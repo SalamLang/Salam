@@ -5,23 +5,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_stmt.c =====
-
-// `defer` is scoped to the block it is written in, not to the whole function.
-// The registration list is still one flat per-function stack, but every nested
-// block remembers its depth on entry and flushes back down to it on the way
-// out, so a defer that names a block-local sees that name in scope:
-//
-//     if cond:
-//         mut v := ...
-//         defer v.free()     // emitted here, at the closing brace
-//     end                    // - not at function exit, where v is gone
-//
-// That also makes the cleanup conditional (it only runs when the branch runs)
-// and makes a defer in a loop body run once per iteration, which is what the
-// interpreter does by registering defers as it reaches them.
-//
-// `ret` still flushes the whole stack, since it leaves every open block.
 func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
     mut i := g.fn_defers.len()
     until i > mark:
@@ -30,7 +13,6 @@ func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
     end
 end
 
-// cg_emit_defers - flush g.fn_defers LIFO (without popping).
 func cg_emit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
     cg_emit_defers_from(g, s, a, 0)
 end
@@ -41,9 +23,6 @@ func defers_trunc(g &: Cg, mark: int):
     end
 end
 
-// A block whose last statement jumps has already emitted its defers on that
-// path (ret flushes everything, break/continue flush back to the loop mark),
-// so a second copy at the closing brace would be dead code.
 func cg_list_terminates(a &: at.Ast, blockid: int): bool:
     bn := at.Get(a, blockid)
     n := bn.list.len()
@@ -54,7 +33,6 @@ func cg_list_terminates(a &: at.Ast, blockid: int): bool:
     ret k == at.AST_RETURN || k == at.AST_BREAK || k == at.AST_CONTINUE
 end
 
-// Emit the statements of a nested block, then its own defers, then drop them.
 func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
     lmark := g.locals.len()
     dmark := g.fn_defers.len()
@@ -69,8 +47,6 @@ func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
     locals_trunc(g, lmark)
 end
 
-// Loop bodies additionally record their defer depth so that break/continue,
-// which skip the end of the body, still run what the body registered.
 func cg_loop_push(g &: Cg):
     g.loop_dmark.push(g.fn_defers.len())
 end
@@ -88,20 +64,8 @@ func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
     end
 end
 
-// cg_expr parenthesizes every binary expression it builds, so `if (%s)` came
-// out as `if ((f == NULL))`. clang reads doubled parens around an equality
-// test as the "did you mean = ?" idiom and warns on every one of them
-// (-Wparentheses-equality; 22 in a benchmark-runner build alone), and gcc does
-// the same under -Wall. Dropping the redundant layer at the condition sites
-// fixes it without changing how expressions are built anywhere else.
-//
-// The outer parens only come off when they wrap the whole expression: `(a) &&
-// (b)` opens and closes before the end and is left alone. String and char
-// literals are skipped so a parenthesis inside one is not counted.
 func cg_unparen(e: str): str:
     n := e.len()
-    // `({ ... })` is a GNU statement expression: those parens are syntax, not
-    // grouping, and taking them off leaves a block where an expression goes.
     if n < 2 || byte_at(e, 0) != 40 || byte_at(e, n - 1) != 41 || byte_at(e, 1) == 123:
         ret e
     end
@@ -137,24 +101,12 @@ func cg_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret cg_unparen(cg_expr(g, s, a, n))
 end
 
-// An expression that denotes an existing array object rather than building
-// one: something `memcpy` can read from directly.
 func cg_is_array_place(a &: at.Ast, n: int): bool:
     k := at.KindOf(a, n)
     if k == at.AST_CAST:
         inner := at.Get(a, n).a
         ret inner != 0 && at.KindOf(a, inner) != at.AST_ARRAY_LIT && cg_is_array_place(a, inner)
     end
-    // A call to a function that returns a fixed array is sret now (see
-    // type_is_byval_agg/call_sret): its value is a fresh local temp that
-    // decays to a pointer exactly like any other array expression, so it
-    // is as much a place to memcpy from as a local or a field is. An
-    // operator overload (operator_add and friends) returning an array
-    // goes through the same sret lowering (cg_emit_op_call) and reaches
-    // codegen as AST_BINARY/AST_UNARY, not AST_CALL - sema only lets
-    // either be array-typed by resolving to such an overload, since
-    // neither built-in arithmetic nor a built-in unary operator can
-    // produce an array result.
     ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX || k == at.AST_THIS || k == at.AST_CALL || k == at.AST_BINARY || k == at.AST_UNARY
 end
 
@@ -169,10 +121,6 @@ func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     if nn.a != 0:
         ret prefix + decl + " = " + cg_expr(g, s, a, nn.a)
     end
-    // No initializer. Sema rejects every read that no assignment precedes, but
-    // a `&:` parameter the callee only writes on some paths would still leave
-    // this slot indeterminate, so zero it: a defined value beats UB. `= {0}`
-    // initializes scalars, pointers, arrays and structs alike (C11 6.7.9p11).
     ret prefix + decl + " = {0}"
 end
 
@@ -198,9 +146,6 @@ func cg_simple_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret cg_expr(g, s, a, n)
 end
 
-// The C type of a `repeat` counter, given the index type semantic
-// analysis settled on. Signed, unless the count is a 64-bit unsigned one -
-// the single case where a signed counter cannot represent it.
 func repeat_ctl_ctype(idx_ts: str): str:
     if str.Equals(idx_ts, "u64") || str.Equals(idx_ts, "size"):
         ret "uint64_t"
@@ -231,16 +176,10 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             end
             ret
         end
-        // `_ := f()` evaluates f for its effects and keeps nothing. Two of
-        // them in one block would be two C objects named `_`.
         if str.Equals(nn.name, "_") && nn.a != 0:
             cg_line(g, "(void)(" + cg_expr_value(g, s, a, nn.a) + ");")
             ret
         end
-        // An array is a value: `b := a` copies it. C has no array
-        // assignment, so an initializer that is another array (a local, a
-        // field, a row of a 2-D array) becomes a declaration plus memcpy.
-        // Literals keep the braced initializer.
         act := cg_array_ctype(nn.type_str)
         if str.Len(act) > 0 && nn.a != 0 && cg_is_array_place(a, nn.a):
             local_add(g, nn.name)
@@ -251,12 +190,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             ret
         end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
-        // A leading underscore is how Salam spells "declared on purpose,
-        // never read", which is what stops sema's unused-name rule firing.
-        // The C compiler has no way to know that, so gcc and clang report
-        // -Wunused-variable for exactly the bindings the author already
-        // marked as deliberate. Carry the intent across, as the C codegen
-        // does - without this the two backends disagree on every `_x := ...`.
         if str.Len(nn.name) > 0 && byte_at(nn.name, 0) == 95:
             cg_line(g, "(void)" + cg_cident(nn.name) + ";")
         end
@@ -271,9 +204,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_ASSIGN:
-        // Whole-array assignment, `b = a` or `b = [4, 5, 6]`: C cannot
-        // assign arrays, so it is a memcpy of the array's own size (never
-        // sizeof the left operand, which may be a parameter).
         if nn.op == tok.TK_ASSIGN && nn.a != 0 && nn.b != 0:
             lact := cg_array_ctype(at.Get(a, nn.a).type_str)
             if str.Len(lact) > 0 && !cg_is_slice_ts(at.Get(a, nn.b).type_str):
@@ -375,10 +305,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_EXPR_STMT:
-        // A call returning a struct is built as a GNU statement expression
-        // whose value is the temporary it filled in. Called for its effect
-        // only, that trailing value is dropped, and clang says so
-        // (-Wunused-value). Casting to void is how C spells "yes, on purpose".
         e := cg_expr(g, s, a, nn.a)
         mut pfx := ""
         if byte_at(e, 0) == 40 && byte_at(e, 1) == 123:
@@ -410,12 +336,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             t := g.tmpn
             tmp := "__retv" + t
             if str.Len(r_act) > 0:
-                // A deferred statement can still mutate the array `expr`
-                // names (e.g. `ret a` then a defer that writes into `a`),
-                // so the value has to be copied into a real array temp
-                // here, before the defers run - not just pointed at, the
-                // way a bare `cg_ctype` pointer temp would (that pointer
-                // would still read whatever the defers left behind).
                 cg_line(g, cg_decl_cn(r_ts, tmp) + ";")
                 cg_line(g, "salam_arrcpy(" + tmp + ", " + expr + ", sizeof(" + r_act + "));")
             else:
@@ -444,13 +364,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             cg_line(g, "return " + cg_expr_value(g, s, a, nn.a) + ";")
         else:
             cg_emit_defers(g, s, a)
-            // `func main:` has no declared return type but is emitted as C's
-            // `int main`, so a bare `ret` in it is a bare `return;` from a
-            // non-void function. tcc accepts that silently; gcc 16 makes
-            // -Wreturn-mismatch an error, which took out every telegram/
-            // websocket example that ends a branch with a bare `ret`. The
-            // language already says main implicitly returns i32, so the
-            // value that `ret` means here is 0.
             if g.cur_is_main:
                 cg_line(g, "return 0;")
             else:
@@ -549,11 +462,6 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                 g, "for (int64_t __rep" + t + " = (int64_t)(" + from_c + "), __repe" + t + " = (int64_t)(" + to_c + "), __repa" + t + " = (int64_t)(" + step + "), __reps" + t + " = (__rep" + t + " <= __repe" + t + ") ? __repa" + t + " : -__repa" + t + "; (__reps" + t + " > 0) ? (__rep" + t + " <= __repe" + t + ") : (__rep" + t + " >= __repe" + t + "); __rep" + t + " += __reps" + t + ") {"
             )
         else:
-            // The counter is wider than the index on purpose: it has to
-            // hold the count itself, and `repeat n` over an i8 n still
-            // walks 0..n. Unsigned where the count is, though - a u64
-            // count above INT64_MAX read as int64_t is negative, and the
-            // loop that should have run billions of times ran none.
             ctl := repeat_ctl_ctype(nn.type_str)
             cg_line(
                 g, "for (" + ctl + " __rep" + t + " = 0, __repn" + t + " = (" + ctl + ")(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
@@ -563,20 +471,10 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_loop_push(g)
         mark := g.locals.len()
         if str.Len(nn.name) > 0:
-            // The index carries the type semantic analysis gave it - the
-            // width of the values that drive the loop, not a fixed i32 -
-            // so the body compares and indexes with it uncast.
             ivct := cg_ctype(str.Len(nn.type_str) > 0 ? nn.type_str : "i32")
             cg_line(
                 g, "const " + ivct + " " + cg_cident(nn.name) + " = (" + ivct + ")__rep" + t + ";"
             )
-            // `repeat n with i:` may legitimately ignore i - the count is the
-            // point and the binding is there for the cases that do use it - so
-            // the declaration alone draws -Wunused-variable from gcc and
-            // clang. Salam's own unused-name rule does not apply to a loop
-            // binding, so this cannot be pushed back to the source. (void) is
-            // the portable way to say "declared on purpose";
-            // __attribute__((unused)) is not available on tcc.
             cg_line(g, "(void)" + cg_cident(nn.name) + ";")
             local_add(g, nn.name)
         end

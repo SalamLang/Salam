@@ -16,26 +16,6 @@ package autograd
 
 import tensor
 
-// Convolution and pooling on the tape.
-//
-// The convolution node reuses the aux slot for its OPTIONAL BIAS input
-// id (-1 when absent) rather than for an owned tensor - the one node
-// with three differentiable inputs. Geometry packs into s0/s1 as
-// stride*256+stride and pad*256+pad; kernel size is read off the weight
-// shape.
-//
-// Backward RECOMPUTES each sample's im2col columns instead of saving
-// them: saving costs kh*kw times the whole activation per layer for the
-// life of the step, recomputing costs one extra unrolling pass per
-// sample. Small memory, slightly more time - the right trade at the
-// batch sizes a CPU trains. The per-sample products run through
-// tensor.GemmAcc on offset pointers, so nothing is copied per sample
-// but the column buffer itself.
-//
-// MaxPool saves its winners' positions as an owned aux tensor and
-// backward scatters straight to them; AvgPool spreads uniformly over
-// each window (recounting window clipping at the edges).
-
 // Element-offset pointer step, the GEP idiom.
 inline func _off(p: f32*, off: int): f32*:
     ret (p as i64 + (off as i64) * (sizeof(f32) as i64)) as f32*
@@ -93,8 +73,6 @@ func _bk_conv2d(tp &: Tape, n &: Node, dc &: tensor.Tensor):
         dcols.free()
     end
 
-    // Bias: one gradient per output channel, summed over batch and
-    // positions.
     if n.aux >= 0 && tp.needs.get(n.aux):
         gb := _grad_of(tp, n.aux)
         pg := gb.data.data
@@ -177,8 +155,6 @@ func _bk_avgpool(tp &: Tape, n &: Node, dc &: tensor.Tensor):
         end
     end
 end
-
-// ---- public API ----
 
 // x [N,C,H,W] convolved with w [OC,C,KH,KW], plus bias b (pass -1 for
 // none), stride sh/sw, zero padding ph/pw.

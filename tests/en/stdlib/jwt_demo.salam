@@ -14,26 +14,12 @@
 
 package main
 
-// std/jwt end to end, including the HTTP-facing parts that can be tested
-// without a live request.
-//
-// The signing tests pin whole tokens, not just "it round-trips". A JWS is
-// only worth anything if another implementation agrees byte for byte, so the
-// expected strings here were produced independently (PyJWT / hmac+base64url)
-// and the canonical jwt.io HS256 token is verified as-is. A round-trip test
-// alone would pass just as happily with two matching bugs.
-//
-// Every rejection path gets its own case, because a verifier that returns
-// "invalid" for the wrong reason is a verifier that will one day return
-// "valid" for the wrong reason.
-
 import jwt
 import crypto
 import testing
 
 const SECRET := "your-256-bit-secret"
 
-// A fixed clock, so exp/nbf/iat cases are not a function of when the suite runs.
 const NOW := 1600000000
 
 func fixed_opts(): jwt.Options:
@@ -42,22 +28,18 @@ func fixed_opts(): jwt.Options:
     ret o
 end
 
-// ---------------------------------------------------------------- base64url
-
 func test_b64url():
     testing.AssertEqStr(jwt.B64UrlEncode(""), "")
     testing.AssertEqStr(jwt.B64UrlEncode("f"), "Zg")
     testing.AssertEqStr(jwt.B64UrlEncode("fo"), "Zm8")
     testing.AssertEqStr(jwt.B64UrlEncode("foo"), "Zm9v")
     testing.AssertEqStr(jwt.B64UrlEncode("foobar"), "Zm9vYmFy")
-    // the two bytes that differ from standard base64: 0xFB 0xFF -> "+/" -> "-_"
     testing.AssertEqStr(jwt.B64UrlEncode(`{"alg":"HS256","typ":"JWT"}`), "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
     mut ok := false
     testing.AssertEqStr(jwt.B64UrlDecode("Zm9vYmFy", ok), "foobar")
     testing.AssertTrue(ok)
     testing.AssertEqStr(jwt.B64UrlDecode("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ok), `{"alg":"HS256","typ":"JWT"}`)
     testing.AssertTrue(ok)
-    // padded, standard-alphabet and whitespace-carrying input is NOT base64url
     _r1 := jwt.B64UrlDecode("Zm9vYmFy=", ok)
     testing.AssertFalse(ok)
     _r2 := jwt.B64UrlDecode("ab+c", ok)
@@ -66,12 +48,9 @@ func test_b64url():
     testing.AssertFalse(ok)
     _r4 := jwt.B64UrlDecode("Zm9v YmFy", ok)
     testing.AssertFalse(ok)
-    // a lone trailing character cannot be a quantum
     _r5 := jwt.B64UrlDecode("Zm9vY", ok)
     testing.AssertFalse(ok)
 end
-
-// ---------------------------------------------------------------- claims
 
 func test_claims_json():
     mut c := jwt.NewClaims()
@@ -86,13 +65,10 @@ func test_claims_json():
     jwt.SetBool(c, "mfa", true)
     jwt.SetInt(c, "level", 7 as i64)
     jwt.SetRaw(c, "scopes", `["read","write"]`)
-    // registered claims first, in a fixed order, then custom ones as added
     testing.AssertEqStr(jwt.ClaimsJSON(c), `{"iss":"api.example.com","sub":"user-42","aud":"web","exp":2000000000,"iat":1000000000,"jti":"abc","role":"admin","mfa":true,"level":7,"scopes":["read","write"]}`)
 end
 
 func test_claims_registered_routing():
-    // Set* with a registered name must land in the field, not append a
-    // second copy of the key
     mut c := jwt.NewClaims()
     jwt.SetStr(c, "iss", "me")
     jwt.SetStr(c, "sub", "you")
@@ -118,8 +94,6 @@ func test_claims_escaping():
     testing.AssertEqStr(jwt.ClaimsJSON(c), `{"name":"Ali \"MAX\" Base","path":"C:\\tmp","lines":"a\nb"}`)
 end
 
-// ---------------------------------------------------------------- signing
-
 func test_sign_known_tokens():
     mut c := jwt.NewClaims()
     c.sub = "1234567890"
@@ -133,7 +107,6 @@ func test_sign_known_tokens():
     testing.AssertEqStr(hs384, "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiaWF0IjoxNTE2MjM5MDIyLCJuYW1lIjoiSm9obiBEb2UifQ.oBbeSMWfiX9tiMhNSJeMDGXOJr7Ihg49HtLqx2VolvLx0AAyuFh_MeRgQ3IoGV9f")
     hs512 := jwt.SignHS512(c, SECRET, err)
     testing.AssertEqStr(hs512, "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiaWF0IjoxNTE2MjM5MDIyLCJuYW1lIjoiSm9obiBEb2UifQ.f1qJgj7FVIk1ATQPEgLgF913j9XQB7JBHJdU5QVNM0dPDNIzyOw73y2tCg0rWNkwU2T_j4tPrq35NMdZDh7AQQ")
-    // a "kid" goes in the header, and changes it
     kidded := jwt.SignWithKid(c, jwt.JWT_HS256, "key-1", SECRET, err)
     mut e2 := 0
     t := jwt.Decode(kidded, e2)
@@ -149,15 +122,11 @@ func test_sign_rejects():
     testing.AssertEqInt(err, jwt.JWT_ERR_ALG_UNSUPPORTED)
     testing.AssertEqStr(jwt.Sign(c, "none", SECRET, err), "")
     testing.AssertEqInt(err, jwt.JWT_ERR_ALG_UNSUPPORTED)
-    // an empty secret would produce a token anyone can forge
     testing.AssertEqStr(jwt.SignHS256(c, "", err), "")
     testing.AssertEqInt(err, jwt.JWT_ERR_EMPTY_SECRET)
 end
 
-// ---------------------------------------------------------------- verifying
-
 func test_verify_canonical():
-    // The jwt.io sample token, signed elsewhere with the same secret.
     io := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     mut err := 0
     t := jwt.Verify(io, SECRET, fixed_opts(), err)
@@ -201,7 +170,6 @@ func test_verify_round_trip():
     testing.AssertEqStr(jwt.Str(t, "nope"), "")
     testing.AssertEqInt64(jwt.Int(t, "nope"), 0 as i64)
     testing.AssertFalse(jwt.Bool(t, "nope"))
-    // a claim that is an object comes back only as raw text
     testing.AssertEqStr(jwt.Str(t, "scopes"), "")
 end
 
@@ -212,10 +180,8 @@ func test_verify_signature_failures():
     mut err := 0
     tok := jwt.SignHS256(c, SECRET, err)
     mut verr := 0
-    // wrong key
     _t1 := jwt.Verify(tok, "not-the-secret", fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_SIGNATURE)
-    // flipped last character of the signature
     mut tampered := tok.substr(0, tok.len() - 1)
     if tok.substr(tok.len() - 1, 1) == "A":
         tampered = tampered.concat("B")
@@ -225,24 +191,19 @@ func test_verify_signature_failures():
     t2 := jwt.Verify(tampered, SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_SIGNATURE)
     testing.AssertFalse(t2.valid)
-    // an empty secret can never verify anything
     _t3 := jwt.Verify(tok, "", fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_EMPTY_SECRET)
 end
 
 func test_verify_alg_attacks():
     mut verr := 0
-    // "alg": "none" with an empty signature - the classic forgery
     none_tok := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiJ9."
     t := jwt.Verify(none_tok, SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_ALG_UNSUPPORTED)
     testing.AssertFalse(t.valid)
-    // an algorithm this build does not implement is refused, never guessed at
     rs_tok := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiJ9.aaaa"
     _t2 := jwt.Verify(rs_tok, SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_ALG_UNSUPPORTED)
-    // a real HS512 token offered to an HS256 verifier: the header does not
-    // get to choose the algorithm
     mut c := jwt.NewClaims()
     c.sub = "user-42"
     c.exp = 2000000000 as i64
@@ -250,7 +211,6 @@ func test_verify_alg_attacks():
     tok512 := jwt.SignHS512(c, SECRET, err)
     _t3 := jwt.Verify(tok512, SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_ALG_MISMATCH)
-    // ... and it verifies when the verifier is the one that asked for HS512
     mut o := jwt.OptionsFor(jwt.JWT_HS512)
     o.now = NOW as i64
     t4 := jwt.Verify(tok512, SECRET, o, verr)
@@ -270,10 +230,8 @@ func test_verify_malformed():
     testing.AssertEqInt(verr, jwt.JWT_ERR_MALFORMED)
     _t5 := jwt.Verify(".b.c", SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_MALFORMED)
-    // valid shape, but the header segment is not base64url
     _t6 := jwt.Verify("a+b.eyJzdWIiOiJ4In0.sig", SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_BAD_BASE64)
-    // decodes, but the header is not a JSON object with an alg
     _t7 := jwt.Verify("eyJ4IjoxfQ.eyJzdWIiOiJ4In0.sig", SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_BAD_JSON)
 end
@@ -281,33 +239,24 @@ end
 func test_header_policy():
     mut verr := 0
     payload := jwt.B64UrlEncode(`{"sub":"x"}`)
-    // "typ" is optional, and an OAuth2 access token spells it "at+jwt"
     testing.AssertTrue(signed_with_header(`{"alg":"HS256","typ":"at+jwt"}`, payload, verr))
     testing.AssertEqInt(verr, JWT_OK_CODE())
     testing.AssertTrue(signed_with_header(`{"alg":"HS256"}`, payload, verr))
     testing.AssertEqInt(verr, JWT_OK_CODE())
     testing.AssertTrue(signed_with_header(`{"alg":"HS256","typ":"jwt"}`, payload, verr))
     testing.AssertEqInt(verr, JWT_OK_CODE())
-    // a JWE, or anything else pretending to be one of ours
     _bad := signed_with_header(`{"alg":"HS256","typ":"JOSE"}`, payload, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_TYPE)
-    // "crit" names extensions a verifier must understand; this one
-    // understands none, so it must refuse rather than ignore them
     _crit := signed_with_header(`{"alg":"HS256","typ":"JWT","crit":["exp"]}`, payload, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_ALG_UNSUPPORTED)
-    // a claim carried twice is ambiguous, and two services reading the same
-    // token would not have to agree on which copy wins
     _dup := signed_with_header(`{"alg":"HS256","typ":"JWT"}`, jwt.B64UrlEncode(`{"sub":"admin","sub":"guest"}`), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_BAD_JSON)
     _dup2 := signed_with_header(`{"alg":"HS256","typ":"JWT"}`, jwt.B64UrlEncode(`{"exp":9999999999,"exp":1}`), verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_BAD_JSON)
-    // a duplicated claim this package does not act on is the caller's problem
     testing.AssertTrue(signed_with_header(`{"alg":"HS256","typ":"JWT"}`, jwt.B64UrlEncode(`{"sub":"x","note":"a","note":"b"}`), verr))
     testing.AssertEqInt(verr, JWT_OK_CODE())
 end
 
-// Sign an arbitrary header + payload the way the package would, so header
-// policy can be tested without a hand-computed signature.
 func signed_with_header(header_json: str, payload_b64: str, err &: int): bool:
     si := jwt.B64UrlEncode(header_json).concat(".").concat(payload_b64)
     tok := si.concat(".").concat(jwt.SignatureOf(si, jwt.JWT_HS256, SECRET))
@@ -328,26 +277,21 @@ func test_verify_time():
     mut verr := 0
     _t0 := jwt.Verify(tok, SECRET, fixed_opts(), verr)
     testing.AssertEqInt(verr, JWT_OK_CODE())
-    // expired
     mut late := fixed_opts()
     late.now = (NOW + 101) as i64
     _t1 := jwt.Verify(tok, SECRET, late, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_EXPIRED)
-    // ... and leeway forgives a small clock difference
     late.leeway = 60 as i64
     _t2 := jwt.Verify(tok, SECRET, late, verr)
     testing.AssertEqInt(verr, JWT_OK_CODE())
-    // exp is exclusive: at exactly exp the token is done
     mut at_exp := fixed_opts()
     at_exp.now = (NOW + 100) as i64
     _t3 := jwt.Verify(tok, SECRET, at_exp, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_EXPIRED)
-    // not yet valid
     mut early := fixed_opts()
     early.now = (NOW - 200) as i64
     _t4 := jwt.Verify(tok, SECRET, early, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_NOT_YET_VALID)
-    // issued in the future: a token minted by a clock ahead of ours
     mut c2 := jwt.NewClaims()
     c2.iat = (NOW + 500) as i64
     tok2 := jwt.SignHS256(c2, SECRET, err)
@@ -388,7 +332,6 @@ end
 func test_audience_forms():
     mut err := 0
     mut verr := 0
-    // "aud" as an array is as legal as "aud" as a string
     mut c := jwt.NewClaims()
     c.exp = 2000000000 as i64
     jwt.SetRaw(c, "aud", `["web","mobile"]`)
@@ -403,7 +346,6 @@ func test_audience_forms():
     o.audience = "desktop"
     _t2 := jwt.Verify(tok, SECRET, o, verr)
     testing.AssertEqInt(verr, jwt.JWT_ERR_AUDIENCE)
-    // a single-string audience that merely looks like an array is not one
     mut c3 := jwt.NewClaims()
     c3.exp = 2000000000 as i64
     c3.aud = `["web"]`
@@ -425,7 +367,6 @@ func test_scopes():
     testing.AssertTrue(jwt.HasScope(t, "read"))
     testing.AssertTrue(jwt.HasScope(t, "write"))
     testing.AssertTrue(jwt.HasScope(t, "admin"))
-    // a prefix of a scope is not that scope
     testing.AssertFalse(jwt.HasScope(t, "adm"))
     testing.AssertFalse(jwt.HasScope(t, "read write"))
     testing.AssertFalse(jwt.HasScope(t, ""))
@@ -447,7 +388,6 @@ func test_unicode_round_trip():
     testing.AssertEqStr(jwt.Str(t, "fa"), "سلام دنیا")
     testing.AssertEqStr(jwt.Str(t, "lines"), "a\nb\tc")
     testing.AssertEqStr(jwt.Str(t, "win"), "C:\\tmp")
-    // \uXXXX escapes produced by another encoder decode too
     mut e2 := 0
     esc := jwt.SignJSON(`{"a":"\u0633\u0644\u0627\u0645","b":"\u00e9","c":"\ud83d\ude00"}`, jwt.JWT_HS256, "", SECRET, e2)
     t2 := jwt.Decode(esc, e2)
@@ -457,7 +397,6 @@ func test_unicode_round_trip():
 end
 
 func test_decode_does_not_validate():
-    // expired, wrong issuer, and Decode still hands it over - with valid false
     mut c := jwt.NewClaims()
     c.iss = "somebody-else"
     c.sub = "user-42"
@@ -470,7 +409,6 @@ func test_decode_does_not_validate():
     testing.AssertFalse(t.valid)
     testing.AssertEqStr(t.claims.sub, "user-42")
     testing.AssertEqStr(t.alg, "HS256")
-    // IsValid is the same check as Verify, minus the token
     testing.AssertFalse(jwt.IsValid(tok, SECRET, fixed_opts()))
     mut c2 := jwt.NewClaims()
     c2.exp = 2000000000 as i64
@@ -494,8 +432,6 @@ func test_error_text():
     testing.AssertEqInt(jwt.DigestSize("HS512"), 64)
     testing.AssertEqInt(jwt.DigestSize("RS256"), 0)
 end
-
-// ---------------------------------------------------------------- auth layer
 
 func test_bearer_parsing():
     testing.AssertEqStr(jwt.ParseBearer("Bearer abc.def.ghi"), "abc.def.ghi")
@@ -521,13 +457,10 @@ func test_guard_issue():
     testing.AssertEqInt(verr, JWT_OK_CODE())
     testing.AssertTrue(t.valid)
     testing.AssertEqStr(t.claims.sub, "user-42")
-    // Issue fills issuer and audience in from the guard's own policy, so the
-    // token it mints is one the same guard will accept
     testing.AssertEqStr(t.claims.iss, "api.example.com")
     testing.AssertEqStr(t.claims.aud, "web")
     testing.AssertTrue(t.claims.exp > t.claims.iat)
     testing.AssertEqInt64(t.claims.exp - t.claims.iat, 3600 as i64)
-    // a guard with no secret cannot mint anything
     broken := jwt.NewGuard("")
     mut e2 := 0
     testing.AssertEqStr(jwt.IssueFor(broken, "user-42", 60 as i64, e2), "")
@@ -548,8 +481,6 @@ func test_guard_pair():
     tr := jwt.Verify(refresh, SECRET, g.opts, e2)
     testing.AssertEqInt(e1, JWT_OK_CODE())
     testing.AssertEqInt(e2, JWT_OK_CODE())
-    // the two are distinguishable, which is what stops a refresh token from
-    // being spent as an access token
     testing.AssertEqStr(jwt.Str(ta, "kind"), "access")
     testing.AssertEqStr(jwt.Str(tr, "kind"), "refresh")
     testing.AssertTrue(tr.claims.jti.len() > 0)
@@ -561,17 +492,12 @@ func test_password_and_secrets():
     testing.AssertTrue(crypto.VerifyPassword("correct horse battery staple", hash))
     testing.AssertFalse(crypto.VerifyPassword("Correct horse battery staple", hash))
     testing.AssertFalse(crypto.VerifyPassword("", hash))
-    // the same password twice must not produce the same stored hash
     hash2 := crypto.HashPassword("correct horse battery staple")
     testing.AssertTrue(hash != hash2)
     testing.AssertTrue(crypto.VerifyPassword("correct horse battery staple", hash2))
     testing.AssertTrue(crypto.SecretEquals("abc", "abc"))
     testing.AssertFalse(crypto.SecretEquals("abc", "abz"))
     testing.AssertFalse(crypto.SecretEquals("abc", "abcd"))
-    // crypto.SecretEquals is an EXACT constant-time compare, so two empty
-    // strings are equal. That is the documented trap: an expected secret
-    // that failed to load would match an empty candidate, and the guard
-    // belongs at the call site rather than inside the primitive.
     testing.AssertTrue(crypto.SecretEquals("", ""))
     testing.AssertFalse(secret_ok("", ""))
     testing.AssertTrue(secret_ok("abc", "abc"))
@@ -579,15 +505,11 @@ func test_password_and_secrets():
     testing.AssertTrue(crypto.RandomHex(32) != crypto.RandomHex(32))
 end
 
-// The call-site guard every secret comparison needs: an unset expected value
-// must never match. See crypto.SecretEquals.
 func secret_ok(given: str, expected: str): bool:
     if expected.len() == 0: ret false end
     ret crypto.SecretEquals(given, expected)
 end
 
-// jwt.JWT_OK is 0; wrapped so the assertions read as intent rather than as a
-// bare literal.
 pure func JWT_OK_CODE(): int:
     ret jwt.JWT_OK
 end

@@ -14,31 +14,6 @@
 
 package main
 
-// A todo API: register, sign in, and CRUD over your own list. MariaDB for
-// storage, JWT for identity. See README.md to run it.
-//
-//   POST   /auth/register          {email, password}
-//   POST   /auth/login             {email, password} -> access + refresh
-//   POST   /auth/refresh           Bearer <refresh>  -> access
-//   GET    /api/todos              ?status=all|open|done&limit=&offset=
-//   POST   /api/todos              {title, notes?, due_on?}
-//   GET    /api/todos/:id
-//   PATCH  /api/todos/:id          {title?, notes?, done?, due_on?}
-//   DELETE /api/todos/:id
-//   GET    /api/stats
-//   GET    /health
-//
-// THE SHAPE
-//
-// main.salam is HTTP: parse the request, check the caller, call the store,
-// write a response. _store.salam is SQL. Nothing in this file builds a query
-// and nothing in that one knows what a request is. The seam is what lets the
-// store enforce escaping and ownership on every statement (see its header).
-//
-// Identity comes from the token's `sub` claim, which holds the user's id. It
-// is never read from the path or the body: a client that could name its own
-// user_id would not need to steal a token.
-
 import os
 import crypto
 import jwt
@@ -64,13 +39,8 @@ end
 func secret(): str:
     s := os.Env("JWT_SECRET")
     if s.len() > 0: ret s end
-    // Fine for a demo on localhost. In production this is a 32-byte value
-    // from the environment, and the process should refuse to start without
-    // it rather than fall back to a constant every reader of this file knows.
     ret "dev-only-secret-change-me"
 end
-
-// ---------------------------------------------------------------- helpers
 
 func send(ctx: i64, code: int, body: str):
     http.Ctx_status(ctx, code)
@@ -82,20 +52,11 @@ func fail(ctx: i64, code: int, message: str):
     send(ctx, code, `{"error":`.concat(json.Str(message)).concat("}"))
 end
 
-// The store's errors carry SQL in them. They belong in the log, not in the
-// response - a duplicate-key message tells a stranger which addresses are
-// registered.
 func db_fail(ctx: i64, where: str, err: str):
     println "[db] ", where, ": ", err
     fail(ctx, 500, "database error")
 end
 
-// Identify the caller and hand back their user id. Returns 0 when the guard
-// already answered the request.
-// A connection for this request, or a 503 and false. Every handler that
-// touches the database starts with this and pairs it with `defer
-// store.Close(conn)` - the connection belongs to this request and to this
-// thread, and it goes away when the handler returns however it returns.
 func db(ctx: i64, c &: store.Conn): bool:
     conn := store.Connect()
     if !store.Ok(conn):
@@ -126,8 +87,6 @@ func int_param(ctx: i64, name: str, fallback: int, max: int): int:
     ret v
 end
 
-// ---------------------------------------------------------------- auth
-
 func register(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -139,17 +98,12 @@ func register(ctx: i64):
         fail(ctx, 400, "a valid email is required")
         ret
     end
-    // Eight is a floor, not a policy. Length is the only rule worth keeping;
-    // the composition rules ("one capital, one digit") push people towards
-    // passwords that are shorter and more guessable, not less.
     if password.len() < 8:
         fail(ctx, 400, "password must be at least 8 characters")
         ret
     end
     existing := store.FindUser(conn, email)
     if existing.id != 0 as i64:
-        // A registration form leaks address existence no matter what, since
-        // it has to refuse a duplicate. The place to be careful is /login.
         fail(ctx, 409, "that email is already registered")
         ret
     end
@@ -176,10 +130,6 @@ func login(ctx: i64):
     body := http.Ctx_body(ctx)
     email := json.Get(body, "email").trim().lower()
     u := store.FindUser(conn, email)
-    // One answer for "no such user" and "wrong password", and the password
-    // is verified either way so the two paths take the same time. Skipping
-    // the hash when the user is unknown turns login into an account
-    // enumerator that anyone can time from the other side of the internet.
     mut stored := u.hash
     if stored.len() == 0: stored = crypto.HashPassword("_no_such_user_") end
     ok := crypto.VerifyPassword(json.Get(body, "password"), stored)
@@ -220,8 +170,6 @@ func refresh(ctx: i64):
     )
 end
 
-// ---------------------------------------------------------------- todos
-
 func list_todos(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -233,8 +181,6 @@ func list_todos(ctx: i64):
     offset := int_param(ctx, "offset", 0, 1000000)
     items := store.ListTodos(conn, uid, status, limit, offset)
     total := store.CountTodos(conn, uid, status)
-    // The count comes back with the page so a client can render "1-20 of 57"
-    // without a second request.
     send(
         ctx, 200, `{"items":`.concat(items).concat(`,"total":`).concat(conv.FormatInt(total)).concat(`,"limit":`).concat(conv.FormatInt(limit as i64)).concat(`,"offset":`).concat(conv.FormatInt(offset as i64)).concat("}")
     )
@@ -276,7 +222,6 @@ func create_todo(ctx: i64):
         ret
     end
     if title.len() > 255:
-        // Refuse it here rather than let MariaDB truncate silently.
         fail(ctx, 400, "title is too long (255 bytes max)")
         ret
     end
@@ -295,8 +240,6 @@ func create_todo(ctx: i64):
     send(ctx, 201, store.GetTodo(conn, uid, id))
 end
 
-// YYYY-MM-DD, checked here so a bad date is a 400 and not a 500 from the
-// driver. MariaDB does the real validation on the column.
 func is_date(s: str): bool:
     if s.len() != 10: ret false end
     if s.substr(4, 1) != "-" || s.substr(7, 1) != "-": ret false end
@@ -319,8 +262,6 @@ func update_todo(ctx: i64):
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     id := path_id(ctx)
-    // 404 before doing any work, so a caller cannot use the difference
-    // between "nothing changed" and "not yours" to probe for ids.
     if store.GetTodo(conn, uid, id).len() == 0:
         fail(ctx, 404, "no such todo")
         ret
@@ -402,18 +343,11 @@ func stats(ctx: i64):
     send(ctx, 200, store.Stats(conn, uid))
 end
 
-// Unauthenticated on purpose: this is what a load balancer polls.
 func health(ctx: i64):
     send(ctx, 200, `{"status":"ok","service":"todo"}`)
 end
 
 func main:
-    // Reads the settings, initialises the client library, and proves the
-    // credentials work by opening one connection and closing it again. After
-    // this returns, no connection is held: each request makes its own.
-    //
-    // The library init has to happen here, on the main thread, before any
-    // request thread exists - see _store.salam's header.
     mut err := ""
     if !store.Configure(err):
         println "cannot reach the database: ", err
@@ -428,8 +362,6 @@ func main:
     router.Get(r, "/api/todos", list_todos)
     router.Post(r, "/api/todos", create_todo)
     router.Get(r, "/api/todos/:id", get_todo)
-    // Get/Post/Put/Delete/Patch/Head/Options have helpers; anything else
-    // goes through router.Method(r, "VERB", path, fn).
     router.Patch(r, "/api/todos/:id", update_todo)
     router.Delete(r, "/api/todos/:id", delete_todo)
     router.Get(r, "/api/stats", stats)

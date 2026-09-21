@@ -14,22 +14,6 @@
 
 package ssh
 
-// AES-128/256 (FIPS 197) in CTR mode - "aes128-ctr" and "aes256-ctr", the
-// cipher this package negotiates. Block cipher code is the same shape as
-// std/tls/aes.salam (duplicated rather than imported - see ssh.salam's
-// header on the package boundary); the CTR wrapper at the bottom is new.
-//
-// Only the forward direction is implemented: CTR mode builds a stream
-// cipher out of AES-encrypt alone (both encryption and decryption XOR the
-// plaintext/ciphertext with AES_encrypt(counter)), so there is no
-// InvSubBytes/InvMixColumns to get wrong or carry as dead code.
-//
-// ==================== CONSTANT-TIME CAVEAT ====================
-// SubBytes indexes a 256-byte S-box with key-dependent data, a cache-timing
-// side channel on CPUs with data caches - the same caveat std/tls/aes.salam
-// documents. Mitigated but not eliminated by using one 256-byte table.
-// ================================================================
-
 const SSH_AES_SBOX := [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0
@@ -127,13 +111,11 @@ inline func _xtime(a: int): int:
 end
 
 func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
-    // state[r][c] with column-major words, as FIPS 197 defines them.
     mut s: int[16]
     repeat 16 with i:
         s[i] = _bget(inp, i)
     end
 
-    // AddRoundKey(0)
     repeat 4 with c:
         k := a.rk[c]
         s[c * 4] = s[c * 4] ^ (((k >> (24 as u32)) & (0xFF as u32)) as int)
@@ -144,12 +126,9 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
 
     mut round := 1
     until round < a.nr + 1:
-        // SubBytes
         repeat 16 with i:
             s[i] = SSH_AES_SBOX[s[i]]
         end
-        // ShiftRows: row r rotates left by r. Column-major bytes, so byte
-        // (c,r) lives at s[c*4+r].
         mut t: int[16]
         repeat 4 with c:
             repeat 4 with r:
@@ -159,7 +138,6 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
         repeat 16 with i:
             s[i] = t[i]
         end
-        // MixColumns, skipped in the final round.
         if round < a.nr:
             repeat 4 with c:
                 o := c * 4
@@ -174,7 +152,6 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
                 s[o + 3] = a3 ^ x ^ _xtime(a3 ^ a0)
             end
         end
-        // AddRoundKey(round)
         repeat 4 with c:
             k := a.rk[round * 4 + c]
             s[c * 4] = s[c * 4] ^ (((k >> (24 as u32)) & (0xFF as u32)) as int)
@@ -189,13 +166,6 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
         _bput(out, i, s[i])
     end
 end
-
-// ---------------------------------------------------------------- CTR mode
-//
-// RFC 4344 3.1 / SSH's aes*-ctr: the 16-byte IV is one big-endian counter,
-// incremented as a whole (not per-word) after every block. Same operation
-// encrypts and decrypts - XOR with AES_encrypt(counter) is its own inverse -
-// so packet.salam calls this for both directions.
 
 func _ctr_increment(block &: Buf):
     mut i := 15

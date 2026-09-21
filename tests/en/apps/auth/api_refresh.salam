@@ -14,28 +14,6 @@
 
 package main
 
-// Short-lived access token, long-lived refresh token, and the route that
-// trades one for the other.
-//
-//     salam run tests/en/apps/auth/api_refresh.salam
-//     curl -s -XPOST localhost:8082/auth/login   -d '{"email":"sara@example.com","password":"hunter2"}'
-//     curl -s -XPOST localhost:8082/auth/refresh -H "Authorization: Bearer <refresh>"
-//     curl -s localhost:8082/api/me              -H "Authorization: Bearer <access>"
-//
-// WHY BOTH TOKENS
-//
-// A JWT cannot be recalled: it is valid until it expires, because verifying
-// it involves no database. That argues for a very short life. But a token
-// that dies every 15 minutes means logging in every 15 minutes, unless
-// something longer-lived can mint a new one. Hence the pair: the access
-// token is spent constantly and expires fast, the refresh token is spent
-// once in a while and is the only thing worth protecting carefully.
-//
-// The rule that makes the split mean anything is that each token is refused
-// where the other belongs. Both carry a "kind" claim, and both sides check
-// it. Without that check an access token would also be a refresh token, and
-// a stolen one could renew itself forever.
-
 import crypto
 import jwt
 import conv
@@ -76,10 +54,6 @@ func issue_refresh(subject: str, err &: int): str:
     mut c := jwt.NewClaims()
     c.sub = subject
     jwt.SetStr(c, "kind", "refresh")
-    // A unique id per refresh token. Nothing here uses it, but it is what a
-    // revocation list keys on: store the jti of a token you want dead and
-    // check it here. That is the one server-side lookup worth paying for,
-    // and it belongs on the rare route, not the hot one.
     c.jti = crypto.RandomHex(12)
     ret jwt.Issue(guard(), c, REFRESH_TTL as i64, err)
 end
@@ -102,9 +76,6 @@ func login(ctx: i64):
     send(ctx, 200, `{"access":"` + access + `","refresh":"` + refresh_tok + `","expires_in":900}`)
 end
 
-// Spend a refresh token, get a new access token. The refresh token itself is
-// left alone here; rotating it (issuing a new one and retiring this jti) is
-// the stricter variant, and needs the revocation store mentioned above.
 func refresh(ctx: i64):
     mut t := jwt.Token {}
     if !jwt.Require(ctx, guard(), t): ret end
@@ -121,7 +92,6 @@ func refresh(ctx: i64):
     send(ctx, 200, `{"access":"` + access + `","expires_in":900}`)
 end
 
-// The other half of the rule: an ordinary route refuses a refresh token.
 func me(ctx: i64):
     mut t := jwt.Token {}
     if !jwt.Require(ctx, guard(), t): ret end

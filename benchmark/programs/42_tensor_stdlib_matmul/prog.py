@@ -1,5 +1,3 @@
-"""Tensor-stdlib benchmark: real NumPy (@) in float32, not a hand-written triple loop."""
-
 import numpy as np
 
 n = 400

@@ -5,9 +5,6 @@ import co "../sal_core.salam"
 import tok "../token.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_type.c =====
-
-// cg_kv - split "Map<K, V>"-style typestrs; cap mirrors the C buffer size.
 func cg_kv(ts: str, kbuf &: str, vbuf &: str, cap: int):
     kbuf = ""
     vbuf = ""
@@ -94,10 +91,6 @@ func cg_cident(name: str): str:
     if is_digit_b(byte_at(name, 0)):
         co.SbPutc(b, 95)
     end
-    // `_X...` and `__...` are C's reserved namespace, and gcc really does
-    // define names there (`__k8`). Such a name is re-based under `_u_`: the
-    // marker cannot be produced by any other Salam name, because a Salam
-    // `_u_X` has its interior underscore doubled and comes out as `_u__X`.
     if n >= 2 && byte_at(name, 0) == 95 && (byte_at(name, 1) == 95 || (byte_at(name, 1) >= 65 && byte_at(name, 1) <= 90)):
         co.SbPuts(b, "_u_")
         mut jr := 1
@@ -109,13 +102,6 @@ func cg_cident(name: str): str:
         co.SbFree(b)
         ret r0
     end
-    // A LEADING underscore is copied through as one, not doubled. C reserves
-    // every identifier starting with "__" for the implementation, and gcc
-    // really does use that space: on x86-64 it predefines __k8 as an
-    // architecture macro, so Salam's `_k8` (the ordinary "declared but
-    // unused" spelling) became C's `__k8` and expanded to `1`. Interior
-    // underscores still double, so the mangling stays one-to-one:
-    // `_a_b` -> `_a__b`, while `a_b` -> `a__b`.
     mut j := 0
     if byte_at(name, 0) == 95:
         co.SbPutc(b, 95)
@@ -127,18 +113,12 @@ func cg_cident(name: str): str:
     end
     r := co.SbCstr(b)
     co.SbFree(b)
-    // Copying the leading underscore through as one lets a name land exactly
-    // on a C keyword that the doubling used to step over: `_Bool` came out as
-    // `__Bool` before, and as plain `_Bool` now - "two or more data types in
-    // declaration specifiers". The suffix is the same escape the all-alnum
-    // path above already applies to `int`, `while` and friends.
     if cg_is_c_keyword(r):
         ret r + "_"
     end
     ret r
 end
 
-// base_ctype - `found` mirrors the C's pointer-identity check (bc == base).
 func base_ctype(base: str, found &: bool): str:
     repeat K_CG_BASE_COUNT with i:
         if str.Equals(base, k_cg_base_s[i]):
@@ -150,19 +130,10 @@ func base_ctype(base: str, found &: bool): str:
     ret base
 end
 
-// A lambda, closure or function value. All of them lower to the `void*` that
-// carries the closure environment, which matters beyond the C spelling: a
-// callee takes that pointer as a plain `void*` and may write through it (a
-// counter closure updates the state it captured), so such a binding must not
-// be const-qualified even when the Salam name is immutable.
 func type_is_callable(ts: str): bool:
     ret str.StartsWith(ts, "func(") || str.StartsWith(ts, "externfunc(")
 end
 
-// A pointer to a callable, "(func(i32) i32)*" - the parenthesised spelling
-// type_to_string uses so the trailing stars cannot be read as part of the
-// return type. Every callable is a void* in C, so its pointer is void**,
-// one more star per level. "" when `ts` is not that shape.
 func cg_fnptr_ctype(ts: str): str:
     if !str.StartsWith(ts, "(func(") && !str.StartsWith(ts, "(externfunc("):
         ret ""
@@ -184,9 +155,6 @@ func cg_fnptr_ctype(ts: str): str:
     ret spelled
 end
 
-// parse_typestr_ex - cap mirrors the caller's base[] buffer size, plus the
-// star count that belongs to an array's ELEMENT type: "Edge*[6]" yields
-// base "Edge", dims {6}, ptr false, eptr 1.
 func parse_typestr_ex(
     ts: str, cap: int, base &: str, ptr &: bool, dims &: Vector<int>, eptr &: int, pdepth &: int
 ):
@@ -196,8 +164,6 @@ func parse_typestr_ex(
     dims.clear()
     tslen := str.Len(ts)
     mut n := tslen
-    // Stars nest: Vector<Edge*> lays its data pointer out as "Edge**", so
-    // the whole trailing run is counted rather than just the last one.
     until n > 0 && byte_at(ts, n - 1) == 42:
         ptr = true
         pdepth += 1
@@ -216,12 +182,6 @@ func parse_typestr_ex(
     if lb >= 0:
         blen = lb
     end
-    // An array OF pointers spells its stars between the element name and
-    // the first '[' - "Edge*[6]" is six Edge*, not a pointer to anything.
-    // They have to come off `base` here: everything downstream feeds the
-    // base through cg_cident, which would hex-escape the '*' into a type
-    // name that was never declared. The count travels out via eptr so
-    // callers can put the stars back on the element type.
     until blen > 0 && byte_at(ts, blen - 1) == 42:
         blen -= 1
         eptr += 1
@@ -254,9 +214,6 @@ func parse_typestr_ex(
             p = rb + 1
         end
     end
-    // `cap` is a leftover of the C port's fixed base[] buffer; a Salam
-    // string has no such limit, and truncating a long struct name here
-    // produced a C type that was never declared.
     _cap := cap
     base = str.Substr(ts, 0, blen)
 end
@@ -277,15 +234,6 @@ func cg_is_unsigned_typestr(ts: str): bool:
     ret str.Equals(ts, "u8") || str.Equals(ts, "u16") || str.Equals(ts, "u32") || str.Equals(ts, "u64") || str.Equals(ts, "size")
 end
 
-// The unsigned type of the same width, or `ts` itself when there isn't one.
-//
-// Salam defines +, - and * to wrap modulo 2^n in the operand type
-// (SALAM-TYPES 4.1, 15), but signed overflow is undefined in C, not wrapping:
-// at -O2 gcc is entitled to assume it never happens and fold the branch that
-// checks for it. Emitting the arithmetic in the unsigned twin and converting
-// the result back gives exactly the defined wrap Salam promises - unsigned
-// arithmetic is modular by definition, and the narrowing conversion back is
-// two's complement on every target Salam supports (and mandated by C23).
 func cg_unsigned_twin(ts: str): str:
     if str.Equals(ts, "i8"):
         ret "u8"
@@ -315,9 +263,6 @@ func cg_int_ts_bits(ts: str): int:
     ret 64
 end
 
-// Common type of an integer binary operation (SALAM-TYPES.md 15): same
-// signedness picks the higher rank, mixed signedness has no common type
-// (semantic analysis rejects it as E021).
 func cg_common_int_typestr(x: str, y: str): str:
     if !cg_is_int_typestr(x) || !cg_is_int_typestr(y):
         ret ""
@@ -335,7 +280,6 @@ func cg_op_is_cmp(k: int): bool:
     ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
 end
 
-// cg_vec_elem - elem of "Vector<T>" (cap mirrors the C ebuf).
 func cg_vec_elem(ts: str, cap: int): str:
     lt := str.IndexOf(ts, "<")
     gt := str.LastIndex(ts, ">")
@@ -350,10 +294,6 @@ func cg_vec_elem(ts: str, cap: int): str:
     until ee > es && byte_at(ts, ee - 1) == 32:
         ee -= 1
     end
-    // `cap` mirrors the C port's fixed buffer and is ignored: a nested
-    // element type longer than it was silently cut short, and the typedef
-    // for `Vector<HashMap<str, Vector<...>>>` then named a type that did
-    // not exist.
     _cap := cap
     ret str.Substr(ts, es, ee - es)
 end
@@ -368,7 +308,6 @@ func cg_encode_typestr(b &: str.StringBuilder, s: str, skip_spaces: bool):
         else c == 91:
             co.SbPuts(b, "_arr")
         else:
-            // ']' is dropped; so is ' ' when skip_spaces.
             if c != 93 && !(c == 32 && skip_spaces):
                 cg_put_ident_byte(b, c)
             end
@@ -389,7 +328,6 @@ func cg_vec_cname(ts: str): str:
     ret "Vector_" + cg_vec_code_str(cg_vec_elem(ts, 96))
 end
 
-// cg_variant_push_trimmed - [64][160] clamps kept.
 func variant_push_trimmed(ts: str, s0: int, e0: int, out2 &: Vector<str>):
     mut s := s0
     mut e := e0
@@ -402,7 +340,6 @@ func variant_push_trimmed(ts: str, s0: int, e0: int, out2 &: Vector<str>):
     out2.push(str.Substr(ts, s, e - s))
 end
 
-// cg_variant_members - the caller frees the returned vector.
 func cg_variant_members(ts: str): Vector<str>:
     mut mv := Vector {} as Vector<str>
     lt := str.IndexOf(ts, "<")
@@ -455,8 +392,6 @@ func cg_variant_tag_of(variant_ts: str, member_ts: str): int:
     ret r
 end
 
-// A type string that names a pointer. `x[i]` over one is address
-// arithmetic, never the pointee's operator_index (see sema's AST_INDEX).
 func cg_is_ptr_ts(ts: str): bool:
     ret str.EndsWith(ts, "*")
 end
@@ -469,7 +404,6 @@ func cg_slice_elem(ts: str, cap: int): str:
     ret cg_vec_elem(ts, cap)
 end
 
-// strpbrk(p, "[*") - index of the first '[' or '*' at/after `from`, -1 none.
 func pbrk_arr_star(s: str, from: int): int:
     n := str.Len(s)
     mut i := from
@@ -532,10 +466,6 @@ func cg_ctype(ts: str): str:
     ret bc
 end
 
-// The C spelling of an array type with no declarator attached -
-// "int32_t[3]" - which is what a compound literal needs in front of its
-// braces. "" for anything that is not a plain array of a nameable element
-// type, so callers can fall back to the bare brace form.
 func cg_array_ctype(ts: str): str:
     if str.Len(ts) == 0 || cg_is_slice_ts(ts) || str.StartsWith(ts, "Variant<") || str.StartsWith(ts, "dyn ") || str.StartsWith(ts, "func(") || str.StartsWith(ts, "("):
         ret ""
@@ -577,17 +507,6 @@ func cg_array_ctype(ts: str): str:
     ret r
 end
 
-// The C name of a module-level global. Functions and types have carried their
-// package since the beginning; globals went out under their bare Salam name,
-// so two modules that each declared `const COLS` produced two `COLS` objects
-// in one flat C namespace and the link failed with "multiple definition" -
-// even when neither was `pub`, and even for std's own `excel.FormatUnknown`
-// against `image.FormatUnknown`, which is why no program could import both.
-//
-// `pkg` is the package the global was declared in, not necessarily the module
-// being emitted: a generic body instantiated in another module still reads
-// its home package's globals, and must name them the same way that package
-// defined them.
 func cg_global_cname(pkg: str, name: str): str:
     ret "_Salam_g_" + cg_cident(str.Len(pkg) > 0 ? pkg : "main") + "_" + cg_cident(name)
 end
@@ -596,10 +515,6 @@ func cg_decl(ts: str, name: str): str:
     ret cg_decl_cn(ts, cg_cident(name))
 end
 
-// cg_decl over a name that is already a C identifier. A module-level global is
-// spelled with its package baked in (cg_global_cname), and that spelling must
-// not go through cg_cident a second time - the encoder doubles interior
-// underscores, so the definition and the extern would disagree.
 func cg_decl_cn(ts: str, name: str): str:
     if cg_is_slice_ts(ts):
         ret "salam_slice " + name
@@ -664,7 +579,6 @@ func cg_decl_cn(ts: str, name: str): str:
     ret bc + " " + cname
 end
 
-// type_code - encoded type_to_string (spaces kept, unlike vec_code_str).
 func type_code(s &: sm.Sema, t: int): str:
     ts := sm.ToString(s, t)
     mut b := co.SbNew()
@@ -674,7 +588,6 @@ func type_code(s &: sm.Sema, t: int): str:
     ret r
 end
 
-// cg_mangle_in - params are sm TypeIds. "" = the C NULL for pkg/sname.
 func cg_mangle_in(
     s &: sm.Sema, pkg: str, sname: str, fname: str, params: Vector<int>
 ): str:
@@ -708,7 +621,6 @@ func cg_mangle(
     ret cg_mangle_in(s, g.pkg, sname, fname, params)
 end
 
-// cg_mangle_method - owner is a SymId (0 = C NULL), sname "" = C NULL.
 func cg_mangle_method(
     g &: Cg, s &: sm.Sema, sname: str, owner: int, fname: str, params: Vector<int>
 ): str:
@@ -758,7 +670,6 @@ func func_ret_of(ts: str): str:
     ret "void"
 end
 
-// 'externfunc(...)' counterpart of func_ret_of (raw C function pointers).
 func raw_ret_of(ts: str): str:
     if !str.StartsWith(ts, "externfunc("):
         ret "void"
@@ -788,7 +699,6 @@ func raw_ret_of(ts: str): str:
     ret "void"
 end
 
-// Shared body of raw_cast_params / func_cast_params (identical scans in C).
 func cast_params_from(ts: str, s0: int): str:
     mut b := co.SbNew()
     co.SbPutc(b, 40)
@@ -804,11 +714,6 @@ func cast_params_from(ts: str, s0: int): str:
         else c == 62:
             depth -= 1
         else c == 41 && depth > 0:
-            // The ')' that closes a nested `func(...)` parameter is part
-            // of that parameter, not the end of the list. Testing depth
-            // after the decrement made `func(func(i32) i32, i32) i32`
-            // stop at the inner ')' and cast the value to a one-parameter
-            // function.
             depth -= 1
             p += 1
             continue
@@ -868,7 +773,6 @@ func func_cast_params_env(ts: str): str:
     ret "(void*, " + str.Substr(base, 1, str.Len(base) - 1)
 end
 
-// type_is_byval_agg - t is a sm TypeId (sm.TYPE_NONE = C NULL).
 func type_is_byval_agg(s &: sm.Sema, t: int): bool:
     if t == sm.TYPE_NONE:
         ret false
@@ -877,11 +781,6 @@ func type_is_byval_agg(s &: sm.Sema, t: int): bool:
     ret k == sm.TY_STRUCT || k == sm.TY_VEC || k == sm.TY_DYN || k == sm.TY_SLICE || k == sm.TY_VARIANT || k == sm.TY_ARRAY
 end
 
-// A fixed array returned by value needs the caller's storage passed in, the
-// same as a struct sret return, but the C declarator for "pointer to array"
-// puts the star and the name inside parens ahead of the dims - cg_ctype's
-// plain "append a star" only works for scalars and structs, so this is its
-// own helper rather than a case inside cg_decl.
 func cg_array_ret_decl(ts: str, name: str): str:
     mut base := ""
     mut ptr := false
@@ -899,8 +798,6 @@ func cg_array_ret_decl(ts: str, name: str): str:
         bc = bc + "*"
         eptr -= 1
     end
-    // `name` is a compiler-generated C identifier already (`__ret`), not
-    // a Salam name - cg_cident would double its leading underscores.
     mut b := co.SbNew()
     co.SbPuts(b, bc + " (*" + name + ")")
     repeat dims.len() with i:

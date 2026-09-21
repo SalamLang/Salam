@@ -14,19 +14,6 @@
 
 package tensor
 
-// Shape surgery. Everything here either rewrites metadata over the same
-// element order (Reshape, Squeeze, Unsqueeze) or materializes a copy in
-// the new order (Permute, Narrow, Concat2, Stack2, Pad2D). There are no
-// views to hand out, so "cheap" means the metadata forms and their
-// in-place variants; the copying forms say so by returning a fresh
-// tensor.
-//
-// The copying kernels all reduce to the same decomposition: pick the
-// axis being rearranged, call everything before it `outer` and
-// everything after it `inner`, and move contiguous `inner`-sized blocks.
-// Row-major order makes those blocks genuinely contiguous, so the inner
-// loops are flat pointer copies the vectorizer treats as memmove.
-
 // outer x inner products around one axis.
 func _outer_of(x &: Tensor, axis: int): int:
     mut o := 1
@@ -40,8 +27,6 @@ func _inner_of(x &: Tensor, axis: int): int:
     repeat r - axis - 1 with i: v = v * x.shape.get(axis + 1 + i) end
     ret v
 end
-
-// ---- public API ----
 
 // A reshaped copy. For the O(1) in-place form use the reshape_ method;
 // this one exists for call sites that need the original intact.
@@ -95,7 +80,6 @@ end
 pub func Permute(x &: Tensor, perm &: Vector<int>): Tensor:
     r := x.rank()
     if perm.len() != r || r == 0: ret Empty() end
-    // Validate: every value in range, each axis exactly once.
     mut in_range := true
     repeat r with i:
         p := perm.get(i)
@@ -112,7 +96,6 @@ pub func Permute(x &: Tensor, perm &: Vector<int>): Tensor:
     seen.free()
     if valid == false: ret Empty() end
 
-    // Input strides, then the stride each OUTPUT dimension advances by.
     mut istr := Vector {} as Vector<int>
     istr.zeros(r)
     mut acc := 1
@@ -134,8 +117,6 @@ pub func Permute(x &: Tensor, perm &: Vector<int>): Tensor:
     if n > 0:
         p := t.data.data
         q := x.data.data
-        // Odometer over the output multi-index; src tracks the input flat
-        // index incrementally, so there is no div/mod per element.
         mut idx := Vector {} as Vector<int>
         idx.zeros(r)
         mut src := 0

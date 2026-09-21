@@ -12,32 +12,12 @@
  *
  */
 
-// UDP is connectionless, so a server thread isn't needed to test a
-// send/receive round trip: bind the "server" socket and exchange
-// datagrams with a second socket, both on the main thread.
-//
-// UDP delivers on a best-effort basis even over loopback - a datagram
-// can be dropped under host load (confirmed here: this exact exchange
-// intermittently lost a packet under a busy parallel test run, with no
-// bug in either side's send/receive code - rerunning the identical
-// request always succeeded). A send/receive test therefore has to
-// tolerate that the way any real UDP client would: retry a bounded
-// number of times rather than treat one dropped datagram as a failure.
-
 import net.udp
 import mem
 
-// Resends `msg` from `sender` to `dest_host`:`dest_port` until `receiver`
-// actually gets something back or `tries` attempts are exhausted -
-// Receive() returns a zero-value Packet (empty data) on its configured
-// timeout, which is what a dropped datagram looks like from here.
 func send_recv(sender: udp.Socket, receiver: udp.Socket, dest_host: str, dest_port: int, msg: str, max: int, tries: int): udp.Packet:
     mut attempt := 0
     mut p := udp.Packet {}
-    // `until COND` loops WHILE COND holds (this is a while-loop, not a
-    // do-until, despite the keyword) - so the guard has to spell out
-    // "keep retrying", not "stop retrying", or the body never runs at
-    // all on the first pass.
     until attempt < tries:
         udp.Send(sender, dest_host, dest_port, msg)
         p = udp.Receive(receiver, max)
@@ -50,11 +30,6 @@ func send_recv(sender: udp.Socket, receiver: udp.Socket, dest_host: str, dest_po
 end
 
 func main:
-    // Bind(0) asks the OS for a free ephemeral port rather than using a
-    // hardcoded one - see rawsock.LocalPort's doc comment for why: a
-    // hardcoded port can collide with another process or a host's
-    // dynamic port reservations (observed in practice on Windows with
-    // Hyper-V/WSL2's NAT active).
     srv := udp.Bind(0)
     println udp.Ok(srv)
     udp.SetTimeout(srv, 2000)
@@ -73,8 +48,6 @@ func main:
     udp.Close(c)
     udp.Close(srv)
 
-    // Binary-safe SendBytes/ReceiveBytes path, including an embedded NUL
-    // byte a plain `str` round-trip would truncate.
     srv2 := udp.Bind(0)
     println udp.Ok(srv2)
     udp.SetTimeout(srv2, 2000)
@@ -96,9 +69,6 @@ func main:
     mut fp := 0
     mut n := udp.ReceiveBytes(srv2, rbuf, 16, fh, fp)
     mut attempt := 0
-    // Same while-not-do-until reminder as send_recv above: the guard is
-    // "still failed and still have retries left", not "succeeded or out
-    // of retries".
     until n <= 0 && attempt < 4:
         udp.SendBytes(c2, "127.0.0.1", srv2_port, buf, 5)
         n = udp.ReceiveBytes(srv2, rbuf, 16, fh, fp)

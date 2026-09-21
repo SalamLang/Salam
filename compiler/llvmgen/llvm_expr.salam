@@ -7,33 +7,7 @@ import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 import cg "../codegen/codegen.salam"
 
-// ===== codegen_llvm_expr.c =====
-
-// ll_nowrap - the 'nsw' on signed add/sub/mul, and only in a release build.
-//
-// A debug build emits none: salam defines signed and unsigned overflow alike
-// as two's-complement wrap (SALAM-TYPES.md 4.1), and 'nsw' tells LLVM signed
-// overflow is poison - which lets `(100 as i8) + (100 as i8)` fold to 200
-// instead of wrapping to -56. tests/en/exec/int_width_wrap.salam pins that.
-//
-// A release build trades the guarantee away, the same bargain it already makes
-// for bounds checks. It buys more than skipping a compare does: without it
-// LLVM cannot prove an `int` loop counter stays in range, so it will not widen
-// the counter to 64 bits, and without a widened counter it cannot strength
-// reduce the element address to a walking pointer or unroll the loop. That is
-// worth ~40% on an index-heavy loop (33_subset_sum_reachability, 22_knapsack).
-//
-// Never on unsigned types - unsigned wrap stays defined in every mode - and
-// never on the bitwise or shift operators, whose overflow is a different
-// question.
 func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
-    // Float arithmetic gets the other half of this decision: `contract` lets
-    // the backend fuse an adjacent multiply and add into a single FMA, which
-    // rounds once rather than twice. That is a strictly smaller error, but a
-    // different answer, so it only appears under --fp-contract. Without the
-    // tag LLVM leaves the pair as vmulpd + vaddpd, which is two instructions
-    // and two dependent latencies per multiply-add: on a 4x4 matrix product
-    // micro-kernel that is most of the distance to a tuned BLAS.
     if isflt:
         if !v.fp_contract:
             ret ""
@@ -52,7 +26,6 @@ func nowrap_flag(v &: Lv, k: int, isflt: bool, issigned: bool): str:
     ret ""
 end
 
-// ll_arith_op
 func arith_op(k: int, isflt: bool, issigned: bool): str:
     if k == tok.TK_PLUS:
         ret isflt ? "fadd" : "add"
@@ -87,15 +60,11 @@ func arith_op(k: int, isflt: bool, issigned: bool): str:
     ret ""
 end
 
-// ll_cmp_pred
 func cmp_pred(k: int, isflt: bool, issigned: bool): str:
     if k == tok.TK_EQ:
         ret isflt ? "oeq" : "eq"
     end
     if k == tok.TK_NE:
-        // `une`, not `one`: `!=` has to be true when either side is NaN, the
-        // way C's `!=` is. `one` is the ordered form and answers false for
-        // NaN, which made math.IsNaN() (`ret x != x`) always false.
         ret isflt ? "une" : "ne"
     end
     if k == tok.TK_LT:
@@ -113,12 +82,10 @@ func cmp_pred(k: int, isflt: bool, issigned: bool): str:
     ret ""
 end
 
-// ll_is_cmp
 func is_cmp_op(k: int): bool:
     ret k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE
 end
 
-// ll_to_ptr
 func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
     if is_ptr_ts(val.ts) || is_str(s, val.ts) || str.Equals(val.ts, "null"):
         ret val.ref
@@ -128,7 +95,6 @@ func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
     ret r
 end
 
-// ll_str_operand
 func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
     node := at.Get(a, n)
     ts := node.type_str
@@ -147,11 +113,6 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
             v, r + " = call ptr @salam_ll_charstr(i32 " + conv(v, s, a, val, "i32") + ")"
         )
     else is_float(ts):
-        // Through the runtime's salam_fmt_f64, the same shortest
-        // round-trip text print uses - the local %g helper rendered
-        // 12.56636 as "12.5664", so a concatenated float disagreed with a
-        // printed one. The local helper stays as the fallback for a
-        // program that somehow has no text package linked.
         dref := conv(v, s, a, val, "f64")
         fref := call_runtime_val(v, s, a, "salam_fmt_f64", "double", dref, "ptr")
         if str.Len(fref) > 0:
@@ -183,7 +144,6 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret r
 end
 
-// ll_binary_string
 func binary_string(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, op: int, out2 &: Llv
 ): bool:
@@ -225,7 +185,6 @@ func binary_string(
     ret false
 end
 
-// ll_binary_pow
 func binary_pow(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     node := at.Get(a, n)
     l := conv(v, s, a, lv_expr(v, s, a, node.a), "f64")
@@ -238,7 +197,6 @@ func binary_pow(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(r, str.Len(node.type_str) > 0 ? node.type_str : "f64")
 end
 
-// ll_op_method_name
 func op_method_name(k: int): str:
     if k == tok.TK_PLUS:
         ret "operator_add"
@@ -279,19 +237,12 @@ func op_method_name(k: int): str:
     ret ""
 end
 
-// ll_op_struct - sname2 receives the (possibly de-pointered) type name;
-// returns the struct SymId, 0 = none.
 func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
     if str.Len(ts) == 0:
         ret 0
     end
     sname2 = is_ptr_ts(ts) ? str.Substr(ts, 0, str.Len(ts) - 1) : ts
     ss := struct_sym(v, s, a, sname2)
-    // Mangle by the struct symbol's canonical type name, never by the spelling
-    // at the use site: ensure_fn emits the body through lv_function(.., ss),
-    // which uses owner_key, and the two have to agree. Resolving the symbol
-    // first also normalises a receiver whose type_str was written some other
-    // way.
     if ss != 0:
         nm := owner_key(s, ss)
         if str.Len(nm) > 0:
@@ -301,8 +252,6 @@ func op_struct(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, sname2 &: str): int:
     ret ss
 end
 
-// ll_pick_arity - first overload of `symid` with exactly `want` params,
-// 0 = none.
 func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     sy := sm.SymAt(s, symid)
     mut i := 0
@@ -316,7 +265,6 @@ func pick_arity(s &: sm.Sema, symid: int, want: int): int:
     ret 0
 end
 
-// ll_op_call - rhs = 0 for a unary operator method.
 func op_call(
     v &: Lv, s &: sm.Sema, a &: at.Ast, recv: int, sname2: str, ss: int, mname: str, rhs: int, out2 &: Llv
 ): bool:
@@ -328,13 +276,6 @@ func op_call(
     if sig == 0:
         ret false
     end
-    // Operator methods reached this way (v[i] lowering to operator_index,
-    // etc.) emitted the call without ever requesting the callee's body, so a
-    // monomorphized instance nothing else referenced - Vector<diag.Diag>'s
-    // operator_index - was called but never defined, and the module failed
-    // to parse. Every other call site pairs its emit with an ensure_fn.
-    // The body belongs to the scope that declares its type, not the
-    // caller's (see scope_of).
     mut osc := scope_of(s, ss)
     if osc == 0:
         osc = v.pkg_scope
@@ -365,14 +306,11 @@ func op_call(
     ret true
 end
 
-// ll_index_set
 func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): bool:
     idxn := at.Get(a, idx)
     if idxn.a == 0 || str.Len(at.Get(a, idxn.a).type_str) == 0:
         ret false
     end
-    // Writing through a pointer is address arithmetic, not the pointee's
-    // operator_index_set (see sema's AST_INDEX check).
     if is_ptr_ts(at.Get(a, idxn.a).type_str):
         ret false
     end
@@ -389,8 +327,6 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     if sig == 0:
         ret false
     end
-    // Same missing pairing as op_call: emit the call, request the body -
-    // under the scope that declares the type, not the caller's.
     mut osc := scope_of(s, ss)
     if osc == 0:
         osc = v.pkg_scope
@@ -410,7 +346,6 @@ func lv_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, idx: int, value: int): boo
     ret true
 end
 
-// ll_binary
 func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     node := at.Get(a, n)
     op := node.op
@@ -510,7 +445,6 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(r5, rt)
 end
 
-// ll_unary
 func lv_unary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     node := at.Get(a, n)
     if node.a != 0 && (node.op == tok.TK_MINUS || node.op == tok.TK_NOT):
@@ -554,7 +488,6 @@ func lv_unary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret poison(node.type_str)
 end
 
-// ll_incdec
 func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     node := at.Get(a, n)
     tgt := node.a
@@ -580,16 +513,10 @@ func lv_incdec(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret make_llv(node.is_prefix ? newv : oldv, ts)
 end
 
-// One segment of a print, already a string, sent straight to a file
-// descriptor. There is no stdio to go through: fd 1 keeps the same buffer
-// the all-literal path uses, fd 2 is written immediately so a panic message
-// survives whatever happens next.
 func write_free(v &: Lv, ref: str, err: bool):
     ln := new_tmp(v)
     emit(v, ln + " = call " + v.usize + " @strlen(ptr " + ref + ")")
     if err:
-        // Straight to libc write(2), whose length is pointer-width; only the
-        // internal salam_out_write below is fixed at i64.
         emit(
             v, new_tmp(v) + " = call " + v.usize + " @write(i32 2, ptr " + ref + ", " + v.usize + " " + ln + ")"
         )
@@ -605,10 +532,6 @@ func write_free(v &: Lv, ref: str, err: bool):
     end
 end
 
-// The freestanding counterpart of cg_lower_print_free: no printf to hand a
-// format string to, so every segment is turned into a string and written on
-// its own, in source order. The salam_tostr_* family std/console defines is
-// the same one the C backend calls.
 func lower_print_free(
     v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
 ):
@@ -648,8 +571,6 @@ func lower_print_free(
         else sg.kind == cg.PF_U64 || sg.kind == cg.PF_SIZE:
             ref = call_runtime_val(v, s, a, "salam_tostr_u64", "i64", conv(v, s, a, val, "u64"), "ptr")
         else:
-            // A double needs a correctly rounded conversion, and a kernel
-            // must not touch SSE at all. The C backend prints the same.
             ref = strconst(v, "<f64>")
         end
         if str.Len(ref) == 0:
@@ -660,7 +581,6 @@ func lower_print_free(
     end
 end
 
-// ll_lower_print
 func lv_lower_print(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
 ):
@@ -740,9 +660,6 @@ func lv_lower_print(
             else sg.kind == cg.PF_CHAR:
                 av = ", i32 " + conv(v, s, a, val, "i32")
             else sg.kind == cg.PF_F64:
-                // Printed as the text salam_fmt_f64 makes of it (the "%s"
-                // cg.PfSpec now asks for), so this backend and the C one
-                // and the browser all render a double the same way.
                 dref := conv(v, s, a, val, "f64")
                 fref := call_runtime_val(
                     v, s, a, "salam_fmt_f64", "double", dref, "ptr"
@@ -782,12 +699,6 @@ func lv_lower_print(
             v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) + ")"
         )
         if buffered:
-            // fflush(NULL) flushes every open output stream, which is all
-            // this needs: push the printf line out to fd 1 before the next
-            // @salam_out_write bypasses stdio. Reaching it through the
-            // `stdout` global instead would need the platform's spelling of
-            // that symbol - Darwin calls it `__stdoutp`, so `@stdout` was
-            // left unresolved there and took the whole module down with it.
             t2b := new_tmp(v)
             emit(v, t2b + " = call i32 @fflush(ptr null)")
         end

@@ -1,25 +1,5 @@
 package tls
 
-// Certificate structure: the TBS fields, the public key, and the
-// signature. Extensions, names and validity times are in x509ext.salam.
-
-
-
-// Certificate parsing. Identity matching lives in name.salam.
-
-// X.509 v3 certificate parsing (RFC 5280).
-//
-// Parsing only; chain building and trust decisions live in verify.salam. The
-// split matters: everything here is "what does this blob say", and nothing here
-// should ever be read as "and therefore it is trustworthy".
-//
-// Fields are kept as Readers pointing into the caller's certificate buffer
-// rather than copied out. That keeps a Cert cheap and, more importantly, keeps
-// `tbs` byte-identical to what the issuer actually signed. Re-encoding a parsed
-// structure and verifying the re-encoding is a classic way to accept a
-// certificate whose signature covers different bytes than the ones interpreted.
-// The consequence is that a Cert is only valid while its backing buffer lives.
-
 // public key algorithms
 const PK_UNKNOWN := 0
 const PK_RSA := 1
@@ -162,7 +142,6 @@ func _parse_spki(spki: Reader, c &: Cert): bool:
         ret false
     end
     if _oid_is(o, OID_RSA_ENCRYPTION):
-        // RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
         mut k := key
         mut ks := _der_seq(k)
         if k.bad:
@@ -174,7 +153,6 @@ func _parse_spki(spki: Reader, c &: Cert): bool:
             ret false
         end
         if c.rsa_n.len < 128:
-            // under 1024 bits; refuse rather than verify something forgeable
             ret false
         end
         c.pk_alg = PK_RSA
@@ -186,10 +164,6 @@ func _parse_spki(spki: Reader, c &: Cert): bool:
         if p.bad:
             ret false
         end
-        // Only the two curves the arithmetic implements are accepted. An
-        // unsupported curve is refused rather than stored, because keeping a
-        // key we cannot check signatures against would let it sit in a trust
-        // store looking usable.
         if _oid_is(curve, OID_PRIME256V1):
             if key.len != 65 || _rdat(key, 0) != 0x04:
                 ret false
@@ -220,8 +194,6 @@ func _cert_parse(p: void*, n: int): Cert:
     if top.bad:
         ret c
     end
-    // Trailing bytes after the certificate are not allowed: they would let the
-    // same buffer be read two different ways.
     if _rdleft(top) != 0:
         ret c
     end
@@ -233,7 +205,6 @@ func _cert_parse(p: void*, n: int): Cert:
     c.tbs = tbs.full
     mut t := tbs.body
 
-    // version [0] EXPLICIT, default v1
     mut version := 1
     if _der_is(t, ASN1_CTX0):
         vt := _der_tag(t, ASN1_CTX0)
@@ -248,8 +219,6 @@ func _cert_parse(p: void*, n: int): Cert:
         version = _rdat(vi, 0) + 1
     end
     if version != 3:
-        // v1/v2 certificates carry no extensions, so no basicConstraints and
-        // no SAN. Nothing on the modern web should present one.
         ret c
     end
 
@@ -306,7 +275,6 @@ func _cert_parse(p: void*, n: int): Cert:
         ret c
     end
 
-    // issuerUniqueID [1] / subjectUniqueID [2] are v2 leftovers; skip them
     if _der_is(t, ASN1_CTX1):
         _der_skip(t)
     end
@@ -337,27 +305,6 @@ func _cert_parse(p: void*, n: int): Cert:
     end
     outer_params := _rdrest(ob)
     c.sig_alg = _sig_alg_from_oid(outer_oid, outer_params)
-    // An unsupported signature algorithm (SHA-1, and anything else outside the
-    // supported set) is NOT a parse failure. A trust anchor is trusted because
-    // it is in the store, not because of its own self-signature, and many
-    // still-valid roots self-sign with SHA-1 while issuing SHA-256
-    // intermediates. Refusing to parse them would discard usable anchors for
-    // no security gain.
-    //
-    // Safety comes from the other side: _cert_signed_by only accepts the
-    // algorithms it implements, so SIG_UNKNOWN can never verify a link. A
-    // certificate carrying one is parseable but unusable as a signature.
-    //
-    // RFC 5280 4.1.1.2: the inner and outer algorithm identifiers must agree.
-    //
-    // Compared as full DER, not as the algorithm id they decode to. The outer
-    // signatureAlgorithm sits OUTSIDE tbsCertificate and is therefore not
-    // covered by the signature, so anything about it that is not checked here
-    // can be altered freely on a validly signed certificate. Comparing only
-    // the decoded id left the AlgorithmIdentifier parameters unconstrained,
-    // which a mutation fuzz found: flipping bytes there produced a modified
-    // certificate that still verified. Signature malleability like that is
-    // worth closing even when the field carries no meaning of its own.
     if inner_alg != c.sig_alg:
         ret c
     end

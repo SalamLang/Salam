@@ -14,10 +14,6 @@
 
 package main
 
-// std/onnx: the second op table - reductions, indexing, comparisons,
-// the extra activations and the normalizations - each checked against
-// the same math done directly on std/tensor.
-
 import compress
 import encoding.protobuf
 import math
@@ -69,7 +65,6 @@ func attr_float(name: str, v: f64): compress.ByteBuf:
     ret b
 end
 
-// Takes ownership of `vals`, which every caller builds inline.
 func attr_ints(name: str, vals: Vector<i64>): compress.ByteBuf:
     mut b := compress.NewByteBuf()
     put_str(b, 1, name)
@@ -124,9 +119,6 @@ func ilist(a: i64): Vector<i64>:
     ret v
 end
 
-// Builds a one-node model over the given initializers and feeds, runs
-// it, and returns output `which`. `okout` reports whether the run
-// succeeded.
 func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.ByteBuf>, inits: Vector<tensor.Tensor>, init_names: Vector<str>, feeds: Vector<tensor.Tensor>, feed_names: Vector<str>, which: int, okout &: bool): tensor.Tensor:
     okout = false
     mut g := compress.NewByteBuf()
@@ -134,8 +126,6 @@ func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.B
     repeat attrs.len() with i: sub(n, 5, attrs.get(i)) end
     sub(g, 1, n)
     compress.BufFree(n)
-    // Everything the caller composed for this one call is owned here:
-    // the attribute buffers, and the name vectors built inline.
     repeat attrs.len() with i:
         mut ab := attrs.get(i)
         compress.BufFree(ab)
@@ -186,14 +176,11 @@ func run1(op: str, ins: Vector<str>, outs: Vector<str>, attrs: Vector<compress.B
     ins_v.free()
     mut outs_v := outs
     outs_v.free()
-    // The feed NAMES are composed per call too; the feed tensors are the
-    // caller's and are left alone.
     mut fn_v := feed_names
     fn_v.free()
     ret out
 end
 
-// The single-feed, no-initializer, no-attribute shape.
 func run_x(op: str, x &: tensor.Tensor, attrs: Vector<compress.ByteBuf>, okout &: bool): tensor.Tensor:
     mut feeds := Vector {} as Vector<tensor.Tensor>
     feeds.push(x)
@@ -215,7 +202,6 @@ func main:
     eps := 0.0001
     mut ok := false
 
-    // ---- elementwise math ----
     mut x := tensor.Zeros2(2, 3)
     repeat 6 with k: x.set_at(k, (k as f64) - 2.5) end
     mut ab := run_x("Abs", x, no_attrs(), ok)
@@ -233,7 +219,6 @@ func main:
     testing.AssertEqFloat(sg.at(5), 1.0, eps)
     mut rc := run_x("Reciprocal", x, no_attrs(), ok)
     testing.AssertEqFloat(rc.at(0), 1.0 / (0.0 - 2.5), eps)
-    // Erf is the real one, so the GELU identity holds
     mut er := run_x("Erf", x, no_attrs(), ok)
     testing.AssertEqFloat(er.at(0), 0.0 - 0.999593, 0.0001)
     testing.AssertEqFloat(er.at(2), 0.0 - 0.5205, 0.0005)
@@ -242,7 +227,6 @@ func main:
     testing.AssertTrue(tensor.AllClose(gel, want_gel, 0.001))
     mut sp := run_x("Softplus", x, no_attrs(), ok)
     testing.AssertEqFloat(sp.at(0), math.Log(1.0 + math.Exp(0.0 - 2.5)), 0.0001)
-    // Elu and HardSigmoid take their attributes
     mut ea := no_attrs()
     ea.push(attr_float("alpha", 2.0))
     mut el := run_x("Elu", x, ea, ok)
@@ -252,7 +236,6 @@ func main:
     testing.AssertEqFloat(hs.at(0), 0.0, eps)
     testing.AssertEqFloat(hs.at(5), 1.0, eps)
 
-    // ---- Pow, and the variadic family ----
     mut two := tensor.Zeros1(1)
     two.set_at(0, 2.0)
     mut feeds2 := Vector {} as Vector<tensor.Tensor>
@@ -279,7 +262,6 @@ func main:
     mut me := run1("Mean", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
     testing.AssertEqFloat(me.at(0), 0.0 - 0.75, eps)
 
-    // ---- reductions ----
     mut ra := no_attrs()
     ra.push(attr_ints("axes", ilist(1 as i64)))
     ra.push(attr_int("keepdims", 0))
@@ -292,7 +274,7 @@ func main:
     mut ra2 := no_attrs()
     ra2.push(attr_ints("axes", ilist(1 as i64)))
     mut rm := run_x("ReduceMean", x, ra2, ok)
-    testing.AssertEqInt(rm.rank(), 2)      // keepdims defaults to 1
+    testing.AssertEqInt(rm.rank(), 2)
     testing.AssertEqInt(rm.dim(1), 1)
     mut want_rm := tensor.MeanAxis(x, 1, true)
     testing.AssertTrue(tensor.AllClose(rm, want_rm, eps))
@@ -307,11 +289,9 @@ func main:
     ra4.push(attr_int("keepdims", 0))
     mut rn := run_x("ReduceMin", x, ra4, ok)
     testing.AssertEqFloat(rn.at(0), 0.0 - 2.5, eps)
-    // no axes at all reduces everything
     mut rall := run_x("ReduceSum", x, no_attrs(), ok)
     testing.AssertEqFloat(rall.at(0), tensor.SumAll(x), eps)
 
-    // ---- Gather, Slice, Split, Shape, Expand ----
     mut table := tensor.Zeros2(4, 2)
     repeat 8 with k: table.set_at(k, k as f64) end
     mut ids := tensor.Zeros1(3)
@@ -328,7 +308,6 @@ func main:
     testing.AssertEqFloat(gt.at2(0, 0), 4.0, eps)
     testing.AssertEqFloat(gt.at2(1, 1), 1.0, eps)
     testing.AssertEqFloat(gt.at2(2, 0), 6.0, eps)
-    // a negative index counts from the end
     mut ids2 := tensor.Zeros1(1)
     ids2.set_at(0, 0.0 - 1.0)
     mut gfeeds2 := Vector {} as Vector<tensor.Tensor>
@@ -336,7 +315,6 @@ func main:
     gfeeds2.push(ids2)
     mut gt2 := run1("Gather", names2("t", "i"), names1("y"), no_attrs(), noinit, nonames, gfeeds2, names2("t", "i"), 0, ok)
     testing.AssertEqFloat(gt2.at2(0, 0), 6.0, eps)
-    // along axis 1
     mut ga := no_attrs()
     ga.push(attr_int("axis", 1))
     mut gt3 := run1("Gather", names2("t", "i"), names1("y"), ga, noinit, nonames, gfeeds2, names2("t", "i"), 0, ok)
@@ -351,7 +329,6 @@ func main:
     testing.AssertTrue(ok)
     testing.AssertEqInt(sl.dim(0), 2)
     testing.AssertEqFloat(sl.at2(0, 0), 2.0, eps)
-    // an end past the axis clamps
     mut sa2 := no_attrs()
     sa2.push(attr_ints("starts", ilist(2 as i64)))
     sa2.push(attr_ints("ends", ilist(99 as i64)))
@@ -392,7 +369,6 @@ func main:
     testing.AssertEqInt(ex.dim(0), 3)
     testing.AssertEqFloat(ex.at2(2, 1), 7.0, eps)
 
-    // ---- comparisons and Where ----
     mut gr := run1("Greater", names2("x", "o"), names1("y"), no_attrs(), noinit, nonames, feeds3, names2("x", "o"), 0, ok)
     testing.AssertTrue(ok)
     testing.AssertEqFloat(gr.at(0), 0.0, eps)
@@ -407,10 +383,9 @@ func main:
     wfeeds.push(other)
     mut wh := run1("Where", names3("c", "a", "b"), names1("y"), no_attrs(), noinit, nonames, wfeeds, names3("c", "a", "b"), 0, ok)
     testing.AssertTrue(ok)
-    testing.AssertEqFloat(wh.at(0), 1.0, eps)      // condition false: takes `other`
-    testing.AssertEqFloat(wh.at(5), 2.5, eps)      // condition true: takes x
+    testing.AssertEqFloat(wh.at(0), 1.0, eps)
+    testing.AssertEqFloat(wh.at(5), 2.5, eps)
 
-    // ---- PRelu and the normalizations ----
     mut slope := tensor.Zeros1(1)
     slope.set_at(0, 0.5)
     mut pfeeds := Vector {} as Vector<tensor.Tensor>
@@ -431,7 +406,6 @@ func main:
     mut ln := run1("LayerNormalization", names3("x", "s", "b"), names1("y"), no_attrs(), noinit, nonames, lfeeds, names3("x", "s", "b"), 0, ok)
     testing.AssertTrue(ok)
     testing.AssertEqInt(ln.dim(1), 3)
-    // each row now has zero mean and unit variance
     mut row_ok := true
     repeat 2 with r:
         mut mean := 0.0
@@ -443,7 +417,6 @@ func main:
     end
     testing.AssertTrue(row_ok)
 
-    // ---- what is still unsupported says so ----
     mut bad := run_x("Einsum", x, no_attrs(), ok)
     testing.AssertFalse(ok)
     testing.AssertTrue(bad.is_empty())

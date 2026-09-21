@@ -6,11 +6,6 @@ import at "../ast.salam"
 import lg "../logger.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_lambda.c =====
-
-// cg_emit_lambda - writes the lifted lambda's decl into blamd and its
-// definition into blamf (the C's cg->c = cg->lam_defs swap becomes
-// g.cur = CG_OUT_LAMF). Names the node in place.
 func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     nn := at.Get(a, n)
     if str.Len(nn.name) > 0:
@@ -54,11 +49,6 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     end
     outd(g, "static " + cret + " " + name + "(" + ps + ");\n")
     if ncap == 0:
-        // The capture-free value is a static object defined next to the
-        // body, which lands after every function of the module. A lambda
-        // in a global initializer is taken by address from the module's
-        // init function, ahead of that, so the object is declared here
-        // (a tentative definition) alongside the prototype.
         outd(g, "static void *" + name + "_env;\n")
     end
     saved_cur := g.cur
@@ -74,11 +64,8 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     g.indent = 0
     g.locals = Vector {} as Vector<str>
     g.fn_defers = Vector {} as Vector<int>
-    // The loop marks index fn_defers, which the lambda body restarts.
     g.loop_dmark = Vector {} as Vector<int>
     g.cur_sret = false
-    // A lambda body is its own C function, never `int main` - a bare `ret`
-    // in it is a real `return;`.
     g.cur_is_main = false
     g.cur_struct = 0
     g.cur_lambda = n
@@ -139,8 +126,6 @@ func cg_emit_lambda(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_line(g, "static void *" + name + "_env = (void*)&" + name + ";")
     end
     outc(g, 10)
-    // The C restored the saved vecs and leaked the inner ones; the port
-    // frees them.
     mut inner_locals := g.locals
     defer inner_locals.free()
     mut inner_defers := g.fn_defers
@@ -178,8 +163,6 @@ func cg_lambda_value(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret nn.name + "_make(" + args + ")"
 end
 
-// cg_lift_walk - pre-pass that lifts every lambda in the tree into
-// blamd/blamf (recurses a/b/c/d and list only, like the C).
 func cg_lift_walk(g &: Cg, s &: sm.Sema, a &: at.Ast, node: int):
     if node == 0:
         ret
@@ -199,12 +182,6 @@ func cg_lift_walk(g &: Cg, s &: sm.Sema, a &: at.Ast, node: int):
     end
 end
 
-// ===========================================================================
-// PUBLIC API (rule E088: everything from here on must be pub).
-// ===========================================================================
-
-// --- codegen_type.c ---
-
 pub func Cident(name: str): str:
     ret cg_cident(name)
 end
@@ -213,7 +190,6 @@ pub func Ctype(ts: str): str:
     ret cg_ctype(ts)
 end
 
-// cg_decl
 pub func CDecl(ts: str, name: str): str:
     ret cg_decl(ts, name)
 end
@@ -238,9 +214,6 @@ pub func VariantTagOf(variant_ts: str, member_ts: str): int:
     ret cg_variant_tag_of(variant_ts, member_ts)
 end
 
-// AddExportOverride - make free (non-method) top-level pub func `fname`,
-// defined in package `pkg`, keep its literal C name `cname` instead of the
-// usual mangled one. See cg_mangle_in.
 pub func AddExportOverride(pkg: str, fname: str, cname: str):
     g_cg_export_pkg.push(pkg)
     g_cg_export_from.push(fname)
@@ -291,7 +264,6 @@ pub func PrimSuffix(tag: int): str:
     ret prim_suffix(tag)
 end
 
-// cg_mangle_in - params are sm TypeIds; "" = the C NULL for pkg/sname.
 pub func MangleIn(
     s &: sm.Sema, pkg: str, sname: str, fname: str, params: Vector<int>
 ): str:
@@ -308,33 +280,22 @@ pub func TypeIsByvalAgg(s &: sm.Sema, t: int): bool:
     ret type_is_byval_agg(s, t)
 end
 
-// --- print_fmt.c ---
-
 pub func PfSpec(k: int): str:
     ret pf_spec_impl(k)
 end
 
-// pf_build - segments for print/println; the caller frees `out`.
 pub func PfBuild(a &: at.Ast, call: int, nl: bool, out2 &: Vector<PfSeg>):
     pf_build_impl(a, call, nl, out2)
 end
 
-// --- codegen.c ---
-
-// cg_tidy (exposed for tests/backends).
 pub func Tidy(src: str): str:
     ret cg_tidy(src)
 end
 
-// salam_module_single_threaded
 pub func ModuleSingleThreaded(a &: at.Ast, program: int): bool:
     ret module_single_threaded_impl(a, program)
 end
 
-// codegen_run - the driver-facing entry. `s` must hold a successful
-// sm.Run over `program`; module_name is the output module stem (driver's
-// module_of), entry the langpack entry name ("" = "main"), target_triple
-// "" = the C NULL. Returns the generated .h/.c text (cg_tidy'd).
 pub func Run(
     lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, program: int, module_name: str, safe: bool, debug_info: bool,
     src_path: str, entry: str, target_triple: str
@@ -344,16 +305,6 @@ pub func Run(
     g.module = module_name
     g.safe = safe
     g.debug_info = debug_info
-    // A print whose text is entirely literal goes to a raw buffer written
-    // with write(2) on fd 1, past stdio; everything else goes through
-    // printf. Keeping the two in step is what the salam_out_flush() in
-    // cg_order_stdout is for, and on Windows it does not hold: the REPL
-    // (the one program here that prints literals around a system() call)
-    // lost every literal it printed and kept every computed one, on a
-    // release build where the rest of the suite was fine. llvmgen has
-    // excluded Windows targets from this buffer since it was written -
-    // "whose CRT has no `write` for the helper to call" - so exclude them
-    // here too, and a print reads the same whichever backend built it.
     g.single_threaded = module_single_threaded_impl(a, program) && !cg_target_is_windows(target_triple)
     g.freestanding = cg_target_is_freestanding(target_triple)
     g.kernel = cg_target_is_kernel(target_triple)

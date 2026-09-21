@@ -14,17 +14,6 @@
 
 package tls
 
-// ChaCha20, Poly1305, and the ChaCha20-Poly1305 AEAD (RFC 8439).
-//
-// This is the preferred cipher suite for the native stack. Both primitives are
-// built entirely from add/xor/rotate on whole registers with no data-dependent
-// table lookups or branches, so they are constant-time by construction -- which
-// is exactly what a table-driven AES cannot promise (see aes.salam).
-//
-// Poly1305 uses the well-known 5 x 26-bit limb representation: each limb fits
-// in a u32, and every limb-by-limb product fits in a u64 with room for the
-// five-term sum, so no 128-bit type is needed.
-
 const POLY_MASK26 := 0x3ffffff as u32
 
 struct ChaState:
@@ -62,8 +51,6 @@ inline func _ple32(v: u32, p: void*, o: int):
     _bput(p, o + 3, ((v >> (24 as u32)) & (0xFF as u32)) as int)
 end
 
-// ---------------------------------------------------------------- ChaCha20
-
 func _cha_qr(s &: ChaState, a: int, b: int, c: int, d: int):
     s.w[a] += s.w[b]
     s.w[d] = _rotl32(s.w[d] ^ s.w[a], 16 as u32)
@@ -78,7 +65,6 @@ end
 // Produce one 64-byte keystream block for (key, counter, nonce).
 func _cha_block(key: void*, counter: u32, nonce: void*, out: void*):
     mut st := ChaState {}
-    // "expand 32-byte k"
     st.w[0] = 0x61707865 as u32
     st.w[1] = 0x3320646e as u32
     st.w[2] = 0x79622d32 as u32
@@ -92,12 +78,10 @@ func _cha_block(key: void*, counter: u32, nonce: void*, out: void*):
     end
     mut wk := st
     repeat 10:
-        // column rounds
         _cha_qr(wk, 0, 4, 8, 12)
         _cha_qr(wk, 1, 5, 9, 13)
         _cha_qr(wk, 2, 6, 10, 14)
         _cha_qr(wk, 3, 7, 11, 15)
-        // diagonal rounds
         _cha_qr(wk, 0, 5, 10, 15)
         _cha_qr(wk, 1, 6, 11, 12)
         _cha_qr(wk, 2, 7, 8, 13)
@@ -130,15 +114,12 @@ func _cha20_xor(key: void*, counter: u32, nonce: void*, inp: void*, out: void*, 
     end
 end
 
-// ---------------------------------------------------------------- Poly1305
-
 func _poly_init(key: void*): Poly1305:
     mut st := Poly1305 {}
     t0 := _le32(key, 0)
     t1 := _le32(key, 4)
     t2 := _le32(key, 8)
     t3 := _le32(key, 12)
-    // r &= 0x0ffffffc0ffffffc0ffffffc0fffffff, folded into the limb masks
     st.r[0] = t0 & (0x3ffffff as u32)
     st.r[1] = ((t0 >> (26 as u32)) | (t1 << (6 as u32))) & (0x3ffff03 as u32)
     st.r[2] = ((t1 >> (20 as u32)) | (t2 << (12 as u32))) & (0x3ffc0ff as u32)
@@ -186,7 +167,6 @@ func _poly_blocks(st &: Poly1305, p: void*, n: int, fin: bool):
         h3 += ((t2 >> (14 as u32)) | (t3 << (18 as u32))) & POLY_MASK26
         h4 += (t3 >> (8 as u32)) | hibit
 
-        // h *= r mod 2^130-5; the 5x reduction is folded into s1..s4
         d0 := (h0 as u64) * (r0 as u64) + (h1 as u64) * (s4 as u64) + (h2 as u64) * (s3 as u64) + (h3 as u64) * (s2 as u64) + (h4 as u64) * (s1 as u64)
         mut d1 := (h0 as u64) * (r1 as u64) + (h1 as u64) * (r0 as u64) + (h2 as u64) * (s4 as u64) + (h3 as u64) * (s3 as u64) + (h4 as u64) * (s2 as u64)
         mut d2 := (h0 as u64) * (r2 as u64) + (h1 as u64) * (r1 as u64) + (h2 as u64) * (r0 as u64) + (h3 as u64) * (s4 as u64) + (h4 as u64) * (s3 as u64)
@@ -223,13 +203,9 @@ func _poly_blocks(st &: Poly1305, p: void*, n: int, fin: bool):
 end
 
 func _poly_update(st &: Poly1305, p: void*, n: int):
-    // Allocated at function scope on purpose: a `defer` written inside a
-    // nested block is hoisted to function exit by codegen, where the
-    // block-local name is no longer in scope.
     mut tmp := _newbuf(16)
     defer _buf_free(tmp)
     mut i := 0
-    // top up a partial block first
     if st.blen > 0:
         mut want := 16 - st.blen
         if want > n:
@@ -263,12 +239,9 @@ end
 
 func _poly_final(st0: Poly1305, out: void*):
     mut st := st0
-    // function scope, not inside the `if`: see the note in _poly_update
     mut tmp := _newbuf(16)
     defer _buf_free(tmp)
     if st.blen > 0:
-        // pad the trailing partial block with 0x01 then zeros, and absorb it
-        // with the implicit high bit disabled
         n := st.blen
         repeat n with j:
             _put8(tmp, st.blk[j] as int)
@@ -302,7 +275,6 @@ func _poly_final(st0: Poly1305, out: void*):
     h0 = h0 & POLY_MASK26
     h1 += c
 
-    // g = h + 5; if it did not borrow, h was >= p and g is the reduced value
     mut g0 := h0 + (5 as u32)
     c = g0 >> (26 as u32)
     g0 = g0 & POLY_MASK26
@@ -317,7 +289,6 @@ func _poly_final(st0: Poly1305, out: void*):
     g3 = g3 & POLY_MASK26
     g4 := h4 + c - ((1 as u32) << (26 as u32))
 
-    // Branch-free select: mask is all-ones when g4 stayed non-negative.
     mut mask := (g4 >> (31 as u32)) - (1 as u32)
     g0 = g0 & mask
     g1 = g1 & mask
@@ -331,7 +302,6 @@ func _poly_final(st0: Poly1305, out: void*):
     h3 = (h3 & mask) | g3
     h4 = (h4 & mask) | g4m
 
-    // repack the 26-bit limbs into four 32-bit words
     h0 = (h0 | (h1 << (26 as u32)))
     h1 = ((h1 >> (6 as u32)) | (h2 << (20 as u32)))
     h2 = ((h2 >> (12 as u32)) | (h3 << (14 as u32)))
@@ -357,8 +327,6 @@ func _poly1305(key: void*, msg: void*, n: int, out: void*):
     _poly_update(st, msg, n)
     _poly_final(st, out)
 end
-
-// ---------------------------------------------------------------- AEAD
 
 func _poly_pad16(st &: Poly1305, n: int):
     rem := n % 16

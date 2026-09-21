@@ -3,20 +3,6 @@ package interp
 import str
 import at "../ast.salam"
 
-// Port of c/src/interp/interp_memlayout.c - raw memory <-> interpreter values.
-//
-// The tree walker runs std's own Salam containers, so a Vector<T> really does
-// allocate `count * sizeof(T)` bytes and index them. For a scalar T that is a
-// plain typed load. For a struct T the bytes have to hold the fields
-// themselves, laid out exactly the way interp_sizeof_typename measures them:
-// the stride the Salam code computes and the stride the walker reads are the
-// same number, so one layout has to answer both.
-//
-// A value with no byte image at all (an array, a closure, an iterator) is kept
-// in ip.mem_boxes and referenced from the slot by a tagged token, never by a
-// pointer: an uninitialized slot then reads back as null instead of following
-// whatever the allocator left there.
-
 const SLOT_I8 := 0
 const SLOT_I16 := 1
 const SLOT_I32 := 2
@@ -34,9 +20,7 @@ const SLOT_PTR := 13
 const SLOT_STRUCT := 14
 const SLOT_BOX := 15
 
-// Tag in the top 16 bits of a box token, so a slot holding anything else
-// (zero, a small integer, a stale pointer) fails the check and reads null.
-const MEM_BOX_TAG := 21314 as i64 // 0x5342
+const MEM_BOX_TAG := 21314 as i64
 const MEM_BOX_SHIFT := 48
 
 func field_type_str(a &: at.Ast, f: int): str:
@@ -47,8 +31,6 @@ func field_type_str(a &: at.Ast, f: int): str:
     ret at.Get(a, fn.ty).type_str
 end
 
-// slot_kind - one classifier behind sizeof, alignof, load and store, so the
-// four can never disagree about a type's byte image.
 func slot_kind(ip &: Interp, ts: str): int:
     n := str.Len(ts)
     if n == 0:
@@ -134,8 +116,6 @@ func interp_alignof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
     ret maxalign
 end
 
-// Round `off` up to where a field of type `ts` starts, so every walk over a
-// struct's bytes advances identically.
 func field_offset(ip &: Interp, a &: at.Ast, ts: str, off: i64): i64:
     al := interp_alignof_typename(ip, a, ts)
     ret (off + al - (1 as i64)) & (~(al - (1 as i64)))
@@ -162,8 +142,6 @@ end
 
 func interp_sizeof_typename(ip &: Interp, a &: at.Ast, ts: str): i64:
     k := slot_kind(ip, ts)
-    // Every slot the walker stores directly is as wide as it is aligned; only
-    // a struct has to be measured field by field.
     if k == SLOT_STRUCT:
         ret struct_size(ip, a, find_struct(ip, ts))
     end
@@ -233,9 +211,6 @@ func struct_store(ip &: Interp, a &: at.Ast, base: i64, sd: int, v: Value):
         if at.KindOf(a, f) == at.AST_FIELD:
             fts := field_type_str(a, f)
             off = field_offset(ip, a, fts, off)
-            // A field the source value does not carry - a null assignment, or
-            // a value of a different shape - is written as its zero rather
-            // than left holding whatever the allocator handed back.
             fv := field_of(ip, v, at.Get(a, f).name)
             interp_mem_store(ip, a, base + off, fts, fv)
             off += interp_sizeof_typename(ip, a, fts)
@@ -296,7 +271,6 @@ func interp_mem_store(ip &: Interp, a &: at.Ast, addr: i64, ts: str, v: Value):
     ptr_store(addr, mem_ptr_elem(k), 0 as i64, v)
 end
 
-// The PTR_* kind that reads and writes a scalar slot the same way.
 func mem_ptr_elem(k: int): int:
     if k == SLOT_I8:
         ret PTR_I8
@@ -334,8 +308,6 @@ func mem_ptr_elem(k: int): int:
     ret PTR_OPAQUE
 end
 
-// Count the trailing '*'s of a type string. `Tag*` points at a struct the
-// walker can lay out; `Tag**` points at a pointer, which is one opaque word.
 func star_count(ts: str): int:
     mut n := str.Len(ts)
     mut stars := 0
@@ -346,8 +318,6 @@ func star_count(ts: str): int:
     ret stars
 end
 
-// A VAL_PTR for `addr`, given the pointer type it was cast to. PTR_STRUCT
-// carries the pointee's name in `s`, which VAL_PTR does not otherwise use.
 func interp_ptr_value(ip &: Interp, addr: i64, ts: str): Value:
     elem := ptr_elem_from_typestr(ts)
     if elem != PTR_OPAQUE || star_count(ts) != 1:
@@ -366,8 +336,6 @@ func interp_ptr_elem_addr(ip &: Interp, a &: at.Ast, pv: Value, idx: i64): i64:
     ret pv.pa + idx * interp_sizeof_typename(ip, a, pv.s)
 end
 
-// ptr_load / ptr_store with a struct element type folded in; the scalar kinds
-// go straight through to the FFI-level pair in interp_valops.salam.
 func mem_ptr_load(ip &: Interp, a &: at.Ast, pv: Value, idx: i64): Value:
     if pv.pe == PTR_STRUCT:
         ret interp_mem_load(ip, a, interp_ptr_elem_addr(ip, a, pv, idx), pv.s)
@@ -403,10 +371,6 @@ func field_place(
     ret false
 end
 
-// interp_mem_ptr_field (interp_memlayout.c) - address and type of field
-// `name` inside the struct `v` points at. This is what lets `p.f` read
-// through a pointer without the longhand `p[0].f`; a heap-node walk like
-// `root.key` is the shape that needs it.
 func interp_mem_ptr_field(
     ip &: Interp, a &: at.Ast, v: Value, name: str, addr &: i64, ts &: str
 ): bool:
@@ -419,15 +383,6 @@ func interp_mem_ptr_field(
     ret field_place(ip, a, v.pa, find_struct(ip, v.s), name, addr, ts)
 end
 
-// True when `n` names a place inside real memory: `p[i]` through a pointer to
-// a struct, and any field chain below it. Assigning to one of those has to
-// reach the bytes, because the value a load produced is a copy - a write to
-// `v.ref(i)[0].name` would otherwise land in the copy and be lost with no
-// diagnostic.
-//
-// Returning false costs the caller one repeated evaluation of the indexed
-// expression, which is why only a chain rooted in an index is ever offered
-// here (see interp_resolve_loc).
 func interp_mem_lvalue(
     ip &: Interp, a &: at.Ast, env: int, n: int, addr &: i64, ts &: str
 ): bool:

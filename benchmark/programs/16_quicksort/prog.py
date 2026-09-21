@@ -1,5 +1,3 @@
-"""Quicksort benchmark."""
-
 import sys
 
 sys.setrecursionlimit(10000)

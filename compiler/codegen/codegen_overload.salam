@@ -5,9 +5,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_overload.c (rest) =====
-
-// pick_overload - SigId (0 = C NULL). fsym is a SymId, call an at.NodeId.
 func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
     mut fallback := 0
     fs := sm.SymAt(s, fsym)
@@ -44,7 +41,6 @@ func pick_overload(s &: sm.Sema, a &: at.Ast, fsym: int, call: int): int:
     ret fallback
 end
 
-// struct_by_name - SymId (0 = C NULL).
 func struct_by_name(s &: sm.Sema, name: str): int:
     sy := sm.Lookup(s, s.global, name)
     if sy != 0 && sm.SymAt(s, sy).kind == sm.SYM_STRUCT:
@@ -79,14 +75,6 @@ func struct_by_name(s &: sm.Sema, name: str): int:
             end
         end
     end
-    // Not in scope: the type may come from a package this module never
-    // imports itself - a data.Table's `cells` is a matrix.Matrix, and a
-    // gguf.LoadTensorF32 result is a tensor.Tensor, whether or not the
-    // caller imported matrix or tensor. Every package ever loaded is in
-    // the sema's package cache, so search those members too. Without this
-    // the method call fell through to cg_mangle_method with owner 0 and
-    // was mangled as a generic instantiation (`_Salam_g_S_...`), a symbol
-    // no header declares.
     repeat s.pkg_cache_syms.len() with ci:
         pkid2 := s.pkg_cache_syms.get(ci)
         if pkid2 == 0:
@@ -114,30 +102,14 @@ func struct_by_name(s &: sm.Sema, name: str): int:
     ret 0
 end
 
-// A member/index expression is only really addressable in the emitted C if
-// its BASE is: `x.field`/`x[i]` need `x` itself to be a real lvalue (or a
-// compound literal, which C99 lvalues too). A base that is itself a call
-// result (e.g. `sm.SymAt(s, sym).overloads`) is emitted as a GNU
-// statement-expression (see call_sret) whose value gcc/clang do NOT treat
-// as addressable once a further `.field`/`&(...)` is chained onto it
-// ("lvalue required as unary '&' operand") - so this must recurse into the
-// base rather than assume every AST_MEMBER/AST_INDEX is addressable.
 func cg_addressable(s &: sm.Sema, a &: at.Ast, n: int): bool:
     k := at.KindOf(a, n)
     if k == at.AST_MEMBER:
         ret cg_addressable(s, a, at.Get(a, n).a)
     end
     if k == at.AST_INDEX:
-        // `xs[i]` is an lvalue while it lowers to C's own indexing. Where
-        // the container is a struct value with an operator_index, it lowers
-        // to a CALL instead, and a call's result has no address: `&` over it
-        // is what gcc rejects with "lvalue required as unary '&' operand".
         cont := at.Get(a, n).a
         cts := at.Get(a, cont).type_str
-        // `p[0]` through a pointer is C's own `p[0]`, an lvalue no matter
-        // what produced the pointer - a call, a field of a call's result.
-        // Recursing into the base said "not addressable" for those and the
-        // method call that followed then ran on a copy of the pointee.
         if str.EndsWith(cts, "*"):
             ret true
         end
@@ -155,8 +127,6 @@ func cg_addressable(s &: sm.Sema, a &: at.Ast, n: int): bool:
     ret k == at.AST_IDENTIFIER || k == at.AST_THIS || k == at.AST_STRUCT_LIT
 end
 
-// cg_struct_of - SymId; sname gets the parsed base typestr (the C wrote
-// into the caller's char sname[96] buffer).
 func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
     mut ptr := false
     mut dims := Vector {} as Vector<int>
@@ -165,7 +135,6 @@ func cg_struct_of(s &: sm.Sema, ts: str, sname &: str): int:
     ret struct_by_name(s, sname)
 end
 
-// cg_op_method - "" = C NULL.
 func cg_op_method(k: int): str:
     if k == tok.TK_PLUS:
         ret "operator_add"
@@ -206,7 +175,6 @@ func cg_op_method(k: int): str:
     ret ""
 end
 
-// cg_compound_base - tok.TK_EOF = none.
 func cg_compound_base(k: int): int:
     if k == tok.TK_PLUS_EQ:
         ret tok.TK_PLUS
@@ -229,7 +197,6 @@ func cg_compound_base(k: int): int:
     ret tok.TK_EOF
 end
 
-// pick_op_overload - SigId; first overload with the wanted param count.
 func pick_op_overload(s &: sm.Sema, msym: int, want_nparams: int): int:
     mut fallback := 0
     ms := sm.SymAt(s, msym)

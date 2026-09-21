@@ -12,47 +12,6 @@
  *
  */
 
-// Real IANA timezones, read from the system's tzdata at runtime.
-//
-// timezone.salam's TimeZone is a single fixed UTC offset, which is exactly
-// right for a zone that has never observed daylight saving (Asia/Tehran
-// since 2022, Asia/Tokyo, the Gulf states) and wrong for about half of
-// every year in a zone that does. Europe/London is UTC+0 in January and
-// UTC+1 in July; America/New_York is UTC-5 and UTC-4. No single number
-// describes either.
-//
-// A Zone is the fix: the full transition history for a named IANA zone,
-// parsed out of the TZif file the operating system already ships
-// (/usr/share/zoneinfo/..., RFC 8536). Nothing is bundled with Salam, so
-// the data is exactly as current as the host's tzdata package and there is
-// no table here to go stale.
-//
-//     mut z := calendar.LoadZone("Europe/London")
-//     defer calendar.FreeZone(z)
-//     println calendar.ZoneAbbrevAt(z, jan)      // GMT
-//     println calendar.ZoneOffsetMinutes(z, jul) // 60
-//
-// A Zone answers a question about one INSTANT, because that is the only
-// form the question has a single answer in. To keep the existing
-// fixed-offset API working, TimeZoneAt(z, epoch) snapshots a Zone into the
-// plain TimeZone that is correct at that instant, which every WallClock*
-// function already accepts:
-//
-//     tz := calendar.TimeZoneAt(z, epoch)
-//     println calendar.FormatGregorian(calendar.WallClockGregorian(epoch, tz))
-//
-// PAST THE LAST TRANSITION. A TZif file lists explicit transitions only up
-// to roughly 2037, then carries a POSIX TZ rule string in its footer
-// ("GMT0BST,M3.5.0/1,M10.5.0") describing the recurring rule to apply
-// after that. This parses and applies that footer, so dates in 2040 or
-// 2100 are still correct under today's rules - as correct as they can be,
-// anyway, since no data can know whether a government will change them.
-//
-// WHERE THERE IS NO TZDATA (Windows, or a stripped container) LoadZone
-// returns a Zone with ok = false. TimeZoneAt then falls back to this
-// package's fixed-offset table for the well-known zone names, so calling
-// code degrades to the old behavior instead of breaking; check `z.ok` when
-// you need to know which you got.
 package calendar
 
 import mem
@@ -135,8 +94,6 @@ struct _TZHead:
     pub charcnt: int = 0
 end
 
-// -- byte-level helpers ---------------------------------------------------
-
 func _readFile(path: str): _Bytes:
     empty := _Bytes { data = null, len = 0 }
     f := fopen(path, "rb")
@@ -198,8 +155,6 @@ func _cstrAt(p: u8*, start: int, limit: int): str:
     str.BufFree(b)
     ret out
 end
-
-// -- POSIX TZ footer parsing ----------------------------------------------
 
 pure func _isAlphaByte(c: int): bool:
     ret (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
@@ -290,8 +245,6 @@ func _parseRule(s: str, i &: int, out &: PosixRule): bool:
             start := i
             mut v := 0
             until i < n && _isDigitByte(_byteAt(s, i)):
-                // Capped: these digits come from a file, and an unbounded
-                // run would overflow the int they accumulate into.
                 if v > 100000000: ret false end
                 v = v * 10 + (_byteAt(s, i) - 48)
                 i += 1
@@ -351,19 +304,16 @@ func _parsePosixTZ(s: str): PosixTZ:
     mut off := 0
     if !_parseHMS(s, i, off): ret out end
     out.std_abbrev = abbrev
-    // POSIX writes the offset as "how far behind UTC", so flip it.
     out.std_offset = 0 - off
     out.dst_abbrev = abbrev
     out.dst_offset = out.std_offset
     out.ok = true
     if i >= n: ret out end
-    // A DST abbreviation may follow; if it does, the zone observes DST.
     mut dabbrev := ""
     if _byteAt(s, i) != 44:
         if !_parseAbbrev(s, i, dabbrev): ret out end
         out.dst_abbrev = dabbrev
         out.has_dst = true
-        // The DST offset is optional and defaults to one hour ahead.
         out.dst_offset = out.std_offset + 3600
         if i < n && _byteAt(s, i) != 44:
             mut doff := 0
@@ -372,8 +322,6 @@ func _parsePosixTZ(s: str): PosixTZ:
         end
     end
     if !out.has_dst: ret out end
-    // ",start,end" - without it the zone is on DST permanently, which the
-    // has_dst/kind=0 combination below represents.
     if i >= n || _byteAt(s, i) != 44: ret out end
     i += 1
     mut r1 := PosixRule {}
@@ -392,7 +340,6 @@ end
 func _ruleInstant(r: PosixRule, year: int, offsetBefore: int): i64:
     mut d := GregorianDate { year = year, month = 1, day = 1 }
     if r.kind == 1:
-        // The r.day-th weekday of month r.mon; week 5 means "the last one".
         first := GregorianDate { year = year, month = r.mon, day = 1 }
         firstMatch := NextWeekdayOnOrAfter(first, r.day)
         cand := AddDaysGregorian(firstMatch, (r.week - 1) * 7)
@@ -402,13 +349,11 @@ func _ruleInstant(r: PosixRule, year: int, offsetBefore: int): i64:
             d = cand
         end
     else r.kind == 2:
-        // Jn: 1..365, never counting February 29.
         mut n := r.day
         if n < 1: n = 1 end
         if n > 59 && IsLeapGregorian(year): n += 1 end
         d = AddDaysGregorian(GregorianDate { year = year, month = 1, day = 1 }, n - 1)
     else:
-        // n: 0..365, counting February 29.
         d = AddDaysGregorian(GregorianDate { year = year, month = 1, day = 1 }, r.day)
     end
     local := _pseudoEpoch(d.year, d.month, d.day, 0, 0, 0) + (r.at_seconds as i64)
@@ -418,21 +363,16 @@ end
 // Whether the POSIX rule puts `epoch` in DST.
 func _posixIsDST(p: PosixTZ, epoch: i64): bool:
     if !p.has_dst: ret false end
-    // A DST abbreviation with no start/end rule means DST all year.
     if p.dst_from.kind == 0 || p.dst_to.kind == 0: ret true end
     approx := _epochParts(epoch + (p.std_offset as i64))
     year := JDNToGregorian(approx.jdn).year
     startAt := _ruleInstant(p.dst_from, year, p.std_offset)
     stopAt := _ruleInstant(p.dst_to, year, p.dst_offset)
     if startAt < stopAt:
-        // Northern hemisphere: DST is a window inside the year.
         ret epoch >= startAt && epoch < stopAt
     end
-    // Southern hemisphere: the window wraps the new year.
     ret epoch >= startAt || epoch < stopAt
 end
-
-// -- TZif parsing ---------------------------------------------------------
 
 // Parses one 44-byte header at `off`, or returns ok = false.
 //
@@ -518,8 +458,6 @@ func _readBlock(b: _Bytes, off: int, h: _TZHead, tsize: int, z &: Zone): bool:
         z.type_at.push(ti)
     end
 
-    // RFC 8536: before the first transition, use the first non-DST type,
-    // falling back to type 0 when every type is DST.
     mut base := 0
     mut found := false
     repeat h.typecnt with k:
@@ -549,15 +487,9 @@ end
 func _parseTZif(b: _Bytes, z &: Zone): bool:
     h1 := _parseHead(b, 0)
     if !h1.ok: ret false end
-    // Version 1 files carry only the 32-bit block, so they cannot express
-    // transitions past 2038; version 2+ repeats everything at 64 bits and
-    // that second copy is the one to read.
     if h1.version == 0:
         ret _readBlock(b, 44, h1, 4, z)
     end
-    // Every offset below is computed in i64 and range-checked before it
-    // narrows to an index, so a corrupt header cannot point the second
-    // block outside the buffer.
     second64 := 44 + _blockSize(h1, 4)
     if second64 < 0 || second64 > (b.len as i64): ret _readBlock(b, 44, h1, 4, z) end
     second := second64 as int
@@ -572,8 +504,6 @@ func _parseTZif(b: _Bytes, z &: Zone): bool:
     z.rule = _parsePosixTZ(_readFooter(b, footer64 as int))
     ret true
 end
-
-// -- zone lookup ----------------------------------------------------------
 
 func _env(name: str): str:
     p := getenv(name)
@@ -605,7 +535,6 @@ func _zoneDirs(): Vector<str>:
     dirs.push("/usr/lib/zoneinfo")
     dirs.push("/usr/share/lib/zoneinfo")
     dirs.push("/etc/zoneinfo")
-    // macOS keeps the real database here and symlinks /usr/share/zoneinfo.
     dirs.push("/var/db/timezone/zoneinfo")
     ret dirs
 end
@@ -668,15 +597,11 @@ func _posixTypeFor(z: Zone, epoch: i64): int:
             ret k
         end
     end
-    // The footer may spell an abbreviation the type table does not use
-    // verbatim; offset plus flag still identifies the observance.
     repeat n with k:
         if z.type_offset.get(k) == want && z.type_isdst.get(k) == dst: ret k end
     end
     ret 0 - 1
 end
-
-// -- public API -----------------------------------------------------------
 
 // Loads a named IANA zone ("Europe/London", "Asia/Tehran", "UTC") from the
 // system tzdata. The returned Zone owns heap memory: free it with
@@ -708,8 +633,6 @@ end
 @ar "المنطقة المحلیة"
 pub func LocalZone(): Zone:
     mut tz := _env("TZ")
-    // POSIX lets TZ name a file as ":Europe/London"; the colon is a hint
-    // that the rest is implementation-defined, not part of the name.
     if tz.len() > 1 && _byteAt(tz, 0) == 58:
         tz = tz.substr(1, tz.len() - 1)
     end
@@ -754,7 +677,6 @@ pub func ZoneOffsetSeconds(z: Zone, epoch: i64): int:
     if z.type_offset.len() == 0: ret 0 end
     idx := _findTransition(z, epoch)
     if idx < 0: ret z.type_offset.get(z.base_type) end
-    // Past the last recorded transition the footer rule is authoritative.
     if idx == z.times.len() - 1:
         pt := _posixTypeFor(z, epoch)
         if pt >= 0: ret z.type_offset.get(pt) end
@@ -841,10 +763,6 @@ end
 @ar "المحلی إلى الحقبة"
 pub func ZonedToEpoch(d: GregorianDate, t: ClockTime, z: Zone): i64:
     local := _pseudoEpoch(d.year, d.month, d.day, t.hour, t.minute, t.second)
-    // The offset depends on the instant, and the instant depends on the
-    // offset. Guess with the offset at the naive instant, then correct
-    // once; a second pass settles the case where the guess landed on the
-    // far side of a transition.
     mut guess := local - (ZoneOffsetSeconds(z, local) as i64)
     off2 := ZoneOffsetSeconds(z, guess)
     if local - (off2 as i64) != guess:

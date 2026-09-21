@@ -108,8 +108,6 @@ pub struct Chan<T>:
         deadline := sync.NowMs() + ms
         mut expired := false
 
-        // Phase one is the same for both flavours: wait for room. A
-        // rendezvous channel has room exactly when its single slot is free.
         mut room := this.cap
         if this.cap == 0: room = 1 end
         until c[3] == 0 && c[2] >= room && !expired:
@@ -130,14 +128,6 @@ pub struct Chan<T>:
         end
 
         if this.cap == 0:
-            /*
-             * The ticket is what makes the handoff safe. Waiting on "the slot
-             * is empty again" is not enough: a second sender can refill it
-             * between the receiver emptying it and this thread waking, and
-             * this send would then wait for a value that was already
-             * delivered. Waiting for `tickets consumed >= my ticket` instead
-             * is immune to that.
-             */
             b[0] = v
             c[2] = 1
             mine := c[4] + 1
@@ -156,8 +146,6 @@ pub struct Chan<T>:
                 end
             end
             if c[5] < mine:
-                // Closed, or ran out of time, before anyone took it: take the
-                // value back so no receiver can pick it up after we gave up.
                 c[2] = 0
                 sync.Signal(this.not_full)
                 sync.Unlock(this.mu)
@@ -227,8 +215,6 @@ pub struct Chan<T>:
         if this.cap == 0:
             v = b[0]
             c[2] = 0
-            // Consume the sender's ticket and wake it; broadcast because the
-            // waiting senders each have to re-check their own ticket.
             c[5] = c[5] + 1
             sync.Broadcast(this.taken)
         else:
@@ -245,9 +231,6 @@ pub struct Chan<T>:
     @fa "تلاش برای فرستادن"
     @ar "محاولة إرسال"
     pub func try_send(v: T): bool:
-        // A rendezvous send cannot complete without a receiver already
-        // parked, and there is no way to know that without waiting, so the
-        // non-blocking form is only meaningful on a buffered channel.
         if this.cap == 0:
             ret false
         end

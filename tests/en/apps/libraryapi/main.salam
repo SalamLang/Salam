@@ -14,41 +14,6 @@
 
 package main
 
-// A lending library: a public catalogue, members who borrow, librarians who
-// manage the shelves.
-//
-//   POST   /auth/register           {email, password}     -> member
-//   POST   /auth/login
-//   GET    /books                   ?q=&available=1       (public)
-//   GET    /books/:id               (public)
-//   POST   /api/books               {isbn, title, author, year?, copies?}  librarian
-//   POST   /api/books/:id/copies    {delta}                                librarian
-//   DELETE /api/books/:id           librarian, only when nothing is out
-//   POST   /api/books/:id/borrow    member
-//   POST   /api/loans/:id/return    the borrower, or a librarian
-//   GET    /api/loans/mine          ?open=1
-//   GET    /api/loans/overdue       librarian
-//   GET    /health
-//
-// WHAT THIS ONE IS ABOUT
-//
-// The other examples answer "may you?". This one also has to answer "is it
-// possible?" - and the second question has a race in it. Two members can ask
-// for the last copy in the same millisecond, and exactly one of them must
-// get it. _store.salam's Borrow is where that is handled; read its header.
-//
-// The other half is error vocabulary. "Cannot borrow" is four different
-// answers, and a client needs to tell them apart to say anything useful:
-//
-//   404 no such book
-//   409 every copy is out                  (try again later)
-//   409 you already have this one          (you are looking at it)
-//   409 you are at your three-book limit   (return something first)
-//
-// 409 Conflict, not 400: the request was well formed, the world just is not
-// in a state where it can happen. A 400 tells the client to change the
-// request, which is wrong advice here.
-
 import os
 import crypto
 import jwt
@@ -72,14 +37,9 @@ func guard(): jwt.Guard:
     mut g := jwt.NewGuard(secret())
     g.opts.issuer = "library.salam"
     g.opts.require_exp = true
-    // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
-    // machines never agree on the time to the second, and without it a
-    // token minted a moment ago can be refused as "issued in the future".
     g.opts.leeway = 30 as i64
     ret g
 end
-
-// ---------------------------------------------------------------- helpers
 
 func send(ctx: i64, code: int, body: str):
     http.Ctx_status(ctx, code)
@@ -96,10 +56,6 @@ func db_fail(ctx: i64, where: str, err: str):
     fail(ctx, 500, "database error")
 end
 
-// A connection for this request, or a 503 and false. Every handler that
-// touches the database starts with this and pairs it with `defer
-// store.Close(conn)` - the connection belongs to this request and to this
-// thread, and it goes away when the handler returns however it returns.
 func db(ctx: i64, c &: store.Conn): bool:
     conn := store.Connect()
     if !store.Ok(conn):
@@ -117,8 +73,6 @@ func caller(ctx: i64): i64:
     ret t.claims.sub.to_int() as i64
 end
 
-// Signed in AND on the staff. The role lives in the database, so revoking it
-// takes effect on the next request rather than on the next login.
 func librarian(ctx: i64, conn: store.Conn): i64:
     uid := caller(ctx)
     if uid == 0 as i64: ret 0 as i64 end
@@ -148,8 +102,6 @@ func borrow_message(reason: str): str:
     if reason == "limit_reached": ret "you are at the three-book limit" end
     ret "could not borrow this book"
 end
-
-// ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
     mut conn := store.Conn {}
@@ -203,8 +155,6 @@ func login(ctx: i64):
     send(ctx, 200, `{"access":`.concat(json.Str(token)).concat(`,"role":`).concat(json.Str(u.role)).concat("}"))
 end
 
-// ---------------------------------------------------------------- catalogue
-
 func list_books(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -249,8 +199,6 @@ func add_book(ctx: i64):
     mut err := ""
     id := store.AddBook(conn, isbn, title, author, json.Get(body, "year"), copies, err)
     if id == 0 as i64:
-        // The UNIQUE on isbn is what makes this reachable, and a duplicate
-        // ISBN is the librarian's mistake to see, not a 500.
         if err.find("Duplicate") >= 0:
             fail(ctx, 409, "a book with that ISBN is already in the catalogue")
             ret
@@ -300,14 +248,11 @@ func delete_book(ctx: i64):
             db_fail(ctx, "delete book", err)
             ret
         end
-        // The DELETE matched nothing, and the book exists, so a copy is out.
         fail(ctx, 409, "some copies are still on loan")
         ret
     end
     send(ctx, 200, `{"deleted":true}`)
 end
-
-// ---------------------------------------------------------------- loans
 
 func borrow(ctx: i64):
     mut conn := store.Conn {}
@@ -325,7 +270,6 @@ func borrow(ctx: i64):
         ret
     end
     if r.reason.len() > 0:
-        // 409: the request is fine, the shelf is not.
         send(ctx, 409, `{"error":`.concat(json.Str(borrow_message(r.reason))).concat(`,"reason":`).concat(json.Str(r.reason)).concat("}"))
         ret
     end
@@ -381,12 +325,6 @@ func health(ctx: i64):
 end
 
 func main:
-    // Reads the settings, initialises the client library, and proves the
-    // credentials work by opening one connection and closing it again. After
-    // this returns, no connection is held: each request makes its own.
-    //
-    // The library init has to happen here, on the main thread, before any
-    // request thread exists - see _store.salam's header.
     mut err := ""
     if !store.Configure(err):
         println "cannot reach the database: ", err

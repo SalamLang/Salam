@@ -14,26 +14,6 @@
 
 package tls
 
-// AES-128 and AES-256 block encryption (FIPS 197).
-//
-// Only the forward direction is implemented: GCM builds a stream cipher out of
-// AES-encrypt alone and never calls the inverse cipher, so there is no
-// InvSubBytes/InvMixColumns here to get wrong or to carry as dead code.
-//
-// ==================== CONSTANT-TIME CAVEAT ====================
-// SubBytes indexes a 256-byte S-box with key-dependent data. On a CPU with
-// data caches that is a cache-timing side channel, and it is the reason a
-// software AES cannot make the same constant-time promise ChaCha20 can. It is
-// mitigated but NOT eliminated by using a single 256-byte table (one or two
-// cache lines' worth of sets) rather than the four 1 KB T-tables that a
-// speed-first implementation would use.
-//
-// Consequently the native stack offers TLS_CHACHA20_POLY1305_SHA256 FIRST in
-// its cipher-suite list. AES-GCM exists because RFC 8446 makes
-// TLS_AES_128_GCM_SHA256 mandatory to implement and some servers offer nothing
-// else. If you have a choice, prefer the ChaCha20 suite.
-// ==============================================================
-
 const AES_SBOX := [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0
@@ -131,13 +111,11 @@ inline func _xtime(a: int): int:
 end
 
 func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
-    // state[r][c] with column-major words, as FIPS 197 defines them
     mut s: int[16]
     repeat 16 with i:
         s[i] = _bget(inp, i)
     end
 
-    // AddRoundKey(0)
     repeat 4 with c:
         k := a.rk[c]
         s[c * 4] = s[c * 4] ^ (((k >> (24 as u32)) & (0xFF as u32)) as int)
@@ -148,12 +126,9 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
 
     mut round := 1
     until round < a.nr + 1:
-        // SubBytes
         repeat 16 with i:
             s[i] = AES_SBOX[s[i]]
         end
-        // ShiftRows: row r rotates left by r. With column-major bytes, byte
-        // (c,r) lives at s[c*4+r].
         mut t: int[16]
         repeat 4 with c:
             repeat 4 with r:
@@ -163,7 +138,6 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
         repeat 16 with i:
             s[i] = t[i]
         end
-        // MixColumns, skipped in the final round
         if round < a.nr:
             repeat 4 with c:
                 o := c * 4
@@ -178,7 +152,6 @@ func _aes_encrypt_block(a: Aes, inp: void*, out: void*):
                 s[o + 3] = a3 ^ x ^ _xtime(a3 ^ a0)
             end
         end
-        // AddRoundKey(round)
         repeat 4 with c:
             k := a.rk[round * 4 + c]
             s[c * 4] = s[c * 4] ^ (((k >> (24 as u32)) & (0xFF as u32)) as int)

@@ -1,11 +1,5 @@
 package tls
 
-// Native OS trust-store FFI bindings (Windows CryptoAPI, macOS Security
-// framework). `link`/`import` must precede every other top-level statement
-// in a Salam file, so only the link/extern declarations live up here; the
-// _roots_load_native() bodies that use them are defined further down, next
-// to the rest of the trust-store loading logic, since consts in turn must be
-// declared before any function/type definition.
 if SALAM_OS_WIN64:
     link dynamic "crypt32"
 
@@ -30,35 +24,6 @@ else:
         end
     end
 end
-
-// Trust store loading: PEM decoding and system CA bundle discovery.
-//
-// Where the roots come from, in order:
-//   1. an explicit path from Config.ca_file, if the caller set one;
-//   2. $SSL_CERT_FILE, the conventional override honoured by OpenSSL and curl;
-//   3. the live OS trust store, on platforms with one (CryptoAPI on Windows,
-//      Keychain's root-program anchors on macOS - see _roots_load_native
-//      below);
-//   4. the first of the well-known system bundle paths that exists (this is
-//      the ONLY source on Linux/FreeBSD/OpenBSD/NetBSD, which have no
-//      keychain-style API);
-//   5. the bundle embedded at build time, if one was generated.
-//
-// A caller that reaches step 5 with no embedded bundle gets an EMPTY trust
-// store, and an empty store makes every chain fail verification. That is the
-// intended behaviour: silently trusting nothing is recoverable, silently
-// trusting everything is not.
-//
-// The embedded bundle is deliberately not checked in by default. Generate it
-// with tools/bash/gen-tls-roots.sh, which writes std/tls/roots_embedded.salam
-// from a system bundle. Without it, _embedded_roots_pem() returns "".
-//
-// Coverage: with P-256 and P-384 both implemented, all 152 certificates in the
-// Mozilla bundle shipped with git-for-windows load successfully. Roots whose
-// self-signature uses an algorithm outside the supported set (SHA-1, 27 of
-// those 152) still load, because a trust anchor is trusted by membership in
-// this store rather than by its own signature; they simply cannot verify
-// anything, which _cert_signed_by enforces.
 
 const PEM_BEGIN := "-----BEGIN CERTIFICATE-----"
 const PEM_END := "-----END CERTIFICATE-----"
@@ -127,8 +92,6 @@ func _roots_add_pem(r &: Roots, pem: str): int:
         room := (e - body) / 4 * 3 + 8
         mut der := _newbuf(room)
         mut good := false
-        // substr allocates; the decoder is done with it when it returns, and
-        // a system bundle has enough certificates for the slices to add up.
         b64 := pem.substr(body, e - body)
         got := encoding.Base64DecodeBytes(b64, der.p, room, good)
         mem.Free(b64 as void*)
@@ -150,16 +113,7 @@ func _embedded_roots_pem(): str:
     ret ""
 end
 
-// Windows and macOS keep their root certificates in a live OS-managed store
-// (CryptoAPI, Keychain) rather than a conventional flat file, so the CA_PATH_*
-// candidates above never find anything there on their own; read the native
-// API directly instead of guessing installer-specific paths. FreeBSD/OpenBSD/
-// NetBSD have no such API (no keychain-style service) - they really do ship a
-// flat file, which the CA_PATH_* list already covers.
 if SALAM_OS_WIN64:
-    // CERT_CONTEXT (64-bit layout): dwCertEncodingType@0, pbCertEncoded@8,
-    // cbCertEncoded@16, pCertInfo@24, hCertStore@32. Only the encoded-DER
-    // pointer and its length are needed here.
     func _roots_load_native(r &: Roots): int:
         store := CertOpenSystemStoreA(0, "ROOT")
         if store == null:
@@ -248,13 +202,11 @@ func _roots_load_file(r &: Roots, path: str): int:
         mem.Free(pem as void*)
         ret 0
     end
-    // The store copies what it keeps, so the file's own text goes back.
     added := _roots_add_pem(r, pem)
     mem.Free(pem as void*)
     ret added
 end
 
-// Build the trust store. `ca_file` may be empty to use the default search.
 /*
  * The trust store, loaded once per process.
  *
@@ -281,8 +233,6 @@ end
 func _roots_load(ca_file: str): Roots:
     mut r := _roots_new()
     if ca_file.len() > 0:
-        // An explicit path is authoritative: if it yields nothing, fall through
-        // to nothing rather than quietly widening trust to the system store.
         _roots_load_file(r, ca_file)
         ret r
     end

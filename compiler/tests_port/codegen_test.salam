@@ -12,14 +12,6 @@
  *
  */
 
-// Unit tests for the codegen port, stages 6a+6b (see salam/codegen.salam):
-// type -> C emission, mangling, print_fmt segments, cident, tidy, the
-// generated header for a small checked module, the .c scaffolding (dyn
-// vtables, private protos, globals, main shell), and - 6b - expression,
-// statement, call, and lambda-lifting emission. Expected C text was
-// derived from compiler/src/codegen/*.c AND from HEAD `bin/salam build
-// --keep-c` output on the same programs (salam_mod_cgref.{h,c} and the
-// tmp_cg/cgexpr.salam, tmp_cg/cglam.salam fixtures).
 package main
 
 import testing
@@ -36,12 +28,10 @@ import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import cg "../codegen/codegen.salam"
 
-// The fixture program (same content as the HEAD reference build cgref.salam).
 func fixture_src(): str:
     ret "extern:\n" + "    func puts(s: str): int\n" + "    salam_embed_probe_len: i64\n" + "end\n" + "\n" + "pub const MAXN := 100\n" + "mut g_count := 7\n" + "\n" + "struct Point:\n" + "    pub x: int = 0\n" + "    pub y: f64 = 0.0\n" + "    pub func dist(): f64:\n" + "        ret this.y\n" + "    end\n" + "end\n" + "\n" + "enum Color: Red, Green = 5, Blue end\n" + "\n" + "interface Shape:\n" + "    func area(): f64\n" + "end\n" + "\n" + "struct Circle:\n" + "    pub r: f64 = 0.0\n" + "    pub func area(): f64:\n" + "        ret this.r\n" + "    end\n" + "end\n" + "\n" + "func helper(s: str): str:\n" + "    ret s\n" + "end\n" + "\n" + "func main:\n" + "    mut p := Point {}\n" + "    p.x = AddOne(MAXN) + g_count\n" + "    _d := p.dist()\n" + "    _sh := Circle { r = 1.0 } as dyn Shape\n" + "    _v := 21 as Variant<i32, str>\n" + "    parts := \"a,b\".split(\",\")\n" + "    defer parts.free()\n" + "    _r := puts(helper(\"hi\"))\n" + "    _probe := salam_embed_probe_len\n" + "    println p.x\n" + "end\n" + "\n" + "pub func AddOne(v: int): int:\n" + "    ret v + 1\n" + "end\n"
 end
 
-// driver pipeline: load -> lex -> parse -> prune -> sema -> codegen.
 func build_module(path: str, module: str, h &: str, c &: str): bool:
     mut sf := src.New()
     if !src.Load(path, sf):
@@ -79,8 +69,6 @@ func test_cident():
     testing.AssertEqStr(cg.Cident("main"), "main")
     testing.AssertEqStr(cg.Cident("2x"), "_2x")
     testing.AssertEqStr(cg.Cident(""), "_")
-    // A leading underscore stays single (C reserves the "__" namespace), so
-    // the keyword escape is what keeps this off C's own `_Bool`.
     testing.AssertEqStr(cg.Cident("_Bool"), "_Bool_")
     testing.AssertEqStr(cg.Cident("_k8"), "_k8")
     testing.AssertEqStr(cg.Cident("a-b"), "a_2db")
@@ -105,8 +93,6 @@ func test_ctype():
     testing.AssertEqStr(cg.Ctype("f32"), "float")
     testing.AssertEqStr(cg.Ctype("f64"), "double")
     testing.AssertEqStr(cg.Ctype("File"), "salam_file")
-    // "int" is NOT in base_ctype's table (sema canonicalizes to i32); the
-    // C falls through to cident, which appends '_' to C keywords.
     testing.AssertEqStr(cg.Ctype("int"), "int_")
     testing.AssertEqStr(cg.Ctype("Point"), "Point")
     testing.AssertEqStr(cg.Ctype("Point*"), "Point*")
@@ -117,7 +103,6 @@ func test_ctype():
     testing.AssertEqStr(cg.Ctype("externfunc(i32) void"), "void*")
     testing.AssertEqStr(cg.Ctype("dyn Shape"), "_Salam_dyn_Shape")
     testing.AssertEqStr(cg.Ctype("dyn Shape*"), "_Salam_dyn_Shape*")
-    // '[' suffix also gets the '*' in cg_ctype (bug-compat with the C).
     testing.AssertEqStr(cg.Ctype("dyn Shape[2]"), "_Salam_dyn_Shape*")
     testing.AssertEqStr(
         cg.Ctype("Variant<i32, str>"), "_Salam_variant_i32_str"
@@ -170,7 +155,6 @@ func test_vec_variant_names():
     testing.AssertEqStr(cg.SliceElem("slice<u8>"), "u8")
     testing.AssertTrue(cg.IsIntTypestr("i32"))
     testing.AssertTrue(cg.IsIntTypestr("size"))
-    // cg_is_int_typestr's table has no "int" (bug-compat with the C).
     testing.AssertFalse(cg.IsIntTypestr("int"))
     testing.AssertTrue(cg.IsUnsignedTypestr("u8"))
     testing.AssertTrue(cg.IsUnsignedTypestr("size"))
@@ -225,16 +209,12 @@ func test_print_tags():
     testing.AssertEqStr(cg.PfSpec(cg.PF_I64), "%lld")
     testing.AssertEqStr(cg.PfSpec(cg.PF_U64), "%llu")
     testing.AssertEqStr(cg.PfSpec(cg.PF_SIZE), "%zu")
-    // "%s": a double is printed as the text salam_fmt_f64 makes of it, not
-    // through printf's 6-significant-digit %g.
     testing.AssertEqStr(cg.PfSpec(cg.PF_F64), "%s")
     testing.AssertEqStr(cg.PfSpec(cg.PF_BOOL), "%s")
     testing.AssertEqStr(cg.PfSpec(cg.PF_CHAR), "%c")
     testing.AssertEqStr(cg.PfSpec(cg.PF_LIT), "")
 end
 
-// Builds `println "n:", <ident i32>, 7, true, 'A', 2.5, <ident u64>` by
-// hand and checks the folded segment list.
 func test_pf_build():
     mut a := at.NewAst()
     call := at.NewNode(a, at.AST_CALL)
@@ -293,8 +273,6 @@ func test_pf_build():
     mut segs := Vector {} as Vector<cg.PfSeg>
     defer segs.free()
     cg.PfBuild(a, call, true, segs)
-    // "n:" + ' ' -> lit; ident x -> I32 seg; " 7 true A 2.5 " folds;
-    // ident u -> U64 seg; trailing "\n" lit.
     testing.AssertEqInt(segs.len(), 5)
     testing.AssertEqInt(segs.get(0).kind, cg.PF_LIT)
     testing.AssertEqStr(segs.get(0).text, "n: ")
@@ -307,7 +285,6 @@ func test_pf_build():
     testing.AssertEqInt(segs.get(4).kind, cg.PF_LIT)
     testing.AssertEqStr(segs.get(4).text, "\n")
 
-    // no-newline print of a single non-foldable str arg: one segment.
     mut segs2 := Vector {} as Vector<cg.PfSeg>
     defer segs2.free()
     call2 := at.NewNode(a, at.AST_CALL)
@@ -320,7 +297,6 @@ func test_pf_build():
     testing.AssertEqInt(segs2.get(0).kind, cg.PF_STR)
     testing.AssertEqInt(segs2.get(0).expr, id7)
 
-    // folded-only println: negative fold + arithmetic fold + f64 division.
     mut segs3 := Vector {} as Vector<cg.PfSeg>
     defer segs3.free()
     call3 := at.NewNode(a, at.AST_CALL)
@@ -354,7 +330,6 @@ func test_mangle():
     testing.AssertEqStr(
         cg.MangleIn(s, "main", "", "AddOne", p1), "_Salam_main_AddOne_i32"
     )
-    // "" pkg = the C NULL -> "main".
     testing.AssertEqStr(
         cg.MangleIn(s, "", "", "AddOne", p1), "_Salam_main_AddOne_i32"
     )
@@ -381,11 +356,9 @@ func test_mangle():
     testing.AssertEqStr(
         cg.MangleIn(s, "mem", "", "Allocate", p4), "_Salam_mem_Allocate_u64"
     )
-    // cg_mangle_ti routes through the struct_name slot -> "_S_" infix.
     testing.AssertEqStr(
         cg.MangleTi(s, "i32", "rank", p0), "_Salam_ti_S_i32_rank"
     )
-    // type_is_byval_agg over TypeIds.
     testing.AssertFalse(cg.TypeIsByvalAgg(s, sm.Prim(s, sm.TY_I32)))
     testing.AssertFalse(cg.TypeIsByvalAgg(s, sm.TYPE_NONE))
     testing.AssertTrue(cg.TypeIsByvalAgg(s, sm.StructType(s, 0, "P")))
@@ -427,7 +400,6 @@ func test_single_threaded():
     at.SetName(a, imp, "thread")
     at.AddChild(a, prog, imp)
     testing.AssertFalse(cg.ModuleSingleThreaded(a, prog))
-    // spawn() call anywhere in the tree also disables it.
     prog2 := at.NewNode(a, at.AST_PROGRAM)
     call := at.NewNode(a, at.AST_CALL)
     callee := at.NewNode(a, at.AST_IDENTIFIER)
@@ -440,7 +412,6 @@ func test_single_threaded():
     at.FreeAst(a)
 end
 
-// Full pipeline over the fixture; exact expected text from HEAD --keep-c.
 func test_module_output():
     dir := "compiler/tests_port/tmp_cg"
     _mk := os.MkdirAll(dir)
@@ -455,7 +426,6 @@ func test_module_output():
         ret
     end
 
-    // --- header ---
     testing.AssertTrue(
         str.StartsWith(
             h, "#pragma once\n#ifndef SALAM_MODULE_cgref_H\n" + "#define SALAM_MODULE_cgref_H\n#include <stdint.h>\n"
@@ -466,10 +436,6 @@ func test_module_output():
         h, "void* _Salam_mem_Allocate_u64(uint64_t size);\n" + "void* _Salam_mem_AllocateZeroed_u64(uint64_t size);\n" + "void* _Salam_mem_Reallocate_void_ptr_u64(void* ptr, uint64_t " + "size);\nvoid _Salam_mem_Free_void_ptr(void* ptr);\n"
     )
     testing.AssertContains(h, "#include \"salam_mod_core.h\"\n")
-    // An extern names a symbol defined outside Salam, so it goes out exactly
-    // as written. cg_cident doubles interior underscores, and when the
-    // variable form still went through it this read salam__embed__probe__len
-    // and every embedded-blob link came up undefined.
     testing.AssertContains(h, "extern int64_t salam_embed_probe_len;\n")
     testing.AssertContains(
         h, "typedef enum { Color_Red = 0, Color_Green = 5, Color_Blue = 6 } " + "Color;\n"
@@ -492,8 +458,6 @@ func test_module_output():
     testing.AssertContains(
         h, "#ifndef SALAM__Salam_variant_i32_str_TYPEDEF\n" + "#define SALAM__Salam_variant_i32_str_TYPEDEF\n" + "typedef struct { int32_t tag; union { int32_t v0; const char* " + "v1; } payload; } _Salam_variant_i32_str;\n#endif\n"
     )
-    // An extern FFI function no longer gets a prototype of its own in the
-    // header; the prelude already declares it, so what matters is the call.
     testing.AssertContains(
         c, "const int32_t _r = puts(_Salam_main_helper_str(\"hi\"));\n"
     )
@@ -507,7 +471,6 @@ func test_module_output():
     testing.AssertContains(
         h, "int32_t _Salam_main_AddOne_i32(int32_t v);\n"
     )
-    // generic instance prototypes (synthetic Vector<str> from .split).
     testing.AssertContains(
         h, "#ifndef SALAM_IP__Salam_g_S_Vector__str_push_str\n" + "#define SALAM_IP__Salam_g_S_Vector__str_push_str\n" + "static inline void _Salam_g_S_Vector__str_push_str(Vector__str* " + "this, const char* x);\n#endif\n"
     )
@@ -516,10 +479,8 @@ func test_module_output():
     )
     testing.AssertContains(h, "#ifndef SALAM_IB__Salam_g_S_Vector__str_free")
     testing.AssertTrue(str.EndsWith(h, "\n#endif\n"))
-    // g_count is not pub and this is a main module: no extern for it.
     testing.AssertFalse(str.Contains(h, "g__count"))
 
-    // --- C file ---
     testing.AssertTrue(
         str.StartsWith(
             c, "#include \"salam_mod_cgref.h\"\n\nstatic double " + "_Salam_thunk_Shape_Circle_area(void* self){ return " + "_Salam_main_S_Circle_area((Circle*)self); }\nstatic const " + "_Salam_vtbl_Shape _Salam_vtbl_Shape_Circle = { " + "_Salam_thunk_Shape_Circle_area };\n"
@@ -528,14 +489,9 @@ func test_module_output():
     testing.AssertContains(
         c, "static const char* _Salam_main_helper_str(const char* s);\n"
     )
-    // global initializers, real cg_expr text now that 6b is ported.
     testing.AssertContains(c, "const int32_t _Salam_g_main_MAXN = 100;\n")
     testing.AssertContains(c, "int32_t _Salam_g_main_g__count = 7;\n")
     testing.AssertContains(c, "int main(int argc, char** argv) {\n")
-    // The reference site, not just the header declaration: both used to be
-    // mangled, so they agreed with each other and disagreed with the symbol
-    // that actually exists. Asserting the raw spelling appears is not enough
-    // on its own - the mangled one must be absent too, or a half-fix passes.
     testing.AssertContains(c, "_probe = salam_embed_probe_len;")
     testing.AssertMsg(
         c.find("salam__embed__probe__len") < 0,
@@ -556,8 +512,6 @@ func test_module_output():
     _rm := os.Remove(path)
 end
 
-// Package-module fixture: sret, slices, ref params, attrs, inline header,
-// type alias, pkg globals - and the extern-const array bug, bug-for-bug.
 func fixture_pkg_src(): str:
     ret "package util2\n" + "\n" + "mut g_u2 := 0\n" + "vals := [1, 2]\n" + "\n" + "pub type Id2 = int\n" + "\n" + "pub struct Pair2:\n" + "    pub first: int = 0\n" + "    pub second: int = 0\n" + "end\n" + "\n" + "func hidden2(x: int): int:\n" + "    ret x + 1\n" + "end\n" + "\n" + "pub func MkPair2(x: int, y: int): Pair2:\n" + "    ret Pair2 { first = x, second = y }\n" + "end\n" + "\n" + "pub inline func Twice2(x: int): int:\n" + "    ret x * 2\n" + "end\n" + "\n" + "pub func Sum2(view: i32[:]): int:\n" + "    mut t := vals[0] + g_u2\n" + "    each v in view:\n" + "        t += v\n" + "    end\n" + "    ret hidden2(t)\n" + "end\n" + "\n" + "pub pure func Sq2(x: f64): f64:\n" + "    ret x * x\n" + "end\n" + "\n" + "pub deprecated func Old2(): int:\n" + "    ret 1\n" + "end\n" + "\n" + "pub func Bump2(c &: Pair2):\n" + "    c.first = c.first + 1\n" + "end\n"
 end
@@ -575,26 +529,20 @@ func test_pkg_module_output():
         _rm := os.Remove(path)
         ret
     end
-    // type alias + pkg globals (every pkg global is extern'd in the .h).
     testing.AssertContains(h, "typedef int32_t Id2;\n")
     testing.AssertContains(h, "extern int32_t _Salam_g_util2_g__u2;\n")
-    // THE extern-const array bug (PORTING.md), ported bug-for-bug: the .h
-    // declares the non-mut array const, the .c defines it non-const.
     testing.AssertContains(h, "extern int32_t _Salam_g_util2_vals[2];\n")
     testing.AssertContains(c, "\nint32_t _Salam_g_util2_vals[2] = ")
     testing.AssertFalse(str.Contains(c, "const int32_t _Salam_g_util2_vals[2]"))
-    // sret: by-value struct returns become a trailing __ret out-param.
     testing.AssertContains(
         h, "void _Salam_util2_MkPair2_i32_i32(int32_t x, int32_t y, " + "util2__Pair2* __ret);\n"
     )
-    // pub inline: proto + body both live in the header.
     testing.AssertContains(
         h, "static inline int32_t _Salam_util2_Twice2_i32(int32_t x);\n"
     )
     testing.AssertContains(
         h, "static inline int32_t _Salam_util2_Twice2_i32(int32_t x) {\n"
     )
-    // slice param, attrs, ref param, and the pkgmod non-static private fn.
     testing.AssertContains(
         h, "int32_t _Salam_util2_Sum2_slice_3ci32_3e(salam_slice view);\n"
     )
@@ -623,9 +571,6 @@ func test_pkg_module_output():
     _rm := os.Remove(path)
 end
 
-// --- 6b: expression / statement emission (codegen_expr.c, codegen_stmt.c).
-// Expected C text derived from HEAD `bin/salam build --keep-c` on the same
-// program (salam/tests_port/tmp_cg/cgexpr.salam / hexpr/salam_mod_cgexpr.c).
 func fixture_expr_stmt_src(): str:
     ret "func main:\n" + "    a := 3\n" + "    b := 4\n" + "    x := a + b * 2\n" + "    s := \"n=\" + a\n" + "    t := a > b ? \"big\" : \"small\"\n" + "    mut i := 0\n" + "    until i < 3:\n" + "        i += 1\n" + "    end\n" + "    mut total := 0\n" + "    repeat 3 with k:\n" + "        total += k\n" + "    end\n" + "    grade := match total:\n" + "        3 => \"three\"\n" + "        else => \"other\"\n" + "    end\n" + "    defer println \"done\"\n" + "    println x, s, t, grade\n" + "end\n"
 end
@@ -643,46 +588,33 @@ func test_expr_stmt_output():
         _rm := os.Remove(path)
         ret
     end
-    // binary precedence: a + b * 2. Every integer operand carries an
-    // explicit (int32_t) cast now, so C's own integer promotions cannot
-    // quietly widen a Salam i32 expression mid-way; these expectations
-    // predate that and were written against the un-cast emission.
     testing.AssertContains(
         c,
         "const int32_t x = ((int32_t)((uint32_t)(a) + (uint32_t)(((int32_t)((uint32_t)(b) * (uint32_t)(2))))));\n"
     )
-    // str + int concat lowers to salam_strcat + salam_tostr_i32
     testing.AssertContains(
         c, "const char* s = salam_strcat(\"n=\", salam_tostr_i32(a));\n"
     )
-    // ternary: every branch double-parenthesized like the C
     testing.AssertContains(
         c, "const char* t = ((((int32_t)(a) > (int32_t)(b))) ? (\"big\") : (\"small\"));\n"
     )
-    // until == while
     testing.AssertContains(c, "while ((int32_t)(i) < (int32_t)(3)) {\n")
     testing.AssertContains(c, "    i += 1;\n")
-    // repeat n with k -> counted for-loop over __repN
     testing.AssertContains(
         c, "for (int64_t __rep1 = 0, __repn1 = (int64_t)(3); __rep1 < " + "__repn1; __rep1++) {\n"
     )
     testing.AssertContains(c, "const int32_t k = (int32_t)__rep1;\n")
-    // match-expr: statement-expression with a goto-terminated result temp
     testing.AssertContains(c, "if ((__msubj2) == (3)) {\n")
     testing.AssertContains(c, "= (intptr_t)(\"three\"); goto __mend2;\n")
     testing.AssertContains(c, "else if (1) {\n")
     testing.AssertContains(c, "= (intptr_t)(\"other\"); goto __mend2;\n")
     testing.AssertContains(c, "__mend2: __mres2; });\n")
-    // defer runs LIFO at function end, after the rest of the body.
     printidx := str.IndexOf(c, `printf("%d %s %s %s\n"`)
     deferidx := str.IndexOf(c, "SALAM_OUT_LIT(\"done\\n\", 5);\n")
     testing.AssertTrue(printidx >= 0 && deferidx > printidx)
     _rm := os.Remove(path)
 end
 
-// --- 6b: lambda lifting + closure calls (codegen_lambda.c, call_value).
-// Expected C text derived from HEAD `bin/salam build --keep-c` on
-// salam/tests_port/tmp_cg/cglam.salam / hlam/salam_mod_cglam.c.
 func fixture_lambda_src(): str:
     ret "func main:\n" + "    n := 10\n" + "    add := (p: int, q: int) => p + q + n\n" + "    println add(3, 4)\n" + "end\n"
 end
@@ -700,7 +632,6 @@ func test_lambda_output():
         _rm := os.Remove(path)
         ret
     end
-    // captures env struct + forward decls, lifted ABOVE main (blamd/blamf).
     testing.AssertContains(
         c, "typedef struct { void *fn; int32_t n; } _Salam_lambda_0_env;\n"
     )
@@ -710,7 +641,6 @@ func test_lambda_output():
     testing.AssertContains(
         c, "static int32_t _Salam_lambda_0(void *__envp, int32_t p, " + "int32_t q);\n"
     )
-    // body: captured `n` read through __env->n.
     testing.AssertContains(
         c, "static int32_t _Salam_lambda_0(void *__envp, int32_t p, " + "int32_t q) {\n"
     )
@@ -721,15 +651,11 @@ func test_lambda_output():
         c,
         "return ((int32_t)((uint32_t)(((int32_t)((uint32_t)(p) + (uint32_t)(q)))) + (uint32_t)(__env->n)));\n"
     )
-    // _make allocates the env and stores fn ptr + captured n.
     testing.AssertContains(c, "e->fn = (void*)&_Salam_lambda_0;\n")
     testing.AssertContains(c, "e->n = n;\n")
-    // lambda VALUE at the use site is the _make() call.
     testing.AssertContains(
         c, "void* add = _Salam_lambda_0_make(n);\n"
     )
-    // calling a `func(...)`-typed local goes through call_value's
-    // deref-and-prepend-env convention.
     testing.AssertContains(
         c, "({ void *_clz0 = (void*)(add); ((int32_t(*)(void*, int32_t, " + "int32_t))(*(void**)_clz0))(_clz0, 3, 4); })"
     )

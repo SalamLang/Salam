@@ -1,29 +1,6 @@
 package tls
 import net.internal.rawsock
 
-
-// Record framing. Traffic keys and AEAD dispatch live in keys.salam.
-
-// TLS 1.3 record layer (RFC 8446 section 5) and traffic-key management.
-//
-// A record is a 5-byte header followed by a fragment. Before the handshake
-// keys exist the fragment is plaintext; afterwards it is an AEAD ciphertext
-// whose additional data is the header itself, so a rewritten length or content
-// type breaks authentication.
-//
-// Two details that are easy to get subtly wrong and are called out here:
-//
-//  * The per-record nonce is the static IV XOR the 64-bit sequence number,
-//    right-aligned. The sequence number is NEVER transmitted; both sides count
-//    independently, which is what stops a record being replayed or reordered
-//    within a connection. It resets to zero on every key change.
-//
-//  * TLS 1.3 hides the real content type inside the encrypted payload and puts
-//    a fixed 0x17 (application_data) in the visible header. The true type is
-//    the last non-zero byte of the decrypted inner plaintext, after any padding
-//    zeros. Reading the visible header's type instead would mean trusting a
-//    field the AEAD does authenticate but which is deliberately meaningless.
-
 const REC_CHANGE_CIPHER_SPEC := 20
 const REC_ALERT := 21
 const REC_HANDSHAKE := 22
@@ -65,8 +42,6 @@ const ALERT_INTERNAL_ERROR := 80
 // WebSocket needs.
 const HANDSHAKE_READ_TIMEOUT_MS := 15000
 
-// ---------------------------------------------------------------- transport
-
 struct RecordLayer:
     pub fd: i64 = 0 - 1
     // bytes received but not yet consumed
@@ -107,11 +82,6 @@ end
 
 // Pull more bytes from the socket into the receive buffer.
 func _rec_fill(r &: RecordLayer): bool:
-    // WaitReadable, never SetTimeout: a timed recv() that expires halfway
-    // through a record consumes the bytes it did get and leaves this layer
-    // holding a fragment it can never finish. poll() touches no bytes, so
-    // it composes with a buffering transport the way a timed recv does not
-    // - the reasoning is spelled out on rawsock.WaitReadable itself.
     if r.read_deadline_ms > 0:
         if !rawsock.WaitReadable(rawsock.FromFd(r.fd), r.read_deadline_ms):
             _rec_fail(r, "timed out waiting for the peer")
@@ -183,8 +153,6 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
 
     mut hdr := _newbuf(REC_HEADER)
     defer _buf_free(hdr)
-    // TLS 1.2 scratch at function scope: a defer inside the branch below would
-    // outlive the name it frees
     mut n12 := _newbuf(12)
     defer _buf_free(n12)
     mut a12 := _newbuf(16)
@@ -197,7 +165,6 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
 
     _bufreset(out)
     if !r.rxk.live:
-        // plaintext record
         repeat length with i:
             _put8(out, _bufat(r.rx, REC_HEADER + i))
         end
@@ -206,9 +173,6 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
         ret true
     end
 
-    // ChangeCipherSpec may still arrive after keys are installed, as
-    // middlebox-compatibility filler. It is not encrypted and must be ignored
-    // rather than fed to the AEAD.
     if ctype == REC_CHANGE_CIPHER_SPEC:
         _bufconsume(r.rx, REC_HEADER + length)
         typ = REC_CHANGE_CIPHER_SPEC
@@ -221,9 +185,6 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
     end
 
     if r.rxk.is12:
-        // is12 read path: the header carries the real content type, the
-        // additional data is seq||type||version||plaintext_len, and AES-GCM
-        // prefixes an 8-byte explicit nonce to the ciphertext.
         exp := r.rxk.explicit_len
         if length < exp + 17:
             _rec_fail(r, "encrypted record too short")
@@ -284,7 +245,6 @@ func _rec_read(r &: RecordLayer, typ &: int, out &: Buf): bool:
         ret false
     end
 
-    // strip zero padding from the end; the last non-zero byte is the real type
     mut last := ctlen - 1
     until last >= 0 && _bufat(plain, last) == 0:
         last -= 1
@@ -303,8 +263,6 @@ end
 func _rec_write_raw(r &: RecordLayer, typ: int, p: void*, n: int): bool:
     mut rec := _newbuf(n + REC_HEADER + 32)
     defer _buf_free(rec)
-    // All scratch lives at function scope: a `defer` inside the else branch
-    // would be hoisted past the branch-local declaration.
     mut inner := _newbuf(n + 1)
     defer _buf_free(inner)
     mut nonce := _newbuf(12)
@@ -328,7 +286,6 @@ func _rec_write_raw(r &: RecordLayer, typ: int, p: void*, n: int): bool:
         _putzeros(nonce, 12)
         _tk_nonce(r.txk, nonce)
         if exp > 0:
-            // the explicit nonce is the low 8 bytes of the constructed nonce
             repeat 8 with i:
                 _put8(rec, _bufat(nonce, 4 + i))
             end
@@ -344,8 +301,6 @@ func _rec_write_raw(r &: RecordLayer, typ: int, p: void*, n: int): bool:
             ret false
         end
     else:
-        // inner plaintext is content || real type; the visible header always
-        // claims application_data
         _putraw(inner, p, n)
         _put8(inner, typ)
 

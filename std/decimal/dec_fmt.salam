@@ -17,20 +17,6 @@ package decimal
 import bigint
 import str
 
-// Text in and text out.
-//
-// Output is always plain positional notation -- "0.00001250", never "1.25e-5".
-// A price, an invoice line, and a ledger entry are all read by people and
-// stored in databases that expect a fixed form, and switching to exponential
-// notation past some threshold is how a total ends up rendered as "1e+06" on
-// a receipt. There is no formatter here that will do that to you.
-//
-// Input accepts what a person or a data feed actually writes: a sign, digits
-// with `_` grouping, an optional fraction, an optional exponent, and Persian
-// or Arabic-Indic digits alongside ASCII. The scale of the result is the
-// number of fraction digits as written, so "1.50" parses at scale 2 and keeps
-// its trailing zero -- which for money is information, not noise.
-
 // Appends `digits` with a decimal point inserted `scale` places from the
 // right, no sign. Digits are copied byte by byte rather than through Substr
 // because a str result is never reclaimed in Salam, and a formatter that runs
@@ -42,8 +28,6 @@ func _emit_digits(b &: str.StringBuilder, digits: str, scale: int):
         ret
     end
     if n <= scale:
-        // Smaller than one: a leading zero, then enough padding zeros that the
-        // digits land in the right place.
         str.BufAppendChar(b, 48)
         str.BufAppendChar(b, 46)
         repeat scale - n: str.BufAppendChar(b, 48) end
@@ -59,10 +43,6 @@ func _emit_digits(b &: str.StringBuilder, digits: str, scale: int):
         i += 1
     end
 end
-
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
 
 // Plain decimal notation, with exactly `Scale(d)` digits after the point and
 // never an exponent. A zero at scale 2 prints "0.00".
@@ -115,9 +95,6 @@ pub func FormatGrouped(d: Dec, scale: int, group: str, point: str): str:
     r.free()
 
     n := str.Len(digits)
-    // Digits 0..wn-1 are the integer part and wn..n-1 the fraction. A wn of
-    // zero or less means the value is below one, so the integer part is a
-    // written-in "0" and the fraction needs -wn leading zeros of padding.
     wn := n - sc
 
     mut b := str.NewBuilder()
@@ -126,8 +103,6 @@ pub func FormatGrouped(d: Dec, scale: int, group: str, point: str): str:
         str.BufAppendChar(b, 48)
     else:
         repeat wn with i:
-            // A separator goes before every digit whose distance from the end
-            // of the integer part is a nonzero multiple of three.
             rem := wn - i
             if i > 0 && rem % 3 == 0: str.BufAppend(b, group) end
             str.BufAppendChar(b, digits[i] as int)
@@ -148,10 +123,6 @@ pub func FormatGrouped(d: Dec, scale: int, group: str, point: str): str:
     ret out
 end
 
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
 // Reads "123.45", "-0.001", "+1_000.00", "1.5e3", "۱۲٫۳۴"-style Persian and
 // Arabic-Indic digits. The scale of the result is the number of fraction
 // digits written, less any exponent, so "1.50" is scale 2 and "1.5e3" is 1500
@@ -161,8 +132,6 @@ end
 @ar "تحليل"
 pub func Parse(s: str, ok &: bool): Dec:
     ok = false
-    // As in bigint.ParseBase: only pay for the digit fold when the input
-    // actually carries non-ASCII digits.
     mut norm := s
     if str.HasPersianDigits(s) || str.HasArabicDigits(s):
         norm = str.ToEnglishDigits(s)
@@ -179,8 +148,6 @@ pub func Parse(s: str, ok &: bool): Dec:
         end
     end
 
-    // Mantissa digits are collected with the point removed; `frac` counts how
-    // many of them fell after it, which is the scale before any exponent.
     mut digits := str.NewBuilder()
     mut seen := 0
     mut frac := 0
@@ -189,7 +156,6 @@ pub func Parse(s: str, ok &: bool): Dec:
     while i < n:
         c := norm[i] as int
         if c == 95:
-            // A group separator, legal only between digits.
             if seen == 0: bad = true break end
             i += 1
             continue
@@ -223,8 +189,6 @@ pub func Parse(s: str, ok &: bool): Dec:
             while i < n:
                 c2 := norm[i] as int
                 if c2 < 48 || c2 > 57: break end
-                // Clamped: an exponent past this is not a number anyone meant,
-                // and letting it through would ask Pow10 for a terabyte.
                 if ex < 1000000: ex = ex * 10 + (c2 - 48) end
                 edig += 1
                 i += 1
@@ -249,8 +213,6 @@ pub func Parse(s: str, ok &: bool): Dec:
     end
     if neg: bigint.NegateIn(u) end
     ok = true
-    // _adopt folds a negative scale (which an exponent can produce) back into
-    // the digits, so the Dec that comes out always has scale >= 0.
     ret _adopt(u, frac - ex)
 end
 
@@ -267,10 +229,6 @@ pub func ParseOr(s: str): Dec:
     end
     ret v
 end
-
-// ---------------------------------------------------------------------------
-// Machine number conversions
-// ---------------------------------------------------------------------------
 
 // The integer part of d, truncated toward zero. Sets ok = false if it does not
 // fit an i64.

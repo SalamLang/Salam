@@ -119,19 +119,8 @@ if SALAM_OS_WINDOWS:
         ret sa
     end
 
-    // Capture targets a real file opened with an inheritable handle, never an
-    // anonymous pipe. A pipe has a fixed kernel buffer (4 KB by default, which
-    // is what CreatePipe's size=0 asks for): a child that outruns it blocks in
-    // WriteFile, and a parent that waits for the child before draining blocks
-    // in WaitForSingleObject - neither side can break that. Draining first
-    // does not fix it either, because two pipes have to be drained
-    // concurrently or whichever one is read second fills up and deadlocks the
-    // same way. A file handle applies no back-pressure at all, so both streams
-    // are captured with no ordering constraint between Wait and the reads.
     func _open_inheritable(path: str, access: u32, disp: u32): void*:
         sa := _build_sa()
-        // FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_ATTRIBUTE_NORMAL: the
-        // parent has to be able to read the file back while the child writes.
         h := CreateFileA(path, access, 3 as u32, sa, disp, 128 as u32, null)
         mem.Free(sa)
         invalid := (0 - 1) as i64
@@ -151,8 +140,6 @@ else:
             arr[i + 1] = args.get(i)
             i += 1
         end
-        // execv wants a NULL terminator; `null as str` is not a cast the
-        // language allows, so it goes through void*.
         arr[n + 1] = (null as void*) as str
         ret arr as void*
     end
@@ -220,16 +207,11 @@ if SALAM_OS_WINDOWS:
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 1, 0, null, null, si, pi)
         mem.Free(si)
-        // The child owns its own duplicates from here on; without these the
-        // parent keeps the capture files open for writing for its own
-        // lifetime.
         if in_h != null: CloseHandle(in_h) end
         if out_h != null: CloseHandle(out_h) end
         if err_h != null: CloseHandle(err_h) end
 
         mut p := Process {}
-        // Recorded even on the failure path so Cleanup can still remove the
-        // two temp files that were created above.
         p.stdout_path = out_path
         p.stderr_path = err_path
         if ok == 0:
@@ -250,9 +232,6 @@ if SALAM_OS_WINDOWS:
     @fa "انتظار"
     @ar "انتظار"
     pub func Wait(p &: Process): int:
-        // A Process whose spawn failed has no handle to wait on; without this
-        // GetExitCodeProcess fails too and its untouched buffer reads back as
-        // a clean exit 0.
         if p.handle == null: ret 0 - 1 end
         WaitForSingleObject(p.handle, 0 - 1)
         buf := mem.AllocateZeroed(4 as u64)
@@ -260,8 +239,6 @@ if SALAM_OS_WINDOWS:
         code := _u32_at(buf, 0) as int
         mem.Free(buf)
         CloseHandle(p.handle)
-        // Cleared, not just closed: the guard above is only worth anything if
-        // a second Wait (or a Kill after Wait) cannot reach a stale handle.
         p.handle = null
         p.running = false
         p.exit_code = code
@@ -328,8 +305,6 @@ else:
         mem.Free(actions)
         mem.Free(argv)
         mut p := Process {}
-        // Recorded even on the failure path so Cleanup can still remove the
-        // two temp files that were created above.
         p.stdout_path = out_path
         p.stderr_path = err_path
         if rc != 0:
@@ -348,24 +323,9 @@ else:
     @fa "انتظار"
     @ar "انتظار"
     pub func Wait(p &: Process): int:
-        // pid 0 is a Process that never started (Start/StartCaptured left the
-        // default in place after a failed spawn). It has to be turned away
-        // here: to waitpid and kill, 0 does not mean "nothing", it means
-        // "every process in my group".
         if p.pid <= 0: ret 0 - 1 end
         statusbuf := mem.AllocateZeroed(4 as u64)
         mut rc := waitpid(p.pid, statusbuf, 0)
-        // waitpid is a cancellation point: any signal delivered to this thread
-        // (an http.Run handler thread is as likely to get one as the main
-        // thread) cuts it short with EINTR before the child is reaped, leaving
-        // statusbuf untouched. The old code ignored the return value entirely
-        // and read that still-zero buffer as "exited, status 0" - a success
-        // code for a child that was in fact still running, and whose capture
-        // files were then read empty. kill(pid, 0) is the errno-free way to
-        // tell the two failure modes apart: it succeeds while the child exists
-        // (zombies included, so the retry can still reap it) and fails once it
-        // is gone for good, which is what stops this from spinning when the
-        // child was already reaped elsewhere.
         until rc < 0 && kill(p.pid, 0) == 0:
             rc = waitpid(p.pid, statusbuf, 0)
         end
@@ -374,10 +334,6 @@ else:
         mem.Free(statusbuf)
         mut code := 0 - 1
         if rc == p.pid:
-            // Low 7 bits are the terminating signal, 0 for a normal exit, in
-            // which case the exit status is the next byte up. A child killed
-            // by a signal used to divide down to 0 and report success; report
-            // it the way a shell does instead, as 128 + signal.
             low := status % 128
             if low == 0:
                 code = (status / 256) % 256
@@ -394,7 +350,7 @@ else:
     @fa "کشتن"
     @ar "قتل"
     pub func Kill(p &: Process): int:
-        if p.pid <= 0: ret 0 - 1 end // see Wait: kill(0, sig) signals the group
+        if p.pid <= 0: ret 0 - 1 end
         if kill(p.pid, 9) != 0: ret 0 - 1 end
         p.running = false
         ret 0
@@ -404,7 +360,7 @@ else:
     @fa "پایان دادن"
     @ar "إنهاء"
     pub func Terminate(p &: Process): int:
-        if p.pid <= 0: ret 0 - 1 end // see Wait: kill(0, sig) signals the group
+        if p.pid <= 0: ret 0 - 1 end
         if kill(p.pid, 15) != 0: ret 0 - 1 end
         p.running = false
         ret 0

@@ -6,7 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ll_param_is_ref
 func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
     decl := sm.SigAt(s, sig).decl
     if decl == 0:
@@ -19,13 +18,6 @@ func param_is_ref(s &: sm.Sema, a &: at.Ast, sig: int, i: int): bool:
     ret at.Get(a, dn.list.get(i)).is_ref
 end
 
-// Which parameters of the C library functions declare_libc declares are
-// size_t. Salam has no pointer-width integer type - std/mem spells the
-// allocator `extern func malloc(size: u64)` - so on a 32-bit target the
-// argument arrives as an i64 while the callee was declared taking an i32.
-// LLVM accepts that mismatch SILENTLY and emits the call in the wrong ABI:
-// on big-endian ARM an i64 travels in r0:r1 with the high half in r0, so
-// malloc would be handed 0. Narrow the argument to the declared width here.
 func libc_size_param(fname: str, i: int): bool:
     if str.Equals(fname, "malloc"):
         ret i == 0
@@ -45,13 +37,11 @@ func libc_size_param(fname: str, i: int): bool:
     ret false
 end
 
-// ll_emit_arg
 func emit_arg(
     v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int, cname: str
 ):
     if param_is_ref(s, a, sig, i):
         if at.Get(a, arg).ref_arg_ptr:
-            // Already a pointer to the parameter's type (`this`, or a T*).
             pv := lv_expr(v, s, a, arg)
             co.SbPuts(ab, "ptr " + pv.ref)
             ret
@@ -74,7 +64,6 @@ func emit_arg(
     co.SbPuts(ab, ty + " " + ref2)
 end
 
-// ll_fill_defaults
 func fill_defaults(
     v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, n: int, sig: int, first0: bool
 ):
@@ -103,18 +92,8 @@ func fill_defaults(
     end
 end
 
-// ll_call_user
 func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     mut fsym := 0
-    // The enclosing package's own function outranks whatever the global
-    // scope holds under that name, exactly as ordinary scoping demands.
-    // sym_of searches globally first, which got this wrong twice: std/time
-    // is `package time` and also declares `extern func time(tp: void*)`, so
-    // a bare `time(null)` inside it resolved to SYM_PACKAGE and was reported
-    // as an unknown function; and std/net/http's own `send(method, url,
-    // headers, body): Response` lost to the libc `send()` extern that
-    // std/net/internal/rawsock declares, which silently lowered four string
-    // arguments through ptrtoint into a socket call.
     if v.pkg_scope != 0:
         lf := sm.LookupLocal(s, v.pkg_scope, nm)
         if lf != 0 && sm.SymAt(s, lf).kind == sm.SYM_FUNC:
@@ -131,8 +110,6 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     sig := pick_overload(v, s, a, fsym, n)
     ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, v.pkg_scope)
     nn := at.Get(a, n)
-    // The C name, for an extern only: a Salam function called `malloc` is
-    // not the libc one and must not have its arguments narrowed.
     cname := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern ? nm : ""
     mut ab := co.SbNew()
     mut i := 0
@@ -171,7 +148,6 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
         callty = " " + co.SbCstr(sp)
         co.SbFree(sp)
     end
-    // The convention has to match the `declare` exactly - see StdcallCc.
     cc := StdcallCc(v, fname)
     if str.Equals(rts, "void"):
         emit(v, "call" + cc + " void" + callty + " @" + fname + "(" + argsx + ")")
@@ -184,7 +160,6 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     ret make_llv(r, rts)
 end
 
-// ast_str_lit_len - -1 = not a foldable string literal.
 func ast_str_lit_len(a &: at.Ast, n: int): i64:
     if n == 0:
         ret (0 - 1)
@@ -202,7 +177,6 @@ func ast_str_lit_len(a &: at.Ast, n: int): i64:
     ret str.Len(node.value_str)
 end
 
-// ll_len_of
 func len_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, arg: int): Llv:
     ts := at.Get(a, arg).type_str
     if is_slice(ts):
@@ -228,12 +202,10 @@ func len_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, arg: int): Llv:
     ret make_llv(usize_to_i32(v, l2), "i32")
 end
 
-// ll_call_len
 func call_len(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     ret len_of(v, s, a, n, at.Get(a, n).list.get(0))
 end
 
-// ll_emit_call
 func emit_call(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, sig: int, lead: str, fname: str, rts: str
 ): Llv:
@@ -264,7 +236,6 @@ func emit_call(
     ret make_llv(r, rts)
 end
 
-// ll_call_pkg
 func call_pkg(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, fname_: str
 ): Llv:
@@ -278,8 +249,6 @@ func call_pkg(
     sig := pick_overload(v, s, a, fs, n)
     ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, py.members)
     is_ext := sm.SigAt(s, sig).decl != 0 && at.Get(a, sm.SigAt(s, sig).decl).is_extern
-    // py.pkgname, not the caller's package: this is the one call path that
-    // resolves through another package's member scope.
     mut own_pkg := py.pkgname
     if str.Len(own_pkg) == 0:
         own_pkg = py.name
@@ -290,13 +259,6 @@ func call_pkg(
     )
 end
 
-// ll_runtime_fn - locate a `salam_*` runtime builtin by name in any package
-// sema has loaded. These are not symbols that must come from a prebuilt
-// runtime archive: the stdlib declares them as `extern:` blocks that DO
-// carry a Salam body (std/fs/fs.salam's salam_file_read, std/text's
-// salam_str_split, ...), which toplevel() already emits - only the dispatch
-// from the surface syntax down to them was missing.
-// Returns the signature id; sets out_pk to the owning package.
 func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:
     mut p := 0
     until p < sm.PackageCount(s):
@@ -316,12 +278,6 @@ func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:
     ret 0
 end
 
-// ll_call_runtime - emit a call to a runtime builtin resolved by
-// runtime_fn. `recv` (0 when absent) is lowered as the leading argument:
-// method-shaped builtins take their receiver as parameter 0, so the call's
-// own arguments line up with sig params starting at index 1. That offset is
-// why this does not go through emit_call, which pairs argument i with
-// param i.
 func call_runtime(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
 ): bool:
@@ -372,11 +328,6 @@ func call_runtime(
     ret true
 end
 
-// ll_runtime_val - a runtime builtin called on a value that is already
-// lowered, rather than on an argument list of AST nodes. The print path
-// needs this: it holds a double and wants the text salam_fmt_f64 makes of
-// it.  Returns the register holding the result, or "" when the builtin is
-// not in this program (nothing links it, so nothing can call it).
 func call_runtime_val(
     v &: Lv, s &: sm.Sema, a &: at.Ast, rtname: str, argty: str, argref: str, retty: str
 ): str:
@@ -392,11 +343,6 @@ func call_runtime_val(
     ret r
 end
 
-// ll_call_vec_str - builtins that hand back a freshly allocated
-// `const char**` plus an out-param element count, which the surface
-// language sees as a Vector<str>. Vector<T> is { data, count, capacity } (see
-// std/collections/vector.salam), so cap is filled with the same count as
-// len - the buffer is exactly sized and never grown in place.
 func call_vec_str(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, rtname: str, recv: int, out2 &: Llv
 ): bool:
@@ -448,7 +394,6 @@ func call_vec_str(
     ret true
 end
 
-// ll_call_file - File* methods, the C backend's call_file() counterpart.
 func call_file(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, obj: int, m: str, out2 &: Llv
 ): bool:
@@ -470,13 +415,6 @@ func call_file(
     ret false
 end
 
-// An enum member's LLVM value, in its backing type: an i32 immediate for
-// int (unchanged), a float immediate for float, or the same deduplicated
-// global-string reference an ordinary string literal would get for string -
-// strconst hands back the identical @.str.N for equal content, so two reads
-// of the same member (or of an equal-valued member elsewhere) are pointer-
-// identical without that being load-bearing for ==, which still goes
-// through binary_string's strcmp like any other str comparison.
 func enum_member_value(v &: Lv, s &: sm.Sema, m: int): Llv:
     mv := sm.SymAt(s, m)
     if mv.enum_val_kind == tok.TV_FLOAT:
@@ -488,12 +426,6 @@ func enum_member_value(v &: Lv, s &: sm.Sema, m: int): Llv:
     ret make_llv(co.I64Toa(mv.enum_value), "i32")
 end
 
-// ll_pkg_value - `pkg.NAME` where NAME is a package-level const/var or an
-// enum member the package exports: the non-call half of package-qualified
-// access, which previously fell through to member_addr and reported the
-// package identifier itself as an unknown address. Touching the package
-// first is what makes this work - touch_pkg emits its globals, and only
-// then can global_find see them.
 func pkg_value(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, pk: int, out2 &: Llv
 ): bool:

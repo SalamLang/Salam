@@ -7,13 +7,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_header.c =====
-
-// The stem the driver names an import's generated module after: the base
-// name of the resolved file with its extension dropped, which is what
-// driver_build turns into salam_mod_<stem>.c/.h/.o. "" when the import cannot
-// be resolved, which the caller treats as "nothing to emit" - a missing import
-// is already a semantic error by the time codegen runs.
 func cg_import_module(a &: at.Ast, did: int): str:
     d := at.Get(a, did)
     mut p := d.name
@@ -143,11 +136,6 @@ func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
         )
     end
     if n.kind == at.AST_TYPE && n.is_dyn && str.Len(n.name) > 0:
-        // A type node carries the name as written ("Rows", "db.Rows");
-        // every other route here carries the canonical one the type
-        // string uses. Register the canonical form or the interface gets
-        // two typedefs, only one of which the rest of the module refers
-        // to.
         isym3 := cg_iface_sym(s, n.name)
         dyn_set_add(g.dyn_ifaces, isym3 != 0 ? cg_iface_canon_name(s, isym3) : n.name)
     end
@@ -172,7 +160,6 @@ func dyn_collect(g &: Cg, s &: sm.Sema, a &: at.Ast, id: int):
     end
 end
 
-// dyn_match_sig - cm is a SymId, want a SigId; returns a SigId.
 func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
     if cm == 0:
         ret 0
@@ -202,12 +189,6 @@ func dyn_match_sig(s &: sm.Sema, cm: int, want: int): int:
     ret 0
 end
 
-// A type name that reaches codegen is canonical: a struct or interface
-// declared in package `db` is named "db_Connection" no matter which file
-// names it, and only a main-module declaration keeps its bare name
-// (sema_decl.salam). So a symbol has to be found by that canonical name,
-// which for anything outside the main module means walking the packages -
-// it is not in the global scope under that spelling.
 func cg_canon_sym(s &: sm.Sema, name: str, kind: int): int:
     if str.Len(name) == 0:
         ret 0
@@ -247,16 +228,10 @@ func cg_iface_sym(s &: sm.Sema, name: str): int:
     ret cg_canon_sym(s, name, sm.SYM_INTERFACE)
 end
 
-// The concrete side of an impl pair is canonical too: a driver struct in
-// another package reaches here as "drv_DB".
 func cg_struct_sym(s &: sm.Sema, name: str): int:
     ret cg_canon_sym(s, name, sm.SYM_STRUCT)
 end
 
-// sig_param_is_ref - whether param `p` of the signature is declared `&:`.
-// The ref bit lives on the AST param node, not on the type, so a vtable
-// slot and its thunk have to consult the interface's declaration to type
-// the parameter `T*` the way func_signature does for the method itself.
 func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
     decl := sm.SigAt(s, sigid).decl
     if decl == 0:
@@ -270,12 +245,6 @@ func sig_param_is_ref(s &: sm.Sema, a &: at.Ast, sigid: int, p: int): bool:
 end
 
 func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
-    // Every fat pointer and vtable is named before any is defined: an
-    // interface method that takes or returns `dyn` of its own interface -
-    // `func combine(o: dyn Maker): int` - spells `_Salam_dyn_Maker` inside
-    // the vtable that `_Salam_dyn_Maker` itself is defined after. A
-    // prototype only needs the type declared, so the forward typedefs are
-    // enough.
     repeat g.dyn_ifaces.len() with i0:
         iname0 := g.dyn_ifaces.get(i0)
         ci0 := cg_cident(iname0)
@@ -306,17 +275,9 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
             end
             sigid := ms.overloads.get(0)
             sig := sm.SigAt(s, sigid)
-            // An aggregate return lowers to an out-parameter here just as it
-            // does for a plain function (func_signature), so the slot has
-            // to be typed `void (*)(void*, ..., R*)`.
             sret := type_is_byval_agg(s, sig.ret_type)
             ret_ts0 := sm.ToString(s, sig.ret_type)
             rc := cg_ctype(ret_ts0)
-            // An array return's out-parameter is written as the real
-            // (unnamed) array declarator, not cg_ctype's always-single-
-            // decay "T*": C's array-parameter rule keeps every dimension
-            // past the first, so a 2-D return needs "(*)[3]", which only
-            // cg_decl_cn's dimension-aware form produces.
             ret_act0 := cg_array_ctype(ret_ts0)
             mut ret_out0 := ""
             if str.Len(ret_act0) > 0:
@@ -331,12 +292,6 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 pts0 := sm.ToString(s, sig.params.get(p))
                 pact0 := sig_param_is_ref(s, a, sigid, p) ? "" : cg_array_ctype(pts0)
                 if str.Len(pact0) > 0:
-                    // An unnamed array declarator adjusts to a pointer to
-                    // everything past the first dimension the same way a
-                    // named one does (C's own parameter-decay rule, not
-                    // something this has to spell out itself) - cg_decl_cn
-                    // with an empty name, exactly like func_signature's own
-                    // by-value array parameter above, just anonymous here.
                     outh(g, ", " + cg_decl_cn(pts0, ""))
                 else:
                     outh(g, ", " + cg_ctype(pts0) + (sig_param_is_ref(s, a, sigid, p) ? "*" : ""))
@@ -355,7 +310,6 @@ func cg_emit_dyn_types(g &: Cg, s &: sm.Sema, a &: at.Ast):
     end
 end
 
-// cg_emit_dyn_vtables - writes to the C sink (callers keep cur == CG_OUT_C).
 func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
     repeat g.dyn_impls.len() with i:
         pair := g.dyn_impls.get(i)
@@ -385,20 +339,10 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             mut mangled := ""
             mut recv_star := "*"
             if csig != 0:
-                // Through cg_mangle_method, not cg_mangle: the method
-                // belongs to the struct's own package, which is not the
-                // module being emitted when a driver in another package
-                // is boxed into an interface here.
                 mangled = cg_mangle_method(
                     g, s, sm.SymAt(s, csym).name, csym, ms.name, sm.SigAt(s, csig).params
                 )
             else:
-                // Nothing on the struct itself; an `impl Iface on Struct`
-                // block may still provide it (see sema_generic.salam's
-                // iface_satisfied, which now accepts this too). Those
-                // methods take `this` by value, mangled with the "ti"
-                // scheme (see codegen_decl.salam / llvm_decl.salam), not
-                // by the struct's own pointer-receiver convention.
                 iowner := sm.Lookup(s, s.global, sm.ImplOwnerKey(cnamev))
                 mut icm := 0
                 if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
@@ -415,9 +359,6 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
             iret_ts := sm.ToString(s, isigv.ret_type)
             rets := cg_ctype(iret_ts)
             iret_act := cg_array_ctype(iret_ts)
-            // Same array-parameter declarator as func_signature and the
-            // vtable slot above - cg_ctype's flat "T*" loses every
-            // dimension past the first.
             mut ret_out1 := ""
             if str.Len(iret_act) > 0:
                 ret_out1 = cg_array_ret_decl(iret_ts, "__ret")
@@ -430,12 +371,6 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 pts1 := sm.ToString(s, isigv.params.get(p))
                 pact1 := sig_param_is_ref(s, a, isig, p) ? "" : cg_array_ctype(pts1)
                 if str.Len(pact1) > 0:
-                    // Named array declarator - C's parameter-decay rule
-                    // drops the first dimension on its own, same as any
-                    // named array parameter (func_signature's own "__in"
-                    // copies included), so this is cg_decl_cn, not the
-                    // pointer-to-whole-array form cg_array_ret_decl builds
-                    // for an out-parameter.
                     co.SbPuts(ps, ", " + cg_decl_cn(pts1, "__a" + p))
                 else:
                     pt := cg_ctype(pts1) + (sig_param_is_ref(s, a, isig, p) ? "*" : "")
@@ -444,9 +379,6 @@ func cg_emit_dyn_vtables_impl(g &: Cg, s &: sm.Sema, a &: at.Ast):
                 co.SbPuts(asb, ", __a" + p)
             end
             isvoid := isigv.ret_type != sm.TYPE_NONE && sm.TypeAt(s, isigv.ret_type).kind == sm.TY_VOID
-            // The callee is `void f(C*, ..., R* __ret)` when it returns an
-            // aggregate, so the thunk cannot `return f(...)` - it takes the
-            // caller's out-pointer and hands it straight on.
             sret2 := type_is_byval_agg(s, isigv.ret_type)
             recv_expr := recv_star == "*" ? "(" + cc2 + "*)self" : "*(" + cc2 + "*)self"
             if sret2:
@@ -529,9 +461,6 @@ func vec_emit(g &: Cg, ts: str):
     outh(
         g, "static " + ec + " " + cn + "_get(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) salam_panic(\"Vector.get: index out of " + "bounds\"); return v->data[i]; }\n"
     )
-    // What get returned before it started handing back the element itself.
-    // Out of range stays a null pointer rather than a panic: this is the
-    // escape hatch, and code that reaches for it can check.
     outh(
         g, "static " + ec + "* " + cn + "_ref(" + cn + "* v, int32_t i){ " + "if(i<0||i>=v->len) return (" + ec + "*)0; return " + "&v->data[i]; }\n"
     )
@@ -550,9 +479,6 @@ func vec_emit(g &: Cg, ts: str):
     outh(g, "#endif\n")
 end
 
-// One of the five names spelled the way <string.h> spells them. A program
-// that defines the name itself gets no declaration here: its own definition
-// is the declaration, and libc's spelling would only conflict with it.
 func rt_decl(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str, proto: str):
     did := libc_definition(a, name)
     if did == 0:
@@ -574,10 +500,6 @@ func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     if g.is_gui_mode:
         outh(g, "#ifdef _WIN32\n#include <windows.h>\n#endif\n")
     end
-    // stdint, stdbool and stddef are freestanding headers - the C standard
-    // requires a freestanding implementation to provide them, and gcc and
-    // clang both do under -ffreestanding. <math.h> is not one of them, and a
-    // kernel must not reach libm anyway.
     if g.freestanding:
         outh(
             g, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
@@ -587,58 +509,14 @@ func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             g, "#include <stdint.h>\n#include <stdbool.h>\n#include <math.h>" + "\n#include <stddef.h>\n"
         )
     end
-    // Whole-array copies (`b := a`, a by-value array parameter) go through
-    // this rather than memcpy, which <string.h> would have to declare and a
-    // freestanding build cannot include. The compilers that have the
-    // builtin turn it into the same code; anything else gets a byte loop.
     outh(
         g, "#ifndef SALAM_ARRCPY_DEFINED\n#define SALAM_ARRCPY_DEFINED\n" + "static inline void salam_arrcpy(void *d, const void *s, size_t n) {\n" + "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n" + "    __builtin_memcpy(d, s, n);\n" + "#else\n" + "    unsigned char *dd = (unsigned char *)d; const unsigned char *ss = (const unsigned char *)s;\n" + "    while (n--) *dd++ = *ss++;\n" + "#endif\n" + "}\n#endif\n"
     )
-    // <stdio.h> is included rather than fopen/fread/fwrite being
-    // hand-declared like the rest of the CRT surface: clang's
-    // -Wbuiltin-requires-header fires on any declaration of those three
-    // outside the real header, however exactly it matches its own idea of
-    // the prototype (78 warnings in one benchmark-runner build).
-    // is_stdio_name below drops the hand-declarations that would now
-    // conflict with it.
-    //
-    // Its macros are undefined again immediately. `stdout` and `stderr` are
-    // ordinary field names in Salam - std/ssh's Channel has both - and musl
-    // spells the macro `(stdout)`, which turns `ch->stdout` into a syntax
-    // error; mingw spells it `(&__iob_func()[1])`. Only the macro shorthand
-    // goes, the libc functions and objects behind it survive, and nothing
-    // generated here ever refers to a stdio macro.
-    // <stdio.h> does not exist freestanding, so the hand-declared
-    // fopen/fread/fwrite that hdr_externs suppresses for a hosted build come
-    // back instead and libbs supplies them.
     if !g.freestanding:
         outh(
             g, "#include <stdio.h>\n" + "#undef stdin\n#undef stdout\n#undef stderr\n" + "#undef EOF\n#undef BUFSIZ\n" + "#undef SEEK_SET\n#undef SEEK_CUR\n#undef SEEK_END\n"
         )
     end
-    // fflush and snprintf come from the <stdio.h> above. Hand-declaring them
-    // again is what the include is there to avoid: salam spells the size as
-    // uint64_t where the standard says size_t, and the stream as void* where
-    // it says FILE*.
-    // Keep freed blocks inside the process instead of handing them straight
-    // back to the kernel. glibc's defaults return anything past 128 KiB with
-    // munmap or an sbrk shrink, so a loop that allocates a result, frees it
-    // and allocates the next one re-faults every page it touches: measured on
-    // a 2048x2048 f64 matrix add, 8192 minor faults per call and roughly two
-    // thirds of the wall time, none of it arithmetic. Raising both thresholds
-    // lets the same pages come back already resident.
-    //
-    // Only glibc has mallopt; everywhere else this is an empty function that
-    // the compiler deletes. SALAM_NO_ALLOC_TUNE opts out for a program that
-    // would rather return memory promptly than reuse it.
-    //
-    // Deliberately no getenv() check for an existing MALLOC_*_ setting:
-    // <stdlib.h> declares getenv as char*, std/os hand-declares it as void*,
-    // and pulling the real header in here makes the two collide in every
-    // translation unit that touches os. The compile-time define is the
-    // supported way out.
-    // Freestanding there is no glibc and no <malloc.h>. Emit the empty arm
-    // so the call in emit_module_init still compiles away to nothing.
     if g.freestanding:
         outh(
             g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n"
@@ -648,10 +526,6 @@ func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             g, "#ifndef SALAM_ALLOC_TUNE_DEFINED\n#define SALAM_ALLOC_TUNE_DEFINED\n" + "#if defined(__GLIBC__) && !defined(SALAM_NO_ALLOC_TUNE)\n" + "#include <malloc.h>\n" + "static inline void salam_tune_allocator(void) {\n" + "    static int done = 0;\n" + "    if (done) return;\n" + "    done = 1;\n" + "    mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);\n" + "    mallopt(M_TRIM_THRESHOLD, 512 * 1024 * 1024);\n" + "}\n" + "#else\n" + "static inline void salam_tune_allocator(void) { }\n" + "#endif\n#endif\n"
         )
     end
-    // Freestanding: no stdio, no write(2) and no destructor to flush from.
-    // The program supplies salam_rt_write; a kernel points it at the serial
-    // port. Unbuffered on purpose - when a kernel triple-faults you want the
-    // last line to have already left the machine.
     if g.freestanding:
         outh(
             g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "extern void salam_rt_write(int32_t fd, void *buf, uint64_t n);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) (salam_rt_write((int32_t)(fd), " + "(void *)(buf), (uint64_t)(n)), 0)\n" + "static inline uint64_t salam_cstrlen(const char *s) {\n" + "    uint64_t n = 0; if (!s) return 0; while (s[n]) n++; return n;\n" + "}\n" + "static inline void salam_out_flush(void) { }\n" + "static inline void salam_out_write_(const void *s, uint64_t n) {\n" + "    salam_rt_write(1, (void *)s, n);\n" + "}\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), (uint64_t)(n))\n" + "#endif\n"
@@ -661,68 +535,21 @@ func hdr_prelude(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             g, "#ifndef SALAM_OUT_DEFINED\n#define SALAM_OUT_DEFINED\n" + "#define SALAM_OB_SZ 65536\n" + "#if defined(_WIN32)\n" + "extern int _write(int, void *, unsigned);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) _write((fd), (void " + "*)(buf), (unsigned)(n))\n" + "#elif defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ == 4\n" + "extern int32_t write(int32_t, void *, uint32_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint32_t)(n))\n" + "#else\n" + "extern int64_t write(int32_t, void *, uint64_t);\n" + "#define SALAM_RAW_WRITE(fd, buf, n) write((fd), (void " + "*)(buf), (uint64_t)(n))\n" + "#endif\n" + "#if (defined(__GNUC__) || defined(__clang__)) && " + "!defined(__TINYC__)\n" + "__attribute__((weak)) char salam_ob[SALAM_OB_SZ];\n" + "__attribute__((weak)) uint64_t salam_obn;\n" + "__attribute__((weak)) void salam_out_flush(void) {\n" + "    if (salam_obn) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, salam_ob, salam_obn); (void)r; " + "salam_obn = 0; }\n" + "}\n" + "__attribute__((weak, destructor)) void salam_out_fini(void) " + "{ salam_out_flush(); }\n" + "static inline void salam_out_write_(const void *s, uint64_t " + "n) {\n" + "    if (salam_obn + n > SALAM_OB_SZ) salam_out_flush();\n" + "    if (n >= SALAM_OB_SZ) { int64_t r = " + "(int64_t)SALAM_RAW_WRITE(1, s, n); (void)r; return; }\n" + "    __builtin_memcpy(salam_ob + salam_obn, s, (size_t)n); " + "salam_obn += n;\n" + "    if (__builtin_memchr(s, '\\n', (size_t)n)) salam_out_flush();\n" + "}\n" + "#else\n" + "static void salam_out_flush(void) { fflush(0); }\n" + "static void salam_out_write_(const void *s, uint64_t n) {\n" + "    int64_t r = (int64_t)SALAM_RAW_WRITE(1, s, n); (void)r;\n" + "}\n" + "#endif\n" + "#define SALAM_OUT_LIT(s, n) salam_out_write_((s), " + "(uint64_t)(n))\n" + "#endif\n"
         )
     end
-    // See cg_needs_fparg in codegen_call.salam: tcc 0.9.27 (x86-64)
-    // overwrites a computed floating-point argument with the value of the
-    // floating-point argument that follows it, so every such argument is
-    // routed through an opaque identity call that forces it into its own
-    // slot. Expands to nothing outside __TINYC__ - no other toolchain pays
-    // for it, and even under tcc only calls with two adjacent float
-    // parameters are wrapped.
     outh(
         g, "#ifndef SALAM_FPARG_DEFINED\n#define SALAM_FPARG_DEFINED\n" + "#if defined(__TINYC__)\n" + "static double salam_fparg_d(double v) { return v; }\n" + "static float salam_fparg_f(float v) { return v; }\n" + "#define SALAM_FPARG_D(x) salam_fparg_d(x)\n" + "#define SALAM_FPARG_F(x) salam_fparg_f(x)\n" + "#else\n" + "#define SALAM_FPARG_D(x) (x)\n" + "#define SALAM_FPARG_F(x) (x)\n" + "#endif\n" + "#endif\n"
     )
     outh(
         g, "#ifndef SALAM_FN_ATTRS_DEFINED\n#define " + "SALAM_FN_ATTRS_DEFINED\n" + "#if defined(__GNUC__) || defined(__clang__)\n" + "#define SALAM_NOINLINE __attribute__((noinline))\n" + "#define SALAM_PURE __attribute__((pure))\n" + "#define SALAM_NORET __attribute__((noreturn))\n" + "#define SALAM_DEPRECATED __attribute__((deprecated))\n" + "#else\n" + "#define SALAM_NOINLINE\n" + "#define SALAM_PURE\n" + "#define SALAM_NORET\n" + "#define SALAM_DEPRECATED\n" + "#endif\n" + "#endif\n"
     )
-    // The four allocator entry points are declared here, ahead of every
-    // #include, because a generic method is instantiated into the header of
-    // whichever module happens to use it: Vector<str> lands in
-    // salam_mod_str.h, which core.h reaches long before mem.h gets to declare
-    // its own functions. Whatever those instantiated bodies call therefore has
-    // to be visible from the very top of any module header, not from mem's.
     outh(
         g, "#ifndef SALAM_RT_TYPES_DEFINED\n#define " + "SALAM_RT_TYPES_DEFINED\n" + "typedef struct salam_file salam_file;\n" + "typedef struct salam_map salam_map;\n" + "typedef struct salam_map_iter salam_map_iter;\n" + "typedef struct { void* data; int64_t len; } salam_slice;\n" + "extern int64_t salam_idx(int64_t, int64_t);\n"
-            // The bounds check, inline. salam_idx itself lives in another
-            // translation unit, so a call to it is a call even under -O2 -
-            // one per subscript, and one the vectorizer will not look
-            // past. The fast path is a single unsigned compare (a negative
-            // index reinterprets as huge and fails the same test), and the
-            // failing path still goes to salam_idx, so the diagnostic and
-            // the abort stay exactly where they were.
             + "#define SALAM_IDX(i, n) ({ int64_t __salam_ix = (int64_t)(i); "
             + "((uint64_t)__salam_ix < (uint64_t)(int64_t)(n)) ? __salam_ix "
             + ": salam_idx(__salam_ix, (int64_t)(n)); })\n" + "extern SALAM_NORET void salam_panic(const char* msg);\n" + "extern uint64_t salam_hash_int(uint64_t x);\n" + "extern uint64_t salam_str_hash(const char* s);\n" + "void* " + CG_MEM_ALLOC + "(uint64_t size);\n" + "void* " + CG_MEM_ALLOC_ZEROED + "(uint64_t size);\n" + "void* " + CG_MEM_REALLOC + "(void* ptr, uint64_t size);\n" + "void " + CG_MEM_FREE + "(void* ptr);\n" + "static inline void salam_slice_new(salam_slice* out, void* " + "b, int64_t lo, int64_t hi, int64_t esz)" + "{ out->data=(void*)((char*)b+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void salam_slice_sub(salam_slice* out, " + "salam_slice b, int64_t lo, int64_t hi, int has_hi, int64_t " + "esz)" + "{ if(!has_hi) hi=b.len; " + "out->data=(void*)((char*)b.data+(lo)*(esz)); " + "out->len=(hi)-(lo); }\n" + "static inline void* salam_slice_at(salam_slice s, int64_t i, " + "int64_t esz, int sf)" + "{ return " + "(void*)((char*)s.data+(sf?SALAM_IDX(i,s.len):i)*(esz)); }\n" + "typedef void (*salam_thread_fn)(void);\n" + "typedef void (*salam_thread_arg_fn)(void*);\n" + "#endif\n"
     )
-    // std/ modules (mem, str, thread, sync, webview, ...) declare their own
-    // CRT/WinAPI extern funcs (e.g. strlen, WaitForSingleObject) using
-    // salam's own type spellings. tcc does strict typedef-identity
-    // comparison, so on _WIN32 in GUI mode - where <windows.h> above
-    // transitively pulls in the *real* prototypes - those collide with the
-    // hand-rolled ones just below and in hdr_externs. Claiming these guards
-    // here, before either block, suppresses this module's own copies so
-    // only the <windows.h> versions apply. See is_wellknown_libc_name.
-    //
-    // Two tiers, because the two supported Windows compilers do not agree on
-    // what <windows.h> drags in. Both declare the kernel32/user32 set, so
-    // SALAM_EXTERN_LIBC_ON_WIN32 is unconditional. Only gcc/clang also reach
-    // <stdlib.h> and winsock from it (winnt.h -> x86intrin.h -> mm_malloc.h ->
-    // stdlib.h, plus winsock.h), which is where getenv, socket, send, recv, ...
-    // come from - tcc's headers never do, so suppressing those names for tcc
-    // would leave them with no declaration at all.
-    // SALAM_EXTERN_WIDE_LIBC_ON_WIN32 is therefore claimed only when the
-    // compiler is not tcc.
     if g.is_gui_mode:
         outh(g, "#ifdef _WIN32\n#define SALAM_RT_STR_DEFINED\n" + "#define SALAM_EXTERN_LIBC_ON_WIN32\n" + "#if !defined(__TINYC__)\n" + "#define SALAM_EXTERN_WIDE_LIBC_ON_WIN32\n" + "#endif\n#endif\n")
     end
-    // Spelled exactly as <string.h>/<stdlib.h> spell them, not in salam's own
-    // type vocabulary. gcc (-Wbuiltin-declaration-mismatch) and clang
-    // (-Wincompatible-library-redeclaration) both know these five by name and
-    // warn about every difference: `const char*` where strstr returns `char*`,
-    // `void*` where strtol/strtod take `char**`, `int64_t` where strtol
-    // returns `long` (a different width on Windows). Salam has no way to write
-    // a `char**` parameter, so the C text is written out here instead of being
-    // derived from a salam signature - same reason libc_canonical_proto exists
-    // for the extern blocks in std/.
     outh(g, "#ifndef SALAM_RT_STR_DEFINED\n#define SALAM_RT_STR_DEFINED\n")
     rt_decl(g, s, a, "strlen", "extern size_t strlen(const char* s);\n")
     rt_decl(g, s, a, "strcmp", "extern int strcmp(const char* a, const char* b);\n")
@@ -760,14 +587,6 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         end
         esym := sm.LookupLocal(s, s.global, d.name)
         backing := esym != 0 ? sm.SymAt(s, esym).enum_val_kind : tok.TV_INT
-        // The type's own C name is package-mangled for a non-main package
-        // (sema_decl.salam's AST_ENUM_DEF pre-pass), matching what cg_ctype
-        // already produces for a variable/param declared with this enum's
-        // type - so the typedef itself has to use that name too, or
-        // "unknown type name" follows the moment anything outside this
-        // enum's own package refers to it. The *member constant* names stay
-        // on the short, unmangled prefix (d.name): same-package reads
-        // (cg_expr's AST_MEMBER case) already rely on that, unchanged here.
         mut tname := d.name
         if esym != 0:
             esv := sm.SymAt(s, esym)
@@ -778,17 +597,7 @@ func hdr_enums(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
                 end
             end
         end
-        // A C `enum` can only ever hold integers, so a string/float backed
-        // enum can't become one - it's emitted as one `static const`
-        // declaration per member instead. Either way the member-read site
-        // (cg_expr's AST_MEMBER case) just emits the bare identifier
-        // `Enum_Member`, so it doesn't care which of these two forms
-        // declared it.
         if backing != tok.TV_INT:
-            // Other codegen sites resolve the type name "Color" straight to
-            // a C type via typedef (variable decls, params, struct fields) -
-            // without a C `enum` to supply that, a plain typedef to the
-            // backing C type keeps "Color" valid.
             outh(
                 g, "typedef " + (backing == tok.TV_STRING ? "const char *" : "double") + " " + cg_cident(tname) + ";\n"
             )
@@ -910,7 +719,6 @@ func emit_struct_def(g &: Cg, s &: sm.Sema, ssym: int, gcn: str):
     outh(g, "};\n#endif\n")
 end
 
-// struct_dep_cname - "" = the C NULL (no dependency).
 func struct_dep_cname(s &: sm.Sema, t0: int): str:
     mut t := t0
     until t != sm.TYPE_NONE && sm.TypeAt(s, t).kind == sm.TY_ARRAY:
@@ -1031,11 +839,6 @@ func hdr_aliases(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     end
 end
 
-// CRT functions and genuine WinAPI functions (kernel32/user32, all
-// transitively declared by <windows.h>) that std/ modules declare via
-// their own `extern func` blocks - see the comment above the
-// SALAM_EXTERN_LIBC_ON_WIN32 guard in hdr_prelude for why these must not
-// be redeclared when windows.h has already provided the real prototype.
 func is_wellknown_libc_name(name: str): bool:
     names := [
         "malloc", "realloc", "free", "calloc", "memset", "memcpy", "memmove",
@@ -1045,43 +848,19 @@ func is_wellknown_libc_name(name: str): bool:
         "FindFirstFileA", "FindNextFileA", "FindClose", "WaitForSingleObject",
         "CloseHandle", "CreateMutexA", "ReleaseMutex", "Sleep", "SleepEx",
         "GetSystemTimeAsFileTime", "GetCurrentDirectoryA", "GetFileAttributesA",
-        // std/fs spells the info-level param `int`; <windows.h> spells it
-        // GET_FILEEX_INFO_LEVELS (an enum), which no Salam extern can
-        // express, so this one is only ever safe behind the guard.
         "GetFileAttributesExA",
         "MultiByteToWideChar", "WideCharToMultiByte", "CreateWindowExA",
         "DestroyWindow", "IsWindow", "PeekMessageA", "TranslateMessage",
         "DispatchMessageA", "SetWindowTextA", "SetWindowPos",
-        // std/os/process (CreateProcessA/CreatePipe/ReadFile/... for the
-        // Run/RunCapture pipeline), std/debug (DebugBreak) and the REPL's
-        // raw-console mode. Same collision as above: <windows.h> spells these
-        // with HANDLE/DWORD/BOOL/LPVOID and STARTUPINFO-style struct pointers,
-        // none of which a Salam extern can name, so any GUI program importing
-        // those modules failed to compile without this. Derived by testing
-        // every `extern:` name in std/ and compiler/ against <windows.h>.
         "CreateProcessA", "CreatePipe", "ReadFile", "GetStdHandle",
         "GetFileType", "GetLastError", "GetExitCodeProcess",
         "TerminateProcess", "SetHandleInformation", "MoveFileExA",
         "GetConsoleMode", "SetConsoleMode", "ReadConsoleInputA", "DebugBreak",
-        // std/time's monotonic clock (QueryPerformanceCounter/Frequency take a
-        // LARGE_INTEGER* that Salam spells `void*`) and the selfhost compiler's
-        // own CPU-time profiling in sal_core (GetProcessTimes' FILETIME*
-        // params, likewise `void*`). std/time reaches a GUI translation unit
-        // transitively - webview -> ... -> debug -> time - so it collides there
-        // even though nothing GUI calls it.
         "QueryPerformanceCounter", "QueryPerformanceFrequency",
         "GetCurrentProcess", "GetProcessTimes",
-        // Both compilers' <windows.h> declares these; std/os/process'
-        // CreateFileA/WriteFile are the ones a GUI build actually reaches
-        // (Run/RunCapture redirect through them), and the GDI/user32 set
-        // belongs to the drawing and window-property helpers. GetProp, SetProp
-        // and LoadImage are macros over their ...A/...W variants there, so the
-        // guard is the only way the two can agree.
         "CreateFileA", "WriteFile", "Arc", "BeginPath", "FillRect", "LineTo",
         "RoundRect", "LoadImage", "GetProp", "SetProp",
     ]
-    // names.len(), never a literal: a hand-written bound silently stops
-    // guarding the tail entries the next time a name is appended.
     repeat names.len() with i:
         if str.Equals(names[i], name):
             ret true
@@ -1090,20 +869,6 @@ func is_wellknown_libc_name(name: str): bool:
     ret false
 end
 
-// The <math.h> functions std/math declares in its own `extern:` block. Every
-// generated header includes <math.h> (see hdr_prelude), and Salam spells
-// these exactly as the standard does - `double f(double)` - so redeclaring
-// them adds nothing and can only conflict with what the header already said.
-//
-// It does conflict, on tcc 0.9.28rc: its tcc_libm.h answers msvcrt's slow
-// fabs() with a `__CRT_INLINE double __cdecl fabs(...)` of its own ("Override
-// msvcrt fabs(): 6.3x speedup!"), which is `static`, so a plain include leaves
-// a harmless local `t fabs` per object. A later `extern` redeclaration
-// promotes that definition to external linkage, every module that includes
-// math.h exports a body, and the link dies on "symbol 'fabs' defined twice" -
-// 10 of the general tests, and any user program importing std/math. 0.9.27
-// ships no tcc_libm.h and never saw it. Dropping the redeclarations fixes it
-// for whatever the next such override turns out to be, too.
 func is_libm_name(name: str): bool:
     names := [
         "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
@@ -1117,19 +882,6 @@ func is_libm_name(name: str): bool:
     ret false
 end
 
-// Declared by the <stdio.h> that hdr_prelude includes, so std/'s own `extern
-// func fopen(...)` blocks must not be emitted at all: their salam spelling
-// (`void*` for FILE*, `int` for long, `u64` for size_t) conflicts with the
-// real prototype, and for fopen/fread/fwrite clang additionally rejects any
-// declaration outside the header itself (-Wbuiltin-requires-header). Call
-// sites keep compiling because void* converts to FILE* and back implicitly.
-//
-// Standard names, plus the non-C ones <stdio.h> declares on every platform
-// that has them: std/fs, std/os and compiler/interp declare each group inside
-// the matching half of a `if SALAM_OS_WINDOWS:` split, so a build that emits
-// one is a build whose <stdio.h> already declared it. The Windows spellings
-// are in mingw's header and in the bundled tcc's alike. Anything a platform
-// might *not* have stays hand-declared.
 func is_stdio_name(name: str): bool:
     names := [
         "clearerr", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos",
@@ -1151,12 +903,6 @@ func is_stdio_name(name: str): bool:
     ret false
 end
 
-// Whether the program supplies this name itself: an `extern:` entry with a
-// body, anywhere in the program. libc's prototype is what a CALLER needs;
-// where the program is the one defining the function, the definition is its
-// own declaration, and libc's spelling only collides with it - `memcpy`
-// declared `const void*` against a definition that cannot say `const` is a
-// hard error, which is what kept a freestanding runtime out of Salam.
 func libc_definition(a &: at.Ast, name: str): int:
     total := at.Count(a)
     mut i := 1
@@ -1170,9 +916,6 @@ func libc_definition(a &: at.Ast, name: str): int:
     ret 0
 end
 
-// The signature belonging to one declaration, found by the declaration
-// rather than by name: two of these names can be declared in several
-// packages at once, and only one of them is the definition.
 func sig_for_decl(s &: sm.Sema, decl: int): int:
     total := sm.SigCount(s)
     mut i := 1
@@ -1185,17 +928,6 @@ func sig_for_decl(s &: sm.Sema, decl: int): int:
     ret 0
 end
 
-// <string.h>/<stdlib.h> names whose real prototype salam's type vocabulary
-// cannot express, so an `extern func memcpy(dst: void*, src: void*, n: u64)`
-// in std/mem came out as a declaration both gcc and clang consider
-// incompatible with the library function they know (const-qualified source
-// pointer, char** out-parameter, size_t/long widths). The C text wins over the
-// salam signature for these; every call site still type-checks, because the
-// differences only ever *add* a qualifier or widen a parameter.
-//
-// Only functions whose declaration is warned about are listed. The rest of the
-// CRT surface std/ declares is emitted from its salam signature as before.
-// Returns "" for anything not in the table.
 func libc_canonical_proto(name: str): str:
     if str.Equals(name, "memcpy"):
         ret "extern void* memcpy(void* dst, const void* src, size_t n)"
@@ -1212,21 +944,6 @@ func libc_canonical_proto(name: str): str:
     if str.Equals(name, "strtod"):
         ret "extern double strtod(const char* s, char** endptr)"
     end
-    // Everything taking or returning a size. Salam spells these `u64`, which
-    // codegen writes as `uint64_t` - the same type as size_t on LP64 Linux, so
-    // gcc never objected, but a DIFFERENT type on macOS where size_t is
-    // `unsigned long` and uint64_t is `unsigned long long`. clang then rejects
-    // the second declaration outright:
-    //
-    //   error: conflicting types for 'strlen'
-    //   extern uint64_t strlen(const char* s);
-    //   note: previous declaration is here
-    //   extern size_t strlen(const char* s);
-    //
-    // (the prelude's own, correct, one). That killed the stage 2 build.
-    // memset's `int` matters for the same reason - `int32_t` is not spelled
-    // `int` everywhere - and clang reports it as an
-    // incompatible-library-redeclaration of a builtin.
     if str.Equals(name, "strlen"):
         ret "extern size_t strlen(const char* s)"
     end
@@ -1245,14 +962,6 @@ func libc_canonical_proto(name: str): str:
     if str.Equals(name, "memcmp"):
         ret "extern int memcmp(const void* a, const void* b, size_t n)"
     end
-    // Everything else gcc and clang know as a built-in. A user extern such
-    // as `func abs(x: i64): i64` or `func strdup(s: str): str` used to be
-    // emitted from its Salam signature and drew -Wbuiltin-declaration-
-    // mismatch / -Wincompatible-library-redeclaration. The prototypes are
-    // the C library's own, harvested from glibc's <stdlib.h>, <string.h>,
-    // <math.h> and <unistd.h> with `gcc -aux-info`, and spelled with the
-    // typedef names (size_t, ssize_t, off_t) so they hold on every libc.
-    // Name/prototype pairs, flattened with stride 2.
     protos := [
         "abort", "extern void abort(void)",
         "abs", "extern int abs(int)",
@@ -1518,22 +1227,13 @@ func libc_canonical_proto(name: str): str:
     ret ""
 end
 
-// The gcc/clang-only half of the collision set: names that only *their*
-// <windows.h> reaches, via <stdlib.h> and winsock. Guarded by
-// SALAM_EXTERN_WIDE_LIBC_ON_WIN32, which tcc never defines, so tcc keeps
-// emitting its own declarations exactly as before. Derived by probing every
-// `extern:` name in std/ and compiler/ against the real GUI-mode header set
-// with both compilers and taking the difference, not by hand.
 func is_wide_libc_name(name: str): bool:
     names := [
-        // <stdlib.h>, reached from windows.h only on gcc/clang
         "abort", "exit", "getenv", "system", "_putenv_s",
-        // winsock.h, which windows.h includes unless WIN32_LEAN_AND_MEAN
         "socket", "bind", "listen", "accept", "connect", "shutdown",
         "closesocket", "ioctlsocket", "send", "recv", "sendto", "recvfrom",
         "setsockopt", "getsockname", "gethostbyname", "inet_ntoa", "htons",
         "ntohs", "WSAStartup",
-        // wincrypt.h, same story - std/tls' native root-store reader
         "CertOpenSystemStoreA", "CertEnumCertificatesInStore", "CertCloseStore",
     ]
     repeat names.len() with i:
@@ -1555,17 +1255,6 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         if d.kind == at.AST_FUNC_DEF:
             fsym := sm.LookupLocal(s, s.global, d.name)
             sig := sig_of_decl(s, fsym, did)
-            // The libm/stdio suppressions exist because the real headers
-            // already declare those names and clang warns about a second,
-            // not-quite-matching declaration. Freestanding there is no
-            // <stdio.h> and no <math.h>, so nothing else declares them and
-            // the hand-declaration is the only one - keep it.
-            // "write" joins libm/stdio for the same reason: hdr_prelude
-            // always declares it first (SALAM_RAW_WRITE, behind
-            // SALAM_OUT_DEFINED), so a user's own `extern func write(...)`
-            // met a real, already-emitted "extern ... write(...)" with a
-            // different parameter width - std/console does exactly this,
-            // and only avoided it by never calling println in that file.
             suppress := !g.freestanding && (is_libm_name(d.name) || is_stdio_name(d.name) || str.Equals(d.name, "write"))
             if sig != 0 && !suppress:
                 mut guard := ""
@@ -1591,12 +1280,6 @@ func hdr_externs(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
             end
         else d.kind == at.AST_VAR_DECL:
             ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
-            // cg_decl_cn, not cg_decl: an extern names a symbol defined
-            // outside Salam, so it has to be spelled exactly as written.
-            // cg_cident doubles interior underscores, which turned
-            // `salam_embed_musl` into `salam__embed__musl` and left the link
-            // undefined. Extern functions already went out raw; only the
-            // variable form was encoded.
             outh(g, "extern " + cg_decl_cn(ts, d.name) + ";\n")
         end
     end
@@ -1615,16 +1298,9 @@ func hdr_globals(g &: Cg, a &: at.Ast, program: int):
             continue
         end
         ts := str.Len(d.type_str) > 0 ? d.type_str : "int32_t"
-        // Must match emit_globals' spelling exactly (cg_global_cname).
         decl := cg_decl_cn(ts, cg_global_cname(g.pkg, d.name))
         is_array := str.IndexOf(ts, "[") >= 0
         can_defer := d.kind == at.AST_VAR_DECL && d.a != 0 && at.KindOf(a, d.a) != at.AST_LITERAL && !is_array
-        // !is_array matches emit_globals in codegen_core - see the comment
-        // there for why an array global cannot carry the qualifier. The two
-        // must agree or the extern and the definition conflict.
-        // !is_array and !type_is_callable match emit_globals in
-        // codegen_core.salam - the two must agree or the extern and the
-        // definition conflict.
         want_const := !can_defer && !is_array && !type_is_callable(ts) && (d.kind == at.AST_CONST_DECL || !d.is_mut)
         gct_const := want_const && str.StartsWith(cg_ctype(ts), "const ")
         pfx := (want_const && !gct_const) ? "const " : ""
@@ -1680,14 +1356,6 @@ func hdr_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     end
 end
 
-// Prototypes for `impl Trait for T` methods, which codegen_core also
-// forward-declares at the top of the .c. They are needed in the *header*
-// as well: a generic function is instantiated as a `static inline` body
-// appended to this header, and such a body calls the trait impls of
-// whatever type it was instantiated with. Those calls sat above the .c's
-// declarations, so the only thing that made them compile was C89 implicit
-// declaration - tcc still allows it, gcc 16 made it an error, and the
-// returned `const char*` came back as `int` on any compiler that took it.
 func hdr_impl_prototypes(g &: Cg, s &: sm.Sema, a &: at.Ast):
     gsc := sm.ScopeAt(s, s.global)
     repeat gsc.symbols.len() with i:

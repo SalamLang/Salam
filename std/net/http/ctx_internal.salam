@@ -232,8 +232,6 @@ end
 
 func _warm_up_split():
     junk := "a/b".split("/")
-    // free() releases the vector's backing array; the pieces split allocated
-    // are separate blocks and have to go individually.
     repeat junk.len() with i:
         mem.Free(junk.get(i) as void *)
     end
@@ -244,8 +242,6 @@ func _reqctx_sizeof(): i64:
     if _reqctx_size == 0:
         mut v := Vector {} as Vector<_ReqCtx> v.push(_ReqCtx {})
         v.push(_ReqCtx {})
-        // the stride between two slots, so these have to be the addresses
-        // ref hands back, not the elements get returns
         _reqctx_size = (v.ref(1) as i64) - (v.ref(0) as i64)
         v.free()
     end
@@ -392,8 +388,6 @@ func salam_ctx_free(h: i64):
         i += 1
     end
     c.owned.free()
-    // The key/value strings these hold were registered above as they were
-    // produced, so only the vectors' own backing buffers are left.
     c.req_hdrs.free()
     c.path_params.free()
     c.resp_hdrs.free()
@@ -541,9 +535,6 @@ end
 func salam_ctx_kv_get(h: i64, list: int, key: str): str:
     c := _rc(h)
     if list == 0:
-        // Anything a middleware injected wins over what arrived on the wire;
-        // the list is empty on the ordinary path, so this costs a length
-        // check.
         if c.req_hdrs.len() > 0:
             over := _kvl_get_field(c.req_hdrs, key)
             if over.len() > 0: ret over end
@@ -660,7 +651,6 @@ func _parse_http(ctx: i64, req: str):
     if qmark >= 0:
         c.path = _ctx_own(ctx, pathquery.substr(0, qmark))
         c.query = _ctx_own(ctx, pathquery.substr(qmark + 1, pathquery.len() - qmark - 1))
-        // Both halves were copied out; the request target itself is dead.
         mem.Free(pathquery as void *)
     else:
         c.path = _ctx_own(ctx, pathquery)
@@ -668,15 +658,9 @@ func _parse_http(ctx: i64, req: str):
     end
     first_crlf := str.IndexFrom(req, "\r\n", sp2 + 1)
     if first_crlf < 0: ret end
-    // "HTTP/1.0" defaults to closing the connection; 1.1 and later default to
-    // keeping it. Either default can still be overridden by Connection below.
     if first_crlf - sp2 - 1 >= 8 && _eq_at(req, sp2 + 1, "HTTP/1.0"):
         c.keep_alive = false
     end
-    // The header block stays where it landed. This walk only has to find
-    // where the body starts and settle keep-alive; every field name and value
-    // it used to copy out is read on demand by _hdr_lookup instead, and most
-    // are never asked for at all.
     c.raw = req
     c.hdr_pos = first_crlf + 2
     mut pos := first_crlf + 2
@@ -691,9 +675,6 @@ func _parse_http(ctx: i64, req: str):
             break
         end
         colon := str.IndexFrom(req, ":", pos)
-        // "Connection" is ten characters; nothing else decided here is, so
-        // the length check keeps the comparison off the hot path for every
-        // other header on every request.
         if colon >= 0 && colon < line_end && colon - pos == 10 && _eq_at_fold(req, pos, "connection"):
             mut vs := colon + 1
             until vs < line_end && _ows_at(req, vs):
@@ -738,9 +719,6 @@ func _append_status(b &: str.StringBuilder, status: int):
     if status == 404: str.BufAppend(b, "404 Not Found") ret end
     if status == 204: str.BufAppend(b, "204 No Content") ret end
     if status == 500: str.BufAppend(b, "500 Internal Server Error") ret end
-    // The general path used to be FormatInt(...).concat(" ").concat(...),
-    // which allocated twice and freed neither. StatusText returns a literal,
-    // so writing both pieces into the builder allocates nothing at all.
     str.BufAppendInt(b, status as i64)
     str.BufAppend(b, " ")
     str.BufAppend(b, mime.StatusText(status))
@@ -772,9 +750,6 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
     end
     str.BufAppend(b, "\r\nServer: ")
     str.BufAppend(b, shdr)
-    // X-Powered-By is the header an operator reads to find out what answered.
-    // A proxy in front of the service is free to rewrite Server, and most do;
-    // almost none touch this one, so a Salam service says its own name twice.
     if _has_header(ctx, "X-Powered-By") == false:
         str.BufAppend(b, "\r\nX-Powered-By: ")
         str.BufAppend(b, shdr)
@@ -823,9 +798,6 @@ func _dispatch(r: router.Router, ctx: i64): bool:
     mut i := 0
     until i < n:
         kv := m.params.items.get(i)
-        // The capture strings move into the request scope rather than being
-        // copied: Dispatch allocated them, nothing else refers to them, and
-        // the context outlives the Match.
         salam_ctx_kv_add(ctx, 1, _ctx_own(ctx, kv.key), _ctx_own(ctx, kv.value))
         i += 1
     end
@@ -842,16 +814,6 @@ end
 func _net_accept(lfd: i64): i64:
     ret rawsock.Accept(rawsock.FromFd(lfd)).fd
 end
-
-// ------------------------------------------------------- keep-alive plumbing
-
-// How long a connection may sit idle between requests before its thread is
-// taken back, and how many requests one connection may serve before it is
-// retired. Neither limit is about correctness: they are what stops a client
-// that opens a connection and says nothing from holding a thread forever.
-
-// Bytes per socket read. One buffer is allocated per connection and reused
-// for every request on it, rather than allocated and zeroed per read.
 
 // A str of exactly `n` bytes from `ptr`. rawsock.Recv cannot be used on this
 // path: it allocates a fresh max-sized buffer per call and memsets all of it
@@ -947,15 +909,10 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool): str
                 ret one.substr(0, need)
             end
         end
-        // Split across packets, or a body still arriving: copy what came in
-        // and let the accumulating path below finish the job.
         pending = _str_of(scratch, got)
     end
     mut buf := pending
     pending = ""
-    // Where to resume the terminator search. Scanning from 0 after every read
-    // makes assembling a large request quadratic in its size; only the three
-    // bytes straddling the join need re-examining.
     mut scan := 0
     mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
     until head_end < 0:
@@ -1049,9 +1006,6 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
         if got == (0 as u64):
             break
         end
-        // A client that hangs up part way through a download used to be read
-        // from disk and written into a dead socket for the whole rest of the
-        // file. Stop at the first refused write instead.
         if tcp.WriteBytes(conn, buf, got as int) <= 0:
             break
         end
@@ -1113,9 +1067,6 @@ func _safe_static_path(root: str, rel: str): str:
     else cleaned == croot:
         ok = true
     else:
-        // The trailing slash is what stops "/srv/wwwroot" passing as a path
-        // under "/srv/www". It used to be checked with croot.concat("/"),
-        // which allocated a string per request and dropped it.
         ok = _eq_at(cleaned, 0, croot) && _eq_at(cleaned, croot.len(), "/")
     end
     mem.Free(croot as void *)
@@ -1185,10 +1136,6 @@ func _insertion_sort_strs(v &: Vector<str>):
     n := v.len()
     repeat n with i:
         mut j := i
-        // `until COND: ...` loops WHILE COND holds (see e.g. _parse_http's
-        // "until pos < req.len()"), not "until COND becomes true" - the
-        // condition here is deliberately the keep-shifting condition
-        // (in-bounds AND out of order), not a stop condition.
         until j > 0 && v.get(j - 1) > v.get(j):
             a := v.get(j - 1)
             b := v.get(j)
@@ -1267,8 +1214,6 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
         _fill_response(b, ctx, shdr, keep)
-        // Straight out of the builder: no BufStr copy, one write for headers
-        // and body together.
         tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b.len as int)
         str.BufFree(b)
     end
@@ -1295,8 +1240,6 @@ func _web_conn_handler(packed: i64):
     rawsock.SetNoDelay(sock, true)
     rawsock.SetTimeout(sock, _keepalive_idle_ms)
     scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
-    // One context for the whole connection; _serve_request resets it per
-    // request rather than building a new one.
     ctx := salam_ctx_new(fd)
     mut pending := ""
     mut served := 0
@@ -1311,8 +1254,6 @@ func _web_conn_handler(packed: i64):
         served += 1
         if keep == false || served >= _keepalive_max_reqs: break end
     end
-    // Whatever the peer pipelined behind the last request it will never get an
-    // answer to, but the bytes are still this thread's to release.
     if pending.len() > 0: mem.Free(pending as void *) end
     salam_ctx_free(ctx)
     mem.Free(scratch)

@@ -16,28 +16,6 @@ package ssh
 
 import crypto
 
-// RSA sign (blinded) and verify, RSASSA-PKCS1-v1_5 (RFC 8017) - the "ssh-rsa"
-// (SHA-1) and "rsa-sha2-256"/"rsa-sha2-512" (RFC 8332) signature algorithms.
-// Same shape as std/tls's rsa.salam/rsa_sign.salam split, ported rather than
-// imported for the reason given in ssh.salam's header (the package
-// boundary), and using this package's own bigint.salam/Barrett modexp.
-//
-// PKCS#1 v1.5 is verified by CONSTRUCTING the expected padded block and
-// comparing it whole, never by parsing the recovered block and hunting for
-// the digest inside it - a parsing verifier that tolerates trailing bytes
-// or a short padding string is the Bleichenbacher'06 forgery. The recovered
-// value is re-encoded to exactly the modulus length so a short encoding of
-// the same integer cannot be substituted either.
-//
-// Signing uses RSA blinding (Rivest): every private-key operation picks a
-// fresh random r, computes (msg * r^e) mod n with the modexp that uses only
-// the PUBLIC exponent e, exponentiates the blinded value with the secret d,
-// then unblinds via r^(phi(n)-1) mod n (Euler's theorem gives r^-1 mod n
-// from a plain modexp, with no separate extended-Euclidean routine needed).
-// This decorrelates the modexp's input from the message on every call,
-// defeating a timing attack that needs many observations against the SAME
-// operand - it does not make the modexp itself constant-time.
-
 const SSH_HASH_SHA1 := 0
 const SSH_HASH_SHA256 := 1
 const SSH_HASH_SHA512 := 2
@@ -72,7 +50,6 @@ func _rsa_public_op(sig: void*, siglen: int, nmod: void*, nlen: int, expo: void*
     mut e := _big_from_bytes(expo, elen)
     mut s := _big_from_bytes(sig, siglen)
     mut ok := !n.bad && !e.bad && !s.bad && !_big_is_zero(n) && !_big_is_zero(e)
-    // A signature must be a residue: s < n, keeping its representation unique.
     if ok && _big_cmp(s, n) >= 0:
         ok = false
     end
@@ -147,7 +124,6 @@ func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp
         ok = !rraw.bad && _big_mod(r, rraw, n) && !_big_is_zero(r)
     end
 
-    // re = r^e mod n - public exponent, nothing secret in this call.
     mut re := _big_new(n.n + 4)
     if ok:
         ok = _big_modexp_barrett(re, r, e, n)
@@ -160,14 +136,11 @@ func _rsa_private_op_blinded(msg: void*, mlen: int, nmod: void*, nlen: int, dexp
         ok = !prod.bad && _big_mod(blinded, prod, n)
     end
 
-    // The only step touching the secret exponent; its input is decorrelated
-    // from `msg` by r on every call.
     mut s := _big_new(n.n + 4)
     if ok:
         ok = _big_modexp_barrett(s, blinded, d, n)
     end
 
-    // r^-1 mod n = r^(phi(n)-1) mod n, by Euler's theorem.
     mut one := _big_new(1)
     _big_set_u32(one, 1 as u32)
     mut phim1 := _big_new(ph.n + 4)

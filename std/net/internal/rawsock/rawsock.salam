@@ -20,34 +20,9 @@ package rawsock
 import mem
 import str
 
-// The lowest layer of the net/ stack: raw blocking/non-blocking BSD
-// sockets over plain `extern` FFI to libc/Winsock, extending what used to
-// live directly in std/net/net.salam (kept there, unchanged, for now -
-// see std/net/net.salam's header for the migration status).
-//
-// Named `rawsock`, not `socket`, specifically to avoid a filename
-// collision with std/socket/socket.salam (today's WebSocket package,
-// destined to become net/websocket) - a .salam file's C module is keyed
-// by filename, not by package, so two different packages both shipping a
-// `socket.salam` would silently collide at link time.
-//
-// New here, beyond what std/net/net.salam has:
-//   - IPv6 (AF_INET6) resolution and connection, via getaddrinfo/
-//     freeaddrinfo instead of the IPv4-only gethostbyname. EXPERIMENTAL:
-//     the addrinfo/sockaddr_in6 struct layouts are hand-decoded via raw
-//     pointer offsets (matching this file's existing sockaddr_in
-//     handling) assuming the standard 64-bit layout common to Win64/
-//     Linux/macOS; not yet interop-tested against a real IPv6 network in
-//     this environment.
-//   - SOCK_DGRAM (UDP) alongside SOCK_STREAM (TCP), shared by net/tcp and
-//     net/udp.
-//   - Non-blocking mode, receive/send timeouts, keep-alive, TCP_NODELAY.
-
 if SALAM_OS_WINDOWS:
     link dynamic "ws2_32"
 end
-
-// ---------------------------------------------------------------- extern
 
 extern:
     func memset(ptr: void*, val: int, n: u64): void*
@@ -102,23 +77,6 @@ else:
     end
 end
 
-// ------------------------------------------------------------- constants
-
-// Sent with every stream write: MSG_NOSIGNAL, so a write to a peer that has
-// already closed returns EPIPE instead of raising SIGPIPE.
-//
-// The default action for SIGPIPE is to kill the process, and nothing about
-// that is hypothetical - a server writing a reply to a client that has just
-// navigated away, or either end of a connection both sides are closing at
-// once, dies outright with no diagnostic and no chance to handle it. It
-// surfaces as an intermittent exit 141 and reads like a hang, because the
-// output simply stops mid-sentence.
-//
-// Ignoring the signal process-wide would do it too, but that is a rude thing
-// for a library to decide on a program's behalf - it would also change what
-// happens when the program's own stdout is a closed pipe. The flag is per
-// call and affects nothing else. macOS has no MSG_NOSIGNAL and uses a
-// per-socket option instead; see _no_sigpipe.
 if SALAM_OS_WINDOWS:
     const _SEND_FLAGS := 0
 else SALAM_OS_MAC:
@@ -148,12 +106,6 @@ pub const ShutRdWr := 2
 // wants: the point is to end the connection, not to half-close it.
 const _SHUT_BOTH := 2
 
-// Named `_rawsock_wsa_init`, not the shorter `_g_wsa_init` std/net/net.salam
-// uses - top-level global variables are NOT namespaced by package in this
-// compiler's C codegen (unlike functions, which get a `_Salam_<pkg>_`
-// prefix), so two different packages both picking `_g_wsa_init` collide at
-// the C symbol level the moment both end up linked into the same program
-// (which happens here: std/tls's bytes.salam imports std/net transitively).
 if SALAM_OS_WINDOWS:
     mut _rawsock_wsa_init := 0
 end
@@ -166,15 +118,6 @@ pub struct Socket:
     pub family: int = AF_INET
 end
 
-// Split into two full per-platform definitions (matching std/sync.salam's
-// mutex_new()/mutex_lock()/... idiom for the same problem) rather than one
-// function with a body that is entirely `if SALAM_OS_WINDOWS: ... end`:
-// after condcomp strips the untaken branch, the latter shape leaves a
-// completely empty function body on non-Windows, which this compiler
-// rejects (E061 - "empty function body must contain at least one
-// statement"). POSIX sockets need no equivalent of WSAStartup, but every
-// call site here calls _net_init() unconditionally, so a real (if
-// trivial) definition still has to exist on that side.
 if SALAM_OS_WINDOWS:
     func _net_init():
         if _rawsock_wsa_init == 0:
@@ -189,8 +132,6 @@ else:
         ret
     end
 end
-
-// -------------------------------------------------------- address helpers
 
 // Reads the first IPv4 address out of a `struct hostent*` returned by
 // gethostbyname, exactly as std/net/net.salam does today.
@@ -224,8 +165,6 @@ func _make_sa4(h_addr: int, port: int): void*:
     sa32[1] = h_addr
     ret sa
 end
-
-// ---------------------------------------------------- getaddrinfo (IPv6+v4)
 
 // struct addrinfo layout, size 48 on every 64-bit target, but NOT
 // identical across libc's - verified by dumping real offsetof() values
@@ -278,7 +217,7 @@ func _resolve_sockaddr(host: str, family_hint: int, port: int, out_len &: int, o
     defer mem.Free(hints)
     memset(hints, 0, 48 as u64)
     hp := hints as int*
-    hp[1] = family_hint // ai_family (0 = AF_UNSPEC)
+    hp[1] = family_hint
     hp[2] = SOCK_STREAM
     res_slot := mem.Allocate(8 as u64)
     defer mem.Free(res_slot)
@@ -321,8 +260,6 @@ func _copy_sockaddr(ai: void*, out_len &: int): void*:
     ret out
 end
 
-// -------------------------------------------------------------- Socket API
-
 // macOS has no MSG_NOSIGNAL, so the same protection is a socket option
 // there, set once when the socket is made. Everywhere else this is nothing:
 // the flag on each send has already done the job.
@@ -335,7 +272,6 @@ func _no_sigpipe(fd: i64):
         defer mem.Free(opt)
         o32 := opt as int*
         o32[0] = 1
-        // SOL_SOCKET is 0xffff and SO_NOSIGPIPE 0x1022 on Darwin.
         setsockopt(fd as int, 65535, 4130, opt, 4)
     end
 end
@@ -426,7 +362,7 @@ pub func ListenOn(host: str, port: int, socktype: int): Socket:
         defer mem.Free(opt)
         mut opt32 := opt as int*
         opt32[0] = 1
-        setsockopt(s, 65535, 4, opt, 4) // SOL_SOCKET, SO_REUSEADDR
+        setsockopt(s, 65535, 4, opt, 4)
         sa := _make_sa4(h_addr, port)
         defer mem.Free(sa)
         if bind(s, sa, 16) != 0:
@@ -652,8 +588,6 @@ pub func ResolveAddr4Raw(host: str): int:
     ret _resolve_addr4(host)
 end
 
-// ---------------------------------------------------------- socket options
-
 @en "SetNonBlocking"
 @fa "تنظیم حالت غیرمسدود"
 @ar "تعیین وضع غیر حاجب"
@@ -663,16 +597,16 @@ pub func SetNonBlocking(sock: Socket, enable: bool):
         defer mem.Free(mode)
         m32 := mode as int*
         if enable: m32[0] = 1 else: m32[0] = 0 end
-        ioctlsocket(sock.fd, 0 - 2147195266, mode) // FIONBIO
+        ioctlsocket(sock.fd, 0 - 2147195266, mode)
     else:
-        mut flags := fcntl(sock.fd as int, 3, 0) // F_GETFL
+        mut flags := fcntl(sock.fd as int, 3, 0)
         if flags < 0: ret end
         if enable:
-            flags = flags | 2048 // O_NONBLOCK
+            flags = flags | 2048
         else:
             flags = flags & (0 - 2049)
         end
-        fcntl(sock.fd as int, 4, flags) // F_SETFL
+        fcntl(sock.fd as int, 4, flags)
     end
 end
 
@@ -685,8 +619,8 @@ pub func SetTimeout(sock: Socket, millis: int):
         defer mem.Free(t)
         t32 := t as int*
         t32[0] = millis
-        setsockopt(sock.fd, 65535, 4102, t, 4) // SOL_SOCKET, SO_RCVTIMEO
-        setsockopt(sock.fd, 65535, 4101, t, 4) // SOL_SOCKET, SO_SNDTIMEO
+        setsockopt(sock.fd, 65535, 4102, t, 4)
+        setsockopt(sock.fd, 65535, 4101, t, 4)
     else:
         tv := mem.Allocate(16 as u64)
         defer mem.Free(tv)
@@ -696,8 +630,8 @@ pub func SetTimeout(sock: Socket, millis: int):
         usec := tv as i64 + 8
         usecp := usec as i64*
         usecp[0] = ((millis % 1000) * 1000) as i64
-        setsockopt(sock.fd as int, 1, 20, tv, 16) // SOL_SOCKET, SO_RCVTIMEO
-        setsockopt(sock.fd as int, 1, 21, tv, 16) // SOL_SOCKET, SO_SNDTIMEO
+        setsockopt(sock.fd as int, 1, 20, tv, 16)
+        setsockopt(sock.fd as int, 1, 21, tv, 16)
     end
 end
 
@@ -723,24 +657,20 @@ pub func WaitReadable(sock: Socket, timeout_ms: int): bool:
         ret false
     end
     if SALAM_OS_WINDOWS:
-        // WSAPOLLFD is { SOCKET fd; SHORT events; SHORT revents; } - a
-        // SOCKET is a 64-bit handle on Win64, so the struct is 16 bytes
-        // with the two shorts at offsets 8 and 10.
         p := mem.AllocateZeroed(16 as u64)
         defer mem.Free(p)
         fdp := p as i64*
         fdp[0] = sock.fd
         evp := ((p as i64) + 8) as i16*
-        evp[0] = 256 as i16 // POLLRDNORM
+        evp[0] = 256 as i16
         ret WSAPoll(p, 1 as u64, timeout_ms) > 0
     else:
-        // struct pollfd is { int fd; short events; short revents; }.
         p := mem.AllocateZeroed(8 as u64)
         defer mem.Free(p)
         fdp := p as i32*
         fdp[0] = sock.fd as i32
         evp := ((p as i64) + 4) as i16*
-        evp[0] = 1 as i16 // POLLIN
+        evp[0] = 1 as i16
         ret poll(p, 1 as u64, timeout_ms) > 0
     end
 end
@@ -754,9 +684,9 @@ pub func SetKeepAlive(sock: Socket, enable: bool):
     o32 := opt as int*
     if enable: o32[0] = 1 else: o32[0] = 0 end
     if SALAM_OS_WINDOWS:
-        setsockopt(sock.fd, 65535, 8, opt, 4) // SOL_SOCKET, SO_KEEPALIVE
+        setsockopt(sock.fd, 65535, 8, opt, 4)
     else:
-        setsockopt(sock.fd as int, 1, 9, opt, 4) // SOL_SOCKET, SO_KEEPALIVE
+        setsockopt(sock.fd as int, 1, 9, opt, 4)
     end
 end
 
@@ -768,8 +698,6 @@ pub func SetNoDelay(sock: Socket, enable: bool):
     defer mem.Free(opt)
     o32 := opt as int*
     if enable: o32[0] = 1 else: o32[0] = 0 end
-    // IPPROTO_TCP == 6 on every platform this compiler targets;
-    // TCP_NODELAY == 1 on every platform this compiler targets.
     if SALAM_OS_WINDOWS:
         setsockopt(sock.fd, 6, 1, opt, 4)
     else:
@@ -800,13 +728,11 @@ pub func SetBroadcast(sock: Socket, enable: bool):
     o32 := opt as int*
     if enable: o32[0] = 1 else: o32[0] = 0 end
     if SALAM_OS_WINDOWS:
-        setsockopt(sock.fd, 65535, 32, opt, 4) // SOL_SOCKET, SO_BROADCAST
+        setsockopt(sock.fd, 65535, 32, opt, 4)
     else:
-        setsockopt(sock.fd as int, 1, 6, opt, 4) // SOL_SOCKET, SO_BROADCAST
+        setsockopt(sock.fd as int, 1, 6, opt, 4)
     end
 end
-
-// ------------------------------------------------------- datagram (UDP) API
 
 // Sends one datagram to host:port. Resolution is IPv4-only for now (same
 // limitation as ListenOn).
@@ -859,17 +785,6 @@ pub func RecvFromBytes(sock: Socket, buf: void*, max: int, out_host &: str, out_
         out_port = 0
         ret n
     end
-    // Read sin_port directly out of the sockaddr_in's bytes 2-3 (network/
-    // big-endian order) instead of reconstructing it via arithmetic on
-    // the packed 32-bit word - see LocalPort's doc comment above for why
-    // that division is wrong for any port whose network-byte-order form
-    // sets the top bit (packed goes negative, and signed division does
-    // not recover an unsigned high half from a negative dividend the way
-    // a same-signedness bit shift would). This was silently returning
-    // the wrong sender port for roughly half of all possible ephemeral
-    // ports - the reply-to address UDP callers build from out_port would
-    // aim at the wrong port and just never get a response, indistinguishable
-    // from a dropped packet without reading the raw bytes to compare.
     sap := sa as i8*
     sa32 := sa as int*
     mut hi := sap[2] as int

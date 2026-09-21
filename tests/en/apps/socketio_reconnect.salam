@@ -12,15 +12,6 @@
  *
  */
 
-// Losing the connection and getting it back.
-//
-// The point of the exercise is that the code doing the emitting never finds
-// out. The server drops the socket mid-session; the client notices, reports
-// the standard reason, holds what is emitted in the meantime, reconnects,
-// re-joins its namespace and sends the held packets. Everything below is
-// deterministic - the server drops the connection when asked to, rather than
-// on a timer.
-
 import net.socketio
 import net.websocket
 import sync
@@ -31,16 +22,11 @@ const PORT := 19414
 mut ready := sync.NewWaitGroup()
 mut server log := ""
 
-// One session: the open packet, the namespace handshake, then events until
-// the client asks to be dropped or leaves. Returns true if it was a drop.
 func serve one(c &: websocket.Conn, sid: str): bool:
     websocket.SendText(c, `0{"sid":"` + sid + `","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
     mut dropped := false
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -61,8 +47,6 @@ func serve one(c &: websocket.Conn, sid: str): bool:
                 dropped = true
                 going = false
             else str.StartsWith(body, "2"):
-                // Echo the event name back so the client can prove a held
-                // packet really arrived after the reconnection.
                 server log += sid + ":got " + body + ";"
             else body == "1":
                 server log += sid + ":left;"
@@ -88,8 +72,6 @@ func sio server():
         else:
             dropped := serve one(c, "s" + round)
             if dropped:
-                // Cut the connection without a close handshake, the way a
-                // network does.
                 websocket.Stop(c)
             end
             websocket.Close(c)
@@ -114,13 +96,6 @@ func main:
     c := socketio.DialWith("http://127.0.0.1:" + PORT, o)
     println "connected:", socketio.IsConnected(c), "id:", socketio.Id(c)
 
-    // Ask the server to cut the connection - and ask it for an
-    // acknowledgement it will never send, with no deadline of its own.
-    //
-    // The answer can never arrive: the server that would have sent it is
-    // gone, and a reconnection starts the numbering again. A client that
-    // kept waiting here would simply stop, so losing the connection has to
-    // fail what is outstanding.
     mut d := socketio.NewArgs()
     mut never := socketio.EmitAck(c, "drop", d, 0 - 1)
     socketio.ArgsFree(d)
@@ -141,14 +116,9 @@ func main:
     println "still active, so it will come back:", socketio.Active(c)
     println "connected right now:", socketio.IsConnected(c)
 
-    // Emitted into a connection that does not exist. Nothing is lost.
     socketio.EmitStr(c, "while-down", "held")
     println "held packets:", socketio.Buffered(c)
 
-    // Two things have to happen, in this order: the TRANSPORT comes back
-    // (EV_RECONNECT), and then the namespace is joined again on it
-    // (EV_CONNECT). socket.io reports them separately for the same reason -
-    // a live socket is not yet a live namespace.
     mut transport back := false
     mut attempted := false
     mut rejoined := false
@@ -172,7 +142,6 @@ func main:
     println "attempt counter reset:", socketio.Attempts(c)
     println "nothing held any more:", socketio.Buffered(c)
 
-    // Give the server a moment to log the packet that was held.
     socketio.RunFor(c, 300)
     socketio.Close(c)
     join(t)

@@ -4,30 +4,6 @@ import str
 import co "../sal_core.salam"
 import at "../ast.salam"
 
-// ===== sema_derive_json_dec.c =====
-//
-// The Salam source of a derived JSON decoder.
-//
-// Shape: `func _jsondec_T(_s, _i, _o &: T, _e &: str, _ep &: int, _st: bool):
-// int`, returning the position just past the value it read or -1 with the
-// message and offset filled in. Every nested decoder has the same shape, so a
-// failure twelve levels down needs no unwinding: the first _derr wins and
-// every frame above it returns -1.
-//
-// `_st` is strictness, threaded through rather than baked in, so one Unmarshal
-// has one policy for the whole document:
-//
-//   strict    unknown key, missing key and repeated key are errors
-//   lenient   unknown keys are skipped, missing keys keep the field's
-//             default, a repeated key wins
-//
-// A type mismatch is an error in both: a decoder that quietly turns "3" into
-// 3, or 1.9 into 1, hides the schema drift it exists to catch.
-//
-// PORT-NOTE: the C threads an on-key callback into dec_object. Here the key
-// body is built first and handed in as text, which needs no function pointer
-// and reads the same way.
-
 func jd_fresh(ctr &: int, stem: str): str:
     ctr += 1
     ret "_" + stem + ctr
@@ -37,8 +13,6 @@ func jd_fail(ind: str, msg: str, pos: str): str:
     ret ind + "ret _derr(" + JD_ERR + ", " + JD_ERRP + ", " + jd_quote(msg) + ", " + pos + ")\n"
 end
 
-// The bounds a narrow integer field is checked against, or "" when the type is
-// i64/u64 and the check would be a no-op.
 func jd_int_bounds(s &: Sema, t: int): str:
     k := ty_at(s, t).kind
     if k == TY_I8:
@@ -62,9 +36,6 @@ func jd_int_bounds(s &: Sema, t: int): str:
     ret ""
 end
 
-// --------------------------------------------------------------- scalars
-
-// The reader call for a scalar, given the endpos variable it reports through.
 func jd_read_call(s &: Sema, t: int, q: str, spelling: str): str:
     k := ty_at(s, t).kind
     lead := "(" + JD_TEXT + ", " + JD_POS + ", " + q + ")"
@@ -96,8 +67,6 @@ func jd_read_call(s &: Sema, t: int, q: str, spelling: str): str:
     ret ""
 end
 
-// `@json "" "string"` on the way in: the value arrives as a JSON string and its
-// contents are what the number or the bool is spelled in.
 func jd_dec_quoted(s &: Sema, t: int, lval: str, ind: str, ctr &: int, spelling: str): str:
     q := jd_fresh(ctr, "q")
     raw := jd_fresh(ctr, "r")
@@ -126,9 +95,6 @@ func jd_read_inner(s &: Sema, t: int, raw: str, q: str, spelling: str): str:
     ret "_dgint" + lead + " as " + spelling
 end
 
-// One scalar: read it, check it landed, store it. Every reader reports failure
-// the same way (an endpos of -1), so the shape here does not vary with the
-// type - only the call and the cast do.
 func jd_dec_scalar(
     s &: Sema, t: int, lval: str, ind: str, ctr &: int, as_string: bool
 ): str:
@@ -191,11 +157,6 @@ func jd_dec_enum_arms(
     ret first ? "" : out
 end
 
-// ------------------------------------------------------------ aggregates
-
-// Anything with its own derived function: recurse into it and take its cursor.
-// `lval` is passed by reference, so a field twelve levels down is written in
-// place rather than copied back up.
 func jd_dec_nested(
     s &: Sema, a &: at.Ast, t: int, lval: str, ind: str, ctr &: int, home: int, sp: co.SrcSpan
 ): str:
@@ -210,10 +171,6 @@ func jd_dec_nested(
     ret out + ind + JD_POS + " = " + q + "\n"
 end
 
-// A pointer field: `null` clears it, anything else gets storage of its own and
-// is decoded straight through the pointer. Salam has no address-of operator,
-// so a pointee that outlives this frame has to be allocated rather than
-// pointed at.
 func jd_dec_ptr(
     s &: Sema, a &: at.Ast, t: int, lval: str, ind: str, ctr &: int, home: int, sp: co.SrcSpan
 ): str:
@@ -257,11 +214,6 @@ func jd_dec_value(
     ret jd_dec_nested(s, a, t, lval, ind, ctr, home, sp)
 end
 
-// ---------------------------------------------------------------- bodies
-
-// The object walk every struct and map decoder shares: open brace, then
-// key/colon/value until the closing brace. `keybody` is what to do with a
-// decoded key, already indented, and is the only part that differs.
 func jd_dec_object(keyvar: str, keybody: str, ke: str): str:
     i3 := JIND + JIND + JIND
     mut out := JIND + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_START + ")\n"
@@ -282,8 +234,6 @@ func jd_dec_object(keyvar: str, keybody: str, ke: str): str:
     ret out + jd_dec_close(i3, 125, "expected ',' or '}'")
 end
 
-// The `, next` / `close, done` tail both the object and the array walk end
-// with. `close` is the byte that finishes the container.
 func jd_dec_close(i3: str, close: int, msg: str): str:
     mut out := i3 + JD_POS + " = _dws(" + JD_TEXT + ", " + JD_POS + ")\n"
     out = out + i3 + "if _dbyte(" + JD_TEXT + ", " + JD_POS + ") == 44:\n"
@@ -295,8 +245,6 @@ func jd_dec_close(i3: str, close: int, msg: str): str:
     ret out + JIND + JIND + "end\n" + JIND + "end\n"
 end
 
-// The `else` arm every object walk needs: an unknown key is an error under
-// strict and a skipped value otherwise.
 func jd_dec_unknown(ind: str, deep: str): str:
     mut out := ind + "if " + JD_STRICT + ":\n"
     out = out + jd_fail(deep, "unknown key", JD_POS) + ind + "end\n"

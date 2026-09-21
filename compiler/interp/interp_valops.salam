@@ -6,8 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
-// base_typename - prefix before '<' '[' '*' ' ', clamped at 95 chars like
-// the C's char[96] buffer.
 func base_typename(ts: str): str:
     n := str.Len(ts)
     mut b := str.NewBuilder()
@@ -69,9 +67,6 @@ func ptr_elem_from_typestr(ts: str): int:
     ret PTR_OPAQUE
 end
 
-// ptr_load / ptr_store - raw typed memory access for FFI values. PTR_STR
-// reinterprets the cell's pointer bits as a char* str (aliasing, like the
-// C); a NULL cell loads as "" (the C's val_str(NULL) was unusable).
 func ptr_load(pa: i64, elem: int, idx: i64): Value:
     if elem == PTR_I8:
         p0 := pa as i8*
@@ -122,7 +117,6 @@ func ptr_load(pa: i64, elem: int, idx: i64): Value:
         ret val_char(pc[idx] as i64)
     end
     if elem == PTR_STR:
-        // C: val_str(((const char **)addr)[idx]) - alias the char* as a str.
         ps := pa as i64*
         bits := ps[idx]
         if bits == (0 as i64):
@@ -197,7 +191,6 @@ func ptr_store(pa: i64, elem: int, idx: i64, v: Value):
         ret
     end
     if elem == PTR_STR:
-        // C: cell = v.kind == VAL_STR ? v.as.s : "" (the value's char*).
         ps := pa as i64*
         cs := v.kind == VAL_STR ? v.s : ""
         cp := cs as void*
@@ -232,7 +225,6 @@ func zero_for_base(base: str): Value:
     ret val_null()
 end
 
-// default_for_type - zero-filled array for "T[n]" type strings, else null.
 func default_for_type(ip &: Interp, ts: str): Value:
     if str.Len(ts) == 0:
         ret val_null()
@@ -259,7 +251,6 @@ func default_for_type(ip &: Interp, ts: str): Value:
     ret val_arr(aid)
 end
 
-// binop_method - operator-overload method name for a token kind ("" = none).
 func binop_method(op: int): str:
     if op == tok.TK_PLUS:
         ret "operator_add"
@@ -382,8 +373,6 @@ func int_ty_from_typestr(ts: str): int:
     if str.Len(ts) == 0:
         ret ITY_NONE
     end
-    // Only bare scalar names count: a trailing '*', '[' or '<' means the
-    // decoration is a pointer/array/generic type, not an integer.
     c0 := byte_at(ts, 0)
     if c0 == 105:
         if str.Equals(ts, "i8"):
@@ -436,11 +425,6 @@ func int_ty_from_typestr(ts: str): int:
     ret ITY_NONE
 end
 
-// Common type of a binary operation (SALAM-TYPES.md 15): same signedness
-// picks the higher rank. Mixed signedness is rejected by semantic analysis,
-// so it can only be reached from undecorated values; there the sized operand
-// wins, which is what the int-literal adaptation in check_binary() would have
-// produced for the usual `x + 1` shape.
 func int_ty_common(x: int, y: int): int:
     if x == y:
         ret x
@@ -485,10 +469,6 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
         ret val_float(r)
     end
     if is_intlike(x) && is_intlike(y):
-        // Shifts keep the left operand's type; everything else uses the
-        // common type of both. The operation is then carried out at that
-        // type's width and signedness and wrapped back into it, so u32/u64
-        // results stay unsigned instead of reading back as negative i64.
         shift := op == tok.TK_SHL || op == tok.TK_SHR
         rt := shift ? x.ity : int_ty_common(x.ity, y.ity)
         uns := int_ty_is_unsigned(rt)
@@ -499,7 +479,6 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
         uy := yi as u64
         shmask := (bits - 1) as u64
         negone := (0 as i64) - (1 as i64)
-        // INT64_MIN (a literal-lhs 1<<63 would be const-folded at 32 bits)
         imin := (0x8000000000000000 as u64) as i64
         if op == tok.TK_PLUS:
             ret val_int_ty((ux + uy) as i64, rt)
@@ -549,9 +528,6 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
             ret val_int_ty((ux << (uy & shmask)) as i64, rt)
         end
         if op == tok.TK_SHR:
-            // Logical for unsigned, arithmetic for signed - decided by the
-            // declared type, not by the sign of the i64 carrier. ux is
-            // already the zero-extended pattern when rt is unsigned.
             if uns:
                 ret val_int_ty((ux >> (uy & shmask)) as i64, rt)
             end
@@ -569,11 +545,6 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
     if op == tok.TK_STAR:
         ret val_float(xf * yf)
     end
-    // No zero guard on either of these: dividing a double by zero is
-    // defined - +-inf, or NaN for 0.0/0.0 - and that is what every compiled
-    // backend produces. Refusing it here made the same program die under
-    // `salam exec` and print `inf` when built. Integer division above still
-    // errors, where zero really has no answer.
     if op == tok.TK_SLASH:
         ret val_float(xf / yf)
     end
@@ -589,9 +560,6 @@ func value_cmp(x: Value, y: Value): int:
         c := str.Compare(x.s, y.s)
         ret c < 0 ? (0 - 1) : (c > 0 ? 1 : 0)
     end
-    // Integer pairs compare as integers: going through f64 both loses
-    // precision past 2^53 and would order u64 values by their signed
-    // reinterpretation.
     if is_intlike(x) && is_intlike(y):
         rt := int_ty_common(x.ity, y.ity)
         xi := int_ty_wrap(rt, x.i)

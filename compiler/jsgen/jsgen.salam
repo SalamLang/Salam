@@ -12,47 +12,16 @@
  *
  */
 
-// Flat port of compiler/src/jsgen (see salam/PORTING.md "Layout - FLAT"):
-// jsgen.c + jsgen_expr.c + jsgen_stmt.c + jsgen_host.c - one package `jsgen`,
-// one file. Import alias for consumers: `jg`.
-//
-// C differences (per salam/PORTING.md):
-// - jsgen_run -> Run. The arena_t* is gone; jsgen_output_t is the pub Output
-//   struct filled through a ref param (create with NewOutput() - cross-package
-//   struct literals don't parse). The nullable minify_last / minify_keys /
-//   minify_vals pointers are always-present ref params ("" / caller vectors);
-//   Run copies the final state back before returning, so the driver can
-//   thread one name sequence through several modules exactly like the C.
-// - jg_t + the used slice of cg_t (codegen_internal.h) are merged into the
-//   package struct Jg. cg->c (sb_t*) is Jg.out, a str.StringBuilder that is
-//   swapped exactly where the C swaps sb pointers (function bodies, lambda
-//   bodies and immediately invoked match expressions). cg fields jsgen never touches
-//   (h/safe/debug_info/lam_*/vec_types/dyn_*/deferred/...) are dropped.
-// - The cg_* helpers jsgen calls (codegen_emit.c / codegen_type.c /
-//   codegen_overload.c / codegen_expr.c's cg_op) are ported here as private
-//   helpers because the codegen module is not ported yet; they keep their C
-//   names. When codegen is ported it can lift them from here.
-// - ast_node_t* -> at.NodeId (0 = C NULL), symbol_t*/scope_t*/func_sig_t* ->
-//   sm.SymId/ScopeId/SigId (0 = C NULL), type_t* -> sm TypeId via Sig.params.
-// - `const char *` that can be NULL -> str with "" = NULL (jsg_emit_op_call /
-//   jsg_try_inline / jsg_template_concat return "" for "no result"; a real
-//   result is never empty).
-// - All byte scanning uses the unsigned-byte idiom (byte_at) like the other
-//   ports; ctype checks are the C-locale ASCII sets, so UTF-8 bytes >= 0x80
-//   are "not alnum" exactly like the C's isalnum((unsigned char)c).
 package jsgen
 
 import str
 import lg "../logger.salam"
 
-// JS operator precedences (jsgen_internal.h). JSP_PRIMARY/JSP_CALL exist in
-// the C header but are unused by the C sources, so they are not ported.
 const JSP_MEMBER := 17
 const JSP_UNARY := 15
 const JSP_TERNARY := 3
 const JSP_LAMBDA := 2
 
-// ===== jsgen_expr.c: static tables of jsg_reserved() =====
 k_js_kw := [
     "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default",
     "delete", "do", "else", "enum", "eval", "export", "extends", "false", "finally", "for", "function",
@@ -74,19 +43,6 @@ k_js_runtime := [
     "log10", "floor", "ceil", "round", "trunc", "hypot", "fabs", "pow"
 ]
 
-// The C library's memory primitives, which a browser has no answer for:
-// there is no heap to hand out, and a JS array is not a block of bytes.
-// Emitting a plain call to one of these produced JS that died with
-// "ReferenceError: realloc is not defined" the first time a Vector grew,
-// naming a symbol the reader never wrote. They are reported at build time
-// and lowered to __salam_unsupported() instead - the same treatment
-// 'sizeof' and 'spawn' already get.
-// C library functions a browser has no answer for. They are reported at
-// build time and lowered to __salam_unsupported() instead - the same
-// treatment 'sizeof' and 'spawn' get - so a page fails with the name of
-// what it wanted rather than "ReferenceError: printf is not defined".
-// The memory primitives are NOT here: those are host-mapped onto typed
-// arrays (see k_js_host_names).
 k_js_no_browser := [
     "printf", "fprintf", "sprintf", "snprintf", "puts", "fputs", "fopen", "fclose",
     "fread", "fwrite", "fseek", "ftell", "fflush", "opendir", "readdir", "closedir",
@@ -94,7 +50,6 @@ k_js_no_browser := [
     "atexit", "exit", "abort", "signal", "time", "clock", "usleep", "sleep"
 ]
 
-// ===== codegen_type.c: cg_is_c_keyword() table =====
 k_js_ckw := [
     "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum",
     "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return",
@@ -103,12 +58,6 @@ k_js_ckw := [
     "_Alignof", "_Atomic", "_Generic", "_Noreturn", "_Static_assert", "_Thread_local"
 ]
 
-// ===== jsgen_host.c: k_js_host[] (name/template pairs, split) =====
-// The C memory primitives, over typed arrays. A pointer is a Uint8Array of
-// BYTES here, which is what a `str` cast to one becomes (jsg_is_byte_ptr_ts)
-// and what these hand back. An allocation scaled by sizeof(T) cannot arrive:
-// `sizeof` is unsupported and fails first, so a buffer of anything wider than
-// a byte never gets built on a wrong element size.
 k_js_mem_names := [
     "malloc", "calloc", "realloc", "free", "memset", "memcpy", "memmove"
 ]
@@ -174,7 +123,6 @@ k_js_host_tmpls := [
     "(%0 < %1 ? -1 : (%0 > %1 ? 1 : 0))"
 ]
 
-// ===== jsgen.h: jsgen_output_t =====
 pub struct Output:
     pub module: str = ""
     pub globals_src: str = ""
@@ -183,34 +131,30 @@ pub struct Output:
     pub entry_mangled: str = ""
 end
 
-// ===== jsgen_internal.h: jg_t (+ the cg_t slice jsgen uses) =====
 pub struct Jg:
-    // cg_t slice
     pub log: lg.Logger = lg.New(lg.LOG_OFF, false)
     pub module: str = ""
     pub pkg: str = "main"
     pub entry: str = "main"
     pub compact: bool = false
-    pub out: str.StringBuilder = str.NewBuilder() // cg->c
+    pub out: str.StringBuilder = str.NewBuilder()
     pub indent: int = 0
     pub locals: Vector<str> = Vector {}
-    pub cur_struct: int = 0 // SymId
-    pub cur_fn_home: int = 0 // ScopeId
+    pub cur_struct: int = 0
+    pub cur_fn_home: int = 0
     pub tmpn: int = 0
-    pub fn_defers: Vector<int> = Vector {} // NodeIds
-    // fn_defers depth at the start of each enclosing loop body
+    pub fn_defers: Vector<int> = Vector {}
     pub loop_dmark: Vector<int> = Vector {}
-    pub match_result_tmp: str = "" // "" = C NULL
-    pub match_end_label: str = "" // "" = C NULL
-    // jg_t
+    pub match_result_tmp: str = ""
+    pub match_end_label: str = ""
     pub entry_mangled: str = ""
     pub last_fn_name: str = ""
-    pub local_muts: Vector<int> = Vector {} // 0/1 parallel to locals
-    pub local_emit: Vector<str> = Vector {} // emitted names parallel to locals
+    pub local_muts: Vector<int> = Vector {}
+    pub local_emit: Vector<str> = Vector {}
     pub taken: Vector<str> = Vector {}
     pub fn_used_names: Vector<str> = Vector {}
     pub minify_keys: Vector<str> = Vector {}
     pub minify_vals: Vector<str> = Vector {}
     pub enable_minify: bool = false
-    pub minify_last: str = "" // "" = C NULL
+    pub minify_last: str = ""
 end

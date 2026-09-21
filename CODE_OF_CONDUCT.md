@@ -13,7 +13,7 @@ Our community is dedicated to providing a **harassment-free experience for every
 - 🔄 Be open to constructive criticism and feedback.
 - 🌍 Respect differing opinions, perspectives, and backgrounds.
 - 🙏 Assume good intent and extend grace to fellow community members.
-- 🆕 Be especially welcoming to newcomers — everyone starts somewhere.
+- 🆕 Be especially welcoming to newcomers - everyone starts somewhere.
 - 🗣️ Use inclusive language that welcomes all people.
 
 ### 🚫 Unacceptable Behavior
@@ -50,4 +50,4 @@ This Code of Conduct is adapted from the [Contributor Covenant](https://www.cont
 
 ---
 
-_Together, we build a community as welcoming as the word **سلام** — peace for all._
+_Together, we build a community as welcoming as the word **سلام** - peace for all._

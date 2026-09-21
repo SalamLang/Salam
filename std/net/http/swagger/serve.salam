@@ -14,35 +14,6 @@
 
 package swagger
 
-// Putting the documentation somewhere a browser can reach it: on the API's
-// own router under a prefix, or on a port of its own.
-//
-//     swagger.Mount(doc, r, "/docs")     // http://host/docs
-//     swagger.Serve(doc, 8091)           // http://host:8091/
-//
-// WHY THE MOUNT TABLE
-//
-// Salam has no closures, so a handler cannot carry the document it is meant
-// to render - `router.Get` takes a bare function pointer and there is nowhere
-// to hang state off it. The two handlers below are therefore ordinary
-// functions that look their document up by the request that reached them, in
-// a table the mounting calls fill in.
-//
-// A table, not a single global, because a process can mount more than one:
-// net/http now runs several servers at once (see its server table), and a
-// gateway in front of two services is two documents. The lookup is by path
-// and by port, because two documents served on their own ports both have
-// their page at "/" and the path alone cannot tell them apart - see
-// _mount_for. A client that sends a Host header without a port (which every
-// browser does include, and which this repo's own client now sends too)
-// leaves that ambiguity unresolved, and gets whichever matched first.
-//
-// The table is written by Mount and read by handler threads, so mounting has
-// to happen before the server that serves it starts - which is the natural
-// order anyway, since the router has to be built before it is used. Mounting
-// after a server is already running would push onto a Vector other threads
-// are reading.
-
 import net.http
 import net.router
 import os
@@ -87,9 +58,6 @@ func _host_port(host: str): int:
         ret 0
     end
     tail := host.substr(colon + 1, host.len() - colon - 1)
-    // A bare IPv6 literal is all colons and hex - "[::1]" has a last colon
-    // with no port after it - so the tail has to be digits before it can be
-    // read as one.
     repeat tail.len() with i:
         c := tail.substr(i, 1)
         if c < "0" || c > "9":
@@ -167,8 +135,6 @@ func _register(prefix: str, port: int, title: str, spec: str): int:
     repeat _mounts.len() with i:
         m := _mounts.get(i)
         if str.Equals(m.prefix, p) && m.port == port:
-            // Remounting the same place replaces what is there rather than
-            // adding a second entry the lookups would never reach.
             _mounts.set(i, entry)
             ret i
         end
@@ -187,10 +153,6 @@ func _handle_ui(ctx: i64):
         http.Ctx_text(ctx, "404 Not Found")
         ret
     end
-    // The document is baked into the binary, so a cached copy of this page
-    // outlives the deploy that changed the API it describes. Revalidating is
-    // one conditional request against a local server, and being wrong about
-    // what an API accepts costs more than that.
     http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
     http.Ctx_html(ctx, _mounts.get(i).page)
 end
@@ -202,10 +164,6 @@ func _handle_spec(ctx: i64):
         http.Ctx_json(ctx, "{\"error\":\"not found\"}")
         ret
     end
-    // A spec is meant to be read by tools on other origins - a client
-    // generator, a linter, a browser page from the frontend's dev server -
-    // and it is a public description of a public interface, so it is served
-    // cross-origin. The API's own routes are untouched by this.
     http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
     http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
     http.Ctx_json(ctx, _mounts.get(i).spec)
@@ -227,8 +185,6 @@ func _serve_on(prefix: str, port: int): bool:
     http.Use(s, r)
     ret http.RunBackground(s)
 end
-
-// ------------------------------------------------------------ on a router
 
 // Serve the document from the API's own server, under `prefix`: the page at
 // `prefix`, the OpenAPI JSON at `prefix + "/openapi.json"`.
@@ -254,8 +210,6 @@ pub func MountSpec(spec: str, title: str, r &: router.Router, prefix: str):
     _reg := _register(prefix, 0, title, spec)
     _mount_routes(r, prefix)
 end
-
-// -------------------------------------------------------- on its own port
 
 // Serve the document on `port`, with the page at "/" and the OpenAPI JSON at
 // "/openapi.json", on a listener of its own.
@@ -283,8 +237,6 @@ pub func ServeSpec(spec: str, title: str, port: int): bool:
     _reg := _register("/", port, title, spec)
     ret _serve_on("/", port)
 end
-
-// ----------------------------------------------------------------- files
 
 // An OpenAPI document read from disk, "" when the file cannot be read.
 @en "SpecFromFile"

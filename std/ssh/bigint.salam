@@ -14,22 +14,6 @@
 
 package ssh
 
-// Arbitrary-precision unsigned integers on 32-bit limbs - the shared engine
-// behind RSA (rsakey.salam) and classic Diffie-Hellman group14
-// (dhgroups.salam). Deliberately the same shape as std/tls/bigint.salam
-// (limbs little-endian, bytes big-endian, bit-serial shift-and-subtract
-// division) since that file cannot be imported across the package boundary
-// (see ssh.salam's header) and the algorithm is already well exercised
-// there; only the blinding helper at the bottom is new.
-//
-// NOT constant-time: division is bit-serial shift-and-subtract, and none of
-// the arithmetic below hides the operand through its timing. That is fine
-// for a PUBLIC operand (verifying a host key signature, a DH public value)
-// and is why every private-key use of modexp in this package - RSA signing
-// in rsakey.salam, and our own ephemeral DH exponent in dhgroups.salam -
-// goes through _big_modexp_blinded below rather than calling _big_modexp
-// directly on secret data.
-
 struct Big:
     pub b: Buf = Buf {}
     pub cap: int = 0
@@ -405,23 +389,6 @@ func _big_modexp(r &: Big, base: Big, e: Big, m: Big): bool:
     ret !r.bad
 end
 
-// ---------------------------------------------------------------- Barrett reduction
-//
-// _big_modexp above is bit-serial-division-based (O(bits(a) * limbs(m)) PER
-// reduction), which is fine for RSA verification's handful of reductions
-// but far too slow for DH group14's 2048-bit modexp done several times per
-// connection - measured at tens of seconds each. Barrett reduction turns
-// "divide by m" into two multiplications against a precomputed constant, cut
-// to the ~limbs(m)^2 cost a schoolbook multiply already has, which is the
-// difference between this being usable as a KEX fallback and not.
-//
-// mu = floor(b^(2k) / m), b = 2^32, k = limbs(m), computed ONCE per modexp
-// call (a single division, not one per squaring). Reduction of a product x
-// (0 <= x < b^(2k), which every squaring/multiply inside modexp satisfies
-// since both operands are already < m) is then: q = floor((x >> (k-1)) * mu
-// >> (k+1)), r = (x - q*m) mod b^(k+1), followed by at most a couple of
-// corrective subtractions of m - Handbook of Applied Cryptography 14.42.
-
 // x >> (32*s): drop the low s limbs.
 func _big_shr_limbs(x: Big, s: int): Big:
     mut nn := x.n - s
@@ -500,7 +467,6 @@ func _barrett_reduce(bt: Barrett, x: Big, r &: Big): bool:
     if _big_cmp(r1, r2) >= 0:
         _s1 := _big_sub(wide, r1, r2)
     else:
-        // r1 - r2 wrapped mod b^(k+1): add b^(k+1) back in first.
         mut base := _big_new(k + 6)
         _big_setbit(base, (k + 1) * 32)
         mut r1adj := _big_new(k + 6)
@@ -577,8 +543,6 @@ func _big_modexp_barrett(r &: Big, base: Big, e: Big, m: Big): bool:
     _barrett_free(bt)
     ret ok && !r.bad
 end
-
-// ---------------------------------------------------------------- bytes
 
 func _big_from_bytes(p: void*, len: int): Big:
     mut nl := (len + 3) / 4

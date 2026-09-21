@@ -12,15 +12,6 @@
  *
  */
 
-// Several namespaces multiplexed over one Socket.IO connection.
-//
-// This is the feature that makes Socket.IO more than a WebSocket: "/", the
-// admin channel and a channel the server refuses all share ONE socket, one
-// session id and one heartbeat, and a packet finds its way to the right one
-// by the namespace written into it. The server here is written against the
-// protocol text, so what is being checked is that the client addresses each
-// namespace correctly and keeps them apart on the way back.
-
 import net.socketio
 import net.websocket
 import sync
@@ -31,7 +22,6 @@ const PORT := 19413
 mut ready := sync.NewWaitGroup()
 mut server log := ""
 
-// The acknowledgement id out of a packet like `20["ask"]`, or -1.
 func ack id of(text: str): int:
     mut i := 1
     mut id := 0
@@ -66,9 +56,6 @@ func sio server():
     websocket.SendText(c, `0{"sid":"one-session","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -84,15 +71,12 @@ func sio server():
             if body == "0":
                 websocket.SendText(c, `40{"sid":"root-socket"}`)
             else str.StartsWith(body, "0/admin,"):
-                // Whatever the client put in the CONNECT payload is the
-                // namespace's auth.
                 server log += "admin auth=" + body.substr(8, body.len() - 8) + ";"
                 websocket.SendText(c, `40/admin,{"sid":"admin-socket"}`)
             else str.StartsWith(body, "0/staff,"):
                 websocket.SendText(c, `44/staff,{"message":"Not authorized"}`)
             else str.StartsWith(body, `2/admin,["shout"`):
                 server log += "admin shout;"
-                // Answers on both namespaces, to prove they stay apart.
                 websocket.SendText(c, `42/admin,["heard","in admin"]`)
                 websocket.SendText(c, `42["heard","in root"]`)
             else str.StartsWith(body, "2") && str.Contains(body, `"ask"`):
@@ -139,7 +123,6 @@ func main:
     println "namespaces:", socks.len()
     socks.free()
 
-    // One emit on /admin, two answers, one per namespace.
     socketio.EmitStr(admin, "shout", "hello")
     mut admin heard := ""
     mut root heard := ""
@@ -160,14 +143,12 @@ func main:
     println "admin received:", admin heard
     println "root received:", root heard
 
-    // An acknowledgement on the root namespace only.
     mut a := socketio.NewArgs()
     mut ack := socketio.EmitAck(root, "ask", a, 2000)
     socketio.ArgsFree(a)
     println "root ack:", ack.ok, socketio.AckStr(ack, 0)
     socketio.AckFree(ack)
 
-    // Closing one namespace leaves the others - and the transport - alone.
     socketio.Close(admin)
     println "after closing admin - transport still up:", socketio.IsOpen(m), "root still connected:", socketio.IsConnected(root)
     mut left := socketio.Sockets(m)

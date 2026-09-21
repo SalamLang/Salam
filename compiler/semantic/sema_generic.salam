@@ -7,11 +7,6 @@ import at "../ast.salam"
 import i18 "../i18n.salam"
 import cc "../condcomp.salam"
 
-// ===========================================================================
-// ===== sema_generic.c (5c) =====
-// ===========================================================================
-
-// Creates a synthetic-capable node carrying `sp` (ast_new(kind, span)).
 func new_node_at(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
     id := at.NewNode(a, kind)
     at.SetSpan(
@@ -21,7 +16,6 @@ func new_node_at(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
     ret id
 end
 
-// g_sanitize - type string -> identifier-safe instance-name fragment.
 func g_sanitize(ts: str): str:
     mut out := ""
     n := str.Len(ts)
@@ -42,10 +36,6 @@ func g_sanitize(ts: str): str:
     ret out
 end
 
-// g_subst - rewrites every AST_TYPE named after a type parameter into a
-// clone of the matching argument node. The C shared the clone's list/dims
-// vectors; the port copies the child NodeIds into fresh vectors (same
-// reads, no double-free on FreeAst).
 func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
     if nid == 0:
         ret
@@ -70,9 +60,6 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             ccid := at.Clone(a, args.get(pi))
             cc := at.Get(a, ccid)
             mut nv := at.Get(a, nid)
-            // Stars ACCUMULATE. `T*` instantiated with T = `Edge*` is
-            // Edge**, not Edge*: OR-ing the two booleans used to collapse
-            // every pointer-of-pointer to one level.
             cc_depth := cc.ptr_depth != 0 ? cc.ptr_depth : (cc.is_pointer ? 1 : 0)
             n_depth := nv.ptr_depth != 0 ? nv.ptr_depth : (nv.is_pointer ? 1 : 0)
             depth := n_depth + cc_depth
@@ -86,25 +73,12 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             nv.is_pointer = depth > 0
             nv.elem_ptr_depth += cc.elem_ptr_depth
             nv.is_dyn = cc.is_dyn
-            // A function type carries its return type in `ty` and its
-            // extern-ness in a flag; neither lives in the name or the
-            // list, so a `func (int) int` handed to Vector<T> used to come
-            // out as `func (int) void`. The clone owns a fresh copy.
             nv.ty = cc.ty
             nv.is_extern = cc.is_extern
             nv.is_variadic = cc.is_variadic
             if cc.is_slice:
                 nv.is_slice = true
             end
-            // The resolved type comes along whole only where the occurrence
-            // is the bare parameter. `T*` or `T[4]` stands for a different
-            // type than what the caller resolved, so only the base travels and
-            // sema_resolve_type re-applies the `*`/`[N]` - going back through
-            // the name would fail for any argument the template's own package
-            // cannot see (`Vector<Row>` over a struct from another package:
-            // "unknown type 'cmod_Row'"). The base is only usable when the
-            // argument node is itself undecorated; `T[4]` with T = `Foo[3]`
-            // has to merge dims, and cc.sema_type is the whole array there.
             if n_depth == 0 && nv.dims.len() == 0 && nv.elem_ptr_depth == 0:
                 nv.sema_type = cc.sema_type
             else cc_depth == 0 && cc.dims.len() == 0 && cc.elem_ptr_depth == 0:
@@ -125,8 +99,6 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
     end
 end
 
-// g_instance_name - "Base_arg1_arg2" (the C clamps at 512 bytes; not
-// replicated per the file-header conventions).
 func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
     mut out := base
     repeat argtypes.len() with i:
@@ -135,12 +107,6 @@ func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
     ret out
 end
 
-// g_type_to_ast - synthesizes an AST_TYPE node describing `t`.
-// The name is kept for diagnostics and for the instance's mangled name, but
-// the resolved type travels with the node: the template is checked inside the
-// package that declared it, and that scope cannot see a struct the caller
-// declared. Without this a stdlib generic could only ever be instantiated with
-// a built-in type.
 func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     nid := g_type_to_ast_bare(s, a, t, sp)
     if t >= 0:
@@ -184,8 +150,6 @@ func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     ret nid
 end
 
-// iface_satisfied - structural interface conformance for generic bounds
-// and dyn coercion.
 func iface_satisfied(
     s &: Sema, _a &: at.Ast, concrete: int, iface_name: str, tparam: str, sp: co.SrcSpan
 ): bool:
@@ -222,8 +186,6 @@ func iface_satisfied(
     if concrete >= 0 && ty_at(s, concrete).kind == TY_STRUCT && ty_at(s, concrete).decl != 0:
         members = sym_at(s, ty_at(s, concrete).decl).members
     else:
-        // A non-struct type (or a struct with no methods of its own)
-        // relies entirely on an `impl Iface on T` block for its methods.
         members = impl_members
         impl_members = 0
     end
@@ -249,9 +211,6 @@ func iface_satisfied(
         if have_m && sym_at(s, smx).kind != SYM_METHOD:
             have_m = false
         end
-        // A struct's own methods take priority, but one an `impl` block
-        // supplies still counts: a struct can satisfy an interface partly
-        // through its own methods and partly through one impl block.
         if !have_m && impl_members != 0:
             smx = scope_lookup_local(s, impl_members, im.name)
             have_m = smx != 0
@@ -301,7 +260,6 @@ func iface_satisfied(
     ret all_ok
 end
 
-// g_check_bounds - validates `<T: Iface>` bounds at instantiation.
 func g_check_bounds(
     s &: Sema, a &: at.Ast, tmpl: int, argtypes: Vector<int>, sp: co.SrcSpan
 ):
@@ -318,8 +276,6 @@ func g_check_bounds(
     end
 end
 
-// coerce_to_dyn - wraps `expr` in a synthetic AST_CAST when the expected
-// type is a dyn interface; returns the (possibly new) node id.
 func coerce_to_dyn(
     s &: Sema, a &: at.Ast, expected: int, expr: int, etype: int
 ): int:
@@ -340,7 +296,6 @@ func coerce_to_dyn(
     ret box
 end
 
-// coerce_to_variant - wraps `expr` in an AST_VARIANT_BOX carrying the tag.
 func coerce_to_variant(
     s &: Sema, a &: at.Ast, variant: int, expr: int, tag: int
 ): int:
@@ -401,7 +356,6 @@ func coerce_args_to_variant(
     end
 end
 
-// g_instantiate_func - like g_instantiate_struct for generic functions.
 func g_instantiate_func(
     s &: Sema, a &: at.Ast, tmpl: int, targ_nodes: Vector<int>, sp: co.SrcSpan
 ): int:
@@ -434,8 +388,6 @@ func g_instantiate_func(
     mut iv := at.Get(a, inst)
     iv.name = iname
     iv.synthetic = true
-    // The clone is checked against the declaring package's scope, so its body
-    // may name that package's private functions. See at.Node.home_pkg.
     iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
     g_subst(a, inst, tn.typarams, targ_nodes)
@@ -458,8 +410,6 @@ func g_instantiate_func(
     ret fsym
 end
 
-// g_unify - matches a template parameter's type NODE against a concrete
-// argument type to bind type parameter `T`; TYPE_NONE = the C NULL.
 func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
     if pty == 0 || att < 0:
         ret TYPE_NONE
@@ -512,8 +462,6 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
     ret TYPE_NONE
 end
 
-// g_localize_instance - re-materializes a generic instance type in the
-// current global scope (used for cross-package instance return types).
 func g_localize_instance(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if t < 0 || ty_at(s, t).kind != TY_STRUCT || ty_at(s, t).decl == 0:
         ret t
@@ -540,8 +488,6 @@ func g_localize_instance(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     ret t
 end
 
-// g_infer_call - infers a generic function's type arguments at a call site
-// and instantiates it; 0 = the C NULL.
 func g_infer_call(
     s &: Sema, a &: at.Ast, tsym: int, argtypes: Vector<int>, sp: co.SrcSpan, expected: int
 ): int:
@@ -637,10 +583,6 @@ func g_infer_call(
     ret g_result
 end
 
-// g_check_targ - a fixed array cannot be a type argument. C has no array
-// values: `Vector<i32[3]>` lowered to a payload the vector could neither
-// assign nor return ("assignment to expression with array type"), and no
-// backend can give `T` a value of that shape. The error names the fix.
 func g_check_targ(s &: Sema, _a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if t >= 0 && ty_at(s, t).kind == TY_ARRAY:
         serr(

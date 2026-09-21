@@ -1,5 +1,3 @@
-"""Sieve of Eratosthenes benchmark using array marking."""
-
 LIMIT = 3000000
 is_composite = [0] * (LIMIT + 1)
 is_composite[0] = 1

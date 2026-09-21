@@ -9,10 +9,8 @@ import lg "../logger.salam"
 import i18 "../i18n.salam"
 import sm "../semantic/semantic.salam"
 
-// Unsigned byte read from a str (same idiom as the other ports).
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
-// &node->span - rebuild a co.SrcSpan from the node's inlined span fields.
 func span_of(a &: at.Ast, id: int): co.SrcSpan:
     n := at.Get(a, id)
     ret co.MakeSpan(
@@ -21,12 +19,10 @@ func span_of(a &: at.Ast, id: int): co.SrcSpan:
     )
 end
 
-// C-locale isspace (strtol's whitespace skip).
 func is_c_space(c: int): bool:
     ret c == 32 || (c >= 9 && c <= 13)
 end
 
-// Bit pattern of a double (the C memcpy'd into a uint64_t).
 func f64_bits(d: f64): u64:
     p := mem.Allocate(8 as u64)
     dp := p as f64*
@@ -37,12 +33,6 @@ func f64_bits(d: f64): u64:
     ret bits
 end
 
-// ===========================================================================
-// ===== interp.c =====
-// ===========================================================================
-
-// rt_error with a NULL node (tick's timeout). Keeps the FIRST error, like
-// the C longjmp which never came back for a second one.
 func rt_fail(ip &: Interp, msg: str):
     if ip.failed:
         ret
@@ -51,8 +41,6 @@ func rt_fail(ip &: Interp, msg: str):
     ip.errmsg = msg
 end
 
-// rt_error - `msg` is pre-translated/pre-formatted at the call site with
-// i18.Tr + co.FormatN (the C ran i18n_tr on the format internally).
 func rt_error(ip &: Interp, a &: at.Ast, n: int, msg: str):
     if ip.failed:
         ret
@@ -72,7 +60,6 @@ func tick(ip &: Interp):
     end
 end
 
-// itab_hash - FNV-1a.
 func itab_hash(s: str): u64:
     mut h := 1469598103934665603 as u64
     n := str.Len(s)
@@ -83,7 +70,6 @@ func itab_hash(s: str): u64:
     ret h
 end
 
-// ptab_hash - splitmix-style avalanche of the (former pointer) key.
 func ptab_hash(k: int): u64:
     mut x := k as u64
     x = x ^ (x >> (33 as u64))
@@ -126,8 +112,6 @@ func itab_grow(t &: Itab, want: int):
     end
 end
 
-// Returns the stored val, 0 when absent (the C returned NULL; no table
-// stores 0 - every handle/NodeId val is >= 1).
 func itab_get(t: Itab, key: str): int:
     if t.cap == 0:
         ret 0
@@ -143,7 +127,6 @@ func itab_get(t: Itab, key: str): int:
     ret 0
 end
 
-// First put wins (the C itab_put returned without overwriting).
 func itab_put(t &: Itab, key: str, val: int):
     if (t.count + 1) * 4 >= t.cap * 3:
         itab_grow(t, t.count + 1)
@@ -229,7 +212,6 @@ func env_new(ip &: Interp, parent: int): int:
     ret id
 end
 
-// env_find_local - binding slot index inside `e`, -1 when absent.
 func env_find_local(ip &: Interp, e: int, name: str): int:
     en := ip.envs.get(e)
     repeat en.names.len() with i:
@@ -240,8 +222,6 @@ func env_find_local(ip &: Interp, e: int, name: str): int:
     ret 0 - 1
 end
 
-// env_find - walks the parent chain; returns the slot and stores the owning
-// EnvId in `where` (-1/0 when absent). The C returned the binding pointer.
 func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
     mut e := e0
     until e != 0:
@@ -307,8 +287,6 @@ func register_func(ip &: Interp, a &: at.Ast, f: int):
     ip.fnlists.set(li, fl)
 end
 
-// find_func - exact param-count match, else the first overload. Call with
-// nargs = -1 (the C passed (size_t)-1) to take the first one (entry lookup).
 func find_func(ip &: Interp, a &: at.Ast, name: str, nargs: int): int:
     li := itab_get(ip.tab_funcs, name)
     if li == 0:
@@ -331,8 +309,6 @@ func find_module(ip &: Interp, name: str): int:
     ret itab_get(ip.tab_modules, name)
 end
 
-// find_extern_fn - index into ip.extern_fns (0 = none; the C returned the
-// boxed value_t*).
 func find_extern_fn(ip &: Interp, name: str): int:
     ret itab_get(ip.tab_extern_fns, name)
 end
@@ -470,8 +446,6 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
                 register_method_envs(ip, a, d, ip.globals)
             end
         else dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
-            // The initialiser is not run here - interp_eval_globals does it,
-            // once the rest of the program exists. See there.
             env_define(ip, ip.globals, dn.name, val_null())
             if ip.failed:
                 ret
@@ -499,13 +473,6 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                 env_define(ip, md.env, dn.name, mk_closure(ip, d, md.env))
             end
         else dn.kind == at.AST_STRUCT_DEF:
-            // A package's struct keeps its short name on the declaration but
-            // its *type* is named <pkg>_<name>, and a type string is what the
-            // walker has in hand wherever it has to lay a value out in memory
-            // - the element type of a Vector<T> above all. Looking only under
-            // the short name left `Vector<pkg.Row>.get(i)` reading the bytes
-            // back as an opaque box, so the result was not a struct and any
-            // field access on it failed with "cannot access member".
             if str.Len(dn.name) != 0 && str.Len(md.name) != 0 && !str.Equals(md.name, "main"):
                 qual := md.name + "_" + dn.name
                 if find_struct(ip, qual) == 0:
@@ -575,7 +542,6 @@ func eval_module_consts(ip &: Interp, a &: at.Ast, mid: int, prog: int):
     end
 end
 
-// Package symbol's display name (pk->pkgname ? : pk->decl->name).
 func pkg_name_of(a &: at.Ast, sem &: sm.Sema, pkid: int): str:
     pk := sm.SymAt(sem, pkid)
     if str.Len(pk.pkgname) != 0:
@@ -618,18 +584,6 @@ func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
     wire_imports(ip, sem, ip.globals, sem.global)
 end
 
-// Run every global initialiser, packages first and the program last.
-//
-// Deliberately its own pass, after collect_decls, build_modules and the
-// generic/synthetic fixups: an initialiser is an arbitrary expression and may
-// call anything the program defines, but the declaration-order rules put
-// globals *above* the functions of their own file (E085), so evaluating one
-// while its file is still being collected reached a function that did not
-// exist yet - `mut g_cat := catalog.New()` failed with "call to undefined
-// function 'New'", or, across a module boundary, quietly left the global at
-// its zero value and surfaced much later as "Vector.get: index out of bounds".
-// The compiled backends run the same initialisers from salam_mod_<m>_init();
-// this is the walker's equivalent.
 func interp_eval_globals(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int):
     npk := sm.PackageCount(sem)
     repeat npk with i:
@@ -669,13 +623,6 @@ func fixup_generic_envs_in(
         if !dn.synthetic || str.Len(dn.name) == 0 || find_def_env(ip, d) != 0:
             continue
         end
-        // The instance records the package whose scope its body was checked
-        // in, which is exactly the environment its methods have to resolve
-        // against. Preferred over the symbol search below because an instance
-        // created while checking an imported package is defined in *that*
-        // package's scope, not the program's, so the lookup misses it and a
-        // `Vector<int>` first named inside a package kept an environment with
-        // no `mem` in it ("undefined variable 'mem'" from Vector.reserve).
         if str.Len(dn.home_pkg) != 0:
             hm := find_module(ip, dn.home_pkg)
             if hm != 0:
@@ -717,12 +664,6 @@ func fixup_generic_envs(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
     fixup_generic_envs_in(ip, a, sem, ip.impls)
 end
 
-// A generic instance or a derived codec has a global name but a package's
-// body: it is reachable from anywhere, and resolves the names it calls -
-// private ones included - inside the module it was cloned or generated from.
-// Its closure is built before the modules exist, so the environment is
-// corrected here, once they do ("call to undefined function '_dnew'" without
-// it, from the JSON codecs the compiler derives).
 func rehome_synthetic_funcs(ip &: Interp, a &: at.Ast):
     repeat ip.funcs.len() with i:
         f := ip.funcs.get(i)
@@ -750,7 +691,6 @@ func rehome_synthetic_funcs(ip &: Interp, a &: at.Ast):
     end
 end
 
-// The C interp_run's setjmp branch (runtime-error report), shared by Run.
 func run_fail(ip &: Interp): int:
     if ip.have_errspan:
         lg.Log(

@@ -25,16 +25,6 @@ if SALAM_OS_UNIX:
     end
 end
 
-/*
- * Windows locks are CRITICAL_SECTIONs rather than CreateMutexA handles.
- * A kernel mutex works for plain Lock/Unlock, but no condition variable can
- * wait on one - SleepConditionVariableCS wants a CRITICAL_SECTION - and every
- * blocking primitive below (WaitGroup, RWMutex, Semaphore, channels) is built
- * on a condition variable. A CRITICAL_SECTION is also recursive and
- * process-local, exactly like the mutex it replaces, so Lock/Unlock keep their
- * old behaviour; it is merely far cheaper, since an uncontended acquire never
- * enters the kernel at all.
- */
 if SALAM_OS_WINDOWS:
     link dynamic "kernel32"
     extern:
@@ -75,25 +65,6 @@ end
 const MUTEX_BYTES := 128
 const COND_BYTES := 128
 
-/*
- * CONDITION_VARIABLE and GetTickCount64 are Vista-era, and the import
- * definitions bundled with the TinyCC commit this repo pins predate them:
- * win32/lib/kernel32.def carries InitializeCriticalSection but not one
- * ConditionVariable name, so declaring them as ordinary externs fails the
- * link outright under the C backend ("unresolved reference to
- * 'InitializeConditionVariable'") - which is what broke general/en/net_loopback
- * on the Windows release gate. GetModuleHandleA and GetProcAddress ARE in the
- * def, so go through those instead; same functions, same semantics, only the
- * way the address is obtained changes. c/src/core/timer.c already resolves
- * K32GetProcessMemoryInfo this way.
- *
- * Resolved here rather than on first use: a package global with a
- * non-constant initialiser is stored before the entry function runs, so these
- * are set before any thread exists and there is no lazy-init race to reason
- * about in what is, after all, the threading library. Globals must also
- * precede every type and function definition in a file (E085), which is why
- * they sit up here rather than beside the code that uses them.
- */
 if SALAM_OS_WINDOWS:
     _k32 := GetModuleHandleA("kernel32.dll")
     _cv_init_fn := GetProcAddress(_k32, "InitializeConditionVariable")
@@ -177,8 +148,6 @@ if SALAM_OS_WINDOWS:
         mem.Free(h)
     end
 
-    // Calls go through the _cv_*_fn pointers resolved at the top of this
-    // file; see the comment there for why they are not plain externs.
     func cond_new(): void*:
         c := mem.Allocate(COND_BYTES as u64)
         if _cv_init_fn != null:
@@ -188,15 +157,6 @@ if SALAM_OS_WINDOWS:
         ret c
     end
 
-    /*
-     * The fallbacks below cover the case where the host has no
-     * CONDITION_VARIABLE at all (pre-Vista, or a stripped kernel32). Dropping
-     * the lock, sleeping a moment and retaking it is a legal - if slow -
-     * condition wait: every caller in this file re-tests its predicate in a
-     * loop, because a spurious wakeup is permitted on every platform, so a
-     * wakeup that carries no information is safe. Correct and slow beats a
-     * null call through.
-     */
     func cond_wait(c: void*, m: void*):
         if _cv_sleep_fn == null:
             LeaveCriticalSection(m)
@@ -208,8 +168,6 @@ if SALAM_OS_WINDOWS:
         f(c, m, 0 - 1)
     end
 
-    // Non-zero means the predicate may have changed; zero means it timed out
-    // (or failed, which for a caller re-testing its predicate is the same).
     func cond_timedwait(c: void*, m: void*, ms: i64): bool:
         if _cv_sleep_fn == null:
             LeaveCriticalSection(m)
@@ -224,8 +182,6 @@ if SALAM_OS_WINDOWS:
         ret f(c, m, ms as int) == 0
     end
 
-    // GetTickCount wraps every 49.7 days; GetTickCount64 does not, so prefer
-    // it and keep the 32-bit call only as the fallback.
     func now_ms_os(): i64:
         if _tick64_fn == null: ret GetTickCount() as i64 end
         f := _tick64_fn as extern func () u64
@@ -244,7 +200,6 @@ if SALAM_OS_WINDOWS:
         f(c)
     end
 
-    // A CONDITION_VARIABLE owns no resources and has no matching Delete call.
     func cond_free(c: void*): mem.Free(c) end
 
     func _sync_sleep_ms(ms: int): Sleep(ms) end
@@ -381,10 +336,6 @@ pub func Destroy(m: Mutex): mutex_free(m.handle) end
 @ar "نوم بالمللي ثانية"
 pub func SleepMs(ms: int): _sync_sleep_ms(ms) end
 
-// ---------------------------------------------------------------------------
-// Condition variable
-// ---------------------------------------------------------------------------
-
 @en "NewCondVar"
 @fa "متغیر شرط جدید"
 @ar "متغير شرطي جديد"
@@ -449,10 +400,6 @@ pub func Broadcast(cv: CondVar): cond_broadcast(cv.handle) end
 @ar "تدمير المتغير الشرطي"
 pub func DestroyCondVar(cv: CondVar): cond_free(cv.handle) end
 
-// ---------------------------------------------------------------------------
-// WaitGroup
-// ---------------------------------------------------------------------------
-
 @en "NewWaitGroup"
 @fa "گروه انتظار جدید"
 @ar "مجموعة انتظار جدیدة"
@@ -513,10 +460,6 @@ pub func DestroyWaitGroup(wg: WaitGroup):
     mutex_free(wg.mu)
 end
 
-// ---------------------------------------------------------------------------
-// Reader/writer lock
-// ---------------------------------------------------------------------------
-
 @en "NewRWMutex"
 @fa "قفل خواندن نوشتن جدید"
 @ar "قفل قراءة كتابة جديد"
@@ -534,8 +477,6 @@ end
 pub func RLock(rw: RWMutex):
     s := rw.state
     mutex_lock(rw.mu)
-    // Yielding to waiting writers is what keeps a writer from starving while
-    // readers hand the lock to one another without it ever hitting zero.
     until s[1] != 0 || s[2] > 0:
         cond_wait(rw.cv, rw.mu)
     end
@@ -588,10 +529,6 @@ pub func DestroyRWMutex(rw: RWMutex):
     cond_free(rw.cv)
     mutex_free(rw.mu)
 end
-
-// ---------------------------------------------------------------------------
-// Counting semaphore
-// ---------------------------------------------------------------------------
 
 @en "NewSemaphore"
 @fa "نشانگر جدید"
@@ -649,10 +586,6 @@ pub func DestroySemaphore(sem: Semaphore):
     cond_free(sem.cv)
     mutex_free(sem.mu)
 end
-
-// ---------------------------------------------------------------------------
-// Once
-// ---------------------------------------------------------------------------
 
 @en "NewOnce"
 @fa "یک بار جدید"

@@ -7,14 +7,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
-// ===========================================================================
-// ===== sema_decl.c =====
-// ===========================================================================
-
-// push_overload - adds `sig` to `fsym`'s overload set, unless one with the
-// same parameter types is there already: a second definition of the same
-// function used to be accepted and then reported at every call as
-// ambiguous, far from the line that caused it.
 func push_overload(s &: Sema, a &: at.Ast, fsym: int, sig: int, did: int):
     mut fv := sym_at(s, fsym)
     nsg := sig_at(s, sig)
@@ -62,7 +54,6 @@ func tv_kind_name(k: int): str:
     ret "?"
 end
 
-// block_has_valued_ret - true when any non-lambda descendant is `ret <expr>`.
 func block_has_valued_ret(a &: at.Ast, nid: int): bool:
     if nid == 0:
         ret false
@@ -94,8 +85,6 @@ func block_has_valued_ret(a &: at.Ast, nid: int): bool:
     ret false
 end
 
-// build_sig - resolves a function declaration into a Sig record.
-// owner 0 = the C NULL (free function).
 func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
     sigid := s.sigs.len()
     s.sigs.push(Sig {})
@@ -140,9 +129,6 @@ func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
     ret sigid
 end
 
-// get_or_make_func - the existing func/method symbol, or a fresh one. C
-// quirk kept: when the name is taken by a non-function symbol, the new
-// symbol is returned even though scope_define left it out of the scope.
 func get_or_make_func(s &: Sema, sc: int, name: str, kind: int): int:
     sym := scope_lookup_local(s, sc, name)
     if sym != 0:
@@ -216,11 +202,6 @@ func check_link(s &: Sema, a &: at.Ast, did: int):
     end
 end
 
-// sema_collect - two passes: type names first, then members/sigs/globals.
-// 5c note: the program list can GROW during pass 2 (generic instantiation
-// appends synthetic instances), so both loops read children live via
-// at.Child/ChildCount - a snapshot Vector header would dangle on realloc.
-// Appended instances are synthetic and skipped, exactly like the C.
 func sema_collect(s &: Sema, a &: at.Ast, program: int):
     save_file := s.file
     mut i := 0
@@ -234,8 +215,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
         _sf1 := sema_use_decl_file(s, a, did)
         if d.kind == at.AST_STRUCT_DEF || d.kind == at.AST_ENUM_DEF || d.kind == at.AST_TYPE_ALIAS || d.kind == at.AST_INTERFACE_DEF:
             if sema_is_builtin_type_name(d.name):
-                // `struct File` used to be accepted and then emitted over the
-                // runtime's salam_file ("variable has incomplete type").
                 serr(
                     s, 95, span_of(a, did), co.Format1(
                         i18.Tr("'%s' is a built-in type and cannot be redefined"), co.ArgStr(d.name)
@@ -303,12 +282,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             sv4.decl = did
             sv4.is_pub = d.is_pub
             sv4.members = members4
-            // Same package qualification a struct gets above, and for the
-            // same reason: `dyn Connection` written inside package db and
-            // `dyn db.Connection` written by an importer must name ONE
-            // type, or each spelling would get its own vtable struct in C
-            // and a value boxed on one side would not dispatch on the
-            // other.
             sv4.pkgname = s.pkg
             sym_put(s, sym4, sv4)
             if scope_define(s, s.global, sym4) != 0:
@@ -351,7 +324,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             end
             ssym := scope_lookup_local(s, s.global, d.name)
             if ssym == 0 || sym_at(s, ssym).members == 0:
-                continue // defensive: redefinition collided with a non-struct
+                continue
             end
             repeat d.list.len() with j:
                 mid := d.list.get(j)
@@ -498,11 +471,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             if esym == 0 || sym_at(s, esym).members == 0:
                 continue
             end
-            // The first member with an initializer fixes this enum's
-            // backing kind (TV_INT if none has one, preserving the default
-            // 0/1/2... auto-increment). Every later member's initializer,
-            // if any, must agree with it - an enum is either all-int,
-            // all-string, or all-float, never mixed.
             mut backing := tok.TV_INT
             repeat d.list.len() with jb:
                 mb := at.Get(a, d.list.get(jb))
@@ -565,11 +533,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 end
             end
         else d.kind == at.AST_FUNC_DEF:
-            // The other half of sema_check_shadows_func: top-level ordering
-            // puts globals before functions, so this is the direction a
-            // global/function clash actually shows up in. Without it
-            // get_or_make_func's scope_define silently loses to the global
-            // and every call site reported "call to undefined function".
             prevsym := scope_lookup_local(s, s.global, d.name)
             if prevsym != 0 && (sym_at(s, prevsym).kind == SYM_VAR || sym_at(s, prevsym).kind == SYM_CONST):
                 serr(
@@ -611,10 +574,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             gv.is_mut = d.is_mut
             gv.is_pub = d.is_pub
             gv.decl = did
-            // codegen spells a module-level global with its package baked in,
-            // so it has to know which package that was - a generic body
-            // emitted into another module reads globals through its home
-            // scope, not the module being compiled.
             gv.pkgname = s.pkg
             gv.home = s.global
             if d.kind == at.AST_CONST_DECL && d.a != 0:
@@ -637,10 +596,6 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
     s.file = save_file
 end
 
-// sema_is_builtin_type_name - a primitive (in any language spelling), or
-// `File` / `Variant`, the two intrinsic types the compiler materialises
-// itself. Vector, HashMap and MapIter are intrinsic names too, but std/
-// collections is where they are actually declared, so those stay free.
 func sema_is_builtin_type_name(name: str): bool:
     if str.Len(name) == 0:
         ret false
@@ -648,7 +603,6 @@ func sema_is_builtin_type_name(name: str): bool:
     if type_prim_kind_from_name(name, "") >= 0:
         ret true
     end
-    // Flattened with stride 3 (fa, ar, en): File is entry 3, Variant entry 4.
     mut i := 9
     until i < 15:
         if str.Equals(name, k_sm_intr_types[i]):

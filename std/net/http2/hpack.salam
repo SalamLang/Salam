@@ -16,23 +16,6 @@ package http2
 
 import compress
 
-// HPACK (RFC 7541): the header compression HTTP/2 mandates. Four pieces,
-// all here:
-//
-//   - the prefix-coded integer (section 5.1) and string literal
-//     (section 5.2, optionally Huffman-coded via hpack_huffman.salam)
-//   - the 61-entry static table (Appendix A)
-//   - the dynamic table: append at the end, index from the end, evict
-//     from the front when `name + value + 32` bytes would exceed the
-//     negotiated maximum (section 4.1)
-//   - the six wire representations (section 6), encoder and decoder
-//
-// Encoder and decoder each own a DynTable and the two must stay exactly
-// in step: HPACK is stateful across a whole connection, so a decoder
-// that mis-handles one header block corrupts every block after it. That
-// is why the decoder here treats every malformed case as a hard failure
-// (`ok = false`) rather than skipping a field and continuing.
-
 // name, value, name, value, ... for static indices 1..61 (Appendix A).
 // A value of "" means the entry indexes only a name.
 const _STATIC := [
@@ -177,8 +160,6 @@ func _dec_int(src: compress.ByteBuf, pos &: int, first: int, prefix_bits: int, o
         end
         shift += 7
         if shift > 28:
-            // A continuation this long can only be a corrupt or hostile
-            // encoding; the spec allows rejecting it outright.
             ok = false
             ret 0
         end
@@ -277,8 +258,6 @@ end
 @ar "إدراج فی الجدول"
 pub func DynInsert(t &: DynTable, h: Header):
     sz := _entry_size(h)
-    // An entry larger than the whole table empties it and is not stored
-    // - explicitly legal, and not an error (section 4.4).
     if sz > t.max_size:
         _dyn_evict_to(t, 0 - 1)
         ret
@@ -377,13 +356,11 @@ pub func EncodeHeader(out &: compress.ByteBuf, t &: DynTable, h: Header, use_huf
         ret
     end
     if h.sensitive:
-        // 0001xxxx, 4-bit name index, never indexed.
         _enc_int(out, 16, 4, idx)
         if idx == 0: _enc_string(out, h.name, use_huffman) end
         _enc_string(out, h.value, use_huffman)
         ret
     end
-    // 01xxxxxx, 6-bit name index, with incremental indexing.
     _enc_int(out, 64, 6, idx)
     if idx == 0: _enc_string(out, h.name, use_huffman) end
     _enc_string(out, h.value, use_huffman)
@@ -487,9 +464,6 @@ pub func DecodeHeaderList(t &: DynTable, block: compress.ByteBuf, ok &: bool): H
             DynSetMaxSize(t, newmax)
             continue
         end
-        // 0000xxxx (without indexing) and 0001xxxx (never indexed) share
-        // a 4-bit prefix and differ only in whether a proxy may re-index
-        // them; neither touches this endpoint's table.
         never := (b & 16) != 0
         mut iok := false
         idx := _dec_int(block, pos, b, 4, iok)

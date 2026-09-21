@@ -1,31 +1,5 @@
 package tls
 
-// Short-Weierstrass curve arithmetic over a prime field, shared by P-256 and
-// P-384 (and by anything else with a = -3 that gets added later).
-//
-// WHY GENERIC. The two NIST curves differ only in modulus, group order, limb
-// count and constants; the field and point algorithms are identical. Keeping
-// two copies of Montgomery multiplication and Jacobian point addition would
-// mean every subtle fix has to land twice, and the copy nobody is currently
-// testing is the one that rots. So the arithmetic lives here once and takes the
-// modulus, limb count and n0inv as parameters.
-//
-// REPRESENTATION. Montgomery form on 32-bit limbs, in a fixed 12-limb Fe.
-// P-256 uses the low 8 limbs and P-384 all 12; the unused high limbs of a
-// P-256 element stay zero and are simply not iterated. Montgomery CIOS is one
-// uniform loop rather than the usual Solinas fast-reduction table, which for
-// these curves is a hand-unrolled permutation of signed words -- fast, but the
-// kind of code where a transposed index yields a wrong answer that still looks
-// plausible. Both curves also make it cheap: p == -1 mod 2^32 for each, so
-// n0inv is 1 on the field side.
-//
-// CONSTANT-TIME. _jac_mul is used for ECDH, where the scalar is our secret. It
-// runs a fixed number of iterations of double-and-add-always with the addend
-// chosen by an arithmetic mask, so neither the iteration count nor the memory
-// access pattern depends on the scalar. _jac_mul_double_vartime is the
-// signature-verification path, where every input is public and variable time is
-// fine.
-
 const FE_LIMBS := 12
 
 struct Fe:
@@ -194,7 +168,6 @@ func _fe_mont_mul(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int, n0inv: u32):
         t[i] = 0 as u32
     end
     repeat nl with i:
-        // t += a[i] * b
         mut carry := 0 as u64
         ai := a.v[i] as u64
         repeat nl with j:
@@ -206,7 +179,6 @@ func _fe_mont_mul(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int, n0inv: u32):
         t[nl] = sN as u32
         t[nl + 1] = (t[nl + 1]) + ((sN >> (32 as u64)) as u32)
 
-        // t += m * ((t[0] * n0inv) mod 2^32), which clears the low limb
         u := (t[0] as u64) * (n0inv as u64)
         um := (u as u32) as u64
         carry = 0 as u64
@@ -219,7 +191,6 @@ func _fe_mont_mul(r &: Fe, a: Fe, b: Fe, m: u32[12], nl: int, n0inv: u32):
         t[nl] = sM as u32
         t[nl + 1] = (t[nl + 1]) + ((sM >> (32 as u64)) as u32)
 
-        // shift down one limb
         repeat nl + 1 with k:
             t[k] = t[k + 1]
         end
@@ -282,8 +253,6 @@ func _fe_lt(a: Fe, m: u32[12], nl: int): bool:
     ret false
 end
 
-// ---------------------------------------------------------------- bytes
-
 func _fe_from_bytes(p: void*, nb: int): Fe:
     mut r := Fe {}
     nl := nb / 4
@@ -305,8 +274,6 @@ func _fe_to_bytes(a: Fe, out: void*, nb: int):
         _bput(out, o + 3, (v & (0xFF as u32)) as int)
     end
 end
-
-// ---------------------------------------------------------------- points
 
 func _jac_infinity(cv: Curve): Jac:
     mut j := Jac {}
@@ -535,7 +502,6 @@ func _ec_point_from_bytes(cv: Curve, p: void*, n: int, out &: Jac): bool:
     mut ym := Fe {}
     _fe_to_mont(ym, ya, cv.p, cv.r2p, nl, n0)
 
-    // y^2 == x^3 - 3x + b
     mut lhs := Fe {}
     _fe_mont_mul(lhs, ym, ym, cv.p, nl, n0)
     mut x3 := Fe {}
@@ -555,8 +521,6 @@ func _ec_point_from_bytes(cv: Curve, p: void*, n: int, out &: Jac): bool:
     out.z = _fe_from(cv.one, nl)
     ret true
 end
-
-// ---------------------------------------------------------------- ECDH
 
 func _ec_base_mul(cv: Curve, scalar: void*, xout: void*, yout: void*): bool:
     k := _fe_from_bytes(scalar, cv.nb)
@@ -580,6 +544,5 @@ func _ec_ecdh(cv: Curve, scalar: void*, peer: void*, peerlen: int, out: void*): 
     mut ybuf := _newbuf(cv.nb)
     defer _buf_wipe(ybuf)
     _putzeros(ybuf, cv.nb)
-    // the ECDH output is the affine x coordinate only
     ret _jac_to_affine(cv, r, out, ybuf.p)
 end

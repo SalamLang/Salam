@@ -1,5 +1,3 @@
-# Salam books - one common XeLaTeX image that builds BOTH the English and the Persian tutorial book.
-
 FROM texlive/texlive:TL2024-historic
 
 LABEL org.opencontainers.image.title="Salam tutorial books (XeLaTeX)"

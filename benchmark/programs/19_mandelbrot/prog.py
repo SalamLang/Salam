@@ -1,5 +1,3 @@
-"""Mandelbrot escape-iteration-count benchmark."""
-
 WIDTH = 400
 HEIGHT = 400
 MAX_ITER = 100

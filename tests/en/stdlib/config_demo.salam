@@ -20,12 +20,6 @@ import os
 import io
 import fs.path
 
-// std/config is one flat, ordered key to value model with three readers
-// in front of it: INI, .env and YAML. It owns none of those formats.
-// .env goes through std/encoding/envfile and YAML through
-// std/encoding/yaml, so what is tested here is the model and the
-// flattening, not a second copy of either parser.
-
 func ini_text(): str:
     mut t := "# global settings\n"
     t = t.concat("port = 8080\n")
@@ -45,14 +39,10 @@ func test_ini():
     defer config.Free(c)
     testing.AssertEqInt(config.Len(c), 6)
     testing.AssertEqStr(config.Get(c, "port"), "8080")
-    // an inline comment is stripped, a quoted value keeps its spaces
     testing.AssertEqStr(config.Get(c, "name"), "my app")
-    // single quotes are verbatim, so a Windows path survives
     testing.AssertEqStr(config.Get(c, "path"), "C:\\tmp")
-    // a section prefixes its keys
     testing.AssertEqStr(config.Get(c, "db.host"), "localhost")
     testing.AssertEqStr(config.Get(c, "db.timeout"), "30")
-    // ';' opens an inline comment in INI, unlike .env
     testing.AssertTrue(config.Has(c, "db.debug"))
     testing.AssertFalse(config.Has(c, "missing"))
 end
@@ -63,12 +53,10 @@ func test_typed_reads():
     testing.AssertEqInt64(config.GetInt(c, "port", 0 as i64), 8080 as i64)
     testing.AssertEqInt64(config.GetInt(c, "db.timeout", 0 as i64), 30 as i64)
     testing.AssertTrue(config.GetBool(c, "db.debug", false))
-    // a missing key falls back to the supplied default, every time
     testing.AssertEqInt64(config.GetInt(c, "nope", 42 as i64), 42 as i64)
     testing.AssertEqFloat(config.GetFloat(c, "nope", 1.5), 1.5, 0.0001)
     testing.AssertFalse(config.GetBool(c, "nope", false))
     testing.AssertEqStr(config.GetOr(c, "nope", "fallback"), "fallback")
-    // and a missing key reads as empty rather than crashing
     testing.AssertEqStr(config.Get(c, "nope"), "")
 end
 
@@ -79,7 +67,6 @@ func test_mutate():
     config.Set(c, "a", "1")
     config.Set(c, "b", "2")
     config.Set(c, "a", "3")
-    // setting an existing key replaces it in place
     testing.AssertEqInt(config.Len(c), 2)
     testing.AssertEqStr(config.Get(c, "a"), "3")
     keys := config.Keys(c)
@@ -97,7 +84,6 @@ func test_section():
     defer config.Free(c)
     mut db := config.Section(c, "db")
     defer config.Free(db)
-    // a section is a config in its own right, with the prefix removed
     testing.AssertEqInt(config.Len(db), 3)
     testing.AssertEqStr(config.Get(db, "host"), "localhost")
     testing.AssertFalse(config.Has(db, "db.host"))
@@ -107,9 +93,6 @@ func test_section():
     testing.AssertEqInt(config.Len(none), 0)
 end
 
-// The layering that makes configuration usable: defaults, then the file,
-// then whatever the environment overrides. Later wins, and neither input
-// is modified.
 func test_merge():
     mut defaults := config.New()
     defer config.Free(defaults)
@@ -125,13 +108,10 @@ func test_merge():
     testing.AssertEqStr(config.Get(merged, "port"), "8080")
     testing.AssertEqStr(config.Get(merged, "debug"), "true")
     testing.AssertEqInt(config.Len(merged), 3)
-    // the sources are untouched
     testing.AssertEqStr(config.Get(defaults, "port"), "3000")
     testing.AssertEqInt(config.Len(file), 2)
 end
 
-// .env support is delegated, so what matters here is that the whole
-// format arrives intact rather than a reduced version of it.
 func test_env_format():
     mut t := "# comment\n"
     t = t.concat("export API_KEY=abc123 # inline\n")
@@ -144,13 +124,10 @@ func test_env_format():
     testing.AssertEqInt(config.Len(c), 5)
     testing.AssertEqStr(config.Get(c, "API_KEY"), "abc123")
     testing.AssertEqStr(config.Get(c, "QUOTED"), "a b")
-    // expansion against an earlier entry, which the old loop could not do
     testing.AssertEqStr(config.Get(c, "URL"), "http://localhost/api")
     testing.AssertEqStr(config.Get(c, "EMPTY"), "")
 end
 
-// Nested YAML maps flatten to dotted keys, the same shape ParseINI
-// produces for sections, so Section works on either source.
 func test_yaml_flatten():
     mut t := "app:\n"
     t = t.concat("  name: myservice\n")
@@ -178,7 +155,6 @@ func test_format_roundtrip():
     config.Set(c, "db.host", "localhost")
     ini := config.FormatINI(c)
     testing.AssertContains(ini, "port = 9090")
-    // a value with a space has to come back quoted or it would not reparse
     testing.AssertContains(ini, `name = "my app"`)
     testing.AssertContains(ini, "[db]")
     mut back := config.ParseINI(ini)
@@ -193,7 +169,6 @@ func test_format_roundtrip():
     mut envback := config.ParseEnv(env)
     defer config.Free(envback)
     testing.AssertEqStr(config.Get(envback, "name"), "my app")
-    // the shell sourceable form is the same with a prefix per line
     exported := config.FormatEnvExport(c)
     testing.AssertContains(exported, "export port=9090")
 end
@@ -217,7 +192,6 @@ func test_load_from_files():
     defer config.Free(d)
     testing.AssertEqInt64(config.GetInt(d, "server.port", 0 as i64), 9999 as i64)
 
-    // a file that is not there reads as an empty config, not a crash
     mut missing := config.LoadINI(path.Join(dir, "salam_cfg_nothing.ini"))
     defer config.Free(missing)
     testing.AssertEqInt(config.Len(missing), 0)

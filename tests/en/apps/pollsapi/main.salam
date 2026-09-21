@@ -14,34 +14,6 @@
 
 package main
 
-// A polls API: ask a question, offer some answers, count the votes.
-//
-//   POST   /auth/register        {email, password}
-//   POST   /auth/login
-//   GET    /polls                ?open=1&limit=&offset=        (public)
-//   GET    /polls/:id            question, options, tallies    (public)
-//   POST   /api/polls            {question, options:[...], closes_at?}
-//   POST   /api/polls/:id/vote   {option_id}
-//   GET    /api/polls/:id/myvote
-//   POST   /api/polls/:id/close  owner only
-//   GET    /api/polls/mine
-//   GET    /health
-//
-// WHAT THIS ONE IS ABOUT
-//
-// Two things the other examples do not do.
-//
-// 1. A REAL JSON BODY. The other APIs read flat {"title": "..."} objects,
-//    which json.Get handles. A poll arrives with an ARRAY of options, so
-//    this one parses the body properly: json.Decode gives a value.Value
-//    tree, and value.ArrayGet walks it. Note the value.ValueFree - that
-//    tree is heap-allocated and nothing collects it for you.
-//
-// 2. "ONE VOTE EACH" AS A CONSTRAINT, NOT A CHECK. The rule lives in a
-//    UNIQUE index; the API translates the resulting error into a 409. See
-//    _store.salam's header for why the obvious "check, then insert" version
-//    is wrong on a server with more than one client.
-
 import os
 import crypto
 import jwt
@@ -68,14 +40,9 @@ func guard(): jwt.Guard:
     mut g := jwt.NewGuard(secret())
     g.opts.issuer = "polls.salam"
     g.opts.require_exp = true
-    // Half a minute of tolerance on exp/nbf/iat. Not politeness: two
-    // machines never agree on the time to the second, and without it a
-    // token minted a moment ago can be refused as "issued in the future".
     g.opts.leeway = 30 as i64
     ret g
 end
-
-// ---------------------------------------------------------------- helpers
 
 func send(ctx: i64, code: int, body: str):
     http.Ctx_status(ctx, code)
@@ -92,10 +59,6 @@ func db_fail(ctx: i64, where: str, err: str):
     fail(ctx, 500, "database error")
 end
 
-// A connection for this request, or a 503 and false. Every handler that
-// touches the database starts with this and pairs it with `defer
-// store.Close(conn)` - the connection belongs to this request and to this
-// thread, and it goes away when the handler returns however it returns.
 func db(ctx: i64, c &: store.Conn): bool:
     conn := store.Connect()
     if !store.Ok(conn):
@@ -125,8 +88,6 @@ end
 func path_id(ctx: i64): i64:
     ret http.Ctx_param(ctx, "id").to_int() as i64
 end
-
-// ---------------------------------------------------------------- auth
 
 func register(ctx: i64):
     mut conn := store.Conn {}
@@ -176,8 +137,6 @@ func login(ctx: i64):
     send(ctx, 200, `{"access":`.concat(json.Str(token)).concat("}"))
 end
 
-// ---------------------------------------------------------------- polls
-
 func list_polls(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -200,7 +159,6 @@ func get_poll(ctx: i64):
     send(ctx, 200, p.json)
 end
 
-// The only handler in these examples that parses a nested JSON body.
 func create_poll(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -209,8 +167,6 @@ func create_poll(ctx: i64):
     if uid == 0 as i64: ret end
     mut perr := encerr.NoError()
     body := json.Decode(http.Ctx_body(ctx), perr)
-    // ValueFree releases the whole tree. Every early return below has to go
-    // through it, which is what `defer` is for.
     defer value.ValueFree(body)
     if encerr.IsError(perr) || !value.IsObject(body):
         fail(ctx, 400, "body must be a JSON object")
@@ -243,7 +199,6 @@ func text_field(obj: value.Value, key: str): str:
     ret value.AsString(v)
 end
 
-// Pull ["a", "b", ...] out of the body and validate it in one pass.
 func read_options(body: value.Value, labels &: Vector<str>): bool:
     if !value.ObjectHas(body, "options"): ret false end
     arr := value.ObjectGet(body, "options")
@@ -292,8 +247,6 @@ func close_poll(ctx: i64):
     send(ctx, 200, store.GetPoll(conn, p.id).json)
 end
 
-// ---------------------------------------------------------------- voting
-
 func vote(ctx: i64):
     mut conn := store.Conn {}
     if !db(ctx, conn): ret end
@@ -317,9 +270,6 @@ func vote(ctx: i64):
     end
     reason := store.Vote(conn, poll_id, option_id, uid)
     if reason == "already_voted":
-        // A second ballot is a 409, and the message says where to go next.
-        // Silently overwriting the first vote would be the wrong default:
-        // changing a vote should be a decision, not an accident.
         send(ctx, 409, `{"error":"you have already voted in this poll","hint":"PATCH the same route to change your vote"}`)
         ret
     end
@@ -381,12 +331,6 @@ func health(ctx: i64):
 end
 
 func main:
-    // Reads the settings, initialises the client library, and proves the
-    // credentials work by opening one connection and closing it again. After
-    // this returns, no connection is held: each request makes its own.
-    //
-    // The library init has to happen here, on the main thread, before any
-    // request thread exists - see _store.salam's header.
     mut err := ""
     if !store.Configure(err):
         println "cannot reach the database: ", err

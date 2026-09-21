@@ -1,0 +1,149 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import io
+import str
+import fmt
+import regex
+
+const DECL_PAT := "^declare[^@\n]*?([a-zA-Z0-9_.]+|\\{[^}]*\\})\\s+@([A-Za-z0-9_.$]+)\\(([^)]*)\\)"
+const CALL_PAT := "=\\s*call\\s+([a-zA-Z0-9_.]+)\\s+@([A-Za-z0-9_.$]+)\\(([^)]*)\\)"
+const VOID_CALL_PAT := "^\\s*call\\s+([a-zA-Z0-9_.]+)\\s+@([A-Za-z0-9_.$]+)\\(([^)]*)\\)"
+
+const MAX_PER_LINE := 64
+
+struct Bad:
+    pub name: str = ""
+    pub where: str = ""
+    pub declared: str = ""
+    pub called: str = ""
+end
+
+func head_token(s: str): str:
+    t := str.Trim(s)
+    sp := t.find(" ")
+    if sp < 0: ret t end
+    ret t.substr(0, sp)
+end
+
+func type_list(params: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each p in str.Split(params, ","):
+        if str.Trim(p).len() == 0: continue end
+        out.push(head_token(p))
+    end
+    ret out
+end
+
+func scan_decls(lines &: Vector<str>, ret_of &: HashMap<str, str>, params_of &: HashMap<str, str>):
+    re := regex.Compile(DECL_PAT)
+    each line in lines:
+        m := regex.FindMatch(re, line)
+        if regex.GroupOk(m, 2) == false: continue end
+        params := regex.Group(m, 3)
+        if str.Contains(params, "..."): continue end
+        name := regex.Group(m, 2)
+        ret_of.put(name, regex.Group(m, 1))
+        params_of.put(name, str.Join(type_list(params), ","))
+    end
+end
+
+func collect(
+    pattern: str,
+    lines &: Vector<str>,
+    ret_of &: HashMap<str, str>,
+    params_of &: HashMap<str, str>,
+    bad &: Vector<Bad>
+):
+    re := regex.Compile(pattern)
+    each line in lines:
+        each m in regex.FindAllMatches(re, line, MAX_PER_LINE):
+            name := regex.Group(m, 2)
+            if ret_of.has(name) == false: continue end
+            rt := regex.Group(m, 1)
+            dret := ret_of.get(name)
+            if rt != dret:
+                bad.push(Bad { name = name, where = "return", declared = dret, called = rt })
+                continue
+            end
+            at := type_list(regex.Group(m, 3))
+            mut dps := Vector {} as Vector<str>
+            if params_of.get(name).len() > 0:
+                dps = str.Split(params_of.get(name), ",")
+            end
+            if at.len() != dps.len(): continue end
+            mut i := 0
+            until i < dps.len():
+                if dps.get(i) != at.get(i):
+                    bad.push(Bad {
+                        name = name,
+                        where = "arg" + str.FromInt(i as i64),
+                        declared = dps.get(i),
+                        called = at.get(i)
+                    })
+                end
+                i += 1
+            end
+        end
+    end
+end
+
+func usage():
+    println "usage: salam run tools/salam/abicheck.salam <file.ll>"
+    println ""
+    println "  Flags every call in an LLVM IR file whose return type or argument"
+    println "  types disagree with the matching declare. Exits 1 when any do."
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 2:
+        usage()
+        os.Exit(1)
+    end
+    path := args.get(1)
+    if os.Exists(path) == false:
+        io.EPrintln("abicheck: no such file: " + path)
+        os.Exit(1)
+    end
+
+    mut lines := str.Split(os.ReadFile(path), "\n")
+    mut ret_of := HashMap {} as HashMap<str, str>
+    mut params_of := HashMap {} as HashMap<str, str>
+    scan_decls(lines, ret_of, params_of)
+
+    mut bad := Vector {} as Vector<Bad>
+    collect(CALL_PAT, lines, ret_of, params_of, bad)
+    collect(VOID_CALL_PAT, lines, ret_of, params_of, bad)
+
+    mut seen := Set {} as Set<str>
+    mut found := 0
+    each b in bad:
+        key := b.name + "|" + b.where + "|" + b.declared + "|" + b.called
+        if seen.has(key): continue end
+        seen.add(key)
+        found += 1
+        println "  " + fmt.PadRight(b.name, 14) + " " + fmt.PadRight(b.where, 7) +
+            " declared " + fmt.PadRight(b.declared, 6) + " called " + b.called
+    end
+
+    if found > 0:
+        os.Exit(1)
+    end
+    ret 0
+end

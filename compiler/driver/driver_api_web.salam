@@ -18,8 +18,6 @@ import sm "../semantic/semantic.salam"
 import co "../sal_core.salam"
 import lo "../sal_layout/sal_layout.salam"
 
-    // driver_js (driver/js_build.c) - js_build_bundle over opt.inputs, then
-    // write the bundle (or an HTML-embedded page when --output is *.html/.htm).
     pub func Js(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         mut module := ""
@@ -52,12 +50,6 @@ import lo "../sal_layout/sal_layout.salam"
         ret 0
     end
 
-    // driver_layout_build (driver/layout_build.c) - each input: lex/parse/
-    // prune -> lo.Expand -> sm.Run -> lo.FindLayout -> lo.Generate; then write
-    // each module's HTML(+CSS+JS), sharing a merged style.css/script.js when
-    // multiple inputs are given (matching the C's `multi` branch). No input
-    // (or a directory) resolves the project's layout entry below, same as
-    // the C's driver_layout_build.
     pub func LayoutBuild(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         pack := lp.Load(opt.lang)
@@ -67,15 +59,6 @@ import lo "../sal_layout/sal_layout.salam"
             )
             ret 2
         end
-        // `salam layout build` with no input (or a directory): the fixed
-        // project entry file salam.salam wins when present; otherwise
-        // every .salam file here with a `layout` block is built (a
-        // multi-page site).
-        // PORT-NOTE: `resolved` is declared here, at function scope, the
-        // same hoist Run()/Exec() use. It dates from when defers were
-        // replayed at function exit and a block-local one would not
-        // compile; defers are block-scoped now, so this is style, not a
-        // requirement.
         mut resolved := Vector {} as Vector<str>
         defer resolved.free()
         if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0))):
@@ -96,8 +79,6 @@ import lo "../sal_layout/sal_layout.salam"
             end
         end
         sm.SetStdlibRoot(opt.stdlib_path)
-        // driver_main calls `layout_schema_init(salam_get_stdlib_root())` - the
-        // RESOLVED root (see the fuller PORT-NOTE on Web()/Llvm() below).
         sm.LayoutSchemaInit(sm.GetStdlibRoot())
 
         multi := opt.inputs.len() > 1
@@ -245,18 +226,6 @@ import lo "../sal_layout/sal_layout.salam"
         ret rc
     end
 
-    // driver_web (driver/web_build.c) - NOTE this is a DIFFERENT "web" than
-    // salam/sal_web.salam (that ports web_api.c, the emscripten/wasm playground
-    // API, confirmed unreachable from any native CLI path by that module's own
-    // notes). THIS Web(), CMD_WEB, IS reachable: driver.c's command switch
-    // dispatches `case CMD_WEB: ... return driver_web(&opt);` for the real
-    // `salam web <file.salam>` CLI command - a single page combining a
-    // `layout:` block with its <script src="*.salam"> page scripts, each
-    // compiled via the same js_build_bundle() Js() uses. If the file has no
-    // layout block at all, the C falls back to driver_js verbatim; ported the
-    // same way here (falls back to this module's own Js()). No input (or a
-    // directory) resolves the project's layout entry below - a single page
-    // is demanded - same as the C's driver_web.
     pub func Web(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         pack := lp.Load(opt.lang)
@@ -266,14 +235,6 @@ import lo "../sal_layout/sal_layout.salam"
             )
             ret 2
         end
-        // `salam web` with no input (or a directory): the fixed project
-        // entry file salam.salam wins when present; otherwise exactly one
-        // .salam file with a `layout` block is expected here.
-        // PORT-NOTE: `resolved` is declared here, at function scope, the
-        // same hoist Run()/Exec() use. It dates from when defers were
-        // replayed at function exit and a block-local one would not
-        // compile; defers are block-scoped now, so this is style, not a
-        // requirement.
         mut resolved := Vector {} as Vector<str>
         defer resolved.free()
         if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0))):
@@ -293,20 +254,6 @@ import lo "../sal_layout/sal_layout.salam"
         end
         path := opt.inputs.get(0)
         sm.SetStdlibRoot(opt.stdlib_path)
-        // PORT-NOTE: the C's layout_schema_init() is called exactly ONCE in
-        // driver_main (driver.c), before its command switch, for every command
-        // - not per sub-driver-function. Since the cli/main wave that owns
-        // driver_main isn't ported yet, this pub function (like LayoutBuild()
-        // above) calls it itself so it behaves correctly when called directly.
-        // It's called as `layout_schema_init(salam_get_stdlib_root())` in the
-        // C - the RESOLVED root, not opt->stdlib_path directly: an empty
-        // stdlib_path (the common case before the cli wave sets it from
-        // --stdlib/$SALAM_STD) makes layout_schema_init look for a literal
-        // "std/layout" relative to the CURRENT DIRECTORY instead of falling
-        // back to the resolved default/env var, silently loading zero schema
-        // files - every element then renders as an unrecognized `<div>` with a
-        // W002 warning instead of its real tag. sm.GetStdlibRoot() is the same
-        // resolve-with-fallback accessor salam_get_stdlib_root() is.
         sm.LayoutSchemaInit(sm.GetStdlibRoot())
         mut sf := src.New()
         if !src.Load(path, sf):
@@ -438,26 +385,6 @@ import lo "../sal_layout/sal_layout.salam"
         ret rc
     end
 
-    // Not from any C driver/*.c file: `salam serve [dir]`, the Salam
-    // equivalent of `python -m http.server` / `php -S`. Rather than
-    // reimplementing sockets/HTTP here, this generates a tiny Salam program
-    // that wires up the real std/net router (router.Static +
-    // router.EnableListing, whose serving side owns the actual
-    // path-traversal safety and directory-listing logic - see
-    // std/net/http/ctx_internal.salam's _safe_static_path/_dir_listing_html)
-    // and runs it exactly like Run() above does for `salam run` - one
-    // implementation of "serve files safely over HTTP", shared with the C
-    // driver's own driver/serve_build.c (which takes the same
-    // generate-and-build approach, for the same reason: std/net/http's
-    // thread-per-connection model needs a real compiled binary, not the
-    // tree-walking interpreter).
-    //
-    // The generated program must stay in sync with the std/net API it
-    // calls: these are ordinary package functions resolved at compile
-    // time, so a rename there turns into an E012 "package has no exported
-    // function" at `salam serve` time, not a build-time error here.
-    // tests/en/general/serve_template.salam compiles this exact program
-    // shape as a guard.
     pub func Serve(opt &: Dr): int:
         mut dir := opt.input
         if str.Len(dir) == 0:
@@ -502,7 +429,3 @@ import lo "../sal_layout/sal_layout.salam"
         _rm := os.Remove(salam_path)
         ret rc
     end
-
-    // ===== driver/embed_sysroot.c (stage 8b, NEW - see the private section's
-    // header note: source fidelity only, unreachable without SALAM_HAVE_LLVM
-    // like sal_web.salam's web_api.c port) =====

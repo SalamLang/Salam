@@ -1,5 +1,3 @@
-"""coin_change_dp benchmark"""
-
 AMOUNT = 100000
 MOD = 1000000007
 coins = [1, 5, 10, 25, 50, 100]

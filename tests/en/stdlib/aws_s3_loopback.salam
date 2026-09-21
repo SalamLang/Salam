@@ -12,24 +12,6 @@
  *
  */
 
-// std/aws driven against a mock object store over a real socket.
-//
-// aws_demo.salam checks the signing and parsing in isolation, where the inputs
-// are fixed strings. This checks the part that cannot be tested that way: the
-// request that actually goes out, the answer that actually comes back, and
-// whether the two agree.
-//
-// The mock does not merely accept what it is sent. It re-derives every
-// signature from the bytes on the wire - re-reading the signed header list,
-// rebuilding the canonical request from the received headers, rehashing the
-// received body, and recomputing the HMAC - and answers 403 when its result
-// differs. So a test that passes is a test where an independent reader of the
-// request agreed with the client about what the request was, which is the only
-// property that matters against a real service.
-//
-// It also covers what a `str` body cannot carry: an object with NUL bytes in
-// it, round-tripped and compared byte for byte.
-
 import aws
 import mem
 import str
@@ -44,8 +26,6 @@ const ACCESS_KEY := "AKIAIOSFODNN7EXAMPLE"
 const SECRET_KEY := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 mut wg := sync.NewWaitGroup()
-
-// ---- small helpers ----
 
 func at(p: void*, off: int): void*:
     ret ((p as i64) + (off as i64)) as void*
@@ -72,8 +52,6 @@ func hexval(c: int): int:
     ret 0 - 1
 end
 
-// pct_decode - the mock's own decoder, deliberately not the package's: a test
-// that decodes with the code under test proves nothing about the encoding.
 func pct_decode(s: str): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -96,7 +74,6 @@ func pct_decode(s: str): str:
     ret str.BufStr(sb)
 end
 
-// hdr_get - one header of a request, case-insensitively.
 func hdr_get(head: str, name: str): str:
     lower := head.lower()
     needle := "\r\n" + name.lower() + ":"
@@ -108,7 +85,6 @@ func hdr_get(head: str, name: str): str:
     ret head.substr(start, stop - start).trim()
 end
 
-// field - one space-separated field of the request line.
 func field(head: str, which: int): str:
     mut start := 0
     mut n := 0
@@ -144,7 +120,6 @@ func path_of(target: str): str:
     ret target.substr(0, a)
 end
 
-// param - one value out of a query string, decoded.
 func param(query: str, name: str): str:
     mut pos := 0
     until pos < query.len():
@@ -160,8 +135,6 @@ func param(query: str, name: str): str:
     ret ""
 end
 
-// ---- signature verification ----
-
 func mock_config(): aws.Config:
     ret aws.Config {
         endpoint = "http://127.0.0.1:19844",
@@ -174,10 +147,6 @@ func mock_config(): aws.Config:
     }
 end
 
-// canon_headers - the block the client claims to have signed, rebuilt from the
-// headers that actually arrived. A header that was signed and not sent, or
-// sent with a different value, produces a different block and therefore a
-// different signature.
 func canon_headers(head: str, signed: str, ok &: bool): str:
     mut block := ""
     mut pos := 0
@@ -196,7 +165,6 @@ func canon_headers(head: str, signed: str, ok &: bool): str:
     ret block
 end
 
-// verify - "" when the request signs to what it claims, a reason otherwise.
 func verify(head: str, body: void*, blen: int): str:
     auth := hdr_get(head, "Authorization")
     if auth.len() == 0: ret "no Authorization header" end
@@ -232,8 +200,6 @@ func verify(head: str, body: void*, blen: int): str:
     ret ""
 end
 
-// ---- the store ----
-
 func store_find(keys &: Vector<str>, key: str): int:
     mut i := 0
     until i < keys.len():
@@ -262,8 +228,6 @@ func store_put(keys &: Vector<str>, blobs &: Vector<i64>, sizes &: Vector<int>,
     kinds.push(kind)
 end
 
-// ---- responses ----
-
 func reason(status: int): str:
     if status == 200: ret "OK" end
     if status == 204: ret "No Content" end
@@ -291,8 +255,6 @@ func respond_error(c: tcp.Conn, status: int, code: str, message: str):
         "</Code><Message>" + message + "</Message></Error>")
 end
 
-// listing - a ListBucketResult over the stored keys, url-encoded the way S3
-// encodes one when asked to.
 func listing(keys &: Vector<str>, sizes &: Vector<int>, prefix: str,
     delim: str): str:
     mut sb := str.NewBuilder()
@@ -344,7 +306,6 @@ func listing(keys &: Vector<str>, sizes &: Vector<int>, prefix: str,
     ret str.BufStr(sb)
 end
 
-// range_of - the start and length a Range header asks for, clamped.
 func range_of(spec: str, total: int, start &: int): int:
     start = 0
     if !str.StartsWith(spec, "bytes="): ret total end
@@ -369,8 +330,6 @@ func range_of(spec: str, total: int, start &: int): int:
     if stop >= total: stop = total - 1 end
     ret stop - start + 1
 end
-
-// ---- the mock server ----
 
 func read_request(c: tcp.Conn, head &: str, body &: void*, blen &: int): bool:
     buf := mem.Allocate(READ_CAP as u64)
@@ -444,9 +403,6 @@ func serve():
                 if why.len() > 0:
                     respond_error(c, 403, "SignatureDoesNotMatch", why)
                 else key == "__huge":
-                    // An eight-gigabyte object, answered without one. Its
-                    // Content-Length does not fit in 32 bits, and at exactly
-                    // 8 GB a 32-bit reader reports no size at all.
                     tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 8589934592" +
                         "\r\nETag: \"huge\"\r\nConnection: close\r\n\r\n")
                 else key == "__stop":
@@ -508,8 +464,6 @@ func serve():
     tcp.CloseServer(srv)
 end
 
-// ---- the client side ----
-
 func say(label: str, ok: bool):
     print label
     if ok: println ": ok" else: println ": FAIL" end
@@ -525,9 +479,6 @@ func say_why(label: str, ok: bool, detail: str):
     end
 end
 
-// The server's Bind() is not guaranteed to have been reached by the time this
-// thread sends its first request, the same startup race net_proxy.salam
-// documents. A failed connect never reaches the server, so retrying is safe.
 func put_with_retry(cfg: aws.Config, key: str, body: str, kind: str): aws.Result:
     mut attempt := 0
     mut res := aws.Result {}
@@ -575,8 +526,6 @@ func binary_objects(cfg: aws.Config):
             if gp[i] != bp[i]: same = false end
         end
     end
-    // A str body would have stopped at the first zero byte, which this object
-    // has at index 0 and every 256 bytes after it.
     say("bytes survive the round trip", same)
     aws.FreeBytes(got)
     mut piece := aws.S3GetRange(cfg, "blobs/raw.bin", 10 as i64, 19 as i64)
@@ -621,8 +570,6 @@ func listings(cfg: aws.Config):
     say("delimiter separates objects", aws.ListCount(folder) == 2)
     say("delimiter collects folders", aws.ListPrefixCount(folder) == 2)
     aws.ListFree(folder)
-    // A key with a space, a plus and an ampersand survives being encoded into
-    // a path, signed, listed, encoded again and decoded back.
     mut odd := aws.S3ListAll(cfg, "tree/odd/")
     say("awkward key round trips",
         aws.ListCount(odd) == 1 && aws.ListAt(odd, 0).key == "tree/odd/a b+c&d.txt")
@@ -631,10 +578,6 @@ func listings(cfg: aws.Config):
         aws.S3Get(cfg, "tree/odd/a b+c&d.txt").body == "awkward")
 end
 
-// An object larger than 2 GB is ordinary in an object store, and its size
-// arrives as a Content-Length that a 32-bit reader mangles. S3DownloadFile
-// drives its range loop off this number, so getting it wrong writes a
-// truncated file rather than reporting an error.
 func large_objects(cfg: aws.Config):
     info := aws.S3Stat(cfg, "__huge")
     say("head of a huge object", info.ok)
@@ -648,8 +591,6 @@ func removal(cfg: aws.Config):
     say("delete removes it", !aws.S3Exists(cfg, "gone/x.txt"))
 end
 
-// A request whose signature does not match must be refused, and this proves
-// the mock is actually checking rather than waving requests through.
 func tampering(cfg: aws.Config):
     mut wrong := cfg
     wrong.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEZ"

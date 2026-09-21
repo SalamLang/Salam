@@ -6,8 +6,6 @@ import tok "../token.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ll_emit_lambda - the lambda frame (stage A); the body comes from stage
-// B's lv_block_top like ll_function.
 func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     if str.Len(node.name) > 0:
@@ -42,9 +40,6 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     saved_tmp := v.tmp
     saved_lbl := v.lbl
     saved_nloop := v.nloop
-    // Same reasoning as the function emitter: a lambda body is
-    // emitted nested inside whatever was being lowered, so the outer
-    // loops' live break/continue targets must survive it.
     mut saved_dmk2 := Vector {} as Vector<int>
     mut saved_brk2 := Vector {} as Vector<str>
     mut saved_cont2 := Vector {} as Vector<str>
@@ -168,16 +163,6 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.match_merge_block = saved_mmerge
 end
 
-// ll_fp_text - a decimal floating constant LLVM's .ll parser will accept.
-//
-// It requires a '.' in every decimal FP literal, and printf's %g drops the
-// point whenever the value is exactly integral - including in exponent form
-// for large magnitudes, where "1e+308" then lexes as an integer with a stray
-// exponent and the module fails to parse ("integer constant must have
-// integer type"). Put the point back, before the exponent when there is one.
-//
-// inf/nan text is left alone: those are not decimal literals and splicing a
-// point into them would only make things worse.
 func fp_text(vtext: str): str:
     if str.Len(vtext) == 0:
         ret "0.0"
@@ -197,7 +182,6 @@ func fp_text(vtext: str): str:
     ret mant + ".0" + expo
 end
 
-// ll_const_fpfix
 func const_fpfix(lety: str, vtext: str): str:
     if str.Equals(lety, "double") || str.Equals(lety, "float"):
         ret fp_text(vtext)
@@ -205,7 +189,6 @@ func const_fpfix(lety: str, vtext: str): str:
     ret vtext
 end
 
-// ll_const_value - true when `n` folds to a global-initializer constant.
 func const_value(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str
 ): bool:
@@ -230,7 +213,6 @@ func const_value(
     ret false
 end
 
-// ll_const_agg
 func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
     node := at.Get(a, n)
     if node.kind == at.AST_ARRAY_LIT:
@@ -333,15 +315,8 @@ func const_agg(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, out2 &: str): bool:
     ret false
 end
 
-// ll_emit_globals
 func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     mut any := false
-    // Every global carries the package it was declared in. The LLVM backend
-    // puts the whole program in one module, so without that the second package
-    // to declare a `COLS` was skipped as "already emitted" and both packages
-    // then read the first one's storage - the same collision the C backend
-    // reported as a duplicate definition at link time, except here it linked
-    // and quietly returned the wrong value.
     mut gpkg := pkg_of_scope(s, v.pkg_scope)
     if str.Len(gpkg) == 0:
         gpkg = "main"
@@ -351,19 +326,9 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
         d := at.Child(a, program, i)
         dn := at.Get(a, d)
         mut skip := dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL
-        // Idempotent: emitting the same global twice would produce a
-        // duplicate definition in the module. This lets the function be
-        // called again for a package whose globals may or may not have been
-        // emitted already, which lv_addr_of relies on.
         if !skip && global_find_in(v, gpkg, dn.name) >= 0:
             skip = true
         end
-        // An extern *variable* - POSIX `environ`, which std/os/process
-        // declares in its non-Windows branch. emit_externs_in only handles
-        // SYM_FUNC and this loop used to skip is_extern outright, so nothing
-        // emitted these at all and every reference became "address of an
-        // unknown identifier 'environ'". Declared under its real C name,
-        // never the @g. prefix: the system linker is what resolves it.
         if !skip && dn.is_extern:
             ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
             eref := "@" + dn.name
@@ -372,7 +337,6 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
             ev.name = dn.name
             ev.ptr = eref
             ev.ts = ets
-            // No package: it is the one object everyone links against.
             ev.pkg = ""
             ev.init = 0
             v.globals.push(ev)
@@ -397,9 +361,6 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
                 init = zero_of(s, ts)
                 if dn.a != 0:
                     gv.init = dn.a
-                    // The index of the entry pushed just below, not a name to
-                    // look back up: two packages can have a global of the same
-                    // name and the lookup would pick one of them at random.
                     v.gdefer.push(v.globals.len())
                 end
             end
@@ -414,11 +375,6 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     end
 end
 
-// ll_extern_seen - .len(), never a literal: the C side bounds its prologue[]
-// with sizeof, so a name added there and mirrored into
-// k_lv_prologue_externs used to land past a hardcoded count. The guard then
-// missed it, the program's own `extern` redeclared what emit_prologue had
-// already declared, and LLVM rejected the whole module as a redefinition.
 func extern_seen(v &: Lv, name: str): bool:
     repeat k_lv_prologue_externs.len() with p:
         if str.Equals(name, k_lv_prologue_externs[p]):
@@ -433,18 +389,7 @@ func extern_seen(v &: Lv, name: str): bool:
     ret false
 end
 
-// A function of this name that some package declares *with* a body, if
-// any; -1 when none does. A bodyless `extern:` re-declaration is how one
-// package calls another's runtime entry point - std/collections redeclares
-// `noret func salam_panic(msg: str)` so its bounds checks can call it,
-// while the real body lives in std/core. Both are SYM_FUNCs of the same
-// name, and which one a given emission order reached first decided whether
-// the module got a definition or only a declaration.
 func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
-    // The entry module is not a package, so a runtime entry point defined
-    // there - a program supplying its own salam_rt_write, or its own
-    // freestanding libc - was invisible here, and the bodyless declaration
-    // that stood in for it collided with the definition.
     gs := sm.LookupLocal(s, s.global, name)
     if gs != 0 && sm.SymAt(s, gs).kind == sm.SYM_FUNC:
         gov := sm.SymAt(s, gs).overloads
@@ -480,14 +425,6 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
             sgid := ov.get(o)
             o += 1
             d := sm.SigAt(s, sgid).decl
-            // `is_extern` too, not just "has a body": the point of this
-            // lookup is to find the definition that emits the *unmangled*
-            // @name the bodyless declaration would otherwise stand in for,
-            // and only `extern:`-block functions get that name. An ordinary
-            // same-named function is a different symbol entirely - std/net's
-            // `send(method, url, headers, body)` shadowed the libc `send`
-            // every socket write calls, so nothing declared @send and no
-            // server program could be built.
             if d != 0 && at.Get(a, d).a != 0 && at.Get(a, d).is_extern:
                 owner = pk
                 ret sgid
@@ -497,15 +434,6 @@ func body_sig_for(s &: sm.Sema, a &: at.Ast, name: str, owner &: int): int:
     ret 0 - 1
 end
 
-// StdcallCc - " x86_stdcallcc" for an extern that is a Win32 API on a
-// 32-bit Windows target, "" otherwise. See k_lv_win32_stdcall in
-// llvmgen.salam for why this is a table and how it was checked.
-//
-// Both the `declare` and every call site have to carry it: the convention
-// decides who pops the arguments, and disagreeing on that is what left the
-// i686 stack eight bytes out after the first Win32 call. Emitting it also
-// makes LLVM's mangler append the @N byte count, which is the decoration
-// kernel32's import library exports the function under.
 func StdcallCc(v &: Lv, name: str): str:
     if !target_is_windows_of(v.triple) || target_ptr_bits_of(v.triple) != 32:
         ret ""
@@ -518,15 +446,6 @@ func StdcallCc(v &: Lv, name: str): str:
     ret ""
 end
 
-// ll_declare_extern - one bodyless `extern func` -> one `declare` line,
-// de-duplicated against everything already declared or defined.
-//
-// Split out of emit_externs_in so emit_function can reach it too: that scope
-// walk only ever runs over the global scope and over packages touch_pkg has
-// visited, but a call can reach an extern in a package nothing touched -
-// std/fs' `fopen`, std/net's `send` - and then the module referenced @fopen
-// with no declaration anywhere ("use of undefined value '@fopen'", which
-// every program doing file or socket I/O hit).
 func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
     sg := sm.SigAt(s, sigid)
     if sg.decl == 0 || extern_seen(v, name):
@@ -537,11 +456,6 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
             ret
         end
     end
-    // Emit the body instead of a declaration whenever one exists, so the
-    // outcome no longer depends on which package is walked first. Without
-    // this, `salam_panic` was declared (from collections) and never defined
-    // (from core) in any program where collections was reached first - every
-    // Vector bounds check then failed to link.
     mut bowner := 0
     bsig := body_sig_for(s, a, name, bowner)
     if bsig >= 0:
@@ -579,7 +493,6 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
     co.SbFree(b)
 end
 
-// ll_emit_externs_in
 func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
@@ -605,12 +518,10 @@ func emit_externs_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     end
 end
 
-// ll_emit_externs
 func emit_externs(v &: Lv, s &: sm.Sema, a &: at.Ast):
     emit_externs_in(v, s, a, s.global)
 end
 
-// ll_touch_pkg - emit a package's struct types/externs/globals/impls once.
 func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
     if pk == 0:
         ret
@@ -639,7 +550,6 @@ func touch_pkg(v &: Lv, s &: sm.Sema, a &: at.Ast, pk: int):
     v.pkg_scope = saved
 end
 
-// ll_touch_pkg_named
 func touch_pkg_named(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
     if str.Len(pkgname) == 0:
         ret
@@ -653,7 +563,6 @@ func touch_pkg_named(v &: Lv, s &: sm.Sema, a &: at.Ast, pkgname: str):
     end
 end
 
-// ll_emit_global_inits - runs at the top of main().
 func emit_global_inits(v &: Lv, s &: sm.Sema, a &: at.Ast):
     repeat v.gdefer.len() with i:
         gi := v.gdefer.get(i)

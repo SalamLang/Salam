@@ -12,36 +12,15 @@
  *
  */
 
-// ===== core/sal_path.c =====
-//
-// One place that knows what a path separator is.
-//
-// Both '/' (47) and '\' (92) are separators, on every platform. Windows
-// accepts either in every path it is handed, and a user on Windows types,
-// pastes and gets back backslashes: %PATH% entries, drag-and-dropped
-// filenames and tab-completed directories all arrive that way. Meanwhile
-// everything the compiler builds itself joins with '/', so a path that mixes
-// the two ("C:\gcc\bin/gcc.exe") is the normal case, not an odd one, and
-// anything that scans for only one of the two silently gets the wrong answer
-// on half of them.
-//
-// Treating '\' as a separator on POSIX too - where it is a legal filename
-// character - is deliberate: the compiler's own path handling then behaves
-// identically on every host, which is what keeps this backend and the C one
-// emitting byte-identical output for the same sources.
-//
-// '/' is the canonical form. Everything produced here is slash-only, so
-// paths used as dedup keys ("did I already load this module?") compare equal
-// no matter which spelling they came in as.
 package salpath
 
 import str
 import co "sal_core.salam"
 
-const K_PATH_SEP := 47      // '/'
-const K_PATH_BACKSEP := 92  // '\'
-const K_PATH_DOT := 46      // '.'
-const K_PATH_COLON := 58    // ':'
+const K_PATH_SEP := 47
+const K_PATH_BACKSEP := 92
+const K_PATH_DOT := 46
+const K_PATH_COLON := 58
 
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
@@ -49,8 +28,6 @@ func is_sep(b: int): bool:
     ret b == K_PATH_SEP || b == K_PATH_BACKSEP
 end
 
-// "a//b" -> "a/b". Starts at index 2 so a leading "//" survives: on Windows
-// that is a UNC root ("//server/share"), where the doubling is the syntax.
 func collapse_double_sep(p: str): str:
     if str.Len(p) < 3:
         ret p
@@ -67,10 +44,6 @@ func collapse_double_sep(p: str): str:
     ret q
 end
 
-// Index just past the last character `dir` keeps once its trailing
-// separators are dropped. "/" and "c:/" are roots: the separator is the
-// whole path, not a trailing one, and dropping it would turn them into ""
-// and "c:".
 func trimmed_len(dir: str): int:
     mut n := str.Len(dir)
     until n > 1 && is_sep(byte_at(dir, n - 1)) && !(n == 3 && byte_at(dir, 1) == K_PATH_COLON):
@@ -79,15 +52,6 @@ func trimmed_len(dir: str): int:
     ret n
 end
 
-// Append p[lo:hi) to `sb` with '\' rewritten to '/'.
-//
-// Building the answer straight into the caller's buffer is what keeps
-// PathJoin/PathDir down to the single allocation they return. Composing
-// PathToSlash(PathTrimSep(dir)) instead reads better but allocates an
-// intermediate string per call and drops it, and Salam has no arena behind
-// those temporaries: on a `salam inspect` of one file the std-package scan
-// joins paths thousands of times, and every intermediate stayed live until
-// the process exited.
 func buf_append_slashed(sb &: str.StringBuilder, p: str, lo: int, hi: int):
     mut i := lo
     until i < hi:
@@ -101,7 +65,6 @@ func buf_append_slashed(sb &: str.StringBuilder, p: str, lo: int, hi: int):
     end
 end
 
-// The slash-canonical p[lo:hi) as a fresh string.
 func slashed_range(p: str, lo: int, hi: int): str:
     mut sb := str.NewBuilder()
     buf_append_slashed(sb, p, lo, hi)
@@ -110,7 +73,6 @@ func slashed_range(p: str, lo: int, hi: int): str:
     ret out
 end
 
-// Offset of the last separator, or -1 when the path has none.
 func last_sep(p: str): int:
     mut cut := 0 - 1
     repeat str.Len(p) with i:
@@ -125,7 +87,6 @@ pub func PathIsSep(b: int): bool:
     ret is_sep(b)
 end
 
-// True for "/x", "\x", "c:/x", "c:\x".
 pub func PathIsAbs(p: str): bool:
     n := str.Len(p)
     if n == 0:
@@ -143,7 +104,6 @@ pub func PathIsAbs(p: str): bool:
     ret false
 end
 
-// '\' -> '/'.
 pub func PathToSlash(p: str): str:
     if !str.Contains(p, "\\"):
         ret p
@@ -162,12 +122,10 @@ pub func PathToSlash(p: str): str:
     ret out
 end
 
-// Drop trailing separators, keeping a root ("/", "c:/") intact.
 pub func PathTrimSep(p: str): str:
     ret str.Substr(p, 0, trimmed_len(p))
 end
 
-// The component after the last separator.
 pub func PathBase(p: str): str:
     cut := last_sep(p)
     if cut < 0:
@@ -176,7 +134,6 @@ pub func PathBase(p: str): str:
     ret str.Substr(p, cut + 1, str.Len(p) - cut - 1)
 end
 
-// Basename with its last extension removed.
 pub func PathStem(p: str): str:
     b := PathBase(p)
     dot := str.LastIndex(b, ".")
@@ -186,7 +143,6 @@ pub func PathStem(p: str): str:
     ret b
 end
 
-// Everything before the last separator; "" when there is none.
 pub func PathDir(p: str): str:
     cut := last_sep(p)
     if cut < 0:
@@ -195,13 +151,8 @@ pub func PathDir(p: str): str:
     ret slashed_range(p, 0, cut)
 end
 
-// dir + "/" + name, with exactly one separator between them and no trailing
-// one, slash-canonical throughout. An empty dir yields name alone.
 pub func PathJoin(dir: str, name0: str): str:
     n := str.Len(name0)
-    // A leading separator on `name` would double up against the one added
-    // here; the caller means "under dir", not "at the root". Skipped by
-    // offset rather than by re-slicing, which allocated once per separator.
     mut off := 0
     until off < n && is_sep(byte_at(name0, off)):
         off += 1
@@ -212,8 +163,6 @@ pub func PathJoin(dir: str, name0: str): str:
     dn := trimmed_len(dir)
     mut sb := str.NewBuilder()
     buf_append_slashed(sb, dir, 0, dn)
-    // Nothing to separate when the name is empty, and a root ("/", "c:/")
-    // keeps its own separator, so adding one here would double it.
     if off < n && !is_sep(byte_at(dir, dn - 1)):
         str.BufAppendChar(sb, K_PATH_SEP)
     end
@@ -223,14 +172,6 @@ pub func PathJoin(dir: str, name0: str): str:
     ret out
 end
 
-// to_slash, then strip leading "./", collapse "/./", "//" and "seg/../".
-// Lexical only - the filesystem is never consulted, so a symlinked "seg" is
-// not resolved.
-//
-// The ".." collapse keeps import dedup keys canonical: the same file
-// imported as "token.salam" from the root and as "../token.salam" from a
-// sibling directory must resolve to ONE module, or its globals get linked
-// twice ('defined twice' at link time).
 pub func PathNormalize(p: str): str:
     mut q := collapse_double_sep(PathToSlash(p))
     until str.Len(q) >= 2 && byte_at(q, 0) == K_PATH_DOT && byte_at(q, 1) == K_PATH_SEP:
@@ -243,7 +184,6 @@ pub func PathNormalize(p: str): str:
     end
     mut dd := str.IndexOf(q, "/../")
     until dd >= 0:
-        // start of the path segment right before this "/../"
         mut segstart := 0
         mut k := dd - 1
         until k >= 0:
@@ -254,8 +194,6 @@ pub func PathNormalize(p: str): str:
             k -= 1
         end
         seg := str.Substr(q, segstart, dd - segstart)
-        // never collapse a ".." segment, an empty segment ("//../", a
-        // rooted "/../") or a drive prefix like "c:" - skip past those
         if str.Len(seg) == 0 || str.Equals(seg, "..") || str.Contains(seg, ":"):
             dd = str.IndexFrom(q, "/../", dd + 1)
             continue

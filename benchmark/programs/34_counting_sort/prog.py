@@ -1,5 +1,3 @@
-"""counting_sort benchmark"""
-
 N = 5000000
 RANGE = 100000
 x = 6

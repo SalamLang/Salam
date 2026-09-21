@@ -18,24 +18,12 @@ import str
 import crypto
 import encoding
 
-// Self-tests for hostkey.salam: wire-blob parsing, signature verification
-// over an exchange hash, and the known_hosts-style SHA256 fingerprint.
-// _rsa_sign_pkcs1/_rsa_verify_pkcs1 themselves are already cross-checked
-// against an independent openssl-produced signature in selftest_rsa.salam,
-// so these tests reuse that same real key (_RSA_TV_N/E/D/PHI, from
-// selftest_rsa.salam - package-private consts are visible package-wide) and
-// focus on what is unique to THIS layer: the "ssh-rsa" key-blob wire
-// format, picking the right hash from the signature-format string (which
-// can legitimately differ from the key blob's own type name - RFC 8332),
-// and the fingerprint's base64 formatting.
-
 func _selftest_hostkey():
     mut n := _hexbuf(_RSA_TV_N)
     mut e := _hexbuf(_RSA_TV_E)
     mut d := _hexbuf(_RSA_TV_D)
     mut phi := _hexbuf(_RSA_TV_PHI)
 
-    // ---------------------------------------------------------- blob parse
     mut blob := NewBuf(8 + n.len)
     BufPutStringStr(blob, "ssh-rsa")
     BufPutMpintBuf(blob, e)
@@ -48,26 +36,18 @@ func _selftest_hostkey():
     _ckhex(_hex_of(hk.e.p, hk.e.len), _hex_of(e.p, e.len), "hostkey: parsed exponent bytes match the source key exactly")
     _ck(hk.blob.len == blob.len, "hostkey: .blob keeps the original wire bytes verbatim")
 
-    // An unrecognized key type must be rejected, not silently accepted with
-    // garbage n/e.
     mut badtype := NewBuf(8)
     BufPutStringStr(badtype, "ssh-ed25519")
     badhk := _hostkey_parse(badtype)
     _ck(!badhk.ok, "hostkey: an unsupported key type (ssh-ed25519) is rejected, not misparsed")
     FreeBuf(badtype)
 
-    // Truncated input (claims a key type but has no e/n after it) must fail
-    // cleanly rather than reading past the buffer.
     mut truncated := NewBuf(8)
     BufPutStringStr(truncated, "ssh-rsa")
     trunchk := _hostkey_parse(truncated)
     _ck(!trunchk.ok, "hostkey: a truncated blob (missing e/n) is rejected")
     FreeBuf(truncated)
 
-    // ---------------------------------------------------------- signature verify
-    // H is whatever this connection's exchange hash happened to be - its
-    // actual value doesn't matter here, only that signing and verifying
-    // agree on hashing it the same way for a given signature-format name.
     mut h := _hexbuf("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 
     mut digest256 := NewBuf(32)
@@ -83,17 +63,12 @@ func _selftest_hostkey():
     BufPutStringBuf(sigblob256, sig256)
     _ck(_hostkey_verify(hk, h, sigblob256), "hostkey: verifies a valid rsa-sha2-256 signature over H")
 
-    // Tamper with H after signing: verification must fail.
     mut htampered := NewBuf(h.len)
     BufPutBytes(htampered, h.p, h.len)
     _bput(htampered.p, 0, _bget(htampered.p, 0) ^ 0x01)
     _ck(!_hostkey_verify(hk, htampered, sigblob256), "hostkey: a tampered exchange hash fails verification")
     FreeBuf(htampered)
 
-    // ssh-rsa (SHA-1) uses a different hash than its signature-format name
-    // would suggest at a glance (RFC 8332's whole point: same key type,
-    // different signature formats) - make sure that hash selection is
-    // actually wired to sig_format, not to the key's own "ssh-rsa" type tag.
     mut digest1 := NewBuf(20)
     BufPutZeros(digest1, 20)
     crypto.Sha1Bytes(h.p, h.len, digest1.p)
@@ -106,16 +81,12 @@ func _selftest_hostkey():
     BufPutStringBuf(sigblob1, sig1)
     _ck(_hostkey_verify(hk, h, sigblob1), "hostkey: verifies a valid ssh-rsa (SHA-1) signature over H")
 
-    // A sha256 signature must NOT verify as if it were a sha1 signature
-    // (wrong sig_format label attached to right bytes) - the label drives
-    // which hash gets recomputed, so this must fail.
     mut mislabeled := NewBuf(8 + sig256.len)
     BufPutStringStr(mislabeled, "ssh-rsa")
     BufPutStringBuf(mislabeled, sig256)
     _ck(!_hostkey_verify(hk, h, mislabeled), "hostkey: a sha2-256 signature mislabeled as ssh-rsa (sha1) does not verify")
     FreeBuf(mislabeled)
 
-    // ---------------------------------------------------------- fingerprint
     mut want_digest := NewBuf(32)
     BufPutZeros(want_digest, 32)
     crypto.Sha256Bytes(hk.blob.p, hk.blob.len, want_digest.p)

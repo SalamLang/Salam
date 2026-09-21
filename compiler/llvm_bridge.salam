@@ -12,33 +12,6 @@
  *
  */
 
-// Optional in-process LLVM/LLD for the self-hosted compiler - the Salam
-// counterpart of the C's `#ifdef SALAM_HAVE_LLVM` in llvm_native.c.
-//
-// Why this is a separate file rather than code inside llvm.salam:
-//
-//  1. `import llvm` (std/llvm) has to be gated, because it drags in
-//     `link static "salam_llvm"` and the host system libraries, which only
-//     exist on a machine that ran `make -C c libsalam-llvm`. An ungated
-//     import would break every build without those archives. Salam's
-//     condcomp prunes *top-level* `if FLAG:` blocks, so the import and
-//     everything referencing it live in one such block here, with an
-//     `else` arm supplying the same signatures.
-//
-//     Note the flag can only be tested at top level: `-D`-defined names are
-//     absent from the symbol table when not passed, so referencing
-//     SALAM_HAVE_LLVM inside a function body is an "unknown identifier"
-//     error rather than a false. Keeping every reference top-level is what
-//     makes the gate work in both directions.
-//
-//  2. llvm.salam is `package llvmgen` precisely so it does not collide with
-//     std/llvm's `package llvm`; this bridge is a third package again, so
-//     it can import std/llvm without either name clashing.
-//
-// The API below is deliberately primitive-typed (no shared structs): the
-// bridge cannot import llvm.salam without a cycle, and cannot expose
-// std/llvm's own Options to llvm.salam without leaking the gated type into
-// an ungated module.
 @en "llvmbridge"
 @fa "پل ال ال وی ام"
 @ar "جسر ال ال وی ام"
@@ -49,32 +22,14 @@ import str
 if SALAM_HAVE_LLVM:
     import llvm
 
-    // Whether this binary has static LLVM linked in - the question
-    // --backend=auto asks, and the exact counterpart of the C's
-    // `#ifdef SALAM_HAVE_LLVM` (see use_llvm_backend in driver_proc.salam).
-    //
-    // LLVM, not LLD. This used to answer llvm.LldAvailable(), which is a
-    // different question: in-process LLD is only ever *used* for the
-    // mingw-gnu and linux-musl triples (CanLinkTriple), and every other
-    // host - macOS included - links by shelling out to cc no matter what.
-    // Homebrew ships lld as shared libraries only, so a macOS build has
-    // LLVM in-process and no LLD, and the old spelling quietly demoted that
-    // whole compiler to the C backend.
     pub func Available(): bool:
         ret llvm.Available()
     end
 
-    // The triple this binary's own LLVM targets by default, i.e. what an
-    // empty --target resolves to. "" when there is no linked-in LLVM to ask,
-    // and the caller falls back to the external toolchain.
     pub func HostTriple(): str:
         ret llvm.DefaultTriple()
     end
 
-    // Mirrors salam_llvm_native(): emit/optimize/link `ll_path` per
-    // `output_mode`. Returns 0 on success, non-zero on failure, and -1 for
-    // "not built with LLVM" so the caller falls back to the shell-out
-    // toolchain path.
     pub func Run(
         ll_path: str,
         opt_level: int,
@@ -106,9 +61,6 @@ if SALAM_HAVE_LLVM:
         if r.ok:
             ret 0
         end
-        // Hand the reason back rather than only a 1. Without this the driver
-        // could say no more than "in-process LLVM step failed", which is
-        // what an armhf cross to Windows reports and nothing else.
         err = r.error
         ret 1
     end

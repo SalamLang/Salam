@@ -8,12 +8,6 @@ import lg "../logger.salam"
 import i18 "../i18n.salam"
 import sm "../semantic/semantic.salam"
 
-// ===========================================================================
-// ===== PUBLIC API (rule E088: nothing but pub funcs below this line) =====
-// ===========================================================================
-
-// --- value.h constructors ---
-
 pub func ValNull(): Value:
     ret val_null()
 end
@@ -50,11 +44,6 @@ pub func PtrElemSize(elem: int): int:
     ret ptr_elem_size(elem)
 end
 
-// --- interp.c ---
-
-// interp_run's construction half: interpreter state + options. The other
-// half is Run() - split so callers (driver/web/tests) can read captured
-// output and error state off the Interp afterwards.
 pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
     mut ipn := Interp {}
     ipn.log = lgr
@@ -63,10 +52,6 @@ pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
     ipn.capture = opts.capture
     ipn.in_has = opts.has_input
     ipn.in_data = opts.input_data
-    // Negative = run until it finishes or the caller kills it, matching the
-    // C interpreter: deadline_ms 0 is already spelled "no deadline" in
-    // interp_core's check, it just had no way of being asked for. 0 keeps
-    // meaning "unset", which is the 5000ms default.
     if opts.timeout_ms < 0:
         ipn.deadline_ms = 0 as i64
     else:
@@ -87,14 +72,10 @@ pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
     ret ipn
 end
 
-// Cross-package Options literal replacement (struct literals do not cross
-// package boundaries - see salam/PORTING.md).
 pub func NewOptions(): Options:
     ret Options {}
 end
 
-// interp_run's execution half. Returns the process exit code (main's int
-// return, 0 otherwise, 1 on a runtime error - logged like the C setjmp arm).
 pub func Run(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
     collect_decls(ip, a, program)
     if ip.failed:
@@ -131,7 +112,6 @@ pub func Run(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
     ret 0
 end
 
-// Releases every pool vector (the C freed its arena wholesale).
 pub func Free(ip &: Interp):
     repeat ip.envs.len() with i0:
         e := ip.envs.get(i0)
@@ -196,8 +176,6 @@ pub func Tick(ip &: Interp):
     tick(ip)
 end
 
-// --- environments ---
-
 pub func EnvNew(ip &: Interp, parent: int): int:
     ret env_new(ip, parent)
 end
@@ -206,7 +184,6 @@ pub func EnvDefine(ip &: Interp, e: int, name: str, v: Value):
     env_define(ip, e, name, v)
 end
 
-// env_find over the parent chain; false when unbound.
 pub func EnvLookup(ip &: Interp, e: int, name: str, out &: Value): bool:
     mut where := 0
     slot := env_find(ip, e, name, where)
@@ -225,8 +202,6 @@ pub func EnvLookupLocal(ip &: Interp, e: int, name: str, out &: Value): bool:
     out = env_slot_val(ip, e, slot)
     ret true
 end
-
-// --- lookups (interp.c find_* family) ---
 
 pub func FindFunc(ip &: Interp, a &: at.Ast, name: str, nargs: int): int:
     ret find_func(ip, a, name, nargs)
@@ -258,8 +233,6 @@ pub func FindDefEnv(ip &: Interp, def: int): int:
     ret find_def_env(ip, def)
 end
 
-// --- conversions & printing (interp_value.c) ---
-
 pub func ToBool(v: Value): bool:
     ret to_bool(v)
 end
@@ -279,8 +252,6 @@ end
 pub func StrRepeat(s: str, n: i64): Value:
     ret str_repeat(s, n)
 end
-
-// --- arrays ---
 
 pub func ArrayNew(ip &: Interp, cap: int): int:
     ret arr_new(ip, cap)
@@ -309,8 +280,6 @@ end
 pub func MkArray(id: int): Value:
     ret val_arr(id)
 end
-
-// --- maps ---
 
 pub func MapNew(ip &: Interp): int:
     ret map_new(ip)
@@ -348,8 +317,6 @@ end
 pub func MkMap(id: int): Value:
     ret val_map(id)
 end
-
-// --- structs / closures / variants ---
 
 pub func MkStruct(ip &: Interp, name: str, def: int, nfields: int): Value:
     ret mk_struct(ip, name, def, nfields)
@@ -390,8 +357,6 @@ pub func MkVariant(ip &: Interp, tag: int, has_boxed: bool, boxed: Value): Value
     ret mk_variant(ip, tag, has_boxed, boxed)
 end
 
-// --- typed pointers ---
-
 pub func PtrElemFromTypestr(ts: str): int:
     ret ptr_elem_from_typestr(ts)
 end
@@ -403,8 +368,6 @@ end
 pub func PtrStore(pa: i64, elem: int, idx: i64, v: Value):
     ptr_store(pa, elem, idx, v)
 end
-
-// --- typenames / defaults ---
 
 pub func BaseTypename(ts: str): str:
     ret base_typename(ts)
@@ -421,8 +384,6 @@ end
 pub func DefaultForType(ip &: Interp, ts: str): Value:
     ret default_for_type(ip, ts)
 end
-
-// --- operators ---
 
 pub func Arith(
     ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value
@@ -448,9 +409,6 @@ pub func TryStructOp(
     ret try_struct_op(ip, a, op, va, vb, has_b, found)
 end
 
-// --- builtins (interp_builtin.c) ---
-
-// Index in the intrinsic table (22 = the platform sleep row), -1 = none.
 pub func IntrinsicLookup(name: str): int:
     repeat K_IP_INTR_COUNT with i:
         if str.Equals(k_ip_intrinsics[i], name):
@@ -481,8 +439,6 @@ pub func CallBuiltinMethod(
     ret call_builtin_method(ip, a, call, recv, method, args)
 end
 
-// `env` is the caller's scope, which is where a `&:` argument is written back
-// to; pass ip.globals when there is no enclosing call.
 pub func CallModuleFunc(
     ip &: Interp, a &: at.Ast, env: int, call: int, mid: int, fnname: str,
     args: Vector<Value>

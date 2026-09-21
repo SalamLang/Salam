@@ -14,34 +14,11 @@
 
 package main
 
-// A worked example of std/graphql: a small blog API, from schema text to
-// an HTTP response.
-//
-// It runs start to finish without opening a socket, because
-// graphql.HandleHttp takes the parts of a request (method, content
-// type, body, query string) and returns a status and a body. Mounting
-// that on the real server is the four lines at the bottom of this file.
-//
-// The five things worth taking away:
-//
-//   1. the schema is ordinary SDL text, parsed at startup;
-//   2. a resolver is a plain `func(slot: i64)` registered against one
-//      field, reading its inputs through graphql.Arg* / graphql.Parent
-//      and answering with graphql.Resolve*;
-//   3. per-request state (here, the signed-in user) travels in the
-//      context, not in a global;
-//   4. a field that fails calls graphql.Fail, and the response carries
-//      the message with the path to the field that produced it;
-//   5. the same schema answers introspection, so any GraphQL client can
-//      discover the API without being told about it.
-
 import graphql
 import encoding.value
 import encoding.json
 import encoding.encerr
 import str
-
-// ---- the schema ----
 
 func schema_text(): str:
     ret "\"\"\"\nA very small blog.\n\"\"\"\n" +
@@ -82,8 +59,6 @@ func schema_text(): str:
         "}\n"
 end
 
-// ---- the data these resolvers stand in for ----
-
 func mk_user(id: str, name: str): value.Value:
     mut u := value.NewValueObject()
     value.ObjectSet(u, "id", value.ValueString(id))
@@ -101,10 +76,6 @@ func mk_post(id: str, title: str, status: str, authorName: str, words: i64): val
     ret p
 end
 
-// ---- resolvers ----
-
-// The context is whatever the caller handed to HandleHttp, so a
-// request-scoped value like the authenticated user needs no global.
 func r_me(slot: i64):
     ctx := graphql.Context(slot)
     if !value.ObjectHas(ctx, "user"):
@@ -114,9 +85,6 @@ func r_me(slot: i64):
     graphql.Resolve(slot, value.ObjectGet(ctx, "user"))
 end
 
-// A field with no resolver falls back to reading its own name off the
-// parent object, so `id` and `name` on User need nothing registered.
-// `initials` does, because it is derived rather than stored.
 func r_initials(slot: i64):
     name := value.AsString(graphql.ParentField(slot, "name"))
     mut out := ""
@@ -146,8 +114,6 @@ func r_post(slot: i64):
     graphql.Resolve(slot, mk_post("1", "Hello, world", "PUBLISHED", "Ada Lovelace", 42 as i64))
 end
 
-// Arguments arrive already coerced and defaulted, so `first` and
-// `status` are always present even when the query omitted them.
 func r_posts(slot: i64):
     first := graphql.ArgInt(slot, "first")
     status := graphql.ArgStr(slot, "status")
@@ -167,9 +133,6 @@ func r_posts(slot: i64):
     graphql.Resolve(slot, out)
 end
 
-// A resolver reports failure with graphql.Fail. Because `secret` is
-// nullable the rest of the response survives; had it been `String!`
-// the null would have propagated to its parent instead.
 func r_secret(slot: i64):
     ctx := graphql.Context(slot)
     if !value.ObjectHas(ctx, "user"):
@@ -180,9 +143,6 @@ func r_secret(slot: i64):
 end
 
 func r_publish(slot: i64):
-    // `input` is a reserved word in Salam, so the argument's value is
-    // bound to a differently named local; the GraphQL argument itself is
-    // still called `input`, since it is only ever named by a string.
     inp := graphql.Arg(slot, "input")
     title := value.AsString(value.ObjectGet(inp, "title"))
     body := value.AsString(value.ObjectGet(inp, "body"))
@@ -224,8 +184,6 @@ func build_schema(): graphql.Schema:
     ret sch
 end
 
-// ---- driving it like a server would ----
-
 func anonymous(): value.Value: ret value.NewValueObject() end
 
 func signed_in(): value.Value:
@@ -234,10 +192,6 @@ func signed_in(): value.Value:
     ret ctx
 end
 
-// Responses are reprinted with their object keys sorted so this
-// example's output is byte-for-byte reproducible. A real client would
-// print res.body as it arrived; see gql_result.salam for why the
-// unsorted order of a HashMap-backed value tree is not stable.
 func stable(body: str): str:
     mut err := encerr.NoError()
     v := json.Decode(body, err)
@@ -247,7 +201,6 @@ func stable(body: str): str:
     ret json.Encode(v, opts)
 end
 
-// One request in, one response out: exactly what an HTTP handler does.
 func request(sch: graphql.Schema, label: str, body: str, ctx: value.Value):
     res := graphql.HandleHttp(sch, "POST", "application/json", body, "",
         value.NewValueObject(), ctx)
@@ -336,24 +289,6 @@ func main:
     println "title:    " + value.AsString(value.ObjectGet(post, "title"))
     println "initials: " + value.AsString(value.ObjectGet(value.ObjectGet(post, "author"), "initials"))
     graphql.FreeClientResponse(parsed)
-
-    // Mounting this on the real server is the whole integration:
-    //
-    //     import net.http
-    //     import net.router
-    //
-    //     func gql_handler(h: i64):
-    //         res := graphql.HandleHttpSimple(_schema, http.Ctx_method(h),
-    //             http.Ctx_header(h, "Content-Type"), http.Ctx_body(h), "")
-    //         http.Ctx_status(h, res.status)
-    //         http.Ctx_json(h, res.body)
-    //     end
-    //
-    //     router.Post(r, "/graphql", gql_handler)
-    //
-    // std/graphql deliberately does not import net/http itself: linking a
-    // package pulls in every extern its public functions reference, and a
-    // program that only parses a schema should not need sockets.
 
     graphql.FreeSchema(sch)
     ret 0

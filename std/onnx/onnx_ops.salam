@@ -17,21 +17,6 @@ package onnx
 import str
 import tensor
 
-// The op table, opset 13 semantics for the ops it covers:
-//
-//   elementwise  Relu Sigmoid Tanh Exp Log Sqrt Neg LeakyRelu Clip
-//                Add Sub Mul Div (NumPy-style broadcast as std/tensor
-//                supports it) Softmax LogSoftmax (last axis)
-//   dense        MatMul (rank 2) Gemm (alpha, beta, transA, transB)
-//   convolution  Conv (2D, group 1, unit dilation, symmetric pads)
-//                MaxPool AveragePool (2D, no pads) GlobalAveragePool
-//                BatchNormalization (inference form)
-//   shape        Reshape Flatten Transpose Squeeze Unsqueeze Concat
-//                Identity Dropout (inference passthrough) Constant
-//
-// Anything else fails the run with the op named in model.error, which
-// is what an exporter's user needs to hear.
-
 func _norm_axis(axis: i64, rank: int): int:
     mut a := axis as int
     if a < 0: a = a + rank end
@@ -359,8 +344,6 @@ func _batchnorm(model &: Model, node &: Node, env &: _Env): bool:
     inner := x.numel() / (n * c)
     p := y.data.data
     repeat c with ch:
-        // y = g * x + b with g = scale / sqrt(var + eps) and
-        // b = bias - mean * g: the inference-time fold.
         g := (scale.at(ch) / _sqrt64(vr.at(ch) + eps)) as f32
         b := (bias.at(ch) - mean.at(ch) * (g as f64)) as f32
         repeat n with i:
@@ -440,7 +423,6 @@ func _squeeze(model &: Model, node &: Node, env &: _Env, insert: bool): bool:
     if _in(model, node, env, 0, x) == false: ret false end
     mut axes := Vector {} as Vector<int>
     if _axes_of(model, node, env, axes) == false:
-        // Squeeze with no axes drops every size-1 dimension.
         if insert:
             axes.free()
             ret false
@@ -449,7 +431,6 @@ func _squeeze(model &: Model, node &: Node, env &: _Env, insert: bool): bool:
     end
     mut y := tensor.Clone(x)
     if insert:
-        // Insert in ascending order of the final positions.
         mut i := 0
         until i < axes.len():
             mut best := i
@@ -555,7 +536,6 @@ func _exec_node(model &: Model, node: Node, env &: _Env): bool:
     if str.Equals(op, "Unsqueeze"): ret _squeeze(model, node, env, true) end
     if str.Equals(op, "Concat"): ret _concat(model, node, env) end
     if str.Equals(op, "Constant"): ret _constant(model, node, env) end
-    // The second table (onnx_ops2) answers for everything else it knows.
     if _exec_node2(model, node, env): ret true end
     if str.Len(model.error) > 0: ret false end
     model.error = "unsupported op: " + op

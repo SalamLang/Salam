@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1
-# Salam sandbox execution image for the runner API (Cloudflare Containers).
 
 FROM debian:bookworm-slim AS fetch
 ARG SALAM_VERSION

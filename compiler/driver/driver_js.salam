@@ -28,7 +28,6 @@ import mn "../minify.salam"
         ret c
     end
 
-    // has_suffix_ci
     func ends_with_ci(s: str, suf: str): bool:
         sl := str.Len(s)
         fl := str.Len(suf)
@@ -46,8 +45,6 @@ import mn "../minify.salam"
         ret ok
     end
 
-    // js_refs - does `text` reference identifier `name` as a whole word (used
-    // by the dead-segment-elimination pass below)?
     func js_refs(text: str, name: str): bool:
         nl := str.Len(name)
         if nl == 0:
@@ -64,7 +61,7 @@ import mn "../minify.salam"
             after := idx + nl < tn ? byte_at(text, idx + nl) : 0
             bok := !(
                 is_alnum(before) || before == 95 || before == 36 || before == 46
-            ) // '_' '$' '.'
+            )
             aok := !(is_alnum(after) || after == 95 || after == 36)
             if bok && aok:
                 ret true
@@ -73,15 +70,6 @@ import mn "../minify.salam"
         end
     end
 
-    // js_build_bundle (driver/js_build.c) - work-list of `entries` + resolved
-    // imports -> per-module lex/parse/prune/package-merge/sema(cached)/jsgen
-    // (minify-name-sequence threaded across modules) -> prelude segments
-    // (+minify) -> js_refs dead-segment elimination -> IIFE bundle. Shared by
-    // both Js() (whole-program `salam js`) and Web() (one call per <script
-    // src=".salam"> page script) exactly like the C's single js_build_bundle is
-    // shared by driver_js and driver_web. `module_out` receives the FIRST
-    // entry's module stem (used for the default output name / <title>);
-    // `rc_out` mirrors the C's *rc_out (0 unless an error path sets it).
     func js_build_bundle(
         lgr: lg.Logger, opt &: Dr, entries: Vector<str>, module_out &: str, rc_out &: int
     ): str:
@@ -95,14 +83,6 @@ import mn "../minify.salam"
             ret ""
         end
         sm.SetStdlibRoot(opt.stdlib_path)
-        // See Web()'s PORT-NOTE (driver.salam's public section): driver_main
-        // calls `layout_schema_init(salam_get_stdlib_root())` - the RESOLVED
-        // root, not opt->stdlib_path directly (an empty stdlib_path resolves
-        // relative to "std/layout" under CWD instead of falling back to
-        // SALAM_STD/the default, so passing it unresolved silently loads zero
-        // schema files and every element renders as an unrecognized <div>).
-        // Harmless/idempotent to call again here too (Web() already called it
-        // once before this).
         sm.LayoutSchemaInit(sm.GetStdlibRoot())
 
         minify_ws := !opt.no_minify
@@ -292,7 +272,6 @@ import mn "../minify.salam"
             ret ""
         end
 
-        // ---- segment table: prelude first, then modules in REVERSE order ----
         mut seg_names := Vector {} as Vector<str>
         mut seg_texts := Vector {} as Vector<str>
         mut seg_used := Vector {} as Vector<int>
@@ -320,7 +299,6 @@ import mn "../minify.salam"
             m -= 1
         end
 
-        // ---- dead-segment elimination roots: globals (reverse) + boot ----
         boot := entry_name
         mut roots := ""
         mut m2 := nmod - 1
@@ -360,7 +338,6 @@ import mn "../minify.salam"
             end
         end
 
-        // ---- assemble the bundle ----
         mut js := str.NewBuilder()
         str.BufAppend(
             js, minify_ws ? `(function(){"use strict";` : "(function () {\n\"use strict\";\n\n"
@@ -407,8 +384,6 @@ import mn "../minify.salam"
         ret text
     end
 
-    // driver_js's HTML-embedding branch (--output=*.html/*.htm): wrap the
-    // bundle in a minimal self-contained page.
     func js_html_page(module: str, js_text: str, minify_ws: bool): str:
         mut b := str.NewBuilder()
         if minify_ws:
@@ -437,14 +412,6 @@ import mn "../minify.salam"
         ret r
     end
 
-    // ===== driver/layout_build.c (stage 8b) =====
-    // (module_of/dir_of/write_file are the SAME private helpers build.c already
-    // defined above - layout_build.c's own copies were byte-identical to them
-    // in the C too, so this port doesn't redeclare them.)
-
-    // ===== driver/web_build.c (stage 8b) =====
-
-    // plural_suffix (web_build.c): "" for a count of exactly 1, "s" otherwise.
     func plural_suffix(n: int): str:
         ret n == 1 ? "" : "s"
     end
@@ -461,8 +428,6 @@ import mn "../minify.salam"
         ret pth.PathBase(p)
     end
 
-    // Whole path minus its last extension - unlike PathStem, which also
-    // drops the directory part.
     func strip_ext(p: str): str:
         base := pth.PathBase(p)
         dot := str.LastIndex(base, ".")
@@ -472,8 +437,6 @@ import mn "../minify.salam"
         ret p
     end
 
-    // script_salam_src - this <script> element's src="*.salam" attribute value,
-    // "" if none (C: NULL).
     func script_salam_src(a &: at.Ast, el: int): str:
         n := at.Get(a, el)
         repeat n.list.len() with j:
@@ -494,10 +457,6 @@ import mn "../minify.salam"
         ret ""
     end
 
-    // collect_scripts - recursively strips <script src="*.salam"> elements out
-    // of the layout tree (in place) and collects their src paths into `out`,
-    // so they can be compiled as page scripts instead of rendered as literal
-    // <script> tags.
     func collect_scripts(a &: at.Ast, node: int, out &: Vector<str>):
         if node == 0:
             ret
@@ -530,20 +489,3 @@ import mn "../minify.salam"
         at.Put(a, node, nn)
         defer old.free()
     end
-
-    // ===== driver/embed_sysroot.c (stage 8b) =====
-    // Sysroot tar-archive materializer used ONLY by llvm_native.c's
-    // SALAM_HAVE_LLVM branch (embedding pre-built mingw/musl/wasm sysroots as
-    // tar blobs baked into the binary at C-build time). That branch is
-    // compile-time-unreachable in every build this repo ships - llvm.salam's
-    // own stage-C notes already established this repo's bin/salam has no
-    // SALAM_HAVE_LLVM, which is exactly why NativeAvailable()/NativeRun() route
-    // through the always-available `salam_llvm_toolchain` shell-out instead.
-    // So, same precedent as sal_web.salam's web_api.c port: ported here for
-    // SOURCE FIDELITY, not because anything in this driver-wave calls it.
-    // Deviations: (1) mkdir_p/mkdir_parent's hand-rolled byte-by-byte path
-    // walk is replaced by the stdlib's own os.MkdirAll (recursive mkdir -p),
-    // which didn't exist for C's libc to call - same idea, fewer lines, no
-    // behavior loss for this port's purpose. (2) the tar bytes are represented
-    // as a plain `str` (byte length via str.Len), the same "raw bytes in a
-    // str" idiom used throughout this port (e.g. interp.salam's PTR_STR).

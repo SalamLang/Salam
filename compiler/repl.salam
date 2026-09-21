@@ -122,16 +122,12 @@ import src "source.salam"
 import i18 "i18n.salam"
 import co "sal_core.salam"
 
-// process spawn (system()) - same idiom driver.salam's own identical
-// comment uses; no link needed, libc is always linked.
 extern:
     func system(cmd: str): int
     func getchar(): int
 end
 
 if SALAM_OS_WINDOWS:
-    // wincon.h / wincontypes.h - see the file header for the byte-offset
-    // derivation this reads INPUT_RECORD/KEY_EVENT_RECORD through.
     extern:
         func GetStdHandle(nStdHandle: i32): void*
         func GetFileType(h: void*): i32
@@ -141,8 +137,6 @@ if SALAM_OS_WINDOWS:
         func _isatty(fd: int): int
     end
 else:
-    // termios.h / unistd.h - see the file header for the (glibc-only)
-    // byte-offset derivation this reads/writes `struct termios` through.
     extern:
         func isatty(fd: int): int
         func tcgetattr(fd: int, buf: void*): int
@@ -151,49 +145,31 @@ else:
     end
 end
 
-// REPL_HIST_MAX (repl.c)
 const HIST_MAX := 200
 
-// STD_INPUT_HANDLE (winbase.h): (DWORD)-10, passed as the i32 bit pattern
-// GetStdHandle expects.
 const STD_INPUT_HANDLE := 0 - 10
 const FILE_TYPE_CHAR := 2
 const ENABLE_PROCESSED_INPUT := 1
 const KEY_EVENT := 1
 const VK_RETURN := 13
 const VK_BACK := 8
-const VK_DELETE := 46 // 0x2E
-const VK_LEFT := 37 // 0x25
-const VK_RIGHT := 39 // 0x27
-const VK_HOME := 36 // 0x24
-const VK_END := 35 // 0x23
-const VK_UP := 38 // 0x26
-const VK_DOWN := 40 // 0x28
+const VK_DELETE := 46
+const VK_LEFT := 37
+const VK_RIGHT := 39
+const VK_HOME := 36
+const VK_END := 35
+const VK_UP := 38
+const VK_DOWN := 40
 
-// TCSAFLUSH (termios.h)
 const TCSAFLUSH := 2
-// VMIN/VTIME indices into glibc's c_cc[NCCS] (bits/termios.h)
 const CC_VTIME_IDX := 5
 const CC_VMIN_IDX := 6
-// Raw-mode flag masks (see file header for the octal->decimal derivation).
-// Written as "the bits raw mode CLEARS" so cflag/lflag/iflag can be combined
-// with AND
-// with these directly (`flag & IFLAG_KEEP_MASK`) instead of needing a `~`
-// operator: each KEEP_MASK is precomputed as 0xFFFFFFFF minus the exact
-// set of bits the C's `&= ~(...)` clears.
-const IFLAG_CLEAR_BITS := 1330 // BRKINT|ICRNL|INPCK|ISTRIP|IXON
-const IFLAG_KEEP_MASK := 4294965965 // ~IFLAG_CLEAR_BITS as u32
-const LFLAG_CLEAR_BITS := 32779 // ECHO|ICANON|IEXTEN|ISIG
-const LFLAG_KEEP_MASK := 4294934516 // ~LFLAG_CLEAR_BITS as u32
+const IFLAG_CLEAR_BITS := 1330
+const IFLAG_KEEP_MASK := 4294965965
+const LFLAG_CLEAR_BITS := 32779
+const LFLAG_KEEP_MASK := 4294934516
 const CFLAG_CS8 := 48
 
-// repl_kind_t (repl_internal.h) - the buckets, in the order the language
-// demands they appear in a file: `package` first, then imports, then
-// externs (E083), then globals (E085), then types (E087), then functions.
-// A REPL user types definitions in whatever order the thought arrives, so
-// the session sorts them back into a legal program on the way out instead
-// of rejecting the input. RS_STMT is not a bucket: it is a statement,
-// which lands in the synthesized main.
 const RS_PKG := 0
 const RS_IMPORT := 1
 const RS_EXTERN := 2
@@ -202,38 +178,23 @@ const RS_TYPE := 4
 const RS_DEF := 5
 const RS_STMT := 6
 
-// repl_hist[]/repl_nhist (repl.c) - module-global session history, shared
-// across every readline() call in one `salam repl` run (matches the C's
-// static array living for the process, reset only at the top of driver_repl
-// via repl_nhist=0/frees, which Run() below reproduces on entry).
 mut g_hist := Vector {} as Vector<str>
 
-// repl_ctx_t's last_out/last_len - what the session printed on its last
-// good run. Every turn re-runs the whole session, so this is what tells
-// emit_output() which part of the output is replay and which part is news.
 mut g_last_out := ""
 mut g_has_last := false
 
-// repl_entry_t
 struct Entry:
     pub kind: int = 6
-    pub name: str = "" // what this entry defines; "" when it names nothing
-    pub text: str = "" // raw source, newline-terminated
+    pub name: str = ""
+    pub text: str = ""
 end
 
-// repl_session_t - what the prompt remembers between turns.
 struct Session:
     pub defs: Vector<Entry> = Vector {}
     pub stmts: Vector<str> = Vector {}
-    // The user wrote their own entry function, so no main is synthesized
-    // and bare statements have nowhere to go.
     pub has_main: bool = false
 end
 
-// resolve_color / stderr_is_tty - private copies of driver.salam's own
-// identically-named helpers (not reusable from here: driver.salam keeps
-// them package-private, per the "driver.salam is read-only from here"
-// convention cli.salam's own header already documents).
 func stderr_is_tty(): bool:
     if SALAM_OS_WINDOWS:
         ret _isatty(2) != 0
@@ -252,8 +213,6 @@ func resolve_color(flag: int): bool:
     ret stderr_is_tty()
 end
 
-// Unsigned byte read from a str's bytes (idiom shared with driver.salam's
-// own byte_at / diag.salam's ub).
 func byte_at(s: str, i: int): int:
     bp := (s as void*) as i8*
     mut v := bp[i] as int
@@ -263,8 +222,6 @@ func byte_at(s: str, i: int): int:
     ret v
 end
 
-// repl_hist_push - append to session history, capped at HIST_MAX (oldest
-// evicted), skipping a blank line or an exact repeat of the last entry.
 func hist_push(line: str):
     if str.Len(line) == 0:
         ret
@@ -284,10 +241,6 @@ func hist_push(line: str):
     g_hist.push(line)
 end
 
-// repl_readline's non-tty fallback (both OS branches use the same fgets
-// idiom in the C; ok=false only when EOF hits before any byte was read -
-// same distinction fgets' NULL return makes, which io.Input()/salam_input()
-// cannot make since both treat "EOF at once" and "" as identical).
 func fallback_readline(prompt: str, ok &: bool): str:
     print prompt
     mut c := getchar()
@@ -308,9 +261,6 @@ func fallback_readline(prompt: str, ok &: bool): str:
 end
 
 if SALAM_OS_WINDOWS:
-    // repl_readline (Win32 branch). INPUT_RECORD layout (see file header):
-    // a 24-byte buffer, EventType:u16@0, KeyEvent.bKeyDown:i32@4,
-    // KeyEvent.wVirtualKeyCode:u16@10, KeyEvent.uChar.AsciiChar:i8@14.
     func win_readline(prompt: str, ok &: bool): str:
         hIn := GetStdHandle(STD_INPUT_HANDLE)
         invalid := (hIn as i64) == (0 - 1)
@@ -421,9 +371,6 @@ if SALAM_OS_WINDOWS:
         ret line
     end
 else:
-    // repl_readline (POSIX branch). `struct termios` layout (see file
-    // header): glibc-only, 60-byte buffer, c_iflag/c_oflag/c_cflag/
-    // c_lflag:u32@0/4/8/12, c_cc[NCCS]@17 (VMIN@17+6, VTIME@17+5).
     func posix_readline(prompt: str, ok &: bool): str:
         if isatty(0) == 0:
             ret fallback_readline(prompt, ok)
@@ -494,12 +441,12 @@ else:
                 n1 := read(0, s1b, 1 as u64)
                 s1 := n1 > (0 as i64) ? ((s1b as u8*)[0] as int) : 0
                 mem.Free(s1b)
-                if n1 > (0 as i64) && s1 == 91: // '['
+                if n1 > (0 as i64) && s1 == 91:
                     s2b := mem.Allocate(1 as u64)
                     n2 := read(0, s2b, 1 as u64)
                     s2 := n2 > (0 as i64) ? ((s2b as u8*)[0] as int) : 0
                     mem.Free(s2b)
-                    if n2 > (0 as i64) && s2 == 65: // 'A' - up
+                    if n2 > (0 as i64) && s2 == 65:
                         if hi == g_hist.len():
                             saved = line
                         end
@@ -510,7 +457,7 @@ else:
                             line = hline
                             pos = str.Len(line)
                         end
-                    else s2 == 66: // 'B' - down
+                    else s2 == 66:
                         if hi < g_hist.len():
                             hi += 1
                             mut hline := saved
@@ -521,18 +468,18 @@ else:
                             line = hline
                             pos = str.Len(line)
                         end
-                    else s2 == 67 && pos < len: // 'C' - right
+                    else s2 == 67 && pos < len:
                         print line.substr(pos, 1)
                         pos += 1
-                    else s2 == 68 && pos > 0: // 'D' - left
+                    else s2 == 68 && pos > 0:
                         print "\b"
                         pos -= 1
-                    else s2 == 51: // '3' - possibly Delete (ESC [ 3 ~)
+                    else s2 == 51:
                         tb := mem.Allocate(1 as u64)
                         nt := read(0, tb, 1 as u64)
                         tch := nt > (0 as i64) ? ((tb as u8*)[0] as int) : 0
                         mem.Free(tb)
-                        if nt > (0 as i64) && tch == 126 && pos < len: // '~'
+                        if nt > (0 as i64) && tch == 126 && pos < len:
                             line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
                             print line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
                         end
@@ -550,7 +497,6 @@ else:
     end
 end
 
-// repl_readline dispatcher.
 func readline(prompt: str, ok &: bool): str:
     if SALAM_OS_WINDOWS:
         ret win_readline(prompt, ok)
@@ -559,12 +505,6 @@ func readline(prompt: str, ok &: bool): str:
     end
 end
 
-// ===========================================================================
-// ===== repl_session.c =====
-// ===========================================================================
-
-// repl_skip_ws - index of the first byte at or after `i` that is neither a
-// space nor a tab.
 func skip_ws(s: str, i: int): int:
     n := str.Len(s)
     mut p := i
@@ -578,8 +518,6 @@ func skip_ws(s: str, i: int): int:
     ret p
 end
 
-// Identifier bytes, non-ASCII included: fa/ar keywords and identifiers are
-// UTF-8, and every continuation byte has the high bit set.
 func ident_byte(c: int): bool:
     ret c >= 128 || c == 95 || (c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (
         c >= 65 && c <= 90
@@ -595,10 +533,6 @@ func word_len(s: str, i: int): int:
     ret e - i
 end
 
-// The whole first line, trimmed - the fallback name for a block whose
-// subject cannot be read off its opener (`impl X on Y`, an extern block,
-// an import). Retyping it verbatim then replaces it instead of colliding;
-// a different one lives alongside it.
 func line_as_name(line: str): str:
     p := skip_ws(line, 0)
     n := str.Len(line)
@@ -609,17 +543,12 @@ func line_as_name(line: str): str:
     until e > p && (byte_at(line, e - 1) == 32 || byte_at(line, e - 1) == 9):
         e -= 1
     end
-    // The ':' that opens the block is not part of what the line names, and
-    // reading "redefined impl Describe on int:." back is a wart. Dropped
-    // on both sides of the comparison, so it costs nothing to match on.
     if e > p && byte_at(line, e - 1) == 58:
         e -= 1
     end
     ret str.Substr(line, p, e - p)
 end
 
-// A definition's subject: the identifier after the keyword, dots kept so
-// two members of one type stay distinct.
 func subject_name(s: str, after_kw: int): str:
     p := skip_ws(s, after_kw)
     n := str.Len(s)
@@ -669,9 +598,6 @@ func kind_of_keyword(k: int): int:
     ret RS_STMT
 end
 
-// `text` with any leading `@lang "..."` marker lines removed. A marker
-// line is one whose first non-blank byte is '@'; blank lines between a
-// marker and its definition go with them.
 func after_metas(text: str): str:
     n := str.Len(text)
     mut i := 0
@@ -683,7 +609,6 @@ func after_metas(text: str): str:
         if byte_at(text, ls) != 64:
             ret str.Substr(text, i, n - i)
         end
-        // Skip to just past this line's newline.
         mut e := ls
         until e < n && byte_at(text, e) != 10:
             e += 1
@@ -696,16 +621,7 @@ func after_metas(text: str): str:
     ret ""
 end
 
-// repl_classify - which bucket does `text` (the first line of a turn, or
-// the whole block once it has been read) belong to, and what does it
-// define? `name` gets the defined
-// symbol, or the trimmed line itself when the entry names nothing a later
-// redefinition could match on. Keywords are read through `pack`, so an
-// fa/ar session classifies exactly like an en one.
 func classify(pack: int, text: str, name &: str): int:
-    // `@en "Name"` markers belong to the definition under them, so they
-    // are stepped over here - and a turn that is nothing but markers is
-    // still a definition, one whose first line has not been typed yet.
     line := after_metas(text)
     mut p := skip_ws(line, 0)
     name = ""
@@ -720,7 +636,6 @@ func classify(pack: int, text: str, name &: str): int:
         name = line_as_name(line)
         ret RS_DEF
     end
-    // At most one pass per leading modifier, then the keyword decides.
     mut guard := 0
     until guard < 8:
         n := word_len(line, p)
@@ -732,8 +647,6 @@ func classify(pack: int, text: str, name &: str): int:
             p = skip_ws(line, p + n)
             guard += 1
         else:
-            // `link "..."` has no token of its own - it is parsed off the
-            // identifier - so it is matched by spelling, English only.
             if k == tok.TK_IDENT && n == 4 && str.Equals(str.Substr(line, p, n), "link"):
                 name = line_as_name(line)
                 ret RS_IMPORT
@@ -758,15 +671,6 @@ func classify(pack: int, text: str, name &: str): int:
     ret RS_STMT
 end
 
-// An `=` that assigns, as opposed to one inside ==, !=, <=, >=, +=, and
-// friends. Struct literals (`Vec2 { x = 1 }`) count as assignment here,
-// which only costs them the echo.
-//
-// ':' is NOT in this list, unlike in the C: there the ':' of `x := 1`
-// disqualified a binding from counting as an assignment, so every binding
-// turn was probed as `println x := 1` first - a wasted front-end pass, and
-// one that threw away any adjustment turn_stmt had already made to the
-// text (see the `mut` carry-over there).
 func assign_prev_byte(c: int): bool:
     ret c == 61 || c == 33 || c == 60 || c == 62 || c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 38 || c == 124 || c == 94 || c == 126
 end
@@ -786,9 +690,6 @@ func has_assignment(s: str, from: int): bool:
     ret false
 end
 
-// repl_is_expr_line - is `line` a bare expression: no keyword opener, no
-// assignment, one line? Those are questions, and the REPL answers them by
-// printing the value instead of evaluating for effect.
 func is_expr_line(pack: int, line: str): bool:
     p := skip_ws(line, 0)
     n := str.Len(line)
@@ -807,9 +708,6 @@ func is_expr_line(pack: int, line: str): bool:
     ):
         ret false
     end
-    // A zero-length word is fine: an expression can open with a literal or
-    // a sign (`"a" + "b"`, `-x`, `(1 + 2) * 3`). Only a keyword opener
-    // rules it out - that is a statement, whatever follows.
     w := word_len(line, p)
     if w > 0 && tok.IsKeyword(word_kind(pack, line, p, w)):
         ret false
@@ -817,15 +715,6 @@ func is_expr_line(pack: int, line: str): bool:
     ret !has_assignment(line, p)
 end
 
-// The name a statement BINDS, "" when it binds nothing. `x := 1`,
-// `mut x := 1` and `mut x: int = 1` all bind x; `x = 2` (plain
-// assignment) and `xs.push(1)` bind nothing. Not in the C: the C
-// accumulated statements append-only, so `x := 1` followed by
-// `x := "one"` reached sema as a redefinition (E001) and the turn was
-// rejected. At a prompt that second line means "x is a str from now on",
-// so session_add_stmt below replaces the earlier binding in place
-// (in place, not at the end, so the statements typed between the two
-// still see an x).
 func stmt_binding_name(pack: int, text: str): str:
     mut p := skip_ws(text, 0)
     mut n := word_len(text, p)
@@ -847,17 +736,12 @@ func stmt_binding_name(pack: int, text: str): str:
     end
     name := str.Substr(text, p, n)
     q := skip_ws(text, p + n)
-    // `name :=` or the typed `name: T = ...`; anything else (`name =`,
-    // `name.field = `, `name(...)`) is not a new binding.
     if q < str.Len(text) && byte_at(text, q) == 58:
         ret name
     end
     ret ""
 end
 
-// The "there is no candidate" entry - render()'s has_cand=false ignores
-// its fields. A struct literal is not accepted as a call argument, so it
-// gets a name here instead of being spelled out at every call site.
 func no_cand(): Entry:
     e := Entry {}
     ret e
@@ -869,7 +753,6 @@ func starts_with_mut(pack: int, text: str): bool:
     ret n > 0 && word_kind(pack, text, p, n) == tok.TK_KW_MUT
 end
 
-// `mut` in front of `text`, keeping its indentation.
 func with_mut(pack: int, text: str): str:
     kw := lp.Spelling(pack, tok.TK_KW_MUT)
     p := skip_ws(text, 0)
@@ -889,7 +772,6 @@ func session_defines(s &: Session, name: str): bool:
     ret false
 end
 
-// Does the session still define an entry function after this change?
 func refresh_has_main(s &: Session, pack: int):
     entry := lp.Entry(pack)
     s.has_main = false
@@ -903,9 +785,6 @@ func refresh_has_main(s &: Session, pack: int):
     end
 end
 
-// repl_session_add - accepts an entry into the session. A definition with
-// the same name as an existing one REPLACES it in place: redefining a
-// function is the most ordinary thing a REPL user does.
 func session_add(s &: Session, pack: int, kind: int, name: str, text: str):
     mut i := 0
     until i < s.defs.len():
@@ -922,7 +801,6 @@ func session_add(s &: Session, pack: int, kind: int, name: str, text: str):
     refresh_has_main(s, pack)
 end
 
-// Index of the accumulated statement `text` rebinds, or -1 to append.
 func stmt_replace_index(s &: Session, pack: int, text: str): int:
     nm := stmt_binding_name(pack, text)
     if str.Len(nm) == 0:
@@ -947,7 +825,6 @@ func session_add_stmt(s &: Session, pack: int, text: str):
     s.stmts.push(text)
 end
 
-// repl_session_undo - drops the newest statement, false when there is none.
 func session_undo(s &: Session): bool:
     if s.stmts.len() == 0:
         ret false
@@ -973,10 +850,6 @@ func entry_is_pub(pack: int, text: str): bool:
     ret n > 0 && word_kind(pack, text, p, n) == tok.TK_KW_PUB
 end
 
-// `pubsel` selects a pass over one bucket: -1 for everything, 0 for the
-// private entries, 1 for the pub ones. Functions are emitted in two passes
-// because a private function may not follow a pub one (E088), and the
-// prompt has no business making the user care.
 func put_bucket(
     sb &: str.StringBuilder, s &: Session, pack: int, kind: int, cand: Entry, has_cand: bool, pubsel: int
 ):
@@ -1002,9 +875,6 @@ func put_bucket(
     end
 end
 
-// The statements of the synthesized main, with `cand` (an unaccepted
-// statement) placed exactly where session_add_stmt would put it, so the
-// program that gets checked is the program that gets kept.
 func put_stmts(
     sb &: str.StringBuilder, s &: Session, pack: int, cand: Entry, has_cand: bool
 ):
@@ -1026,12 +896,6 @@ func put_stmts(
     end
 end
 
-// repl_render - the session as one compilable program: buckets in file
-// order, then a synthesized `func main:` holding every accepted statement.
-// `cand` is an entry that has not been accepted yet (has_cand=false for
-// the session alone); a candidate that redefines an existing name shadows
-// it here too, so the check that follows sees the program the user is
-// asking for rather than a duplicate-symbol error.
 func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
     mut sb := str.NewBuilder()
     mut k := 0
@@ -1048,9 +912,6 @@ func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
         str.BufAppend(sb, str.Len(kw_func) > 0 ? kw_func : "func")
         str.BufAppend(sb, " " + lp.Entry(pack) + ":\n")
         put_stmts(sb, s, pack, cand, has_cand)
-        // A function with an empty body is an error in this language, and a
-        // session that is all definitions so far has nothing to put in main
-        // yet. `ret 0` is what main returns anyway.
         if empty:
             str.BufAppend(sb, str.Len(kw_ret) > 0 ? kw_ret : "ret")
             str.BufAppend(sb, " 0\n")
@@ -1062,25 +923,7 @@ func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
     ret out
 end
 
-// ===========================================================================
-// ===== repl.c: checking, running and turns =================================
-// ===========================================================================
-
-// repl_incomplete - is the turn still unfinished? The parser decides: it
-// is the only thing that knows a `match` arm from a struct field, and a
-// block-opening ':' from the ':' in `f(n: int): int`. Counting colons and
-// `end`s by hand - what this used to do - miscounted the moment a function
-// took a typed parameter or named a return type, and the prompt then
-// swallowed everything typed after it.
 func incomplete(pack: int, src_text: str, as_stmt: bool): bool:
-    // A statement is only legal inside a function, so it is probed inside
-    // one - with a closing `end` appended. That `end` absorbs exactly the
-    // one the block still owes: `each v in xs:` on its own leaves main
-    // open (more input owed), while a block the user already closed
-    // parses whole (the turn is finished). Probing a statement at top
-    // level instead - what this did first - failed with "expected a
-    // top-level definition", which is not an end-of-input error, so every
-    // multi-line `if`/`each`/`until` ended after its first line.
     mut probe := src_text
     if as_stmt:
         kw_func := lp.Spelling(pack, tok.TK_KW_FUNC)
@@ -1104,12 +947,6 @@ func incomplete(pack: int, src_text: str, as_stmt: bool): bool:
     ret more
 end
 
-// repl_read_block - reads continuation lines until the turn parses (or
-// input ends). `as_stmt` picks the framing incomplete() probes in: the
-// first line has already been classified by then, so the two callers know
-// which one this turn is. `ok` is false when the user abandoned the block with
-// `:abort` - without that escape a block that can never be completed (a
-// typo in the word that closes it) would hold the prompt forever.
 func read_block(pack: int, first: str, as_stmt: bool, ok &: bool): str:
     mut block := first + "\n"
     mut cont_ok := true
@@ -1129,11 +966,6 @@ func read_block(pack: int, first: str, as_stmt: bool, ok &: bool): str:
     ret block
 end
 
-// compile_check - the front end only: lex, parse, prune, analyze (codegen
-// is never reached - this is a dry-run gate before accepting a turn into
-// the session, matching the C's own throwaway arena_t exactly). `quiet`
-// decides whether the user sees the diagnostics - the echo probe below
-// asks a question it does not want answered out loud.
 func compile_check(opt &: dr.Dr, pack: int, test_src: str, quiet: bool): bool:
     lgr := lg.New(quiet ? lg.LOG_OFF : lg.LOG_ERROR, resolve_color(opt.color))
     mut sf := src.New()
@@ -1168,10 +1000,6 @@ func compile_check(opt &: dr.Dr, pack: int, test_src: str, quiet: bool): bool:
     ret ok && pok && cok && sok
 end
 
-// What system() reported, in the words the user thinks in. libc hands
-// back a wait status on POSIX - exit code 3 arrives as 768 - and the C
-// printed that raw number, so a program that exited 3 said "exited with
-// 768". Windows' system() returns the code itself.
 func exit_note(rc: int): str:
     if SALAM_OS_WINDOWS:
         ret "[program exited with " + co.I64Toa(rc as i64) + "]"
@@ -1187,12 +1015,6 @@ func exit_note(rc: int): str:
     end
 end
 
-// repl_emit_output - prints what this run added. Everything the session
-// printed on earlier turns comes out again byte for byte, so the common
-// prefix is replay and only the tail is news; a program whose output
-// changed (it reads a clock, a file, the network - or a statement the user
-// just rebound) fails the prefix test and is shown whole rather than
-// guessed at.
 func emit_output(out: str):
     mut skip := 0
     if g_has_last && str.StartsWith(out, g_last_out):
@@ -1203,19 +1025,7 @@ func emit_output(out: str):
     end
 end
 
-// exec_session - repl_exec, reworked to reuse dr.Build's own full
-// package-resolution pipeline (see the file header's "C -> Salam decisions"
-// note on why this is simpler AND more complete than the C's hand-rolled
-// RT_PKGS mini-linker). `opt` is mutated in place (inputs/output/command),
-// matching dr.Run()'s own established idiom of repurposing its `&: Dr` for
-// a one-shot sub-build. `replay` is true for a turn - the run is captured
-// so only what the newest statement added is printed - and false for an
-// explicit :run, which hands the program the terminal itself.
 func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
-    // Same "INFO is too noisy for a one-shot run" bump dr.Run() itself
-    // applies before build_impl, so `:run`/a bare statement doesn't spam
-    // the whole stdlib closure's parse/codegen INFO lines on every REPL
-    // turn.
     if opt.log_level == lg.LOG_INFO:
         opt.log_level = lg.LOG_WARN
     end
@@ -1235,9 +1045,6 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
     end
     opt.inputs = Vector {} as Vector<str>
     opt.inputs.push(tmp_src)
-    // Both fields, not just the list: this turn's file is the whole input,
-    // and dr.Build hands `input` to the LLVM backend and `inputs` to the C
-    // one.
     opt.input = tmp_src
     opt.output = tmp_exe
     opt.exe_path = ""
@@ -1247,9 +1054,6 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
         exe := str.Len(opt.exe_path) > 0 ? opt.exe_path : tmp_exe
         mut cmdb := str.NewBuilder()
         if SALAM_OS_WINDOWS:
-            // cmd.exe strips the outermost quote pair off everything after
-            // /c, so the whole redirected command needs one more pair
-            // around it for a temp path with a space in it to survive.
             if replay:
                 str.BufAppendChar(cmdb, 34)
             end
@@ -1288,11 +1092,6 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
             end
             _r0 := os.Remove(tmp_out)
         else:
-            // An explicit :run keeps the program's own stdout and stdin -
-            // a loop prints as it goes and `input()` can still ask a
-            // question, neither of which survives a redirect to a file.
-            // The cost is that this run's output was never read here, so
-            // the next turn has no prefix to replay and shows everything.
             g_last_out = ""
             g_has_last = false
         end
@@ -1305,12 +1104,6 @@ func exec_session(opt &: dr.Dr, full_src: str, replay: bool): int:
     ret rc
 end
 
-// repl_echo_wrap - `expr` alone on a line is a question, so answer it: the
-// REPL tries the turn as `println expr` first and keeps that form only if
-// it compiles. A void call like `xs.push("a")` fails that check and runs
-// as the plain statement it is. The expression is not parenthesized -
-// print statements reject that outright - which is safe because it is the
-// whole line.
 func echo_wrap(pack: int, block: str): str:
     kw := lp.Spelling(pack, tok.TK_KW_PRINTLN)
     mut n := str.Len(block)
@@ -1320,8 +1113,6 @@ func echo_wrap(pack: int, block: str): str:
     ret (str.Len(kw) > 0 ? kw : "println") + " " + str.Substr(block, 0, n) + "\n"
 end
 
-// repl_turn_def - a definition turn: check the session as it would be with
-// this entry in it, then let it replace whatever it redefines.
 func turn_def(
     opt &: dr.Dr, s &: Session, pack: int, kind: int, name: str, block: str
 ):
@@ -1336,7 +1127,6 @@ func turn_def(
             s.stmts.len() as i64
         ) + " statement(s) typed so far."
     end
-    // An import or an extern block names nothing worth reading back.
     if kind == RS_PKG || kind == RS_IMPORT || kind == RS_EXTERN:
         println "ok."
     else:
@@ -1348,13 +1138,8 @@ func turn_def(
     end
 end
 
-// repl_turn_stmt - a statement turn: echo-probe it, check it, run it, and
-// keep it only if all three worked.
 func turn_stmt(opt &: dr.Dr, s &: Session, pack: int, block: str):
     mut cand := Entry { kind = RS_STMT, name = "", text = block }
-    // Re-binding a name the session already bound `mut` keeps the `mut`:
-    // the statements typed in between may well assign to it, and losing
-    // their right to do so is not what "x is 5 now" asked for.
     old_i := stmt_replace_index(s, pack, block)
     if old_i >= 0 && starts_with_mut(pack, s.stmts.get(old_i)) && !starts_with_mut(
         pack, block
@@ -1368,20 +1153,12 @@ func turn_stmt(opt &: dr.Dr, s &: Session, pack: int, block: str):
             cand.text = plain
         end
     end
-    // Analyze before building, the same gate a def already goes through. A
-    // rejected turn is then reported against "<repl>" instead of against a
-    // temp file whose path is longer than the program and which is deleted
-    // before the user could open it, and no backend or C compiler is
-    // started for a turn that cannot survive the front end.
     src_text := render(s, pack, cand, true)
     if compile_check(opt, pack, src_text, false) && exec_session(opt, src_text, true) == 0:
         session_add_stmt(s, pack, cand.text)
     end
 end
 
-// repl_layout_exec - lex/parse/prune, then (regardless of sema's own
-// result, matching the C's `if (ok) sema_run(...)` with the bool
-// discarded) find and render a `layout: ... end` block to stdout.
 func layout_exec(opt &: dr.Dr, pack: int, src_text: str):
     lgr := lg.New(lg.LOG_ERROR, resolve_color(opt.color))
     mut sf := src.New()
@@ -1425,7 +1202,6 @@ func layout_exec(opt &: dr.Dr, pack: int, src_text: str):
     at.FreeAst(a)
 end
 
-// repl_layout_turn
 func layout_turn(opt &: dr.Dr, pack: int, first_line: str, block: str):
     p := str.TrimLeft(first_line)
     if str.StartsWith(p, "layout") && (
@@ -1436,10 +1212,6 @@ func layout_turn(opt &: dr.Dr, pack: int, first_line: str, block: str):
     end
     io.EPrintln("error: layout REPL only accepts 'layout: ... end' blocks")
 end
-
-// ===========================================================================
-// ===== repl.c: commands ====================================================
-// ===========================================================================
 
 func help(is_layout: bool):
     if is_layout:
@@ -1497,12 +1269,6 @@ func save_session(s &: Session, pack: int, arg: str):
     println "saved to " + path
 end
 
-// :load - the other half of :save. The file is read as though it had been
-// typed: split into turns by the same "does this parse yet?" test the
-// prompt uses, and each turn taken through the same def/statement path, so
-// a definition replaces one of the same name and a statement joins main
-// and runs. A turn that does not survive its check leaves the session
-// alone, exactly as at the prompt, and the rest of the file still loads.
 func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: str):
     path := str.TrimLeft(arg)
     if str.Len(path) == 0:
@@ -1519,8 +1285,6 @@ func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: s
     mut turns := 0
     repeat lines.len() with i:
         line := lines.get(i)
-        // A blank line outside a block is nothing; inside one it belongs to
-        // the block being built.
         if str.Len(block) == 0 && str.Len(str.TrimLeft(line)) == 0:
             continue
         end
@@ -1548,8 +1312,6 @@ func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: s
     println "loaded " + path + " (" + co.I64Toa(turns as i64) + " turn(s))."
 end
 
-// `main()` typed at the prompt reads as "run it", the same shorthand the
-// REPL has always accepted, in the session's own language.
 func wants_run(pack: int, line: str): bool:
     entry := lp.Entry(pack)
     p := skip_ws(line, 0)
@@ -1577,7 +1339,6 @@ func cmd_run(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool):
     _rc := exec_session(opt, text, false)
 end
 
-// driver_repl - the interactive loop.
 pub func Run(opt &: dr.Dr): int:
     g_hist = Vector {} as Vector<str>
     g_last_out = ""
@@ -1591,9 +1352,6 @@ pub func Run(opt &: dr.Dr): int:
     end
     sm.SetStdlibRoot(opt.stdlib_path)
     sm.LayoutSchemaInit(opt.stdlib_path)
-    // A turn is a fragment of a program still being written: a binding
-    // whose first use is on the next line, a helper defined before its
-    // caller. See sm.SetRelaxUnused.
     sm.SetRelaxUnused(true)
     is_layout := opt.command == dr.CMD_REPL_LAYOUT
     which := is_layout ? "layout" : "general"
@@ -1607,7 +1365,7 @@ pub func Run(opt &: dr.Dr): int:
         if !ok:
             running = false
         else str.Len(line) == 0:
-            _blank := 0 // blank line, just re-prompt
+            _blank := 0
         else str.Equals(line, ":quit") || str.Equals(line, ":q") || str.Equals(line, "quit") || str.Equals(line, "exit") || str.Equals(line, "q"):
             running = false
         else str.Equals(line, ":help"):
@@ -1620,9 +1378,6 @@ pub func Run(opt &: dr.Dr): int:
             println "session cleared."
             hist_push(line)
         else str.Equals(line, ":defs"):
-            // render() always writes at least the synthesized main, so
-            // "nothing typed yet" has to be recognized before it, not
-            // from the rendered text being empty (it never is).
             if ses.defs.len() == 0 && ses.stmts.len() == 0:
                 println "(empty)"
             else:
@@ -1644,10 +1399,6 @@ pub func Run(opt &: dr.Dr): int:
             cmd_run(opt, ses, pack, is_layout)
             hist_push(line)
         else byte_at(line, 0) == 58:
-            // Nothing in this language starts a statement with ':', so a
-            // line that does is a command that was meant - and mistyped, or
-            // typed where it does not apply (`:abort` belongs at the '...'
-            // prompt). Saying so beats a parse error about ':'.
             if str.Equals(line, ":abort"):
                 println "nothing to abandon - :abort answers the '  ... ' prompt."
             else:
@@ -1657,10 +1408,6 @@ pub func Run(opt &: dr.Dr): int:
             end
             hist_push(line)
         else:
-            // Classified before the block is read: which framing the
-            // turn completes in (a top-level definition, or a statement
-            // inside main) is decided by its first line. A layout block
-            // is top-level whatever `layout` classifies as.
             mut name := ""
             first_kind := classify(pack, line, name)
             mut blk_ok := true
@@ -1669,9 +1416,6 @@ pub func Run(opt &: dr.Dr): int:
                 if is_layout:
                     layout_turn(opt, pack, line, block)
                 else:
-                    // Read again off the whole block: a turn that opens
-                    // with `@en "..."` markers names what it defines on a
-                    // later line, which only the finished block has.
                     kind := classify(pack, block, name)
                     if kind != RS_STMT:
                         turn_def(opt, ses, pack, kind, name, block)

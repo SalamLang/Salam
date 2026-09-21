@@ -12,14 +12,6 @@
  *
  */
 
-// aws - queues.
-//
-// Offline, like the other two aws demos: what goes on the wire is a pure
-// function of the call, and what comes back is a pure function of the
-// document, so both are checked without a service. The consumer loop itself -
-// receive, handle, delete, and the redelivery that happens when the delete is
-// missed - is exercised against a mock outside the suite.
-
 import aws
 
 func check(label: str, got: str, want: str):
@@ -56,11 +48,6 @@ func queue_url(): str:
     ret "https://sqs.eu-west-1.amazonaws.com/123456789012/jobs"
 end
 
-// ---- addressing ----
-
-// A request goes to the queue's own URL rather than to the service root with
-// the queue named in a parameter. Both work; posting to the queue is what the
-// SDKs do and what makes a request readable in a log.
 func addressing():
     c := aws.NewQueryCall("sqs", "SendMessage", aws.SQS_VERSION)
     head := aws.PreparedCall(example(), c, 1369353600 as i64)
@@ -69,8 +56,6 @@ func addressing():
     check_bool("scoped to sqs",
         head.find("/20130524/us-east-1/sqs/aws4_request") >= 0, true)
 end
-
-// ---- messages ----
 
 func receive_answer(): str:
     ret "<ReceiveMessageResponse xmlns=\"http://queue.amazonaws.com/doc/2012-11-05/\">" +
@@ -100,31 +85,21 @@ func messages():
     check("entity-decoded body", m.body, "render invoice 42 & 43")
     check("receipt handle", m.receipt, "AQEB7Handle==")
     check("body digest", m.md5, "fafb00f5732ab283681e124bf8747ed1")
-    // A receive count climbing above one or two is the signal that a handler
-    // is failing silently, so it has to survive parsing.
     check("receive count", "" + m.receive_count, "3")
-    // SQS reports this in milliseconds, unlike every other AWS timestamp, and
-    // the value is always past what 32 bits hold.
     check("sent timestamp in seconds", "" + m.sent_epoch, "1787282854")
     check("fifo group", m.group_id, "tenant-7")
-    // A message attribute nests its value one level deeper than a system
-    // attribute does.
     check("message attribute", aws.MessageAttribute(m, "tenant"), "acme & co")
     check("second message attribute", aws.MessageAttribute(m, "priority"), "high")
     check("absent attribute", aws.MessageAttribute(m, "nothing"), "")
     check("out of range is empty", aws.MessageAt(l, 4).id, "")
 end
 
-// An empty queue answers a well-formed document with no Message in it, which
-// is a success with nothing in it rather than a failure.
 func empty_receive():
     l := aws.ParseReceive("<ReceiveMessageResponse><ReceiveMessageResult/>" +
         "</ReceiveMessageResponse>", 200)
     check_bool("an empty queue is not an error", l.ok, true)
     check("nothing received", "" + aws.MessageCount(l), "0")
 end
-
-// ---- sending ----
 
 func sending():
     mut m := aws.OutMessage { body = "work", delay = 30, group_id = "g1",
@@ -138,14 +113,12 @@ func sending():
     check_bool("delay sent", body.find("&DelaySeconds=30") >= 0, true)
     check_bool("fifo group sent", body.find("&MessageGroupId=g1") >= 0, true)
     check_bool("dedup id sent", body.find("&MessageDeduplicationId=d1") >= 0, true)
-    // A message attribute is three numbered parameters, not one.
     check_bool("attribute name",
         body.find("&MessageAttribute.1.Name=tenant") >= 0, true)
     check_bool("attribute type",
         body.find("&MessageAttribute.1.Value.DataType=String") >= 0, true)
     check_bool("attribute value",
         body.find("&MessageAttribute.1.Value.StringValue=acme") >= 0, true)
-    // The request goes to the queue's path, not the service root.
     head := aws.PreparedCall(example(), c, 1369353600 as i64)
     check_bool("posted to the queue",
         head.find("POST /123456789012/jobs HTTP/1.1") == 0, true)
@@ -153,8 +126,6 @@ func sending():
         head.find("\r\nHost: sqs.eu-west-1.amazonaws.com\r\n") >= 0, true)
 end
 
-// The limits are the service's, and exceeding them is an error from the far
-// side rather than a clamp - so they are clamped here.
 func clamping():
     c := aws.SqsReceiveCall(queue_url(), aws.ReceiveOptions {
         max_messages = 99, wait_seconds = 600, visibility_timeout = 99999
@@ -173,8 +144,6 @@ func clamping():
         aws.CallBodyText(small).find("&MaxNumberOfMessages=1") >= 0, true)
 end
 
-// Long polling is the default, because a zero wait answers empty almost every
-// time and is billed the same as one that waits.
 func polling_default():
     o := aws.ReceiveOptions {}
     check("default wait", "" + o.wait_seconds, "20")
@@ -182,10 +151,6 @@ func polling_default():
     check_bool("attributes asked for by default", o.want_attributes, true)
 end
 
-// ---- configuration ----
-
-// Without a dead-letter queue, a message whose handler always fails is retried
-// until the queue's retention runs out.
 func redrive():
     check("redrive policy",
         aws.SqsRedrivePolicy("arn:aws:sqs:us-east-1:1:dlq", 5),

@@ -1,5 +1,3 @@
-"""Collatz-sequence longest-chain benchmark."""
-
 best_steps = 0
 best_n = 1
 for n in range(1, 30001):

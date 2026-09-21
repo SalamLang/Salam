@@ -1,32 +1,5 @@
 package tls
 
-// TLS 1.2 client handshake (RFC 5246), restricted to ECDHE key exchange and
-// AEAD cipher suites.
-//
-//   -> ClientHello              (the same hello that offers 1.3; the server
-//                                chooses by omitting supported_versions)
-//   <- ServerHello
-//   <- Certificate
-//   <- ServerKeyExchange        (ECDHE params, signed by the leaf key)
-//   <- ServerHelloDone
-//   -> ClientKeyExchange        (our ECDHE public key)
-//   -> ChangeCipherSpec         (plaintext)
-//   -> Finished                 (first record under the new keys)
-//   <- ChangeCipherSpec
-//   <- Finished
-//
-// NO CBC SUITES. Every suite offered here is AES-GCM or ChaCha20-Poly1305.
-// That is what keeps the MAC-then-encrypt padding-oracle family (BEAST,
-// Lucky13, POODLE-style attacks) out of this path entirely, and it is why a
-// 1.2 fallback is tractable at all. A server that offers only CBC gets no
-// overlap with our list and the handshake fails, which is the intended outcome.
-//
-// THE SERVERKEYEXCHANGE SIGNATURE IS THE WHOLE POINT of this flow. Unlike
-// TLS 1.3, the transcript is not signed; the server signs only
-// client_random || server_random || ECDHParams. Skipping or mis-scoping that
-// check means accepting an attacker-supplied ECDHE key and a fully readable
-// session, so it is verified before the shared secret is ever used.
-
 const TLS12_ECDHE_ECDSA_AES128_GCM_SHA256 := 0xC02B
 const TLS12_ECDHE_RSA_AES128_GCM_SHA256 := 0xC02F
 const TLS12_ECDHE_ECDSA_AES256_GCM_SHA384 := 0xC02C
@@ -112,8 +85,6 @@ func _tls_verify_leaf_sig(leaf: Cert, scheme: int, content: Buf, sig: Reader, al
         ret _rsa_verify_pss(kind, digest.p, n.p, n.len, e.p, e.len, sg.p, sg.len, hlen)
     end
     if scheme == SA_RSA_PKCS1_SHA256 || scheme == SA_RSA_PKCS1_SHA384:
-        // Legal in TLS 1.2's ServerKeyExchange, forbidden in TLS 1.3's
-        // CertificateVerify (RFC 8446 4.4.3), which only permits PSS.
         if !allow_pkcs1:
             ret false
         end
@@ -174,7 +145,6 @@ func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
     if r.bad:
         ret _hs_fail(h, "malformed ServerKeyExchange")
     end
-    // params as they appeared on the wire: 1 + 2 + 1 + plen bytes from the start
     params := _subreader(msg, 0, 4 + plen)
 
     scheme := _rd16(r)
@@ -185,8 +155,6 @@ func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
 
     mut signed := _newbuf(128 + plen)
     defer _buf_free(signed)
-    // function scope: a defer inside the group branch below would be hoisted
-    // past the name it frees
     mut peer := _newbuf(point.len + 1)
     defer _buf_free(peer)
     _putbuf(signed, h.crand)
@@ -203,11 +171,8 @@ func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
         ret _hs_fail(h, "ServerKeyExchange signature invalid")
     end
 
-    // Record the group the SERVER chose: ClientKeyExchange must answer with a
-    // key on that curve, not on whichever one we happened to offer a share for.
     h.group = group
 
-    // Derive the pre-master secret from the server's ephemeral point.
     _bufreset(h.shared)
     if group == GROUP_X25519:
         if point.len != 32:
@@ -224,14 +189,6 @@ func _tls12_parse_ske(h &: Handshake, msg: Reader): bool:
         if group == GROUP_SECP384R1:
             cv = _curve_p384()
         end
-        // The ClientHello can only pre-generate one EC keypair, and it picks
-        // P-256; a server that answers on P-384 needs a P-384 one. Reusing the
-        // P-256 pair read a 48-byte scalar out of a 32-byte buffer and then
-        // sent a 65-byte P-256 point as the ClientKeyExchange, so our shared
-        // secret and the point we published described different keys. The
-        // server's first look at that was our Finished, which it rejected by
-        // dropping the connection - a "connection closed during handshake"
-        // against every host that prefers secp384r1.
         if !_tls12_gen_ec_key(h, cv):
             ret _hs_fail(h, "could not generate a key on the server's curve")
         end
@@ -277,7 +234,6 @@ func _tls12_install_keys(h &: Handshake): bool:
 
     _tk_free(h.rec.rxk)
     _tk_free(h.rec.txk)
-    // client writes with the first key/IV, server with the second
     h.rec.txk = _tk_from_block(kb, 0, klen, 2 * klen, ivlen, h.cipher)
     h.rec.rxk = _tk_from_block(kb, klen, klen, 2 * klen + ivlen, ivlen, h.cipher)
     ret h.rec.txk.live && h.rec.rxk.live

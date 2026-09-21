@@ -13,11 +13,6 @@ import cc "../condcomp.salam"
 import sm "../semantic/semantic.salam"
 import co "../sal_core.salam"
 
-    // Extracts an embedded sysroot tarball into a cache directory keyed by its
-    // size, so a given build's blob is unpacked once and reused. Takes a raw
-    // pointer and a length rather than a `str`: tar data is full of NUL bytes
-    // and `str` ends at the first one, which is why this could never have been
-    // called with a real archive before.
     pub func MaterializeSysroot(name: str, tar: void*, tar_len: i64, out &: str): bool:
         if tar == null || tar_len < (512 as i64):
             ret false
@@ -37,18 +32,6 @@ import co "../sal_core.salam"
         ret true
     end
 
-    // ===== driver/debug_cmd.c (stage 8b, NEW) =====
-
-    // driver_debug (`salam debug`) - build with debug info (+SALAM_SAFE if not
-    // already safe), then launch the platform debugger attached to the
-    // resulting binary. PORT-NOTE: the C compares the raw `system()` return
-    // against 127 (its "command not found" convention) and against 0 with NO
-    // WEXITSTATUS-style unpacking anywhere in this function - on POSIX,
-    // system()'s return is actually a packed wait-status, so the `== 127`
-    // branch is latent dead code upstream too (a real "not found" exit packs
-    // as 127<<8, not 127) while `== 0` still works (a 0 exit packs as literal
-    // 0). Ported bit-for-bit, warts included, rather than silently
-    // "correcting" behavior HEAD itself doesn't have.
     pub func Debug(opt &: Dr): int:
         if opt.inputs.len() == 0:
             io.EPrintln("salam debug: no input file")
@@ -108,37 +91,18 @@ import co "../sal_core.salam"
         ret rc2 == 0 ? 0 : 1
     end
 
-    // driver_memcheck (`salam memcheck`) - build with debug info, then hand the
-    // binary to whichever checker is available: Valgrind on POSIX where it is
-    // installed, otherwise an ASan build run directly. Exactly one of the two,
-    // never both - see the comment inside. Same raw-system()-return fidelity
-    // note as Debug() above (the `==0` checks are unaffected by the
-    // packed-wait-status subtlety; only an `==127`-style check would be).
     pub func Memcheck(opt &: Dr): int:
         if opt.inputs.len() == 0:
             io.EPrintln("salam memcheck: no input file")
             ret 2
         end
-        // Which checker gets the process is decided here, before the build, and
-        // exactly one of them does. AddressSanitizer and Valgrind each replace
-        // the allocator, and an ASan-instrumented binary run under Valgrind
-        // aborts on startup with "ASan runtime does not come first in initial
-        // library list" having checked nothing at all - which is what this
-        // command used to do whenever both were available. Valgrind wins where
-        // it exists, because it also reports reads of uninitialised memory and
-        // ASan does not.
         mut use_valgrind := false
         if !SALAM_OS_WINDOWS:
             use_valgrind = system("valgrind --version > /dev/null 2>&1") == 0
         else:
-            // Spelled out rather than left to the initializer: with a Windows
-            // target condcomp prunes the arm above, and a `mut` that is never
-            // assigned is an error (E069). There is no Valgrind here either way.
             use_valgrind = false
         end
 
-        // tcc cannot instrument for ASan, but it emits a perfectly good binary
-        // for Valgrind to watch, so it is only a hard stop when ASan is the plan.
         if !use_valgrind && str.Contains(opt.cc, "tcc"):
             io.EPrintln("salam memcheck: tcc does not support AddressSanitizer, and no")
             io.EPrintln("  Valgrind was found to check the binary instead.")
@@ -169,15 +133,6 @@ import co "../sal_core.salam"
             ret rc
         end
         built := str.Len(opt.exe_path) > 0 ? opt.exe_path : exe
-        // Spell a bare name as "./name" before handing it to the shell. Without
-        // the prefix the shell looks the binary up on $PATH, which does not
-        // include the current directory on POSIX, so a build that landed in the
-        // working directory fails with "valgrind: app: command not found"
-        // rather than running. Run() guards the same way; cmd.exe searches the
-        // working directory itself, so Windows needs nothing.
-        // SALAM_OS_WINDOWS is a compile-time constant and only reads as a whole
-        // condition, so the platform test and the path test are nested rather than
-        // combined; assigning in every branch keeps `mut` justified on both.
         mut target := ""
         if SALAM_OS_WINDOWS:
             target = built
@@ -213,11 +168,6 @@ import co "../sal_core.salam"
         ret rc2 == 0 ? 0 : 1
     end
 
-    // ===== driver/repl.c (stage 8b, NEW - see the private section's fidelity
-    // note above repl_readline for the one deliberate simplification) =====
-
-    // driver_repl (`salam repl` / `salam repl layout`, CMD_REPL / CMD_REPL_LAYOUT
-    // share this one entry point exactly like the C).
     pub func Repl(opt &: Dr): int:
         lgr := lg.New(opt.log_level, resolve_color(opt.color))
         pack := lp.Load(opt.lang)
@@ -299,7 +249,7 @@ import co "../sal_core.salam"
                 mut after_ok := str.Len(first) == 6
                 if !after_ok && str.Len(first) > 6:
                     nc := byte_at(first, 6)
-                    after_ok = nc == 58 || nc == 32 || nc == 9 // ':' ' ' '\t'
+                    after_ok = nc == 58 || nc == 32 || nc == 9
                 end
                 if str.StartsWith(first, "layout") && after_ok:
                     repl_layout_exec(block, pack, opt)

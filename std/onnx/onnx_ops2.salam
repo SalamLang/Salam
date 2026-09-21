@@ -18,21 +18,7 @@ import math
 import str
 import tensor
 
-// The second half of the op table, the ops a transformer or a modern
-// vision export leans on that the first wave (onnx_ops) left out:
-//
-//   math       Abs Erf Softplus Elu Selu HardSigmoid PRelu Floor Ceil
-//              Round Reciprocal Sign Pow Min Max Sum Mean
-//   reduce     ReduceMean ReduceSum ReduceMax ReduceMin (axes, keepdims)
-//   indexing   Gather (1-D or scalar indices) Slice Split Expand Where
-//              Equal Greater Less Cast Shape
-//   norm       LayerNormalization InstanceNormalization
-//
-// _exec_node falls through to _exec_node2 before it gives up, so the
-// two tables read as one.
-
 func _erf(x: f64): f64:
-    // Abramowitz and Stegun 7.1.26, |error| < 1.5e-7 - well inside f32.
     mut sign := 1.0
     mut v := x
     if v < 0.0:
@@ -77,8 +63,6 @@ func _unary2(model &: Model, node &: Node, env &: _Env): bool:
     else str.Equals(op, "Gelu"):
         y = tensor.Gelu(x)
     else str.Equals(op, "Cast"):
-        // Only the float types survive a round trip through std/tensor,
-        // and an integer target is a truncation of the same values.
         target := node.attr_int("to", 1)
         if target == 6 || target == 7 || target == 5 || target == 12 || target == 13:
             y = _map_op(x, "Floor", 0.0, 0.0)
@@ -191,7 +175,6 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
     else:
         repeat x.rank() with i: axes.push(i) end
     end
-    // Descending, so removing one does not renumber the others.
     repeat axes.len() with i:
         repeat axes.len() - 1 - i with j:
             if axes.get(j) < axes.get(j + 1):
@@ -215,7 +198,6 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
         else str.Equals(node.op, "ReduceSum"): nxt = tensor.SumAxis(cur, ax, keep)
         else str.Equals(node.op, "ReduceMax"): nxt = tensor.MaxAxis(cur, ax, keep)
         else:
-            // ReduceMin, as -max(-x)
             mut neg := tensor.Neg(cur)
             mut mx := tensor.MaxAxis(neg, ax, keep)
             neg.free()
@@ -255,7 +237,6 @@ func _gather(model &: Model, node &: Node, env &: _Env): bool:
         model.error = str.Clone("Gather: index out of range")
         ret false
     end
-    // A scalar index drops the axis, the way ONNX defines it.
     if idx.rank() == 0 && y.rank() > 1:
         mut shape := Vector {} as Vector<int>
         repeat y.rank() with i:
@@ -427,8 +408,6 @@ func _prelu(model &: Model, node &: Node, env &: _Env): bool:
     p := out.data.data
     ps := sl.data.data
     ns := sl.numel()
-    // The slope is per channel (axis 1) when it has one entry per
-    // channel, and shared when it is a scalar.
     inner := x.rank() > 2 ? x.numel() / (x.dim(0) * x.dim(1)) : 1
     chan := x.rank() > 1 ? x.dim(1) : 1
     zero := 0.0 as f32
@@ -493,7 +472,6 @@ func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
         inv := 1.0 / math.Sqrt(var + eps)
         repeat inner with k:
             v := ((p[base + k] as f64) - mean) * inv
-            // LayerNorm scales per normalized element, Instance per channel.
             mut idx := k
             if instance: idx = r % chan end
             mut s := 1.0

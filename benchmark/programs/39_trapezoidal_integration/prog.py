@@ -1,6 +1,3 @@
-"""Trapezoidal integration benchmark."""
-
-
 def f(x):
     return x * x * x - 2.0 * x * x + 1.0
 

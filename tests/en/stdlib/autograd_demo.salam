@@ -14,9 +14,6 @@
 
 package main
 
-// std/autograd: the tape, forward recording, and hand-checked backward
-// results.
-
 import autograd
 import tensor
 import testing
@@ -24,9 +21,8 @@ import testing
 func main:
     eps := 0.0001
 
-    // d/dx sum(x*x) = 2x, with fan-out through the two uses of x
     mut tp := autograd.NewTape(1)
-    mut x := tensor.Arange(4)              // 0 1 2 3
+    mut x := tensor.Arange(4)
     xid := autograd.Watch(tp, x)
     sq := autograd.Mul(tp, xid, xid)
     loss := autograd.Sum(tp, sq)
@@ -38,11 +34,9 @@ func main:
     testing.AssertEqFloat(gx.at(2), 4.0, eps)
     testing.AssertEqFloat(gx.at(3), 6.0, eps)
 
-    // reset() clears the graph; the tape is reusable in place
     tp.reset()
     testing.AssertEqInt(tp.len(), 0)
 
-    // y = x*x + x: fan-out sums the two paths, dy = 2x + 1
     xid2 := autograd.Watch(tp, x)
     sq2 := autograd.Mul(tp, xid2, xid2)
     both := autograd.Add(tp, sq2, xid2)
@@ -53,7 +47,6 @@ func main:
     testing.AssertEqFloat(g2.at(3), 7.0, eps)
     tp.reset()
 
-    // Inputs are constants: no gradient, no node
     ione := autograd.Input(tp, x)
     itwo := autograd.Input(tp, x)
     isum := autograd.Add(tp, ione, itwo)
@@ -63,7 +56,6 @@ func main:
     testing.AssertEqInt(tp.nodes.len(), 0)
     tp.reset()
 
-    // Broadcast add: d(bias) folds the batch axis down
     mut xb := tensor.Zeros2(2, 3)
     tensor.SetAll(xb, 1.0)
     mut bias := tensor.Arange(3)
@@ -78,16 +70,14 @@ func main:
     testing.AssertEqFloat(gb.at(2), 2.0, eps)
     tp.reset()
 
-    // Sub keeps its sign on the swapped side; Scale and AddScalar chain
     sx := autograd.Watch(tp, x)
-    neg := autograd.Sub(tp, autograd.Scale(tp, sx, 3.0), sx)   // 3x - x
+    neg := autograd.Sub(tp, autograd.Scale(tp, sx, 3.0), sx)
     sloss := autograd.Sum(tp, autograd.AddScalar(tp, neg, 10.0))
     autograd.Backward(tp, sloss)
     gs := autograd.Grad(tp, sx)
     testing.AssertEqFloat(gs.at(1), 2.0, eps)
     tp.reset()
 
-    // Div: d/da (a/b) = 1/b, d/db = -a/b^2
     mut a := tensor.Zeros1(3)
     a.set_at(0, 2.0)
     a.set_at(1, 4.0)
@@ -105,7 +95,6 @@ func main:
     testing.AssertEqFloat(gdb.at(1), 0.0 - 1.0, eps)
     tp.reset()
 
-    // MatMul: with L = sum(A B), dA = ones * B^T, dB = A^T * ones
     mut am := tensor.Zeros2(2, 3)
     repeat 6 with k: am.set_at(k, (k + 1) as f64) end
     mut bm := tensor.Zeros2(3, 2)
@@ -117,14 +106,12 @@ func main:
     autograd.Backward(tp, mloss)
     gma := autograd.Grad(tp, ma)
     gmb := autograd.Grad(tp, mb)
-    // Row sums of B are 11, 7, 3; column sums of A are 5, 7, 9.
     testing.AssertEqFloat(gma.at2(0, 0), 11.0, eps)
     testing.AssertEqFloat(gma.at2(1, 2), 3.0, eps)
     testing.AssertEqFloat(gmb.at2(0, 0), 5.0, eps)
     testing.AssertEqFloat(gmb.at2(2, 1), 9.0, eps)
     tp.reset()
 
-    // Mean and MeanAxis scale their broadcast-back by 1/n
     mm := autograd.Watch(tp, am)
     mloss2 := autograd.Mean(tp, mm)
     autograd.Backward(tp, mloss2)
@@ -133,31 +120,27 @@ func main:
     tp.reset()
 
     ax := autograd.Watch(tp, am)
-    sa := autograd.SumAxis(tp, ax, 0, false)     // [3]
+    sa := autograd.SumAxis(tp, ax, 0, false)
     sl := autograd.Sum(tp, autograd.Square(tp, sa))
     autograd.Backward(tp, sl)
     gax := autograd.Grad(tp, ax)
-    // column sums are 5, 7, 9; d = 2*colsum in every row
     testing.AssertEqFloat(gax.at2(0, 0), 10.0, eps)
     testing.AssertEqFloat(gax.at2(1, 2), 18.0, eps)
     tp.reset()
 
-    // Param accumulates into a persistent buffer that survives reset
     mut w := tensor.Arange(3)
     mut wg := tensor.Zeros1(3)
     pid := autograd.Param(tp, w, wg)
     ploss := autograd.Sum(tp, autograd.Mul(tp, pid, pid))
     autograd.Backward(tp, ploss)
     tp.reset()
-    testing.AssertEqFloat(wg.at(2), 4.0, eps)    // 2x at x=2
-    // A second pass accumulates on top: optimizers zero between steps.
+    testing.AssertEqFloat(wg.at(2), 4.0, eps)
     pid2 := autograd.Param(tp, w, wg)
     ploss2 := autograd.Sum(tp, autograd.Mul(tp, pid2, pid2))
     autograd.Backward(tp, ploss2)
     tp.reset()
     testing.AssertEqFloat(wg.at(2), 8.0, eps)
 
-    // Reshape and Transpose2D route gradients straight through
     rx := autograd.Watch(tp, am)
     mut s6 := tensor.Shape1(6)
     rr := autograd.Reshape(tp, rx, s6)
@@ -165,7 +148,7 @@ func main:
     rt := autograd.Sum(tp, autograd.Square(tp, rr))
     autograd.Backward(tp, rt)
     grx := autograd.Grad(tp, rx)
-    testing.AssertEqFloat(grx.at2(1, 2), 12.0, eps)   // 2*6
+    testing.AssertEqFloat(grx.at2(1, 2), 12.0, eps)
     tp.reset()
 
     tx := autograd.Watch(tp, am)

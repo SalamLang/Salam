@@ -1,5 +1,3 @@
-"""Array read/write throughput benchmark."""
-
 N = 1000000
 MOD = 1000000007
 arr = [0] * N

@@ -12,31 +12,6 @@
  *
  */
 
-// Flat merge of the salam/condcomp port (see salam/PORTING.md "Layout - FLAT"):
-// condcomp_table.c + condcomp_fold.c (+ condcomp.h) - one package `condcomp`,
-// one file. Import alias for consumers: `cc`.
-//
-// C -> Salam decisions for this module:
-// - cc_val_kind_t -> pub int constants CC_BOOL / CC_STR (cross-package enums
-//   don't resolve; see PORTING.md "Cross-module enums").
-// - cc_const_t -> pub struct Entry; cc_table_t -> pub struct Table holding a
-//   Vector<Entry>. The arena parameter is gone: TableFree releases the table.
-// - `const cc_const_t *cc_table_lookup` (NULL = absent) -> `Lookup` returning
-//   an int index into the table (-1 = absent, the C NULL) plus Entry*
-//   accessors (EntryName/EntryKind/EntryBool/EntryStr) - consumers cannot
-//   build cross-package struct literals, and index+accessors avoids needing
-//   a sentinel Entry.
-// - ast_node_t* -> NodeId ints into an ast.Ast (0 = C NULL), matching the ast
-//   port; all tree rewiring goes through the get-copy -> mutate -> Put
-//   protocol described in salam/ast.salam.
-// - The host `#if defined(_WIN32)`/... ladder in cc_push_host_defs becomes a
-//   Salam compile-time `if SALAM_OS_*` ladder - the defines the *running*
-//   compiler was built with play the role of the C compiler's predefines.
-// - LOG_E_AT(log, PH_PARSER, file, span, msg) -> lg.LogAt(log, lg.PH_PARSER,
-//   lg.LOG_ERROR, file, line, col, msg) using the condition node's begin span.
-// - Deviation: EvalBool (a pub wrapper over the private cc_fold_bool) is
-//   exported so tests/consumers can evaluate a compile-time condition without
-//   pruning; the C kept the folder entirely static.
 package condcomp
 
 import tok "token.salam"
@@ -44,14 +19,11 @@ import lg "logger.salam"
 import at "ast.salam"
 import str
 
-// cc_val_kind_t (consts must precede globals - E086)
 pub const CC_BOOL := 0
 pub const CC_STR := 1
 
 const K_CC_NUM_BOOL_FLAGS := 25
 
-// ===== condcomp_table.c =====
-// s_all_bool_flags[] (NULL terminator dropped; fixed length instead).
 k_cc_all_bool_flags := [
     "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX",
     "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX",
@@ -60,28 +32,22 @@ k_cc_all_bool_flags := [
     "SALAM_OS_SALAMOS"
 ]
 
-// cc_const_t
 pub struct Entry:
     pub name: str = ""
-    pub kind: int = 0 // CC_BOOL
+    pub kind: int = 0
     pub bval: bool = false
-    pub sval: str = "" // "" where C used NULL
+    pub sval: str = ""
 end
 
-// struct cc_table_t
 pub struct Table:
     pub entries: Vector<Entry> = Vector {}
 end
 
-// ===== condcomp_fold.c (private result types) =====
-// cc_bres_t (fields pub: E017 makes non-pub fields unusable even inside
-// the defining package's free functions)
 struct Bres:
     pub ok: bool = false
     pub bval: bool = false
 end
 
-// cc_scalar_t
 struct Scalar:
     pub ok: bool = false
     pub is_str: bool = false
@@ -89,21 +55,14 @@ struct Scalar:
     pub sval: str = ""
 end
 
-// ===== condcomp_table.c (private helpers) =====
-
-// cc_push_bool
 func cc_push_bool(t &: Table, name: str, val: bool):
     t.entries.push(Entry { name = name, kind = CC_BOOL, bval = val, sval = "" })
 end
 
-// cc_push_str
 func cc_push_str(t &: Table, name: str, val: str):
     t.entries.push(Entry { name = name, kind = CC_STR, bval = false, sval = val })
 end
 
-// cc_push_host_defs - the C #if/#elif ladder on the host compiler's
-// predefines becomes a compile-time if-ladder on this compiler's own
-// SALAM_OS_*/SALAM_ARCH_* defines (order preserved from the C).
 func cc_push_host_defs(t &: Table):
     if SALAM_OS_WINDOWS:
         cc_push_bool(t, "SALAM_OS_WINDOWS", true)
@@ -168,12 +127,10 @@ func cc_push_host_defs(t &: Table):
     end
 end
 
-// trip_has
 func trip_has(hay: str, needle: str): bool:
     ret str.Contains(hay, needle)
 end
 
-// cc_push_target_defs
 func cc_push_target_defs(t &: Table, trip: str):
     mut bits64 := false
     if trip_has(trip, "x86_64") || trip_has(trip, "amd64"):
@@ -201,46 +158,19 @@ func cc_push_target_defs(t &: Table, trip: str):
 
     if trip_has(trip, "bsos"):
         cc_push_bool(t, "SALAM_OS_BSOS", true)
-        // Deliberately NOT SALAM_OS_UNIX. BS OS runs Salam programs and has no
-        // libc, so a package that takes its POSIX arm on this target compiles
-        // to open/read/pthread_create calls that nothing can link. Claiming
-        // Unix here was a shortcut that made those packages appear to port for
-        // free; it made them fail at link time with an undefined symbol
-        // instead of at the `if` with a branch that is honestly missing.
-        // std/net, std/sync and std/thread are the three packages this
-        // affects, and each needs a real SALAM_OS_BSOS arm.
         cc_push_str(t, "SALAM_OS", "bsos")
-        // Every BSOS target is freestanding, not only the kernel one, which is
-        // what cg_target_is_freestanding in codegen_core.salam has always
-        // decided. The flag used to be set here for the kernel triple alone,
-        // so a BSOS userspace program was compiled freestanding but could not
-        // say so in an `if`. The two now agree.
         cc_push_bool(t, "SALAM_FREESTANDING", true)
-        // "-kernel" adds the ring-0 profile on top: the float ban that keeps
-        // SSE state off the interrupt path.
         if trip_has(trip, "kernel"):
             cc_push_bool(t, "SALAM_KERNEL", true)
         end
     else trip_has(trip, "salamos"):
         cc_push_bool(t, "SALAM_OS_SALAMOS", true)
-        // Deliberately NOT SALAM_OS_UNIX, for the same reason as
-        // SALAM_OS_BSOS above: SalamOS has no libc, so std/net, std/sync and
-        // std/thread need a real SALAM_OS_SALAMOS arm rather than falling
-        // through to a POSIX path that fails at link time with an undefined
-        // symbol instead of at the `if` with a branch that is honestly
-        // missing.
         cc_push_str(t, "SALAM_OS", "salamos")
-        // Every SalamOS target is freestanding, kernel or not: there is no
-        // libc, a userspace program links against libsos/sysabi's raw
-        // syscall stub instead.
         cc_push_bool(t, "SALAM_FREESTANDING", true)
-        // "-kernel" adds the ring-0 profile on top: the float ban that keeps
-        // SSE state off the interrupt path.
         if trip_has(trip, "kernel"):
             cc_push_bool(t, "SALAM_KERNEL", true)
         end
     else trip_has(trip, "uefi"):
-        // BS-Boot: PE32+, Microsoft x64 ABI, no libc.
         cc_push_bool(t, "SALAM_OS_UEFI", true)
         cc_push_bool(t, "SALAM_FREESTANDING", true)
         cc_push_str(t, "SALAM_OS", "uefi")
@@ -286,7 +216,6 @@ func cc_push_target_defs(t &: Table, trip: str):
     end
 end
 
-// cc_push_missing_bool_defaults
 func cc_push_missing_bool_defaults(t &: Table):
     repeat K_CC_NUM_BOOL_FLAGS with i:
         if Lookup(t, k_cc_all_bool_flags[i]) < 0:
@@ -295,7 +224,6 @@ func cc_push_missing_bool_defaults(t &: Table):
     end
 end
 
-// cc_push_define - "NAME" -> bool true, "NAME=value" -> string value.
 func cc_push_define(t &: Table, def: str):
     eq := str.IndexOf(def, "=")
     if eq < 0:
@@ -307,9 +235,6 @@ func cc_push_define(t &: Table, def: str):
     )
 end
 
-// ===== condcomp_fold.c (private helpers) =====
-
-// cc_fold_defined_call - `defined(NAME)` -> whether NAME is in the table.
 func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
     n := at.Get(a, id)
     if n.a == 0:
@@ -333,7 +258,6 @@ func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
     ret Bres { ok = true, bval = Lookup(t, arg.name) >= 0 }
 end
 
-// cc_fold_scalar - a bool or string compile-time scalar.
 func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
     if id == 0:
         ret Scalar {}
@@ -352,7 +276,6 @@ func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
         ci := Lookup(t, n.name)
         if ci < 0:
             if lenient:
-                // Unknown name in lenient (top-level) mode folds to false.
                 ret Scalar { ok = true, is_str = false, bval = false, sval = "" }
             end
             ret Scalar {}
@@ -377,8 +300,6 @@ func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
     ret Scalar {}
 end
 
-// cc_fold_bool - !, &&, || (short-circuit), ==/!= (bool or string),
-// defined(...), plain scalars.
 func cc_fold_bool(a: at.Ast, t: Table, id: int, lenient: bool): Bres:
     if id == 0:
         ret Bres {}
@@ -430,8 +351,6 @@ func cc_fold_bool(a: at.Ast, t: Table, id: int, lenient: bool): Bres:
     ret Bres { ok = true, bval = s.bval }
 end
 
-// cc_cond_has_ref - true when the condition references a name/call, i.e. it
-// is a candidate for compile-time folding even below the top level.
 func cc_cond_has_ref(a: at.Ast, id: int): bool:
     if id == 0:
         ret false
@@ -451,9 +370,6 @@ func cc_cond_has_ref(a: at.Ast, id: int): bool:
     ret false
 end
 
-// cc_lvalue_root - the identifier an assignment target hangs off, walking
-// through the member/index chain the way sema's analyze_lvalue does. 0 when
-// the target bottoms out in something that is not a plain name.
 func cc_lvalue_root(a &: at.Ast, id: int): int:
     mut cur := id
     until cur != 0:
@@ -469,7 +385,6 @@ func cc_lvalue_root(a &: at.Ast, id: int): int:
     ret 0
 end
 
-// cc_note_write - records the root of a write target as assigned-in-pruned-code.
 func cc_note_write(a &: at.Ast, file: str, target: int):
     r := cc_lvalue_root(a, target)
     if r != 0:
@@ -477,16 +392,6 @@ func cc_note_write(a &: at.Ast, file: str, target: int):
     end
 end
 
-// cc_note_pruned - walks a subtree that is about to be dropped and records
-// every name it mentions (Ast.pruned_names), marking the ones it writes to.
-// Without this, the lints that fire at the end of sema see a variable whose
-// only assignment, or a function whose only call, lived in the branch this
-// host folds away, and report it as unused or never-mutated - a hard error on
-// source that is correct for the other host. The write set mirrors the four
-// things sema itself counts as a mutation: assignment targets, ++/--, the
-// receiver of a method call, and any bare identifier handed to a call (the
-// callee's `&:` parameters are not known this early, so every argument name
-// is treated as one).
 func cc_note_pruned(a &: at.Ast, file: str, id: int):
     if id == 0:
         ret
@@ -523,7 +428,6 @@ func cc_note_pruned(a &: at.Ast, file: str, id: int):
     end
 end
 
-// cc_resolve_if - returns the surviving node id (0 = whole if pruned away).
 func cc_resolve_if(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
 ): int:
@@ -566,7 +470,6 @@ func cc_resolve_if(
     ret id
 end
 
-// cc_resolve_slot - rewires one child slot, recursing into everything else.
 func cc_resolve_slot(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, ok &: bool
 ): int:
@@ -624,12 +527,9 @@ func cc_resolve_slot(
     ret id
 end
 
-// cc_process_list - rebuilds `owner`'s statement list, resolving each `if`
-// and splicing a surviving block's statements in place of the if.
 func cc_process_list(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, owner: int, top_level: bool, ok &: bool
 ):
-    // Snapshot the original child ids (the vec_t walked in C).
     mut orig := Vector {} as Vector<int>
     defer orig.free()
     n0 := at.Get(a, owner)
@@ -655,17 +555,12 @@ func cc_process_list(
             out.push(cc_resolve_slot(a, log, file, t, it, ok))
         end
     end
-    // *list = out; - free the replaced vector (the C arena freed in bulk).
     mut n1 := at.Get(a, owner)
     n1.list.free()
     n1.list = out
     at.Put(a, owner, n1)
 end
 
-// ===== condcomp.h / condcomp_table.c / condcomp_fold.c (public) =====
-
-// cc_table_build - target_triple "" = host defines (C NULL). `defines` are
-// the CLI -D entries ("NAME" or "NAME=value"); pass an empty Vector for none.
 pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
     mut t := Table {}
     if str.Len(target_triple) != 0:
@@ -680,12 +575,10 @@ pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
     ret t
 end
 
-// Releases the table storage (the C version lived in an arena).
 pub func TableFree(t &: Table):
     t.entries.free()
 end
 
-// cc_table_lookup - first entry named `name`, or -1 (the C NULL).
 pub func Lookup(t: Table, name: str): int:
     repeat t.entries.len() with i:
         e := t.entries.get(i)
@@ -705,7 +598,6 @@ pub func EntryName(t: Table, i: int): str:
     ret e.name
 end
 
-// CC_BOOL or CC_STR
 pub func EntryKind(t: Table, i: int): int:
     e := t.entries.get(i)
     ret e.kind
@@ -721,10 +613,6 @@ pub func EntryStr(t: Table, i: int): str:
     ret e.sval
 end
 
-// Evaluates a compile-time boolean condition (port deviation: pub wrapper
-// over cc_fold_bool). Returns whether the expression folded; on true the
-// value is written to `bval`. `lenient` treats unknown identifiers as false
-// (the top-level pruning mode).
 pub func EvalBool(a: at.Ast, t: Table, expr: int, lenient: bool, bval &: bool): bool:
     r := cc_fold_bool(a, t, expr, lenient)
     if r.ok:
@@ -733,10 +621,6 @@ pub func EvalBool(a: at.Ast, t: Table, expr: int, lenient: bool, bval &: bool): 
     ret r.ok
 end
 
-// cc_prune_program - folds every compile-time `if` under `program`
-// (an AST_PROGRAM node), splicing taken branches into their parent list and
-// dropping dead ones. Returns false (and logs at PH_PARSER/LOG_ERROR) when a
-// top-level if condition is not a compile-time constant.
 pub func PruneProgram(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, program: int
 ): bool:

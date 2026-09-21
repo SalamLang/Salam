@@ -12,14 +12,6 @@
  *
  */
 
-// net/socketio against a Socket.IO server written here, on top of
-// net/websocket, in one process.
-//
-// The server side answers with literal protocol strings rather than by
-// calling anything in net/socketio, so what is being checked is that the
-// client puts the documented bytes on the wire and reads the documented
-// bytes back - not that the package agrees with itself.
-
 import net.socketio
 import net.websocket
 import sync
@@ -31,7 +23,6 @@ const PORT := 19412
 mut ready := sync.NewWaitGroup()
 mut server log := ""
 
-// The ack id out of a packet like `42<id>["add",2,3]`, or -1.
 func ack id of(text: str): int:
     mut i := 1
     mut id := 0
@@ -63,9 +54,6 @@ func sio server():
         websocket.CloseServer(srv)
         ret
     end
-    // The path carries the Engine.IO parameters, and both halves of the
-    // query: what was written in the URL and what Options.query added. A
-    // server's middleware reads a credential out of exactly this.
     if str.Contains(c.path, "EIO=4") && str.Contains(c.path, "transport=websocket"):
         server log += "handshake ok;"
     end
@@ -75,18 +63,12 @@ func sio server():
     if str.Contains(c.path, "client=salam"):
         server log += "options query;"
     end
-    // Written without the closing CRLF, which is how a caller writes one
-    // header and how a client that does not close it off produces a request
-    // no server can read.
     if str.Contains(c.hdr, "X-Api-Key: k-123"):
         server log += "extra header;"
     end
     websocket.SendText(c, `0{"sid":"loopback-sid","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -107,9 +89,7 @@ func sio server():
             else str.StartsWith(body, `2["echo"`):
                 server log += "echo;"
                 websocket.SendText(c, `42["echoed","and back"]`)
-                // An event the client has to acknowledge.
                 websocket.SendText(c, `427["question","2+2"]`)
-                // A binary event: the placeholder, then the buffer.
                 websocket.SendText(c, `451-["blob",{"_placeholder":true,"num":0}]`)
                 raw := mem.Allocate(4 as u64)
                 bp := raw as i8*
@@ -154,7 +134,6 @@ func main:
     println "namespace:", socketio.Namespace(c)
     println "transport is websocket:", socketio.Transport(c) == socketio.TRANSPORT_WEBSOCKET
 
-    // Emit, and read back the three packets the server answers with.
     socketio.EmitStr(c, "echo", "please")
     mut got event := ""
     mut got binary := ""
@@ -180,7 +159,6 @@ func main:
     println "binary argument:", got binary
     println "question wanted an ack:", question id >= 0
 
-    // Emit and wait for the server's acknowledgement.
     mut a := socketio.NewArgs()
     socketio.AddInt(a, 2)
     socketio.AddInt(a, 3)
@@ -189,7 +167,6 @@ func main:
     println "ack ok:", ack.ok, "value:", socketio.AckInt(ack, 0)
     socketio.AckFree(ack)
 
-    // A reserved name is refused rather than sent.
     println "reserved name refused:", !socketio.Emit(c, "connect")
 
     socketio.Close(c)

@@ -4,27 +4,6 @@ import str
 import co "../sal_core.salam"
 import at "../ast.salam"
 
-// ===== sema_derive_emit.c =====
-//
-// The Salam source of a derived stringify function. See sema_derive.salam
-// for why this is text rather than hand-built AST.
-//
-// What a printed value looks like:
-//
-//   struct       Point {x = 10, y = 15}
-//   array/vector [1, 2, 3]
-//   hashmap      {"a": 1, "b": 2}
-//   nested str   "ali"          (quoted, so an empty element is visible)
-//   pointer      null | <ptr>   (never followed - a cycle would not end)
-//
-// A struct that defines `to_str(): str` gets that called instead, so a type
-// can present itself however it likes.
-//
-// PORT-NOTE: the C threads an sb_t down the emitters; here each one returns
-// the text it produced and the caller concatenates. "" is the C NULL.
-
-// Locals the generated bodies use. Underscore-prefixed so they never collide
-// with a field or a package name, and so the unused-name rules let them be.
 const DV_PARAM := "_v"
 const DV_BUF := "_sb"
 const DV_IND := "    "
@@ -37,7 +16,6 @@ func derive_is_plain(s &: Sema, t: int): bool:
     ret type_is_numeric(s, t)
 end
 
-// The first overload of `sym.name` taking `nparams` arguments, 0 if none.
 func derive_method_sig(s &: Sema, sym: int, name: str, nparams: int): int:
     members := sym_at(s, sym).members
     if members == 0:
@@ -66,11 +44,6 @@ func derive_user_to_str(s &: Sema, sym: int): bool:
     ret rt >= 0 && ty_at(s, rt).kind == TY_STR
 end
 
-// A struct that behaves like a sequence - `len()`/`size()` plus `get(int)`.
-// Recognised by shape rather than by name so std/collections' Vector, Deque,
-// LinkedList and anything a user writes the same way all print as `[...]`
-// instead of exposing the buffer and capacity behind them. Returns the
-// counting method's name, "" when the struct is not one.
 func derive_seq_count(s &: Sema, sym: int): str:
     names := ["len", "size"]
     repeat 2 with i:
@@ -85,7 +58,6 @@ func derive_seq_count(s &: Sema, sym: int): str:
     ret ""
 end
 
-// The element type behind `get(int)`, TYPE_NONE when there is no such method.
 func derive_seq_elem(s &: Sema, sym: int): int:
     sid := derive_method_sig(s, sym, "get", 1)
     if sid == 0:
@@ -98,9 +70,6 @@ func derive_seq_elem(s &: Sema, sym: int): int:
     ret g.ret_type
 end
 
-// The same for a keyed container: `iter()` handing back a cursor that answers
-// has_next/key/value/next, which is what std/collections' HashMap offers.
-// Returns the cursor's SymId, 0 when the struct is not one.
 func derive_map_cursor(s &: Sema, sym: int): int:
     it := derive_method_sig(s, sym, "iter", 0)
     if it == 0:
@@ -123,9 +92,6 @@ func derive_map_cursor(s &: Sema, sym: int): int:
     ret cur
 end
 
-// ---------------------------------------------------------------- spelling
-
-// The package alias `sym` is reachable under, "" when it is not exported.
 func derive_pkg_qualified(s &: Sema, sym: int): str:
     name := sym_at(s, sym).name
     syms := scope_at(s, s.global).symbols
@@ -144,9 +110,6 @@ func derive_pkg_qualified(s &: Sema, sym: int): str:
     ret ""
 end
 
-// True when the deriving scope can name the generic template `base` with no
-// qualification. Vector and HashMap reach it through the prelude, which is
-// where every generic the standard library exports for general use lives.
 func derive_template_visible(s &: Sema, base: str): bool:
     if scope_lookup(s, s.cur, base) != 0:
         ret true
@@ -154,20 +117,11 @@ func derive_template_visible(s &: Sema, base: str): bool:
     ret s.prelude != 0 && scope_lookup_local(s, s.prelude, base) != 0
 end
 
-// A generic instance carries the internal name `Vector_i64`, and that name is
-// defined only in the scope the instantiation happened in. A derived function
-// is installed in another package's scope - std/encoding/json's, for
-// `json.Marshal` - so an instance made anywhere else has no name there.
-// `Vector<i64>`, what the programmer wrote, resolves wherever the template
-// does, and is the spelling that survives the move.
 func derive_generic_spelling(s &: Sema, sym: int): str:
     v := sym_at(s, sym)
     if str.Len(v.generic_base) == 0 || v.generic_args.len() == 0:
         ret ""
     end
-    // Only a template the deriving scope can name unqualified. Salam has no
-    // spelling for another package's generic - `pkg.Box<i32>` is not syntax -
-    // so an instance of one stays unspellable, as it was before.
     if !derive_template_visible(s, v.generic_base):
         ret ""
     end
@@ -217,10 +171,6 @@ func derive_array_spelling(s &: Sema, t: int): str:
     ret base + dims
 end
 
-// How `t` is written in source, resolvable from the printing package's global
-// scope - "i32", "Vector<str>", "geo.Point", "Point[3]". "" when the type has
-// no such spelling (a struct another package keeps private, a function type,
-// a variant) and the print has to stay an error.
 func derive_type_spelling(s &: Sema, t: int): str:
     if t < 0:
         ret ""
@@ -258,15 +208,6 @@ func derive_type_spelling(s &: Sema, t: int): str:
     ret ""
 end
 
-// ------------------------------------------------------------- one value
-
-// Statements appending the rendering of the Salam expression `expr` (of type
-// `t`) to DV_BUF.
-//
-// Never fails. A member no function can be derived for - a file handle, a
-// closure, a struct another package keeps private - renders as `<its type>`
-// rather than costing the whole struct its printability: seeing the other
-// nine fields of a ten-field struct beats being told to print them by hand.
 func derive_append(s &: Sema, a &: at.Ast, t: int, expr: str, sp: co.SrcSpan): str:
     if t < 0:
         ret ""
@@ -293,11 +234,6 @@ func derive_append(s &: Sema, a &: at.Ast, t: int, expr: str, sp: co.SrcSpan): s
     ret lead + fn + "(" + expr + ")\n"
 end
 
-// ---------------------------------------------------------------- bodies
-
-// What the struct calls itself in the printed text. A generic instance is
-// named `Box_i32` internally; it is shown as the `Box<i32>` the programmer
-// wrote instead.
 func derive_display_name(s &: Sema, sym: int): str:
     v := sym_at(s, sym)
     if str.Len(v.generic_base) == 0 || v.generic_args.len() == 0:
@@ -331,8 +267,6 @@ func derive_body_struct(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     ret out + DV_IND + DV_BUF + " = " + DV_BUF + " + \"}\"\n"
 end
 
-// Vector, fixed array and slice all render as `[a, b, c]`; they differ only
-// in how the count and an element are spelled.
 func derive_body_seq(s &: Sema, a &: at.Ast, elem: int, count: str, item: str, sp: co.SrcSpan): str:
     mut out := DV_IND + "mut " + DV_BUF + " := \"[\"\n"
     out = out + DV_IND + "mut _i := 0\n"
@@ -399,9 +333,6 @@ func derive_body_of(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     ret ""
 end
 
-// The full `func <fname>(_v: T): str: ... end` text for `t`, or "" when the
-// type has no spelling. Nested aggregates are derived on the way through, so
-// this may install further functions before it returns.
 func derive_fn_source(s &: Sema, a &: at.Ast, t: int, fname: str, sp: co.SrcSpan): str:
     spelling := derive_type_spelling(s, t)
     if str.Len(spelling) == 0:

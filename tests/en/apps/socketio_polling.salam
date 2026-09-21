@@ -12,20 +12,6 @@
  *
  */
 
-// The other transport: Socket.IO over HTTP long-polling, with no WebSocket
-// anywhere.
-//
-// Polling is what Engine.IO falls back to when an upgrade is impossible -
-// through a proxy that strips the Upgrade header, say - and it is a genuinely
-// different shape underneath. There is no socket: the client holds a GET open
-// until the server has something to say, posts what it wants to send, and
-// several packets share one body separated by an 0x1e record separator. The
-// Socket.IO layer above cannot tell the difference, and this test is what
-// says so.
-//
-// The server is a plain HTTP server over net/tcp, so nothing but the wire
-// format is shared with the client.
-
 import net.socketio
 import net.tcp
 import sync
@@ -60,7 +46,6 @@ func header value(head: str, name: str): int:
     ret str.Trim(head.substr(colon + 1, stop - colon - 1)).to_int()
 end
 
-// One HTTP request, head and body. False if the peer went away first.
 func read request(c: tcp.Conn, target &: str, body &: str): bool:
     mut buf := ""
     mut going := true
@@ -81,13 +66,11 @@ func read request(c: tcp.Conn, target &: str, body &: str): bool:
     until rest.len() < want:
         chunk := tcp.Read(c, 8192)
         if chunk.len() == 0:
-            // The peer stopped early; take what arrived rather than spin.
             want = rest.len()
         else:
             rest += chunk
         end
     end
-    // "GET /socket.io/?EIO=4&transport=polling&t=... HTTP/1.1"
     first := str.Find(head, " ")
     second := str.IndexFrom(head, " ", first + 1)
     target = head.substr(0, second)
@@ -95,7 +78,6 @@ func read request(c: tcp.Conn, target &: str, body &: str): bool:
     ret true
 end
 
-// The client's acknowledgement id out of a Socket.IO EVENT packet.
 func ack id of(text: str): int:
     mut i := 1
     mut id := 0
@@ -121,8 +103,6 @@ func handle payload(payload: str):
         ret
     end
     if str.StartsWith(payload, "b"):
-        // A binary attachment: base64 behind a "b", because a polling body
-        // is text and cannot carry the bytes themselves.
         server log += "binary=" + payload.substr(1, payload.len() - 1) + ";"
         if pending blob ack >= 0:
             outbox.push("43" + pending blob ack + "[true]")
@@ -147,12 +127,10 @@ func handle payload(payload: str):
         else str.StartsWith(rest, "2") && str.Contains(rest, `"held"`):
             server log += "held " + rest.substr(1, rest.len() - 1) + ";"
         else str.StartsWith(rest, "5") && str.Contains(rest, `"upload"`):
-            // A BINARY_EVENT; its buffer follows in a later request.
             dash := str.Find(rest, "-")
             server log += "attachments=" + rest.substr(1, dash - 1) + ";"
             pending blob ack = ack id of("x" + rest.substr(dash + 1, rest.len() - dash - 1))
         else str.StartsWith(rest, "2") && str.Contains(rest, `"fetch"`):
-            // ...and one going the other way, buffer and all.
             outbox.push(`451-["blob",{"_placeholder":true,"num":0}]`)
             outbox.push("bCQAH/w==")
         else str.StartsWith(rest, "2") && str.Contains(rest, `"sum"`):
@@ -173,8 +151,6 @@ func serve(c: tcp.Conn):
     end
     if str.StartsWith(target, "POST"):
         mut items := socketio.SplitPayloads(body)
-        // How many packets shared one request body - the whole point of the
-        // 0x1e separator, and of batching what was held while offline.
         if items.len() > biggest post:
             biggest post = items.len()
         end
@@ -186,14 +162,10 @@ func serve(c: tcp.Conn):
         ret
     end
     if !str.Contains(target, "sid="):
-        // The handshake. No "websocket" in `upgrades`, so the client has
-        // nothing to upgrade to and stays on polling of its own accord.
         tcp.WriteHTTP(c, "200 OK", "text/plain; charset=UTF-8",
             `0{"sid":"polling-session","upgrades":[],"pingInterval":20000,"pingTimeout":5000,"maxPayload":65536}`)
         ret
     end
-    // A long poll: hand over whatever is waiting, or hold briefly and send a
-    // heartbeat, which is what the client has to answer to stay alive.
     if outbox.len() == 0:
         time.Sleep(60)
         tcp.WriteHTTP(c, "200 OK", "text/plain; charset=UTF-8", socketio.EncodeEngine(socketio.EIO_PING, ""))
@@ -228,13 +200,9 @@ func main:
     sync.Wait(ready)
 
     mut o := socketio.NewOptions()
-    // Left on AUTO deliberately: the handshake goes over polling and the
-    // client only upgrades if the server offers it, which this one does not.
     o.transports = socketio.TRANSPORT_AUTO
     o.timeout = 3000
     o.reconnection = false
-    // Held before there is a connection, so that connecting has a group to
-    // send rather than one packet.
     o.auto_connect = false
     c := socketio.DialWith("http://127.0.0.1:" + PORT, o)
     socketio.EmitStr(c, "held", "first")
@@ -286,18 +254,13 @@ func main:
         spins += 1
     end
     down := socketio.ArgBytes(blob, 0)
-    // A buffer starting with a NUL, which is what a `str` would have lost.
     println "attachment back:", down.len, socketio.BytesAt(down, 0), socketio.BytesAt(down, 1), socketio.BytesAt(down, 2), socketio.BytesAt(down, 3)
     println "base64:", socketio.BytesToBase64(down)
     socketio.EventFree(blob)
 
-    // Long enough for at least one empty poll, which is how the server's
-    // heartbeat reaches a polling client.
     socketio.RunFor(c, 800)
     println "answered the heartbeat:", saw pong
     println "nothing held any more:", socketio.Buffered(c)
-    // Three held events, plus the namespace CONNECT that goes with them,
-    // in a single request body.
     println "most packets in one request:", biggest post
 
     socketio.Close(c)

@@ -21,36 +21,6 @@ import fs
 import fs.dir
 import filepath
 
-// SFTP version 3 (draft-ietf-secsh-filexfer-02) file transfer, the version
-// essentially every server still speaks (OpenSSH's sftp-server has offered
-// v3 since 2001 and never moved past it, precisely so old and new clients
-// alike can rely on it - which is exactly this package's own "old and new"
-// brief). Runs over the "sftp" subsystem of an ordinary session channel:
-// SFTP's own uint32-length-prefixed packets travel inside SSH_MSG_CHANNEL_
-// DATA, so this file has to re-frame them out of the channel's byte stream
-// itself (a CHANNEL_DATA message boundary has no relationship to an SFTP
-// packet boundary - see _sftp_read_packet).
-//
-// One request in flight at a time (no pipelining) - simple and correct,
-// and file transfer throughput here is dominated by AES-CTR/HMAC and the
-// network round-trip, not by request pipelining.
-//
-// Local file I/O goes through fopen/fread/fwrite directly, not std/io's
-// str-based WriteFile/ReadFile (a Salam str truncates at the first
-// embedded 0x00 byte - see bytes.salam's header - which would silently
-// corrupt any non-text file transferred through this). The extern
-// declarations below duplicate names std/fs/fs.salam already declares -
-// unavoidable, since fopen/fread/fwrite are what byte-safe file I/O is -
-// and merely doing so, without importing fs, is enough to make the
-// compiler mis-resolve fs.salam's own conditional extern blocks while
-// checking for a conflict (a latent parser bug in that file, unrelated to
-// this package: fs.salam compiles and runs correctly on its own, as
-// confirmed separately - see this file's PR notes for the isolated repro).
-// `import fs` plus one real call to it - not just the import - is the
-// workaround: it forces fs.salam to resolve normally through the ordinary
-// import path before anything here can trip the conflict check (see
-// _fs_import_workaround below, called once from SftpOpen).
-
 extern:
     func fopen(path: str, mode: str): void*
     func fclose(stream: void*): int
@@ -208,7 +178,6 @@ func _sftp_read_packet(t &: Transport, sftp &: Sftp): SftpPacket:
     if sftp.ch.stdout.len < 4:
         ret SftpPacket {}
     end
-    // Length prefix counts the type byte plus the body, not itself.
     payload_len := ((_bget(sftp.ch.stdout.p, 0) as u32) << (24 as u32)) | ((_bget(sftp.ch.stdout.p, 1) as u32) << (16 as u32)) | ((_bget(sftp.ch.stdout.p, 2) as u32) << (8 as u32)) | (_bget(sftp.ch.stdout.p, 3) as u32)
     packet_len := 4 + (payload_len as int)
     until sftp.ch.stdout.len < packet_len && steps < 200000:
@@ -254,7 +223,7 @@ func _sftp_open_handle(t &: Transport, sftp &: Sftp, path: str, pflags: u32): Bu
     BufPutUint32(body, id)
     BufPutStringStr(body, path)
     BufPutUint32(body, pflags)
-    BufPutUint32(body, 0 as u32) // attrs flags = none
+    BufPutUint32(body, 0 as u32)
     ok := _sftp_send(t, sftp, SSH_FXP_OPEN, body)
     FreeBuf(body)
     if !ok:
@@ -292,28 +261,20 @@ func _sftp_parse_attrs(r &: Reader): SftpFileInfo:
     if (flags & (SFTP_ATTR_SIZE as u32)) != (0 as u32):
         info.size = RGetUint64(r) as i64
     end
-    if (flags & (0x00000002 as u32)) != (0 as u32): // UIDGID
+    if (flags & (0x00000002 as u32)) != (0 as u32):
         _uid := RGetUint32(r)
         _gid := RGetUint32(r)
     end
     if (flags & (SFTP_ATTR_PERMISSIONS as u32)) != (0 as u32):
         info.permissions = RGetUint32(r)
-        // POSIX S_IFMT/S_IFDIR. Written in hex, not octal: Salam has no
-        // bare-leading-zero octal literal syntax (only an explicit `0o`
-        // prefix is octal - see compiler/lexer.salam's scan_number), so
-        // the traditional C `0170000`/`0040000` spelling here previously
-        // parsed as plain DECIMAL 170000/40000 and silently never matched
-        // any real st_mode value, making is_dir always false.
         info.is_dir = (info.permissions & (0xF000 as u32)) == (0x4000 as u32)
     end
-    if (flags & (0x00000008 as u32)) != (0 as u32): // ACMODTIME
+    if (flags & (0x00000008 as u32)) != (0 as u32):
         _atime := RGetUint32(r)
         _mtime := RGetUint32(r)
     end
     ret info
 end
-
-// ============================================================== public API
 
 // Opens the "sftp" subsystem on a fresh channel and completes the
 // INIT/VERSION exchange.
@@ -337,7 +298,7 @@ pub func SftpOpen(client &: Client): Sftp:
     FreeBuf(extra)
 
     mut init_body := NewBuf(4)
-    BufPutUint32(init_body, 3 as u32) // SFTP protocol version
+    BufPutUint32(init_body, 3 as u32)
     if !_sftp_send(client.transport, sftp, SSH_FXP_INIT, init_body):
         FreeBuf(init_body)
         ret sftp
@@ -436,7 +397,7 @@ pub func Download(client &: Client, sftp &: Sftp, remote_path: str, local_path: 
             mut r := pkt.body
             _rid := RGetUint32(r)
             _status_code := RGetUint32(r)
-            done = true // SSH_FX_EOF (or any status here) ends the transfer
+            done = true
             FreeBuf(pkt.bodybuf)
         else if pkt.msgtype == SSH_FXP_DATA:
             mut r := pkt.body
@@ -650,10 +611,6 @@ pub func ListDir(client &: Client, sftp &: Sftp, path: str): Vector<SftpFileInfo
     ret entries
 end
 
-// SFTP has no opcode for any of the four below: the protocol works one
-// path at a time, so a caller wanting a whole tree had to write the walk
-// itself. These do it once, here.
-
 @en "SftpMkdirAll"
 @fa "ساخت مسیر کامل"
 @ar "إنشاء المسار کاملا"
@@ -673,9 +630,6 @@ pub func MkdirAll(client &: Client, sftp &: Sftp, path: str): bool:
             else:
                 cur = cur + "/" + part
             end
-            // An existing component is not a failure - that is the whole
-            // difference from Mkdir - so the result is judged by what is
-            // there afterwards, not by this call.
             if !Exists(client, sftp, cur):
                 Mkdir(client, sftp, cur)
             end
@@ -692,9 +646,6 @@ end
 @fa "حذف همه"
 @ar "حذف الکل"
 pub func RemoveAll(client &: Client, sftp &: Sftp, path: str): bool:
-    // Lstat, not Stat: Stat follows the link, so a link to a directory
-    // would be walked and its TARGET emptied before the link itself was
-    // ever unlinked.
     info := Lstat(client, sftp, path)
     is_link := (info.permissions & (0xF000 as u32)) == (0xA000 as u32)
     if is_link || !info.is_dir:
@@ -706,9 +657,6 @@ pub func RemoveAll(client &: Client, sftp &: Sftp, path: str): bool:
     each e in entries:
         if e.name != "." && e.name != "..":
             child := path + "/" + e.name
-            // ListDir's attrs come from the readdir response, which does
-            // not follow links either, but re-checking keeps the decision
-            // in one place.
             if e.is_dir && !IsLink(client, sftp, child):
                 if !RemoveAll(client, sftp, child): ok = false end
             else:
@@ -732,9 +680,6 @@ pub func DownloadDir(client &: Client, sftp &: Sftp, remote_path: str, local_pat
     defer entries.free()
     mut ok := true
     each e in entries:
-        // A name is joined onto a local path, so anything that is not one
-        // ordinary component - "..", or something containing a separator -
-        // could write outside local_path. Server-supplied, so dropped.
         if e.name != "." && e.name != ".." && e.name.find("/") < 0 && e.name.len() > 0:
             rchild := remote_path + "/" + e.name
             lchild := filepath.Join(local_path, e.name)

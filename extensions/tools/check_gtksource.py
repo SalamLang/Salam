@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""Highlight the probe files with GtkSourceView and report the style each
-token is given.
-
-Usage: check_gtksource.py <definition-dir> <file...>
-       check_gtksource.py --probe-modules
-
-Exit status: 0 success, 1 the definition or a source file failed, and 3 only
-when the GObject bindings are not installed. The caller relies on 3 being the
-one code that means "skip"; everything else has to surface as a failure.
-
-GtkSourceView is reachable only through GObject introspection, so this stays
-in Python for the same reason check_textmate.mjs stays in JavaScript: it is
-the engine's own runtime. Everything the check decides lives in
-check_engines.salam.
-"""
-
 # pylint: disable=import-error,import-outside-toplevel,invalid-name
 
 import json
@@ -24,7 +8,6 @@ MODULES_MISSING = 3
 
 
 def load():
-    """Import GtkSourceView lazily so a missing binding is a skip, not a crash."""
     import gi
 
     gi.require_version("GtkSource", "4")
@@ -34,7 +17,6 @@ def load():
 
 
 def signature(tags):
-    """Name the styling a set of tags applies, so two tokens can be compared."""
     parts = []
     for tag in tags:
         name = tag.get_property("name")
@@ -52,7 +34,6 @@ def signature(tags):
 
 
 def styles(source, buffer):
-    """Highlight one file and return its [token, style] pairs, first use wins."""
     with open(source, encoding="utf-8") as handle:
         buffer.set_text(handle.read())
     buffer.ensure_highlight(buffer.get_start_iter(), buffer.get_end_iter())
@@ -77,7 +58,6 @@ def styles(source, buffer):
 
 
 def main(argv):
-    """Print one JSON object mapping each source path to its token styles."""
     try:
         GtkSource = load()
     except (ImportError, ValueError) as error:
@@ -86,7 +66,11 @@ def main(argv):
     if argv and argv[0] == "--probe-modules":
         return 0
     if len(argv) < 2:
-        print(__doc__, file=sys.stderr)
+        print(
+            "usage: check_gtksource.py <definition-dir> <file...>\n"
+            "       check_gtksource.py --probe-modules",
+            file=sys.stderr,
+        )
         return 1
 
     definitions, sources = argv[0], argv[1:]

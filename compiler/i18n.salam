@@ -12,62 +12,25 @@
  *
  */
 
-// Port of compiler/src/i18n/ (i18n.c, i18n.h, i18n_internal.h + the data
-// tables of i18n_gettext.c). Flat single-file module
-// (see salam/PORTING.md "Layout - FLAT"): i18n_gettext.c + i18n_load.c +
-// i18n_locale.c merged below, with `// ===== <file>.c =====` markers.
-//
-// This file carries the package's globals and every private helper so the
-// file satisfies E083/E085/E088 (the pub API follows the helpers).
-//
-// C -> Salam decisions for this module:
-// - k_msgs[] ({en, fa, ar} rows, i18n_gettext.c) -> three parallel str
-//   arrays k_msg_en/k_msg_fa/k_msg_ar, generated mechanically from the C
-//   source so every string is byte-for-byte identical. Lookup is the same
-//   linear scan over the English column (first match wins).
-// - i18n_msg_t / i18n_pair_t structs -> parallel arrays (no struct needed).
-// - g_dyn_words / g_dyn_vals fixed C arrays (+counters) -> Vector<str>
-//   triples (lang/alias/canon); the C capacity caps (I18N_DYN_MAX = 512,
-//   I18N_DYN_VAL_MAX = 256) are still enforced, and like the C arrays the
-//   registries live for the whole process (never freed).
-// - k_layout_fa / k_value_fa static fallback tables are EMPTY in the C
-//   source ({{NULL, NULL}}), so the fa fallback scans are not ported (they
-//   can never match); LayoutWord/LayoutValue go straight to the fallback.
-// - const char* NULL guards are dropped (Salam str is never null).
-// - i18n_active_lang() (i18n_internal.h) is not exported: inside the merged
-//   package siblings read g_i18n_lang directly; external consumers use Lang().
-// - byte-wise loose comparison (i18n_words_equal_loose) is re-expressed
-//   over UTF-8 codepoints via str.Chars - equivalent for valid UTF-8:
-//   both sides are compared after skipping spaces and ZWNJ (U+200C).
 package i18n
 
 import str
 
-// I18N_DYN_MAX / I18N_DYN_VAL_MAX (i18n_load.c)
 const I18N_DYN_MAX := 512
 const I18N_DYN_VAL_MAX := 256
 
-// g_i18n_lang (i18n_locale.c)
 mut g_i18n_lang := "en"
 
-// g_dyn_words[] + g_dyn_words_n (i18n_load.c) - parallel columns
 mut g_dyn_word_lang := Vector {} as Vector<str>
 mut g_dyn_word_alias := Vector {} as Vector<str>
 mut g_dyn_word_canon := Vector {} as Vector<str>
 
-// g_dyn_vals[] + g_dyn_vals_n (i18n_load.c) - parallel columns
 mut g_dyn_val_lang := Vector {} as Vector<str>
 mut g_dyn_val_alias := Vector {} as Vector<str>
 mut g_dyn_val_canon := Vector {} as Vector<str>
 
-// ZWNJ (U+200C), the byte sequence i18n_zwnj_at() tests for
 k_i18n_zwnj := "\xE2\x80\x8C"
 
-// ---------------------------------------------------------------------------
-// k_msgs[] from i18n_gettext.c, split into three parallel columns.
-// GENERATED from compiler/src/i18n/i18n_gettext.c - do not edit by hand;
-// row i of each array is column en/fa/ar of C row i.
-// ---------------------------------------------------------------------------
 k_msg_en := [
     "error", "warning", "note", "help", "DRIVER", "CLI", "LEXER", "PARSER", "SEMANTIC", "IR", "CODEGEN",
     "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "OFF", "parsing %zu tokens", "parse complete: %zu top-level defs%s",
@@ -781,13 +744,6 @@ k_msg_ar := [
     "نقطة دخول تخطيط غامضة: %d ملف يحتوي على كتلة 'layout':"
 ]
 
-// ---------------------------------------------------------------------------
-// Private helpers (must precede the first pub function of the merged
-// package - rule E088; the pub API lives in the sibling files).
-// ---------------------------------------------------------------------------
-
-// Codepoint-level rewrite of the skip loops in i18n_words_equal_loose():
-// drop every space and ZWNJ, keep everything else.
 func strip_loose(s: str): str:
     cs := str.Chars(s)
     defer cs.free()
@@ -800,13 +756,10 @@ func strip_loose(s: str): str:
     ret out
 end
 
-// i18n_words_equal_loose (i18n_load.c): equal ignoring spaces and ZWNJ.
 func words_equal_loose(a: str, b: str): bool:
     ret str.Equals(strip_loose(a), strip_loose(b))
 end
 
-// The scan loop of i18n_tr(): index of msgid in the English column, -1 if
-// missing (first match wins, like the C linear scan).
 func msg_index(msgid: str): int:
     n := len(k_msg_en)
     mut i := 0
@@ -819,19 +772,6 @@ func msg_index(msgid: str): int:
     ret -1
 end
 
-// ===== i18n_locale.c =====
-// Port of compiler/src/i18n/i18n_locale.c.
-// Merged into this flat file: g_i18n_lang lives in
-// i18n.salam and is referenced unqualified; sibling files must NOT import
-// each other.
-//
-// Notes vs the C version:
-// - i18n_set_lang(NULL) is impossible (str is never null); every non-"fa"/
-//   non-"ar" code selects "en", exactly like the C fallthrough.
-// - i18n_active_lang() (internal linkage in C) is not exported; siblings
-//   read g_i18n_lang directly and external consumers use Lang().
-
-// i18n_set_lang
 pub func SetLang(code: str):
     if str.Equals(code, "fa"):
         g_i18n_lang = "fa"
@@ -842,26 +782,10 @@ pub func SetLang(code: str):
     end
 end
 
-// i18n_lang
 pub func Lang(): str:
     ret g_i18n_lang
 end
 
-// ===== i18n_load.c =====
-// Port of compiler/src/i18n/i18n_load.c - the dynamic layout word/value
-// alias registries (filled by the layout module at startup).
-// Merged into this flat file: the registry Vectors,
-// the capacity consts and words_equal_loose() live in i18n.salam and are
-// referenced unqualified.
-//
-// Notes vs the C version:
-// - k_layout_fa / k_value_fa static fallback tables are EMPTY in the C
-//   source, so their scan loops are not ported (they can never match).
-// - NULL-argument guards are dropped (str is never null); the capacity
-//   caps (I18N_DYN_MAX / I18N_DYN_VAL_MAX) are kept: registrations past
-//   the cap are silently ignored, exactly like the C code.
-
-// i18n_register_layout_word
 pub func RegisterLayoutWord(lang: str, alias: str, canonical: str):
     if g_dyn_word_lang.len() >= I18N_DYN_MAX:
         ret
@@ -871,9 +795,6 @@ pub func RegisterLayoutWord(lang: str, alias: str, canonical: str):
     g_dyn_word_canon.push(canonical)
 end
 
-// i18n_layout_word - canonical spelling for a localized layout word.
-// Pass 1: exact alias match for the active language; pass 2: loose match
-// (spaces/ZWNJ ignored); otherwise the name is already canonical.
 pub func LayoutWord(name: str): str:
     n := g_dyn_word_lang.len()
     mut i := 0
@@ -893,7 +814,6 @@ pub func LayoutWord(name: str): str:
     ret name
 end
 
-// i18n_register_layout_value
 pub func RegisterLayoutValue(lang: str, alias: str, canonical: str):
     if g_dyn_val_lang.len() >= I18N_DYN_VAL_MAX:
         ret
@@ -903,9 +823,6 @@ pub func RegisterLayoutValue(lang: str, alias: str, canonical: str):
     g_dyn_val_canon.push(canonical)
 end
 
-// i18n_layout_value - canonical spelling for a localized attribute value.
-// A registration whose lang starts with '*' applies to every language
-// (same test as the C `lang[0] == '*'`); values have no loose pass.
 pub func LayoutValue(value: str): str:
     n := g_dyn_val_lang.len()
     mut i := 0
@@ -919,17 +836,6 @@ pub func LayoutValue(value: str): str:
     ret value
 end
 
-// ===== i18n_gettext.c =====
-// Port of compiler/src/i18n/i18n_gettext.c (the i18n_tr() function).
-// Merged into this flat file. The k_msgs[] data - // three parallel arrays k_msg_en/k_msg_fa/k_msg_ar - and the private
-// msg_index() helper live above (E085/E088 ordering).
-//
-// Notes vs the C version:
-// - `tr ? tr : msgid` NULL fallback: no k_msgs row has a NULL fa/ar column
-//   in the C source (verified mechanically), so the port only falls back
-//   when the msgid itself is not in the table - same observable behavior.
-
-// i18n_tr - returns msgid untranslated for "en" (or when msgid is unknown).
 pub func Tr(msgid: str): str:
     fa := str.Equals(g_i18n_lang, "fa")
     ar := str.Equals(g_i18n_lang, "ar")

@@ -1,5 +1,3 @@
-"""Digit-sum benchmark."""
-
 s = 0
 for i in range(1, 500001):
     m = i

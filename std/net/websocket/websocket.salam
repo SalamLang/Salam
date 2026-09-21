@@ -350,9 +350,6 @@ end
 func _readable(c &: Conn, timeout_ms: int): bool:
     if c.secure:
         tc := _tls_get(c.tls_idx)
-        // tls.Readable, not tls.Pending: a record can be off the socket and
-        // not yet decrypted, in which case the message is here but the
-        // descriptor has nothing left to wake a poll with.
         if tls.Readable(tc):
             ret true
         end
@@ -486,11 +483,8 @@ func _shutdown(c &: Conn):
         tls.Close(tc)
         _tls_put(c.tls_idx, tc)
         _tls_release(c.tls_idx)
-        // Cleared so a second Close on the same Conn cannot hand the slot
-        // back twice and have two live connections share it.
         c.tls_idx = 0 - 1
     else c.secure:
-        // Already torn down.
         c.open = false
     else:
         if c.fd >= 0:
@@ -621,8 +615,6 @@ func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
     if !c.open && opcode != 8:
         ret 0 - 1
     end
-    // A secure Conn has fd == -1 on purpose (it routes through _tls_slots by
-    // tls_idx instead), so this guard only applies to the plain path.
     if !c.secure && c.fd < 0:
         ret 0 - 1
     end
@@ -668,9 +660,6 @@ func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
         _bput(buf, hlen + 2, m2)
         _bput(buf, hlen + 3, m3)
         _copy_raw(buf, hlen + 4, payload, plen)
-        // Masked in place, over the bytes already copied. Reading them back
-        // out of the string instead would put a fresh one-byte allocation in
-        // the middle of the loop, which is what this used to do.
         body := ((buf as i64) + ((hlen + 4) as i64)) as i8*
         repeat plen with i:
             mi := i % 4
@@ -687,8 +676,6 @@ func _send_frame_raw(c &: Conn, opcode: int, payload: void*, plen: int): int:
     end
     mut sent := 0
     if c.secure && c.tls_idx < 0:
-        // Already torn down; the slot is gone and indexing it would be a
-        // read out of the table.
         ret 0 - 1
     else c.secure:
         mut tc := _tls_get(c.tls_idx)
@@ -761,9 +748,6 @@ end
 // balancer routes on exactly that cookie.
 pub func HandshakeRequestWith(host: str, path: str, key: str, extra: str): str:
     mut req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n"
-    // A block that is only whitespace is nothing: left in, its blank line
-    // would end the headers early and the server would read the rest of the
-    // request as a body.
     if str.Trim(extra).len() > 0:
         req += extra
         if !str.EndsWith(extra, "\r\n"):
@@ -1061,8 +1045,6 @@ pub func Poll(c &: Conn, timeout_ms: int): Message:
                 msg = Message { kind = 8, text = "" }
                 going = false
             else:
-                // A data frame. opcode 0 continues whatever the first frame
-                // of this message declared; 1 and 2 start a new one.
                 if opcode == 1 || opcode == 2:
                     c.acc_kind = opcode
                     c.acc = ""
@@ -1199,8 +1181,6 @@ pub func Stop(c &: Conn):
     end
     c.open = false
 end
-
-// ------------------------------------------------------------------ Hub
 
 @en "NewHub"
 @fa "هاب جدید"

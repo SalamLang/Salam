@@ -10,52 +10,22 @@ import src "../source.salam"
 import lx "../lexer/lexer.salam"
 import ps "../parser/parser.salam"
 
-// ===== sema_derive_str.c =====
-//
-// `println p` on a struct, an array, a Vector or a HashMap.
-//
-// printf has no spelling for an aggregate, so the value is turned into a
-// string first: this pass writes a `func _strof_T(_v: T): str` that appends
-// every field or element to a buffer, installs it in the program being
-// analysed, and rewrites the print argument into a call to it. A field that
-// is itself an aggregate gets its own function, derived on the way through,
-// so a Vector of structs nests without any of this knowing how deep it goes.
-//
-// The function is generated as Salam source and put through the lexer and
-// parser, rather than assembled as AST by hand. Two reasons: what a printed
-// value looks like is then readable in one place instead of spread over node
-// constructors, and the result is an ordinary synthetic top-level
-// declaration - exactly what a generic instantiation is - so the C, LLVM, JS
-// and interpreter backends emit it without knowing this pass exists.
-//
-// PORT-NOTE: the C keeps a vec of derived_t{scope,name,decl}; here that is
-// the three parallel vectors Sema.derived_scopes/_names/_decls.
-
-// Identifier characters for a type's key: `Vector<str>` -> `Vector_str`,
-// `Point[3]` -> `Point_a3`, `geo.Point` -> `geo_Point`. Only has to be
-// injective enough that two different types never collide.
 func derive_key(ts: str): str:
-    // Each special character gets its OWN two-letter escape rather than
-    // folding onto a shared "_": "pkg.Point" and a struct actually named
-    // "pkg_Point" used to both key to "pkg_Point", so whichever's
-    // equality function was derived first was silently reused for the
-    // other, comparing it field by field against the wrong struct.
     mut out := ""
     repeat str.Len(ts) with i:
         b := byte_at(ts, i)
         if b == 60:
-            out = out + "_o" // '<'
+            out = out + "_o"
         else b == 44:
-            out = out + "_c" // ','
+            out = out + "_c"
         else b == 46:
-            out = out + "_d" // '.'
+            out = out + "_d"
         else b == 95:
-            out = out + "_u" // '_'
+            out = out + "_u"
         else b == 91:
-            out = out + "_a" // '['
+            out = out + "_a"
         else b == 42:
-            out = out + "_p" // '*'
-        // '>', ']' and ' ' carry no information once the opener is encoded.
+            out = out + "_p"
         else b != 62 && b != 93 && b != 32:
             out = out + ts.substr(i, 1)
         end
@@ -67,10 +37,6 @@ func derive_name(s &: Sema, t: int): str:
     ret "_strof_" + derive_key(type_to_string(s, t))
 end
 
-// True when this scope already has (or is midway through) deriving `name`.
-// The registry is the authority rather than a scope lookup: a user function
-// that happens to be called `_strof_Point` must not be mistaken for one of
-// ours.
 func derive_registry_find(s &: Sema, name: str): int:
     repeat s.derived_names.len() with i:
         if s.derived_scopes.get(i) == s.global && str.Equals(s.derived_names.get(i), name):
@@ -80,7 +46,6 @@ func derive_registry_find(s &: Sema, name: str): int:
     ret 0
 end
 
-// sema_is_derived_decl - is this pending declaration one of ours?
 func derive_is_decl(s &: Sema, did: int): bool:
     repeat s.derived_decls.len() with i:
         if s.derived_decls.get(i) == did:
@@ -131,9 +96,6 @@ func derive_parse(s &: Sema, a &: at.Ast, text: str, path: str): int:
     ret prog
 end
 
-// derive_home_of - the scope, at or above `from`, that declares `probe`; the
-// way the JSON derive finds std/encoding/json without hardcoding a package
-// name. 0 when no scope on the chain has it.
 func derive_home_of(s &: Sema, from: int, probe: str): int:
     mut sc := from
     until sc != 0:
@@ -145,9 +107,6 @@ func derive_home_of(s &: Sema, from: int, probe: str): int:
     ret 0
 end
 
-// derive_pkg_name_of - the name of the package a scope is the body of, or ""
-// Stamped onto synthetic declarations so the interpreter can run them against
-// the right module environment.
 func derive_pkg_name_of(s &: Sema, sc: int): str:
     if sc == 0 || s.global == 0:
         ret ""
@@ -162,16 +121,6 @@ func derive_pkg_name_of(s &: Sema, sc: int): str:
             ret pk.name
         end
     end
-    // The search above only finds a package the scope being analysed imported
-    // by name. std/collections is not one of those: sema_load_prelude pulls it
-    // in behind the programmer's back, so a `Vector<T>` instantiated from
-    // inside another package had no home recorded, and the interpreter then
-    // resolved its methods against the *using* package's environment
-    // ("undefined variable 'mem'" from Vector.reserve). load_package labels
-    // every package scope with its package name, which answers the question
-    // regardless of who imported whom - including for the package currently
-    // being analysed, whose own scope is s.global. The program's global scope
-    // carries no label, so it still answers "" there.
     scv := scope_at(s, sc)
     if scv.kind == SCOPE_GLOBAL && str.Len(scv.label) > 0:
         ret scv.label
@@ -179,15 +128,6 @@ func derive_pkg_name_of(s &: Sema, sc: int): str:
     ret ""
 end
 
-// A derived body has to see two things at once: the program's own
-// declarations (the struct being encoded) and the runtime layer of the module
-// the codec belongs to (its private _d* helpers). Those live in separate scope
-// trees - a package is analysed on its own and merged in as a symbol, so its
-// scope's ancestors are its own globals, not the program's.
-//
-// The bridge is a scope holding the module's symbols with the program's global
-// scope as its parent, so a lookup finds the helper first and the user's types
-// straight after.
 func derive_bridge_for(s &: Sema, home: int): int:
     if home == 0:
         ret 0
@@ -209,10 +149,6 @@ func derive_bridge_for(s &: Sema, home: int): int:
     ret sc
 end
 
-// Register one parsed `func` as a synthetic top-level of the program being
-// analysed: AST into the program list, symbol into the global scope,
-// declaration onto the pending queue so its body is checked with everything
-// else instantiation produces.
 func derive_install_fn(s &: Sema, a &: at.Ast, did: int, home: int, pkg: str):
     mut d := at.Get(a, did)
     d.synthetic = true
@@ -236,9 +172,6 @@ func derive_install_fn(s &: Sema, a &: at.Ast, did: int, home: int, pkg: str):
     s.pending.push(did)
 end
 
-// Signature types resolve against the global scope in English: a local named
-// after the struct must not shadow it, and `Vector` must not be held to the
-// Farsi spelling rule that applies to what the user typed.
 func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str, home0: int): int:
     save_cur := s.cur
     save_lang := s.lang
@@ -268,9 +201,6 @@ func derive_install_all(s &: Sema, a &: at.Ast, prog: int, want: str, home0: int
     ret found
 end
 
-// Derive `func _strof_<T>(_v: T): str` for an aggregate the user asked to
-// print, and hand back its name. "" when the type has no printable form (the
-// caller then reports the ordinary "cannot print" error).
 func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     if t < 0 || s.program == 0:
         ret ""
@@ -282,9 +212,6 @@ func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     if scope_lookup_local(s, s.global, fname) != 0:
         ret ""
     end
-    // Claimed before the body is generated: a struct holding a Vector of
-    // itself asks for this same function again from inside derive_fn_source,
-    // and has to be told it already exists rather than recurse forever.
     derive_registry_claim(s, fname)
     text := derive_fn_source(s, a, t, fname, sp)
     if str.Len(text) == 0:
@@ -304,17 +231,6 @@ func derive_stringify(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): str:
     s.derived_decls.set(slot - 1, fn)
     ret fname
 end
-
-// ---- derived equality ---------------------------------------------------
-//
-// `a == b` on a struct with no operator_eq of its own compares field by
-// field, through `func _eqof_<T>(_a: T, _b: T): bool` derived here the same
-// way _strof_ is. Arrays compare element-wise; a nested struct compares
-// through its own derived (or user) operator; anything that owns heap
-// storage or hides its representation (Vector, HashMap, dyn, Variant,
-// closures, files) has no field-wise meaning and is refused up front, so
-// the user sees one error at the comparison rather than a cascade from
-// generated code.
 
 func derive_eq_name(s &: Sema, t: int): str:
     ret "_eqof_" + derive_key(type_to_string(s, t))
@@ -337,9 +253,6 @@ func derive_eq_possible(s &: Sema, t: int, depth: int): bool:
         if scope_lookup_local(s, sym_at(s, sym).members, "operator_eq") != 0:
             ret true
         end
-        // A container or anything that owns storage (it has a `free()`)
-        // is not its fields: comparing a Vector's buffer pointer and
-        // count says nothing about its contents.
         if derive_method_sig(s, sym, "free", 0) != 0 || derive_map_cursor(s, sym) != 0:
             ret false
         end
@@ -364,7 +277,6 @@ func derive_eq_possible(s &: Sema, t: int, depth: int): bool:
     ret true
 end
 
-// One `if l != r: ret false end`, or a loop of them for an array.
 func derive_eq_field(s &: Sema, t: int, l: str, r: str, depth: int): str:
     v := ty_at(s, t)
     if v.kind == TY_ARRAY:
@@ -393,8 +305,6 @@ func derive_eq_source(s &: Sema, t: int, fname: str): str:
         "ret true\nend\n"
 end
 
-// Derive `_eqof_<T>` for struct type `t` and return its name; "" when it
-// cannot be spelled (the caller reports the comparison as unsupported).
 func derive_struct_eq(s &: Sema, a &: at.Ast, t: int, _sp: co.SrcSpan): str:
     if t < 0 || s.program == 0 || !derive_eq_possible(s, t, 0):
         ret ""
@@ -426,8 +336,6 @@ func derive_struct_eq(s &: Sema, a &: at.Ast, t: int, _sp: co.SrcSpan): str:
     ret fname
 end
 
-// Turn the binary node `nid` (`l == r` or `l != r`) into `_eqof_T(l, r)`,
-// wrapped in `!` for the negated form. The operands stay where they are.
 func derive_rewrite_eq(s &: Sema, a &: at.Ast, nid: int, fname: str, negate: bool):
     n := at.Get(a, nid)
     sp := span_of(a, nid)
@@ -463,10 +371,6 @@ func derive_rewrite_eq(s &: Sema, a &: at.Ast, nid: int, fname: str, negate: boo
     end
 end
 
-// Replace print argument `i` with a call to a stringify function derived for
-// its type, so `println p` becomes `println _strof_Point(p)` and the rest of
-// the pipeline sees an ordinary str. False when the type has no derivable
-// form; the caller then reports "cannot print".
 func derive_print_arg(s &: Sema, a &: at.Ast, callid: int, i: int, t: int): bool:
     if i >= at.ChildCount(a, callid):
         ret false

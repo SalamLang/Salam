@@ -19,47 +19,6 @@ package autograd
 
 import tensor
 
-// Reverse-mode automatic differentiation over std/tensor, built as a
-// tape.
-//
-// A variable is a plain int - an index into the tape - and every
-// operation in this package is eager: autograd.Add(tp, a, b) computes
-// the f32 result immediately with the std/tensor kernel and records one
-// node saying how gradients flow back through it. Backward(tp, loss)
-// then walks the node list once, in reverse, dispatching on an op code.
-// There are no graph objects, no per-node function pointers, and no
-// deferred execution to debug.
-//
-// Memory is the design's center, because nothing here is garbage
-// collected:
-//
-//   - Every tensor an operation produces is OWNED BY THE TAPE, along
-//     with every gradient buffer and every auxiliary tensor (a dropout
-//     mask, a saved column buffer). tp.reset() frees all of it in one
-//     sweep and keeps the vectors' capacity, which is what a training
-//     step calls before building the next graph; tp.free() releases
-//     everything at the end of the run.
-//   - Input(tp, x) borrows: the tape stores an aliasing header of x and
-//     never frees it. The caller keeps ownership, and x must stay alive
-//     and unresized until reset.
-//   - Param(tp, val, grad) borrows BOTH ways: the value is read in
-//     place, and backward accumulates += into the persistent grad
-//     buffer the caller (typically std/nn's ParamStore) owns. Gradients
-//     therefore survive reset() - that is the point - and zeroing them
-//     between steps is the optimizer's job.
-//
-// Values are read with Value(tp, v) and gradients with Grad(tp, v);
-// both return aliasing headers into tape-owned storage. Read them,
-// clone them if they must outlive the tape - never free them and never
-// resize them.
-//
-// Operations record a node only when a gradient can actually reach a
-// leaf (some input has needs set). A forward pass over constants and
-// plain inputs records nothing and backpropagates in zero time, so the
-// same model code serves training and inference; Watch(tp, x) marks a
-// borrowed tensor as wanting a gradient when there is no ParamStore in
-// the picture.
-
 // Node op codes. Private: the dispatch table is an implementation
 // detail shared by ag_ops and ag_back.
 const _OP_ADD := 1
@@ -223,8 +182,6 @@ func _grad_of(tp &: Tape, v: int): tensor.Tensor:
     ret g
 end
 
-// ---- public API ----
-
 @en "NewTape"
 @fa "نوار نو"
 @ar "شريط جديد"
@@ -307,9 +264,6 @@ pub func Backward(tp &: Tape, loss: int):
     mut i := tp.nodes.len() - 1
     until i >= 0:
         n := tp.nodes.get(i)
-        // A node whose output never received a gradient contributes
-        // nothing; skipping it is both faster and what keeps detached
-        // subgraphs silent.
         g := tp.grads.get(n.out)
         if g.data.len() > 0:
             _backprop_node(tp, n)

@@ -14,9 +14,6 @@
 
 package main
 
-// std/autograd: narrow, concat, SiLU, rotary embedding, RMS norm and
-// batch norm against central differences.
-
 import autograd
 import tensor
 import testing
@@ -34,7 +31,6 @@ func f_narrow_concat(t: tensor.Tensor): f64:
     mut tp := autograd.NewTape(1)
     x := autograd.Input(tp, t)
     c := autograd.Input(tp, g_c)
-    // swap the two halves along axis 1, weight, sum
     left := autograd.Narrow(tp, x, 1, 0, 2)
     right := autograd.Narrow(tp, x, 1, 2, 2)
     sw := autograd.Concat2(tp, right, left, 1)
@@ -55,8 +51,6 @@ func f_rope(t: tensor.Tensor): f64:
     ret out
 end
 
-// [2, 4, 3]: two samples, four channels, three positions - two groups
-// of two channels, so each group normalizes six values.
 func f_group_x(t: tensor.Tensor): f64:
     mut tp := autograd.NewTape(1)
     x := autograd.Input(tp, t)
@@ -166,7 +160,6 @@ func main:
     h := 0.01
     tol := 0.02
 
-    // x is [6, 4]: two sequences of three positions, or a batch of six
     mut s64 := tensor.Shape2(6, 4)
     g_x = tensor.RandUniform(s64, 0.0 - 1.5, 1.5, 31)
     g_c = tensor.RandUniform(s64, 0.0 - 1.0, 1.0, 32)
@@ -182,7 +175,6 @@ func main:
     g_rv = tensor.Ones(s4)
     s4.free()
 
-    // Narrow + Concat2 + SiLU
     mut tp := autograd.NewTape(1)
     xid := autograd.Watch(tp, g_x)
     cid := autograd.Input(tp, g_c)
@@ -199,7 +191,6 @@ func main:
     testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_narrow_concat(t) end, g_x, ga, h, tol))
     tensor.Free(ga)
 
-    // RoPE: two heads of two, seq 3, offset 1. A rotation preserves norms.
     mut tp2 := autograd.NewTape(1)
     rx := autograd.Watch(tp2, g_x)
     rc := autograd.Input(tp2, g_c)
@@ -219,14 +210,12 @@ func main:
     testing.AssertTrue(autograd.GradCheck((t: tensor.Tensor): ret f_rope(t) end, g_x, gr, h, tol))
     tensor.Free(gr)
 
-    // RMSNorm, x and gamma
     mut tp3 := autograd.NewTape(1)
     mx := autograd.Watch(tp3, g_x)
     mg := autograd.Watch(tp3, g_gamma)
     mc := autograd.Input(tp3, g_c)
     my := autograd.RMSNorm(tp3, mx, mg, 0.00001)
     myv := autograd.Value(tp3, my)
-    // each row of x/gamma has unit RMS
     mut ms := 0.0
     repeat 4 with k:
         v := myv.at2(1, k) / g_gamma.at(k)
@@ -243,7 +232,6 @@ func main:
     tensor.Free(gmx)
     tensor.Free(gmg)
 
-    // BatchNorm in training mode: normalized columns, running stats move
     mut tp4 := autograd.NewTape(1)
     bx := autograd.Watch(tp4, g_x)
     bg := autograd.Watch(tp4, g_gamma)
@@ -271,7 +259,6 @@ func main:
     tensor.Free(gbg)
     tensor.Free(gbb)
 
-    // Inference mode uses the running statistics and records no coupling
     mut tp5 := autograd.NewTape(1)
     tp5.training = false
     ix := autograd.Input(tp5, g_x)
@@ -283,8 +270,6 @@ func main:
     testing.AssertTrue(iyv.numel() == 24)
     tp5.free()
 
-    // GroupNorm with two groups of two channels: each group of each row
-    // is normalized on its own, and all three inputs gradcheck.
     mut tp6 := autograd.NewTape(1)
     gx := autograd.Watch(tp6, g_gx)
     gg := autograd.Watch(tp6, g_gamma)
@@ -293,8 +278,6 @@ func main:
     gy := autograd.GroupNorm(tp6, gx, gg, gb, 2, 0.00001)
     gyv := autograd.Value(tp6, gy)
     testing.AssertEqInt(gyv.numel(), 24)
-    // sample 1, group 0 (channels 0 and 1, three positions each) has zero
-    // mean and unit variance once the affine is undone
     mut gm := 0.0
     mut gv := 0.0
     repeat 2 with cc:
@@ -318,7 +301,6 @@ func main:
     tensor.Free(ggx)
     tensor.Free(ggg)
     tensor.Free(ggb)
-    // one group over all four channels is LayerNorm over the channels
     mut tp7 := autograd.NewTape(1)
     ox := autograd.Input(tp7, g_x)
     og := autograd.Input(tp7, g_gamma)
@@ -326,7 +308,6 @@ func main:
     one_group := autograd.Value(tp7, autograd.GroupNorm(tp7, ox, og, ob, 1, 0.00001))
     layer := autograd.Value(tp7, autograd.LayerNorm(tp7, ox, og, ob, 0.00001))
     testing.AssertTrue(tensor.AllClose(one_group, layer, 0.0001))
-    // a channel count that does not divide gives the empty sentinel
     bad := autograd.Value(tp7, autograd.GroupNorm(tp7, ox, og, ob, 3, 0.00001))
     testing.AssertTrue(bad.is_empty())
     tp7.free()

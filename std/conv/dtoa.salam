@@ -1,32 +1,3 @@
-// Exact conversion between IEEE-754 doubles and decimal text.
-//
-// The machinery behind FormatFloat and ParseFloat in conv.salam. It lives in
-// its own file because it is long and self-contained, and in this package
-// because this is where converting between a number and its text belongs.
-//
-// Formatting a double used to be the one place the standard library reached
-// outside the language: FormatFloat asked libc for snprintf, ParseFloat for
-// strtod, and salam_fmt_f64 for both. That works on a hosted system and
-// leaves a freestanding one - a kernel, a bootloader, anything without a
-// libc - unable to print a number at all.
-//
-// The method is big-integer arithmetic rather than any of the fast published
-// algorithms (Grisu, Ryu). A double is a 53-bit integer times a power of two,
-// so its decimal expansion is finite and can be written down exactly:
-//
-//   value = m * 2^k          k >= 0:  the integer m << k
-//   value = m / 2^j          k < 0:   the integer m * 5^j, times 10^-j
-//
-// The longest such expansion is 767 digits, for the smallest subnormal. Once
-// the digits are exact, rounding to N of them is arithmetic on a digit string
-// and cannot be wrong. Reading back is the same idea run backwards: parse to
-// an exact fraction, then divide out just enough bits to round once.
-//
-// Doubles are handled as their bit patterns, obtained by writing through a
-// pointer rather than by taking an address - Salam's `&` yields function
-// addresses only. No floating-point arithmetic appears below, so a program
-// compiled without floating-point registers can still link every part of
-// this that does not name a double in its signature.
 package conv
 
 // Limbs are 32 bits so a product fits in 64 without a wider type.
@@ -36,7 +7,7 @@ package conv
 // already carry several hundred digits. 264 limbs is 8448 bits, comfortably
 // past that; printing never needs more than 80.
 const BN_CAP := 264
-const BN_BYTES := 1064 // (BN_CAP + 1) * 4
+const BN_BYTES := 1064
 
 // Nine digits is the most that fits in a u32 divisor while leaving the
 // running remainder room in a u64.
@@ -50,7 +21,7 @@ const POW5_13_EXP := 13
 const POW2_29_EXP := 29
 
 const MAX_DIGITS := 800 // significant digits kept when parsing
-const DIGIT_BUF := 1200 // room for 767 exact digits plus rounding slack
+const DIGIT_BUF := 1200
 
 const EXP_BIAS := 1023
 const MANT_BITS := 52
@@ -72,8 +43,6 @@ const TWO53 := 0x20000000000000
 // and a formatter that allocates is a formatter that can fail.
 mut _scratch := 0 as u64
 mut _ready := false
-
-// ---------------------------------------------------------------- bignum
 
 // Limb 0 holds the count; the digits themselves start at 1. Keeping the
 // length with the data means one pointer describes a whole number, which
@@ -104,15 +73,6 @@ func _digit_buf(): u8*:
     ret (_scratch + (OFF_DIGITS as u64)) as u8*
 end
 
-// The eight bytes a double is read through. Salam's `&` gives function
-// addresses only, so a value is punned by storing it and loading it back at a
-// different type - which is what a union does in C, without needing one.
-//
-// f64 in a signature needs an SSE register under the SysV ABI even when the
-// body never does float arithmetic, so these two, and _dtoa_shortest and
-// _dtoa_parse below, do not exist under SALAM_KERNEL, which compiles
-// -mgeneral-regs-only. Everything else in this file works on bit patterns
-// and u64/i64 throughout, and stays available either way.
 if SALAM_KERNEL:
 else:
 func _pun_bits(v: f64): u64:
@@ -266,7 +226,6 @@ func _bn_shl(b: u32*, k: int): bool:
     if newlen > BN_CAP:
         ret false
     end
-    // Walk downward so the source is read before it is overwritten.
     mut i := newlen - 1
     while i >= 0:
         mut v := 0 as u32
@@ -413,8 +372,6 @@ func _bn_div(p: u32*, q: u32*, t: u32*): u64:
     ret quo
 end
 
-// ------------------------------------------------------- double <-> digits
-
 func _u64_bitlen(v: u64): int:
     mut n := 0
     mut t := v
@@ -463,7 +420,6 @@ func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
         decexp = 0 - j
     end
 
-    // Peel nine digits at a time off the low end, then reverse.
     mut pos := 0
     while !_bn_is_zero(work):
         mut r := _bn_divmod_small(work, DEC_CHUNK as u32)
@@ -478,8 +434,6 @@ func _exact_digits(bits: u64, digits: u8*, out: i64*, work: u32*): int:
             c += 1
         end
     end
-    // The final chunk was emitted with all nine places, so the top of the
-    // buffer may hold zeros that are not part of the number.
     while pos > 1 && digits[pos - 1] == (48 as u8):
         pos -= 1
     end
@@ -543,7 +497,6 @@ func _round_to(digits: u8*, ndig: int, p: int): int:
             ret 0
         end
     end
-    // Every digit was a nine: 999 -> 1000, so the string shifts right.
     mut m := p - 1
     while m > 0:
         digits[m] = digits[m - 1]
@@ -639,7 +592,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
         pos = _put(buf, cap, pos, 45 as u8)
     end
 
-    // X is the power of ten on the leading digit.
     mut x := (ndig - 1) + decexp
     zero := ndig == 1 && digits[0] == (48 as u8)
     if zero:
@@ -647,7 +599,7 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
     end
 
     mut p := prec
-    if kind == 103: // 'g': precision counts significant digits, and 0 means 1
+    if kind == 103:
         if p < 1:
             p = 1
         end
@@ -655,7 +607,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
 
     mut style := kind
     if kind == 103:
-        // The %g rule: scientific outside [1e-4, 10^P), fixed inside.
         if x < -4 || x >= p:
             style = 101
         else:
@@ -663,10 +614,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
         end
     end
 
-    // How many significant digits to round to. The three conversions count
-    // different things: %g counts significant digits, %e counts digits after
-    // the point plus the one before it, and %f counts decimal places, which
-    // depends on where the point falls.
     mut sig := p
     mut ndec := 0
     if style == 101 && kind != 103:
@@ -678,9 +625,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
         ndec = p
     end
 
-    // %f can be asked for fewer decimals than the value has leading zeros,
-    // in which case every digit shown is behind the point and the answer is
-    // either zero or one unit in the last place.
     if kind == 102 && sig <= 0 && !zero:
         mut carry := false
         if sig == 0:
@@ -712,7 +656,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
         ndig = sig
     end
 
-    // %g drops trailing zeros; %e and %f keep them.
     if kind == 103:
         mut show := sig
         while show > 1 && _digit_at(digits, ndig, show - 1) == (48 as u8):
@@ -723,8 +666,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
             ndec = 0
         end
         if style == 101:
-            // In scientific notation the exponent carries the magnitude, so
-            // the digits after the point are just the rest of the significand.
             ndec = show - 1
         end
     end
@@ -743,9 +684,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
         ret pos
     end
 
-    // Fixed notation. Digits before position 0 or past the end of the exact
-    // expansion are zeros, which is what makes both the leading "0.000" case
-    // and the trailing "100.0" case fall out of the same loop.
     if x < 0:
         pos = _put(buf, cap, pos, 48 as u8)
     else:
@@ -765,9 +703,6 @@ func _format(bits: u64, prec: int, kind: int, buf: u8*, cap: int, digits: u8*, o
     end
     ret pos
 end
-
-// ------------------------------------------------------------- decimal -> double
-
 
 // _round_quotient - drop `excess` low bits of q, rounding half to even.
 //
@@ -800,8 +735,6 @@ func _encode(neg: bool, m: u64, e2: int): u64:
         bits = 0 as u64
     else:
         if m < (TWO52 as u64):
-            // Subnormal: the exponent field is zero and there is no implicit
-            // leading one, so the significand is stored as-is.
             bits = m
         else:
             be := e2 + 1075
@@ -847,7 +780,6 @@ func _decimal_to_bits(neg: bool, d: u32*, nd: int, dexp: int, trunc: bool, p: u3
         end
     end
 
-    // Scale so the quotient lands just above 53 bits, leaving room to round.
     bp := _bn_bitlen(p0)
     bq := _bn_bitlen(q0)
     shift := 54 - (bp - bq)
@@ -875,9 +807,6 @@ func _decimal_to_bits(neg: bool, d: u32*, nd: int, dexp: int, trunc: bool, p: u3
         fe += 1
     end
 
-    // Below the smallest normal the significand has to shrink rather than the
-    // exponent keep falling, so the whole division is redone against a fixed
-    // exponent of 2^-1074.
     if fe < SUBNORMAL_EXP:
         _bn_copy(p, p0)
         _bn_copy(q, q0)
@@ -889,8 +818,6 @@ func _decimal_to_bits(neg: bool, d: u32*, nd: int, dexp: int, trunc: bool, p: u3
         m = _round_quotient(quo, 1, sticky)
         fe = SUBNORMAL_EXP
         if m >= (TWO52 as u64):
-            // Rounding lifted it back into the normal range, which is the
-            // correct answer and needs the normal encoding.
             ret _encode(neg, m, fe)
         end
         mut bits := m
@@ -932,7 +859,6 @@ end
 // caller can fill in strtod's endptr.
 func _strtod_core(sp: i8*, out: i64*): u64:
     mut i := 0
-    // Leading whitespace, as the C library defines it.
     mut c := _byte(sp, i)
     while c == 32 || (c >= 9 && c <= 13):
         i += 1
@@ -946,7 +872,6 @@ func _strtod_core(sp: i8*, out: i64*): u64:
         c = _byte(sp, i)
     end
 
-    // inf / infinity / nan, case-insensitive.
     if _lower(c) == 105:
         if _lower(_byte(sp, i + 1)) == 110 && _lower(_byte(sp, i + 2)) == 102:
             mut j := i + 3
@@ -992,8 +917,6 @@ func _strtod_core(sp: i8*, out: i64*): u64:
             any = true
             v := c - 48
             if nd == 0 && v == 0:
-                // A leading zero adds no significant digit, but one after the
-                // point still moves the exponent.
                 if seen_point:
                     dexp -= 1
                 end
@@ -1024,7 +947,7 @@ func _strtod_core(sp: i8*, out: i64*): u64:
     end
 
     if !any:
-        out[0] = 0 as i64 // nothing consumed: strtod leaves endptr at the start
+        out[0] = 0 as i64
         ret 0
     end
 
@@ -1061,8 +984,6 @@ func _strtod_core(sp: i8*, out: i64*): u64:
     ret bits
 end
 
-
-
 // _dtoa_into - one conversion into a caller's buffer, using the scratch
 // registers. Returns the length it would have needed, as snprintf does.
 func _dtoa_into(bits: u64, prec: int, kind: int, out: u8*, cap: int): int:
@@ -1071,11 +992,6 @@ func _dtoa_into(bits: u64, prec: int, kind: int, out: u8*, cap: int): int:
     end
     outv := (_scratch + (OFF_PUN as u64)) as i64*
     n := _format(bits, prec, kind, out, cap, _digit_buf(), outv, _reg(6))
-    // Terminate. _format reports a length, the way snprintf does, and every
-    // caller here goes on to treat the buffer as a string. Without this a
-    // second, shorter rendering into the same buffer leaves the tail of the
-    // first behind: 9007199254740992 came back as "9007199254740992e+15",
-    // the "e+15" being the last four bytes of the attempt before it.
     if cap > 0 && n >= 0:
         if n < cap:
             out[n] = 0 as u8

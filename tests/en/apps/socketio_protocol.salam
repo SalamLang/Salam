@@ -12,19 +12,6 @@
  *
  */
 
-// The parts of the protocol a happy path never reaches.
-//
-// A client is judged on what it does with traffic it did not ask for: a
-// packet it cannot parse, an acknowledgement for an id nobody is waiting on,
-// an event for a namespace it never joined, a server that hangs up, and a
-// server that simply stops talking. None of these may take the process down,
-// and each has a defined answer.
-//
-// The heartbeat is checked here too, in both directions: the client has to
-// answer the server's ping, and has to notice when the pings stop. The
-// server advertises a deliberately tiny interval so that "notice" takes
-// under a second rather than the usual forty-five.
-
 import net.socketio
 import net.websocket
 import sync
@@ -59,14 +46,10 @@ func ack id of(text: str): int:
     ret id
 end
 
-// Round one: answer everything, oddly, then hang up on the namespace.
 func serve odd(c &: websocket.Conn):
     websocket.SendText(c, `0{"sid":"proto","upgrades":[],"pingInterval":30000,"pingTimeout":30000}`)
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -82,26 +65,17 @@ func serve odd(c &: websocket.Conn):
             if body == "0":
                 websocket.SendText(c, `40{"sid":"proto-nsp"}`)
             else str.StartsWith(body, `2["poke"`):
-                // An Engine.IO no-op, which exists to end a long poll and
-                // means nothing here.
                 websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_NOOP, ""))
-                // A Socket.IO packet that is not one.
                 websocket.SendText(c, "4not-a-packet")
-                // An acknowledgement for an id nobody is waiting on.
                 websocket.SendText(c, `43999["stray"]`)
-                // An event for a namespace this client never joined.
                 websocket.SendText(c, `42/ghost,["boo"]`)
-                // ...and then two real ones.
                 websocket.SendText(c, `42["tick",1]`)
                 websocket.SendText(c, `42["tick",2]`)
             else str.StartsWith(body, "2") && str.Contains(body, `"ask"`):
                 websocket.SendText(c, "43" + ack id of(body) + `["answered"]`)
             else str.StartsWith(body, "2") && str.Contains(body, `"silent"`):
-                // Deliberately unanswered, so the wait has to time out.
                 server log += "ignored a question;"
             else str.StartsWith(body, `2["bye"`):
-                // The server closes this namespace, which is not the same as
-                // the connection going away.
                 websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_MESSAGE, "1"))
                 server log += "hung up;"
             else body == "1":
@@ -111,7 +85,6 @@ func serve odd(c &: websocket.Conn):
     end
 end
 
-// Round two: one ping, then silence, so the client has to time it out.
 func serve silent(c &: websocket.Conn):
     websocket.SendText(c, `0{"sid":"quiet","upgrades":[],"pingInterval":800,"pingTimeout":800}`)
     mut going := true
@@ -126,8 +99,6 @@ func serve silent(c &: websocket.Conn):
         else m.kind != websocket.TEXT:
             going = false
         else:
-            // A pong is the payload "3" on its own - an Engine.IO type digit
-            // with no body - so it is matched before the digit is stripped.
             if m.text == socketio.EncodeEngine(socketio.EIO_PONG, ""):
                 server log += "answered the ping;"
                 going = false
@@ -135,15 +106,11 @@ func serve silent(c &: websocket.Conn):
                 body := m.text.substr(1, m.text.len() - 1)
                 if body == "0":
                     websocket.SendText(c, `40{"sid":"quiet-nsp"}`)
-                    // One heartbeat, straight away, so the client has
-                    // something to answer before the silence starts.
                     websocket.SendText(c, socketio.EncodeEngine(socketio.EIO_PING, ""))
                 end
             end
         end
     end
-    // Hold the socket open but mute, which is what a wedged server looks
-    // like: the connection is fine, the peer is gone.
     mut waiting := true
     mut quiet := 0
     until waiting:
@@ -233,7 +200,6 @@ func main:
     println "nothing left outstanding:", socketio.Pending(c)
 
     println "-- the server closes the namespace"
-    // Drain first, so the next line is testing one thing.
     mut k := 0
     until k < 10:
         mut spare := socketio.Next(c, 100)
@@ -241,9 +207,6 @@ func main:
         k += 1
     end
     socketio.Emit(c, "bye")
-    // ONE call, not a loop: the pump that ends a connection queues the
-    // disconnect on its way out, and a Next that gave up without looking
-    // again would report a timeout for something that was not one.
     mut bye := socketio.Next(c, 2000)
     reason := bye.message
     println "one Next reported a disconnect:", bye.kind == socketio.EV_DISCONNECT

@@ -12,25 +12,6 @@
  *
  */
 
-// Live checks for everything live_exec.salam and live_sftp.salam don't
-// cover: authentication FAILURE paths (wrong key, wrong port, wrong user,
-// wrong password), the known_hosts policy modes actually wired through
-// Dial (not just the pure decision logic vectors_bytes.salam already
-// unit-tests), and an interactive PTY/Shell session. See live_exec.salam's
-// header for the _HOST/_PORT/_USER/_KEY_PATH convention and how to point
-// this at your own server or a local throwaway sshd.
-//
-//   salam build tests/en/ssh/live_auth_and_policy.salam --output=/tmp/live_auth && /tmp/live_auth
-//
-// _WRONG_KEY_PATH needs a real RSA key that is NOT in the server's
-// authorized_keys - generate one with:
-//   ssh-keygen -t rsa -b 1024 -f /tmp/sshtest/wrong_key -N ""
-//
-// Does NOT test password auth SUCCEEDING: that needs a real account with a
-// known password, which a committed test cannot safely provision for
-// itself (see live_exec.salam's header) - only that a wrong password is
-// correctly rejected, which needs no such account.
-
 package main
 
 import ssh
@@ -56,7 +37,6 @@ func check(cond: bool, what: str):
 end
 
 func main:
-    // ---------------------------------------------------------- auth failure paths
     mut cfg_wrongkey := ssh.NewConfig(_HOST, _PORT, _USER)
     _loaded_wk := ssh.WithKeyFile(cfg_wrongkey, _WRONG_KEY_PATH)
     ssh.WithHostKeyMode(cfg_wrongkey, ssh.HOSTKEY_MODE_INSECURE)
@@ -82,12 +62,9 @@ func main:
     client_wrongpass := ssh.Dial(cfg_wrongpass)
     check(!ssh.Ok(client_wrongpass), "Dial fails for a wrong password (server has PasswordAuthentication on)")
 
-    // ---------------------------------------------------------- known_hosts policy, wired through Dial
     kh_path := os.TempDir() + "/salam_ssh_live_policy_known_hosts"
     _removed_before := os.Remove(kh_path)
 
-    // STRICT against an empty/nonexistent known_hosts file: the host is
-    // UNKNOWN, and STRICT only proceeds on MATCH - Dial must refuse.
     mut cfg_strict_unknown := ssh.NewConfig(_HOST, _PORT, _USER)
     _loaded_su := ssh.WithKeyFile(cfg_strict_unknown, _KEY_PATH)
     ssh.WithHostKeyMode(cfg_strict_unknown, ssh.HOSTKEY_MODE_STRICT)
@@ -96,8 +73,6 @@ func main:
     check(!ssh.Ok(client_strict_unknown), "STRICT mode refuses an unknown host and does not connect")
     check(!os.Exists(kh_path), "STRICT mode never writes a known_hosts entry for a host it refused")
 
-    // ACCEPT_NEW against the same still-empty file: proceeds (TOFU) AND
-    // records the key.
     mut cfg_acceptnew := ssh.NewConfig(_HOST, _PORT, _USER)
     _loaded_an := ssh.WithKeyFile(cfg_acceptnew, _KEY_PATH)
     ssh.WithHostKeyMode(cfg_acceptnew, ssh.HOSTKEY_MODE_ACCEPT_NEW)
@@ -108,8 +83,6 @@ func main:
     fp1 := ssh.HostKeyFingerprint(client_acceptnew)
     ssh.Close(client_acceptnew)
 
-    // STRICT against the now-populated file: the recorded key matches, so
-    // this must now succeed.
     mut cfg_strict_known := ssh.NewConfig(_HOST, _PORT, _USER)
     _loaded_sk := ssh.WithKeyFile(cfg_strict_known, _KEY_PATH)
     ssh.WithHostKeyMode(cfg_strict_known, ssh.HOSTKEY_MODE_STRICT)
@@ -120,9 +93,6 @@ func main:
     check(str.Equals(fp1, fp2), "the fingerprint recorded by ACCEPT_NEW matches what STRICT verified against")
     ssh.Close(client_strict_known)
 
-    // MISMATCH: corrupt the recorded key in the known_hosts file (simulate
-    // a changed host key / MITM) - STRICT must now refuse, the single most
-    // important security property this whole mode exists for.
     content := io.ReadFile(kh_path)
     tampered := str.Replace(content, "A", "Z")
     _wrote_tampered := io.WriteFile(kh_path, tampered)
@@ -135,7 +105,6 @@ func main:
 
     _removed_after := os.Remove(kh_path)
 
-    // ---------------------------------------------------------- interactive PTY + shell
     mut cfg := ssh.NewConfig(_HOST, _PORT, _USER)
     _loaded := ssh.WithKeyFile(cfg, _KEY_PATH)
     ssh.WithHostKeyMode(cfg, ssh.HOSTKEY_MODE_INSECURE)
@@ -151,9 +120,6 @@ func main:
         wrote := ssh.WriteInput(sess, client, "echo shell_marker_98765\n")
         check(wrote, "WriteInput sends a command line to the interactive shell's stdin")
 
-        // Poll a few read steps so the echoed command + its output have a
-        // chance to arrive, then check for the marker without needing a
-        // fixed sleep.
         mut got_marker := false
         mut steps := 0
         until !got_marker && steps < 200:

@@ -12,18 +12,6 @@
  *
  */
 
-// Options.retries: sending an event again when nothing acknowledges it.
-//
-// Buffering covers a connection that is DOWN. This covers the other case -
-// the connection is up, the packet went out, and it still did not arrive.
-// The only evidence a packet arrived is an acknowledgement, so turning
-// retries on makes every emit ask for one, whether or not the caller wanted
-// it; the id is the client's own and the answer is thrown away.
-//
-// The server here acknowledges one event on its second arrival and never
-// acknowledges the other, so both halves are visible: the retry that
-// succeeds and stops, and the one that gives up after the budget.
-
 import net.socketio
 import net.websocket
 import sync
@@ -69,9 +57,6 @@ func sio server():
     websocket.SendText(c, `0{"sid":"retry","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -88,7 +73,6 @@ func sio server():
                 websocket.SendText(c, `40{"sid":"retry-nsp"}`)
             else str.StartsWith(body, "2") && str.Contains(body, `"flaky"`):
                 flaky count += 1
-                // Silence the first time, so the client has to try again.
                 if flaky count >= 2:
                     websocket.SendText(c, "43" + ack id of(body) + "[]")
                 end
@@ -118,8 +102,6 @@ func main:
     println "connected:", socketio.IsConnected(c)
     println "retries configured:", socketio.OptionsOf(socketio.ManagerOf(c)).retries
 
-    // Neither emit asks for an acknowledgement; retries adds one behind the
-    // caller's back, which is why Pending counts them.
     socketio.EmitStr(c, "flaky", "a")
     socketio.EmitStr(c, "never", "b")
     println "waiting on acknowledgements nobody asked for:", socketio.Pending(c)
@@ -129,8 +111,6 @@ func main:
     println "delivered on the retry, then stopped:", flaky count
     println "retried to the end of the budget, then gave up:", never count
     println "no acknowledgements outstanding:", socketio.Pending(c)
-    // The internal acknowledgements are the client's own business and never
-    // reach the caller's queue as results.
     println "still connected:", socketio.IsConnected(c)
 
     socketio.Close(c)

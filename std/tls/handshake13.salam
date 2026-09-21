@@ -1,35 +1,5 @@
 package tls
 
-// The TLS 1.3 key schedule and the messages that follow ServerHello.
-// Hello construction and parsing live in hello.salam.
-
-
-// TLS 1.3 client handshake and key schedule (RFC 8446 sections 4 and 7.1).
-//
-// Client side only. The flow is:
-//
-//   -> ClientHello                        (key_share: X25519)
-//   <- ServerHello                        (selects suite + peer key share)
-//      [derive handshake traffic keys; everything after is encrypted]
-//   <- EncryptedExtensions
-//   <- Certificate
-//   <- CertificateVerify                  (signature over the transcript)
-//   <- Finished                           (MAC over the transcript)
-//   -> Finished
-//      [derive application traffic keys]
-//
-// THE TRANSCRIPT IS THE POINT. Every handshake message is absorbed into a
-// running hash, and both the CertificateVerify signature and both Finished
-// MACs cover it. That is what binds the negotiated parameters to the server's
-// identity: an attacker who rewrites the ClientHello's cipher list or key share
-// changes the transcript, and the server's Finished then fails to verify. So
-// the transcript must be fed the exact bytes seen on the wire, in order, and
-// nothing else.
-//
-// NOT IMPLEMENTED: session resumption / PSK, 0-RTT, client certificates,
-// HelloRetryRequest, post-handshake KeyUpdate. A server that requires any of
-// them will fail the handshake rather than silently degrade.
-
 const HS_CLIENT_HELLO := 1
 const HS_SERVER_HELLO := 2
 const HS_NEW_SESSION_TICKET := 4
@@ -107,8 +77,6 @@ func _hs_transcript(h: Handshake, out &: Buf):
     _hash_final(h.tr, out.p)
 end
 
-// ---------------------------------------------------------------- schedule
-
 // Derive-Secret(secret, label, transcript) for the current hash.
 func _hs_derive(h: Handshake, secret: Buf, label: str, th: Buf, out &: Buf): bool:
     _bufreset(out)
@@ -139,7 +107,6 @@ func _hs_key_schedule(h &: Handshake): bool:
         ret false
     end
 
-    // handshake secret = Extract(derived, ECDHE)
     _bufreset(h.hs_secret)
     _putzeros(h.hs_secret, h.hlen)
     _hkdf_extract(h.hash, derived.p, h.hlen, h.shared.p, h.shared.len, h.hs_secret.p)
@@ -154,7 +121,6 @@ func _hs_key_schedule(h &: Handshake): bool:
         ret false
     end
 
-    // master secret = Extract(Derive-Secret(hs, "derived", ""), 0)
     mut derived2 := _newbuf(h.hlen)
     defer _buf_wipe(derived2)
     if !_hs_derive(h, h.hs_secret, "derived", emptyhash, derived2):
@@ -181,8 +147,6 @@ func _hs_finished_mac(h: Handshake, secret: Buf, th: Buf, out &: Buf): bool:
     ret true
 end
 
-// ---------------------------------------------------------------- Certificate
-
 // Read a Certificate message's chain into the handshake buffer.
 //
 // The two versions differ only at the edges: TLS 1.3 prefixes a
@@ -193,8 +157,6 @@ func _hs_read_cert_list(h &: Handshake, msg: Reader, tls13: bool): bool:
     mut r := msg
     if tls13:
         ctx := _rdvec8(r)
-        // a non-empty context only answers a CertificateRequest, which this
-        // client never sends
         if r.bad || ctx.len != 0:
             ret _hs_fail(h, "unexpected certificate context")
         end
@@ -215,8 +177,6 @@ func _hs_read_cert_list(h &: Handshake, msg: Reader, tls13: bool): bool:
         if list.bad:
             ret _hs_fail(h, "malformed certificate entry")
         end
-        // Anything past the depth cap is dropped rather than rejected: a
-        // server padding its chain should not cost the caller a connection.
         if h.ncerts < MAX_CHAIN_DEPTH:
             begin := h.certs.len
             repeat cert.len with i:
@@ -267,8 +227,6 @@ func _hs_verify_cert_verify(h &: Handshake, msg: Reader, th: Buf): bool:
         ret _hs_fail(h, "server leaf certificate did not parse")
     end
 
-    // Same dispatch as the TLS 1.2 ServerKeyExchange check, with PKCS#1 v1.5
-    // refused: RFC 8446 4.4.3 allows only PSS for RSA in CertificateVerify.
     if !_tls_verify_leaf_sig(leaf, scheme, content, sig, false):
         ret _hs_fail(h, "CertificateVerify signature invalid")
     end

@@ -92,10 +92,6 @@ end
 
 func _tm_field(epoch: i64, idx: int): int:
     tm := _localtime(epoch)
-    // Same MSVC limitation as _gm_field: localtime hands back NULL for any
-    // pre-1970 instant. Fall back to UTC rather than report all-zero fields
-    // - that is also what _localEpoch does when mktime refuses the same
-    // instant, so formatting and parsing still agree with each other.
     if tm == null: ret _gmFieldPure(epoch, idx) end
     tm32 := tm as int*
     ret tm32[idx]
@@ -183,12 +179,6 @@ else:
     end
 end
 
-// _mono_ns is a MONOTONIC clock: it never runs backwards and never jumps when
-// the wall clock is adjusted, so the difference of two readings is a valid
-// elapsed time. _now_ns above is a wall clock and is not usable for timing:
-// on Windows GetSystemTimeAsFileTime only updates every ~15.6 ms, and on POSIX
-// clock_gettime(0) is CLOCK_REALTIME, which NTP can step. Everything that
-// measures a duration (time.Elapsed*, debug timers, bench, prof) uses this one.
 if SALAM_OS_WINDOWS:
     func _mono_ns(): i64:
         buf := mem.AllocateZeroed(16 as u64)
@@ -201,9 +191,6 @@ if SALAM_OS_WINDOWS:
                 counter := cp[0]
                 freq := fp[0]
                 if freq > 0:
-                    // Split so the multiply cannot overflow: counter * 1e9
-                    // wraps a signed 64-bit value a few seconds into uptime
-                    // at a 10 MHz performance counter.
                     whole := counter / freq
                     frac := counter % freq
                     out = whole * 1000000000 + (frac * 1000000000) / freq
@@ -219,7 +206,6 @@ else:
         func _mono_ns(): i64:
             buf := mem.AllocateZeroed(16 as u64)
             mut out := 0 as i64
-            // 1 is CLOCK_MONOTONIC on Linux, macOS and the BSDs.
             if clock_gettime(1, buf) == 0:
                 p := buf as i64*
                 out = p[0] * 1000000000 + p[1]

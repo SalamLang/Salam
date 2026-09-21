@@ -12,33 +12,6 @@
  *
  */
 
-// Flat merge of the salam/ast port (see salam/PORTING.md "Layout - FLAT"):
-// ast.c + ast.h + ast_xml.c - one package `ast`, one file.
-//
-// C differences (per salam/PORTING.md):
-// - ast_kind_t / ast_order_phase_t are `pub const` ints (+ `pub type AstKind`)
-//   instead of enums: cross-package enum members don't resolve and the C
-//   backend miscompiles non-main-package enums. Values match the C enums
-//   exactly, so --emit-ast-xml output is byte-identical.
-// - ast_node_t* pointers become integer indices (`pub type NodeId = int`)
-//   into Ast.nodes (a Vector<Node>). NodeId 0 is the C NULL: NewAst() seeds
-//   a sentinel node at index 0, so real nodes start at id 1.
-// - Node mutation protocol: Vector<T> is a value struct (data/len/cap), so
-//   ALL writes go get-copy -> mutate -> Put/set-back (the accessors below do
-//   this). NEVER hold a Node copy across a mutating call on the same Ast and
-//   Put it back later - its child-list headers may be stale by then; re-Get.
-// - token_value_t union -> flattened value_kind/value_int/value_float/
-//   value_str/value_bool fields (TV_CHAR codepoints live in value_int, as in
-//   C). SetTokenValue/ValueOf convert from/to token.TokenValue.
-// - src_span_t is inlined as begin_*/end_*/length u32 fields (same as the
-//   Token port). end_index/length are kept but not emitted in XML (as in C).
-// - `name`/`type_str`/`origin_lang` use "" where C used NULL (`name` is only
-//   emitted in XML when non-empty; the C parser never produces empty names).
-// - The C field `type` is renamed `ty` (`type` is a Salam keyword); `a`, `b`,
-//   `c`, `d` and the vec_t fields keep their C names.
-// - ast_new's arena parameter is gone: nodes are owned by the Ast; FreeAst()
-//   releases everything. ast_clone clones into the same Ast (the only way
-//   the C compiler uses it, modulo the arena).
 package ast
 
 import tok "token.salam"
@@ -46,8 +19,6 @@ import x "xml.salam"
 import co "sal_core.salam"
 import str
 
-// ===== ast.c =====
-// ast_kind_t - order and values MUST stay identical to the C enum.
 pub const AST_PROGRAM := 0
 pub const AST_IMPORT := 1
 pub const AST_LINK := 2
@@ -101,9 +72,8 @@ pub const AST_MATCH_ARM := 49
 pub const AST_MATCH_PATTERN := 50
 pub const AST_VARIANT_BOX := 51
 pub const AST_VARIANT_UNWRAP := 52
-pub const AST_COUNT := 53 // AST__COUNT - not a real kind
+pub const AST_COUNT := 53
 
-// ast_order_phase_t
 pub const AST_ORDER_IMPORT := 0
 pub const AST_ORDER_CONST := 1
 pub const AST_ORDER_VAR := 2
@@ -111,7 +81,6 @@ pub const AST_ORDER_TYPEDEF := 3
 pub const AST_ORDER_FUNC := 4
 pub const AST_ORDER_NONE := 0 - 1
 
-// k_ast_names[] from ast.c, indexed by AST_* (53 = AST_COUNT entries).
 k_ast_names := [
     "Program", "Import", "Link", "TypeAlias", "ConstDecl", "FunctionDef", "Param", "StructDef", "Field",
     "InterfaceDef", "ImplDef", "EnumDef", "EnumMember", "Block", "VariableDecl", "Assignment", "IfStmt",
@@ -122,14 +91,11 @@ k_ast_names := [
     "MatchExpr", "MatchArm", "MatchPattern", "VariantBox", "VariantUnwrap"
 ]
 
-// ast_kind_t / node handle (see file header for why not an enum / pointer).
 pub type AstKind = int
 pub type NodeId = int
 
-// struct ast_node (ast.h). Fields keep the C names except `type` -> `ty`.
 pub struct Node:
     pub kind: AstKind = 0
-    // src_span_t span (inlined; end_index/length kept but not in XML)
     pub begin_line: u32 = 0 as u32
     pub begin_col: u32 = 0 as u32
     pub begin_index: u32 = 0 as u32
@@ -137,31 +103,17 @@ pub struct Node:
     pub end_col: u32 = 0 as u32
     pub end_index: u32 = 0 as u32
     pub length: u32 = 0 as u32
-    // Source file this top-level node was parsed from, stamped by parser.Run.
-    // The files of a multi-file package are merged into one program, so the
-    // span alone cannot say which file a line number belongs to; sema follows
-    // this while checking so a sibling file's diagnostics stop being reported
-    // against the package's anchor file. "" on nodes below the top level and
-    // on synthetic ones - those inherit whatever file is current.
     pub src_file: str = ""
     pub name: str = ""
-    // token_value_t value (union flattened; TV_CHAR codepoint in value_int)
-    pub value_kind: int = 0 // tok.TV_NONE
+    pub value_kind: int = 0
     pub value_int: u64 = 0 as u64
     pub value_float: f64 = 0.0
     pub value_str: str = ""
     pub value_bool: bool = false
-    pub op: int = 0 // token_kind_t (tok.TK_*)
+    pub op: int = 0
     pub is_mut: bool = false
-    // Shorthand for ptr_depth > 0, kept in sync by every writer so the many
-    // readers that only ask "is this a pointer at all" keep working.
     pub is_pointer: bool = false
-    // AST_TYPE only: stars written AFTER the dims ("Edge[6]**" -> 2), i.e. a
-    // pointer TO the array. Generic substitution SUMS this with the
-    // argument's own depth: "T*" with T = "Edge*" is Edge**.
     pub ptr_depth: int = 0
-    // ...and stars written BEFORE the dims ("Edge**[6]" -> 2), which belong
-    // to the ELEMENT type: an array of pointers, not a pointer to an array.
     pub elem_ptr_depth: int = 0
     pub synthetic: bool = false
     pub file_boundary: bool = false
@@ -169,19 +121,9 @@ pub struct Node:
     pub is_variadic: bool = false
     pub is_dyn: bool = false
     pub is_ref: bool = false
-    // Set on a call argument that binds to a `&:` reference parameter, so the
-    // definite-assignment pass can tell "the callee writes this" apart from
-    // "this value is read". Stamped by mark_ref_args (sema_overload.salam).
     pub ref_arg: bool = false
-    // With ref_arg: the argument is already a pointer to the parameter's
-    // type (`this` inside a method, or any T*), so the call passes it as it
-    // is instead of taking its address. Stamped by mark_ref_args.
     pub ref_arg_ptr: bool = false
     pub is_pub: bool = false
-    // Set on an AST_IDENTIFIER that names a free function and is being read as
-    // a value rather than called. Sema types it i64 (the handler-slot ABI that
-    // std/net/router and friends take) and every backend lowers it to the
-    // function's address.
     pub func_value: bool = false
     pub is_inline: bool = false
     pub is_noinline: bool = false
@@ -191,81 +133,37 @@ pub struct Node:
     pub is_slice: bool = false
     pub is_prefix: bool = false
     pub match_is_expr: bool = false
-    // Set on the synthetic AST_VAR_DECLs an `each` lowers its key/value
-    // bindings to, so the unused-variable check can tell a loop binding from
-    // an ordinary local and apply the stricter rule.
     pub loop_bind: bool = false
-    pub ty: NodeId = 0 // ast_node_t *type
+    pub ty: NodeId = 0
     pub a: NodeId = 0
     pub b: NodeId = 0
     pub c: NodeId = 0
     pub d: NodeId = 0
-    pub list: Vector<int> = Vector {} // vec_t list (NodeIds)
-    pub dims: Vector<int> = Vector {} // vec_t dims (NodeIds)
-    pub typarams: Vector<str> = Vector {} // vec_t typarams (names)
-    pub typaram_bounds: Vector<str> = Vector {} // vec_t typaram_bounds ("" = none)
-    pub aliases: Vector<str> = Vector {} // vec_t aliases (names)
-    pub captures: Vector<int> = Vector {} // vec_t captures (NodeIds)
+    pub list: Vector<int> = Vector {}
+    pub dims: Vector<int> = Vector {}
+    pub typarams: Vector<str> = Vector {}
+    pub typaram_bounds: Vector<str> = Vector {}
+    pub aliases: Vector<str> = Vector {}
+    pub captures: Vector<int> = Vector {}
     pub type_str: str = ""
-    // On an AST_TYPE the generic machinery built rather than parsed: the type
-    // id it already stands for. A type argument is resolved in the caller's
-    // scope but substituted into a template that is checked in the declaring
-    // package's scope, and a package's scope cannot see the caller's
-    // declarations - so a round trip through the name would lose a
-    // user-defined struct handed to a stdlib generic ("unknown type 'User'"
-    // from inside std/encoding/json). Carrying the resolved type across that
-    // switch is what keeps `json.Marshal(user)` and `option.Some(user)`
-    // working. -1 on everything the parser produced.
     pub sema_type: int = -1
-    // The same trick one level down, for an occurrence that decorates the type
-    // parameter rather than naming it bare: `T*`, `T[4]`. Substituting `T` =
-    // `Row` there cannot reuse the argument's resolved type - the node stands
-    // for `Row*`, not `Row` - but resolving the name again is exactly what
-    // fails, because `Row` belongs to a package the template's scope cannot
-    // see. So the *base* travels instead and sema_resolve_type applies this
-    // node's own `*` and `[N]` on top of it. -1 unless g_subst set it.
     pub sema_base_type: int = -1
-    // On a synthetic top-level function - a generic instantiation or a derived
-    // codec - the package whose scope its body was checked inside. Its name is
-    // global, but the names it calls are that package's, private ones
-    // included. The interpreter keeps one environment per module, so without
-    // this a body would be looked up against the program's globals and its own
-    // module's helpers would be missing.
     pub home_pkg: str = ""
     pub origin_lang: str = ""
 end
 
-// Node storage: all nodes of one tree, indexed by NodeId (0 = sentinel/none).
 pub struct Ast:
     pub nodes: Vector<Node> = Vector {}
-    // Names that condcomp dropped along with a dead branch, and the subset of
-    // them that the dropped code wrote to. Pruning runs before sema, so a
-    // variable only assigned - or a function only called - inside the branch
-    // this host folds away has no reference left to find by the time the
-    // unused/never-mutated lints run, and E059/E062/E066/E069 fire on code
-    // that is perfectly live on the other host. Sema consults these before
-    // raising one of those four. Names rather than node ids because the nodes
-    // are gone by then; that costs some precision (a same-named symbol
-    // elsewhere in the module is excused too), which only ever silences a
-    // lint, never accepts a program the checker would otherwise reject.
     pub pruned_names: Vector<str> = Vector {}
-    // The file each pruned_names/pruned_writes entry came from, parallel to
-    // them. Without it a name matched across the whole build: a parameter
-    // called 'b' got no E062 because some condcomp branch in some other file
-    // of std happened to mention a 'b'.
     pub pruned_files: Vector<str> = Vector {}
     pub pruned_write_files: Vector<str> = Vector {}
     pub pruned_writes: Vector<str> = Vector {}
 end
 
-// ===== ast_xml.c (private helpers) =====
-
-// ast_kind_has_op
 func kind_has_op(k: int): bool:
     ret k == AST_BINARY || k == AST_UNARY || k == AST_INCDEC || k == AST_ASSIGN || k == AST_LITERAL
 end
 
-// ast_emit_value
 func emit_value(w &: x.Writer, n: Node):
     if n.value_kind == tok.TV_NONE:
         ret
@@ -290,7 +188,6 @@ func emit_value(w &: x.Writer, n: Node):
     x.Close(w)
 end
 
-// ast_loc
 func emit_loc(w &: x.Writer, n: Node):
     x.Open(w, "location")
     x.LeafInt(w, "begin_line", n.begin_line as i64)
@@ -301,7 +198,6 @@ func emit_loc(w &: x.Writer, n: Node):
     x.Close(w)
 end
 
-// ast_child - omitted entirely when the node is none (C NULL).
 func emit_child(w &: x.Writer, role: str, a: Ast, id: int):
     if id == 0:
         ret
@@ -311,7 +207,6 @@ func emit_child(w &: x.Writer, role: str, a: Ast, id: int):
     x.Close(w)
 end
 
-// ast_child_list - the role element is emitted even when empty.
 func emit_child_list(w &: x.Writer, role: str, a: Ast, ids: Vector<int>):
     x.Open(w, role)
     repeat ids.len() with i:
@@ -320,16 +215,12 @@ func emit_child_list(w &: x.Writer, role: str, a: Ast, ids: Vector<int>):
     x.Close(w)
 end
 
-// ===== ast.c (public) =====
-
-// Creates an empty tree; index 0 is a sentinel standing in for C NULL.
 pub func NewAst(): Ast:
     mut a := Ast {}
     a.nodes.push(Node { kind = 0 - 1 })
     ret a
 end
 
-// Frees every node's vectors and the node storage itself.
 pub func FreeAst(a &: Ast):
     repeat a.nodes.len() with i:
         mut n := a.nodes.get(i)
@@ -347,24 +238,20 @@ pub func FreeAst(a &: Ast):
     a.pruned_writes.free()
 end
 
-// Number of node slots, including the id-0 sentinel.
 pub func Count(a: Ast): int:
     ret a.nodes.len()
 end
 
-// ast_new (span starts zeroed - see SetSpan).
 pub func NewNode(a &: Ast, kind: AstKind): NodeId:
     id := a.nodes.len()
     a.nodes.push(Node { kind = kind })
     ret id
 end
 
-// Full node read (returns a copy; see the mutation protocol in the header).
 pub func Get(a: Ast, id: NodeId): Node:
     ret a.nodes.get(id)
 end
 
-// Full node write-back.
 pub func Put(a &: Ast, id: NodeId, n: Node):
     a.nodes.set(id, n)
 end
@@ -394,11 +281,6 @@ pub func SetName(a &: Ast, id: NodeId, name: str):
     a.nodes.set(id, n)
 end
 
-// SALAM_ERR_NAME / ast_name_is_err: the placeholder the parser stores as a
-// declaration's or an identifier's name once it has already reported why the
-// real name could not be read. Later phases must stay silent about it: a
-// second diagnostic quoting "<error>" only buries the one that explained the
-// problem.
 pub func NameIsErr(name: str): bool:
     ret str.Equals(name, "<error>")
 end
@@ -421,7 +303,6 @@ pub func SetTypeStr(a &: Ast, id: NodeId, s: str):
     a.nodes.set(id, n)
 end
 
-// Copies a token.TokenValue payload into the node (parser convenience).
 pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
     mut n := a.nodes.get(id)
     n.value_kind = v.kind
@@ -432,7 +313,6 @@ pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
     a.nodes.set(id, n)
 end
 
-// Reads the node's value back as a token.TokenValue.
 pub func ValueOf(a: Ast, id: NodeId): tok.TokenValue:
     n := a.nodes.get(id)
     mut v := tok.ValueNone()
@@ -444,7 +324,6 @@ pub func ValueOf(a: Ast, id: NodeId): tok.TokenValue:
     ret v
 end
 
-// ast_add - appends to n->list, skipping none (C NULL) children.
 pub func AddChild(a &: Ast, parent: NodeId, child: NodeId):
     if child == 0:
         ret
@@ -464,8 +343,6 @@ pub func ChildCount(a: Ast, id: NodeId): int:
     ret n.list.len()
 end
 
-// Stamps a parsed program and every one of its top-level nodes with the file
-// they came from, so the merge into a package program cannot lose it.
 pub func StampSrcFile(a &: Ast, prog: NodeId, file: str):
     mut p := a.nodes.get(prog)
     p.src_file = file
@@ -478,8 +355,6 @@ pub func StampSrcFile(a &: Ast, prog: NodeId, file: str):
     end
 end
 
-// Records `name` as having been mentioned in code condcomp pruned away, and
-// (with `wrote`) as having been assigned there. See Ast.pruned_names.
 pub func NotePruned(a &: Ast, file: str, name: str, wrote: bool):
     if str.Len(name) == 0:
         ret
@@ -507,13 +382,6 @@ pub func NotePruned(a &: Ast, file: str, name: str, wrote: bool):
     a.pruned_write_files.push(file)
 end
 
-// Whether `name` was mentioned in code condcomp pruned out of `file`.
-//
-// Scoped to one file, because that is the scope the lints it guards work
-// in: a variable's uses and a parameter's uses are inside the function that
-// declares them. Matching bare names across the whole build meant one
-// pruned mention of a short name anywhere in std silently switched E059,
-// E062 and E069 off for every symbol of that name in the program.
 pub func WasPruned(a: Ast, file: str, name: str): bool:
     repeat a.pruned_names.len() with i:
         if str.Equals(a.pruned_names.get(i), name) && str.Equals(a.pruned_files.get(i), file):
@@ -523,9 +391,6 @@ pub func WasPruned(a: Ast, file: str, name: str): bool:
     ret false
 end
 
-// Whether `name` was mentioned in pruned code ANYWHERE in the build. Only
-// E066 wants this: a function can have its single call site in a branch
-// another file folded away, so that lint really is program-wide.
 pub func WasPrunedAnywhere(a: Ast, name: str): bool:
     repeat a.pruned_names.len() with i:
         if str.Equals(a.pruned_names.get(i), name):
@@ -535,7 +400,6 @@ pub func WasPrunedAnywhere(a: Ast, name: str): bool:
     ret false
 end
 
-// Whether pruned-away code in `file` assigned to `name`.
 pub func WasPrunedWrite(a: Ast, file: str, name: str): bool:
     repeat a.pruned_writes.len() with i:
         if str.Equals(a.pruned_writes.get(i), name) && str.Equals(a.pruned_write_files.get(i), file):
@@ -577,7 +441,6 @@ pub func CaptureCount(a: Ast, id: NodeId): int:
     ret n.captures.len()
 end
 
-// Type parameter + its bound ("" = unbounded), kept in lockstep.
 pub func AddTyparam(a &: Ast, id: NodeId, name: str, bound: str):
     mut n := a.nodes.get(id)
     n.typarams.push(name)
@@ -616,7 +479,6 @@ pub func AliasCount(a: Ast, id: NodeId): int:
     ret n.aliases.len()
 end
 
-// ast_kind_name
 pub func KindName(kind: AstKind): str:
     if kind < 0 || kind >= AST_COUNT:
         ret "Unknown"
@@ -624,7 +486,6 @@ pub func KindName(kind: AstKind): str:
     ret k_ast_names[kind]
 end
 
-// ast_toplevel_order_phase
 pub func ToplevelOrderPhase(a: Ast, id: NodeId): int:
     n := a.nodes.get(id)
     if n.is_extern && n.kind == AST_VAR_DECL:
@@ -651,8 +512,6 @@ pub func ToplevelOrderPhase(a: Ast, id: NodeId): int:
     ret AST_ORDER_NONE
 end
 
-// ast_str_lit_len - -1 unless the node is a string literal (Salam strings are
-// never NULL, so the C NULL-payload -1 case cannot occur; "" gives 0).
 pub func StrLitLen(a: Ast, id: NodeId): i64:
     if id == 0:
         ret (0 - 1)
@@ -670,7 +529,6 @@ pub func StrLitLen(a: Ast, id: NodeId): i64:
     ret str.Len(n.value_str)
 end
 
-// ast_clone - deep copy into the same Ast; returns the new root's id.
 pub func Clone(a &: Ast, id: NodeId): NodeId:
     if id == 0:
         ret 0
@@ -711,14 +569,6 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     ret nid
 end
 
-// ===== ast_xml.c =====
-// The --emit-ast-xml dump. The kind dispatch is an if/else chain, not
-// `match`: C-switch order kept. AST_SLICE / AST_LAMBDA / AST_BREAK /
-// AST_CONTINUE / AST_IMPORT / AST_LINK / AST_LITERAL / AST_IDENTIFIER /
-// AST_FUNC_ADDR / AST_THIS hit the C default: no child elements.
-
-// ast_to_xml - id 0 (C NULL) emits nothing. The driver wraps this with
-// xml.Decl() + file output; byte-compatible with the C emitter.
 pub func ToXml(w &: x.Writer, a: Ast, id: NodeId):
     if id == 0:
         ret
@@ -754,7 +604,7 @@ pub func ToXml(w &: x.Writer, a: Ast, id: NodeId):
         x.Attr(w, "pub", "true")
     end
     emit_loc(w, n)
-    emit_value(w, n) // no-op when value_kind == TV_NONE
+    emit_value(w, n)
     k := n.kind
     if k == AST_PROGRAM:
         emit_child_list(w, "defs", a, n.list)

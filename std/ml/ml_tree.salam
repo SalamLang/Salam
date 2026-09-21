@@ -18,25 +18,6 @@ import math
 import matrix
 import sort
 
-// CART decision trees, classification (gini or entropy) and regression
-// (mean squared error) in one struct: the criterion field picks the
-// mode, and `value` holds class counts per node or the node mean.
-//
-// Nodes live in flat index-linked arrays rather than a pointer graph:
-// node i is a leaf iff feature.get(i) < 0, otherwise rows with
-// x[feature] <= threshold go to left.get(i) and the rest to right.get(i).
-// One allocation per array, trivial to free, trivial to walk, and a
-// forest of them shares no heap pointers between workers.
-//
-// Growth is an explicit work stack over a shared row-index array: each
-// frame owns a contiguous range of it, a split partitions the range in
-// place, and the two halves become frames. No recursion, so a deep tree
-// is a long loop and never a stack overflow. Split search sorts the
-// range's rows by one feature at a time and sweeps once with running
-// class counts (or running sums), scoring every gap between distinct
-// values; max_features > 0 restricts the sweep to a seeded random
-// subset of columns, which is what a random forest asks for.
-
 // One frame of the growth stack: node id, and its rows as a range of
 // the shared index array.
 struct _TreeFrame:
@@ -96,8 +77,6 @@ pub struct DecisionTree:
         end
         this.n_classes = k
         mut values := Vector {} as Vector<f64>
-        // Grow into a local copy of the settings (a method cannot lend
-        // `this` by reference), then adopt its node arrays.
         mut me := DecisionTree {}
         me.criterion = this.criterion
         me.max_depth = this.max_depth
@@ -110,7 +89,6 @@ pub struct DecisionTree:
         this.threshold = me.threshold
         this.left = me.left
         this.right = me.right
-        // Node values: k class counts per node, or one mean.
         this.value = matrix.Zeros(this.feature.len(), k)
         repeat this.feature.len() * k with t: this.value.a.set(t, values.get(t)) end
         values.free()
@@ -239,7 +217,6 @@ func _best_split(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, r
     n := hi - lo
     regression := tree.is_regression()
     nf := n as f64
-    // Parent impurity.
     mut parent := 0.0
     mut total_counts := Vector {} as Vector<f64>
     mut ysum := 0.0
@@ -272,7 +249,6 @@ func _best_split(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, r
     repeat feats.len() with fi:
         f := feats.get(fi)
         repeat n with t: keys.set(t, x.at(order.get(t), f)) end
-        // Sort the row order by this feature's values.
         mut idx := Vector {} as Vector<int>
         repeat n with t: idx.push(t) end
         sort.SortIndex(idx, keys)
@@ -354,7 +330,6 @@ func _grow_tree(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, k:
     mut rows := Vector {} as Vector<int>
     repeat n with i: rows.push(i) end
     mut g := matrix.NewRng(tree.seed)
-    // Root.
     tree.feature.push(0 - 1)
     tree.threshold.push(0.0)
     tree.left.push(0 - 1)
@@ -367,7 +342,6 @@ func _grow_tree(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, k:
         fr := stack.pop()
         cnt := fr.hi - fr.lo
         if fr.depth >= tree.max_depth || cnt < tree.min_samples_split || cnt < 2 * tree.min_samples_leaf: continue end
-        // Candidate features: all, or a seeded subset.
         feats.clear()
         if tree.max_features > 0 && tree.max_features < p:
             mut pool := Vector {} as Vector<int>
@@ -389,7 +363,6 @@ func _grow_tree(tree &: DecisionTree, x &: matrix.Matrix, y &: matrix.Matrix, k:
         if bf < 0 || gain <= 0.0: continue end
         mid := _partition(x, rows, fr.lo, fr.hi, bf, bt)
         if mid == fr.lo || mid == fr.hi: continue end
-        // Two children.
         lid := tree.feature.len()
         tree.feature.push(0 - 1)
         tree.threshold.push(0.0)

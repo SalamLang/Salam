@@ -12,18 +12,6 @@
  *
  */
 
-// The matching engine: a pattern is parsed into a small syntax tree, the tree
-// is compiled to a flat instruction program, and the program is run by a
-// backtracking VM. Groups fall out of that shape for free - a capturing paren
-// becomes a pair of SAVE instructions that write the current text offset into
-// a slot, and the VM restores the slot when a branch fails, so what survives to
-// the MATCH instruction is exactly the spans of the branch that won.
-//
-// Everything lives in package globals: a compiled program is a set of parallel
-// int arrays, never a heap allocation, so Regex stays a plain value that nobody
-// has to free. Only the most recent pattern stays compiled (patterns repeat in
-// a loop far more often than they alternate), keyed on the pattern text.
-
 package regex
 
 const _RE_MAX_NODE := 512
@@ -209,7 +197,6 @@ pure func _re_class_match(pat: str, start: int, stop: int, cc: int): bool:
         neg = true
         q += 1
     end
-    // stop - 1 is the closing ']', so the items end there.
     last := stop - 1
     if q < last && _ub(pp, q) == 93:
         if cc == 93: found = true end
@@ -292,8 +279,6 @@ func _re_scan_rep(pat: str, start: int): bool:
     end
     if q >= pl || _ub(pp, q) != 125: ret false end
     if hi >= 0 && hi < lo: ret false end
-    // A count this large is a repetition the compiler cannot lay out, not a
-    // literal brace: say so rather than quietly matching something else.
     if lo > _RE_MAX_REP || hi > _RE_MAX_REP:
         _re_err = true
         ret false
@@ -337,7 +322,6 @@ func _re_p_atom(pat: str): int:
                 _re_pi += 1
                 gnum = _re_next_group()
             else:
-                // Lookaround and inline flags are not supported.
                 _re_err = true
                 ret 0
             end
@@ -383,7 +367,6 @@ func _re_p_atom(pat: str): int:
         _re_pi += 1
         ret _re_new_node(_NK_EOL, -1, -1, 0, 0)
     else c == 41 || c == 42 || c == 43 || c == 63:
-        // A stray ')' or a quantifier with nothing in front of it.
         _re_err = true
         ret 0
     end
@@ -631,8 +614,6 @@ func _re_gen(node: int):
         _re_gen(_re_nl[node])
         _re_emit(_OP_SAVE, 2 * g + 1, 0)
     else k == _NK_REP:
-        // {n,m} is compiled by repetition: n copies of the body, then either a
-        // star (open ended) or m-n optional copies.
         body := _re_nl[node]
         lo := _re_na[node]
         hi := _re_nb[node]
@@ -662,7 +643,6 @@ func _re_compile(pat: str): bool:
     _re_nmark = 0
     _re_emit(_OP_SAVE, 0, 0)
     root := _re_p_alt(pat)
-    // Anything left over is an unbalanced ')'.
     if _re_pi < pat.len(): _re_err = true end
     _re_gen(root)
     _re_emit(_OP_SAVE, 1, 0)
@@ -713,10 +693,6 @@ func _re_step(pat: str, text: str, pc: int, si: int): int:
         if si == tl: ret _re_run(pat, text, pc + 1, si) end
         ret -1
     else op == _OP_MANY:
-        // Take the whole run first, then give bytes back one at a time (or
-        // hand them out one at a time, when lazy), trying the rest of the
-        // pattern after each. Only that trial recurses, so the run itself
-        // costs no stack.
         atom := _re_ox[pc]
         min := _re_oy[pc]
         mut count := 0
@@ -753,12 +729,9 @@ func _re_step(pat: str, text: str, pc: int, si: int): int:
         _re_mark[slot] = old
         ret -1
     else op == _OP_PROG:
-        // The body matched nothing, so another turn round the loop would match
-        // nothing again: leave instead.
         if si > _re_mark[_re_oy[pc]]: ret _re_run(pat, text, _re_ox[pc], si) end
         ret _re_run(pat, text, pc + 1, si)
     else op == _OP_LSPLIT:
-        // Same guard, on a split: a target behind us is the repeat branch.
         mut r := -1
         if _re_ox[pc] > pc || si > _re_mark[_re_oz[pc]]:
             r = _re_run(pat, text, _re_ox[pc], si)
@@ -776,7 +749,6 @@ func _re_step(pat: str, text: str, pc: int, si: int): int:
         _re_save[slot] = si
         r := _re_run(pat, text, pc + 1, si)
         if r >= 0: ret r end
-        // This branch lost, so the span it recorded never happened.
         _re_save[slot] = old
         ret -1
     else op == _OP_MATCH:
@@ -805,10 +777,6 @@ func _re_exec(pat: str, text: str, from: int): bool:
     mut si := from
     if si < 0: si = 0 end
     until si <= tl:
-        // The budget is per starting offset, not per search: runaway
-        // backtracking is something one offset does, and a shared budget would
-        // otherwise turn a long subject into a false "no match" once the plain
-        // left-to-right scan had spent it.
         _re_steps = 0
         _re_depth = 0
         mut k := 0

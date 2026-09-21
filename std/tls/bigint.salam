@@ -14,28 +14,6 @@
 
 package tls
 
-// Arbitrary-precision unsigned integers on 32-bit limbs, sized for RSA moduli.
-//
-// SCOPE AND THREAT MODEL: nothing here is constant-time. It started as an RSA
-// *verifier*, where every input -- signature, exponent, modulus -- travels in
-// the clear inside a certificate and there is no secret for a timing side
-// channel to leak. Signing came later and does touch a secret exponent, which
-// is why rsa_sign.salam never calls into this file directly: its private op is
-// blinded, so the operand these routines see is decorrelated from the message
-// on every call. Do not add a caller that hands a secret straight to
-// _big_modexp or _big_modexp_barrett.
-//
-// Division is bit-serial shift-and-subtract rather than Knuth algorithm D:
-// asymptotically worse, but far easier to get right, and an RSA-2048
-// verification with e=65537 reaches it only ~18 times. Signing reaches it
-// ~9000 times, which is seconds rather than microseconds, so the exponent
-// loop reduces with Barrett instead -- see the Barrett section below. The
-// bit-serial divider stays as the thing Barrett's own setup divides with, and
-// as the reference the selftest cross-checks Barrett against.
-//
-// Limbs are little-endian (limb 0 is least significant); byte serialisation is
-// big-endian, matching how integers appear in DER and in TLS.
-
 struct Big:
     pub b: Buf = Buf {}
     pub cap: int = 0
@@ -68,9 +46,6 @@ func _big_new(limbs: int): Big:
         nl = 1
     end
     bb := _newbuf(nl * 4)
-    // Fields are assigned one at a time rather than written as a struct
-    // literal: a literal carrying a struct-typed member compiles to a C
-    // compound literal that the default `tcc` backend rejects.
     mut x := Big {}
     x.b = bb
     x.cap = nl
@@ -407,7 +382,6 @@ func _big_modexp(r &: Big, base: Big, e: Big, m: Big): bool:
             end
             _big_copy(acc, red)
         end
-        // skip the final squaring; nothing consumes it
         if i + 1 < bits:
             _big_mul(prod, cur, cur)
             if prod.bad || !_big_mod(red, prod, m):
@@ -420,33 +394,6 @@ func _big_modexp(r &: Big, base: Big, e: Big, m: Big): bool:
     _big_copy(r, acc)
     ret !r.bad
 end
-
-// ---------------------------------------------------------------- Barrett reduction
-//
-// _big_modexp above reduces with the bit-serial division: O(bits(x) *
-// limbs(m)) per reduction, and one reduction per exponent bit. For RSA
-// verification, where e is 65537 and there are ~18 reductions in total, that
-// costs microseconds and the simpler algorithm was worth keeping. Signing is
-// the opposite shape - a full-width 2048-bit private exponent, and
-// rsa_sign.salam's blinding runs three of those per signature - so the same
-// reduction is reached ~9000 times and the handshake takes seconds. Measured
-// on the wss loopback test: 1.9s built with LLVM at -O2, and 35s built with
-// tcc, which is what Windows uses and what pushed the test past its 30s
-// budget in CI.
-//
-// Barrett turns "divide by m" into two multiplications against a constant
-// precomputed once per modexp, which brings a reduction down to the
-// ~limbs(m)^2 a schoolbook multiply already costs.
-//
-// mu = floor(b^(2k) / m), b = 2^32, k = limbs(m), computed ONCE per modexp
-// call (a single division, not one per squaring). Reduction of a product x
-// (0 <= x < b^(2k), which every squaring/multiply inside modexp satisfies
-// since both operands are already < m) is then: q = floor((x >> (k-1)) * mu
-// >> (k+1)), r = (x - q*m) mod b^(k+1), followed by at most a couple of
-// corrective subtractions of m - Handbook of Applied Cryptography 14.42.
-//
-// Same code as std/ssh/bigint.salam's, which cannot be imported across the
-// package boundary; keep the two in step.
 
 // x >> (32*s): drop the low s limbs.
 func _big_shr_limbs(x: Big, s: int): Big:
@@ -526,7 +473,6 @@ func _barrett_reduce(bt: Barrett, x: Big, r &: Big): bool:
     if _big_cmp(r1, r2) >= 0:
         _s1 := _big_sub(wide, r1, r2)
     else:
-        // r1 - r2 wrapped mod b^(k+1): add b^(k+1) back in first.
         mut base := _big_new(k + 6)
         _big_setbit(base, (k + 1) * 32)
         mut r1adj := _big_new(k + 6)
@@ -604,8 +550,6 @@ func _big_modexp_barrett(r &: Big, base: Big, e: Big, m: Big): bool:
     ret ok && !r.bad
 end
 
-// ---------------------------------------------------------------- bytes
-
 func _big_from_bytes(p: void*, len: int): Big:
     mut nl := (len + 3) / 4
     if nl < 1:
@@ -616,7 +560,6 @@ func _big_from_bytes(p: void*, len: int): Big:
         ret x
     end
     repeat len with i:
-        // i counts from the least significant byte
         v := _bget(p, len - 1 - i)
         li := i / 4
         sh := ((i % 4) * 8) as u32

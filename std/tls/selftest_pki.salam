@@ -14,21 +14,6 @@
 
 package tls
 
-// Checks for signatures, X.509 parsing, chain verification,
-// hostname and address matching, and trust store loading.
-
-
-// Known-answer self-tests for the internal layers.
-//
-// These live inside the package because the layers they check (Buf, Reader,
-// the constant-time helpers, and later the hashes and ciphers) are private
-// plumbing rather than public API. Keeping them here also makes them runnable
-// on any target the compiler can reach, which is how a port to a new
-// architecture gets validated -- byte-order and integer-width mistakes show up
-// as self-test failures rather than as a mysterious handshake rejection.
-//
-// Every entry point returns a FAILURE COUNT: 0 means pass.
-
 const T_RSA_N := "9abe7ab966c27abf15aeb4f12e6a0fc901d06c520cf32c114d03c602364ed20572c415aaacbbd9f21ca41e1a97cd7a53c79fef2878461f5c2b0036623d9bac391c8f9d4003020e838ebe99f712b2faf627f556e5037f39599cd23b65fc687062ccc8e657655e333c4a2d67f427b5a24edb9111aa7b78d3ebc3846f01832e3f0e17f8a0a045a09702f962e0b509034eb939d8b6307bd3817b790f5b4166fc6984ffa60311b4f65f34a70558d4b7bae9fdd63d2488ccbb44bd2bb2bfbf7a7fa1a141cf07e4b6e0c22d38ba14e8ac006a1dd504ad201d3559103c4be928d879df79f081cba4150855f58f0fcfb03f162e66dba4d9b3510ffa1a9b12d0cf12fd5c09"
 const T_RSA_E := "010001"
 const T_SIG_PKCS1_256 := "950aa1b6acb3867bb6bd70a588c015ad8f16a4c70ea77c9b9910741439657d0a44dc605640bd7e34f38fde02008a9c5779806eb6f575dc133f9ba7808ae403f81512a2b1d1ecd35159da7041c6411362db6d8494dcdff3481167f86c08ea1110f7739fbcc86b6af9a745378c53f4bf8287ef7b896dcc72ea435e5415128ffe05bdc45f9feb7f57afb65ee6844a86f9f2c05ea573ec75bd3be0b349b4c59de1f57db975c299885caa1596676b602d0d579b178bd49d521a4265f75b21b3d78bad5d5bb3cd62b31fc713c3f1c699b0a9adcc2c707f33387bedf46df8cded021e36c20b740706bba30adb79917479ac0bf8fff470e18539ba7c04e5b234cb040d28"
@@ -40,9 +25,6 @@ const T_EC_R := "6d02392e3e8704bf05c44ce86d25a4ebc90855dd2d604ec0051085f911bee8d
 const T_EC_S := "a1ee23bb74cb3e6642322e1babd4b9a3e3794a6b34202e51bbaa586b7057b488"
 const T_EC_R384 := "c87f210e9d418a8975f77814b7ea57b27e4f606c79b85d57faf808dc4e2e2b98"
 const T_EC_S384 := "8712f7985c9338f3e80c02c96ed584ec0f702f2569cac0bbab020b48ccba3e00"
-
-// ------------------------------------------------------ RSA / ECDSA verify
-
 
 func _digest_of(kind: int, s: str, out &: Buf):
     hs := _hash_size(kind)
@@ -64,7 +46,6 @@ func _selftest_sig():
     _digest_of(HASH_SHA384, T_MSG, d384)
     _ckhex(_hexofbuf(d256), "12f5a3dab2d5fc68e84da05b34534421a8b5568f22e4cb20f86741505da26e75", "test message sha256")
 
-    // --- PKCS#1 v1.5, signatures produced by OpenSSL via python-cryptography
     mut s1 := _hexbuf(T_SIG_PKCS1_256)
     defer _buf_free(s1)
     _ck(_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 sha256 accepts valid signature")
@@ -73,9 +54,6 @@ func _selftest_sig():
     defer _buf_free(s384)
     _ck(_rsa_verify_pkcs1(HASH_SHA384, d384.p, n.p, n.len, e.p, e.len, s384.p, s384.len), "rsa pkcs1 sha384 accepts valid signature")
 
-    // Negative cases. A verifier that passes only the positive vectors above
-    // could be one that returns true unconditionally, so these carry the real
-    // weight of the test.
     _bufset(s1, 200, _bufat(s1, 200) ^ 0x01)
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects corrupted signature")
     _bufset(s1, 200, _bufat(s1, 200) ^ 0x01)
@@ -84,8 +62,6 @@ func _selftest_sig():
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects wrong digest")
     _bufset(d256, 0, _bufat(d256, 0) ^ 0x01)
 
-    // A SHA-256 signature must not verify when interpreted under SHA-384's
-    // DigestInfo -- that is the algorithm-substitution check.
     _ck(!_rsa_verify_pkcs1(HASH_SHA384, d384.p, n.p, n.len, e.p, e.len, s1.p, s1.len), "rsa pkcs1 rejects hash substitution")
 
     mut wrongn := _hexbuf(T_RSA_N)
@@ -95,14 +71,12 @@ func _selftest_sig():
 
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len - 1), "rsa pkcs1 rejects short signature")
 
-    // s == 0 and s == n are not valid residues
     mut zsig := _newbuf(n.len)
     defer _buf_free(zsig)
     _putzeros(zsig, n.len)
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, zsig.p, zsig.len), "rsa pkcs1 rejects zero signature")
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, n.p, n.len), "rsa pkcs1 rejects s == n")
 
-    // --- PSS
     mut ps := _hexbuf(T_SIG_PSS_256)
     defer _buf_free(ps)
     _ck(_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 32), "rsa pss sha256 accepts valid signature")
@@ -113,11 +87,9 @@ func _selftest_sig():
     _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 32), "rsa pss rejects wrong digest")
     _bufset(d256, 10, _bufat(d256, 10) ^ 0x80)
     _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len, 20), "rsa pss rejects wrong salt length")
-    // a PKCS#1 v1.5 signature must not pass as PSS, and vice versa
     _ck(!_rsa_verify_pss(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, s1.p, s1.len, 32), "rsa pss rejects pkcs1 signature")
     _ck(!_rsa_verify_pkcs1(HASH_SHA256, d256.p, n.p, n.len, e.p, e.len, ps.p, ps.len), "rsa pkcs1 rejects pss signature")
 
-    // --- ECDSA P-256
     mut pubkey := _hexbuf(T_EC_PUB)
     defer _buf_free(pubkey)
     mut r := _hexbuf(T_EC_R)
@@ -142,10 +114,8 @@ func _selftest_sig():
     _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pubkey.p, pubkey.len), "ecdsa rejects wrong digest")
     _bufset(d256, 20, _bufat(d256, 20) ^ 0x01)
 
-    // swapping r and s must not verify
     _ck(!_ecdsa_p256_verify(d256.p, 32, s.p, r.p, pubkey.p, pubkey.len), "ecdsa rejects swapped r and s")
 
-    // r or s equal to zero, and a corrupted (off-curve) public key
     mut zed := _hexbuf("0000000000000000000000000000000000000000000000000000000000000000")
     defer _buf_free(zed)
     _ck(!_ecdsa_p256_verify(d256.p, 32, zed.p, s.p, pubkey.p, pubkey.len), "ecdsa rejects r == 0")
@@ -156,8 +126,6 @@ func _selftest_sig():
     _bufset(pubkey, 40, _bufat(pubkey, 40) ^ 0x01)
     _ck(!_ecdsa_p256_verify(d256.p, 32, r.p, s.p, pubkey.p, pubkey.len), "ecdsa rejects off-curve public key")
 end
-
-// ---------------------------------------------------------------- X.509
 
 func _selftest_x509():
     mut rootder := _hexbuf(TC_ROOT)
@@ -171,7 +139,6 @@ func _selftest_x509():
     mut ecrootder := _hexbuf(TC_EC_ROOT)
     defer _buf_free(ecrootder)
 
-    // --- structural parse
     root := _cert_parse(rootder.p, rootder.len)
     _ck(root.ok, "x509 parses RSA root")
     _ck(root.has_basic_constraints && root.is_ca, "x509 root is a CA")
@@ -191,8 +158,6 @@ func _selftest_x509():
     _ck(leaf.subject_cn == "example.com", "x509 leaf CN parsed")
     _ck(leaf.serial.len == 5, "x509 leaf serial is 5 bytes")
 
-    // issuer of the leaf must be byte-identical to the root's subject, which is
-    // what chain building keys on
     _ck(_cteqrd(leaf.issuer, root.subject), "x509 leaf issuer matches root subject")
 
     pss := _cert_parse(pssder.p, pssder.len)
@@ -203,7 +168,6 @@ func _selftest_x509():
     _ck(ecroot.ok, "x509 parses ECDSA-signed root")
     _ck(ecroot.sig_alg == SIG_ECDSA_SHA256, "x509 ecdsa-sha256 sigalg")
 
-    // --- validity window
     exp := _cert_parse(expder.p, expder.len)
     _ck(exp.ok, "x509 parses expired cert")
     _ck(exp.not_before == 20150101000000 as i64, "x509 notBefore parsed")
@@ -211,7 +175,6 @@ func _selftest_x509():
     _ck(leaf.not_before < leaf.not_after, "x509 validity ordered")
     _ck(exp.not_after < leaf.not_before, "x509 expired cert precedes valid one")
 
-    // --- hostname matching (RFC 6125)
     _ck(_cert_match_host(leaf, "example.com"), "host exact match")
     _ck(_cert_match_host(leaf, "EXAMPLE.COM"), "host match is case-insensitive")
     _ck(_cert_match_host(leaf, "www.example.com"), "wildcard matches one label")
@@ -220,11 +183,8 @@ func _selftest_x509():
     _ck(!_cert_match_host(leaf, "notexample.com"), "host rejects suffix confusion")
     _ck(!_cert_match_host(leaf, "example.com.evil.net"), "host rejects trailing domain")
     _ck(!_cert_match_host(leaf, ""), "host rejects empty")
-    // CN must never be consulted: this cert's CN is example.com but the SAN is
-    // what decides, and a name only in the CN must not match
     _ck(!_cert_match_host(exp, "example.com"), "CN is not used for matching")
 
-    // wildcard rules in isolation
     _ck(_host_match("*.example.com", "a.example.com"), "wildcard leftmost label")
     _ck(!_host_match("*.com", "example.com"), "wildcard needs two labels after it")
     _ck(!_host_match("*", "example.com"), "bare wildcard rejected")
@@ -232,7 +192,6 @@ func _selftest_x509():
     _ck(!_host_match("*w.example.com", "www.example.com"), "suffix-label wildcard rejected")
     _ck(!_host_match("*.example.com", "example.com"), "wildcard does not match bare domain")
 
-    // --- malformed input must be rejected, not silently reinterpreted
     _ck(!_cert_parse(leafder.p, leafder.len - 1).ok, "x509 rejects truncated cert")
     _ck(!_cert_parse(leafder.p, 0).ok, "x509 rejects empty input")
 
@@ -242,15 +201,12 @@ func _selftest_x509():
     _put8(trailing, 0x00)
     _ck(!_cert_parse(trailing.p, trailing.len).ok, "x509 rejects trailing bytes")
 
-    // flipping a byte inside the TBS must still parse or fail cleanly, never
-    // crash; flipping the outer SEQUENCE tag must fail
     mut badtag := _newbuf(leafder.len)
     defer _buf_free(badtag)
     _putbuf(badtag, leafder)
     _bufset(badtag, 0, 0x31)
     _ck(!_cert_parse(badtag.p, badtag.len).ok, "x509 rejects wrong outer tag")
 
-    // a non-minimal length encoding is valid BER but not DER
     mut ber := _newbuf(8)
     defer _buf_free(ber)
     _put8(ber, 0x30)
@@ -261,7 +217,6 @@ func _selftest_x509():
     _der(br)
     _ck(br.bad, "der rejects non-minimal length")
 
-    // indefinite length is BER only
     mut indef := _newbuf(8)
     defer _buf_free(indef)
     _put8(indef, 0x30)
@@ -272,7 +227,6 @@ func _selftest_x509():
     _der(ir)
     _ck(ir.bad, "der rejects indefinite length")
 
-    // an INTEGER with redundant leading zero
     mut padint := _newbuf(8)
     defer _buf_free(padint)
     _put8(padint, 0x02)
@@ -283,7 +237,6 @@ func _selftest_x509():
     _der_int(pr)
     _ck(pr.bad, "der rejects redundant integer padding")
 
-    // a well-formed INTEGER keeps its sign byte stripped
     mut okint := _newbuf(8)
     defer _buf_free(okint)
     _put8(okint, 0x02)
@@ -294,7 +247,6 @@ func _selftest_x509():
     iv := _der_int(orr2)
     _ck(!orr2.bad && iv.len == 1 && _rdat(iv, 0) == 0x80, "der strips integer sign byte")
 
-    // a negative INTEGER where an unsigned value is required
     mut negint := _newbuf(8)
     defer _buf_free(negint)
     _put8(negint, 0x02)
@@ -304,7 +256,6 @@ func _selftest_x509():
     _der_uint(nr)
     _ck(nr.bad, "der rejects negative unsigned integer")
 
-    // length running past the end of the buffer
     mut over := _newbuf(8)
     defer _buf_free(over)
     _put8(over, 0x30)
@@ -314,8 +265,6 @@ func _selftest_x509():
     _der(ovr)
     _ck(ovr.bad, "der rejects length past end of buffer")
 end
-
-// ------------------------------------------------------- chain verification
 
 func _selftest_verify():
     mut rootder := _hexbuf(TC_ROOT)
@@ -329,7 +278,6 @@ func _selftest_verify():
     mut ecrootder := _hexbuf(TC_EC_ROOT)
     defer _buf_free(ecrootder)
 
-    // Direct signature check: the leaf really is signed by the root.
     root := _cert_parse(rootder.p, rootder.len)
     leaf := _cert_parse(leafder.p, leafder.len)
     pss := _cert_parse(pssder.p, pssder.len)
@@ -339,17 +287,13 @@ func _selftest_verify():
     _ck(_cert_signed_by(root, root), "chain: root is self-signed")
     _ck(_cert_signed_by(ecroot, ecroot), "chain: EC root self-signature verifies (ECDSA)")
 
-    // Cross-checks that must fail.
     _ck(!_cert_signed_by(leaf, leaf), "chain: leaf is not signed by itself")
     _ck(!_cert_signed_by(root, ecroot), "chain: root not signed by unrelated EC root")
     _ck(!_cert_signed_by(leaf, ecroot), "chain: leaf not signed by unrelated root")
 
-    // A single flipped bit anywhere in the signed body must break the
-    // signature. This is the property the whole PKI rests on.
     mut tampered := _newbuf(leafder.len)
     defer _buf_free(tampered)
     _putbuf(tampered, leafder)
-    // flip a byte inside the SAN extension
     _bufset(tampered, 300, _bufat(tampered, 300) ^ 0x01)
     tc := _cert_parse(tampered.p, tampered.len)
     if tc.ok:
@@ -360,13 +304,10 @@ func _selftest_verify():
 
     now := 20270601000000 as i64
 
-    // --- full chain verification against a trust store
     mut roots := _roots_new()
     defer _roots_free(roots)
     _roots_add(roots, rootder.p, rootder.len)
 
-    // One chain array, retargeted before each call: a function cannot return
-    // a fixed-size array in Salam.
     mut ch: Reader[8]
     repeat 8 with i:
         ch[i] = _newreader(null, 0)
@@ -375,44 +316,34 @@ func _selftest_verify():
     _ck(_verify_chain(ch, 1, roots, "example.com", now) == VERR_NONE, "verify: leaf against trusted root")
     _ck(_verify_chain(ch, 1, roots, "www.example.com", now) == VERR_NONE, "verify: wildcard host")
 
-    // wrong hostname
     _ck(_verify_chain(ch, 1, roots, "evil.com", now) == VERR_HOSTNAME, "verify: rejects wrong hostname")
     _ck(_verify_chain(ch, 1, roots, "a.b.example.com", now) == VERR_HOSTNAME, "verify: rejects multi-label wildcard")
 
-    // outside the validity window
     _ck(_verify_chain(ch, 1, roots, "example.com", 20200101000000 as i64) == VERR_NOT_YET_VALID, "verify: rejects not-yet-valid")
     _ck(_verify_chain(ch, 1, roots, "example.com", 20400101000000 as i64) == VERR_EXPIRED, "verify: rejects expired leaf")
 
-    // expired certificate with an otherwise valid signature
     ch[0] = _readerof(expder)
     _ck(_verify_chain(ch, 1, roots, "old.example.com", now) == VERR_EXPIRED, "verify: rejects expired certificate")
     ch[0] = _readerof(leafder)
 
-    // EMPTY trust store: the same chain that verified above must now fail.
-    // This is the check that catches a verifier which trusts anything.
     mut empty := _roots_new()
     defer _roots_free(empty)
     _ck(_verify_chain(ch, 1, empty, "example.com", now) == VERR_UNTRUSTED, "verify: rejects when no roots are trusted")
 
-    // A trust store holding an unrelated root must not validate the leaf.
     mut wrongroots := _roots_new()
     defer _roots_free(wrongroots)
     _roots_add(wrongroots, ecrootder.p, ecrootder.len)
     _ck(_verify_chain(ch, 1, wrongroots, "example.com", now) == VERR_UNTRUSTED, "verify: rejects unrelated trusted root")
 
-    // The leaf is not a CA, so presenting it as its own issuer must fail.
     mut leafroots := _roots_new()
     defer _roots_free(leafroots)
     _roots_add(leafroots, leafder.p, leafder.len)
     _ck(_verify_chain(ch, 1, leafroots, "example.com", now) != VERR_NONE, "verify: non-CA cannot act as an anchor")
 
-    // Self-signed leaf presented alone, with an empty store: must not be
-    // trusted just because the chain terminates.
     ch[0] = _readerof(rootder)
     _ck(_verify_chain(ch, 1, empty, "example.com", now) != VERR_NONE, "verify: self-signed root alone is not trusted")
     ch[0] = _readerof(leafder)
 
-    // A tampered certificate must not verify even with the right root present.
     if tc.ok:
         ch[0] = _readerof(tampered)
         _ck(_verify_chain(ch, 1, roots, "example.com", now) != VERR_NONE, "verify: rejects tampered certificate")
@@ -421,17 +352,12 @@ func _selftest_verify():
         _ck(true, "verify: tampered certificate does not parse")
     end
 
-    // zero-length chain
     _ck(_verify_chain(ch, 0, roots, "example.com", now) == VERR_PARSE, "verify: rejects empty chain")
 
-    // reason strings are wired up
     _ck(_verr_str(VERR_EXPIRED).len() > 0, "verify: error strings present")
 end
 
-// ---------------------------------------------------------------- roots/PEM
-
 func _selftest_roots():
-    // Round-trip a known certificate through PEM.
     mut leafder := _hexbuf(TC_LEAF)
     defer _buf_free(leafder)
     b64 := encoding.Base64EncodeBytes(leafder.p, leafder.len)
@@ -445,8 +371,6 @@ func _selftest_roots():
     _ck(got.len == leafder.len, "pem: decoded length matches DER")
     _ck(_cteq(got.p, leafder.p, leafder.len), "pem: decoded bytes match DER")
 
-    // Two blocks in one document, plus surrounding noise, which is what real
-    // system bundles look like.
     mut rootder := _hexbuf(TC_ROOT)
     defer _buf_free(rootder)
     b2 := encoding.Base64EncodeBytes(rootder.p, rootder.len)
@@ -455,33 +379,27 @@ func _selftest_roots():
     defer _roots_free(r2)
     _ck(_roots_add_pem(r2, multi) == 2, "pem: loads two certificates with noise between")
 
-    // Garbage inside a block must not produce a root.
     mut r3 := _roots_new()
     defer _roots_free(r3)
     bad := "-----BEGIN CERTIFICATE-----\n!!!!not base64!!!!\n-----END CERTIFICATE-----\n"
     _ck(_roots_add_pem(r3, bad) == 0, "pem: rejects non-base64 body")
     _ck(r3.count == 0, "pem: nothing added on failure")
 
-    // Valid base64 that is not a certificate must not produce a root either.
     mut r4 := _roots_new()
     defer _roots_free(r4)
     notcert := "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAA\n-----END CERTIFICATE-----\n"
     _ck(_roots_add_pem(r4, notcert) == 0, "pem: rejects base64 that is not a certificate")
 
-    // An unterminated block is ignored rather than read past.
     mut r5 := _roots_new()
     defer _roots_free(r5)
     trunc := "-----BEGIN CERTIFICATE-----\n" + b64
     _ck(_roots_add_pem(r5, trunc) == 0, "pem: ignores unterminated block")
 
-    // Empty and non-PEM input.
     mut r6 := _roots_new()
     defer _roots_free(r6)
     _ck(_roots_add_pem(r6, "") == 0, "pem: empty input")
     _ck(_roots_add_pem(r6, "not a pem file at all") == 0, "pem: non-PEM input")
 
-    // A certificate loaded through PEM must verify a chain exactly as the
-    // DER-loaded one did, which is what makes a system bundle usable.
     mut rr := _roots_new()
     defer _roots_free(rr)
     pemroot := "-----BEGIN CERTIFICATE-----\n" + b2 + "\n-----END CERTIFICATE-----\n"
@@ -493,14 +411,10 @@ func _selftest_roots():
     ch[0] = _readerof(leafder)
     _ck(_verify_chain(ch, 1, rr, "example.com", 20270601000000 as i64) == VERR_NONE, "pem: PEM-loaded root verifies the chain")
 
-    // The store search must not fabricate roots when handed a missing path.
     mut r7 := _roots_load("/definitely/not/a/real/ca-bundle.pem")
     defer _roots_free(r7)
     _ck(r7.count == 0, "roots: missing ca_file yields an empty store")
 
-    // A SHA-1 self-signed root PARSES (so it remains usable as a trust anchor,
-    // which is how a large share of the real Mozilla bundle is still shipped)
-    // but its signature algorithm must never verify anything.
     mut sha1der := _hexbuf(TC_SHA1_ROOT)
     defer _buf_free(sha1der)
     s1 := _cert_parse(sha1der.p, sha1der.len)
@@ -509,7 +423,6 @@ func _selftest_roots():
     _ck(s1.pk_alg == PK_RSA, "sha1 root public key still usable")
     _ck(!_cert_signed_by(s1, s1), "sha1 self-signature never verifies")
 
-    // and it must not be able to vouch for anything else
     mut sroots := _roots_new()
     defer _roots_free(sroots)
     _roots_add(sroots, sha1der.p, sha1der.len)
@@ -521,8 +434,6 @@ func _selftest_roots():
     _ck(_verify_chain(ch2, 1, sroots, "example.com", 20270601000000 as i64) != VERR_NONE, "sha1 root cannot vouch for a leaf")
 end
 
-// ---------------------------------------------------------------- IP SANs
-
 func _ip4_str(s: str): str:
     r := _parse_ip4(s)
     if !r.ok:
@@ -532,16 +443,12 @@ func _ip4_str(s: str): str:
 end
 
 func _selftest_ip():
-    // Accepted forms, round-tripped through the parsed octets.
     _ckhex(_ip4_str("1.2.3.4"), "1.2.3.4", "ip4 basic")
     _ckhex(_ip4_str("0.0.0.0"), "0.0.0.0", "ip4 all zero")
     _ckhex(_ip4_str("255.255.255.255"), "255.255.255.255", "ip4 all ones")
     _ckhex(_ip4_str("93.184.216.34"), "93.184.216.34", "ip4 real address")
     _ckhex(_ip4_str("10.0.0.1"), "10.0.0.1", "ip4 zero inside an octet")
 
-    // Rejected forms. Permissive IP parsing is a standing source of SSRF and
-    // name-confusion bugs, so every one of these must fail closed rather than
-    // be interpreted generously.
     _ckhex(_ip4_str("01.2.3.4"), "reject", "ip4 rejects leading zero")
     _ckhex(_ip4_str("1.02.3.4"), "reject", "ip4 rejects leading zero mid-address")
     _ckhex(_ip4_str("0177.0.0.1"), "reject", "ip4 rejects octal-looking form")
@@ -559,8 +466,6 @@ func _selftest_ip():
     _ckhex(_ip4_str("1234.1.1.1"), "reject", "ip4 rejects four-digit octet")
     _ckhex(_ip4_str("::1"), "reject", "ip4 rejects an IPv6 literal")
 
-    // A certificate whose SANs are dNSName only must not be satisfied by an
-    // address, even though the verifier is being asked about one.
     mut leafder := _hexbuf(TC_LEAF)
     defer _buf_free(leafder)
     leaf := _cert_parse(leafder.p, leafder.len)

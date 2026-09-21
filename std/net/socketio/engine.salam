@@ -21,20 +21,6 @@ import rand
 import encoding
 import encoding.json
 
-// The Engine.IO half: the session, the transport, and the heartbeat.
-//
-// Engine.IO exists because a WebSocket is not always reachable. It opens a
-// session over plain HTTP long-polling - which goes through anything - and
-// then, if it can, moves that same session onto a WebSocket without the
-// application above noticing. This file implements both transports and the
-// switch between them; nothing above it knows which one is carrying a
-// packet.
-//
-// The heartbeat runs the other way round from what most people expect. In
-// protocol version 4 the SERVER sends the pings and the client answers; a
-// client that waits to be asked and never is has to notice the silence
-// itself, which is what `last_rx` and _heartbeat_expired are for.
-
 func _now(): i64:
     ret time.MonoMillis()
 end
@@ -86,10 +72,6 @@ func _query_of(m: MgrState*, transport: str, sid: str): str:
         q += "&sid=" + sid
     end
     q += "&t=" + time.NowMillis() + "-" + rand.Int32Range(0, 999999)
-    // Both halves: what was written in the URL ("http://host/chat?token=x")
-    // and what Options.query adds. The URL's own query is not decoration -
-    // it is where a credential travels when the client cannot set a header,
-    // and server middleware reads it out of the handshake.
     mut extra := _clean_query(m[0].ep.query)
     own := _clean_query(m[0].opts.query)
     if own.len() > 0:
@@ -108,8 +90,6 @@ end
 // and what a server mounted the usual way expects; Options.trailing_slash
 // drops it for the ones behind a proxy that rewrites paths.
 func _mount(m: MgrState*): str:
-    // A path of "/" already ends in one; adding another would ask for "//?"
-    // and get a 404 from a server mounted at the root.
     if m[0].opts.trailing_slash && m[0].ep.path != "/":
         ret m[0].ep.path + "/?"
     end
@@ -227,8 +207,6 @@ func _poll_handshake(m: MgrState*): bool:
         ret false
     end
     m[0].transport = TRANSPORT_POLLING
-    // Anything the server bundled after the open packet is already session
-    // traffic and has to be dispatched, not dropped.
     mut i := 1
     until i < payloads.len():
         _engine_payload(m, payloads.get(i))
@@ -307,9 +285,6 @@ func _engine_open(m: MgrState*): bool:
         if !remembered:
             ret false
         end
-        // The shortcut was a guess about a network that has since changed -
-        // which is the usual reason the connection dropped in the first
-        // place. Forget it and take the long way round.
         m[0].upgraded_before = false
         m[0].last_error = ""
     end
@@ -325,17 +300,9 @@ end
 
 func _engine_close(m: MgrState*):
     if m[0].transport == TRANSPORT_POLLING && m[0].state == ST_OPEN && m[0].sid.len() > 0:
-        // A polling session has no socket to close, so the only way to say
-        // goodbye is to post it. Without this the server holds the session
-        // open until pingTimeout and keeps replaying its state to nobody.
-        // Appended, not substituted: anything already queued is still owed
-        // to the server, and goes out in the same request as the goodbye.
         m[0].pollout.push(EncodeEngine(EIO_CLOSE, ""))
         _poll_flush(m)
     end
-    // Closed unconditionally, not only on the websocket transport: an
-    // upgrade probe that failed leaves a socket open on a session that is
-    // still polling, and that one has an owner too.
     if websocket.IsOpen(m[0].ws):
         if m[0].transport == TRANSPORT_WEBSOCKET:
             websocket.SendText(m[0].ws, EncodeEngine(EIO_CLOSE, ""))
@@ -367,7 +334,6 @@ func _poll_flush(m: MgrState*): bool:
     mut ok := true
     repeat m[0].pollout.len() with i:
         one := m[0].pollout.get(i)
-        // +1 for the record separator this payload will need.
         if batch.len() > 0 && used + one.len() + 1 > cap:
             if !_poll_post(m, batch):
                 ok = false
@@ -446,8 +412,6 @@ func _engine_payload(m: MgrState*, payload: str):
     m[0].last_rx = _now()
     k := EngineKind(payload)
     if k == EIO_PING:
-        // Answering is not optional: a server that does not hear back inside
-        // pingTimeout drops the session.
         _engine_write(m, EncodeEngine(EIO_PONG, ""))
         _broadcast_lifecycle(m, EV_PING, "")
     else k == EIO_CLOSE:

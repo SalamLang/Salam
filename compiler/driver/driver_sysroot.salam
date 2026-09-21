@@ -4,24 +4,16 @@ import os
 import str
 import pth "../sal_path.salam"
 
-    // A tar archive is raw bytes, and Salam's `str` stops at the first NUL, so
-    // every read below goes through a `u8*` and an explicit length instead.
-    // Writing has the same problem - a .o or .a in a sysroot is full of NULs -
-    // so the extracted contents go out through fwrite rather than os.WriteFile.
     extern:
         func fopen(path: str, mode: str): void*
         func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
         func fclose(stream: void*): int
     end
 
-    // Salam has no pointer arithmetic on u8*, so an offset pointer is made by
-    // going through i64. Only used to hand fwrite the start of a member.
     inline func at_off(p: u8*, off: int): u8*:
         ret ((p as i64) + (off as i64)) as u8*
     end
 
-    // A tar header field that is known NUL-free (names, prefixes) back into a
-    // str. Anything that can carry a NUL must not come through here.
     func bytes_str(buf: u8*, off: int, n: int): str:
         mut sb := str.NewBuilder()
         defer str.BufFree(sb)
@@ -68,9 +60,6 @@ import pth "../sal_path.salam"
         ret v
     end
 
-    // untar - minimal USTAR reader (GNU long-name 'L' entries, directories '5',
-    // regular files '0'/NUL/'7'; anything else, and any ".." / absolute name,
-    // is skipped exactly like the C).
     func untar(tar: u8*, total: int, dest: str): bool:
         mut off := 0
         mut longname := ""
@@ -118,7 +107,7 @@ import pth "../sal_path.salam"
                 break
             end
 
-            if typ == 76: // 'L'
+            if typ == 76:
                 cp := size < (511 as i64) ? size as int : 511
                 longname = bytes_str(tar, off, cp)
                 have_long = true
@@ -130,11 +119,11 @@ import pth "../sal_path.salam"
                 continue
             end
             full := pth.PathJoin(dest, name)
-            if typ == 53: // '5' directory
+            if typ == 53:
                 if os.MkdirAll(full) != 0:
                     ret false
                 end
-            else typ == 48 || typ == 0 || typ == 55: // '0' NUL '7'
+            else typ == 48 || typ == 0 || typ == 55:
                 parent := dir_of(full)
                 if str.Len(parent) > 0:
                     _mk := os.MkdirAll(parent)
@@ -148,12 +137,6 @@ import pth "../sal_path.salam"
         ret true
     end
 
-    // ===== driver/debug_cmd.c: debug_tool_name (stage 8b, NEW) =====
-    // The debugger binary name, per platform (C: `dbg` = "lldb" on __APPLE__,
-    // "gdb" everywhere else). A function (not a ternary) because condcomp only
-    // folds/prunes plain `if <macro>:` conditions - a macro reference inside a
-    // ternary or other expression position is NOT recognized and fails E001
-    // "unknown identifier" (see PORTING.md's condcomp gotcha).
     func debug_tool_name(): str:
         if SALAM_OS_MAC:
             ret "lldb"
@@ -193,25 +176,3 @@ import pth "../sal_path.salam"
             ret "/tmp"
         end
     end
-
-    // ===== driver/repl.c (stage 8b) =====
-    // FIDELITY NOTE (read this before the functions below): repl.c is ~90%
-    // hand-rolled interactive line editing (raw termios / Windows console API:
-    // arrow-key history recall, ^A/^E/^U, in-place redraw) that only runs when
-    // stdin IS a real tty. Both the C's OWN repl_readline and this port take a
-    // *different, much simpler* fallback path the instant stdin is NOT a tty
-    // (piped/redirected) - a bare prompt + getchar()-until-newline loop, no
-    // history, no editing. Every non-interactive/scripted comparison against
-    // HEAD (the only kind an automated test harness can drive - there is no
-    // tty to attach) exercises exactly that fallback path on BOTH sides, so a
-    // scripted-stdin REPL session is byte-comparable end to end despite the
-    // interactive editor itself not being ported. The raw-mode arrow-key/
-    // history editor is UI-only (it can only change what the user sees while
-    // typing, never what the accumulated session text or its output is), is
-    // unreachable under any pipe/redirect, and is the one deliberate fidelity
-    // gap in this stage - documented here rather than silently dropped.
-    // repl_hist_push/repl_nhist (only feed that UI) are dropped for the same
-    // reason. repl_block_depth's unused `layout_mode` parameter (the C itself
-    // never reads it - `(void)layout_mode;`) is dropped too, matching this
-    // port's established "drop truly-unused params" convention (e.g.
-    // llvm.salam's lv_literal).

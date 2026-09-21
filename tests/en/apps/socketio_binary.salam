@@ -12,14 +12,6 @@
  *
  */
 
-// Binary attachments, in both directions and in both packet types.
-//
-// JSON cannot hold bytes, so Socket.IO sends a binary event as ordinary JSON
-// with `{"_placeholder":true,"num":N}` where each buffer belonged, followed
-// by the buffers as their own frames. Every byte value has to survive that,
-// NUL included - which is exactly what a Salam `str` cannot carry, and why
-// the API deals in Bytes here rather than text.
-
 import net.socketio
 import net.websocket
 import sync
@@ -82,9 +74,6 @@ func sio server():
     mut pending ack := 0 - 1
     mut going := true
     mut idle := 0
-    // A poll that times out is not the end of anything - under a loaded
-    // test runner the client can be several seconds between packets - so it
-    // only counts towards a hard stop that stops this thread wedging.
     until going:
         m := websocket.Poll(c, 2000)
         if m.kind == websocket.TIMEOUT:
@@ -94,7 +83,6 @@ func sio server():
             end
         else m.kind == websocket.BINARY:
             idle = 0
-            // The buffers that belong to the packet just before them.
             server log += "bin" + describe(m) + ";"
             if pending ack >= 0:
                 websocket.SendText(c, "43" + pending ack + "[true]")
@@ -108,14 +96,11 @@ func sio server():
             if body == "0":
                 websocket.SendText(c, `40{"sid":"bin-nsp"}`)
             else str.StartsWith(body, "5"):
-                // A BINARY_EVENT: how many attachments, and the ack id if
-                // the client wants one.
                 dash := str.Find(body, "-")
                 server log += "attachments=" + body.substr(1, dash - 1) + ";"
                 rest := body.substr(dash + 1, body.len() - dash - 1)
                 pending ack = ack id of("x" + rest)
             else str.StartsWith(body, `2["send"`):
-                // Two attachments in one event, plus a plain argument.
                 websocket.SendText(c, `452-["files","report",{"_placeholder":true,"num":0},{"_placeholder":true,"num":1}]`)
                 raw := mem.Allocate(4 as u64)
                 bp := raw as i8*
@@ -185,7 +170,6 @@ func main:
     println "first buffer:", one.len, socketio.BytesAt(one, 0), socketio.BytesAt(one, 1), socketio.BytesAt(one, 2), socketio.BytesAt(one, 3)
     println "second buffer:", two.len, socketio.BytesToStr(two)
     println "base64, which keeps the NULs:", socketio.BytesToBase64(one)
-    // A str stops at the first NUL, which is the whole reason for Bytes.
     println "as text, truncated:", socketio.BytesToStr(one).len()
     println "out of range byte:", socketio.BytesAt(one, 99)
     socketio.EventFree(got)

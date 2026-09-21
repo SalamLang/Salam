@@ -18,10 +18,6 @@ import cg "../codegen/codegen.salam"
 import co "../sal_core.salam"
 import pf "../prof_self.salam"
 
-    // build.c cc_is_bare_name - a tool name we are expected to look up: no
-    // directory component and no flags. Anything else ("gcc -O2",
-    // "C:/tools/tcc.exe") is a command prefix the caller wrote deliberately
-    // and is passed through untouched.
     func cc_is_bare_name(name: str): bool:
         if str.Len(name) == 0:
             ret false
@@ -38,11 +34,6 @@ import pf "../prof_self.salam"
         ret true
     end
 
-    // driver/build.c driver_build (the CMD_BUILD/CMD_OBJ shared body; `opt`
-    // must have .command already set to CMD_BUILD or CMD_OBJ by the caller).
-    // target_is_freestanding - mirrors cg_target_is_freestanding in the codegen.
-// Kept as its own copy rather than imported because driver and codegen do not
-// otherwise depend on each other; the two must agree, and a test pins them.
 func target_is_freestanding(triple: str): bool:
     if str.Len(triple) == 0:
         ret false
@@ -51,13 +42,6 @@ func target_is_freestanding(triple: str): bool:
 end
 
 func build_impl(opt &: Dr): int:
-        // A bare `salam build` (no inputs) or a directory passed as the
-        // sole input (`salam build .`, `salam build ../project/`) doesn't
-        // name a file - resolve it to the project's entry file
-        // (salam.salam when present, else the one .salam file defining
-        // `main`) BEFORE picking a backend: the LLVM path reads opt.input
-        // directly and must see the resolved file, not a directory, and
-        // the project-file rule has to hold for every backend equally.
         if opt.inputs.len() == 0 || (opt.inputs.len() == 1 && os.IsDir(opt.inputs.get(0))):
             rlgr := lg.New(opt.log_level, resolve_color(opt.color))
             rpack := lp.Load(opt.lang)
@@ -83,50 +67,14 @@ func build_impl(opt &: Dr): int:
             opt.input = first
         end
 
-        // The two backends read the input from different fields of the same
-        // `opt`: the C path walks `inputs`, the LLVM path reads the single
-        // `input`. The CLI fills both, so the split never shows up there -
-        // but a caller that builds an `opt` by hand (repl.salam's
-        // exec_session, which swaps in a temp file per turn) filled only
-        // `inputs`, and every REPL turn on an LLVM-capable build answered
-        // "salam: no input file". Put them back in step here, which every
-        // build passes through, rather than trusting each caller to know
-        // which field its backend will look at.
         if str.Len(opt.input) == 0 && opt.inputs.len() > 0:
             opt.input = opt.inputs.get(0)
         end
 
-        // driver/build.c: `if (opt->llvm_target && opt->llvm_target[0]) return
-        // driver_llvm_build(opt);` - NOT a bare driver_llvm call (that would
-        // skip setting llvm_emit from opt->command). LlvmBuild (below, in the
-        // public section) is that wrapper.
-        // ...unless the C backend was asked for by name. `--backend=c
-        // --target=X` then means "emit C conditioned for X", which is how
-        // the wasm build gets browser code: emcc compiles the result, and
-        // without the triple the condcomp table would be built from the
-        // HOST's defines and every SALAM_OS_WASM arm would be pruned away
-        // on a Linux runner.
         if str.Len(opt.llvm_target) > 0 && !str.Equals(opt.backend, "c"):
             ret LlvmBuild(opt)
         end
 
-        // Backend choice for a native build, mirroring driver_build()'s
-        // build_use_llvm() in the C. LLVM is preferred whenever this binary
-        // can actually drive it, because it optimizes and (with in-process
-        // LLD) links without a compiler on the end user's machine.
-        //
-        // RC_LLVM_UNSUPPORTED means the module was emitted but is
-        // incomplete - the program uses a construct the LLVM backend does
-        // not lower yet. RC_LLVM_LINK_FAILED means codegen was fine but
-        // producing the executable was not, which is what happens to every
-        // program that links a host shared library (-lsqlite3, -lgtk-3):
-        // the bundled static musl sysroot has none of them, while the C
-        // backend's host toolchain does. Falling back on both keeps every
-        // program that builds today building, which is what makes
-        // defaulting to LLVM safe before backend parity is finished. Any
-        // other non-zero code is a real error and is reported as-is rather
-        // than retried, so a genuine mistake is not hidden behind a second
-        // compile.
         if use_llvm_backend(opt):
             lrc := LlvmBuild(opt)
             if lrc != RC_LLVM_UNSUPPORTED && lrc != RC_LLVM_LINK_FAILED:
@@ -153,10 +101,6 @@ func build_impl(opt &: Dr): int:
             )
             ret 2
         end
-        // Not from build.c: whole-build skip (see build_up_to_date's comment).
-        // CMD_OBJ has no single tracked output and already has its own
-        // per-object cache below, so this only applies to a real `salam
-        // build` producing one executable.
         if opt.command == CMD_BUILD && !opt.force:
             predicted_name := str.Len(opt.output) > 0 ? opt.output : output_stem_of(opt.inputs.get(0))
             predicted_output := exe_name_for(predicted_name, opt.llvm_target)
@@ -173,11 +117,6 @@ func build_impl(opt &: Dr): int:
         sm.SetStdlibRoot(opt.stdlib_path)
         sm.LayoutSchemaInit(opt.stdlib_path)
 
-        // --export=Fn:CName is only registered (cg.AddExportOverride) once we
-        // know the DEFINING file's own package (modpkg, below) - matching by
-        // name alone would rename EVERY same-named free function across every
-        // module this build transitively pulls in (e.g. llvm.salam's own
-        // Emit() collides with sal_web.salam's Emit() otherwise).
         mut export_names := Vector {} as Vector<str>
         mut export_cnames := Vector {} as Vector<str>
         defer export_names.free()
@@ -201,31 +140,7 @@ func build_impl(opt &: Dr): int:
         mut resolved := ""
         mut bundled := false
         mut found := false
-        // opt.cc_explicit is what separates that sentinel from a user who
-        // actually typed --cc=tcc. Testing the string alone made the two
-        // identical, so an explicit --cc=tcc was silently resolved away to
-        // whatever clang/gcc the ladder found first - not a compiler the
-        // caller asked for. An explicit --cc is a choice, not a hint.
-        //
-        // It still has to be *found*, though: only the ladder is skipped
-        // for an explicit --cc, never the lookup. See the else-branch.
         if !opt.cc_explicit && str.Equals(opt.cc, "tcc"):
-            // clang > gcc > tcc, matching build.c's ladder exactly: clang
-            // leads because it is the same codegen family as the LLVM
-            // backend, so an auto build degrades to the closest thing
-            // available rather than to a different toolchain.
-            //
-            // The *whole* ladder is walked over the bundled install tree
-            // before $PATH is consulted at all - not bundled-then-$PATH per
-            // rung. Interleaving them let a host gcc outrank the tcc a
-            // self-contained install ships with, which is not the toolchain
-            // that install was built and tested against: on Windows it swaps
-            // in a mingw-w64 gcc whose <stdlib.h> spells __argv as a macro
-            // over __p___argv(), so std/os/process' `extern void* __argv`
-            // becomes a conflicting redeclaration and every program
-            // importing it stops compiling. The $PATH pass still exists for
-            // the case it was added for - an install that ships no toolchain
-            // at all, most notably a plain source checkout.
             ladder := ["clang", "gcc", "tcc"]
             repeat ladder.len() with i:
                 if !found:
@@ -239,13 +154,6 @@ func build_impl(opt &: Dr): int:
                 end
             end
         else opt.cc_explicit && cc_is_bare_name(opt.cc):
-            // An explicit --cc says *which* compiler; where it lives is
-            // still an open question, and the bundled toolchain is not on
-            // $PATH. On Windows a release's tcc sits at
-            // <install>/tcc/tcc.exe, so leaving the bare name for the shell
-            // got cmd.exe's "'tcc' is not recognized" on every db/ and
-            // opencv/ test - they all pass --cc=$DBCC. Bundled first, then
-            // $PATH, exactly as the ladder does, minus the ladder.
             found = sm.FindBundledTool(opt.cc, resolved)
             bundled = found
             if !found:
@@ -268,10 +176,6 @@ func build_impl(opt &: Dr): int:
                     end
                 end
             end
-            // A --cc= the user typed is a command prefix and may carry
-            // flags, so it goes into the command line verbatim; a path
-            // resolved here is just a path, and $PATH entries like
-            // "C:/Program Files/..." have to be quoted to survive it.
             if str.Contains(resolved, " "):
                 opt.cc = "\"" + resolved + "\""
             else:
@@ -281,18 +185,12 @@ func build_impl(opt &: Dr): int:
 
         mut cfiles := Vector {} as Vector<str>
         mut generated := Vector {} as Vector<str>
-        // 1 when cfiles[i]'s object must be rebuilt, 0 when the cached .o is
-        // still valid. Parallel to cfiles (int, not bool, to stay clear of the
-        // generic-nesting limits noted in PORTING.md).
         mut cdirty := Vector {} as Vector<int>
         defer cfiles.free()
         defer generated.free()
         defer cdirty.free()
         mut first_module := ""
         mut all_ok := true
-        // paths that failed to read/parse/check/generate, recapped on abort
-        // (below) so the reader doesn't have to scroll back past the phase
-        // INFO logs of every other file in the build to find out what broke.
         mut failed_files := Vector {} as Vector<str>
         defer failed_files.free()
 
@@ -304,13 +202,6 @@ func build_impl(opt &: Dr): int:
         defer links.free()
         defer link_kinds.free()
 
-        // The static third-party libs this binary carries for its own host, so
-        // `link dynamic "sqlite3"` and friends resolve without the user having
-        // installed the dev packages. Added to lib_paths once, ahead of both
-        // link-command builders below; an explicit --libpath still wins,
-        // since those are emitted first. This path is native-only - a
-        // --target= build is redirected to the LLVM driver long before here,
-        // which picks the matching per-target set instead.
         mut hostlibs := ""
         if EmbeddedExtralibs("", hostlibs):
             opt.lib_paths.push(hostlibs)
@@ -349,21 +240,8 @@ func build_impl(opt &: Dr): int:
             work.push(corep)
         end
 
-        // ONE Ast and ONE Sema for the whole build (the C uses a single arena
-        // for both). Sharing them is what lets an imported package be lexed,
-        // parsed and analyzed once per build instead of once per importer:
-        // cached package symbols are SymIds into this Sema and hold NodeIds
-        // into this Ast, so neither may be freed between work-list files.
-        // NOTE: never copy these into a local (`mut x := a`) - at.Ast/Sema own
-        // Vectors, and a struct copy snapshots the vector headers, so growth
-        // through the copy would not be visible through the original (the
-        // "Vector-header copy hazard" PORTING.md warns about). Pass them by
-        // reference (`&:`) only, which every lexer/parser/sema/codegen entry
-        // point already takes.
         mut a := at.NewAst()
         mut s := sm.New(lgr, "", "en")
-        // Each file's own global ScopeId, handed back to sm.RebindScope before
-        // that file's codegen (codegen resolves top-level names via s.global).
         mut w_global := Vector {} as Vector<int>
         mut w_prog := Vector {} as Vector<int>
         mut w_module := Vector {} as Vector<str>
@@ -490,9 +368,6 @@ func build_impl(opt &: Dr): int:
                     break
                 end
             end
-            // --export only applies to the entry file itself (wi==0): matching
-            // by name across every transitively-imported module would catch
-            // unrelated same-named functions too (e.g. llvm.salam's own Emit()).
             if wi == 0 && export_names.len() > 0:
                 repeat prog_n.list.len() with di3x:
                     d4 := at.Get(a, prog_n.list.get(di3x))
@@ -546,11 +421,6 @@ func build_impl(opt &: Dr): int:
                 if str.Len(ipath) == 0:
                     continue
                 end
-                // Normalized before the dedupe, not after: the same file can
-                // be reached as `std/mem/mem.salam` from one importer and
-                // `./std/mem/mem.salam` from another, and comparing the raw
-                // spellings queued it twice - two identical modules on the
-                // link line, and every global in them "multiple definition".
                 ipath = pth.PathNormalize(ipath)
                 mut known := false
                 repeat work.len() with wj:
@@ -572,14 +442,6 @@ func build_impl(opt &: Dr): int:
             wi += 1
         end
 
-        // Two files claiming one package name is not something the language
-        // can express: everything a package exports is mangled as
-        // _Salam_<pkg>_<name> and its generated unit is salam_mod_<stem>.c, so
-        // a local `config.salam` next to std/config produced one .c file
-        // overwriting the other and two different `_Salam_config_New`s in one
-        // link. What reached the programmer was a C compiler complaining about
-        // an incomplete type in code they did not write. Say it here instead,
-        // where both paths are known.
         repeat w_prog.len() with ci:
             mut cj := ci + 1
             until cj < w_prog.len():
@@ -608,7 +470,6 @@ func build_impl(opt &: Dr): int:
             entry2 := w_entry.get(bi)
             pkg2 := w_pkg.get(bi)
             path2 := w_path.get(bi)
-            // Point the shared Sema back at this file's own global scope.
             sm.RebindScope(s, w_global.get(bi), pkg2, path2)
 
             mut kept := Vector {} as Vector<int>
@@ -641,9 +502,6 @@ func build_impl(opt &: Dr): int:
                 pf.Count(pf.TC_FUNCS_EMITTED, nfuncs as i64)
             end
             _pt_cg := pf.Begin(pf.TP_CODEGEN, path2)
-            // The triple, not "": with --backend=c --target= this is the
-            // only thing that tells codegen what it is generating for, and
-            // the literal-print buffer is off for Windows targets.
             o := cg.Run(
                 lgr, s, a, prog2, module2, opt.safe, opt.debug_info, path2, entry2, opt.llvm_target
             )
@@ -652,9 +510,6 @@ func build_impl(opt &: Dr): int:
             cpath := scratch + "/salam_mod_" + module2 + ".c"
             hpath := scratch + "/salam_mod_" + module2 + ".h"
             opath := scratch + "/salam_mod_" + module2 + ".o"
-            // Only rewrite when the generated C actually differs: rewriting an
-            // identical file would churn its timestamp and force a needless
-            // recompile of an object that is still valid.
             _pt_w := pf.Begin(pf.TP_WRITE, path2)
             unchanged := !opt.force && os.Exists(opath) && file_unchanged(cpath, o.c_src) && file_unchanged(hpath, o.h_src)
             mut wok1 := true
@@ -679,8 +534,6 @@ func build_impl(opt &: Dr): int:
             end
 
         end
-        // The shared Ast/Sema are owned by the whole build, so they are freed
-        // once here rather than per file.
         sm.Free(s)
         at.FreeAst(a)
 
@@ -696,11 +549,6 @@ func build_impl(opt &: Dr): int:
             ret 1
         end
 
-        // A freestanding target has no `main`: a kernel is entered at
-        // _start from its boot assembly and a UEFI application at efi_main,
-        // both named by the linker rather than by the language. Requiring an
-        // entry point there would mean every such build passed a flag to say
-        // so, so the profile decides it.
         needs_entry := opt.command != CMD_OBJ && !target_is_freestanding(opt.llvm_target)
         if needs_entry && !has_entry:
             lg.Log(
@@ -716,8 +564,6 @@ func build_impl(opt &: Dr): int:
             ret 1
         end
 
-        // --emit-c stops here: the sources are on disk and a host C compiler
-        // has no business trying to build them for a foreign target.
         if opt.emit_c:
             ret 0
         end
@@ -725,60 +571,9 @@ func build_impl(opt &: Dr): int:
         mut crc := 0
         no_tcc_opt := !str.Contains(opt.cc, "tcc")
         no_o_flag := !str.Contains(opt.cc, "-O")
-        // -O2 for a normal build, -O3 for --release.
-        //
-        // The split matters more than the one digit suggests. gcc 12+ does
-        // vectorise at -O2, but under the "very-cheap" cost model, which
-        // rejects any loop needing a runtime alias check - and a loop over
-        // two Vector payloads always needs one, since nothing in the emitted
-        // C says the two payloads are distinct. Measured on std/matrix, -O2
-        // vectorises ZERO loops in the module and -O3 vectorises fourteen;
-        // the entrywise and matrix-product kernels are all in the second set.
-        // --release already means "trade the safety checks for speed", so it
-        // is the honest place to also pay the extra compile time, and a
-        // default build keeps -O2's faster turnaround.
         rel_opt := opt.safe ? " -O2" : " -O3"
         opt_flag := (!opt.debug_info && !opt.asan && no_tcc_opt && no_o_flag) ? rel_opt : ""
-        // -fno-strict-aliasing is not optional, and is applied whenever the
-        // compiler is not tcc - independently of -O, so a caller who passes
-        // their own --cc="gcc -O2" still gets it. Generated C reaches every
-        // aggregate through void* (slices hand back void* from
-        // salam_slice_at, Vector payloads are re-cast per element, str
-        // arrays are walked as int64_t*), which is exactly the punning
-        // strict aliasing forbids: at -O2 gcc assumed those accesses could
-        // not alias, `fmt.Sprintf` over a Vector<str> segfaulted and a
-        // dozen tests truncated their output. -O0/-O1 were fine, which is
-        // what made it look like a miscompile rather than UB in our output.
         alias_flag := no_tcc_opt ? " -fno-strict-aliasing" : ""
-        // SALAM_C_STRICT=1 turns every diagnostic the C compiler would have
-        // printed about generated code into a hard error, so a codegen
-        // regression stops the build instead of scrolling past. -Werror on
-        // its own, deliberately: it promotes what the compiler already chose
-        // to warn about rather than switching on new warning classes, so the
-        // bar means the same thing under tcc, gcc and clang. Off unless asked
-        // for - a user's newer gcc inventing a warning must not break their
-        // build - and turned on by run-tests.sh, where regressions have to be
-        // caught and the compiler set is known.
-        //
-        // Two diagnostics are switched off on every build, strict or not,
-        // because neither can tell what the generated code means and both
-        // are on by default in gcc and clang, so they reached the user's
-        // terminal on an ordinary `salam build`:
-        //
-        //   div-by-zero  fires on a constant-folded `10 / d` sitting in the
-        //                right arm of `d != 0 && ...`. Salam's && short-
-        //                circuits, so that arm never runs, but the fold
-        //                happens before the compiler knows that. A genuine
-        //                constant division by zero is already a semantic
-        //                error and never reaches C.
-        //   deprecated-declarations
-        //                codegen puts __attribute__((deprecated)) on the
-        //                prototype so hand-written C including the header is
-        //                warned. Salam call sites already get the semantic
-        //                pass's own deprecation warning, so the C copy of it
-        //                is a duplicate at best and, under -Werror, turns
-        //                "this test exercises a deprecated function" into a
-        //                build failure.
         quiet_flag := " -Wno-div-by-zero -Wno-deprecated-declarations"
         werror_flag := (str.Equals(os.Env("SALAM_C_STRICT"), "1") ? " -Werror" : "") + quiet_flag
         no_o0 := !str.Contains(opt.cc, "-O0")
@@ -830,17 +625,8 @@ func build_impl(opt &: Dr): int:
         else:
             mut output := opt.output
             if str.Len(output) == 0:
-                // Not first_module: the fixed project entry file salam.salam
-                // names the executable after its directory (see
-                // output_stem_of), and this must agree with
-                // build_up_to_date's predicted_output above.
                 output = output_stem_of(opt.inputs.get(0))
             end
-            // This backend only ever builds for the host - build_impl sends
-            // every --target= to the LLVM one - so the extension question is
-            // "is this host Windows", which is what exe_name_for answers for
-            // the empty triple. An explicit --output goes through it too, so
-            // nobody ends up with a Windows binary cmd.exe won't run.
             output = exe_name_for(output, opt.llvm_target)
             mut lm := " -lm"
             if SALAM_OS_WINDOWS:
@@ -884,15 +670,8 @@ func build_impl(opt &: Dr): int:
             end
 
             if !opt.lto && !musl_tcc.active:
-                // Fast path (default): compile every .c to its own .o across
-                // worker threads, then one ordinary (non-LTO) link. See
-                // compile_parallel's comment for why LTO stays opt-in instead.
                 mut objs := Vector {} as Vector<str>
                 mut jobs := Vector {} as Vector<str>
-                // Cached objects were built with the previous flag set; if it
-                // moved (--release, -g, --asan, a new link directive, a
-                // different --cc) every object is stale no matter whether its
-                // source changed.
                 sigpath := scratch + "/salam_build.flags"
                 sigtext := opt.cc + " " + opt_flag + " " + alias_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
                 mut sig_pending := false
@@ -900,15 +679,6 @@ func build_impl(opt &: Dr): int:
                     repeat cfiles.len() with cd0:
                         cdirty.set(cd0, 1)
                     end
-                    // Recorded only once every object has actually been
-                    // rebuilt with these flags (see after compile_parallel).
-                    // Writing it here, before compiling, meant a build that
-                    // failed or was interrupted left the file claiming a flag
-                    // set the objects on disk were never built with. The next
-                    // run then believed its cache and linked whatever was
-                    // lying there: switching gcc -> tcc that way handed the
-                    // linker gcc's objects and it died on "unrecognized file
-                    // type", pointing at nothing the user did.
                     sig_pending = true
                 end
                 repeat cfiles.len() with ci2:
@@ -925,19 +695,6 @@ func build_impl(opt &: Dr): int:
                     str.BufAppend(jb, opt_flag)
                     str.BufAppend(jb, alias_flag)
                     str.BufAppend(jb, werror_flag)
-                    // No -Wno-error=incompatible-pointer-types here. It was
-                    // added to keep the parallel path building while newer
-                    // GCC promoted pointer-type mismatches to errors, with
-                    // the reason given as "an unrelated pre-existing codegen
-                    // issue" - which is to say the generated C really was
-                    // wrong and the driver agreed to look away. It also sat
-                    // after -Werror, so it silently un-errored the one class
-                    // SALAM_C_STRICT most needs to catch: emitting a pointer
-                    // where an integer is expected is a bug wherever it comes
-                    // from. All 45 modules of the self-hosted compiler now
-                    // compile clean under gcc 16 and tcc with no exemption,
-                    // so this is deleted rather than narrowed; if it ever
-                    // trips again the build must stop and say so.
                     str.BufAppend(jb, dbg_flag2)
                     str.BufAppend(jb, asan_flag)
                     str.BufAppend(jb, link_defines)
@@ -965,10 +722,6 @@ func build_impl(opt &: Dr): int:
                     )
                     rc = 3
                 else:
-                    // Every object now matches these flags, so the cache may
-                    // claim them. On failure the file is deliberately left
-                    // alone, so the next run still sees the old signature,
-                    // marks everything dirty and rebuilds.
                     if sig_pending:
                         _wsig := write_file(lgr, sigpath, sigtext)
                     end
@@ -979,12 +732,6 @@ func build_impl(opt &: Dr): int:
                     str.BufAppend(cmdb2, shell_arg(scratch))
                     str.BufAppend(cmdb2, " -o ")
                     str.BufAppend(cmdb2, shell_arg(output))
-                    // See the matching stack-size/weak-symbol comments on
-                    // the other final-link command below (musl_tcc/--lto
-                    // path) - this is the default (non-LTO) fast-path's own
-                    // separate link step, added for the parallel-object-
-                    // compile optimization that has no C-original
-                    // counterpart, so it needs the same fixes independently.
                     if SALAM_OS_WINDOWS:
                         if use_tcc:
                             str.BufAppend(cmdb2, " -Wl,--stack=8388608")
@@ -997,11 +744,6 @@ func build_impl(opt &: Dr): int:
                         str.BufAppend(cmdb2, shell_arg(objs.get(oi2)))
                     end
                     str.BufAppend(cmdb2, lm)
-                    // --libpath=DIR, same as the LLVM link path honors - so
-                    // an archive that is not installed yet (a freshly built
-                    // libsalam_llvm.a, say) is linkable through the C
-                    // backend too, not only through LLVM. Before the -l
-                    // flags: a static link only resolves backwards.
                     repeat opt.lib_paths.len() with lp2:
                         str.BufAppend(cmdb2, " -L")
                         str.BufAppend(cmdb2, shell_arg(opt.lib_paths.get(lp2)))
@@ -1032,9 +774,6 @@ func build_impl(opt &: Dr): int:
                         end
                     end
                 end
-                // Objects are the incremental build cache now: keeping them is
-                // what lets the next build reuse unchanged modules. They live
-                // in the gitignored scratch dir, and --force ignores them.
                 objs.free()
             else:
                 mut lto_flag := ""
@@ -1069,40 +808,10 @@ func build_impl(opt &: Dr): int:
                 str.BufAppend(cmdb, shell_arg(scratch))
                 str.BufAppend(cmdb, " -o ")
                 str.BufAppend(cmdb, shell_arg(output))
-                // tcc's default linked stack (SizeOfStackReserve in the PE
-                // header) is only 1MiB on this target - half of MinGW gcc's
-                // 2MiB default - which is too little for the self-hosted
-                // compiler's own recursive descent parser/semantic pass to
-                // process its own (large, deeply nested) source: a
-                // tcc-linked salam.exe building compiler/*.salam with
-                // --cc=tcc reliably stack-overflows partway through
-                // parsing, while the identical workload run from a
-                // gcc-linked salam.exe (2MiB stack) does not. Confirmed via
-                // objdump -p on minimal tcc output (SizeOfStackReserve
-                // 0x100000) vs the same source built by gcc (0x200000), and
-                // via a direct A/B: a tcc-linked self-hosted binary crashes
-                // rebuilding itself; the same binary relinked with gcc
-                // instead does not. -Wl,--stack tells tcc's linker to
-                // reserve more (8MiB, matching common *nix default thread
-                // stack sizes) regardless of which --cc built the binary
-                // doing the *compiling*.
                 if SALAM_OS_WINDOWS:
                     if use_tcc:
                         str.BufAppend(cmdb, " -Wl,--stack=8388608")
                     else:
-                        // codegen.salam's per-module SALAM_OUT_DEFINED
-                        // prelude marks salam_ob/salam_obn/salam_out_flush/
-                        // salam_out_fini __attribute__((weak)) so every
-                        // module can carry its own copy and the linker
-                        // picks one - reliable on ELF, but on this
-                        // MinGW/GCC + binutils combination weak *data*
-                        // symbols (salam_ob/salam_obn) sometimes still
-                        // collide: "multiple definition of
-                        // `.weak.salam_ob.'" etc - reproduced building
-                        // tests/*/general/web_router.salam (query.o vs
-                        // url.o). tcc takes the plain non-weak fallback in
-                        // that same prelude (guarded by
-                        // `!defined(__TINYC__)`), so it never hits this.
                         str.BufAppend(cmdb, " -Wl,--allow-multiple-definition")
                     end
                 end
@@ -1123,8 +832,6 @@ func build_impl(opt &: Dr): int:
                 end
                 str.BufAppend(cmdb, lm)
 
-                // See the matching --libpath block on the parallel-object
-                // link command above; driver/build.c does the same.
                 repeat opt.lib_paths.len() with lp2b:
                     str.BufAppend(cmdb, " -L")
                     str.BufAppend(cmdb, shell_arg(opt.lib_paths.get(lp2b)))
@@ -1173,23 +880,12 @@ func build_impl(opt &: Dr): int:
             end
         end
 
-        // The generated .c/.h are the object cache's key: deleting them would
-        // make every module look changed on the next build, so they stay in the
-        // gitignored scratch dir regardless of --keep-c.
         if opt.keep_c:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept generated C files")
         end
         ret rc
     end
 
-    // ===== driver/driver.c =====
-
-// IsFreestandingTarget - public query over the same triple-sniffing rule
-// target_is_freestanding uses internally, so tooling and tests outside this
-// package can ask the question without duplicating the triple substrings by
-// hand. codegen_core.salam keeps its own copy (IsFreestandingTarget there
-// too) for the same reason driver and codegen do not otherwise depend on
-// each other; the two must agree, and driver_test.salam pins them.
 pub func IsFreestandingTarget(triple: str): bool:
     ret target_is_freestanding(triple)
 end

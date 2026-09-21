@@ -12,33 +12,6 @@
  *
  */
 
-// ORC/LLJIT in-process JIT - llvm-c/Orc.h, llvm-c/LLJIT.h. Ports
-// orc_fail()/define_runtime_symbols()/jit_run_file() (llvm_native.c:799-
-// 960). Targets LLVM >= 21's API shape (LLVMContextCreate +
-// LLVMOrcCreateNewThreadSafeContextFromLLVMContext) - the only branch
-// verified against a real installed llvm-c/Orc.h while writing this port
-// (LLVM 22's header no longer even declares the older
-// LLVMOrcThreadSafeContextGetContext the C's pre-21 fallback used).
-//
-// KNOWN SIMPLIFICATIONS vs the C (flag for a closer read before relying on
-// JIT on these paths):
-//  - The 32-bit ARM CodeModelLarge far-call workaround (llvm_native.c:869-
-//    904, for JITLink's +-32MB Arm_Jump24 range) is not ported; RunJIT
-//    always takes LLVMOrcCreateLLJIT's host-autodetect path
-//    (LLVMOrcCreateLLJIT(&jit, NULL)).
-//  - define_runtime_symbols' absolute-symbol registration below hand-packs
-//    LLVMOrcCSymbolMapPair/LLVMJITEvaluatedSymbol/LLVMJITSymbolFlags by
-//    raw byte offset (Salam's `extern:` has no by-value C struct-array
-//    binding) - offsets were read directly from llvm-c-22/llvm-c/Orc.h,
-//    not guessed, but this is the highest-risk, least-precedented part of
-//    this whole port and deserves independent verification against a real
-//    JIT run before being trusted.
-//  - Calling the JIT-resolved `main` needs a tiny new C trampoline,
-//    c/src/llvm/orc_call.{h,c} (`salam_orc_call_main`): a JIT'd address is
-//    only known at runtime, and Salam's `as` cast has no i64 ->
-//    callable-function-type conversion (extern: bindings are link-time
-//    only), so there is no purely-Salam way to invoke it. This is the same
-//    kind of minimal C-ABI bridge lld_link.cc already is for LLD.
 package llvm
 
 extern:
@@ -65,11 +38,6 @@ extern:
     func LLVMOrcAbsoluteSymbols(syms: void*, n_pairs: u64): void*
 end
 
-// The C standard library functions define_runtime_symbols() registers as
-// absolute JIT symbols, so JIT'd code can call them even in a statically
-// linked salam.exe where the process's dynamic symbol table (which
-// LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess searches) may not
-// expose them at all - exactly this feature's own target scenario.
 extern:
     func printf(fmt: str, ...): int
     func snprintf(buf: char*, cap: u64, fmt: str, ...): int
@@ -94,7 +62,7 @@ end
 
 // LLVMJITSymbolGenericFlags (llvm-c/Orc.h) - Exported | Callable, the
 // exact flag combination RT_FLAGS uses in the C.
-const RT_FLAGS := 5 as u8 // (1 << 0) | (1 << 2)
+const RT_FLAGS := 5 as u8
 
 // sizeof(LLVMOrcCSymbolMapPair) on a 64-bit host: {Name: void* @0} +
 // {Sym.Address: u64 @8, Sym.Flags.{Generic,Target}: u8 @16/@17} + 6 bytes

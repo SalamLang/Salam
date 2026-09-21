@@ -12,44 +12,20 @@
  *
  */
 
-// Split out of diag.salam's diag_render.c + diag_render_format.c +
-// diag_render_source.c port (see diag.salam's header comment for the
-// original C -> Salam decisions this file inherits unchanged).
-//
-// Why a separate package: diag.salam's Engine holds a `log: lg.Logger`
-// field, so `diag` depends on `logger`. The logger's own rich-diagnostic
-// path (logger_emit_rich in the C) needs these same render functions, but
-// `logger` importing `diag` back would be a cycle. In the C build this
-// isn't an issue because diag_render.c/.h never included logger.h; this
-// file restores that same one-directional shape for the port: `diagrender`
-// depends on nothing but str/sal_core, `logger` and `diag` both depend on
-// `diagrender`, and `diagrender` depends on neither.
 package diagrender
 
 import str
 import co "sal_core.salam"
 import i18 "i18n.salam"
 
-// diag_style_t (diag_render.h). Kept package-private (not `pub`) and under
-// distinct names (RS_/RF_ instead of DIAG_STYLE_/DIAG_FORMAT_) even though
-// the values are identical to diag.salam's public DIAG_STYLE_*/DIAG_FORMAT_*
-// constants: the C backend gives top-level const/var decls their bare Salam
-// name as the emitted global symbol with NO package qualification, so two
-// packages both linked into the same binary declaring `pub const
-// DIAG_STYLE_RUST` collide at link time ("defined twice"). diag.salam is the
-// public-facing owner of those names (existing callers use `dg.DIAG_STYLE_*`
-// unqualified); this package only needs the values internally for its own
-// style/format dispatch, so it keeps its own uniquely-named copies instead.
 const RS_RUST := 0
 const RS_GCC := 1
 const RS_CLANG := 2
 
-// diag_format_t (diag_render.h) - see RS_* comment above.
 const RF_HUMAN := 0
 const RF_JSON := 1
 const RF_XML := 2
 
-// ANSI attributes (diag_internal.h)
 const A_RESET := "\x1b[0m"
 const A_BOLD := "\x1b[1m"
 const A_RED := "\x1b[1;31m"
@@ -59,24 +35,19 @@ const A_GREEN := "\x1b[1;32m"
 const A_BLUE := "\x1b[34m"
 const A_BBLUE := "\x1b[1;34m"
 
-// TAB_WIDTH (diag_render_source.c)
 const TAB_WIDTH := 4
 
-// The C line buffer was char[1024]; excerpt lines clamp to 1023 bytes.
 const LINE_CAP := 1023
 
-// Extended Persian-Indic digits (U+06F0-06F9) used by fa diagnostic codes.
 const FA_DIGITS := ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"]
 
 pub type DiagStyle = int
 pub type DiagFormat = int
 
-// i18n_tr - routed through the ported i18n module (identity for en/unknown).
 func tr(s: str): str:
     ret i18.Tr(s)
 end
 
-// Unsigned byte read from a str's bytes (see core.salam).
 func ub(bp: i8*, i: int): int:
     mut v := bp[i] as int
     if v < 0:
@@ -92,14 +63,11 @@ func spaces(n: int): str:
     ret " ".repeat (n)
 end
 
-// Two lowercase hex digits (for json \u00XX escapes of control bytes).
 func hex2(c: int): str:
     tbl := "0123456789abcdef"
     ret tbl.substr((c / 16) % 16, 1) + tbl.substr(c % 16, 1)
 end
 
-// write_diag_code (diag_render_source.c) without the surrounding brackets:
-// "E012" / "W031" for en/ar, "خطا۰۱۲" / "هشدار۰۳۱" for fa.
 func code_str(is_error: bool, code: int): str:
     if str.Equals(i18.Lang(), "fa"):
         mut c := code % 1000
@@ -112,7 +80,6 @@ func code_str(is_error: bool, code: int): str:
     ret co.Format2("%c%03d", co.ArgChar(is_error ? 69 : 87), co.ArgInt(code as i64))
 end
 
-// level_color (diag_render_source.c)
 func level_color(level: str): str:
     if str.Equals(level, "error"):
         ret A_RED
@@ -129,12 +96,10 @@ func level_color(level: str): str:
     ret A_BOLD
 end
 
-// get_src_line (diag_render_source.c): extract 1-based line `lineno` from
-// text[0..text_len), without its trailing \n / \r. Empty when out of range.
 func get_src_line(text: str, text_len: int, lineno: int): str:
     bp := (text as void*) as i8*
     mut n := text_len
-    if n > str.Len(text): // safety clamp; the C code trusted the caller
+    if n > str.Len(text):
         n = str.Len(text)
     end
     mut p := 0
@@ -159,9 +124,6 @@ func get_src_line(text: str, text_len: int, lineno: int): str:
     ret text.substr(start, ll)
 end
 
-// visual_col (diag_render_source.c): visual column of byte offset `byte_off`
-// with tabs expanded to TAB_WIDTH stops. Offsets past the line count 1 each
-// (the C code walked over the NUL there).
 func visual_col(line_buf: str, byte_off: int): int:
     bp := (line_buf as void*) as i8*
     n := str.Len(line_buf)
@@ -178,7 +140,6 @@ func visual_col(line_buf: str, byte_off: int): int:
     ret vis
 end
 
-// write_expanded (diag_render_source.c): the line with tabs expanded.
 func expand_line(line_buf: str): str:
     bp := (line_buf as void*) as i8*
     n := str.Len(line_buf)
@@ -201,8 +162,6 @@ func expand_line(line_buf: str): str:
     ret r
 end
 
-// span_visuals (diag_render_source.c): visual start column and caret width
-// for a span at byte column `col` (1-based) with `length` bytes.
 func span_visuals(line_buf: str, col: int, length: int, vis_s &: int, vis_w &: int):
     line_len := str.Len(line_buf)
     mut byte_start := 0
@@ -231,8 +190,6 @@ func span_visuals(line_buf: str, col: int, length: int, vis_s &: int, vis_w &: i
     end
 end
 
-// write_gutter (diag_render_source.c): "NN |" right-aligned to num_width;
-// lineno 0 = the bare gutter line.
 func gutter_str(lineno: int, num_width: int, color: bool): str:
     mut numpart := ""
     if lineno == 0:
@@ -248,7 +205,6 @@ func gutter_str(lineno: int, num_width: int, color: bool): str:
     ret numpart + " |"
 end
 
-// Digit count of the reported line number (diag_render_rust gutter width).
 func num_width_for(line: int): int:
     mut w := 1
     mut t := line
@@ -259,7 +215,6 @@ func num_width_for(line: int): int:
     ret w
 end
 
-// json_str (diag_render_format.c)
 func json_escape(s: str): str:
     bp := (s as void*) as i8*
     n := str.Len(s)
@@ -289,7 +244,6 @@ func json_escape(s: str): str:
     ret r
 end
 
-// xml_str (diag_render_format.c)
 func xml_escape(s: str): str:
     bp := (s as void*) as i8*
     n := str.Len(s)
@@ -317,17 +271,6 @@ func xml_escape(s: str): str:
     ret r
 end
 
-// ===== diag_render.c =====
-// Style/format parsing and the render dispatcher.
-// C differences:
-// - FILE *sink -> the rendered text is RETURNED as a str.
-// - diag_style_t / diag_format_t out-params -> plain `int &:` out-params
-//   (DIAG_STYLE_* / DIAG_FORMAT_* values).
-// - RenderAt is a port addition: the same dispatcher taking the span as
-//   line/col/length ints, for callers that don't hold a SrcSpan (the
-//   logger's rich path receives line/col ints).
-
-// diag_style_from_string (case-insensitive, like strcasecmp/_stricmp)
 pub func StyleFromString(s: str, out &: int): bool:
     if str.EqualFold(s, "rust"):
         out = RS_RUST
@@ -344,7 +287,6 @@ pub func StyleFromString(s: str, out &: int): bool:
     ret false
 end
 
-// diag_format_from_string
 pub func FormatFromString(s: str, out &: int): bool:
     if str.EqualFold(s, "human"):
         out = RF_HUMAN
@@ -361,9 +303,6 @@ pub func FormatFromString(s: str, out &: int): bool:
     ret false
 end
 
-// diag_render - dispatch on format, then style. Returns the rendered text
-// (all lines newline-terminated). Pass co.EmptySpan() for "no span",
-// "" for "no source text" and "" for "no help", where the C passed NULL.
 pub func Render(
     level: str, code: int, is_error: bool, file: str, span: co.SrcSpan, src_text: str, src_len: int,
     msg: str, help: str, style: DiagStyle, format: DiagFormat, color: bool
@@ -374,13 +313,12 @@ pub func Render(
     )
 end
 
-// Render with the span passed as plain ints (line/col 1-based, 0 = none).
 pub func RenderAt(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str,
     src_len: int, msg: str, help: str, style: DiagStyle, format: DiagFormat, color: bool
 ): str:
     mut lvl := level
-    if str.Len(lvl) == 0: // if (!level) level = "error"
+    if str.Len(lvl) == 0:
         lvl = "error"
     end
     if format == RF_JSON:
@@ -404,11 +342,6 @@ pub func RenderAt(
     )
 end
 
-// ===== diag_render_format.c =====
-// Machine-readable diagnostic formats (JSON lines and XML elements).
-// FILE *sink -> the rendered text is RETURNED as a str (with trailing \n).
-
-// diag_render_json - one JSON object per diagnostic, one line.
 pub func RenderJson(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, body: str, help: str
 ): str:
@@ -432,13 +365,11 @@ pub func RenderJson(
     ret out + "}\n"
 end
 
-// diag_render_xml - one <diagnostic> element per diagnostic, one line.
 pub func RenderXml(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, body: str, help: str
 ): str:
     mut out := `<diagnostic level="` + xml_escape(level) + `"`
     if code > 0:
-        // the C prints the code attribute unescaped ("%c%03d")
         out = out + ` code="` + code_str(is_error, code) + `"`
     end
     if str.Len(file) > 0:
@@ -457,26 +388,6 @@ pub func RenderXml(
     ret out + "</diagnostic>\n"
 end
 
-// ===== diag_render_source.c =====
-// The human-readable diagnostic styles with source excerpts and carets.
-// C differences:
-// - FILE *sink -> the rendered text is RETURNED as a str; every line the C
-//   fprintf'ed ends in \n, byte-identical (including the trailing space on
-//   an empty caret line, and tab expansion to 4-column stops).
-// - const src_span_t* -> line/col/length ints (line/col 1-based, 0 = the C
-//   NULL span); src_text = "" stands for the C NULL source pointer.
-// - i18n_tr -> tr() above, routed through i18.Tr (see the top-of-file
-//   `import i18 "i18n.salam"`); code_str() below also reproduces
-//   write_diag_code's Persian-digit "E012"/"W031" rendering for lang=fa.
-
-// diag_render_rust:
-//   error[E012]: message
-//    --> file:line:col
-//     |
-//   N | source line
-//     |      ^^^^
-//     |
-//     = help: ...          (only with help text)
 pub func RenderRust(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str,
     src_len: int, body: str, help: str, color: bool
@@ -531,19 +442,12 @@ pub func RenderRust(
 
     out = out + gutter_str(0, nw, color) + "\n"
 
-    // Aligns the '=' under the gutter's '|' rather than after it, so the help
-    // line reads as a footnote to the snippet instead of a source line.
     if str.Len(help) > 0:
         out = out + spaces(nw) + " " + green + "= " + tr("help") + ":" + reset + " " + help + "\n"
     end
     ret out
 end
 
-// diag_render_gcc:
-//   file:line:col: error: message [E012]
-//       source line
-//         ^~~~~
-//     note: ...              (only with help text)
 pub func RenderGcc(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str,
     src_len: int, body: str, help: str, color: bool
@@ -590,12 +494,6 @@ pub func RenderGcc(
     ret out
 end
 
-// diag_render_clang:
-//   file:line:col: error: message [E012]
-//       source line
-//          ^~~~~
-//          | message
-//          = help text        (only with help text)
 pub func RenderClang(
     level: str, code: int, is_error: bool, file: str, line: int, col: int, length: int, src_text: str,
     src_len: int, body: str, help: str, color: bool

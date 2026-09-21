@@ -16,21 +16,6 @@ package bigint
 
 import str
 
-// Text and byte conversions.
-//
-// Both directions work in the largest chunk that still fits a limb rather than
-// one digit at a time: for base 10 that is 10^9, so printing costs one long
-// division per nine digits and parsing one short multiply per nine. The naive
-// per-digit loop is nine times the work for the same answer.
-//
-// Parsing is permissive in the ways that help and strict in the ways that
-// matter. It accepts a leading sign, `_` as a group separator (1_000_000), and
-// Persian and Arabic-Indic digits alongside ASCII -- a Salam program reading a
-// price out of a Persian invoice should not have to transliterate first. It
-// rejects everything else, including an empty string, a lone sign, and a
-// trailing separator, by setting ok = false rather than returning a partial
-// number.
-
 // Value of an ASCII digit or letter in the given base, or -1 if it is not one.
 func _digit_val(c: int, base: int): int:
     mut d := 0 - 1
@@ -48,10 +33,6 @@ func _digit_char(d: int): int:
     ret 97 + (d - 10)
 end
 
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
-
 @en "ToStr"
 @fa "به رشته"
 @ar "إلى نص"
@@ -66,8 +47,6 @@ pub func ToStrBase(x: Int, base: int): str:
     if base < 2 || base > 36: ret "" end
     if x.is_zero(): ret "0" end
 
-    // The largest power of the base that still fits a limb, so one division
-    // step yields `per` digits.
     mut pw := 1 as u64
     mut per := 0
     while pw * (base as u64) <= _LOW_MASK:
@@ -75,8 +54,6 @@ pub func ToStrBase(x: Int, base: int): str:
         per += 1
     end
 
-    // Digits come out least significant first and are reversed on the way into
-    // the builder.
     mut digits := Vector {} as Vector<int>
     mut cur := Abs(x)
     while !cur.is_zero():
@@ -84,19 +61,14 @@ pub func ToStrBase(x: Int, base: int): str:
         nx := _udivmod_small(cur, pw as u32, rem)
         cur.free()
         cur = nx
-        // u64, not int: the chunk is the largest power of the base below
-        // 2^32, which for base 2 and base 36 is above the i32 ceiling and
-        // would come back negative.
         mut chunk := rem as u64
         radix := base as u64
         if cur.is_zero():
-            // Top chunk: emit only its significant digits, no leading zeros.
             while chunk > 0 as u64:
                 digits.push((chunk % radix) as int)
                 chunk = chunk / radix
             end
         else:
-            // An interior chunk is exactly `per` digits, zeros included.
             repeat per:
                 digits.push((chunk % radix) as int)
                 chunk = chunk / radix
@@ -124,10 +96,6 @@ end
 @ar "إلى ست عشري"
 pub func ToHex(x: Int): str: ret ToStrBase(x, 16) end
 
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
 @en "Parse"
 @fa "تجزیه"
 @ar "تحليل"
@@ -143,9 +111,6 @@ pub func ParseBase(s: str, base: int, ok &: bool): Int:
     ok = false
     if base != 0 && (base < 2 || base > 36): ret Int {} end
 
-    // Fold Persian and Arabic-Indic digits down to ASCII before scanning, so
-    // "۱۲۳" and "123" take the same path. The probe comes first because the
-    // fold allocates a copy and almost every input is already ASCII.
     mut norm := s
     if str.HasPersianDigits(s) || str.HasArabicDigits(s):
         norm = str.ToEnglishDigits(s)
@@ -174,7 +139,6 @@ pub func ParseBase(s: str, base: int, ok &: bool): Int:
         end
     end
 
-    // Chunk size for the accumulate loop, mirroring the print loop.
     mut pw := 1 as u64
     mut per := 0
     while pw * (b as u64) <= _LOW_MASK:
@@ -192,7 +156,6 @@ pub func ParseBase(s: str, base: int, ok &: bool): Int:
         c := norm[i] as int
         i += 1
         if c == 95:
-            // A separator is only legal between digits.
             if seen == 0: bad = true break end
             last_sep = true
             continue
@@ -218,7 +181,6 @@ pub func ParseBase(s: str, base: int, ok &: bool): Int:
     end
 
     if in_chunk > 0:
-        // Fold the short tail in with the matching power of the base.
         mut mult := 1 as u64
         repeat in_chunk: mult = mult * (b as u64) end
         nx := _umul_add_small(acc, mult as u32, chunk as u32)
@@ -247,10 +209,6 @@ pub func ParseOr(s: str, base: int): Int:
     end
     ret v
 end
-
-// ---------------------------------------------------------------------------
-// Machine number conversions
-// ---------------------------------------------------------------------------
 
 // x as an i64, setting ok = false and returning 0 if it does not fit.
 @en "ToInt"
@@ -335,7 +293,6 @@ pub func FromBytes(p: void*, n: int): Int:
     src := p as u8*
     nl := (n + 3) / 4
     r.mag.zeros(nl)
-    // Walk from the least significant byte, which is the last one.
     mut i := 0
     while i < n:
         b := src[n - 1 - i] as u32
@@ -361,7 +318,6 @@ pub func ToBytes(x: Int, out: void*, n: int): bool:
     dst := out as u8*
     mut i := 0
     while i < n:
-        // Byte i counted from the least significant end lands at n-1-i.
         li := i / 4
         mut v := 0 as u32
         if li < x.mag.len(): v = (x.mag.get(li) >> ((i % 4) * 8)) & (0xFF as u32) end

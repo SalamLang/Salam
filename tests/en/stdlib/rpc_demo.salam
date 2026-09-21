@@ -14,10 +14,6 @@
 
 package main
 
-// std/rpc end to end: the JSON-RPC 2.0 codec, the MessagePack-RPC codec,
-// all three stream framings, the method registry and its dispatcher, and
-// a real client/server pair talking over a loopback TCP socket.
-
 import rpc
 import encoding.value
 import compress
@@ -28,13 +24,6 @@ import os
 mut srv wg := sync.NewWaitGroup()
 mut bound port := 0
 mut server := rpc.NewServer(0, rpc.RPC_CODEC_JSON)
-
-// ---- handlers ----------------------------------------------------------
-//
-// A handler takes a call slot, not the request: `callhandler` can only
-// pass one i64, so arguments come in and the reply goes out through the
-// slot. Named and positional parameters both reach the same code -
-// rpc.CallParam* tries the object key first, then the array position.
 
 func add(slot: i64):
     a := rpc.CallParamInt(slot, "a", 0)
@@ -55,10 +44,7 @@ func divide(slot: i64):
     rpc.ReplyInt(slot, rpc.CallParamInt(slot, "a", 0) / denom)
 end
 
-// Deliberately replies nothing: the dispatcher must turn that into an
-// internal error rather than leaving a client waiting forever.
 func silent(_slot: i64):
-    // Intentionally no reply; the dispatcher must synthesise the error.
     ret
 end
 
@@ -73,8 +59,6 @@ func serve loopback():
     rpc.ServeCount(server, 1)
 end
 
-// ---- checks ------------------------------------------------------------
-
 func check json codec():
     mut ok := false
     req := rpc.JsonDecodeRequest("{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":[2,40],\"id\":7}", ok)
@@ -85,27 +69,22 @@ func check json codec():
     testing.AssertEqInt(rpc.ParamCount(req), 2)
     testing.AssertEqInt64(rpc.ParamInt(req, "a", 0), 2 as i64)
 
-    // A string id must come back a string, not a coerced number.
     mut ok2 := false
     req2 := rpc.JsonDecodeRequest("{\"jsonrpc\":\"2.0\",\"method\":\"x\",\"id\":\"abc\"}", ok2)
     testing.AssertTrue(ok2)
     testing.AssertTrue(value.IsString(req2.id))
     testing.AssertEqStr(value.AsString(req2.id), "abc")
 
-    // No `id` member at all is a notification - distinct from id: null.
     mut ok3 := false
     req3 := rpc.JsonDecodeRequest("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}", ok3)
     testing.AssertTrue(ok3)
     testing.AssertTrue(rpc.IsNotification(req3))
 
-    // Wrong version, missing method, and non-structured params are all
-    // Invalid Request / Invalid Params, not parse errors.
     bad := rpc.JsonDecodeBatch("{\"jsonrpc\":\"1.0\",\"method\":\"x\",\"id\":1}")
     testing.AssertEqInt(bad.items.get(0).err_code, rpc.RPC_INVALID_REQUEST)
     bad2 := rpc.JsonDecodeBatch("{\"jsonrpc\":\"2.0\",\"method\":\"x\",\"params\":5,\"id\":1}")
     testing.AssertEqInt(bad2.items.get(0).err_code, rpc.RPC_INVALID_PARAMS)
 
-    // Malformed JSON is a parse error at the payload level.
     broken := rpc.JsonDecodeBatch("{not json")
     testing.AssertFalse(broken.ok)
     testing.AssertEqInt(broken.err.code, rpc.RPC_PARSE_ERROR)
@@ -119,7 +98,6 @@ func check dispatch():
     testing.AssertFalse(resp.is_error)
     testing.AssertEqInt64(value.AsInt(resp.result), 42 as i64)
 
-    // Named parameters reach the same handler.
     named := rpc.HandleText("{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":{\"a\":10,\"b\":5},\"id\":2}")
     mut ok2 := false
     resp2 := rpc.JsonDecodeResponse(named, ok2)
@@ -139,19 +117,16 @@ func check dispatch():
     testing.AssertEqInt(resp4.err.code, rpc.RPC_INVALID_PARAMS)
     testing.AssertEqStr(resp4.err.message, "division by zero")
 
-    // A handler that never replies is an internal error, never a hang.
     quiet := rpc.HandleText("{\"jsonrpc\":\"2.0\",\"method\":\"silent\",\"id\":5}")
     mut ok5 := false
     resp5 := rpc.JsonDecodeResponse(quiet, ok5)
     testing.AssertTrue(resp5.is_error)
     testing.AssertEqInt(resp5.err.code, rpc.RPC_INTERNAL_ERROR)
 
-    // A notification produces no reply document at all.
     testing.AssertEqStr(rpc.HandleText("{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":[1,1]}"), "")
 end
 
 func check batch():
-    // Two calls and one notification: the reply array holds two entries.
     text := "[{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":[1,2],\"id\":1}," +
         "{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":[3,4]}," +
         "{\"jsonrpc\":\"2.0\",\"method\":\"shout\",\"params\":[\"salam\"],\"id\":2}]"
@@ -164,10 +139,8 @@ func check batch():
     testing.AssertEqInt64(value.AsInt(rs.items.get(0).result), 3 as i64)
     testing.AssertEqStr(value.AsString(rs.items.get(1).result), "SALAM")
 
-    // An entirely-notification batch gets nothing back.
     testing.AssertEqStr(rpc.HandleText("[{\"jsonrpc\":\"2.0\",\"method\":\"add\",\"params\":[1,1]}]"), "")
 
-    // An empty batch array is itself an Invalid Request.
     empty := rpc.HandleText("[]")
     mut ok2 := false
     resp := rpc.JsonDecodeResponse(empty, ok2)
@@ -187,7 +160,6 @@ func check reflection():
 end
 
 func check framing():
-    // Line framing: one message per newline, blank lines skipped.
     mut s := rpc.NewMemStream()
     rpc.FeedStr(s, "{\"a\":1}\n\n{\"b\":2}\n")
     mut ok := false
@@ -199,7 +171,6 @@ func check framing():
     testing.AssertFalse(ok)
     rpc.FreeStream(s)
 
-    // LSP framing: Content-Length plus a blank line, other headers ignored.
     mut h := rpc.NewMemStream()
     rpc.FeedStr(h, "Content-Length: 7\r\nContent-Type: application/json\r\n\r\n{\"a\":1}Content-Length: 7\r\n\r\n{\"b\":2}")
     mut hok := false
@@ -209,8 +180,6 @@ func check framing():
     testing.AssertTrue(hok)
     rpc.FreeStream(h)
 
-    // Length framing is binary-safe: a payload full of NUL bytes, which
-    // a `str`-based reader would truncate at the first one, survives.
     mut raw := compress.NewByteBuf()
     compress.BufPush(raw, 1)
     compress.BufPush(raw, 0)
@@ -236,7 +205,6 @@ func check msgpack codec():
     value.ArrayPush(req.params, value.ValueInt(20 as i64))
     value.ArrayPush(req.params, value.ValueInt(22 as i64))
     mut wire := rpc.MsgpackEncodeRequest(req)
-    // [0, 11, "add", [20, 22]] is 10 bytes of MessagePack.
     testing.AssertEqInt(compress.BufLen(wire), 10)
     mut reply := rpc.HandlePayload(rpc.RPC_CODEC_MSGPACK, wire)
     mut ok := false
@@ -248,8 +216,6 @@ func check msgpack codec():
     compress.BufFree(wire)
     compress.BufFree(reply)
 
-    // The default framing follows the codec: text is line-delimited,
-    // binary gets an explicit length prefix.
     testing.AssertEqInt(rpc.CodecDefaultFraming(rpc.RPC_CODEC_JSON), rpc.RPC_FRAME_LINE)
     testing.AssertEqInt(rpc.CodecDefaultFraming(rpc.RPC_CODEC_MSGPACK), rpc.RPC_FRAME_LENGTH)
     testing.AssertEqStr(rpc.CodecName(rpc.RPC_CODEC_MSGPACK), "msgpack-rpc")
@@ -283,8 +249,6 @@ func check loopback():
     testing.AssertTrue(rpc.IsErrorResponse(r4))
     testing.AssertEqInt(rpc.ErrorCode(r4), rpc.RPC_METHOD_NOT_FOUND)
 
-    // A notification is fire-and-forget: it must not consume a reply,
-    // so the call right after it still lines up.
     testing.AssertTrue(rpc.Notify(c, "add", value.NewValueArray()))
     r5 := rpc.CallArgs(c, "add", args)
     testing.AssertEqInt64(rpc.ResultInt(r5), 42 as i64)

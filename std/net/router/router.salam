@@ -19,33 +19,6 @@ package router
 
 import mem
 
-// Path/method routing, extracted out of std/web's router.salam so it can
-// be reasoned about (and reused) independently of any particular HTTP
-// server implementation. The original `_try_match` wrote extracted
-// `:param` values directly into std/web's request-context handle - this
-// version is a pure function: `Dispatch` takes a method+path and returns
-// a `Match` (which route, if any, plus its extracted params) with no
-// side effects on caller state. net/http's server calls Dispatch and
-// then copies `Match.params` into its own request context itself -
-// cleaner layering, and Dispatch/_try_match are independently testable.
-//
-// Handlers are stored as raw function pointers (`fn: i64`; a bare
-// function name decays to one), the same convention std/web used - Salam has no
-// closures, so there is no way to capture per-group middleware/prefix
-// state in a builder object the way Express/Go routers do. "Group"
-// below is therefore a plain string-prefixing helper, not a sub-router
-// builder: `router.Group(r, "/v1", "GET", "/users", fn)` is exactly
-// `router.Get(r, "/v1/users", fn)` with the prefix computed once at the
-// call site - honest about what the language can express here, not a
-// thin unimplemented stub of a fluent API this codebase can't support.
-//
-// Route priority (spec requirement): matching no longer depends on
-// registration order. Dispatch tries every route with a literal
-// (non-parametric, non-wildcard) pattern first, then every `:param`
-// route, then every `*` wildcard route - static beats param beats
-// wildcard, exactly like Go/Express routers, regardless of the order
-// routes were registered in.
-
 const _CH_SLASH := 47
 const _CH_COLON := 58
 const _CH_STAR := 42
@@ -193,8 +166,6 @@ end
 // allocations - captures excepted, which are the values the caller asked for.
 func _byte_at(s: str, i: int): int:
     p := s as i8 *
-    // No `as int` here: an i8 widens to the i32 this returns on its own, and
-    // spelling it out is the useless cast E093 rejects.
     ret p[i]
 end
 
@@ -418,16 +389,11 @@ end
 pub func Dispatch(r: Router, method: str, path: str): Match:
     mut m := Match {}
     mid := _method_id(method)
-    // Literal routes first, and they win outright: static beats param beats
-    // wildcard, so a hit here is the answer and nothing else needs looking
-    // at. One hash, then one comparison per probe, whatever the route count.
     if r.idx_mask > 0:
         mut slot := _hash_key(mid, path) & r.idx_mask
         until r.idx.get(slot) != 0:
             route := r.routes.get(r.idx.get(slot) - 1)
             if route.mid == mid && route.pattern == path:
-                // Two different custom verbs hash together when both are
-                // unrecognised (mid 0); only then is the string compared.
                 if mid != 0 || route.method == method:
                     m.matched = true
                     m.fn = route.fn
@@ -438,9 +404,6 @@ pub func Dispatch(r: Router, method: str, path: str): Match:
         end
     end
     if r.n_dynamic == 0: ret m end
-    // Everything with a ":param" or a "*", in registration order, lowest
-    // specificity winning - param beats wildcard regardless of the order the
-    // two were registered in.
     n := r.routes.len()
     mut best := 3
     mut i := 0
@@ -450,8 +413,6 @@ pub func Dispatch(r: Router, method: str, path: str): Match:
             if mid != 0 || route.method == method:
                 mut params := ParamList {}
                 if _try_match(route.pattern, path, params):
-                    // A less specific route may already have matched and be
-                    // holding captures this one is about to replace.
                     _free_params(m.params)
                     m.matched = true
                     m.fn = route.fn

@@ -14,26 +14,6 @@
 
 package aws
 
-// The request layer every S3 operation is built on.
-//
-// The original signer could sign four fixed headers in a fixed order. That is
-// enough for put, get and delete, and it runs out immediately after: a ranged
-// read needs `range`, a copy needs `x-amz-copy-source`, metadata needs a
-// header per entry, a listing needs a sorted query string. All of them have to
-// land in the canonical request in the one order AWS re-derives on its side,
-// so the ordering cannot stay hard-coded.
-//
-// Headers is therefore an ordered name/value pair list that sorts on demand,
-// and Request is a whole request described as data. Do() turns one into an
-// answer. Everything else in this package is a function that fills in a
-// Request and reads a Result, which is why the operations below read as
-// declarations rather than as string concatenation.
-//
-// Retries live here too. An object store answers 500 and 503 under load, and a
-// caller that treats those as failures will lose data that a second attempt
-// would have stored. Only the statuses AWS documents as retryable are retried,
-// and only after a backoff, so a struggling service is not made worse.
-
 import mem
 import str
 import time
@@ -92,8 +72,6 @@ pub struct Bytes:
     pub code: str = ""
     pub error: str = ""
 end
-
-// ------------------------------------------------------------ header list
 
 func _hdr_find(h: Headers, name: str): int:
     lower := name.lower()
@@ -212,8 +190,6 @@ func _canon_query(q: Headers): str:
     ret str.BufStr(sb)
 end
 
-// ------------------------------------------------------------- addressing
-
 func _bucket_of(cfg: Config, r: Request): str:
     if r.service_level: ret "" end
     if r.bucket.len() > 0: ret r.bucket end
@@ -238,8 +214,6 @@ func _wire_path(cfg: Config, bucket: str, key: str): str:
     if key.len() == 0: ret "/" + bucket end
     ret "/" + bucket + EncodeKey(key)
 end
-
-// ------------------------------------------------------------- the answer
 
 // _tag_text - the text of one non-nested XML element, by hand.
 //
@@ -283,8 +257,6 @@ func _backoff_ms(cfg: Config, attempt: int): int:
     ret wait
 end
 
-// ------------------------------------------------------------ the request
-
 // _head_block - the request line and headers, ready to write. `authorization`
 // is empty for an anonymous request, which sends no credential at all.
 func _head_block(method: str, path: str, query: str, authorization: str,
@@ -299,9 +271,6 @@ func _head_block(method: str, path: str, query: str, authorization: str,
         str.BufAppend(sb, query)
     end
     str.BufAppend(sb, " HTTP/1.1\r\n")
-    // Every signed header, in the order it was added, followed by the ones
-    // that are never signed. Host first, because a server reading the request
-    // line wants it early and because it costs nothing.
     mut i := 0
     until i < signed_set.names.len():
         str.BufAppend(sb, signed_set.names.get(i))
@@ -417,8 +386,6 @@ func _fill_common(raw: httpx.Raw, status: int, ok &: bool, etag &: str,
         error = _describe(status, body)
     end
 end
-
-// -------------------------------------------------------------- public API
 
 // NewHeaders - an empty pair list.
 pub func NewHeaders(): Headers:
@@ -545,8 +512,6 @@ pub func Do(cfg: Config, r: Request): Result:
     out.request_id = httpx.HeaderValue(raw.head, "x-amz-request-id")
     out.version_id = httpx.HeaderValue(raw.head, "x-amz-version-id")
     length := httpx.HeaderValue(raw.head, "Content-Length")
-    // 64-bit, because Content-Length on an object store routinely exceeds
-    // what 32 bits hold, and S3DownloadFile drives its range loop off this.
     if length.len() > 0: out.length = conv.ParseInt(length) end
     ret out
 end

@@ -14,11 +14,6 @@
 
 package main
 
-// std/llm: SentencePiece and byte-level BPE tokenizers round-trip,
-// the KV cache makes token-by-token decoding match one-shot decoding,
-// sampling is seeded, and a hand-built GGUF loads back into a model
-// that produces the same logits as the weights it was written from.
-
 import archive
 import compress
 import encoding.binary
@@ -71,8 +66,6 @@ end
 
 func padded(n: int): int: ret ((n + 31) / 32) * 32 end
 
-// A tensor info record with GGUF's innermost-first dims; returns the
-// offset the next tensor starts at.
 func tensor_info(b &: compress.ByteBuf, name: str, t &: tensor.Tensor, offset: int): int:
     put_str(b, name)
     binary.WriteU32LE(b, t.rank())
@@ -133,7 +126,7 @@ end
 func bpe_tokenizer(): llm.Tokenizer:
     mut t := llm.NewTokenizer(llm.TOK_BPE)
     _a := t.add_token("<|endoftext|>", 0.0)
-    _b := t.add_token("\xC4\xA0", 0.0)       // "Ġ", the stand-in for a space
+    _b := t.add_token("\xC4\xA0", 0.0)
     _c := t.add_token("h", 0.0)
     _d := t.add_token("i", 0.0)
     _e := t.add_token("\xC4\xA0h", 0.0)
@@ -148,7 +141,6 @@ func bpe_tokenizer(): llm.Tokenizer:
 end
 
 func main:
-    // ---- SentencePiece tokenizer ----
     mut spm := spm_tokenizer()
     mut ids := spm.encode("hello lo")
     testing.AssertEqInt(ids.len(), 4)
@@ -160,7 +152,6 @@ func main:
     testing.AssertTrue(str.Equals(text_a, "hello lo"))
     mem.Free(text_a as void*)
     ids.free()
-    // byte fallback for a character no token covers
     mut ids2 := spm.encode("\xC3\xA9")
     testing.AssertEqInt(ids2.len(), 4)
     testing.AssertEqInt(ids2.get(2), 14 + 0xC3)
@@ -171,7 +162,6 @@ func main:
     ids2.free()
     spm.free()
 
-    // ---- byte-level BPE tokenizer ----
     mut bpe := bpe_tokenizer()
     mut ids3 := bpe.encode(" hi hi!")
     testing.AssertEqInt(ids3.len(), 3)
@@ -184,7 +174,6 @@ func main:
     ids3.free()
     bpe.free()
 
-    // ---- KV cache: incremental decoding matches one-shot ----
     mut cfg := llm.Config { vocab = 16, dim = 8, layers = 2, heads = 2, kv_heads = 1, ff = 16, ctx = 16 }
     mut m := llm.RandomModel(cfg, 7)
     mut cache := llm.NewKVCache(cfg)
@@ -214,7 +203,6 @@ func main:
     end
     testing.AssertTrue(all_close)
     testing.AssertEqInt(cache.len, 6)
-    // the other rotary layout gives different numbers
     cfg.rope_kind = llm.ROPE_NEOX
     mut m2 := llm.RandomModel(cfg, 7)
     cache.reset()
@@ -222,14 +210,12 @@ func main:
     testing.AssertTrue(!tensor.AllClose(full, full2, 0.0001))
     full2.free()
     m2.free()
-    // context overflow is refused
     cache.reset()
     cache.len = 15
     mut over := llm.Forward(m, cache, toks)
     testing.AssertTrue(over.is_empty())
     cache.reset()
 
-    // ---- sampling ----
     mut greedy := llm.NewSampler(1)
     greedy.temperature = 0.0
     testing.AssertEqInt(greedy.sample(full, 5, one), llm.Greedy(full, 5))
@@ -253,7 +239,6 @@ func main:
     p := s3.sample(full, 2, toks)
     testing.AssertTrue(p >= 0 && p < 16)
     full.free()
-    // generation runs for max_new steps when nothing emits eos
     mut gen := llm.GenerateIds(m, cache, toks, 4, greedy, 0 - 1)
     testing.AssertEqInt(gen.len(), 4)
     testing.AssertEqInt(cache.len, 10)
@@ -262,14 +247,13 @@ func main:
     cache.free()
     m.free()
 
-    // ---- GGUF round trip ----
     mut gcfg := llm.Config { vocab = 8, dim = 4, layers = 1, heads = 2, kv_heads = 1, ff = 8, ctx = 8 }
     mut gm := llm.RandomModel(gcfg, 3)
     mut b := compress.NewByteBuf()
     compress.BufPushBytes(b, "GGUF" as void*, 4)
     binary.WriteU32LE(b, 3)
-    binary.WriteU64LE(b, 11)   // tensors
-    binary.WriteU64LE(b, 13)   // metadata pairs
+    binary.WriteU64LE(b, 11)
+    binary.WriteU64LE(b, 13)
     kv_str(b, "general.architecture", "llama")
     kv_u32(b, "llama.embedding_length", 4)
     kv_u32(b, "llama.block_count", 1)
@@ -349,7 +333,6 @@ func main:
     text_d := lt.decode(pids)
     testing.AssertTrue(str.Equals(text_d, "a b"))
     mem.Free(text_d as void*)
-    // same logits from the loaded weights
     mut c1 := llm.NewKVCache(gcfg)
     mut c2 := llm.NewKVCache(gcfg)
     mut la := llm.Forward(gm, c1, pids)
@@ -357,7 +340,6 @@ func main:
     testing.AssertTrue(tensor.AllClose(la, lb, 0.00001))
     la.free()
     lb.free()
-    // text in, text out, deterministic under greedy
     c1.reset()
     c2.reset()
     mut g1 := llm.GenerateIds(lm, c1, pids, 3, greedy, lt.eos)

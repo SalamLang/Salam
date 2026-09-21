@@ -51,10 +51,6 @@ package llvm
 // reports them per platform. Keep this list in step with that output.
 link static "salam_llvm"
 
-// LLVM and LLD are C++; their archives reference the C++ runtime, so it has
-// to be linked too - and *after* libsalam_llvm.a, since a static link only
-// resolves a symbol from an archive it has not already scanned past. The
-// declaration order here is the link order.
 if SALAM_OS_WINDOWS:
     link dynamic "psapi"
     link dynamic "shell32"
@@ -63,10 +59,6 @@ if SALAM_OS_WINDOWS:
     link dynamic "advapi32"
     link dynamic "ws2_32"
     link dynamic "ntdll"
-    // xml2 before z, for the same reason the C++ runtime comes after
-    // libsalam_llvm.a: libxml2.a calls gzread/gzclose/gzdopen, so libz.a has
-    // to still be ahead of the linker when those references show up. With z
-    // first the link ended in "undefined reference to `gzread'".
     link static "xml2"
     link static "iconv"
     link static "z"
@@ -74,29 +66,8 @@ if SALAM_OS_WINDOWS:
     link dynamic "bcrypt"
     link static "stdc++"
     link static "gcc_eh"
-    // LLVM/LLD use std::mutex and friends, which mingw's libstdc++ threading
-    // layer implements on top of winpthreads.
     link static "pthread"
 else SALAM_OS_MAC:
-    // macOS gets its own arm rather than sharing the Linux one below for two
-    // reasons, both of which broke the stage 2 link of the self-hosted
-    // compiler outright:
-    //
-    // - the C++ runtime is libc++, not libstdc++. lld_link.cc is compiled
-    //   -stdlib=libc++ and Homebrew's LLVM/LLD archives are built against it,
-    //   so `-lstdc++` is the wrong library here even where the SDK still
-    //   carries a stub for it. The C build reached the same conclusion from
-    //   the other direction: compiler-release.yml's macOS job passes
-    //   LLVM_CXXLIB=-lc++ to override c/Makefile's -lstdc++ default.
-    // - `link static "X"` on a bare name is not expressible for Apple's
-    //   linker (the driver warns and links it normally anyway - see
-    //   emit_link in c/src/driver/build.c), so these are spelled dynamic:
-    //   the SDK ships .tbd stubs, never archives, for all of them.
-    //
-    // zstd is the one entry the SDK does not provide at all. It comes from
-    // Homebrew, whose keg is not on the linker's default search path, so the
-    // link needs a `--libpath` pointing at it - compiler/tools/bash/
-    // bootstrap.sh works out that directory the same way c/Makefile does.
     link dynamic "pthread"
     link dynamic "dl"
     link dynamic "m"
@@ -110,35 +81,11 @@ else:
     link dynamic "m"
     link static "z"
     link static "zstd"
-    // libLLVMWindowsManifest.a is part of `llvm-config --libs all` on EVERY
-    // host, not just Windows, and the apt.llvm.org builds compile it with
-    // LLVM_ENABLE_LIBXML2=ON - so WindowsManifestMerger.cpp.o inside
-    // libsalam_llvm.a references xmlNewDoc/xmlFree/... on Linux too, and the
-    // self-host bootstrap failed to link without this. `llvm-config
-    // --link-static --system-libs` lists it (`-lz -lzstd -lxml2`) for exactly
-    // this reason; the C build picks it up from there automatically, and this
-    // is the same entry for the Salam side.
-    //
-    // dynamic, unlike the Windows branch's `link static "xml2"`: a static
-    // libxml2.a drags in zlib and liblzma symbols that would have to be
-    // resolved by archives listed AFTER it, and liblzma-dev is not something
-    // to make a build dependency. libxml2.so.2 is present on every mainstream
-    // Linux and carries its own DT_NEEDED, which is also how upstream LLVM's
-    // own tools link it.
     link dynamic "xml2"
-    // LLVM asks the terminal whether it supports colour through terminfo
-    // (Process::FileDescriptorHasColors -> tigetnum/set_curterm/del_curterm),
-    // which lives in libtinfo. Without it the link fails on those three
-    // symbols alone. Dynamic for the same reason as xml2: libtinfo.so is on
-    // every mainstream Linux, and a static one drags in more than it is
-    // worth.
     link dynamic "tinfo"
     link static "stdc++"
 end
 
-// Imports are package-wide once declared in any one file of a merged
-// package (see std/ssl/ssl.salam vs its sibling files) - declared here
-// only, not repeated in ir.salam/target.salam/etc.
 import str
 import os
 import mem

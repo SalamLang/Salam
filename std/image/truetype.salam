@@ -18,39 +18,6 @@ import mem
 import compress
 import archive
 
-// TrueType/OpenType font loading - the container half: the sfnt table
-// directory, the headers it points at (head/maxp/hhea), and the Font
-// value the rest of the package reads everything else out of. The four
-// files around this one each take one table family: ttf_cmap.salam maps
-// codepoints to glyphs, ttf_metrics.salam reads hmtx/kern, and
-// ttf_glyph.salam decodes glyf/loca outlines that glyph_raster.salam
-// then fills. Nothing here knows what a glyph looks like.
-//
-// A `Font` owns a private copy of the whole font file (fonts are a few
-// hundred KB and every table is read by offset into it, so keeping the
-// bytes is both simpler and faster than copying each table out) - free it
-// with FreeFont, the same explicit-ownership rule Image itself follows.
-//
-// Supported: TrueType outlines (`glyf`/`loca`), i.e. .ttf files and the
-// .ttc collections that wrap several of them, from either an 0x00010000
-// or a 'true' sfnt header. cmap formats 0, 4, 6 and 12 cover every real
-// font's Unicode table, including the 3/0 "symbol" encoding whose
-// codepoints live at 0xF000+ch (looked up transparently, see
-// GlyphIndex).
-//
-// NOT supported: PostScript/CFF outlines (an 'OTTO' header - most .otf
-// files), which are a completely separate charstring format rather than
-// a variation on `glyf`. LoadFont reports those through `ok = false`
-// rather than half-reading them, the same "report, don't misread" rule
-// webp.salam's stub follows. Bitmap-only fonts (EBDT/CBDT color emoji)
-// and variable-font instancing (`gvar`) are likewise reported, not
-// approximated.
-//
-// Every read goes through the bounds-checked _ttf_* helpers below, which
-// return 0 past the end of the buffer, so a truncated or hostile font
-// file produces a blank/garbled glyph at worst, never an out-of-bounds
-// read.
-
 const _TTF_TAG_HEAD := (0x68 << 24) | (0x65 << 16) | (0x61 << 8) | 0x64
 const _TTF_TAG_MAXP := (0x6D << 24) | (0x61 << 16) | (0x78 << 8) | 0x70
 const _TTF_TAG_LOCA := (0x6C << 24) | (0x6F << 16) | (0x63 << 8) | 0x61
@@ -103,8 +70,6 @@ pub struct Font:
     pub ok: bool = false
 end
 
-// ------------------------------------------------------- bounds-checked IO
-
 func _ttf_u8(p: void*, n: int, off: int): int:
     if off < 0 || off >= n:
         ret 0
@@ -133,8 +98,6 @@ func _ttf_u32(p: void*, n: int, off: int): int:
     ret (_ttf_u16(p, n, off) << 16) | _ttf_u16(p, n, off + 2)
 end
 
-// ------------------------------------------------------------ table lookup
-
 func _ttf_find_table(p: void*, n: int, dir_off: int, tag: int, len_out &: int): int:
     num_tables := _ttf_u16(p, n, dir_off + 4)
     mut i := 0
@@ -149,8 +112,6 @@ func _ttf_find_table(p: void*, n: int, dir_off: int, tag: int, len_out &: int): 
     len_out = 0
     ret 0
 end
-
-// -------------------------------------------------------------- table init
 
 func _ttf_init(f &: Font, dir_off: int): bool:
     ver := _ttf_u32(f.data, f.size, dir_off)
@@ -185,8 +146,6 @@ func _ttf_init(f &: Font, dir_off: int): bool:
         f.line_gap = _ttf_i16(f.data, f.size, hhea + 8)
         f.num_hmetrics = _ttf_u16(f.data, f.size, hhea + 34)
     end
-    // A font with no hhea still renders; only its line spacing is
-    // guessed, from the em square the way a typographer would.
     if f.ascent == 0 && f.descent == 0:
         f.ascent = (f.units_per_em * 4) / 5
         f.descent = 0 - f.units_per_em / 5
@@ -194,8 +153,6 @@ func _ttf_init(f &: Font, dir_off: int): bool:
     _ttf_pick_cmap(f, _ttf_find_table(f.data, f.size, dir_off, _TTF_TAG_CMAP, tlen))
     ret true
 end
-
-// ------------------------------------------------------------------ public
 
 // Parses a font from bytes already in memory, taking a private copy so
 // the caller can free its own buffer immediately. `index` selects a face

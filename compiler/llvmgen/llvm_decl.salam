@@ -5,9 +5,6 @@ import co "../sal_core.salam"
 import at "../ast.salam"
 import sm "../semantic/semantic.salam"
 
-// ===== codegen_llvm_decl.c =====
-
-// ll_emit_struct_types
 func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     mut i := 0
     until i < at.ChildCount(a, program):
@@ -52,10 +49,6 @@ func emit_struct_types(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
     out_g(v, "\n")
 end
 
-// ll_pkg_of_scope - the package a member scope belongs to, "" for the main
-// module. The whole program lands in one LLVM module, so a free function's
-// symbol has to carry its package the way the C backend's _Salam_<pkg>_...
-// names do - see mangle_in.
 func pkg_of_scope(s &: sm.Sema, sc: int): str:
     if sc == 0:
         ret ""
@@ -75,13 +68,6 @@ func pkg_of_scope(s &: sm.Sema, sc: int): str:
     ret ""
 end
 
-// ll_mangle_in - "" owner = the C NULL; sig 0 = the C NULL. `pkg` qualifies
-// free functions (owner == ""). Without it std/fs/path's `pub func Ext(p:
-// str): ret filepath.Ext(p) end` and std/filepath's own `Ext` both mangled
-// to @salam_Ext_str: only one body was emitted, the wrapper's tail call
-// bound to itself, and every program calling path.Ext died in infinite
-// recursion. Struct/impl members keep the owner-only name - their call sites
-// only know the receiver's type, not the package that declared it.
 func mangle_in(
     v &: Lv, s &: sm.Sema, pkg: str, owner: str, fn_name: str, sig: int
 ): str:
@@ -111,32 +97,10 @@ func mangle_in(
     ret r
 end
 
-// ll_mangle - the package in scope right now. Every call site that reaches a
-// free function through the current scope (a same-package call, a bare name
-// read as a value, &f)
-// is emitting into the same package the callee was declared in, so the
-// definition and those calls agree on the name. call_pkg is the exception -
-// it resolves through another package's member scope and passes that package
-// to mangle_in itself.
 func mangle(v &: Lv, s &: sm.Sema, owner: str, fn_name: str, sig: int): str:
     ret mangle_in(v, s, pkg_of_scope(s, v.pkg_scope), owner, fn_name, sig)
 end
 
-// A method's owner, spelled the one way every side of the call agrees on.
-//
-// It used to be the struct's DECLARED name, so `pa.Input.free` and
-// `pb.Input.free` both mangled to @salam_Input_free: one body was emitted and
-// every call to either bound to it. The bodies read `this` at their own
-// struct's field offsets, so a call that got the wrong one loaded whatever
-// happened to sit at that offset in the other layout - which is how a
-// `Vector<i64>` receiver came out eight bytes past its real address and free()
-// was handed the {count, cap} pair as if it were the data pointer. The C
-// backend never had this: cg_mangle_method has always folded the owner's
-// package into the name.
-//
-// The canonical type name is unique by construction and is exactly what a
-// receiver's type_str already carries, so call sites can derive it without
-// knowing anything the declared name did not already tell them.
 func owner_key(s &: sm.Sema, osym: int): str:
     if osym == 0:
         ret ""
@@ -151,8 +115,6 @@ func owner_key(s &: sm.Sema, osym: int): str:
     ret ov.name
 end
 
-// ll_pick_overload - first exact arg-typestring match; else first
-// arity-compatible; else overload 0.
 func pick_overload(
     v &: Lv, s &: sm.Sema, a &: at.Ast, symid: int, call: int
 ): int:
@@ -193,12 +155,6 @@ func pick_overload(
     ret 0
 end
 
-// Every signature indexed by the declaration it belongs to, built on first
-// use. A name is not enough to find a function's own signature: two packages
-// can each declare a private `draw_empty`, the global scope holds one of
-// them, and the other one then took its parameter list - a wrong LLVM
-// signature when the arities happened to agree, and a compiler crash when
-// they did not.
 func sig_for_decl(v &: Lv, s &: sm.Sema, fn: int): int:
     if v.sig_ix.len() == 0:
         total := sm.SigCount(s)
@@ -223,15 +179,12 @@ func sig_for_decl(v &: Lv, s &: sm.Sema, fn: int): int:
     ret v.sig_ix.get(fn)
 end
 
-// ll_sig_of
 func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     fname := at.Get(a, fn).name
     mut symid := 0
     if owner != 0:
         symid = sm.LookupLocal(s, sm.SymAt(s, owner).members, fname)
     else:
-        // The package being emitted owns its own names, the way call_user
-        // already resolves a call; only then does the global scope answer.
         if v.pkg_scope != 0:
             own := sm.LookupLocal(s, v.pkg_scope, fname)
             if own != 0 && sm.SymAt(s, own).kind == sm.SYM_FUNC:
@@ -267,10 +220,6 @@ func sig_of(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int): int:
     ret 0
 end
 
-// How many parameters a declaration and its signature agree on. They always
-// should; when they do not the module is wrong rather than merely incomplete,
-// so say so and emit the part that is sound instead of reading past the end
-// of either list.
 func param_count(v &: Lv, a &: at.Ast, s &: sm.Sema, fn: int, sig: int, fname: str): int:
     n := at.ChildCount(a, fn)
     m := sm.SigAt(s, sig).params.len()
@@ -281,7 +230,6 @@ func param_count(v &: Lv, a &: at.Ast, s &: sm.Sema, fn: int, sig: int, fname: s
     ret n < m ? n : m
 end
 
-// ll_fn_header - recv_param "" = the C NULL.
 func fn_header(
     v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int, ret_lty: str, fname: str, recv_param: str,
     exported: bool, is_main: bool
@@ -291,12 +239,6 @@ func fn_header(
         hdr, "define " + (exported ? "" : "internal ") + ret_lty + " @" + fname + "("
     )
     mut first := true
-    // main takes the real C argc/argv. Salam's own `func main:` declares no
-    // parameters, so this emitted `define i32 @main()` and the process
-    // arguments never reached the runtime - args() returned an empty vector
-    // in every LLVM-built program (the C backend has always emitted
-    // `main(int argc, char **argv)` and called salam_set_args, see
-    // codegen_decl.c).
     if is_main:
         co.SbPuts(hdr, "i32 %argc, ptr %argv")
         first = false
@@ -343,10 +285,6 @@ func fn_header(
         co.SbPuts(hdr, " minsize")
     end
     co.SbPuts(hdr, " nounwind")
-    // Without this the optimizer rewrites calls into whatever libc it
-    // assumes is there - printf("%s\n", x) becomes puts, strstr(s, "/")
-    // becomes strchr - and a freestanding program fails to link against
-    // names its own runtime never defined.
     if v.freestanding:
         co.SbPuts(hdr, " \"no-builtins\"")
     end
@@ -359,7 +297,6 @@ func fn_header(
     ret r
 end
 
-// ll_spill_params
 func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
     fnode := at.Get(a, fn)
     sg := sm.SigAt(s, sig)
@@ -379,18 +316,6 @@ func spill_params(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, sig: int):
     end
 end
 
-// ll_function - the function frame. Body statements come from stage B's
-// lv_block_top; everything else (header, spills, this-slot, global inits,
-// implicit return, builder nesting) is stage A.
-// Match-expression state is per function. `ret` inside a match arm does not
-// return: lower_return stores to the match's result slot and branches to its
-// merge block. A function emitted ON DEMAND from inside such an arm - by
-// ensure_fn for a call, or by touching a package for the first time -
-// inherited that state and ended with `br label %L0_mend` in a function that
-// has neither that block nor a `ret`, so LLVM rejected the whole module with
-// "use of undefined value '%L0_mend'". Every caller funnels through here, so
-// clearing it here covers the on-demand paths as well as the top-level walk.
-// emit_globals already guards its own nested emission the same way.
 func emit_function(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     saved_mres := v.match_result_ptr
     saved_mts := v.match_result_ts
@@ -406,11 +331,6 @@ end
 
 func emit_function_body(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int):
     fnode := at.Get(a, fn)
-    // A bodyless `extern func` has no definition to emit - but it does need a
-    // `declare`, and this is the one place every call site funnels through
-    // (call_user -> ensure_fn). Returning silently left the call referencing
-    // an undeclared @name whenever the declaring package was never touched by
-    // the scope walk in emit_externs_in.
     if owner == 0 && fnode.is_extern && fnode.a == 0:
         xsig := sig_of(v, s, a, fn, owner)
         if xsig != 0:
@@ -464,14 +384,6 @@ func emit_function_body(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int)
     saved_tmp := v.tmp
     saved_lbl := v.lbl
     saved_nloop := v.nloop
-    // The break/continue target stacks, not just their depth. A
-    // function can be emitted *nested* inside another's body
-    // (ensure_fn fires while lowering a call expression), and the
-    // nested emission resets nloop to 0 and then writes brk[0]/cont[0]
-    // for its own loops - which are the outer function's live
-    // entries. The outer `continue` then branched to a label
-    // belonging to the inner function and never defined in its own,
-    // producing IR that fails to parse.
     mut saved_brk := Vector {} as Vector<str>
     mut saved_dmk := Vector {} as Vector<int>
     mut saved_cont := Vector {} as Vector<str>
@@ -520,48 +432,20 @@ func emit_function_body(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int)
     end
     spill_params(v, s, a, fn, sig)
     if is_main0:
-        // Every return from main flushes the print buffer (see emit_return),
-        // so the helper has to exist even in a program whose own prints all
-        // take the printf path. Only where the buffer is reachable at all:
-        // single_threaded is already false for Windows targets, whose CRT
-        // has no `write` for the helper to call.
         if v.single_threaded && !v.freestanding:
             need(v, LV_H_OUTBUF)
-            // Returning from main is not the only way out: os.Exit() calls
-            // exit(), and an atexit handler can print after main is gone.
-            // Neither path reaches the flush in emit_return, and the
-            // llvm.global_dtors backstop is dropped by a static-musl link
-            // through in-process lld. Registering the flush here, before any
-            // user code runs, puts it last in atexit's LIFO order, so it
-            // still sees what a handler registered later has printed. Not
-            // under --jit: see v.jit.
             if !v.jit:
                 emit(v, new_tmp(v) + " = call i32 @atexit(ptr @salam_out_flush)")
-                // SIGINT/SIGTERM (2/15 everywhere the buffer is live - it is
-                // off for Windows targets) reach neither `ret` nor atexit. A
-                // single-threaded server prints its banner, blocks in
-                // accept(), and is killed: without this the banner never
-                // leaves the buffer. Installed before user code, so a
-                // program that installs its own handler still wins.
                 emit(v, new_tmp(v) + " = call ptr @signal(i32 2, ptr @salam_out_onsig)")
                 emit(v, new_tmp(v) + " = call ptr @signal(i32 15, ptr @salam_out_onsig)")
             end
         end
-        // Hand argc/argv to the runtime before anything can call args().
         mut sa_owner := 0
         sa := body_sig_for(s, a, "salam_set_args", sa_owner)
         if sa >= 0 && sm.SigAt(s, sa).decl != 0:
             ensure_fn(v, s, a, sm.SigAt(s, sa).decl, 0, sm.SymAt(s, sa_owner).members)
             emit(v, "call void @salam_set_args(i32 %argc, ptr %argv)")
         end
-        // Keep freed blocks in the process instead of returning them to the
-        // kernel. glibc hands anything past 128 KiB back with munmap or an
-        // sbrk shrink, so a loop that allocates a result, frees it and
-        // allocates the next one re-faults every page it touches: on a
-        // 4096x4096 f64 matrix add that was two thirds of the wall time and
-        // none of it arithmetic. M_MMAP_THRESHOLD is -3 and M_TRIM_THRESHOLD
-        // is -1; the values clear a 128 MiB matrix, which the first version
-        // of this did not.
         if v.libc_glibc:
             emit(v, new_tmp(v) + " = call i32 @mallopt(i32 -3, i32 268435456)")
             emit(v, new_tmp(v) + " = call i32 @mallopt(i32 -1, i32 536870912)")
@@ -609,7 +493,6 @@ func emit_function_body(v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int)
     v.defers = saved_defers
 end
 
-// ll_ensure_fn
 func ensure_fn(
     v &: Lv, s &: sm.Sema, a &: at.Ast, fn: int, owner: int, pscope: int
 ):
@@ -622,7 +505,6 @@ func ensure_fn(
     v.pkg_scope = saved
 end
 
-// ll_vtbl_name
 func vtbl_name(iface: str, concrete: str): str:
     mut b := co.SbNew()
     co.SbPuts(b, "@vtbl.")
@@ -634,13 +516,6 @@ func vtbl_name(iface: str, concrete: str): str:
     ret r
 end
 
-// ll_match_sig
-// The overload of `m` whose parameters match `iface_sig`'s, not just its
-// arity: two overloads of the same name and arity but different parameter
-// types (legal - overloading is by type, not just count) used to let this
-// pick whichever came first regardless of which one actually satisfies the
-// interface, mismatching the parameter types a vtable slot or dyn_impl_thunk
-// then declares against the ones the selected function actually takes.
 func match_sig(s &: sm.Sema, m: int, iface_sig: int): int:
     sy := sm.SymAt(s, m)
     iparams := sm.SigAt(s, iface_sig).params
@@ -665,7 +540,6 @@ func match_sig(s &: sm.Sema, m: int, iface_sig: int): int:
     ret first
 end
 
-// ll_ensure_vtbl
 func ensure_vtbl(
     v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str, concrete: str
 ):
@@ -705,12 +579,6 @@ func ensure_vtbl(
                     )
                 )
             else:
-                // Nothing on the struct itself; an `impl Iface on Struct`
-                // block may still provide it (sema_generic.salam's
-                // iface_satisfied accepts this too). Those methods take
-                // `this` by value, mangled with the "ti" scheme, so the
-                // vtable - whose slot always calls `fn(ptr data, ...)` -
-                // needs a small thunk that loads the value and forwards.
                 iowner := sym_of(v, s, a, sm.ImplOwnerKey(concrete))
                 mut icsig := 0
                 if iowner != 0 && sm.SymAt(s, iowner).kind == sm.SYM_TYPEIMPL:
@@ -740,10 +608,6 @@ func ensure_vtbl(
     co.SbFree(slots)
 end
 
-
-// A one-off wrapper for a vtable slot backed by an `impl Iface on T` method:
-// the slot always calls `fn(ptr data, ...)`, but a by-value "ti"-mangled
-// impl method wants `T` itself. Loads the value from `data` and forwards.
 func dyn_impl_thunk(
     v &: Lv, s &: sm.Sema, a &: at.Ast, iface: str, concrete: str, mname: str, isig: int, icsig: int
 ): str:
@@ -793,9 +657,7 @@ func dyn_impl_thunk(
     ret tname
 end
 
-// ll_box_dyn - box a struct value into a %dyn { data, vtbl } pair.
 func box_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, iface: str): str:
-    // iface truncated at '*' / '[' into char ib[160]
     n := str.Len(iface)
     mut k := 0
     mut stop := false
@@ -826,7 +688,6 @@ func box_dyn(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, iface: str): str:
     ret t1
 end
 
-// ll_box_variant
 func box_variant(
     v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, tag: int, variant_ts: str
 ): str:
@@ -850,7 +711,6 @@ func box_variant(
     ret result
 end
 
-// ll_unwrap_variant
 func unwrap_variant(
     v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv, member_ts: str
 ): Llv:
@@ -867,7 +727,6 @@ func unwrap_variant(
     ret make_llv(r, member_ts)
 end
 
-// ll_mangle_ti
 func mangle_ti(
     v &: Lv, s &: sm.Sema, typestr: str, fn_name: str, sig: int
 ): str:
@@ -889,7 +748,6 @@ func mangle_ti(
     ret r
 end
 
-// ll_emit_impls_in
 func emit_impls_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     syms := sm.ScopeAt(s, gsc).symbols
     repeat syms.len() with i:
@@ -913,7 +771,6 @@ func emit_impls_in(v &: Lv, s &: sm.Sema, a &: at.Ast, gsc: int):
     end
 end
 
-// ll_emit_impls
 func emit_impls(v &: Lv, s &: sm.Sema, a &: at.Ast):
     emit_impls_in(v, s, a, s.global)
 end

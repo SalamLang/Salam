@@ -12,17 +12,6 @@
  *
  */
 
-// In-process cross-linking - ports native_link_elf/native_link_mingw/
-// native_link_lld (llvm_native.c:546-796): builds an `ld.lld`-style argv
-// and calls lld.salam's Link. The .incbin-embedded musl/mingw sysroot
-// tarballs (SALAM_HAVE_EMBED_MUSL/_MINGW/_EXTRALIBS_*, llvm_native.c:41-
-// 99,225-519) are NOT ported - they exist only to support the C build's
-// asm-embedding trick, which self-host has no build step for yet (a
-// deferred build-pipeline task). Sysroot resolution here still works for
-// cross-compiling: explicit `opts.sysroot` -> $SALAM_SYSROOTS env var ->
-// the OS-default system-package path (mingw-w64/musl-tools) - the same
-// fallback chain the C uses once its embedded-tarball checks come up
-// empty.
 package llvm
 
 @en "LinkResult"
@@ -90,13 +79,6 @@ func find_compiler_rt(rtarch: str): str:
         if !os.IsDir(base):
             continue
         end
-        // Freed explicitly rather than with `defer`, which is how this loop
-        // was written when every backend emitted defers at *function* exit
-        // and a defer on a loop-local landed in the epilogue where that
-        // binding is out of scope. Defers are block-scoped now (SKILL.md
-        // always said scope exit), so `defer entries.free()` would work here
-        // too; the explicit frees are kept because the `continue` paths below
-        // already read cleanly with them.
         entries := os.ListDir(base)
         mut hit := ""
         repeat entries.len() with i:
@@ -234,14 +216,6 @@ func user_libs_of(opts: Options): Vector<str>:
     ret out
 end
 
-// resolve_linker - llvm_native.c:247-258. The C looks for a tool bundled
-// next to the running salam first; std/llvm has no access to that lookup,
-// so this is the platform default it falls back to.
-//
-// Two top-level condcomp arms rather than one function with an `if
-// SALAM_OS_WINDOWS:` inside it: condcomp prunes the dead arm outright, so a
-// `mut` only ever assigned in the pruned branch trips E069 ("declared 'mut'
-// but never mutated") on the other platform.
 if SALAM_OS_WINDOWS:
     func resolve_linker(): str:
         ret "gcc"
@@ -307,9 +281,6 @@ pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
             cmd += " -l" + spec
         end
     end
-    // The C's is_tcc branch picks -lmsvcrt over -lm, but it can only reach
-    // tcc through the bundled-tool lookup this port does not have, so the
-    // linker here is never tcc and -lm is always the right choice.
     cmd += " -lm"
     if os.Run(cmd) == 0:
         ret LinkResult { ok = true }
@@ -412,9 +383,6 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     argv.push(crt1)
     argv.push(crti)
     argv.push("-L" + sr)
-    // --libpath entries after the sysroot but before the object: an
-    // explicitly named directory should still be searched, and archive
-    // order only matters relative to the object and -l flags.
     repeat opts.lib_paths.len() with lpi:
         argv.push("-L" + opts.lib_paths.get(lpi))
     end

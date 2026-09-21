@@ -16,31 +16,6 @@ package graphql
 
 import encoding.value
 
-// execute - the execution algorithm (spec section 6).
-//
-// ExecuteSelectionSet, ExecuteField and CompleteValue follow the spec's
-// structure closely enough that the section numbers are worth keeping
-// in mind while reading.
-//
-// Error propagation is the part worth stating plainly, because it is
-// what separates a real implementation from a toy one. When a field
-// errors, or resolves to null where the schema declared a non-null
-// type, the field's value becomes null and the error is recorded with
-// the field's response path. If that field was non-null, the null
-// cannot stay there, so the *parent* object becomes null instead, and
-// that repeats upward until a nullable position is reached, or the
-// whole `data` entry becomes null. That upward travel is the `bubble`
-// out-parameter threaded through every completion function: it means
-// "this position could not hold the null it was given, so the caller
-// must null itself too".
-//
-// Execution state lives in one Ex struct passed by reference rather
-// than in globals, so two schemas can execute concurrently in separate
-// call stacks without stepping on each other. The response path is a
-// stack on Ex that is pushed and popped as the walk descends, so
-// building an error path costs no copying until an error actually
-// happens.
-
 @en "Ex"
 @fa "وضعیت اجرا"
 @ar "حالة التنفیذ"
@@ -55,8 +30,6 @@ pub struct Ex:
     pub depth: int = 0
     pub maxDepth: int = 512
 end
-
-// ---- private: path and errors ----
 
 func _ex_push_key(ex &: Ex, key: str):
     ex.pathKeys.push(key)
@@ -95,8 +68,6 @@ func _ex_error(ex &: Ex, message: str, line: int, col: int):
     end
     AddError(ex.errors, e)
 end
-
-// ---- private: arguments ----
 
 func _ex_arg_from_literal(ex &: Ex, argDef: InputValueDef, a: AstArgument, out &: value.Value, name: str): bool:
     lit := LiteralToValue(ex.sch, ex.doc, a.value, ex.vars)
@@ -160,8 +131,6 @@ func _ex_coerce_args(ex &: Ex, fieldDef: FieldDef, sel: AstSelection, ok &: bool
     ret out
 end
 
-// ---- private: resolving one field's raw value ----
-
 // The default resolver reads the field's own name off the parent object
 // (spec 6.4.2 leaves this to the implementation; every GraphQL server
 // uses a property lookup). __typename is answered from the object type
@@ -221,8 +190,6 @@ func _ex_resolve_abstract(ex &: Ex, abstractName: str, v: value.Value, sel: AstS
     _ex_error(ex, _gql_no_typename_msg(abstractName), sel.line, sel.col)
     ret ""
 end
-
-// ---- private: completion ----
 
 func _ex_complete_leaf(ex &: Ex, typeName: str, v: value.Value, sel: AstSelection): value.Value:
     r := CoerceLeafResult(ex.sch, typeName, v)
@@ -301,8 +268,6 @@ func _ex_complete_nullable(ex &: Ex, t: AstTypeRef, g: FieldGroup, v: value.Valu
     ret _ex_complete_object(ex, t.name, g, v, sel, bubble)
 end
 
-// ---- private: fields and selection sets ----
-
 // __typename is answerable on any object type and is not declared as a
 // field, so it is handled before the schema lookup that would fail.
 func _ex_typename_field(ex &: Ex, objectType: str, g: FieldGroup, out &: value.Value): bool:
@@ -335,9 +300,6 @@ func _ex_field(ex &: Ex, objectType: str, parent: value.Value, g: FieldGroup, ou
     if argsOk:
         raw = _ex_resolve_field(ex, objectType, parent, sel, args, resolveFailed)
     end
-    // A field that already raised an error yields null without a second
-    // "cannot return null" error on top of the first (spec 6.4.4): the
-    // resolver's own message is the useful one.
     if !argsOk || resolveFailed:
         _ex_pop(ex)
         if TypeRefIsNonNull(ex.sch.doc, fieldDef.typeRef):
@@ -403,8 +365,6 @@ func _ex_selection_set(ex &: Ex, objectType: str, sels: Vector<int>, parent: val
     ex.depth -= 1
     ret out
 end
-
-// ---- private: variables ----
 
 func _ex_var_missing(ex &: Ex, vd: AstVariableDef, out &: value.Value): bool:
     if vd.hasDefault:

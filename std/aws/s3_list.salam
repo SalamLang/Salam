@@ -14,19 +14,6 @@
 
 package aws
 
-// Listing: what is in the bucket.
-//
-// S3 has no directories. What it has is a flat key space and a delimiter, and
-// the illusion of a folder is what you get by listing with `prefix = "photos/"`
-// and `delimiter = "/"`: keys directly under it come back as objects, and
-// everything deeper is collapsed into a common prefix, which is the folder.
-// That single fact explains the whole shape of this API.
-//
-// A listing is always paginated - a thousand keys at a time by default - and a
-// caller that ignores the truncation flag silently sees a prefix of the truth.
-// S3List() hands back one page and the token for the next; S3ListAll() follows
-// the tokens itself and is the one to reach for unless the count is unbounded.
-
 import str
 import encoding.xml
 
@@ -217,8 +204,6 @@ func _parse_list(res: Result): ObjectList:
         next_key_marker = _decoded(_xml_text(root, "NextKeyMarker"), encoded),
         next_version_marker = _xml_text(root, "NextVersionIdMarker")
     }
-    // V1 resumes on a marker; when S3 omits NextMarker on a truncated V1 page,
-    // the last key is the marker, which is what the specification says to do.
     if out.next_token.len() == 0:
         out.next_token = _decoded(_xml_text(root, "NextMarker"), encoded)
     end
@@ -258,8 +243,6 @@ func _list_result(l: ObjectList): Result:
         length = l.items.len() as i64
     }
 end
-
-// ------------------------------------------------------------- public API
 
 // S3List - one page of a listing.
 //
@@ -331,10 +314,6 @@ pub func S3ListAllWith(cfg: Config, o: ListOptions): ObjectList:
             out.key_count = out.items.len()
             ret out
         end
-        // A token that does not advance means the service is answering the
-        // same page forever. Stopping is the only safe reading: continuing
-        // collects the same keys until the cap, and reports a count that is
-        // pure fiction.
         if page.next_token == opts.continuation_token:
             out.truncated = true
             out.next_token = page.next_token
@@ -436,13 +415,9 @@ pub func S3DeleteMany(cfg: Config, keys: KeyList): Result:
         SetFlag(r, "delete")
         SetText(r, body)
         SetHeader(r, "Content-Type", "application/xml")
-        // S3 requires Content-MD5 on this one request, and several
-        // S3-compatible services enforce it even where AWS no longer does.
         SetHeader(r, "Content-MD5", S3ContentMd5(body as void*, body.len()))
         res := Do(cfg, r)
         if !res.ok: ret res end
-        // A batch delete answers 200 even when individual keys failed; the
-        // failures are in the body, and quiet mode means nothing else is.
         if res.body.find("<Error>") >= 0:
             mut bad := res
             bad.ok = false

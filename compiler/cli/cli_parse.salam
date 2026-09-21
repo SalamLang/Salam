@@ -11,17 +11,12 @@ import i18 "../i18n.salam"
 import co "../sal_core.salam"
 import pf "../prof_self.salam"
 
-// plural_suffix: "" for a count of exactly 1, "s" otherwise.
 func plural_suffix(n: int): str:
     ret n == 1 ? "" : "s"
 end
 
-// Unsigned byte read from a str (same idiom used throughout the port, e.g.
-// driver.salam's byte_at / str/str.salam's _bp+_ub - re-derived locally
-// since those are private to their own packages).
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
-// cli_opt_value: arg == "key=VALUE" ? val=VALUE, true : false.
 func opt_value(arg: str, key: str, val &: str): bool:
     prefix := key + "="
     if str.StartsWith(arg, prefix):
@@ -31,9 +26,6 @@ func opt_value(arg: str, key: str, val &: str): bool:
     ret false
 end
 
-// strtol(val, &endp, 10) with the same "every char must be a digit, no
-// trailing junk, range 1-16" validation cli_options.c's --indent handler
-// does (endp==val || *endp || n<1 || n>16 -> reject).
 func parse_indent_width(val: str, out &: int): bool:
     n := str.Len(val)
     if n == 0:
@@ -56,11 +48,6 @@ func parse_indent_width(val: str, out &: int): bool:
     ret true
 end
 
-// --timeout=<ms> for `salam run`/`exec`/`jit`: the tree-walking interpreter's
-// wall-clock deadline (interp.salam defaults to 5000ms when unset). Same
-// digit-only validation as parse_indent_width, but no small upper cap since
-// long-running interpreted programs are a legitimate use case; still bounded
-// so a garbage/huge value can't overflow the int field.
 func parse_timeout_ms(val: str, out &: int): bool:
     n := str.Len(val)
     if n == 0 || n > 9:
@@ -83,7 +70,6 @@ func parse_timeout_ms(val: str, out &: int): bool:
     ret true
 end
 
-// cli_options.c's --port handler for `salam serve`.
 func parse_port(val: str, out &: int): bool:
     n := str.Len(val)
     if n == 0 || n > 5:
@@ -106,16 +92,10 @@ func parse_port(val: str, out &: int): bool:
     ret true
 end
 
-// cli_options.c's cli_check_const_name: -dNAME / -dNAME=VALUE names are held
-// to SCREAMING_SNAKE_CASE - an upper-case letter or '_' first, then upper
-// case, digits and '_'. A build-injected constant should read as one at
-// every use site, so a lower-case name is rejected rather than quietly
-// accepted, and '-', which would not lex as an identifier at all, gets a
-// message of its own.
 func check_const_name(def: str): bool:
     total := str.Len(def)
     mut n := 0
-    until n < total && byte_at(def, n) != 61: // '='
+    until n < total && byte_at(def, n) != 61:
         n += 1
     end
     if n == 0:
@@ -126,10 +106,10 @@ func check_const_name(def: str): bool:
     mut i := 0
     until i < n:
         code := byte_at(def, i)
-        upper := code >= 65 && code <= 90 // 'A'..'Z'
-        digit := code >= 48 && code <= 57 // '0'..'9'
-        if !upper && code != 95 && !(digit && i > 0): // '_'
-            if code == 45: // '-'
+        upper := code >= 65 && code <= 90
+        digit := code >= 48 && code <= 57
+        if !upper && code != 95 && !(digit && i > 0):
+            if code == 45:
                 io.EPrintln(
                     co.Format1(
                         i18.Tr("salam: '-' is not allowed in a -d constant name ('%s'); use '_'"),
@@ -151,7 +131,6 @@ func check_const_name(def: str): bool:
     ret true
 end
 
-// cli_options.c's cli_add_const.
 func add_const(def: str, out &: dr.Dr): bool:
     if !check_const_name(def):
         ret false
@@ -160,9 +139,6 @@ func add_const(def: str, out &: dr.Dr): bool:
     ret true
 end
 
-// core/sb.c's sb_put_shell_arg: quote a single argv-style token so it
-// survives a shell command line built with string concatenation (used by
-// debug_cmd/memcheck_cmd, which invoke gdb/lldb/valgrind via os.Run).
 func shell_arg(s: str): str:
     if SALAM_OS_WINDOWS:
         mut out := `"`
@@ -171,7 +147,7 @@ func shell_arg(s: str): str:
         ret out
     else:
         mut sb := str.NewBuilder()
-        str.BufAppendChar(sb, 39) // '
+        str.BufAppendChar(sb, 39)
         n := str.Len(s)
         mut i := 0
         until i < n:
@@ -190,14 +166,10 @@ func shell_arg(s: str): str:
     end
 end
 
-// debug_cmd.c's path_stem: basename with the extension stripped.
 func path_stem(path: str): str:
     ret pth.PathStem(path)
 end
 
-// ---------------------------------------------------------------------------
-// cli_options.c's cli_positional
-// ---------------------------------------------------------------------------
 func positional(arg: str, out &: dr.Dr): bool:
     if out.command == dr.CMD_NEW:
         if str.Len(out.new_name) > 0:
@@ -229,11 +201,6 @@ func positional(arg: str, out &: dr.Dr): bool:
             out.run_args.push(arg)
         end
     else out.command == dr.CMD_REPL || out.command == dr.CMD_REPL_LAYOUT:
-        // The REPL reads its program from the prompt, so a file (or a
-        // mistyped subcommand) named here would be silently ignored:
-        // `salam cli layout` quietly started the GENERAL prompt, and
-        // `salam cli app.salam` quietly started a prompt instead of
-        // running the file.
         if str.Equals(arg, "layout"):
             io.EPrintln(
                 i18.Tr("salam: the layout REPL is 'salam layout', not 'salam cli layout'")
@@ -268,11 +235,6 @@ func positional(arg: str, out &: dr.Dr): bool:
     ret true
 end
 
-// ---------------------------------------------------------------------------
-// cli_subcmd.c's cli_dispatch_command. `args` mirrors C's argv exactly:
-// args[0] is the program name (see main.salam / os.Args()'s salam_set_args
-// contract), args[1] is the first real word.
-// ---------------------------------------------------------------------------
 func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
     mut start := 1
     n := args.len()
@@ -354,18 +316,11 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
             start = 2
         end
     else:
-        // Unmatched `cmd` (e.g. a bare "file.salam"): no command word was
-        // given, so this is an error - a command (run/build/exec/inspect/...)
-        // is now required. ParseArgs checks for CMD_UNKNOWN and bails before
-        // parse_options ever runs.
         out.command = dr.CMD_UNKNOWN
     end
     ret start
 end
 
-// ---------------------------------------------------------------------------
-// cli_options.c's cli_parse_options
-// ---------------------------------------------------------------------------
 func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
     n := args.len()
     mut i := start
@@ -508,9 +463,6 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
         else opt_value(arg, "--cc", val):
             out.cc = val
             out.cc_explicit = true
-            // --cc names a *C* compiler, so asking for one is asking for the
-            // C backend; without this an explicit --cc=gcc would be silently
-            // ignored once LLVM became the default.
             if str.Equals(out.backend, "auto"):
                 out.backend = "c"
             end

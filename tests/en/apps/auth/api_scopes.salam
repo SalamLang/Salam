@@ -14,26 +14,6 @@
 
 package main
 
-// Four ways to say "and you also have to be allowed to do this".
-//
-//     salam run tests/en/apps/auth/api_scopes.salam
-//     curl -s -XPOST localhost:8084/login -d '{"user":"sara"}'   # admin
-//     curl -s -XPOST localhost:8084/login -d '{"user":"ali"}'    # plain member
-//
-// 401 vs 403 is the distinction worth getting right. 401 means "I do not
-// know who you are" - the credential is missing, expired or forged, and
-// retrying with a better one may work. 403 means "I know exactly who you
-// are, and no" - retrying is pointless. jwt.Require* returns the first;
-// the scope, claim and subject checks return the second.
-//
-//   jwt.Require        signed in
-//   jwt.RequireScope   ... and "scope" contains the named scope
-//   jwt.RequireClaim   ... and a claim equals, or an array claim contains
-//   jwt.RequireSubject ... and it is that user's own resource
-//
-// The last one is the guard people forget. Being signed in is not permission
-// to read /users/someone-else/settings.
-
 import jwt
 import net.http
 import net.router
@@ -53,8 +33,6 @@ func send(ctx: i64, code: int, body: str):
     http.Ctx_json(ctx, body)
 end
 
-// Two accounts with different rights. A real service reads these from a
-// users table; the shape of the claims is the part to copy.
 func scopes_of(user: str): str:
     if user == "sara": ret "reports:read reports:write billing:read" end
     if user == "ali": ret "reports:read" end
@@ -67,8 +45,6 @@ func roles_of(user: str): str:
     ret "[]"
 end
 
-// No password here - this example is about authorisation, not authentication.
-// api_protected.salam is the one that checks a password.
 func login(ctx: i64):
     user := json.Get(http.Ctx_body(ctx), "user")
     if scopes_of(user).len() == 0:
@@ -77,38 +53,31 @@ func login(ctx: i64):
     end
     mut c := jwt.NewClaims()
     c.sub = user
-    // A space-delimited "scope" string is the OAuth 2 convention, and what
-    // jwt.HasScope / jwt.RequireScope read.
     jwt.SetStr(c, "scope", scopes_of(user))
-    // Roles as a JSON array, read by jwt.ListHas / jwt.RequireClaim.
     jwt.SetRaw(c, "roles", roles_of(user))
     mut err := 0
     token := jwt.Issue(guard(), c, 3600 as i64, err)
     send(ctx, 200, `{"token":"` + token + `"}`)
 end
 
-// 1. signed in, nothing more
 func reports(ctx: i64):
     mut t := jwt.Token {}
     if !jwt.Require(ctx, guard(), t): ret end
     send(ctx, 200, `{"reports":["q1","q2"],"for":"` + t.claims.sub + `"}`)
 end
 
-// 2. signed in AND holding a scope
 func create_report(ctx: i64):
     mut t := jwt.Token {}
     if !jwt.RequireScope(ctx, guard(), "reports:write", t): ret end
     send(ctx, 201, `{"created":true,"by":"` + t.claims.sub + `"}`)
 end
 
-// 3. signed in AND carrying a role
 func audit_log(ctx: i64):
     mut t := jwt.Token {}
     if !jwt.RequireClaim(ctx, guard(), "roles", "admin", t): ret end
     send(ctx, 200, `{"entries":41,"viewer":"` + t.claims.sub + `"}`)
 end
 
-// 4. signed in AND it is your own record
 func user_settings(ctx: i64):
     id := http.Ctx_param(ctx, "id")
     mut t := jwt.Token {}
@@ -116,9 +85,6 @@ func user_settings(ctx: i64):
     send(ctx, 200, `{"user":"` + id + `","theme":"dark"}`)
 end
 
-// Two rules at once, and the order matters: authenticate, then authorise.
-// Anything that reads a claim before Require has run is reading unverified
-// input.
 func close_account(ctx: i64):
     id := http.Ctx_param(ctx, "id")
     mut t := jwt.Token {}

@@ -6,17 +6,6 @@ import pth "../sal_path.salam"
 import sm "../semantic/semantic.salam"
 import lb "../llvm_bridge.salam"
 
-// The host toolchain's own library directory, as the tool will see it.
-//
-// On Windows this path drives the build through `wsl.exe -e bash`, so clang
-// there searches Linux prefixes. Everything the mingw sysroot provides still
-// resolves, but a third-party import library does not: msys2 keeps
-// libsqlite3 in /mingw64/lib, the C backend finds it because it runs the host
-// compiler directly, and this path failed every db test with
-// "unable to find library -lsqlite3". Adding the directory the native
-// compiler would have used closes the gap without changing how the build is
-// driven. Empty when no host compiler is on disk, which leaves the command
-// exactly as it was.
 func nt_host_lib_dir(): str:
     mut p := ""
     if !sm.FindBundledTool("clang", p):
@@ -35,7 +24,6 @@ func nt_host_lib_dir(): str:
     ret nt_to_tool_path(lib)
 end
 
-// opt_flag
 func nt_opt_flag(l: int): str:
     if l == LV_OPT_O0:
         ret "-O0"
@@ -58,9 +46,6 @@ func nt_opt_flag(l: int): str:
     ret "-O0"
 end
 
-// triple_is_windows / triple_is_wasm (llvm_toolchain.c: no host-OS fallback
-// for an empty triple, unlike ll_target_is_windows a few hundred lines up - // an empty/default triple means "host default", and the C's `!win && !wasm`
-// gate for appending `-lm` must stay true in that case).
 func nt_triple_is_windows(t: str): bool:
     if str.Len(t) == 0:
         ret false
@@ -72,11 +57,6 @@ func nt_triple_is_wasm(t: str): bool:
     ret str.Len(t) > 0 && str.Contains(t, "wasm")
 end
 
-// sb_put_shell_arg. Windows branch: C-style double-quote escaping (only
-// reachable when SALAM_OS_WINDOWS is compiled in, which this port's own
-// WSL/Linux verification builds prune away, exactly like every other
-// host-OS conditional in this file). POSIX branch: single-quote wrap with
-// '\'' escaping.
 func nt_shell_arg(v: str): str:
     if SALAM_OS_WINDOWS:
         mut out := `"`
@@ -131,32 +111,10 @@ func nt_shell_arg(v: str): str:
     end
 end
 
-// A literal % in a batch file is expanded as a %VAR% environment reference
-// while the line is read, even inside quotes and even as a bare command-line
-// argument to `cmd /c` - doubling it to %% is the only escape cmd.exe
-// honors, for a path headed into a .bat body or the launcher line itself.
 func nt_bat_percent_escape(s: str): str:
     ret str.Replace(s, "%", "%%")
 end
 
-// to_tool_path. POSIX: passed through unchanged (the C's realpath() call is
-// skipped - no Salam stdlib equivalent, and every caller in this port
-// already hands a cwd-relative or absolute path that bash resolves fine on
-// its own). Windows: `C:\foo\bar` -> `/mnt/c/foo/bar` for `wsl.exe -e bash`
-// (drive-letter case-folded, backslashes flipped); a path with no drive
-// prefix is passed through as-is. This branch is compile-time-pruned out on
-// every build this port is verified against.
-// Whether this Windows host can drive the toolchain itself instead of
-// through `wsl.exe -e bash`.
-//
-// The two do not see the same libraries. WSL's clang searches Linux prefixes,
-// so a third-party import library the C backend picks up from msys2's
-// /mingw64/lib - sqlite3, say - is invisible and the link fails with
-// "unable to find library -lsqlite3". Adding that directory with -L is not a
-// fix either: the mingw runtime then comes half from WSL's
-// /usr/x86_64-w64-mingw32 and half from msys2, and the link fails on
-// _gnu_exception_handler instead. Using one toolchain end to end is the only
-// coherent answer, and it is what the C backend has always done.
 func nt_win_native_cc(out &: str): bool:
     if SALAM_OS_WINDOWS:
         if sm.FindBundledTool("clang", out):
@@ -172,8 +130,6 @@ func nt_to_tool_path(host: str): str:
     if SALAM_OS_WINDOWS:
         mut probe := ""
         if nt_win_native_cc(probe):
-            // Running the toolchain ourselves: it wants host paths, and the
-            // /mnt/<drive> form below would be meaningless to it.
             ret host
         end
         n := str.Len(host)
@@ -193,8 +149,6 @@ func nt_to_tool_path(host: str): str:
     end
 end
 
-// resolve_tool - sm.FindBundledTool next to the running executable, else a
-// bare fallback name resolved via PATH by the shell.
 func nt_resolve_tool(bundled: str, fallback: str): str:
     mut out := ""
     if sm.FindBundledTool(bundled, out):
@@ -202,9 +156,6 @@ func nt_resolve_tool(bundled: str, fallback: str): str:
     end
     mut probe := ""
     if nt_win_native_cc(probe):
-        // No shell will resolve this for us, so do it here. Falls through to
-        // the bare name when the tool is not on $PATH either, which keeps the
-        // error message the same as before.
         if sm.FindPathTool(bundled, out):
             ret out
         end
@@ -212,12 +163,10 @@ func nt_resolve_tool(bundled: str, fallback: str): str:
     ret fallback
 end
 
-
 func nt_has_path_char(spec: str): bool:
     ret str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, ".")
 end
 
-// emit_llvm_link
 func nt_emit_llvm_link(spec: str, kind: str): str:
     if str.Len(spec) == 0:
         ret " -l" + nt_shell_arg(spec)
@@ -230,24 +179,12 @@ func nt_emit_llvm_link(spec: str, kind: str): str:
     if byte_at(spec, 0) == 45 || nt_has_path_char(spec):
         ret " " + nt_shell_arg(spec)
     end
-    // -l:libX.a - GNU ld/lld "exact archive name" syntax, picks the static
-    // archive regardless of a same-named shared lib also being on the
-    // search path. Previously gated on `!windows` (mirroring the pre-fix
-    // C), silently falling back to a bare (dynamic) -lX there - but the
-    // clang this script invokes on Windows still targets *-w64-mingw32
-    // through the same GNU-compatible driver/lld-mingw-flavor toolchain
-    // this whole driver assumes elsewhere, which understands -l: just
-    // like the Linux/macOS case - see c/src/driver/llvm_toolchain.c's
-    // emit_llvm_link for the parity fix this mirrors.
     if is_static:
         ret " -l:lib" + nt_shell_arg(spec) + ".a"
     end
     ret " -l" + nt_shell_arg(spec)
 end
 
-// emit_tool_cmd - the tool-invocation line(s) appended after the script's
-// IN/OUT/SYSROOT variable assignments. link_kinds shorter than link_libs
-// (or absent) reads as "" per slot, same as the C's NULL kind.
 func nt_emit_tool_cmd(opts: Options): str:
     clang_tool := nt_resolve_tool("clang", "clang-22")
     opt_tool := nt_resolve_tool("opt", "opt-22")
@@ -296,8 +233,6 @@ func nt_emit_tool_cmd(opts: Options): str:
         if win:
             out += " -fuse-ld=lld"
         end
-        // --libpath=DIR entries first: an explicitly named directory should
-        // win over the sysroot's own copy of a same-named archive.
         mut lp2 := 0
         until lp2 < opts.lib_paths.len():
             out += ` -L"` + opts.lib_paths.get(lp2) + `"`
@@ -334,11 +269,6 @@ func nt_emit_tool_cmd(opts: Options): str:
     ret out
 end
 
-// The triple the toolchain would pick for itself, i.e. what an empty
-// --target means at link time. Asked of the same clang that will do the
-// linking, or of the linked-in LLVM when this binary has one, because
-// nothing on disk answers it reliably: a glibc box with musl-dev installed
-// has the musl loader sitting in /lib too.
 func nt_host_triple(): str:
     embedded := lb.HostTriple()
     if str.Len(embedded) > 0:
@@ -352,11 +282,6 @@ func nt_host_triple(): str:
     ret str.Trim(r.out)
 end
 
-// Whether the machine this compiler runs on links glibc - the libc question
-// for an empty target triple. Everything but Linux is a no; on Linux the
-// host triple decides, and when there is no toolchain to ask at all the
-// answer is no, since the calls this gates are an optimization and a
-// wrong yes fails the link outright.
 func nt_host_is_glibc(): bool:
     if SALAM_OS_LINUX:
         t := nt_host_triple()
@@ -369,7 +294,6 @@ func nt_host_is_glibc(): bool:
     end
 end
 
-// A quick "<tool> --version" PATH probe (redirected, exit code only).
 func nt_probe_tool(tool: str): bool:
     mut cmd := `"` + tool + `" --version`
     if SALAM_OS_WINDOWS:
@@ -379,21 +303,3 @@ func nt_probe_tool(tool: str): bool:
     end
     ret os.Run(cmd) == 0
 end
-
-// ===========================================================================
-// PUBLIC API (rule E088: pub functions last). Mapping to the C surface:
-//   OptionsDefault  = codegen_llvm_options_default
-//   ErrorOf         = codegen_llvm_error
-//   Run             = codegen_llvm_run
-//   RunOpts         = codegen_llvm_run_opts (opts by value; OptionsDefault()
-//                     plays the C NULL; src_path "" = NULL)
-//   NativeAvailable/NativeRun = driver/llvm_toolchain.c's clang/opt/lli
-//                     shell-out path (salam_llvm_toolchain's fallback
-//                     branch - see the file-header note for why, not
-//                     llvm_native.c's #ifdef SALAM_HAVE_LLVM body).
-//   NativeBuildScript = no direct C equivalent - exposes emit_tool_cmd's
-//                     generated script text for assertions without running
-//                     a real toolchain.
-// The remaining pubs re-export internals for tests_port/llvm_test.salam and
-// stage B/C (the role of codegen_llvm_internal.h).
-// ===========================================================================

@@ -12,37 +12,6 @@
  *
  */
 
-// The Unicode bidirectional algorithm, UAX #9.
-//
-// Persian and Arabic run right to left, but the text around them rarely runs
-// only one way: a Persian sentence quoting a product code, a phone number, or
-// an English brand name contains left-to-right runs inside a right-to-left
-// paragraph, and Arabic-Indic digits themselves run left to right. Storage
-// order and display order are therefore different things, and working out the
-// second from the first is not a matter of "reverse it if the language is
-// Persian" - it is this algorithm.
-//
-// What is here:
-//
-//   ParagraphLevel  the base direction, either detected from the text or
-//                   forced by the caller
-//   Levels          the resolved embedding level of each code point
-//   VisualOrder     the permutation from logical order to display order
-//   Reorder         that permutation applied, as a string
-//
-// Reorder produces text in display order. That is what a renderer without bidi
-// support needs, and it is exactly the wrong thing to store: reordered text
-// has lost the information needed to lay it out again at a different width.
-// Store logical order, reorder at the point of drawing.
-//
-// Not here: shaping. Turning the reordered code points into the joined,
-// context-dependent glyph forms that Arabic script is actually written in is a
-// separate problem, and one that belongs to a font engine.
-//
-// The implementation follows the rule numbering of UAX #9 - P2, X1..X10,
-// W1..W7, N0..N2, I1..I2, L1..L2 - and the comments name the rule each block
-// implements, because the rules are only comprehensible against the spec.
-
 @en "bidi"
 @fa "دوسویه"
 @ar "ثنائي الاتجاه"
@@ -70,10 +39,6 @@ const _MAX_DEPTH := 125
 const _OVR_NEUTRAL := 0
 const _OVR_LTR := 1
 const _OVR_RTL := 2
-
-// ---------------------------------------------------------------------------
-// class predicates
-// ---------------------------------------------------------------------------
 
 inline pure func _is_isolate_init(t: int): bool:
     ret t == unicode.BcLRI || t == unicode.BcRLI || t == unicode.BcFSI
@@ -115,10 +80,6 @@ func _new_ints(n: int, fill: int): Vector<int>:
     repeat n with _: out.push(fill) end
     ret out
 end
-
-// ---------------------------------------------------------------------------
-// P2/P3 and BD9
-// ---------------------------------------------------------------------------
 
 // Rules P2 and P3 over types[from..stop): the direction of the first strong
 // character, skipping anything inside an isolate, or 0 if there is none.
@@ -163,10 +124,6 @@ func _match_isolates(types: Vector<int>, pdi_of &: Vector<int>, init_of &: Vecto
         end
     end
 end
-
-// ---------------------------------------------------------------------------
-// X1..X8: explicit levels and overrides
-// ---------------------------------------------------------------------------
 
 // Applies the explicit formatting rules, filling `levels` and rewriting
 // `types` where a directional override is in force.
@@ -228,7 +185,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
 
             mut rtl := t == unicode.BcRLI
             if t == unicode.BcFSI:
-                // X5c: an FSI takes the direction its own contents imply.
                 mut stop := pdi_of.get(i)
                 if stop < 0: stop = n end
                 rtl = _auto_level(types, i + 1, stop) == 1
@@ -248,7 +204,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
                 overflow_iso += 1
             end
         else t == unicode.BcPDI:
-            // X6a.
             if overflow_iso > 0:
                 overflow_iso -= 1
             else valid_iso > 0:
@@ -268,11 +223,8 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
             if st_over.get(ntop) == _OVR_LTR: types.set(i, unicode.BcL)
             else st_over.get(ntop) == _OVR_RTL: types.set(i, unicode.BcR) end
         else t == unicode.BcPDF:
-            // X7. Removed by X9; level recorded for consistency.
             levels.set(i, cur)
             if overflow_iso > 0:
-                // An isolate is open; this PDF cannot match anything, so it
-                // is dropped without touching the stack.
                 overflow_iso += 0
             else overflow_emb > 0:
                 overflow_emb -= 1
@@ -283,7 +235,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
             end
             levels.set(i, st_level.get(st_level.len() - 1))
         else t == unicode.BcB:
-            // X8. A paragraph separator always returns to the base level.
             levels.set(i, para)
         else:
             // X6.
@@ -320,9 +271,6 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         prev = types.get(p)
     end
 
-    // W2: a European number becomes an Arabic number when the last strong type
-    // before it was an Arabic letter. This is what makes "١٢٣" and "123"
-    // behave differently inside Arabic text.
     mut strong := sos
     repeat m with k:
         p := seq.get(k)
@@ -333,13 +281,11 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         end
     end
 
-    // W3: Arabic letters are right-to-left from here on.
     repeat m with k:
         p := seq.get(k)
         if types.get(p) == unicode.BcAL: types.set(p, unicode.BcR) end
     end
 
-    // W4: a single separator between two numbers of the same kind joins them.
     repeat m with k:
         if k == 0: continue end
         if k + 1 >= m: continue end
@@ -356,8 +302,6 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         end
     end
 
-    // W5: a run of terminators adjacent to a European number joins it, so that
-    // "$123" and "123%" hold together.
     mut k := 0
     until k < m:
         if types.get(seq.get(k)) != unicode.BcET:
@@ -381,7 +325,6 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         k = e
     end
 
-    // W6: whatever separators and terminators are left are neutral.
     repeat m with q:
         p := seq.get(q)
         t := types.get(p)
@@ -390,7 +333,6 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         end
     end
 
-    // W7: a European number in left-to-right context is simply left-to-right.
     strong = sos
     repeat m with q:
         p := seq.get(q)
@@ -401,10 +343,6 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
         end
     end
 end
-
-// ---------------------------------------------------------------------------
-// N0: paired brackets
-// ---------------------------------------------------------------------------
 
 // Canonical equivalence for the two bracket pairs that have singleton
 // decompositions - BD16 requires U+2329 and U+3008 to match each other's
@@ -424,8 +362,6 @@ func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>,
     mut o := unicode.BcL
     if e == unicode.BcL: o = unicode.BcR end
 
-    // BD16: match brackets with a stack, capped at 63 openers. Past that the
-    // spec stops matching rather than growing.
     stack_pos := Vector {} as Vector<int>
     defer stack_pos.free()
     stack_cp := Vector {} as Vector<int>
@@ -464,7 +400,6 @@ func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>,
         k += 1
     end
 
-    // Pairs must be processed in the order their openers appear.
     mut a := 0
     until a < open_at.len():
         mut b := a + 1
@@ -499,12 +434,8 @@ func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>,
 
         mut chosen := 0 - 1
         if found_e:
-            // Strong text inside matching the embedding direction settles it.
             chosen = e
         else found_o:
-            // Otherwise the brackets follow the opposite direction only if the
-            // context before them already runs that way; if not, they stay
-            // with the embedding direction.
             mut ctx := sos
             mut r := ko - 1
             until r >= 0:
@@ -522,8 +453,6 @@ func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>,
         if chosen >= 0:
             types.set(seq.get(ko), chosen)
             types.set(seq.get(kc), chosen)
-            // A nonspacing mark that followed the bracket took the bracket's
-            // old type under W1 and has to follow it here too.
             mut z := ko + 1
             until z < m && _orig_nsm(cps, seq, z):
                 types.set(seq.get(z), chosen)
@@ -545,10 +474,6 @@ inline func _orig_nsm(cps: Vector<int>, seq: Vector<int>, k: int): bool:
     ret unicode.BidiClass(cps.get(seq.get(k))) == unicode.BcNSM
 end
 
-// ---------------------------------------------------------------------------
-// N1..N2, I1..I2
-// ---------------------------------------------------------------------------
-
 func _resolve_neutrals(types &: Vector<int>, seq: Vector<int>, level: int, sos: int, eos: int):
     m := seq.len()
     e := _level_dir(level)
@@ -566,8 +491,6 @@ func _resolve_neutrals(types &: Vector<int>, seq: Vector<int>, level: int, sos: 
         if k > 0: before = _n_dir(types.get(seq.get(k - 1))) end
         mut after := eos
         if end_k < m: after = _n_dir(types.get(seq.get(end_k))) end
-        // N1: neutrals between two runs of the same direction take it.
-        // N2: otherwise they take the embedding direction.
         mut fill := e
         if before == after && before >= 0: fill = before end
         mut j := k
@@ -598,10 +521,6 @@ func _resolve_implicit(types: Vector<int>, seq: Vector<int>, levels &: Vector<in
         end
     end
 end
-
-// ---------------------------------------------------------------------------
-// driver
-// ---------------------------------------------------------------------------
 
 // Decodes `s` into code points.
 func _code_points(s: str): Vector<int>:
@@ -647,18 +566,10 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
     repeat n with i: levels.set(i, para) end
     _explicit_levels(types, pdi_of, para, levels)
 
-    // X10 computes each sequence's boundary types from the levels the X rules
-    // assigned. Those have to be read from a snapshot: rules I1 and I2 raise
-    // levels as each sequence is resolved, so by the time a later sequence
-    // asks for its neighbour's level the live array no longer holds the
-    // explicit one. Reading the mutated value makes sos come out R instead of
-    // L next to a resolved right-to-left run, which silently pushes a whole
-    // trailing number run to the wrong level.
     explicit := _new_ints(n, 0)
     defer explicit.free()
     repeat n with i: explicit.set(i, levels.get(i)) end
 
-    // X9: drop the embedding controls and boundary neutrals.
     retained := Vector {} as Vector<int>
     defer retained.free()
     repeat n with i:
@@ -666,7 +577,6 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
     end
     rn := retained.len()
 
-    // BD7: split what is left into level runs.
     run_start := Vector {} as Vector<int>
     defer run_start.free()
     run_end := Vector {} as Vector<int>
@@ -686,10 +596,6 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
         k = e
     end
 
-    // BD13: chain level runs into isolating run sequences. A run that ends
-    // with a matched isolate initiator continues at the run beginning with
-    // that initiator's PDI, so the text on both sides of an isolate is
-    // resolved as one sequence and the isolated text is not.
     used := _new_ints(run_start.len(), 0)
     defer used.free()
     mut r := 0
@@ -723,7 +629,6 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
             cur = nr
         end
 
-        // X10: the boundary types on either side of the sequence.
         level := explicit.get(seq.get(0))
         mut prev_level := para
         pi := run_start.get(r) - 1
@@ -751,9 +656,6 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
         r += 1
     end
 
-    // L1: separators and any trailing run of whitespace or isolate formatting
-    // go back to the paragraph level. This uses the ORIGINAL types - by now
-    // the working types have been rewritten past recognition.
     mut trailing := true
     mut q := rn - 1
     until q >= 0:
@@ -770,7 +672,6 @@ func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
         q -= 1
     end
 
-    // Removed characters have no level of their own.
     repeat n with i:
         if _is_removed(orig.get(i)): levels.set(i, 0 - 1) end
     end

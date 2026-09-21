@@ -78,8 +78,6 @@ func jsg_stmt_has_break_continue(a &: at.Ast, id: int): bool:
         end
         ret false
     end
-    // break/continue inside a nested loop targets that loop, not any match
-    // expression enclosing it, so don't recurse into loop bodies.
     ret false
 end
 
@@ -106,9 +104,6 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     subj_var := "__msubj" + co.I64Toa(t as i64)
     hoist := jsg_stmt_has_break_continue(a, id)
     if hoist:
-        // An arm contains break/continue meant for a loop enclosing this
-        // match expression: emit the arms hoisted in place with a labeled
-        // block (see the C comment).
         res_var := "__mres" + co.I64Toa(t as i64)
         lbl := "__mlbl" + co.I64Toa(t as i64)
         saved_tmp := g.match_result_tmp
@@ -165,7 +160,7 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     str.BufFree(g.out)
     g.out = saved_out
     g.indent = saved_indent
-    until g.locals.len() > mark: // C: cg->locals.len = mark (locals only)
+    until g.locals.len() > mark:
         _l := g.locals.pop()
     end
     if g.compact:
@@ -174,9 +169,6 @@ func jsg_match_expr(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     ret "(() => {\n" + body + "})()"
 end
 
-// An enum member's JS value, in its backing type. JS strings/numbers are
-// value types compared by content with ===, so unlike C/LLVM no separate
-// comparison codegen is needed once the member itself is right.
 func jsg_enum_member_value(s &: sm.Sema, m: int): str:
     mv := sm.SymAt(s, m)
     if mv.enum_val_kind == tok.TV_FLOAT:
@@ -223,9 +215,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret "0"
     end
     if n.kind == at.AST_IDENTIFIER:
-        // A `&:` parameter is passed as a one-element box (see jsg_function
-        // and jsg_call_finish) - JS has no address-of for a primitive, so
-        // every read of it inside the function unwraps the box instead.
         if n.is_ref && local_known(g, n.name):
             ret jsg_local_ref(g, n.name) + "[0]"
         end
@@ -328,10 +317,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         end
         if str.Len(cts) > 0 && jsg_ts_wrappable(cts) && !jsg_op_is_cmp(n.op):
             uns := cg_is_unsigned_typestr(cts)
-            // '>>' must be logical for unsigned; JS '>>' is arithmetic.
             opw := (n.op == tok.TK_SHR && uns) ? ">>>" : jsg_op(n.op)
-            // A 32x32 product exceeds f64's exact range, so the low 32 bits
-            // have to come from Math.imul rather than '*'.
             if n.op == tok.TK_STAR && jsg_int_ts_bits(cts) == 32:
                 ret jsg_wrap_int(
                     "Math.imul(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + jsg_expr_p(g, s, a, n.b, 0) + ")", cts
@@ -374,7 +360,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                 end
             end
         end
-        // '-' and '~' preserve the operand's type (SALAM-TYPES.md 21).
         if (n.op == tok.TK_MINUS || n.op == tok.TK_TILDE) && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
             ret jsg_wrap_int(
                 cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY), at.Get(a, n.a).type_str
@@ -396,8 +381,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         else str.Len(n.type_str) > 0:
             dts = n.type_str
         end
-        // A literal keeps its own shape through a cast - unless the cast is
-        // to a `dyn`, which wraps it (jsg_dyn_box) rather than retyping it.
         if n.a != 0 && !str.StartsWith(dts, "dyn "):
             ak := at.KindOf(a, n.a)
             if ak == at.AST_ARRAY_LIT || ak == at.AST_STRUCT_LIT:
@@ -408,27 +391,18 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if str.Equals(dts, sts):
             ret jsg_expr_p(g, s, a, n.a, minprec)
         end
-        // A str seen through a byte pointer, and back (jsg_is_byte_ptr_ts).
         if jsg_is_byte_ptr_ts(dts) && str.Equals(sts, "str"):
             ret "__sal_bytes(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
         end
         if str.Equals(dts, "str") && jsg_is_byte_ptr_ts(sts):
             ret "__sal_str(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
         end
-        // `(p as u64) + k` cast back to a pointer: C's pointer arithmetic,
-        // which std uses to take a slice of a string's bytes. A Uint8Array
-        // says exactly that - a view starting k bytes in.
         if jsg_is_byte_ptr_ts(dts):
             pa := jsg_ptr_add(g, s, a, id)
             if str.Len(pa) > 0:
                 ret pa
             end
         end
-        // A pointer to anything wider than a byte cannot ride on the byte
-        // array a pointer is here: indexing it would step one byte at a
-        // time and quietly answer wrong. std's SHA-1 builds its message
-        // schedule that way (`mem.Allocate(80 * 8) as i64*`), and a wrong
-        // hash is worse than a refusal.
         if str.EndsWith(dts, "*") && !jsg_is_byte_ptr_ts(dts) && jsg_is_byte_ptr_ts(
             sts
         ):
@@ -442,8 +416,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         end
         dn := str.Len(dts)
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
-            // ToInt32/ToUint32 already truncate toward zero, so the wrap form
-            // both narrows and reinterprets (SALAM-TYPES.md 16).
             if jsg_ts_wrappable(dts):
                 ret jsg_wrap_int(jsg_expr_p(g, s, a, n.a, 0), dts)
             end
@@ -470,13 +442,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             av := at.Get(a, n.a)
             if av.kind == at.AST_IDENTIFIER && !local_known(g, av.name):
                 mut e := sm.Lookup(s, s.global, av.name)
-                // Same reasoning as codegen_expr.salam's matching fallback:
-                // a synthesized enum-derive body is checked against its
-                // enum's home scope (sema), so an unqualified enum name
-                // inside it can be package-scoped - this lookup only
-                // searches the global scope by default and needs the same
-                // cur_fn_home fallback used for free-function calls in such
-                // bodies.
                 if (e == 0 || sm.SymAt(s, e).kind != sm.SYM_ENUM) && g.cur_fn_home != 0:
                     e = sm.Lookup(s, g.cur_fn_home, av.name)
                 end
@@ -508,13 +473,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                     end
                 end
             end
-            // pkg.EnumName.Member: n.a is itself pkg.EnumName, an
-            // AST_MEMBER - see the matching fix in check_member/
-            // sema_expr.salam for why the parser always builds this as a
-            // plain left-associative chain. Without this, n.a falls to the
-            // generic fallback below, which has no idea "pkg.EnumName"
-            // denotes a type and emits it as a literal (and nonexistent) JS
-            // property access.
             if av.kind == at.AST_MEMBER && av.a != 0 && at.KindOf(a, av.a) == at.AST_IDENTIFIER && !local_known(g, at.Get(a, av.a).name):
                 pkname2 := at.Get(a, av.a).name
                 mut pk4 := sm.Lookup(s, s.global, pkname2)
@@ -535,8 +493,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "." + cg_cident(n.name)
     end
     if n.kind == at.AST_INDEX:
-        // A Vector indexes like the array it is here, without going through
-        // the operator_index method the struct declares (jsg_call_vec).
         if n.a != 0 && cg_is_vector_ts(s, at.Get(a, n.a).type_str):
             ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "[" + jsg_expr_p(
                 g, s, a, n.b, 0
@@ -544,8 +500,6 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         end
         if n.a != 0:
             ats3 := at.Get(a, n.a).type_str
-            // Not through a pointer - that indexes as a pointer (sema's
-            // AST_INDEX check draws the same line).
             if str.Len(ats3) > 0 && !str.EndsWith(ats3, "*"):
                 mut sname3 := ""
                 ssym3 := cg_struct_of(s, ats3, sname3)
@@ -596,7 +550,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
     end
     if n.kind == at.AST_ARRAY_LIT:
         mut b := str.NewBuilder()
-        str.BufAppendChar(b, 91) // '['
+        str.BufAppendChar(b, 91)
         cnt := n.list.len()
         ets := jsg_array_elem_ts(n.type_str)
         mut i := 0
@@ -612,7 +566,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             str.BufAppend(b, ev)
             i += 1
         end
-        str.BufAppendChar(b, 93) // ']'
+        str.BufAppendChar(b, 93)
         r := str.BufStr(b)
         str.BufFree(b)
         ret r

@@ -1,39 +1,4 @@
 #!/bin/sh
-# Salam installer for Linux, macOS and the BSDs.
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh | sh -s -- --dir ./bin
-#   ./install.sh --version 0.3.6
-#
-# Options:
-#   -d, --dir DIR         install into DIR (default: $HOME/.salam/bin)
-#   -v, --version X.Y.Z   install this exact release instead of the newest
-#   -p, --platform NAME   force a release asset (linux, mac, linux-aarch64, ...)
-#       --no-modify-path  never touch your shell startup files
-#       --no-color        plain output, no colors
-#   -h, --help            show this help
-#
-# Environment variables:
-#   SALAM_INSTALL_DIR     same as --dir
-#   SALAM_VERSION         same as --version
-#   SALAM_PLATFORM        same as --platform
-#   SALAM_NO_MODIFY_PATH  set to 1 for --no-modify-path
-#   NO_COLOR              set to anything for --no-color
-#   GITHUB_TOKEN, GH_TOKEN  used when talking to api.github.com
-#
-# Release assets this understands:
-#   linux           Linux x86_64          mac    macOS
-#   linux-i686      Linux 32-bit x86
-#   linux-aarch64   Linux ARM64
-#   linux-armhf     Linux 32-bit ARM (hard float)
-#
-# Names are probed against the actual release, so a build published later
-# (freebsd, mac-aarch64, ...) is picked up by this script unchanged.
-#
-# Plain POSIX sh on purpose: this has to run unmodified under dash, under
-# busybox ash, under ksh/pdksh on the BSDs, and under the ancient bash
-# macOS still ships. No arrays, no [[ ]], no local, no GNU-only flags.
 
 set -eu
 
@@ -47,11 +12,7 @@ INSTALL_DIR="${SALAM_INSTALL_DIR:-}"
 VERSION="${SALAM_VERSION:-}"
 PLATFORM="${SALAM_PLATFORM:-}"
 PLATFORM_FORCED=0
-# Detected glibc ("2.34"), empty when it could not be read or is not glibc.
 GLIBC_VER=""
-# The oldest glibc the published glibc bundles will start on. Raise it when
-# a release links a newer symbol; salam-*-linux-musl.zip is what everything
-# below this floor gets instead.
 GLIBC_FLOOR="2.38"
 
 if [ -n "$PLATFORM" ]; then
@@ -72,18 +33,11 @@ MAX_TAGS=8
 DL_PID=""
 WORKDIR=""
 
-# Some init systems and cron setups start a shell without HOME.
 if [ -z "${HOME:-}" ]; then
     HOME=$(cd ~ 2>/dev/null && pwd || printf '/tmp')
     export HOME
 fi
 
-# ---------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------
-
-# Everything the installer says goes to stderr, so `... | sh` keeps
-# working and so a caller can still capture what salam itself prints.
 IS_TTY=0
 if [ -t 2 ]; then
     IS_TTY=1
@@ -115,8 +69,6 @@ set_colors() {
 }
 set_colors
 
-# Width is only used to wipe the tail of a repainted line, so a wrong
-# guess costs nothing worse than a stray character.
 term_width() {
     _w="${COLUMNS:-}"
 
@@ -189,8 +141,6 @@ spaces() {
     printf '%s' "$_s"
 }
 
-# One line, repainted in place. Without a terminal there is no cursor to
-# move, so callers print milestones instead of animating.
 status() {
     if [ "$IS_TTY" != 1 ]; then
         return 0
@@ -236,10 +186,6 @@ Environment:
 USAGE
 }
 
-# ---------------------------------------------------------------------
-# Formatting
-# ---------------------------------------------------------------------
-
 fmt_size() {
     _n=${1:-0}
 
@@ -265,8 +211,6 @@ fmt_duration() {
     '' | *[!0-9]*) _t=0 ;;
     esac
 
-    # A stalled transfer produces nonsense estimates; say so rather than
-    # promise the user four days.
     if [ "$_t" -gt 359999 ]; then
         printf -- '--:--'
         return 0
@@ -340,8 +284,6 @@ progress_line() {
     _speed=0
 
     if [ "$_tenths" -ge 1 ]; then
-        # Divide before multiplying: a 32-bit shell would overflow on
-        # (bytes * 10) once an archive passes 200 MB.
         # shellcheck disable=SC2017  # the lost precision is under a byte/s
         _speed=$((_done / _tenths * 10))
         _rate="$(fmt_size $_speed)/s"
@@ -369,10 +311,6 @@ progress_line() {
         "$(fmt_size $_done)" "$(fmt_size $_total)" "$_rate" "$_eta"
 }
 
-# ---------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------
-
 # shellcheck disable=SC2329  # invoked from the traps below
 cleanup() {
     if [ -n "$DL_PID" ]; then
@@ -389,10 +327,6 @@ trap cleanup EXIT
 trap 'status_end; cleanup; exit 130' INT
 trap 'status_end; cleanup; exit 143' TERM
 trap 'status_end; cleanup; exit 129' HUP
-
-# ---------------------------------------------------------------------
-# Arguments
-# ---------------------------------------------------------------------
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -453,15 +387,9 @@ done
 
 VERSION="${VERSION#v}"
 
-# ---------------------------------------------------------------------
-# Downloading
-# ---------------------------------------------------------------------
-
 DL_TOOL=""
 UNAME_S=$(uname -s 2>/dev/null || printf 'unknown')
 
-# Where the downloader's own complaint is kept. Set once the temporary
-# directory exists; until then every capture goes to /dev/null.
 NET_ERR=""
 DL_STATUS=0
 
@@ -471,9 +399,6 @@ net_err_reset() {
     fi
 }
 
-# The last few lines curl or wget wrote, which is where "Could not
-# resolve host" and "Connection timed out" live. Fails when there is
-# nothing to show, so callers can skip the whole paragraph.
 net_error() {
     if [ -z "$NET_ERR" ] || [ ! -s "$NET_ERR" ]; then
         return 1
@@ -490,14 +415,10 @@ if command -v curl >/dev/null 2>&1; then
 elif command -v wget >/dev/null 2>&1; then
     DL_TOOL="wget"
 elif [ "$UNAME_S" = "FreeBSD" ] && command -v fetch >/dev/null 2>&1; then
-    # FreeBSD installs neither curl nor wget by default; fetch(1) is in
-    # the base system and is what the OS fetches its own packages with.
     DL_TOOL="fetch"
 elif command -v ftp >/dev/null 2>&1; then
     case "$UNAME_S" in
     OpenBSD | NetBSD | DragonFly)
-        # Same story on the other BSDs, where ftp(1) speaks HTTPS. The
-        # Linux client of that name does not, hence the guard.
         DL_TOOL="ftp"
         ;;
     esac
@@ -516,8 +437,6 @@ fetch_to_stdout() {
 
     case "$1" in
     https://api.github.com/*)
-        # Anonymous API calls are rate limited per IP, which a busy
-        # office or a CI runner burns through fast.
         if [ -n "$API_TOKEN" ]; then
             _auth="Authorization: Bearer $API_TOKEN"
         fi
@@ -554,8 +473,6 @@ fetch_to_stdout() {
 fetch_to_file() {
     case "$DL_TOOL" in
     curl)
-        # -sS: this script draws its own progress bar, but an error still
-        # has to reach stderr, which the caller keeps.
         curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 \
             -A "$USER_AGENT" -o "$2" "$1"
         ;;
@@ -571,9 +488,6 @@ fetch_to_file() {
     esac
 }
 
-# Headers only: it settles whether a release publishes this platform's
-# asset without pulling a hundred megabytes to find out, and hands back
-# the size the progress bar needs.
 PROBE_SIZE=0
 
 probe_url() {
@@ -582,10 +496,6 @@ probe_url() {
 
     case "$DL_TOOL" in
     curl)
-        # No -f here: a 404 has to come back with its headers so the
-        # status check below can see it. GitHub answers a missing asset
-        # with a 404 that still carries a content-length, so trusting
-        # that header alone would call every wrong name a hit.
         net_err_reset
         _headers=$(curl -sSL -I --connect-timeout 20 --max-time 60 \
             -A "$USER_AGENT" "$1" 2>"${NET_ERR:-/dev/null}" || true)
@@ -594,8 +504,6 @@ probe_url() {
         _headers=$(wget $WGET_FLAGS --spider -S -U "$USER_AGENT" "$1" 2>&1 || true)
         ;;
     fetch)
-        # -s prints the size and downloads nothing, which is exactly the
-        # question being asked here.
         _len=$(fetch -s "$1" 2>/dev/null || true)
 
         case "$_len" in
@@ -606,29 +514,19 @@ probe_url() {
         return 0
         ;;
     *)
-        # ftp(1) has no HEAD mode; 2 tells the caller to settle it with a
-        # plain GET rather than to treat this as a missing asset.
         return 2
         ;;
     esac
 
     if [ -z "$_headers" ]; then
-        # Nothing came back at all. That is a DNS failure, a refused
-        # connection or a proxy eating the request, and it says nothing
-        # about whether this release publishes the asset. 2 keeps the
-        # caller from reading it as a missing file.
         return 2
     fi
 
     _headers=$(printf '%s\n' "$_headers" | tr -d '\015')
 
-    # The last status line is the one that settles it; the earlier ones
-    # belong to the redirect hops.
     _code=$(printf '%s\n' "$_headers" |
         sed -n 's#^ *HTTP/[0-9.]* *\([0-9][0-9][0-9]\).*#\1#p' | tail -n 1)
 
-    # Output but no status line: wget writes its own errors to the same
-    # stream, so this is the wget-shaped version of the case above.
     if [ -z "$_code" ]; then
         return 2
     fi
@@ -638,7 +536,6 @@ probe_url() {
     *) return 1 ;;
     esac
 
-    # The last Content-Length wins, for the same reason.
     _len=$(printf '%s\n' "$_headers" |
         sed -n 's/^ *[Cc]ontent-[Ll]ength: *\([0-9][0-9]*\).*/\1/p' | tail -n 1)
 
@@ -654,8 +551,6 @@ NAP="1"
 NAP_TENTHS=10
 
 pick_nap() {
-    # Sub-second sleeps are not POSIX, but every system worth animating
-    # for has them. One doomed call settles it.
     if sleep 0.25 2>/dev/null; then
         NAP="0.25"
         NAP_TENTHS=2
@@ -669,8 +564,6 @@ nap() {
     sleep "$NAP" 2>/dev/null || sleep 1
 }
 
-# $1 = start second, $2 = tenths counted from our own sleeps. The wall
-# clock wins when the loop body ran slower than the sleeps promised.
 elapsed_tenths() {
     _wall=$((($(now_seconds) - $1) * 10))
 
@@ -733,8 +626,6 @@ download_file() {
     return 0
 }
 
-# Watches a background job and keeps the line moving, so a long unpack
-# never looks like a hang.
 spin_wait() {
     _pid=$1
     _label=$2
@@ -773,13 +664,7 @@ spin_wait() {
     return 1
 }
 
-# ---------------------------------------------------------------------
-# Release lookup
-# ---------------------------------------------------------------------
-
 latest_tag_via_redirect() {
-    # /releases/latest answers with a redirect to the real tag and costs
-    # no API quota, unlike api.github.com which rate limits per IP.
     _location=""
 
     case "$DL_TOOL" in
@@ -795,15 +680,11 @@ latest_tag_via_redirect() {
         ;;
     esac
 
-    # The class has to exclude whitespace: GNU wget writes the header as
-    # "Location: <url> [following]", and everything after the tag would
-    # otherwise be swallowed into it.
     printf '%s\n' "$_location" |
         sed -n 's#.*/releases/tag/\([^/?#[:space:]]*\).*#\1#p'
 }
 
 tags_via_atom() {
-    # Served by github.com itself, so it carries no API rate limit.
     fetch_to_stdout "$RELEASES_URL.atom" 2>/dev/null |
         tr '<' '\012' |
         sed -n 's#.*/releases/tag/\([^"]*\)".*#\1#p' || true
@@ -825,9 +706,6 @@ candidate_tags() {
         _tags=$(tags_via_api || true)
     fi
 
-    # Nightlies name their assets after the plain version (salam-0.2.9-linux.zip
-    # under a v0.2.9-nightly-<date> tag), so a name built from the tag can
-    # never match one - skipping them here avoids a guaranteed 404.
     printf '%s\n' "$_tags" |
         tr -d ' \011\015' |
         grep -v 'nightly' |
@@ -840,18 +718,10 @@ asset_url() {
     printf '%s/download/v%s/salam-%s-%s.zip' "$RELEASES_URL" "$1" "$1" "$2"
 }
 
-# ---------------------------------------------------------------------
-# Header
-# ---------------------------------------------------------------------
-
 printf '\n' >&2
 printf '  %sSalam Programming Language installer%s\n' "$C_GOOD" "$C_OFF" >&2
 printf '  https://github.com/%s\n' "$REPO" >&2
 printf '  ------------------------------------\n' >&2
-
-# ---------------------------------------------------------------------
-# 1. This machine
-# ---------------------------------------------------------------------
 
 step "Checking this machine"
 
@@ -887,10 +757,6 @@ Linux)
         OS_LABEL="Linux"
     fi
 
-    # Which libc the machine actually runs decides whether the published,
-    # glibc-linked builds can start at all. Ask the dynamic loader
-    # rather than looking for files: a glibc box with musl-tools
-    # installed has an ld-musl-* sitting right there, and is still glibc.
     LIBC=""
 
     if command -v ldd >/dev/null 2>&1; then
@@ -935,11 +801,6 @@ Linux)
         LIBC="unknown"
     fi
 
-    # The glibc bundles are linked on the newest Ubuntu the CI runners
-    # offer, so they carry symbol versions an older distribution simply
-    # does not have and the binary dies on the first call. Knowing the
-    # local glibc is what lets the asset choice below prefer the static
-    # musl build instead of installing something that cannot start.
     if [ "$LIBC" = "glibc" ] && command -v ldd >/dev/null 2>&1; then
         GLIBC_VER=$(ldd --version 2>&1 | head -n 1 |
             grep -oE '[0-9]+\.[0-9]+' | tail -n 1 || true)
@@ -983,10 +844,6 @@ SunOS | AIX | Haiku | GNU | *)
     ;;
 esac
 
-# True when the detected glibc is older than the floor the published glibc
-# bundles need. Unknown version answers false: a machine we cannot measure
-# gets the normal build and the existing "did not run" diagnosis, rather
-# than being pushed onto a fallback it may not need.
 glibc_below_floor() {
     [ "$LIBC" = "glibc" ] || return 1
     [ -n "$GLIBC_VER" ] || return 1
@@ -1003,9 +860,6 @@ glibc_below_floor() {
     [ "$_have_min" -lt "$_need_min" ]
 }
 
-# Asset names to try, best first. They are probed against the real
-# release, so a build published later - freebsd, mac-aarch64 - starts
-# working here with no change to this script.
 if [ -n "$PLATFORM" ]; then
     PLATFORMS="$PLATFORM"
 else
@@ -1013,10 +867,6 @@ else
     linux)
         case "$ARCH" in
         x86_64 | amd64)
-            # linux-musl is the fully static build: no libc of any kind is
-            # loaded, so it runs anywhere. Order decides which is installed,
-            # and every name is probed against the real release, so listing
-            # both means a release that publishes only one still resolves.
             if [ "$LIBC" = "musl" ] || [ "$LIBC" = "unknown" ] ||
                 glibc_below_floor; then
                 PLATFORMS="linux-x86_64-musl linux-musl linux-x86_64 linux"
@@ -1100,12 +950,8 @@ if [ -z "$INSTALL_DIR" ]; then
     INSTALL_DIR="$HOME/.salam/bin"
 fi
 
-# Relative paths resolve against the caller's directory, which is what
-# someone typing --dir ./bin means.
 TILDE='~'
 
-# Two passes, because a single one cannot rewrite the overlapping
-# components of a path like /a/././b.
 tidy_path() {
     printf '%s' "$1" | sed \
         -e 's#//*#/#g' -e 's#/\./#/#g' \
@@ -1142,7 +988,6 @@ fi
 WORKDIR=$(mktemp -d 2>/dev/null || mktemp -d -t salam 2>/dev/null || true)
 
 if [ -z "$WORKDIR" ]; then
-    # Solaris 10 and a few embedded userlands have no usable mktemp.
     WORKDIR="${TMPDIR:-/tmp}/salam-install-$$"
     mkdir -p "$WORKDIR" || die "could not create a temporary directory in ${TMPDIR:-/tmp}"
 fi
@@ -1150,10 +995,6 @@ fi
 ARCHIVE="$WORKDIR/salam.zip"
 EXTRACT_DIR="$WORKDIR/extracted"
 NET_ERR="$WORKDIR/net.err"
-
-# ---------------------------------------------------------------------
-# 2. Which release
-# ---------------------------------------------------------------------
 
 step "Choosing the release to install"
 
@@ -1164,7 +1005,6 @@ TOTAL=0
 PROBE_BLOCKED=0
 
 try_platforms() {
-    # $1 = version without the leading v. Sets URL/ASSET/TOTAL on a hit.
     for _plat in $PLATFORMS; do
         _try=$(asset_url "$1" "$_plat")
 
@@ -1175,8 +1015,6 @@ try_platforms() {
             TOTAL=$PROBE_SIZE
             return 0
         else
-            # Reading $? here, as the first command of the else branch,
-            # still gets the condition's own status.
             if [ "$?" = 2 ]; then
                 PROBE_BLOCKED=1
             fi
@@ -1190,8 +1028,6 @@ if [ -n "$VERSION" ]; then
     info "requested version: $VERSION"
 
     if ! try_platforms "$VERSION"; then
-        # A downloader without a HEAD mode, or a proxy that refuses one,
-        # looks exactly like a missing asset. Let the GET decide.
         PLATFORM=$(printf '%s' "$PLATFORMS" | cut -d' ' -f1)
         ASSET="salam-$VERSION-$PLATFORM.zip"
         URL=$(asset_url "$VERSION" "$PLATFORM")
@@ -1287,9 +1123,6 @@ else
     fi
 
     if [ -z "$URL" ]; then
-        # Header requests get refused by some proxies, and ftp(1) cannot
-        # make one at all - both look exactly like a missing asset. Give
-        # the newest tag one honest GET before giving up.
         TAG=$(printf '%s\n' "$TAGS" | head -n 1)
         VERSION="${TAG#v}"
         PLATFORM=$(printf '%s' "$PLATFORMS" | cut -d' ' -f1)
@@ -1304,10 +1137,6 @@ else
         fi
     fi
 fi
-
-# ---------------------------------------------------------------------
-# 3. Download
-# ---------------------------------------------------------------------
 
 step "Downloading $ASSET"
 
@@ -1330,8 +1159,6 @@ if ! download_file "$URL" "$ARCHIVE" "$TOTAL"; then
         warn "$DL_TOOL exited with status $DL_STATUS"
     fi
 
-    # A status line means the request got through and GitHub answered;
-    # the asset is simply not there.
     case "$NET_WHY" in
     *404*)
         die "could not download $ASSET" \
@@ -1359,8 +1186,6 @@ if [ "$SIZE" -lt 1024 ]; then
         "try again, or download it by hand from $RELEASES_URL"
 fi
 
-# "PK". An HTML error page saved under a .zip name fails here instead of
-# turning into a baffling extraction error later.
 MAGIC=$(dd if="$ARCHIVE" bs=1 count=2 2>/dev/null || true)
 
 if [ "$MAGIC" != "PK" ]; then
@@ -1368,10 +1193,6 @@ if [ "$MAGIC" != "PK" ]; then
         "something between here and GitHub replaced it - usually a proxy or a captive portal" \
         "download it by hand from $RELEASES_URL"
 fi
-
-# ---------------------------------------------------------------------
-# 4. Extract
-# ---------------------------------------------------------------------
 
 step "Extracting $ASSET"
 
@@ -1383,8 +1204,6 @@ UNPACK=""
 
 for _tool in unzip bsdtar tar python3 python; do
     if command -v "$_tool" >/dev/null 2>&1; then
-        # BSD tar reads zip archives; GNU tar does not, and answers with
-        # "This does not look like a tar archive" if handed one.
         if [ "$_tool" = "tar" ]; then
             case "$(tar --version 2>&1 | head -n 1 || true)" in
             *bsdtar* | *libarchive*) ;;
@@ -1439,10 +1258,6 @@ if [ ! -f "$BUNDLE/salam" ]; then
     BUNDLE=$(dirname "$FOUND")
 fi
 
-# ---------------------------------------------------------------------
-# 5. Install
-# ---------------------------------------------------------------------
-
 step "Installing into $INSTALL_DIR"
 
 if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
@@ -1455,11 +1270,6 @@ if [ ! -w "$INSTALL_DIR" ]; then
         "choose a directory you own with --dir DIR, or re-run this under sudo"
 fi
 
-# Everything ships side by side on purpose: salam finds its std/ library
-# relative to its own path, so installing the bare binary leaves every
-# "import os" failing with "standard library package not found". Copying
-# the whole bundle also keeps this working when a release starts
-# shipping something new next to the compiler.
 for _entry in "$BUNDLE"/*; do
     if [ ! -e "$_entry" ]; then
         continue
@@ -1471,8 +1281,6 @@ for _entry in "$BUNDLE"/*; do
     if [ -d "$_entry" ]; then
         info "copying $_name/"
 
-        # Replace wholesale: an upgrade must not leave a previous
-        # version's std/ modules lying around.
         rm -rf "$_target"
 
         if ! cp -R "$_entry" "$_target" 2>/dev/null; then
@@ -1481,8 +1289,6 @@ for _entry in "$BUNDLE"/*; do
     else
         info "copying $_name"
 
-        # Unlink first: a running program keeps its executable busy, and
-        # overwriting it in place fails with ETXTBSY.
         rm -f "$_target"
 
         if ! cp "$_entry" "$_target" 2>/dev/null; then
@@ -1498,9 +1304,6 @@ done
 
 chmod +x "$INSTALL_DIR/salam" 2>/dev/null || true
 
-# Gatekeeper quarantines anything a browser or curl brought in, and the
-# dialog it shows says "cannot be opened because the developer cannot be
-# verified" rather than anything about quarantine.
 if [ "$KERNEL" = "mac" ] && command -v xattr >/dev/null 2>&1; then
     xattr -dr com.apple.quarantine "$INSTALL_DIR" >/dev/null 2>&1 || true
 fi
@@ -1516,10 +1319,6 @@ INSTALLED_SIZE=$(du -sh "$INSTALL_DIR" 2>/dev/null | cut -f1 || true)
 if [ -n "$INSTALLED_SIZE" ]; then
     info "installed size: $INSTALLED_SIZE"
 fi
-
-# ---------------------------------------------------------------------
-# 6. PATH
-# ---------------------------------------------------------------------
 
 on_path() {
     case ":$PATH:" in
@@ -1553,8 +1352,6 @@ else
         PATH_RC="${ZDOTDIR:-$HOME}/.zshrc"
         ;;
     */bash)
-        # macOS Terminal starts login shells, which read .bash_profile
-        # and never .bashrc; most Linux terminals do the opposite.
         if [ -f "$HOME/.bash_profile" ]; then
             PATH_RC="$HOME/.bash_profile"
         elif [ "$KERNEL" = "mac" ]; then
@@ -1600,10 +1397,6 @@ if [ -n "$SHADOW" ] && [ "$SHADOW" != "$INSTALL_DIR/salam" ]; then
     warn "another salam sits earlier on your PATH: $SHADOW"
     info "that one keeps winning until you remove it or reorder PATH"
 fi
-
-# ---------------------------------------------------------------------
-# 7. Verify
-# ---------------------------------------------------------------------
 
 step "Verifying the installation"
 
@@ -1663,15 +1456,9 @@ else
     esac
 fi
 
-# ---------------------------------------------------------------------
-# Done
-# ---------------------------------------------------------------------
-
 SALAM_CMD="salam"
 
 if [ "$PATH_CHANGED" = 0 ] && ! on_path "$INSTALL_DIR"; then
-    # Nothing put this directory on PATH, so the bare name would not
-    # find it - show the path that does.
     SALAM_CMD="$INSTALL_DIR/salam"
 fi
 

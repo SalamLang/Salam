@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# Renders every packaging template against a published GitHub release.
-#
-#   packaging/bump.sh 0.4.0 [seed-version]
-#
-# Reads the release's SHA256SUMS (so nothing is re-hashed by hand), fills the
-# @PLACEHOLDER@ tokens in packaging/*/ and writes the result to
-# packaging/dist/. Templates are left untouched.
-#
-# seed-version is the release used to bootstrap a from-source build; it
-# defaults to the newest stable release older than <version>.
 
 set -euo pipefail
 
@@ -44,7 +34,6 @@ curl -fsSL -o "$SUMS" \
     "https://github.com/$REPO/releases/download/v$VERSION/SHA256SUMS" \
     || { echo "bump.sh: v$VERSION has no SHA256SUMS asset yet" >&2; exit 1; }
 
-# <asset basename> -> sha256, straight out of the release's own manifest.
 sum_for() {
     local name=$1 v
     v=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1; exit }' "$SUMS")
@@ -119,7 +108,6 @@ MUSL=salam-$VERSION-linux-x86_64-musl.tar.gz
 curl -fsSL -o "$TMP/$MUSL" "https://github.com/$REPO/releases/download/v$VERSION/$MUSL"
 SHA512_LINUX_MUSL=$(sha512_of "$TMP/$MUSL")
 
-# Nix wants SRI: sha256-<base64 of the raw digest>.
 sri() {
     python3 -c 'import base64,binascii,sys; print("sha256-"+base64.b64encode(binascii.unhexlify(sys.argv[1])).decode())' "$1"
 }

@@ -1,22 +1,4 @@
 #!/usr/bin/env bash
-#
-# Generate std/tls/roots_embedded.salam from a system CA bundle.
-#
-# The embedded bundle is the LAST-RESORT trust source for std/tls. It is used
-# only when no explicit ca_file was configured, $SSL_CERT_FILE is unset, and
-# none of the well-known system bundle paths exist, which in practice means a
-# statically linked binary in a scratch container. See std/tls/roots.salam for
-# the full search order.
-#
-# Without this file std/tls falls back to an EMPTY trust store. That fails every
-# chain rather than trusting one, which is the safe direction, but it also means
-# HTTPS will not work in such an image until this is generated.
-#
-# Usage:
-#   tools/bash/gen-tls-roots.sh [path-to-ca-bundle.pem]
-#
-# Re-run whenever the upstream bundle is refreshed. The output is plain Salam
-# source and is safe to commit.
 
 set -euo pipefail
 
@@ -81,7 +63,6 @@ HDR
     echo
     echo 'func _embedded_roots_data(): str:'
     echo '    ret """'
-    # keep only the PEM blocks; some bundles interleave human-readable metadata
     awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' "$SRC"
     echo '"""'
     echo 'end'

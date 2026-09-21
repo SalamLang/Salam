@@ -1,29 +1,4 @@
 #!/usr/bin/env bash
-# Runs the whole comparison and writes results.json + results.md.
-#
-#   tests/en/apps/httpbench/bench/run.sh                 # everything
-#   SERVERS="salam nginx" ROUTES="plaintext json" run.sh # a subset
-#
-# Method, and why each piece of it is there:
-#
-#   * One server runs at a time. Four servers sharing four cores would measure
-#     scheduling, not serving.
-#   * Every server is given every core it can use (nginx workers, node cluster
-#     workers, Salam threads). `php -S` is single-request-at-a-time by design;
-#     that is reported as what it is rather than worked around.
-#   * Each route gets a warmup that is measured and thrown away, then a timed
-#     run. Without the warmup, JIT-warmup in node and first-touch page faults
-#     everywhere land inside the sample.
-#   * The load generator and the servers share a machine. That costs every
-#     server something, and it costs the fastest server the most, because it
-#     is the one whose throughput is closest to what the generator itself can
-#     drive. The generator's own CPU share is reported so the reader can see
-#     how much room is left.
-#   * Nothing here is a "who wins" number. The routes are chosen so that
-#     differences can be attributed: /plaintext isolates the server loop,
-#     /cached isolates response writing, /file adds one disk read, /compute
-#     adds work that is identical in every language only in shape, never in
-#     cost.
 
 set -uo pipefail
 
@@ -40,11 +15,6 @@ THREADS="${THREADS:-2}"
 SERVERS="${SERVERS:-salam nginx apache node php}"
 ROUTES="${ROUTES:-plaintext json cached file users search compute headers static home echo}"
 
-# One port per server, even though only one server is ever up at a time.
-# Sharing a port would work in principle and fail in practice: a server that
-# is slow to release its listener collides with the next one, `wait_up`
-# succeeds against the corpse of the previous run, and the column that comes
-# out belongs to neither. Distinct ports make that failure impossible.
 SALAM_PORT=8099
 NGINX_PORT=8100
 PHP_PORT=8101
@@ -52,19 +22,12 @@ NODE_PORT=8102
 APACHE_PORT=8103
 
 NPROC="$(nproc)"
-# The generator needs cores of its own, or it becomes the bottleneck and every
-# server converges on the same wrong number. Servers get the low cores, the
-# generator gets the rest, and neither is ever scheduled onto the other's.
 SERVER_CORES="$((NPROC > 2 ? NPROC - THREADS : 1))"
 [ "$SERVER_CORES" -lt 1 ] && SERVER_CORES=1
 SERVER_CPUS="0-$((SERVER_CORES - 1))"
 GEN_CPUS="$SERVER_CORES-$((NPROC - 1))"
 [ "$SERVER_CORES" -ge "$NPROC" ] && GEN_CPUS="$SERVER_CPUS"
 
-# Apache's MaxRequestWorkers is a hard concurrency ceiling, not a hint: set it
-# below the connection count and requests queue, and the column measures the
-# queue rather than the server. One child per core, 64 threads each, and a
-# floor that keeps it above CONNS on a single-core box.
 APACHE_THREADS=64
 APACHE_MAX_WORKERS=$((SERVER_CORES * APACHE_THREADS))
 [ "$APACHE_MAX_WORKERS" -lt "$CONNS" ] && APACHE_MAX_WORKERS="$CONNS"
@@ -76,8 +39,6 @@ RESULTS="$RUNDIR/results.json"
 say() { printf '\033[1m%s\033[0m\n' "$*" >&2; }
 note() { printf '  %s\n' "$*" >&2; }
 
-# ------------------------------------------------------------------ build
-
 build_loadgen() {
     if [ ! -x "$RUNDIR/loadgen" ] || [ "$HERE/loadgen.c" -nt "$RUNDIR/loadgen" ]; then
         say "building loadgen"
@@ -85,10 +46,6 @@ build_loadgen() {
     fi
 }
 
-# `make -C c` drops the binary at the repository root; an installed or
-# cross-built one may sit under c/. Either is fine, SALAM_BIN overrides.
-# The report step needs it too, and takes the prebuilt-server path through
-# build_salam that never reaches the search below.
 resolve_salam_bin() {
     if [ -z "${SALAM_BIN:-}" ]; then
         for cand in "$ROOT/salam" "$ROOT/c/salam"; do
@@ -101,9 +58,6 @@ resolve_salam_bin() {
 }
 
 build_salam() {
-    # Point SALAM_HTTPBENCH_BIN at an already-built server to skip the build.
-    # This is what makes a before/after comparison possible: build the two
-    # versions once each, then measure them without the compiler in the loop.
     if [ -n "${SALAM_HTTPBENCH_BIN:-}" ]; then
         say "using prebuilt $SALAM_HTTPBENCH_BIN"
         cp "$SALAM_HTTPBENCH_BIN" "$RUNDIR/httpbench"
@@ -124,11 +78,6 @@ build_salam() {
         }
 }
 
-# The repository's .gitignore drops *.css and *.html under tests/, so neither
-# asset survives a clean clone even though the routes that serve them are
-# measured. Both are regenerated here rather than force-added, so the ignore
-# rule stays as the repository intends and the benchmark still reproduces from
-# nothing but a checkout.
 ensure_assets() {
     if [ ! -s "$ASSETS/style.css" ]; then
         say "regenerating $ASSETS/style.css (gitignored)"
@@ -169,26 +118,18 @@ a:hover { text-decoration:underline; }
 CSS
     fi
 
-    # nginx serves / from a file, since it cannot render one. The file is the
-    # byte-identical output of the Salam server's own / route, fetched once, so
-    # the response sizes match across all four columns.
     if [ ! -s "$ASSETS/index.html" ]; then
         say "regenerating $ASSETS/index.html from the Salam server's own / route"
         if start_salam; then
             curl -s "http://127.0.0.1:$SALAM_PORT/" -o "$ASSETS/index.html"
         fi
         stop_server
-        # An empty or missing index.html does not fail loudly on its own: nginx
-        # happily serves 404s at several tens of thousands a second, and the
-        # column reads like a result. Delete the stub and say so instead.
         if [ ! -s "$ASSETS/index.html" ]; then
             rm -f "$ASSETS/index.html"
             note "could not render index.html (see $RUNDIR/salam.log); nginx will skip /"
         fi
     fi
 }
-
-# ------------------------------------------------------------------ servers
 
 SERVER_PID=""
 stop_server() {
@@ -233,10 +174,6 @@ start_nginx() {
     wait_up "$NGINX_PORT"
 }
 
-# Apache cannot build a response body from its config the way nginx can, so
-# the fixed-body routes are files that mod_file_cache mmaps at startup. They
-# are written here, byte-identical to what main.salam returns, so the only
-# thing that differs between the two columns is the server.
 apache_canned() {
     mkdir -p "$RUNDIR/apache/canned"
     printf 'Hello, World!' >"$RUNDIR/apache/canned/plaintext.txt"
@@ -247,9 +184,6 @@ apache_canned() {
 }
 
 start_apache() {
-    # Ubuntu ships every module as a separate .so under a path the config has
-    # to name outright; apxs knows where, and the hardcoded path is only the
-    # fallback for a distribution that has no apxs.
     local moddir
     moddir="$(apxs -q LIBEXECDIR 2>/dev/null)"
     [ -d "${moddir:-}" ] || moddir=/usr/lib/apache2/modules
@@ -276,10 +210,6 @@ start_node() {
 }
 
 start_php() {
-    # php -S handles one request at a time. PHP_CLI_SERVER_WORKERS is an
-    # undocumented but real knob that forks N of them; it is set to the same
-    # core budget the others get, so the column is "php -S at its best on this
-    # machine" and not a strawman.
     HTTPBENCH_ASSETS="$ASSETS" PHP_CLI_SERVER_WORKERS="$SERVER_CORES" \
         taskset -c "$SERVER_CPUS" \
         php -d opcache.enable_cli=1 -S "127.0.0.1:$PHP_PORT" -t "$HERE/php" "$HERE/php/index.php" \
@@ -301,10 +231,6 @@ start_server() {
 
 server_alive() { [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; }
 
-# A server that dies mid-run would otherwise score zero on every route after
-# the one that killed it, which reads as "this server is slow" when what
-# happened is "this server crashed". Restarting and counting it separates the
-# two, and the count goes in the results so it cannot be lost.
 CRASHED_ROUTES=""
 ensure_up() {
     local server="$1" route="$2"
@@ -324,8 +250,6 @@ port_of() {
     esac
 }
 
-# ------------------------------------------------------------------ routes
-
 path_of() {
     case "$1" in
     plaintext) echo "/plaintext" ;;
@@ -342,9 +266,6 @@ path_of() {
     esac
 }
 
-# Routes nginx cannot answer without an application behind it. Skipped rather
-# than faked; see nginx.conf.template. `home` joins them only when the
-# pre-rendered page is missing, which nginx cannot produce for itself.
 nginx_skips() {
     case "$1" in
     search | compute | echo | headers) return 0 ;;
@@ -353,10 +274,6 @@ nginx_skips() {
     return 1
 }
 
-# Apache skips everything nginx does, plus /users/:id. nginx can capture the
-# path segment and interpolate it into a `return 200` body; Apache has no
-# directive that sets a body at all, so the route would have to be faked or
-# put behind mod_php, and either one would stop measuring Apache.
 apache_skips() {
     case "$1" in
     users) return 0 ;;
@@ -372,21 +289,6 @@ server_skips() {
     esac
 }
 
-# Waits for the kernel's TIME_WAIT table to drain before the next route.
-#
-# A server that closes after every response leaves one socket in TIME_WAIT per
-# request, and each of those holds an ephemeral port on loopback for a minute.
-# The generator closes hard to avoid most of this, but a server that closes
-# first still puts its own end into TIME_WAIT, and enough of them starve the
-# next route of ports. Without this pause the symptom is a route that scores
-# zero for no visible reason - which is exactly how the first run of this
-# harness failed, and it looked like a bug in the server rather than in the
-# measurement.
-# The threshold is low on purpose. A close-per-request server can leave
-# 25,000 sockets in TIME_WAIT after a single eight-second route, and measuring
-# the next route against a half-full port table charges it for the previous
-# one's mess. Every route therefore starts from a table that is close to
-# empty, whichever server filled it.
 drain_time_wait() {
     local limit=2000 waited=0
     while [ "$(ss -tan state time-wait 2>/dev/null | wc -l)" -gt "$limit" ] && [ "$waited" -lt 120 ]; do
@@ -397,11 +299,6 @@ drain_time_wait() {
     return 0
 }
 
-# The first route measured against a freshly started server reads low even
-# with a per-route warmup: allocator arenas, thread stacks and page tables are
-# all cold, and node has a JIT that has not seen the code yet. This drives a
-# short burst before any route is measured, so the first route is not
-# systematically punished for being first.
 prewarm() {
     local port="$1"
     taskset -c "$GEN_CPUS" "$RUNDIR/loadgen" -j -c "$CONNS" -t "$THREADS" -d 3 -w 0 \
@@ -431,8 +328,6 @@ measure() {
         "$(printf '%s' "$out" | sed -n 's/.*"rps":\([0-9.]*\).*"p99_us":\([0-9]*\).*/\1 req\/s, p99 \2us/p')" \
         "$($died && printf '   <-- SERVER DIED')" >&2
 }
-
-# ------------------------------------------------------------------ main
 
 build_loadgen
 build_salam

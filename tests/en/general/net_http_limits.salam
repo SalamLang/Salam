@@ -1,0 +1,63 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import net.http
+import net.router
+import net.internal.rawsock
+import str
+
+const PORT := 19483
+
+func take(ctx: i64):
+    http.Ctx_text(ctx, "len=" + str.FromInt(http.Ctx_body(ctx).len() as i64))
+end
+
+func status of(raw: str): str:
+    c := rawsock.Connect("127.0.0.1", PORT)
+    if !rawsock.Ok(c):
+        ret "connect failed"
+    end
+    rawsock.SetTimeout(c, 2000)
+    rawsock.Send(c, raw)
+    mut all := ""
+    mut tries := 0
+    while tries < 6:
+        part := rawsock.Recv(c, 2048)
+        if part.len() == 0: break end
+        all = all.concat(part)
+        tries += 1
+    end
+    rawsock.Close(c)
+    if str.IndexFrom(all, "413 Content Too Large", 0) >= 0: ret "413" end
+    if str.IndexFrom(all, "400 Bad Request", 0) >= 0: ret "400" end
+    if str.IndexFrom(all, "200 OK", 0) >= 0: ret "200" end
+    ret "none"
+end
+
+func main:
+    http.SetMaxBodyBytes(4096)
+    mut r := router.NewRouter()
+    router.Post(r, "/up", take)
+    s := http.NewServer(PORT)
+    http.Use(s, r)
+    if !http.RunBackground(s):
+        println "server failed to start"
+        ret
+    end
+
+    println "over-cap     " + status of("POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n")
+    println "overflow-cl  " + status of("POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 99999999999999999999\r\n\r\n")
+    println "under-cap    " + status of("POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
+end

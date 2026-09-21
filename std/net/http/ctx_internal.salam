@@ -26,29 +26,11 @@ import encoding
 import filepath
 import os
 
-// The request-handling internals migrated from std/web/web.salam: the
-// opaque request-context handle (an i64 pointing at a heap-allocated
-// _ReqCtx - kept as a raw handle, not a Salam struct with foreign
-// fields, for the same cross-package struct-embedding codegen reasons
-// tcp.Conn/DialTLS document), HTTP/1.1 request parsing, response
-// serialization, static file serving with directory-traversal
-// protection, and the per-connection handler run on its own OS thread.
-//
-// Route matching itself is delegated to net/router.Dispatch (a pure
-// function, no side effects on this context) - this file's job is
-// purely translating between "the wire" and "a Router lookup", which is
-// the same responsibility std/web's `_dispatch` had, just no longer
-// entangled with the matching algorithm.
 
 extern:
     func fopen(path: str, mode: str): void *
     func fread(ptr: void *, size: u64, nmemb: u64, stream: void *): u64
     func fseek(stream: void *, off: int, whence: int): int
-    // int, not i64: std/os.salam's own `extern func ftell` declares the
-    // same libc symbol as returning plain `int` (both get emitted into the
-    // same generated C header once a program imports both packages), so
-    // the two declarations must agree exactly or the C build fails with
-    // "conflicting types for 'ftell'". Widened to i64 at every call site.
     func ftell(stream: void *): int
     func fclose(stream: void *): int
 end
@@ -56,16 +38,10 @@ end
 @en "SERVER_VERSION"
 @fa "نسخه سرور"
 @ar "إصدار الخادم"
-// The toolchain's own version, so the Server: header a Salam service sends
-// tracks the repo's VERSION file with nothing to bump here.
 pub const SERVER_VERSION := SALAM_VERSION
 
-// Bytes per socket read; one buffer per connection, reused per request.
 const _RD_CHUNK := 65536
 
-// How many listeners one process may run, and the split point of the packed
-// (slot, fd) pair their connection threads are started with: the slot index
-// sits above bit 32, the file descriptor below it. See "the server table".
 const _SRV_MAX := 8
 const _SRV_SHIFT := 32 as i64
 const _SRV_MASK := 4294967295 as i64
@@ -74,33 +50,13 @@ mut _reqctx_size := 0 as i64
 mut _keepalive_idle_ms := 5000
 mut _keepalive_max_reqs := 100000
 
-// ------------------------------------------------------- the server table
-//
-// One process, several listeners. There used to be a single `_current_router`
-// global that Run() wrote before its accept loop and every handler thread
-// read; a second Run() in the same process overwrote it, and both listeners
-// then dispatched through whichever router started last. That is not an
-// exotic case - an API on 8080 with its OpenAPI docs on 8081 (see
-// net/http/swagger) is two servers, and so is a health endpoint on a port a
-// load balancer can reach but the internet cannot.
-//
-// So a server's settings live in a slot, and the slot index travels with the
-// connection: Run packs it into the high half of the i64 it hands the
-// connection thread, next to the accepted file descriptor. Nothing is looked
-// up per request that was not already known when the listener started.
-//
-// The vectors are filled to _SRV_MAX once, on the first Run, and never grow
-// again - Run only `set`s. That matters because handler threads read this
-// table without a lock: a push that reallocated the backing buffer while a
-// thread was reading through it would be a use-after-free, whereas a slot
-// written before its own listener exists is read by nobody until then.
+mut _max_header_bytes := 65536
+mut _max_body_bytes := 67108864
+
 mut _srv_routers := Vector {} as Vector<router.Router>
 mut _srv_hide := Vector {} as Vector<bool>
 mut _srv_log := Vector {} as Vector<bool>
 mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
-// The "Salam/x.y.z" the Server and X-Powered-By headers carry. It is the
-// same bytes for the life of the process, so it is built once per listener
-// here rather than concatenated fresh for every response.
 mut _srv_shdr := Vector {} as Vector<str>
 mut _srv_count := 0
 
@@ -129,36 +85,8 @@ struct _ReqCtx:
     pub req_hdrs: Vector<_KV> = Vector {}
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
-    // Whether this request permits the connection to be reused, decided by
-    // _parse_http from the HTTP version and the Connection header. The
-    // default is the HTTP/1.1 rule (reuse unless told otherwise); a request
-    // line ending in HTTP/1.0, or an explicit "Connection: close", flips it.
     pub keep_alive: bool = true
-    // Every heap string this server allocates while serving the request -
-    // the method, the path, each header name and value, each captured path
-    // parameter - is registered here and freed when the request ends.
-    //
-    // A `str` is a bare byte pointer with no ownership attached, so there is
-    // no way to look at c.method and know whether it is a slice this server
-    // malloc'd or a literal baked into the binary. Freeing the struct alone
-    // (which is all salam_ctx_free used to do) therefore released about
-    // thirty bytes and abandoned everything they pointed at: roughly 1.2 KB
-    // per request, on every route, until the kernel killed the process.
-    // Keeping the pointers is what makes releasing them safe.
     pub owned: Vector<i64> = Vector {}
-    // The request bytes as they arrived, plus the half-open span of the
-    // header block inside them.
-    //
-    // Headers used to be copied out eagerly: a name and a value allocated,
-    // trimmed and stored for every header line of every request, whether or
-    // not the handler ever asked for one. A plain GET carries three or four
-    // of them and most handlers read none, so that was eight allocations and
-    // eight frees per request spent on nothing. Ctx_header now slices the
-    // value it was asked for straight out of these bytes.
-    //
-    // `raw` is borrowed, not owned - it points at the connection's receive
-    // buffer or at the request string the handler loop is holding, both of
-    // which outlive the request and neither of which this context frees.
     pub raw: str = ""
     pub hdr_pos: int = 0
     pub hdr_end: int = 0
@@ -175,17 +103,6 @@ pub struct Server:
     pub access_log: bool = false
 end
 
-// Path/query parsing and the static-file safety check (_safe_static_path)
-// all go through str.split("/") indirectly via filepath.Clean/Join. On this
-// toolchain, the very first str.split() call in a process that produces 3+
-// pieces can return a Vector whose last slot was never actually written
-// (reads back as the Windows "uninitialized heap" poison pattern
-// 0xBAADF00D, confirmed under gdb) - some one-time lazy-init gap in the
-// C runtime/allocator that a single earlier split() call papers over for
-// the rest of the process's lifetime. Running one harmless split here,
-// before the first real request can reach _safe_static_path, avoids
-// hitting that gap on live traffic. Cheap and process-wide: this needs to
-// run exactly once, not once per connection/thread.
 func _srv_init():
     if _srv_routers.len() > 0:
         ret
@@ -199,10 +116,6 @@ func _srv_init():
     end
 end
 
-// Claim a slot for a server about to start listening. Past _SRV_MAX the last
-// slot is reused rather than the call failing: a ninth listener is already a
-// misconfiguration, and sharing a slot degrades to the old single-router
-// behaviour instead of dropping the server on the floor.
 func _srv_claim(r: router.Router, hide: bool, log: bool): int:
     _srv_init()
     mut slot := _srv_count
@@ -252,15 +165,6 @@ func _rc(h: i64): _ReqCtx *:
     ret h as _ReqCtx *
 end
 
-// Whether `s` carries `lit`, in full, starting at `pos`.
-//
-// The obvious spelling is `s.substr(pos, lit.len()) == lit`, and it is what
-// this file used everywhere. Every one of those comparisons heap-allocates a
-// copy of the span, compares it, and abandons it - the header-block walk did
-// it once per header line of every request, which was the single largest
-// remaining source of the server's memory growth after the request context
-// started freeing itself. Reading the bytes costs nothing and allocates
-// nothing.
 func _eq_at(s: str, pos: int, lit: str): bool:
     m := lit.len()
     if pos < 0 || pos + m > s.len(): ret false end
@@ -274,16 +178,12 @@ func _eq_at(s: str, pos: int, lit: str): bool:
     ret true
 end
 
-// True when byte `i` of `s` is a space or a tab - the optional whitespace
-// HTTP allows between a header's colon and its value.
 func _ows_at(s: str, i: int): bool:
     p := s as i8 *
     b := p[i] as int
     ret b == 32 || b == 9
 end
 
-// _eq_at, folding BOTH sides, for comparing a field name on the wire against
-// one a caller spelled however they liked ("Content-Type", "content-type").
 func _eq_at_ifold(s: str, pos: int, name: str): bool:
     m := name.len()
     if pos < 0 || pos + m > s.len(): ret false end
@@ -301,8 +201,6 @@ func _eq_at_ifold(s: str, pos: int, name: str): bool:
     ret true
 end
 
-// _eq_at with ASCII case folding, for the field names HTTP says are
-// case-insensitive. `lit` must already be lowercase.
 func _eq_at_fold(s: str, pos: int, lit: str): bool:
     m := lit.len()
     if pos < 0 || pos + m > s.len(): ret false end
@@ -324,33 +222,12 @@ func salam_ctx_new(fd: i64): i64:
     ret p as i64
 end
 
-// Hands a heap string to the request scope. Returns it unchanged so it can
-// be used inline at the point it is produced, which is the only place the
-// answer to "who frees this?" is still obvious.
-//
-// The pointer must be heap-allocated. Registering a literal here would hand
-// free() a pointer into the binary's read-only data, so every producer whose
-// result reaches this function returns heap unconditionally - see BufStr and
-// _query_parse, both of which allocate even for the empty result rather than
-// return "" and leave the caller unable to tell the two apart.
 func _ctx_own(h: i64, s: str): str:
     c := _rc(h)
     c.owned.push((s as void *) as i64)
     ret s
 end
 
-// Releases everything this request allocated and returns the context to the
-// state salam_ctx_new left it in, WITHOUT giving the vectors' buffers back.
-//
-// A keep-alive connection serves many requests, and allocating a context, an
-// ownership list and three key/value vectors for each of them - then freeing
-// all five again - is five malloc/free pairs per request that buy nothing:
-// the next request on the same connection needs the same five things, at
-// close to the same sizes. Popping to empty keeps the capacity, so the second
-// and later requests on a connection allocate nothing for their own
-// bookkeeping at all. This matters more now than it did before: releasing the
-// request's strings is real work that leaking them did not cost, and reusing
-// the buffers is what pays for it.
 func salam_ctx_reset(h: i64):
     c := _rc(h)
     n := c.owned.len()
@@ -448,18 +325,6 @@ func _kvl_get(l &: Vector<_KV>, key: str): str:
     ret ""
 end
 
-// The same lookup, for the two lists whose keys are HTTP FIELD NAMES.
-//
-// Field names are case-insensitive (RFC 9110 §5.1), and HTTP/2 goes further and
-// requires them to be lowercase on the wire (RFC 9113 §8.2.1). So a request that
-// reached this server through any HTTP/2 hop - which is every browser talking to
-// a proxy - arrives carrying `authorization`, not `Authorization`. An exact
-// comparison finds nothing, and a handler asking for "Authorization" is told the
-// request had none: the caller is anonymous, CORS never fires, the conditional
-// request always misses. It looks like an application bug and it is not one.
-//
-// Path parameters keep the exact comparison. Those are names the route author
-// chose, not names a peer sends, and :id and :ID are two different parameters.
 func _kvl_get_field(l &: Vector<_KV>, key: str): str:
     repeat l.len() with i:
         kv := l.get(i)
@@ -478,14 +343,6 @@ func _kvl_set(l &: Vector<_KV>, key: str, val: str):
     l.push(_KV { k = key, v = val })
 end
 
-// Set-Cookie specifically dedupes by cookie NAME (the "n=" prefix of the
-// serialized value), unlike every other response header. Setting the same
-// cookie twice in one handler - e.g. session.Start followed immediately by
-// session.Regenerate, both of which set the session-id cookie - should
-// replace the earlier Set-Cookie line, not add a second one for a value
-// that's about to be superseded. A real browser resolves two same-name
-// Set-Cookie lines fine on its own (last one wins), but there's no reason
-// to ship the dead first line over the wire.
 func _kvl_set_cookie(l &: Vector<_KV>, cookie_name: str, val: str):
     prefix := cookie_name.concat("=")
     mut i := 0
@@ -506,9 +363,6 @@ func _kvl_clear(l &: Vector<_KV>):
     end
 end
 
-// Finds one header in the request bytes, without having copied any of them
-// out first. Returns "" - a literal, borrowed - when the request did not
-// carry the field, and otherwise a request-scoped copy of the value.
 func _hdr_lookup(h: i64, name: str): str:
     c := _rc(h)
     raw := c.raw
@@ -596,16 +450,6 @@ func salam_ctx_kv_val(h: i64, list: int, idx: int): str:
     end
 end
 
-// The value of `key` in an "a=1&b=2" string, percent-decoded. Always returns
-// a heap string the caller owns, "" included, so the result is unconditionally
-// safe to free (see _ctx_own on why that matters).
-//
-// The old version decoded the WHOLE string first and then split it on "&" and
-// "=". That is wrong as well as leaky: a value containing %26 decodes to a
-// literal "&" before the split ever runs, so ?q=a%26b parsed as two fields and
-// the caller got "a". Percent-decoding has to happen after the field
-// boundaries are found, never before. Splitting is done by index here, so the
-// scan itself allocates nothing.
 func _query_parse(req: str, key: str): str:
     n := req.len()
     mut pos := 0
@@ -633,11 +477,6 @@ func _query_parse(req: str, key: str): str:
     ret str.Clone("")
 end
 
-// Three copies of the whole request used to be made before a single header
-// was read: `after_method` (everything past the verb), then the header walk,
-// then a fresh scan from offset 0 for the blank line that the header walk had
-// already stepped over. This version copies out only the request target,
-// remembers where the header walk stopped, and slices the body from there.
 func _parse_http(ctx: i64, req: str):
     c := _rc(ctx)
     n := req.len()
@@ -696,11 +535,6 @@ func _server_header(hide: bool): str:
     ret "Salam/".concat(SERVER_VERSION)
 end
 
-// Whether the handler already set a header of its own by this name. Header
-// names are case-insensitive, so a handler that wrote "content-type" has to
-// count as having written "Content-Type" - anything else sends the header
-// twice, which is what a client of this server used to get on every JSON
-// response that also named a charset.
 func _has_header(ctx: i64, name: str): bool:
     n := salam_ctx_kv_n(ctx, 2)
     repeat n with i:
@@ -709,11 +543,6 @@ func _has_header(ctx: i64, name: str): bool:
     ret false
 end
 
-// "200 OK" without a heap allocation. The old path called conv.FormatInt to
-// turn the number into digits and mime.StatusText to look up the reason
-// phrase, then concatenated both, for every response. These four cover
-// essentially all of the traffic a server actually emits; everything else
-// falls through to the general path, which still works.
 func _append_status(b &: str.StringBuilder, status: int):
     if status == 200: str.BufAppend(b, "200 OK") ret end
     if status == 404: str.BufAppend(b, "404 Not Found") ret end
@@ -724,17 +553,17 @@ func _append_status(b &: str.StringBuilder, status: int):
     str.BufAppend(b, mime.StatusText(status))
 end
 
-// Serializes the response into `b`, headers and body together.
-//
-// The old version built the same bytes with about a dozen `resp = resp.concat(...)`
-// steps. Each one allocates a new string the size of everything written so
-// far and copies it, so serializing an n-piece response costs O(n^2) bytes
-// copied and n allocations, all of them thrown away. A builder doubles its
-// buffer instead: one allocation per doubling, each byte written once.
-//
-// Body and headers land in the same buffer on purpose, so the whole response
-// leaves in a single write. Two writes would mean two syscalls, and with
-// TCP_NODELAY on, two packets for what fits in one.
+func _hdr_dirty(s: str): bool:
+    ret str.Contains(s, "\r") || str.Contains(s, "\n")
+end
+
+func _hdr_clean(s: str): str:
+    a := str.Replace(s, "\r", " ")
+    out := str.Replace(a, "\n", " ")
+    mem.Free(a as void *)
+    ret out
+end
+
 func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
@@ -762,18 +591,27 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
     end
     nhdr := salam_ctx_kv_n(ctx, 2)
     repeat nhdr with i:
-        str.BufAppend(b, salam_ctx_kv_key(ctx, 2, i))
-        str.BufAppend(b, ": ")
-        str.BufAppend(b, salam_ctx_kv_val(ctx, 2, i))
+        k0 := salam_ctx_kv_key(ctx, 2, i)
+        v0 := salam_ctx_kv_val(ctx, 2, i)
+        if _hdr_dirty(k0) || _hdr_dirty(v0):
+            hk := _hdr_clean(k0)
+            hv := _hdr_clean(v0)
+            str.BufAppend(b, hk)
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, hv)
+            mem.Free(hk as void *)
+            mem.Free(hv as void *)
+        else:
+            str.BufAppend(b, k0)
+            str.BufAppend(b, ": ")
+            str.BufAppend(b, v0)
+        end
         str.BufAppend(b, "\r\n")
     end
     str.BufAppend(b, "\r\n")
     str.BufAppend(b, body)
 end
 
-// Kept because std/tls's handler and any caller outside this file still want
-// a response as a string. The plain-HTTP path does not use it: it writes the
-// builder's bytes straight to the socket, which skips the copy BufStr makes.
 func _build_response(ctx: i64, shdr: str): str:
     mut b := str.NewBuilder()
     _fill_response(b, ctx, shdr, false)
@@ -782,9 +620,6 @@ func _build_response(ctx: i64, shdr: str): str:
     ret out
 end
 
-// Runs net/router.Dispatch and, on a match, copies the extracted path
-// params into this request's ctx before invoking the handler - the only
-// bridge between router's pure Match value and web's ctx-handle world.
 func _dispatch(r: router.Router, ctx: i64): bool:
     method := salam_ctx_get(ctx, 0)
     path := salam_ctx_get(ctx, 1)
@@ -815,10 +650,6 @@ func _net_accept(lfd: i64): i64:
     ret rawsock.Accept(rawsock.FromFd(lfd)).fd
 end
 
-// A str of exactly `n` bytes from `ptr`. rawsock.Recv cannot be used on this
-// path: it allocates a fresh max-sized buffer per call and memsets all of it
-// (64 KiB of zeroing to receive a 100-byte GET), then measures the result
-// with strlen. This copies the bytes the kernel actually delivered, once.
 func _str_of(ptr: void *, n: int): str:
     r := mem.Allocate((n + 1) as u64)
     mem.Copy(r, ptr, n as u64)
@@ -827,9 +658,66 @@ func _str_of(ptr: void *, n: int): str:
     ret r as str
 end
 
-// Content-Length, or 0. Only the framing of a request that can carry a body
-// depends on this, so the header block is scanned for it only when the method
-// says a body is possible - which keeps it off the path GET traffic takes.
+func _has_transfer_encoding(head: str, head_len: int): bool:
+    mut pos := 0
+    until pos < head_len:
+        line_end := str.IndexFrom(head, "\r\n", pos)
+        if line_end < 0 || line_end >= head_len: break end
+        colon := str.IndexFrom(head, ":", pos)
+        if colon >= 0 && colon < line_end:
+            if colon - pos == 17 && _eq_at_fold(head, pos, "transfer-encoding"):
+                ret true
+            end
+        end
+        pos = line_end + 2
+    end
+    ret false
+end
+
+func _bad_content_length(head: str, head_len: int): bool:
+    mut pos := 0
+    mut seen := false
+    mut first := 0
+    until pos < head_len:
+        line_end := str.IndexFrom(head, "\r\n", pos)
+        if line_end < 0 || line_end >= head_len: break end
+        colon := str.IndexFrom(head, ":", pos)
+        if colon >= 0 && colon < line_end:
+            if colon - pos == 14 && _eq_at_fold(head, pos, "content-length"):
+                raw := head.substr(colon + 1, line_end - colon - 1)
+                t := str.Trim(raw)
+                mem.Free(raw as void *)
+                if t.len() == 0:
+                    mem.Free(t as void *)
+                    ret true
+                end
+                tp := t as u8 *
+                mut k := 0
+                until k < t.len():
+                    c := tp[k] as int
+                    if c < 48 || c > 57:
+                        mem.Free(t as void *)
+                        ret true
+                    end
+                    k += 1
+                end
+                if t.len() > 15:
+                    mem.Free(t as void *)
+                    ret true
+                end
+                v := t.to_int()
+                mem.Free(t as void *)
+                if v < 0: ret true end
+                if seen && v != first: ret true end
+                seen = true
+                first = v
+            end
+        end
+        pos = line_end + 2
+    end
+    ret false
+end
+
 func _content_length(head: str, head_len: int): int:
     mut pos := 0
     until pos < head_len:
@@ -852,17 +740,6 @@ func _content_length(head: str, head_len: int): int:
     ret 0
 end
 
-// Reads exactly one complete request off `fd`, leaving anything that arrived
-// with it in `pending` for the next call.
-//
-// The old server did one recv per connection and treated whatever came back
-// as the whole request. That is right often enough to look right, and wrong
-// in two ways that keep-alive makes routine: a request split across packets
-// was truncated, and a second pipelined request in the same segment was
-// thrown away. Framing it properly - headers to the blank line, then exactly
-// Content-Length body bytes - is what makes connection reuse safe rather than
-// merely fast.
-// Whether the verb occupying s[0..vend) can carry a body.
 func _has_body_at(s: str, vend: int): bool:
     if vend == 3 && _eq_at(s, 0, "GET"): ret false end
     if vend == 4 && _eq_at(s, 0, "HEAD"): ret false end
@@ -870,22 +747,7 @@ func _has_body_at(s: str, vend: int): bool:
     ret true
 end
 
-// Reads exactly one request off `fd`, leaving anything that arrived behind it
-// in `pending` for the next call. `owned` says whether the returned string is
-// the caller's to free.
-//
-// The fast path - nothing pipelined from the previous request, and the whole
-// request in one recv - hands back the receive buffer itself, NUL-terminated
-// in place. That is the shape of essentially every request a keep-alive
-// connection carries, and it used to cost two allocations and two full copies
-// of the request bytes before a single byte was parsed: one in _str_of to
-// turn the buffer into a string, and another in `buf.concat(chunk)` to append
-// that string to an empty one. Now it costs neither.
-//
-// The buffer is reused by the next read on this connection, which is why the
-// borrow is safe: the request is fully parsed, and every field the context
-// keeps is copied out of it, before this function is called again.
-func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool): str:
+func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, oversize &: int): str:
     sock := rawsock.FromFd(fd)
     owned = false
     if pending.len() == 0:
@@ -915,7 +777,12 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool): str
     pending = ""
     mut scan := 0
     mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
-    until head_end < 0:
+    while head_end < 0:
+        if buf.len() >= _max_header_bytes:
+            mem.Free(buf as void *)
+            oversize = 431
+            ret ""
+        end
         got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
         if got <= 0:
             mem.Free(buf as void *)
@@ -935,14 +802,24 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool): str
     vend := buf.find(" ")
     if vend > 0 && _has_body_at(buf, vend):
         need = head_len + _content_length(buf, head_len)
-        until buf.len() < need:
-            got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
-            if got <= 0: break end
-            chunk := _str_of(scratch, got)
-            grown := buf.concat(chunk)
-            mem.Free(chunk as void *)
+        if need - head_len > _max_body_bytes:
             mem.Free(buf as void *)
-            buf = grown
+            oversize = 413
+            ret ""
+        end
+        if buf.len() < need:
+            mut acc := str.NewBuilder()
+            str.BufAppend(acc, buf)
+            mem.Free(buf as void *)
+            while (str.BufLen(acc) as int) < need:
+                got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+                if got <= 0: break end
+                chunk := _str_of(scratch, got)
+                str.BufAppend(acc, chunk)
+                mem.Free(chunk as void *)
+            end
+            buf = str.BufStr(acc)
+            str.BufFree(acc)
         end
         if buf.len() < need: need = buf.len() end
     end
@@ -962,9 +839,6 @@ func _net_close(fd: i64):
     tcp.Close(tcp.ConnFromFd(fd))
 end
 
-// Streams the file in fixed-size chunks instead of loading it whole into
-// memory, so serving large files (video, archives, ...) doesn't blow up
-// process memory or hit an arbitrary size cap.
 func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     f := fopen(path, "rb")
     if f == null:
@@ -1014,8 +888,6 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     ret 1
 end
 
-// Escapes text for safe inclusion in an HTML document (directory listings,
-// generated error pages, ...).
 func _html_escape(s: str): str:
     n := s.len()
     mut b := str.NewBuilder()
@@ -1034,25 +906,6 @@ func _html_escape(s: str): str:
     ret str.BufStr(b)
 end
 
-// Resolves an (already percent-decoded) request path against a static
-// root directory and guarantees the result cannot escape that root, no
-// matter how many "../", encoded traversal segments, or absolute-looking
-// paths appear in `rel`. Returns "" when the request would escape.
-//
-// Uses filepath.Clean's segment-collapsing algorithm: joining then
-// cleaning "root/../../../etc/passwd" yields "/etc/passwd" (or similar),
-// which fails the containment check below and is rejected - the request
-// is judged by where it ends up, not by pattern-matching "..".
-//
-// root == "." (the common `salam serve` case, serving the current
-// directory) needs its own branch: filepath.Clean(".") returns the
-// literal "." but filepath.Clean drops "." segments from every other
-// path it cleans, so a contained request like "src" cleans to "src",
-// never to "./src" - the croot-prefix check below would never match it
-// and every subpath would 404. Under root ".", any cleaned path that
-// isn't an escape ("..", "../...") or OS-absolute is contained.
-// The path under `root` that `rel` names, or "" if `rel` escapes it. Always
-// returns a heap string the caller frees, "" included.
 func _safe_static_path(root: str, rel: str): str:
     croot := filepath.Clean(root)
     joined := filepath.Join(croot, rel)
@@ -1075,9 +928,6 @@ func _safe_static_path(root: str, rel: str): str:
     ret str.Clone("")
 end
 
-// Renders a simple "Index of <path>" directory listing, like a plain dev
-// HTTP file server. Entries are shown alphabetically, directories first,
-// with a ".." link when not already at the served root.
 func _dir_listing_html(url_path: str, disk_path: str): str:
     names := os.ListDir(disk_path)
     defer names.free()
@@ -1129,9 +979,6 @@ func _dir_listing_html(url_path: str, disk_path: str): str:
     ret out
 end
 
-// Tiny in-place insertion sort local to this package, to avoid pulling in
-// a cross-package generic Vector<str> instantiation for a handful of
-// directory entries.
 func _insertion_sort_strs(v &: Vector<str>):
     n := v.len()
     repeat n with i:
@@ -1151,12 +998,6 @@ func _log_access(slot: int, method: str, path: str, status: int):
     println method, path, "->", status
 end
 
-// Shared by both the plain and TLS handlers: parses the request, runs
-// static-file/router dispatch, and returns the fully-serialized response
-// (or "" when the static-file branch already streamed its own response
-// straight to the transport and there is nothing left to send).
-// Serves one request and writes its response. Sets `keep` to whether the
-// connection may be reused afterwards; the caller owns the socket either way.
 func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     if req.len() == 0:
         keep = false
@@ -1220,19 +1061,6 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     ret true
 end
 
-// One thread per connection, and now one connection for many requests.
-//
-// This used to be one thread per *request*: the handler read once, answered,
-// closed, and exited, so every single GET cost a TCP handshake, a thread
-// creation, a thread teardown and a four-way close. That is most of the work
-// in serving a small response, and none of it is serving.
-//
-// TCP_NODELAY matters more once the connection is reused. Without it, a
-// small response can sit in the kernel waiting for more data to coalesce
-// with, and on a reused connection there is nothing behind it to coalesce
-// with until the client's next request - which the client will not send
-// until it has this response. Nagle plus delayed ACK turns that standoff
-// into tens of milliseconds of latency on an otherwise idle link.
 func _web_conn_handler(packed: i64):
     slot := _srv_slot_of(packed)
     fd := _srv_fd_of(packed)
@@ -1245,8 +1073,23 @@ func _web_conn_handler(packed: i64):
     mut served := 0
     until 1 == 1:
         mut owned := false
-        req := _read_request(fd, scratch, pending, owned)
+        mut oversize := 0
+        req := _read_request(fd, scratch, pending, owned, oversize)
+        if oversize == 431:
+            _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            break
+        end
+        if oversize != 0:
+            _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            break
+        end
         if req.len() == 0: break end
+        te_end := str.IndexFrom(req, "\r\n\r\n", 0)
+        if te_end >= 0 && (_has_transfer_encoding(req, te_end + 4) || _bad_content_length(req, te_end + 4)):
+            _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            if owned: mem.Free(req as void *) end
+            break
+        end
         mut keep := true
         ok := _serve_request(slot, fd, ctx, req, keep)
         if owned: mem.Free(req as void *) end
@@ -1260,24 +1103,6 @@ func _web_conn_handler(packed: i64):
     _net_close(fd)
 end
 
-// TLS variant of the connection handler: wraps the accepted fd in a
-// server-side TLS 1.3 handshake (std/tls.WrapServer) before doing
-// anything else, then reads/writes through the tls.Conn instead of the
-// raw fd. Static files are read fully into memory and sent in one
-// tls.Write rather than streamed in fixed chunks over the raw fd - TLS
-// already segments its own records, so the streaming optimization
-// _send_file relies on for plain connections doesn't carry the same
-// value here, and doing it this way avoids a second chunked-file-over-
-// TLS code path for what is, on the TLS listener, presumably a much
-// smaller fraction of traffic than dynamic API responses.
-//
-// This duplicates _handle_request's static/dispatch decision tree
-// rather than sharing it, because the static-file branch needs a
-// different low-level write primitive (tls.Write vs the raw fd) at the
-// exact point the decision is made - a real DRY gap, not an oversight;
-// factoring it out cleanly needs the static-file decision separated
-// from the static-file I/O, which is a slightly bigger refactor than
-// this pass covers. Keep both branches in sync by hand until then.
 func _web_tls_conn_handler(packed: i64):
     slot := _srv_slot_of(packed)
     fd := _srv_fd_of(packed)
@@ -1382,6 +1207,20 @@ end
 @ar "تعیین خمول الاتصال"
 pub func SetKeepAliveIdle(millis: int):
     _keepalive_idle_ms = millis
+end
+
+@en "SetMaxHeaderBytes"
+@fa "بیشینه بایت سرایند"
+@ar "أقصی بایتات الترویسة"
+pub func SetMaxHeaderBytes(n: int):
+    if n > 0: _max_header_bytes = n end
+end
+
+@en "SetMaxBodyBytes"
+@fa "بیشینه بایت بدنه"
+@ar "أقصی بایتات الجسم"
+pub func SetMaxBodyBytes(n: int):
+    if n > 0: _max_body_bytes = n end
 end
 
 @en "SetKeepAliveMaxRequests"

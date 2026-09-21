@@ -1459,8 +1459,8 @@ The phase key set is identical, which is what `timereport/parity` asserts.
 ### 8.6 Building and running the checks
 
 ```sh
-# C compiler
-make -C c CC=gcc
+# a seed compiler to bootstrap with
+sh install.sh
 
 # self-hosted compiler
 salam build --stdlib-path=./std -o salamx.exe compiler/main.salam

@@ -20,42 +20,17 @@ package chan
 import mem
 import sync
 
-/*
- * A many-to-many message queue in two flavours, chosen by the capacity passed
- * to init:
- *
- *   init(n) with n >= 1  - buffered. A send lands in the ring buffer and
- *                          returns; it only blocks when the buffer is full.
- *   init(0)              - rendezvous. A send does not return until a
- *                          receiver has actually taken the value, so the two
- *                          threads meet rather than queue.
- *
- * Every field that carries state is a pointer, so copying a Chan copies a
- * *reference* to one channel rather than duplicating it. That is what lets a
- * channel reach a worker at all: it can sit in a global, or in a struct handed
- * to spawn(f, arg), and both sides still talk to the same queue.
- */
 @en "Chan"
 @fa "کانال"
 @ar "قناة"
 pub struct Chan<T>:
-    /*
-     * One slot past the usable ones: the extra is never written, so it keeps
-     * the zeroed value AllocateZeroed gave it and can be returned by a failed
-     * receive - salam has no way to spell "the zero value of T" otherwise.
-     * Buffered channels ring over 0..cap-1; a rendezvous channel hands off
-     * through slot 0. Either way `zidx` is the untouched one.
-     */
     pub buf: T* = null
-    // [0] head, [1] tail, [2] count, [3] closed, [4] send tickets issued,
-    // [5] send tickets consumed by a receiver.
     pub ctl: i64* = null
     pub cap: i64 = 0
     pub zidx: i64 = 0
     pub mu: sync.Mutex = sync.Mutex {}
     pub not_empty: sync.CondVar = sync.CondVar {}
     pub not_full: sync.CondVar = sync.CondVar {}
-    // Rendezvous only: raised when a receiver has taken a handed-off value.
     pub taken: sync.CondVar = sync.CondVar {}
 
     @en "init"
@@ -76,12 +51,6 @@ pub struct Chan<T>:
         this.taken = sync.NewCondVar()
     end
 
-    /*
-     * Buffered: blocks while full. Rendezvous: parks until a receiver takes
-     * the value. Returns false if the channel was closed - by this or another
-     * thread - rather than aborting, so a producer that loses a race with
-     * Close can simply stop.
-     */
     @en "send"
     @fa "فرستادن"
     @ar "إرسال"
@@ -89,11 +58,6 @@ pub struct Chan<T>:
         ret this.send_deadline(v, 0 as i64, false)
     end
 
-    /*
-     * Gives up after `ms` milliseconds and returns false. For a rendezvous
-     * channel the deadline covers the whole handoff, so a value that no
-     * receiver claimed in time is retracted rather than left in the slot.
-     */
     @en "send_timeout"
     @fa "فرستادن با مهلت"
     @ar "إرسال بمهلة"
@@ -163,12 +127,6 @@ pub struct Chan<T>:
         ret true
     end
 
-    /*
-     * Blocks while the channel is empty and open. `ok` is false exactly when
-     * the channel is closed *and* drained, which is the signal a consumer loop
-     * should stop on - a closed channel still hands out everything already
-     * queued before it starts reporting false.
-     */
     @en "recv"
     @fa "دریافت"
     @ar "استقبال"
@@ -176,10 +134,6 @@ pub struct Chan<T>:
         ret this.recv_deadline(ok, 0 as i64, false)
     end
 
-    /*
-     * `ok` is false if nothing arrived within `ms` - which covers both "timed
-     * out" and "closed and drained". Call is_closed() to tell those apart.
-     */
     @en "recv_timeout"
     @fa "دریافت با مهلت"
     @ar "استقبال بمهلة"
@@ -277,12 +231,6 @@ pub struct Chan<T>:
         ret v
     end
 
-    /*
-     * Broadcasts on all three sides: every blocked sender has to wake to learn
-     * it should give up, every blocked receiver has to wake to drain what is
-     * left and then see ok = false, and a rendezvous sender parked mid-handoff
-     * has to wake to retract its value. Closing twice is harmless.
-     */
     @en "close"
     @fa "بستن"
     @ar "إغلاق"
@@ -323,11 +271,6 @@ pub struct Chan<T>:
     @ar "سعة"
     pub func capacity(): i64: ret this.cap end
 
-    /*
-     * Only safe once every thread that touches the channel has been joined -
-     * freeing the mutex out from under a blocked receiver is not something
-     * this can defend against.
-     */
     @en "free"
     @fa "آزادسازی"
     @ar "تحرير"

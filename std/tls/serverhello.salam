@@ -44,10 +44,6 @@ func _pick_suite12(chi: ClientHelloInfo, k: PrivateKey): int:
     ret 0
 end
 
-// A scheme this server can actually produce for `k`'s key type, preferring
-// whatever the client listed but falling back to our default if the client
-// omitted the extension entirely (rare, but not a reason to refuse). RFC
-// 8446 4.4.3: RSA in a TLS 1.3 CertificateVerify MUST be PSS, never PKCS#1.
 func _pick_sig_scheme(chi: ClientHelloInfo, k: PrivateKey): int:
     mut want1 := 0
     mut want2 := 0
@@ -76,13 +72,6 @@ func _pick_sig_scheme(chi: ClientHelloInfo, k: PrivateKey): int:
     ret want1
 end
 
-// Generate this server's ephemeral key exchange key on `group`. Split from
-// the ECDH step (_hs_server_kx_finish) because TLS 1.2 needs them apart: the
-// server picks its own key and sends it in ServerKeyExchange BEFORE the
-// client's public key exists on the wire (it arrives later, in
-// ClientKeyExchange). TLS 1.3 has both sides' keys available together (the
-// client's is already in ClientHello), so _hs_server_kx below just calls
-// both in sequence for that path.
 func _hs_server_kx_gen(h &: Handshake, group: int): bool:
     h.group = group
     if group == GROUP_X25519:
@@ -128,9 +117,6 @@ func _hs_server_kx_gen(h &: Handshake, group: int): bool:
     ret true
 end
 
-// Compute the shared secret against the peer's public key, once it is
-// known. Mirrors the client's own ECDH in hello.salam/tls12.salam - same
-// primitives either way, ECDH has no notion of "client" or "server" scalar.
 func _hs_server_kx_finish(h &: Handshake, peer_pub: Buf): bool:
     if h.group == GROUP_X25519:
         _bufreset(h.shared)
@@ -153,8 +139,6 @@ func _hs_server_kx(h &: Handshake, group: int, peer_pub: Buf): bool:
     ret _hs_server_kx_finish(h, peer_pub)
 end
 
-// ServerHello. `suite13` is nonzero iff TLS 1.3 was negotiated; the 1.2 path
-// needs no key_share here (it arrives later, signed, in ServerKeyExchange).
 func _hs_build_server_hello(h &: Handshake, chi: ClientHelloInfo, suite: int, tls13: bool, out &: Buf): bool:
     _bufreset(out)
     _put8(out, HS_SERVER_HELLO)
@@ -212,9 +196,6 @@ func _hs_build_server_hello(h &: Handshake, chi: ClientHelloInfo, suite: int, tl
     ret true
 end
 
-// TLS 1.3 EncryptedExtensions. Empty: no ALPN response, no server_name
-// acknowledgement - both are optional and this server does not need a
-// client to renegotiate anything based on them.
 func _hs_build_encrypted_extensions(out &: Buf):
     _bufreset(out)
     _put8(out, HS_ENCRYPTED_EXTENSIONS)
@@ -225,10 +206,6 @@ func _hs_build_encrypted_extensions(out &: Buf):
     _patch24(out, lenmark, out.len - body)
 end
 
-// Certificate (send side). `chain` holds this server's own leaf-first chain
-// (loaded from a PEM file - see certchain.salam), never peer input.
-// `tls13` selects the certificate_request_context prefix TLS 1.3 requires
-// and the per-entry extensions vector TLS 1.2 does not have.
 func _hs_build_certificate_msg(chain: Roots, tls13: bool, out &: Buf):
     _bufreset(out)
     _put8(out, HS_CERTIFICATE)
@@ -257,9 +234,6 @@ func _hs_build_certificate_msg(chain: Roots, tls13: bool, out &: Buf):
     _patch24(out, lenmark, out.len - body)
 end
 
-// CertificateVerify (send side, TLS 1.3 only). Signs the same
-// context-string-prefixed transcript hash the client checks in
-// _hs_verify_cert_verify - see _hs_cv_content in handshake13.salam.
 func _hs_build_certificate_verify(h: Handshake, k: PrivateKey, scheme: int, th: Buf, out &: Buf): bool:
     mut content := _newbuf(128)
     defer _buf_free(content)
@@ -322,10 +296,6 @@ func _hs_build_certificate_verify(h: Handshake, k: PrivateKey, scheme: int, th: 
     ret true
 end
 
-// TLS 1.2's signature_algorithms handling is not implemented on the
-// selection side (unlike 1.3's _pick_sig_scheme, which checks the client's
-// list) - PKCS#1/ECDSA with SHA-256 (SHA-384 for a P-384 key) is close to
-// universal for ECDHE suites and is what every mainstream client accepts.
 func _pick_sig_scheme12(k: PrivateKey): int:
     if k.pk_alg == PK_RSA:
         ret SA_RSA_PKCS1_SHA256
@@ -336,11 +306,6 @@ func _pick_sig_scheme12(k: PrivateKey): int:
     ret SA_ECDSA_P256_SHA256
 end
 
-// ServerKeyExchange (TLS 1.2 send side): the mirror image of
-// _tls12_parse_ske in tls12.salam. The signature covers client_random ||
-// server_random || the ECDHParams exactly as they appear on the wire, which
-// is why `params` is built once and reused both in the signed content and
-// in the message body.
 func _hs_build_ske(h: Handshake, k: PrivateKey, scheme: int, out &: Buf): bool:
     mut params := _newbuf(256)
     defer _buf_free(params)
@@ -417,11 +382,6 @@ func _hs_build_ske(h: Handshake, k: PrivateKey, scheme: int, out &: Buf): bool:
     ret true
 end
 
-// key_block layout for an AEAD suite, server side: no MAC keys, just the two
-// write keys followed by the two fixed IVs. Mirrors _tls12_install_keys in
-// tls12.salam with the two halves swapped - the server writes with the
-// SECOND key/IV in the block and reads with the first, the opposite of the
-// client.
 func _tls12_install_keys_server(h &: Handshake): bool:
     klen := _cipher_keylen(h.cipher)
     ivlen := _tk12_ivlen(h.cipher)

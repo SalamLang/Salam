@@ -19,8 +19,6 @@ package collections
 @ar "قائمة"
 pub struct Vector<T>:
     pub data: T* = null
-    // Private: outside code goes through len() and cap(), one-line accessors
-    // that both backends inline back into the same field read.
     count: int = 0
     capacity: int = 0
 
@@ -71,14 +69,6 @@ pub struct Vector<T>:
         ret d[i]
     end
 
-    // The address of an element, for the two things a value cannot do: write
-    // one field of a struct element in place, and hand a stored element to
-    // something that takes a pointer. get used to be this, so where older
-    // code derefed a get with a trailing index, the spelling is now
-    // v.ref(i) followed by that same index.
-    //
-    // The pointer is only valid until the next push/reserve/zeros/free: those
-    // reallocate and every earlier ref dangles.
     @en "ref"
     @fa "ارجاع"
     @ar "مرجع"
@@ -91,21 +81,6 @@ pub struct Vector<T>:
         ret (this.data as i64 + (i as i64) * (sizeof(T) as i64)) as T*
     end
 
-    // Writes an element that is already there. Out of range is a panic, not a
-    // resize - see resize_set for the growing form.
-    //
-    // Growing here put a realloc on a path inside every loop that writes a
-    // vector, and that one call is enough to stop LLVM proving `data` and
-    // `count` unchanged across an iteration: bounds checks stay, loop-invariant
-    // element loads are reloaded every time, and stores are never forwarded.
-    // Splitting the two meanings apart is worth up to half the instructions in
-    // a DP kernel.
-    //
-    // The guard sits under SALAM_SAFE, same as gets, so the two accessors
-    // agree about what --release means. Code written against the older,
-    // growing set therefore panics in a default build and stores out of
-    // bounds in a --release one; that is the same bargain --release already
-    // offers for every other indexed access.
     @en "set"
     @fa "تنظیم"
     @ar "تعیین"
@@ -119,8 +94,6 @@ pub struct Vector<T>:
         d[i] = x
     end
 
-    // set that grows the vector to fit, filling up to `i` with whatever
-    // reserve left there. This is what set itself used to do.
     @en "resize_set"
     @fa "تنظیم با تغییر اندازه"
     @ar "تعيين مع تغيير الحجم"
@@ -136,25 +109,6 @@ pub struct Vector<T>:
         d[i] = x
     end
 
-    // n zeroed elements in one allocation, the counterpart of C's calloc,
-    // Rust's `vec![0; n]` and C++'s `vector<T>(n)`. Filling by push instead
-    // costs a bounds-checked store per element and denies the allocator the
-    // chance to hand back pages the kernel has already zeroed; on a 3M-element
-    // sieve that loop alone was most of the gap to C.
-    //
-    // Not a free win, and the direction is not obvious from instruction
-    // counts. A large calloc is a fresh mapping whose pages are untouched, so
-    // every page faults on *first use* - inside whatever loop runs next. A
-    // push fill pays those same faults, but pays them up front and leaves the
-    // memory warm. So this wins when what follows sweeps the whole vector
-    // (sieve -7%, subset-sum -18%, counting sort -14%) and loses when what
-    // follows is scattered or touches only part of it, where the faults land
-    // in the hot loop instead (a 16MB random-update benchmark went +33%).
-    // Measure wall clock, not cycles: kernel fault time does not show up in
-    // a user-space cycle count, which reports these regressions as wins.
-    //
-    // Anything already held is dropped, so this is a fresh start, not a
-    // resize - see reserve for growing an existing vector.
     @en "zeros"
     @fa "صفرها"
     @ar "أصفار"
@@ -166,14 +120,6 @@ pub struct Vector<T>:
         this.count = n
     end
 
-    // Sizes the vector to n elements WITHOUT initialising them, for a caller
-    // that is about to write every one. zeros() above is the safe default and
-    // stays that way; this is the escape hatch for a kernel whose next act is
-    // to overwrite the whole buffer, where the calloc costs a second pass over
-    // memory that the write is about to make again.
-    //
-    // Reading an element before writing it yields whatever the allocator
-    // handed back. Use zeros() unless the very next loop covers 0..n-1.
     @en "alloc"
     @fa "تخصیص"
     @ar "تخصيص"

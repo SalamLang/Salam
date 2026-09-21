@@ -1,24 +1,4 @@
 #!/bin/sh
-# Builds libsalam_embed.a: the sysroot tarballs a self-contained salam carries
-# inside itself, so `--target=` cross-compiles without the user installing a
-# musl or mingw toolchain.
-#
-# This is c/Makefile's embed_musl_arch/embed_mingw_arch macros as a standalone
-# script. Same trick: tar the staged sysroot, emit a .S that .incbin's it, and
-# assemble. It exports a pointer and a length per target rather than the C's
-# start/end symbol pair, because Salam has no address-of on an extern.
-#
-# Every target gets a symbol pair whether or not it was staged; the ones that
-# were not come out as a null pointer and a zero length, which is what
-# driver_embed.salam reads as "nothing embedded for this one". That keeps the
-# compiler side free of per-target conditionals.
-#
-# Usage:
-#   tools/bash/build-embed.sh --out DIR [--musl-x86_64 DIR] [--musl-aarch64 DIR]
-#                             [--musl-i686 DIR] [--musl-arm DIR]
-#                             [--mingw-x86_64 DIR] [--mingw-i686 DIR]
-#
-# Build the compiler with -DSALAM_HAVE_EMBED --libpath=DIR to link it.
 
 set -eu
 
@@ -104,29 +84,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# A pointer is 4 bytes on a 32-bit target and 8 on a 64-bit one, and `.quad`
-# against a symbol simply cannot be relocated in a 32-bit object - the i386 and
-# armhf jobs failed with "cannot represent relocation type BFD_RELOC_64". The
-# length stays .quad either way, because Salam reads it as an i64 - but as a
-# literal count from wc, NOT as `end - data`. A .quad holding a difference of
-# two symbols came out with its low word right and 0xffffffff in its high
-# word on armhf, so the mingw sysroot reported a length of -4279074816 and
-# never unpacked; the musl one survived only because its data symbol sits at
-# offset 0, which makes the difference degenerate. The script already knows
-# the byte count, so nothing has to be relocated or folded at all.
-#
-# The i64 still needs .balign 8 of its own, because a 4-byte .long pointer
-# ahead of it would otherwise leave it 4-byte aligned - harmless on x86, a
-# fault on armhf, where a 64-bit load wants its natural alignment.
 case "$($CC -dumpmachine 2>/dev/null)" in
 i?86-* | arm-* | armv7*-* | armhf-* | powerpc-* | mips-* | mipsel-*) PTR=.long ;;
 *) PTR=.quad ;;
 esac
 
-# The assembler on MSYS2 is a native Windows binary and cannot resolve an MSYS
-# path like /tmp/tmp.XXXX, so every .incbin came back as "file not found" while
-# the .S itself opened fine. Only paths that go INTO the generated assembly get
-# converted; the ones this shell uses stay as they are.
 to_native_path() {
     if command -v cygpath >/dev/null 2>&1; then
         cygpath -m "$1"
@@ -143,7 +105,6 @@ S=$WORK/embed.S
 : >"$S"
 staged=0
 
-# emit <symbol-stem> <sysroot-dir>
 emit() {
     stem=$1
     dir=$2
@@ -166,8 +127,6 @@ emit() {
         echo "  embedded $stem ($(wc -c <"$WORK/$stem.tar") bytes) from $dir"
         staged=$((staged + 1))
     else
-        # Absent target: a null pointer and a zero length, so the compiler side
-        # needs no per-target conditional.
         {
             printf '.section .data\n'
             printf '.balign 8\n'
@@ -187,10 +146,6 @@ emit musl_arm "$MUSL_ARM"
 emit mingw_x86_64 "$MINGW_X86_64"
 emit mingw_i686 "$MINGW_I686"
 
-# The static third-party libraries (sqlite3, openssl, hiredis, mariadb) that
-# `link dynamic "sqlite3"` and friends resolve against, so a program using them
-# links without the user installing dev packages. hostlibs is this machine's
-# own set; the extralibs_* are per cross target.
 emit hostlibs "$HOSTLIBS"
 emit extralibs_x86_64_linux_musl "$XL_X86_64_MUSL"
 emit extralibs_aarch64_linux_musl "$XL_AARCH64_MUSL"

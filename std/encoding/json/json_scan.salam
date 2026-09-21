@@ -17,10 +17,6 @@ package json
 import str
 import mem
 
-// _derr - the single failure path. Returns -1 so a generated body can say
-// `ret _derr(...)` in one line, and leaves the first error in place: a struct
-// twelve levels down reports where it actually went wrong rather than having
-// its message overwritten by every frame on the way out.
 func _derr(e &: str, ep &: int, msg: str, pos: int): int:
     if e == "":
         e = msg
@@ -29,12 +25,6 @@ func _derr(e &: str, ep &: int, msg: str, pos: int): int:
     ret -1
 end
 
-// _dbyte - the byte at `i`, or -1 at the end of the document.
-//
-// A str is NUL-terminated, and that terminator is what marks the end here: a
-// bounds test would be `i >= s.len()`, and s.len() is strlen, so asking it once
-// per byte makes decoding quadratic in the size of the document. A 1 MB payload
-// took minutes before this read the terminator instead.
 func _dbyte(s: str, i: int): int:
     if i < 0: ret -1 end
     v := _ub(_bp(s), i)
@@ -42,8 +32,6 @@ func _dbyte(s: str, i: int): int:
     ret v
 end
 
-// _dat - true when `word` sits at `i`. Used for the three JSON literals.
-// Byte-by-byte for the same reason _dbyte is.
 func _dat(s: str, i: int, word: str): bool:
     if i < 0: ret false end
     n := word.len()
@@ -55,8 +43,6 @@ func _dat(s: str, i: int, word: str): bool:
     ret true
 end
 
-// _dws - whitespace skip. json.salam's _jws is the same scan but measures the
-// string first; every generated decoder calls this between every token.
 func _dws(s: str, i: int): int:
     mut p := i
     if p < 0: p = 0 end
@@ -68,8 +54,6 @@ func _dws(s: str, i: int): int:
     end
 end
 
-// _dnum - the extent of a JSON number at `i`, or -1. json.salam's _jnum again,
-// without the leading strlen.
 func _dnum(s: str, i: int): int:
     bp := _bp(s)
     mut p := i
@@ -97,8 +81,6 @@ func _ddigits(bp: i8*, i: int): int:
     end
 end
 
-// _dstrend - the position just past a string token, without decoding it.
-// json.salam's _jstr, again without the leading strlen.
 func _dstrend(s: str, i: int): int:
     bp := _bp(s)
     if _ub(bp, i) != 34: ret -1 end
@@ -120,16 +102,10 @@ func _dnullat(s: str, i: int): int:
     ret -1
 end
 
-// _dalloc - storage for a pointer field the document turned out to have a
-// value for. Salam has no address-of operator, so a decoded pointee has to
-// live on the heap; zeroed, so a field the derived body does not reach keeps
-// a defined value.
 func _dalloc(n: u64): void*:
     ret mem.AllocateZeroed(n)
 end
 
-// _dgstr - decodes a JSON string at `i`, resolving escapes. endpos is the
-// position just past the closing quote, or -1 when there is no string here.
 func _dgstr(s: str, i: int, endpos &: int): str:
     bp := _bp(s)
     if i < 0 || _ub(bp, i) != 34:
@@ -179,9 +155,6 @@ func _dgstr(s: str, i: int, endpos &: int): str:
     ret ""
 end
 
-// _dslice - the bytes of s[i..e] as their own string. s.substr does the same
-// thing but measures s first, and s here is the whole document: one substr per
-// number is one full scan per number, which is quadratic all over again.
 func _dslice(s: str, i: int, e: int): str:
     bp := _bp(s)
     mut sb := str.NewBuilder()
@@ -212,21 +185,6 @@ func _dhexval(c: int): int:
     ret -1
 end
 
-// _dcp - resolves the \uXXXX escape whose 'u' sits at `p` and appends the code
-// point it denotes as UTF-8. Returns the index of the last byte consumed, or
-// -1 when the four hex digits are not there.
-//
-// Python's json.dumps and PHP's json_encode escape every non-ASCII character
-// by default, so this - not the raw-UTF-8 path - is what a Salam service
-// actually receives from such a client. Appending the value as a single byte
-// truncated each code point to its low byte, so U+0645 arrived as 'E' and a
-// Persian name reached the database as mojibake with no error anywhere.
-//
-// A code point past the BMP is written as a UTF-16 surrogate pair
-// (`\uD83D\uDE00`), so a high surrogate looks ahead for its low half and
-// joins the two. A surrogate that stays unpaired is not a code point at all;
-// it becomes U+FFFD rather than the CESU-8 that encoding it on its own would
-// produce.
 func _dcp(s: str, p: int, sb &: str.StringBuilder): int:
     hi := _dhex4(s, p + 1)
     if hi < 0: ret -1 end
@@ -244,10 +202,6 @@ func _dcp(s: str, p: int, sb &: str.StringBuilder): int:
     ret q
 end
 
-// _dpint - digits to i64, by hand. str.to_int() is 32 bits wide, so an id
-// past two billion would come back saturated and a range check downstream
-// would see a value that was in range only because it had already been
-// clipped. Overflow is reported, never clamped.
 func _dpint(s: str, beg: int, stop: int, neg: bool, ok &: bool): i64:
     mut v := 0 as i64
     mut p := beg
@@ -299,9 +253,6 @@ func _dpuint(s: str, beg: int, stop: int, ok &: bool): u64:
     ret v
 end
 
-// _dgint - a JSON number that has to land in an integer. A fractional or
-// exponent form is rejected rather than truncated: a decoder that silently
-// turns 1.9 into 1 hides a schema mismatch instead of reporting it.
 func _dgint(s: str, i: int, endpos &: int): i64:
     e := _dnum(s, i)
     if e < 0 || e == i || _dfractional(s, i, e):
@@ -321,9 +272,6 @@ func _dgint(s: str, i: int, endpos &: int): i64:
     ret v
 end
 
-// A number an integer field cannot take: it has a fraction or an exponent.
-// Read off the bytes rather than a substring, so decoding a large document
-// does not allocate once per number.
 func _dfractional(s: str, i: int, e: int): bool:
     bp := _bp(s)
     mut p := i
@@ -381,7 +329,6 @@ func _dgbool(s: str, i: int, endpos &: int): bool:
     ret false
 end
 
-// _dgch - the one-character string a `char` field encodes to.
 func _dgch(s: str, i: int, endpos &: int): int:
     text := _dgstr(s, i, endpos)
     if endpos < 0: ret 0 end
@@ -392,9 +339,6 @@ func _dgch(s: str, i: int, endpos &: int): int:
     ret _dbyte(text, 0)
 end
 
-// _drange - the bounds check a narrow integer field needs. i64 is what every
-// JSON number decodes to; a u8 field handed 300 is a schema error, not a
-// value to truncate.
 func _drange(v: i64, lo: i64, hi: i64, endpos &: int): i64:
     if endpos < 0: ret 0 end
     if v < lo || v > hi:
@@ -404,9 +348,6 @@ func _drange(v: i64, lo: i64, hi: i64, endpos &: int): i64:
     ret v
 end
 
-// _dskip - steps over one complete value without decoding it, for the
-// unknown keys a lenient decode is allowed to drop. -1 when the text is not
-// a value at all.
 func _dskip(s: str, i: int): int:
     p := _dws(s, i)
     c := _dbyte(s, p)
@@ -421,8 +362,6 @@ func _dskip(s: str, i: int): int:
     ret _dnum(s, p)
 end
 
-// Bracket matching that steps over strings, so a '}' inside a value does not
-// close the object that contains it.
 func _dskip_pair(s: str, i: int, open: int, close: int): int:
     mut depth := 0
     mut p := i

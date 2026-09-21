@@ -1,19 +1,4 @@
 #!/bin/sh
-# Installs a full Salam release bundle (the `salam` binary plus its std/
-# library, LICENSE and README) for use inside the Salam Docker image.
-#
-# This differs from the repo-root install.sh (which installs only the
-# `salam` binary onto a host PATH): programs that `use` std/ packages need
-# std/ to sit next to the binary, so the whole release bundle is unpacked
-# here, matching the layout the release zip already ships (salam + std/).
-#
-# Usage:
-#   sh install.sh --dir /opt/salam
-#   sh install.sh --dir /opt/salam --version 0.2.9
-#
-# Env vars (mirroring the root install.sh):
-#   SALAM_INSTALL_DIR, SALAM_VERSION
-#
 
 set -eu
 
@@ -55,11 +40,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# GitHub's REST API budgets anonymous callers per source IP, and shared CI
-# runners exhaust that budget between them - the call then answers 403 for
-# everyone on that IP. A token moves it onto the far larger authenticated
-# budget; GitHub Actions exposes one as github.token. Only ever sent to
-# api.github.com so it cannot leak to a release download or a redirect.
 API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 fetch_to_stdout() {
@@ -88,24 +68,14 @@ fetch_to_stdout() {
     fi
 }
 
-# Newest release tag first, one per line. Empty output means neither source
-# answered.
 list_release_tags() {
     json="$(fetch_to_stdout "https://api.github.com/repos/${REPO}/releases?per_page=10" 2>/dev/null || true)"
     found_tags="$(printf '%s' "$json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"
     if [ -z "$found_tags" ]; then
-        # The API is rate-limited and unauthenticated CI runners routinely
-        # hit 403 on it. The releases feed is served by github.com itself
-        # and carries no such limit, so it keeps the installer working.
         log "  releases API unavailable, falling back to the Atom feed"
         atom="$(fetch_to_stdout "https://github.com/${REPO}/releases.atom" 2>/dev/null || true)"
         found_tags="$(printf '%s' "$atom" | sed -n 's#.*/releases/tag/\([^"]*\)".*#\1#p')"
     fi
-    # Nightlies are prereleases and their assets carry the plain version
-    # (salam-0.2.9-linux.zip under a v0.2.9-nightly-<date> tag), so they can
-    # never match the name built from the tag below - dropping them here just
-    # skips a guaranteed-failed download attempt. Filtered by name because
-    # the Atom fallback carries no prerelease flag to filter on.
     printf '%s\n' "$found_tags" | grep -v nightly || true
 }
 

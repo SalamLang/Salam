@@ -22,11 +22,6 @@ pub struct LinkResult:
     pub err: str = ""
 end
 
-// ArgvOf - marshals a Vector<str> into a contiguous char*[] (as a `str*`,
-// ABI-identical to lld_link.h's `const char *const *argv`) for
-// salam_lld_link. The size comes from sizeof(str) rather than a hardcoded
-// 8: this used to assume a 64-bit pointer and under-allocate by half on a
-// 32-bit host, writing past the end of the buffer for every argument.
 func argv_of(items: Vector<str>): void*:
     mut buf := mem.Allocate((items.len() as u64) * (sizeof(str) as u64)) as str*
     repeat items.len() with i:
@@ -35,8 +30,6 @@ func argv_of(items: Vector<str>): void*:
     ret buf as void*
 end
 
-// elf_arch_of/emul/rtarch - ports native_link_elf's `t` substring sniffing
-// (llvm_native.c:558-574).
 func elf_arch_of(t: str): str:
     if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "aarch64" end
     if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "i386" end
@@ -51,7 +44,6 @@ func elf_emul_of(t: str): str:
     ret "elf_x86_64"
 end
 
-// mingw_arch/mingw_emul - llvm_native.c:329-341.
 func mingw_arch(t: str): str:
     if str.Contains(t, "aarch64") || str.Contains(t, "arm64"): ret "aarch64" end
     if str.Contains(t, "i686") || str.Contains(t, "i386") || str.Contains(t, "i586"): ret "i686" end
@@ -64,10 +56,6 @@ func mingw_emul(t: str): str:
     ret "i386pep"
 end
 
-// find_compiler_rt - ports find_compiler_rt() (llvm_native.c:376-409):
-// scans a handful of clang install prefixes for
-// <prefix>/<version>/lib/linux/libclang_rt.builtins-<rtarch>.a. "" = not
-// found (mirrors the C's `have_rt = 0` fallthrough).
 func find_compiler_rt(rtarch: str): str:
     mut bases := Vector {} as Vector<str>
     defer bases.free()
@@ -97,10 +85,6 @@ func find_compiler_rt(rtarch: str): str:
     ret ""
 end
 
-// find_mingw_gccdir - ports find_mingw_gccdir() (llvm_native.c:343-374):
-// scans /usr/lib/gcc/<arch>-w64-mingw32/<version>/ for crtbegin.o, exactly
-// as the C does (last hit wins unless a "win32" subdir variant is found,
-// which wins immediately - same tie-break). "" = not found.
 func find_mingw_gccdir(arch: str): str:
     base := "/usr/lib/gcc/" + arch + "-w64-mingw32"
     if !os.IsDir(base):
@@ -125,10 +109,6 @@ func find_mingw_gccdir(arch: str): str:
     ret found
 end
 
-// musl_sysroot - resolves the musl sysroot directory for `arch`: explicit
-// opts.sysroot -> $SALAM_SYSROOTS/<arch>-linux-musl (only if it actually
-// has a crt1.o) -> the plain system-package path. Ports the non-embedded
-// tail of native_link_elf's sysroot resolution (llvm_native.c:576-594).
 func musl_sysroot(explicit: str, arch: str): str:
     if str.Len(explicit) > 0:
         ret explicit
@@ -143,8 +123,6 @@ func musl_sysroot(explicit: str, arch: str): str:
     ret "/usr/lib/" + arch + "-linux-musl"
 end
 
-// mingw_sysroot - same idea for mingw (llvm_native.c:692-707): explicit
-// opts.sysroot -> $SALAM_SYSROOTS/<arch>-w64-mingw32 -> system package path.
 func mingw_sysroot(explicit: str, arch: str): str:
     if str.Len(explicit) > 0:
         ret explicit
@@ -159,12 +137,6 @@ func mingw_sysroot(explicit: str, arch: str): str:
     ret "/usr/" + arch + "-w64-mingw32"
 end
 
-// musl_folds_into_libc - libraries glibc splits out but musl keeps inside
-// libc. A `link dynamic "pthread"` (std/thread, std/sync) is right for a
-// glibc host and fatal against a musl sysroot, which ships no libpthread at
-// all: ld.lld stops at "unable to find library -lpthread" and every program
-// importing threads fails to link. The symbols are in -lc, already on the
-// line. Mirrors musl_folds_into_libc() in c/src/llvm/llvm_native.c.
 func musl_folds_into_libc(flag: str): bool:
     mut names := Vector {} as Vector<str>
     names.push("pthread")
@@ -185,13 +157,6 @@ func musl_folds_into_libc(flag: str): bool:
     ret false
 end
 
-// user_libs_of - ports the C's opts->link_libs argv-building loop
-// (native_link_elf/native_link_mingw, llvm_native.c), now also honoring
-// per-lib `link_kinds` ("static" -> `-l:libX.a`, GNU ld/lld's exact-
-// archive-name syntax - see the parity fix in c/src/llvm/llvm_native.c's
-// native_link_mingw and c/src/driver/llvm_toolchain.c's emit_llvm_link).
-// A raw flag or explicit path (leading "-", or containing "/"/"\"/".")
-// passes through unchanged regardless of kind, matching the C.
 func user_libs_of(opts: Options): Vector<str>:
     mut out := Vector {} as Vector<str>
     repeat opts.link_libs.len() with i:
@@ -226,17 +191,18 @@ else:
     end
 end
 
-// CanLinkTriple - ports lld_can_link(): whether LinkAuto has an in-process
-// linker for `t` at all (mingw+gnu windows, or musl linux). Anything else
-// (e.g. wasm, glibc linux, macOS) falls back to the caller's external
-// clang-shellout path.
-//
-// The LldAvailable() half is the port of lld_can_link's `#ifdef
-// SALAM_HAVE_LLD ... #else return 0`, and it is not hypothetical: a build
-// can have LLVM in-process and no LLD (macOS, where Homebrew's lld is
-// shared-only - see lld.salam). Without it, such a build would hand a musl
-// or mingw target to LinkAuto, reach the stubbed salam_lld_link, and report
-// a link failure instead of falling back to the external linker.
+func _target_is_darwin(opts: Options): bool:
+    t := opts.target_triple
+    if str.Len(t) == 0:
+        if SALAM_OS_MAC:
+            ret true
+        else:
+            ret false
+        end
+    end
+    ret str.Contains(t, "darwin") || str.Contains(t, "apple") || str.Contains(t, "macos")
+end
+
 @en "CanLinkTriple"
 @fa "میتوان سه‌تایی را پیوند داد"
 @ar "یمکن ربط الثلاثیة"
@@ -250,15 +216,6 @@ pub func CanLinkTriple(t: str): bool:
     ret (win && gnu) || musl
 end
 
-// LinkExternal - ports link_executable() (llvm_native.c:260-317): hands the
-// object EmitObject already produced to a system C compiler, which supplies
-// the host CRT and libc that LinkElf's static-musl path cannot.
-//
-// This is the normal outcome of a plain native build, not an error path: on
-// a glibc Linux or a macOS host there is no in-process linker at all, and
-// the C reaches exactly here via `if (rc < 0) rc = link_executable(...)`.
-// Only the object is linked - the IR is never recompiled - so it costs one
-// `cc` invocation, not a second full compile.
 @en "LinkExternal"
 @fa "پیوند بیرونی"
 @ar "ربط خارجی"
@@ -268,18 +225,31 @@ pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
     repeat opts.lib_paths.len() with i:
         cmd += ` -L"` + opts.lib_paths.get(i) + `"`
     end
+    darwin := _target_is_darwin(opts)
     repeat opts.link_libs.len() with i:
         spec := opts.link_libs.get(i)
         if str.Len(spec) == 0:
             continue
         end
-        // A raw flag or an explicit path passes through unchanged; a bare
-        // name becomes -lname. Matches the C's strpbrk(spec, "/\\.") test.
         if str.StartsWith(spec, "-") || str.Contains(spec, "/") || str.Contains(spec, "\\") || str.Contains(spec, "."):
             cmd += ` "` + spec + `"`
-        else:
-            cmd += " -l" + spec
+            continue
         end
+        mut kind := ""
+        if i < opts.link_kinds.len():
+            kind = opts.link_kinds.get(i)
+        end
+        if str.Equals(kind, "framework"):
+            if darwin:
+                cmd += " -framework " + spec
+            end
+            continue
+        end
+        if str.Equals(kind, "static") && !darwin:
+            cmd += " -Wl,-Bstatic -l" + spec + " -Wl,-Bdynamic"
+            continue
+        end
+        cmd += " -l" + spec
     end
     cmd += " -lm"
     if os.Run(cmd) == 0:
@@ -288,22 +258,6 @@ pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
     ret LinkResult { ok = false, err = "external link failed: " + cmd }
 end
 
-// HostLinkTriple - ports native_host_link_triple() (llvm_native.c:878-901):
-// the triple to hand LinkAuto when the caller asked for a plain native
-// build and named no --target=. Empty means "there is no in-process linker
-// for this host" - the caller then links externally, exactly like the C's
-// `if (rc < 0) rc = link_executable(...)`.
-//
-// Windows: the host triple itself, unless it is an MSVC one (LinkMingw
-// only knows the mingw CRT layout).
-//
-// Linux: the host's glibc CRT cannot be linked by LinkElf, which is a
-// static-musl linker - so this reports a musl triple only when a musl
-// sysroot has actually been provided, which is the direct analogue of the
-// C's salam_try_embed_musl() gate. `explicit`/$SALAM_SYSROOTS only, never
-// a distro's /usr/lib/<arch>-linux-musl: the C links the *embedded*
-// sysroot it ships, and silently switching every native build on a
-// musl-dev machine to a static musl binary would diverge from it.
 @en "HostLinkTriple"
 @fa "سه‌تایی پیوند میزبان"
 @ar "ثلاثیة ربط المضیف"
@@ -339,11 +293,6 @@ pub func HostLinkTriple(): str:
     ret (str.Equals(arch, "i386") ? "i686" : arch) + "-linux-musl"
 end
 
-// LinkElf - ports native_link_elf(): static-links a musl-libc ELF
-// executable in-process via LLD. `obj` is a native object file already
-// emitted (emit.salam's EmitObject); `opts.target_triple` selects the
-// arch, `opts.sysroot`/$SALAM_SYSROOTS/system-package resolves the musl
-// sysroot, `opts.debug_info` controls symbol stripping.
 @en "LinkElf"
 @fa "پیوند ای ال اف"
 @ar "ربط إی إل إف"
@@ -413,8 +362,6 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     ret LinkResult { ok = false, err = "in-process lld link failed" }
 end
 
-// LinkMingw - ports native_link_mingw(): dynamically-linked (against the
-// mingw-w64 CRT DLLs) PE executable, in-process via LLD.
 @en "LinkMingw"
 @fa "پیوند مینگو"
 @ar "ربط مینغو"
@@ -494,10 +441,6 @@ pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
     ret LinkResult { ok = false, err = "in-process lld link failed" }
 end
 
-// LinkAuto - ports native_link_lld(): picks LinkMingw or LinkElf by
-// `opts.target_triple`, or reports "no in-process linker for this
-// triple" (the C's -1 sentinel) so the caller can fall back to an
-// external clang-shellout link.
 @en "LinkAuto"
 @fa "پیوند خودکار"
 @ar "ربط تلقائي"

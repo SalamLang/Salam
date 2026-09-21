@@ -16,35 +16,9 @@ package image
 
 import math
 
-// Anti-aliased scanline rasterizer for glyph outlines: contour points
-// (from ttf_glyph.salam) -> straight edges -> per-pixel coverage ->
-// blended pixels.
-//
-// Coverage is exact horizontally and sampled vertically: each pixel row
-// is crossed by _TTF_SUBSAMPLES sub-scanlines, and every filled span a
-// sub-scanline produces contributes its exact fractional width to the
-// pixels it touches (a span covering 0.3 of a pixel adds 0.3 of that
-// sub-scanline's weight). Sampling both axes instead would need 16x the
-// samples for the same quality on the near-vertical stems that dominate
-// text; being exact in x is what makes 4 rows enough.
-//
-// Insides are decided by the nonzero winding rule, which is the one
-// TrueType is defined in terms of: outer contours run clockwise and
-// inner ones (the hole in an 'o') counter-clockwise, so their windings
-// cancel. An even-odd fill would agree on letters and disagree on any
-// glyph whose contours overlap.
-//
-// Nothing here is glyph-specific below _build_edges - it fills an
-// arbitrary set of closed contours - but it is deliberately not exposed
-// as a general polygon filler yet: that would mean a public point-list
-// type, and draw.salam's aliased primitives are what the rest of the
-// package is built on.
 
 const _TTF_SUBSAMPLES := 4
 
-// A directed edge, always stored top-to-bottom (y0 < y1) with `dir`
-// remembering which way the contour actually ran, since that sign is
-// what the winding count adds up.
 struct _Edge:
     pub x0: f64 = 0.0
     pub y0: f64 = 0.0
@@ -64,9 +38,6 @@ func _ttf_clampi(v: int, lo: int, hi: int): int:
     ret v
 end
 
-// Horizontal edges are dropped rather than stored: a scanline can never
-// cross one (the crossing test is half-open in y), and keeping them
-// would only add a divide-by-zero to the intersection math.
 func _edge_push(edges &: Vector<_Edge>, x0: f64, y0: f64, x1: f64, y1: f64):
     if y0 == y1:
         ret
@@ -88,10 +59,6 @@ func _edge_push(edges &: Vector<_Edge>, x0: f64, y0: f64, x1: f64, y1: f64):
     edges.push(e)
 end
 
-// Flattens one quadratic Bezier into line segments. The segment count
-// follows the control polygon's length in pixels, so a 6px 'o' costs a
-// handful of edges and a 200px one stays smooth, without a fixed count
-// that is wrong at both ends.
 func _quad_to(edges &: Vector<_Edge>, x0: f64, y0: f64, cx: f64, cy: f64, x1: f64, y1: f64):
     d := math.Abs(cx - x0) + math.Abs(cy - y0) + math.Abs(x1 - cx) + math.Abs(y1 - cy)
     mut n := 2 + (d / 3.0) as int
@@ -113,13 +80,6 @@ func _quad_to(edges &: Vector<_Edge>, x0: f64, y0: f64, cx: f64, cy: f64, x1: f6
     end
 end
 
-// Walks one contour (points [s, e)) and emits its edges.
-//
-// The start point is the first on-curve point, and TrueType allows a
-// contour to have none at all in the corners of a rounded rectangle -
-// hence the three-way choice: start at point 0 if it is on-curve, else
-// at the last point if that one is, else at the implied midpoint
-// between them.
 func _contour_edges(pts &: Vector<_GlyphPoint>, s: int, e: int, edges &: Vector<_Edge>):
     if e - s < 2:
         ret
@@ -193,9 +153,6 @@ func _build_edges(pts &: Vector<_GlyphPoint>, ends &: Vector<int>, edges &: Vect
     end
 end
 
-// Every edge crossing one sub-scanline, kept sorted by x. Insertion sort
-// rather than a general sort: a glyph rarely has more than a dozen
-// crossings on one scanline and they arrive nearly in order already.
 func _scan_crossings(edges &: Vector<_Edge>, sy: f64, out &: Vector<_Cross>):
     n := edges.len()
     mut i := 0
@@ -221,8 +178,6 @@ func _scan_crossings(edges &: Vector<_Edge>, sy: f64, out &: Vector<_Cross>):
     end
 end
 
-// Adds `weight` of coverage over [xa, xb) to the row accumulator, with
-// the two partially-covered end pixels getting their exact fraction.
 func _add_span(acc &: Vector<f64>, xoff: int, w: int, xa: f64, xb: f64, weight: f64):
     mut a := xa - (xoff as f64)
     mut b := xb - (xoff as f64)
@@ -256,8 +211,6 @@ func _add_span(acc &: Vector<f64>, xoff: int, w: int, xa: f64, xb: f64, weight: 
     acc.set(ib, acc.get(ib) + (b - (ib as f64)) * weight)
 end
 
-// Nonzero winding: a span is inside from the crossing that takes the
-// winding count away from zero until the one that brings it back.
 func _accumulate_spans(xs &: Vector<_Cross>, acc &: Vector<f64>, xoff: int, w: int, weight: f64):
     mut wind := 0
     mut spanx := 0.0
@@ -347,9 +300,6 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
     xs.free()
 end
 
-// Draws one glyph under an arbitrary 2x3 device transform (see
-// ttf_glyph.salam for what a..dy mean). Everything public that draws
-// text funnels through here.
 func _draw_glyph_xform(img &: Image, f: Font, glyph: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, col: Color):
     if !FontValid(f) || img.pixels == null:
         ret

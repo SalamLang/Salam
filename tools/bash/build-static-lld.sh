@@ -1,36 +1,4 @@
 #!/bin/sh
-# Build LLD as static archives, for hosts whose package manager only ships it
-# as shared libraries.
-#
-# Homebrew's lld formula is built with BUILD_SHARED_LIBS=ON, so a Mac has
-# liblld*.dylib and no liblld*.a. `make -C c libsalam-llvm` can only merge
-# archives - a dylib cannot go into libsalam_llvm.a, and linking Homebrew's
-# would be worse than not having LLD at all, because that dylib reaches LLVM
-# through libLLVM.dylib and the archive already carries a static LLVM: two
-# copies of LLVM's global state in one process.
-#
-# So build the same lld release from source with BUILD_SHARED_LIBS=OFF,
-# against the LLVM already installed. Then:
-#
-#   make -C c libsalam-llvm WITH_LLVM=1 WITH_LLD=1 \
-#        LLVM_CONFIG=... LLD_PREFIX=<this script's --prefix>
-#
-# and the self-hosted compiler gets in-process LLD on macOS exactly as it
-# does on Linux. Without it the build is still fine, just WITH_LLD=0: LLVM
-# codegen stays in-process and only the final link shells out to cc.
-#
-# Note what this does NOT buy on a Mac: salam has no Mach-O path in its
-# native linker (native_link_lld covers mingw-gnu and linux-musl only), and
-# a Mach-O link needs the platform SDK's libSystem.tbd regardless of which
-# linker performs it. In-process LLD on macOS is for cross-linking *to*
-# Linux and Windows targets; native macOS output still goes through cc.
-#
-# Usage:
-#   tools/bash/build-static-lld.sh --prefix DIR [--llvm-config PATH] [--jobs N]
-#
-# The LLVM version is taken from llvm-config, and the matching lld source
-# tarball is fetched from the llvm-project release page. Exits non-zero on
-# any failure; callers that treat LLD as optional should ignore that.
 
 set -eu
 
@@ -88,8 +56,6 @@ command -v "$LLVM_CONFIG" >/dev/null 2>&1 || {
 }
 
 VER=$("$LLVM_CONFIG" --version | tr -d '[:space:]')
-# llvm-config reports e.g. 22.1.8 or 22.1.8git; releases are tagged by the
-# plain three-part version.
 VER=$(printf '%s' "$VER" | sed 's/[^0-9.].*$//')
 case "$VER" in
 [0-9]*.[0-9]*.[0-9]*) ;;
@@ -103,7 +69,6 @@ if [ -z "$JOBS" ]; then
     JOBS=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
 fi
 
-# Already built (a warm cache)? Nothing to do.
 if [ -f "$PREFIX/lib/liblldCommon.a" ]; then
     echo "static lld $VER already at $PREFIX"
     exit 0
@@ -114,9 +79,6 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 BASE="https://github.com/llvm/llvm-project/releases/download/llvmorg-$VER"
 echo "fetching lld $VER sources"
-# Since LLVM 15 a standalone project tarball needs the shared cmake/ modules
-# tarball unpacked as its sibling, or the configure step dies on a missing
-# "GetErrcMessages.cmake".
 for p in lld cmake; do
     curl -fsSL "$BASE/$p-$VER.src.tar.xz" -o "$WORK/$p.tar.xz" || {
         echo "error: cannot download $p-$VER.src.tar.xz from $BASE" >&2

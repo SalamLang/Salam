@@ -1,34 +1,4 @@
 #!/bin/sh
-# Stage trimmed musl sysroots for the release build to embed, so a released
-# salam can produce fully static linux-musl binaries for a target without
-# that target's toolchain installed.
-#
-# A sysroot here is five required files - crt1.o, crti.o, crtn.o, libc.a,
-# libgcc.a - plus three more that clang wants only when it links a static
-# executable itself (crtbeginT.o, crtend.o, libgcc_eh.a), plus, with
-# --headers, musl's libc headers. All taken out of a prebuilt cross toolchain
-# with everything else thrown away.
-#
-# The extra three are best-effort: an arch whose toolchain does not carry them
-# still stages, because salam's own driver never asks for them - it names
-# crt1.o and lets its C compiler do the rest. They matter to the Windows
-# release job, which cross-compiles the static third-party libs with clang.
-# Without them in the sysroot clang falls back to the host's GCC install,
-# which on that runner is mingw: PE objects, and the link dies with
-# "crtend.o: unknown file type".
-#
-# Usage:
-#   tools/bash/fetch-musl-sysroots.sh --out DIR [--arches "x86_64 aarch64 ..."]
-#                                     [--headers]
-#
-# Writes SALAM_EMBED_MUSL_<ARCH>_DIR=<path> for each staged arch to
-# $GITHUB_ENV when that is set (x86_64 gets the unsuffixed
-# SALAM_EMBED_MUSL_DIR, which is the name the Makefile and the build steps
-# already use for it). Always prints what it staged.
-#
-# Every arch is best-effort and independent: a failure warns and moves on,
-# because an embed that is missing costs one cross-target on the released
-# binary, not the release.
 
 set -eu
 
@@ -70,7 +40,6 @@ done
     exit 2
 }
 
-# arch -> musl.cc triple, cross-tools/musl-cross triple.
 triple_of() {
     case "$1" in
     x86_64) echo x86_64-linux-musl ;;
@@ -99,13 +68,6 @@ varname_of() {
     fi
 }
 
-# cross-tools/musl-cross publishes the same prebuilt toolchains as GitHub
-# Releases, which resolve over the network GitHub-hosted runners already
-# use, so it is tried first. musl.cc is a small volunteer-run host serving
-# ~100MB archives and has been observed fully unreachable from those runners
-# (connection timeout, not just slow), so --connect-timeout stays short and
-# there is no curl --retry: retrying a dead host only burns CI minutes.
-# --max-time stays generous for a connection that DOES succeed but crawls.
 download() {
     out=$1
     shift
@@ -120,9 +82,6 @@ download() {
     return 1
 }
 
-# Read-only files and dirs (crosstool-NG leaves some behind) make a plain
-# rm -rf fail outright, which under `set -e` would kill the whole job over
-# scratch cleanup in a directory the runner throws away anyway.
 scrub() {
     chmod -R u+rwX "$1" 2>/dev/null || true
     rm -rf "$1" 2>/dev/null || true
@@ -169,16 +128,6 @@ for arch in $ARCHES; do
         continue
     fi
 
-    # tar's exit status is deliberately ignored, and the extraction is
-    # judged by what it produced instead. These toolchains carry symlinks
-    # (lib64 -> lib, the .so version chains, license links) that a Windows
-    # runner cannot create - MSYS2 has no privilege to, and its copy
-    # fallback cannot resolve a link whose target tar has not written yet.
-    # GNU tar reports each one and exits 2 while every regular file, which
-    # is all this script takes, came out fine. Gating on the status instead
-    # cost the Windows release every one of its musl targets, under a
-    # "could not fetch from any mirror" warning that blamed the mirrors for
-    # an 81MB archive that had downloaded perfectly.
     tar xf "$arch.tar" -C "$arch-x" 2>"$arch-tar.err" || true
 
     mkdir -p "$SR"
@@ -192,9 +141,6 @@ for arch in $ARCHES; do
         fi
     done
 
-    # Optional, and deliberately not part of `missing`: losing one of these
-    # costs a static clang link on the Windows job, while treating it as
-    # required would cost the whole arch.
     for f in crtbeginT.o crtend.o libgcc_eh.a; do
         found=$(find "$arch-x" -name "$f" -type f 2>/dev/null | head -1)
         [ -n "$found" ] && cp "$found" "$SR/$f"
@@ -211,19 +157,10 @@ for arch in $ARCHES; do
     fi
 
     if [ "$WANT_HEADERS" = 1 ]; then
-        # musl's libc headers, not gcc's own fixed-includes in the sibling
-        # lib/gcc/.../include dir - clang needs these via -isystem to
-        # cross-compile sqlite3/hiredis/openssl/mariadb for this target.
-        # features.h is a stable, always-present marker for the real libc
-        # include root.
         hdr=$(find "$arch-x" -type f -name features.h ! -path '*/c++/*' 2>/dev/null | head -1)
         rm -rf "$SR/include"
         if [ -n "$hdr" ]; then
             mkdir -p "$SR/include"
-            # `|| true` for the same reason tar's status is ignored above:
-            # a header tree can carry a symlink this host cannot reproduce,
-            # and cp would then fail the whole step over one file. What
-            # matters is whether features.h arrived, so check that instead.
             cp -r "$(dirname "$hdr")/." "$SR/include/" 2>/dev/null || true
         fi
         if [ ! -f "$SR/include/features.h" ]; then

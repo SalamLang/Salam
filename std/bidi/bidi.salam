@@ -20,22 +20,12 @@ package bidi
 import str
 import unicode
 
-// Paragraph direction requests.
-//
-// DirAuto is rule P2/P3: scan for the first strong character and take its
-// direction, defaulting to left-to-right if there is none. That is the right
-// choice for text of unknown provenance. DirLTR and DirRTL correspond to the
-// "higher-level protocol" the spec allows - a document language attribute, or
-// a UI that knows which way its own text runs.
 pub const DirAuto := 0
 pub const DirLTR := 1
 pub const DirRTL := 2
 
-// The maximum embedding depth, from BD2. Beyond this, further embeddings and
-// isolates are counted as overflow and otherwise ignored.
 const _MAX_DEPTH := 125
 
-// Directional override status values used by the X rules.
 const _OVR_NEUTRAL := 0
 const _OVR_LTR := 1
 const _OVR_RTL := 2
@@ -44,31 +34,23 @@ inline pure func _is_isolate_init(t: int): bool:
     ret t == unicode.BcLRI || t == unicode.BcRLI || t == unicode.BcFSI
 end
 
-// The characters rule X9 removes from the text: the embedding and override
-// initiators, the terminator, and anything that was already boundary-neutral.
-// Isolate initiators and PDI are NOT removed - they survive as neutrals and
-// take part in the N rules.
 inline pure func _is_removed(t: int): bool:
     if t == unicode.BcRLE || t == unicode.BcLRE: ret true end
     if t == unicode.BcRLO || t == unicode.BcLRO: ret true end
     ret t == unicode.BcPDF || t == unicode.BcBN
 end
 
-// "NI" in the spec: neutral or isolate formatting, the classes the N rules
-// resolve.
 inline pure func _is_ni(t: int): bool:
     if t == unicode.BcB || t == unicode.BcS: ret true end
     if t == unicode.BcWS || t == unicode.BcON: ret true end
     ret _is_isolate_init(t) || t == unicode.BcPDI
 end
 
-// Direction of a level: odd levels run right to left.
 inline pure func _level_dir(level: int): int:
     if level % 2 == 1: ret unicode.BcR end
     ret unicode.BcL
 end
 
-// For the N rules, European and Arabic numbers count as right-to-left context.
 inline pure func _n_dir(t: int): int:
     if t == unicode.BcR || t == unicode.BcEN || t == unicode.BcAN: ret unicode.BcR end
     if t == unicode.BcL: ret unicode.BcL end
@@ -81,12 +63,6 @@ func _new_ints(n: int, fill: int): Vector<int>:
     ret out
 end
 
-// Rules P2 and P3 over types[from..stop): the direction of the first strong
-// character, skipping anything inside an isolate, or 0 if there is none.
-//
-// Isolates are skipped rather than descended into because that is the whole
-// point of an isolate: the text inside it must not influence the direction of
-// the text around it.
 func _auto_level(types: Vector<int>, from: int, stop: int): int:
     mut depth := 0
     mut i := from
@@ -105,8 +81,6 @@ func _auto_level(types: Vector<int>, from: int, stop: int): int:
     ret 0
 end
 
-// Rule BD9: for every isolate initiator, the index of the PDI that matches it,
-// or -1. Written into `pdi_of`; the inverse goes into `init_of`.
 func _match_isolates(types: Vector<int>, pdi_of &: Vector<int>, init_of &: Vector<int>):
     n := types.len()
     stack := Vector {} as Vector<int>
@@ -125,13 +99,6 @@ func _match_isolates(types: Vector<int>, pdi_of &: Vector<int>, init_of &: Vecto
     end
 end
 
-// Applies the explicit formatting rules, filling `levels` and rewriting
-// `types` where a directional override is in force.
-//
-// The directional status stack holds a level, an override status and whether
-// the entry was pushed by an isolate. Overflow is tracked in two counters
-// rather than by growing the stack, because an overflowed embedding still has
-// to be matched by its terminator without affecting anything in between.
 func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, levels &: Vector<int>):
     n := types.len()
     st_level := Vector {} as Vector<int>
@@ -156,9 +123,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
         cur := st_level.get(top)
 
         if t == unicode.BcRLE || t == unicode.BcLRE || t == unicode.BcRLO || t == unicode.BcLRO:
-            // X2..X5. The character itself is removed by X9, but it still gets
-            // the level in force before the push so that nothing downstream
-            // has to special-case an unset value.
             levels.set(i, cur)
             mut next := cur + 1
             if t == unicode.BcRLE || t == unicode.BcRLO:
@@ -176,9 +140,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
                 if overflow_iso == 0: overflow_emb += 1 end
             end
         else _is_isolate_init(t):
-            // X5a..X5c. An isolate initiator is itself part of the text
-            // outside the isolate, so it takes the current level and any
-            // override in force before the push.
             levels.set(i, cur)
             if st_over.get(top) == _OVR_LTR: types.set(i, unicode.BcL)
             else st_over.get(top) == _OVR_RTL: types.set(i, unicode.BcR) end
@@ -237,7 +198,6 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
         else t == unicode.BcB:
             levels.set(i, para)
         else:
-            // X6.
             levels.set(i, cur)
             if st_over.get(top) == _OVR_LTR: types.set(i, unicode.BcL)
             else st_over.get(top) == _OVR_RTL: types.set(i, unicode.BcR) end
@@ -246,17 +206,10 @@ func _explicit_levels(types &: Vector<int>, pdi_of: Vector<int>, para: int, leve
     end
 end
 
-// ---------------------------------------------------------------------------
-// W1..W7: weak types
-// ---------------------------------------------------------------------------
 
-// `seq` holds the positions of one isolating run sequence, in order.
 func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
     m := seq.len()
 
-    // W1: a nonspacing mark takes the type of what precedes it. After an
-    // isolate initiator or a PDI it becomes ON instead, so that a mark cannot
-    // inherit a direction from across an isolate boundary.
     mut prev := sos
     repeat m with k:
         p := seq.get(k)
@@ -344,18 +297,12 @@ func _resolve_weak(types &: Vector<int>, seq: Vector<int>, sos: int):
     end
 end
 
-// Canonical equivalence for the two bracket pairs that have singleton
-// decompositions - BD16 requires U+2329 and U+3008 to match each other's
-// partners, and they are the only such case.
 inline pure func _canon_bracket(cp: int): int:
     if cp == 0x3008: ret 0x2329 end
     if cp == 0x3009: ret 0x232A end
     ret cp
 end
 
-// Rule N0. Brackets that enclose a strong direction take that direction, so
-// that the parentheses in "(سلام)" face the way the reader expects rather than
-// inheriting from whatever precedes the phrase.
 func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>, level: int, sos: int):
     m := seq.len()
     e := _level_dir(level)
@@ -468,8 +415,6 @@ func _resolve_brackets(cps: Vector<int>, types &: Vector<int>, seq: Vector<int>,
     end
 end
 
-// Whether position k of the sequence was originally a nonspacing mark. N0
-// needs the ORIGINAL class here, because W1 has already rewritten it.
 inline func _orig_nsm(cps: Vector<int>, seq: Vector<int>, k: int): bool:
     ret unicode.BidiClass(cps.get(seq.get(k))) == unicode.BcNSM
 end
@@ -502,9 +447,6 @@ func _resolve_neutrals(types &: Vector<int>, seq: Vector<int>, level: int, sos: 
     end
 end
 
-// Rules I1 and I2: turn resolved types into levels. In a left-to-right
-// context, right-to-left text goes up one and numbers go up two; in a
-// right-to-left context, everything left-to-right or numeric goes up one.
 func _resolve_implicit(types: Vector<int>, seq: Vector<int>, levels &: Vector<int>):
     m := seq.len()
     repeat m with k:
@@ -522,7 +464,6 @@ func _resolve_implicit(types: Vector<int>, seq: Vector<int>, levels &: Vector<in
     end
 end
 
-// Decodes `s` into code points.
 func _code_points(s: str): Vector<int>:
     out := Vector {} as Vector<int>
     n := s.len()
@@ -536,9 +477,6 @@ func _code_points(s: str): Vector<int>:
     ret out
 end
 
-// Runs the whole algorithm, leaving the per-code-point levels in `levels`
-// (with -1 for the characters rule X9 removes) and returning the paragraph
-// embedding level.
 func _resolve(cps: Vector<int>, dir: int, levels &: Vector<int>): int:
     n := cps.len()
 
@@ -681,13 +619,6 @@ end
 @en "ParagraphLevel"
 @fa "تراز بند"
 @ar "مستوی الفقرة"
-// The paragraph embedding level of `s`: 0 for left-to-right, 1 for
-// right-to-left.
-//
-// With DirAuto this is rules P2 and P3 - the direction of the first strong
-// character outside any isolate. A Persian sentence gives 1; a Persian
-// sentence that happens to open with an English word gives 0, which is why a
-// document that knows its own language should pass DirRTL rather than guess.
 pub func ParagraphLevel(s: str, dir: int): int:
     cps := _code_points(s)
     defer cps.free()
@@ -699,12 +630,6 @@ end
 @en "Levels"
 @fa "ترازها"
 @ar "المستویات"
-// The resolved embedding level of each code point of `s`, in logical order.
-//
-// Even levels run left to right and odd levels right to left, and the number
-// itself is the nesting depth. Characters removed by rule X9 - the embedding
-// controls and boundary neutrals - come back as -1, because they have no
-// level and are not displayed.
 pub func Levels(s: str, dir: int): Vector<int>:
     cps := _code_points(s)
     defer cps.free()
@@ -716,11 +641,6 @@ end
 @en "VisualOrder"
 @fa "ترتیب دیداری"
 @ar "الترتیب المرئي"
-// The display order of `s`, as indices into its code points.
-//
-// This is rule L2: from the highest level down to the lowest odd one, reverse
-// every contiguous run at or above that level. Characters removed by X9 are
-// left out entirely, so the result may be shorter than the input.
 pub func VisualOrder(s: str, dir: int): Vector<int>:
     cps := _code_points(s)
     defer cps.free()
@@ -780,12 +700,6 @@ end
 @en "Reorder"
 @fa "بازچینش"
 @ar "إعادة الترتیب"
-// `s` rearranged into display order.
-//
-// The result is for drawing, not for storing: display order has thrown away
-// the structure that would let the text be laid out again at another width,
-// and re-running the algorithm over it gives nonsense. Keep the logical string
-// and call this at the point of rendering.
 pub func Reorder(s: str, dir: int): str:
     cps := _code_points(s)
     defer cps.free()

@@ -1,16 +1,4 @@
 #!/usr/bin/env sh
-# prek hook: keep docs/ai/stdlib-index.json in step with the std/ tree.
-#
-# The MCP server workflow rebuilds the index from std/ and fails the pull
-# request when the committed copy disagrees. Regenerating here turns that
-# into a blocked commit, which is a much shorter feedback loop than a red PR.
-#
-# Only a checkout that has built the server can regenerate the index, and a
-# fresh clone (or the prek CI job, which never builds Salam) has neither
-# salam-mcp nor necessarily node. There the hook says what is missing and
-# passes; the workflow stays the real gate.
-#
-# Usage: tools/mcp/check-index.sh
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

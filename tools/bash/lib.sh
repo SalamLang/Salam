@@ -1,5 +1,4 @@
 # shellcheck shell=sh
-# Shared helpers for the tools/bash/*.sh scripts, not executable on its own.
 
 cd "$(dirname "$0")/../.." || exit 1
 

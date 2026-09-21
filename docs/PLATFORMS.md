@@ -8,7 +8,7 @@ produces binaries for them.
 
 - ✅ **64-bit** (x86-64, arm64): fully supported, both backends, all features.
 - ✅ **32-bit** (i686, armhf, wasm32): supported.
-  - The **C backend** (`salam build`) targets 32-bit correctly and completely —
+  - The **C backend** (`salam build`) targets 32-bit correctly and completely -
     it emits standard C and lets the system C compiler resolve pointer/`size_t`
     width. This is the recommended path for 32-bit today.
   - The **LLVM backend** (`salam llvm`) is now **pointer-width aware** and emits
@@ -16,7 +16,7 @@ produces binaries for them.
     LLVM _toolchain_ binary is shipped 64-bit-first; the 32-bit LLVM story
     depends on toolchain availability (notes below).
 
-## 🔢 Can a 32-bit machine use `i64` and `f64`? — Yes.
+## 🔢 Can a 32-bit machine use `i64` and `f64`? - Yes.
 
 "32-bit" refers to the **pointer / word width**, not the widest value you can
 compute with. Nothing about 64-bit numeric types is lost on a 32-bit CPU:
@@ -24,7 +24,7 @@ compute with. Nothing about 64-bit numeric types is lost on a 32-bit CPU:
 | Type           | On a 32-bit target                                                                                                                                                                                                                  |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `i64` / `u64`  | Fully supported. Add/sub are inlined as 32-bit register **pairs**; multiply/divide/modulo call the compiler's runtime helpers (`__divdi3`, `__moddi3`, `__udivdi3`, …). Correct, just a few instructions slower than native 64-bit. |
-| `f64` (double) | Fully supported and usually **native** — the FPU (x87 / SSE2 / NEON) operates on 64-bit doubles regardless of pointer width.                                                                                                        |
+| `f64` (double) | Fully supported and usually **native** - the FPU (x87 / SSE2 / NEON) operates on 64-bit doubles regardless of pointer width.                                                                                                        |
 | `i32` / `f32`  | Native.                                                                                                                                                                                                                             |
 
 What actually changes on 32-bit is only:
@@ -37,19 +37,19 @@ pointer or `size_t` is 64 bits. That is exactly what the changes below address.
 
 ## ⚙️ How Each Backend Handles Word Size
 
-### 🔵 C backend (`salam build`) — portable by construction
+### 🔵 C backend (`salam build`) - portable by construction
 
 Salam types lower to standard C types: `i64`→`int64_t`, `f64`→`double`,
 `sizeof(T)`→C's `sizeof`, pointers→native C pointers. The **system C compiler**
 (gcc / tcc / clang) then resolves every width for the actual target. Build the
-generated C with a 32-bit compiler and you get correct 32-bit code for free —
+generated C with a 32-bit compiler and you get correct 32-bit code for free -
 no special handling in Salam is required.
 
-### 🟠 LLVM backend (`salam llvm`) — now width-aware
+### 🟠 LLVM backend (`salam llvm`) - now width-aware
 
 Salam emits textual LLVM IR. Previously every `size_t`-typed position
 (`malloc`, `realloc`, `memcpy`, `memmove`, `snprintf`, `strlen`) and the
-internal helpers were hardcoded to `i64`, which is wrong on a 32-bit target —
+internal helpers were hardcoded to `i64`, which is wrong on a 32-bit target -
 the IR declarations would not match the real libc ABI (most visibly,
 `snprintf`'s vararg layout breaks when its `size_t` argument is the wrong
 width).
@@ -63,7 +63,7 @@ salam llvm prog.salam --emit-llvm --target=i686-linux-gnu   # 32-bit: usize = i3
 ```
 
 - With no `--target`, `usize` = the host pointer width, so **64-bit output is
-  byte-for-byte identical** to before — no behavior change for existing users.
+  byte-for-byte identical** to before - no behavior change for existing users.
 - With a 32-bit triple, all `size_t` positions become `i32`, a matching
   `target triple = "…"` line is emitted, and `llc`/`clang` lower the module to
   real 32-bit machine code (verified: a 32-bit triple produces an
@@ -92,7 +92,7 @@ Width classification lives in `ll_target_ptr_bits()`
 | `build-linux-arm`    | Linux aarch64 / armhf | 64 / 32   | C backend (cross-compiled, smoke-tested under QEMU)                   |
 
 The three 32-bit/cross jobs are marked `continue-on-error`, and the release
-step attaches their artifacts only if present — a flaky 32-bit or cross build
+step attaches their artifacts only if present - a flaky 32-bit or cross build
 can never block the release of the core 64-bit platforms.
 
 ### ❓ Why not embedded LLVM everywhere on 32-bit?
@@ -116,6 +116,6 @@ can never block the release of the core 64-bit platforms.
 
 ## 🔗 Related
 
-- [Getting Started](GETTING_STARTED.md) — build instructions for all platforms
-- [LLVM Default Backend](LLVM_DEFAULT_BACKEND.md) — LLVM backend deep-dive
-- [Releases](https://github.com/SalamLang/Salam/releases) — pre-built binaries for all supported platforms
+- [Getting Started](GETTING_STARTED.md) - build instructions for all platforms
+- [LLVM Default Backend](LLVM_DEFAULT_BACKEND.md) - LLVM backend deep-dive
+- [Releases](https://github.com/SalamLang/Salam/releases) - pre-built binaries for all supported platforms

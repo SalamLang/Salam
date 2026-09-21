@@ -6,18 +6,18 @@ Everything else the compiler is made of has a self-hosted counterpart under
 `compiler/`. These six files do not, and cannot, because of how LLVM and LLD
 publish their interfaces:
 
-- **`orc_call.c` / `orc_call.h`** — `LLVMInitializeAllTargets`,
+- **`orc_call.c` / `orc_call.h`** - `LLVMInitializeAllTargets`,
   `...AllTargetInfos`, `...AllTargetMCs`, `...AllAsmPrinters`,
   `...AllAsmParsers` are **preprocessor macros** in LLVM's C API, not
   functions, so nothing outside C can call them. This wraps each one in a real
   function. It also carries `salam_orc_call_main`, which calls a JIT'd address
   through a function pointer.
-- **`lld_link.cc` / `lld_link.h`** — LLD has **no C API at all**; its entry
+- **`lld_link.cc` / `lld_link.h`** - LLD has **no C API at all**; its entry
   points are C++ (`lld::coff::link` and friends). This is the C++ wrapper that
   gives them C linkage.
-- **`lld_stub.c`** — the same two symbols as `lld_link.cc`, for builds without
+- **`lld_stub.c`** - the same two symbols as `lld_link.cc`, for builds without
   in-process LLD, so `std/llvm` still resolves.
-- **`win_lld_demangle_shim.S`** — a Windows link-time shim; see the comment in
+- **`win_lld_demangle_shim.S`** - a Windows link-time shim; see the comment in
   the file.
 
 That is eight exported symbols in total:

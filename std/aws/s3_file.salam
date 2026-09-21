@@ -20,9 +20,6 @@ import os
 import net.mime
 
 extern:
-    // Declared by <stdio.h> in every generated module, so these emit no C of
-    // their own. Used rather than std/io because a `str` cannot carry a NUL
-    // byte, and an object generally can.
     func fopen(path: str, mode: str): void*
     func fread(ptr: void*, size: u64, count: u64, stream: void*): u64
     func fwrite(ptr: void*, size: u64, count: u64, stream: void*): u64
@@ -33,15 +30,10 @@ extern:
     func rename(oldpath: str, newpath: str): int
 end
 
-// The bytes one ranged GET asks for while downloading. Eight mebibytes is the
-// same figure multipart uses, for the same reason: large enough that the
-// per-request overhead disappears, small enough to re-fetch cheaply.
 const _S3_DOWNLOAD_CHUNK := 8388608
 
-// An MD5 digest, which is what a multipart ETag is built out of.
 const _S3_MD5_WIDTH := 16
 
-// TransferResult - what a file transfer did.
 pub struct TransferResult:
     pub ok: bool = false
     pub status: int = 0
@@ -54,15 +46,11 @@ pub struct TransferResult:
     pub code: str = ""
 end
 
-// DirResult - what a whole-directory transfer did.
 pub struct DirResult:
     pub ok: bool = false
     pub files: int = 0
     pub bytes: i64 = 0
     pub skipped: int = 0
-    // The first file that failed, and why. A directory transfer stops at the
-    // first failure rather than continuing and reporting a count, because a
-    // partial sync that claims success is worse than a stopped one.
     pub failed_path: str = ""
     pub error: str = ""
     pub code: str = ""
@@ -92,8 +80,6 @@ func _content_type_for(path: str, given: str): str:
     ret mime.MimeType(path)
 end
 
-// _read_all - a whole file into a fresh buffer, for an object small enough to
-// send in one request.
 func _read_all(path: str, size: i64, out_len &: int): void*:
     out_len = 0
     if size <= 0 as i64: ret null end
@@ -114,7 +100,6 @@ func _read_all(path: str, size: i64, out_len &: int): void*:
     ret p
 end
 
-// _upload_stream - a file larger than one part, read a part at a time.
 func _upload_stream(cfg: Config, key: str, path: str, size: i64, part: int,
     o: PutOptions): TransferResult:
     buf := mem.Allocate(part as u64)
@@ -168,8 +153,6 @@ func _upload_stream(cfg: Config, key: str, path: str, size: i64, part: int,
     }
 end
 
-// _relative - a path under `base`, as an object key. Backslashes become
-// forward slashes, because a key separator is `/` on every platform.
 func _relative(base: str, path: str): str:
     mut rest := path
     if base.len() > 0 && str.StartsWith(path, base):
@@ -181,7 +164,6 @@ func _relative(base: str, path: str): str:
     ret str.Replace(rest, "\\", "/")
 end
 
-// _parent_of - the directory part of a local path, or "".
 func _parent_of(path: str): str:
     mut cut := -1
     repeat path.len() with i:
@@ -192,11 +174,6 @@ func _parent_of(path: str): str:
     ret path.substr(0, cut)
 end
 
-// S3UploadFile - store a local file as an object.
-//
-// One request for a small file, a multipart upload for a large one, and the
-// decision is made from the file's size against `o.part_size`. The content
-// type is guessed from the extension unless one is given.
 pub func S3UploadFile(cfg: Config, key: str, path: str,
     o: PutOptions): TransferResult:
     size := _file_size(path)
@@ -225,17 +202,11 @@ pub func S3UploadFile(cfg: Config, key: str, path: str,
     }
 end
 
-// S3UploadFileAs - the short form, with a content type and nothing else.
 pub func S3UploadFileAs(cfg: Config, key: str, path: str,
     content_type: str): TransferResult:
     ret S3UploadFile(cfg, key, path, PutOptions { content_type = content_type })
 end
 
-// S3DownloadFile - write an object to a local file.
-//
-// Ranged reads, one chunk at a time, into a `.part` file that is renamed once
-// the whole object has arrived. Peak memory is one chunk regardless of the
-// object's size.
 pub func S3DownloadFile(cfg: Config, key: str, path: str): TransferResult:
     info := S3Stat(cfg, key)
     if !info.ok:
@@ -290,11 +261,6 @@ pub func S3DownloadFile(cfg: Config, key: str, path: str): TransferResult:
     }
 end
 
-// S3UploadDir - store every file under a local directory.
-//
-// Keys are the prefix followed by each file's path relative to the directory,
-// with the separators normalised to `/`. Stops at the first failure and names
-// the file it stopped on.
 pub func S3UploadDir(cfg: Config, dir: str, prefix: str,
     o: PutOptions): DirResult:
     if !os.IsDir(dir):
@@ -328,8 +294,6 @@ pub func S3UploadDir(cfg: Config, dir: str, prefix: str,
     ret out
 end
 
-// S3DownloadPrefix - write every object under a prefix into a local
-// directory, recreating the key structure as directories.
 pub func S3DownloadPrefix(cfg: Config, prefix: str, dir: str): DirResult:
     if os.MkdirAll(dir) != 0:
         ret DirResult { error = "could not create " + dir, code = "IOError" }
@@ -367,13 +331,6 @@ pub func S3DownloadPrefix(cfg: Config, prefix: str, dir: str): DirResult:
     ret out
 end
 
-// S3FileEtag - the ETag S3 will report for a local file uploaded with a given
-// part size, so an upload can be verified without downloading it again.
-//
-// Reads a part at a time, the same way the upload does, so checking a
-// hundred-gigabyte file costs one part of memory rather than the file. The
-// part size must be the one the upload used: a multipart ETag depends on it,
-// which is exactly why it cannot be compared against a plain MD5.
 pub func S3FileEtag(path: str, part_size: int): str:
     size := _file_size(path)
     if size < 0 as i64: ret "" end

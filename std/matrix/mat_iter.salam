@@ -31,7 +31,6 @@ pub struct IterResult:
     pub func free(): this.x.free() end
 end
 
-// |b - Ax|, the quantity every method here drives to zero.
 func _resid_norm(a &: Matrix, x &: Matrix, b &: Matrix): f64:
     mut ax := MatVec(a, x)
     mut r := Sub(b, ax)
@@ -41,9 +40,6 @@ func _resid_norm(a &: Matrix, x &: Matrix, b &: Matrix): f64:
     ret v
 end
 
-// One sweep of Jacobi or Gauss-Seidel. They differ in exactly one place:
-// whether the sum reads the previous iterate or the one being built, so they
-// share a body and a flag rather than duplicating the loop.
 func _sweep(a &: Matrix, x &: Matrix, xo &: Matrix, b &: Matrix, omega: f64, in_place: bool):
     n := a.rows
     repeat n with i:
@@ -63,9 +59,6 @@ func _pick(x &: Matrix, xo &: Matrix, j: int, in_place: bool): f64:
     ret xo.at(j, 0)
 end
 
-// x_i <- (1 - omega) x_i + omega * candidate. omega = 1 is the plain update;
-// above 1 it overshoots deliberately, which is what successive over-relaxation
-// means and where its speed comes from.
 func _relax(x &: Matrix, i: int, candidate: f64, omega: f64):
     if omega == 1.0:
         x.set(i, 0, candidate)
@@ -74,7 +67,6 @@ func _relax(x &: Matrix, i: int, candidate: f64, omega: f64):
     x.set(i, 0, (1.0 - omega) * x.at(i, 0) + omega * candidate)
 end
 
-// The shared driver for the three stationary methods.
 func _stationary(a &: Matrix, b &: Matrix, omega: f64, in_place: bool, iters: int, tol: f64): IterResult:
     mut r := IterResult {}
     if a.is_square() == false || a.rows != b.rows || b.cols != 1: ret r end
@@ -105,9 +97,6 @@ func _cg_loop(a &: Matrix, out &: IterResult, r &: Matrix, p &: Matrix, iters: i
     out.iterations = k
 end
 
-// One CG step: the step length alpha is chosen to minimize the error along
-// the current direction, and beta makes the next direction A-orthogonal to
-// this one.
 func _cg_step(a &: Matrix, x &: Matrix, r &: Matrix, p &: Matrix, rs: f64): f64:
     mut ap := MatVec(a, p)
     denom := Dot(p, ap)
@@ -124,7 +113,6 @@ func _cg_step(a &: Matrix, x &: Matrix, r &: Matrix, p &: Matrix, rs: f64): f64:
     ret rs_new
 end
 
-// p <- r + beta p, the new search direction.
 func _cg_direction(p &: Matrix, r &: Matrix, beta: f64):
     repeat p.count() with k: p.a.set(k, r.a.get(k) + beta * p.a.get(k)) end
 end
@@ -148,8 +136,6 @@ func _rayleigh(a &: Matrix, x &: Matrix): f64:
     ret v
 end
 
-// |A(i,i)| > sum of |A(i,j)| over j != i, for every row. Sufficient (not
-// necessary) for Jacobi, Gauss-Seidel and SOR to converge from any start.
 @en "IsDiagonallyDominant"
 @fa "غالب قطری است"
 @ar "مهيمنة قطريا"
@@ -165,8 +151,6 @@ pub func IsDiagonallyDominant(a &: Matrix): bool:
     ret true
 end
 
-// The Jacobi method: every component of the next iterate is computed from the
-// previous one alone, so the sweep is embarrassingly parallel.
 @en "SolveJacobi"
 @fa "حل ژاکوبی"
 @ar "حل جاكوبي"
@@ -174,8 +158,6 @@ pub func SolveJacobi(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult
     ret _stationary(a, b, 1.0, false, iters, tol)
 end
 
-// Gauss-Seidel: each component uses the values already updated in this same
-// sweep, which roughly doubles the convergence rate for the same work.
 @en "SolveGaussSeidel"
 @fa "حل گاوس زایدل"
 @ar "حل غاوس زايدل"
@@ -183,9 +165,6 @@ pub func SolveGaussSeidel(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterR
     ret _stationary(a, b, 1.0, true, iters, tol)
 end
 
-// Successive over-relaxation. omega must lie in (0, 2) for any hope of
-// convergence; the optimum for a well-behaved problem is usually between 1.5
-// and 1.9, and omega = 1 reduces exactly to Gauss-Seidel.
 @en "SolveSOR"
 @fa "حل فوق‌آسایش"
 @ar "حل الاسترخاء الزائد"
@@ -193,14 +172,6 @@ pub func SolveSOR(a &: Matrix, b &: Matrix, omega: f64, iters: int, tol: f64): I
     ret _stationary(a, b, omega, true, iters, tol)
 end
 
-// The conjugate gradient method, for symmetric positive definite A.
-//
-// Each step minimizes the error over a Krylov subspace one dimension larger
-// than the last, and does it while storing only four vectors, because the
-// search directions are built to be A-orthogonal to every previous one and so
-// never need to be revisited. That is the whole idea, and it is what makes CG
-// the standard method for the large sparse systems that come out of
-// discretized differential equations.
 @en "SolveCG"
 @fa "حل گرادیان مزدوج"
 @ar "حل التدرج المرافق"
@@ -217,20 +188,6 @@ pub func SolveCG(a &: Matrix, b &: Matrix, iters: int, tol: f64): IterResult:
     defer p.free()
     ret out
 end
-// The dominant eigenvalue and its eigenvector, by the power method: repeated
-// multiplication by A amplifies the component along the largest eigenvector
-// faster than any other, so any starting vector not exactly orthogonal to it
-// converges there.
-//
-// The eigenvalue is returned as a Rayleigh quotient x^T A x / x^T x, which is
-// accurate to second order in the error of x: even a mediocre eigenvector
-// yields a good eigenvalue. Returned as a column vector of length n+1, with
-// the eigenvalue appended after the eigenvector.
-//
-// It converges at the rate |lambda_2 / lambda_1| per step, so it is fast when
-// the top eigenvalue is well separated and useless when it is not, and it
-// cannot find a complex pair at all, since two conjugate eigenvalues have
-// equal magnitude and neither ever wins.
 @en "PowerIteration"
 @fa "تکرار توانی"
 @ar "تكرار القوى"
@@ -247,17 +204,11 @@ pub func PowerIteration(a &: Matrix, iters: int): Matrix:
     ret r
 end
 
-// The Rayleigh quotient x^T A x / x^T x: the scalar that best represents A
-// along the direction x, and an eigenvalue exactly when x is an eigenvector.
 @en "Rayleigh"
 @fa "خارج‌قسمت ریلی"
 @ar "خارج قسمة رايلي"
 pub func Rayleigh(a &: Matrix, x &: Matrix): f64: ret _rayleigh(a, x) end
 
-// The eigenvalue of A closest to `shift`, by inverse iteration. Multiplying
-// by (A - shift I)^-1 amplifies whichever eigenvector has an eigenvalue
-// nearest the shift, so this is the power method aimed anywhere in the
-// spectrum rather than only at its largest end.
 @en "ShiftedInverseIteration"
 @fa "تکرار وارون شیفت‌دار"
 @ar "تكرار معكوس مزاح"

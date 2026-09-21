@@ -15,7 +15,6 @@ const ASN1_GENERALIZEDTIME := 0x18
 const ASN1_SEQUENCE := 0x30
 const ASN1_SET := 0x31
 
-// context-specific constructed tags [0]..[3], as used by TBSCertificate
 const ASN1_CTX0 := 0xA0
 const ASN1_CTX1 := 0xA1
 const ASN1_CTX2 := 0xA2
@@ -23,16 +22,11 @@ const ASN1_CTX3 := 0xA3
 
 struct Tlv:
     pub tag: int = 0
-    // the V of the TLV
     pub body: Reader = Reader {}
-    // the whole TLV including its header, needed wherever a signature covers
-    // the encoded form (tbsCertificate) or where two names are compared byte
-    // for byte (issuer/subject chaining)
     pub full: Reader = Reader {}
     pub ok: bool = false
 end
 
-// Read one TLV from r, advancing past it.
 func _der(r &: Reader): Tlv:
     mut t := Tlv {}
     if r.bad:
@@ -96,7 +90,6 @@ func _der(r &: Reader): Tlv:
     ret t
 end
 
-// Read a TLV and require a specific tag.
 func _der_tag(r &: Reader, want: int): Tlv:
     mut t := _der(r)
     if !t.ok:
@@ -109,7 +102,6 @@ func _der_tag(r &: Reader, want: int): Tlv:
     ret t
 end
 
-// Peek the next tag without consuming, for OPTIONAL fields.
 func _der_peek(r: Reader): int:
     if r.bad || r.pos >= r.len:
         ret 0 - 1
@@ -121,7 +113,6 @@ func _der_is(r: Reader, tag: int): bool:
     ret _der_peek(r) == tag
 end
 
-// Open a SEQUENCE and return a reader over its contents.
 func _der_seq(r &: Reader): Reader:
     t := _der_tag(r, ASN1_SEQUENCE)
     if !t.ok:
@@ -130,8 +121,6 @@ func _der_seq(r &: Reader): Reader:
     ret t.body
 end
 
-// An INTEGER's contents with DER's padding rules enforced, returned WITHOUT
-// stripping. The sign lives in the top bit of the first byte here.
 func _der_int_raw(r &: Reader): Reader:
     t := _der_tag(r, ASN1_INTEGER)
     if !t.ok:
@@ -157,8 +146,6 @@ func _der_int_raw(r &: Reader): Reader:
     ret b
 end
 
-// Drop the single leading 0x00 that DER prepends to keep a large positive
-// value from reading as negative.
 func _der_strip_sign(b: Reader): Reader:
     if b.len > 1 && _rdat(b, 0) == 0x00:
         ret _subreader(b, 1, b.len - 1)
@@ -174,12 +161,6 @@ func _der_int(r &: Reader): Reader:
     ret _der_strip_sign(b)
 end
 
-// An INTEGER that must be non-negative (serial numbers, RSA moduli and
-// exponents, ECDSA r/s).
-//
-// The sign is judged on the UNSTRIPPED encoding: a 2048-bit modulus is encoded
-// as 0x00 followed by a byte with its top bit set, and testing the stripped
-// bytes would reject every RSA key of full width.
 func _der_uint(r &: Reader): Reader:
     b := _der_int_raw(r)
     if r.bad:
@@ -192,9 +173,6 @@ func _der_uint(r &: Reader): Reader:
     ret _der_strip_sign(b)
 end
 
-// BIT STRING contents minus the "unused bits" prefix byte. X.509 only ever
-// uses whole-byte bit strings for keys and signatures, so a nonzero unused
-// count is rejected there via `allow_unused = false`.
 func _der_bitstring(r &: Reader, allow_unused: bool): Reader:
     t := _der_tag(r, ASN1_BITSTRING)
     if !t.ok:
@@ -225,7 +203,6 @@ func _der_oid(r &: Reader): Reader:
     ret t.body
 end
 
-// Compare an OID's contents against a hex literal of its DER encoding.
 func _oid_is(o: Reader, hexoid: str): bool:
     mut want := _hexbuf(hexoid)
     defer _buf_free(want)
@@ -240,8 +217,6 @@ func _oid_is(o: Reader, hexoid: str): bool:
     ret true
 end
 
-// AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY OPTIONAL }
-// Returns the algorithm OID; `params` receives whatever followed it.
 func _der_algid(r &: Reader, params &: Reader): Reader:
     mut s := _der_seq(r)
     if r.bad:
@@ -256,7 +231,6 @@ func _der_algid(r &: Reader, params &: Reader): Reader:
     ret o
 end
 
-// Skip one TLV.
 func _der_skip(r &: Reader):
     t := _der(r)
     if !t.ok:
@@ -264,10 +238,6 @@ func _der_skip(r &: Reader):
     end
 end
 
-// Copy a reader's bytes into a str. Used for DNS names and DN components,
-// which are ASCII in practice; embedded NULs are rejected because a name
-// containing one parses differently in a C string than in a length-delimited
-// buffer, which is the classic "null-prefix" certificate attack.
 func _rd_to_str(r: Reader): str:
     mut b := _newbuf(r.len + 1)
     defer _buf_free(b)

@@ -16,23 +16,18 @@ package tensor
 
 import pool
 
-// Work below these sizes runs serial: the spawn/join overhead would
-// outweigh the split. _EW_* are element counts, _GM_MIN_FLOPS compares
-// against 2*n*k*m.
 const _EW_CHUNK := 65536
 const _EW_MIN := 262144
 const _GM_MIN_FLOPS := 32000000.0
 
 mut _tsr_threads := 0
 
-// Elementwise slots: same-shape zip and unary map.
 mut _ew_pa := null as f32*
 mut _ew_pb := null as f32*
 mut _ew_pr := null as f32*
 mut _ew_n := 0
 mut _ew_op := 0
 
-// Gemm row-band slots.
 mut _gm_px := null as f32*
 mut _gm_py := null as f32*
 mut _gm_pr := null as f32*
@@ -41,7 +36,6 @@ mut _gm_k := 0
 mut _gm_m := 0
 mut _gm_band := 0
 
-// Batch matmul slots.
 mut _bm_px := null as f32*
 mut _bm_py := null as f32*
 mut _bm_pr := null as f32*
@@ -78,7 +72,6 @@ func _bm_worker(t: i64):
     )
 end
 
-// Same-shape binary op over flat buffers, parallel when it pays.
 func _par_zip(pa: f32*, pb: f32*, pr: f32*, n: int, op: int):
     if n < _EW_MIN || Threads() <= 1:
         _k_same(pa, pb, pr, n, op)
@@ -93,7 +86,6 @@ func _par_zip(pa: f32*, pb: f32*, pr: f32*, n: int, op: int):
     pool.ParallelFor(chunks as i64, Threads() as i64, (i: i64): _ew_zip_worker(i) end)
 end
 
-// Unary map over flat buffers, parallel when it pays.
 func _par_map(pa: f32*, pr: f32*, n: int, op: int):
     if n < _EW_MIN || Threads() <= 1:
         _u_range(pa, pr, n, op)
@@ -107,11 +99,6 @@ func _par_map(pa: f32*, pr: f32*, n: int, op: int):
     pool.ParallelFor(chunks as i64, Threads() as i64, (i: i64): _ew_map_worker(i) end)
 end
 
-// r += x y with the row range split into per-thread bands. Bands are a
-// multiple of the micro-kernel's row count, so every row sees exactly
-// the serial kernel's treatment; each worker runs the full packed
-// pipeline over its band, which re-packs y once per band - an O(k*m)
-// cost per extra thread against the O(n*k*m) it divides.
 func _par_gemm(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
     t := Threads()
     flops := 2.0 * (n as f64) * (kn as f64) * (m as f64)
@@ -132,8 +119,6 @@ func _par_gemm(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
     pool.ParallelFor(bands as i64, t as i64, (i: i64): _gm_worker(i) end)
 end
 
-// The batch product sweep: one worker per sample, each running the
-// serial kernel - never both levels at once (see the re-entrancy note).
 func _par_batch_gemm(px: f32*, py: f32*, pr: f32*, b: int, n: int, kn: int, m: int):
     t := Threads()
     if t <= 1 || b < 2:
@@ -157,8 +142,6 @@ func _par_batch_gemm(px: f32*, py: f32*, pr: f32*, b: int, n: int, kn: int, m: i
     pool.ParallelFor(b as i64, t as i64, (i: i64): _bm_worker(i) end)
 end
 
-// Pins the worker count for every parallel kernel in this package.
-// 0 restores the default (CPUCount capped at 8); 1 forces serial.
 @en "SetThreads"
 @fa "تنظیم نخ‌ها"
 @ar "تعيين الخيوط"

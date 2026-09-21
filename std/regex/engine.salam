@@ -16,24 +16,13 @@ package regex
 
 const _RE_MAX_NODE := 512
 const _RE_MAX_PROG := 1024
-// Capture groups, not counting the whole match; slots are two per group plus
-// two for the whole match at index 0.
 const _RE_MAX_GROUP := 16
 const _RE_MAX_SLOT := 34
-// A run that needs more than this many VM steps, or nests deeper than this many
-// frames, is treated as "no match" instead of running away. Both are far above
-// what a sane pattern needs, and they are what keeps a pathological pattern
-// like (a*)* from spinning forever or overflowing the C stack.
 const _RE_MAX_STEP := 400000
 const _RE_MAX_DEPTH := 20000
-// Upper bound on a {n,m} count: the repetition is compiled by repeating the
-// body, so this bounds the program size too.
 const _RE_MAX_REP := 64
-// Loops that need a progress guard; deeper nesting than this falls back to the
-// step budget, which still terminates.
 const _RE_MAX_MARK := 16
 
-// Syntax tree node kinds.
 const _NK_EMPTY := 0
 const _NK_CHAR := 1
 const _NK_ANY := 2
@@ -49,7 +38,6 @@ const _NK_QUEST := 11
 const _NK_GROUP := 12
 const _NK_REP := 13
 
-// VM opcodes.
 const _OP_CHAR := 1
 const _OP_ANY := 2
 const _OP_CLASS := 3
@@ -60,15 +48,7 @@ const _OP_SAVE := 7
 const _OP_MATCH := 8
 const _OP_BOL := 9
 const _OP_EOL := 10
-// A run of one single-byte atom: x is the pc of that atom, y the smallest
-// accepted count, z the greedy flag. The whole run is consumed by a loop and
-// backtracked by a counter, which is what keeps .* over a megabyte of text from
-// nesting a VM frame per byte.
 const _OP_MANY := 11
-// Progress guard for a loop whose body can match nothing. MARK records where
-// the iteration started; PROG jumps back only if the body actually consumed
-// something, and LSPLIT is the same test on the split that closes a `+`. A
-// backward target is the repeat branch, and only it is guarded.
 const _OP_MARK := 12
 const _OP_PROG := 13
 const _OP_LSPLIT := 14
@@ -89,8 +69,6 @@ mut _re_cached_ok := false
 mut _re_cached_pat := ""
 mut _re_nmark := 0
 
-// Syntax tree: kind, left/right child, two payload ints (character code, group
-// number, class span, repetition bounds) and the greedy flag of a quantifier.
 mut _re_nk: int[_RE_MAX_NODE]
 mut _re_nl: int[_RE_MAX_NODE]
 mut _re_nr: int[_RE_MAX_NODE]
@@ -98,17 +76,13 @@ mut _re_na: int[_RE_MAX_NODE]
 mut _re_nb: int[_RE_MAX_NODE]
 mut _re_ng: int[_RE_MAX_NODE]
 
-// Program: opcode plus two operands.
 mut _re_op: int[_RE_MAX_PROG]
 mut _re_ox: int[_RE_MAX_PROG]
 mut _re_oy: int[_RE_MAX_PROG]
 mut _re_oz: int[_RE_MAX_PROG]
 
-// Loop-entry offsets of the run in progress, one per progress-guarded loop.
 mut _re_mark: int[_RE_MAX_MARK]
 
-// Capture slots of the run in progress: 2*g is the start of group g, 2*g+1 its
-// end, -1 when the group did not take part in the match.
 mut _re_save: int[_RE_MAX_SLOT]
 
 inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
@@ -119,8 +93,6 @@ inline pure func _ub(bp: i8*, i: int): int:
     ret v
 end
 
-// Byte equality, spelled out rather than via strcmp: the JS backend has no
-// strcmp, and this package has to behave the same on every backend.
 pure func _re_same(a: str, b: str): bool:
     n := a.len()
     if n != b.len(): ret false end
@@ -144,8 +116,6 @@ inline pure func _re_is_space(c: int): bool:
     ret c == 32 || c == 9 || c == 10 || c == 13 || c == 11 || c == 12
 end
 
-// One \x escape against one input byte. Uppercase is the complement of
-// lowercase; anything else is a literal that never reaches here.
 pure func _re_esc_match(ec: int, cc: int): bool:
     if ec == 100: ret _re_is_digit(cc)
     else ec == 68: ret !_re_is_digit(cc)
@@ -157,7 +127,6 @@ pure func _re_esc_match(ec: int, cc: int): bool:
     ret cc == ec
 end
 
-// The byte an escape stands for when it is not a character class.
 pure func _re_esc_char(ec: int): int:
     if ec == 110: ret 10
     else ec == 116: ret 9
@@ -169,9 +138,6 @@ pure func _re_esc_char(ec: int): int:
     ret ec
 end
 
-// Index just past the ']' that closes the class starting at `start`, or -1 if
-// it is never closed. A ']' first in the class is a literal, and a backslash
-// escapes whatever follows it.
 pure func _re_scan_class(pat: str, start: int): int:
     pl := pat.len()
     pp := _bp(pat)
@@ -186,8 +152,6 @@ pure func _re_scan_class(pat: str, start: int): int:
     ret -1
 end
 
-// Match one byte against the class spanning pat[start .. stop), where start is
-// the '[' and stop is just past the ']'.
 pure func _re_class_match(pat: str, start: int, stop: int, cc: int): bool:
     pp := _bp(pat)
     mut q := start + 1
@@ -251,8 +215,6 @@ func _re_next_group(): int:
     ret _re_ngroup
 end
 
-// Read a {n}, {n,} or {n,m} at `start` into _re_rep_*. False means "this brace
-// is not a repetition", and the caller treats it as an ordinary character.
 func _re_scan_rep(pat: str, start: int): bool:
     pl := pat.len()
     pp := _bp(pat)
@@ -466,9 +428,6 @@ func _re_emit(op: int, x: int, y: int): int:
     ret id
 end
 
-// Whether a node can match the empty string. A loop over such a body would
-// otherwise repeat forever without moving, so this is what decides that the
-// loop needs a progress guard.
 func _re_nullable(node: int): bool:
     k := _re_nk[node]
     if k == _NK_EMPTY || k == _NK_BOL || k == _NK_EOL: ret true
@@ -482,7 +441,6 @@ func _re_nullable(node: int): bool:
     ret true
 end
 
-// A mark slot for one guarded loop, or -1 when they are all in use.
 func _re_new_mark(): int:
     if _re_nmark >= _RE_MAX_MARK: ret 0 - 1 end
     id := _re_nmark
@@ -490,15 +448,11 @@ func _re_new_mark(): int:
     ret id
 end
 
-// Whether a node compiles to exactly one instruction that eats exactly one
-// byte - the shape a MANY run can hold.
 func _re_simple_atom(node: int): bool:
     k := _re_nk[node]
     ret k == _NK_CHAR || k == _NK_ANY || k == _NK_CLASS || k == _NK_ESC
 end
 
-// Emit `body` repeated `min` or more times as one MANY run. The atom sits right
-// after the MANY, so what follows the run is always pc + 2.
 func _re_gen_many(body: int, min: int, greedy: int):
     mp := _re_emit(_OP_MANY, 0, min)
     _re_oz[mp] = greedy
@@ -506,9 +460,6 @@ func _re_gen_many(body: int, min: int, greedy: int):
     _re_gen(body)
 end
 
-// x?  - a split that either enters the body or steps over it. Greedy prefers
-// entering, lazy prefers skipping; that preference order is the whole
-// difference between .* and .*? once the VM tries branches left to right.
 func _re_gen_quest(body: int, greedy: int):
     sp := _re_emit(_OP_SPLIT, 0, 0)
     bs := _re_nprog
@@ -523,7 +474,6 @@ func _re_gen_quest(body: int, greedy: int):
     end
 end
 
-// x* - the same split, with a jump back to it after the body.
 func _re_gen_star(body: int, greedy: int):
     if _re_simple_atom(body):
         _re_gen_many(body, 0, greedy)
@@ -631,8 +581,6 @@ func _re_gen(node: int):
     end
 end
 
-// Compile `pat` into the program globals, reusing the last compile when the
-// pattern text is unchanged. Returns false for a pattern the parser rejects.
 func _re_compile(pat: str): bool:
     if _re_cached && _re_same(_re_cached_pat, pat): ret _re_cached_ok end
     _re_err = false
@@ -653,8 +601,6 @@ func _re_compile(pat: str): bool:
     ret _re_cached_ok
 end
 
-// One single-byte instruction against text[si]; the MANY loop is the only
-// caller, since every other opcode is dispatched by _re_step itself.
 func _re_atom_ok(pat: str, text: str, apc: int, si: int): bool:
     tp := _bp(text)
     op := _re_op[apc]
@@ -769,8 +715,6 @@ func _re_run(pat: str, text: str, pc: int, si: int): int:
     ret r
 end
 
-// Leftmost match of `pat` in `text` at or after `from`. On success the span and
-// every group span are left in _re_save for the caller to read out.
 func _re_exec(pat: str, text: str, from: int): bool:
     if !_re_compile(pat): ret false end
     tl := text.len()
@@ -794,7 +738,6 @@ func _re_exec(pat: str, text: str, from: int): bool:
     ret false
 end
 
-// Start offset of the leftmost match, or -1. _re_last_end holds its end.
 func _re_search(pat: str, text: str): int:
     if !_re_exec(pat, text, 0): ret -1 end
     ret _re_save[0]

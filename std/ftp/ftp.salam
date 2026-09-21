@@ -33,10 +33,6 @@ extern:
     func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
 end
 
-// A tls.Conn cannot be a struct field (the same codegen limitation
-// net/websocket and net/email document), so a secured connection lives in
-// this table and the struct carries its index. Slots are never reused:
-// an FTPS session is long-lived and the table is one pointer per session.
 mut _tls_slots := Vector {} as Vector<tls.Conn>
 
 @en "FileInfo"
@@ -47,11 +43,7 @@ pub struct FileInfo:
     pub size: i64 = 0 as i64
     pub is_dir: bool = false
     pub is_link: bool = false
-    // Verbatim from LIST ("rwxr-xr-x"), or "" when the listing format
-    // carries no mode column.
     pub mode: str = ""
-    // Verbatim date text from LIST. Server formats vary far too much to
-    // parse into a timestamp; ModTime() asks the server instead.
     pub raw_date: str = ""
 end
 
@@ -63,25 +55,15 @@ pub struct Client:
     pub ok: bool = false
     pub host: str = ""
     pub port: int = 21
-    // Bytes read off the control socket that have not been handed out as a
-    // line yet. A reply can arrive split across reads, or two replies can
-    // land in one, so leftovers have to survive between calls.
     pub rxbuf: str = ""
     pub last_reply: str = ""
     pub last_code: int = 0
-    // Control channel is under TLS (after AUTH TLS).
     pub secure: bool = false
     pub tls_idx: int = 0 - 1
-    // PROT P accepted, so data connections get TLS too. Kept separate
-    // from `secure`: RFC 4217 allows a protected control channel with a
-    // cleartext data channel, and some servers still only offer that.
     pub prot_p: bool = false
-    // The config AuthTLS was given, reused for every data connection so
-    // both channels are validated the same way.
     pub tls_cfg: tls.Config = tls.Config {}
 end
 
-// A data connection, which is TLS or not independently of the control one.
 struct DataConn:
     pub conn: tcp.Conn = tcp.Conn {}
     pub tls_idx: int = 0 - 1
@@ -89,11 +71,7 @@ struct DataConn:
     pub ok: bool = false
 end
 
-// ============================================================ internals
 
-// A growable byte buffer. Every transfer body travels through one of
-// these, so a payload's length is carried explicitly instead of being
-// inferred from a terminator that binary data is free to contain.
 struct Bytes:
     pub p: void* = null
     pub len: int = 0
@@ -150,9 +128,6 @@ func _code_of(line: str): int:
     ret line.substr(0, 3).to_int()
 end
 
-// A reply ends on "NNN " - three digits then a space. A continuation line
-// uses '-' there, which is what stops "230-Welcome to 220 Industries"
-// from being read as the end of the reply.
 func _is_final(line: str): bool:
     if line.len() < 4: ret false end
     if !_is_digits(line, 0, 3): ret false end
@@ -226,10 +201,6 @@ func _send(c &: Client, line: str): int:
     ret tcp.Write(c.conn, line + "\r\n")
 end
 
-// Refuses a command carrying CR or LF. Paths, usernames and passwords
-// are all interpolated into these lines, so without this a value holding
-// "\r\n" would end the command and have whatever follows executed as
-// another one.
 func _cmd(c &: Client, line: str): int:
     if line.find("\r") >= 0 || line.find("\n") >= 0:
         c.last_reply = "500 refused locally: command contains CR or LF"
@@ -244,8 +215,6 @@ func _good(code: int): bool:
     ret code >= 100 && code < 400
 end
 
-// Splits on runs of spaces/tabs and drops the empties, which is what
-// every LIST format needs and what a plain split on " " does not give.
 func _fields(s: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     mut cur := ""
@@ -264,9 +233,6 @@ func _fields(s: str): Vector<str>:
     ret out
 end
 
-// Byte offset just past the nth whitespace-separated field, so a name
-// containing spaces can be taken verbatim from the original line rather
-// than rebuilt from split pieces.
 func _skip_fields(s: str, n: int): int:
     mut pos := 0
     mut seen := 0
@@ -286,8 +252,6 @@ func _skip_fields(s: str, n: int): int:
     ret pos
 end
 
-// "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)" -> "h1.h2.h3.h4:port".
-// Returns "" when the reply does not carry a usable address.
 func _parse_pasv(reply: str): str:
     open_at := reply.find("(")
     if open_at < 0: ret "" end
@@ -310,8 +274,6 @@ func _parse_pasv(reply: str): str:
     ret host + ":" + conv.FormatInt(port as i64)
 end
 
-// "229 Entering Extended Passive Mode (|||6446|)" -> 6446, else 0. EPSV
-// only ever returns a port; the host is the one already connected to.
 func _parse_epsv(reply: str): int:
     open_at := reply.find("(")
     if open_at < 0: ret 0 end
@@ -334,9 +296,6 @@ func _parse_epsv(reply: str): int:
     ret port
 end
 
-// One LIST line -> FileInfo. Handles the Unix `ls -l` layout every real
-// server emits, and the older MSDOS/IIS one. Returns a FileInfo whose
-// name is "" when the line is a total/blank/unparsable header.
 func _parse_list_line(line: str): FileInfo:
     mut fi := FileInfo {}
     t := str.Trim(line)
@@ -375,9 +334,6 @@ func _parse_list_line(line: str): FileInfo:
     ret fi
 end
 
-// Opens the data connection for the next transfer. EPSV first: it is the
-// only one of the two that works over IPv6, and a server that does not
-// know it answers 5xx harmlessly, leaving PASV as the fallback.
 func _data_open(c &: Client): DataConn:
     mut d := DataConn {}
     mut raw := tcp.Conn {}
@@ -450,8 +406,6 @@ func _data_write_bytes(d &: DataConn, ptr: void*, n: int): int:
     ret tcp.WriteBytes(d.conn, ptr, n)
 end
 
-// Reads the data connection to EOF as bytes. Unlike _drain this carries
-// the length explicitly, so a payload containing 0x00 survives.
 func _drain_bytes(d &: DataConn): Bytes:
     mut out := _bytes_new(16384)
     chunk := mem.Allocate(16384 as u64)
@@ -479,8 +433,6 @@ func _data_close(d &: DataConn):
     d.ok = false
 end
 
-// Reads the data connection until the server closes it, which is how FTP
-// signals end-of-transfer - there is no length header anywhere.
 func _drain(d &: DataConn): str:
     mut out := ""
     mut more := true
@@ -495,9 +447,6 @@ func _drain(d &: DataConn): str:
     ret out
 end
 
-// Runs a command whose payload arrives on a data connection, and returns
-// the payload. The trailing 226/250 on the control socket has to be read
-// too, or it would be mistaken for the next command's reply.
 func _xfer_in(c &: Client, command: str): str:
     mut dc := _data_open(c)
     if !dc.ok: ret "" end
@@ -528,8 +477,6 @@ func _xfer_out(c &: Client, command: str, payload: str): bool:
     ret _good(final) && (payload.len() == 0 || sent > 0)
 end
 
-// The byte-safe twin of _xfer_in: same protocol dance, length-carrying
-// result. Callers must _bytes_free the result.
 func _xfer_in_bytes(c &: Client, command: str): Bytes:
     mut dc := _data_open(c)
     if !dc.ok: ret _bytes_new(0) end
@@ -559,11 +506,6 @@ func _xfer_out_bytes(c &: Client, command: str, ptr: void*, n: int): bool:
     ret _good(final) && (n == 0 || sent == n)
 end
 
-// True when `name` is one ordinary path component. Listing entries come
-// from the server, and joining one straight onto a local directory lets
-// a name like "../../etc/cron.d/x" write wherever it likes. Anything
-// that is not a plain component is dropped rather than sanitised - a
-// server sending one is not a case worth guessing the intent of.
 func _safe_component(name: str): bool:
     if name.len() == 0: ret false end
     if name == "." || name == "..": ret false end
@@ -591,15 +533,6 @@ pub func Dial(host: str, port: int): Client:
     ret c
 end
 
-// Upgrades an already-dialled connection to TLS (RFC 4217, "explicit"
-// FTPS - the only form still standardised; the old implicit-on-port-990
-// variant never was). Call it before Login, which is the entire point:
-// plain FTP would otherwise put the password on the wire in the clear.
-//
-// PBSZ 0 then PROT P asks for the data connections to be protected too.
-// A server may refuse just that part, in which case the control channel
-// stays encrypted and transfers do not - so prot_p records what was
-// actually agreed rather than what was asked for.
 @en "AuthTLS"
 @fa "ارتقا به تی‌ال‌اس"
 @ar "الترقیة إلی TLS"
@@ -619,9 +552,6 @@ pub func AuthTLSWith(c &: Client, cfg: tls.Config): bool:
     ret true
 end
 
-// AuthTLSWith using the default trust store, which is what almost every
-// caller wants. Use AuthTLSWith directly to pin a certificate, point at a
-// private CA (Config.ca_file), or reach a test server.
 @en "AuthTLS"
 @fa "احراز تی‌ال‌اس"
 @ar "مصادقة TLS"
@@ -629,7 +559,6 @@ pub func AuthTLS(c &: Client): bool:
     ret AuthTLSWith(c, tls.NewConfig(c.host))
 end
 
-// Dial + AuthTLS, which is how an FTPS session almost always starts.
 @en "DialTLS"
 @fa "اتصال امن"
 @ar "اتصال آمن"
@@ -640,7 +569,6 @@ pub func DialTLS(host: str, port: int): Client:
     ret c
 end
 
-// DialTLS with a caller-supplied TLS config.
 @en "DialTLSWith"
 @fa "اتصال امن با تنظیمات"
 @ar "اتصال آمن بإعدادات"
@@ -651,13 +579,11 @@ pub func DialTLSWith(host: str, port: int, cfg: tls.Config): Client:
     ret c
 end
 
-// True when the control channel is encrypted.
 @en "Secure"
 @fa "امن"
 @ar "آمن"
 pub func Secure(c: Client): bool: ret c.secure end
 
-// True when transfers are encrypted too (PROT P was accepted).
 @en "SecureData"
 @fa "داده امن"
 @ar "بیانات آمنة"
@@ -714,8 +640,6 @@ pub func LastReply(c: Client): str: ret c.last_reply end
 @ar "آخر رمز"
 pub func LastCode(c: Client): int: ret c.last_code end
 
-// Sends a raw command and returns its reply code, for anything this
-// package does not wrap (SITE CHMOD, OPTS UTF8 ON, ...).
 @en "Command"
 @fa "فرمان"
 @ar "أمر"
@@ -742,15 +666,11 @@ pub func Features(c &: Client): str:
     ret c.last_reply
 end
 
-// Binary (TYPE I). Anything that is not plain text must go through this,
-// and it is what every function below assumes.
 @en "Binary"
 @fa "دودویی"
 @ar "ثنائي"
 pub func Binary(c &: Client): bool: ret _cmd(c, "TYPE I") == 200 end
 
-// Text (TYPE A). The server may rewrite line endings to its own
-// convention, so use it only for text you want translated.
 @en "Ascii"
 @fa "متنی"
 @ar "نصي"
@@ -792,9 +712,6 @@ pub func Mkdir(c &: Client, path: str): bool: ret _cmd(c, "MKD " + path) == 257 
 @ar "حذف مجلد"
 pub func Rmdir(c &: Client, path: str): bool: ret _cmd(c, "RMD " + path) == 250 end
 
-// Creates every missing component of `path`, and reports success when the
-// whole path exists afterwards - a component that already exists is not
-// an error, which is the difference from Mkdir.
 @en "MkdirAll"
 @fa "ساخت مسیر کامل"
 @ar "إنشاء المسار کاملا"
@@ -815,8 +732,6 @@ pub func MkdirAll(c &: Client, path: str): bool:
     ret ok
 end
 
-// Raw LIST output, one server-formatted line per entry. Useful when the
-// server's format is not one List() understands.
 @en "ListRaw"
 @fa "فهرست خام"
 @ar "قائمة خام"
@@ -826,8 +741,6 @@ pub func ListRaw(c &: Client, path: str): str:
     ret _xfer_in(c, command)
 end
 
-// Parsed directory listing. "." and ".." are dropped: they are an artefact
-// of the listing, not entries a caller ever wants to walk into.
 @en "List"
 @fa "فهرست"
 @ar "قائمة"
@@ -846,8 +759,6 @@ pub func List(c &: Client, path: str): Vector<FileInfo>:
     ret out
 end
 
-// Bare names (NLST). Cheaper than List when the metadata is not needed,
-// and the one listing every server formats identically.
 @en "NameList"
 @fa "فهرست نام‌ها"
 @ar "قائمة الأسماء"
@@ -866,8 +777,6 @@ pub func NameList(c &: Client, path: str): Vector<str>:
     ret out
 end
 
-// Size in bytes, or -1. Requires TYPE I on most servers, since in TYPE A
-// the size after line-ending translation is not knowable up front.
 @en "Size"
 @fa "اندازه"
 @ar "الحجم"
@@ -879,7 +788,6 @@ pub func Size(c &: Client, path: str): i64:
     ret f.get(1).to_int()
 end
 
-// Modification time as the server's own "YYYYMMDDhhmmss" (UTC), or "".
 @en "ModTime"
 @fa "زمان تغییر"
 @ar "وقت التعدیل"
@@ -891,8 +799,6 @@ pub func ModTime(c &: Client, path: str): str:
     ret f.get(1)
 end
 
-// True when `path` is a directory, tested by asking the server to enter
-// it and stepping back - CWD is the one probe every server implements.
 @en "IsDir"
 @fa "پوشه است"
 @ar "هل هو مجلد"
@@ -903,9 +809,6 @@ pub func IsDir(c &: Client, path: str): bool:
     ret true
 end
 
-// True when `path` is a symbolic link, judged from its parent's listing
-// because FTP has no lstat. False when the parent cannot be listed, which
-// is the safe answer: callers use this to decide NOT to recurse.
 @en "IsLink"
 @fa "پیوند است"
 @ar "هل هو ارتباط"
@@ -939,7 +842,6 @@ pub func Exists(c &: Client, path: str): bool:
     ret IsDir(c, path)
 end
 
-// Whole remote file as a string, without touching local disk.
 @en "Read"
 @fa "خواندن"
 @ar "قراءة"
@@ -947,7 +849,6 @@ pub func Read(c &: Client, remote: str): str:
     ret _xfer_in(c, "RETR " + remote)
 end
 
-// Writes `data` to `remote`, replacing it if it exists.
 @en "Write"
 @fa "نوشتن"
 @ar "کتابة"
@@ -955,7 +856,6 @@ pub func Write(c &: Client, remote: str, data: str): bool:
     ret _xfer_out(c, "STOR " + remote, data)
 end
 
-// Appends to `remote`, creating it when absent.
 @en "Append"
 @fa "افزودن"
 @ar "إلحاق"
@@ -1016,8 +916,6 @@ end
 @ar "حذف"
 pub func Delete(c &: Client, path: str): bool: ret _cmd(c, "DELE " + path) == 250 end
 
-// Move or rename, on the server, without moving any bytes. This is FTP's
-// "cut and paste": RNFR names the source, RNTO the destination.
 @en "Rename"
 @fa "تغییر نام"
 @ar "إعادة تسمیة"
@@ -1033,9 +931,6 @@ pub func Move(c &: Client, from_path: str, to_path: str): bool:
     ret Rename(c, from_path, to_path)
 end
 
-// Deletes `path` whatever it is: a file, or a directory and everything
-// under it. FTP has no recursive delete, so this walks the tree itself,
-// depth first - a directory cannot be removed until it is empty.
 @en "RemoveAll"
 @fa "حذف همه"
 @ar "حذف الکل"
@@ -1057,9 +952,6 @@ pub func RemoveAll(c &: Client, path: str): bool:
     ret ok
 end
 
-// Downloads a whole remote directory into `local`, creating it and every
-// subdirectory. Returns false if any single file failed, having still
-// copied the rest.
 @en "DownloadDir"
 @fa "دریافت پوشه"
 @ar "تنزیل مجلد"
@@ -1086,8 +978,6 @@ pub func DownloadDir(c &: Client, remote: str, local: str): bool:
     ret ok
 end
 
-// Uploads a whole local directory into `remote`, creating it and every
-// subdirectory.
 @en "UploadDir"
 @fa "ارسال پوشه"
 @ar "رفع مجلد"
@@ -1112,31 +1002,26 @@ pub func UploadDir(c &: Client, local: str, remote: str): bool:
     ret ok
 end
 
-// The 3-digit code at the head of a reply line, or 0.
 @en "ReplyCode"
 @fa "کد پاسخ"
 @ar "رمز الرد"
 pub func ReplyCode(line: str): int: ret _code_of(line) end
 
-// True when this line terminates a (possibly multi-line) reply.
 @en "IsFinalLine"
 @fa "خط پایانی است"
 @ar "السطر الأخیر"
 pub func IsFinalLine(line: str): bool: ret _is_final(line) end
 
-// "227 ... (h1,h2,h3,h4,p1,p2)" -> "host:port", or "".
 @en "ParsePasv"
 @fa "تحلیل پسیو"
 @ar "تحلیل الوضع السلبي"
 pub func ParsePasv(reply: str): str: ret _parse_pasv(reply) end
 
-// "229 ... (|||port|)" -> port, or 0.
 @en "ParseEpsv"
 @fa "تحلیل پسیو گسترده"
 @ar "تحلیل الوضع الممتد"
 pub func ParseEpsv(reply: str): int: ret _parse_epsv(reply) end
 
-// One LIST line -> FileInfo. name is "" when the line carries no entry.
 @en "ParseListLine"
 @fa "تحلیل خط فهرست"
 @ar "تحلیل سطر القائمة"

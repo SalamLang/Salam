@@ -17,17 +17,11 @@ package aws
 import str
 import encoding.xml
 
-// _bucket_request - a request against a named bucket, or the Config's.
 func _bucket_request(method: str, bucket: str): Request:
     if bucket.len() == 0: ret NewRequest(method, "") end
     ret NewBucketRequest(method, bucket, "")
 end
 
-// _create_body - the location constraint.
-//
-// us-east-1 is the one region that must NOT be named: S3 answers
-// InvalidLocationConstraint when it is, because that region is the default and
-// the API predates the idea of naming it.
 func _create_body(region: str): str:
     if region.len() == 0 || region == "us-east-1": ret "" end
     ret "<CreateBucketConfiguration>" +
@@ -70,11 +64,6 @@ func _parse_tags(res: Result): Headers:
     ret out
 end
 
-// S3CreateBucket - make a bucket in the Config's region.
-//
-// Creating one that already exists and belongs to you answers 200 at AWS and
-// BucketAlreadyOwnedByYou elsewhere; both mean the bucket is there, which is
-// what the caller wanted.
 pub func S3CreateBucket(cfg: Config, bucket: str): Result:
     mut r := _bucket_request("PUT", bucket)
     body := _create_body(cfg.region)
@@ -85,8 +74,6 @@ pub func S3CreateBucket(cfg: Config, bucket: str): Result:
     ret Do(cfg, r)
 end
 
-// S3CreateBucketAcl - the same, with an ACL. Ignored by a bucket with ACLs
-// disabled, which is the default for anything created since 2023.
 pub func S3CreateBucketAcl(cfg: Config, bucket: str, acl: str): Result:
     mut r := _bucket_request("PUT", bucket)
     SetHeader(r, "x-amz-acl", acl)
@@ -98,25 +85,18 @@ pub func S3CreateBucketAcl(cfg: Config, bucket: str, acl: str): Result:
     ret Do(cfg, r)
 end
 
-// S3DeleteBucket - remove an empty bucket. S3 refuses a bucket with anything
-// in it, including old versions and open multipart uploads, which is why this
-// so often answers BucketNotEmpty for a bucket that looks empty.
 pub func S3DeleteBucket(cfg: Config, bucket: str): Result:
     ret Do(cfg, _bucket_request("DELETE", bucket))
 end
 
-// S3HeadBucket - whether a bucket exists and is reachable with these
-// credentials. 404 means no such bucket, 403 means it is someone else's.
 pub func S3HeadBucket(cfg: Config, bucket: str): Result:
     ret Do(cfg, _bucket_request("HEAD", bucket))
 end
 
-// S3BucketExists - the question S3HeadBucket is usually asked.
 pub func S3BucketExists(cfg: Config, bucket: str): bool:
     ret S3HeadBucket(cfg, bucket).ok
 end
 
-// S3ListBuckets - every bucket the credentials can see.
 pub func S3ListBuckets(cfg: Config): BucketList:
     res := Do(cfg, NewServiceRequest("GET"))
     if !res.ok:
@@ -164,13 +144,6 @@ end
 
 pub func BucketListFree(l &: BucketList): l.items.free() end
 
-// S3BucketRegion - the region a bucket actually lives in.
-//
-// Worth asking before anything else when a correctly signed request is
-// refused: a signature is scoped to a region, so a bucket in eu-central-1
-// rejects a us-east-1 signature with an error that does not say so. AWS
-// answers an empty constraint for us-east-1, which this reports as the name
-// rather than as nothing.
 pub func S3BucketRegion(cfg: Config, bucket: str): str:
     mut r := _bucket_request("GET", bucket)
     SetFlag(r, "location")
@@ -185,12 +158,6 @@ pub func S3BucketRegion(cfg: Config, bucket: str): str:
     ret where
 end
 
-// S3SetVersioning - turn versioning on, or suspend it.
-//
-// Versioning cannot be turned off once enabled, only suspended: the versions
-// already stored stay stored. Enabling it is the single most effective guard
-// against an application deleting the wrong key, and the single most common
-// source of a storage bill nobody can explain - pair it with a lifecycle rule.
 pub func S3SetVersioning(cfg: Config, bucket: str, enabled: bool): Result:
     mut r := _bucket_request("PUT", bucket)
     SetFlag(r, "versioning")
@@ -204,8 +171,6 @@ pub func S3SetVersioning(cfg: Config, bucket: str, enabled: bool): Result:
     ret Do(cfg, r)
 end
 
-// S3Versioning - "Enabled", "Suspended", or "" for a bucket that has never had
-// it turned on.
 pub func S3Versioning(cfg: Config, bucket: str): str:
     mut r := _bucket_request("GET", bucket)
     SetFlag(r, "versioning")
@@ -214,7 +179,6 @@ pub func S3Versioning(cfg: Config, bucket: str): str:
     ret ResultTag(res.body, "Status").trim()
 end
 
-// S3SetBucketTags - replace a bucket's tag set.
 pub func S3SetBucketTags(cfg: Config, bucket: str, tags: Headers): Result:
     mut r := _bucket_request("PUT", bucket)
     SetFlag(r, "tagging")
@@ -225,7 +189,6 @@ pub func S3SetBucketTags(cfg: Config, bucket: str, tags: Headers): Result:
     ret Do(cfg, r)
 end
 
-// S3BucketTags - the tag set, empty when there is none.
 pub func S3BucketTags(cfg: Config, bucket: str): Headers:
     mut r := _bucket_request("GET", bucket)
     SetFlag(r, "tagging")
@@ -238,11 +201,6 @@ pub func S3DeleteBucketTags(cfg: Config, bucket: str): Result:
     ret Do(cfg, r)
 end
 
-// S3SetBucketPolicy - replace the bucket policy with a JSON document.
-//
-// A policy is the authority on who may do what, and it is evaluated before any
-// ACL. Passing an empty document is not how to remove one; S3DeleteBucketPolicy
-// is.
 pub func S3SetBucketPolicy(cfg: Config, bucket: str, policy_json: str): Result:
     if policy_json.len() == 0:
         ret Failure("a bucket policy cannot be empty; delete it instead")
@@ -254,7 +212,6 @@ pub func S3SetBucketPolicy(cfg: Config, bucket: str, policy_json: str): Result:
     ret Do(cfg, r)
 end
 
-// S3BucketPolicy - the policy document, or "" when there is none.
 pub func S3BucketPolicy(cfg: Config, bucket: str): str:
     mut r := _bucket_request("GET", bucket)
     SetFlag(r, "policy")
@@ -269,12 +226,6 @@ pub func S3DeleteBucketPolicy(cfg: Config, bucket: str): Result:
     ret Do(cfg, r)
 end
 
-// S3SetBucketCors - the rules that decide which web origins a browser may use
-// a presigned URL from.
-//
-// The setting that most often blocks a direct browser upload: the presigned
-// PUT is correct, the browser refuses to send it, and nothing in the S3
-// response says why because the request never reached S3.
 pub func S3SetBucketCors(cfg: Config, bucket: str, origin: str,
     methods: str, max_age: int): Result:
     mut sb := str.NewBuilder()
@@ -331,13 +282,6 @@ pub func S3DeleteBucketCors(cfg: Config, bucket: str): Result:
     ret Do(cfg, r)
 end
 
-// S3SetLifecycle - install a lifecycle configuration from an XML document.
-//
-// Left as a document rather than modelled as a struct because a lifecycle rule
-// is genuinely open-ended - transitions between six storage classes, expiry of
-// current and non-current versions, abandoned-upload cleanup, filters on
-// prefix, tag and size - and a partial model would be a trap. S3ExpiryRule()
-// builds the two rules almost every bucket wants.
 pub func S3SetLifecycle(cfg: Config, bucket: str, config_xml: str): Result:
     mut r := _bucket_request("PUT", bucket)
     SetFlag(r, "lifecycle")
@@ -361,13 +305,6 @@ pub func S3DeleteLifecycle(cfg: Config, bucket: str): Result:
     ret Do(cfg, r)
 end
 
-// S3ExpiryRule - a lifecycle document that expires objects under a prefix and
-// cleans up abandoned multipart uploads.
-//
-// The second half is the one that matters and the one everyone forgets: parts
-// of an upload that was never completed are stored and billed indefinitely,
-// and they do not appear in any listing. Seven days is a generous ceiling on
-// how long a legitimate upload can be in flight.
 pub func S3ExpiryRule(prefix: str, days: int, abort_days: int): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)

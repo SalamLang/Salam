@@ -16,29 +16,6 @@ package matrix
 
 import math
 
-// QR factorization by Householder reflections: A = QR, with Q orthogonal and
-// R upper triangular. The right tool for least squares, and for anything else
-// that wants an orthonormal basis for a column space.
-//
-// Householder rather than Gram-Schmidt. Classical Gram-Schmidt loses
-// orthogonality catastrophically on nearly dependent columns (the computed Q
-// can fail Q^T Q = I in the first digit), and modified Gram-Schmidt only
-// softens that. A Householder reflection is an exactly orthogonal
-// transformation up to rounding of its own entries, so the product of them is
-// orthogonal to working precision no matter how ill-conditioned A is. That is
-// the whole reason this factorization is trusted.
-//
-// The reflectors are stored where they are computed, in the part of the
-// matrix they have just zeroed: the strict lower triangle holds the vectors v
-// and `rdiag` holds R's diagonal. Q is never formed unless asked for, because
-// least squares does not need it. Applying Q^T to a vector costs O(mn), while
-// building Q costs O(mn^2) and then multiplying costs O(mn) anyway.
-//
-// Solving via QR costs about twice what LU costs, and is worth it exactly
-// when the system is overdetermined (where LU does not apply at all) or badly
-// conditioned (where QR's error grows with cond(A) and the normal equations'
-// with cond(A)^2, which is the difference between losing 8 digits and losing
-// all 16).
 
 @en "QR"
 @fa "تجزیه کیوآر"
@@ -59,9 +36,6 @@ pub struct QR:
     end
 end
 
-// Euclidean length of the part of column k at or below row k, computed by
-// scaling so that a column of large or tiny entries does not overflow or
-// underflow on the way to a representable answer.
 func _house_norm(a &: Matrix, k: int, m: int): f64:
     mut scale := 0.0
     mut i := k
@@ -81,7 +55,6 @@ func _house_norm(a &: Matrix, k: int, m: int): f64:
     ret scale * math.Sqrt(s)
 end
 
-// Applies the reflector held in column k to column j of the same matrix.
 func _house_apply(a &: Matrix, k: int, j: int, m: int):
     mut s := 0.0
     mut i := k
@@ -98,10 +71,6 @@ func _house_apply(a &: Matrix, k: int, j: int, m: int):
     end
 end
 
-// Builds the reflector for column k in place and applies it to the columns to
-// its right. The sign of the norm is chosen to match the leading entry, which
-// avoids the cancellation that the other choice produces when that entry is
-// already close to the norm.
 func _house_step(f &: QR, k: int):
     mut nrm := _house_norm(f.qr, k, f.m)
     if nrm != 0.0:
@@ -122,8 +91,6 @@ func _house_step(f &: QR, k: int):
     if nrm == 0.0: f.full_rank = false end
 end
 
-// Applies Q^T to every column of b, in place, by replaying the reflectors in
-// the order they were formed.
 func _qt_apply(f &: QR, b &: Matrix):
     repeat f.n with k:
         repeat b.cols with c: _qt_col(f, b, k, c) end
@@ -146,8 +113,6 @@ func _qt_col(f &: QR, b &: Matrix, k: int, c: int):
     end
 end
 
-// Back substitution against R, whose diagonal lives in rdiag rather than in
-// the matrix.
 func _r_backsolve(f &: QR, b &: Matrix):
     repeat b.cols with c:
         mut k := f.n - 1
@@ -180,15 +145,6 @@ func _q_expand(f &: QR, q &: Matrix, k: int, j: int):
     end
 end
 
-// Subtracts the projections onto every basis vector already accepted, then
-// keeps the remainder if it is long enough to be real.
-//
-// "Long enough" is measured against the column's own length before the
-// projections were removed, never against an absolute constant. A column that
-// is an exact multiple of an earlier one leaves a remainder around
-// eps * |column|, so an absolute threshold accepts it for any column scaled
-// above about 1 and rejects it below, which makes the reported rank depend on
-// the units the data happens to be in.
 func _mgs_column(w &: Matrix, cols &: Vector<int>, j: int):
     before := _col_length(w, j)
     repeat cols.len() with t:
@@ -232,8 +188,6 @@ pub func QRDecompose(x &: Matrix): QR:
     ret f
 end
 
-// The thin Q, m x n with orthonormal columns. Built on demand from the stored
-// reflectors, applied in reverse order.
 @en "QRGetQ"
 @fa "کیو"
 @ar "كيو"
@@ -252,7 +206,6 @@ pub func QRGetQ(f &: QR): Matrix:
     ret q
 end
 
-// The n x n upper triangular R.
 @en "QRGetR"
 @fa "آر"
 @ar "آر"
@@ -269,14 +222,6 @@ pub func QRGetR(f &: QR): Matrix:
     ret r
 end
 
-// The least squares solution of A x = b: the x that minimizes |Ax - b|.
-//
-// For a square nonsingular A this is the exact solution and agrees with
-// Solve. For an overdetermined A (more equations than unknowns, the usual
-// case in fitting) there is no exact solution and this is the best one in the
-// Euclidean sense. A rank-deficient A has no unique answer and gives 0x0
-// here; PseudoInverse is what answers that case, by picking the solution of
-// smallest norm.
 @en "LeastSquares"
 @fa "کمترین مربعات"
 @ar "أصغر المربعات"
@@ -288,8 +233,6 @@ pub func LeastSquares(a &: Matrix, b &: Matrix): Matrix:
     ret r
 end
 
-// Reuses a factorization across right-hand sides, the QR counterpart of
-// LUSolve.
 @en "QRSolve"
 @fa "حل کیوآر"
 @ar "حل كيو آر"
@@ -303,9 +246,6 @@ pub func QRSolve(f &: QR, b &: Matrix): Matrix:
     ret r
 end
 
-// The residual vector b - A x for a computed solution. Worth looking at: a
-// least squares fit is only as good as this is small, and its norm is the
-// quantity the fit actually minimized.
 @en "Residual"
 @fa "باقیمانده"
 @ar "بقية"
@@ -316,15 +256,6 @@ pub func Residual(a &: Matrix, x &: Matrix, b &: Matrix): Matrix:
     ret r
 end
 
-// An orthonormal basis for the column space, by modified Gram-Schmidt.
-//
-// Kept alongside the Householder path because it answers a different
-// question: it returns a basis whose k-th vector spans the same space as the
-// first k columns of A, which is what a Krylov method needs and what
-// QRGetQ's reflector product does not directly give. Columns that are
-// numerically dependent on the ones before them are dropped rather than
-// normalized into noise, so the result always has orthonormal columns and its
-// width is the numerical rank.
 @en "Orthonormalize"
 @fa "متعامدسازی"
 @ar "تعامد"

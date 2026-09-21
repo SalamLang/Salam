@@ -19,21 +19,11 @@ import time
 import encoding
 import net.httpx
 
-// The seven-day ceiling AWS puts on a SigV4 presigned URL.
 const _S3_MAX_EXPIRES := 604800
 
-// PresignOptions - what a presigned URL is allowed to do.
-//
-// Everything here narrows the URL. `content_type` on a PUT commits the client
-// to sending exactly that type, and the response overrides on a GET let one
-// stored object be handed to a browser under a chosen filename.
 pub struct PresignOptions:
-    // Seconds. Zero takes the Config's `expires`. AWS caps this at seven days
-    // for a SigV4 URL, and this package refuses anything longer rather than
-    // minting a URL the service will reject.
     pub expires: int = 0
     pub version_id: str = ""
-    // Signed as a header: the client must send it, and cannot send another.
     pub content_type: str = ""
     pub acl: str = ""
     pub storage_class: str = ""
@@ -42,41 +32,25 @@ pub struct PresignOptions:
     pub response_cache_control: str = ""
 end
 
-// PostOptions - the shape of an HTML form upload.
 pub struct PostOptions:
     pub expires: int = 0
-    // When true, `key` is a prefix and the browser may choose the rest of the
-    // name. This is how "upload into this folder" is expressed; without it the
-    // key is fixed and one URL uploads exactly one object.
     pub key_is_prefix: bool = false
     pub content_type: str = ""
-    // When set, the type is a prefix condition rather than an exact one, so
-    // "image/" admits any image and nothing else.
     pub content_type_is_prefix: bool = false
     pub acl: str = ""
     pub cache_control: str = ""
     pub storage_class: str = ""
-    // The size range the policy will accept, in bytes. A maximum of zero means
-    // no upper bound, which is almost never what a public upload form wants.
     pub min_bytes: i64 = 0
     pub max_bytes: i64 = 0
-    // What S3 answers with on success: a status ("201" returns an XML
-    // document) or a URL to redirect the browser to.
     pub success_status: str = ""
     pub success_redirect: str = ""
     pub meta: Headers = Headers {}
 end
 
-// PostForm - a signed browser upload: where to post, and what to post with it.
-//
-// Every field must appear in the form, in this order, before the file input.
-// S3 reads the parts in order and ignores anything after the file.
 pub struct PostForm:
     pub ok: bool = false
     pub url: str = ""
     pub fields: Headers = Headers {}
-    // The policy document, before base64. Kept because it is the only way to
-    // see what a form actually permits.
     pub policy: str = ""
     pub error: str = ""
 end
@@ -94,7 +68,6 @@ func _expiry_of(cfg: Config, want: int): int:
     ret secs
 end
 
-// _presign_query - the six or seven parameters that carry the credential.
 func _presign_query(cfg: Config, amz_date: str, expires: int, signed: str,
     o: PresignOptions): Headers:
     mut q := Headers {}
@@ -120,8 +93,6 @@ func _presign_query(cfg: Config, amz_date: str, expires: int, signed: str,
     ret q
 end
 
-// _presign_headers - the headers a presigned URL commits the client to. Host
-// always; a content type or an ACL when the caller pins one.
 func _presign_headers(host: str, o: PresignOptions): Headers:
     mut h := Headers {}
     HeaderSet(h, "host", host)
@@ -133,8 +104,6 @@ func _presign_headers(host: str, o: PresignOptions): Headers:
     ret h
 end
 
-// _json_escape - a JSON string body. Policy conditions carry object keys and
-// content types, which can hold a quote or a backslash.
 func _json_escape(s: str): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -152,9 +121,6 @@ func _json_escape(s: str): str:
     ret str.BufStr(sb)
 end
 
-// _attr_escape - a value going into an HTML attribute. Small and local rather
-// than a dependency on a template engine, because this package needs exactly
-// four replacements and nothing else.
 func _attr_escape(s: str): str:
     mut out := str.Replace(s, "&", "&amp;")
     out = str.Replace(out, "\"", "&quot;")
@@ -171,10 +137,6 @@ func _cond_starts(name: str, value: str): str:
         _json_escape(value) + "\"]"
 end
 
-// _post_fields - the form fields, which are also exactly the policy's exact
-// conditions. Building them once and deriving both keeps the two in step; a
-// field that is not in the policy, or a condition with no field, is the usual
-// reason a form upload is refused.
 func _post_fields(cfg: Config, key: str, amz_date: str, o: PostOptions): Headers:
     mut f := Headers {}
     HeaderSet(f, "key", key)
@@ -243,9 +205,6 @@ func _post_policy(cfg: Config, expiry_iso: str, fields: Headers,
     ret str.BufStr(sb)
 end
 
-// S3Url - the plain, unsigned URL of an object. Useful for a public bucket and
-// for building a link a CDN will front; a private bucket answers 403, which is
-// the point.
 pub func S3Url(cfg: Config, key: str): str:
     ep := httpx.ParseEndpoint(cfg.endpoint)
     if !ep.ok: ret "" end
@@ -253,23 +212,16 @@ pub func S3Url(cfg: Config, key: str): str:
         _wire_path(cfg, cfg.bucket, key)
 end
 
-// S3Presign - a URL that works, without a credential, for `expires` seconds.
 pub func S3Presign(cfg: Config, method: str, key: str, expires: int): str:
     ret S3PresignAt(cfg, method, key, expires, time.Now())
 end
 
-// S3PresignAt - the same, anchored to a given instant rather than now.
-//
-// Exists so a signature can be reproduced: a test can check one against a
-// published vector, and a caller minting a batch can give them all one expiry
-// rather than a spread of them.
 pub func S3PresignAt(cfg: Config, method: str, key: str, expires: int,
     epoch_seconds: i64): str:
     ret S3PresignWith(cfg, method, key, PresignOptions { expires = expires },
         epoch_seconds)
 end
 
-// S3PresignWith - a presigned URL with every option, anchored to an instant.
 pub func S3PresignWith(cfg: Config, method: str, key: str, o: PresignOptions,
     epoch_seconds: i64): str:
     if !Configured(cfg): ret "" end
@@ -289,14 +241,10 @@ pub func S3PresignWith(cfg: Config, method: str, key: str, o: PresignOptions,
     ret _origin(ep, host) + path + "?" + query + "&X-Amz-Signature=" + signature
 end
 
-// S3PresignGet - a download URL. The common case, spelled out.
 pub func S3PresignGet(cfg: Config, key: str, expires: int): str:
     ret S3PresignAt(cfg, "GET", key, expires, time.Now())
 end
 
-// S3PresignPut - an upload URL. Pin the content type when the browser is
-// expected to send one: without it the signature does not cover the type and
-// the client may store anything under any type.
 pub func S3PresignPut(cfg: Config, key: str, content_type: str,
     expires: int): str:
     ret S3PresignWith(cfg, "PUT", key,
@@ -304,8 +252,6 @@ pub func S3PresignPut(cfg: Config, key: str, content_type: str,
         time.Now())
 end
 
-// S3PresignDownload - a URL that makes a browser save the object under a
-// chosen filename rather than displaying it.
 pub func S3PresignDownload(cfg: Config, key: str, filename: str,
     expires: int): str:
     ret S3PresignWith(cfg, "GET", key, PresignOptions {
@@ -314,19 +260,10 @@ pub func S3PresignDownload(cfg: Config, key: str, filename: str,
     }, time.Now())
 end
 
-// S3PresignPost - a signed HTML form upload.
-//
-// The only form that works from a plain <form enctype="multipart/form-data">,
-// because a form cannot set an Authorization header or a Content-MD5. The
-// browser posts to `url` with every field of `fields` first and the file last.
-//
-// Worth setting max_bytes on anything a stranger can reach: without it the
-// policy permits an upload of any size, and the bill is the account's.
 pub func S3PresignPost(cfg: Config, key: str, o: PostOptions): PostForm:
     ret S3PresignPostAt(cfg, key, o, time.Now())
 end
 
-// S3PresignPostAt - the same, anchored to an instant, so it is reproducible.
 pub func S3PresignPostAt(cfg: Config, key: str, o: PostOptions,
     epoch_seconds: i64): PostForm:
     if !Configured(cfg):
@@ -353,11 +290,6 @@ pub func S3PresignPostAt(cfg: Config, key: str, o: PostOptions,
     ret PostForm { ok = true, url = url, fields = fields, policy = policy }
 end
 
-// PostFormHtml - the form itself, ready to paste into a page.
-//
-// A convenience with a real purpose: the field order matters, S3 ignores
-// anything after the file input, and getting either wrong produces a rejection
-// that says nothing useful. Generating the form removes both mistakes.
 pub func PostFormHtml(f: PostForm, file_field: str): str:
     if !f.ok: ret "" end
     mut name := file_field

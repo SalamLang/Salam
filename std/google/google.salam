@@ -23,15 +23,11 @@ import crypto
 import tls
 import time
 
-// Google issues tokens good for an hour. Renewing a minute early costs one
-// extra exchange an hour and removes the race where a token expires between
-// being read and being used.
 const RENEW_MARGIN_SECONDS := 60
 const ASSERTION_TTL_SECONDS := 3600
 
 const GRANT_TYPE := "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
-// Scopes worth naming, since a caller should not have to look them up.
 pub const SCOPE_FCM := "https://www.googleapis.com/auth/firebase.messaging"
 pub const SCOPE_STORAGE := "https://www.googleapis.com/auth/devstorage.read_write"
 pub const SCOPE_CLOUD := "https://www.googleapis.com/auth/cloud-platform"
@@ -41,10 +37,6 @@ mut _cache_keys := Vector {} as Vector<str>
 mut _cache_tokens := Vector {} as Vector<str>
 mut _cache_expiry := Vector {} as Vector<i64>
 
-// ServiceAccount - the fields of a service-account JSON file that matter.
-//
-// The others - private_key_id, auth_uri, the certificate URLs - are for
-// verifying Google's side of things, which TLS already does.
 pub struct ServiceAccount:
     pub client_email: str = ""
     pub private_key: str = ""
@@ -53,8 +45,6 @@ pub struct ServiceAccount:
     pub ok: bool = false
 end
 
-// _b64url - standard base64 to the URL-safe alphabet, unpadded, which is what
-// JOSE uses everywhere.
 func _b64url(standard: str): str:
     mut out := str.Replace(str.Replace(standard, "+", "-"), "/", "_")
     while out.len() > 0 && out.substr(out.len() - 1, 1) == "=":
@@ -63,21 +53,14 @@ func _b64url(standard: str): str:
     ret out
 end
 
-// _part - one JOSE segment.
 func _part(payload: str): str:
     ret _b64url(encoding.Base64Encode(payload))
 end
 
-// _digest - SHA-256 of the signing input, which is what RS256 signs.
 func _digest(signing_input: str): str:
     ret encoding.Base64Encode(encoding.HexDecode(crypto.Sha256Hex(signing_input)))
 end
 
-// _assertion - the signed JWT exchanged for a token.
-//
-// `aud` is the token endpoint rather than the API being called: the assertion
-// authenticates to Google's authorisation server, and the scope is what says
-// which API the resulting token is for.
 func _assertion(sa: ServiceAccount, scope: str, now: i64): str:
     header := _part(`{"alg":"RS256","typ":"JWT"}`)
     claims := _part(`{"iss":"` + sa.client_email + `","scope":"` + scope +
@@ -101,7 +84,6 @@ func _num(value: i64): str:
     ret out
 end
 
-// _cached - a token that is still good, or "". Called under the lock.
 func _cached(key: str, now: i64): str:
     repeat _cache_keys.len() with i:
         if _cache_keys.get(i) == key && _cache_expiry.get(i) > now:
@@ -111,7 +93,6 @@ func _cached(key: str, now: i64): str:
     ret ""
 end
 
-// _remember - stores a token against its key, replacing any earlier one.
 func _remember(key: str, token: str, expires_at: i64):
     repeat _cache_keys.len() with i:
         if _cache_keys.get(i) == key:
@@ -125,7 +106,6 @@ func _remember(key: str, token: str, expires_at: i64):
     _cache_expiry.push(expires_at)
 end
 
-// _exchange - the assertion for a token.
 func _exchange(sa: ServiceAccount, scope: str, now: i64, ok &: bool): str:
     ok = false
     assertion := _assertion(sa, scope, now)
@@ -142,11 +122,6 @@ func _exchange(sa: ServiceAccount, scope: str, now: i64, ok &: bool): str:
     ret token
 end
 
-// _mint - the exchange, and the cache write that follows it.
-//
-// The lock is not held across the request: two threads racing here both do the
-// exchange and the second overwrites the first, which costs one extra token
-// and is far better than every push waiting behind one HTTP call.
 func _mint(sa: ServiceAccount, scope: str, key: str, now: i64, ok &: bool): str:
     token := _exchange(sa, scope, now, ok)
     if !ok: ret "" end
@@ -156,11 +131,6 @@ func _mint(sa: ServiceAccount, scope: str, key: str, now: i64, ok &: bool): str:
     ret token
 end
 
-// ParseServiceAccount - the JSON a service-account key file contains.
-//
-// The private key arrives with its newlines escaped, which is how JSON carries
-// a PEM; the decoder unescapes them, and a PEM with literal backslash-n in it
-// parses as nothing at all.
 pub func ParseServiceAccount(document: str): ServiceAccount:
     if document.len() == 0: ret ServiceAccount {} end
     email := json.Get(document, "client_email")
@@ -177,11 +147,6 @@ pub func ParseServiceAccount(document: str): ServiceAccount:
     ret sa
 end
 
-// AccessToken - a bearer token for one scope, minted or reused.
-//
-// Cached per (account, scope) until shortly before it expires, so a caller may
-// ask for one on every request without paying for a signature and a round trip
-// each time.
 pub func AccessToken(sa: ServiceAccount, scope: str, ok &: bool): str:
     ok = false
     if !sa.ok || scope.len() == 0: ret "" end
@@ -197,8 +162,6 @@ pub func AccessToken(sa: ServiceAccount, scope: str, ok &: bool): str:
     ret _mint(sa, scope, key, now, ok)
 end
 
-// Forget - drops any cached token for an account. For a caller that has just
-// been told its credentials changed.
 pub func Forget(sa: ServiceAccount):
     sync.Lock(_cache_lock)
     mut keys := Vector {} as Vector<str>
@@ -220,7 +183,6 @@ pub func Forget(sa: ServiceAccount):
     sync.Unlock(_cache_lock)
 end
 
-// Authorization - the header value a Google API request carries.
 pub func Authorization(token: str): str:
     ret "Bearer " + token
 end

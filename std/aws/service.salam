@@ -18,49 +18,30 @@ import str
 import time
 import net.httpx
 
-// The services that answer at one global endpoint rather than one per region.
-// A signature still names a region - us-east-1, by convention - so this is
-// about addressing, not about scope.
 const _AWS_GLOBAL := "iam cloudfront route53 organizations waf globalaccelerator"
 
-// The form and JSON content types, spelled once.
 const _CT_FORM := "application/x-www-form-urlencoded; charset=utf-8"
 
-// Call - one request to one service.
-//
-// `region` empty takes the Config's. `endpoint` overrides addressing entirely,
-// which is how a caller reaches a VPC endpoint, a LocalStack, or a test mock.
 pub struct Call:
     pub service: str = ""
     pub region: str = ""
     pub method: str = "POST"
     pub path: str = "/"
-    // X-Amz-Target, which is how a JSON-protocol service is told which
-    // operation is being called; the path is always "/" for those.
     pub target: str = ""
     pub content_type: str = ""
     pub query: Headers = Headers {}
     pub headers: Headers = Headers {}
-    // Form parameters, for the query protocol. Rendered into the body in the
-    // order they were added, with Action and Version first.
     pub params: Headers = Headers {}
     pub body: str = ""
     pub endpoint: str = ""
-    // Address the single global endpoint rather than a regional one.
     pub global_endpoint: bool = false
 end
 
-// _is_global - whether a service name is one of the global ones.
 func _is_global(service: str): bool:
     if service.len() == 0: ret false end
     ret str.Contains(_AWS_GLOBAL, service.lower())
 end
 
-// _form_body - the query protocol's body: URL-encoded pairs joined by `&`.
-//
-// AWS's escaping, not a form encoder's: a space is %20 here rather than `+`.
-// The service accepts both, but the body is hashed into the signature, so it
-// has to be encoded once and sent exactly as encoded.
 func _form_body(params: Headers): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -75,7 +56,6 @@ func _form_body(params: Headers): str:
     ret str.BufStr(sb)
 end
 
-// _call_body - the bytes a Call sends, whichever protocol it speaks.
 func _call_body(c: Call): str:
     if c.params.names.len() > 0: ret _form_body(c.params) end
     ret c.body
@@ -110,7 +90,6 @@ func _call_host(ep: httpx.Endpoint): str:
     ret host
 end
 
-// _call_headers - the caller's headers plus the ones the protocol requires.
 func _call_headers(c: Call, content_type: str): Headers:
     mut h := _hdr_copy(c.headers)
     if content_type.len() > 0: _hdr_set(h, "Content-Type", content_type) end
@@ -118,7 +97,6 @@ func _call_headers(c: Call, content_type: str): Headers:
     ret h
 end
 
-// _invoke_once - one attempt, signed for this service and region.
 func _invoke_once(cfg: Config, c: Call, at: i64): httpx.Raw:
     endpoint := _call_endpoint(cfg, c)
     ep := httpx.ParseEndpoint(endpoint)
@@ -156,9 +134,6 @@ func _invoke_raw(cfg: Config, c: Call): httpx.Raw:
     ret httpx.Raw { error = "the request was never attempted" }
 end
 
-// _service_ready - a service call needs credentials and an endpoint, and
-// unlike S3 it needs no bucket. Configured() insists on one, so it cannot be
-// the check here.
 func _service_ready(cfg: Config, c: Call): str:
     if c.service.len() == 0 && c.endpoint.len() == 0:
         ret "the call names no service"
@@ -170,12 +145,6 @@ func _service_ready(cfg: Config, c: Call): str:
     ret ""
 end
 
-// _json_field - one string field out of a JSON document.
-//
-// Deliberately not encoding.json: this reads two fields out of an error
-// document, and pulling a whole parser in for that would make every program
-// that touches any AWS service carry one. A caller who wants the *answer*
-// parsed should hand result.body to encoding.json themselves.
 func _json_field(body: str, name: str): str:
     needle := "\"" + name + "\""
     at := body.find(needle)
@@ -209,7 +178,6 @@ func _json_field(body: str, name: str): str:
     ret str.BufStr(sb)
 end
 
-// ServiceEndpoint - where a service answers in a region.
 pub func ServiceEndpoint(service: str, region: str): str:
     if service.len() == 0: ret "" end
     if region.len() == 0 || _is_global(service):
@@ -218,11 +186,6 @@ pub func ServiceEndpoint(service: str, region: str): str:
     ret "https://" + service + "." + region + ".amazonaws.com"
 end
 
-// NewQueryCall - a call to a query-protocol service.
-//
-// STS, SQS, SNS, EC2, CloudWatch, IAM. `action` and `version` are the two
-// parameters every such request carries, and they go first so that a signed
-// body is reproducible.
 pub func NewQueryCall(service: str, action: str, version: str): Call:
     mut c := Call { service = service, method = "POST", path = "/" }
     _hdr_set(c.params, "Action", action)
@@ -230,12 +193,6 @@ pub func NewQueryCall(service: str, action: str, version: str): Call:
     ret c
 end
 
-// NewJsonCall - a call to a JSON-protocol service.
-//
-// `target` is the operation, spelled the way the service spells it -
-// "DynamoDB_20120810.GetItem", "TrentService.Encrypt". Getting it wrong
-// produces an UnknownOperationException rather than a signing error, which is
-// at least a diagnosable one.
 pub func NewJsonCall(service: str, target: str, json: str): Call:
     ret Call {
         service = service,
@@ -247,67 +204,47 @@ pub func NewJsonCall(service: str, target: str, json: str): Call:
     }
 end
 
-// NewJson11Call - the same for a service on the 1.1 flavour of the protocol
-// (Lambda's control plane, Kinesis, CloudWatch Logs).
 pub func NewJson11Call(service: str, target: str, json: str): Call:
     mut c := NewJsonCall(service, target, json)
     c.content_type = "application/x-amz-json-1.1"
     ret c
 end
 
-// NewRestCall - a call to a service shaped like HTTP, where the operation is
-// the method and the path.
 pub func NewRestCall(service: str, method: str, path: str): Call:
     ret Call { service = service, method = method, path = path }
 end
 
-// CallParam - one form parameter, for the query protocol.
 pub func CallParam(c &: Call, name: str, value: str):
     if value.len() == 0: ret end
     _hdr_set(c.params, name, value)
 end
 
-// CallParamInt - the same for a number.
 pub func CallParamInt(c &: Call, name: str, value: int):
     _hdr_set(c.params, name, "" + value)
 end
 
-// CallHeader - one header, which will be signed along with everything else.
 pub func CallHeader(c &: Call, name: str, value: str):
     if value.len() == 0: ret end
     _hdr_set(c.headers, name, value)
 end
 
-// CallQuery - one query-string parameter, for a REST-shaped call.
 pub func CallQuery(c &: Call, name: str, value: str):
     _hdr_set(c.query, name, value)
 end
 
-// CallBody - a body written by the caller, for a REST or JSON call.
 pub func CallBody(c &: Call, body: str, content_type: str):
     c.body = body
     if content_type.len() > 0: c.content_type = content_type end
 end
 
-// CallRegion - override the region for this call alone, which matters because
-// a signature is scoped to one and a queue or a table lives in one.
 pub func CallRegion(c &: Call, region: str):
     c.region = region
 end
 
-// CallEndpoint - send somewhere other than the real AWS. A LocalStack, a VPC
-// endpoint, or a test mock; the signature is unchanged, so the far side can
-// still verify it.
 pub func CallEndpoint(c &: Call, endpoint: str):
     c.endpoint = endpoint
 end
 
-// Invoke - send a call and read the answer.
-//
-// The answer is a Result, the same one every S3 operation returns, so the
-// error handling a caller already wrote works unchanged. `code` carries the
-// service's own error code, which for the query protocol is the <Code> of its
-// XML fault and for JSON is the tail of its __type.
 pub func Invoke(cfg: Config, c: Call): Result:
     why := _service_ready(cfg, c)
     if why.len() > 0: ret Failure(why) end
@@ -332,11 +269,6 @@ pub func Invoke(cfg: Config, c: Call): Result:
     ret out
 end
 
-// ServiceErrorCode - the error code out of either protocol's fault document.
-//
-// The query protocol answers <ErrorResponse><Error><Code>…; JSON answers
-// {"__type":"com.amazon.coral.service#SomeException"}, where only the part
-// after the `#` is worth showing.
 pub func ServiceErrorCode(body: str): str:
     tagged := _tag_text(body, "Code")
     if tagged.len() > 0: ret tagged end
@@ -347,7 +279,6 @@ pub func ServiceErrorCode(body: str): str:
     ret typed
 end
 
-// ServiceErrorMessage - and the human half of it.
 pub func ServiceErrorMessage(body: str, status: int): str:
     tagged := _tag_text(body, "Message")
     if tagged.len() > 0: ret tagged end
@@ -360,19 +291,12 @@ pub func ServiceErrorMessage(body: str, status: int): str:
     ret "the service answered " + status
 end
 
-// CallFree - release the pair lists a Call accumulated.
 pub func CallFree(c &: Call):
     HeaderFree(c.params)
     HeaderFree(c.headers)
     HeaderFree(c.query)
 end
 
-// PreparedCall - the request line and headers a call would send, without
-// sending them, and the body it would carry after them.
-//
-// The counterpart of PreparedHead for everything that is not S3, and there for
-// the same reason: a signature disagreement is invisible in a 403, and the
-// only way to find one is to read what was actually signed.
 pub func PreparedCall(cfg: Config, c: Call, at: i64): str:
     endpoint := _call_endpoint(cfg, c)
     ep := httpx.ParseEndpoint(endpoint)
@@ -400,9 +324,6 @@ pub func PreparedCall(cfg: Config, c: Call, at: i64): str:
     ret _head_block(c.method, path, query, auth, signed_set, body.len()) + body
 end
 
-// CallBodyText - the bytes a call would send, on their own. The query
-// protocol builds this from the parameters, so it is the only way to see what
-// was actually posted.
 pub func CallBodyText(c: Call): str:
     ret _call_body(c)
 end

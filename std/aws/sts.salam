@@ -18,23 +18,13 @@ import str
 import time
 import encoding.xml
 
-// The STS API version. Unchanged since 2011 and unlikely to move.
 pub const STS_VERSION := "2011-06-15"
 
-// AWS's own bounds on a session: fifteen minutes to twelve hours, though a
-// role's MaxSessionDuration can lower the ceiling.
 pub const STS_MIN_DURATION := 900
 pub const STS_MAX_DURATION := 43200
 
-// Refresh this many seconds before a credential actually expires. A signature
-// is checked against the service's clock, not this one, so expiring exactly on
-// time means expiring slightly late.
 pub const STS_DEFAULT_SKEW := 300
 
-// Credentials - one set of temporary credentials, and when they die.
-//
-// `expires_epoch` is zero for a credential that does not expire, which is what
-// a long-lived access key is.
 pub struct Credentials:
     pub ok: bool = false
     pub access_key: str = ""
@@ -42,13 +32,11 @@ pub struct Credentials:
     pub session_token: str = ""
     pub expires: str = ""
     pub expires_epoch: i64 = 0
-    // Where these came from, for a log line that has to explain a 403.
     pub source: str = ""
     pub error: str = ""
     pub code: str = ""
 end
 
-// Identity - who the current credentials belong to.
 pub struct Identity:
     pub ok: bool = false
     pub account: str = ""
@@ -72,8 +60,6 @@ func _sts_failure(res: Result, source: str): Credentials:
     }
 end
 
-// _credentials_of - the <Credentials> element every STS answer carries, under
-// whichever result element the action uses.
 func _credentials_of(res: Result, source: str): Credentials:
     if !res.ok: ret _sts_failure(res, source) end
     mut ok := false
@@ -122,11 +108,6 @@ func _credentials_of(res: Result, source: str): Credentials:
     ret out
 end
 
-// _sts_call - a query-protocol call to STS, in the Config's region.
-//
-// AWS_ENDPOINT_URL_STS redirects it, which is the documented way to reach a
-// VPC endpoint or a private STS, and the only way to point a test at
-// something that is not Amazon.
 func _sts_call(action: str): Call:
     mut c := NewQueryCall("sts", action, STS_VERSION)
     override := env.Get("AWS_ENDPOINT_URL_STS")
@@ -134,33 +115,16 @@ func _sts_call(action: str): Call:
     ret c
 end
 
-// StsEndpoint - where STS answers.
-//
-// Regional by preference: the global endpoint is a single point of failure
-// shared by every account on earth, and a regional one is closer. Both are
-// signed for the region they are addressed in.
 pub func StsEndpoint(region: str): str:
     if region.len() == 0: ret "https://sts.amazonaws.com" end
     ret "https://sts." + region + ".amazonaws.com"
 end
 
-// AssumeRole - trade the Config's credentials for a role's.
-//
-// `session_name` appears in CloudTrail against every action the credentials
-// take, so it should identify the caller rather than the role - "deploy-ci",
-// "invoice-worker". `duration` is seconds, clamped to what STS allows; zero
-// takes the role's default, which is an hour.
 pub func AssumeRole(cfg: Config, role_arn: str, session_name: str,
     duration: int): Credentials:
     ret AssumeRoleWith(cfg, role_arn, session_name, duration, "", "")
 end
 
-// AssumeRoleWith - the same with an external id or a scoping policy.
-//
-// `external_id` is the shared secret a third party's role requires, and it
-// exists to stop the confused-deputy problem: without it, knowing a role ARN
-// would be enough to use it. `policy_arn` narrows the session to less than the
-// role allows, which is worth doing for anything long-lived.
 pub func AssumeRoleWith(cfg: Config, role_arn: str, session_name: str,
     duration: int, external_id: str, policy_arn: str): Credentials:
     if role_arn.len() == 0:
@@ -182,15 +146,6 @@ pub func AssumeRoleWith(cfg: Config, role_arn: str, session_name: str,
     ret _credentials_of(res, "AssumeRole " + role_arn)
 end
 
-// AssumeRoleWithWebIdentity - turn an OIDC token into AWS credentials.
-//
-// The one path that needs no AWS secret at all: a Kubernetes service account
-// token, a GitHub Actions OIDC token, a Google or Apple sign-in. The trust
-// policy on the role decides which issuer and which subject are acceptable, so
-// the token alone is the credential.
-//
-// Deliberately unsigned - it must be, because the caller has nothing to sign
-// with. That is the point of it.
 pub func AssumeRoleWithWebIdentity(cfg: Config, role_arn: str,
     session_name: str, web_identity_token: str, duration: int): Credentials:
     if role_arn.len() == 0 || web_identity_token.len() == 0:
@@ -214,11 +169,6 @@ pub func AssumeRoleWithWebIdentity(cfg: Config, role_arn: str,
     ret _credentials_of(res, "AssumeRoleWithWebIdentity " + role_arn)
 end
 
-// GetSessionToken - the Config's own credentials, time-boxed.
-//
-// With an MFA serial and code, the resulting session satisfies a policy that
-// demands MFA, which is the usual reason to call this. Without one it is
-// mainly a way to hand something a credential that expires.
 pub func GetSessionToken(cfg: Config, duration: int, mfa_serial: str,
     mfa_code: str): Credentials:
     mut c := _sts_call("GetSessionToken")
@@ -231,11 +181,6 @@ pub func GetSessionToken(cfg: Config, duration: int, mfa_serial: str,
     ret _credentials_of(res, "GetSessionToken")
 end
 
-// GetFederationToken - credentials for someone who has no AWS identity.
-//
-// The way to hand a browser or a customer a scoped, expiring credential
-// without creating an IAM user for them. The policy is required and is the
-// whole of what the holder may do.
 pub func GetFederationToken(cfg: Config, name: str, policy_json: str,
     duration: int): Credentials:
     if name.len() == 0 || policy_json.len() == 0:
@@ -254,11 +199,6 @@ pub func GetFederationToken(cfg: Config, name: str, policy_json: str,
     ret _credentials_of(res, "GetFederationToken " + name)
 end
 
-// GetCallerIdentity - who these credentials are.
-//
-// Every identity may call it and no policy can deny it, which makes it the
-// one reliable way to answer "which credentials is this process actually
-// using" - the question behind most unexplained AccessDenied errors.
 pub func GetCallerIdentity(cfg: Config): Identity:
     mut c := _sts_call("GetCallerIdentity")
     res := Invoke(cfg, c)
@@ -274,11 +214,6 @@ pub func GetCallerIdentity(cfg: Config): Identity:
     }
 end
 
-// Apply - a Config that signs with these credentials.
-//
-// The endpoint, region and bucket are kept; only the credential changes. So
-// the usual shape is one line: assume a role, hand the result to the S3 Config
-// that was already built.
 pub func Apply(cfg: Config, creds: Credentials): Config:
     mut out := cfg
     if !creds.ok: ret out end
@@ -289,8 +224,6 @@ pub func Apply(cfg: Config, creds: Credentials): Config:
     ret out
 end
 
-// StaticCredentials - a long-lived key as a Credentials, so code that takes
-// one does not need a second path for the case where nothing expires.
 pub func StaticCredentials(access_key: str, secret_key: str): Credentials:
     ret Credentials {
         ok = access_key.len() > 0 && secret_key.len() > 0,
@@ -300,11 +233,6 @@ pub func StaticCredentials(access_key: str, secret_key: str): Credentials:
     }
 end
 
-// Expired - whether credentials should be replaced before being used again.
-//
-// True `skew` seconds before the stated expiry, because the check that matters
-// happens on the service's clock rather than this one. Credentials that never
-// expire are never expired.
 pub func Expired(creds: Credentials, now: i64, skew: int): bool:
     if !creds.ok: ret true end
     if creds.expires_epoch == 0 as i64: ret false end
@@ -313,19 +241,15 @@ pub func Expired(creds: Credentials, now: i64, skew: int): bool:
     ret creds.expires_epoch - (margin as i64) <= now
 end
 
-// ExpiredNow - the same against the current clock and the default skew.
 pub func ExpiredNow(creds: Credentials): bool:
     ret Expired(creds, time.Now(), STS_DEFAULT_SKEW)
 end
 
-// SecondsRemaining - how long credentials have left, or -1 when they do not
-// expire. Negative values other than -1 mean they already have.
 pub func SecondsRemaining(creds: Credentials, now: i64): i64:
     if creds.expires_epoch == 0 as i64: ret 0 - (1 as i64) end
     ret creds.expires_epoch - now
 end
 
-// DescribeCredentials - a line for a log, with nothing secret in it.
 pub func DescribeCredentials(creds: Credentials): str:
     if !creds.ok: ret "credentials unavailable: " + creds.error end
     mut key := creds.access_key
@@ -337,10 +261,6 @@ pub func DescribeCredentials(creds: Credentials): str:
     ret kind + " " + key + ", " + when + ", from " + creds.source
 end
 
-// ParseCredentials - an STS answer that arrived from somewhere else.
-//
-// Public for the same reason the listing parser is: it is the only way to
-// exercise this without a service in front of it.
 pub func ParseCredentials(body: str, status: int, source: str): Credentials:
     ret _credentials_of(Result {
         ok = status >= 200 && status < 300, status = status, body = body

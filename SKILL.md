@@ -1379,7 +1379,7 @@ merged `style.css`/`script.js`.
 ```sh
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing
-salam build app.salam --output=app      # native executable (add --keep-c to inspect the C)
+salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
 salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS

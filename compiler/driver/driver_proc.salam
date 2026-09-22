@@ -2,10 +2,47 @@ package driver
 
 import os
 import str
+import mem
 import cc "../condcomp.salam"
 import lv "../llvmgen/llvmgen.salam"
 import thread
 import sync
+
+    const _WIN_CP_UTF8 := 65001
+    const _WIN_STD_ERROR_HANDLE := 0 - 12
+    const _WIN_ENABLE_VT := 0x4
+
+    mut _win_console_ready := false
+    mut _win_ansi_ok := false
+
+    if SALAM_OS_WINDOWS:
+        // Old conhost consoles (Windows Server 2016 included) default to
+        // the legacy OEM codepage and leave VT100 escape processing off, so
+        // raw source text prints as mojibake and diagnostics show their
+        // ANSI codes literally unless a program opts both of these in.
+        func win_console_init():
+            if _win_console_ready:
+                ret
+            end
+            _win_console_ready = true
+            _cp := SetConsoleOutputCP(_WIN_CP_UTF8)
+            h := GetStdHandle(_WIN_STD_ERROR_HANDLE)
+            if h == null:
+                ret
+            end
+            buf := mem.Allocate(8 as u64)
+            defer mem.Free(buf)
+            if GetConsoleMode(h, buf) == 0:
+                ret
+            end
+            p := buf as int*
+            _win_ansi_ok = SetConsoleMode(h, p[0] | _WIN_ENABLE_VT) != 0
+        end
+    else:
+        func win_console_init():
+            ret
+        end
+    end
 
     func proc_status(code: int): int:
         if SALAM_OS_WINDOWS:
@@ -27,13 +64,23 @@ import sync
     end
 
     func resolve_color(flag: int): bool:
+        if SALAM_OS_WINDOWS:
+            win_console_init()
+        end
         if flag == 1:
             ret true
         end
         if flag == 0:
             ret false
         end
-        ret stderr_is_tty()
+        if !stderr_is_tty():
+            ret false
+        end
+        if SALAM_OS_WINDOWS:
+            ret _win_ansi_ok
+        else:
+            ret true
+        end
     end
 
     func compile_worker():

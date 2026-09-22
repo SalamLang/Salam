@@ -78,6 +78,7 @@ MINGW_EXTRA="libws2_32.a libgdi32.a libole32.a liboleaut32.a libuuid.a"
 MINGW_EXTRA="$MINGW_EXTRA libcomdlg32.a libwinspool.a libpsapi.a libiphlpapi.a"
 MINGW_EXTRA="$MINGW_EXTRA libcrypt32.a libbcrypt.a libsecur32.a libwinmm.a"
 MINGW_EXTRA="$MINGW_EXTRA libversion.a libnetapi32.a libuserenv.a libdbghelp.a"
+MINGW_EXTRA="$MINGW_EXTRA libwinhttp.a"
 
 stage_mingw() {
     arch=$1

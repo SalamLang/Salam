@@ -479,7 +479,7 @@ Wiring differences that follow from how `compiler/` is written:
   and a plain `Vector<Frame>` of a single-level struct is fine, but a fixed array
   avoids the allocation entirely on the hot path.
 - `opt.time_report`, `opt.time_report_fmt` and `opt.time_trace` are added to
-  `pub struct Dr` at `compiler/driver.salam:201`, next to `keep_c` (line 220)
+  `pub struct Dr` at `compiler/driver.salam:201`, next to `keep_temp` (line 220)
   and `asan` (line 230). The flag parse goes into `compiler/cli.salam`'s option
   loop, and the dispatcher at `compiler/cli.salam:337` needs no change.
 

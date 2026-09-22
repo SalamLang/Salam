@@ -82,7 +82,7 @@ try time-report-json "$SALAM_BIN" build hello.salam --output=t2 $CCPICK --time-r
 # shellcheck disable=SC2086
 try time-trace "$SALAM_BIN" build hello.salam --output=t3 $CCPICK --time-trace=tr.json
 # shellcheck disable=SC2086
-try keep-c "$SALAM_BIN" build hello.salam --output=t4 $CCPICK --keep-c
+try keep-temp "$SALAM_BIN" build hello.salam --output=t4 $CCPICK --keep-temp
 # shellcheck disable=SC2086
 try debug-info "$SALAM_BIN" build hello.salam --output=t5 $CCPICK -g
 # shellcheck disable=SC2086

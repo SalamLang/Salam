@@ -133,7 +133,7 @@ Hello, World!
 salam build app.salam --output=app
 
 # keep the generated C source for inspection
-salam build app.salam --keep-c
+salam build app.salam --keep-temp
 
 # compile to an object file only
 salam obj app.salam

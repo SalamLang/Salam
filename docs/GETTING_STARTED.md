@@ -39,6 +39,20 @@ The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 -OutFile "$env:TEMP\salam-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\salam-install.ps1"
 ```
 
+Getting `Could not create SSL/TLS secure channel` from that `irm` call? That
+happens when PowerShell's default protocol list doesn't include TLS 1.2,
+which is common on older Windows Server builds even though the OS itself
+supports it. Enable it for the session first, then retry:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 3072 -bor [Net.ServicePointManager]::SecurityProtocol
+irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 -OutFile "$env:TEMP\salam-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\salam-install.ps1"
+```
+
+If that still fails, use the `cmd.exe` installer below instead - `curl.exe`
+and `certutil` negotiate TLS through Windows itself, not .NET, so they are
+unaffected by this.
+
 Or from `cmd.exe`:
 
 ```bat

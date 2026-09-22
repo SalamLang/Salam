@@ -108,9 +108,9 @@ make   # release build -> ../salam at the repo root
 Save the following to `hello.salam`:
 
 ```salam
-func main {
+func main:
     println "Hello, World!"
-}
+end
 ```
 
 Compile and run:

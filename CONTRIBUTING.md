@@ -101,9 +101,9 @@ cmake -B build && cmake --build build
 **Hello, World** - save the following as `hello.salam`:
 
 ```salam
-func main {
+func main:
     println "Hello, World!"
-}
+end
 ```
 
 Then compile and run it:

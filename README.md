@@ -86,6 +86,19 @@ The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
 ```
 
+> Got `Could not create SSL/TLS secure channel`? That's PowerShell's default
+> protocol list missing TLS 1.2, common on older Windows Server builds.
+> Enable it for the session first, then retry:
+>
+> ```powershell
+> [Net.ServicePointManager]::SecurityProtocol = 3072 -bor [Net.ServicePointManager]::SecurityProtocol
+> irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
+> ```
+>
+> Still failing? Skip PowerShell entirely and use the `cmd.exe` installer
+> below - it goes through Windows' own `curl.exe`/`certutil`, which
+> negotiate TLS independently of .NET.
+
 To pass options, wrap the fetched script instead of piping it:
 
 ```powershell

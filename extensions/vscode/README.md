@@ -23,6 +23,8 @@ irm https://raw.githubusercontent.com/SalamLang/Salam/main/install.ps1 | iex
 
 If `salam` is not on your `PATH`, set `salam.compilerPath` to its absolute location.
 
+Getting `Could not create SSL/TLS secure channel` from the PowerShell command (common on older Windows Server builds)? See the [installer troubleshooting note](https://github.com/SalamLang/Salam#quick-installing) in the main README.
+
 ## Settings
 
 | Setting              | Default | Description                                                |

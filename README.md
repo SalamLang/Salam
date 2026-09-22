@@ -196,9 +196,9 @@ salam layout    # layout
 Hello, World:
 
 ```salam
-func main {
+func main:
     println "Hello, World!"
-}
+end
 ```
 
 ### Cross-compilation

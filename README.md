@@ -98,16 +98,24 @@ irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps
 > below - it goes through Windows' own `curl.exe`/`certutil`, which
 > negotiate TLS independently of .NET.
 
-To pass options, wrap the fetched script instead of piping it:
+To pass options, wrap the fetched script instead of piping it - a bare
+`irm ... 0.4.2 | iex` does not work, since that "0.4.2" is parsed as an
+argument to `Invoke-RestMethod`, not to the installer:
 
 ```powershell
-iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam"
+iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam --version 0.4.2"
+```
+
+Or set the matching environment variable before the plain piped form instead:
+
+```powershell
+$env:SALAM_VERSION = "0.4.2"; irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
 ```
 
 Or from `cmd.exe`:
 
 ```bat
-curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat"
+curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat" --version 0.4.2
 ```
 
 ## 🧩 Editor Support

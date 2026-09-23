@@ -15,19 +15,19 @@ forces it.
 
 ## What it covers
 
-Keyword and type highlighting in English, Persian and Arabic on top of Geany's
+Keyword and type highlighting in English and Persian on top of Geany's
 C lexer, which also handles `//` and `/* */` comments, strings and numbers.
 Comment toggling, four-space indentation and a symbol list come with the
 file type.
 
 The Build menu gets:
 
-| Entry   | Command                           |
-| ------- | --------------------------------- |
-| Compile | `salam build`                     |
-| Check   | `salam inspect --emit-symbol-xml` |
-| Format  | `salam format`                    |
-| Execute | `salam exec`                      |
+| Entry   | Command                       |
+| ------- | ----------------------------- |
+| Compile | `salam build`                 |
+| Check   | `salam inspect --emit-symbol` |
+| Format  | `salam format`                |
+| Execute | `salam exec`                  |
 
 Errors are parsed out of the gcc-style diagnostics, so clicking one jumps to
 the line.

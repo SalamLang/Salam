@@ -244,7 +244,7 @@ if [ "${1:-}" = "--worker" ]; then
             ;;
         errors)
             code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            out=$("$SALAM_ABS" inspect "$f" --emit-symbol-xml --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+            out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
             if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code"; then
                 echo "PASS $label ($code)"
             else
@@ -314,7 +314,7 @@ WORK="${WORK:-${TMPDIR:-/tmp}/salam-run-tests-work.$$}"
 mkdir -p "$WORK/results"
 printf '0\n' >"$WORK/.counter"
 trap 'rm -rf "$WORK"' EXIT
-LANGS="${LANGS:-en fa ar}"
+LANGS="${LANGS:-en fa}"
 NPROC="${NPROC:-}"
 if [ -z "$NPROC" ]; then
     command -v nproc >/dev/null 2>&1 && NPROC=$(nproc 2>/dev/null)

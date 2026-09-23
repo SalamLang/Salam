@@ -1,8 +1,8 @@
 # Editor support for Salam
 
-Salam programs can be written with English, Persian or Arabic keywords, and a
-single file may use any one of them. Every integration here highlights all
-three, treats Arabic-script letters as identifier characters, and accepts
+Salam programs can be written with English or Persian keywords, and a
+single file may use either of them. Every integration here highlights both,
+treats Arabic-script letters as identifier characters, and accepts
 numbers written with ASCII, Persian or Arabic-Indic digits.
 
 | Editor             | Directory                         | Highlighting | Indent  | Snippets | Run / build | Format | Diagnostics                     |
@@ -26,14 +26,14 @@ Each directory has its own readme with installation instructions.
 Nothing here keeps its own copy of the language's keywords. The generator
 reads them out of the compiler at generation time:
 
-- `compiler/langpack.salam` gives every keyword's spelling in all three
+- `compiler/langpack.salam` gives every keyword's spelling in both
   languages along with the token kind the lexer assigns it, so a keyword is
   grouped by what it _is_ rather than by how it is spelled.
 - `compiler/semantic/semantic.salam` gives the primitive type names, the
   intrinsic types (`Vector`, `HashMap`, `MapIter`, `File`, `Variant`) and the
   intrinsic method names.
 
-A new keyword therefore reaches every editor at once, in all three languages,
+A new keyword therefore reaches every editor at once, in both languages,
 by rerunning one command.
 
 ## Regenerating
@@ -105,10 +105,10 @@ actually read them: the Visual Studio Code grammar to `vscode-textmate` and
 `vscode-oniguruma`, the Kate one to `kate-syntax-highlighter`, the Sublime
 Text one to syntect (which ships inside `bat`), and the GtkSourceView one to
 GtkSourceView through GObject introspection. Each highlights
-`tools/fixtures/probe_{en,fa,ar}.salam`. Those three files are the same
-program written with the English, Persian and Arabic keywords, and each one
+`tools/fixtures/probe_{en,fa}.salam`. Those two files are the same
+program written with the English and Persian keywords, and each one
 compiles. The check asserts that a construct comes out styled the same way in
-all three, so dropping a Persian keyword from one definition fails the build.
+both, so dropping a Persian keyword from one definition fails the build.
 Where an engine is not installed the check says so and skips rather than
 failing.
 
@@ -142,11 +142,11 @@ YASnippet, which all use the same `${1:placeholder}` syntax.
 
 The integrations lean on three compiler options:
 
-| Flag                                                                         | Why                                                                                                             |
-| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `--error-style=gcc`                                                          | One-line `file:line:col: error: message` diagnostics, which every editor's error parser already understands.    |
-| `--error-format=json`                                                        | One JSON object per diagnostic, for editors that build structured diagnostics.                                  |
-| `salam inspect FILE --emit-symbol-xml --xml-out=/dev/null --log-level=error` | Lex, parse and analyze without running the program or writing an artifact: the check every "lint on save" uses. |
+| Flag                                                                     | Why                                                                                                             |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `--error-style=gcc`                                                      | One-line `file:line:col: error: message` diagnostics, which every editor's error parser already understands.    |
+| `--error-format=json`                                                    | One JSON object per diagnostic, for editors that build structured diagnostics.                                  |
+| `salam inspect FILE --emit-symbol --xml-out=/dev/null --log-level=error` | Lex, parse and analyze without running the program or writing an artifact: the check every "lint on save" uses. |
 
 ## Licensing
 

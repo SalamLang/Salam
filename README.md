@@ -53,11 +53,10 @@ inclusive environment for building high-performance software.
 
 - **English**: Fully supported and ready for use.
 - **Persian (فارسی)**: Fully supported and ready for use.
-- **Arabic (العربية)**: Currently under development. We need contributions from native Arabic speakers to complete support.
 
 ### Why Choose Salam?
 
-- 🌍 **Localized for Persian and Arabic Speakers**: Write and read code in your native language.
+- 🌍 **Localized for Persian Speakers**: Write and read code in your native language.
 - 🧑‍🎓 **Beginner-Friendly**: Salam makes programming approachable for everyone, including students and new developers.
 - 💻 **Powerful Tools**: Easy to use, but with robust capabilities for all your coding needs.
 
@@ -131,7 +130,7 @@ its own installation instructions:
 | [Geany](extensions/geany) | [gedit & GNOME](extensions/gtksourceview) | [Notepad++](extensions/notepadpp) |
 | [GNU nano](extensions/nano) | [micro](extensions/micro) | |
 
-All of them highlight the English, Persian and Arabic keyword packs, and the
+All of them highlight the English and Persian keyword packs, and the
 word lists are generated from the compiler's own tables so they cannot drift.
 The richer plugins also run, build, check and format through the compiler.
 

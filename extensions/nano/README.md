@@ -19,7 +19,7 @@ nano loads everything in `/usr/share/nano/` by default.
 ## What it covers
 
 Keywords, types, built-in output statements, constants and contextual
-keywords in all three languages, numbers in ASCII, Persian and Arabic-Indic
+keywords in both languages, numbers in ASCII, Persian and Arabic-Indic
 digits, string, raw-string and character literals, `//` and `/* */` comments,
 `TODO` markers, and trailing whitespace.
 

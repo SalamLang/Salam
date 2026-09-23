@@ -23,8 +23,8 @@ if exists('*GetSalamIndent')
 endif
 
 let s:open_block = ':\s*\%(//.*\)\=$'
-let s:close_block = '^\s*\%(نهاية\|تمام\|end\)\s*$'
-let s:else_block = '^\s*\%(وگرنه\|else\|وإلا\)\%(\s\|:\)'
+let s:close_block = '^\s*\%(پایان\|end\)\s*$'
+let s:else_block = '^\s*\%(وگرنه\|else\)\%(\s\|:\)'
 
 function! s:Code(lnum) abort
   let l:line = getline(a:lnum)

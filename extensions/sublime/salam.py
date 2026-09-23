@@ -88,7 +88,7 @@ def directive_lang(head):
 
 def detect_lang(text):
     choice = setting("language_pack", "auto")
-    if choice in ("en", "fa", "ar"):
+    if choice in ("en", "fa"):
         return choice
 
     head = text[:4000]
@@ -102,7 +102,7 @@ def detect_lang(text):
             return "fa"
         if is_arabic_script(ord(char)):
             arabic += 1
-    return "ar" if arabic >= 3 else "en"
+    return "fa" if arabic >= 3 else "en"
 
 
 def common_args(text):
@@ -190,7 +190,7 @@ class SalamCheckCommand(sublime_plugin.TextCommand):
         args = [
             "inspect",
             path,
-            "--emit-symbol-xml",
+            "--emit-symbol",
             "--xml-out=" + null_device,
             "--error-style=gcc",
             "--log-level=error",

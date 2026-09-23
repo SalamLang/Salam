@@ -27,7 +27,7 @@ running it or writing any artifact."
   :command ((eval salam-compiler)
             "inspect"
             source
-            "--emit-symbol-xml"
+            "--emit-symbol"
             (eval (concat "--xml-out=" (flycheck-salam--null-device)))
             "--error-style=gcc"
             "--log-level=error"

@@ -20,9 +20,9 @@ Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
 **`layout:`** blocks compile to HTML/CSS/JS. It can also be run with a
 tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
-LLVM. Source can be written in English, Persian, or Arabic; **this guide uses
-English throughout** (every stdlib symbol also has `@fa`/`@ar` spellings defined
-by `@en "Name" @fa "…" @ar "…"` annotations, though you rarely need them).
+LLVM. Source can be written in English or Persian; **this guide uses
+English throughout** (every stdlib symbol also has a `@fa` spelling defined
+by `@en "Name" @fa "…"` annotations, though you rarely need them).
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -166,8 +166,8 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > `until C:` runs its body **while `C` is true** and stops when `C` becomes
 > false. It is not a do-until and not a "loop until C happens". **`while` is
 > the same keyword under a name that says so** - `while C:` and `until C:` are
-> one loop, and new code should prefer `while`. (The Persian `تاوقتی` and
-> Arabic `بينما` spellings already read correctly; only the English `until`
+> one loop, and new code should prefer `while`. (The Persian `تاوقتی`
+> spelling already reads correctly; only the English `until`
 > invites the wrong reading.) When porting a loop from C/Python/JS/Go, **copy
 > the condition verbatim**:
 >
@@ -1223,7 +1223,7 @@ C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
 `link dynamic "X"` (`-lX`) vs `link static "X"` (`-l:libX.a` on the
 LLVM-native/JIT toolchain path; falls back to dynamic on the legacy tcc
 path, since tcc's own linker doesn't support that syntax) vs `link
-framework "X"` (macOS only, `-framework X`). Persian/Arabic keywords:
+framework "X"` (macOS only, `-framework X`). Persian keywords:
 `ایستا`/`پویا`/`چارچوب`.
 
 **Concurrency:**
@@ -1386,7 +1386,7 @@ salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
-salam app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml   # inspect a stage
+salam app.salam --emit-tokens | --emit-ast | --emit-symbol   # inspect a stage
 ```
 
 **Always verify a converted program.** Prefer `salam exec file.salam` for a quick
@@ -1543,14 +1543,14 @@ in dependency order:
 | `jsgen` / `layout` / `minify` / `web` | 2.6k / 2.5k / 0.3k / 0.4k | JS + layout-DSL → HTML/CSS/JS                                       |
 | `interp`                              | 3.5k                      | tree-walking interpreter (`salam exec`)                             |
 | `driver` / `cli`                      | 4.6k / 0.7k               | command dispatch, build orchestration                               |
-| `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-*-xml`                                     |
-| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian/Arabic keyword & symbol tables                      |
+| `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-tokens/-ast/-symbol`                        |
+| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
 | `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
 
 **Suggested port order:** `core` → `token`/`source` → `lexer` → `ast` →
 `parser` → `semantic` → one backend (`codegen` C) → `driver`/`cli`, then the
 remaining backends and tools. Port module-by-module, keeping the existing C build
 runnable, and validate each stage against the current compiler's
-`--emit-tokens-xml` / `--emit-ast-xml` / `--emit-symbol-xml` output and the
+`--emit-tokens` / `--emit-ast` / `--emit-symbol` output and the
 `tests/` suite. The bit-heavy code (lexer, hasher, codegen) ports directly
 now that bitwise operators exist (§12.1).

@@ -179,7 +179,7 @@ not in expressions.
 keep their meaning (they are used for timestamps, which is correct):
 
 ```salam
-@en "MonoNanos"   @fa "نانوثانیه یکنواخت"   @ar "نانو ثانیة رتیبة"
+@en "MonoNanos"   @fa "نانوثانیه یکنواخت"
 pub func MonoNanos(): i64: ret _mono_ns() end
 
 @en "MonoElapsedNs"  ...
@@ -583,7 +583,7 @@ Two layers. The lower layer is what codegen emits; the upper layer is what a use
 calls by hand when they want to profile a region rather than a function.
 
 ```salam
-@en "prof"  @fa "پروفایل"  @ar "تحلیل"
+@en "prof"  @fa "پروفایل"
 package prof
 
 // ---- lower layer: emitted by codegen, not meant to be hand-written ----
@@ -625,8 +625,8 @@ pub func Report(): str: ... end
 pub func Reset(): ... end
 ```
 
-`@fa` / `@ar` names are required on every `pub` symbol; the repository convention is
-that all three are present or the translated import paths break.
+`@fa` names are required on every `pub` symbol; the repository convention is
+that both are present or the translated import paths break.
 
 **Internal representation.** One flat array of records, indexed by slot ID:
 
@@ -1027,7 +1027,7 @@ New package `std/bench/bench.salam`, modeled on Go's `testing.B` because that
 design is well proven and users coming from Go will recognize it.
 
 ```salam
-@en "bench"  @fa "محک"  @ar "قیاس"
+@en "bench"  @fa "محک"
 package bench
 
 pub struct B:
@@ -1267,10 +1267,10 @@ decided before the first commit, not after.
 
 ### 5.1 Localization
 
-- Every new `pub` symbol in `std/prof` and `std/bench` needs `@en`, `@fa` and
-  `@ar` annotations. Missing ones break translated imports.
+- Every new `pub` symbol in `std/prof` and `std/bench` needs `@en` and `@fa`
+  annotations. Missing ones break translated imports.
 - Every new user-visible string in `c/src/` goes through `i18n_tr(...)`, and the
-  same key is added to the `fa`/`ar` catalogs in `c/src/i18n/`.
+  same key is added to the `fa` catalog in `c/src/i18n/`.
 - `compiler/i18n.salam` needs the mirrored entries.
 - Report _tables_ are not translated string-by-string; column headers are, and
   numbers go through `sal_format` for digit shaping.

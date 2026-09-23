@@ -18,7 +18,7 @@ Or copy it straight into the UDL folder:
 ## What it covers
 
 Keywords, types, built-in output statements, constants, intrinsic types and
-intrinsic methods in English, Persian and Arabic; `//` and `/* */` comments
+intrinsic methods in English and Persian; `//` and `/* */` comments
 with folding; `"..."`, `'c'` and `` `...` `` literals; hex, binary, octal and
 decimal numbers; and the operator set.
 

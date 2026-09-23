@@ -4,8 +4,8 @@ Syntax highlighting, indentation, snippets, build commands and a formatter for
 the [Salam programming language](https://github.com/SalamLang/Salam) in
 Sublime Text 3 and 4.
 
-Salam keywords are spelled in English, Persian or Arabic, and one file may use
-any of the three. All three spellings are highlighted, and the compiler's
+Salam keywords are spelled in English or Persian, and one file may use
+either. Both spellings are highlighted, and the compiler's
 keyword pack is detected per file, so a Persian program needs no configuration.
 
 ## Install
@@ -33,8 +33,7 @@ picked for a file whose first line is a `//!` directive header.
   string forms (`"..."`, `"""..."""`, `` `...` ``, `'c'`), every numeric base,
   annotations, `//!` directive headers and layout-DSL elements.
 - Indentation: a trailing `:` opens a block, `end` closes it, `else` dedents.
-- Goto Symbol (`Ctrl+R`) lists functions and types, including Persian and
-  Arabic names.
+- Goto Symbol (`Ctrl+R`) lists functions and types, including Persian names.
 - 24 snippets, the same set the Visual Studio Code extension ships.
 - Build commands for running, building, checking, formatting and inspecting.
 - `Salam: Format File` and `Salam: Check File` in the command palette.
@@ -44,18 +43,18 @@ picked for a file whose first line is a `//!` directive header.
 Pick one with `Tools > Build System > Salam`, then `Ctrl+B`. `Ctrl+Shift+B`
 chooses a variant:
 
-| Variant                       | Command                             |
-| ----------------------------- | ----------------------------------- |
-| _(default)_ Run (interpreter) | `salam exec`                        |
-| Build and Run                 | `salam run`                         |
-| Build Executable              | `salam build`                       |
-| Build Project                 | `salam build` in the project folder |
-| Check (no run)                | `salam inspect --emit-symbol-xml`   |
-| Format                        | `salam format`                      |
-| Check Formatting              | `salam format --check`              |
-| Show Tokens / Show AST        | `salam inspect --emit-*-xml`        |
-| Build Web Page                | `salam web`                         |
-| Compile to JavaScript         | `salam js`                          |
+| Variant                       | Command                                      |
+| ----------------------------- | -------------------------------------------- |
+| _(default)_ Run (interpreter) | `salam exec`                                 |
+| Build and Run                 | `salam run`                                  |
+| Build Executable              | `salam build`                                |
+| Build Project                 | `salam build` in the project folder          |
+| Check (no run)                | `salam inspect --emit-symbol`                |
+| Format                        | `salam format`                               |
+| Check Formatting              | `salam format --check`                       |
+| Show Tokens / Show AST        | `salam inspect --emit-tokens` / `--emit-ast` |
+| Build Web Page                | `salam web`                                  |
+| Compile to JavaScript         | `salam js`                                   |
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 

@@ -1,7 +1,7 @@
 # Writing Salam: a guide for AI agents
 
-Salam is a compiled, statically typed language whose keywords exist in English,
-Persian and Arabic. This file is the orientation an AI model needs to produce
+Salam is a compiled, statically typed language whose keywords exist in English
+and Persian. This file is the orientation an AI model needs to produce
 Salam that compiles on the first try. It documents the rules that are _not_
 guessable from other languages. Everything here has been verified against the
 compiler in this checkout, with the exact diagnostic it produces.
@@ -206,18 +206,17 @@ Available: `SALAM_OS_WINDOWS`, `SALAM_OS_LINUX`, `SALAM_OS_MAC`,
 
 ## 10. Multilingual source
 
-Every keyword exists in English, Persian and Arabic; `salam_keywords` returns
+Every keyword exists in English and Persian; `salam_keywords` returns
 the full table. Declarations carry name aliases so other-language callers can
 use them:
 
 ```salam
 @en "Trim"
 @fa "پیرایش"
-@ar "اقتطاع"
 pub func Trim(s: str): str: ret s.trim() end
 ```
 
-Compile non-English source with `--lang=fa` or `--lang=ar`.
+Compile non-English source with `--lang=fa`.
 
 ---
 

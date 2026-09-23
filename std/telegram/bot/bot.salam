@@ -104,6 +104,8 @@ pub struct ApiResponse:
     pub result: str = ""
     pub description: str = ""
     pub error_code: i64 = 0
+    pub http_status: int = 0
+    pub http_err: str = ""
 end
 
 @en "SendOptions"
@@ -154,12 +156,21 @@ end
 func _call(bot: Bot, method: str, params: HashMap<str, str>): ApiResponse:
     url := http.WithQuery(_api_url(bot, method), params)
     defer params.free()
-    raw := http.Get(url).body
+    r := http.Get(url)
     mut resp := ApiResponse {}
-    resp.ok = json.Get(raw, "ok") == "true"
-    resp.result = json.Get(raw, "result")
-    resp.description = json.Get(raw, "description")
-    resp.error_code = conv.ParseInt(json.Get(raw, "error_code"))
+    resp.http_status = r.status
+    resp.http_err = r.err
+    if r.err.len() > 0:
+        resp.description = r.err
+        ret resp
+    end
+    resp.ok = json.Get(r.body, "ok") == "true"
+    resp.result = json.Get(r.body, "result")
+    resp.description = json.Get(r.body, "description")
+    resp.error_code = conv.ParseInt(json.Get(r.body, "error_code"))
+    if !resp.ok && resp.description.len() == 0:
+        resp.description = "no 'description' field in response (HTTP " + str.FromInt(r.status) + "): " + r.body
+    end
     ret resp
 end
 
@@ -598,6 +609,12 @@ pub func DeleteWebhook(bot: Bot): ApiResponse:
     ret _call(bot, "deleteWebhook", _new_params())
 end
 
+@en "GetWebhookInfo"
+@fa "دریافت اطلاعات وب هوک"
+pub func GetWebhookInfo(bot: Bot): ApiResponse:
+    ret _call(bot, "getWebhookInfo", _new_params())
+end
+
 @en "BotCommand"
 @fa "دستور بات"
 pub func BotCommand(command: str, description: str): str:
@@ -725,6 +742,7 @@ pub func Poll(bot: Bot, timeout: i64, handler: func (Update)):
             end
             updates.free()
         else:
+            printerr "getUpdates failed (HTTP " + str.FromInt(resp.http_status) + ", code " + str.FromInt(resp.error_code) + "): " + resp.description
             time.Sleep(1000)
         end
     end

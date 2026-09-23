@@ -1,12 +1,12 @@
 ---
 name: salam
-description: Use when writing, reading, debugging or reviewing Salam source (.salam files) - the Salam programming language with English/Persian/Arabic keywords. Covers its enforced declaration ordering, the `until` = `while` rule, stdlib lookup, and the toolchain traps that silently produce wrong behaviour. Triggers on .salam files, "Salam", "salamlang", or any request to compile, check or run Salam code.
+description: Use when writing, reading, debugging or reviewing Salam source (.salam files) - the Salam programming language with English/Persian keywords. Covers its enforced declaration ordering, the `until` = `while` rule, stdlib lookup, and the toolchain traps that silently produce wrong behaviour. Triggers on .salam files, "Salam", "salamlang", or any request to compile, check or run Salam code.
 ---
 
 # Working with Salam
 
-Salam is a compiled, statically typed language whose keywords exist in English,
-Persian and Arabic. Its rules differ from mainstream languages in ways that are
+Salam is a compiled, statically typed language whose keywords exist in English
+and Persian. Its rules differ from mainstream languages in ways that are
 not guessable, so verify with tools rather than assuming.
 
 ## Always do this
@@ -85,16 +85,15 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 
 ## Multilingual source
 
-Keywords exist in all three languages (`salam_keywords` returns the table).
+Keywords exist in both languages (`salam_keywords` returns the table).
 Declarations carry aliases:
 
 ```salam
 @en "Trim"
 @fa "پیرایش"
-@ar "اقتطاع"
 pub func Trim(s: str): str: ret s.trim() end
 ```
 
-Compile non-English source with `--lang=fa` or `--lang=ar`.
+Compile non-English source with `--lang=fa`.
 
 Full reference: `docs/ai/AGENTS.md`, or the `salam://guide/agents.md` resource.

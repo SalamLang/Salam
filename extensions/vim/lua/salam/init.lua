@@ -93,7 +93,7 @@ function M.check(bufnr)
     M.config.compiler,
     'inspect',
     path,
-    '--emit-symbol-xml',
+    '--emit-symbol',
     '--xml-out=' .. null_device(),
     '--error-format=json',
     '--log-level=error',

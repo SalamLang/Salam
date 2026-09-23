@@ -16,7 +16,7 @@ Restart Kate. `.salam` files are detected by extension; pick
 ## What it covers
 
 Keywords, primitive and intrinsic type names, built-in output statements,
-constants and contextual keywords in English, Persian and Arabic; the name in
+constants and contextual keywords in English and Persian; the name in
 a `func` or `struct` declaration; `//` and `/* */` comments with alert
 highlighting; `//!` directive headers; `"..."`, `"""..."""`, `` `...` `` and
 `'c'` literals with escape checking; and integers and floats written with

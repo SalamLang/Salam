@@ -7,7 +7,7 @@ One plugin covers both editors. Vim 8.0 and later get the vimscript half;
 Neovim additionally loads a Lua layer with asynchronous `vim.diagnostic`
 support and `:checkhealth salam`.
 
-Salam keywords are spelled in English, Persian or Arabic. All three are
+Salam keywords are spelled in English or Persian. Both are
 highlighted, Arabic-script identifiers count as words for `w`, `*` and `gd`,
 and the keyword pack is detected per file.
 

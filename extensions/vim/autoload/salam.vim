@@ -124,7 +124,7 @@ function! salam#Check() abort
 
   let l:args = [
         \ 'inspect', l:path,
-        \ '--emit-symbol-xml',
+        \ '--emit-symbol',
         \ '--xml-out=' . s:NullDevice(),
         \ '--error-style=gcc',
         \ '--log-level=error',

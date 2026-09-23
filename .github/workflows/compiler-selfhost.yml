@@ -85,8 +85,21 @@ jobs:
         run: |
           set -u
           sudo apt-get update
-          sudo apt-get install -y libxml2 ||
-            echo "::warning::libxml2 (old SONAME) not installable here; the seed release may fail to run until the next release ships with static libxml2 (PR #1690)"
+          if ! sudo apt-get install -y libxml2; then
+            echo "::warning::libxml2 (old SONAME) not installable via apt here; building libxml2.so.2 from source instead"
+            set -e
+            sudo apt-get install -y cmake ninja-build
+            git clone --quiet --depth 1 --branch v2.13.5 \
+              https://github.com/GNOME/libxml2.git /tmp/libxml2-seed-src
+            cmake /tmp/libxml2-seed-src -G Ninja -B /tmp/libxml2-seed-build \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+              -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+              -DLIBXML2_WITH_ZLIB=ON
+            ninja -C /tmp/libxml2-seed-build
+            sudo cp -P /tmp/libxml2-seed-build/libxml2.so* /usr/local/lib/
+            sudo ldconfig
+            rm -rf /tmp/libxml2-seed-src /tmp/libxml2-seed-build
+          fi
 
       - name: Install seed salam from a published release
         env:
@@ -272,7 +285,34 @@ jobs:
           macOS) brew install zstd || true ;;
           esac
 
+      - name: Cache static libxml2 (Linux, cache miss only)
+        id: cache-libxml2-selfhost
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/libxml2-selfhost
+          key: libxml2-2.15.4-static-selfhost-${{ matrix.os }}-v1
+
+      - name: Build static libxml2 (Linux, cache miss only)
+        if: runner.os == 'Linux' && steps.cache-libxml2-selfhost.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          git clone --quiet --depth 1 --branch v2.15.4 \
+            https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+          cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+            -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
+            -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF \
+            -DLIBXML2_WITH_ZLIB=ON
+          ninja -C /tmp/libxml2-build
+          mkdir -p /tmp/libxml2-selfhost
+          cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-selfhost/
+          rm -rf /tmp/libxml2-src /tmp/libxml2-build
+
       - name: Bootstrap stage1 -> stage2 -> stage3
+        env:
+          SALAM_EXTRA_LIBPATH: ${{ runner.os == 'Linux' && '/tmp/libxml2-selfhost' || '' }}
         run: |
           set -eu
           sh compiler/tools/bash/bootstrap.sh "$SALAM_SEED" build/selfhost

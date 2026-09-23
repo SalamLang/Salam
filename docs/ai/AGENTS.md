@@ -251,14 +251,16 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   contain a file called `io.salam` collide at link time. Give every source file
   a name unique across the whole project.
 
-- **The interpreter has no networking at all.** `salam exec`'s extern
-  dispatch table covers file I/O, memory and process functions only; no
-  socket function (`socket`/`connect`/`send`/`recv`, or Windows' WinHTTP
-  family) is in it, on any platform. Anything that imports `net.http`,
-  `net.internal.rawsock`, or similar fails immediately with `extern
-function '...' is not supported by the interpreter`. This is a hard
-  block, not a bug to work around: use `salam run`/`salam build` for any
-  program that touches the network.
+- **The interpreter's HTTPS is slow: raise `--timeout` for it.** `salam exec`
+  supports networking now, including the TLS path in `net.http`, but the
+  handshake's certificate-chain math runs as tree-walked Salam instead of
+  native code, so a real HTTPS request can take upward of a minute. The
+  default per-run deadline is 5 seconds, so a program that dials `https://`
+  under `salam exec` needs an explicit `--timeout` of tens of seconds or
+  more, or it will report a timed-out execution well before the handshake
+  finishes. Plain `http://` has none of this cost. For anything
+  latency-sensitive, `salam run`/`salam build` compiles the same TLS code to
+  native speed.
 
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 

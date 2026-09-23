@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.4.2
+;; Version: 0.4.3
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -64,10 +64,10 @@ An empty string lets the compiler find it."
 (defconst salam-conditional-keywords '("if" "else" "match" "اگر" "وگرنه" "برگزین"))
 (defconst salam-loop-keywords '("until" "repeat" "each" "while" "تاهنگام" "چرخه" "هر"))
 (defconst salam-statement-keywords '("ret" "end" "break" "continue" "defer" "to" "by" "in" "with" "بازگشت" "پایان" "بشکن" "بگذر" "دیرکرد" "تا" "گام" "در" "با"))
-(defconst salam-storage-keywords '("mut" "const" "extern" "pub" "inline" "noinline" "pure" "noret" "deprecated" "گذرا" "پایدار" "خارجی" "همگانی" "توکار" "جدا" "درونزا" "بی‌بازگشت" "ازکارافتاده"))
+(defconst salam-storage-keywords '("mut" "const" "extern" "pub" "inline" "noinline" "pure" "noret" "deprecated" "گذرا" "پایدار" "بیرونی" "همگانی" "توکار" "جدا" "درونزا" "بی‌بازگشت" "ازکارافتاده"))
 (defconst salam-other-keywords '("on" "as" "layout" "operator" "impl" "بر" "برگردان" "چیدمان" "کنشگر" "پیاده‌سازی"))
 (defconst salam-function-keywords '("func" "کارکرد"))
-(defconst salam-structure-keywords '("type" "struct" "enum" "interface" "component" "ریخت" "ساختار" "شمارش" "واسط" "سازه"))
+(defconst salam-structure-keywords '("type" "struct" "enum" "interface" "component" "ریخت" "ساختار" "شمارش" "میانجی" "سازه"))
 (defconst salam-include-keywords '("import" "package" "فراخوانی" "بسته"))
 (defconst salam-boolean-keywords '("true" "false" "درست" "نادرست"))
 (defconst salam-null-keywords '("null" "پوچ"))
@@ -82,7 +82,7 @@ An empty string lets the compiler find it."
 (defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float"))
 (defconst salam-end-keywords '("end" "پایان"))
 (defconst salam-else-keywords '("else" "وگرنه"))
-(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "with" "match" "while" "بازگشت" "اگر" "وگرنه" "تاهنگام" "پایان" "بشکن" "بگذر" "دیرکرد" "چرخه" "تا" "گام" "هر" "در" "با" "برگزین" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "layout" "package" "operator" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "کارکرد" "بر" "گذرا" "پایدار" "ریخت" "ساختار" "شمارش" "فراخوانی" "برگردان" "چیدمان" "بسته" "کنشگر" "خارجی" "واسط" "همگانی" "توکار" "جدا" "درونزا" "بی‌بازگشت" "ازکارافتاده" "سازه" "پیاده‌سازی" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "بنویس" "چاپ" "نادرستینویس" "نادرستیچاپ" "بخوان" "و" "یا"))
+(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "with" "match" "while" "بازگشت" "اگر" "وگرنه" "تاهنگام" "پایان" "بشکن" "بگذر" "دیرکرد" "چرخه" "تا" "گام" "هر" "در" "با" "برگزین" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "layout" "package" "operator" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "کارکرد" "بر" "گذرا" "پایدار" "ریخت" "ساختار" "شمارش" "فراخوانی" "برگردان" "چیدمان" "بسته" "کنشگر" "بیرونی" "میانجی" "همگانی" "توکار" "جدا" "درونزا" "بی‌بازگشت" "ازکارافتاده" "سازه" "پیاده‌سازی" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "بنویس" "چاپ" "نادرستینویس" "نادرستیچاپ" "بخوان" "و" "یا"))
 
 (defconst salam--ident-chars "[[:alnum:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍]"
   "Character class matching one identifier character, Arabic script included.")

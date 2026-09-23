@@ -31,7 +31,7 @@ Restart the editor. `.salam` files are detected by glob.
 ## What it covers
 
 Keywords, primitive and intrinsic types, built-in output statements,
-constants and contextual keywords in all three languages; the name in a
+constants and contextual keywords in both languages; the name in a
 `func` or `struct` declaration; `//` and `/* */` comments with spell checking
 disabled in code; `//!` directive headers; every string form; annotations;
 and numbers in ASCII, Persian and Arabic-Indic digits.

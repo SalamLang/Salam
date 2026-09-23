@@ -3,7 +3,7 @@ call ale#Set('salam_options', '')
 
 function! ale_linters#salam#salam#GetCommand(buffer) abort
   let l:null = has('win32') ? 'NUL' : '/dev/null'
-  return '%e inspect %s --emit-symbol-xml --xml-out=' . l:null
+  return '%e inspect %s --emit-symbol --xml-out=' . l:null
         \ . ' --error-style=gcc --log-level=error '
         \ . ale#Var(a:buffer, 'salam_options')
 endfunction

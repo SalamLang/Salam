@@ -72,8 +72,8 @@ try doc-file "$SALAM_BIN" doc hello.salam --output=d1.html
 try doc-dir "$SALAM_BIN" doc "$ROOT/std/str" --output=d2.html
 try doc-fa "$SALAM_BIN" doc hello.salam --output=d3.html --lang=fa
 
-try inspect-ast "$SALAM_BIN" inspect hello.salam --emit-ast-xml
-try inspect-symbols "$SALAM_BIN" inspect hello.salam --emit-symbol-xml
+try inspect-ast "$SALAM_BIN" inspect hello.salam --emit-ast
+try inspect-symbols "$SALAM_BIN" inspect hello.salam --emit-symbol
 
 # shellcheck disable=SC2086
 try time-report "$SALAM_BIN" build hello.salam --output=t1 $CCPICK --time-report

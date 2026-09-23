@@ -4,7 +4,7 @@
 
 **Salam** (سلام - _peace_) is a statically typed, compiled, general-purpose systems programming language designed to be efficient, readable, and inclusive.
 
-- ✏️ Write code in **English**, **Persian (فارسی)**, or **Arabic (العربية)**.
+- ✏️ Write code in **English** or **Persian (فارسی)**.
 - ⚡ The general language transpiles to C and compiles to a native executable.
 - 🌐 A built-in **layout DSL** compiles `.salam` files directly to HTML, CSS, and JavaScript.
 - 🔗 Runs in the browser via the [web playground](https://salamlang.github.io/Salam/).

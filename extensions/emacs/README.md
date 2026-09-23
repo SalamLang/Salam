@@ -3,7 +3,7 @@
 `salam-mode`: font locking, indentation, imenu, snippets, formatting and type
 checking for the [Salam programming language](https://github.com/SalamLang/Salam).
 
-Salam keywords are spelled in English, Persian or Arabic. All three are
+Salam keywords are spelled in English or Persian. Both are
 recognised, Arabic-script letters and ZWNJ count as word constituents, and
 source lines stay left to right even when the code in them is Persian.
 

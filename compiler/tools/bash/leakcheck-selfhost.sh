@@ -108,7 +108,7 @@ echo "leaked allocations per invocation:"
 run_case version version
 run_case help help
 run_case format format hello.salam --check
-run_case inspect inspect hello.salam --emit-ast-xml
+run_case inspect inspect hello.salam --emit-ast
 run_case exec exec hello.salam
 if [ -n "${SALAM_CC:-}" ]; then
     run_case build build hello.salam --output=hello.out --cc="$SALAM_CC"

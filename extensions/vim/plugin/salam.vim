@@ -39,9 +39,9 @@ command! -nargs=* -complete=file SalamBuild   call salam#Build(<q-args>)
 command! -nargs=0                SalamCheck   call salam#Check()
 command! -nargs=0 -bar           SalamFmt     call salam#Format()
 command! -nargs=0 -bar           SalamFmtCheck call salam#FormatCheck()
-command! -nargs=0                SalamTokens  call salam#Inspect('--emit-tokens-xml')
-command! -nargs=0                SalamAst     call salam#Inspect('--emit-ast-xml')
-command! -nargs=0                SalamSymbols call salam#Inspect('--emit-symbol-xml')
+command! -nargs=0                SalamTokens  call salam#Inspect('--emit-tokens')
+command! -nargs=0                SalamAst     call salam#Inspect('--emit-ast')
+command! -nargs=0                SalamSymbols call salam#Inspect('--emit-symbol')
 command! -nargs=0 -bar           SalamVersion call salam#Version()
 
 augroup salam_plugin

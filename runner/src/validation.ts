@@ -4,7 +4,7 @@ export const BODY_TOO_LARGE_MESSAGE = `body must be under ${MAX_BODY_BYTES} byte
 
 const ALLOWED_TYPES = new Set(["program", "layout"]);
 const ALLOWED_ENGINES = new Set(["interp", "llvm"]);
-const ALLOWED_LANGUAGES = new Set(["en", "fa", "ar"]);
+const ALLOWED_LANGUAGES = new Set(["en", "fa"]);
 
 export interface RunOptions {
   type: string;

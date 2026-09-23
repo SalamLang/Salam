@@ -95,13 +95,13 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+      - name: Restore static third-party libs (sqlite3 + hiredis, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-${{ github.run_id }}
           restore-keys: |
-            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-
       - name: Build static third-party libs for all --target= triples
         id: extralibs
         run: |
@@ -115,8 +115,6 @@ jobs:
           TARGETS="x86_64-linux-musl aarch64-linux-musl i686-linux-musl arm-linux-musleabihf x86_64-w64-windows-gnu hostlibs"
           need_build() { [ ! -f "/tmp/extralibs/$2/lib$1.a" ]; }
           any_needed() { for t in $TARGETS; do need_build "$1" "$t" && return 0; done; return 1; }
-          need_build_openssl() { [ ! -f "/tmp/extralibs/$1/libssl.a" ] || [ ! -f "/tmp/extralibs/$1/libcrypto.a" ]; }
-          any_needed_openssl() { for t in $TARGETS; do need_build_openssl "$t" && return 0; done; return 1; }
 
           if any_needed sqlite3; then
             curl -fL --connect-timeout 10 --max-time 120 -o /tmp/sqlite3.zip \
@@ -130,118 +128,7 @@ jobs:
             git clone --quiet --depth 1 --branch v1.4.0 \
               https://github.com/redis/hiredis.git /tmp/hiredis-src
           fi
-          if any_needed_openssl || any_needed mariadb; then
-            curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
-              "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
-            echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
-              | sha256sum -c -
-          fi
           JOBS=$(nproc 2>/dev/null || echo 4)
-          build_openssl() {
-            target="$1"; ossl_target="$2"; shift 2
-            need_build_openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
-            ob_dir="/tmp/openssl-build-$target"
-            rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
-            tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
-            if ( cd "$ob_dir" \
-                 && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
-                      no-secure-memory no-engine "$@" \
-                 && make -j"$JOBS" build_libs ) >"$ob_dir.log" 2>&1; then
-              if [ -f "$ob_dir/libssl.a" ] && [ -f "$ob_dir/libcrypto.a" ]; then
-                mkdir -p "/tmp/extralibs/$target"
-                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/tmp/extralibs/$target/"
-                rm -rf "/tmp/openssl-root-$target"
-                mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
-                cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
-                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" \
-                  "/tmp/openssl-root-$target/lib/"
-                echo "built libssl.a/libcrypto.a for $target"
-              else
-                echo "::warning::openssl build for $target reported success but libssl.a/libcrypto.a are missing; skipping"
-              fi
-            else
-              echo "::warning::openssl build failed for $target; skipping static openssl for this target"
-              tail -60 "$ob_dir.log" || true
-            fi
-            rm -rf "$ob_dir" "$ob_dir.log"
-          }
-          if any_needed mariadb; then
-            git clone --quiet --depth 1 --branch v3.4.9 \
-              https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
-          fi
-          ensure_openssl_root() {
-            target="$1"; ossl_target="$2"; shift 2
-            [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] && return 0
-            [ -f "/tmp/extralibs/$target/libssl.a" ] || return 1
-            [ -f /tmp/openssl.tar.gz ] || {
-              curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
-                "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz" || return 1
-              echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
-                | sha256sum -c - || return 1
-            }
-            ob_dir="/tmp/openssl-build-$target"
-            rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
-            tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
-            ( cd "$ob_dir" \
-              && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
-                   no-secure-memory no-engine "$@" \
-              && make -j"$JOBS" build_generated ) >"$ob_dir.log" 2>&1 || {
-              echo "::warning::openssl header regeneration failed for $target"
-              tail -30 "$ob_dir.log" || true
-              rm -rf "$ob_dir" "$ob_dir.log"; return 1; }
-            rm -rf "/tmp/openssl-root-$target"
-            mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
-            cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
-            cp "/tmp/extralibs/$target/libssl.a" "/tmp/extralibs/$target/libcrypto.a" \
-              "/tmp/openssl-root-$target/lib/"
-            rm -rf "$ob_dir" "$ob_dir.log"
-            [ -f "/tmp/openssl-root-$target/include/openssl/opensslv.h" ] || {
-              echo "::warning::openssl-root for $target is missing generated headers"
-              return 1; }
-          }
-          build_mariadb() {
-            target="$1"; ossl_target="$2"; shift 2
-            need_build mariadb "$target" || { echo "reusing cached mariadb for $target"; return 0; }
-            case "$target" in
-              *windows*) ssl_args=(-DWITH_SSL=SCHANNEL) ;;
-              *)
-                if ensure_openssl_root "$target" "$ossl_target"; then
-                  ssl_args=(-DWITH_SSL=OPENSSL "-DOPENSSL_ROOT_DIR=/tmp/openssl-root-$target" \
-                    -DOPENSSL_USE_STATIC_LIBS=TRUE \
-                    "-DOPENSSL_INCLUDE_DIR=/tmp/openssl-root-$target/include" \
-                    "-DOPENSSL_CRYPTO_LIBRARY=/tmp/openssl-root-$target/lib/libcrypto.a" \
-                    "-DOPENSSL_SSL_LIBRARY=/tmp/openssl-root-$target/lib/libssl.a" \
-                    -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON)
-                else
-                  echo "::warning::no static openssl available for $target; skipping static mariadb (it has no TLS-less build option)"
-                  return 0
-                fi
-                ;;
-            esac
-            mb_dir="/tmp/mariadb-build-$target"
-            rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
-            if ( cd "$mb_dir" \
-                 && cmake /tmp/mariadb-src -DCMAKE_BUILD_TYPE=Release \
-                      -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF "${ssl_args[@]}" "$@" \
-                 && cmake --build . --target mariadbclient -j"$JOBS" ) \
-                 >"$mb_dir.log" 2>&1; then
-              LIB=$(find "$mb_dir" -name "libmariadbclient.a" | head -1)
-              if [ -n "$LIB" ]; then
-                mkdir -p "/tmp/extralibs/$target"
-                cp "$LIB" "/tmp/extralibs/$target/libmariadbclient.a"
-                cp "$LIB" "/tmp/extralibs/$target/libmariadb.a"
-                cp "$LIB" "/tmp/extralibs/$target/libmysqlclient.a"
-                echo "built libmariadb.a for $target"
-              else
-                echo "::warning::mariadb build for $target reported success but libmariadbclient.a is missing; skipping"
-              fi
-            else
-              echo "::warning::mariadb build failed for $target; skipping static mariadb for this target"
-              tail -80 "$mb_dir.log" || true
-            fi
-            rm -rf "$mb_dir" "$mb_dir.log"
-          }
 
           build_sqlite3() {
             target="$1"; cc="$2"; ar="$3"
@@ -272,28 +159,13 @@ jobs:
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           build_all hostlibs gcc ar
 
-          (
-            build_openssl x86_64-linux-musl linux-x86_64 CC=musl-gcc
-            build_mariadb x86_64-linux-musl linux-x86_64 -DCMAKE_C_COMPILER=musl-gcc
-          ) &
-          (
-            build_openssl x86_64-w64-windows-gnu mingw64 --cross-compile-prefix=x86_64-w64-mingw32-
-            build_mariadb x86_64-w64-windows-gnu mingw64 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
-          ) &
-          (
-            build_openssl hostlibs linux-x86_64 CC=gcc
-            build_mariadb hostlibs linux-x86_64 -DCMAKE_C_COMPILER=gcc
-          ) &
-          wait
-
-          ARCH_TARGETS=(); ARCH_GCC=(); ARCH_OSSL=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
-          for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl:linux-aarch64 \
-                      i686:i686-linux-musl:i686-unknown-linux-musl:linux-x86 \
-                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf:linux-armv4; do
+          ARCH_TARGETS=(); ARCH_GCC=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
+          for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
+                      i686:i686-linux-musl:i686-unknown-linux-musl \
+                      arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
             arch="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"
-            rest2="${rest#*:}"; ctriple="${rest2%%:*}"; ossl_target="${rest2#*:}"
-            need_build sqlite3 "$target" || need_build hiredis "$target" \
-              || need_build_openssl "$target" || need_build mariadb "$target" || {
+            ctriple="${rest#*:}"
+            need_build sqlite3 "$target" || need_build hiredis "$target" || {
               echo "reusing cached static libs for $target"; continue; }
             rm -rf "/tmp/xtc-${arch}"; mkdir -p "/tmp/xtc-${arch}"
             if curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
@@ -309,7 +181,7 @@ jobs:
                      -o -name "*musleabihf-ar" | head -1)
               if [ -n "$GCC" ] && [ -n "$AR" ]; then
                 build_all "$target" "$GCC" "$AR"
-                ARCH_TARGETS+=("$target"); ARCH_GCC+=("$GCC"); ARCH_OSSL+=("$ossl_target")
+                ARCH_TARGETS+=("$target"); ARCH_GCC+=("$GCC")
                 ARCH_ARCH+=("$arch"); ARCH_CTRIPLE+=("$ctriple")
                 continue
               else
@@ -321,22 +193,11 @@ jobs:
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
-          for i in "${!ARCH_TARGETS[@]}"; do
-            target="${ARCH_TARGETS[$i]}"; GCC="${ARCH_GCC[$i]}"; ossl_target="${ARCH_OSSL[$i]}"
-            arch="${ARCH_ARCH[$i]}"; ctriple="${ARCH_CTRIPLE[$i]}"
-            (
-              build_openssl "$target" "$ossl_target" "--cross-compile-prefix=$(dirname "$GCC")/${ctriple}-"
-              build_mariadb "$target" "$ossl_target" -DCMAKE_SYSTEM_NAME=Linux \
-                -DCMAKE_SYSTEM_PROCESSOR="$arch" -DCMAKE_C_COMPILER="$GCC"
-            ) &
-          done
-          wait
           for arch in aarch64 i686 arm; do
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz /tmp/mariadb-src \
-            /tmp/openssl-root-*
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src
 
           for target in $TARGETS; do
             [ -d "/tmp/extralibs/$target" ] || continue
@@ -356,12 +217,12 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
             echo 'static libs changed; a fresh cache entry will be saved'
           fi
-      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+      - name: Save static third-party libs (sqlite3 + hiredis, per --target=)
         if: steps.extralibs.outputs.changed == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-v2-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-${{ github.run_id }}
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
@@ -876,13 +737,13 @@ jobs:
           CHERE_INVOKING: '1'
         run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
-      - name: Restore static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+      - name: Restore static third-party libs (sqlite3 + hiredis, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ matrix.os }}-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
-            extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-
       - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
         id: extralibs
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -901,7 +762,6 @@ jobs:
           EXTRALIBS_BEFORE=$(fingerprint /c/extralibs)
 
           need_build() { [ ! -f "/c/extralibs/$2/lib$1.a" ]; }
-          need_build_openssl() { [ ! -f "/c/extralibs/$1/libssl.a" ] || [ ! -f "/c/extralibs/$1/libcrypto.a" ]; }
 
           MUSL_TARGETS=""
           if [ -n "${SALAM_EMBED_MUSL_DIR:-}" ] && [ -f "${SALAM_EMBED_MUSL_DIR}/include/features.h" ]; then
@@ -920,7 +780,6 @@ jobs:
 
           musl_triples() { for e in $MUSL_TARGETS; do printf '%s\n' "${e%%:*}"; done; }
           any_needed() { for t in x86_64-w64-windows-gnu $(musl_triples); do need_build "$1" "$t" && return 0; done; return 1; }
-          any_needed_openssl() { for t in x86_64-w64-windows-gnu $(musl_triples); do need_build_openssl "$t" && return 0; done; return 1; }
 
           LLVM_AR_WIN=C:/msys64/mingw64/bin/llvm-ar.exe
           LLVM_RANLIB_WIN=C:/msys64/mingw64/bin/llvm-ranlib.exe
@@ -983,115 +842,16 @@ jobs:
             git clone --quiet --depth 1 --branch v1.4.0 \
               https://github.com/redis/hiredis.git /tmp/hiredis-src
           fi
-          if any_needed_openssl || any_needed mariadb; then
-            pkgs=""
-            if any_needed_openssl; then pkgs="$pkgs perl"; fi
-            if any_needed mariadb; then pkgs="$pkgs mingw-w64-x86_64-cmake"; fi
-            # shellcheck disable=SC2086
-            [ -n "$pkgs" ] && pacman -Sy --noconfirm --needed $pkgs >/dev/null
-          fi
-          if any_needed_openssl || any_needed mariadb; then
-            curl -fL --connect-timeout 15 --max-time 180 -o /tmp/openssl.tar.gz \
-              "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz"
-            echo "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1  /tmp/openssl.tar.gz" \
-              | sha256sum -c -
-          fi
-          if any_needed mariadb; then
-            git clone --quiet --depth 1 --branch v3.4.9 \
-              https://github.com/mariadb-corporation/mariadb-connector-c.git /tmp/mariadb-src
-          fi
-
-          build_openssl() {
-            target="$1"; ossl_target="$2"; shift 2
-            need_build_openssl "$target" || { echo "reusing cached openssl for $target"; return 0; }
-            ob_dir="/tmp/openssl-build-$target"
-            rm -rf "$ob_dir" "$ob_dir.log"; mkdir -p "$ob_dir"
-            tar xf /tmp/openssl.tar.gz -C "$ob_dir" --strip-components=1
-            if ( cd "$ob_dir" \
-                 && ./Configure "$ossl_target" no-shared no-tests no-docs no-apps \
-                      no-secure-memory no-engine "$@" \
-                 && make -j"$(nproc)" build_libs ) >"$ob_dir.log" 2>&1; then
-              if [ -f "$ob_dir/libssl.a" ] && [ -f "$ob_dir/libcrypto.a" ]; then
-                mkdir -p "/c/extralibs/$target"
-                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/c/extralibs/$target/"
-                rm -rf "/tmp/openssl-root-$target"
-                mkdir -p "/tmp/openssl-root-$target/include" "/tmp/openssl-root-$target/lib"
-                cp -r "$ob_dir/include/." "/tmp/openssl-root-$target/include/"
-                cp "$ob_dir/libssl.a" "$ob_dir/libcrypto.a" "/tmp/openssl-root-$target/lib/"
-                echo "built libssl.a/libcrypto.a for $target"
-              else
-                echo "::warning::openssl build for $target reported success but libssl.a/libcrypto.a are missing; skipping"
-              fi
-            else
-              echo "::warning::openssl build failed for $target; skipping static openssl for this target"
-              tail -60 "$ob_dir.log" || true
-            fi
-            rm -rf "$ob_dir" "$ob_dir.log"
-          }
-          build_mariadb() {
-            target="$1"; ssl_args="$2"; extra_args="$3"
-            need_build mariadb "$target" || { echo "reusing cached mariadb for $target"; return 0; }
-            mb_dir="/tmp/mariadb-build-$target"
-            rm -rf "$mb_dir" "$mb_dir.log"; mkdir -p "$mb_dir"
-            # shellcheck disable=SC2086
-            if ( cd "$mb_dir" \
-                 && cmake /tmp/mariadb-src -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
-                      -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
-                      -DWITH_UNIT_TESTS=OFF -DWITH_CURL=OFF \
-                      -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON $ssl_args $extra_args \
-                 && cmake --build . --target mariadbclient -j"$(nproc)" ) \
-                 >"$mb_dir.log" 2>&1; then
-              LIB=$(find "$mb_dir" -name "libmariadbclient.a" | head -1)
-              if [ -n "$LIB" ]; then
-                mkdir -p "/c/extralibs/$target"
-                cp "$LIB" "/c/extralibs/$target/libmariadbclient.a"
-                cp "$LIB" "/c/extralibs/$target/libmariadb.a"
-                cp "$LIB" "/c/extralibs/$target/libmysqlclient.a"
-                echo "built libmariadb.a for $target"
-              else
-                echo "::warning::mariadb build for $target reported success but libmariadbclient.a is missing; skipping"
-              fi
-            else
-              echo "::warning::mariadb build failed for $target; skipping static mariadb for this target"
-              tail -80 "$mb_dir.log" || true
-            fi
-            rm -rf "$mb_dir" "$mb_dir.log"
-          }
-          musl_openssl_root_args() {
-            target="$1"
-            [ -f "/tmp/openssl-root-$target/include/openssl/ssl.h" ] || return 1
-            printf -- '-DWITH_SSL=OPENSSL -DOPENSSL_ROOT_DIR=/tmp/openssl-root-%s -DOPENSSL_USE_STATIC_LIBS=TRUE '\
-              '-DOPENSSL_INCLUDE_DIR=/tmp/openssl-root-%s/include -DOPENSSL_CRYPTO_LIBRARY=/tmp/openssl-root-%s/lib/libcrypto.a '\
-              '-DOPENSSL_SSL_LIBRARY=/tmp/openssl-root-%s/lib/libssl.a -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON' \
-              "$target" "$target" "$target" "$target"
-          }
 
           build_all x86_64-w64-windows-gnu gcc ar
-          (
-            build_openssl x86_64-w64-windows-gnu mingw64
-            build_mariadb x86_64-w64-windows-gnu -DWITH_SSL=SCHANNEL -DCMAKE_C_COMPILER=gcc
-          ) &
 
           for entry in $MUSL_TARGETS; do
             triple="${entry%%:*}"; rest="${entry#*:}"
-            sr="${rest%%:*}"; rest2="${rest#*:}"
-            ossl_target="${rest2%%:*}"; arch="${rest2#*:}"
+            sr="${rest%%:*}"
             wdir=$(make_musl_wrapper "$triple" "$sr")
             build_all "$triple" "$wdir/$triple-gcc" "$wdir/$triple-ar"
-            (
-              build_openssl "$triple" "$ossl_target" "--cross-compile-prefix=$wdir/$triple-"
-              ssl_args=$(musl_openssl_root_args "$triple") || ssl_args=""
-              if [ -n "$ssl_args" ]; then
-                build_mariadb "$triple" "$ssl_args" \
-                  "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$arch -DCMAKE_C_COMPILER=$wdir/$triple-gcc.bat -DCMAKE_AR=$LLVM_AR_WIN -DCMAKE_RANLIB=$LLVM_RANLIB_WIN"
-              elif need_build mariadb "$triple"; then
-                echo "::warning::no static openssl available for $triple; skipping static mariadb (it has no TLS-less build option)"
-              fi
-            ) &
           done
-          wait
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src /tmp/openssl.tar.gz /tmp/mariadb-src \
-            /tmp/openssl-root-*
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src
 
           echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
@@ -1113,12 +873,12 @@ jobs:
             echo 'static libs changed; a fresh cache entry will be saved'
           fi
 
-      - name: Save static third-party libs (sqlite3 + hiredis + openssl + mariadb, per --target=)
+      - name: Save static third-party libs (sqlite3 + hiredis, per --target=)
         if: steps.extralibs.outputs.changed == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-openssl-3.6.3-mariadb-v3.4.9-win-v3-${{ matrix.os }}-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-${{ matrix.os }}-${{ github.run_id }}
 
       - name: Install a seed compiler
         id: seed

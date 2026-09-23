@@ -4,7 +4,7 @@ Language support for [Salam](https://github.com/SalamLang/Salam): syntax highlig
 
 ## Features
 
-- **Syntax highlighting** for `.salam`, covering all three keyword packs (English, Persian, Arabic)
+- **Syntax highlighting** for `.salam`, covering both keyword packs (English, Persian)
 - **Snippets** for the constructs you type most
 - **Run and build commands** that shell out to the `salam` compiler
 - **Language configuration**: comment toggling, bracket matching, auto-closing pairs

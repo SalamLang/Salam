@@ -1,0 +1,621 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cli
+
+import os
+import io
+import str
+import pth "../sal_path.salam"
+import dr "../driver/driver.salam"
+import lg "../logger.salam"
+import i18 "../i18n.salam"
+import lp "../langpack.salam"
+import lx "../lexer/lexer.salam"
+import tok "../token.salam"
+import src "../source.salam"
+import co "../sal_core.salam"
+
+const K_TR_TYPE_COUNT := 24
+const K_TR_TYPE_ALT_COUNT := 10
+const K_TR_METHOD_COUNT := 29
+const K_TR_CTX_COUNT := 5
+
+k_tr_type := [
+    "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar",
+    "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64",
+    "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64",
+    "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64",
+    "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
+]
+
+k_tr_type_alt := [
+    "صحیح8", "i8", "صحیح16", "i16", "صحیح32", "i32", "صحیح64", "i64",
+    "طبیعی8", "u8", "طبیعی16", "u16", "طبیعی32", "u32", "طبیعی64", "u64",
+    "اعشار32", "f32", "اعشار64", "f64"
+]
+
+k_tr_method := [
+    "بیفزا", "push", "دربیاور", "pop", "بگیر", "get", "ارجاع", "ref", "بنشان", "set",
+    "طول", "len", "ظرفیت", "cap", "آزادکن", "free", "درج", "put", "دارد", "has",
+    "حذف", "remove", "اندازه", "size", "پیمایش", "iter", "داردبعدی", "has_next", "کلید", "key",
+    "مقدار", "value", "بعدی", "next", "خواندن", "read", "خواندن خط", "readline", "نوشتن", "write",
+    "جابجایی", "seek", "ببند", "close", "پیوست", "concat", "زیررشته", "substr", "بیاب", "find",
+    "بشکاف", "split", "پیراست", "trim", "به صحیح", "to_int", "به اعشار", "to_float"
+]
+
+k_tr_ctx := [
+    "پیوند", "link", "ایستا", "static", "پویا", "dynamic", "چارچوب", "framework", "گونه", "kind"
+]
+
+mut tr_pkg_ready := false
+mut tr_pkg_root := ""
+mut tr_pkg_en := Vector {} as Vector<str>
+mut tr_pkg_fa := Vector {} as Vector<str>
+
+struct TrCtx:
+    pub target: int = 0
+    pub fallback: int = 0
+    pub rewrite: bool = false
+    pub stdlib_root: str = ""
+    pub total: int = 0
+    pub changed: int = 0
+    pub ok: int = 0
+    pub errors: int = 0
+end
+
+func tr_type_to_fa(name: str): str:
+    mut i := 0
+    until i < K_TR_TYPE_COUNT:
+        if str.Equals(k_tr_type[i * 2 + 1], name):
+            ret k_tr_type[i * 2]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_type_to_en(name: str): str:
+    mut i := 0
+    until i < K_TR_TYPE_COUNT:
+        if str.Equals(k_tr_type[i * 2], name):
+            ret k_tr_type[i * 2 + 1]
+        end
+        i += 1
+    end
+    i = 0
+    until i < K_TR_TYPE_ALT_COUNT:
+        if str.Equals(k_tr_type_alt[i * 2], name):
+            ret k_tr_type_alt[i * 2 + 1]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_method_to_fa(name: str): str:
+    mut i := 0
+    until i < K_TR_METHOD_COUNT:
+        if str.Equals(k_tr_method[i * 2 + 1], name):
+            ret k_tr_method[i * 2]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_method_to_en(name: str): str:
+    mut i := 0
+    until i < K_TR_METHOD_COUNT:
+        if str.Equals(k_tr_method[i * 2], name):
+            ret k_tr_method[i * 2 + 1]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_ctx_to_fa(name: str): str:
+    mut i := 0
+    until i < K_TR_CTX_COUNT:
+        if str.Equals(k_tr_ctx[i * 2 + 1], name):
+            ret k_tr_ctx[i * 2]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_ctx_to_en(name: str): str:
+    mut i := 0
+    until i < K_TR_CTX_COUNT:
+        if str.Equals(k_tr_ctx[i * 2], name):
+            ret k_tr_ctx[i * 2 + 1]
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_type_word(targetpack: int, name: str): str:
+    ret targetpack == lp.LP_FA ? tr_type_to_fa(name) : tr_type_to_en(name)
+end
+
+func tr_method_word(targetpack: int, name: str): str:
+    ret targetpack == lp.LP_FA ? tr_method_to_fa(name) : tr_method_to_en(name)
+end
+
+func tr_ctx_word(targetpack: int, name: str): str:
+    ret targetpack == lp.LP_FA ? tr_ctx_to_fa(name) : tr_ctx_to_en(name)
+end
+
+func tr_keyword_spelling(targetpack: int, kind: int): str:
+    if kind == tok.TK_AND:
+        ret targetpack == lp.LP_FA ? "و" : "&&"
+    end
+    if kind == tok.TK_OR:
+        ret targetpack == lp.LP_FA ? "یا" : "||"
+    end
+    ret lp.Spelling(targetpack, kind)
+end
+
+func tr_extract_tag(line: str, tag_prefix: str): str:
+    trimmed := str.TrimLeft(line)
+    if !str.StartsWith(trimmed, tag_prefix):
+        ret ""
+    end
+    rest := str.Substr(trimmed, str.Len(tag_prefix), str.Len(trimmed) - str.Len(tag_prefix))
+    q1 := str.IndexOf(rest, "\"")
+    if q1 < 0:
+        ret ""
+    end
+    q2 := str.IndexFrom(rest, "\"", q1 + 1)
+    if q2 < 0:
+        ret ""
+    end
+    ret str.Substr(rest, q1 + 1, q2 - q1 - 1)
+end
+
+func tr_index_package_file(path: str):
+    text := os.ReadFile(path)
+    if str.Len(text) == 0:
+        ret
+    end
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut en_val := ""
+    mut fa_val := ""
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)
+        trimmed := str.TrimLeft(line)
+        if str.StartsWith(trimmed, "package "):
+            break
+        end
+        e := tr_extract_tag(line, "@en ")
+        if str.Len(e) > 0:
+            en_val = e
+        end
+        f := tr_extract_tag(line, "@fa ")
+        if str.Len(f) > 0:
+            fa_val = f
+        end
+        i += 1
+    end
+    if str.Len(en_val) > 0 && str.Len(fa_val) > 0:
+        tr_pkg_en.push(en_val)
+        tr_pkg_fa.push(fa_val)
+    end
+end
+
+func tr_build_pkg_index(std_root: str):
+    if tr_pkg_ready && str.Equals(tr_pkg_root, std_root):
+        ret
+    end
+    tr_pkg_en.free()
+    tr_pkg_fa.free()
+    tr_pkg_en = Vector {} as Vector<str>
+    tr_pkg_fa = Vector {} as Vector<str>
+    tr_pkg_ready = true
+    tr_pkg_root = std_root
+    if !os.IsDir(std_root):
+        ret
+    end
+    dirs := os.ListDir(std_root)
+    defer dirs.free()
+    repeat dirs.len() with i:
+        name := dirs.get(i)
+        if str.StartsWith(name, "."):
+            continue
+        end
+        dirpath := pth.PathJoin(std_root, name)
+        if !os.IsDir(dirpath):
+            continue
+        end
+        file := pth.PathJoin(dirpath, name + ".salam")
+        if os.Exists(file):
+            tr_index_package_file(file)
+        end
+    end
+end
+
+func tr_pkg_alias(std_root: str, name: str): str:
+    tr_build_pkg_index(std_root)
+    n := tr_pkg_en.len()
+    mut i := 0
+    until i < n:
+        if str.Equals(tr_pkg_en.get(i), name):
+            ret tr_pkg_fa.get(i)
+        end
+        if str.Equals(tr_pkg_fa.get(i), name):
+            ret tr_pkg_en.get(i)
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_pkg_canon(std_root: str, name: str): str:
+    tr_build_pkg_index(std_root)
+    n := tr_pkg_en.len()
+    mut i := 0
+    until i < n:
+        if str.Equals(tr_pkg_en.get(i), name) || str.Equals(tr_pkg_fa.get(i), name):
+            ret tr_pkg_en.get(i)
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_scan_file_member(path: str, name: str, from_fa: bool): str:
+    text := os.ReadFile(path)
+    if str.Len(text) == 0:
+        ret ""
+    end
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut pending_en := ""
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)
+        e := tr_extract_tag(line, "@en ")
+        if str.Len(e) > 0:
+            pending_en = e
+            i += 1
+            continue
+        end
+        f := tr_extract_tag(line, "@fa ")
+        if str.Len(f) > 0:
+            if str.Len(pending_en) > 0:
+                if from_fa && str.Equals(f, name):
+                    ret pending_en
+                end
+                if !from_fa && str.Equals(pending_en, name):
+                    ret f
+                end
+            end
+            pending_en = ""
+            i += 1
+            continue
+        end
+        trimmed := str.TrimLeft(line)
+        if str.Len(trimmed) > 0 && !str.StartsWith(trimmed, "@"):
+            pending_en = ""
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func tr_pkg_member(std_root: str, pkg_dirname: str, name: str, from_fa: bool): str:
+    dirpath := pth.PathJoin(std_root, pkg_dirname)
+    if !os.IsDir(dirpath):
+        ret ""
+    end
+    files := os.ListDir(dirpath)
+    defer files.free()
+    mut result := ""
+    mut i := 0
+    until i < files.len() && str.Len(result) == 0:
+        fname := files.get(i)
+        if str.EndsWith(fname, ".salam"):
+            found := tr_scan_file_member(pth.PathJoin(dirpath, fname), name, from_fa)
+            if str.Len(found) > 0:
+                result = found
+            end
+        end
+        i += 1
+    end
+    ret result
+end
+
+func tr_is_marker_line(line: str): bool:
+    trimmed := str.TrimLeft(line)
+    if !str.StartsWith(trimmed, "//"):
+        ret false
+    end
+    rest := str.Substr(trimmed, 2, str.Len(trimmed) - 2)
+    ret str.Contains(rest, "lang") || str.Contains(rest, "زبان")
+end
+
+func tr_apply_marker(text: str, target_code: str): str:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut out_lines := Vector {} as Vector<str>
+    defer out_lines.free()
+    mut removed := false
+    mut scan_max := lines.len()
+    if scan_max > 8:
+        scan_max = 8
+    end
+    mut i := 0
+    until i < lines.len():
+        line := lines.get(i)
+        if !removed && i < scan_max && tr_is_marker_line(line):
+            removed = true
+        else:
+            out_lines.push(line)
+        end
+        i += 1
+    end
+    body := str.Join(out_lines, "\n")
+    ret "// lang: " + target_code + "\n" + body
+end
+
+func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: str, sfile: src.SourceFile, out &: str): bool:
+    mut toks := tok.StreamNew(sfile.path)
+    ok := lx.RunEx(lgr, srcpack, sfile, true, toks)
+    if !ok:
+        tok.StreamFree(toks)
+        ret false
+    end
+    src_entry := lp.Entry(srcpack)
+    tgt_entry := lp.Entry(targetpack)
+    text := sfile.text
+    n := tok.StreamCount(toks)
+    mut sb := co.SbNew()
+    mut cursor := 0
+    mut prev_kind := 0 - 1
+    mut expect_entry := false
+    mut prev_ident_lexeme := ""
+    mut dot_receiver := ""
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_EOF:
+            break
+        end
+        bi := t.begin_index as int
+        ei := t.end_index as int
+        if bi > cursor:
+            co.SbPuts(sb, str.Substr(text, cursor, bi - cursor))
+        end
+        mut lexeme := t.lexeme
+        mut skip_emit := false
+        if t.kind == tok.TK_STMT_END:
+            skip_emit = true
+        else t.kind == tok.TK_META:
+            mapped := tr_ctx_word(targetpack, t.lexeme)
+            lexeme = "@" + (str.Len(mapped) > 0 ? mapped : t.lexeme)
+        else tok.IsKeyword(t.kind) || t.kind == tok.TK_AND || t.kind == tok.TK_OR:
+            spelled := tr_keyword_spelling(targetpack, t.kind)
+            if str.Len(spelled) > 0:
+                lexeme = spelled
+            end
+        else t.kind == tok.TK_IDENT:
+            if expect_entry && str.Equals(t.lexeme, src_entry):
+                lexeme = tgt_entry
+            else prev_kind == tok.TK_KW_IMPORT:
+                pkg_mapped := tr_pkg_alias(std_root, t.lexeme)
+                if str.Len(pkg_mapped) > 0:
+                    lexeme = pkg_mapped
+                end
+            else:
+                type_mapped := tr_type_word(targetpack, t.lexeme)
+                if str.Len(type_mapped) > 0:
+                    lexeme = type_mapped
+                else prev_kind == tok.TK_DOT:
+                    pkg_dirname := tr_pkg_canon(std_root, dot_receiver)
+                    mut sym_mapped := ""
+                    if str.Len(pkg_dirname) > 0:
+                        sym_mapped = tr_pkg_member(std_root, pkg_dirname, t.lexeme, targetpack != lp.LP_FA)
+                    end
+                    if str.Len(sym_mapped) > 0:
+                        lexeme = sym_mapped
+                    else:
+                        method_mapped := tr_method_word(targetpack, t.lexeme)
+                        if str.Len(method_mapped) > 0:
+                            lexeme = method_mapped
+                        end
+                    end
+                end
+            end
+        end
+        if !skip_emit:
+            co.SbPuts(sb, lexeme)
+        end
+        expect_entry = t.kind == tok.TK_KW_FUNC
+        if t.kind == tok.TK_DOT:
+            dot_receiver = prev_ident_lexeme
+        end
+        if t.kind == tok.TK_IDENT:
+            prev_ident_lexeme = t.lexeme
+        end
+        if t.kind != tok.TK_COMMENT_LINE && t.kind != tok.TK_COMMENT_BLOCK:
+            prev_kind = t.kind
+        end
+        cursor = ei
+        i += 1
+    end
+    if cursor < sfile.len:
+        co.SbPuts(sb, str.Substr(text, cursor, sfile.len - cursor))
+    end
+    out = co.SbCstr(sb)
+    co.SbFree(sb)
+    tok.StreamFree(toks)
+    ret true
+end
+
+func tr_ensure_dir(path: str):
+    dir := pth.PathDir(path)
+    if str.Len(dir) > 0:
+        os.MkdirAll(dir)
+    end
+end
+
+func translate_one_file(c &: TrCtx, src_path: str, dst_path: str):
+    mut sfile := src.New()
+    if !src.Load(src_path, sfile):
+        io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(src_path)))
+        c.errors += 1
+        ret
+    end
+    c.total += 1
+    srcpack := lx.Detect(sfile, c.fallback)
+    tr_ensure_dir(dst_path)
+    if srcpack == c.target:
+        if !str.Equals(src_path, dst_path):
+            wrc := os.WriteFile(dst_path, sfile.text)
+            if wrc < 0:
+                io.EPrintln(co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(dst_path)))
+                c.errors += 1
+                ret
+            end
+        end
+        c.ok += 1
+        ret
+    end
+    lgr := lg.New(lg.LOG_OFF, false)
+    mut translated := ""
+    if !translate_source(lgr, srcpack, c.target, c.stdlib_root, sfile, translated):
+        io.EPrintln(
+            co.Format1(i18.Tr("cannot translate '%s': fix the lexical errors first"), co.ArgStr(src_path))
+        )
+        c.errors += 1
+        ret
+    end
+    final_text := tr_apply_marker(translated, lp.Code(c.target))
+    wrc := os.WriteFile(dst_path, final_text)
+    if wrc < 0:
+        io.EPrintln(co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(dst_path)))
+        c.errors += 1
+        ret
+    end
+    c.changed += 1
+    println co.Format2(i18.Tr("translated %s -> %s"), co.ArgStr(src_path), co.ArgStr(dst_path))
+end
+
+func translate_walk(c &: TrCtx, src_dir: str, dst_dir: str):
+    entries := os.ListDir(src_dir)
+    defer entries.free()
+    os.MkdirAll(dst_dir)
+    repeat entries.len() with i:
+        name := entries.get(i)
+        if str.StartsWith(name, "."):
+            continue
+        end
+        schild := pth.PathJoin(src_dir, name)
+        dchild := pth.PathJoin(dst_dir, name)
+        if os.IsDir(schild):
+            translate_walk(c, schild, dchild)
+        else has_salam_ext(name):
+            translate_one_file(c, schild, dchild)
+        else:
+            if !str.Equals(schild, dchild):
+                os.Copy(schild, dchild)
+            end
+        end
+    end
+end
+
+func tr_default_output_dir(path: str, target_code: str): str:
+    ret pth.PathTrimSep(path) + "-" + target_code
+end
+
+func tr_default_output_file(path: str, target_code: str): str:
+    dir := pth.PathDir(path)
+    stem := pth.PathStem(pth.PathBase(path))
+    name := stem + "." + target_code + ".salam"
+    ret pth.PathJoin(dir, name)
+end
+
+func translate_target_path(opt &: dr.Dr, p: str, single_input: bool): str:
+    if opt.translate_rewrite:
+        ret p
+    end
+    if str.Len(opt.output) > 0:
+        if single_input:
+            ret opt.output
+        end
+        ret pth.PathJoin(opt.output, pth.PathBase(pth.PathTrimSep(p)))
+    end
+    if os.IsDir(p):
+        ret tr_default_output_dir(p, opt.translate_lang)
+    end
+    ret tr_default_output_file(p, opt.translate_lang)
+end
+
+func translate_cmd(opt &: dr.Dr): int:
+    if str.Len(opt.translate_lang) == 0:
+        io.EPrintln(i18.Tr("salam: 'translate' requires a target language ('en' or 'fa')"))
+        ret 2
+    end
+    target := lp.Load(opt.translate_lang)
+    if target == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.translate_lang)))
+        ret 2
+    end
+    fallback := lp.Load(opt.lang)
+    if fallback == lp.LP_NONE:
+        io.EPrintln(co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang)))
+        ret 2
+    end
+    mut default_inputs := Vector {} as Vector<str>
+    defer default_inputs.free()
+    mut inputs := opt.inputs
+    if inputs.len() == 0:
+        default_inputs.push(".")
+        inputs = default_inputs
+    end
+    mut c := TrCtx {}
+    c.target = target
+    c.fallback = fallback
+    c.rewrite = opt.translate_rewrite
+    c.stdlib_root = str.Len(opt.stdlib_path) > 0 ? opt.stdlib_path : "std"
+    single_input := inputs.len() == 1
+    repeat inputs.len() with idx:
+        p := inputs.get(idx)
+        outp := translate_target_path(opt, p, single_input)
+        if os.IsDir(p):
+            translate_walk(c, p, outp)
+        else has_salam_ext(p):
+            translate_one_file(c, p, outp)
+        else:
+            tr_ensure_dir(outp)
+            if !str.Equals(p, outp):
+                os.Copy(p, outp)
+            end
+        end
+    end
+    println co.Format4(
+        i18.Tr("translate: %d translated, %d unchanged, %d error%s"), co.ArgInt(c.changed as i64),
+        co.ArgInt(c.ok as i64), co.ArgInt(c.errors as i64), co.ArgStr(plural_suffix(c.errors))
+    )
+    mut rc := 0
+    if c.errors > 0:
+        rc = 2
+    end
+    ret rc
+end

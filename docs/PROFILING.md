@@ -1209,7 +1209,7 @@ noise-aware to be useful.
 ```json
 {
   "schema": "salam.bench.v1",
-  "salam_version": "0.4.3",
+  "salam_version": "0.4.4",
   "backend": "c",
   "cc": "gcc",
   "flags": "-O2",

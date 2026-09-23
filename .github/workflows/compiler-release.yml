@@ -50,7 +50,7 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache \
+          sudo apt-get install -y build-essential ccache cmake ninja-build \
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
             musl-dev musl-tools mingw-w64 qemu-user-static wine64
@@ -95,13 +95,13 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Restore static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Restore static third-party libs (sqlite3 + hiredis + libxml2 (hostlibs only), per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-${{ github.run_id }}
           restore-keys: |
-            extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-
+            extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-
       - name: Build static third-party libs for all --target= triples
         id: extralibs
         run: |
@@ -129,6 +129,36 @@ jobs:
               https://github.com/redis/hiredis.git /tmp/hiredis-src
           fi
           JOBS=$(nproc 2>/dev/null || echo 4)
+
+          build_libxml2_hostlibs() {
+            need_build xml2 hostlibs || { echo "reusing cached libxml2 for hostlibs"; return 0; }
+            git clone --quiet --depth 1 --branch v2.15.4 \
+              https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+            xb_dir=/tmp/libxml2-build-hostlibs
+            rm -rf "$xb_dir"; mkdir -p "$xb_dir"
+            ( cd "$xb_dir" \
+              && cmake /tmp/libxml2-src -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                   -DBUILD_SHARED_LIBS=OFF -DLIBXML2_WITH_PYTHON=OFF \
+                   -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_LZMA=OFF \
+                   -DLIBXML2_WITH_HTTP=OFF -DLIBXML2_WITH_FTP=OFF \
+                   -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON \
+              && ninja ) >"$xb_dir.log" 2>&1 || {
+              echo "::error::libxml2 build for hostlibs failed"
+              tail -80 "$xb_dir.log"
+              rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
+              return 1
+            }
+            LIB=$(find "$xb_dir" -name "libxml2.a" | head -1)
+            [ -n "$LIB" ] || {
+              echo "::error::libxml2 build for hostlibs reported success but libxml2.a is missing"
+              rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
+              return 1
+            }
+            mkdir -p /tmp/extralibs/hostlibs
+            cp "$LIB" /tmp/extralibs/hostlibs/libxml2.a
+            echo "built libxml2.a for hostlibs"
+            rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
+          }
 
           build_sqlite3() {
             target="$1"; cc="$2"; ar="$3"
@@ -158,6 +188,7 @@ jobs:
           build_all x86_64-linux-musl musl-gcc ar
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           build_all hostlibs gcc ar
+          build_libxml2_hostlibs
 
           ARCH_TARGETS=(); ARCH_GCC=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
           for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
@@ -217,12 +248,12 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
             echo 'static libs changed; a fresh cache entry will be saved'
           fi
-      - name: Save static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Save static third-party libs (sqlite3 + hiredis + libxml2 (hostlibs only), per --target=)
         if: steps.extralibs.outputs.changed == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-v3-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-${{ github.run_id }}
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
@@ -254,7 +285,8 @@ jobs:
         run: |
           set -eu
           sh tools/bash/build-selfhost.sh \
-            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
+            -- "--libpath=${SALAM_EMBED_HOSTLIBS_DIR:-/tmp/extralibs/hostlibs}"
           echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
 
@@ -1482,7 +1514,7 @@ jobs:
             -e CCACHE_DIR=/root/.ccache \
             i386/debian:sid bash -euxc '
               apt-get update
-              PKGS="build-essential ccache file git llvm-21-dev liblld-21-dev libpolly-21-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev"
+              PKGS="build-essential ccache file git cmake ninja-build llvm-21-dev liblld-21-dev libpolly-21-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev"
               if ! apt-get install -y --no-install-recommends $PKGS; then
                 echo "::warning::i386 dependency resolution failed - retrying with the amd64 index as an Architecture: all fallback."
                 printf "deb [arch=amd64] http://deb.debian.org/debian sid main\n" > /etc/apt/sources.list.d/arch-all-fallback.list
@@ -1493,11 +1525,22 @@ jobs:
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
               MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              git clone --quiet --depth 1 --branch v2.15.4 https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+              cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
+                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+                -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+                -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
+                -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON
+              ninja -C /tmp/libxml2-build
+              mkdir -p /tmp/libxml2-static
+              cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-static/
+              rm -rf /tmp/libxml2-src /tmp/libxml2-build
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam
+                --llvm=/work --embed=/work --output=/work/salam \
+                -- --libpath=/tmp/libxml2-static
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
@@ -1605,17 +1648,28 @@ jobs:
             -e CCACHE_DIR=/root/.ccache \
             arm32v7/debian:sid bash -euxc '
               apt-get update
-              apt-get install -y --no-install-recommends build-essential ccache file git \
+              apt-get install -y --no-install-recommends build-essential ccache file git cmake ninja-build \
                 llvm-21-dev liblld-21-dev libpolly-21-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
               MINGW_SR=/work/sysroots/x86_64-w64-mingw32
+              git clone --quiet --depth 1 --branch v2.15.4 https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+              cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
+                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+                -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+                -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
+                -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON
+              ninja -C /tmp/libxml2-build
+              mkdir -p /tmp/libxml2-static
+              cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-static/
+              rm -rf /tmp/libxml2-src /tmp/libxml2-build
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam
+                --llvm=/work --embed=/work --output=/work/salam \
+                -- --libpath=/tmp/libxml2-static
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
@@ -1700,7 +1754,7 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y build-essential ccache \
+          sudo apt-get install -y build-essential ccache cmake ninja-build \
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
             libsqlite3-dev \
@@ -1745,6 +1799,30 @@ jobs:
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
+      - name: Cache static libxml2 (native aarch64)
+        id: cache-libxml2-aarch64
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/libxml2-aarch64
+          key: libxml2-2.15.4-static-aarch64-v1
+
+      - name: Build static libxml2 (native aarch64, cache miss only)
+        if: steps.cache-libxml2-aarch64.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          git clone --quiet --depth 1 --branch v2.15.4 \
+            https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+          cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+            -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
+            -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF \
+            -DLIBXML2_WITH_ZLIB=ON
+          ninja -C /tmp/libxml2-build
+          mkdir -p /tmp/libxml2-aarch64
+          cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-aarch64/
+          rm -rf /tmp/libxml2-src /tmp/libxml2-build
+
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
           set -eu
@@ -1759,7 +1837,8 @@ jobs:
             --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
             --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}"
           sh tools/bash/build-selfhost.sh \
-            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
+            -- --libpath=/tmp/libxml2-aarch64
           echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)

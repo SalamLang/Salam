@@ -49,10 +49,10 @@ chooses a variant:
 | Build and Run                 | `salam run`                         |
 | Build Executable              | `salam build`                       |
 | Build Project                 | `salam build` in the project folder |
-| Check (no run)                | `salam inspect --emit-symbol`   |
+| Check (no run)                | `salam inspect --emit-symbol`       |
 | Format                        | `salam format`                      |
 | Check Formatting              | `salam format --check`              |
-| Show Tokens / Show AST        | `salam inspect --emit-*-xml`        |
+| Show Tokens / Show AST        | `salam inspect --emit-tokens` / `--emit-ast` |
 | Build Web Page                | `salam web`                         |
 | Compile to JavaScript         | `salam js`                          |
 

@@ -1543,8 +1543,8 @@ in dependency order:
 | `jsgen` / `layout` / `minify` / `web` | 2.6k / 2.5k / 0.3k / 0.4k | JS + layout-DSL → HTML/CSS/JS                                       |
 | `interp`                              | 3.5k                      | tree-walking interpreter (`salam exec`)                             |
 | `driver` / `cli`                      | 4.6k / 0.7k               | command dispatch, build orchestration                               |
-| `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-*-xml`                                     |
-| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                            |
+| `diag` / `logger` / `xml`             | 0.8k / 0.3k / 0.2k        | errors, logging, `--emit-tokens/-ast/-symbol`                        |
+| `i18n` / `langpack`                   | 1.6k / 0.4k               | English/Persian keyword & symbol tables                             |
 | `fmt`                                 | 1.0k                      | source formatter (`salam format`)                                   |
 
 **Suggested port order:** `core` → `token`/`source` → `lexer` → `ast` →

@@ -108,7 +108,7 @@ Then point `command` in your MCP config at the full path to `salam-mcp.exe`.
 | `salam_stdlib_symbols`  | A package's real public declarations, filterable |
 | `salam_find_examples`   | Search the test corpus for working usages        |
 | `salam_read_source`     | Read a line-numbered slice of any workspace file |
-| `salam_keywords`        | English/Persian keyword table                     |
+| `salam_keywords`        | English/Persian keyword table                    |
 
 ## 📖 Resources
 

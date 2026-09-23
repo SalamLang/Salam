@@ -22,12 +22,12 @@ file type.
 
 The Build menu gets:
 
-| Entry   | Command                           |
-| ------- | --------------------------------- |
-| Compile | `salam build`                     |
+| Entry   | Command                       |
+| ------- | ----------------------------- |
+| Compile | `salam build`                 |
 | Check   | `salam inspect --emit-symbol` |
-| Format  | `salam format`                    |
-| Execute | `salam exec`                      |
+| Format  | `salam format`                |
+| Execute | `salam exec`                  |
 
 Errors are parsed out of the gcc-style diagnostics, so clicking one jumps to
 the line.

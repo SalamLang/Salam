@@ -105,6 +105,16 @@ if [ -n "$LLVM_FLAGS" ] && [ "$(uname -s)" = Darwin ]; then
     done
 fi
 
+# a caller can point this at a directory holding its own static libs (e.g. a
+# libxml2.a built without LZMA/ICONV, to dodge a system libxml2 that needs
+# them) so every stage's link sees it, regardless of the LLVM state above.
+if [ -n "${SALAM_EXTRA_LIBPATH:-}" ]; then
+    for d in $SALAM_EXTRA_LIBPATH; do
+        [ -d "$d" ] || continue
+        LLVM_FLAGS="${LLVM_FLAGS:+$LLVM_FLAGS }--libpath=$d"
+    done
+fi
+
 accepts_llvm_flags() {
     "$1" help 2>&1 | grep -q -- '--libpath'
 }

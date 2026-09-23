@@ -251,6 +251,15 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   contain a file called `io.salam` collide at link time. Give every source file
   a name unique across the whole project.
 
+- **The interpreter has no networking at all.** `salam exec`'s extern
+  dispatch table covers file I/O, memory and process functions only; no
+  socket function (`socket`/`connect`/`send`/`recv`, or Windows' WinHTTP
+  family) is in it, on any platform. Anything that imports `net.http`,
+  `net.internal.rawsock`, or similar fails immediately with `extern
+function '...' is not supported by the interpreter`. This is a hard
+  block, not a bug to work around: use `salam run`/`salam build` for any
+  program that touches the network.
+
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
 - **`input()` cannot report EOF.** It returns `""` both for an empty line and at

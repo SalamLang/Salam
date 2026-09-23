@@ -39,7 +39,8 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 22
           sudo apt-get update
-          sudo apt-get install -y llvm-22-dev liblld-22-dev libpolly-22-dev \
+          sudo apt-get install -y cmake ninja-build \
+            llvm-22-dev liblld-22-dev libpolly-22-dev \
             libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
 
       - name: Install a seed compiler
@@ -50,8 +51,34 @@ jobs:
           sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
             --out "$GITHUB_WORKSPACE"
 
+      - name: Cache static libxml2
+        id: cache-libxml2
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/libxml2-static
+          key: libxml2-2.15.4-static-x86_64-v1
+
+      - name: Build static libxml2 (cache miss only)
+        if: steps.cache-libxml2.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          git clone --quiet --depth 1 --branch v2.15.4 \
+            https://github.com/GNOME/libxml2.git /tmp/libxml2-src
+          cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
+            -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
+            -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF \
+            -DLIBXML2_WITH_ZLIB=ON
+          ninja -C /tmp/libxml2-build
+          mkdir -p /tmp/libxml2-static
+          cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-static/
+          rm -rf /tmp/libxml2-src /tmp/libxml2-build
+
       - name: Build the compiler with LLVM in-process
-        run: sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE"
+        run: |
+          sh tools/bash/build-selfhost.sh --llvm="$GITHUB_WORKSPACE" \
+            -- --libpath=/tmp/libxml2-static
 
       - name: Backend must compile the whole corpus
         run: |
@@ -67,7 +94,8 @@ jobs:
 
       - name: Build the self-hosted compiler through the LLVM backend
         run: |
-          ./salam build compiler/main.salam --backend=llvm --output=/tmp/selfhost-llvm
+          ./salam build compiler/main.salam --backend=llvm --output=/tmp/selfhost-llvm \
+            --libpath="$GITHUB_WORKSPACE" --libpath=/tmp/libxml2-static
           test -s /tmp/selfhost-llvm
 
       - name: Produced compiler must actually run

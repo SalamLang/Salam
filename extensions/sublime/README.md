@@ -43,18 +43,18 @@ picked for a file whose first line is a `//!` directive header.
 Pick one with `Tools > Build System > Salam`, then `Ctrl+B`. `Ctrl+Shift+B`
 chooses a variant:
 
-| Variant                       | Command                             |
-| ----------------------------- | ----------------------------------- |
-| _(default)_ Run (interpreter) | `salam exec`                        |
-| Build and Run                 | `salam run`                         |
-| Build Executable              | `salam build`                       |
-| Build Project                 | `salam build` in the project folder |
-| Check (no run)                | `salam inspect --emit-symbol`       |
-| Format                        | `salam format`                      |
-| Check Formatting              | `salam format --check`              |
+| Variant                       | Command                                      |
+| ----------------------------- | -------------------------------------------- |
+| _(default)_ Run (interpreter) | `salam exec`                                 |
+| Build and Run                 | `salam run`                                  |
+| Build Executable              | `salam build`                                |
+| Build Project                 | `salam build` in the project folder          |
+| Check (no run)                | `salam inspect --emit-symbol`                |
+| Format                        | `salam format`                               |
+| Check Formatting              | `salam format --check`                       |
 | Show Tokens / Show AST        | `salam inspect --emit-tokens` / `--emit-ast` |
-| Build Web Page                | `salam web`                         |
-| Compile to JavaScript         | `salam js`                          |
+| Build Web Page                | `salam web`                                  |
+| Compile to JavaScript         | `salam js`                                   |
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 

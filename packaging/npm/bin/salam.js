@@ -21,7 +21,7 @@ function locate() {
 const bin = locate();
 if (!bin) {
   console.error(
-    "salam: the compiler is not unpacked; re-run `npm install salam-lang`",
+    "salam: the compiler is not unpacked; re-run `npm install salamlang`",
   );
   process.exit(1);
 }

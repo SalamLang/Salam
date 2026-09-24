@@ -45,7 +45,7 @@ already exists on this repository, so the `.deb`/`.rpm` jobs need nothing new.
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
 | GitHub Releases (.deb/.rpm) | built-in - `GITHUB_TOKEN`, falls back to the existing `RELEASE_TOKEN`                                                                                                  | `RELEASE_TOKEN` _(already set)_                    | yes               |
 | AUR                         | register at <https://aur.archlinux.org/register>, then paste an SSH **public** key at <https://aur.archlinux.org/account/> → _Edit_ → _SSH Public Key_                 | `AUR_SSH_PRIVATE_KEY`, `AUR_USERNAME`, `AUR_EMAIL` | yes, secret-gated |
-| npm                         | <https://www.npmjs.com/settings/~/tokens> → _Generate New Token_ → _Granular Access Token_, read+write on `salam-lang`                                                 | `NPM_TOKEN`                                        | not yet           |
+| npm                         | <https://www.npmjs.com/settings/~/tokens> → _Generate New Token_ → _Granular Access Token_, read+write on `salamlang`                                                  | `NPM_TOKEN`                                        | not yet           |
 | Chocolatey                  | register at <https://push.chocolatey.org/>, key at <https://push.chocolatey.org/account>                                                                               | `CHOCO_API_KEY`                                    | not yet           |
 | Snap Store                  | `snapcraft register salam`, then `snapcraft export-login --snaps=salam --acls package_access,package_push,package_update,package_release creds.txt` and paste the file | `SNAPCRAFT_STORE_CREDENTIALS`                      | not yet           |
 | Fedora COPR                 | log in at <https://copr.fedorainfracloud.org/>, token at <https://copr.fedorainfracloud.org/api/> (expires after 180 days)                                             | `COPR_CONFIG`                                      | not yet           |
@@ -214,8 +214,8 @@ cd packaging/dist/npm
 npm publish --access public
 ```
 
-Installs as `salam-lang`; the postinstall downloads the right release binary
-and verifies it against the published `.sha256`. Users get `npx salam-lang`.
+Installs as `salamlang`; the postinstall downloads the right release binary
+and verifies it against the published `.sha256`. Users get `npx salamlang`.
 
 ### asdf / mise
 

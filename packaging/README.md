@@ -39,14 +39,15 @@ still wins.
 ## What you need before publishing
 
 Where to get each credential, and the secret name CI expects. `RELEASE_TOKEN`
-already exists on this repository, so the `.deb`/`.rpm` jobs need nothing new.
+already exists on this repository, so the `.deb`/`.rpm` build (inside
+`compiler-release.yml`) needs nothing new.
 
 | Service                     | Get the token here                                                                                                                                                     | Secret name                                        | Wired in CI?      |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------- |
 | GitHub Releases (.deb/.rpm) | built-in - `GITHUB_TOKEN`, falls back to the existing `RELEASE_TOKEN`                                                                                                  | `RELEASE_TOKEN` _(already set)_                    | yes               |
 | AUR                         | register at <https://aur.archlinux.org/register>, then paste an SSH **public** key at <https://aur.archlinux.org/account/> → _Edit_ → _SSH Public Key_                 | `AUR_SSH_PRIVATE_KEY`, `AUR_USERNAME`, `AUR_EMAIL` | yes, secret-gated |
-| npm                         | <https://www.npmjs.com/settings/~/tokens> → _Generate New Token_ → _Granular Access Token_, read+write on `salamlang`                                                  | `NPM_TOKEN`                                        | not yet           |
-| Chocolatey                  | register at <https://push.chocolatey.org/>, key at <https://push.chocolatey.org/account>                                                                               | `CHOCO_API_KEY`                                    | not yet           |
+| npm                         | <https://www.npmjs.com/settings/~/tokens> → _Generate New Token_ → _Granular Access Token_, read+write on `salamlang`                                                  | `NPM_TOKEN`                                        | yes, secret-gated |
+| Chocolatey                  | register at <https://push.chocolatey.org/>, key at <https://push.chocolatey.org/account>                                                                               | `CHOCO_API_KEY`                                    | yes, secret-gated |
 | Snap Store                  | `snapcraft register salam`, then `snapcraft export-login --snaps=salam --acls package_access,package_push,package_update,package_release creds.txt` and paste the file | `SNAPCRAFT_STORE_CREDENTIALS`                      | not yet           |
 | Fedora COPR                 | log in at <https://copr.fedorainfracloud.org/>, token at <https://copr.fedorainfracloud.org/api/> (expires after 180 days)                                             | `COPR_CONFIG`                                      | not yet           |
 | Scoop bucket                | no token - create `SalamLang/scoop-salam` and push                                                                                                                     | -                                                  | not yet           |
@@ -68,9 +69,15 @@ and does nothing else.
 
 ### Debian / Ubuntu - `.deb` on the release
 
-Fully automatic. `.github/workflows/packaging-release.yml` builds
-`salam_<version>-1_{amd64,arm64,armhf,i386}.deb` from the published Linux
-tarballs and attaches them to the release.
+Fully automatic, and built inside `compiler-release.yml`'s `create-release`
+job itself - not in `packaging-release.yml`. GitHub's org-enforced
+immutable-releases setting locks a release's assets the instant it publishes,
+so anything trying to attach a `.deb`/`.rpm` afterward (which is what
+`packaging-release.yml` did originally) fails with `HTTP 422: Cannot upload
+assets to an immutable release`. The fix is building
+`salam_<version>-1_{amd64,arm64,armhf,i386}.deb` from the Linux tarballs
+already sitting in `./release/` before the release is created, so they ship
+in the same initial asset list.
 
 Users install with:
 
@@ -90,7 +97,9 @@ packaging/debian/build-deb.sh --version 0.4.0 --input ./release --output ./debs
 ### Arch - AUR
 
 Two packages: `salam-bin` (the prebuilt release, what most people want) and
-`salam` (builds from source using the previous release as the bootstrap seed).
+`salamlang` (builds from source using the previous release as the bootstrap
+seed - installs the same `salam` command; the plain name `salam` is already
+an unrelated, actively-maintained AUR package, so ours can't use it).
 
 First time only, create them:
 
@@ -112,7 +121,16 @@ git push origin master
 ```
 
 After that the `publish-aur` job updates both on every release.
-Users install with `yay -S salam-bin`.
+Users install with `yay -S salam-bin` or `yay -S salamlang`.
+
+**The plain `salam` name is already taken on the AUR** by an unrelated,
+actively-maintained package (a different, MIT-licensed project, last updated
+recently - not abandoned, so orphan-requesting it isn't an option). The
+`publish-aur` job pushes `salam-bin` fine but fails on `salam` with
+`git-receive-pack: permission denied`, since our key isn't a co-maintainer on
+someone else's package. Either rename our source-build package (e.g.
+`salam-lang`, to match the npm name) or drop it and ship only `salam-bin` -
+most users want the prebuilt binary anyway.
 
 ### Homebrew - homebrew-core
 
@@ -183,9 +201,9 @@ For nixpkgs proper, `packaging/dist/nix/package.nix` goes to
 ### Fedora / RHEL - COPR
 
 Create a project at <https://copr.fedorainfracloud.org>, then either upload
-`packaging/dist/rpm/salam.spec` by hand or point COPR at this repository. The CI
-job already builds the `.rpm` and attaches it to the release, so users can
-also install it directly.
+`packaging/dist/rpm/salam.spec` by hand or point COPR at this repository.
+`compiler-release.yml` already builds the `.rpm` and attaches it to the
+release, so users can also `dnf install` it directly without COPR.
 
 ### Alpine
 
@@ -232,8 +250,11 @@ mise use -g salam@0.4.0
 ## Release checklist
 
 1. Tag and publish `v<version>` as usual (`release:` commit on `main`).
-2. Wait for `compiler-release.yml` to finish - `bump.sh` needs `SHA256SUMS`.
-3. `packaging-release.yml` then runs on its own: builds and attaches the
-   `.deb`/`.rpm`, renders every manifest, pushes to the AUR if the key is set.
+   `compiler-release.yml`'s `create-release` job builds and attaches the
+   `.deb`/`.rpm` itself, as part of the same release.
+2. Wait for that to finish - `packaging-release.yml`'s `bump.sh` step needs
+   the release's `SHA256SUMS` to already be published.
+3. `packaging-release.yml` then runs on its own: renders every manifest,
+   pushes to the AUR/npm/Chocolatey if their secrets are set.
 4. Download the `salam-package-manifests` artifact for the PR-based targets.
 5. Send the Homebrew / WinGet / nixpkgs PRs from `PULL-REQUESTS.md`.

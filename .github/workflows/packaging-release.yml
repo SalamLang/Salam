@@ -10,10 +10,6 @@ on:
         description: 'Version to package (defaults to the VERSION file)'
         type: string
         default: ''
-      attach:
-        description: 'Attach the built .deb / .rpm to that release'
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -50,129 +46,6 @@ jobs:
           esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "packaging v$VERSION"
-
-  deb:
-    name: Build .deb packages
-    runs-on: ubuntu-24.04
-    needs: resolve
-    if: ${{ !contains(needs.resolve.outputs.version, '-nightly-') }}
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.resolve.outputs.version }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install dpkg-dev
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dpkg-dev lintian
-      - name: Download the Linux release tarballs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          mkdir -p release
-          for a in x86_64 aarch64 armhf i686; do
-            gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" \
-              --pattern "salam-$VERSION-linux-$a.tar.gz" --dir release \
-              || echo "::warning::no linux-$a tarball on v$VERSION"
-          done
-          ls -la release
-      - name: Build the packages
-        run: |
-          sh packaging/debian/build-deb.sh --version "$VERSION" \
-            --input ./release --output ./debs
-          ls -la debs
-      - name: Lint the packages
-        run: |
-          set -eu
-          for d in debs/*.deb; do
-            echo "== $d"
-            lintian --fail-on error,warning --suppress-tags \
-              statically-linked-binary,embedded-library,unstripped-binary-or-object,\
-          arch-dependent-file-in-usr-share,no-manual-page,changelog-file-missing-in-native-package,\
-          extended-description-is-probably-too-short "$d" || true
-          done
-      - name: Smoke-test the amd64 package
-        run: |
-          set -eu
-          sudo dpkg -i debs/salam_"$VERSION"-1_amd64.deb
-          printf 'func main:\n    println "salam"\nend\n' > /tmp/hello.salam
-          cd /tmp
-          # The point of the wrapper: a bare $PATH lookup has to work.
-          out=$(salam exec /tmp/hello.salam)
-          echo "$out"
-          [ "$out" = "salam" ] || { echo "::error::installed salam did not run"; exit 1; }
-          salam version
-      - name: Upload the packages as an artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: salam-deb
-          path: debs/*.deb
-      - name: Attach the packages to the release
-        if: ${{ github.event_name == 'release' || inputs.attach }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          for d in debs/*.deb; do
-            sha256sum "$d" | awk '{ print $1, "'"$(basename "$d")"'" }' > "$d.sha256"
-          done
-          gh release upload "v$VERSION" debs/*.deb debs/*.deb.sha256 \
-            --repo "$GITHUB_REPOSITORY" --clobber
-
-  rpm:
-    name: Build .rpm packages
-    runs-on: ubuntu-24.04
-    needs: resolve
-    if: ${{ !contains(needs.resolve.outputs.version, '-nightly-') }}
-    permissions:
-      contents: write
-    container:
-      image: fedora:41
-    env:
-      VERSION: ${{ needs.resolve.outputs.version }}
-    steps:
-      - name: Install build tooling
-        run: dnf install -y rpm-build rpmdevtools curl tar gzip gh
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Render the spec
-        run: |
-          set -eu
-          ./packaging/bump.sh "$VERSION"
-          cp packaging/dist/rpm/salam.spec /tmp/salam.spec
-          cat /tmp/salam.spec
-      - name: Build
-        run: |
-          set -eu
-          rpmdev-setuptree
-          spectool -g -R /tmp/salam.spec
-          rpmbuild -bb /tmp/salam.spec
-          find ~/rpmbuild/RPMS -name '*.rpm' -print
-      - name: Collect
-        run: |
-          mkdir -p rpms
-          find ~/rpmbuild/RPMS -name '*.rpm' -exec cp {} rpms/ \;
-          ls -la rpms
-      - name: Upload the packages as an artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: salam-rpm
-          path: rpms/*.rpm
-      - name: Attach the packages to the release
-        if: ${{ github.event_name == 'release' || inputs.attach }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          gh release upload "v$VERSION" rpms/*.rpm \
-            --repo "$GITHUB_REPOSITORY" --clobber
 
   manifests:
     name: Render package manifests
@@ -238,7 +111,7 @@ jobs:
       - name: Render the manifests
         if: steps.gate.outputs.run == 'true'
         run: ./packaging/bump.sh "$VERSION"
-      - name: Push salam-bin and salam
+      - name: Push salam-bin and salamlang
         if: steps.gate.outputs.run == 'true'
         env:
           AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
@@ -262,8 +135,8 @@ jobs:
           chmod 600 /home/builder/.ssh/aur /home/builder/.ssh/config
 
           install -d -o builder -g builder /home/builder/work
-          cp packaging/dist/aur/salam-bin/PKGBUILD /home/builder/work/PKGBUILD.salam-bin
-          cp packaging/dist/aur/salam/PKGBUILD     /home/builder/work/PKGBUILD.salam
+          cp packaging/dist/aur/salam-bin/PKGBUILD  /home/builder/work/PKGBUILD.salam-bin
+          cp packaging/dist/aur/salamlang/PKGBUILD  /home/builder/work/PKGBUILD.salamlang
           chown -R builder:builder /home/builder/work
 
           su builder -c "
@@ -271,7 +144,7 @@ jobs:
             cd /home/builder/work
             git config --global user.name \"${AUR_USERNAME:-Salam Release Bot}\"
             git config --global user.email \"${AUR_EMAIL:-MaxBaseCode@gmail.com}\"
-            for pkg in salam-bin salam; do
+            for pkg in salam-bin salamlang; do
               echo \"== \$pkg\"
               rm -rf \"\$pkg\"
               git clone \"ssh://aur@aur.archlinux.org/\$pkg.git\" \"\$pkg\"

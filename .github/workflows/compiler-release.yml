@@ -2274,6 +2274,60 @@ jobs:
             [ -f "$z" ] || { echo "::error::$(basename "$t") ships without a .zip counterpart"; fail=1; }
           done
           [ "$fail" -eq 0 ] || exit 1
+      - name: Build .deb packages
+        id: build_deb
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+          if sh packaging/debian/build-deb.sh --version "$VERSION" --input ./release --output ./debs; then
+            cp ./debs/*.deb ./release/
+            echo "built=$(ls ./debs/*.deb | wc -l)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::deb packaging failed - the release will ship without .deb files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build .rpm packages
+        id: build_rpm
+        run: |
+          set -eu
+          mkdir -p ./rpms
+          RPM_DATE=$(LC_ALL=C date -u +"%a %b %d %Y")
+          sed \
+            -e "s|@VERSION@|$VERSION|g" \
+            -e "s|@RPM_DATE@|$RPM_DATE|g" \
+            packaging/rpm/salam.spec > /tmp/salam.spec
+          if docker run --rm -v "$PWD:/repo:ro" -v /tmp/salam.spec:/tmp/salam.spec:ro \
+              -v "$PWD/rpms:/rpms" -e VERSION="$VERSION" fedora:41 bash -c '
+            set -eu
+            dnf install -y -q rpm-build rpmdevtools >/dev/null
+            rpmdev-setuptree
+            for f in /repo/release/salam-"$VERSION"-linux-x86_64.tar.gz /repo/release/salam-"$VERSION"-linux-aarch64.tar.gz; do
+              [ -f "$f" ] && cp "$f" ~/rpmbuild/SOURCES/
+            done
+            rpmbuild -bb /tmp/salam.spec
+            find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} /rpms/ \;
+          '; then
+            n=$(ls ./rpms/*.rpm 2>/dev/null | wc -l)
+            if [ "$n" -gt 0 ]; then
+              cp ./rpms/*.rpm ./release/
+            else
+              echo "::error::rpm packaging produced no .rpm files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::rpm packaging failed - the release will ship without .rpm files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Summarize .deb/.rpm packaging
+        if: always()
+        run: |
+          {
+            echo "### Distro packages"
+            echo ""
+            echo "- .deb: ${{ steps.build_deb.outputs.built || 0 }} file(s)"
+            echo "- .rpm: ${{ steps.build_rpm.outputs.built || 0 }} file(s)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Delete existing release and tag if found
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2356,6 +2410,8 @@ jobs:
             release/salam-*-stdlib-doc.html
             release/salam-*-android.aab
             release/salam-*-android-*.apk
+            release/salam_*.deb
+            release/salam-*.rpm
           )
           assets=()
           for c in "${candidates[@]}"; do

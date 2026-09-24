@@ -1,6 +1,7 @@
 package interp
 
 import str
+import mem
 import co "../sal_core.salam"
 
 func val_null(): Value:
@@ -337,11 +338,96 @@ func arr_len(ip &: Interp, id: int): int:
     ret an.is_view ? an.vlen : an.items.len()
 end
 
+func arr_elem_ptr_kind(v: Value): int:
+    if v.kind == VAL_INT:
+        if v.ity == ITY_I8:
+            ret PTR_I8
+        end
+        if v.ity == ITY_I16:
+            ret PTR_I16
+        end
+        if v.ity == ITY_I32:
+            ret PTR_I32
+        end
+        if v.ity == ITY_U8:
+            ret PTR_U8
+        end
+        if v.ity == ITY_U16:
+            ret PTR_U16
+        end
+        if v.ity == ITY_U32:
+            ret PTR_U32
+        end
+        if v.ity == ITY_U64:
+            ret PTR_U64
+        end
+        ret PTR_I64
+    end
+    if v.kind == VAL_FLOAT:
+        ret PTR_F64
+    end
+    if v.kind == VAL_BOOL:
+        ret PTR_BOOL
+    end
+    if v.kind == VAL_CHAR:
+        ret PTR_CHAR
+    end
+    if v.kind == VAL_STR:
+        ret PTR_STR
+    end
+    if v.kind == VAL_PTR:
+        ret PTR_I64
+    end
+    ret -1
+end
+
+// Decays an array to a real native pointer to its own storage, so it stays
+// consistent with normal indexing (arr_get/arr_set below) and with anything
+// that dereferences the returned address, matching how a compiled array
+// decays to the address of its own flat storage. Returns 0 as i64 if the
+// array is empty or holds a value kind that has no fixed native layout.
+func arr_materialize(ip &: Interp, id: int): i64:
+    mut rid := id
+    mut roff := 0
+    an := ip.arrs.get(id)
+    if an.is_view:
+        rid = an.base
+        roff = an.off
+    end
+    mut bn := ip.arrs.get(rid)
+    if bn.native_addr != (0 as i64):
+        ret bn.native_addr + ((roff * ptr_elem_size(bn.native_elem)) as i64)
+    end
+    n := bn.items.len()
+    if n == 0:
+        ret 0
+    end
+    ek := arr_elem_ptr_kind(bn.items.get(0))
+    if ek < 0:
+        ret 0
+    end
+    esz := ptr_elem_size(ek) as u64
+    addr := mem.AllocateZeroed((n as u64) * esz) as i64
+    repeat n with i:
+        ptr_store(addr, ek, i as i64, bn.items.get(i))
+    end
+    bn.native_addr = addr
+    bn.native_elem = ek
+    ip.arrs.set(rid, bn)
+    ret addr + ((roff * (esz as int)) as i64)
+end
+
 func arr_get(ip &: Interp, id: int, i: int): Value:
     an := ip.arrs.get(id)
     if an.is_view:
         bn := ip.arrs.get(an.base)
+        if bn.native_addr != (0 as i64):
+            ret ptr_load(bn.native_addr, bn.native_elem, (an.off + i) as i64)
+        end
         ret bn.items.get(an.off + i)
+    end
+    if an.native_addr != (0 as i64):
+        ret ptr_load(an.native_addr, an.native_elem, i as i64)
     end
     ret an.items.get(i)
 end
@@ -350,8 +436,16 @@ func arr_set(ip &: Interp, id: int, i: int, v: Value):
     mut an := ip.arrs.get(id)
     if an.is_view:
         mut bn := ip.arrs.get(an.base)
+        if bn.native_addr != (0 as i64):
+            ptr_store(bn.native_addr, bn.native_elem, (an.off + i) as i64, v)
+            ret
+        end
         bn.items.set(an.off + i, v)
         ip.arrs.set(an.base, bn)
+        ret
+    end
+    if an.native_addr != (0 as i64):
+        ptr_store(an.native_addr, an.native_elem, i as i64, v)
         ret
     end
     an.items.set(i, v)
@@ -370,6 +464,15 @@ func arr_push(ip &: Interp, id: int, v: Value):
         end
         ip.arrs.set(an.base, bn)
         an.vlen += 1
+        ip.arrs.set(id, an)
+        ret
+    end
+    if an.native_addr != (0 as i64):
+        new_n := an.items.len() + 1
+        esz := ptr_elem_size(an.native_elem) as u64
+        an.native_addr = mem.Reallocate(an.native_addr as void*, (new_n as u64) * esz) as i64
+        ptr_store(an.native_addr, an.native_elem, (new_n - 1) as i64, v)
+        an.items.push(v)
         ip.arrs.set(id, an)
         ret
     end

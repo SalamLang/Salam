@@ -90,7 +90,9 @@ packaging/debian/build-deb.sh --version 0.4.0 --input ./release --output ./debs
 ### Arch - AUR
 
 Two packages: `salam-bin` (the prebuilt release, what most people want) and
-`salam` (builds from source using the previous release as the bootstrap seed).
+`salamlang` (builds from source using the previous release as the bootstrap
+seed - installs the same `salam` command; the plain name `salam` is already
+an unrelated, actively-maintained AUR package, so ours can't use it).
 
 First time only, create them:
 
@@ -112,7 +114,7 @@ git push origin master
 ```
 
 After that the `publish-aur` job updates both on every release.
-Users install with `yay -S salam-bin`.
+Users install with `yay -S salam-bin` or `yay -S salamlang`.
 
 ### Homebrew - homebrew-core
 

@@ -232,8 +232,8 @@ cd packaging/dist/npm
 npm publish --access public
 ```
 
-Installs as `salam-lang`; the postinstall downloads the right release binary
-and verifies it against the published `.sha256`. Users get `npx salam-lang`.
+Installs as `salamlang`; the postinstall downloads the right release binary
+and verifies it against the published `.sha256`. Users get `npx salamlang`.
 
 ### asdf / mise
 

@@ -2,6 +2,8 @@
 
 \providecommand{\latincodefont}{\salamcodeENfont}
 \providecommand{\lr}[1]{\LRE{#1}}
+\providecommand{\salamfa@lro}{\char"202D}
+\providecommand{\salamfa@pdf}{\char"202C}
 
 \@for\salamfa@x:=%
   func,ret,if,else,until,each,in,with,mut,const,type,struct,enum,end,import,as,true,%
@@ -52,23 +54,46 @@
 \newif\ifsalamfa@hasanydigit
 \newif\ifsalamfa@hasletter
 \newif\ifsalamfa@standalone
+\newif\ifsalamfa@runfadig
+\newif\ifsalamfa@linepersian
+\newif\ifsalamfa@runpinned
+\newif\ifsalamfa@haspersian
+\def\salamfa@persianscan#1{%
+  \ifx#1\relax\else
+    \ifnum`#1>127
+      \ifnum`#1<1776 \global\salamfa@linepersiantrue\else
+        \ifnum`#1>1785 \global\salamfa@linepersiantrue\fi
+      \fi
+    \fi
+    \expandafter\salamfa@persianscan
+  \fi}
 
 \newcommand{\salamfa@lineflush}{%
   \ifsalamfa@lineopen
     \toks@\expandafter{\salamfa@lineacc}%
-    \salamfa@uselrfalse
-    \ifnum\salamfa@brkdepth=\z@
-      \salamfa@uselrtrue
-    \fi
-    \ifsalamfa@uselr
-      \edef\salamfa@linetmp{\noexpand\lr{\noexpand\latincodefont \the\toks@}}%
+    \ifsalamfa@runfadig
+      \edef\salamfa@linetmp{{\the\toks@}}%
     \else
-      \edef\salamfa@linetmp{{‭\noexpand\latincodefont \the\toks@‬}}%
+      \ifsalamfa@runpinned
+        \edef\salamfa@linetmp{{\noexpand\latincodefont \the\toks@}}%
+      \else
+      \salamfa@uselrfalse
+      \ifnum\salamfa@brkdepth=\z@
+        \salamfa@uselrtrue
+      \fi
+      \ifsalamfa@uselr
+        \edef\salamfa@linetmp{\noexpand\lr{\noexpand\latincodefont \the\toks@}}%
+      \else
+        \edef\salamfa@linetmp{{\salamfa@lro\noexpand\latincodefont \the\toks@\salamfa@pdf}}%
+      \fi
+      \fi
     \fi
     \expandafter\salamfa@gadd\expandafter{\salamfa@linetmp}%
     \global\let\salamfa@lineacc\@empty
     \global\salamfa@lineopenfalse
     \global\salamfa@brkdepth\z@
+    \global\salamfa@runfadigfalse
+    \global\salamfa@runpinnedfalse
   \fi
   \ifsalamfa@commapending
     \salamfa@gadd{,}%
@@ -90,8 +115,8 @@
 \def\salamfa@mergeloop#1{%
   \ifx#1\relax\else
     \ifnum`#1>127
-      \ifnum`#1<1776 \salamfa@mergeablefalse
-      \else\ifnum`#1>1785 \salamfa@mergeablefalse
+      \ifnum`#1<1776 \salamfa@mergeablefalse\salamfa@haspersiantrue
+      \else\ifnum`#1>1785 \salamfa@mergeablefalse\salamfa@haspersiantrue
       \else \salamfa@hasfadigittrue\salamfa@hasanydigittrue
       \fi\fi
     \else
@@ -120,26 +145,111 @@
     \expandafter\salamfa@tokbrkloop
   \fi}
 
-\def\salamfa@revloop#1{%
-  \ifx#1\relax\else
-    \edef\salamfa@revtmp{#1\salamfa@revtmp}%
-    \expandafter\salamfa@revloop
-  \fi}
-\newcommand{\salamfa@reverse}[1]{%
-  \def\salamfa@revtmp{}%
-  \salamfa@revloop#1\relax
-}
-\newcommand{\salamfa@opswap}[1]{%
-  \salamfa@reverse{#1}%
-  \let\salamfa@opswapped\salamfa@revtmp
-}
 
 \newcommand{\salamfa@laddexp}[1]{\g@addto@macro\salamfa@lineacc{#1}}
+
+% A token holding persian text: emitted straight into the right-to-left flow,
+% with every bracket pinned to the RTL level so that it is mirrored.
+\newcommand{\salamfa@persiantok}[2]{%
+  \salamfa@lineflush
+  \ifsalamfa@spacepending
+    \salamfa@gadd{\space}%
+    \salamfa@spacependingfalse
+  \fi
+  \StrSubstitute{#2}{(}{‏(}[\salamfa@tq1]%
+  \StrSubstitute{\salamfa@tq1}{[}{‏[}[\salamfa@tq2]%
+  \StrSubstitute{\salamfa@tq2}{)}{‏)}[\salamfa@tq3]%
+  \StrSubstitute{\salamfa@tq3}{]}{‏]}[\salamfa@tq4]%
+  \StrSubstitute{\salamfa@tq4}{\{}{‏\{}[\salamfa@tq5]%
+  \StrSubstitute{\salamfa@tq5}{\}}{‏\}}[\salamfa@tokbodyb]%
+  \salamfa@tokbrk\z@
+  \expandafter\salamfa@tokbrkloop\salamfa@tokbodyb\relax
+  \global\advance\salamfa@brkdepth\salamfa@tokbrk
+  \edef\salamfa@tokCtmp{\noexpand#1{\salamfa@tokbodyb}}%
+  \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
+}
+
+% A token holding only latin text that landed here only because an unbalanced
+% bracket was already open.  Same treatment as a latin run: a trailing colon
+% moves to the front so it sits between the name and its type, and the brackets
+% are drawn mirrored by hand because the run itself is laid out left-to-right.
+\newcommand{\salamfa@latintok}[2]{%
+  \salamfa@lineflush
+  \ifsalamfa@spacepending
+    \salamfa@gadd{\space}%
+    \salamfa@spacependingfalse
+  \fi
+  \edef\salamfa@worktoken{#2}%
+  \IfEndWith{\salamfa@worktoken}{:}{%
+    \StrGobbleRight{\salamfa@worktoken}{1}[\salamfa@nocolon]%
+    \edef\salamfa@worktoken{:\salamfa@nocolon}%
+  }{%
+    \edef\salamfa@worktoken{#2}%
+  }%
+  \global\let\salamfa@swapped\@empty
+  \edef\salamfa@swapin{\salamfa@worktoken}%
+  \expandafter\salamfa@swapbrk\salamfa@swapin\relax
+  \edef\salamfa@worktoken{\salamfa@swapped}%
+  \salamfa@tokbrk\z@
+  \expandafter\salamfa@tokbrkloop\salamfa@worktoken\relax
+  \global\advance\salamfa@brkdepth\salamfa@tokbrk
+  \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\latincodefont\salamfa@worktoken}}}%
+  \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
+}
+
+% A latin string literal belongs to the same left-to-right run as the
+% expression around it, so that 2 + "3" stays one block instead of breaking
+% apart.  Brackets inside the literal are mirrored by hand, because inside a
+% left-to-right run the renderer would otherwise leave them as written and a
+% literal like "(" + x + ")" would read as a backwards paren pair.
+\newcommand{\salamfa@strtok}[2]{%
+  \salamfa@brkloop#2\relax
+  \ifsalamfa@commapending
+    \g@addto@macro\salamfa@lineacc{,}%
+    \global\salamfa@commapendingfalse
+  \fi
+  \ifsalamfa@spacepending
+    \g@addto@macro\salamfa@lineacc{\space}%
+    \salamfa@spacependingfalse
+  \fi
+  \global\salamfa@lineopentrue
+  \global\let\salamfa@swapped\@empty
+  \salamfa@swapbrk#2\relax
+  \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\latincodefont\salamfa@swapped}}}%
+  \expandafter\salamfa@laddexp\expandafter{\salamfa@tokCtmp}%
+}
+\def\salamfa@swapbrk#1{%
+  \ifx#1\relax\else
+    \ifx#1(\g@addto@macro\salamfa@swapped{)}%
+    \else\ifx#1)\g@addto@macro\salamfa@swapped{(}%
+    \else\ifx#1[\g@addto@macro\salamfa@swapped{]}%
+    \else\ifx#1]\g@addto@macro\salamfa@swapped{[}%
+    \else\ifx#1\{\g@addto@macro\salamfa@swapped{\}}%
+    \else\ifx#1\}\g@addto@macro\salamfa@swapped{\{}%
+    \else\g@addto@macro\salamfa@swapped{#1}%
+    \fi\fi\fi\fi\fi\fi
+    \expandafter\salamfa@swapbrk
+  \fi}
+
+% Same, but for curly braces only.
+\def\salamfa@swapbrace#1{%
+  \ifx#1\relax\else
+    \ifx#1\{\g@addto@macro\salamfa@swapped{\}}%
+    \else\ifx#1\}\g@addto@macro\salamfa@swapped{\{}%
+    \else\g@addto@macro\salamfa@swapped{#1}%
+    \fi\fi
+    \expandafter\salamfa@swapbrace
+  \fi}
+
 \newcommand{\salamfa@tokC}[2]{%
   \salamfa@mergeabletrue\salamfa@hasfadigitfalse\salamfa@hasanydigitfalse\salamfa@hasletterfalse
+  \salamfa@haspersianfalse
   \salamfa@mergeloop#2\relax
   \ifnum\salamfa@brkdepth=\z@\else\salamfa@mergeablefalse\fi
   \ifsalamfa@mergeable
+    \IfSubStr{#2}{"}{%
+      \salamfa@strtok{#1}{#2}%
+    }{%
     \ifsalamfa@lineopen
       \salamfa@standalonefalse
     \else
@@ -152,8 +262,7 @@
         \salamfa@gadd{\space}%
         \salamfa@spacependingfalse
       \fi
-      \salamfa@opswap{#2}%
-      \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\latincodefont\salamfa@opswapped}}}%
+      \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\lr{\noexpand\latincodefont #2}}}}%
       \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
     \else
     \salamfa@brkloop#2\relax
@@ -166,29 +275,64 @@
       \salamfa@spacependingfalse
     \fi
     \global\salamfa@lineopentrue
-    \IfEndWith{#2}{,}%
-      {\StrGobbleRight{#2}{1}[\salamfa@tokbody]\global\salamfa@commapendingtrue}%
-      {\def\salamfa@tokbody{#2}}%
+    % Persian digits are strong right-to-left.  Such a run must not be forced
+    % into a left-to-right override, otherwise the brackets glued to it stop
+    % mirroring.  A latin run inside a persian-led line is in the same boat:
+    % it sits in a right-to-left card, so its brackets and its trailing colon
+    % have to be pinned to the RTL level too.  Pin them with an RLM and let the
+    % run flow natively.
+    \ifsalamfa@hasfadigit
+      \global\salamfa@runfadigtrue
+      \StrSubstitute{#2}{(}{‏(}[\salamfa@wt0]%
+      \StrSubstitute{\salamfa@wt0}{[}{‏[}[\salamfa@wt0b]%
+      \StrSubstitute{\salamfa@wt0b}{)}{‏)}[\salamfa@wt1]%
+      \StrSubstitute{\salamfa@wt1}{]}{‏]}[\salamfa@wt2]%
+      \StrSubstitute{\salamfa@wt2}{:}{‏:}[\salamfa@wt3]%
+      \StrSubstitute{\salamfa@wt3}{\{}{‏\{}[\salamfa@wt4]%
+      \StrSubstitute{\salamfa@wt4}{\}}{‏\}}[\salamfa@wt5]%
+      \edef\salamfa@worktoken{\salamfa@wt5}%
+    \else
+      \edef\salamfa@worktoken{#2}%
+      \edef\salamfa@origtoken{#2}%
+      \ifsalamfa@linepersian
+        % A trailing colon belongs between the name and its type, which in a
+        % right-to-left card means to the left of the name.  The run itself is
+        % laid out left-to-right, so put the colon first and it lands there.
+        \IfEndWith{#2}{:}{%
+          \StrGobbleRight{#2}{1}[\salamfa@nocolon]%
+          \edef\salamfa@worktoken{:\salamfa@nocolon}%
+        }{%
+          \edef\salamfa@worktoken{#2}%
+        }%
+        % This run stays a left-to-right island, so the bidi engine will not
+        % mirror its brackets for us.  Draw them mirrored by hand instead,
+        % otherwise [12, 19, 8] reads as a backwards pair in a RTL card.
+        \global\let\salamfa@swapped\@empty
+        \edef\salamfa@swapin{\salamfa@worktoken}%
+        \expandafter\salamfa@swapbrk\salamfa@swapin\relax
+        \edef\salamfa@worktoken{\salamfa@swapped}%
+      \fi
+    \fi
+    \IfEndWith{\salamfa@worktoken}{,}%
+      {\StrGobbleRight{\salamfa@worktoken}{1}[\salamfa@tokbody]\global\salamfa@commapendingtrue}%
+      {\def\salamfa@tokbody{\salamfa@worktoken}}%
     \ifsalamfa@hasfadigit
       \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\salamcodefont\salamfa@tokbody}}}%
     \else
       \edef\salamfa@tokCtmp{\noexpand#1{\salamfa@tokbody}}%
     \fi
     \expandafter\salamfa@laddexp\expandafter{\salamfa@tokCtmp}%
-    \fi
+    \fi}%
   \else
-    \salamfa@lineflush
-    \ifsalamfa@spacepending
-      \salamfa@gadd{\space}%
-      \salamfa@spacependingfalse
+    \ifsalamfa@linepersian
+      \ifsalamfa@haspersian
+        \salamfa@persiantok{#1}{#2}%
+      \else
+        \salamfa@latintok{#1}{#2}%
+      \fi
+    \else
+      \salamfa@persiantok{#1}{#2}%
     \fi
-    \StrSubstitute{#2}{)}{‏)}[\salamfa@tokbodya]%
-    \StrSubstitute{\salamfa@tokbodya}{]}{‏]}[\salamfa@tokbodyb]%
-    \salamfa@tokbrk\z@
-    \expandafter\salamfa@tokbrkloop\salamfa@tokbodyb\relax
-    \global\advance\salamfa@brkdepth\salamfa@tokbrk
-    \edef\salamfa@tokCtmp{\noexpand#1{\salamfa@tokbodyb}}%
-    \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
   \fi}
 
 \newcommand{\salamfa@id}[1]{#1}
@@ -245,6 +389,10 @@
   \global\salamfa@spacependingfalse
   \global\salamfa@commapendingfalse
   \global\salamfa@brkdepth\z@
+  \global\salamfa@runfadigfalse
+  \global\salamfa@linepersianfalse
+  \global\salamfa@runpinnedfalse
+  \salamfa@persianscan#1\relax
   \ifnum\salamfa@nlines>\@ne \salamfa@gadd{\\}\fi
   \salamfa@gadd{\strut}%
   \edef\salamfa@line{\detokenize{#1}\space\salamfa@end\space}%

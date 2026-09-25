@@ -1,0 +1,366 @@
+% Persian (RTL) salam code block component. Input right after salam-en-code.tex
+% to make the FA code card (salam), the FA output boxes (progoutfa/outputfa)
+% and their bidi-aware parser available. Fonts come from the host book; the
+% \salamfaout* hooks near the bottom tune the FA output box look.
+\makeatletter
+
+% Safe defaults for hosts that lack these (polyglossia vs xepersian). The FA
+% books define their own \latincodefont and \lr first; \providecommand no-ops.
+\providecommand{\latincodefont}{\salamcodeENfont}
+\providecommand{\lr}[1]{\LRE{#1}}
+
+\@for\salamfa@x:=%
+  func,ret,if,else,until,each,in,with,mut,const,type,struct,enum,end,import,as,true,%
+  false,null,this,break,continue,layout,package,print,println,printerr,%
+  printerrln,input,defer,operator,extern,interface,pub,component,repeat,impl,%
+  on,to,by,main,sizeof,spawn,join,link,%
+  تابع,بازگشت,اگر,وگرنه,تاوقتی,هر,در,با,متغیر,ثابت,نوع,ساختار,شمارش,پایان,%
+  واردکردن,بعنوان,درست,نادرست,پوچ,این,بشکن,ادامه,صفحه,بسته,بنویس,چاپ,%
+  خطابنویس,خطاچاپ,بخوان,تعلیق,عملگر,خارجی,واسط,عمومی,مولفه,تکرار,پیاده‌سازی,بر,%
+  اصلی,تا,گام\do{%
+    \expandafter\let\csname salamkw@\salamfa@x\endcsname\@empty}
+
+\@for\salamfa@x:=%
+  void,bool,char,str,i8,i16,i32,int,i64,u8,u16,u32,uint,u64,f32,float,f64,%
+  auto,byte,HashMap,Vector,MapIter,Option,Stack,Queue,Thread,Mutex,WaitGroup,%
+  تهی,منطقی,نویسه,رشته,صحیح۸,صحیح۱۶,صحیح۳۲,صحیح,صحیح۶۴,صحیح8,صحیح16,صحیح32,%
+  صحیح64,طبیعی۸,طبیعی۱۶,طبیعی۳۲,طبیعی,طبیعی۶۴,طبیعی8,طبیعی16,طبیعی32,طبیعی64,%
+  اعشار۳۲,اعشار,اعشار۶۴,اعشار32,اعشار64,خودکار,وکتور,نگاشت\do{%
+    \expandafter\let\csname salamty@\salamfa@x\endcsname\@empty}
+
+\@for\salamfa@x:=0,1,2,3,4,5,6,7,8,9,%
+  ۰,۱,۲,۳,۴,۵,۶,۷,۸,۹,٠,١,٢,٣,٤,٥,٦,٧,٨,٩\do{%
+    \expandafter\let\csname salamfa@dig@\salamfa@x\endcsname\@empty}
+
+% --- parser state ----------------------------------------------------------
+\newdimen\salamfa@unit \salamfa@unit=0.5em % indent width per leading space
+\newcount\salamfa@lead
+\newcount\salamfa@nlines
+\newcount\salamfa@cmtdepth                 % /* */ nesting depth (global)
+\newif\ifsalamfa@incmt                     % inside a block comment (across lines)
+\newif\ifsalamfa@linecmt                   % inside a // comment (this line only)
+\newif\ifsalamfa@instr                     % inside a "..." string span
+\newcommand{\salamfa@code}{}
+\newcommand{\salamfa@nums}{}
+\long\def\salamfa@gadd#1{\g@addto@macro\salamfa@code{#1}}
+\protected\def\salamfa@end{}% non-expandable end-of-line sentinel
+\def\salamfa@endmac{\salamfa@end}
+\newif\ifsalamfa@inlead
+
+% --- bidi-aware line state --------------------------------------------------
+\newif\ifsalamfa@lineopen
+\newcommand{\salamfa@lineacc}{}%
+\newif\ifsalamfa@uselr
+\newcount\salamfa@brkdepth
+\newcount\salamfa@tokbrk
+\newif\ifsalamfa@spacepending
+\newif\ifsalamfa@commapending
+\newif\ifsalamfa@mergeable
+\newif\ifsalamfa@hasfadigit
+\newif\ifsalamfa@hasanydigit
+\newif\ifsalamfa@hasletter
+\newif\ifsalamfa@standalone
+
+% --- bidi-aware line machinery ---------------------------------------------
+\newcommand{\salamfa@lineflush}{%
+  \ifsalamfa@lineopen
+    \toks@\expandafter{\salamfa@lineacc}%
+    \salamfa@uselrfalse
+    \ifnum\salamfa@brkdepth=\z@
+      \salamfa@uselrtrue
+    \fi
+    \ifsalamfa@uselr
+      \edef\salamfa@linetmp{\noexpand\lr{\noexpand\latincodefont \the\toks@}}%
+    \else
+      \edef\salamfa@linetmp{{‭\noexpand\latincodefont \the\toks@‬}}%
+    \fi
+    \expandafter\salamfa@gadd\expandafter{\salamfa@linetmp}%
+    \global\let\salamfa@lineacc\@empty
+    \global\salamfa@lineopenfalse
+    \global\salamfa@brkdepth\z@
+  \fi
+  \ifsalamfa@commapending
+    \salamfa@gadd{,}%
+    \global\salamfa@commapendingfalse
+  \fi}
+
+\newif\ifsalamfa@spacepending
+\newcommand{\salamfa@feedspace}{%
+  \ifsalamfa@lineopen
+    \salamfa@spacependingtrue
+  \else
+    \salamfa@gadd{\space}%
+  \fi}
+
+\newif\ifsalamfa@mergeable
+\newif\ifsalamfa@hasfadigit
+\newif\ifsalamfa@hasanydigit
+\newif\ifsalamfa@hasletter
+\def\salamfa@mergeloop#1{%
+  \ifx#1\relax\else
+    \ifnum`#1>127
+      \ifnum`#1<1776 \salamfa@mergeablefalse
+      \else\ifnum`#1>1785 \salamfa@mergeablefalse
+      \else \salamfa@hasfadigittrue\salamfa@hasanydigittrue
+      \fi\fi
+    \else
+      \ifnum`#1>47 \ifnum`#1<58 \salamfa@hasanydigittrue\fi\fi
+      \ifnum`#1>64 \ifnum`#1<91 \salamfa@haslettertrue\fi\fi
+      \ifnum`#1>96 \ifnum`#1<123 \salamfa@haslettertrue\fi\fi
+    \fi
+    \expandafter\salamfa@mergeloop
+  \fi}
+
+\def\salamfa@brkloop#1{%
+  \ifx#1\relax\else
+    \ifnum`#1=40 \advance\salamfa@brkdepth\@ne\fi
+    \ifnum`#1=91 \advance\salamfa@brkdepth\@ne\fi
+    \ifnum`#1=41 \advance\salamfa@brkdepth\m@ne\fi
+    \ifnum`#1=93 \advance\salamfa@brkdepth\m@ne\fi
+    \expandafter\salamfa@brkloop
+  \fi}
+
+\def\salamfa@tokbrkloop#1{%
+  \ifx#1\relax\else
+    \ifnum`#1=40 \advance\salamfa@tokbrk\@ne\fi
+    \ifnum`#1=91 \advance\salamfa@tokbrk\@ne\fi
+    \ifnum`#1=41 \advance\salamfa@tokbrk\m@ne\fi
+    \ifnum`#1=93 \advance\salamfa@tokbrk\m@ne\fi
+    \expandafter\salamfa@tokbrkloop
+  \fi}
+
+\def\salamfa@revloop#1{%
+  \ifx#1\relax\else
+    \edef\salamfa@revtmp{#1\salamfa@revtmp}%
+    \expandafter\salamfa@revloop
+  \fi}
+\newcommand{\salamfa@reverse}[1]{%
+  \def\salamfa@revtmp{}%
+  \salamfa@revloop#1\relax
+}
+\newcommand{\salamfa@opswap}[1]{%
+  \salamfa@reverse{#1}%
+  \let\salamfa@opswapped\salamfa@revtmp
+}
+
+\newcommand{\salamfa@laddexp}[1]{\g@addto@macro\salamfa@lineacc{#1}}
+\newcommand{\salamfa@tokC}[2]{%
+  \salamfa@mergeabletrue\salamfa@hasfadigitfalse\salamfa@hasanydigitfalse\salamfa@hasletterfalse
+  \salamfa@mergeloop#2\relax
+  \ifnum\salamfa@brkdepth=\z@\else\salamfa@mergeablefalse\fi
+  \ifsalamfa@mergeable
+    \ifsalamfa@lineopen
+      \salamfa@standalonefalse
+    \else
+      \ifsalamfa@hasanydigit\salamfa@standalonefalse\else
+        \ifsalamfa@hasletter\salamfa@standalonefalse\else\salamfa@standalonetrue\fi
+      \fi
+    \fi
+    \ifsalamfa@standalone
+      \ifsalamfa@spacepending
+        \salamfa@gadd{\space}%
+        \salamfa@spacependingfalse
+      \fi
+      \salamfa@opswap{#2}%
+      \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\latincodefont\salamfa@opswapped}}}%
+      \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
+    \else
+    \salamfa@brkloop#2\relax
+    \ifsalamfa@commapending
+      \g@addto@macro\salamfa@lineacc{,}%
+      \global\salamfa@commapendingfalse
+    \fi
+    \ifsalamfa@spacepending
+      \g@addto@macro\salamfa@lineacc{\space}%
+      \salamfa@spacependingfalse
+    \fi
+    \global\salamfa@lineopentrue
+    \IfEndWith{#2}{,}%
+      {\StrGobbleRight{#2}{1}[\salamfa@tokbody]\global\salamfa@commapendingtrue}%
+      {\def\salamfa@tokbody{#2}}%
+    \ifsalamfa@hasfadigit
+      \edef\salamfa@tokCtmp{\noexpand#1{{\noexpand\salamcodefont\salamfa@tokbody}}}%
+    \else
+      \edef\salamfa@tokCtmp{\noexpand#1{\salamfa@tokbody}}%
+    \fi
+    \expandafter\salamfa@laddexp\expandafter{\salamfa@tokCtmp}%
+    \fi
+  \else
+    \salamfa@lineflush
+    \ifsalamfa@spacepending
+      \salamfa@gadd{\space}%
+      \salamfa@spacependingfalse
+    \fi
+    \salamfa@tokbrk\z@
+    \salamfa@tokbrkloop#2\relax
+    \global\advance\salamfa@brkdepth\salamfa@tokbrk
+    \edef\salamfa@tokCtmp{\noexpand#1{#2}}%
+    \expandafter\salamfa@gadd\expandafter{\salamfa@tokCtmp}%
+  \fi}
+
+\newcommand{\salamfa@id}[1]{#1}
+\newcommand{\salamfaNM}[1]{\textcolor{nm}{#1}}
+
+% --- the line parser ---------------------------------------------------------
+\newcommand{\salamfa@classify}[1]{%
+  \ifsalamfa@linecmt
+    \salamfa@tokC{\cmtword}{#1}%
+  \else\ifsalamfa@incmt
+    \salamfa@tokC{\cmtword}{#1}%
+    \IfBeginWith{#1}{/*}{\global\advance\salamfa@cmtdepth\@ne}{}%
+    \IfEndWith{#1}{*/}{\salamfa@closecmt}{}%
+  \else\ifsalamfa@instr
+    \salamfa@tokC{\stword}{#1}%
+    \IfSubStr{#1}{"}{\salamfa@instrfalse}{}%
+  \else
+    \IfBeginWith{#1}{//}%
+      {\salamfa@lineflush \salamfa@linecmttrue \salamfa@tokC{\cmtword}{#1}}%
+      {\IfBeginWith{#1}{/*}{\salamfa@lineflush\salamfa@opencmt{#1}}{\salamfa@word{#1}}}%
+  \fi\fi\fi}
+
+\newcommand{\salamfa@opencmt}[1]{%
+  \salamfa@tokC{\cmtword}{#1}%
+  \global\salamfa@cmtdepth\@ne \global\salamfa@incmttrue
+  \IfEndWith{#1}{*/}{\salamfa@closecmt}{}}
+\def\salamfa@closecmt{%
+  \global\advance\salamfa@cmtdepth\m@ne
+  \ifnum\salamfa@cmtdepth<\@ne \global\salamfa@incmtfalse\fi}
+
+\newcommand{\salamfa@word}[1]{%
+  \IfBeginWith{#1}{"}%
+    {\StrGobbleLeft{#1}{1}[\salamfa@rest]%
+     \expandafter\IfSubStr\expandafter{\salamfa@rest}{"}%
+       {\salamfa@tokC{\stword}{#1}}%
+       {\salamfa@tokC{\stword}{#1}\salamfa@instrtrue}}%
+    {\ifcsname salamkw@#1\endcsname
+       \salamfa@tokC{\kw}{#1}%
+     \else\ifcsname salamty@#1\endcsname
+       \salamfa@tokC{\tyword}{#1}%
+     \else
+       \StrLeft{#1}{1}[\salamfa@fc]%
+       \ifcsname salamfa@dig@\salamfa@fc\endcsname
+         \salamfa@tokC{\salamfaNM}{#1}%
+       \else
+         \salamfa@tokC{\salamfa@id}{#1}%
+       \fi
+     \fi\fi}}
+
+\newcommand{\salamfa@procline}[1]{%
+  \global\advance\salamfa@nlines\@ne
+  \salamfa@lead=0
+  \salamfa@linecmtfalse \salamfa@instrfalse  %
+  \global\salamfa@lineopenfalse \global\let\salamfa@lineacc\@empty
+  \global\salamfa@spacependingfalse
+  \global\salamfa@commapendingfalse
+  \global\salamfa@brkdepth\z@
+  \ifnum\salamfa@nlines>\@ne \salamfa@gadd{\\}\fi
+  \salamfa@gadd{\strut}%
+  \edef\salamfa@line{\detokenize{#1}\space\salamfa@end\space}%
+  \salamfa@inleadtrue
+  \expandafter\salamfa@loop\salamfa@line
+}
+\def\salamfa@loop#1 {%
+  \def\salamfa@tmp{#1}%
+  \ifx\salamfa@tmp\salamfa@endmac
+    \salamfa@lineflush
+  \else
+    \ifx\salamfa@tmp\@empty
+      \ifsalamfa@inlead \advance\salamfa@lead\@ne \else \salamfa@feedspace \fi
+    \else
+      \ifsalamfa@inlead
+        \salamfa@inleadfalse
+        \ifnum\salamfa@lead>\z@
+          \edef\salamfa@tmp{\noexpand\hspace*{\the\dimexpr\salamfa@lead\salamfa@unit\relax}}%
+          \expandafter\salamfa@gadd\expandafter{\salamfa@tmp}%
+        \fi
+      \else
+        \salamfa@feedspace
+      \fi
+      \salamfa@classify{#1}%
+    \fi
+    \expandafter\salamfa@loop
+  \fi}
+
+\renewcommand{\FancyVerbFormatLine}[1]{\salamfa@procline{#1}}
+\def\salamfa@buildnums{%
+  \gdef\salamfa@nums{}\@tempcnta=0
+  \@whilenum\@tempcnta<\salamfa@nlines\do{%
+    \advance\@tempcnta\@ne
+    \ifnum\@tempcnta=\@ne
+      \xdef\salamfa@nums{\the\@tempcnta}%
+    \else
+      \xdef\salamfa@nums{\salamfa@nums\noexpand\\\the\@tempcnta}%
+    \fi}}
+\newbox\salamfa@scratch
+
+% --- FA code card ------------------------------------------------------------
+\newcommand{\salamfacardnumgap}{0pt}
+\newcommand{\salamfacardbegin}{%
+  \gdef\salamfa@code{}\salamfa@nlines=0
+  \global\salamfa@cmtdepth=0 \global\salamfa@incmtfalse
+  \VerbatimEnvironment
+  \setbox\salamfa@scratch=\vbox\bgroup\begin{Verbatim}}
+\newcommand{\salamfacardend}{%
+  \end{Verbatim}\egroup
+  \salamfa@buildnums
+  \par\noindent
+  \hfuzz=30pt% numbers protrude into the margin by design; don't warn
+  \begin{LTR}%
+    \fcolorbox{black}{bg}{%
+      \begin{minipage}[t]{\dimexpr\linewidth-2\fboxsep-2\fboxrule-\salamfacardnumgap\relax}%
+        \begin{RTL}\raggedleft\salamcodeFAfont\salamfa@code\end{RTL}%
+      \end{minipage}%
+    }%
+    \makebox[0pt][l]{%
+      \hspace{\fboxsep}%
+      \begin{minipage}[t]{3em}%
+        \begin{RTL}\raggedright\salamfa@nums\end{RTL}%
+      \end{minipage}%
+    }%
+  \end{LTR}%
+  \par}
+\newenvironment{salam}{\salamfacardbegin}{\salamfacardend}
+
+% --- FA output boxes -----------------------------------------------------------
+% Look hooks; a host book may \renewcommand these to theme the output boxes.
+\providecommand{\salamfaoutcolor}{black}
+\providecommand{\salamfaoutpad}{2\fboxsep+2\fboxrule}
+\providecommand{\salamfaoutheadfont}{\bfseries}
+\providecommand{\salamfaoutheadcolor}{black}
+
+\newcommand{\salamnumfix}[1]{%
+  \IfSubStr{#1}{.}{%
+    \StrRight{#1}{1}[\salam@lastc]%
+    \ifcsname salamfa@dig@\salam@lastc\endcsname
+      \lr{#1}%
+    \else
+      #1%
+    \fi
+  }{#1}}
+
+\newcommand{\salamfaplainwords}{%
+  \def\kw##1{##1}\def\tyword##1{##1}\def\cmtword##1{##1}%
+  \def\stword##1{##1}\def\nmword##1{\salamnumfix{##1}}}
+\newcommand{\salamfaoutbegin}{%
+  \gdef\salamfa@code{}\salamfa@nlines=0
+  \global\salamfa@cmtdepth=0 \global\salamfa@incmtfalse
+  \VerbatimEnvironment
+  \setbox\salamfa@scratch=\vbox\bgroup\begin{Verbatim}}
+\newcommand{\salamfaoutend}{%
+  \end{Verbatim}\egroup
+  \par\nointerlineskip\noindent
+  \begin{LTR}%
+    \fcolorbox{\salamfaoutcolor}{white}{%
+      \begin{minipage}[t]{\dimexpr\linewidth-(\salamfaoutpad)\relax}%
+        \begin{RTL}\raggedleft\salamcodeFAfont\small
+          \salamfaplainwords\salamfa@code\end{RTL}%
+      \end{minipage}%
+    }%
+  \end{LTR}%
+  \par}
+\newenvironment{progoutfa}{\salamfaoutbegin}{\salamfaoutend}
+\newenvironment{outputfa}{%
+  \par\bigskip\noindent{\salamfaoutheadfont\small\color{\salamfaoutheadcolor}خروجی برنامه}\par\nobreak\vskip1pt
+  \salamfaoutbegin}{\salamfaoutend}
+
+\makeatother

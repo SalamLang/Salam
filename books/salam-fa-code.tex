@@ -1,0 +1,745 @@
+\makeatletter
+
+\providecommand{\latincodefont}{\salamcodeENfont}
+\providecommand{\lr}[1]{\LRE{#1}}
+
+\@for\salamfa@x:=%
+  func,ret,if,else,until,each,in,with,mut,const,type,struct,enum,end,import,as,true,%
+  false,null,this,break,continue,layout,package,print,println,printerr,%
+  printerrln,input,defer,operator,extern,interface,pub,component,repeat,impl,%
+  on,to,by,main,sizeof,spawn,join,link,%
+  تابع,بازگشت,اگر,وگرنه,تاوقتی,هر,در,با,متغیر,ثابت,نوع,ساختار,شمارش,پایان,%
+  واردکردن,بعنوان,درست,نادرست,پوچ,این,بشکن,ادامه,صفحه,بسته,بنویس,چاپ,%
+  خطابنویس,خطاچاپ,بخوان,تعلیق,عملگر,خارجی,واسط,عمومی,مولفه,تکرار,پیاده‌سازی,بر,%
+  اصلی,تا,گام\do{%
+    \expandafter\let\csname salamkw@\salamfa@x\endcsname\@empty}
+
+\@for\salamfa@x:=%
+  void,bool,char,str,i8,i16,i32,int,i64,u8,u16,u32,uint,u64,f32,float,f64,%
+  auto,byte,HashMap,Vector,MapIter,Option,Stack,Queue,Thread,Mutex,WaitGroup,%
+  تهی,منطقی,نویسه,رشته,صحیح۸,صحیح۱۶,صحیح۳۲,صحیح,صحیح۶۴,صحیح8,صحیح16,صحیح32,%
+  صحیح64,طبیعی۸,طبیعی۱۶,طبیعی۳۲,طبیعی,طبیعی۶۴,طبیعی8,طبیعی16,طبیعی32,طبیعی64,%
+  اعشار۳۲,اعشار,اعشار۶۴,اعشار32,اعشار64,خودکار,وکتور,نگاشت\do{%
+    \expandafter\let\csname salamty@\salamfa@x\endcsname\@empty}
+
+% ---------------------------------------------------------------------------
+% How a line is drawn.
+%
+% XeTeX only runs the bidi algorithm inside a single word, so a code line is
+% never handed to it as running text.  Each line is cut into items (words,
+% operator characters, spaces, string literals, comments) and the items are
+% then handed to the right-to-left paragraph one box at a time, with the
+% direction of each box and the shape of each bracket decided here.
+%
+%  * A line holding any persian letter reads right to left from its first
+%    character to its last: the items come out in reverse order and every
+%    operator character is mirrored, so `:=' shows as `=:', `>=' as `=<' and
+%    `(' as `)'.  Only a word or a number keeps its own inner direction.
+%  * A line with no persian letter keeps each space-separated token exactly as
+%    written, but the tokens still run right to left, so the first token of
+%    the line sits against the right edge.
+%  * Inside a string literal or a comment, neighbouring latin words and the
+%    punctuation between them stay together as one left-to-right island, the
+%    way ordinary mixed persian/english text reads.
+% ---------------------------------------------------------------------------
+
+\newdimen\salamfa@unit \salamfa@unit=0.5em
+\newdimen\salamfa@spw  \salamfa@spw=0.4em
+\newcount\salamfa@lead
+\newcount\salamfa@nlines
+\newcount\salamfa@c
+\newcount\salamfa@mode      % 0 code, 1 string, 2 line comment, 3 block comment
+\newcount\salamfa@qchar
+\newcount\salamfa@spc
+\newcount\salamfa@ctx       % 0 code, 1 string, 2 comment, 3 program output
+\newcount\salamfa@signc
+\newif\ifsalamfa@out
+\newif\ifsalamfa@lineP
+\newif\ifsalamfa@started
+\newif\ifsalamfa@esc
+\newif\ifsalamfa@dotp
+\newif\ifsalamfa@slashp
+\newif\ifsalamfa@starp
+\newif\ifsalamfa@lastsig
+\newif\ifsalamfa@wP
+\newif\ifsalamfa@wF
+\newif\ifsalamfa@wnum
+\newif\ifsalamfa@isl
+\newif\ifsalamfa@leadcmt
+\newcommand{\salamfa@code}{}
+\def\salamfa@SP{\salamfa@SP}
+\def\salamfa@END{\salamfa@END}
+\protected\def\salamfa@end{}
+\def\salamfa@endmac{\salamfa@end}
+
+\def\salamfa@gapp#1#2{\xdef#1{\unexpanded\expandafter{#1}\unexpanded{#2}}}
+\def\salamfa@xapp#1#2{\edef\salamfa@t{#2}%
+  \expandafter\salamfa@gapp\expandafter#1\expandafter{\salamfa@t}}
+
+% ---- character classes ------------------------------------------------------
+% 0 neutral, 1 latin letter or _, 2 ascii digit, 3 persian letter,
+% 4 persian digit, 5 neutral drawn with the persian font
+\def\salamfa@classof#1{%
+  \salamfa@c\z@
+  \ifnum`#1<128
+    \ifnum`#1>47 \ifnum`#1<58 \salamfa@c\tw@\fi\fi
+    \ifnum`#1>64 \ifnum`#1<91 \salamfa@c\@ne\fi\fi
+    \ifnum`#1>96 \ifnum`#1<123 \salamfa@c\@ne\fi\fi
+    \ifnum`#1=95 \salamfa@c\@ne\fi
+  \else\ifnum`#1<1536
+    \salamfa@c\@ne
+    \ifnum`#1=171 \salamfa@c5 \fi
+    \ifnum`#1=187 \salamfa@c5 \fi
+  \else\ifnum`#1<1792
+    \salamfa@c\thr@@
+    \ifnum`#1>1775 \ifnum`#1<1786 \salamfa@c4 \fi\fi
+    \ifnum`#1>1631 \ifnum`#1<1642 \salamfa@c4 \fi\fi
+    \ifnum`#1=1548 \salamfa@c5 \fi
+    \ifnum`#1=1563 \salamfa@c5 \fi
+    \ifnum`#1=1567 \salamfa@c5 \fi
+    \ifnum`#1>1641 \ifnum`#1<1646 \salamfa@c5 \fi\fi
+    \ifnum`#1=1748 \salamfa@c5 \fi
+  \else\ifnum`#1<8192
+    \salamfa@c\@ne
+  \else\ifnum`#1<8304
+    \salamfa@c5
+    \ifnum`#1=8204 \salamfa@c\thr@@\fi
+    \ifnum`#1=8205 \salamfa@c\thr@@\fi
+  \else\ifnum`#1<64336
+    \salamfa@c5
+  \else\ifnum`#1<65280
+    \salamfa@c\thr@@
+  \else
+    \salamfa@c5
+  \fi\fi\fi\fi\fi\fi\fi}
+
+% ---- mirrored glyphs ----------------------------------------------------------
+\edef\salamfa@lb{\expandafter\@gobble\string\{}
+\edef\salamfa@rb{\expandafter\@gobble\string\}}
+\def\salamfa@defmir#1#2{\expandafter\xdef\csname salamfa@mir@#1\endcsname{#2}}
+\salamfa@defmir{(}{)}\salamfa@defmir{)}{(}
+\salamfa@defmir{[}{]}\salamfa@defmir{]}{[}
+\salamfa@defmir{<}{>}\salamfa@defmir{>}{<}
+\salamfa@defmir{«}{»}\salamfa@defmir{»}{«}
+\expandafter\salamfa@defmir\expandafter{\salamfa@lb}{\salamfa@rb}
+\expandafter\salamfa@defmir\expandafter{\salamfa@rb}{\salamfa@lb}
+
+% ---- pieces: what finally gets typeset -----------------------------------------
+% xepersian's inter-character hooks rewrite a number such as 12.5 for running
+% text, which scrambles it here, so they are switched off in left-to-right boxes.
+\def\salamfa@pL#1#2{\hbox{\LRE{\XeTeXinterchartokenstate\z@\salamcodeENfont#1{#2}}}}
+\def\salamfa@pF#1#2{\hbox{\LRE{\XeTeXinterchartokenstate\z@
+  \salamcodeFAfont#1{\salamfa@fadots#2\relax}}}}
+\def\salamfa@pP#1#2{\hbox{\RLE{\salamcodeFAfont#1{#2}}}}
+\def\salamfa@pI#1{\hbox{\LRE{\XeTeXinterchartokenstate\z@#1}}}
+% the persian font turns a dot between persian digits into a decimal comma;
+% keep the dot the source actually has
+\def\salamfa@fadots#1{%
+  \ifx#1\relax\else
+    \ifnum`#1=46 \kern\z@.\kern\z@\else#1\fi
+    \expandafter\salamfa@fadots
+  \fi}
+\def\salamfa@pS{\hskip\salamfa@spw\relax}
+
+% ---- lexer ------------------------------------------------------------------------
+\def\salamfa@add#1{%
+  \ifnum\salamfa@mode=\z@ \salamfa@gapp\salamfa@items{#1}%
+  \else \salamfa@gapp\salamfa@sub{#1}\fi}
+\def\salamfa@xadd#1{\edef\salamfa@t{#1}\expandafter\salamfa@add\expandafter{\salamfa@t}}
+
+% spaces are held back until something follows them, so trailing ones vanish
+% and leading ones become the indentation
+\def\salamfa@flushsp{%
+  \ifsalamfa@started
+    \@whilenum\salamfa@spc>\z@\do{\salamfa@add{\salamfa@iS}\advance\salamfa@spc\m@ne}%
+  \else
+    \salamfa@lead\salamfa@spc \salamfa@startedtrue
+  \fi
+  \salamfa@spc\z@}
+
+\def\salamfa@wreset{%
+  \gdef\salamfa@wb{}\salamfa@wPfalse\salamfa@wFfalse\salamfa@wnumfalse}
+
+\def\salamfa@flushword{%
+  \ifx\salamfa@wb\@empty\else
+    \ifsalamfa@wP \def\salamfa@k{P}\else\ifsalamfa@wF \def\salamfa@k{F}\else
+      \def\salamfa@k{L}\fi\fi
+    \salamfa@xadd{\noexpand\salamfa@iW{\salamfa@wb}{\salamfa@k}%
+      {\ifsalamfa@wnum 1\else 0\fi}}%
+    \salamfa@lastsigtrue
+  \fi
+  \salamfa@wreset}
+
+% one operator or punctuation character
+\def\salamfa@op#1{%
+  \salamfa@flushword \salamfa@flushsp
+  \salamfa@classof{#1}%
+  \salamfa@xadd{\noexpand\salamfa@iO{\unexpanded{#1}}{\ifnum\salamfa@c=5 P\else L\fi}}%
+  \salamfa@lastsigfalse
+  \ifnum`#1=41 \salamfa@lastsigtrue\fi
+  \ifnum`#1=93 \salamfa@lastsigtrue\fi
+  \ifnum`#1=125 \salamfa@lastsigtrue\fi}
+
+% settle what the previous character left open, now that the next one (#1)
+% is known: a dot inside a word (p.x, 12.5) and the sign of a number (-5)
+\def\salamfa@resolve#1{%
+  \ifsalamfa@dotp
+    \salamfa@dotpfalse
+    \ifx#1\salamfa@SP \salamfa@op.\else
+      \salamfa@classof{#1}%
+      \ifnum\salamfa@c>\z@ \ifnum\salamfa@c<5
+        \g@addto@macro\salamfa@wb{.}\else\salamfa@op.\fi
+      \else \salamfa@op.\fi
+    \fi
+  \fi
+  \ifnum\salamfa@signc>\z@
+    \ifx#1\salamfa@SP \salamfa@signop\else
+      \salamfa@classof{#1}%
+      \ifnum\salamfa@c=\tw@ \salamfa@signword\else
+      \ifnum\salamfa@c=4 \salamfa@signword\else \salamfa@signop\fi\fi
+    \fi
+    \salamfa@signc\z@
+  \fi}
+\def\salamfa@signword{%
+  \salamfa@flushsp
+  \ifnum\salamfa@signc=45 \gdef\salamfa@wb{-}\else \gdef\salamfa@wb{+}\fi
+  \salamfa@wnumtrue}
+\def\salamfa@signop{%
+  \ifnum\salamfa@signc=45 \salamfa@op-\else \salamfa@op+\fi}
+
+\def\salamfa@wordchar#1{%
+  \ifx\salamfa@wb\@empty
+    \salamfa@flushsp
+    \ifnum\salamfa@c=\tw@ \salamfa@wnumtrue\fi
+    \ifnum\salamfa@c=4 \salamfa@wnumtrue\fi
+  \fi
+  \g@addto@macro\salamfa@wb{#1}%
+  \ifnum\salamfa@c=\thr@@ \salamfa@wPtrue \global\salamfa@linePtrue\fi
+  \ifnum\salamfa@c=4 \salamfa@wFtrue\fi}
+
+\def\salamfa@char#1{%
+  \ifx#1\salamfa@SP
+    \salamfa@resolve{#1}%
+    \ifsalamfa@slashp \salamfa@slashpfalse \salamfa@op/\fi
+    \ifsalamfa@starp \salamfa@starpfalse \salamfa@op*\fi
+    \salamfa@flushword
+    \advance\salamfa@spc\@ne
+  \else
+    \ifsalamfa@out
+      \salamfa@classof{#1}%
+      \ifnum\salamfa@c>\tw@ \global\salamfa@linePtrue\fi
+    \fi
+    \salamfa@charB{#1}%
+  \fi}
+
+\def\salamfa@charB#1{%
+  \ifcase\salamfa@mode
+    % code: a slash may open a comment
+    \ifsalamfa@slashp
+      \salamfa@slashpfalse
+      \ifnum`#1=47 \salamfa@opencmt2\else
+      \ifnum`#1=42 \salamfa@opencmt3\else
+        \salamfa@op/\salamfa@charC{#1}\fi\fi
+    \else \salamfa@charC{#1}\fi
+  \or
+    % string literal
+    \ifsalamfa@esc
+      \salamfa@escfalse \salamfa@c\@ne \salamfa@wordchar{#1}%
+    \else\ifnum`#1=\salamfa@qchar
+      \salamfa@resolve{#1}\salamfa@op{#1}%
+      \global\salamfa@mode\z@
+      \salamfa@xadd{\noexpand\salamfa@iT{\unexpanded\expandafter{\salamfa@sub}}}%
+      \salamfa@lastsigtrue
+    \else\ifnum`#1=92 \ifnum\salamfa@qchar=96 \salamfa@charC{#1}\else
+      \salamfa@resolve{#1}\salamfa@esctrue \salamfa@c\@ne \salamfa@wordchar{#1}\fi
+    \else \salamfa@charC{#1}\fi\fi\fi
+  \or
+    \salamfa@charC{#1}%
+  \or
+    % block comment: look for the closing */
+    \ifsalamfa@starp
+      \salamfa@starpfalse
+      \ifnum`#1=47
+        \salamfa@op*\salamfa@op/\salamfa@closecmt
+      \else \salamfa@op*\salamfa@charD{#1}\fi
+    \else \salamfa@charD{#1}\fi
+  \fi}
+\def\salamfa@charD#1{%
+  \ifnum`#1=42 \salamfa@resolve{#1}\salamfa@flushword\salamfa@starptrue
+  \else \salamfa@charC{#1}\fi}
+
+% what every mode shares: words, numbers and plain operators
+\def\salamfa@charC#1{%
+  \salamfa@resolve{#1}%
+  \salamfa@classof{#1}%
+  \ifnum\salamfa@c>\z@ \ifnum\salamfa@c<5
+    \salamfa@wordchar{#1}%
+  \else \salamfa@charE{#1}\fi
+  \else \salamfa@charE{#1}\fi}
+\def\salamfa@charE#1{%
+  \ifnum`#1=46
+    \ifx\salamfa@wb\@empty \salamfa@op{#1}\else \salamfa@dotptrue\fi
+  \else\ifnum\salamfa@mode=\z@ \salamfa@charF{#1}%
+  \else \salamfa@charG{#1}\fi\fi}
+\def\salamfa@charF#1{%
+  \ifsalamfa@out \salamfa@charG{#1}\else
+  \ifnum`#1=34 \salamfa@openstr{#1}\else
+  \ifnum`#1=39 \salamfa@openstr{#1}\else
+  \ifnum`#1=96 \salamfa@openstr{#1}\else
+  \ifnum`#1=47 \salamfa@flushword\salamfa@slashptrue\else
+    \salamfa@charG{#1}\fi\fi\fi\fi\fi}
+\def\salamfa@charG#1{%
+  \ifx\salamfa@wb\@empty
+    \ifsalamfa@lastsig \salamfa@op{#1}\else
+      \ifnum`#1=45 \salamfa@signc`#1\relax\else
+      \ifnum`#1=43 \salamfa@signc`#1\relax\else \salamfa@op{#1}\fi\fi
+    \fi
+  \else \salamfa@op{#1}\fi}
+
+\def\salamfa@openstr#1{%
+  \salamfa@flushword \salamfa@flushsp
+  \gdef\salamfa@sub{}%
+  \global\salamfa@mode\@ne \salamfa@qchar`#1\relax
+  \salamfa@op{#1}}
+
+\def\salamfa@opencmt#1{%
+  \salamfa@flushword \salamfa@flushsp
+  \gdef\salamfa@sub{}%
+  \ifnum#1=\tw@
+    \gdef\salamfa@cmark{\salamfa@iO{/}{L}\salamfa@iO{/}{L}}%
+  \else
+    \gdef\salamfa@cmark{\salamfa@iO{/}{L}\salamfa@iO{*}{L}}%
+  \fi
+  \global\salamfa@mode#1\relax}
+\def\salamfa@emitcmt{%
+  \salamfa@flushword
+  \salamfa@spc\z@
+  \edef\salamfa@t{\noexpand\salamfa@iC{\unexpanded\expandafter{\salamfa@cmark}}%
+    {\unexpanded\expandafter{\salamfa@sub}}}%
+  \expandafter\salamfa@gapp\expandafter\salamfa@items\expandafter{\salamfa@t}%
+  \gdef\salamfa@sub{}\gdef\salamfa@cmark{}}
+\def\salamfa@closecmt{%
+  \global\salamfa@mode\z@
+  \salamfa@emitcmt
+  \salamfa@lastsigfalse}
+
+\def\salamfa@lex#1{%
+  \ifx#1\salamfa@END\else
+    \salamfa@char{#1}%
+    \expandafter\salamfa@lex
+  \fi}
+
+% cut the detokenized line at its spaces
+\def\salamfa@split#1 {%
+  \def\salamfa@tmp{#1}%
+  \ifx\salamfa@tmp\salamfa@endmac\else
+    \g@addto@macro\salamfa@chars{#1\salamfa@SP}%
+    \expandafter\salamfa@split
+  \fi}
+
+% ---- layout -------------------------------------------------------------------------
+% The line itself is a right-to-left paragraph, so pieces are handed over in
+% reading order and TeX lays them out from the right edge.  Every piece is a
+% box, which is what lets a long line wrap onto the next row in the right
+% order.  A left-to-right island goes in as one box.
+\def\salamfa@pre#1{\xdef\salamfa@vis{\unexpanded\expandafter{\salamfa@vis}\unexpanded{#1}}}
+\def\salamfa@preI#1{\ifx#1\@empty\else
+  \edef\salamfa@t{\noexpand\salamfa@pI{\unexpanded\expandafter{#1}}}%
+  \expandafter\salamfa@pre\expandafter{\salamfa@t}\fi}
+
+% style of a word, given its text (#1) and whether it is a number (#2)
+\def\salamfa@setsty#1#2{%
+  \ifcase\salamfa@ctx
+    \ifcsname salamkw@#1\endcsname \def\salamfa@sty{\kw}%
+    \else\ifcsname salamty@#1\endcsname \def\salamfa@sty{\tyword}%
+    \else\ifnum#2=\@ne \def\salamfa@sty{\salamfaNM}%
+    \else \def\salamfa@sty{\salamfa@id}\fi\fi\fi
+  \or \def\salamfa@sty{\stword}%
+  \or \def\salamfa@sty{\cmtword}%
+  \or \def\salamfa@sty{\salamfa@id}%
+  \fi}
+\def\salamfa@setopsty{%
+  \ifcase\salamfa@ctx \def\salamfa@sty{\salamfa@id}%
+  \or \def\salamfa@sty{\stword}%
+  \or \def\salamfa@sty{\cmtword}%
+  \or \def\salamfa@sty{\salamfa@id}\fi}
+
+% build \salamfa@piece for a word, or for an operator (#3 = 1 mirrors it)
+\def\salamfa@mkW#1#2#3{%
+  \salamfa@setsty{#1}{#3}%
+  \if#2P\def\salamfa@k{\salamfa@pP}\else
+  \if#2F\def\salamfa@k{\salamfa@pF}\else \def\salamfa@k{\salamfa@pL}\fi\fi
+  \edef\salamfa@piece{\expandafter\noexpand\salamfa@k
+    {\expandafter\noexpand\salamfa@sty}{\unexpanded{#1}}}}
+\def\salamfa@mkO#1#2#3{%
+  \salamfa@setopsty
+  \def\salamfa@m{#1}%
+  \ifnum#3=\@ne
+    \ifcsname salamfa@mir@#1\endcsname
+      \edef\salamfa@m{\csname salamfa@mir@#1\endcsname}\fi
+  \fi
+  \if#2P\def\salamfa@k{\salamfa@pF}\else \def\salamfa@k{\salamfa@pL}\fi
+  \edef\salamfa@piece{\expandafter\noexpand\salamfa@k
+    {\expandafter\noexpand\salamfa@sty}{\unexpanded\expandafter{\salamfa@m}}}}
+
+% handlers that append in reading order, inside a left-to-right run
+\def\salamfa@hLtr#1{%
+  \def\salamfa@iW##1##2##3{\salamfa@mkW{##1}{##2}{##3}%
+    \expandafter\salamfa@gapp\expandafter#1\expandafter{\salamfa@piece}}%
+  \def\salamfa@iO##1##2{\salamfa@mkO{##1}{##2}0%
+    \expandafter\salamfa@gapp\expandafter#1\expandafter{\salamfa@piece}}%
+  \def\salamfa@iS{\salamfa@gapp#1{\salamfa@pS}}}
+
+% handlers for a right-to-left code line: everything comes out reversed
+\def\salamfa@hRcode{%
+  \def\salamfa@iW##1##2##3{\salamfa@mkW{##1}{##2}{##3}%
+    \expandafter\salamfa@pre\expandafter{\salamfa@piece}}%
+  \def\salamfa@iO##1##2{\salamfa@mkO{##1}{##2}1%
+    \expandafter\salamfa@pre\expandafter{\salamfa@piece}}%
+  \def\salamfa@iS{\salamfa@pre{\salamfa@pS}}%
+  \def\salamfa@iT##1{\begingroup\salamfa@ctx\@ne\salamfa@hRtext
+    ##1\salamfa@closeisl\endgroup}%
+  \def\salamfa@iC##1##2{\begingroup\salamfa@ctx\tw@\salamfa@hRtext
+    ##1##2\salamfa@closeisl\endgroup}}
+
+% handlers for right-to-left running text: latin words, and the punctuation
+% between two of them, form left-to-right islands
+\def\salamfa@hRtext{%
+  \global\salamfa@islfalse
+  \gdef\salamfa@islb{}\gdef\salamfa@pendL{}\gdef\salamfa@pendR{}%
+  \def\salamfa@iW##1##2##3{\salamfa@mkW{##1}{##2}{##3}%
+    \if##2L%
+      \ifsalamfa@isl
+        \expandafter\salamfa@gapp\expandafter\salamfa@islb\expandafter{\salamfa@pendL}%
+        \gdef\salamfa@pendL{}\gdef\salamfa@pendR{}%
+      \else \global\salamfa@isltrue \fi
+      \expandafter\salamfa@gapp\expandafter\salamfa@islb\expandafter{\salamfa@piece}%
+    \else
+      \let\salamfa@savepiece\salamfa@piece
+      \salamfa@closeisl
+      \expandafter\salamfa@pre\expandafter{\salamfa@savepiece}%
+    \fi}%
+  \def\salamfa@iO##1##2{%
+    \ifsalamfa@isl
+      \salamfa@mkO{##1}{##2}0%
+      \expandafter\salamfa@gapp\expandafter\salamfa@pendL\expandafter{\salamfa@piece}%
+      \salamfa@mkO{##1}{##2}1%
+      \salamfa@xapp\salamfa@pendR{\noexpand\salamfa@pre{\unexpanded\expandafter{\salamfa@piece}}}%
+    \else
+      \salamfa@mkO{##1}{##2}1%
+      \expandafter\salamfa@pre\expandafter{\salamfa@piece}%
+    \fi}%
+  \def\salamfa@iS{%
+    \ifsalamfa@isl
+      \salamfa@gapp\salamfa@pendL{\salamfa@pS}%
+      \salamfa@gapp\salamfa@pendR{\salamfa@pre{\salamfa@pS}}%
+    \else \salamfa@pre{\salamfa@pS}\fi}}
+\def\salamfa@closeisl{%
+  \ifsalamfa@isl
+    \global\salamfa@islfalse
+    \salamfa@preI\salamfa@islb
+    \salamfa@pendR
+    \gdef\salamfa@islb{}\gdef\salamfa@pendL{}\gdef\salamfa@pendR{}%
+  \fi}
+
+% handlers for a latin code line: tokens right to left, each kept as written
+\def\salamfa@flushtok{%
+  \salamfa@preI\salamfa@tokb
+  \gdef\salamfa@tokb{}}
+\def\salamfa@hLcode{%
+  \gdef\salamfa@tokb{}%
+  \salamfa@hLtr\salamfa@tokb
+  \def\salamfa@iS{\salamfa@flushtok\salamfa@pre{\salamfa@pS}}%
+  \def\salamfa@iT##1{\begingroup\salamfa@ctx\@ne
+    \salamfa@hLtr\salamfa@tokb ##1\endgroup}%
+  % a comment: the // marker first, then its text as one left-to-right run
+  \def\salamfa@iC##1##2{\salamfa@flushtok
+    \begingroup\salamfa@ctx\tw@
+      \gdef\salamfa@cmtb{}\salamfa@hLtr\salamfa@cmtb ##1%
+      \salamfa@preI\salamfa@cmtb
+      \gdef\salamfa@cmtb{}%
+      \salamfa@leadcmttrue
+      \def\salamfa@iS{\ifsalamfa@leadcmt\salamfa@pre{\salamfa@pS}\else
+        \salamfa@gapp\salamfa@cmtb{\salamfa@pS}\fi}%
+      \def\salamfa@iW####1####2####3{\salamfa@leadcmtfalse
+        \salamfa@mkW{####1}{####2}{####3}%
+        \expandafter\salamfa@gapp\expandafter\salamfa@cmtb\expandafter{\salamfa@piece}}%
+      \def\salamfa@iO####1####2{\salamfa@leadcmtfalse\salamfa@mkO{####1}{####2}0%
+        \expandafter\salamfa@gapp\expandafter\salamfa@cmtb\expandafter{\salamfa@piece}}%
+      ##2%
+      \salamfa@preI\salamfa@cmtb
+    \endgroup}}
+
+% ---- arithmetic islands --------------------------------------------------------
+% An expression made of numbers and latin names, such as 2026 - 2008 or
+% p.x * p.x + p.y, must keep its left-to-right order: read backwards, a minus
+% or a division means something else.  Such a run is drawn as one
+% left-to-right box, in persian lines and latin lines alike.  It may hold
+% spaces, + - * / % ^ and balanced brackets, but it needs at least one of those
+% operators, and a bracket glued to a persian name (a call or an index on
+% it) never opens one, so an expression led by a persian name still reads
+% right to left.
+%
+% The items of a line are first copied into numbered slots with a join code:
+% 0 never joins, 1 operand, 2 operator, 3 space, 4 opening, 5 closing bracket.
+\newcount\salamfa@n
+\newcount\salamfa@N
+\newif\ifsalamfa@prevP
+\newif\ifsalamfa@go
+\newif\ifsalamfa@hasop
+\def\salamfa@J#1{\csname salamfa@J\number#1\endcsname}
+\def\salamfa@store#1#2{%
+  \global\advance\salamfa@N\@ne
+  \expandafter\gdef\csname salamfa@A\the\salamfa@N\endcsname{#1}%
+  \expandafter\xdef\csname salamfa@J\the\salamfa@N\endcsname{#2}%
+  \expandafter\global\expandafter\let\csname salamfa@I\the\salamfa@N\endcsname\relax}
+\def\salamfa@jof#1{%
+  \def\salamfa@j{0}%
+  \ifnum`#1=43 \def\salamfa@j{2}\fi
+  \ifnum`#1=45 \def\salamfa@j{2}\fi
+  \ifnum`#1=42 \def\salamfa@j{2}\fi
+  \ifnum`#1=47 \def\salamfa@j{2}\fi
+  \ifnum`#1=37 \def\salamfa@j{2}\fi
+  \ifnum`#1=94 \def\salamfa@j{2}\fi
+  \ifnum`#1=41 \def\salamfa@j{5}\fi
+  \ifnum`#1=93 \def\salamfa@j{5}\fi
+  \ifsalamfa@prevP\else
+    \ifnum`#1=40 \def\salamfa@j{4}\fi
+    \ifnum`#1=91 \def\salamfa@j{4}\fi
+  \fi}
+\def\salamfa@collect{%
+  \global\salamfa@N\z@ \global\salamfa@prevPfalse
+  \def\salamfa@iW##1##2##3{%
+    \if##2P\salamfa@store{\salamfa@iW{##1}{##2}{##3}}{0}\global\salamfa@prevPtrue
+    \else \salamfa@store{\salamfa@iW{##1}{##2}{##3}}{1}\global\salamfa@prevPfalse\fi}%
+  \def\salamfa@iO##1##2{\salamfa@jof{##1}%
+    \salamfa@store{\salamfa@iO{##1}{##2}}{\salamfa@j}\global\salamfa@prevPfalse}%
+  \def\salamfa@iS{\salamfa@store{\salamfa@iS}{3}\global\salamfa@prevPfalse}%
+  \def\salamfa@iT##1{\salamfa@store{\salamfa@iT{##1}}{0}\global\salamfa@prevPfalse}%
+  \def\salamfa@iC##1##2{\salamfa@store{\salamfa@iC{##1}{##2}}{0}\global\salamfa@prevPfalse}%
+  \salamfa@items}
+
+% find the maximal joinable runs, then cut each one down to islands
+\def\salamfa@markislands{%
+  \salamfa@n\@ne \salamfa@runloop}
+\def\salamfa@runloop{%
+  \ifnum\salamfa@n>\salamfa@N\else
+    \ifnum\salamfa@J\salamfa@n>\z@
+      \@tempcnta\salamfa@n
+      \salamfa@runend
+      \edef\salamfa@t{\noexpand\salamfa@proc{\the\@tempcnta}{\the\numexpr\salamfa@n-1\relax}}%
+      \salamfa@t
+    \else \advance\salamfa@n\@ne \fi
+    \expandafter\salamfa@runloop
+  \fi}
+\def\salamfa@runend{%
+  \salamfa@gofalse
+  \ifnum\salamfa@n>\salamfa@N\else
+    \ifnum\salamfa@J\salamfa@n>\z@ \salamfa@gotrue\fi
+  \fi
+  \ifsalamfa@go \advance\salamfa@n\@ne \expandafter\salamfa@runend\fi}
+
+% slots #1..#2: trim the edges, split at an unmatched bracket, and mark what
+% is left as an island if it holds an operator
+\newcount\salamfa@kk
+\newcount\salamfa@depth
+\newcount\salamfa@cut
+\def\salamfa@proc#1#2{%
+  \begingroup
+  \@tempcnta#1\relax \@tempcntb#2\relax
+  \loop
+    \salamfa@gofalse
+    \ifnum\@tempcnta>\@tempcntb\else
+      \ifcase\salamfa@J\@tempcnta \or\or \salamfa@gotrue\or \salamfa@gotrue\or\or
+        \salamfa@gotrue\fi
+    \fi
+    \ifsalamfa@go \advance\@tempcnta\@ne \repeat
+  \loop
+    \salamfa@gofalse
+    \ifnum\@tempcnta>\@tempcntb\else
+      \ifcase\salamfa@J\@tempcntb \or\or \salamfa@gotrue\or \salamfa@gotrue\or
+        \salamfa@gotrue\fi
+    \fi
+    \ifsalamfa@go \advance\@tempcntb\m@ne \repeat
+  \ifnum\@tempcnta>\@tempcntb
+    \endgroup
+  \else
+    \salamfa@cut\z@ \salamfa@hasopfalse
+    % a closing bracket with no opener, scanning forward
+    \salamfa@depth\z@ \salamfa@kk\@tempcnta
+    \loop
+      \ifnum\salamfa@J\salamfa@kk=2 \salamfa@hasoptrue\fi
+      \ifnum\salamfa@J\salamfa@kk=4 \advance\salamfa@depth\@ne\fi
+      \ifnum\salamfa@J\salamfa@kk=5
+        \ifnum\salamfa@depth=\z@
+          \ifnum\salamfa@cut=\z@ \salamfa@cut\salamfa@kk\fi
+        \else \advance\salamfa@depth\m@ne\fi
+      \fi
+      \advance\salamfa@kk\@ne
+      \ifnum\salamfa@kk>\@tempcntb\else \repeat
+    % otherwise an opening bracket with no closer, scanning backward
+    \ifnum\salamfa@cut=\z@
+      \salamfa@depth\z@ \salamfa@kk\@tempcntb
+      \loop
+        \ifnum\salamfa@J\salamfa@kk=5 \advance\salamfa@depth\@ne\fi
+        \ifnum\salamfa@J\salamfa@kk=4
+          \ifnum\salamfa@depth=\z@
+            \ifnum\salamfa@cut=\z@ \salamfa@cut\salamfa@kk\fi
+          \else \advance\salamfa@depth\m@ne\fi
+        \fi
+        \advance\salamfa@kk\m@ne
+        \ifnum\salamfa@kk<\@tempcnta\else \repeat
+    \fi
+    \ifnum\salamfa@cut=\z@
+      \ifsalamfa@hasop
+        \expandafter\xdef\csname salamfa@I\the\@tempcnta\endcsname{\the\@tempcntb}%
+      \fi
+      \endgroup
+    \else
+      \edef\salamfa@t{%
+        \noexpand\salamfa@proc{\the\@tempcnta}{\the\numexpr\salamfa@cut-1\relax}%
+        \noexpand\salamfa@proc{\the\numexpr\salamfa@cut+1\relax}{\the\@tempcntb}}%
+      \expandafter\endgroup\salamfa@t
+    \fi
+  \fi}
+
+% lay the slots out with the current handlers, an island as a single run
+\def\salamfa@rloop{%
+  \ifnum\salamfa@n>\salamfa@N\else
+    \expandafter\ifx\csname salamfa@I\the\salamfa@n\endcsname\relax
+      \csname salamfa@A\the\salamfa@n\endcsname
+      \advance\salamfa@n\@ne
+    \else
+      \edef\salamfa@e{\csname salamfa@I\the\salamfa@n\endcsname}%
+      \begingroup
+        \gdef\salamfa@islx{}\salamfa@hLtr\salamfa@islx
+        \salamfa@iloop
+      \endgroup
+      \salamfa@putisland
+      \salamfa@n\salamfa@e\relax \advance\salamfa@n\@ne
+    \fi
+    \expandafter\salamfa@rloop
+  \fi}
+\def\salamfa@iloop{%
+  \ifnum\salamfa@n>\salamfa@e\else
+    \csname salamfa@A\the\salamfa@n\endcsname
+    \advance\salamfa@n\@ne
+    \expandafter\salamfa@iloop
+  \fi}
+
+\newcommand{\salamfa@id}[1]{#1}
+\newcommand{\salamfaNM}[1]{\textcolor{nm}{#1}}
+
+\newcommand{\salamfa@procline}[1]{%
+  \global\advance\salamfa@nlines\@ne
+  \begingroup
+  \salamfa@lead\z@ \salamfa@spc\z@ \salamfa@startedfalse
+  \salamfa@escfalse \salamfa@dotpfalse \salamfa@slashpfalse \salamfa@starpfalse
+  \salamfa@lastsigfalse \salamfa@signc\z@ \salamfa@wreset
+  \global\salamfa@linePfalse
+  \gdef\salamfa@items{}\gdef\salamfa@vis{}\gdef\salamfa@chars{}%
+  \ifnum\salamfa@mode=\thr@@
+    \salamfa@startedtrue \gdef\salamfa@sub{}\gdef\salamfa@cmark{}%
+  \else \global\salamfa@mode\z@ \fi
+  \edef\salamfa@line{\detokenize{#1}\space\salamfa@end\space}%
+  \expandafter\salamfa@split\salamfa@line
+  \expandafter\salamfa@lex\salamfa@chars\salamfa@END
+  % close whatever the end of the line leaves open
+  \ifsalamfa@slashp \salamfa@op/\fi
+  \ifsalamfa@starp \salamfa@op*\fi
+  \ifsalamfa@dotp \salamfa@dotpfalse \salamfa@op.\fi
+  \ifnum\salamfa@signc>\z@ \salamfa@signop \salamfa@signc\z@ \fi
+  \salamfa@flushword
+  \ifcase\salamfa@mode
+  \or \global\salamfa@mode\z@
+      \salamfa@xadd{\noexpand\salamfa@iT{\unexpanded\expandafter{\salamfa@sub}}}%
+  \or \global\salamfa@mode\z@ \salamfa@emitcmt
+  \or \salamfa@emitcmt
+  \fi
+  % lay the items out
+  \ifsalamfa@out
+    \salamfa@ctx\thr@@
+    \ifsalamfa@lineP \salamfa@hRtext \salamfa@items \salamfa@closeisl
+    \else
+      \gdef\salamfa@tokb{}\salamfa@hLtr\salamfa@tokb
+      \salamfa@items \salamfa@flushtok
+    \fi
+  \else
+    \salamfa@ctx\z@
+    \salamfa@collect \salamfa@markislands
+    \ifsalamfa@lineP
+      \salamfa@hRcode \def\salamfa@putisland{\salamfa@preI\salamfa@islx}%
+    \else
+      \salamfa@hLcode \def\salamfa@putisland{%
+        \expandafter\salamfa@gapp\expandafter\salamfa@tokb\expandafter{\salamfa@islx}}%
+    \fi
+    \salamfa@n\@ne \salamfa@rloop
+    \ifsalamfa@lineP\else \salamfa@flushtok \fi
+  \fi
+  \xdef\salamfa@code{\unexpanded\expandafter{\salamfa@code}%
+    \ifnum\salamfa@nlines>\@ne \noexpand\\\fi
+    \noexpand\strut
+    \ifsalamfa@out\else \noexpand\salamfa@num{\the\salamfa@nlines}\fi
+    \ifnum\salamfa@lead>\z@
+      \noexpand\hspace*{\the\dimexpr\salamfa@lead\salamfa@unit\relax}\fi
+    \unexpanded\expandafter{\salamfa@vis}}%
+  \endgroup}
+
+\renewcommand{\FancyVerbFormatLine}[1]{\salamfa@procline{#1}}
+\newbox\salamfa@scratch
+
+% The line number rides on the line itself, as a zero-width box at its right
+% end that hangs out past the frame, so a line that wraps keeps its number on
+% its first row and the numbers below stay in step.
+\def\salamfa@num#1{%
+  \LRE{\hbox to\z@{\hskip\dimexpr2\fboxsep+\fboxrule\relax
+    {\normalfont\color{black}#1}\hss}}}
+
+\newcommand{\salamfacardnumgap}{0pt}
+\newcommand{\salamfacardbegin}{%
+  \gdef\salamfa@code{}\global\salamfa@nlines=0
+  \global\salamfa@mode\z@ \salamfa@outfalse
+  \VerbatimEnvironment
+  \setbox\salamfa@scratch=\vbox\bgroup\begin{Verbatim}}
+\newcommand{\salamfacardend}{%
+  \end{Verbatim}\egroup
+  \par\noindent
+  \hfuzz=30pt%
+  \begin{LTR}%
+    \fcolorbox{black}{bg}{%
+      \begin{minipage}[t]{\dimexpr\linewidth-2\fboxsep-2\fboxrule-\salamfacardnumgap\relax}%
+        \begin{RTL}\raggedleft\salamcodeFAfont\salamfa@code\end{RTL}%
+      \end{minipage}%
+    }%
+  \end{LTR}%
+  \par}
+\newenvironment{salamfa}{\salamfacardbegin}{\salamfacardend}
+
+\providecommand{\salamfaoutcolor}{black}
+\providecommand{\salamfaoutpad}{2\fboxsep+2\fboxrule}
+\providecommand{\salamfaoutheadfont}{\bfseries}
+\providecommand{\salamfaoutheadcolor}{black}
+
+\newcommand{\salamfaoutbegin}{%
+  \gdef\salamfa@code{}\global\salamfa@nlines=0
+  \global\salamfa@mode\z@ \salamfa@outtrue
+  \VerbatimEnvironment
+  \setbox\salamfa@scratch=\vbox\bgroup\begin{Verbatim}}
+\newcommand{\salamfaoutend}{%
+  \end{Verbatim}\egroup
+  \par\nointerlineskip\noindent
+  \begin{LTR}%
+    \fcolorbox{\salamfaoutcolor}{white}{%
+      \begin{minipage}[t]{\dimexpr\linewidth-(\salamfaoutpad)\relax}%
+        \begin{RTL}\raggedleft\salamcodeFAfont\small
+          \salamfa@code\end{RTL}%
+      \end{minipage}%
+    }%
+  \end{LTR}%
+  \par}
+\newenvironment{progoutfa}{\salamfaoutbegin}{\salamfaoutend}
+\newenvironment{outputfa}{%
+  \par\bigskip\noindent{\salamfaoutheadfont\small\color{\salamfaoutheadcolor}خروجی برنامه}\par\nobreak\vskip1pt
+  \salamfaoutbegin}{\salamfaoutend}
+
+\makeatother

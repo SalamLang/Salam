@@ -178,7 +178,7 @@ rm -rf "$DIST"
 
 render "$HERE/homebrew/salam.rb" "$DIST/homebrew/salam.rb"
 render "$HERE/aur/salam-bin/PKGBUILD" "$DIST/aur/salam-bin/PKGBUILD"
-render "$HERE/aur/salamlang/PKGBUILD"    "$DIST/aur/salamlang/PKGBUILD"
+render "$HERE/aur/salamlang/PKGBUILD" "$DIST/aur/salamlang/PKGBUILD"
 render "$HERE/rpm/salam.spec" "$DIST/rpm/salam.spec"
 render "$HERE/alpine/APKBUILD" "$DIST/alpine/APKBUILD"
 render "$HERE/nix/package.nix" "$DIST/nix/package.nix"

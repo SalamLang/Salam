@@ -30,6 +30,15 @@ func sw_types_comparable(s &: Sema, ta: int, tb: int): bool:
     ret type_is_numeric(s, ta) && type_is_numeric(s, tb) && type_common_arith(s, ta, tb) >= 0
 end
 
+func sw_check_label(s &: Sema, a &: at.Ast, nid: int, subj: int): int:
+    if is_int_lit(a, nid) && type_is_integer(s, subj):
+        s.expected = subj
+    end
+    lt := sema_check_expr(s, a, nid)
+    s.expected = TYPE_NONE
+    ret lt
+end
+
 func sw_item_is_ordered(op: int): bool:
     ret op == tok.TK_KW_TO || op == tok.TK_GT || op == tok.TK_GE || op == tok.TK_LT || op == tok.TK_LE
 end
@@ -115,7 +124,7 @@ func check_switch_item(
         _mt := sema_check_expr(s, a, at.Get(a, item).a)
         ret
     end
-    vt := sema_check_expr(s, a, itn.a)
+    vt := sw_check_label(s, a, itn.a, subj)
     if !sw_types_comparable(s, subj, vt):
         serr(
             s, 21, isp, co.Format2(
@@ -140,7 +149,7 @@ func check_switch_item(
         end
     end
     if itn.op == tok.TK_KW_TO:
-        ht := sema_check_expr(s, a, at.Get(a, item).c)
+        ht := sw_check_label(s, a, at.Get(a, item).c, subj)
         if !sw_types_comparable(s, subj, ht):
             serr(
                 s, 21, span_of(a, at.Get(a, item).c), co.Format2(
@@ -149,6 +158,44 @@ func check_switch_item(
             )
         end
     end
+end
+
+func sw_check_enum_exhaustive(s &: Sema, a &: at.Ast, nid: int, subj: int, seen_members: Vector<int>):
+    syid := ty_at(s, subj).decl
+    if syid == 0 || sym_at(s, syid).members == 0:
+        ret
+    end
+    msyms := scope_at(s, sym_at(s, syid).members).symbols
+    mut missing := ""
+    mut nmissing := 0
+    repeat msyms.len() with mi:
+        mid := msyms.get(mi)
+        if sym_at(s, mid).kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        mut covered := false
+        repeat seen_members.len() with k:
+            if seen_members.get(k) == mid:
+                covered = true
+                break
+            end
+        end
+        if !covered:
+            if nmissing > 0:
+                missing = missing + ", "
+            end
+            missing = missing + sym_at(s, mid).name
+            nmissing += 1
+        end
+    end
+    if nmissing == 0:
+        ret
+    end
+    serr(
+        s, 103, span_of(a, nid), co.Format2(
+            i18.Tr("switch on enum '%s' does not cover: %s; add the missing cases or an 'else'"), co.ArgStr(sym_at(s, syid).name), co.ArgStr(missing)
+        )
+    )
 end
 
 func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
@@ -168,16 +215,25 @@ func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
     mut seen_lits := Vector {} as Vector<int>
     defer seen_lits.free()
 
+    mut has_else := false
+    mut only_members := true
+    errs_before := s.diag.errors
     s.switch_depth += 1
     mut ci := 0
     until ci < at.ChildCount(a, nid):
         cs := at.Child(a, nid, ci)
         ci += 1
-        if at.Get(a, cs).op != tok.TK_KW_ELSE:
+        if at.Get(a, cs).op == tok.TK_KW_ELSE:
+            has_else = true
+        else:
             mut ii := 0
             until ii < at.ChildCount(a, cs):
                 item := at.Child(a, cs, ii)
                 ii += 1
+                itk := at.KindOf(a, at.Get(a, item).a)
+                if at.Get(a, item).op != 0 || (itk != at.AST_IDENTIFIER && itk != at.AST_MEMBER):
+                    only_members = false
+                end
                 check_switch_item(
                     s, a, item, subj, subj_is_enum, ordered_ok, seen_members, seen_lits
                 )
@@ -186,5 +242,8 @@ func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
         sema_check_block(s, a, at.Get(a, cs).b)
     end
     s.switch_depth -= 1
+    if subj_is_enum && !has_else && only_members && s.diag.errors == errs_before:
+        sw_check_enum_exhaustive(s, a, nid, subj, seen_members)
+    end
     _dt := sema_decorate(s, a, nid, sema_ty(s, TY_VOID))
 end

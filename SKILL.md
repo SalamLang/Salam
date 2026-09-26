@@ -218,9 +218,11 @@ end
 - **`switch true:`** with boolean labels replaces an if/else chain that tests
   different conditions (`x < 0:`, `x == 0 || name == "zero":`, ...): the first
   true label wins.
-- **No exhaustiveness check** - unlike `match` on an enum/`Variant`, a
-  `switch` with no matching label and no `else` simply does nothing, by
-  design.
+- **Enum subjects must be covered** - a `switch` on an enum (or on an alias
+  of one, `type Paint = Color`) with no `else` must list every member, or it
+  is compile error E103 naming the missing members. Members may be written
+  through the enum or the alias (`Paint.Red`, `Color.Green`). For other
+  subjects, a `switch` with no matching label and no `else` does nothing.
 - **Not usable on a `Variant`** subject - that is a semantic error that tells
   you to use `match`'s type patterns instead (see §3).
 - Prefer `switch` for C-style fallthrough or open-ended relational/range
@@ -313,7 +315,11 @@ a literal backtick, or when it needs an escape sequence (`\n`, `\uXXXX`, …)
 that backtick strings don't process.
 
 **Type aliases:** `type NodeId = int`, `type Bytes = u8*` gives a new name for an
-existing type (declared at top level, before functions).
+existing type (declared at top level, before functions). An alias is the same
+type as its target, so values mix freely; type errors that involve a written
+alias name it, e.g. `cannot pass 'i32' to 'Age' ('Years' is an alias of 'Age')`.
+An alias of an enum reaches its members too: `type Paint = Color` then
+`Paint.Red`.
 
 **Casts & typed literals with `as`:**
 
@@ -1153,12 +1159,14 @@ naive port into compile errors (each corresponds to a case in
    top-level `if` must be a **compile-time constant** condition (see §8).
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
-10. **`match` on a `Variant` must be exhaustive** and use valid type/member
+10. **`match` on an enum or a `Variant` must be exhaustive** (or have an
+    `else`) - both as a statement and as an expression - and use valid type/member
     patterns. Enum `match` patterns must be real members. **`switch` is the
-    non-exhaustive, fallthrough alternative** - it cannot be used on a
-    `Variant` at all (§2, §3, §12.2).
-11. **Enum members need a comma separator** (`,` or `،`) - a bare newline
-    between members is a compile error, since member names may contain
+    fallthrough alternative** - on an enum it must still cover every member
+    or have an `else` (E103); it cannot be used on a `Variant` at all (§2,
+    §3, §12.2).
+11. **Enum members are separated by a comma** (`,` or `،`) **or a newline** -
+    on a single line the comma is required, since member names may contain
     spaces.
 12. **Types are checked strictly**: no implicit narrowing; use `as`. Ternary
     branches must share a type; a condition must be `bool`. Array-literal length
@@ -1527,7 +1535,7 @@ two closing angle brackets, not a shift.
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `typedef struct { … } T;`                    | `struct T: … end` (fields default private → add `pub`)                                                                      |
 | `union { … }` / tagged union                 | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                                                |
-| `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (comma between members is required, not just style)                                                  |
+| `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (members on one line need commas; one per line needs none)                                           |
 | `#define NAME 3` (const)                     | `const NAME := 3`                                                                                                           |
 | `#define MAX(a,b) …` (macro fn)              | `inline func Max(a: int, b: int): int: … end`                                                                               |
 | `#ifdef` / `#if` / platform `#ifdef _WIN32`  | `@if`-style top-level `if SALAM_OS_WINDOWS:` on compile-time constants (§8)                                                 |

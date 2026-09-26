@@ -185,8 +185,38 @@ func nt_emit_llvm_link(spec: str, kind: str): str:
     ret " -l" + nt_shell_arg(spec)
 end
 
+func nt_wasi_sdk_clang(): str:
+    mut exe := "clang"
+    if SALAM_OS_WINDOWS:
+        exe = "clang.exe"
+    end
+    roots := [os.Env("WASI_SDK_PATH"), pth.PathJoin(os.Env("HOME"), ".salam/wasi-sdk"), "/opt/wasi-sdk"]
+    repeat 3 with i:
+        if str.Len(roots[i]) > 0:
+            cand := pth.PathJoin(pth.PathJoin(roots[i], "bin"), exe)
+            if os.Exists(cand):
+                ret cand
+            end
+        end
+    end
+    ret ""
+end
+
+func nt_clang_link_triple(t: str): str:
+    if str.Equals(t, "wasm32-wasi") || str.Equals(t, "wasm32-unknown-wasi"):
+        ret "wasm32-wasip1"
+    end
+    ret t
+end
+
 func nt_emit_tool_cmd(opts: Options): str:
-    clang_tool := nt_resolve_tool("clang", "clang-22")
+    mut clang_tool := nt_resolve_tool("clang", "clang-22")
+    if opts.output_mode == LV_OUT_EXEC && nt_triple_is_wasm(opts.target_triple):
+        wasi_clang := nt_wasi_sdk_clang()
+        if str.Len(wasi_clang) > 0:
+            clang_tool = wasi_clang
+        end
+    end
     opt_tool := nt_resolve_tool("opt", "opt-22")
     lli_tool := nt_resolve_tool("lli", "lli-22")
     o_flag := nt_opt_flag(opts.opt_level)
@@ -220,7 +250,7 @@ func nt_emit_tool_cmd(opts: Options): str:
         wasm := nt_triple_is_wasm(triple)
         out += `"` + clang_tool + `" ` + o_flag
         if str.Len(triple) > 0:
-            out += " --target=" + triple
+            out += " --target=" + nt_clang_link_triple(triple)
         else opts.native_cpu:
             out += " -march=native"
         end
@@ -247,6 +277,15 @@ func nt_emit_tool_cmd(opts: Options): str:
         end
         if !win && !wasm:
             out += " -lm"
+        end
+        if wasm:
+            out += " -Wno-override-module"
+            if !opts.debug_info:
+                out += " -Wl,--strip-all"
+            end
+        end
+        if wasm && str.Contains(triple, "wasi"):
+            out += " -lwasi-emulated-signal"
         end
         out += " -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_JIT:

@@ -6,6 +6,62 @@ import tok "../token.salam"
 import at "../ast.salam"
 import i18 "../i18n.salam"
 
+func interp_case_item_matches(
+    ip &: Interp, a &: at.Ast, env: int, item: int, subj: Value
+): bool:
+    itn := at.Get(a, item)
+    if itn.op == tok.TK_KW_TO:
+        lo := eval(ip, a, env, itn.a)
+        if ip.failed:
+            ret false
+        end
+        hi := eval(ip, a, env, itn.c)
+        if ip.failed:
+            ret false
+        end
+        ret value_cmp(subj, lo) >= 0 && value_cmp(subj, hi) <= 0
+    end
+    val := eval(ip, a, env, itn.a)
+    if ip.failed:
+        ret false
+    end
+    if itn.op == 0 || itn.op == tok.TK_EQ:
+        ret value_eq(subj, val)
+    end
+    if itn.op == tok.TK_NE:
+        ret !value_eq(subj, val)
+    end
+    c := value_cmp(subj, val)
+    if itn.op == tok.TK_GT:
+        ret c > 0
+    end
+    if itn.op == tok.TK_GE:
+        ret c >= 0
+    end
+    if itn.op == tok.TK_LT:
+        ret c < 0
+    end
+    ret c <= 0
+end
+
+func interp_case_matches(ip &: Interp, a &: at.Ast, env: int, cs: int, subj: Value): bool:
+    csn := at.Get(a, cs)
+    println "DEBUG case op=", csn.op, " TK_KW_ELSE=", tok.TK_KW_ELSE, " childcount=", at.ChildCount(a, cs)
+    if csn.op == tok.TK_KW_ELSE:
+        ret true
+    end
+    repeat at.ChildCount(a, cs) with i:
+        item := at.Child(a, cs, i)
+        if interp_case_item_matches(ip, a, env, item, subj):
+            ret true
+        end
+        if ip.failed:
+            ret false
+        end
+    end
+    ret false
+end
+
 func interp_match_arm(
     ip &: Interp, a &: at.Ast, env: int, arm: int, subj: Value
 ): bool:
@@ -571,6 +627,35 @@ func exec_stmt(
             ret FLOW_NORMAL
         end
         ret exec_scoped(ip, a, env, fr, at.Get(a, arm).b, retv)
+    end
+    if k == at.AST_SWITCH:
+        subj2 := eval(ip, a, env, node.a)
+        println "DEBUG switch subj eval done, failed=", ip.failed, " children=", at.ChildCount(a, n)
+        if ip.failed:
+            ret FLOW_NORMAL
+        end
+        mut matched := false
+        mut ci := 0
+        until ci >= at.ChildCount(a, n):
+            cs := at.Child(a, n, ci)
+            ci += 1
+            if !matched:
+                matched = interp_case_matches(ip, a, env, cs, subj2)
+                if ip.failed:
+                    ret FLOW_NORMAL
+                end
+            end
+            if matched:
+                f := exec_scoped(ip, a, env, fr, at.Get(a, cs).b, retv)
+                if f == FLOW_BREAK:
+                    ret FLOW_NORMAL
+                end
+                if f != FLOW_NORMAL:
+                    ret f
+                end
+            end
+        end
+        ret FLOW_NORMAL
     end
     if k == at.AST_RETURN:
         if node.a != 0:

@@ -148,6 +148,50 @@ func lv_if(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_label(v, endL)
 end
 
+func lv_switch_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
+    node := at.Get(a, n)
+    n2 := node.list.len()
+    if n2 == 0:
+        _unused_subject := lv_expr(v, s, a, node.a)
+        ret
+    end
+    subject := lv_expr(v, s, a, node.a)
+    endL := new_lbl(v, "swend")
+    mut bodyLbls := Vector {} as Vector<str>
+    defer bodyLbls.free()
+    repeat n2:
+        bodyLbls.push(new_lbl(v, "swbody"))
+    end
+    mut i := 0
+    until i < n2:
+        csid := node.list.get(i)
+        cond := lv_case_cond(v, s, a, csid, subject)
+        nextTestL := (i + 1 < n2) ? new_lbl(v, "swtest") : endL
+        emit_term(v, "br i1 " + cond + ", label %" + bodyLbls.get(i) + ", label %" + nextTestL)
+        if i + 1 < n2:
+            emit_label(v, nextTestL)
+        end
+        i += 1
+    end
+    if v.nloop >= 64:
+        lv_error(v, a, n, "switch nesting too deep")
+        ret
+    end
+    parent_cont := v.nloop > 0 ? v.cont.get(v.nloop - 1) : ""
+    loop_push(v, endL, parent_cont)
+    mut i2 := 0
+    until i2 < n2:
+        emit_label(v, bodyLbls.get(i2))
+        csid2 := node.list.get(i2)
+        stmts_scoped(v, s, a, at.Get(a, csid2).b)
+        nextBodyL := (i2 + 1 < n2) ? bodyLbls.get(i2 + 1) : endL
+        emit_term(v, "br label %" + nextBodyL)
+        i2 += 1
+    end
+    v.nloop -= 1
+    emit_label(v, endL)
+end
+
 func lv_match_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     if node.list.len() == 0:
@@ -430,6 +474,10 @@ func lv_stmt(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     end
     if k == at.AST_MATCH:
         lv_match_stmt(v, s, a, n)
+        ret
+    end
+    if k == at.AST_SWITCH:
+        lv_switch_stmt(v, s, a, n)
         ret
     end
     if k == at.AST_UNTIL:

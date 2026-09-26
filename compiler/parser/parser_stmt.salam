@@ -71,6 +71,9 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
     if k == tok.TK_KW_MATCH:
         ret parse_match(p, a)
     end
+    if k == tok.TK_KW_SWITCH:
+        ret parse_switch(p, a)
+    end
     if k == tok.TK_KW_RET:
         ret parse_return(p, a)
     end
@@ -322,6 +325,86 @@ func parse_match(p &: Ps, a &: at.Ast): int:
         end
     end
     p_expect(p, tok.TK_KW_END, "'end' to close match")
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func p_at_case_rel_op(p &: Ps): bool:
+    k := p_peek(p).kind
+    ret k == tok.TK_GT || k == tok.TK_GE || k == tok.TK_LT || k == tok.TK_LE || k == tok.TK_NE || k == tok.TK_EQ
+end
+
+func parse_case_item(p &: Ps, a &: at.Ast): int:
+    it := p_mk(p, a, at.AST_CASE_ITEM)
+    if p_at_case_rel_op(p):
+        at.SetOp(a, it, p_peek(p).kind)
+        p_advance(p)
+        ps_set_a(a, it, parse_cond_expr(p, a))
+    else:
+        lo := parse_cond_expr(p, a)
+        if p_match(p, tok.TK_KW_TO):
+            at.SetOp(a, it, tok.TK_KW_TO)
+            ps_set_a(a, it, lo)
+            ps_set_c(a, it, parse_cond_expr(p, a))
+        else:
+            ps_set_a(a, it, lo)
+        end
+    end
+    p_fin(p, a, it)
+    ret it
+end
+
+func parse_case(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "switch_case")
+    if !p_recurse_enter(p, "switch case nested too deeply"):
+        ret p_mk(p, a, at.AST_CASE)
+    end
+    cs := p_mk(p, a, at.AST_CASE)
+    if p_match(p, tok.TK_KW_ELSE):
+        at.SetOp(a, cs, tok.TK_KW_ELSE)
+    else:
+        mut go := true
+        until go:
+            at.AddChild(a, cs, parse_case_item(p, a))
+            go = p_match(p, tok.TK_COMMA)
+        end
+    end
+    ps_set_b(a, cs, parse_block(p, a))
+    p_fin(p, a, cs)
+    p_recurse_leave(p)
+    ret cs
+end
+
+func parse_switch(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "switch_stmt")
+    if !p_recurse_enter(p, "switch nested too deeply"):
+        ret p_mk(p, a, at.AST_SWITCH)
+    end
+    n := p_mk(p, a, at.AST_SWITCH)
+    p_advance(p)
+    ps_set_a(a, n, parse_cond_expr(p, a))
+    p_expect(p, tok.TK_COLON, "':' after switch subject")
+    p_skip_terminators(p)
+    mut seen_else := false
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        if seen_else:
+            p_error(p, "'else' must be the last case in a switch")
+        end
+        cs := parse_case(p, a)
+        if at.Get(a, cs).op == tok.TK_KW_ELSE:
+            seen_else = true
+        end
+        at.AddChild(a, n, cs)
+        p_skip_terminators(p)
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    if at.ChildCount(a, n) == 0:
+        p_error(p, "'switch' must contain at least one case")
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close switch")
     p_fin(p, a, n)
     p_recurse_leave(p)
     ret n

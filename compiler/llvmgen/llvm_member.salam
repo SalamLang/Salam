@@ -504,6 +504,105 @@ func match_variant_tag_cond(
     ret r
 end
 
+func llvm_icmp_pred(op: int, want_signed: bool): str:
+    if op == tok.TK_GT:
+        ret want_signed ? "sgt" : "ugt"
+    end
+    if op == tok.TK_GE:
+        ret want_signed ? "sge" : "uge"
+    end
+    if op == tok.TK_LT:
+        ret want_signed ? "slt" : "ult"
+    end
+    if op == tok.TK_LE:
+        ret want_signed ? "sle" : "ule"
+    end
+    if op == tok.TK_NE:
+        ret "ne"
+    end
+    ret "eq"
+end
+
+func llvm_fcmp_pred(op: int): str:
+    if op == tok.TK_GT:
+        ret "ogt"
+    end
+    if op == tok.TK_GE:
+        ret "oge"
+    end
+    if op == tok.TK_LT:
+        ret "olt"
+    end
+    if op == tok.TK_LE:
+        ret "ole"
+    end
+    if op == tok.TK_NE:
+        ret "one"
+    end
+    ret "oeq"
+end
+
+func match_pat_rel(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, subj: Llv, val_head: int, op: int
+): str:
+    pv := lv_expr(v, s, a, val_head)
+    if is_str(s, subj.ts):
+        c := new_tmp(v)
+        r := new_tmp(v)
+        emit(v, c + " = call i32 @strcmp(ptr " + subj.ref + ", ptr " + pv.ref + ")")
+        emit(v, r + " = icmp " + llvm_icmp_pred(op, true) + " i32 " + c + ", 0")
+        ret r
+    end
+    cv := conv(v, s, a, pv, subj.ts)
+    r2 := new_tmp(v)
+    if is_float(subj.ts):
+        emit(
+            v, r2 + " = fcmp " + llvm_fcmp_pred(op) + " " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
+    else:
+        emit(
+            v, r2 + " = icmp " + llvm_icmp_pred(op, is_signed_ts(subj.ts)) + " " + ty_of(v, s, a, subj.ts) + " " + subj.ref + ", " + cv
+        )
+    end
+    ret r2
+end
+
+func lv_case_item_cond(v &: Lv, s &: sm.Sema, a &: at.Ast, item: int, subj: Llv): str:
+    itn := at.Get(a, item)
+    if itn.op == tok.TK_KW_TO:
+        lo := match_pat_rel(v, s, a, subj, itn.a, tok.TK_GE)
+        hi := match_pat_rel(v, s, a, subj, itn.c, tok.TK_LE)
+        r := new_tmp(v)
+        emit(v, r + " = and i1 " + lo + ", " + hi)
+        ret r
+    end
+    if itn.op == 0:
+        ret match_pat_eq(v, s, a, subj, itn.a)
+    end
+    ret match_pat_rel(v, s, a, subj, itn.a, itn.op)
+end
+
+func lv_case_cond(v &: Lv, s &: sm.Sema, a &: at.Ast, cs: int, subj: Llv): str:
+    csn := at.Get(a, cs)
+    if csn.op == tok.TK_KW_ELSE:
+        ret "true"
+    end
+    mut acc := ""
+    mut i := 0
+    until i < csn.list.len():
+        c := lv_case_item_cond(v, s, a, csn.list.get(i), subj)
+        if str.Len(acc) == 0:
+            acc = c
+        else:
+            r := new_tmp(v)
+            emit(v, r + " = or i1 " + acc + ", " + c)
+            acc = r
+        end
+        i += 1
+    end
+    ret str.Len(acc) > 0 ? acc : "false"
+end
+
 func lv_match_arm_cond(
     v &: Lv, s &: sm.Sema, a &: at.Ast, arm: int, subj: Llv, is_variant: bool
 ): str:

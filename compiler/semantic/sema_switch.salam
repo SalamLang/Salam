@@ -1,0 +1,190 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+import co "../sal_core.salam"
+import tok "../token.salam"
+import at "../ast.salam"
+import i18 "../i18n.salam"
+
+func sw_types_comparable(s &: Sema, ta: int, tb: int): bool:
+    if type_is_error(s, ta) || type_is_error(s, tb):
+        ret true
+    end
+    if type_equiv(s, ta, tb):
+        ret true
+    end
+    ret type_is_numeric(s, ta) && type_is_numeric(s, tb) && type_common_arith(s, ta, tb) >= 0
+end
+
+func sw_item_is_ordered(op: int): bool:
+    ret op == tok.TK_KW_TO || op == tok.TK_GT || op == tok.TK_GE || op == tok.TK_LT || op == tok.TK_LE
+end
+
+func sw_lit_equal(a &: at.Ast, x: int, y: int): bool:
+    xv := at.Get(a, x)
+    yv := at.Get(a, y)
+    if xv.value_kind != yv.value_kind:
+        ret false
+    end
+    if xv.value_kind == tok.TV_INT:
+        ret xv.value_int == yv.value_int
+    end
+    if xv.value_kind == tok.TV_STRING:
+        ret str.Equals(xv.value_str, yv.value_str)
+    end
+    if xv.value_kind == tok.TV_BOOL:
+        ret xv.value_bool == yv.value_bool
+    end
+    if xv.value_kind == tok.TV_CHAR:
+        ret xv.value_int == yv.value_int
+    end
+    ret false
+end
+
+func check_switch_item(
+    s &: Sema, a &: at.Ast, item: int, subj: int, subj_is_enum: bool, ordered_ok: bool, seen_members &: Vector<int>, seen_lits &: Vector<int>
+):
+    itn := at.Get(a, item)
+    isp := span_of(a, item)
+    ordered := sw_item_is_ordered(itn.op)
+    if ordered && !ordered_ok:
+        serr(
+            s, 102, isp, i18.Tr("a relational or range case label requires a numeric or string switch subject")
+        )
+    end
+    ak := at.KindOf(a, itn.a)
+    if itn.op == 0 && subj_is_enum && (ak == at.AST_IDENTIFIER || ak == at.AST_MEMBER):
+        syd := ty_at(s, subj).decl
+        pname := ak == at.AST_IDENTIFIER ? at.Get(a, itn.a).name : at.Get(a, itn.a).name
+        mut m := 0
+        if syd != 0 && sym_at(s, syd).members != 0:
+            m = scope_lookup_local(s, sym_at(s, syd).members, pname)
+        end
+        if m == 0:
+            serr(
+                s, 16, span_of(a, itn.a), co.Format2(
+                    i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(syd != 0 ? sym_at(s, syd).name : "?"), co.ArgStr(pname)
+                )
+            )
+            ret
+        end
+        mut dup := false
+        repeat seen_members.len() with k:
+            if seen_members.get(k) == m:
+                dup = true
+                break
+            end
+        end
+        if dup:
+            serr(
+                s, 101, isp, co.Format1(i18.Tr("duplicate case value '%s'"), co.ArgStr(pname))
+            )
+        else:
+            seen_members.push(m)
+        end
+        if ak == at.AST_IDENTIFIER:
+            mem := new_node_at(a, at.AST_MEMBER, span_of(a, itn.a))
+            idn := new_node_at(a, at.AST_IDENTIFIER, span_of(a, itn.a))
+            mut iv := at.Get(a, idn)
+            iv.synthetic = true
+            iv.name = sym_at(s, syd).name
+            at.Put(a, idn, iv)
+            mut mv := at.Get(a, mem)
+            mv.synthetic = true
+            mv.a = idn
+            mv.name = pname
+            at.Put(a, mem, mv)
+            mut iv2 := at.Get(a, item)
+            iv2.a = mem
+            at.Put(a, item, iv2)
+        end
+        _mt := sema_check_expr(s, a, at.Get(a, item).a)
+        ret
+    end
+    vt := sema_check_expr(s, a, itn.a)
+    if !sw_types_comparable(s, subj, vt):
+        serr(
+            s, 21, isp, co.Format2(
+                i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_to_string(s, subj)), co.ArgStr(type_to_string(s, vt))
+            )
+        )
+    end
+    if itn.op == 0 && !subj_is_enum && ak == at.AST_LITERAL:
+        mut dup2 := false
+        repeat seen_lits.len() with k2:
+            if sw_lit_equal(a, seen_lits.get(k2), itn.a):
+                dup2 = true
+                break
+            end
+        end
+        if dup2:
+            serr(
+                s, 101, isp, i18.Tr("duplicate case value")
+            )
+        else:
+            seen_lits.push(itn.a)
+        end
+    end
+    if itn.op == tok.TK_KW_TO:
+        ht := sema_check_expr(s, a, at.Get(a, item).c)
+        if !sw_types_comparable(s, subj, ht):
+            serr(
+                s, 21, span_of(a, at.Get(a, item).c), co.Format2(
+                    i18.Tr("cannot compare '%s' and '%s'"), co.ArgStr(type_to_string(s, subj)), co.ArgStr(type_to_string(s, ht))
+                )
+            )
+        end
+    end
+end
+
+func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
+    s.expected = TYPE_NONE
+    subj := sema_check_expr(s, a, at.Get(a, nid).a)
+    subj_is_enum := subj >= 0 && ty_at(s, subj).kind == TY_ENUM
+    subj_is_variant := subj >= 0 && ty_at(s, subj).kind == TY_VARIANT
+    ordered_ok := type_is_numeric(s, subj) || ty_at(s, subj).kind == TY_STR
+    if subj_is_variant:
+        serr(
+            s, 21, span_of(a, at.Get(a, nid).a), i18.Tr("'switch' cannot dispatch on a Variant value; use 'match' instead")
+        )
+    end
+
+    mut seen_members := Vector {} as Vector<int>
+    defer seen_members.free()
+    mut seen_lits := Vector {} as Vector<int>
+    defer seen_lits.free()
+
+    s.switch_depth += 1
+    mut ci := 0
+    until ci < at.ChildCount(a, nid):
+        cs := at.Child(a, nid, ci)
+        ci += 1
+        if at.Get(a, cs).op != tok.TK_KW_ELSE:
+            mut ii := 0
+            until ii < at.ChildCount(a, cs):
+                item := at.Child(a, cs, ii)
+                ii += 1
+                check_switch_item(
+                    s, a, item, subj, subj_is_enum, ordered_ok, seen_members, seen_lits
+                )
+            end
+        end
+        sema_check_block(s, a, at.Get(a, cs).b)
+    end
+    s.switch_depth -= 1
+    _dt := sema_decorate(s, a, nid, sema_ty(s, TY_VOID))
+end

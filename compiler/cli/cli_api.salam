@@ -16,6 +16,32 @@ func format_mem_gib(mem_bytes: i64): str:
     ret co.I64Toa(tenths / 10) + "." + co.I64Toa(tenths % 10) + " GiB"
 end
 
+func receipt_field(text: str, key: str): str:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    prefix := key + "="
+    repeat lines.len() with i:
+        line := lines.get(i)
+        if str.StartsWith(line, prefix):
+            ret str.TrimRight(str.Substr(line, str.Len(prefix), str.Len(line) - str.Len(prefix)))
+        end
+    end
+    ret ""
+end
+
+func origin_desc(): str:
+    receipt := sm.ReadReleaseReceipt()
+    if str.Equals(receipt_field(receipt, "channel"), "release"):
+        tag := receipt_field(receipt, "tag")
+        ret str.Len(tag) > 0 ? "official release build (" + tag + ")" : "official release build"
+    end
+    dirty := str.Len(co.GIT_DIRTY) > 0
+    if str.Equals(co.GIT_COMMIT, "unknown"):
+        ret "built from source (no git metadata)"
+    end
+    ret dirty ? "built from source (local build, uncommitted changes)" : "built from source (local build)"
+end
+
 pub func ParseArgs(args: Vector<str>, out &: dr.Dr): bool:
     out = dr.NewOptions()
     start := dispatch_command(args, out)
@@ -56,7 +82,7 @@ Commands:
   run      [file.salam] [build options]         Build (auto-detect entry) + run, no artifacts kept
   exec     [file.salam] [--timeout=MS]           Run with the tree-walking interpreter (no C toolchain)
   new      [name] [--lang=en|fa]                 Scaffold a new project directory
-  format   [files/dirs...] [--check] [-r] [--tabs]  Format .salam source in place (recursive)
+  format   [files/dirs...] [--check] [-r] [--tabs] [--exclude=PAT]  Format .salam source in place (recursive)
   doc      [path] [--output=FILE] [--lang=CODE]     Generate a self-contained API doc.html from a
                                                 project directory (default '.') or a single file
   translate en|fa [files|dir] [--lang=CODE] [--rewrite] [--output=PATH]
@@ -178,6 +204,21 @@ Format options:
                            reordering only; anything it can't safely move on
                            its own, e.g. inside 'extern:' blocks or platform
                            'if' blocks, is left in place and reported)
+  --exclude=PATTERN        Skip files/dirs matching PATTERN (repeatable); a
+                           directory match prunes the whole subtree. No '/'
+                           matches the basename at any depth (e.g. '*.gen.
+                           salam', 'vendor'); with a '/' it anchors against
+                           the path from the input root (e.g. 'tests/fixtures/**').
+                           '*' matches within one path segment, '**' across
+                           segments, '?' matches one character
+  --include=PATTERN        Only format files matching PATTERN (repeatable;
+                           same glob syntax as --exclude); --exclude still
+                           removes matches from this set
+  --exclude-from=FILE      Read more --exclude patterns from FILE, one per
+                           line ('#' comments and blank lines skipped;
+                           repeatable)
+  A '.salamfmtignore' file in the current directory, if present, is read
+  the same way and merged in automatically.
   --lang=CODE              Language pack of the source (fa=Persian)
 
 Translate options (salam translate en|fa [files|dir]):
@@ -234,6 +275,7 @@ pub func VersionText(short_form: bool): str:
     out = out + "commit:  " + co.GIT_COMMIT + co.GIT_DIRTY + "\n"
     out = out + "date:    " + co.GIT_DATE + "\n"
     out = out + "built:   " + co.BUILD_DATE + "\n"
+    out = out + "origin:  " + origin_desc() + "\n"
     out = out + "os:      " + platform.OS() + "\n"
     out = out + "arch:    " + platform.Arch() + "\n"
     out = out + "cpus:    " + co.I64Toa(platform.CpuCount() as i64) + "\n"
@@ -250,6 +292,9 @@ pub func RunCommand(args: Vector<str>): int:
     defer opt.inputs.free()
     defer opt.run_args.free()
     defer opt.defines.free()
+    defer opt.fmt_exclude.free()
+    defer opt.fmt_include.free()
+    defer opt.fmt_exclude_from.free()
 
     if !ParseArgs(args, opt):
         ret 2

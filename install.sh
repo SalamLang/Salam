@@ -1304,6 +1304,15 @@ done
 
 chmod +x "$INSTALL_DIR/salam" 2>/dev/null || true
 
+{
+    printf 'channel=release\n'
+    printf 'tag=%s\n' "$TAG"
+    printf 'version=%s\n' "$VERSION"
+    printf 'platform=%s\n' "$PLATFORM"
+    printf 'installed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    printf 'installer=install.sh\n'
+} >"$INSTALL_DIR/.salam-release" 2>/dev/null || true
+
 if [ "$KERNEL" = "mac" ] && command -v xattr >/dev/null 2>&1; then
     xattr -dr com.apple.quarantine "$INSTALL_DIR" >/dev/null 2>&1 || true
 fi

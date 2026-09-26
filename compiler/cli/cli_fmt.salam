@@ -3,6 +3,7 @@ package cli
 import os
 import io
 import str
+import regex
 import pth "../sal_path.salam"
 import dr "../driver/driver.salam"
 import lg "../logger.salam"
@@ -15,6 +16,85 @@ import sf "../sal_fmt.salam"
 
 func has_salam_ext(name: str): bool:
     ret str.EndsWith(name, ".salam")
+end
+
+func glob_to_regex(pat: str): str:
+    n := str.Len(pat)
+    mut out := "^"
+    mut i := 0
+    until i < n:
+        c := byte_at(pat, i)
+        if c == 42 && i + 1 < n && byte_at(pat, i + 1) == 42:
+            out = out + ".*"
+            i += 2
+        else c == 42:
+            out = out + "[^/]*"
+            i += 1
+        else c == 63:
+            out = out + "[^/]"
+            i += 1
+        else c == 46 || c == 43 || c == 40 || c == 41 || c == 91 || c == 93 || c == 123 || c == 125 || c == 94 || c == 36 || c == 124 || c == 92:
+            out = out + "\\" + str.Substr(pat, i, 1)
+            i += 1
+        else:
+            out = out + str.Substr(pat, i, 1)
+            i += 1
+        end
+    end
+    ret out + "$"
+end
+
+func norm_rel_path(p: str): str:
+    mut s := p
+    until str.StartsWith(s, "./"):
+        s = str.Substr(s, 2, str.Len(s) - 2)
+    end
+    ret s
+end
+
+func path_matches(pattern: str, rel_path: str): bool:
+    target := str.Contains(pattern, "/") ? norm_rel_path(rel_path) : pth.PathBase(rel_path)
+    ret regex.MatchStr(glob_to_regex(pattern), target)
+end
+
+func any_pattern_matches(patterns: Vector<str>, rel_path: str): bool:
+    repeat patterns.len() with i:
+        if path_matches(patterns.get(i), rel_path):
+            ret true
+        end
+    end
+    ret false
+end
+
+func path_excluded(c &: FmtCtx, path: str): bool:
+    ret c.exclude.len() > 0 && any_pattern_matches(c.exclude, path)
+end
+
+func path_included(c &: FmtCtx, path: str): bool:
+    ret c.include.len() == 0 || any_pattern_matches(c.include, path)
+end
+
+func copy_patterns(dst &: Vector<str>, src: Vector<str>):
+    repeat src.len() with i:
+        dst.push(src.get(i))
+    end
+end
+
+func load_ignore_file(path: str, out &: Vector<str>): bool:
+    if !os.Exists(path) || os.IsDir(path):
+        ret false
+    end
+    text := os.ReadFile(path)
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    repeat lines.len() with i:
+        line := str.TrimRight(str.TrimLeft(lines.get(i)))
+        if str.Len(line) == 0 || str.StartsWith(line, "#"):
+            continue
+        end
+        out.push(line)
+    end
+    ret true
 end
 
 func fmt_one_file(c &: FmtCtx, path: str):
@@ -84,10 +164,18 @@ func fmt_walk(c &: FmtCtx, dir: str):
             continue
         end
         child := pth.PathJoin(dir, name)
+        if path_excluded(c, child):
+            c.skipped += 1
+            continue
+        end
         if os.IsDir(child):
             fmt_walk(c, child)
         else has_salam_ext(name):
-            fmt_one_file(c, child)
+            if path_included(c, child):
+                fmt_one_file(c, child)
+            else:
+                c.skipped += 1
+            end
         end
     end
 end
@@ -99,18 +187,35 @@ func fmt_cmd(opt &: dr.Dr): int:
         ret 2
     end
     mut c := FmtCtx {}
+    defer c.exclude.free()
+    defer c.include.free()
     c.check = opt.fmt_check
     c.fix_order = opt.fmt_fix_order
     c.minify = opt.fmt_minify
     c.tabs = opt.fmt_tabs
     c.width = opt.fmt_indent_width
     c.pack = pack
+    copy_patterns(c.exclude, opt.fmt_exclude)
+    copy_patterns(c.include, opt.fmt_include)
+    repeat opt.fmt_exclude_from.len() with i:
+        f := opt.fmt_exclude_from.get(i)
+        if !load_ignore_file(f, c.exclude):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot read --exclude-from file '%s'"), co.ArgStr(f)))
+            ret 2
+        end
+    end
+    load_ignore_file(".salamfmtignore", c.exclude)
     if opt.inputs.len() == 0:
         fmt_walk(c, ".")
     else:
         repeat opt.inputs.len() with i:
             p := opt.inputs.get(i)
-            if os.IsDir(p):
+            is_dir := os.IsDir(p)
+            if path_excluded(c, p):
+                c.skipped += 1
+            else !is_dir && !path_included(c, p):
+                c.skipped += 1
+            else is_dir:
                 fmt_walk(c, p)
             else:
                 fmt_one_file(c, p)
@@ -131,6 +236,9 @@ func fmt_cmd(opt &: dr.Dr): int:
         println co.Format2(
             i18.Tr("done: %d formatted, %d unchanged"), co.ArgInt(c.changed as i64), co.ArgInt(c.ok as i64)
         )
+    end
+    if c.skipped > 0:
+        println co.Format2(i18.Tr("skipped: %d file%s (--exclude/--include)"), co.ArgInt(c.skipped as i64), co.ArgStr(plural_suffix(c.skipped)))
     end
     mut rc := 0
     if c.errors > 0:

@@ -47,12 +47,61 @@ func norm_ident(text: str): str:
     ret r
 end
 
+func spaced_keyword_end(L &: Lx, k: int): int:
+    if k != tok.TK_KW_FALSE:
+        ret 0
+    end
+    mut j := 0
+    until L.pos + j < L.n && byte_at(L.s, L.pos + j) == 32:
+        j += 1
+    end
+    if j == 0 || L.pos + j >= L.n || !is_ident_start(byte_at(L.s, L.pos + j)):
+        ret 0
+    end
+    mut e := L.pos + j
+    until e < L.n && is_ident_cont(byte_at(L.s, e)):
+        e += 1
+    end
+    ret e
+end
+
+func input_starts_name(L &: Lx): bool:
+    mut j := 0
+    until L.pos + j < L.n && byte_at(L.s, L.pos + j) == 32:
+        j += 1
+    end
+    if j == 0 || L.pos + j >= L.n || !is_ident_start(byte_at(L.s, L.pos + j)):
+        ret false
+    end
+    mut e := L.pos + j
+    until e < L.n && is_ident_cont(byte_at(L.s, e)):
+        e += 1
+    end
+    word := str.SubstrIn(L.s, L.pos + j, e - L.pos - j)
+    ret lp.LookupKeywordIn(L.pack, word, false) == tok.TK_IDENT
+end
+
 func scan_ident(L &: Lx):
     start := L.pos
     b := lx_pos(L)
     skip_ident(L)
-    raw := lex_slice(L, start)
-    k := lp.LookupKeyword(L.pack, raw)
+    mut raw := lex_slice(L, start)
+    mut k := lp.LookupKeywordIn(L.pack, raw, L.rep_header)
+    if k == tok.TK_KW_INPUT && input_starts_name(L):
+        k = tok.TK_IDENT
+    end
+    e := spaced_keyword_end(L, k)
+    if e > 0:
+        cand := str.SubstrIn(L.s, start, e - start)
+        k2 := lp.LookupKeywordIn(L.pack, cand, false)
+        if k2 == tok.TK_KW_PRINTERR || k2 == tok.TK_KW_PRINTERRLN:
+            k = k2
+            repeat e - L.pos:
+                adv(L)
+            end
+            raw = lex_slice(L, start)
+        end
+    end
     mut text := raw
     if k == tok.TK_IDENT && !L.keep_comments:
         canon := lp.CanonWord(L.pack, raw)
@@ -65,6 +114,9 @@ func scan_ident(L &: Lx):
     end
     if k == tok.TK_KW_COMPONENT:
         L.comp_header = true
+    end
+    if k == tok.TK_KW_REPEAT:
+        L.rep_header = true
     end
 end
 

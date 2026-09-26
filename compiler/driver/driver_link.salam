@@ -5,137 +5,137 @@ import str
 import pth "../sal_path.salam"
 import lg "../logger.salam"
 
-    func abort_message(base: str, failed: Vector<str>): str:
-        if failed.len() == 0:
-            ret base
-        end
-        ret base + " (" + str.Join(failed, ", ") + ")"
+func abort_message(base: str, failed: Vector<str>): str:
+    if failed.len() == 0:
+        ret base
     end
+    ret base + " (" + str.Join(failed, ", ") + ")"
+end
 
-    func link_spec_is_path(spec: str): bool:
-        if str.Contains(spec, "/") || str.Contains(spec, "\\"):
+func link_spec_is_path(spec: str): bool:
+    if str.Contains(spec, "/") || str.Contains(spec, "\\"):
+        ret true
+    end
+    exts := [".a", ".so", ".dll", ".lib", ".dylib"]
+    repeat 5 with i:
+        ext := exts[i]
+        if str.Len(spec) > str.Len(ext) && str.EndsWith(spec, ext):
             ret true
         end
-        exts := [".a", ".so", ".dll", ".lib", ".dylib"]
-        repeat 5 with i:
-            ext := exts[i]
-            if str.Len(spec) > str.Len(ext) && str.EndsWith(spec, ext):
-                ret true
-            end
-        end
-        ret false
     end
+    ret false
+end
 
-    func shell_arg(s: str): str:
-        mut b := str.NewBuilder()
-        if SALAM_OS_WINDOWS:
-            str.BufAppendChar(b, 34)
-            n := str.Len(s)
-            repeat n with i:
-                c := byte_at(s, i)
-                if c == 34:
-                    str.BufAppend(b, `\"`)
-                else:
-                    str.BufAppendChar(b, c)
-                end
-            end
-            str.BufAppendChar(b, 34)
-        else:
-            str.BufAppendChar(b, 39)
-            n := str.Len(s)
-            repeat n with i:
-                c := byte_at(s, i)
-                if c == 39:
-                    str.BufAppend(b, "'\\''")
-                else:
-                    str.BufAppendChar(b, c)
-                end
-            end
-            str.BufAppendChar(b, 39)
-        end
-        r := str.BufStr(b)
-        str.BufFree(b)
-        ret r
-    end
-
-    func sanitize_ident(lib: str): str:
-        mut b := str.NewBuilder()
-        n := str.Len(lib)
+func shell_arg(s: str): str:
+    mut b := str.NewBuilder()
+    if SALAM_OS_WINDOWS:
+        str.BufAppendChar(b, 34)
+        n := str.Len(s)
         repeat n with i:
-            code := byte_at(lib, i)
-            mut c := code
-            if c >= 97 && c <= 122:
-                c = c - 32
-            else (c >= 65 && c <= 90) || (c >= 48 && c <= 57):
-                c = c
+            c := byte_at(s, i)
+            if c == 34:
+                str.BufAppend(b, `\"`)
             else:
-                c = 95
+                str.BufAppendChar(b, c)
             end
-            str.BufAppendChar(b, c)
         end
-        r := str.BufStr(b)
-        str.BufFree(b)
-        ret r
+        str.BufAppendChar(b, 34)
+    else:
+        str.BufAppendChar(b, 39)
+        n := str.Len(s)
+        repeat n with i:
+            c := byte_at(s, i)
+            if c == 39:
+                str.BufAppend(b, "'\\''")
+            else:
+                str.BufAppendChar(b, c)
+            end
+        end
+        str.BufAppendChar(b, 39)
     end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
 
-    func link_define(lib: str): str:
-        ret "SALAM_LINK_" + sanitize_ident(lib)
+func sanitize_ident(lib: str): str:
+    mut b := str.NewBuilder()
+    n := str.Len(lib)
+    repeat n with i:
+        code := byte_at(lib, i)
+        mut c := code
+        if c >= 97 && c <= 122:
+            c = c - 32
+        else (c >= 65 && c <= 90) || (c >= 48 && c <= 57):
+            c = c
+        else:
+            c = 95
+        end
+        str.BufAppendChar(b, c)
     end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
 
-    func emit_link(
-        cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str, use_tcc: bool
-    ):
-        framework := str.Equals(kind, "framework")
-        is_static := str.Equals(kind, "static")
-        if framework:
-            if SALAM_OS_MAC:
-                str.BufAppend(cmdb, " -framework ")
-                str.BufAppend(cmdb, spec)
-            else:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_WARN, "ignoring framework link '" + spec + "' (frameworks are macOS-only)"
-                )
-            end
-            ret
+func link_define(lib: str): str:
+    ret "SALAM_LINK_" + sanitize_ident(lib)
+end
+
+func emit_link(
+    cmdb &: str.StringBuilder, lgr: lg.Logger, spec: str, kind: str, use_tcc: bool
+):
+    framework := str.Equals(kind, "framework")
+    is_static := str.Equals(kind, "static")
+    if framework:
+        if SALAM_OS_MAC:
+            str.BufAppend(cmdb, " -framework ")
+            str.BufAppend(cmdb, spec)
+        else:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, "ignoring framework link '" + spec + "' (frameworks are macOS-only)"
+            )
         end
-        if (str.Len(spec) > 0 && byte_at(spec, 0) == 45) || link_spec_is_path(spec):
-            str.BufAppendChar(cmdb, 32)
-            str.BufAppend(cmdb, shell_arg(spec))
-            ret
-        end
-        if is_static && !use_tcc:
-            if SALAM_OS_MAC:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_WARN, "static link of bare name '" + spec + "' is unsupported by the macOS linker; pass an explicit " + ".a path. Linking it normally."
-                )
-                str.BufAppend(cmdb, " -l")
-                str.BufAppend(cmdb, shell_arg(spec))
-            else:
-                str.BufAppend(cmdb, " -Wl,-Bstatic -l")
-                str.BufAppend(cmdb, shell_arg(spec))
-                str.BufAppend(cmdb, " -Wl,-Bdynamic")
-            end
-            ret
-        end
-        str.BufAppend(cmdb, " -l")
+        ret
+    end
+    if (str.Len(spec) > 0 && byte_at(spec, 0) == 45) || link_spec_is_path(spec):
+        str.BufAppendChar(cmdb, 32)
         str.BufAppend(cmdb, shell_arg(spec))
+        ret
     end
+    if is_static && !use_tcc:
+        if SALAM_OS_MAC:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_WARN, "static link of bare name '" + spec + "' is unsupported by the macOS linker; pass an explicit " + ".a path. Linking it normally."
+            )
+            str.BufAppend(cmdb, " -l")
+            str.BufAppend(cmdb, shell_arg(spec))
+        else:
+            str.BufAppend(cmdb, " -Wl,-Bstatic -l")
+            str.BufAppend(cmdb, shell_arg(spec))
+            str.BufAppend(cmdb, " -Wl,-Bdynamic")
+        end
+        ret
+    end
+    str.BufAppend(cmdb, " -l")
+    str.BufAppend(cmdb, shell_arg(spec))
+end
 
-    func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
-        mut r := MuslTcc {}
-        if !str.Contains(cc_path, "tcc"):
-            ret r
-        end
-        d := pth.PathDir(cc_path)
-        if str.Len(d) == 0:
-            ret r
-        end
-        r.tcc_dir = d
-        probe := pth.PathJoin(r.tcc_dir, "musl/lib/crt1.o")
-        if !os.Exists(probe):
-            ret r
-        end
-        r.musl_dir = pth.PathJoin(r.tcc_dir, "musl")
-        r.active = true
+func detect_bundled_musl_tcc(cc_path: str): MuslTcc:
+    mut r := MuslTcc {}
+    if !str.Contains(cc_path, "tcc"):
         ret r
     end
+    d := pth.PathDir(cc_path)
+    if str.Len(d) == 0:
+        ret r
+    end
+    r.tcc_dir = d
+    probe := pth.PathJoin(r.tcc_dir, "musl/lib/crt1.o")
+    if !os.Exists(probe):
+        ret r
+    end
+    r.musl_dir = pth.PathJoin(r.tcc_dir, "musl")
+    r.active = true
+    ret r
+end

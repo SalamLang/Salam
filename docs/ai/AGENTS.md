@@ -176,12 +176,17 @@ almost always mean a nested generic somewhere in your own file.
 import str                          // std package
 import encoding.json                // nested std package: dotted, unquoted
 import fs.file
-import mine "my_helpers.salam"      // sibling file, quoted, aliased
+include mine "my_helpers.salam"     // your own file: include, quoted, aliased
+include "@/shared/util.salam"       // from the project root
 ```
 
-Nested std packages use dots (`encoding.json`), never quoted slashes. For a
-sibling source file, the quoted form binds to the **filename**, so alias it
-explicitly (`import mine "my_helpers.salam"`) and call it as `mine.Thing()`.
+`import` is for libraries only and takes a bare name; nested std packages use
+dots (`encoding.json`), never quotes or slashes. Your own source files come in
+with `include "path"` (Persian `فراخوانی`). The path is relative to the current
+file, or starts with `@/` for the project root (the folder of the entry file);
+starting it with `./` is an error. The quoted form binds to the **filename**, so
+alias it explicitly (`include mine "my_helpers.salam"`) and call it as
+`mine.Thing()`. A missing or unreadable include is a compile error.
 
 `import foo` resolves `std/foo/foo.salam` specifically; once that anchor
 resolves, the other files in that directory join the same package.

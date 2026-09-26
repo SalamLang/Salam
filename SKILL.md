@@ -473,9 +473,14 @@ impl Ranked on str:  func rank(): int:  ret len(this)  end  end
 
 ## 5. Standard library catalog
 
-Import a package by name: `import str`, `import math`. Dotted subpackages:
-`import db.sqlite`. Aliased / local-file imports: `import mx "math.salam"`
-(then call `mx.Square(…)`). A file may declare `package <name>` (default `main`).
+Import a library by name, never quoted: `import str`, `import math`. Dotted
+subpackages: `import db.sqlite`. Your **own files** use `include` with a quoted
+path (Persian `فراخوانی`): `include "util.salam"` (relative to this file),
+`include "@/lib/util.salam"` (from the project root, the entry file's folder),
+`include mx "math.salam"` (aliased; call `mx.Square(…)`). `import "x.salam"`,
+`include str` and a path starting with `./` are all compile errors, and a missing
+or unreadable include stops the build. A file may declare `package <name>`
+(default `main`).
 Only `pub` symbols are importable. **Function names are `PascalCase`; collection
 methods are `snake_case`.**
 
@@ -1158,7 +1163,7 @@ naive port into compile errors (each corresponds to a case in
    `Option<T>`, or a sentinel value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
-8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
+8. **Top-level ordering.** Within a file: `package` first, then all `import`s and `include`s,
    then top-level `const`/variable/`type` declarations, then functions. A
    top-level `if` must be a **compile-time constant** condition (see §8).
 9. **`pure` functions are checked**: they may not write globals, call impure

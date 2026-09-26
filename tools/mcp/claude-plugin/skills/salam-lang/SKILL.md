@@ -31,7 +31,7 @@ never runs or never ends.
 **Top-level order is enforced:**
 
 ```
-package → import → extern: → globals → types → private funcs → pub funcs
+package → import / include → extern: → globals → types → private funcs → pub funcs
 ```
 
 Once the first `pub func` appears, only `pub func`s may follow (`E088`).

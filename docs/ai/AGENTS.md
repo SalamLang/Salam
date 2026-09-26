@@ -265,9 +265,10 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   (~64KB) blocks forever. For anything that might produce real volume,
   redirect to a file and read it back, or use `os.RunCapture`.
 
-- **The interpreter gets unsigned arithmetic wrong.** `salam exec` silently
-  miscomputes `u32`/`u64` operations. Verify crypto, hashing and bit-twiddling
-  code with `salam build`/`salam run`, never `salam exec`.
+- **The JavaScript backend has no real 64-bit integers.** `salam js` maps
+  `i64`/`u64`/`size`/`usize` to JS numbers, so wraparound (`0 - 1` as `u64`),
+  shifts past 31 bits and values above 2^53 come out wrong, and `sizeof`
+  throws. Keep 64-bit math on the native backends or check it with `salam run`.
 
 - **`os.Args()` has a broken generic type.** Binding any element to a local
   (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.

@@ -1165,6 +1165,8 @@ naive port into compile errors (each corresponds to a case in
    expose with `pub`. Accessing a private field/method from outside is an error.
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s and `include`s,
    then top-level `const`/variable/`type` declarations, then functions. A
+   body-less `extern:` block ranks with the imports; an `export:` block ranks
+   with the private functions, so it must come before the first `pub func`. A
    top-level `if` must be a **compile-time constant** condition (see §8).
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
@@ -1282,6 +1284,32 @@ func main:  printf("%d\n", 42)  end
 ```
 
 C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
+
+**Exporting Salam functions to C (`export:`):** `extern:` only _declares_
+symbols defined elsewhere (no bodies). A Salam function that C code, a C
+library callback, or the compiler-generated runtime must reach by a fixed name
+goes in an `export:` block. It is emitted under its plain name (no mangling)
+with external linkage, and it is never dropped as dead code:
+
+```salam
+export:
+    func on_ready(ctx: void*): int:     // C sees `int on_ready(void* ctx)`
+        ret 0
+    end
+end
+func main:
+    cb := (&on_ready) as extern func (void*) int
+    println cb(null)
+end
+```
+
+Rules: every entry needs a body. No variables, no generics, no `...`. No
+`pub`, `inline` or `noinline`: an exported function is always a public,
+out-of-line C symbol. Only `deprecated`, `pure` (checked against the body) and
+`noret` may modify it. Persian: `درون‌داد:` = `extern:`, `برون‌داد:` =
+`export:` (with ZWNJ or a space). Seed-compiled code (`compiler/` and the std
+packages it imports) still puts bodies in `extern:` until a release whose
+compiler knows `export:` becomes the bootstrap seed.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:

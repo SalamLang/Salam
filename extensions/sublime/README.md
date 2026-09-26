@@ -80,7 +80,7 @@ compiler is not on your `PATH`, copy `Salam.sublime-build` into
 
 `main`, `func`, `funcv`, `if`, `ifelse`, `until`, `each`, `eachi`, `eachkv`,
 `repeat`, `repeati`, `repeatrange`, `var`, `mut`, `const`, `struct`, `enum`,
-`interface`, `impl`, `import`, `extern`, `layout`, `component`, `println`.
+`interface`, `impl`, `import`, `extern`, `export`, `layout`, `component`, `println`.
 
 ## Maintenance
 

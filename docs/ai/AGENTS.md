@@ -54,7 +54,7 @@ call that takes a signed `int` does not: pass `i as int`.
 The compiler requires one specific order and rejects anything else. In order:
 
 ```
-package  →  import  →  extern:  →  globals  →  types  →  private funcs  →  pub funcs
+package  →  import  →  extern:  →  globals  →  types  →  private funcs / export:  →  pub funcs
 ```
 
 | Rule                                                                              | Diagnostic if broken                                                                |

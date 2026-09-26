@@ -1,8 +1,8 @@
 package parser
 
 import str
-include tok "../token.salam"
-include at "../ast.salam"
+import tok "../token.salam"
+import at "../ast.salam"
 
 func canon_link_kind(s: str): str:
     if str.Equals(s, "static"):
@@ -195,5 +195,69 @@ func parse_extern_into(p &: Ps, a &: at.Ast, prog: int):
         end
     end
     p_expect(p, tok.TK_KW_END, "'end' to close extern block")
+    p_term(p)
+end
+
+func parse_export_into(p &: Ps, a &: at.Ast, prog: int):
+    p_advance(p)
+    p_expect(p, tok.TK_COLON, "':' to open export block")
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        mut d := 0
+        mut m_deprecated := false
+        mut m_pure := false
+        mut m_noret := false
+        if p_at(p, tok.TK_KW_DEPRECATED):
+            m_deprecated = true
+            p_advance(p)
+        end
+        if p_at(p, tok.TK_KW_PURE):
+            m_pure = true
+            p_advance(p)
+        else p_at(p, tok.TK_KW_NORET):
+            m_noret = true
+            p_advance(p)
+        end
+        if p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE):
+            p_error(p, "an exported function is always a public, out-of-line C symbol; only 'deprecated', 'pure', or 'noret' may modify it")
+            p_advance(p)
+        end
+        if (m_deprecated || m_pure || m_noret) && !p_at(p, tok.TK_KW_FUNC):
+            p_error(p, "export function modifiers ('deprecated', 'pure', 'noret') must appear in this order: 'deprecated pure|noret func'")
+        end
+        if p_at(p, tok.TK_KW_FUNC):
+            fsp := p_peek(p)
+            d = parse_extern_func(p, a)
+            if d != 0:
+                mut dn := at.Get(a, d)
+                dn.is_deprecated = m_deprecated
+                dn.is_pure = m_pure
+                dn.is_noret = m_noret
+                at.Put(a, d, dn)
+                if dn.a == 0:
+                    p_error_at(p, fsp, "a function in an export block needs a body; put body-less declarations in an extern block")
+                end
+                if dn.is_variadic:
+                    p_error_at(p, fsp, "an exported function cannot be variadic")
+                end
+            end
+        else:
+            p_error(p, "expected 'func' in export block; variables and body-less declarations belong in an extern block")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if d != 0:
+            at.AddChild(a, prog, d)
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close export block")
     p_term(p)
 end

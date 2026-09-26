@@ -31,10 +31,13 @@ never runs or never ends.
 **Top-level order is enforced:**
 
 ```
-package → import / include → extern: → globals → types → private funcs → pub funcs
+package → import / include → extern: → globals → types → private funcs / export: → pub funcs
 ```
 
 Once the first `pub func` appears, only `pub func`s may follow (`E088`).
+`extern:` holds body-less C declarations only; Salam functions that C must
+call by their plain name go in an `export:` block, which ranks with the
+private funcs.
 Put every private helper above the public section. Globals must precede all
 functions and types (`E085`); imports come directly after `package` (`E083`).
 

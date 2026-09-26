@@ -94,7 +94,7 @@ diagnostic UI you already use. `:checkhealth salam` reports what was found.
 [UltiSnips](https://github.com/SirVer/ultisnips). Triggers: `main`, `func`,
 `funcv`, `if`, `ifelse`, `until`, `each`, `eachi`, `eachkv`, `repeat`,
 `repeati`, `repeatrange`, `var`, `mut`, `const`, `struct`, `enum`,
-`interface`, `impl`, `import`, `extern`, `layout`, `component`, `println`.
+`interface`, `impl`, `import`, `extern`, `export`, `layout`, `component`, `println`.
 
 ## ALE
 

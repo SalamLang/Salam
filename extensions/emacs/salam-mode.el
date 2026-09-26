@@ -72,7 +72,7 @@ An empty string lets the compiler find it."
 (defconst salam-boolean-keywords '("true" "false" "درست" "نادرست"))
 (defconst salam-null-keywords '("null" "پوچ"))
 (defconst salam-this-keywords '("this" "این"))
-(defconst salam-type-keywords '("void" "bool" "char" "str" "uchar" "i8" "i16" "i32" "int" "i64" "u8" "u16" "u32" "uint" "u64" "size" "f32" "float" "f64" "تهی" "منطقی" "نویسه" "رشته" "یونیکد" "صحیح۸" "صحیح۱۶" "صحیح۳۲" "صحیح" "صحیح۶۴" "صحیح8" "صحیح16" "صحیح32" "صحیح64" "طبیعی۸" "طبیعی۱۶" "طبیعی۳۲" "طبیعی" "طبیعی۶۴" "طبیعی8" "طبیعی16" "طبیعی32" "طبیعی64" "اندازه" "اعشار۳۲" "اعشار" "اعشار۶۴" "اعشار32" "اعشار64"))
+(defconst salam-type-keywords '("void" "bool" "char" "str" "uchar" "i8" "i16" "i32" "int" "i64" "u8" "u16" "u32" "uint" "u64" "usize" "size" "f32" "float" "f64" "تهی" "منطقی" "نویسه" "رشته" "یونیکد" "صحیح۸" "صحیح۱۶" "صحیح۳۲" "صحیح" "صحیح۶۴" "صحیح8" "صحیح16" "صحیح32" "صحیح64" "طبیعی۸" "طبیعی۱۶" "طبیعی۳۲" "طبیعی" "طبیعی۶۴" "طبیعی8" "طبیعی16" "طبیعی32" "طبیعی64" "اندازه مثبت" "اندازه" "اعشار۳۲" "اعشار" "اعشار۶۴" "اعشار32" "اعشار64"))
 (defconst salam-auto-keywords '("auto" "خودکار" "تلقائي"))
 (defconst salam-builtin-type-keywords '("وکتور" "Vector" "نگاشت" "HashMap" "پیمایشگرنگاشت" "MapIter" "پرونده" "File" "گوناگون" "Variant"))
 (defconst salam-builtin-keywords '("print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی"))

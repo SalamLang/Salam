@@ -17,17 +17,11 @@ package fmt
 import str
 
 include co "sal_core.salam"
-
 include src "source.salam"
-
 include tok "token.salam"
-
 include lg "logger.salam"
-
 include lx "lexer/lexer.salam"
-
 include ps "parser/parser.salam"
-
 include at "ast.salam"
 
 pub const FMT_INDENT_WIDTH := 4
@@ -72,6 +66,7 @@ struct FmtCtx:
     pub prev_unary: bool = false
     pub prev_after_dot: bool = false
     pub prev_end_line: int = 0
+    pub hdr_prev: int = 0
 end
 
 pub struct FmtStyle:
@@ -405,9 +400,58 @@ func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     end
 end
 
-func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
+func header_group(k: int): int:
+    if k == tok.TK_KW_PACKAGE:
+        ret 1
+    end
+    if k == tok.TK_KW_IMPORT:
+        ret 2
+    end
+    if k == tok.TK_KW_INCLUDE:
+        ret 3
+    end
+    if k == tok.TK_COMMENT_LINE || k == tok.TK_COMMENT_BLOCK:
+        ret 0
+    end
+    ret 4
+end
+
+func next_code_index(ts: tok.TokenStream, i: int): int:
+    n := tok.StreamCount(ts)
+    mut j := i
+    until j < n:
+        k := tok.StreamAt(ts, j).kind
+        if k != tok.TK_COMMENT_LINE && k != tok.TK_COMMENT_BLOCK && k != tok.TK_STMT_END:
+            ret j
+        end
+        j += 1
+    end
+    ret n
+end
+
+func next_code_kind(ts: tok.TokenStream, i: int): int:
+    j := next_code_index(ts, i)
+    if j >= tok.StreamCount(ts):
+        ret tok.TK_EOF
+    end
+    ret tok.StreamAt(ts, j).kind
+end
+
+func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, ts: tok.TokenStream, i: int):
     if !c.line_has_content:
-        if !c.st.minify && c.bracket == 0 && c.has_prev && (t.begin_line as int) > c.prev_end_line + 1:
+        mut blank := !c.st.minify && c.bracket == 0 && c.has_prev && (t.begin_line as int) > c.prev_end_line + 1
+        if c.indent == 0 && c.bracket == 0 && c.block_top == 0:
+            mut g := header_group(k)
+            is_comment := g == 0
+            if is_comment:
+                g = header_group(next_code_kind(ts, i))
+            end
+            if !c.st.minify && c.has_prev && c.hdr_prev >= 1 && c.hdr_prev <= 3:
+                blank = g != c.hdr_prev
+            end
+            c.hdr_prev = is_comment ? 0 : g
+        end
+        if blank:
             co.SbPutc(out, 10)
         end
         emit_indent(out, c.st, c.indent + c.bracket_indent)
@@ -631,6 +675,9 @@ func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
         if ord_line_is_blank(text, pstart, pend):
             break
         end
+        if str.Len(lx.MarkerCode(str.Substr(text, pstart, pend - pstart), pend - pstart)) > 0:
+            break
+        end
         mut maybe_block := false
         if !ord_line_is_comment_or_meta(text, pstart, pend, maybe_block):
             if maybe_block:
@@ -718,12 +765,20 @@ func ord_find_token_for_begin(toks: tok.TokenStream, cursor &: int, begin_index:
 end
 
 func ord_sort_key(a &: at.Ast, it: OrdItem): int:
+    n := at.Get(a, it.node)
     splits := it.phase == at.AST_ORDER_FUNC || it.phase == at.AST_ORDER_TYPEDEF
     mut secondary := 0
-    if splits && at.Get(a, it.node).is_pub:
+    if splits && n.is_pub:
         secondary = 1
     end
-    ret it.phase * 2 + secondary
+    if it.phase == at.AST_ORDER_IMPORT:
+        if n.kind != at.AST_IMPORT:
+            secondary = 2
+        else n.value_kind == tok.TV_STRING:
+            secondary = 1
+        end
+    end
+    ret it.phase * 3 + secondary
 end
 
 func ord_stable_sort(a &: at.Ast, items &: Vector<OrdItem>):
@@ -888,7 +943,7 @@ pub func Tokens(ts: tok.TokenStream, style: FmtStyle, out &: str.StringBuilder):
 
         step_break_before(c, out, t, k, cur_ml)
         step_dedent(c, out, t, k)
-        step_leading(c, out, t, k)
+        step_leading(c, out, t, k, ts, i)
 
         if k == tok.TK_META:
             co.SbPutc(out, 64)

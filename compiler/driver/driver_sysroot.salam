@@ -4,175 +4,175 @@ import os
 import str
 import pth "../sal_path.salam"
 
-    extern:
-        func fopen(path: str, mode: str): void*
-        func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
-        func fclose(stream: void*): int
-    end
+extern:
+    func fopen(path: str, mode: str): void*
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fclose(stream: void*): int
+end
 
-    inline func at_off(p: u8*, off: int): u8*:
-        ret ((p as i64) + (off as i64)) as u8*
-    end
+inline func at_off(p: u8*, off: int): u8*:
+    ret ((p as i64) + (off as i64)) as u8*
+end
 
-    func bytes_str(buf: u8*, off: int, n: int): str:
-        mut sb := str.NewBuilder()
-        defer str.BufFree(sb)
-        mut i := 0
-        until i < n:
-            str.BufAppendChar(sb, buf[off + i] as int)
-            i += 1
+func bytes_str(buf: u8*, off: int, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < n:
+        str.BufAppendChar(sb, buf[off + i] as int)
+        i += 1
+    end
+    ret str.BufStr(sb)
+end
+
+func write_raw(path: str, buf: u8*, off: int, n: int): bool:
+    fp := fopen(path, "wb")
+    if fp == null:
+        ret false
+    end
+    mut ok := true
+    if n > 0:
+        w := fwrite(at_off(buf, off) as void*, 1 as u64, n as u64, fp)
+        ok = (w as int) == n
+    end
+    _c := fclose(fp)
+    ret ok
+end
+
+func tar_oct(buf: u8*, off: int, n: int): i64:
+    mut i := 0
+    until i < n:
+        c := buf[off + i] as int
+        if c != 32 && c != 0:
+            break
         end
-        ret str.BufStr(sb)
+        i += 1
     end
-
-    func write_raw(path: str, buf: u8*, off: int, n: int): bool:
-        fp := fopen(path, "wb")
-        if fp == null:
-            ret false
+    mut v := 0 as i64
+    until i < n:
+        c := buf[off + i] as int
+        if c < 48 || c > 55:
+            break
         end
-        mut ok := true
-        if n > 0:
-            w := fwrite(at_off(buf, off) as void*, 1 as u64, n as u64, fp)
-            ok = (w as int) == n
-        end
-        _c := fclose(fp)
-        ret ok
+        v = (v << 3) | ((c - 48) as i64)
+        i += 1
     end
+    ret v
+end
 
-    func tar_oct(buf: u8*, off: int, n: int): i64:
-        mut i := 0
-        until i < n:
-            c := buf[off + i] as int
-            if c != 32 && c != 0:
-                break
+func untar(tar: u8*, total: int, dest: str): bool:
+    mut off := 0
+    mut longname := ""
+    mut have_long := false
+    until off + 512 <= total:
+        h0 := tar[off] as int
+        if h0 == 0:
+            break
+        end
+        mut name := ""
+        if have_long:
+            name = longname
+            have_long = false
+        else:
+            mut nmlen := 0
+            until nmlen < 100:
+                if tar[off + nmlen] as int == 0:
+                    break
+                end
+                nmlen += 1
             end
-            i += 1
-        end
-        mut v := 0 as i64
-        until i < n:
-            c := buf[off + i] as int
-            if c < 48 || c > 55:
-                break
+            nm := bytes_str(tar, off, nmlen)
+            mut pfxlen := 0
+            until pfxlen < 155:
+                if tar[off + 345 + pfxlen] as int == 0:
+                    break
+                end
+                pfxlen += 1
             end
-            v = (v << 3) | ((c - 48) as i64)
-            i += 1
-        end
-        ret v
-    end
-
-    func untar(tar: u8*, total: int, dest: str): bool:
-        mut off := 0
-        mut longname := ""
-        mut have_long := false
-        until off + 512 <= total:
-            h0 := tar[off] as int
-            if h0 == 0:
-                break
-            end
-            mut name := ""
-            if have_long:
-                name = longname
-                have_long = false
+            pfx := bytes_str(tar, off + 345, pfxlen)
+            if str.Len(pfx) > 0:
+                name = pfx + "/" + nm
             else:
-                mut nmlen := 0
-                until nmlen < 100:
-                    if tar[off + nmlen] as int == 0:
-                        break
-                    end
-                    nmlen += 1
-                end
-                nm := bytes_str(tar, off, nmlen)
-                mut pfxlen := 0
-                until pfxlen < 155:
-                    if tar[off + 345 + pfxlen] as int == 0:
-                        break
-                    end
-                    pfxlen += 1
-                end
-                pfx := bytes_str(tar, off + 345, pfxlen)
-                if str.Len(pfx) > 0:
-                    name = pfx + "/" + nm
-                else:
-                    name = nm
-                end
+                name = nm
             end
-            size := tar_oct(tar, off + 124, 12)
-            typ := tar[off + 156] as int
-            off += 512
-            if size > (total - off) as i64:
-                break
-            end
-            blocks := ((size + 511) / 512) as int
-            if off + blocks * 512 > total:
-                break
-            end
+        end
+        size := tar_oct(tar, off + 124, 12)
+        typ := tar[off + 156] as int
+        off += 512
+        if size > (total - off) as i64:
+            break
+        end
+        blocks := ((size + 511) / 512) as int
+        if off + blocks * 512 > total:
+            break
+        end
 
-            if typ == 76:
-                cp := size < (511 as i64) ? size as int : 511
-                longname = bytes_str(tar, off, cp)
-                have_long = true
-                off += blocks * 512
-                continue
-            end
-            if str.Len(name) == 0 || byte_at(name, 0) == 47 || byte_at(name, 0) == 92 || str.Contains(name, ".."):
-                off += blocks * 512
-                continue
-            end
-            full := pth.PathJoin(dest, name)
-            if typ == 53:
-                if os.MkdirAll(full) != 0:
-                    ret false
-                end
-            else typ == 48 || typ == 0 || typ == 55:
-                parent := dir_of(full)
-                if str.Len(parent) > 0:
-                    _mk := os.MkdirAll(parent)
-                end
-                if !write_raw(full, tar, off, size as int):
-                    ret false
-                end
-            end
+        if typ == 76:
+            cp := size < (511 as i64) ? size as int : 511
+            longname = bytes_str(tar, off, cp)
+            have_long = true
             off += blocks * 512
+            continue
         end
-        ret true
-    end
-
-    func debug_tool_name(): str:
-        if SALAM_OS_MAC:
-            ret "lldb"
-        else:
-            ret "gdb"
+        if str.Len(name) == 0 || byte_at(name, 0) == 47 || byte_at(name, 0) == 92 || str.Contains(name, ".."):
+            off += blocks * 512
+            continue
         end
+        full := pth.PathJoin(dest, name)
+        if typ == 53:
+            if os.MkdirAll(full) != 0:
+                ret false
+            end
+        else typ == 48 || typ == 0 || typ == 55:
+            parent := dir_of(full)
+            if str.Len(parent) > 0:
+                _mk := os.MkdirAll(parent)
+            end
+            if !write_raw(full, tar, off, size as int):
+                ret false
+            end
+        end
+        off += blocks * 512
     end
+    ret true
+end
 
-    func cache_root(): str:
-        mut e := os.Env("SALAM_CACHE")
+func debug_tool_name(): str:
+    if SALAM_OS_MAC:
+        ret "lldb"
+    else:
+        ret "gdb"
+    end
+end
+
+func cache_root(): str:
+    mut e := os.Env("SALAM_CACHE")
+    if str.Len(e) > 0:
+        ret e
+    end
+    e = os.Env("XDG_CACHE_HOME")
+    if str.Len(e) > 0:
+        ret e
+    end
+    if SALAM_OS_WINDOWS:
+        e = os.Env("LOCALAPPDATA")
         if str.Len(e) > 0:
             ret e
         end
-        e = os.Env("XDG_CACHE_HOME")
+        e = os.Env("TEMP")
         if str.Len(e) > 0:
             ret e
         end
-        if SALAM_OS_WINDOWS:
-            e = os.Env("LOCALAPPDATA")
-            if str.Len(e) > 0:
-                ret e
-            end
-            e = os.Env("TEMP")
-            if str.Len(e) > 0:
-                ret e
-            end
-            ret "."
-        else:
-            e = os.Env("HOME")
-            if str.Len(e) > 0:
-                ret e + "/.cache"
-            end
-            e = os.Env("TMPDIR")
-            if str.Len(e) > 0:
-                ret e
-            end
-            ret "/tmp"
+        ret "."
+    else:
+        e = os.Env("HOME")
+        if str.Len(e) > 0:
+            ret e + "/.cache"
         end
+        e = os.Env("TMPDIR")
+        if str.Len(e) > 0:
+            ret e
+        end
+        ret "/tmp"
     end
+end

@@ -8,165 +8,165 @@ import lv "../llvmgen/llvmgen.salam"
 import thread
 import sync
 
-    const _WIN_CP_UTF8 := 65001
-    const _WIN_STD_ERROR_HANDLE := 0 - 12
-    const _WIN_ENABLE_VT := 0x4
+const _WIN_CP_UTF8 := 65001
+const _WIN_STD_ERROR_HANDLE := 0 - 12
+const _WIN_ENABLE_VT := 0x4
 
-    mut _win_console_ready := false
-    mut _win_ansi_ok := false
+mut _win_console_ready := false
+mut _win_ansi_ok := false
 
-    if SALAM_OS_WINDOWS:
-        // Old conhost consoles (Windows Server 2016 included) default to
-        // the legacy OEM codepage and leave VT100 escape processing off, so
-        // raw source text prints as mojibake and diagnostics show their
-        // ANSI codes literally unless a program opts both of these in.
-        func win_console_init():
-            if _win_console_ready:
-                ret
-            end
-            _win_console_ready = true
-            _cp := SetConsoleOutputCP(_WIN_CP_UTF8)
-            h := GetStdHandle(_WIN_STD_ERROR_HANDLE)
-            if h == null:
-                ret
-            end
-            buf := mem.Allocate(8 as u64)
-            defer mem.Free(buf)
-            if GetConsoleMode(h, buf) == 0:
-                ret
-            end
-            p := buf as u32*
-            _win_ansi_ok = SetConsoleMode(h, p[0] | (_WIN_ENABLE_VT as u32)) != 0
-        end
-    else:
-        func win_console_init():
+if SALAM_OS_WINDOWS:
+    // Old conhost consoles (Windows Server 2016 included) default to
+    // the legacy OEM codepage and leave VT100 escape processing off, so
+    // raw source text prints as mojibake and diagnostics show their
+    // ANSI codes literally unless a program opts both of these in.
+    func win_console_init():
+        if _win_console_ready:
             ret
         end
+        _win_console_ready = true
+        _cp := SetConsoleOutputCP(_WIN_CP_UTF8)
+        h := GetStdHandle(_WIN_STD_ERROR_HANDLE)
+        if h == null:
+            ret
+        end
+        buf := mem.Allocate(8 as u64)
+        defer mem.Free(buf)
+        if GetConsoleMode(h, buf) == 0:
+            ret
+        end
+        p := buf as u32*
+        _win_ansi_ok = SetConsoleMode(h, p[0] | (_WIN_ENABLE_VT as u32)) != 0
     end
+else:
+    func win_console_init():
+        ret
+    end
+end
 
-    func proc_status(code: int): int:
-        if SALAM_OS_WINDOWS:
-            ret code
+func proc_status(code: int): int:
+    if SALAM_OS_WINDOWS:
+        ret code
+    else:
+        if code < 0:
+            ret 1
+        end
+        ret (code / 256) % 256
+    end
+end
+
+func stderr_is_tty(): bool:
+    if SALAM_OS_WINDOWS:
+        ret _isatty(2) != 0
+    else:
+        ret isatty(2) != 0
+    end
+end
+
+func resolve_color(flag: int): bool:
+    if SALAM_OS_WINDOWS:
+        win_console_init()
+    end
+    if flag == 1:
+        ret true
+    end
+    if flag == 0:
+        ret false
+    end
+    if !stderr_is_tty():
+        ret false
+    end
+    if SALAM_OS_WINDOWS:
+        ret _win_ansi_ok
+    else:
+        ret true
+    end
+end
+
+func compile_worker():
+    mut running := true
+    until running:
+        sync.Lock(g_cw_mu)
+        mut idx := 0 - 1
+        if g_cw_next < g_cw_jobs.len():
+            idx = g_cw_next
+            g_cw_next += 1
+        end
+        sync.Unlock(g_cw_mu)
+        if idx < 0:
+            running = false
         else:
-            if code < 0:
-                ret 1
-            end
-            ret (code / 256) % 256
-        end
-    end
-
-    func stderr_is_tty(): bool:
-        if SALAM_OS_WINDOWS:
-            ret _isatty(2) != 0
-        else:
-            ret isatty(2) != 0
-        end
-    end
-
-    func resolve_color(flag: int): bool:
-        if SALAM_OS_WINDOWS:
-            win_console_init()
-        end
-        if flag == 1:
-            ret true
-        end
-        if flag == 0:
-            ret false
-        end
-        if !stderr_is_tty():
-            ret false
-        end
-        if SALAM_OS_WINDOWS:
-            ret _win_ansi_ok
-        else:
-            ret true
-        end
-    end
-
-    func compile_worker():
-        mut running := true
-        until running:
-            sync.Lock(g_cw_mu)
-            mut idx := 0 - 1
-            if g_cw_next < g_cw_jobs.len():
-                idx = g_cw_next
-                g_cw_next += 1
-            end
-            sync.Unlock(g_cw_mu)
-            if idx < 0:
-                running = false
-            else:
-                job_rc := proc_status(system(g_cw_jobs.get(idx)))
-                if job_rc != 0:
-                    sync.Lock(g_cw_mu)
-                    if g_cw_rc == 0:
-                        g_cw_rc = job_rc
-                    end
-                    sync.Unlock(g_cw_mu)
+            job_rc := proc_status(system(g_cw_jobs.get(idx)))
+            if job_rc != 0:
+                sync.Lock(g_cw_mu)
+                if g_cw_rc == 0:
+                    g_cw_rc = job_rc
                 end
+                sync.Unlock(g_cw_mu)
             end
         end
     end
+end
 
-    func cpu_count(): int:
-        mut txt := ""
-        if SALAM_OS_WINDOWS:
-            txt = os.Env("NUMBER_OF_PROCESSORS")
-        else SALAM_OS_MAC || SALAM_OS_BSD:
-            res := os.RunCapture("sysctl -n hw.ncpu 2>/dev/null || /usr/sbin/sysctl -n hw.ncpu 2>/dev/null || /sbin/sysctl -n hw.ncpu 2>/dev/null")
-            txt = str.TrimRight(res.out)
-        else:
-            res := os.RunCapture("nproc")
-            txt = str.TrimRight(res.out)
-        end
-        n := str.Len(txt)
-        if n == 0:
+func cpu_count(): int:
+    mut txt := ""
+    if SALAM_OS_WINDOWS:
+        txt = os.Env("NUMBER_OF_PROCESSORS")
+    else SALAM_OS_MAC || SALAM_OS_BSD:
+        res := os.RunCapture("sysctl -n hw.ncpu 2>/dev/null || /usr/sbin/sysctl -n hw.ncpu 2>/dev/null || /sbin/sysctl -n hw.ncpu 2>/dev/null")
+        txt = str.TrimRight(res.out)
+    else:
+        res := os.RunCapture("nproc")
+        txt = str.TrimRight(res.out)
+    end
+    n := str.Len(txt)
+    if n == 0:
+        ret 4
+    end
+    mut v := 0
+    repeat n with i:
+        c := byte_at(txt, i)
+        if c < 48 || c > 57:
             ret 4
         end
-        mut v := 0
-        repeat n with i:
-            c := byte_at(txt, i)
-            if c < 48 || c > 57:
-                ret 4
-            end
-            v = v * 10 + (c - 48)
-        end
-        if v <= 0:
-            ret 4
-        end
-        ret v
+        v = v * 10 + (c - 48)
     end
+    if v <= 0:
+        ret 4
+    end
+    ret v
+end
 
-    func compile_parallel(jobs: Vector<str>): int:
-        if jobs.len() == 0:
-            ret 0
-        end
-        g_cw_mu = sync.NewMutex()
-        g_cw_jobs = jobs
-        g_cw_next = 0
-        g_cw_rc = 0
-        mut workers := cpu_count()
-        if workers > jobs.len():
-            workers = jobs.len()
-        end
-        if workers < 1:
-            workers = 1
-        end
-        mut threads := Vector {} as Vector<thread.Thread>
-        repeat workers:
-            threads.push(thread.New(spawn(compile_worker)))
-        end
-        thread.JoinAll(threads)
-        defer threads.free()
-        ret g_cw_rc
+func compile_parallel(jobs: Vector<str>): int:
+    if jobs.len() == 0:
+        ret 0
     end
+    g_cw_mu = sync.NewMutex()
+    g_cw_jobs = jobs
+    g_cw_next = 0
+    g_cw_rc = 0
+    mut workers := cpu_count()
+    if workers > jobs.len():
+        workers = jobs.len()
+    end
+    if workers < 1:
+        workers = 1
+    end
+    mut threads := Vector {} as Vector<thread.Thread>
+    repeat workers:
+        threads.push(thread.New(spawn(compile_worker)))
+    end
+    thread.JoinAll(threads)
+    defer threads.free()
+    ret g_cw_rc
+end
 
-    func use_llvm_backend(opt &: Dr): bool:
-        if str.Equals(opt.backend, "c"):
-            ret false
-        end
-        if str.Equals(opt.backend, "llvm"):
-            ret true
-        end
-        ret lv.NativeAvailable()
+func use_llvm_backend(opt &: Dr): bool:
+    if str.Equals(opt.backend, "c"):
+        ret false
     end
+    if str.Equals(opt.backend, "llvm"):
+        ret true
+    end
+    ret lv.NativeAvailable()
+end

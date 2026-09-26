@@ -1,0 +1,236 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import os
+import encoding.json
+import encoding.query
+
+struct Request:
+    pub method: str = ""
+    pub path: str = ""
+    pub query: str = ""
+    pub body: str = ""
+end
+
+struct Response:
+    pub status: int = 200
+    pub content_type: str = "text/plain; charset=utf-8"
+    pub body: str = ""
+end
+
+struct Info:
+    pub language: str = ""
+    pub runtime: str = ""
+    pub method: str = ""
+    pub path: str = ""
+    pub routes: Vector<str> = Vector {} as Vector<str>
+end
+
+struct Echo:
+    pub length: int = 0
+    pub body: str = ""
+end
+
+struct Fib:
+    pub n: int = 0
+    pub value: i64 = 0
+end
+
+struct ApiError:
+    pub error: str = ""
+    pub path: str = ""
+end
+
+func text(status: int, body: str): Response:
+    ret Response { status = status, body = body }
+end
+
+func json_resp(status: int, body: str): Response:
+    ret Response { status = status, content_type = "application/json", body = body }
+end
+
+func error(status: int, what: str, path: str): Response:
+    ret json_resp(status, json.Marshal(ApiError { error = what, path = path }))
+end
+
+func reason(status: int): str:
+    switch status:
+        200:
+            ret "OK"
+        end
+        400:
+            ret "Bad Request"
+        end
+        404:
+            ret "Not Found"
+        end
+        405:
+            ret "Method Not Allowed"
+        end
+        else:
+            ret "Unknown"
+        end
+    end
+    ret "Unknown"
+end
+
+func is_digits(s: str): bool:
+    if s.len() == 0 || s.len() > 2:
+        ret false
+    end
+    repeat s.len() with i:
+        c := s.substr(i, 1)
+        if c < "0" || c > "9":
+            ret false
+        end
+    end
+    ret true
+end
+
+func fib(n: int): i64:
+    mut a := 0 as i64
+    mut b := 1 as i64
+    repeat n:
+        t := a + b
+        a = b
+        b = t
+    end
+    ret a
+end
+
+func home(): Response:
+    mut html := "<!doctype html><html><head><meta charset=\"utf-8\"><title>Salam on Workers</title></head><body>"
+    html += "<h1>Salam &#x1F44B; from Cloudflare Workers</h1>"
+    html += "<p>This page was rendered by a Salam program compiled to WebAssembly (wasm32-wasi).</p>"
+    html += "<ul><li><a href=\"/hello/world\">/hello/:name</a></li>"
+    html += "<li><a href=\"/greet?name=Salam\">/greet?name=</a></li>"
+    html += "<li><a href=\"/api/info\">/api/info</a></li>"
+    html += "<li><a href=\"/api/fib/40\">/api/fib/:n</a></li>"
+    html += "<li>POST /api/echo</li></ul></body></html>"
+    ret Response { content_type = "text/html; charset=utf-8", body = html }
+end
+
+func info(req: Request): Response:
+    mut i := Info { language = "Salam", runtime = "wasm32-wasi on Cloudflare Workers", method = req.method, path = req.path }
+    i.routes.push("GET /")
+    i.routes.push("GET /hello/:name")
+    i.routes.push("GET /greet?name=")
+    i.routes.push("GET /api/info")
+    i.routes.push("GET /api/fib/:n")
+    i.routes.push("POST /api/echo")
+    ret json_resp(200, json.Marshal(i))
+end
+
+func route(req: Request): Response:
+    p := req.path
+    if req.method == "POST":
+        if p == "/api/echo":
+            ret json_resp(200, json.Marshal(Echo { length = req.body.len(), body = req.body }))
+        end
+        ret error(405, "method_not_allowed", p)
+    end
+    if req.method != "GET" && req.method != "HEAD":
+        ret error(405, "method_not_allowed", p)
+    end
+    if p == "/":
+        ret home()
+    end
+    if p == "/api/info":
+        ret info(req)
+    end
+    if p == "/greet":
+        mut name := query.Get(req.query, "name")
+        if name.len() == 0:
+            name = "stranger"
+        end
+        ret text(200, "Salam, " + name + "!\n")
+    end
+    if str.StartsWith(p, "/hello/"):
+        name := p.substr(7, p.len() - 7)
+        if name.len() > 0:
+            ret text(200, "Salam, " + name + "!\n")
+        end
+    end
+    if str.StartsWith(p, "/api/fib/"):
+        n := p.substr(9, p.len() - 9)
+        if !is_digits(n) || str.ToInt(n) > 90:
+            ret error(400, "n must be an integer in 0..90", p)
+        end
+        k := str.ToInt(n) as int
+        ret json_resp(200, json.Marshal(Fib { n = k, value = fib(k) }))
+    end
+    ret error(404, "not_found", p)
+end
+
+func render(res: Response): str:
+    mut out := "Status: " + str.FromInt(res.status as i64) + " " + reason(res.status) + "\n"
+    out += "Content-Type: " + res.content_type + "\n"
+    out += "X-Powered-By: Salam\n\n"
+    out += res.body
+    ret out
+end
+
+func self_test():
+    mut reqs := Vector {} as Vector<Request>
+    reqs.push(Request { method = "GET", path = "/hello/world" })
+    reqs.push(Request { method = "GET", path = "/greet", query = "name=Cloud%20Flare" })
+    reqs.push(Request { method = "GET", path = "/greet" })
+    reqs.push(Request { method = "GET", path = "/api/fib/40" })
+    reqs.push(Request { method = "GET", path = "/api/fib/x" })
+    reqs.push(Request { method = "POST", path = "/api/echo", body = "{\"hi\":1}" })
+    reqs.push(Request { method = "DELETE", path = "/api/info" })
+    reqs.push(Request { method = "GET", path = "/nope" })
+    reqs.push(Request { method = "GET", path = "/api/info" })
+    repeat reqs.len() with i:
+        r := reqs.get(i)
+        println "== " + r.method + " " + r.path
+        println render(route(r))
+    end
+end
+
+func read_body(): str:
+    want := str.ToInt(os.Env("CONTENT_LENGTH"))
+    mut body := ""
+    until (body.len() as i64) < want:
+        if body.len() > 0:
+            body += "\n"
+        end
+        body += input ()
+    end
+    ret body
+end
+
+func main:
+    method := os.Env("REQUEST_METHOD")
+    if method.len() == 0:
+        self_test()
+        ret
+    end
+    mut req := Request { method = method, path = os.Env("PATH_INFO"), query = os.Env("QUERY_STRING") }
+    if req.path.len() == 0:
+        req.path = "/"
+    end
+    if method == "POST":
+        req.body = read_body()
+    end
+    res := route(req)
+    if method == "HEAD":
+        print render(Response { status = res.status, content_type = res.content_type })
+        ret
+    end
+    print render(res)
+end

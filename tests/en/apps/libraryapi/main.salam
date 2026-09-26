@@ -69,16 +69,16 @@ end
 
 func caller(ctx: i64): i64:
     mut t := jwt.Token {}
-    if !jwt.Require(ctx, guard(), t): ret 0 as i64 end
-    ret t.claims.sub.to_int() as i64
+    if !jwt.Require(ctx, guard(), t): ret 0 end
+    ret t.claims.sub.to_int()
 end
 
 func librarian(ctx: i64, conn: store.Conn): i64:
     uid := caller(ctx)
-    if uid == 0 as i64: ret 0 as i64 end
+    if uid == 0 as i64: ret 0 end
     if !store.IsLibrarian(conn, uid):
         jwt.Forbidden(ctx, "librarians only")
-        ret 0 as i64
+        ret 0
     end
     ret uid
 end
@@ -93,13 +93,15 @@ func int_param(ctx: i64, name: str, fallback: int, max: int): int:
 end
 
 func path_id(ctx: i64): i64:
-    ret http.Ctx_param(ctx, "id").to_int() as i64
+    ret http.Ctx_param(ctx, "id").to_int()
 end
 
 func borrow_message(reason: str): str:
-    if reason == "unavailable": ret "every copy is on loan" end
-    if reason == "already_out": ret "you already have a copy of this book" end
-    if reason == "limit_reached": ret "you are at the three-book limit" end
+    switch reason:
+        "unavailable": ret "every copy is on loan" end
+        "already_out": ret "you already have a copy of this book" end
+        "limit_reached": ret "you are at the three-book limit" end
+    end
     ret "could not borrow this book"
 end
 
@@ -261,19 +263,23 @@ func borrow(ctx: i64):
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     r := store.Borrow(conn, uid, path_id(ctx))
-    if r.reason == "no_book":
-        fail(ctx, 404, "no such book")
-        ret
+    switch r.reason:
+        "no_book":
+            fail(ctx, 404, "no such book")
+            break
+        end
+        "db":
+            db_fail(ctx, "borrow", "transaction failed")
+            break
+        end
+        "":
+            send(ctx, 201, `{"loan_id":`.concat(conv.FormatInt(r.loan_id)).concat(`,"due_at":`).concat(json.Str(r.due_at)).concat("}"))
+            break
+        end
+        else:
+            send(ctx, 409, `{"error":`.concat(json.Str(borrow_message(r.reason))).concat(`,"reason":`).concat(json.Str(r.reason)).concat("}"))
+        end
     end
-    if r.reason == "db":
-        db_fail(ctx, "borrow", "transaction failed")
-        ret
-    end
-    if r.reason.len() > 0:
-        send(ctx, 409, `{"error":`.concat(json.Str(borrow_message(r.reason))).concat(`,"reason":`).concat(json.Str(r.reason)).concat("}"))
-        ret
-    end
-    send(ctx, 201, `{"loan_id":`.concat(conv.FormatInt(r.loan_id)).concat(`,"due_at":`).concat(json.Str(r.due_at)).concat("}"))
 end
 
 func return_loan(ctx: i64):
@@ -283,23 +289,27 @@ func return_loan(ctx: i64):
     uid := caller(ctx)
     if uid == 0 as i64: ret end
     reason := store.ReturnLoan(conn, uid, path_id(ctx), store.IsLibrarian(conn, uid))
-    if reason == "no_loan":
-        fail(ctx, 404, "no such loan")
-        ret
+    switch reason:
+        "no_loan":
+            fail(ctx, 404, "no such loan")
+            break
+        end
+        "not_yours":
+            jwt.Forbidden(ctx, "that is not your loan")
+            break
+        end
+        "already_returned":
+            fail(ctx, 409, "that loan was already returned")
+            break
+        end
+        "":
+            send(ctx, 200, `{"returned":true}`)
+            break
+        end
+        else:
+            db_fail(ctx, "return", reason)
+        end
     end
-    if reason == "not_yours":
-        jwt.Forbidden(ctx, "that is not your loan")
-        ret
-    end
-    if reason == "already_returned":
-        fail(ctx, 409, "that loan was already returned")
-        ret
-    end
-    if reason.len() > 0:
-        db_fail(ctx, "return", reason)
-        ret
-    end
-    send(ctx, 200, `{"returned":true}`)
 end
 
 func my_loans(ctx: i64):

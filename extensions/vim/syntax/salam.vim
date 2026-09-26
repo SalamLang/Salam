@@ -15,24 +15,25 @@ syn sync minlines=60 maxlines=400
 
 syn keyword salamConditional  if else match switch اگر وگرنه همخوان ترابرد
 syn keyword salamRepeat       until repeat each تا تکرار هر
-syn keyword salamStatement    ret end break continue defer to by in with برگشت پایان بشکن گذر دیرکن تا از
-syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated ناپایا پایا فراخوانه همگانی درخط نادرخط ناب نابرگشت
+syn keyword salamStatement    ret end break continue defer to by in with برگشت پایان بشکن گذر دیرکن تا هر در
+syn keyword salamStorageClass mut const extern pub inline noinline pure noret deprecated export ناپایا پایا همگانی درخط نادرخط ناب نابرگشت
 syn keyword salamKeyword      on as layout operator impl بر برگردان چیدمان کارور کاربست
 syn keyword salamBoolean      true false درست نادرست
 syn keyword salamNull         null پوچ
 syn keyword salamThis         this این
-syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16 u32 uint u64 size f32 float f64 تهی منطقی نویسه رشته یونیکد صحیح۸ صحیح۱۶ صحیح۳۲ صحیح صحیح۶۴ صحیح8 صحیح16 صحیح32 صحیح64 طبیعی۸ طبیعی۱۶ طبیعی۳۲ طبیعی طبیعی۶۴ طبیعی8 طبیعی16 طبیعی32 طبیعی64 اندازه اعشار۳۲ اعشار اعشار۶۴ اعشار32 اعشار64
+syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16 u32 uint u64 usize size f32 float f64 تهی منطقی نویسه رشته یونیکد صحیح۸ صحیح۱۶ صحیح۳۲ صحیح صحیح۶۴ صحیح8 صحیح16 صحیح32 صحیح64 طبیعی۸ طبیعی۱۶ طبیعی۳۲ طبیعی طبیعی۶۴ طبیعی8 طبیعی16 طبیعی32 طبیعی64 اندازه اعشار۳۲ اعشار اعشار۶۴ اعشار32 اعشار64
 syn keyword salamType         auto خودکار تلقائي
 syn keyword salamBuiltinType  وکتور Vector نگاشت HashMap پیمایشگرنگاشت MapIter پرونده File گوناگون Variant
 syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی
 syn keyword salamOperatorWord و یا برابر نابرابر
 syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn
-syn match salamStorageClass "\<\%(بی‌کاره\)\>"
+syn match salamStorageClass "\<\%(درون‌داد\|برون‌داد\|بی‌کاره\)\>"
+syn match salamType "\<\%(اندازه مثبت\)\>"
 syn match salamBuiltin "\<\%(نادرست‌سرچاپ\|نادرست‌چاپ\)\>"
 
 syn keyword salamFuncDecl  func روال nextgroup=salamFunctionName skipwhite
 syn keyword salamStructure type struct enum interface component گونه ساختار جداشمار میانجی بخش nextgroup=salamTypeName skipwhite
-syn keyword salamInclude   import package واردسازی بسته nextgroup=salamModuleName skipwhite
+syn keyword salamInclude   import package include واردسازی بسته فراخوانی nextgroup=salamModuleName skipwhite
 
 syn match salamFunctionName contained "\k\+"
 syn match salamTypeName     contained "\k\+"
@@ -46,7 +47,7 @@ syn match salamFloat  "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-
 syn match salamFloat  "\<[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\.[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\%([eE][+-]\=[0-9\u0660-\u0669\u06f0-\u06f9][0-9\u0660-\u0669\u06f0-\u06f9_]*\)\=f\=\>"
 
 syn match salamAnnotation "@[A-Za-z_]\k*"
-syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|deprecated\|printerrln\|نادرست‌چاپ\|interface\|component\|continue\|operator\|noinline\|واردسازی\|فراخوانه\|printerr\|package\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|layout\|extern\|inline\|ناپایا\|ساختار\|چیدمان\|میانجی\|همگانی\|نادرخط\|کاربست\|نادرست\|until\|break\|defer\|match\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|کارور\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|with\|بشکن\|func\|type\|enum\|pure\|impl\|روال\|پایا\|گونه\|بسته\|درخط\|true\|null\|درست\|this\|ret\|end\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|if\|to\|by\|in\|تا\|هر\|از\|on\|as\|بر\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
+syn match salamLayoutElement "^\s*\%(\%(نادرست‌سرچاپ\|deprecated\|printerrln\|نادرست‌چاپ\|interface\|component\|continue\|operator\|noinline\|واردسازی\|درون‌داد\|فراخوانی\|برون‌داد\|printerr\|package\|include\|جداشمار\|برگردان\|نابرگشت\|بی‌کاره\|println\|نابرابر\|repeat\|switch\|همخوان\|ترابرد\|struct\|import\|layout\|extern\|inline\|export\|ناپایا\|ساختار\|چیدمان\|میانجی\|همگانی\|نادرخط\|کاربست\|نادرست\|until\|break\|defer\|match\|برگشت\|وگرنه\|پایان\|دیرکن\|تکرار\|const\|noret\|کارور\|false\|print\|input\|سرچاپ\|ورودی\|برابر\|else\|each\|with\|بشکن\|func\|type\|enum\|pure\|impl\|روال\|پایا\|گونه\|بسته\|درخط\|true\|null\|درست\|this\|ret\|end\|اگر\|گذر\|mut\|pub\|ناب\|بخش\|پوچ\|این\|چاپ\|if\|to\|by\|in\|تا\|هر\|در\|on\|as\|بر\|یا\|و\)\>\)\@!\zs\k\+\ze\s*:\s*$"
 
 syn match salamOperator "=>\|\.\.\.\|:=\|==\|!=\|<=\|>=\|&&\|||\|\^\^=\|[-+*/%]=\|[-+*/%<>=!&?]"
 syn match salamDelimiter "[(){}\[\],;]"

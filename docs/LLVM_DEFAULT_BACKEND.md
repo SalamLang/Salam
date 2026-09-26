@@ -495,7 +495,7 @@ a loop-local binding landed in the function epilogue where that binding is out
 of scope. 20-line repro:
 
 ```salam
-repeat bases.len() with bi:
+repeat bases.len() in bi:
     entries := os.ListDir(bases.get(bi))
     defer entries.free()          // <- epilogue cannot see `entries`
     ...

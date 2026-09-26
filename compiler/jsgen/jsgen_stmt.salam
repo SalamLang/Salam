@@ -48,6 +48,30 @@ func jsg_loop_pop(g &: Jg):
     end
 end
 
+func jsg_loop_push_lbl(g &: Jg, label: str):
+    g.loop_dmark.push(g.fn_defers.len())
+    g.brk_goto.push(label)
+end
+
+func jsg_loop_open(g &: Jg, a &: at.Ast, body: int): str:
+    if !at.HasMultiBreak(a, body):
+        ret ""
+    end
+    g.tmpn += 1
+    lbl := "__lp" + co.I64Toa(g.tmpn as i64)
+    cg_line(g, lbl + ": {")
+    g.indent += 1
+    ret lbl
+end
+
+func jsg_loop_close(g &: Jg, label: str):
+    if str.Len(label) == 0:
+        ret
+    end
+    g.indent -= 1
+    cg_line(g, "}")
+end
+
 func jsg_switch_push(g &: Jg, label: str):
     g.loop_dmark.push(g.fn_defers.len())
     g.brk_goto.push(label)
@@ -102,7 +126,7 @@ func jsg_compound(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     if local_known(g, av.name) && !jsg_local_is_mut(g, av.name):
         ret ""
     end
-    if jsg_ts_wrappable(av.type_str):
+    if jsg_ts_wrappable(av.type_str) || jsg_ts_is_w64(av.type_str):
         ret ""
     end
     lv := jsg_expr(g, s, a, n.a)
@@ -258,6 +282,7 @@ func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     n := at.Get(a, id)
     m := g.locals.len()
     lv := jsg_loop_var(g, a, id)
+    lp := jsg_loop_open(g, a, n.b)
     if n.c == 0:
         is_int := n.a != 0 && cg_is_int_typestr(at.Get(a, n.a).type_str)
         mut bound := jsg_expr_p(g, s, a, n.a, 11)
@@ -321,11 +346,12 @@ func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         end
     end
     g.indent += 1
-    jsg_loop_push(g)
+    jsg_loop_push_lbl(g, lp)
     jsg_stmt_list(g, s, a, n.b)
     jsg_loop_pop(g)
     g.indent -= 1
     cg_line(g, "}")
+    jsg_loop_close(g, lp)
     jsg_scope_reset(g, m)
 end
 
@@ -428,14 +454,26 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             cg_line(g, c + ";")
             ret
         end
+        if n.op != tok.TK_ASSIGN && n.a != 0 && jsg_ts_is_w64(at.Get(a, n.a).type_str):
+            w64ts := at.Get(a, n.a).type_str
+            w64c := jsg_w64_code(jsg_compound_int_base(n.op))
+            if w64c >= 0:
+                w64lv := jsg_expr(g, s, a, n.a)
+                cg_line(g, w64lv + " = " + jsg_w64_call(w64c, w64lv, jsg_expr(g, s, a, n.b), w64ts) + ";")
+                ret
+            end
+        end
         if n.op != tok.TK_ASSIGN && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
             wts := at.Get(a, n.a).type_str
-            bop := cg_compound_base(n.op)
+            bop := jsg_compound_int_base(n.op)
             if bop != tok.TK_EOF:
                 wuns := cg_is_unsigned_typestr(wts)
                 wlv := jsg_expr(g, s, a, n.a)
                 wop := (bop == tok.TK_SHR && wuns) ? ">>>" : cg_op(bop)
                 mut wrhs := wlv + " " + wop + " " + jsg_expr_p(g, s, a, n.b, 14)
+                if bop == tok.TK_SHL || bop == tok.TK_SHR:
+                    wrhs = wlv + " " + wop + " " + jsg_shift_count(jsg_expr(g, s, a, n.b), wts)
+                end
                 if bop == tok.TK_STAR && jsg_int_ts_bits(wts) == 32:
                     wrhs = "Math.imul(" + wlv + ", " + jsg_expr(g, s, a, n.b) + ")"
                 end
@@ -454,6 +492,12 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     if n.kind == at.AST_EXPR_STMT:
         if n.a != 0 && at.KindOf(a, n.a) == at.AST_INCDEC:
             iv := at.Get(a, n.a)
+            if iv.a != 0 && jsg_ts_is_w64(at.Get(a, iv.a).type_str) && cg_is_unsigned_typestr(at.Get(a, iv.a).type_str):
+                ults := at.Get(a, iv.a).type_str
+                ulv := jsg_expr(g, s, a, iv.a)
+                cg_line(g, ulv + " = " + jsg_w64_call(iv.op == tok.TK_PLUS_PLUS ? 0 : 1, ulv, "1", ults) + ";")
+                ret
+            end
             if iv.a != 0 && jsg_ts_wrappable(at.Get(a, iv.a).type_str):
                 its := at.Get(a, iv.a).type_str
                 ilv := jsg_expr(g, s, a, iv.a)
@@ -498,8 +542,14 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         ret
     end
     if n.kind == at.AST_BREAK:
-        jsg_emit_loop_exit_defers(g, s, a)
         bgn := g.brk_goto.len()
+        levels := at.BreakLevels(a, id)
+        if levels > 1 && levels <= bgn && str.Len(g.brk_goto.get(bgn - levels)) > 0:
+            jsg_emit_defers_from(g, s, a, g.loop_dmark.get(bgn - levels))
+            cg_line(g, "break " + g.brk_goto.get(bgn - levels) + ";")
+            ret
+        end
+        jsg_emit_loop_exit_defers(g, s, a)
         if bgn > 0 && str.Len(g.brk_goto.get(bgn - 1)) > 0:
             cg_line(g, "break " + g.brk_goto.get(bgn - 1) + ";")
         else:
@@ -601,13 +651,15 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         ret
     end
     if n.kind == at.AST_UNTIL:
+        lp := jsg_loop_open(g, a, n.b)
         cg_line(g, "while (" + jsg_expr(g, s, a, n.a) + ") {")
         g.indent += 1
-        jsg_loop_push(g)
+        jsg_loop_push_lbl(g, lp)
         jsg_stmt_list(g, s, a, n.b)
         jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        jsg_loop_close(g, lp)
         ret
     end
     if n.kind == at.AST_REPEAT:
@@ -616,6 +668,7 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     end
     if n.kind == at.AST_EACH:
         m := g.locals.len()
+        lp := jsg_loop_open(g, a, n.b)
         if n.c != 0 && str.Len(at.Get(a, n.c).name) > 0:
             it := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
             cg_line(
@@ -628,11 +681,12 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
             )
         end
         g.indent += 1
-        jsg_loop_push(g)
+        jsg_loop_push_lbl(g, lp)
         jsg_stmt_list(g, s, a, n.b)
         jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        jsg_loop_close(g, lp)
         jsg_scope_reset(g, m)
         ret
     end
@@ -641,13 +695,15 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
         init := n.a != 0 ? jsg_simple_inline(g, s, a, n.a) : ""
         cond := n.b != 0 ? jsg_expr(g, s, a, n.b) : ""
         post := n.c != 0 ? jsg_simple_inline(g, s, a, n.c) : ""
+        lp := jsg_loop_open(g, a, n.d)
         cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
         g.indent += 1
-        jsg_loop_push(g)
+        jsg_loop_push_lbl(g, lp)
         jsg_stmt_list(g, s, a, n.d)
         jsg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        jsg_loop_close(g, lp)
         jsg_scope_reset(g, mark)
         ret
     end

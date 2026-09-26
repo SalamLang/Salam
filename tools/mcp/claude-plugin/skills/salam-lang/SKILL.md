@@ -31,10 +31,13 @@ never runs or never ends.
 **Top-level order is enforced:**
 
 ```
-package → import → extern: → globals → types → private funcs → pub funcs
+package → import / include → extern: → globals → types → private funcs / export: → pub funcs
 ```
 
 Once the first `pub func` appears, only `pub func`s may follow (`E088`).
+`extern:` holds body-less C declarations only; Salam functions that C must
+call by their plain name go in an `export:` block, which ranks with the
+private funcs.
 Put every private helper above the public section. Globals must precede all
 functions and types (`E085`); imports come directly after `package` (`E083`).
 
@@ -87,8 +90,8 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `str.Split` can segfault reading its **last** element on gcc-linked builds.
   Prefer `find`/`substr`.
 - `os.shell.Run` deadlocks when the child writes more than ~64KB.
-- `salam exec` (the interpreter) miscomputes unsigned `u32`/`u64` arithmetic,
-  so verify such code with `salam_run`, never `salam_exec`.
+- `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
+  exact up to 2^53, but larger results or intermediates are rounded.
 - A bare `ret` in `main` passes `salam_check` and fails `salam_build` with a
   raw gcc error. If check passes but build fails, look here first.
 - Source files are keyed by **filename**, not package: two files named

@@ -27,13 +27,11 @@ import tok "../token.salam"
 import src "../source.salam"
 import co "../sal_core.salam"
 
-const K_TR_TYPE_COUNT := 24
-const K_TR_TYPE_ALT_COUNT := 10
 const K_TR_METHOD_COUNT := 29
 const K_TR_CTX_COUNT := 4
 
 k_tr_type := [
-    "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64", "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64", "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64", "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
+    "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64", "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64", "اندازه مثبت", "usize", "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64", "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
 ]
 
 k_tr_type_alt := [
@@ -66,7 +64,7 @@ end
 
 func tr_type_to_fa(name: str): str:
     mut i := 0
-    until i < K_TR_TYPE_COUNT:
+    until i < len(k_tr_type) / 2:
         if str.Equals(k_tr_type[i * 2 + 1], name):
             ret k_tr_type[i * 2]
         end
@@ -77,14 +75,14 @@ end
 
 func tr_type_to_en(name: str): str:
     mut i := 0
-    until i < K_TR_TYPE_COUNT:
+    until i < len(k_tr_type) / 2:
         if str.Equals(k_tr_type[i * 2], name):
             ret k_tr_type[i * 2 + 1]
         end
         i += 1
     end
     i = 0
-    until i < K_TR_TYPE_ALT_COUNT:
+    until i < len(k_tr_type_alt) / 2:
         if str.Equals(k_tr_type_alt[i * 2], name):
             ret k_tr_type_alt[i * 2 + 1]
         end
@@ -155,12 +153,6 @@ func tr_keyword_spelling(targetpack: int, kind: int): str:
     end
     if kind == tok.TK_OR:
         ret targetpack == lp.LP_FA ? "یا" : "||"
-    end
-    if kind == tok.TK_KW_STEP && lp.Spelling(targetpack, kind) == "":
-        ret lp.Spelling(targetpack, tok.TK_KW_EACH)
-    end
-    if kind == tok.TK_KW_WITH && lp.Spelling(targetpack, kind) == "":
-        ret lp.Spelling(targetpack, tok.TK_KW_IN)
     end
     ret lp.Spelling(targetpack, kind)
 end
@@ -367,6 +359,71 @@ func tr_apply_marker(text: str, target_code: str): str:
     ret "// lang: " + target_code + "\n" + body
 end
 
+func tr_next_kind(toks: tok.TokenStream, i: int, n: int): int:
+    mut j := i + 1
+    until j < n:
+        k := tok.StreamAt(toks, j).kind
+        if k != tok.TK_COMMENT_LINE && k != tok.TK_COMMENT_BLOCK:
+            ret k
+        end
+        j += 1
+    end
+    ret 0 - 1
+end
+
+func tr_next_is_call(toks: tok.TokenStream, i: int, n: int): bool:
+    ret tr_next_kind(toks, i, n) == tok.TK_LPAREN
+end
+
+func tr_declared_names(toks: tok.TokenStream, n: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    mut prev_kind := 0 - 1
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_IDENT && tr_is_decl_name(toks, i, n, prev_kind):
+            names.push(t.lexeme)
+        end
+        if t.kind != tok.TK_COMMENT_LINE && t.kind != tok.TK_COMMENT_BLOCK:
+            prev_kind = t.kind
+        end
+        i += 1
+    end
+    ret names
+end
+
+func tr_has(names: Vector<str>, w: str): bool:
+    repeat names.len() with i:
+        if str.Equals(names.get(i), w):
+            ret true
+        end
+    end
+    ret false
+end
+
+func tr_prev_same_line(toks: tok.TokenStream, i: int): bool:
+    mut j := i - 1
+    until j >= 0:
+        p := tok.StreamAt(toks, j)
+        if p.kind != tok.TK_COMMENT_LINE && p.kind != tok.TK_COMMENT_BLOCK && p.kind != tok.TK_STMT_END:
+            ret p.end_line == tok.StreamAt(toks, i).begin_line
+        end
+        j -= 1
+    end
+    ret false
+end
+
+func tr_is_decl_name(toks: tok.TokenStream, i: int, n: int, prev_kind: int): bool:
+    nk := tr_next_kind(toks, i, n)
+    if nk != tok.TK_COLON && nk != tok.TK_COLON_ASSIGN:
+        ret false
+    end
+    if !tr_prev_same_line(toks, i):
+        ret true
+    end
+    ret prev_kind != tok.TK_COLON && prev_kind != tok.TK_RPAREN && prev_kind != tok.TK_KW_AS && prev_kind != tok.TK_KW_ON
+end
+
 func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: str, sfile: src.SourceFile, out &: str): bool:
     mut toks := tok.StreamNew(sfile.path)
     ok := lx.RunEx(lgr, srcpack, sfile, true, toks)
@@ -384,6 +441,10 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut expect_entry := false
     mut prev_ident_lexeme := ""
     mut dot_receiver := ""
+    mut angle_depth := 0
+    mut alias_rhs := false
+    names := tr_declared_names(toks, n)
+    defer names.free()
     mut i := 0
     until i < n:
         t := tok.StreamAt(toks, i)
@@ -422,7 +483,15 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                     lexeme = pkg_mapped
                 end
             else:
-                type_mapped := tr_type_word(targetpack, t.lexeme)
+                mut type_mapped := ""
+                if prev_kind == tok.TK_DOT && tr_next_kind(toks, i, n) == tok.TK_LT:
+                    type_mapped = tr_type_word(targetpack, t.lexeme)
+                else prev_kind != tok.TK_DOT && !tr_is_decl_name(toks, i, n, prev_kind):
+                    type_pos := (prev_kind == tok.TK_COLON && tr_prev_same_line(toks, i)) || (prev_kind == tok.TK_ASSIGN && alias_rhs) || prev_kind == tok.TK_KW_AS || prev_kind == tok.TK_KW_ON || prev_kind == tok.TK_LT || (prev_kind == tok.TK_COMMA && angle_depth > 0) || tr_next_kind(toks, i, n) == tok.TK_LBRACE
+                    if type_pos || !tr_has(names, t.lexeme):
+                        type_mapped = tr_type_word(targetpack, t.lexeme)
+                    end
+                end
                 if str.Len(type_mapped) > 0:
                     lexeme = type_mapped
                 else prev_kind == tok.TK_DOT:
@@ -433,7 +502,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                     end
                     if str.Len(sym_mapped) > 0:
                         lexeme = sym_mapped
-                    else:
+                    else tr_next_is_call(toks, i, n):
                         method_mapped := tr_method_word(targetpack, t.lexeme)
                         if str.Len(method_mapped) > 0:
                             lexeme = method_mapped
@@ -448,6 +517,16 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         expect_entry = t.kind == tok.TK_KW_FUNC
         if t.kind == tok.TK_DOT:
             dot_receiver = prev_ident_lexeme
+        end
+        if t.kind == tok.TK_KW_TYPE:
+            alias_rhs = true
+        else t.kind == tok.TK_STMT_END:
+            alias_rhs = false
+        end
+        if t.kind == tok.TK_LT && prev_kind == tok.TK_IDENT:
+            angle_depth += 1
+        else t.kind == tok.TK_GT && angle_depth > 0:
+            angle_depth -= 1
         end
         if t.kind == tok.TK_IDENT:
             prev_ident_lexeme = t.lexeme

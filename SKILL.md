@@ -150,14 +150,14 @@ end
 
 until i < n:  i = i + 1  end          // loops WHILE the condition holds - "while" doesn't exist, see box below
 repeat 3:  println "hi"  end          // do 3 times
-repeat n with i:  println i  end      // i = 0 .. n-1 ("with" or "in" both bind the index)
+repeat n in i:  println i  end        // i = 0 .. n-1 ("in" binds the index)
 repeat 1 to 5:  ...  end              // 1..5 inclusive
-repeat 1 to 5 with i:  ...  end       // ...binding the loop variable
-repeat 10 to 1 with i:  ...  end      // descending: the *bounds* pick the direction
-repeat 0 to 20 by 2:  ...  end        // step; "by" or "each" both work, must be POSITIVE even descending
+repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
+repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
+repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
 each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map)
-// break: exit the innermost loop (or switch, see below);  continue: next iteration
+// break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
 > ### ⚠ `until` is Salam's only loop-while keyword. There is no `while`.
@@ -186,8 +186,8 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > nothing", check its condition polarity **first**.
 >
 > **`repeat a to b` direction is decided at runtime by the bounds**, so
-> `repeat n to 1 with i` counts _up_ `0, 1` when `n` is `0` instead of not
-> running. Guard the count (`if n >= 1: repeat n to 1 with i: … end end`) when
+> `repeat n to 1 in i` counts _up_ `0, 1` when `n` is `0` instead of not
+> running. Guard the count (`if n >= 1: repeat n to 1 in i: … end end`) when
 > the start bound can fall below the end bound.
 
 ### Switch
@@ -211,9 +211,18 @@ end
 - **`break` exits the switch only**; `continue` is not caught by a switch and
   passes straight through to an enclosing loop (`continue` with no enclosing
   loop is still an error, same as everywhere else).
-- **No exhaustiveness check** - unlike `match` on an enum/`Variant`, a
-  `switch` with no matching label and no `else` simply does nothing, by
-  design.
+- **`break N` exits N levels** of enclosing loops and switches, so `break 2`
+  inside a switch inside a loop leaves the loop too (`break 1` is `break`).
+  Deferred statements of every level left still run. N must be between 1 and
+  the number of enclosing loops and switches, or it is a compile error.
+- **`switch true:`** with boolean labels replaces an if/else chain that tests
+  different conditions (`x < 0:`, `x == 0 || name == "zero":`, ...): the first
+  true label wins.
+- **Enum subjects must be covered** - a `switch` on an enum (or on an alias
+  of one, `type Paint = Color`) with no `else` must list every member, or it
+  is compile error E103 naming the missing members. Members may be written
+  through the enum or the alias (`Paint.Red`, `Color.Green`). For other
+  subjects, a `switch` with no matching label and no `else` does nothing.
 - **Not usable on a `Variant`** subject - that is a semantic error that tells
   you to use `match`'s type patterns instead (see §3).
 - Prefer `switch` for C-style fallthrough or open-ended relational/range
@@ -268,9 +277,13 @@ end
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `char`,
-`str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`, `float`=`f32`. Literals:
-`42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
+`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+`float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
+`اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
+bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
+`sizeof(T)` returns `usize`.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
@@ -306,7 +319,11 @@ a literal backtick, or when it needs an escape sequence (`\n`, `\uXXXX`, …)
 that backtick strings don't process.
 
 **Type aliases:** `type NodeId = int`, `type Bytes = u8*` gives a new name for an
-existing type (declared at top level, before functions).
+existing type (declared at top level, before functions). An alias is the same
+type as its target, so values mix freely; type errors that involve a written
+alias name it, e.g. `cannot pass 'i32' to 'Age' ('Years' is an alias of 'Age')`.
+An alias of an enum reaches its members too: `type Paint = Color` then
+`Paint.Red`.
 
 **Casts & typed literals with `as`:**
 
@@ -456,9 +473,14 @@ impl Ranked on str:  func rank(): int:  ret len(this)  end  end
 
 ## 5. Standard library catalog
 
-Import a package by name: `import str`, `import math`. Dotted subpackages:
-`import db.sqlite`. Aliased / local-file imports: `import mx "math.salam"`
-(then call `mx.Square(…)`). A file may declare `package <name>` (default `main`).
+Import a library by name, never quoted: `import str`, `import math`. Dotted
+subpackages: `import db.sqlite`. Your **own files** use `include` with a quoted
+path (Persian `فراخوانی`): `include "util.salam"` (relative to this file),
+`include "@/lib/util.salam"` (from the project root, the entry file's folder),
+`include mx "math.salam"` (aliased; call `mx.Square(…)`). `import "x.salam"`,
+`include str` and a path starting with `./` are all compile errors, and a missing
+or unreadable include stops the build. A file may declare `package <name>`
+(default `main`).
 Only `pub` symbols are importable. **Function names are `PascalCase`; collection
 methods are `snake_case`.**
 
@@ -1141,17 +1163,21 @@ naive port into compile errors (each corresponds to a case in
    `Option<T>`, or a sentinel value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
-8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
+8. **Top-level ordering.** Within a file: `package` first, then all `import`s and `include`s,
    then top-level `const`/variable/`type` declarations, then functions. A
+   body-less `extern:` block ranks with the imports; an `export:` block ranks
+   with the private functions, so it must come before the first `pub func`. A
    top-level `if` must be a **compile-time constant** condition (see §8).
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
-10. **`match` on a `Variant` must be exhaustive** and use valid type/member
+10. **`match` on an enum or a `Variant` must be exhaustive** (or have an
+    `else`) - both as a statement and as an expression - and use valid type/member
     patterns. Enum `match` patterns must be real members. **`switch` is the
-    non-exhaustive, fallthrough alternative** - it cannot be used on a
-    `Variant` at all (§2, §3, §12.2).
-11. **Enum members need a comma separator** (`,` or `،`) - a bare newline
-    between members is a compile error, since member names may contain
+    fallthrough alternative** - on an enum it must still cover every member
+    or have an `else` (E103); it cannot be used on a `Variant` at all (§2,
+    §3, §12.2).
+11. **Enum members are separated by a comma** (`,` or `،`) **or a newline** -
+    on a single line the comma is required, since member names may contain
     spaces.
 12. **Types are checked strictly**: no implicit narrowing; use `as`. Ternary
     branches must share a type; a condition must be `bool`. Array-literal length
@@ -1187,7 +1213,7 @@ General mapping that applies to all source languages:
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
 | `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
 | `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)      |
-| `for i in range(n)`          | `repeat n with i:` (or `repeat n in i:`)                                         |
+| `for i in range(n)`          | `repeat n in i:`                                                                 |
 | `for x in xs`                | `each x in xs:`                                                                  |
 | destructor / cleanup         | `defer x.free()`                                                                 |
 
@@ -1258,6 +1284,32 @@ func main:  printf("%d\n", 42)  end
 ```
 
 C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
+
+**Exporting Salam functions to C (`export:`):** `extern:` only _declares_
+symbols defined elsewhere (no bodies). A Salam function that C code, a C
+library callback, or the compiler-generated runtime must reach by a fixed name
+goes in an `export:` block. It is emitted under its plain name (no mangling)
+with external linkage, and it is never dropped as dead code:
+
+```salam
+export:
+    func on_ready(ctx: void*): int:     // C sees `int on_ready(void* ctx)`
+        ret 0
+    end
+end
+func main:
+    cb := (&on_ready) as extern func (void*) int
+    println cb(null)
+end
+```
+
+Rules: every entry needs a body. No variables, no generics, no `...`. No
+`pub`, `inline` or `noinline`: an exported function is always a public,
+out-of-line C symbol. Only `deprecated`, `pure` (checked against the body) and
+`noret` may modify it. Persian: `درون‌داد:` = `extern:`, `برون‌داد:` =
+`export:` (with ZWNJ or a space). Seed-compiled code (`compiler/` and the std
+packages it imports) still puts bodies in `extern:` until a release whose
+compiler knows `export:` becomes the bootstrap seed.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:
@@ -1345,7 +1397,10 @@ There is no `async`/`await`.
 **Conditional compilation** (a top-level or inline `if` on a compile-time
 constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
 `SALAM_ARCH_X64/ARM64/X86/ARM/WASM`, string forms `SALAM_OS`/`SALAM_ARCH`; plus
-your own `-DNAME` defines from the build command.
+your own `-DNAME` defines from the build command. The predefined `SALAM_*`
+names are also ordinary constant values anywhere else - `switch SALAM_OS:`,
+`println SALAM_ARCH`, `is_win := SALAM_OS_WINDOWS`, or inside a runtime
+condition such as `if SALAM_OS_MAC && retries > 0:`.
 
 ```salam
 if SALAM_OS_WINDOWS:  const SEP := "\\"
@@ -1513,41 +1568,41 @@ two closing angle brackets, not a shift.
 
 ### 12.2 C construct → Salam
 
-| C                                            | Salam                                                                                                |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `typedef struct { … } T;`                    | `struct T: … end` (fields default private → add `pub`)                                               |
-| `union { … }` / tagged union                 | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                         |
-| `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (comma between members is required, not just style)                           |
-| `#define NAME 3` (const)                     | `const NAME := 3`                                                                                    |
-| `#define MAX(a,b) …` (macro fn)              | `inline func Max(a: int, b: int): int: … end`                                                        |
-| `#ifdef` / `#if` / platform `#ifdef _WIN32`  | `@if`-style top-level `if SALAM_OS_WINDOWS:` on compile-time constants (§8)                          |
-| `#include "x.h"` / header+source split       | `package` + `import`; export with `pub` (no headers)                                                 |
-| function pointer `int (*f)(int)`             | typed value `func (int) int` (pass a lambda); or a bare `fn`/`&fn` for `i64`/`void*` callback tables |
-| `void*` / `char*` / `T*`                     | `void*` / `str` or `u8*` / `T*`; deref `p[0]`; `null`                                                |
-| `malloc/calloc/realloc/free`                 | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                  |
-| `memcpy/memset/memmove`                      | `mem.Copy / mem.Set / mem.MemMove`                                                                   |
-| `strlen/strcmp/strcpy/strcat`                | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                                 |
-| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.free()`                                              |
-| hash table (symbol table)                    | `HashMap<K, V>`                                                                                      |
-| `switch (x) { case … }` (fallthrough)        | **`switch x: … end`** - bare labels (no `case`/`default`), same fallthrough, `break` exits it (§2)   |
-| `switch` used for exhaustive/tagged dispatch | `match x: … end` instead - exhaustive on enum/`Variant`, no fallthrough (§3)                         |
-| `goto`                                       | not available; restructure with functions/flags/loops                                                |
-| `break` / `continue`                         | `break` / `continue` (innermost loop **or switch** for `break`; `continue` always targets the loop)  |
-| `while (c)`                                  | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)       |
-| `while (v)` / `while (p)` (truthy)           | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                       |
-| `do { B } while (c);`                        | `until true: B  if !c: break end end`                                                                |
-| `for (;;)`                                   | `until true:` + `break`                                                                              |
-| `for (i = 0; i < n; i++)`                    | `repeat n with i:` (i = 0 .. n-1)                                                                    |
-| `for (i = n; i >= 1; i--)`                   | `repeat n to 1 with i:` (descending; guard `n >= 1`, see §2)                                         |
-| `for (i = 0; i < n; i += 2)`                 | `repeat 0 to n - 1 by 2 with i:` (`by` is always positive)                                           |
-| variadic `f(int, ...)`                       | only in `extern`/FFI; pure Salam passes a `Vector`                                                   |
-| `static` file-local                          | default (package-private); top level, not `pub`                                                      |
-| `static`/global mutable state                | top-level `mut` globals are allowed (`mut g_count := 0`)                                             |
-| `const T x`                                  | `const NAME := …` (compile-time) or an immutable `:=` binding                                        |
-| `errno` / return-code error handling         | `bool` / `Option<T>` / sentinel + an error record/struct                                             |
-| `assert()`                                   | `import testing` (`AssertTrue`, …) or an explicit `if … : print + os.Exit`                           |
-| `int8_t … uint64_t`, `size_t`                | `i8…i64`, `u8…u64` (use `u64` for sizes/counts)                                                      |
-| bitfields / flag enums                       | bitwise ops on an integer (`flags & MASK`, §12.1), or a small struct of `bool`s                      |
+| C                                            | Salam                                                                                                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `typedef struct { … } T;`                    | `struct T: … end` (fields default private → add `pub`)                                                                      |
+| `union { … }` / tagged union                 | **`Variant<A, B, …>`**, narrowed by `match` on type patterns                                                                |
+| `enum { A, B=5 }`                            | `enum E: A, B = 5 end` (members on one line need commas; one per line needs none)                                           |
+| `#define NAME 3` (const)                     | `const NAME := 3`                                                                                                           |
+| `#define MAX(a,b) …` (macro fn)              | `inline func Max(a: int, b: int): int: … end`                                                                               |
+| `#ifdef` / `#if` / platform `#ifdef _WIN32`  | `@if`-style top-level `if SALAM_OS_WINDOWS:` on compile-time constants (§8)                                                 |
+| `#include "x.h"` / header+source split       | `package` + `import`; export with `pub` (no headers)                                                                        |
+| function pointer `int (*f)(int)`             | typed value `func (int) int` (pass a lambda); or a bare `fn`/`&fn` for `i64`/`void*` callback tables                        |
+| `void*` / `char*` / `T*`                     | `void*` / `str` or `u8*` / `T*`; deref `p[0]`; `null`                                                                       |
+| `malloc/calloc/realloc/free`                 | `mem.Allocate / AllocateZeroed / Reallocate / Free`                                                                         |
+| `memcpy/memset/memmove`                      | `mem.Copy / mem.Set / mem.MemMove`                                                                                          |
+| `strlen/strcmp/strcpy/strcat`                | `str.Len / str.Compare / str.Clone / str.Concat` (+ `StringBuilder`)                                                        |
+| growable array / `realloc` buffer            | `Vector<T>` (`push/get(i)/set/len`), remember `.free()`                                                                     |
+| hash table (symbol table)                    | `HashMap<K, V>`                                                                                                             |
+| `switch (x) { case … }` (fallthrough)        | **`switch x: … end`** - bare labels (no `case`/`default`), same fallthrough, `break` exits it (§2)                          |
+| `switch` used for exhaustive/tagged dispatch | `match x: … end` instead - exhaustive on enum/`Variant`, no fallthrough (§3)                                                |
+| `goto`                                       | not available; restructure with functions/flags/loops                                                                       |
+| `break` / `continue`                         | `break` / `continue` (innermost loop **or switch** for `break`, `break N` for N levels; `continue` always targets the loop) |
+| `while (c)`                                  | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)                              |
+| `while (v)` / `while (p)` (truthy)           | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                                              |
+| `do { B } while (c);`                        | `until true: B  if !c: break end end`                                                                                       |
+| `for (;;)`                                   | `until true:` + `break`                                                                                                     |
+| `for (i = 0; i < n; i++)`                    | `repeat n in i:` (i = 0 .. n-1)                                                                                             |
+| `for (i = n; i >= 1; i--)`                   | `repeat n to 1 in i:` (descending; guard `n >= 1`, see §2)                                                                  |
+| `for (i = 0; i < n; i += 2)`                 | `repeat 0 to n - 1 by 2 in i:` (`by` is always positive)                                                                    |
+| variadic `f(int, ...)`                       | only in `extern`/FFI; pure Salam passes a `Vector`                                                                          |
+| `static` file-local                          | default (package-private); top level, not `pub`                                                                             |
+| `static`/global mutable state                | top-level `mut` globals are allowed (`mut g_count := 0`)                                                                    |
+| `const T x`                                  | `const NAME := …` (compile-time) or an immutable `:=` binding                                                               |
+| `errno` / return-code error handling         | `bool` / `Option<T>` / sentinel + an error record/struct                                                                    |
+| `assert()`                                   | `import testing` (`AssertTrue`, …) or an explicit `if … : print + os.Exit`                                                  |
+| `int8_t … uint64_t`, `size_t`, `ssize_t`     | `i8…i64`, `u8…u64`, `usize` for `size_t`, `size` for `ssize_t`/`intptr_t`/`ptrdiff_t`                                       |
+| bitfields / flag enums                       | bitwise ops on an integer (`flags & MASK`, §12.1), or a small struct of `bool`s                                             |
 
 ### 12.3 Building blocks the compiler needs (all in Salam today)
 

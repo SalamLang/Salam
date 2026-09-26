@@ -36,12 +36,12 @@ index, an `i64` count an `i64` one; bounds that mix signed and unsigned, or a
 count that is not an integer at all, fall back to `i32`.
 
 ```salam
-repeat v.len() with i:      // len() is i32, so i is i32
+repeat v.len() in i:      // len() is i32, so i is i32
     print v.get(i)
 end
 
 n := 200 as u8
-repeat n with i:            // i is u8 here
+repeat n in i:            // i is u8 here
     total = total + v.get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
@@ -54,7 +54,7 @@ call that takes a signed `int` does not: pass `i as int`.
 The compiler requires one specific order and rejects anything else. In order:
 
 ```
-package  →  import  →  extern:  →  globals  →  types  →  private funcs  →  pub funcs
+package  →  import  →  extern:  →  globals  →  types  →  private funcs / export:  →  pub funcs
 ```
 
 | Rule                                                                              | Diagnostic if broken                                                                |
@@ -83,7 +83,7 @@ Add imports only as you use them.
 
 Loop bindings are stricter: a `_` prefix does not excuse them, because the
 fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
-`repeat 20000 with _i:`. The one escape is the bare name `_`, for the
+`repeat 20000 in _i:`. The one escape is the bare name `_`, for the
 `each (key, value)` form that has no way to omit a binding:
 
 ```salam
@@ -176,12 +176,17 @@ almost always mean a nested generic somewhere in your own file.
 import str                          // std package
 import encoding.json                // nested std package: dotted, unquoted
 import fs.file
-import mine "my_helpers.salam"      // sibling file, quoted, aliased
+include mine "my_helpers.salam"     // your own file: include, quoted, aliased
+include "@/shared/util.salam"       // from the project root
 ```
 
-Nested std packages use dots (`encoding.json`), never quoted slashes. For a
-sibling source file, the quoted form binds to the **filename**, so alias it
-explicitly (`import mine "my_helpers.salam"`) and call it as `mine.Thing()`.
+`import` is for libraries only and takes a bare name; nested std packages use
+dots (`encoding.json`), never quotes or slashes. Your own source files come in
+with `include "path"` (Persian `فراخوانی`). The path is relative to the current
+file, or starts with `@/` for the project root (the folder of the entry file);
+starting it with `./` is an error. The quoted form binds to the **filename**, so
+alias it explicitly (`include mine "my_helpers.salam"`) and call it as
+`mine.Thing()`. A missing or unreadable include is a compile error.
 
 `import foo` resolves `std/foo/foo.salam` specifically; once that anchor
 resolves, the other files in that directory join the same package.
@@ -265,9 +270,12 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   (~64KB) blocks forever. For anything that might produce real volume,
   redirect to a file and read it back, or use `os.RunCapture`.
 
-- **The interpreter gets unsigned arithmetic wrong.** `salam exec` silently
-  miscomputes `u32`/`u64` operations. Verify crypto, hashing and bit-twiddling
-  code with `salam build`/`salam run`, never `salam exec`.
+- **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
+  `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
+  wraparound and casts are computed exactly, but a result (or an intermediate
+  value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
+  `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
+  hashes, with `salam run`.
 
 - **`os.Args()` has a broken generic type.** Binding any element to a local
   (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.

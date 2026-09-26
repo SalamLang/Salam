@@ -34,10 +34,10 @@ func jsg_case_item_cond(g &: Jg, s &: sm.Sema, a &: at.Ast, item: int, subj_var:
     if itn.op == tok.TK_KW_TO:
         lo := jsg_expr(g, s, a, itn.a)
         hi := jsg_expr(g, s, a, itn.c)
-        ret "(" + subj_var + " >= " + lo + " && " + subj_var + " <= " + hi + ")"
+        ret "(" + subj_var + " >= (" + lo + ") && " + subj_var + " <= (" + hi + "))"
     end
     val := jsg_expr(g, s, a, itn.a)
-    ret "(" + subj_var + " " + jsg_rel_op_str(itn.op) + " " + val + ")"
+    ret "(" + subj_var + " " + jsg_rel_op_str(itn.op) + " (" + val + "))"
 end
 
 func jsg_case_cond(g &: Jg, s &: sm.Sema, a &: at.Ast, cs: int, subj_var: str): str:
@@ -374,8 +374,15 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                 )
             end
             ownw := jsg_binprec(n.op)
-            ret jsg_wrap_int(
-                jsg_expr_p(g, s, a, n.a, ownw) + " " + opw + " " + jsg_expr_p(g, s, a, n.b, ownw + 1), cts
+            mut rhsw := jsg_expr_p(g, s, a, n.b, ownw + 1)
+            if shift:
+                rhsw = jsg_shift_count(jsg_expr_p(g, s, a, n.b, 0), cts)
+            end
+            ret jsg_wrap_int(jsg_expr_p(g, s, a, n.a, ownw) + " " + opw + " " + rhsw, cts)
+        end
+        if str.Len(cts) > 0 && jsg_ts_is_w64(cts) && jsg_w64_code(n.op) >= 0:
+            ret jsg_w64_call(
+                jsg_w64_code(n.op), jsg_expr_p(g, s, a, n.a, 0), jsg_expr_p(g, s, a, n.b, 0), cts
             )
         end
         own := jsg_binprec(n.op)
@@ -414,6 +421,15 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             ret jsg_wrap_int(
                 cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY), at.Get(a, n.a).type_str
             )
+        end
+        if n.a != 0 && jsg_ts_is_w64(at.Get(a, n.a).type_str):
+            uts := at.Get(a, n.a).type_str
+            if n.op == tok.TK_TILDE:
+                ret jsg_w64_call(8, jsg_expr_p(g, s, a, n.a, 0), "0", uts)
+            end
+            if n.op == tok.TK_MINUS && cg_is_unsigned_typestr(uts):
+                ret jsg_w64_call(1, "0", jsg_expr_p(g, s, a, n.a, 0), uts)
+            end
         end
         sv2 := cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY)
         ret jsg_wrap(sv2, JSP_UNARY, minprec)
@@ -468,6 +484,9 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if cg_is_int_typestr(dts) && dn > 0 && byte_at(dts, dn - 1) != 42 && !has_bracket(dts):
             if jsg_ts_wrappable(dts):
                 ret jsg_wrap_int(jsg_expr_p(g, s, a, n.a, 0), dts)
+            end
+            if jsg_ts_is_w64(dts):
+                ret "__sal_w64c(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + (cg_is_unsigned_typestr(dts) ? "1" : "0") + ")"
             end
             ret "Math.trunc(" + jsg_expr_p(g, s, a, n.a, 0) + ")"
         end

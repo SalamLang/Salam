@@ -428,6 +428,39 @@ func cc_note_pruned(a &: at.Ast, file: str, id: int):
     end
 end
 
+func cc_is_defined_call(a &: at.Ast, n: at.Node): bool:
+    if n.kind != at.AST_CALL || n.a == 0:
+        ret false
+    end
+    callee := at.Get(a, n.a)
+    ret callee.kind == at.AST_IDENTIFIER && str.Equals(callee.name, "defined")
+end
+
+func cc_literalize(a &: at.Ast, t: Table, id: int):
+    mut n := at.Get(a, id)
+    if !str.StartsWith(n.name, "SALAM_"):
+        ret
+    end
+    ci := Lookup(t, n.name)
+    if ci < 0:
+        ret
+    end
+    e := t.entries.get(ci)
+    n.kind = at.AST_LITERAL
+    if e.kind == CC_BOOL:
+        n.op = e.bval ? tok.TK_KW_TRUE : tok.TK_KW_FALSE
+        n.value_kind = tok.TV_BOOL
+        n.value_bool = e.bval
+        n.name = e.bval ? "true" : "false"
+    else:
+        n.op = tok.TK_STRING
+        n.value_kind = tok.TV_STRING
+        n.value_str = e.sval
+        n.name = "\"" + e.sval + "\""
+    end
+    at.Put(a, id, n)
+end
+
 func cc_resolve_if(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
 ): int:
@@ -456,6 +489,7 @@ func cc_resolve_if(
         ok = false
         ret 0
     end
+    cc_resolve_slot(a, log, file, t, n.a, ok)
     cc_process_list(a, log, file, t, n.b, false, ok)
     if n.c != 0:
         if at.KindOf(a, n.c) == at.AST_IF:
@@ -484,7 +518,14 @@ func cc_resolve_slot(
         cc_process_list(a, log, file, t, id, false, ok)
         ret id
     end
+    if k == at.AST_IDENTIFIER:
+        cc_literalize(a, t, id)
+        ret id
+    end
     n := at.Get(a, id)
+    if cc_is_defined_call(a, n):
+        ret id
+    end
     nty := cc_resolve_slot(a, log, file, t, n.ty, ok)
     na := cc_resolve_slot(a, log, file, t, n.a, ok)
     nb := cc_resolve_slot(a, log, file, t, n.b, ok)

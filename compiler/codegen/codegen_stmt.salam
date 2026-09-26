@@ -48,16 +48,36 @@ func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
 end
 
 func cg_loop_push(g &: Cg):
+    g.tmpn += 1
     g.loop_dmark.push(g.fn_defers.len())
-    g.brk_goto.push("")
+    g.brk_goto.push("!__lpend" + str.FromInt(g.tmpn as i64))
 end
 
-func cg_loop_pop(g &: Cg):
+func cg_break_pop(g &: Cg): str:
     if g.loop_dmark.len() > 0:
         _dropped := g.loop_dmark.pop()
     end
     if g.brk_goto.len() > 0:
-        _droppedg := g.brk_goto.pop()
+        ret g.brk_goto.pop()
+    end
+    ret ""
+end
+
+func cg_loop_pop(g &: Cg):
+    lbl := cg_break_pop(g)
+    g.loop_end.push(str.StartsWith(lbl, "!") ? str.Substr(lbl, 1, str.Len(lbl) - 1) : "")
+end
+
+func cg_loop_close(g &: Cg):
+    if g.loop_end.len() == 0:
+        ret
+    end
+    lbl := g.loop_end.pop()
+    repeat g.loop_end_used.len() with i:
+        if str.Equals(g.loop_end_used.get(i), lbl):
+            cg_line(g, lbl + ": ;")
+            ret
+        end
     end
 end
 
@@ -67,7 +87,7 @@ func cg_switch_push(g &: Cg, label: str):
 end
 
 func cg_switch_pop(g &: Cg):
-    cg_loop_pop(g)
+    _lbl := cg_break_pop(g)
 end
 
 func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
@@ -443,9 +463,20 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         ret
     end
     if k == at.AST_BREAK:
-        cg_emit_loop_exit_defers(g, s, a)
         bgn := g.brk_goto.len()
-        if bgn > 0 && str.Len(g.brk_goto.get(bgn - 1)) > 0:
+        levels := at.BreakLevels(a, n)
+        if levels > 1 && levels <= bgn:
+            cg_emit_defers_from(g, s, a, g.loop_dmark.get(bgn - levels))
+            mut target := g.brk_goto.get(bgn - levels)
+            if str.StartsWith(target, "!"):
+                target = str.Substr(target, 1, str.Len(target) - 1)
+                g.loop_end_used.push(target)
+            end
+            cg_line(g, "goto " + target + ";")
+            ret
+        end
+        cg_emit_loop_exit_defers(g, s, a)
+        if bgn > 0 && str.Len(g.brk_goto.get(bgn - 1)) > 0 && !str.StartsWith(g.brk_goto.get(bgn - 1), "!"):
             cg_line(g, "goto " + g.brk_goto.get(bgn - 1) + ";")
         else:
             cg_line(g, "break;")
@@ -496,6 +527,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        cg_loop_close(g)
         ret
     end
     if k == at.AST_REPEAT:
@@ -533,6 +565,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        cg_loop_close(g)
         ret
     end
     if k == at.AST_FOR:
@@ -556,6 +589,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_loop_pop(g)
         g.indent -= 1
         cg_line(g, "}")
+        cg_loop_close(g)
         locals_trunc(g, mark)
         ret
     end

@@ -1,0 +1,259 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import os
+import conv
+import encoding.json
+import net.http
+import net.router
+import net.http.middleware
+
+struct User:
+    pub id: int = 0
+    pub name: str = ""
+    pub role: str = ""
+end
+
+struct UserList:
+    pub total: int = 0
+    pub items: Vector<User> = Vector {} as Vector<User>
+end
+
+struct Greeting:
+    pub lang: str = ""
+    pub message: str = ""
+end
+
+struct RequestInfo:
+    pub method: str = ""
+    pub path: str = ""
+    pub user_agent: str = ""
+    pub ip: str = ""
+    pub country: str = ""
+    pub ray: str = ""
+    pub edge: bool = false
+end
+
+struct Echo:
+    pub content_type: str = ""
+    pub length: int = 0
+    pub body: str = ""
+end
+
+struct Visits:
+    pub visits: int = 0
+end
+
+struct Config:
+    pub app: str = ""
+    pub environment: str = ""
+end
+
+struct Fib:
+    pub n: int = 0
+    pub value: i64 = 0
+end
+
+struct ApiError:
+    pub error: str = ""
+end
+
+func users(): Vector<User>:
+    mut out := Vector {} as Vector<User>
+    out.push(User { id = 1, name = "Ali", role = "admin" })
+    out.push(User { id = 2, name = "Sara", role = "editor" })
+    out.push(User { id = 3, name = "Kian", role = "viewer" })
+    ret out
+end
+
+func api(h: i64): http.Context:
+    middleware.Secure(h)
+    middleware.AllowAll(h)
+    middleware.NoCache(h)
+    ret http.Ctx(h)
+end
+
+func fail(ctx: http.Context, status: int, message: str):
+    http.SetStatus(ctx, status)
+    http.Json(ctx, json.Marshal(ApiError { error = message }))
+end
+
+func home(h: i64):
+    mut page := "<!doctype html><html><head><meta charset=\"utf-8\"><title>Salam Router on Workers</title>"
+    page += "<style>body{font:16px/1.5 system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem}code{background:#f2f2f2;padding:0 .3rem}</style></head><body>"
+    page += "<h1>Salam &#x1F44B;</h1><p>A standard <code>net/http</code> + <code>net/router</code> server, compiled to WebAssembly and running on Cloudflare Workers.</p><ul>"
+    page += "<li><a href=\"/hello/world\">GET /hello/:name</a></li>"
+    page += "<li><a href=\"/api/greet?name=Salam&amp;lang=fa\">GET /api/greet?name=&amp;lang=en|fa|ar</a></li>"
+    page += "<li><a href=\"/api/users\">GET /api/users</a> &middot; <a href=\"/api/users/1\">GET /api/users/:id</a> &middot; POST /api/users &middot; DELETE /api/users/:id</li>"
+    page += "<li><a href=\"/api/request\">GET /api/request</a></li>"
+    page += "<li><a href=\"/api/visits\">GET /api/visits</a> (cookie counter)</li>"
+    page += "<li><a href=\"/api/config\">GET /api/config</a> (wrangler vars)</li>"
+    page += "<li><a href=\"/api/fib/50\">GET /api/fib/:n</a></li>"
+    page += "<li>POST /api/echo</li></ul></body></html>"
+    http.Html(http.Ctx(h), page)
+end
+
+func hello(h: i64):
+    ctx := http.Ctx(h)
+    http.Text(ctx, "Salam, " + http.UrlDecode(http.Param(ctx, "name")) + "!\n")
+end
+
+func greet(h: i64):
+    ctx := api(h)
+    mut name := http.Query(ctx, "name")
+    if name.len() == 0:
+        name = "World"
+    end
+    lang := http.Query(ctx, "lang")
+    if lang == "fa":
+        http.Json(ctx, json.Marshal(Greeting { lang = "fa", message = "سلام " + name + "!" }))
+    else lang == "ar":
+        http.Json(ctx, json.Marshal(Greeting { lang = "ar", message = "مرحبا " + name + "!" }))
+    else:
+        http.Json(ctx, json.Marshal(Greeting { lang = "en", message = "Hello " + name + "!" }))
+    end
+end
+
+func list_users(h: i64):
+    ctx := api(h)
+    all := users()
+    http.Json(ctx, json.Marshal(UserList { total = all.len(), items = all }))
+end
+
+func get_user(h: i64):
+    ctx := api(h)
+    id := str.ToInt(http.Param(ctx, "id"))
+    all := users()
+    repeat all.len() with i:
+        if all.get(i).id == id:
+            http.Json(ctx, json.Marshal(all.get(i)))
+            ret
+        end
+    end
+    fail(ctx, 404, "user not found")
+end
+
+func create_user(h: i64):
+    ctx := api(h)
+    body := http.Body(ctx)
+    name := json.Get(body, "name")
+    if name.len() == 0:
+        fail(ctx, 400, "name is required")
+        ret
+    end
+    mut role := json.Get(body, "role")
+    if role.len() == 0:
+        role = "viewer"
+    end
+    http.SetStatus(ctx, 201)
+    http.SetHeader(ctx, "Location", "/api/users/4")
+    http.Json(ctx, json.Marshal(User { id = 4, name = name, role = role }))
+end
+
+func delete_user(h: i64):
+    ctx := api(h)
+    id := str.ToInt(http.Param(ctx, "id"))
+    if id < 1 || id > 3:
+        fail(ctx, 404, "user not found")
+        ret
+    end
+    http.SetStatus(ctx, 204)
+end
+
+func preflight(h: i64):
+    http.SetStatus(api(h), 204)
+end
+
+func request_info(h: i64):
+    ctx := api(h)
+    info := RequestInfo {
+        method = http.Method(ctx), path = http.Path(ctx), user_agent = http.Header(ctx, "User-Agent"), ip = http.Header(ctx, "CF-Connecting-IP"), country = http.Header(ctx, "CF-IPCountry"), ray = http.Header(ctx, "CF-Ray"), edge = http.IsEdge()
+    }
+    http.Json(ctx, json.Marshal(info))
+end
+
+func echo(h: i64):
+    ctx := api(h)
+    body := http.Body(ctx)
+    http.Json(
+        ctx, json.Marshal(Echo { content_type = http.Header(ctx, "Content-Type"), length = body.len(), body = body })
+    )
+end
+
+func visits(h: i64):
+    ctx := api(h)
+    n := str.ToInt(http.CookieValue(ctx, "visits")) + 1
+    http.SetCookie(ctx, http.ExpiringCookie("visits", conv.FormatInt(n as i64), 86400))
+    http.Json(ctx, json.Marshal(Visits { visits = n }))
+end
+
+func config(h: i64):
+    ctx := api(h)
+    mut app := os.Env("APP_NAME")
+    if app.len() == 0:
+        app = "salam-router"
+    end
+    mut environment := os.Env("ENVIRONMENT")
+    if environment.len() == 0:
+        environment = "local"
+    end
+    http.Json(ctx, json.Marshal(Config { app = app, environment = environment }))
+end
+
+func fib(h: i64):
+    ctx := api(h)
+    n := str.ToInt(http.Param(ctx, "n"))
+    if n < 0 || n > 90:
+        fail(ctx, 400, "n must be between 0 and 90")
+        ret
+    end
+    mut a := 0 as i64
+    mut b := 1 as i64
+    repeat n:
+        t := a + b
+        a = b
+        b = t
+    end
+    http.Json(ctx, json.Marshal(Fib { n = n, value = a }))
+end
+
+func old_home(h: i64):
+    http.Redirect(http.Ctx(h), "/")
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/", home)
+    router.Get(r, "/index.html", old_home)
+    router.Get(r, "/hello/:name", hello)
+    router.Get(r, "/api/greet", greet)
+    router.Get(r, "/api/users", list_users)
+    router.Post(r, "/api/users", create_user)
+    router.Options(r, "/api/users", preflight)
+    router.Get(r, "/api/users/:id", get_user)
+    router.Delete(r, "/api/users/:id", delete_user)
+    router.Get(r, "/api/request", request_info)
+    router.Post(r, "/api/echo", echo)
+    router.Get(r, "/api/visits", visits)
+    router.Get(r, "/api/config", config)
+    router.Get(r, "/api/fib/:n", fib)
+    mut s := http.NewServer(8080)
+    http.EnableAccessLog(s)
+    http.Use(s, r)
+    println "listening on http://localhost:8080"
+    http.Run(s)
+end

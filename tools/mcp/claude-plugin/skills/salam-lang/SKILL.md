@@ -1,6 +1,6 @@
 ---
 name: salam
-description: Use when writing, reading, debugging or reviewing Salam source (.salam files) - the Salam programming language with English/Persian keywords. Covers its enforced declaration ordering, the `until` = `while` rule, stdlib lookup, and the toolchain traps that silently produce wrong behaviour. Triggers on .salam files, "Salam", "salamlang", or any request to compile, check or run Salam code.
+description: Use when writing, reading, debugging or reviewing Salam source (.salam files) - the Salam programming language with English/Persian keywords. Covers its enforced declaration ordering, the `until` = `while` rule (there is no `while`), `switch` vs `match`, the enum comma requirement, stdlib lookup, and the toolchain traps that silently produce wrong behaviour. Triggers on .salam files, "Salam", "salamlang", or any request to compile, check or run Salam code.
 ---
 
 # Working with Salam
@@ -41,6 +41,14 @@ functions and types (`E085`); imports come directly after `package` (`E083`).
 **Unused things are errors, not warnings:** unused import `E082`, unused
 variable `E059`, unused function `E066`. Prefix with `_` or remove.
 
+**`switch` and `match` are not interchangeable.** `switch`/`ترابرد` is a
+fallthrough **statement** with bare labels (no `case`/`default`) - `break`
+stops the fallthrough, no exhaustiveness check, and it rejects a `Variant`
+subject outright. `match` is an exhaustive, no-fallthrough **expression** for
+enum/`Variant` dispatch. Use `switch` for C-style fallthrough or
+range/relational labels (`90 to 100:`, `>= 60:`); use `match` when every case
+must be handled.
+
 ## Quick syntax
 
 ```salam
@@ -70,6 +78,9 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `Vector {} as Vector<str>`, `v.get(i)` to read an element, `v.ref(i)` for its address.
 - Nested generics (`Vector<Vector<T>>`) do not work, so flatten instead. They
   fail with type errors pointing _inside_ std, not at your code.
+- `enum E: A, B, C end` - the comma between members is **required**, not
+  optional style (member names can contain spaces, so a bare newline can't
+  tell where one ends and the next begins).
 
 ## Traps that fail silently
 

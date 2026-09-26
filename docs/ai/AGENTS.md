@@ -36,12 +36,12 @@ index, an `i64` count an `i64` one; bounds that mix signed and unsigned, or a
 count that is not an integer at all, fall back to `i32`.
 
 ```salam
-repeat v.len() with i:      // len() is i32, so i is i32
+repeat v.len() in i:      // len() is i32, so i is i32
     print v.get(i)
 end
 
 n := 200 as u8
-repeat n with i:            // i is u8 here
+repeat n in i:            // i is u8 here
     total = total + v.get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
@@ -83,7 +83,7 @@ Add imports only as you use them.
 
 Loop bindings are stricter: a `_` prefix does not excuse them, because the
 fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
-`repeat 20000 with _i:`. The one escape is the bare name `_`, for the
+`repeat 20000 in _i:`. The one escape is the bare name `_`, for the
 `each (key, value)` form that has no way to omit a binding:
 
 ```salam

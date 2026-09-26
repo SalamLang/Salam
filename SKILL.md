@@ -150,11 +150,11 @@ end
 
 until i < n:  i = i + 1  end          // loops WHILE the condition holds - "while" doesn't exist, see box below
 repeat 3:  println "hi"  end          // do 3 times
-repeat n with i:  println i  end      // i = 0 .. n-1 ("with" or "in" both bind the index)
+repeat n in i:  println i  end        // i = 0 .. n-1 ("in" binds the index)
 repeat 1 to 5:  ...  end              // 1..5 inclusive
-repeat 1 to 5 with i:  ...  end       // ...binding the loop variable
-repeat 10 to 1 with i:  ...  end      // descending: the *bounds* pick the direction
-repeat 0 to 20 by 2:  ...  end        // step; "by" or "each" both work, must be POSITIVE even descending
+repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
+repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
+repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
 each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map)
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
@@ -186,8 +186,8 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > nothing", check its condition polarity **first**.
 >
 > **`repeat a to b` direction is decided at runtime by the bounds**, so
-> `repeat n to 1 with i` counts _up_ `0, 1` when `n` is `0` instead of not
-> running. Guard the count (`if n >= 1: repeat n to 1 with i: … end end`) when
+> `repeat n to 1 in i` counts _up_ `0, 1` when `n` is `0` instead of not
+> running. Guard the count (`if n >= 1: repeat n to 1 in i: … end end`) when
 > the start bound can fall below the end bound.
 
 ### Switch
@@ -1206,7 +1206,7 @@ General mapping that applies to all source languages:
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
 | `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
 | `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)      |
-| `for i in range(n)`          | `repeat n with i:` (or `repeat n in i:`)                                         |
+| `for i in range(n)`          | `repeat n in i:`                                                                 |
 | `for x in xs`                | `each x in xs:`                                                                  |
 | destructor / cleanup         | `defer x.free()`                                                                 |
 
@@ -1559,9 +1559,9 @@ two closing angle brackets, not a shift.
 | `while (v)` / `while (p)` (truthy)           | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                                              |
 | `do { B } while (c);`                        | `until true: B  if !c: break end end`                                                                                       |
 | `for (;;)`                                   | `until true:` + `break`                                                                                                     |
-| `for (i = 0; i < n; i++)`                    | `repeat n with i:` (i = 0 .. n-1)                                                                                           |
-| `for (i = n; i >= 1; i--)`                   | `repeat n to 1 with i:` (descending; guard `n >= 1`, see §2)                                                                |
-| `for (i = 0; i < n; i += 2)`                 | `repeat 0 to n - 1 by 2 with i:` (`by` is always positive)                                                                  |
+| `for (i = 0; i < n; i++)`                    | `repeat n in i:` (i = 0 .. n-1)                                                                                             |
+| `for (i = n; i >= 1; i--)`                   | `repeat n to 1 in i:` (descending; guard `n >= 1`, see §2)                                                                  |
+| `for (i = 0; i < n; i += 2)`                 | `repeat 0 to n - 1 by 2 in i:` (`by` is always positive)                                                                    |
 | variadic `f(int, ...)`                       | only in `extern`/FFI; pure Salam passes a `Vector`                                                                          |
 | `static` file-local                          | default (package-private); top level, not `pub`                                                                             |
 | `static`/global mutable state                | top-level `mut` globals are allowed (`mut g_count := 0`)                                                                    |

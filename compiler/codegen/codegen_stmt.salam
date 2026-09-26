@@ -49,12 +49,25 @@ end
 
 func cg_loop_push(g &: Cg):
     g.loop_dmark.push(g.fn_defers.len())
+    g.brk_goto.push("")
 end
 
 func cg_loop_pop(g &: Cg):
     if g.loop_dmark.len() > 0:
         _dropped := g.loop_dmark.pop()
     end
+    if g.brk_goto.len() > 0:
+        _droppedg := g.brk_goto.pop()
+    end
+end
+
+func cg_switch_push(g &: Cg, label: str):
+    g.loop_dmark.push(g.fn_defers.len())
+    g.brk_goto.push(label)
+end
+
+func cg_switch_pop(g &: Cg):
+    cg_loop_pop(g)
 end
 
 func cg_emit_loop_exit_defers(g &: Cg, s &: sm.Sema, a &: at.Ast):
@@ -397,9 +410,46 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_line(g, "}")
         ret
     end
+    if k == at.AST_SWITCH:
+        subj_ts2 := at.Get(a, nn.a).type_str
+        g.tmpn += 1
+        t2 := g.tmpn
+        subj_var2 := "__swsubj" + t2
+        matched_var := "__swmatched" + t2
+        end_lbl := "__swend" + t2
+        cg_line(g, "{")
+        g.indent += 1
+        cg_line(
+            g, cg_ctype(str.Len(subj_ts2) > 0 ? subj_ts2 : "int32_t") + " " + subj_var2 + " = (" + cg_expr(g, s, a, nn.a) + ");"
+        )
+        cg_line(g, cg_ctype("bool") + " " + matched_var + " = false;")
+        cg_switch_push(g, end_lbl)
+        repeat nn.list.len() with i2:
+            csid := nn.list.get(i2)
+            cond2 := cg_case_cond(g, s, a, csid, subj_var2, subj_ts2)
+            cg_line(
+                g, "if (!" + matched_var + " && (" + cond2 + ")) { " + matched_var + " = true; }"
+            )
+            cg_line(g, "if (" + matched_var + ") {")
+            g.indent += 1
+            cg_scoped_stmts(g, s, a, at.Get(a, csid).b)
+            g.indent -= 1
+            cg_line(g, "}")
+        end
+        cg_switch_pop(g)
+        cg_line(g, end_lbl + ": ;")
+        g.indent -= 1
+        cg_line(g, "}")
+        ret
+    end
     if k == at.AST_BREAK:
         cg_emit_loop_exit_defers(g, s, a)
-        cg_line(g, "break;")
+        bgn := g.brk_goto.len()
+        if bgn > 0 && str.Len(g.brk_goto.get(bgn - 1)) > 0:
+            cg_line(g, "goto " + g.brk_goto.get(bgn - 1) + ";")
+        else:
+            cg_line(g, "break;")
+        end
         ret
     end
     if k == at.AST_CONTINUE:

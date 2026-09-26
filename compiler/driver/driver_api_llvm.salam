@@ -30,236 +30,236 @@ else:
     func native_link_triple(): str: ret "" end
 end
 
-    func build_opt_level(opt &: Dr): int:
-        if opt.llvm_opt_set:
-            ret opt.llvm_opt_level
-        end
-        if opt.debug_info || opt.asan:
-            ret lv.LV_OPT_O0
-        end
-        if !opt.safe:
-            ret lv.LV_OPT_O3
-        end
-        ret lv.LV_OPT_O2
+func build_opt_level(opt &: Dr): int:
+    if opt.llvm_opt_set:
+        ret opt.llvm_opt_level
+    end
+    if opt.debug_info || opt.asan:
+        ret lv.LV_OPT_O0
+    end
+    if !opt.safe:
+        ret lv.LV_OPT_O3
+    end
+    ret lv.LV_OPT_O2
+end
+
+pub func Llvm(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    pack := lp.Load(opt.lang)
+    if pack == lp.LP_NONE:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
+        )
+        ret 2
+    end
+    mut entry := lp.Entry(pack)
+    sm.SetStdlibRoot(opt.stdlib_path)
+    sm.LayoutSchemaInit(sm.GetStdlibRoot())
+    if str.Len(opt.input) == 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("salam: no input file"))
+        ret 2
+    end
+    mut sf := src.New()
+    _pt_src := pf.Begin(pf.TP_SOURCE, opt.input)
+    loaded := src.Load(opt.input, sf)
+    pf.End(pf.TP_SOURCE, _pt_src)
+    if !loaded:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
+        )
+        ret 2
+    end
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
+    module := module_of(opt.input)
+    modpack := lx.Detect(sf, pack)
+    entry = lp.Entry(modpack)
+    mut toks := tok.StreamNew(opt.input)
+    _pt_lx := pf.Begin(pf.TP_LEXER, opt.input)
+    lok := lx.Run(lgr, modpack, sf, toks)
+    pf.End(pf.TP_LEXER, _pt_lx)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pt_ps := pf.Begin(pf.TP_PARSER, opt.input)
+    mut pok := ps.Run(lgr, toks, a, prog)
+    pf.End(pf.TP_PARSER, _pt_ps)
+    tok.StreamFree(toks)
+    table := cc.TableBuild(opt.llvm_target, opt.defines)
+    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+        pok = false
+    end
+    mut s := sm.New(lgr, sf.path, lp.Code(modpack))
+    sm.SetCc(s, table)
+    _pt_se := pf.Begin(pf.TP_SEMANTIC, opt.input)
+    sok := sm.Run(s, a, prog)
+    pf.End(pf.TP_SEMANTIC, _pt_se)
+    if !lok || !pok || !sok:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
+        )
+        sm.Free(s)
+        at.FreeAst(a)
+        ret 1
     end
 
-    pub func Llvm(opt &: Dr): int:
-        lgr := lg.New(opt.log_level, resolve_color(opt.color))
-        pack := lp.Load(opt.lang)
-        if pack == lp.LP_NONE:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown language pack '%s'"), co.ArgStr(opt.lang))
-            )
-            ret 2
-        end
-        mut entry := lp.Entry(pack)
-        sm.SetStdlibRoot(opt.stdlib_path)
-        sm.LayoutSchemaInit(sm.GetStdlibRoot())
-        if str.Len(opt.input) == 0:
-            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("salam: no input file"))
-            ret 2
-        end
-        mut sf := src.New()
-        _pt_src := pf.Begin(pf.TP_SOURCE, opt.input)
-        loaded := src.Load(opt.input, sf)
-        pf.End(pf.TP_SOURCE, _pt_src)
-        if !loaded:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
-            )
-            ret 2
-        end
-        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
-        lg.AddDiagSource(lgr, opt.input, sf.text, sf.len)
-        module := module_of(opt.input)
-        modpack := lx.Detect(sf, pack)
-        entry = lp.Entry(modpack)
-        mut toks := tok.StreamNew(opt.input)
-        _pt_lx := pf.Begin(pf.TP_LEXER, opt.input)
-        lok := lx.Run(lgr, modpack, sf, toks)
-        pf.End(pf.TP_LEXER, _pt_lx)
-        mut a := at.NewAst()
-        mut prog := 0
-        _pt_ps := pf.Begin(pf.TP_PARSER, opt.input)
-        mut pok := ps.Run(lgr, toks, a, prog)
-        pf.End(pf.TP_PARSER, _pt_ps)
-        tok.StreamFree(toks)
-        table := cc.TableBuild(opt.llvm_target, opt.defines)
-        if !cc.PruneProgram(a, lgr, sf.path, table, prog):
-            pok = false
-        end
-        mut s := sm.New(lgr, sf.path, lp.Code(modpack))
-        sm.SetCc(s, table)
-        _pt_se := pf.Begin(pf.TP_SEMANTIC, opt.input)
-        sok := sm.Run(s, a, prog)
-        pf.End(pf.TP_SEMANTIC, _pt_se)
-        if !lok || !pok || !sok:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
-            )
-            sm.Free(s)
-            at.FreeAst(a)
-            ret 1
-        end
+    mut o := lv.OptionsDefault()
+    o.opt_level = opt.llvm_opt_level
+    o.output_mode = opt.llvm_emit
+    o.debug_info = opt.debug_info
+    o.verify_module = opt.llvm_verify
+    o.release = !opt.safe
+    o.target_triple = opt.llvm_target
+    o.lib_paths = opt.lib_paths
+    mut xl := ""
+    if EmbeddedExtralibs(opt.llvm_target, xl):
+        o.lib_paths.push(xl)
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
+    end
+    o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
+    o.fp_contract = opt.llvm_fp_contract
 
-        mut o := lv.OptionsDefault()
-        o.opt_level = opt.llvm_opt_level
-        o.output_mode = opt.llvm_emit
-        o.debug_info = opt.debug_info
-        o.verify_module = opt.llvm_verify
-        o.release = !opt.safe
-        o.target_triple = opt.llvm_target
-        o.lib_paths = opt.lib_paths
-        mut xl := ""
-        if EmbeddedExtralibs(opt.llvm_target, xl):
-            o.lib_paths.push(xl)
-            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
+    if o.output_mode == lv.LV_OUT_EXEC:
+        mut links := Vector {} as Vector<str>
+        mut kinds := Vector {} as Vector<str>
+        ll_gather_links(
+            lgr, pack, opt.input, a, prog, lp.Code(modpack), table, links, kinds
+        )
+        o.link_libs = links
+        o.link_kinds = kinds
+        o.nlink = links.len()
+        mut sr_triple := opt.llvm_target
+        if str.Len(sr_triple) == 0:
+            sr_triple = native_link_triple()
         end
-        o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
-        o.fp_contract = opt.llvm_fp_contract
-
-        if o.output_mode == lv.LV_OUT_EXEC:
-            mut links := Vector {} as Vector<str>
-            mut kinds := Vector {} as Vector<str>
-            ll_gather_links(
-                lgr, pack, opt.input, a, prog, lp.Code(modpack), table, links, kinds
-            )
-            o.link_libs = links
-            o.link_kinds = kinds
-            o.nlink = links.len()
-            mut sr_triple := opt.llvm_target
-            if str.Len(sr_triple) == 0:
-                sr_triple = native_link_triple()
-            end
-            if str.Len(sr_triple) > 0:
-                mut sr := ""
-                if sm.FindSysroot(sr_triple, sr):
-                    o.sysroot = sr
-                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled sysroot: " + sr)
-                else:
-                    mut esr := ""
-                    if EmbeddedSysrootFor(sr_triple, sm.SysrootSubdir(sr_triple), esr):
-                        o.sysroot = esr
-                        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded sysroot: " + esr)
-                    end
+        if str.Len(sr_triple) > 0:
+            mut sr := ""
+            if sm.FindSysroot(sr_triple, sr):
+                o.sysroot = sr
+                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using bundled sysroot: " + sr)
+            else:
+                mut esr := ""
+                if EmbeddedSysrootFor(sr_triple, sm.SysrootSubdir(sr_triple), esr):
+                    o.sysroot = esr
+                    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded sysroot: " + esr)
                 end
             end
         end
+    end
 
-        _pt_cg := pf.Begin(pf.TP_CODEGEN, sf.path)
-        out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
-        pf.End(pf.TP_CODEGEN, _pt_cg)
+    _pt_cg := pf.Begin(pf.TP_CODEGEN, sf.path)
+    out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
+    pf.End(pf.TP_CODEGEN, _pt_cg)
 
-        if str.Len(o.target_triple) == 0:
-            o.target_triple = native_link_triple()
-        end
+    if str.Len(o.target_triple) == 0:
+        o.target_triple = native_link_triple()
+    end
 
-        ir_mode := o.output_mode == lv.LV_OUT_IR
-        mut llpath := ""
-        if ir_mode:
-            if str.Len(opt.output) > 0:
-                llpath = opt.output
-            else:
-                llpath = module + ".ll"
-            end
+    ir_mode := o.output_mode == lv.LV_OUT_IR
+    mut llpath := ""
+    if ir_mode:
+        if str.Len(opt.output) > 0:
+            llpath = opt.output
         else:
-            g_ll_tmp_seq += 1
-            llpath = os.TempDir() + "/salam-ir-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq + ".ll"
+            llpath = module + ".ll"
         end
-        _pt_w := pf.Begin(pf.TP_WRITE, llpath)
-        wrote := os.WriteFile(llpath, out.ll_src)
-        pf.End(pf.TP_WRITE, _pt_w)
-        if wrote < 0:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(llpath))
-            )
-            sm.Free(s)
-            at.FreeAst(a)
-            ret 2
-        end
-        if !out.ok:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_WARN, lv.ErrorOf(out) + "; the program uses constructs the LLVM backend does not yet " + "support, so " + llpath + " may be incomplete"
-            )
-            if !opt.keep_temp && !(ir_mode && str.Len(opt.output) > 0):
-                os.Remove(llpath)
-            end
-            sm.Free(s)
-            at.FreeAst(a)
-            ret RC_LLVM_UNSUPPORTED
-        end
-
-        mut rc := 0
-        if ir_mode:
-            if o.verify_module || o.opt_level != lv.LV_OPT_O0:
-                rc = lv.NativeRun(lgr, llpath, o)
-            end
-            if rc == 0:
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "LLVM IR written to " + llpath)
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_INFO, "  native: clang " + llpath + " -lm -o " + module + " | wasm: clang --target=wasm32-wasi ..."
-                )
-            end
-        else o.output_mode == lv.LV_OUT_JIT:
-            rc = lv.NativeRun(lgr, llpath, o)
-            if opt.keep_temp:
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
-            else:
-                _rm := os.Remove(llpath)
-            end
-        else:
-            if str.Len(opt.output) > 0:
-                if o.output_mode == lv.LV_OUT_EXEC:
-                    o.output_file = exe_name_for(opt.output, opt.llvm_target)
-                else:
-                    o.output_file = opt.output
-                end
-            else:
-                o.output_file = default_llvm_output(
-                    output_stem_of(opt.input), o.output_mode, opt.llvm_target
-                )
-            end
-            rc = lv.NativeRun(lgr, llpath, o)
-            if opt.keep_temp:
-                lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
-            else:
-                _rm2 := os.Remove(llpath)
-            end
-            if rc == 0:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(o.output_file))
-                )
-                if str.Len(opt.exe_path) == 0 && o.output_mode == lv.LV_OUT_EXEC:
-                    opt.exe_path = o.output_file
-                end
-            else o.output_mode == lv.LV_OUT_EXEC && str.Len(opt.llvm_target) == 0:
-                rc = RC_LLVM_LINK_FAILED
-            end
+    else:
+        g_ll_tmp_seq += 1
+        llpath = os.TempDir() + "/salam-ir-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq + ".ll"
+    end
+    _pt_w := pf.Begin(pf.TP_WRITE, llpath)
+    wrote := os.WriteFile(llpath, out.ll_src)
+    pf.End(pf.TP_WRITE, _pt_w)
+    if wrote < 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(llpath))
+        )
+        sm.Free(s)
+        at.FreeAst(a)
+        ret 2
+    end
+    if !out.ok:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_WARN, lv.ErrorOf(out) + "; the program uses constructs the LLVM backend does not yet " + "support, so " + llpath + " may be incomplete"
+        )
+        if !opt.keep_temp && !(ir_mode && str.Len(opt.output) > 0):
+            os.Remove(llpath)
         end
         sm.Free(s)
         at.FreeAst(a)
-        if rc < 0:
-            ret RC_LLVM_UNSUPPORTED
-        end
-        ret rc
+        ret RC_LLVM_UNSUPPORTED
     end
 
-    pub func LlvmBuild(opt &: Dr): int:
-        if opt.command == CMD_OBJ:
-            opt.llvm_emit = lv.LV_OUT_OBJ
-        else:
-            opt.llvm_emit = lv.LV_OUT_EXEC
+    mut rc := 0
+    if ir_mode:
+        if o.verify_module || o.opt_level != lv.LV_OPT_O0:
+            rc = lv.NativeRun(lgr, llpath, o)
         end
-        opt.llvm_opt_level = build_opt_level(opt)
-        rc := Llvm(opt)
-        if rc != 0 && rc != RC_LLVM_UNSUPPORTED && rc != RC_LLVM_LINK_FAILED && str.Len(opt.llvm_target) > 0:
-            io.EPrintln(
-                co.Format1(
-                    i18.Tr(
-                        "salam: cross-compilation for target '%s' failed; see the diagnostics " + "above. If they point to a missing toolchain, install the LLVM " + "tools (clang/llc), plus lld and a sysroot for Windows targets."
-                    ), co.ArgStr(opt.llvm_target)
-                )
+        if rc == 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "LLVM IR written to " + llpath)
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, "  native: clang " + llpath + " -lm -o " + module + " | wasm: clang --target=wasm32-wasi ..."
             )
         end
-        ret rc
+    else o.output_mode == lv.LV_OUT_JIT:
+        rc = lv.NativeRun(lgr, llpath, o)
+        if opt.keep_temp:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
+        else:
+            _rm := os.Remove(llpath)
+        end
+    else:
+        if str.Len(opt.output) > 0:
+            if o.output_mode == lv.LV_OUT_EXEC:
+                o.output_file = exe_name_for(opt.output, opt.llvm_target)
+            else:
+                o.output_file = opt.output
+            end
+        else:
+            o.output_file = default_llvm_output(
+                output_stem_of(opt.input), o.output_mode, opt.llvm_target
+            )
+        end
+        rc = lv.NativeRun(lgr, llpath, o)
+        if opt.keep_temp:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
+        else:
+            _rm2 := os.Remove(llpath)
+        end
+        if rc == 0:
+            lg.Log(
+                lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(o.output_file))
+            )
+            if str.Len(opt.exe_path) == 0 && o.output_mode == lv.LV_OUT_EXEC:
+                opt.exe_path = o.output_file
+            end
+        else o.output_mode == lv.LV_OUT_EXEC && str.Len(opt.llvm_target) == 0:
+            rc = RC_LLVM_LINK_FAILED
+        end
     end
+    sm.Free(s)
+    at.FreeAst(a)
+    if rc < 0:
+        ret RC_LLVM_UNSUPPORTED
+    end
+    ret rc
+end
+
+pub func LlvmBuild(opt &: Dr): int:
+    if opt.command == CMD_OBJ:
+        opt.llvm_emit = lv.LV_OUT_OBJ
+    else:
+        opt.llvm_emit = lv.LV_OUT_EXEC
+    end
+    opt.llvm_opt_level = build_opt_level(opt)
+    rc := Llvm(opt)
+    if rc != 0 && rc != RC_LLVM_UNSUPPORTED && rc != RC_LLVM_LINK_FAILED && str.Len(opt.llvm_target) > 0:
+        io.EPrintln(
+            co.Format1(
+                i18.Tr(
+                    "salam: cross-compilation for target '%s' failed; see the diagnostics " + "above. If they point to a missing toolchain, install the LLVM " + "tools (clang/llc), plus lld and a sysroot for Windows targets."
+                ), co.ArgStr(opt.llvm_target)
+            )
+        )
+    end
+    ret rc
+end

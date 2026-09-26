@@ -118,8 +118,7 @@ func di_read(s &: Sema, d &: Di, a &: at.Ast, nid: int):
     line := at.Get(a, d.vars.get(idx).decl).begin_line as u64
     serr(
         s, 89, span_of(a, nid), co.Format2(
-            i18.Tr("'%s' is read before it is given a value (declared on line %u); give it a value with ':=', or assign to it on every path that reaches here"),
-            co.ArgStr(n.name), co.ArgUint(line)
+            i18.Tr("'%s' is read before it is given a value (declared on line %u); give it a value with ':=', or assign to it on every path that reaches here"), co.ArgStr(n.name), co.ArgUint(line)
         )
     )
     di_set_inited(d, idx, true)
@@ -201,6 +200,46 @@ func di_match(s &: Sema, d &: Di, a &: at.Ast, nid: int):
         arm := at.Child(a, nid, j)
         body := at.Get(a, arm).b
         if at.Get(a, arm).op == tok.TK_KW_ELSE:
+            has_else = true
+        end
+        mut st := di_arm(s, d, a, body, base, nv)
+        if !sema_stmt_terminates(s, a, body):
+            any_live = true
+            repeat nv with k:
+                if st.get(k) == 0:
+                    acc.set(k, 0)
+                end
+            end
+        end
+        st.free()
+    end
+    di_load(d, base, nv)
+    if has_else && any_live:
+        repeat nv with i:
+            if acc.get(i) != 0:
+                di_set_inited(d, i, true)
+            end
+        end
+    end
+    base.free()
+    acc.free()
+end
+
+func di_switch(s &: Sema, d &: Di, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    di_expr(s, d, a, n.a)
+    nv := d.vars.len()
+    mut base := di_snap(d, nv)
+    mut acc := di_snap(d, 0)
+    repeat nv:
+        acc.push(1)
+    end
+    mut has_else := false
+    mut any_live := false
+    repeat at.ChildCount(a, nid) with j:
+        cs := at.Child(a, nid, j)
+        body := at.Get(a, cs).b
+        if at.Get(a, cs).op == tok.TK_KW_ELSE:
             has_else = true
         end
         mut st := di_arm(s, d, a, body, base, nv)
@@ -372,6 +411,8 @@ func di_stmt(s &: Sema, d &: Di, a &: at.Ast, nid: int):
         di_if(s, d, a, nid)
     else k == at.AST_MATCH:
         di_match(s, d, a, nid)
+    else k == at.AST_SWITCH:
+        di_switch(s, d, a, nid)
     else k == at.AST_UNTIL:
         di_loop(s, d, a, at.Get(a, nid).a, at.Get(a, nid).b, 0)
     else k == at.AST_FOR:

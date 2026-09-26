@@ -410,7 +410,7 @@ want() {
     return 1
 }
 
-EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework"
+EXAMPLE_DIRS="apps basics data editor-selected features games interop stdlib types webframework switch match"
 
 want_example() {
     want "$1" && return 0

@@ -26,10 +26,10 @@ pub const CC_BOOL := 0
 
 pub const CC_STR := 1
 
-const K_CC_NUM_BOOL_FLAGS := 25
+const K_CC_NUM_BOOL_FLAGS := 24
 
 k_cc_all_bool_flags := [
-    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_OS_BSOS", "SALAM_OS_UEFI", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_OS_SALAMOS"
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_OS_UEFI", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_OS_SALAMOS"
 ]
 
 struct Bres:
@@ -156,14 +156,7 @@ func cc_push_target_defs(t &: Table, trip: str):
         cc_push_str(t, "SALAM_ARCH", "arm")
     end
 
-    if trip_has(trip, "bsos"):
-        cc_push_bool(t, "SALAM_OS_BSOS", true)
-        cc_push_str(t, "SALAM_OS", "bsos")
-        cc_push_bool(t, "SALAM_FREESTANDING", true)
-        if trip_has(trip, "kernel"):
-            cc_push_bool(t, "SALAM_KERNEL", true)
-        end
-    else trip_has(trip, "salamos"):
+    if trip_has(trip, "salamos"):
         cc_push_bool(t, "SALAM_OS_SALAMOS", true)
         cc_push_str(t, "SALAM_OS", "salamos")
         cc_push_bool(t, "SALAM_FREESTANDING", true)
@@ -428,6 +421,39 @@ func cc_note_pruned(a &: at.Ast, file: str, id: int):
     end
 end
 
+func cc_is_defined_call(a &: at.Ast, n: at.Node): bool:
+    if n.kind != at.AST_CALL || n.a == 0:
+        ret false
+    end
+    callee := at.Get(a, n.a)
+    ret callee.kind == at.AST_IDENTIFIER && str.Equals(callee.name, "defined")
+end
+
+func cc_literalize(a &: at.Ast, t: Table, id: int):
+    mut n := at.Get(a, id)
+    if !str.StartsWith(n.name, "SALAM_"):
+        ret
+    end
+    ci := Lookup(t, n.name)
+    if ci < 0:
+        ret
+    end
+    e := t.entries.get(ci)
+    n.kind = at.AST_LITERAL
+    if e.kind == CC_BOOL:
+        n.op = e.bval ? tok.TK_KW_TRUE : tok.TK_KW_FALSE
+        n.value_kind = tok.TV_BOOL
+        n.value_bool = e.bval
+        n.name = e.bval ? "true" : "false"
+    else:
+        n.op = tok.TK_STRING
+        n.value_kind = tok.TV_STRING
+        n.value_str = e.sval
+        n.name = "\"" + e.sval + "\""
+    end
+    at.Put(a, id, n)
+end
+
 func cc_resolve_if(
     a &: at.Ast, log: lg.Logger, file: str, t: Table, id: int, top_level: bool, ok &: bool
 ): int:
@@ -456,6 +482,7 @@ func cc_resolve_if(
         ok = false
         ret 0
     end
+    cc_resolve_slot(a, log, file, t, n.a, ok)
     cc_process_list(a, log, file, t, n.b, false, ok)
     if n.c != 0:
         if at.KindOf(a, n.c) == at.AST_IF:
@@ -484,7 +511,14 @@ func cc_resolve_slot(
         cc_process_list(a, log, file, t, id, false, ok)
         ret id
     end
+    if k == at.AST_IDENTIFIER:
+        cc_literalize(a, t, id)
+        ret id
+    end
     n := at.Get(a, id)
+    if cc_is_defined_call(a, n):
+        ret id
+    end
     nty := cc_resolve_slot(a, log, file, t, n.ty, ok)
     na := cc_resolve_slot(a, log, file, t, n.a, ok)
     nb := cc_resolve_slot(a, log, file, t, n.b, ok)

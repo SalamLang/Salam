@@ -134,7 +134,7 @@ byte-compiles the Emacs mode with warnings as errors.
 
 ## Snippets
 
-`vscode/snippets/salam.code-snippets` is the single source for all 24
+`vscode/snippets/salam.code-snippets` is the single source for all 25
 snippets. The generator converts it to Sublime completions, UltiSnips and
 YASnippet, which all use the same `${1:placeholder}` syntax.
 

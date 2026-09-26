@@ -79,7 +79,7 @@ build would.
 with `yas-snippet-dirs` when YASnippet is loaded. Triggers: `main`, `func`,
 `funcv`, `if`, `ifelse`, `until`, `each`, `eachi`, `eachkv`, `repeat`,
 `repeati`, `repeatrange`, `var`, `mut`, `const`, `struct`, `enum`,
-`interface`, `impl`, `import`, `extern`, `layout`, `component`, `println`.
+`interface`, `impl`, `import`, `extern`, `export`, `layout`, `component`, `println`.
 
 ## What is generated
 

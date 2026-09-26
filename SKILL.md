@@ -277,9 +277,13 @@ end
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `char`,
-`str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`, `float`=`f32`. Literals:
-`42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
+`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+`float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
+`اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
+bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
+`sizeof(T)` returns `usize`.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
@@ -1564,7 +1568,7 @@ two closing angle brackets, not a shift.
 | `const T x`                                  | `const NAME := …` (compile-time) or an immutable `:=` binding                                                               |
 | `errno` / return-code error handling         | `bool` / `Option<T>` / sentinel + an error record/struct                                                                    |
 | `assert()`                                   | `import testing` (`AssertTrue`, …) or an explicit `if … : print + os.Exit`                                                  |
-| `int8_t … uint64_t`, `size_t`                | `i8…i64`, `u8…u64` (use `u64` for sizes/counts)                                                                             |
+| `int8_t … uint64_t`, `size_t`, `ssize_t`     | `i8…i64`, `u8…u64`, `usize` for `size_t`, `size` for `ssize_t`/`intptr_t`/`ptrdiff_t`                                       |
 | bitfields / flag enums                       | bitwise ops on an integer (`flags & MASK`, §12.1), or a small struct of `bool`s                                             |
 
 ### 12.3 Building blocks the compiler needs (all in Salam today)

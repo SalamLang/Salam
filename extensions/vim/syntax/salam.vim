@@ -21,13 +21,14 @@ syn keyword salamKeyword      on as layout operator impl بر برگردان چ�
 syn keyword salamBoolean      true false درست نادرست
 syn keyword salamNull         null پوچ
 syn keyword salamThis         this این
-syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16 u32 uint u64 usize size f32 float f64 تهی منطقی نویسه رشته یونیکد صحیح۸ صحیح۱۶ صحیح۳۲ صحیح صحیح۶۴ صحیح8 صحیح16 صحیح32 صحیح64 طبیعی۸ طبیعی۱۶ طبیعی۳۲ طبیعی طبیعی۶۴ طبیعی8 طبیعی16 طبیعی32 طبیعی64 اندازه مثبت اندازه اعشار۳۲ اعشار اعشار۶۴ اعشار32 اعشار64
+syn keyword salamType         void bool char str uchar i8 i16 i32 int i64 u8 u16 u32 uint u64 usize size f32 float f64 تهی منطقی نویسه رشته یونیکد صحیح۸ صحیح۱۶ صحیح۳۲ صحیح صحیح۶۴ صحیح8 صحیح16 صحیح32 صحیح64 طبیعی۸ طبیعی۱۶ طبیعی۳۲ طبیعی طبیعی۶۴ طبیعی8 طبیعی16 طبیعی32 طبیعی64 اندازه اعشار۳۲ اعشار اعشار۶۴ اعشار32 اعشار64
 syn keyword salamType         auto خودکار تلقائي
 syn keyword salamBuiltinType  وکتور Vector نگاشت HashMap پیمایشگرنگاشت MapIter پرونده File گوناگون Variant
 syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی
 syn keyword salamOperatorWord و یا برابر نابرابر
 syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn
 syn match salamStorageClass "\<\%(بی‌کاره\)\>"
+syn match salamType "\<\%(اندازه مثبت\)\>"
 syn match salamBuiltin "\<\%(نادرست‌سرچاپ\|نادرست‌چاپ\)\>"
 
 syn keyword salamFuncDecl  func روال nextgroup=salamFunctionName skipwhite

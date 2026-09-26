@@ -19,7 +19,9 @@ package router
 import mem
 
 const _CH_SLASH := 47
+
 const _CH_COLON := 58
+
 const _CH_STAR := 42
 
 @en "Param"
@@ -219,6 +221,48 @@ func _add(r &: Router, method: str, pattern: str, fn: i64):
     end
 end
 
+func _dispatch_exact(r: Router, method: str, path: str): Match:
+    mut m := Match {}
+    mid := _method_id(method)
+    if r.idx_mask > 0:
+        mut slot := _hash_key(mid, path) & r.idx_mask
+        until r.idx.get(slot) != 0:
+            route := r.routes.get(r.idx.get(slot) - 1)
+            if route.mid == mid && route.pattern == path:
+                if mid != 0 || route.method == method:
+                    m.matched = true
+                    m.fn = route.fn
+                    ret m
+                end
+            end
+            slot = (slot + 1) & r.idx_mask
+        end
+    end
+    if r.n_dynamic == 0: ret m end
+    n := r.routes.len()
+    mut best := 3
+    mut i := 0
+    until i < n:
+        route := r.routes.get(i)
+        if route.spec != 0 && route.mid == mid && route.spec < best:
+            if mid != 0 || route.method == method:
+                mut params := ParamList {}
+                if _try_match(route.pattern, path, params):
+                    _free_params(m.params)
+                    m.matched = true
+                    m.fn = route.fn
+                    m.params = params
+                    best = route.spec
+                else:
+                    _free_params(params)
+                end
+            end
+        end
+        i += 1
+    end
+    ret m
+end
+
 @en "NewRouter"
 @fa "مسیریاب جدید"
 pub func NewRouter(): Router:
@@ -294,43 +338,9 @@ end
 @en "Dispatch"
 @fa "اعزام"
 pub func Dispatch(r: Router, method: str, path: str): Match:
-    mut m := Match {}
-    mid := _method_id(method)
-    if r.idx_mask > 0:
-        mut slot := _hash_key(mid, path) & r.idx_mask
-        until r.idx.get(slot) != 0:
-            route := r.routes.get(r.idx.get(slot) - 1)
-            if route.mid == mid && route.pattern == path:
-                if mid != 0 || route.method == method:
-                    m.matched = true
-                    m.fn = route.fn
-                    ret m
-                end
-            end
-            slot = (slot + 1) & r.idx_mask
-        end
-    end
-    if r.n_dynamic == 0: ret m end
-    n := r.routes.len()
-    mut best := 3
-    mut i := 0
-    until i < n:
-        route := r.routes.get(i)
-        if route.spec != 0 && route.mid == mid && route.spec < best:
-            if mid != 0 || route.method == method:
-                mut params := ParamList {}
-                if _try_match(route.pattern, path, params):
-                    _free_params(m.params)
-                    m.matched = true
-                    m.fn = route.fn
-                    m.params = params
-                    best = route.spec
-                else:
-                    _free_params(params)
-                end
-            end
-        end
-        i += 1
+    m := _dispatch_exact(r, method, path)
+    if !m.matched && method == "HEAD":
+        ret _dispatch_exact(r, "GET", path)
     end
     ret m
 end

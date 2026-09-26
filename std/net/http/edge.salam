@@ -1,0 +1,103 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import mem
+import str
+import os
+import net.router
+
+if SALAM_OS_WASM:
+    extern:
+        func read(fd: int, buf: void *, n: u32): int
+        func write(fd: int, buf: void *, n: u32): int
+    end
+end
+
+const _EDGE_IN_FD := 0
+
+const _EDGE_OUT_FD := 3
+
+const _EDGE_CHUNK := 65536
+
+func _edge_read_request(): str:
+    if SALAM_OS_WASM:
+        mut cap := _EDGE_CHUNK
+        mut buf := mem.Allocate((cap + 1) as u64)
+        mut got := 0
+        until 1 == 1:
+            if got == cap:
+                cap = cap * 2
+                buf = mem.Reallocate(buf, (cap + 1) as u64)
+            end
+            n := read(_EDGE_IN_FD, ((buf as i64) + (got as i64)) as void *, (cap - got) as u32)
+            if n <= 0:
+                break
+            end
+            got += n
+        end
+        p := buf as i8 *
+        p[got] = 0 as i8
+        ret buf as str
+    else:
+        ret ""
+    end
+end
+
+func _edge_write(data: void *, n: int):
+    if SALAM_OS_WASM:
+        mut off := 0
+        until off < n:
+            w := write(_EDGE_OUT_FD, ((data as i64) + (off as i64)) as void *, (n - off) as u32)
+            if w <= 0:
+                ret
+            end
+            off += w
+        end
+    else:
+        ret
+    end
+end
+
+func _edge_serve(r: router.Router, hide: bool, log: bool):
+    slot := _srv_claim(r, hide, log)
+    req := _edge_read_request()
+    ctx := salam_ctx_new(0 - 1)
+    mut keep := false
+    if _route_request(slot, 0 - 1, ctx, req, keep):
+        if salam_ctx_is_sent(ctx) == 0:
+            mut b := str.NewBuilder()
+            _fill_response(b, ctx, _srv_shdr.get(slot), false)
+            _edge_write(b.data, b.len as int)
+            str.BufFree(b)
+        end
+    else:
+        bad := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        _edge_write(bad as void *, bad.len())
+    end
+    salam_ctx_free(ctx)
+    mem.Free(req as void *)
+    os.Exit(0)
+end
+
+@en "IsEdge"
+@fa "لبه است"
+pub func IsEdge(): bool:
+    if SALAM_OS_WASM:
+        ret true
+    else:
+        ret false
+    end
+end

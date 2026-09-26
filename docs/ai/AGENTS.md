@@ -15,8 +15,8 @@ package, `salam_find_examples` to see a working usage.
 ## 1. The rule that trips up every newcomer: `until` means `while`
 
 `until COND:` runs the body **while `COND` is true**. It is not a do-while and
-it is not "loop until the condition becomes true". It is a plain `while` with a
-different spelling.
+it is not "loop until the condition becomes true". There is no `while`
+keyword in Salam at all - `until` is the only spelling this loop has.
 
 ```salam
 mut i := 0
@@ -217,6 +217,35 @@ pub func Trim(s: str): str: ret s.trim() end
 ```
 
 Compile non-English source with `--lang=fa`.
+
+## 11. `switch` vs `match`
+
+`switch`/`ترابرد` is a **statement** with real C-style fallthrough - no
+`case`/`default` keywords, bare labels closed by `end` like a `match` arm,
+`break` to stop falling through:
+
+```salam
+switch code:
+    400, 404: println "client error"     // falls through unless it breaks
+    500:      println "server error"  break
+    >= 600:   println "unknown"          // leading relational op: > >= < <= == !=
+    else:     println "ok"               // wildcard; must be last
+end
+```
+
+Use `switch` for fallthrough or open-ended range/relational labels. Use
+`match` (an **expression**, not a statement) when the subject is an enum or
+`Variant` and every case must be handled - `switch` has no exhaustiveness
+check and rejects a `Variant` subject outright (semantic error, points you at
+`match`). `break` inside a `switch` exits the switch only; `continue` is not
+caught by it and still targets an enclosing loop.
+
+## 12. Enum members require a comma
+
+`enum E: A, B, C end` - the comma between members is mandatory, not optional
+style. A bare newline is not enough because member names may contain spaces
+(`enum Status: not started, in progress, done end`), so leaving the comma out
+is a compile error, not a silent misparse.
 
 ---
 

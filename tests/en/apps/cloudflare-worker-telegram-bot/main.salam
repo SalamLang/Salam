@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import os
+import conv
+import time
+import net.http
+import net.router
+import telegram.bot
+
+func main_menu(): str:
+    mut first := Vector {} as Vector<str>
+    first.push(bot.InlineButton("👋 Salam", "salam"))
+    first.push(bot.InlineButton("🎲 Roll a dice", "dice"))
+    mut second := Vector {} as Vector<str>
+    second.push(bot.InlineButton("🕒 Server time", "time"))
+    second.push(bot.InlineButtonURL("⭐ Salam on GitHub", "https://github.com/SalamLang/Salam"))
+    mut rows := Vector {} as Vector<str>
+    rows.push(bot.Row(first))
+    rows.push(bot.Row(second))
+    ret bot.InlineKeyboardMarkup(rows)
+end
+
+func help_text(): str:
+    mut t := "I am a Salam program running on Cloudflare Workers.\n\n"
+    t += "/start - show the menu\n"
+    t += "/help - this message\n"
+    t += "/echo <text> - repeat after you\n"
+    t += "/upper <text> - SHOUT it\n"
+    t += "/reverse <text> - txet ruoy esrever\n"
+    t += "/fib <n> - the n-th Fibonacci number\n"
+    t += "/whoami - what Telegram tells me about you\n"
+    t += "/time - the time on the edge\n\n"
+    t += "Anything else is echoed back. Say سلام!"
+    ret t
+end
+
+func fib(n: int): i64:
+    mut a := 0 as i64
+    mut b := 1 as i64
+    repeat n:
+        t := a + b
+        a = b
+        b = t
+    end
+    ret a
+end
+
+func now_text(): str:
+    ret "It is " + time.FormatHTTPDate(time.Now()) + " on the edge."
+end
+
+func dice(): int:
+    ret ((time.NowNanos() / 1000) % 6 + 1) as int
+end
+
+func whoami(m: bot.Message): str:
+    u := m.from_user
+    mut t := "id: " + str.FromInt(u.id) + "\n"
+    t += "name: " + u.first_name
+    if u.last_name.len() > 0:
+        t += " " + u.last_name
+    end
+    t += "\n"
+    if u.username.len() > 0:
+        t += "username: @" + u.username + "\n"
+    end
+    if u.language_code.len() > 0:
+        t += "language: " + u.language_code + "\n"
+    end
+    t += "chat: " + m.chat.chat_type
+    ret t
+end
+
+func is_greeting(text: str): bool:
+    t := str.Lower(text.trim())
+    ret t == "salam" || t == "hi" || t == "hello" || t == "سلام" || t == "مرحبا"
+end
+
+func on_command(m: bot.Message): str:
+    chat := m.chat.id
+    cmd := bot.CommandName(m.text)
+    args := bot.CommandArgs(m.text)
+    if cmd == "start":
+        name := m.from_user.first_name
+        opts := bot.SendOptions { reply_markup = main_menu() }
+        ret bot.ReplyMessageOptions(chat, "Salam " + name + "! 👋\nPick something, or send /help.", opts)
+    end
+    if cmd == "help":
+        ret bot.ReplyMessage(chat, help_text())
+    end
+    if cmd == "echo" || cmd == "upper" || cmd == "reverse":
+        if args.len() == 0:
+            ret bot.ReplyMessage(chat, "Usage: /" + cmd + " <text>")
+        end
+        if cmd == "upper":
+            ret bot.ReplyMessage(chat, str.Upper(args))
+        end
+        if cmd == "reverse":
+            ret bot.ReplyMessage(chat, str.Reverse(args))
+        end
+        ret bot.ReplyMessage(chat, args)
+    end
+    if cmd == "fib":
+        n := conv.ParseInt(args) as int
+        if args.len() == 0 || n < 0 || n > 90:
+            ret bot.ReplyMessage(chat, "Usage: /fib <n>, with 0 <= n <= 90")
+        end
+        ret bot.ReplyMessage(chat, "fib(" + str.FromInt(n as i64) + ") = " + str.FromInt(fib(n)))
+    end
+    if cmd == "whoami":
+        ret bot.ReplyMessage(chat, whoami(m))
+    end
+    if cmd == "time":
+        ret bot.ReplyMessage(chat, now_text())
+    end
+    ret bot.ReplyMessage(chat, "I don't know /" + cmd + ". Try /help.")
+end
+
+func on_message(m: bot.Message): str:
+    if bot.IsCommand(m.text):
+        ret on_command(m)
+    end
+    if m.text.len() == 0:
+        ret bot.ReplyMessage(m.chat.id, "I can only read text for now.")
+    end
+    if is_greeting(m.text):
+        ret bot.ReplyMessage(m.chat.id, "سلام " + m.from_user.first_name + "! 🌙")
+    end
+    opts := bot.SendOptions { reply_to_message_id = m.message_id }
+    ret bot.ReplyMessageOptions(m.chat.id, "You said: " + m.text, opts)
+end
+
+func on_callback(q: bot.CallbackQuery): str:
+    if q.data == "salam":
+        ret bot.ReplyAnswerCallbackQuery(q.id, "سلام " + q.from_user.first_name + "! 👋", false)
+    end
+    if q.data == "dice":
+        ret bot.ReplyAnswerCallbackQuery(q.id, "🎲 You rolled a " + str.FromInt(dice() as i64) + "!", true)
+    end
+    if q.data == "time":
+        ret bot.ReplyAnswerCallbackQuery(q.id, now_text(), true)
+    end
+    ret bot.ReplyAnswerCallbackQuery(q.id, "", false)
+end
+
+func webhook(h: i64):
+    ctx := http.Ctx(h)
+    secret := os.Env("TELEGRAM_SECRET")
+    if secret.len() > 0 && http.Header(ctx, bot.SECRET_HEADER) != secret:
+        http.SetStatus(ctx, 401)
+        http.Text(ctx, "unauthorized\n")
+        ret
+    end
+    u := bot.ParseUpdate(http.Body(ctx))
+    if u.has_message:
+        println "message from", u.message.from_user.id, ":", u.message.text
+        http.Json(ctx, on_message(u.message))
+        ret
+    end
+    if u.has_callback_query:
+        println "button", u.callback_query.data, "from", u.callback_query.from_user.id
+        http.Json(ctx, on_callback(u.callback_query))
+        ret
+    end
+    http.Text(ctx, "ok\n")
+end
+
+func status(h: i64):
+    http.Text(http.Ctx(h), "Salam Telegram bot is running. Telegram posts updates to /webhook.\n")
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/", status)
+    router.Post(r, "/webhook", webhook)
+    s := http.NewServer(8080)
+    http.Use(s, r)
+    http.Run(s)
+end

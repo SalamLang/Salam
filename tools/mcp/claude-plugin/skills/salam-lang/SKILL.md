@@ -87,8 +87,8 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `str.Split` can segfault reading its **last** element on gcc-linked builds.
   Prefer `find`/`substr`.
 - `os.shell.Run` deadlocks when the child writes more than ~64KB.
-- `salam js` has no real 64-bit integers: `i64`/`u64`/`size`/`usize` are JS
-  numbers, so wraparound, shifts past 31 bits and values above 2^53 are wrong.
+- `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
+  exact up to 2^53, but larger results or intermediates are rounded.
 - A bare `ret` in `main` passes `salam_check` and fails `salam_build` with a
   raw gcc error. If check passes but build fails, look here first.
 - Source files are keyed by **filename**, not package: two files named

@@ -265,10 +265,12 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   (~64KB) blocks forever. For anything that might produce real volume,
   redirect to a file and read it back, or use `os.RunCapture`.
 
-- **The JavaScript backend has no real 64-bit integers.** `salam js` maps
-  `i64`/`u64`/`size`/`usize` to JS numbers, so wraparound (`0 - 1` as `u64`),
-  shifts past 31 bits and values above 2^53 come out wrong, and `sizeof`
-  throws. Keep 64-bit math on the native backends or check it with `salam run`.
+- **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
+  `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
+  wraparound and casts are computed exactly, but a result (or an intermediate
+  value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
+  `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
+  hashes, with `salam run`.
 
 - **`os.Args()` has a broken generic type.** Binding any element to a local
   (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.

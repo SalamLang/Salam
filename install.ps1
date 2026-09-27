@@ -1367,6 +1367,7 @@ try {
 
             if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
                 $downloaded = $true
+                $releaseTag = "v$Version"
                 break
             }
         }
@@ -1418,6 +1419,7 @@ try {
 
                 if (Save-Url -Url $url -Destination $archive -ShowProgress $true -Quiet $false) {
                     $Version = $candidate
+                    $releaseTag = $tag
                     $downloaded = $true
                     break
                 }
@@ -1517,6 +1519,21 @@ try {
 
     if (!(Test-Path (Join-Path $InstallDir "std"))) {
         Write-Warn "no std\ directory in this release - imports will not resolve"
+    }
+
+    $receiptLines = @(
+        "channel=release",
+        "tag=$releaseTag",
+        "version=$Version",
+        "platform=$platform",
+        ("installed_at=" + [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")),
+        "installer=install.ps1"
+    )
+
+    try {
+        [IO.File]::WriteAllLines((Join-Path $InstallDir ".salam-release"), $receiptLines)
+    }
+    catch {
     }
 
     if ($ModifyPath -and $isDefaultDir) {

@@ -23,6 +23,54 @@ func find_sig(s &: Sema, fsym: int, decl: int): int:
     ret 0
 end
 
+func op_method_symbol(name: str): str:
+    names := ["operator_add", "+", "operator_sub", "-", "operator_mul", "*", "operator_div", "/", "operator_mod", "%", "operator_pow", "**", "operator_eq", "==", "operator_ne", "!=", "operator_lt", "<", "operator_gt", ">", "operator_le", "<=", "operator_ge", ">="]
+    repeat len(names) / 2 in i:
+        if str.Equals(names[i * 2], name):
+            ret names[i * 2 + 1]
+        end
+    end
+    ret ""
+end
+
+func check_operator_arity(s &: Sema, a &: at.Ast, fnid: int, fsp: co.SrcSpan):
+    fn := at.Get(a, fnid)
+    mut np := 0
+    repeat fn.list.len() in i:
+        if at.KindOf(a, fn.list.get(i)) == at.AST_PARAM:
+            np += 1
+        end
+    end
+    if str.Equals(fn.name, "operator_sub"):
+        if np > 1:
+            serr(s, 12, fsp, i18.Tr("operator '-' takes no parameters (negation, '-x') or one parameter (subtraction, 'x - y')"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_not"):
+        if np != 0:
+            serr(s, 12, fsp, i18.Tr("operator '!' takes no parameters: it applies to 'this' alone"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_index"):
+        if np != 1:
+            serr(s, 12, fsp, i18.Tr("operator '[]' takes one parameter (the index) and 'operator []=' takes two (the index and the value)"))
+        end
+        ret
+    end
+    if str.Equals(fn.name, "operator_index_set"):
+        if np != 2:
+            serr(s, 12, fsp, i18.Tr("operator '[]' takes one parameter (the index) and 'operator []=' takes two (the index and the value)"))
+        end
+        ret
+    end
+    sym := op_method_symbol(fn.name)
+    if str.Len(sym) > 0 && np != 1:
+        serr(s, 12, fsp, co.Format1(i18.Tr("operator '%s' takes exactly one parameter: the right-hand operand"), co.ArgStr(sym)))
+    end
+end
+
 func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
     if sigid != 0:
         mut sg0 := sig_at(s, sigid)
@@ -35,6 +83,9 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
     end
     fn := at.Get(a, fnid)
     fsp := span_of(a, fnid)
+    if owner != 0 && str.StartsWith(fn.name, "operator_"):
+        check_operator_arity(s, a, fnid, fsp)
+    end
     if fn.is_noret && sigid != 0:
         sgn := sig_at(s, sigid)
         if !sgn.infer_ret && sgn.ret_type >= 0 && ty_at(s, sgn.ret_type).kind != TY_VOID:

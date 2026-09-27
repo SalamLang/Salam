@@ -33,7 +33,7 @@ end
 func _map_op(x &: tensor.Tensor, op: str, a1: f64, a2: f64): tensor.Tensor:
     out := tensor.Clone(x)
     p := out.data.data
-    repeat out.numel() with k:
+    repeat out.numel() in k:
         v := p[k] as f64
         mut r := v
         if str.Equals(op, "Erf"): r = _erf(v)
@@ -99,7 +99,7 @@ func _pow(model &: Model, node &: Node, env &: _Env): bool:
     out := tensor.Clone(ea)
     p := out.data.data
     pb := eb.data.data
-    repeat out.numel() with k: p[k] = math.Pow(p[k] as f64, pb[k] as f64) as f32 end
+    repeat out.numel() in k: p[k] = math.Pow(p[k] as f64, pb[k] as f64) as f32 end
     ea.free()
     eb.free()
     _emit(node, env, 0, out)
@@ -135,7 +135,7 @@ func _variadic(model &: Model, node &: Node, env &: _Env): bool:
         out.free()
         p := ea.data.data
         pb := eb.data.data
-        repeat ea.numel() with k:
+        repeat ea.numel() in k:
             if str.Equals(node.op, "Min"):
                 if pb[k] < p[k]: p[k] = pb[k] end
             else str.Equals(node.op, "Max"):
@@ -161,19 +161,19 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
     k := node.attr_index("axes")
     if k >= 0:
         a := node.attrs.get(k)
-        repeat a.ints.len() with i: axes.push(_norm_axis(a.ints.get(i), x.rank())) end
+        repeat a.ints.len() in i: axes.push(_norm_axis(a.ints.get(i), x.rank())) end
     else if node.inputs.len() > 1 && str.Len(node.inputs.get(1)) > 0:
         mut t := tensor.Empty()
         if _in(model, node, env, 1, t) == false:
             axes.free()
             ret false
         end
-        repeat t.numel() with i: axes.push(_norm_axis(t.at(i) as i64, x.rank())) end
+        repeat t.numel() in i: axes.push(_norm_axis(t.at(i) as i64, x.rank())) end
     else:
-        repeat x.rank() with i: axes.push(i) end
+        repeat x.rank() in i: axes.push(i) end
     end
-    repeat axes.len() with i:
-        repeat axes.len() - 1 - i with j:
+    repeat axes.len() in i:
+        repeat axes.len() - 1 - i in j:
             if axes.get(j) < axes.get(j + 1):
                 t := axes.get(j)
                 axes.set(j, axes.get(j + 1))
@@ -182,7 +182,7 @@ func _reduce(model &: Model, node &: Node, env &: _Env): bool:
         end
     end
     mut cur := tensor.Clone(x)
-    repeat axes.len() with i:
+    repeat axes.len() in i:
         ax := axes.get(i)
         if ax < 0 || ax >= cur.rank():
             axes.free()
@@ -220,7 +220,7 @@ func _gather(model &: Model, node &: Node, env &: _Env): bool:
     ax := _norm_axis(node.attr_int("axis", 0), x.rank())
     dim := ax >= 0 && ax < x.rank() ? x.dim(ax) : 0
     mut ids := Vector {} as Vector<int>
-    repeat idx.numel() with i:
+    repeat idx.numel() in i:
         mut v := idx.at(i) as int
         if v < 0: v = v + dim end
         ids.push(v)
@@ -233,7 +233,7 @@ func _gather(model &: Model, node &: Node, env &: _Env): bool:
     end
     if idx.rank() == 0 && y.rank() > 1:
         mut shape := Vector {} as Vector<int>
-        repeat y.rank() with i:
+        repeat y.rank() in i:
             if i != ax: shape.push(y.dim(i)) end
         end
         if shape.len() == 0: shape.push(1) end
@@ -257,14 +257,14 @@ func _slice(model &: Model, node &: Node, env &: _Env): bool:
         ret false
     end
     if _int_list(model, node, env, "axes", 3, axes) == false:
-        repeat starts.len() with i: axes.push(i) end
+        repeat starts.len() in i: axes.push(i) end
     end
     if axes.len() == 0:
-        repeat starts.len() with i: axes.push(i) end
+        repeat starts.len() in i: axes.push(i) end
     end
     mut steps := Vector {} as Vector<int>
     if _int_list(model, node, env, "steps", 4, steps):
-        repeat steps.len() with i:
+        repeat steps.len() in i:
             if steps.get(i) != 1:
                 model.error = str.Clone("Slice: only step 1 is supported")
                 ret false
@@ -272,7 +272,7 @@ func _slice(model &: Model, node &: Node, env &: _Env): bool:
         end
     end
     mut cur := tensor.Clone(x)
-    repeat starts.len() with i:
+    repeat starts.len() in i:
         ax := _norm_axis(axes.get(i) as i64, cur.rank())
         if ax < 0 || ax >= cur.rank():
             cur.free()
@@ -318,7 +318,7 @@ func _split(model &: Model, node &: Node, env &: _Env): bool:
         repeat parts: sizes.push(x.dim(ax) / parts) end
     end
     mut off := 0
-    repeat sizes.len() with i:
+    repeat sizes.len() in i:
         len := sizes.get(i)
         if off + len > x.dim(ax):
             sizes.free()
@@ -336,7 +336,7 @@ func _shape_op(model &: Model, node &: Node, env &: _Env): bool:
     mut x := tensor.Empty()
     if _in(model, node, env, 0, x) == false: ret false end
     mut out := tensor.Zeros1(x.rank())
-    repeat x.rank() with i: out.set_at(i, x.dim(i) as f64) end
+    repeat x.rank() in i: out.set_at(i, x.dim(i) as f64) end
     _emit(node, env, 0, out)
     ret true
 end
@@ -346,7 +346,7 @@ func _expand(model &: Model, node &: Node, env &: _Env): bool:
     mut sh := tensor.Empty()
     if _in(model, node, env, 0, x) == false || _in(model, node, env, 1, sh) == false: ret false end
     mut shape := Vector {} as Vector<int>
-    repeat sh.numel() with i:
+    repeat sh.numel() in i:
         mut d := sh.at(i) as int
         if d < 0: d = 1 end
         shape.push(d)
@@ -404,7 +404,7 @@ func _prelu(model &: Model, node &: Node, env &: _Env): bool:
     inner := x.rank() > 2 ? x.numel() / (x.dim(0) * x.dim(1)) : 1
     chan := x.rank() > 1 ? x.dim(1) : 1
     zero := 0.0 as f32
-    repeat out.numel() with k:
+    repeat out.numel() in k:
         if p[k] < zero:
             mut s := ps[0]
             if ns > 1:
@@ -436,7 +436,7 @@ func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
         ret false
     end
     mut inner := 1
-    repeat x.rank() with i:
+    repeat x.rank() in i:
         if i >= ax: inner = inner * x.dim(i) end
     end
     if inner == 0:
@@ -449,19 +449,19 @@ func _layernorm(model &: Model, node &: Node, env &: _Env): bool:
     nsc := scale.numel()
     nb := bias.numel()
     chan := x.rank() > 1 ? x.dim(1) : 1
-    repeat outer with r:
+    repeat outer in r:
         base := r * inner
         mut mean := 0.0
-        repeat inner with k: mean += p[base + k] as f64 end
+        repeat inner in k: mean += p[base + k] as f64 end
         mean = mean / (inner as f64)
         mut var := 0.0
-        repeat inner with k:
+        repeat inner in k:
             d := (p[base + k] as f64) - mean
             var += d * d
         end
         var = var / (inner as f64)
         inv := 1.0 / math.Sqrt(var + eps)
-        repeat inner with k:
+        repeat inner in k:
             v := ((p[base + k] as f64) - mean) * inv
             mut idx := k
             if instance: idx = r % chan end
@@ -480,7 +480,7 @@ func _int_list(model &: Model, node &: Node, env &: _Env, name: str, k: int, out
     a := node.attr_index(name)
     if a >= 0:
         at := node.attrs.get(a)
-        repeat at.ints.len() with i: out.push(at.ints.get(i) as int) end
+        repeat at.ints.len() in i: out.push(at.ints.get(i) as int) end
         ret true
     end
     if k >= node.inputs.len() || str.Len(node.inputs.get(k)) == 0: ret false end
@@ -489,7 +489,7 @@ func _int_list(model &: Model, node &: Node, env &: _Env, name: str, k: int, out
         model.error = node.op + ": unbound input " + node.inputs.get(k)
         ret false
     end
-    repeat t.numel() with i: out.push(t.at(i) as int) end
+    repeat t.numel() in i: out.push(t.at(i) as int) end
     ret true
 end
 

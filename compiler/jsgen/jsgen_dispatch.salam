@@ -231,6 +231,13 @@ func jsg_enum_member_value(s &: sm.Sema, m: int): str:
     ret co.I64Toa(mv.enum_value)
 end
 
+func jsg_unary_join(op: str, operand: str): str:
+    if (str.Equals(op, "-") || str.Equals(op, "+")) && (str.StartsWith(operand, "-") || str.StartsWith(operand, "+")):
+        ret op + "(" + operand + ")"
+    end
+    ret op + operand
+end
+
 func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
     if id == 0:
         ret "0"
@@ -420,7 +427,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         end
         if (n.op == tok.TK_MINUS || n.op == tok.TK_TILDE) && n.a != 0 && jsg_ts_wrappable(at.Get(a, n.a).type_str):
             ret jsg_wrap_int(
-                cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY), at.Get(a, n.a).type_str
+                jsg_unary_join(cg_op(n.op), jsg_expr_p(g, s, a, n.a, JSP_UNARY)), at.Get(a, n.a).type_str
             )
         end
         if n.a != 0 && jsg_ts_is_w64(at.Get(a, n.a).type_str):
@@ -432,7 +439,7 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                 ret jsg_w64_call(1, "0", jsg_expr_p(g, s, a, n.a, 0), uts)
             end
         end
-        sv2 := cg_op(n.op) + jsg_expr_p(g, s, a, n.a, JSP_UNARY)
+        sv2 := jsg_unary_join(cg_op(n.op), jsg_expr_p(g, s, a, n.a, JSP_UNARY))
         ret jsg_wrap(sv2, JSP_UNARY, minprec)
     end
     if n.kind == at.AST_INCDEC:
@@ -473,7 +480,16 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if str.EndsWith(dts, "*") && !jsg_is_byte_ptr_ts(dts) && jsg_is_byte_ptr_ts(
             sts
         ):
-            ret jsg_unsupported(g, "pointer to " + str.Substr(dts, 0, str.Len(dts) - 1))
+            pts := str.Substr(dts, 0, str.Len(dts) - 1)
+            psym := jsg_ptr_struct(s, dts)
+            if psym != 0:
+                ret "__salz_" + cg_cident(sm.SymAt(s, psym).name) + "()"
+            end
+            psz := jsg_prim_size(pts)
+            if psz > 0:
+                ret "__sal_parr(" + jsg_expr_p(g, s, a, n.a, 0) + ", " + co.I64Toa(psz as i64) + ")"
+            end
+            ret jsg_unsupported(g, "pointer to " + pts)
         end
         if str.StartsWith(dts, "dyn "):
             if str.StartsWith(sts, "dyn "):
@@ -592,15 +608,18 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
         if n.a != 0 && str.Equals(at.Get(a, n.a).type_str, "str"):
             ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + ".charCodeAt(" + jsg_expr_p(g, s, a, n.b, 0) + ")"
         end
+        if n.a != 0 && jsg_ptr_struct(s, at.Get(a, n.a).type_str) != 0:
+            ret jsg_expr_p(g, s, a, n.a, minprec)
+        end
         ret jsg_expr_p(g, s, a, n.a, JSP_MEMBER) + "[" + jsg_expr_p(g, s, a, n.b, 0) + "]"
     end
     if n.kind == at.AST_SLICE:
         base := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
         lo := n.b != 0 ? jsg_expr_p(g, s, a, n.b, 0) : "0"
         if n.c != 0:
-            ret base + ".slice(" + lo + ", " + jsg_expr_p(g, s, a, n.c, 0) + ")"
+            ret "__sal_slice(" + base + ", " + lo + ", " + jsg_expr_p(g, s, a, n.c, 0) + ")"
         end
-        ret base + ".slice(" + lo + ")"
+        ret "__sal_slice(" + base + ", " + lo + ")"
     end
     if n.kind == at.AST_MATCH:
         ret jsg_match_expr(g, s, a, id)

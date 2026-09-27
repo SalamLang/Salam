@@ -247,10 +247,12 @@ end
 func parse_enum(p &: Ps, a &: at.Ast): int:
     p_rule(p, "enum_def")
     n := p_mk(p, a, at.AST_ENUM_DEF)
+    en_kw := str.Equals(p_peek(p).lexeme, "enum")
     p_advance(p)
     at.SetName(a, n, p_name(p, "expected enum name"))
     p_expect(p, tok.TK_COLON, "':' after enum name")
     p_skip_terminators(p)
+    mut has_data := false
     until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
         before := p.pos
         p_skip_terminators(p)
@@ -259,6 +261,10 @@ func parse_enum(p &: Ps, a &: at.Ast): int:
         end
         m := p_mk(p, a, at.AST_ENUM_MEMBER)
         at.SetName(a, m, p_munch_name(p))
+        if p_at(p, tok.TK_LPAREN):
+            has_data = true
+            parse_enum_payload(p, a, m)
+        end
         if p_match(p, tok.TK_ASSIGN):
             ps_set_a(a, m, parse_expr(p, a))
         end
@@ -282,7 +288,96 @@ func parse_enum(p &: Ps, a &: at.Ast): int:
     end
     p_expect(p, tok.TK_KW_END, "'end' to close enum")
     p_fin(p, a, n)
+    if has_data:
+        ret desugar_data_enum(p, a, n, en_kw)
+    end
     ret n
+end
+
+func parse_enum_payload(p &: Ps, a &: at.Ast, m: int):
+    p_advance(p)
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_RPAREN) && !p_at_eof(p):
+        f := p_mk(p, a, at.AST_FIELD)
+        at.SetName(a, f, p_name(p, "expected a field name in the enum member's data"))
+        at.SetTypeNode(a, f, parse_type_anno(p, a))
+        mut fv := at.Get(a, f)
+        fv.is_pub = true
+        at.Put(a, f, fv)
+        p_fin(p, a, f)
+        at.AddChild(a, m, f)
+        if p.panic:
+            ret
+        end
+        p_skip_terminators(p)
+        if !p_match(p, tok.TK_COMMA):
+            break
+        end
+        p_skip_terminators(p)
+    end
+    p_expect(p, tok.TK_RPAREN, "')' to close the enum member's data")
+end
+
+func mk_type_named(a &: at.Ast, src: int, name: str): int:
+    t := mk_from_node(a, at.AST_TYPE, src)
+    at.SetName(a, t, name)
+    ret t
+end
+
+func desugar_data_enum(p &: Ps, a &: at.Ast, n: int, en_kw: bool): int:
+    ename := at.Get(a, n).name
+    members := at.Get(a, n).list
+    if members.len() < 2:
+        p_error_at(p, p_prev(p), "an enum with data needs at least two members")
+        repeat members.len() in k:
+            mut mk := at.Get(a, members.get(k))
+            mk.list = Vector {} as Vector<int>
+            at.Put(a, members.get(k), mk)
+        end
+        ret n
+    end
+    al := mk_from_node(a, at.AST_TYPE_ALIAS, n)
+    at.SetName(a, al, ename)
+    vt := mk_type_named(a, n, en_kw ? "Variant" : "گوناگون")
+    repeat members.len() in i:
+        m := members.get(i)
+        mv := at.Get(a, m)
+        if mv.a != 0:
+            p_error_at(p, p_prev(p), "an enum member with data cannot also have a '= value'")
+        end
+        sd := mk_from_node(a, at.AST_STRUCT_DEF, m)
+        cname := "__" + ename + "__" + mv.name
+        at.SetName(a, sd, cname)
+        if mv.list.len() == 0:
+            f := mk_from_node(a, at.AST_FIELD, m)
+            at.SetName(a, f, "_unit")
+            at.SetTypeNode(a, f, mk_type_named(a, m, en_kw ? "bool" : "منطقی"))
+            lit := mk_from_node(a, at.AST_LITERAL, m)
+            at.SetOp(a, lit, tok.TK_KW_FALSE)
+            at.SetTokenValue(a, lit, tok.ValueBool(false))
+            at.SetName(a, lit, "false")
+            ps_set_a(a, f, lit)
+            mut uf := at.Get(a, f)
+            uf.is_pub = true
+            at.Put(a, f, uf)
+            at.AddChild(a, sd, f)
+        else:
+            repeat mv.list.len() in j:
+                at.AddChild(a, sd, mv.list.get(j))
+            end
+        end
+        mut sv := at.Get(a, sd)
+        sv.is_pub = true
+        sv.enum_payload = true
+        at.Put(a, sd, sv)
+        p.tail_defs.push(sd)
+        at.AddChild(a, vt, mk_type_named(a, m, cname))
+    end
+    at.SetTypeNode(a, al, vt)
+    mut alv := at.Get(a, al)
+    alv.enum_payload = true
+    at.Put(a, al, alv)
+    ret al
 end
 
 func parse_typarams(p &: Ps, a &: at.Ast, n: int):

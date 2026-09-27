@@ -519,6 +519,31 @@ tell where one multi-word name ends and the next begins. Leaving out the
 comma is a compile error (`'end'`/EOF right after a member with no comma
 before it).
 
+**Enums with data** (sum types): a member may carry named values. Build one
+with `Enum.Member(values...)` (or `Enum.Member` when it has none) and take it
+apart in `match` with `Member(a, b)` (use `_` to skip a value) or
+`Member whole` to bind the whole case. `match` must cover every member (or
+have `else`). Such enums print as `Circle(r = 2)` and compare with `==` when
+every value can. They work across packages (`geo.Token.Num(4)`). An enum with
+data needs at least two members, and members cannot also have `= value`.
+
+```salam
+enum Shape:
+    Circle(r: f64)
+    Rect(w: f64, h: f64)
+    Empty
+end
+func area(s: Shape): f64:
+    ret match s:
+        Circle(r) => 3.14 * r * r
+        Rect(w, h) => w * h
+        Empty => 0.0
+    end
+end
+println area(Shape.Rect(3.0, 4.0))
+println Shape.Circle(2.0)          // Circle(r = 2)
+```
+
 **`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
 Assign any member type; narrow it back with `match` on **type-name** patterns:
 
@@ -1327,7 +1352,7 @@ General mapping that applies to all source languages:
 | exception / error            | `bool` flag, `Option<T>`, or sentinel; **no throw/catch**                        |
 | null / nil / None            | `null` (pointers) or `Option.None()`                                             |
 | lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
-| enum / union                 | `enum` (C-like, comma-separated members) or `Variant<…>` (tagged union)          |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`          |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
 | `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
@@ -1380,7 +1405,7 @@ General mapping that applies to all source languages:
   `spawn`; `sync.Mutex/WaitGroup`→`sync.*`; multiple returns → a `struct` or
   out-params via pointers; `error` return → `bool`/`Option`; slices → `Vector`
   or `T[:]` slices; `map`→`HashMap`.
-- **Rust**: `struct`/`enum`(+data)→`struct`/`Variant`; `trait`→`interface`+
+- **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
   `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
   (Salam does not borrow-check). Pattern `match` maps to Salam `match`.

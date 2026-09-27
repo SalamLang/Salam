@@ -1,0 +1,447 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func enum_case_split(name: str, ename &: str, mname &: str): bool:
+    if !str.StartsWith(name, "__"):
+        ret false
+    end
+    rest := str.Substr(name, 2, str.Len(name) - 2)
+    idx := str.IndexOf(rest, "__")
+    if idx <= 0:
+        ret false
+    end
+    ename = str.Substr(rest, 0, idx)
+    mname = str.Substr(rest, idx + 2, str.Len(rest) - idx - 2)
+    ret true
+end
+
+func enum_data_sym(s &: Sema, t: int): int:
+    if t < 0:
+        ret 0
+    end
+    tv := ty_at(s, t)
+    if tv.kind != TY_VARIANT:
+        ret 0
+    end
+    if tv.decl != 0 && sym_at(s, tv.decl).enum_data:
+        ret tv.decl
+    end
+    if tv.params.len() == 0:
+        ret 0
+    end
+    p0 := ty_at(s, tv.params.get(0))
+    if p0.kind != TY_STRUCT || p0.decl == 0 || !sym_at(s, p0.decl).enum_case:
+        ret 0
+    end
+    mut en := ""
+    mut mn := ""
+    if !enum_case_split(sym_at(s, p0.decl).name, en, mn):
+        ret 0
+    end
+    h := sym_at(s, p0.decl).home
+    es := scope_lookup_local(s, h != 0 ? h : s.global, en)
+    if es != 0 && sym_at(s, es).enum_data:
+        ret es
+    end
+    ret 0
+end
+
+func enum_case_member(s &: Sema, cs: int): str:
+    mut en := ""
+    mut mn := ""
+    if enum_case_split(sym_at(s, cs).name, en, mn):
+        ret mn
+    end
+    ret sym_at(s, cs).name
+end
+
+func enum_case_struct(s &: Sema, esym: int, i: int): int:
+    vt := sym_at(s, esym).ty
+    if vt < 0 || i < 0 || i >= ty_at(s, vt).params.len():
+        ret 0
+    end
+    ret ty_at(s, ty_at(s, vt).params.get(i)).decl
+end
+
+func enum_case_count(s &: Sema, esym: int): int:
+    vt := sym_at(s, esym).ty
+    if vt < 0 || ty_at(s, vt).kind != TY_VARIANT:
+        ret 0
+    end
+    ret ty_at(s, vt).params.len()
+end
+
+func enum_case_index(s &: Sema, esym: int, mname: str): int:
+    repeat enum_case_count(s, esym) in i:
+        cs := enum_case_struct(s, esym, i)
+        if cs != 0 && str.Equals(enum_case_member(s, cs), mname):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func enum_case_fields(s &: Sema, a &: at.Ast, cs: int, out &: Vector<str>):
+    d := sym_at(s, cs).decl
+    if d == 0:
+        ret
+    end
+    dn := at.Get(a, d)
+    repeat dn.list.len() in i:
+        f := at.Get(a, dn.list.get(i))
+        if f.kind == at.AST_FIELD && !str.Equals(f.name, "_unit"):
+            out.push(f.name)
+        end
+    end
+end
+
+func enum_data_target(s &: Sema, a &: at.Ast, obj: int, qual &: str): int:
+    qual = ""
+    if obj == 0:
+        ret 0
+    end
+    o := at.Get(a, obj)
+    if o.kind == at.AST_IDENTIFIER:
+        sy := scope_lookup(s, s.cur, o.name)
+        if sy != 0 && sym_at(s, sy).kind == SYM_ALIAS && sym_at(s, sy).enum_data:
+            ret sy
+        end
+        ret 0
+    end
+    if o.kind != at.AST_MEMBER || o.a == 0 || at.KindOf(a, o.a) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    pk := scope_lookup(s, s.cur, at.Get(a, o.a).name)
+    if pk == 0 || sym_at(s, pk).kind != SYM_PACKAGE:
+        ret 0
+    end
+    es := scope_lookup_local(s, sym_at(s, pk).members, pkg_member_canon(s, a, pk, o.name, span_of(a, obj)))
+    if es == 0 || sym_at(s, es).kind != SYM_ALIAS || !sym_at(s, es).enum_data:
+        ret 0
+    end
+    qual = at.Get(a, o.a).name + "."
+    ret es
+end
+
+func enum_make_value(s &: Sema, a &: at.Ast, nid: int, esym: int, qual: str, cs: int, args: Vector<int>):
+    sp := span_of(a, nid)
+    mut fields := Vector {} as Vector<str>
+    defer fields.free()
+    enum_case_fields(s, a, cs, fields)
+    lit := new_node_at(a, at.AST_STRUCT_LIT, sp)
+    at.SetName(a, lit, qual + sym_at(s, cs).name)
+    repeat args.len() in i:
+        if i < fields.len():
+            fi := new_node_at(a, at.AST_FIELD_INIT, span_of(a, args.get(i)))
+            at.SetName(a, fi, fields.get(i))
+            mut fv := at.Get(a, fi)
+            fv.a = args.get(i)
+            at.Put(a, fi, fv)
+            at.AddChild(a, lit, fi)
+        end
+    end
+    ty := new_node_at(a, at.AST_TYPE, sp)
+    at.SetName(a, ty, qual + sym_at(s, esym).name)
+    mut nv := at.Get(a, nid)
+    nv.kind = at.AST_CAST
+    nv.a = lit
+    nv.b = 0
+    nv.c = 0
+    nv.op = 0
+    nv.name = ""
+    nv.list = Vector {} as Vector<int>
+    at.Put(a, nid, nv)
+    at.SetTypeNode(a, nid, ty)
+end
+
+func enum_ctor_rewrite(s &: Sema, a &: at.Ast, n: int): int:
+    callee := at.Get(a, n).a
+    if callee == 0 || at.KindOf(a, callee) != at.AST_MEMBER:
+        ret 0
+    end
+    cv := at.Get(a, callee)
+    mut qual := ""
+    esym := enum_data_target(s, a, cv.a, qual)
+    if esym == 0:
+        ret 0
+    end
+    sp := span_of(a, n)
+    ci := enum_case_index(s, esym, cv.name)
+    if ci < 0:
+        serr(
+            s, 16, sp, co.Format2(
+                i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(cv.name)
+            )
+        )
+        ret 2
+    end
+    cs := enum_case_struct(s, esym, ci)
+    mut fields := Vector {} as Vector<str>
+    defer fields.free()
+    enum_case_fields(s, a, cs, fields)
+    nargs := at.ChildCount(a, n)
+    if nargs != fields.len():
+        serr(
+            s, 12, sp, co.Format4(
+                i18.Tr("'%s' takes %zu value%s, got %zu"), co.ArgStr(sym_at(s, esym).name + "." + cv.name), co.ArgUint(fields.len() as u64), co.ArgStr(plural_suffix(fields.len())), co.ArgUint(nargs as u64)
+            )
+        )
+        ret 2
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    repeat nargs in i:
+        args.push(at.Child(a, n, i))
+    end
+    enum_make_value(s, a, n, esym, qual, cs, args)
+    ret 1
+end
+
+func enum_value_rewrite(s &: Sema, a &: at.Ast, nid: int): int:
+    nv := at.Get(a, nid)
+    mut qual := ""
+    esym := enum_data_target(s, a, nv.a, qual)
+    if esym == 0:
+        ret 0
+    end
+    sp := span_of(a, nid)
+    ci := enum_case_index(s, esym, nv.name)
+    if ci < 0:
+        serr(
+            s, 16, sp, co.Format2(
+                i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(nv.name)
+            )
+        )
+        ret 2
+    end
+    cs := enum_case_struct(s, esym, ci)
+    mut fields := Vector {} as Vector<str>
+    defer fields.free()
+    enum_case_fields(s, a, cs, fields)
+    if fields.len() > 0:
+        serr(
+            s, 12, sp, co.Format3(
+                i18.Tr("'%s.%s' carries data: build it with %s(...)"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(nv.name), co.ArgStr(sym_at(s, esym).name + "." + nv.name)
+            )
+        )
+        ret 2
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    enum_make_value(s, a, nid, esym, qual, cs, args)
+    ret 1
+end
+
+func enum_pattern_prepare(s &: Sema, a &: at.Ast, arm: int, pat: int, esym: int): bool:
+    pv := at.Get(a, pat)
+    if pv.a == 0 || at.KindOf(a, pv.a) != at.AST_IDENTIFIER:
+        ret true
+    end
+    psp := span_of(a, pat)
+    mname := at.Get(a, pv.a).name
+    ci := enum_case_index(s, esym, mname)
+    if ci < 0:
+        serr(
+            s, 16, psp, co.Format2(
+                i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(mname)
+            )
+        )
+        ret false
+    end
+    cs := enum_case_struct(s, esym, ci)
+    home := sym_at(s, cs).home
+    mut tname := sym_at(s, cs).name
+    if home != 0 && home != s.global:
+        alias := distinct_pkg_alias(s, home)
+        if str.Len(alias) > 0:
+            tname = alias + "." + tname
+        end
+    end
+    at.SetName(a, pv.a, tname)
+    if !pv.enum_payload:
+        ret true
+    end
+    mut fields := Vector {} as Vector<str>
+    defer fields.free()
+    enum_case_fields(s, a, cs, fields)
+    if pv.list.len() != fields.len():
+        serr(
+            s, 76, psp, co.Format4(
+                i18.Tr("'%s.%s' holds %zu value%s; bind each one, or '_' to skip it"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(mname), co.ArgUint(fields.len() as u64), co.ArgStr(plural_suffix(fields.len()))
+            )
+        )
+        ret false
+    end
+    if str.Len(pv.name) > 0:
+        serr(
+            s, 76, psp, i18.Tr("a pattern cannot both bind its fields and name the whole value")
+        )
+        ret false
+    end
+    hidden := "__pb" + str.FromInt(pat as i64)
+    mut decls := Vector {} as Vector<int>
+    defer decls.free()
+    repeat fields.len() in i:
+        b := pv.list.get(i)
+        bname := at.Get(a, b).name
+        if str.Equals(bname, "_"):
+            continue
+        end
+        bsp := span_of(a, b)
+        src := new_node_at(a, at.AST_IDENTIFIER, bsp)
+        at.SetName(a, src, hidden)
+        mem := new_node_at(a, at.AST_MEMBER, bsp)
+        at.SetName(a, mem, fields.get(i))
+        mut mv := at.Get(a, mem)
+        mv.a = src
+        at.Put(a, mem, mv)
+        decl := new_node_at(a, at.AST_VAR_DECL, bsp)
+        mut dv := at.Get(a, decl)
+        dv.name = bname
+        dv.a = mem
+        at.Put(a, decl, dv)
+        decls.push(decl)
+    end
+    mut pv2 := at.Get(a, pat)
+    pv2.name = hidden
+    pv2.list = Vector {} as Vector<int>
+    pv2.enum_payload = false
+    at.Put(a, pat, pv2)
+    armb := at.Get(a, arm).b
+    mut bv := at.Get(a, armb)
+    mut nl := Vector {} as Vector<int>
+    repeat decls.len() in k:
+        nl.push(decls.get(k))
+    end
+    repeat bv.list.len() in k2:
+        nl.push(bv.list.get(k2))
+    end
+    old := bv.list
+    bv.list = nl
+    at.Put(a, armb, bv)
+    old.free()
+    ret true
+end
+
+func enum_data_disp(s &: Sema, t: int): str:
+    es := enum_data_sym(s, t)
+    if es != 0:
+        ret sym_at(s, es).name
+    end
+    if t >= 0 && ty_at(s, t).kind == TY_STRUCT && ty_at(s, t).decl != 0 && sym_at(s, ty_at(s, t).decl).enum_case:
+        mut en := ""
+        mut mn := ""
+        if enum_case_split(sym_at(s, ty_at(s, t).decl).name, en, mn):
+            ret en + "." + mn
+        end
+    end
+    ret ""
+end
+
+func enum_data_spelling(s &: Sema, esym: int): str:
+    home := sym_at(s, esym).home
+    if home == 0 || home == s.global:
+        ret sym_at(s, esym).name
+    end
+    pkg := derive_pkg_name_of(s, home)
+    if str.Len(pkg) == 0:
+        ret sym_at(s, esym).name
+    end
+    ret pkg + "." + sym_at(s, esym).name
+end
+
+func enum_data_body(s &: Sema, a &: at.Ast, esym: int, sp: co.SrcSpan): str:
+    mut out := DV_IND + "mut " + DV_BUF + " := \"\"\n" + DV_IND + "match " + DV_PARAM + ":\n"
+    ind2 := DV_IND + DV_IND
+    ind3 := ind2 + DV_IND
+    repeat enum_case_count(s, esym) in i:
+        cs := enum_case_struct(s, esym, i)
+        mname := enum_case_member(s, cs)
+        mut fields := Vector {} as Vector<str>
+        enum_case_fields(s, a, cs, fields)
+        out = out + ind2 + mname + " _c:\n"
+        if fields.len() == 0:
+            out = out + ind3 + DV_BUF + " = " + DV_BUF + " + \"" + mname + "\"\n"
+        else:
+            out = out + ind3 + DV_BUF + " = " + DV_BUF + " + \"" + mname + "(\"\n"
+            repeat fields.len() in j:
+                f := scope_lookup_local(s, sym_at(s, cs).members, fields.get(j))
+                sep := j == 0 ? "" : ", "
+                out = out + ind3 + DV_BUF + " = " + DV_BUF + " + \"" + sep + fields.get(j) + " = \"\n"
+                out = out + DV_IND + DV_IND + derive_append(s, a, sym_at(s, f).ty, "_c." + fields.get(j), sp)
+            end
+            out = out + ind3 + DV_BUF + " = " + DV_BUF + " + \")\"\n"
+        end
+        out = out + ind2 + "end\n"
+        fields.free()
+    end
+    ret out + DV_IND + "end\n"
+end
+
+func enum_data_eq_possible(s &: Sema, esym: int, depth: int): bool:
+    repeat enum_case_count(s, esym) in i:
+        cs := enum_case_struct(s, esym, i)
+        if cs == 0 || !derive_eq_possible(s, sym_at(s, cs).ty, depth + 1):
+            ret false
+        end
+    end
+    ret true
+end
+
+func enum_data_eq_source(s &: Sema, esym: int, fname: str): str:
+    spelling := enum_data_spelling(s, esym)
+    mut out := "func " + fname + "(_a: " + spelling + ", _b: " + spelling + "): bool:\n"
+    out = out + DV_IND + "match _a:\n"
+    ind2 := DV_IND + DV_IND
+    ind3 := ind2 + DV_IND
+    ind4 := ind3 + DV_IND
+    repeat enum_case_count(s, esym) in i:
+        mname := enum_case_member(s, enum_case_struct(s, esym, i))
+        out = out + ind2 + mname + " _x:\n"
+        out = out + ind3 + "match _b:\n"
+        out = out + ind4 + mname + " _y:\n"
+        out = out + ind4 + DV_IND + "ret _x == _y\n"
+        out = out + ind4 + "end\n"
+        if enum_case_count(s, esym) > 1:
+            out = out + ind4 + "else:\n"
+            out = out + ind4 + DV_IND + "ret false\n"
+            out = out + ind4 + "end\n"
+        end
+        out = out + ind3 + "end\n"
+        out = out + ind2 + "end\n"
+    end
+    ret out + DV_IND + "end\n" + DV_IND + "ret false\nend\n"
+end
+
+func derive_enum_eq(s &: Sema, a &: at.Ast, t: int): str:
+    esym := enum_data_sym(s, t)
+    if esym == 0 || s.program == 0 || !enum_data_eq_possible(s, esym, 0):
+        ret ""
+    end
+    fname := derive_eq_name(s, t)
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    prog := derive_parse(s, a, enum_data_eq_source(s, esym, fname), "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end

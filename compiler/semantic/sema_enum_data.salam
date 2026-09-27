@@ -210,6 +210,18 @@ func enum_ctor_rewrite(s &: Sema, a &: at.Ast, n: int, expected: int): int:
         ret 0
     end
     sp := span_of(a, n)
+    if str.Equals(cv.name, "Count") && at.ChildCount(a, n) == 0:
+        mut nv := at.Get(a, n)
+        nv.kind = at.AST_LITERAL
+        nv.op = tok.TK_INT
+        nv.value_kind = tok.TV_INT
+        nv.value_int = at.Get(a, at.Get(a, sym_at(s, esym).decl).ty).list.len() as u64
+        nv.a = 0
+        nv.b = 0
+        nv.list = Vector {} as Vector<int>
+        at.Put(a, n, nv)
+        ret 1
+    end
     vt := enum_ctor_type(s, a, esym, expected, sym_at(s, esym).name + "." + cv.name, sp)
     if vt == TYPE_NONE:
         ret 2
@@ -550,4 +562,38 @@ func g_instantiate_enum(s &: Sema, a &: at.Ast, esym: int, targ_nodes: Vector<in
         ty_put(s, vt, tv)
     end
     ret vt
+end
+
+func derive_enum_data_name(s &: Sema, a &: at.Ast, t: int): str:
+    esym := enum_data_sym(s, t)
+    spelling := derive_type_spelling(s, t)
+    if esym == 0 || s.program == 0 || str.Len(spelling) == 0:
+        ret ""
+    end
+    fname := "_nameof_" + derive_key(type_to_string(s, t))
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    mut src := "func " + fname + "(_v: " + spelling + "): str:\n" + DV_IND + "ret match _v:\n"
+    repeat enum_case_count(s, t) in i:
+        mname := enum_case_member(s, enum_case_struct(s, t, i))
+        src = src + DV_IND + DV_IND + mname + " _c => \"" + mname + "\"\n"
+    end
+    src = src + DV_IND + "end\nend\n"
+    prog := derive_parse(s, a, src, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
 end

@@ -20,6 +20,13 @@ func jd_dec_temp(s &: Sema, t: int, name: str, ind: str): str:
     if jd_is_scalar(s, t) || k == TY_ENUM:
         ret ind + "mut " + name + " := 0 as " + spelling + "\n"
     end
+    if k == TY_VARIANT && enum_data_sym(s, t) != 0:
+        c0 := derive_type_spelling(s, sym_at(s, enum_case_struct(s, t, 0)).ty)
+        if str.Len(c0) == 0:
+            ret ""
+        end
+        ret ind + "mut " + name + " := " + c0 + " {} as " + spelling + "\n"
+    end
     ret ind + "mut " + name + " := " + spelling + " {}\n"
 end
 
@@ -213,6 +220,12 @@ func jd_dec_body(
     if v.kind == TY_MAP:
         ret jd_dec_map(s, a, v.key, v.elem, ctr, home, sp)
     end
+    if v.kind == TY_VARIANT && enum_data_sym(s, t) != 0:
+        ret jd_dec_enum_data(s, a, t, ctr, home, sp)
+    end
+    if !jd_is_scalar(s, t) && v.kind != TY_ENUM && v.kind != TY_PTR:
+        ret ""
+    end
     lead := JIND + JD_POS + " = __jdws(" + JD_TEXT + ", " + JD_START + ")\n"
     body := jd_dec_value(s, a, t, JD_OUT, JIND, ctr, false, home, sp)
     ret str.Len(body) == 0 ? "" : lead + body
@@ -235,4 +248,68 @@ func jd_dec_source(
     out = out + JD_ERRP + " &: int, " + JD_STRICT + ": bool): int:\n"
     out = out + JIND + "mut " + JD_POS + " := " + JD_START + "\n" + body
     ret out + JIND + "ret " + JD_POS + "\nend\n"
+end
+
+func jd_dec_enum_data(
+    s &: Sema, a &: at.Ast, vt: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    spelling := derive_type_spelling(s, vt)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    i2 := JIND + JIND
+    i3 := i2 + JIND
+    i4 := i3 + JIND
+    mut units := ""
+    mut arms := ""
+    keyvar := jd_fresh(ctr, "k")
+    ke := jd_fresh(ctr, "q")
+    nm := jd_fresh(ctr, "en")
+    q := jd_fresh(ctr, "q")
+    repeat enum_case_count(s, vt) in i:
+        cs := enum_case_struct(s, vt, i)
+        mname := enum_case_member(s, cs)
+        cspell := derive_type_spelling(s, sym_at(s, cs).ty)
+        if str.Len(cspell) == 0:
+            ret ""
+        end
+        mut fields := Vector {} as Vector<str>
+        enum_case_fields(s, a, cs, fields)
+        nf := fields.len()
+        fields.free()
+        if nf == 0:
+            head := str.Len(units) == 0 ? "if" : "else"
+            units = units + i2 + head + " " + nm + " == " + jd_quote(mname) + ":\n"
+            units = units + i3 + JD_OUT + " = " + cspell + " {} as " + spelling + "\n"
+            continue
+        end
+        tmp := jd_fresh(ctr, "t")
+        val := jd_dec_value(s, a, sym_at(s, cs).ty, tmp, i4, ctr, false, home, sp)
+        if str.Len(val) == 0:
+            ret ""
+        end
+        head2 := str.Len(arms) == 0 ? "if" : "else"
+        arms = arms + i3 + head2 + " " + keyvar + " == " + jd_quote(mname) + ":\n"
+        arms = arms + i4 + "mut " + tmp + " := " + cspell + " {}\n" + val
+        arms = arms + i4 + JD_OUT + " = " + tmp + " as " + spelling + "\n"
+    end
+    mut out := JIND + JD_POS + " = __jdws(" + JD_TEXT + ", " + JD_START + ")\n"
+    out = out + JIND + "if __jdbyte(" + JD_TEXT + ", " + JD_POS + ") == 34:\n"
+    if str.Len(units) == 0:
+        out = out + jd_fail(i2, "expected an object naming an enum member", JD_POS)
+    else:
+        out = out + i2 + "mut " + q + " := 0\n"
+        out = out + i2 + nm + " := __jdgstr(" + JD_TEXT + ", " + JD_POS + ", " + q + ")\n"
+        out = out + i2 + "if " + q + " < 0:\n" + jd_fail(i3, "expected a string naming an enum member", JD_POS) + i2 + "end\n"
+        out = out + units + i2 + "else:\n" + jd_fail(i3, "no enum member with that name", JD_POS) + i2 + "end\n"
+        out = out + i2 + JD_POS + " = " + q + "\n"
+    end
+    out = out + JIND + "else:\n"
+    if str.Len(arms) == 0:
+        out = out + jd_fail(i2, "expected a string naming an enum member", JD_POS)
+    else:
+        body := arms + i3 + "else:\n" + jd_fail(i4, "no enum member with that name", JD_POS) + i3 + "end\n"
+        out = out + jd_dec_object(keyvar, body, ke)
+    end
+    ret out + JIND + "end\n"
 end

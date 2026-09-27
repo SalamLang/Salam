@@ -526,6 +526,7 @@ apart in `match` with `Member(a, b)` (use `_` to skip a value) or
 have `else`). Such enums print as `Circle(r = 2)` and compare with `==` when
 every value can. They work across packages (`geo.Token.Num(4)`). An enum with
 data needs at least two members, and members cannot also have `= value`.
+`value.name()` gives the member's name and `Enum.Count()` the number of members.
 
 ```salam
 enum Shape:
@@ -928,7 +929,9 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
   compiler derives per type:
   `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
-  `@json "" "omitempty"/"optional"/"string"` for the rest.
+  `@json "" "omitempty"/"optional"/"string"` for the rest. An enum with data
+  is written with its member as the key, `{"Circle":{"r":1.5}}`, and a member
+  without data as a bare string, `"Empty"`.
   `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
   `$ref`, so a self-referential type works) from the same declaration and the
   same markers - the argument is a value only because that is how a generic

@@ -44,6 +44,21 @@ func check_unused_loop_bind(s &: Sema, a &: at.Ast, v &: Symbol): bool:
     ret true
 end
 
+func check_empty_loop_body(s &: Sema, a &: at.Ast, nid: int, body: int): bool:
+    if body == 0 || at.KindOf(a, body) != at.AST_BLOCK || at.ChildCount(a, body) != 0:
+        ret false
+    end
+    k := at.KindOf(a, nid)
+    mut msg := i18.Tr("'repeat' loop has an empty body: add a statement to it, or remove the loop")
+    if k == at.AST_EACH:
+        msg = i18.Tr("'each' loop has an empty body: add a statement to it, or remove the loop")
+    else k == at.AST_UNTIL:
+        msg = i18.Tr("'until' loop has an empty body: add a statement to it (write 'continue' for a deliberate spin loop), or remove the loop")
+    end
+    serr(s, 104, span_of(a, nid), msg)
+    ret true
+end
+
 func ea_node(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
     id := new_node_at(a, kind, sp)
     mut nv := at.Get(a, id)
@@ -428,6 +443,11 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
             end
         end
 
+        if n2.op != tok.TK_ASSIGN && type_distinct_sym(s, tt) != 0 && !type_is_error(s, vt):
+            if distinct_try_compound(s, a, nid, tt, vt):
+                ret
+            end
+        end
         if n2.op != tok.TK_ASSIGN && tt >= 0 && ty_at(s, tt).kind == TY_STRUCT:
             base_op := sema_compound_base(n2.op)
             mname := sema_op_method(base_op)
@@ -567,6 +587,7 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                 s, 68, span_of(a, n4.a), i18.Tr("'until' condition is always false: the loop body can never run")
             )
         end
+        _e4 := check_empty_loop_body(s, a, nid, n4.b)
         s.loop_depth += 1
         check_stmt(s, a, n4.b)
         s.loop_depth -= 1
@@ -658,18 +679,30 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
             _sd := scope_define(s, sc5, iv5)
             s.cur = sc5
         end
+        empty5 := check_empty_loop_body(s, a, nid, n5.b)
         s.loop_depth += 1
         check_stmt(s, a, n5.b)
         s.loop_depth -= 1
-        if iv5 != 0 && !s.relax_unused:
-            mut ivv2 := sym_at(s, iv5)
-            _lb := check_unused_loop_bind(s, a, ivv2)
+        if iv5 != 0 && !s.relax_unused && !empty5:
+            ivv2 := sym_at(s, iv5)
+            if !ivv2.used && !str.Equals(ivv2.name, "_") && !at.WasPruned(a, s.file, ivv2.name):
+                serr(
+                    s, 59, span_of(a, nid), co.Format2(
+                        i18.Tr("unused loop index '%s': remove 'in %s', the loop repeats the same number of times without it"), co.ArgStr(ivv2.name), co.ArgStr(ivv2.name)
+                    )
+                )
+            end
         end
         s.cur = saved5
         ret
     end
     if k == at.AST_EACH:
+        relax7 := s.relax_unused
+        if check_empty_loop_body(s, a, nid, at.Get(a, nid).b):
+            s.relax_unused = true
+        end
         check_each(s, a, nid)
+        s.relax_unused = relax7
         ret
     end
     if k == at.AST_FOR:
@@ -988,7 +1021,7 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     if n.a != 0:
         initt = sema_check_expr(s, a, n.a)
     end
-    if cast_sugar && declared >= 0 && initt >= 0 && !type_is_error(s, initt) && !s.in_derive && type_equiv(s, declared, initt) && !sema_cast_target_is_context_dependent(s, a, n.a, declared):
+    if cast_sugar && declared >= 0 && initt >= 0 && !type_is_error(s, initt) && !s.in_derive && type_equiv(s, declared, initt) && !sema_cast_target_is_context_dependent(s, a, n.a, declared) && !(type_distinct_sym(s, declared) != 0 && at.KindOf(a, n.a) == at.AST_LITERAL):
         serr(
             s, 93, cast_span, co.Format1(
                 i18.Tr("useless cast: this expression already has type '%s'"), co.ArgStr(type_disp(s, declared))

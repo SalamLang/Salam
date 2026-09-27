@@ -259,6 +259,10 @@ is a compile error, not a silent misparse.
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
+- **The version command is `salam version`, not `salam --version`.** Salam's
+  CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)
+  fail with `unknown command '--version'`.
+
 - **`str.Split` can crash on its last element.** On a gcc-linked build,
   `str.Split("a/b/c/d", "/")` reports the right length and correct elements
   `0..n-2`, then segfaults reading the last one. Avoid it in code that must be

@@ -284,7 +284,7 @@ func type_equiv(s &: Sema, ta: int, tb: int): bool:
     end
     va := ty_at(s, ta)
     vb := ty_at(s, tb)
-    if va.kind != vb.kind:
+    if va.kind != vb.kind || va.distinct != vb.distinct:
         ret false
     end
     k := va.kind
@@ -389,6 +389,9 @@ func type_assignable(s &: Sema, dst: int, src: int): bool:
     if type_equiv(s, dst, src):
         ret true
     end
+    if type_distinct_sym(s, dst) != type_distinct_sym(s, src):
+        ret false
+    end
     ret type_implicit(s, src, dst)
 end
 
@@ -398,6 +401,9 @@ func type_castable(s &: Sema, dst: int, src: int): bool:
     end
     if type_equiv(s, dst, src):
         ret true
+    end
+    if type_distinct_sym(s, dst) != 0 || type_distinct_sym(s, src) != 0:
+        ret type_castable(s, type_undistinct(s, dst), type_undistinct(s, src))
     end
     dk := ty_at(s, dst).kind
     sk := ty_at(s, src).kind
@@ -433,6 +439,12 @@ end
 func type_common_arith(s &: Sema, ta: int, tb: int): int:
     if !type_is_numeric(s, ta) || !type_is_numeric(s, tb):
         ret TYPE_NONE
+    end
+    if type_distinct_sym(s, ta) != type_distinct_sym(s, tb):
+        ret TYPE_NONE
+    end
+    if type_distinct_sym(s, ta) != 0:
+        ret ta
     end
     ka := ty_at(s, ta).kind
     kb := ty_at(s, tb).kind
@@ -503,7 +515,34 @@ func type_params_str(s &: Sema, params: Vector<int>): str:
 end
 
 func type_disp(s &: Sema, t: int): str:
+    if t >= 0 && ty_at(s, t).distinct != 0:
+        ret "\x01" + ty_at(s, t).name + "\x02"
+    end
     ret "\x01" + type_to_string(s, t) + "\x02"
+end
+
+func type_distinct_new(s &: Sema, dsym: int, name: str, base: int): int:
+    mut nt := ty_at(s, base)
+    nt.distinct = dsym
+    nt.base = base
+    nt.name = name
+    id := s.types.len()
+    s.types.push(nt)
+    ret id
+end
+
+func type_distinct_sym(s &: Sema, t: int): int:
+    if t < 0:
+        ret 0
+    end
+    ret ty_at(s, t).distinct
+end
+
+func type_undistinct(s &: Sema, t: int): int:
+    if t >= 0 && ty_at(s, t).distinct != 0:
+        ret ty_at(s, t).base
+    end
+    ret t
 end
 
 func type_to_string(s &: Sema, t: int): str:
@@ -511,6 +550,9 @@ func type_to_string(s &: Sema, t: int): str:
         ret "<null>"
     end
     v := ty_at(s, t)
+    if v.distinct != 0:
+        ret type_to_string(s, v.base)
+    end
     k := v.kind
     prim := type_scalar_str(k)
     if str.Len(prim) > 0:

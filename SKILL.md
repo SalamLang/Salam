@@ -395,8 +395,46 @@ decides unary or binary and is checked:
 - `!` / `not` takes none
 - `[]` takes one (the index), `[]=` takes two (the index and the value)
 
-Operators attach to structs; a `type X = int` alias is the same type as `int`,
-so it cannot carry its own operators.
+The `operator` keyword is optional (`func +(o: V): V:` is the same as
+`func operator +(o: V): V:`), and so are empty parentheses (`func -: V:`
+declares unary minus). A later release will drop the `operator` keyword.
+
+**Distinct types (`type X: T`)**: `type Age = int` is a plain alias, the same
+type as `int`. `type Meters: int` creates a _new_ type built on `int`. It
+supports every `int` operator (the result is `Meters`), can declare its own
+operators and methods in a body closed by `end`, and never mixes silently with
+plain `int`:
+
+```salam
+type Meters: int
+    func +(other: Meters): Meters:
+        ret ((this as int) + (other as int)) as Meters
+    end
+    func *(k: int): Meters:             // overload by the operand's type
+        ret ((this as int) * k) as Meters
+    end
+    func -: Meters:                     // unary minus, no parameters
+        ret (0 - (this as int)) as Meters
+    end
+    func km: f64:                       // ordinary method: m.km()
+        ret (this as f64) / 1000.0
+    end
+end
+
+a := 5 as Meters                        // literals adopt the type: a + 3, 3 + a
+b := a + 10                             // your operator +
+println (a * 4).km(), a < b             // built-in '<' still works
+n := a as int                           // conversions are explicit
+```
+
+- The base type must be a number, `bool`, `char` or `str`; a struct already
+  has its own operators.
+- `Meters + int_variable` is an error unless you declare an operator for it.
+- `a != b` uses your `==` when there is no `!=`.
+- `a += b` uses your `+`.
+- An alias of a distinct type (`type Length = Meters`) shares its operators.
+- From another file included as `units`, write `units.Meters`; its operators
+  work there too.
 
 **Sign runs are errors:** two `+`/`-` operators in a row are rejected, whether
 spaced or not. That covers `- -x`, `a - -b`, `a + -b`, `a---b`, `n++ + 1` and
@@ -1504,8 +1542,12 @@ salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
+salam version                           # print the compiler version (NOT --version)
 salam app.salam --emit-tokens | --emit-ast | --emit-symbol   # inspect a stage
 ```
+
+> **Version check is `salam version`, a subcommand.** There is no `--version`
+> or `-v` flag: `salam --version` fails with `unknown command '--version'`.
 
 **Always verify a converted program.** Prefer `salam exec file.salam` for a quick
 check of pure logic; use `salam build … --output=…` (or `salam run`) when it uses

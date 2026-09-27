@@ -1,5 +1,7 @@
 package parser
 
+import str
+
 include tok "../token.salam"
 include at "../ast.salam"
 
@@ -92,11 +94,96 @@ func check_fn_mods_target(p &: Ps, m &: FnMods):
     end
 end
 
+func distinct_this_to_self(a &: at.Ast, id: int):
+    if id == 0:
+        ret
+    end
+    mut n := at.Get(a, id)
+    if n.kind == at.AST_THIS:
+        n.kind = at.AST_IDENTIFIER
+        n.name = "__self"
+        at.Put(a, id, n)
+        ret
+    end
+    distinct_this_to_self(a, n.a)
+    distinct_this_to_self(a, n.b)
+    distinct_this_to_self(a, n.c)
+    distinct_this_to_self(a, n.d)
+    repeat n.list.len() in i:
+        distinct_this_to_self(a, n.list.get(i))
+    end
+    repeat n.dims.len() in j:
+        distinct_this_to_self(a, n.dims.get(j))
+    end
+    repeat n.captures.len() in k:
+        distinct_this_to_self(a, n.captures.get(k))
+    end
+end
+
+func distinct_desugar_method(a &: at.Ast, f: int, tname: str, idx: int):
+    fv := at.Get(a, f)
+    self_param := mk_from_node(a, at.AST_PARAM, f)
+    at.SetName(a, self_param, "__self")
+    self_ty := mk_from_node(a, at.AST_TYPE, f)
+    at.SetName(a, self_ty, tname)
+    at.SetTypeNode(a, self_param, self_ty)
+    mut nf := at.Get(a, f)
+    mut params := Vector {} as Vector<int>
+    params.push(self_param)
+    repeat fv.list.len() in i:
+        params.push(fv.list.get(i))
+    end
+    nf.list = params
+    nf.name = "__" + tname + "__" + fv.name + "__" + str.FromInt(idx as i64)
+    nf.is_pub = true
+    at.Put(a, f, nf)
+    distinct_this_to_self(a, fv.a)
+end
+
+func parse_distinct_body(p &: Ps, a &: at.Ast, tname: str):
+    mut idx := 0
+    p_skip_terminators(p)
+    until !p_at(p, tok.TK_KW_END) && !p_at_eof(p):
+        p_skip_terminators(p)
+        if p_at(p, tok.TK_KW_END) || p_at_eof(p):
+            break
+        end
+        mut mods := parse_fn_mods(p)
+        if p_at(p, tok.TK_KW_FUNC):
+            f := parse_function(p, a, false)
+            if f != 0:
+                apply_fn_mods(a, f, mods)
+                distinct_desugar_method(a, f, tname, idx)
+                idx += 1
+                p.tail_defs.push(f)
+            end
+        else:
+            p_error(p, "expected 'func' or 'end' in the body of a distinct type")
+            if !p_at_eof(p):
+                p_advance(p)
+            end
+        end
+        if p.panic:
+            p_sync(p)
+        end
+    end
+    p_expect(p, tok.TK_KW_END, "'end' to close the type body")
+    p_term(p)
+end
+
 func parse_type_alias(p &: Ps, a &: at.Ast): int:
     p_rule(p, "type_alias")
     n := p_mk(p, a, at.AST_TYPE_ALIAS)
     p_advance(p)
-    at.SetName(a, n, p_name(p, "expected alias name"))
+    tname := p_name(p, "expected alias name")
+    at.SetName(a, n, tname)
+    if p_match(p, tok.TK_COLON):
+        at.SetOp(a, n, tok.TK_COLON)
+        at.SetTypeNode(a, n, parse_type(p, a))
+        parse_distinct_body(p, a, tname)
+        p_fin(p, a, n)
+        ret n
+    end
     p_expect(p, tok.TK_ASSIGN, "'=' in type alias")
     at.SetTypeNode(a, n, parse_type(p, a))
     p_term(p)
@@ -430,15 +517,23 @@ func parse_op_method_name(p &: Ps): str:
     ret "operator_error"
 end
 
+func tk_is_op_method_start(k: int): bool:
+    ret k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_STAR || k == tok.TK_SLASH || k == tok.TK_PERCENT || k == tok.TK_POWER || k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LT || k == tok.TK_GT || k == tok.TK_LE || k == tok.TK_GE || k == tok.TK_NOT || k == tok.TK_LBRACKET
+end
+
+func tk_is_non_overloadable_op(k: int): bool:
+    ret k == tok.TK_AMP || k == tok.TK_PIPE || k == tok.TK_CARET || k == tok.TK_TILDE || k == tok.TK_SHL || k == tok.TK_SHR || k == tok.TK_AND || k == tok.TK_OR || k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS || k == tok.TK_ASSIGN
+end
+
 func parse_function(p &: Ps, a &: at.Ast, allow_untyped: bool): int:
     p_rule(p, "function_def")
     n := p_mk(p, a, at.AST_FUNC_DEF)
     p_advance(p)
-    if p_at(p, tok.TK_KW_OPERATOR):
-        p_advance(p)
+    if p_at(p, tok.TK_KW_OPERATOR) || tk_is_op_method_start(p_peek(p).kind) || tk_is_non_overloadable_op(p_peek(p).kind):
+        p_match(p, tok.TK_KW_OPERATOR)
         opname := parse_op_method_name(p)
         at.SetName(a, n, opname)
-        if opname != "operator_error" && !p_at(p, tok.TK_LPAREN) && p_peek(p).begin_index == p_prev(p).end_index:
+        if opname != "operator_error" && !p_at(p, tok.TK_LPAREN) && !p_at(p, tok.TK_COLON) && p_peek(p).begin_index == p_prev(p).end_index:
             p_error(p, "this is not a Salam operator: only the built-in operators can be overloaded (+ - * / % ** == != < > <= >= ! [] []=)")
         end
     else p_at(p, tok.TK_IDENT):

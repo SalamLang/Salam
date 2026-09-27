@@ -367,8 +367,9 @@ receiver.
 **Static members:** `static func` and `const` inside a struct belong to the type,
 not to a value. Call them through the type name, also across packages
 (`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
-struct's private fields, so it is the place for constructors. Not yet supported
-on generic structs.
+struct's private fields, so it is the place for constructors. On a generic
+struct the type parameters come from the arguments or the expected type:
+`Box.Of(42)`, `ret Box.Empty()`, `Box.Empty() as Box<f64>`.
 
 ```salam
 struct Color:

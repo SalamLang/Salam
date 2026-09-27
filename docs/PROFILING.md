@@ -561,7 +561,7 @@ The self-hosted driver force-injects the same two packages at
 ```salam
 if opt.profile_mode != PROF_MODE_OFF:
     profp := sm.ResolveImport("", "prof")
-    if str.Len(profp) > 0 && os.Exists(profp):
+    if str.Len(profp) > 0 and os.Exists(profp):
         work.push(profp)
     else:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR,
@@ -645,7 +645,7 @@ end
 `Enter(id)`:
 
 ```
-if !_on: ret end
+if not _on: ret end
 _stack[_sp].id = id
 _stack[_sp].t0 = time.MonoNanos()
 _stack[_sp].child = 0
@@ -656,7 +656,7 @@ _slots[id].depth += 1
 `Exit(id)`:
 
 ```
-if !_on: ret end
+if not _on: ret end
 _sp -= 1
 dt := time.MonoNanos() - _stack[_sp].t0
 s := &_slots[id]

@@ -130,12 +130,13 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !` (or `and
-or not`), ternary `cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer
-`/` **truncates**. Power is `**`, right-associative and tighter than unary minus
-(`2 ** 3 ** 2 == 512`, `-2 ** 2 == -4`). The older spelling `^^` / `^^=` still
-works and means the same, until a later release removes it. `T**` in a type is
-still a pointer to a pointer; after `as`, `x as i64 ** 2` is a cast then a power.
+`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the logical words
+`and or not` (Persian `و یا وارون`), ternary `cond ? a : b`, compound
+`+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
+right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
+`-2 ** 2 == -4`). `T**` in a type is a pointer to a pointer; after `as`,
+`x as i64 ** 2` is a cast then a power. There is no `&&`, `||`, `!` or `^^`:
+the compiler rejects them and names the word to write instead.
 `^` on its own remains bitwise XOR.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
@@ -172,14 +173,14 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > already reads correctly as "while".) When porting a loop from C/Python/JS/Go,
 > **copy the condition verbatim**:
 >
-> | source loop              | Salam                                 | NOT                                                 |
-> | ------------------------ | ------------------------------------- | --------------------------------------------------- |
-> | `while (v != 0)`         | `until v != 0:`                       | ~~`until v == 0:`~~                                 |
-> | `while (i < n)`          | `until i < n:`                        | ~~`until i >= n:`~~                                 |
-> | `while (v)` (truthy int) | `until v != 0:`                       | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
-> | `while (p)` (pointer)    | `until p != null:`                    | ~~`until p == null:`~~                              |
-> | `for (;;)`               | `until true:` + `break`               |                                                     |
-> | `do { B } while (c);`    | `until true: B  if !c: break end end` |                                                     |
+> | source loop              | Salam                                    | NOT                                                 |
+> | ------------------------ | ---------------------------------------- | --------------------------------------------------- |
+> | `while (v != 0)`         | `until v != 0:`                          | ~~`until v == 0:`~~                                 |
+> | `while (i < n)`          | `until i < n:`                           | ~~`until i >= n:`~~                                 |
+> | `while (v)` (truthy int) | `until v != 0:`                          | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
+> | `while (p)` (pointer)    | `until p != null:`                       | ~~`until p == null:`~~                              |
+> | `for (;;)`               | `until true:` + `break`                  |                                                     |
+> | `do { B } while (c);`    | `until true: B  if not c: break end end` |                                                     |
 >
 > **An inverted `until` fails silently.** `until v == 0:` with a nonzero `v`
 > runs **zero times** and produces no error, so the function just returns its
@@ -219,7 +220,7 @@ end
   Deferred statements of every level left still run. N must be between 1 and
   the number of enclosing loops and switches, or it is a compile error.
 - **`switch true:`** with boolean labels replaces an if/else chain that tests
-  different conditions (`x < 0:`, `x == 0 || name == "zero":`, ...): the first
+  different conditions (`x < 0:`, `x == 0 or name == "zero":`, ...): the first
   true label wins.
 - **Enum subjects must be covered** - a `switch` on an enum (or on an alias
   of one, `type Paint = Color`) with no `else` must list every member, or it
@@ -364,40 +365,32 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
-**Operator overloading:** a struct method named `operator_<op>` is called for that
-operator when the left operand is the struct: `operator_add operator_sub
-operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one
-param, same or convertible type), `operator_eq operator_ne operator_lt operator_gt
-operator_le operator_ge` (comparison, one param, returns `bool`; `!=` falls back to
-`!operator_eq` when `operator_ne` is not defined), `operator_index` /
-`operator_index_set` (`s[i]` / `s[i] = v`), and `operator_not` (unary `!`, no
-param). **Unary `-` reuses `operator_sub`, overloaded by arity**: a zero-parameter
-`operator_sub` is negation, a one-parameter `operator_sub` is binary subtraction -
-define both on the same struct if you need both:
+**Operator overloading:** declare a method whose name is the operator itself,
+`func +(o: V): V:`. It is called when the left operand is the struct. `!=` falls
+back to `not (a == b)` when there is no `!=`, and `a += b` uses your `+`.
+**Unary `-` and binary `-` share the symbol, overloaded by arity**: `func -: V:`
+(no parameters, empty parentheses optional) is negation, `func -(o: V): V:` is
+subtraction - define both if you need both:
 
 ```salam
 struct Vec2:
     pub x: f64
     pub y: f64
-    pub func operator_add(o: Vec2): Vec2: ret Vec2 { x = this.x + o.x, y = this.y + o.y } end
-    pub func operator_sub(o: Vec2): Vec2: ret Vec2 { x = this.x - o.x, y = this.y - o.y } end
-    pub func operator_sub(): Vec2: ret Vec2 { x = -this.x, y = -this.y } end   // unary -v
-    pub func operator_eq(o: Vec2): bool: ret this.x == o.x && this.y == o.y end
+    pub func +(o: Vec2): Vec2: ret Vec2 { x = this.x + o.x, y = this.y + o.y } end
+    pub func -(o: Vec2): Vec2: ret Vec2 { x = this.x - o.x, y = this.y - o.y } end
+    pub func -: Vec2: ret Vec2 { x = -this.x, y = -this.y } end   // unary -v
+    pub func ==(o: Vec2): bool: ret this.x == o.x and this.y == o.y end
 end
 ```
 
 Only Salam's own operators can be overloaded: `+ - * / % ** == != < > <= >=
-! [] []=`. A new symbol (`***`, `+-`, `&`) is an error. The parameter count
+not [] []=`. A new symbol (`***`, `+-`, `&`) is an error. The parameter count
 decides unary or binary and is checked:
 
 - binary operators take exactly one parameter, the right operand
 - `-` takes none (negation, `-v`) or one (subtraction)
-- `!` / `not` takes none
+- `not` takes none
 - `[]` takes one (the index), `[]=` takes two (the index and the value)
-
-The `operator` keyword is optional (`func +(o: V): V:` is the same as
-`func operator +(o: V): V:`), and so are empty parentheses (`func -: V:`
-declares unary minus). A later release will drop the `operator` keyword.
 
 **Distinct types (`type X: T`)**: `type Age = int` is a plain alias, the same
 type as `int`. `type Meters: int` creates a _new_ type built on `int`. It
@@ -784,7 +777,7 @@ func main:
     println term.Bold(term.Green("ready")), term.Dim("(q to quit)")
     until true:
         k := term.ReadKey()
-        if k.code == term.KeyChar && k.ch == "q": break end
+        if k.code == term.KeyChar and k.ch == "q": break end
         if k.code == term.KeyUp: println "up" end
     end
     term.ShowCursor()
@@ -1122,7 +1115,7 @@ end
 
 func me(ctx: i64):
     mut t := jwt.Token { }
-    if !jwt.Require(ctx, guard(), t): ret end     // 401 already written
+    if not jwt.Require(ctx, guard(), t): ret end     // 401 already written
     http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
 end
 ```
@@ -1228,7 +1221,7 @@ naive port into compile errors (each corresponds to a case in
    top-level `if` must be a **compile-time constant** condition (see §8).
    **No `if` branch may be empty** - not at top level, not in a function, and
    not in an `else if`. Instead of `if X:` with an empty body followed by
-   `else:`, negate the condition: `if !X:` (or `if not X:`).
+   `else:`, negate the condition: `if not X:`.
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
 10. **`match` on an enum or a `Variant` must be exhaustive** (or have an
@@ -1460,7 +1453,7 @@ constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
 your own `-DNAME` defines from the build command. The predefined `SALAM_*`
 names are also ordinary constant values anywhere else - `switch SALAM_OS:`,
 `println SALAM_ARCH`, `is_win := SALAM_OS_WINDOWS`, or inside a runtime
-condition such as `if SALAM_OS_MAC && retries > 0:`.
+condition such as `if SALAM_OS_MAC and retries > 0:`.
 
 ```salam
 if SALAM_OS_WINDOWS:  const SEP := "\\"
@@ -1612,14 +1605,12 @@ compiler's bit-heavy code (UTF-8 encoding, hashing, flag sets, `codegen/print_fm
 
 Operands must be integers (a bitwise op on a float is a compile error). **Precedence
 follows C**: `*  /  %` › `+  -` › `<<  >>` › `<  <=  >  >=` › `==  !=` › `&` › `^` ›
-`|` › `&&` › `||`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
+`|` › `and` › `or`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
 parentheses (`(flags & MASK) == MASK`) exactly as you would in C.
 
-`and`, `or` and `not` are English word forms of `&&`, `||` and `!` (Persian:
-`و`, `یا`, `وارون`). `not` binds as tightly as `!`, so `not a == b` means `(!a) == b`;
-write `not (a == b)` to negate a comparison. Code compiled by the bootstrap
-seed (`compiler/` and the std packages it imports) keeps the symbols until a
-seed that knows the words ships.
+`not` (Persian `وارون`) is a unary prefix that binds tighter than any binary
+operator, so `not a == b` means `(not a) == b`; write `not (a == b)` to negate a
+comparison. `and`/`or` are `و`/`یا` in Persian.
 
 ```salam
 mut flags := 0
@@ -1660,7 +1651,7 @@ two closing angle brackets, not a shift.
 | `break` / `continue`                         | `break` / `continue` (innermost loop **or switch** for `break`, `break N` for N levels; `continue` always targets the loop) |
 | `while (c)`                                  | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)                              |
 | `while (v)` / `while (p)` (truthy)           | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                                              |
-| `do { B } while (c);`                        | `until true: B  if !c: break end end`                                                                                       |
+| `do { B } while (c);`                        | `until true: B  if not c: break end end`                                                                                    |
 | `for (;;)`                                   | `until true:` + `break`                                                                                                     |
 | `for (i = 0; i < n; i++)`                    | `repeat n in i:` (i = 0 .. n-1)                                                                                             |
 | `for (i = n; i >= 1; i--)`                   | `repeat n to 1 in i:` (descending; guard `n >= 1`, see §2)                                                                  |

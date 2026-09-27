@@ -630,6 +630,20 @@ shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
 ```
 
+**Default methods:** an interface method may carry a body. A struct that
+provides all of the interface's methods without bodies gets a copy of every
+default it does not define itself, and so does an `impl I on T` block, so
+defaults work with `<T: I>`, `dyn I` and direct calls.
+
+```salam
+interface Shape:
+    func Area(): f64
+    func Describe(): str:
+        ret "area " + this.Area()
+    end
+end
+```
+
 `impl` adds interface methods to **any** type, including primitives:
 
 ```salam

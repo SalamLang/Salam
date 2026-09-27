@@ -261,6 +261,9 @@ jobs:
       - name: Stage the musl and mingw sysroots
         run: sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
 
+      - name: Stage the wasm32-wasi sysroot
+        run: sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
+
       - name: Build libsalam_llvm.a (in-process LLVM + LLD)
         run: sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out "$GITHUB_WORKSPACE"
 
@@ -280,7 +283,8 @@ jobs:
             --extralibs-aarch64-musl "${SALAM_EMBED_EXTRALIBS_AARCH64_LINUX_MUSL_DIR:-}" \
             --extralibs-i686-musl "${SALAM_EMBED_EXTRALIBS_I686_LINUX_MUSL_DIR:-}" \
             --extralibs-arm-musl "${SALAM_EMBED_EXTRALIBS_ARM_LINUX_MUSLEABIHF_DIR:-}" \
-            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}"
+            --extralibs-x86_64-mingw "${SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR:-}" \
+            --wasi "$sr/wasm32-wasi"
 
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
@@ -290,6 +294,17 @@ jobs:
             -- "--libpath=${SALAM_EMBED_HOSTLIBS_DIR:-/tmp/extralibs/hostlibs}"
           echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
+
+      - name: Smoke-test wasm32-wasi with no wasi-sdk (embedded sysroot + in-process LLD)
+        run: |
+          set -eu
+          export SALAM_STD="$PWD/std"
+          printf 'func main:\n    println "ok-wasi"\nend\n' > wsmoke.salam
+          env -u WASI_SDK_PATH PATH=/usr/bin:/bin ./salam build wsmoke.salam --target=wasm32-wasi -o wsmoke.wasm
+          printf '%s\n' 'const {WASI}=require("node:wasi");const w=new WASI({version:"preview1",returnOnExit:true});' \
+            'WebAssembly.instantiate(require("fs").readFileSync("wsmoke.wasm"),w.getImportObject()).then(({instance})=>process.exit(w.start(instance)));' > wsmoke.cjs
+          out=$(node --no-warnings wsmoke.cjs)
+          [ "$out" = "ok-wasi" ] || { echo "::error::wasm32-wasi smoke printed '$out'"; exit 1; }
 
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)
         run: |
@@ -634,6 +649,7 @@ jobs:
           mkdir -p "$DIST"
           cp salam "$DIST/salam"
           cp -r std "$DIST/std"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$DIST/sysroots/wasm32-wasi"
           cp README.md LICENSE "$DIST/" 2>/dev/null || true
           {
             echo "Salam for macOS - embedded LLVM toolchain."
@@ -953,9 +969,11 @@ jobs:
             MINGW_ARG=/tmp/mingw-sr
           fi
 
+          sh tools/bash/stage-wasi-sysroot.sh --out=/tmp/wasi-sr
           sh std/llvm/native/build.sh --llvm-config llvm-config --out "$GITHUB_WORKSPACE"
           sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
             --mingw-x86_64 "$MINGW_ARG" \
+            --wasi /tmp/wasi-sr \
             --musl-x86_64 "${SALAM_EMBED_MUSL_DIR:-}" \
             --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-}" \
             --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
@@ -1492,6 +1510,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
           sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
           ls -la sysroots
       - name: Cache ccache (Linux i686)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1538,7 +1557,8 @@ jobs:
               rm -rf /tmp/libxml2-src /tmp/libxml2-build
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
-                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
+                --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
                 --llvm=/work --embed=/work --output=/work/salam \
                 -- --libpath=/tmp/libxml2-static
@@ -1623,6 +1643,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev mingw-w64
           sh tools/bash/stage-sysroots.sh --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
       - name: Set up QEMU (armhf containers need user-mode emulation; i386 doesn't)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
@@ -1667,7 +1688,8 @@ jobs:
               rm -rf /tmp/libxml2-src /tmp/libxml2-build
               sh std/llvm/native/build.sh --llvm-config llvm-config-21 --out /work
               sh tools/bash/build-embed.sh --out /work \
-                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR"
+                --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
+                --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
                 --llvm=/work --embed=/work --output=/work/salam \
                 -- --libpath=/tmp/libxml2-static
@@ -1829,6 +1851,7 @@ jobs:
           set -eu
           sh tools/bash/stage-sysroots.sh --musl-arch aarch64 \
             --out="$GITHUB_WORKSPACE/sysroots"
+          sh tools/bash/stage-wasi-sysroot.sh --out="$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
           sh std/llvm/native/build.sh --llvm-config llvm-config-22 \
             --out "$GITHUB_WORKSPACE"
           sh tools/bash/build-embed.sh --out "$GITHUB_WORKSPACE" \
@@ -1836,7 +1859,8 @@ jobs:
             --musl-aarch64 "${SALAM_EMBED_MUSL_AARCH64_DIR:-$GITHUB_WORKSPACE/sysroots/aarch64-linux-musl}" \
             --musl-i686 "${SALAM_EMBED_MUSL_I686_DIR:-}" \
             --musl-arm "${SALAM_EMBED_MUSL_ARM_DIR:-}" \
-            --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}"
+            --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}" \
+            --wasi "$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
           sh tools/bash/build-selfhost.sh \
             --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
             -- --libpath=/tmp/libxml2-aarch64

@@ -184,6 +184,8 @@ func sema_check_match(
         mut coll_off := 0 - 1
         mut coll_cnt := 0
 
+        tags_mark := seen_tags.len()
+        mems_mark := seen_members.len()
         if at.Get(a, arm).op == tok.TK_KW_ELSE:
             has_wildcard = true
         else:
@@ -282,6 +284,15 @@ func sema_check_match(
                     end
                 end
             end
+        end
+        if at.Get(a, arm).c != 0:
+            until seen_tags.len() > tags_mark:
+                _pt := seen_tags.pop()
+            end
+            until seen_members.len() > mems_mark:
+                _pm := seen_members.pop()
+            end
+            match_guard_check(s, a, arm)
         end
 
         if is_expr:
@@ -534,4 +545,100 @@ func sema_check_match(
 
     at.SetTypeStr(a, nid, type_to_string(s, unified))
     ret sema_decorate(s, a, nid, unified)
+end
+
+func guard_subst(a &: at.Ast, nid: int, names: Vector<str>, inits: Vector<int>, used &: Vector<int>, depth: int):
+    if nid == 0 || depth > 32:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        repeat names.len() in i:
+            if str.Equals(names.get(i), n.name):
+                used.push(i)
+                cl := at.Clone(a, inits.get(i))
+                at.Put(a, nid, at.Get(a, cl))
+                guard_subst(a, nid, names, inits, used, depth + 1)
+                ret
+            end
+        end
+        ret
+    end
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    guard_subst(a, n.a, names, inits, used, depth)
+    guard_subst(a, n.b, names, inits, used, depth)
+    guard_subst(a, n.c, names, inits, used, depth)
+    guard_subst(a, n.d, names, inits, used, depth)
+    repeat n.list.len() in j:
+        guard_subst(a, n.list.get(j), names, inits, used, depth)
+    end
+end
+
+func match_guard_check(s &: Sema, a &: at.Ast, arm: int):
+    guard := at.Get(a, arm).c
+    body := at.Get(a, at.Get(a, arm).b).list
+    mut names := Vector {} as Vector<str>
+    mut inits := Vector {} as Vector<int>
+    mut decls := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<int>
+    defer names.free()
+    defer inits.free()
+    defer decls.free()
+    defer used.free()
+    repeat body.len() in i:
+        d := at.Get(a, body.get(i))
+        if d.kind != at.AST_VAR_DECL || !(d.synthetic || d.enum_payload):
+            break
+        end
+        names.push(d.name)
+        inits.push(d.a)
+        decls.push(body.get(i))
+    end
+    guard_subst(a, guard, names, inits, used, 0)
+    if used.len() > 0:
+        armb := at.Get(a, arm).b
+        mut bv := at.Get(a, armb)
+        mut nl := Vector {} as Vector<int>
+        repeat decls.len() in k:
+            nl.push(bv.list.get(k))
+        end
+        repeat names.len() in u:
+            mut hit := false
+            repeat used.len() in u2:
+                if used.get(u2) == u:
+                    hit = true
+                end
+            end
+            if !hit || byte_at(names.get(u), 0) == 95:
+                continue
+            end
+            dsp := span_of(a, decls.get(u))
+            ref := new_node_at(a, at.AST_IDENTIFIER, dsp)
+            at.SetName(a, ref, names.get(u))
+            dis := new_node_at(a, at.AST_VAR_DECL, dsp)
+            mut disv := at.Get(a, dis)
+            disv.name = "_"
+            disv.a = ref
+            disv.synthetic = true
+            at.Put(a, dis, disv)
+            nl.push(dis)
+        end
+        repeat bv.list.len() - decls.len() in k2:
+            nl.push(bv.list.get(decls.len() + k2))
+        end
+        old := bv.list
+        bv.list = nl
+        at.Put(a, armb, bv)
+        old.free()
+    end
+    gt := sema_check_expr(s, a, guard)
+    if !type_is_error(s, gt) && ty_at(s, gt).kind != TY_BOOL:
+        serr(
+            s, 2, span_of(a, guard), co.Format1(
+                i18.Tr("a match guard must be a bool, not '%s'"), co.ArgStr(type_disp(s, gt))
+            )
+        )
+    end
 end

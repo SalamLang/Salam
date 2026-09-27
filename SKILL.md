@@ -544,6 +544,12 @@ println area(Shape.Rect(3.0, 4.0))
 println Shape.Circle(2.0)          // Circle(r = 2)
 ```
 
+**Match guards:** any arm may add `if cond` after its patterns
+(`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
+bindings and runs only when the pattern matches; if it is false, matching
+continues with the next arm. A guarded arm does not count toward
+exhaustiveness, so keep an unguarded arm (or `else`) for that case.
+
 **`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
 Assign any member type; narrow it back with `match` on **type-name** patterns:
 

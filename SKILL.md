@@ -1168,6 +1168,9 @@ naive port into compile errors (each corresponds to a case in
    body-less `extern:` block ranks with the imports; an `export:` block ranks
    with the private functions, so it must come before the first `pub func`. A
    top-level `if` must be a **compile-time constant** condition (see §8).
+   **No `if` branch may be empty** - not at top level, not in a function, and
+   not in an `else if`. Instead of `if X:` with an empty body followed by
+   `else:`, negate the condition: `if !X:` (or `if not X:`).
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
 10. **`match` on an enum or a `Variant` must be exhaustive** (or have an
@@ -1307,9 +1310,8 @@ Rules: every entry needs a body. No variables, no generics, no `...`. No
 `pub`, `inline` or `noinline`: an exported function is always a public,
 out-of-line C symbol. Only `deprecated`, `pure` (checked against the body) and
 `noret` may modify it. Persian: `درون‌داد:` = `extern:`, `برون‌داد:` =
-`export:` (with ZWNJ or a space). Seed-compiled code (`compiler/` and the std
-packages it imports) still puts bodies in `extern:` until a release whose
-compiler knows `export:` becomes the bootstrap seed.
+`export:` (with ZWNJ or a space). A body inside `extern:` is an error that
+points you to `export:`.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:
@@ -1550,6 +1552,12 @@ Operands must be integers (a bitwise op on a float is a compile error). **Preced
 follows C**: `*  /  %` › `+  -` › `<<  >>` › `<  <=  >  >=` › `==  !=` › `&` › `^` ›
 `|` › `&&` › `||`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
 parentheses (`(flags & MASK) == MASK`) exactly as you would in C.
+
+`and`, `or` and `not` are English word forms of `&&`, `||` and `!` (Persian:
+`و`, `یا`, `وارون`). `not` binds as tightly as `!`, so `not a == b` means `(!a) == b`;
+write `not (a == b)` to negate a comparison. Code compiled by the bootstrap
+seed (`compiler/` and the std packages it imports) keeps the symbols until a
+seed that knows the words ships.
 
 ```salam
 mut flags := 0

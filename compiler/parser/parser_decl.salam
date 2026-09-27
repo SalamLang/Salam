@@ -12,15 +12,16 @@ struct FnMods:
     pub is_noinline: bool = false
     pub is_pure: bool = false
     pub is_noret: bool = false
+    pub is_mut: bool = false
     pub any: bool = false
 end
 
 func p_at_fn_mod(p &: Ps): bool:
-    ret p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET)
+    ret p_at(p, tok.TK_KW_PUB) || p_at(p, tok.TK_KW_DEPRECATED) || p_at(p, tok.TK_KW_INLINE) || p_at(p, tok.TK_KW_NOINLINE) || p_at(p, tok.TK_KW_PURE) || p_at(p, tok.TK_KW_NORET) || p_at_mut_func(p)
 end
 
 func absorb_misordered_mods(p &: Ps, m &: FnMods):
-    p_error(p, "function modifiers must appear in this order: 'pub deprecated inline|noinline pure|noret func'")
+    p_error(p, "function modifiers must appear in this order: 'pub deprecated mut inline|noinline pure|noret func'")
     until p_at_fn_mod(p):
         mk := p_peek(p).kind
         if mk == tok.TK_KW_PUB:
@@ -33,6 +34,8 @@ func absorb_misordered_mods(p &: Ps, m &: FnMods):
             m.is_noinline = true
         else mk == tok.TK_KW_PURE:
             m.is_pure = true
+        else mk == tok.TK_KW_MUT:
+            m.is_mut = true
         else:
             m.is_noret = true
         end
@@ -51,6 +54,10 @@ func parse_fn_mods(p &: Ps): FnMods:
         m.is_deprecated = true
         p_advance(p)
     end
+    if p_at_mut_func(p):
+        m.is_mut = true
+        p_advance(p)
+    end
     if p_at(p, tok.TK_KW_INLINE):
         m.is_inline = true
         p_advance(p)
@@ -65,9 +72,12 @@ func parse_fn_mods(p &: Ps): FnMods:
         m.is_noret = true
         p_advance(p)
     end
-    m.any = m.is_deprecated || m.is_inline || m.is_noinline || m.is_pure || m.is_noret
+    m.any = m.is_deprecated || m.is_inline || m.is_noinline || m.is_pure || m.is_noret || m.is_mut
     if p_at_fn_mod(p):
         absorb_misordered_mods(p, m)
+    end
+    if m.is_mut && m.is_pure:
+        p_error(p, "a 'pure' method cannot be 'mut func': modifying 'this' is a side effect")
     end
     ret m
 end
@@ -84,8 +94,24 @@ func apply_fn_mods(a &: at.Ast, n: int, m &: FnMods):
         nn.is_pure = m.is_pure
         nn.is_noret = m.is_noret
         nn.is_deprecated = m.is_deprecated
+        nn.is_mut = m.is_mut
     end
     at.Put(a, n, nn)
+end
+
+func p_at_mut_func(p &: Ps): bool:
+    if !p_at(p, tok.TK_KW_MUT):
+        ret false
+    end
+    k := p_peek2(p).kind
+    ret k == tok.TK_KW_FUNC || k == tok.TK_KW_INLINE || k == tok.TK_KW_NOINLINE || k == tok.TK_KW_PURE || k == tok.TK_KW_NORET
+end
+
+func reject_mut_mod(p &: Ps, m &: FnMods, msg: str):
+    if m.is_mut:
+        p_error(p, msg)
+        m.is_mut = false
+    end
 end
 
 func check_fn_mods_target(p &: Ps, m &: FnMods):
@@ -149,6 +175,7 @@ func parse_distinct_body(p &: Ps, a &: at.Ast, tname: str):
             break
         end
         mut mods := parse_fn_mods(p)
+        reject_mut_mod(p, mods, "'mut func' is not allowed on a distinct type: its 'this' is a copy")
         if p_at(p, tok.TK_KW_FUNC):
             f := parse_function(p, a, false)
             if f != 0:
@@ -314,9 +341,17 @@ func parse_interface(p &: Ps, a &: at.Ast): int:
         if p_at(p, tok.TK_KW_END) || p_at_eof(p):
             break
         end
+        mut imut := false
+        if p_at_mut_func(p):
+            imut = true
+            p_advance(p)
+        end
         if p_at(p, tok.TK_KW_FUNC):
             m := parse_interface_method(p, a)
             if m != 0:
+                mut mv := at.Get(a, m)
+                mv.is_mut = imut
+                at.Put(a, m, mv)
                 at.AddChild(a, n, m)
             end
         else:
@@ -353,6 +388,10 @@ func parse_impl(p &: Ps, a &: at.Ast): int:
         p_skip_terminators(p)
         if p_at(p, tok.TK_KW_END) || p_at_eof(p):
             break
+        end
+        if p_at_mut_func(p):
+            p_error(p, "'mut func' is not allowed in an impl block: 'this' is a copy there")
+            p_advance(p)
         end
         if p_at(p, tok.TK_KW_FUNC):
             m := parse_function(p, a, false)
@@ -448,6 +487,7 @@ func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods):
         end
         m = parse_const(p, a)
     else:
+        reject_mut_mod(p, mods, "'mut func' is not allowed on a static function: it has no 'this'")
         p_advance(p)
         if at.TyparamCount(a, sn) > 0:
             p_error(p, "'static' functions are not supported on generic structs yet")
@@ -674,6 +714,7 @@ func parse_top_level(p &: Ps, a &: at.Ast): int:
 
     mut mods := parse_fn_mods(p)
     is_pub := mods.is_pub
+    reject_mut_mod(p, mods, "'mut func' is only allowed on methods inside a struct; a top-level function has no 'this'")
     check_fn_mods_target(p, mods)
     mut n := 0
     k := p_peek(p).kind

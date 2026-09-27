@@ -379,6 +379,26 @@ end
 w := Color.Gray(Color.Max)
 ```
 
+**`mut func` (read-only `this`):** once any method of a struct is declared
+`mut func`, the compiler checks the whole struct. Its other methods get a
+read-only `this` (E105 when one assigns to a field or calls a `mut func` on
+`this`), and a `mut func` can only be called on a `mut` binding or a `&:`
+parameter (E106). Writes that go through a pointer, slice, `Vector` or
+`HashMap` field change the heap data, not the struct, so they stay allowed.
+Structs with no `mut func` keep the old rules. `mut` goes right after `pub`
+(`pub mut inline func`), is also allowed on interface methods, and cannot be
+combined with `pure`.
+
+```salam
+struct Counter:
+    n: int = 0
+    pub func Count(): int:  ret this.n  end     // this is read-only here
+    pub mut func Tick():  this.n += 1  end
+end
+mut c := Counter {}
+c.Tick()
+```
+
 **Operator overloading:** a struct method named `operator_<op>` is called for that
 operator when the left operand is the struct: `operator_add operator_sub
 operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one

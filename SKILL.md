@@ -365,6 +365,64 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**Static members:** `static func` and `const` inside a struct belong to the type,
+not to a value. Call them through the type name, also across packages
+(`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
+struct's private fields, so it is the place for constructors. On a generic
+struct the type parameters come from the arguments or the expected type:
+`Box.Of(42)`, `ret Box.Empty()`, `Box.Empty() as Box<f64>`.
+
+```salam
+struct Color:
+    pub r: int  pub g: int  pub b: int
+    pub const Max := 255
+    pub static func Gray(v: int): Color:  ret Color { r = v, g = v, b = v }  end
+end
+w := Color.Gray(Color.Max)
+```
+
+**`mut func` (read-only `this`):** once any method of a struct is declared
+`mut func`, the compiler checks the whole struct. Its other methods get a
+read-only `this` (E105 when one assigns to a field or calls a `mut func` on
+`this`), and a `mut func` can only be called on a `mut` binding or a `&:`
+parameter (E106). Writes that go through a pointer, slice, `Vector` or
+`HashMap` field change the heap data, not the struct, so they stay allowed.
+Structs with no `mut func` keep the old rules. `mut` goes right after `pub`
+(`pub mut inline func`), is also allowed on interface methods, and cannot be
+combined with `pure`.
+
+```salam
+struct Counter:
+    n: int = 0
+    pub func Count(): int:  ret this.n  end     // this is read-only here
+    pub mut func Tick():  this.n += 1  end
+end
+mut c := Counter {}
+c.Tick()
+```
+
+**Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
+struct adds a field named `Animal` and promotes its fields and `pub` methods,
+so `d.name` means `d.Animal.name` and `d.Describe()` forwards to it. Promoted
+methods count for interfaces, `<T: I>` bounds and `dyn I`. The outer struct's
+own members win over promoted ones; two embeds that both provide a name are
+E107. Literals may set promoted fields directly (`Dog { name = "Rex" }`); an
+omitted embed defaults to `Animal {}` when all of its fields have defaults.
+`pub use` exposes the embed outside the struct; plain `use` keeps it private.
+Print and JSON show it as a nested object. The Persian spelling is `شامل`. A
+generic struct embeds with its type arguments (`use Stack<str>`); a pointer
+cannot be embedded.
+
+```salam
+struct Animal:  pub name: str = ""  pub func Describe(): str:  ret "I am " + this.name  end  end
+struct Dog:
+    pub use Animal
+    pub breed: str = ""
+end
+d := Dog { name = "Rex", breed = "lab" }
+println d.Describe()
+```
+
 **Operator overloading:** declare a method whose name is the operator itself,
 `func +(o: V): V:`. It is called when the left operand is the struct. `!=` falls
 back to `not (a == b)` when there is no `!=`, and `a += b` uses your `+`.
@@ -456,6 +514,66 @@ tell where one multi-word name ends and the next begins. Leaving out the
 comma is a compile error (`'end'`/EOF right after a member with no comma
 before it).
 
+**Enums with data** (sum types): a member may carry named values. Build one
+with `Enum.Member(values...)` (or `Enum.Member` when it has none) and take it
+apart in `match` with `Member(a, b)` (use `_` to skip a value) or
+`Member whole` to bind the whole case. `match` must cover every member (or
+have `else`). Such enums print as `Circle(r = 2)` and compare with `==` when
+every value can. They work across packages (`geo.Token.Num(4)`). An enum with
+data needs at least two members, and members cannot also have `= value`.
+`value.name()` gives the member's name and `Enum.Count()` the number of members.
+
+```salam
+enum Shape:
+    Circle(r: f64)
+    Rect(w: f64, h: f64)
+    Empty
+end
+func area(s: Shape): f64:
+    ret match s:
+        Circle(r) => 3.14 * r * r
+        Rect(w, h) => w * h
+        Empty => 0.0
+    end
+end
+println area(Shape.Rect(3.0, 4.0))
+println Shape.Circle(2.0)          // Circle(r = 2)
+```
+
+**Generic enums, `result.Result` and `?`:** an enum with data may take type
+parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
+built where its type is known - returned from a function, or with `as`:
+`Maybe.Nothing as Maybe<int>`. `import result` gives
+`result.Result<T, E>` (`Ok(value)` / `Err(error)`) plus `result.IsOk`,
+`IsErr`, `UnwrapOr(r, fallback)` and `Expect(r, msg)`. Inside a function that
+returns such an enum, a postfix `?` unwraps `Ok` and returns any `Err` early
+(running `defer`s): it must be a statement's whole value - `x := f()?`,
+`x = f()?`, `f()?` or `ret f()?`.
+
+```salam
+import result
+func parse(s: str): result.Result<int, str>:
+    if s == "7": ret result.Result.Ok(7) end
+    ret result.Result.Err("bad " + s)
+end
+func sum(a: str, b: str): result.Result<int, str>:
+    x := parse(a)?
+    y := parse(b)?
+    ret result.Result.Ok(x + y)
+end
+```
+
+**Struct patterns:** `Point{x = 0, y}` matches a struct (or an enum member,
+`Rect{w, h = 1.0}`) by field name: `name` binds the field, `name = expr`
+requires it to equal `expr`. A struct pattern with tests acts like a guard,
+so keep a final pattern without tests or an `else`.
+
+**Match guards:** any arm may add `if cond` after its patterns
+(`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
+bindings and runs only when the pattern matches; if it is false, matching
+continues with the next arm. A guarded arm does not count toward
+exhaustiveness, so keep an unguarded arm (or `else`) for that case.
+
 **`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
 Assign any member type; narrow it back with `match` on **type-name** patterns:
 
@@ -510,6 +628,20 @@ func describe<T: Shape>(s: T):  println s.name(), s.area()  end   // static boun
 func draw(s: dyn Shape):  println s.area()  end                  // dynamic dispatch
 shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
+```
+
+**Default methods:** an interface method may carry a body. A struct that
+provides all of the interface's methods without bodies gets a copy of every
+default it does not define itself, and so does an `impl I on T` block, so
+defaults work with `<T: I>`, `dyn I` and direct calls.
+
+```salam
+interface Shape:
+    func Area(): f64
+    func Describe(): str:
+        ret "area " + this.Area()
+    end
+end
 ```
 
 `impl` adds interface methods to **any** type, including primitives:
@@ -811,7 +943,9 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
   compiler derives per type:
   `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
-  `@json "" "omitempty"/"optional"/"string"` for the rest.
+  `@json "" "omitempty"/"optional"/"string"` for the rest. An enum with data
+  is written with its member as the key, `{"Circle":{"r":1.5}}`, and a member
+  without data as a bare string, `"Empty"`.
   `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
   `$ref`, so a self-referential type works) from the same declaration and the
   same markers - the argument is a value only because that is how a generic
@@ -1248,28 +1382,30 @@ When the compiler complains, fix the code; do not try to suppress the check
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                           |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T` |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                   |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                              |
-| set                          | `Set<T>`                                                                         |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                            |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                    |
-| exception / error            | `bool` flag, `Option<T>`, or sentinel; **no throw/catch**                        |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                             |
-| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
-| enum / union                 | `enum` (C-like, comma-separated members) or `Variant<…>` (tagged union)          |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)      |
-| `for i in range(n)`          | `repeat n in i:`                                                                 |
-| `for x in xs`                | `each x in xs:`                                                                  |
-| destructor / cleanup         | `defer x.free()`                                                                 |
+| Source concept               | Salam                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                            |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                       |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`  |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining         |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                            |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                            |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                    |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                               |
+| set                          | `Set<T>`                                                                          |
+| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                             |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
+| exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
+| null / nil / None            | `null` (pointers) or `Option.None()`                                              |
+| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                             |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)        |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)       |
+| `for i in range(n)`          | `repeat n in i:`                                                                  |
+| `for x in xs`                | `each x in xs:`                                                                   |
+| destructor / cleanup         | `defer x.free()`                                                                  |
 
 ### From PHP
 
@@ -1315,7 +1451,7 @@ General mapping that applies to all source languages:
   `spawn`; `sync.Mutex/WaitGroup`→`sync.*`; multiple returns → a `struct` or
   out-params via pointers; `error` return → `bool`/`Option`; slices → `Vector`
   or `T[:]` slices; `map`→`HashMap`.
-- **Rust**: `struct`/`enum`(+data)→`struct`/`Variant`; `trait`→`interface`+
+- **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
   `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
   (Salam does not borrow-check). Pattern `match` maps to Salam `match`.

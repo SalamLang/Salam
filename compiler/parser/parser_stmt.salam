@@ -240,6 +240,44 @@ func tk_is_pattern_literal(k: int): bool:
     ret k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL
 end
 
+func parse_pattern_fields(p &: Ps, a &: at.Ast, pat: int):
+    p_advance(p)
+    mut pv := at.Get(a, pat)
+    pv.enum_payload = true
+    at.Put(a, pat, pv)
+    until not p_at(p, tok.TK_RPAREN) and not p_at_eof(p):
+        b := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, b, p_name(p, "expected a name to bind in the pattern"))
+        p_fin(p, a, b)
+        at.AddChild(a, pat, b)
+        if p.panic or not p_match(p, tok.TK_COMMA):
+            break
+        end
+    end
+    p_expect(p, tok.TK_RPAREN, "')' to close the pattern")
+end
+
+func parse_pattern_struct(p &: Ps, a &: at.Ast, pat: int):
+    p_advance(p)
+    at.SetOp(a, pat, tok.TK_LBRACE)
+    p_skip_terminators(p)
+    until not p_at(p, tok.TK_RBRACE) and not p_at_eof(p):
+        fi := p_mk(p, a, at.AST_FIELD_INIT)
+        at.SetName(a, fi, p_name(p, "expected a field name in the pattern"))
+        if p_match(p, tok.TK_ASSIGN):
+            ps_set_a(a, fi, parse_expr(p, a))
+        end
+        p_fin(p, a, fi)
+        at.AddChild(a, pat, fi)
+        if p.panic or not p_match(p, tok.TK_COMMA):
+            break
+        end
+        p_skip_terminators(p)
+    end
+    p_skip_terminators(p)
+    p_expect(p, tok.TK_RBRACE, "'}' to close the pattern")
+end
+
 func parse_match_pattern(p &: Ps, a &: at.Ast): int:
     pat := p_mk(p, a, at.AST_MATCH_PATTERN)
     if tk_is_pattern_literal(p_peek(p).kind):
@@ -258,6 +296,11 @@ func parse_match_pattern(p &: Ps, a &: at.Ast): int:
         p_advance(p)
         p_fin(p, a, idn)
         ps_set_a(a, pat, idn)
+        if p_at(p, tok.TK_LPAREN):
+            parse_pattern_fields(p, a, pat)
+        else p_at(p, tok.TK_LBRACE):
+            parse_pattern_struct(p, a, pat)
+        end
         if p_at(p, tok.TK_IDENT) and p_peek(p).begin_line == line:
             at.SetName(a, pat, p_peek(p).lexeme)
             p_advance(p)
@@ -282,6 +325,9 @@ func parse_match_arm(p &: Ps, a &: at.Ast): int:
         until go:
             at.AddChild(a, arm, parse_match_pattern(p, a))
             go = p_match(p, tok.TK_COMMA)
+        end
+        if p_match(p, tok.TK_KW_IF):
+            ps_set_c(a, arm, parse_cond_expr(p, a))
         end
     end
     is_block := p_at(p, tok.TK_COLON)

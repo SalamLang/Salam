@@ -386,6 +386,23 @@ struct Vec2:
 end
 ```
 
+Only Salam's own operators can be overloaded: `+ - * / % ** == != < > <= >=
+! [] []=`. A new symbol (`***`, `+-`, `&`) is an error. The parameter count
+decides unary or binary and is checked:
+
+- binary operators take exactly one parameter, the right operand
+- `-` takes none (negation, `-v`) or one (subtraction)
+- `!` / `not` takes none
+- `[]` takes one (the index), `[]=` takes two (the index and the value)
+
+Operators attach to structs; a `type X = int` alias is the same type as `int`,
+so it cannot carry its own operators.
+
+**Sign runs are errors:** two `+`/`-` operators in a row are rejected, whether
+spaced or not. That covers `- -x`, `a - -b`, `a + -b`, `a---b`, `n++ + 1` and
+`+x` (Salam has no unary `+`). Put the inner one in parentheses (`a - (-b)`,
+`(n++) + 1`) or simplify (`a + b`, just `x`).
+
 **Enums & `match`:**
 
 ```salam

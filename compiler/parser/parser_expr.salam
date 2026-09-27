@@ -2,8 +2,10 @@ package parser
 
 import str
 
+include co "../sal_core.salam"
 include tok "../token.salam"
 include at "../ast.salam"
+include i18 "../i18n.salam"
 
 func bp_pack(l: int, r: int): int:
     ret (l << 16) | r
@@ -97,6 +99,42 @@ func make_binary(a &: at.Ast, op: int, l: int, r: int): int:
     ret n
 end
 
+func tk_is_sign(k: int): bool:
+    ret k == tok.TK_PLUS || k == tok.TK_MINUS || k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS
+end
+
+func p_check_sign_run(p &: Ps, unary: bool):
+    nx := p_peek(p)
+    if !tk_is_sign(nx.kind):
+        ret
+    end
+    pv := p_prev(p)
+    incdec := pv.kind == tok.TK_PLUS_PLUS || pv.kind == tok.TK_MINUS_MINUS || nx.kind == tok.TK_PLUS_PLUS || nx.kind == tok.TK_MINUS_MINUS
+    if incdec && pv.end_index == nx.begin_index:
+        p_error_verbatim(
+            p, i18.Tr("'++' and '--' add or subtract one; '+' and '-' add, subtract or negate. Separate them with parentheses."), co.Format1(i18.Tr("'%s' is not a Salam operator"), co.ArgStr(pv.lexeme + nx.lexeme))
+        )
+        ret
+    end
+    if incdec:
+        p_error_verbatim(
+            p, i18.Tr("write the increment or decrement on its own line, or wrap it in parentheses: '(n++) + 1'"), co.Format1(i18.Tr("'%s' mixes '++'/'--' with another sign"), co.ArgStr(pv.lexeme + " " + nx.lexeme))
+        )
+        ret
+    end
+    if nx.kind == tok.TK_PLUS:
+        p_error(p, "Salam has no unary '+': remove this '+'")
+        ret
+    end
+    if unary:
+        p_error(p, "'- -' negates twice, and the two signs cancel out, so they do nothing: remove both '-' signs and write just the value")
+    else pv.kind == tok.TK_MINUS:
+        p_error(p, "'- -' subtracts a negative number, which is the same as adding: write 'a + b' (or 'a - (-b)' if the sign must stay visible)")
+    else:
+        p_error(p, "'+ -' adds a negative number, which is the same as subtracting: write 'a - b' (or 'a + (-b)' if the sign must stay visible)")
+    end
+end
+
 func parse_nud(p &: Ps, a &: at.Ast): int:
     k := p_peek(p).kind
 
@@ -104,6 +142,9 @@ func parse_nud(p &: Ps, a &: at.Ast): int:
         n := p_mk(p, a, at.AST_UNARY)
         at.SetOp(a, n, k)
         p_advance(p)
+        if k == tok.TK_MINUS:
+            p_check_sign_run(p, true)
+        end
         ps_set_a(a, n, parse_expr_bp(p, a, 90))
         p_fin(p, a, n)
         ret n
@@ -111,6 +152,7 @@ func parse_nud(p &: Ps, a &: at.Ast): int:
     if k == tok.TK_PLUS_PLUS || k == tok.TK_MINUS_MINUS:
         start := p_peek(p)
         p_advance(p)
+        p_check_sign_run(p, true)
         operand := parse_expr_bp(p, a, 105)
         n := make_incdec(p, a, k, operand, true)
         mut nn := at.Get(a, n)
@@ -264,9 +306,13 @@ func parse_led(p &: Ps, a &: at.Ast, lhs: int, op: int, w: int): int:
         nn.end_index = t.end_index
         at.Put(a, n, nn)
         p_advance(p)
+        p_check_sign_run(p, false)
         ret n
     end
     p_advance(p)
+    if op == tok.TK_PLUS || op == tok.TK_MINUS:
+        p_check_sign_run(p, false)
+    end
     rhs := parse_expr_bp(p, a, bp_right(w))
     ret make_binary(a, op, lhs, rhs)
 end

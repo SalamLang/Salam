@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.4.5
+;; Version: 0.4.6
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -76,13 +76,13 @@ An empty string lets the compiler find it."
 (defconst salam-auto-keywords '("auto" "خودکار" "تلقائي"))
 (defconst salam-builtin-type-keywords '("وکتور" "Vector" "نگاشت" "HashMap" "پیمایشگرنگاشت" "MapIter" "پرونده" "File" "گوناگون" "Variant"))
 (defconst salam-builtin-keywords '("print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی"))
-(defconst salam-word-operators '("و" "یا" "برابر" "نابرابر"))
+(defconst salam-word-operators '("and" "or" "not" "و" "یا" "برابر" "نابرابر" "وارون"))
 (defconst salam-contextual-keywords '("link" "static" "dynamic" "framework" "پیوند" "ایستا" "پویا" "چارچوب" "dyn"))
 (defconst salam-directive-keywords '("mode" "title" "lang" "dir" "name" "version"))
 (defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float"))
 (defconst salam-end-keywords '("end" "پایان"))
 (defconst salam-else-keywords '("else" "وگرنه"))
-(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "with" "match" "switch" "برگشت" "اگر" "وگرنه" "تا" "پایان" "بشکن" "گذر" "دیرکن" "تکرار" "هر" "در" "همخوان" "ترابرد" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "layout" "package" "operator" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "include" "export" "روال" "بر" "ناپایا" "پایا" "گونه" "ساختار" "جداشمار" "واردسازی" "برگردان" "چیدمان" "بسته" "کارور" "درون‌داد" "میانجی" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "بخش" "کاربست" "فراخوانی" "برون‌داد" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی" "و" "یا" "برابر" "نابرابر"))
+(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "with" "match" "switch" "برگشت" "اگر" "وگرنه" "تا" "پایان" "بشکن" "گذر" "دیرکن" "تکرار" "هر" "در" "همخوان" "ترابرد" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "layout" "package" "operator" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "include" "export" "روال" "بر" "ناپایا" "پایا" "گونه" "ساختار" "جداشمار" "واردسازی" "برگردان" "چیدمان" "بسته" "کارور" "درون‌داد" "میانجی" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "بخش" "کاربست" "فراخوانی" "برون‌داد" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی" "and" "or" "not" "و" "یا" "برابر" "نابرابر" "وارون"))
 
 (defconst salam--ident-chars "[[:alnum:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍]"
   "Character class matching one identifier character, Arabic script included.")

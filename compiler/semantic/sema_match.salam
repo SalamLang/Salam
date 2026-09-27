@@ -184,10 +184,11 @@ func sema_check_match(
         mut coll_off := 0 - 1
         mut coll_cnt := 0
 
+        struct_arm_prepare(s, a, arm, subj)
         tags_mark := seen_tags.len()
         mems_mark := seen_members.len()
         if at.Get(a, arm).op == tok.TK_KW_ELSE:
-            has_wildcard = true
+            has_wildcard = has_wildcard || at.Get(a, arm).c == 0
         else:
             mut pi := 0
             until pi < at.ChildCount(a, arm):
@@ -641,4 +642,161 @@ func match_guard_check(s &: Sema, a &: at.Ast, arm: int):
             )
         )
     end
+end
+
+func sp_binary(a &: at.Ast, sp: co.SrcSpan, op: int, x: int, y: int): int:
+    b := new_node_at(a, at.AST_BINARY, sp)
+    mut bv := at.Get(a, b)
+    bv.op = op
+    bv.a = x
+    bv.b = y
+    at.Put(a, b, bv)
+    ret b
+end
+
+func sp_member(a &: at.Ast, sp: co.SrcSpan, base: int, field: str): int:
+    m := new_node_at(a, at.AST_MEMBER, sp)
+    at.SetName(a, m, field)
+    mut mv := at.Get(a, m)
+    mv.a = base
+    at.Put(a, m, mv)
+    ret m
+end
+
+func sp_base(a &: at.Ast, sp: co.SrcSpan, hidden: str, subj: int): int:
+    id := new_node_at(a, at.AST_IDENTIFIER, sp)
+    if str.Len(hidden) > 0:
+        at.SetName(a, id, hidden)
+        ret id
+    end
+    mut iv := at.Get(a, id)
+    iv.name = "__msubject"
+    iv.unwrap_subj = true
+    iv.sema_type = subj
+    at.Put(a, id, iv)
+    ret id
+end
+
+func struct_arm_prepare(s &: Sema, a &: at.Ast, arm: int, subj: int):
+    armv := at.Get(a, arm)
+    if armv.op == tok.TK_KW_ELSE || armv.list.len() == 0:
+        ret
+    end
+    mut any := false
+    repeat armv.list.len() in i:
+        if at.Get(a, armv.list.get(i)).op == tok.TK_LBRACE:
+            any = true
+        end
+    end
+    if !any:
+        ret
+    end
+    pat := armv.list.get(0)
+    pv := at.Get(a, pat)
+    sp := span_of(a, pat)
+    if armv.list.len() != 1:
+        serr(s, 76, sp, i18.Tr("a pattern with '{ ... }' must be the only pattern of its arm"))
+        ret
+    end
+    pname := pv.a != 0 ? at.Get(a, pv.a).name : ""
+    mut hidden := ""
+    mut owner := 0
+    esym := enum_data_sym(s, subj)
+    if esym != 0:
+        ci := enum_case_index(s, subj, pname)
+        if ci < 0:
+            serr(
+                s, 16, sp, co.Format2(
+                    i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(pname)
+                )
+            )
+            ret
+        end
+        owner = enum_case_struct(s, subj, ci)
+        hidden = "__pb" + str.FromInt(pat as i64)
+    else:
+        owner = struct_sym_of(s, subj)
+        if owner == 0 || subj < 0 || ty_at(s, subj).kind != TY_STRUCT:
+            serr(
+                s, 76, sp, co.Format1(
+                    i18.Tr("a '{ ... }' pattern needs a struct or an enum with data to match, not '%s'"), co.ArgStr(type_disp(s, subj))
+                )
+            )
+            ret
+        end
+        oname := sym_at(s, owner).name
+        mut short := pname
+        pdot := str.IndexOf(short, ".")
+        if pdot >= 0:
+            short = str.Substr(short, pdot + 1, str.Len(short) - pdot - 1)
+        end
+        if !str.Equals(short, oname) && !str.Equals(short, sym_at(s, owner).generic_base):
+            serr(
+                s, 75, sp, co.Format2(
+                    i18.Tr("pattern '%s' does not match the subject's type '%s'"), co.ArgStr(pname), co.ArgStr(type_disp(s, subj))
+                )
+            )
+            mut bad := at.Get(a, arm)
+            bad.op = tok.TK_KW_ELSE
+            bad.list = Vector {} as Vector<int>
+            at.Put(a, arm, bad)
+            ret
+        end
+    end
+    mut tests := 0
+    mut decls := Vector {} as Vector<int>
+    defer decls.free()
+    repeat pv.list.len() in j:
+        fi := at.Get(a, pv.list.get(j))
+        fsp := span_of(a, pv.list.get(j))
+        f := scope_lookup_local(s, sym_at(s, owner).members, fi.name)
+        if f == 0 || sym_at(s, f).kind != SYM_FIELD || str.Equals(fi.name, "_unit"):
+            serr(
+                s, 16, fsp, co.Format2(
+                    i18.Tr("'%s' has no field '%s'"), co.ArgStr(pname), co.ArgStr(fi.name)
+                )
+            )
+            continue
+        end
+        if fi.a != 0:
+            cmp := sp_binary(a, fsp, tok.TK_EQ, sp_member(a, fsp, sp_base(a, fsp, hidden, subj), fi.name), fi.a)
+            tests = tests == 0 ? cmp : sp_binary(a, fsp, tok.TK_AND, tests, cmp)
+            continue
+        end
+        decl := new_node_at(a, at.AST_VAR_DECL, fsp)
+        mut dv := at.Get(a, decl)
+        dv.name = fi.name
+        dv.a = sp_member(a, fsp, sp_base(a, fsp, hidden, subj), fi.name)
+        dv.enum_payload = true
+        at.Put(a, decl, dv)
+        decls.push(decl)
+    end
+    armb := at.Get(a, arm).b
+    mut bv := at.Get(a, armb)
+    mut nl := Vector {} as Vector<int>
+    repeat decls.len() in k:
+        nl.push(decls.get(k))
+    end
+    repeat bv.list.len() in k2:
+        nl.push(bv.list.get(k2))
+    end
+    old := bv.list
+    bv.list = nl
+    at.Put(a, armb, bv)
+    old.free()
+    mut pv2 := at.Get(a, pat)
+    pv2.op = 0
+    pv2.list = Vector {} as Vector<int>
+    mut av := at.Get(a, arm)
+    if str.Len(hidden) > 0:
+        pv2.name = hidden
+    else:
+        av.op = tok.TK_KW_ELSE
+        av.list = Vector {} as Vector<int>
+    end
+    at.Put(a, pat, pv2)
+    if tests != 0:
+        av.c = av.c == 0 ? tests : sp_binary(a, sp, tok.TK_AND, tests, av.c)
+    end
+    at.Put(a, arm, av)
 end

@@ -570,6 +570,11 @@ func sum(a: str, b: str): result.Result<int, str>:
 end
 ```
 
+**Struct patterns:** `Point{x = 0, y}` matches a struct (or an enum member,
+`Rect{w, h = 1.0}`) by field name: `name` binds the field, `name = expr`
+requires it to equal `expr`. A struct pattern with tests acts like a guard,
+so keep a final pattern without tests or an `else`.
+
 **Match guards:** any arm may add `if cond` after its patterns
 (`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
 bindings and runs only when the pattern matches; if it is false, matching

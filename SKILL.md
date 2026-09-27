@@ -1307,9 +1307,8 @@ Rules: every entry needs a body. No variables, no generics, no `...`. No
 `pub`, `inline` or `noinline`: an exported function is always a public,
 out-of-line C symbol. Only `deprecated`, `pure` (checked against the body) and
 `noret` may modify it. Persian: `درون‌داد:` = `extern:`, `برون‌داد:` =
-`export:` (with ZWNJ or a space). Seed-compiled code (`compiler/` and the std
-packages it imports) still puts bodies in `extern:` until a release whose
-compiler knows `export:` becomes the bootstrap seed.
+`export:` (with ZWNJ or a space). A body inside `extern:` is an error that
+points you to `export:`.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:

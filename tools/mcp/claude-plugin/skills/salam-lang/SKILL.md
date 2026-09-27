@@ -87,6 +87,8 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 
 ## Traps that fail silently
 
+- Check the compiler version with `salam version`. There is no `--version`
+  flag; `salam --version` fails with `unknown command '--version'`.
 - `str.Split` can segfault reading its **last** element on gcc-linked builds.
   Prefer `find`/`substr`.
 - `os.shell.Run` deadlocks when the child writes more than ~64KB.

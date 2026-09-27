@@ -138,6 +138,26 @@ func distinct_retype_literal(s &: Sema, a &: at.Ast, nid: int, t: int):
     _d := sema_decorate(s, a, nid, t)
 end
 
+func distinct_check_self_call(s &: Sema, a &: at.Ast, nid: int, dsym: int, fsym: int):
+    if sym_at(s, fsym).overloads.get(0) != s.cur_func:
+        ret
+    end
+    serr(
+        s, 12, span_of(a, nid), co.Format2(
+            i18.Tr("this calls operator '%s' of '%s' from inside itself and would recurse forever; convert to the base type first, e.g. '(this as int) + (other as int)'"), co.ArgStr(distinct_op_symbol(distinct_method_of(sym_at(s, fsym).name))), co.ArgStr(sym_at(s, dsym).name)
+        )
+    )
+end
+
+func distinct_method_of(fname: str): str:
+    disp := distinct_display_name(fname)
+    i := str.IndexOf(disp, " operator ")
+    if i < 0:
+        ret fname
+    end
+    ret str.Substr(disp, i + 10, str.Len(disp) - i - 10)
+end
+
 func distinct_make_call(s &: Sema, a &: at.Ast, callid: int, dsym: int, fsym: int, args: Vector<int>, atys: Vector<int>): int:
     sigid := distinct_sig(s, a, fsym)
     sg := sig_at(s, sigid)
@@ -220,6 +240,7 @@ func distinct_try_binary(s &: Sema, a &: at.Ast, nid: int, l: int, r: int): int:
     distinct_candidates(s, dsym, mname, cands)
     fsym := distinct_pick(s, a, cands, args, atys)
     if fsym != 0:
+        distinct_check_self_call(s, a, nid, dsym, fsym)
         ret distinct_make_call(s, a, nid, dsym, fsym, args, atys)
     end
     if n.op == tok.TK_NE && !distinct_arity_seen(s, cands, 2):
@@ -272,6 +293,7 @@ func distinct_try_unary(s &: Sema, a &: at.Ast, nid: int, t: int): int:
     distinct_candidates(s, dsym, mname, cands)
     fsym := distinct_pick(s, a, cands, args, atys)
     if fsym != 0:
+        distinct_check_self_call(s, a, nid, dsym, fsym)
         ret distinct_make_call(s, a, nid, dsym, fsym, args, atys)
     end
     ret TYPE_NONE
@@ -334,6 +356,7 @@ func distinct_try_compound(s &: Sema, a &: at.Ast, nid: int, tt: int, vt: int): 
         end
         ret false
     end
+    distinct_check_self_call(s, a, nid, dsym, fsym)
     callid := new_node_at(a, at.AST_CALL, span_of(a, nid))
     rt := distinct_make_call(s, a, callid, dsym, fsym, args, atys)
     if !type_assignable(s, tt, rt):
@@ -349,4 +372,56 @@ func distinct_try_compound(s &: Sema, a &: at.Ast, nid: int, tt: int, vt: int): 
     nv.b = callid
     at.Put(a, nid, nv)
     ret true
+end
+
+func distinct_display_name(name: str): str:
+    if !str.StartsWith(name, "__"):
+        ret ""
+    end
+    rest := str.Substr(name, 2, str.Len(name) - 2)
+    sep := str.IndexOf(rest, "__")
+    if sep <= 0:
+        ret ""
+    end
+    tname := str.Substr(rest, 0, sep)
+    tail := str.Substr(rest, sep + 2, str.Len(rest) - sep - 2)
+    mut last := 0 - 1
+    mut from := 0
+    until from < str.Len(tail):
+        k := str.IndexOf(str.Substr(tail, from, str.Len(tail) - from), "__")
+        if k < 0:
+            break
+        end
+        last = from + k
+        from = last + 2
+    end
+    if last <= 0:
+        ret ""
+    end
+    mname := str.Substr(tail, 0, last)
+    if str.StartsWith(mname, "operator_"):
+        ret tname + " operator " + distinct_op_symbol(mname)
+    end
+    ret tname + "." + mname
+end
+
+func distinct_display_names(msg: str): str:
+    if str.IndexOf(msg, "'__") < 0:
+        ret msg
+    end
+    mut out := ""
+    mut rest := msg
+    mut i := str.IndexOf(rest, "'__")
+    until i >= 0:
+        close := str.IndexOf(str.Substr(rest, i + 1, str.Len(rest) - i - 1), "'")
+        if close < 0:
+            break
+        end
+        name := str.Substr(rest, i + 1, close)
+        disp := distinct_display_name(name)
+        out = out + str.Substr(rest, 0, i + 1) + (str.Len(disp) > 0 ? disp : name) + "'"
+        rest = str.Substr(rest, i + close + 2, str.Len(rest) - i - close - 2)
+        i = str.IndexOf(rest, "'__")
+    end
+    ret out + rest
 end

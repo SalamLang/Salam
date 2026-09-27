@@ -1542,8 +1542,12 @@ salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
+salam version                           # print the compiler version (NOT --version)
 salam app.salam --emit-tokens | --emit-ast | --emit-symbol   # inspect a stage
 ```
+
+> **Version check is `salam version`, a subcommand.** There is no `--version`
+> or `-v` flag: `salam --version` fails with `unknown command '--version'`.
 
 **Always verify a converted program.** Prefer `salam exec file.salam` for a quick
 check of pure logic; use `salam build … --output=…` (or `salam run`) when it uses

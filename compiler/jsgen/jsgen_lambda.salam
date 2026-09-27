@@ -149,6 +149,75 @@ func jsg_lambda(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     ret core
 end
 
+func jsg_struct_fields_obj(g &: Jg, s &: sm.Sema, a &: at.Ast, ssym: int, lit: int): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "{ ")
+    mut first := true
+    mut n := at.Node {}
+    if lit != 0:
+        n = at.Get(a, lit)
+    end
+    mems := sm.SymAt(s, ssym).members
+    msc := sm.ScopeAt(s, mems)
+    cnt := msc.symbols.len()
+    mut i := 0
+    until i < cnt:
+        f := sm.SymAt(s, msc.symbols.get(i))
+        if f.kind != sm.SYM_FIELD:
+            i += 1
+            continue
+        end
+        mut provided := 0
+        nfi := n.list.len()
+        mut j := 0
+        until j < nfi:
+            fi := at.Get(a, n.list.get(j))
+            if str.Len(fi.name) > 0 && str.Equals(fi.name, f.name):
+                provided = n.list.get(j)
+                break
+            end
+            j += 1
+        end
+        mut val := ""
+        if provided != 0:
+            pv := at.Get(a, provided).a
+            val = jsg_expr_p(g, s, a, pv, 0)
+            fts := sm.ToString(s, f.ty)
+            if !jsg_is_fresh_value(a, pv) && jsg_needs_copy(s, fts):
+                val = jsg_copy_expr(g, s, fts, val, 0)
+            end
+        else:
+            mut dflt := 0
+            if f.decl != 0:
+                dflt = at.Get(a, f.decl).a
+            end
+            if dflt != 0:
+                val = jsg_expr_p(g, s, a, dflt, 0)
+                dfts := sm.ToString(s, f.ty)
+                if !jsg_is_fresh_value(a, dflt) && jsg_needs_copy(s, dfts):
+                    val = jsg_copy_expr(g, s, dfts, val, 0)
+                end
+            else:
+                mut fts := ""
+                if f.ty != sm.TYPE_NONE:
+                    fts = sm.ToString(s, f.ty)
+                end
+                val = jsg_zero(s, fts)
+            end
+        end
+        if !first:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, cg_cident(f.name) + ": " + val)
+        first = false
+        i += 1
+    end
+    str.BufAppend(b, first ? "}" : " }")
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
 func jsg_struct_lit(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     n := at.Get(a, id)
     if cg_is_vector_ts(s, n.type_str) || str.Equals(n.name, "Vector"):
@@ -162,61 +231,8 @@ func jsg_struct_lit(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): str:
     str.BufAppend(b, "{ ")
     mut first := true
     if ssym != 0:
-        mems := sm.SymAt(s, ssym).members
-        msc := sm.ScopeAt(s, mems)
-        cnt := msc.symbols.len()
-        mut i := 0
-        until i < cnt:
-            f := sm.SymAt(s, msc.symbols.get(i))
-            if f.kind != sm.SYM_FIELD:
-                i += 1
-                continue
-            end
-            mut provided := 0
-            nfi := n.list.len()
-            mut j := 0
-            until j < nfi:
-                fi := at.Get(a, n.list.get(j))
-                if str.Len(fi.name) > 0 && str.Equals(fi.name, f.name):
-                    provided = n.list.get(j)
-                    break
-                end
-                j += 1
-            end
-            mut val := ""
-            if provided != 0:
-                pv := at.Get(a, provided).a
-                val = jsg_expr_p(g, s, a, pv, 0)
-                fts := sm.ToString(s, f.ty)
-                if !jsg_is_fresh_value(a, pv) && jsg_needs_copy(s, fts):
-                    val = jsg_copy_expr(g, s, fts, val, 0)
-                end
-            else:
-                mut dflt := 0
-                if f.decl != 0:
-                    dflt = at.Get(a, f.decl).a
-                end
-                if dflt != 0:
-                    val = jsg_expr_p(g, s, a, dflt, 0)
-                    dfts := sm.ToString(s, f.ty)
-                    if !jsg_is_fresh_value(a, dflt) && jsg_needs_copy(s, dfts):
-                        val = jsg_copy_expr(g, s, dfts, val, 0)
-                    end
-                else:
-                    mut fts := ""
-                    if f.ty != sm.TYPE_NONE:
-                        fts = sm.ToString(s, f.ty)
-                    end
-                    val = jsg_zero(s, fts)
-                end
-            end
-            if !first:
-                str.BufAppend(b, ", ")
-            end
-            str.BufAppend(b, cg_cident(f.name) + ": " + val)
-            first = false
-            i += 1
-        end
+        str.BufFree(b)
+        ret jsg_struct_fields_obj(g, s, a, ssym, id)
     else:
         nfi2 := n.list.len()
         mut j2 := 0

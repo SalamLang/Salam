@@ -170,6 +170,74 @@ func jsg_is_byte_ptr_ts(ts: str): bool:
     ) || str.Equals(ts, "char*")
 end
 
+func jsg_ptr_struct(s &: sm.Sema, ts: str): int:
+    if !str.EndsWith(ts, "*") || str.EndsWith(ts, "**"):
+        ret 0
+    end
+    ret struct_by_name(s, str.Substr(ts, 0, str.Len(ts) - 1))
+end
+
+func jsg_prim_size(ts: str): int:
+    if str.EndsWith(ts, "*") || str.Equals(ts, "str") || str.StartsWith(ts, "func("):
+        ret 8
+    end
+    if str.Equals(ts, "i8") || str.Equals(ts, "u8") || str.Equals(ts, "bool") || str.Equals(ts, "char"):
+        ret 1
+    end
+    if str.Equals(ts, "i16") || str.Equals(ts, "u16"):
+        ret 2
+    end
+    if str.Equals(ts, "i32") || str.Equals(ts, "u32") || str.Equals(ts, "int") || str.Equals(ts, "uint") || str.Equals(ts, "f32") || str.Equals(ts, "float") || str.Equals(ts, "uchar"):
+        ret 4
+    end
+    if str.Equals(ts, "i64") || str.Equals(ts, "u64") || str.Equals(ts, "f64") || str.Equals(ts, "size") || str.Equals(ts, "usize") || str.Equals(ts, "isize"):
+        ret 8
+    end
+    ret 0
+end
+
+func jsg_layout(s &: sm.Sema, ts: str, size &: int, align &: int, depth: int):
+    p := jsg_prim_size(ts)
+    if p > 0:
+        size = p
+        align = p
+        ret
+    end
+    ssym := depth < 16 ? struct_by_name(s, ts) : 0
+    if ssym == 0 || sm.SymAt(s, ssym).kind == sm.SYM_ENUM:
+        size = 4
+        align = 4
+        ret
+    end
+    mems := sm.SymAt(s, ssym).members
+    mut off := 0
+    mut maxal := 1
+    if mems != 0:
+        msc := sm.ScopeAt(s, mems)
+        repeat msc.symbols.len() with i:
+            f := sm.SymAt(s, msc.symbols.get(i))
+            if f.kind == sm.SYM_FIELD:
+                mut fs := 0
+                mut fa := 1
+                jsg_layout(s, sm.ToString(s, f.ty), fs, fa, depth + 1)
+                if fa > maxal:
+                    maxal = fa
+                end
+                off = (off + fa - 1) / fa * fa + fs
+            end
+        end
+    end
+    size = off == 0 ? 0 : (off + maxal - 1) / maxal * maxal
+    align = maxal
+end
+
+func jsg_sizeof(s &: sm.Sema, ts: str): int:
+    mut sz := 0
+    mut al := 1
+    jsg_layout(s, ts, sz, al, 0)
+    ret sz
+end
+
 func jsg_ptr_operand(a &: at.Ast, id: int): int:
     if id == 0 || at.KindOf(a, id) != at.AST_CAST:
         ret 0

@@ -17,6 +17,7 @@
 #   tools/bash/build-embed.sh --out DIR [--musl-x86_64 DIR] [--musl-aarch64 DIR]
 #                             [--musl-i686 DIR] [--musl-arm DIR]
 #                             [--mingw-x86_64 DIR] [--mingw-i686 DIR]
+#                             [--wasi DIR]
 #
 # Build the compiler with -DSALAM_HAVE_EMBED --libpath=DIR to link it.
 
@@ -38,6 +39,7 @@ XL_AARCH64_MUSL=
 XL_I686_MUSL=
 XL_ARM_MUSL=
 XL_X86_64_MINGW=
+WASI=
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -91,6 +93,10 @@ while [ $# -gt 0 ]; do
         ;;
     --extralibs-x86_64-mingw)
         XL_X86_64_MINGW=$2
+        shift 2
+        ;;
+    --wasi)
+        WASI=$2
         shift 2
         ;;
     -h | --help)
@@ -172,6 +178,7 @@ emit extralibs_aarch64_linux_musl "$XL_AARCH64_MUSL"
 emit extralibs_i686_linux_musl "$XL_I686_MUSL"
 emit extralibs_arm_linux_musleabihf "$XL_ARM_MUSL"
 emit extralibs_x86_64_w64_windows_gnu "$XL_X86_64_MINGW"
+emit wasi "$WASI"
 
 $CC -c "$S" -o "$WORK/embed.o"
 rm -f "$OUT/libsalam_embed.a"

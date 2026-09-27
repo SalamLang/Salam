@@ -1,0 +1,429 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func embed_type_sym(s &: Sema, a &: at.Ast, tnode: int, pkg_out &: int): int:
+    pkg_out = 0
+    if tnode == 0:
+        ret 0
+    end
+    tn := at.Get(a, tnode).name
+    dot := str.IndexOf(tn, ".")
+    if dot < 0:
+        ret scope_lookup_local(s, s.global, tn)
+    end
+    pk := scope_lookup(s, s.global, str.Substr(tn, 0, dot))
+    if pk == 0 || sym_at(s, pk).kind != SYM_PACKAGE:
+        ret 0
+    end
+    pkg_out = pk
+    ret scope_lookup_local(s, sym_at(s, pk).members, str.Substr(tn, dot + 1, str.Len(tn) - dot - 1))
+end
+
+func embed_target(s &: Sema, a &: at.Ast, fid: int, pkg_out &: int): int:
+    f := at.Get(a, fid)
+    sp := span_of(a, fid)
+    t := at.Get(a, f.ty)
+    if t.is_pointer || t.dims.len() > 0 || t.is_slice || t.is_dyn:
+        serr(
+            s, 107, sp, co.Format1(
+                i18.Tr("'use %s' must name a struct type, not a pointer, array or slice"), co.ArgStr(t.name)
+            )
+        )
+        ret 0
+    end
+    ssym := embed_type_sym(s, a, f.ty, pkg_out)
+    if ssym == 0 || sym_at(s, ssym).kind != SYM_STRUCT:
+        serr(
+            s, 107, sp, co.Format1(
+                i18.Tr("'use %s' must name a struct type"), co.ArgStr(t.name)
+            )
+        )
+        ret 0
+    end
+    if t.list.len() > 0 || at.TyparamCount(a, sym_at(s, ssym).decl) > 0:
+        serr(
+            s, 107, sp, co.Format1(
+                i18.Tr("embedding the generic struct '%s' is not supported yet"), co.ArgStr(t.name)
+            )
+        )
+        ret 0
+    end
+    ret ssym
+end
+
+func embed_all_defaulted(a &: at.Ast, sdid: int): bool:
+    sd := at.Get(a, sdid)
+    repeat sd.list.len() in i:
+        m := at.Get(a, sd.list.get(i))
+        if m.kind == at.AST_FIELD && m.a == 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func embed_skip_method(name: str): bool:
+    ret str.StartsWith(name, "operator_") || str.Equals(name, "to_str") || str.Equals(name, "to_json") || str.Equals(name, "from_json")
+end
+
+func embed_own_member(a &: at.Ast, did: int, name: str): bool:
+    d := at.Get(a, did)
+    repeat d.list.len() in i:
+        m := at.Get(a, d.list.get(i))
+        if (m.kind == at.AST_FIELD || m.kind == at.AST_FUNC_DEF) && !m.is_embedded && str.Equals(m.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func embed_has_typaram(a &: at.Ast, fn: int, name: str): bool:
+    tps := at.Get(a, fn).typarams
+    repeat tps.len() in i:
+        if str.Equals(tps.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func embed_qualify_types(s &: Sema, a &: at.Ast, tnode: int, pk: int, fn: int):
+    if tnode == 0:
+        ret
+    end
+    t := at.Get(a, tnode)
+    if t.kind == at.AST_TYPE && str.Len(t.name) > 0 && str.IndexOf(t.name, ".") < 0 && !sema_is_builtin_type_name(t.name) && !embed_has_typaram(a, fn, t.name):
+        if scope_lookup_local(s, sym_at(s, pk).members, t.name) != 0:
+            at.SetName(a, tnode, sym_at(s, pk).name + "." + t.name)
+        end
+    end
+    embed_qualify_types(s, a, t.ty, pk, fn)
+    repeat t.list.len() in i:
+        embed_qualify_types(s, a, t.list.get(i), pk, fn)
+    end
+end
+
+func embed_forwarder(s &: Sema, a &: at.Ast, fid: int, mid: int, pk: int): int:
+    f := at.Get(a, fid)
+    sp := span_of(a, fid)
+    fwd := at.Clone(a, mid)
+    mut fv := at.Get(a, fwd)
+    fv.is_pub = fv.is_pub && f.is_pub
+    fv.is_embedded = true
+    fv.is_static = false
+    fv.aliases = Vector {} as Vector<str>
+    at.SetSpan(
+        a, fwd, sp.begin.line, sp.begin.col, sp.begin.index, sp.finish.line, sp.finish.col, sp.finish.index, sp.length
+    )
+    th := new_node_at(a, at.AST_THIS, sp)
+    fm := new_node_at(a, at.AST_MEMBER, sp)
+    at.SetName(a, fm, f.name)
+    mut fmv := at.Get(a, fm)
+    fmv.a = th
+    at.Put(a, fm, fmv)
+    cm := new_node_at(a, at.AST_MEMBER, sp)
+    at.SetName(a, cm, fv.name)
+    mut cmv := at.Get(a, cm)
+    cmv.a = fm
+    at.Put(a, cm, cmv)
+    call := new_node_at(a, at.AST_CALL, sp)
+    mut cv := at.Get(a, call)
+    cv.a = cm
+    at.Put(a, call, cv)
+    repeat fv.list.len() in i:
+        pid := fv.list.get(i)
+        if pk != 0:
+            embed_qualify_types(s, a, at.Get(a, pid).ty, pk, fwd)
+        end
+        arg := new_node_at(a, at.AST_IDENTIFIER, sp)
+        at.SetName(a, arg, at.Get(a, pid).name)
+        at.AddChild(a, call, arg)
+    end
+    if pk != 0:
+        embed_qualify_types(s, a, fv.ty, pk, fwd)
+    end
+    st := new_node_at(a, fv.ty != 0 ? at.AST_RETURN : at.AST_EXPR_STMT, sp)
+    mut stv := at.Get(a, st)
+    stv.a = call
+    at.Put(a, st, stv)
+    blk := new_node_at(a, at.AST_BLOCK, sp)
+    at.AddChild(a, blk, st)
+    fv = at.Get(a, fwd)
+    fv.a = blk
+    at.Put(a, fwd, fv)
+    ret fwd
+end
+
+func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
+    repeat done.len() in di:
+        if done.get(di) == did:
+            ret
+        end
+    end
+    done.push(did)
+    d := at.Get(a, did)
+    mut names := Vector {} as Vector<str>
+    mut fields := Vector {} as Vector<int>
+    mut methods := Vector {} as Vector<int>
+    mut pkgs := Vector {} as Vector<int>
+    mut clash := Vector {} as Vector<str>
+    defer names.free()
+    defer fields.free()
+    defer methods.free()
+    defer pkgs.free()
+    defer clash.free()
+    repeat d.list.len() in i:
+        fid := d.list.get(i)
+        f := at.Get(a, fid)
+        if f.kind != at.AST_FIELD || !f.is_embedded:
+            continue
+        end
+        mut pk := 0
+        es := embed_target(s, a, fid, pk)
+        if es == 0:
+            continue
+        end
+        edid := sym_at(s, es).decl
+        if pk == 0:
+            embed_expand(s, a, edid, done)
+        end
+        ed := at.Get(a, edid)
+        if f.a == 0 && embed_all_defaulted(a, edid):
+            lit := new_node_at(a, at.AST_STRUCT_LIT, span_of(a, fid))
+            at.SetName(a, lit, at.Get(a, f.ty).name)
+            mut fv := at.Get(a, fid)
+            fv.a = lit
+            at.Put(a, fid, fv)
+        end
+        repeat ed.list.len() in j:
+            mid := ed.list.get(j)
+            m := at.Get(a, mid)
+            if m.kind != at.AST_FUNC_DEF || embed_skip_method(m.name) || embed_own_member(a, did, m.name):
+                continue
+            end
+            if !m.is_pub:
+                continue
+            end
+            mut seen := 0 - 1
+            repeat names.len() in k:
+                if str.Equals(names.get(k), m.name):
+                    seen = k
+                end
+            end
+            if seen >= 0:
+                if fields.get(seen) != fid:
+                    clash.push(m.name)
+                end
+                continue
+            end
+            names.push(m.name)
+            fields.push(fid)
+            methods.push(mid)
+            pkgs.push(pk)
+        end
+    end
+    repeat names.len() in n:
+        mut bad := false
+        repeat clash.len() in c:
+            if str.Equals(clash.get(c), names.get(n)):
+                bad = true
+            end
+        end
+        if bad:
+            continue
+        end
+        at.AddChild(a, did, embed_forwarder(s, a, fields.get(n), methods.get(n), pkgs.get(n)))
+    end
+    repeat clash.len() in c2:
+        mut first := true
+        repeat c2 in c3:
+            if str.Equals(clash.get(c3), clash.get(c2)):
+                first = false
+            end
+        end
+        if first:
+            serr(
+                s, 107, span_of(a, did), co.Format3(
+                    i18.Tr("struct '%s' embeds more than one type with a method '%s'; define '%s' on the struct to choose one"), co.ArgStr(d.name), co.ArgStr(clash.get(c2)), co.ArgStr(clash.get(c2))
+                )
+            )
+        end
+    end
+end
+
+func sema_embed_collect(s &: Sema, a &: at.Ast, program: int):
+    mut done := Vector {} as Vector<int>
+    defer done.free()
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_STRUCT_DEF || d.synthetic:
+            continue
+        end
+        mut has := false
+        repeat d.list.len() in j:
+            if at.Get(a, d.list.get(j)).is_embedded:
+                has = true
+            end
+        end
+        if has:
+            _sf := sema_use_decl_file(s, a, did)
+            embed_expand(s, a, did, done)
+        end
+    end
+end
+
+func embed_find(s &: Sema, a &: at.Ast, ssym: int, name: str, depth: int, path &: Vector<str>, hits &: int):
+    if depth > 4 || ssym == 0:
+        ret
+    end
+    mems := scope_at(s, sym_at(s, ssym).members).symbols
+    mut subs := Vector {} as Vector<int>
+    mut subn := Vector {} as Vector<str>
+    defer subs.free()
+    defer subn.free()
+    repeat mems.len() in i:
+        fv := sym_at(s, mems.get(i))
+        if fv.kind != SYM_FIELD || fv.decl == 0 || !at.Get(a, fv.decl).is_embedded:
+            continue
+        end
+        inner := struct_sym_of(s, fv.ty)
+        if inner == 0:
+            continue
+        end
+        f2 := scope_lookup_local(s, sym_at(s, inner).members, name)
+        if f2 != 0 && sym_at(s, f2).kind == SYM_FIELD:
+            hits += 1
+            if hits == 1:
+                path.clear()
+                path.push(fv.name)
+            end
+            continue
+        end
+        subs.push(inner)
+        subn.push(fv.name)
+    end
+    if hits > 0:
+        ret
+    end
+    repeat subs.len() in k:
+        mut sub_path := Vector {} as Vector<str>
+        mut sub_hits := 0
+        embed_find(s, a, subs.get(k), name, depth + 1, sub_path, sub_hits)
+        if sub_hits > 0:
+            hits += sub_hits
+            if path.len() == 0:
+                path.push(subn.get(k))
+                repeat sub_path.len() in m:
+                    path.push(sub_path.get(m))
+                end
+            end
+        end
+        sub_path.free()
+    end
+end
+
+func embed_promote(s &: Sema, a &: at.Ast, nid: int, ssym: int, name: str): int:
+    mut path := Vector {} as Vector<str>
+    defer path.free()
+    mut hits := 0
+    embed_find(s, a, ssym, name, 0, path, hits)
+    if hits == 0:
+        ret 0
+    end
+    sp := span_of(a, nid)
+    if hits > 1:
+        serr(
+            s, 107, sp, co.Format2(
+                i18.Tr("field '%s' is ambiguous: struct '%s' embeds it more than once; name the embedded field"), co.ArgStr(name), co.ArgStr(sym_at(s, ssym).name)
+            )
+        )
+        ret 2
+    end
+    first := scope_lookup_local(s, sym_at(s, ssym).members, path.get(0))
+    if first != 0 && !sym_at(s, first).is_pub && !sema_in_struct(s, ssym) && !s.in_derive:
+        serr(
+            s, 17, sp, co.Format3(
+                i18.Tr("'%s' comes from '%s', which struct '%s' embeds privately (write 'pub use')"), co.ArgStr(name), co.ArgStr(path.get(0)), co.ArgStr(sym_at(s, ssym).name)
+            )
+        )
+        ret 2
+    end
+    mut cur := at.Get(a, nid).a
+    repeat path.len() in i:
+        m := new_node_at(a, at.AST_MEMBER, sp)
+        at.SetName(a, m, path.get(i))
+        mut mv := at.Get(a, m)
+        mv.a = cur
+        at.Put(a, m, mv)
+        cur = m
+    end
+    mut nv := at.Get(a, nid)
+    nv.a = cur
+    at.Put(a, nid, nv)
+    ret 1
+end
+
+func embed_lit_rewrite(s &: Sema, a &: at.Ast, nid: int, ssym: int):
+    mems := sym_at(s, ssym).members
+    mut keep := Vector {} as Vector<int>
+    mut moved := false
+    n := at.Get(a, nid)
+    repeat n.list.len() in i:
+        fid := n.list.get(i)
+        fnm := at.Get(a, fid).name
+        if str.Len(fnm) == 0 || scope_lookup_local(s, mems, fnm) != 0:
+            keep.push(fid)
+            continue
+        end
+        mut path := Vector {} as Vector<str>
+        mut hits := 0
+        embed_find(s, a, ssym, fnm, 0, path, hits)
+        if hits != 1:
+            path.free()
+            keep.push(fid)
+            continue
+        end
+        host := path.get(0)
+        path.free()
+        mut inner := 0
+        repeat keep.len() in k:
+            kv := at.Get(a, keep.get(k))
+            if str.Equals(kv.name, host):
+                inner = kv.a
+            end
+        end
+        if inner != 0 && at.KindOf(a, inner) != at.AST_STRUCT_LIT:
+            keep.push(fid)
+            continue
+        end
+        if inner == 0:
+            hf := scope_lookup_local(s, mems, host)
+            sp := span_of(a, fid)
+            inner = new_node_at(a, at.AST_STRUCT_LIT, sp)
+            at.SetName(a, inner, at.Get(a, at.Get(a, sym_at(s, hf).decl).ty).name)
+            hinit := new_node_at(a, at.AST_FIELD_INIT, sp)
+            at.SetName(a, hinit, host)
+            mut hv := at.Get(a, hinit)
+            hv.a = inner
+            at.Put(a, hinit, hv)
+            keep.push(hinit)
+        end
+        at.AddChild(a, inner, fid)
+        moved = true
+    end
+    if !moved:
+        keep.free()
+        ret
+    end
+    mut nv := at.Get(a, nid)
+    old_list := nv.list
+    nv.list = keep
+    at.Put(a, nid, nv)
+    old_list.free()
+end

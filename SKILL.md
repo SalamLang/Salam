@@ -399,6 +399,27 @@ mut c := Counter {}
 c.Tick()
 ```
 
+**Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
+struct adds a field named `Animal` and promotes its fields and `pub` methods,
+so `d.name` means `d.Animal.name` and `d.Describe()` forwards to it. Promoted
+methods count for interfaces, `<T: I>` bounds and `dyn I`. The outer struct's
+own members win over promoted ones; two embeds that both provide a name are
+E107. Literals may set promoted fields directly (`Dog { name = "Rex" }`); an
+omitted embed defaults to `Animal {}` when all of its fields have defaults.
+`pub use` exposes the embed outside the struct; plain `use` keeps it private.
+Print and JSON show it as a nested object. The Persian spelling is `شامل`. Not
+yet: embedding a generic struct or a pointer.
+
+```salam
+struct Animal:  pub name: str = ""  pub func Describe(): str:  ret "I am " + this.name  end  end
+struct Dog:
+    pub use Animal
+    pub breed: str = ""
+end
+d := Dog { name = "Rex", breed = "lab" }
+println d.Describe()
+```
+
 **Operator overloading:** a struct method named `operator_<op>` is called for that
 operator when the left operand is the struct: `operator_add operator_sub
 operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one
@@ -1295,6 +1316,7 @@ General mapping that applies to all source languages:
 | class                        | `struct` with `pub` fields + methods (`this` receiver)                           |
 | static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                      |
 | interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T` |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining        |
 | subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
 | generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |
 | dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                   |

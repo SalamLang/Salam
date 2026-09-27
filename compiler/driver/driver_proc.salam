@@ -5,6 +5,7 @@ import str
 import mem
 import thread
 import sync
+import os.shell
 
 include cc "../condcomp.salam"
 include lv "../llvmgen/llvmgen.salam"
@@ -100,7 +101,7 @@ func compile_worker():
         if idx < 0:
             running = false
         else:
-            job_rc := proc_status(system(g_cw_jobs.get(idx)))
+            job_rc := shell.System(g_cw_jobs.get(idx))
             if job_rc != 0:
                 sync.Lock(g_cw_mu)
                 if g_cw_rc == 0:
@@ -141,12 +142,29 @@ func cpu_count(): int:
     ret v
 end
 
-func compile_parallel(jobs: Vector<str>): int:
+func largest_first(jobs: Vector<str>, sizes: Vector<i64>): Vector<str>:
+    mut order := Vector {} as Vector<int>
+    repeat jobs.len() in i:
+        mut pos := order.len()
+        until pos > 0 && sizes.get(order.get(pos - 1)) < sizes.get(i):
+            pos -= 1
+        end
+        order.insert(pos, i)
+    end
+    mut out := Vector {} as Vector<str>
+    repeat order.len() in j:
+        out.push(jobs.get(order.get(j)))
+    end
+    order.free()
+    ret out
+end
+
+func compile_parallel(jobs: Vector<str>, sizes: Vector<i64>): int:
     if jobs.len() == 0:
         ret 0
     end
     g_cw_mu = sync.NewMutex()
-    g_cw_jobs = jobs
+    g_cw_jobs = largest_first(jobs, sizes)
     g_cw_next = 0
     g_cw_rc = 0
     mut workers := cpu_count()
@@ -162,6 +180,7 @@ func compile_parallel(jobs: Vector<str>): int:
     end
     thread.JoinAll(threads)
     defer threads.free()
+    g_cw_jobs.free()
     ret g_cw_rc
 end
 

@@ -131,7 +131,7 @@ Rules worth knowing:
 ### Operators
 
 `+ - * / %`, `**` (power, float result), `== != < > <= >=`, the logical words
-`and or not` (Persian `و یا وارون`), ternary `cond ? a : b`, compound
+`and or not` (Persian `و یا وارونه`), ternary `cond ? a : b`, compound
 `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
 right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
 `-2 ** 2 == -4`). `T**` in a type is a pointer to a pointer; after `as`,
@@ -1744,7 +1744,7 @@ follows C**: `*  /  %` › `+  -` › `<<  >>` › `<  <=  >  >=` › `==  !=` �
 `|` › `and` › `or`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
 parentheses (`(flags & MASK) == MASK`) exactly as you would in C.
 
-`not` (Persian `وارون`) is a unary prefix that binds tighter than any binary
+`not` (Persian `وارونه`) is a unary prefix that binds tighter than any binary
 operator, so `not a == b` means `(not a) == b`; write `not (a == b)` to negate a
 comparison. `and`/`or` are `و`/`یا` in Persian.
 

@@ -3,7 +3,7 @@
 The only C and C++ in the Salam toolchain that is not going away.
 
 Everything else the compiler is made of has a self-hosted counterpart under
-`compiler/`. These six files do not, and cannot, because of how LLVM and LLD
+`compiler/`. These eight files do not, and cannot, because of how LLVM and LLD
 publish their interfaces:
 
 - **`orc_call.c` / `orc_call.h`** - `LLVMInitializeAllTargets`,
@@ -17,15 +17,23 @@ publish their interfaces:
   gives them C linkage.
 - **`lld_stub.c`** - the same two symbols as `lld_link.cc`, for builds without
   in-process LLD, so `std/llvm` still resolves.
+- **`parallel_opt.cc` / `parallel_opt.h`** - optimizes and code-generates one
+  module on several threads. LLVM's C API cannot clone a module, give each part
+  its own `LLVMContext` or build a target machine from another one, so this is
+  C++. The module is cut into parts of similar size; each part keeps its own
+  functions plus `available_externally` copies of the small functions it calls,
+  so inlining still crosses part borders, and each part becomes an object file
+  on its own thread.
 - **`win_lld_demangle_shim.S`** - a Windows link-time shim; see the comment in
   the file.
 
-That is eight exported symbols in total:
+That is ten exported symbols in total:
 
     salam_orc_call_main                 salam_llvm_init_all_targets
     salam_llvm_init_all_target_infos    salam_llvm_init_all_target_mcs
     salam_llvm_init_all_asm_printers    salam_llvm_init_all_asm_parsers
     salam_lld_available                 salam_lld_link
+    salam_parallel_partitions           salam_parallel_opt_emit
 
 Every other native symbol `std/llvm` binds is an `LLVM*` entry point that comes
 from libLLVM itself, so it needs no wrapper of ours.

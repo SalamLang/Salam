@@ -106,6 +106,9 @@ SHIMS=""
 # shellcheck disable=SC2086
 $CC -O2 -I"$HERE" $CPPDEFS -c "$HERE/orc_call.c" -o "$WORK/orc_call.o"
 SHIMS="$SHIMS $WORK/orc_call.o"
+# shellcheck disable=SC2046,SC2086
+$CXX -O2 -I"$HERE" $CPPDEFS $($LLVM_CONFIG --cxxflags) -c "$HERE/parallel_opt.cc" -o "$WORK/parallel_opt.o"
+SHIMS="$SHIMS $WORK/parallel_opt.o"
 
 if [ "$WITH_LLD" = 1 ]; then
     LLD_INC=

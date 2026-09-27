@@ -5,7 +5,8 @@
 #
 # --input holds the salam-<version>-linux-<arch>.tar.gz files as published on
 # the GitHub release. One .deb is produced per tarball found; missing arches
-# are skipped, not an error.
+# are skipped, not an error. Each is named like its tarball,
+# salam-<version>-linux-<arch>.deb, with the Debian arch in its control file.
 #
 # Needs dpkg-deb (dpkg-dev on Debian/Ubuntu, `brew install dpkg` on macOS).
 
@@ -69,7 +70,7 @@ while [ $# -gt 0 ]; do
                 shift
                 ;;
         -h | --help)
-                sed -n '2,10p' "$0"
+                sed -n '2,11p' "$0"
                 exit 0
                 ;;
         *)
@@ -174,8 +175,8 @@ EOF
         dpkg-deb --root-owner-group \
                 -Z"$COMPRESSION" -z"$COMPRESSION_LEVEL" \
                 --build "$root" \
-                "$OUTPUT/salam_${VERSION}-${REVISION}_${deb_arch}.deb" >/dev/null
-        echo "  $OUTPUT/salam_${VERSION}-${REVISION}_${deb_arch}.deb"
+                "$OUTPUT/salam-$VERSION-linux-$rel_arch.deb" >/dev/null
+        echo "  $OUTPUT/salam-$VERSION-linux-$rel_arch.deb"
         built=$((built + 1))
 done
 

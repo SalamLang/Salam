@@ -67,7 +67,7 @@ func jsg_call_finish(
         until i < cv.list.len() && i < at.Get(a, decl).list.len():
             p := at.Get(a, at.Get(a, decl).list.get(i))
             argv := at.Get(a, cv.list.get(i))
-            if p.kind == at.AST_PARAM && p.is_ref && (argv.kind == at.AST_IDENTIFIER || argv.ref_arg_ptr):
+            if p.kind == at.AST_PARAM && p.is_ref && (jsg_ref_boxable(argv.kind) || argv.ref_arg_ptr):
                 any_ref = true
                 break
             end
@@ -98,7 +98,7 @@ func jsg_call_finish(
         end
         if p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.ref_arg_ptr:
             str.BufAppend(argb, "[" + jsg_expr_p(g, s, a, argid, 0) + "]")
-        else p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && argv2.kind == at.AST_IDENTIFIER:
+        else p2 != 0 && at.Get(a, p2).kind == at.AST_PARAM && at.Get(a, p2).is_ref && jsg_ref_boxable(argv2.kind):
             box := jsg_fresh(g, "__ref")
             str.BufAppend(pre, "const " + box + " = [" + jsg_expr_p(g, s, a, argid, 0) + "]; ")
             str.BufAppend(argb, box)
@@ -129,6 +129,10 @@ func jsg_call_finish(
     str.BufFree(argb)
     str.BufFree(post)
     ret r
+end
+
+func jsg_ref_boxable(k: int): bool:
+    ret k == at.AST_IDENTIFIER || k == at.AST_MEMBER || k == at.AST_INDEX
 end
 
 func jsg_handler_base(a &: at.Ast, extname: str, args: Vector<int>): str:
@@ -559,6 +563,12 @@ func jsg_call_ident(
             dj := jsg_expr_p(g, s, a, nv.list.get(2), 0)
             ret "((a,e,d)=>{if(a[0]===e){a[0]=d;return true;}return false;})(" + pj + "," + vj + "," + dj + ")"
         end
+        if str.Equals(nm, "sizeof") && nv.list.len() == 1:
+            szts := at.Get(a, nv.list.get(0)).type_str
+            if str.Len(szts) > 0:
+                ret co.I64Toa(jsg_sizeof(s, szts) as i64)
+            end
+        end
         if str.Equals(nm, "sizeof") || str.Equals(nm, "spawn") || str.Equals(nm, "args") || str.Equals(nm, "listdir"):
             ret jsg_unsupported(g, nm)
         end
@@ -875,6 +885,9 @@ func jsg_call_vec(
         ret "__sal_vzeros(" + recv + ", " + a0 + ")"
     end
     if str.Equals(m, "ref"):
+        if jsg_ptr_struct(s, nv.type_str) != 0:
+            ret recv + "[" + a0 + "]"
+        end
         ret "__sal_vref(" + recv + ", " + a0 + ")"
     end
     if str.Equals(m, "iter"):

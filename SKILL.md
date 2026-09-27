@@ -130,7 +130,8 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the logical words
+`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the equality words
+`eq neq` for `==`/`!=` (Persian `برابر نابرابر`), the logical words
 `and or not` (Persian `و یا وارونه`), ternary `cond ? a : b`, compound
 `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
 right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
@@ -810,7 +811,7 @@ LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
 GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
 LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
 TruncatedSVD TSNE MultinomialNB HistGradientBoosting` (`NewElasticNet(alpha,
-  l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
+l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
 ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
   assignment (identical results at any worker count; the serial path is the
   safe one inside another parallel loop);

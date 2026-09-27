@@ -65,7 +65,7 @@ syn region salamTripleString start=+"""+ end=+"""+ keepend
 syn match  salamCharacter "u\='\%(\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|.\)\|[^'\\]\)'"
 
 syn match salamFunctionCall "\k\+\ze\s*("
-syn match salamBuiltinMethod "\.\@<=\%(خواندن خط\|داردبعدی\|has_next\|readline\|به اعشار\|to_float\|دربیاور\|جابجایی\|زیررشته\|به صحیح\|آزادکن\|remove\|اندازه\|پیمایش\|خواندن\|concat\|substr\|پیراست\|to_int\|بیفزا\|ارجاع\|بنشان\|ظرفیت\|مقدار\|value\|نوشتن\|write\|close\|پیوست\|بشکاف\|split\|push\|بگیر\|free\|دارد\|size\|iter\|کلید\|بعدی\|next\|read\|seek\|ببند\|بیاب\|find\|trim\|pop\|get\|ref\|set\|طول\|len\|cap\|درج\|put\|has\|حذف\|key\)\>"
+syn match salamBuiltinMethod "\.\@<=\%(زیررشته نویسه\|نویسه شماره\|char_substr\|char_count\|بیاب نویسه\|خواندن خط\|شمارنویسه\|char_find\|داردبعدی\|has_next\|readline\|به اعشار\|to_float\|دربیاور\|جابجایی\|زیررشته\|به صحیح\|char_at\|آزادکن\|remove\|اندازه\|پیمایش\|خواندن\|concat\|substr\|پیراست\|to_int\|بیفزا\|ارجاع\|بنشان\|ظرفیت\|مقدار\|value\|نوشتن\|write\|close\|پیوست\|بشکاف\|split\|push\|بگیر\|free\|دارد\|size\|iter\|کلید\|بعدی\|next\|read\|seek\|ببند\|بیاب\|find\|trim\|pop\|get\|ref\|set\|طول\|len\|cap\|درج\|put\|has\|حذف\|key\)\>"
 
 syn keyword salamTodo contained TODO FIXME XXX NOTE HACK
 syn region  salamBlockComment start="/\*" end="\*/" contains=salamTodo,@Spell fold

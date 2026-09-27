@@ -135,7 +135,35 @@ Built-in methods on `str`. This is the complete list:
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
 lower  upper  repeat  split  to_int  to_float
+char_count  char_at(i)  char_substr(start, len)  char_find(sub)
 ```
+
+`len`, `s[i]`, `substr` and `find` work in bytes. The `char_*` methods are
+their UTF-8 counterparts: they count and index code points, so
+`"سلام".len()` is 8 but `"سلام".char_count()` is 4, and `char_at(1)` returns
+`"ل"` as a `str`. An out-of-range `char_at` returns `""`, and `char_find`
+returns -1 when the substring is missing. On the JS backend strings are
+JavaScript strings, so `len`, `s[i]`, `substr` and `find` count UTF-16 units
+there instead of bytes. The `str` package follows the same rule, so on JS
+`str.IndexFrom`, `str.LastIndex`, `str.CodePointAt` and `str.CharAt` take
+and return UTF-16 indices that line up with `substr`. The `char_*` methods
+give the same answer on every backend, so prefer them for non-ASCII text.
+
+Text types, and which one to reach for:
+
+| Need                                 | Use                                                                     |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                 |
+| One byte, e.g. `'a'`                 | `char`                                                                  |
+| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.char_at(0) == u'س'` works)          |
+| Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)` |
+| UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                     |
+| Checking text is plain English       | `str.AllAscii(s)`                                                       |
+
+There is no separate ASCII string type: UTF-8 stores ASCII text in exactly
+one byte per character, so `str` is already the most compact choice, and for
+ASCII text `len`, `s[i]` and `substr` are exact and O(1). A plain `'س'` is a
+compile error because `'...'` holds one byte; write `u'س'`.
 
 Anything else lives in the `str` package (`str.StartsWith`, `str.EndsWith`,
 `str.Contains`, `str.Equals`, `str.TrimPrefix`, `str.Join`, `str.Replace`,

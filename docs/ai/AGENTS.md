@@ -73,13 +73,21 @@ your first public function will not compile. Put every private helper above the
 
 Salam fails the build on unused imports, variables and functions.
 
-| Code   | Trigger         | Fix                                        |
-| ------ | --------------- | ------------------------------------------ |
-| `E082` | unused import   | remove it, or prefix the name with `_`     |
-| `E059` | unused variable | remove it, or prefix with `_`              |
-| `E066` | unused function | call it, mark it `pub`, or prefix with `_` |
+| Code   | Trigger          | Fix                                  |
+| ------ | ---------------- | ------------------------------------ |
+| `E082` | unused import    | use one of its members, or remove it |
+| `E059` | unused variable  | use it, or remove it                 |
+| `E062` | unused parameter | use it, or remove it                 |
+| `E066` | unused function  | call it, mark it `pub`, or remove it |
 
-Add imports only as you use them.
+A `pub` function never needs a caller. A private function is fine as long as
+something calls it; otherwise the build fails. `pub` exports a function to
+other packages as part of your package's API, so do not mark a helper `pub`
+just to silence `E066`.
+
+Do not prefix names with `_` to silence these errors. The compiler still
+accepts it, but it hides dead code instead of removing it. Add imports and
+helpers only as you use them.
 
 Loop bindings are stricter: a `_` prefix does not excuse them, because the
 fix is to drop the binding rather than rename it. Write `repeat 20000:`, not

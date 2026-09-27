@@ -3,6 +3,7 @@ package driver
 import os
 import io
 import str
+import os.shell
 
 include pth "../sal_path.salam"
 include tok "../token.salam"
@@ -464,76 +465,23 @@ func build_impl(opt &: Dr): int:
 
     sm.DceFinish()
 
+    mut cg_status := Vector {} as Vector<int>
+    emit_modules(lgr, s, a, opt, scratch, w_global, w_prog, w_module, w_entry, w_pkg, w_path, cg_status)
     repeat w_prog.len() in bi:
-        prog2 := w_prog.get(bi)
-        module2 := w_module.get(bi)
-        entry2 := w_entry.get(bi)
-        pkg2 := w_pkg.get(bi)
-        path2 := w_path.get(bi)
-        sm.RebindScope(s, w_global.get(bi), pkg2, path2)
-
-        mut kept := Vector {} as Vector<int>
-        pn := at.Get(a, prog2)
-        repeat pn.list.len() in ki:
-            did2 := pn.list.get(ki)
-            d3 := at.Get(a, did2)
-            mut keep := true
-            if d3.kind == at.AST_FUNC_DEF && !d3.is_extern && !d3.synthetic && d3.typarams.len() == 0 && !str.Equals(d3.name, entry2):
-                keep = sm.DceReachable(pkg2, d3.name)
-            end
-            if keep:
-                kept.push(did2)
-            end
-        end
-        mut pw := at.Get(a, prog2)
-        old_list := pw.list
-        pw.list = kept
-        at.Put(a, prog2, pw)
-        old_list.free()
-
-        if pf.On():
-            mut nfuncs := 0
-            kn := at.Get(a, prog2)
-            repeat kn.list.len() in fi:
-                if at.Get(a, kn.list.get(fi)).kind == at.AST_FUNC_DEF:
-                    nfuncs += 1
-                end
-            end
-            pf.Count(pf.TC_FUNCS_EMITTED, nfuncs as i64)
-        end
-        _pt_cg := pf.Begin(pf.TP_CODEGEN, path2)
-        o := cg.Run(
-            lgr, s, a, prog2, module2, opt.safe, opt.debug_info, path2, entry2, opt.llvm_target
-        )
-        pf.End(pf.TP_CODEGEN, _pt_cg)
-
-        cpath := scratch + "/salam_mod_" + module2 + ".c"
-        hpath := scratch + "/salam_mod_" + module2 + ".h"
-        opath := scratch + "/salam_mod_" + module2 + ".o"
-        _pt_w := pf.Begin(pf.TP_WRITE, path2)
-        unchanged := !opt.force && os.Exists(opath) && file_unchanged(cpath, o.c_src) && file_unchanged(hpath, o.h_src)
-        mut wok1 := true
-        mut wok2 := true
-        if !unchanged:
-            wok1 = write_file(lgr, cpath, o.c_src)
-            wok2 = write_file(lgr, hpath, o.h_src)
-        end
-        pf.End(pf.TP_WRITE, _pt_w)
-        if !wok1 || !wok2:
+        cpath := mod_c_path(scratch, w_module.get(bi))
+        hpath := mod_h_path(scratch, w_module.get(bi))
+        st := cg_status.get(bi)
+        if st < 0:
             all_ok = false
-            failed_files.push(path2)
+            failed_files.push(w_path.get(bi))
         else:
             cfiles.push(cpath)
-            if unchanged:
-                cdirty.push(0)
-            else:
-                cdirty.push(1)
-            end
+            cdirty.push(st)
             generated.push(cpath)
             generated.push(hpath)
         end
-
     end
+    cg_status.free()
     sm.Free(s)
     at.FreeAst(a)
 
@@ -609,7 +557,7 @@ func build_impl(opt &: Dr): int:
             cmdtext := str.BufStr(cmdb)
             str.BufFree(cmdb)
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "assembling: " + cmdtext)
-            crc = proc_status(system(cmdtext))
+            crc = shell.System(cmdtext)
             oi += 1
         end
         if crc != 0:
@@ -672,6 +620,7 @@ func build_impl(opt &: Dr): int:
         if !opt.lto && !musl_tcc.active:
             mut objs := Vector {} as Vector<str>
             mut jobs := Vector {} as Vector<str>
+            mut job_sizes := Vector {} as Vector<i64>
             sigpath := scratch + "/salam_build.flags"
             sigtext := opt.cc + " " + opt_flag + " " + alias_flag + " " + dbg_flag2 + " " + asan_flag + " " + link_defines
             mut sig_pending := false
@@ -703,17 +652,19 @@ func build_impl(opt &: Dr): int:
                 str.BufAppend(jb, " -o ")
                 str.BufAppend(jb, shell_arg(obj2))
                 jobs.push(str.BufStr(jb))
+                job_sizes.push(os.FileSize(cf2))
                 str.BufFree(jb)
             end
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + str.FromInt(jobs.len() as i64) + " object file" + plural_suffix(jobs.len()) + " in parallel, reused " + str.FromInt((cfiles.len() - jobs.len()) as i64) + " cached object" + plural_suffix(cfiles.len() - jobs.len())
             )
             _pt_cc := pf.Begin(pf.TP_CC, "")
-            crc = compile_parallel(jobs)
+            crc = compile_parallel(jobs, job_sizes)
             pf.End(pf.TP_CC, _pt_cc)
             pf.Count(pf.TC_MODULES_BUILT, jobs.len() as i64)
             pf.Count(pf.TC_MODULES_CACHED, (cfiles.len() - jobs.len()) as i64)
             jobs.free()
+            job_sizes.free()
             if crc != 0:
                 lg.Log(
                     lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
@@ -755,7 +706,7 @@ func build_impl(opt &: Dr): int:
                 str.BufFree(cmdb2)
                 lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext2)
                 _pt_lk2 := pf.Begin(pf.TP_LINK, output)
-                crc = proc_status(system(cmdtext2))
+                crc = shell.System(cmdtext2)
                 pf.End(pf.TP_LINK, _pt_lk2)
                 if crc != 0:
                     lg.Log(
@@ -859,7 +810,7 @@ func build_impl(opt &: Dr): int:
             str.BufFree(cmdb)
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmdtext)
             _pt_lk := pf.Begin(pf.TP_LINK, output)
-            crc = proc_status(system(cmdtext))
+            crc = shell.System(cmdtext)
             pf.End(pf.TP_LINK, _pt_lk)
             if crc != 0:
                 lg.Log(

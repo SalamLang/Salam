@@ -5,6 +5,8 @@ import str
 import mem
 import thread
 import sync
+import os.shell
+import os.platform
 
 include cc "../condcomp.salam"
 include lv "../llvmgen/llvmgen.salam"
@@ -100,7 +102,7 @@ func compile_worker():
         if idx < 0:
             running = false
         else:
-            job_rc := proc_status(system(g_cw_jobs.get(idx)))
+            job_rc := shell.System(g_cw_jobs.get(idx))
             if job_rc != 0:
                 sync.Lock(g_cw_mu)
                 if g_cw_rc == 0:
@@ -112,44 +114,37 @@ func compile_worker():
     end
 end
 
-func cpu_count(): int:
-    mut txt := ""
-    if SALAM_OS_WINDOWS:
-        txt = os.Env("NUMBER_OF_PROCESSORS")
-    else SALAM_OS_MAC || SALAM_OS_BSD:
-        res := os.RunCapture("sysctl -n hw.ncpu 2>/dev/null || /usr/sbin/sysctl -n hw.ncpu 2>/dev/null || /sbin/sysctl -n hw.ncpu 2>/dev/null")
-        txt = str.TrimRight(res.out)
-    else:
-        res := os.RunCapture("nproc")
-        txt = str.TrimRight(res.out)
-    end
-    n := str.Len(txt)
-    if n == 0:
-        ret 4
-    end
-    mut v := 0
-    repeat n in i:
-        c := byte_at(txt, i)
-        if c < 48 || c > 57:
-            ret 4
+func largest_first_idx(sizes: Vector<i64>): Vector<int>:
+    mut order := Vector {} as Vector<int>
+    repeat sizes.len() in i:
+        mut pos := order.len()
+        until pos > 0 && sizes.get(order.get(pos - 1)) < sizes.get(i):
+            pos -= 1
         end
-        v = v * 10 + (c - 48)
+        order.insert(pos, i)
     end
-    if v <= 0:
-        ret 4
-    end
-    ret v
+    ret order
 end
 
-func compile_parallel(jobs: Vector<str>): int:
+func largest_first(jobs: Vector<str>, sizes: Vector<i64>): Vector<str>:
+    order := largest_first_idx(sizes)
+    mut out := Vector {} as Vector<str>
+    repeat order.len() in j:
+        out.push(jobs.get(order.get(j)))
+    end
+    order.free()
+    ret out
+end
+
+func compile_parallel(jobs: Vector<str>, sizes: Vector<i64>): int:
     if jobs.len() == 0:
         ret 0
     end
     g_cw_mu = sync.NewMutex()
-    g_cw_jobs = jobs
+    g_cw_jobs = largest_first(jobs, sizes)
     g_cw_next = 0
     g_cw_rc = 0
-    mut workers := cpu_count()
+    mut workers := platform.CpuCount()
     if workers > jobs.len():
         workers = jobs.len()
     end
@@ -162,6 +157,7 @@ func compile_parallel(jobs: Vector<str>): int:
     end
     thread.JoinAll(threads)
     defer threads.free()
+    g_cw_jobs.free()
     ret g_cw_rc
 end
 

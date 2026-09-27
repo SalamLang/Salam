@@ -1,0 +1,226 @@
+package driver
+
+import os
+import str
+import io
+import os.process
+import os.platform
+
+include lg "../logger.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include cg "../codegen/codegen.salam"
+include pf "../prof_self.salam"
+
+func prune_unreachable(a &: at.Ast, prog: int, entry: str, pkg: str):
+    mut kept := Vector {} as Vector<int>
+    pn := at.Get(a, prog)
+    repeat pn.list.len() in ki:
+        did := pn.list.get(ki)
+        d := at.Get(a, did)
+        mut keep := true
+        if d.kind == at.AST_FUNC_DEF && !d.is_extern && !d.synthetic && d.typarams.len() == 0 && !str.Equals(d.name, entry):
+            keep = sm.DceReachable(pkg, d.name)
+        end
+        if keep:
+            kept.push(did)
+        end
+    end
+    mut pw := at.Get(a, prog)
+    old_list := pw.list
+    pw.list = kept
+    at.Put(a, prog, pw)
+    old_list.free()
+
+    if pf.On():
+        mut nfuncs := 0
+        kn := at.Get(a, prog)
+        repeat kn.list.len() in fi:
+            if at.Get(a, kn.list.get(fi)).kind == at.AST_FUNC_DEF:
+                nfuncs += 1
+            end
+        end
+        pf.Count(pf.TC_FUNCS_EMITTED, nfuncs as i64)
+    end
+end
+
+func mod_c_path(scratch: str, module: str): str:
+    ret scratch + "/salam_mod_" + module + ".c"
+end
+
+func mod_h_path(scratch: str, module: str): str:
+    ret scratch + "/salam_mod_" + module + ".h"
+end
+
+func emit_module(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, opt &: Dr, scratch: str, gscope: int, prog: int, module: str, entry: str, pkg: str, path: str
+): int:
+    sm.RebindScope(s, gscope, pkg, path)
+    _pt_cg := pf.Begin(pf.TP_CODEGEN, path)
+    o := cg.Run(lgr, s, a, prog, module, opt.safe, opt.debug_info, path, entry, opt.llvm_target)
+    pf.End(pf.TP_CODEGEN, _pt_cg)
+
+    cpath := mod_c_path(scratch, module)
+    hpath := mod_h_path(scratch, module)
+    opath := scratch + "/salam_mod_" + module + ".o"
+    _pt_w := pf.Begin(pf.TP_WRITE, path)
+    unchanged := !opt.force && os.Exists(opath) && file_unchanged(cpath, o.c_src) && file_unchanged(hpath, o.h_src)
+    mut wok1 := true
+    mut wok2 := true
+    if !unchanged:
+        wok1 = write_file(lgr, cpath, o.c_src)
+        wok2 = write_file(lgr, hpath, o.h_src)
+    end
+    pf.End(pf.TP_WRITE, _pt_w)
+    if !wok1 || !wok2:
+        ret 0 - 1
+    end
+    ret unchanged ? 0 : 1
+end
+
+func module_weight(path: str): i64:
+    mut total := 0 as i64
+    files := sm.PackageFiles(path)
+    repeat files.len() in i:
+        sz := os.FileSize(files.get(i))
+        if sz > 0:
+            total += sz
+        end
+    end
+    files.free()
+    if total <= 0:
+        total = os.FileSize(path)
+    end
+    ret total
+end
+
+func codegen_workers(nmods: int): int:
+    if SALAM_OS_WINDOWS:
+        ret 1
+    end
+    if str.Equals(os.Env("SALAM_SERIAL_CODEGEN"), "1"):
+        ret 1
+    end
+    mut n := platform.CpuCount()
+    if n < 1:
+        n = 1
+    end
+    if n > nmods:
+        n = nmods
+    end
+    ret n
+end
+
+func cg_status_path(scratch: str, module: str): str:
+    ret scratch + "/salam_mod_" + module + ".cgst"
+end
+
+func emit_modules(
+    lgr: lg.Logger, s &: sm.Sema, a &: at.Ast, opt &: Dr, scratch: str, w_global: Vector<int>, w_prog: Vector<int>, w_module: Vector<str>, w_entry: Vector<str>, w_pkg: Vector<str>, w_path: Vector<str>, status &: Vector<int>
+):
+    n := w_prog.len()
+    repeat n in pi:
+        prune_unreachable(a, w_prog.get(pi), w_entry.get(pi), w_pkg.get(pi))
+    end
+
+    workers := codegen_workers(n)
+    if workers < 2:
+        repeat n in si:
+            status.push(
+                emit_module(lgr, s, a, opt, scratch, w_global.get(si), w_prog.get(si), w_module.get(si), w_entry.get(si), w_pkg.get(si), w_path.get(si))
+            )
+        end
+        ret
+    end
+
+    mut weights := Vector {} as Vector<i64>
+    repeat n in wi:
+        weights.push(module_weight(w_path.get(wi)))
+    end
+    order := largest_first_idx(weights)
+    mut load := Vector {} as Vector<i64>
+    mut owner := Vector {} as Vector<int>
+    repeat workers:
+        load.push(0 as i64)
+    end
+    repeat n:
+        owner.push(0)
+    end
+    repeat order.len() in oi:
+        mi := order.get(oi)
+        mut best := 0
+        repeat workers in bw:
+            if load.get(bw) < load.get(best):
+                best = bw
+            end
+        end
+        owner.set(mi, best)
+        load.set(best, load.get(best) + weights.get(mi))
+    end
+
+    repeat n in ri:
+        _rm := os.Remove(cg_status_path(scratch, w_module.get(ri)))
+    end
+
+    io.Flush()
+    _pt_all := pf.Begin(pf.TP_CODEGEN, "")
+    mut pids := Vector {} as Vector<int>
+    mut serial_bins := Vector {} as Vector<int>
+    repeat workers in w:
+        pid := process.Fork()
+        if pid == 0:
+            mut child_rc := 0
+            repeat order.len() in ci:
+                mi2 := order.get(ci)
+                if owner.get(mi2) == w:
+                    st := emit_module(lgr, s, a, opt, scratch, w_global.get(mi2), w_prog.get(mi2), w_module.get(mi2), w_entry.get(mi2), w_pkg.get(mi2), w_path.get(mi2))
+                    if st < 0 || os.WriteFile(cg_status_path(scratch, w_module.get(mi2)), str.FromInt(st as i64)) < 0:
+                        child_rc = 1
+                    end
+                end
+            end
+            io.Flush()
+            process.ExitNow(child_rc)
+        end
+        if pid < 0:
+            serial_bins.push(w)
+        else:
+            pids.push(pid)
+        end
+    end
+    repeat serial_bins.len() in sb:
+        repeat order.len() in ci3:
+            mi3 := order.get(ci3)
+            if owner.get(mi3) == serial_bins.get(sb):
+                st3 := emit_module(lgr, s, a, opt, scratch, w_global.get(mi3), w_prog.get(mi3), w_module.get(mi3), w_entry.get(mi3), w_pkg.get(mi3), w_path.get(mi3))
+                if st3 >= 0:
+                    _ws := os.WriteFile(cg_status_path(scratch, w_module.get(mi3)), str.FromInt(st3 as i64))
+                end
+            end
+        end
+    end
+    repeat pids.len() in pj:
+        _rc := process.WaitPid(pids.get(pj))
+    end
+    pf.End(pf.TP_CODEGEN, _pt_all)
+
+    repeat n in ki:
+        sp := cg_status_path(scratch, w_module.get(ki))
+        txt := str.TrimRight(io.ReadFile(sp))
+        if str.Equals(txt, "0"):
+            status.push(0)
+        else str.Equals(txt, "1"):
+            status.push(1)
+        else:
+            status.push(0 - 1)
+        end
+        _rm2 := os.Remove(sp)
+    end
+
+    pids.free()
+    serial_bins.free()
+    owner.free()
+    load.free()
+    order.free()
+    weights.free()
+end

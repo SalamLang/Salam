@@ -130,10 +130,13 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `^^` (power, float result), `== != < > <= >=`, `&& || !`, ternary
-`cond ? a : b`, compound `+= -= *= /= %= ^^=`, `++`/`--`. Integer `/` **truncates**.
-**`*` is only multiplication and the pointer suffix** - power is `^^` (as in D) so
-that `T**` stays spellable; `^` on its own remains bitwise XOR.
+`+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !` (or `and
+or not`), ternary `cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer
+`/` **truncates**. Power is `**`, right-associative and tighter than unary minus
+(`2 ** 3 ** 2 == 512`, `-2 ** 2 == -4`). The older spelling `^^` / `^^=` still
+works and means the same, until a later release removes it. `T**` in a type is
+still a pointer to a pointer; after `as`, `x as i64 ** 2` is a cast then a power.
+`^` on its own remains bitwise XOR.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`

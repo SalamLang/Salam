@@ -544,6 +544,29 @@ println area(Shape.Rect(3.0, 4.0))
 println Shape.Circle(2.0)          // Circle(r = 2)
 ```
 
+**Generic enums, `result.Result` and `?`:** an enum with data may take type
+parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
+built where its type is known - returned from a function, or with `as`:
+`Maybe.Nothing as Maybe<int>`. `import result` gives
+`result.Result<T, E>` (`Ok(value)` / `Err(error)`) plus `result.IsOk`,
+`IsErr`, `UnwrapOr(r, fallback)` and `Expect(r, msg)`. Inside a function that
+returns such an enum, a postfix `?` unwraps `Ok` and returns any `Err` early
+(running `defer`s): it must be a statement's whole value - `x := f()?`,
+`x = f()?`, `f()?` or `ret f()?`.
+
+```salam
+import result
+func parse(s: str): result.Result<int, str>:
+    if s == "7": ret result.Result.Ok(7) end
+    ret result.Result.Err("bad " + s)
+end
+func sum(a: str, b: str): result.Result<int, str>:
+    x := parse(a)?
+    y := parse(b)?
+    ret result.Result.Ok(x + y)
+end
+```
+
 **Match guards:** any arm may add `if cond` after its patterns
 (`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
 bindings and runs only when the pattern matches; if it is false, matching
@@ -1342,30 +1365,30 @@ When the compiler complains, fix the code; do not try to suppress the check
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                           |
-| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                      |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T` |
-| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining        |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                   |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                              |
-| set                          | `Set<T>`                                                                         |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                            |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                    |
-| exception / error            | `bool` flag, `Option<T>`, or sentinel; **no throw/catch**                        |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                             |
-| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`          |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)      |
-| `for i in range(n)`          | `repeat n in i:`                                                                 |
-| `for x in xs`                | `each x in xs:`                                                                  |
-| destructor / cleanup         | `defer x.free()`                                                                 |
+| Source concept               | Salam                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                            |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                       |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`  |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining         |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                            |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                            |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                    |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                               |
+| set                          | `Set<T>`                                                                          |
+| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                             |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
+| exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
+| null / nil / None            | `null` (pointers) or `Option.None()`                                              |
+| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                             |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)        |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)       |
+| `for i in range(n)`          | `repeat n in i:`                                                                  |
+| `for x in xs`                | `each x in xs:`                                                                   |
+| destructor / cleanup         | `defer x.free()`                                                                  |
 
 ### From PHP
 

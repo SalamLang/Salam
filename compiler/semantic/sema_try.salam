@@ -1,0 +1,192 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func try_slot(a &: at.Ast, st: int): int:
+    n := at.Get(a, st)
+    if n.kind == at.AST_VAR_DECL || n.kind == at.AST_RETURN || n.kind == at.AST_EXPR_STMT:
+        if n.a != 0 && at.KindOf(a, n.a) == at.AST_TRY:
+            ret n.a
+        end
+        if n.kind == at.AST_EXPR_STMT && n.a != 0 && at.KindOf(a, n.a) == at.AST_ASSIGN:
+            asg := at.Get(a, n.a)
+            if asg.b != 0 && at.KindOf(a, asg.b) == at.AST_TRY:
+                ret asg.b
+            end
+        end
+    end
+    if n.kind == at.AST_ASSIGN && n.b != 0 && at.KindOf(a, n.b) == at.AST_TRY:
+        ret n.b
+    end
+    ret 0
+end
+
+func try_ident(a &: at.Ast, sp: co.SrcSpan, name: str): int:
+    id := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, id, name)
+    ret id
+end
+
+func try_block(a &: at.Ast, sp: co.SrcSpan, st: int): int:
+    b := new_node_at(a, at.AST_BLOCK, sp)
+    at.AddChild(a, b, st)
+    ret b
+end
+
+func try_pattern(a &: at.Ast, sp: co.SrcSpan, member: str, bind: str): int:
+    pat := new_node_at(a, at.AST_MATCH_PATTERN, sp)
+    mut pv := at.Get(a, pat)
+    pv.a = try_ident(a, sp, member)
+    pv.enum_payload = true
+    at.Put(a, pat, pv)
+    at.AddChild(a, pat, try_ident(a, sp, bind))
+    ret pat
+end
+
+func try_enum_ref(a &: at.Ast, sp: co.SrcSpan, tname: str): int:
+    dot := str.IndexOf(tname, ".")
+    if dot < 0:
+        ret try_ident(a, sp, tname)
+    end
+    m := new_node_at(a, at.AST_MEMBER, sp)
+    at.SetName(a, m, str.Substr(tname, dot + 1, str.Len(tname) - dot - 1))
+    mut mv := at.Get(a, m)
+    mv.a = try_ident(a, sp, str.Substr(tname, 0, dot))
+    at.Put(a, m, mv)
+    ret m
+end
+
+func try_ret_enum(s &: Sema, a &: at.Ast): str:
+    if s.cur_func == 0 || s.lam.len() > 0:
+        ret ""
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.decl == 0 || at.Get(a, sg.decl).ty == 0:
+        ret ""
+    end
+    rt := sg.ret_type
+    if enum_data_sym(s, rt) == 0 || enum_case_index(s, rt, "Err") < 0:
+        ret ""
+    end
+    ret at.Get(a, at.Get(a, sg.decl).ty).name
+end
+
+func try_expand(s &: Sema, a &: at.Ast, st: int, t: int, out &: Vector<int>): bool:
+    sp := span_of(a, t)
+    ename := try_ret_enum(s, a)
+    if str.Len(ename) == 0:
+        serr(
+            s, 12, sp, i18.Tr("'?' needs the enclosing function to return an enum with an 'Err' member, such as result.Result")
+        )
+        at.Put(a, t, at.Get(a, at.Get(a, t).a))
+        ret false
+    end
+    tag := str.FromInt(t as i64)
+    tmp := "__try" + tag
+    d1 := new_node_at(a, at.AST_VAR_DECL, sp)
+    mut dv := at.Get(a, d1)
+    dv.name = tmp
+    dv.a = at.Get(a, t).a
+    dv.synthetic = true
+    at.Put(a, d1, dv)
+    out.push(d1)
+
+    errn := "__tryerr" + tag
+    ctor := new_node_at(a, at.AST_MEMBER, sp)
+    at.SetName(a, ctor, "Err")
+    mut cv := at.Get(a, ctor)
+    cv.a = try_enum_ref(a, sp, ename)
+    at.Put(a, ctor, cv)
+    call := new_node_at(a, at.AST_CALL, sp)
+    mut callv := at.Get(a, call)
+    callv.a = ctor
+    at.Put(a, call, callv)
+    at.AddChild(a, call, try_ident(a, sp, errn))
+    rs := new_node_at(a, at.AST_RETURN, sp)
+    mut rsv := at.Get(a, rs)
+    rsv.a = call
+    at.Put(a, rs, rsv)
+    arm1 := new_node_at(a, at.AST_MATCH_ARM, sp)
+    at.AddChild(a, arm1, try_pattern(a, sp, "Err", errn))
+    mut a1v := at.Get(a, arm1)
+    a1v.b = try_block(a, sp, rs)
+    at.Put(a, arm1, a1v)
+    zero := new_node_at(a, at.AST_LITERAL, sp)
+    at.SetOp(a, zero, tok.TK_INT)
+    at.SetTokenValue(a, zero, tok.ValueInt(0 as u64))
+    at.SetName(a, zero, "0")
+    keep := new_node_at(a, at.AST_VAR_DECL, sp)
+    mut kv := at.Get(a, keep)
+    kv.name = "_"
+    kv.a = zero
+    kv.synthetic = true
+    at.Put(a, keep, kv)
+    arm2 := new_node_at(a, at.AST_MATCH_ARM, sp)
+    mut a2v := at.Get(a, arm2)
+    a2v.op = tok.TK_KW_ELSE
+    a2v.b = try_block(a, sp, keep)
+    at.Put(a, arm2, a2v)
+    m1 := new_node_at(a, at.AST_MATCH, sp)
+    mut m1v := at.Get(a, m1)
+    m1v.a = try_ident(a, sp, tmp)
+    m1v.synthetic = true
+    at.Put(a, m1, m1v)
+    at.AddChild(a, m1, arm1)
+    at.AddChild(a, m1, arm2)
+    out.push(m1)
+
+    sn := at.Get(a, st)
+    if sn.kind == at.AST_EXPR_STMT && sn.a == t:
+        ret true
+    end
+    valn := "__tryval" + tag
+    es := new_node_at(a, at.AST_EXPR_STMT, sp)
+    mut esv := at.Get(a, es)
+    esv.a = try_ident(a, sp, valn)
+    at.Put(a, es, esv)
+    arm3 := new_node_at(a, at.AST_MATCH_ARM, sp)
+    at.AddChild(a, arm3, try_pattern(a, sp, "Ok", valn))
+    mut a3v := at.Get(a, arm3)
+    a3v.b = try_block(a, sp, es)
+    at.Put(a, arm3, a3v)
+    mut tv := at.Get(a, t)
+    tv.kind = at.AST_MATCH
+    tv.a = try_ident(a, sp, tmp)
+    tv.synthetic = true
+    tv.list = Vector {} as Vector<int>
+    at.Put(a, t, tv)
+    at.AddChild(a, t, arm3)
+    out.push(st)
+    ret true
+end
+
+func try_expand_block(s &: Sema, a &: at.Ast, block: int):
+    list := at.Get(a, block).list
+    mut any := false
+    repeat list.len() in i:
+        if try_slot(a, list.get(i)) != 0:
+            any = true
+        end
+    end
+    if !any:
+        ret
+    end
+    mut out := Vector {} as Vector<int>
+    repeat list.len() in j:
+        st := list.get(j)
+        t := try_slot(a, st)
+        if t == 0 || !try_expand(s, a, st, t, out):
+            out.push(st)
+        end
+    end
+    mut bv := at.Get(a, block)
+    old := bv.list
+    bv.list = out
+    at.Put(a, block, bv)
+    old.free()
+end

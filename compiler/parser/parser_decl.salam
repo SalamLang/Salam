@@ -250,6 +250,7 @@ func parse_enum(p &: Ps, a &: at.Ast): int:
     en_kw := str.Equals(p_peek(p).lexeme, "enum")
     p_advance(p)
     at.SetName(a, n, p_name(p, "expected enum name"))
+    parse_typarams(p, a, n)
     p_expect(p, tok.TK_COLON, "':' after enum name")
     p_skip_terminators(p)
     mut has_data := false
@@ -290,6 +291,9 @@ func parse_enum(p &: Ps, a &: at.Ast): int:
     p_fin(p, a, n)
     if has_data:
         ret desugar_data_enum(p, a, n, en_kw)
+    end
+    if at.TyparamCount(a, n) > 0:
+        p_error_at(p, p_prev(p), "only an enum whose members carry data can have type parameters")
     end
     ret n
 end
@@ -338,6 +342,11 @@ func desugar_data_enum(p &: Ps, a &: at.Ast, n: int, en_kw: bool): int:
     end
     al := mk_from_node(a, at.AST_TYPE_ALIAS, n)
     at.SetName(a, al, ename)
+    tps := at.Get(a, n).typarams
+    tbs := at.Get(a, n).typaram_bounds
+    repeat tps.len() in ti:
+        at.AddTyparam(a, al, tps.get(ti), tbs.get(ti))
+    end
     vt := mk_type_named(a, n, en_kw ? "Variant" : "گوناگون")
     repeat members.len() in i:
         m := members.get(i)
@@ -366,12 +375,19 @@ func desugar_data_enum(p &: Ps, a &: at.Ast, n: int, en_kw: bool): int:
                 at.AddChild(a, sd, mv.list.get(j))
             end
         end
+        repeat tps.len() in tj:
+            at.AddTyparam(a, sd, tps.get(tj), tbs.get(tj))
+        end
         mut sv := at.Get(a, sd)
         sv.is_pub = true
         sv.enum_payload = true
         at.Put(a, sd, sv)
         p.tail_defs.push(sd)
-        at.AddChild(a, vt, mk_type_named(a, m, cname))
+        ct := mk_type_named(a, m, cname)
+        repeat tps.len() in tk:
+            at.AddChild(a, ct, mk_type_named(a, m, tps.get(tk)))
+        end
+        at.AddChild(a, vt, ct)
     end
     at.SetTypeNode(a, al, vt)
     mut alv := at.Get(a, al)

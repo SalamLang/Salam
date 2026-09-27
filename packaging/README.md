@@ -65,6 +65,21 @@ gates each publish step on its secret and logs a notice when it skips, so a
 release with none of these set still builds and attaches the `.deb`/`.rpm`
 and does nothing else.
 
+## Reproducible builds
+
+`salam version` prints a `built:` line, and the compiler embeds that timestamp
+when it builds itself. By default it is the current time, so two builds of
+the same commit differ in that one string. Set
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/specs/source-date-epoch/)
+to fix it, usually to the commit time:
+
+```sh
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/bash/build-selfhost.sh
+```
+
+The date is always printed in UTC. A value that is not a whole number of
+seconds is ignored.
+
 ## Per-target instructions
 
 ### Debian / Ubuntu - `.deb` on the release

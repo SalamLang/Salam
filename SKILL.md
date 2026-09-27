@@ -364,6 +364,21 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**Static members:** `static func` and `const` inside a struct belong to the type,
+not to a value. Call them through the type name, also across packages
+(`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
+struct's private fields, so it is the place for constructors. Not yet supported
+on generic structs.
+
+```salam
+struct Color:
+    pub r: int  pub g: int  pub b: int
+    pub const Max := 255
+    pub static func Gray(v: int): Color:  ret Color { r = v, g = v, b = v }  end
+end
+w := Color.Gray(Color.Max)
+```
+
 **Operator overloading:** a struct method named `operator_<op>` is called for that
 operator when the left operand is the struct: `operator_add operator_sub
 operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one
@@ -1258,6 +1273,7 @@ General mapping that applies to all source languages:
 | Source concept               | Salam                                                                            |
 | ---------------------------- | -------------------------------------------------------------------------------- |
 | class                        | `struct` with `pub` fields + methods (`this` receiver)                           |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                      |
 | interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T` |
 | subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
 | generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |

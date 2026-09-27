@@ -392,6 +392,14 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
             break
         end
         mut mmods := parse_fn_mods(p)
+        if p_at(p, tok.TK_KW_CONST) || p_at_static_func(p):
+            parse_static_member(p, a, n, mmods)
+            mpend.clear()
+            if p.panic:
+                p_sync(p)
+            end
+            continue
+        end
         check_fn_mods_target(p, mmods)
         mut member := 0
         if p_at(p, tok.TK_KW_FUNC):
@@ -418,6 +426,43 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
     p_expect(p, tok.TK_KW_END, "'end' to close struct")
     p_fin(p, a, n)
     ret n
+end
+
+func p_at_static_func(p &: Ps): bool:
+    if !p_at(p, tok.TK_IDENT) || p_peek2(p).kind != tok.TK_KW_FUNC:
+        ret false
+    end
+    ret str.Equals(canon_link_kind(p_peek(p).lexeme), "static")
+end
+
+func static_member_name(sname: str, mname: str): str:
+    ret "__" + sname + "__" + mname
+end
+
+func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods):
+    sname := at.Get(a, sn).name
+    mut m := 0
+    if p_at(p, tok.TK_KW_CONST):
+        if mods.any:
+            p_error(p, "function modifiers ('deprecated', 'inline', 'noinline', 'pure', 'noret') are only allowed on a function definition")
+        end
+        m = parse_const(p, a)
+    else:
+        p_advance(p)
+        if at.TyparamCount(a, sn) > 0:
+            p_error(p, "'static' functions are not supported on generic structs yet")
+        end
+        m = parse_function(p, a, false)
+    end
+    if m == 0:
+        ret
+    end
+    apply_fn_mods(a, m, mods)
+    mut mv := at.Get(a, m)
+    mv.name = static_member_name(sname, mv.name)
+    mv.is_static = true
+    at.Put(a, m, mv)
+    p.tail_defs.push(m)
 end
 
 func parse_field(p &: Ps, a &: at.Ast): int:

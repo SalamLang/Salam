@@ -179,6 +179,20 @@ if [ "${1:-}" = "--worker" ]; then
         fi
         rm -rf "$jobdir"
     }
+    wk_jsbuildonly() {
+        jobdir="$WORK/jsbojob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        out="$jobdir/a.js"
+        buildlog="$jobdir/build.log"
+        (cd "$jobdir" && "$SALAM_ABS" js "$fabs" --output="$out" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+        if [ -s "$out" ]; then
+            echo "PASS $label (js build)"
+        else
+            echo "FAIL $label (js build failed)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+        fi
+        rm -rf "$jobdir"
+    }
     wk_cross() {
         target="${extra%%:*}"
         runner="${extra#*:}"
@@ -288,6 +302,7 @@ EOF_MSGS
         repl) wk_repl ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
+        jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
         esac
     }
@@ -509,6 +524,9 @@ collect_example_dir() {
             fi
             if [ -f "$base.buildonly" ]; then
                 add_job buildonly "$dir/$lang/${name}#build" "$f" "$lang" -
+            fi
+            if [ -f "$base.jsbuildonly" ]; then
+                add_job jsbuildonly "$dir/$lang/${name}#js" "$f" "$lang" -
             fi
         done
     done

@@ -1,0 +1,427 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func distinct_home(s &: Sema, dsym: int): int:
+    h := sym_at(s, dsym).home
+    ret h != 0 ? h : s.global
+end
+
+func distinct_candidates(s &: Sema, dsym: int, mname: str, out &: Vector<int>):
+    prefix := "__" + sym_at(s, dsym).name + "__" + mname + "__"
+    sc := scope_at(s, distinct_home(s, dsym))
+    repeat sc.symbols.len() in i:
+        id := sc.symbols.get(i)
+        sv := sym_at(s, id)
+        if sv.kind == SYM_FUNC && sv.overloads.len() > 0 && str.StartsWith(sv.name, prefix):
+            out.push(id)
+        end
+    end
+end
+
+func distinct_pkg_alias(s &: Sema, home: int): str:
+    mut sc := s.cur
+    until sc != 0:
+        scv := scope_at(s, sc)
+        repeat scv.symbols.len() in i:
+            sv := sym_at(s, scv.symbols.get(i))
+            if sv.kind == SYM_PACKAGE && sv.members == home:
+                ret sv.name
+            end
+        end
+        sc = scv.parent
+    end
+    ret ""
+end
+
+func distinct_callee(s &: Sema, a &: at.Ast, sp: co.SrcSpan, dsym: int, fname: str): int:
+    home := distinct_home(s, dsym)
+    alias := home != s.global ? distinct_pkg_alias(s, home) : ""
+    if str.Len(alias) == 0:
+        callee := new_node_at(a, at.AST_IDENTIFIER, sp)
+        at.SetName(a, callee, fname)
+        mut cv := at.Get(a, callee)
+        cv.synthetic = true
+        at.Put(a, callee, cv)
+        ret callee
+    end
+    pk := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, pk, alias)
+    mut pv := at.Get(a, pk)
+    pv.synthetic = true
+    at.Put(a, pk, pv)
+    mem := new_node_at(a, at.AST_MEMBER, sp)
+    mut mv := at.Get(a, mem)
+    mv.a = pk
+    mv.name = fname
+    mv.synthetic = true
+    at.Put(a, mem, mv)
+    ret mem
+end
+
+func distinct_is_num_lit(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_UNARY && n.op == tok.TK_MINUS:
+        ret distinct_is_num_lit(a, n.a)
+    end
+    ret n.kind == at.AST_LITERAL && (n.op == tok.TK_INT || n.op == tok.TK_FLOAT)
+end
+
+func distinct_sig(s &: Sema, a &: at.Ast, fsym: int): int:
+    sigid := sym_at(s, fsym).overloads.get(0)
+    if sig_at(s, sigid).infer_ret && !sig_at(s, sigid).checked:
+        sema_check_function_now(s, a, sigid)
+    end
+    ret sigid
+end
+
+func distinct_pick(s &: Sema, a &: at.Ast, cands: Vector<int>, args: Vector<int>, atys: Vector<int>): int:
+    repeat cands.len() in i:
+        c := cands.get(i)
+        sg := sig_at(s, sym_at(s, c).overloads.get(0))
+        if sg.params.len() != args.len():
+            continue
+        end
+        mut exact := true
+        repeat args.len() in j:
+            mut at_j := atys.get(j)
+            if distinct_is_num_lit(a, args.get(j)):
+                at_j = type_undistinct(s, at_j)
+            end
+            if !type_equiv(s, sg.params.get(j), at_j):
+                exact = false
+                break
+            end
+        end
+        if exact:
+            ret c
+        end
+    end
+    repeat cands.len() in i2:
+        c2 := cands.get(i2)
+        sg2 := sig_at(s, sym_at(s, c2).overloads.get(0))
+        if sg2.params.len() != args.len():
+            continue
+        end
+        mut fits := true
+        repeat args.len() in j2:
+            pt := sg2.params.get(j2)
+            if type_assignable(s, pt, atys.get(j2)):
+                continue
+            end
+            if distinct_is_num_lit(a, args.get(j2)) && type_is_numeric(s, pt):
+                continue
+            end
+            fits = false
+            break
+        end
+        if fits:
+            ret c2
+        end
+    end
+    ret 0
+end
+
+func distinct_retype_literal(s &: Sema, a &: at.Ast, nid: int, t: int):
+    n := at.Get(a, nid)
+    if n.kind == at.AST_UNARY:
+        distinct_retype_literal(s, a, n.a, t)
+    end
+    _d := sema_decorate(s, a, nid, t)
+end
+
+func distinct_check_self_call(s &: Sema, a &: at.Ast, nid: int, dsym: int, fsym: int):
+    if sym_at(s, fsym).overloads.get(0) != s.cur_func:
+        ret
+    end
+    serr(
+        s, 12, span_of(a, nid), co.Format2(
+            i18.Tr("this calls operator '%s' of '%s' from inside itself and would recurse forever; convert to the base type first, e.g. '(this as int) + (other as int)'"), co.ArgStr(distinct_op_symbol(distinct_method_of(sym_at(s, fsym).name))), co.ArgStr(sym_at(s, dsym).name)
+        )
+    )
+end
+
+func distinct_method_of(fname: str): str:
+    disp := distinct_display_name(fname)
+    i := str.IndexOf(disp, " operator ")
+    if i < 0:
+        ret fname
+    end
+    ret str.Substr(disp, i + 10, str.Len(disp) - i - 10)
+end
+
+func distinct_make_call(s &: Sema, a &: at.Ast, callid: int, dsym: int, fsym: int, args: Vector<int>, atys: Vector<int>): int:
+    sigid := distinct_sig(s, a, fsym)
+    sg := sig_at(s, sigid)
+    repeat args.len() in i:
+        if !type_equiv(s, sg.params.get(i), atys.get(i)) && distinct_is_num_lit(a, args.get(i)):
+            distinct_retype_literal(s, a, args.get(i), sg.params.get(i))
+        end
+    end
+    callee := distinct_callee(s, a, span_of(a, callid), dsym, sym_at(s, fsym).name)
+    mut kv := at.Get(a, callid)
+    kv.kind = at.AST_CALL
+    kv.a = callee
+    kv.b = 0
+    kv.c = 0
+    kv.op = 0
+    kv.synthetic = true
+    kv.list = Vector {} as Vector<int>
+    repeat args.len() in j:
+        kv.list.push(args.get(j))
+    end
+    at.Put(a, callid, kv)
+    ret sema_decorate(s, a, callid, sg.ret_type)
+end
+
+func distinct_op_symbol(mname: str): str:
+    sym := op_method_symbol(mname)
+    if str.Len(sym) > 0:
+        ret sym
+    end
+    if str.Equals(mname, "operator_not"):
+        ret "!"
+    end
+    ret mname
+end
+
+func distinct_no_match(s &: Sema, sp: co.SrcSpan, dsym: int, mname: str, atys: Vector<int>):
+    mut got := ""
+    repeat atys.len() in i:
+        if i > 0:
+            got = got + ", "
+        end
+        got = got + type_disp(s, atys.get(i))
+    end
+    serr(
+        s, 21, sp, co.Format3(
+            i18.Tr("type '%s' defines operator '%s', but none of its versions accepts (%s)"), co.ArgStr(sym_at(s, dsym).name), co.ArgStr(distinct_op_symbol(mname)), co.ArgStr(got)
+        )
+    )
+end
+
+func distinct_arity_seen(s &: Sema, cands: Vector<int>, n: int): bool:
+    repeat cands.len() in i:
+        if sig_at(s, sym_at(s, cands.get(i)).overloads.get(0)).params.len() == n:
+            ret true
+        end
+    end
+    ret false
+end
+
+func distinct_try_binary(s &: Sema, a &: at.Ast, nid: int, l: int, r: int): int:
+    dsym := type_distinct_sym(s, l)
+    if dsym == 0:
+        ret TYPE_NONE
+    end
+    n := at.Get(a, nid)
+    mname := sema_op_method(n.op)
+    if str.Len(mname) == 0:
+        ret TYPE_NONE
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    args.push(n.a)
+    args.push(n.b)
+    mut atys := Vector {} as Vector<int>
+    defer atys.free()
+    atys.push(l)
+    atys.push(r)
+    mut cands := Vector {} as Vector<int>
+    defer cands.free()
+    distinct_candidates(s, dsym, mname, cands)
+    fsym := distinct_pick(s, a, cands, args, atys)
+    if fsym != 0:
+        distinct_check_self_call(s, a, nid, dsym, fsym)
+        ret distinct_make_call(s, a, nid, dsym, fsym, args, atys)
+    end
+    if n.op == tok.TK_NE && !distinct_arity_seen(s, cands, 2):
+        mut eqs := Vector {} as Vector<int>
+        defer eqs.free()
+        distinct_candidates(s, dsym, "operator_eq", eqs)
+        eqf := distinct_pick(s, a, eqs, args, atys)
+        if eqf != 0:
+            callid := new_node_at(a, at.AST_CALL, span_of(a, nid))
+            _c := distinct_make_call(s, a, callid, dsym, eqf, args, atys)
+            mut uv := at.Get(a, nid)
+            uv.kind = at.AST_UNARY
+            uv.op = tok.TK_NOT
+            uv.a = callid
+            uv.b = 0
+            uv.synthetic = true
+            at.Put(a, nid, uv)
+            ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+        end
+    end
+    if distinct_arity_seen(s, cands, 2):
+        distinct_no_match(s, span_of(a, nid), dsym, mname, atys)
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ret TYPE_NONE
+end
+
+func distinct_try_unary(s &: Sema, a &: at.Ast, nid: int, t: int): int:
+    dsym := type_distinct_sym(s, t)
+    if dsym == 0:
+        ret TYPE_NONE
+    end
+    n := at.Get(a, nid)
+    mut mname := ""
+    if n.op == tok.TK_MINUS:
+        mname = "operator_sub"
+    else n.op == tok.TK_NOT:
+        mname = "operator_not"
+    else:
+        ret TYPE_NONE
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    args.push(n.a)
+    mut atys := Vector {} as Vector<int>
+    defer atys.free()
+    atys.push(t)
+    mut cands := Vector {} as Vector<int>
+    defer cands.free()
+    distinct_candidates(s, dsym, mname, cands)
+    fsym := distinct_pick(s, a, cands, args, atys)
+    if fsym != 0:
+        distinct_check_self_call(s, a, nid, dsym, fsym)
+        ret distinct_make_call(s, a, nid, dsym, fsym, args, atys)
+    end
+    ret TYPE_NONE
+end
+
+func distinct_try_method_call(s &: Sema, a &: at.Ast, callid: int, recv: int, recv_t: int, mname: str): int:
+    dsym := type_distinct_sym(s, recv_t)
+    if dsym == 0:
+        ret TYPE_NONE
+    end
+    mut cands := Vector {} as Vector<int>
+    defer cands.free()
+    distinct_candidates(s, dsym, mname, cands)
+    if cands.len() == 0:
+        ret TYPE_NONE
+    end
+    cn := at.Get(a, callid)
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    mut atys := Vector {} as Vector<int>
+    defer atys.free()
+    args.push(recv)
+    atys.push(recv_t)
+    repeat cn.list.len() in i:
+        arg := cn.list.get(i)
+        args.push(arg)
+        atys.push(sema_check_expr(s, a, arg))
+    end
+    fsym := distinct_pick(s, a, cands, args, atys)
+    if fsym == 0:
+        distinct_no_match(s, span_of(a, callid), dsym, mname, atys)
+        ret sema_decorate(s, a, callid, sema_err_ty(s))
+    end
+    ret distinct_make_call(s, a, callid, dsym, fsym, args, atys)
+end
+
+func distinct_try_compound(s &: Sema, a &: at.Ast, nid: int, tt: int, vt: int): bool:
+    dsym := type_distinct_sym(s, tt)
+    n := at.Get(a, nid)
+    mname := sema_op_method(sema_compound_base(n.op))
+    if str.Len(mname) == 0:
+        ret false
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    args.push(n.a)
+    args.push(n.b)
+    mut atys := Vector {} as Vector<int>
+    defer atys.free()
+    atys.push(tt)
+    atys.push(vt)
+    mut cands := Vector {} as Vector<int>
+    defer cands.free()
+    distinct_candidates(s, dsym, mname, cands)
+    fsym := distinct_pick(s, a, cands, args, atys)
+    if fsym == 0:
+        if distinct_arity_seen(s, cands, 2):
+            distinct_no_match(s, span_of(a, nid), dsym, mname, atys)
+            ret true
+        end
+        ret false
+    end
+    distinct_check_self_call(s, a, nid, dsym, fsym)
+    callid := new_node_at(a, at.AST_CALL, span_of(a, nid))
+    rt := distinct_make_call(s, a, callid, dsym, fsym, args, atys)
+    if !type_assignable(s, tt, rt):
+        serr(
+            s, 2, span_of(a, nid), co.Format2(
+                i18.Tr("cannot assign '%s' to '%s'"), co.ArgStr(type_disp(s, rt)), co.ArgStr(type_disp(s, tt))
+            )
+        )
+        ret true
+    end
+    mut nv := at.Get(a, nid)
+    nv.op = tok.TK_ASSIGN
+    nv.b = callid
+    at.Put(a, nid, nv)
+    ret true
+end
+
+func distinct_display_name(name: str): str:
+    if !str.StartsWith(name, "__"):
+        ret ""
+    end
+    rest := str.Substr(name, 2, str.Len(name) - 2)
+    sep := str.IndexOf(rest, "__")
+    if sep <= 0:
+        ret ""
+    end
+    tname := str.Substr(rest, 0, sep)
+    tail := str.Substr(rest, sep + 2, str.Len(rest) - sep - 2)
+    mut last := 0 - 1
+    mut from := 0
+    until from < str.Len(tail):
+        k := str.IndexOf(str.Substr(tail, from, str.Len(tail) - from), "__")
+        if k < 0:
+            break
+        end
+        last = from + k
+        from = last + 2
+    end
+    if last <= 0:
+        ret ""
+    end
+    mname := str.Substr(tail, 0, last)
+    if str.StartsWith(mname, "operator_"):
+        ret tname + " operator " + distinct_op_symbol(mname)
+    end
+    ret tname + "." + mname
+end
+
+func distinct_display_names(msg: str): str:
+    if str.IndexOf(msg, "'__") < 0:
+        ret msg
+    end
+    mut out := ""
+    mut rest := msg
+    mut i := str.IndexOf(rest, "'__")
+    until i >= 0:
+        close := str.IndexOf(str.Substr(rest, i + 1, str.Len(rest) - i - 1), "'")
+        if close < 0:
+            break
+        end
+        name := str.Substr(rest, i + 1, close)
+        disp := distinct_display_name(name)
+        out = out + str.Substr(rest, 0, i + 1) + (str.Len(disp) > 0 ? disp : name) + "'"
+        rest = str.Substr(rest, i + close + 2, str.Len(rest) - i - close - 2)
+        i = str.IndexOf(rest, "'__")
+    end
+    ret out + rest
+end

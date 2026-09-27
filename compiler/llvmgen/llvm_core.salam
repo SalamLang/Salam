@@ -100,15 +100,23 @@ end
 func emit_substr(v &: Lv):
     u := v.usize
     out_hg(v, "define internal noalias ptr @salam_ll_substr(ptr %s, i32 %start, i32 %len) nounwind willreturn nofree {\nentry:\n")
-    l := pl_widen(v, "%len", "%l")
-    so := pl_widen(v, "%start", "%so")
-    out_hg(v, "  %t = add " + u + " " + l + ", 1\n")
+    out_hg(v, "  %n = call " + u + " @strlen(ptr %s)\n")
+    out_hg(v, "  %sneg = icmp slt i32 %start, 0\n")
+    out_hg(v, "  %s0 = select i1 %sneg, i32 0, i32 %start\n")
+    out_hg(v, "  %lneg = icmp slt i32 %len, 0\n")
+    out_hg(v, "  %l0 = select i1 %lneg, i32 0, i32 %len\n")
+    sw := pl_widen(v, "%s0", "%sw")
+    lw := pl_widen(v, "%l0", "%lw")
+    out_hg(v, "  %sbig = icmp ugt " + u + " " + sw + ", %n\n")
+    out_hg(v, "  %so = select i1 %sbig, " + u + " %n, " + u + " " + sw + "\n")
+    out_hg(v, "  %rem = sub " + u + " %n, %so\n")
+    out_hg(v, "  %lbig = icmp ugt " + u + " " + lw + ", %rem\n")
+    out_hg(v, "  %l = select i1 %lbig, " + u + " %rem, " + u + " " + lw + "\n")
+    out_hg(v, "  %t = add " + u + " %l, 1\n")
     out_hg(v, "  %buf = call ptr @malloc(" + u + " %t)\n")
-    out_hg(v, "  %src = getelementptr i8, ptr %s, " + u + " " + so + "\n")
-    out_hg(
-        v, "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " " + l + ")\n"
-    )
-    out_hg(v, "  %e = getelementptr i8, ptr %buf, " + u + " " + l + "\n")
+    out_hg(v, "  %src = getelementptr i8, ptr %s, " + u + " %so\n")
+    out_hg(v, "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " %l)\n")
+    out_hg(v, "  %e = getelementptr i8, ptr %buf, " + u + " %l\n")
     out_hg(v, "  store i8 0, ptr %e\n  ret ptr %buf\n}\n\n")
 end
 
@@ -210,6 +218,45 @@ end
 
 func emit_lower(v &: Lv):
     emit_case(v, "salam_ll_lower", 65, 90, 32)
+end
+
+func emit_u8step(v &: Lv):
+    u := v.usize
+    out_hg(
+        v, "define internal " + u + " @salam_ll_u8step(ptr %s, " + u + " %i, " + u + " %n) nounwind willreturn memory(argmem: read) {\n" + "entry:\n" + "  %p = getelementptr i8, ptr %s, " + u + " %i\n" + "  %b = load i8, ptr %p\n" + "  %ge192 = icmp uge i8 %b, -64\n" + "  %ge224 = icmp uge i8 %b, -32\n" + "  %ge240 = icmp uge i8 %b, -16\n" + "  %la = select i1 %ge192, " + u + " 2, " + u + " 1\n" + "  %lb = select i1 %ge224, " + u + " 3, " + u + " %la\n" + "  %len = select i1 %ge240, " + u + " 4, " + u + " %lb\n" + "  %e = add " + u + " %i, %len\n" + "  %over = icmp ugt " + u + " %e, %n\n" + "  %r = select i1 %over, " + u + " %n, " + u + " %e\n" + "  ret " + u + " %r\n}\n\n"
+    )
+end
+
+func emit_u8adv(v &: Lv):
+    need(v, LV_H_U8STEP)
+    u := v.usize
+    out_hg(
+        v, "define internal " + u + " @salam_ll_u8adv(ptr %s, " + u + " %n, " + u + " %from, i32 %k) nounwind willreturn memory(argmem: read) {\n" + "entry:\n  br label %loop\n" + "loop:\n" + "  %i = phi " + u + " [ %from, %entry ], [ %ni, %body ]\n" + "  %c = phi i32 [ 0, %entry ], [ %nc, %body ]\n" + "  %more = icmp slt i32 %c, %k\n" + "  %inb = icmp ult " + u + " %i, %n\n" + "  %go = and i1 %more, %inb\n" + "  br i1 %go, label %body, label %done\n" + "body:\n" + "  %ni = call " + u + " @salam_ll_u8step(ptr %s, " + u + " %i, " + u + " %n)\n" + "  %nc = add i32 %c, 1\n" + "  br label %loop\n" + "done:\n  ret " + u + " %i\n}\n\n"
+    )
+end
+
+func emit_u8cnt(v &: Lv):
+    need(v, LV_H_U8STEP)
+    u := v.usize
+    out_hg(
+        v, "define internal i32 @salam_ll_u8cnt(ptr %s, " + u + " %n) nounwind willreturn memory(argmem: read) {\n" + "entry:\n  br label %loop\n" + "loop:\n" + "  %i = phi " + u + " [ 0, %entry ], [ %ni, %body ]\n" + "  %c = phi i32 [ 0, %entry ], [ %nc, %body ]\n" + "  %inb = icmp ult " + u + " %i, %n\n" + "  br i1 %inb, label %body, label %done\n" + "body:\n" + "  %ni = call " + u + " @salam_ll_u8step(ptr %s, " + u + " %i, " + u + " %n)\n" + "  %nc = add i32 %c, 1\n" + "  br label %loop\n" + "done:\n  ret i32 %c\n}\n\n"
+    )
+end
+
+func emit_u8substr(v &: Lv):
+    need(v, LV_H_U8ADV)
+    u := v.usize
+    out_hg(
+        v, "define internal noalias ptr @salam_ll_u8substr(ptr %s, i32 %start, i32 %len) nounwind willreturn nofree {\n" + "entry:\n" + "  %n = call " + u + " @strlen(ptr %s)\n" + "  %sneg = icmp slt i32 %start, 0\n" + "  %st = select i1 %sneg, i32 0, i32 %start\n" + "  %lneg = icmp slt i32 %len, 0\n" + "  %ln = select i1 %lneg, i32 0, i32 %len\n" + "  %b0 = call " + u + " @salam_ll_u8adv(ptr %s, " + u + " %n, " + u + " 0, i32 %st)\n" + "  %b1 = call " + u + " @salam_ll_u8adv(ptr %s, " + u + " %n, " + u + " %b0, i32 %ln)\n" + "  %d = sub " + u + " %b1, %b0\n" + "  %t = add " + u + " %d, 1\n" + "  %buf = call ptr @malloc(" + u + " %t)\n" + "  %src = getelementptr i8, ptr %s, " + u + " %b0\n" + "  %c = call ptr @memcpy(ptr %buf, ptr %src, " + u + " %d)\n" + "  %e = getelementptr i8, ptr %buf, " + u + " %d\n" + "  store i8 0, ptr %e\n  ret ptr %buf\n}\n\n"
+    )
+end
+
+func emit_u8find(v &: Lv):
+    need(v, LV_H_U8CNT)
+    u := v.usize
+    out_hg(
+        v, "define internal i32 @salam_ll_u8find(ptr %s, ptr %sub) nounwind willreturn memory(argmem: read) {\n" + "entry:\n" + "  %p = call ptr @strstr(ptr %s, ptr %sub)\n" + "  %nf = icmp eq ptr %p, null\n" + "  br i1 %nf, label %none, label %found\n" + "none:\n  ret i32 -1\n" + "found:\n" + "  %pi = ptrtoint ptr %p to " + u + "\n" + "  %si = ptrtoint ptr %s to " + u + "\n" + "  %off = sub " + u + " %pi, %si\n" + "  %c = call i32 @salam_ll_u8cnt(ptr %s, " + u + " %off)\n" + "  ret i32 %c\n}\n\n"
+    )
 end
 
 func emit_strhash(v &: Lv):
@@ -321,6 +368,16 @@ func need(v &: Lv, which: int):
         emit_upper(v)
     else which == LV_H_LOWER:
         emit_lower(v)
+    else which == LV_H_U8STEP:
+        emit_u8step(v)
+    else which == LV_H_U8ADV:
+        emit_u8adv(v)
+    else which == LV_H_U8CNT:
+        emit_u8cnt(v)
+    else which == LV_H_U8SUBSTR:
+        emit_u8substr(v)
+    else which == LV_H_U8FIND:
+        emit_u8find(v)
     end
 end
 

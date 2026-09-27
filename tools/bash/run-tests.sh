@@ -430,6 +430,11 @@ note_result() {
 
 SECTIONS="$*"
 
+MOCK_AR=${AR:-ar}
+if [ -z "${AR:-}" ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/ar ]; then
+    MOCK_AR=/usr/bin/ar
+fi
+
 want() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
@@ -573,7 +578,7 @@ if want db; then
         }
     done
     dbok=0
-    if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/dbwork/.work"
         mockobjs="$WORK/dbwork/.work/mysql_mock.o"
         if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
@@ -583,7 +588,7 @@ if want db; then
                 mockobjs="$mockobjs $WORK/dbwork/.work/postgres_mock.o"
             fi
             # shellcheck disable=SC2086
-            if ar rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
+            if "$MOCK_AR" rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
                 dbok=1
             fi
         fi
@@ -629,10 +634,10 @@ if want opencv; then
         }
     done
     ocvok=0
-    if [ -n "$OCVCC" ] && [ -n "$ocvmockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$OCVCC" ] && [ -n "$ocvmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/opencvwork/.work"
         if "$OCVCC" -c -std=c11 "$ocvmockc" -o "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/opencvwork/.work/libsalam_opencv_mock.a" "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1; then
+            "$MOCK_AR" rcs "$WORK/opencvwork/.work/libsalam_opencv_mock.a" "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1; then
             ocvok=1
         fi
     fi
@@ -664,10 +669,10 @@ if want webview_cef; then
     cefmockc=""
     [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
     cefok=0
-    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/cefwork/.work"
         if "$CEFCC" -c -std=c11 "$cefmockc" -o "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
+            "$MOCK_AR" rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
             cefok=1
         fi
     fi

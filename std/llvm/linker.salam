@@ -211,7 +211,8 @@ pub func CanLinkTriple(t: str): bool:
     win := str.Contains(t, "windows") || str.Contains(t, "mingw") || str.Contains(t, "win32")
     gnu := str.Contains(t, "gnu") || str.Contains(t, "mingw")
     musl := str.Contains(t, "linux") && str.Contains(t, "musl")
-    ret (win && gnu) || musl
+    wasi := str.Contains(t, "wasm32") && str.Contains(t, "wasi")
+    ret (win && gnu) || musl || wasi
 end
 
 @en "LinkExternal"
@@ -356,6 +357,52 @@ pub func LinkElf(obj: str, out_path: str, opts: Options): LinkResult:
     ret LinkResult { ok = false, err = "in-process lld link failed" }
 end
 
+@en "LinkWasi"
+@fa "پیوند وازی"
+pub func LinkWasi(obj: str, out_path: str, opts: Options): LinkResult:
+    lib := filepath.Join(opts.sysroot, "lib")
+    crt1 := filepath.Join(lib, "crt1-command.o")
+    if str.Len(opts.sysroot) == 0 || !os.Exists(crt1):
+        ret LinkResult {
+            ok = false, err = "no WASI sysroot (looked in '" + opts.sysroot + "'): use a salam build that embeds one, set $SALAM_SYSROOTS, or install wasi-sdk"
+        }
+    end
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("wasm-ld")
+    argv.push("-m")
+    argv.push("wasm32")
+    argv.push("-L" + lib)
+    repeat opts.lib_paths.len() in lpi:
+        argv.push("-L" + opts.lib_paths.get(lpi))
+    end
+    argv.push(crt1)
+    argv.push(obj)
+    libs := user_libs_of(opts)
+    defer libs.free()
+    repeat libs.len() in i:
+        l := libs.get(i)
+        if !str.Equals(l, "-lm") && !str.Equals(l, "-lc"):
+            argv.push(l)
+        end
+    end
+    argv.push("-lwasi-emulated-signal")
+    if !opts.debug_info:
+        argv.push("--strip-all")
+    end
+    argv.push("-lc")
+    rt := filepath.Join(lib, "libclang_rt.builtins.a")
+    if os.Exists(rt):
+        argv.push(rt)
+    end
+    argv.push("-o")
+    argv.push(out_path)
+    if Link(LLD_WASM, argv_of(argv), argv.len()):
+        ret LinkResult { ok = true }
+    end
+    ret LinkResult { ok = false, err = "in-process lld wasm link failed" }
+end
+
 @en "LinkMingw"
 @fa "پیوند مینگو"
 pub func LinkMingw(obj: str, out_path: str, opts: Options): LinkResult:
@@ -447,6 +494,9 @@ pub func LinkAuto(obj: str, out_path: str, opts: Options): LinkResult:
     end
     if str.Contains(t, "linux") && str.Contains(t, "musl"):
         ret LinkElf(obj, out_path, opts)
+    end
+    if str.Contains(t, "wasm32") && str.Contains(t, "wasi"):
+        ret LinkWasi(obj, out_path, opts)
     end
     ret LinkResult { ok = false, err = "no in-process linker for triple '" + t + "'" }
 end

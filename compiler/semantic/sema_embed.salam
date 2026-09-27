@@ -45,10 +45,10 @@ func embed_target(s &: Sema, a &: at.Ast, fid: int, pkg_out &: int): int:
         )
         ret 0
     end
-    if t.list.len() > 0 || at.TyparamCount(a, sym_at(s, ssym).decl) > 0:
+    if t.list.len() != at.TyparamCount(a, sym_at(s, ssym).decl):
         serr(
             s, 107, sp, co.Format1(
-                i18.Tr("embedding the generic struct '%s' is not supported yet"), co.ArgStr(t.name)
+                i18.Tr("'use %s' needs one type argument for each type parameter of the struct"), co.ArgStr(t.name)
             )
         )
         ret 0
@@ -108,10 +108,14 @@ func embed_qualify_types(s &: Sema, a &: at.Ast, tnode: int, pk: int, fn: int):
     end
 end
 
-func embed_forwarder(s &: Sema, a &: at.Ast, fid: int, mid: int, pk: int): int:
+func embed_forwarder(s &: Sema, a &: at.Ast, fid: int, mid: int, pk: int, edid: int): int:
     f := at.Get(a, fid)
     sp := span_of(a, fid)
     fwd := at.Clone(a, mid)
+    tps := at.Get(a, edid).typarams
+    if tps.len() > 0:
+        g_subst(a, fwd, tps, at.Get(a, f.ty).list)
+    end
     mut fv := at.Get(a, fwd)
     fv.is_pub = fv.is_pub && f.is_pub
     fv.is_embedded = true
@@ -172,6 +176,8 @@ func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
     mut methods := Vector {} as Vector<int>
     mut pkgs := Vector {} as Vector<int>
     mut clash := Vector {} as Vector<str>
+    mut edids := Vector {} as Vector<int>
+    defer edids.free()
     defer names.free()
     defer fields.free()
     defer methods.free()
@@ -196,8 +202,16 @@ func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
         if f.a == 0 && embed_all_defaulted(a, edid):
             lit := new_node_at(a, at.AST_STRUCT_LIT, span_of(a, fid))
             at.SetName(a, lit, at.Get(a, f.ty).name)
+            mut dflt := lit
+            if at.Get(a, f.ty).list.len() > 0:
+                dflt = new_node_at(a, at.AST_CAST, span_of(a, fid))
+                mut dv := at.Get(a, dflt)
+                dv.a = lit
+                at.Put(a, dflt, dv)
+                at.SetTypeNode(a, dflt, at.Clone(a, f.ty))
+            end
             mut fv := at.Get(a, fid)
-            fv.a = lit
+            fv.a = dflt
             at.Put(a, fid, fv)
         end
         repeat ed.list.len() in j:
@@ -225,6 +239,7 @@ func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
             fields.push(fid)
             methods.push(mid)
             pkgs.push(pk)
+            edids.push(edid)
         end
     end
     repeat names.len() in n:
@@ -237,7 +252,7 @@ func embed_expand(s &: Sema, a &: at.Ast, did: int, done &: Vector<int>):
         if bad:
             continue
         end
-        at.AddChild(a, did, embed_forwarder(s, a, fields.get(n), methods.get(n), pkgs.get(n)))
+        at.AddChild(a, did, embed_forwarder(s, a, fields.get(n), methods.get(n), pkgs.get(n), edids.get(n)))
     end
     repeat clash.len() in c2:
         mut first := true

@@ -408,8 +408,9 @@ own members win over promoted ones; two embeds that both provide a name are
 E107. Literals may set promoted fields directly (`Dog { name = "Rex" }`); an
 omitted embed defaults to `Animal {}` when all of its fields have defaults.
 `pub use` exposes the embed outside the struct; plain `use` keeps it private.
-Print and JSON show it as a nested object. The Persian spelling is `شامل`. Not
-yet: embedding a generic struct or a pointer.
+Print and JSON show it as a nested object. The Persian spelling is `شامل`. A
+generic struct embeds with its type arguments (`use Stack<str>`); a pointer
+cannot be embedded.
 
 ```salam
 struct Animal:  pub name: str = ""  pub func Describe(): str:  ret "I am " + this.name  end  end

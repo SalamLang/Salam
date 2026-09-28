@@ -80,7 +80,7 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     -s EXIT_RUNTIME=0 \
     -s IGNORE_MISSING_MAIN=1 \
     -s FILESYSTEM=1 \
-    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_version','_malloc','_free']" \
+    -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_last_failed','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
 echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
 "$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"

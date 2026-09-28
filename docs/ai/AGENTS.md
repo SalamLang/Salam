@@ -60,6 +60,7 @@ package  →  import  →  extern:  →  globals  →  types  →  private funcs
 | Rule                                                                              | Diagnostic if broken                                                                |
 | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `import` must come directly after `package`, before any other top-level statement | `E083: 'import' must appear before any other top-level statement`                   |
+| Library `import`s come before file `include`s                                     | `E108: 'import str' must come before every include`                                 |
 | Global variables must precede every function and type definition                  | `E085: global variable 'g' must be declared before any function or type definition` |
 | Once the first `pub func` appears, only `pub func`s may follow                    | `E088: function '_b' must appear before 'pub' function 'A'`                         |
 

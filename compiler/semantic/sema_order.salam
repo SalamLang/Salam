@@ -3,6 +3,7 @@ package semantic
 import str
 
 include co "../sal_core.salam"
+include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lp "../langpack.salam"
@@ -16,6 +17,32 @@ func safe_name(a &: at.Ast, d: int): str:
         ret nm
     end
     ret "?"
+end
+
+func is_include(a &: at.Ast, did: int): bool:
+    ret at.Get(a, did).value_kind == tok.TV_STRING
+end
+
+func check_import_before_include(s &: Sema, a &: at.Ast, did: int, first_include &: int):
+    d := at.Get(a, did)
+    if d.kind != at.AST_IMPORT:
+        ret
+    end
+    if is_include(a, did):
+        if first_include == 0:
+            first_include = did
+        end
+        ret
+    end
+    if first_include == 0:
+        ret
+    end
+    inc := at.Get(a, first_include)
+    serr(
+        s, 108, span_of(a, did), co.Format3(
+            i18.Tr("'import %s' must come before every include; move it above 'include \"%s\"' (line %u): library imports come first, then file includes, then everything else"), co.ArgStr(d.name), co.ArgStr(inc.value_str), co.ArgUint(inc.begin_line as u64)
+        )
+    )
 end
 
 func check_pub_order(s &: Sema, a &: at.Ast, list: Vector<int>):
@@ -59,6 +86,7 @@ func sema_check_toplevel_order(s &: Sema, a &: at.Ast, program: int):
     mut max_phase := at.AST_ORDER_IMPORT
     mut first_of := [0, 0, 0, 0, 0]
     mut have_first := [false, false, false, false, false]
+    mut first_include := 0
 
     prog := at.Get(a, program)
     repeat prog.list.len() in i:
@@ -73,6 +101,7 @@ func sema_check_toplevel_order(s &: Sema, a &: at.Ast, program: int):
                 first_of[z] = 0
                 have_first[z] = false
             end
+            first_include = 0
         end
         if d.synthetic or d.is_static or d.enum_payload:
             continue
@@ -133,8 +162,13 @@ func sema_check_toplevel_order(s &: Sema, a &: at.Ast, program: int):
                     )
                 )
             end
-        else p > max_phase:
-            max_phase = p
+        else:
+            if p == at.AST_ORDER_IMPORT:
+                check_import_before_include(s, a, did, first_include)
+            end
+            if p > max_phase:
+                max_phase = p
+            end
         end
     end
 

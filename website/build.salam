@@ -307,6 +307,132 @@ func render(name: str, tmpl: str, ctx: HashMap<str, str>, errs &: Vector<str>): 
     ret template.Render(tmpl, ctx)
 end
 
+func json_str(v: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppendChar(b, 34)
+    each cp in str.CodePoints(v):
+        if cp == 34:
+            str.BufAppend(b, "\\\"")
+        else cp == 92:
+            str.BufAppend(b, "\\\\")
+        else cp == 10:
+            str.BufAppend(b, "\\n")
+        else cp == 13:
+            str.BufAppend(b, "\\r")
+        else cp == 9:
+            str.BufAppend(b, "\\t")
+        else cp == 60:
+            str.BufAppend(b, "\\u003c")
+        else cp < 32:
+            str.BufAppend(b, " ")
+        else:
+            str.BufAppendCp(b, cp)
+        end
+    end
+    str.BufAppendChar(b, 34)
+    ret str.BufStr(b)
+end
+
+func strip_tags(v: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut inside := false
+    each cp in str.CodePoints(v):
+        if cp == 60:
+            inside = true
+        else cp == 62:
+            inside = false
+        else not inside:
+            str.BufAppendCp(b, cp)
+        end
+    end
+    ret str.Trim(str.BufStr(b))
+end
+
+func ctx_or(ctx: HashMap<str, str>, key: str, fallback: str): str:
+    if ctx.has(key):
+        ret ctx.get(key)
+    end
+    ret fallback
+end
+
+func json_list(items: str): str:
+    mut parts := Vector {} as Vector<str>
+    each it in items.split("|"):
+        t := str.Trim(it)
+        if t.len() > 0:
+            parts.push(json_str(t))
+        end
+    end
+    ret "[" + str.Join(parts, ",") + "]"
+end
+
+func faq_count(ctx: HashMap<str, str>): int:
+    mut n := 0
+    until ctx.has("faq." + (n + 1) + ".q"):
+        n += 1
+    end
+    ret n
+end
+
+func faq_html(ctx: HashMap<str, str>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 1
+    until i <= faq_count(ctx):
+        str.BufAppend(b, `<details class="faq-item"><summary><h3>` + ctx.get("faq." + i + ".q") + "</h3></summary><div class=\"faq-answer\"><p>" + ctx.get("faq." + i + ".a") + "</p></div></details>\n")
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func faq_jsonld(ctx: HashMap<str, str>): str:
+    mut items := Vector {} as Vector<str>
+    mut i := 1
+    until i <= faq_count(ctx):
+        q := json_str(strip_tags(ctx.get("faq." + i + ".q")))
+        answer := json_str(strip_tags(ctx.get("faq." + i + ".a")))
+        items.push(`{"@type":"Question","name":` + q + `,"acceptedAnswer":{"@type":"Answer","text":` + answer + "}}")
+        i += 1
+    end
+    ret `{"@type":"FAQPage","mainEntity":[` + str.Join(items, ",") + "]}"
+end
+
+func page_jsonld(ctx: HashMap<str, str>, p: Page, version: str): str:
+    u := ctx_or(ctx, "site.url", "")
+    tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
+    org := u + "/#organization"
+    site := u + "/#website"
+    lang := u + "/#language"
+    app := u + "/#compiler"
+    page_url := u + p.url
+    logo := u + ctx_or(ctx, "site.logo_png", "")
+    image := u + ctx_or(ctx, "site.og_image", "")
+    mut graph := Vector {} as Vector<str>
+    graph.push(`{"@type":"Organization","@id":` + json_str(org) + `,"name":` + json_str(ctx_or(ctx, "site.org_name", "")) + `,"url":` + json_str(u + "/") + `,"logo":{"@type":"ImageObject","url":` + json_str(logo) + `},"sameAs":` + json_list(ctx_or(ctx, "site.same_as", "")) + "}")
+    graph.push(`{"@type":"WebSite","@id":` + json_str(site) + `,"name":` + json_str(ctx_or(ctx, "site.name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"url":` + json_str(u + "/") + `,"inLanguage":` + json_str(tag) + `,"publisher":{"@id":` + json_str(org) + "}}")
+    graph.push(`{"@type":"ComputerLanguage","@id":` + json_str(lang) + `,"name":` + json_str(ctx_or(ctx, "site.short_name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"description":` + json_str(ctx_or(ctx, "site.description", "")) + `,"url":` + json_str(u + "/") + `,"sameAs":` + json_list(ctx_or(ctx, "link.github", "")) + "}")
+    graph.push(`{"@type":"SoftwareApplication","@id":` + json_str(app) + `,"name":` + json_str(ctx_or(ctx, "site.app_name", "")) + `,"applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":` + json_str(version) + `,"license":` + json_str(ctx_or(ctx, "link.license", "")) + `,"downloadUrl":` + json_str(ctx_or(ctx, "link.releases", "")) + `,"inLanguage":` + json_str(tag) + `,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"publisher":{"@id":` + json_str(org) + "}}")
+    mut web := `{"@type":"WebPage","@id":` + json_str(page_url + "#webpage") + `,"url":` + json_str(page_url) + `,"name":` + json_str(ctx_or(ctx, p.slug + ".title", "")) + `,"description":` + json_str(ctx_or(ctx, p.slug + ".description", "")) + `,"inLanguage":` + json_str(tag) + `,"isPartOf":{"@id":` + json_str(site) + `},"about":{"@id":` + json_str(lang) + `},"primaryImageOfPage":{"@type":"ImageObject","url":` + json_str(image) + "}"
+    if p.slug != "index":
+        web += `,"breadcrumb":{"@id":` + json_str(page_url + "#breadcrumb") + "}"
+    end
+    graph.push(web + "}")
+    if p.slug != "index":
+        crumb := ctx_or(ctx, "nav." + p.slug, strip_tags(ctx_or(ctx, p.slug + ".title", "")))
+        graph.push(`{"@type":"BreadcrumbList","@id":` + json_str(page_url + "#breadcrumb") + `,"itemListElement":[{"@type":"ListItem","position":1,"name":` + json_str(ctx_or(ctx, "nav.home", "")) + `,"item":` + json_str(u + "/") + `},{"@type":"ListItem","position":2,"name":` + json_str(crumb) + `,"item":` + json_str(page_url) + "}]}")
+    end
+    if p.slug == "index" and faq_count(ctx) > 0:
+        graph.push(faq_jsonld(ctx))
+    end
+    ret `<script type="application/ld+json">{"@context":"https://schema.org","@graph":[` + str.Join(graph, ",") + "]}</script>"
+end
+
+func manifest_json(ctx: HashMap<str, str>): str:
+    ret `{"name":` + json_str(ctx_or(ctx, "site.name", "")) + `,"short_name":` + json_str(ctx_or(ctx, "site.short_name", "")) + `,"description":` + json_str(ctx_or(ctx, "site.description", "")) + `,"lang":` + json_str(ctx_or(ctx, "site.lang", "")) + `,"dir":` + json_str(ctx_or(ctx, "site.dir", "")) + `,"start_url":"/","scope":"/","display":"standalone","background_color":"#111214","theme_color":"#ff5c00","icons":[{"src":"/assets/img/icon-192.png","sizes":"192x192","type":"image/png"},{"src":"/assets/img/icon-512.png","sizes":"512x512","type":"image/png"},{"src":"/assets/img/icon-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}]}` + "\n"
+end
+
 func page_for(slug: str): Page:
     if slug == "index":
         ret Page { slug = slug, url = "/", out = "index.html" }
@@ -337,13 +463,15 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         end
     end
     load_examples(lang_dir, ctx, errs)
-    mut version := str.Trim(io.ReadFile("VERSION"))
+    raw_version := str.Trim(io.ReadFile("VERSION"))
+    mut version := raw_version
     if ctx.has("site.digits") and ctx.get("site.digits") == "fa":
         version = str.ToPersianDigits(version)
     end
     ctx.put("site.version", version)
     ctx.put("asset.css", "/assets/css/site.css?v=" + short_hash(ROOT + "/assets/css/site.css"))
     ctx.put("asset.js", "/assets/js/site.js?v=" + short_hash(ROOT + "/assets/js/site.js"))
+    ctx.put("faq.html", faq_html(ctx))
 
     mut pages := Vector {} as Vector<Page>
     each name in dir.ListFiles(ROOT + "/templates/pages"):
@@ -375,6 +503,9 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         ctx.put("page.url", p.url)
         ctx.put("page.title", ctx.has(p.slug + ".title") ? ctx.get(p.slug + ".title") : "")
         ctx.put("page.description", ctx.has(p.slug + ".description") ? ctx.get(p.slug + ".description") : "")
+        ctx.put("page.keywords", ctx_or(ctx, p.slug + ".keywords", ctx_or(ctx, "site.keywords", "")))
+        ctx.put("page.robots", p.slug == "404" ? "noindex, follow" : ctx_or(ctx, "site.robots", "index, follow"))
+        ctx.put("page.jsonld", p.slug == "404" ? "" : page_jsonld(ctx, p, raw_version))
         ctx.put("page.body", render(tpath, io.ReadFile(tpath), ctx, errs))
         html := render(ROOT + "/templates/base.html", base, ctx, errs)
         ctx.put("active." + p.slug, "")
@@ -389,6 +520,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     end
     str.BufAppend(sitemap, "</urlset>\n")
     write(out_dir + "/sitemap.xml", str.BufStr(sitemap), errs)
+    write(out_dir + "/site.webmanifest", manifest_json(ctx), errs)
     write(out_dir + "/robots.txt", "User-agent: *\nAllow: /\nSitemap: " + site_url + "/sitemap.xml\n", errs)
     ret pages.len()
 end

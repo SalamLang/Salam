@@ -50,6 +50,16 @@ escaped automatically. `<page>.title` and `<page>.description` fill the
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.
 
+SEO: each page's `<page>.title` is the full `<title>` (write the whole
+phrase, including the brand), `<page>.description` the meta description and
+`<page>.keywords` its keywords (falling back to `site.keywords`). The
+generator builds the JSON-LD graph (`Organization`, `WebSite`,
+`ComputerLanguage`, `SoftwareApplication`, `WebPage`, `BreadcrumbList`) and
+`site.webmanifest` from the
+`site.*` keys. `faq.N.q` / `faq.N.a` become both the visible FAQ on the home
+page (`{{faq.html}}`) and its `FAQPage` structured data, so the two never
+disagree. Put a Search Console token in `site.google_verification`.
+
 Examples: `examples/name.salam` becomes `{{example.name}}`, a code window with
 the highlighted code and, when `name.out` exists, its output. The highlighter
 takes its word lists from `code.keywords`, `code.types` and `code.builtins`.

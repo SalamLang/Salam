@@ -294,7 +294,10 @@ EOF_MSGS
         llvm)
             jobdir="$WORK/llvmjob_${jobid}_$$"
             mkdir -p "$jobdir"
-            (cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>/dev/null; echo "$?" >"$jobdir/.rc")
+            (
+                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>/dev/null
+                echo "$?" >"$jobdir/.rc"
+            )
             got=$(tr -d '\r' <"$jobdir/.stdout")
             rc=$(cat "$jobdir/.rc")
             rm -rf "$jobdir"

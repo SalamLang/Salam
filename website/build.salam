@@ -1,0 +1,425 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import str
+import io
+import fs.file
+import fs.dir
+import template
+
+const ROOT := "website"
+
+struct Page:
+    pub slug: str = ""
+    pub url: str = ""
+    pub out: str = ""
+end
+
+func report(errs &: Vector<str>, msg: str):
+    errs.push(msg)
+end
+
+func strip_cr(s: str): str:
+    ret str.TrimSuffix(s, "\r")
+end
+
+func load_strings(path: str, ctx &: HashMap<str, str>, errs &: Vector<str>):
+    lines := io.ReadFile(path).split("\n")
+    mut i := 0
+    until i < lines.len():
+        line := strip_cr(lines.get(i))
+        t := str.Trim(line)
+        i += 1
+        if t.len() == 0 or str.StartsWith(t, "#"):
+            continue
+        end
+        mut key := ""
+        mut value := ""
+        if str.EndsWith(t, "<<"):
+            key = str.Trim(str.TrimSuffix(t, "<<"))
+            mut parts := Vector {} as Vector<str>
+            mut closed := false
+            until i < lines.len():
+                body := strip_cr(lines.get(i))
+                i += 1
+                if str.Trim(body) == ">>":
+                    closed = true
+                    break
+                end
+                parts.push(body)
+            end
+            if not closed:
+                report(errs, path + ": block '" + key + "' has no closing >>")
+            end
+            value = str.Join(parts, "\n")
+        else:
+            pos := t.find("=")
+            if pos <= 0:
+                report(errs, path + ": expected 'key = value', got: " + t)
+                continue
+            end
+            key = str.Trim(t.substr(0, pos))
+            value = str.Trim(t.substr(pos + 1, t.len() - pos - 1))
+        end
+        if ctx.has(key):
+            report(errs, path + ": duplicate key '" + key + "'")
+        end
+        if str.EndsWith(key, "_cmd"):
+            value = template.EscapeHTML(value)
+        end
+        ctx.put(key, value)
+    end
+end
+
+func escape_cp(b &: str.StringBuilder, cp: int):
+    if cp == 38:
+        str.BufAppend(b, "&amp;")
+    else cp == 60:
+        str.BufAppend(b, "&lt;")
+    else cp == 62:
+        str.BufAppend(b, "&gt;")
+    else cp == 34:
+        str.BufAppend(b, "&quot;")
+    else:
+        str.BufAppendCp(b, cp)
+    end
+end
+
+func escape_span(b &: str.StringBuilder, cps: Vector<int>, start: int, stop: int):
+    mut k := start
+    until k < stop:
+        escape_cp(b, cps.get(k))
+        k += 1
+    end
+end
+
+func text_of(cps: Vector<int>, start: int, stop: int): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut k := start
+    until k < stop:
+        str.BufAppendCp(b, cps.get(k))
+        k += 1
+    end
+    ret str.BufStr(b)
+end
+
+func wrap(b &: str.StringBuilder, class: str, cps: Vector<int>, start: int, stop: int):
+    str.BufAppend(b, `<span class="tok-` + class + `">`)
+    escape_span(b, cps, start, stop)
+    str.BufAppend(b, "</span>")
+end
+
+func is_ident_cp(cp: int): bool:
+    if cp == 95:
+        ret true
+    end
+    if cp < 128:
+        ret str.IsAsciiAlnum(cp)
+    end
+    ret cp != 1548 and cp != 1563 and cp != 1567 and cp != 171 and cp != 187 and cp != 160
+end
+
+func next_visible(cps: Vector<int>, start: int): int:
+    mut k := start
+    until k < cps.len():
+        cp := cps.get(k)
+        if cp != 32 and cp != 9:
+            ret cp
+        end
+        k += 1
+    end
+    ret 0 - 1
+end
+
+func highlight(code: str, classes: HashMap<str, str>): str:
+    cps := str.CodePoints(code)
+    n := cps.len()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < n:
+        cp := cps.get(i)
+        nx := i + 1 < n ? cps.get(i + 1) : 0 - 1
+        mut j := i + 1
+        if cp == 47 and nx == 47:
+            until j < n and cps.get(j) != 10:
+                j += 1
+            end
+            wrap(b, "c", cps, i, j)
+        else cp == 47 and nx == 42:
+            j = i + 2
+            until j < n and not (cps.get(j) == 42 and j + 1 < n and cps.get(j + 1) == 47):
+                j += 1
+            end
+            j = j + 2 > n ? n : j + 2
+            wrap(b, "c", cps, i, j)
+        else cp == 34:
+            until j < n and cps.get(j) != 34 and cps.get(j) != 10:
+                if cps.get(j) == 92:
+                    j += 1
+                end
+                j += 1
+            end
+            j = j < n ? j + 1 : n
+            wrap(b, "s", cps, i, j)
+        else cp == 96:
+            until j < n and cps.get(j) != 96:
+                j += 1
+            end
+            j = j < n ? j + 1 : n
+            wrap(b, "s", cps, i, j)
+        else str.IsAnyDigit(cp):
+            until j < n and (str.IsAnyDigit(cps.get(j)) or cps.get(j) == 46 or cps.get(j) == 95):
+                j += 1
+            end
+            wrap(b, "n", cps, i, j)
+        else is_ident_cp(cp):
+            until j < n and is_ident_cp(cps.get(j)):
+                j += 1
+            end
+            word := text_of(cps, i, j)
+            if classes.has(word):
+                wrap(b, classes.get(word), cps, i, j)
+            else next_visible(cps, j) == 40:
+                wrap(b, "f", cps, i, j)
+            else:
+                escape_span(b, cps, i, j)
+            end
+        else:
+            escape_cp(b, cp)
+        end
+        i = j
+    end
+    ret str.BufStr(b)
+end
+
+func add_class_words(classes &: HashMap<str, str>, words: str, class: str):
+    each w in str.Fields(words):
+        classes.put(w, class)
+    end
+end
+
+func escape_text(s: str): str:
+    ret template.EscapeHTML(s)
+end
+
+func has_rtl_script(s: str): bool:
+    each cp in str.CodePoints(s):
+        if cp >= 1424 and cp <= 2303:
+            ret true
+        end
+    end
+    ret false
+end
+
+func label(ctx: HashMap<str, str>, key: str, errs &: Vector<str>): str:
+    if not ctx.has(key):
+        report(errs, "missing string '" + key + "'")
+        ret ""
+    end
+    ret ctx.get(key)
+end
+
+func example_block(name: str, src: str, code_html: str, out_html: str, ctx: HashMap<str, str>, errs &: Vector<str>): str:
+    dir_attr := has_rtl_script(src) ? "rtl" : "ltr"
+    id := "ex-" + name
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `<div class="code-window">`)
+    str.BufAppend(b, `<div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>`)
+    str.BufAppend(b, `<span class="file" dir="ltr">` + name + ".salam</span>")
+    str.BufAppend(b, `<button type="button" class="copy-button" data-copy-target="` + id + `" data-copied="` + escape_text(label(ctx, "code.copied", errs)) + `">` + label(ctx, "code.copy", errs) + "</button></div>")
+    str.BufAppend(b, `<pre class="code" dir="` + dir_attr + `"><code id="` + id + `">` + code_html + "</code></pre>")
+    if out_html.len() > 0:
+        str.BufAppend(b, `<div class="code-output" dir="` + dir_attr + `"><span class="label">` + label(ctx, "code.output", errs) + "</span>" + out_html + "</div>")
+    end
+    str.BufAppend(b, "</div>")
+    ret str.BufStr(b)
+end
+
+func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>):
+    mut classes := HashMap {} as HashMap<str, str>
+    add_class_words(classes, ctx.has("code.keywords") ? ctx.get("code.keywords") : "", "k")
+    add_class_words(classes, ctx.has("code.types") ? ctx.get("code.types") : "", "t")
+    add_class_words(classes, ctx.has("code.builtins") ? ctx.get("code.builtins") : "", "b")
+    ex_dir := lang_dir + "/examples"
+    if not dir.Exists(ex_dir):
+        ret
+    end
+    each name in dir.ListFiles(ex_dir):
+        if not str.EndsWith(name, ".salam"):
+            continue
+        end
+        stem := str.TrimSuffix(name, ".salam")
+        src := str.TrimRight(io.ReadFile(ex_dir + "/" + name))
+        out_path := ex_dir + "/" + stem + ".out"
+        mut out_html := ""
+        if file.Exists(out_path):
+            out_html = escape_text(str.TrimRight(io.ReadFile(out_path)))
+        end
+        ctx.put("example." + stem, example_block(stem, src, highlight(src, classes), out_html, ctx, errs))
+    end
+end
+
+func check_tags(name: str, tmpl: str, ctx: HashMap<str, str>, errs &: Vector<str>):
+    mut i := 0
+    until true:
+        lb := str.IndexFrom(tmpl, "{{", i)
+        if lb < 0:
+            break
+        end
+        rb := str.IndexFrom(tmpl, "}}", lb + 2)
+        if rb < 0:
+            report(errs, name + ": unclosed {{")
+            break
+        end
+        mut tag := str.Trim(tmpl.substr(lb + 2, rb - lb - 2))
+        i = rb + 2
+        if tag == "else" or tag == "/if" or str.StartsWith(tag, "!"):
+            continue
+        end
+        if str.StartsWith(tag, "#if "):
+            tag = str.Trim(str.TrimPrefix(tag, "#if "))
+        end
+        if not ctx.has(tag):
+            report(errs, name + ": no value for '" + tag + "'")
+        end
+    end
+end
+
+func render(name: str, tmpl: str, ctx: HashMap<str, str>, errs &: Vector<str>): str:
+    check_tags(name, tmpl, ctx, errs)
+    ret template.Render(tmpl, ctx)
+end
+
+func page_for(slug: str): Page:
+    if slug == "index":
+        ret Page { slug = slug, url = "/", out = "index.html" }
+    end
+    if slug == "404":
+        ret Page { slug = slug, url = "/404.html", out = "404.html" }
+    end
+    ret Page { slug = slug, url = "/" + slug + "/", out = slug + "/index.html" }
+end
+
+func short_hash(path: str): str:
+    ret file.Sha256Hex(path).substr(0, 10)
+end
+
+func write(path: str, data: str, errs &: Vector<str>):
+    if file.WriteText(path, data) < 0:
+        report(errs, "cannot write " + path)
+    end
+end
+
+func build_lang(lang: str, errs &: Vector<str>): int:
+    lang_dir := ROOT + "/content/" + lang
+    out_dir := ROOT + "/dist/" + lang
+    mut ctx := HashMap {} as HashMap<str, str>
+    each name in dir.ListFiles(lang_dir):
+        if str.EndsWith(name, ".txt"):
+            load_strings(lang_dir + "/" + name, ctx, errs)
+        end
+    end
+    load_examples(lang_dir, ctx, errs)
+    mut version := str.Trim(io.ReadFile("VERSION"))
+    if ctx.has("site.digits") and ctx.get("site.digits") == "fa":
+        version = str.ToPersianDigits(version)
+    end
+    ctx.put("site.version", version)
+    ctx.put("asset.css", "/assets/css/site.css?v=" + short_hash(ROOT + "/assets/css/site.css"))
+    ctx.put("asset.js", "/assets/js/site.js?v=" + short_hash(ROOT + "/assets/js/site.js"))
+
+    mut pages := Vector {} as Vector<Page>
+    each name in dir.ListFiles(ROOT + "/templates/pages"):
+        if str.EndsWith(name, ".html"):
+            pages.push(page_for(str.TrimSuffix(name, ".html")))
+        end
+    end
+    each p in pages:
+        ctx.put("active." + p.slug, "")
+    end
+
+    if dir.Exists(out_dir):
+        _rm := dir.RemoveAll(out_dir)
+    end
+    _mk := dir.MkdirAll(out_dir)
+    if dir.Copy(ROOT + "/assets", out_dir + "/assets") != 0:
+        report(errs, "cannot copy assets into " + out_dir)
+    end
+
+    base := io.ReadFile(ROOT + "/templates/base.html")
+    site_url := ctx.has("site.url") ? ctx.get("site.url") : ""
+    mut sitemap := str.NewBuilder()
+    defer str.BufFree(sitemap)
+    str.BufAppend(sitemap, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
+    each p in pages:
+        tpath := ROOT + "/templates/pages/" + p.slug + ".html"
+        ctx.put("active." + p.slug, "true")
+        ctx.put("page.slug", p.slug)
+        ctx.put("page.url", p.url)
+        ctx.put("page.title", ctx.has(p.slug + ".title") ? ctx.get(p.slug + ".title") : "")
+        ctx.put("page.description", ctx.has(p.slug + ".description") ? ctx.get(p.slug + ".description") : "")
+        ctx.put("page.body", render(tpath, io.ReadFile(tpath), ctx, errs))
+        html := render(ROOT + "/templates/base.html", base, ctx, errs)
+        ctx.put("active." + p.slug, "")
+        target := out_dir + "/" + p.out
+        if p.slug != "index" and p.slug != "404":
+            _md := dir.MkdirAll(out_dir + "/" + p.slug)
+            str.BufAppend(sitemap, "  <url><loc>" + site_url + p.url + "</loc></url>\n")
+        else p.slug == "index":
+            str.BufAppend(sitemap, "  <url><loc>" + site_url + "/</loc></url>\n")
+        end
+        write(target, html, errs)
+    end
+    str.BufAppend(sitemap, "</urlset>\n")
+    write(out_dir + "/sitemap.xml", str.BufStr(sitemap), errs)
+    write(out_dir + "/robots.txt", "User-agent: *\nAllow: /\nSitemap: " + site_url + "/sitemap.xml\n", errs)
+    ret pages.len()
+end
+
+func main:
+    args := os.Args()
+    mut langs := Vector {} as Vector<str>
+    mut ai := 1
+    until ai < args.len():
+        langs.push(args.get(ai))
+        ai += 1
+    end
+    if langs.len() == 0:
+        each d in dir.ListDirs(ROOT + "/content"):
+            langs.push(d)
+        end
+    end
+    mut errs := Vector {} as Vector<str>
+    each lang in langs:
+        if not dir.Exists(ROOT + "/content/" + lang):
+            report(errs, "no content for language '" + lang + "'")
+            continue
+        end
+        count := build_lang(lang, errs)
+        println "built", count, "pages for", lang, "->", ROOT + "/dist/" + lang
+    end
+    if errs.len() > 0:
+        each e in errs:
+            printerrln "website: " + e
+        end
+        ret 1
+    end
+    ret 0
+end

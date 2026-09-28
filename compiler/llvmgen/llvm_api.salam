@@ -334,6 +334,9 @@ pub func NativeBatchScript(ll_path: str, opts: Options): str:
     end
     body = str.Replace(body, "true\n", "rem\n")
     body = str.Replace(body, "\n", "\nif errorlevel 1 exit /b 1\n")
+    if opts.output_mode == LV_OUT_JIT and str.EndsWith(body, "if errorlevel 1 exit /b 1\n"):
+        body = str.Substr(body, 0, str.Len(body) - 26) + "exit /b %errorlevel%\n"
+    end
     mut out := "@echo off\n"
     out += body
     ret out
@@ -342,10 +345,15 @@ end
 pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
     mut lberr := ""
     mut brc := 0 - 1
+    mut exit_code := 0
+    is_jit := opts.output_mode == LV_OUT_JIT
     if not (opts.output_mode == LV_OUT_EXEC and nt_triple_is_wasm(opts.target_triple) and str.Len(opts.sysroot) == 0):
         brc = lb.Run(
-            ll_path, opts.opt_level, opts.output_mode, opts.output_file, opts.target_triple, opts.debug_info, opts.verify_module, opts.native_cpu, opts.sysroot, opts.link_libs, opts.link_kinds, opts.lib_paths, lberr
+            ll_path, opts.opt_level, opts.output_mode, opts.output_file, opts.target_triple, opts.debug_info, opts.verify_module, opts.native_cpu, opts.sysroot, opts.link_libs, opts.link_kinds, opts.lib_paths, opts.run_args, exit_code, lberr
         )
+    end
+    if brc == 0 and is_jit:
+        ret exit_code & 255
     end
     if brc >= 0:
         if brc != 0:
@@ -389,6 +397,9 @@ pub func NativeRun(lgr: lg.Logger, ll_path: str, opts: Options): int:
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "llvm toolchain: " + cmd)
     rc := os.Run(cmd)
     _rm := os.Remove(spath)
+    if is_jit:
+        ret rc & 255
+    end
     if rc != 0:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, "LLVM toolchain step failed (exit " + co.I64Toa(rc as i64) + ")"

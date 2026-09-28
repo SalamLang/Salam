@@ -55,7 +55,7 @@ func scan_based_int(L &: Lx, b: co.SrcPos, bad &: bool):
     end
 end
 
-func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool): bool:
+func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool, named &: bool): bool:
     mut is_float := false
     _n1 := scan_digits(L, 0, bad)
     if peek(L) == 46 and at_digit(L, 1) != 0:
@@ -74,10 +74,18 @@ func scan_decimal(L &: Lx, b: co.SrcPos, bad &: bool): bool:
         end
     end
     if is_alpha(peek(L)):
-        if peek(L) == 102:
+        if L.layout_mode:
+            if peek(L) == 102:
+                is_float = true
+            end
+            skip_ident(L)
+        else peek(L) == 102 and not is_ident_cont(peek2(L, 1)):
             is_float = true
+            adv(L)
+        else:
+            named = true
+            skip_ident(L)
         end
-        skip_ident(L)
     end
     ret is_float
 end
@@ -137,10 +145,11 @@ func scan_number(L &: Lx):
         c1 == 120 or c1 == 88 or c1 == 98 or c1 == 66 or c1 == 111 or c1 == 79
     )
     mut is_float := false
+    mut named := false
     if based:
         scan_based_int(L, b, bad)
     else:
-        is_float = scan_decimal(L, b, bad)
+        is_float = scan_decimal(L, b, bad, named)
     end
     if bad:
         error_at(L, b, "misplaced '_' separator in numeric literal")
@@ -158,5 +167,26 @@ func scan_number(L &: Lx):
     if is_float and v.fval * 0.5 == v.fval and v.fval != 0.0:
         error_at(L, b, "floating-point literal is out of range for f64")
     end
+    if not L.layout_mode and (named or at_letter(L)):
+        error_at(L, b, "a name cannot start with a digit; put the digit after a letter, or add a space if you meant a number")
+    end
     emit_val(L, is_float ? tok.TK_FLOAT : tok.TK_INT, b, text, v)
+end
+
+func at_letter(L &: Lx): bool:
+    c := peek(L)
+    if is_alpha(c) or c == 95:
+        ret true
+    end
+    if c < 0xD8 or c > 0xDB:
+        ret false
+    end
+    cp := ((c & 0x1F) << 6) | (peek2(L, 1) & 0x3F)
+    if cp >= 0x0660 and cp <= 0x066D:
+        ret false
+    end
+    if cp >= 0x06F0 and cp <= 0x06F9:
+        ret false
+    end
+    ret (cp >= 0x0620 and cp <= 0x064A) or (cp >= 0x066E and cp <= 0x06D3) or (cp >= 0x06FA and cp <= 0x06FF)
 end

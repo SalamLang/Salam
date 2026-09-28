@@ -334,6 +334,71 @@ func repeat_idx_type(s &: Sema, ty: int, fits: bool, wide: bool): int:
     ret sema_ty(s, wide ? TY_I64 : TY_I32)
 end
 
+func has_effect(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, n)
+    if k == at.AST_CALL or k == at.AST_ASSIGN or k == at.AST_INCDEC or k == at.AST_TRY or k == at.AST_MATCH or k == at.AST_LAMBDA:
+        ret true
+    end
+    nv := at.Get(a, n)
+    if has_effect(a, nv.a) or has_effect(a, nv.b) or has_effect(a, nv.c):
+        ret true
+    end
+    repeat at.ChildCount(a, n) in i:
+        if has_effect(a, at.Child(a, n, i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func print_stmt_line(a &: at.Ast, st: int): int:
+    if st == 0 or at.KindOf(a, st) != at.AST_EXPR_STMT:
+        ret 0
+    end
+    c := at.Get(a, st).a
+    if c == 0 or at.KindOf(a, c) != at.AST_CALL:
+        ret 0
+    end
+    callee := at.Get(a, c).a
+    if callee == 0 or at.KindOf(a, callee) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    nm := at.Get(a, callee).name
+    if str.Equals(nm, "print") or str.Equals(nm, "println") or str.Equals(nm, "printerr") or str.Equals(nm, "printerrln"):
+        ret span_of(a, st).begin.line as int
+    end
+    ret 0
+end
+
+func check_no_effect(s &: Sema, a &: at.Ast, ea: int):
+    if ea == 0:
+        ret
+    end
+    k := at.KindOf(a, ea)
+    if k == at.AST_IDENTIFIER and at.Get(a, ea).func_value:
+        nm := at.Get(a, ea).name
+        serr(
+            s, 108, span_of(a, ea), co.Format2(
+                i18.Tr("routine '%s' is not called: write '%s()' to call it"), co.ArgStr(nm), co.ArgStr(nm)
+            )
+        )
+        ret
+    end
+    if (k == at.AST_LITERAL or k == at.AST_IDENTIFIER) and g_sm_after_print_line > 0 and span_of(a, ea).begin.line as int == g_sm_after_print_line:
+        serr(s, 108, span_of(a, ea), i18.Tr("expected ',' between the values to print"))
+        ret
+    end
+    pure_kind := k == at.AST_LITERAL or k == at.AST_IDENTIFIER or k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_CAST or k == at.AST_THIS
+    if pure_kind and not has_effect(a, ea):
+        serr(
+            s, 108, span_of(a, ea), i18.Tr("this statement has no effect: its value is computed and then thrown away")
+        )
+    end
+end
+
 func check_stmt(s &: Sema, a &: at.Ast, nid: int):
     if nid == 0:
         ret
@@ -893,7 +958,11 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
         ret
     end
     if k == at.AST_EXPR_STMT:
-        _et := sema_check_expr(s, a, at.Get(a, nid).a)
+        ea := at.Get(a, nid).a
+        _et := sema_check_expr(s, a, ea)
+        if s.match_arm_depth == 0:
+            check_no_effect(s, a, ea)
+        end
         ret
     end
     if k == at.AST_INCDEC:
@@ -911,8 +980,10 @@ func sema_check_block(s &: Sema, a &: at.Ast, block: int):
         s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "enter block scope (" + at.ChildCount(a, block) + " stmts)"
     )
     repeat at.ChildCount(a, block) in i:
+        g_sm_after_print_line = i > 0 ? print_stmt_line(a, at.Child(a, block, i - 1)) : 0
         check_stmt(s, a, at.Child(a, block, i))
     end
+    g_sm_after_print_line = 0
     if not s.requal:
         mut j := 0
         until j + 1 < at.ChildCount(a, block):

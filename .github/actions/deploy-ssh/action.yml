@@ -87,14 +87,18 @@ runs:
           esac
         fi
 
-    - name: Prepare SSH
+    - name: Upload files
       shell: bash
       env:
+        SRC: ${{ inputs.source }}
+        TARGET: ${{ inputs.target }}
         HOST: ${{ inputs.host }}
         PORT: ${{ inputs.port }}
+        USER_NAME: ${{ inputs.username }}
         KEY: ${{ inputs.private-key }}
-        PASS: ${{ inputs.password }}
+        SSHPASS: ${{ inputs.password }}
         KNOWN: ${{ inputs.known-hosts }}
+        EXCLUDE: ${{ inputs.exclude }}
       run: |
         set -euo pipefail
         dir="$RUNNER_TEMP/deploy-ssh"
@@ -110,37 +114,23 @@ runs:
           echo "::warning::the server's host key is not pinned; add an SSH_KNOWN_HOSTS secret to stop trusting whatever key the network returns"
           ssh-keygen -lf "$dir/known_hosts" || true
         fi
-        opts="-p $PORT -o UserKnownHostsFile=$dir/known_hosts -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ConnectTimeout=20"
+        ssh_opts=(-p "$PORT" -o "UserKnownHostsFile=$dir/known_hosts" -o StrictHostKeyChecking=yes -o ServerAliveInterval=15 -o ConnectTimeout=20)
+        prefix=()
         if [ -n "$KEY" ]; then
           printf '%s\n' "$KEY" > "$dir/id"
           chmod 600 "$dir/id"
-          opts="$opts -i $dir/id -o IdentitiesOnly=yes -o BatchMode=yes"
-          echo "DEPLOY_SSH_PREFIX=" >> "$GITHUB_ENV"
+          ssh_opts+=(-i "$dir/id" -o IdentitiesOnly=yes -o BatchMode=yes)
         else
           if ! command -v sshpass >/dev/null 2>&1; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq sshpass
           fi
-          echo "DEPLOY_SSH_PREFIX=sshpass -e" >> "$GITHUB_ENV"
-          opts="$opts -o PubkeyAuthentication=no -o PreferredAuthentications=password"
+          prefix=(sshpass -e)
+          ssh_opts+=(-o PubkeyAuthentication=no -o PreferredAuthentications=password)
         fi
-        echo "DEPLOY_SSH_OPTS=$opts" >> "$GITHUB_ENV"
-
-    - name: Upload files
-      shell: bash
-      env:
-        SRC: ${{ inputs.source }}
-        TARGET: ${{ inputs.target }}
-        HOST: ${{ inputs.host }}
-        USER_NAME: ${{ inputs.username }}
-        SSHPASS: ${{ inputs.password }}
-        EXCLUDE: ${{ inputs.exclude }}
-      run: |
-        set -euo pipefail
         remote="$USER_NAME@$HOST"
         dest="${TARGET%/}"
-        # shellcheck disable=SC2086
-        run_ssh() { $DEPLOY_SSH_PREFIX ssh $DEPLOY_SSH_OPTS "$remote" "$@"; }
+        run_ssh() { "${prefix[@]}" ssh "${ssh_opts[@]}" "$remote" "$@"; }
         run_ssh "mkdir -p '$dest'"
         excludes=(--exclude='.well-known/' --exclude='.htaccess' --exclude='.user.ini' --exclude='cgi-bin/')
         tar_excludes=()
@@ -150,16 +140,15 @@ runs:
           tar_excludes+=("--exclude=$pat")
         done
         if run_ssh "command -v rsync" >/dev/null 2>&1; then
-          # shellcheck disable=SC2086
-          $DEPLOY_SSH_PREFIX rsync -rlz --delete --delay-updates \
+          "${prefix[@]}" rsync -rlz --delete --delay-updates \
             --chmod=D755,F644 "${excludes[@]}" \
-            -e "ssh $DEPLOY_SSH_OPTS" \
+            -e "ssh ${ssh_opts[*]}" \
             "${SRC%/}/" "$remote:$dest/"
         else
           echo "::warning::rsync is not installed on the server; copying with tar, so files removed from the build stay on the server"
           tar -C "$SRC" "${tar_excludes[@]}" -czf - . | run_ssh "tar -xzf - -C '$dest'"
         fi
-        echo "deployed $(find "$SRC" -type f | wc -l) files to $HOST:$dest"
+        echo "deployed to $HOST:$dest"
 
     - name: Remove SSH credentials
       if: always()

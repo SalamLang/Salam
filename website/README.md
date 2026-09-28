@@ -1,4 +1,4 @@
-# Website
+# Site
 
 The source of [www.salamlang.ir](https://www.salamlang.ir). The generator is written in
 Salam (`build.salam`) and turns shared templates plus per-language content into

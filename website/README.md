@@ -66,6 +66,20 @@ takes its word lists from `code.keywords`, `code.types` and `code.builtins`.
 Code in Persian script is shown right to left, other code left to right,
 whatever the page direction.
 
+## Lessons
+
+Each file in `content/<lang>/learn/` is one lesson, published at
+`/learn/<name>/` (the file `07-loops.txt` becomes `/learn/loops/`; the number
+only sets the order). A lesson defines `lesson.part`, `lesson.title`,
+`lesson.summary`, `lesson.seo_title`, `lesson.description`, `lesson.lead` and a
+`lesson.body` block. The body is HTML: every `<h2 id="...">` becomes an entry
+in the lesson's contents list, and `{{example.name}}` inserts a checked
+example. The generator builds the `/learn/` overview, the sidebar and the
+previous/next links from the lesson files, grouped by `lesson.part`.
+
+An example without a `.out` file is not run: a `layout:` page is built with
+`salam layout build`, anything else is type-checked with `salam inspect`.
+
 ## Adding English (salamlang.org)
 
 1. Copy `content/fa` to `content/en` and translate the `.txt` files.

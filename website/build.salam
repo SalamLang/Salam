@@ -23,6 +23,15 @@ import template
 
 const ROOT := "website"
 
+struct Lesson:
+    pub path: str = ""
+    pub slug: str = ""
+    pub url: str = ""
+    pub part: str = ""
+    pub title: str = ""
+    pub summary: str = ""
+end
+
 struct Page:
     pub slug: str = ""
     pub url: str = ""
@@ -399,34 +408,237 @@ func faq_jsonld(ctx: HashMap<str, str>): str:
     ret `{"@type":"FAQPage","mainEntity":[` + str.Join(items, ",") + "]}"
 end
 
-func page_jsonld(ctx: HashMap<str, str>, p: Page, version: str): str:
+func site_nodes(ctx: HashMap<str, str>, version: str, graph &: Vector<str>):
     u := ctx_or(ctx, "site.url", "")
     tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
     org := u + "/#organization"
-    site := u + "/#website"
-    lang := u + "/#language"
-    app := u + "/#compiler"
-    page_url := u + p.url
     logo := u + ctx_or(ctx, "site.logo_png", "")
-    image := u + ctx_or(ctx, "site.og_image", "")
-    mut graph := Vector {} as Vector<str>
     graph.push(`{"@type":"Organization","@id":` + json_str(org) + `,"name":` + json_str(ctx_or(ctx, "site.org_name", "")) + `,"url":` + json_str(u + "/") + `,"logo":{"@type":"ImageObject","url":` + json_str(logo) + `},"sameAs":` + json_list(ctx_or(ctx, "site.same_as", "")) + "}")
-    graph.push(`{"@type":"WebSite","@id":` + json_str(site) + `,"name":` + json_str(ctx_or(ctx, "site.name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"url":` + json_str(u + "/") + `,"inLanguage":` + json_str(tag) + `,"publisher":{"@id":` + json_str(org) + "}}")
-    graph.push(`{"@type":"ComputerLanguage","@id":` + json_str(lang) + `,"name":` + json_str(ctx_or(ctx, "site.short_name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"description":` + json_str(ctx_or(ctx, "site.description", "")) + `,"url":` + json_str(u + "/") + `,"sameAs":` + json_list(ctx_or(ctx, "link.github", "")) + "}")
-    graph.push(`{"@type":"SoftwareApplication","@id":` + json_str(app) + `,"name":` + json_str(ctx_or(ctx, "site.app_name", "")) + `,"applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":` + json_str(version) + `,"license":` + json_str(ctx_or(ctx, "link.license", "")) + `,"downloadUrl":` + json_str(ctx_or(ctx, "link.releases", "")) + `,"inLanguage":` + json_str(tag) + `,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"publisher":{"@id":` + json_str(org) + "}}")
-    mut web := `{"@type":"WebPage","@id":` + json_str(page_url + "#webpage") + `,"url":` + json_str(page_url) + `,"name":` + json_str(ctx_or(ctx, p.slug + ".title", "")) + `,"description":` + json_str(ctx_or(ctx, p.slug + ".description", "")) + `,"inLanguage":` + json_str(tag) + `,"isPartOf":{"@id":` + json_str(site) + `},"about":{"@id":` + json_str(lang) + `},"primaryImageOfPage":{"@type":"ImageObject","url":` + json_str(image) + "}"
-    if p.slug != "index":
+    graph.push(`{"@type":"WebSite","@id":` + json_str(u + "/#website") + `,"name":` + json_str(ctx_or(ctx, "site.name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"url":` + json_str(u + "/") + `,"inLanguage":` + json_str(tag) + `,"publisher":{"@id":` + json_str(org) + "}}")
+    graph.push(`{"@type":"ComputerLanguage","@id":` + json_str(u + "/#language") + `,"name":` + json_str(ctx_or(ctx, "site.short_name", "")) + `,"alternateName":` + json_list(ctx_or(ctx, "site.alternate_names", "")) + `,"description":` + json_str(ctx_or(ctx, "site.description", "")) + `,"url":` + json_str(u + "/") + `,"sameAs":` + json_list(ctx_or(ctx, "link.github", "")) + "}")
+    graph.push(`{"@type":"SoftwareApplication","@id":` + json_str(u + "/#compiler") + `,"name":` + json_str(ctx_or(ctx, "site.app_name", "")) + `,"applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS, Windows","softwareVersion":` + json_str(version) + `,"license":` + json_str(ctx_or(ctx, "link.license", "")) + `,"downloadUrl":` + json_str(ctx_or(ctx, "link.releases", "")) + `,"inLanguage":` + json_str(tag) + `,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"publisher":{"@id":` + json_str(org) + "}}")
+end
+
+func webpage_node(ctx: HashMap<str, str>, page_url: str, title: str, desc: str, with_crumb: bool): str:
+    u := ctx_or(ctx, "site.url", "")
+    tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
+    image := u + ctx_or(ctx, "site.og_image", "")
+    mut web := `{"@type":"WebPage","@id":` + json_str(page_url + "#webpage") + `,"url":` + json_str(page_url) + `,"name":` + json_str(title) + `,"description":` + json_str(desc) + `,"inLanguage":` + json_str(tag) + `,"isPartOf":{"@id":` + json_str(u + "/#website") + `},"about":{"@id":` + json_str(u + "/#language") + `},"primaryImageOfPage":{"@type":"ImageObject","url":` + json_str(image) + "}"
+    if with_crumb:
         web += `,"breadcrumb":{"@id":` + json_str(page_url + "#breadcrumb") + "}"
     end
-    graph.push(web + "}")
+    ret web + "}"
+end
+
+func crumb_node(page_url: str, names: Vector<str>, urls: Vector<str>): str:
+    mut items := Vector {} as Vector<str>
+    repeat names.len() in i:
+        items.push(`{"@type":"ListItem","position":` + (i + 1) + `,"name":` + json_str(names.get(i)) + `,"item":` + json_str(urls.get(i)) + "}")
+    end
+    ret `{"@type":"BreadcrumbList","@id":` + json_str(page_url + "#breadcrumb") + `,"itemListElement":[` + str.Join(items, ",") + "]}"
+end
+
+func wrap_graph(graph: Vector<str>): str:
+    ret `<script type="application/ld+json">{"@context":"https://schema.org","@graph":[` + str.Join(graph, ",") + "]}</script>"
+end
+
+func page_jsonld(ctx: HashMap<str, str>, p: Page, version: str): str:
+    u := ctx_or(ctx, "site.url", "")
+    page_url := u + p.url
+    mut graph := Vector {} as Vector<str>
+    site_nodes(ctx, version, graph)
+    graph.push(webpage_node(ctx, page_url, ctx_or(ctx, p.slug + ".title", ""), ctx_or(ctx, p.slug + ".description", ""), p.slug != "index"))
     if p.slug != "index":
-        crumb := ctx_or(ctx, "nav." + p.slug, strip_tags(ctx_or(ctx, p.slug + ".title", "")))
-        graph.push(`{"@type":"BreadcrumbList","@id":` + json_str(page_url + "#breadcrumb") + `,"itemListElement":[{"@type":"ListItem","position":1,"name":` + json_str(ctx_or(ctx, "nav.home", "")) + `,"item":` + json_str(u + "/") + `},{"@type":"ListItem","position":2,"name":` + json_str(crumb) + `,"item":` + json_str(page_url) + "}]}")
+        mut names := Vector {} as Vector<str>
+        mut urls := Vector {} as Vector<str>
+        names.push(ctx_or(ctx, "nav.home", ""))
+        urls.push(u + "/")
+        names.push(ctx_or(ctx, "nav." + p.slug, strip_tags(ctx_or(ctx, p.slug + ".title", ""))))
+        urls.push(page_url)
+        graph.push(crumb_node(page_url, names, urls))
     end
     if p.slug == "index" and faq_count(ctx) > 0:
         graph.push(faq_jsonld(ctx))
     end
-    ret `<script type="application/ld+json">{"@context":"https://schema.org","@graph":[` + str.Join(graph, ",") + "]}</script>"
+    if p.slug == "learn" and ctx.has("learn.itemlist"):
+        graph.push(ctx.get("learn.itemlist"))
+    end
+    ret wrap_graph(graph)
+end
+
+func lesson_jsonld(ctx: HashMap<str, str>, l: Lesson, version: str): str:
+    u := ctx_or(ctx, "site.url", "")
+    tag := ctx_or(ctx, "site.lang_tag", ctx_or(ctx, "site.lang", ""))
+    page_url := u + l.url
+    title := ctx_or(ctx, "lesson.seo_title", l.title)
+    desc := ctx_or(ctx, "lesson.description", "")
+    mut graph := Vector {} as Vector<str>
+    site_nodes(ctx, version, graph)
+    graph.push(webpage_node(ctx, page_url, title, desc, true))
+    graph.push(`{"@type":"TechArticle","@id":` + json_str(page_url + "#article") + `,"headline":` + json_str(l.title) + `,"description":` + json_str(desc) + `,"url":` + json_str(page_url) + `,"inLanguage":` + json_str(tag) + `,"image":` + json_str(u + ctx_or(ctx, "site.og_image", "")) + `,"about":{"@id":` + json_str(u + "/#language") + `},"isPartOf":{"@id":` + json_str(u + "/learn/#webpage") + `},"author":{"@id":` + json_str(u + "/#organization") + `},"publisher":{"@id":` + json_str(u + "/#organization") + "}}")
+    mut names := Vector {} as Vector<str>
+    mut urls := Vector {} as Vector<str>
+    names.push(ctx_or(ctx, "nav.home", ""))
+    urls.push(u + "/")
+    names.push(ctx_or(ctx, "nav.learn", ""))
+    urls.push(u + "/learn/")
+    names.push(l.title)
+    urls.push(page_url)
+    graph.push(crumb_node(page_url, names, urls))
+    ret wrap_graph(graph)
+end
+
+func digits(ctx: HashMap<str, str>, n: int): str:
+    t := "" + n
+    if ctx_or(ctx, "site.digits", "") == "fa":
+        ret str.ToPersianDigits(t)
+    end
+    ret t
+end
+
+func lesson_slug(name: str): str:
+    base := str.TrimSuffix(name, ".txt")
+    dash := base.find("-")
+    if dash > 0:
+        ret base.substr(dash + 1, base.len() - dash - 1)
+    end
+    ret base
+end
+
+func sort_names(names &: Vector<str>):
+    mut i := 1
+    until i < names.len():
+        key := names.get(i)
+        mut j := i
+        until j > 0 and str.Compare(names.get(j - 1), key) > 0:
+            names.set(j, names.get(j - 1))
+            j -= 1
+        end
+        names.set(j, key)
+        i += 1
+    end
+end
+
+func load_lessons(lang_dir: str, errs &: Vector<str>): Vector<Lesson>:
+    mut out := Vector {} as Vector<Lesson>
+    ldir := lang_dir + "/learn"
+    if not dir.Exists(ldir):
+        ret out
+    end
+    mut names := Vector {} as Vector<str>
+    each name in dir.ListFiles(ldir):
+        if str.EndsWith(name, ".txt"):
+            names.push(name)
+        end
+    end
+    sort_names(names)
+    each name in names:
+        mut m := HashMap {} as HashMap<str, str>
+        path := ldir + "/" + name
+        load_strings(path, m, errs)
+        each key in ["lesson.title", "lesson.part", "lesson.summary", "lesson.seo_title", "lesson.description", "lesson.body"]:
+            if not m.has(key):
+                report(errs, path + ": missing '" + key + "'")
+            end
+        end
+        slug := lesson_slug(name)
+        out.push(Lesson { path = path, slug = slug, url = "/learn/" + slug + "/", part = ctx_or(m, "lesson.part", ""), title = ctx_or(m, "lesson.title", ""), summary = ctx_or(m, "lesson.summary", "") })
+    end
+    ret out
+end
+
+func course_index_html(ctx: HashMap<str, str>, lessons: Vector<Lesson>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut part := ""
+    repeat lessons.len() in i:
+        l := lessons.get(i)
+        if l.part != part:
+            if part != "":
+                str.BufAppend(b, "</ol></section>\n")
+            end
+            part = l.part
+            str.BufAppend(b, `<section class="course-part"><h2>` + part + `</h2><ol class="course-list">`)
+        end
+        str.BufAppend(b, `<li><a href="` + l.url + `"><span class="course-num">` + digits(ctx, i + 1) + `</span><span class="course-text"><strong>` + l.title + "</strong><small>" + l.summary + "</small></span></a></li>")
+    end
+    if part != "":
+        str.BufAppend(b, "</ol></section>\n")
+    end
+    ret str.BufStr(b)
+end
+
+func course_itemlist(ctx: HashMap<str, str>, lessons: Vector<Lesson>): str:
+    u := ctx_or(ctx, "site.url", "")
+    mut items := Vector {} as Vector<str>
+    repeat lessons.len() in i:
+        l := lessons.get(i)
+        items.push(`{"@type":"ListItem","position":` + (i + 1) + `,"name":` + json_str(l.title) + `,"url":` + json_str(u + l.url) + "}")
+    end
+    ret `{"@type":"ItemList","@id":` + json_str(u + "/learn/#lessons") + `,"name":` + json_str(ctx_or(ctx, "learn.heading", "")) + `,"itemListElement":[` + str.Join(items, ",") + "]}"
+end
+
+func course_sidebar(ctx: HashMap<str, str>, lessons: Vector<Lesson>, current: int): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `<nav class="course-nav" aria-label="` + ctx_or(ctx, "learn.course_nav", "") + `"><a class="course-nav-home" href="/learn/">` + ctx_or(ctx, "learn.course_nav", "") + "</a>")
+    mut part := ""
+    repeat lessons.len() in i:
+        l := lessons.get(i)
+        if l.part != part:
+            if part != "":
+                str.BufAppend(b, "</ol>")
+            end
+            part = l.part
+            str.BufAppend(b, `<p class="course-nav-part">` + part + "</p><ol>")
+        end
+        cur := i == current ? ` aria-current="page"` : ""
+        str.BufAppend(b, `<li><a href="` + l.url + `"` + cur + `><span class="course-num">` + digits(ctx, i + 1) + "</span>" + l.title + "</a></li>")
+    end
+    if part != "":
+        str.BufAppend(b, "</ol>")
+    end
+    str.BufAppend(b, "</nav>")
+    ret str.BufStr(b)
+end
+
+func body_toc(body: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    mut any := false
+    until true:
+        at_h := str.IndexFrom(body, `<h2 id="`, i)
+        if at_h < 0:
+            break
+        end
+        id_start := at_h + 8
+        id_end := str.IndexFrom(body, `"`, id_start)
+        close_tag := str.IndexFrom(body, ">", id_end)
+        end_h := str.IndexFrom(body, "</h2>", close_tag)
+        if id_end < 0 or close_tag < 0 or end_h < 0:
+            break
+        end
+        str.BufAppend(b, `<li><a href="#` + body.substr(id_start, id_end - id_start) + `">` + body.substr(close_tag + 1, end_h - close_tag - 1) + "</a></li>")
+        any = true
+        i = end_h + 5
+    end
+    if not any:
+        ret ""
+    end
+    ret "<ol>" + str.BufStr(b) + "</ol>"
+end
+
+func lesson_link(ctx: HashMap<str, str>, l: Lesson, key: str, class: str): str:
+    ret `<a class="lesson-step ` + class + `" href="` + l.url + `"><small>` + ctx_or(ctx, key, "") + "</small><strong>" + l.title + "</strong></a>"
+end
+
+func copy_map(src: HashMap<str, str>): HashMap<str, str>:
+    mut m := HashMap {} as HashMap<str, str>
+    each (k, v) in src:
+        m.put(k, v)
+    end
+    ret m
 end
 
 func manifest_json(ctx: HashMap<str, str>): str:
@@ -472,6 +684,10 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     ctx.put("asset.css", "/assets/css/site.css?v=" + short_hash(ROOT + "/assets/css/site.css"))
     ctx.put("asset.js", "/assets/js/site.js?v=" + short_hash(ROOT + "/assets/js/site.js"))
     ctx.put("faq.html", faq_html(ctx))
+    lessons := load_lessons(lang_dir, errs)
+    ctx.put("learn.cards", course_index_html(ctx, lessons))
+    ctx.put("learn.itemlist", course_itemlist(ctx, lessons))
+    ctx.put("learn.count", digits(ctx, lessons.len()))
 
     mut pages := Vector {} as Vector<Page>
     each name in dir.ListFiles(ROOT + "/templates/pages"):
@@ -518,11 +734,38 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         end
         write(target, html, errs)
     end
+    lesson_tmpl := io.ReadFile(ROOT + "/templates/lesson.html")
+    repeat lessons.len() in li:
+        l := lessons.get(li)
+        mut lc := copy_map(ctx)
+        load_strings(l.path, lc, errs)
+        lc.put("active.learn", "true")
+        lc.put("lesson.number", digits(lc, li + 1))
+        lc.put("lesson.count", digits(lc, lessons.len()))
+        lc.put("lesson.sidebar", course_sidebar(lc, lessons, li))
+        body := render(l.path, lc.get("lesson.body"), lc, errs)
+        lc.put("lesson.body_html", body)
+        lc.put("lesson.toc", body_toc(body))
+        lc.put("lesson.prev", li > 0 ? lesson_link(lc, lessons.get(li - 1), "learn.prev_label", "prev") : "")
+        lc.put("lesson.next", li + 1 < lessons.len() ? lesson_link(lc, lessons.get(li + 1), "learn.next_label", "next") : "")
+        lc.put("page.slug", "learn-" + l.slug)
+        lc.put("page.url", l.url)
+        lc.put("page.title", lc.get("lesson.seo_title"))
+        lc.put("page.description", lc.get("lesson.description"))
+        lc.put("page.keywords", ctx_or(lc, "lesson.keywords", ctx_or(lc, "site.keywords", "")))
+        lc.put("page.robots", ctx_or(lc, "site.robots", "index, follow"))
+        lc.put("page.jsonld", lesson_jsonld(lc, l, raw_version))
+        lc.put("page.body", render(ROOT + "/templates/lesson.html", lesson_tmpl, lc, errs))
+        lhtml := render(ROOT + "/templates/base.html", base, lc, errs)
+        _ld := dir.MkdirAll(out_dir + "/learn/" + l.slug)
+        write(out_dir + "/learn/" + l.slug + "/index.html", lhtml, errs)
+        str.BufAppend(sitemap, "  <url><loc>" + site_url + l.url + "</loc></url>\n")
+    end
     str.BufAppend(sitemap, "</urlset>\n")
     write(out_dir + "/sitemap.xml", str.BufStr(sitemap), errs)
     write(out_dir + "/site.webmanifest", manifest_json(ctx), errs)
     write(out_dir + "/robots.txt", "User-agent: *\nAllow: /\nSitemap: " + site_url + "/sitemap.xml\n", errs)
-    ret pages.len()
+    ret pages.len() + lessons.len()
 end
 
 func main:

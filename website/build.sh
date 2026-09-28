@@ -10,8 +10,22 @@ fail=0
 for src in website/content/*/examples/*.salam; do
     want="${src%.salam}.out"
     if [ ! -f "$want" ]; then
-        echo "MISSING $want"
-        fail=1
+        if grep -q "^چیدمان:\|^layout:" "$src"; then
+            tmp=$(mktemp -d)
+            cp "$src" "$tmp/"
+            if (cd "$tmp" && "$SALAM" layout build "$(basename "$src")" --inline --no-color --log-level=error >/dev/null 2>&1); then
+                echo "ok   $src (layout build)"
+            else
+                echo "FAIL $src (layout build)"
+                fail=1
+            fi
+            rm -rf "$tmp"
+        elif "$SALAM" inspect --emit-ast "$src" --no-color --log-level=error >/dev/null 2>&1; then
+            echo "ok   $src (checked, not run)"
+        else
+            echo "FAIL $src (does not compile)"
+            fail=1
+        fi
         continue
     fi
     if ! got=$("$SALAM" run "$src" --no-color --log-level=error 2>&1); then

@@ -101,6 +101,9 @@ each (_, value) in scores:   // iterate for the values alone
 end
 ```
 
+`os.Exit` inside `main` is an error too (`E109`): it skips `main`'s `defer`s.
+Write `ret code` instead; `main`'s return value is the exit code.
+
 ## 4. Bindings
 
 ```salam

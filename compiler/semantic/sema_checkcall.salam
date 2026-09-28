@@ -6,6 +6,7 @@ include co "../sal_core.salam"
 include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
+include lp "../langpack.salam"
 
 func check_enum_static_call(
     s &: Sema, a &: at.Ast, n: int, callee: int, esym: int, argtypes: Vector<int>, sp: co.SrcSpan
@@ -79,6 +80,23 @@ func check_enum_static_call(
         ) + sema_suggest(s, a, sym_at(s, esym).members, m, SUGGEST_ANY, false)
     )
     ret sema_decorate(s, a, n, sema_err_ty(s))
+end
+
+func in_entry_main(s &: Sema, a &: at.Ast): bool:
+    if s.cur_func == 0:
+        ret false
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.owner != 0 or sg.decl == 0:
+        ret false
+    end
+    nm := at.Get(a, sg.decl).name
+    entry := lp.EntryFor(s.lang)
+    if not str.Equals(nm, "main") and not (str.Len(entry) > 0 and str.Equals(nm, entry)):
+        ret false
+    end
+    fs := scope_lookup_local(s, s.global, nm)
+    ret fs != 0 and str.Equals(sym_at(s, fs).pkgname, "main")
 end
 
 func check_call(s &: Sema, a &: at.Ast, n: int): int:
@@ -549,6 +567,11 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                     )
                 )
                 ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
+            if str.Equals(pkv.pkgname, "os") and str.Equals(fname3, "Exit") and in_entry_main(s, a):
+                serr(
+                    s, 109, sp, i18.Tr("do not call os.Exit in main: it skips main's deferred cleanup; write 'ret <code>' instead, main's return value is the exit code")
+                )
             end
             mut fnm := sym_at(s, fn)
             fnm.used = true

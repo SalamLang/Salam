@@ -26,7 +26,13 @@
  * declaration, which is a link-time construct). This is the minimal C-ABI
  * bridge that closes the gap, in the same spirit as lld_link.cc's shim
  * over LLD: one call, no LLVM/LLD headers involved.
+ * The JIT'd main is `i32 main(i32 argc, ptr argv)`, the same shape a
+ * native build links against, so the trampoline hands it the argument
+ * vector queued with salam_orc_args_push (argv[0] first) and returns its
+ * exit code.
  */
+void salam_orc_args_clear(void);
+void salam_orc_args_push(const char *arg);
 int salam_orc_call_main(int64_t addr);
 
 /*

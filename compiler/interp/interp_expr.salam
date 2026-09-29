@@ -8,6 +8,21 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 
+func writeback_receiver(ip &: Interp, a &: at.Ast, env: int, obj: int, recvr: Value):
+    if ip.failed:
+        ret
+    end
+    k := at.KindOf(a, obj)
+    if k != at.AST_INDEX and k != at.AST_MEMBER:
+        ret
+    end
+    mut addr := 0 as i64
+    mut ts := ""
+    if interp_mem_lvalue(ip, a, env, obj, addr, ts) and slot_kind(ip, ts) == SLOT_STRUCT:
+        interp_mem_store(ip, a, addr, ts, recvr)
+    end
+end
+
 func eval_args(
     ip &: Interp, a &: at.Ast, env: int, call: int, out &: Vector<Value>
 ):
@@ -86,7 +101,10 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_null()
         end
         if str.Equals(nm, "input"):
-            ret do_input(ip)
+            gstate_in := gil_release(ip)
+            iv := do_input(ip)
+            gil_acquire(ip, gstate_in)
+            ret iv
         end
         if str.Equals(nm, "lang"):
             ret val_str(ip.lang)
@@ -194,7 +212,27 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         decl := find_extern_decl(ip, nm)
         if decl != 0:
-            ret call_native_extern(ip, a, n, decl, args)
+            ret call_native_extern(ip, a, env, n, decl, args)
+        end
+        if str.Equals(nm, "spawn") and (args.len() == 1 or args.len() == 2):
+            ret interp_spawn(ip, a, n, args)
+        end
+        if str.Equals(nm, "join") and args.len() == 1:
+            interp_join(ip, args.get(0))
+            ret val_null()
+        end
+        if str.Equals(nm, "callhandler") and args.len() == 2:
+            hid := fn_id_of(args.get(0))
+            if hid < 0 or hid >= ip.closures.len():
+                rt_error(ip, a, n, i18.Tr("'callhandler' needs a function"))
+                ret val_null()
+            end
+            hcl := ip.closures.get(hid)
+            mut hargs := Vector {} as Vector<Value>
+            defer hargs.free()
+            hargs.push(args.get(1))
+            _hr := call_func(ip, a, hcl.fn, hcl.env, false, val_null(), hargs)
+            ret val_null()
         end
         rt_error(
             ip, a, n, co.Format1(
@@ -243,9 +281,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             if m != 0:
                 denv := find_def_env(ip, m)
-                ret invoke(
+                mr := invoke(
                     ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr)
+                ret mr
             end
             fi := st_find_field(ip, recvr.id, method)
             if fi >= 0:
@@ -259,9 +299,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             im2 := find_impl_method(ip, a, stv.type_name, method, na2)
             if im2 != 0:
                 denv3 := find_def_env(ip, im2)
-                ret invoke(
+                ir := invoke(
                     ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr)
+                ret ir
             end
             rt_error(
                 ip, a, n, co.Format2(
@@ -571,7 +613,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             if cav.kind == VAL_STR:
                 svp := cav.s as void*
                 addr = svp as i64
-            else cav.kind == VAL_NULL or cav.kind == VAL_INT or cav.kind == VAL_CHAR or cav.kind == VAL_FLOAT or cav.kind == VAL_BOOL or cav.kind == VAL_PTR:
+            else cav.kind == VAL_NULL or cav.kind == VAL_INT or cav.kind == VAL_CHAR or cav.kind == VAL_FLOAT or cav.kind == VAL_BOOL or cav.kind == VAL_PTR or cav.kind == VAL_FUNC:
                 addr = to_int(cav)
             else cav.kind == VAL_ARRAY:
                 addr = arr_materialize(ip, cav.id)
@@ -605,7 +647,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if str.Equals(base, "str"):
             if cav.kind == VAL_PTR:
                 if cav.pa == (0 as i64):
-                    ret val_str("")
+                    ret val_null()
                 end
                 pv := cav.pa as void*
                 ret val_str(pv as str)
@@ -826,7 +868,13 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if str.Equals(node.name, "Vector"):
             ret val_arr(arr_new(ip, 4))
         end
-        sdef := find_struct(ip, node.name)
+        mut sdef := 0
+        if str.Len(node.type_str) != 0 and not str.Equals(node.type_str, node.name):
+            sdef = find_struct(ip, node.type_str)
+        end
+        if sdef == 0:
+            sdef = find_struct(ip, node.name)
+        end
         if sdef == 0:
             rt_error(
                 ip, a, n, co.Format1(

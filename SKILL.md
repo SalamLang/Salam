@@ -1941,6 +1941,8 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - `salam translate fa file.salam` rewrites English source to Persian
   (`translate en` goes back): keywords, `true/false/null/this`, the entry
   function, primitive type names, and the built-in methods of §15.
+  Comparisons come out as words in Persian (`بزرگتر`, `برابر`, ...) and as
+  symbols in English (`>`, `==`, ...); generic `<T>` keeps its brackets.
 
 ## 14. Persian keywords
 

@@ -1,0 +1,81 @@
+---
+name: (internal) Detect relevant changes
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: |
+          Bash glob patterns, one per line, matched against changed file paths
+          (a * also matches /). A leading ! excludes. The last matching line wins.
+        required: true
+        type: string
+    outputs:
+      run:
+        description: "'true' when the caller has work to do"
+        value: ${{ jobs.detect.outputs.run }}
+permissions:
+  contents: read
+jobs:
+  detect:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - name: Match changed files
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          PATHS: ${{ inputs.paths }}
+        run: |
+          set -u
+          finish() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "run=$1 ($2)"
+            exit 0
+          }
+          case "$EVENT" in
+            pull_request | pull_request_target | push) ;;
+            *) finish true "event $EVENT" ;;
+          esac
+          case "${PR_TITLE:-}${HEAD_MSG:-}" in
+            release:*) finish true "release" ;;
+          esac
+          case "${BASE:-}" in
+            '' | 0000000000000000000000000000000000000000) finish true "no base commit" ;;
+          esac
+          if ! files=$(gh api "repos/$REPO/compare/$BASE...$HEAD" --jq '.files[].filename'); then
+            finish true "compare failed"
+          fi
+          count=$(printf '%s\n' "$files" | grep -c . || true)
+          if [ "$count" -eq 0 ] || [ "$count" -ge 300 ]; then
+            finish true "$count changed files"
+          fi
+          while IFS= read -r f; do
+            [ "$f" = VERSION ] && finish true "VERSION changed"
+            hit=false
+            while IFS= read -r pat; do
+              pat="${pat#"${pat%%[![:space:]]*}"}"
+              pat="${pat%"${pat##*[![:space:]]}"}"
+              case "$pat" in
+                '' | '#'*) continue ;;
+                '!'*)
+                  # shellcheck disable=SC2053
+                  [[ $f == ${pat#!} ]] && hit=false
+                  ;;
+                *)
+                  # shellcheck disable=SC2053
+                  [[ $f == $pat ]] && hit=true
+                  ;;
+              esac
+            done <<< "$PATHS"
+            [ "$hit" = true ] && finish true "$f"
+          done <<< "$files"
+          finish false "none of $count changed files match"

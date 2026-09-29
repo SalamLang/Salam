@@ -1,0 +1,202 @@
+package interp
+
+import os
+import sync
+
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lg "../logger.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+
+mut g_vm := Interp {}
+mut g_ast := at.NewAst()
+mut g_threads_on := false
+mut g_gil := sync.Mutex {}
+mut g_task_fn := Vector {} as Vector<Value>
+mut g_task_arg := Vector {} as Vector<Value>
+mut g_task_has_arg := Vector {} as Vector<bool>
+mut g_task_handle := Vector {} as Vector<i64>
+
+struct ThreadState:
+    pub break_levels: int = 0
+    pub depth: int = 0
+    pub match_expr_depth: int = 0
+    pub pending_flow: int = FLOW_NORMAL
+    pub subj: Vector<Value> = Vector {}
+end
+
+func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
+    collect_decls(ip, a, program)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    build_modules(ip, a, sem)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    fixup_generic_envs(ip, a, sem)
+    rehome_synthetic_funcs(ip, a)
+    interp_eval_globals(ip, a, sem, program)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    main_fn := find_func(ip, a, ip.entry, 0 - 1)
+    if main_fn == 0:
+        lg.Log(
+            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("no entry point: define a '%s' function"), co.ArgStr(ip.entry)
+            )
+        )
+        ret 1
+    end
+    mut noargs := Vector {} as Vector<Value>
+    defer noargs.free()
+    rc := call_func(ip, a, main_fn, ip.globals, false, val_null(), noargs)
+    if ip.failed:
+        ret run_fail(ip)
+    end
+    if rc.kind == VAL_INT:
+        ret rc.i as int
+    end
+    ret 0
+end
+
+func ts_save(ip &: Interp): ThreadState:
+    mut t := ThreadState {}
+    t.break_levels = ip.break_levels
+    t.depth = ip.depth
+    t.match_expr_depth = ip.match_expr_depth
+    t.pending_flow = ip.pending_flow
+    repeat ip.match_subj.len() in i:
+        t.subj.push(ip.match_subj.get(i))
+    end
+    ret t
+end
+
+func ts_restore(ip &: Interp, t: ThreadState):
+    ip.break_levels = t.break_levels
+    ip.depth = t.depth
+    ip.match_expr_depth = t.match_expr_depth
+    ip.pending_flow = t.pending_flow
+    ip.match_subj.free()
+    ip.match_subj = t.subj
+end
+
+func gil_release(ip &: Interp): ThreadState:
+    if not g_threads_on:
+        ret ThreadState {}
+    end
+    t := ts_save(ip)
+    _u := sync.Unlock(g_gil)
+    ret t
+end
+
+func gil_acquire(ip &: Interp, t: ThreadState):
+    if not g_threads_on:
+        ret
+    end
+    _l := sync.Lock(g_gil)
+    ts_restore(ip, t)
+end
+
+func gil_yield(ip &: Interp):
+    t := gil_release(ip)
+    sync.SleepMs(0)
+    gil_acquire(ip, t)
+end
+
+if SALAM_OS_WASM:
+    func interp_spawn(ip &: Interp, a &: at.Ast, call: int, _args: Vector<Value>): Value:
+        rt_error(ip, a, call, i18.Tr("'spawn' is not available in the browser"))
+        ret val_null()
+    end
+
+    func interp_join(_ip &: Interp, _h: Value):
+    end
+
+    func interp_pthread_create(ip &: Interp, a &: at.Ast, call: int, _args: Vector<Value>): Value:
+        rt_error(ip, a, call, i18.Tr("'spawn' is not available in the browser"))
+        ret val_null()
+    end
+else:
+    func interp_thread_main(arg: void*):
+        tid := (arg as i64) as int
+        _l := sync.Lock(g_gil)
+        g_vm.break_levels = 0
+        g_vm.depth = 0
+        g_vm.match_expr_depth = 0
+        g_vm.pending_flow = FLOW_NORMAL
+        g_vm.match_subj = Vector {} as Vector<Value>
+        fv := g_task_fn.get(tid)
+        mut targs := Vector {} as Vector<Value>
+        if g_task_has_arg.get(tid):
+            targs.push(g_task_arg.get(tid))
+        end
+        cl := g_vm.closures.get(fv.id)
+        _r := call_func(g_vm, g_ast, cl.fn, cl.env, false, val_null(), targs)
+        targs.free()
+        if g_vm.failed:
+            _rc := run_fail(g_vm)
+            os.Exit(1)
+        end
+        _u := sync.Unlock(g_gil)
+    end
+
+    func interp_spawn(ip &: Interp, a &: at.Ast, call: int, args: Vector<Value>): Value:
+        fv := args.get(0)
+        if fv.kind != VAL_FUNC:
+            rt_error(ip, a, call, i18.Tr("'spawn' needs a function"))
+            ret val_null()
+        end
+        if not g_threads_on:
+            g_gil = sync.NewMutex()
+            _l := sync.Lock(g_gil)
+            g_threads_on = true
+        end
+        tid := g_task_fn.len()
+        g_task_fn.push(fv)
+        g_task_has_arg.push(args.len() > 1)
+        g_task_arg.push(args.len() > 1 ? args.get(1) : val_null())
+        h := spawn(interp_thread_main, (tid as i64) as void*)
+        g_task_handle.push(h)
+        ret val_int((tid + 1) as i64)
+    end
+
+    func interp_pthread_create(ip &: Interp, a &: at.Ast, call: int, args: Vector<Value>): Value:
+        fid := fn_id_of(args.get(2))
+        mut fargs := Vector {} as Vector<Value>
+        defer fargs.free()
+        fargs.push(Value { kind = VAL_FUNC, id = fid })
+        fargs.push(args.get(3))
+        hv := interp_spawn(ip, a, call, fargs)
+        if ip.failed:
+            ret val_int(1 as i64)
+        end
+        tid := (to_int(hv) as int) - 1
+        h := g_task_handle.get(tid)
+        g_task_handle.set(tid, 0 as i64)
+        out := args.get(0)
+        if out.kind == VAL_PTR and out.pa != (0 as i64) and h != (0 as i64):
+            src := h as i64*
+            dst := out.pa as i64*
+            dst[0] = src[0]
+        end
+        ret val_int(0 as i64)
+    end
+
+    func interp_join(ip &: Interp, hv: Value):
+        tid := (to_int(hv) as int) - 1
+        if tid < 0 or tid >= g_task_handle.len():
+            ret
+        end
+        h := g_task_handle.get(tid)
+        if h == (0 as i64):
+            ret
+        end
+        g_task_handle.set(tid, 0 as i64)
+        t := gil_release(ip)
+        join(h)
+        gil_acquire(ip, t)
+    end
+end

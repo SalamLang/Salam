@@ -25,6 +25,8 @@ include i18 "../i18n.salam"
 include lp "../langpack.salam"
 include lx "../lexer/lexer.salam"
 include tok "../token.salam"
+include at "../ast.salam"
+include ps "../parser/parser.salam"
 include src "../source.salam"
 include co "../sal_core.salam"
 
@@ -449,6 +451,48 @@ func compare_symbol(kind: int): str:
     ret ">="
 end
 
+func tr_compare_gaps(pack: int, sfile: src.SourceFile, gaps &: Vector<int>):
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(sfile.path)
+    if lx.Run(quiet, pack, sfile, toks):
+        mut a := at.NewAst()
+        mut prog := 0
+        if ps.Run(quiet, toks, a, prog):
+            n := at.Count(a)
+            mut i := 1
+            until i < n:
+                nd := at.Get(a, i)
+                if nd.kind == at.AST_BINARY and nd.op >= tok.TK_EQ and nd.op <= tok.TK_GE and nd.a != 0 and nd.b != 0:
+                    gaps.push(at.Get(a, nd.a).end_index as int)
+                    gaps.push(at.Get(a, nd.b).begin_index as int)
+                end
+                i += 1
+            end
+        end
+        at.FreeAst(a)
+    end
+    tok.StreamFree(toks)
+end
+
+func tr_in_gap(gaps: Vector<int>, at_index: int): bool:
+    mut i := 0
+    until i + 1 < gaps.len():
+        if at_index >= gaps.get(i) and at_index < gaps.get(i + 1):
+            ret true
+        end
+        i += 2
+    end
+    ret false
+end
+
+func tr_is_space(text: str, i: int, n: int): bool:
+    if i < 0 or i >= n:
+        ret true
+    end
+    c := str.Substr(text, i, 1)
+    ret str.Equals(c, " ") or str.Equals(c, "\t") or str.Equals(c, "\n") or str.Equals(c, "\r")
+end
+
 func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: str, sfile: src.SourceFile, out &: str): bool:
     mut toks := tok.StreamNew(sfile.path)
     ok := lx.RunEx(lgr, srcpack, sfile, true, toks)
@@ -470,6 +514,9 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut alias_rhs := false
     names := tr_declared_names(toks, n)
     defer names.free()
+    mut gaps := Vector {} as Vector<int>
+    defer gaps.free()
+    tr_compare_gaps(srcpack, sfile, gaps)
     mut i := 0
     until i < n:
         t := tok.StreamAt(toks, i)
@@ -501,8 +548,16 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             lexeme = targetpack == lp.LP_FA ? "\xD8\x8C" : ","
         else t.kind >= tok.TK_EQ and t.kind <= tok.TK_GE:
             sym := compare_symbol(t.kind)
-            if not str.Equals(t.lexeme, sym):
-                lexeme = targetpack == lp.LP_FA ? lp.Spelling(targetpack, t.kind) : sym
+            if targetpack != lp.LP_FA:
+                lexeme = sym
+            else not str.Equals(t.lexeme, sym) or tr_in_gap(gaps, bi):
+                lexeme = lp.Spelling(targetpack, t.kind)
+                if not tr_is_space(text, bi - 1, sfile.len):
+                    lexeme = " " + lexeme
+                end
+                if not tr_is_space(text, ei, sfile.len):
+                    lexeme = lexeme + " "
+                end
             end
         else t.kind == tok.TK_IDENT:
             if expect_entry and str.Equals(t.lexeme, src_entry):

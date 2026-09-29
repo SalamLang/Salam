@@ -157,8 +157,10 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the equality words
-`eq neq` for `==`/`!=` (Persian `برابر نابرابر`), the logical words
+`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the comparison
+words `eq neq lt gt lte gte` for `== != < > <= >=` (Persian `برابر نابرابر
+کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر`; `کوچکتر برابر` and `بزرگتر برابر`
+with a space work too), the logical words
 `and or not` (Persian `و یا وارونه`), ternary `cond ? a : b`, compound
 `+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
 right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
@@ -1967,6 +1969,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
 | `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
+| `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
 
 Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`,

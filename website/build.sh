@@ -5,6 +5,10 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 . "$root/tools/bash/lib.sh"
 cd "$root"
 salam_ensure_compiler
+case "$SALAM" in
+    /*) ;;
+    */*) SALAM="$root/$SALAM" ;;
+esac
 
 fail=0
 for src in website/content/*/examples/*.salam; do
@@ -42,9 +46,47 @@ for src in website/content/*/examples/*.salam; do
     fi
     echo "ok   $src"
 done
+for src in website/content/*/std-examples/*/*.salam; do
+    [ -f "$src" ] || continue
+    want="${src%.salam}.out"
+    tmp=$(mktemp -d)
+    if [ ! -f "$want" ]; then
+        if (cd "$tmp" && "$SALAM" inspect --emit-ast "$root/$src" --no-color --log-level=error >/dev/null 2>&1); then
+            echo "ok   $src (checked, not run)"
+        else
+            echo "FAIL $src (does not compile)"
+            fail=1
+        fi
+        rm -rf "$tmp"
+        continue
+    fi
+    if ! got=$(cd "$tmp" && "$SALAM" run "$root/$src" --no-color --log-level=error 2>&1 </dev/null); then
+        echo "FAIL $src"
+        printf '%s\n' "$got"
+        fail=1
+    elif [ "$got" != "$(cat "$want")" ]; then
+        echo "DIFF $src"
+        printf '%s\n' "$got" | diff "$want" - || true
+        fail=1
+    else
+        echo "ok   $src"
+    fi
+    rm -rf "$tmp"
+done
 [ "$fail" -eq 0 ] || {
     echo "website: example output does not match its .out file" >&2
     exit 1
 }
+
+mkdir -p website/dist/api
+for page in website/content/*/std/*.txt; do
+    [ -f "$page" ] || continue
+    pkg=$(sed -n 's/^pkg\.en = //p' "$page")
+    slug=$(printf '%s' "$pkg" | tr '/' '-')
+    if ! "$SALAM" doc "std/$pkg" --output="website/dist/api/$slug.json" >/dev/null; then
+        echo "website: salam doc failed for std/$pkg" >&2
+        exit 1
+    fi
+done
 
 "$SALAM" run website/build.salam --no-color --log-level=error "$@"

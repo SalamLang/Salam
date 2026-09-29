@@ -7,11 +7,13 @@ description: >-
   self-hosting the Salam compiler itself). Use whenever the request mentions
   "Salam" (the programming language / زبان سلام), a `.salam` file, "convert/port/
   rewrite X to Salam", "rewrite the compiler in Salam", the Salam layout DSL, or
-  building with the `salam` compiler. This is the authoritative, up-to-date
-  reference for Salam's current syntax, its 64-package standard library, its
-  strict compiler rules, the layout DSL, and porting low-level C. The tutorial
-  books under `books/` are OUT OF DATE. Trust this file, `std/`, and
-  `tests/en/` instead.
+  building with the `salam` compiler. Covers both English Salam (Part I) and
+  Persian Salam, سلام فارسی (Part II: every keyword, type, method and std
+  package name). This is the authoritative, up-to-date reference for Salam's
+  current syntax, its standard library, its strict compiler rules, the layout
+  DSL, and porting low-level C. The tutorial books under `books/` are OUT OF
+  DATE. Trust this file, `std/`, `tests/`, and the Persian course at
+  https://www.salamlang.ir/learn/ instead.
 ---
 
 # Writing Salam
@@ -20,9 +22,22 @@ Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
 **`layout:`** blocks compile to HTML/CSS/JS. It can also be run with a
 tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
-LLVM. Source can be written in English or Persian; **this guide uses
-English throughout** (every stdlib symbol also has a `@fa` spelling defined
-by `@en "Name" @fa "…"` annotations, though you rarely need them).
+LLVM. Source can be written in English or Persian, with the same grammar and
+the same compiler rules in both.
+
+This skill has two parts:
+
+- **Part I (§1 to §12): English Salam.** The full language, stdlib, rules and
+  porting guide, with English keywords.
+- **Part II (§13 to §19): Persian Salam (سلام فارسی).** Every Persian keyword,
+  type, method and std package name, the Persian-only rules, and complete
+  Persian programs. Read Part I for semantics and Part II for spelling; the
+  semantics never differ.
+
+For Persian there is also a complete 25-lesson human tutorial on the official
+site: **<https://www.salamlang.ir/learn/>** (one page per topic, every example
+compiled and run). There is no English site yet; for English, this file and
+`tests/en/` are the reference.
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -43,6 +58,13 @@ by `@en "Name" @fa "…"` annotations, though you rarely need them).
 10. Tooling & verification
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
+13. **Persian:** source basics (digits, commas, detection, the entry `ریشه`)
+14. **Persian:** keywords
+15. **Persian:** types, built-in methods and std package names
+16. **Persian:** syntax crib (every construct side by side)
+17. **Persian:** rules and traps
+18. **Persian:** complete programs
+19. **Persian:** the tutorial on salamlang.ir (lesson map)
 
 ---
 
@@ -86,13 +108,19 @@ Comments: `//` to end of line, `/* … */` across lines.
 name := "Sara"           // immutable, type inferred (str)
 mut count := 0           // mutable
 count += 3 * 4           // compound assignment; count is now 12
-total: int = 250         // explicit type
-x: auto = 3.14           // inferred (f64)
+total := 250 as i64      // pick a type with `as`
+x := 3.14                // f64
 const MAX := 100         // compile-time constant
 ```
 
 `:=` declares (immutable by default). Reassigning a non-`mut` variable is a
 **compile error**. `mut` makes it reassignable; `const` is a compile-time value.
+**Typed declarations were removed**: `total: int = 250` and `x: auto = 3.14`
+are parse errors ("declarations with a type annotation were removed"). Write
+`name := value` and use `as` when the inferred type is not the one you want.
+`name: Type = value` survives only for struct fields and parameters.
+A `const` name must be a single word (`const MAX VALUE := 3` is a parse
+error); `mut` globals, locals and functions may still have multi-word names.
 
 ### Printing
 
@@ -109,9 +137,8 @@ struct Point:  x: int  y: int  end
 
 p := Point {x = 10, y = 15}
 println p                                   // Point {x = 10, y = 15}
-println [p, Point {x = 20, y = 25}] as Point[2]
-                                            // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
-println ["ali", "reza"] as str[2]           // ["ali", "reza"]
+println [p, Point {x = 20, y = 25}]         // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
+println ["ali", "reza"]                     // ["ali", "reza"]
 ```
 
 Rules worth knowing:
@@ -204,12 +231,12 @@ value (or comma-list, range, or relational test) closed by its own `end`,
 the same shape as a `match` arm:
 
 ```salam
-switch grade:
-    "A", "B":  println "great"          // falls through into "C" below unless it breaks
-    "C":       println "ok"  break      // break exits the switch (only), not an enclosing loop
-    90 to 100: println "numeric A"      // inclusive range label
-    > 60:      println "passing"       // leading relational operator: > >= < <= == !=
-    else:      println "unknown"       // wildcard; must be the LAST case
+switch score:
+    100:       println "perfect"  end         // falls through into the next label unless it breaks
+    90 to 99:  println "A"  break  end        // break exits the switch (only), not an enclosing loop
+    70, 80:    println "round"  break  end    // comma list
+    > 60:      println "passing"  break  end  // leading relational operator: > >= < <= == !=
+    else:      println "low"  end             // wildcard; must be the LAST case
 end
 ```
 
@@ -245,8 +272,13 @@ func greet(name: str, prefix: str = "Hello"):     // default arguments allowed
 end
 ```
 
-- **Pass by value.** Overloading by parameter types is allowed. Definition order
-  doesn't matter.
+- **Pass by value.** Overloading by parameter types is allowed. Functions may
+  call each other in any order, but every `struct`/`enum`/`type`/`interface`/
+  `impl` must come **before the first function** of the file (E087), and
+  constants and globals before both (E084/E085).
+- **Default values are constants or expressions of globals**; a default may not
+  refer to another parameter (`func f(a: int, b: int = a)` is E001 unknown
+  identifier `a`). Use an overload instead.
 - **Multi-word names**: identifiers may contain spaces, e.g.
   `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
   `is weekend(d)`; a field access `dog.pet name`.
@@ -267,8 +299,16 @@ end
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
   `defer v.free()`.
 - **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
-  block form `(): n = n + 1  ret n  end`. Function-typed parameters/vars:
+  block form `(): n = n + 1  ret n  end`. Function-typed parameters:
   `func () int`, `func (int, int) bool`.
+  - **Lambdas capture by value.** Each lambda gets its own copy of the outer
+    variables at creation time: after `mut n := 1  g := () => n  n = 5`,
+    `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
+    own copy (it counts across calls), never the caller's `n`. Share state
+    through a pointer, a heap collection or a `mut` global.
+  - **Never write a return type on a lambda.** `(x: int): int => x` and a
+    block `(x: int): int: ... end` fail to parse; the return type is inferred
+    (`(x: int): ... ret x * 2 end` is fine).
   - **A bare named function decays to its address**, typed `i64` - the slot
     C-style callback registries take (e.g. the `web` router):
     `web.Get(r, "/", home)`. For a `void*` slot, or to cast to a typed C
@@ -335,7 +375,8 @@ An alias of an enum reaches its members too: `type Paint = Color` then
 ```salam
 b := 250 as int as u8
 n := fib(i) as i64
-arr := [1, 2, 3] as int[3]
+arr := [1, 2, 3]                 // already int[3]; `as int[3]` is E093 "useless cast"
+big := [0 as i64, 5, 7]          // the first element picks the element type
 v := Vector {} as Vector<int>
 m := HashMap {} as HashMap<str, int>
 ```
@@ -343,8 +384,8 @@ m := HashMap {} as HashMap<str, int>
 **Arrays (fixed size) & slices:**
 
 ```salam
-a: int[3] = [1, 2, 3]                 // indexed 0..2
-grid: int[2][3] = [[1,2,3],[4,5,6]]   // 2-D
+a := [1, 2, 3]                        // int[3], indexed 0..2
+grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
 mid := a[1: 3]                        // slice (view), writes through to `a`
 whole := a[:]  head := a[: 2]  tail := a[1:]
 func sum(view: int[:]): int: ... end  // int[:] = slice parameter
@@ -1349,8 +1390,10 @@ naive port into compile errors (each corresponds to a case in
    `Option<T>`, or a sentinel value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
-8. **Top-level ordering.** Within a file: `package` first, then all `import`s and `include`s,
-   then top-level `const`/variable/`type` declarations, then functions. A
+8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
+   then all `include`s (an `import` after an `include` is E108), then
+   top-level `const`/variable declarations (E084/E085), then types
+   (`struct enum type interface impl`, E087), then functions. A
    body-less `extern:` block ranks with the imports; an `export:` block ranks
    with the private functions, so it must come before the first `pub func`. A
    top-level `if` must be a **compile-time constant** condition (see §8).
@@ -1373,6 +1416,14 @@ naive port into compile errors (each corresponds to a case in
     must match the declared size.
 13. **Dead code is rejected**: an always-false `if/until/repeat/each`, an
     unreachable `ret`, etc. are errors, not warnings.
+14. **Useless casts are rejected** (E093): `x as T` where `x` already has type
+    `T`, including `[1, 2, 3] as int[3]`.
+15. **`main` returns the exit code.** Write `ret 1` in `main` to fail; calling
+    `os.Exit` inside `main` is E109 because it skips `main`'s `defer`s. `ret`
+    alone (or falling off the end) exits with 0. Other functions may still
+    call `os.Exit`.
+16. **No typed declarations.** `x: T = v` is a parse error; write
+    `x := v as T` (see §2).
 
 When the compiler complains, fix the code; do not try to suppress the check
 (except the deliberate `_` prefix for genuinely-unused names).
@@ -1849,3 +1900,490 @@ runnable, and validate each stage against the current compiler's
 `--emit-tokens` / `--emit-ast` / `--emit-symbol` output and the
 `tests/` suite. The bit-heavy code (lexer, hasher, codegen) ports directly
 now that bitwise operators exist (§12.1).
+
+---
+
+## Part II: Persian Salam (سلام فارسی)
+
+Everything in Part I holds for Persian source: same grammar, same types, same
+strict rules, same stdlib. Only the spelling changes. This part is the full
+spelling reference plus the few things that behave differently because the
+source is Persian. The human-facing version of this material is the Persian
+course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
+
+## 13. Persian source basics
+
+- **Language detection is automatic** from the keywords in the file; pass
+  `--lang=fa` to force it (`salam build app.salam --lang=fa`). Diagnostics are
+  printed in Persian for Persian files.
+- **The entry function is `ریشه`**, not `main`: `روال ریشه:` ... `پایان`.
+  Its return value is the exit code, as in English (`برگشت ۱` to fail).
+- **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
+  number literals, mixed freely with ASCII. The decimal point is always `.`
+  (`۳.۱۴`); the Persian decimal separator `٫` is **not** accepted.
+- **Printed numbers and booleans are ASCII**: `سرچاپ ۱۲` prints `12`, and a
+  `منطقی` prints `true`/`false`. Convert digits yourself if the output must
+  be Persian.
+- **Separators:** the Persian comma `،` works everywhere the ASCII `,` does
+  (arguments, parameters, enum members, array literals, struct literals,
+  match patterns). A new line also separates call arguments and parameters.
+- **Names:** identifiers may be Persian and may contain spaces or ZWNJ
+  (`روال جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
+  same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
+  `ي`/`ك` equal Persian `ی`/`ک`.
+- **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
+  written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
+  unknown identifier.
+- Strings are UTF-8 bytes, as in English: `"سلام".طول()` is `8` (bytes);
+  use `.شمارنویسه()` for the letter count (`4`).
+- `salam translate fa file.salam` rewrites English source to Persian
+  (`translate en` goes back): keywords, `true/false/null/this`, the entry
+  function, primitive type names, and the built-in methods of §15.
+
+## 14. Persian keywords
+
+| English             | Persian             | English                   | Persian                       |
+| ------------------- | ------------------- | ------------------------- | ----------------------------- |
+| `func`              | `روال`              | `ret`                     | `برگشت`                       |
+| `if`                | `اگر`               | `else`                    | `وگرنه`                       |
+| `until` (while)     | `تا`                | `repeat`                  | `تکرار`                       |
+| `to` (in repeat)    | `تا`                | `by` (step)               | `هر`                          |
+| `each`              | `هر`                | `in`                      | `در`                          |
+| `match`             | `همخوان`            | `switch`                  | `ترابرد`                      |
+| `break`             | `بشکن`              | `continue`                | `گذر`                         |
+| `mut`               | `ناپایا`            | `const`                   | `پایا`                        |
+| `type`              | `گونه`              | `struct`                  | `ساختار`                      |
+| `enum`              | `جداشمار`           | `interface`               | `میانجی`                      |
+| `impl`              | `کاربست`            | `on` (impl X on T)        | `بر`                          |
+| `end`               | `پایان`             | `as`                      | `برگردان`                     |
+| `import`            | `واردسازی`          | `include`                 | `فراخوانی`                    |
+| `package`           | `بسته`              | `pub`                     | `همگانی`                      |
+| `true` / `false`    | `درست` / `نادرست`   | `null`                    | `پوچ`                         |
+| `this`              | `این`               | `defer`                   | `دیرکن`                       |
+| `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
+| `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
+| `export`            | `برون‌داد`          | `layout`                  | `چیدمان`                      |
+| `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
+| `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
+| `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
+| `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
+
+Context words (keywords only in their position, usable as names elsewhere):
+`static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`,
+`link` `پیوند`, `framework` `چارچوب`, `use` (struct embedding) `شامل`.
+`mut func` is `ناپایا روال`.
+
+**Stay English in Persian files:** `spawn`, `join`, `dyn`, `sizeof`, `len`,
+the compile-time constants (`SALAM_OS`, `SALAM_OS_WINDOWS`, ...) and C names
+declared in `درون‌داد`.
+
+Two Persian words have two meanings, told apart by position:
+
+- `تا` is `until` at the start of a statement and `to` inside a `تکرار`
+  header: `تا ک < ۳:` loops while `ک < ۳`; `تکرار ۱ تا ۵ در ای:` counts 1..5.
+  Persian `تا` reads naturally as "while", so the §2 polarity trap is less
+  likely, but the rule is the same: the loop runs **while** the condition
+  holds.
+- `هر` is `each` at the start of a statement and `by` (the step) inside a
+  `تکرار` header: `هر ع در لیست:` vs `تکرار ۰ تا ۲۰ هر ۲ در ای:`.
+
+`و` is a reserved word (`and`), so it can never be a name; `و۱` and `وکتور`
+are fine.
+
+## 15. Persian types, built-in methods and std package names
+
+**Types:**
+
+| English          | Persian                      | English          | Persian                  |
+| ---------------- | ---------------------------- | ---------------- | ------------------------ |
+| `void`           | `تهی`                        | `bool`           | `منطقی`                  |
+| `char`           | `نویسه`                      | `uchar`          | `یونیکد`                 |
+| `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
+| `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
+| `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
+| `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
+| `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
+| `Variant<...>`   | `گوناگون<...>`               |                  |                          |
+
+Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
+`اعشار` is **f32**; a float literal such as `۲.۵` is `اعشار۶۴`, so write
+`اعشار۶۴` for ordinary floating point.
+
+**Built-in methods** (on `str`, `Vector`, `HashMap`, `File` and iterators):
+
+| English     | Persian       | English       | Persian         |
+| ----------- | ------------- | ------------- | --------------- |
+| `push`      | `بیفزا`       | `pop`         | `دربیاور`       |
+| `get`       | `بگیر`        | `ref`         | `ارجاع`         |
+| `set`       | `بنشان`       | `len`         | `طول`           |
+| `cap`       | `ظرفیت`       | `free`        | `آزادکن`        |
+| `put`       | `درج`         | `has`         | `دارد`          |
+| `remove`    | `حذف`         | `size`        | `اندازه`        |
+| `iter`      | `پیمایش`      | `has_next`    | `داردبعدی`      |
+| `key`       | `کلید`        | `value`       | `مقدار`         |
+| `next`      | `بعدی`        | `read`        | `خواندن`        |
+| `readline`  | `خواندن خط`   | `write`       | `نوشتن`         |
+| `seek`      | `جابجایی`     | `close`       | `ببند`          |
+| `concat`    | `پیوست`       | `substr`      | `زیررشته`       |
+| `find`      | `بیاب`        | `split`       | `بشکاف`         |
+| `trim`      | `پیراست`      | `to_int`      | `به صحیح`       |
+| `to_float`  | `به اعشار`    | `char_count`  | `شمارنویسه`     |
+| `char_at`   | `نویسه شماره` | `char_substr` | `زیررشته نویسه` |
+| `char_find` | `بیاب نویسه`  |               |                 |
+
+The free builtin `len(x)` keeps its English name (there is no `طول(x)`
+function; use `x.طول()` or `len(x)`).
+
+**Std packages and their functions** have Persian names declared with
+`@fa "..."` next to `@en "..."` in `std/`. Import by the Persian name and call
+through it; never guess a name, read the `@fa` line in `std/<pkg>/`:
+
+```salam
+واردسازی رشته
+واردسازی ریاضی
+واردسازی سیستم عامل
+
+روال ریشه:
+    سرچاپ رشته.طول("سلام")، ریاضی.جذر(۱۶.۰)
+    سرچاپ سیستم عامل.آرگومان‌ها().طول()
+پایان
+```
+
+Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عامل`,
+`io` `ورودی خروجی`, `fmt` `قالب بندی`, `conv` `تبدیل`, `time` `زمان`,
+`rand` `تصادفی`, `sort` `مرتب سازی`, `json` `جیسون`, `regex`
+`عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
+`fs` `سیستم پرونده`, `file` `پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
+`thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
+`log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
+`bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی شبکه`
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+`term` `پایانه`, `cli` `خط فرمان`.
+
+A few function names, to show the style: `str.Len` `طول`, `str.Split`
+`تفکیک کردن`, `str.Join` `بپیوند`, `str.Trim` `پیرایش`, `str.Replace`
+`جایگزینی`, `str.Contains` `شامل است`, `str.ToInt` `تبدیل به عدد`,
+`str.FromInt` `از عدد`, `math.Sqrt` `جذر`, `math.Abs` `قدرمطلق`,
+`math.Pow` `توان`, `math.Min` / `Max` `کمینه` / `بیشینه`, `os.Args`
+`آرگومان ها`. **English std names are rejected in a Persian file**
+(`رشته.Len(...)` is E001 "identifier must be Persian in a Persian file"), so
+look the Persian name up instead of guessing it.
+
+Give your own `pub` API both spellings the same way:
+
+```salam
+@en "Twice"
+@fa "دوبار"
+همگانی روال دوبار(ع: صحیح): صحیح:
+    برگشت ع * ۲
+پایان
+```
+
+## 16. Persian syntax crib
+
+```salam
+پایا بیشینه := ۱۰                        // const (one word)
+ناپایا شمار := ۰                         // mut global
+
+ساختار نقطه:
+    همگانی ایکس: صحیح = ۰
+    همگانی ایگرگ: صحیح = ۰
+    همگانی روال جمع(): صحیح:
+        برگشت این.ایکس + این.ایگرگ
+    پایان
+پایان
+
+جداشمار رنگ: قرمز، سبز، آبی پایان
+
+روال دوبرابر(ن: صحیح): صحیح:
+    برگشت ن * ۲
+پایان
+
+روال ریشه:
+    نام := "سارا"                        // immutable
+    ناپایا ک := ۰                        // mutable
+    ع := ۲.۵ برگردان اعشار۶۴             // cast with برگردان
+    اگر ک > ۱۰ و ک < ۲۰:
+        سرچاپ "بین"
+    وگرنه ک == ۰:                        // else-if
+        سرچاپ "صفر"
+    وگرنه:
+        سرچاپ "دیگر"
+    پایان
+    تا ک < ۳:                            // while
+        ک += ۱
+    پایان
+    تکرار ۳:                             // three times
+        چاپ "*"
+    پایان
+    تکرار ۱ تا ۵ در ای:                  // 1..5 inclusive
+        چاپ ای، ""
+    پایان
+    تکرار ۰ تا ۲۰ هر ۵ در ای:            // with a step
+        چاپ ای، ""
+    پایان
+    آ := [۱۰، ۲۰]
+    هر (ش، م) در آ:                      // index and value
+        سرچاپ ش، م
+    پایان
+    ن := نقطه { ایکس = ۳، ایگرگ = ۴ }
+    سرچاپ ن.جمع()، دوبرابر(ن.ایکس)
+    متن := همخوان رنگ.سبز:               // match: bare member names
+        قرمز، آبی => "گرم یا سرد"
+        سبز => "سبز"
+    پایان
+    ترابرد ک:                            // switch: each label has its own پایان
+        ۳:
+            سرچاپ "سه"
+            بشکن
+        پایان
+        وگرنه:
+            سرچاپ "?"
+        پایان
+    پایان
+    سرچاپ نام، ع، متن
+پایان
+```
+
+More forms, each checked with the current compiler:
+
+```salam
+// collections
+ناپایا و۱ := وکتور {} برگردان وکتور<صحیح>
+دیرکن و۱.آزادکن()
+و۱.بیفزا(۵)
+سرچاپ و۱.بگیر(۰)، و۱.طول()
+ناپایا نگ := نگاشت {} برگردان نگاشت<رشته، صحیح>
+دیرکن نگ.آزادکن()
+نگ.درج("الف"، ۱)
+هر (کلید، مقدار) در نگ:
+    سرچاپ کلید، مقدار
+پایان
+
+// lambdas: no return type, captured by value
+دوبرابر := (ع: صحیح) => ع * ۲
+رده := (نمره: صحیح):
+    برگشت نمره >= ۱۰ ? "قبول" : "مردود"
+پایان
+روال به‌کاربردن(ر: روال (صحیح) صحیح، مقدار: صحیح): صحیح:
+    برگشت ر(مقدار)
+پایان
+
+// guards use اگر
+جداشمار شکل:
+    دایره(شعاع: اعشار۶۴)
+    مستطیل(پهنا: اعشار۶۴، بلندی: اعشار۶۴)
+پایان
+روال مساحت(ش: شکل): اعشار۶۴:
+    برگشت همخوان ش:
+        دایره(ر) => ۳.۱۴ * ر * ر
+        مستطیل(پ، ب) اگر پ == ب => پ * پ
+        مستطیل(پ، ب) => پ * ب
+    پایان
+پایان
+
+// switch on true replaces an if chain
+ترابرد درست:
+    ک < ۰:
+        سرچاپ "منفی"
+        بشکن
+    پایان
+    ک == ۳ یا ک == ۴:
+        سرچاپ "سه یا چهار"
+        بشکن
+    پایان
+پایان
+
+// interfaces, impl on a built-in type, generics, dyn
+میانجی رتبه‌دار:
+    روال رتبه(): صحیح
+پایان
+کاربست رتبه‌دار بر رشته:
+    روال رتبه(): صحیح: برگشت len(این) پایان
+پایان
+روال بالاتر<ت: رتبه‌دار>(الف: ت، ب: ت): صحیح:
+    اگر الف.رتبه() > ب.رتبه():
+        برگشت الف.رتبه()
+    پایان
+    برگشت ب.رتبه()
+پایان
+روال توصیف(ش: dyn شکل‌دار):              // dyn stays English
+    سرچاپ ش.نام()
+پایان
+
+// static members, mut methods, embedding
+ساختار شمارنده:
+    ن: صحیح = ۰
+    همگانی پایا سقف := ۱۰۰
+    همگانی ایستا روال تازه(آغاز: صحیح): شمارنده:
+        برگشت شمارنده { ن = آغاز }
+    پایان
+    همگانی ناپایا روال بیفزای():
+        این.ن += ۱
+    پایان
+پایان
+ساختار سگ:
+    همگانی شامل جانور                     // embeds جانور's fields and methods
+    همگانی نژاد: رشته = ""
+پایان
+
+// Variant
+روال شرح(م: گوناگون<صحیح، رشته>): رشته:
+    برگشت همخوان م:
+        صحیح ع => "عدد " + ع
+        رشته ر => "متن " + ر
+    پایان
+پایان
+
+// reference parameter, defer, pointers
+روال واریز(ح &: حساب، مبلغ: صحیح):
+    ح.موجودی += مبلغ
+پایان
+دیرکن سرچاپ "پاکسازی"
+پ := پوچ برگردان صحیح*
+
+// packages: بسته in the library file, فراخوانی in the user
+بسته ابزار
+همگانی روال چهاربرابر(ع: صحیح): صحیح:
+    برگشت ع * ۴
+پایان
+// ...and in the program:
+فراخوانی ابزار "ابزار.salam"
+سرچاپ ابزار.چهاربرابر(۵)
+
+// C functions and compile-time branches
+درون‌داد:
+    روال sqrt(x: اعشار۶۴): اعشار۶۴
+پایان
+پیوند پویا "sqlite3"
+اگر SALAM_OS_WINDOWS:
+    پایا جداکننده := "\\"
+وگرنه:
+    پایا جداکننده := "/"
+پایان
+
+// threads: spawn and join stay English
+ر := spawn(کارگر)
+join(ر)
+```
+
+## 17. Rules and traps specific to Persian
+
+All of §6 applies. In addition:
+
+1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
+2. **Enum patterns in `همخوان` are bare member names** (`سبز =>`), not
+   `رنگ.سبز =>`; the qualified form is a parse error in a pattern.
+3. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
+   fallthrough continues into the next label unless you `بشکن`.
+4. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
+5. **No `٫` decimal separator**; write `۱۲.۵`.
+6. **Output digits are ASCII** and booleans print as `true`/`false`.
+7. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
+   (`۰.۱ برگردان اعشار` prints `0.10000000149011612`). A float literal is
+   already `اعشار۶۴`: casting a literal is allowed, but casting a variable
+   to the type it already has is a useless cast (E093).
+8. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
+   write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
+9. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
+   `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
+   `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+10. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
+    `حدبالا` or `حد_بالا`.
+11. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
+    The English name is not a fallback in a Persian file, and an invented
+    translation will not resolve.
+12. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
+    same as in English, so search `tests/en/errors/` by code.
+
+## 18. Complete Persian programs
+
+A command-line program with a struct, a vector, a map and a match:
+
+```salam
+واردسازی رشته
+
+جداشمار سطح: کم، متوسط، زیاد پایان
+
+ساختار دانشجو:
+    همگانی نام: رشته = ""
+    همگانی نمره: صحیح = ۰
+پایان
+
+روال سطح از(نمره: صحیح): سطح:
+    اگر نمره >= ۱۷:
+        برگشت سطح.زیاد
+    وگرنه نمره >= ۱۲:
+        برگشت سطح.متوسط
+    پایان
+    برگشت سطح.کم
+پایان
+
+روال برچسب(س: سطح): رشته:
+    برگشت همخوان س:
+        کم => "ضعیف"
+        متوسط => "خوب"
+        زیاد => "عالی"
+    پایان
+پایان
+
+روال ریشه:
+    ناپایا کلاس := وکتور {} برگردان وکتور<دانشجو>
+    دیرکن کلاس.آزادکن()
+    کلاس.بیفزا(دانشجو { نام = "سارا"، نمره = ۱۹ })
+    کلاس.بیفزا(دانشجو { نام = "علی"، نمره = ۱۳ })
+    کلاس.بیفزا(دانشجو { نام = "رضا"، نمره = ۹ })
+
+    ناپایا شمار := نگاشت {} برگردان نگاشت<رشته، صحیح>
+    دیرکن شمار.آزادکن()
+    ناپایا جمع := ۰
+    هر د در کلاس:
+        ب := برچسب(سطح از(د.نمره))
+        سرچاپ د.نام، د.نمره، ب
+        جمع += د.نمره
+        قبلی := شمار.دارد(ب) ? شمار.بگیر(ب) : ۰
+        شمار.درج(ب، قبلی + ۱)
+    پایان
+    سرچاپ "میانگین:"، جمع / کلاس.طول()
+    سرچاپ "عالی‌ها:"، شمار.بگیر("عالی")
+    سرچاپ رشته.طول("پایان")
+پایان
+```
+
+The same program in English is a direct keyword-for-keyword translation;
+`salam translate en` produces it.
+
+## 19. The Persian tutorial on salamlang.ir
+
+The course at <https://www.salamlang.ir/learn/> teaches the whole language in
+Persian, one lesson per page, and every example on it is compiled and run
+when the site is built. Point Persian-speaking users to the matching lesson:
+
+| Topic                                            | Lesson                                         |
+| ------------------------------------------------ | ---------------------------------------------- |
+| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>        |
+| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>    |
+| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>        |
+| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>    |
+| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>      |
+| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>   |
+| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>        |
+| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>        |
+| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>    |
+| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>      |
+| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>        |
+| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>       |
+| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>  |
+| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>      |
+| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>        |
+| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
+| Generics, `میانجی`, `کاربست`, `dyn`              | <https://www.salamlang.ir/learn/generics/>     |
+| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
+| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
+| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
+| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |
+| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
+| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
+| Layout DSL `چیدمان`                              | <https://www.salamlang.ir/learn/layout/>       |
+| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

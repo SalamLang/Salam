@@ -971,9 +971,62 @@ func std_item(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, idx: int, words:
     ret str.BufStr(b)
 end
 
+func std_groups(ctx: HashMap<str, str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each (k, _) in ctx:
+        if str.StartsWith(k, "group.") and not str.EndsWith(k, ".title"):
+            out.push(str.TrimPrefix(k, "group."))
+        end
+    end
+    ret out
+end
+
+func std_group_of(groups: Vector<str>, d: ApiDecl): str:
+    mut best := ""
+    if d.k != "const":
+        ret best
+    end
+    each g in groups:
+        if str.StartsWith(d.n, g) and g.len() > best.len():
+            best = g
+        end
+    end
+    ret best
+end
+
+func std_group_card(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, group: Vector<str>, prefix: str, examples: HashMap<str, str>, shown &: HashMap<str, str>, errs &: Vector<str>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    key := "group." + prefix
+    str.BufAppend(b, `<article class="api-item">`)
+    str.BufAppend(b, std_heading("h3", prefix, ctx_or(ctx, key + ".title", prefix), prefix + "…"))
+    str.BufAppend(b, `<div class="api-doc">` + ctx_or(ctx, key, "") + "</div>")
+    mut rows := ""
+    repeat api.decls.len() in i:
+        d := api.decls.get(i)
+        if d.par >= 0 or not d.p or d.k != "const" or std_group_of(group, d) != prefix:
+            continue
+        end
+        mut fa := alias_of(d, "fa")
+        if fa.len() == 0:
+            report(errs, pkg.path + ": '" + d.n + "' has no @fa name in std")
+            fa = d.n
+        end
+        eqpos := d.s.find("=")
+        value := eqpos > 0 ? str.Trim(d.s.substr(eqpos + 1, d.s.len() - eqpos - 1)) : ""
+        rows += `<tr id="` + d.n + `"><td>` + fa + `</td><td><code dir="ltr">` + d.n + `</code></td><td><code dir="ltr">` + escape_text(value) + "</code></td></tr>"
+    end
+    str.BufAppend(b, `<div class="table-wrap"><table class="api-members"><thead><tr><th>` + ctx_or(ctx, "stdref.col_name", "") + "</th><th>" + ctx_or(ctx, "stdref.col_en", "") + "</th><th>" + ctx_or(ctx, "stdref.col_value", "") + "</th></tr></thead><tbody>" + rows + "</tbody></table></div>")
+    str.BufAppend(b, std_example(ctx, pkg, key, prefix, examples, shown, errs))
+    str.BufAppend(b, "</article>")
+    ret str.BufStr(b)
+end
+
 func std_api_html(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, examples: HashMap<str, str>, errs &: Vector<str>): str:
     words := sig_words(ctx, api)
     classes := code_classes(ctx)
+    groups := std_groups(ctx)
+    mut done_groups := HashMap {} as HashMap<str, str>
     mut shown := HashMap {} as HashMap<str, str>
     mut b := str.NewBuilder()
     defer str.BufFree(b)
@@ -986,9 +1039,18 @@ func std_api_html(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, examples: Ha
             if d.par >= 0 or not d.p or str.StartsWith(d.n, "_") or std_kind_group(d) != g:
                 continue
             end
+            gp := std_group_of(groups, d)
+            if gp.len() > 0 and done_groups.has(gp):
+                continue
+            end
             if not any:
                 str.BufAppend(b, `<h2 id="` + ids[g] + `">` + ctx_or(ctx, heads[g], "") + "</h2>\n")
                 any = true
+            end
+            if gp.len() > 0:
+                done_groups.put(gp, "")
+                str.BufAppend(b, std_group_card(ctx, pkg, api, groups, gp, examples, shown, errs) + "\n")
+                continue
             end
             str.BufAppend(b, std_item(ctx, pkg, api, i, words, classes, examples, shown, errs) + "\n")
         end

@@ -62,6 +62,10 @@ if [ "${1:-}" = "--worker" ]; then
         "$SALAM_ABS" format "$jobdir/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
         "$SALAM_ABS" format "$jobdir/$name.salam" --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
         idem=$?
+        golden=0
+        if [ -f "${fabs%.salam}.golden" ] && ! cmp -s "$jobdir/$name.salam" "${fabs%.salam}.golden"; then
+            golden=1
+        fi
         exe="$jobdir/$name.exe"
         btry=1
         while [ ! -x "$exe" ] && [ "$btry" -le 2 ]; do
@@ -87,11 +91,11 @@ if [ "${1:-}" = "--worker" ]; then
         gottab=$([ -x "$texe" ] && "$texe" 2>&1 | tr -d '\r')
 
         want=$(tr -d '\r' <"$expabs")
-        if [ "$idem" -eq 0 ] && [ "$got" = "$want" ] &&
+        if [ "$idem" -eq 0 ] && [ "$golden" -eq 0 ] && [ "$got" = "$want" ] &&
             [ "$tabidem" -eq 0 ] && [ "$hastab" -eq 0 ] && [ "$gottab" = "$want" ]; then
             echo "PASS $label"
         else
-            echo "FAIL $label (idempotent=$idem tab-idem=$tabidem has-tab=$hastab)"
+            echo "FAIL $label (idempotent=$idem golden=$golden tab-idem=$tabidem has-tab=$hastab)"
             echo "  got: $(printf '%s' "$got" | tr '\n' '|')"
             echo "  tab: $(printf '%s' "$gottab" | tr '\n' '|')"
         fi

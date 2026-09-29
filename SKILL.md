@@ -1974,11 +1974,12 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
 
 Context words (keywords only in their position, usable as names elsewhere):
-`static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`,
-`link` `پیوند`, `framework` `چارچوب`, `use` (struct embedding) `شامل`.
+`static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`
+(`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
+`framework` `چارچوب`, `use` (struct embedding) `شامل`.
 `mut func` is `ناپایا روال`.
 
-**Stay English in Persian files:** `spawn`, `join`, `dyn`, `sizeof`, `len`,
+**Stay English in Persian files:** `spawn`, `join`, `sizeof`, `len`,
 the compile-time constants (`SALAM_OS`, `SALAM_OS_WINDOWS`, ...) and C names
 declared in `درون‌داد`.
 
@@ -2200,7 +2201,7 @@ More forms, each checked with the current compiler:
     پایان
 پایان
 
-// interfaces, impl on a built-in type, generics, dyn
+// interfaces, impl on a built-in type, generics, پویا (dyn)
 میانجی رتبه‌دار:
     روال رتبه(): صحیح
 پایان
@@ -2213,7 +2214,7 @@ More forms, each checked with the current compiler:
     پایان
     برگشت ب.رتبه()
 پایان
-روال توصیف(ش: dyn شکل‌دار):              // dyn stays English
+روال توصیف(ش: پویا شکل‌دار):             // پویا is dyn
     سرچاپ ش.نام()
 پایان
 
@@ -2383,7 +2384,7 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>      |
 | Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>        |
 | `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
-| Generics, `میانجی`, `کاربست`, `dyn`              | <https://www.salamlang.ir/learn/generics/>     |
+| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
 | `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
 | Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
 | Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |

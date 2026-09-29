@@ -8,6 +8,21 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 
+func writeback_receiver(ip &: Interp, a &: at.Ast, env: int, obj: int, recvr: Value):
+    if ip.failed:
+        ret
+    end
+    k := at.KindOf(a, obj)
+    if k != at.AST_INDEX and k != at.AST_MEMBER:
+        ret
+    end
+    mut addr := 0 as i64
+    mut ts := ""
+    if interp_mem_lvalue(ip, a, env, obj, addr, ts) and slot_kind(ip, ts) == SLOT_STRUCT:
+        interp_mem_store(ip, a, addr, ts, recvr)
+    end
+end
+
 func eval_args(
     ip &: Interp, a &: at.Ast, env: int, call: int, out &: Vector<Value>
 ):
@@ -86,7 +101,10 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_null()
         end
         if str.Equals(nm, "input"):
-            ret do_input(ip)
+            gstate_in := gil_release(ip)
+            iv := do_input(ip)
+            gil_acquire(ip, gstate_in)
+            ret iv
         end
         if str.Equals(nm, "lang"):
             ret val_str(ip.lang)
@@ -263,9 +281,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             if m != 0:
                 denv := find_def_env(ip, m)
-                ret invoke(
+                mr := invoke(
                     ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr)
+                ret mr
             end
             fi := st_find_field(ip, recvr.id, method)
             if fi >= 0:
@@ -279,9 +299,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             im2 := find_impl_method(ip, a, stv.type_name, method, na2)
             if im2 != 0:
                 denv3 := find_def_env(ip, im2)
-                ret invoke(
+                ir := invoke(
                     ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr)
+                ret ir
             end
             rt_error(
                 ip, a, n, co.Format2(

@@ -85,7 +85,12 @@ for page in website/content/*/std/*.txt; do
     [ -f "$page" ] || continue
     pkg=$(sed -n 's/^pkg\.en = //p' "$page")
     slug=$(printf '%s' "$pkg" | tr '/' '-')
-    if ! "$SALAM" doc "std/$pkg" --output="website/dist/api/$slug.json" >/dev/null; then
+    src="std/$pkg"
+    if grep -q '^pkg\.flat = true' "$page"; then
+        src=$(mktemp -d)
+        cp "std/$pkg"/*.salam "$src/"
+    fi
+    if ! "$SALAM" doc "$src" --output="website/dist/api/$slug.json" >/dev/null; then
         echo "website: salam doc failed for std/$pkg" >&2
         exit 1
     fi

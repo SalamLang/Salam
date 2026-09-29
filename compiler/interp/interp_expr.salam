@@ -39,7 +39,7 @@ func struct_home_env(ip &: Interp, a &: at.Ast, sdef: int): int:
     if e != 0:
         ret e
     end
-    hp := at.Get(a, sdef).home_pkg
+    hp := at.At(a, sdef).home_pkg
     if str.Len(hp) > 0:
         hm := find_module(ip, hp)
         if hm != 0:
@@ -75,53 +75,61 @@ func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
     ret val_arr(out)
 end
 
+func mark_plain_call(ip &: Interp, n: int):
+    until ip.plain_calls.len() <= n:
+        ip.plain_calls.push(false)
+    end
+    ip.plain_calls.set(n, true)
+end
+
 func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
-    node := at.Get(a, n)
+    node := at.At(a, n)
     callee := node.a
-    cn := at.Get(a, callee)
+    cn := at.At(a, callee)
     mut args := Vector {} as Vector<Value>
     defer args.free()
 
     if cn.kind == at.AST_IDENTIFIER:
         nm := cn.name
-        if str.Equals(nm, "print"):
+        plain := n < ip.plain_calls.len() and ip.plain_calls.get(n)
+        if not plain and str.Equals(nm, "print"):
             do_print(ip, a, env, n, false, false)
             ret val_null()
         end
-        if str.Equals(nm, "println"):
+        if not plain and str.Equals(nm, "println"):
             do_print(ip, a, env, n, true, false)
             ret val_null()
         end
-        if str.Equals(nm, "printerr"):
+        if not plain and str.Equals(nm, "printerr"):
             do_print(ip, a, env, n, false, true)
             ret val_null()
         end
-        if str.Equals(nm, "printerrln"):
+        if not plain and str.Equals(nm, "printerrln"):
             do_print(ip, a, env, n, true, true)
             ret val_null()
         end
-        if str.Equals(nm, "input"):
+        if not plain and str.Equals(nm, "input"):
             gstate_in := gil_release(ip)
             iv := do_input(ip)
             gil_acquire(ip, gstate_in)
             ret iv
         end
-        if str.Equals(nm, "lang"):
+        if not plain and str.Equals(nm, "lang"):
             ret val_str(ip.lang)
         end
-        if str.Equals(nm, "args") and at.ChildCount(a, n) == 0:
+        if not plain and str.Equals(nm, "args") and at.ChildCount(a, n) == 0:
             ret val_arr(arr_new(ip, 0))
         end
-        if str.Equals(nm, "sizeof") and at.ChildCount(a, n) == 1:
+        if not plain and str.Equals(nm, "sizeof") and at.ChildCount(a, n) == 1:
             op := at.Child(a, n, 0)
-            ret val_int(interp_sizeof_typename(ip, a, at.Get(a, op).type_str))
+            ret val_int(interp_sizeof_typename(ip, a, at.At(a, op).type_str))
         end
         eval_args(ip, a, env, n, args)
         if ip.failed:
             ret val_null()
         end
         na := args.len()
-        if str.Equals(nm, "len") and na == 1:
+        if not plain and str.Equals(nm, "len") and na == 1:
             la := args.get(0)
             if la.kind == VAL_ARRAY:
                 ret val_int(arr_len(ip, la.id) as i64)
@@ -136,11 +144,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             rt_error(ip, a, n, i18.Tr("len() expects an array, string, or map"))
             ret val_null()
         end
-        if str.Equals(nm, "char_code") and na == 1:
+        if not plain and str.Equals(nm, "char_code") and na == 1:
             cs := to_str(ip, args.get(0))
             ret val_int((str.Len(cs) > 0 ? byte_at(cs, 0) : 0) as i64)
         end
-        if str.Equals(nm, "char_from_code") and na == 1:
+        if not plain and str.Equals(nm, "char_from_code") and na == 1:
             cb := (to_int(args.get(0)) & (0xFF as i64)) as int
             if cb == 0:
                 ret val_str("")
@@ -151,17 +159,17 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             str.BufFree(cbb)
             ret val_str(cr)
         end
-        if str.Equals(nm, "strcmp") and na == 2:
+        if not plain and str.Equals(nm, "strcmp") and na == 2:
             ret val_int(
                 str.Compare(
                     to_str(ip, args.get(0)), to_str(ip, args.get(1))
                 ) as i64
             )
         end
-        if str.Equals(nm, "listdir") and na == 1:
+        if not plain and str.Equals(nm, "listdir") and na == 1:
             ret do_listdir(ip, a, n, args.get(0))
         end
-        if str.Equals(nm, "hash") and na == 1:
+        if not plain and str.Equals(nm, "hash") and na == 1:
             ha := args.get(0)
             hname := ha.kind == VAL_STR ? "salam_str_hash" : "salam_hash_int"
             hefi := find_extern_fn(ip, hname)
@@ -177,6 +185,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             hargs.free()
             ret val_int(to_int(hr) & (0x7FFFFFFFFFFFFFFF as i64))
         end
+        mark_plain_call(ip, n)
 
         mut bw := 0
         bslot := env_find(ip, env, nm, bw)
@@ -189,7 +198,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         fn := find_func(ip, a, nm, na)
         if fn != 0:
-            hp := at.Get(a, fn).home_pkg
+            hp := at.At(a, fn).home_pkg
             mut henv := ip.globals
             if str.Len(hp) > 0:
                 hm := find_module(ip, hp)
@@ -245,7 +254,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if cn.kind == at.AST_MEMBER:
         obj := cn.a
         method := cn.name
-        onn := at.Get(a, obj)
+        onn := at.At(a, obj)
         if onn.kind == at.AST_IDENTIFIER:
             mut mw := 0
             mslot := env_find(ip, env, onn.name, mw)
@@ -362,7 +371,7 @@ func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
 end
 
 func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
-    node := at.Get(a, n)
+    node := at.At(a, n)
     subj := eval(ip, a, env, node.a)
     if ip.failed:
         ret val_null()
@@ -379,7 +388,7 @@ func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     saved_depth := ip.match_expr_depth
     ip.match_expr_depth = saved_depth + 1
     ip.match_subj.push(subj)
-    f := exec_list(ip, a, c, fr, at.Get(a, arm).b, val)
+    f := exec_list(ip, a, c, fr, at.At(a, arm).b, val)
     _ms := ip.match_subj.pop()
     ip.match_expr_depth = saved_depth
     if f == FLOW_BREAK or f == FLOW_CONTINUE:
@@ -394,14 +403,26 @@ func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if v.kind != VAL_INT or n == 0:
         ret v
     end
-    ret coerce_int_ty(v, int_ty_from_typestr(at.Get(a, n).type_str))
+    if n < ip.node_ity.len():
+        c := ip.node_ity.get(n)
+        if c != 0:
+            ret coerce_int_ty(v, c - 1)
+        end
+    else:
+        until ip.node_ity.len() <= n:
+            ip.node_ity.push(0)
+        end
+    end
+    ity := int_ty_from_typestr(at.At(a, n).type_str)
+    ip.node_ity.set(n, ity + 1)
+    ret coerce_int_ty(v, ity)
 end
 
 func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if n == 0 or ip.failed:
         ret val_null()
     end
-    node := at.Get(a, n)
+    node := at.At(a, n)
     k := node.kind
     if k == at.AST_LITERAL:
         if node.op == tok.TK_INT:
@@ -606,7 +627,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        ts := node.ty != 0 ? at.Get(a, node.ty).type_str : ""
+        ts := node.ty != 0 ? at.At(a, node.ty).type_str : ""
         tn := str.Len(ts)
         if tn != 0 and byte_at(ts, tn - 1) == 42:
             mut addr := 0 as i64
@@ -661,11 +682,11 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     end
     if k == at.AST_MEMBER:
         obj := node.a
-        onn := at.Get(a, obj)
+        onn := at.At(a, obj)
         mut obj_is_pkg_qualified := false
         if onn.kind == at.AST_MEMBER and onn.a != 0 and at.KindOf(a, onn.a) == at.AST_IDENTIFIER:
             mut pw := 0
-            pslot := env_find(ip, env, at.Get(a, onn.a).name, pw)
+            pslot := env_find(ip, env, at.At(a, onn.a).name, pw)
             if pslot >= 0:
                 pv := env_slot_val(ip, pw, pslot)
                 obj_is_pkg_qualified = pv.kind == VAL_MODULE
@@ -681,19 +702,19 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             if edef != 0:
                 mut backing := tok.TV_INT
                 repeat at.ChildCount(a, edef) in bi:
-                    bm := at.Get(a, at.Child(a, edef, bi))
-                    if bm.a != 0 and at.Get(a, bm.a).kind == at.AST_LITERAL:
-                        backing = at.Get(a, bm.a).value_kind
+                    bm := at.At(a, at.Child(a, edef, bi))
+                    if bm.a != 0 and at.At(a, bm.a).kind == at.AST_LITERAL:
+                        backing = at.At(a, bm.a).value_kind
                         break
                     end
                 end
                 mut next := 0 as i64
                 repeat at.ChildCount(a, edef) in i:
                     m := at.Child(a, edef, i)
-                    mn := at.Get(a, m)
+                    mn := at.At(a, m)
                     mut val := val_int(next)
-                    if mn.a != 0 and at.Get(a, mn.a).kind == at.AST_LITERAL and at.Get(a, mn.a).value_kind == backing:
-                        man := at.Get(a, mn.a)
+                    if mn.a != 0 and at.At(a, mn.a).kind == at.AST_LITERAL and at.At(a, mn.a).value_kind == backing:
+                        man := at.At(a, mn.a)
                         if backing == tok.TV_FLOAT:
                             val = val_float(man.value_float)
                         else if backing == tok.TV_STRING:
@@ -889,20 +910,20 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 nf += 1
             end
         end
-        sdn := at.Get(a, sdef)
+        sdn := at.At(a, sdef)
         sv := mk_struct(ip, sdn.name, sdef, nf)
         fenv := struct_home_env(ip, a, sdef)
         mut fi := 0
         repeat at.ChildCount(a, sdef) in i:
             f := at.Child(a, sdef, i)
-            fnode := at.Get(a, f)
+            fnode := at.At(a, f)
             if fnode.kind != at.AST_FIELD:
                 continue
             end
             mut provided := 0
             repeat at.ChildCount(a, n) in j:
                 p := at.Child(a, n, j)
-                pn := at.Get(a, p)
+                pn := at.At(a, p)
                 if str.Len(pn.name) != 0 and str.Equals(pn.name, fnode.name):
                     provided = p
                     break
@@ -910,7 +931,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             mut fval := val_null()
             if provided != 0:
-                fval = eval(ip, a, env, at.Get(a, provided).a)
+                fval = eval(ip, a, env, at.At(a, provided).a)
             else fnode.a != 0:
                 fval = eval(ip, a, fenv, fnode.a)
             end

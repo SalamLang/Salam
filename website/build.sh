@@ -6,8 +6,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 salam_ensure_compiler
 case "$SALAM" in
-    /*) ;;
-    */*) SALAM="$root/$SALAM" ;;
+/*) ;;
+*/*) SALAM="$root/$SALAM" ;;
 esac
 
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error

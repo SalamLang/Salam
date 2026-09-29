@@ -55,6 +55,9 @@ end
 
 func tick(ip &: Interp):
     ip.steps = ip.steps + (1 as u64)
+    if g_threads_on and (ip.steps & (0xFFF as u64)) == (0 as u64):
+        gil_yield(ip)
+    end
     if (ip.steps & (0xFFFFF as u64)) == (0 as u64) and ip.deadline_ms != (0 as i64) and time.NowMillis() > ip.deadline_ms:
         rt_fail(ip, i18.Tr("execution timed out (possible infinite loop)"))
     end
@@ -481,16 +484,17 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                     ip.tab_structs = tq
                 end
             end
-            if find_struct(ip, dn.name) == 0:
+            bare := find_struct(ip, dn.name)
+            if bare == 0:
                 ip.structs.push(d)
                 if str.Len(dn.name) != 0:
                     mut t := ip.tab_structs
                     itab_put(t, dn.name, d)
                     ip.tab_structs = t
                 end
-                if not dn.synthetic:
-                    register_method_envs(ip, a, d, md.env)
-                end
+            end
+            if (bare == 0 or bare != d) and not dn.synthetic:
+                register_method_envs(ip, a, d, md.env)
             end
         else dn.kind == at.AST_ENUM_DEF:
             if find_enum(ip, dn.name) == 0:
@@ -533,8 +537,14 @@ func eval_module_consts(ip &: Interp, a &: at.Ast, mid: int, prog: int):
     repeat at.ChildCount(a, prog) in i:
         d := at.Child(a, prog, i)
         dn := at.Get(a, d)
-        if (dn.kind == at.AST_CONST_DECL or dn.kind == at.AST_VAR_DECL) and dn.a != 0:
-            env_define(ip, md.env, dn.name, eval(ip, a, md.env, dn.a))
+        if dn.kind == at.AST_CONST_DECL or dn.kind == at.AST_VAR_DECL:
+            if dn.a != 0:
+                env_define(ip, md.env, dn.name, eval(ip, a, md.env, dn.a))
+            else dn.is_extern:
+                env_define(ip, md.env, dn.name, extern_var_value(ip, a, dn.name, dn.type_str))
+            else:
+                env_define(ip, md.env, dn.name, default_for_type(ip, dn.type_str))
+            end
             if ip.failed:
                 ret
             end
@@ -605,6 +615,11 @@ func interp_eval_globals(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int
             continue
         end
         if dn.a == 0:
+            if dn.is_extern:
+                env_define(ip, ip.globals, dn.name, extern_var_value(ip, a, dn.name, dn.type_str))
+            else:
+                env_define(ip, ip.globals, dn.name, default_for_type(ip, dn.type_str))
+            end
             continue
         end
         env_define(ip, ip.globals, dn.name, eval(ip, a, ip.globals, dn.a))

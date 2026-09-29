@@ -10,6 +10,8 @@ case "$SALAM" in
     */*) SALAM="$root/$SALAM" ;;
 esac
 
+"$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
+
 fail=0
 for src in website/content/*/examples/*.salam; do
     want="${src%.salam}.out"

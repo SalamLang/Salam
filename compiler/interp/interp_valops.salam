@@ -236,6 +236,12 @@ func default_for_type(ip &: Interp, ts: str): Value:
     end
     lb := str.Find(ts, "[")
     if lb < 0:
+        if str.Len(ts) > 0 and byte_at(ts, str.Len(ts) - 1) != 42:
+            sd := find_struct(ip, ts)
+            if sd != 0:
+                ret struct_zero(ip, sd)
+            end
+        end
         ret val_null()
     end
     mut n := 0
@@ -248,12 +254,47 @@ func default_for_type(ip &: Interp, ts: str): Value:
         end
         p += 1
     end
-    zero := zero_for_base(base_typename(ts))
+    base := str.Substr(ts, 0, lb)
+    rest := base + str.Substr(ts, p + 1, tn - p - 1)
+    nested := str.Find(rest, "[") >= 0
     aid := arr_new(ip, n > 0 ? n : 4)
+    if nested or find_struct(ip, str.Trim(base)) != 0:
+        repeat n:
+            arr_push(ip, aid, default_for_type(ip, str.Trim(rest)))
+        end
+        ret val_arr(aid)
+    end
+    zero := zero_for_base(base_typename(ts))
     repeat n:
         arr_push(ip, aid, zero)
     end
     ret val_arr(aid)
+end
+
+func struct_zero(ip &: Interp, sd: int): Value:
+    sdn := at.At(g_ast, sd)
+    mut nf := 0
+    repeat at.ChildCount(g_ast, sd) in ci:
+        if at.KindOf(g_ast, at.Child(g_ast, sd, ci)) == at.AST_FIELD:
+            nf += 1
+        end
+    end
+    sv := mk_struct(ip, sdn.name, sd, nf)
+    mut fi := 0
+    repeat at.ChildCount(g_ast, sd) in i:
+        f := at.Child(g_ast, sd, i)
+        if at.KindOf(g_ast, f) == at.AST_FIELD:
+            fnode := at.At(g_ast, f)
+            fts := fnode.ty != 0 ? at.At(g_ast, fnode.ty).type_str : ""
+            mut fv := zero_for_base(base_typename(fts))
+            if fv.kind == VAL_NULL:
+                fv = default_for_type(ip, fts)
+            end
+            st_field_set(ip, sv.id, fi, fnode.name, fv)
+            fi += 1
+        end
+    end
+    ret sv
 end
 
 func binop_method(op: int): str:
@@ -470,7 +511,7 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x0: Value, y0: Value): Va
     mut x := x0
     mut y := y0
     if x.kind == VAL_PTR or y.kind == VAL_PTR or x.kind == VAL_FUNC or y.kind == VAL_FUNC:
-        rts := n != 0 ? at.Get(a, n).type_str : ""
+        rts := n != 0 ? at.At(a, n).type_str : ""
         if str.Len(rts) == 0 or byte_at(rts, str.Len(rts) - 1) != 42:
             x = ptr_as_int(x)
             y = ptr_as_int(y)
@@ -597,6 +638,10 @@ func value_cmp(x: Value, y: Value): int:
 end
 
 func value_eq(x: Value, y: Value): bool:
+    if x.kind == VAL_FUNC or y.kind == VAL_FUNC:
+        fx := fn_id_of(x)
+        ret fx >= 0 and fx == fn_id_of(y)
+    end
     if x.kind == VAL_STR and y.kind == VAL_STR:
         ret str.Equals(x.s, y.s)
     end

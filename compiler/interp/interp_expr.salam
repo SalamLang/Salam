@@ -8,8 +8,12 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 
-func writeback_receiver(ip &: Interp, a &: at.Ast, env: int, obj: int, recvr: Value):
+func writeback_receiver(ip &: Interp, a &: at.Ast, env: int, obj: int, recvr: Value, back_addr: i64, back_ts: str):
     if ip.failed:
+        ret
+    end
+    if back_addr != (0 as i64):
+        interp_mem_store(ip, a, back_addr, back_ts, recvr)
         ret
     end
     k := at.KindOf(a, obj)
@@ -118,7 +122,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_str(ip.lang)
         end
         if not plain and str.Equals(nm, "args") and at.ChildCount(a, n) == 0:
-            ret val_arr(arr_new(ip, 0))
+            pa := arr_new(ip, ip.prog_args.len() + 1)
+            repeat ip.prog_args.len() in pi:
+                arr_push(ip, pa, val_str(ip.prog_args.get(pi)))
+            end
+            ret val_arr(pa)
         end
         if not plain and str.Equals(nm, "sizeof") and at.ChildCount(a, n) == 1:
             op := at.Child(a, n, 0)
@@ -273,9 +281,16 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 end
             end
         end
-        recvr := eval(ip, a, env, obj)
+        mut recvr := eval(ip, a, env, obj)
         if ip.failed:
             ret val_null()
+        end
+        mut back_addr := 0 as i64
+        mut back_ts := ""
+        if recvr.kind == VAL_PTR and recvr.pe == PTR_STRUCT and recvr.pa != (0 as i64) and slot_kind(ip, recvr.s) == SLOT_STRUCT:
+            back_addr = recvr.pa
+            back_ts = recvr.s
+            recvr = interp_mem_load(ip, a, back_addr, back_ts)
         end
         eval_args(ip, a, env, n, args)
         if ip.failed:
@@ -297,7 +312,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 mr := invoke(
                     ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
                 )
-                writeback_receiver(ip, a, env, obj, recvr)
+                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
                 ret mr
             end
             fi := st_find_field(ip, recvr.id, method)
@@ -315,7 +330,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 ir := invoke(
                     ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
                 )
-                writeback_receiver(ip, a, env, obj, recvr)
+                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
                 ret ir
             end
             rt_error(

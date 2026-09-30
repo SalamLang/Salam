@@ -66,9 +66,9 @@ for src in website/content/*/std-examples/*/*.salam; do
         echo "FAIL $src"
         printf '%s\n' "$got"
         fail=1
-    elif [ "$got" != "$(cat "$want")" ]; then
+    elif [ "$(printf '%s' "$got" | tr -d '\r')" != "$(tr -d '\r' <"$want")" ]; then
         echo "DIFF $src"
-        printf '%s\n' "$got" | diff "$want" - || true
+        printf '%s\n' "$got" | tr -d '\r' | diff "$want" - || true
         fail=1
     else
         echo "ok   $src"

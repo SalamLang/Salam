@@ -1,6 +1,7 @@
 package interp
 
 import os
+import str
 import sync
 
 include at "../ast.salam"
@@ -56,6 +57,15 @@ func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
     if ip.failed:
         ret run_fail(ip)
     end
+    mut xi := ip.exit_fns.len() - 1
+    until xi >= 0:
+        xcl := ip.closures.get(ip.exit_fns.get(xi))
+        _xr := call_func(ip, a, xcl.fn, xcl.env, false, val_null(), noargs)
+        if ip.failed:
+            ret run_fail(ip)
+        end
+        xi -= 1
+    end
     if rc.kind == VAL_INT:
         ret rc.i as int
     end
@@ -98,6 +108,37 @@ func gil_acquire(ip &: Interp, t: ThreadState):
     end
     _l := sync.Lock(g_gil)
     ts_restore(ip, t)
+end
+
+func interp_atomic(ip &: Interp, a &: at.Ast, call: int, nm: str, args: Vector<Value>): Value:
+    addr := to_int(args.get(0))
+    if addr == (0 as i64):
+        rt_error(ip, a, call, i18.Tr("dereference of a null pointer"))
+        ret val_null()
+    end
+    p := addr as i64*
+    old := p[0]
+    if str.Equals(nm, "atomic_load"):
+        ret val_int(old)
+    end
+    v := to_int(args.get(1))
+    if str.Equals(nm, "atomic_store"):
+        p[0] = v
+        ret val_null()
+    end
+    if str.Equals(nm, "atomic_add"):
+        p[0] = old + v
+        ret val_int(old + v)
+    end
+    if str.Equals(nm, "atomic_swap"):
+        p[0] = v
+        ret val_int(old)
+    end
+    if old == v:
+        p[0] = to_int(args.get(2))
+        ret val_bool(true)
+    end
+    ret val_bool(false)
 end
 
 func gil_yield(ip &: Interp):

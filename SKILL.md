@@ -126,17 +126,20 @@ error); `mut` globals, locals and functions may still have multi-word names.
 
 `print`/`println` (stdout) and `printerr`/`printerrln` (stderr) take
 comma-separated arguments and space-join them. They are statements, not calls:
-never wrap the whole argument list in parentheses.
+never wrap the whole argument list in parentheses. They always need a value:
+a bare `println` is an error, so write `println ""` for an empty line.
 
 `input` reads one line from stdin (without the newline) and follows the same
-rule: write `input` or `input "prompt"` (Persian `ورودی` / `ورودی "پیام"`),
-never `input()`. The prompt is printed first, with no newline. A prompt that
-starts with a bare name merges into that name, so print a variable prompt
-first or start the expression with a string: `input "> " + label`.
+rules: it always takes a prompt and never parentheses. Write `input ""` or
+`input "prompt"` (Persian `ورودی ""` / `ورودی "پیام"`); a bare `input` and
+`input()` are errors. The prompt is printed first, with no newline. A prompt
+that starts with a bare name merges into that name, so start the expression
+with a string: `input "> " + label`.
 
 ```salam
+println ""
 name := input "Name: "
-line := input
+line := input ""
 ```
 
 Any **struct, array, slice, `Vector` or `HashMap`** can be printed directly:

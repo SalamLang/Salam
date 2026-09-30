@@ -132,9 +132,10 @@ a bare `println` is an error, so write `println ""` for an empty line.
 `input` reads one line from stdin (without the newline) and follows the same
 rules: it always takes a prompt and never parentheses. Write `input ""` or
 `input "prompt"` (Persian `ورودی ""` / `ورودی "پیام"`); a bare `input` and
-`input()` are errors. The prompt is printed first, with no newline. A prompt
-that starts with a bare name merges into that name, so start the expression
-with a string: `input "> " + label`.
+`input()` are errors. The prompt is printed first, with no newline. A
+variable works as the prompt (`input label`), but only that name is the
+prompt: `input label + "x"` appends `"x"` to the line read. For a computed
+prompt, start with a string: `input "> " + label`.
 
 ```salam
 println ""

@@ -2052,7 +2052,7 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `char_at`   | `نویسه شماره` | `char_substr` | `زیررشته نویسه` |
 | `char_find` | `بیاب نویسه`  |               |                 |
 
-The free builtin `len(x)` keeps its English name (there is no `طول(x)`
+The free built-in `len(x)` keeps its English name (there is no `طول(x)`
 function; use `x.طول()` or `len(x)`).
 
 **Std packages and their functions** have Persian names declared with

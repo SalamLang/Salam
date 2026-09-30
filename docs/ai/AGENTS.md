@@ -345,7 +345,10 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
-- **`input()` cannot report EOF.** It returns `""` both for an empty line and at
+- **`input` takes no parentheses.** Write `input` or `input "prompt"`;
+  `input()` is an error, like `print()`.
+
+- **`input` cannot report EOF.** It returns `""` both for an empty line and at
   end-of-stream. Drive `getchar()` yourself if you need to tell them apart.
 
 ---

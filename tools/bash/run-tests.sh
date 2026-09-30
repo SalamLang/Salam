@@ -407,6 +407,8 @@ fi
 
 : "${SALAM_C_STRICT:=1}"
 export SALAM_C_STRICT
+: "${SALAM_EXEC_TIMEOUT_MS:=120000}"
+export SALAM_EXEC_TIMEOUT_MS
 
 case "$(uname -s 2>/dev/null)" in
 Linux) HOST_OS=linux ;;

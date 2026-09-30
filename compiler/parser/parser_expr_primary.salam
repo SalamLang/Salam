@@ -1,5 +1,7 @@
 package parser
 
+import str
+
 include tok "../token.salam"
 include at "../ast.salam"
 
@@ -75,6 +77,42 @@ func tk_is_binary_only(k: int): bool:
     ret k == tok.TK_SLASH or k == tok.TK_PERCENT or k == tok.TK_POWER or k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LE or k == tok.TK_GE or k == tok.TK_PIPE or k == tok.TK_CARET or k == tok.TK_AND or k == tok.TK_OR or k == tok.TK_SHL or k == tok.TK_SHR
 end
 
+func input_prompt_starts(k: int): bool:
+    ret k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_IDENT or k == tok.TK_KW_THIS or k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR
+end
+
+// TODO: drop once the published seed parses a bare 'input'; std/io still spells it 'input ()'.
+func input_parens_bridge(p &: Ps): bool:
+    ret str.EndsWith(p.file, "std/io/io.salam") or str.EndsWith(p.file, "std\\io\\io.salam")
+end
+
+func parse_input_expr(p &: Ps, a &: at.Ast): int:
+    call := p_mk(p, a, at.AST_CALL)
+    callee := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, "input")
+    ps_set_a(a, call, callee)
+    p_advance(p)
+    p_fin(p, a, callee)
+    if p_at(p, tok.TK_LPAREN):
+        if not input_parens_bridge(p):
+            p_error(p, "input takes no parentheses: write 'input' or 'input \"prompt\"'")
+        end
+        p_advance(p)
+        if not p_at(p, tok.TK_RPAREN):
+            mut go := true
+            until go:
+                at.AddChild(a, call, parse_expr(p, a))
+                go = p_list_next(p, tok.TK_RPAREN)
+            end
+        end
+        p_expect(p, tok.TK_RPAREN, "')' after arguments")
+    else input_prompt_starts(p_peek(p).kind):
+        at.AddChild(a, call, parse_expr(p, a))
+    end
+    p_fin(p, a, call)
+    ret call
+end
+
 func parse_primary(p &: Ps, a &: at.Ast): int:
     t := p_peek(p)
     if tk_is_literal_kind(t.kind):
@@ -92,7 +130,10 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         p_fin(p, a, n)
         ret n
     end
-    if t.kind == tok.TK_KW_PRINT or t.kind == tok.TK_KW_PRINTLN or t.kind == tok.TK_KW_PRINTERR or t.kind == tok.TK_KW_PRINTERRLN or t.kind == tok.TK_KW_INPUT:
+    if t.kind == tok.TK_KW_INPUT:
+        ret parse_input_expr(p, a)
+    end
+    if t.kind == tok.TK_KW_PRINT or t.kind == tok.TK_KW_PRINTLN or t.kind == tok.TK_KW_PRINTERR or t.kind == tok.TK_KW_PRINTERRLN:
         n := p_mk(p, a, at.AST_IDENTIFIER)
         at.SetName(a, n, builtin_callable_name(t.kind))
         p_advance(p)

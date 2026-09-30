@@ -524,9 +524,15 @@ func parse_impl(p &: Ps, a &: at.Ast): int:
     at.SetTypeNode(a, n, parse_type(p, a))
     p_expect(p, tok.TK_COLON, "':' after impl target type")
     p_skip_terminators(p)
+    mut ipend := Vector {} as Vector<str>
+    defer ipend.free()
     until not p_at(p, tok.TK_KW_END) and not p_at_eof(p):
         p_skip_terminators(p)
+        parse_metas(p, ipend)
         if p_at(p, tok.TK_KW_END) or p_at_eof(p):
+            if ipend.len() > 0:
+                p_error(p, "expected a definition after the '@' annotation")
+            end
             break
         end
         if p_at_mut_func(p):
@@ -536,8 +542,12 @@ func parse_impl(p &: Ps, a &: at.Ast): int:
         if p_at(p, tok.TK_KW_FUNC):
             m := parse_function(p, a, false)
             if m != 0:
+                repeat ipend.len() in i:
+                    at.AddAlias(a, m, ipend.get(i))
+                end
                 at.AddChild(a, n, m)
             end
+            ipend.clear()
         else:
             p_error(p, "expected a method ('func ...') in impl block")
             if not p_at_eof(p):
@@ -572,7 +582,7 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
         end
         mut mmods := parse_fn_mods(p)
         if p_at(p, tok.TK_KW_CONST) or p_at_static_func(p):
-            parse_static_member(p, a, n, mmods)
+            parse_static_member(p, a, n, mmods, mpend)
             mpend.clear()
             if p.panic:
                 p_sync(p)
@@ -620,7 +630,7 @@ func static_member_name(sname: str, mname: str): str:
     ret "__" + sname + "__" + mname
 end
 
-func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods):
+func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods, metas: Vector<str>):
     sname := at.Get(a, sn).name
     mut m := 0
     if p_at(p, tok.TK_KW_CONST):
@@ -657,6 +667,12 @@ func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods):
     mv.name = static_member_name(sname, mv.name)
     mv.is_static = true
     at.Put(a, m, mv)
+    mut mi := 0
+    until mi + 1 < metas.len():
+        at.AddAlias(a, m, metas.get(mi))
+        at.AddAlias(a, m, static_member_name(sname, metas.get(mi + 1)))
+        mi += 2
+    end
     p.tail_defs.push(m)
 end
 

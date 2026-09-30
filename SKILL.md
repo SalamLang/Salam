@@ -128,6 +128,17 @@ error); `mut` globals, locals and functions may still have multi-word names.
 comma-separated arguments and space-join them. They are statements, not calls:
 never wrap the whole argument list in parentheses.
 
+`input` reads one line from stdin (without the newline) and follows the same
+rule: write `input` or `input "prompt"` (Persian `ورودی` / `ورودی "پیام"`),
+never `input()`. The prompt is printed first, with no newline. A prompt that
+starts with a bare name merges into that name, so print a variable prompt
+first or start the expression with a string: `input "> " + label`.
+
+```salam
+name := input "Name: "
+line := input
+```
+
 Any **struct, array, slice, `Vector` or `HashMap`** can be printed directly:
 the compiler derives a stringify function for the type and prints what it
 returns, recursing into fields and elements.
@@ -352,13 +363,13 @@ or `fmt.Sprintf`):
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
 
 ```salam
-input := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
+data := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
 ```
 
 not
 
 ```salam
-input := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"tags\": [\"a\", \"b\"]}"
+data := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"tags\": [\"a\", \"b\"]}"
 ```
 
 Only fall back to `"..."` with escaped quotes when the string must also contain

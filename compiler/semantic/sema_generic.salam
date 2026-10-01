@@ -97,6 +97,112 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             break
         end
     end
+    if n.kind == at.AST_STRUCT_LIT and n.ty == 0 and n.list.len() == 0 and str.Len(n.name) > 0:
+        repeat params.len() in pj:
+            if str.Equals(n.name, params.get(pj)):
+                mut lv := at.Get(a, nid)
+                lv.ty = at.Clone(a, args.get(pj))
+                lv.name = at.Get(a, lv.ty).name
+                at.Put(a, nid, lv)
+                break
+            end
+        end
+    end
+end
+
+func zero_lit_into(a &: at.Ast, nid: int, op: int, v: tok.TokenValue, text: str, as_cast: bool):
+    if as_cast:
+        lit := new_node_at(a, at.AST_LITERAL, span_of(a, nid))
+        at.SetOp(a, lit, op)
+        at.SetTokenValue(a, lit, v)
+        at.SetName(a, lit, text)
+        mut cv := at.Get(a, nid)
+        cv.kind = at.AST_CAST
+        cv.a = lit
+        cv.name = ""
+        cv.synthetic = true
+        at.Put(a, nid, cv)
+        ret
+    end
+    mut lv := at.Get(a, nid)
+    lv.kind = at.AST_LITERAL
+    lv.ty = 0
+    lv.name = text
+    at.Put(a, nid, lv)
+    at.SetOp(a, nid, op)
+    at.SetTokenValue(a, nid, v)
+end
+
+func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
+    tt := sema_resolve_type(s, a, at.Get(a, nid).ty)
+    if tt < 0 or ty_at(s, tt).kind == TY_ERROR:
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    k := ty_at(s, tt).kind
+    if k == TY_STRUCT:
+        ssym := ty_at(s, tt).decl
+        if ssym != 0 and sym_at(s, ssym).members != 0:
+            sp := span_of(a, nid)
+            msc := scope_at(s, sym_at(s, ssym).members)
+            repeat msc.symbols.len() in fi:
+                f := sym_at(s, msc.symbols.get(fi))
+                if f.kind != SYM_FIELD or f.ty < 0:
+                    continue
+                end
+                if f.decl != 0 and at.Get(a, f.decl).a != 0:
+                    continue
+                end
+                tnode := new_node_at(a, at.AST_TYPE, sp)
+                mut tv := at.Get(a, tnode)
+                tv.sema_type = f.ty
+                tv.name = type_to_string(s, f.ty)
+                at.Put(a, tnode, tv)
+                zv := new_node_at(a, at.AST_STRUCT_LIT, sp)
+                mut zvv := at.Get(a, zv)
+                zvv.ty = tnode
+                zvv.name = tv.name
+                zvv.synthetic = true
+                at.Put(a, zv, zvv)
+                init := new_node_at(a, at.AST_FIELD_INIT, sp)
+                at.SetName(a, init, f.name)
+                mut iv := at.Get(a, init)
+                iv.a = zv
+                at.Put(a, init, iv)
+                at.AddChild(a, nid, init)
+            end
+        end
+        s.expected = tt
+        ret TYPE_NONE
+    end
+    if k == TY_VEC or k == TY_MAP:
+        inner := new_node_at(a, at.AST_STRUCT_LIT, span_of(a, nid))
+        at.SetName(a, inner, k == TY_VEC ? "Vector" : "HashMap")
+        mut cv := at.Get(a, nid)
+        cv.kind = at.AST_CAST
+        cv.a = inner
+        cv.name = ""
+        at.Put(a, nid, cv)
+        ret sema_check_expr(s, a, nid)
+    end
+    if k == TY_STR:
+        zero_lit_into(a, nid, tok.TK_STRING, tok.ValueStr(""), `""`, false)
+    else k == TY_BOOL:
+        zero_lit_into(a, nid, tok.TK_KW_FALSE, tok.ValueBool(false), "false", false)
+    else type_is_integer(s, tt) or k == TY_CHAR or k == TY_UCHAR or k == TY_ENUM:
+        zero_lit_into(a, nid, tok.TK_INT, tok.ValueInt(0 as u64), "0", k != TY_I32)
+    else type_is_float(s, tt):
+        zero_lit_into(a, nid, tok.TK_FLOAT, tok.ValueFloat(0.0), "0.0", k != TY_F64)
+    else k == TY_PTR or k == TY_FUNC:
+        zero_lit_into(a, nid, tok.TK_KW_NULL, tok.ValueNone(), "null", true)
+    else:
+        serr(
+            s, 1, span_of(a, nid), co.Format1(
+                i18.Tr("type '%s' has no zero value to build with '{}'"), co.ArgStr(type_disp(s, tt))
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    ret sema_check_expr(s, a, nid)
 end
 
 func g_resolved_targs(a &: at.Ast, targ_nodes: Vector<int>, argtypes: Vector<int>): Vector<int>:

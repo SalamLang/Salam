@@ -133,22 +133,55 @@ func zero_lit_into(a &: at.Ast, nid: int, op: int, v: tok.TokenValue, text: str,
     at.SetTokenValue(a, nid, v)
 end
 
-func str_enum_zero(s &: Sema, a &: at.Ast, nid: int, tt: int): bool:
-    esym := ty_at(s, tt).decl
-    if esym == 0 or sym_at(s, esym).members == 0:
-        ret false
+func enum_ref_base(s &: Sema, a &: at.Ast, esym: int, sp: co.SrcSpan): int:
+    nm := sym_at(s, esym).name
+    if scope_lookup(s, s.cur, nm) == esym:
+        base := new_node_at(a, at.AST_IDENTIFIER, sp)
+        at.SetName(a, base, nm)
+        ret base
     end
+    mut sc := s.cur
+    until sc != 0:
+        scv := scope_at(s, sc)
+        repeat scv.symbols.len() in i:
+            pv := sym_at(s, scv.symbols.get(i))
+            if pv.kind == SYM_PACKAGE and pv.members != 0 and scope_lookup_local(s, pv.members, nm) == esym:
+                pid := new_node_at(a, at.AST_IDENTIFIER, sp)
+                at.SetName(a, pid, pv.name)
+                base := new_node_at(a, at.AST_MEMBER, sp)
+                mut bv := at.Get(a, base)
+                bv.a = pid
+                bv.name = nm
+                at.Put(a, base, bv)
+                ret base
+            end
+        end
+        sc = scv.parent
+    end
+    ret 0
+end
+
+func str_enum_zero(s &: Sema, a &: at.Ast, nid: int, tt: int): int:
+    esym := ty_at(s, tt).decl
+    if ty_at(s, tt).enum_val_kind != tok.TV_STRING or esym == 0 or sym_at(s, esym).members == 0:
+        ret TYPE_NONE
+    end
+    sp := span_of(a, nid)
     msc := scope_at(s, sym_at(s, esym).members)
     repeat msc.symbols.len() in i:
         m := sym_at(s, msc.symbols.get(i))
         if m.kind != SYM_ENUM_MEMBER:
             continue
         end
-        if str.Len(m.enum_value_str) == 0:
-            ret false
+        base := enum_ref_base(s, a, esym, sp)
+        if base == 0:
+            serr(
+                s, 1, sp, co.Format1(
+                    i18.Tr("enum '%s' is not visible here, so '{}' cannot name its first member; import its package"), co.ArgStr(type_disp(s, tt))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
-        base := new_node_at(a, at.AST_IDENTIFIER, span_of(a, nid))
-        at.SetName(a, base, sym_at(s, esym).name)
         mut mv := at.Get(a, nid)
         mv.kind = at.AST_MEMBER
         mv.a = base
@@ -156,9 +189,9 @@ func str_enum_zero(s &: Sema, a &: at.Ast, nid: int, tt: int): bool:
         mv.name = m.name
         mv.list = Vector {} as Vector<int>
         at.Put(a, nid, mv)
-        ret true
+        ret sema_check_expr(s, a, nid)
     end
-    ret false
+    ret TYPE_NONE
 end
 
 func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
@@ -237,8 +270,11 @@ func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
         at.Put(a, nid, av)
         ret sema_check_expr(s, a, nid)
     end
-    if k == TY_ENUM and str_enum_zero(s, a, nid, tt):
-        ret sema_check_expr(s, a, nid)
+    if k == TY_ENUM:
+        ez := str_enum_zero(s, a, nid, tt)
+        if ez != TYPE_NONE:
+            ret ez
+        end
     end
     dist := type_distinct_sym(s, tt) != 0
     if k == TY_STR:

@@ -133,6 +133,34 @@ func zero_lit_into(a &: at.Ast, nid: int, op: int, v: tok.TokenValue, text: str,
     at.SetTokenValue(a, nid, v)
 end
 
+func str_enum_zero(s &: Sema, a &: at.Ast, nid: int, tt: int): bool:
+    esym := ty_at(s, tt).decl
+    if esym == 0 or sym_at(s, esym).members == 0:
+        ret false
+    end
+    msc := scope_at(s, sym_at(s, esym).members)
+    repeat msc.symbols.len() in i:
+        m := sym_at(s, msc.symbols.get(i))
+        if m.kind != SYM_ENUM_MEMBER:
+            continue
+        end
+        if str.Len(m.enum_value_str) == 0:
+            ret false
+        end
+        base := new_node_at(a, at.AST_IDENTIFIER, span_of(a, nid))
+        at.SetName(a, base, sym_at(s, esym).name)
+        mut mv := at.Get(a, nid)
+        mv.kind = at.AST_MEMBER
+        mv.a = base
+        mv.ty = 0
+        mv.name = m.name
+        mv.list = Vector {} as Vector<int>
+        at.Put(a, nid, mv)
+        ret true
+    end
+    ret false
+end
+
 func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
     tt := sema_resolve_type(s, a, at.Get(a, nid).ty)
     if tt < 0 or ty_at(s, tt).kind == TY_ERROR:
@@ -184,14 +212,43 @@ func check_type_param_zero(s &: Sema, a &: at.Ast, nid: int): int:
         at.Put(a, nid, cv)
         ret sema_check_expr(s, a, nid)
     end
+    if k == TY_ARRAY:
+        sp := span_of(a, nid)
+        et := ty_at(s, tt).elem
+        tnode := new_node_at(a, at.AST_TYPE, sp)
+        mut tv := at.Get(a, tnode)
+        tv.sema_type = et
+        tv.name = type_to_string(s, et)
+        at.Put(a, tnode, tv)
+        zv := new_node_at(a, at.AST_STRUCT_LIT, sp)
+        mut zvv := at.Get(a, zv)
+        zvv.ty = tnode
+        zvv.name = tv.name
+        zvv.synthetic = true
+        at.Put(a, zv, zvv)
+        mut av := at.Get(a, nid)
+        av.kind = at.AST_ARRAY_LIT
+        av.ty = 0
+        av.name = ""
+        av.list = Vector {} as Vector<int>
+        repeat ty_at(s, tt).length as int:
+            av.list.push(zv)
+        end
+        at.Put(a, nid, av)
+        ret sema_check_expr(s, a, nid)
+    end
+    if k == TY_ENUM and str_enum_zero(s, a, nid, tt):
+        ret sema_check_expr(s, a, nid)
+    end
+    dist := type_distinct_sym(s, tt) != 0
     if k == TY_STR:
-        zero_lit_into(a, nid, tok.TK_STRING, tok.ValueStr(""), `""`, false)
+        zero_lit_into(a, nid, tok.TK_STRING, tok.ValueStr(""), `""`, dist)
     else k == TY_BOOL:
-        zero_lit_into(a, nid, tok.TK_KW_FALSE, tok.ValueBool(false), "false", false)
+        zero_lit_into(a, nid, tok.TK_KW_FALSE, tok.ValueBool(false), "false", dist)
     else type_is_integer(s, tt) or k == TY_CHAR or k == TY_UCHAR or k == TY_ENUM:
-        zero_lit_into(a, nid, tok.TK_INT, tok.ValueInt(0 as u64), "0", k != TY_I32)
+        zero_lit_into(a, nid, tok.TK_INT, tok.ValueInt(0 as u64), "0", k != TY_I32 or dist)
     else type_is_float(s, tt):
-        zero_lit_into(a, nid, tok.TK_FLOAT, tok.ValueFloat(0.0), "0.0", k != TY_F64)
+        zero_lit_into(a, nid, tok.TK_FLOAT, tok.ValueFloat(0.0), "0.0", k != TY_F64 or dist)
     else k == TY_PTR or k == TY_FUNC:
         zero_lit_into(a, nid, tok.TK_KW_NULL, tok.ValueNone(), "null", true)
     else:

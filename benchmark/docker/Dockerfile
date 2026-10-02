@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # checkov:skip=CKV_DOCKER_2:One-shot CLI benchmark runner, not a long-running service; no process to healthcheck.
 
-ARG ALPINE_VERSION=edge
+ARG ALPINE_VERSION=3.24
 ARG LLVM_VERSION=22
 
 FROM alpine:${ALPINE_VERSION} AS toolchain

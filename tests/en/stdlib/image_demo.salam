@@ -864,6 +864,82 @@ func check_webp(tmpdir: str):
     image.Free(img)
 end
 
+func check_gif(tmpdir: str):
+    testing.AssertTrue(image.IsGIF("GIF89a" as void*, 6))
+    testing.AssertTrue(image.IsGIF("GIF87a" as void*, 6))
+    testing.AssertFalse(image.IsGIF("GIF90a" as void*, 6))
+
+    mut tiny := compress.NewByteBuf()
+    each b in [71, 73, 70, 56, 57, 97, 3, 0, 9, 0, 241, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 33, 249, 4, 1, 0, 0, 3, 0, 44, 0, 0, 0, 0, 3, 0, 9, 0, 64, 2, 16, 68, 40, 48, 34, 66, 137, 3, 53, 34, 212, 56, 48, 161, 198, 129, 41, 0, 59]:
+        compress.BufPush(tiny, b)
+    end
+    testing.AssertEqInt(image.DetectFormat(tiny.data, tiny.len), image.FormatGIF)
+    mut tiny_ok := false
+    tiny_img := image.DecodeGIF(tiny.data, tiny.len, tiny_ok)
+    testing.AssertTrue(tiny_ok)
+    testing.AssertEqInt(tiny_img.width, 3)
+    testing.AssertEqInt(tiny_img.height, 9)
+    testing.AssertTrue(image.Equals(image.GetPixel(tiny_img, 0, 0), image.RGB(255, 0, 0)))
+    testing.AssertTrue(image.Equals(image.GetPixel(tiny_img, 1, 0), image.RGB(0, 255, 0)))
+    testing.AssertTrue(image.Equals(image.GetPixel(tiny_img, 2, 4), image.RGB(0, 0, 255)))
+    testing.AssertTrue(image.Equals(image.GetPixel(tiny_img, 0, 8), image.RGB(255, 0, 0)))
+    testing.AssertEqInt(image.GetPixel(tiny_img, 2, 1).a as int, 0)
+    image.Free(tiny_img)
+    mut cut_ok := true
+    cut_img := image.DecodeGIF(tiny.data, 30, cut_ok)
+    testing.AssertFalse(cut_ok)
+    testing.AssertTrue(image.IsEmpty(cut_img))
+    compress.BufFree(tiny)
+
+    mut few := image.New(7, 5)
+    image.FillHex(few, "#336699")
+    image.SetPixel(few, 2, 3, image.RGB(250, 10, 20))
+    image.SetPixel(few, 6, 4, image.RGBA(0, 0, 0, 0))
+    few_buf := image.EncodeGIF(few)
+    testing.AssertTrue(image.IsGIF(few_buf.data, few_buf.len))
+    mut few_ok := false
+    few_back := image.DecodeGIF(few_buf.data, few_buf.len, few_ok)
+    testing.AssertTrue(few_ok)
+    testing.AssertTrue(image.Equals(image.GetPixel(few_back, 0, 0), image.RGB(51, 102, 153)))
+    testing.AssertTrue(image.Equals(image.GetPixel(few_back, 2, 3), image.RGB(250, 10, 20)))
+    testing.AssertEqInt(image.GetPixel(few_back, 6, 4).a as int, 0)
+    image.Free(few_back)
+    compress.BufFree(few_buf)
+    image.Free(few)
+
+    mut many := image.New(64, 48)
+    repeat 48 in y:
+        repeat 64 in x:
+            image.SetPixel(many, x, y, image.RGB(x * 4, y * 5, (x * y) % 256))
+        end
+    end
+    path := filepath.Join(tmpdir, "t.gif")
+    testing.AssertTrue(image.SaveGIF(many, path))
+    mut many_ok := false
+    many_back := image.OpenGIF(path, many_ok)
+    testing.AssertTrue(many_ok)
+    testing.AssertEqInt(many_back.width, 64)
+    px := image.GetPixel(many_back, 20, 20)
+    testing.AssertTrue(math.Abs((px.r as int - 80) as f64) <= 24.0 and math.Abs((px.g as int - 100) as f64) <= 24.0)
+    testing.AssertEqInt(px.a as int, 255)
+    image.Free(many_back)
+
+    testing.AssertEqInt(image.FormatFromExt("anim.GIF"), image.FormatGIF)
+    dispatch_path := filepath.Join(tmpdir, "d.gif")
+    testing.AssertTrue(image.Save(many, dispatch_path))
+    mut open_ok := false
+    opened := image.Open(dispatch_path, open_ok)
+    testing.AssertTrue(open_ok)
+    testing.AssertEqInt(opened.height, 48)
+    image.Free(opened)
+    image.Free(many)
+
+    mut missing_ok := true
+    missing := image.OpenGIF("definitely_missing.gif", missing_ok)
+    testing.AssertFalse(missing_ok)
+    testing.AssertTrue(image.IsEmpty(missing))
+end
+
 func check_dispatch(tmpdir: str):
     testing.AssertEqInt(image.FormatFromExt("photo.png"), image.FormatPNG)
     testing.AssertEqInt(image.FormatFromExt("photo.PNG"), image.FormatPNG)
@@ -981,6 +1057,8 @@ func main:
     check_jpeg(tmpdir)
     println "webp"
     check_webp(tmpdir)
+    println "gif"
+    check_gif(tmpdir)
     println "dispatch"
     check_dispatch(tmpdir)
 

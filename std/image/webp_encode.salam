@@ -1,0 +1,324 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+
+const _WP_CLC_ORDER := "17 18 0 1 2 3 4 5 16 6 7 8 9 10 11 12 13 14 15"
+
+func _wp_zeros(n: int): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    repeat n:
+        v.push(0)
+    end
+    ret v
+end
+
+func _wp_lengths(counts: Vector<int>, limit: int): Vector<int>:
+    n := counts.len()
+    mut lens := _wp_zeros(n)
+    mut used := 0
+    repeat n in i:
+        if counts.get(i) > 0:
+            used += 1
+        end
+    end
+    if used == 0:
+        ret lens
+    end
+    if used == 1:
+        repeat n in i:
+            if counts.get(i) > 0:
+                lens.set(i, 1)
+            end
+        end
+        ret lens
+    end
+    mut floor := 1
+    mut done := false
+    until not done:
+        mut weight := Vector {} as Vector<i64>
+        mut parent := Vector {} as Vector<int>
+        mut leaf := Vector {} as Vector<int>
+        mut alive := Vector {} as Vector<bool>
+        repeat n in i:
+            c := counts.get(i)
+            if c > 0:
+                w := c < floor ? floor : c
+                weight.push(w as i64)
+                parent.push(0 - 1)
+                leaf.push(i)
+                alive.push(true)
+            end
+        end
+        mut live := weight.len()
+        until live > 1:
+            mut a := 0 - 1
+            mut b := 0 - 1
+            repeat weight.len() in k:
+                if alive.get(k):
+                    if a < 0 or weight.get(k) < weight.get(a):
+                        b = a
+                        a = k
+                    else b < 0 or weight.get(k) < weight.get(b):
+                        b = k
+                    end
+                end
+            end
+            alive.set(a, false)
+            alive.set(b, false)
+            weight.push(weight.get(a) + weight.get(b))
+            parent.push(0 - 1)
+            leaf.push(0 - 1)
+            alive.push(true)
+            node := weight.len() - 1
+            parent.set(a, node)
+            parent.set(b, node)
+            live -= 1
+        end
+        mut deepest := 0
+        repeat leaf.len() in k:
+            s := leaf.get(k)
+            if s >= 0:
+                mut depth := 0
+                mut at := k
+                until parent.get(at) >= 0:
+                    at = parent.get(at)
+                    depth += 1
+                end
+                lens.set(s, depth)
+                if depth > deepest:
+                    deepest = depth
+                end
+            end
+        end
+        weight.free()
+        parent.free()
+        leaf.free()
+        alive.free()
+        if deepest <= limit:
+            done = true
+        else:
+            floor = floor * 2
+        end
+    end
+    ret lens
+end
+
+func _wp_codes(lens: Vector<int>): Vector<int>:
+    n := lens.len()
+    mut count := _wp_zeros(16)
+    repeat n in i:
+        l := lens.get(i)
+        if l > 0:
+            count.set(l, count.get(l) + 1)
+        end
+    end
+    mut next := _wp_zeros(16)
+    mut code := 0
+    mut bits := 1
+    until bits < 16:
+        code = (code + count.get(bits - 1)) << 1
+        next.set(bits, code)
+        bits += 1
+    end
+    mut codes := _wp_zeros(n)
+    repeat n in i:
+        l := lens.get(i)
+        if l > 0:
+            codes.set(i, next.get(l))
+            next.set(l, next.get(l) + 1)
+        end
+    end
+    count.free()
+    next.free()
+    ret codes
+end
+
+func _wp_put(w &: compress.BitWriter, code: int, len: int):
+    mut i := len - 1
+    until i >= 0:
+        compress.BitWriteBit(w, (code >> i) & 1)
+        i -= 1
+    end
+end
+
+func _wp_used(lens: Vector<int>): int:
+    mut used := 0
+    repeat lens.len() in i:
+        if lens.get(i) > 0:
+            used += 1
+        end
+    end
+    ret used
+end
+
+func _wp_write_code(w &: compress.BitWriter, counts: Vector<int>, lens_out &: Vector<int>, codes_out &: Vector<int>):
+    n := counts.len()
+    mut syms := Vector {} as Vector<int>
+    repeat n in i:
+        if counts.get(i) > 0:
+            syms.push(i)
+        end
+    end
+    if syms.len() <= 2 and (syms.len() == 0 or syms.get(syms.len() - 1) < 256):
+        compress.BitWriteBit(w, 1)
+        mut lens := _wp_zeros(n)
+        if syms.len() == 0:
+            compress.BitWriteBit(w, 0)
+            compress.BitWriteBit(w, 0)
+            compress.BitWriteBit(w, 0)
+        else:
+            compress.BitWriteBit(w, syms.len() - 1)
+            s0 := syms.get(0)
+            if s0 < 2:
+                compress.BitWriteBit(w, 0)
+                compress.BitWriteBit(w, s0)
+            else:
+                compress.BitWriteBit(w, 1)
+                compress.BitWriteBits(w, s0, 8)
+            end
+            if syms.len() == 2:
+                compress.BitWriteBits(w, syms.get(1), 8)
+                lens.set(s0, 1)
+                lens.set(syms.get(1), 1)
+            end
+        end
+        lens_out = lens
+        codes_out = _wp_codes(lens)
+        syms.free()
+        ret
+    end
+    syms.free()
+    compress.BitWriteBit(w, 0)
+    lens := _wp_lengths(counts, 15)
+    mut clc_counts := _wp_zeros(19)
+    repeat n in i:
+        l := lens.get(i)
+        clc_counts.set(l, clc_counts.get(l) + 1)
+    end
+    clc_lens := _wp_lengths(clc_counts, 7)
+    single := _wp_used(clc_lens) == 1
+    clc_codes := _wp_codes(clc_lens)
+    order := _WP_CLC_ORDER.split(" ")
+    mut last := 3
+    repeat 19 in k:
+        if clc_lens.get(order.get(k).to_int()) > 0 and k > last:
+            last = k
+        end
+    end
+    compress.BitWriteBits(w, last + 1 - 4, 4)
+    repeat last + 1 in k:
+        compress.BitWriteBits(w, clc_lens.get(order.get(k).to_int()), 3)
+    end
+    compress.BitWriteBit(w, 0)
+    if not single:
+        repeat n in i:
+            l := lens.get(i)
+            _wp_put(w, clc_codes.get(l), clc_lens.get(l))
+        end
+    end
+    order.free()
+    clc_counts.free()
+    lens_out = lens
+    codes_out = _wp_codes(lens)
+end
+
+func _wp_emit(w &: compress.BitWriter, sym: int, lens: Vector<int>, codes: Vector<int>):
+    if _wp_used(lens) <= 1:
+        ret
+    end
+    _wp_put(w, codes.get(sym), lens.get(sym))
+end
+
+func _wp_u32(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 24) & 255)
+end
+
+@en "EncodeWebP"
+@fa "کدگذاری وب‌پی"
+pub func EncodeWebP(img: Image): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if IsEmpty(img) or img.width > 16384 or img.height > 16384:
+        ret out
+    end
+    bp := img.pixels as u8*
+    total := img.width * img.height
+    mut cg := _wp_zeros(280)
+    mut cr := _wp_zeros(256)
+    mut cb := _wp_zeros(256)
+    mut ca := _wp_zeros(256)
+    mut alpha := false
+    repeat total in p:
+        cr.set(bp[p * 4] as int, cr.get(bp[p * 4] as int) + 1)
+        cg.set(bp[p * 4 + 1] as int, cg.get(bp[p * 4 + 1] as int) + 1)
+        cb.set(bp[p * 4 + 2] as int, cb.get(bp[p * 4 + 2] as int) + 1)
+        a := bp[p * 4 + 3] as int
+        ca.set(a, ca.get(a) + 1)
+        if a != 255:
+            alpha = true
+        end
+    end
+    mut w := compress.NewBitWriter()
+    compress.BitWriteBits(w, 47, 8)
+    compress.BitWriteBits(w, img.width - 1, 14)
+    compress.BitWriteBits(w, img.height - 1, 14)
+    compress.BitWriteBit(w, alpha ? 1 : 0)
+    compress.BitWriteBits(w, 0, 3)
+    compress.BitWriteBit(w, 0)
+    compress.BitWriteBit(w, 0)
+    compress.BitWriteBit(w, 0)
+    mut lg := Vector {} as Vector<int>
+    mut kg := Vector {} as Vector<int>
+    mut lr := Vector {} as Vector<int>
+    mut kr := Vector {} as Vector<int>
+    mut lb := Vector {} as Vector<int>
+    mut kb := Vector {} as Vector<int>
+    mut la := Vector {} as Vector<int>
+    mut ka := Vector {} as Vector<int>
+    mut ld := Vector {} as Vector<int>
+    mut kd := Vector {} as Vector<int>
+    _wp_write_code(w, cg, lg, kg)
+    _wp_write_code(w, cr, lr, kr)
+    _wp_write_code(w, cb, lb, kb)
+    _wp_write_code(w, ca, la, ka)
+    _wp_write_code(w, _wp_zeros(40), ld, kd)
+    repeat total in p:
+        _wp_emit(w, bp[p * 4 + 1] as int, lg, kg)
+        _wp_emit(w, bp[p * 4] as int, lr, kr)
+        _wp_emit(w, bp[p * 4 + 2] as int, lb, kb)
+        _wp_emit(w, bp[p * 4 + 3] as int, la, ka)
+    end
+    compress.BitFlush(w)
+    size := compress.BufLen(w.buf)
+    pad := size % 2
+    compress.BufPushBytes(out, "RIFF" as void*, 4)
+    _wp_u32(out, 4 + 8 + size + pad)
+    compress.BufPushBytes(out, "WEBPVP8L" as void*, 8)
+    _wp_u32(out, size)
+    compress.BufPushBytes(out, w.buf.data, size)
+    if pad == 1:
+        compress.BufPush(out, 0)
+    end
+    compress.BitWriterFree(w)
+    cg.free()
+    cr.free()
+    cb.free()
+    ca.free()
+    ret out
+end

@@ -149,8 +149,24 @@ func _read_str(r &: compress.ByteReader, n: int): str:
     ret out
 end
 
+func _mp_fits(r &: compress.ByteReader, n: int, per: int, err &: encerr.EncodingError): bool:
+    if r.bad or n < 0 or (n as i64) * (per as i64) > ((r.len - r.pos) as i64):
+        err = encerr.ErrUnexpectedEOF(r.pos)
+        ret false
+    end
+    ret true
+end
+
 func _unmarshal(r &: compress.ByteReader, err &: encerr.EncodingError): value.Value:
+    ret _unmarshal_d(r, err, 0)
+end
+
+func _unmarshal_d(r &: compress.ByteReader, err &: encerr.EncodingError, depth: int): value.Value:
     if encerr.IsError(err): ret value.ValueNull() end
+    if depth > 512:
+        err = encerr.NewError(encerr.KindCustom, "msgpack nesting is deeper than 512 levels", r.pos)
+        ret value.ValueNull()
+    end
     tag := binary.ReadU8(r)
     if r.bad:
         err = encerr.ErrUnexpectedEOF(r.pos)
@@ -160,15 +176,15 @@ func _unmarshal(r &: compress.ByteReader, err &: encerr.EncodingError): value.Va
     if tag >= 0xe0: ret value.ValueInt((tag - 256) as i64) end
     if tag >= 0x80 and tag <= 0x8f:
         n := tag & 15
-        ret _unmarshal_map(r, n, err)
+        ret _unmarshal_map(r, n, err, depth)
     end
     if tag >= 0x90 and tag <= 0x9f:
         n := tag & 15
-        ret _unmarshal_array(r, n, err)
+        ret _unmarshal_array(r, n, err, depth)
     end
     if tag >= 0xa0 and tag <= 0xbf:
         n := tag & 31
-        ret value.ValueString(_read_str(r, n))
+        ret _mp_fits(r, n, 1, err) ? value.ValueString(_read_str(r, n)) : value.ValueNull()
     end
     if tag == 0xc0: ret value.ValueNull() end
     if tag == 0xc2: ret value.ValueBool(false) end
@@ -200,41 +216,42 @@ func _unmarshal(r &: compress.ByteReader, err &: encerr.EncodingError): value.Va
     if tag == 0xd3: ret value.ValueInt(binary.ReadI64BE(r)) end
     if tag == 0xd9:
         n := binary.ReadU8(r)
-        ret value.ValueString(_read_str(r, n))
+        ret _mp_fits(r, n, 1, err) ? value.ValueString(_read_str(r, n)) : value.ValueNull()
     end
     if tag == 0xda:
         n := binary.ReadU16BE(r)
-        ret value.ValueString(_read_str(r, n))
+        ret _mp_fits(r, n, 1, err) ? value.ValueString(_read_str(r, n)) : value.ValueNull()
     end
     if tag == 0xdb:
         n := binary.ReadU32BE(r)
-        ret value.ValueString(_read_str(r, n))
+        ret _mp_fits(r, n, 1, err) ? value.ValueString(_read_str(r, n)) : value.ValueNull()
     end
     if tag == 0xdc:
         n := binary.ReadU16BE(r)
-        ret _unmarshal_array(r, n, err)
+        ret _unmarshal_array(r, n, err, depth)
     end
     if tag == 0xdd:
         n := binary.ReadU32BE(r)
-        ret _unmarshal_array(r, n, err)
+        ret _unmarshal_array(r, n, err, depth)
     end
     if tag == 0xde:
         n := binary.ReadU16BE(r)
-        ret _unmarshal_map(r, n, err)
+        ret _unmarshal_map(r, n, err, depth)
     end
     if tag == 0xdf:
         n := binary.ReadU32BE(r)
-        ret _unmarshal_map(r, n, err)
+        ret _unmarshal_map(r, n, err, depth)
     end
     err = encerr.NewError(encerr.KindCustom, "unsupported msgpack tag (ext/bin types are not supported)", r.pos)
     ret value.ValueNull()
 end
 
-func _unmarshal_array(r &: compress.ByteReader, n: int, err &: encerr.EncodingError): value.Value:
+func _unmarshal_array(r &: compress.ByteReader, n: int, err &: encerr.EncodingError, depth: int): value.Value:
+    if not _mp_fits(r, n, 1, err): ret value.ValueNull() end
     mut out := value.NewValueArray()
     mut i := 0
     until i < n:
-        item := _unmarshal(r, err)
+        item := _unmarshal_d(r, err, depth + 1)
         if encerr.IsError(err): ret value.ValueNull() end
         value.ArrayPush(out, item)
         i += 1
@@ -242,13 +259,14 @@ func _unmarshal_array(r &: compress.ByteReader, n: int, err &: encerr.EncodingEr
     ret out
 end
 
-func _unmarshal_map(r &: compress.ByteReader, n: int, err &: encerr.EncodingError): value.Value:
+func _unmarshal_map(r &: compress.ByteReader, n: int, err &: encerr.EncodingError, depth: int): value.Value:
+    if not _mp_fits(r, n, 2, err): ret value.ValueNull() end
     mut out := value.NewValueObject()
     mut i := 0
     until i < n:
-        k := _unmarshal(r, err)
+        k := _unmarshal_d(r, err, depth + 1)
         if encerr.IsError(err): ret value.ValueNull() end
-        v := _unmarshal(r, err)
+        v := _unmarshal_d(r, err, depth + 1)
         if encerr.IsError(err): ret value.ValueNull() end
         value.ObjectSet(out, value.AsString(k), v)
         i += 1

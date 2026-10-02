@@ -1,0 +1,948 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+
+const BA_MIN_BYTES := 512
+
+mut g_ba_names := Vector {} as Vector<str>
+mut g_ba_bodies := Vector {} as Vector<str>
+mut g_ba_memo := Vector {} as Vector<i64>
+mut g_ba_seq := 0
+
+struct BigFnInfo:
+    pub name: str = ""
+    pub sret: str = ""
+    pub byval: Vector<str> = Vector {}
+end
+
+func ba_ident(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c == 46 or c == 36 or c == 45
+end
+
+func ba_trim(s: str): str:
+    ret str.Trim(s)
+end
+
+func ba_find(s: str, sub: str, from: int): int:
+    ret str.IndexFrom(s, sub, from)
+end
+
+func ba_close(s: str, open_at: int): int:
+    mut depth := 0
+    mut i := open_at
+    n := str.Len(s)
+    until i < n:
+        c := byte_at(s, i)
+        if c == 40 or c == 91 or c == 123 or c == 60:
+            depth += 1
+        else c == 41 or c == 93 or c == 125 or c == 62:
+            depth -= 1
+            if depth == 0:
+                ret i
+            end
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func ba_split(body: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut depth := 0
+    mut start := 0
+    n := str.Len(body)
+    repeat n in i:
+        c := byte_at(body, i)
+        if c == 40 or c == 91 or c == 123 or c == 60:
+            depth += 1
+        else c == 41 or c == 93 or c == 125 or c == 62:
+            depth -= 1
+        else c == 44 and depth == 0:
+            out.push(ba_trim(str.Substr(body, start, i - start)))
+            start = i + 1
+        end
+    end
+    last := ba_trim(str.Substr(body, start, n - start))
+    if str.Len(last) > 0:
+        out.push(last)
+    end
+    ret out
+end
+
+func ba_join(parts: Vector<str>): str:
+    mut b := str.NewBuilder()
+    repeat parts.len() in i:
+        if i > 0:
+            str.BufAppend(b, ", ")
+        end
+        str.BufAppend(b, parts.get(i))
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func ba_digits(s: str, from: int, end_at: int): i64:
+    mut v := 0 as i64
+    mut i := from
+    until i < end_at:
+        c := byte_at(s, i)
+        if c < 48 or c > 57:
+            ret v
+        end
+        v = v * (10 as i64) + ((c - 48) as i64)
+        i += 1
+    end
+    ret v
+end
+
+func ba_size(t0: str, depth: int): i64:
+    t := ba_trim(t0)
+    if depth > 64 or str.Len(t) == 0:
+        ret 8
+    end
+    if str.Equals(t, "ptr") or str.Equals(t, "double") or str.Equals(t, "i64"):
+        ret 8
+    end
+    if str.Equals(t, "float") or str.Equals(t, "i32"):
+        ret 4
+    end
+    if str.Equals(t, "half") or str.Equals(t, "i16"):
+        ret 2
+    end
+    if str.Equals(t, "i8") or str.Equals(t, "i1"):
+        ret 1
+    end
+    if str.Equals(t, "fp128") or str.Equals(t, "x86_fp80") or str.Equals(t, "i128"):
+        ret 16
+    end
+    c0 := byte_at(t, 0)
+    if c0 == 91:
+        x := ba_find(t, " x ", 1)
+        if x < 0:
+            ret 8
+        end
+        cnt := ba_digits(t, 1, x)
+        elem := str.Substr(t, x + 3, str.Len(t) - x - 4)
+        ret cnt * ba_size(elem, depth + 1)
+    end
+    if c0 == 123 or (c0 == 60 and str.Len(t) > 1 and byte_at(t, 1) == 123):
+        off := c0 == 60 ? 2 : 1
+        cut := c0 == 60 ? 4 : 2
+        mut fs := ba_split(str.Substr(t, off, str.Len(t) - cut))
+        mut total := 0 as i64
+        repeat fs.len() in i:
+            total = total + ba_size(fs.get(i), depth + 1)
+        end
+        fs.free()
+        ret total
+    end
+    if c0 == 37:
+        repeat g_ba_names.len() in i:
+            if str.Equals(g_ba_names.get(i), t):
+                if g_ba_memo.get(i) < (0 as i64):
+                    g_ba_memo.set(i, 0 as i64)
+                    g_ba_memo.set(i, ba_size(g_ba_bodies.get(i), depth + 1))
+                end
+                ret g_ba_memo.get(i)
+            end
+        end
+    end
+    ret 8
+end
+
+func ba_big(ty: str): bool:
+    if str.Len(ty) == 0:
+        ret false
+    end
+    c0 := byte_at(ty, 0)
+    if c0 != 37 and c0 != 91:
+        ret false
+    end
+    ret ba_size(ty, 0) >= (BA_MIN_BYTES as i64)
+end
+
+func ba_in(v: Vector<str>, s: str): int:
+    repeat v.len() in i:
+        if str.Equals(v.get(i), s):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func ba_uses_line(l: str, name: str): int:
+    mut n := 0
+    m := str.Len(name)
+    mut p := ba_find(l, name, 0)
+    until p >= 0:
+        after := p + m
+        if after >= str.Len(l) or not ba_ident(byte_at(l, after)):
+            n += 1
+        end
+        p = ba_find(l, name, p + m)
+    end
+    ret n
+end
+
+func ba_uses(f: Vector<str>, name: str): int:
+    mut n := 0
+    repeat f.len() in li:
+        n += ba_uses_line(f.get(li), name)
+    end
+    ret n
+end
+
+func ba_sizeof(t: str): str:
+    ret "ptrtoint (ptr getelementptr (" + t + ", ptr null, i32 1) to i64)"
+end
+
+func ba_memcpy(dst: str, src: str, t: str): str:
+    ret "  call void @llvm.memcpy.p0.p0.i64(ptr " + dst + ", ptr " + src + ", i64 " + ba_sizeof(t) + ", i1 false)"
+end
+
+func ba_memset(dst: str, t: str): str:
+    ret "  call void @llvm.memset.p0.i64(ptr " + dst + ", i8 0, i64 " + ba_sizeof(t) + ", i1 false)"
+end
+
+func ba_tmp(): str:
+    g_ba_seq += 1
+    ret "%ba." + g_ba_seq
+end
+
+func ba_load(l: str, out_name &: str, out_ty &: str, out_ptr &: str): bool:
+    t := ba_trim(l)
+    eqp := ba_find(t, " = load ", 0)
+    if eqp <= 0 or byte_at(t, 0) != 37:
+        ret false
+    end
+    rest := str.Substr(t, eqp + 8, str.Len(t) - eqp - 8)
+    comma := ba_find(rest, ", ptr ", 0)
+    if comma < 0:
+        ret false
+    end
+    ty := str.Substr(rest, 0, comma)
+    if not ba_big(ty):
+        ret false
+    end
+    pstart := comma + 6
+    mut pend := ba_find(rest, ",", pstart)
+    if pend < 0:
+        pend = str.Len(rest)
+    end
+    out_name = str.Substr(t, 0, eqp)
+    out_ty = ty
+    out_ptr = ba_trim(str.Substr(rest, pstart, pend - pstart))
+    ret true
+end
+
+func ba_store(l: str, ty: str, val: str, out_ptr &: str): bool:
+    t := ba_trim(l)
+    head := "store " + ty + " " + val + ", ptr "
+    if not str.StartsWith(t, head):
+        ret false
+    end
+    rest := str.Substr(t, str.Len(head), str.Len(t) - str.Len(head))
+    mut pend := ba_find(rest, ",", 0)
+    if pend < 0:
+        pend = str.Len(rest)
+    end
+    out_ptr = ba_trim(str.Substr(rest, 0, pend))
+    ret true
+end
+
+func ba_is_ret(l: str, ty: str, val: str): bool:
+    ret str.Equals(ba_trim(l), "ret " + ty + " " + val)
+end
+
+func ba_insert(l: str, out_res &: str, out_ty &: str, out_base &: str, out_ety &: str, out_val &: str, out_idx &: str): bool:
+    t := ba_trim(l)
+    eqp := ba_find(t, " = insertvalue ", 0)
+    if eqp <= 0 or byte_at(t, 0) != 37:
+        ret false
+    end
+    mut parts := ba_split(str.Substr(t, eqp + 15, str.Len(t) - eqp - 15))
+    if parts.len() < 3:
+        parts.free()
+        ret false
+    end
+    agg := parts.get(0)
+    sp := ba_find(agg, " ", 0)
+    elem := parts.get(1)
+    mut lastsp := str.Len(elem) - 1
+    until lastsp >= 0 and byte_at(elem, lastsp) != 32:
+        lastsp -= 1
+    end
+    if sp < 0 or lastsp < 0:
+        parts.free()
+        ret false
+    end
+    out_res = str.Substr(t, 0, eqp)
+    out_ty = str.Substr(agg, 0, sp)
+    out_base = str.Substr(agg, sp + 1, str.Len(agg) - sp - 1)
+    out_ety = ba_trim(str.Substr(elem, 0, lastsp))
+    out_val = str.Substr(elem, lastsp + 1, str.Len(elem) - lastsp - 1)
+    mut idx := Vector {} as Vector<str>
+    mut k := 2
+    until k < parts.len():
+        idx.push("i32 " + parts.get(k))
+        k += 1
+    end
+    out_idx = ba_join(idx)
+    idx.free()
+    parts.free()
+    ret true
+end
+
+func ba_param_ty(p: str): str:
+    sp := ba_find(p, " ", 0)
+    if sp < 0:
+        ret p
+    end
+    ret str.Substr(p, 0, sp)
+end
+
+func ba_param_name(p: str): str:
+    mut i := str.Len(p) - 1
+    until i >= 0 and byte_at(p, i) != 32:
+        i -= 1
+    end
+    ret str.Substr(p, i + 1, str.Len(p) - i - 1)
+end
+
+func ba_parse_define(l: str, out_ret &: str, out_name &: str, out_params &: str, out_pre &: str, out_post &: str): bool:
+    if not str.StartsWith(l, "define "):
+        ret false
+    end
+    atp := ba_find(l, " @", 0)
+    paren := atp >= 0 ? ba_find(l, "(", atp) : 0 - 1
+    if paren < 0:
+        ret false
+    end
+    close := ba_close(l, paren)
+    if close < 0:
+        ret false
+    end
+    pre := str.Substr(l, 0, atp)
+    mut sp := str.Len(pre) - 1
+    until sp >= 0 and byte_at(pre, sp) != 32:
+        sp -= 1
+    end
+    out_ret = str.Substr(pre, sp + 1, str.Len(pre) - sp - 1)
+    out_pre = str.Substr(pre, 0, sp + 1)
+    out_name = str.Substr(l, atp + 1, paren - atp - 1)
+    out_params = str.Substr(l, paren + 1, close - paren - 1)
+    out_post = str.Substr(l, close + 1, str.Len(l) - close - 1)
+    ret true
+end
+
+func ba_addr_safe(lines: Vector<str>, name: str): bool:
+    m := str.Len(name)
+    repeat lines.len() in li:
+        l := lines.get(li)
+        mut p := ba_find(l, name, 0)
+        until p >= 0:
+            after := p + m
+            if after >= str.Len(l) or not ba_ident(byte_at(l, after)):
+                if after >= str.Len(l) or byte_at(l, after) != 40:
+                    ret false
+                end
+                if not str.StartsWith(l, "define "):
+                    cl := ba_find(l, "call ", 0)
+                    if cl < 0 or cl > p or ba_find(str.Substr(l, cl, p - cl), ",", 0) >= 0:
+                        ret false
+                    end
+                end
+            end
+            p = ba_find(l, name, p + m)
+        end
+    end
+    ret true
+end
+
+func ba_parse_call(l: str, out_res &: str, out_rty &: str, out_name &: str, out_args &: str, out_tail &: str): bool:
+    t := ba_trim(l)
+    cl := ba_find(t, "call ", 0)
+    if cl < 0:
+        ret false
+    end
+    atp := ba_find(t, " @", cl)
+    paren := atp >= 0 ? ba_find(t, "(", atp) : 0 - 1
+    if paren < 0:
+        ret false
+    end
+    if cl > 0:
+        eqp := ba_find(t, " = ", 0)
+        if eqp < 0 or eqp > cl or not str.Equals(str.Substr(t, eqp, cl - eqp), " = "):
+            ret false
+        end
+        out_res = str.Substr(t, 0, eqp)
+    else:
+        out_res = ""
+    end
+    close := ba_close(t, paren)
+    if close < 0:
+        ret false
+    end
+    out_rty = ba_trim(str.Substr(t, cl + 5, atp - cl - 5))
+    out_name = str.Substr(t, atp + 1, paren - atp - 1)
+    out_args = str.Substr(t, paren + 1, close - paren - 1)
+    out_tail = str.Substr(t, close + 1, str.Len(t) - close - 1)
+    ret true
+end
+
+func ba_fn_at(fns: Vector<BigFnInfo>, name: str): int:
+    repeat fns.len() in i:
+        if str.Equals(fns.get(i).name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func ba_addr_use(l: str, d: str): bool:
+    t := ba_trim(l)
+    if str.StartsWith(t, d + " = alloca "):
+        ret true
+    end
+    ap := ", ptr " + d
+    k := ba_find(t, ap, 0)
+    if k < 0:
+        ret false
+    end
+    after := k + str.Len(ap)
+    if after < str.Len(t) and byte_at(t, after) != 44:
+        ret false
+    end
+    if ba_find(t, " = load ", 0) > 0 or ba_find(t, " = getelementptr ", 0) > 0:
+        ret ba_uses_line(t, d) == 1
+    end
+    if str.StartsWith(t, "store "):
+        ret ba_uses_line(t, d) == 1
+    end
+    ret false
+end
+
+func ba_local_noescape(f: Vector<str>, q: str): bool:
+    mut is_alloca := false
+    repeat f.len() in li:
+        if str.StartsWith(ba_trim(f.get(li)), q + " = alloca "):
+            is_alloca = true
+        end
+    end
+    if not is_alloca:
+        ret false
+    end
+    mut derived := Vector {} as Vector<str>
+    derived.push(q)
+    mut grew := true
+    mut rounds := 0
+    until grew and rounds < 8:
+        grew = false
+        rounds += 1
+        repeat f.len() in li:
+            t := ba_trim(f.get(li))
+            gp := ba_find(t, " = getelementptr ", 0)
+            if gp > 0:
+                nm := str.Substr(t, 0, gp)
+                if ba_in(derived, nm) < 0:
+                    repeat derived.len() in di:
+                        if ba_find(t, ", ptr " + derived.get(di) + ",", 0) >= 0:
+                            derived.push(nm)
+                            grew = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    mut ok := true
+    repeat derived.len() in di:
+        d := derived.get(di)
+        repeat f.len() in li:
+            l := f.get(li)
+            if li > 0 and ba_uses_line(l, d) > 0 and not ba_addr_use(l, d):
+                ok = false
+            end
+        end
+    end
+    derived.free()
+    ret ok
+end
+
+func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilder):
+    mut hdr := f.get(0)
+    mut sret_ty := ""
+    mut bv_names := Vector {} as Vector<str>
+    mut bv_tys := Vector {} as Vector<str>
+    mut dret := ""
+    mut dname := ""
+    mut dparams := ""
+    mut dpre := ""
+    mut dpost := ""
+    if ba_parse_define(hdr, dret, dname, dparams, dpre, dpost):
+        k := ba_fn_at(fns, dname)
+        if k >= 0:
+            fi := fns.get(k)
+            mut ps := ba_split(dparams)
+            mut np := Vector {} as Vector<str>
+            if str.Len(fi.sret) > 0:
+                np.push("ptr sret(" + fi.sret + ") %sret.out")
+                sret_ty = fi.sret
+            end
+            repeat ps.len() in pi:
+                p := ps.get(pi)
+                pt := ba_param_ty(p)
+                if pi < fi.byval.len() and str.Len(fi.byval.get(pi)) > 0:
+                    pn := ba_param_name(p)
+                    np.push("ptr byval(" + pt + ") " + pn + ".bv")
+                    bv_names.push(pn)
+                    bv_tys.push(pt)
+                else:
+                    np.push(p)
+                end
+            end
+            hdr = dpre + (str.Len(sret_ty) > 0 ? "void" : dret) + " " + dname + "(" + ba_join(np) + ")" + dpost
+            ps.free()
+            np.free()
+        end
+    end
+    mut body := Vector {} as Vector<str>
+    mut entry := Vector {} as Vector<str>
+    mut skip_vals := Vector {} as Vector<str>
+    mut skip_ptrs := Vector {} as Vector<str>
+    mut skip_tys := Vector {} as Vector<str>
+    repeat bv_names.len() in bi:
+        pn := bv_names.get(bi)
+        mut handled := false
+        if ba_uses(f, pn) == 2:
+            repeat f.len() in li:
+                mut q := ""
+                if li > 0 and ba_store(f.get(li), bv_tys.get(bi), pn, q):
+                    handled = true
+                end
+            end
+        end
+        if handled:
+            skip_vals.push(pn)
+            skip_ptrs.push(pn + ".bv")
+            skip_tys.push(bv_tys.get(bi))
+        else:
+            entry.push("  " + pn + " = load " + bv_tys.get(bi) + ", ptr " + pn + ".bv")
+        end
+    end
+    n := f.len()
+    mut ch_members := Vector {} as Vector<int>
+    mut ch_consumer := 0 - 1
+    mut ch_build := ""
+    mut ch_dst := ""
+    mut ch_ty := ""
+    mut i := 1
+    until i < n:
+        l := f.get(i)
+        nx := i + 1 < n ? f.get(i + 1) : ""
+        if ch_consumer < 0:
+            mut ires := ""
+            mut ity := ""
+            mut ibase := ""
+            mut iety := ""
+            mut ival := ""
+            mut iidx := ""
+            if ba_insert(l, ires, ity, ibase, iety, ival, iidx) and ba_big(ity) and (str.Equals(ibase, "undef") or str.Equals(ibase, "poison") or str.Equals(ibase, "zeroinitializer")) and ba_uses(f, ires) == 2:
+                mut members := Vector {} as Vector<int>
+                members.push(i)
+                mut last := ires
+                mut ok := true
+                mut consumer := 0 - 1
+                mut dst := ""
+                mut j := i + 1
+                until j < n and ok and consumer < 0 and j - i < 400:
+                    lj := f.get(j)
+                    mut r2 := ""
+                    mut t2 := ""
+                    mut b2 := ""
+                    mut e2 := ""
+                    mut v2 := ""
+                    mut x2 := ""
+                    if ba_insert(lj, r2, t2, b2, e2, v2, x2) and str.Equals(t2, ity) and str.Equals(b2, last):
+                        if ba_uses(f, r2) != 2:
+                            ok = false
+                        else:
+                            members.push(j)
+                            last = r2
+                        end
+                    else ba_uses_line(lj, last) > 0:
+                        mut q4 := ""
+                        if ba_store(lj, ity, last, q4):
+                            consumer = j
+                            dst = q4
+                        else str.Len(sret_ty) > 0 and str.Equals(ity, sret_ty) and ba_is_ret(lj, ity, last):
+                            consumer = j
+                            dst = "%sret.out"
+                        else:
+                            ok = false
+                        end
+                    end
+                    j += 1
+                end
+                if ok and consumer > 0:
+                    ch_members.free()
+                    ch_members = members
+                    ch_consumer = consumer
+                    ch_dst = dst
+                    ch_ty = ity
+                    ch_build = ba_tmp()
+                    entry.push("  " + ch_build + " = alloca " + ity)
+                    body.push(ba_memset(ch_build, ity))
+                else:
+                    members.free()
+                end
+            end
+        end
+        if ch_consumer > 0:
+            mut is_member := false
+            repeat ch_members.len() in mi:
+                if ch_members.get(mi) == i:
+                    is_member = true
+                end
+            end
+            if is_member:
+                mut r3 := ""
+                mut t3 := ""
+                mut b3 := ""
+                mut e3 := ""
+                mut v3 := ""
+                mut x3 := ""
+                _p := ba_insert(l, r3, t3, b3, e3, v3, x3)
+                g := ba_tmp()
+                body.push("  " + g + " = getelementptr inbounds " + t3 + ", ptr " + ch_build + ", i32 0, " + x3)
+                si2 := ba_in(skip_vals, v3)
+                if si2 >= 0:
+                    body.push(ba_memcpy(g, skip_ptrs.get(si2), e3))
+                else:
+                    body.push("  store " + e3 + " " + v3 + ", ptr " + g)
+                end
+                i += 1
+                continue
+            end
+            if i == ch_consumer:
+                body.push(ba_memcpy(ch_dst, ch_build, ch_ty))
+                if str.Equals(ch_dst, "%sret.out"):
+                    body.push("  ret void")
+                end
+                ch_consumer = 0 - 1
+                i += 1
+                continue
+            end
+        end
+        mut lname := ""
+        mut lty := ""
+        mut lptr := ""
+        if ba_load(l, lname, lty, lptr) and ba_uses(f, lname) == 2:
+            mut q := ""
+            if ba_store(nx, lty, lname, q):
+                body.push(ba_memcpy(q, lptr, lty))
+                i += 2
+                continue
+            end
+            if str.Len(sret_ty) > 0 and str.Equals(lty, sret_ty) and ba_is_ret(nx, lty, lname):
+                body.push(ba_memcpy("%sret.out", lptr, lty))
+                body.push("  ret void")
+                i += 2
+                continue
+            end
+            if ba_find(nx, lty + " " + lname, 0) >= 0 and (ba_find(nx, " = insertvalue ", 0) >= 0 or ba_find(nx, "call ", 0) >= 0):
+                skip_vals.push(lname)
+                skip_ptrs.push(lptr)
+                skip_tys.push(lty)
+                i += 1
+                continue
+            end
+        end
+        mut sv := ""
+        mut sq := ""
+        if ba_find(ba_trim(l), "store ", 0) == 0:
+            repeat skip_vals.len() in si:
+                mut q3 := ""
+                if ba_find(l, " " + skip_vals.get(si) + ", ptr ", 0) >= 0:
+                    st := ba_trim(l)
+                    sty := str.Substr(st, 6, ba_find(st, " " + skip_vals.get(si) + ", ptr ", 0) - 6)
+                    if ba_store(l, sty, skip_vals.get(si), q3):
+                        sv = skip_ptrs.get(si) + "|" + sty
+                        sq = q3
+                    end
+                end
+            end
+        end
+        if str.Len(sq) > 0:
+            bar := ba_find(sv, "|", 0)
+            body.push(ba_memcpy(sq, str.Substr(sv, 0, bar), str.Substr(sv, bar + 1, str.Len(sv) - bar - 1)))
+            i += 1
+            continue
+        end
+        mut cres := ""
+        mut crty := ""
+        mut cname := ""
+        mut cargs := ""
+        mut ctail := ""
+        if ba_parse_call(l, cres, crty, cname, cargs, ctail):
+            k2 := ba_fn_at(fns, cname)
+            if k2 >= 0:
+                fi2 := fns.get(k2)
+                mut cas := ba_split(cargs)
+                mut na := Vector {} as Vector<str>
+                repeat cas.len() in ai:
+                    arg := cas.get(ai)
+                    if ai < fi2.byval.len() and str.Len(fi2.byval.get(ai)) > 0:
+                        aty := fi2.byval.get(ai)
+                        av := ba_param_name(arg)
+                        si3 := ba_in(skip_vals, av)
+                        if si3 >= 0:
+                            na.push("ptr byval(" + aty + ") " + skip_ptrs.get(si3))
+                        else:
+                            tmpb := ba_tmp()
+                            entry.push("  " + tmpb + " = alloca " + aty)
+                            body.push("  store " + aty + " " + av + ", ptr " + tmpb)
+                            na.push("ptr byval(" + aty + ") " + tmpb)
+                        end
+                    else:
+                        na.push(arg)
+                    end
+                end
+                newargs := ba_join(na)
+                cas.free()
+                na.free()
+                if str.Len(fi2.sret) > 0 and str.Len(cres) == 0:
+                    tmpd := ba_tmp()
+                    entry.push("  " + tmpd + " = alloca " + fi2.sret)
+                    body.push("  call void " + cname + "(ptr sret(" + fi2.sret + ") " + tmpd + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                    i += 1
+                    continue
+                end
+                if str.Len(fi2.sret) > 0 and str.Len(cres) > 0:
+                    mut dst2 := ""
+                    mut eat := 0
+                    mut q5 := ""
+                    uses := ba_uses(f, cres)
+                    mut copy_to := ""
+                    if uses == 2 and ba_store(nx, fi2.sret, cres, q5):
+                        if ba_local_noescape(f, q5):
+                            dst2 = q5
+                        else:
+                            copy_to = q5
+                        end
+                        eat = 1
+                    else uses == 2 and str.Len(sret_ty) > 0 and str.Equals(sret_ty, fi2.sret) and ba_is_ret(nx, fi2.sret, cres):
+                        copy_to = "%sret.out"
+                        eat = 1
+                    end
+                    if str.Len(copy_to) > 0:
+                        tmpc := ba_tmp()
+                        entry.push("  " + tmpc + " = alloca " + fi2.sret)
+                        body.push("  call void " + cname + "(ptr sret(" + fi2.sret + ") " + tmpc + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                        body.push(ba_memcpy(copy_to, tmpc, fi2.sret))
+                        if str.Equals(copy_to, "%sret.out"):
+                            body.push("  ret void")
+                        end
+                        i += 1 + eat
+                        continue
+                    end
+                    if str.Len(dst2) > 0:
+                        body.push("  call void @" + str.Substr(cname, 1, str.Len(cname) - 1) + "(ptr sret(" + fi2.sret + ") " + dst2 + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                        if str.Equals(dst2, "%sret.out"):
+                            body.push("  ret void")
+                        end
+                        i += 1 + eat
+                        continue
+                    end
+                    tmps := ba_tmp()
+                    entry.push("  " + tmps + " = alloca " + fi2.sret)
+                    body.push("  call void @" + str.Substr(cname, 1, str.Len(cname) - 1) + "(ptr sret(" + fi2.sret + ") " + tmps + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                    if uses == 2 and ba_find(nx, fi2.sret + " " + cres, 0) >= 0 and (ba_find(nx, " = insertvalue ", 0) >= 0 or ba_find(nx, "call ", 0) >= 0):
+                        skip_vals.push(cres)
+                        skip_ptrs.push(tmps)
+                        skip_tys.push(fi2.sret)
+                    else uses > 1:
+                        body.push("  " + cres + " = load " + fi2.sret + ", ptr " + tmps)
+                    end
+                    i += 1
+                    continue
+                end
+                pre2 := str.Len(cres) > 0 ? cres + " = " : ""
+                body.push("  " + pre2 + "call " + crty + " " + cname + "(" + newargs + ")" + ctail)
+                i += 1
+                continue
+            end
+        end
+        if str.Len(sret_ty) > 0:
+            tl := ba_trim(l)
+            rp := "ret " + sret_ty + " "
+            if str.StartsWith(tl, rp):
+                v := str.Substr(tl, str.Len(rp), str.Len(tl) - str.Len(rp))
+                si4 := ba_in(skip_vals, v)
+                if si4 >= 0:
+                    body.push(ba_memcpy("%sret.out", skip_ptrs.get(si4), sret_ty))
+                else:
+                    body.push("  store " + sret_ty + " " + v + ", ptr %sret.out")
+                end
+                body.push("  ret void")
+                i += 1
+                continue
+            end
+        end
+        body.push(l)
+        i += 1
+    end
+    repeat skip_vals.len() in si:
+        v := skip_vals.get(si)
+        if ba_uses(body, v) > 0:
+            mut nb := Vector {} as Vector<str>
+            mut done := false
+            repeat body.len() in bi:
+                if not done and ba_uses_line(body.get(bi), v) > 0:
+                    nb.push("  " + v + " = load " + skip_tys.get(si) + ", ptr " + skip_ptrs.get(si))
+                    done = true
+                end
+                nb.push(body.get(bi))
+            end
+            body.free()
+            body = nb
+        end
+    end
+    str.BufAppend(out, hdr)
+    str.BufAppend(out, "\n")
+    mut placed := entry.len() == 0
+    repeat body.len() in bi:
+        bl := body.get(bi)
+        if not placed and str.EndsWith(bl, ":") and not str.StartsWith(bl, " "):
+            str.BufAppend(out, bl)
+            str.BufAppend(out, "\n")
+            repeat entry.len() in ei:
+                str.BufAppend(out, entry.get(ei))
+                str.BufAppend(out, "\n")
+            end
+            placed = true
+            continue
+        end
+        if not placed:
+            repeat entry.len() in ei:
+                str.BufAppend(out, entry.get(ei))
+                str.BufAppend(out, "\n")
+            end
+            placed = true
+        end
+        str.BufAppend(out, bl)
+        str.BufAppend(out, "\n")
+    end
+    body.free()
+    entry.free()
+    skip_vals.free()
+    skip_ptrs.free()
+    skip_tys.free()
+    ch_members.free()
+    bv_names.free()
+    bv_tys.free()
+end
+
+func BigAggrRewrite(src: str): str:
+    if ba_find(src, " = type ", 0) < 0:
+        ret src
+    end
+    mut lines := src.split("\n")
+    g_ba_names = Vector {} as Vector<str>
+    g_ba_bodies = Vector {} as Vector<str>
+    g_ba_memo = Vector {} as Vector<i64>
+    repeat lines.len() in i:
+        l := lines.get(i)
+        if str.Len(l) > 0 and byte_at(l, 0) == 37:
+            eqp := ba_find(l, " = type ", 0)
+            if eqp > 0:
+                g_ba_names.push(str.Substr(l, 0, eqp))
+                g_ba_bodies.push(str.Substr(l, eqp + 8, str.Len(l) - eqp - 8))
+                g_ba_memo.push(0 - 1 as i64)
+            end
+        end
+    end
+    mut any_big := false
+    repeat g_ba_names.len() in i:
+        if ba_big(g_ba_names.get(i)):
+            any_big = true
+        end
+    end
+    if not any_big:
+        lines.free()
+        ret src
+    end
+    mut fns := Vector {} as Vector<BigFnInfo>
+    repeat lines.len() in i:
+        mut dret := ""
+        mut dname := ""
+        mut dparams := ""
+        mut dpre := ""
+        mut dpost := ""
+        if ba_parse_define(lines.get(i), dret, dname, dparams, dpre, dpost):
+            mut fi := BigFnInfo { name = dname }
+            mut want := false
+            if ba_big(dret):
+                fi.sret = dret
+                want = true
+            end
+            mut ps := ba_split(dparams)
+            repeat ps.len() in pi:
+                pt := ba_param_ty(ps.get(pi))
+                if ba_big(pt):
+                    fi.byval.push(pt)
+                    want = true
+                else:
+                    fi.byval.push("")
+                end
+            end
+            ps.free()
+            if want and ba_addr_safe(lines, dname):
+                fns.push(fi)
+            end
+        end
+    end
+    mut out := str.NewBuilder()
+    mut fbuf := Vector {} as Vector<str>
+    mut in_fn := false
+    repeat lines.len() in i:
+        l := lines.get(i)
+        if not in_fn and str.StartsWith(l, "define ") and str.EndsWith(l, "{"):
+            in_fn = true
+            fbuf.push(l)
+            continue
+        end
+        if in_fn:
+            if str.Equals(l, "}"):
+                ba_function(fbuf, fns, out)
+                str.BufAppend(out, "}\n")
+                fbuf.free()
+                fbuf = Vector {} as Vector<str>
+                in_fn = false
+            else:
+                fbuf.push(l)
+            end
+            continue
+        end
+        str.BufAppend(out, l)
+        if i + 1 < lines.len():
+            str.BufAppend(out, "\n")
+        end
+    end
+    if ba_find(src, "declare void @llvm.memcpy.p0.p0.i64(", 0) < 0:
+        str.BufAppend(out, "\ndeclare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1) nounwind\n")
+    end
+    if ba_find(src, "declare void @llvm.memset.p0.i64(", 0) < 0:
+        str.BufAppend(out, "\ndeclare void @llvm.memset.p0.i64(ptr, i8, i64, i1) nounwind\n")
+    end
+    r := str.BufStr(out)
+    str.BufFree(out)
+    fbuf.free()
+    fns.free()
+    lines.free()
+    ret r
+end

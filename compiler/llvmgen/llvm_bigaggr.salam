@@ -402,6 +402,77 @@ func ba_fn_at(fns: Vector<BigFnInfo>, name: str): int:
     ret 0 - 1
 end
 
+func ba_addr_use(l: str, d: str): bool:
+    t := ba_trim(l)
+    if str.StartsWith(t, d + " = alloca "):
+        ret true
+    end
+    ap := ", ptr " + d
+    k := ba_find(t, ap, 0)
+    if k < 0:
+        ret false
+    end
+    after := k + str.Len(ap)
+    if after < str.Len(t) and byte_at(t, after) != 44:
+        ret false
+    end
+    if ba_find(t, " = load ", 0) > 0 or ba_find(t, " = getelementptr ", 0) > 0:
+        ret ba_uses_line(t, d) == 1
+    end
+    if str.StartsWith(t, "store "):
+        ret ba_uses_line(t, d) == 1
+    end
+    ret false
+end
+
+func ba_local_noescape(f: Vector<str>, q: str): bool:
+    mut is_alloca := false
+    repeat f.len() in li:
+        if str.StartsWith(ba_trim(f.get(li)), q + " = alloca "):
+            is_alloca = true
+        end
+    end
+    if not is_alloca:
+        ret false
+    end
+    mut derived := Vector {} as Vector<str>
+    derived.push(q)
+    mut grew := true
+    mut rounds := 0
+    until grew and rounds < 8:
+        grew = false
+        rounds += 1
+        repeat f.len() in li:
+            t := ba_trim(f.get(li))
+            gp := ba_find(t, " = getelementptr ", 0)
+            if gp > 0:
+                nm := str.Substr(t, 0, gp)
+                if ba_in(derived, nm) < 0:
+                    repeat derived.len() in di:
+                        if ba_find(t, ", ptr " + derived.get(di) + ",", 0) >= 0:
+                            derived.push(nm)
+                            grew = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    mut ok := true
+    repeat derived.len() in di:
+        d := derived.get(di)
+        repeat f.len() in li:
+            l := f.get(li)
+            if li > 0 and ba_uses_line(l, d) > 0 and not ba_addr_use(l, d):
+                ok = false
+            end
+        end
+    end
+    derived.free()
+    ret ok
+end
+
 func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilder):
     mut hdr := f.get(0)
     mut sret_ty := ""
@@ -464,10 +535,109 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
         end
     end
     n := f.len()
+    mut ch_members := Vector {} as Vector<int>
+    mut ch_consumer := 0 - 1
+    mut ch_build := ""
+    mut ch_dst := ""
+    mut ch_ty := ""
     mut i := 1
     until i < n:
         l := f.get(i)
         nx := i + 1 < n ? f.get(i + 1) : ""
+        if ch_consumer < 0:
+            mut ires := ""
+            mut ity := ""
+            mut ibase := ""
+            mut iety := ""
+            mut ival := ""
+            mut iidx := ""
+            if ba_insert(l, ires, ity, ibase, iety, ival, iidx) and ba_big(ity) and (str.Equals(ibase, "undef") or str.Equals(ibase, "poison") or str.Equals(ibase, "zeroinitializer")) and ba_uses(f, ires) == 2:
+                mut members := Vector {} as Vector<int>
+                members.push(i)
+                mut last := ires
+                mut ok := true
+                mut consumer := 0 - 1
+                mut dst := ""
+                mut j := i + 1
+                until j < n and ok and consumer < 0 and j - i < 400:
+                    lj := f.get(j)
+                    mut r2 := ""
+                    mut t2 := ""
+                    mut b2 := ""
+                    mut e2 := ""
+                    mut v2 := ""
+                    mut x2 := ""
+                    if ba_insert(lj, r2, t2, b2, e2, v2, x2) and str.Equals(t2, ity) and str.Equals(b2, last):
+                        if ba_uses(f, r2) != 2:
+                            ok = false
+                        else:
+                            members.push(j)
+                            last = r2
+                        end
+                    else ba_uses_line(lj, last) > 0:
+                        mut q4 := ""
+                        if ba_store(lj, ity, last, q4):
+                            consumer = j
+                            dst = q4
+                        else str.Len(sret_ty) > 0 and str.Equals(ity, sret_ty) and ba_is_ret(lj, ity, last):
+                            consumer = j
+                            dst = "%sret.out"
+                        else:
+                            ok = false
+                        end
+                    end
+                    j += 1
+                end
+                if ok and consumer > 0:
+                    ch_members.free()
+                    ch_members = members
+                    ch_consumer = consumer
+                    ch_dst = dst
+                    ch_ty = ity
+                    ch_build = ba_tmp()
+                    entry.push("  " + ch_build + " = alloca " + ity)
+                    body.push(ba_memset(ch_build, ity))
+                else:
+                    members.free()
+                end
+            end
+        end
+        if ch_consumer > 0:
+            mut is_member := false
+            repeat ch_members.len() in mi:
+                if ch_members.get(mi) == i:
+                    is_member = true
+                end
+            end
+            if is_member:
+                mut r3 := ""
+                mut t3 := ""
+                mut b3 := ""
+                mut e3 := ""
+                mut v3 := ""
+                mut x3 := ""
+                _p := ba_insert(l, r3, t3, b3, e3, v3, x3)
+                g := ba_tmp()
+                body.push("  " + g + " = getelementptr inbounds " + t3 + ", ptr " + ch_build + ", i32 0, " + x3)
+                si2 := ba_in(skip_vals, v3)
+                if si2 >= 0:
+                    body.push(ba_memcpy(g, skip_ptrs.get(si2), e3))
+                else:
+                    body.push("  store " + e3 + " " + v3 + ", ptr " + g)
+                end
+                i += 1
+                continue
+            end
+            if i == ch_consumer:
+                body.push(ba_memcpy(ch_dst, ch_build, ch_ty))
+                if str.Equals(ch_dst, "%sret.out"):
+                    body.push("  ret void")
+                end
+                ch_consumer = 0 - 1
+                i += 1
+                continue
+            end
+        end
         mut lname := ""
         mut lty := ""
         mut lptr := ""
@@ -513,77 +683,6 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
             i += 1
             continue
         end
-        mut ires := ""
-        mut ity := ""
-        mut ibase := ""
-        mut iety := ""
-        mut ival := ""
-        mut iidx := ""
-        if ba_insert(l, ires, ity, ibase, iety, ival, iidx) and ba_big(ity):
-            mut chain := Vector {} as Vector<str>
-            mut ok := true
-            mut j := i
-            mut last := ""
-            until j < n and ok:
-                mut r2 := ""
-                mut t2 := ""
-                mut b2 := ""
-                mut e2 := ""
-                mut v2 := ""
-                mut x2 := ""
-                if not ba_insert(f.get(j), r2, t2, b2, e2, v2, x2) or not str.Equals(t2, ity):
-                    break
-                end
-                if j > i and not str.Equals(b2, last):
-                    break
-                end
-                if ba_uses(f, r2) != 2:
-                    ok = false
-                    break
-                end
-                chain.push(f.get(j))
-                last = r2
-                j += 1
-            end
-            mut dst := ""
-            mut consumed := 0
-            fin := j < n ? f.get(j) : ""
-            mut q4 := ""
-            if ok and ba_store(fin, ity, last, q4):
-                dst = q4
-                consumed = 1
-            else ok and str.Len(sret_ty) > 0 and str.Equals(ity, sret_ty) and ba_is_ret(fin, ity, last):
-                dst = "%sret.out"
-                consumed = 1
-            end
-            if str.Len(dst) > 0:
-                body.push(ba_memset(dst, ity))
-                repeat chain.len() in ci:
-                    mut r3 := ""
-                    mut t3 := ""
-                    mut b3 := ""
-                    mut e3 := ""
-                    mut v3 := ""
-                    mut x3 := ""
-                    _p := ba_insert(chain.get(ci), r3, t3, b3, e3, v3, x3)
-                    g := ba_tmp()
-                    body.push("  " + g + " = getelementptr inbounds " + t3 + ", ptr " + dst + ", i32 0, " + x3)
-                    si2 := ba_in(skip_vals, v3)
-                    if si2 >= 0:
-                        body.push(ba_memcpy(g, skip_ptrs.get(si2), e3))
-                    else:
-                        body.push("  store " + e3 + " " + v3 + ", ptr " + g)
-                    end
-                end
-                if str.Equals(dst, "%sret.out"):
-                    body.push("  ret void")
-                end
-                chain.free()
-                i = j + consumed
-                continue
-            end
-            chain.free()
-        end
         mut cres := ""
         mut crty := ""
         mut cname := ""
@@ -616,17 +715,40 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                 newargs := ba_join(na)
                 cas.free()
                 na.free()
+                if str.Len(fi2.sret) > 0 and str.Len(cres) == 0:
+                    tmpd := ba_tmp()
+                    entry.push("  " + tmpd + " = alloca " + fi2.sret)
+                    body.push("  call void " + cname + "(ptr sret(" + fi2.sret + ") " + tmpd + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                    i += 1
+                    continue
+                end
                 if str.Len(fi2.sret) > 0 and str.Len(cres) > 0:
                     mut dst2 := ""
                     mut eat := 0
                     mut q5 := ""
                     uses := ba_uses(f, cres)
+                    mut copy_to := ""
                     if uses == 2 and ba_store(nx, fi2.sret, cres, q5):
-                        dst2 = q5
+                        if ba_local_noescape(f, q5):
+                            dst2 = q5
+                        else:
+                            copy_to = q5
+                        end
                         eat = 1
                     else uses == 2 and str.Len(sret_ty) > 0 and str.Equals(sret_ty, fi2.sret) and ba_is_ret(nx, fi2.sret, cres):
-                        dst2 = "%sret.out"
+                        copy_to = "%sret.out"
                         eat = 1
+                    end
+                    if str.Len(copy_to) > 0:
+                        tmpc := ba_tmp()
+                        entry.push("  " + tmpc + " = alloca " + fi2.sret)
+                        body.push("  call void " + cname + "(ptr sret(" + fi2.sret + ") " + tmpc + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
+                        body.push(ba_memcpy(copy_to, tmpc, fi2.sret))
+                        if str.Equals(copy_to, "%sret.out"):
+                            body.push("  ret void")
+                        end
+                        i += 1 + eat
+                        continue
                     end
                     if str.Len(dst2) > 0:
                         body.push("  call void @" + str.Substr(cname, 1, str.Len(cname) - 1) + "(ptr sret(" + fi2.sret + ") " + dst2 + (str.Len(newargs) > 0 ? ", " + newargs : "") + ")" + ctail)
@@ -643,7 +765,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
                         skip_vals.push(cres)
                         skip_ptrs.push(tmps)
                         skip_tys.push(fi2.sret)
-                    else:
+                    else uses > 1:
                         body.push("  " + cres + " = load " + fi2.sret + ", ptr " + tmps)
                     end
                     i += 1
@@ -720,6 +842,7 @@ func ba_function(f: Vector<str>, fns: Vector<BigFnInfo>, out &: str.StringBuilde
     skip_vals.free()
     skip_ptrs.free()
     skip_tys.free()
+    ch_members.free()
     bv_names.free()
     bv_tys.free()
 end

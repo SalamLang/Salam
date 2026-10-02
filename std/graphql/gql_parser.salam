@@ -19,6 +19,7 @@ struct Ps:
     pub pos: int = 0
     pub failed: bool = false
     pub err: GqlError = GqlError {}
+    pub depth: int = 0
 end
 
 func _ps_cur(ps: Ps): GqlToken:
@@ -79,7 +80,44 @@ func _ps_skip(ps &: Ps, kind: int): bool:
     ret false
 end
 
+func _ps_enter(ps &: Ps): bool:
+    ps.depth += 1
+    if ps.depth > 256:
+        _ps_fail(ps, "the document nests deeper than 256 levels")
+        ret false
+    end
+    ret true
+end
+
 func _p_value(ps &: Ps, doc &: Document, isConst: bool): int:
+    mut id := 0 - 1
+    if _ps_enter(ps):
+        id = _p_value_body(ps, doc, isConst)
+    end
+    ps.depth -= 1
+    ret id
+end
+
+func _p_type_ref(ps &: Ps, doc &: Document): int:
+    mut id := 0 - 1
+    if _ps_enter(ps):
+        id = _p_type_ref_body(ps, doc)
+    end
+    ps.depth -= 1
+    ret id
+end
+
+func _p_selection_set(ps &: Ps, doc &: Document): Vector<int>:
+    if not _ps_enter(ps):
+        ps.depth -= 1
+        ret Vector {}
+    end
+    out := _p_selection_set_body(ps, doc)
+    ps.depth -= 1
+    ret out
+end
+
+func _p_value_body(ps &: Ps, doc &: Document, isConst: bool): int:
     if ps.failed: ret 0 - 1 end
     t := _ps_cur(ps)
     if t.kind == TOK_DOLLAR: ret _p_variable_value(ps, doc, isConst) end
@@ -186,7 +224,7 @@ func _p_object_value(ps &: Ps, doc &: Document, isConst: bool): int:
     ret _doc_add_value(doc, v)
 end
 
-func _p_type_ref(ps &: Ps, doc &: Document): int:
+func _p_type_ref_body(ps &: Ps, doc &: Document): int:
     if ps.failed: ret 0 - 1 end
     mut id := 0 - 1
     if _ps_skip(ps, TOK_LBRACKET):
@@ -245,7 +283,7 @@ func _p_directives(ps &: Ps, doc &: Document, isConst: bool): Vector<AstDirectiv
     ret out
 end
 
-func _p_selection_set(ps &: Ps, doc &: Document): Vector<int>:
+func _p_selection_set_body(ps &: Ps, doc &: Document): Vector<int>:
     mut out := Vector {} as Vector<int>
     _ps_expect(ps, TOK_LBRACE)
     if ps.failed: ret out end

@@ -1,0 +1,75 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import net.websocket
+import net.httpx
+import net.internal.rawsock
+import compress
+
+const WS_PORT := 19471
+const HTTP_PORT := 19472
+
+mut evil := rawsock.Socket {}
+
+func evil server():
+    c := rawsock.Accept(evil)
+    if rawsock.Ok(c):
+        rawsock.SetTimeout(c, 2000)
+        _ := rawsock.Recv(c, 4096)
+        _ := rawsock.Send(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nworld\r\n0\r\n\r\n")
+        rawsock.Close(c)
+    end
+end
+
+func frames(): str:
+    mut b := compress.NewByteBuf()
+    each x in [129, 5, 104, 101, 108, 108, 111, 130, 5, 0, 129, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1, 98, 105, 110]:
+        compress.BufPush(b, x)
+    end
+    s := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret s
+end
+
+func main:
+    srv := websocket.Listen(WS_PORT)
+    if not websocket.Ok(srv):
+        println "websocket listen failed"
+        ret
+    end
+    raw := rawsock.Connect("127.0.0.1", WS_PORT)
+    _ := rawsock.Send(raw, "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+    f := frames()
+    _ := rawsock.SendBytes(raw, f as void*, 24)
+    mut c := websocket.Accept(srv)
+    mut kinds := ""
+    repeat 4:
+        m := websocket.Poll(c, 300)
+        kinds = kinds.concat(websocket.IsText(m) ? "t" : "-")
+    end
+    println "websocket server survived " + kinds
+    websocket.Stop(c)
+    rawsock.Close(raw)
+    websocket.CloseServer(srv)
+
+    evil = rawsock.Listen(HTTP_PORT)
+    h := spawn(evil server)
+    ep := httpx.ParseEndpoint("http://127.0.0.1:19472/")
+    mut r := httpx.SendRaw(ep, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", null, 0)
+    println "http client survived ok=" + (r.ok ? "true" : "false") + " error=" + r.error
+    httpx.FreeRaw(r)
+    rawsock.Close(evil)
+    _ := h
+end

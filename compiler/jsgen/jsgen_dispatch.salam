@@ -249,6 +249,49 @@ func jsg_unary_join(op: str, operand: str): str:
     ret op + operand
 end
 
+func jsg_func_ref(g &: Jg, s &: sm.Sema, a &: at.Ast, fsym: int, home_pkg: str, name: str): str:
+    if fsym == 0 or sm.SymAt(s, fsym).kind != sm.SYM_FUNC or sm.SymAt(s, fsym).overloads.len() == 0:
+        ret ""
+    end
+    fv := sm.SymAt(s, fsym)
+    sig := fv.overloads.get(0)
+    mut d_ext := false
+    mut d_syn := false
+    d := sm.SigAt(s, sig).decl
+    if d != 0:
+        d_ext = at.Get(a, d).is_extern
+        d_syn = at.Get(a, d).synthetic
+    end
+    pk := str.Len(fv.pkgname) > 0 ? fv.pkgname : home_pkg
+    ret jsg_fn_name(g, s, pk, "", name, fsym, sig, d_ext, d_syn)
+end
+
+func jsg_func_addr(g &: Jg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str): str:
+    if pkgid != 0 and at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
+        pname := at.Get(a, pkgid).name
+        mut pk := sm.Lookup(s, s.global, pname)
+        if pk == 0 and g.cur_fn_home != 0:
+            pk = sm.Lookup(s, g.cur_fn_home, pname)
+        end
+        if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE and sm.SymAt(s, pk).members != 0:
+            pkv := sm.SymAt(s, pk)
+            r := jsg_func_ref(g, s, a, sm.LookupLocal(s, pkv.members, name), str.Len(pkv.pkgname) > 0 ? pkv.pkgname : pname, name)
+            if str.Len(r) > 0:
+                ret r
+            end
+        end
+    end
+    mut f := sm.Lookup(s, s.global, name)
+    if f == 0 and g.cur_fn_home != 0:
+        f = sm.Lookup(s, g.cur_fn_home, name)
+    end
+    r2 := jsg_func_ref(g, s, a, f, g.pkg, name)
+    if str.Len(r2) > 0:
+        ret r2
+    end
+    ret jsg_ident(name)
+end
+
 func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
     if id == 0:
         ret "0"
@@ -334,6 +377,9 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
             end
         end
         ret jsg_ident(n.name)
+    end
+    if n.kind == at.AST_FUNC_ADDR:
+        ret jsg_func_addr(g, s, a, n.a, n.name)
     end
     if n.kind == at.AST_THIS:
         ret "__self"
@@ -566,6 +612,12 @@ func jsg_expr_p(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, minprec: int): str:
                                 end
                                 gp3 := str.Len(ev.pkgname) > 0 ? ev.pkgname : av.name
                                 ret jsg_global_ref(g, gp3, n.name)
+                            end
+                            if m2v.kind == sm.SYM_FUNC:
+                                fr := jsg_func_ref(g, s, a, m2, str.Len(ev.pkgname) > 0 ? ev.pkgname : av.name, n.name)
+                                if str.Len(fr) > 0:
+                                    ret fr
+                                end
                             end
                             if m2v.decl != 0 and at.Get(a, m2v.decl).a != 0:
                                 ret jsg_expr_p(

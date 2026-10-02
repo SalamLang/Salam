@@ -435,18 +435,7 @@ func _wpd_inverse(t: _WpdTransform, px &: Vector<i64>, ysize: int):
     end
 end
 
-func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
-    ok = false
-    mut r := compress.NewBitReader(p, n)
-    if compress.BitReadBits(r, 8) != 47:
-        ret New(0, 0)
-    end
-    width := compress.BitReadBits(r, 14) + 1
-    height := compress.BitReadBits(r, 14) + 1
-    _ := compress.BitReadBit(r)
-    if compress.BitReadBits(r, 3) != 0:
-        ret New(0, 0)
-    end
+func _wpd_stream(r &: compress.BitReader, width: int, height: int, px &: Vector<i64>): bool:
     mut xsize := width
     mut transforms := Vector {} as Vector<_WpdTransform>
     mut seen := 0
@@ -454,7 +443,7 @@ func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
         kind := compress.BitReadBits(r, 2)
         if ((seen >> kind) & 1) == 1:
             _wpd_free_transforms(transforms)
-            ret New(0, 0)
+            ret false
         end
         seen = seen | (1 << kind)
         mut t := _WpdTransform { kind = kind, xsize = xsize }
@@ -476,12 +465,10 @@ func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
         end
         transforms.push(t)
     end
-    mut px := Vector {} as Vector<i64>
     _wpd_pixels(r, xsize, height, true, px)
     if r.bad or px.len() != xsize * height:
-        px.free()
         _wpd_free_transforms(transforms)
-        ret New(0, 0)
+        ret false
     end
     mut k := transforms.len() - 1
     until k >= 0:
@@ -489,6 +476,26 @@ func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
         k -= 1
     end
     _wpd_free_transforms(transforms)
+    ret true
+end
+
+func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    mut r := compress.NewBitReader(p, n)
+    if compress.BitReadBits(r, 8) != 47:
+        ret New(0, 0)
+    end
+    width := compress.BitReadBits(r, 14) + 1
+    height := compress.BitReadBits(r, 14) + 1
+    _ := compress.BitReadBit(r)
+    if compress.BitReadBits(r, 3) != 0:
+        ret New(0, 0)
+    end
+    mut px := Vector {} as Vector<i64>
+    if not _wpd_stream(r, width, height, px):
+        px.free()
+        ret New(0, 0)
+    end
     img := New(width, height)
     bp := img.pixels as u8*
     repeat width * height in i:
@@ -507,6 +514,79 @@ func _wpd_u32(bp: u8*, at: int): int:
     ret (bp[at] as int) | ((bp[at + 1] as int) << 8) | ((bp[at + 2] as int) << 16) | ((bp[at + 3] as int) << 24)
 end
 
+func _wpd_u24(bp: u8*, at: int): int:
+    ret (bp[at] as int) | ((bp[at + 1] as int) << 8) | ((bp[at + 2] as int) << 16)
+end
+
+func _wpd_tag(bp: u8*, at: int, a: int, b: int, c: int, d: int): bool:
+    ret bp[at] as int == a and bp[at + 1] as int == b and bp[at + 2] as int == c and bp[at + 3] as int == d
+end
+
+func _wpd_chunks(p: void*, start: int, stop: int, ok &: bool): Image:
+    ok = false
+    bp := p as u8*
+    mut alpha_at := 0 - 1
+    mut alpha_size := 0
+    mut canvas_w := 0
+    mut canvas_h := 0
+    mut at := start
+    until at + 8 <= stop:
+        size := _wpd_u32(bp, at + 4)
+        body := at + 8
+        if size < 0 or body + size > stop:
+            ret New(0, 0)
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 76):
+            ret _wpd_vp8l(((p as i64) + (body as i64)) as void*, size, ok)
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 88) and size >= 10:
+            canvas_w = _wpd_u24(bp, body + 4) + 1
+            canvas_h = _wpd_u24(bp, body + 7) + 1
+        end
+        if _wpd_tag(bp, at, 65, 76, 80, 72):
+            alpha_at = body
+            alpha_size = size
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 32):
+            mut img := _vp8_frame(bp, body, size, ok)
+            if ok and alpha_at >= 0 and not _vp8_alpha(img, ((p as i64) + (alpha_at as i64)) as void*, alpha_size):
+                ok = false
+                Free(img)
+                ret New(0, 0)
+            end
+            ret img
+        end
+        if _wpd_tag(bp, at, 65, 78, 77, 70) and size >= 16:
+            fx := _wpd_u24(bp, body) * 2
+            fy := _wpd_u24(bp, body + 3) * 2
+            mut frame := _wpd_chunks(p, body + 16, body + size, ok)
+            if not ok:
+                ret New(0, 0)
+            end
+            if canvas_w == 0 or (fx == 0 and fy == 0 and frame.width == canvas_w and frame.height == canvas_h):
+                ret frame
+            end
+            if fx + frame.width > canvas_w or fy + frame.height > canvas_h:
+                ok = false
+                Free(frame)
+                ret New(0, 0)
+            end
+            canvas := New(canvas_w, canvas_h)
+            dst := canvas.pixels as u8*
+            src := frame.pixels as u8*
+            repeat frame.height in y:
+                repeat frame.width * 4 in k:
+                    dst[((fy + y) * canvas_w + fx) * 4 + k] = src[y * frame.width * 4 + k]
+                end
+            end
+            Free(frame)
+            ret canvas
+        end
+        at = body + size + (size % 2)
+    end
+    ret New(0, 0)
+end
+
 @en "DecodeWebP"
 @fa "کدگشایی وب‌پی"
 pub func DecodeWebP(p: void*, n: int, ok &: bool): Image:
@@ -514,18 +594,5 @@ pub func DecodeWebP(p: void*, n: int, ok &: bool): Image:
     if not IsWebP(p, n):
         ret New(0, 0)
     end
-    bp := p as u8*
-    mut at := 12
-    until at + 8 <= n:
-        size := _wpd_u32(bp, at + 4)
-        body := at + 8
-        if size < 0 or body + size > n:
-            ret New(0, 0)
-        end
-        if bp[at] as int == 86 and bp[at + 1] as int == 80 and bp[at + 2] as int == 56 and bp[at + 3] as int == 76:
-            ret _wpd_vp8l(((p as i64) + (body as i64)) as void*, size, ok)
-        end
-        at = body + size + (size % 2)
-    end
-    ret New(0, 0)
+    ret _wpd_chunks(p, 12, n, ok)
 end

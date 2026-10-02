@@ -1,0 +1,1008 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+import mem
+import math
+
+const _VP8_COST := [
+    0, 2048, 1792, 1642, 1536, 1454, 1386, 1329, 1280, 1236, 1198, 1162, 1130, 1101, 1073, 1048, 1024, 1002, 980, 961, 942, 924, 906, 890,
+    874, 859, 845, 831, 817, 804, 792, 780, 768, 757, 746, 735, 724, 714, 705, 695, 686, 676, 668, 659, 650, 642, 634, 626,
+    618, 611, 603, 596, 589, 582, 575, 568, 561, 555, 548, 542, 536, 530, 524, 518, 512, 506, 501, 495, 490, 484, 479, 474,
+    468, 463, 458, 453, 449, 444, 439, 434, 430, 425, 420, 416, 412, 407, 403, 399, 394, 390, 386, 382, 378, 374, 370, 366,
+    362, 358, 355, 351, 347, 343, 340, 336, 333, 329, 326, 322, 319, 315, 312, 309, 305, 302, 299, 296, 292, 289, 286, 283,
+    280, 277, 274, 271, 268, 265, 262, 259, 256, 253, 250, 247, 245, 242, 239, 236, 234, 231, 228, 226, 223, 220, 218, 215,
+    212, 210, 207, 205, 202, 200, 197, 195, 193, 190, 188, 185, 183, 181, 178, 176, 174, 171, 169, 167, 164, 162, 160, 158,
+    156, 153, 151, 149, 147, 145, 143, 140, 138, 136, 134, 132, 130, 128, 126, 124, 122, 120, 118, 116, 114, 112, 110, 108,
+    106, 104, 102, 101, 99, 97, 95, 93, 91, 89, 87, 86, 84, 82, 80, 78, 77, 75, 73, 71, 70, 68, 66, 64,
+    63, 61, 59, 58, 56, 54, 53, 51, 49, 48, 46, 44, 43, 41, 40, 38, 36, 35, 33, 32, 30, 28, 27, 25,
+    24, 22, 21, 19, 18, 16, 15, 13, 12, 10, 9, 7, 6, 4, 3, 1
+]
+
+const _VP8_SHARPEN := [0, 30, 60, 90, 30, 60, 90, 90, 60, 90, 90, 90, 90, 90, 90, 90]
+
+struct _Vp8Bw:
+    pub buf: compress.ByteBuf = compress.ByteBuf {}
+    pub range: int = 255
+    pub bottom: i64 = 0
+    pub count: int = 24
+    pub dry: bool = false
+    pub bits: int = 0
+    pub stats: bool = false
+    pub probs: Vector<int> = Vector {}
+    pub ones: Vector<int> = Vector {}
+    pub seen: Vector<int> = Vector {}
+end
+
+func _vp8w_tok(w &: _Vp8Bw, bit: int, idx: int):
+    if w.stats:
+        w.seen.set(idx, w.seen.get(idx) + 1)
+        if bit != 0:
+            w.ones.set(idx, w.ones.get(idx) + 1)
+        end
+        ret
+    end
+    _vp8w_put(w, bit, w.probs.len() > 0 ? w.probs.get(idx) : _VP8_PROBA0[idx])
+end
+
+func _vp8w_new(): _Vp8Bw:
+    ret _Vp8Bw { buf = compress.NewByteBuf() }
+end
+
+func _vp8w_carry(w &: _Vp8Bw):
+    bp := w.buf.data as u8*
+    mut i := compress.BufLen(w.buf) - 1
+    until i >= 0 and bp[i] as int == 255:
+        bp[i] = 0 as u8
+        i -= 1
+    end
+    if i >= 0:
+        bp[i] = ((bp[i] as int) + 1) as u8
+    end
+end
+
+func _vp8w_put(w &: _Vp8Bw, bit: int, prob: int):
+    if w.dry:
+        w.bits += bit != 0 ? _VP8_COST[256 - prob] : _VP8_COST[prob]
+        ret
+    end
+    split := 1 + (((w.range - 1) * prob) >> 8)
+    if bit != 0:
+        w.bottom += split as i64
+        w.range -= split
+    else:
+        w.range = split
+    end
+    until w.range < 128:
+        w.range = w.range << 1
+        if (w.bottom & (2147483648 as i64)) != 0:
+            _vp8w_carry(w)
+        end
+        w.bottom = (w.bottom << 1) & (4294967295 as i64)
+        w.count -= 1
+        if w.count == 0:
+            compress.BufPush(w.buf, ((w.bottom >> 24) & (255 as i64)) as int)
+            w.bottom = w.bottom & (16777215 as i64)
+            w.count = 8
+        end
+    end
+end
+
+func _vp8w_bits(w &: _Vp8Bw, v: int, n: int):
+    mut k := n - 1
+    until k >= 0:
+        _vp8w_put(w, (v >> k) & 1, 128)
+        k -= 1
+    end
+end
+
+func _vp8w_flush(w &: _Vp8Bw):
+    mut c := w.count
+    mut v := w.bottom
+    if (v & ((1 as i64) << (32 - c))) != 0:
+        _vp8w_carry(w)
+    end
+    v = (v << (c & 7)) & (4294967295 as i64)
+    c = c >> 3
+    c -= 1
+    until c >= 0:
+        v = (v << 8) & (4294967295 as i64)
+        c -= 1
+    end
+    repeat 4:
+        compress.BufPush(w.buf, ((v >> 24) & (255 as i64)) as int)
+        v = (v << 8) & (4294967295 as i64)
+    end
+end
+
+func _vp8w_coeffs(w &: _Vp8Bw, t: int, ctx: int, lv: int*, lb: int, first: int): int:
+    mut last := 0 - 1
+    mut k := first
+    until k < 16:
+        if lv[lb + k] != 0:
+            last = k
+        end
+        k += 1
+    end
+    mut n := first
+    mut p := _vp8_pidx(t, n, ctx)
+    _vp8w_tok(w, last >= 0 ? 1 : 0, p)
+    if last < 0:
+        ret 0
+    end
+    until n < 16:
+        c := lv[lb + n]
+        n += 1
+        mut v := c < 0 ? 0 - c : c
+        _vp8w_tok(w, v != 0 ? 1 : 0, p + 1)
+        if v == 0:
+            p = _vp8_pidx(t, n, 0)
+            continue
+        end
+        _vp8w_tok(w, v > 1 ? 1 : 0, p + 2)
+        if v <= 1:
+            p = _vp8_pidx(t, n, 1)
+        else:
+            _vp8w_tok(w, v > 4 ? 1 : 0, p + 3)
+            if v <= 4:
+                _vp8w_tok(w, v != 2 ? 1 : 0, p + 4)
+                if v != 2:
+                    _vp8w_tok(w, v == 4 ? 1 : 0, p + 5)
+                end
+            else:
+                _vp8w_tok(w, v > 10 ? 1 : 0, p + 6)
+                if v <= 10:
+                    _vp8w_tok(w, v > 6 ? 1 : 0, p + 7)
+                    if v <= 6:
+                        _vp8w_put(w, v == 6 ? 1 : 0, 159)
+                    else:
+                        _vp8w_put(w, v >= 9 ? 1 : 0, 165)
+                        _vp8w_put(w, (v & 1) == 0 ? 1 : 0, 145)
+                    end
+                else:
+                    mut cat := 3
+                    if v < 3 + (8 << 1):
+                        cat = 0
+                    else v < 3 + (8 << 2):
+                        cat = 1
+                    else v < 3 + (8 << 3):
+                        cat = 2
+                    end
+                    _vp8w_tok(w, cat >> 1, p + 8)
+                    _vp8w_tok(w, cat & 1, p + 9 + (cat >> 1))
+                    v -= 3 + (8 << cat)
+                    if cat == 0:
+                        repeat 3 in b:
+                            _vp8w_put(w, (v >> (2 - b)) & 1, _VP8_CAT3[b])
+                        end
+                    else cat == 1:
+                        repeat 4 in b:
+                            _vp8w_put(w, (v >> (3 - b)) & 1, _VP8_CAT4[b])
+                        end
+                    else cat == 2:
+                        repeat 5 in b:
+                            _vp8w_put(w, (v >> (4 - b)) & 1, _VP8_CAT5[b])
+                        end
+                    else:
+                        repeat 11 in b:
+                            _vp8w_put(w, (v >> (10 - b)) & 1, _VP8_CAT6[b])
+                        end
+                    end
+                end
+            end
+            p = _vp8_pidx(t, n, 2)
+        end
+        _vp8w_put(w, c < 0 ? 1 : 0, 128)
+        if n == 16:
+            ret 1
+        end
+        _vp8w_tok(w, n <= last ? 1 : 0, p)
+        if n > last:
+            ret 1
+        end
+    end
+    ret 1
+end
+
+func _vp8_fdct(src: u8*, ref: u8*, d: int, out: int*, base: int):
+    mut tmp := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    repeat 4 in i:
+        r := d + i * _VP8_BPS
+        d0 := (src[r] as int) - (ref[r] as int)
+        d1 := (src[r + 1] as int) - (ref[r + 1] as int)
+        d2 := (src[r + 2] as int) - (ref[r + 2] as int)
+        d3 := (src[r + 3] as int) - (ref[r + 3] as int)
+        a0 := d0 + d3
+        a1 := d1 + d2
+        a2 := d1 - d2
+        a3 := d0 - d3
+        tmp[i * 4] = (a0 + a1) * 8
+        tmp[i * 4 + 1] = (a2 * 2217 + a3 * 5352 + 1812) >> 9
+        tmp[i * 4 + 2] = (a0 - a1) * 8
+        tmp[i * 4 + 3] = (a3 * 2217 - a2 * 5352 + 937) >> 9
+    end
+    repeat 4 in i:
+        a0 := tmp[i] + tmp[12 + i]
+        a1 := tmp[4 + i] + tmp[8 + i]
+        a2 := tmp[4 + i] - tmp[8 + i]
+        a3 := tmp[i] - tmp[12 + i]
+        out[base + i] = (a0 + a1 + 7) >> 4
+        out[base + 4 + i] = ((a2 * 2217 + a3 * 5352 + 12000) >> 16) + (a3 != 0 ? 1 : 0)
+        out[base + 8 + i] = (a0 - a1 + 7) >> 4
+        out[base + 12 + i] = (a3 * 2217 - a2 * 5352 + 51000) >> 16
+    end
+end
+
+func _vp8_fwht(c: int*, out: int*):
+    mut tmp := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    repeat 4 in i:
+        b := i * 64
+        a0 := c[b] + c[b + 32]
+        a1 := c[b + 16] + c[b + 48]
+        a2 := c[b + 16] - c[b + 48]
+        a3 := c[b] - c[b + 32]
+        tmp[i * 4] = a0 + a1
+        tmp[i * 4 + 1] = a3 + a2
+        tmp[i * 4 + 2] = a3 - a2
+        tmp[i * 4 + 3] = a0 - a1
+    end
+    repeat 4 in i:
+        a0 := tmp[i] + tmp[8 + i]
+        a1 := tmp[4 + i] + tmp[12 + i]
+        a2 := tmp[4 + i] - tmp[12 + i]
+        a3 := tmp[i] - tmp[8 + i]
+        out[i] = (a0 + a1) >> 1
+        out[4 + i] = (a3 + a2) >> 1
+        out[8 + i] = (a3 - a2) >> 1
+        out[12 + i] = (a0 - a1) >> 1
+    end
+end
+
+func _vp8_quant(c: int*, base: int, first: int, dcq: int, acq: int, dcb: int, acb: int, sharp: bool, lv: int*, lb: int): int:
+    mut nz := 0
+    mut n := first
+    until n < 16:
+        j := _VP8_ZIGZAG[n]
+        q := n == 0 ? dcq : acq
+        bias := n == 0 ? dcb : acb
+        v := c[base + j]
+        a := (v < 0 ? 0 - v : v) + (sharp ? (_VP8_SHARPEN[j] * q) >> 11 : 0)
+        mut level := (a * ((1 << 17) / q) + (bias << 9)) >> 17
+        if level > 2047:
+            level = 2047
+        end
+        if v < 0:
+            level = 0 - level
+        end
+        lv[lb + n] = level
+        c[base + j] = level * q
+        if level != 0:
+            nz += 1
+        end
+        n += 1
+    end
+    ret nz
+end
+
+func _vp8_sse(a: u8*, b: u8*, d: int, size: int): int:
+    mut s := 0
+    repeat size in y:
+        repeat size in x:
+            i := d + x + y * _VP8_BPS
+            e := (a[i] as int) - (b[i] as int)
+            s += e * e
+        end
+    end
+    ret s
+end
+
+func _vp8_edge_mode(mode: int, mx: int, my: int): int:
+    if mode != 0:
+        ret mode
+    end
+    ret mx == 0 ? (my == 0 ? 6 : 5) : (my == 0 ? 4 : 0)
+end
+
+func _vp8_to_y(r: int, g: int, b: int): int:
+    ret (16839 * r + 33059 * g + 6420 * b + (16 << 16) + 32768) >> 16
+end
+
+func _vp8_to_uv(v: int): int:
+    ret _vp8_clamp((v + (32768 << 2) + (128 << 18)) >> 18, 255)
+end
+
+func _vp8_yuv(img: Image, yp: u8*, ys: int, up: u8*, vp: u8*, uvs: int, rows: int):
+    bp := img.pixels as u8*
+    w := img.width
+    h := img.height
+    repeat rows in y:
+        sy := y < h ? y : h - 1
+        repeat ys in x:
+            sx := x < w ? x : w - 1
+            i := (sy * w + sx) * 4
+            yp[y * ys + x] = _vp8_to_y(bp[i] as int, bp[i + 1] as int, bp[i + 2] as int) as u8
+        end
+    end
+    repeat rows / 2 in y:
+        repeat uvs in x:
+            mut r := 0
+            mut g := 0
+            mut b := 0
+            repeat 2 in dy:
+                repeat 2 in dx:
+                    sx := _vp8_clamp(2 * x + dx, w - 1)
+                    sy := _vp8_clamp(2 * y + dy, h - 1)
+                    i := (sy * w + sx) * 4
+                    r += bp[i] as int
+                    g += bp[i + 1] as int
+                    b += bp[i + 2] as int
+                end
+            end
+            up[y * uvs + x] = _vp8_to_uv(0 - 9719 * r - 19081 * g + 28800 * b) as u8
+            vp[y * uvs + x] = _vp8_to_uv(28800 * r - 24116 * g - 4684 * b) as u8
+        end
+    end
+end
+
+func _vp8_quality_q(quality: int): int:
+    c := (_vp8_clamp(quality, 100) as f64) / 100.0
+    linear := c < 0.75 ? c * (2.0 / 3.0) : 2.0 * c - 1.0
+    comp := math.Pow(linear, 1.0 / 3.0)
+    ret _vp8_clamp((127.0 * (1.0 - comp) + 0.5) as int, 127)
+end
+
+func _vp8_copy_src(sb: u8*, yp: u8*, ys: int, up: u8*, vp: u8*, uvs: int, mx: int, my: int):
+    repeat 16 in j:
+        repeat 16 in i:
+            sb[_VP8_YOFF + j * _VP8_BPS + i] = yp[(my * 16 + j) * ys + mx * 16 + i]
+        end
+    end
+    repeat 8 in j:
+        repeat 8 in i:
+            sb[_VP8_UOFF + j * _VP8_BPS + i] = up[(my * 8 + j) * uvs + mx * 8 + i]
+            sb[_VP8_VOFF + j * _VP8_BPS + i] = vp[(my * 8 + j) * uvs + mx * 8 + i]
+        end
+    end
+end
+
+func _vp8_ymode_bits(w &: _Vp8Bw, m: int):
+    if m == 0 or m == 2:
+        _vp8w_put(w, 0, 156)
+        _vp8w_put(w, m == 2 ? 1 : 0, 163)
+    else:
+        _vp8w_put(w, 1, 156)
+        _vp8w_put(w, m == 1 ? 1 : 0, 128)
+    end
+end
+
+func _vp8_uvmode_bits(w &: _Vp8Bw, m: int):
+    if m == 0:
+        _vp8w_put(w, 0, 142)
+    else m == 2:
+        _vp8w_put(w, 1, 142)
+        _vp8w_put(w, 0, 114)
+    else:
+        _vp8w_put(w, 1, 142)
+        _vp8w_put(w, 1, 114)
+        _vp8w_put(w, m == 1 ? 1 : 0, 183)
+    end
+end
+
+func _vp8_bmode_bits(w &: _Vp8Bw, m: int, top: int, left: int):
+    pb := (top * 10 + left) * 9
+    _vp8w_put(w, m == 0 ? 0 : 1, _VP8_BMODES[pb])
+    if m == 0:
+        ret
+    end
+    _vp8w_put(w, m == 1 ? 0 : 1, _VP8_BMODES[pb + 1])
+    if m == 1:
+        ret
+    end
+    _vp8w_put(w, m == 2 ? 0 : 1, _VP8_BMODES[pb + 2])
+    if m == 2:
+        ret
+    end
+    if m <= 5:
+        _vp8w_put(w, 0, _VP8_BMODES[pb + 3])
+        _vp8w_put(w, m == 3 ? 0 : 1, _VP8_BMODES[pb + 4])
+        if m != 3:
+            _vp8w_put(w, m == 5 ? 1 : 0, _VP8_BMODES[pb + 5])
+        end
+    else:
+        _vp8w_put(w, 1, _VP8_BMODES[pb + 3])
+        _vp8w_put(w, m == 6 ? 0 : 1, _VP8_BMODES[pb + 6])
+        if m != 6:
+            _vp8w_put(w, m == 7 ? 0 : 1, _VP8_BMODES[pb + 7])
+            if m != 7:
+                _vp8w_put(w, m == 9 ? 1 : 0, _VP8_BMODES[pb + 8])
+            end
+        end
+    end
+end
+
+func _vp8_yblock(nb: int): int:
+    ret _VP8_YOFF + (nb % 4) * 4 + (nb / 4) * 4 * _VP8_BPS
+end
+
+func _vp8_uvblock(nb: int): int:
+    ret (nb % 2) * 4 + (nb / 2) * 4 * _VP8_BPS
+end
+
+func _vp8_recon16(ws: u8*, sb: u8*, mode: int, coeffs: int*, dcs: int*, lv: int*, qp: Vector<int>): int:
+    _vp8_pred(ws, _VP8_YOFF, 16, mode)
+    repeat 16 in nb:
+        _vp8_fdct(sb, ws, _vp8_yblock(nb), coeffs, nb * 16)
+    end
+    _vp8_fwht(coeffs, dcs)
+    mut nz := _vp8_quant(dcs, 0, 0, qp.get(2), qp.get(3), 96, 108, false, lv, 0)
+    repeat 16 in nb:
+        nz += _vp8_quant(coeffs, nb * 16, 1, qp.get(0), qp.get(1), 96, 110, true, lv, (1 + nb) * 16)
+    end
+    _vp8_walsh(dcs, coeffs)
+    repeat 16 in nb:
+        _vp8_idct(coeffs, nb * 16, ws, _vp8_yblock(nb))
+    end
+    ret nz
+end
+
+func _vp8_recon4(ws: u8*, sb: u8*, nb: int, mode: int, coeffs: int*, lv: int*, qp: Vector<int>): int:
+    d := _vp8_yblock(nb)
+    _vp8_pred4(ws, d, mode)
+    _vp8_fdct(sb, ws, d, coeffs, nb * 16)
+    nz := _vp8_quant(coeffs, nb * 16, 0, qp.get(0), qp.get(1), 96, 110, true, lv, (1 + nb) * 16)
+    _vp8_idct(coeffs, nb * 16, ws, d)
+    ret nz
+end
+
+func _vp8_recon_uv(ws: u8*, sb: u8*, mode: int, coeffs: int*, lv: int*, qp: Vector<int>): int:
+    _vp8_pred(ws, _VP8_UOFF, 8, mode)
+    _vp8_pred(ws, _VP8_VOFF, 8, mode)
+    mut nz := 0
+    repeat 4 in nb:
+        off := _vp8_uvblock(nb)
+        _vp8_fdct(sb, ws, _VP8_UOFF + off, coeffs, (16 + nb) * 16)
+        _vp8_fdct(sb, ws, _VP8_VOFF + off, coeffs, (20 + nb) * 16)
+    end
+    repeat 8 in nb:
+        nz += _vp8_quant(coeffs, (16 + nb) * 16, 0, qp.get(4), qp.get(5), 110, 115, false, lv, (17 + nb) * 16)
+    end
+    repeat 4 in nb:
+        off := _vp8_uvblock(nb)
+        _vp8_idct(coeffs, (16 + nb) * 16, ws, _VP8_UOFF + off)
+        _vp8_idct(coeffs, (20 + nb) * 16, ws, _VP8_VOFF + off)
+    end
+    ret nz
+end
+
+func _vp8_sse_rect(a: u8*, b: u8*, d: int, wd: int, ht: int): int:
+    mut s := 0
+    repeat ht in y:
+        repeat wd in x:
+            i := d + x + y * _VP8_BPS
+            e := (a[i] as int) - (b[i] as int)
+            s += e * e
+        end
+    end
+    ret s
+end
+
+func _vp8_tokens_y(w &: _Vp8Bw, is4: bool, lv: int*, tn &: Vector<int>, ln &: Vector<int>):
+    mut first := 0
+    mut ytype := 3
+    if not is4:
+        f := _vp8w_coeffs(w, 1, tn.get(8) + ln.get(8), lv, 0, 0)
+        tn.set(8, f)
+        ln.set(8, f)
+        first = 1
+        ytype = 0
+    end
+    repeat 4 in yy:
+        repeat 4 in xx:
+            g := _vp8w_coeffs(w, ytype, ln.get(yy) + tn.get(xx), lv, (1 + yy * 4 + xx) * 16, first)
+            ln.set(yy, g)
+            tn.set(xx, g)
+        end
+    end
+end
+
+func _vp8_tokens_uv(w &: _Vp8Bw, lv: int*, tn &: Vector<int>, ln &: Vector<int>):
+    repeat 2 in ch:
+        repeat 2 in yy:
+            repeat 2 in xx:
+                g := _vp8w_coeffs(w, 2, ln.get(4 + ch * 2 + yy) + tn.get(4 + ch * 2 + xx), lv, (17 + ch * 4 + yy * 2 + xx) * 16, 0)
+                ln.set(4 + ch * 2 + yy, g)
+                tn.set(4 + ch * 2 + xx, g)
+            end
+        end
+    end
+end
+
+func _vp8_copy9(src: Vector<int>, at: int, dst &: Vector<int>):
+    repeat 9 in i:
+        dst.set(i, src.get(at + i))
+    end
+end
+
+func _vp8_token_pass(w &: _Vp8Bw, all_lv: Vector<int>, modes: Vector<int>, mbw: int, mbh: int):
+    lv := mem.AllocateZeroed((25 * 16 * 4) as u64) as int*
+    mut top_nz := Vector {} as Vector<int>
+    repeat mbw * 9:
+        top_nz.push(0)
+    end
+    mut tn := Vector {} as Vector<int>
+    mut ln := Vector {} as Vector<int>
+    repeat 9:
+        tn.push(0)
+        ln.push(0)
+    end
+    repeat mbh in my:
+        repeat 9 in i:
+            ln.set(i, 0)
+        end
+        repeat mbw in mx:
+            k := my * mbw + mx
+            is4 := modes.get(k * 20) == 1
+            _vp8_copy9(top_nz, mx * 9, tn)
+            if modes.get(k * 20 + 3) == 1:
+                repeat 8 in i:
+                    ln.set(i, 0)
+                    tn.set(i, 0)
+                end
+                if not is4:
+                    ln.set(8, 0)
+                    tn.set(8, 0)
+                end
+            else:
+                repeat 25 * 16 in i:
+                    lv[i] = all_lv.get(k * 400 + i)
+                end
+                _vp8_tokens_y(w, is4, lv, tn, ln)
+                _vp8_tokens_uv(w, lv, tn, ln)
+            end
+            repeat 9 in i:
+                top_nz.set(mx * 9 + i, tn.get(i))
+            end
+        end
+    end
+    mem.Free(lv as void*)
+    top_nz.free()
+    tn.free()
+    ln.free()
+end
+
+func _vp8_encode(img: Image, quality: int): compress.ByteBuf:
+    width := img.width
+    height := img.height
+    mbw := (width + 15) >> 4
+    mbh := (height + 15) >> 4
+    ys := mbw * 16
+    uvs := mbw * 8
+    sy := mem.AllocateZeroed((ys * mbh * 16) as u64) as u8*
+    su := mem.AllocateZeroed((uvs * mbh * 8) as u64) as u8*
+    sv := mem.AllocateZeroed((uvs * mbh * 8) as u64) as u8*
+    ry := mem.AllocateZeroed((ys * mbh * 16) as u64) as u8*
+    ru := mem.AllocateZeroed((uvs * mbh * 8) as u64) as u8*
+    rv := mem.AllocateZeroed((uvs * mbh * 8) as u64) as u8*
+    _vp8_yuv(img, sy, ys, su, sv, uvs, mbh * 16)
+    ws := mem.AllocateZeroed((_VP8_BPS * 26) as u64) as u8*
+    sb := mem.AllocateZeroed((_VP8_BPS * 26) as u64) as u8*
+    save := mem.AllocateZeroed((_VP8_BPS * 26) as u64) as u8*
+    coeffs := mem.AllocateZeroed((384 * 4) as u64) as int*
+    dcs := mem.AllocateZeroed((16 * 4) as u64) as int*
+    lv := mem.AllocateZeroed((25 * 16 * 4) as u64) as int*
+    lv16 := mem.AllocateZeroed((25 * 16 * 4) as u64) as int*
+    q := _vp8_quality_q(quality)
+    mut qp := Vector {} as Vector<int>
+    qp.push(_VP8_DC[q])
+    qp.push(_VP8_AC[q])
+    qp.push(_VP8_DC[q] * 2)
+    mut y2ac := (_VP8_AC[q] * 101581) >> 16
+    if y2ac < 8:
+        y2ac = 8
+    end
+    qp.push(y2ac)
+    qp.push(_VP8_DC[_vp8_clamp(q, 117)])
+    qp.push(_VP8_AC[q])
+    q_i4 := (qp.get(0) + 15 * qp.get(1) + 8) >> 4
+    q_i16 := (qp.get(2) + 15 * qp.get(3) + 8) >> 4
+    q_uv := (qp.get(4) + 15 * qp.get(5) + 8) >> 4
+    lambda_i4 := _vp8_imax((3 * q_i4 * q_i4) >> 7, 1)
+    lambda_i16 := _vp8_imax(3 * q_i16 * q_i16, 1)
+    lambda_uv := _vp8_imax((3 * q_uv * q_uv) >> 6, 1)
+    lambda_mode := _vp8_imax((q_i4 * q_i4) >> 7, 1)
+    mut level := ((qp.get(1) >> 2) > 63 ? 63 : (qp.get(1) >> 2)) * 300 / 256
+    if level < 2:
+        level = 0
+    end
+    if level > 63:
+        level = 63
+    end
+    mut tw := _vp8w_new()
+    mut dry := _Vp8Bw { dry = true }
+    mut modes := Vector {} as Vector<int>
+    mut top_nz := Vector {} as Vector<int>
+    repeat mbw * 9:
+        top_nz.push(0)
+    end
+    mut left_nz := Vector {} as Vector<int>
+    mut tn := Vector {} as Vector<int>
+    mut ln := Vector {} as Vector<int>
+    repeat 9:
+        left_nz.push(0)
+        tn.push(0)
+        ln.push(0)
+    end
+    mut intra_t := Vector {} as Vector<int>
+    repeat mbw * 4:
+        intra_t.push(0)
+    end
+    mut intra_l := [0, 0, 0, 0]
+    mut sub := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    mut skips := 0
+    mut all_lv := Vector {} as Vector<int>
+    repeat mbh in my:
+        repeat 9 in i:
+            left_nz.set(i, 0)
+        end
+        repeat 4 in i:
+            intra_l[i] = 0
+        end
+        repeat mbw in mx:
+            _vp8_copy_src(sb, sy, ys, su, sv, uvs, mx, my)
+            _vp8_border(ws, _VP8_YOFF, 16, ry, ys, mx * 16, my * 16, mx, my, 4)
+            _vp8_border(ws, _VP8_UOFF, 8, ru, uvs, mx * 8, my * 8, mx, my, 0)
+            _vp8_border(ws, _VP8_VOFF, 8, rv, uvs, mx * 8, my * 8, mx, my, 0)
+            if my > 0:
+                repeat 4 in i:
+                    ws[_VP8_YOFF - _VP8_BPS + 16 + i] = (mx >= mbw - 1 ? ry[(my * 16 - 1) * ys + mx * 16 + 15] : ry[(my * 16 - 1) * ys + mx * 16 + 16 + i])
+                end
+            end
+            repeat 3 in r:
+                repeat 4 in i:
+                    ws[_VP8_YOFF - _VP8_BPS + 16 + (r + 1) * 4 * _VP8_BPS + i] = ws[_VP8_YOFF - _VP8_BPS + 16 + i]
+                end
+            end
+            tbase := mx * 9
+            mut ymode := 0
+            mut best16 := 0 - 1
+            repeat 4 in m:
+                mem.Set(lv as void*, 0, (17 * 16 * 4) as u64)
+                _ := _vp8_recon16(ws, sb, _vp8_edge_mode(m, mx, my), coeffs, dcs, lv, qp)
+                d := _vp8_sse_rect(sb, ws, _VP8_YOFF, 16, 16)
+                _vp8_copy9(top_nz, tbase, tn)
+                _vp8_copy9(left_nz, 0, ln)
+                dry.bits = 0
+                _vp8w_put(dry, 1, 145)
+                _vp8_ymode_bits(dry, m)
+                _vp8_tokens_y(dry, false, lv, tn, ln)
+                score := dry.bits * lambda_i16 + 256 * d
+                if best16 < 0 or score < best16:
+                    best16 = score
+                    ymode = m
+                end
+            end
+            mem.Set(lv16 as void*, 0, (17 * 16 * 4) as u64)
+            _ := _vp8_recon16(ws, sb, _vp8_edge_mode(ymode, mx, my), coeffs, dcs, lv16, qp)
+            d16 := _vp8_sse_rect(sb, ws, _VP8_YOFF, 16, 16)
+            _vp8_copy9(top_nz, tbase, tn)
+            _vp8_copy9(left_nz, 0, ln)
+            dry.bits = 0
+            _vp8w_put(dry, 1, 145)
+            _vp8_ymode_bits(dry, ymode)
+            _vp8_tokens_y(dry, false, lv16, tn, ln)
+            score16 := dry.bits * lambda_mode + 256 * d16
+            repeat 16 in j:
+                repeat 16 in i:
+                    save[_VP8_YOFF + j * _VP8_BPS + i] = ws[_VP8_YOFF + j * _VP8_BPS + i]
+                end
+            end
+            dry.bits = 0
+            _vp8w_put(dry, 0, 145)
+            mut total4 := dry.bits * lambda_mode
+            mut is4 := true
+            _vp8_copy9(top_nz, tbase, tn)
+            _vp8_copy9(left_nz, 0, ln)
+            mem.Set(lv as void*, 0, (17 * 16 * 4) as u64)
+            repeat 16 in nb:
+                if is4:
+                    bx := nb % 4
+                    by4 := nb / 4
+                    top_m := by4 == 0 ? intra_t.get(mx * 4 + bx) : sub[nb - 4]
+                    left_m := bx == 0 ? intra_l[by4] : sub[nb - 1]
+                    ctx := ln.get(by4) + tn.get(bx)
+                    mut bm := 0
+                    mut bscore := 0 - 1
+                    mut brate := 0
+                    mut bdist := 0
+                    repeat 10 in m:
+                        _ := _vp8_recon4(ws, sb, nb, m, coeffs, lv, qp)
+                        dist := _vp8_sse_rect(sb, ws, _vp8_yblock(nb), 4, 4)
+                        dry.bits = 0
+                        _vp8_bmode_bits(dry, m, top_m, left_m)
+                        _ := _vp8w_coeffs(dry, 3, ctx, lv, (1 + nb) * 16, 0)
+                        sc := dry.bits * lambda_i4 + 256 * dist
+                        if bscore < 0 or sc < bscore:
+                            bscore = sc
+                            bm = m
+                            brate = dry.bits
+                            bdist = dist
+                        end
+                    end
+                    _ := _vp8_recon4(ws, sb, nb, bm, coeffs, lv, qp)
+                    sub[nb] = bm
+                    g := _vp8w_coeffs(dry, 3, ctx, lv, (1 + nb) * 16, 0)
+                    ln.set(by4, g)
+                    tn.set(bx, g)
+                    total4 += brate * lambda_mode + 256 * bdist
+                    if total4 >= score16:
+                        is4 = false
+                    end
+                end
+            end
+            if not is4:
+                repeat 16 in j:
+                    repeat 16 in i:
+                        ws[_VP8_YOFF + j * _VP8_BPS + i] = save[_VP8_YOFF + j * _VP8_BPS + i]
+                    end
+                end
+                mem.Copy(lv as void*, lv16 as void*, (17 * 16 * 4) as u64)
+                repeat 4 in i:
+                    intra_t.set(mx * 4 + i, ymode)
+                    intra_l[i] = ymode
+                end
+            else:
+                repeat 4 in i:
+                    intra_t.set(mx * 4 + i, sub[12 + i])
+                    intra_l[i] = sub[i * 4 + 3]
+                end
+            end
+            mut uvmode := 0
+            mut bestuv := 0 - 1
+            repeat 4 in m:
+                _ := _vp8_recon_uv(ws, sb, _vp8_edge_mode(m, mx, my), coeffs, lv, qp)
+                d := _vp8_sse_rect(sb, ws, _VP8_UOFF, 8, 8) + _vp8_sse_rect(sb, ws, _VP8_VOFF, 8, 8)
+                _vp8_copy9(top_nz, tbase, tn)
+                _vp8_copy9(left_nz, 0, ln)
+                dry.bits = 0
+                _vp8_uvmode_bits(dry, m)
+                _vp8_tokens_uv(dry, lv, tn, ln)
+                score := dry.bits * lambda_uv + 256 * d
+                if bestuv < 0 or score < bestuv:
+                    bestuv = score
+                    uvmode = m
+                end
+            end
+            _ := _vp8_recon_uv(ws, sb, _vp8_edge_mode(uvmode, mx, my), coeffs, lv, qp)
+            repeat 16 in j:
+                repeat 16 in i:
+                    ry[(my * 16 + j) * ys + mx * 16 + i] = ws[_VP8_YOFF + j * _VP8_BPS + i]
+                end
+            end
+            repeat 8 in j:
+                repeat 8 in i:
+                    ru[(my * 8 + j) * uvs + mx * 8 + i] = ws[_VP8_UOFF + j * _VP8_BPS + i]
+                    rv[(my * 8 + j) * uvs + mx * 8 + i] = ws[_VP8_VOFF + j * _VP8_BPS + i]
+                end
+            end
+            mut any := false
+            repeat 25 * 16 in i:
+                if lv[i] != 0:
+                    any = true
+                end
+            end
+            if is4:
+                repeat 16 in i:
+                    lv[i] = 0
+                end
+            end
+            _vp8_copy9(top_nz, tbase, tn)
+            _vp8_copy9(left_nz, 0, ln)
+            if not any:
+                skips += 1
+                repeat 8 in i:
+                    ln.set(i, 0)
+                    tn.set(i, 0)
+                end
+                if not is4:
+                    ln.set(8, 0)
+                    tn.set(8, 0)
+                end
+            else:
+                _vp8_tokens_y(dry, is4, lv, tn, ln)
+                _vp8_tokens_uv(dry, lv, tn, ln)
+            end
+            repeat 25 * 16 in i:
+                all_lv.push(lv[i])
+            end
+            repeat 9 in i:
+                top_nz.set(tbase + i, tn.get(i))
+                left_nz.set(i, ln.get(i))
+            end
+            modes.push(is4 ? 1 : 0)
+            modes.push(ymode)
+            modes.push(uvmode)
+            modes.push(any ? 0 : 1)
+            repeat 16 in i:
+                modes.push(sub[i])
+            end
+        end
+    end
+    mut st := _Vp8Bw { dry = true, stats = true }
+    repeat 1056:
+        st.ones.push(0)
+        st.seen.push(0)
+    end
+    _vp8_token_pass(st, all_lv, modes, mbw, mbh)
+    mut newp := Vector {} as Vector<int>
+    mut upd := Vector {} as Vector<int>
+    repeat 1056 in i:
+        nb := st.ones.get(i)
+        tot := st.seen.get(i)
+        old_p := _VP8_PROBA0[i]
+        mut use := false
+        mut np := old_p
+        if tot > 0:
+            np = _vp8_clamp(nb > 0 ? 255 - nb * 255 / tot : 255, 255)
+            if np < 1:
+                np = 1
+            end
+            oldc := nb * _VP8_COST[256 - old_p] + (tot - nb) * _VP8_COST[old_p] + _VP8_COST[_VP8_UPDATE[i]]
+            newc := nb * _VP8_COST[256 - np] + (tot - nb) * _VP8_COST[np] + _VP8_COST[256 - _VP8_UPDATE[i]] + 8 * 256
+            use = oldc > newc
+        end
+        newp.push(use ? np : old_p)
+        upd.push(use ? 1 : 0)
+    end
+    st.ones.free()
+    st.seen.free()
+    tw.probs = newp
+    _vp8_token_pass(tw, all_lv, modes, mbw, mbh)
+    _vp8w_flush(tw)
+    total := mbw * mbh
+    use_skip := skips > 0
+    mut skip_p := ((total - skips) * 255) / total
+    if skip_p < 1:
+        skip_p = 1
+    end
+    if skip_p > 254:
+        skip_p = 254
+    end
+    mut hw := _vp8w_new()
+    _vp8w_put(hw, 0, 128)
+    _vp8w_put(hw, 0, 128)
+    _vp8w_put(hw, 0, 128)
+    _vp8w_put(hw, 0, 128)
+    _vp8w_bits(hw, level, 6)
+    _vp8w_bits(hw, 0, 3)
+    _vp8w_put(hw, 0, 128)
+    _vp8w_bits(hw, 0, 2)
+    _vp8w_bits(hw, q, 7)
+    repeat 5:
+        _vp8w_put(hw, 0, 128)
+    end
+    _vp8w_put(hw, 0, 128)
+    repeat 1056 in i:
+        _vp8w_put(hw, upd.get(i), _VP8_UPDATE[i])
+        if upd.get(i) == 1:
+            _vp8w_bits(hw, newp.get(i), 8)
+        end
+    end
+    _vp8w_put(hw, use_skip ? 1 : 0, 128)
+    if use_skip:
+        _vp8w_bits(hw, skip_p, 8)
+    end
+    repeat mbw * 4 in i:
+        intra_t.set(i, 0)
+    end
+    repeat mbh in my:
+        repeat 4 in i:
+            intra_l[i] = 0
+        end
+        repeat mbw in mx:
+            k := (my * mbw + mx) * 20
+            if use_skip:
+                _vp8w_put(hw, modes.get(k + 3), skip_p)
+            end
+            if modes.get(k) == 0:
+                _vp8w_put(hw, 1, 145)
+                ym := modes.get(k + 1)
+                _vp8_ymode_bits(hw, ym)
+                repeat 4 in i:
+                    intra_t.set(mx * 4 + i, ym)
+                    intra_l[i] = ym
+                end
+            else:
+                _vp8w_put(hw, 0, 145)
+                repeat 4 in yy:
+                    repeat 4 in xx:
+                        m := modes.get(k + 4 + yy * 4 + xx)
+                        _vp8_bmode_bits(hw, m, intra_t.get(mx * 4 + xx), intra_l[yy])
+                        intra_t.set(mx * 4 + xx, m)
+                        intra_l[yy] = m
+                    end
+                end
+            end
+            _vp8_uvmode_bits(hw, modes.get(k + 2))
+        end
+    end
+    _vp8w_flush(hw)
+    p0 := compress.BufLen(hw.buf)
+    tl := compress.BufLen(tw.buf)
+    mut out := compress.NewByteBuf()
+    if p0 >= 524288:
+        compress.BufFree(hw.buf)
+        compress.BufFree(tw.buf)
+        _vp8_free_all(sy, su, sv, ry, ru, rv, ws, sb, save, coeffs, dcs, lv, lv16)
+        qp.free()
+        newp.free()
+        upd.free()
+        all_lv.free()
+        modes.free()
+        top_nz.free()
+        left_nz.free()
+        tn.free()
+        ln.free()
+        intra_t.free()
+        ret out
+    end
+    tag := (p0 << 5) | (1 << 4)
+    compress.BufPush(out, tag & 255)
+    compress.BufPush(out, (tag >> 8) & 255)
+    compress.BufPush(out, (tag >> 16) & 255)
+    compress.BufPush(out, 157)
+    compress.BufPush(out, 1)
+    compress.BufPush(out, 42)
+    compress.BufPush(out, width & 255)
+    compress.BufPush(out, (width >> 8) & 63)
+    compress.BufPush(out, height & 255)
+    compress.BufPush(out, (height >> 8) & 63)
+    compress.BufPushBytes(out, hw.buf.data, p0)
+    compress.BufPushBytes(out, tw.buf.data, tl)
+    compress.BufFree(hw.buf)
+    compress.BufFree(tw.buf)
+    _vp8_free_all(sy, su, sv, ry, ru, rv, ws, sb, save, coeffs, dcs, lv, lv16)
+    qp.free()
+    newp.free()
+    upd.free()
+    all_lv.free()
+    modes.free()
+    top_nz.free()
+    left_nz.free()
+    tn.free()
+    ln.free()
+    intra_t.free()
+    ret out
+end
+
+func _vp8_imax(a: int, b: int): int:
+    ret a > b ? a : b
+end
+
+func _vp8_free_all(sy: u8*, su: u8*, sv: u8*, ry: u8*, ru: u8*, rv: u8*, ws: u8*, sb: u8*, save: u8*, coeffs: int*, dcs: int*, lv: int*, lv16: int*):
+    mem.Free(sy as void*)
+    mem.Free(su as void*)
+    mem.Free(sv as void*)
+    mem.Free(ry as void*)
+    mem.Free(ru as void*)
+    mem.Free(rv as void*)
+    mem.Free(ws as void*)
+    mem.Free(sb as void*)
+    mem.Free(save as void*)
+    mem.Free(coeffs as void*)
+    mem.Free(dcs as void*)
+    mem.Free(lv as void*)
+    mem.Free(lv16 as void*)
+end

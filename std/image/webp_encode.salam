@@ -529,22 +529,43 @@ func _wp_u32(b &: compress.ByteBuf, v: int):
     compress.BufPush(b, (v >> 24) & 255)
 end
 
-func _wp_body(img: Image, alpha: bool, modes: Vector<i64>, res: Vector<i64>, bits: int, cache_bits: int): compress.BitWriter:
+func _wp_body(width: int, height: int, alpha: bool, header: bool, sg: bool, modes: Vector<i64>, res: Vector<i64>, bits: int, cache_bits: int): compress.BitWriter:
     mut w := compress.NewBitWriter()
-    compress.BitWriteBits(w, 47, 8)
-    compress.BitWriteBits(w, img.width - 1, 14)
-    compress.BitWriteBits(w, img.height - 1, 14)
-    compress.BitWriteBit(w, alpha ? 1 : 0)
-    compress.BitWriteBits(w, 0, 3)
-    compress.BitWriteBit(w, 1)
-    compress.BitWriteBits(w, 2, 2)
+    if header:
+        compress.BitWriteBits(w, 47, 8)
+        compress.BitWriteBits(w, width - 1, 14)
+        compress.BitWriteBits(w, height - 1, 14)
+        compress.BitWriteBit(w, alpha ? 1 : 0)
+        compress.BitWriteBits(w, 0, 3)
+    end
+    if sg:
+        compress.BitWriteBit(w, 1)
+        compress.BitWriteBits(w, 2, 2)
+    end
     compress.BitWriteBit(w, 1)
     compress.BitWriteBits(w, 0, 2)
     compress.BitWriteBits(w, bits - 2, 3)
-    _wp_image(w, modes, (img.width + (1 << bits) - 1) >> bits, false, 0)
+    _wp_image(w, modes, (width + (1 << bits) - 1) >> bits, false, 0)
     compress.BitWriteBit(w, 0)
-    _wp_image(w, res, img.width, true, cache_bits)
+    _wp_image(w, res, width, true, cache_bits)
     compress.BitFlush(w)
+    ret w
+end
+
+func _wp_stream(width: int, height: int, px: Vector<i64>, header: bool, alpha: bool, sg: bool): compress.BitWriter:
+    bits := 4
+    mut modes := Vector {} as Vector<i64>
+    res := _wp_predict(px, width, height, bits, modes)
+    mut w := _wp_body(width, height, alpha, header, sg, modes, res, bits, 10)
+    mut plain := _wp_body(width, height, alpha, header, sg, modes, res, bits, 0)
+    if compress.BufLen(plain.buf) < compress.BufLen(w.buf):
+        compress.BitWriterFree(w)
+        w = plain
+    else:
+        compress.BitWriterFree(plain)
+    end
+    modes.free()
+    res.free()
     ret w
 end
 
@@ -569,17 +590,7 @@ pub func EncodeWebP(img: Image): compress.ByteBuf:
         end
         px.push(_wpd_argb(a, (r - g) & 255, g, (b - g) & 255))
     end
-    bits := 4
-    mut modes := Vector {} as Vector<i64>
-    res := _wp_predict(px, img.width, img.height, bits, modes)
-    mut w := _wp_body(img, alpha, modes, res, bits, 10)
-    mut plain := _wp_body(img, alpha, modes, res, bits, 0)
-    if compress.BufLen(plain.buf) < compress.BufLen(w.buf):
-        compress.BitWriterFree(w)
-        w = plain
-    else:
-        compress.BitWriterFree(plain)
-    end
+    mut w := _wp_stream(img.width, img.height, px, true, alpha, true)
     size := compress.BufLen(w.buf)
     pad := size % 2
     compress.BufPushBytes(out, "RIFF" as void*, 4)
@@ -592,7 +603,76 @@ pub func EncodeWebP(img: Image): compress.ByteBuf:
     end
     compress.BitWriterFree(w)
     px.free()
-    modes.free()
-    res.free()
+    ret out
+end
+
+@en "EncodeWebPQuality"
+@fa "کدگذاری وب‌پی با کیفیت"
+pub func EncodeWebPQuality(img: Image, quality: int): compress.ByteBuf:
+    if quality >= 100:
+        ret EncodeWebP(img)
+    end
+    if IsEmpty(img) or img.width > 16383 or img.height > 16383:
+        ret compress.NewByteBuf()
+    end
+    bp := img.pixels as u8*
+    total := img.width * img.height
+    mut alpha := false
+    repeat total in p:
+        if bp[p * 4 + 3] as int != 255:
+            alpha = true
+        end
+    end
+    mut frame := _vp8_encode(img, quality)
+    fsize := compress.BufLen(frame)
+    if fsize == 0:
+        compress.BufFree(frame)
+        ret EncodeWebP(img)
+    end
+    mut out := compress.NewByteBuf()
+    compress.BufPushBytes(out, "RIFF" as void*, 4)
+    if not alpha:
+        _wp_u32(out, 4 + 8 + fsize + fsize % 2)
+        compress.BufPushBytes(out, "WEBPVP8 " as void*, 8)
+    else:
+        mut apx := Vector {} as Vector<i64>
+        repeat total in p:
+            apx.push(_wpd_argb(0, 0, bp[p * 4 + 3] as int, 0))
+        end
+        mut aw := _wp_stream(img.width, img.height, apx, false, false, false)
+        apx.free()
+        asize := compress.BufLen(aw.buf) + 1
+        _wp_u32(out, 4 + 18 + 8 + asize + asize % 2 + 8 + fsize + fsize % 2)
+        compress.BufPushBytes(out, "WEBPVP8X" as void*, 8)
+        _wp_u32(out, 10)
+        compress.BufPush(out, 16)
+        compress.BufPush(out, 0)
+        compress.BufPush(out, 0)
+        compress.BufPush(out, 0)
+        compress.BufPush(out, (img.width - 1) & 255)
+        compress.BufPush(out, ((img.width - 1) >> 8) & 255)
+        compress.BufPush(out, ((img.width - 1) >> 16) & 255)
+        compress.BufPush(out, (img.height - 1) & 255)
+        compress.BufPush(out, ((img.height - 1) >> 8) & 255)
+        compress.BufPush(out, ((img.height - 1) >> 16) & 255)
+        compress.BufPush(out, 65)
+        compress.BufPush(out, 76)
+        compress.BufPush(out, 80)
+        compress.BufPush(out, 72)
+        _wp_u32(out, asize)
+        compress.BufPush(out, 1)
+        compress.BufPushBytes(out, aw.buf.data, asize - 1)
+        if asize % 2 == 1:
+            compress.BufPush(out, 0)
+        end
+        compress.BitWriterFree(aw)
+        compress.BufPushBytes(out, "VP8 " as void*, 4)
+    end
+    _wp_u32(out, fsize)
+    compress.BufPushBytes(out, frame.data, fsize)
+    if fsize % 2 == 1:
+        compress.BufPush(out, 0)
+    end
+    compress.BufFree(frame)
     ret out
 end

@@ -5,7 +5,7 @@
  *   |     S A L A M     |
  *   +-------------------+
  *
- * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Designed yb Seyyed Ali Mohammadiyeh and the Salam Team
  * Born from a decade of language design experience (since 2018)
  *
  * Repository: https://github.com/SalamLang/Salam
@@ -245,11 +245,307 @@ func _wp_emit(w &: compress.BitWriter, sym: int, lens: Vector<int>, codes: Vecto
     _wp_put(w, codes.get(sym), lens.get(sym))
 end
 
+func _wp_prefix(v: int, prefix &: int, extra &: int, bits &: int):
+    d := v - 1
+    if d < 4:
+        prefix = d
+        extra = 0
+        bits = 0
+        ret
+    end
+    mut h := 1
+    until (d >> (h + 1)) > 0:
+        h += 1
+    end
+    prefix = 2 * h + ((d >> (h - 1)) & 1)
+    bits = h - 1
+    extra = d & ((1 << bits) - 1)
+end
+
+func _wp_sub(a: i64, b: i64): i64:
+    ret _wpd_argb((_wpd_ch(a, 24) - _wpd_ch(b, 24)) & 255, (_wpd_ch(a, 16) - _wpd_ch(b, 16)) & 255, (_wpd_ch(a, 8) - _wpd_ch(b, 8)) & 255, (_wpd_ch(a, 0) - _wpd_ch(b, 0)) & 255)
+end
+
+func _wp_cost(p: i64): int:
+    ret _wpd_abs(_wpd_s8(_wpd_ch(p, 24))) + _wpd_abs(_wpd_s8(_wpd_ch(p, 16))) + _wpd_abs(_wpd_s8(_wpd_ch(p, 8))) + _wpd_abs(_wpd_s8(_wpd_ch(p, 0)))
+end
+
+func _wp_match(px: Vector<i64>, i: int, d: int): int:
+    total := px.len()
+    mut n := 0
+    until n < 4096 and i + n < total and px.get(i + n) == px.get(i + n - d):
+        n += 1
+    end
+    ret n
+end
+
+func _wp_planes(xsize: int): Vector<int>:
+    mut planes := Vector {} as Vector<int>
+    repeat 120 in k:
+        d := _WPD_DIST[k * 2] + _WPD_DIST[k * 2 + 1] * xsize
+        planes.push(d < 1 ? 1 : d)
+    end
+    ret planes
+end
+
+func _wp_dcode(planes: Vector<int>, d: int): int:
+    repeat 120 in k:
+        if planes.get(k) == d:
+            ret k + 1
+        end
+    end
+    ret d + 120
+end
+
+func _wp_key(px: Vector<i64>, i: int): int:
+    x := (px.get(i) ^ (px.get(i + 1) * (31 as i64))) & (4294967295 as i64)
+    ret (((x * (0x1e35a7bd as i64)) & (4294967295 as i64)) >> 16) as int
+end
+
+func _wp_image(w &: compress.BitWriter, px: Vector<i64>, xsize: int, main: bool, cache_bits: int):
+    total := px.len()
+    cache_size := cache_bits > 0 ? 1 << cache_bits : 0
+    planes := _wp_planes(xsize)
+    mut head := Vector {} as Vector<int>
+    repeat 65536:
+        head.push(0 - 1)
+    end
+    mut chain := _wp_zeros(total)
+    mut cache := Vector {} as Vector<i64>
+    repeat cache_size:
+        cache.push(0 as i64)
+    end
+    mut tl := Vector {} as Vector<int>
+    mut td := Vector {} as Vector<int>
+    mut cg := _wp_zeros(280 + cache_size)
+    mut cr := _wp_zeros(256)
+    mut cb := _wp_zeros(256)
+    mut ca := _wp_zeros(256)
+    mut cd := _wp_zeros(40)
+    mut lp := 0
+    mut le := 0
+    mut lb := 0
+    mut inserted := 0
+    mut i := 0
+    until i < total:
+        mut len := 0
+        mut dist := 0
+        if i >= 1:
+            len = _wp_match(px, i, 1)
+            dist = 1
+        end
+        if i >= xsize:
+            up := _wp_match(px, i, xsize)
+            if up > len:
+                len = up
+                dist = xsize
+            end
+        end
+        if i + 1 < total and len < 4096:
+            mut cand := head.get(_wp_key(px, i))
+            mut depth := 0
+            until cand >= 0 and depth < 32 and i - cand <= 1048455:
+                n := _wp_match(px, i, i - cand)
+                if n > len:
+                    len = n
+                    dist = i - cand
+                end
+                cand = chain.get(cand)
+                depth += 1
+            end
+        end
+        mut step := 1
+        if len >= 3:
+            code := _wp_dcode(planes, dist)
+            tl.push(len)
+            td.push(code)
+            _wp_prefix(len, lp, le, lb)
+            cg.set(256 + lp, cg.get(256 + lp) + 1)
+            _wp_prefix(code, lp, le, lb)
+            cd.set(lp, cd.get(lp) + 1)
+            step = len
+        else:
+            p := px.get(i)
+            mut hit := 0 - 1
+            if cache_size > 0:
+                k := _wpd_hash(p, cache_bits)
+                if cache.get(k) == p:
+                    hit = k
+                end
+            end
+            if hit >= 0:
+                tl.push(0 - 1)
+                td.push(hit)
+                cg.set(280 + hit, cg.get(280 + hit) + 1)
+            else:
+                tl.push(0)
+                td.push(i)
+                cg.set(_wpd_ch(p, 8), cg.get(_wpd_ch(p, 8)) + 1)
+                cr.set(_wpd_ch(p, 16), cr.get(_wpd_ch(p, 16)) + 1)
+                cb.set(_wpd_ch(p, 0), cb.get(_wpd_ch(p, 0)) + 1)
+                ca.set(_wpd_ch(p, 24), ca.get(_wpd_ch(p, 24)) + 1)
+            end
+        end
+        i += step
+        until inserted < i:
+            if cache_size > 0:
+                q := px.get(inserted)
+                cache.set(_wpd_hash(q, cache_bits), q)
+            end
+            if inserted + 1 < total:
+                k := _wp_key(px, inserted)
+                chain.set(inserted, head.get(k))
+                head.set(k, inserted)
+            end
+            inserted += 1
+        end
+    end
+    if cache_size > 0:
+        compress.BitWriteBit(w, 1)
+        compress.BitWriteBits(w, cache_bits, 4)
+    else:
+        compress.BitWriteBit(w, 0)
+    end
+    if main:
+        compress.BitWriteBit(w, 0)
+    end
+    mut lg := Vector {} as Vector<int>
+    mut kg := Vector {} as Vector<int>
+    mut lr := Vector {} as Vector<int>
+    mut kr := Vector {} as Vector<int>
+    mut lbl := Vector {} as Vector<int>
+    mut kb := Vector {} as Vector<int>
+    mut la := Vector {} as Vector<int>
+    mut ka := Vector {} as Vector<int>
+    mut ld := Vector {} as Vector<int>
+    mut kd := Vector {} as Vector<int>
+    _wp_write_code(w, cg, lg, kg)
+    _wp_write_code(w, cr, lr, kr)
+    _wp_write_code(w, cb, lbl, kb)
+    _wp_write_code(w, ca, la, ka)
+    _wp_write_code(w, cd, ld, kd)
+    sg := _wp_used(lg) <= 1
+    sr := _wp_used(lr) <= 1
+    sb := _wp_used(lbl) <= 1
+    sa := _wp_used(la) <= 1
+    sd := _wp_used(ld) <= 1
+    repeat tl.len() in t:
+        n := tl.get(t)
+        if n < 0:
+            _wp_emit(w, 280 + td.get(t), lg, kg, sg)
+        else n == 0:
+            p := px.get(td.get(t))
+            _wp_emit(w, _wpd_ch(p, 8), lg, kg, sg)
+            _wp_emit(w, _wpd_ch(p, 16), lr, kr, sr)
+            _wp_emit(w, _wpd_ch(p, 0), lbl, kb, sb)
+            _wp_emit(w, _wpd_ch(p, 24), la, ka, sa)
+        else:
+            _wp_prefix(n, lp, le, lb)
+            _wp_emit(w, 256 + lp, lg, kg, sg)
+            compress.BitWriteBits(w, le, lb)
+            _wp_prefix(td.get(t), lp, le, lb)
+            _wp_emit(w, lp, ld, kd, sd)
+            compress.BitWriteBits(w, le, lb)
+        end
+    end
+    tl.free()
+    td.free()
+    head.free()
+    chain.free()
+    cache.free()
+    planes.free()
+    lg.free()
+    kg.free()
+    lr.free()
+    kr.free()
+    lbl.free()
+    kb.free()
+    la.free()
+    ka.free()
+    ld.free()
+    kd.free()
+    cg.free()
+    cr.free()
+    cb.free()
+    ca.free()
+    cd.free()
+end
+
+func _wp_predict(px: Vector<i64>, xsize: int, ysize: int, bits: int, modes &: Vector<i64>): Vector<i64>:
+    bw := (xsize + (1 << bits) - 1) >> bits
+    bh := (ysize + (1 << bits) - 1) >> bits
+    repeat bh in yb:
+        repeat bw in xb:
+            mut best := 1
+            mut best_cost := 0 - 1
+            mut mode := 1
+            until mode <= 13:
+                mut cost := 0
+                mut y := yb << bits
+                until y < ysize and y < (yb + 1) << bits:
+                    mut x := xb << bits
+                    until x < xsize and x < (xb + 1) << bits:
+                        if x > 0 and y > 0:
+                            i := y * xsize + x
+                            pred := _wpd_predict(mode, px.get(i - 1), px.get(i - xsize), px.get(i - xsize + 1), px.get(i - xsize - 1))
+                            cost += _wp_cost(_wp_sub(px.get(i), pred))
+                        end
+                        x += 1
+                    end
+                    y += 1
+                end
+                if best_cost < 0 or cost < best_cost:
+                    best_cost = cost
+                    best = mode
+                end
+                mode += 1
+            end
+            modes.push(_wpd_argb(255, 0, best, 0))
+        end
+    end
+    mut res := Vector {} as Vector<i64>
+    repeat ysize in y:
+        repeat xsize in x:
+            i := y * xsize + x
+            mut pred := 4278190080 as i64
+            if y == 0 and x > 0:
+                pred = px.get(i - 1)
+            else x == 0 and y > 0:
+                pred = px.get(i - xsize)
+            else y > 0:
+                mode := _wpd_ch(modes.get((y >> bits) * bw + (x >> bits)), 8)
+                pred = _wpd_predict(mode, px.get(i - 1), px.get(i - xsize), px.get(i - xsize + 1), px.get(i - xsize - 1))
+            end
+            res.push(_wp_sub(px.get(i), pred))
+        end
+    end
+    ret res
+end
+
 func _wp_u32(b &: compress.ByteBuf, v: int):
     compress.BufPush(b, v & 255)
     compress.BufPush(b, (v >> 8) & 255)
     compress.BufPush(b, (v >> 16) & 255)
     compress.BufPush(b, (v >> 24) & 255)
+end
+
+func _wp_body(img: Image, alpha: bool, modes: Vector<i64>, res: Vector<i64>, bits: int, cache_bits: int): compress.BitWriter:
+    mut w := compress.NewBitWriter()
+    compress.BitWriteBits(w, 47, 8)
+    compress.BitWriteBits(w, img.width - 1, 14)
+    compress.BitWriteBits(w, img.height - 1, 14)
+    compress.BitWriteBit(w, alpha ? 1 : 0)
+    compress.BitWriteBits(w, 0, 3)
+    compress.BitWriteBit(w, 1)
+    compress.BitWriteBits(w, 2, 2)
+    compress.BitWriteBit(w, 1)
+    compress.BitWriteBits(w, 0, 2)
+    compress.BitWriteBits(w, bits - 2, 3)
+    _wp_image(w, modes, (img.width + (1 << bits) - 1) >> bits, false, 0)
+    compress.BitWriteBit(w, 0)
+    _wp_image(w, res, img.width, true, cache_bits)
+    compress.BitFlush(w)
+    ret w
 end
 
 @en "EncodeWebP"
@@ -261,58 +557,29 @@ pub func EncodeWebP(img: Image): compress.ByteBuf:
     end
     bp := img.pixels as u8*
     total := img.width * img.height
-    mut cg := _wp_zeros(280)
-    mut cr := _wp_zeros(256)
-    mut cb := _wp_zeros(256)
-    mut ca := _wp_zeros(256)
     mut alpha := false
+    mut px := Vector {} as Vector<i64>
     repeat total in p:
-        cr.set(bp[p * 4] as int, cr.get(bp[p * 4] as int) + 1)
-        cg.set(bp[p * 4 + 1] as int, cg.get(bp[p * 4 + 1] as int) + 1)
-        cb.set(bp[p * 4 + 2] as int, cb.get(bp[p * 4 + 2] as int) + 1)
+        r := bp[p * 4] as int
+        g := bp[p * 4 + 1] as int
+        b := bp[p * 4 + 2] as int
         a := bp[p * 4 + 3] as int
-        ca.set(a, ca.get(a) + 1)
         if a != 255:
             alpha = true
         end
+        px.push(_wpd_argb(a, (r - g) & 255, g, (b - g) & 255))
     end
-    mut w := compress.NewBitWriter()
-    compress.BitWriteBits(w, 47, 8)
-    compress.BitWriteBits(w, img.width - 1, 14)
-    compress.BitWriteBits(w, img.height - 1, 14)
-    compress.BitWriteBit(w, alpha ? 1 : 0)
-    compress.BitWriteBits(w, 0, 3)
-    compress.BitWriteBit(w, 0)
-    compress.BitWriteBit(w, 0)
-    compress.BitWriteBit(w, 0)
-    mut lg := Vector {} as Vector<int>
-    mut kg := Vector {} as Vector<int>
-    mut lr := Vector {} as Vector<int>
-    mut kr := Vector {} as Vector<int>
-    mut lb := Vector {} as Vector<int>
-    mut kb := Vector {} as Vector<int>
-    mut la := Vector {} as Vector<int>
-    mut ka := Vector {} as Vector<int>
-    mut ld := Vector {} as Vector<int>
-    mut kd := Vector {} as Vector<int>
-    _wp_write_code(w, cg, lg, kg)
-    _wp_write_code(w, cr, lr, kr)
-    _wp_write_code(w, cb, lb, kb)
-    _wp_write_code(w, ca, la, ka)
-    mut cd := _wp_zeros(40)
-    _wp_write_code(w, cd, ld, kd)
-    cd.free()
-    sg := _wp_used(lg) <= 1
-    sr := _wp_used(lr) <= 1
-    sb := _wp_used(lb) <= 1
-    sa := _wp_used(la) <= 1
-    repeat total in p:
-        _wp_emit(w, bp[p * 4 + 1] as int, lg, kg, sg)
-        _wp_emit(w, bp[p * 4] as int, lr, kr, sr)
-        _wp_emit(w, bp[p * 4 + 2] as int, lb, kb, sb)
-        _wp_emit(w, bp[p * 4 + 3] as int, la, ka, sa)
+    bits := 4
+    mut modes := Vector {} as Vector<i64>
+    res := _wp_predict(px, img.width, img.height, bits, modes)
+    mut w := _wp_body(img, alpha, modes, res, bits, 10)
+    mut plain := _wp_body(img, alpha, modes, res, bits, 0)
+    if compress.BufLen(plain.buf) < compress.BufLen(w.buf):
+        compress.BitWriterFree(w)
+        w = plain
+    else:
+        compress.BitWriterFree(plain)
     end
-    compress.BitFlush(w)
     size := compress.BufLen(w.buf)
     pad := size % 2
     compress.BufPushBytes(out, "RIFF" as void*, 4)
@@ -324,19 +591,8 @@ pub func EncodeWebP(img: Image): compress.ByteBuf:
         compress.BufPush(out, 0)
     end
     compress.BitWriterFree(w)
-    cg.free()
-    cr.free()
-    cb.free()
-    ca.free()
-    lg.free()
-    kg.free()
-    lr.free()
-    kr.free()
-    lb.free()
-    kb.free()
-    la.free()
-    ka.free()
-    ld.free()
-    kd.free()
+    px.free()
+    modes.free()
+    res.free()
     ret out
 end

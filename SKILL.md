@@ -1994,9 +1994,33 @@ Context words (keywords only in their position, usable as names elsewhere):
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
 `mut func` is `ناپایا روال`.
 
-**Stay English in Persian files:** `spawn`, `join`, `sizeof`, `len`,
-the compile-time constants (`SALAM_OS`, `SALAM_OS_WINDOWS`, ...) and C names
-declared in `درون‌داد`.
+**The built-in functions have Persian names, and a Persian file must use
+them** - the English spelling is an error (`E001`):
+
+| English          | Persian           |
+| ---------------- | ----------------- |
+| `len`            | `طول`             |
+| `sizeof`         | `اندازه‌گونه`     |
+| `args`           | `آرگومان‌ها`      |
+| `env`            | `متغیر‌محیطی`     |
+| `lang`           | `زبان`            |
+| `open`           | `بازکردن`         |
+| `listdir`        | `فهرست‌پوشه`      |
+| `hash`           | `درهم`            |
+| `char_code`      | `کدنویسه`         |
+| `char_from_code` | `نویسه‌ازکد`      |
+| `strcmp`         | `مقایسه‌رشته`     |
+| `spawn`          | `نخ‌ساز`          |
+| `join`           | `نخ‌پیوند`        |
+| `callhandler`    | `فراخوان‌دستگیره` |
+| `atomic_load`    | `اتمی‌بخوان`      |
+| `atomic_store`   | `اتمی‌بنویس`      |
+| `atomic_add`     | `اتمی‌بیفزا`      |
+| `atomic_swap`    | `اتمی‌جابجا`      |
+| `atomic_cas`     | `اتمی‌مقایسه`     |
+
+**Stay English in Persian files:** the compile-time constants (`SALAM_OS`,
+`SALAM_OS_WINDOWS`, ...) and C names declared in `درون‌داد`.
 
 Two Persian words have two meanings, told apart by position:
 

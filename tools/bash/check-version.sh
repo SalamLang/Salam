@@ -5,11 +5,11 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
 salam=${SALAM:-}
-if [ -z "$salam" ] && command -v salam >/dev/null 2>&1; then
-    salam=$(command -v salam)
-fi
 if [ -z "$salam" ] && [ -x "$root/salam" ]; then
     salam="$root/salam"
+fi
+if [ -z "$salam" ] && command -v salam >/dev/null 2>&1; then
+    salam=$(command -v salam)
 fi
 if [ -z "$salam" ]; then
     printf 'no salam compiler found; skipping the version check.\n' >&2

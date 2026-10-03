@@ -939,7 +939,10 @@ TIMEREPORT_EOF
 
     rm -rf "$tr_dir/.salam-build"
     (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
-    if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
+    tr_trc=$?
+    if [ "$tr_trc" -ne 0 ]; then
+        note_result "FAIL timereport/trace (build exited $tr_trc)" "timereport/trace"
+    elif [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
     else
         note_result "FAIL timereport/trace (no trace events written)" "timereport/trace"

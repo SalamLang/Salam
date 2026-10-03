@@ -403,9 +403,9 @@ m := HashMap {} as HashMap<str, int>
 ```salam
 a := [1, 2, 3]                        // int[3], indexed 0..2
 grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
-mid := a[1: 3]                        // slice (view), writes through to `a`
-whole := a[:]  head := a[: 2]  tail := a[1:]
-func sum(view: int[:]): int: ... end  // int[:] = slice parameter
+mid := a[1: 3]                        // slice (view) of a[1] and a[2]; writes through to `a`
+whole := a[:]  head := a[: 2]  tail := a[1:]   // omitted bound = that end of `a`
+func sum(view: int[]): int: ... end   // int[] = slice parameter, any length
 len(a)                                // length builtin
 ```
 
@@ -1519,7 +1519,7 @@ General mapping that applies to all source languages:
 - **Go**: `struct`+methods→same; `interface`→`interface`/`dyn`; goroutines→
   `spawn`; `sync.Mutex/WaitGroup`→`sync.*`; multiple returns → a `struct` or
   out-params via pointers; `error` return → `bool`/`Option`; slices → `Vector`
-  or `T[:]` slices; `map`→`HashMap`.
+  or `T[]` slices; `map`→`HashMap`.
 - **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
   `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`

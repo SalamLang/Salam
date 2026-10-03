@@ -43,39 +43,24 @@ const _DFL_DIST_EXTRA := [
     7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13
 ]
 
-func _write_bits_msb(w &: BitWriter, code: int, len: int):
-    mut bit := len - 1
-    until bit >= 0:
-        BitWriteBit(w, (code >> bit) & 1)
-        bit -= 1
-    end
-end
+const _DFL_CLC_ORDER := [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
-func _fixed_lit_code(sym: int, code_out &: int, len_out &: int):
-    if sym <= 143:
-        code_out = 0x30 + sym
-        len_out = 8
-    else:
-        if sym <= 255:
-            code_out = 0x190 + (sym - 144)
-            len_out = 9
-        else:
-            if sym <= 279:
-                code_out = sym - 256
-                len_out = 7
-            else:
-                code_out = 0xc0 + (sym - 280)
-                len_out = 8
-            end
-        end
-    end
-end
+const _DFL_BLOCK_TOKENS := 16384
 
-func _write_fixed_literal(w &: BitWriter, sym: int):
-    mut code := 0
-    mut len := 0
-    _fixed_lit_code(sym, code, len)
-    _write_bits_msb(w, code, len)
+const _DFL_LAZY_MAX := 32
+
+const _DFL_GOOD := 8
+
+const _DFL_NICE := 128
+
+func _dfl_reverse(code: int, len: int): int:
+    mut r := 0
+    mut c := code
+    repeat len:
+        r = (r << 1) | (c & 1)
+        c = c >> 1
+    end
+    ret r
 end
 
 func _length_to_code(length: int, idx_out &: int, extra_out &: int):
@@ -96,26 +81,6 @@ func _dist_to_code(dist: int, idx_out &: int, extra_out &: int):
     extra_out = dist - _DFL_DIST_BASE[idx]
 end
 
-func _write_fixed_length(w &: BitWriter, length: int):
-    mut idx := 0
-    mut extra := 0
-    _length_to_code(length, idx, extra)
-    _write_fixed_literal(w, 257 + idx)
-    if _DFL_LENGTH_EXTRA[idx] > 0:
-        BitWriteBits(w, extra, _DFL_LENGTH_EXTRA[idx])
-    end
-end
-
-func _write_fixed_distance(w &: BitWriter, dist: int):
-    mut idx := 0
-    mut extra := 0
-    _dist_to_code(dist, idx, extra)
-    _write_bits_msb(w, idx, 5)
-    if _DFL_DIST_EXTRA[idx] > 0:
-        BitWriteBits(w, extra, _DFL_DIST_EXTRA[idx])
-    end
-end
-
 func _dfl_hash3(bp: u8*, i: int): int:
     ret ((((bp[i] as int) << 10) ^ ((bp[i + 1] as int) << 5)) ^ (bp[i + 2] as int)) & _DFL_HASH_MASK
 end
@@ -129,7 +94,7 @@ func _dfl_insert(bp: u8*, n: int, i: int, head &: Vector<int>, prev &: Vector<in
     head.set(h, i)
 end
 
-func _dfl_find_match(p: void*, n: int, pos: int, head &: Vector<int>, prev &: Vector<int>, bestlen &: int, bestdist &: int):
+func _dfl_find_match(p: void*, n: int, pos: int, head &: Vector<int>, prev &: Vector<int>, max_chain: int, bestlen &: int, bestdist &: int):
     bp := p as u8*
     bestlen = 0
     bestdist = 0
@@ -141,7 +106,7 @@ func _dfl_find_match(p: void*, n: int, pos: int, head &: Vector<int>, prev &: Ve
     mut limit := pos - _DFL_WINDOW
     if limit < 0: limit = 0 end
     mut cand := head.get(_dfl_hash3(bp, pos))
-    mut chain := _DFL_MAX_CHAIN
+    mut chain := max_chain
     until cand >= limit and chain > 0:
         if bestlen == 0 or (bp[cand + bestlen] as int) == (bp[pos + bestlen] as int):
             mut len := 0
@@ -151,7 +116,7 @@ func _dfl_find_match(p: void*, n: int, pos: int, head &: Vector<int>, prev &: Ve
             if len > bestlen:
                 bestlen = len
                 bestdist = pos - cand
-                if len >= maxlen:
+                if len >= maxlen or len >= _DFL_NICE:
                     ret
                 end
             end
@@ -161,49 +126,451 @@ func _dfl_find_match(p: void*, n: int, pos: int, head &: Vector<int>, prev &: Ve
     end
 end
 
+func _dfl_zeros(n: int): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    v.zeros(n)
+    ret v
+end
+
+func _dfl_lengths(freq: Vector<int>, limit: int): Vector<int>:
+    n := freq.len()
+    mut lens := _dfl_zeros(n)
+    mut used := 0
+    mut only := 0
+    repeat n in i:
+        if freq.get(i) > 0:
+            used += 1
+            only = i
+        end
+    end
+    if used == 0:
+        ret lens
+    end
+    if used == 1:
+        lens.set(only, 1)
+        ret lens
+    end
+    mut floor := 1
+    mut done := false
+    until not done:
+        mut weight := Vector {} as Vector<i64>
+        mut parent := Vector {} as Vector<int>
+        mut leaf := Vector {} as Vector<int>
+        mut alive := Vector {} as Vector<bool>
+        repeat n in i:
+            f := freq.get(i)
+            if f > 0:
+                weight.push((f < floor ? floor : f) as i64)
+                parent.push(0 - 1)
+                leaf.push(i)
+                alive.push(true)
+            end
+        end
+        mut live := weight.len()
+        until live > 1:
+            mut x := 0 - 1
+            mut y := 0 - 1
+            repeat weight.len() in k:
+                if alive.get(k):
+                    if x < 0 or weight.get(k) < weight.get(x):
+                        y = x
+                        x = k
+                    else y < 0 or weight.get(k) < weight.get(y):
+                        y = k
+                    end
+                end
+            end
+            alive.set(x, false)
+            alive.set(y, false)
+            weight.push(weight.get(x) + weight.get(y))
+            parent.push(0 - 1)
+            leaf.push(0 - 1)
+            alive.push(true)
+            parent.set(x, weight.len() - 1)
+            parent.set(y, weight.len() - 1)
+            live -= 1
+        end
+        mut deepest := 0
+        repeat leaf.len() in k:
+            sym := leaf.get(k)
+            if sym >= 0:
+                mut depth := 0
+                mut at := k
+                until parent.get(at) >= 0:
+                    at = parent.get(at)
+                    depth += 1
+                end
+                lens.set(sym, depth)
+                if depth > deepest:
+                    deepest = depth
+                end
+            end
+        end
+        weight.free()
+        parent.free()
+        leaf.free()
+        alive.free()
+        if deepest <= limit:
+            done = true
+        else:
+            floor = floor * 2
+        end
+    end
+    ret lens
+end
+
+func _dfl_codes(lens: Vector<int>): Vector<int>:
+    n := lens.len()
+    mut count := _dfl_zeros(16)
+    repeat n in i:
+        l := lens.get(i)
+        if l > 0:
+            count.set(l, count.get(l) + 1)
+        end
+    end
+    mut next := _dfl_zeros(16)
+    mut code := 0
+    mut bits := 1
+    until bits < 16:
+        code = (code + count.get(bits - 1)) << 1
+        next.set(bits, code)
+        bits += 1
+    end
+    mut codes := _dfl_zeros(n)
+    repeat n in i:
+        l := lens.get(i)
+        if l > 0:
+            codes.set(i, _dfl_reverse(next.get(l), l))
+            next.set(l, next.get(l) + 1)
+        end
+    end
+    count.free()
+    next.free()
+    ret codes
+end
+
+func _dfl_rle(lens: Vector<int>, syms &: Vector<int>, extra &: Vector<int>):
+    n := lens.len()
+    mut i := 0
+    until i < n:
+        l := lens.get(i)
+        mut run := 1
+        until i + run < n and lens.get(i + run) == l:
+            run += 1
+        end
+        if l == 0 and run >= 3:
+            mut left := run
+            until left >= 3:
+                take := left > 138 ? 138 : left
+                if take >= 11:
+                    syms.push(18)
+                    extra.push(take - 11)
+                else:
+                    syms.push(17)
+                    extra.push(take - 3)
+                end
+                left -= take
+            end
+            repeat left:
+                syms.push(0)
+                extra.push(0)
+            end
+            i += run
+        else l != 0 and run >= 4:
+            syms.push(l)
+            extra.push(0)
+            mut left := run - 1
+            until left >= 3:
+                take := left > 6 ? 6 : left
+                syms.push(16)
+                extra.push(take - 3)
+                left -= take
+            end
+            repeat left:
+                syms.push(l)
+                extra.push(0)
+            end
+            i += run
+        else:
+            syms.push(l)
+            extra.push(0)
+            i += 1
+        end
+    end
+end
+
+func _dfl_fixed_len(sym: int): int:
+    if sym <= 143: ret 8 end
+    if sym <= 255: ret 9 end
+    if sym <= 279: ret 7 end
+    ret 8
+end
+
+func _dfl_emit_block(w &: BitWriter, src: u8*, start: int, stop: int, tl: Vector<int>, td: Vector<int>, last: bool):
+    mut lf := _dfl_zeros(286)
+    mut df := _dfl_zeros(30)
+    mut extra_bits := 0
+    repeat tl.len() in t:
+        len := tl.get(t)
+        if len == 0:
+            lf.set(td.get(t), lf.get(td.get(t)) + 1)
+        else:
+            mut li := 0
+            mut le := 0
+            _length_to_code(len, li, le)
+            lf.set(257 + li, lf.get(257 + li) + 1)
+            mut di := 0
+            mut de := 0
+            _dist_to_code(td.get(t), di, de)
+            df.set(di, df.get(di) + 1)
+            extra_bits += _DFL_LENGTH_EXTRA[li] + _DFL_DIST_EXTRA[di]
+        end
+    end
+    lf.set(256, 1)
+    ll := _dfl_lengths(lf, 15)
+    mut used_dist := false
+    repeat 30 in i:
+        if df.get(i) > 0:
+            used_dist = true
+        end
+    end
+    if not used_dist:
+        df.set(0, 1)
+    end
+    dl := _dfl_lengths(df, 15)
+    mut hlit := 286
+    until hlit > 257 and ll.get(hlit - 1) == 0:
+        hlit -= 1
+    end
+    mut hdist := 30
+    until hdist > 1 and dl.get(hdist - 1) == 0:
+        hdist -= 1
+    end
+    mut all := Vector {} as Vector<int>
+    repeat hlit in i:
+        all.push(ll.get(i))
+    end
+    repeat hdist in i:
+        all.push(dl.get(i))
+    end
+    mut rs := Vector {} as Vector<int>
+    mut rx := Vector {} as Vector<int>
+    _dfl_rle(all, rs, rx)
+    mut cf := _dfl_zeros(19)
+    repeat rs.len() in i:
+        cf.set(rs.get(i), cf.get(rs.get(i)) + 1)
+    end
+    cl := _dfl_lengths(cf, 7)
+    mut hclen := 19
+    until hclen > 4 and cl.get(_DFL_CLC_ORDER[hclen - 1]) == 0:
+        hclen -= 1
+    end
+    mut dyn := 3 + 5 + 5 + 4 + hclen * 3 + extra_bits
+    repeat rs.len() in i:
+        sym := rs.get(i)
+        dyn += cl.get(sym) + (sym == 16 ? 2 : (sym == 17 ? 3 : (sym == 18 ? 7 : 0)))
+    end
+    mut fixed := 3 + extra_bits
+    repeat 286 in i:
+        dyn += lf.get(i) * ll.get(i)
+        fixed += lf.get(i) * _dfl_fixed_len(i)
+    end
+    repeat 30 in i:
+        if used_dist:
+            dyn += df.get(i) * dl.get(i)
+            fixed += df.get(i) * 5
+        end
+    end
+    stored := (stop - start) * 8 + 40 + ((stop - start) / 65535) * 40
+    if stored < dyn and stored < fixed:
+        mut at := start
+        mut first := true
+        until first or at < stop:
+            first = false
+            chunk := stop - at > 65535 ? 65535 : stop - at
+            BitWriteBit(w, (last and at + chunk >= stop) ? 1 : 0)
+            BitWriteBits(w, 0, 2)
+            BitFlush(w)
+            BitWriteBits(w, chunk & 255, 8)
+            BitWriteBits(w, (chunk >> 8) & 255, 8)
+            BitWriteBits(w, (0 - chunk - 1) & 255, 8)
+            BitWriteBits(w, ((0 - chunk - 1) >> 8) & 255, 8)
+            repeat chunk in k:
+                BitWriteBits(w, src[at + k] as int, 8)
+            end
+            at += chunk
+        end
+    else:
+        BitWriteBit(w, last ? 1 : 0)
+        mut lcodes := Vector {} as Vector<int>
+        mut llens := Vector {} as Vector<int>
+        mut dcodes := Vector {} as Vector<int>
+        mut dlens := Vector {} as Vector<int>
+        if fixed <= dyn:
+            BitWriteBits(w, 1, 2)
+            repeat 288 in i:
+                llens.push(i < 286 ? _dfl_fixed_len(i) : 8)
+            end
+            repeat 30:
+                dlens.push(5)
+            end
+        else:
+            BitWriteBits(w, 2, 2)
+            BitWriteBits(w, hlit - 257, 5)
+            BitWriteBits(w, hdist - 1, 5)
+            BitWriteBits(w, hclen - 4, 4)
+            repeat hclen in i:
+                BitWriteBits(w, cl.get(_DFL_CLC_ORDER[i]), 3)
+            end
+            ccodes := _dfl_codes(cl)
+            repeat rs.len() in i:
+                sym := rs.get(i)
+                BitWriteBits(w, ccodes.get(sym), cl.get(sym))
+                if sym == 16:
+                    BitWriteBits(w, rx.get(i), 2)
+                else sym == 17:
+                    BitWriteBits(w, rx.get(i), 3)
+                else sym == 18:
+                    BitWriteBits(w, rx.get(i), 7)
+                end
+            end
+            ccodes.free()
+            repeat 286 in i:
+                llens.push(ll.get(i))
+            end
+            repeat 30 in i:
+                dlens.push(dl.get(i))
+            end
+        end
+        lcodes = _dfl_codes(llens)
+        dcodes = _dfl_codes(dlens)
+        repeat tl.len() in t:
+            len := tl.get(t)
+            if len == 0:
+                sym := td.get(t)
+                BitWriteBits(w, lcodes.get(sym), llens.get(sym))
+            else:
+                mut li := 0
+                mut le := 0
+                _length_to_code(len, li, le)
+                BitWriteBits(w, lcodes.get(257 + li), llens.get(257 + li))
+                if _DFL_LENGTH_EXTRA[li] > 0:
+                    BitWriteBits(w, le, _DFL_LENGTH_EXTRA[li])
+                end
+                mut di := 0
+                mut de := 0
+                _dist_to_code(td.get(t), di, de)
+                BitWriteBits(w, dcodes.get(di), dlens.get(di))
+                if _DFL_DIST_EXTRA[di] > 0:
+                    BitWriteBits(w, de, _DFL_DIST_EXTRA[di])
+                end
+            end
+        end
+        BitWriteBits(w, lcodes.get(256), llens.get(256))
+        lcodes.free()
+        llens.free()
+        dcodes.free()
+        dlens.free()
+    end
+    lf.free()
+    df.free()
+    ll.free()
+    dl.free()
+    all.free()
+    rs.free()
+    rx.free()
+    cf.free()
+    cl.free()
+end
+
 @en "RawDeflate"
 @fa "دیفلیت خام"
 pub func RawDeflate(p: void*, n: int): ByteBuf:
     mut w := NewBitWriter()
-    BitWriteBit(w, 1)
-    BitWriteBits(w, 1, 2)
-
-    if n > 0:
-        bp := p as u8*
-        mut head := Vector {} as Vector<int>
-        mut prev := Vector {} as Vector<int>
-        head.zeros(_DFL_HASH_SIZE)
-        prev.zeros(n)
-        mut h := 0
-        until h < _DFL_HASH_SIZE:
-            head.set(h, 0 - 1)
-            h += 1
-        end
-        mut pos := 0
-        until pos < n:
-            mut bestlen := 0
-            mut bestdist := 0
-            _dfl_find_match(p, n, pos, head, prev, bestlen, bestdist)
-            if bestlen >= _DFL_MIN_MATCH:
-                _write_fixed_length(w, bestlen)
-                _write_fixed_distance(w, bestdist)
+    bp := p as u8*
+    mut tl := Vector {} as Vector<int>
+    mut td := Vector {} as Vector<int>
+    if n == 0:
+        _dfl_emit_block(w, bp, 0, 0, tl, td, true)
+        tl.free()
+        td.free()
+        BitFlush(w)
+        ret w.buf
+    end
+    mut head := Vector {} as Vector<int>
+    mut prev := Vector {} as Vector<int>
+    head.zeros(_DFL_HASH_SIZE)
+    prev.zeros(n)
+    mut h := 0
+    until h < _DFL_HASH_SIZE:
+        head.set(h, 0 - 1)
+        h += 1
+    end
+    mut block_start := 0
+    mut pos := 0
+    mut have_prev := false
+    mut prev_len := 0
+    mut prev_dist := 0
+    until pos < n:
+        mut bestlen := 0
+        mut bestdist := 0
+        _dfl_find_match(p, n, pos, head, prev, (have_prev and prev_len >= _DFL_GOOD) ? _DFL_MAX_CHAIN / 4 : _DFL_MAX_CHAIN, bestlen, bestdist)
+        if have_prev:
+            if bestlen > prev_len:
+                tl.push(0)
+                td.push(bp[pos - 1] as int)
+                prev_len = bestlen
+                prev_dist = bestdist
+                _dfl_insert(bp, n, pos, head, prev)
+                pos += 1
+            else:
+                tl.push(prev_len)
+                td.push(prev_dist)
                 mut k := 0
-                until k < bestlen:
+                until k < prev_len - 1:
                     _dfl_insert(bp, n, pos + k, head, prev)
                     k += 1
                 end
-                pos += bestlen
-            else:
-                _write_fixed_literal(w, bp[pos] as int)
-                _dfl_insert(bp, n, pos, head, prev)
-                pos += 1
+                pos += prev_len - 1
+                have_prev = false
             end
+        else bestlen >= _DFL_LAZY_MAX:
+            tl.push(bestlen)
+            td.push(bestdist)
+            mut k := 0
+            until k < bestlen:
+                _dfl_insert(bp, n, pos + k, head, prev)
+                k += 1
+            end
+            pos += bestlen
+        else bestlen >= _DFL_MIN_MATCH:
+            have_prev = true
+            prev_len = bestlen
+            prev_dist = bestdist
+            _dfl_insert(bp, n, pos, head, prev)
+            pos += 1
+        else:
+            tl.push(0)
+            td.push(bp[pos] as int)
+            _dfl_insert(bp, n, pos, head, prev)
+            pos += 1
         end
-        head.free()
-        prev.free()
+        if not have_prev and tl.len() >= _DFL_BLOCK_TOKENS and pos < n:
+            _dfl_emit_block(w, bp, block_start, pos, tl, td, false)
+            block_start = pos
+            tl.clear()
+            td.clear()
+        end
     end
-
-    _write_fixed_literal(w, 256)
+    if have_prev:
+        tl.push(prev_len)
+        td.push(prev_dist)
+    end
+    _dfl_emit_block(w, bp, block_start, n, tl, td, true)
+    head.free()
+    prev.free()
+    tl.free()
+    td.free()
     BitFlush(w)
     ret w.buf
 end

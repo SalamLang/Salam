@@ -923,7 +923,7 @@ TIMEREPORT_EOF
         tr_wall=$(tr_field "$tr_json" wall_ns)
         tr_bad=""
         [ -n "$tr_wall" ] && [ "$tr_wall" -gt 0 ] || tr_bad="wall_ns not positive"
-        for k in source lexer parser semantic codegen write; do
+        for k in source lexer parser semantic codegen cc link; do
             grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
         done
         tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |
@@ -937,6 +937,7 @@ TIMEREPORT_EOF
         fi
     fi
 
+    rm -rf "$tr_dir/.salam-build"
     (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
     if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"

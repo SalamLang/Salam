@@ -163,14 +163,15 @@ give the same answer on every backend, so prefer them for non-ASCII text.
 
 Text types, and which one to reach for:
 
-| Need                                 | Use                                                                     |
-| ------------------------------------ | ----------------------------------------------------------------------- |
-| Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                 |
-| One byte, e.g. `'a'`                 | `char`                                                                  |
-| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.char_at(0) == u'س'` works)          |
-| Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)` |
-| UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                     |
-| Checking text is plain English       | `str.AllAscii(s)`                                                       |
+| Need                                 | Use                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                     |
+| One byte, e.g. `'a'`                 | `char`                                                                      |
+| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.char_at(0) == u'س'` works)              |
+| Code point of one character          | `c as int` for a `uchar` (`u'س' as int` is 1587), back with `1587 as uchar` |
+| Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)`     |
+| UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                         |
+| Checking text is plain English       | `str.AllAscii(s)`                                                           |
 
 There is no separate ASCII string type: UTF-8 stores ASCII text in exactly
 one byte per character, so `str` is already the most compact choice, and for

@@ -9,19 +9,18 @@ include i18 "../i18n.salam"
 
 func base_typename(ts: str): str:
     n := str.Len(ts)
-    mut b := str.NewBuilder()
     mut i := 0
-    until i < n && i < 95:
+    until i < n and i < 95:
         c := byte_at(ts, i)
-        if c == 60 || c == 91 || c == 42 || c == 32:
+        if c == 60 or c == 91 or c == 42 or c == 32:
             break
         end
-        str.BufAppendChar(b, c)
         i += 1
     end
-    r := str.BufStr(b)
-    str.BufFree(b)
-    ret r
+    if i == n:
+        ret ts
+    end
+    ret str.Substr(ts, 0, i)
 end
 
 func ptr_elem_from_typestr(ts: str): int:
@@ -29,7 +28,7 @@ func ptr_elem_from_typestr(ts: str): int:
     if str.Equals(base, "i8"):
         ret PTR_I8
     end
-    if str.Equals(base, "u8") || str.Equals(base, "byte"):
+    if str.Equals(base, "u8") or str.Equals(base, "byte"):
         ret PTR_U8
     end
     if str.Equals(base, "i16"):
@@ -44,10 +43,10 @@ func ptr_elem_from_typestr(ts: str): int:
     if str.Equals(base, "u32"):
         ret PTR_U32
     end
-    if str.Equals(base, "i64") || str.Equals(base, "size"):
+    if str.Equals(base, "i64") or str.Equals(base, "size"):
         ret PTR_I64
     end
-    if str.Equals(base, "u64") || str.Equals(base, "usize"):
+    if str.Equals(base, "u64") or str.Equals(base, "usize"):
         ret PTR_U64
     end
     if str.Equals(base, "f32"):
@@ -193,6 +192,10 @@ func ptr_store(pa: i64, elem: int, idx: i64, v: Value):
     end
     if elem == PTR_STR:
         ps := pa as i64*
+        if v.kind == VAL_NULL or (v.kind == VAL_PTR and v.pa == (0 as i64)):
+            ps[idx] = 0 as i64
+            ret
+        end
         cs := v.kind == VAL_STR ? v.s : ""
         cp := cs as void*
         ps[idx] = cp as i64
@@ -203,11 +206,11 @@ func ptr_store(pa: i64, elem: int, idx: i64, v: Value):
 end
 
 func is_int_typename(b0: str): bool:
-    ret str.Equals(b0, "i8") || str.Equals(b0, "i16") || str.Equals(b0, "i32") || str.Equals(b0, "i64") || str.Equals(b0, "u8") || str.Equals(b0, "u16") || str.Equals(b0, "u32") || str.Equals(b0, "u64") || str.Equals(b0, "int") || str.Equals(b0, "byte") || str.Equals(b0, "char") || str.Equals(b0, "usize") || str.Equals(b0, "size")
+    ret str.Equals(b0, "i8") or str.Equals(b0, "i16") or str.Equals(b0, "i32") or str.Equals(b0, "i64") or str.Equals(b0, "u8") or str.Equals(b0, "u16") or str.Equals(b0, "u32") or str.Equals(b0, "u64") or str.Equals(b0, "int") or str.Equals(b0, "byte") or str.Equals(b0, "char") or str.Equals(b0, "usize") or str.Equals(b0, "size")
 end
 
 func is_float_typename(b0: str): bool:
-    ret str.Equals(b0, "f32") || str.Equals(b0, "f64") || str.Equals(b0, "float")
+    ret str.Equals(b0, "f32") or str.Equals(b0, "f64") or str.Equals(b0, "float")
 end
 
 func zero_for_base(base: str): Value:
@@ -232,24 +235,68 @@ func default_for_type(ip &: Interp, ts: str): Value:
     end
     lb := str.Find(ts, "[")
     if lb < 0:
+        if str.Len(ts) > 0 and byte_at(ts, str.Len(ts) - 1) != 42:
+            sd := find_struct(ip, ts)
+            if sd != 0:
+                ret struct_zero(ip, sd)
+            end
+        end
         ret val_null()
     end
     mut n := 0
     mut p := lb + 1
     tn := str.Len(ts)
-    until p < tn && byte_at(ts, p) != 93:
+    until p < tn and byte_at(ts, p) != 93:
         c := byte_at(ts, p)
-        if c >= 48 && c <= 57:
+        if c >= 48 and c <= 57:
             n = n * 10 + (c - 48)
         end
         p += 1
     end
-    zero := zero_for_base(base_typename(ts))
+    base := str.Substr(ts, 0, lb)
+    rest := base + str.Substr(ts, p + 1, tn - p - 1)
+    nested := str.Find(rest, "[") >= 0
     aid := arr_new(ip, n > 0 ? n : 4)
+    if nested or find_struct(ip, str.Trim(base)) != 0:
+        repeat n:
+            arr_push(ip, aid, default_for_type(ip, str.Trim(rest)))
+        end
+        ret val_arr(aid)
+    end
+    zero := zero_for_base(base_typename(ts))
     repeat n:
         arr_push(ip, aid, zero)
     end
     ret val_arr(aid)
+end
+
+func struct_zero(ip &: Interp, sd: int): Value:
+    sdn := at.At(g_ast, sd)
+    mut nf := 0
+    repeat at.ChildCount(g_ast, sd) in ci:
+        if at.KindOf(g_ast, at.Child(g_ast, sd, ci)) == at.AST_FIELD:
+            nf += 1
+        end
+    end
+    sv := mk_struct(ip, sdn.name, sd, nf)
+    mut fi := 0
+    repeat at.ChildCount(g_ast, sd) in i:
+        f := at.Child(g_ast, sd, i)
+        if at.KindOf(g_ast, f) == at.AST_FIELD:
+            fnode := at.At(g_ast, f)
+            fts := fnode.ty != 0 ? at.At(g_ast, fnode.ty).type_str : ""
+            mut fv := val_null()
+            if str.Find(fts, "[") < 0:
+                fv = zero_for_base(base_typename(fts))
+            end
+            if fv.kind == VAL_NULL:
+                fv = default_for_type(ip, fts)
+            end
+            st_field_set(ip, sv.id, fi, fnode.name, fv)
+            fi += 1
+        end
+    end
+    ret sv
 end
 
 func binop_method(op: int): str:
@@ -345,7 +392,7 @@ func try_struct_op(
     end
     stv := ip.sts.get(va.id)
     m := struct_method_arity(a, stv.def, mname, has_b ? 1 : 0)
-    if m == 0 && op == tok.TK_NE:
+    if m == 0 and op == tok.TK_NE:
         eqm := struct_method_arity(a, stv.def, "operator_eq", 1)
         if eqm != 0:
             denv := find_def_env(ip, eqm)
@@ -356,7 +403,7 @@ func try_struct_op(
                 ip, a, eqm, denv != 0 ? denv : ip.globals, true, va, args1
             )
             args1.free()
-            ret val_bool(!to_bool(r))
+            ret val_bool(not to_bool(r))
         end
     end
     if m == 0:
@@ -406,7 +453,7 @@ func int_ty_from_typestr(ts: str): int:
         if str.Equals(ts, "u32"):
             ret ITY_U32
         end
-        if str.Equals(ts, "u64") || str.Equals(ts, "usize"):
+        if str.Equals(ts, "u64") or str.Equals(ts, "usize"):
             ret ITY_U64
         end
         if str.Equals(ts, "uint"):
@@ -446,7 +493,7 @@ func int_ty_common(x: int, y: int): int:
 end
 
 func coerce_int_ty(v: Value, t: int): Value:
-    if t == ITY_NONE || v.kind != VAL_INT:
+    if t == ITY_NONE or v.kind != VAL_INT:
         ret v
     end
     mut r := v
@@ -455,25 +502,37 @@ func coerce_int_ty(v: Value, t: int): Value:
     ret r
 end
 
-func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Value:
-    if op == tok.TK_PLUS && (x.kind == VAL_STR || y.kind == VAL_STR):
+func ptr_as_int(v: Value): Value:
+    if v.kind == VAL_PTR or v.kind == VAL_FUNC:
+        ret val_int_ty(to_int(v), ITY_I64)
+    end
+    ret v
+end
+
+func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x0: Value, y0: Value): Value:
+    mut x := x0
+    mut y := y0
+    if x.kind == VAL_PTR or y.kind == VAL_PTR or x.kind == VAL_FUNC or y.kind == VAL_FUNC:
+        rts := n != 0 ? at.At(a, n).type_str : ""
+        if str.Len(rts) == 0 or byte_at(rts, str.Len(rts) - 1) != 42:
+            x = ptr_as_int(x)
+            y = ptr_as_int(y)
+        end
+    end
+    if op == tok.TK_PLUS and (x.kind == VAL_STR or y.kind == VAL_STR):
         ret val_str(to_str(ip, x) + to_str(ip, y))
     end
-    if op == tok.TK_STAR && (x.kind == VAL_STR || y.kind == VAL_STR):
+    if op == tok.TK_STAR and (x.kind == VAL_STR or y.kind == VAL_STR):
         x_str := x.kind == VAL_STR
         sv := x_str ? x : y
         nv := x_str ? y : x
         ret str_repeat(sv.s, to_int(nv))
     end
     if op == tok.TK_POWER:
-        r := math.Pow(to_float(x), to_float(y))
-        if x.kind == VAL_INT && y.kind == VAL_INT && r == math.Floor(r) && math.Abs(r) < 9200000000000000000.0:
-            ret val_int(r as i64)
-        end
-        ret val_float(r)
+        ret val_float(math.Pow(to_float(x), to_float(y)))
     end
-    if is_intlike(x) && is_intlike(y):
-        shift := op == tok.TK_SHL || op == tok.TK_SHR
+    if is_intlike(x) and is_intlike(y):
+        shift := op == tok.TK_SHL or op == tok.TK_SHR
         rt := shift ? x.ity : int_ty_common(x.ity, y.ity)
         uns := int_ty_is_unsigned(rt)
         bits := int_ty_bits(rt)
@@ -501,7 +560,7 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
             if uns:
                 ret val_int_ty((ux / uy) as i64, rt)
             end
-            if xi == imin && yi == negone:
+            if xi == imin and yi == negone:
                 ret val_int_ty(imin, rt)
             end
             ret val_int_ty(xi / yi, rt)
@@ -514,7 +573,7 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
             if uns:
                 ret val_int_ty((ux % uy) as i64, rt)
             end
-            if xi == imin && yi == negone:
+            if xi == imin and yi == negone:
                 ret val_int_ty(0 as i64, rt)
             end
             ret val_int_ty(xi % yi, rt)
@@ -560,11 +619,11 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Valu
 end
 
 func value_cmp(x: Value, y: Value): int:
-    if x.kind == VAL_STR && y.kind == VAL_STR:
+    if x.kind == VAL_STR and y.kind == VAL_STR:
         c := str.Compare(x.s, y.s)
         ret c < 0 ? (0 - 1) : (c > 0 ? 1 : 0)
     end
-    if is_intlike(x) && is_intlike(y):
+    if is_intlike(x) and is_intlike(y):
         rt := int_ty_common(x.ity, y.ity)
         xi := int_ty_wrap(rt, x.i)
         yi := int_ty_wrap(rt, y.i)
@@ -581,32 +640,36 @@ func value_cmp(x: Value, y: Value): int:
 end
 
 func value_eq(x: Value, y: Value): bool:
-    if x.kind == VAL_STR && y.kind == VAL_STR:
+    if x.kind == VAL_FUNC or y.kind == VAL_FUNC:
+        fx := fn_id_of(x)
+        ret fx >= 0 and fx == fn_id_of(y)
+    end
+    if x.kind == VAL_STR and y.kind == VAL_STR:
         ret str.Equals(x.s, y.s)
     end
-    if x.kind == VAL_PTR && y.kind == VAL_PTR:
+    if x.kind == VAL_PTR and y.kind == VAL_PTR:
         ret x.pa == y.pa
     end
-    if x.kind == VAL_PTR && y.kind == VAL_NULL:
+    if x.kind == VAL_PTR and y.kind == VAL_NULL:
         ret x.pa == (0 as i64)
     end
-    if x.kind == VAL_NULL && y.kind == VAL_PTR:
+    if x.kind == VAL_NULL and y.kind == VAL_PTR:
         ret y.pa == (0 as i64)
     end
-    if x.kind == VAL_NULL || y.kind == VAL_NULL:
+    if x.kind == VAL_NULL or y.kind == VAL_NULL:
         ret x.kind == y.kind
     end
-    if x.kind == VAL_BOOL || y.kind == VAL_BOOL:
+    if x.kind == VAL_BOOL or y.kind == VAL_BOOL:
         ret to_bool(x) == to_bool(y)
     end
-    if is_intlike(x) && is_intlike(y):
+    if is_intlike(x) and is_intlike(y):
         rt := int_ty_common(x.ity, y.ity)
         ret int_ty_wrap(rt, x.i) == int_ty_wrap(rt, y.i)
     end
-    if is_number(x) && is_number(y):
+    if is_number(x) and is_number(y):
         ret to_float(x) == to_float(y)
     end
-    if x.kind == VAL_STRUCT && y.kind == VAL_STRUCT:
+    if x.kind == VAL_STRUCT and y.kind == VAL_STRUCT:
         ret x.id == y.id
     end
     ret false

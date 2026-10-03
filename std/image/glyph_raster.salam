@@ -144,36 +144,11 @@ func _build_edges(pts &: Vector<_GlyphPoint>, ends &: Vector<int>, edges &: Vect
     mut k := 0
     until k < ends.len():
         e := ends.get(k)
-        if e > s && e <= pts.len():
+        if e > s and e <= pts.len():
             _contour_edges(pts, s, e, edges)
         end
         s = e
         k += 1
-    end
-end
-
-func _scan_crossings(edges &: Vector<_Edge>, sy: f64, out &: Vector<_Cross>):
-    n := edges.len()
-    mut i := 0
-    until i < n:
-        e := edges.get(i)
-        if sy >= e.y0 && sy < e.y1:
-            mut cr := _Cross {}
-            cr.x = e.x0 + (sy - e.y0) * (e.x1 - e.x0) / (e.y1 - e.y0)
-            cr.dir = e.dir
-            out.push(cr)
-            mut j := out.len() - 1
-            until j > 0:
-                prev := out.get(j - 1)
-                if prev.x <= cr.x:
-                    break
-                end
-                out.set(j, prev)
-                out.set(j - 1, cr)
-                j -= 1
-            end
-        end
-        i += 1
     end
 end
 
@@ -194,7 +169,7 @@ func _add_span(acc &: Vector<f64>, xoff: int, w: int, xa: f64, xb: f64, weight: 
     if ib >= w:
         ib = w - 1
     end
-    if ia >= w || ib < ia:
+    if ia >= w or ib < ia:
         ret
     end
     if ia == ib:
@@ -218,9 +193,9 @@ func _accumulate_spans(xs &: Vector<_Cross>, acc &: Vector<f64>, xoff: int, w: i
         cr := xs.get(i)
         prev := wind
         wind += cr.dir
-        if prev == 0 && wind != 0:
+        if prev == 0 and wind != 0:
             spanx = cr.x
-        else if prev != 0 && wind == 0:
+        else if prev != 0 and wind == 0:
             _add_span(acc, xoff, w, spanx, cr.x, weight)
         end
         i += 1
@@ -245,15 +220,51 @@ func _blit_coverage(img &: Image, acc &: Vector<f64>, xoff: int, w: int, py: int
     end
 end
 
+func _gr_msort(idx &: Vector<int>, keys &: Vector<f64>, tmp &: Vector<int>, lo: int, hi: int):
+    if hi - lo < 2:
+        ret
+    end
+    mid := (lo + hi) / 2
+    _gr_msort(idx, keys, tmp, lo, mid)
+    _gr_msort(idx, keys, tmp, mid, hi)
+    mut i := lo
+    mut j := mid
+    mut k := lo
+    until k < hi:
+        if j >= hi or (i < mid and keys.get(idx.get(i)) <= keys.get(idx.get(j))):
+            tmp.set(k, idx.get(i))
+            i += 1
+        else:
+            tmp.set(k, idx.get(j))
+            j += 1
+        end
+        k += 1
+    end
+    k = lo
+    until k < hi:
+        idx.set(k, tmp.get(k))
+        k += 1
+    end
+end
+
+func _gr_sort(idx &: Vector<int>, keys &: Vector<f64>, tmp &: Vector<int>):
+    until tmp.len() < idx.len():
+        tmp.push(0)
+    end
+    _gr_msort(idx, keys, tmp, 0, idx.len())
+end
+
 func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
     n := edges.len()
-    if n == 0 || img.pixels == null:
+    if n == 0 or img.pixels == null:
         ret
     end
     mut minx := 1.0e30
     mut maxx := 0.0 - 1.0e30
     mut miny := 1.0e30
     mut maxy := 0.0 - 1.0e30
+    mut ykeys := Vector {} as Vector<f64>
+    mut order := Vector {} as Vector<int>
     mut i := 0
     until i < n:
         e := edges.get(i)
@@ -263,20 +274,31 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
         if e.x1 > maxx: maxx = e.x1 end
         if e.y0 < miny: miny = e.y0 end
         if e.y1 > maxy: maxy = e.y1 end
+        ykeys.push(e.y0)
+        order.push(i)
         i += 1
     end
     x0 := _ttf_clampi(math.Floor(minx) as int, 0, img.width)
     x1 := _ttf_clampi((math.Floor(maxx) as int) + 1, 0, img.width)
     y0 := _ttf_clampi(math.Floor(miny) as int, 0, img.height)
     y1 := _ttf_clampi((math.Floor(maxy) as int) + 1, 0, img.height)
-    if x1 <= x0 || y1 <= y0:
+    if x1 <= x0 or y1 <= y0:
+        ykeys.free()
+        order.free()
         ret
     end
+    mut tmp := Vector {} as Vector<int>
+    _gr_sort(order, ykeys, tmp)
     w := x1 - x0
     step := 1.0 / (_TTF_SUBSAMPLES as f64)
     mut acc := Vector {} as Vector<f64>
     acc.zeros(w)
     mut xs := Vector {} as Vector<_Cross>
+    mut active := Vector {} as Vector<int>
+    mut xkeys := Vector {} as Vector<f64>
+    mut xorder := Vector {} as Vector<int>
+    mut sorted := Vector {} as Vector<_Cross>
+    mut next := 0
     mut py := y0
     until py < y1:
         mut k := 0
@@ -287,9 +309,43 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
         mut s := 0
         until s < _TTF_SUBSAMPLES:
             sy := (py as f64) + ((s as f64) + 0.5) * step
+            until next < n and edges.get(order.get(next)).y0 <= sy:
+                active.push(order.get(next))
+                next += 1
+            end
             xs.clear()
-            _scan_crossings(edges, sy, xs)
-            _accumulate_spans(xs, acc, x0, w, step)
+            xkeys.clear()
+            xorder.clear()
+            mut keep := 0
+            mut a := 0
+            until a < active.len():
+                ei := active.get(a)
+                e := edges.get(ei)
+                if e.y1 > sy:
+                    active.set(keep, ei)
+                    keep += 1
+                    if sy >= e.y0:
+                        mut cr := _Cross {}
+                        cr.x = e.x0 + (sy - e.y0) * (e.x1 - e.x0) / (e.y1 - e.y0)
+                        cr.dir = e.dir
+                        xorder.push(xs.len())
+                        xkeys.push(cr.x)
+                        xs.push(cr)
+                    end
+                end
+                a += 1
+            end
+            until active.len() > keep:
+                active.pop()
+            end
+            _gr_sort(xorder, xkeys, tmp)
+            sorted.clear()
+            mut q := 0
+            until q < xorder.len():
+                sorted.push(xs.get(xorder.get(q)))
+                q += 1
+            end
+            _accumulate_spans(sorted, acc, x0, w, step)
             s += 1
         end
         _blit_coverage(img, acc, x0, w, py, c)
@@ -297,18 +353,28 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
     end
     acc.free()
     xs.free()
+    active.free()
+    xkeys.free()
+    xorder.free()
+    sorted.free()
+    tmp.free()
+    ykeys.free()
+    order.free()
 end
 
 func _draw_glyph_xform(img &: Image, f: Font, glyph: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, col: Color):
-    if !FontValid(f) || img.pixels == null:
+    if not FontValid(f) or img.pixels == null:
         ret
     end
     mut pts := Vector {} as Vector<_GlyphPoint>
     mut ends := Vector {} as Vector<int>
     mut edges := Vector {} as Vector<_Edge>
-    _ttf_append_glyph(f, glyph, a, b, c, d, dx, dy, pts, ends, 0)
+    mut work := 0
+    _ttf_append_glyph(f, glyph, a, b, c, d, dx, dy, pts, ends, 0, work)
     _build_edges(pts, ends, edges)
-    _fill_edges(img, edges, col)
+    if edges.len() <= 65536:
+        _fill_edges(img, edges, col)
+    end
     pts.free()
     ends.free()
     edges.free()

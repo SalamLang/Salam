@@ -53,11 +53,13 @@ pub func New(lgr: lg.Logger, entry: str, opts: Options): Interp:
     ipn.capture = opts.capture
     ipn.in_has = opts.has_input
     ipn.in_data = opts.input_data
-    if opts.timeout_ms < 0:
-        ipn.deadline_ms = 0 as i64
+    repeat opts.args.len() in ai:
+        ipn.prog_args.push(opts.args.get(ai))
+    end
+    if opts.timeout_ms > 0:
+        ipn.deadline_ms = time.NowMillis() + (opts.timeout_ms as i64)
     else:
-        ms := opts.timeout_ms > 0 ? opts.timeout_ms : 5000
-        ipn.deadline_ms = time.NowMillis() + (ms as i64)
+        ipn.deadline_ms = 0 as i64
     end
     ipn.envs.push(Env {})
     ipn.arrs.push(Arr {})
@@ -78,39 +80,12 @@ pub func NewOptions(): Options:
 end
 
 pub func Run(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
-    collect_decls(ip, a, program)
-    if ip.failed:
-        ret run_fail(ip)
-    end
-    build_modules(ip, a, sem)
-    if ip.failed:
-        ret run_fail(ip)
-    end
-    fixup_generic_envs(ip, a, sem)
-    rehome_synthetic_funcs(ip, a)
-    interp_eval_globals(ip, a, sem, program)
-    if ip.failed:
-        ret run_fail(ip)
-    end
-    main_fn := find_func(ip, a, ip.entry, 0 - 1)
-    if main_fn == 0:
-        lg.Log(
-            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
-                i18.Tr("no entry point: define a '%s' function"), co.ArgStr(ip.entry)
-            )
-        )
-        ret 1
-    end
-    mut noargs := Vector {} as Vector<Value>
-    defer noargs.free()
-    rc := call_func(ip, a, main_fn, ip.globals, false, val_null(), noargs)
-    if ip.failed:
-        ret run_fail(ip)
-    end
-    if rc.kind == VAL_INT:
-        ret rc.i as int
-    end
-    ret 0
+    g_vm = ip
+    g_ast = a
+    rc := run_program(g_vm, g_ast, sem, program)
+    ip = g_vm
+    a = g_ast
+    ret rc
 end
 
 pub func Free(ip &: Interp):
@@ -118,6 +93,10 @@ pub func Free(ip &: Interp):
         e := ip.envs.get(i0)
         e.names.free()
         e.vals.free()
+        if e.indexed:
+            e.tab.keys.free()
+            e.tab.vals.free()
+        end
     end
     ip.envs.free()
     repeat ip.arrs.len() in i1:

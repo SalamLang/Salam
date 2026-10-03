@@ -20,6 +20,7 @@ import testing
 import os
 import str
 import filepath
+import mem
 
 func repeat_str(s: str, count: int): str:
     mut b := str.NewBuilder()
@@ -120,18 +121,23 @@ end
 
 func main:
     tmpdir := filepath.Join(os.TempDir(), "salam_archive_test")
+    defer mem.Free(tmpdir as void*)
     os.MkdirAll(tmpdir)
 
     text1 := "The quick brown fox jumps over the lazy dog.\n"
     text2 := repeat_str("Salam archive test data, repeated for a real compression ratio. ", 100)
     d1 := compress.BufFromStr(text1)
     d2 := compress.BufFromStr(text2)
+    mem.Free(text2 as void*)
 
     p1 := filepath.Join(tmpdir, "sample1.txt")
+    defer mem.Free(p1 as void*)
     testing.AssertTrue(archive.WriteBinaryFile(p1, d1.data, d1.len))
     gzpath := filepath.Join(tmpdir, "sample1.txt.gz")
+    defer mem.Free(gzpath as void*)
     testing.AssertTrue(archive.GzipCompressFile(p1, gzpath))
     gzout := filepath.Join(tmpdir, "sample1_from_gz.txt")
+    defer mem.Free(gzout as void*)
     testing.AssertTrue(archive.GzipDecompressFile(gzpath, gzout))
     mut ok1 := false
     r1 := archive.ReadBinaryFile(gzout, ok1)
@@ -140,12 +146,14 @@ func main:
     compress.BufFree(r1)
 
     p2 := filepath.Join(tmpdir, "sample2.txt")
+    defer mem.Free(p2 as void*)
     testing.AssertTrue(archive.WriteBinaryFile(p2, d2.data, d2.len))
 
     mut zfiles := Vector {} as Vector<archive.ZipFileInput>
     zfiles.push(archive.MakeZipFileInput("sample1.txt", d1.data, d1.len, 8))
     zfiles.push(archive.MakeZipFileInput("sample2.txt", d2.data, d2.len, 0))
     zippath := filepath.Join(tmpdir, "test.zip")
+    defer mem.Free(zippath as void*)
     testing.AssertTrue(archive.ZipCreateFile(zfiles, zippath))
     defer zfiles.free()
 
@@ -169,6 +177,7 @@ func main:
     compress.BufFree(ze2)
 
     zextractdir := filepath.Join(tmpdir, "zip_extracted")
+    defer mem.Free(zextractdir as void*)
     testing.AssertTrue(archive.ZipExtractAll(zipbuf.data, zipbuf.len, zextractdir))
     compress.BufFree(zipbuf)
 
@@ -177,6 +186,7 @@ func main:
     tfiles.push(archive.MakeTarFileInput("sub/", 0 as void*, 0, true))
     tfiles.push(archive.MakeTarFileInput("sub/sample2.txt", d2.data, d2.len, false))
     tarpath := filepath.Join(tmpdir, "test.tar")
+    defer mem.Free(tarpath as void*)
     testing.AssertTrue(archive.TarCreateFile(tfiles, tarpath))
     defer tfiles.free()
 
@@ -200,25 +210,69 @@ func main:
     compress.BufFree(te2)
 
     textractdir := filepath.Join(tmpdir, "tar_extracted")
+    defer mem.Free(textractdir as void*)
     testing.AssertTrue(archive.TarExtractAll(tarbuf.data, tarbuf.len, textractdir))
     compress.BufFree(tarbuf)
+
+    slipdir := filepath.Join(tmpdir, "slip")
+    defer mem.Free(slipdir as void*)
+    innerdir := filepath.Join(slipdir, "inner")
+    defer mem.Free(innerdir as void*)
+    escaped_zip := filepath.Join(slipdir, "escaped_zip.txt")
+    up_zip := filepath.Join(slipdir, "up_zip.txt")
+    escaped_tar := filepath.Join(slipdir, "escaped_tar.txt")
+    kept_zip := filepath.Join(innerdir, "kept_zip.txt")
+    kept_tar := filepath.Join(innerdir, "kept_tar.txt")
+    _ := os.Remove(escaped_zip)
+    _ := os.Remove(up_zip)
+    _ := os.Remove(escaped_tar)
+    mut sfiles := Vector {} as Vector<archive.ZipFileInput>
+    sfiles.push(archive.MakeZipFileInput("../escaped_zip.txt", d1.data, d1.len, 0))
+    sfiles.push(archive.MakeZipFileInput("/abs_zip.txt", d1.data, d1.len, 0))
+    sfiles.push(archive.MakeZipFileInput("a/../../up_zip.txt", d1.data, d1.len, 0))
+    sfiles.push(archive.MakeZipFileInput("kept_zip.txt", d1.data, d1.len, 0))
+    slipzip := archive.ZipCreate(sfiles)
+    sfiles.free()
+    testing.AssertFalse(archive.ZipExtractAll(slipzip.data, slipzip.len, innerdir))
+    compress.BufFree(slipzip)
+    mut tslip := Vector {} as Vector<archive.TarFileInput>
+    tslip.push(archive.MakeTarFileInput("../escaped_tar.txt", d1.data, d1.len, false))
+    tslip.push(archive.MakeTarFileInput("kept_tar.txt", d1.data, d1.len, false))
+    sliptar := archive.TarCreate(tslip)
+    tslip.free()
+    testing.AssertFalse(archive.TarExtractAll(sliptar.data, sliptar.len, innerdir))
+    compress.BufFree(sliptar)
+    testing.AssertFalse(os.Exists(escaped_zip))
+    testing.AssertFalse(os.Exists(up_zip))
+    testing.AssertFalse(os.Exists(escaped_tar))
+    testing.AssertTrue(os.Exists(kept_zip))
+    testing.AssertTrue(os.Exists(kept_tar))
+    mem.Free(escaped_zip as void*)
+    mem.Free(up_zip as void*)
+    mem.Free(escaped_tar as void*)
+    mem.Free(kept_zip as void*)
+    mem.Free(kept_tar as void*)
 
     rarbuf := build_synthetic_rar("hi.txt", "Hi Salam!", "sub/nested.txt", "Nested RAR content")
     testing.AssertTrue(archive.IsRar(rarbuf.data, rarbuf.len))
     rentries := archive.RarList(rarbuf.data, rarbuf.len) as Vector<archive.Entry>
     testing.AssertEqInt(rentries.len(), 2)
-    defer rentries.free()
+    defer archive.FreeEntries(rentries)
 
     mut re1ok := false
     re1 := archive.RarExtractByName(rarbuf.data, rarbuf.len, "hi.txt", re1ok)
     testing.AssertTrue(re1ok)
-    testing.AssertEqStr(compress.BufToStrUnsafe(re1), "Hi Salam!")
+    re1s := compress.BufToStrUnsafe(re1)
+    testing.AssertEqStr(re1s, "Hi Salam!")
+    mem.Free(re1s as void*)
     compress.BufFree(re1)
 
     mut re2ok := false
     re2 := archive.RarExtractByName(rarbuf.data, rarbuf.len, "sub/nested.txt", re2ok)
     testing.AssertTrue(re2ok)
-    testing.AssertEqStr(compress.BufToStrUnsafe(re2), "Nested RAR content")
+    re2s := compress.BufToStrUnsafe(re2)
+    testing.AssertEqStr(re2s, "Nested RAR content")
+    mem.Free(re2s as void*)
     compress.BufFree(re2)
     compress.BufFree(rarbuf)
 
@@ -229,12 +283,14 @@ func main:
     r5e := r5entries.get(0)
     testing.AssertEqStr(r5e.name, "hello5.txt")
     testing.AssertEqInt(r5e.method, 0)
-    defer r5entries.free()
+    defer archive.FreeEntries(r5entries)
 
     mut r5ok := false
     r5x := archive.RarExtractByName(rar5buf.data, rar5buf.len, "hello5.txt", r5ok)
     testing.AssertTrue(r5ok)
-    testing.AssertEqStr(compress.BufToStrUnsafe(r5x), "Hello RAR5!")
+    r5xs := compress.BufToStrUnsafe(r5x)
+    testing.AssertEqStr(r5xs, "Hello RAR5!")
+    mem.Free(r5xs as void*)
     compress.BufFree(r5x)
     compress.BufFree(rar5buf)
 
@@ -251,6 +307,7 @@ func main:
     mut bfiles := Vector {} as Vector<archive.ZipFileInput>
     bfiles.push(archive.MakeZipFileInput("bin.dat", bin.data, bin.len, 8))
     binzip := filepath.Join(tmpdir, "bin.zip")
+    defer mem.Free(binzip as void*)
     testing.AssertTrue(archive.ZipCreateFile(bfiles, binzip))
     defer bfiles.free()
 
@@ -268,5 +325,5 @@ func main:
     compress.BufFree(d2)
     os.RemoveAll(tmpdir)
 
-    os.Exit(testing.Summary())
+    ret testing.Summary()
 end

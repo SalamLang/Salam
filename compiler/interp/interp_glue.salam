@@ -14,13 +14,21 @@ func call_func(
         ip.depth -= 1
         ret val_null()
     end
+    mk := env_mark(ip)
+    saved_file := ip.cur_file
+    if fnnode < ip.fn_file.len():
+        ff := ip.fn_file.get(fnnode)
+        if str.Len(ff) > 0:
+            ip.cur_file = ff
+        end
+    end
     env := env_new(ip, defenv)
     if has_this:
         env_define(ip, env, "this", thisv)
     end
     repeat at.ChildCount(a, fnnode) in i:
         p := at.Child(a, fnnode, i)
-        pn := at.Get(a, p)
+        pn := at.At(a, p)
         if i < args.len():
             env_define(ip, env, pn.name, pn.is_ref ? args.get(i) : val_copy_deep(ip, args.get(i)))
         else pn.a != 0:
@@ -39,7 +47,7 @@ func call_func(
     saved_med := ip.match_expr_depth
     mut retv := val_null()
     ip.match_expr_depth = 0
-    fnn := at.Get(a, fnnode)
+    fnn := at.At(a, fnnode)
     if fnn.a != 0:
         _f := exec_list(ip, a, env, fr, fnn.a, retv)
     end
@@ -57,14 +65,16 @@ func call_func(
     end
     export_ref_params(ip, a, fnnode, env, args)
     ip.depth -= 1
+    env_release(ip, mk)
+    ip.cur_file = saved_file
     ret retv
 end
 
 func writeback_value_place(
     ip &: Interp, a &: at.Ast, env: int, arg: int, v: Value
 ): bool:
-    an := at.Get(a, arg)
-    if an.kind == at.AST_MEMBER && an.a != 0 && str.Len(an.name) != 0:
+    an := at.At(a, arg)
+    if an.kind == at.AST_MEMBER and an.a != 0 and str.Len(an.name) != 0:
         obj := eval(ip, a, env, an.a)
         if ip.failed:
             ret false
@@ -82,7 +92,7 @@ func writeback_value_place(
         end
         ret false
     end
-    if an.kind == at.AST_INDEX && an.a != 0 && an.b != 0:
+    if an.kind == at.AST_INDEX and an.a != 0 and an.b != 0:
         base := eval(ip, a, env, an.a)
         if ip.failed:
             ret false
@@ -95,7 +105,7 @@ func writeback_value_place(
             ret false
         end
         mut av := ip.arrs.get(base.id)
-        if idx < (0 as i64) || idx >= (av.items.len() as i64):
+        if idx < (0 as i64) or idx >= (av.items.len() as i64):
             ret false
         end
         av.items.set(idx as int, v)
@@ -110,17 +120,17 @@ func interp_writeback_refs(
 ):
     repeat at.ChildCount(a, fnnode) in i:
         p := at.Child(a, fnnode, i)
-        pn := at.Get(a, p)
-        if pn.is_ref && i < args.len() && i < at.ChildCount(a, call):
+        pn := at.At(a, p)
+        if pn.is_ref and i < args.len() and i < at.ChildCount(a, call):
             arg := at.Child(a, call, i)
             k := at.KindOf(a, arg)
             if k == at.AST_IDENTIFIER:
                 mut where := 0
-                slot := env_find(ip, env, at.Get(a, arg).name, where)
+                slot := env_find(ip, env, at.At(a, arg).name, where)
                 if slot >= 0:
                     env_slot_set(ip, where, slot, args.get(i))
                 end
-            else k == at.AST_INDEX || k == at.AST_MEMBER:
+            else k == at.AST_INDEX or k == at.AST_MEMBER:
                 mut maddr := 0 as i64
                 mut mts := ""
                 if interp_mem_lvalue(ip, a, env, arg, maddr, mts):
@@ -136,7 +146,16 @@ end
 func invoke(
     ip &: Interp, a &: at.Ast, env: int, call: int, fnnode: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
 ): Value:
+    tracked := not g_threads_on
+    if tracked:
+        ip.tb_call.push(call)
+        ip.tb_file.push(ip.cur_file)
+    end
     r := call_func(ip, a, fnnode, defenv, has_this, thisv, args)
+    if tracked:
+        _tc := ip.tb_call.pop()
+        _tf := ip.tb_file.pop()
+    end
     if ip.failed:
         ret r
     end
@@ -149,8 +168,8 @@ func export_ref_params(
 ):
     repeat at.ChildCount(a, fnnode) in i:
         p := at.Child(a, fnnode, i)
-        pn := at.Get(a, p)
-        if pn.is_ref && i < args.len():
+        pn := at.At(a, p)
+        if pn.is_ref and i < args.len():
             slot := env_find_local(ip, env, pn.name)
             if slot >= 0:
                 args.set(i, env_slot_val(ip, env, slot))

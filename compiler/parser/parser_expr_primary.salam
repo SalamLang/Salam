@@ -1,10 +1,12 @@
 package parser
 
+import str
+
 include tok "../token.salam"
 include at "../ast.salam"
 
 func lambda_ahead(p &: Ps, a &: at.Ast): bool:
-    if !p_at(p, tok.TK_LPAREN):
+    if not p_at(p, tok.TK_LPAREN):
         ret false
     end
     save_pos := p.pos
@@ -14,15 +16,15 @@ func lambda_ahead(p &: Ps, a &: at.Ast): bool:
 
     p_advance(p)
     mut ok := true
-    if !p_at(p, tok.TK_RPAREN):
+    if not p_at(p, tok.TK_RPAREN):
         mut go := true
         until go:
-            if !p_at(p, tok.TK_IDENT):
+            if not p_at(p, tok.TK_IDENT):
                 ok = false
                 break
             end
             p_advance(p)
-            if !p_at(p, tok.TK_COLON):
+            if not p_at(p, tok.TK_COLON):
                 ok = false
                 break
             end
@@ -40,7 +42,7 @@ func lambda_ahead(p &: Ps, a &: at.Ast): bool:
     if ok:
         next_kind = p_peek(p).kind
     end
-    is_lambda := ok && (next_kind == tok.TK_FAT_ARROW || next_kind == tok.TK_COLON)
+    is_lambda := ok and (next_kind == tok.TK_FAT_ARROW or next_kind == tok.TK_COLON)
 
     p.pos = save_pos
     p.panic = save_panic
@@ -68,11 +70,50 @@ func builtin_callable_name(k: int): str:
 end
 
 func tk_is_literal_kind(k: int): bool:
-    ret k == tok.TK_INT || k == tok.TK_FLOAT || k == tok.TK_STRING || k == tok.TK_TRIPLE_STRING || k == tok.TK_RAW_STRING || k == tok.TK_CHAR || k == tok.TK_UTF8_CHAR || k == tok.TK_KW_TRUE || k == tok.TK_KW_FALSE || k == tok.TK_KW_NULL
+    ret k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL
 end
 
 func tk_is_binary_only(k: int): bool:
-    ret k == tok.TK_SLASH || k == tok.TK_PERCENT || k == tok.TK_POWER || k == tok.TK_EQ || k == tok.TK_NE || k == tok.TK_LE || k == tok.TK_GE || k == tok.TK_PIPE || k == tok.TK_CARET || k == tok.TK_AND || k == tok.TK_OR || k == tok.TK_SHL || k == tok.TK_SHR
+    ret k == tok.TK_SLASH or k == tok.TK_PERCENT or k == tok.TK_POWER or k == tok.TK_EQ or k == tok.TK_NE or k == tok.TK_LE or k == tok.TK_GE or k == tok.TK_PIPE or k == tok.TK_CARET or k == tok.TK_AND or k == tok.TK_OR or k == tok.TK_SHL or k == tok.TK_SHR
+end
+
+func input_prompt_starts(k: int): bool:
+    ret k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_IDENT or k == tok.TK_KW_THIS or k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR
+end
+
+// TODO: drop once the published seed parses 'input ""'; std/io still spells it 'input ()'.
+func input_parens_bridge(p &: Ps): bool:
+    ret str.EndsWith(p.file, "std/io/io.salam") or str.EndsWith(p.file, "std\\io\\io.salam")
+end
+
+func parse_input_expr(p &: Ps, a &: at.Ast): int:
+    call := p_mk(p, a, at.AST_CALL)
+    callee := p_mk(p, a, at.AST_IDENTIFIER)
+    at.SetName(a, callee, "input")
+    ps_set_a(a, call, callee)
+    kw := p_peek(p)
+    p_advance(p)
+    p_fin(p, a, callee)
+    if p_at(p, tok.TK_LPAREN):
+        if not input_parens_bridge(p):
+            p_error_at(p, p_peek(p), "input takes no parentheses: write 'input \"\"' or 'input \"prompt\"'")
+        end
+        p_advance(p)
+        if not p_at(p, tok.TK_RPAREN):
+            mut go := true
+            until go:
+                at.AddChild(a, call, parse_expr(p, a))
+                go = p_list_next(p, tok.TK_RPAREN)
+            end
+        end
+        p_expect(p, tok.TK_RPAREN, "')' after arguments")
+    else input_prompt_starts(p_peek(p).kind):
+        at.AddChild(a, call, parse_expr(p, a))
+    else:
+        p_error_at(p, kw, "input needs a prompt: write 'input \"\"' or 'input \"prompt\"'")
+    end
+    p_fin(p, a, call)
+    ret call
 end
 
 func parse_primary(p &: Ps, a &: at.Ast): int:
@@ -92,7 +133,10 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         p_fin(p, a, n)
         ret n
     end
-    if t.kind == tok.TK_KW_PRINT || t.kind == tok.TK_KW_PRINTLN || t.kind == tok.TK_KW_PRINTERR || t.kind == tok.TK_KW_PRINTERRLN || t.kind == tok.TK_KW_INPUT:
+    if t.kind == tok.TK_KW_INPUT:
+        ret parse_input_expr(p, a)
+    end
+    if t.kind == tok.TK_KW_PRINT or t.kind == tok.TK_KW_PRINTLN or t.kind == tok.TK_KW_PRINTERR or t.kind == tok.TK_KW_PRINTERRLN:
         n := p_mk(p, a, at.AST_IDENTIFIER)
         at.SetName(a, n, builtin_callable_name(t.kind))
         p_advance(p)
@@ -118,7 +162,7 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         n := p_mk(p, a, at.AST_FUNC_ADDR)
         p_advance(p)
         at.SetName(a, n, p_name(p, "expected a function name after '&'"))
-        if p_at(p, tok.TK_DOT) && p_peek2(p).kind == tok.TK_IDENT:
+        if p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
             pkg := p_mk(p, a, at.AST_IDENTIFIER)
             at.SetName(a, pkg, at.Get(a, n).name)
             p_fin(p, a, pkg)
@@ -132,10 +176,10 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         ret n
     end
     if t.kind == tok.TK_IDENT:
-        if p_peek2(p).kind == tok.TK_LBRACE && !p.no_struct_lit:
+        if p_peek2(p).kind == tok.TK_LBRACE and not p.no_struct_lit:
             ret parse_struct_lit(p, a)
         end
-        if p_peek2(p).kind == tok.TK_DOT && p_peekn(p, 2).kind == tok.TK_IDENT && p_peekn(p, 3).kind == tok.TK_LBRACE && !p.no_struct_lit:
+        if not p.no_struct_lit and pkg_struct_lit_words(p) > 0:
             ret parse_struct_lit(p, a)
         end
         n := p_mk(p, a, at.AST_IDENTIFIER)
@@ -143,9 +187,9 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         p_fin(p, a, n)
         ret n
     end
-    if p_at_reserved_word(p) && !p_at(p, tok.TK_KW_END) && !p_at(p, tok.TK_KW_ELSE):
+    if p_at_reserved_word(p) and not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE):
         p_reserved_word_error(p)
-    else p_at(p, tok.TK_STAR) && p_prev(p).kind == tok.TK_STAR && p_prev(p).end_index == p_peek(p).begin_index:
+    else p_at(p, tok.TK_STAR) and p_prev(p).kind == tok.TK_STAR and p_prev(p).end_index == p_peek(p).begin_index:
         p_error(p, "'***' is not a Salam operator: power is '**' and multiplication is '*'")
     else p_at(p, tok.TK_STAR):
         p_error(p, "'*' cannot start a value: Salam has no prefix '*'; read through a pointer with 'p[0]'")
@@ -158,7 +202,7 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
     end
     n := p_mk(p, a, at.AST_IDENTIFIER)
     at.SetName(a, n, "<error>")
-    if !p_at_eof(p):
+    if not p_at_eof(p):
         p_advance(p)
     end
     p_fin(p, a, n)
@@ -168,7 +212,7 @@ end
 func parse_lambda(p &: Ps, a &: at.Ast): int:
     n := p_mk(p, a, at.AST_LAMBDA)
     p_expect(p, tok.TK_LPAREN, "'(' to open lambda parameters")
-    if !p_at(p, tok.TK_RPAREN):
+    if not p_at(p, tok.TK_RPAREN):
         mut go := true
         until go:
             param := p_mk(p, a, at.AST_PARAM)
@@ -211,7 +255,7 @@ func parse_array_lit(p &: Ps, a &: at.Ast): int:
     p_advance(p)
 
     p_skip_terminators(p)
-    until !p_at(p, tok.TK_RBRACKET) && !p_at_eof(p):
+    until not p_at(p, tok.TK_RBRACKET) and not p_at_eof(p):
         at.AddChild(a, n, parse_expr(p, a))
         p_match(p, tok.TK_COMMA)
         p_skip_terminators(p)
@@ -221,20 +265,43 @@ func parse_array_lit(p &: Ps, a &: at.Ast): int:
     ret n
 end
 
+func pkg_struct_lit_words(p &: Ps): int:
+    line := p_peek(p).begin_line
+    mut n := 0
+    until n < 8 and p_peekn(p, n).kind == tok.TK_IDENT and p_peekn(p, n).begin_line == line:
+        n += 1
+    end
+    if n == 0 or p_peekn(p, n).kind != tok.TK_DOT:
+        ret 0
+    end
+    mut m := n + 1
+    until m < n + 9 and p_peekn(p, m).kind == tok.TK_IDENT and p_peekn(p, m).begin_line == line:
+        m += 1
+    end
+    if m > n + 1 and p_peekn(p, m).kind == tok.TK_LBRACE:
+        ret n
+    end
+    if m == n + 1 and tok.IsKeyword(p_peekn(p, m).kind) and p_peekn(p, m).begin_line == line and p_peekn(p, m + 1).kind == tok.TK_LBRACE:
+        ret n
+    end
+    ret 0
+end
+
 func parse_struct_lit(p &: Ps, a &: at.Ast): int:
     n := p_mk(p, a, at.AST_STRUCT_LIT)
-    nm := p_peek(p).lexeme
+    nm := p_munch_name(p)
     at.SetName(a, n, nm)
-    p_advance(p)
-    if p_at(p, tok.TK_DOT) && p_peek2(p).kind == tok.TK_IDENT:
+    if p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
         p_advance(p)
-        at.SetName(a, n, nm + "." + p_peek(p).lexeme)
+        at.SetName(a, n, nm + "." + p_munch_name(p))
+    else p_at(p, tok.TK_DOT) and tok.IsKeyword(p_peek2(p).kind):
         p_advance(p)
+        at.SetName(a, n, nm + "." + p_member_name(p, "expected a type name after '.'"))
     end
     p_expect(p, tok.TK_LBRACE, "'{' in struct literal")
 
     p_skip_terminators(p)
-    until !p_at(p, tok.TK_RBRACE) && !p_at_eof(p):
+    until not p_at(p, tok.TK_RBRACE) and not p_at_eof(p):
         fi := p_mk(p, a, at.AST_FIELD_INIT)
         mut fname := ""
         if p_at(p, tok.TK_IDENT):

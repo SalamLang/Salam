@@ -1,0 +1,601 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import compress
+
+const _WPD_DIST := [
+    0, 1, 1, 0, 1, 1, -1, 1, 0, 2, 2, 0, 1, 2, -1, 2, 2, 1, -2, 1, 2, 2, -2, 2, 0, 3, 3, 0, 1, 3, -1, 3, 3, 1, -3, 1, 2, 3, -2, 3, 3, 2, -3, 2, 0, 4, 4, 0, 1, 4, -1, 4, 4, 1, -4, 1, 3, 3, -3, 3, 2, 4, -2, 4, 4, 2, -4, 2, 0, 5, 3, 4, -3, 4, 4, 3, -4, 3, 5, 0, 1, 5, -1, 5, 5, 1, -5, 1, 2, 5, -2, 5, 5, 2, -5, 2, 4, 4, -4, 4, 3, 5, -3, 5, 5, 3, -5, 3, 0, 6, 6, 0, 1, 6, -1, 6, 6, 1, -6, 1, 2, 6, -2, 6, 6, 2, -6, 2, 4, 5, -4, 5, 5, 4, -5, 4, 3, 6, -3, 6, 6, 3, -6, 3, 0, 7, 7, 0, 1, 7, -1, 7, 5, 5, -5, 5, 7, 1, -7, 1, 4, 6, -4, 6, 6, 4, -6, 4, 2, 7, -2, 7, 7, 2, -7, 2, 3, 7, -3, 7, 7, 3, -7, 3, 5, 6, -5, 6, 6, 5, -6, 5, 8, 0, 4, 7, -4, 7, 7, 4, -7, 4, 8, 1, 8, 2, 6, 6, -6, 6, 8, 3, 5, 7, -5, 7, 7, 5, -7, 5, 8, 4, 6, 7, -6, 7, 7, 6, -7, 6, 8, 5, 7, 7, -7, 7, 8, 6, 8, 7
+]
+
+const _WPD_CLC_ORDER := [
+    17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+]
+
+struct _WpdCode:
+    pub count: Vector<int> = Vector {}
+    pub syms: Vector<int> = Vector {}
+    pub single: int = 0 - 1
+end
+
+struct _WpdTransform:
+    pub kind: int = 0
+    pub bits: int = 0
+    pub xsize: int = 0
+    pub data: Vector<i64> = Vector {}
+end
+
+func _wpd_build(lens: Vector<int>): _WpdCode:
+    mut c := _WpdCode {}
+    repeat 16:
+        c.count.push(0)
+    end
+    mut used := 0
+    mut last := 0
+    repeat lens.len() in i:
+        l := lens.get(i)
+        if l > 0:
+            c.count.set(l, c.count.get(l) + 1)
+            used += 1
+            last = i
+        end
+    end
+    if used <= 1:
+        c.single = last
+        ret c
+    end
+    mut l := 1
+    until l < 16:
+        repeat lens.len() in i:
+            if lens.get(i) == l:
+                c.syms.push(i)
+            end
+        end
+        l += 1
+    end
+    ret c
+end
+
+func _wpd_free_codes(codes &: Vector<_WpdCode>):
+    repeat codes.len() in i:
+        mut c := codes.get(i)
+        c.count.free()
+        c.syms.free()
+    end
+    codes.free()
+end
+
+func _wpd_free_transforms(ts &: Vector<_WpdTransform>):
+    repeat ts.len() in i:
+        mut t := ts.get(i)
+        t.data.free()
+    end
+    ts.free()
+end
+
+func _wpd_read(r &: compress.BitReader, c: _WpdCode): int:
+    if c.single >= 0:
+        ret c.single
+    end
+    mut code := 0
+    mut first := 0
+    mut index := 0
+    mut len := 1
+    until len < 16:
+        code = code | compress.BitReadBit(r)
+        n := c.count.get(len)
+        if code - first < n:
+            ret c.syms.get(index + code - first)
+        end
+        index += n
+        first = (first + n) << 1
+        code = code << 1
+        len += 1
+    end
+    r.bad = true
+    ret 0
+end
+
+func _wpd_code(r &: compress.BitReader, size: int): _WpdCode:
+    mut lens := Vector {} as Vector<int>
+    repeat size:
+        lens.push(0)
+    end
+    if compress.BitReadBit(r) == 1:
+        num := compress.BitReadBit(r) + 1
+        first8 := compress.BitReadBit(r)
+        s0 := compress.BitReadBits(r, 1 + 7 * first8)
+        if s0 < size:
+            lens.set(s0, 1)
+        end
+        if num == 2:
+            s1 := compress.BitReadBits(r, 8)
+            if s1 < size:
+                lens.set(s1, 1)
+            end
+        end
+        c := _wpd_build(lens)
+        lens.free()
+        ret c
+    end
+    mut clc := Vector {} as Vector<int>
+    repeat 19:
+        clc.push(0)
+    end
+    num := 4 + compress.BitReadBits(r, 4)
+    repeat num in k:
+        clc.set(_WPD_CLC_ORDER[k], compress.BitReadBits(r, 3))
+    end
+    lc := _wpd_build(clc)
+    clc.free()
+    mut max_symbol := size
+    if compress.BitReadBit(r) == 1:
+        nbits := 2 + 2 * compress.BitReadBits(r, 3)
+        max_symbol = 2 + compress.BitReadBits(r, nbits)
+    end
+    mut prev := 8
+    mut sym := 0
+    until sym < size and max_symbol > 0 and not r.bad:
+        max_symbol -= 1
+        v := _wpd_read(r, lc)
+        if v < 16:
+            lens.set(sym, v)
+            sym += 1
+            if v != 0:
+                prev = v
+            end
+        else:
+            mut rep := 0
+            mut val := 0
+            if v == 16:
+                rep = 3 + compress.BitReadBits(r, 2)
+                val = prev
+            else v == 17:
+                rep = 3 + compress.BitReadBits(r, 3)
+            else:
+                rep = 11 + compress.BitReadBits(r, 7)
+            end
+            if sym + rep > size:
+                r.bad = true
+                rep = size - sym
+            end
+            repeat rep:
+                lens.set(sym, val)
+                sym += 1
+            end
+        end
+    end
+    c := _wpd_build(lens)
+    lens.free()
+    ret c
+end
+
+func _wpd_value(r &: compress.BitReader, prefix: int): int:
+    if prefix < 4:
+        ret prefix + 1
+    end
+    extra := (prefix - 2) >> 1
+    offset := (2 + (prefix & 1)) << extra
+    ret offset + compress.BitReadBits(r, extra) + 1
+end
+
+func _wpd_argb(a: int, r: int, g: int, b: int): i64:
+    ret ((a as i64) << 24) | ((r as i64) << 16) | ((g as i64) << 8) | (b as i64)
+end
+
+func _wpd_hash(argb: i64, bits: int): int:
+    ret ((((argb * (0x1e35a7bd as i64)) & (4294967295 as i64)) >> (32 - bits)) as int)
+end
+
+func _wpd_pixels(r &: compress.BitReader, xsize: int, ysize: int, main: bool, out &: Vector<i64>):
+    mut cache_bits := 0
+    if compress.BitReadBit(r) == 1:
+        cache_bits = compress.BitReadBits(r, 4)
+        if cache_bits < 1 or cache_bits > 11:
+            r.bad = true
+            ret
+        end
+    end
+    mut prefix_bits := 0
+    mut entropy := Vector {} as Vector<i64>
+    mut pw := 0
+    mut groups := 1
+    if main and compress.BitReadBit(r) == 1:
+        prefix_bits = compress.BitReadBits(r, 3) + 2
+        pw = (xsize + (1 << prefix_bits) - 1) >> prefix_bits
+        ph := (ysize + (1 << prefix_bits) - 1) >> prefix_bits
+        _wpd_pixels(r, pw, ph, false, entropy)
+        repeat entropy.len() in i:
+            m := ((entropy.get(i) >> 8) & (65535 as i64)) as int
+            if m + 1 > groups:
+                groups = m + 1
+            end
+        end
+    end
+    cache_size := cache_bits > 0 ? 1 << cache_bits : 0
+    mut codes := Vector {} as Vector<_WpdCode>
+    repeat groups:
+        codes.push(_wpd_code(r, 256 + 24 + cache_size))
+        codes.push(_wpd_code(r, 256))
+        codes.push(_wpd_code(r, 256))
+        codes.push(_wpd_code(r, 256))
+        codes.push(_wpd_code(r, 40))
+    end
+    mut cache := Vector {} as Vector<i64>
+    repeat cache_size:
+        cache.push(0 as i64)
+    end
+    total := xsize * ysize
+    mut cached := 0
+    until out.len() < total and not r.bad:
+        pos := out.len()
+        mut g := 0
+        if prefix_bits > 0:
+            x := pos % xsize
+            y := pos / xsize
+            g = ((entropy.get((y >> prefix_bits) * pw + (x >> prefix_bits)) >> 8) & (65535 as i64)) as int
+        end
+        base := g * 5
+        s := _wpd_read(r, codes.get(base))
+        if s < 256:
+            red := _wpd_read(r, codes.get(base + 1))
+            blue := _wpd_read(r, codes.get(base + 2))
+            alpha := _wpd_read(r, codes.get(base + 3))
+            out.push(_wpd_argb(alpha, red, s, blue))
+        else s < 280:
+            length := _wpd_value(r, s - 256)
+            dcode := _wpd_value(r, _wpd_read(r, codes.get(base + 4)))
+            mut d := dcode - 120
+            if dcode < 1:
+                r.bad = true
+            else dcode <= 120:
+                dx := _WPD_DIST[(dcode - 1) * 2]
+                dy := _WPD_DIST[(dcode - 1) * 2 + 1]
+                d = dx + dy * xsize
+                if d < 1:
+                    d = 1
+                end
+            end
+            if d < 1 or d > pos or pos + length > total:
+                r.bad = true
+            else:
+                repeat length:
+                    out.push(out.get(out.len() - d))
+                end
+            end
+        else:
+            idx := s - 280
+            if idx >= cache_size:
+                r.bad = true
+            else:
+                out.push(cache.get(idx))
+            end
+        end
+        if cache_size > 0:
+            until cached < out.len():
+                px := out.get(cached)
+                cache.set(_wpd_hash(px, cache_bits), px)
+                cached += 1
+            end
+        end
+    end
+    cache.free()
+    entropy.free()
+    _wpd_free_codes(codes)
+end
+
+func _wpd_ch(p: i64, shift: int): int:
+    ret ((p >> shift) & (255 as i64)) as int
+end
+
+func _wpd_avg(a: i64, b: i64): i64:
+    ret _wpd_argb((_wpd_ch(a, 24) + _wpd_ch(b, 24)) / 2, (_wpd_ch(a, 16) + _wpd_ch(b, 16)) / 2, (_wpd_ch(a, 8) + _wpd_ch(b, 8)) / 2, (_wpd_ch(a, 0) + _wpd_ch(b, 0)) / 2)
+end
+
+func _wpd_clamp(v: int): int:
+    if v < 0:
+        ret 0
+    end
+    if v > 255:
+        ret 255
+    end
+    ret v
+end
+
+func _wpd_abs(v: int): int:
+    ret v < 0 ? 0 - v : v
+end
+
+func _wpd_select(l: i64, t: i64, tl: i64): i64:
+    mut pl := 0
+    mut pt := 0
+    repeat 4 in k:
+        sh := k * 8
+        p := _wpd_ch(l, sh) + _wpd_ch(t, sh) - _wpd_ch(tl, sh)
+        pl += _wpd_abs(p - _wpd_ch(l, sh))
+        pt += _wpd_abs(p - _wpd_ch(t, sh))
+    end
+    ret pl < pt ? l : t
+end
+
+func _wpd_predict(mode: int, l: i64, t: i64, tr: i64, tl: i64): i64:
+    if mode == 0 or mode > 13:
+        ret 4278190080
+    else mode == 1:
+        ret l
+    else mode == 2:
+        ret t
+    else mode == 3:
+        ret tr
+    else mode == 4:
+        ret tl
+    else mode == 5:
+        ret _wpd_avg(_wpd_avg(l, tr), t)
+    else mode == 6:
+        ret _wpd_avg(l, tl)
+    else mode == 7:
+        ret _wpd_avg(l, t)
+    else mode == 8:
+        ret _wpd_avg(tl, t)
+    else mode == 9:
+        ret _wpd_avg(t, tr)
+    else mode == 10:
+        ret _wpd_avg(_wpd_avg(l, tl), _wpd_avg(t, tr))
+    else mode == 11:
+        ret _wpd_select(l, t, tl)
+    else mode == 12:
+        ret _wpd_argb(_wpd_clamp(_wpd_ch(l, 24) + _wpd_ch(t, 24) - _wpd_ch(tl, 24)), _wpd_clamp(_wpd_ch(l, 16) + _wpd_ch(t, 16) - _wpd_ch(tl, 16)), _wpd_clamp(_wpd_ch(l, 8) + _wpd_ch(t, 8) - _wpd_ch(tl, 8)), _wpd_clamp(_wpd_ch(l, 0) + _wpd_ch(t, 0) - _wpd_ch(tl, 0)))
+    end
+    a := _wpd_avg(l, t)
+    ret _wpd_argb(_wpd_clamp(_wpd_ch(a, 24) + (_wpd_ch(a, 24) - _wpd_ch(tl, 24)) / 2), _wpd_clamp(_wpd_ch(a, 16) + (_wpd_ch(a, 16) - _wpd_ch(tl, 16)) / 2), _wpd_clamp(_wpd_ch(a, 8) + (_wpd_ch(a, 8) - _wpd_ch(tl, 8)) / 2), _wpd_clamp(_wpd_ch(a, 0) + (_wpd_ch(a, 0) - _wpd_ch(tl, 0)) / 2))
+end
+
+func _wpd_add(a: i64, b: i64): i64:
+    ret _wpd_argb((_wpd_ch(a, 24) + _wpd_ch(b, 24)) & 255, (_wpd_ch(a, 16) + _wpd_ch(b, 16)) & 255, (_wpd_ch(a, 8) + _wpd_ch(b, 8)) & 255, (_wpd_ch(a, 0) + _wpd_ch(b, 0)) & 255)
+end
+
+func _wpd_s8(v: int): int:
+    ret v >= 128 ? v - 256 : v
+end
+
+func _wpd_delta(t: int, c: int): int:
+    ret (_wpd_s8(t) * _wpd_s8(c)) >> 5
+end
+
+func _wpd_inverse(t: _WpdTransform, px &: Vector<i64>, ysize: int):
+    w := t.xsize
+    if t.kind == 2:
+        repeat px.len() in i:
+            p := px.get(i)
+            g := _wpd_ch(p, 8)
+            px.set(i, _wpd_argb(_wpd_ch(p, 24), (_wpd_ch(p, 16) + g) & 255, g, (_wpd_ch(p, 0) + g) & 255))
+        end
+    else t.kind == 0:
+        bw := (w + (1 << t.bits) - 1) >> t.bits
+        repeat ysize in y:
+            repeat w in x:
+                i := y * w + x
+                mut pred := 4278190080 as i64
+                if y == 0 and x > 0:
+                    pred = px.get(i - 1)
+                else x == 0 and y > 0:
+                    pred = px.get(i - w)
+                else y > 0:
+                    mode := _wpd_ch(t.data.get((y >> t.bits) * bw + (x >> t.bits)), 8) & 15
+                    tr := px.get(i - w + 1)
+                    pred = _wpd_predict(mode, px.get(i - 1), px.get(i - w), tr, px.get(i - w - 1))
+                end
+                px.set(i, _wpd_add(px.get(i), pred))
+            end
+        end
+    else t.kind == 1:
+        bw := (w + (1 << t.bits) - 1) >> t.bits
+        repeat px.len() in i:
+            x := i % w
+            y := i / w
+            e := t.data.get((y >> t.bits) * bw + (x >> t.bits))
+            g2r := _wpd_ch(e, 0)
+            g2b := _wpd_ch(e, 8)
+            r2b := _wpd_ch(e, 16)
+            p := px.get(i)
+            g := _wpd_ch(p, 8)
+            red := (_wpd_ch(p, 16) + _wpd_delta(g2r, g)) & 255
+            blue := (_wpd_ch(p, 0) + _wpd_delta(g2b, g) + _wpd_delta(r2b, red)) & 255
+            px.set(i, _wpd_argb(_wpd_ch(p, 24), red, g, blue))
+        end
+    else:
+        n := t.data.len()
+        bits := t.bits
+        packed := (w + (1 << bits) - 1) >> bits
+        mut res := Vector {} as Vector<i64>
+        per := 1 << bits
+        vbits := 8 >> bits
+        mask := (1 << vbits) - 1
+        repeat ysize in y:
+            repeat w in x:
+                g := _wpd_ch(px.get(y * packed + (x >> bits)), 8)
+                idx := (g >> ((x & (per - 1)) * vbits)) & mask
+                res.push(idx < n ? t.data.get(idx) : 0 as i64)
+            end
+        end
+        px.free()
+        px = res
+    end
+end
+
+func _wpd_stream(r &: compress.BitReader, width: int, height: int, px &: Vector<i64>): bool:
+    mut xsize := width
+    mut transforms := Vector {} as Vector<_WpdTransform>
+    mut seen := 0
+    until compress.BitReadBit(r) == 1 and not r.bad:
+        kind := compress.BitReadBits(r, 2)
+        if ((seen >> kind) & 1) == 1:
+            _wpd_free_transforms(transforms)
+            ret false
+        end
+        seen = seen | (1 << kind)
+        mut t := _WpdTransform { kind = kind, xsize = xsize }
+        if kind == 0 or kind == 1:
+            t.bits = compress.BitReadBits(r, 3) + 2
+            bw := (xsize + (1 << t.bits) - 1) >> t.bits
+            bh := (height + (1 << t.bits) - 1) >> t.bits
+            _wpd_pixels(r, bw, bh, false, t.data)
+        else kind == 3:
+            size := compress.BitReadBits(r, 8) + 1
+            _wpd_pixels(r, size, 1, false, t.data)
+            mut i := 1
+            until i < t.data.len():
+                t.data.set(i, _wpd_add(t.data.get(i), t.data.get(i - 1)))
+                i += 1
+            end
+            t.bits = size <= 2 ? 3 : (size <= 4 ? 2 : (size <= 16 ? 1 : 0))
+            xsize = (xsize + (1 << t.bits) - 1) >> t.bits
+        end
+        transforms.push(t)
+    end
+    _wpd_pixels(r, xsize, height, true, px)
+    if r.bad or px.len() != xsize * height:
+        _wpd_free_transforms(transforms)
+        ret false
+    end
+    mut k := transforms.len() - 1
+    until k >= 0:
+        _wpd_inverse(transforms.get(k), px, height)
+        k -= 1
+    end
+    _wpd_free_transforms(transforms)
+    ret true
+end
+
+func _wpd_vp8l(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    mut r := compress.NewBitReader(p, n)
+    if compress.BitReadBits(r, 8) != 47:
+        ret New(0, 0)
+    end
+    width := compress.BitReadBits(r, 14) + 1
+    height := compress.BitReadBits(r, 14) + 1
+    _ := compress.BitReadBit(r)
+    if compress.BitReadBits(r, 3) != 0:
+        ret New(0, 0)
+    end
+    mut px := Vector {} as Vector<i64>
+    if not _wpd_stream(r, width, height, px):
+        px.free()
+        ret New(0, 0)
+    end
+    img := New(width, height)
+    bp := img.pixels as u8*
+    repeat width * height in i:
+        v := px.get(i)
+        bp[i * 4] = _wpd_ch(v, 16) as u8
+        bp[i * 4 + 1] = _wpd_ch(v, 8) as u8
+        bp[i * 4 + 2] = _wpd_ch(v, 0) as u8
+        bp[i * 4 + 3] = _wpd_ch(v, 24) as u8
+    end
+    px.free()
+    ok = true
+    ret img
+end
+
+func _wpd_u32(bp: u8*, at: int): int:
+    ret (bp[at] as int) | ((bp[at + 1] as int) << 8) | ((bp[at + 2] as int) << 16) | ((bp[at + 3] as int) << 24)
+end
+
+func _wpd_u24(bp: u8*, at: int): int:
+    ret (bp[at] as int) | ((bp[at + 1] as int) << 8) | ((bp[at + 2] as int) << 16)
+end
+
+func _wpd_tag(bp: u8*, at: int, a: int, b: int, c: int, d: int): bool:
+    ret bp[at] as int == a and bp[at + 1] as int == b and bp[at + 2] as int == c and bp[at + 3] as int == d
+end
+
+func _wpd_chunks(p: void*, start: int, stop: int, ok &: bool): Image:
+    ok = false
+    bp := p as u8*
+    mut alpha_at := 0 - 1
+    mut alpha_size := 0
+    mut canvas_w := 0
+    mut canvas_h := 0
+    mut at := start
+    until at + 8 <= stop:
+        size := _wpd_u32(bp, at + 4)
+        body := at + 8
+        if size < 0 or body + size > stop:
+            ret New(0, 0)
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 76):
+            ret _wpd_vp8l(((p as i64) + (body as i64)) as void*, size, ok)
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 88) and size >= 10:
+            canvas_w = _wpd_u24(bp, body + 4) + 1
+            canvas_h = _wpd_u24(bp, body + 7) + 1
+            if (canvas_w as i64) * (canvas_h as i64) > (268435456 as i64):
+                ret New(0, 0)
+            end
+        end
+        if _wpd_tag(bp, at, 65, 76, 80, 72):
+            alpha_at = body
+            alpha_size = size
+        end
+        if _wpd_tag(bp, at, 86, 80, 56, 32):
+            mut img := _vp8_frame(bp, body, size, ok)
+            if ok and alpha_at >= 0 and not _vp8_alpha(img, ((p as i64) + (alpha_at as i64)) as void*, alpha_size):
+                ok = false
+                Free(img)
+                ret New(0, 0)
+            end
+            ret img
+        end
+        if _wpd_tag(bp, at, 65, 78, 77, 70) and size >= 16:
+            fx := _wpd_u24(bp, body) * 2
+            fy := _wpd_u24(bp, body + 3) * 2
+            mut frame := _wpd_chunks(p, body + 16, body + size, ok)
+            if not ok:
+                ret New(0, 0)
+            end
+            if canvas_w == 0 or (fx == 0 and fy == 0 and frame.width == canvas_w and frame.height == canvas_h):
+                ret frame
+            end
+            if fx + frame.width > canvas_w or fy + frame.height > canvas_h:
+                ok = false
+                Free(frame)
+                ret New(0, 0)
+            end
+            canvas := New(canvas_w, canvas_h)
+            dst := canvas.pixels as u8*
+            src := frame.pixels as u8*
+            repeat frame.height in y:
+                repeat frame.width * 4 in k:
+                    dst[((fy + y) * canvas_w + fx) * 4 + k] = src[y * frame.width * 4 + k]
+                end
+            end
+            Free(frame)
+            ret canvas
+        end
+        at = body + size + (size % 2)
+    end
+    ret New(0, 0)
+end
+
+@en "DecodeWebP"
+@fa "کدگشایی وب‌پی"
+pub func DecodeWebP(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    if not IsWebP(p, n):
+        ret New(0, 0)
+    end
+    ret _wpd_chunks(p, 12, n, ok)
+end

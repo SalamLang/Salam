@@ -1,0 +1,158 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import fs.file
+import fs.dir
+
+const LANGPACK := "compiler/langpack.salam"
+const ZWNJ := "\u200c"
+
+func quoted(text: str, from: int, stop: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := from
+    until i < stop:
+        q := str.IndexFrom(text, `"`, i)
+        if q < 0 or q >= stop:
+            break
+        end
+        e := str.IndexFrom(text, `"`, q + 1)
+        if e < 0:
+            break
+        end
+        out.push(text.substr(q + 1, e - q - 1))
+        i = e + 1
+    end
+    ret out
+end
+
+func fa_names(t: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut at := str.IndexFrom(t, "@fa ", 0)
+    until at >= 0:
+        mut stop := str.IndexFrom(t, "@", at + 4)
+        if stop < 0:
+            stop = t.len()
+        end
+        each name in quoted(t, at + 4, stop):
+            out.push(name)
+        end
+        at = str.IndexFrom(t, "@fa ", at + 4)
+    end
+    ret out
+end
+
+func keywords(): Vector<str>:
+    text := file.ReadText(LANGPACK)
+    start := text.find("k_kw_spell_fa := [")
+    if start < 0:
+        ret Vector {}
+    end
+    ret quoted(text, start, str.IndexFrom(text, "]", start))
+end
+
+func contains(xs: Vector<str>, w: str): bool:
+    each x in xs:
+        if x == w:
+            ret true
+        end
+    end
+    ret false
+end
+
+func problem(name: str, kws: Vector<str>, ops: Vector<str>, later: Vector<str>): str:
+    words := str.Fields(str.Replace(name, ZWNJ, " "))
+    spaced := " " + str.Join(words, " ") + " "
+    each k in kws:
+        if str.Contains(k, " ") and str.IndexFrom(spaced, " " + k + " ", 1) > 0:
+            ret "the keyword '" + k + "' can only be the first word"
+        end
+    end
+    repeat words.len() in i:
+        w := words.get(i)
+        if i == 0 and contains(ops, w):
+            ret "'" + w + "' is an operator word and cannot start a name"
+        end
+        if i > 0 and contains(kws, w) and not contains(later, w):
+            ret "the keyword '" + w + "' can only be the first word"
+        end
+        cps := str.CodePoints(w)
+        if str.IsAnyDigit(cps.get(0)):
+            ret "the word '" + w + "' starts with a digit; attach the digits to the word before"
+        end
+        each cp in cps:
+            if cp < 128 and not str.IsAsciiAlnum(cp) and cp != 95:
+                ret "the word '" + w + "' has a character that cannot appear in a name"
+            end
+        end
+    end
+    ret ""
+end
+
+func walk(path: str, out &: Vector<str>):
+    each d in dir.ListDirs(path):
+        walk(path + "/" + d, out)
+    end
+    each f in dir.ListFiles(path):
+        if str.EndsWith(f, ".salam"):
+            out.push(path + "/" + f)
+        end
+    end
+end
+
+func main:
+    mut kws := Vector {} as Vector<str>
+    each k in keywords():
+        kws.push(str.Replace(k, ZWNJ, " "))
+    end
+    if kws.len() == 0:
+        printerrln "check-fa-names: no Persian keywords found in " + LANGPACK
+        ret 2
+    end
+    ops := ["و", "یا"]
+    later := ["در", "بخش", "بسته", "تکرار", "ورودی", "وارونه"]
+    mut opv := Vector {} as Vector<str>
+    each o in ops:
+        opv.push(o)
+    end
+    mut laterv := Vector {} as Vector<str>
+    each l in later:
+        laterv.push(l)
+    end
+    mut files := Vector {} as Vector<str>
+    walk("std", files)
+    mut bad := 0
+    each path in files:
+        lines := file.ReadText(path).split("\n")
+        repeat lines.len() in n:
+            t := str.Trim(lines.get(n))
+            if not str.StartsWith(t, "@"):
+                continue
+            end
+            each name in fa_names(t):
+                why := problem(name, kws, opv, laterv)
+                if why.len() > 0:
+                    printerrln path + ":" + (n + 1) + `: @fa "` + name + `": ` + why
+                    bad += 1
+                end
+            end
+        end
+    end
+    if bad > 0:
+        printerrln "check-fa-names: " + bad + " Persian name(s) that Persian code cannot call"
+        ret 1
+    end
+    println "check-fa-names: " + files.len() + " files ok"
+    ret 0
+end

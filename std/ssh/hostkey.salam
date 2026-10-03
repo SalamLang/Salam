@@ -32,15 +32,40 @@ func _hostkey_free(hk &: HostKey):
     hk.ok = false
 end
 
+func _mpint_significant(b: Buf): int:
+    mut i := 0
+    until i < b.len and _bget(b.p, i) == 0:
+        i += 1
+    end
+    ret b.len - i
+end
+
+func _hostkey_sane(e: Buf, n: Buf): bool:
+    nlen := _mpint_significant(n)
+    elen := _mpint_significant(e)
+    if nlen < 128 or nlen > 2048 or elen < 1 or elen > 8:
+        ret false
+    end
+    if (_bget(n.p, n.len - 1) & 1) == 0 or (_bget(e.p, e.len - 1) & 1) == 0:
+        ret false
+    end
+    ret not (elen == 1 and _bget(e.p, e.len - 1) == 1)
+end
+
 func _hostkey_parse(raw: Buf): HostKey:
     mut r := ReaderFromBuf(raw)
     keytype := RGetStringAsStr(r)
-    if r.bad || !str.Equals(keytype, "ssh-rsa"):
+    if r.bad or not str.Equals(keytype, "ssh-rsa"):
         ret HostKey {}
     end
     e := RGetMpintCopy(r)
     n := RGetMpintCopy(r)
     if r.bad:
+        FreeBuf(e)
+        FreeBuf(n)
+        ret HostKey {}
+    end
+    if not _hostkey_sane(e, n):
         FreeBuf(e)
         FreeBuf(n)
         ret HostKey {}
@@ -77,13 +102,13 @@ func _hash_for_kind(kind: int, p: void*, n: int, out: void*):
 end
 
 func _hostkey_verify(hk: HostKey, h: Buf, sig_blob: Buf): bool:
-    if !hk.ok:
+    if not hk.ok:
         ret false
     end
     mut r := ReaderFromBuf(sig_blob)
     sig_format := RGetStringAsStr(r)
     sig := RGetStringCopy(r)
-    if r.bad || !(str.Equals(sig_format, HOSTKEY_SSH_RSA) || str.Equals(sig_format, HOSTKEY_RSA_SHA256) || str.Equals(sig_format, HOSTKEY_RSA_SHA512)):
+    if r.bad or not (str.Equals(sig_format, HOSTKEY_SSH_RSA) or str.Equals(sig_format, HOSTKEY_RSA_SHA256) or str.Equals(sig_format, HOSTKEY_RSA_SHA512)):
         FreeBuf(sig)
         ret false
     end

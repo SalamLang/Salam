@@ -60,6 +60,7 @@ package  →  import  →  extern:  →  globals  →  types  →  private funcs
 | Rule                                                                              | Diagnostic if broken                                                                |
 | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `import` must come directly after `package`, before any other top-level statement | `E083: 'import' must appear before any other top-level statement`                   |
+| Library `import`s come before file `include`s                                     | `E108: 'import str' must come before every include`                                 |
 | Global variables must precede every function and type definition                  | `E085: global variable 'g' must be declared before any function or type definition` |
 | Once the first `pub func` appears, only `pub func`s may follow                    | `E088: function '_b' must appear before 'pub' function 'A'`                         |
 
@@ -73,24 +74,35 @@ your first public function will not compile. Put every private helper above the
 
 Salam fails the build on unused imports, variables and functions.
 
-| Code   | Trigger         | Fix                                        |
-| ------ | --------------- | ------------------------------------------ |
-| `E082` | unused import   | remove it, or prefix the name with `_`     |
-| `E059` | unused variable | remove it, or prefix with `_`              |
-| `E066` | unused function | call it, mark it `pub`, or prefix with `_` |
+| Code   | Trigger          | Fix                                  |
+| ------ | ---------------- | ------------------------------------ |
+| `E082` | unused import    | use one of its members, or remove it |
+| `E059` | unused variable  | use it, or remove it                 |
+| `E062` | unused parameter | use it, or remove it                 |
+| `E066` | unused function  | call it, mark it `pub`, or remove it |
 
-Add imports only as you use them.
+A `pub` function never needs a caller. A private function is fine as long as
+something calls it; otherwise the build fails. `pub` exports a function to
+other packages as part of your package's API, so do not mark a helper `pub`
+just to silence `E066`.
+
+Do not prefix names with `_` to silence these errors. The compiler still
+accepts it, but it hides dead code instead of removing it. Add imports and
+helpers only as you use them.
 
 Loop bindings are stricter: a `_` prefix does not excuse them, because the
 fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
 `repeat 20000 in _i:`. The one escape is the bare name `_`, for the
-`each (key, value)` form that has no way to omit a binding:
+`each key, value` form that has no way to omit a binding:
 
 ```salam
-each (_, value) in scores:   // iterate for the values alone
+each _, value in scores:     // iterate for the values alone
     total = total + value
 end
 ```
+
+`os.Exit` inside `main` is an error too (`E109`): it skips `main`'s `defer`s.
+Write `ret code` instead; `main`'s return value is the exit code.
 
 ## 4. Bindings
 
@@ -135,7 +147,36 @@ Built-in methods on `str`. This is the complete list:
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
 lower  upper  repeat  split  to_int  to_float
+char_count  char_at(i)  char_substr(start, len)  char_find(sub)
 ```
+
+`len`, `s[i]`, `substr` and `find` work in bytes. The `char_*` methods are
+their UTF-8 counterparts: they count and index code points, so
+`"سلام".len()` is 8 but `"سلام".char_count()` is 4, and `char_at(1)` returns
+`"ل"` as a `str`. An out-of-range `char_at` returns `""`, and `char_find`
+returns -1 when the substring is missing. On the JS backend strings are
+JavaScript strings, so `len`, `s[i]`, `substr` and `find` count UTF-16 units
+there instead of bytes. The `str` package follows the same rule, so on JS
+`str.IndexFrom`, `str.LastIndex`, `str.CodePointAt` and `str.CharAt` take
+and return UTF-16 indices that line up with `substr`. The `char_*` methods
+give the same answer on every backend, so prefer them for non-ASCII text.
+
+Text types, and which one to reach for:
+
+| Need                                 | Use                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| Text of any language                 | `str` (UTF-8 bytes, like Go's `string`)                                     |
+| One byte, e.g. `'a'`                 | `char`                                                                      |
+| One Unicode character, e.g. `u'س'`   | `uchar` (compares with `str`, so `s.char_at(0) == u'س'` works)              |
+| Code point of one character          | `c as int` for a `uchar` (`u'س' as int` is 1587), back with `1587 as uchar` |
+| Random access by code point (UTF-32) | `str.CodePoints(s)` -> `Vector<int>`, back with `str.FromCodePoints(v)`     |
+| UTF-16 for Windows or JS interop     | `text.ToUtf16` / `text.FromUtf16` / `text.Utf16Len`                         |
+| Checking text is plain English       | `str.AllAscii(s)`                                                           |
+
+There is no separate ASCII string type: UTF-8 stores ASCII text in exactly
+one byte per character, so `str` is already the most compact choice, and for
+ASCII text `len`, `s[i]` and `substr` are exact and O(1). A plain `'س'` is a
+compile error because `'...'` holds one byte; write `u'س'`.
 
 Anything else lives in the `str` package (`str.StartsWith`, `str.EndsWith`,
 `str.Contains`, `str.Equals`, `str.TrimPrefix`, `str.Join`, `str.Replace`,
@@ -305,7 +346,11 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
 
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
-- **`input()` cannot report EOF.** It returns `""` both for an empty line and at
+- **`input` and `print` always take a value and never parentheses.** Write
+  `input ""` or `input "prompt"`, and `println ""` for an empty line. A bare
+  `input`/`println` and `input()`/`print()` are errors.
+
+- **`input` cannot report EOF.** It returns `""` both for an empty line and at
   end-of-stream. Drive `getchar()` yourself if you need to tell them apart.
 
 ---

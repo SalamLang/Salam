@@ -97,25 +97,38 @@ func level_color(level: str): str:
     ret A_BOLD
 end
 
-func get_src_line(text: str, text_len: int, lineno: int): str:
-    bp := (text as void*) as i8*
-    mut n := text_len
-    if n > str.Len(text):
-        n = str.Len(text)
+func src_extent(text: str, text_len: int): int:
+    if text_len > str.Len(text):
+        ret str.Len(text)
     end
+    ret text_len
+end
+
+func line_start(text: str, n: int, lineno: int): int:
+    bp := (text as void*) as i8*
     mut p := 0
     mut cur := 1
-    until cur < lineno && p < n:
+    until cur < lineno and p < n:
         if bp[p] == (10 as i8):
             cur += 1
         end
         p += 1
     end
-    if p >= n || cur != lineno:
+    if p >= n or cur != lineno:
+        ret 0 - 1
+    end
+    ret p
+end
+
+func get_src_line(text: str, text_len: int, lineno: int): str:
+    n := src_extent(text, text_len)
+    start := line_start(text, n, lineno)
+    if start < 0:
         ret ""
     end
-    start := p
-    until p < n && bp[p] != (10 as i8) && bp[p] != (13 as i8):
+    bp := (text as void*) as i8*
+    mut p := start
+    until p < n and bp[p] != (10 as i8) and bp[p] != (13 as i8):
         p += 1
     end
     mut ll := p - start
@@ -131,14 +144,36 @@ func visual_col(line_buf: str, byte_off: int): int:
     mut vis := 0
     mut i := 0
     until i < byte_off:
-        if i < n && bp[i] == (9 as i8):
+        if i < n and bp[i] == (9 as i8):
             vis += TAB_WIDTH - (vis % TAB_WIDTH)
-        else:
+        else i >= n or (ub(bp, i) & 0xC0) != 0x80:
             vis += 1
         end
         i += 1
     end
     ret vis
+end
+
+func char_col(src_text: str, src_len: int, line: int, col: int): int:
+    if col <= 1 or str.Len(src_text) == 0:
+        ret col
+    end
+    n := src_extent(src_text, src_len)
+    start := line_start(src_text, n, line)
+    if start < 0:
+        ret col
+    end
+    bp := (src_text as void*) as i8*
+    mut chars := 0
+    mut i := 0
+    until i < col - 1:
+        p := start + i
+        if p >= n or (ub(bp, p) & 0xC0) != 0x80:
+            chars += 1
+        end
+        i += 1
+    end
+    ret chars + 1
 end
 
 func expand_line(line_buf: str): str:
@@ -411,7 +446,7 @@ pub func RenderRust(
         end
         ret out
     end
-    out = out + " " + blue + "-->" + reset + " " + file + ":" + line + ":" + col + "\n"
+    out = out + " " + blue + "-->" + reset + " " + file + ":" + line + ":" + char_col(src_text, src_len, line, col) + "\n"
 
     nw := num_width_for(line)
     has_src := str.Len(src_text) > 0
@@ -429,7 +464,7 @@ pub func RenderRust(
     out = out + "\n"
 
     out = out + gutter_str(0, nw, color) + " "
-    if has_src && col > 0:
+    if has_src and col > 0:
         mut vis_s := 0
         mut vis_w := 1
         span_visuals(line_buf, col, length, vis_s, vis_w)
@@ -454,8 +489,8 @@ pub func RenderGcc(
     cyan := color ? A_CYAN : ""
 
     mut out := ""
-    if str.Len(file) > 0 && line > 0:
-        out = out + bold + file + ":" + line + ":" + col + ":" + reset + " "
+    if str.Len(file) > 0 and line > 0:
+        out = out + bold + file + ":" + line + ":" + char_col(src_text, src_len, line, col) + ":" + reset + " "
     else str.Len(file) > 0:
         out = out + bold + file + ":" + reset + " "
     end
@@ -464,7 +499,7 @@ pub func RenderGcc(
         out = out + " [" + code_str(is_error, code) + "]"
     end
     out = out + "\n"
-    if str.Len(src_text) == 0 || line <= 0:
+    if str.Len(src_text) == 0 or line <= 0:
         if str.Len(help) > 0:
             out = out + "  " + cyan + tr("note") + ":" + reset + " " + help + "\n"
         end
@@ -500,8 +535,8 @@ pub func RenderClang(
     green := color ? A_GREEN : ""
 
     mut out := ""
-    if str.Len(file) > 0 && line > 0:
-        out = out + bold + file + ":" + line + ":" + col + ":" + reset + " "
+    if str.Len(file) > 0 and line > 0:
+        out = out + bold + file + ":" + line + ":" + char_col(src_text, src_len, line, col) + ":" + reset + " "
     else str.Len(file) > 0:
         out = out + bold + file + ":" + reset + " "
     end
@@ -510,7 +545,7 @@ pub func RenderClang(
         out = out + " [" + code_str(is_error, code) + "]"
     end
     out = out + "\n"
-    if str.Len(src_text) == 0 || line <= 0:
+    if str.Len(src_text) == 0 or line <= 0:
         if str.Len(help) > 0:
             out = out + "  " + cyan + tr("note") + ":" + reset + " " + help + "\n"
         end

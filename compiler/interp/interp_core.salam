@@ -13,14 +13,14 @@ include sm "../semantic/semantic.salam"
 inline func byte_at(s: str, i: int): int: ret co.ByteAt(s, i) end
 
 func span_of(a &: at.Ast, id: int): co.SrcSpan:
-    n := at.Get(a, id)
+    n := at.At(a, id)
     ret co.MakeSpan(
         co.MakePos(n.begin_line, n.begin_col, n.begin_index), co.MakePos(n.end_line, n.end_col, n.end_index), n.length
     )
 end
 
 func is_c_space(c: int): bool:
-    ret c == 32 || (c >= 9 && c <= 13)
+    ret c == 32 or (c >= 9 and c <= 13)
 end
 
 func f64_bits(d: f64): u64:
@@ -47,6 +47,20 @@ func rt_error(ip &: Interp, a &: at.Ast, n: int, msg: str):
     end
     ip.failed = true
     ip.errmsg = msg
+    ip.errfile = ip.cur_file
+    mut tb := ""
+    mut k := ip.tb_call.len() - 1
+    mut shown := 0
+    until k >= 0 and shown < 20:
+        cn := at.At(a, ip.tb_call.get(k))
+        tf := ip.tb_file.get(k)
+        if str.Len(tf) > 0:
+            tb = tb + "\n" + co.Format3(i18.Tr("  from %s:%u:%u"), co.ArgStr(tf), co.ArgUint(cn.begin_line as u64), co.ArgUint(cn.begin_col as u64))
+            shown += 1
+        end
+        k -= 1
+    end
+    ip.errtrace = tb
     if n != 0:
         ip.errspan = span_of(a, n)
         ip.have_errspan = true
@@ -55,7 +69,10 @@ end
 
 func tick(ip &: Interp):
     ip.steps = ip.steps + (1 as u64)
-    if (ip.steps & (0xFFFFF as u64)) == (0 as u64) && ip.deadline_ms != (0 as i64) && time.NowMillis() > ip.deadline_ms:
+    if g_threads_on and (ip.steps & (0xFFF as u64)) == (0 as u64):
+        gil_yield(ip)
+    end
+    if (ip.steps & (0xFFFFF as u64)) == (0 as u64) and ip.deadline_ms != (0 as i64) and time.NowMillis() > ip.deadline_ms:
         rt_fail(ip, i18.Tr("execution timed out (possible infinite loop)"))
     end
 end
@@ -206,16 +223,48 @@ func ptab_put(t &: Ptab, key: int, val: int):
     t.count += 1
 end
 
+func env_mark(ip &: Interp): EnvMark:
+    ret EnvMark { envs = ip.envs.len(), closures = ip.closures.len(), defs = ip.def_env_envs.len() }
+end
+
+func env_release(ip &: Interp, mk: EnvMark):
+    if g_threads_on or ip.closures.len() != mk.closures or ip.def_env_envs.len() != mk.defs:
+        ret
+    end
+    until ip.envs.len() > mk.envs:
+        e := ip.envs.pop()
+        e.names.free()
+        e.vals.free()
+        if e.indexed:
+            e.tab.keys.free()
+            e.tab.vals.free()
+        end
+    end
+end
+
 func env_new(ip &: Interp, parent: int): int:
     id := ip.envs.len()
     ip.envs.push(Env { parent = parent })
     ret id
 end
 
+func name_eq(x: str, y: str): bool:
+    if (x as void*) == (y as void*):
+        ret true
+    end
+    if byte_at(x, 0) != byte_at(y, 0):
+        ret false
+    end
+    ret str.Equals(x, y)
+end
+
 func env_find_local(ip &: Interp, e: int, name: str): int:
-    en := ip.envs.get(e)
+    en := ip.envs.ref(e)
+    if en.indexed:
+        ret itab_get(en.tab, name) - 1
+    end
     repeat en.names.len() in i:
-        if str.Equals(en.names.get(i), name):
+        if name_eq(en.names.get(i), name):
             ret i
         end
     end
@@ -230,7 +279,7 @@ func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
             where = e
             ret slot
         end
-        en := ip.envs.get(e)
+        en := ip.envs.ref(e)
         e = en.parent
     end
     where = 0
@@ -238,14 +287,13 @@ func env_find(ip &: Interp, e0: int, name: str, where &: int): int:
 end
 
 func env_slot_val(ip &: Interp, e: int, slot: int): Value:
-    en := ip.envs.get(e)
+    en := ip.envs.ref(e)
     ret en.vals.get(slot)
 end
 
 func env_slot_set(ip &: Interp, e: int, slot: int, v: Value):
-    mut en := ip.envs.get(e)
+    en := ip.envs.ref(e)
     en.vals.set(slot, v)
-    ip.envs.set(e, en)
 end
 
 func env_define(ip &: Interp, e: int, name: str, v: Value):
@@ -254,10 +302,17 @@ func env_define(ip &: Interp, e: int, name: str, v: Value):
         env_slot_set(ip, e, slot, v)
         ret
     end
-    mut en := ip.envs.get(e)
+    en := ip.envs.ref(e)
     en.names.push(name)
     en.vals.push(v)
-    ip.envs.set(e, en)
+    if en.indexed:
+        itab_put(en.tab, name, en.names.len())
+    else en.names.len() >= 32:
+        en.indexed = true
+        repeat en.names.len() in i:
+            itab_put(en.tab, en.names.get(i), i + 1)
+        end
+    end
 end
 
 func find_struct(ip &: Interp, name: str): int:
@@ -270,7 +325,7 @@ end
 
 func register_func(ip &: Interp, a &: at.Ast, f: int):
     ip.funcs.push(f)
-    fn := at.Get(a, f)
+    fn := at.At(a, f)
     if str.Len(fn.name) == 0:
         ret
     end
@@ -320,8 +375,8 @@ end
 func struct_method(a &: at.Ast, sdef: int, name: str): int:
     repeat at.ChildCount(a, sdef) in i:
         m := at.Child(a, sdef, i)
-        mn := at.Get(a, m)
-        if mn.kind == at.AST_FUNC_DEF && str.Len(mn.name) != 0 && str.Equals(mn.name, name):
+        mn := at.At(a, m)
+        if mn.kind == at.AST_FUNC_DEF and str.Len(mn.name) != 0 and str.Equals(mn.name, name):
             ret m
         end
     end
@@ -331,8 +386,8 @@ end
 func struct_method_arity(a &: at.Ast, sdef: int, name: str, nparams: int): int:
     repeat at.ChildCount(a, sdef) in i:
         m := at.Child(a, sdef, i)
-        mn := at.Get(a, m)
-        if mn.kind == at.AST_FUNC_DEF && str.Len(mn.name) != 0 && str.Equals(mn.name, name) && mn.list.len() == nparams:
+        mn := at.At(a, m)
+        if mn.kind == at.AST_FUNC_DEF and str.Len(mn.name) != 0 and str.Equals(mn.name, name) and mn.list.len() == nparams:
             ret m
         end
     end
@@ -347,12 +402,12 @@ func find_impl_method(
     end
     repeat ip.impls.len() in i:
         d := ip.impls.get(i)
-        dn := at.Get(a, d)
+        dn := at.At(a, d)
         if dn.ty == 0:
             continue
         end
-        tn := at.Get(a, dn.ty)
-        if !str.Equals(tn.type_str, typestr):
+        tn := at.At(a, dn.ty)
+        if not str.Equals(tn.type_str, typestr) and not str.EndsWith(tn.type_str, "_" + typestr):
             continue
         end
         mut m := struct_method_arity(a, d, method, nargs)
@@ -390,7 +445,7 @@ func find_def_env(ip &: Interp, def: int): int:
 end
 
 func register_extern_decl(ip &: Interp, a &: at.Ast, env: int, d: int):
-    dn := at.Get(a, d)
+    dn := at.At(a, d)
     if dn.a != 0:
         cl := mk_closure(ip, d, env)
         idx := ip.extern_fns.len()
@@ -400,7 +455,7 @@ func register_extern_decl(ip &: Interp, a &: at.Ast, env: int, d: int):
             itab_put(t, dn.name, idx)
             ip.tab_extern_fns = t
         end
-        if str.Len(dn.name) != 0 && env_find_local(ip, env, dn.name) < 0:
+        if str.Len(dn.name) != 0 and env_find_local(ip, env, dn.name) < 0:
             env_define(ip, env, dn.name, cl)
         end
     else:
@@ -416,7 +471,7 @@ end
 func collect_decls(ip &: Interp, a &: at.Ast, program: int):
     repeat at.ChildCount(a, program) in i:
         d := at.Child(a, program, i)
-        dn := at.Get(a, d)
+        dn := at.At(a, d)
         if dn.kind == at.AST_FUNC_DEF:
             if dn.is_extern:
                 register_extern_decl(ip, a, ip.globals, d)
@@ -430,7 +485,7 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
                 itab_put(t, dn.name, d)
                 ip.tab_structs = t
             end
-            if !dn.synthetic:
+            if not dn.synthetic:
                 register_method_envs(ip, a, d, ip.globals)
             end
         else dn.kind == at.AST_ENUM_DEF:
@@ -442,10 +497,10 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
             end
         else dn.kind == at.AST_IMPL_DEF:
             ip.impls.push(d)
-            if !dn.synthetic:
+            if not dn.synthetic:
                 register_method_envs(ip, a, d, ip.globals)
             end
-        else dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL:
+        else dn.kind == at.AST_CONST_DECL or dn.kind == at.AST_VAR_DECL:
             env_define(ip, ip.globals, dn.name, val_null())
             if ip.failed:
                 ret
@@ -454,8 +509,8 @@ func collect_decls(ip &: Interp, a &: at.Ast, program: int):
     end
     repeat ip.funcs.len() in j:
         f := ip.funcs.get(j)
-        fn := at.Get(a, f)
-        if str.Len(fn.name) != 0 && env_find_local(ip, ip.globals, fn.name) < 0:
+        fn := at.At(a, f)
+        if str.Len(fn.name) != 0 and env_find_local(ip, ip.globals, fn.name) < 0:
             env_define(ip, ip.globals, fn.name, mk_closure(ip, f, ip.globals))
         end
     end
@@ -465,15 +520,15 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
     md := ip.mods.get(mid)
     repeat at.ChildCount(a, prog) in i:
         d := at.Child(a, prog, i)
-        dn := at.Get(a, d)
+        dn := at.At(a, d)
         if dn.kind == at.AST_FUNC_DEF:
             if dn.is_extern:
                 register_extern_decl(ip, a, md.env, d)
-            else str.Len(dn.name) != 0 && env_find_local(ip, md.env, dn.name) < 0:
+            else str.Len(dn.name) != 0 and env_find_local(ip, md.env, dn.name) < 0:
                 env_define(ip, md.env, dn.name, mk_closure(ip, d, md.env))
             end
         else dn.kind == at.AST_STRUCT_DEF:
-            if str.Len(dn.name) != 0 && str.Len(md.name) != 0 && !str.Equals(md.name, "main"):
+            if str.Len(dn.name) != 0 and str.Len(md.name) != 0 and not str.Equals(md.name, "main"):
                 qual := md.name + "_" + dn.name
                 if find_struct(ip, qual) == 0:
                     mut tq := ip.tab_structs
@@ -481,16 +536,17 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                     ip.tab_structs = tq
                 end
             end
-            if find_struct(ip, dn.name) == 0:
+            bare := find_struct(ip, dn.name)
+            if bare == 0:
                 ip.structs.push(d)
                 if str.Len(dn.name) != 0:
                     mut t := ip.tab_structs
                     itab_put(t, dn.name, d)
                     ip.tab_structs = t
                 end
-                if !dn.synthetic:
-                    register_method_envs(ip, a, d, md.env)
-                end
+            end
+            if (bare == 0 or bare != d) and not dn.synthetic:
+                register_method_envs(ip, a, d, md.env)
             end
         else dn.kind == at.AST_ENUM_DEF:
             if find_enum(ip, dn.name) == 0:
@@ -503,7 +559,7 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
             end
         else dn.kind == at.AST_IMPL_DEF:
             ip.impls.push(d)
-            if !dn.synthetic:
+            if not dn.synthetic:
                 register_method_envs(ip, a, d, md.env)
             end
         end
@@ -518,7 +574,7 @@ func wire_imports(ip &: Interp, sem &: sm.Sema, env: int, scope: int):
     repeat sc.symbols.len() in i:
         symid := sc.symbols.get(i)
         sy := sm.SymAt(sem, symid)
-        if sy.kind != sm.SYM_PACKAGE || str.Len(sy.pkgname) == 0:
+        if sy.kind != sm.SYM_PACKAGE or str.Len(sy.pkgname) == 0:
             continue
         end
         target := find_module(ip, sy.pkgname)
@@ -532,9 +588,15 @@ func eval_module_consts(ip &: Interp, a &: at.Ast, mid: int, prog: int):
     md := ip.mods.get(mid)
     repeat at.ChildCount(a, prog) in i:
         d := at.Child(a, prog, i)
-        dn := at.Get(a, d)
-        if (dn.kind == at.AST_CONST_DECL || dn.kind == at.AST_VAR_DECL) && dn.a != 0:
-            env_define(ip, md.env, dn.name, eval(ip, a, md.env, dn.a))
+        dn := at.At(a, d)
+        if dn.kind == at.AST_CONST_DECL or dn.kind == at.AST_VAR_DECL:
+            if dn.a != 0:
+                env_define(ip, md.env, dn.name, eval(ip, a, md.env, dn.a))
+            else dn.is_extern:
+                env_define(ip, md.env, dn.name, extern_var_value(ip, a, dn.name, dn.type_str))
+            else:
+                env_define(ip, md.env, dn.name, default_for_type(ip, dn.type_str))
+            end
             if ip.failed:
                 ret
             end
@@ -548,7 +610,7 @@ func pkg_name_of(a &: at.Ast, sem &: sm.Sema, pkid: int): str:
         ret pk.pkgname
     end
     if pk.decl != 0:
-        dn := at.Get(a, pk.decl)
+        dn := at.At(a, pk.decl)
         ret dn.name
     end
     ret ""
@@ -560,7 +622,7 @@ func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
         pkid := sm.PackageAt(sem, i)
         pk := sm.SymAt(sem, pkid)
         name := pkg_name_of(a, sem, pkid)
-        if str.Len(name) == 0 || pk.decl == 0 || find_module(ip, name) != 0:
+        if str.Len(name) == 0 or pk.decl == 0 or find_module(ip, name) != 0:
             continue
         end
         menv := env_new(ip, 0)
@@ -591,7 +653,7 @@ func interp_eval_globals(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int
         pk := sm.SymAt(sem, pkid)
         name := pkg_name_of(a, sem, pkid)
         mid := str.Len(name) != 0 ? find_module(ip, name) : 0
-        if mid != 0 && pk.decl != 0:
+        if mid != 0 and pk.decl != 0:
             eval_module_consts(ip, a, mid, pk.decl)
             if ip.failed:
                 ret
@@ -600,11 +662,16 @@ func interp_eval_globals(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int
     end
     repeat at.ChildCount(a, program) in j:
         d := at.Child(a, program, j)
-        dn := at.Get(a, d)
-        if dn.kind != at.AST_CONST_DECL && dn.kind != at.AST_VAR_DECL:
+        dn := at.At(a, d)
+        if dn.kind != at.AST_CONST_DECL and dn.kind != at.AST_VAR_DECL:
             continue
         end
         if dn.a == 0:
+            if dn.is_extern:
+                env_define(ip, ip.globals, dn.name, extern_var_value(ip, a, dn.name, dn.type_str))
+            else:
+                env_define(ip, ip.globals, dn.name, default_for_type(ip, dn.type_str))
+            end
             continue
         end
         env_define(ip, ip.globals, dn.name, eval(ip, a, ip.globals, dn.a))
@@ -619,8 +686,8 @@ func fixup_generic_envs_in(
 ):
     repeat defs.len() in i:
         d := defs.get(i)
-        dn := at.Get(a, d)
-        if !dn.synthetic || str.Len(dn.name) == 0 || find_def_env(ip, d) != 0:
+        dn := at.At(a, d)
+        if not dn.synthetic or str.Len(dn.name) == 0 or find_def_env(ip, d) != 0:
             continue
         end
         if str.Len(dn.home_pkg) != 0:
@@ -643,11 +710,11 @@ func fixup_generic_envs_in(
             if bd == d:
                 continue
             end
-            bn := at.Get(a, bd)
-            if bn.synthetic || str.Len(bn.name) == 0:
+            bn := at.At(a, bd)
+            if bn.synthetic or str.Len(bn.name) == 0:
                 continue
             end
-            if !str.Equals(bn.name, sy.generic_base):
+            if not str.Equals(bn.name, sy.generic_base):
                 continue
             end
             base_env := find_def_env(ip, bd)
@@ -667,8 +734,8 @@ end
 func rehome_synthetic_funcs(ip &: Interp, a &: at.Ast):
     repeat ip.funcs.len() in i:
         f := ip.funcs.get(i)
-        fnode := at.Get(a, f)
-        if str.Len(fnode.name) == 0 || str.Len(fnode.home_pkg) == 0:
+        fnode := at.At(a, f)
+        if str.Len(fnode.name) == 0 or str.Len(fnode.home_pkg) == 0:
             continue
         end
         home := find_module(ip, fnode.home_pkg)
@@ -691,17 +758,24 @@ func rehome_synthetic_funcs(ip &: Interp, a &: at.Ast):
     end
 end
 
-func run_fail(ip &: Interp): int:
+func fail_text(ip &: Interp): str:
+    if not ip.failed:
+        ret ""
+    end
+    if ip.have_errspan and str.Len(ip.errfile) > 0:
+        ret co.Format4(
+            i18.Tr("runtime error at %s:%u:%u: %s"), co.ArgStr(ip.errfile), co.ArgUint(ip.errspan.begin.line as u64), co.ArgUint(ip.errspan.begin.col as u64), co.ArgStr(ip.errmsg)
+        ) + ip.errtrace
+    end
     if ip.have_errspan:
-        lg.Log(
-            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
-                i18.Tr("runtime error at line %u: %s"), co.ArgUint(ip.errspan.begin.line as u64), co.ArgStr(ip.errmsg)
-            )
-        )
-    else:
-        lg.Log(
-            ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("runtime error: %s"), co.ArgStr(ip.errmsg))
+        ret co.Format2(
+            i18.Tr("runtime error at line %u: %s"), co.ArgUint(ip.errspan.begin.line as u64), co.ArgStr(ip.errmsg)
         )
     end
+    ret co.Format1(i18.Tr("runtime error: %s"), co.ArgStr(ip.errmsg))
+end
+
+func run_fail(ip &: Interp): int:
+    lg.Log(ip.log, lg.PH_DRIVER, lg.LOG_ERROR, fail_text(ip))
     ret 1
 end

@@ -1,0 +1,74 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llvm
+
+import str
+import conv
+import os
+import os.platform
+
+extern:
+    func salam_parallel_partitions(mod: void*, jobs: int): int
+    func salam_parallel_opt_emit(mod: void*, tm: void*, pipeline: str, parts: int, out_prefix: str, out_err &: void*): int
+end
+
+@en "ParallelResult"
+@fa "نتیجه موازی"
+pub struct ParallelResult:
+    pub ok: bool = false
+    pub err: str = ""
+    pub objects: Vector<str> = Vector {}
+end
+
+@en "ParallelJobs"
+@fa "کارهای موازی"
+pub func ParallelJobs(): int:
+    env := os.Env("SALAM_LLVM_JOBS")
+    if str.Len(env) > 0:
+        v := conv.ParseInt(env) as int
+        ret v < 1 ? 1 : v
+    end
+    n := platform.CpuCount()
+    ret n < 1 ? 1 : n
+end
+
+@en "ParallelPartitions"
+@fa "بخش‌های موازی"
+pub func ParallelPartitions(mod: Module, jobs: int): int:
+    ret salam_parallel_partitions(mod.handle, jobs)
+end
+
+@en "OptimizeEmitParallel"
+@fa "بهینه‌سازی سپس تولید موازی"
+pub func OptimizeEmitParallel(mod: Module, tm: TargetMachine, opt_level: int, parts: int, out_prefix: str): ParallelResult:
+    mut perr := null as void*
+    rc := salam_parallel_opt_emit(mod.handle, tm.handle, PassPipelineOf(opt_level), parts, out_prefix, perr)
+    mut objects := Vector {} as Vector<str>
+    repeat parts in i:
+        objects.push(out_prefix + "." + str.FromInt(i as i64) + ".o")
+    end
+    if rc != 0:
+        msg := perr != null ? str.Clone(perr as str) : "(unknown)"
+        if perr != null: LLVMDisposeMessage(perr) end
+        repeat objects.len() in j:
+            if os.Exists(objects.get(j)):
+                _rm := os.Remove(objects.get(j))
+            end
+        end
+        objects.free()
+        ret ParallelResult { ok = false, err = msg }
+    end
+    ret ParallelResult { ok = true, objects = objects }
+end

@@ -22,6 +22,94 @@ func _row_stride(width: int, bytes_per_pixel: int): int:
     ret ((width * bytes_per_pixel + 3) / 4) * 4
 end
 
+func _bmp_channel(v: int, mask: int): int:
+    if mask == 0:
+        ret 0
+    end
+    mut m := mask
+    mut shift := 0
+    until (m & 1) == 0 and shift < 32:
+        m = (m >> 1) & 2147483647
+        shift += 1
+    end
+    mut bits := 0
+    until (m & 1) == 1 and bits < 32:
+        m = (m >> 1) & 2147483647
+        bits += 1
+    end
+    val := ((v >> shift) & ((1 << bits) - 1))
+    if bits >= 8:
+        ret (val >> (bits - 8)) & 255
+    end
+    mut out := val << (8 - bits)
+    mut s := bits
+    until s < 8:
+        out = out | (out >> s)
+        s = s * 2
+    end
+    ret out & 255
+end
+
+func _bmp_put(dst: u8*, width: int, height: int, top_down: bool, x: int, row: int, c: int):
+    if x < 0 or x >= width or row < 0 or row >= height:
+        ret
+    end
+    y := top_down ? row : height - 1 - row
+    o := (y * width + x) * 4
+    dst[o] = ((c >> 16) & 255) as u8
+    dst[o + 1] = ((c >> 8) & 255) as u8
+    dst[o + 2] = (c & 255) as u8
+    dst[o + 3] = 255 as u8
+end
+
+func _bmp_rle(bp: u8*, off: int, n: int, four: bool, width: int, height: int, top_down: bool, pal: Vector<int>, dst: u8*): bool:
+    mut at := off
+    mut x := 0
+    mut row := 0
+    until at + 1 < n and row < height:
+        count := bp[at] as int
+        val := bp[at + 1] as int
+        at += 2
+        if count > 0:
+            repeat count in k:
+                idx := four ? ((k % 2) == 0 ? val >> 4 : val & 15) : val
+                _bmp_put(dst, width, height, top_down, x, row, idx < pal.len() ? pal.get(idx) : 0)
+                x += 1
+            end
+        else val == 0:
+            x = 0
+            row += 1
+        else val == 1:
+            ret true
+        else val == 2:
+            if at + 1 >= n:
+                ret true
+            end
+            x += bp[at] as int
+            row += bp[at + 1] as int
+            at += 2
+        else:
+            bytes := four ? (val + 1) / 2 : val
+            if at + bytes > n:
+                ret true
+            end
+            repeat val in k:
+                mut idx := 0
+                if four:
+                    b := bp[at + k / 2] as int
+                    idx = (k % 2) == 0 ? b >> 4 : b & 15
+                else:
+                    idx = bp[at + k] as int
+                end
+                _bmp_put(dst, width, height, top_down, x, row, idx < pal.len() ? pal.get(idx) : 0)
+                x += 1
+            end
+            at += bytes + (bytes % 2)
+        end
+    end
+    ret true
+end
+
 @en "EncodeBMP"
 @fa "کدگذاری بی‌ام‌پی"
 pub func EncodeBMP(img: Image): compress.ByteBuf:
@@ -29,25 +117,37 @@ pub func EncodeBMP(img: Image): compress.ByteBuf:
     w := img.width
     h := img.height
     pixel_bytes := w * h * 4
-    file_size := 54 + pixel_bytes
+    file_size := 138 + pixel_bytes
 
     compress.BufPush(out, 66)
     compress.BufPush(out, 77)
     archive.LEPut32(out, file_size)
     archive.LEPut32(out, 0)
-    archive.LEPut32(out, 54)
+    archive.LEPut32(out, 138)
 
-    archive.LEPut32(out, 40)
+    archive.LEPut32(out, 124)
     archive.LEPut32(out, w)
     archive.LEPut32(out, h)
     archive.LEPut16(out, 1)
     archive.LEPut16(out, 32)
-    archive.LEPut32(out, 0)
+    archive.LEPut32(out, 3)
     archive.LEPut32(out, pixel_bytes)
     archive.LEPut32(out, 2835)
     archive.LEPut32(out, 2835)
     archive.LEPut32(out, 0)
     archive.LEPut32(out, 0)
+    archive.LEPut32(out, 16711680)
+    archive.LEPut32(out, 65280)
+    archive.LEPut32(out, 255)
+    archive.LEPut32(out, 0 - 16777216)
+    archive.LEPut32(out, 1934772034)
+    repeat 12:
+        archive.LEPut32(out, 0)
+    end
+    archive.LEPut32(out, 4)
+    repeat 3:
+        archive.LEPut32(out, 0)
+    end
 
     if img.pixels != null:
         mut y := h - 1
@@ -80,69 +180,171 @@ end
 @fa "کدگشایی بی‌ام‌پی"
 pub func DecodeBMP(p: void*, n: int, ok &: bool): Image:
     ok = false
-    if n < 54:
+    if n < 26:
         ret New(0, 0)
     end
     bp := p as u8*
-    if (bp[0] as int) != 66 || (bp[1] as int) != 77:
+    if (bp[0] as int) != 66 or (bp[1] as int) != 77:
         ret New(0, 0)
     end
-    data_offset := archive.LEGet32(p, 10)
-    dib_size := archive.LEGet32(p, 14)
-    if dib_size < 40 || n < 14 + dib_size:
-        ret New(0, 0)
-    end
-    width := archive.LEGet32(p, 18)
-    height_raw := archive.LEGet32(p, 22)
-    bitcount := archive.LEGet16(p, 28)
-    compression := archive.LEGet32(p, 30)
-
-    if width <= 0 || height_raw == 0:
-        ret New(0, 0)
-    end
-    if bitcount != 24 && bitcount != 32:
-        ret New(0, 0)
-    end
-    if compression != 0 && compression != 3:
-        ret New(0, 0)
-    end
-
-    mut top_down := false
-    mut height := height_raw
-    if height_raw < 0:
-        top_down = true
-        height = -height_raw
-    end
-
-    bytes_per_pixel := bitcount / 8
-    stride := _row_stride(width, bytes_per_pixel)
-    needed := data_offset + stride * height
-    if n < needed || data_offset < 14 + dib_size:
-        ret New(0, 0)
-    end
-
-    out := New(width, height)
-    mut row := 0
-    until row < height:
-        mut dst_y := height - 1 - row
-        if top_down:
-            dst_y = row
+    off := archive.LEGet32(p, 10)
+    dib := archive.LEGet32(p, 14)
+    mut width := 0
+    mut height := 0
+    mut bpp := 0
+    mut comp := 0
+    mut used := 0
+    mut entry := 4
+    if dib == 12:
+        width = archive.LEGet16(p, 18)
+        height = archive.LEGet16(p, 20)
+        bpp = archive.LEGet16(p, 24)
+        entry = 3
+    else dib >= 16 and dib <= 124 and n >= 14 + dib:
+        width = archive.LEGet32(p, 18)
+        height = archive.LEGet32(p, 22)
+        bpp = archive.LEGet16(p, 28)
+        if dib >= 20:
+            comp = archive.LEGet32(p, 30)
         end
-        row_off := data_offset + row * stride
-        mut x := 0
-        until x < width:
-            px_off := row_off + x * bytes_per_pixel
-            b := bp[px_off] as int
-            g := bp[px_off + 1] as int
-            r := bp[px_off + 2] as int
-            mut a := 255
-            if bytes_per_pixel == 4:
-                a = bp[px_off + 3] as int
+        if dib >= 36:
+            used = archive.LEGet32(p, 46)
+        end
+        if dib == 64 and (comp == 3 or comp == 4):
+            ret New(0, 0)
+        end
+    else:
+        ret New(0, 0)
+    end
+    if comp == 4 or comp == 5:
+        if off <= 0 or off >= n:
+            ret New(0, 0)
+        end
+        inner := ((p as i64) + (off as i64)) as void*
+        ret comp == 4 ? DecodeJPEG(inner, n - off, ok) : DecodePNG(inner, n - off, ok)
+    end
+    top_down := height < 0
+    if top_down:
+        height = 0 - height
+    end
+    if width <= 0 or height <= 0 or (width as i64) * (height as i64) > (268435456 as i64):
+        ret New(0, 0)
+    end
+    if bpp != 1 and bpp != 2 and bpp != 4 and bpp != 8 and bpp != 16 and bpp != 24 and bpp != 32:
+        ret New(0, 0)
+    end
+    if comp != 0 and comp != 1 and comp != 2 and comp != 3 and comp != 6:
+        ret New(0, 0)
+    end
+    if (comp == 1 and bpp != 8) or (comp == 2 and bpp != 4) or ((comp == 3 or comp == 6) and bpp != 16 and bpp != 32):
+        ret New(0, 0)
+    end
+    mut rmask := 0
+    mut gmask := 0
+    mut bmask := 0
+    mut amask := 0
+    mut explicit_alpha := false
+    mut pal_at := 14 + dib
+    if comp == 3 or comp == 6:
+        mat := 54
+        if dib == 40:
+            pal_at += comp == 6 ? 16 : 12
+        end
+        if mat + 12 > n:
+            ret New(0, 0)
+        end
+        rmask = archive.LEGet32(p, mat)
+        gmask = archive.LEGet32(p, mat + 4)
+        bmask = archive.LEGet32(p, mat + 8)
+        if (comp == 6 or dib >= 56) and mat + 16 <= n:
+            amask = archive.LEGet32(p, mat + 12)
+            explicit_alpha = amask != 0
+        end
+    else bpp == 16:
+        rmask = 31744
+        gmask = 992
+        bmask = 31
+    else bpp == 32:
+        rmask = 16711680
+        gmask = 65280
+        bmask = 255
+        amask = 0 - 16777216
+    end
+    mut pal := Vector {} as Vector<int>
+    if bpp <= 8:
+        count := used > 0 and used < (1 << bpp) ? used : 1 << bpp
+        repeat count in i:
+            at := pal_at + i * entry
+            if at + 3 <= n and (off <= 0 or at + 3 <= off or off < pal_at):
+                pal.push(((bp[at + 2] as int) << 16) | ((bp[at + 1] as int) << 8) | (bp[at] as int))
             end
-            SetPixel(out, x, dst_y, RGBA(r, g, b, a))
-            x += 1
         end
-        row += 1
+    end
+    if off <= 0 or off >= n:
+        pal.free()
+        ret New(0, 0)
+    end
+    out := New(width, height)
+    dst := out.pixels as u8*
+    mut good := true
+    if comp == 1 or comp == 2:
+        good = _bmp_rle(bp, off, n, comp == 2, width, height, top_down, pal, dst)
+    else:
+        stride64 := (((width as i64) * (bpp as i64) + (31 as i64)) / (32 as i64)) * (4 as i64)
+        if (off as i64) + stride64 * (height as i64) > (n as i64):
+            good = false
+        else:
+            stride := stride64 as int
+            mut any_alpha := false
+            repeat height in row:
+                y := top_down ? row : height - 1 - row
+                at := off + row * stride
+                repeat width in x:
+                    o := (y * width + x) * 4
+                    if bpp <= 8:
+                        bit := x * bpp
+                        idx := ((bp[at + bit / 8] as int) >> (8 - bpp - bit % 8)) & ((1 << bpp) - 1)
+                        c := idx < pal.len() ? pal.get(idx) : 0
+                        dst[o] = ((c >> 16) & 255) as u8
+                        dst[o + 1] = ((c >> 8) & 255) as u8
+                        dst[o + 2] = (c & 255) as u8
+                        dst[o + 3] = 255 as u8
+                    else bpp == 24:
+                        q := at + x * 3
+                        dst[o] = bp[q + 2]
+                        dst[o + 1] = bp[q + 1]
+                        dst[o + 2] = bp[q]
+                        dst[o + 3] = 255 as u8
+                    else:
+                        mut v := 0
+                        if bpp == 16:
+                            v = archive.LEGet16(p, at + x * 2)
+                        else:
+                            v = archive.LEGet32(p, at + x * 4)
+                        end
+                        dst[o] = _bmp_channel(v, rmask) as u8
+                        dst[o + 1] = _bmp_channel(v, gmask) as u8
+                        dst[o + 2] = _bmp_channel(v, bmask) as u8
+                        a := amask != 0 ? _bmp_channel(v, amask) : 255
+                        if a != 0:
+                            any_alpha = true
+                        end
+                        dst[o + 3] = a as u8
+                    end
+                end
+            end
+            if bpp == 32 and not explicit_alpha and not any_alpha:
+                repeat width * height in i:
+                    dst[i * 4 + 3] = 255 as u8
+                end
+            end
+        end
+    end
+    pal.free()
+    if not good:
+        mut bad := out
+        Free(bad)
+        ret New(0, 0)
     end
     ok = true
     ret out
@@ -153,7 +355,7 @@ end
 pub func OpenBMP(path: str, ok &: bool): Image:
     mut read_ok := false
     buf := archive.ReadBinaryFile(path, read_ok)
-    if !read_ok:
+    if not read_ok:
         ok = false
         ret New(0, 0)
     end

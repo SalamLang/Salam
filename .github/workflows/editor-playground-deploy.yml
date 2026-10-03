@@ -4,25 +4,37 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'compiler/**'
-      - 'tools/bash/**'
-      - 'std/**'
-      - 'editor/**'
-      - 'tests/*/editor-selected/**'
-      - '.github/workflows/editor-playground-deploy.yml'
   workflow_dispatch:
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
   group: editor-playground-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml
+    with:
+      paths: |
+        compiler/*
+        tools/bash/*
+        std/*
+        editor/*
+        tests/*/editor-selected/*
+        .github/workflows/editor-playground-deploy.yml
+        .github/actions/setup-*
+        .github/actions/deploy-ssh/*
+        .github/workflows/_changes.yml
   build-deploy:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     name: Build and Deploy
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    outputs:
+      built: ${{ steps.verify.outputs.built }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -83,6 +95,7 @@ jobs:
           sh tools/bash/update-playground.sh --selfhost
 
       - name: Verify generated editor assets
+        id: verify
         run: |
           set -eu
           missing=0
@@ -96,6 +109,14 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
           echo "==> Editor directory to be published:"
           ls -l editor/
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the bundle for the server deploy
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: editor-site
+          path: editor
+          retention-days: 3
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
@@ -108,3 +129,38 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  deploy-server:
+    name: Deploy to production server
+    needs: build-deploy
+    if: always() && needs.build-deploy.outputs.built == 'true'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: deploy-editor-server
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+
+      - name: Download the editor bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: editor-site
+          path: editor-site
+
+      - name: Upload to the server
+        uses: ./.github/actions/deploy-ssh
+        with:
+          source: editor-site
+          target: ${{ secrets.SSH_PATH_EDITOR }}
+          host: ${{ secrets.SSH_HOST }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          username: ${{ secrets.SSH_USERNAME }}
+          private-key: ${{ secrets.SSH_PRIVATEKEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          allowed-root: /hosts/
+          exclude: '*.salam build.sh package.json README.md'

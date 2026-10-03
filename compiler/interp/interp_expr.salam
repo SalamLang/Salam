@@ -8,6 +8,25 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 
+func writeback_receiver(ip &: Interp, a &: at.Ast, env: int, obj: int, recvr: Value, back_addr: i64, back_ts: str):
+    if ip.failed:
+        ret
+    end
+    if back_addr != (0 as i64):
+        interp_mem_store(ip, a, back_addr, back_ts, recvr)
+        ret
+    end
+    k := at.KindOf(a, obj)
+    if k != at.AST_INDEX and k != at.AST_MEMBER:
+        ret
+    end
+    mut addr := 0 as i64
+    mut ts := ""
+    if interp_mem_lvalue(ip, a, env, obj, addr, ts) and slot_kind(ip, ts) == SLOT_STRUCT:
+        interp_mem_store(ip, a, addr, ts, recvr)
+    end
+end
+
 func eval_args(
     ip &: Interp, a &: at.Ast, env: int, call: int, out &: Vector<Value>
 ):
@@ -24,7 +43,7 @@ func struct_home_env(ip &: Interp, a &: at.Ast, sdef: int): int:
     if e != 0:
         ret e
     end
-    hp := at.Get(a, sdef).home_pkg
+    hp := at.At(a, sdef).home_pkg
     if str.Len(hp) > 0:
         hm := find_module(ip, hp)
         if hm != 0:
@@ -52,7 +71,7 @@ func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
     cnt := cip[0]
     mem.Free(cntp)
     out := arr_new(ip, cnt > 0 ? cnt : 4)
-    if !ip.failed && r.kind == VAL_PTR && r.pa != (0 as i64) && cnt > 0:
+    if not ip.failed and r.kind == VAL_PTR and r.pa != (0 as i64) and cnt > 0:
         repeat cnt in i:
             arr_push(ip, out, ptr_load(r.pa, PTR_STR, i as i64))
         end
@@ -60,50 +79,76 @@ func do_listdir(ip &: Interp, a &: at.Ast, call: int, patharg: Value): Value:
     ret val_arr(out)
 end
 
+func mark_plain_call(ip &: Interp, n: int):
+    until ip.plain_calls.len() <= n:
+        ip.plain_calls.push(false)
+    end
+    ip.plain_calls.set(n, true)
+end
+
 func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
-    node := at.Get(a, n)
+    node := at.At(a, n)
     callee := node.a
-    cn := at.Get(a, callee)
+    cn := at.At(a, callee)
     mut args := Vector {} as Vector<Value>
     defer args.free()
 
     if cn.kind == at.AST_IDENTIFIER:
         nm := cn.name
-        if str.Equals(nm, "print"):
+        plain := n < ip.plain_calls.len() and ip.plain_calls.get(n)
+        if not plain and str.Equals(nm, "print"):
             do_print(ip, a, env, n, false, false)
             ret val_null()
         end
-        if str.Equals(nm, "println"):
+        if not plain and str.Equals(nm, "println"):
             do_print(ip, a, env, n, true, false)
             ret val_null()
         end
-        if str.Equals(nm, "printerr"):
+        if not plain and str.Equals(nm, "printerr"):
             do_print(ip, a, env, n, false, true)
             ret val_null()
         end
-        if str.Equals(nm, "printerrln"):
+        if not plain and str.Equals(nm, "printerrln"):
             do_print(ip, a, env, n, true, true)
             ret val_null()
         end
-        if str.Equals(nm, "input"):
-            ret do_input(ip)
+        if not plain and str.Equals(nm, "input"):
+            if at.ChildCount(a, n) == 1:
+                pv := eval(ip, a, env, at.Child(a, n, 0))
+                if ip.failed:
+                    ret val_null()
+                end
+                sink(ip, to_str(ip, pv), false)
+            end
+            gstate_in := gil_release(ip)
+            iv := do_input(ip)
+            gil_acquire(ip, gstate_in)
+            ret iv
         end
-        if str.Equals(nm, "lang"):
+        if not plain and str.Equals(nm, "lang"):
             ret val_str(ip.lang)
         end
-        if str.Equals(nm, "args") && at.ChildCount(a, n) == 0:
-            ret val_arr(arr_new(ip, 0))
+        if not plain and str.Equals(nm, "args") and at.ChildCount(a, n) == 0:
+            pa := arr_new(ip, ip.prog_args.len() + 1)
+            repeat ip.prog_args.len() in pi:
+                arr_push(ip, pa, val_str(ip.prog_args.get(pi)))
+            end
+            ret val_arr(pa)
         end
-        if str.Equals(nm, "sizeof") && at.ChildCount(a, n) == 1:
+        if not plain and str.Equals(nm, "sizeof") and at.ChildCount(a, n) == 1:
             op := at.Child(a, n, 0)
-            ret val_int(interp_sizeof_typename(ip, a, at.Get(a, op).type_str))
+            ret val_int(interp_sizeof_typename(ip, a, at.At(a, op).type_str))
         end
         eval_args(ip, a, env, n, args)
         if ip.failed:
             ret val_null()
         end
         na := args.len()
-        if str.Equals(nm, "len") && na == 1:
+        if not plain and str.Equals(nm, "salam_panic") and na == 1:
+            rt_error(ip, a, n, to_str(ip, args.get(0)))
+            ret val_null()
+        end
+        if not plain and str.Equals(nm, "len") and na == 1:
             la := args.get(0)
             if la.kind == VAL_ARRAY:
                 ret val_int(arr_len(ip, la.id) as i64)
@@ -118,11 +163,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             rt_error(ip, a, n, i18.Tr("len() expects an array, string, or map"))
             ret val_null()
         end
-        if str.Equals(nm, "char_code") && na == 1:
+        if not plain and str.Equals(nm, "char_code") and na == 1:
             cs := to_str(ip, args.get(0))
             ret val_int((str.Len(cs) > 0 ? byte_at(cs, 0) : 0) as i64)
         end
-        if str.Equals(nm, "char_from_code") && na == 1:
+        if not plain and str.Equals(nm, "char_from_code") and na == 1:
             cb := (to_int(args.get(0)) & (0xFF as i64)) as int
             if cb == 0:
                 ret val_str("")
@@ -133,17 +178,17 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             str.BufFree(cbb)
             ret val_str(cr)
         end
-        if str.Equals(nm, "strcmp") && na == 2:
+        if not plain and str.Equals(nm, "strcmp") and na == 2:
             ret val_int(
                 str.Compare(
                     to_str(ip, args.get(0)), to_str(ip, args.get(1))
                 ) as i64
             )
         end
-        if str.Equals(nm, "listdir") && na == 1:
+        if not plain and str.Equals(nm, "listdir") and na == 1:
             ret do_listdir(ip, a, n, args.get(0))
         end
-        if str.Equals(nm, "hash") && na == 1:
+        if not plain and str.Equals(nm, "hash") and na == 1:
             ha := args.get(0)
             hname := ha.kind == VAL_STR ? "salam_str_hash" : "salam_hash_int"
             hefi := find_extern_fn(ip, hname)
@@ -159,19 +204,21 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             hargs.free()
             ret val_int(to_int(hr) & (0x7FFFFFFFFFFFFFFF as i64))
         end
+        mark_plain_call(ip, n)
 
         mut bw := 0
         bslot := env_find(ip, env, nm, bw)
         if bslot >= 0:
             bv := env_slot_val(ip, bw, bslot)
-            if bv.kind == VAL_FUNC:
-                bcl := ip.closures.get(bv.id)
+            bfid := fn_id_of(bv)
+            if bfid >= 0 and bfid < ip.closures.len():
+                bcl := ip.closures.get(bfid)
                 ret invoke(ip, a, env, n, bcl.fn, bcl.env, false, val_null(), args)
             end
         end
         fn := find_func(ip, a, nm, na)
         if fn != 0:
-            hp := at.Get(a, fn).home_pkg
+            hp := at.At(a, fn).home_pkg
             mut henv := ip.globals
             if str.Len(hp) > 0:
                 hm := find_module(ip, hp)
@@ -194,7 +241,30 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         decl := find_extern_decl(ip, nm)
         if decl != 0:
-            ret call_native_extern(ip, a, n, decl, args)
+            ret call_native_extern(ip, a, env, n, decl, args)
+        end
+        if str.Equals(nm, "spawn") and (args.len() == 1 or args.len() == 2):
+            ret interp_spawn(ip, a, n, args)
+        end
+        if str.Equals(nm, "join") and args.len() == 1:
+            interp_join(ip, a, n, args.get(0))
+            ret val_null()
+        end
+        if str.StartsWith(nm, "atomic_") and sm.AtomicArity(nm) == args.len():
+            ret interp_atomic(ip, a, n, nm, args)
+        end
+        if str.Equals(nm, "callhandler") and args.len() == 2:
+            hid := fn_id_of(args.get(0))
+            if hid < 0 or hid >= ip.closures.len():
+                rt_error(ip, a, n, i18.Tr("'callhandler' needs a function"))
+                ret val_null()
+            end
+            hcl := ip.closures.get(hid)
+            mut hargs := Vector {} as Vector<Value>
+            defer hargs.free()
+            hargs.push(args.get(1))
+            _hr := call_func(ip, a, hcl.fn, hcl.env, false, val_null(), hargs)
+            ret val_null()
         end
         rt_error(
             ip, a, n, co.Format1(
@@ -207,7 +277,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if cn.kind == at.AST_MEMBER:
         obj := cn.a
         method := cn.name
-        onn := at.Get(a, obj)
+        onn := at.At(a, obj)
         if onn.kind == at.AST_IDENTIFIER:
             mut mw := 0
             mslot := env_find(ip, env, onn.name, mw)
@@ -222,9 +292,16 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 end
             end
         end
-        recvr := eval(ip, a, env, obj)
+        mut recvr := eval(ip, a, env, obj)
         if ip.failed:
             ret val_null()
+        end
+        mut back_addr := 0 as i64
+        mut back_ts := ""
+        if recvr.kind == VAL_PTR and recvr.pe == PTR_STRUCT and recvr.pa != (0 as i64) and slot_kind(ip, recvr.s) == SLOT_STRUCT:
+            back_addr = recvr.pa
+            back_ts = recvr.s
+            recvr = interp_mem_load(ip, a, back_addr, back_ts)
         end
         eval_args(ip, a, env, n, args)
         if ip.failed:
@@ -232,7 +309,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         na2 := args.len()
 
-        if str.Equals(method, "free") && na2 == 0:
+        if str.Equals(method, "free") and na2 == 0:
             ret val_null()
         end
         if recvr.kind == VAL_STRUCT:
@@ -243,9 +320,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             if m != 0:
                 denv := find_def_env(ip, m)
-                ret invoke(
+                mr := invoke(
                     ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
+                ret mr
             end
             fi := st_find_field(ip, recvr.id, method)
             if fi >= 0:
@@ -259,9 +338,11 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             im2 := find_impl_method(ip, a, stv.type_name, method, na2)
             if im2 != 0:
                 denv3 := find_def_env(ip, im2)
-                ret invoke(
+                ir := invoke(
                     ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
                 )
+                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
+                ret ir
             end
             rt_error(
                 ip, a, n, co.Format2(
@@ -281,9 +362,15 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         ret call_builtin_method(ip, a, n, recvr, method, args)
     end
 
-    fv2 := eval(ip, a, env, callee)
+    mut fv2 := eval(ip, a, env, callee)
     if ip.failed:
         ret val_null()
+    end
+    if fv2.kind != VAL_FUNC:
+        fid := fn_id_of(fv2)
+        if fid >= 0 and fid < ip.closures.len():
+            fv2 = Value { kind = VAL_FUNC, id = fid }
+        end
     end
     if fv2.kind == VAL_FUNC:
         eval_args(ip, a, env, n, args)
@@ -292,6 +379,14 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         vcl := ip.closures.get(fv2.id)
         ret invoke(ip, a, env, n, vcl.fn, vcl.env, false, val_null(), args)
+    end
+    cts := at.At(a, callee).type_str
+    if fv2.kind == VAL_PTR and fv2.pa != (0 as i64) and str.StartsWith(cts, "externfunc("):
+        eval_args(ip, a, env, n, args)
+        if ip.failed:
+            ret val_null()
+        end
+        ret ffi_call_sig(ip, a, n, fv2.pa as void*, cts, args)
     end
     rt_error(ip, a, n, i18.Tr("value is not callable"))
     ret val_null()
@@ -320,13 +415,13 @@ func run_defers(ip &: Interp, a &: at.Ast, fr &: Frame):
 end
 
 func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
-    node := at.Get(a, n)
+    node := at.At(a, n)
     subj := eval(ip, a, env, node.a)
     if ip.failed:
         ret val_null()
     end
     arm := interp_find_match_arm(ip, a, env, n, subj)
-    if arm == 0 || ip.failed:
+    if arm == 0 or ip.failed:
         ret val_null()
     end
     c := env_new(ip, env)
@@ -336,9 +431,11 @@ func eval_match(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     mut val := val_null()
     saved_depth := ip.match_expr_depth
     ip.match_expr_depth = saved_depth + 1
-    f := exec_list(ip, a, c, fr, at.Get(a, arm).b, val)
+    ip.match_subj.push(subj)
+    f := exec_list(ip, a, c, fr, at.At(a, arm).b, val)
+    _ms := ip.match_subj.pop()
     ip.match_expr_depth = saved_depth
-    if f == FLOW_BREAK || f == FLOW_CONTINUE:
+    if f == FLOW_BREAK or f == FLOW_CONTINUE:
         ip.pending_flow = f
     end
     run_defers(ip, a, fr)
@@ -347,29 +444,48 @@ end
 
 func eval(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     v := eval_node(ip, a, env, n)
-    if v.kind != VAL_INT || n == 0:
+    if v.kind != VAL_INT or n == 0:
         ret v
     end
-    ret coerce_int_ty(v, int_ty_from_typestr(at.Get(a, n).type_str))
+    if n < ip.node_ity.len():
+        c := ip.node_ity.get(n)
+        if c != 0:
+            ret coerce_int_ty(v, c - 1)
+        end
+    else:
+        until ip.node_ity.len() <= n:
+            ip.node_ity.push(0)
+        end
+    end
+    ity := int_ty_from_typestr(at.At(a, n).type_str)
+    ip.node_ity.set(n, ity + 1)
+    ret coerce_int_ty(v, ity)
 end
 
 func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
-    if n == 0 || ip.failed:
+    if n == 0 or ip.failed:
         ret val_null()
     end
-    node := at.Get(a, n)
+    node := at.At(a, n)
     k := node.kind
     if k == at.AST_LITERAL:
         if node.op == tok.TK_INT:
+            if str.Len(node.type_str) > 0 and byte_at(node.type_str, 0) == 102 and is_float_typename(node.type_str):
+                fx := node.value_int as f64
+                ret val_float(str.Equals(node.type_str, "f32") ? ((fx as f32) as f64) : fx)
+            end
             ret val_int(node.value_int as i64)
         end
         if node.op == tok.TK_FLOAT:
+            if str.Equals(node.type_str, "f32"):
+                ret val_float((node.value_float as f32) as f64)
+            end
             ret val_float(node.value_float)
         end
         if node.op == tok.TK_CHAR:
             ret val_char(node.value_int as i64)
         end
-        if node.op == tok.TK_STRING || node.op == tok.TK_TRIPLE_STRING || node.op == tok.TK_RAW_STRING || node.op == tok.TK_UTF8_CHAR:
+        if node.op == tok.TK_STRING or node.op == tok.TK_TRIPLE_STRING or node.op == tok.TK_RAW_STRING or node.op == tok.TK_UTF8_CHAR:
             ret val_str(node.value_str)
         end
         if node.op == tok.TK_KW_TRUE:
@@ -379,6 +495,9 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_bool(false)
         end
         ret val_null()
+    end
+    if k == at.AST_IDENTIFIER and node.unwrap_subj and ip.match_subj.len() > 0:
+        ret ip.match_subj.get(ip.match_subj.len() - 1)
     end
     if k == at.AST_IDENTIFIER:
         mut w := 0
@@ -425,7 +544,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             if ip.failed:
                 ret val_null()
             end
-            if !to_bool(av0):
+            if not to_bool(av0):
                 ret val_bool(false)
             end
             ret val_bool(to_bool(eval(ip, a, env, node.b)))
@@ -457,7 +576,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_bool(value_eq(av, bv))
         end
         if op == tok.TK_NE:
-            ret val_bool(!value_eq(av, bv))
+            ret val_bool(not value_eq(av, bv))
         end
         if op == tok.TK_LT:
             ret val_bool(value_cmp(av, bv) < 0)
@@ -491,16 +610,21 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         ret mk_variant(ip, node.value_int as int, true, inner)
     end
     if k == at.AST_VARIANT_UNWRAP:
-        uv := eval(ip, a, env, node.a)
+        mut uv := val_null()
+        if node.unwrap_subj and ip.match_subj.len() > 0:
+            uv = ip.match_subj.get(ip.match_subj.len() - 1)
+        else:
+            uv = eval(ip, a, env, node.a)
+        end
         if ip.failed:
             ret val_null()
         end
-        if uv.kind != VAL_VARIANT || uv.id == 0:
+        if uv.kind != VAL_VARIANT or uv.id == 0:
             rt_error(ip, a, n, i18.Tr("invalid Variant unwrap"))
             ret val_null()
         end
         vv := ip.variants.get(uv.id)
-        if !vv.has_boxed:
+        if not vv.has_boxed:
             rt_error(ip, a, n, i18.Tr("invalid Variant unwrap"))
             ret val_null()
         end
@@ -525,7 +649,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
         end
         if node.op == tok.TK_NOT:
-            ret val_bool(!to_bool(uav))
+            ret val_bool(not to_bool(uav))
         end
         if node.op == tok.TK_TILDE:
             ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
@@ -554,14 +678,14 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        ts := node.ty != 0 ? at.Get(a, node.ty).type_str : ""
+        ts := node.ty != 0 ? at.At(a, node.ty).type_str : ""
         tn := str.Len(ts)
-        if tn != 0 && byte_at(ts, tn - 1) == 42:
+        if tn != 0 and byte_at(ts, tn - 1) == 42:
             mut addr := 0 as i64
             if cav.kind == VAL_STR:
                 svp := cav.s as void*
                 addr = svp as i64
-            else cav.kind == VAL_NULL || cav.kind == VAL_INT || cav.kind == VAL_CHAR || cav.kind == VAL_FLOAT || cav.kind == VAL_BOOL || cav.kind == VAL_PTR:
+            else cav.kind == VAL_NULL or cav.kind == VAL_INT or cav.kind == VAL_CHAR or cav.kind == VAL_FLOAT or cav.kind == VAL_BOOL or cav.kind == VAL_PTR or cav.kind == VAL_FUNC:
                 addr = to_int(cav)
             else cav.kind == VAL_ARRAY:
                 addr = arr_materialize(ip, cav.id)
@@ -579,14 +703,32 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if str.Equals(base, "char"):
             ret val_char(to_int(cav))
         end
+        if str.Equals(base, "uchar") and cav.kind != VAL_STR:
+            mut ucb := str.NewBuilder()
+            str.BufAppendCp(ucb, to_int(cav) as int)
+            ucs := str.BufStr(ucb)
+            str.BufFree(ucb)
+            ret val_str(ucs)
+        end
+        if cav.kind == VAL_STR and is_int_typename(base) and str.Equals(base_typename(at.At(a, node.a).type_str), "uchar"):
+            mut ucp := 0
+            if str.Len(cav.s) > 0:
+                str.CodePointAt(cav.s, 0, ucp)
+                if ucp < 0: ucp = 0xFFFD end
+            end
+            ret val_int_ty(ucp as i64, int_ty_from_typestr(base))
+        end
         if is_int_typename(base):
             cty := int_ty_from_typestr(base)
-            if cav.kind == VAL_FLOAT && int_ty_is_unsigned(cty):
+            if cav.kind == VAL_FLOAT and int_ty_is_unsigned(cty):
                 ret val_int_ty((cav.f as u64) as i64, cty)
             end
             ret val_int_ty(to_int(cav), cty)
         end
         if is_float_typename(base):
+            if str.Equals(base, "f32"):
+                ret val_float((to_float(cav) as f32) as f64)
+            end
             ret val_float(to_float(cav))
         end
         if str.Equals(base, "bool"):
@@ -595,7 +737,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if str.Equals(base, "str"):
             if cav.kind == VAL_PTR:
                 if cav.pa == (0 as i64):
-                    ret val_str("")
+                    ret val_null()
                 end
                 pv := cav.pa as void*
                 ret val_str(pv as str)
@@ -609,11 +751,11 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     end
     if k == at.AST_MEMBER:
         obj := node.a
-        onn := at.Get(a, obj)
+        onn := at.At(a, obj)
         mut obj_is_pkg_qualified := false
-        if onn.kind == at.AST_MEMBER && onn.a != 0 && at.KindOf(a, onn.a) == at.AST_IDENTIFIER:
+        if onn.kind == at.AST_MEMBER and onn.a != 0 and at.KindOf(a, onn.a) == at.AST_IDENTIFIER:
             mut pw := 0
-            pslot := env_find(ip, env, at.Get(a, onn.a).name, pw)
+            pslot := env_find(ip, env, at.At(a, onn.a).name, pw)
             if pslot >= 0:
                 pv := env_slot_val(ip, pw, pslot)
                 obj_is_pkg_qualified = pv.kind == VAL_MODULE
@@ -624,24 +766,24 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             mut ew0 := 0
             bare_unbound = env_find(ip, env, onn.name, ew0) < 0
         end
-        if bare_unbound || obj_is_pkg_qualified:
+        if bare_unbound or obj_is_pkg_qualified:
             edef := find_enum(ip, onn.name)
             if edef != 0:
                 mut backing := tok.TV_INT
                 repeat at.ChildCount(a, edef) in bi:
-                    bm := at.Get(a, at.Child(a, edef, bi))
-                    if bm.a != 0 && at.Get(a, bm.a).kind == at.AST_LITERAL:
-                        backing = at.Get(a, bm.a).value_kind
+                    bm := at.At(a, at.Child(a, edef, bi))
+                    if bm.a != 0 and at.At(a, bm.a).kind == at.AST_LITERAL:
+                        backing = at.At(a, bm.a).value_kind
                         break
                     end
                 end
                 mut next := 0 as i64
                 repeat at.ChildCount(a, edef) in i:
                     m := at.Child(a, edef, i)
-                    mn := at.Get(a, m)
+                    mn := at.At(a, m)
                     mut val := val_int(next)
-                    if mn.a != 0 && at.Get(a, mn.a).kind == at.AST_LITERAL && at.Get(a, mn.a).value_kind == backing:
-                        man := at.Get(a, mn.a)
+                    if mn.a != 0 and at.At(a, mn.a).kind == at.AST_LITERAL and at.At(a, mn.a).value_kind == backing:
+                        man := at.At(a, mn.a)
                         if backing == tok.TV_FLOAT:
                             val = val_float(man.value_float)
                         else if backing == tok.TV_STRING:
@@ -651,7 +793,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                             val = val_int(next)
                         end
                     end
-                    if str.Len(mn.name) != 0 && str.Equals(mn.name, node.name):
+                    if str.Len(mn.name) != 0 and str.Equals(mn.name, node.name):
                         ret val
                     end
                     if backing == tok.TV_INT:
@@ -739,7 +881,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if iav.kind == VAL_ARRAY:
             iv := to_int(idxv)
             ln := arr_len(ip, iav.id)
-            if iv < (0 as i64) || iv >= (ln as i64):
+            if iv < (0 as i64) or iv >= (ln as i64):
                 rt_error(
                     ip, a, n, co.Format2(
                         i18.Tr("index %lld out of range (len %zu)"), co.ArgInt(iv), co.ArgUint(ln as u64)
@@ -752,7 +894,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if iav.kind == VAL_STR:
             iv2 := to_int(idxv)
             ln2 := str.Len(iav.s)
-            if iv2 < (0 as i64) || iv2 >= (ln2 as i64):
+            if iv2 < (0 as i64) or iv2 >= (ln2 as i64):
                 rt_error(ip, a, n, i18.Tr("string index out of range"))
                 ret val_null()
             end
@@ -816,7 +958,13 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if str.Equals(node.name, "Vector"):
             ret val_arr(arr_new(ip, 4))
         end
-        sdef := find_struct(ip, node.name)
+        mut sdef := 0
+        if str.Len(node.type_str) != 0 and not str.Equals(node.type_str, node.name):
+            sdef = find_struct(ip, node.type_str)
+        end
+        if sdef == 0:
+            sdef = find_struct(ip, node.name)
+        end
         if sdef == 0:
             rt_error(
                 ip, a, n, co.Format1(
@@ -831,30 +979,38 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 nf += 1
             end
         end
-        sdn := at.Get(a, sdef)
+        sdn := at.At(a, sdef)
         sv := mk_struct(ip, sdn.name, sdef, nf)
         fenv := struct_home_env(ip, a, sdef)
         mut fi := 0
         repeat at.ChildCount(a, sdef) in i:
             f := at.Child(a, sdef, i)
-            fnode := at.Get(a, f)
+            fnode := at.At(a, f)
             if fnode.kind != at.AST_FIELD:
                 continue
             end
             mut provided := 0
             repeat at.ChildCount(a, n) in j:
                 p := at.Child(a, n, j)
-                pn := at.Get(a, p)
-                if str.Len(pn.name) != 0 && str.Equals(pn.name, fnode.name):
+                pn := at.At(a, p)
+                if str.Len(pn.name) != 0 and str.Equals(pn.name, fnode.name):
                     provided = p
                     break
                 end
             end
             mut fval := val_null()
             if provided != 0:
-                fval = eval(ip, a, env, at.Get(a, provided).a)
+                fval = eval(ip, a, env, at.At(a, provided).a)
             else fnode.a != 0:
                 fval = eval(ip, a, fenv, fnode.a)
+            else:
+                fts := fnode.ty != 0 ? at.At(a, fnode.ty).type_str : ""
+                if str.Find(fts, "[") < 0:
+                    fval = zero_for_base(base_typename(fts))
+                end
+                if fval.kind == VAL_NULL:
+                    fval = default_for_type(ip, fts)
+                end
             end
             if ip.failed:
                 ret val_null()
@@ -875,9 +1031,53 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         ret val_arr(aid)
     end
+    if k == at.AST_FUNC_ADDR:
+        ret eval_func_addr(ip, a, env, n)
+    end
     rt_error(
         ip, a, n, co.Format1(
             i18.Tr("cannot evaluate %s"), co.ArgStr(at.KindName(k))
+        )
+    )
+    ret val_null()
+end
+
+func eval_func_addr(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
+    node := at.At(a, n)
+    mut fv := val_null()
+    mut menv := env
+    if node.a != 0:
+        pv := eval(ip, a, env, node.a)
+        if ip.failed:
+            ret val_null()
+        end
+        if pv.kind == VAL_MODULE:
+            menv = ip.mods.get(pv.id).env
+        end
+    end
+    mut w := 0
+    slot := env_find(ip, menv, node.name, w)
+    if slot >= 0:
+        fv = env_slot_val(ip, w, slot)
+    end
+    if fn_id_of(fv) < 0:
+        f := find_func(ip, a, node.name, 0 - 1)
+        if f != 0:
+            fv = mk_closure(ip, f, ip.globals)
+        end
+    end
+    if fn_id_of(fv) >= 0:
+        ret val_ptr(to_int(fv), PTR_OPAQUE)
+    end
+    if find_extern_decl(ip, node.name) != 0:
+        sp := ffi_sym(ip, a, node.name)
+        if sp != null:
+            ret val_ptr(sp as i64, PTR_OPAQUE)
+        end
+    end
+    rt_error(
+        ip, a, n, co.Format1(
+            i18.Tr("call to undefined function '%s'"), co.ArgStr(node.name)
         )
     )
     ret val_null()

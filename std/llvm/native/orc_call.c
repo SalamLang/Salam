@@ -14,10 +14,47 @@
 
 #include "orc_call.h"
 
+#include <stdlib.h>
+#include <string.h>
+
+static char **g_orc_argv = NULL;
+static int g_orc_argc = 0;
+static int g_orc_cap = 0;
+
+void salam_orc_args_clear(void)
+{
+    for (int i = 0; i < g_orc_argc; i++) {
+        free(g_orc_argv[i]);
+    }
+    free(g_orc_argv);
+    g_orc_argv = NULL;
+    g_orc_argc = 0;
+    g_orc_cap = 0;
+}
+
+void salam_orc_args_push(const char *arg)
+{
+    if (g_orc_argc + 2 > g_orc_cap) {
+        int cap = g_orc_cap ? g_orc_cap * 2 : 8;
+        char **grown = realloc(g_orc_argv, (size_t)cap * sizeof(char *));
+        if (!grown) {
+            return;
+        }
+        g_orc_argv = grown;
+        g_orc_cap = cap;
+    }
+    g_orc_argv[g_orc_argc++] = strdup(arg ? arg : "");
+    g_orc_argv[g_orc_argc] = NULL;
+}
+
 int salam_orc_call_main(int64_t addr)
 {
-    int (*fn)(void) = (int (*)(void))(intptr_t)addr;
-    return fn();
+    static char *empty_argv[] = {"salam-jit", NULL};
+    int (*fn)(int, char **) = (int (*)(int, char **))(intptr_t)addr;
+    if (g_orc_argc == 0) {
+        return fn(1, empty_argv);
+    }
+    return fn(g_orc_argc, g_orc_argv);
 }
 
 /*

@@ -300,12 +300,18 @@ func _gg_edge(pr: f32*, rc: int, px: f32*, xc: int, py: f32*, yc: int, i0: int, 
 end
 
 func _gemm_acc(px: f32*, py: f32*, pr: f32*, n: int, kn: int, m: int):
-    if n <= 0 || m <= 0 || kn <= 0: ret end
+    if n <= 0 or m <= 0 or kn <= 0: ret end
     nfull := (n / _MR) * _MR
     mfull := (m / _NR) * _NR
-    bpack := mem.Allocate(((_NC * _KC) as u64) * (sizeof(f32) as u64)) as f32*
+    if nfull == 0 or mfull == 0:
+        _gg_edge(pr, m, px, kn, py, m, nfull, n, 0, mfull, kn)
+        _gg_edge(pr, m, px, kn, py, m, 0, n, mfull, m, kn)
+        ret
+    end
+    kcap := _gmin(_KC, kn)
+    bpack := mem.Allocate(((_gmin(_NC, mfull) * kcap) as u64) * (sizeof(f32) as u64)) as f32*
     defer mem.Free(bpack as void*)
-    apack := mem.Allocate(((_MC * _KC) as u64) * (sizeof(f32) as u64)) as f32*
+    apack := mem.Allocate(((_gmin((_MC / _MR) * _MR, nfull) * kcap) as u64) * (sizeof(f32) as u64)) as f32*
     defer mem.Free(apack as void*)
     mut j0 := 0
     until j0 < mfull:
@@ -371,7 +377,7 @@ func _transpose2d_into(px: f32*, n: int, m: int, pr: f32*):
     end
 end
 
-func _is_mat(x &: Tensor): bool: ret x.rank() == 2 && x.is_empty() == false end
+func _is_mat(x &: Tensor): bool: ret x.rank() == 2 and x.is_empty() == false end
 
 @en "Transpose2D"
 @fa "ترانهاده دوبعدی"
@@ -387,7 +393,7 @@ end
 @en "MatMul"
 @fa "ضرب ماتریسی"
 pub func MatMul(x &: Tensor, y &: Tensor): Tensor:
-    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if _is_mat(x) == false or _is_mat(y) == false: ret Empty() end
     if x.shape.get(1) != y.shape.get(0): ret Empty() end
     n := x.shape.get(0)
     kn := x.shape.get(1)
@@ -400,11 +406,11 @@ end
 @en "MatMulInto"
 @fa "ضرب ماتریسی در"
 pub func MatMulInto(x &: Tensor, y &: Tensor, out &: Tensor): bool:
-    if _is_mat(x) == false || _is_mat(y) == false || out.rank() != 2: ret false end
+    if _is_mat(x) == false or _is_mat(y) == false or out.rank() != 2: ret false end
     if x.shape.get(1) != y.shape.get(0): ret false end
     n := x.shape.get(0)
     m := y.shape.get(1)
-    if out.shape.get(0) != n || out.shape.get(1) != m: ret false end
+    if out.shape.get(0) != n or out.shape.get(1) != m: ret false end
     pz := out.data.data
     zero := 0.0 as f32
     repeat n * m in i: pz[i] = zero end
@@ -415,11 +421,11 @@ end
 @en "MatMulAcc"
 @fa "ضرب ماتریسی انباشته"
 pub func MatMulAcc(x &: Tensor, y &: Tensor, out &: Tensor): bool:
-    if _is_mat(x) == false || _is_mat(y) == false || out.rank() != 2: ret false end
+    if _is_mat(x) == false or _is_mat(y) == false or out.rank() != 2: ret false end
     if x.shape.get(1) != y.shape.get(0): ret false end
     n := x.shape.get(0)
     m := y.shape.get(1)
-    if out.shape.get(0) != n || out.shape.get(1) != m: ret false end
+    if out.shape.get(0) != n or out.shape.get(1) != m: ret false end
     _par_gemm(x.data.data, y.data.data, out.data.data, n, x.shape.get(1), m)
     ret true
 end
@@ -427,7 +433,7 @@ end
 @en "TransposeMul"
 @fa "ضرب ترانهاده"
 pub func TransposeMul(x &: Tensor, y &: Tensor): Tensor:
-    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if _is_mat(x) == false or _is_mat(y) == false: ret Empty() end
     if x.shape.get(0) != y.shape.get(0): ret Empty() end
     mut t := Transpose2D(x)
     r := MatMul(t, y)
@@ -438,7 +444,7 @@ end
 @en "MulTranspose"
 @fa "ضرب در ترانهاده"
 pub func MulTranspose(x &: Tensor, y &: Tensor): Tensor:
-    if _is_mat(x) == false || _is_mat(y) == false: ret Empty() end
+    if _is_mat(x) == false or _is_mat(y) == false: ret Empty() end
     if x.shape.get(1) != y.shape.get(1): ret Empty() end
     mut t := Transpose2D(y)
     r := MatMul(x, t)
@@ -449,7 +455,7 @@ end
 @en "BatchMatMul"
 @fa "ضرب ماتریسی دسته‌ای"
 pub func BatchMatMul(x &: Tensor, y &: Tensor): Tensor:
-    if x.rank() != 3 || y.rank() != 3: ret Empty() end
+    if x.rank() != 3 or y.rank() != 3: ret Empty() end
     if x.shape.get(0) != y.shape.get(0): ret Empty() end
     if x.shape.get(2) != y.shape.get(1): ret Empty() end
     b := x.shape.get(0)
@@ -464,7 +470,7 @@ end
 @en "MatVec"
 @fa "ضرب در بردار"
 pub func MatVec(a &: Tensor, x &: Tensor): Tensor:
-    if _is_mat(a) == false || x.rank() != 1: ret Empty() end
+    if _is_mat(a) == false or x.rank() != 1: ret Empty() end
     if a.shape.get(1) != x.shape.get(0): ret Empty() end
     n := a.shape.get(0)
     kn := a.shape.get(1)
@@ -498,7 +504,7 @@ end
 @en "Dot"
 @fa "ضرب داخلی"
 pub func Dot(x &: Tensor, y &: Tensor): f64:
-    if x.rank() != 1 || y.rank() != 1: ret 0.0 end
+    if x.rank() != 1 or y.rank() != 1: ret 0.0 end
     n := x.shape.get(0)
     if n != y.shape.get(0): ret 0.0 end
     p := x.data.data

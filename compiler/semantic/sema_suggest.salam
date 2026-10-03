@@ -1,0 +1,236 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+pub const SUGGEST_ANY := 0
+pub const SUGGEST_FUNC := 1
+pub const SUGGEST_STRUCT := 2
+pub const SUGGEST_TYPE := 3
+pub const SUGGEST_FIELD := 4
+
+const SUGGEST_MAX := 3
+
+func sug_units(name: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    n := str.Len(name)
+    mut i := 0
+    until i < n:
+        su_skip(name, i)
+        if i >= n:
+            break
+        end
+        b0 := byte_at(name, i)
+        if b0 == 95:
+            i += 1
+            continue
+        end
+        if b0 < 128:
+            out.push(b0 >= 65 and b0 <= 90 ? b0 + 32 : b0)
+            i += 1
+            continue
+        end
+        j := i
+        k := prim_fold(name, i)
+        if k == 257 or k == 258:
+            out.push(k)
+            continue
+        end
+        mut cp := b0
+        i = j + 1
+        until i < n and byte_at(name, i) >= 128 and byte_at(name, i) < 192:
+            cp = cp * 64 + byte_at(name, i)
+            i += 1
+        end
+        out.push(cp + 1000)
+    end
+    ret out
+end
+
+func sug_min3(x: int, y: int, z: int): int:
+    mut m := x
+    if y < m:
+        m = y
+    end
+    if z < m:
+        m = z
+    end
+    ret m
+end
+
+func sug_distance(a: Vector<int>, b: Vector<int>): int:
+    na := a.len()
+    nb := b.len()
+    w := nb + 1
+    mut d := Vector {} as Vector<int>
+    defer d.free()
+    repeat (na + 1) * w:
+        d.push(0)
+    end
+    repeat na + 1 in i:
+        d.set(i * w, i)
+    end
+    repeat nb + 1 in j:
+        d.set(j, j)
+    end
+    mut i := 1
+    until i <= na:
+        mut j := 1
+        until j <= nb:
+            cost := a.get(i - 1) == b.get(j - 1) ? 0 : 1
+            mut v := sug_min3(d.get((i - 1) * w + j) + 1, d.get(i * w + j - 1) + 1, d.get((i - 1) * w + j - 1) + cost)
+            if i > 1 and j > 1 and a.get(i - 1) == b.get(j - 2) and a.get(i - 2) == b.get(j - 1):
+                t := d.get((i - 2) * w + j - 2) + 1
+                if t < v:
+                    v = t
+                end
+            end
+            d.set(i * w + j, v)
+            j += 1
+        end
+        i += 1
+    end
+    ret d.get(na * w + nb)
+end
+
+func sug_contains(hay: Vector<int>, needle: Vector<int>): bool:
+    nh := hay.len()
+    nn := needle.len()
+    if nn == 0 or nn > nh:
+        ret false
+    end
+    repeat nh - nn + 1 in st:
+        mut k := 0
+        until k < nn and hay.get(st + k) == needle.get(k):
+            k += 1
+        end
+        if k == nn:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sug_kind_ok(kind: int, want: int): bool:
+    if want == SUGGEST_FUNC:
+        ret kind == SYM_FUNC
+    else want == SUGGEST_STRUCT:
+        ret kind == SYM_STRUCT
+    else want == SUGGEST_TYPE:
+        ret kind == SYM_STRUCT or kind == SYM_ENUM or kind == SYM_ALIAS or kind == SYM_INTERFACE
+    else want == SUGGEST_FIELD:
+        ret kind == SYM_FIELD
+    end
+    ret kind != SYM_PACKAGE and kind != SYM_TYPEIMPL
+end
+
+func sug_display_name(s &: Sema, a &: at.Ast, m: Symbol): str:
+    mut lang := s.lang
+    if str.Len(lang) == 0:
+        lang = i18.Lang()
+    end
+    if m.decl != 0 and not str.Equals(lang, "en"):
+        alias := alias_for_lang(at.Get(a, m.decl).aliases, lang)
+        if str.Len(alias) > 0:
+            ret alias
+        end
+    end
+    ret m.name
+end
+
+func sema_suggest(s &: Sema, a &: at.Ast, members: int, name: str, want: int, need_pub: bool): str:
+    if members == 0 or str.Len(name) == 0:
+        ret ""
+    end
+    q := sug_units(name)
+    defer q.free()
+    qn := q.len()
+    if qn == 0:
+        ret ""
+    end
+    mut limit := qn / 3
+    if limit < 1:
+        limit = 1
+    else limit > 4:
+        limit = 4
+    end
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    mut dists := Vector {} as Vector<int>
+    defer dists.free()
+    sc := scope_at(s, members)
+    repeat sc.symbols.len() in i:
+        m := sym_at(s, sc.symbols.get(i))
+        if not sug_kind_ok(m.kind, want) or (need_pub and not m.is_pub):
+            continue
+        end
+        if str.Len(m.name) == 0 or byte_at(m.name, 0) == 95 or str.IndexOf(m.name, "__") >= 0 or str.IndexOf(m.name, "<") >= 0 or m.generic_args.len() > 0:
+            continue
+        end
+        if m.decl != 0 and at.Get(a, m.decl).synthetic:
+            continue
+        end
+        shown := sug_display_name(s, a, m)
+        mut c := sug_units(shown)
+        d := sug_distance(q, c)
+        near := qn >= 3 and c.len() >= 3 and (sug_contains(c, q) or sug_contains(q, c))
+        c.free()
+        if d == 0:
+            continue
+        end
+        if d > limit and not near:
+            continue
+        end
+        mut dup := false
+        each prev in names:
+            if str.Equals(prev, shown):
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        mut at_i := names.len()
+        until at_i > 0 and (dists.get(at_i - 1) > d or (dists.get(at_i - 1) == d and str.Compare(names.get(at_i - 1), shown) > 0)):
+            at_i -= 1
+        end
+        names.insert(at_i, shown)
+        dists.insert(at_i, d)
+    end
+    if names.len() == 0:
+        ret ""
+    end
+    mut n := names.len()
+    if n > SUGGEST_MAX:
+        n = SUGGEST_MAX
+    end
+    mut list := "'" + names.get(0) + "'"
+    mut k := 1
+    until k < n:
+        item := "'" + names.get(k) + "'"
+        if k == n - 1:
+            list = co.Format2(i18.Tr("%s or %s"), co.ArgStr(list), co.ArgStr(item))
+        else:
+            list = co.Format2(i18.Tr("%s, %s"), co.ArgStr(list), co.ArgStr(item))
+        end
+        k += 1
+    end
+    ret co.Format1(i18.Tr("; did you mean %s?"), co.ArgStr(list))
+end

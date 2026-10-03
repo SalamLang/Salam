@@ -19,6 +19,7 @@ Install-ChocolateyZipPackage @packageArgs
 
 # salam.exe resolves std/ from the directory it lives in. Point it there
 # explicitly so a $env:PATH lookup cannot land on the wrong root.
+$platform = if ([Environment]::Is64BitOperatingSystem) { 'windows-x86_64' } else { 'windows-i686' }
 $dir = if ([Environment]::Is64BitOperatingSystem) {
   Join-Path $toolsDir 'salam-windows'
 } else {
@@ -28,6 +29,19 @@ $dir = if ([Environment]::Is64BitOperatingSystem) {
 $exe = Join-Path $dir 'salam.exe'
 if (-not (Test-Path $exe)) {
   throw "salam.exe not found at $exe after unpacking"
+}
+
+$receiptLines = @(
+  'channel=release',
+  "tag=v$version",
+  "version=$version",
+  "platform=$platform",
+  ('installed_at=' + [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')),
+  'installer=chocolatey'
+)
+try {
+  [IO.File]::WriteAllLines((Join-Path $dir '.salam-release'), $receiptLines)
+} catch {
 }
 
 Install-ChocolateyEnvironmentVariable -VariableName 'SALAM_STD' `

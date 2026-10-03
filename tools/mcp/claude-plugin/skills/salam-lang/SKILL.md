@@ -31,7 +31,7 @@ never runs or never ends.
 **Top-level order is enforced:**
 
 ```
-package → import / include → extern: → globals → types → private funcs / export: → pub funcs
+package → import → include → extern: → globals → types → private funcs / export: → pub funcs
 ```
 
 Once the first `pub func` appears, only `pub func`s may follow (`E088`).
@@ -39,7 +39,9 @@ Once the first `pub func` appears, only `pub func`s may follow (`E088`).
 call by their plain name go in an `export:` block, which ranks with the
 private funcs.
 Put every private helper above the public section. Globals must precede all
-functions and types (`E085`); imports come directly after `package` (`E083`).
+functions and types (`E084`/`E085`), types must precede all functions
+(`E087`), imports come directly after `package` (`E083`) and before every
+`include` (`E108`).
 
 **Unused things are errors, not warnings:** unused import `E082`, unused
 variable `E059`, unused function `E066`. Prefix with `_` or remove.
@@ -70,20 +72,19 @@ func main:
     mut total := 0             // mutable
     total = Double(x)
     println str.FromInt(total)
-    ret 0                      // main must return a value
+    ret 0                      // optional: main's return value is the exit code
 end
 ```
 
-- No typed local declarations: use `:=`, cast with `as`.
+- No typed declarations (`x: int = 1` is a parse error): use `:=`, cast with `as`.
+- Never call `os.Exit` in `main` (`E109`, it skips `defer`s); `ret <code>` instead.
+- Lambdas capture by value and must not declare a return type.
 - `&:` marks a by-reference parameter.
 - Built-in `str` methods are only: `len concat substr find/search/indexOf trim
 lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `Vector {} as Vector<str>`, `v.get(i)` to read an element, `v.ref(i)` for its address.
-- Nested generics (`Vector<Vector<T>>`) do not work, so flatten instead. They
-  fail with type errors pointing _inside_ std, not at your code.
-- `enum E: A, B, C end` - the comma between members is **required**, not
-  optional style (member names can contain spaces, so a bare newline can't
-  tell where one ends and the next begins).
+- `enum E: A, B, C end` - on one line the comma between members is
+  **required** (member names can contain spaces); one member per line also works.
 
 ## Traps that fail silently
 
@@ -94,8 +95,6 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - `os.shell.Run` deadlocks when the child writes more than ~64KB.
 - `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
-- A bare `ret` in `main` passes `salam_check` and fails `salam_build` with a
-  raw gcc error. If check passes but build fails, look here first.
 - Source files are keyed by **filename**, not package: two files named
   `io.salam` anywhere in one program collide at link time.
 
@@ -110,6 +109,33 @@ Declarations carry aliases:
 pub func Trim(s: str): str: ret s.trim() end
 ```
 
-Compile non-English source with `--lang=fa`.
+The language is detected from the keywords; `--lang=fa` forces Persian.
+
+## Persian source
+
+Persian Salam has the same grammar and rules with Persian spellings. The
+entry function is `ریشه`, blocks end with `پایان`, and `،` works as a comma.
+The most used words:
+
+| English                        | Persian                               | English                    | Persian                   |
+| ------------------------------ | ------------------------------------- | -------------------------- | ------------------------- |
+| `func` / `ret`                 | `روال` / `برگشت`                      | `if` / `else`              | `اگر` / `وگرنه`           |
+| `until` (while)                | `تا`                                  | `repeat` ... `to` ... `in` | `تکرار` ... `تا` ... `در` |
+| `each` / `by`                  | `هر`                                  | `match` / `switch`         | `همخوان` / `ترابرد`       |
+| `mut` / `const`                | `ناپایا` / `پایا`                     | `struct` / `enum`          | `ساختار` / `جداشمار`      |
+| `pub` / `this`                 | `همگانی` / `این`                      | `as`                       | `برگردان`                 |
+| `import` / `include`           | `واردسازی` / `فراخوانی`               | `println` / `print`        | `سرچاپ` / `چاپ`           |
+| `and` / `or` / `not`           | `و` / `یا` / `وارونه`                 | `true` / `false` / `null`  | `درست` / `نادرست` / `پوچ` |
+| `int` / `f64` / `str` / `bool` | `صحیح` / `اعشار۶۴` / `رشته` / `منطقی` | `Vector` / `HashMap`       | `وکتور` / `نگاشت`         |
+
+Persian-only traps: enum patterns in `همخوان` are bare member names; `ترابرد`
+labels each end with `پایان`; `و` is reserved; `اعشار` is f32; the decimal
+point is `.` not `٫`; std functions must use their Persian `@fa` names (an
+English name is an error in a Persian file); `spawn`, `join`, `dyn`, `len`
+and `sizeof` stay English.
+
+The root `SKILL.md` Part II has the complete tables, and the Persian course
+at <https://www.salamlang.ir/learn/> teaches the whole language with runnable
+examples; point Persian-speaking users there.
 
 Full reference: `docs/ai/AGENTS.md`, or the `salam://guide/agents.md` resource.

@@ -34,6 +34,7 @@ include cg "codegen/codegen.salam"
 include lv "llvmgen/llvmgen.salam"
 
 mut g_wb_schema_ready := false
+mut g_wb_failed := false
 
 struct FrontEnd:
     pub ok: bool = false
@@ -45,7 +46,7 @@ struct FrontEnd:
 end
 
 func ensure_schema():
-    if !g_wb_schema_ready:
+    if not g_wb_schema_ready:
         sm.LayoutSchemaInit(sm.GetStdlibRoot())
         g_wb_schema_ready = true
     end
@@ -79,7 +80,7 @@ func front_end(lgr: lg.Logger, lang: str, source: str): FrontEnd:
     tok.StreamFree(toks)
 
     table := cc.TableBuild("", Vector {} as Vector<str>)
-    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+    if not cc.PruneProgram(a, lgr, sf.path, table, prog):
         pok = false
     end
 
@@ -91,7 +92,7 @@ func front_end(lgr: lg.Logger, lang: str, source: str): FrontEnd:
     r.a = a
     r.program = prog
     r.s = s
-    if !lok || !pok || !sok:
+    if not lok or not pok or not sok:
         rendered := dg.RenderAll(
             s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
         )
@@ -122,12 +123,18 @@ export:
     func salam_web_syntax_ok(source: str, lang: str): str:
         ret SyntaxOk(source, lang)
     end
+
+    func salam_web_last_failed(): int:
+        ret LastFailed() ? 1 : 0
+    end
 end
 
 pub func RunApp(source: str, lang: str): str:
+    g_wb_failed = false
     lgr := lg.New(lg.LOG_WARN, false)
     fe := front_end(lgr, lang, source)
-    if !fe.ok:
+    if not fe.ok:
+        g_wb_failed = true
         d := fe.diag
         sm.Free(fe.s)
         at.FreeAst(fe.a)
@@ -143,16 +150,24 @@ pub func RunApp(source: str, lang: str): str:
 
     mut result := vm.out_text
     if str.Len(vm.err_text) > 0:
-        if str.Len(result) > 0 && !str.EndsWith(result, "\n"):
+        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
             result += "\n"
         end
         result += vm.err_text
+    end
+    fail_text := ip.FailText(vm)
+    if str.Len(fail_text) > 0:
+        g_wb_failed = true
+        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
+            result += "\n"
+        end
+        result += fail_text + "\n"
     end
     warn_text := dg.RenderAll(
         fe.s.diag, source, str.Len(source), dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
     )
     if str.Len(warn_text) > 0:
-        if str.Len(result) > 0 && !str.EndsWith(result, "\n"):
+        if str.Len(result) > 0 and not str.EndsWith(result, "\n"):
             result += "\n"
         end
         result += warn_text
@@ -165,10 +180,12 @@ pub func RunApp(source: str, lang: str): str:
 end
 
 pub func BuildLayout(source: str, lang: str): str:
+    g_wb_failed = false
     ensure_schema()
     lgr := lg.New(lg.LOG_WARN, false)
     fe := front_end(lgr, lang, source)
-    if !fe.ok:
+    if not fe.ok:
+        g_wb_failed = true
         d := fe.diag
         sm.Free(fe.s)
         at.FreeAst(fe.a)
@@ -177,6 +194,7 @@ pub func BuildLayout(source: str, lang: str): str:
 
     lb := lo.FindLayout(fe.a, fe.program)
     if lb == 0:
+        g_wb_failed = true
         sm.Free(fe.s)
         at.FreeAst(fe.a)
         ret i18.Tr(
@@ -188,6 +206,7 @@ pub func BuildLayout(source: str, lang: str): str:
     res := lo.Generate(lgr, diag_e, "main.salam", fe.a, lb, false)
     mut result := ""
     if dg.HasErrors(diag_e):
+        g_wb_failed = true
         rendered := dg.RenderAll(
             diag_e, source, str.Len(source), dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
         )
@@ -202,11 +221,13 @@ pub func BuildLayout(source: str, lang: str): str:
 end
 
 pub func Emit(source: str, lang: str, phase: str): str:
+    g_wb_failed = false
     i18.SetLang(lang)
     sm.SetStdlibRoot("")
     lgr := lg.New(lg.LOG_WARN, false)
     pack := lp.Load(lang)
     if pack == lp.LP_NONE:
+        g_wb_failed = true
         ret i18.Tr("unknown language pack")
     end
     entry := lp.Entry(pack)
@@ -229,7 +250,7 @@ pub func Emit(source: str, lang: str, phase: str): str:
     mut pok := ps.Run(lgr, toks, a, prog)
     tok.StreamFree(toks)
     table := cc.TableBuild("", Vector {} as Vector<str>)
-    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+    if not cc.PruneProgram(a, lgr, sf.path, table, prog):
         pok = false
     end
     if str.Equals(phase, "ast"):
@@ -259,7 +280,8 @@ pub func Emit(source: str, lang: str, phase: str): str:
         ret r
     end
 
-    if !lok || !pok || !sok:
+    if not lok or not pok or not sok:
+        g_wb_failed = true
         rendered := dg.RenderAll(
             s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
         )
@@ -269,10 +291,11 @@ pub func Emit(source: str, lang: str, phase: str): str:
         ret r
     end
 
-    if str.Equals(phase, "html") || str.Equals(phase, "css") || str.Equals(phase, "js"):
+    if str.Equals(phase, "html") or str.Equals(phase, "css") or str.Equals(phase, "js"):
         ensure_schema()
         lb := lo.FindLayout(a, prog)
         if lb == 0:
+            g_wb_failed = true
             sm.Free(s)
             at.FreeAst(a)
             ret i18.Tr(
@@ -282,6 +305,7 @@ pub func Emit(source: str, lang: str, phase: str): str:
         mut diag_e := dg.New(lgr, lg.PH_CODEGEN)
         res := lo.Generate(lgr, diag_e, "main.salam", a, lb, false)
         if dg.HasErrors(diag_e):
+            g_wb_failed = true
             rendered := dg.RenderAll(
                 diag_e, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false
             )
@@ -327,7 +351,7 @@ pub func Emit(source: str, lang: str, phase: str): str:
     if str.Equals(phase, "llvm"):
         llo := lv.Run(lgr, s, a, prog, "main", entry)
         mut b := ""
-        if !llo.ok:
+        if not llo.ok:
             b += "; note: the LLVM backend supports a subset of Salam.\n; "
             b += str.Len(llo.error) > 0 ? llo.error : "unsupported construct"
             b += "\n\n"
@@ -342,10 +366,15 @@ pub func Emit(source: str, lang: str, phase: str): str:
         ret b
     end
 
+    g_wb_failed = true
     r := i18.Tr("compilation failed")
     sm.Free(s)
     at.FreeAst(a)
     ret r
+end
+
+pub func LastFailed(): bool:
+    ret g_wb_failed
 end
 
 pub func Version(): str:
@@ -364,7 +393,7 @@ pub func SyntaxOk(source: str, lang: str): str:
 
     mut toks := tok.StreamNew(sf.path)
     lok := lx.Run(lgr, pack, sf, toks)
-    if !lok:
+    if not lok:
         tok.StreamFree(toks)
         ret "0"
     end

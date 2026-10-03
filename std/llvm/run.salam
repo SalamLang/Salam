@@ -14,6 +14,49 @@
 
 package llvm
 
+func run_parallel(pr: ParseResult, tm: TargetMachine, opts: Options, parts: int): Output:
+    mut out := Output { ok = true }
+    if opts.verify_module:
+        vr := Verify(pr.mod)
+        if not vr.ok:
+            out = Output { ok = false, error = vr.err }
+        end
+    end
+    if out.ok:
+        par := OptimizeEmitParallel(pr.mod, tm, opts.opt_level, parts, opts.output_file)
+        if not par.ok:
+            out = Output { ok = false, error = par.err }
+        else:
+            mut extra := Vector {} as Vector<str>
+            repeat par.objects.len() - 1 in i:
+                extra.push(par.objects.get(i + 1))
+            end
+            mut xopts := opts
+            xopts.extra_objects = extra
+            mut lopts := xopts
+            if str.Len(lopts.target_triple) == 0:
+                lopts.target_triple = HostLinkTriple()
+            end
+            first := par.objects.get(0)
+            if CanLinkTriple(lopts.target_triple):
+                lr := LinkAuto(first, opts.output_file, lopts)
+                out = Output { ok = lr.ok, error = lr.err }
+            else:
+                lr := LinkExternal(first, opts.output_file, xopts)
+                out = Output { ok = lr.ok, error = lr.err }
+            end
+            repeat par.objects.len() in j:
+                _rm := os.Remove(par.objects.get(j))
+            end
+            extra.free()
+        end
+    end
+    FreeTargetMachine(tm)
+    FreeModule(pr.mod)
+    FreeContext(pr.ctx)
+    ret out
+end
+
 @en "Available"
 @fa "در دسترس"
 pub func Available(): bool:
@@ -28,12 +71,12 @@ pub func Run(ll_path: str, opts: Options): Output:
     end
 
     if opts.output_mode == OUT_JIT:
-        jr := RunJIT(ll_path)
-        ret Output { ok = jr.ok, error = jr.err }
+        jr := RunJITArgs(ll_path, opts.run_args)
+        ret Output { ok = jr.ok, error = jr.err, rc = jr.rc }
     end
 
     pr := ParseIR(ll_path)
-    if !pr.ok:
+    if not pr.ok:
         ret Output { ok = false, error = pr.err }
     end
     mut trip := opts.target_triple
@@ -43,18 +86,25 @@ pub func Run(ll_path: str, opts: Options): Output:
     SetTargetTriple(pr.mod, trip)
 
     tmr := NewTargetMachine(trip, opts.opt_level, opts.native_cpu)
-    if !tmr.ok:
+    if not tmr.ok:
         FreeModule(pr.mod)
         FreeContext(pr.ctx)
         ret Output { ok = false, error = tmr.err }
     end
     ApplyDataLayout(pr.mod, tmr.tm)
 
+    if opts.output_mode == OUT_EXEC and not opts.debug_info:
+        parts := ParallelPartitions(pr.mod, ParallelJobs())
+        if parts >= 2:
+            ret run_parallel(pr, tmr.tm, opts, parts)
+        end
+    end
+
     _opt := RunOpt(pr.mod, tmr.tm, opts.opt_level)
 
     if opts.verify_module:
         vr := Verify(pr.mod)
-        if !vr.ok:
+        if not vr.ok:
             FreeTargetMachine(tmr.tm)
             FreeModule(pr.mod)
             FreeContext(pr.ctx)
@@ -75,7 +125,7 @@ pub func Run(ll_path: str, opts: Options): Output:
     else opts.output_mode == OUT_EXEC:
         obj_path := opts.output_file + ".o"
         er := EmitObject(pr.mod, tmr.tm, obj_path)
-        if !er.ok:
+        if not er.ok:
             out = Output { ok = false, error = er.err }
         else:
             mut lopts := opts

@@ -6,6 +6,7 @@ include co "../sal_core.salam"
 include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
+include lp "../langpack.salam"
 
 func check_enum_static_call(
     s &: Sema, a &: at.Ast, n: int, callee: int, esym: int, argtypes: Vector<int>, sp: co.SrcSpan
@@ -13,7 +14,7 @@ func check_enum_static_call(
     m := at.Get(a, callee).name
     _de := sema_decorate(s, a, at.Get(a, callee).a, sym_at(s, esym).ty)
 
-    if str.Equals(m, "Count"):
+    if str.Equals(enum_builtin_canon(s, m), "Count"):
         if argtypes.len() != 0:
             serr(s, 12, sp, i18.Tr("Count() takes no arguments"))
         end
@@ -36,19 +37,19 @@ func check_enum_static_call(
         ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
     end
 
-    if str.Equals(m, "FromString") || str.Equals(m, "Names"):
+    if str.Equals(m, "FromString") or str.Equals(m, "Names"):
         is_fs := str.Equals(m, "FromString")
         et := sym_at(s, esym).ty
         fn := is_fs ? sema_derive_enum_fromstring(s, a, et) : sema_derive_enum_names(s, a, et)
         if str.Len(fn) == 0:
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
-        if is_fs && (
-            argtypes.len() != 2 || ty_at(s, argtypes.get(0)).kind != TY_STR || ty_at(s, argtypes.get(1)).kind != TY_BOOL
+        if is_fs and (
+            argtypes.len() != 2 or ty_at(s, argtypes.get(0)).kind != TY_STR or ty_at(s, argtypes.get(1)).kind != TY_BOOL
         ):
             serr(s, 12, sp, i18.Tr("FromString(name, ok) takes a str and a bool ref"))
         end
-        if !is_fs && argtypes.len() != 0:
+        if not is_fs and argtypes.len() != 0:
             serr(s, 12, sp, i18.Tr("Names() takes no arguments"))
         end
         mut cv := at.Get(a, callee)
@@ -76,9 +77,26 @@ func check_enum_static_call(
     serr(
         s, 16, sp, co.Format2(
             i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(sym_at(s, esym).name), co.ArgStr(m)
-        )
+        ) + sema_suggest(s, a, sym_at(s, esym).members, m, SUGGEST_ANY, false)
     )
     ret sema_decorate(s, a, n, sema_err_ty(s))
+end
+
+func in_entry_main(s &: Sema, a &: at.Ast): bool:
+    if s.cur_func == 0:
+        ret false
+    end
+    sg := sig_at(s, s.cur_func)
+    if sg.owner != 0 or sg.decl == 0:
+        ret false
+    end
+    nm := at.Get(a, sg.decl).name
+    entry := lp.EntryFor(s.lang)
+    if not str.Equals(nm, "main") and not (str.Len(entry) > 0 and str.Equals(nm, entry)):
+        ret false
+    end
+    fs := scope_lookup_local(s, s.global, nm)
+    ret fs != 0 and str.Equals(sym_at(s, fs).pkgname, "main")
 end
 
 func check_call(s &: Sema, a &: at.Ast, n: int): int:
@@ -91,14 +109,32 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
     if callee != 0:
         ckind = at.KindOf(a, callee)
     end
+    if ckind == at.AST_MEMBER:
+        erw := enum_ctor_rewrite(s, a, n, call_expected)
+        if erw == 2:
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        if erw == 1:
+            s.expected = call_expected
+            ret sema_check_expr(s, a, n)
+        end
+        srw := static_member_rewrite(s, a, callee)
+        if srw == 2:
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+        ckind = at.KindOf(a, callee)
+    end
+    if ckind == at.AST_IDENTIFIER and scope_lookup(s, s.cur, at.Get(a, callee).name) == 0:
+        sema_canon_builtin_fn(s, a, callee, span_of(a, callee))
+    end
     if ckind == at.AST_IDENTIFIER:
         check_pure_builtin(s, a, n, at.Get(a, callee).name)
     end
 
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "spawn"):
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "spawn"):
         nargs := at.ChildCount(a, n)
         has_arg := nargs == 2
-        if (nargs != 1 && nargs != 2) || at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
+        if (nargs != 1 and nargs != 2) or at.KindOf(a, at.Child(a, n, 0)) != at.AST_IDENTIFIER:
             serr(s, 12, sp, i18.Tr("spawn(func) or spawn(func, arg) takes a function name first"))
             ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
         end
@@ -106,10 +142,10 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         fname := at.Get(a, fnid).name
         fsym := scope_lookup(s, s.cur, fname)
         mut is_fn := fsym != 0
-        if is_fn && sym_at(s, fsym).kind != SYM_FUNC:
+        if is_fn and sym_at(s, fsym).kind != SYM_FUNC:
             is_fn = false
         end
-        if !is_fn:
+        if not is_fn:
             serr(
                 s, 12, sp, co.Format1(
                     i18.Tr("spawn argument '%s' is not a function"), co.ArgStr(fname)
@@ -130,25 +166,25 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         fsv2 := sym_at(s, fsym)
         repeat fsv2.overloads.len() in i:
             sg := sig_at(s, fsv2.overloads.get(i))
-            if sg.ret_type >= 0 && ty_at(s, sg.ret_type).kind == TY_VOID:
-                if !has_arg:
+            if sg.ret_type >= 0 and ty_at(s, sg.ret_type).kind == TY_VOID:
+                if not has_arg:
                     if sg.params.len() == 0:
                         sok = true
                     end
                 else:
-                    if sg.params.len() == 1 && ty_at(s, sg.params.get(0)).kind == TY_PTR:
+                    if sg.params.len() == 1 and ty_at(s, sg.params.get(0)).kind == TY_PTR:
                         if want == TYPE_NONE:
                             want = sg.params.get(0)
                         end
-                        if argt != TYPE_NONE && type_assignable(s, sg.params.get(0), argt):
+                        if argt != TYPE_NONE and type_assignable(s, sg.params.get(0), argt):
                             sok = true
                         end
                     end
                 end
             end
         end
-        if !sok:
-            if !has_arg:
+        if not sok:
+            if not has_arg:
                 serr(
                     s, 12, sp, i18.Tr("spawn requires a function taking no arguments and returning nothing")
                 )
@@ -171,7 +207,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
     end
 
-    if ckind == at.AST_IDENTIFIER && atomic_arity(at.Get(a, callee).name) > 0 && scope_lookup(
+    if ckind == at.AST_IDENTIFIER and atomic_arity(at.Get(a, callee).name) > 0 and scope_lookup(
         s, s.cur, at.Get(a, callee).name
     ) == 0:
         aname := at.Get(a, callee).name
@@ -191,7 +227,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             if ai == 0:
                 wty = cellty
             end
-            if aty != TYPE_NONE && !type_assignable(s, wty, aty):
+            if aty != TYPE_NONE and not type_assignable(s, wty, aty):
                 serr(
                     s, 12, sp, co.Format3(
                         i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((ai + 1) as u64), co.ArgStr(type_disp(s, aty)), co.ArgStr(type_disp(s, wty))
@@ -209,7 +245,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
     end
 
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "callhandler"):
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "callhandler"):
         if at.ChildCount(a, n) != 2:
             serr(
                 s, 12, sp, i18.Tr("callhandler(fn, arg) takes a function pointer and an i64 argument")
@@ -222,8 +258,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
     end
 
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "sizeof"):
-        if at.ChildCount(a, n) != 1 || at.KindOf(a, at.Child(a, n, 0)) != at.AST_TYPE:
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "sizeof"):
+        if at.ChildCount(a, n) != 1 or at.KindOf(a, at.Child(a, n, 0)) != at.AST_TYPE:
             serr(s, 12, sp, i18.Tr("sizeof(Type) takes a single type operand"))
             ret sema_decorate(s, a, n, sema_ty(s, TY_USIZE))
         end
@@ -234,13 +270,13 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         ret sema_decorate(s, a, n, sema_ty(s, TY_USIZE))
     end
 
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "jsonenc"):
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "jsonenc"):
         ret check_json_builtin(s, a, n, true, sp)
     end
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "jsondec"):
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "jsondec"):
         ret check_json_builtin(s, a, n, false, sp)
     end
-    if ckind == at.AST_IDENTIFIER && str.Equals(at.Get(a, callee).name, "jsonschema"):
+    if ckind == at.AST_IDENTIFIER and str.Equals(at.Get(a, callee).name, "jsonschema"):
         ret check_json_schema_builtin(s, a, n, sp)
     end
 
@@ -255,25 +291,25 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         fvid := scope_lookup(s, s.cur, at.Get(a, callee).name)
         if fvid != 0:
             fvv := sym_at(s, fvid)
-            if fvv.ty >= 0 && ty_at(s, fvv.ty).kind == TY_FUNC && (
-                fvv.kind == SYM_VAR || fvv.kind == SYM_PARAM || fvv.kind == SYM_CONST
+            if fvv.ty >= 0 and ty_at(s, fvv.ty).kind == TY_FUNC and (
+                fvv.kind == SYM_VAR or fvv.kind == SYM_PARAM or fvv.kind == SYM_CONST
             ):
                 ft = fvv.ty
                 mut fvm := sym_at(s, fvid)
                 fvm.used = true
                 sym_put(s, fvid, fvm)
-                if s.lam.len() > 0 && (fvv.kind == SYM_VAR || fvv.kind == SYM_PARAM):
+                if s.lam.len() > 0 and (fvv.kind == SYM_VAR or fvv.kind == SYM_PARAM):
                     ctop := s.lam.get(s.lam.len() - 1)
                     cname := at.Get(a, callee).name
-                    if !defined_within(s, s.cur, ctop.boundary, cname) && scope_lookup_local(s, s.global, cname) == 0:
+                    if not defined_within(s, s.cur, ctop.boundary, cname) and scope_lookup_local(s, s.global, cname) == 0:
                         record_capture(s, a, callee, fvv.ty)
                     end
                 end
             end
         end
-    else callee != 0 && ckind != at.AST_MEMBER:
+    else callee != 0 and ckind != at.AST_MEMBER:
         ct := sema_check_expr(s, a, callee)
-        if ct >= 0 && ty_at(s, ct).kind == TY_FUNC:
+        if ct >= 0 and ty_at(s, ct).kind == TY_FUNC:
             ft = ct
         end
     end
@@ -296,7 +332,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             )
         else:
             repeat argtypes.len() in fi:
-                if !type_assignable(
+                if not type_assignable(
                     s, ftv.params.get(fi), argtypes.get(fi)
                 ):
                     serr(
@@ -312,7 +348,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
 
     if ckind == at.AST_IDENTIFIER:
         mut nm := at.Get(a, callee).name
-        if str.Equals(nm, "print") || str.Equals(nm, "println") || str.Equals(nm, "printerr") || str.Equals(nm, "printerrln"):
+        if str.Equals(nm, "print") or str.Equals(nm, "println") or str.Equals(nm, "printerr") or str.Equals(nm, "printerrln"):
             repeat argtypes.len() in pi:
                 tid := argtypes.get(pi)
                 if tid >= 0:
@@ -321,8 +357,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                         serr(
                             s, 2, sp, i18.Tr("cannot print a value of type 'void' - this expression produces no value")
                         )
-                    else pk == TY_ARRAY || pk == TY_STRUCT || pk == TY_MAP || pk == TY_MAP_ITER || pk == TY_VEC || pk == TY_FILE || pk == TY_FUNC || pk == TY_SLICE || pk == TY_VARIANT:
-                        if !derive_print_arg(s, a, n, pi, tid):
+                    else pk == TY_ARRAY or pk == TY_STRUCT or pk == TY_MAP or pk == TY_MAP_ITER or pk == TY_VEC or pk == TY_FILE or pk == TY_FUNC or pk == TY_SLICE or pk == TY_VARIANT:
+                        if not derive_print_arg(s, a, n, pi, tid):
                             serr(
                                 s, 2, sp, co.Format1(
                                     i18.Tr("cannot print value of type '%s' directly - print its elements or fields instead"), co.ArgStr(type_disp(s, tid))
@@ -331,7 +367,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                         end
                     else pk == TY_PTR:
                         pte := ty_at(s, tid).pointee
-                        if pte >= 0 && ty_at(s, pte).kind != TY_VOID:
+                        if pte >= 0 and ty_at(s, pte).kind != TY_VOID:
                             serr(
                                 s, 2, sp, co.Format2(
                                     i18.Tr("cannot print a pointer of type '%s' - add '[0]' to print the '%s' it points to"), co.ArgStr(type_disp(s, tid)), co.ArgStr(type_disp(s, pte))
@@ -351,10 +387,17 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
         end
         if str.Equals(nm, "input"):
+            if argtypes.len() == 1 and argtypes.get(0) >= 0 and ty_at(s, argtypes.get(0)).kind != TY_STR and not type_is_error(s, argtypes.get(0)):
+                serr(
+                    s, 2, sp, co.Format3(
+                        i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint(1 as u64), co.ArgStr(type_disp(s, argtypes.get(0))), co.ArgStr(type_disp(s, sema_ty(s, TY_STR)))
+                    )
+                )
+            end
             _da2 := sema_decorate(s, a, callee, sema_ty(s, TY_STR))
             ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
         end
-        if str.Equals(nm, "hash") && argtypes.len() == 1:
+        if str.Equals(nm, "hash") and argtypes.len() == 1:
             _db2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
             ret sema_decorate(s, a, n, sema_ty(s, TY_U64))
         end
@@ -398,7 +441,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         mut sym := scope_lookup(s, s.cur, nm)
         if sym == 0:
             c := local_canon(s, a, nm, sp)
-            if !str.Equals(c, nm):
+            if not str.Equals(c, nm):
                 nm = c
                 at.SetName(a, callee, c)
                 sym = scope_lookup(s, s.cur, nm)
@@ -407,19 +450,19 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         mut sym_callable := sym != 0
         if sym_callable:
             sk := sym_at(s, sym).kind
-            if sk != SYM_FUNC && sk != SYM_METHOD:
+            if sk != SYM_FUNC and sk != SYM_METHOD:
                 sym_callable = false
             end
         end
-        if !sym_callable:
-            if str.Equals(nm, "len") && argtypes.len() == 1:
+        if not sym_callable:
+            if str.Equals(nm, "len") and argtypes.len() == 1:
                 ak := ty_at(s, argtypes.get(0)).kind
-                if ak == TY_ARRAY || ak == TY_SLICE || ak == TY_STR:
+                if ak == TY_ARRAY or ak == TY_SLICE or ak == TY_STR:
                     _dh2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
                     ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
                 end
             end
-            if str.Equals(nm, "char_code") && argtypes.len() == 1 && ty_at(s, argtypes.get(0)).kind == TY_STR:
+            if str.Equals(nm, "char_code") and argtypes.len() == 1 and ty_at(s, argtypes.get(0)).kind == TY_STR:
                 _di2 := sema_decorate(s, a, callee, sema_ty(s, TY_VOID))
                 ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
             end
@@ -428,17 +471,17 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 bnargs := k_sm_builtin_nargs[bi]
                 barg := k_sm_builtin_arg[bi]
                 bret := k_sm_builtin_ret[bi]
-                if bnargs >= 0 && argtypes.len() != bnargs:
+                if bnargs >= 0 and argtypes.len() != bnargs:
                     serr(
                         s, 12, sp, co.Format4(
                             i18.Tr("builtin '%s' takes %d argument%s, got %zu"), co.ArgStr(nm), co.ArgInt(bnargs as i64), co.ArgStr(plural_suffix(bnargs)), co.ArgUint(argtypes.len() as u64)
                         )
                     )
                 end
-                if !str.Equals(barg, "*"):
+                if not str.Equals(barg, "*"):
                     bak := type_prim_kind_from_name(barg, "")
                     repeat argtypes.len() in bj:
-                        if !type_assignable(
+                        if not type_assignable(
                             s, sema_ty(s, bak), argtypes.get(bj)
                         ):
                             serr(
@@ -458,6 +501,21 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                     s, a, n, sema_ty(s, type_prim_kind_from_name(bret, ""))
                 )
             end
+            split_at := str.LastIndex(nm, " ")
+            if split_at > 0:
+                tail := str.Substr(nm, split_at + 1, str.Len(nm) - split_at - 1)
+                tsym := scope_lookup(s, s.cur, tail)
+                if tsym != 0 and sym_at(s, tsym).kind == SYM_FUNC:
+                    serr(
+                        s, 12, sp, co.Format2(
+                            i18.Tr(
+                                "call to undefined function '%s': words next to each other are read as one name; if '%s(...)' is a separate call, start it on a new line or put the value before it in parentheses"
+                            ), co.ArgStr(nm), co.ArgStr(tail)
+                        )
+                    )
+                    ret sema_decorate(s, a, n, sema_err_ty(s))
+                end
+            end
             serr(
                 s, 12, sp, co.Format1(
                     i18.Tr("call to undefined function '%s'"), co.ArgStr(nm)
@@ -470,7 +528,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         symv.used = true
         sym_put(s, sym, symv)
         dce_note(s, a, str.Len(symv.pkgname) > 0 ? symv.pkgname : s.pkg, nm)
-        if symv.kind == SYM_FUNC && symv.decl != 0 && at.TyparamCount(a, symv.decl) > 0:
+        if symv.kind == SYM_FUNC and symv.decl != 0 and at.TyparamCount(a, symv.decl) > 0:
             inst := g_infer_call(s, a, sym, argtypes, sp, call_expected)
             if inst == 0:
                 ret sema_decorate(s, a, n, sema_err_ty(s))
@@ -491,28 +549,28 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         )
     end
 
-    if ckind == at.AST_MEMBER && at.Get(a, callee).a != 0 && at.KindOf(a, at.Get(a, callee).a) == at.AST_IDENTIFIER:
+    if ckind == at.AST_MEMBER and at.Get(a, callee).a != 0 and at.KindOf(a, at.Get(a, callee).a) == at.AST_IDENTIFIER:
         pk := scope_lookup(s, s.cur, at.Get(a, at.Get(a, callee).a).name)
-        if pk != 0 && sym_at(s, pk).kind == SYM_PACKAGE:
+        if pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE:
             csp := span_of(a, callee)
             fname3 := pkg_member_canon(s, a, pk, at.Get(a, callee).name, csp)
             at.SetName(a, callee, fname3)
             pkv := sym_at(s, pk)
             fn := scope_lookup_local(s, pkv.members, fname3)
             mut fn_ok := fn != 0
-            if fn_ok && sym_at(s, fn).kind != SYM_FUNC:
+            if fn_ok and sym_at(s, fn).kind != SYM_FUNC:
                 fn_ok = false
             end
-            if !fn_ok:
+            if not fn_ok:
                 serr(
                     s, 12, sp, co.Format2(
                         i18.Tr("package '%s' has no exported function '%s'"), co.ArgStr(pkv.name), co.ArgStr(fname3)
-                    )
+                    ) + sema_suggest(s, a, pkv.members, fname3, SUGGEST_FUNC, true)
                 )
                 ret sema_decorate(s, a, n, sema_err_ty(s))
             end
             fnv := sym_at(s, fn)
-            if !fnv.is_pub:
+            if not fnv.is_pub:
                 serr(
                     s, 17, sp, co.Format2(
                         i18.Tr("'%s' is not exported by package '%s' (mark it 'pub')"), co.ArgStr(fname3), co.ArgStr(pkv.name)
@@ -520,12 +578,17 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 )
                 ret sema_decorate(s, a, n, sema_err_ty(s))
             end
+            if str.Equals(pkv.pkgname, "os") and str.Equals(fname3, "Exit") and in_entry_main(s, a):
+                serr(
+                    s, 109, sp, i18.Tr("do not call os.Exit in main: it skips main's deferred cleanup; write 'ret <code>' instead, main's return value is the exit code")
+                )
+            end
             mut fnm := sym_at(s, fn)
             fnm.used = true
             sym_put(s, fn, fnm)
             dce_note(s, a, pkv.pkgname, fname3)
 
-            if fnm.decl != 0 && at.TyparamCount(a, fnm.decl) > 0:
+            if fnm.decl != 0 and at.TyparamCount(a, fnm.decl) > 0:
                 save_cur := s.cur
                 save_gp := s.gen_pkg
                 s.cur = pkv.members
@@ -561,22 +624,22 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 s, a, n, g_localize_instance(s, a, sig_ret_or_err(s, sig3), sp)
             )
         end
-        if pk != 0 && sym_at(s, pk).kind == SYM_ENUM:
+        if pk != 0 and sym_at(s, pk).kind == SYM_ENUM:
             ret check_enum_static_call(s, a, n, callee, pk, argtypes, sp)
         end
     end
 
-    if ckind == at.AST_MEMBER && at.Get(a, callee).a != 0 && at.KindOf(a, at.Get(a, callee).a) == at.AST_MEMBER:
+    if ckind == at.AST_MEMBER and at.Get(a, callee).a != 0 and at.KindOf(a, at.Get(a, callee).a) == at.AST_MEMBER:
         ca := at.Get(a, callee).a
         can := at.Get(a, ca)
-        if can.a != 0 && at.KindOf(a, can.a) == at.AST_IDENTIFIER:
+        if can.a != 0 and at.KindOf(a, can.a) == at.AST_IDENTIFIER:
             pk3 := scope_lookup(s, s.cur, at.Get(a, can.a).name)
-            if pk3 != 0 && sym_at(s, pk3).kind == SYM_PACKAGE:
+            if pk3 != 0 and sym_at(s, pk3).kind == SYM_PACKAGE:
                 pk3v := sym_at(s, pk3)
                 mname3 := pkg_member_canon(s, a, pk3, can.name, span_of(a, ca))
-                at.SetName(a, ca, mname3)
                 m3 := scope_lookup_local(s, pk3v.members, mname3)
-                if m3 != 0 && sym_at(s, m3).kind == SYM_ENUM:
+                if m3 != 0 and sym_at(s, m3).kind == SYM_ENUM:
+                    at.SetName(a, ca, mname3)
                     ret check_enum_static_call(s, a, n, callee, m3, argtypes, sp)
                 end
             end
@@ -593,12 +656,12 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret dmc
         end
         mut root := at.Get(a, callee).a
-        until root != 0 && (
-            at.KindOf(a, root) == at.AST_MEMBER || at.KindOf(a, root) == at.AST_INDEX
+        until root != 0 and (
+            at.KindOf(a, root) == at.AST_MEMBER or at.KindOf(a, root) == at.AST_INDEX
         ):
             root = at.Get(a, root).a
         end
-        if root != 0 && at.KindOf(a, root) == at.AST_IDENTIFIER && str.Len(at.Get(a, root).name) > 0:
+        if root != 0 and at.KindOf(a, root) == at.AST_IDENTIFIER and str.Len(at.Get(a, root).name) > 0 and not call_keeps_receiver(s, a, objt, at.Get(a, callee).name):
             rsym := scope_lookup(s, s.cur, at.Get(a, root).name)
             if rsym != 0:
                 mut rv := sym_at(s, rsym)
@@ -610,11 +673,11 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         csp2 := span_of(a, callee)
         ov := ty_at(s, objt)
         mut is_file_ptr := false
-        if ov.kind == TY_PTR && ov.pointee >= 0 && ty_at(s, ov.pointee).kind == TY_FILE:
+        if ov.kind == TY_PTR and ov.pointee >= 0 and ty_at(s, ov.pointee).kind == TY_FILE:
             is_file_ptr = true
         end
-        if str.Len(at.Get(a, callee).name) > 0 && (
-            ov.kind == TY_MAP || ov.kind == TY_MAP_ITER || ov.kind == TY_VEC || ov.kind == TY_STR || ov.kind == TY_ARRAY || ov.kind == TY_SLICE || is_file_ptr
+        if str.Len(at.Get(a, callee).name) > 0 and (
+            ov.kind == TY_MAP or ov.kind == TY_MAP_ITER or ov.kind == TY_VEC or ov.kind == TY_STR or ov.kind == TY_ARRAY or ov.kind == TY_SLICE or is_file_ptr
         ):
             orig := at.Get(a, callee).name
             at.SetName(a, callee, intrinsic_method_canon(orig))
@@ -687,9 +750,9 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         if ov.kind == TY_VEC:
             m3 := at.Get(a, callee).name
             _dq2 := sema_decorate(s, a, callee, objt)
-            if ov.elem >= 0 && ty_at(s, ov.elem).kind == TY_DYN && (str.Equals(m3, "push") || str.Equals(m3, "set")):
+            if ov.elem >= 0 and ty_at(s, ov.elem).kind == TY_DYN and (str.Equals(m3, "push") or str.Equals(m3, "set")):
                 vi := str.Equals(m3, "push") ? 0 : 1
-                if vi < at.ChildCount(a, n) && vi < argtypes.len():
+                if vi < at.ChildCount(a, n) and vi < argtypes.len():
                     nb := coerce_to_dyn(
                         s, a, ov.elem, at.Child(a, n, vi), argtypes.get(vi)
                     )
@@ -785,14 +848,15 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
 
-        if ov.kind == TY_ENUM:
-            m0 := at.Get(a, callee).name
+        is_data_enum := ov.kind == TY_VARIANT and enum_data_sym(s, objt) != 0
+        if ov.kind == TY_ENUM or (is_data_enum and str.Equals(enum_builtin_canon(s, at.Get(a, callee).name), "name")):
+            m0 := enum_builtin_canon(s, at.Get(a, callee).name)
             _de0 := sema_decorate(s, a, callee, objt)
             if str.Equals(m0, "name"):
                 if argtypes.len() != 0:
                     serr(s, 12, sp, i18.Tr("name() takes no arguments"))
                 end
-                fn0 := sema_derive_enum_name(s, a, objt)
+                fn0 := is_data_enum ? derive_enum_data_name(s, a, objt) : sema_derive_enum_name(s, a, objt)
                 if str.Len(fn0) == 0:
                     ret sema_decorate(s, a, n, sema_err_ty(s))
                 end
@@ -839,6 +903,30 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             if str.Equals(m5, "len"):
                 ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
             end
+            if str.Equals(m5, "char_count"):
+                if argtypes.len() != 0:
+                    serr(s, 12, sp, i18.Tr("char_count() takes no args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
+            if str.Equals(m5, "char_at"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("char_at(index) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "char_substr"):
+                if argtypes.len() != 2:
+                    serr(s, 12, sp, i18.Tr("char_substr(start,len) takes 2 args"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(m5, "char_find"):
+                if argtypes.len() != 1:
+                    serr(s, 12, sp, i18.Tr("char_find(sub) takes 1 arg"))
+                end
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I32))
+            end
             if str.Equals(m5, "concat"):
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("concat(other) takes 1 arg"))
@@ -851,7 +939,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 end
                 ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
             end
-            if str.Equals(m5, "find") || str.Equals(m5, "search") || str.Equals(m5, "indexOf"):
+            if str.Equals(m5, "find") or str.Equals(m5, "search") or str.Equals(m5, "indexOf"):
                 if argtypes.len() != 1:
                     serr(
                         s, 12, sp, co.Format1(
@@ -876,7 +964,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             if str.Equals(m5, "to_float"):
                 ret sema_decorate(s, a, n, sema_ty(s, TY_F64))
             end
-            if str.Equals(m5, "lower") || str.Equals(m5, "upper"):
+            if str.Equals(m5, "lower") or str.Equals(m5, "upper"):
                 if argtypes.len() != 0:
                     serr(
                         s, 12, sp, co.Format1(
@@ -902,7 +990,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
 
-        if ov.kind == TY_ARRAY || ov.kind == TY_SLICE:
+        if ov.kind == TY_ARRAY or ov.kind == TY_SLICE:
             m6 := at.Get(a, callee).name
             _dt2 := sema_decorate(s, a, callee, objt)
             if str.Equals(m6, "len"):
@@ -921,10 +1009,10 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         mut dynt := TYPE_NONE
         if ov.kind == TY_DYN:
             dynt = objt
-        else ov.kind == TY_PTR && ov.pointee >= 0 && ty_at(s, ov.pointee).kind == TY_DYN:
+        else ov.kind == TY_PTR and ov.pointee >= 0 and ty_at(s, ov.pointee).kind == TY_DYN:
             dynt = ov.pointee
         end
-        if dynt >= 0 && ty_at(s, dynt).decl != 0:
+        if dynt >= 0 and ty_at(s, dynt).decl != 0:
             iface := ty_at(s, dynt).decl
             _du2 := sema_decorate(s, a, callee, objt)
             if str.Equals(at.Get(a, callee).name, "free"):
@@ -936,10 +1024,10 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             at.SetName(a, callee, im)
             md := scope_lookup_local(s, sym_at(s, iface).members, im)
             mut md_ok := md != 0
-            if md_ok && sym_at(s, md).kind != SYM_METHOD:
+            if md_ok and sym_at(s, md).kind != SYM_METHOD:
                 md_ok = false
             end
-            if !md_ok:
+            if not md_ok:
                 serr(
                     s, 17, sp, co.Format2(
                         i18.Tr("interface '%s' has no method '%s'"), co.ArgStr(sym_at(s, iface).name), co.ArgStr(im)
@@ -971,13 +1059,14 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         at.SetName(
             a, callee, scope_member_canon(s, a, ssv.members, orig_method_name, csp2)
         )
+        via_alias := not str.Equals(orig_method_name, at.Get(a, callee).name)
         if scope_lookup_local(s, ssv.members, at.Get(a, callee).name) == 0:
             intr := intrinsic_method_canon(at.Get(a, callee).name)
-            if !str.Equals(intr, at.Get(a, callee).name) && scope_lookup_local(s, ssv.members, intr) != 0:
+            if not str.Equals(intr, at.Get(a, callee).name) and scope_lookup_local(s, ssv.members, intr) != 0:
                 at.SetName(a, callee, intr)
             end
         end
-        if scope_lookup_local(s, ssv.members, at.Get(a, callee).name) != 0:
+        if not via_alias and scope_lookup_local(s, ssv.members, at.Get(a, callee).name) != 0:
             sema_check_intrinsic_method_lang(
                 s, orig_method_name, at.Get(a, callee).name, csp2
             )
@@ -988,14 +1077,14 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         mut is_func_field := false
         if m7 != 0:
             m7v := sym_at(s, m7)
-            if m7v.kind == SYM_FIELD && m7v.ty >= 0 && ty_at(s, m7v.ty).kind == TY_FUNC:
+            if m7v.kind == SYM_FIELD and m7v.ty >= 0 and ty_at(s, m7v.ty).kind == TY_FUNC:
                 is_func_field = true
             end
         end
         if is_func_field:
             m7v2 := sym_at(s, m7)
             fft := m7v2.ty
-            if !m7v2.is_pub && struct_sym_of(s, s.self_type) != ssym:
+            if not m7v2.is_pub and not sema_in_struct(s, ssym):
                 serr(
                     s, 17, sp, co.Format2(
                         i18.Tr("field '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(mname), co.ArgStr(ssv.name)
@@ -1020,7 +1109,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 )
             else:
                 repeat argtypes.len() in gi:
-                    if !type_assignable(
+                    if not type_assignable(
                         s, fftv.params.get(gi), argtypes.get(gi)
                     ):
                         serr(
@@ -1042,13 +1131,21 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, fftv.elem)
         end
         mut m7_ok := m7 != 0
-        if m7_ok && sym_at(s, m7).kind != SYM_METHOD:
+        if m7_ok and sym_at(s, m7).kind != SYM_METHOD:
             m7_ok = false
         end
-        if !m7_ok:
+        if not m7_ok:
             ric4 := try_impl_call(s, a, n, callee, objt, argtypes)
             if ric4 != TYPE_NONE:
                 ret ric4
+            end
+            if scope_lookup_local(s, static_home(s, ssym), static_member_name(ssv.name, mname)) != 0:
+                serr(
+                    s, 17, sp, co.Format3(
+                        i18.Tr("'%s' is static: call it as %s.%s(...)"), co.ArgStr(mname), co.ArgStr(ssv.name), co.ArgStr(mname)
+                    )
+                )
+                ret sema_decorate(s, a, n, sema_err_ty(s))
             end
             serr(
                 s, 17, sp, co.Format2(
@@ -1057,7 +1154,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
-        if !sym_at(s, m7).is_pub && struct_sym_of(s, s.self_type) != ssym:
+        if not sym_at(s, m7).is_pub and not sema_in_struct(s, ssym):
             serr(
                 s, 17, sp, co.Format2(
                     i18.Tr("method '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(mname), co.ArgStr(ssv.name)
@@ -1065,6 +1162,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             )
         end
         sig5 := resolve_overload(s, a, m7, argtypes, sp, mname)
+        sema_check_mut_call(s, a, at.Get(a, callee).a, sig5, mname, sp)
         mark_ref_args(s, a, n, sig5)
         coerce_args_to_dyn(s, a, n, argtypes, sig5)
         coerce_args_to_variant(s, a, n, argtypes, sig5)

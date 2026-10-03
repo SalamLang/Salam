@@ -12,14 +12,14 @@ func call_str(
 ): bool:
     nn := at.Get(a, n)
     na := nn.list.len()
-    if str.Equals(m, "len") && na == 0:
+    if str.Equals(m, "len") and na == 0:
         klen := ast_str_lit_len(a, obj)
         if klen >= (0 as i64):
             out2 = make_llv(co.I64Toa(klen), "i32")
             ret true
         end
     end
-    if str.Equals(m, "split") && na == 1:
+    if str.Equals(m, "split") and na == 1:
         ret call_vec_str(v, s, a, n, "salam_str_split", obj, out2)
     end
     recv := lv_expr(v, s, a, obj).ref
@@ -30,7 +30,7 @@ func call_str(
         out2 = make_llv(usize_to_i32(v, l), "i32")
         ret true
     end
-    if str.Equals(m, "concat") && na == 1:
+    if str.Equals(m, "concat") and na == 1:
         arg0 := lv_expr(v, s, a, nn.list.get(0)).ref
         r = new_tmp(v)
         need(v, LV_H_STRCAT)
@@ -40,7 +40,49 @@ func call_str(
         out2 = make_llv(r, "str")
         ret true
     end
-    if str.Equals(m, "substr") && na == 2:
+    if str.Equals(m, "char_count") and na == 0:
+        l2 := new_tmp(v)
+        r = new_tmp(v)
+        need(v, LV_H_U8CNT)
+        emit(v, l2 + " = call " + v.usize + " @strlen(ptr " + recv + ")")
+        emit(v, r + " = call i32 @salam_ll_u8cnt(ptr " + recv + ", " + v.usize + " " + l2 + ")")
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(m, "char_at") and na == 1:
+        ci := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
+        cneg := new_tmp(v)
+        cln := new_tmp(v)
+        r = new_tmp(v)
+        need(v, LV_H_U8SUBSTR)
+        emit(v, cneg + " = icmp slt i32 " + ci + ", 0")
+        emit(v, cln + " = select i1 " + cneg + ", i32 0, i32 1")
+        emit(
+            v, r + " = call ptr @salam_ll_u8substr(ptr " + recv + ", i32 " + ci + ", i32 " + cln + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "char_substr") and na == 2:
+        cst := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
+        cln2 := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "i32")
+        r = new_tmp(v)
+        need(v, LV_H_U8SUBSTR)
+        emit(
+            v, r + " = call ptr @salam_ll_u8substr(ptr " + recv + ", i32 " + cst + ", i32 " + cln2 + ")"
+        )
+        out2 = make_llv(r, "str")
+        ret true
+    end
+    if str.Equals(m, "char_find") and na == 1:
+        csub := lv_expr(v, s, a, nn.list.get(0)).ref
+        r = new_tmp(v)
+        need(v, LV_H_U8FIND)
+        emit(v, r + " = call i32 @salam_ll_u8find(ptr " + recv + ", ptr " + csub + ")")
+        out2 = make_llv(r, "i32")
+        ret true
+    end
+    if str.Equals(m, "substr") and na == 2:
         st := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
         ln := conv(v, s, a, lv_expr(v, s, a, nn.list.get(1)), "i32")
         r = new_tmp(v)
@@ -61,25 +103,41 @@ func call_str(
     if str.Equals(m, "to_int"):
         x := new_tmp(v)
         r = new_tmp(v)
-        lt := ltype(v)
-        emit(v, x + " = call " + lt + " @strtol(ptr " + recv + ", ptr null, i32 10)")
-        if str.Equals(lt, "i32"):
+        lt_at := ltype(v)
+        need(v, LV_H_ASCIIDIG)
+        dg := new_tmp(v)
+        emit(v, dg + " = call ptr @salam_ll_asciidig(ptr " + recv + ")")
+        emit(v, x + " = call " + lt_at + " @strtol(ptr " + dg + ", ptr null, i32 10)")
+        emit(v, "call void @free(ptr " + dg + ")")
+        if str.Equals(lt_at, "i32"):
             emit(v, r + " = add i32 " + x + ", 0")
         else:
-            emit(v, r + " = trunc " + lt + " " + x + " to i32")
+            gt_at := new_tmp(v)
+            hi := new_tmp(v)
+            lt2 := new_tmp(v)
+            lo := new_tmp(v)
+            emit(v, gt_at + " = icmp sgt " + lt_at + " " + x + ", 2147483647")
+            emit(v, hi + " = select i1 " + gt_at + ", " + lt_at + " 2147483647, " + lt_at + " " + x)
+            emit(v, lt2 + " = icmp slt " + lt_at + " " + hi + ", -2147483648")
+            emit(v, lo + " = select i1 " + lt2 + ", " + lt_at + " -2147483648, " + lt_at + " " + hi)
+            emit(v, r + " = trunc " + lt_at + " " + lo + " to i32")
         end
         out2 = make_llv(r, "i32")
         ret true
     end
     if str.Equals(m, "to_float"):
         r = new_tmp(v)
-        emit(v, r + " = call double @strtod(ptr " + recv + ", ptr null)")
+        need(v, LV_H_ASCIIDIG)
+        df := new_tmp(v)
+        emit(v, df + " = call ptr @salam_ll_asciidig(ptr " + recv + ")")
+        emit(v, r + " = call double @strtod(ptr " + df + ", ptr null)")
+        emit(v, "call void @free(ptr " + df + ")")
         out2 = make_llv(r, "f64")
         ret true
     end
     if (
-        str.Equals(m, "find") || str.Equals(m, "search") || str.Equals(m, "indexOf")
-    ) && na == 1:
+        str.Equals(m, "find") or str.Equals(m, "search") or str.Equals(m, "indexOf")
+    ) and na == 1:
         arg1 := lv_expr(v, s, a, nn.list.get(0)).ref
         p := new_tmp(v)
         pi := new_tmp(v)
@@ -112,7 +170,7 @@ func call_str(
         out2 = make_llv(r, "str")
         ret true
     end
-    if str.Equals(m, "repeat") && na == 1:
+    if str.Equals(m, "repeat") and na == 1:
         cnt := conv(v, s, a, lv_expr(v, s, a, nn.list.get(0)), "i32")
         r = new_tmp(v)
         need(v, LV_H_REPEAT)
@@ -131,9 +189,9 @@ func call_dyn(
     ni := str.Len(iface)
     mut k := 0
     mut stop := false
-    until k < ni && k < 159 && !stop:
+    until k < ni and k < 159 and not stop:
         c := byte_at(iface, k)
-        if c == 42 || c == 91:
+        if c == 42 or c == 91:
             stop = true
         else:
             k += 1
@@ -141,11 +199,11 @@ func call_dyn(
     end
     ib := str.Substr(iface, 0, k)
     isym := sym_of(v, s, a, ib)
-    if isym == 0 || sm.SymAt(s, isym).kind != sm.SYM_INTERFACE:
+    if isym == 0 or sm.SymAt(s, isym).kind != sm.SYM_INTERFACE:
         lv_error(v, a, n, "dynamic call on non-interface '" + ib + "'")
         ret poison(at.Get(a, n).type_str)
     end
-    if str.Equals(mname, "free") && at.Get(a, n).list.len() == 0:
+    if str.Equals(mname, "free") and at.Get(a, n).list.len() == 0:
         dv0 := lv_expr(v, s, a, obj)
         mut dv0ref := dv0.ref
         if is_ptr_ts(dv0.ts):
@@ -164,7 +222,7 @@ func call_dyn(
     isyms := sm.ScopeAt(s, sm.SymAt(s, isym).members).symbols
     repeat isyms.len() in m:
         im := sm.SymAt(s, isyms.get(m))
-        if im.kind == sm.SYM_METHOD && im.overloads.len() > 0:
+        if im.kind == sm.SYM_METHOD and im.overloads.len() > 0:
             if str.Equals(im.name, mname):
                 slot = idx
                 msig = im.overloads.get(0)
@@ -225,7 +283,7 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
 
     if str.StartsWith(ots, "dyn "):
         mut ibn := str.Len(ots)
-        until ibn > 4 && byte_at(ots, ibn - 1) == 42:
+        until ibn > 4 and byte_at(ots, ibn - 1) == 42:
             ibn -= 1
         end
         ret call_dyn(v, s, a, n, obj, str.Substr(ots, 4, ibn - 4), mname)
@@ -245,19 +303,19 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         end
     end
 
-    if str.Equals(mname, "len") && (is_slice(ots) || (str.Len(ots) > 0 && idx_byte(ots, 91) >= 0)):
+    if str.Equals(mname, "len") and (is_slice(ots) or (str.Len(ots) > 0 and idx_byte(ots, 91) >= 0)):
         ret len_of(v, s, a, n, obj)
     end
 
-    if objn.kind == at.AST_IDENTIFIER && (str.Len(ots) == 0 || str.Equals(ots, "<null>")):
+    if objn.kind == at.AST_IDENTIFIER and (str.Len(ots) == 0 or str.Equals(ots, "<null>")):
         pk := sym_of(v, s, a, objn.name)
-        if pk != 0 && sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
+        if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
             ret call_pkg(v, s, a, n, pk, mname)
         end
         mut pi := 0
         until pi < sm.PackageCount(s):
             cand := sm.PackageAt(s, pi)
-            if cand != 0 && str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
+            if cand != 0 and str.Equals(sm.SymAt(s, cand).pkgname, objn.name):
                 ret call_pkg(v, s, a, n, cand, mname)
             end
             pi += 1
@@ -271,7 +329,7 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     if ss != 0:
         ms = sm.LookupLocal(s, sm.SymAt(s, ss).members, mname)
     end
-    if ms != 0 && sm.SymAt(s, ms).kind == sm.SYM_METHOD && sm.SymAt(s, ms).overloads.len() > 0:
+    if ms != 0 and sm.SymAt(s, ms).kind == sm.SYM_METHOD and sm.SymAt(s, ms).overloads.len() > 0:
         sig := pick_overload(v, s, a, ms, n)
         mut osc := scope_of(s, ss)
         if osc == 0:
@@ -288,10 +346,13 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         )
     end
 
-    implsym := sym_of(v, s, a, sm.ImplOwnerKey(ots))
-    if implsym != 0 && sm.SymAt(s, implsym).kind == sm.SYM_TYPEIMPL:
+    mut implsym := sym_of(v, s, a, sm.ImplOwnerKey(ots))
+    if implsym == 0:
+        implsym = sm.FindImplOwner(s, ots)
+    end
+    if implsym != 0 and sm.SymAt(s, implsym).kind == sm.SYM_TYPEIMPL:
         im := sm.LookupLocal(s, sm.SymAt(s, implsym).members, mname)
-        if im != 0 && sm.SymAt(s, im).kind == sm.SYM_METHOD && sm.SymAt(s, im).overloads.len() > 0:
+        if im != 0 and sm.SymAt(s, im).kind == sm.SYM_METHOD and sm.SymAt(s, im).overloads.len() > 0:
             sig2 := pick_overload(v, s, a, im, n)
             mut osc2 := scope_of(s, implsym)
             if osc2 == 0:
@@ -305,7 +366,7 @@ func call_method(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         end
     end
 
-    if ss != 0 && str.StartsWith(calleen.type_str, "func("):
+    if ss != 0 and str.StartsWith(calleen.type_str, "func("):
         ret call_indirect(v, s, a, n, callee)
     end
 
@@ -350,7 +411,7 @@ func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
     fts := at.Get(a, callee).type_str
     fv := lv_expr(v, s, a, callee)
     mut fn := fv.ref
-    if !str.Equals(ty_of(v, s, a, fv.ts), "ptr"):
+    if not str.Equals(ty_of(v, s, a, fv.ts), "ptr"):
         fn = new_tmp(v)
         emit(v, fn + " = inttoptr " + ty_of(v, s, a, fv.ts) + " " + fv.ref + " to ptr")
     end
@@ -387,7 +448,7 @@ func call_intrinsic(
     na := nn.list.len()
     a0 := na > 0 ? nn.list.get(0) : 0
     mut r := ""
-    if str.Equals(nm, "hash") && na == 1:
+    if str.Equals(nm, "hash") and na == 1:
         r = new_tmp(v)
         if is_str(s, at.Get(a, a0).type_str):
             need(v, LV_H_STRHASH)
@@ -403,7 +464,7 @@ func call_intrinsic(
         out2 = make_llv(r, "u64")
         ret true
     end
-    if str.Equals(nm, "char_from_code") && na == 1:
+    if str.Equals(nm, "char_from_code") and na == 1:
         r = new_tmp(v)
         need(v, LV_H_CHARSTR)
         emit(
@@ -412,7 +473,7 @@ func call_intrinsic(
         out2 = make_llv(r, "str")
         ret true
     end
-    if str.Equals(nm, "char_code") && na == 1:
+    if str.Equals(nm, "char_code") and na == 1:
         b := new_tmp(v)
         r = new_tmp(v)
         emit(v, b + " = load i8, ptr " + lv_expr(v, s, a, a0).ref)
@@ -420,23 +481,31 @@ func call_intrinsic(
         out2 = make_llv(r, "i32")
         ret true
     end
-    if str.Equals(nm, "args") && na == 0:
+    if str.Equals(nm, "args") and na == 0:
         ret call_vec_str(v, s, a, n, "salam_args", 0, out2)
     end
-    if str.Equals(nm, "listdir") && na == 1:
+    if str.Equals(nm, "listdir") and na == 1:
         ret call_vec_str(v, s, a, n, "salam_os_listdir", 0, out2)
     end
-    if str.Equals(nm, "input") && na == 0:
-        ret call_runtime(v, s, a, n, "salam_input", 0, out2)
+    if str.Equals(nm, "input") and na <= 1:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_flush()")
+        emit(v, new_tmp(v) + " = call i32 @fflush(ptr null)")
+        if na == 1:
+            pv := lv_expr(v, s, a, at.Child(a, n, 0))
+            write_free(v, pv.ref, false)
+            emit(v, "call void @salam_out_flush()")
+        end
+        ret call_runtime(v, s, a, at.Get(a, n).a, "salam_input", 0, out2)
     end
-    if str.Equals(nm, "open") && na == 2:
+    if str.Equals(nm, "open") and na == 2:
         ret call_runtime(v, s, a, n, "salam_open", 0, out2)
     end
-    if str.Equals(nm, "lang") && na == 0:
+    if str.Equals(nm, "lang") and na == 0:
         out2 = make_llv(strconst(v, i18.Lang()), "str")
         ret true
     end
-    if str.Equals(nm, "spawn") && (na == 1 || na == 2) && at.KindOf(a, a0) == at.AST_IDENTIFIER:
+    if str.Equals(nm, "spawn") and (na == 1 or na == 2) and at.KindOf(a, a0) == at.AST_IDENTIFIER:
         mut rt := "salam_thread_spawn"
         if na == 2:
             rt = "salam_thread_spawn_arg"
@@ -449,7 +518,7 @@ func call_intrinsic(
         emit(v, r + " = ptrtoint ptr @" + symn + " to i64")
         mut spk := 0
         ssig := runtime_fn(s, rt, spk)
-        if ssig == 0 || sm.SigAt(s, ssig).decl == 0:
+        if ssig == 0 or sm.SigAt(s, ssig).decl == 0:
             ret false
         end
         touch_pkg_named(v, s, a, sm.SymAt(s, spk).pkgname)
@@ -466,7 +535,7 @@ func call_intrinsic(
         out2 = make_llv(r2, "i64")
         ret true
     end
-    if sm.AtomicArity(nm) > 0 && na == sm.AtomicArity(nm) && sm.Lookup(s, s.global, nm) == 0:
+    if sm.AtomicArity(nm) > 0 and na == sm.AtomicArity(nm) and sm.Lookup(s, s.global, nm) == 0:
         pv := conv(v, s, a, lv_expr(v, s, a, a0), "ptr")
         if str.Equals(nm, "atomic_load"):
             r = new_tmp(v)
@@ -504,7 +573,7 @@ func call_intrinsic(
         out2 = make_llv(r, "bool")
         ret true
     end
-    if str.Equals(nm, "callhandler") && na == 2:
+    if str.Equals(nm, "callhandler") and na == 2:
         a1 := nn.list.get(1)
         fp := new_tmp(v)
         emit(v, fp + " = inttoptr i64 " + conv(v, s, a, lv_expr(v, s, a, a0), "i64") + " to ptr")
@@ -524,13 +593,13 @@ end
 func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     nn := at.Get(a, n)
     callee := nn.a
-    if callee != 0 && is_extern_fn_ts(at.Get(a, callee).type_str):
+    if callee != 0 and is_extern_fn_ts(at.Get(a, callee).type_str):
         ret call_raw_ptr(v, s, a, n, callee)
     end
-    if callee != 0 && at.KindOf(a, callee) == at.AST_MEMBER:
+    if callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER:
         ret call_method(v, s, a, n, callee)
     end
-    if callee != 0 && at.KindOf(a, callee) == at.AST_IDENTIFIER:
+    if callee != 0 and at.KindOf(a, callee) == at.AST_IDENTIFIER:
         nm := at.Get(a, callee).name
         if str.Equals(nm, "print"):
             lv_lower_print(v, s, a, n, false, false)
@@ -548,10 +617,10 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             lv_lower_print(v, s, a, n, true, true)
             ret make_llv("0", "void")
         end
-        if str.Equals(nm, "len") && nn.list.len() == 1:
+        if str.Equals(nm, "len") and nn.list.len() == 1:
             ret call_len(v, s, a, n)
         end
-        if str.Equals(nm, "sizeof") && nn.list.len() == 1:
+        if str.Equals(nm, "sizeof") and nn.list.len() == 1:
             t := at.Get(a, nn.list.get(0)).type_str
             szp := new_tmp(v)
             sz := new_tmp(v)
@@ -562,7 +631,7 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             ret make_llv(sz, "usize")
         end
         fsym := sym_of(v, s, a, nm)
-        if fsym != 0 && sm.SymAt(s, fsym).kind == sm.SYM_FUNC:
+        if fsym != 0 and sm.SymAt(s, fsym).kind == sm.SYM_FUNC:
             ret call_user(v, s, a, n, nm)
         end
         if fsym == 0:
@@ -576,7 +645,7 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         end
         ret call_user(v, s, a, n, nm)
     end
-    if callee != 0 && is_func_ts(at.Get(a, callee).type_str):
+    if callee != 0 and is_func_ts(at.Get(a, callee).type_str):
         ret call_indirect(v, s, a, n, callee)
     end
     lv_error(v, a, n, "method / package / indirect call")

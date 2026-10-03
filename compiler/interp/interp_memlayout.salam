@@ -23,13 +23,14 @@ const SLOT_BOX := 15
 
 const MEM_BOX_TAG := 21314 as i64
 const MEM_BOX_SHIFT := 48
+const FN_TAG := 21315 as i64
 
 func field_type_str(a &: at.Ast, f: int): str:
-    fn := at.Get(a, f)
+    fn := at.At(a, f)
     if fn.ty == 0:
         ret ""
     end
-    ret at.Get(a, fn.ty).type_str
+    ret at.At(a, fn.ty).type_str
 end
 
 func slot_kind(ip &: Interp, ts: str): int:
@@ -49,7 +50,7 @@ func slot_kind(ip &: Interp, ts: str): int:
     if str.Equals(ts, "i32"):
         ret SLOT_I32
     end
-    if str.Equals(ts, "i64") || str.Equals(ts, "size"):
+    if str.Equals(ts, "i64") or str.Equals(ts, "size"):
         ret SLOT_I64
     end
     if str.Equals(ts, "u8"):
@@ -61,7 +62,7 @@ func slot_kind(ip &: Interp, ts: str): int:
     if str.Equals(ts, "u32"):
         ret SLOT_U32
     end
-    if str.Equals(ts, "u64") || str.Equals(ts, "usize"):
+    if str.Equals(ts, "u64") or str.Equals(ts, "usize"):
         ret SLOT_U64
     end
     if str.Equals(ts, "f32"):
@@ -86,13 +87,13 @@ func slot_kind(ip &: Interp, ts: str): int:
 end
 
 func slot_align(k: int): i64:
-    if k == SLOT_I8 || k == SLOT_U8 || k == SLOT_BOOL || k == SLOT_CHAR:
+    if k == SLOT_I8 or k == SLOT_U8 or k == SLOT_BOOL or k == SLOT_CHAR:
         ret 1
     end
-    if k == SLOT_I16 || k == SLOT_U16:
+    if k == SLOT_I16 or k == SLOT_U16:
         ret 2
     end
-    if k == SLOT_I32 || k == SLOT_U32 || k == SLOT_F32:
+    if k == SLOT_I32 or k == SLOT_U32 or k == SLOT_F32:
         ret 4
     end
     ret 8
@@ -169,14 +170,14 @@ func box_read(ip &: Interp, tok: i64): Value:
     if (tok >> MEM_BOX_SHIFT) != MEM_BOX_TAG:
         ret val_null()
     end
-    if idx == (0 as i64) || idx > (ip.mem_boxes.len() as i64):
+    if idx == (0 as i64) or idx > (ip.mem_boxes.len() as i64):
         ret val_null()
     end
     ret ip.mem_boxes.get((idx as int) - 1)
 end
 
 func struct_load(ip &: Interp, a &: at.Ast, base: i64, sd: int): Value:
-    sdn := at.Get(a, sd)
+    sdn := at.At(a, sd)
     sv := mk_struct(ip, sdn.name, sd, count_fields(a, sd))
     mut off := 0 as i64
     mut fi := 0
@@ -186,7 +187,7 @@ func struct_load(ip &: Interp, a &: at.Ast, base: i64, sd: int): Value:
             fts := field_type_str(a, f)
             off = field_offset(ip, a, fts, off)
             fv := interp_mem_load(ip, a, base + off, fts)
-            st_field_set(ip, sv.id, fi, at.Get(a, f).name, fv)
+            st_field_set(ip, sv.id, fi, at.At(a, f).name, fv)
             off += interp_sizeof_typename(ip, a, fts)
             fi += 1
         end
@@ -212,7 +213,7 @@ func struct_store(ip &: Interp, a &: at.Ast, base: i64, sd: int, v: Value):
         if at.KindOf(a, f) == at.AST_FIELD:
             fts := field_type_str(a, f)
             off = field_offset(ip, a, fts, off)
-            fv := field_of(ip, v, at.Get(a, f).name)
+            fv := field_of(ip, v, at.At(a, f).name)
             interp_mem_store(ip, a, base + off, fts, fv)
             off += interp_sizeof_typename(ip, a, fts)
         end
@@ -312,7 +313,7 @@ end
 func star_count(ts: str): int:
     mut n := str.Len(ts)
     mut stars := 0
-    until n > 0 && byte_at(ts, n - 1) == 42:
+    until n > 0 and byte_at(ts, n - 1) == 42:
         stars += 1
         n -= 1
     end
@@ -321,11 +322,16 @@ end
 
 func interp_ptr_value(ip &: Interp, addr: i64, ts: str): Value:
     elem := ptr_elem_from_typestr(ts)
-    if elem != PTR_OPAQUE || star_count(ts) != 1:
+    if star_count(ts) >= 2:
+        mut pp := val_ptr(addr, PTR_STRUCT)
+        pp.s = str.TrimRight(str.Substr(ts, 0, str.Len(ts) - 1))
+        ret pp
+    end
+    if elem != PTR_OPAQUE or star_count(ts) != 1:
         ret val_ptr(addr, elem)
     end
     pointee := str.TrimRight(str.Substr(ts, 0, str.Len(ts) - 1))
-    if str.Len(pointee) == 0 || find_struct(ip, pointee) == 0:
+    if str.Len(pointee) == 0 or (find_struct(ip, pointee) == 0 and not str.StartsWith(pointee, "Variant<") and not str.StartsWith(pointee, "dyn ")):
         ret val_ptr(addr, elem)
     end
     mut v := val_ptr(addr, PTR_STRUCT)
@@ -361,7 +367,7 @@ func field_place(
         if at.KindOf(a, f) == at.AST_FIELD:
             fts := field_type_str(a, f)
             off = field_offset(ip, a, fts, off)
-            if str.Equals(at.Get(a, f).name, name):
+            if str.Equals(at.At(a, f).name, name):
                 addr = base + off
                 ts = fts
                 ret true
@@ -375,7 +381,7 @@ end
 func interp_mem_ptr_field(
     ip &: Interp, a &: at.Ast, v: Value, name: str, addr &: i64, ts &: str
 ): bool:
-    if v.kind != VAL_PTR || v.pe != PTR_STRUCT || v.pa == (0 as i64):
+    if v.kind != VAL_PTR or v.pe != PTR_STRUCT or v.pa == (0 as i64):
         ret false
     end
     if slot_kind(ip, v.s) != SLOT_STRUCT:
@@ -388,10 +394,10 @@ func interp_mem_lvalue(
     ip &: Interp, a &: at.Ast, env: int, n: int, addr &: i64, ts &: str
 ): bool:
     k := at.KindOf(a, n)
-    node := at.Get(a, n)
+    node := at.At(a, n)
     if k == at.AST_INDEX:
         base := eval(ip, a, env, node.a)
-        if ip.failed || base.kind != VAL_PTR || base.pe != PTR_STRUCT || base.pa == (0 as i64):
+        if ip.failed or base.kind != VAL_PTR or base.pe != PTR_STRUCT or base.pa == (0 as i64):
             ret false
         end
         iv := eval(ip, a, env, node.b)
@@ -406,7 +412,15 @@ func interp_mem_lvalue(
         mut baddr := 0 as i64
         mut bts := ""
         if interp_mem_lvalue(ip, a, env, node.a, baddr, bts) == false:
-            ret false
+            ok := at.KindOf(a, node.a)
+            if ok != at.AST_IDENTIFIER and ok != at.AST_MEMBER and ok != at.AST_THIS:
+                ret false
+            end
+            pv := eval(ip, a, env, node.a)
+            if ip.failed:
+                ret false
+            end
+            ret interp_mem_ptr_field(ip, a, pv, node.name, addr, ts)
         end
         if slot_kind(ip, bts) != SLOT_STRUCT:
             ret false

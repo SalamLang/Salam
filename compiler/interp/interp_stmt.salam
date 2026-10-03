@@ -10,7 +10,7 @@ include i18 "../i18n.salam"
 func interp_case_item_matches(
     ip &: Interp, a &: at.Ast, env: int, item: int, subj: Value
 ): bool:
-    itn := at.Get(a, item)
+    itn := at.At(a, item)
     if itn.op == tok.TK_KW_TO:
         lo := eval(ip, a, env, itn.a)
         if ip.failed:
@@ -20,17 +20,17 @@ func interp_case_item_matches(
         if ip.failed:
             ret false
         end
-        ret value_cmp(subj, lo) >= 0 && value_cmp(subj, hi) <= 0
+        ret value_cmp(subj, lo) >= 0 and value_cmp(subj, hi) <= 0
     end
     val := eval(ip, a, env, itn.a)
     if ip.failed:
         ret false
     end
-    if itn.op == 0 || itn.op == tok.TK_EQ:
+    if itn.op == 0 or itn.op == tok.TK_EQ:
         ret value_eq(subj, val)
     end
     if itn.op == tok.TK_NE:
-        ret !value_eq(subj, val)
+        ret not value_eq(subj, val)
     end
     c := value_cmp(subj, val)
     if itn.op == tok.TK_GT:
@@ -46,7 +46,7 @@ func interp_case_item_matches(
 end
 
 func interp_case_matches(ip &: Interp, a &: at.Ast, env: int, cs: int, subj: Value): bool:
-    csn := at.Get(a, cs)
+    csn := at.At(a, cs)
     if csn.op == tok.TK_KW_ELSE:
         ret true
     end
@@ -65,7 +65,7 @@ end
 func interp_match_arm(
     ip &: Interp, a &: at.Ast, env: int, arm: int, subj: Value
 ): bool:
-    an := at.Get(a, arm)
+    an := at.At(a, arm)
     if an.op == tok.TK_KW_ELSE:
         ret true
     end
@@ -73,14 +73,14 @@ func interp_match_arm(
         pat := at.Child(a, arm, pi)
         if subj.kind == VAL_VARIANT:
             if subj.id != 0:
-                pn := at.Get(a, pat)
+                pn := at.At(a, pat)
                 vv := ip.variants.get(subj.id)
                 if (pn.value_int as i64) == (vv.tag as i64):
                     ret true
                 end
             end
         else:
-            pv := eval(ip, a, env, at.Get(a, pat).a)
+            pv := eval(ip, a, env, at.At(a, pat).a)
             if ip.failed:
                 ret false
             end
@@ -98,7 +98,19 @@ func interp_find_match_arm(
     repeat at.ChildCount(a, n) in i:
         arm := at.Child(a, n, i)
         if interp_match_arm(ip, a, env, arm, subj):
-            ret arm
+            guard := at.At(a, arm).c
+            if guard == 0:
+                ret arm
+            end
+            ip.match_subj.push(subj)
+            gv := eval(ip, a, env, guard)
+            _gp := ip.match_subj.pop()
+            if ip.failed:
+                ret 0
+            end
+            if to_bool(gv):
+                ret arm
+            end
         end
         if ip.failed:
             ret 0
@@ -110,7 +122,7 @@ end
 func member_chain_root(a &: at.Ast, n: int): int:
     mut cur := n
     until at.KindOf(a, cur) == at.AST_MEMBER:
-        cur = at.Get(a, cur).a
+        cur = at.At(a, cur).a
     end
     ret cur
 end
@@ -124,7 +136,7 @@ end
 func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
     mut loc := Loc {}
     loc.target = target
-    tn := at.Get(a, target)
+    tn := at.At(a, target)
 
     if tn.kind == at.AST_IDENTIFIER:
         mut w := 0
@@ -229,7 +241,7 @@ func interp_resolve_loc(ip &: Interp, a &: at.Ast, env: int, target: int): Loc:
             if ip.failed:
                 ret loc
             end
-            if iv < (0 as i64) || iv >= (arr_len(ip, av.id) as i64):
+            if iv < (0 as i64) or iv >= (arr_len(ip, av.id) as i64):
                 rt_error(ip, a, target, i18.Tr("index out of range in assignment"))
                 ret loc
             end
@@ -366,10 +378,12 @@ end
 func exec_scoped(
     ip &: Interp, a &: at.Ast, env: int, fr &: Frame, owner: int, retv &: Value
 ): int:
+    mk := env_mark(ip)
     c := env_new(ip, env)
     dmark := fr.defer_stmts.len()
     f := exec_list(ip, a, c, fr, owner, retv)
     run_defers_from(ip, a, fr, dmark)
+    env_release(ip, mk)
     ret f
 end
 
@@ -380,13 +394,13 @@ func exec_stmt(
     if ip.failed:
         ret FLOW_NORMAL
     end
-    node := at.Get(a, n)
+    node := at.At(a, n)
     k := node.kind
 
     if k == at.AST_BLOCK:
         ret exec_scoped(ip, a, env, fr, n, retv)
     end
-    if k == at.AST_VAR_DECL || k == at.AST_CONST_DECL:
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
         mut v := val_null()
         if node.a != 0:
             v = eval(ip, a, env, node.a)
@@ -486,7 +500,7 @@ func exec_stmt(
             if take_pending_flow(ip, pf5):
                 ret pf5
             end
-            if !cond:
+            if not cond:
                 break
             end
             f := exec_scoped(ip, a, env, fr, node.b, retv)
@@ -513,18 +527,18 @@ func exec_stmt(
         mut step := 1 as i64
         mut uns := false
         if node.c != 0:
-            if !rep_num(
+            if not rep_num(
                 ip, a, env, node.a, i18.Tr("repeat range start must be a number"), start
             ):
                 ret FLOW_NORMAL
             end
-            if !rep_num(
+            if not rep_num(
                 ip, a, env, node.c, i18.Tr("repeat range bound must be a number"), endv
             ):
                 ret FLOW_NORMAL
             end
             if node.d != 0:
-                if !rep_num(
+                if not rep_num(
                     ip, a, env, node.d, i18.Tr("repeat step must be a number"), step
                 ):
                     ret FLOW_NORMAL
@@ -542,13 +556,13 @@ func exec_stmt(
                 step = (0 as i64) - step
             end
         else:
-            if !rep_num(
+            if not rep_num(
                 ip, a, env, node.a, i18.Tr("repeat count must be a number"), endv
             ):
                 ret FLOW_NORMAL
             end
-            uns = str.Equals(node.type_str, "u64") || str.Equals(node.type_str, "usize")
-            if uns && endv == (0 as i64):
+            uns = str.Equals(node.type_str, "u64") or str.Equals(node.type_str, "usize")
+            if uns and endv == (0 as i64):
                 ret FLOW_NORMAL
             end
             start = 0 as i64
@@ -561,6 +575,7 @@ func exec_stmt(
             if ip.failed:
                 ret FLOW_NORMAL
             end
+            mk := env_mark(ip)
             c := env_new(ip, env)
             if str.Len(node.name) != 0:
                 env_define(ip, c, node.name, val_int(kk))
@@ -568,6 +583,7 @@ func exec_stmt(
             dmark := fr.defer_stmts.len()
             f := exec_list(ip, a, c, fr, node.b, retv)
             run_defers_from(ip, a, fr, dmark)
+            env_release(ip, mk)
             if f == FLOW_RETURN:
                 ret f
             end
@@ -608,7 +624,7 @@ func exec_stmt(
             if take_pending_flow(ip, pf6):
                 ret pf6
             end
-            if !cond:
+            if not cond:
                 break
             end
             f := exec_scoped(ip, a, loop, fr, node.d, retv)
@@ -638,10 +654,13 @@ func exec_stmt(
             ret FLOW_NORMAL
         end
         arm := interp_find_match_arm(ip, a, env, n, subj)
-        if arm == 0 || ip.failed:
+        if arm == 0 or ip.failed:
             ret FLOW_NORMAL
         end
-        ret exec_scoped(ip, a, env, fr, at.Get(a, arm).b, retv)
+        ip.match_subj.push(subj)
+        mf := exec_scoped(ip, a, env, fr, at.At(a, arm).b, retv)
+        _ms := ip.match_subj.pop()
+        ret mf
     end
     if k == at.AST_SWITCH:
         subj2 := eval(ip, a, env, node.a)
@@ -654,14 +673,14 @@ func exec_stmt(
         until ci < cc:
             cs := at.Child(a, n, ci)
             ci += 1
-            if !matched:
+            if not matched:
                 matched = interp_case_matches(ip, a, env, cs, subj2)
                 if ip.failed:
                     ret FLOW_NORMAL
                 end
             end
             if matched:
-                f := exec_scoped(ip, a, env, fr, at.Get(a, cs).b, retv)
+                f := exec_scoped(ip, a, env, fr, at.At(a, cs).b, retv)
                 if f == FLOW_BREAK:
                     if ip.break_levels > 1:
                         ip.break_levels -= 1

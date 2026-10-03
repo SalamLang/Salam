@@ -31,14 +31,25 @@ else:
     func native_link_triple(): str: ret "" end
 end
 
+func program_has_func(a &: at.Ast, prog: int, name: str): bool:
+    pn := at.Get(a, prog)
+    repeat pn.list.len() in i:
+        d := at.Get(a, pn.list.get(i))
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
 func build_opt_level(opt &: Dr): int:
     if opt.llvm_opt_set:
         ret opt.llvm_opt_level
     end
-    if opt.debug_info || opt.asan:
+    if opt.debug_info or opt.asan:
         ret lv.LV_OPT_O0
     end
-    if !opt.safe:
+    if not opt.safe:
         ret lv.LV_OPT_O3
     end
     ret lv.LV_OPT_O2
@@ -64,7 +75,7 @@ pub func Llvm(opt &: Dr): int:
     _pt_src := pf.Begin(pf.TP_SOURCE, opt.input)
     loaded := src.Load(opt.input, sf)
     pf.End(pf.TP_SOURCE, _pt_src)
-    if !loaded:
+    if not loaded:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
         )
@@ -86,7 +97,7 @@ pub func Llvm(opt &: Dr): int:
     pf.End(pf.TP_PARSER, _pt_ps)
     tok.StreamFree(toks)
     table := cc.TableBuild(opt.llvm_target, opt.defines)
-    if !cc.PruneProgram(a, lgr, sf.path, table, prog):
+    if not cc.PruneProgram(a, lgr, sf.path, table, prog):
         pok = false
     end
     mut s := sm.New(lgr, sf.path, lp.Code(modpack))
@@ -94,9 +105,21 @@ pub func Llvm(opt &: Dr): int:
     _pt_se := pf.Begin(pf.TP_SEMANTIC, opt.input)
     sok := sm.Run(s, a, prog)
     pf.End(pf.TP_SEMANTIC, _pt_se)
-    if !lok || !pok || !sok:
+    if not lok or not pok or not sok:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("build aborted: errors in source") + " (" + opt.input + ")"
+        )
+        sm.Free(s)
+        at.FreeAst(a)
+        ret 1
+    end
+
+    wants_entry := opt.llvm_emit == lv.LV_OUT_EXEC or opt.llvm_emit == lv.LV_OUT_JIT
+    if wants_entry and not target_is_freestanding(opt.llvm_target) and not program_has_func(a, prog, entry):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("no entry point: define a '%s' function"), co.ArgStr(entry)
+            )
         )
         sm.Free(s)
         at.FreeAst(a)
@@ -108,15 +131,21 @@ pub func Llvm(opt &: Dr): int:
     o.output_mode = opt.llvm_emit
     o.debug_info = opt.debug_info
     o.verify_module = opt.llvm_verify
-    o.release = !opt.safe
+    o.release = not opt.safe
     o.target_triple = opt.llvm_target
     o.lib_paths = opt.lib_paths
+    if opt.llvm_emit == lv.LV_OUT_JIT:
+        o.run_args.push(opt.input)
+        each ra in opt.run_args:
+            o.run_args.push(ra)
+        end
+    end
     mut xl := ""
     if EmbeddedExtralibs(opt.llvm_target, xl):
         o.lib_paths.push(xl)
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
     end
-    o.native_cpu = opt.llvm_native_cpu && str.Len(opt.llvm_target) == 0
+    o.native_cpu = opt.llvm_native_cpu and str.Len(opt.llvm_target) == 0
     o.fp_contract = opt.llvm_fp_contract
 
     if o.output_mode == lv.LV_OUT_EXEC:
@@ -178,11 +207,11 @@ pub func Llvm(opt &: Dr): int:
         at.FreeAst(a)
         ret 2
     end
-    if !out.ok:
+    if not out.ok:
         lg.Log(
             lgr, lg.PH_DRIVER, lg.LOG_WARN, lv.ErrorOf(out) + "; the program uses constructs the LLVM backend does not yet " + "support, so " + llpath + " may be incomplete"
         )
-        if !opt.keep_temp && !(ir_mode && str.Len(opt.output) > 0):
+        if not opt.keep_temp and not (ir_mode and str.Len(opt.output) > 0):
             os.Remove(llpath)
         end
         sm.Free(s)
@@ -192,7 +221,7 @@ pub func Llvm(opt &: Dr): int:
 
     mut rc := 0
     if ir_mode:
-        if o.verify_module || o.opt_level != lv.LV_OPT_O0:
+        if o.verify_module or o.opt_level != lv.LV_OPT_O0:
             rc = lv.NativeRun(lgr, llpath, o)
         end
         if rc == 0:
@@ -230,10 +259,10 @@ pub func Llvm(opt &: Dr): int:
             lg.Log(
                 lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(o.output_file))
             )
-            if str.Len(opt.exe_path) == 0 && o.output_mode == lv.LV_OUT_EXEC:
+            if str.Len(opt.exe_path) == 0 and o.output_mode == lv.LV_OUT_EXEC:
                 opt.exe_path = o.output_file
             end
-        else o.output_mode == lv.LV_OUT_EXEC && str.Len(opt.llvm_target) == 0:
+        else o.output_mode == lv.LV_OUT_EXEC and str.Len(opt.llvm_target) == 0:
             rc = RC_LLVM_LINK_FAILED
         end
     end
@@ -253,7 +282,7 @@ pub func LlvmBuild(opt &: Dr): int:
     end
     opt.llvm_opt_level = build_opt_level(opt)
     rc := Llvm(opt)
-    if rc != 0 && rc != RC_LLVM_UNSUPPORTED && rc != RC_LLVM_LINK_FAILED && str.Len(opt.llvm_target) > 0:
+    if rc != 0 and rc != RC_LLVM_UNSUPPORTED and rc != RC_LLVM_LINK_FAILED and str.Len(opt.llvm_target) > 0:
         io.EPrintln(
             co.Format1(
                 i18.Tr(

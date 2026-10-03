@@ -185,9 +185,45 @@
 #
 # Raised by ~2%, the headroom this file has always carried.
 
+# Re-baselined 2026-09-27 on Linux/aarch64, gcc, in an ubuntu:24.04 container
+# (observed: version 6106, help 5978, format 6289, inspect 253849, exec
+# 257508, build 492714-492760; the CI runner saw build 493251 before the
+# fixes below). Only `build` moved: #1737 generates each module's C in forked
+# workers, and the parent no longer runs codegen at all.
+#
+# Measured one variable at a time on the same binary:
+#
+#   SALAM_SERIAL_CODEGEN=1   456,119
+#   parallel (the default)   493,054
+#
+# Diffing the leak stacks of the two runs, almost all of the +37k is lexer
+# and semantic strings (identifier slices, check_function / mangle_func /
+# sema_check_block concatenations, langpack kw_normalize) that were never
+# freed in either mode. In a serial run codegen's global tables still point
+# at them, so LSan counts them reachable; with codegen in the children
+# nothing does, and they show up as leaked. That is the stale-pointer caveat
+# above, not new garbage. The codegen allocations that used to leak in the
+# parent now die with the children, which _exit without an LSan pass.
+#
+# What was new garbage, and is now freed: module_weight dropped the paths
+# PackageFiles returns (and package_files dropped every ListDir name), and
+# emit_modules dropped its .cgst status paths and the text read from them.
+# That is ~350 allocations; nothing in the remaining stacks goes through the
+# new driver_codegen.salam code.
+#
+# build raised by ~2% over the largest run. help lowered to 6100, which the
+# ratchet has flagged as well under budget since the last entry.
+
+#
+# Lowered after langpack's kw_ident_equal stopped allocating. It built two
+# normalized strings per comparison, one character at a time, and freed
+# none of them; every identifier with a space, ZWNJ, yeh or kaf was compared
+# that way against each keyword of the pack. CI measured inspect 217,141,
+# exec 220,662 and build 423,885 afterwards (from 257,538 / 260,972 /
+# 500,510); the budgets sit ~2% above those.
 version 6300
-help 6300
+help 6100
 format 6500
-inspect 256000
-exec 259700
-build 460000
+inspect 221500
+exec 225100
+build 432400

@@ -1,0 +1,897 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed yb Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+import mem
+
+const _JD_NATURAL := [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
+]
+
+struct _JdHuff:
+    pub ok: bool = false
+    pub maxcode: Vector<int> = Vector {}
+    pub valoff: Vector<int> = Vector {}
+    pub vals: Vector<int> = Vector {}
+    pub look: Vector<int> = Vector {}
+end
+
+struct _JdBits:
+    pub bp: u8* = null
+    pub n: int = 0
+    pub pos: int = 0
+    pub acc: i64 = 0
+    pub nbits: int = 0
+    pub marker: bool = false
+end
+
+struct _JdComp:
+    pub id: int = 0
+    pub h: int = 1
+    pub v: int = 1
+    pub tq: int = 0
+    pub td: int = 0
+    pub ta: int = 0
+    pub bw: int = 0
+    pub bh: int = 0
+    pub dw: int = 0
+    pub dh: int = 0
+    pub pred: int = 0
+    pub latched: bool = false
+    pub q: Vector<int> = Vector {}
+    pub coef: int* = null
+end
+
+func _jd_build(bits: Vector<int>, vals: Vector<int>): _JdHuff:
+    mut t := _JdHuff { ok = true }
+    repeat 18:
+        t.maxcode.push(0 - 1)
+        t.valoff.push(0)
+    end
+    repeat vals.len() in i:
+        t.vals.push(vals.get(i))
+    end
+    repeat 512:
+        t.look.push(0)
+    end
+    mut code := 0
+    mut k := 0
+    mut l := 1
+    until l <= 16:
+        cnt := bits.get(l - 1)
+        if cnt > 0:
+            t.valoff.set(l, k - code)
+            repeat cnt:
+                if l <= 9:
+                    shift := 9 - l
+                    repeat 1 << shift in fill:
+                        t.look.set((code << shift) | fill, (vals.get(k) << 8) | l)
+                    end
+                end
+                code += 1
+                k += 1
+            end
+            t.maxcode.set(l, code - 1)
+        end
+        code = code << 1
+        l += 1
+    end
+    t.maxcode.set(17, 2147483647)
+    ret t
+end
+
+func _jd_fill(b &: _JdBits):
+    until b.nbits <= 32:
+        mut v := 0
+        if not b.marker and b.pos < b.n:
+            c := b.bp[b.pos] as int
+            if c == 255:
+                nx := b.pos + 1 < b.n ? b.bp[b.pos + 1] as int : 217
+                if nx == 0:
+                    v = 255
+                    b.pos += 2
+                else:
+                    b.marker = true
+                end
+            else:
+                v = c
+                b.pos += 1
+            end
+        end
+        b.acc = ((b.acc << 8) | (v as i64)) & (281474976710655 as i64)
+        b.nbits += 8
+    end
+end
+
+func _jd_bits(b &: _JdBits, n: int): int:
+    if n == 0:
+        ret 0
+    end
+    if b.nbits < n:
+        _jd_fill(b)
+    end
+    b.nbits -= n
+    ret ((b.acc >> b.nbits) & (((1 as i64) << n) - 1)) as int
+end
+
+func _jd_decode(b &: _JdBits, t: _JdHuff): int:
+    if b.nbits < 16:
+        _jd_fill(b)
+    end
+    peek := ((b.acc >> (b.nbits - 9)) & (511 as i64)) as int
+    e := t.look.get(peek)
+    if e != 0:
+        b.nbits -= e & 255
+        ret e >> 8
+    end
+    mut code := 0
+    mut l := 0
+    until l < 16:
+        code = (code << 1) | _jd_bits(b, 1)
+        l += 1
+        if code <= t.maxcode.get(l):
+            idx := code + t.valoff.get(l)
+            ret idx >= 0 and idx < t.vals.len() ? t.vals.get(idx) : 0
+        end
+    end
+    ret 0
+end
+
+func _jd_extend(v: int, s: int): int:
+    ret v < (1 << (s - 1)) ? v - (1 << s) + 1 : v
+end
+
+func _jd_range(x: int): int:
+    v := x & 1023
+    if v < 128:
+        ret v + 128
+    end
+    if v < 512:
+        ret 255
+    end
+    if v < 896:
+        ret 0
+    end
+    ret v - 896
+end
+
+func _jd_idct(c: int*, base: int, q: Vector<int>, out: u8*, stride: int, ox: int, oy: int):
+    mut ws := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    repeat 8 in col:
+        d0 := c[base + col] * q.get(col)
+        d1 := c[base + 8 + col] * q.get(8 + col)
+        d2 := c[base + 16 + col] * q.get(16 + col)
+        d3 := c[base + 24 + col] * q.get(24 + col)
+        d4 := c[base + 32 + col] * q.get(32 + col)
+        d5 := c[base + 40 + col] * q.get(40 + col)
+        d6 := c[base + 48 + col] * q.get(48 + col)
+        d7 := c[base + 56 + col] * q.get(56 + col)
+        z1 := (d2 + d6) * 4433
+        tmp2 := z1 + d6 * (0 - 15137)
+        tmp3 := z1 + d2 * 6270
+        tmp0 := (d0 + d4) << 13
+        tmp1 := (d0 - d4) << 13
+        tmp10 := tmp0 + tmp3
+        tmp13 := tmp0 - tmp3
+        tmp11 := tmp1 + tmp2
+        tmp12 := tmp1 - tmp2
+        mut o0 := d7
+        mut o1 := d5
+        mut o2 := d3
+        mut o3 := d1
+        mut y1 := o0 + o3
+        mut y2 := o1 + o2
+        mut y3 := o0 + o2
+        mut y4 := o1 + o3
+        y5 := (y3 + y4) * 9633
+        o0 = o0 * 2446
+        o1 = o1 * 16819
+        o2 = o2 * 25172
+        o3 = o3 * 12299
+        y1 = y1 * (0 - 7373)
+        y2 = y2 * (0 - 20995)
+        y3 = y3 * (0 - 16069) + y5
+        y4 = y4 * (0 - 3196) + y5
+        o0 += y1 + y3
+        o1 += y2 + y4
+        o2 += y2 + y3
+        o3 += y1 + y4
+        ws[col] = (tmp10 + o3 + 1024) >> 11
+        ws[56 + col] = (tmp10 - o3 + 1024) >> 11
+        ws[8 + col] = (tmp11 + o2 + 1024) >> 11
+        ws[48 + col] = (tmp11 - o2 + 1024) >> 11
+        ws[16 + col] = (tmp12 + o1 + 1024) >> 11
+        ws[40 + col] = (tmp12 - o1 + 1024) >> 11
+        ws[24 + col] = (tmp13 + o0 + 1024) >> 11
+        ws[32 + col] = (tmp13 - o0 + 1024) >> 11
+    end
+    repeat 8 in row:
+        r := row * 8
+        z1 := (ws[r + 2] + ws[r + 6]) * 4433
+        tmp2 := z1 + ws[r + 6] * (0 - 15137)
+        tmp3 := z1 + ws[r + 2] * 6270
+        tmp0 := (ws[r] + ws[r + 4]) << 13
+        tmp1 := (ws[r] - ws[r + 4]) << 13
+        tmp10 := tmp0 + tmp3
+        tmp13 := tmp0 - tmp3
+        tmp11 := tmp1 + tmp2
+        tmp12 := tmp1 - tmp2
+        mut o0 := ws[r + 7]
+        mut o1 := ws[r + 5]
+        mut o2 := ws[r + 3]
+        mut o3 := ws[r + 1]
+        mut y1 := o0 + o3
+        mut y2 := o1 + o2
+        mut y3 := o0 + o2
+        mut y4 := o1 + o3
+        y5 := (y3 + y4) * 9633
+        o0 = o0 * 2446
+        o1 = o1 * 16819
+        o2 = o2 * 25172
+        o3 = o3 * 12299
+        y1 = y1 * (0 - 7373)
+        y2 = y2 * (0 - 20995)
+        y3 = y3 * (0 - 16069) + y5
+        y4 = y4 * (0 - 3196) + y5
+        o0 += y1 + y3
+        o1 += y2 + y4
+        o2 += y2 + y3
+        o3 += y1 + y4
+        p := (oy + row) * stride + ox
+        out[p] = _jd_range((tmp10 + o3 + 131072) >> 18) as u8
+        out[p + 7] = _jd_range((tmp10 - o3 + 131072) >> 18) as u8
+        out[p + 1] = _jd_range((tmp11 + o2 + 131072) >> 18) as u8
+        out[p + 6] = _jd_range((tmp11 - o2 + 131072) >> 18) as u8
+        out[p + 2] = _jd_range((tmp12 + o1 + 131072) >> 18) as u8
+        out[p + 5] = _jd_range((tmp12 - o1 + 131072) >> 18) as u8
+        out[p + 3] = _jd_range((tmp13 + o0 + 131072) >> 18) as u8
+        out[p + 4] = _jd_range((tmp13 - o0 + 131072) >> 18) as u8
+    end
+end
+
+func _jd_restart(b &: _JdBits):
+    b.nbits = 0
+    b.acc = 0 as i64
+    b.marker = false
+    if b.pos + 1 < b.n and b.bp[b.pos] as int == 255:
+        m := b.bp[b.pos + 1] as int
+        if m >= 208 and m <= 215:
+            b.pos += 2
+        end
+    end
+end
+
+func _jd_block(b &: _JdBits, cp &: _JdComp, at: int, dc: _JdHuff, ac: _JdHuff, prog: bool, ss: int, se: int, ah: int, al: int, eobrun &: int):
+    c := cp.coef
+    if not prog:
+        s := _jd_decode(b, dc)
+        mut diff := 0
+        if s > 0:
+            diff = _jd_extend(_jd_bits(b, s), s)
+        end
+        cp.pred += diff
+        c[at] = cp.pred
+        mut k := 1
+        until k < 64:
+            rs := _jd_decode(b, ac)
+            r := rs >> 4
+            sz := rs & 15
+            if sz > 0:
+                k += r
+                if k > 63:
+                    ret
+                end
+                c[at + _JD_NATURAL[k]] = _jd_extend(_jd_bits(b, sz), sz)
+                k += 1
+            else r == 15:
+                k += 16
+            else:
+                ret
+            end
+        end
+        ret
+    end
+    if ss == 0:
+        if ah == 0:
+            s := _jd_decode(b, dc)
+            mut diff := 0
+            if s > 0:
+                diff = _jd_extend(_jd_bits(b, s), s)
+            end
+            cp.pred += diff
+            c[at] = cp.pred << al
+        else:
+            if _jd_bits(b, 1) == 1:
+                c[at] = c[at] | (1 << al)
+            end
+        end
+        ret
+    end
+    if ah == 0:
+        if eobrun > 0:
+            eobrun -= 1
+            ret
+        end
+        mut k := ss
+        until k <= se:
+            rs := _jd_decode(b, ac)
+            r := rs >> 4
+            sz := rs & 15
+            if sz > 0:
+                k += r
+                if k > 63:
+                    ret
+                end
+                c[at + _JD_NATURAL[k]] = _jd_extend(_jd_bits(b, sz), sz) << al
+                k += 1
+            else r == 15:
+                k += 16
+            else:
+                eobrun = (1 << r) - 1
+                if r > 0:
+                    eobrun += _jd_bits(b, r)
+                end
+                ret
+            end
+        end
+        ret
+    end
+    p1 := 1 << al
+    m1 := 0 - (1 << al)
+    mut k := ss
+    if eobrun == 0:
+        until k <= se:
+            rs := _jd_decode(b, ac)
+            mut r := rs >> 4
+            sz := rs & 15
+            mut val := 0
+            mut stop := false
+            if sz > 0:
+                val = _jd_bits(b, 1) == 1 ? p1 : m1
+            else r != 15:
+                eobrun = 1 << r
+                if r > 0:
+                    eobrun += _jd_bits(b, r)
+                end
+                stop = true
+            end
+            if stop:
+                break
+            end
+            mut placed := false
+            until k <= se and not placed:
+                pos := at + _JD_NATURAL[k]
+                cur := c[pos]
+                if cur != 0:
+                    if _jd_bits(b, 1) == 1 and (cur & p1) == 0:
+                        c[pos] = cur >= 0 ? cur + p1 : cur + m1
+                    end
+                    k += 1
+                else:
+                    if r == 0:
+                        if val != 0:
+                            c[pos] = val
+                        end
+                        k += 1
+                        placed = true
+                    else:
+                        r -= 1
+                        k += 1
+                    end
+                end
+            end
+        end
+    end
+    if eobrun > 0:
+        until k <= se:
+            pos := at + _JD_NATURAL[k]
+            cur := c[pos]
+            if cur != 0:
+                if _jd_bits(b, 1) == 1 and (cur & p1) == 0:
+                    c[pos] = cur >= 0 ? cur + p1 : cur + m1
+                end
+            end
+            k += 1
+        end
+        eobrun -= 1
+    end
+end
+
+func _jd_clampi(v: int, lo: int, hi: int): int:
+    ret v < lo ? lo : (v > hi ? hi : v)
+end
+
+func _jd_plane(cp: _JdComp, plane: u8*, sw: int, hx: int, vx: int, width: int, height: int): u8*:
+    out := mem.AllocateZeroed((width * height) as u64) as u8*
+    dw := cp.dw
+    dh := cp.dh
+    if hx == 1 and vx == 1:
+        repeat height in y:
+            repeat width in x:
+                out[y * width + x] = plane[y * sw + x]
+            end
+        end
+    else hx == 2 and vx == 1 and dw > 2:
+        repeat height in y:
+            row := y * sw
+            repeat width in x:
+                i := x >> 1
+                cur := plane[row + i] as int
+                mut v := cur
+                if (x & 1) == 0:
+                    v = i == 0 ? cur : (cur * 3 + (plane[row + i - 1] as int) + 1) >> 2
+                else:
+                    v = i == dw - 1 ? cur : (cur * 3 + (plane[row + i + 1] as int) + 2) >> 2
+                end
+                out[y * width + x] = v as u8
+            end
+        end
+    else hx == 1 and vx == 2:
+        repeat height in y:
+            iy := y >> 1
+            ny := _jd_clampi((y & 1) == 0 ? iy - 1 : iy + 1, 0, dh - 1)
+            bias := (y & 1) == 0 ? 1 : 2
+            repeat width in x:
+                out[y * width + x] = (((plane[iy * sw + x] as int) * 3 + (plane[ny * sw + x] as int) + bias) >> 2) as u8
+            end
+        end
+    else hx == 2 and vx == 2 and dw > 2:
+        repeat height in y:
+            iy := y >> 1
+            ny := _jd_clampi((y & 1) == 0 ? iy - 1 : iy + 1, 0, dh - 1)
+            repeat width in x:
+                i := x >> 1
+                cs := (plane[iy * sw + i] as int) * 3 + (plane[ny * sw + i] as int)
+                mut v := 0
+                if (x & 1) == 0:
+                    if i == 0:
+                        v = (cs * 4 + 8) >> 4
+                    else:
+                        last := (plane[iy * sw + i - 1] as int) * 3 + (plane[ny * sw + i - 1] as int)
+                        v = (cs * 3 + last + 8) >> 4
+                    end
+                else:
+                    if i == dw - 1:
+                        v = (cs * 4 + 7) >> 4
+                    else:
+                        next := (plane[iy * sw + i + 1] as int) * 3 + (plane[ny * sw + i + 1] as int)
+                        v = (cs * 3 + next + 7) >> 4
+                    end
+                end
+                out[y * width + x] = v as u8
+            end
+        end
+    else:
+        repeat height in y:
+            repeat width in x:
+                out[y * width + x] = plane[(y / vx) * sw + x / hx]
+            end
+        end
+    end
+    ret out
+end
+
+func _jd_free_comps(comps &: Vector<_JdComp>):
+    repeat comps.len() in i:
+        mut cp := comps.get(i)
+        cp.q.free()
+        if cp.coef != null:
+            mem.Free(cp.coef as void*)
+        end
+    end
+    comps.free()
+end
+
+func _jd_free_tables(tables &: Vector<_JdHuff>):
+    repeat tables.len() in i:
+        mut t := tables.get(i)
+        t.maxcode.free()
+        t.valoff.free()
+        t.vals.free()
+        t.look.free()
+    end
+    tables.free()
+end
+
+func _jd_ycc(y: int, cb: int, cr: int, out: u8*, o: int):
+    x_cr := cr - 128
+    x_cb := cb - 128
+    r := y + ((91881 * x_cr + 32768) >> 16)
+    g := y + ((0 - 22554 * x_cb + 32768 - 46802 * x_cr) >> 16)
+    b := y + ((116130 * x_cb + 32768) >> 16)
+    out[o] = _jd_clampi(r, 0, 255) as u8
+    out[o + 1] = _jd_clampi(g, 0, 255) as u8
+    out[o + 2] = _jd_clampi(b, 0, 255) as u8
+end
+
+func _jd_u16(bp: u8*, at: int): int:
+    ret ((bp[at] as int) << 8) | (bp[at + 1] as int)
+end
+
+func _jd_decode_all(p: void*, n: int, ok &: bool): Image:
+    ok = false
+    bp := p as u8*
+    if n < 4 or bp[0] as int != 255 or bp[1] as int != 216:
+        ret New(0, 0)
+    end
+    mut qt := Vector {} as Vector<Vector<int>>
+    repeat 4:
+        mut q := Vector {} as Vector<int>
+        repeat 64:
+            q.push(1)
+        end
+        qt.push(q)
+    end
+    mut tables := Vector {} as Vector<_JdHuff>
+    repeat 8:
+        tables.push(_JdHuff {})
+    end
+    mut comps := Vector {} as Vector<_JdComp>
+    mut width := 0
+    mut height := 0
+    mut prog := false
+    mut frame := false
+    mut restart := 0
+    mut adobe := 0 - 1
+    mut hmax := 1
+    mut vmax := 1
+    mut mcux := 0
+    mut mcuy := 0
+    mut scans := 0
+    mut bad := false
+    mut pos := 2
+    mut done := false
+    until not done and not bad and pos + 4 <= n:
+        if bp[pos] as int != 255:
+            pos += 1
+            continue
+        end
+        marker := bp[pos + 1] as int
+        if marker == 255 or marker == 0 or (marker >= 208 and marker <= 215) or marker == 1:
+            pos += 1
+            continue
+        end
+        if marker == 217:
+            done = true
+            break
+        end
+        len := _jd_u16(bp, pos + 2)
+        seg := pos + 4
+        send := pos + 2 + len
+        if len < 2 or send > n:
+            bad = true
+            break
+        end
+        if marker == 219:
+            mut at := seg
+            until at < send:
+                pq := (bp[at] as int) >> 4
+                tq := (bp[at] as int) & 15
+                at += 1
+                if tq > 3 or at + 64 * (pq + 1) > send:
+                    bad = true
+                    break
+                end
+                mut q := qt.get(tq)
+                repeat 64 in k:
+                    v := pq == 0 ? bp[at + k] as int : _jd_u16(bp, at + 2 * k)
+                    q.set(_JD_NATURAL[k], v)
+                end
+                at += 64 * (pq + 1)
+            end
+        else marker == 196:
+            mut at := seg
+            until at + 17 <= send:
+                tc := (bp[at] as int) >> 4
+                th := (bp[at] as int) & 15
+                if tc > 1 or th > 3:
+                    bad = true
+                    break
+                end
+                mut bits := Vector {} as Vector<int>
+                mut total := 0
+                repeat 16 in i:
+                    bits.push(bp[at + 1 + i] as int)
+                    total += bp[at + 1 + i] as int
+                end
+                if total > 256 or at + 17 + total > send:
+                    bits.free()
+                    bad = true
+                    break
+                end
+                mut vals := Vector {} as Vector<int>
+                repeat total in i:
+                    vals.push(bp[at + 17 + i] as int)
+                end
+                mut old := tables.get(tc * 4 + th)
+                old.maxcode.free()
+                old.valoff.free()
+                old.vals.free()
+                old.look.free()
+                tables.set(tc * 4 + th, _jd_build(bits, vals))
+                bits.free()
+                vals.free()
+                at += 17 + total
+            end
+        else marker == 221:
+            if len >= 4:
+                restart = _jd_u16(bp, seg)
+            end
+        else marker == 238:
+            if len >= 14 and bp[seg] as int == 65 and bp[seg + 1] as int == 100 and bp[seg + 2] as int == 111 and bp[seg + 3] as int == 98 and bp[seg + 4] as int == 101:
+                adobe = bp[seg + 11] as int
+            end
+        else marker == 192 or marker == 193 or marker == 194:
+            if frame or len < 8 or bp[seg] as int != 8:
+                bad = true
+                break
+            end
+            prog = marker == 194
+            height = _jd_u16(bp, seg + 1)
+            width = _jd_u16(bp, seg + 3)
+            nc := bp[seg + 5] as int
+            if width == 0 or height == 0 or (nc != 1 and nc != 3 and nc != 4) or len < 8 + nc * 3 or (width as i64) * (height as i64) > (268435456 as i64):
+                bad = true
+                break
+            end
+            repeat nc in i:
+                b := seg + 6 + i * 3
+                hv := bp[b + 1] as int
+                cp := _JdComp { id = bp[b] as int, h = hv >> 4, v = hv & 15, tq = (bp[b + 2] as int) & 3 }
+                if cp.h < 1 or cp.h > 4 or cp.v < 1 or cp.v > 4:
+                    bad = true
+                end
+                if cp.h > hmax:
+                    hmax = cp.h
+                end
+                if cp.v > vmax:
+                    vmax = cp.v
+                end
+                comps.push(cp)
+            end
+            if bad:
+                break
+            end
+            mcux = (width + 8 * hmax - 1) / (8 * hmax)
+            mcuy = (height + 8 * vmax - 1) / (8 * vmax)
+            repeat nc in i:
+                mut cp := comps.get(i)
+                if hmax % cp.h != 0 or vmax % cp.v != 0:
+                    bad = true
+                end
+                cp.bw = mcux * cp.h
+                cp.bh = mcuy * cp.v
+                cp.dw = (width * cp.h + hmax - 1) / hmax
+                cp.dh = (height * cp.v + vmax - 1) / vmax
+                cp.coef = mem.AllocateZeroed((cp.bw * cp.bh * 64 * 4) as u64) as int*
+                comps.set(i, cp)
+            end
+            frame = true
+        else marker >= 195 and marker <= 207 and marker != 196 and marker != 200 and marker != 204:
+            bad = true
+            break
+        else marker == 218:
+            if not frame or len < 6:
+                bad = true
+                break
+            end
+            ns := bp[seg] as int
+            if ns < 1 or ns > 4 or len < 6 + ns * 2:
+                bad = true
+                break
+            end
+            mut sc := Vector {} as Vector<int>
+            repeat ns in i:
+                cid := bp[seg + 1 + i * 2] as int
+                tsel := bp[seg + 2 + i * 2] as int
+                mut found := 0 - 1
+                repeat comps.len() in j:
+                    if comps.get(j).id == cid:
+                        found = j
+                    end
+                end
+                if found < 0:
+                    bad = true
+                else:
+                    mut cp := comps.get(found)
+                    cp.td = (tsel >> 4) & 3
+                    cp.ta = tsel & 3
+                    cp.pred = 0
+                    if not cp.latched:
+                        repeat 64 in k:
+                            cp.q.push(qt.get(cp.tq).get(k))
+                        end
+                        cp.latched = true
+                    end
+                    comps.set(found, cp)
+                    sc.push(found)
+                end
+            end
+            ss := bp[seg + 1 + ns * 2] as int
+            se := bp[seg + 2 + ns * 2] as int
+            ah := (bp[seg + 3 + ns * 2] as int) >> 4
+            al := (bp[seg + 3 + ns * 2] as int) & 15
+            if bad or (prog and (ss > se or se > 63 or (ss == 0 and se != 0) or (ss > 0 and ns != 1))):
+                sc.free()
+                bad = true
+                break
+            end
+            repeat ns in i:
+                cp := comps.get(sc.get(i))
+                needs_dc := not prog or (ss == 0 and ah == 0)
+                needs_ac := not prog or ss > 0
+                if (needs_dc and not tables.get(cp.td).ok) or (needs_ac and not tables.get(4 + cp.ta).ok):
+                    bad = true
+                end
+            end
+            if bad:
+                sc.free()
+                break
+            end
+            mut b := _JdBits { bp = bp, n = n, pos = send }
+            mut eobrun := 0
+            mut togo := restart
+            if ns == 1:
+                ci := sc.get(0)
+                mut cp := comps.get(ci)
+                bw := (cp.dw + 7) / 8
+                bh := (cp.dh + 7) / 8
+                dct := tables.get(cp.td)
+                act := tables.get(4 + cp.ta)
+                repeat bh in yb:
+                    repeat bw in bx:
+                        if restart > 0:
+                            if togo == 0:
+                                _jd_restart(b)
+                                cp.pred = 0
+                                eobrun = 0
+                                togo = restart
+                            end
+                            togo -= 1
+                        end
+                        _jd_block(b, cp, (yb * cp.bw + bx) * 64, dct, act, prog, ss, se, ah, al, eobrun)
+                    end
+                end
+                comps.set(ci, cp)
+            else:
+                repeat mcuy in my:
+                    repeat mcux in mx:
+                        if restart > 0:
+                            if togo == 0:
+                                _jd_restart(b)
+                                repeat ns in i:
+                                    mut cp := comps.get(sc.get(i))
+                                    cp.pred = 0
+                                    comps.set(sc.get(i), cp)
+                                end
+                                eobrun = 0
+                                togo = restart
+                            end
+                            togo -= 1
+                        end
+                        repeat ns in i:
+                            ci := sc.get(i)
+                            mut cp := comps.get(ci)
+                            dct := tables.get(cp.td)
+                            act := tables.get(4 + cp.ta)
+                            repeat cp.v in vy:
+                                repeat cp.h in hx:
+                                    _jd_block(b, cp, ((my * cp.v + vy) * cp.bw + mx * cp.h + hx) * 64, dct, act, prog, ss, se, ah, al, eobrun)
+                                end
+                            end
+                            comps.set(ci, cp)
+                        end
+                    end
+                end
+            end
+            sc.free()
+            scans += 1
+            pos = b.pos
+            if not prog:
+                done = comps.len() > 0 and ns == comps.len()
+            end
+            continue
+        end
+        pos = send
+    end
+    if bad or not frame or scans == 0:
+        _jd_free_comps(comps)
+        _jd_free_tables(tables)
+        repeat 4 in i:
+            mut q := qt.get(i)
+            q.free()
+        end
+        qt.free()
+        ret New(0, 0)
+    end
+    nc := comps.len()
+    mut planes := Vector {} as Vector<i64>
+    repeat nc in i:
+        mut cp := comps.get(i)
+        if not cp.latched:
+            repeat 64 in k:
+                cp.q.push(qt.get(cp.tq).get(k))
+            end
+            cp.latched = true
+            comps.set(i, cp)
+        end
+        sw := cp.bw * 8
+        plane := mem.AllocateZeroed((sw * cp.bh * 8) as u64) as u8*
+        repeat cp.bh in yb:
+            repeat cp.bw in bx:
+                _jd_idct(cp.coef, (yb * cp.bw + bx) * 64, cp.q, plane, sw, bx * 8, yb * 8)
+            end
+        end
+        full := _jd_plane(cp, plane, sw, hmax / cp.h, vmax / cp.v, width, height)
+        mem.Free(plane as void*)
+        planes.push(full as i64)
+    end
+    img := New(width, height)
+    dst := img.pixels as u8*
+    p0 := planes.get(0) as u8*
+    total := width * height
+    if nc == 1:
+        repeat total in i:
+            v := p0[i]
+            dst[i * 4] = v
+            dst[i * 4 + 1] = v
+            dst[i * 4 + 2] = v
+            dst[i * 4 + 3] = 255 as u8
+        end
+    else:
+        p1 := planes.get(1) as u8*
+        p2 := planes.get(2) as u8*
+        mut transform := adobe
+        if transform < 0:
+            transform = nc == 3 and comps.get(0).id == 82 and comps.get(1).id == 71 and comps.get(2).id == 66 ? 0 : 1
+            if nc == 4:
+                transform = 0
+            end
+        end
+        repeat total in i:
+            if transform == 0:
+                dst[i * 4] = p0[i]
+                dst[i * 4 + 1] = p1[i]
+                dst[i * 4 + 2] = p2[i]
+            else:
+                _jd_ycc(p0[i] as int, p1[i] as int, p2[i] as int, dst, i * 4)
+            end
+            if nc == 4:
+                k := (planes.get(3) as u8*)[i] as int
+                repeat 3 in ch:
+                    c := dst[i * 4 + ch] as int
+                    dst[i * 4 + ch] = ((c * k + 127) / 255) as u8
+                end
+            end
+            dst[i * 4 + 3] = 255 as u8
+        end
+    end
+    repeat nc in i:
+        mem.Free(planes.get(i) as void*)
+    end
+    planes.free()
+    _jd_free_comps(comps)
+    _jd_free_tables(tables)
+    repeat 4 in i:
+        mut q := qt.get(i)
+        q.free()
+    end
+    qt.free()
+    ok = true
+    ret img
+end

@@ -16,6 +16,7 @@ package archive
 
 import compress
 import filepath
+import mem
 
 const _RAR4_SIG_LEN := 7
 const _RAR5_SIG_LEN := 8
@@ -23,13 +24,13 @@ const _RAR5_SIG_LEN := 8
 func _rar4_sig_match(p: void*, n: int): bool:
     if n < _RAR4_SIG_LEN: ret false end
     bp := p as u8*
-    ret bp[0] as int == 0x52 && bp[1] as int == 0x61 && bp[2] as int == 0x72 && bp[3] as int == 0x21 && bp[4] as int == 0x1a && bp[5] as int == 0x07 && bp[6] as int == 0x00
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x00
 end
 
 func _rar5_sig_match(p: void*, n: int): bool:
     if n < _RAR5_SIG_LEN: ret false end
     bp := p as u8*
-    ret bp[0] as int == 0x52 && bp[1] as int == 0x61 && bp[2] as int == 0x72 && bp[3] as int == 0x21 && bp[4] as int == 0x1a && bp[5] as int == 0x07 && bp[6] as int == 0x01 && bp[7] as int == 0x00
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x01 and bp[7] as int == 0x00
 end
 
 func _rar_bytes_to_str(p: void*, off: int, n: int): str:
@@ -38,6 +39,12 @@ func _rar_bytes_to_str(p: void*, off: int, n: int): str:
     s := compress.BufToStrUnsafe(buf)
     compress.BufFree(buf)
     ret s
+end
+
+func _rar_free_name(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
 end
 
 func _rar4_read_file_fields(p: void*, block_start: int, pack_size_out &: int, unp_size_out &: int, method_out &: int, flags_out &: int, name_out &: str): int:
@@ -109,7 +116,7 @@ func _rar5_parse_block(p: void*, block_start: int, n: int, header_type_out &: in
     name_out = ""
     data_offset_out = header_data_start + hsize
 
-    if header_type == 2 || header_type == 3:
+    if header_type == 2 or header_type == 3:
         file_flags := _rar5_vint(p, cur, vlen) as int
         cur += vlen
         unp_size := _rar5_vint(p, cur, vlen) as int
@@ -187,13 +194,16 @@ func _rar5_list(p: void*, n: int, out &: Vector<Entry>):
         mut data_offset := 0
         mut data_size := 0
         good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, name, data_offset, data_size)
-        if !good || total_size <= 0:
+        if not (good and total_size > 0 and header_type == 2 and name.len() > 0):
+            _rar_free_name(name)
+        end
+        if not good or total_size <= 0:
             break
         end
         if header_type == 5:
             break
         end
-        if header_type == 2 && name.len() > 0:
+        if header_type == 2 and name.len() > 0:
             e := Entry {
                 name = name
                 size = unp_size as i64
@@ -228,7 +238,9 @@ func _rar4_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: b
             mut flags := 0
             mut nm := ""
             _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, nm)
-            if nm == name:
+            hit := nm == name
+            _rar_free_name(nm)
+            if hit:
                 if (flags & 0x0004) != 0:
                     ret
                 end
@@ -259,13 +271,15 @@ func _rar5_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: b
         mut data_offset := 0
         mut data_size := 0
         good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, nm, data_offset, data_size)
-        if !good || total_size <= 0:
+        hit := header_type == 2 and nm == name and not is_dir
+        _rar_free_name(nm)
+        if not good or total_size <= 0:
             break
         end
         if header_type == 5:
             break
         end
-        if header_type == 2 && nm == name && !is_dir:
+        if hit:
             if method != 0:
                 ret
             end
@@ -279,9 +293,9 @@ func _rar5_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: b
 end
 
 @en "IsRar"
-@fa "آیا آر ای آر است"
+@fa "آر ای آر است"
 pub func IsRar(p: void*, n: int): bool:
-    ret _rar4_sig_match(p, n) || _rar5_sig_match(p, n)
+    ret _rar4_sig_match(p, n) or _rar5_sig_match(p, n)
 end
 
 @en "RarList"
@@ -321,15 +335,22 @@ pub func RarExtractAll(p: void*, n: int, destdir: str): bool:
     mut i := 0
     until i < entries.len():
         e := entries.get(i)
+        if not _safe_entry_name(e.name):
+            all_ok = false
+            i += 1
+            continue
+        end
         outpath := filepath.Join(destdir, e.name)
         if e.is_dir:
             EnsureDir(outpath)
         else:
-            EnsureDir(filepath.Dir(outpath))
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
             mut ok := false
             data := RarExtractByName(p, n, e.name, ok)
             if ok:
-                if !WriteBinaryFileBuf(outpath, data):
+                if not WriteBinaryFileBuf(outpath, data):
                     all_ok = false
                 end
             else:
@@ -337,8 +358,9 @@ pub func RarExtractAll(p: void*, n: int, destdir: str): bool:
             end
             compress.BufFree(data)
         end
+        mem.Free(outpath as void*)
         i += 1
     end
-    defer entries.free()
+    defer FreeEntries(entries)
     ret all_ok
 end

@@ -32,6 +32,8 @@ const _TTF_MAX_POINTS := 20000
 
 const _TTF_MAX_DEPTH := 5
 
+const _TTF_MAX_WORK := 1024
+
 struct _GlyphPoint:
     pub x: f64 = 0.0
     pub y: f64 = 0.0
@@ -53,7 +55,7 @@ end
 func _ttf_glyph_range(f: Font, gid: int, off &: int, glen &: int): bool:
     off = 0
     glen = 0
-    if gid < 0 || gid >= f.num_glyphs:
+    if gid < 0 or gid >= f.num_glyphs:
         ret false
     end
     mut s := 0
@@ -65,7 +67,7 @@ func _ttf_glyph_range(f: Font, gid: int, off &: int, glen &: int): bool:
         s = _ttf_u16(f.data, f.size, f.loca + gid * 2) * 2
         e = _ttf_u16(f.data, f.size, f.loca + gid * 2 + 2) * 2
     end
-    if e <= s || s < 0:
+    if e <= s or s < 0:
         ret false
     end
     off = f.glyf + s
@@ -85,7 +87,7 @@ func _ttf_read_flags(f: Font, start: int, npoints: int, flags &: Vector<int>): i
             r := _ttf_u8(f.data, f.size, cur)
             cur += 1
             mut k := 0
-            until k < r && n < npoints:
+            until k < r and n < npoints:
                 flags.push(fl)
                 n += 1
                 k += 1
@@ -122,7 +124,7 @@ end
 func _ttf_simple_glyph(f: Font, goff: int, ncont: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>):
     base := pts.len()
     npoints := _ttf_u16(f.data, f.size, goff + 10 + (ncont - 1) * 2) + 1
-    if npoints <= 0 || npoints > _TTF_MAX_POINTS:
+    if npoints <= 0 or npoints > _TTF_MAX_POINTS or pts.len() + npoints > _TTF_MAX_POINTS:
         ret
     end
     mut i := 0
@@ -197,10 +199,10 @@ func _ttf_component_xform(f: Font, at: int, flags: int, sa &: f64, sb &: f64, sc
     ret cur
 end
 
-func _ttf_composite_glyph(f: Font, goff: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int):
+func _ttf_composite_glyph(f: Font, goff: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int, work &: int):
     mut cur := goff + 10
     mut more := true
-    until more:
+    until more and pts.len() <= _TTF_MAX_POINTS and work <= _TTF_MAX_WORK:
         flags := _ttf_u16(f.data, f.size, cur)
         sub := _ttf_u16(f.data, f.size, cur + 2)
         mut sa := 1.0
@@ -210,18 +212,19 @@ func _ttf_composite_glyph(f: Font, goff: int, a: f64, b: f64, c: f64, d: f64, dx
         mut ox := 0.0
         mut oy := 0.0
         cur = _ttf_component_xform(f, cur + 4, flags, sa, sb, sc, sd, ox, oy)
-        _ttf_append_glyph(f, sub, a * sa + c * sb, b * sa + d * sb, a * sc + c * sd, b * sc + d * sd, a * ox + c * oy + dx, b * ox + d * oy + dy, pts, ends, depth + 1)
+        _ttf_append_glyph(f, sub, a * sa + c * sb, b * sa + d * sb, a * sc + c * sd, b * sc + d * sd, a * ox + c * oy + dx, b * ox + d * oy + dy, pts, ends, depth + 1, work)
         more = (flags & _TTF_MORE_COMP) != 0
     end
 end
 
-func _ttf_append_glyph(f: Font, gid: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int):
-    if depth >= _TTF_MAX_DEPTH:
+func _ttf_append_glyph(f: Font, gid: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, pts &: Vector<_GlyphPoint>, ends &: Vector<int>, depth: int, work &: int):
+    work += 1
+    if depth >= _TTF_MAX_DEPTH or pts.len() > _TTF_MAX_POINTS or work > _TTF_MAX_WORK:
         ret
     end
     mut goff := 0
     mut glen := 0
-    if !_ttf_glyph_range(f, gid, goff, glen):
+    if not _ttf_glyph_range(f, gid, goff, glen):
         ret
     end
     ncont := _ttf_i16(f.data, f.size, goff)
@@ -230,7 +233,7 @@ func _ttf_append_glyph(f: Font, gid: int, a: f64, b: f64, c: f64, d: f64, dx: f6
         ret
     end
     if ncont < 0:
-        _ttf_composite_glyph(f, goff, a, b, c, d, dx, dy, pts, ends, depth)
+        _ttf_composite_glyph(f, goff, a, b, c, d, dx, dy, pts, ends, depth, work)
     end
 end
 
@@ -243,7 +246,7 @@ pub func GlyphBox(f: Font, glyph: int, x0 &: int, y0 &: int, x1 &: int, y1 &: in
     y1 = 0
     mut goff := 0
     mut glen := 0
-    if !_ttf_glyph_range(f, glyph, goff, glen):
+    if not _ttf_glyph_range(f, glyph, goff, glen):
         ret false
     end
     x0 = _ttf_i16(f.data, f.size, goff + 2)
@@ -258,7 +261,7 @@ end
 pub func GlyphHasOutline(f: Font, glyph: int): bool:
     mut goff := 0
     mut glen := 0
-    if !_ttf_glyph_range(f, glyph, goff, glen):
+    if not _ttf_glyph_range(f, glyph, goff, glen):
         ret false
     end
     ret _ttf_i16(f.data, f.size, goff) != 0

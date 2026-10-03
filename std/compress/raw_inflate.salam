@@ -125,12 +125,18 @@ end
 
 func _decode_raw_symbol(r &: BitReader, t: _RawHuffTable): int:
     mut cur := 0
-    until !t.tleaf.get(cur):
+    until not t.tleaf.get(cur):
+        if r.bad:
+            ret -1
+        end
         bit := BitReadBit(r)
         if bit == 0:
             cur = t.tleft.get(cur)
         else:
             cur = t.tright.get(cur)
+        end
+        if cur < 0:
+            ret -1
         end
     end
     ret t.tsym.get(cur)
@@ -164,7 +170,7 @@ end
 func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable): bool:
     until true:
         sym := _decode_raw_symbol(r, littable)
-        if sym < 0:
+        if sym < 0 or r.bad:
             ret false
         end
         if sym < 256:
@@ -174,12 +180,12 @@ func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable,
                 ret true
             end
             idx := sym - 257
-            if idx < 0 || idx >= 29:
+            if idx < 0 or idx >= 29:
                 ret false
             end
             length := _LENGTH_BASE[idx] + BitReadBits(r, _LENGTH_EXTRA[idx])
             dsym := _decode_raw_symbol(r, disttable)
-            if dsym < 0 || dsym >= 30:
+            if dsym < 0 or dsym >= 30:
                 ret false
             end
             dist := _DIST_BASE[dsym] + BitReadBits(r, _DIST_EXTRA[dsym])
@@ -200,6 +206,9 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf): bool:
     hlit := BitReadBits(r, 5) + 257
     hdist := BitReadBits(r, 5) + 1
     hclen := BitReadBits(r, 4) + 4
+    if hlit > 286 or hdist > 30:
+        ret false
+    end
 
     mut cl: int[19]
     repeat 19 in i: cl[i] = 0 end
@@ -217,7 +226,7 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf): bool:
     total := hlit + hdist
     until lengths.len() < total:
         sym := _decode_raw_symbol(r, cltable)
-        if sym < 0:
+        if sym < 0 or r.bad:
             _raw_huff_table_free(cltable)
             lengths.free()
             ret false
@@ -291,6 +300,9 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
     mut r := NewBitReader(p, n)
     mut cap := 0
     if expected_size > 0: cap = expected_size end
+    if (cap as i64) > (n as i64) * (1032 as i64) + (1024 as i64):
+        cap = n * 1032 + 1024
+    end
     mut out := NewByteBufCap(cap)
 
     mut bfinal := 0
@@ -302,7 +314,7 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
             len_val := BitReadBits(r, 16)
             _nlen := BitReadBits(r, 16)
             mut k := 0
-            until k < len_val:
+            until k < len_val and not r.bad:
                 b := BitReadBits(r, 8)
                 BufPush(out, b)
                 k += 1
@@ -318,13 +330,13 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
                 good := _raw_inflate_block(r, out, littable, disttable)
                 _raw_huff_table_free(littable)
                 _raw_huff_table_free(disttable)
-                if !good:
+                if not good:
                     ok = false
                     ret out
                 end
             else:
                 if btype == 2:
-                    if !_raw_inflate_dynamic_block(r, out):
+                    if not _raw_inflate_dynamic_block(r, out):
                         ok = false
                         ret out
                     end

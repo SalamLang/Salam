@@ -24,6 +24,8 @@ const _CT_TRNS := (116 << 24) | (82 << 16) | (78 << 8) | 83
 const _CT_IDAT := (73 << 24) | (68 << 16) | (65 << 8) | 84
 const _CT_IEND := (73 << 24) | (69 << 16) | (78 << 8) | 68
 
+const _ADAM7 := [0, 0, 8, 8, 4, 0, 8, 8, 0, 4, 4, 8, 2, 0, 4, 4, 0, 2, 2, 4, 1, 0, 2, 2, 0, 1, 1, 2]
+
 func _be_get32(p: void*, off: int): int:
     bp := p as u8*
     ret ((bp[off] as int) << 24) | ((bp[off + 1] as int) << 16) | ((bp[off + 2] as int) << 8) | (bp[off + 3] as int)
@@ -37,7 +39,7 @@ func _paeth(a: int, b: int, c: int): int:
     if pb < 0: pb = -pb end
     mut pc := p - c
     if pc < 0: pc = -pc end
-    if pa <= pb && pa <= pc: ret a end
+    if pa <= pb and pa <= pc: ret a end
     if pb <= pc: ret b end
     ret c
 end
@@ -89,7 +91,7 @@ func _zlib_unwrap(p: void*, n: int, expected_size: int, ok &: bool): compress.By
     body_len := n - 6
     mut inflate_ok := false
     out := compress.RawInflate(body, body_len, expected_size, inflate_ok)
-    if !inflate_ok:
+    if not inflate_ok:
         ret out
     end
     ok = true
@@ -105,42 +107,73 @@ func _channels_for(color_type: int): int:
     ret 0
 end
 
-func _sample8(rp: u8*, i: int, sample: int): int:
-    if sample == 1:
-        ret rp[i] as int
+func _png_depth_ok(ct: int, d: int): bool:
+    if ct == 0:
+        ret d == 1 or d == 2 or d == 4 or d == 8 or d == 16
     end
-    v := ((rp[i] as int) * 256) + (rp[i + 1] as int)
-    ret (v + 128) / 257
+    if ct == 3:
+        ret d == 1 or d == 2 or d == 4 or d == 8
+    end
+    ret d == 8 or d == 16
 end
 
-func _unfilter(raw: compress.ByteBuf, width: int, height: int, bpp: int, out: void*):
-    stride := width * bpp
-    op := out as u8*
-    mut y := 0
-    until y < height:
-        row_start := y * (1 + stride)
-        ftype := compress.BufGet(raw, row_start)
-        out_row := y * stride
-        prev_row := out_row - stride
-        mut i := 0
-        until i < stride:
-            x := compress.BufGet(raw, row_start + 1 + i)
-            mut a := 0
-            if i >= bpp: a = op[out_row + i - bpp] as int end
-            mut b := 0
-            if y > 0: b = op[prev_row + i] as int end
-            mut c := 0
-            if y > 0 && i >= bpp: c = op[prev_row + i - bpp] as int end
+func _png_pass_size(n: int, interlace: int, pass: int, horizontal: bool): int:
+    if interlace == 0:
+        ret n
+    end
+    start := horizontal ? _ADAM7[pass * 4] : _ADAM7[pass * 4 + 1]
+    step := horizontal ? _ADAM7[pass * 4 + 2] : _ADAM7[pass * 4 + 3]
+    if n <= start:
+        ret 0
+    end
+    ret (n - start + step - 1) / step
+end
 
+func _png_sample(rp: u8*, row: int, i: int, depth: int): int:
+    if depth == 8:
+        ret rp[row + i] as int
+    end
+    if depth == 16:
+        ret ((rp[row + i * 2] as int) << 8) | (rp[row + i * 2 + 1] as int)
+    end
+    bit := i * depth
+    byte := rp[row + bit / 8] as int
+    ret (byte >> (8 - depth - bit % 8)) & ((1 << depth) - 1)
+end
+
+func _png_scale(v: int, depth: int, maxv: int): int:
+    if depth == 8:
+        ret v
+    end
+    if depth == 16:
+        ret (v + 128) / 257
+    end
+    ret v * 255 / maxv
+end
+
+func _png_unfilter(rp: u8*, at: int, stride: int, rows: int, bpp: int):
+    repeat rows in y:
+        row := at + y * (1 + stride)
+        ftype := rp[row] as int
+        cur := row + 1
+        prev := row - stride
+        repeat stride in i:
+            x := rp[cur + i] as int
+            a := i >= bpp ? rp[cur + i - bpp] as int : 0
+            b := y > 0 ? rp[prev + i] as int : 0
+            c := y > 0 and i >= bpp ? rp[prev + i - bpp] as int : 0
             mut recon := x
-            if ftype == 1: recon = x + a end
-            if ftype == 2: recon = x + b end
-            if ftype == 3: recon = x + (a + b) / 2 end
-            if ftype == 4: recon = x + _paeth(a, b, c) end
-            op[out_row + i] = (recon & 255) as u8
-            i += 1
+            if ftype == 1:
+                recon = x + a
+            else ftype == 2:
+                recon = x + b
+            else ftype == 3:
+                recon = x + (a + b) / 2
+            else ftype == 4:
+                recon = x + _paeth(a, b, c)
+            end
+            rp[cur + i] = (recon & 255) as u8
         end
-        y += 1
     end
 end
 
@@ -183,45 +216,50 @@ pub func EncodePNG(img: Image): compress.ByteBuf:
     cand := mem.AllocateZeroed(stride as u64)
     candp := cand as u8*
 
+    src := img.pixels as u8*
     mut y := 0
     until y < h:
-        mut x := 0
-        until x < w:
-            c := GetPixel(img, x, y)
-            off := x * 4
-            cp[off] = c.r
-            cp[off + 1] = c.g
-            cp[off + 2] = c.b
-            cp[off + 3] = c.a
-            x += 1
-        end
+        mem.Copy(cur, ((src as i64) + ((y * stride) as i64)) as void*, stride as u64)
 
+        mut s0 := 0
+        mut s1 := 0
+        mut s2 := 0
+        mut s3 := 0
+        mut s4 := 0
+        mut j := 0
+        until j < stride:
+            xv := cp[j] as int
+            b := pp[j] as int
+            mut a := 0
+            mut c2 := 0
+            if j >= 4:
+                a = cp[j - 4] as int
+                c2 = pp[j - 4] as int
+            end
+            s0 += _abs_signed_byte(xv)
+            s1 += _abs_signed_byte(xv - a)
+            s2 += _abs_signed_byte(xv - b)
+            s3 += _abs_signed_byte(xv - (a + b) / 2)
+            s4 += _abs_signed_byte(xv - _paeth(a, b, c2))
+            j += 1
+        end
         mut best_type := 0
-        mut best_score := -1
-        mut ftype := 0
-        until ftype <= 4:
-            mut score := 0
-            mut i := 0
-            until i < stride:
-                xv := cp[i] as int
-                mut a := 0
-                if i >= 4: a = cp[i - 4] as int end
-                b := pp[i] as int
-                mut c2 := 0
-                if i >= 4: c2 = pp[i - 4] as int end
-                mut fv := xv
-                if ftype == 1: fv = xv - a end
-                if ftype == 2: fv = xv - b end
-                if ftype == 3: fv = xv - (a + b) / 2 end
-                if ftype == 4: fv = xv - _paeth(a, b, c2) end
-                score += _abs_signed_byte(fv)
-                i += 1
-            end
-            if best_score < 0 || score < best_score:
-                best_score = score
-                best_type = ftype
-            end
-            ftype += 1
+        mut best_score := s0
+        if s1 < best_score:
+            best_score = s1
+            best_type = 1
+        end
+        if s2 < best_score:
+            best_score = s2
+            best_type = 2
+        end
+        if s3 < best_score:
+            best_score = s3
+            best_type = 3
+        end
+        if s4 < best_score:
+            best_score = s4
+            best_type = 4
         end
 
         mut i := 0
@@ -282,7 +320,7 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
         ret New(0, 0)
     end
     bp := p as u8*
-    if (bp[0] as int) != 137 || (bp[1] as int) != 80 || (bp[2] as int) != 78 || (bp[3] as int) != 71:
+    if (bp[0] as int) != 137 or (bp[1] as int) != 80 or (bp[2] as int) != 78 or (bp[3] as int) != 71 or (bp[4] as int) != 13 or (bp[5] as int) != 10 or (bp[6] as int) != 26 or (bp[7] as int) != 10:
         ret New(0, 0)
     end
 
@@ -291,15 +329,16 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
     mut bit_depth := 0
     mut color_type := -1
     mut have_ihdr := false
+    mut png_interlace := 0
     mut idat := compress.NewByteBuf()
     mut palette := compress.NewByteBuf()
     mut trns := compress.NewByteBuf()
 
     mut pos := 8
     mut fatal := false
-    until pos + 12 <= n && !fatal:
+    until pos + 12 <= n and not fatal:
         chunk_len := _be_get32(p, pos)
-        if chunk_len < 0 || pos + 12 + chunk_len > n:
+        if chunk_len < 0 or pos + 12 + chunk_len > n:
             fatal = true
             break
         end
@@ -323,19 +362,12 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
             bit_depth = bp[data_off + 8] as int
             color_type = bp[data_off + 9] as int
             interlace := bp[data_off + 12] as int
-            if width <= 0 || height <= 0 || interlace != 0:
+            png_interlace = interlace
+            if width <= 0 or height <= 0 or interlace > 1 or (width as i64) * (height as i64) > (268435456 as i64):
                 fatal = true
                 break
             end
-            if bit_depth != 8 && bit_depth != 16:
-                fatal = true
-                break
-            end
-            if bit_depth == 16 && color_type == 3:
-                fatal = true
-                break
-            end
-            if _channels_for(color_type) == 0:
+            if _channels_for(color_type) == 0 or not _png_depth_ok(color_type, bit_depth):
                 fatal = true
                 break
             end
@@ -360,7 +392,7 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
         pos = data_off + chunk_len + 4
     end
 
-    if !have_ihdr || fatal:
+    if not have_ihdr or fatal:
         compress.BufFree(idat)
         compress.BufFree(palette)
         compress.BufFree(trns)
@@ -368,88 +400,102 @@ pub func DecodePNG(p: void*, n: int, ok &: bool): Image:
     end
 
     channels := _channels_for(color_type)
-    sample := bit_depth / 8
-    bpp := channels * sample
-    stride := width * bpp
-    expected_raw := height * (1 + stride)
+    mut expected_raw := 0
+    repeat png_interlace == 1 ? 7 : 1 in pass:
+        pw := _png_pass_size(width, png_interlace, pass, true)
+        ph := _png_pass_size(height, png_interlace, pass, false)
+        if pw > 0 and ph > 0:
+            expected_raw += ph * (1 + (pw * channels * bit_depth + 7) / 8)
+        end
+    end
 
     mut inflate_ok := false
     inflated := _zlib_unwrap(idat.data, idat.len, expected_raw, inflate_ok)
     compress.BufFree(idat)
-    if !inflate_ok || inflated.len < expected_raw:
+    if not inflate_ok or inflated.len < expected_raw:
         compress.BufFree(inflated)
         compress.BufFree(palette)
         compress.BufFree(trns)
         ret New(0, 0)
     end
 
-    raw_size := (width * height * bpp) as u64
-    raw := mem.AllocateZeroed(raw_size)
-    _unfilter(inflated, width, height, bpp, raw)
-    compress.BufFree(inflated)
-    rp := raw as u8*
-
-    out := New(width, height)
-    mut y := 0
-    until y < height:
-        mut x := 0
-        until x < width:
-            row_off := y * stride
-            off := row_off + x * bpp
-            s1 := sample
-            s2 := sample * 2
-            s3 := sample * 3
-            mut r := 0
-            mut g := 0
-            mut b := 0
-            mut a := 255
-            if color_type == 0:
-                v := _sample8(rp, off, sample)
-                r = v
-                g = v
-                b = v
-            end
-            if color_type == 2:
-                r = _sample8(rp, off, sample)
-                g = _sample8(rp, off + s1, sample)
-                b = _sample8(rp, off + s2, sample)
-            end
-            if color_type == 3:
-                idx := rp[off] as int
-                mut pr := 0
-                mut pg := 0
-                mut pb := 0
-                if idx * 3 + 2 < palette.len:
-                    pr = compress.BufGet(palette, idx * 3)
-                    pg = compress.BufGet(palette, idx * 3 + 1)
-                    pb = compress.BufGet(palette, idx * 3 + 2)
-                end
-                r = pr
-                g = pg
-                b = pb
-                if idx < trns.len:
-                    a = compress.BufGet(trns, idx)
-                end
-            end
-            if color_type == 4:
-                v := _sample8(rp, off, sample)
-                r = v
-                g = v
-                b = v
-                a = _sample8(rp, off + s1, sample)
-            end
-            if color_type == 6:
-                r = _sample8(rp, off, sample)
-                g = _sample8(rp, off + s1, sample)
-                b = _sample8(rp, off + s2, sample)
-                a = _sample8(rp, off + s3, sample)
-            end
-            SetPixel(out, x, y, RGBA(r, g, b, a))
-            x += 1
-        end
-        y += 1
+    mut key := [0 - 1, 0 - 1, 0 - 1]
+    if color_type == 0 and trns.len >= 2:
+        key[0] = (compress.BufGet(trns, 0) << 8) | compress.BufGet(trns, 1)
     end
-    mem.Free(raw)
+    if color_type == 2 and trns.len >= 6:
+        repeat 3 in k:
+            key[k] = (compress.BufGet(trns, k * 2) << 8) | compress.BufGet(trns, k * 2 + 1)
+        end
+    end
+    maxv := (1 << bit_depth) - 1
+    out := New(width, height)
+    dst := out.pixels as u8*
+    rp := inflated.data as u8*
+    mut at := 0
+    repeat png_interlace == 1 ? 7 : 1 in pass:
+        pw := _png_pass_size(width, png_interlace, pass, true)
+        ph := _png_pass_size(height, png_interlace, pass, false)
+        if pw > 0 and ph > 0:
+            stride := (pw * channels * bit_depth + 7) / 8
+            fbpp := (channels * bit_depth + 7) / 8
+            _png_unfilter(rp, at, stride, ph, fbpp)
+            x0 := png_interlace == 1 ? _ADAM7[pass * 4] : 0
+            y0 := png_interlace == 1 ? _ADAM7[pass * 4 + 1] : 0
+            dx := png_interlace == 1 ? _ADAM7[pass * 4 + 2] : 1
+            dy := png_interlace == 1 ? _ADAM7[pass * 4 + 3] : 1
+            repeat ph in py:
+                row := at + py * (1 + stride) + 1
+                repeat pw in px:
+                    mut vals := [0, 0, 0, 0]
+                    repeat channels in ch:
+                        vals[ch] = _png_sample(rp, row, px * channels + ch, bit_depth)
+                    end
+                    mut r := 0
+                    mut g := 0
+                    mut b := 0
+                    mut a := 255
+                    if color_type == 3:
+                        idx := vals[0]
+                        if idx * 3 + 2 < palette.len:
+                            r = compress.BufGet(palette, idx * 3)
+                            g = compress.BufGet(palette, idx * 3 + 1)
+                            b = compress.BufGet(palette, idx * 3 + 2)
+                        end
+                        if idx < trns.len:
+                            a = compress.BufGet(trns, idx)
+                        end
+                    else color_type == 0 or color_type == 4:
+                        v := _png_scale(vals[0], bit_depth, maxv)
+                        r = v
+                        g = v
+                        b = v
+                        if color_type == 4:
+                            a = _png_scale(vals[1], bit_depth, maxv)
+                        else vals[0] == key[0]:
+                            a = 0
+                        end
+                    else:
+                        r = _png_scale(vals[0], bit_depth, maxv)
+                        g = _png_scale(vals[1], bit_depth, maxv)
+                        b = _png_scale(vals[2], bit_depth, maxv)
+                        if color_type == 6:
+                            a = _png_scale(vals[3], bit_depth, maxv)
+                        else vals[0] == key[0] and vals[1] == key[1] and vals[2] == key[2]:
+                            a = 0
+                        end
+                    end
+                    o := ((y0 + py * dy) * width + x0 + px * dx) * 4
+                    dst[o] = r as u8
+                    dst[o + 1] = g as u8
+                    dst[o + 2] = b as u8
+                    dst[o + 3] = a as u8
+                end
+            end
+            at += ph * (1 + stride)
+        end
+    end
+    compress.BufFree(inflated)
     compress.BufFree(palette)
     compress.BufFree(trns)
     ok = true
@@ -461,7 +507,7 @@ end
 pub func OpenPNG(path: str, ok &: bool): Image:
     mut read_ok := false
     buf := archive.ReadBinaryFile(path, read_ok)
-    if !read_ok:
+    if not read_ok:
         ok = false
         ret New(0, 0)
     end

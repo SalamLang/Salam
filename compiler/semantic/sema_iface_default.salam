@@ -1,0 +1,89 @@
+package semantic
+
+import str
+
+include at "../ast.salam"
+
+func idf_has_method(a &: at.Ast, owner: int, name: str): bool:
+    o := at.Get(a, owner)
+    repeat o.list.len() in i:
+        m := at.Get(a, o.list.get(i))
+        if m.kind == at.AST_FUNC_DEF and str.Equals(m.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func idf_fill(a &: at.Ast, owner: int, iface: int, need_all: bool):
+    iv := at.Get(a, iface)
+    mut required := 0
+    mut defaults := 0
+    repeat iv.list.len() in i:
+        m := at.Get(a, iv.list.get(i))
+        if m.kind != at.AST_FUNC_DEF:
+            continue
+        end
+        if m.a != 0:
+            defaults += 1
+            continue
+        end
+        required += 1
+        if need_all and not idf_has_method(a, owner, m.name):
+            ret
+        end
+    end
+    if defaults == 0 or (need_all and required == 0):
+        ret
+    end
+    repeat iv.list.len() in j:
+        mid := iv.list.get(j)
+        m2 := at.Get(a, mid)
+        if m2.kind != at.AST_FUNC_DEF or m2.a == 0 or idf_has_method(a, owner, m2.name):
+            continue
+        end
+        cl := at.Clone(a, mid)
+        mut cv := at.Get(a, cl)
+        cv.is_pub = true
+        cv.is_embedded = true
+        at.Put(a, cl, cv)
+        at.AddChild(a, owner, cl)
+    end
+end
+
+func sema_iface_defaults(s &: Sema, a &: at.Ast, program: int):
+    mut ifaces := Vector {} as Vector<int>
+    defer ifaces.free()
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_INTERFACE_DEF or d.typarams.len() > 0:
+            continue
+        end
+        repeat d.list.len() in j:
+            if at.Get(a, d.list.get(j)).a != 0:
+                ifaces.push(did)
+                break
+            end
+        end
+    end
+    if ifaces.len() == 0:
+        ret
+    end
+    repeat at.ChildCount(a, program) in k:
+        did2 := at.Child(a, program, k)
+        d2 := at.Get(a, did2)
+        if d2.kind == at.AST_STRUCT_DEF and not d2.synthetic:
+            repeat ifaces.len() in f:
+                idf_fill(a, did2, ifaces.get(f), true)
+            end
+        else d2.kind == at.AST_IMPL_DEF:
+            repeat ifaces.len() in f2:
+                if str.Equals(at.Get(a, ifaces.get(f2)).name, d2.name):
+                    idf_fill(a, did2, ifaces.get(f2), false)
+                end
+            end
+        end
+    end
+    _ks := s.pkg
+end

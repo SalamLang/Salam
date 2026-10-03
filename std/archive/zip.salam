@@ -45,6 +45,10 @@ func _zip_find_eocd(p: void*, n: int, eocd_pos_out &: int): bool:
     ret false
 end
 
+func _zip_in(off: int, len: int, n: int): bool:
+    ret off >= 0 and len >= 0 and (off as i64) + (len as i64) <= (n as i64)
+end
+
 func _zip_read_name(p: void*, off: int, name_len: int): str:
     mut nmbuf := compress.NewByteBuf()
     name_ptr := ((p as i64) + (off as i64)) as void*
@@ -167,7 +171,7 @@ end
 pub func ZipList(p: void*, n: int): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
     mut eocd_pos := 0
-    if !_zip_find_eocd(p, n, eocd_pos):
+    if not _zip_find_eocd(p, n, eocd_pos):
         ret out
     end
     count := LEGet16(p, eocd_pos + 10)
@@ -175,7 +179,10 @@ pub func ZipList(p: void*, n: int): Vector<Entry>:
     mut pos := cd_offset
     mut k := 0
     until k < count:
-        if LEGet32(p, pos) != 0x02014b50:
+        if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+            break
+        end
+        if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
             break
         end
         method := LEGet16(p, pos + 10)
@@ -210,7 +217,7 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     ok = false
     mut out := compress.NewByteBuf()
     mut eocd_pos := 0
-    if !_zip_find_eocd(p, n, eocd_pos):
+    if not _zip_find_eocd(p, n, eocd_pos):
         ret out
     end
     count := LEGet16(p, eocd_pos + 10)
@@ -218,7 +225,10 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     mut pos := cd_offset
     mut k := 0
     until k < count:
-        if LEGet32(p, pos) != 0x02014b50:
+        if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+            break
+        end
+        if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
             break
         end
         flags := LEGet16(p, pos + 8)
@@ -233,12 +243,15 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
         hit := nm == name
         _zip_free_name(nm)
         if hit:
-            if (flags & 1) != 0:
+            if (flags & 1) != 0 or not _zip_in(local_offset, 30, n):
                 ret out
             end
             lname_len := LEGet16(p, local_offset + 26)
             lextra_len := LEGet16(p, local_offset + 28)
             data_start := local_offset + 30 + lname_len + lextra_len
+            if not _zip_in(data_start, comp_size, n):
+                ret out
+            end
             data_ptr := ((p as i64) + (data_start as i64)) as void*
             if method == 0:
                 compress.BufPushBytes(out, data_ptr, comp_size)
@@ -246,7 +259,7 @@ pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
             else:
                 if method == 8:
                     mut infl_ok := false
-                    result := compress.RawInflate(data_ptr, comp_size, uncomp_size, infl_ok)
+                    result := compress.RawInflate(data_ptr, comp_size, uncomp_size < 0 ? 0 : uncomp_size, infl_ok)
                     if infl_ok:
                         compress.BufFree(out)
                         out = result
@@ -272,6 +285,11 @@ pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
     mut i := 0
     until i < entries.len():
         e := entries.get(i)
+        if not _safe_entry_name(e.name):
+            all_ok = false
+            i += 1
+            continue
+        end
         outpath := filepath.Join(destdir, e.name)
         if e.is_dir:
             EnsureDir(outpath)
@@ -282,7 +300,7 @@ pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
             mut ok := false
             data := ZipExtractByName(p, n, e.name, ok)
             if ok:
-                if !WriteBinaryFileBuf(outpath, data):
+                if not WriteBinaryFileBuf(outpath, data):
                     all_ok = false
                 end
             else:

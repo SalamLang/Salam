@@ -7,11 +7,13 @@ description: >-
   self-hosting the Salam compiler itself). Use whenever the request mentions
   "Salam" (the programming language / زبان سلام), a `.salam` file, "convert/port/
   rewrite X to Salam", "rewrite the compiler in Salam", the Salam layout DSL, or
-  building with the `salam` compiler. This is the authoritative, up-to-date
-  reference for Salam's current syntax, its 64-package standard library, its
-  strict compiler rules, the layout DSL, and porting low-level C. The tutorial
-  books under `books/` are OUT OF DATE. Trust this file, `std/`, and
-  `tests/en/` instead.
+  building with the `salam` compiler. Covers both English Salam (Part I) and
+  Persian Salam, سلام فارسی (Part II: every keyword, type, method and std
+  package name). This is the authoritative, up-to-date reference for Salam's
+  current syntax, its standard library, its strict compiler rules, the layout
+  DSL, and porting low-level C. The tutorial books under `books/` are OUT OF
+  DATE. Trust this file, `std/`, `tests/`, and the Persian course at
+  https://www.salamlang.ir/learn/ instead.
 ---
 
 # Writing Salam
@@ -20,9 +22,22 @@ Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
 **`layout:`** blocks compile to HTML/CSS/JS. It can also be run with a
 tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
-LLVM. Source can be written in English or Persian; **this guide uses
-English throughout** (every stdlib symbol also has a `@fa` spelling defined
-by `@en "Name" @fa "…"` annotations, though you rarely need them).
+LLVM. Source can be written in English or Persian, with the same grammar and
+the same compiler rules in both.
+
+This skill has two parts:
+
+- **Part I (§1 to §12): English Salam.** The full language, stdlib, rules and
+  porting guide, with English keywords.
+- **Part II (§13 to §19): Persian Salam (سلام فارسی).** Every Persian keyword,
+  type, method and std package name, the Persian-only rules, and complete
+  Persian programs. Read Part I for semantics and Part II for spelling; the
+  semantics never differ.
+
+For Persian there is also a complete 25-lesson human tutorial on the official
+site: **<https://www.salamlang.ir/learn/>** (one page per topic, every example
+compiled and run). There is no English site yet; for English, this file and
+`tests/en/` are the reference.
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -43,6 +58,13 @@ by `@en "Name" @fa "…"` annotations, though you rarely need them).
 10. Tooling & verification
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
+13. **Persian:** source basics (digits, commas, detection, the entry `ریشه`)
+14. **Persian:** keywords
+15. **Persian:** types, built-in methods and std package names
+16. **Persian:** syntax crib (every construct side by side)
+17. **Persian:** rules and traps
+18. **Persian:** complete programs
+19. **Persian:** the tutorial on salamlang.ir (lesson map)
 
 ---
 
@@ -86,19 +108,40 @@ Comments: `//` to end of line, `/* … */` across lines.
 name := "Sara"           // immutable, type inferred (str)
 mut count := 0           // mutable
 count += 3 * 4           // compound assignment; count is now 12
-total: int = 250         // explicit type
-x: auto = 3.14           // inferred (f64)
+total := 250 as i64      // pick a type with `as`
+x := 3.14                // f64
 const MAX := 100         // compile-time constant
 ```
 
 `:=` declares (immutable by default). Reassigning a non-`mut` variable is a
 **compile error**. `mut` makes it reassignable; `const` is a compile-time value.
+**Typed declarations were removed**: `total: int = 250` and `x: auto = 3.14`
+are parse errors ("declarations with a type annotation were removed"). Write
+`name := value` and use `as` when the inferred type is not the one you want.
+`name: Type = value` survives only for struct fields and parameters.
+A `const` name must be a single word (`const MAX VALUE := 3` is a parse
+error); `mut` globals, locals and functions may still have multi-word names.
 
 ### Printing
 
 `print`/`println` (stdout) and `printerr`/`printerrln` (stderr) take
 comma-separated arguments and space-join them. They are statements, not calls:
-never wrap the whole argument list in parentheses.
+never wrap the whole argument list in parentheses. They always need a value:
+a bare `println` is an error, so write `println ""` for an empty line.
+
+`input` reads one line from stdin (without the newline) and follows the same
+rules: it always takes a prompt and never parentheses. Write `input ""` or
+`input "prompt"` (Persian `ورودی ""` / `ورودی "پیام"`); a bare `input` and
+`input()` are errors. The prompt is printed first, with no newline. A
+variable works as the prompt (`input label`), but only that name is the
+prompt: `input label + "x"` appends `"x"` to the line read. For a computed
+prompt, start with a string: `input "> " + label`.
+
+```salam
+println ""
+name := input "Name: "
+line := input ""
+```
 
 Any **struct, array, slice, `Vector` or `HashMap`** can be printed directly:
 the compiler derives a stringify function for the type and prints what it
@@ -109,9 +152,8 @@ struct Point:  x: int  y: int  end
 
 p := Point {x = 10, y = 15}
 println p                                   // Point {x = 10, y = 15}
-println [p, Point {x = 20, y = 25}] as Point[2]
-                                            // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
-println ["ali", "reza"] as str[2]           // ["ali", "reza"]
+println [p, Point {x = 20, y = 25}]         // [Point {x = 10, y = 15}, Point {x = 20, y = 25}]
+println ["ali", "reza"]                     // ["ali", "reza"]
 ```
 
 Rules worth knowing:
@@ -130,12 +172,16 @@ Rules worth knowing:
 
 ### Operators
 
-`+ - * / %`, `**` (power, float result), `== != < > <= >=`, `&& || !` (or `and
-or not`), ternary `cond ? a : b`, compound `+= -= *= /= %= **=`, `++`/`--`. Integer
-`/` **truncates**. Power is `**`, right-associative and tighter than unary minus
-(`2 ** 3 ** 2 == 512`, `-2 ** 2 == -4`). The older spelling `^^` / `^^=` still
-works and means the same, until a later release removes it. `T**` in a type is
-still a pointer to a pointer; after `as`, `x as i64 ** 2` is a cast then a power.
+`+ - * / %`, `**` (power, float result), `== != < > <= >=`, the comparison
+words `eq neq lt gt lte gte` for `== != < > <= >=` (Persian `برابر نابرابر
+کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر`; `کوچکتر برابر` and `بزرگتر برابر`
+with a space work too), the logical words
+`and or not` (Persian `و یا وارونه`), ternary `cond ? a : b`, compound
+`+= -= *= /= %= **=`, `++`/`--`. Integer `/` **truncates**. Power is `**`,
+right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
+`-2 ** 2 == -4`). `T**` in a type is a pointer to a pointer; after `as`,
+`x as i64 ** 2` is a cast then a power. There is no `&&`, `||`, `!` or `^^`:
+the compiler rejects them and names the word to write instead.
 `^` on its own remains bitwise XOR.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
@@ -159,7 +205,7 @@ repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
-each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map)
+each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -172,14 +218,14 @@ each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map
 > already reads correctly as "while".) When porting a loop from C/Python/JS/Go,
 > **copy the condition verbatim**:
 >
-> | source loop              | Salam                                 | NOT                                                 |
-> | ------------------------ | ------------------------------------- | --------------------------------------------------- |
-> | `while (v != 0)`         | `until v != 0:`                       | ~~`until v == 0:`~~                                 |
-> | `while (i < n)`          | `until i < n:`                        | ~~`until i >= n:`~~                                 |
-> | `while (v)` (truthy int) | `until v != 0:`                       | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
-> | `while (p)` (pointer)    | `until p != null:`                    | ~~`until p == null:`~~                              |
-> | `for (;;)`               | `until true:` + `break`               |                                                     |
-> | `do { B } while (c);`    | `until true: B  if !c: break end end` |                                                     |
+> | source loop              | Salam                                    | NOT                                                 |
+> | ------------------------ | ---------------------------------------- | --------------------------------------------------- |
+> | `while (v != 0)`         | `until v != 0:`                          | ~~`until v == 0:`~~                                 |
+> | `while (i < n)`          | `until i < n:`                           | ~~`until i >= n:`~~                                 |
+> | `while (v)` (truthy int) | `until v != 0:`                          | ~~`until v:`~~ (no truthiness; needs a real `bool`) |
+> | `while (p)` (pointer)    | `until p != null:`                       | ~~`until p == null:`~~                              |
+> | `for (;;)`               | `until true:` + `break`                  |                                                     |
+> | `do { B } while (c);`    | `until true: B  if not c: break end end` |                                                     |
 >
 > **An inverted `until` fails silently.** `until v == 0:` with a nonzero `v`
 > runs **zero times** and produces no error, so the function just returns its
@@ -202,12 +248,12 @@ value (or comma-list, range, or relational test) closed by its own `end`,
 the same shape as a `match` arm:
 
 ```salam
-switch grade:
-    "A", "B":  println "great"          // falls through into "C" below unless it breaks
-    "C":       println "ok"  break      // break exits the switch (only), not an enclosing loop
-    90 to 100: println "numeric A"      // inclusive range label
-    > 60:      println "passing"       // leading relational operator: > >= < <= == !=
-    else:      println "unknown"       // wildcard; must be the LAST case
+switch score:
+    100:       println "perfect"  end         // falls through into the next label unless it breaks
+    90 to 99:  println "A"  break  end        // break exits the switch (only), not an enclosing loop
+    70, 80:    println "round"  break  end    // comma list
+    > 60:      println "passing"  break  end  // leading relational operator: > >= < <= == !=
+    else:      println "low"  end             // wildcard; must be the LAST case
 end
 ```
 
@@ -219,7 +265,7 @@ end
   Deferred statements of every level left still run. N must be between 1 and
   the number of enclosing loops and switches, or it is a compile error.
 - **`switch true:`** with boolean labels replaces an if/else chain that tests
-  different conditions (`x < 0:`, `x == 0 || name == "zero":`, ...): the first
+  different conditions (`x < 0:`, `x == 0 or name == "zero":`, ...): the first
   true label wins.
 - **Enum subjects must be covered** - a `switch` on an enum (or on an alias
   of one, `type Paint = Color`) with no `else` must list every member, or it
@@ -243,8 +289,13 @@ func greet(name: str, prefix: str = "Hello"):     // default arguments allowed
 end
 ```
 
-- **Pass by value.** Overloading by parameter types is allowed. Definition order
-  doesn't matter.
+- **Pass by value.** Overloading by parameter types is allowed. Functions may
+  call each other in any order, but every `struct`/`enum`/`type`/`interface`/
+  `impl` must come **before the first function** of the file (E087), and
+  constants and globals before both (E084/E085).
+- **Default values are constants or expressions of globals**; a default may not
+  refer to another parameter (`func f(a: int, b: int = a)` is E001 unknown
+  identifier `a`). Use an overload instead.
 - **Multi-word names**: identifiers may contain spaces, e.g.
   `func make counter()`, `func is weekend(d: Day)`, `pet name: str`. A call is
   `is weekend(d)`; a field access `dog.pet name`.
@@ -265,8 +316,16 @@ end
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
   `defer v.free()`.
 - **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
-  block form `(): n = n + 1  ret n  end`. Function-typed parameters/vars:
+  block form `(): n = n + 1  ret n  end`. Function-typed parameters:
   `func () int`, `func (int, int) bool`.
+  - **Lambdas capture by value.** Each lambda gets its own copy of the outer
+    variables at creation time: after `mut n := 1  g := () => n  n = 5`,
+    `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
+    own copy (it counts across calls), never the caller's `n`. Share state
+    through a pointer, a heap collection or a `mut` global.
+  - **Never write a return type on a lambda.** `(x: int): int => x` and a
+    block `(x: int): int: ... end` fail to parse; the return type is inferred
+    (`(x: int): ... ret x * 2 end` is fine).
   - **A bare named function decays to its address**, typed `i64` - the slot
     C-style callback registries take (e.g. the `web` router):
     `web.Get(r, "/", home)`. For a `void*` slot, or to cast to a typed C
@@ -308,13 +367,13 @@ or `fmt.Sprintf`):
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
 
 ```salam
-input := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
+data := `{"name": "salam", "version": 2, "active": true, "pi": 3.5, "tags": ["a", "b"]}`
 ```
 
 not
 
 ```salam
-input := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"tags\": [\"a\", \"b\"]}"
+data := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"tags\": [\"a\", \"b\"]}"
 ```
 
 Only fall back to `"..."` with escaped quotes when the string must also contain
@@ -333,7 +392,8 @@ An alias of an enum reaches its members too: `type Paint = Color` then
 ```salam
 b := 250 as int as u8
 n := fib(i) as i64
-arr := [1, 2, 3] as int[3]
+arr := [1, 2, 3]                 // already int[3]; `as int[3]` is E093 "useless cast"
+big := [0 as i64, 5, 7]          // the first element picks the element type
 v := Vector {} as Vector<int>
 m := HashMap {} as HashMap<str, int>
 ```
@@ -341,11 +401,11 @@ m := HashMap {} as HashMap<str, int>
 **Arrays (fixed size) & slices:**
 
 ```salam
-a: int[3] = [1, 2, 3]                 // indexed 0..2
-grid: int[2][3] = [[1,2,3],[4,5,6]]   // 2-D
-mid := a[1: 3]                        // slice (view), writes through to `a`
-whole := a[:]  head := a[: 2]  tail := a[1:]
-func sum(view: int[:]): int: ... end  // int[:] = slice parameter
+a := [1, 2, 3]                        // int[3], indexed 0..2
+grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
+mid := a[1: 3]                        // slice (view) of a[1] and a[2]; writes through to `a`
+whole := a[:]  head := a[: 2]  tail := a[1:]   // omitted bound = that end of `a`
+func sum(view: int[]): int: ... end   // int[] = slice parameter, any length
 len(a)                                // length builtin
 ```
 
@@ -364,40 +424,90 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
-**Operator overloading:** a struct method named `operator_<op>` is called for that
-operator when the left operand is the struct: `operator_add operator_sub
-operator_mul operator_div operator_mod operator_pow` (binary arithmetic, one
-param, same or convertible type), `operator_eq operator_ne operator_lt operator_gt
-operator_le operator_ge` (comparison, one param, returns `bool`; `!=` falls back to
-`!operator_eq` when `operator_ne` is not defined), `operator_index` /
-`operator_index_set` (`s[i]` / `s[i] = v`), and `operator_not` (unary `!`, no
-param). **Unary `-` reuses `operator_sub`, overloaded by arity**: a zero-parameter
-`operator_sub` is negation, a one-parameter `operator_sub` is binary subtraction -
-define both on the same struct if you need both:
+**Static members:** `static func` and `const` inside a struct belong to the type,
+not to a value. Call them through the type name, also across packages
+(`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
+struct's private fields, so it is the place for constructors. On a generic
+struct the type parameters come from the arguments or the expected type:
+`Box.Of(42)`, `ret Box.Empty()`, `Box.Empty() as Box<f64>`.
+
+```salam
+struct Color:
+    pub r: int  pub g: int  pub b: int
+    pub const Max := 255
+    pub static func Gray(v: int): Color:  ret Color { r = v, g = v, b = v }  end
+end
+w := Color.Gray(Color.Max)
+```
+
+**`mut func` (read-only `this`):** once any method of a struct is declared
+`mut func`, the compiler checks the whole struct. Its other methods get a
+read-only `this` (E105 when one assigns to a field or calls a `mut func` on
+`this`), and a `mut func` can only be called on a `mut` binding or a `&:`
+parameter (E106). Writes that go through a pointer, slice, `Vector` or
+`HashMap` field change the heap data, not the struct, so they stay allowed.
+Structs with no `mut func` keep the old rules. `mut` goes right after `pub`
+(`pub mut inline func`), is also allowed on interface methods, and cannot be
+combined with `pure`.
+
+```salam
+struct Counter:
+    n: int = 0
+    pub func Count(): int:  ret this.n  end     // this is read-only here
+    pub mut func Tick():  this.n += 1  end
+end
+mut c := Counter {}
+c.Tick()
+```
+
+**Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
+struct adds a field named `Animal` and promotes its fields and `pub` methods,
+so `d.name` means `d.Animal.name` and `d.Describe()` forwards to it. Promoted
+methods count for interfaces, `<T: I>` bounds and `dyn I`. The outer struct's
+own members win over promoted ones; two embeds that both provide a name are
+E107. Literals may set promoted fields directly (`Dog { name = "Rex" }`); an
+omitted embed defaults to `Animal {}` when all of its fields have defaults.
+`pub use` exposes the embed outside the struct; plain `use` keeps it private.
+Print and JSON show it as a nested object. The Persian spelling is `شامل`. A
+generic struct embeds with its type arguments (`use Stack<str>`); a pointer
+cannot be embedded.
+
+```salam
+struct Animal:  pub name: str = ""  pub func Describe(): str:  ret "I am " + this.name  end  end
+struct Dog:
+    pub use Animal
+    pub breed: str = ""
+end
+d := Dog { name = "Rex", breed = "lab" }
+println d.Describe()
+```
+
+**Operator overloading:** declare a method whose name is the operator itself,
+`func +(o: V): V:`. It is called when the left operand is the struct. `!=` falls
+back to `not (a == b)` when there is no `!=`, and `a += b` uses your `+`.
+**Unary `-` and binary `-` share the symbol, overloaded by arity**: `func -: V:`
+(no parameters, empty parentheses optional) is negation, `func -(o: V): V:` is
+subtraction - define both if you need both:
 
 ```salam
 struct Vec2:
     pub x: f64
     pub y: f64
-    pub func operator_add(o: Vec2): Vec2: ret Vec2 { x = this.x + o.x, y = this.y + o.y } end
-    pub func operator_sub(o: Vec2): Vec2: ret Vec2 { x = this.x - o.x, y = this.y - o.y } end
-    pub func operator_sub(): Vec2: ret Vec2 { x = -this.x, y = -this.y } end   // unary -v
-    pub func operator_eq(o: Vec2): bool: ret this.x == o.x && this.y == o.y end
+    pub func +(o: Vec2): Vec2: ret Vec2 { x = this.x + o.x, y = this.y + o.y } end
+    pub func -(o: Vec2): Vec2: ret Vec2 { x = this.x - o.x, y = this.y - o.y } end
+    pub func -: Vec2: ret Vec2 { x = -this.x, y = -this.y } end   // unary -v
+    pub func ==(o: Vec2): bool: ret this.x == o.x and this.y == o.y end
 end
 ```
 
 Only Salam's own operators can be overloaded: `+ - * / % ** == != < > <= >=
-! [] []=`. A new symbol (`***`, `+-`, `&`) is an error. The parameter count
+not [] []=`. A new symbol (`***`, `+-`, `&`) is an error. The parameter count
 decides unary or binary and is checked:
 
 - binary operators take exactly one parameter, the right operand
 - `-` takes none (negation, `-v`) or one (subtraction)
-- `!` / `not` takes none
+- `not` takes none
 - `[]` takes one (the index), `[]=` takes two (the index and the value)
-
-The `operator` keyword is optional (`func +(o: V): V:` is the same as
-`func operator +(o: V): V:`), and so are empty parentheses (`func -: V:`
-declares unary minus). A later release will drop the `operator` keyword.
 
 **Distinct types (`type X: T`)**: `type Age = int` is a plain alias, the same
 type as `int`. `type Meters: int` creates a _new_ type built on `int`. It
@@ -463,6 +573,66 @@ tell where one multi-word name ends and the next begins. Leaving out the
 comma is a compile error (`'end'`/EOF right after a member with no comma
 before it).
 
+**Enums with data** (sum types): a member may carry named values. Build one
+with `Enum.Member(values...)` (or `Enum.Member` when it has none) and take it
+apart in `match` with `Member(a, b)` (use `_` to skip a value) or
+`Member whole` to bind the whole case. `match` must cover every member (or
+have `else`). Such enums print as `Circle(r = 2)` and compare with `==` when
+every value can. They work across packages (`geo.Token.Num(4)`). An enum with
+data needs at least two members, and members cannot also have `= value`.
+`value.name()` gives the member's name and `Enum.Count()` the number of members.
+
+```salam
+enum Shape:
+    Circle(r: f64)
+    Rect(w: f64, h: f64)
+    Empty
+end
+func area(s: Shape): f64:
+    ret match s:
+        Circle(r) => 3.14 * r * r
+        Rect(w, h) => w * h
+        Empty => 0.0
+    end
+end
+println area(Shape.Rect(3.0, 4.0))
+println Shape.Circle(2.0)          // Circle(r = 2)
+```
+
+**Generic enums, `result.Result` and `?`:** an enum with data may take type
+parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
+built where its type is known - returned from a function, or with `as`:
+`Maybe.Nothing as Maybe<int>`. `import result` gives
+`result.Result<T, E>` (`Ok(value)` / `Err(error)`) plus `result.IsOk`,
+`IsErr`, `UnwrapOr(r, fallback)` and `Expect(r, msg)`. Inside a function that
+returns such an enum, a postfix `?` unwraps `Ok` and returns any `Err` early
+(running `defer`s): it must be a statement's whole value - `x := f()?`,
+`x = f()?`, `f()?` or `ret f()?`.
+
+```salam
+import result
+func parse(s: str): result.Result<int, str>:
+    if s == "7": ret result.Result.Ok(7) end
+    ret result.Result.Err("bad " + s)
+end
+func sum(a: str, b: str): result.Result<int, str>:
+    x := parse(a)?
+    y := parse(b)?
+    ret result.Result.Ok(x + y)
+end
+```
+
+**Struct patterns:** `Point{x = 0, y}` matches a struct (or an enum member,
+`Rect{w, h = 1.0}`) by field name: `name` binds the field, `name = expr`
+requires it to equal `expr`. A struct pattern with tests acts like a guard,
+so keep a final pattern without tests or an `else`.
+
+**Match guards:** any arm may add `if cond` after its patterns
+(`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
+bindings and runs only when the pattern matches; if it is false, matching
+continues with the next arm. A guarded arm does not count toward
+exhaustiveness, so keep an unguarded arm (or `else`) for that case.
+
 **`Variant<A, B, …>`** is a tagged union (one slot sized to the largest member).
 Assign any member type; narrow it back with `match` on **type-name** patterns:
 
@@ -517,6 +687,20 @@ func describe<T: Shape>(s: T):  println s.name(), s.area()  end   // static boun
 func draw(s: dyn Shape):  println s.area()  end                  // dynamic dispatch
 shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
+```
+
+**Default methods:** an interface method may carry a body. A struct that
+provides all of the interface's methods without bodies gets a copy of every
+default it does not define itself, and so does an `impl I on T` block, so
+defaults work with `<T: I>`, `dyn I` and direct calls.
+
+```salam
+interface Shape:
+    func Area(): f64
+    func Describe(): str:
+        ret "area " + this.Area()
+    end
+end
 ```
 
 `impl` adds interface methods to **any** type, including primitives:
@@ -685,7 +869,7 @@ LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`; models
 GaussianNB DecisionTree RandomForest AdaBoost GradientBoosting LinearSVM SVC
 LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
 TruncatedSVD TSNE MultinomialNB HistGradientBoosting` (`NewElasticNet(alpha,
-  l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
+l1_ratio)` builds the mixed-penalty `Lasso`), plus the `KDTree` index (`algorithm =
 ml.KNN_KDTREE`) and `workers` on KNN and KMeans for parallel queries and
   assignment (identical results at any worker count; the serial path is the
   safe one inside another parallel loop);
@@ -784,7 +968,7 @@ func main:
     println term.Bold(term.Green("ready")), term.Dim("(q to quit)")
     until true:
         k := term.ReadKey()
-        if k.code == term.KeyChar && k.ch == "q": break end
+        if k.code == term.KeyChar and k.ch == "q": break end
         if k.code == term.KeyUp: println "up" end
     end
     term.ShowCursor()
@@ -798,7 +982,7 @@ ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter free
   index via `v[i]` (read) / `v[i] = x` (write); free functions `contains index_of
 count_of slice clone reverse swap extend`.
 - **`HashMap<K,V>`**: `put(k,v) get(k) has(k) remove(k) size is_empty
-iter free`; iterate with `each (k, v) in m:`.
+iter free`; iterate with `each k, v in m:`.
 - **`Set<T>`**, **`Stack<T>`** (`push pop peek size is_empty`),
   **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
@@ -818,7 +1002,9 @@ LowerBound UpperBound Min Max Reverse Swap` + named algorithms
   compiler derives per type:
   `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
-  `@json "" "omitempty"/"optional"/"string"` for the rest.
+  `@json "" "omitempty"/"optional"/"string"` for the rest. An enum with data
+  is written with its member as the key, `{"Circle":{"r":1.5}}`, and a member
+  without data as a bare string, `"Empty"`.
   `Schema(v)` derives the same type's **JSON Schema** (2020-12, `$defs` +
   `$ref`, so a self-referential type works) from the same declaration and the
   same markers - the argument is a value only because that is how a generic
@@ -1122,7 +1308,7 @@ end
 
 func me(ctx: i64):
     mut t := jwt.Token { }
-    if !jwt.Require(ctx, guard(), t): ret end     // 401 already written
+    if not jwt.Require(ctx, guard(), t): ret end     // 401 already written
     http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
 end
 ```
@@ -1221,14 +1407,16 @@ naive port into compile errors (each corresponds to a case in
    `Option<T>`, or a sentinel value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
-8. **Top-level ordering.** Within a file: `package` first, then all `import`s and `include`s,
-   then top-level `const`/variable/`type` declarations, then functions. A
+8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
+   then all `include`s (an `import` after an `include` is E108), then
+   top-level `const`/variable declarations (E084/E085), then types
+   (`struct enum type interface impl`, E087), then functions. A
    body-less `extern:` block ranks with the imports; an `export:` block ranks
    with the private functions, so it must come before the first `pub func`. A
    top-level `if` must be a **compile-time constant** condition (see §8).
    **No `if` branch may be empty** - not at top level, not in a function, and
    not in an `else if`. Instead of `if X:` with an empty body followed by
-   `else:`, negate the condition: `if !X:` (or `if not X:`).
+   `else:`, negate the condition: `if not X:`.
 9. **`pure` functions are checked**: they may not write globals, call impure
    functions, mutate parameters, or `print`. Only mark a function `pure` if it is.
 10. **`match` on an enum or a `Variant` must be exhaustive** (or have an
@@ -1245,6 +1433,14 @@ naive port into compile errors (each corresponds to a case in
     must match the declared size.
 13. **Dead code is rejected**: an always-false `if/until/repeat/each`, an
     unreachable `ret`, etc. are errors, not warnings.
+14. **Useless casts are rejected** (E093): `x as T` where `x` already has type
+    `T`, including `[1, 2, 3] as int[3]`.
+15. **`main` returns the exit code.** Write `ret 1` in `main` to fail; calling
+    `os.Exit` inside `main` is E109 because it skips `main`'s `defer`s. `ret`
+    alone (or falling off the end) exits with 0. Other functions may still
+    call `os.Exit`.
+16. **No typed declarations.** `x: T = v` is a parse error; write
+    `x := v as T` (see §2).
 
 When the compiler complains, fix the code; do not try to suppress the check
 (except the deliberate `_` prefix for genuinely-unused names).
@@ -1255,28 +1451,30 @@ When the compiler complains, fix the code; do not try to suppress the check
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                           |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T` |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                           |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                           |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                   |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                              |
-| set                          | `Set<T>`                                                                         |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                            |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                    |
-| exception / error            | `bool` flag, `Option<T>`, or sentinel; **no throw/catch**                        |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                             |
-| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                            |
-| enum / union                 | `enum` (C-like, comma-separated members) or `Variant<…>` (tagged union)          |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                              |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`         |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)       |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)      |
-| `for i in range(n)`          | `repeat n in i:`                                                                 |
-| `for x in xs`                | `each x in xs:`                                                                  |
-| destructor / cleanup         | `defer x.free()`                                                                 |
+| Source concept               | Salam                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                            |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                       |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`  |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining         |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                            |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                            |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                    |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                               |
+| set                          | `Set<T>`                                                                          |
+| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                             |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
+| exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
+| null / nil / None            | `null` (pointers) or `Option.None()`                                              |
+| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                             |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)        |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)       |
+| `for i in range(n)`          | `repeat n in i:`                                                                  |
+| `for x in xs`                | `each x in xs:`                                                                   |
+| destructor / cleanup         | `defer x.free()`                                                                  |
 
 ### From PHP
 
@@ -1321,8 +1519,8 @@ General mapping that applies to all source languages:
 - **Go**: `struct`+methods→same; `interface`→`interface`/`dyn`; goroutines→
   `spawn`; `sync.Mutex/WaitGroup`→`sync.*`; multiple returns → a `struct` or
   out-params via pointers; `error` return → `bool`/`Option`; slices → `Vector`
-  or `T[:]` slices; `map`→`HashMap`.
-- **Rust**: `struct`/`enum`(+data)→`struct`/`Variant`; `trait`→`interface`+
+  or `T[]` slices; `map`→`HashMap`.
+- **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
   `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
   (Salam does not borrow-check). Pattern `match` maps to Salam `match`.
@@ -1460,7 +1658,7 @@ constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
 your own `-DNAME` defines from the build command. The predefined `SALAM_*`
 names are also ordinary constant values anywhere else - `switch SALAM_OS:`,
 `println SALAM_ARCH`, `is_win := SALAM_OS_WINDOWS`, or inside a runtime
-condition such as `if SALAM_OS_MAC && retries > 0:`.
+condition such as `if SALAM_OS_MAC and retries > 0:`.
 
 ```salam
 if SALAM_OS_WINDOWS:  const SEP := "\\"
@@ -1612,14 +1810,12 @@ compiler's bit-heavy code (UTF-8 encoding, hashing, flag sets, `codegen/print_fm
 
 Operands must be integers (a bitwise op on a float is a compile error). **Precedence
 follows C**: `*  /  %` › `+  -` › `<<  >>` › `<  <=  >  >=` › `==  !=` › `&` › `^` ›
-`|` › `&&` › `||`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
+`|` › `and` › `or`. So `flags & MASK == MASK` parses as `flags & (MASK == MASK)`, so add
 parentheses (`(flags & MASK) == MASK`) exactly as you would in C.
 
-`and`, `or` and `not` are English word forms of `&&`, `||` and `!` (Persian:
-`و`, `یا`, `وارون`). `not` binds as tightly as `!`, so `not a == b` means `(!a) == b`;
-write `not (a == b)` to negate a comparison. Code compiled by the bootstrap
-seed (`compiler/` and the std packages it imports) keeps the symbols until a
-seed that knows the words ships.
+`not` (Persian `وارونه`) is a unary prefix that binds tighter than any binary
+operator, so `not a == b` means `(not a) == b`; write `not (a == b)` to negate a
+comparison. `and`/`or` are `و`/`یا` in Persian.
 
 ```salam
 mut flags := 0
@@ -1660,7 +1856,7 @@ two closing angle brackets, not a shift.
 | `break` / `continue`                         | `break` / `continue` (innermost loop **or switch** for `break`, `break N` for N levels; `continue` always targets the loop) |
 | `while (c)`                                  | **`until c:`** with the same condition, **never negated** (`while (v != 0)` → `until v != 0:`)                              |
 | `while (v)` / `while (p)` (truthy)           | `until v != 0:` / `until p != null:` (Salam has no truthiness)                                                              |
-| `do { B } while (c);`                        | `until true: B  if !c: break end end`                                                                                       |
+| `do { B } while (c);`                        | `until true: B  if not c: break end end`                                                                                    |
 | `for (;;)`                                   | `until true:` + `break`                                                                                                     |
 | `for (i = 0; i < n; i++)`                    | `repeat n in i:` (i = 0 .. n-1)                                                                                             |
 | `for (i = n; i >= 1; i--)`                   | `repeat n to 1 in i:` (descending; guard `n >= 1`, see §2)                                                                  |
@@ -1721,3 +1917,518 @@ runnable, and validate each stage against the current compiler's
 `--emit-tokens` / `--emit-ast` / `--emit-symbol` output and the
 `tests/` suite. The bit-heavy code (lexer, hasher, codegen) ports directly
 now that bitwise operators exist (§12.1).
+
+---
+
+## Part II: Persian Salam (سلام فارسی)
+
+Everything in Part I holds for Persian source: same grammar, same types, same
+strict rules, same stdlib. Only the spelling changes. This part is the full
+spelling reference plus the few things that behave differently because the
+source is Persian. The human-facing version of this material is the Persian
+course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
+
+## 13. Persian source basics
+
+- **Language detection is automatic** from the keywords in the file; pass
+  `--lang=fa` to force it (`salam build app.salam --lang=fa`). Diagnostics are
+  printed in Persian for Persian files.
+- **The entry function is `ریشه`**, not `main`: `روال ریشه:` ... `پایان`.
+  Its return value is the exit code, as in English (`برگشت ۱` to fail).
+- **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
+  number literals, mixed freely with ASCII. The decimal point is always `.`
+  (`۳.۱۴`); the Persian decimal separator `٫` is **not** accepted.
+- **Printed numbers and booleans are ASCII**: `سرچاپ ۱۲` prints `12`, and a
+  `منطقی` prints `true`/`false`. Convert digits yourself if the output must
+  be Persian.
+- **Separators:** the Persian comma `،` works everywhere the ASCII `,` does
+  (arguments, parameters, enum members, array literals, struct literals,
+  match patterns). A new line also separates call arguments and parameters.
+- **Names:** identifiers may be Persian and may contain spaces or ZWNJ
+  (`روال جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
+  same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
+  `ي`/`ك` equal Persian `ی`/`ک`.
+- **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
+  written with a ZWNJ or a space, but not glued together: `نادرستسرچاپ` is an
+  unknown identifier.
+- Strings are UTF-8 bytes, as in English: `"سلام".طول()` is `8` (bytes);
+  use `.شمارنویسه()` for the letter count (`4`).
+- `salam translate fa file.salam` rewrites English source to Persian
+  (`translate en` goes back): keywords, `true/false/null/this`, the entry
+  function, primitive type names, and the built-in methods of §15.
+  Comparisons come out as words in Persian (`بزرگتر`, `برابر`, ...) and as
+  symbols in English (`>`, `==`, ...); generic `<T>` keeps its brackets.
+
+## 14. Persian keywords
+
+| English             | Persian             | English                   | Persian                       |
+| ------------------- | ------------------- | ------------------------- | ----------------------------- |
+| `func`              | `روال`              | `ret`                     | `برگشت`                       |
+| `if`                | `اگر`               | `else`                    | `وگرنه`                       |
+| `until` (while)     | `تا`                | `repeat`                  | `تکرار`                       |
+| `to` (in repeat)    | `تا`                | `by` (step)               | `هر`                          |
+| `each`              | `هر`                | `in`                      | `در`                          |
+| `match`             | `همخوان`            | `switch`                  | `ترابرد`                      |
+| `break`             | `بشکن`              | `continue`                | `گذر`                         |
+| `mut`               | `ناپایا`            | `const`                   | `پایا`                        |
+| `type`              | `گونه`              | `struct`                  | `ساختار`                      |
+| `enum`              | `جداشمار`           | `interface`               | `میانجی`                      |
+| `impl`              | `کاربست`            | `on` (impl X on T)        | `بر`                          |
+| `end`               | `پایان`             | `as`                      | `برگردان`                     |
+| `import`            | `واردسازی`          | `include`                 | `فراخوانی`                    |
+| `package`           | `بسته`              | `pub`                     | `همگانی`                      |
+| `true` / `false`    | `درست` / `نادرست`   | `null`                    | `پوچ`                         |
+| `this`              | `این`               | `defer`                   | `دیرکن`                       |
+| `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
+| `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
+| `export`            | `برون‌داد`          | `layout`                  | `چیدمان`                      |
+| `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
+| `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
+| `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
+| `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
+| `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
+
+Context words (keywords only in their position, usable as names elsewhere):
+`static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`
+(`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
+`framework` `چارچوب`, `use` (struct embedding) `شامل`.
+`mut func` is `ناپایا روال`.
+
+**The built-in functions have Persian names, and a Persian file must use
+them** - the English spelling is an error (`E001`):
+
+| English          | Persian           |
+| ---------------- | ----------------- |
+| `len`            | `طول`             |
+| `sizeof`         | `اندازه‌گونه`     |
+| `args`           | `آرگومان‌ها`      |
+| `env`            | `متغیر‌محیطی`     |
+| `lang`           | `زبان`            |
+| `open`           | `بازکردن`         |
+| `listdir`        | `فهرست‌پوشه`      |
+| `hash`           | `درهم`            |
+| `char_code`      | `کدنویسه`         |
+| `char_from_code` | `نویسه‌ازکد`      |
+| `strcmp`         | `مقایسه‌رشته`     |
+| `spawn`          | `نخ‌ساز`          |
+| `join`           | `نخ‌پیوند`        |
+| `callhandler`    | `فراخوان‌دستگیره` |
+| `atomic_load`    | `اتمی‌بخوان`      |
+| `atomic_store`   | `اتمی‌بنویس`      |
+| `atomic_add`     | `اتمی‌بیفزا`      |
+| `atomic_swap`    | `اتمی‌جابجا`      |
+| `atomic_cas`     | `اتمی‌مقایسه`     |
+
+**Stay English in Persian files:** the compile-time constants (`SALAM_OS`,
+`SALAM_OS_WINDOWS`, ...) and C names declared in `درون‌داد`.
+
+Two Persian words have two meanings, told apart by position:
+
+- `تا` is `until` at the start of a statement and `to` inside a `تکرار`
+  header: `تا ک < ۳:` loops while `ک < ۳`; `تکرار ۱ تا ۵ در ای:` counts 1..5.
+  Persian `تا` reads naturally as "while", so the §2 polarity trap is less
+  likely, but the rule is the same: the loop runs **while** the condition
+  holds.
+- `هر` is `each` at the start of a statement and `by` (the step) inside a
+  `تکرار` header: `هر ع در لیست:` vs `تکرار ۰ تا ۲۰ هر ۲ در ای:`.
+
+`و` is a reserved word (`and`), so it can never be a name; `و۱` and `وکتور`
+are fine.
+
+## 15. Persian types, built-in methods and std package names
+
+**Types:**
+
+| English          | Persian                      | English          | Persian                  |
+| ---------------- | ---------------------------- | ---------------- | ------------------------ |
+| `void`           | `تهی`                        | `bool`           | `منطقی`                  |
+| `char`           | `نویسه`                      | `uchar`          | `یونیکد`                 |
+| `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
+| `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
+| `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
+| `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
+| `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
+| `Variant<...>`   | `گوناگون<...>`               |                  |                          |
+
+Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
+`اعشار` is **f32**; a float literal such as `۲.۵` is `اعشار۶۴`, so write
+`اعشار۶۴` for ordinary floating point.
+
+**Built-in methods** (on `str`, `Vector`, `HashMap`, `File` and iterators):
+
+| English     | Persian       | English       | Persian         |
+| ----------- | ------------- | ------------- | --------------- |
+| `push`      | `بیفزا`       | `pop`         | `دربیاور`       |
+| `get`       | `بگیر`        | `ref`         | `ارجاع`         |
+| `set`       | `بنشان`       | `len`         | `طول`           |
+| `cap`       | `ظرفیت`       | `free`        | `آزادکن`        |
+| `put`       | `درج`         | `has`         | `دارد`          |
+| `remove`    | `حذف`         | `size`        | `اندازه`        |
+| `iter`      | `پیمایش`      | `has_next`    | `داردبعدی`      |
+| `key`       | `کلید`        | `value`       | `مقدار`         |
+| `next`      | `بعدی`        | `read`        | `خواندن`        |
+| `readline`  | `خواندن خط`   | `write`       | `نوشتن`         |
+| `seek`      | `جابجایی`     | `close`       | `ببند`          |
+| `concat`    | `پیوست`       | `substr`      | `زیررشته`       |
+| `find`      | `بیاب`        | `split`       | `بشکاف`         |
+| `trim`      | `پیراست`      | `to_int`      | `به صحیح`       |
+| `to_float`  | `به اعشار`    | `char_count`  | `شمارنویسه`     |
+| `char_at`   | `نویسه شماره` | `char_substr` | `زیررشته نویسه` |
+| `char_find` | `بیاب نویسه`  |               |                 |
+
+The free built-in `len(x)` keeps its English name (there is no `طول(x)`
+function; use `x.طول()` or `len(x)`).
+
+**Std packages and their functions** have Persian names declared with
+`@fa "..."` next to `@en "..."` in `std/`. Import by the Persian name and call
+through it; never guess a name, read the `@fa` line in `std/<pkg>/`:
+
+```salam
+واردسازی رشته
+واردسازی ریاضی
+واردسازی سیستم عامل
+
+روال ریشه:
+    سرچاپ رشته.طول("سلام")، ریاضی.جذر(۱۶.۰)
+    سرچاپ سیستم عامل.آرگومان‌ها().طول()
+پایان
+```
+
+Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عامل`,
+`io` `ورودی خروجی`, `fmt` `قالب بندی`, `conv` `تبدیل`, `time` `زمان`,
+`rand` `تصادفی`, `sort` `مرتب سازی`, `json` `جیسون`, `regex`
+`عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
+`fs` `سیستم پرونده`, `file` `پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
+`thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
+`log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
+`bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+`term` `پایانه`, `cli` `خط فرمان`.
+
+A few function names, to show the style: `str.Len` `طول`, `str.Split`
+`تفکیک کردن`, `str.Join` `بپیوند`, `str.Trim` `پیرایش`, `str.Replace`
+`جایگزینی`, `str.Contains` `شامل است`, `str.ToInt` `تبدیل به عدد`,
+`str.FromInt` `از عدد`, `math.Sqrt` `جذر`, `math.Abs` `قدرمطلق`,
+`math.Pow` `توان`, `math.Min` / `Max` `کمینه` / `بیشینه`, `os.Args`
+`آرگومان ها`. **English std names are rejected in a Persian file**
+(`رشته.Len(...)` is E001 "identifier must be Persian in a Persian file"), so
+look the Persian name up instead of guessing it.
+
+Give your own `pub` API both spellings the same way:
+
+```salam
+@en "Twice"
+@fa "دوبار"
+همگانی روال دوبار(ع: صحیح): صحیح:
+    برگشت ع * ۲
+پایان
+```
+
+## 16. Persian syntax crib
+
+```salam
+پایا بیشینه := ۱۰                        // const (one word)
+ناپایا شمار := ۰                         // mut global
+
+ساختار نقطه:
+    همگانی ایکس: صحیح = ۰
+    همگانی ایگرگ: صحیح = ۰
+    همگانی روال جمع(): صحیح:
+        برگشت این.ایکس + این.ایگرگ
+    پایان
+پایان
+
+جداشمار رنگ: قرمز، سبز، آبی پایان
+
+روال دوبرابر(ن: صحیح): صحیح:
+    برگشت ن * ۲
+پایان
+
+روال ریشه:
+    نام := "سارا"                        // immutable
+    ناپایا ک := ۰                        // mutable
+    ع := ۲.۵ برگردان اعشار۶۴             // cast with برگردان
+    اگر ک > ۱۰ و ک < ۲۰:
+        سرچاپ "بین"
+    وگرنه ک == ۰:                        // else-if
+        سرچاپ "صفر"
+    وگرنه:
+        سرچاپ "دیگر"
+    پایان
+    تا ک < ۳:                            // while
+        ک += ۱
+    پایان
+    تکرار ۳:                             // three times
+        چاپ "*"
+    پایان
+    تکرار ۱ تا ۵ در ای:                  // 1..5 inclusive
+        چاپ ای، ""
+    پایان
+    تکرار ۰ تا ۲۰ هر ۵ در ای:            // with a step
+        چاپ ای، ""
+    پایان
+    آ := [۱۰، ۲۰]
+    هر (ش، م) در آ:                      // index and value
+        سرچاپ ش، م
+    پایان
+    ن := نقطه { ایکس = ۳، ایگرگ = ۴ }
+    سرچاپ ن.جمع()، دوبرابر(ن.ایکس)
+    متن := همخوان رنگ.سبز:               // match: bare member names
+        قرمز، آبی => "گرم یا سرد"
+        سبز => "سبز"
+    پایان
+    ترابرد ک:                            // switch: each label has its own پایان
+        ۳:
+            سرچاپ "سه"
+            بشکن
+        پایان
+        وگرنه:
+            سرچاپ "?"
+        پایان
+    پایان
+    سرچاپ نام، ع، متن
+پایان
+```
+
+More forms, each checked with the current compiler:
+
+```salam
+// collections
+ناپایا و۱ := وکتور {} برگردان وکتور<صحیح>
+دیرکن و۱.آزادکن()
+و۱.بیفزا(۵)
+سرچاپ و۱.بگیر(۰)، و۱.طول()
+ناپایا نگ := نگاشت {} برگردان نگاشت<رشته، صحیح>
+دیرکن نگ.آزادکن()
+نگ.درج("الف"، ۱)
+هر (کلید، مقدار) در نگ:
+    سرچاپ کلید، مقدار
+پایان
+
+// lambdas: no return type, captured by value
+دوبرابر := (ع: صحیح) => ع * ۲
+رده := (نمره: صحیح):
+    برگشت نمره >= ۱۰ ? "قبول" : "مردود"
+پایان
+روال به‌کاربردن(ر: روال (صحیح) صحیح، مقدار: صحیح): صحیح:
+    برگشت ر(مقدار)
+پایان
+
+// guards use اگر
+جداشمار شکل:
+    دایره(شعاع: اعشار۶۴)
+    مستطیل(پهنا: اعشار۶۴، بلندی: اعشار۶۴)
+پایان
+روال مساحت(ش: شکل): اعشار۶۴:
+    برگشت همخوان ش:
+        دایره(ر) => ۳.۱۴ * ر * ر
+        مستطیل(پ، ب) اگر پ == ب => پ * پ
+        مستطیل(پ، ب) => پ * ب
+    پایان
+پایان
+
+// switch on true replaces an if chain
+ترابرد درست:
+    ک < ۰:
+        سرچاپ "منفی"
+        بشکن
+    پایان
+    ک == ۳ یا ک == ۴:
+        سرچاپ "سه یا چهار"
+        بشکن
+    پایان
+پایان
+
+// interfaces, impl on a built-in type, generics, پویا (dyn)
+میانجی رتبه‌دار:
+    روال رتبه(): صحیح
+پایان
+کاربست رتبه‌دار بر رشته:
+    روال رتبه(): صحیح: برگشت len(این) پایان
+پایان
+روال بالاتر<ت: رتبه‌دار>(الف: ت، ب: ت): صحیح:
+    اگر الف.رتبه() > ب.رتبه():
+        برگشت الف.رتبه()
+    پایان
+    برگشت ب.رتبه()
+پایان
+روال توصیف(ش: پویا شکل‌دار):             // پویا is dyn
+    سرچاپ ش.نام()
+پایان
+
+// static members, mut methods, embedding
+ساختار شمارنده:
+    ن: صحیح = ۰
+    همگانی پایا سقف := ۱۰۰
+    همگانی ایستا روال تازه(آغاز: صحیح): شمارنده:
+        برگشت شمارنده { ن = آغاز }
+    پایان
+    همگانی ناپایا روال بیفزای():
+        این.ن += ۱
+    پایان
+پایان
+ساختار سگ:
+    همگانی شامل جانور                     // embeds جانور's fields and methods
+    همگانی نژاد: رشته = ""
+پایان
+
+// Variant
+روال شرح(م: گوناگون<صحیح، رشته>): رشته:
+    برگشت همخوان م:
+        صحیح ع => "عدد " + ع
+        رشته ر => "متن " + ر
+    پایان
+پایان
+
+// reference parameter, defer, pointers
+روال واریز(ح &: حساب، مبلغ: صحیح):
+    ح.موجودی += مبلغ
+پایان
+دیرکن سرچاپ "پاکسازی"
+پ := پوچ برگردان صحیح*
+
+// packages: بسته in the library file, فراخوانی in the user
+بسته ابزار
+همگانی روال چهاربرابر(ع: صحیح): صحیح:
+    برگشت ع * ۴
+پایان
+// ...and in the program:
+فراخوانی ابزار "ابزار.salam"
+سرچاپ ابزار.چهاربرابر(۵)
+
+// C functions and compile-time branches
+درون‌داد:
+    روال sqrt(x: اعشار۶۴): اعشار۶۴
+پایان
+پیوند پویا "sqlite3"
+اگر SALAM_OS_WINDOWS:
+    پایا جداکننده := "\\"
+وگرنه:
+    پایا جداکننده := "/"
+پایان
+
+// threads: spawn and join stay English
+ر := spawn(کارگر)
+join(ر)
+```
+
+## 17. Rules and traps specific to Persian
+
+All of §6 applies. In addition:
+
+1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
+2. **Enum patterns in `همخوان` are bare member names** (`سبز =>`), not
+   `رنگ.سبز =>`; the qualified form is a parse error in a pattern.
+3. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
+   fallthrough continues into the next label unless you `بشکن`.
+4. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
+5. **No `٫` decimal separator**; write `۱۲.۵`.
+6. **Output digits are ASCII** and booleans print as `true`/`false`.
+7. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
+   (`۰.۱ برگردان اعشار` prints `0.10000000149011612`). A float literal is
+   already `اعشار۶۴`: casting a literal is allowed, but casting a variable
+   to the type it already has is a useless cast (E093).
+8. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
+   write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
+9. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
+   `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
+   `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+10. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
+    `حدبالا` or `حد_بالا`.
+11. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
+    The English name is not a fallback in a Persian file, and an invented
+    translation will not resolve.
+12. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
+    same as in English, so search `tests/en/errors/` by code.
+
+## 18. Complete Persian programs
+
+A command-line program with a struct, a vector, a map and a match:
+
+```salam
+واردسازی رشته
+
+جداشمار سطح: کم، متوسط، زیاد پایان
+
+ساختار دانشجو:
+    همگانی نام: رشته = ""
+    همگانی نمره: صحیح = ۰
+پایان
+
+روال سطح از(نمره: صحیح): سطح:
+    اگر نمره >= ۱۷:
+        برگشت سطح.زیاد
+    وگرنه نمره >= ۱۲:
+        برگشت سطح.متوسط
+    پایان
+    برگشت سطح.کم
+پایان
+
+روال برچسب(س: سطح): رشته:
+    برگشت همخوان س:
+        کم => "ضعیف"
+        متوسط => "خوب"
+        زیاد => "عالی"
+    پایان
+پایان
+
+روال ریشه:
+    ناپایا کلاس := وکتور {} برگردان وکتور<دانشجو>
+    دیرکن کلاس.آزادکن()
+    کلاس.بیفزا(دانشجو { نام = "سارا"، نمره = ۱۹ })
+    کلاس.بیفزا(دانشجو { نام = "علی"، نمره = ۱۳ })
+    کلاس.بیفزا(دانشجو { نام = "رضا"، نمره = ۹ })
+
+    ناپایا شمار := نگاشت {} برگردان نگاشت<رشته، صحیح>
+    دیرکن شمار.آزادکن()
+    ناپایا جمع := ۰
+    هر د در کلاس:
+        ب := برچسب(سطح از(د.نمره))
+        سرچاپ د.نام، د.نمره، ب
+        جمع += د.نمره
+        قبلی := شمار.دارد(ب) ? شمار.بگیر(ب) : ۰
+        شمار.درج(ب، قبلی + ۱)
+    پایان
+    سرچاپ "میانگین:"، جمع / کلاس.طول()
+    سرچاپ "عالی‌ها:"، شمار.بگیر("عالی")
+    سرچاپ رشته.طول("پایان")
+پایان
+```
+
+The same program in English is a direct keyword-for-keyword translation;
+`salam translate en` produces it.
+
+## 19. The Persian tutorial on salamlang.ir
+
+The course at <https://www.salamlang.ir/learn/> teaches the whole language in
+Persian, one lesson per page, and every example on it is compiled and run
+when the site is built. Point Persian-speaking users to the matching lesson:
+
+| Topic                                            | Lesson                                         |
+| ------------------------------------------------ | ---------------------------------------------- |
+| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>        |
+| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>    |
+| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>        |
+| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>    |
+| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>      |
+| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>   |
+| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>        |
+| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>        |
+| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>    |
+| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>      |
+| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>        |
+| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>       |
+| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>  |
+| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>      |
+| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>        |
+| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
+| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
+| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
+| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
+| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
+| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |
+| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
+| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
+| Layout DSL `چیدمان`                              | <https://www.salamlang.ir/learn/layout/>       |
+| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

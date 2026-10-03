@@ -65,6 +65,21 @@ gates each publish step on its secret and logs a notice when it skips, so a
 release with none of these set still builds and attaches the `.deb`/`.rpm`
 and does nothing else.
 
+## Reproducible builds
+
+`salam version` prints a `built:` line, and the compiler embeds that timestamp
+when it builds itself. By default it is the current time, so two builds of
+the same commit differ in that one string. Set
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/specs/source-date-epoch/)
+to fix it, usually to the commit time:
+
+```sh
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/bash/build-selfhost.sh
+```
+
+The date is always printed in UTC. A value that is not a whole number of
+seconds is ignored.
+
 ## Per-target instructions
 
 ### Debian / Ubuntu - `.deb` on the release
@@ -75,15 +90,15 @@ immutable-releases setting locks a release's assets the instant it publishes,
 so anything trying to attach a `.deb`/`.rpm` afterward (which is what
 `packaging-release.yml` did originally) fails with `HTTP 422: Cannot upload
 assets to an immutable release`. The fix is building
-`salam_<version>-1_{amd64,arm64,armhf,i386}.deb` from the Linux tarballs
+`salam-<version>-linux-{x86_64,aarch64,armhf,i686}.deb` from the Linux tarballs
 already sitting in `./release/` before the release is created, so they ship
 in the same initial asset list.
 
 Users install with:
 
 ```sh
-wget https://github.com/SalamLang/Salam/releases/download/v0.4.0/salam_0.4.0-1_amd64.deb
-sudo apt install ./salam_0.4.0-1_amd64.deb
+wget https://github.com/SalamLang/Salam/releases/download/v0.4.7/salam-0.4.7-linux-x86_64.deb
+sudo apt install ./salam-0.4.7-linux-x86_64.deb
 ```
 
 `apt install ./file.deb` (not `dpkg -i`) pulls in `libxml2` and friends.

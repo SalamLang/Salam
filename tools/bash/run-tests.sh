@@ -62,6 +62,10 @@ if [ "${1:-}" = "--worker" ]; then
         "$SALAM_ABS" format "$jobdir/$name.salam" --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
         "$SALAM_ABS" format "$jobdir/$name.salam" --check --lang="$lang" --no-color --log-level=error >/dev/null 2>&1
         idem=$?
+        golden=0
+        if [ -f "${fabs%.salam}.golden" ] && ! cmp -s "$jobdir/$name.salam" "${fabs%.salam}.golden"; then
+            golden=1
+        fi
         exe="$jobdir/$name.exe"
         btry=1
         while [ ! -x "$exe" ] && [ "$btry" -le 2 ]; do
@@ -87,11 +91,11 @@ if [ "${1:-}" = "--worker" ]; then
         gottab=$([ -x "$texe" ] && "$texe" 2>&1 | tr -d '\r')
 
         want=$(tr -d '\r' <"$expabs")
-        if [ "$idem" -eq 0 ] && [ "$got" = "$want" ] &&
+        if [ "$idem" -eq 0 ] && [ "$golden" -eq 0 ] && [ "$got" = "$want" ] &&
             [ "$tabidem" -eq 0 ] && [ "$hastab" -eq 0 ] && [ "$gottab" = "$want" ]; then
             echo "PASS $label"
         else
-            echo "FAIL $label (idempotent=$idem tab-idem=$tabidem has-tab=$hastab)"
+            echo "FAIL $label (idempotent=$idem golden=$golden tab-idem=$tabidem has-tab=$hastab)"
             echo "  got: $(printf '%s' "$got" | tr '\n' '|')"
             echo "  tab: $(printf '%s' "$gottab" | tr '\n' '|')"
         fi
@@ -175,6 +179,20 @@ if [ "${1:-}" = "--worker" ]; then
             echo "PASS $label (build)"
         else
             echo "FAIL $label (build failed)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+        fi
+        rm -rf "$jobdir"
+    }
+    wk_jsbuildonly() {
+        jobdir="$WORK/jsbojob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        out="$jobdir/a.js"
+        buildlog="$jobdir/build.log"
+        (cd "$jobdir" && "$SALAM_ABS" js "$fabs" --output="$out" --no-color --log-level=error --lang="$lang") >"$buildlog" 2>&1
+        if [ -s "$out" ]; then
+            echo "PASS $label (js build)"
+        else
+            echo "FAIL $label (js build failed)"
             sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
         fi
         rm -rf "$jobdir"
@@ -280,14 +298,25 @@ EOF_MSGS
         llvm)
             jobdir="$WORK/llvmjob_${jobid}_$$"
             mkdir -p "$jobdir"
-            got=$( (cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error 2>/dev/null) | tr -d '\r')
+            (
+                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>/dev/null
+                echo "$?" >"$jobdir/.rc"
+            )
+            got=$(tr -d '\r' <"$jobdir/.stdout")
+            rc=$(cat "$jobdir/.rc")
             rm -rf "$jobdir"
-            wk_check "$expabs" "$got"
+            want_rc_file="${fabs%.salam}.exit"
+            if [ -f "$want_rc_file" ] && [ "$rc" != "$(tr -d '\r\n' <"$want_rc_file")" ]; then
+                echo "FAIL $label (exit $rc, want $(tr -d '\r\n' <"$want_rc_file"))"
+            else
+                wk_check "$expabs" "$got"
+            fi
             ;;
         fmt) wk_fmt ;;
         repl) wk_repl ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
+        jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
         esac
     }
@@ -378,6 +407,8 @@ fi
 
 : "${SALAM_C_STRICT:=1}"
 export SALAM_C_STRICT
+: "${SALAM_EXEC_TIMEOUT_MS:=120000}"
+export SALAM_EXEC_TIMEOUT_MS
 
 case "$(uname -s 2>/dev/null)" in
 Linux) HOST_OS=linux ;;
@@ -414,6 +445,11 @@ note_result() {
 }
 
 SECTIONS="$*"
+
+MOCK_AR=${AR:-ar}
+if [ -z "${AR:-}" ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/ar ]; then
+    MOCK_AR=/usr/bin/ar
+fi
 
 want() {
     [ -z "$SECTIONS" ] && return 0
@@ -510,6 +546,9 @@ collect_example_dir() {
             if [ -f "$base.buildonly" ]; then
                 add_job buildonly "$dir/$lang/${name}#build" "$f" "$lang" -
             fi
+            if [ -f "$base.jsbuildonly" ]; then
+                add_job jsbuildonly "$dir/$lang/${name}#js" "$f" "$lang" -
+            fi
         done
     done
 }
@@ -555,7 +594,7 @@ if want db; then
         }
     done
     dbok=0
-    if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$DBCC" ] && [ -n "$mockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/dbwork/.work"
         mockobjs="$WORK/dbwork/.work/mysql_mock.o"
         if "$DBCC" -c "$mockc" -o "$WORK/dbwork/.work/mysql_mock.o" >/dev/null 2>&1; then
@@ -565,7 +604,7 @@ if want db; then
                 mockobjs="$mockobjs $WORK/dbwork/.work/postgres_mock.o"
             fi
             # shellcheck disable=SC2086
-            if ar rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
+            if "$MOCK_AR" rcs "$WORK/dbwork/.work/libsalammock.a" $mockobjs >/dev/null 2>&1; then
                 dbok=1
             fi
         fi
@@ -611,10 +650,10 @@ if want opencv; then
         }
     done
     ocvok=0
-    if [ -n "$OCVCC" ] && [ -n "$ocvmockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$OCVCC" ] && [ -n "$ocvmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/opencvwork/.work"
         if "$OCVCC" -c -std=c11 "$ocvmockc" -o "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/opencvwork/.work/libsalam_opencv_mock.a" "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1; then
+            "$MOCK_AR" rcs "$WORK/opencvwork/.work/libsalam_opencv_mock.a" "$WORK/opencvwork/.work/opencv_mock.o" >/dev/null 2>&1; then
             ocvok=1
         fi
     fi
@@ -646,10 +685,10 @@ if want webview_cef; then
     cefmockc=""
     [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
     cefok=0
-    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v ar >/dev/null 2>&1; then
+    if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/cefwork/.work"
         if "$CEFCC" -c -std=c11 "$cefmockc" -o "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1 &&
-            ar rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
+            "$MOCK_AR" rcs "$WORK/cefwork/.work/libsalam_webview_cef_mock.a" "$WORK/cefwork/.work/cef_mock.o" >/dev/null 2>&1; then
             cefok=1
         fi
     fi
@@ -884,7 +923,7 @@ TIMEREPORT_EOF
         tr_wall=$(tr_field "$tr_json" wall_ns)
         tr_bad=""
         [ -n "$tr_wall" ] && [ "$tr_wall" -gt 0 ] || tr_bad="wall_ns not positive"
-        for k in source lexer parser semantic codegen write; do
+        for k in source lexer parser semantic codegen link; do
             grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
         done
         tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |
@@ -898,8 +937,12 @@ TIMEREPORT_EOF
         fi
     fi
 
+    rm -rf "$tr_dir/.salam-build"
     (cd "$tr_dir" && "$SALAM_ABS" build --time-trace=trace.json tiny.salam >/dev/null 2>&1)
-    if [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
+    tr_trc=$?
+    if [ "$tr_trc" -ne 0 ]; then
+        note_result "FAIL timereport/trace (build exited $tr_trc)" "timereport/trace"
+    elif [ -s "$tr_dir/trace.json" ] && grep -q '"ph":"X"' "$tr_dir/trace.json"; then
         note_result "PASS timereport/trace" "timereport/trace"
     else
         note_result "FAIL timereport/trace (no trace events written)" "timereport/trace"

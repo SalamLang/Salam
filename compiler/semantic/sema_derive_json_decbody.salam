@@ -17,8 +17,15 @@ func jd_dec_temp(s &: Sema, t: int, name: str, ind: str): str:
     if k == TY_PTR:
         ret ind + "mut " + name + " := null as " + spelling + "\n"
     end
-    if jd_is_scalar(s, t) || k == TY_ENUM:
+    if jd_is_scalar(s, t) or k == TY_ENUM:
         ret ind + "mut " + name + " := 0 as " + spelling + "\n"
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        c0 := derive_type_spelling(s, sym_at(s, enum_case_struct(s, t, 0)).ty)
+        if str.Len(c0) == 0:
+            ret ""
+        end
+        ret ind + "mut " + name + " := " + c0 + " {} as " + spelling + "\n"
     end
     ret ind + "mut " + name + " := " + spelling + " {}\n"
 end
@@ -27,7 +34,7 @@ func jd_dec_field_arm(
     s &: Sema, a &: at.Ast, f: int, keyvar: str, first: bool, ctr &: int, home: int, sp: co.SrcSpan
 ): str:
     fa := jd_attr_of(s, a, f, sp)
-    if !fa.ok:
+    if not fa.ok:
         ret ""
     end
     ind := JIND + JIND + JIND
@@ -41,7 +48,7 @@ func jd_dec_field_arm(
     end
     head := first ? "if" : "else"
     mut out := ind + head + " " + keyvar + " == " + jd_quote(fa.name) + ":\n"
-    out = out + deep + "if " + flag + " && " + JD_STRICT + ":\n"
+    out = out + deep + "if " + flag + " and " + JD_STRICT + ":\n"
     out = out + jd_fail(deep + JIND, "duplicate key '" + fa.name + "'", JD_POS)
     out = out + deep + "end\n" + deep + flag + " = true\n"
     ret out + val
@@ -57,10 +64,10 @@ func jd_dec_struct_keys(
         f := mems.get(i)
         if sym_at(s, f).kind == SYM_FIELD:
             fa := jd_attr_of(s, a, f, sp)
-            if !fa.ok:
+            if not fa.ok:
                 ret ""
             end
-            if !fa.skip:
+            if not fa.skip:
                 ctr += 1
                 flags.push("_f" + ctr)
                 needs.push(fa.optional ? "" : fa.name)
@@ -88,7 +95,7 @@ func jd_dec_struct(
     s &: Sema, a &: at.Ast, t: int, ctr &: int, home: int, sp: co.SrcSpan
 ): str:
     sym := ty_at(s, t).decl
-    if sym == 0 || sym_at(s, sym).members == 0:
+    if sym == 0 or sym_at(s, sym).members == 0:
         ret ""
     end
     keyvar := jd_fresh(ctr, "k")
@@ -112,7 +119,7 @@ func jd_dec_missing(flags: Vector<str>, needs: Vector<str>): str:
     repeat needs.len() in i:
         want := needs.get(i)
         if str.Len(want) > 0:
-            out = out + JIND + "if " + JD_STRICT + " && " + flags.get(i) + " == false:\n"
+            out = out + JIND + "if " + JD_STRICT + " and " + flags.get(i) + " == false:\n"
             out = out + jd_fail(JIND + JIND, "missing key '" + want + "'", JD_START)
             out = out + JIND + "end\n"
         end
@@ -127,7 +134,7 @@ func jd_dec_map(
         ret ""
     end
     kk := ty_at(s, key).kind
-    if kk != TY_STR && kk != TY_UCHAR:
+    if kk != TY_STR and kk != TY_UCHAR:
         ret ""
     end
     keyvar := jd_fresh(ctr, "k")
@@ -136,7 +143,7 @@ func jd_dec_map(
     ind := JIND + JIND + JIND
     decl := jd_dec_temp(s, val, tmp, ind)
     body := jd_dec_value(s, a, val, tmp, ind, ctr, false, home, sp)
-    if str.Len(decl) == 0 || str.Len(body) == 0:
+    if str.Len(decl) == 0 or str.Len(body) == 0:
         ret ""
     end
     put := ind + JD_OUT + ".put(" + keyvar + ", " + tmp + ")\n"
@@ -150,7 +157,7 @@ func jd_dec_seq(
     i3 := JIND + JIND + JIND
     decl := jd_dec_temp(s, elem, tmp, i3)
     body := jd_dec_value(s, a, elem, tmp, i3, ctr, false, home, sp)
-    if str.Len(decl) == 0 || str.Len(body) == 0:
+    if str.Len(decl) == 0 or str.Len(body) == 0:
         ret ""
     end
     mut out := JIND + JD_POS + " = __jdws(" + JD_TEXT + ", " + JD_START + ")\n"
@@ -181,17 +188,17 @@ func jd_dec_of_struct(
 ): str:
     sym := ty_at(s, t).decl
     fj := derive_method_sig(s, sym, "from_json", 1)
-    if fj != 0 && ty_at(s, sig_at(s, fj).ret_type).kind == TY_BOOL:
+    if fj != 0 and ty_at(s, sig_at(s, fj).ret_type).kind == TY_BOOL:
         ret jd_dec_from_json(ctr)
     end
     cur := derive_map_cursor(s, sym)
-    if cur != 0 && derive_method_sig(s, sym, "put", 2) != 0:
+    if cur != 0 and derive_method_sig(s, sym, "put", 2) != 0:
         kt := sig_at(s, derive_method_sig(s, cur, "key", 0)).ret_type
         vt := sig_at(s, derive_method_sig(s, cur, "value", 0)).ret_type
         ret jd_dec_map(s, a, kt, vt, ctr, home, sp)
     end
     elem := derive_seq_elem(s, sym)
-    if str.Len(derive_seq_count(s, sym)) > 0 && elem >= 0:
+    if str.Len(derive_seq_count(s, sym)) > 0 and elem >= 0:
         if derive_method_sig(s, sym, "push", 1) == 0:
             ret ""
         end
@@ -212,6 +219,12 @@ func jd_dec_body(
     end
     if v.kind == TY_MAP:
         ret jd_dec_map(s, a, v.key, v.elem, ctr, home, sp)
+    end
+    if v.kind == TY_VARIANT and enum_data_sym(s, t) != 0:
+        ret jd_dec_enum_data(s, a, t, ctr, home, sp)
+    end
+    if not jd_is_scalar(s, t) and v.kind != TY_ENUM and v.kind != TY_PTR:
+        ret ""
     end
     lead := JIND + JD_POS + " = __jdws(" + JD_TEXT + ", " + JD_START + ")\n"
     body := jd_dec_value(s, a, t, JD_OUT, JIND, ctr, false, home, sp)
@@ -235,4 +248,68 @@ func jd_dec_source(
     out = out + JD_ERRP + " &: int, " + JD_STRICT + ": bool): int:\n"
     out = out + JIND + "mut " + JD_POS + " := " + JD_START + "\n" + body
     ret out + JIND + "ret " + JD_POS + "\nend\n"
+end
+
+func jd_dec_enum_data(
+    s &: Sema, a &: at.Ast, vt: int, ctr &: int, home: int, sp: co.SrcSpan
+): str:
+    spelling := derive_type_spelling(s, vt)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    i2 := JIND + JIND
+    i3 := i2 + JIND
+    i4 := i3 + JIND
+    mut units := ""
+    mut arms := ""
+    keyvar := jd_fresh(ctr, "k")
+    ke := jd_fresh(ctr, "q")
+    nm := jd_fresh(ctr, "en")
+    q := jd_fresh(ctr, "q")
+    repeat enum_case_count(s, vt) in i:
+        cs := enum_case_struct(s, vt, i)
+        mname := enum_case_member(s, cs)
+        cspell := derive_type_spelling(s, sym_at(s, cs).ty)
+        if str.Len(cspell) == 0:
+            ret ""
+        end
+        mut fields := Vector {} as Vector<str>
+        enum_case_fields(s, a, cs, fields)
+        nf := fields.len()
+        fields.free()
+        if nf == 0:
+            head := str.Len(units) == 0 ? "if" : "else"
+            units = units + i2 + head + " " + nm + " == " + jd_quote(mname) + ":\n"
+            units = units + i3 + JD_OUT + " = " + cspell + " {} as " + spelling + "\n"
+            continue
+        end
+        tmp := jd_fresh(ctr, "t")
+        val := jd_dec_value(s, a, sym_at(s, cs).ty, tmp, i4, ctr, false, home, sp)
+        if str.Len(val) == 0:
+            ret ""
+        end
+        head2 := str.Len(arms) == 0 ? "if" : "else"
+        arms = arms + i3 + head2 + " " + keyvar + " == " + jd_quote(mname) + ":\n"
+        arms = arms + i4 + "mut " + tmp + " := " + cspell + " {}\n" + val
+        arms = arms + i4 + JD_OUT + " = " + tmp + " as " + spelling + "\n"
+    end
+    mut out := JIND + JD_POS + " = __jdws(" + JD_TEXT + ", " + JD_START + ")\n"
+    out = out + JIND + "if __jdbyte(" + JD_TEXT + ", " + JD_POS + ") == 34:\n"
+    if str.Len(units) == 0:
+        out = out + jd_fail(i2, "expected an object naming an enum member", JD_POS)
+    else:
+        out = out + i2 + "mut " + q + " := 0\n"
+        out = out + i2 + nm + " := __jdgstr(" + JD_TEXT + ", " + JD_POS + ", " + q + ")\n"
+        out = out + i2 + "if " + q + " < 0:\n" + jd_fail(i3, "expected a string naming an enum member", JD_POS) + i2 + "end\n"
+        out = out + units + i2 + "else:\n" + jd_fail(i3, "no enum member with that name", JD_POS) + i2 + "end\n"
+        out = out + i2 + JD_POS + " = " + q + "\n"
+    end
+    out = out + JIND + "else:\n"
+    if str.Len(arms) == 0:
+        out = out + jd_fail(i2, "expected a string naming an enum member", JD_POS)
+    else:
+        body := arms + i3 + "else:\n" + jd_fail(i4, "no enum member with that name", JD_POS) + i3 + "end\n"
+        out = out + jd_dec_object(keyvar, body, ke)
+    end
+    ret out + JIND + "end\n"
 end

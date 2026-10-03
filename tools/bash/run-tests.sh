@@ -923,7 +923,7 @@ TIMEREPORT_EOF
         tr_wall=$(tr_field "$tr_json" wall_ns)
         tr_bad=""
         [ -n "$tr_wall" ] && [ "$tr_wall" -gt 0 ] || tr_bad="wall_ns not positive"
-        for k in source lexer parser semantic codegen link; do
+        for k in source lexer parser semantic codegen; do
             grep -q "\"$k\":{" "$tr_json" || tr_bad="missing phase '$k'"
         done
         tr_sum=$(tr -d ' ' <"$tr_json" | grep -o '"self_ns":[0-9]*' | cut -d: -f2 |

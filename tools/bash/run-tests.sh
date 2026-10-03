@@ -299,15 +299,18 @@ EOF_MSGS
             jobdir="$WORK/llvmjob_${jobid}_$$"
             mkdir -p "$jobdir"
             (
-                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>/dev/null
+                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>"$jobdir/.stderr"
                 echo "$?" >"$jobdir/.rc"
             )
             got=$(tr -d '\r' <"$jobdir/.stdout")
             rc=$(cat "$jobdir/.rc")
+            why=$(tr -d '\r' <"$jobdir/.stderr" | grep -v '^$' | head -3 | tr '\n' ' ')
             rm -rf "$jobdir"
             want_rc_file="${fabs%.salam}.exit"
             if [ -f "$want_rc_file" ] && [ "$rc" != "$(tr -d '\r\n' <"$want_rc_file")" ]; then
-                echo "FAIL $label (exit $rc, want $(tr -d '\r\n' <"$want_rc_file"))"
+                echo "FAIL $label (exit $rc, want $(tr -d '\r\n' <"$want_rc_file"))${why:+ - $why}"
+            elif [ -z "$got" ] && [ -n "$why" ]; then
+                echo "FAIL $label (no output, exit $rc) - $why"
             else
                 wk_check "$expabs" "$got"
             fi

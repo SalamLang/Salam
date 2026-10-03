@@ -205,7 +205,7 @@ repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
-each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map)
+each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -403,9 +403,9 @@ m := HashMap {} as HashMap<str, int>
 ```salam
 a := [1, 2, 3]                        // int[3], indexed 0..2
 grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
-mid := a[1: 3]                        // slice (view), writes through to `a`
-whole := a[:]  head := a[: 2]  tail := a[1:]
-func sum(view: int[:]): int: ... end  // int[:] = slice parameter
+mid := a[1: 3]                        // slice (view) of a[1] and a[2]; writes through to `a`
+whole := a[:]  head := a[: 2]  tail := a[1:]   // omitted bound = that end of `a`
+func sum(view: int[]): int: ... end   // int[] = slice parameter, any length
 len(a)                                // length builtin
 ```
 
@@ -982,7 +982,7 @@ ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter free
   index via `v[i]` (read) / `v[i] = x` (write); free functions `contains index_of
 count_of slice clone reverse swap extend`.
 - **`HashMap<K,V>`**: `put(k,v) get(k) has(k) remove(k) size is_empty
-iter free`; iterate with `each (k, v) in m:`.
+iter free`; iterate with `each k, v in m:`.
 - **`Set<T>`**, **`Stack<T>`** (`push pop peek size is_empty`),
   **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
@@ -1519,7 +1519,7 @@ General mapping that applies to all source languages:
 - **Go**: `struct`+methods→same; `interface`→`interface`/`dyn`; goroutines→
   `spawn`; `sync.Mutex/WaitGroup`→`sync.*`; multiple returns → a `struct` or
   out-params via pointers; `error` return → `bool`/`Option`; slices → `Vector`
-  or `T[:]` slices; `map`→`HashMap`.
+  or `T[]` slices; `map`→`HashMap`.
 - **Rust**: `struct`→`struct`, `enum` with data→`enum` with data (`Circle(r: f64)`); `trait`→`interface`+
   `impl … on …`; `Option`/`Result`→`Option`/`bool`; generics + bounds
   `<T: Trait>`→`<T: Interface>`; ownership/`Drop`→manual `defer x.free()`
@@ -2078,7 +2078,7 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `fs` `سیستم پرونده`, `file` `پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
-`bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی شبکه`
+`bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
 (imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`.
 

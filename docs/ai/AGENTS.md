@@ -93,10 +93,10 @@ helpers only as you use them.
 Loop bindings are stricter: a `_` prefix does not excuse them, because the
 fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
 `repeat 20000 in _i:`. The one escape is the bare name `_`, for the
-`each (key, value)` form that has no way to omit a binding:
+`each key, value` form that has no way to omit a binding:
 
 ```salam
-each (_, value) in scores:   // iterate for the values alone
+each _, value in scores:     // iterate for the values alone
     total = total + value
 end
 ```

@@ -205,7 +205,7 @@ repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
-each (i, x) in xs:  println i, x  end // index + value (or (key,value) for a map)
+each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -982,7 +982,7 @@ ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter free
   index via `v[i]` (read) / `v[i] = x` (write); free functions `contains index_of
 count_of slice clone reverse swap extend`.
 - **`HashMap<K,V>`**: `put(k,v) get(k) has(k) remove(k) size is_empty
-iter free`; iterate with `each (k, v) in m:`.
+iter free`; iterate with `each k, v in m:`.
 - **`Set<T>`**, **`Stack<T>`** (`push pop peek size is_empty`),
   **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),

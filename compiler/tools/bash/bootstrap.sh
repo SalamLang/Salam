@@ -106,8 +106,8 @@ if [ -n "$LLVM_FLAGS" ] && [ "$(uname -s)" = Darwin ]; then
 fi
 
 # a caller can point this at a directory holding its own static libs (e.g. a
-# libxml2.a built without LZMA/ICONV, to dodge a system libxml2 that needs
-# them) so every stage's link sees it, regardless of the LLVM state above.
+# .a the host only ships as a .so) so every stage's link sees it, regardless
+# of the LLVM state above.
 if [ -n "${SALAM_EXTRA_LIBPATH:-}" ]; then
     for d in $SALAM_EXTRA_LIBPATH; do
         [ -d "$d" ] || continue

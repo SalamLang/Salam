@@ -1,0 +1,72 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import ssl
+import net.tcp
+import sync
+
+mut ready := sync.NewWaitGroup()
+
+func serve():
+    srv := tcp.Bind(19302)
+    sync.Done(ready)
+    ctx := ssl.NewServerContext("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    repeat 4:
+        c := tcp.Accept(srv)
+        conn := ssl.Wrap(ctx, c.fd)
+        if ssl.Accept(conn):
+            msg := ssl.Read(conn, 1024)
+            ssl.Write(conn, "echo:" + msg)
+        end
+        ssl.Close(conn)
+        tcp.Close(c)
+    end
+    ssl.CloseContext(ctx)
+    tcp.CloseServer(srv)
+end
+
+func attempt(host: str, verify: int, label: str):
+    ctx := ssl.NewClientContext()
+    ssl.LoadVerifyLocationsFile(ctx, "tests/fixtures/ssl/server.crt")
+    ssl.SetVerify(ctx, verify)
+    c := tcp.Dial("127.0.0.1", 19302)
+    conn := ssl.Wrap(ctx, c.fd)
+    if host != "":
+        ssl.SetHostname(conn, host)
+    end
+    ok := ssl.Connect(conn)
+    println label
+    println ok
+    println ssl.PeerVerified(conn)
+    if ok:
+        ssl.Write(conn, label)
+        println "  " + ssl.Read(conn, 1024)
+    else:
+        println "  err: " + ssl.LastErrorString()
+    end
+    ssl.Close(conn)
+    tcp.Close(c)
+    ssl.CloseContext(ctx)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(ready)
+    attempt("wrong.example", ssl.VERIFY_PEER, "badhost")
+    attempt("", ssl.VERIFY_NONE, "noverify")
+    attempt("127.0.0.1", ssl.VERIFY_PEER, "ipsan")
+    attempt("", ssl.VERIFY_PEER, "nohost")
+    join(t)
+end

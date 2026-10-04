@@ -12,46 +12,13 @@
  *
  */
 
+
 @en "ssl"
 @fa "اس اس ال"
 package ssl
 
 import mem
-import str
-
-link dynamic "ssl"
-
-link dynamic "crypto"
-
-extern:
-    func TLS_client_method(): void*
-    func TLS_server_method(): void*
-    func SSL_CTX_new(method: void*): void*
-    func SSL_CTX_free(ctx: void*)
-    func SSL_CTX_ctrl(ctx: void*, cmd: int, large: i64, parg: void*): i64
-    func SSL_CTX_set_verify(ctx: void*, mode: int, callback: void*)
-    func SSL_CTX_load_verify_locations(ctx: void*, cafile: str, capath: void*): int
-    func SSL_CTX_set_default_verify_paths(ctx: void*): int
-    func SSL_CTX_use_certificate_file(ctx: void*, file: str, filetype: int): int
-    func SSL_CTX_use_PrivateKey_file(ctx: void*, file: str, filetype: int): int
-    func SSL_CTX_check_private_key(ctx: void*): int
-
-    func SSL_new(ctx: void*): void*
-    func SSL_free(ssl: void*)
-    func SSL_set_fd(ssl: void*, fd: int): int
-    func SSL_ctrl(ssl: void*, cmd: int, large: i64, parg: void*): i64
-    func SSL_set1_host(ssl: void*, hostname: str): int
-    func SSL_connect(ssl: void*): int
-    func SSL_accept(ssl: void*): int
-    func SSL_read(ssl: void*, buf: void*, num: int): int
-    func SSL_write(ssl: void*, buf: void*, num: int): int
-    func SSL_shutdown(ssl: void*): int
-    func SSL_get_error(ssl: void*, rc: int): int
-    func SSL_get_verify_result(ssl: void*): i64
-
-    func ERR_get_error(): u64
-    func ERR_error_string_n(e: u64, buf: void*, len: u64)
-end
+import tls
 
 @en "VERIFY_NONE"
 @fa "بدون تایید"
@@ -77,9 +44,15 @@ pub const TLS1_3 := 772
 @fa "گواهی معتبر"
 pub const CERT_OK := 0 as i64
 
-const _CTRL_SET_TLSEXT_HOSTNAME := 55
-const _TLSEXT_NAMETYPE_HOST_NAME := 0
-const _CTRL_SET_MIN_PROTO_VERSION := 123
+const _VERIFY_FAILED := 1 as i64
+const _VERIFY_SKIPPED := 50 as i64
+
+const _ERROR_NONE := 0
+const _ERROR_SSL := 1
+const _ERROR_SYSCALL := 5
+const _ERROR_ZERO_RETURN := 6
+
+mut _last_error := ""
 
 @en "Context"
 @fa "زمینه"
@@ -91,4 +64,65 @@ end
 @fa "اتصال"
 pub struct Conn:
     pub handle: void* = null
+end
+
+struct _Ctx:
+    pub server: bool = false
+    pub verify: int = VERIFY_PEER
+    pub ca_file: str = ""
+    pub min_version: i64 = TLS1_2
+    pub scfg: tls.ServerConfig = tls.ServerConfig {}
+end
+
+struct _Session:
+    pub ctx: void* = null
+    pub fd: i64 = 0 - 1
+    pub host: str = ""
+    pub conn: tls.Conn = tls.Conn {}
+    pub attached: bool = false
+    pub live: bool = false
+    pub closed: bool = false
+    pub verify_result: i64 = 0 - 1
+    pub err: str = ""
+end
+
+func _ctx_of(ctx: Context): _Ctx*:
+    ret ctx.handle as _Ctx*
+end
+
+func _session_of(c: Conn): _Session*:
+    ret c.handle as _Session*
+end
+
+func _fail(s: _Session*, msg: str): bool:
+    s[0].err = msg
+    _last_error = msg
+    ret false
+end
+
+func _release(s: _Session*):
+    if s[0].attached:
+        tls.Detach(s[0].conn)
+        s[0].attached = false
+    end
+    s[0].live = false
+end
+
+func _finish(s: _Session*): bool:
+    s[0].attached = true
+    if not tls.ConnOk(s[0].conn):
+        msg := tls.ConnError(s[0].conn)
+        if msg.find("certificate verification failed") >= 0:
+            s[0].verify_result = _VERIFY_FAILED
+        end
+        _release(s)
+        ret _fail(s, msg)
+    end
+    cx := s[0].ctx as _Ctx*
+    if cx[0].min_version >= TLS1_3 and tls.Version(s[0].conn) != "TLS1.3":
+        _release(s)
+        ret _fail(s, "the peer does not support the minimum TLS version")
+    end
+    s[0].live = true
+    ret true
 end

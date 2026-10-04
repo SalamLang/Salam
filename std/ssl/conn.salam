@@ -12,23 +12,20 @@
  *
  */
 
+
 package ssl
 
 @en "Wrap"
 @fa "پوشاندن"
 pub func Wrap(ctx: Context, fd: i64): Conn:
-    if ctx.handle == null:
+    if ctx.handle == null or fd < 0:
         ret Conn { handle = null }
     end
-    handle := SSL_new(ctx.handle)
-    if handle == null:
-        ret Conn { handle = null }
-    end
-    if SSL_set_fd(handle, fd as int) != 1:
-        SSL_free(handle)
-        ret Conn { handle = null }
-    end
-    ret Conn { handle = handle }
+    s := mem.AllocateZeroed(sizeof(_Session) as u64) as _Session*
+    s[0] = _Session {}
+    s[0].ctx = ctx.handle
+    s[0].fd = fd
+    ret Conn { handle = s as void* }
 end
 
 @en "ConnOk"
@@ -43,7 +40,30 @@ pub func Connect(c: Conn): bool:
     if c.handle == null:
         ret false
     end
-    ret SSL_connect(c.handle) == 1
+    s := _session_of(c)
+    if s[0].attached:
+        ret s[0].live
+    end
+    cx := s[0].ctx as _Ctx*
+    if cx[0].server:
+        ret _fail(s, "Connect needs a client context")
+    end
+    mut cfg := tls.NewConfig(s[0].host)
+    cfg.ca_file = cx[0].ca_file
+    cfg.insecure_skip_verify = cx[0].verify == VERIFY_NONE
+    if not cfg.insecure_skip_verify and s[0].host.len() == 0:
+        ret _fail(s, "call SetHostname before Connect so the peer certificate can be checked")
+    end
+    s[0].conn = tls.WrapClient(s[0].fd, cfg)
+    if not _finish(s):
+        ret false
+    end
+    if cfg.insecure_skip_verify:
+        s[0].verify_result = _VERIFY_SKIPPED
+    else:
+        s[0].verify_result = CERT_OK
+    end
+    ret true
 end
 
 @en "Accept"
@@ -52,7 +72,20 @@ pub func Accept(c: Conn): bool:
     if c.handle == null:
         ret false
     end
-    ret SSL_accept(c.handle) == 1
+    s := _session_of(c)
+    if s[0].attached:
+        ret s[0].live
+    end
+    cx := s[0].ctx as _Ctx*
+    if not cx[0].server:
+        ret _fail(s, "Accept needs a server context")
+    end
+    s[0].conn = tls.WrapServer(s[0].fd, cx[0].scfg)
+    if not _finish(s):
+        ret false
+    end
+    s[0].verify_result = CERT_OK
+    ret true
 end
 
 @en "Read"
@@ -61,14 +94,11 @@ pub func Read(c: Conn, max: int): str:
     if c.handle == null or max <= 0:
         ret ""
     end
-    buf := mem.AllocateZeroed((max + 1) as u64)
-    defer mem.Free(buf)
-    n := SSL_read(c.handle, buf, max)
-    if n <= 0:
+    s := _session_of(c)
+    if not s[0].live:
         ret ""
     end
-    s := str.Clone(buf as str)
-    ret s
+    ret tls.Read(s[0].conn, max)
 end
 
 @en "Write"
@@ -77,22 +107,32 @@ pub func Write(c: Conn, data: str): int:
     if c.handle == null:
         ret 0
     end
-    ret SSL_write(c.handle, data as void*, len(data) as int)
+    s := _session_of(c)
+    if not s[0].live:
+        ret 0
+    end
+    ret tls.Write(s[0].conn, data)
 end
 
 @en "Shutdown"
 @fa "خاموش‌ کردن"
 pub func Shutdown(c: Conn):
-    if c.handle != null:
-        SSL_shutdown(c.handle)
+    if c.handle == null:
+        ret
     end
+    s := _session_of(c)
+    if s[0].live:
+        s[0].closed = true
+    end
+    _release(s)
 end
 
 @en "Close"
 @fa "بستن"
 pub func Close(c: Conn):
-    if c.handle != null:
-        SSL_shutdown(c.handle)
-        SSL_free(c.handle)
+    if c.handle == null:
+        ret
     end
+    _release(_session_of(c))
+    mem.Free(c.handle)
 end

@@ -9,7 +9,6 @@ class Salam < Formula
   head "https://github.com/SalamLang/Salam.git", branch: "main"
 
   depends_on "llvm@22" => :build
-  depends_on "libxml2"
   depends_on "zstd"
 
   uses_from_macos "zlib"
@@ -53,8 +52,6 @@ class Salam < Formula
            "--out", buildpath
 
     ENV.prepend_path "LIBRARY_PATH", formula_opt_lib("zstd")
-    ENV.prepend_path "LIBRARY_PATH", formula_opt_lib("libxml2")
-    ENV.prepend_path "CPATH", formula_opt_include("libxml2") / "libxml2"
 
     system "sh", "tools/bash/build-selfhost.sh",
            "--output=#{buildpath}/salam",

@@ -101,7 +101,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 built=0
 
-DEPENDS='libc6 (>= 2.38), libgcc-s1, libtinfo6, libxml2'
+DEPENDS='libc6 (>= 2.38), libgcc-s1'
 
 for spec in \
         "x86_64:amd64" \

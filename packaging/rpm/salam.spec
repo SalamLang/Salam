@@ -16,8 +16,6 @@ ExclusiveArch:  x86_64 aarch64
 
 Requires:       glibc >= 2.38
 Requires:       libgcc
-Requires:       libxml2
-Requires:       ncurses-libs
 
 # The payload is a prebuilt release binary: Salam's compiler is written in
 # Salam, so a from-source build needs a seed compiler that COPR cannot fetch

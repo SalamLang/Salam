@@ -315,22 +315,24 @@ end
 
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
   `defer v.free()`.
-- **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
-  block form `(): n = n + 1  ret n  end`. Function-typed parameters:
-  `func () int`, `func (int, int) bool`.
+- **Closures/lambdas** are first-class typed values, always written
+  `(params): ... end` with an explicit `ret` for the value:
+  `(x: int): ret x * 2 end`, or several statements
+  `(): n = n + 1  ret n  end`. Salam has no `=>` at all; it was removed in
+  0.5.0. Function-typed parameters: `func () int`, `func (int, int) bool`.
   - **Lambdas capture by value.** Each lambda gets its own copy of the outer
-    variables at creation time: after `mut n := 1  g := () => n  n = 5`,
+    variables at creation time: after `mut n := 1  g := (): ret n end  n = 5`,
     `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
     own copy (it counts across calls), never the caller's `n`. Share state
     through a pointer, a heap collection or a `mut` global.
-  - **Never write a return type on a lambda.** `(x: int): int => x` and a
-    block `(x: int): int: ... end` fail to parse; the return type is inferred
-    (`(x: int): ... ret x * 2 end` is fine).
+  - **Never write a return type on a lambda.** `(x: int): int: ... end`
+    fails to parse; the return type is inferred from the `ret`
+    (`(x: int): ret x * 2 end`).
   - **A bare named function decays to its address**, typed `i64` - the slot
     C-style callback registries take (e.g. the `web` router):
     `web.Get(r, "/", home)`. For a `void*` slot, or to cast to a typed C
     function pointer, use **`&fn`** instead. For a _typed_ Salam callback
-    (`func (int) int`), pass a **lambda**: `apply((x: int) => inc(x), 3)`.
+    (`func (int) int`), pass a **lambda**: `apply((x: int): ret inc(x) end, 3)`.
   - **A variable may not reuse a function's name.** With a bare name being a
     value, `test := 5` next to `func test` is rejected (E090), in both
     directions, so an identifier always means exactly one thing.
@@ -567,9 +569,9 @@ end
 ```
 
 **A match arm is always `pattern: … end`.** The older `pattern => expr` form
-was removed in 0.5.0; `=>` now means a lambda and nothing else. An arm's block
-may hold statements, and its value (when `match` is used as an expression) is
-the bare expression it ends with.
+was removed in 0.5.0, along with `=>` itself: the token is not part of the
+language any more. An arm's block may hold statements, and its value (when
+`match` is used as an expression) is the bare expression it ends with.
 
 **A comma (`,` or Persian `،`) is required between enum members** - a bare
 newline is not enough, because member names may contain spaces
@@ -1484,7 +1486,7 @@ General mapping that applies to all source languages:
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
 | exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
 | null / nil / None            | `null` (pointers) or `Option.None()`                                              |
-| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                             |
+| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                       |
 | enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
@@ -1511,9 +1513,9 @@ General mapping that applies to all source languages:
 - `class`→`struct`, `interface`→`interface`, `enum`→`enum`, generics carry over
   (`Array<T>`→`Vector<T>`, `Map`→`HashMap`, `Set`→`Set`, object literal→`struct`
   or `HashMap<str, …>`).
-- Arrow functions `(x) => x*2` map almost directly: `(x: int) => x * 2` (add
-  types). `Promise`/`async`/`await` have **no equivalent**, so use synchronous
-  code, or `spawn`/`join` + `sync` (§8) for real parallelism.
+- Arrow functions `(x) => x*2` become `(x: int): ret x * 2 end` (add types;
+  Salam has no `=>`). `Promise`/`async`/`await` have **no equivalent**, so use
+  synchronous code, or `spawn`/`join` + `sync` (§8) for real parallelism.
 - `let`/`const`→`mut`/`:=`+`const`. `null`/`undefined`→`null`/`Option`.
   `JSON.parse/stringify`→`json.*`. `throw`→`bool`/`Option`.
 - Truthiness is gone: conditions must be real `bool`.
@@ -1616,7 +1618,7 @@ Without it a worker can only reach globals.
 Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`WaitCondTimeout`/`Signal`/
 `Broadcast` - always re-test your predicate in an `until` loop, wakeups can be
 spurious), `RWMutex` (`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring),
-`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`),
+`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, (): ... end)`),
 `SleepMs`, `NowMs` (unspecified epoch - only differences mean anything).
 Everything blocks on a condition variable rather than polling.
 
@@ -2227,7 +2229,7 @@ More forms, each checked with the current compiler:
 پایان
 
 // lambdas: no return type, captured by value
-دوبرابر := (ع: صحیح) => ع * ۲
+دوبرابر := (ع: صحیح): برگشت ع * ۲ پایان
 رده := (نمره: صحیح):
     برگشت نمره >= ۱۰ ? "قبول" : "مردود"
 پایان

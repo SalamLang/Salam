@@ -21,6 +21,8 @@ import stats
 import io
 import filepath
 import collections
+import os
+import time
 
 func round0(x: f64): f64: ret ((x + 0.5) as i64) as f64 end
 
@@ -270,13 +272,14 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("`-O3`, the C backend compiled by `gcc -O3`, and the default `tcc` toolchain")
     lines.push("(no optimizer) as the out-of-the-box reference. C and C++ run at `-O3` too.")
     lines.push("")
-    lines.push("- Started (epoch ns): ".concat(conv.FormatInt(started)))
-    lines.push("- Finished (epoch ns): ".concat(conv.FormatInt(finished)))
+    lines.push("- Date: ".concat(time.FormatISOUTC(started / 1000000000)).concat(" (took ").concat(conv.FormatInt((finished - started) / 60000000000)).concat(" min)"))
+    commit := os.Env("BENCH_COMMIT")
+    if commit.len() > 0: lines.push("- Commit: `".concat(commit).concat("`")) end
     lines.push("")
 
     lines.push("## Methodology")
     lines.push("")
-    lines.push("Times below are the **minimum wall-clock over ".concat(conv.FormatInt(cfg.runs as i64)).concat(" timed runs** (plus one"))
+    lines.push("Times below are the **minimum wall-clock over ".concat(conv.FormatInt(cfg.runs as i64)).concat(" timed run(s)** (plus one"))
     lines.push("untimed warm-up run per variant). The minimum is the most robust")
     lines.push("single-number estimator on a shared machine: it rejects scheduler and")
     lines.push("background-load noise, which inflates averages on short-lived processes.")
@@ -284,7 +287,7 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("language; all variants are verified against the C output before timing.")
     lines.push("")
     lines.push("For the full per-run distribution (min/avg/max/median/stdev, raw epoch-ns")
-    lines.push("samples), see `results/results.json` and `results/results.csv`.")
+    lines.push("samples), see [`results.json`](results.json) and [`results.csv`](results.csv).")
     lines.push("")
 
     lines.push("## Environment")
@@ -571,41 +574,17 @@ pub func WriteReport(cfg &: Config, s &: Store, names: Vector<str>, ekeys: Vecto
     lines.push("Salam matches or beats the fastest other compiled language on ".concat(conv.FormatInt(matched as i64)).concat(" of ").concat(conv.FormatInt(names.len() as i64)).concat(" programs."))
     lines.push("")
 
-    if names contains(names, "12_hello_print"):
-        lines.push("### hello_print (the IO case)")
-        lines.push("")
-        lines.push("`12_hello_print` prints a constant string one million times. It was previously")
-        lines.push("the one program where Salam trailed (≈13 ms, near the bottom). The C backend now")
-        lines.push("routes stdout of single-threaded modules through a process-global userspace")
-        lines.push("buffer: a literal `println` becomes an inline `memcpy` into a 64 KiB buffer plus")
-        lines.push("one `write(2)` when it fills or at exit, skipping the per-call stdio lock and the")
-        lines.push("`strlen`/format machinery (the length is known at compile time). That took it")
-        lines.push("**13 ms → 3 ms, tying the fastest language measured** (Rust's buffered writer is")
-        lines.push("3 ms, Go 8 ms, C's line-by-line `printf` 13 ms). Both Salam backends now use this")
-        lines.push("path: the LLVM backend emits the same buffer as IR globals plus a")
-        lines.push("`llvm.global_dtors` flush, so `salam llvm` also dropped from ≈13 ms to 3 ms.")
-        lines.push("Multi-threaded modules keep using locked stdio, so correctness and output")
-        lines.push("ordering are unchanged; the full test suite passes on both backends.")
-        lines.push("")
-        lines.push("The fast path is now enabled across targets, not just 64-bit Linux/macOS:")
-        lines.push("")
-        lines.push("- **32-bit LLVM** uses target-independent IR (i64 byte counters and the")
-        lines.push("  `llvm.memcpy.p0.p0.i64` intrinsic), so `--target=i686-*` gets the same buffer.")
-        lines.push("- **Windows (C backend)** routes the raw write through `_write` and keeps the")
-        lines.push("  weak-symbol buffer with a destructor flush, so a native mingw build buffers too")
-        lines.push("  (verified: the prelude compiles and links against `_write` on both")
-        lines.push("  `x86_64-w64-mingw32` and `i686-w64-mingw32`).")
-        lines.push("- **Windows LLVM targets** intentionally fall back to `printf` (the POSIX")
-        lines.push("  `write(2)` the buffer emits does not exist there), keeping cross-compiled")
-        lines.push("  Windows binaries correct.")
-        lines.push("")
-    end
-
     lines.push("Notes:")
+    lines.push("")
+    lines.push("- `12_hello_print` prints a constant line one million times, so it measures")
+    lines.push("  how each runtime buffers stdout more than how good its generated code is.")
+    lines.push("- The `*_stdlib_*` programs use each language's own library where it has one")
+    lines.push("  (Salam's `matrix`/`tensor`, NumPy in Python); C, C++, Rust, Go and PHP use")
+    lines.push("  plain loops. Those rows compare libraries, not compilers.")
     lines.push("- Python and PHP are included for scale only; they are consistently much")
     lines.push("  slower and are never the fastest on this suite.")
     lines.push("- Measurements were taken on a single machine under normal background load;")
     lines.push("  small gaps between the compiled languages can be within run-to-run noise.")
 
-    io.WriteLines(filepath.Join(cfg.root, "RESULTS.md"), lines)
+    io.WriteLines(filepath.Join(filepath.Join(cfg.root, "results"), "README.md"), lines)
 end

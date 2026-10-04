@@ -17,11 +17,21 @@ cover that gap.
 Default sections: general features basics types switch match data
     editor-selected interop stdlib
 
-Each line is AGREE, DIVERGE, SKIP-NOEXP (no .out) or SKIP-FAIL (the backend
-could not build or run it). A DIVERGE is not automatically a bug: the JS
-backend has no 64-bit integers, sockets, sqlite or FFI, and the interpreter
-refuses variadic externs and is far slower, so check the cause before
-reporting one.
+Each line is one of:
+
+    AGREE            output matched the .out file
+    DIVERGE          it ran and printed something else
+    DIVERGE-TIMEOUT  it did not finish; output is whatever it flushed
+    SKIP-NOEXP       no .out file to compare against
+    SKIP-FAIL        the backend could not build or emit it at all
+
+Output is compared exactly the way run-tests.sh compares it, so that a pass
+here means the same thing a pass there does. A non-zero exit is not by itself
+a failure, since the runner does not treat it as one either.
+
+A DIVERGE is not automatically a bug: the JS backend has no 64-bit integers,
+sockets, sqlite or FFI, and the interpreter refuses variadic externs and is
+far slower, so check the cause before reporting one.
 USAGE
     exit 2
 }
@@ -56,22 +66,27 @@ SECTIONS="$*"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/salam-sweep.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-HOST_OS=linux
+# Must match tools/bash/run-tests.sh: the expectation files are named after
+# its spellings ('mac', 'x64'), not uname's.
 case "$(uname -s 2>/dev/null)" in
-Darwin) HOST_OS=macos ;;
+Linux) HOST_OS=linux ;;
+Darwin) HOST_OS=mac ;;
 MINGW* | MSYS* | CYGWIN*) HOST_OS=windows ;;
+*) HOST_OS="" ;;
 esac
-HOST_ARCH=$(uname -m 2>/dev/null)
-case "$HOST_ARCH" in
-x86_64 | amd64) HOST_ARCH=x86_64 ;;
+[ "${OS:-}" = "Windows_NT" ] && HOST_OS=windows
+case "$(uname -m 2>/dev/null)" in
+x86_64 | amd64) HOST_ARCH=x64 ;;
 aarch64 | arm64) HOST_ARCH=arm64 ;;
+i386 | i486 | i586 | i686 | x86) HOST_ARCH=x86 ;;
+armv6l | armv7l | armv7 | arm) HOST_ARCH=arm ;;
 *) HOST_ARCH="" ;;
 esac
 
 pick_expect() {
-    if [ -n "$HOST_ARCH" ] && [ -f "$1.$HOST_OS.$HOST_ARCH.out" ]; then
+    if [ -n "$HOST_OS" ] && [ -n "$HOST_ARCH" ] && [ -f "$1.$HOST_OS.$HOST_ARCH.out" ]; then
         printf '%s\n' "$1.$HOST_OS.$HOST_ARCH.out"
-    elif [ -f "$1.$HOST_OS.out" ]; then
+    elif [ -n "$HOST_OS" ] && [ -f "$1.$HOST_OS.out" ]; then
         printf '%s\n' "$1.$HOST_OS.out"
     else
         printf '%s\n' "$1.out"
@@ -101,17 +116,22 @@ for section in $SECTIONS; do
             want=$(tr -d '\r' <"$exp")
             got=""
             ok=1
+            rc=0
             case "$BACKEND" in
             exec)
                 # shellcheck disable=SC2086
-                got=$(timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" exec "$ROOT/$f" $defs \
-                    --no-color --log-level=error --lang="$lang" </dev/null 2>&1 | tr -d '\r') || ok=1
+                timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" exec "$ROOT/$f" $defs \
+                    --no-color --log-level=error --lang="$lang" </dev/null >"$WORK/run.out" 2>&1
+                rc=$?
+                got=$(tr -d '\r' <"$WORK/run.out")
                 ;;
             js)
                 # shellcheck disable=SC2086
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" js "$ROOT/$f" $defs \
                     --output=sweep.js --no-color --log-level=error --lang="$lang") >/dev/null 2>&1; then
-                    got=$(cd "$WORK" && timeout 90 node sweep.js </dev/null 2>&1 | tr -d '\r')
+                    (cd "$WORK" && timeout 90 node sweep.js </dev/null) >"$WORK/run.out" 2>&1
+                    rc=$?
+                    got=$(tr -d '\r' <"$WORK/run.out")
                 else
                     ok=0
                 fi
@@ -121,7 +141,9 @@ for section in $SECTIONS; do
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
                     --backend=llvm --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
                     [ -x "$WORK/sweep.exe" ]; then
-                    got=$(cd "$WORK" && timeout 90 ./sweep.exe </dev/null 2>&1 | tr -d '\r')
+                    (cd "$WORK" && timeout 90 ./sweep.exe </dev/null) >"$WORK/run.out" 2>&1
+                    rc=$?
+                    got=$(tr -d '\r' <"$WORK/run.out")
                 else
                     ok=0
                 fi
@@ -131,6 +153,9 @@ for section in $SECTIONS; do
             if [ "$ok" -eq 0 ]; then
                 echo "SKIP-FAIL $f"
                 skipped=$((skipped + 1))
+            elif [ "$rc" -eq 124 ]; then
+                echo "DIVERGE-TIMEOUT $f"
+                diverge=$((diverge + 1))
             elif [ "$got" = "$want" ]; then
                 echo "AGREE $f"
                 agree=$((agree + 1))

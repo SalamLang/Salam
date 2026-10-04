@@ -482,9 +482,11 @@ sh tools/bash/backend-sweep.sh ./salam llvm types     # one section
 sh tools/bash/backend-sweep.sh ./salam js
 ```
 
-It honours the `// DEFINE:` and `// CONST:` comments the corpus uses, picks the
-same platform-specific `.out` file the runner does, and exits non-zero if
-anything diverged.
+It honours the `// DEFINE:` and `// CONST:` comments the corpus uses, resolves
+the platform-specific `.out` with the runner's own spellings (`mac`, `x64`, not
+uname's), compares output exactly the way the runner does, and exits non-zero
+if anything diverged. A test that did not finish is reported as
+`DIVERGE-TIMEOUT` rather than as wrong output.
 
 A `DIVERGE` is a lead, not a verdict. The JS backend has no 64-bit integers
 (`18446744073709551615` prints as `...552000`), no sockets, sqlite or FFI; the

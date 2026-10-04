@@ -7,7 +7,7 @@ Templates live in this directory with `@PLACEHOLDER@` tokens.
 and writes the result to `packaging/dist/` (generated, not committed).
 
 ```sh
-packaging/bump.sh 0.4.0
+packaging/bump.sh 0.5.0
 ```
 
 It reads the release's own `SHA256SUMS`, so no checksum is ever typed by hand,
@@ -97,8 +97,8 @@ in the same initial asset list.
 Users install with:
 
 ```sh
-wget https://github.com/SalamLang/Salam/releases/download/v0.4.7/salam-0.4.7-linux-x86_64.deb
-sudo apt install ./salam-0.4.7-linux-x86_64.deb
+wget https://github.com/SalamLang/Salam/releases/download/v0.5.0/salam-0.5.0-linux-x86_64.deb
+sudo apt install ./salam-0.5.0-linux-x86_64.deb
 ```
 
 `apt install ./file.deb` (not `dpkg -i`) pulls in the few runtime libraries it
@@ -107,7 +107,7 @@ needs.
 To build locally:
 
 ```sh
-packaging/debian/build-deb.sh --version 0.4.0 --input ./release --output ./debs
+packaging/debian/build-deb.sh --version 0.5.0 --input ./release --output ./debs
 ```
 
 ### Arch - AUR
@@ -126,13 +126,13 @@ First time only, create them:
 3. Seed each repository once by hand:
 
 ```sh
-packaging/bump.sh 0.4.0
+packaging/bump.sh 0.5.0
 git clone ssh://aur@aur.archlinux.org/salam-bin.git
 cd salam-bin
 cp ../packaging/dist/aur/salam-bin/PKGBUILD .
 makepkg --printsrcinfo > .SRCINFO
 git add PKGBUILD .SRCINFO
-git commit -m "Initial import of salam-bin 0.4.0"
+git commit -m "Initial import of salam-bin 0.5.0"
 git push origin master
 ```
 
@@ -157,7 +157,7 @@ using the previous release as a bootstrap seed (the same pattern `rust` and
 Test the formula before sending it:
 
 ```sh
-packaging/bump.sh 0.4.0
+packaging/bump.sh 0.5.0
 brew install --build-from-source --verbose --debug packaging/dist/homebrew/salam.rb
 brew test packaging/dist/homebrew/salam.rb
 brew audit --strict --new packaging/dist/homebrew/salam.rb
@@ -183,7 +183,7 @@ scoop install salam
 ```
 
 **WinGet** is a PR to `microsoft/winget-pkgs`; the manifests go to
-`manifests/s/SalamLang/Salam/0.4.0/`. Validate first:
+`manifests/s/SalamLang/Salam/0.5.0/`. Validate first:
 
 ```powershell
 winget validate --manifest packaging\dist\winget
@@ -196,7 +196,7 @@ winget install --manifest packaging\dist\winget
 cd packaging\dist\chocolatey
 choco pack
 choco apikey --key <API_KEY> --source https://push.chocolatey.org/
-choco push salam.0.4.0.nupkg --source https://push.chocolatey.org/
+choco push salam.0.5.0.nupkg --source https://push.chocolatey.org/
 ```
 
 Expect moderation. The 108 MB download will draw a reviewer comment; the
@@ -235,7 +235,7 @@ for a name that matches a project you do not obviously own. Then:
 
 ```sh
 snapcraft
-snapcraft upload --release=stable salam_0.4.0_amd64.snap
+snapcraft upload --release=stable salam_0.5.0_amd64.snap
 ```
 
 Note `confinement: classic`: a compiler has to read and write files anywhere
@@ -258,9 +258,9 @@ containing just the `bin/` directory. Then:
 
 ```sh
 asdf plugin add salam https://github.com/SalamLang/asdf-salam
-asdf install salam 0.4.0
+asdf install salam 0.5.0
 # mise reads asdf plugins directly:
-mise use -g salam@0.4.0
+mise use -g salam@0.5.0
 ```
 
 ## Release checklist

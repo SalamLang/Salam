@@ -695,7 +695,9 @@ changing the original afterwards does not reach the field. Copying the
 struct shares the box, the same way copying a Vector shares its storage, so a
 method that changes state through one copy shows in the other. Release the
 box with `field.free()` when you are done with it. `copy()` shares the box
-too, while `deep_copy()` boxes a deep copy of whatever value the field holds.
+too, while `deep_copy()` boxes a deep copy of whatever value the field holds
+(a concrete type that holds a raw pointer is copied as a value, so the
+pointer itself is shared).
 That works for interfaces declared in your program; for an interface from
 another package `deep_copy()` refuses, so give the struct its own
 `deep_copy()`.

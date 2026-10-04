@@ -5,7 +5,7 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
 salam=${SALAM:-./salam}
-if [ ! -x "$salam" ]; then
+if ! command -v "$salam" >/dev/null 2>&1; then
     printf 'salam is not built; skipping the message table check.\n' >&2
     exit 0
 fi

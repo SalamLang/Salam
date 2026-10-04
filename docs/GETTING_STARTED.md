@@ -236,6 +236,11 @@ salam format app.salam --tabs
 salam format app.salam --lang=fa
 ```
 
+Top-level code is split into sections: `package`, imports, includes, each
+`link` kind, `extern`, pub consts, consts, vars, types and funcs (pub and
+private apart). The formatter puts exactly one blank line between two
+sections. Inside a section your own blank lines are kept, at most one in a row.
+
 ## 🌐 Layout DSL - compile to HTML/CSS/JS
 
 Salam includes a built-in DSL for describing web layouts.

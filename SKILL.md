@@ -689,6 +689,15 @@ shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
 ```
 
+**`dyn` fields:** a struct field can hold any implementation, e.g.
+`pub shape: dyn Shape = Square {}`. Storing a value copies it into a box, so
+changing the original afterwards does not reach the field. Copying the
+struct shares the box, the same way copying a Vector shares its storage, so a
+method that changes state through one copy shows in the other. Release the
+box with `field.free()` when you are done with it. `copy()` shares the box
+too, and `deep_copy()` refuses a struct with a `dyn` field, since it cannot
+know the concrete type; give such a struct its own `deep_copy()`.
+
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every
 default it does not define itself, and so does an `impl I on T` block, so

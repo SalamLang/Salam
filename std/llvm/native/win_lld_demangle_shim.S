@@ -28,8 +28,8 @@ IMPORT_ALIAS(_ZN4llvm23ItaniumPartialDemanglerD1Ev)
 IMPORT_ALIAS(_ZN4llvm23ItaniumPartialDemangler15partialDemangleEPKc)
 IMPORT_ALIAS(_ZNK4llvm23ItaniumPartialDemangler15getFunctionNameEPcPy)
 
-/* libxml2, from libxml2.a - needed by libLLVMWindowsManifest.a (pulled in
- * transitively by liblldCOFF.a's manifest-merge support). */
+/* libxml2's API, from xml_stub.c - needed by libLLVMWindowsManifest.a (pulled
+ * in transitively by liblldCOFF.a's manifest-merge support). */
 IMPORT_ALIAS(xmlAddChild)
 IMPORT_ALIAS(xmlCopyNamespace)
 IMPORT_ALIAS(xmlDocDumpFormatMemoryEnc)

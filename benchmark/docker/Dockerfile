@@ -76,7 +76,7 @@ WORKDIR /repo
 FROM debian:stable-slim AS salam-builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl unzip gcc libc6-dev git libxml2 \
+        ca-certificates curl unzip gcc libc6-dev git \
     && rm -rf /var/lib/apt/lists/*
 ARG SALAM_SEED_SLUG=linux-x86_64
 COPY tools /repo/tools

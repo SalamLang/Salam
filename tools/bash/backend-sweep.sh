@@ -15,7 +15,7 @@ backend for js/, so most tests never execute anywhere else; this is how to
 cover that gap.
 
 Default sections: general features basics types switch match data
-                  editor-selected interop stdlib
+    editor-selected interop stdlib
 
 Each line is AGREE, DIVERGE, SKIP-NOEXP (no .out) or SKIP-FAIL (the backend
 could not build or run it). A DIVERGE is not automatically a bug: the JS

@@ -411,7 +411,47 @@ func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     end
 end
 
-func header_group(k: int): int:
+func link_group(lexeme: str): int:
+    if str.Equals(lexeme, "static") or str.Equals(lexeme, "ایستا"):
+        ret 4
+    end
+    if str.Equals(lexeme, "dynamic") or str.Equals(lexeme, "پویا"):
+        ret 5
+    end
+    ret 6
+end
+
+func decl_group(ts: tok.TokenStream, i: int): int:
+    n := tok.StreamCount(ts)
+    mut j := i
+    until j < n:
+        t := tok.StreamAt(ts, j)
+        if t.kind == tok.TK_META:
+            j += 1
+            until j < n and tok.StreamAt(ts, j).begin_line == t.begin_line and tok.StreamAt(ts, j).kind != tok.TK_STMT_END:
+                j += 1
+            end
+            continue
+        end
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK and t.kind != tok.TK_STMT_END:
+            break
+        end
+        j += 1
+    end
+    mut is_pub := false
+    until j < n and head_modifier(tok.StreamAt(ts, j).kind):
+        if tok.StreamAt(ts, j).kind == tok.TK_KW_PUB:
+            is_pub = true
+        end
+        j += 1
+    end
+    if j >= n:
+        ret 0
+    end
+    t := tok.StreamAt(ts, j)
+    k := t.kind
+    nk := j + 1 < n ? tok.StreamAt(ts, j + 1).kind : tok.TK_EOF
+    priv := is_pub ? 0 : 1
     if k == tok.TK_KW_PACKAGE:
         ret 1
     end
@@ -421,46 +461,41 @@ func header_group(k: int): int:
     if k == tok.TK_KW_INCLUDE:
         ret 3
     end
-    if k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK:
-        ret 0
+    if k == tok.TK_IDENT and str.Equals(t.lexeme, "link") and (nk == tok.TK_IDENT or nk == tok.TK_STRING):
+        ret link_group(tok.StreamAt(ts, j + 1).lexeme)
     end
-    ret 4
-end
-
-func next_code_index(ts: tok.TokenStream, i: int): int:
-    n := tok.StreamCount(ts)
-    mut j := i
-    until j < n:
-        k := tok.StreamAt(ts, j).kind
-        if k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK and k != tok.TK_STMT_END:
-            ret j
-        end
-        j += 1
+    if k == tok.TK_KW_EXTERN:
+        ret 7
     end
-    ret n
-end
-
-func next_code_kind(ts: tok.TokenStream, i: int): int:
-    j := next_code_index(ts, i)
-    if j >= tok.StreamCount(ts):
-        ret tok.TK_EOF
+    if k == tok.TK_KW_CONST:
+        ret 8 + priv
     end
-    ret tok.StreamAt(ts, j).kind
+    if k == tok.TK_KW_MUT or (k == tok.TK_IDENT and (nk == tok.TK_COLON_ASSIGN or nk == tok.TK_COLON)):
+        ret 10 + priv
+    end
+    if k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_INTERFACE or k == tok.TK_KW_IMPL or k == tok.TK_KW_TYPE:
+        ret 12 + priv
+    end
+    if k == tok.TK_KW_FUNC:
+        ret 14 + priv
+    end
+    ret 0
 end
 
 func step_leading(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int, ts: tok.TokenStream, i: int):
     if not c.line_has_content:
         mut blank := not c.st.minify and c.bracket == 0 and c.has_prev and (t.begin_line as int) > c.prev_end_line + 1
-        if c.indent == 0 and c.bracket == 0 and c.block_top == 0:
-            mut g := header_group(k)
-            is_comment := g == 0
-            if is_comment:
-                g = header_group(next_code_kind(ts, i))
+        if c.indent == 0 and c.bracket == 0 and c.block_top == 0 and c.stmt_head == tok.TK_EOF and k != tok.TK_KW_END and k != tok.TK_KW_ELSE:
+            g := decl_group(ts, i)
+            if not c.st.minify and c.has_prev:
+                if c.hdr_prev >= 1 and c.hdr_prev <= 3:
+                    blank = g != c.hdr_prev
+                else c.hdr_prev != 0 and g != 0 and g != c.hdr_prev:
+                    blank = true
+                end
             end
-            if not c.st.minify and c.has_prev and c.hdr_prev >= 1 and c.hdr_prev <= 3:
-                blank = g != c.hdr_prev
-            end
-            c.hdr_prev = is_comment ? 0 : g
+            lead := k == tok.TK_COMMENT_LINE or k == tok.TK_COMMENT_BLOCK or k == tok.TK_META
+            c.hdr_prev = lead ? 0 : g
         end
         if blank:
             co.SbPutc(out, 10)
@@ -704,6 +739,21 @@ func ord_scan_leading_trivia(text: str, begin: int, bail &: bool): int:
         cur = pstart
     end
     ret cur
+end
+
+func ord_blank_before(text: str, pos: int): bool:
+    mut i := pos - 1
+    mut lines := 0
+    until i >= 0:
+        b := byte_at(text, i)
+        if b == 10:
+            lines += 1
+        else b != 32 and b != 9 and b != 13:
+            break
+        end
+        i -= 1
+    end
+    ret lines >= 2
 end
 
 func ord_extend_trailing_comment(text: str, len0: int, end0: int): int:
@@ -1160,7 +1210,7 @@ pub func ReorderToplevel(
                 pend := ord_rtrim_end(text, pstart, sorted.get(w).uend)
                 co.SbPuts(result, str.Substr(text, pstart, pend - pstart))
                 if w + 1 < run_len:
-                    co.SbPuts(result, "\n\n")
+                    co.SbPuts(result, ord_blank_before(text, sorted.get(w + 1).ustart) ? "\n\n" : "\n")
                 end
                 w += 1
             end

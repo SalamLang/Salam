@@ -23,12 +23,12 @@ exe="$WORK/exe_$jobid.exe"
 rm -f "$exe"
 
 buildlog="$jobdir/build.log"
-cc_flag=""
-[ -n "${SALAM_CC:-}" ] && cc_flag="--cc=$SALAM_CC"
 build_once() {
-    # shellcheck disable=SC2086 # cc_flag is one optional flag; it must stay unquoted so an empty value expands to nothing
+    if [ -n "${SALAM_CC:-}" ]; then
+        set -- --cc="$SALAM_CC" "$@"
+    fi
     (cd "$jobdir" && "$SALAM_BIN" build "$f" --output="$exe" \
-        --no-color --log-level=error --lang="$lang" $cc_flag "$@") >"$buildlog" 2>&1
+        --no-color --log-level=error --lang="$lang" "$@") >"$buildlog" 2>&1
 }
 
 build_once "$@"

@@ -1,0 +1,84 @@
+---
+name: 📊 Benchmark - Publish Results
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: benchmark-publish
+  cancel-in-progress: true
+jobs:
+  publish:
+    if: startsWith(github.event.head_commit.message, 'release:') || github.event_name == 'workflow_dispatch'
+    name: Run suite and open results PR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build benchmark toolchain image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: benchmark/docker/Dockerfile
+          target: bench
+          tags: salam-bench:ci
+          load: true
+          build-args: |
+            ALPINE_VERSION=3.24
+            LLVM_VERSION=22
+          cache-from: type=gha,scope=bench-v2
+          cache-to: type=gha,mode=max,scope=bench-v2
+
+      - name: Run full benchmark suite
+        env:
+          BENCH_RUNS: '10'
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          rm -rf benchmark/results && mkdir -p benchmark/results
+          docker run --rm \
+            --user "$(id -u)":"$(id -g)" \
+            -e BENCH_RUNS="${BENCH_RUNS}" \
+            -e BENCH_COMMIT="${short_sha}" \
+            -v "${{ github.workspace }}/benchmark/results":/repo/benchmark/results \
+            salam-bench:ci
+          cat benchmark/results/README.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open results PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BENCH_RUNS: '10'
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          version="$(cat VERSION)"
+          branch="bench/results-${short_sha}"
+          if git diff --quiet -- benchmark/results; then
+            echo "results unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898213+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git add benchmark/results
+          git commit -m "benchmark: results for v${version} (${short_sha})"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${branch}"
+          if [ -z "$(gh pr list -R "${REPO}" --head "${branch}" --json number --jq '.[].number')" ]; then
+            gh pr create -R "${REPO}" --base main --head "${branch}" \
+              --title "benchmark: results for v${version} (${short_sha})" \
+              --body "Full suite on ${short_sha}, ${BENCH_RUNS} runs per variant."
+          fi

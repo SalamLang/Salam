@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-RESULTS_FILE="${1:?usage: build_pr_comment.sh <RESULTS.md>}"
+RESULTS_FILE="${1:?usage: build_pr_comment.sh <results/README.md>}"
 SHORT_SHA="${SHORT_SHA:-unknown}"
 RUN_URL="${RUN_URL:-}"
 ARTIFACT_NAME="${ARTIFACT_NAME:-}"
@@ -23,7 +23,7 @@ build_full() {
     if [ -n "$quick_section" ]; then
         echo "$quick_section"
     else
-        echo "_(overall ranking section not found in RESULTS.md)_"
+        echo "_(overall ranking section not found in the report)_"
     fi
     echo
     echo "<details>"
@@ -45,7 +45,7 @@ build_truncated() {
     if [ -n "$quick_section" ]; then
         echo "$quick_section"
     else
-        echo "_(overall ranking section not found in RESULTS.md)_"
+        echo "_(overall ranking section not found in the report)_"
     fi
     echo
     echo "_The full per-program report is too large to inline in a PR comment._"

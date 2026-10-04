@@ -3,7 +3,7 @@
 The only C and C++ in the Salam toolchain that is not going away.
 
 Everything else the compiler is made of has a self-hosted counterpart under
-`compiler/`. These eight files do not, and cannot, because of how LLVM and LLD
+`compiler/`. These nine files do not, and cannot, because of how LLVM and LLD
 publish their interfaces:
 
 - **`orc_call.c` / `orc_call.h`** - `LLVMInitializeAllTargets`,
@@ -26,8 +26,12 @@ publish their interfaces:
   on its own thread.
 - **`win_lld_demangle_shim.S`** - a Windows link-time shim; see the comment in
   the file.
+- **`xml_stub.c`** - the sixteen libxml2 symbols LLVM's Windows manifest
+  merger references, so nothing links libxml2. Salam never asks lld to merge
+  manifests; if something did, the merge fails with a parse error.
+  See the comment in the file.
 
-That is ten exported symbols in total:
+Not counting the libxml2 stand-ins, that is ten exported symbols in total:
 
     salam_orc_call_main                 salam_llvm_init_all_targets
     salam_llvm_init_all_target_infos    salam_llvm_init_all_target_mcs

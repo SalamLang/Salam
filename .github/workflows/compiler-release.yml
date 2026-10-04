@@ -88,7 +88,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ccache cmake ninja-build \
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
-            libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
+            libzstd-dev zlib1g-dev \
             musl-dev musl-tools mingw-w64 qemu-user-static wine64
           WINE_BIN="$(command -v wine64 || command -v wine || true)"
           if [ -z "$WINE_BIN" ]; then
@@ -131,13 +131,13 @@ jobs:
           key: ccache-linux-${{ github.run_id }}
           restore-keys: |
             ccache-linux-
-      - name: Restore static third-party libs (sqlite3 + hiredis + libxml2 (hostlibs only), per --target=)
+      - name: Restore static third-party libs (sqlite3, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-v6-${{ github.run_id }}
           restore-keys: |
-            extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-
+            extralibs-sqlite3-3530400-v6-
       - name: Build static third-party libs for all --target= triples
         id: extralibs
         run: |
@@ -160,40 +160,6 @@ jobs:
             unzip -q -o /tmp/sqlite3.zip -d /tmp/sqlite3-src
             SQLITE_C=/tmp/sqlite3-src/sqlite-amalgamation-3530400/sqlite3.c
           fi
-          if any_needed hiredis; then
-            git clone --quiet --depth 1 --branch v1.4.0 \
-              https://github.com/redis/hiredis.git /tmp/hiredis-src
-          fi
-
-          build_libxml2_hostlibs() {
-            need_build xml2 hostlibs || { echo "reusing cached libxml2 for hostlibs"; return 0; }
-            git clone --quiet --depth 1 --branch v2.15.4 \
-              https://github.com/GNOME/libxml2.git /tmp/libxml2-src
-            xb_dir=/tmp/libxml2-build-hostlibs
-            rm -rf "$xb_dir"; mkdir -p "$xb_dir"
-            ( cd "$xb_dir" \
-              && cmake /tmp/libxml2-src -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                   -DBUILD_SHARED_LIBS=OFF -DLIBXML2_WITH_PYTHON=OFF \
-                   -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_LZMA=OFF \
-                   -DLIBXML2_WITH_HTTP=OFF -DLIBXML2_WITH_FTP=OFF \
-                   -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON \
-              && ninja ) >"$xb_dir.log" 2>&1 || {
-              echo "::error::libxml2 build for hostlibs failed"
-              tail -80 "$xb_dir.log"
-              rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
-              return 1
-            }
-            LIB=$(find "$xb_dir" -name "libxml2.a" | head -1)
-            [ -n "$LIB" ] || {
-              echo "::error::libxml2 build for hostlibs reported success but libxml2.a is missing"
-              rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
-              return 1
-            }
-            mkdir -p /tmp/extralibs/hostlibs
-            cp "$LIB" /tmp/extralibs/hostlibs/libxml2.a
-            echo "built libxml2.a for hostlibs"
-            rm -rf "$xb_dir" "$xb_dir.log" /tmp/libxml2-src
-          }
 
           build_sqlite3() {
             target="$1"; cc="$2"; ar="$3"
@@ -202,13 +168,6 @@ jobs:
             "$ar" rcs "/tmp/extralibs/$target/libsqlite3.a" "/tmp/extralibs/$target/sqlite3.o"
             rm -f "/tmp/extralibs/$target/sqlite3.o"
           }
-          build_hiredis() {
-            target="$1"; cc="$2"; ar="$3"
-            mkdir -p "/tmp/extralibs/$target"
-            make -C /tmp/hiredis-src clean >/dev/null
-            make -C /tmp/hiredis-src libhiredis.a CC="$cc" AR="$ar" USE_WERROR=0 >/dev/null
-            cp /tmp/hiredis-src/libhiredis.a "/tmp/extralibs/$target/libhiredis.a"
-          }
           build_all() {
             target="$1"; cc="$2"; ar="$3"
             command -v "$cc" >/dev/null 2>&1 || {
@@ -216,14 +175,10 @@ jobs:
             if need_build sqlite3 "$target"; then
               build_sqlite3 "$target" "$cc" "$ar"; echo "built libsqlite3.a for $target"
             fi
-            if need_build hiredis "$target"; then
-              build_hiredis "$target" "$cc" "$ar"; echo "built libhiredis.a for $target"
-            fi
           }
           build_all x86_64-linux-musl musl-gcc ar
           build_all x86_64-w64-windows-gnu x86_64-w64-mingw32-gcc x86_64-w64-mingw32-ar
           build_all hostlibs gcc ar
-          build_libxml2_hostlibs
 
           ARCH_TARGETS=(); ARCH_GCC=(); ARCH_ARCH=(); ARCH_CTRIPLE=()
           for pair in aarch64:aarch64-linux-musl:aarch64-unknown-linux-musl \
@@ -231,7 +186,7 @@ jobs:
                       arm:arm-linux-musleabihf:arm-unknown-linux-musleabihf; do
             arch="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"
             ctriple="${rest#*:}"
-            need_build sqlite3 "$target" || need_build hiredis "$target" || {
+            need_build sqlite3 "$target" || {
               echo "reusing cached static libs for $target"; continue; }
             rm -rf "/tmp/xtc-${arch}"; mkdir -p "/tmp/xtc-${arch}"
             if curl -fL --connect-timeout 5 --max-time 300 --speed-limit 512 --speed-time 30 \
@@ -263,7 +218,7 @@ jobs:
             chmod -R u+rwX "/tmp/xtc-${arch}" 2>/dev/null || true
             rm -rf "/tmp/xtc-${arch}" "/tmp/xtc-${arch}.tar"
           done
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src
 
           for target in $TARGETS; do
             [ -d "/tmp/extralibs/$target" ] || continue
@@ -283,12 +238,12 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
             echo 'static libs changed; a fresh cache entry will be saved'
           fi
-      - name: Save static third-party libs (sqlite3 + hiredis + libxml2 (hostlibs only), per --target=)
+      - name: Save static third-party libs (sqlite3, per --target=)
         if: steps.extralibs.outputs.changed == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-libxml2-2.15.4-v4-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-v6-${{ github.run_id }}
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
@@ -385,7 +340,7 @@ jobs:
       - name: Validate full test suite (release gate)
         if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
         run: |
-          sudo apt-get install -y libhiredis-dev libmariadb-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libmariadb-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
@@ -826,13 +781,13 @@ jobs:
           CHERE_INVOKING: '1'
         run: sh tools/bash/fetch-musl-sysroots.sh --out /c/muslcc --headers
 
-      - name: Restore static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Restore static third-party libs (sqlite3, per --target=)
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-${{ matrix.os }}-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-win-v5-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
-            extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-
+            extralibs-sqlite3-3530400-win-v5-
       - name: Build static third-party libs for x86_64-w64-windows-gnu + linux-musl targets
         id: extralibs
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
@@ -900,22 +855,12 @@ jobs:
             "$ar" rcs "/c/extralibs/$target/libsqlite3.a" "/c/extralibs/$target/sqlite3.o"
             rm -f "/c/extralibs/$target/sqlite3.o"
           }
-          build_hiredis() {
-            target="$1"; cc="$2"; ar="$3"
-            mkdir -p "/c/extralibs/$target"
-            make -C /tmp/hiredis-src clean >/dev/null
-            make -C /tmp/hiredis-src libhiredis.a CC="$cc" AR="$ar" USE_WERROR=0 >/dev/null
-            cp /tmp/hiredis-src/libhiredis.a "/c/extralibs/$target/libhiredis.a"
-          }
           build_all() {
             target="$1"; cc="$2"; ar="$3"
             { command -v "$cc" >/dev/null 2>&1 || [ -x "$cc" ]; } || {
-              echo "::warning::$cc not found/executable; skipping static sqlite3/hiredis for $target"; return 0; }
+              echo "::warning::$cc not found/executable; skipping static sqlite3 for $target"; return 0; }
             if need_build sqlite3 "$target"; then
               build_sqlite3 "$target" "$cc" "$ar"; echo "built libsqlite3.a for $target"
-            fi
-            if need_build hiredis "$target"; then
-              build_hiredis "$target" "$cc" "$ar"; echo "built libhiredis.a for $target"
             fi
           }
 
@@ -927,10 +872,6 @@ jobs:
             unzip -q -o /tmp/sqlite3.zip -d /tmp/sqlite3-src
             SQLITE_C=/tmp/sqlite3-src/sqlite-amalgamation-3530400/sqlite3.c
           fi
-          if any_needed hiredis; then
-            git clone --quiet --depth 1 --branch v1.4.0 \
-              https://github.com/redis/hiredis.git /tmp/hiredis-src
-          fi
 
           build_all x86_64-w64-windows-gnu gcc ar
 
@@ -940,7 +881,7 @@ jobs:
             wdir=$(make_musl_wrapper "$triple" "$sr")
             build_all "$triple" "$wdir/$triple-gcc" "$wdir/$triple-ar"
           done
-          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src /tmp/hiredis-src
+          rm -rf /tmp/sqlite3.zip /tmp/sqlite3-src
 
           echo "SALAM_EMBED_EXTRALIBS_X86_64_W64_WINDOWS_GNU_DIR=C:/extralibs/x86_64-w64-windows-gnu" \
             >> "$GITHUB_ENV"
@@ -962,12 +903,12 @@ jobs:
             echo 'static libs changed; a fresh cache entry will be saved'
           fi
 
-      - name: Save static third-party libs (sqlite3 + hiredis, per --target=)
+      - name: Save static third-party libs (sqlite3, per --target=)
         if: steps.extralibs.outputs.changed == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\extralibs
-          key: extralibs-sqlite3-3530400-hiredis-v1.4.0-win-v4-${{ matrix.os }}-${{ github.run_id }}
+          key: extralibs-sqlite3-3530400-win-v5-${{ matrix.os }}-${{ github.run_id }}
 
       - name: Install a seed compiler
         id: seed
@@ -1161,7 +1102,7 @@ jobs:
           rm -f smoke.salam smoke*.exe smoke_x86_64 smoke_aarch64 smoke_i686 smoke_arm smoke.o salam_mod_*.c salam_mod_*.h
           cd ..
 
-      - name: Install native libraries for full test suite (hiredis, mariadb, sqlite3, openssl)
+      - name: Install native libraries for full test suite (mariadb, sqlite3, openssl)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: 'C:\msys64\usr\bin\bash.exe --login -eo pipefail "{0}"'
         env:
@@ -1169,16 +1110,15 @@ jobs:
           CHERE_INVOKING: '1'
         run: |
           pacman -Sy --noconfirm --needed \
-            mingw-w64-x86_64-hiredis mingw-w64-x86_64-libmariadbclient mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-libmariadbclient mingw-w64-x86_64-sqlite3
 
-      - name: Stage native libs for full test suite (hiredis, mariadb, sqlite3, openssl, WebView2Loader)
+      - name: Stage native libs for full test suite (mariadb, sqlite3, openssl, WebView2Loader)
         if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
         shell: bash
         run: |
           set -eu
           TCCLIB="salam-windows/tcc/lib"
           MB="/c/msys64/mingw64/bin"
-          cp "$MB/libhiredis.dll"      "$TCCLIB/"
           cp "$MB/libmariadb.dll"      "$TCCLIB/"
           cp "$MB/libsqlite3-0.dll"    "$TCCLIB/libsqlite3.dll"
           cp "$MB/libssl-3-x64.dll"    "$TCCLIB/libssl.dll"
@@ -1577,7 +1517,7 @@ jobs:
             -e CCACHE_DIR=/root/.ccache \
             i386/debian:sid bash -euxc '
               apt-get update
-              PKGS="build-essential ca-certificates ccache file git cmake ninja-build llvm-22-dev liblld-22-dev libpolly-22-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev"
+              PKGS="build-essential ca-certificates ccache file git cmake ninja-build llvm-22-dev liblld-22-dev libpolly-22-dev libzstd-dev zlib1g-dev"
               if ! apt-get install -y --no-install-recommends $PKGS; then
                 echo "::warning::i386 dependency resolution failed - retrying with the amd64 index as an Architecture: all fallback."
                 printf "deb [arch=amd64] http://deb.debian.org/debian sid main\n" > /etc/apt/sources.list.d/arch-all-fallback.list
@@ -1588,23 +1528,12 @@ jobs:
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
               MINGW_SR=/work/sysroots/x86_64-w64-mingw32
-              git clone --quiet --depth 1 --branch v2.15.4 https://github.com/GNOME/libxml2.git /tmp/libxml2-src
-              cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
-                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-                -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
-                -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
-                -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON
-              ninja -C /tmp/libxml2-build
-              mkdir -p /tmp/libxml2-static
-              cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-static/
-              rm -rf /tmp/libxml2-src /tmp/libxml2-build
               sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
                 --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam \
-                -- --libpath=/tmp/libxml2-static
+                --llvm=/work --embed=/work --output=/work/salam
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
@@ -1734,15 +1663,12 @@ jobs:
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
               MINGW_SR=/work/sysroots/x86_64-w64-mingw32
-              mkdir -p /tmp/libxml2-static
-              cp /opt/libxml2-static/libxml2.a /tmp/libxml2-static/
               sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
                 --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam \
-                -- --libpath=/tmp/libxml2-static
+                --llvm=/work --embed=/work --output=/work/salam
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
@@ -1831,7 +1757,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential ccache cmake ninja-build \
             llvm-22-dev liblld-22-dev libpolly-22-dev libclang-rt-22-dev \
-            libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev \
+            libzstd-dev zlib1g-dev \
             libsqlite3-dev \
             mingw-w64 qemu-user-static
           gcc --version | head -1
@@ -1874,30 +1800,6 @@ jobs:
       - name: Install a seed compiler
         uses: ./.github/actions/setup-salam
 
-      - name: Cache static libxml2 (native aarch64)
-        id: cache-libxml2-aarch64
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /tmp/libxml2-aarch64
-          key: libxml2-2.15.4-static-aarch64-v1
-
-      - name: Build static libxml2 (native aarch64, cache miss only)
-        if: steps.cache-libxml2-aarch64.outputs.cache-hit != 'true'
-        run: |
-          set -eu
-          git clone --quiet --depth 1 --branch v2.15.4 \
-            https://github.com/GNOME/libxml2.git /tmp/libxml2-src
-          cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
-            -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
-            -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF \
-            -DLIBXML2_WITH_ZLIB=ON
-          ninja -C /tmp/libxml2-build
-          mkdir -p /tmp/libxml2-aarch64
-          cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-aarch64/
-          rm -rf /tmp/libxml2-src /tmp/libxml2-build
-
       - name: Build the flagship self-contained salam (LLVM + LLD + sysroots)
         run: |
           set -eu
@@ -1914,8 +1816,7 @@ jobs:
             --mingw-x86_64 "${SALAM_EMBED_MINGW_DIR:-$GITHUB_WORKSPACE/sysroots/x86_64-w64-mingw32}" \
             --wasi "$GITHUB_WORKSPACE/sysroots/wasm32-wasi"
           sh tools/bash/build-selfhost.sh \
-            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE" \
-            -- --libpath=/tmp/libxml2-aarch64
+            --llvm="$GITHUB_WORKSPACE" --embed="$GITHUB_WORKSPACE"
           echo "SELF_CONTAINED=1" >> "$GITHUB_ENV"
           ./salam version
       - name: Smoke-test the backend (and cross-compile with a scrubbed PATH)

@@ -101,7 +101,8 @@ wget https://github.com/SalamLang/Salam/releases/download/v0.4.7/salam-0.4.7-lin
 sudo apt install ./salam-0.4.7-linux-x86_64.deb
 ```
 
-`apt install ./file.deb` (not `dpkg -i`) pulls in `libxml2` and friends.
+`apt install ./file.deb` (not `dpkg -i`) pulls in the few runtime libraries it
+needs.
 
 To build locally:
 

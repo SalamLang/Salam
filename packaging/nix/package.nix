@@ -4,8 +4,6 @@
   fetchurl,
   autoPatchelfHook,
   makeWrapper,
-  libxml2,
-  ncurses,
   zlib,
 }:
 
@@ -45,8 +43,6 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ makeWrapper ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
 
   buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
-    libxml2
-    ncurses
     zlib
     stdenv.cc.cc.lib
   ];

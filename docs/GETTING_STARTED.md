@@ -31,7 +31,7 @@ The fastest way to get `salam` on your machine:
 
 The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
-Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.6`.
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.5.0`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 `--no-modify-path` and `--help`; run it with `--help` for the full list.
 

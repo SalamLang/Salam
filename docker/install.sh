@@ -9,7 +9,7 @@
 #
 # Usage:
 #   sh install.sh --dir /opt/salam
-#   sh install.sh --dir /opt/salam --version 0.2.9
+#   sh install.sh --dir /opt/salam --version 0.5.0
 #
 # Env vars (mirroring the root install.sh):
 #   SALAM_INSTALL_DIR, SALAM_VERSION

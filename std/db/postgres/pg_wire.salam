@@ -40,6 +40,7 @@ if not SALAM_DB_MOCK:
         pub dbname: str = ""
         pub sslmode: str = "prefer"
         pub sslrootcert: str = ""
+        pub connect_timeout: int = 30
         pub use_tls: bool = false
         pub tc: tls.Conn = tls.Conn {}
         pub rbuf: void* = null
@@ -215,8 +216,12 @@ if not SALAM_DB_MOCK:
         else:
             n = rawsock.RecvBytes(rawsock.FromFd(c[0].fd), dst, room)
         end
-        if n <= 0:
+        if n == 0:
             _pg_broken(c, "server closed the connection unexpectedly")
+            ret false
+        end
+        if n < 0:
+            _pg_broken(c, "could not receive data from server: timeout expired or connection reset")
             ret false
         end
         c[0].rlen = c[0].rlen + (n as i64)
@@ -577,6 +582,9 @@ if not SALAM_DB_MOCK:
             ret
         end
         c[0].fd = sock.fd
+        if c[0].connect_timeout > 0:
+            rawsock.SetTimeout(sock, c[0].connect_timeout * 1000)
+        end
         if c[0].sslmode != "disable" and c[0].sslmode != "allow":
             if not _pg_tls(c):
                 _pg_close_socket(c)
@@ -587,6 +595,7 @@ if not SALAM_DB_MOCK:
             _pg_close_socket(c)
             ret
         end
+        rawsock.SetTimeout(sock, 0)
         c[0].ok = true
     end
 
@@ -642,6 +651,8 @@ if not SALAM_DB_MOCK:
             c[0].sslmode = val
         else if key == "sslrootcert":
             c[0].sslrootcert = val
+        else if key == "connect_timeout":
+            c[0].connect_timeout = conv.ParseInt(val) as int
         end
     end
 

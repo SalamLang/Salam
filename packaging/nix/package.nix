@@ -4,7 +4,6 @@
   fetchurl,
   autoPatchelfHook,
   makeWrapper,
-  zlib,
 }:
 
 let
@@ -43,7 +42,6 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ makeWrapper ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
 
   buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
-    zlib
     stdenv.cc.cc.lib
   ];
 

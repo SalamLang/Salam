@@ -6,6 +6,7 @@ const EXT_SIGNATURE_ALGORITHMS := 13
 const EXT_ALPN := 16
 const EXT_SUPPORTED_VERSIONS := 43
 const EXT_KEY_SHARE := 51
+const EXT_COOKIE := 44
 
 const GROUP_X25519 := 0x001D
 const GROUP_SECP256R1 := 0x0017
@@ -32,6 +33,7 @@ func _ext_close(b &: Buf, mark: int):
 end
 
 func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool, out &: Buf): bool:
+    retry := h.hrr
     _bufreset(out)
     _put8(out, HS_CLIENT_HELLO)
     lenmark := out.len
@@ -40,20 +42,18 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
 
     _put16(out, TLS12)
 
-    mut rnd := _newbuf(32)
-    defer _buf_free(rnd)
-    _putzeros(rnd, 32)
-    crypto.RandomBytes(rnd.p, 32)
-    _putbuf(out, rnd)
-    _bufreset(h.crand)
-    _putbuf(h.crand, rnd)
-
-    mut sid := _newbuf(32)
-    defer _buf_free(sid)
-    _putzeros(sid, 32)
-    crypto.RandomBytes(sid.p, 32)
+    if not retry:
+        _bufreset(h.crand)
+        _putzeros(h.crand, 32)
+        crypto.RandomBytes(h.crand.p, 32)
+        _buf_free(h.sid)
+        h.sid = _newbuf(32)
+        _putzeros(h.sid, 32)
+        crypto.RandomBytes(h.sid.p, 32)
+    end
+    _putbuf(out, h.crand)
     _put8(out, 32)
-    _putbuf(out, sid)
+    _putbuf(out, h.sid)
 
     if aes_only:
         _put16(out, 6)
@@ -119,19 +119,42 @@ func _hs_build_client_hello(h &: Handshake, host: str, alpn: str, aes_only: bool
     m8 := _ext_open(out, EXT_EXTENDED_MASTER_SECRET)
     _ext_close(out, m8)
 
-    _bufreset(h.priv)
-    _putzeros(h.priv, 32)
-    crypto.RandomBytes(h.priv.p, 32)
-    _bufreset(h.pub_key)
-    _putzeros(h.pub_key, 32)
-    _x25519_base(h.priv.p, h.pub_key.p)
-
+    if not retry:
+        h.share_group = GROUP_X25519
+    end
     m5 := _ext_open(out, EXT_KEY_SHARE)
-    _put16(out, 36)
-    _put16(out, GROUP_X25519)
-    _put16(out, 32)
-    _putbuf(out, h.pub_key)
+    if h.share_group == GROUP_X25519:
+        _bufreset(h.priv)
+        _putzeros(h.priv, 32)
+        crypto.RandomBytes(h.priv.p, 32)
+        _bufreset(h.pub_key)
+        _putzeros(h.pub_key, 32)
+        _x25519_base(h.priv.p, h.pub_key.p)
+        _put16(out, 36)
+        _put16(out, GROUP_X25519)
+        _put16(out, 32)
+        _putbuf(out, h.pub_key)
+    else:
+        mut cv := _curve_p256()
+        if h.share_group == GROUP_SECP384R1:
+            cv = _curve_p384()
+        end
+        if not _tls12_gen_ec_key(h, cv):
+            ret _hs_fail(h, "could not generate a key share")
+        end
+        _put16(out, h.ecpub.len + 4)
+        _put16(out, h.share_group)
+        _put16(out, h.ecpub.len)
+        _putbuf(out, h.ecpub)
+    end
     _ext_close(out, m5)
+
+    if retry and h.cookie.len > 0:
+        mc := _ext_open(out, EXT_COOKIE)
+        _put16(out, h.cookie.len)
+        _putbuf(out, h.cookie)
+        _ext_close(out, mc)
+    end
 
     if alpn.len() > 0:
         m6 := _ext_open(out, EXT_ALPN)
@@ -162,8 +185,9 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
     end
     mut hrr := _hexbuf(HRR_RANDOM)
     defer _buf_free(hrr)
-    if _cteq(srand.p, hrr.p, 32):
-        ret _hs_fail(h, "server sent HelloRetryRequest (unsupported)")
+    is_hrr := _cteq(srand.p, hrr.p, 32)
+    if is_hrr and h.hrr:
+        ret _hs_fail(h, "server sent a second HelloRetryRequest")
     end
     sid := _rdvec8(r)
     _rdskip(sid, sid.len)
@@ -201,16 +225,43 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
             got_version = true
         else if id == EXT_EXTENDED_MASTER_SECRET:
             h.ems = true
+        else if id == EXT_KEY_SHARE and is_hrr:
+            g := _rd16(body)
+            if body.bad or (g != GROUP_SECP256R1 and g != GROUP_SECP384R1 and g != GROUP_X25519) or g == h.share_group:
+                ret _hs_fail(h, "HelloRetryRequest asked for an unsupported group")
+            end
+            h.share_group = g
+        else if id == EXT_COOKIE and is_hrr:
+            ck := _rdvec16(body)
+            if body.bad or ck.len == 0:
+                ret _hs_fail(h, "malformed HelloRetryRequest cookie")
+            end
+            _buf_free(h.cookie)
+            h.cookie = _newbuf(ck.len)
+            repeat ck.len in i:
+                _put8(h.cookie, _rdat(ck, i))
+            end
         else if id == EXT_KEY_SHARE:
             g := _rd16(body)
-            if g != GROUP_X25519:
+            if g != h.share_group:
                 ret _hs_fail(h, "server selected a group we did not offer a share for")
             end
             peer = _rdvec16(body)
-            if body.bad or peer.len != 32:
+            if body.bad:
                 ret _hs_fail(h, "malformed key share")
             end
         end
+    end
+    if is_hrr:
+        if not got_version or suite13 == CIPHER_NONE:
+            ret _hs_fail(h, "malformed HelloRetryRequest")
+        end
+        h.hrr = true
+        h.suite = suite
+        h.cipher = suite13
+        h.hash = _cipher_hash(h.cipher)
+        h.hlen = _hash_size(h.hash)
+        ret true
     end
     if not got_version:
         if suite12 == CIPHER_NONE:
@@ -226,19 +277,36 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
     if suite13 == CIPHER_NONE:
         ret _hs_fail(h, "server picked a TLS 1.2 suite while selecting TLS 1.3")
     end
+    if h.hrr and suite != h.suite:
+        ret _hs_fail(h, "ServerHello cipher suite differs from the HelloRetryRequest")
+    end
     h.ver = TLS13
     h.suite = suite
     h.cipher = suite13
     h.hash = _cipher_hash(h.cipher)
     h.hlen = _hash_size(h.hash)
-    if peer.len != 32:
+    if peer.len == 0:
         ret _hs_fail(h, "server sent no key share")
     end
-
+    h.group = h.share_group
     _bufreset(h.shared)
-    _putzeros(h.shared, 32)
-    if not _x25519_shared(h.priv.p, peer.p, h.shared.p):
-        ret _hs_fail(h, "peer key share produced a degenerate shared secret")
+    if h.share_group == GROUP_X25519:
+        if peer.len != 32:
+            ret _hs_fail(h, "malformed key share")
+        end
+        _putzeros(h.shared, 32)
+        if not _x25519_shared(h.priv.p, peer.p, h.shared.p):
+            ret _hs_fail(h, "peer key share produced a degenerate shared secret")
+        end
+        ret true
+    end
+    mut cv := _curve_p256()
+    if h.share_group == GROUP_SECP384R1:
+        cv = _curve_p384()
+    end
+    _putzeros(h.shared, cv.nb)
+    if not _ec_ecdh(cv, h.ecpriv.p, peer.p, peer.len, h.shared.p):
+        ret _hs_fail(h, "invalid EC key share from the server")
     end
     ret true
 end

@@ -16,50 +16,12 @@
 @fa "مای اس کیو ال"
 package mysql
 
-if not SALAM_DB_MOCK:
-    if SALAM_DB_MYSQLCLIENT:
-        link dynamic "mysqlclient"
-    else:
-        link dynamic "mariadb"
-    end
-    link dynamic "ssl"
-    link dynamic "crypto"
-end
 import str
 import conv
-
-extern:
-    func mysql_init(conn: void*): void*
-    func mysql_real_connect(conn: void*, host: str, user: str, passwd: str, db: str, port: u32, unix_socket: void*, client_flag: u64): void*
-    func mysql_close(conn: void*)
-    func mysql_ping(conn: void*): int
-    func mysql_select_db(conn: void*, db: str): int
-    func mysql_set_character_set(conn: void*, csname: str): int
-    func mysql_query(conn: void*, stmt: str): int
-    func mysql_store_result(conn: void*): void*
-    func mysql_free_result(result: void*)
-    func mysql_fetch_row(result: void*): void*
-    func mysql_num_fields(result: void*): u32
-    func mysql_num_rows(result: void*): u64
-    func mysql_field_count(conn: void*): u32
-    func mysql_fetch_field_direct(result: void*, fieldnr: u32): void*
-    func mysql_affected_rows(conn: void*): u64
-    func mysql_insert_id(conn: void*): u64
-    func mysql_autocommit(conn: void*, mode: bool): bool
-    func mysql_commit(conn: void*): bool
-    func mysql_rollback(conn: void*): bool
-    func mysql_real_escape_string(conn: void*, dst: void*, from: str, length: u64): u64
-    func mysql_error(conn: void*): str
-    func mysql_errno(conn: void*): u32
-    func mysql_get_client_info(): str
-    func mysql_thread_init(): bool
-    func mysql_thread_end()
-    func mysql_server_init(argc: int, argv: void*, groups: void*): int
-    func mysql_server_end()
-    func mysql_get_server_info(conn: void*): str
-end
 import mem
 import db
+
+mut _connect_error := ""
 
 @en "Database"
 @fa "پایگاه داده"
@@ -80,7 +42,7 @@ pub struct Database:
         if this.handle == null:
             ret false
         end
-        ret mysql_ping(this.handle) == 0
+        ret _my_ping(this.handle) == 0
     end
 
     @en "Exec"
@@ -89,12 +51,12 @@ pub struct Database:
         if this.handle == null:
             ret -1
         end
-        if mysql_query(this.handle, sql) != 0:
+        if _my_query(this.handle, sql) != 0:
             ret -1
         end
-        res := mysql_store_result(this.handle)
+        res := _my_store_result(this.handle)
         if res != null:
-            mysql_free_result(res)
+            _my_free_result(res)
         end
         ret 0
     end
@@ -105,10 +67,10 @@ pub struct Database:
         if this.handle == null:
             ret Result { handle = null }
         end
-        if mysql_query(this.handle, sql) != 0:
+        if _my_query(this.handle, sql) != 0:
             ret Result { handle = null }
         end
-        ret Result { handle = mysql_store_result(this.handle) }
+        ret Result { handle = _my_store_result(this.handle) }
     end
 
     @en "Begin"
@@ -126,7 +88,7 @@ pub struct Database:
         if this.handle == null:
             ret 0
         end
-        ret mysql_insert_id(this.handle) as i64
+        ret _my_insert_id(this.handle) as i64
     end
 
     @en "Changes"
@@ -135,7 +97,7 @@ pub struct Database:
         if this.handle == null:
             ret 0
         end
-        ret mysql_affected_rows(this.handle) as i64
+        ret _my_affected_rows(this.handle) as i64
     end
 
     @en "Error"
@@ -144,7 +106,7 @@ pub struct Database:
         if this.handle == null:
             ret "no connection"
         end
-        ret str.Clone(mysql_error(this.handle))
+        ret str.Clone(_my_error(this.handle))
     end
 
     @en "Quote"
@@ -162,7 +124,7 @@ pub struct Database:
         if this.handle == null:
             ret -1
         end
-        mysql_close(this.handle)
+        _my_close(this.handle)
         ret 0
     end
 end
@@ -183,7 +145,7 @@ pub struct Result:
         if this.handle == null:
             ret false
         end
-        this.row = mysql_fetch_row(this.handle)
+        this.row = _my_fetch_row(this.handle)
         ret this.row != null
     end
 
@@ -193,7 +155,7 @@ pub struct Result:
         if this.handle == null:
             ret 0
         end
-        ret mysql_num_fields(this.handle) as int
+        ret _my_num_fields(this.handle) as int
     end
 
     @en "ColumnName"
@@ -202,7 +164,7 @@ pub struct Result:
         if this.handle == null:
             ret ""
         end
-        fld := mysql_fetch_field_direct(this.handle, col as u32)
+        fld := _my_fetch_field_direct(this.handle, col as u32)
         if fld == null:
             ret ""
         end
@@ -270,7 +232,7 @@ pub struct Result:
         if this.handle == null:
             ret -1
         end
-        mysql_free_result(this.handle)
+        _my_free_result(this.handle)
         this.handle = null
         ret 0
     end
@@ -337,7 +299,7 @@ end
 @en "ClientVersion"
 @fa "نسخه کلاینت"
 pub func ClientVersion(): str:
-    ret str.Clone(mysql_get_client_info())
+    ret str.Clone(_my_get_client_info())
 end
 
 @en "ServerVersion"
@@ -346,7 +308,7 @@ pub func ServerVersion(db: Database): str:
     if db.handle == null:
         ret ""
     end
-    ret str.Clone(mysql_get_server_info(db.handle))
+    ret str.Clone(_my_get_server_info(db.handle))
 end
 
 @en "Open"
@@ -358,7 +320,7 @@ end
 @en "OpenFull"
 @fa "بازکردن کامل"
 pub func OpenFull(host: str, user: str, pass: str, dbname: str, port: int, socket: str, flags: u64): Database:
-    conn := mysql_init(null)
+    conn := _my_init(null)
     if conn == null:
         ret Database { handle = null }
     end
@@ -366,11 +328,13 @@ pub func OpenFull(host: str, user: str, pass: str, dbname: str, port: int, socke
     if socket != "":
         sock = socket as void*
     end
-    res := mysql_real_connect(conn, host, user, pass, dbname, port as u32, sock, flags)
+    res := _my_real_connect(conn, host, user, pass, dbname, port as u32, sock, flags)
     if res == null:
-        mysql_close(conn)
+        _connect_error = str.Clone(_my_error(conn))
+        _my_close(conn)
         ret Database { handle = null }
     end
+    _connect_error = ""
     ret Database { handle = conn }
 end
 
@@ -384,7 +348,7 @@ end
 @fa "بستن"
 pub func Close(db: Database):
     if db.handle != null:
-        mysql_close(db.handle)
+        _my_close(db.handle)
     end
 end
 
@@ -394,7 +358,7 @@ pub func Ping(db: Database): bool:
     if db.handle == null:
         ret false
     end
-    ret mysql_ping(db.handle) == 0
+    ret _my_ping(db.handle) == 0
 end
 
 @en "SelectDB"
@@ -403,7 +367,7 @@ pub func SelectDB(db: Database, name: str): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_select_db(db.handle, name) == 0: ret 0 end
+    if _my_select_db(db.handle, name) == 0: ret 0 end
     ret -1
 end
 
@@ -413,7 +377,7 @@ pub func SetCharset(db: Database, charset: str): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_set_character_set(db.handle, charset) == 0: ret 0 end
+    if _my_set_character_set(db.handle, charset) == 0: ret 0 end
     ret -1
 end
 
@@ -421,9 +385,12 @@ end
 @fa "خطا"
 pub func Error(db: Database): str:
     if db.handle == null:
+        if _connect_error.len() > 0:
+            ret str.Clone(_connect_error)
+        end
         ret "no connection"
     end
-    ret str.Clone(mysql_error(db.handle))
+    ret str.Clone(_my_error(db.handle))
 end
 
 @en "Errno"
@@ -432,7 +399,7 @@ pub func Errno(db: Database): int:
     if db.handle == null:
         ret -1
     end
-    ret mysql_errno(db.handle) as int
+    ret _my_errno(db.handle) as int
 end
 
 @en "Exec"
@@ -441,12 +408,12 @@ pub func Exec(db: Database, sql: str): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_query(db.handle, sql) != 0:
+    if _my_query(db.handle, sql) != 0:
         ret -1
     end
-    res := mysql_store_result(db.handle)
+    res := _my_store_result(db.handle)
     if res != null:
-        mysql_free_result(res)
+        _my_free_result(res)
     end
     ret 0
 end
@@ -457,7 +424,7 @@ pub func AffectedRows(db: Database): i64:
     if db.handle == null:
         ret 0
     end
-    ret mysql_affected_rows(db.handle) as i64
+    ret _my_affected_rows(db.handle) as i64
 end
 
 @en "Changes"
@@ -472,7 +439,7 @@ pub func LastInsertId(db: Database): i64:
     if db.handle == null:
         ret 0
     end
-    ret mysql_insert_id(db.handle) as i64
+    ret _my_insert_id(db.handle) as i64
 end
 
 @en "Begin"
@@ -487,7 +454,7 @@ pub func Commit(db: Database): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_commit(db.handle): ret -1 end
+    if _my_commit(db.handle): ret -1 end
     ret 0
 end
 
@@ -497,7 +464,7 @@ pub func Rollback(db: Database): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_rollback(db.handle): ret -1 end
+    if _my_rollback(db.handle): ret -1 end
     ret 0
 end
 
@@ -507,7 +474,7 @@ pub func Autocommit(db: Database, enabled: bool): int:
     if db.handle == null:
         ret -1
     end
-    if mysql_autocommit(db.handle, enabled): ret -1 end
+    if _my_autocommit(db.handle, enabled): ret -1 end
     ret 0
 end
 
@@ -517,10 +484,10 @@ pub func Query(db: Database, sql: str): Result:
     if db.handle == null:
         ret Result { handle = null, row = null }
     end
-    if mysql_query(db.handle, sql) != 0:
+    if _my_query(db.handle, sql) != 0:
         ret Result { handle = null, row = null }
     end
-    res := mysql_store_result(db.handle)
+    res := _my_store_result(db.handle)
     ret Result { handle = res, row = null }
 end
 
@@ -536,7 +503,7 @@ pub func Next(res &: Result): bool:
     if res.handle == null:
         ret false
     end
-    res.row = mysql_fetch_row(res.handle)
+    res.row = _my_fetch_row(res.handle)
     ret res.row != null
 end
 
@@ -544,7 +511,7 @@ end
 @fa "پایان"
 pub func Finish(res: Result):
     if res.handle != null:
-        mysql_free_result(res.handle)
+        _my_free_result(res.handle)
     end
 end
 
@@ -554,7 +521,7 @@ pub func ColumnCount(res: Result): int:
     if res.handle == null:
         ret 0
     end
-    ret mysql_num_fields(res.handle) as int
+    ret _my_num_fields(res.handle) as int
 end
 
 @en "RowCount"
@@ -563,7 +530,7 @@ pub func RowCount(res: Result): i64:
     if res.handle == null:
         ret 0
     end
-    ret mysql_num_rows(res.handle) as i64
+    ret _my_num_rows(res.handle) as i64
 end
 
 @en "ColumnName"
@@ -572,7 +539,7 @@ pub func ColumnName(res: Result, col: int): str:
     if res.handle == null:
         ret ""
     end
-    fld := mysql_fetch_field_direct(res.handle, col as u32)
+    fld := _my_fetch_field_direct(res.handle, col as u32)
     if fld == null:
         ret ""
     end
@@ -639,7 +606,7 @@ pub func Escape(db: Database, s: str): str:
     if buf == null:
         ret s
     end
-    mysql_real_escape_string(db.handle, buf, s, n as u64)
+    _my_real_escape_string(db.handle, buf, s, n as u64)
     out := str.Clone(buf as str)
     mem.Free(buf)
     ret out
@@ -672,25 +639,25 @@ end
 @en "LibraryInit"
 @fa "آماده سازی کتابخانه"
 pub func LibraryInit(): bool:
-    ret mysql_server_init(0, null, null) == 0
+    ret _my_server_init(0, null, null) == 0
 end
 
 @en "LibraryEnd"
 @fa "پایان کتابخانه"
 pub func LibraryEnd():
-    mysql_server_end()
+    _my_server_end()
 end
 
 @en "ThreadInit"
 @fa "آماده سازی نخ"
 pub func ThreadInit(): bool:
-    ret mysql_thread_init()
+    ret _my_thread_init()
 end
 
 @en "ThreadEnd"
 @fa "پایان نخ"
 pub func ThreadEnd():
-    mysql_thread_end()
+    _my_thread_end()
 end
 
 @en "Conn"

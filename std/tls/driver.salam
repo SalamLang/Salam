@@ -94,8 +94,12 @@ func _do_handshake12(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf): bool:
     if not _hs_next_msg(h, buf, typ, body):
         ret _conn_fail(c, h.err)
     end
+    mut cert_requested := false
     if typ == HS_CERTIFICATE_REQUEST:
-        ret _conn_fail(c, "server requested a client certificate (unsupported)")
+        cert_requested = true
+        if not _hs_next_msg(h, buf, typ, body):
+            ret _conn_fail(c, h.err)
+        end
     end
     if typ != HS_SERVER_HELLO_DONE:
         ret _conn_fail(c, "expected ServerHelloDone")
@@ -103,6 +107,18 @@ func _do_handshake12(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf): bool:
 
     if not _verify_peer_chain(c, h, cfg):
         ret false
+    end
+
+    if cert_requested:
+        mut ccert := _newbuf(8)
+        defer _buf_free(ccert)
+        _put8(ccert, HS_CERTIFICATE)
+        _put24(ccert, 3)
+        _put24(ccert, 0)
+        _hash_update(h.tr, ccert.p, ccert.len)
+        if not _rec_write(h.rec, REC_HANDSHAKE, ccert.p, ccert.len):
+            ret _conn_fail(c, "could not send client Certificate")
+        end
     end
 
     mut cke := _newbuf(256)
@@ -189,6 +205,41 @@ func _verify_peer_chain(c &: Conn, h &: Handshake, cfg: Config): bool:
     ret true
 end
 
+func _read_server_hello(h &: Handshake, frag &: Buf, shlen &: int, err &: str): bool:
+    mut rtyp := 0
+    mut got := false
+    mut guard := 0
+    until not got and guard < 16:
+        guard += 1
+        if not _rec_read(h.rec, rtyp, frag):
+            err = "no ServerHello: " + h.rec.err
+            ret false
+        end
+        if rtyp == REC_CHANGE_CIPHER_SPEC:
+            continue
+        end
+        if rtyp == REC_ALERT:
+            err = _alert_text(frag)
+            ret false
+        end
+        if rtyp != REC_HANDSHAKE:
+            err = "expected ServerHello"
+            ret false
+        end
+        got = true
+    end
+    if not got or frag.len < 4 or _bufat(frag, 0) != HS_SERVER_HELLO:
+        err = "expected ServerHello"
+        ret false
+    end
+    shlen = (_bufat(frag, 1) << 16) | (_bufat(frag, 2) << 8) | _bufat(frag, 3)
+    if frag.len < 4 + shlen:
+        err = "truncated ServerHello"
+        ret false
+    end
+    ret true
+end
+
 func _do_handshake(c &: Conn, cfg: Config): bool:
     mut h := c.h
     mut ch := _newbuf(512)
@@ -208,38 +259,13 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     mut body := _newbuf(REC_MAX_PLAINTEXT)
     defer _buf_free(body)
 
-    mut rtyp := 0
     mut frag := _newbuf(REC_MAX_PLAINTEXT)
     defer _buf_free(frag)
-    mut got := false
-    mut guard := 0
-    until not got and guard < 16:
-        guard += 1
-        if not _rec_read(h.rec, rtyp, frag):
-            c.h = h
-            ret _conn_fail(c, "no ServerHello: " + h.rec.err)
-        end
-        if rtyp == REC_CHANGE_CIPHER_SPEC:
-            continue
-        end
-        if rtyp == REC_ALERT:
-            c.h = h
-            ret _conn_fail(c, _alert_text(frag))
-        end
-        if rtyp != REC_HANDSHAKE:
-            c.h = h
-            ret _conn_fail(c, "expected ServerHello")
-        end
-        got = true
-    end
-    if not got or frag.len < 4 or _bufat(frag, 0) != HS_SERVER_HELLO:
+    mut shlen := 0
+    mut sherr := ""
+    if not _read_server_hello(h, frag, shlen, sherr):
         c.h = h
-        ret _conn_fail(c, "expected ServerHello")
-    end
-    shlen := (_bufat(frag, 1) << 16) | (_bufat(frag, 2) << 8) | _bufat(frag, 3)
-    if frag.len < 4 + shlen:
-        c.h = h
-        ret _conn_fail(c, "truncated ServerHello")
+        ret _conn_fail(c, sherr)
     end
     shr := _newreader(_bufptr(frag, 4), shlen)
     if not _hs_parse_server_hello(h, shr):
@@ -247,9 +273,45 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         ret _conn_fail(c, h.err)
     end
 
-    h.tr = _hash_init(h.hash)
-    _hash_update(h.tr, ch.p, ch.len)
-    _hash_update(h.tr, frag.p, 4 + shlen)
+    if h.hrr:
+        mut synth := _newbuf(4 + 64)
+        defer _buf_free(synth)
+        _put8(synth, HS_MESSAGE_HASH)
+        _put24(synth, h.hlen)
+        _putzeros(synth, h.hlen)
+        _hash_oneshot(h.hash, ch.p, ch.len, _bufptr(synth, 4))
+        h.tr = _hash_init(h.hash)
+        _hash_update(h.tr, synth.p, synth.len)
+        _hash_update(h.tr, frag.p, 4 + shlen)
+        if not _hs_build_client_hello(h, cfg.server_name, cfg.alpn, cfg.aes_only, ch):
+            c.h = h
+            ret _conn_fail(c, "could not build the second ClientHello: " + h.err)
+        end
+        if not _rec_write(h.rec, REC_HANDSHAKE, ch.p, ch.len):
+            c.h = h
+            ret _conn_fail(c, "could not send the second ClientHello: " + h.rec.err)
+        end
+        _hash_update(h.tr, ch.p, ch.len)
+        _bufreset(frag)
+        if not _read_server_hello(h, frag, shlen, sherr):
+            c.h = h
+            ret _conn_fail(c, sherr)
+        end
+        shr2 := _newreader(_bufptr(frag, 4), shlen)
+        if not _hs_parse_server_hello(h, shr2):
+            c.h = h
+            ret _conn_fail(c, h.err)
+        end
+        if h.ver != TLS13:
+            c.h = h
+            ret _conn_fail(c, "server switched to TLS 1.2 after a HelloRetryRequest")
+        end
+        _hash_update(h.tr, frag.p, 4 + shlen)
+    else:
+        h.tr = _hash_init(h.hash)
+        _hash_update(h.tr, ch.p, ch.len)
+        _hash_update(h.tr, frag.p, 4 + shlen)
+    end
     if frag.len > 4 + shlen:
         _putraw(buf, _bufptr(frag, 4 + shlen), frag.len - (4 + shlen))
     end
@@ -279,9 +341,22 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
         c.h = h
         ret _conn_fail(c, h.err)
     end
+    mut cert_ctx := _newbuf(256)
+    defer _buf_free(cert_ctx)
+    mut cert_requested := false
     if typ == HS_CERTIFICATE_REQUEST:
-        c.h = h
-        ret _conn_fail(c, "server requested a client certificate (unsupported)")
+        if body.len < 1 or _bufat(body, 0) + 1 > body.len:
+            c.h = h
+            ret _conn_fail(c, "malformed CertificateRequest")
+        end
+        repeat _bufat(body, 0) in i:
+            _put8(cert_ctx, _bufat(body, 1 + i))
+        end
+        cert_requested = true
+        if not _hs_next_msg(h, buf, typ, body):
+            c.h = h
+            ret _conn_fail(c, h.err)
+        end
     end
     if typ != HS_CERTIFICATE:
         c.h = h
@@ -357,9 +432,27 @@ func _do_handshake(c &: Conn, cfg: Config): bool:
     _put8(ccs, 1)
     _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
 
+    mut th_cfin := _newbuf(64)
+    defer _buf_free(th_cfin)
+    if cert_requested:
+        mut ccert := _newbuf(16 + cert_ctx.len)
+        defer _buf_free(ccert)
+        _put8(ccert, HS_CERTIFICATE)
+        _put24(ccert, 1 + cert_ctx.len + 3)
+        _put8(ccert, cert_ctx.len)
+        _putbuf(ccert, cert_ctx)
+        _put24(ccert, 0)
+        _hash_update(h.tr, ccert.p, ccert.len)
+        if not _rec_write(h.rec, REC_HANDSHAKE, ccert.p, ccert.len):
+            c.h = h
+            ret _conn_fail(c, "could not send client Certificate")
+        end
+    end
+    _hs_transcript(h, th_cfin)
+
     mut cfin := _newbuf(64)
     defer _buf_free(cfin)
-    if not _hs_finished_mac(h, h.c_hs_secret, th_app, cfin):
+    if not _hs_finished_mac(h, h.c_hs_secret, th_cfin, cfin):
         c.h = h
         ret _conn_fail(c, "could not compute client Finished")
     end

@@ -225,9 +225,10 @@ independent value:
 A negative `start` counts from the end, so `v.copy(-3)` is the last three
 items. Ranges clamp instead of panicking. Range arguments only apply to Vector
 and str. A struct can define its own `copy()` or `deep_copy()`, and the
-recursion uses it. `deep_copy()` refuses a value holding a raw pointer or a
-`dyn` field, since it cannot know what the pointer owns or which concrete type
-sits behind the interface. `copy()` shares a `dyn` field's box. Copies are new heap values the caller
+recursion uses it. `deep_copy()` refuses a value holding a raw pointer, since
+it cannot know what the pointer owns. A `dyn` value is deep-copied through its
+concrete type when the interface is declared in your program (a value holding
+a raw pointer is then copied as-is); `copy()` shares a `dyn` field's box. Copies are new heap values the caller
 frees, like any other Vector or HashMap.
 
 ## 8. Imports

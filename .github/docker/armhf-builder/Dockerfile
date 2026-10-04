@@ -24,6 +24,11 @@ RUN git clone --quiet --depth 1 --branch "${LIBXML2_TAG}" https://github.com/GNO
     && cp /tmp/libxml2-build/libxml2.a /opt/libxml2-static/ \
     && rm -rf /tmp/libxml2-src /tmp/libxml2-build
 
+RUN useradd --create-home --shell /bin/bash --uid 1001 builder
+
+ENV HOME=/tmp
+
 HEALTHCHECK NONE
 
 WORKDIR /work
+USER builder

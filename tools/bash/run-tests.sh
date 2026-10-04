@@ -641,6 +641,14 @@ if want db; then
                         continue
                     fi
                     ;;
+                mylive_*)
+                    if [ -z "${SALAM_TEST_MYSQL:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MYSQL to \"host port user password db\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 pglive_*)
                     if [ -z "${SALAM_TEST_PG:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_PG to a PostgreSQL connection string)" "db/$lang/$name"

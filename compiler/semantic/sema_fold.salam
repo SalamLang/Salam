@@ -32,26 +32,51 @@ func lit_int(a &: at.Ast, nid: int, out &: i64): bool:
     ret true
 end
 
-func const_ref_int(s &: Sema, a &: at.Ast, nid: int, out &: i64): bool:
+func const_ref_node(s &: Sema, a &: at.Ast, nid: int): int:
     if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
-        ret false
+        ret 0
     end
     sid := scope_lookup(s, s.cur, at.Get(a, nid).name)
     if sid == 0:
-        ret false
+        ret 0
     end
     sv := sym_at(s, sid)
     if sv.kind != SYM_CONST or sv.is_mut or sv.decl == 0:
-        ret false
+        ret 0
     end
-    ret lit_int(a, at.Get(a, sv.decl).a, out)
+    ret at.Get(a, sv.decl).a
 end
 
 func fold_operand_int(s &: Sema, a &: at.Ast, nid: int, out &: i64): bool:
     if lit_int(a, nid, out):
         ret true
     end
-    ret const_ref_int(s, a, nid, out)
+    ret lit_int(a, const_ref_node(s, a, nid), out)
+end
+
+func fold_operand_bool(s &: Sema, a &: at.Ast, nid: int, out &: bool): bool:
+    if lit_bool(a, nid, out):
+        ret true
+    end
+    ret lit_bool(a, const_ref_node(s, a, nid), out)
+end
+
+func fold_operand_flt(s &: Sema, a &: at.Ast, nid: int, out &: f64): bool:
+    if lit_flt(a, nid, out):
+        ret true
+    end
+    ret lit_flt(a, const_ref_node(s, a, nid), out)
+end
+
+func fold_is_flt_lit(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    if at.Get(a, nid).op == tok.TK_FLOAT:
+        ret true
+    end
+    r := const_ref_node(s, a, nid)
+    ret r != 0 and at.Get(a, r).op == tok.TK_FLOAT
 end
 
 func lit_flt(a &: at.Ast, nid: int, out &: f64): bool:
@@ -104,6 +129,17 @@ func lit_str(a &: at.Ast, nid: int): bool:
     ret n.kind == at.AST_LITERAL and (
         n.op == tok.TK_STRING or n.op == tok.TK_TRIPLE_STRING or n.op == tok.TK_RAW_STRING
     ) and n.value_kind == tok.TV_STRING
+end
+
+func fold_str_node(s &: Sema, a &: at.Ast, nid: int): int:
+    if lit_str(a, nid):
+        ret nid
+    end
+    r := const_ref_node(s, a, nid)
+    if r != 0 and lit_str(a, r):
+        ret r
+    end
+    ret 0
 end
 
 func fold_done(a &: at.Ast, nid: int, op: int):
@@ -392,10 +428,9 @@ func fold_binary_str_repeat(a &: at.Ast, nid: int, strid: int, count: i64):
     fold_done(a, nid, tok.TK_STRING)
 end
 
-func fold_binary_str(a &: at.Ast, nid: int):
-    n := at.Get(a, nid)
-    sa := at.Get(a, n.a).value_str
-    sb := at.Get(a, n.b).value_str
+func fold_binary_str(a &: at.Ast, nid: int, an: int, bn: int):
+    sa := at.Get(a, an).value_str
+    sb := at.Get(a, bn).value_str
     mut nv := at.Get(a, nid)
     nv.value_kind = tok.TV_STRING
     nv.value_str = str.Concat(sa, sb)
@@ -412,7 +447,7 @@ func fold_binary(s &: Sema, a &: at.Ast, nid: int):
     mut ba := false
     mut bb := false
     if n.op == tok.TK_AND or n.op == tok.TK_OR:
-        if lit_bool(a, n.a, ba) and lit_bool(a, n.b, bb):
+        if fold_operand_bool(s, a, n.a, ba) and fold_operand_bool(s, a, n.b, bb):
             fold_bool(a, nid, n.op == tok.TK_AND ? (ba and bb) : (ba or bb))
         end
         ret
@@ -421,11 +456,11 @@ func fold_binary(s &: Sema, a &: at.Ast, nid: int):
         fold_binary_int(s, a, nid, ia, ib)
         ret
     end
-    if lit_flt(a, n.a, fa) and lit_flt(a, n.b, fb) and (at.Get(a, n.a).op == tok.TK_FLOAT or at.Get(a, n.b).op == tok.TK_FLOAT):
+    if fold_operand_flt(s, a, n.a, fa) and fold_operand_flt(s, a, n.b, fb) and (fold_is_flt_lit(s, a, n.a) or fold_is_flt_lit(s, a, n.b)):
         fold_binary_flt(a, nid, fa, fb)
         ret
     end
-    if lit_bool(a, n.a, ba) and lit_bool(a, n.b, bb):
+    if fold_operand_bool(s, a, n.a, ba) and fold_operand_bool(s, a, n.b, bb):
         if n.op == tok.TK_EQ:
             fold_bool(a, nid, ba == bb)
         else n.op == tok.TK_NE:
@@ -433,15 +468,21 @@ func fold_binary(s &: Sema, a &: at.Ast, nid: int):
         end
         ret
     end
-    if n.op == tok.TK_PLUS and lit_str(a, n.a) and lit_str(a, n.b) and str.Equals(n.type_str, "str"):
-        fold_binary_str(a, nid)
+    if n.op == tok.TK_PLUS and str.Equals(n.type_str, "str"):
+        pa := fold_str_node(s, a, n.a)
+        pb := fold_str_node(s, a, n.b)
+        if pa != 0 and pb != 0:
+            fold_binary_str(a, nid, pa, pb)
+        end
         ret
     end
     if n.op == tok.TK_STAR and str.Equals(n.type_str, "str"):
-        if lit_str(a, n.a) and lit_int(a, n.b, ia):
-            fold_binary_str_repeat(a, nid, n.a, ia)
-        else lit_str(a, n.b) and lit_int(a, n.a, ia):
-            fold_binary_str_repeat(a, nid, n.b, ia)
+        ra := fold_str_node(s, a, n.a)
+        rb := fold_str_node(s, a, n.b)
+        if ra != 0 and fold_operand_int(s, a, n.b, ia):
+            fold_binary_str_repeat(a, nid, ra, ia)
+        else rb != 0 and fold_operand_int(s, a, n.a, ia):
+            fold_binary_str_repeat(a, nid, rb, ia)
         end
     end
 end
@@ -463,7 +504,7 @@ func fold_unary(s &: Sema, a &: at.Ast, nid: int):
         end
         ret
     end
-    if n.op == tok.TK_NOT and lit_bool(a, n.a, bv):
+    if n.op == tok.TK_NOT and fold_operand_bool(s, a, n.a, bv):
         fold_bool(a, nid, not bv)
     end
     if n.op == tok.TK_TILDE and fold_operand_int(s, a, n.a, iv) and fold_result_is_int(a, nid):

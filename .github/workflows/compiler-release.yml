@@ -1705,6 +1705,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: sh tools/bash/fetch-seed.sh --slug linux-armhf --out "$GITHUB_WORKSPACE/seed"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the armhf builder image (cached)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .github/docker/armhf-builder
+          file: .github/docker/armhf-builder/Dockerfile
+          platforms: linux/arm/v7
+          tags: salam-armhf-builder:latest
+          load: true
+          cache-from: type=gha,scope=armhf-builder
+          cache-to: type=gha,mode=max,scope=armhf-builder
+
       - name: Build + smoke-test inside an arm32v7/debian container (QEMU-emulated compile - slower)
         run: |
           set -eu
@@ -1713,24 +1727,13 @@ jobs:
             -v "$PWD:/work" -w /work \
             -v /tmp/ccache-armhf:/root/.ccache \
             -e CCACHE_DIR=/root/.ccache \
-            arm32v7/debian:sid bash -euxc '
-              apt-get update
-              apt-get install -y --no-install-recommends build-essential ca-certificates ccache file git cmake ninja-build \
-                llvm-22-dev liblld-22-dev libpolly-22-dev libzstd-dev zlib1g-dev libtinfo-dev libxml2-dev
+            salam-armhf-builder:latest bash -euxc '
               git config --global --add safe.directory /work
               ccache --max-size=300M >/dev/null 2>&1 || true
               MUSL_SR=/work/sysroots/x86_64-linux-musl
               MINGW_SR=/work/sysroots/x86_64-w64-mingw32
-              git clone --quiet --depth 1 --branch v2.15.4 https://github.com/GNOME/libxml2.git /tmp/libxml2-src
-              cmake /tmp/libxml2-src -G Ninja -B /tmp/libxml2-build \
-                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-                -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
-                -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_HTTP=OFF \
-                -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ZLIB=ON
-              ninja -C /tmp/libxml2-build
               mkdir -p /tmp/libxml2-static
-              cp /tmp/libxml2-build/libxml2.a /tmp/libxml2-static/
-              rm -rf /tmp/libxml2-src /tmp/libxml2-build
+              cp /opt/libxml2-static/libxml2.a /tmp/libxml2-static/
               sh std/llvm/native/build.sh --llvm-config llvm-config-22 --out /work
               sh tools/bash/build-embed.sh --out /work \
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \

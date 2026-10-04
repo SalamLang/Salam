@@ -1,0 +1,914 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package mysql
+
+if not SALAM_DB_MOCK:
+    import os
+    import crypto
+    import tls
+    import net.internal.rawsock
+
+    const _MY_CLIENT_LONG_PASSWORD := 1
+    const _MY_CLIENT_LONG_FLAG := 4
+    const _MY_CLIENT_CONNECT_WITH_DB := 8
+    const _MY_CLIENT_PROTOCOL_41 := 512
+    const _MY_CLIENT_SSL := 2048
+    const _MY_CLIENT_TRANSACTIONS := 8192
+    const _MY_CLIENT_SECURE_CONNECTION := 32768
+    const _MY_CLIENT_MULTI_RESULTS := 131072
+    const _MY_CLIENT_PLUGIN_AUTH := 524288
+    const _MY_CLIENT_PLUGIN_AUTH_LENENC := 2097152
+    const _MY_MORE_RESULTS := 8
+    const _MY_MAX_PACKET := 16777215
+    const _MY_CHARSET_UTF8MB4 := 45
+    const _MY_READ_CHUNK := 16384
+    const _MY_CR_CONN_HOST_ERROR := 2003
+    const _MY_CR_SERVER_LOST := 2013
+    const _MY_CR_AUTH_PLUGIN := 2059
+    const _MY_CONNECT_TIMEOUT_MS := 30000
+
+    mut _my_threads := 0
+    mut _my_library_ready := false
+
+    struct _MyConn:
+        pub fd: i64 = 0 - 1
+        pub ok: bool = false
+        pub use_tls: bool = false
+        pub tc: tls.Conn = tls.Conn {}
+        pub rbuf: void* = null
+        pub rlen: i64 = 0
+        pub rcap: i64 = 0
+        pub rpos: i64 = 0
+        pub seq: int = 0
+        pub errno: int = 0
+        pub err: str = ""
+        pub server_version: str = ""
+        pub user: str = ""
+        pub password: str = ""
+        pub affected: i64 = 0
+        pub insert_id: i64 = 0
+        pub field_count: int = 0
+        pub pending: void* = null
+    end
+
+    struct _MyRes:
+        pub nfields: int = 0
+        pub nrows: i64 = 0
+        pub pos: i64 = 0
+        pub names: void* = null
+        pub rows: Vector<i64> = Vector {} as Vector<i64>
+    end
+
+    struct _MyOut:
+        pub p: void* = null
+        pub len: i64 = 0
+        pub cap: i64 = 0
+    end
+
+    func _out_new(): _MyOut:
+        mut o := _MyOut {}
+        o.cap = 256
+        o.p = mem.Allocate(o.cap as u64)
+        ret o
+    end
+
+    func _out_room(o &: _MyOut, n: i64):
+        if o.len + n <= o.cap:
+            ret
+        end
+        mut cap := o.cap * 2
+        until cap < o.len + n:
+            cap = cap * 2
+        end
+        o.p = mem.Reallocate(o.p, cap as u64)
+        o.cap = cap
+    end
+
+    func _out_byte(o &: _MyOut, b: int):
+        _out_room(o, 1)
+        bp := o.p as u8*
+        bp[o.len] = b as u8
+        o.len += 1
+    end
+
+    func _out_le(o &: _MyOut, v: i64, width: int):
+        mut x := v
+        repeat width:
+            _out_byte(o, (x % 256) as int)
+            x = x / 256
+        end
+    end
+
+    func _out_raw(o &: _MyOut, src: void*, n: i64):
+        if n <= 0:
+            ret
+        end
+        _out_room(o, n)
+        mem.Copy((o.p as i64 + o.len) as void*, src, n as u64)
+        o.len += n
+    end
+
+    func _out_str(o &: _MyOut, s: str):
+        _out_raw(o, s as void*, s.len() as i64)
+    end
+
+    func _out_zeros(o &: _MyOut, n: int):
+        repeat n:
+            _out_byte(o, 0)
+        end
+    end
+
+    func _rd(p: void*, at: i64): int:
+        bp := p as u8*
+        ret bp[at] as int
+    end
+
+    func _rd_le(p: void*, at: i64, width: int): i64:
+        mut v := 0 as i64
+        mut i := width - 1
+        until i >= 0:
+            v = v * 256 + (_rd(p, at + (i as i64)) as i64)
+            i -= 1
+        end
+        ret v
+    end
+
+    func _rd_lenenc(p: void*, at &: i64): i64:
+        b := _rd(p, at)
+        if b < 251:
+            at += 1
+            ret b
+        end
+        if b == 252:
+            v := _rd_le(p, at + 1, 2)
+            at += 3
+            ret v
+        end
+        if b == 253:
+            v := _rd_le(p, at + 1, 3)
+            at += 4
+            ret v
+        end
+        v := _rd_le(p, at + 1, 8)
+        at += 9
+        ret v
+    end
+
+    func _copy_bytes(p: void*, at: i64, n: i64): void*:
+        out := mem.Allocate((n + 1) as u64)
+        if n > 0:
+            mem.Copy(out, (p as i64 + at) as void*, n as u64)
+        end
+        op := out as u8*
+        op[n] = 0 as u8
+        ret out
+    end
+
+    func _copy_str(p: void*, at: i64, n: i64): str:
+        ret _copy_bytes(p, at, n) as str
+    end
+
+    func _cstr_len(p: void*, at: i64, limit: i64): i64:
+        mut i := at
+        until i < limit and _rd(p, i) != 0:
+            i += 1
+        end
+        ret i - at
+    end
+
+    func _my_fail(c: _MyConn*, code: int, msg: str):
+        c[0].errno = code
+        c[0].err = msg
+    end
+
+    func _my_lost(c: _MyConn*, timed_out: bool):
+        if c[0].ok and c[0].errno == 0:
+            if timed_out:
+                _my_fail(c, _MY_CR_SERVER_LOST, "Lost connection to server: timeout expired or connection reset")
+            else:
+                _my_fail(c, _MY_CR_SERVER_LOST, "Lost connection to server during query")
+            end
+        end
+        c[0].ok = false
+    end
+
+    func _my_fill(c: _MyConn*): bool:
+        if c[0].rpos > 0:
+            rest := c[0].rlen - c[0].rpos
+            if rest > 0:
+                mem.MemMove(c[0].rbuf, (c[0].rbuf as i64 + c[0].rpos) as void*, rest as u64)
+            end
+            c[0].rlen = rest
+            c[0].rpos = 0
+        end
+        if c[0].rcap - c[0].rlen < 4096:
+            c[0].rcap = c[0].rcap * 2
+            c[0].rbuf = mem.Reallocate(c[0].rbuf, c[0].rcap as u64)
+        end
+        dst := (c[0].rbuf as i64 + c[0].rlen) as void*
+        room := (c[0].rcap - c[0].rlen) as int
+        mut n := 0
+        if c[0].use_tls:
+            n = tls.ReadBytes(c[0].tc, dst, room)
+        else:
+            n = rawsock.RecvBytes(rawsock.FromFd(c[0].fd), dst, room)
+        end
+        if n <= 0:
+            _my_lost(c, n < 0)
+            ret false
+        end
+        c[0].rlen = c[0].rlen + (n as i64)
+        ret true
+    end
+
+    func _my_need(c: _MyConn*, n: i64): bool:
+        until c[0].rlen - c[0].rpos < n:
+            if not _my_fill(c):
+                ret false
+            end
+        end
+        ret true
+    end
+
+    func _my_read(c: _MyConn*, out &: _MyOut): bool:
+        out.len = 0
+        until true:
+            if not _my_need(c, 4):
+                ret false
+            end
+            n := _rd_le(c[0].rbuf, c[0].rpos, 3)
+            c[0].seq = (_rd(c[0].rbuf, c[0].rpos + 3) + 1) % 256
+            if not _my_need(c, n + 4):
+                ret false
+            end
+            _out_raw(out, (c[0].rbuf as i64 + c[0].rpos + 4) as void*, n)
+            c[0].rpos = c[0].rpos + n + 4
+            if n < (_MY_MAX_PACKET as i64):
+                ret true
+            end
+        end
+    end
+
+    func _my_send_raw(c: _MyConn*, p: void*, n: i64): bool:
+        mut sent := 0
+        if c[0].use_tls:
+            sent = tls.WriteBytes(c[0].tc, p, n as int)
+        else:
+            sent = rawsock.SendBytes(rawsock.FromFd(c[0].fd), p, n as int)
+        end
+        if (sent as i64) != n:
+            _my_lost(c, false)
+            ret false
+        end
+        ret true
+    end
+
+    func _my_send(c: _MyConn*, payload: _MyOut): bool:
+        mut at := 0 as i64
+        until true:
+            mut chunk := payload.len - at
+            if chunk > (_MY_MAX_PACKET as i64):
+                chunk = _MY_MAX_PACKET as i64
+            end
+            mut pkt := _out_new()
+            _out_le(pkt, chunk, 3)
+            _out_byte(pkt, c[0].seq)
+            _out_raw(pkt, (payload.p as i64 + at) as void*, chunk)
+            c[0].seq = (c[0].seq + 1) % 256
+            good := _my_send_raw(c, pkt.p, pkt.len)
+            mem.Free(pkt.p)
+            if not good:
+                ret false
+            end
+            at = at + chunk
+            if chunk < (_MY_MAX_PACKET as i64):
+                ret true
+            end
+        end
+    end
+
+    func _my_err_packet(c: _MyConn*, p: void*, n: i64):
+        code := _rd_le(p, 1, 2) as int
+        mut at := 3 as i64
+        if n > 3 and _rd(p, 3) == 35:
+            at = 9
+        end
+        _my_fail(c, code, _copy_str(p, at, n - at))
+    end
+
+    func _hash_raw(sha256: bool, p: void*, n: int, out: void*):
+        if sha256:
+            crypto.Sha256Bytes(p, n, out)
+        else:
+            crypto.Sha1Bytes(p, n, out)
+        end
+    end
+
+    func _scramble(sha256: bool, password: str, nonce: void*, nlen: int, out &: _MyOut):
+        out.len = 0
+        if password.len() == 0:
+            ret
+        end
+        mut w := 20
+        if sha256:
+            w = 32
+        end
+        h1 := mem.Allocate(32 as u64)
+        defer mem.Free(h1)
+        h2 := mem.Allocate(32 as u64)
+        defer mem.Free(h2)
+        h3 := mem.Allocate(32 as u64)
+        defer mem.Free(h3)
+        _hash_raw(sha256, password as void*, password.len(), h1)
+        _hash_raw(sha256, h1, w, h2)
+        mut mix := _out_new()
+        defer mem.Free(mix.p)
+        if sha256:
+            _out_raw(mix, h2, w as i64)
+            _out_raw(mix, nonce, nlen as i64)
+        else:
+            _out_raw(mix, nonce, nlen as i64)
+            _out_raw(mix, h2, w as i64)
+        end
+        _hash_raw(sha256, mix.p, mix.len as int, h3)
+        a := h1 as u8*
+        b := h3 as u8*
+        repeat w in i:
+            _out_byte(out, (a[i] as int) ^ (b[i] as int))
+        end
+    end
+
+    func _auth_data(c: _MyConn*, plugin: str, nonce: void*, nlen: int, out &: _MyOut): bool:
+        out.len = 0
+        if plugin == "mysql_native_password":
+            _scramble(false, c[0].password, nonce, nlen, out)
+            ret true
+        end
+        if plugin == "caching_sha2_password":
+            _scramble(true, c[0].password, nonce, nlen, out)
+            ret true
+        end
+        if plugin == "mysql_clear_password" or plugin == "sha256_password":
+            if not c[0].use_tls:
+                _my_fail(c, _MY_CR_AUTH_PLUGIN, "Authentication plugin '" + plugin + "' needs a TLS connection")
+                ret false
+            end
+            _out_str(out, c[0].password)
+            _out_byte(out, 0)
+            ret true
+        end
+        _my_fail(c, _MY_CR_AUTH_PLUGIN, "Authentication plugin '" + plugin + "' cannot be loaded")
+        ret false
+    end
+
+    func _my_auth_loop(c: _MyConn*, nonce &: _MyOut): bool:
+        mut pkt := _out_new()
+        defer mem.Free(pkt.p)
+        mut reply := _out_new()
+        defer mem.Free(reply.p)
+        until true:
+            if not _my_read(c, pkt):
+                ret false
+            end
+            p := pkt.p
+            n := pkt.len
+            if n == 0:
+                _my_fail(c, _MY_CR_SERVER_LOST, "empty packet during authentication")
+                ret false
+            end
+            head := _rd(p, 0)
+            if head == 0:
+                ret true
+            end
+            if head == 255:
+                _my_err_packet(c, p, n)
+                ret false
+            end
+            if head == 254:
+                pl := _cstr_len(p, 1, n)
+                plugin := _copy_str(p, 1, pl)
+                mut dl := n - pl - 2
+                if dl > 0 and _rd(p, n - 1) == 0:
+                    dl -= 1
+                end
+                nonce.len = 0
+                if dl > 0:
+                    _out_raw(nonce, (p as i64 + pl + 2) as void*, dl)
+                end
+                if not _auth_data(c, plugin, nonce.p, nonce.len as int, reply):
+                    ret false
+                end
+                if not _my_send(c, reply):
+                    ret false
+                end
+            else if head == 1:
+                if n >= 2 and _rd(p, 1) == 3:
+                    continue
+                end
+                if n >= 2 and _rd(p, 1) == 4:
+                    if not c[0].use_tls:
+                        _my_fail(c, _MY_CR_AUTH_PLUGIN, "caching_sha2_password full authentication needs a TLS connection")
+                        ret false
+                    end
+                    reply.len = 0
+                    _out_str(reply, c[0].password)
+                    _out_byte(reply, 0)
+                    if not _my_send(c, reply):
+                        ret false
+                    end
+                end
+            else:
+                _my_fail(c, _MY_CR_SERVER_LOST, "unexpected packet during authentication")
+                ret false
+            end
+        end
+    end
+
+    func _my_connect(c: _MyConn*, host: str, user: str, password: str, dbname: str, port: int, flags: u64): bool:
+        mut h := host
+        if h.len() == 0:
+            h = "localhost"
+        end
+        mut pt := port
+        if pt <= 0:
+            pt = 3306
+        end
+        c[0].user = user
+        c[0].password = password
+        sock := rawsock.Connect(h, pt)
+        if not rawsock.Ok(sock):
+            _my_fail(c, _MY_CR_CONN_HOST_ERROR, "Can't connect to server on '" + h + "' port " + conv.FormatInt(pt as i64))
+            ret false
+        end
+        c[0].fd = sock.fd
+        c[0].ok = true
+        rawsock.SetTimeout(sock, _MY_CONNECT_TIMEOUT_MS)
+        mut pkt := _out_new()
+        defer mem.Free(pkt.p)
+        if not _my_read(c, pkt):
+            ret false
+        end
+        p := pkt.p
+        n := pkt.len
+        if _rd(p, 0) == 255:
+            _my_err_packet(c, p, n)
+            ret false
+        end
+        vl := _cstr_len(p, 1, n)
+        c[0].server_version = _copy_str(p, 1, vl)
+        mut at := 1 + vl + 1 + 4
+        mut nonce := _out_new()
+        defer mem.Free(nonce.p)
+        _out_raw(nonce, (p as i64 + at) as void*, 8)
+        at = at + 9
+        mut caps := _rd_le(p, at, 2)
+        at = at + 2
+        mut plugin := "mysql_native_password"
+        if at < n:
+            at = at + 3
+            caps = caps + _rd_le(p, at, 2) * 65536
+            at = at + 2
+            auth_len := _rd(p, at) as i64
+            at = at + 11
+            mut part2 := auth_len - 8
+            if part2 < 13:
+                part2 = 13
+            end
+            mut take := part2
+            if _rd(p, at + part2 - 1) == 0:
+                take = part2 - 1
+            end
+            _out_raw(nonce, (p as i64 + at) as void*, take)
+            at = at + part2
+            if at < n:
+                plugin = _copy_str(p, at, _cstr_len(p, at, n))
+            end
+        end
+        mut want := (_MY_CLIENT_LONG_PASSWORD + _MY_CLIENT_LONG_FLAG + _MY_CLIENT_PROTOCOL_41 + _MY_CLIENT_TRANSACTIONS + _MY_CLIENT_SECURE_CONNECTION + _MY_CLIENT_MULTI_RESULTS + _MY_CLIENT_PLUGIN_AUTH + _MY_CLIENT_PLUGIN_AUTH_LENENC) as i64
+        if dbname.len() > 0:
+            want = want + (_MY_CLIENT_CONNECT_WITH_DB as i64)
+        end
+        want = want | (flags as i64)
+        mut client := want & caps
+        mode := os.Env("SALAM_MYSQL_SSL_MODE")
+        if (caps & (_MY_CLIENT_SSL as i64)) != 0 and mode != "DISABLED":
+            client = client | (_MY_CLIENT_SSL as i64)
+            mut req := _out_new()
+            _out_le(req, client, 4)
+            _out_le(req, _MY_MAX_PACKET as i64, 4)
+            _out_byte(req, _MY_CHARSET_UTF8MB4)
+            _out_zeros(req, 23)
+            sent := _my_send(c, req)
+            mem.Free(req.p)
+            if not sent:
+                ret false
+            end
+            mut cfg := tls.NewConfig(h)
+            cfg.insecure_skip_verify = mode != "VERIFY_IDENTITY"
+            cfg.ca_file = os.Env("SALAM_MYSQL_SSL_CA")
+            c[0].tc = tls.WrapClient(c[0].fd, cfg)
+            c[0].use_tls = true
+            if not tls.ConnOk(c[0].tc):
+                _my_fail(c, _MY_CR_CONN_HOST_ERROR, "TLS handshake failed: " + tls.ConnError(c[0].tc))
+                ret false
+            end
+        else if mode == "REQUIRED" or mode == "VERIFY_IDENTITY":
+            _my_fail(c, _MY_CR_CONN_HOST_ERROR, "the server does not support TLS, but it was required")
+            ret false
+        end
+        mut auth := _out_new()
+        defer mem.Free(auth.p)
+        if not _auth_data(c, plugin, nonce.p, nonce.len as int, auth):
+            plugin = "mysql_native_password"
+            c[0].errno = 0
+            c[0].err = ""
+            _scramble(false, password, nonce.p, nonce.len as int, auth)
+        end
+        mut resp := _out_new()
+        defer mem.Free(resp.p)
+        _out_le(resp, client, 4)
+        _out_le(resp, _MY_MAX_PACKET as i64, 4)
+        _out_byte(resp, _MY_CHARSET_UTF8MB4)
+        _out_zeros(resp, 23)
+        _out_str(resp, user)
+        _out_byte(resp, 0)
+        _out_byte(resp, auth.len as int)
+        _out_raw(resp, auth.p, auth.len)
+        if (client & (_MY_CLIENT_CONNECT_WITH_DB as i64)) != 0:
+            _out_str(resp, dbname)
+            _out_byte(resp, 0)
+        end
+        if (client & (_MY_CLIENT_PLUGIN_AUTH as i64)) != 0:
+            _out_str(resp, plugin)
+            _out_byte(resp, 0)
+        end
+        if not _my_send(c, resp):
+            ret false
+        end
+        ret _my_auth_loop(c, nonce)
+    end
+
+    func _my_close_socket(c: _MyConn*):
+        if c[0].use_tls:
+            tls.Close(c[0].tc)
+            c[0].use_tls = false
+        else if c[0].fd >= 0:
+            rawsock.Close(rawsock.FromFd(c[0].fd))
+        end
+        c[0].fd = 0 - 1
+        c[0].ok = false
+    end
+
+    func _my_res_new(nfields: int): _MyRes*:
+        r := mem.AllocateZeroed(sizeof(_MyRes) as u64) as _MyRes*
+        r[0] = _MyRes {}
+        r[0].nfields = nfields
+        r[0].names = mem.AllocateZeroed((nfields * 8 + 8) as u64)
+        ret r
+    end
+
+    func _my_free_result(res: void*):
+        if res == null:
+            ret
+        end
+        r := res as _MyRes*
+        names := r[0].names as i64*
+        repeat r[0].nfields in i:
+            if names[i] != 0:
+                mem.Free(names[i] as void*)
+            end
+        end
+        mem.Free(r[0].names)
+        each row in r[0].rows:
+            cells := row as i64*
+            repeat r[0].nfields in j:
+                if cells[j] != 0:
+                    mem.Free(cells[j] as void*)
+                end
+            end
+            mem.Free(row as void*)
+        end
+        r[0].rows.free()
+        mem.Free(res)
+    end
+
+    func _my_read_result(c: _MyConn*, keep: bool): int:
+        mut pkt := _out_new()
+        defer mem.Free(pkt.p)
+        if not _my_read(c, pkt):
+            ret 0 - 1
+        end
+        p := pkt.p
+        n := pkt.len
+        head := _rd(p, 0)
+        if head == 255:
+            _my_err_packet(c, p, n)
+            ret 0 - 1
+        end
+        if head == 251:
+            empty := _out_new()
+            _my_send(c, empty)
+            mem.Free(empty.p)
+            ret _my_read_result(c, keep)
+        end
+        if head == 0:
+            mut at := 1 as i64
+            aff := _rd_lenenc(p, at)
+            iid := _rd_lenenc(p, at)
+            status := _rd_le(p, at, 2) as int
+            if keep:
+                c[0].affected = aff
+                c[0].insert_id = iid
+                c[0].field_count = 0
+            end
+            ret status
+        end
+        mut at0 := 0 as i64
+        nf := _rd_lenenc(p, at0) as int
+        r := _my_res_new(nf)
+        names := r[0].names as i64*
+        repeat nf in i:
+            if not _my_read(c, pkt):
+                _my_free_result(r as void*)
+                ret 0 - 1
+            end
+            mut at := 0 as i64
+            repeat 4:
+                l := _rd_lenenc(pkt.p, at)
+                at = at + l
+            end
+            nl := _rd_lenenc(pkt.p, at)
+            names[i] = _copy_bytes(pkt.p, at, nl) as i64
+        end
+        if not _my_read(c, pkt):
+            _my_free_result(r as void*)
+            ret 0 - 1
+        end
+        mut status := 0
+        until true:
+            if not _my_read(c, pkt):
+                _my_free_result(r as void*)
+                ret 0 - 1
+            end
+            q := pkt.p
+            if _rd(q, 0) == 254 and pkt.len < 9:
+                if pkt.len >= 5:
+                    status = _rd_le(q, 3, 2) as int
+                end
+                break
+            end
+            if _rd(q, 0) == 255:
+                _my_err_packet(c, q, pkt.len)
+                _my_free_result(r as void*)
+                ret 0 - 1
+            end
+            cells := mem.AllocateZeroed((nf * 8 + 8) as u64) as i64*
+            mut at := 0 as i64
+            repeat nf in j:
+                if _rd(q, at) == 251:
+                    at += 1
+                else:
+                    l := _rd_lenenc(q, at)
+                    cells[j] = _copy_bytes(q, at, l) as i64
+                    at = at + l
+                end
+            end
+            r[0].rows.push(cells as i64)
+            r[0].nrows = r[0].nrows + 1
+        end
+        if keep:
+            c[0].field_count = nf
+            c[0].affected = r[0].nrows
+            c[0].pending = r as void*
+        else:
+            _my_free_result(r as void*)
+        end
+        ret status
+    end
+
+    func _my_command(c: _MyConn*, cmd: int, arg: str): int:
+        _my_free_result(c[0].pending)
+        c[0].pending = null
+        c[0].errno = 0
+        c[0].err = ""
+        c[0].field_count = 0
+        if not c[0].ok:
+            _my_fail(c, _MY_CR_SERVER_LOST, "MySQL server has gone away")
+            ret 1
+        end
+        c[0].seq = 0
+        mut o := _out_new()
+        _out_byte(o, cmd)
+        _out_str(o, arg)
+        sent := _my_send(c, o)
+        mem.Free(o.p)
+        if not sent:
+            ret 1
+        end
+        mut status := _my_read_result(c, true)
+        if status < 0:
+            ret 1
+        end
+        until (status & _MY_MORE_RESULTS) != 0:
+            status = _my_read_result(c, false)
+            if status < 0:
+                ret 1
+            end
+        end
+        ret 0
+    end
+
+    func _my_init(_conn: void*): void*:
+        c := mem.AllocateZeroed(sizeof(_MyConn) as u64) as _MyConn*
+        c[0] = _MyConn {}
+        c[0].rcap = _MY_READ_CHUNK as i64
+        c[0].rbuf = mem.Allocate(c[0].rcap as u64)
+        ret c as void*
+    end
+
+    func _my_real_connect(conn: void*, host: str, user: str, passwd: str, dbname: str, port: u32, unix_socket: void*, client_flag: u64): void*:
+        c := conn as _MyConn*
+        if unix_socket != null:
+            _my_fail(c, _MY_CR_CONN_HOST_ERROR, "Unix-domain sockets are not supported; connect over TCP")
+            ret null
+        end
+        if not _my_connect(c, host, user, passwd, dbname, port as int, client_flag):
+            _my_close_socket(c)
+            ret null
+        end
+        rawsock.SetTimeout(rawsock.FromFd(c[0].fd), 0)
+        ret conn
+    end
+
+    func _my_close(conn: void*):
+        c := conn as _MyConn*
+        if c[0].ok:
+            c[0].seq = 0
+            mut o := _out_new()
+            _out_byte(o, 1)
+            _my_send(c, o)
+            mem.Free(o.p)
+        end
+        _my_close_socket(c)
+        _my_free_result(c[0].pending)
+        mem.Free(c[0].rbuf)
+        mem.Free(conn)
+    end
+
+    func _my_ping(conn: void*): int:
+        ret _my_command(conn as _MyConn*, 14, "")
+    end
+
+    func _my_select_db(conn: void*, dbname: str): int:
+        ret _my_command(conn as _MyConn*, 2, dbname)
+    end
+
+    func _my_query(conn: void*, stmt: str): int:
+        ret _my_command(conn as _MyConn*, 3, stmt)
+    end
+
+    func _my_set_character_set(conn: void*, csname: str): int:
+        ret _my_command(conn as _MyConn*, 3, "SET NAMES " + csname)
+    end
+
+    func _my_store_result(conn: void*): void*:
+        c := conn as _MyConn*
+        r := c[0].pending
+        c[0].pending = null
+        ret r
+    end
+
+    func _my_fetch_row(res: void*): void*:
+        r := res as _MyRes*
+        if r[0].pos >= r[0].nrows:
+            ret null
+        end
+        row := r[0].rows.get(r[0].pos as int)
+        r[0].pos = r[0].pos + 1
+        ret row as void*
+    end
+
+    func _my_num_fields(res: void*): u32:
+        r := res as _MyRes*
+        ret r[0].nfields as u32
+    end
+
+    func _my_num_rows(res: void*): u64:
+        r := res as _MyRes*
+        ret r[0].nrows as u64
+    end
+
+    func _my_fetch_field_direct(res: void*, fieldnr: u32): void*:
+        r := res as _MyRes*
+        if (fieldnr as int) >= r[0].nfields:
+            ret null
+        end
+        ret (r[0].names as i64 + (fieldnr as i64) * 8) as void*
+    end
+
+    func _my_affected_rows(conn: void*): u64:
+        c := conn as _MyConn*
+        ret c[0].affected as u64
+    end
+
+    func _my_insert_id(conn: void*): u64:
+        c := conn as _MyConn*
+        ret c[0].insert_id as u64
+    end
+
+    func _my_autocommit(conn: void*, mode: bool): bool:
+        mut sql := "SET autocommit=0"
+        if mode:
+            sql = "SET autocommit=1"
+        end
+        ret _my_command(conn as _MyConn*, 3, sql) != 0
+    end
+
+    func _my_commit(conn: void*): bool:
+        ret _my_command(conn as _MyConn*, 3, "COMMIT") != 0
+    end
+
+    func _my_rollback(conn: void*): bool:
+        ret _my_command(conn as _MyConn*, 3, "ROLLBACK") != 0
+    end
+
+    func _my_real_escape_string(_conn: void*, dst: void*, from: str, length: u64): u64:
+        sp := from as void*
+        dp := dst as u8*
+        mut w := 0
+        repeat (length as int) in i:
+            b := _rd(sp, i as i64)
+            mut esc := 0
+            if b == 0:
+                esc = 48
+            else if b == 10:
+                esc = 110
+            else if b == 13:
+                esc = 114
+            else if b == 26:
+                esc = 90
+            else if b == 92 or b == 39 or b == 34:
+                esc = b
+            end
+            if esc != 0:
+                dp[w] = 92 as u8
+                dp[w + 1] = esc as u8
+                w += 2
+            else:
+                dp[w] = b as u8
+                w += 1
+            end
+        end
+        dp[w] = 0 as u8
+        ret w as u64
+    end
+
+    func _my_error(conn: void*): str:
+        c := conn as _MyConn*
+        ret c[0].err
+    end
+
+    func _my_errno(conn: void*): u32:
+        c := conn as _MyConn*
+        ret c[0].errno as u32
+    end
+
+    func _my_get_client_info(): str:
+        ret "salam-native"
+    end
+
+    func _my_thread_init(): bool:
+        _my_threads += 1
+        ret false
+    end
+
+    func _my_thread_end():
+        _my_threads -= 1
+    end
+
+    func _my_server_init(_argc: int, _argv: void*, _groups: void*): int:
+        _my_library_ready = true
+        ret 0
+    end
+
+    func _my_server_end():
+        _my_library_ready = false
+    end
+
+    func _my_get_server_info(conn: void*): str:
+        c := conn as _MyConn*
+        ret c[0].server_version
+    end
+end

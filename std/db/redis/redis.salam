@@ -19,15 +19,7 @@ package redis
 import mem
 import str
 import conv
-
-link dynamic "hiredis"
-
-extern:
-    func redisConnect(ip: str, port: int): void*
-    func redisFree(ctx: void*)
-    func redisCommandArgv(ctx: void*, argc: int, argv: void*, argvlen: void*): void*
-    func freeReplyObject(reply: void*)
-end
+import net.internal.rawsock
 
 @en "REPLY_STRING"
 @fa "پاسخ_رشته"
@@ -57,6 +49,10 @@ pub const REPLY_ERROR := 6
 @fa "پاسخ_اعشار"
 pub const REPLY_DOUBLE := 7
 
+const _CONN_SIZE := 56
+const _REPLY_SIZE := 40
+const _READ_CHUNK := 16384
+
 @en "Client"
 @fa "کلاینت"
 pub struct Client:
@@ -69,29 +65,282 @@ pub struct Reply:
     pub handle: void* = null
 end
 
+func _slot(base: void*, i: int): i64:
+    p := base as i64*
+    ret p[i]
+end
+
+func _set_slot(base: void*, i: int, v: i64):
+    p := base as i64*
+    p[i] = v
+end
+
+func _ctx_new(fd: i64): void*:
+    ctx := mem.AllocateZeroed(_CONN_SIZE as u64)
+    _set_slot(ctx, 0, fd)
+    buf := mem.Allocate(_READ_CHUNK as u64)
+    _set_slot(ctx, 3, buf as i64)
+    _set_slot(ctx, 5, _READ_CHUNK as i64)
+    ret ctx
+end
+
+func _ctx_sock(ctx: void*): rawsock.Socket:
+    ret rawsock.FromFd(_slot(ctx, 0))
+end
+
 func _ctx_err(ctx: void*): int:
-    p := (ctx as i64 + 8) as int*
-    ret p[0]
+    ret _slot(ctx, 1) as int
 end
 
 func _ctx_errstr(ctx: void*): str:
-    p := (ctx as i64 + 12) as void* as str
-    ret str.Clone(p)
+    sp := _slot(ctx, 2)
+    if sp == 0:
+        ret ""
+    end
+    ret str.Clone(sp as void* as str)
+end
+
+func _ctx_fail(ctx: void*, msg: str):
+    if _slot(ctx, 1) != 0:
+        ret
+    end
+    _set_slot(ctx, 1, 1)
+    _set_slot(ctx, 2, str.Clone(msg) as void* as i64)
+    rawsock.Close(_ctx_sock(ctx))
+end
+
+func _ctx_free(ctx: void*):
+    if _slot(ctx, 1) == 0:
+        rawsock.Close(_ctx_sock(ctx))
+    end
+    sp := _slot(ctx, 2)
+    if sp != 0:
+        mem.Free(sp as void*)
+    end
+    mem.Free(_slot(ctx, 3) as void*)
+    mem.Free(ctx)
+end
+
+func _fill(ctx: void*): bool:
+    if _slot(ctx, 1) != 0:
+        ret false
+    end
+    mut buf := _slot(ctx, 3) as void*
+    mut len := _slot(ctx, 4)
+    pos := _slot(ctx, 6)
+    if pos > 0:
+        if len > pos:
+            mem.MemMove(buf, (buf as i64 + pos) as void*, (len - pos) as u64)
+        end
+        len = len - pos
+        _set_slot(ctx, 6, 0)
+    end
+    mut cap := _slot(ctx, 5)
+    if cap - len < 4096:
+        cap = cap * 2
+        buf = mem.Reallocate(buf, cap as u64)
+        _set_slot(ctx, 3, buf as i64)
+        _set_slot(ctx, 5, cap)
+    end
+    n := rawsock.RecvBytes(_ctx_sock(ctx), (buf as i64 + len) as void*, (cap - len) as int)
+    _set_slot(ctx, 4, len)
+    if n <= 0:
+        _ctx_fail(ctx, "Server closed the connection")
+        ret false
+    end
+    _set_slot(ctx, 4, len + n)
+    ret true
+end
+
+func _ensure(ctx: void*, n: i64): bool:
+    until _slot(ctx, 4) - _slot(ctx, 6) < n:
+        if not _fill(ctx):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _line_end(ctx: void*): i64:
+    mut scanned := 0 as i64
+    until true:
+        pos := _slot(ctx, 6)
+        len := _slot(ctx, 4)
+        buf := _slot(ctx, 3) as u8*
+        mut i := pos + scanned
+        until i + 1 < len:
+            if buf[i] as int == 13 and buf[i + 1] as int == 10:
+                ret i
+            end
+            i += 1
+        end
+        scanned = i - pos
+        if not _fill(ctx):
+            ret -1
+        end
+    end
+end
+
+func _take_cstr(ctx: void*, n: i64): void*:
+    out := mem.Allocate((n + 1) as u64)
+    pos := _slot(ctx, 6)
+    mem.Copy(out, (_slot(ctx, 3) + pos) as void*, n as u64)
+    op := out as u8*
+    op[n] = 0 as u8
+    _set_slot(ctx, 6, pos + n)
+    ret out
+end
+
+func _parse_int(p: void*): i64:
+    b := p as u8*
+    mut i := 0
+    mut neg := false
+    if b[0] as int == 45:
+        neg = true
+        i = 1
+    else if b[0] as int == 43:
+        i = 1
+    end
+    mut v := 0 as i64
+    until b[i] as int >= 48 and b[i] as int <= 57:
+        v = v * 10 + ((b[i] as int) - 48) as i64
+        i += 1
+    end
+    if neg:
+        ret 0 - v
+    end
+    ret v
+end
+
+func _reply_new(kind: int): void*:
+    r := mem.AllocateZeroed(_REPLY_SIZE as u64)
+    _set_slot(r, 0, kind as i64)
+    ret r
+end
+
+func _read_reply(ctx: void*): void*:
+    e := _line_end(ctx)
+    if e < 0:
+        ret null
+    end
+    pos := _slot(ctx, 6)
+    buf := _slot(ctx, 3) as u8*
+    kind := buf[pos] as int
+    _set_slot(ctx, 6, pos + 1)
+    line := _take_cstr(ctx, e - pos - 1)
+    _set_slot(ctx, 6, e + 2)
+    if kind == 43 or kind == 45 or kind == 44 or kind == 40:
+        mut t := REPLY_STATUS
+        if kind == 45:
+            t = REPLY_ERROR
+        else if kind == 44:
+            t = REPLY_DOUBLE
+        else if kind == 40:
+            t = REPLY_STRING
+        end
+        r := _reply_new(t)
+        _set_slot(r, 2, line as i64)
+        ret r
+    end
+    if kind == 58 or kind == 35:
+        r := _reply_new(REPLY_INTEGER)
+        if kind == 35:
+            lp := line as u8*
+            if lp[0] as int == 116:
+                _set_slot(r, 1, 1)
+            end
+        else:
+            _set_slot(r, 1, _parse_int(line))
+        end
+        mem.Free(line)
+        ret r
+    end
+    if kind == 95:
+        mem.Free(line)
+        ret _reply_new(REPLY_NIL)
+    end
+    if kind == 36 or kind == 33 or kind == 61:
+        n := _parse_int(line)
+        mem.Free(line)
+        if n < 0:
+            ret _reply_new(REPLY_NIL)
+        end
+        if not _ensure(ctx, n + 2):
+            ret null
+        end
+        mut t := REPLY_STRING
+        if kind == 33:
+            t = REPLY_ERROR
+        end
+        r := _reply_new(t)
+        _set_slot(r, 2, _take_cstr(ctx, n) as i64)
+        _set_slot(ctx, 6, _slot(ctx, 6) + 2)
+        ret r
+    end
+    if kind == 42 or kind == 37 or kind == 126 or kind == 62:
+        mut n := _parse_int(line)
+        mem.Free(line)
+        if n < 0:
+            ret _reply_new(REPLY_NIL)
+        end
+        if kind == 37:
+            n = n * 2
+        end
+        r := _reply_new(REPLY_ARRAY)
+        _set_slot(r, 3, n)
+        if n == 0:
+            ret r
+        end
+        elems := mem.AllocateZeroed((n * 8) as u64)
+        _set_slot(r, 4, elems as i64)
+        mut i := 0 as i64
+        until i < n:
+            child := _read_reply(ctx)
+            if child == null:
+                _free_reply(r)
+                ret null
+            end
+            _set_slot(elems, i as int, child as i64)
+            i += 1
+        end
+        ret r
+    end
+    mem.Free(line)
+    _ctx_fail(ctx, "Protocol error, got an unexpected reply type")
+    ret null
+end
+
+func _free_reply(r: void*):
+    if r == null:
+        ret
+    end
+    sp := _slot(r, 2)
+    if sp != 0:
+        mem.Free(sp as void*)
+    end
+    n := _slot(r, 3)
+    elems := _slot(r, 4)
+    if elems != 0:
+        mut i := 0 as i64
+        until i < n:
+            _free_reply(_slot(elems as void*, i as int) as void*)
+            i += 1
+        end
+        mem.Free(elems as void*)
+    end
+    mem.Free(r)
 end
 
 func _reply_type(r: void*): int:
-    p := (r as i64) as int*
-    ret p[0]
+    ret _slot(r, 0) as int
 end
 
 func _reply_integer(r: void*): i64:
-    p := (r as i64 + 8) as i64*
-    ret p[0]
+    ret _slot(r, 1)
 end
 
 func _reply_str(r: void*): str:
-    p := (r as i64 + 32) as i64*
-    sp := p[0]
+    sp := _slot(r, 2)
     if sp == 0:
         ret ""
     end
@@ -99,46 +348,79 @@ func _reply_str(r: void*): str:
 end
 
 func _reply_elements_count(r: void*): i64:
-    p := (r as i64 + 48) as i64*
-    ret p[0]
+    ret _slot(r, 3)
 end
 
 func _reply_element_at(r: void*, i: int): void*:
-    p := (r as i64 + 56) as i64*
-    arr := p[0]
-    ep := arr as i64*
-    ret ep[i] as void*
+    elems := _slot(r, 4)
+    if elems == 0 or i < 0 or (i as i64) >= _slot(r, 3):
+        ret null
+    end
+    ret _slot(elems as void*, i) as void*
 end
 
-func _build_argv(args: Vector<str>): str*:
-    n := args.len()
-    argv := mem.Allocate((n as u64) * (sizeof(str) as u64)) as str*
-    repeat n in i:
-        argv[i] = args.get(i)
+func _digits(n: i64): i64:
+    mut d := 1 as i64
+    mut v := n
+    until v >= 10:
+        v = v / 10
+        d += 1
     end
-    ret argv
+    ret d
 end
 
-func _build_lens(args: Vector<str>): u64*:
-    n := args.len()
-    lens := mem.Allocate((n as u64) * (sizeof(u64) as u64)) as u64*
-    repeat n in i:
-        lens[i] = args.get(i).len() as u64
+func _put_int(out: u8*, at: i64, n: i64): i64:
+    d := _digits(n)
+    mut v := n
+    mut i := d - 1
+    until i >= 0:
+        out[at + i] = (48 + (v % 10)) as u8
+        v = v / 10
+        i -= 1
     end
-    ret lens
+    ret at + d
+end
+
+func _put_header(out: u8*, at: i64, mark: int, n: i64): i64:
+    out[at] = mark as u8
+    p := _put_int(out, at + 1, n)
+    out[p] = 13 as u8
+    out[p + 1] = 10 as u8
+    ret p + 2
 end
 
 func _raw_command(handle: void*, args: Vector<str>): void*:
     n := args.len()
-    if n == 0:
+    if n == 0 or _ctx_err(handle) != 0:
         ret null
     end
-    argv := _build_argv(args)
-    lens := _build_lens(args)
-    reply := redisCommandArgv(handle, n, argv as void*, lens as void*)
-    mem.Free(argv as void*)
-    mem.Free(lens as void*)
-    ret reply
+    mut total := 3 + _digits(n as i64)
+    repeat n in i:
+        l := args.get(i).len() as i64
+        total = total + 5 + _digits(l) + l
+    end
+    out := mem.Allocate(total as u64)
+    op := out as u8*
+    mut at := _put_header(op, 0, 42, n as i64)
+    repeat n in i:
+        a := args.get(i)
+        l := a.len() as i64
+        at = _put_header(op, at, 36, l)
+        if l > 0:
+            mem.Copy((out as i64 + at) as void*, a as void*, l as u64)
+        end
+        at = at + l
+        op[at] = 13 as u8
+        op[at + 1] = 10 as u8
+        at = at + 2
+    end
+    sent := rawsock.SendBytes(_ctx_sock(handle), out, at as int)
+    mem.Free(out)
+    if (sent as i64) != at:
+        _ctx_fail(handle, "Broken pipe")
+        ret null
+    end
+    ret _read_reply(handle)
 end
 
 func _args1(a: str): Vector<str>:

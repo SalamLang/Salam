@@ -12,42 +12,36 @@
  *
  */
 
+
 package ssl
+
+func _new_ctx(server: bool): Context:
+    p := mem.AllocateZeroed(sizeof(_Ctx) as u64) as _Ctx*
+    p[0] = _Ctx {}
+    p[0].server = server
+    ret Context { handle = p as void* }
+end
 
 @en "NewClientContext"
 @fa "زمینه جدید مشتری"
 pub func NewClientContext(): Context:
-    handle := SSL_CTX_new(TLS_client_method())
-    if handle == null:
-        ret Context { handle = null }
-    end
-    SSL_CTX_ctrl(handle, _CTRL_SET_MIN_PROTO_VERSION, TLS1_2, null)
-    SSL_CTX_set_verify(handle, VERIFY_PEER, null)
-    SSL_CTX_set_default_verify_paths(handle)
-    ret Context { handle = handle }
+    ret _new_ctx(false)
 end
 
 @en "NewServerContext"
 @fa "زمینه جدید سرور"
 pub func NewServerContext(cert_file: str, key_file: str): Context:
-    handle := SSL_CTX_new(TLS_server_method())
-    if handle == null:
+    mut scfg := tls.NewServerConfig(cert_file, key_file)
+    if not scfg.ok:
+        tls.FreeRoots(scfg.chain)
+        tls.FreePrivateKey(scfg.key)
+        _last_error = "could not load the certificate or key file"
         ret Context { handle = null }
     end
-    SSL_CTX_ctrl(handle, _CTRL_SET_MIN_PROTO_VERSION, TLS1_2, null)
-    if SSL_CTX_use_certificate_file(handle, cert_file, FILETYPE_PEM) != 1:
-        SSL_CTX_free(handle)
-        ret Context { handle = null }
-    end
-    if SSL_CTX_use_PrivateKey_file(handle, key_file, FILETYPE_PEM) != 1:
-        SSL_CTX_free(handle)
-        ret Context { handle = null }
-    end
-    if SSL_CTX_check_private_key(handle) != 1:
-        SSL_CTX_free(handle)
-        ret Context { handle = null }
-    end
-    ret Context { handle = handle }
+    ctx := _new_ctx(true)
+    p := _ctx_of(ctx)
+    p[0].scfg = scfg
+    ret ctx
 end
 
 @en "CtxOk"
@@ -62,7 +56,8 @@ pub func SetVerify(ctx: Context, mode: int):
     if ctx.handle == null:
         ret
     end
-    SSL_CTX_set_verify(ctx.handle, mode, null)
+    p := _ctx_of(ctx)
+    p[0].verify = mode
 end
 
 @en "LoadVerifyLocationsFile"
@@ -71,7 +66,16 @@ pub func LoadVerifyLocationsFile(ctx: Context, path: str): bool:
     if ctx.handle == null:
         ret false
     end
-    ret SSL_CTX_load_verify_locations(ctx.handle, path, null) == 1
+    mut roots := tls.LoadRoots(path)
+    n := tls.RootCount(roots)
+    tls.FreeRoots(roots)
+    if n == 0:
+        _last_error = "no certificates found in " + path
+        ret false
+    end
+    p := _ctx_of(ctx)
+    p[0].ca_file = path
+    ret true
 end
 
 @en "SetDefaultVerifyPaths"
@@ -80,22 +84,32 @@ pub func SetDefaultVerifyPaths(ctx: Context): bool:
     if ctx.handle == null:
         ret false
     end
-    ret SSL_CTX_set_default_verify_paths(ctx.handle) == 1
+    p := _ctx_of(ctx)
+    p[0].ca_file = ""
+    ret true
 end
 
 @en "SetMinVersion"
 @fa "تنظیم کمینه نسخه"
 pub func SetMinVersion(ctx: Context, version: i64): bool:
-    if ctx.handle == null:
+    if ctx.handle == null or version < 0 or version > TLS1_3:
         ret false
     end
-    ret SSL_CTX_ctrl(ctx.handle, _CTRL_SET_MIN_PROTO_VERSION, version, null) == (1 as i64)
+    p := _ctx_of(ctx)
+    p[0].min_version = version
+    ret true
 end
 
 @en "CloseContext"
 @fa "بستن زمینه"
 pub func CloseContext(ctx: Context):
-    if ctx.handle != null:
-        SSL_CTX_free(ctx.handle)
+    if ctx.handle == null:
+        ret
     end
+    p := _ctx_of(ctx)
+    if p[0].server:
+        tls.FreeRoots(p[0].scfg.chain)
+        tls.FreePrivateKey(p[0].scfg.key)
+    end
+    mem.Free(ctx.handle)
 end

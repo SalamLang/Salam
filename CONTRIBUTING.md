@@ -468,6 +468,31 @@ The counts are exactly reproducible, so the check fails on a regression and tell
 
 Add a line to `tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
 
+### 🔀 Cross-backend sweeps
+
+`run-tests.sh` gives nearly every section a C build, and only runs the
+interpreter for `exec/` and the JS backend for `js/`. Roughly 1400 tests
+therefore never execute anywhere but the C backend, and that gap is where
+backend bugs hide. `tools/bash/backend-sweep.sh` runs them somewhere else and
+compares against the same `.out` files:
+
+```sh
+sh tools/bash/backend-sweep.sh ./salam exec           # the interpreter
+sh tools/bash/backend-sweep.sh ./salam llvm types     # one section
+sh tools/bash/backend-sweep.sh ./salam js
+```
+
+It honours the `// DEFINE:` and `// CONST:` comments the corpus uses, resolves
+the platform-specific `.out` with the runner's own spellings (`mac`, `x64`, not
+uname's), compares output exactly the way the runner does, and exits non-zero
+if anything diverged. A test that did not finish is reported as
+`DIVERGE-TIMEOUT` rather than as wrong output.
+
+A `DIVERGE` is a lead, not a verdict. The JS backend has no 64-bit integers
+(`18446744073709551615` prints as `...552000`), no sockets, sqlite or FFI; the
+interpreter refuses variadic externs and is slow enough that crypto-heavy or
+ML tests hit the timeout. Read the actual diff before filing anything.
+
 ## 💬 Feedback and Support
 
 If you have any questions or need assistance, feel free to reach out to the project maintainers or the community. We're here to support each other in making Salam the best it can be.

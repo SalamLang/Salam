@@ -14,6 +14,9 @@ mut g_vm := Interp {}
 mut g_ast := at.NewAst()
 mut g_run_main := 0
 mut g_run_rc := 0
+mut g_run_program := 0
+mut g_glob_mods := Vector {} as Vector<int>
+mut g_glob_decls := Vector {} as Vector<int>
 mut g_threads_on := false
 mut g_gil := sync.Mutex {}
 mut g_task_fn := Vector {} as Vector<Value>
@@ -62,12 +65,16 @@ func run_prepare(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int, main_o
     end
     fixup_generic_envs(ip, a, sem)
     rehome_synthetic_funcs(ip, a)
-    interp_eval_globals(ip, a, sem, program)
-    if ip.failed:
-        ret run_fail(ip)
-    end
+    g_run_program = program
+    g_glob_mods.clear()
+    g_glob_decls.clear()
+    plan_globals(ip, a, sem, g_glob_mods, g_glob_decls)
     main_fn := find_func(ip, a, ip.entry, 0 - 1)
     if main_fn == 0:
+        eval_globals(ip, a, program, g_glob_mods, g_glob_decls)
+        if ip.failed:
+            ret run_fail(ip)
+        end
         lg.Log(
             ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
                 i18.Tr("no entry point: define a '%s' function"), co.ArgStr(ip.entry)
@@ -80,6 +87,10 @@ func run_prepare(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int, main_o
 end
 
 func run_execute(ip &: Interp, a &: at.Ast, main_fn: int): int:
+    eval_globals(ip, a, g_run_program, g_glob_mods, g_glob_decls)
+    if ip.failed:
+        ret run_fail(ip)
+    end
     mut noargs := Vector {} as Vector<Value>
     defer noargs.free()
     rc := call_func(ip, a, main_fn, ip.globals, false, val_null(), noargs)

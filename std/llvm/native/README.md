@@ -28,7 +28,7 @@ publish their interfaces:
   the file.
 - **`xml_stub.c`** - the sixteen libxml2 symbols LLVM's Windows manifest
   merger references, so nothing links libxml2. Salam never asks lld to merge
-  manifests; if something did, the merge fails with "invalid xml document".
+  manifests; if something did, the merge fails with a parse error.
   See the comment in the file.
 
 Not counting the libxml2 stand-ins, that is ten exported symbols in total:

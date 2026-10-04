@@ -8,6 +8,43 @@ include at "../ast.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
 
+func ret_slice_local(s &: Sema, a &: at.Ast, e: int): str:
+    if e == 0 or at.KindOf(a, e) != at.AST_SLICE:
+        ret ""
+    end
+    mut cur := at.Get(a, e).a
+    until cur != 0 and (at.KindOf(a, cur) == at.AST_MEMBER or at.KindOf(a, cur) == at.AST_INDEX or at.KindOf(a, cur) == at.AST_SLICE):
+        cur = at.Get(a, cur).a
+    end
+    if cur == 0:
+        ret ""
+    end
+    ck := at.KindOf(a, cur)
+    if ck == at.AST_ARRAY_LIT:
+        ret i18.Tr("an array literal")
+    end
+    if ck != at.AST_IDENTIFIER:
+        ret ""
+    end
+    nm := at.Get(a, cur).name
+    sym := scope_lookup(s, s.cur, nm)
+    if sym == 0 or scope_lookup_local(s, s.global, nm) == sym:
+        ret ""
+    end
+    sv := sym_at(s, sym)
+    if sv.is_ref or sv.ty < 0:
+        ret ""
+    end
+    tk := ty_at(s, sv.ty).kind
+    if tk == TY_SLICE or tk == TY_PTR:
+        ret ""
+    end
+    if sv.kind == SYM_VAR or sv.kind == SYM_PARAM or sv.kind == SYM_CONST:
+        ret "'" + nm + "'"
+    end
+    ret ""
+end
+
 func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
     d := at.Get(a, did)
     symid := symbol_new(s, kind, d.name)
@@ -810,6 +847,14 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
     end
     if k == at.AST_RETURN:
         n7 := at.Get(a, nid)
+        escp := ret_slice_local(s, a, n7.a)
+        if str.Len(escp) > 0:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("cannot return a slice of %s: its memory is gone once the function returns; return the array itself or a Vector"), co.ArgStr(escp)
+                )
+            )
+        end
         if s.match_arm_depth > 0 and s.match_yield_active:
             saved_exp := s.expected
             s.expected = s.match_yield_expected

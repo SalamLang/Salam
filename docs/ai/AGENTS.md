@@ -68,7 +68,7 @@ The `pub` rule is the one that bites hardest: a private helper written _after_
 your first public function will not compile. Put every private helper above the
 `// ---- public API ----` line.
 
-`salam format --fix-order` can reorder declarations mechanically.
+`salam format` reorders declarations mechanically; pass `--no-fix-order` to skip that.
 
 ## 3. Unused anything is an error, not a warning
 
@@ -147,8 +147,12 @@ Built-in methods on `str`. This is the complete list:
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
 lower  upper  repeat  split  to_int  to_float
+starts_with(prefix)  ends_with(suffix)  includes(sub)
 char_count  char_at(i)  char_substr(start, len)  char_find(sub)
 ```
+
+`starts_with`, `ends_with` and `includes` return `bool`; their Persian names
+are `شروع با`, `ختم با` and `دربردارد`.
 
 `len`, `s[i]`, `substr` and `find` work in bytes. The `char_*` methods are
 their UTF-8 counterparts: they count and index code points, so

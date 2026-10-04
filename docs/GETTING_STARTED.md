@@ -238,8 +238,8 @@ salam format app.salam --lang=fa
 
 Top-level code is split into sections: `package`, imports, includes, each
 `link` kind, `extern`, pub consts, consts, vars, types and funcs (pub and
-private apart). The formatter puts exactly one blank line between two
-sections. Inside a section your own blank lines are kept, at most one in a row.
+private apart). The formatter puts exactly one empty line between two
+sections. Inside a section your own empty lines are kept, at most one in a row.
 
 ## 🌐 Layout DSL - compile to HTML/CSS/JS
 

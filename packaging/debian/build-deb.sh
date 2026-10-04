@@ -1,7 +1,7 @@
 #!/bin/sh
 # Turns the published Linux release tarballs into .deb packages.
 #
-#   packaging/debian/build-deb.sh --version 0.4.0 --input ./release --output ./debs
+#   packaging/debian/build-deb.sh --version 0.5.0 --input ./release --output ./debs
 #
 # --input holds the salam-<version>-linux-<arch>.tar.gz files as published on
 # the GitHub release. One .deb is produced per tarball found; missing arches
@@ -101,7 +101,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 built=0
 
-DEPENDS='libc6 (>= 2.38), libgcc-s1, libtinfo6, libxml2'
+DEPENDS='libc6 (>= 2.38), libgcc-s1'
 
 for spec in \
         "x86_64:amd64" \

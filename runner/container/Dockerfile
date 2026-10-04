@@ -39,7 +39,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.salamVersion=$(cat 
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libstdc++6 libtinfo6 libxml2 libzstd1 zlib1g \
+    && apt-get install -y --no-install-recommends libtinfo6 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 sandbox \
     && useradd --uid 10001 --gid sandbox --no-create-home --shell /usr/sbin/nologin sandbox \

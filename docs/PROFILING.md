@@ -1110,7 +1110,7 @@ checksum-style benchmarks for LTO builds.
    slower than ideal, never faster), so the mean is dragged by outliers and the
    median is the honest central estimate. Report `min` too, because for
    deterministic CPU-bound code the minimum is the closest thing to the true
-   cost. This matches what `benchmark/RESULTS.md` already does for the
+   cost. This matches what `benchmark/results/README.md` already does for the
    cross-language suite ("geometric-mean minimum time"), so the two stay
    comparable.
 4. **Stability warning.** If `stddev / median > 0.05`, print a `noisy` marker on
@@ -1209,7 +1209,7 @@ noise-aware to be useful.
 ```json
 {
   "schema": "salam.bench.v1",
-  "salam_version": "0.4.8",
+  "salam_version": "0.4.9",
   "backend": "c",
   "cc": "gcc",
   "flags": "-O2",
@@ -1246,7 +1246,7 @@ question. Two integration points:
 1. `benchmark/bench/timing.salam` currently does its own timing. Point it at
    `time.MonoNanos` from section 1.3 so the cross-language suite stops using the
    15.6 ms Windows clock. This is the highest-value single line in this whole
-   document for the accuracy of the numbers in `benchmark/RESULTS.md`.
+   document for the accuracy of the numbers in `benchmark/results/README.md`.
 2. `benchmark/bench/report.salam` and `salam bench --json` should emit
    compatible statistics fields so one set of downstream tooling reads both.
 

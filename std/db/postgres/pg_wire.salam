@@ -1,0 +1,1075 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package postgres
+
+if not SALAM_DB_MOCK:
+    import mem
+    import os
+    import crypto
+    import encoding
+    import tls
+    import net.internal.rawsock
+
+    const _PG_PROTOCOL := 196608
+    const _PG_SSL_REQUEST := 80877103
+    const _PG_FATAL_ERROR := 7
+    const _PG_CLIENT_VERSION := 180000
+    const _PG_READ_CHUNK := 16384
+
+    struct _PgConn:
+        pub fd: i64 = 0 - 1
+        pub ok: bool = false
+        pub err: str = ""
+        pub conninfo: str = ""
+        pub host: str = "localhost"
+        pub port: str = "5432"
+        pub user: str = ""
+        pub password: str = ""
+        pub dbname: str = ""
+        pub sslmode: str = "prefer"
+        pub sslrootcert: str = ""
+        pub connect_timeout: int = 30
+        pub use_tls: bool = false
+        pub tc: tls.Conn = tls.Conn {}
+        pub rbuf: void* = null
+        pub rlen: i64 = 0
+        pub rcap: i64 = 0
+        pub rpos: i64 = 0
+        pub server_version: str = ""
+    end
+
+    struct _PgResult:
+        pub status: int = 0
+        pub err: str = ""
+        pub cmd_tuples: str = ""
+        pub nfields: int = 0
+        pub nrows: int = 0
+        pub names: Vector<str> = Vector {} as Vector<str>
+        pub types: Vector<int> = Vector {} as Vector<int>
+        pub values: Vector<str> = Vector {} as Vector<str>
+        pub nulls: Vector<bool> = Vector {} as Vector<bool>
+    end
+
+    struct _PgOut:
+        pub p: void* = null
+        pub len: i64 = 0
+        pub cap: i64 = 0
+    end
+
+    func _out_new(): _PgOut:
+        mut o := _PgOut {}
+        o.cap = 256
+        o.p = mem.Allocate(o.cap as u64)
+        ret o
+    end
+
+    func _out_room(o &: _PgOut, n: i64):
+        if o.len + n <= o.cap:
+            ret
+        end
+        mut cap := o.cap * 2
+        until cap < o.len + n:
+            cap = cap * 2
+        end
+        o.p = mem.Reallocate(o.p, cap as u64)
+        o.cap = cap
+    end
+
+    func _out_byte(o &: _PgOut, b: int):
+        _out_room(o, 1)
+        bp := o.p as u8*
+        bp[o.len] = b as u8
+        o.len += 1
+    end
+
+    func _out_i32(o &: _PgOut, v: i64):
+        _out_byte(o, ((v / 16777216) % 256) as int)
+        _out_byte(o, ((v / 65536) % 256) as int)
+        _out_byte(o, ((v / 256) % 256) as int)
+        _out_byte(o, (v % 256) as int)
+    end
+
+    func _out_raw(o &: _PgOut, src: void*, n: i64):
+        if n <= 0:
+            ret
+        end
+        _out_room(o, n)
+        mem.Copy((o.p as i64 + o.len) as void*, src, n as u64)
+        o.len += n
+    end
+
+    func _out_str(o &: _PgOut, s: str):
+        _out_raw(o, s as void*, s.len() as i64)
+    end
+
+    func _out_cstr(o &: _PgOut, s: str):
+        _out_str(o, s)
+        _out_byte(o, 0)
+    end
+
+    func _out_begin(o &: _PgOut, kind: int): i64:
+        _out_byte(o, kind)
+        at := o.len
+        _out_i32(o, 0)
+        ret at
+    end
+
+    func _out_end(o &: _PgOut, at: i64):
+        n := o.len - at
+        bp := o.p as u8*
+        bp[at] = ((n / 16777216) % 256) as u8
+        bp[at + 1] = ((n / 65536) % 256) as u8
+        bp[at + 2] = ((n / 256) % 256) as u8
+        bp[at + 3] = (n % 256) as u8
+    end
+
+    func _rd_u8(p: void*, at: i64): int:
+        bp := p as u8*
+        ret bp[at] as int
+    end
+
+    func _rd_i32(p: void*, at: i64): i64:
+        v := (_rd_u8(p, at) as i64) * 16777216 + (_rd_u8(p, at + 1) as i64) * 65536 + (_rd_u8(p, at + 2) as i64) * 256 + (_rd_u8(p, at + 3) as i64)
+        if v >= 2147483648:
+            ret v - 4294967296
+        end
+        ret v
+    end
+
+    func _rd_i16(p: void*, at: i64): int:
+        v := _rd_u8(p, at) * 256 + _rd_u8(p, at + 1)
+        if v >= 32768:
+            ret v - 65536
+        end
+        ret v
+    end
+
+    func _copy_str(p: void*, at: i64, n: i64): str:
+        out := mem.Allocate((n + 1) as u64)
+        if n > 0:
+            mem.Copy(out, (p as i64 + at) as void*, n as u64)
+        end
+        op := out as u8*
+        op[n] = 0 as u8
+        ret out as str
+    end
+
+    func _cstr_len(p: void*, at: i64, limit: i64): i64:
+        mut i := at
+        until i < limit and _rd_u8(p, i) != 0:
+            i += 1
+        end
+        ret i - at
+    end
+
+    func _pg_send(c: _PgConn*, o: _PgOut): bool:
+        mut sent := 0
+        if c[0].use_tls:
+            sent = tls.WriteBytes(c[0].tc, o.p, o.len as int)
+        else:
+            sent = rawsock.SendBytes(rawsock.FromFd(c[0].fd), o.p, o.len as int)
+        end
+        if (sent as i64) != o.len:
+            _pg_broken(c, "could not send data to server")
+            ret false
+        end
+        ret true
+    end
+
+    func _pg_broken(c: _PgConn*, msg: str):
+        if c[0].ok or c[0].err.len() == 0:
+            c[0].err = msg + "\n"
+        end
+        c[0].ok = false
+    end
+
+    func _pg_fill(c: _PgConn*): bool:
+        if c[0].rpos > 0:
+            rest := c[0].rlen - c[0].rpos
+            if rest > 0:
+                mem.MemMove(c[0].rbuf, (c[0].rbuf as i64 + c[0].rpos) as void*, rest as u64)
+            end
+            c[0].rlen = rest
+            c[0].rpos = 0
+        end
+        if c[0].rcap - c[0].rlen < 4096:
+            c[0].rcap = c[0].rcap * 2
+            c[0].rbuf = mem.Reallocate(c[0].rbuf, c[0].rcap as u64)
+        end
+        dst := (c[0].rbuf as i64 + c[0].rlen) as void*
+        room := (c[0].rcap - c[0].rlen) as int
+        mut n := 0
+        if c[0].use_tls:
+            n = tls.ReadBytes(c[0].tc, dst, room)
+        else:
+            n = rawsock.RecvBytes(rawsock.FromFd(c[0].fd), dst, room)
+        end
+        if n == 0:
+            _pg_broken(c, "server closed the connection unexpectedly")
+            ret false
+        end
+        if n < 0:
+            _pg_broken(c, "could not receive data from server: timeout expired or connection reset")
+            ret false
+        end
+        c[0].rlen = c[0].rlen + (n as i64)
+        ret true
+    end
+
+    func _pg_need(c: _PgConn*, n: i64): bool:
+        until c[0].rlen - c[0].rpos < n:
+            if not _pg_fill(c):
+                ret false
+            end
+        end
+        ret true
+    end
+
+    func _pg_next(c: _PgConn*, kind &: int, body &: i64, blen &: i64): bool:
+        if not _pg_need(c, 5):
+            ret false
+        end
+        n := _rd_i32(c[0].rbuf, c[0].rpos + 1)
+        if n < 4:
+            _pg_broken(c, "invalid message length from server")
+            ret false
+        end
+        if not _pg_need(c, n + 1):
+            ret false
+        end
+        kind = _rd_u8(c[0].rbuf, c[0].rpos)
+        body = c[0].rpos + 5
+        blen = n - 4
+        c[0].rpos = c[0].rpos + n + 1
+        ret true
+    end
+
+    func _pg_error_text(p: void*, at: i64, n: i64): str:
+        mut i := at
+        end_at := at + n
+        mut severity := "ERROR"
+        mut message := ""
+        mut detail := ""
+        until i < end_at:
+            code := _rd_u8(p, i)
+            if code == 0:
+                break
+            end
+            l := _cstr_len(p, i + 1, end_at)
+            v := _copy_str(p, i + 1, l)
+            if code == 83:
+                severity = v
+            else if code == 77:
+                message = v
+            else if code == 68:
+                detail = v
+            end
+            i = i + l + 2
+        end
+        mut out := severity + ":  " + message + "\n"
+        if detail.len() > 0:
+            out = out + "DETAIL:  " + detail + "\n"
+        end
+        ret out
+    end
+
+    func _pq_free_strs(v &: Vector<str>):
+        each s in v:
+            mem.Free(s as void*)
+        end
+        v.free()
+    end
+
+    func _pq_result_new(status: int): _PgResult*:
+        r := mem.AllocateZeroed(sizeof(_PgResult) as u64) as _PgResult*
+        r[0] = _PgResult {}
+        r[0].status = status
+        ret r
+    end
+
+    func _pq_clear(res: void*):
+        if res == null:
+            ret
+        end
+        r := res as _PgResult*
+        _pq_free_strs(r[0].names)
+        _pq_free_strs(r[0].values)
+        r[0].types.free()
+        r[0].nulls.free()
+        mem.Free(res)
+    end
+
+    func _hex_of(p: void*, n: int): str:
+        digits := "0123456789abcdef"
+        mut out := ""
+        repeat n in i:
+            b := _rd_u8(p, i as i64)
+            out = out + digits.substr(b / 16, 1) + digits.substr(b % 16, 1)
+        end
+        ret out
+    end
+
+    func _md5_hex_raw(p: void*, n: int): str:
+        dig := mem.Allocate(16 as u64)
+        defer mem.Free(dig)
+        crypto.Md5Bytes(p, n, dig)
+        ret _hex_of(dig, 16)
+    end
+
+    func _pg_md5_password(c: _PgConn*, salt_at: i64): str:
+        inner := crypto.Md5Hex(c[0].password + c[0].user)
+        mut o := _out_new()
+        defer mem.Free(o.p)
+        _out_str(o, inner)
+        _out_raw(o, (c[0].rbuf as i64 + salt_at) as void*, 4)
+        ret "md5" + _md5_hex_raw(o.p, o.len as int)
+    end
+
+    func _hmac(key: void*, klen: int, msg: str, out: void*):
+        crypto.HmacSha256Raw(key, klen, msg as void*, msg.len(), out)
+    end
+
+    func _scram_attr(msg: str, key: str): str:
+        parts := msg.split(",")
+        each part in parts:
+            if str.StartsWith(part, key + "="):
+                ret part.substr(key.len() + 1, part.len() - key.len() - 1)
+            end
+        end
+        ret ""
+    end
+
+    func _pg_send_password(c: _PgConn*, pw: str): bool:
+        mut o := _out_new()
+        defer mem.Free(o.p)
+        at := _out_begin(o, 112)
+        _out_cstr(o, pw)
+        _out_end(o, at)
+        ret _pg_send(c, o)
+    end
+
+    func _pg_scram(c: _PgConn*, nonce: str, client_first_bare: str, server_first: str, server_sig: void*): str:
+        server_nonce := _scram_attr(server_first, "r")
+        salt_b64 := _scram_attr(server_first, "s")
+        iters := conv.ParseInt(_scram_attr(server_first, "i")) as int
+        if not str.StartsWith(server_nonce, nonce) or salt_b64.len() == 0 or iters <= 0:
+            ret ""
+        end
+        salt := mem.Allocate((salt_b64.len() + 8) as u64)
+        defer mem.Free(salt)
+        mut ok := false
+        slen := encoding.Base64DecodeBytes(salt_b64, salt, salt_b64.len(), ok)
+        if not ok:
+            ret ""
+        end
+        pw := c[0].password
+        block := mem.Allocate((slen + 4) as u64)
+        defer mem.Free(block)
+        mem.Copy(block, salt, slen as u64)
+        bp := block as u8*
+        bp[slen] = 0 as u8
+        bp[slen + 1] = 0 as u8
+        bp[slen + 2] = 0 as u8
+        bp[slen + 3] = 1 as u8
+        u := mem.Allocate(32 as u64)
+        defer mem.Free(u)
+        salted := mem.Allocate(32 as u64)
+        defer mem.Free(salted)
+        crypto.HmacSha256Raw(pw as void*, pw.len(), block, slen + 4, u)
+        mem.Copy(salted, u, 32 as u64)
+        sp := salted as u8*
+        up := u as u8*
+        mut k := 1
+        until k < iters:
+            crypto.HmacSha256Raw(pw as void*, pw.len(), u, 32, u)
+            repeat 32 in j:
+                sp[j] = ((sp[j] as int) ^ (up[j] as int)) as u8
+            end
+            k += 1
+        end
+        client_key := mem.Allocate(32 as u64)
+        defer mem.Free(client_key)
+        stored_key := mem.Allocate(32 as u64)
+        defer mem.Free(stored_key)
+        client_sig := mem.Allocate(32 as u64)
+        defer mem.Free(client_sig)
+        server_key := mem.Allocate(32 as u64)
+        defer mem.Free(server_key)
+        _hmac(salted, 32, "Client Key", client_key)
+        crypto.Sha256Bytes(client_key, 32, stored_key)
+        without_proof := "c=biws,r=" + server_nonce
+        auth_msg := client_first_bare + "," + server_first + "," + without_proof
+        _hmac(stored_key, 32, auth_msg, client_sig)
+        ck := client_key as u8*
+        cs := client_sig as u8*
+        repeat 32 in j:
+            ck[j] = ((ck[j] as int) ^ (cs[j] as int)) as u8
+        end
+        _hmac(salted, 32, "Server Key", server_key)
+        _hmac(server_key, 32, auth_msg, server_sig)
+        ret without_proof + ",p=" + encoding.Base64EncodeBytes(client_key, 32)
+    end
+
+    func _pg_startup(c: _PgConn*): bool:
+        mut o := _out_new()
+        defer mem.Free(o.p)
+        _out_i32(o, 0)
+        _out_i32(o, _PG_PROTOCOL as i64)
+        _out_cstr(o, "user")
+        _out_cstr(o, c[0].user)
+        _out_cstr(o, "database")
+        _out_cstr(o, c[0].dbname)
+        _out_cstr(o, "client_encoding")
+        _out_cstr(o, "UTF8")
+        _out_cstr(o, "application_name")
+        _out_cstr(o, "salam")
+        _out_byte(o, 0)
+        _out_end(o, 0)
+        if not _pg_send(c, o):
+            ret false
+        end
+        nonce := crypto.RandomHex(18)
+        client_first_bare := "n=,r=" + nonce
+        server_sig := mem.Allocate(32 as u64)
+        defer mem.Free(server_sig)
+        until true:
+            mut kind := 0
+            mut body := 0 as i64
+            mut blen := 0 as i64
+            if not _pg_next(c, kind, body, blen):
+                ret false
+            end
+            p := c[0].rbuf
+            if kind == 69:
+                c[0].err = _pg_error_text(p, body, blen)
+                ret false
+            else if kind == 83:
+                l := _cstr_len(p, body, body + blen)
+                name := _copy_str(p, body, l)
+                vl := _cstr_len(p, body + l + 1, body + blen)
+                if name == "server_version":
+                    c[0].server_version = _copy_str(p, body + l + 1, vl)
+                end
+            else if kind == 90:
+                ret true
+            else if kind == 82:
+                code := _rd_i32(p, body)
+                if code == 3:
+                    if not _pg_send_password(c, c[0].password):
+                        ret false
+                    end
+                else if code == 5:
+                    if not _pg_send_password(c, _pg_md5_password(c, body + 4)):
+                        ret false
+                    end
+                else if code == 10:
+                    if not _has_mech(p, body + 4, body + blen, "SCRAM-SHA-256"):
+                        c[0].err = "the server asks for a SASL mechanism this client does not support\n"
+                        ret false
+                    end
+                    client_first := "n,," + client_first_bare
+                    mut o2 := _out_new()
+                    defer mem.Free(o2.p)
+                    at := _out_begin(o2, 112)
+                    _out_cstr(o2, "SCRAM-SHA-256")
+                    _out_i32(o2, client_first.len() as i64)
+                    _out_str(o2, client_first)
+                    _out_end(o2, at)
+                    if not _pg_send(c, o2):
+                        ret false
+                    end
+                else if code == 11:
+                    server_first := _copy_str(p, body + 4, blen - 4)
+                    final := _pg_scram(c, nonce, client_first_bare, server_first, server_sig)
+                    if final.len() == 0:
+                        c[0].err = "invalid SCRAM challenge from the server\n"
+                        ret false
+                    end
+                    mut o3 := _out_new()
+                    defer mem.Free(o3.p)
+                    at := _out_begin(o3, 112)
+                    _out_str(o3, final)
+                    _out_end(o3, at)
+                    if not _pg_send(c, o3):
+                        ret false
+                    end
+                else if code == 12:
+                    server_final := _copy_str(p, body + 4, blen - 4)
+                    want := "v=" + encoding.Base64EncodeBytes(server_sig, 32)
+                    if server_final != want:
+                        c[0].err = "the server's SCRAM signature did not verify\n"
+                        ret false
+                    end
+                else if code != 0:
+                    c[0].err = "authentication method " + conv.FormatInt(code) + " is not supported\n"
+                    ret false
+                end
+            end
+        end
+    end
+
+    func _has_mech(p: void*, at: i64, end_at: i64, want: str): bool:
+        mut i := at
+        until i < end_at:
+            l := _cstr_len(p, i, end_at)
+            if l == 0:
+                ret false
+            end
+            if _copy_str(p, i, l) == want:
+                ret true
+            end
+            i = i + l + 1
+        end
+        ret false
+    end
+
+    func _pg_tls(c: _PgConn*): bool:
+        mut o := _out_new()
+        defer mem.Free(o.p)
+        _out_i32(o, 8)
+        _out_i32(o, _PG_SSL_REQUEST as i64)
+        if not _pg_send(c, o):
+            ret false
+        end
+        answer := mem.Allocate(1 as u64)
+        defer mem.Free(answer)
+        n := rawsock.RecvBytes(rawsock.FromFd(c[0].fd), answer, 1)
+        if n != 1:
+            c[0].err = "server closed the connection during SSL negotiation\n"
+            ret false
+        end
+        verify := c[0].sslmode == "verify-full" or c[0].sslmode == "verify-ca"
+        if _rd_u8(answer, 0) != 83:
+            if c[0].sslmode == "require" or verify:
+                c[0].err = "server does not support SSL, but SSL was required\n"
+                ret false
+            end
+            ret true
+        end
+        mut cfg := tls.NewConfig(c[0].host)
+        cfg.insecure_skip_verify = not verify
+        cfg.ca_file = c[0].sslrootcert
+        c[0].tc = tls.WrapClient(c[0].fd, cfg)
+        c[0].use_tls = true
+        if not tls.ConnOk(c[0].tc):
+            c[0].err = "SSL connection failed: " + tls.ConnError(c[0].tc) + "\n"
+            ret false
+        end
+        ret true
+    end
+
+    func _pg_open(c: _PgConn*):
+        c[0].ok = false
+        c[0].err = ""
+        c[0].use_tls = false
+        c[0].rlen = 0
+        c[0].rpos = 0
+        sock := rawsock.Connect(c[0].host, conv.ParseInt(c[0].port) as int)
+        if not rawsock.Ok(sock):
+            c[0].err = "connection to server at \"" + c[0].host + "\", port " + c[0].port + " failed\n"
+            ret
+        end
+        c[0].fd = sock.fd
+        if c[0].connect_timeout > 0:
+            rawsock.SetTimeout(sock, c[0].connect_timeout * 1000)
+        end
+        if c[0].sslmode != "disable" and c[0].sslmode != "allow":
+            if not _pg_tls(c):
+                _pg_close_socket(c)
+                ret
+            end
+        end
+        if not _pg_startup(c):
+            _pg_close_socket(c)
+            ret
+        end
+        rawsock.SetTimeout(sock, 0)
+        c[0].ok = true
+    end
+
+    func _pg_close_socket(c: _PgConn*):
+        if c[0].use_tls:
+            tls.Close(c[0].tc)
+            c[0].use_tls = false
+        else if c[0].fd >= 0:
+            rawsock.Close(rawsock.FromFd(c[0].fd))
+        end
+        c[0].fd = 0 - 1
+    end
+
+    func _unquote_value(ci: str, i &: int): str:
+        mut out := ""
+        if i < ci.len() and ci.substr(i, 1) == "'":
+            i += 1
+            until i < ci.len():
+                ch := ci.substr(i, 1)
+                if ch == "\\" and i + 1 < ci.len():
+                    out = out + ci.substr(i + 1, 1)
+                    i += 2
+                    continue
+                end
+                if ch == "'":
+                    i += 1
+                    break
+                end
+                out = out + ch
+                i += 1
+            end
+            ret out
+        end
+        until i < ci.len() and ci.substr(i, 1) != " ":
+            out = out + ci.substr(i, 1)
+            i += 1
+        end
+        ret out
+    end
+
+    func _pg_set(c: _PgConn*, key: str, val: str):
+        if key == "host" or key == "hostaddr":
+            c[0].host = val
+        else if key == "port":
+            c[0].port = val
+        else if key == "user":
+            c[0].user = val
+        else if key == "password":
+            c[0].password = val
+        else if key == "dbname":
+            c[0].dbname = val
+        else if key == "sslmode":
+            c[0].sslmode = val
+        else if key == "sslrootcert":
+            c[0].sslrootcert = val
+        else if key == "connect_timeout":
+            c[0].connect_timeout = conv.ParseInt(val) as int
+        end
+    end
+
+    func _pct_decode(s: str): str:
+        mut out := ""
+        mut i := 0
+        until i < s.len():
+            ch := s.substr(i, 1)
+            if ch == "%" and i + 2 < s.len() + 1:
+                b := encoding.HexDecode(s.substr(i + 1, 2))
+                if b.len() == 1:
+                    out = out + b
+                    i += 3
+                    continue
+                end
+            end
+            out = out + ch
+            i += 1
+        end
+        ret out
+    end
+
+    func _pg_parse_uri(c: _PgConn*, uri: str):
+        mut rest := uri.substr(uri.find("://") + 3, uri.len() - uri.find("://") - 3)
+        q := rest.find("?")
+        mut query := ""
+        if q >= 0:
+            query = rest.substr(q + 1, rest.len() - q - 1)
+            rest = rest.substr(0, q)
+        end
+        slash := rest.find("/")
+        if slash >= 0:
+            db_part := rest.substr(slash + 1, rest.len() - slash - 1)
+            if db_part.len() > 0:
+                c[0].dbname = _pct_decode(db_part)
+            end
+            rest = rest.substr(0, slash)
+        end
+        at := rest.find("@")
+        if at >= 0:
+            cred := rest.substr(0, at)
+            rest = rest.substr(at + 1, rest.len() - at - 1)
+            colon := cred.find(":")
+            if colon >= 0:
+                c[0].user = _pct_decode(cred.substr(0, colon))
+                c[0].password = _pct_decode(cred.substr(colon + 1, cred.len() - colon - 1))
+            else:
+                c[0].user = _pct_decode(cred)
+            end
+        end
+        if rest.len() > 0:
+            colon := rest.find(":")
+            if colon >= 0:
+                c[0].host = rest.substr(0, colon)
+                c[0].port = rest.substr(colon + 1, rest.len() - colon - 1)
+            else:
+                c[0].host = rest
+            end
+        end
+        if query.len() > 0:
+            each kv in query.split("&"):
+                at_eq := kv.find("=")
+                if at_eq > 0:
+                    _pg_set(c, kv.substr(0, at_eq), _pct_decode(kv.substr(at_eq + 1, kv.len() - at_eq - 1)))
+                end
+            end
+        end
+    end
+
+    func _pg_parse(c: _PgConn*, ci: str):
+        if str.StartsWith(ci, "postgresql://") or str.StartsWith(ci, "postgres://"):
+            _pg_parse_uri(c, ci)
+            ret
+        end
+        mut i := 0
+        until i < ci.len():
+            if ci.substr(i, 1) == " ":
+                i += 1
+                continue
+            end
+            mut key := ""
+            until i < ci.len() and ci.substr(i, 1) != "=" and ci.substr(i, 1) != " ":
+                key = key + ci.substr(i, 1)
+                i += 1
+            end
+            until i < ci.len() and ci.substr(i, 1) == " ":
+                i += 1
+            end
+            if i >= ci.len() or ci.substr(i, 1) != "=":
+                break
+            end
+            i += 1
+            until i < ci.len() and ci.substr(i, 1) == " ":
+                i += 1
+            end
+            _pg_set(c, key, _unquote_value(ci, i))
+        end
+    end
+
+    func _env_or(name: str, fallback: str): str:
+        v := os.Env(name)
+        if v.len() > 0:
+            ret v
+        end
+        ret fallback
+    end
+
+    func _pq_connectdb(conninfo: str): void*:
+        c := mem.AllocateZeroed(sizeof(_PgConn) as u64) as _PgConn*
+        c[0] = _PgConn {}
+        c[0].conninfo = conninfo
+        c[0].host = _env_or("PGHOST", "localhost")
+        c[0].port = _env_or("PGPORT", "5432")
+        c[0].user = _env_or("PGUSER", _env_or("USER", os.Env("USERNAME")))
+        c[0].password = os.Env("PGPASSWORD")
+        c[0].dbname = os.Env("PGDATABASE")
+        c[0].sslmode = _env_or("PGSSLMODE", "prefer")
+        c[0].sslrootcert = os.Env("PGSSLROOTCERT")
+        _pg_parse(c, conninfo)
+        if c[0].dbname.len() == 0:
+            c[0].dbname = c[0].user
+        end
+        c[0].rcap = _PG_READ_CHUNK as i64
+        c[0].rbuf = mem.Allocate(c[0].rcap as u64)
+        if str.StartsWith(c[0].host, "/"):
+            c[0].err = "Unix-domain sockets are not supported; connect with host=localhost\n"
+            ret c as void*
+        end
+        _pg_open(c)
+        ret c as void*
+    end
+
+    func _pq_status(conn: void*): int:
+        c := conn as _PgConn*
+        if c[0].ok:
+            ret 0
+        end
+        ret 1
+    end
+
+    func _pq_finish(conn: void*):
+        c := conn as _PgConn*
+        if c[0].ok:
+            mut o := _out_new()
+            at := _out_begin(o, 88)
+            _out_end(o, at)
+            _pg_send(c, o)
+            mem.Free(o.p)
+        end
+        _pg_close_socket(c)
+        mem.Free(c[0].rbuf)
+        mem.Free(conn)
+    end
+
+    func _pq_reset(conn: void*):
+        c := conn as _PgConn*
+        _pg_close_socket(c)
+        _pg_open(c)
+    end
+
+    func _pq_error_message(conn: void*): str:
+        c := conn as _PgConn*
+        ret c[0].err
+    end
+
+    func _tag_count(tag: str): str:
+        sp := str.LastIndex(tag, " ")
+        if sp < 0:
+            ret ""
+        end
+        verb := tag.substr(0, tag.find(" "))
+        if verb == "INSERT" or verb == "UPDATE" or verb == "DELETE" or verb == "SELECT" or verb == "MOVE" or verb == "FETCH" or verb == "COPY" or verb == "MERGE":
+            ret tag.substr(sp + 1, tag.len() - sp - 1)
+        end
+        ret ""
+    end
+
+    func _pq_exec(conn: void*, sql: str): void*:
+        c := conn as _PgConn*
+        if not c[0].ok:
+            r := _pq_result_new(_PG_FATAL_ERROR)
+            r[0].err = c[0].err
+            ret r as void*
+        end
+        c[0].err = ""
+        mut o := _out_new()
+        defer mem.Free(o.p)
+        at := _out_begin(o, 81)
+        _out_cstr(o, sql)
+        _out_end(o, at)
+        if not _pg_send(c, o):
+            r := _pq_result_new(_PG_FATAL_ERROR)
+            r[0].err = c[0].err
+            ret r as void*
+        end
+        mut cur := null as _PgResult*
+        mut failed := null as _PgResult*
+        until true:
+            mut kind := 0
+            mut body := 0 as i64
+            mut blen := 0 as i64
+            if not _pg_next(c, kind, body, blen):
+                _pq_clear(cur as void*)
+                _pq_clear(failed as void*)
+                r := _pq_result_new(_PG_FATAL_ERROR)
+                r[0].err = c[0].err
+                ret r as void*
+            end
+            p := c[0].rbuf
+            if kind == 90:
+                break
+            end
+            if failed != null:
+                continue
+            end
+            if kind == 84:
+                _pq_clear(cur as void*)
+                cur = _pq_result_new(PGRES_TUPLES_OK)
+                n := _rd_i16(p, body)
+                cur[0].nfields = n
+                mut i := body + 2
+                repeat n:
+                    l := _cstr_len(p, i, body + blen)
+                    cur[0].names.push(_copy_str(p, i, l))
+                    i = i + l + 1
+                    cur[0].types.push(_rd_i32(p, i + 6) as int)
+                    i = i + 18
+                end
+            else if kind == 68:
+                if cur != null:
+                    n := _rd_i16(p, body)
+                    mut i := body + 2
+                    repeat n:
+                        l := _rd_i32(p, i)
+                        i += 4
+                        if l < 0:
+                            cur[0].values.push(_copy_str(p, i, 0))
+                            cur[0].nulls.push(true)
+                        else:
+                            cur[0].values.push(_copy_str(p, i, l))
+                            cur[0].nulls.push(false)
+                            i = i + l
+                        end
+                    end
+                    cur[0].nrows = cur[0].nrows + 1
+                end
+            else if kind == 67:
+                tag := _copy_str(p, body, _cstr_len(p, body, body + blen))
+                if cur == null or cur[0].status != PGRES_TUPLES_OK:
+                    _pq_clear(cur as void*)
+                    cur = _pq_result_new(PGRES_COMMAND_OK)
+                end
+                cur[0].cmd_tuples = _tag_count(tag)
+            else if kind == 73:
+                _pq_clear(cur as void*)
+                cur = _pq_result_new(PGRES_EMPTY_QUERY)
+            else if kind == 69:
+                failed = _pq_result_new(_PG_FATAL_ERROR)
+                failed[0].err = _pg_error_text(p, body, blen)
+                c[0].err = failed[0].err
+            else if kind == 71:
+                mut fo := _out_new()
+                fat := _out_begin(fo, 102)
+                _out_cstr(fo, "COPY FROM STDIN is not supported")
+                _out_end(fo, fat)
+                _pg_send(c, fo)
+                mem.Free(fo.p)
+            end
+        end
+        if failed != null:
+            _pq_clear(cur as void*)
+            ret failed as void*
+        end
+        if cur == null:
+            cur = _pq_result_new(PGRES_EMPTY_QUERY)
+        end
+        ret cur as void*
+    end
+
+    func _pq_result_status(res: void*): int:
+        r := res as _PgResult*
+        ret r[0].status
+    end
+
+    func _pq_ntuples(res: void*): int:
+        r := res as _PgResult*
+        ret r[0].nrows
+    end
+
+    func _pq_nfields(res: void*): int:
+        r := res as _PgResult*
+        ret r[0].nfields
+    end
+
+    func _pq_fname(res: void*, col: int): str:
+        r := res as _PgResult*
+        if col < 0 or col >= r[0].nfields:
+            ret ""
+        end
+        ret r[0].names.get(col)
+    end
+
+    func _pq_ftype(res: void*, col: int): u32:
+        r := res as _PgResult*
+        if col < 0 or col >= r[0].nfields:
+            ret 0
+        end
+        ret r[0].types.get(col) as u32
+    end
+
+    func _pq_cell(r: _PgResult*, row: int, col: int): int:
+        if row < 0 or row >= r[0].nrows or col < 0 or col >= r[0].nfields:
+            ret 0 - 1
+        end
+        ret row * r[0].nfields + col
+    end
+
+    func _pq_getvalue(res: void*, row: int, col: int): void*:
+        r := res as _PgResult*
+        at := _pq_cell(r, row, col)
+        if at < 0:
+            ret null
+        end
+        ret r[0].values.get(at) as void*
+    end
+
+    func _pq_getisnull(res: void*, row: int, col: int): int:
+        r := res as _PgResult*
+        at := _pq_cell(r, row, col)
+        if at < 0 or r[0].nulls.get(at):
+            ret 1
+        end
+        ret 0
+    end
+
+    func _pq_cmd_tuples(res: void*): str:
+        r := res as _PgResult*
+        ret r[0].cmd_tuples
+    end
+
+    func _pq_lib_version(): int:
+        ret _PG_CLIENT_VERSION
+    end
+
+    func _pq_server_version(conn: void*): int:
+        c := conn as _PgConn*
+        v := c[0].server_version
+        if not c[0].ok or v.len() == 0:
+            ret 0
+        end
+        mut major := 0
+        mut minor := 0
+        mut seen_dot := false
+        mut i := 0
+        until i < v.len():
+            ch := v.substr(i, 1)
+            if ch == ".":
+                if seen_dot:
+                    break
+                end
+                seen_dot = true
+            else if "0123456789".find(ch) >= 0:
+                d := "0123456789".find(ch)
+                if seen_dot:
+                    minor = minor * 10 + d
+                else:
+                    major = major * 10 + d
+                end
+            else:
+                break
+            end
+            i += 1
+        end
+        ret major * 10000 + minor
+    end
+
+    func _pq_escape_literal(_conn: void*, s: str, length: u64): void*:
+        mut o := _out_new()
+        if s.find("\\") >= 0:
+            _out_str(o, " E")
+        end
+        _out_byte(o, 39)
+        n := length as int
+        sp := s as void*
+        repeat n in i:
+            b := _rd_u8(sp, i as i64)
+            if b == 39 or b == 92:
+                _out_byte(o, b)
+            end
+            _out_byte(o, b)
+        end
+        _out_byte(o, 39)
+        _out_byte(o, 0)
+        ret o.p
+    end
+
+    func _pq_freemem(p: void*):
+        mem.Free(p)
+    end
+
+    func _pq_db(conn: void*): str:
+        c := conn as _PgConn*
+        ret c[0].dbname
+    end
+
+    func _pq_user(conn: void*): str:
+        c := conn as _PgConn*
+        ret c[0].user
+    end
+
+    func _pq_host(conn: void*): str:
+        c := conn as _PgConn*
+        ret c[0].host
+    end
+
+    func _pq_port(conn: void*): str:
+        c := conn as _PgConn*
+        ret c[0].port
+    end
+end

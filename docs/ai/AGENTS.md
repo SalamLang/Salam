@@ -68,7 +68,7 @@ The `pub` rule is the one that bites hardest: a private helper written _after_
 your first public function will not compile. Put every private helper above the
 `// ---- public API ----` line.
 
-`salam format --fix-order` can reorder declarations mechanically.
+`salam format` reorders declarations mechanically; pass `--no-fix-order` to skip that.
 
 ## 3. Unused anything is an error, not a warning
 
@@ -147,8 +147,12 @@ Built-in methods on `str`. This is the complete list:
 ```
 len  concat  substr(start, len)  find/search/indexOf  trim
 lower  upper  repeat  split  to_int  to_float
+starts_with(prefix)  ends_with(suffix)  includes(sub)
 char_count  char_at(i)  char_substr(start, len)  char_find(sub)
 ```
+
+`starts_with`, `ends_with` and `includes` return `bool`; their Persian names
+are `شروع با`, `ختم با` and `دربردارد`.
 
 `len`, `s[i]`, `substr` and `find` work in bytes. The `char_*` methods are
 their UTF-8 counterparts: they count and index code points, so
@@ -201,15 +205,31 @@ first := v.get(0)                          // get() returns the element; v.ref(0
 m := HashMap {} as HashMap<str, int>
 ```
 
-**Nested generics do not work.** `Vector<Vector<T>>` and `HashMap<K, Vector<V>>`
-are not usable, so flatten the data instead. A cross-package function returning
-`Vector<T>` may also need an explicit `as` cast at the call site.
+Nested generics work: `Vector<Vector<int>>`, `HashMap<str, Vector<Point>>`
+and deeper all compile on every backend.
 
-The failure mode is misleading: instantiating `Vector<Vector<int>>` reports
-type errors _inside the standard library_ (`return type mismatch: expected
-'Vector_i32', got 'i32'` at some `std/collections/vector.salam` line) rather
-than at your declaration. Errors pointing into std that you did not touch
-almost always mean a nested generic somewhere in your own file.
+Assigning a Vector or HashMap (`w := v`) copies its header, not its storage,
+so both names share the elements while each keeps its own length (on the JS
+backend they share the length too). Use `copy()`
+or `deep_copy()` (Persian `رونوشت` and `رونوشت عمیق`) when you need an
+independent value:
+
+| Call               | Result                                                                  |
+| ------------------ | ----------------------------------------------------------------------- |
+| `x.copy()`         | New storage for every container `x` holds directly; elements are shared |
+| `x.deep_copy()`    | Fully independent copy, recursing through structs, enums and containers |
+| `v.copy(start)`    | Vector or str from `start` to the end                                   |
+| `v.copy(s, count)` | At most `count` items from `s`                                          |
+| `v.copy(s, n, st)` | Every `st`-th item; a negative `st` walks backwards (Vector only)       |
+
+A negative `start` counts from the end, so `v.copy(-3)` is the last three
+items. Ranges clamp instead of panicking. Range arguments only apply to Vector
+and str. A struct can define its own `copy()` or `deep_copy()`, and the
+recursion uses it. `deep_copy()` refuses a value holding a raw pointer, since
+it cannot know what the pointer owns. A `dyn` value is deep-copied through its
+concrete type when the interface is declared in your program (a value holding
+a raw pointer is then copied as-is); `copy()` shares a `dyn` field's box. Copies are new heap values the caller
+frees, like any other Vector or HashMap.
 
 ## 8. Imports
 

@@ -120,6 +120,39 @@ func input_var_prompt(s &: Sema, a &: at.Ast, nid: int, name: str, sp: co.SrcSpa
     ret true
 end
 
+func str_lit_node(s &: Sema, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        ret nid
+    end
+    if n.kind != at.AST_IDENTIFIER:
+        ret 0
+    end
+    sid := scope_lookup(s, s.cur, n.name)
+    if sid == 0:
+        ret 0
+    end
+    sv := sym_at(s, sid)
+    if sv.is_mut or sv.decl == 0:
+        ret 0
+    end
+    if sv.kind != SYM_CONST and sv.kind != SYM_VAR:
+        ret 0
+    end
+    init := at.Get(a, sv.decl).a
+    if init == 0:
+        ret 0
+    end
+    iv := at.Get(a, init)
+    if iv.kind == at.AST_LITERAL and iv.value_kind == tok.TV_STRING:
+        ret init
+    end
+    ret 0
+end
+
 func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if nid == 0:
         ret sema_ty(s, TY_VOID)
@@ -360,7 +393,9 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
         ret bt
     end
     if k == at.AST_TERNARY:
-        ret check_ternary(s, a, nid)
+        tt := check_ternary(s, a, nid)
+        sema_fold_expr(s, a, nid)
+        ret tt
     end
     if k == at.AST_MATCH:
         ret sema_check_match(s, a, nid, true, s.expected)
@@ -467,6 +502,11 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, o3)
         end
         check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
+        if ty_at(s, target).kind == TY_DYN and o3 >= 0 and ty_at(s, o3).kind == TY_STRUCT:
+            _dynok := iface_satisfied(
+                s, a, o3, ty_at(s, target).name, ty_at(s, target).name, sp
+            )
+        end
         if target >= 0 and not type_is_error(s, o3) and ty_at(s, target).kind == TY_VARIANT and ty_at(s, o3).kind != TY_VARIANT:
             vtag := type_variant_tag(s, target, o3)
             if vtag >= 0:
@@ -488,7 +528,9 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
                     ) + alias_note(s, a, n4.ty)
                 )
             end
-            ret sema_decorate(s, a, nid, target)
+            ct := sema_decorate(s, a, nid, target)
+            sema_fold_expr(s, a, nid)
+            ret ct
         end
         zero_fn := n4.synthetic and not type_is_error(s, o3) and target >= 0 and ty_at(s, o3).kind == TY_NULL and ty_at(s, target).kind == TY_FUNC
         if not type_castable(s, target, o3) and not zero_fn:
@@ -498,7 +540,9 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
                 ) + alias_note(s, a, n4.ty)
             )
         end
-        ret sema_decorate(s, a, nid, target)
+        ct := sema_decorate(s, a, nid, target)
+        sema_fold_expr(s, a, nid)
+        ret ct
     end
     if k == at.AST_CALL:
         ret check_call(s, a, nid)
@@ -555,6 +599,21 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, av.pointee)
         end
         if av.kind == TY_STR:
+            sib := at.Get(a, n5.b)
+            if sib.kind == at.AST_LITERAL and sib.value_kind == tok.TV_INT:
+                slit := str_lit_node(s, a, n5.a)
+                if slit != 0:
+                    siv := sib.value_int as i64
+                    slen := str.Len(at.Get(a, slit).value_str) as i64
+                    if siv < (0 as i64) or siv >= slen:
+                        serr(
+                            s, 21, sp, co.Format2(
+                                i18.Tr("index %d is out of bounds for a string of length %d"), co.ArgInt(siv), co.ArgInt(slen)
+                            )
+                        )
+                    end
+                end
+            end
             ret sema_decorate(s, a, nid, sema_ty(s, TY_CHAR))
         end
         if not type_is_error(s, arr):
@@ -590,6 +649,50 @@ func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
             end
         end
         bk := ty_at(s, base).kind
+        if bk == TY_ARRAY:
+            alen := ty_at(s, base).length
+            mut slo := 0 as i64
+            mut shi := alen
+            mut lo_lit := true
+            mut hi_lit := true
+            if n6.b != 0:
+                lb := at.Get(a, n6.b)
+                if lb.kind == at.AST_LITERAL and lb.value_kind == tok.TV_INT:
+                    slo = lb.value_int as i64
+                else:
+                    lo_lit = false
+                end
+            end
+            if n6.c != 0:
+                hb := at.Get(a, n6.c)
+                if hb.kind == at.AST_LITERAL and hb.value_kind == tok.TV_INT:
+                    shi = hb.value_int as i64
+                else:
+                    hi_lit = false
+                end
+            end
+            if lo_lit and (slo < (0 as i64) or slo > alen):
+                serr(
+                    s, 21, sp, co.Format2(
+                        i18.Tr("slice bound %d is out of bounds for an array of length %d"), co.ArgInt(slo), co.ArgInt(alen)
+                    )
+                )
+            end
+            if hi_lit and (shi < (0 as i64) or shi > alen):
+                serr(
+                    s, 21, sp, co.Format2(
+                        i18.Tr("slice bound %d is out of bounds for an array of length %d"), co.ArgInt(shi), co.ArgInt(alen)
+                    )
+                )
+            end
+            if lo_lit and hi_lit and slo > shi:
+                serr(
+                    s, 21, sp, co.Format2(
+                        i18.Tr("slice start %d is greater than its end %d"), co.ArgInt(slo), co.ArgInt(shi)
+                    )
+                )
+            end
+        end
         if bk == TY_ARRAY or bk == TY_SLICE:
             mut root := n6.a
             until root != 0 and (at.KindOf(a, root) == at.AST_MEMBER or at.KindOf(a, root) == at.AST_INDEX or at.KindOf(a, root) == at.AST_SLICE):

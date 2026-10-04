@@ -220,6 +220,42 @@ func is_el(w: str): bool: ret ELEMENTS.find("|" + w + "|") >= 0 end
 
 func cc(s: str, idx: int): int: ret s[idx] as int end
 
+func u8_step(s: str, i: int): int:
+    c := cc(s, i)
+    mut k := 1
+    if c >= 240:
+        k = 4
+    else c >= 224:
+        k = 3
+    else c >= 192:
+        k = 2
+    end
+    ret i + k > s.len() ? s.len() - i : k
+end
+
+func u16_to_byte(s: str, u: int): int:
+    n := s.len()
+    mut i := 0
+    mut units := 0
+    until i < n and units < u:
+        k := u8_step(s, i)
+        units += k == 4 ? 2 : 1
+        i += k
+    end
+    ret i
+end
+
+func byte_to_u16(s: str, b: int): int:
+    mut i := 0
+    mut units := 0
+    until i < b and i < s.len():
+        k := u8_step(s, i)
+        units += k == 4 ? 2 : 1
+        i += k
+    end
+    ret units
+end
+
 func find_from(s: str, sub: str, from: int): int:
     n := s.len()
     if from >= n: ret 0 - 1 end
@@ -230,7 +266,7 @@ func find_from(s: str, sub: str, from: int): int:
 end
 
 func is_alpha(c: int): bool:
-    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or (c >= 1536 and c <= 1791)
+    ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c >= 128
 end
 
 func is_digit(c: int): bool:
@@ -249,8 +285,15 @@ func esc_html(s: str): str:
     mut out := ""
     n := s.len()
     mut i := 0
+    mut plain := 0
     until i < n:
         c := cc(s, i)
+        if c != 38 and c != 60 and c != 62 and c != 34 and c != 39:
+            i += 1
+            continue
+        end
+        if i > plain: out = out + s.substr(plain, i - plain) end
+        plain = i + 1
         switch c:
             38:
                 out = out + "&amp;"
@@ -272,12 +315,10 @@ func esc_html(s: str): str:
                 out = out + "&#39;"
                 break
             end
-            else:
-                out = out + s.substr(i, 1)
-            end
         end
         i += 1
     end
+    if n > plain: out = out + s.substr(plain, n - plain) end
     ret out
 end
 
@@ -346,8 +387,9 @@ func highlight_salam(src: str): str:
             out = out + span("o", src.substr(i, j - i))
             i = j
         else:
-            out = out + esc_html(src.substr(i, 1))
-            i += 1
+            w := u8_step(src, i)
+            out = out + esc_html(src.substr(i, w))
+            i += w
         end
     end
     ret out + "\n"
@@ -374,8 +416,9 @@ func highlight_xml_attrs(s: str): str:
             out = out + span("xa", s.substr(i, j - i))
             mut k := j
             until k < n and (cc(s, k) == 32 or cc(s, k) == 61):
-                out = out + esc_html(s.substr(k, 1))
-                k += 1
+                wk := u8_step(s, k)
+                out = out + esc_html(s.substr(k, wk))
+                k += wk
             end
             i = k
             if i < n and (cc(s, i) == 34 or cc(s, i) == 39):
@@ -389,8 +432,9 @@ func highlight_xml_attrs(s: str): str:
                 i = e
             end
         else:
-            out = out + esc_html(s.substr(i, 1))
-            i += 1
+            wi := u8_step(s, i)
+            out = out + esc_html(s.substr(i, wi))
+            i += wi
         end
     end
     ret out
@@ -440,8 +484,12 @@ func highlight_xml(src: str): str:
             out = out + highlight_xml_tag(src.substr(i, e - i))
             i = e
         else:
-            out = out + esc_html(src.substr(i, 1))
-            i += 1
+            mut j := i + 1
+            until j < n and cc(src, j) != 60:
+                j += 1
+            end
+            out = out + esc_html(src.substr(i, j - i))
+            i = j
         end
     end
     ret out
@@ -1096,12 +1144,15 @@ func flash_copied(btn: i64, lbl: i64):
     copy_flash_timer = dom.SetTimeout(() => do_unflash(btn, lbl), 1300)
 end
 
-func get_sel_start(): int: ret dom.GetNum(el_code, "selectionStart") as int end
+func get_sel_start(): int: ret u16_to_byte(dom.GetValue(el_code), dom.GetNum(el_code, "selectionStart") as int) end
 
-func set_caret(pos: int):
-    dom.SetProp(el_code, "selectionStart", pos as i64)
-    dom.SetProp(el_code, "selectionEnd", pos as i64)
+func set_sel(start: int, stop: int):
+    val := dom.GetValue(el_code)
+    dom.SetProp(el_code, "selectionStart", byte_to_u16(val, start) as i64)
+    dom.SetProp(el_code, "selectionEnd", byte_to_u16(val, stop) as i64)
 end
+
+func set_caret(pos: int): set_sel(pos, pos) end
 
 func replace_range(start: int, stop: int, text: str, caret: int, kind: str):
     history.Mark(start, stop)
@@ -1168,7 +1219,7 @@ func maybe_outdent_end():
     set_caret(pos - 4)
 end
 
-func get_sel_end(): int: ret dom.GetNum(el_code, "selectionEnd") as int end
+func get_sel_end(): int: ret u16_to_byte(dom.GetValue(el_code), dom.GetNum(el_code, "selectionEnd") as int) end
 
 func line_start_of(val: str, pos: int): int:
     mut ls := 0
@@ -1204,7 +1255,7 @@ func block_indent(outdent: bool):
     mut first_delta := 0
     mut total_delta := 0
     mut is_first_line := true
-    mut line_buf := ""
+    mut line_from := 0
     seg_len := segment.len()
     mut idx := 0
     until idx <= seg_len:
@@ -1212,7 +1263,7 @@ func block_indent(outdent: bool):
         ch := at_end ? 10 : cc(segment, idx)
         if ch == 10:
             mut delta := 0
-            mut nl := line_buf
+            mut nl := segment.substr(line_from, idx - line_from)
             if outdent:
                 mut rm := 0
                 until rm < 4 and rm < nl.len() and cc(nl, rm) == 32:
@@ -1234,9 +1285,7 @@ func block_indent(outdent: bool):
             if is_first_line: first_delta = delta end
             total_delta += delta
             is_first_line = false
-            line_buf = ""
-        else:
-            line_buf = line_buf + segment.substr(idx, 1)
+            line_from = idx + 1
         end
         idx += 1
     end
@@ -1245,8 +1294,7 @@ func block_indent(outdent: bool):
     mut new_s := s + first_delta
     if new_s < ls: new_s = ls end
     new_e := e + total_delta
-    dom.SetProp(el_code, "selectionStart", new_s as i64)
-    dom.SetProp(el_code, "selectionEnd", new_e as i64)
+    set_sel(new_s, new_e)
     commit_edit("indent")
 end
 
@@ -1257,7 +1305,10 @@ func on_gutter_move(ev: i64):
         y := dom.EventY(ev)
         dom.SetStyle(el_split, "--row-a", "" + y + "px")
     else:
-        x := dom.EventX(ev)
+        mut x := dom.EventX(ev)
+        if dir_of(g_lang) == "rtl":
+            x = dom.GetNum(el_split, "offsetLeft") + dom.GetNum(el_split, "offsetWidth") - x
+        end
         dom.SetStyle(el_split, "--col-a", "" + x + "px")
     end
 end
@@ -1319,7 +1370,7 @@ func edit_kind(ev: i64): str:
         "insertText", "insertCompositionText":
             data := dom.GetStr(ev, "data")
             if data == " " or data == "\t": ret "space" end
-            if data.len() != 1: ret "chunk" end
+            if data.char_count() != 1: ret "chunk" end
             ret "type"
         end
     end
@@ -1342,8 +1393,7 @@ end
 
 func apply_history_state():
     dom.SetValue(el_code, history.Text())
-    dom.SetProp(el_code, "selectionStart", history.SelStart() as i64)
-    dom.SetProp(el_code, "selectionEnd", history.SelEnd() as i64)
+    set_sel(history.SelStart(), history.SelEnd())
     after_edit()
     caret_into_view()
 end

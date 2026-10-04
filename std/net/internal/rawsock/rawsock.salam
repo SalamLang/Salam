@@ -199,46 +199,59 @@ func _ai_addr(ai: void*): void*:
 end
 func _ai_next(ai: void*): void*: ret ((ai as i64 + 40) as i64*)[0] as void* end
 
-func _resolve_sockaddr(host: str, family_hint: int, port: int, out_len &: int, out_family &: int): void*:
+func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
     if SALAM_OS_WINDOWS:
-        _net_init()
+        s := socket(fam, socktype, 0)
+        if s == (0 - 1 as i64):
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        if connect(s, sa, alen) != 0:
+            closesocket(s)
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        ret Socket { fd = s, family = fam }
+    else:
+        s := socket(fam, socktype, 0)
+        if s == 0 - 1:
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        if connect(s, sa, alen) != 0:
+            close(s)
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        _no_sigpipe(s as i64)
+        ret Socket { fd = s as i64, family = fam }
     end
+end
+
+func _resolve_all(host: str, port: int, addrs &: Vector<i64>, lens &: Vector<int>, fams &: Vector<int>):
     hints := mem.Allocate(48 as u64)
     defer mem.Free(hints)
     memset(hints, 0, 48 as u64)
     hp := hints as int*
-    hp[1] = family_hint
     hp[2] = SOCK_STREAM
     res_slot := mem.Allocate(8 as u64)
     defer mem.Free(res_slot)
     rp := res_slot as i64*
     rp[0] = 0
     port_str := str.FromInt(port as i64)
-    rc := getaddrinfo(host, port_str, hints, res_slot)
-    if rc != 0:
-        out_len = 0
-        out_family = 0
-        ret (0 as void*)
+    if getaddrinfo(host, port_str, hints, res_slot) != 0:
+        ret
     end
     res := rp[0] as void*
     if res == null:
-        out_len = 0
-        out_family = 0
-        ret (0 as void*)
+        ret
     end
     defer freeaddrinfo(res)
     mut cur := res
     until cur != null:
-        fam := _ai_family(cur)
-        if family_hint == 0 or fam == family_hint:
-            out_family = fam
-            ret _copy_sockaddr(cur, out_len)
-        end
+        mut alen := 0
+        sa := _copy_sockaddr(cur, alen)
+        addrs.push(sa as i64)
+        lens.push(alen)
+        fams.push(_ai_family(cur))
         cur = _ai_next(cur)
     end
-    out_len = 0
-    out_family = 0
-    ret (0 as void*)
 end
 
 func _copy_sockaddr(ai: void*, out_len &: int): void*:
@@ -297,37 +310,21 @@ pub func ConnectProto(host: str, port: int, socktype: int): Socket:
     if SALAM_OS_WINDOWS:
         _net_init()
     end
-    mut alen := 0
-    mut fam := 0
-    sa := _resolve_sockaddr(host, 0, port, alen, fam)
-    if sa == null:
-        ret Socket { fd = 0 - 1, family = AF_INET }
+    mut addrs := Vector {} as Vector<i64>
+    mut lens := Vector {} as Vector<int>
+    mut fams := Vector {} as Vector<int>
+    _resolve_all(host, port, addrs, lens, fams)
+    mut out := Socket { fd = 0 - 1, family = AF_INET }
+    repeat addrs.len() in i:
+        if out.fd < 0:
+            out = _try_connect(addrs.get(i) as void*, lens.get(i), fams.get(i), socktype)
+        end
+        mem.Free(addrs.get(i) as void*)
     end
-    defer mem.Free(sa)
-    if SALAM_OS_WINDOWS:
-        s := socket(fam, socktype, 0)
-        if s == (0 - 1 as i64):
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        r := connect(s, sa, alen)
-        if r != 0:
-            closesocket(s)
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        ret Socket { fd = s, family = fam }
-    else:
-        s := socket(fam, socktype, 0)
-        if s == 0 - 1:
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        r := connect(s, sa, alen)
-        if r != 0:
-            close(s)
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        _no_sigpipe(s as i64)
-        ret Socket { fd = s as i64, family = fam }
-    end
+    addrs.free()
+    lens.free()
+    fams.free()
+    ret out
 end
 
 @en "ListenOn"
@@ -584,17 +581,23 @@ pub func SetTimeout(sock: Socket, millis: int):
         tv := mem.Allocate(16 as u64)
         defer mem.Free(tv)
         memset(tv, 0, 16 as u64)
-        tv64 := tv as i64*
-        tv64[0] = (millis / 1000) as i64
-        usec := tv as i64 + 8
-        usecp := usec as i64*
-        usecp[0] = ((millis % 1000) * 1000) as i64
-        if SALAM_OS_MAC or SALAM_OS_BSD:
-            setsockopt(sock.fd as int, 65535, 4102, tv, 16)
-            setsockopt(sock.fd as int, 65535, 4101, tv, 16)
+        mut tvlen := 16
+        if sizeof(void*) == 8:
+            tv64 := tv as i64*
+            tv64[0] = (millis / 1000) as i64
+            tv64[1] = ((millis % 1000) * 1000) as i64
         else:
-            setsockopt(sock.fd as int, 1, 20, tv, 16)
-            setsockopt(sock.fd as int, 1, 21, tv, 16)
+            tv32 := tv as i32*
+            tv32[0] = millis / 1000
+            tv32[1] = (millis % 1000) * 1000
+            tvlen = 8
+        end
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            setsockopt(sock.fd as int, 65535, 4102, tv, tvlen)
+            setsockopt(sock.fd as int, 65535, 4101, tv, tvlen)
+        else:
+            setsockopt(sock.fd as int, 1, 20, tv, tvlen)
+            setsockopt(sock.fd as int, 1, 21, tv, tvlen)
         end
     end
 end

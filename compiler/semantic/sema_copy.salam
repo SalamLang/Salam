@@ -1,0 +1,720 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const CP_SHALLOW := 1
+const CP_DEEP := 2
+const CP_VALUE := 3
+const CP_ALL := 2147483647
+const CP_MAX_DEPTH := 32
+const CP_DYN_METHOD := "__dcopy"
+const CP_DYN_VALUE := "__dcopy_value"
+
+func copy_method_kind(name: str): int:
+    canon := intrinsic_method_canon(name)
+    if str.Equals(canon, "copy"):
+        ret CP_SHALLOW
+    end
+    if str.Equals(canon, "deep_copy"):
+        ret CP_DEEP
+    end
+    if str.Equals(name, CP_DYN_VALUE):
+        ret CP_VALUE
+    end
+    ret 0
+end
+
+func copy_dyn_deep_ok(s &: Sema, t: int): bool:
+    if t < 0 or ty_at(s, t).kind != TY_DYN:
+        ret false
+    end
+    iface := ty_at(s, t).decl
+    ret iface != 0 and sym_at(s, iface).members != 0 and scope_lookup_local(s, sym_at(s, iface).members, CP_DYN_METHOD) != 0
+end
+
+func copy_program_deep_copies(a &: at.Ast): bool:
+    n := at.Count(a)
+    mut i := 1
+    until i < n:
+        nd := at.Get(a, i)
+        if nd.kind == at.AST_MEMBER and str.Equals(intrinsic_method_canon(nd.name), "deep_copy"):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func copy_iface_required(a &: at.Ast, iface: int): int:
+    mut req := 0
+    iv := at.Get(a, iface)
+    repeat iv.list.len() in i:
+        m := at.Get(a, iv.list.get(i))
+        if m.kind == at.AST_FUNC_DEF:
+            if str.Equals(m.name, CP_DYN_METHOD):
+                ret 0 - 1
+            end
+            if m.a == 0:
+                req += 1
+            end
+        end
+    end
+    ret req
+end
+
+func copy_inject_dyn_deep(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg or not copy_program_deep_copies(a):
+        ret
+    end
+    mut ifaces := Vector {} as Vector<int>
+    defer ifaces.free()
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_INTERFACE_DEF and d.typarams.len() == 0 and str.Len(d.name) > 0 and copy_iface_required(a, did) > 0:
+            ifaces.push(did)
+        end
+    end
+    repeat ifaces.len() in j:
+        did2 := ifaces.get(j)
+        nm := at.Get(a, did2).name
+        text := "interface " + nm + ":\n" + DV_IND + "func " + CP_DYN_METHOD + "(): dyn " + nm + ":\n" + DV_IND + DV_IND + "ret this." + CP_DYN_VALUE + "() as dyn " + nm + "\n" + DV_IND + "end\nend\n"
+        prog := derive_parse(s, a, text, "<derived>")
+        if prog == 0 or at.ChildCount(a, prog) == 0:
+            continue
+        end
+        tmp := at.Child(a, prog, 0)
+        if at.ChildCount(a, tmp) == 0:
+            continue
+        end
+        fn := at.Child(a, tmp, 0)
+        mut fv := at.Get(a, fn)
+        fv.origin_lang = "en"
+        at.Put(a, fn, fv)
+        at.AddChild(a, did2, fn)
+    end
+end
+
+func copy_inst_arg(s &: Sema, t: int, base: str, nargs: int, idx: int): int:
+    v := ty_at(s, t)
+    if v.kind != TY_STRUCT or v.decl == 0:
+        ret TYPE_NONE
+    end
+    sym := sym_at(s, v.decl)
+    if not str.Equals(sym.generic_base, base) or sym.generic_args.len() != nargs:
+        ret TYPE_NONE
+    end
+    ret sym.generic_args.get(idx)
+end
+
+func copy_vec_elem(s &: Sema, t: int): int:
+    if t < 0:
+        ret TYPE_NONE
+    end
+    if ty_at(s, t).kind == TY_VEC:
+        ret ty_at(s, t).elem
+    end
+    ret copy_inst_arg(s, t, "Vector", 1, 0)
+end
+
+func copy_map_key(s &: Sema, t: int): int:
+    if t < 0:
+        ret TYPE_NONE
+    end
+    if ty_at(s, t).kind == TY_MAP:
+        ret ty_at(s, t).key
+    end
+    ret copy_inst_arg(s, t, "HashMap", 2, 0)
+end
+
+func copy_map_val(s &: Sema, t: int): int:
+    if t < 0:
+        ret TYPE_NONE
+    end
+    if ty_at(s, t).kind == TY_MAP:
+        ret ty_at(s, t).elem
+    end
+    ret copy_inst_arg(s, t, "HashMap", 2, 1)
+end
+
+func copy_is_vec(s &: Sema, t: int): bool:
+    ret copy_vec_elem(s, t) != TYPE_NONE
+end
+
+func copy_is_map(s &: Sema, t: int): bool:
+    ret copy_map_key(s, t) != TYPE_NONE
+end
+
+func copy_is_str(s &: Sema, t: int): bool:
+    ret t >= 0 and ty_at(s, t).kind == TY_STR
+end
+
+func copy_has_member(s &: Sema, t: int, name: str, canon: str): bool:
+    if t < 0 or ty_at(s, t).kind != TY_STRUCT:
+        ret false
+    end
+    sym := ty_at(s, t).decl
+    if sym == 0 or sym_at(s, sym).members == 0:
+        ret false
+    end
+    members := sym_at(s, sym).members
+    ret scope_lookup_local(s, members, name) != 0 or scope_lookup_local(s, members, canon) != 0
+end
+
+func copy_user_deep(s &: Sema, t: int): bool:
+    ret copy_has_member(s, t, "deep_copy", "deep_copy")
+end
+
+func copy_needs_deep(s &: Sema, t: int, depth: int): bool:
+    if t < 0 or depth > CP_MAX_DEPTH:
+        ret false
+    end
+    if copy_is_str(s, t) or copy_is_vec(s, t) or copy_is_map(s, t) or copy_dyn_deep_ok(s, t):
+        ret true
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if k == TY_ARRAY:
+        ret copy_needs_deep(s, v.elem, depth + 1)
+    end
+    if k == TY_STRUCT:
+        if copy_user_deep(s, t):
+            ret true
+        end
+        sym := v.decl
+        if sym == 0 or sym_at(s, sym).members == 0:
+            ret false
+        end
+        fields := scope_at(s, sym_at(s, sym).members).symbols
+        repeat fields.len() in i:
+            fv := sym_at(s, fields.get(i))
+            if fv.kind == SYM_FIELD and copy_needs_deep(s, fv.ty, depth + 1):
+                ret true
+            end
+        end
+        ret false
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        repeat enum_case_count(s, t) in ci:
+            cs := enum_case_struct(s, t, ci)
+            if cs != 0 and copy_needs_deep(s, sym_at(s, cs).ty, depth + 1):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func copy_deep_blocker(s &: Sema, t: int, depth: int, path: str): str:
+    if t < 0 or depth > CP_MAX_DEPTH:
+        ret ""
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if derive_is_plain(s, t) or k == TY_STR or k == TY_ENUM or k == TY_FUNC or copy_dyn_deep_ok(s, t):
+        ret ""
+    end
+    if copy_is_vec(s, t):
+        ret copy_deep_blocker(s, copy_vec_elem(s, t), depth + 1, path + "[]")
+    end
+    if k == TY_ARRAY:
+        ret copy_deep_blocker(s, v.elem, depth + 1, path + "[]")
+    end
+    if copy_is_map(s, t):
+        kb := copy_deep_blocker(s, copy_map_key(s, t), depth + 1, path + "{key}")
+        if str.Len(kb) > 0:
+            ret kb
+        end
+        ret copy_deep_blocker(s, copy_map_val(s, t), depth + 1, path + "{value}")
+    end
+    if k == TY_STRUCT:
+        if copy_user_deep(s, t):
+            ret ""
+        end
+        sym := v.decl
+        if sym == 0 or sym_at(s, sym).members == 0:
+            ret ""
+        end
+        fields := scope_at(s, sym_at(s, sym).members).symbols
+        repeat fields.len() in i:
+            fv := sym_at(s, fields.get(i))
+            if fv.kind == SYM_FIELD:
+                fb := copy_deep_blocker(s, fv.ty, depth + 1, path + "." + fv.name)
+                if str.Len(fb) > 0:
+                    ret fb
+                end
+            end
+        end
+        ret ""
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        repeat enum_case_count(s, t) in ci:
+            cs := enum_case_struct(s, t, ci)
+            if cs != 0:
+                cb := copy_deep_blocker(s, sym_at(s, cs).ty, depth + 1, path)
+                if str.Len(cb) > 0:
+                    ret cb
+                end
+            end
+        end
+        ret ""
+    end
+    ret path + " (" + type_disp(s, t) + ")"
+end
+
+func copy_elem(s &: Sema, t: int, expr: str, deep: bool): str:
+    if deep and copy_needs_deep(s, t, 0):
+        ret expr + ".deep_copy()"
+    end
+    ret expr
+end
+
+func copy_user_shallow(s &: Sema, t: int): bool:
+    ret copy_has_member(s, t, "copy", "copy")
+end
+
+func copy_needs_shallow(s &: Sema, t: int, depth: int): bool:
+    if t < 0 or depth > CP_MAX_DEPTH:
+        ret false
+    end
+    if copy_is_vec(s, t) or copy_is_map(s, t):
+        ret true
+    end
+    v := ty_at(s, t)
+    k := v.kind
+    if k == TY_ARRAY:
+        ret copy_needs_shallow(s, v.elem, depth + 1)
+    end
+    if k == TY_STRUCT:
+        if copy_user_shallow(s, t):
+            ret true
+        end
+        sym := v.decl
+        if sym == 0 or sym_at(s, sym).members == 0:
+            ret false
+        end
+        fields := scope_at(s, sym_at(s, sym).members).symbols
+        repeat fields.len() in i:
+            fv := sym_at(s, fields.get(i))
+            if fv.kind == SYM_FIELD and copy_needs_shallow(s, fv.ty, depth + 1):
+                ret true
+            end
+        end
+        ret false
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        repeat enum_case_count(s, t) in ci:
+            cs := enum_case_struct(s, t, ci)
+            if cs != 0 and copy_needs_shallow(s, sym_at(s, cs).ty, depth + 1):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func copy_part(s &: Sema, t: int, expr: str, deep: bool): str:
+    if deep:
+        ret copy_elem(s, t, expr, true)
+    end
+    if copy_needs_shallow(s, t, 0):
+        ret expr + ".copy()"
+    end
+    ret expr
+end
+
+func copy_needs(s &: Sema, t: int, deep: bool): bool:
+    if deep:
+        ret copy_needs_deep(s, t, 0)
+    end
+    ret copy_needs_shallow(s, t, 0)
+end
+
+func copy_takes_range(s &: Sema, t: int): bool:
+    ret copy_is_vec(s, t) or copy_is_str(s, t)
+end
+
+func copy_vec_source(s &: Sema, t: int, fname: str, spelling: str, deep: bool): str:
+    item := copy_elem(s, copy_vec_elem(s, t), "_v.get(_i)", deep)
+    mut out := "func " + fname + "(_v: " + spelling + ", _s: int, _n: int, _st: int): " + spelling + ":\n"
+    out = out + DV_IND + "mut _r := Vector {} as " + spelling + "\n"
+    out = out + DV_IND + "_len := _v.len()\n"
+    out = out + DV_IND + "mut _i := _s\n"
+    out = out + DV_IND + "if _i < 0: _i = _i + _len end\n"
+    out = out + DV_IND + "if _st > 0 and _i < 0: _i = 0 end\n"
+    out = out + DV_IND + "if _st < 0 and _i >= _len: _i = _len - 1 end\n"
+    out = out + DV_IND + "mut _k := 0\n"
+    out = out + DV_IND + "until _st != 0 and _k < _n and _i >= 0 and _i < _len:\n"
+    out = out + DV_IND + DV_IND + "_r.push(" + item + ")\n"
+    out = out + DV_IND + DV_IND + "_i = _i + _st\n"
+    out = out + DV_IND + DV_IND + "_k = _k + 1\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + "ret _r\nend\n"
+end
+
+func copy_str_source(fname: str): str:
+    mut out := "func " + fname + "(_v: str, _s: int, _n: int): str:\n"
+    out = out + DV_IND + "_len := _v.len()\n"
+    out = out + DV_IND + "mut _i := _s\n"
+    out = out + DV_IND + "if _i < 0: _i = _i + _len end\n"
+    out = out + DV_IND + "if _i < 0: _i = 0 end\n"
+    out = out + DV_IND + "if _i > _len: _i = _len end\n"
+    out = out + DV_IND + "mut _c := _n\n"
+    out = out + DV_IND + "if _c > _len - _i: _c = _len - _i end\n"
+    ret out + DV_IND + "ret _v.substr(_i, _c)\nend\n"
+end
+
+func copy_map_source(s &: Sema, t: int, fname: str, spelling: str, deep: bool): str:
+    kexpr := copy_elem(s, copy_map_key(s, t), "_it.key()", deep)
+    vexpr := copy_elem(s, copy_map_val(s, t), "_it.value()", deep)
+    mut out := "func " + fname + "(_v: " + spelling + "): " + spelling + ":\n"
+    out = out + DV_IND + "mut _r := HashMap {} as " + spelling + "\n"
+    out = out + DV_IND + "mut _it := _v.iter()\n"
+    out = out + DV_IND + "until _it.has_next():\n"
+    out = out + DV_IND + DV_IND + "_r.put(" + kexpr + ", " + vexpr + ")\n"
+    out = out + DV_IND + DV_IND + "_it.next()\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + "ret _r\nend\n"
+end
+
+func copy_identity_source(fname: str, spelling: str): str:
+    ret "func " + fname + "(_v: " + spelling + "): " + spelling + ":\n" + DV_IND + "ret _v\nend\n"
+end
+
+func copy_struct_source(s &: Sema, t: int, fname: str, spelling: str, deep: bool): str:
+    sym := ty_at(s, t).decl
+    mut body := ""
+    fields := scope_at(s, sym_at(s, sym).members).symbols
+    repeat fields.len() in i:
+        fv := sym_at(s, fields.get(i))
+        if fv.kind == SYM_FIELD and copy_needs(s, fv.ty, deep):
+            body = body + DV_IND + "_r." + fv.name + " = " + copy_part(s, fv.ty, "_v." + fv.name, deep) + "\n"
+        end
+    end
+    if str.Len(body) == 0:
+        ret copy_identity_source(fname, spelling)
+    end
+    mut out := "func " + fname + "(_v: " + spelling + "): " + spelling + ":\n"
+    out = out + DV_IND + "mut _r := _v\n" + body
+    ret out + DV_IND + "ret _r\nend\n"
+end
+
+func copy_array_source(s &: Sema, t: int, fname: str, spelling: str, deep: bool): str:
+    item := copy_part(s, ty_at(s, t).elem, "_v[_i]", deep)
+    mut out := "func " + fname + "(_v: " + spelling + "): " + spelling + ":\n"
+    out = out + DV_IND + "mut _r := _v\n"
+    out = out + DV_IND + "repeat len(_v) in _i:\n"
+    out = out + DV_IND + DV_IND + "_r[_i] = " + item + "\n"
+    out = out + DV_IND + "end\n"
+    ret out + DV_IND + "ret _r\nend\n"
+end
+
+func copy_enum_base(s &: Sema, t: int): str:
+    esym := enum_data_sym(s, t)
+    mut base := sym_at(s, esym).name
+    home := sym_at(s, esym).home
+    if home != 0 and home != s.global:
+        pkg := derive_pkg_name_of(s, home)
+        if str.Len(pkg) > 0:
+            base = pkg + "." + base
+        end
+    end
+    ret base
+end
+
+func copy_enum_source(s &: Sema, a &: at.Ast, t: int, fname: str, spelling: str, deep: bool): str:
+    ind2 := DV_IND + DV_IND
+    ind3 := ind2 + DV_IND
+    base := copy_enum_base(s, t)
+    mut out := "func " + fname + "(_v: " + spelling + "): " + spelling + ":\n"
+    out = out + DV_IND + "match _v:\n"
+    repeat enum_case_count(s, t) in i:
+        cs := enum_case_struct(s, t, i)
+        mname := enum_case_member(s, cs)
+        mut fields := Vector {} as Vector<str>
+        enum_case_fields(s, a, cs, fields)
+        out = out + ind2 + mname + " _c:\n"
+        if fields.len() == 0:
+            out = out + ind3 + "ret " + base + "." + mname + "\n"
+        else:
+            mut args := ""
+            repeat fields.len() in j:
+                f := scope_lookup_local(s, sym_at(s, cs).members, fields.get(j))
+                if j > 0:
+                    args = args + ", "
+                end
+                args = args + copy_part(s, sym_at(s, f).ty, "_c." + fields.get(j), deep)
+            end
+            out = out + ind3 + "ret " + base + "." + mname + "(" + args + ")\n"
+        end
+        out = out + ind2 + "end\n"
+        fields.free()
+    end
+    ret out + DV_IND + "end\n" + DV_IND + "ret _v\nend\n"
+end
+
+func copy_source(s &: Sema, a &: at.Ast, t: int, fname: str, spelling: str, deep: bool): str:
+    k := ty_at(s, t).kind
+    if copy_is_vec(s, t):
+        ret copy_vec_source(s, t, fname, spelling, deep)
+    end
+    if copy_is_str(s, t):
+        ret copy_str_source(fname)
+    end
+    if copy_is_map(s, t):
+        ret copy_map_source(s, t, fname, spelling, deep)
+    end
+    if not copy_needs(s, t, deep):
+        ret copy_identity_source(fname, spelling)
+    end
+    if k == TY_STRUCT:
+        ret copy_struct_source(s, t, fname, spelling, deep)
+    end
+    if k == TY_ARRAY:
+        ret copy_array_source(s, t, fname, spelling, deep)
+    end
+    if k == TY_VARIANT and enum_data_sym(s, t) != 0:
+        ret copy_enum_source(s, a, t, fname, spelling, deep)
+    end
+    ret copy_identity_source(fname, spelling)
+end
+
+func copy_has_dyn(s &: Sema, t: int, depth: int): bool:
+    if t < 0 or depth > CP_MAX_DEPTH:
+        ret false
+    end
+    if ty_at(s, t).kind == TY_DYN:
+        ret true
+    end
+    if copy_is_vec(s, t):
+        ret copy_has_dyn(s, copy_vec_elem(s, t), depth + 1)
+    end
+    if copy_is_map(s, t):
+        ret copy_has_dyn(s, copy_map_key(s, t), depth + 1) or copy_has_dyn(s, copy_map_val(s, t), depth + 1)
+    end
+    ret false
+end
+
+func copy_close_generic(inner: str): str:
+    if str.EndsWith(inner, ">"):
+        ret inner + " >"
+    end
+    ret inner + ">"
+end
+
+func copy_type_spelling(s &: Sema, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    if copy_is_str(s, t):
+        ret "str"
+    end
+    if not copy_has_dyn(s, t, 0):
+        ret derive_type_spelling(s, t)
+    end
+    if ty_at(s, t).kind == TY_DYN:
+        isym := ty_at(s, t).decl
+        ispell := isym != 0 ? derive_struct_spelling(s, isym) : ""
+        ret str.Len(ispell) > 0 ? "dyn " + ispell : ""
+    end
+    if copy_is_vec(s, t):
+        e := copy_type_spelling(s, copy_vec_elem(s, t))
+        ret str.Len(e) > 0 ? copy_close_generic("Vector<" + e) : ""
+    end
+    if copy_is_map(s, t):
+        k := copy_type_spelling(s, copy_map_key(s, t))
+        v := copy_type_spelling(s, copy_map_val(s, t))
+        ret str.Len(k) > 0 and str.Len(v) > 0 ? copy_close_generic("HashMap<" + k + ", " + v) : ""
+    end
+    ret derive_type_spelling(s, t)
+end
+
+func copy_derive(s &: Sema, a &: at.Ast, t: int, deep: bool): str:
+    k := ty_at(s, t).kind
+    mut use_deep := deep
+    if k == TY_STR:
+        use_deep = false
+    end
+    prefix := use_deep ? "_dcpyof_" : "_cpyof_"
+    fname := prefix + derive_key(type_to_string(s, t))
+    if derive_registry_find(s, fname) != 0:
+        ret fname
+    end
+    if scope_lookup_local(s, s.global, fname) != 0:
+        ret fname
+    end
+    spelling := copy_type_spelling(s, t)
+    if str.Len(spelling) == 0:
+        ret ""
+    end
+    derive_registry_claim(s, fname)
+    text := copy_source(s, a, t, fname, spelling, use_deep)
+    prog := derive_parse(s, a, text, "<derived>")
+    mut fn := 0
+    if prog != 0:
+        fn = derive_install_all(s, a, prog, fname, 0)
+    end
+    if fn == 0:
+        derive_registry_drop(s, derive_registry_find(s, fname))
+        ret ""
+    end
+    slot := derive_registry_find(s, fname)
+    s.derived_decls.set(slot - 1, fn)
+    ret fname
+end
+
+func copy_try_call(
+    s &: Sema, a &: at.Ast, n: int, callee: int, objt0: int, argtypes: Vector<int>, sp: co.SrcSpan
+): int:
+    mut objt := objt0
+    mname := at.Get(a, callee).name
+    mut kind := copy_method_kind(mname)
+    if kind == 0 or objt < 0:
+        ret TYPE_NONE
+    end
+    if kind == CP_VALUE:
+        if ty_at(s, objt).kind == TY_PTR and ty_at(s, objt).pointee >= 0:
+            pointee := ty_at(s, objt).pointee
+            deref := new_node_at(a, at.AST_INDEX, sp)
+            mut dv := at.Get(a, deref)
+            dv.a = at.Get(a, callee).a
+            dv.b = ea_int(a, 0 as u64, sp)
+            dv.synthetic = true
+            at.Put(a, deref, dv)
+            _dz := sema_decorate(s, a, at.Get(a, deref).b, sema_ty(s, TY_I32))
+            _dd := sema_decorate(s, a, deref, pointee)
+            mut cvv := at.Get(a, callee)
+            cvv.a = deref
+            at.Put(a, callee, cvv)
+            objt = pointee
+        end
+        kind = str.Len(copy_deep_blocker(s, objt, 0, "value")) == 0 ? CP_DEEP : CP_SHALLOW
+    else ty_at(s, objt).kind == TY_DYN and kind == CP_DEEP and copy_dyn_deep_ok(s, objt) and argtypes.len() == 0:
+        sema_check_intrinsic_method_lang(s, mname, "deep_copy", sp)
+        at.SetName(a, callee, CP_DYN_METHOD)
+        ret TYPE_NONE
+    end
+    canon := kind == CP_DEEP ? "deep_copy" : "copy"
+    if copy_has_member(s, objt, mname, canon) and not copy_is_vec(s, objt) and not copy_is_map(s, objt):
+        if str.Equals(mname, CP_DYN_VALUE):
+            at.SetName(a, callee, canon)
+        end
+        ret TYPE_NONE
+    end
+    if not str.Equals(mname, CP_DYN_VALUE):
+        sema_check_intrinsic_method_lang(s, mname, canon, sp)
+    end
+    nargs := argtypes.len()
+    if nargs > 0 and not copy_takes_range(s, objt):
+        serr(
+            s, 12, sp, co.Format2(
+                i18.Tr("%s() takes no arguments on '%s'; only Vector and str copy a range"), co.ArgStr(mname),
+                co.ArgStr(type_disp(s, objt))
+            )
+        )
+        ret sema_decorate(s, a, n, sema_err_ty(s))
+    end
+    if nargs > 3 or (copy_is_str(s, objt) and nargs > 2):
+        serr(
+            s, 12, sp, co.Format1(
+                i18.Tr("%s(start, count, step) takes at most 3 arguments, and str takes no step"),
+                co.ArgStr(mname)
+            )
+        )
+        ret sema_decorate(s, a, n, sema_err_ty(s))
+    end
+    repeat nargs in ai:
+        at0 := argtypes.get(ai)
+        if at0 != TYPE_NONE and not type_is_error(s, at0) and not type_assignable(s, sema_ty(s, TY_I32), at0):
+            serr(
+                s, 12, sp, co.Format3(
+                    i18.Tr("%s() argument %zu must be an int, got '%s'"), co.ArgStr(mname), co.ArgUint((ai + 1) as u64),
+                    co.ArgStr(type_disp(s, at0))
+                )
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+    end
+    if nargs == 3:
+        mut stv := 0 as i64
+        if lit_int(a, at.Child(a, n, 2), stv) and stv == 0:
+            serr(s, 12, sp, co.Format1(i18.Tr("%s() step must not be 0"), co.ArgStr(mname)))
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+    end
+    if kind == CP_DEEP:
+        blocker := copy_deep_blocker(s, objt, 0, "value")
+        if str.Len(blocker) > 0:
+            serr(
+                s, 12, sp, co.Format2(
+                    i18.Tr("cannot deep_copy '%s': %s cannot be copied safely; give the struct its own deep_copy()"),
+                    co.ArgStr(type_disp(s, objt)), co.ArgStr(blocker)
+                )
+            )
+            ret sema_decorate(s, a, n, sema_err_ty(s))
+        end
+    end
+    fname := copy_derive(s, a, objt, kind == CP_DEEP)
+    if str.Len(fname) == 0 and str.Equals(mname, CP_DYN_VALUE):
+        at.Put(a, n, at.Get(a, at.Get(a, callee).a))
+        ret sema_decorate(s, a, n, objt)
+    end
+    if str.Len(fname) == 0:
+        serr(
+            s, 12, sp, co.Format2(
+                i18.Tr("%s() is not supported for '%s'"), co.ArgStr(mname), co.ArgStr(type_disp(s, objt))
+            )
+        )
+        ret sema_decorate(s, a, n, sema_err_ty(s))
+    end
+    recv := at.Get(a, callee).a
+    fid := new_node_at(a, at.AST_IDENTIFIER, sp)
+    at.SetName(a, fid, fname)
+    mut fv := at.Get(a, fid)
+    fv.synthetic = true
+    at.Put(a, fid, fv)
+    mut args := Vector {} as Vector<int>
+    args.push(recv)
+    repeat nargs in ai2:
+        args.push(at.Child(a, n, ai2))
+    end
+    if copy_takes_range(s, objt):
+        defaults := [0, CP_ALL, 1]
+        mut want := 3
+        if copy_is_str(s, objt):
+            want = 2
+        end
+        mut di := nargs
+        until di < want:
+            lit := ea_int(a, defaults[di] as u64, sp)
+            _dl := sema_decorate(s, a, lit, sema_ty(s, TY_I32))
+            args.push(lit)
+            di += 1
+        end
+    end
+    mut cv := at.Get(a, n)
+    cv.a = fid
+    cv.synthetic = true
+    cv.list.free()
+    cv.list = args
+    at.Put(a, n, cv)
+    ret sema_decorate(s, a, n, objt)
+end

@@ -689,6 +689,19 @@ shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
 ```
 
+**`dyn` fields:** a struct field can hold any implementation, e.g.
+`pub shape: dyn Shape = Square {}`. Storing a value copies it into a box, so
+changing the original afterwards does not reach the field. Copying the
+struct shares the box, the same way copying a Vector shares its storage, so a
+method that changes state through one copy shows in the other. Release the
+box with `field.free()` when you are done with it. `copy()` shares the box
+too, while `deep_copy()` boxes a deep copy of whatever value the field holds
+(a concrete type that holds a raw pointer is copied as a value, so the
+pointer itself is shared).
+That works for interfaces declared in your program; for an interface from
+another package `deep_copy()` refuses, so give the struct its own
+`deep_copy()`.
+
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every
 default it does not define itself, and so does an `impl I on T` block, so
@@ -1347,8 +1360,8 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
 
 - **`db.sqlite`**:
   `Available Version Open Ok Exec Query Next Text Int Finish Prepare BindText Reset LastInsertId Changes QueryInt Close Conn`.
-- **`db.postgres`** (libpq): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed.
-- **`db.mysql`** (MariaDB/MySQL): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText Conn`. This API hands every value over as text, so `ColumnType` answers `TYPE_TEXT` where the others report the column's own type; DDL commits implicitly, so `Tx.Rollback()` cannot undo it. **Threading**: a connection
+- **`db.postgres`** (native wire protocol, no libpq; TCP only, SCRAM/MD5/password auth, TLS via `sslmode`): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed.
+- **`db.mysql`** (MariaDB/MySQL, native protocol, no libmysqlclient; TCP only, native_password and caching_sha2 auth, TLS when the server offers it, `SALAM_MYSQL_SSL_MODE` = DISABLED/REQUIRED/VERIFY_IDENTITY): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText Conn`. This API hands every value over as text, so `ColumnType` answers `TYPE_TEXT` where the others report the column's own type; DDL commits implicitly, so `Tx.Rollback()` cannot undo it. **Threading**: a connection
   cannot be used by two threads at once (it segfaults, it does not error), so
   a threaded server gives each request its own connection. Call
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
@@ -2075,7 +2088,9 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `trim`      | `پیراست`      | `to_int`      | `به صحیح`       |
 | `to_float`  | `به اعشار`    | `char_count`  | `شمارنویسه`     |
 | `char_at`   | `نویسه شماره` | `char_substr` | `زیررشته نویسه` |
-| `char_find` | `بیاب نویسه`  |               |                 |
+| `char_find` | `بیاب نویسه`  | `starts_with` | `شروع با`       |
+| `ends_with` | `ختم با`      | `includes`    | `دربردارد`      |
+| `copy`      | `رونوشت`      | `deep_copy`   | `رونوشت عمیق`   |
 
 The free built-in `len(x)` keeps its English name (there is no `طول(x)`
 function; use `x.طول()` or `len(x)`).

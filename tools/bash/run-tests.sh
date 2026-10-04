@@ -299,15 +299,18 @@ EOF_MSGS
             jobdir="$WORK/llvmjob_${jobid}_$$"
             mkdir -p "$jobdir"
             (
-                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>/dev/null
+                cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --jit --no-color --log-level=error >"$jobdir/.stdout" 2>"$jobdir/.stderr"
                 echo "$?" >"$jobdir/.rc"
             )
             got=$(tr -d '\r' <"$jobdir/.stdout")
             rc=$(cat "$jobdir/.rc")
+            why=$(tr -d '\r' <"$jobdir/.stderr" | grep -v '^$' | head -3 | tr '\n' ' ')
             rm -rf "$jobdir"
             want_rc_file="${fabs%.salam}.exit"
             if [ -f "$want_rc_file" ] && [ "$rc" != "$(tr -d '\r\n' <"$want_rc_file")" ]; then
-                echo "FAIL $label (exit $rc, want $(tr -d '\r\n' <"$want_rc_file"))"
+                echo "FAIL $label (exit $rc, want $(tr -d '\r\n' <"$want_rc_file"))${why:+ - $why}"
+            elif [ -z "$got" ] && [ -n "$why" ]; then
+                echo "FAIL $label (no output, exit $rc) - $why"
             else
                 wk_check "$expabs" "$got"
             fi
@@ -367,8 +370,21 @@ if [ -z "$NPROC" ]; then
     [ -z "$NPROC" ] && [ -r /proc/cpuinfo ] && NPROC=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     NPROC="${NPROC:-4}"
 fi
+SHARD_I=1
+SHARD_N=1
 while [ $# -gt 0 ]; do
     case "$1" in
+    --shard=*)
+        SHARD_SPEC="${1#--shard=}"
+        SHARD_I="${SHARD_SPEC%%/*}"
+        SHARD_N="${SHARD_SPEC##*/}"
+        shift
+        ;;
+    --shard)
+        SHARD_I="${2%%/*}"
+        SHARD_N="${2##*/}"
+        shift 2
+        ;;
     -j)
         NPROC="$2"
         shift 2
@@ -625,6 +641,22 @@ if want db; then
                         continue
                     fi
                     ;;
+                mylive_*)
+                    if [ -z "${SALAM_TEST_MYSQL:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MYSQL to \"host port user password db\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                pglive_*)
+                    if [ -z "${SALAM_TEST_PG:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_PG to a PostgreSQL connection string)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done
@@ -861,11 +893,29 @@ if want layout; then
     done
 fi
 
+case "$SHARD_N" in
+'' | *[!0-9]*) SHARD_N=1 ;;
+esac
+case "$SHARD_I" in
+'' | *[!0-9]*) SHARD_I=1 ;;
+esac
+[ "$SHARD_N" -lt 1 ] && SHARD_N=1
+[ "$SHARD_I" -lt 1 ] && SHARD_I=1
+[ "$SHARD_I" -gt "$SHARD_N" ] && SHARD_I="$SHARD_N"
+SHARD_NOTE=""
+if [ "$SHARD_N" -gt 1 ]; then
+    ALL=$(wc -l <"$JOBS")
+    ALL=$((ALL + 0))
+    awk -v i="$SHARD_I" -v n="$SHARD_N" 'NR % n == i % n' "$JOBS" >"$JOBS.shard"
+    mv "$JOBS.shard" "$JOBS"
+    SHARD_NOTE=" (shard $SHARD_I of $SHARD_N, from $ALL total)"
+fi
+
 TOTAL=$(wc -l <"$JOBS")
 TOTAL=$((TOTAL + 0))
 START=$(date +%s 2>/dev/null || echo 0)
 if [ "$TOTAL" -gt 0 ]; then
-    echo "== running $TOTAL tests on $NPROC parallel workers =="
+    echo "== running $TOTAL tests on $NPROC parallel workers$SHARD_NOTE =="
     export SALAM SALAM_ABS WORK TOTAL
     if printf 'x\0' | xargs -0 -n 1 -P 2 sh -c ':' probe >/dev/null 2>&1; then
         tr '\n' '\000' <"$JOBS" | xargs -0 -n 1 -P "$NPROC" sh "$SELF" --worker

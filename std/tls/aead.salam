@@ -121,6 +121,31 @@ func _public_of(cv: Curve, scalar: void*): str:
     ret _spki_wrap(point.p)
 end
 
+func _mgf1_xor(seed: void*, slen: int, dst: void*, dlen: int):
+    mut blk := _newbuf(slen + 4)
+    defer _buf_free(blk)
+    mut h := _newbuf(20)
+    defer _buf_free(h)
+    _putzeros(h, 20)
+    hp := h.p as u8*
+    dp := dst as u8*
+    mut done := 0
+    mut cnt := 0 as i64
+    until done < dlen:
+        _bufreset(blk)
+        _putraw(blk, seed, slen)
+        _put32(blk, cnt)
+        crypto.Sha1Bytes(blk.p, blk.len, h.p)
+        repeat 20 in i:
+            if done + i < dlen:
+                dp[done + i] = ((dp[done + i] as int) ^ (hp[i] as int)) as u8
+            end
+        end
+        done += 20
+        cnt += 1
+    end
+end
+
 @en "EcdhP256Generate"
 @fa "تولید کلید ای سی دی اچ"
 pub func EcdhP256Generate(priv &: str, pub_spki &: str): bool:
@@ -413,4 +438,60 @@ pub func RsaKeyBits(pem: str): int:
     defer FreePrivateKey(key)
     if not key.ok: ret 0 end
     ret key.rsa_n.len * 8
+end
+
+@en "RsaEncryptOaepSha1"
+@fa "رمزگذاری آر اس ای اوئپ"
+pub func RsaEncryptOaepSha1(pem: str, plain_b64: str, ok &: bool): str:
+    ok = false
+    begintag := "-----BEGIN PUBLIC KEY-----"
+    endtag := "-----END PUBLIC KEY-----"
+    b := pem.find(begintag)
+    if b < 0: ret "" end
+    bodystart := b + begintag.len()
+    e := str.IndexFrom(pem, endtag, bodystart)
+    if e < 0: ret "" end
+    room := (e - bodystart) / 4 * 3 + 8
+    mut der := _newbuf(room)
+    defer _buf_free(der)
+    mut good := false
+    got := encoding.Base64DecodeBytes(pem.substr(bodystart, e - bodystart), der.p, room, good)
+    if not good or got <= 0: ret "" end
+    mut c := Cert {}
+    if not _parse_spki(_newreader(der.p, got), c) or c.pk_alg != PK_RSA: ret "" end
+    mut msg := _decode_any(plain_b64)
+    defer _buf_free(msg)
+    if msg.bad: ret "" end
+    k := c.rsa_n.len
+    hl := 20
+    if msg.len > k - 2 * hl - 2: ret "" end
+    mut em := _newbuf(k)
+    defer _buf_free(em)
+    _putzeros(em, k)
+    dblen := k - hl - 1
+    crypto.Sha1Bytes(em.p, 0, _bufptr(em, 1 + hl))
+    ep := em.p as u8*
+    ep[k - msg.len - 1] = 1 as u8
+    if msg.len > 0:
+        mem.Copy(_bufptr(em, k - msg.len), msg.p, msg.len as u64)
+    end
+    crypto.RandomBytes(_bufptr(em, 1), hl)
+    _mgf1_xor(_bufptr(em, 1), hl, _bufptr(em, 1 + hl), dblen)
+    _mgf1_xor(_bufptr(em, 1 + hl), dblen, _bufptr(em, 1), hl)
+    mut n := _newbuf(k)
+    defer _buf_free(n)
+    repeat k in i:
+        _put8(n, _rdat(c.rsa_n, i))
+    end
+    mut ex := _newbuf(c.rsa_e.len)
+    defer _buf_free(ex)
+    repeat c.rsa_e.len in i:
+        _put8(ex, _rdat(c.rsa_e, i))
+    end
+    mut out := _newbuf(k)
+    defer _buf_free(out)
+    _putzeros(out, k)
+    if not _rsa_public_op(em.p, k, n.p, n.len, ex.p, ex.len, out.p, k): ret "" end
+    ok = true
+    ret encoding.Base64EncodeBytes(out.p, k)
 end

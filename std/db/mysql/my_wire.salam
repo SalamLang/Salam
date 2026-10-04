@@ -17,6 +17,7 @@ package mysql
 if not SALAM_DB_MOCK:
     import os
     import crypto
+    import encoding
     import tls
     import net.internal.rawsock
 
@@ -373,6 +374,49 @@ if not SALAM_DB_MOCK:
         ret false
     end
 
+    func _my_rsa_password(c: _MyConn*, nonce &: _MyOut, out &: _MyOut): bool:
+        mut req := _out_new()
+        defer mem.Free(req.p)
+        _out_byte(req, 2)
+        if not _my_send(c, req):
+            ret false
+        end
+        mut key := _out_new()
+        defer mem.Free(key.p)
+        if not _my_read(c, key):
+            ret false
+        end
+        if key.len < 2 or _rd(key.p, 0) != 1:
+            _my_fail(c, _MY_CR_AUTH_PLUGIN, "the server did not send its RSA public key")
+            ret false
+        end
+        pem := _copy_str(key.p, 1, key.len - 1)
+        pw := c[0].password
+        mut x := _out_new()
+        defer mem.Free(x.p)
+        repeat pw.len() + 1 in i:
+            mut b := 0
+            if i < pw.len():
+                b = _rd(pw as void*, i as i64)
+            end
+            _out_byte(x, b ^ _rd(nonce.p, (i % (nonce.len as int)) as i64))
+        end
+        mut good := false
+        ct := tls.RsaEncryptOaepSha1(pem, encoding.Base64EncodeBytes(x.p, x.len as int), good)
+        if not good:
+            _my_fail(c, _MY_CR_AUTH_PLUGIN, "could not encrypt the password with the server's RSA key")
+            ret false
+        end
+        _out_room(out, ct.len() as i64)
+        mut ok2 := false
+        n := encoding.Base64DecodeBytes(ct, out.p, ct.len(), ok2)
+        if not ok2:
+            ret false
+        end
+        out.len = n as i64
+        ret true
+    end
+
     func _my_auth_loop(c: _MyConn*, nonce &: _MyOut): bool:
         mut pkt := _out_new()
         defer mem.Free(pkt.p)
@@ -418,13 +462,13 @@ if not SALAM_DB_MOCK:
                     continue
                 end
                 if n >= 2 and _rd(p, 1) == 4:
-                    if not c[0].use_tls:
-                        _my_fail(c, _MY_CR_AUTH_PLUGIN, "caching_sha2_password full authentication needs a TLS connection")
+                    reply.len = 0
+                    if c[0].use_tls:
+                        _out_str(reply, c[0].password)
+                        _out_byte(reply, 0)
+                    else if not _my_rsa_password(c, nonce, reply):
                         ret false
                     end
-                    reply.len = 0
-                    _out_str(reply, c[0].password)
-                    _out_byte(reply, 0)
                     if not _my_send(c, reply):
                         ret false
                     end

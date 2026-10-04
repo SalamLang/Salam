@@ -153,6 +153,49 @@ func check_match_pattern(
     ret 0 - 1
 end
 
+func match_enum_name(s &: Sema, subj: int): str:
+    if subj < 0:
+        ret ""
+    end
+    if ty_at(s, subj).kind == TY_ENUM and ty_at(s, subj).decl != 0:
+        ret sym_at(s, ty_at(s, subj).decl).name
+    end
+    es := enum_data_sym(s, subj)
+    if es != 0:
+        ret sym_at(s, es).name
+    end
+    ret ""
+end
+
+func match_unqualify_arm(s &: Sema, a &: at.Ast, arm: int, subj: int):
+    ename := match_enum_name(s, subj)
+    if str.Len(ename) == 0:
+        ret
+    end
+    repeat at.ChildCount(a, arm) in i:
+        pa := at.Get(a, at.Child(a, arm, i)).a
+        if pa == 0 or at.KindOf(a, pa) != at.AST_IDENTIFIER:
+            continue
+        end
+        nm := at.Get(a, pa).name
+        dot := str.LastIndex(nm, ".")
+        if dot < 0:
+            continue
+        end
+        qual := str.Substr(nm, 0, dot)
+        qdot := str.LastIndex(qual, ".")
+        qlast := qdot < 0 ? qual : str.Substr(qual, qdot + 1, str.Len(qual) - qdot - 1)
+        if not str.Equals(qlast, ename):
+            serr(
+                s, 16, span_of(a, pa), co.Format3(
+                    i18.Tr("pattern '%s' names '%s', but the match subject is a '%s'"), co.ArgStr(nm), co.ArgStr(qual), co.ArgStr(ename)
+                )
+            )
+        end
+        at.SetName(a, pa, str.Substr(nm, dot + 1, str.Len(nm) - dot - 1))
+    end
+end
+
 func sema_check_match(
     s &: Sema, a &: at.Ast, nid: int, is_expr: bool, expected: int
 ): int:
@@ -190,6 +233,7 @@ func sema_check_match(
         mut coll_off := 0 - 1
         mut coll_cnt := 0
 
+        match_unqualify_arm(s, a, arm, subj)
         struct_arm_prepare(s, a, arm, subj)
         tags_mark := seen_tags.len()
         mems_mark := seen_members.len()

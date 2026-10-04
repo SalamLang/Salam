@@ -694,7 +694,9 @@ reg := Vector {} as Vector<dyn Shape>                            // heterogeneou
 changing the original afterwards does not reach the field. Copying the
 struct shares the box, the same way copying a Vector shares its storage, so a
 method that changes state through one copy shows in the other. Release the
-box with `field.free()` when you are done with it.
+box with `field.free()` when you are done with it. `copy()` shares the box
+too, and `deep_copy()` refuses a struct with a `dyn` field, since it cannot
+know the concrete type; give such a struct its own `deep_copy()`.
 
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every

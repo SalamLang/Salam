@@ -22,8 +22,11 @@ include i18 "../i18n.salam"
 
 const CP_SHALLOW := 1
 const CP_DEEP := 2
+const CP_VALUE := 3
 const CP_ALL := 2147483647
 const CP_MAX_DEPTH := 32
+const CP_DYN_METHOD := "__dcopy"
+const CP_DYN_VALUE := "__dcopy_value"
 
 func copy_method_kind(name: str): int:
     canon := intrinsic_method_canon(name)
@@ -33,7 +36,81 @@ func copy_method_kind(name: str): int:
     if str.Equals(canon, "deep_copy"):
         ret CP_DEEP
     end
+    if str.Equals(name, CP_DYN_VALUE):
+        ret CP_VALUE
+    end
     ret 0
+end
+
+func copy_dyn_deep_ok(s &: Sema, t: int): bool:
+    if t < 0 or ty_at(s, t).kind != TY_DYN:
+        ret false
+    end
+    iface := ty_at(s, t).decl
+    ret iface != 0 and sym_at(s, iface).members != 0 and scope_lookup_local(s, sym_at(s, iface).members, CP_DYN_METHOD) != 0
+end
+
+func copy_program_deep_copies(a &: at.Ast): bool:
+    n := at.Count(a)
+    mut i := 1
+    until i < n:
+        nd := at.Get(a, i)
+        if nd.kind == at.AST_MEMBER and str.Equals(intrinsic_method_canon(nd.name), "deep_copy"):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func copy_iface_required(a &: at.Ast, iface: int): int:
+    mut req := 0
+    iv := at.Get(a, iface)
+    repeat iv.list.len() in i:
+        m := at.Get(a, iv.list.get(i))
+        if m.kind == at.AST_FUNC_DEF:
+            if str.Equals(m.name, CP_DYN_METHOD):
+                ret 0 - 1
+            end
+            if m.a == 0:
+                req += 1
+            end
+        end
+    end
+    ret req
+end
+
+func copy_inject_dyn_deep(s &: Sema, a &: at.Ast, program: int):
+    if s.in_pkg or not copy_program_deep_copies(a):
+        ret
+    end
+    mut ifaces := Vector {} as Vector<int>
+    defer ifaces.free()
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_INTERFACE_DEF and d.typarams.len() == 0 and str.Len(d.name) > 0 and copy_iface_required(a, did) > 0:
+            ifaces.push(did)
+        end
+    end
+    repeat ifaces.len() in j:
+        did2 := ifaces.get(j)
+        nm := at.Get(a, did2).name
+        text := "interface " + nm + ":\n" + DV_IND + "func " + CP_DYN_METHOD + "(): dyn " + nm + ":\n" + DV_IND + DV_IND + "ret this." + CP_DYN_VALUE + "() as dyn " + nm + "\n" + DV_IND + "end\nend\n"
+        prog := derive_parse(s, a, text, "<derived>")
+        if prog == 0 or at.ChildCount(a, prog) == 0:
+            continue
+        end
+        tmp := at.Child(a, prog, 0)
+        if at.ChildCount(a, tmp) == 0:
+            continue
+        end
+        fn := at.Child(a, tmp, 0)
+        mut fv := at.Get(a, fn)
+        fv.origin_lang = "en"
+        at.Put(a, fn, fv)
+        at.AddChild(a, did2, fn)
+    end
 end
 
 func copy_inst_arg(s &: Sema, t: int, base: str, nargs: int, idx: int): int:
@@ -110,7 +187,7 @@ func copy_needs_deep(s &: Sema, t: int, depth: int): bool:
     if t < 0 or depth > CP_MAX_DEPTH:
         ret false
     end
-    if copy_is_str(s, t) or copy_is_vec(s, t) or copy_is_map(s, t):
+    if copy_is_str(s, t) or copy_is_vec(s, t) or copy_is_map(s, t) or copy_dyn_deep_ok(s, t):
         ret true
     end
     v := ty_at(s, t)
@@ -152,7 +229,7 @@ func copy_deep_blocker(s &: Sema, t: int, depth: int, path: str): str:
     end
     v := ty_at(s, t)
     k := v.kind
-    if derive_is_plain(s, t) or k == TY_STR or k == TY_ENUM or k == TY_FUNC:
+    if derive_is_plain(s, t) or k == TY_STR or k == TY_ENUM or k == TY_FUNC or copy_dyn_deep_ok(s, t):
         ret ""
     end
     if copy_is_vec(s, t):
@@ -420,6 +497,30 @@ func copy_source(s &: Sema, a &: at.Ast, t: int, fname: str, spelling: str, deep
     ret copy_identity_source(fname, spelling)
 end
 
+func copy_type_spelling(s &: Sema, t: int): str:
+    if t < 0:
+        ret ""
+    end
+    if ty_at(s, t).kind == TY_DYN:
+        isym := ty_at(s, t).decl
+        ispell := isym != 0 ? derive_struct_spelling(s, isym) : ""
+        ret str.Len(ispell) > 0 ? "dyn " + ispell : ""
+    end
+    if copy_is_vec(s, t):
+        e := copy_type_spelling(s, copy_vec_elem(s, t))
+        ret str.Len(e) > 0 ? "Vector<" + e + ">" : ""
+    end
+    if copy_is_map(s, t):
+        k := copy_type_spelling(s, copy_map_key(s, t))
+        v := copy_type_spelling(s, copy_map_val(s, t))
+        ret str.Len(k) > 0 and str.Len(v) > 0 ? "HashMap<" + k + ", " + v + ">" : ""
+    end
+    if copy_is_str(s, t):
+        ret "str"
+    end
+    ret derive_type_spelling(s, t)
+end
+
 func copy_derive(s &: Sema, a &: at.Ast, t: int, deep: bool): str:
     k := ty_at(s, t).kind
     mut use_deep := deep
@@ -434,10 +535,7 @@ func copy_derive(s &: Sema, a &: at.Ast, t: int, deep: bool): str:
     if scope_lookup_local(s, s.global, fname) != 0:
         ret fname
     end
-    mut spelling := "str"
-    if k != TY_STR:
-        spelling = derive_type_spelling(s, t)
-    end
+    spelling := copy_type_spelling(s, t)
     if str.Len(spelling) == 0:
         ret ""
     end
@@ -458,18 +556,43 @@ func copy_derive(s &: Sema, a &: at.Ast, t: int, deep: bool): str:
 end
 
 func copy_try_call(
-    s &: Sema, a &: at.Ast, n: int, callee: int, objt: int, argtypes: Vector<int>, sp: co.SrcSpan
+    s &: Sema, a &: at.Ast, n: int, callee: int, objt0: int, argtypes: Vector<int>, sp: co.SrcSpan
 ): int:
+    mut objt := objt0
     mname := at.Get(a, callee).name
-    kind := copy_method_kind(mname)
+    mut kind := copy_method_kind(mname)
     if kind == 0 or objt < 0:
+        ret TYPE_NONE
+    end
+    if kind == CP_VALUE:
+        if ty_at(s, objt).kind == TY_PTR and ty_at(s, objt).pointee >= 0:
+            pointee := ty_at(s, objt).pointee
+            deref := new_node_at(a, at.AST_INDEX, sp)
+            mut dv := at.Get(a, deref)
+            dv.a = at.Get(a, callee).a
+            dv.b = ea_int(a, 0 as u64, sp)
+            dv.synthetic = true
+            at.Put(a, deref, dv)
+            _dz := sema_decorate(s, a, at.Get(a, deref).b, sema_ty(s, TY_I32))
+            _dd := sema_decorate(s, a, deref, pointee)
+            mut cvv := at.Get(a, callee)
+            cvv.a = deref
+            at.Put(a, callee, cvv)
+            objt = pointee
+        end
+        kind = str.Len(copy_deep_blocker(s, objt, 0, "value")) == 0 ? CP_DEEP : CP_SHALLOW
+    else ty_at(s, objt).kind == TY_DYN and kind == CP_DEEP and copy_dyn_deep_ok(s, objt) and argtypes.len() == 0:
+        sema_check_intrinsic_method_lang(s, mname, "deep_copy", sp)
+        at.SetName(a, callee, CP_DYN_METHOD)
         ret TYPE_NONE
     end
     canon := kind == CP_DEEP ? "deep_copy" : "copy"
     if copy_has_member(s, objt, mname, canon) and not copy_is_vec(s, objt) and not copy_is_map(s, objt):
         ret TYPE_NONE
     end
-    sema_check_intrinsic_method_lang(s, mname, canon, sp)
+    if not str.Equals(mname, CP_DYN_VALUE):
+        sema_check_intrinsic_method_lang(s, mname, canon, sp)
+    end
     nargs := argtypes.len()
     if nargs > 0 and not copy_takes_range(s, objt):
         serr(
@@ -521,6 +644,10 @@ func copy_try_call(
         end
     end
     fname := copy_derive(s, a, objt, kind == CP_DEEP)
+    if str.Len(fname) == 0 and str.Equals(mname, CP_DYN_VALUE):
+        at.Put(a, n, at.Get(a, at.Get(a, callee).a))
+        ret sema_decorate(s, a, n, objt)
+    end
     if str.Len(fname) == 0:
         serr(
             s, 12, sp, co.Format2(

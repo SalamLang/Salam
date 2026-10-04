@@ -560,11 +560,16 @@ d := Day.Sat
 println d as int                                   // 5
 
 grade := match score / 10:                         // match is an EXPRESSION
-    10, 9 => "A"
-    8 => "B"
-    else => "F"
+    10, 9: "A" end
+    8: "B" end
+    else: "F" end
 end
 ```
+
+**A match arm is always `pattern: … end`.** The older `pattern => expr` form
+was removed in 0.5.0; `=>` now means a lambda and nothing else. An arm's block
+may hold statements, and its value (when `match` is used as an expression) is
+the bare expression it ends with.
 
 **A comma (`,` or Persian `،`) is required between enum members** - a bare
 newline is not enough, because member names may contain spaces
@@ -590,9 +595,9 @@ enum Shape:
 end
 func area(s: Shape): f64:
     ret match s:
-        Circle(r) => 3.14 * r * r
-        Rect(w, h) => w * h
-        Empty => 0.0
+        Circle(r): 3.14 * r * r end
+        Rect(w, h): w * h end
+        Empty: 0.0 end
     end
 end
 println area(Shape.Rect(3.0, 4.0))
@@ -628,7 +633,7 @@ requires it to equal `expr`. A struct pattern with tests acts like a guard,
 so keep a final pattern without tests or an `else`.
 
 **Match guards:** any arm may add `if cond` after its patterns
-(`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
+(`Circle(r) if r > 10: "big" end`, `7 if ready:`). The guard sees the arm's
 bindings and runs only when the pattern matches; if it is false, matching
 continues with the next arm. A guarded arm does not count toward
 exhaustiveness, so keep an unguarded arm (or `else`) for that case.
@@ -640,9 +645,9 @@ Assign any member type; narrow it back with `match` on **type-name** patterns:
 mut v := 21 as Variant<i32, f64, str>   // initial cast is OK from a *member* type (i32)
 v = "offline"                            // then assign member-typed values directly
 label := match v:
-    i32 n => "int " + n
-    f64 f => "float " + f
-    str s => "text " + s
+    i32 n: "int " + n end
+    f64 f: "float " + f end
+    str s: "text " + s end
 end
 ```
 
@@ -2190,8 +2195,8 @@ Give your own `pub` API both spellings the same way:
     ن := نقطه { ایکس = ۳، ایگرگ = ۴ }
     سرچاپ ن.جمع()، دوبرابر(ن.ایکس)
     متن := همخوان رنگ.سبز:               // match: bare member names
-        قرمز، آبی => "گرم یا سرد"
-        سبز => "سبز"
+        قرمز، آبی: "گرم یا سرد" پایان
+        سبز: "سبز" پایان
     پایان
     ترابرد ک:                            // switch: each label has its own پایان
         ۳:
@@ -2237,9 +2242,9 @@ More forms, each checked with the current compiler:
 پایان
 روال مساحت(ش: شکل): اعشار۶۴:
     برگشت همخوان ش:
-        دایره(ر) => ۳.۱۴ * ر * ر
-        مستطیل(پ، ب) اگر پ == ب => پ * پ
-        مستطیل(پ، ب) => پ * ب
+        دایره(ر): ۳.۱۴ * ر * ر پایان
+        مستطیل(پ، ب) اگر پ == ب: پ * پ پایان
+        مستطیل(پ، ب): پ * ب پایان
     پایان
 پایان
 
@@ -2291,8 +2296,8 @@ More forms, each checked with the current compiler:
 // Variant
 روال شرح(م: گوناگون<صحیح، رشته>): رشته:
     برگشت همخوان م:
-        صحیح ع => "عدد " + ع
-        رشته ر => "متن " + ر
+        صحیح ع: "عدد " + ع پایان
+        رشته ر: "متن " + ر پایان
     پایان
 پایان
 
@@ -2333,8 +2338,8 @@ join(ر)
 All of §6 applies. In addition:
 
 1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
-2. **Enum patterns in `همخوان` are bare member names** (`سبز =>`), not
-   `رنگ.سبز =>`; the qualified form is a parse error in a pattern.
+2. **Enum patterns in `همخوان` are bare member names** (`سبز:`), not
+   `رنگ.سبز:`; the qualified form is a parse error in a pattern.
 3. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
    fallthrough continues into the next label unless you `بشکن`.
 4. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
@@ -2382,9 +2387,9 @@ A command-line program with a struct, a vector, a map and a match:
 
 روال برچسب(س: سطح): رشته:
     برگشت همخوان س:
-        کم => "ضعیف"
-        متوسط => "خوب"
-        زیاد => "عالی"
+        کم: "ضعیف" پایان
+        متوسط: "خوب" پایان
+        زیاد: "عالی" پایان
     پایان
 پایان
 

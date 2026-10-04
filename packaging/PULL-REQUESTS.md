@@ -1,20 +1,20 @@
 # Pull request text
 
 Ready-to-paste titles and bodies for the three targets that need a PR.
-Replace `0.4.0` if you are shipping a different version.
+Replace `0.5.0` if you are shipping a different version.
 
 ---
 
 ## 1. homebrew-core
 
 **Repository:** <https://github.com/Homebrew/homebrew-core>
-**Branch:** `salam-0.4.0`
+**Branch:** `salam-0.5.0`
 **File:** `Formula/s/salam.rb`
 
 **Title:**
 
 ```
-salam 0.4.0 (new formula)
+salam 0.5.0 (new formula)
 ```
 
 **Body:**
@@ -27,7 +27,7 @@ and JIT with no other toolchain installed.
 
 - Homepage: https://github.com/SalamLang/Salam
 - License: GPL-3.0-or-later
-- Latest release: https://github.com/SalamLang/Salam/releases/tag/v0.4.0
+- Latest release: https://github.com/SalamLang/Salam/releases/tag/v0.5.0
 
 ### Notes for reviewers
 
@@ -63,13 +63,13 @@ brew audit --strict --new packaging/dist/homebrew/salam.rb
 ## 2. microsoft/winget-pkgs
 
 **Repository:** <https://github.com/microsoft/winget-pkgs>
-**Branch:** `SalamLang.Salam-0.4.0`
-**Files:** `manifests/s/SalamLang/Salam/0.4.0/` - the three rendered YAML files.
+**Branch:** `SalamLang.Salam-0.5.0`
+**Files:** `manifests/s/SalamLang/Salam/0.5.0/` - the three rendered YAML files.
 
 **Title:**
 
 ```
-New package: SalamLang.Salam version 0.4.0
+New package: SalamLang.Salam version 0.5.0
 ```
 
 **Body:**
@@ -83,7 +83,7 @@ domain-specific language for describing user interfaces.
 - Publisher: Salam Language (https://github.com/SalamLang)
 - Package: https://github.com/SalamLang/Salam
 - License: GPL-3.0-or-later
-- Release: https://github.com/SalamLang/Salam/releases/tag/v0.4.0
+- Release: https://github.com/SalamLang/Salam/releases/tag/v0.5.0
 
 `ArchiveBinariesDependOnPath: true` is set deliberately: `salam.exe` resolves
 its standard library from the directory it lives in, so the extracted folder
@@ -102,13 +102,13 @@ folder.
 ## 3. nixpkgs
 
 **Repository:** <https://github.com/NixOS/nixpkgs>
-**Branch:** `salam-init-0.4.0`
+**Branch:** `salam-init-0.5.0`
 **File:** `pkgs/by-name/sa/salam/package.nix`
 
 **Title:**
 
 ```
-salam: init at 0.4.0
+salam: init at 0.5.0
 ```
 
 **Body:**

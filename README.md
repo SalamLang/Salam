@@ -72,10 +72,12 @@ inclusive environment for building high-performance software.
 **GNU-Linux/Mac:**
 
 ```bash
-{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh
 ```
 
-Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.5`.
+The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
+
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.5.0`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 `--no-modify-path` and `--help`; run it with `--help` for the full list.
 
@@ -99,23 +101,23 @@ irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps
 > negotiate TLS independently of .NET.
 
 To pass options, wrap the fetched script instead of piping it - a bare
-`irm ... 0.4.2 | iex` does not work, since that "0.4.2" is parsed as an
+`irm ... 0.5.0 | iex` does not work, since that "0.5.0" is parsed as an
 argument to `Invoke-RestMethod`, not to the installer:
 
 ```powershell
-iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam --version 0.4.2"
+iex "& { $(irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1) } --dir C:\Tools\Salam --version 0.5.0"
 ```
 
 Or set the matching environment variable before the plain piped form instead:
 
 ```powershell
-$env:SALAM_VERSION = "0.4.2"; irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
+$env:SALAM_VERSION = "0.5.0"; irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex
 ```
 
 Or from `cmd.exe`:
 
 ```bat
-curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat" --version 0.4.2
+curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat" --version 0.5.0
 ```
 
 ## 🧩 Editor Support

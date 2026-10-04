@@ -26,10 +26,12 @@ The fastest way to get `salam` on your machine:
 **GNU/Linux & macOS:**
 
 ```sh
-{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh
 ```
 
-Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.6`.
+The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
+
+Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.5.0`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
 `--no-modify-path` and `--help`; run it with `--help` for the full list.
 

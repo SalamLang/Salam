@@ -26,7 +26,7 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    name: Build & validate the ${{ matrix.lang }} book
+    name: Build & validate the ${{ matrix.lang }} books
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -52,71 +52,80 @@ jobs:
           cache-from: type=gha,scope=books
           cache-to: type=gha,mode=max,scope=books
 
-      - name: Build the ${{ matrix.lang }} book (XeLaTeX in Docker)
-        run: |
-          set -euo pipefail
-          case "${{ matrix.lang }}" in
-            en) book_dir=intro-programming ;;
-            fa) book_dir=salam-programming ;;
-            *) echo "::error::no book directory mapped for lang '${{ matrix.lang }}'"; exit 1 ;;
-          esac
-          echo "book_dir=$book_dir" >> "$GITHUB_ENV"
-          rm -f "books/${{ matrix.lang }}/$book_dir/"book.{aux,log,out,toc,xdv,pdf,fls,fdb_latexmk}
-          HOST_UID="$(id -u)"
-          HOST_GID="$(id -g)"
-          export HOST_UID HOST_GID
-          docker compose -f books/docker/docker-compose.yml run --rm books ${{ matrix.lang }}
-
-      - name: Verify the generated PDF is valid
+      - name: Build every ${{ matrix.lang }} book (XeLaTeX in Docker)
         run: |
           set -euo pipefail
           lang="${{ matrix.lang }}"
-          pdf="books/${lang}/${book_dir}/book.pdf"
-
-          if [ ! -f "$pdf" ]; then
-            echo "::error::Expected PDF was not generated: $pdf"
+          found=0
+          for dir in books/"$lang"/*/; do
+            [ -f "$dir/book.tex" ] || continue
+            found=$((found + 1))
+            rm -f "$dir"book.{aux,log,out,toc,xdv,pdf,fls,fdb_latexmk}
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no book.tex found under books/$lang"
             exit 1
           fi
+          echo "building $found '$lang' book(s)"
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          export HOST_UID HOST_GID
+          docker compose -f books/docker/docker-compose.yml run --rm books "$lang"
 
+      - name: Verify every generated PDF is valid
+        run: |
+          set -euo pipefail
+          lang="${{ matrix.lang }}"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends poppler-utils qpdf
-
-          echo "::group::qpdf --check $pdf"
-          qpdf --check "$pdf" || echo "::warning::qpdf reported issues for $pdf (see log above)"
-          echo "::endgroup::"
-
-          info="$(pdfinfo "$pdf")"
-          echo "$info"
-          pages="$(printf '%s\n' "$info" | awk '/^Pages:/ {print $2}')"
-          case "$pages" in
-            ''|*[!0-9]*)
-              echo "::error::Could not read a valid page count from $pdf"
+          mkdir -p book-pdfs
+          {
+            echo "### 📘 ${lang} books"
+            echo ""
+            echo "| Book | Pages | Size |"
+            echo "|------|-------|------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          checked=0
+          for dir in books/"$lang"/*/; do
+            [ -f "$dir/book.tex" ] || continue
+            name="$(basename "$dir")"
+            pdf="${dir}book.pdf"
+            if [ ! -f "$pdf" ]; then
+              echo "::error::Expected PDF was not generated: $pdf"
               exit 1
-              ;;
-          esac
-          if [ "$pages" -lt 1 ]; then
-            echo "::error::$pdf reports $pages pages"
+            fi
+            echo "::group::qpdf --check $pdf"
+            qpdf --check "$pdf" || echo "::warning::qpdf reported issues for $pdf (see log above)"
+            echo "::endgroup::"
+            info="$(pdfinfo "$pdf")"
+            echo "$info"
+            pages="$(printf '%s\n' "$info" | awk '/^Pages:/ {print $2}')"
+            case "$pages" in
+              ''|*[!0-9]*)
+                echo "::error::Could not read a valid page count from $pdf"
+                exit 1
+                ;;
+            esac
+            if [ "$pages" -lt 1 ]; then
+              echo "::error::$pdf reports $pages pages"
+              exit 1
+            fi
+            size="$(du -h "$pdf" | cut -f1)"
+            echo "✅ ${lang}/${name} is a valid PDF: ${pages} pages, ${size}"
+            echo "| ${name} | ${pages} | ${size} |" >> "$GITHUB_STEP_SUMMARY"
+            cp "$pdf" "book-pdfs/salam-${lang}-${name}.pdf"
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no PDFs were checked for $lang"
             exit 1
           fi
+          echo "checked $checked '$lang' book PDF(s)"
 
-          size="$(du -h "$pdf" | cut -f1)"
-          echo "✅ ${lang} book is a valid PDF: ${pages} pages, ${size}"
-
-          {
-            echo "### 📘 ${lang} book - valid PDF"
-            echo ""
-            echo "| Property | Value |"
-            echo "|----------|-------|"
-            echo "| Pages | ${pages} |"
-            echo "| Size | ${size} |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          cp "$pdf" "intro-to-salam-${lang}.pdf"
-
-      - name: Upload the ${{ matrix.lang }} PDF artifact
+      - name: Upload the ${{ matrix.lang }} PDF artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: salam-book-${{ matrix.lang }}
-          path: intro-to-salam-${{ matrix.lang }}.pdf
+          path: book-pdfs/
           if-no-files-found: error
           retention-days: 30

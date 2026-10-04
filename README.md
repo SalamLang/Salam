@@ -72,8 +72,10 @@ inclusive environment for building high-performance software.
 **GNU-Linux/Mac:**
 
 ```bash
-{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh && export PATH="$HOME/.salam/bin:$PATH"
+{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh
 ```
+
+The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
 Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.3.5`.
 The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,

@@ -7,6 +7,76 @@ include tok "../token.salam"
 include at "../ast.salam"
 include sm "../semantic/semantic.salam"
 
+func cg_self_cmp_int_ts(ts: str): bool:
+    names := ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "usize", "size", "char"]
+    repeat 13 in i:
+        if str.Equals(ts, names[i]):
+            ret true
+        end
+    end
+    ret false
+end
+
+func cg_self_cmp_commutes(op: int): bool:
+    ret op == tok.TK_PLUS or op == tok.TK_STAR or op == tok.TK_AMP or op == tok.TK_PIPE or op == tok.TK_CARET
+end
+
+func cg_self_cmp_same(a &: at.Ast, x: int, y: int, depth: int): bool:
+    if x == 0 or y == 0 or depth > 16:
+        ret false
+    end
+    nx := at.Get(a, x)
+    ny := at.Get(a, y)
+    if nx.kind != ny.kind or not str.Equals(nx.type_str, ny.type_str):
+        ret false
+    end
+    k := nx.kind
+    if k == at.AST_IDENTIFIER:
+        ret str.Len(nx.name) > 0 and str.Equals(nx.name, ny.name)
+    end
+    if k == at.AST_LITERAL:
+        ret nx.op == tok.TK_INT and ny.op == tok.TK_INT and nx.value_int == ny.value_int
+    end
+    if k == at.AST_MEMBER:
+        ret str.Equals(nx.name, ny.name) and cg_self_cmp_same(a, nx.a, ny.a, depth + 1)
+    end
+    if k == at.AST_CAST:
+        ret cg_self_cmp_same(a, nx.a, ny.a, depth + 1)
+    end
+    if k == at.AST_UNARY:
+        if nx.a == 0 or ny.a == 0 or not cg_self_cmp_int_ts(at.Get(a, nx.a).type_str):
+            ret false
+        end
+        pure_op := nx.op == tok.TK_MINUS or nx.op == tok.TK_TILDE or nx.op == tok.TK_NOT
+        ret pure_op and nx.op == ny.op and cg_self_cmp_same(a, nx.a, ny.a, depth + 1)
+    end
+    if k == at.AST_BINARY:
+        if nx.a == 0 or nx.b == 0 or not cg_self_cmp_int_ts(at.Get(a, nx.a).type_str) or not cg_self_cmp_int_ts(at.Get(a, nx.b).type_str):
+            ret false
+        end
+        if nx.op != ny.op:
+            ret false
+        end
+        if cg_self_cmp_same(a, nx.a, ny.a, depth + 1) and cg_self_cmp_same(a, nx.b, ny.b, depth + 1):
+            ret true
+        end
+        ret cg_self_cmp_commutes(nx.op) and cg_self_cmp_same(a, nx.a, ny.b, depth + 1) and cg_self_cmp_same(a, nx.b, ny.a, depth + 1)
+    end
+    ret false
+end
+
+func cg_self_cmp(a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    op := nn.op
+    if op != tok.TK_EQ and op != tok.TK_NE and op != tok.TK_LT and op != tok.TK_GT and op != tok.TK_LE and op != tok.TK_GE:
+        ret ""
+    end
+    if not cg_self_cmp_int_ts(at.Get(a, nn.a).type_str) or not cg_self_cmp_same(a, nn.a, nn.b, 0):
+        ret ""
+    end
+    ret (op == tok.TK_EQ or op == tok.TK_LE or op == tok.TK_GE) ? "((bool)1)" : "((bool)0)"
+end
+
 func cg_op(k: int): str:
     if k == tok.TK_PLUS:
         ret "+"
@@ -797,6 +867,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret "this"
     end
     if k == at.AST_BINARY:
+        selfc := cg_self_cmp(a, n)
+        if str.Len(selfc) > 0:
+            ret selfc
+        end
         an := at.Get(a, nn.a)
         bn := at.Get(a, nn.b)
         if nn.a != 0 and str.Len(an.type_str) > 0:
@@ -964,6 +1038,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             dptr != sptr and (cg_is_int_typestr(dts) or cg_is_int_typestr(sts))
         ) or (dptr and str.Equals(sts, "str") and not str.Equals(dts, "str")):
             ret "((" + cg_ctype(tgt) + ")(intptr_t)(" + cg_expr(g, s, a, nn.a) + "))"
+        end
+        if str.Equals(tgt, "bool") and str.Len(sts) > 0 and not str.Equals(sts, "bool") and not str.Equals(sts, "str"):
+            ret "((bool)((" + cg_expr(g, s, a, nn.a) + ") != 0))"
         end
         ret "((" + cg_ctype(tgt) + ")(" + cg_expr(g, s, a, nn.a) + "))"
     end

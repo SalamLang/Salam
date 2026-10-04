@@ -641,6 +641,14 @@ if want db; then
                         continue
                     fi
                     ;;
+                pglive_*)
+                    if [ -z "${SALAM_TEST_PG:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_PG to a PostgreSQL connection string)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done

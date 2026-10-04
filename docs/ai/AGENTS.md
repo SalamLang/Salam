@@ -68,7 +68,7 @@ The `pub` rule is the one that bites hardest: a private helper written _after_
 your first public function will not compile. Put every private helper above the
 `// ---- public API ----` line.
 
-`salam format --fix-order` can reorder declarations mechanically.
+`salam format` reorders declarations mechanically; pass `--no-fix-order` to skip that.
 
 ## 3. Unused anything is an error, not a warning
 

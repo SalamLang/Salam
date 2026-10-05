@@ -1787,6 +1787,28 @@ and every `on<event>` handler work on all elements. All standard CSS properties
 are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 `active`/`before`/`after` prefixes (`hover color = "red"`).
 
+**Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
+rule, never an element. It sits directly under `layout`; `name` and `url`
+(`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
+`woff2`, `ttc`) is optional: without it the compiler reads the URL's extension,
+then the magic bytes of a local file next to the source. A remote URL with
+neither is E126, and a type that disagrees with the extension or the file is
+E127. The compiler never fetches over the network. Optional: `weight`
+(`300`, `"100 900"`), `style` (`italic`), `display` (`swap`), `range`
+(`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
+
+```salam
+layout:
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
+    box: content = "hi" font family = "Estedad, sans-serif" end
+end
+```
+
+**Safety.** URL-typed attributes reject `javascript:`, `vbscript:` and any
+`data:` that is not image/font/audio/video. CSS values cannot contain
+`{ } ; < >` or line breaks. A `style`/`script` body cannot contain
+`</style` or `</script`. Quoted CSS strings are escaped.
+
 **Everything is checked at compile time**:
 
 | code        | meaning                                                                       |
@@ -1802,6 +1824,8 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 | E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
 | E123        | a std generator (`std/layoutgen`) failed to compile or run                    |
 | E125        | element must come first (`caption` in `table`, `legend`, `summary`)           |
+| E126 / E127 | font type cannot be detected / declared type disagrees with the file          |
+| W128        | a local font file is missing next to the source                               |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero

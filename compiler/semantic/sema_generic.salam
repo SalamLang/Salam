@@ -79,7 +79,7 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             if cc.is_slice:
                 nv.is_slice = true
             end
-            if n_depth == 0 and nv.dims.len() == 0 and nv.elem_ptr_depth == 0:
+            if n_depth == 0 and nv.dims.len() == 0 and nv.elem_ptr_depth == 0 and not nv.is_slice:
                 nv.sema_type = cc.sema_type
             else cc_depth == 0 and cc.dims.len() == 0 and cc.elem_ptr_depth == 0:
                 nv.sema_base_type = cc.sema_type
@@ -556,6 +556,46 @@ func coerce_args_to_variant(
     end
 end
 
+func coerce_args_to_slice(
+    s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
+):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    mut i := 0
+    until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
+        pt := sg.params.get(i)
+        if array_fits_slice(s, pt, argtypes.get(i)) and not param_is_ref(s, a, sigid, i):
+            arg := at.Child(a, call, i)
+            sl := new_node_at(a, at.AST_SLICE, span_of(a, arg))
+            mut sv := at.Get(a, sl)
+            sv.a = arg
+            sv.synthetic = true
+            at.Put(a, sl, sv)
+            _ds := sema_decorate(s, a, sl, pt)
+            mut root := arg
+            until root != 0 and (at.KindOf(a, root) == at.AST_MEMBER or at.KindOf(a, root) == at.AST_INDEX or at.KindOf(a, root) == at.AST_SLICE):
+                root = at.Get(a, root).a
+            end
+            if root != 0 and at.KindOf(a, root) == at.AST_IDENTIFIER:
+                rsym := scope_lookup(s, s.cur, at.Get(a, root).name)
+                if rsym != 0:
+                    mut rv := sym_at(s, rsym)
+                    if rv.is_mut or rv.is_ref:
+                        rv.mutated = true
+                        sym_put(s, rsym, rv)
+                    end
+                end
+            end
+            mut cn := at.Get(a, call)
+            cn.list.set(i, sl)
+            at.Put(a, call, cn)
+        end
+        i += 1
+    end
+end
+
 func g_instantiate_func(
     s &: Sema, a &: at.Ast, tmpl: int, targ_nodes: Vector<int>, sp: co.SrcSpan
 ): int:
@@ -622,6 +662,12 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
     pn := intrinsic_type_canon(p.name)
     v := ty_at(s, att)
     if str.Equals(p.name, tname) and p.dims.len() == 0:
+        if p.is_slice:
+            if v.kind == TY_SLICE or v.kind == TY_ARRAY:
+                ret v.elem
+            end
+            ret TYPE_NONE
+        end
         if p.is_pointer:
             if v.kind == TY_PTR:
                 ret v.pointee

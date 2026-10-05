@@ -20,9 +20,10 @@ description: >-
 
 Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
-**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with a
-tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
-LLVM. Source can be written in English or Persian, with the same grammar and
+**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with an
+interpreter (`salam exec`, pure compute only) that compiles each function to
+register bytecode on first call (`SALAM_VM=0` falls back to the plain
+tree-walker), and cross-compiled via LLVM. Source can be written in English or Persian, with the same grammar and
 the same compiler rules in both.
 
 This skill has two parts:
@@ -315,22 +316,24 @@ end
 
 - **`defer stmt`** runs at scope exit, LIFO, which is great for cleanup:
   `defer v.free()`.
-- **Closures/lambdas** are first-class typed values: `(x: int) => x * 2`, or a
-  block form `(): n = n + 1  ret n  end`. Function-typed parameters:
-  `func () int`, `func (int, int) bool`.
+- **Closures/lambdas** are first-class typed values, always written
+  `(params): ... end` with an explicit `ret` for the value:
+  `(x: int): ret x * 2 end`, or several statements
+  `(): n = n + 1  ret n  end`. Salam has no `=>` at all; it was removed in
+  0.5.0. Function-typed parameters: `func () int`, `func (int, int) bool`.
   - **Lambdas capture by value.** Each lambda gets its own copy of the outer
-    variables at creation time: after `mut n := 1  g := () => n  n = 5`,
+    variables at creation time: after `mut n := 1  g := (): ret n end  n = 5`,
     `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
     own copy (it counts across calls), never the caller's `n`. Share state
     through a pointer, a heap collection or a `mut` global.
-  - **Never write a return type on a lambda.** `(x: int): int => x` and a
-    block `(x: int): int: ... end` fail to parse; the return type is inferred
-    (`(x: int): ... ret x * 2 end` is fine).
+  - **Never write a return type on a lambda.** `(x: int): int: ... end`
+    fails to parse; the return type is inferred from the `ret`
+    (`(x: int): ret x * 2 end`).
   - **A bare named function decays to its address**, typed `i64` - the slot
     C-style callback registries take (e.g. the `web` router):
     `web.Get(r, "/", home)`. For a `void*` slot, or to cast to a typed C
     function pointer, use **`&fn`** instead. For a _typed_ Salam callback
-    (`func (int) int`), pass a **lambda**: `apply((x: int) => inc(x), 3)`.
+    (`func (int) int`), pass a **lambda**: `apply((x: int): ret inc(x) end, 3)`.
   - **A variable may not reuse a function's name.** With a bare name being a
     value, `test := 5` next to `func test` is rejected (E090), in both
     directions, so an identifier always means exactly one thing.
@@ -406,6 +409,7 @@ grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
 mid := a[1: 3]                        // slice (view) of a[1] and a[2]; writes through to `a`
 whole := a[:]  head := a[: 2]  tail := a[1:]   // omitted bound = that end of `a`
 func sum(view: int[]): int: ... end   // int[] = slice parameter, any length
+sum(a)  sum([4, 5])  sum(a[1:])       // an array passes as a slice directly, no copy
 len(a)                                // length builtin
 ```
 
@@ -560,11 +564,16 @@ d := Day.Sat
 println d as int                                   // 5
 
 grade := match score / 10:                         // match is an EXPRESSION
-    10, 9 => "A"
-    8 => "B"
-    else => "F"
+    10, 9: "A" end
+    8: "B" end
+    else: "F" end
 end
 ```
+
+**A match arm is always `pattern: … end`.** The older `pattern => expr` form
+was removed in 0.5.0, along with `=>` itself: the token is not part of the
+language any more. An arm's block may hold statements, and its value (when
+`match` is used as an expression) is the bare expression it ends with.
 
 **A comma (`,` or Persian `،`) is required between enum members** - a bare
 newline is not enough, because member names may contain spaces
@@ -590,9 +599,9 @@ enum Shape:
 end
 func area(s: Shape): f64:
     ret match s:
-        Circle(r) => 3.14 * r * r
-        Rect(w, h) => w * h
-        Empty => 0.0
+        Circle(r): 3.14 * r * r end
+        Rect(w, h): w * h end
+        Empty: 0.0 end
     end
 end
 println area(Shape.Rect(3.0, 4.0))
@@ -628,7 +637,7 @@ requires it to equal `expr`. A struct pattern with tests acts like a guard,
 so keep a final pattern without tests or an `else`.
 
 **Match guards:** any arm may add `if cond` after its patterns
-(`Circle(r) if r > 10 => "big"`, `7 if ready:`). The guard sees the arm's
+(`Circle(r) if r > 10: "big" end`, `7 if ready:`). The guard sees the arm's
 bindings and runs only when the pattern matches; if it is false, matching
 continues with the next arm. A guarded arm does not count toward
 exhaustiveness, so keep an unguarded arm (or `else`) for that case.
@@ -640,9 +649,9 @@ Assign any member type; narrow it back with `match` on **type-name** patterns:
 mut v := 21 as Variant<i32, f64, str>   // initial cast is OK from a *member* type (i32)
 v = "offline"                            // then assign member-typed values directly
 label := match v:
-    i32 n => "int " + n
-    f64 f => "float " + f
-    str s => "text " + s
+    i32 n: "int " + n end
+    f64 f: "float " + f end
+    str s: "text " + s end
 end
 ```
 
@@ -1479,7 +1488,7 @@ General mapping that applies to all source languages:
 | string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
 | exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
 | null / nil / None            | `null` (pointers) or `Option.None()`                                              |
-| lambda / closure             | `(x: int) => expr` or block lambda; type `func (…) R`                             |
+| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                       |
 | enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
 | module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
 | free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
@@ -1506,9 +1515,9 @@ General mapping that applies to all source languages:
 - `class`→`struct`, `interface`→`interface`, `enum`→`enum`, generics carry over
   (`Array<T>`→`Vector<T>`, `Map`→`HashMap`, `Set`→`Set`, object literal→`struct`
   or `HashMap<str, …>`).
-- Arrow functions `(x) => x*2` map almost directly: `(x: int) => x * 2` (add
-  types). `Promise`/`async`/`await` have **no equivalent**, so use synchronous
-  code, or `spawn`/`join` + `sync` (§8) for real parallelism.
+- Arrow functions `(x) => x*2` become `(x: int): ret x * 2 end` (add types;
+  Salam has no `=>`). `Promise`/`async`/`await` have **no equivalent**, so use
+  synchronous code, or `spawn`/`join` + `sync` (§8) for real parallelism.
 - `let`/`const`→`mut`/`:=`+`const`. `null`/`undefined`→`null`/`Option`.
   `JSON.parse/stringify`→`json.*`. `throw`→`bool`/`Option`.
 - Truthiness is gone: conditions must be real `bool`.
@@ -1611,7 +1620,7 @@ Without it a worker can only reach globals.
 Rest of `sync`: `CondVar` (`NewCondVar`/`WaitCond`/`WaitCondTimeout`/`Signal`/
 `Broadcast` - always re-test your predicate in an `until` loop, wakeups can be
 spurious), `RWMutex` (`RLock`/`RUnlock`/`WLock`/`WUnlock`, writer-preferring),
-`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, () => ... end)`),
+`Semaphore` (`Acquire`/`TryAcquire`/`Release`), `Once` (`Do(o, (): ... end)`),
 `SleepMs`, `NowMs` (unspecified epoch - only differences mean anything).
 Everything blocks on a condition variable rather than polling.
 
@@ -1679,6 +1688,42 @@ else:                 const SEP := "/"
 end
 ```
 
+**In Persian these constants have Persian names, and only those work.** Persian
+has no upper case, so a leading `سلام` is what marks a name as the language's
+own rather than yours; the rest of the words follow it separated by spaces, the
+way multi-word names already are elsewhere:
+
+| English                                          | Persian                                          |
+| ------------------------------------------------ | ------------------------------------------------ |
+| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
+| `SALAM_ARCH_X64` / `_ARM64`                      | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
+| `SALAM_OS` / `SALAM_ARCH`                        | `سلام سیستم` / `سلام معماری`                     |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `defined(X)`                                     | `تعریف‌شده(X)`                                   |
+
+These names are matched the way Persian keywords are, so a ZWNJ, a space, an
+Arabic yeh for a Persian one and an Arabic kaf for a keheh are all the same
+name: `سلام اشکال‌زدایی حافظه` and `سلام اشکال زدایی حافظه` both name
+`SALAM_MEM_DEBUG`. Write whichever reads better.
+
+```salam
+اگر سلام سیستم لینوکس:
+    سرچاپ سلام سیستم، سلام معماری، سلام نگارش
+پایان
+```
+
+The two spellings do not mix, and the error names the one you wanted:
+`SALAM_OS_LINUX` in a Persian file reports _this file's language writes that
+built-in constant as `سلام سیستم لینوکس`_, and the reverse in an English file. Which set
+applies is decided per file, by the same language detection the keywords use, so
+a Persian program importing English `std/` is fine. Your own `-DNAME` defines
+are never translated, in either language.
+
+`SALAM_JS` / `سلام جاوااسکریپت` is the one flag that is only _defined_ on the JS
+backend rather than defaulting to false, so test it with `defined` in either
+language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
+English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
+
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
 `link dynamic "user32"` → `-luser32`).
@@ -1716,24 +1761,57 @@ layout:
 end
 ```
 
-**Elements** (see `std/layout/elements/`): `layout box header footer nav
-section article heading paragraph span bold strong italic font line break list
-item link head_link image media iframe canvas table row cell form label input
-button script style meta global`.
+**Elements** (`std/layout/elements/`, one `LayoutElement` const per element or
+context variant): every current HTML element, with the full list, Persian
+names and placement rules in `docs/LAYOUT_ELEMENTS.md`. Common ones: `box`
+(div), `paragraph`, `heading` (`size = 1..6`), `span`, `link` (a), `image`
+(img), `list`/`ordered list`/`item`, `table`/`row`/`column`, `form`, `input`,
+`select`/`option`, `text area`, `button`, `label`, `video`/`audio`/`source`,
+`figure`, `details`/`summary`, `dialog`. Every element also accepts its HTML tag
+name (`div`, `a`, `img`, `td`, ...).
 
-**Style properties** (`std/layout/style/`): `background color
-border border_color border_radius box_shadow box_sizing display position
-top right bottom left width height min/max_width min/max_height margin margin_top
-padding gap grid_template_columns flex_wrap align_items justify_content
-aspect_ratio font_family font_size font_weight line_height text_align
-text_decoration text_transform text_shadow letter/opacity overflow cursor
-touch_action tap_highlight`.
+The same name can mean different tags by context. Inside `table`, `header`,
+`main` and `footer` become `<thead>`, `<tbody>` and `<tfoot>`. `column` is `<th>`
+inside a table header row (or with `heading = true`) and `<td>` everywhere else.
+A plain `table: row: column:` emits `<table><tr><td>` with no implicit tbody.
 
-**Attributes** (`std/layout/attributes/`): identity (`id`, `class`),
-forms (`type`, `name`, `value`, `required`, `placeholder`), links/media
-(`href`, `src`, `alt`, `target`), i18n (`lang`, `dir`), ARIA, data-attrs, and
-`selector`. **Value enums** (`std/layout/values/`): named `colors`,
-`units`, `directions`, `input-types`, `languages`, `targets`.
+**Attributes are scoped per element.** The same Salam name maps to the right HTML
+name for each element: `url` is `href` on `link`/`head link` and `src` on
+`image`/`iframe`/`script` (`source`, `href`, `src` and `نشانی` are aliases).
+Global attributes (`id`, `class`, `title`, `lang`, `dir`, `hidden`, `tabindex`,
+`role`, `content`, `repeat`), ARIA (`aria label` ... and any `aria <name>`), data
+attributes (`data view`, or any `data <name>` which becomes `data-<name>`),
+and every `on<event>` handler work on all elements. All standard CSS properties
+are registered (`background color`, `z index`, ...), with `hover`/`focus`/
+`active`/`before`/`after` prefixes (`hover color = "red"`).
+
+**Everything is checked at compile time**:
+
+| code        | meaning                                                                       |
+| ----------- | ----------------------------------------------------------------------------- |
+| E004 / E117 | wrong direct parent / missing required ancestor (`item` outside `list`)       |
+| E005        | missing required attribute (`link` and `image` need `url`)                    |
+| E018        | value has the wrong type (URL, int, uint, float, color, date, MIME type, ...) |
+| E111 / E112 | unknown element / unknown attribute, with "did you mean"                      |
+| E113 / E114 | attribute not allowed on this element / given twice                           |
+| E115 / E116 | child not allowed here / forbidden anywhere inside (link in link)             |
+| E118 / E119 | void element with children / element that cannot hold text                    |
+| E120        | element allowed only once (`main`, table `header`)                            |
+| E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
+| E123        | a std generator (`std/layoutgen`) failed to compile or run                    |
+| E125        | element must come first (`caption` in `table`, `legend`, `summary`)           |
+| W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
+
+Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+on any of these errors.
+
+**Generators.** Most elements use the data-driven default generator. A
+`generator` field on an element or on an enum value picks a std generator: a
+plain Salam function in `std/layoutgen` that takes a `layoutgen.Node` and returns
+a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
+`input: type = "jalali date" end` emits `<input type="text" class="elm_1">` plus
+the JS that validates and normalises Jalali dates. The schema format is
+documented in `docs/LAYOUT_SCHEMA.md`.
 
 Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with
@@ -2184,14 +2262,14 @@ Give your own `pub` API both spellings the same way:
         چاپ ای، ""
     پایان
     آ := [۱۰، ۲۰]
-    هر (ش، م) در آ:                      // index and value
+    هر ش، م در آ:                      // index and value
         سرچاپ ش، م
     پایان
     ن := نقطه { ایکس = ۳، ایگرگ = ۴ }
     سرچاپ ن.جمع()، دوبرابر(ن.ایکس)
     متن := همخوان رنگ.سبز:               // match: bare member names
-        قرمز، آبی => "گرم یا سرد"
-        سبز => "سبز"
+        قرمز، آبی: "گرم یا سرد" پایان
+        سبز: "سبز" پایان
     پایان
     ترابرد ک:                            // switch: each label has its own پایان
         ۳:
@@ -2217,12 +2295,12 @@ More forms, each checked with the current compiler:
 ناپایا نگ := نگاشت {} برگردان نگاشت<رشته، صحیح>
 دیرکن نگ.آزادکن()
 نگ.درج("الف"، ۱)
-هر (کلید، مقدار) در نگ:
+هر کلید، مقدار در نگ:
     سرچاپ کلید، مقدار
 پایان
 
 // lambdas: no return type, captured by value
-دوبرابر := (ع: صحیح) => ع * ۲
+دوبرابر := (ع: صحیح): برگشت ع * ۲ پایان
 رده := (نمره: صحیح):
     برگشت نمره >= ۱۰ ? "قبول" : "مردود"
 پایان
@@ -2237,9 +2315,9 @@ More forms, each checked with the current compiler:
 پایان
 روال مساحت(ش: شکل): اعشار۶۴:
     برگشت همخوان ش:
-        دایره(ر) => ۳.۱۴ * ر * ر
-        مستطیل(پ، ب) اگر پ == ب => پ * پ
-        مستطیل(پ، ب) => پ * ب
+        دایره(ر): ۳.۱۴ * ر * ر پایان
+        مستطیل(پ، ب) اگر پ == ب: پ * پ پایان
+        مستطیل(پ، ب): پ * ب پایان
     پایان
 پایان
 
@@ -2291,8 +2369,8 @@ More forms, each checked with the current compiler:
 // Variant
 روال شرح(م: گوناگون<صحیح، رشته>): رشته:
     برگشت همخوان م:
-        صحیح ع => "عدد " + ع
-        رشته ر => "متن " + ر
+        صحیح ع: "عدد " + ع پایان
+        رشته ر: "متن " + ر پایان
     پایان
 پایان
 
@@ -2333,28 +2411,39 @@ join(ر)
 All of §6 applies. In addition:
 
 1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
-2. **Enum patterns in `همخوان` are bare member names** (`سبز =>`), not
-   `رنگ.سبز =>`; the qualified form is a parse error in a pattern.
-3. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
+2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
+   like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
+   `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
+   an English file `«` is not a delimiter at all. Leaving one open reports its
+   own error rather than the double-quote one, since the fix is different:
+   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
+   with no `«` before it is its own error too, rather than being swallowed
+   into the identifier that follows it.
+3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
+   `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
+   Persian file. See §8.
+4. **Enum patterns in `همخوان` are bare member names** (`سبز:`), not
+   `رنگ.سبز:`; the qualified form is a parse error in a pattern.
+5. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
    fallthrough continues into the next label unless you `بشکن`.
-4. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
-5. **No `٫` decimal separator**; write `۱۲.۵`.
-6. **Output digits are ASCII** and booleans print as `true`/`false`.
-7. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
+6. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
+7. **No `٫` decimal separator**; write `۱۲.۵`.
+8. **Output digits are ASCII** and booleans print as `true`/`false`.
+9. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
    (`۰.۱ برگردان اعشار` prints `0.10000000149011612`). A float literal is
    already `اعشار۶۴`: casting a literal is allowed, but casting a variable
    to the type it already has is a useless cast (E093).
-8. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
-   write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
-9. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
-   `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
-   `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
-10. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
+10. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
+    write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
+11. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
+    `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
+    `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+12. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
     `حدبالا` or `حد_بالا`.
-11. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
+13. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
     The English name is not a fallback in a Persian file, and an invented
     translation will not resolve.
-12. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
+14. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
     same as in English, so search `tests/en/errors/` by code.
 
 ## 18. Complete Persian programs
@@ -2382,9 +2471,9 @@ A command-line program with a struct, a vector, a map and a match:
 
 روال برچسب(س: سطح): رشته:
     برگشت همخوان س:
-        کم => "ضعیف"
-        متوسط => "خوب"
-        زیاد => "عالی"
+        کم: "ضعیف" پایان
+        متوسط: "خوب" پایان
+        زیاد: "عالی" پایان
     پایان
 پایان
 

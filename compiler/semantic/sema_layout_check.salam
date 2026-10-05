@@ -1,0 +1,782 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+
+struct LayCheck:
+    pub stack: Vector<int> = Vector {}
+    pub ids: Vector<str> = Vector {}
+    pub ref_vals: Vector<str> = Vector {}
+    pub ref_nodes: Vector<int> = Vector {}
+    pub ref_names: Vector<str> = Vector {}
+    pub doc_unique: Vector<int> = Vector {}
+    pub comps: Vector<str> = Vector {}
+    pub unexpanded: bool = false
+end
+
+func lay_pseudo_prefix_len(name: str): int:
+    prefixes := ["hover", "focus", "active", "before", "after"]
+    repeat len(prefixes) in i:
+        p := prefixes[i]
+        pl := str.Len(p)
+        if str.Len(name) > pl + 1 and str.StartsWith(name, p):
+            sep := byte_at(name, pl)
+            if sep == 95 or sep == 32 or sep == 45:
+                ret pl + 1
+            end
+        end
+    end
+    ret 0
+end
+
+func lay_pseudo_rest_key(rest: str): str:
+    if str.Equals(lay_loose(rest), "content"):
+        ret "content"
+    end
+    ret lay_attr_key_exact(rest)
+end
+
+func lay_attr_text(a &: at.Ast, attr: int, out &: str): bool:
+    v := at.Get(a, attr).a
+    if v == 0:
+        ret false
+    end
+    vv := at.Get(a, v)
+    if vv.kind == at.AST_LITERAL:
+        if vv.value_kind == tok.TV_STRING:
+            out = vv.value_str
+            ret true
+        end
+        if vv.op == tok.TK_INT:
+            out = co.U64Toa(vv.value_int)
+            ret true
+        end
+        if vv.op == tok.TK_FLOAT:
+            out = co.Format1("%g", co.ArgFloat(vv.value_float))
+            ret true
+        end
+        if vv.op == tok.TK_KW_TRUE:
+            out = "true"
+            ret true
+        end
+        if vv.op == tok.TK_KW_FALSE:
+            out = "false"
+            ret true
+        end
+        ret false
+    end
+    if vv.kind == at.AST_IDENTIFIER:
+        out = vv.name
+        ret true
+    end
+    ret false
+end
+
+func lay_elem_attr(a &: at.Ast, el: int, name: str): int:
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_ATTR and str.Equals(c.name, name):
+            ret cid
+        end
+    end
+    ret 0
+end
+
+func lay_subtree_has_id(a &: at.Ast, el: int): bool:
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        if lay_elem_attr(a, cid, "id") != 0 or lay_subtree_has_id(a, cid):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_localize_attr(a &: at.Ast, attr: int):
+    name := at.Get(a, attr).name
+    key := lay_attr_key_exact(name)
+    if str.Len(key) > 0:
+        if not str.Equals(key, name):
+            at.SetName(a, attr, key)
+        end
+        ret
+    end
+    mut rest := ""
+    pkey := lay_attr_pattern_match(name, rest)
+    if str.Len(pkey) > 0:
+        ai := lay_attr_for(0 - 1, pkey)
+        if ai >= 0:
+            out := g_lay_attrs.get(ai).out
+            star := str.IndexOf(out, "*")
+            if star >= 0:
+                at.SetName(a, attr, str.Substr(out, 0, star) + str.Lower(str.Replace(str.Replace(rest, " ", "-"), "_", "-")))
+            end
+        end
+        ret
+    end
+    pl := lay_pseudo_prefix_len(name)
+    if pl > 0:
+        prest := lay_pseudo_rest_key(str.Substr(name, pl, str.Len(name) - pl))
+        if str.Len(prest) > 0:
+            at.SetName(a, attr, str.Substr(name, 0, pl - 1) + "_" + prest)
+        end
+    end
+end
+
+func lay_when_ok(a &: at.Ast, el: int, e: LayElem): bool:
+    aid := lay_elem_attr(a, el, e.when_attr)
+    if aid == 0:
+        ret false
+    end
+    if str.Len(e.when_value) == 0:
+        mut tv := ""
+        if lay_attr_text(a, aid, tv):
+            ret not str.Equals(tv, "false")
+        end
+        ret true
+    end
+    mut v := ""
+    if not lay_attr_text(a, aid, v):
+        ret false
+    end
+    if str.Equals(v, e.when_value):
+        ret true
+    end
+    mv := i18.LayoutValue(v)
+    ret str.Equals(mv, e.when_value) or str.Equals(lay_loose(mv), lay_loose(e.when_value))
+end
+
+func lay_context_score(a &: at.Ast, el: int, ei: int, stack: Vector<int>): int:
+    e := g_lay_elems.get(ei)
+    mut score := 0
+    n := stack.len()
+    if str.Len(e.parents) > 0:
+        if n == 0 or not lay_list_has_elem(e.parents, stack.get(n - 1)):
+            ret 0 - 1
+        end
+        score += 1
+    end
+    if str.Len(e.path) > 0:
+        mut parts := str.Split(e.path, ",")
+        defer parts.free()
+        if parts.len() > n:
+            ret 0 - 1
+        end
+        repeat parts.len() in k:
+            si := stack.get(n - 1 - k)
+            if si < 0 or not str.Equals(g_lay_elems.get(si).key, parts.get(k)):
+                ret 0 - 1
+            end
+        end
+        score += parts.len()
+    end
+    if str.Len(e.ancestors) > 0:
+        mut found := false
+        repeat n in j:
+            if lay_list_has_elem(e.ancestors, stack.get(j)):
+                found = true
+            end
+        end
+        if not found:
+            ret 0 - 1
+        end
+        score += 1
+    end
+    if str.Len(e.when_attr) > 0:
+        if not lay_when_ok(a, el, e):
+            ret 0 - 1
+        end
+        score += 2
+    end
+    ret score
+end
+
+func lay_resolve_elem(a &: at.Ast, el: int, stack: Vector<int>): int:
+    n := at.Get(a, el)
+    if n.op > 0 and n.op <= g_lay_elems.len():
+        ret n.op - 1
+    end
+    mut cands := lay_elem_candidates(n.name)
+    defer cands.free()
+    k := lay_elem_by_key(n.name)
+    if k >= 0:
+        mut seen := false
+        repeat cands.len() in i:
+            if cands.get(i) == k:
+                seen = true
+            end
+        end
+        if not seen:
+            cands.push(k)
+        end
+    end
+    if cands.len() == 0:
+        ret 0 - 1
+    end
+    if cands.len() == 1:
+        ret cands.get(0)
+    end
+    mut best := 0 - 1
+    mut best_score := 0 - 1
+    mut fallback := 0 - 1
+    repeat cands.len() in ci:
+        c := cands.get(ci)
+        if fallback < 0 and not schema_has_context(g_lay_elems.get(c)):
+            fallback = c
+        end
+        sc := lay_context_score(a, el, c, stack)
+        if sc > best_score:
+            best = c
+            best_score = sc
+        end
+    end
+    if best >= 0:
+        ret best
+    end
+    if fallback >= 0:
+        ret fallback
+    end
+    ret cands.get(0)
+end
+
+func lay_resolve_walk(a &: at.Ast, nid: int, stack &: Vector<int>):
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        if at.KindOf(a, cid) == at.AST_LAYOUT_ATTR:
+            lay_localize_attr(a, cid)
+        end
+    end
+    repeat at.ChildCount(a, nid) in j:
+        cid := at.Child(a, nid, j)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        repeat at.ChildCount(a, cid) in m:
+            gid := at.Child(a, cid, m)
+            if at.KindOf(a, gid) == at.AST_LAYOUT_ATTR:
+                lay_localize_attr(a, gid)
+            end
+        end
+        ei := lay_resolve_elem(a, cid, stack)
+        if ei >= 0:
+            at.SetName(a, cid, g_lay_elems.get(ei).key)
+            at.SetOp(a, cid, ei + 1)
+        end
+        stack.push(ei)
+        lay_resolve_walk(a, cid, stack)
+        _p := stack.pop()
+    end
+end
+
+func layout_resolve(a &: at.Ast, lb: int):
+    if lb == 0:
+        ret
+    end
+    lay_ensure()
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    stack.push(lay_elem_by_key("layout"))
+    lay_resolve_walk(a, lb, stack)
+end
+
+func lay_token_display(t: str): str:
+    if str.Len(t) > 0 and byte_at(t, 0) == 35:
+        ret t
+    end
+    ei := lay_elem_by_key(t)
+    ret ei >= 0 ? lay_elem_display(ei) : t
+end
+
+func lay_list_display(csv: str, sep: str, reverse: bool): str:
+    mut parts := str.Split(csv, ",")
+    defer parts.free()
+    mut out := ""
+    n := parts.len()
+    repeat n in i:
+        t := parts.get(reverse ? n - 1 - i : i)
+        if str.Len(out) > 0:
+            out += sep
+        end
+        out += lay_token_display(t)
+    end
+    ret out
+end
+
+func lay_effective_parent(stack: Vector<int>, from: int): int:
+    mut i := from
+    until i >= 0:
+        pi := stack.get(i)
+        if pi < 0:
+            ret 0 - 1
+        end
+        if not lay_csv_has(g_lay_elems.get(pi).children, "#transparent"):
+            ret pi
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+func lay_accepts_text(ei: int): bool:
+    e := g_lay_elems.get(ei)
+    if e.kind == LK_VOID:
+        ret false
+    end
+    if str.Len(e.children) == 0:
+        ret true
+    end
+    ret lay_csv_has(e.children, "text") or lay_csv_has(e.children, "#phrasing") or lay_csv_has(e.children, "#flow") or lay_csv_has(e.children, "#transparent")
+end
+
+func lay_check_placement(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
+    e := g_lay_elems.get(ei)
+    stack := ck.stack
+    n := stack.len()
+    parent := n > 0 ? stack.get(n - 1) : 0 - 1
+    if str.Len(e.parents) > 0 and parent >= 0 and not lay_list_has_elem(e.parents, parent):
+        serr(
+            s, 4, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' cannot be placed inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(parent))
+            )
+        )
+        ret
+    end
+    if str.Len(e.path) > 0 and lay_context_score(a, el, ei, stack) < 0:
+        serr(
+            s, 117, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' must be placed inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_list_display(e.path, " > ", true))
+            )
+        )
+        ret
+    end
+    if str.Len(e.ancestors) > 0:
+        mut found := false
+        repeat n in j:
+            if lay_list_has_elem(e.ancestors, stack.get(j)):
+                found = true
+            end
+        end
+        if not found:
+            serr(
+                s, 117, span_of(a, el), co.Format2(
+                    i18.Tr("element '%s' must be placed inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_list_display(e.ancestors, "' or '", false))
+                )
+            )
+            ret
+        end
+    end
+    if parent < 0:
+        ret
+    end
+    pe := g_lay_elems.get(parent)
+    if pe.kind == LK_VOID or pe.kind == LK_RAW:
+        serr(
+            s, 118, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' cannot contain child elements such as '%s'"), co.ArgStr(lay_elem_display(parent)), co.ArgStr(lay_elem_display(ei))
+            )
+        )
+        ret
+    end
+    repeat n in d:
+        outer := stack.get(d)
+        if outer >= 0 and lay_list_has_elem(g_lay_elems.get(outer).forbidden_desc, ei):
+            serr(
+                s, 116, span_of(a, el), co.Format2(
+                    i18.Tr("element '%s' cannot appear anywhere inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(outer))
+                )
+            )
+            ret
+        end
+    end
+    if e.kind == LK_VIRTUAL:
+        ret
+    end
+    if lay_list_has_elem(pe.forbidden, ei):
+        serr(
+            s, 115, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' is not allowed directly inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(parent))
+            )
+        )
+        ret
+    end
+    if lay_list_has_elem(pe.children, ei):
+        ret
+    end
+    eff := lay_effective_parent(stack, n - 1)
+    if eff < 0:
+        ret
+    end
+    ee := g_lay_elems.get(eff)
+    if eff != parent and lay_list_has_elem(ee.forbidden, ei):
+        serr(
+            s, 115, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' is not allowed directly inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(eff))
+            )
+        )
+        ret
+    end
+    if str.Len(ee.children) > 0 and not lay_list_has_elem(ee.children, ei):
+        serr(
+            s, 115, span_of(a, el), co.Format2(
+                i18.Tr("element '%s' is not allowed directly inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(eff))
+            )
+        )
+    end
+end
+
+func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
+    e := g_lay_elems.get(ei)
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut has_text := false
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        if at.KindOf(a, aid) != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        name := at.Get(a, aid).name
+        if str.Len(name) == 0:
+            continue
+        end
+        mut dup := false
+        repeat seen.len() in k:
+            if str.Equals(seen.get(k), name):
+                dup = true
+            end
+        end
+        if dup:
+            serr(
+                s, 114, span_of(a, aid), co.Format2(
+                    i18.Tr("duplicate attribute '%s' on '%s'"), co.ArgStr(lay_attr_display(name)), co.ArgStr(lay_elem_display(ei))
+                )
+            )
+            continue
+        end
+        seen.push(name)
+        mut key := lay_attr_key(name)
+        if str.Len(key) == 0:
+            key = name
+        end
+        pl := lay_pseudo_prefix_len(name)
+        mut ai := lay_attr_for(ei, key)
+        mut pseudo_content := false
+        if ai < 0 and pl > 0:
+            key = str.Substr(name, pl, str.Len(name) - pl)
+            if str.Equals(key, "content"):
+                pseudo_content = true
+            else:
+                ai = lay_attr_for(ei, key)
+                if ai >= 0 and g_lay_attrs.get(ai).dest != LA_CSS:
+                    ai = 0 - 1
+                end
+            end
+        end
+        if pseudo_content:
+            if not e.styled:
+                serr(
+                    s, 113, span_of(a, aid), co.Format2(
+                        i18.Tr("attribute '%s' is not allowed on '%s'"), co.ArgStr(name), co.ArgStr(lay_elem_display(ei))
+                    )
+                )
+            end
+            continue
+        end
+        if ai < 0:
+            if lay_attr_known(key):
+                serr(
+                    s, 113, span_of(a, aid), co.Format2(
+                        i18.Tr("attribute '%s' is not allowed on '%s'"), co.ArgStr(lay_attr_display(key)), co.ArgStr(lay_elem_display(ei))
+                    )
+                )
+            else:
+                mut cands := lay_attr_names_for(ei)
+                hint := lay_suggest_from(name, cands)
+                cands.free()
+                serr(
+                    s, 112, span_of(a, aid), co.Format3(
+                        i18.Tr("unknown attribute '%s' on '%s'%s"), co.ArgStr(name), co.ArgStr(lay_elem_display(ei)), co.ArgStr(hint)
+                    )
+                )
+            end
+            continue
+        end
+        av := g_lay_attrs.get(ai)
+        if (av.dest == LA_CSS or pl > 0) and not e.styled:
+            serr(
+                s, 113, span_of(a, aid), co.Format2(
+                    i18.Tr("attribute '%s' is not allowed on '%s'"), co.ArgStr(lay_attr_display(name)), co.ArgStr(lay_elem_display(ei))
+                )
+            )
+            continue
+        end
+        if av.dest == LA_CONTENT:
+            has_text = true
+        end
+        mut v := ""
+        if not lay_attr_text(a, aid, v):
+            continue
+        end
+        if not lay_attr_value_ok(ai, v):
+            serr(
+                s, 18, span_of(a, aid), co.Format3(
+                    i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(lay_attr_display(key)), co.ArgStr(v), co.ArgStr(lay_value_type_name(av.vtype))
+                )
+            )
+            continue
+        end
+        if str.Equals(key, "id"):
+            mut dupid := false
+            repeat ck.ids.len() in q:
+                if str.Equals(ck.ids.get(q), v):
+                    dupid = true
+                end
+            end
+            if dupid:
+                serr(
+                    s, 122, span_of(a, aid), co.Format1(i18.Tr("duplicate id '%s'"), co.ArgStr(v))
+                )
+            else:
+                ck.ids.push(v)
+            end
+        end
+        if av.vtype == VT_IDREF:
+            mut refs := str.Fields(v)
+            repeat refs.len() in r:
+                ck.ref_vals.push(refs.get(r))
+                ck.ref_nodes.push(aid)
+                ck.ref_names.push(lay_attr_display(key))
+            end
+            refs.free()
+        end
+    end
+    if has_text and not lay_accepts_text(ei):
+        serr(
+            s, 119, span_of(a, el), co.Format1(
+                i18.Tr("element '%s' cannot contain text"), co.ArgStr(lay_elem_display(ei))
+            )
+        )
+    end
+    if str.Len(e.required) == 0:
+        ret
+    end
+    mut req := str.Split(e.required, ",")
+    defer req.free()
+    repeat req.len() in ri:
+        piece := req.get(ri)
+        if str.Len(piece) == 0 or lay_elem_attr(a, el, piece) != 0:
+            continue
+        end
+        shown := lay_attr_display(piece)
+        serr(
+            s, 5, span_of(a, el), co.Format3(
+                i18.Tr("element '%s' is missing required attribute '%.*s'"), co.ArgStr(lay_elem_display(ei)), co.ArgInt(str.Len(shown) as i64), co.ArgStr(shown)
+            )
+        )
+    end
+end
+
+func lay_check_repeat(s &: Sema, a &: at.Ast, element: int, shown: str):
+    if lay_elem_attr(a, element, "repeat") == 0:
+        ret
+    end
+    if lay_elem_attr(a, element, "id") != 0:
+        serr(
+            s, 19, span_of(a, element), co.Format1(
+                i18.Tr("element '%s' cannot use 'repeat' together with 'id'"), co.ArgStr(shown)
+            )
+        )
+    else lay_subtree_has_id(a, element):
+        serr(
+            s, 19, span_of(a, element), co.Format1(
+                i18.Tr("element '%s' has 'repeat' but a nested element has an 'id'"), co.ArgStr(shown)
+            )
+        )
+    end
+end
+
+func lay_is_component(ck: LayCheck, name: str): bool:
+    repeat ck.comps.len() in i:
+        if str.Equals(ck.comps.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    mut sib := Vector {} as Vector<int>
+    defer sib.free()
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        cn := at.Get(a, cid)
+        if lay_is_component(ck, cn.name):
+            ck.stack.push(0 - 1)
+            lay_check_children(s, a, cid, ck)
+            _pc := ck.stack.pop()
+            continue
+        end
+        ei := cn.op - 1
+        if ei < 0:
+            if ck.unexpanded:
+                swarn(
+                    s, 2, span_of(a, cid), co.Format1(
+                        i18.Tr("unrecognized layout element '%s' (ignored)"), co.ArgStr(cn.name)
+                    )
+                )
+            else:
+                mut names := lay_elem_names()
+                hint := lay_suggest_from(cn.name, names)
+                names.free()
+                serr(
+                    s, 111, span_of(a, cid), co.Format2(
+                        i18.Tr("unknown layout element '%s'%s"), co.ArgStr(cn.name), co.ArgStr(hint)
+                    )
+                )
+            end
+            ck.stack.push(0 - 1)
+            lay_check_children(s, a, cid, ck)
+            _pu := ck.stack.pop()
+            continue
+        end
+        e := g_lay_elems.get(ei)
+        lay_check_placement(s, a, cid, ei, ck)
+        lay_check_attrs(s, a, cid, ei, ck)
+        lay_check_repeat(s, a, cid, lay_elem_display(ei))
+        if str.Equals(e.unique, "parent"):
+            mut again := false
+            repeat sib.len() in k:
+                if sib.get(k) == ei:
+                    again = true
+                end
+            end
+            if again:
+                serr(
+                    s, 120, span_of(a, cid), co.Format2(
+                        i18.Tr("element '%s' can appear only once inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(ck.stack.len() > 0 and ck.stack.get(ck.stack.len() - 1) >= 0 ? lay_elem_display(ck.stack.get(ck.stack.len() - 1)) : "layout")
+                    )
+                )
+            end
+        else str.Equals(e.unique, "document"):
+            mut again2 := false
+            repeat ck.doc_unique.len() in k2:
+                if ck.doc_unique.get(k2) == ei:
+                    again2 = true
+                end
+            end
+            if again2:
+                serr(
+                    s, 120, span_of(a, cid), co.Format1(
+                        i18.Tr("element '%s' can appear only once in a layout"), co.ArgStr(lay_elem_display(ei))
+                    )
+                )
+            else:
+                ck.doc_unique.push(ei)
+            end
+        end
+        if e.first and sib.len() > 0:
+            pidx := ck.stack.len() > 0 ? ck.stack.get(ck.stack.len() - 1) : 0 - 1
+            serr(
+                s, 125, span_of(a, cid), co.Format2(
+                    i18.Tr("element '%s' must be the first element inside '%s'"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(pidx >= 0 ? lay_elem_display(pidx) : "layout")
+                )
+            )
+        end
+        if e.kind != LK_VIRTUAL and not lay_list_has_elem("#script-supporting", ei):
+            sib.push(ei)
+        end
+        ck.stack.push(ei)
+        lay_check_children(s, a, cid, ck)
+        _pe := ck.stack.pop()
+    end
+end
+
+func lay_tree_has_include(a &: at.Ast, nid: int): bool:
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            nm := at.Get(a, cid).name
+            if str.Equals(nm, "include") or str.Equals(lay_attr_key(nm), "include"):
+                ret true
+            end
+        else k == at.AST_LAYOUT_ELEMENT and lay_tree_has_include(a, cid):
+            ret true
+        end
+    end
+    ret false
+end
+
+func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
+    if at.KindOf(a, nid) != at.AST_LAYOUT_BLOCK:
+        ret
+    end
+    lay_ensure()
+    lg.Log(
+        s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, i18.Tr("validating layout block")
+    )
+    mut ck := LayCheck {}
+    defer ck.stack.free()
+    defer ck.ids.free()
+    defer ck.ref_vals.free()
+    defer ck.ref_nodes.free()
+    defer ck.ref_names.free()
+    defer ck.doc_unique.free()
+    defer ck.comps.free()
+    if s.program != 0:
+        repeat at.ChildCount(a, s.program) in pi:
+            pid := at.Child(a, s.program, pi)
+            if at.KindOf(a, pid) == at.AST_LAYOUT_COMPONENT:
+                ck.comps.push(at.Get(a, pid).name)
+            end
+        end
+    end
+    ck.unexpanded = lay_tree_has_include(a, nid)
+    if not g_lay_schema_reported:
+        g_lay_schema_reported = true
+        repeat g_lay_schema_errors.len() in se:
+            swarn(
+                s, 124, span_of(a, nid), co.Format1(i18.Tr("layout schema problem: %s"), co.ArgStr(g_lay_schema_errors.get(se)))
+            )
+        end
+    end
+    layout_resolve(a, nid)
+    root := lay_elem_by_key("layout")
+    if lay_elem_attr(a, nid, "repeat") != 0 and lay_subtree_has_id(a, nid):
+        serr(
+            s, 19, span_of(a, nid), i18.Tr("layout uses 'repeat' but a nested element has an 'id'")
+        )
+    end
+    if root >= 0:
+        lay_check_attrs(s, a, nid, root, ck)
+    end
+    ck.stack.push(root)
+    lay_check_children(s, a, nid, ck)
+    repeat ck.ref_vals.len() in r:
+        want := ck.ref_vals.get(r)
+        mut ok := false
+        repeat ck.ids.len() in q:
+            if str.Equals(ck.ids.get(q), want):
+                ok = true
+            end
+        end
+        if not ok and not ck.unexpanded:
+            serr(
+                s, 121, span_of(a, ck.ref_nodes.get(r)), co.Format2(
+                    i18.Tr("'%s' refers to id '%s', but no element has that id"), co.ArgStr(ck.ref_names.get(r)), co.ArgStr(want)
+                )
+            )
+        end
+    end
+end

@@ -8,14 +8,67 @@ include at "../ast.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
 
+func ret_slice_local(s &: Sema, a &: at.Ast, e: int): str:
+    if e != 0 and at.KindOf(a, e) == at.AST_IDENTIFIER:
+        vs := scope_lookup(s, s.cur, at.At(a, e).name)
+        if vs == 0 or scope_lookup_local(s, s.global, at.At(a, e).name) == vs:
+            ret ""
+        end
+        vv := sym_at(s, vs)
+        if vv.kind != SYM_VAR or vv.is_mut or vv.decl == 0 or at.KindOf(a, vv.decl) != at.AST_VAR_DECL:
+            ret ""
+        end
+        ret vv.slice_of
+    end
+    if e == 0 or at.KindOf(a, e) != at.AST_SLICE:
+        ret ""
+    end
+    mut cur := at.Get(a, e).a
+    until cur != 0 and (at.KindOf(a, cur) == at.AST_MEMBER or at.KindOf(a, cur) == at.AST_INDEX or at.KindOf(a, cur) == at.AST_SLICE):
+        cur = at.Get(a, cur).a
+    end
+    if cur == 0:
+        ret ""
+    end
+    ck := at.KindOf(a, cur)
+    if ck == at.AST_ARRAY_LIT:
+        ret i18.Tr("an array literal")
+    end
+    if ck != at.AST_IDENTIFIER:
+        ret ""
+    end
+    nm := at.Get(a, cur).name
+    sym := scope_lookup(s, s.cur, nm)
+    if sym == 0 or scope_lookup_local(s, s.global, nm) == sym:
+        ret ""
+    end
+    sv := sym_at(s, sym)
+    if sv.is_ref or sv.ty < 0:
+        ret ""
+    end
+    tk := ty_at(s, sv.ty).kind
+    if tk == TY_SLICE or tk == TY_PTR:
+        ret ""
+    end
+    if sv.kind == SYM_VAR or sv.kind == SYM_PARAM or sv.kind == SYM_CONST:
+        ret "'" + nm + "'"
+    end
+    ret ""
+end
+
 func define_local(s &: Sema, a &: at.Ast, did: int, kind: int, t: int):
     d := at.Get(a, did)
+    mut slice_of := ""
+    if kind == SYM_VAR and not d.is_mut and d.a != 0 and at.KindOf(a, d.a) == at.AST_SLICE:
+        slice_of = ret_slice_local(s, a, d.a)
+    end
     symid := symbol_new(s, kind, d.name)
     mut sv := sym_at(s, symid)
     sv.ty = t
     sv.is_mut = d.is_mut
     sv.loop_bind = d.loop_bind
     sv.decl = did
+    sv.slice_of = slice_of
     sym_put(s, symid, sv)
     sema_check_shadows_func(s, d.name, span_of(a, did))
     if scope_define(s, s.cur, symid) != 0:
@@ -209,7 +262,7 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     end
     if map_like and not have_key:
         serr(
-            s, 65, sp, i18.Tr("iterating a HashMap needs two bindings: each (key, value) in map")
+            s, 65, sp, i18.Tr("iterating a HashMap needs two bindings: each key, value in map")
         )
         ret
     end
@@ -580,6 +633,9 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                     )
                     op_valid = false
                 end
+                if op_valid:
+                    sema_div_zero_check(s, a, base_op2, 0, n2.b, c, sp)
+                end
             end
         end
         if op_valid and not type_assignable(s, tt, vt):
@@ -810,6 +866,14 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
     end
     if k == at.AST_RETURN:
         n7 := at.Get(a, nid)
+        escp := (s.match_arm_depth > 0 and s.match_yield_active) ? "" : ret_slice_local(s, a, n7.a)
+        if str.Len(escp) > 0:
+            serr(
+                s, 12, sp, co.Format1(
+                    i18.Tr("cannot return a slice of %s: its memory is gone once the function returns; return the array itself or a Vector"), co.ArgStr(escp)
+                )
+            )
+        end
         if s.match_arm_depth > 0 and s.match_yield_active:
             saved_exp := s.expected
             s.expected = s.match_yield_expected

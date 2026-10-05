@@ -11,6 +11,26 @@ include at "../ast.salam"
 include sm "../semantic/semantic.salam"
 include mn "../minify.salam"
 
+struct LoAttrs:
+    pub first: str = ""
+    pub rest: str = ""
+    pub css: str = ""
+    pub hover: str = ""
+    pub focus: str = ""
+    pub active: str = ""
+    pub before: str = ""
+    pub after: str = ""
+    pub content: str = ""
+    pub has_content: bool = false
+    pub userclass: str = ""
+    pub has_userclass: bool = false
+    pub emitted: Vector<str> = Vector {}
+    pub keys: Vector<str> = Vector {}
+    pub vals: Vector<str> = Vector {}
+    pub gen: str = ""
+    pub gen_skip: str = ""
+end
+
 func repeat_count(a &: at.Ast, el: int): i64:
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
@@ -29,13 +49,16 @@ end
 func gen_children(
     cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, klass: str, has_klass: bool
 ):
-    parent := at.Get(a, el).name
+    saved := cx.parents
+    me := at.Get(a, el).name
+    cx.parents = str.Len(saved) > 0 ? me + "," + saved : me
     repeat at.ChildCount(a, el) in i:
         cid := at.Child(a, el, i)
         if at.KindOf(a, cid) == at.AST_LAYOUT_ELEMENT:
-            gen_element_n(cx, diag, a, cid, parent, klass, has_klass)
+            gen_element_n(cx, diag, a, cid, klass, has_klass)
         end
     end
+    cx.parents = saved
 end
 
 func has_child_elements(a &: at.Ast, el: int): bool:
@@ -62,48 +85,220 @@ func quote_css_value_if_needed(value: str): str:
 end
 
 func gen_element_n(
-    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, parent: str, parent_class: str, parent_has_class: bool
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, parent_class: str, parent_has_class: bool
 ):
     nrep := repeat_count(a, el)
     mut i := 0 as i64
     until i < nrep:
-        gen_element(cx, diag, a, el, parent, parent_class, parent_has_class)
+        gen_element(cx, diag, a, el, parent_class, parent_has_class)
         i += 1 as i64
     end
 end
 
-func gen_element(
-    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, _parent: str, parent_class: str, parent_has_class: bool
-):
-    name := at.Get(a, el).name
-    di := sm.LayoutElemLookup(name)
-    if di < 0:
-        dg.Report(
-            diag, dg.SEV_WARNING, 2, cx.file, span_of(a, el), co.Format1(
-                i18.Tr("unrecognized layout element '%s' (rendered as <div>)"), co.ArgStr(name)
-            )
-        )
+func lo_attr_get(la: LoAttrs, key: str, out &: str): bool:
+    repeat la.keys.len() in i:
+        if str.Equals(la.keys.get(i), key):
+            out = la.vals.get(i)
+            ret true
+        end
     end
-    mut ltype := K_LO_LE_MOTHER
-    if di >= 0:
-        ltype = sm.LayoutElemKind(di)
-    end
-    mut tag := "div"
-    if di >= 0 and str.Len(sm.LayoutElemTag(di)) > 0:
-        tag = sm.LayoutElemTag(di)
-    end
+    ret false
+end
 
-    if str.Equals(name, "heading"):
-        mut sz := 1 as i64
-        repeat at.ChildCount(a, el) in hi:
-            aid := at.Child(a, el, hi)
-            an := at.Get(a, aid)
-            if an.kind == at.AST_LAYOUT_ATTR and str.Equals(an.name, "size") and an.a != 0:
-                av := at.Get(a, an.a)
-                if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_INT:
-                    sz = av.value_int as i64
+func lo_emit_attr(la &: LoAttrs, out: str, value: str, primary: bool, bare: bool):
+    repeat la.emitted.len() in i:
+        if str.Equals(la.emitted.get(i), out):
+            ret
+        end
+    end
+    la.emitted.push(out)
+    piece := bare ? " " + out : " " + out + `="` + html_escape(value) + `"`
+    if primary:
+        la.first += piece
+    else:
+        la.rest += piece
+    end
+end
+
+func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
+    pl := sm.LayoutPseudoPrefixLen(nm)
+    if pl == 0:
+        ret false
+    end
+    rest := str.Substr(nm, pl, str.Len(nm) - pl)
+    ai := sm.LayoutAttrFor(ei, rest)
+    mut prop := hyphenate(rest)
+    mut val := v
+    if ai >= 0:
+        if str.Len(sm.LayoutAttrOut(ai)) > 0:
+            prop = sm.LayoutAttrOut(ai)
+        end
+        val = attr_value_map(ai, v)
+    end
+    if str.Equals(rest, "content"):
+        val = `"` + v + `"`
+    else:
+        val = quote_css_value_if_needed(val)
+    end
+    decl := css_decl(cx.compact, prop, val)
+    if str.StartsWith(nm, "hover_"):
+        la.hover += decl
+    else str.StartsWith(nm, "focus_"):
+        la.focus += decl
+    else str.StartsWith(nm, "active_"):
+        la.active += decl
+    else str.StartsWith(nm, "before_"):
+        la.before += decl
+    else:
+        la.after += decl
+    end
+    ret true
+end
+
+func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &: LoAttrs):
+    required := ei >= 0 ? sm.LayoutElemRequired(ei) : ""
+    repeat at.ChildCount(a, el) in i:
+        aid := at.Child(a, el, i)
+        an := at.Get(a, aid)
+        if an.kind != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        nm := an.name
+        v := val_str(a, an.a)
+        if lo_pseudo(cx, la, ei, nm, v):
+            continue
+        end
+        mut key := sm.LayoutAttrKey(nm)
+        if str.Len(key) == 0:
+            key = nm
+        end
+        la.keys.push(key)
+        la.vals.push(v)
+        ai := sm.LayoutAttrFor(ei, key)
+        if ai < 0:
+            lg.Log(
+                cx.log, lg.PH_CODEGEN, lg.LOG_TRACE, co.Format1("skipping unknown layout attribute '%s'", co.ArgStr(nm))
+            )
+            continue
+        end
+        dest := sm.LayoutAttrDest(ai)
+        mapped := attr_value_map(ai, v)
+        if sm.LayoutAttrVtype(ai) == sm.VT_ENUM:
+            g := sm.LayoutValueGenerator(sm.LayoutAttrAllowed(ai), mapped)
+            if str.Len(g) > 0:
+                la.gen = g
+                la.gen_skip = key
+                continue
+            end
+        end
+        primary := sm.LayoutCsvHas(required, key)
+        if dest == sm.LA_CONTENT:
+            la.content = v
+            la.has_content = true
+        else dest == sm.LA_CLASS:
+            la.userclass = v
+            la.has_userclass = true
+        else dest == sm.LA_STYLE:
+            lo_emit_attr(la, "style", v, primary, false)
+        else dest == sm.LA_DIR or dest == sm.LA_LANG:
+            lo_emit_attr(la, sm.LayoutAttrOut(ai), mapped, primary, false)
+        else dest == sm.LA_SOURCE:
+            lo_emit_attr(la, str.Equals(tag, "a") ? "href" : "src", v, true, false)
+        else dest == sm.LA_HTML:
+            mut out := sm.LayoutAttrOut(ai)
+            if str.IndexOf(out, "*") >= 0:
+                out = nm
+            end
+            if sm.LayoutAttrVtype(ai) == sm.VT_BOOL:
+                if not str.Equals(v, "false"):
+                    lo_emit_attr(la, out, "", primary, true)
+                end
+            else:
+                lo_emit_attr(la, out, mapped, primary, false)
+            end
+        else dest == sm.LA_HTML_OR_CSS:
+            if lo_all_digits(v):
+                lo_emit_attr(la, sm.LayoutAttrOut(ai), v, primary, false)
+            else:
+                la.css += css_decl(cx.compact, sm.LayoutAttrOut(ai), quote_css_value_if_needed(map_length(i18.LayoutValue(v))))
+            end
+        else dest == sm.LA_CSS:
+            mut prop := sm.LayoutAttrOut(ai)
+            if str.Len(prop) == 0:
+                prop = hyphenate(key)
+            end
+            mut cv := mapped
+            if str.Equals(prop, "background"):
+                c := sm.LayoutMapColor(i18.LayoutValue(v))
+                if str.Len(c) > 0:
+                    cv = c
                 end
             end
+            la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
+        end
+    end
+    if ei < 0:
+        ret
+    end
+    ekey := sm.LayoutElemKey(ei)
+    repeat sm.LayoutAttrCount() in d:
+        if not sm.LayoutAttrHasDefault(d) or not sm.LayoutCsvHas(sm.LayoutAttrScope(d), ekey):
+            continue
+        end
+        if sm.LayoutAttrDest(d) == sm.LA_HTML:
+            lo_emit_attr(la, sm.LayoutAttrOut(d), sm.LayoutAttrDefault(d), false, false)
+        end
+    end
+end
+
+func lo_class_for(cx &: LoCtx, la &: LoAttrs, klass &: str): bool:
+    klass = la.userclass
+    mut has := la.has_userclass
+    needs := str.Len(la.css) > 0 or str.Len(la.hover) > 0 or str.Len(la.focus) > 0 or str.Len(la.active) > 0 or str.Len(la.before) > 0 or str.Len(la.after) > 0
+    if needs and not has:
+        sep := char_from_code(31)
+        key := la.css + sep + la.hover + sep + la.focus + sep + la.active + sep + la.before + sep + la.after
+        klass = class_for_key(cx, key)
+        has = true
+    end
+    ret has
+end
+
+func lo_emit_rules(cx &: LoCtx, la: LoAttrs, klass: str):
+    if str.Len(la.css) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass, la.css))
+    end
+    if str.Len(la.hover) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":hover", la.hover))
+    end
+    if str.Len(la.focus) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":focus", la.focus))
+    end
+    if str.Len(la.active) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + ":active", la.active))
+    end
+    if str.Len(la.before) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + "::before", la.before))
+    end
+    if str.Len(la.after) > 0:
+        emit_rule(cx, css_rule(cx.compact, "." + klass + "::after", la.after))
+    end
+end
+
+func lo_free_attrs(la &: LoAttrs):
+    la.emitted.free()
+    la.keys.free()
+    la.vals.free()
+end
+
+func gen_native(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, gen: str, la &: LoAttrs, klass: str, has_klass: bool, parent_class: str, parent_has_class: bool, tag &: str
+): bool:
+    if str.Equals(gen, "heading"):
+        mut sv := ""
+        mut sz := 1
+        if lo_attr_get(la, "size", sv) and str.Len(sv) > 0:
+            sz = lo_atoi(sv)
         end
         if sz < 1:
             sz = 1
@@ -112,395 +307,158 @@ func gen_element(
             sz = 6
         end
         tag = "h" + co.U64Toa(sz as u64)
+        ret false
     end
-    lg.Log(
-        cx.log, lg.PH_CODEGEN, lg.LOG_TRACE, co.Format2("layout <%s> -> <%s>", co.ArgStr(name), co.ArgStr(tag))
-    )
-    if str.Equals(name, "meta"):
-        mut nmattr := ""
-        mut has_nm := false
-        mut prop := ""
-        mut has_prop := false
-        mut cont := ""
-        mut has_cont := false
-        mut charset := ""
-        mut has_charset := false
-        mut http_equiv := ""
-        mut has_he := false
-        repeat at.ChildCount(a, el) in mi:
-            aid := at.Child(a, el, mi)
-            an := at.Get(a, aid)
-            if an.kind != at.AST_LAYOUT_ATTR:
-                continue
-            end
-            v := val_str(a, an.a)
-            if str.Equals(an.name, "name"):
-                nmattr = v
-                has_nm = true
-            else str.Equals(an.name, "property"):
-                prop = v
-                has_prop = true
-            else str.Equals(an.name, "content"):
-                cont = v
-                has_cont = true
-            else str.Equals(an.name, "charset"):
-                charset = v
-                has_charset = true
-            else str.Equals(an.name, "http_equiv"):
-                http_equiv = v
-                has_he = true
-            end
-        end
-        cx.head += cx.compact ? "<meta" : "  <meta"
-        if has_charset:
-            cx.head += ` charset="` + html_escape(charset) + `"`
-        end
-        if has_nm:
-            cx.head += ` name="` + html_escape(nmattr) + `"`
-        end
-        if has_prop:
-            cx.head += ` property="` + html_escape(prop) + `"`
-        end
-        if has_he:
-            cx.head += ` http-equiv="` + html_escape(http_equiv) + `"`
-        end
-        if has_cont:
-            cx.head += ` content="` + html_escape(cont) + `"`
-        end
-        cx.head += cx.compact ? ">" : ">\n"
-        ret
-    end
-    if str.Equals(name, "head_link"):
-        mut rel := ""
-        mut has_rel := false
-        mut href := ""
-        mut has_href := false
-        mut type_ := ""
-        mut has_type_ := false
-        mut cross := ""
-        mut has_cross := false
-        mut sizes := ""
-        mut has_sizes := false
-        mut as_ := ""
-        mut has_as := false
-        mut media_ := ""
-        mut has_media := false
-        repeat at.ChildCount(a, el) in li:
-            aid := at.Child(a, el, li)
-            an := at.Get(a, aid)
-            if an.kind != at.AST_LAYOUT_ATTR:
-                continue
-            end
-            v := val_str(a, an.a)
-            if str.Equals(an.name, "rel"):
-                rel = v
-                has_rel = true
-            else str.Equals(an.name, "href"):
-                href = v
-                has_href = true
-            else str.Equals(an.name, "type"):
-                type_ = v
-                has_type_ = true
-            else str.Equals(an.name, "crossorigin"):
-                cross = v
-                has_cross = true
-            else str.Equals(an.name, "sizes"):
-                sizes = v
-                has_sizes = true
-            else str.Equals(an.name, "as"):
-                as_ = v
-                has_as = true
-            else str.Equals(an.name, "media"):
-                media_ = v
-                has_media = true
-            end
-        end
-        cx.head += cx.compact ? "<link" : "  <link"
-        if has_rel:
-            cx.head += ` rel="` + html_escape(rel) + `"`
-        end
-        if has_href:
-            cx.head += ` href="` + html_escape(href) + `"`
-        end
-        if has_type_:
-            cx.head += ` type="` + html_escape(type_) + `"`
-        end
-        if has_as:
-            cx.head += ` as="` + html_escape(as_) + `"`
-        end
-        if has_sizes:
-            cx.head += ` sizes="` + html_escape(sizes) + `"`
-        end
-        if has_media:
-            cx.head += ` media="` + html_escape(media_) + `"`
-        end
-        if has_cross:
-            cx.head += ` crossorigin="` + html_escape(cross) + `"`
-        end
-        cx.head += cx.compact ? ">" : ">\n"
-        ret
-    end
-    mut attrs := ""
-    mut css := ""
-    mut hover := ""
-    mut focus := ""
-    mut active := ""
-    mut before := ""
-    mut after := ""
-    mut content := ""
-    mut has_content := false
-    mut userclass := ""
-    mut has_userclass := false
-    mut source := ""
-    mut has_source := false
-    mut srcv := ""
-    mut has_src := false
-    mut type_val := ""
-    mut has_type := false
-    mut condition := ""
-    mut has_condition := false
-    mut selector := ""
-    mut has_selector := false
-    repeat at.ChildCount(a, el) in ai0:
-        aid := at.Child(a, el, ai0)
-        an := at.Get(a, aid)
-        if an.kind != at.AST_LAYOUT_ATTR:
-            continue
-        end
-        nm := an.name
-        v := val_str(a, an.a)
-        if str.Equals(nm, "condition"):
-            condition = v
-            has_condition = true
-            continue
-        end
-        if str.Equals(nm, "selector"):
-            selector = v
-            has_selector = true
-            continue
-        end
-        if str.StartsWith(nm, "hover_"):
-            hover += css_decl(
-                cx.compact, hyphenate(str.Substr(nm, 6, str.Len(nm) - 6)), v
-            )
-            continue
-        end
-        if str.StartsWith(nm, "focus_"):
-            focus += css_decl(
-                cx.compact, hyphenate(str.Substr(nm, 6, str.Len(nm) - 6)), v
-            )
-            continue
-        end
-        if str.StartsWith(nm, "active_"):
-            active += css_decl(
-                cx.compact, hyphenate(str.Substr(nm, 7, str.Len(nm) - 7)), v
-            )
-            continue
-        end
-        if str.StartsWith(nm, "before_"):
-            rest := str.Substr(nm, 7, str.Len(nm) - 7)
-            if str.Equals(rest, "content"):
-                before += css_decl(cx.compact, "content", `"` + v + `"`)
-            else:
-                before += css_decl(cx.compact, hyphenate(rest), v)
-            end
-            continue
-        end
-        if str.StartsWith(nm, "after_"):
-            rest := str.Substr(nm, 6, str.Len(nm) - 6)
-            if str.Equals(rest, "content"):
-                after += css_decl(cx.compact, "content", `"` + v + `"`)
-            else:
-                after += css_decl(cx.compact, hyphenate(rest), v)
-            end
-            continue
-        end
-        if str.Len(nm) >= 2 and byte_at(nm, 0) == 111 and byte_at(nm, 1) == 110:
-            attrs += " " + nm + `="` + html_escape(v) + `"`
-            continue
-        end
-        if str.Equals(name, "canvas") and (str.Equals(nm, "width") or str.Equals(nm, "height")):
-            attrs += " " + nm + `="` + html_escape(v) + `"`
-            continue
-        end
-        ai := sm.LayoutAttrLookup(nm)
-        dest := ai >= 0 ? sm.LayoutAttrDest(ai) : K_LO_LA_CSS
-        if dest == K_LO_LA_CONTENT:
-            content = v
-            has_content = true
-        else dest == K_LO_LA_CLASS:
-            userclass = v
-            has_userclass = true
-        else dest == K_LO_LA_STYLE:
-            attrs += ` style="` + html_escape(v) + `"`
-        else dest == K_LO_LA_DIR:
-            attrs += ` dir="` + attr_value_map(ai, v) + `"`
-        else dest == K_LO_LA_LANG:
-            attrs += ` lang="` + attr_value_map(ai, v) + `"`
-        else dest == K_LO_LA_SOURCE:
-            source = v
-            has_source = true
-        else dest == K_LO_LA_HTML:
-            if str.Equals(nm, "src"):
-                srcv = v
-                has_src = true
-            else str.Equals(nm, "type"):
-                type_val = attr_value_map(ai, v)
-                has_type = true
-            else str.Equals(nm, "condition"):
-                condition = v
-                has_condition = true
-            else is_bool_attr(nm) and str.Equals(v, "true"):
-                attrs += " " + sm.LayoutAttrOut(ai)
-            else:
-                attrs += " " + sm.LayoutAttrOut(ai) + `="` + html_escape(attr_value_map(ai, v)) + `"`
-            end
-        else dest == K_LO_LA_CSS:
-            mut prop := hyphenate(nm)
-            if ai >= 0 and str.Len(sm.LayoutAttrOut(ai)) > 0:
-                prop = sm.LayoutAttrOut(ai)
-            end
-            mut mapped := attr_value_map(ai, v)
-            if str.Equals(prop, "background"):
-                c := sm.LayoutMapColor(i18.LayoutValue(v))
-                if str.Len(c) > 0:
-                    mapped = c
-                end
-            end
-            css += css_decl(cx.compact, prop, quote_css_value_if_needed(mapped))
-        end
-    end
-    has_css := str.Len(css) > 0
-    needs_class := has_css or str.Len(hover) > 0 or str.Len(focus) > 0 or str.Len(active) > 0 or str.Len(before) > 0 or str.Len(after) > 0
-    mut klass := userclass
-    mut has_klass := has_userclass
-    if needs_class and not has_klass:
-        sep := char_from_code(31)
-        key := css + sep + hover + sep + focus + sep + active + sep + before + sep + after
-        klass = class_for_key(cx, key)
-        has_klass = true
-    end
-
-    if str.Equals(name, "media"):
+    if str.Equals(gen, "media"):
         sel := parent_has_class ? parent_class : "body"
-        cond := has_condition ? condition : "all"
-        inner := css_rule(cx.compact, "." + sel, css)
+        mut cond := "all"
+        _hc := lo_attr_get(la, "condition", cond)
+        inner := css_rule(cx.compact, "." + sel, la.css)
         if cx.compact:
             emit_rule(cx, "@media " + cond + "{" + inner + "}")
         else:
             emit_rule(cx, "@media " + cond + " { " + inner + " }")
         end
-        ret
+        ret true
     end
-    if str.Equals(name, "style"):
-        if has_content:
-            cx.css += cx.compact ? mn.Css(content) : content
+    if str.Equals(gen, "style"):
+        if la.has_content:
+            cx.css += cx.compact ? mn.Css(la.content) : la.content
             if not cx.compact:
                 cx.css += "\n"
             end
         end
-        ret
+        ret true
     end
-    if str.Equals(name, "global"):
-        emit_rule(cx, css_rule(cx.compact, has_selector ? selector : "*", css))
-        ret
+    if str.Equals(gen, "global"):
+        mut sel := "*"
+        _hs := lo_attr_get(la, "selector", sel)
+        emit_rule(cx, css_rule(cx.compact, sel, la.css))
+        ret true
     end
-    if str.Equals(name, "script"):
-        if has_src:
+    if str.Equals(gen, "script"):
+        mut srcv := ""
+        if lo_attr_get(la, "url", srcv):
             html_line(cx, `<script src="` + html_escape(srcv) + `"></script>`)
-        else has_content:
-            cx.js += cx.compact ? mn.Js(content) : content
+        else la.has_content:
+            cx.js += cx.compact ? mn.Js(la.content) : la.content
             cx.js += cx.compact ? " " : "\n"
         end
+        ret true
+    end
+    if not is_native_generator(gen):
+        gen_std(cx, diag, a, el, gen, la, klass, has_klass, tag)
+        ret true
+    end
+    ret false
+end
+
+func lo_all_digits(v: str): bool:
+    if str.Len(v) == 0:
+        ret false
+    end
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b < 48 or b > 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lo_atoi(v: str): int:
+    mut x := 0
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b < 48 or b > 57:
+            ret x
+        end
+        x = x * 10 + (b - 48)
+    end
+    ret x
+end
+
+func is_native_generator(g: str): bool:
+    ret str.Equals(g, "heading") or str.Equals(g, "media") or str.Equals(g, "style") or str.Equals(g, "global") or str.Equals(g, "script")
+end
+
+func gen_element(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, parent_class: str, parent_has_class: bool
+):
+    name := at.Get(a, el).name
+    ei := sm.LayoutElemOf(a, el)
+    if ei < 0:
+        dg.Report(
+            diag, dg.SEV_WARNING, 2, cx.file, span_of(a, el), co.Format1(
+                i18.Tr("unrecognized layout element '%s' (rendered as <div>)"), co.ArgStr(name)
+            )
+        )
+    end
+    mut kind := sm.LK_NORMAL
+    mut tag := "div"
+    mut gen := ""
+    mut in_head := false
+    if ei >= 0:
+        kind = sm.LayoutElemKind(ei)
+        if str.Len(sm.LayoutElemTag(ei)) > 0:
+            tag = sm.LayoutElemTag(ei)
+        end
+        gen = sm.LayoutElemGenerator(ei)
+        in_head = sm.LayoutElemInHead(ei)
+    end
+    mut la := LoAttrs {}
+    lo_collect_attrs(cx, a, el, ei, tag, la)
+    if str.Len(la.gen) > 0:
+        gen = la.gen
+    end
+    mut klass := ""
+    has_klass := lo_class_for(cx, la, klass)
+    lg.Log(
+        cx.log, lg.PH_CODEGEN, lg.LOG_TRACE, co.Format2("layout <%s> -> <%s>", co.ArgStr(name), co.ArgStr(tag))
+    )
+    if has_klass and not str.Equals(gen, "media") and not str.Equals(gen, "global"):
+        lo_emit_rules(cx, la, klass)
+    end
+    if str.Len(gen) > 0 and gen_native(cx, diag, a, el, gen, la, klass, has_klass, parent_class, parent_has_class, tag):
+        lo_free_attrs(la)
         ret
     end
-
-    if has_css:
-        emit_rule(cx, css_rule(cx.compact, "." + klass, css))
-    end
-    if str.Len(hover) > 0:
-        emit_rule(cx, css_rule(cx.compact, "." + klass + ":hover", hover))
-    end
-    if str.Len(focus) > 0:
-        emit_rule(cx, css_rule(cx.compact, "." + klass + ":focus", focus))
-    end
-    if str.Len(active) > 0:
-        emit_rule(cx, css_rule(cx.compact, "." + klass + ":active", active))
-    end
-    if str.Len(before) > 0:
-        emit_rule(cx, css_rule(cx.compact, "." + klass + "::before", before))
-    end
-    if str.Len(after) > 0:
-        emit_rule(cx, css_rule(cx.compact, "." + klass + "::after", after))
+    if kind == sm.LK_VIRTUAL:
+        gen_children(cx, diag, a, el, klass, has_klass)
+        lo_free_attrs(la)
+        ret
     end
     classattr := has_klass ? ` class="` + klass + `"` : ""
-    esc := has_content ? html_escape(content) : ""
-
-    if str.Equals(name, "link"):
-        href := has_source ? html_escape(source) : "#"
-        if has_child_elements(a, el):
-            html_line(cx, `<a href="` + href + `"` + classattr + attrs + ">")
-            cx.indent += 1
-            if has_content:
-                html_line(cx, esc)
-            end
-            gen_children(cx, diag, a, el, klass, has_klass)
-            cx.indent -= 1
-            html_line(cx, "</a>")
-        else:
-            html_line(
-                cx, `<a href="` + href + `"` + classattr + attrs + ">" + esc + "</a>"
-            )
-        end
+    open := "<" + tag + la.first + classattr + la.rest + ">"
+    if in_head:
+        cx.head += cx.compact ? open : "  " + open + "\n"
+        lo_free_attrs(la)
         ret
     end
-    if str.Equals(name, "image"):
-        html_line(
-            cx, `<img src="` + (has_source ? html_escape(source) : "") + `"` + classattr + attrs + ` alt="` + esc + `" />`
-        )
+    if kind == sm.LK_VOID:
+        html_line(cx, open)
+        lo_free_attrs(la)
         ret
     end
-    if str.Equals(name, "input"):
-        if has_type and str.Equals(type_val, "textarea"):
-            html_line(
-                cx, "<textarea" + classattr + attrs + ">" + esc + "</textarea>"
-            )
-        else:
-            html_line(
-                cx, "<input" + (has_type ? ` type="` + type_val + `"` : "") + classattr + attrs + " />"
-            )
-        end
+    if kind == sm.LK_RAW:
+        html_line(cx, open + la.content + "</" + tag + ">")
+        lo_free_attrs(la)
         ret
     end
-
-    if str.Equals(name, "canvas"):
-        html_line(cx, "<canvas" + classattr + attrs + "></canvas>")
-        ret
-    end
-    if str.Equals(name, "iframe"):
-        html_line(
-            cx, "<iframe" + classattr + attrs + (has_src ? ` src="` + html_escape(srcv) + `"` : "") + "></iframe>"
-        )
-        ret
-    end
-    if ltype == K_LO_LE_SINGLE:
-        html_line(cx, "<" + tag + classattr + attrs + " />")
-        ret
-    end
+    esc := la.has_content ? html_escape(la.content) : ""
     if has_child_elements(a, el):
-        html_line(cx, "<" + tag + classattr + attrs + ">")
+        html_line(cx, open)
         cx.indent += 1
-        if has_content:
+        if la.has_content:
             html_line(cx, esc)
         end
         gen_children(cx, diag, a, el, klass, has_klass)
         cx.indent -= 1
         html_line(cx, "</" + tag + ">")
     else:
-        html_line(
-            cx, "<" + tag + classattr + attrs + ">" + esc + "</" + tag + ">"
-        )
+        html_line(cx, open + esc + "</" + tag + ">")
     end
+    lo_free_attrs(la)
 end
 
 func plural_suffix(n: int): str:

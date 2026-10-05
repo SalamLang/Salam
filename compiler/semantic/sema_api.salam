@@ -68,6 +68,9 @@ pub func Rebind(sm &: Sema, file: str, lang: str): int:
     sm.in_pkg = false
     sm.relax_unused = g_sm_relax_unused
     sm.requal = false
+    sm.noret_calls.clear()
+    sm.exhaustive.clear()
+    sm.covers_all.clear()
     sm.each_n = 0
     sm.match_arm_depth = 0
     sm.match_yield_expected = TYPE_NONE
@@ -94,8 +97,13 @@ pub func Free(sm &: Sema):
         t.params.free()
     end
     sm.types.free()
+    sm.noret_calls.free()
+    sm.exhaustive.free()
+    sm.covers_all.free()
     sm.arrays_intern.free()
     sm.ptrs_intern.free()
+    sm.fpack_file.free()
+    sm.fpack_code.free()
     repeat sm.scopes.len() in i1:
         mut sc := sm.scopes.get(i1)
         sc.symbols.free()
@@ -124,6 +132,20 @@ pub func Free(sm &: Sema):
     mut e := sm.diag
     dg.Free(e)
     sm.diag = e
+end
+
+pub func SetFilePack(sm &: Sema, path: str, pack: int):
+    sm.fpack_file.push(path)
+    sm.fpack_code.push(pack)
+end
+
+pub func FilePack(sm &: Sema, path: str): int:
+    repeat sm.fpack_file.len() in i:
+        if str.Equals(sm.fpack_file.get(i), path):
+            ret sm.fpack_code.get(i)
+        end
+    end
+    ret str.Equals(sm.lang, "fa") ? 2 : 1
 end
 
 pub func SetCc(sm &: Sema, table: cc.Table):
@@ -421,7 +443,7 @@ end
 pub func BuiltinGlobalConst(
     a &: at.Ast, id: int, name: str, is_str &: bool
 ): bool:
-    ret builtin_global_const(a, id, name, is_str)
+    ret builtin_global_const(a, id, name, is_str, false)
 end
 
 pub func SetStdlibRoot(root: str):
@@ -619,43 +641,134 @@ pub func LayoutSchemaInit(root: str):
     layout_schema_init(root)
 end
 
+pub func LayoutSchemaErrors(): Vector<str>:
+    lay_ensure()
+    mut out := Vector {} as Vector<str>
+    repeat g_lay_schema_errors.len() in i:
+        out.push(g_lay_schema_errors.get(i))
+    end
+    ret out
+end
+
+pub func LayoutResolve(a &: at.Ast, lb: int):
+    layout_resolve(a, lb)
+end
+
+pub func LayoutElemOf(a &: at.Ast, el: int): int:
+    op := at.Get(a, el).op
+    if op > 0 and op <= g_lay_elems.len():
+        ret op - 1
+    end
+    ret 0 - 1
+end
+
 pub func LayoutElemLookup(name: str): int:
+    lay_ensure()
     ret lay_elem_lookup(name)
 end
 
+pub func LayoutElemCount(): int:
+    lay_ensure()
+    ret g_lay_elems.len()
+end
+
+pub func LayoutElemKey(i: int): str:
+    ret g_lay_elems.get(i).key
+end
+
 pub func LayoutElemTag(i: int): str:
-    ret g_sm_lay_elem_tag.get(i)
+    ret g_lay_elems.get(i).tag
 end
 
 pub func LayoutElemKind(i: int): int:
-    ret g_sm_lay_elem_type.get(i)
+    ret g_lay_elems.get(i).kind
 end
 
-pub func LayoutAttrLookup(name: str): int:
-    ret lay_attr_lookup(name)
+pub func LayoutElemGenerator(i: int): str:
+    ret g_lay_elems.get(i).generator
+end
+
+pub func LayoutElemRequired(i: int): str:
+    ret g_lay_elems.get(i).required
+end
+
+pub func LayoutCsvHas(csv: str, v: str): bool:
+    ret lay_csv_has(csv, v)
+end
+
+pub func LayoutElemInHead(i: int): bool:
+    ret g_lay_elems.get(i).head
+end
+
+pub func LayoutAttrFor(ei: int, name: str): int:
+    ret lay_attr_for(ei, name)
+end
+
+pub func LayoutAttrKey(name: str): str:
+    lay_ensure()
+    ret lay_attr_key(name)
+end
+
+pub func LayoutAttrCount(): int:
+    lay_ensure()
+    ret g_lay_attrs.len()
+end
+
+pub func LayoutAttrName(i: int): str:
+    ret g_lay_attrs.get(i).key
 end
 
 pub func LayoutAttrOut(i: int): str:
-    ret g_sm_lay_attr_out.get(i)
+    ret g_lay_attrs.get(i).out
 end
 
 pub func LayoutAttrDest(i: int): int:
-    ret g_sm_lay_attr_dest.get(i)
+    ret g_lay_attrs.get(i).dest
 end
 
 pub func LayoutAttrVtype(i: int): int:
-    ret g_sm_lay_attr_vtype.get(i)
+    ret g_lay_attrs.get(i).vtype
 end
 
 pub func LayoutAttrAllowed(i: int): str:
-    ret g_sm_lay_attr_allowed.get(i)
+    ret g_lay_attrs.get(i).allowed
+end
+
+pub func LayoutAttrMultiple(i: int): bool:
+    ret g_lay_attrs.get(i).multiple
+end
+
+pub func LayoutAttrScope(i: int): str:
+    ret g_lay_attrs.get(i).scope
+end
+
+pub func LayoutAttrHasDefault(i: int): bool:
+    ret g_lay_attrs.get(i).has_default
+end
+
+pub func LayoutAttrDefault(i: int): str:
+    ret g_lay_attrs.get(i).defval
+end
+
+pub func LayoutMapValue(ai: int, v: str): str:
+    ret lay_map_value(ai, v)
+end
+
+pub func LayoutValueGenerator(group: str, canon: str): str:
+    ret lay_value_generator(group, canon)
+end
+
+pub func LayoutPseudoPrefixLen(name: str): int:
+    ret lay_pseudo_prefix_len(name)
 end
 
 pub func LayoutDynValue(group: str, v: str): str:
+    lay_ensure()
     ret lay_dyn_value(group, v)
 end
 
 pub func LayoutMapColor(v: str): str:
+    lay_ensure()
     ret lay_map_color(v)
 end
 

@@ -14,19 +14,16 @@ include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
 
 func schema_kind_of(k: str): int:
-    if str.Len(k) == 0:
-        ret LE_MOTHER
+    if str.Equals(k, "Void") or str.Equals(k, "Single") or str.Equals(k, "Single2Mother"):
+        ret LK_VOID
     end
-    if str.Equals(k, "Single") or str.Equals(k, "single"):
-        ret LE_SINGLE
+    if str.Equals(k, "RawText"):
+        ret LK_RAW
     end
-    if str.Equals(k, "Single2Mother") or str.Equals(k, "single2mother"):
-        ret LE_SINGLE2MOTHER
+    if str.Equals(k, "Virtual"):
+        ret LK_VIRTUAL
     end
-    if str.Equals(k, "Mother2Single") or str.Equals(k, "mother2single"):
-        ret LE_MOTHER2SINGLE
-    end
-    ret LE_MOTHER
+    ret LK_NORMAL
 end
 
 func schema_dest_of(d: str): int:
@@ -57,105 +54,90 @@ func schema_dest_of(d: str): int:
     if str.Equals(d, "meta"):
         ret LA_META
     end
+    if str.Equals(d, "html_or_css"):
+        ret LA_HTML_OR_CSS
+    end
     ret LA_HTML
 end
 
 func schema_vtype_of(t: str): int:
+    names := ["string", "int", "float", "bool", "email", "url", "color", "dir", "lang", "enum", "length", "token", "uint", "ufloat", "number", "absolute_url", "relative_url", "mime", "date", "time", "datetime", "duration", "idref", "charset", "srcset", "media_query", "code", "ulength"]
     if str.Len(t) == 0:
         ret VT_STRING
     end
-    if str.Equals(t, "int"):
-        ret VT_INT
+    repeat len(names) in i:
+        if str.Equals(names[i], t):
+            ret i
+        end
     end
-    if str.Equals(t, "float"):
-        ret VT_FLOAT
-    end
-    if str.Equals(t, "bool"):
-        ret VT_BOOL
-    end
-    if str.Equals(t, "email"):
-        ret VT_EMAIL
-    end
-    if str.Equals(t, "url"):
-        ret VT_URL
-    end
-    if str.Equals(t, "color"):
-        ret VT_COLOR
-    end
-    if str.Equals(t, "dir"):
-        ret VT_DIR
-    end
-    if str.Equals(t, "lang"):
-        ret VT_LANG
-    end
-    if str.Equals(t, "enum"):
-        ret VT_ENUM
-    end
-    if str.Equals(t, "length"):
-        ret VT_LENGTH
-    end
+    lay_schema_error("unknown value_type '" + t + "'")
     ret VT_STRING
 end
 
-func schema_field_atom(a &: at.Ast, lit: int, field: str): str:
+func schema_field_node(a &: at.Ast, lit: int, field: str): int:
     repeat at.ChildCount(a, lit) in i:
         fi := at.Child(a, lit, i)
         fv := at.Get(a, fi)
-        if not str.Equals(fv.name, field) or fv.a == 0:
-            continue
+        if str.Equals(fv.name, field) and fv.a != 0:
+            ret fv.a
         end
-        av := at.Get(a, fv.a)
-        if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_STRING:
-            ret av.value_str
-        end
-        if av.kind == at.AST_MEMBER and str.Len(av.name) > 0:
-            ret av.name
-        end
+    end
+    ret 0
+end
+
+func schema_field_atom(a &: at.Ast, lit: int, field: str): str:
+    vid := schema_field_node(a, lit, field)
+    if vid == 0:
         ret ""
     end
+    av := at.Get(a, vid)
+    if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_STRING:
+        ret av.value_str
+    end
+    if av.kind == at.AST_MEMBER and str.Len(av.name) > 0:
+        ret av.name
+    end
     ret ""
+end
+
+func schema_field_bool(a &: at.Ast, lit: int, field: str, dflt: bool): bool:
+    vid := schema_field_node(a, lit, field)
+    if vid == 0:
+        ret dflt
+    end
+    av := at.Get(a, vid)
+    if av.kind == at.AST_LITERAL and av.op == tok.TK_KW_TRUE:
+        ret true
+    end
+    if av.kind == at.AST_LITERAL and av.op == tok.TK_KW_FALSE:
+        ret false
+    end
+    ret dflt
 end
 
 func schema_field_csv(a &: at.Ast, lit: int, field: str): str:
-    repeat at.ChildCount(a, lit) in i:
-        fi := at.Child(a, lit, i)
-        fv := at.Get(a, fi)
-        if not str.Equals(fv.name, field) or fv.a == 0:
-            continue
-        end
-        av := at.Get(a, fv.a)
-        if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_STRING:
-            ret av.value_str
-        end
-        if av.kind == at.AST_ARRAY_LIT:
-            mut out := ""
-            repeat at.ChildCount(a, fv.a) in j:
-                ev := at.Get(a, at.Child(a, fv.a, j))
-                if ev.kind == at.AST_LITERAL and ev.value_kind == tok.TV_STRING:
-                    if str.Len(out) > 0:
-                        out = out + ","
-                    end
-                    out = out + ev.value_str
-                end
-            end
-            ret out
-        end
+    vid := schema_field_node(a, lit, field)
+    if vid == 0:
         ret ""
     end
-    ret ""
-end
-
-func schema_register_words(a &: at.Ast, did: int, canon: str):
-    d := at.Get(a, did)
-    mut i := 0
-    until i + 1 < d.aliases.len():
-        lang := d.aliases.get(i)
-        spelling := d.aliases.get(i + 1)
-        if str.Equals(lang, "en") or str.Equals(lang, "fa"):
-            i18.RegisterLayoutWord(lang, spelling, canon)
-        end
-        i += 2
+    av := at.Get(a, vid)
+    if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_STRING:
+        ret av.value_str
     end
+    if av.kind == at.AST_ARRAY_LIT:
+        mut out := ""
+        repeat at.ChildCount(a, vid) in j:
+            ev := at.Get(a, at.Child(a, vid, j))
+            if ev.kind == at.AST_LITERAL and ev.value_kind == tok.TV_STRING:
+                if str.Len(out) > 0:
+                    out = out + ","
+                end
+                out = out + ev.value_str
+            end
+        end
+        ret out
+    end
+    ret ""
 end
 
 func schema_parse_file(a &: at.Ast, path: str): int:
@@ -173,124 +155,176 @@ func schema_parse_file(a &: at.Ast, path: str): int:
     ret prog
 end
 
-func schema_load_elem_file(path: str):
-    mut a := at.NewAst()
-    prog := schema_parse_file(a, path)
-    if prog == 0:
-        at.FreeAst(a)
+func schema_load_category(a &: at.Ast, did: int, lit: int):
+    d := at.Get(a, did)
+    mut name := schema_field_atom(a, lit, "name")
+    if str.Len(name) == 0:
+        name = alias_for_lang(d.aliases, "en")
+    end
+    if str.Len(name) == 0 or lay_cat_index(name) >= 0:
         ret
     end
-    mut i := 0
-    until i < at.ChildCount(a, prog) and g_sm_lay_elem_name.len() < K_SM_SCHEMA_MAX:
-        did := at.Child(a, prog, i)
-        i += 1
-        d := at.Get(a, did)
-        if d.kind != at.AST_CONST_DECL or d.a == 0 or at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
-            continue
-        end
-        lit := d.a
-        mut name := schema_field_atom(a, lit, "name")
-        if str.Len(name) == 0:
-            name = alias_for_lang(d.aliases, "en")
-        end
-        mut gen := schema_field_atom(a, lit, "generated_name")
-        if str.Len(gen) == 0:
-            gen = schema_field_atom(a, lit, "tag")
-        end
-        if str.Len(name) == 0:
-            continue
-        end
-        mut parents := schema_field_csv(a, lit, "parents")
-        if str.Len(parents) == 0:
-            parents = schema_field_csv(a, lit, "parentElements")
-        end
-        g_sm_lay_elem_name.push(name)
-        g_sm_lay_elem_tag.push(gen)
-        g_sm_lay_elem_type.push(
-            schema_kind_of(
-                schema_field_atom(
-                    a, lit, "kind"
-                )
-            )
-        )
-        g_sm_lay_elem_parents.push(parents)
-        g_sm_lay_elem_required.push(schema_field_csv(a, lit, "required"))
-        schema_register_words(a, did, name)
-    end
-    at.FreeAst(a)
+    g_lay_cats.push(lay_loose(name))
 end
 
-func schema_load_attr_file(path: str):
-    mut a := at.NewAst()
-    prog := schema_parse_file(a, path)
-    if prog == 0:
-        at.FreeAst(a)
+func schema_load_element(a &: at.Ast, did: int, lit: int):
+    d := at.Get(a, did)
+    mut name := schema_field_atom(a, lit, "name")
+    if str.Len(name) == 0:
+        name = alias_for_lang(d.aliases, "en")
+    end
+    if str.Len(name) == 0:
         ret
     end
-    mut i := 0
-    until i < at.ChildCount(a, prog) and g_sm_lay_attr_name.len() < K_SM_SCHEMA_MAX:
-        did := at.Child(a, prog, i)
-        i += 1
-        d := at.Get(a, did)
-        if d.kind != at.AST_CONST_DECL or d.a == 0 or at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
-            continue
-        end
-        lit := d.a
-        mut name := schema_field_atom(a, lit, "name")
-        if str.Len(name) == 0:
-            name = alias_for_lang(d.aliases, "en")
-        end
-        if str.Len(name) == 0:
-            continue
-        end
-        g_sm_lay_attr_name.push(name)
-        g_sm_lay_attr_out.push(schema_field_atom(a, lit, "generated_name"))
-        g_sm_lay_attr_dest.push(
-            schema_dest_of(schema_field_atom(a, lit, "destination"))
-        )
-        g_sm_lay_attr_vtype.push(
-            schema_vtype_of(schema_field_atom(a, lit, "value_type"))
-        )
-        g_sm_lay_attr_allowed.push(schema_field_csv(a, lit, "allowed"))
-        schema_register_words(a, did, name)
+    if lay_elem_by_key(name) >= 0:
+        lay_schema_error("duplicate element '" + name + "'")
+        ret
     end
-    at.FreeAst(a)
+    mut e := LayElem {}
+    e.key = name
+    e.tag = schema_field_atom(a, lit, "generated_name")
+    if str.Len(e.tag) == 0:
+        e.tag = schema_field_atom(a, lit, "tag")
+    end
+    e.kind = schema_kind_of(schema_field_atom(a, lit, "kind"))
+    e.cat_names = schema_field_csv(a, lit, "categories")
+    e.parents = schema_field_csv(a, lit, "parents")
+    if str.Len(e.parents) == 0:
+        e.parents = schema_field_csv(a, lit, "parentElements")
+    end
+    e.path = schema_field_csv(a, lit, "path")
+    e.ancestors = schema_field_csv(a, lit, "ancestors")
+    e.children = schema_field_csv(a, lit, "children")
+    e.forbidden = schema_field_csv(a, lit, "forbidden")
+    e.forbidden_desc = schema_field_csv(a, lit, "forbidden_descendants")
+    e.required = schema_field_csv(a, lit, "required")
+    when := schema_field_atom(a, lit, "when")
+    eqp := str.IndexOf(when, "=")
+    if eqp > 0:
+        e.when_attr = str.Substr(when, 0, eqp)
+        e.when_value = str.Substr(when, eqp + 1, str.Len(when) - eqp - 1)
+    else:
+        e.when_attr = when
+    end
+    e.unique = schema_field_atom(a, lit, "unique")
+    e.generator = schema_field_atom(a, lit, "generator")
+    e.head = str.Equals(schema_field_atom(a, lit, "placement"), "head")
+    e.first = str.Equals(schema_field_atom(a, lit, "position"), "first")
+    e.styled = schema_field_bool(a, lit, "styled", e.kind != LK_VIRTUAL or str.Len(e.generator) > 0)
+    e.fa_name = alias_for_lang(d.aliases, "fa")
+    ei := g_lay_elems.len()
+    g_lay_elems.push(e)
+    lay_elem_add_alias(name, ei)
+    mut i := 0
+    until i + 1 < d.aliases.len():
+        lay_elem_add_alias(d.aliases.get(i + 1), ei)
+        i += 2
+    end
 end
 
-func schema_load_value_file(path: str):
+func schema_load_attribute(a &: at.Ast, did: int, lit: int):
+    d := at.Get(a, did)
+    mut name := schema_field_atom(a, lit, "name")
+    if str.Len(name) == 0:
+        name = alias_for_lang(d.aliases, "en")
+    end
+    if str.Len(name) == 0:
+        ret
+    end
+    mut at_ := LayAttr {}
+    at_.key = name
+    at_.out = schema_field_atom(a, lit, "generated_name")
+    at_.dest = schema_dest_of(schema_field_atom(a, lit, "destination"))
+    at_.vtype = schema_vtype_of(schema_field_atom(a, lit, "value_type"))
+    at_.allowed = schema_field_csv(a, lit, "allowed")
+    at_.scope = schema_field_csv(a, lit, "elements")
+    at_.multiple = schema_field_bool(a, lit, "multiple", false)
+    if schema_field_node(a, lit, "default") != 0:
+        at_.has_default = true
+        at_.defval = schema_field_atom(a, lit, "default")
+    end
+    at_.fa_name = alias_for_lang(d.aliases, "fa")
+    repeat g_lay_attrs.len() in k:
+        prev := g_lay_attrs.get(k)
+        if str.Equals(prev.key, name) and str.Equals(prev.scope, at_.scope):
+            lay_schema_error("duplicate attribute '" + name + "' for scope '" + at_.scope + "'")
+            ret
+        end
+    end
+    g_lay_attrs.push(at_)
+    pattern := str.IndexOf(at_.out, "*") >= 0
+    if pattern:
+        lay_attr_add_pattern(name, name)
+    else:
+        lay_attr_add_alias(name, name)
+    end
+    mut i := 0
+    until i + 1 < d.aliases.len():
+        if pattern:
+            lay_attr_add_pattern(d.aliases.get(i + 1), name)
+        else:
+            lay_attr_add_alias(d.aliases.get(i + 1), name)
+        end
+        i += 2
+    end
+end
+
+func schema_load_value(a &: at.Ast, did: int, lit: int):
+    d := at.Get(a, did)
+    gen := schema_field_atom(a, lit, "generated_value")
+    group := schema_field_atom(a, lit, "group")
+    if str.Len(gen) == 0 or str.Len(group) == 0:
+        ret
+    end
+    lay_add_value(group, gen, gen)
+    generator := schema_field_atom(a, lit, "generator")
+    if str.Len(generator) > 0:
+        g_lay_valgen_group.push(group)
+        g_lay_valgen_canon.push(gen)
+        g_lay_valgen_gen.push(generator)
+    end
+    mut j := 0
+    until j + 1 < d.aliases.len():
+        lang := d.aliases.get(j)
+        spelling := d.aliases.get(j + 1)
+        j += 2
+        if str.Equals(lang, "en"):
+            lay_add_value(group, spelling, gen)
+            i18.RegisterLayoutValue("*", spelling, gen)
+        else str.Equals(lang, "fa"):
+            lay_add_value(group, spelling, gen)
+            i18.RegisterLayoutValue(lang, spelling, gen)
+        end
+    end
+end
+
+func schema_load_file(path: str, pass: int):
     mut a := at.NewAst()
     prog := schema_parse_file(a, path)
     if prog == 0:
         at.FreeAst(a)
         ret
     end
-    mut i := 0
-    until i < at.ChildCount(a, prog):
+    repeat at.ChildCount(a, prog) in i:
         did := at.Child(a, prog, i)
-        i += 1
         d := at.Get(a, did)
         if d.kind != at.AST_CONST_DECL or d.a == 0 or at.KindOf(a, d.a) != at.AST_STRUCT_LIT:
             continue
         end
         lit := d.a
-        gen := schema_field_atom(a, lit, "generated_value")
-        group := schema_field_atom(a, lit, "group")
-        if str.Len(gen) == 0 or str.Len(group) == 0:
-            continue
-        end
-        lay_add_value(group, gen, gen)
-        mut j := 0
-        until j + 1 < d.aliases.len():
-            lang := d.aliases.get(j)
-            spelling := d.aliases.get(j + 1)
-            j += 2
-            if str.Equals(lang, "en"):
-                lay_add_value(group, spelling, gen)
-                i18.RegisterLayoutValue("*", spelling, gen)
-            else str.Equals(lang, "fa"):
-                lay_add_value(group, spelling, gen)
-                i18.RegisterLayoutValue(lang, spelling, gen)
+        sname := at.Get(a, lit).name
+        if pass == 0:
+            if str.Equals(sname, "LayoutCategory"):
+                schema_load_category(a, did, lit)
             end
+            continue
+        end
+        if str.Equals(sname, "LayoutElement"):
+            schema_load_element(a, did, lit)
+        else str.Equals(sname, "LayoutAttribute"):
+            schema_load_attribute(a, did, lit)
+        else str.Equals(sname, "LayoutValue"):
+            schema_load_value(a, did, lit)
         end
     end
     at.FreeAst(a)
@@ -306,36 +340,157 @@ func schema_list_files(dir: str): Vector<str>:
             out.push(pth.PathJoin(dir, nm))
         end
     end
+    sort_strings(out)
     ret out
 end
 
+func sort_strings(v &: Vector<str>):
+    n := v.len()
+    mut i := 1
+    until i < n:
+        x := v.get(i)
+        mut j := i - 1
+        until j >= 0 and str.Compare(v.get(j), x) > 0:
+            v.set(j + 1, v.get(j))
+            j -= 1
+        end
+        v.set(j + 1, x)
+        i += 1
+    end
+end
+
+func schema_check_list(owner: str, field: str, csv: str):
+    if str.Len(csv) == 0:
+        ret
+    end
+    mut parts := str.Split(csv, ",")
+    defer parts.free()
+    repeat parts.len() in i:
+        t := parts.get(i)
+        if str.Len(t) == 0 or str.Equals(t, "*") or str.Equals(t, "text") or str.Equals(t, "none"):
+            continue
+        end
+        if byte_at(t, 0) == 35:
+            cn := str.Substr(t, 1, str.Len(t) - 1)
+            if not str.Equals(cn, "transparent") and lay_cat_index(cn) < 0:
+                lay_schema_error(owner + ": unknown category '" + t + "' in " + field)
+            end
+        else lay_elem_by_key(t) < 0:
+            lay_schema_error(owner + ": unknown element '" + t + "' in " + field)
+        end
+    end
+end
+
+func schema_has_context(e: LayElem): bool:
+    ret str.Len(e.parents) > 0 or str.Len(e.path) > 0 or str.Len(e.ancestors) > 0 or str.Len(e.when_attr) > 0
+end
+
+func schema_finish():
+    repeat g_lay_elems.len() in i:
+        mut e := g_lay_elems.get(i)
+        mut bits := 0 as u64
+        mut parts := str.Split(e.cat_names, ",")
+        repeat parts.len() in k:
+            cn := parts.get(k)
+            if str.Len(cn) == 0:
+                continue
+            end
+            mut nm := cn
+            if byte_at(nm, 0) == 35:
+                nm = str.Substr(nm, 1, str.Len(nm) - 1)
+            end
+            bit := lay_cat_bit(nm)
+            if bit == 0:
+                lay_schema_error(e.key + ": unknown category '" + cn + "'")
+            end
+            bits = bits | bit
+        end
+        parts.free()
+        e.cats = bits
+        g_lay_elems.set(i, e)
+    end
+    repeat g_lay_elems.len() in j:
+        e := g_lay_elems.get(j)
+        schema_check_list(e.key, "parents", e.parents)
+        schema_check_list(e.key, "path", e.path)
+        schema_check_list(e.key, "ancestors", e.ancestors)
+        schema_check_list(e.key, "children", e.children)
+        schema_check_list(e.key, "forbidden", e.forbidden)
+        schema_check_list(e.key, "forbidden_descendants", e.forbidden_desc)
+    end
+    repeat g_lay_attrs.len() in m:
+        av := g_lay_attrs.get(m)
+        schema_check_list("attribute " + av.key, "elements", av.scope)
+    end
+    repeat g_lay_ealias_loose.len() in x:
+        mut y := x + 1
+        until y < g_lay_ealias_loose.len():
+            if str.Equals(g_lay_ealias_loose.get(x), g_lay_ealias_loose.get(y)):
+                ex := g_lay_elems.get(g_lay_ealias_idx.get(x))
+                ey := g_lay_elems.get(g_lay_ealias_idx.get(y))
+                if not str.Equals(ex.key, ey.key) and not schema_has_context(ex) and not schema_has_context(ey):
+                    lay_schema_error("elements '" + ex.key + "' and '" + ey.key + "' share the name '" + g_lay_ealias_loose.get(x) + "' and neither has a context rule")
+                end
+            end
+            y += 1
+        end
+    end
+end
+
 func layout_schema_init(root: str):
-    mut eff := root
+    if g_lay_loaded and str.Len(root) > 0 and not str.Equals(root, g_lay_root):
+        layout_schema_reset()
+        g_lay_loaded = false
+    end
+    if str.Len(root) > 0 or not g_lay_wanted:
+        g_lay_want_root = root
+    end
+    g_lay_wanted = true
+end
+
+func lay_ensure():
+    if g_lay_loaded or not g_lay_wanted:
+        ret
+    end
+    mut eff := g_lay_want_root
     if str.Len(eff) == 0:
         eff = get_stdlib_root()
     end
+    g_lay_loaded = true
+    g_lay_root = g_lay_want_root
     mut base := "std/layout"
     if str.Len(eff) > 0:
         base = eff + "/std/layout"
     end
-    mut ef := schema_list_files(base + "/elements")
-    defer ef.free()
-    repeat ef.len() in i:
-        schema_load_elem_file(ef.get(i))
+    dirs := ["categories", "elements", "attributes", "style", "values"]
+    repeat 2 in pass:
+        repeat len(dirs) in di:
+            mut files := schema_list_files(base + "/" + dirs[di])
+            repeat files.len() in fi:
+                schema_load_file(files.get(fi), pass)
+            end
+            files.free()
+        end
     end
-    mut af := schema_list_files(base + "/attributes")
-    defer af.free()
-    repeat af.len() in j:
-        schema_load_attr_file(af.get(j))
-    end
-    mut stf := schema_list_files(base + "/style")
-    defer stf.free()
-    repeat stf.len() in k:
-        schema_load_attr_file(stf.get(k))
-    end
-    mut vf := schema_list_files(base + "/values")
-    defer vf.free()
-    repeat vf.len() in l:
-        schema_load_value_file(vf.get(l))
-    end
+    schema_finish()
+end
+
+func layout_schema_reset():
+    g_lay_elems.clear()
+    g_lay_attrs.clear()
+    g_lay_cats.clear()
+    g_lay_ealias_loose.clear()
+    g_lay_ealias_idx.clear()
+    g_lay_aalias_loose.clear()
+    g_lay_aalias_key.clear()
+    g_lay_apat_prefix.clear()
+    g_lay_apat_key.clear()
+    g_sm_lay_val_group.clear()
+    g_sm_lay_val_spell.clear()
+    g_sm_lay_val_canon.clear()
+    g_lay_valgen_group.clear()
+    g_lay_valgen_canon.clear()
+    g_lay_valgen_gen.clear()
+    g_lay_schema_errors.clear()
+    g_lay_schema_reported = false
 end

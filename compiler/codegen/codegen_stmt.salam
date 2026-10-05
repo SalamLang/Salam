@@ -82,6 +82,66 @@ func cg_loop_close(g &: Cg):
     end
 end
 
+func cg_enum_plain(s &: sm.Sema, a &: at.Ast, name: str): bool:
+    sid := sm.Lookup(s, s.global, name)
+    if sid == 0:
+        ret false
+    end
+    dn := sm.SymAt(s, sid).decl
+    if dn == 0 or at.KindOf(a, dn) != at.AST_ENUM_DEF:
+        ret false
+    end
+    repeat at.ChildCount(a, dn) in i:
+        if at.At(a, at.Child(a, dn, i)).a != 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func cg_switch_native(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    nn := at.At(a, n)
+    subj_int := cg_is_int_typestr(at.At(a, nn.a).type_str)
+    mut enum_ok := false
+    mut seen := Vector {} as Vector<u64>
+    defer seen.free()
+    cnt := nn.list.len()
+    repeat cnt in i:
+        cs := at.At(a, nn.list.get(i))
+        if cs.op == tok.TK_KW_ELSE:
+            if i != cnt - 1:
+                ret false
+            end
+            continue
+        end
+        repeat cs.list.len() in j:
+            it := at.At(a, cs.list.get(j))
+            if it.op != 0:
+                ret false
+            end
+            ln := at.At(a, it.a)
+            if ln.kind == at.AST_LITERAL and subj_int and (ln.op == tok.TK_INT or ln.op == tok.TK_CHAR):
+                repeat seen.len() in k:
+                    if seen.get(k) == ln.value_int:
+                        ret false
+                    end
+                end
+                seen.push(ln.value_int)
+            else not subj_int and ln.kind == at.AST_MEMBER and ln.a != 0 and at.KindOf(a, ln.a) == at.AST_IDENTIFIER:
+                if not enum_ok:
+                    if not cg_enum_plain(s, a, at.At(a, ln.a).name):
+                        ret false
+                    end
+                    enum_ok = true
+                end
+            else:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
 func cg_switch_push(g &: Cg, label: str):
     g.loop_dmark.push(g.fn_defers.len())
     g.brk_goto.push(label)
@@ -446,6 +506,33 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_line(
             g, cg_ctype(str.Len(subj_ts2) > 0 ? subj_ts2 : "int32_t") + " " + subj_var2 + " = (" + cg_expr(g, s, a, nn.a) + ");"
         )
+        if cg_switch_native(s, a, n):
+            cg_switch_push(g, end_lbl)
+            cg_line(g, "switch (" + subj_var2 + ") {")
+            repeat nn.list.len() in i3:
+                csid3 := nn.list.get(i3)
+                cs3 := at.At(a, csid3)
+                if cs3.op == tok.TK_KW_ELSE:
+                    cg_line(g, "default: {")
+                else:
+                    mut labels := ""
+                    repeat cs3.list.len() in j3:
+                        labels = labels + "case " + cg_expr(g, s, a, at.At(a, cs3.list.get(j3)).a) + ": "
+                    end
+                    cg_line(g, labels + "{")
+                end
+                g.indent += 1
+                cg_scoped_stmts(g, s, a, cs3.b)
+                g.indent -= 1
+                cg_line(g, "}")
+            end
+            cg_line(g, "}")
+            cg_switch_pop(g)
+            cg_line(g, "goto " + end_lbl + "; " + end_lbl + ": ;")
+            g.indent -= 1
+            cg_line(g, "}")
+            ret
+        end
         cg_line(g, cg_ctype("bool") + " " + matched_var + " = false;")
         cg_switch_push(g, end_lbl)
         repeat nn.list.len() in i2:

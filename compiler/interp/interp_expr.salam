@@ -188,6 +188,16 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if not plain and str.Equals(nm, "listdir") and na == 1:
             ret do_listdir(ip, a, n, args.get(0))
         end
+        if not plain and str.Equals(nm, "open") and na == 2:
+            ofi := find_extern_fn(ip, "salam_open")
+            if ofi == 0:
+                rt_error(ip, a, n, i18.Tr("'open' is not supported by the interpreter"))
+                ret val_null()
+            end
+            oef := ip.extern_fns.get(ofi)
+            ocl := ip.closures.get(oef.id)
+            ret call_func(ip, a, ocl.fn, ocl.env, false, val_null(), args)
+        end
         if not plain and str.Equals(nm, "hash") and na == 1:
             ha := args.get(0)
             hname := ha.kind == VAL_STR ? "salam_str_hash" : "salam_hash_int"
@@ -307,59 +317,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        na2 := args.len()
-
-        if str.Equals(method, "free") and na2 == 0:
-            ret val_null()
-        end
-        if recvr.kind == VAL_STRUCT:
-            stv := ip.sts.get(recvr.id)
-            mut m := struct_method_arity(a, stv.def, method, na2)
-            if m == 0:
-                m = struct_method(a, stv.def, method)
-            end
-            if m != 0:
-                denv := find_def_env(ip, m)
-                mr := invoke(
-                    ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
-                )
-                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
-                ret mr
-            end
-            fi := st_find_field(ip, recvr.id, method)
-            if fi >= 0:
-                s2 := ip.sts.get(recvr.id)
-                fv := s2.fvals.get(fi)
-                if fv.kind == VAL_FUNC:
-                    fcl := ip.closures.get(fv.id)
-                    ret invoke(ip, a, env, n, fcl.fn, fcl.env, false, val_null(), args)
-                end
-            end
-            im2 := find_impl_method(ip, a, stv.type_name, method, na2)
-            if im2 != 0:
-                denv3 := find_def_env(ip, im2)
-                ir := invoke(
-                    ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
-                )
-                writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
-                ret ir
-            end
-            rt_error(
-                ip, a, n, co.Format2(
-                    i18.Tr("struct '%s' has no method '%s'"), co.ArgStr(stv.type_name), co.ArgStr(method)
-                )
-            )
-            ret val_null()
-        end
-
-        im := find_impl_method(ip, a, onn.type_str, method, na2)
-        if im != 0:
-            denv2 := find_def_env(ip, im)
-            ret invoke(
-                ip, a, env, n, im, denv2 != 0 ? denv2 : ip.globals, true, recvr, args
-            )
-        end
-        ret call_builtin_method(ip, a, n, recvr, method, args)
+        ret method_call_values(ip, a, env, n, obj, method, recvr, args, back_addr, back_ts)
     end
 
     mut fv2 := eval(ip, a, env, callee)
@@ -570,30 +528,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        mut found := false
-        r := try_struct_op(ip, a, op, av, bv, true, found)
-        if found:
-            ret r
-        end
-        if op == tok.TK_EQ:
-            ret val_bool(value_eq(av, bv))
-        end
-        if op == tok.TK_NE:
-            ret val_bool(not value_eq(av, bv))
-        end
-        if op == tok.TK_LT:
-            ret val_bool(value_cmp(av, bv) < 0)
-        end
-        if op == tok.TK_GT:
-            ret val_bool(value_cmp(av, bv) > 0)
-        end
-        if op == tok.TK_LE:
-            ret val_bool(value_cmp(av, bv) <= 0)
-        end
-        if op == tok.TK_GE:
-            ret val_bool(value_cmp(av, bv) >= 0)
-        end
-        ret arith(ip, a, n, op, av, bv)
+        ret binary_values(ip, a, n, op, av, bv)
     end
     if k == at.AST_TERNARY:
         cv := eval(ip, a, env, node.a)
@@ -638,26 +573,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        if uav.kind == VAL_STRUCT:
-            mut ufound := false
-            ur := try_struct_op(ip, a, node.op, uav, val_null(), false, ufound)
-            if ufound:
-                ret ur
-            end
-        end
-        if node.op == tok.TK_MINUS:
-            if uav.kind == VAL_FLOAT:
-                ret val_float(0.0 - uav.f)
-            end
-            ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
-        end
-        if node.op == tok.TK_NOT:
-            ret val_bool(not to_bool(uav))
-        end
-        if node.op == tok.TK_TILDE:
-            ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
-        end
-        ret uav
+        ret unary_value(ip, a, node.op, uav)
     end
     if k == at.AST_INCDEC:
         mut loc := interp_resolve_loc(ip, a, env, node.a)
@@ -681,77 +597,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        ts := node.ty != 0 ? at.At(a, node.ty).type_str : ""
-        bts := node.ty != 0 ? ts : node.type_str
-        if str.StartsWith(bts, "dyn ") and not str.EndsWith(bts, "*"):
-            ret val_box_dyn(ip, cav)
-        end
-        tn := str.Len(ts)
-        if tn != 0 and byte_at(ts, tn - 1) == 42:
-            mut addr := 0 as i64
-            if cav.kind == VAL_STR:
-                svp := cav.s as void*
-                addr = svp as i64
-            else cav.kind == VAL_NULL or cav.kind == VAL_INT or cav.kind == VAL_CHAR or cav.kind == VAL_FLOAT or cav.kind == VAL_BOOL or cav.kind == VAL_PTR or cav.kind == VAL_FUNC:
-                addr = to_int(cav)
-            else cav.kind == VAL_ARRAY:
-                addr = arr_materialize(ip, cav.id)
-                if addr == (0 as i64):
-                    rt_error(ip, a, n, i18.Tr("cannot take the address of an empty array, or one whose elements have no fixed native layout"))
-                    ret val_null()
-                end
-            else:
-                rt_error(ip, a, n, i18.Tr("cannot take the address of this value in the interpreter (use 'salam run' instead)"))
-                ret val_null()
-            end
-            ret interp_ptr_value(ip, addr, ts)
-        end
-        base := base_typename(ts)
-        if str.Equals(base, "char"):
-            ret val_char(to_int(cav))
-        end
-        if str.Equals(base, "uchar") and cav.kind != VAL_STR:
-            mut ucb := str.NewBuilder()
-            str.BufAppendCp(ucb, to_int(cav) as int)
-            ucs := str.BufStr(ucb)
-            str.BufFree(ucb)
-            ret val_str(ucs)
-        end
-        if cav.kind == VAL_STR and is_int_typename(base) and str.Equals(base_typename(at.At(a, node.a).type_str), "uchar"):
-            mut ucp := 0
-            if str.Len(cav.s) > 0:
-                str.CodePointAt(cav.s, 0, ucp)
-                if ucp < 0: ucp = 0xFFFD end
-            end
-            ret val_int_ty(ucp as i64, int_ty_from_typestr(base))
-        end
-        if str.Equals(base, "bool"):
-            ret val_bool(to_bool(cav))
-        end
-        if is_int_typename(base):
-            cty := int_ty_from_typestr(base)
-            if cav.kind == VAL_FLOAT and int_ty_is_unsigned(cty):
-                ret val_int_ty((cav.f as u64) as i64, cty)
-            end
-            ret val_int_ty(to_int(cav), cty)
-        end
-        if is_float_typename(base):
-            if str.Equals(base, "f32"):
-                ret val_float((to_float(cav) as f32) as f64)
-            end
-            ret val_float(to_float(cav))
-        end
-        if str.Equals(base, "str"):
-            if cav.kind == VAL_PTR:
-                if cav.pa == (0 as i64):
-                    ret val_null()
-                end
-                pv := cav.pa as void*
-                ret val_str(pv as str)
-            end
-            ret val_str(to_str(ip, cav))
-        end
-        ret cav
+        ret cast_value(ip, a, n, cav)
     end
     if k == at.AST_CALL:
         ret eval_call(ip, a, env, n)
@@ -819,46 +665,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if ip.failed:
             ret val_null()
         end
-        if recvr.kind == VAL_MODULE:
-            md := ip.mods.get(recvr.id)
-            cslot := env_find_local(ip, md.env, node.name)
-            if cslot >= 0:
-                ret env_slot_val(ip, md.env, cslot)
-            end
-            rt_error(
-                ip, a, n, co.Format2(
-                    i18.Tr("package '%s' has no member '%s'"), co.ArgStr(md.name), co.ArgStr(node.name)
-                )
-            )
-            ret val_null()
-        end
-        if recvr.kind == VAL_STRUCT:
-            fi := st_find_field(ip, recvr.id, node.name)
-            if fi >= 0:
-                sv := ip.sts.get(recvr.id)
-                ret sv.fvals.get(fi)
-            end
-            stv := ip.sts.get(recvr.id)
-            rt_error(
-                ip, a, n, co.Format2(
-                    i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(stv.type_name), co.ArgStr(node.name)
-                )
-            )
-            ret val_null()
-        end
-        if recvr.kind == VAL_PTR:
-            mut fa := 0 as i64
-            mut fts := ""
-            if interp_mem_ptr_field(ip, a, recvr, node.name, fa, fts):
-                ret interp_mem_load(ip, a, fa, fts)
-            end
-        end
-        rt_error(
-            ip, a, n, co.Format1(
-                i18.Tr("cannot access member '%s'"), co.ArgStr(node.name)
-            )
-        )
-        ret val_null()
+        ret member_value(ip, a, n, recvr)
     end
     if k == at.AST_INDEX:
         iav := eval(ip, a, env, node.a)
@@ -963,7 +770,19 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         ret val_arr(arr_view(ip, basev.id, lo as int, (hi - lo) as int))
     end
     if k == at.AST_LAMBDA:
-        ret mk_closure(ip, n, env)
+        if node.captures.len() == 0:
+            ret mk_closure(ip, n, env)
+        end
+        cenv := env_new(ip, env)
+        repeat node.captures.len() in ci:
+            cname := at.Get(a, node.captures.get(ci)).name
+            mut cw := 0
+            cslot := env_find(ip, env, cname, cw)
+            if cslot >= 0:
+                env_define(ip, cenv, cname, val_copy_deep(ip, env_slot_val(ip, cw, cslot)))
+            end
+        end
+        ret mk_closure(ip, n, cenv)
     end
     if k == at.AST_STRUCT_LIT:
         if str.Equals(node.name, "HashMap"):
@@ -1095,4 +914,232 @@ func eval_func_addr(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         )
     )
     ret val_null()
+end
+
+func binary_values(ip &: Interp, a &: at.Ast, n: int, op: int, av: Value, bv: Value): Value:
+    mut found := false
+    r := try_struct_op(ip, a, op, av, bv, true, found)
+    if found:
+        ret r
+    end
+    if op == tok.TK_EQ:
+        ret val_bool(value_eq(av, bv))
+    end
+    if op == tok.TK_NE:
+        ret val_bool(not value_eq(av, bv))
+    end
+    if op == tok.TK_LT:
+        ret val_bool(value_cmp(av, bv) < 0)
+    end
+    if op == tok.TK_GT:
+        ret val_bool(value_cmp(av, bv) > 0)
+    end
+    if op == tok.TK_LE:
+        ret val_bool(value_cmp(av, bv) <= 0)
+    end
+    if op == tok.TK_GE:
+        ret val_bool(value_cmp(av, bv) >= 0)
+    end
+    ret arith(ip, a, n, op, av, bv)
+end
+
+func unary_value(ip &: Interp, a &: at.Ast, op: int, uav: Value): Value:
+    if uav.kind == VAL_STRUCT:
+        mut ufound := false
+        ur := try_struct_op(ip, a, op, uav, val_null(), false, ufound)
+        if ufound:
+            ret ur
+        end
+    end
+    if op == tok.TK_MINUS:
+        if uav.kind == VAL_FLOAT:
+            ret val_float(0.0 - uav.f)
+        end
+        ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
+    end
+    if op == tok.TK_NOT:
+        ret val_bool(not to_bool(uav))
+    end
+    if op == tok.TK_TILDE:
+        ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
+    end
+    ret uav
+end
+
+func cast_value(ip &: Interp, a &: at.Ast, n: int, cav: Value): Value:
+    node := at.At(a, n)
+    ts := node.ty != 0 ? at.At(a, node.ty).type_str : ""
+    bts := node.ty != 0 ? ts : node.type_str
+    if str.StartsWith(bts, "dyn ") and not str.EndsWith(bts, "*"):
+        ret val_box_dyn(ip, cav)
+    end
+    tn := str.Len(ts)
+    if tn != 0 and byte_at(ts, tn - 1) == 42:
+        mut addr := 0 as i64
+        if cav.kind == VAL_STR:
+            svp := cav.s as void*
+            addr = svp as i64
+        else cav.kind == VAL_NULL or cav.kind == VAL_INT or cav.kind == VAL_CHAR or cav.kind == VAL_FLOAT or cav.kind == VAL_BOOL or cav.kind == VAL_PTR or cav.kind == VAL_FUNC:
+            addr = to_int(cav)
+        else cav.kind == VAL_ARRAY:
+            addr = arr_materialize(ip, cav.id)
+            if addr == (0 as i64):
+                rt_error(ip, a, n, i18.Tr("cannot take the address of an empty array, or one whose elements have no fixed native layout"))
+                ret val_null()
+            end
+        else:
+            rt_error(ip, a, n, i18.Tr("cannot take the address of this value in the interpreter (use 'salam run' instead)"))
+            ret val_null()
+        end
+        ret interp_ptr_value(ip, addr, ts)
+    end
+    base := base_typename(ts)
+    if str.Equals(base, "char"):
+        ret val_char(to_int(cav))
+    end
+    if str.Equals(base, "uchar") and cav.kind != VAL_STR:
+        mut ucb := str.NewBuilder()
+        str.BufAppendCp(ucb, to_int(cav) as int)
+        ucs := str.BufStr(ucb)
+        str.BufFree(ucb)
+        ret val_str(ucs)
+    end
+    if cav.kind == VAL_STR and is_int_typename(base) and str.Equals(base_typename(at.At(a, node.a).type_str), "uchar"):
+        mut ucp := 0
+        if str.Len(cav.s) > 0:
+            str.CodePointAt(cav.s, 0, ucp)
+            if ucp < 0: ucp = 0xFFFD end
+        end
+        ret val_int_ty(ucp as i64, int_ty_from_typestr(base))
+    end
+    if str.Equals(base, "bool"):
+        ret val_bool(to_bool(cav))
+    end
+    if is_int_typename(base):
+        cty := int_ty_from_typestr(base)
+        if cav.kind == VAL_FLOAT and int_ty_is_unsigned(cty):
+            ret val_int_ty((cav.f as u64) as i64, cty)
+        end
+        ret val_int_ty(to_int(cav), cty)
+    end
+    if is_float_typename(base):
+        if str.Equals(base, "f32"):
+            ret val_float((to_float(cav) as f32) as f64)
+        end
+        ret val_float(to_float(cav))
+    end
+    if str.Equals(base, "str"):
+        if cav.kind == VAL_PTR:
+            if cav.pa == (0 as i64):
+                ret val_null()
+            end
+            pv := cav.pa as void*
+            ret val_str(pv as str)
+        end
+        ret val_str(to_str(ip, cav))
+    end
+    ret cav
+end
+
+func member_value(ip &: Interp, a &: at.Ast, n: int, recvr: Value): Value:
+    node := at.At(a, n)
+    if recvr.kind == VAL_MODULE:
+        md := ip.mods.get(recvr.id)
+        cslot := env_find_local(ip, md.env, node.name)
+        if cslot >= 0:
+            ret env_slot_val(ip, md.env, cslot)
+        end
+        rt_error(
+            ip, a, n, co.Format2(
+                i18.Tr("package '%s' has no member '%s'"), co.ArgStr(md.name), co.ArgStr(node.name)
+            )
+        )
+        ret val_null()
+    end
+    if recvr.kind == VAL_STRUCT:
+        fi := st_find_field(ip, recvr.id, node.name)
+        if fi >= 0:
+            sv := ip.sts.get(recvr.id)
+            ret sv.fvals.get(fi)
+        end
+        stv := ip.sts.get(recvr.id)
+        rt_error(
+            ip, a, n, co.Format2(
+                i18.Tr("struct '%s' has no field '%s'"), co.ArgStr(stv.type_name), co.ArgStr(node.name)
+            )
+        )
+        ret val_null()
+    end
+    if recvr.kind == VAL_PTR:
+        mut fa := 0 as i64
+        mut fts := ""
+        if interp_mem_ptr_field(ip, a, recvr, node.name, fa, fts):
+            ret interp_mem_load(ip, a, fa, fts)
+        end
+    end
+    rt_error(
+        ip, a, n, co.Format1(
+            i18.Tr("cannot access member '%s'"), co.ArgStr(node.name)
+        )
+    )
+    ret val_null()
+end
+
+func method_call_values(
+    ip &: Interp, a &: at.Ast, env: int, n: int, obj: int, method: str, recvr: Value, args: Vector<Value>, back_addr: i64, back_ts: str
+): Value:
+    onn := at.At(a, obj)
+    na2 := args.len()
+
+    if str.Equals(method, "free") and na2 == 0:
+        ret val_null()
+    end
+    if recvr.kind == VAL_STRUCT:
+        stv := ip.sts.get(recvr.id)
+        mut m := struct_method_arity(a, stv.def, method, na2)
+        if m == 0:
+            m = struct_method(a, stv.def, method)
+        end
+        if m != 0:
+            denv := find_def_env(ip, m)
+            mr := invoke(
+                ip, a, env, n, m, denv != 0 ? denv : ip.globals, true, recvr, args
+            )
+            writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
+            ret mr
+        end
+        fi := st_find_field(ip, recvr.id, method)
+        if fi >= 0:
+            s2 := ip.sts.get(recvr.id)
+            fv := s2.fvals.get(fi)
+            if fv.kind == VAL_FUNC:
+                fcl := ip.closures.get(fv.id)
+                ret invoke(ip, a, env, n, fcl.fn, fcl.env, false, val_null(), args)
+            end
+        end
+        im2 := find_impl_method(ip, a, stv.type_name, method, na2)
+        if im2 != 0:
+            denv3 := find_def_env(ip, im2)
+            ir := invoke(
+                ip, a, env, n, im2, denv3 != 0 ? denv3 : ip.globals, true, recvr, args
+            )
+            writeback_receiver(ip, a, env, obj, recvr, back_addr, back_ts)
+            ret ir
+        end
+        rt_error(
+            ip, a, n, co.Format2(
+                i18.Tr("struct '%s' has no method '%s'"), co.ArgStr(stv.type_name), co.ArgStr(method)
+            )
+        )
+        ret val_null()
+    end
+
+    im := find_impl_method(ip, a, onn.type_str, method, na2)
+    if im != 0:
+        denv2 := find_def_env(ip, im)
+        ret invoke(
+            ip, a, env, n, im, denv2 != 0 ? denv2 : ip.globals, true, recvr, args
+        )
+    end
+    ret call_builtin_method(ip, a, n, recvr, method, args)
 end

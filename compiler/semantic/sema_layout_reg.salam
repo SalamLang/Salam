@@ -4,22 +4,324 @@ import str
 
 include i18 "../i18n.salam"
 
-func lay_elem_lookup(name: str): int:
-    repeat g_sm_lay_elem_name.len() in i:
-        if str.Equals(g_sm_lay_elem_name.get(i), name):
+mut g_lay_root := ""
+mut g_lay_loaded := false
+mut g_lay_wanted := false
+mut g_lay_want_root := ""
+mut g_lay_schema_reported := false
+mut g_lay_elems := Vector {} as Vector<LayElem>
+mut g_lay_attrs := Vector {} as Vector<LayAttr>
+mut g_lay_cats := Vector {} as Vector<str>
+mut g_lay_apat_prefix := Vector {} as Vector<str>
+mut g_lay_apat_key := Vector {} as Vector<str>
+mut g_lay_ealias_loose := Vector {} as Vector<str>
+mut g_lay_ealias_idx := Vector {} as Vector<int>
+mut g_lay_aalias_loose := Vector {} as Vector<str>
+mut g_lay_aalias_key := Vector {} as Vector<str>
+mut g_sm_lay_val_group := Vector {} as Vector<str>
+mut g_sm_lay_val_spell := Vector {} as Vector<str>
+mut g_sm_lay_val_canon := Vector {} as Vector<str>
+mut g_lay_valgen_group := Vector {} as Vector<str>
+mut g_lay_valgen_canon := Vector {} as Vector<str>
+mut g_lay_valgen_gen := Vector {} as Vector<str>
+mut g_lay_schema_errors := Vector {} as Vector<str>
+
+struct LayElem:
+    pub key: str = ""
+    pub tag: str = ""
+    pub kind: int = 0
+    pub cats: u64 = 0 as u64
+    pub cat_names: str = ""
+    pub parents: str = ""
+    pub path: str = ""
+    pub ancestors: str = ""
+    pub children: str = ""
+    pub forbidden: str = ""
+    pub forbidden_desc: str = ""
+    pub required: str = ""
+    pub when_attr: str = ""
+    pub when_value: str = ""
+    pub unique: str = ""
+    pub generator: str = ""
+    pub head: bool = false
+    pub first: bool = false
+    pub styled: bool = true
+    pub fa_name: str = ""
+end
+
+struct LayAttr:
+    pub key: str = ""
+    pub out: str = ""
+    pub dest: int = 0
+    pub vtype: int = 0
+    pub allowed: str = ""
+    pub scope: str = ""
+    pub multiple: bool = false
+    pub has_default: bool = false
+    pub defval: str = ""
+    pub fa_name: str = ""
+end
+
+func lay_loose(s: str): str:
+    mut out := ""
+    n := str.Len(s)
+    mut i := 0
+    until i < n:
+        b := byte_at(s, i)
+        if b == 32 or b == 95 or b == 45:
+            i += 1
+            continue
+        end
+        if b == 226 and i + 2 < n and byte_at(s, i + 1) == 128 and byte_at(s, i + 2) == 140:
+            i += 3
+            continue
+        end
+        if b >= 65 and b <= 90:
+            out += char_from_code(b + 32)
+        else:
+            out += str.Substr(s, i, 1)
+        end
+        i += 1
+    end
+    ret out
+end
+
+func lay_schema_error(msg: str):
+    g_lay_schema_errors.push(msg)
+end
+
+func lay_cat_index(name: str): int:
+    l := lay_loose(name)
+    repeat g_lay_cats.len() in i:
+        if str.Equals(g_lay_cats.get(i), l):
             ret i
         end
     end
     ret 0 - 1
 end
 
-func lay_attr_lookup(name: str): int:
-    repeat g_sm_lay_attr_name.len() in i:
-        if str.Equals(g_sm_lay_attr_name.get(i), name):
+func lay_cat_bit(name: str): u64:
+    ci := lay_cat_index(name)
+    if ci < 0 or ci >= 64:
+        ret 0
+    end
+    mut bit := 1 as u64
+    repeat ci:
+        bit = bit * 2
+    end
+    ret bit
+end
+
+func lay_elem_add_alias(spelling: str, ei: int):
+    l := lay_loose(spelling)
+    if str.Len(l) == 0:
+        ret
+    end
+    repeat g_lay_ealias_loose.len() in i:
+        if g_lay_ealias_idx.get(i) == ei and str.Equals(g_lay_ealias_loose.get(i), l):
+            ret
+        end
+    end
+    g_lay_ealias_loose.push(l)
+    g_lay_ealias_idx.push(ei)
+end
+
+func lay_attr_pattern_match(name: str, rest &: str): str:
+    low := str.Lower(name)
+    repeat g_lay_apat_prefix.len() in i:
+        p := g_lay_apat_prefix.get(i)
+        pl := str.Len(p)
+        if str.Len(low) > pl + 1 and str.StartsWith(low, p):
+            sep := byte_at(low, pl)
+            if sep == 32 or sep == 95 or sep == 45:
+                rest = str.Substr(name, pl + 1, str.Len(name) - pl - 1)
+                ret g_lay_apat_key.get(i)
+            end
+        end
+    end
+    ret ""
+end
+
+func lay_attr_add_pattern(spelling: str, key: str):
+    p := str.Lower(spelling)
+    repeat g_lay_apat_prefix.len() in i:
+        if str.Equals(g_lay_apat_prefix.get(i), p):
+            ret
+        end
+    end
+    g_lay_apat_prefix.push(p)
+    g_lay_apat_key.push(key)
+end
+
+func lay_attr_add_alias(spelling: str, key: str):
+    l := lay_loose(spelling)
+    if str.Len(l) == 0:
+        ret
+    end
+    repeat g_lay_aalias_loose.len() in i:
+        if str.Equals(g_lay_aalias_loose.get(i), l):
+            if not str.Equals(g_lay_aalias_key.get(i), key):
+                lay_schema_error("attribute alias '" + spelling + "' is used by both '" + g_lay_aalias_key.get(i) + "' and '" + key + "'")
+            end
+            ret
+        end
+    end
+    g_lay_aalias_loose.push(l)
+    g_lay_aalias_key.push(key)
+end
+
+func lay_elem_candidates(name: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    l := lay_loose(name)
+    repeat g_lay_ealias_loose.len() in i:
+        if str.Equals(g_lay_ealias_loose.get(i), l):
+            out.push(g_lay_ealias_idx.get(i))
+        end
+    end
+    ret out
+end
+
+func lay_elem_by_key(key: str): int:
+    repeat g_lay_elems.len() in i:
+        if str.Equals(g_lay_elems.get(i).key, key):
             ret i
         end
     end
     ret 0 - 1
+end
+
+func lay_elem_lookup(name: str): int:
+    k := lay_elem_by_key(name)
+    if k >= 0:
+        ret k
+    end
+    mut c := lay_elem_candidates(name)
+    defer c.free()
+    if c.len() == 0:
+        ret 0 - 1
+    end
+    ret c.get(0)
+end
+
+func lay_attr_key_exact(name: str): str:
+    l := lay_loose(name)
+    repeat g_lay_aalias_loose.len() in i:
+        if str.Equals(g_lay_aalias_loose.get(i), l):
+            ret g_lay_aalias_key.get(i)
+        end
+    end
+    ret ""
+end
+
+func lay_attr_key(name: str): str:
+    k := lay_attr_key_exact(name)
+    if str.Len(k) > 0:
+        ret k
+    end
+    mut rest := ""
+    ret lay_attr_pattern_match(name, rest)
+end
+
+func lay_attr_lookup(name: str): int:
+    key := lay_attr_key(name)
+    if str.Len(key) == 0:
+        ret 0 - 1
+    end
+    mut first := 0 - 1
+    repeat g_lay_attrs.len() in i:
+        av := g_lay_attrs.get(i)
+        if str.Equals(av.key, key):
+            if str.Len(av.scope) == 0:
+                ret i
+            end
+            if first < 0:
+                first = i
+            end
+        end
+    end
+    ret first
+end
+
+func lay_attr_for(ei: int, key: str): int:
+    mut global := 0 - 1
+    ekey := ei >= 0 ? g_lay_elems.get(ei).key : ""
+    repeat g_lay_attrs.len() in i:
+        av := g_lay_attrs.get(i)
+        if not str.Equals(av.key, key):
+            continue
+        end
+        if str.Len(av.scope) == 0:
+            if global < 0:
+                global = i
+            end
+        else str.Len(ekey) > 0 and lay_csv_has(av.scope, ekey):
+            ret i
+        end
+    end
+    ret global
+end
+
+func lay_attr_known(key: str): bool:
+    repeat g_lay_attrs.len() in i:
+        if str.Equals(g_lay_attrs.get(i).key, key):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_attr_display(key: str): str:
+    if str.Equals(i18.Lang(), "fa"):
+        repeat g_lay_attrs.len() in i:
+            av := g_lay_attrs.get(i)
+            if str.Equals(av.key, key) and str.Len(av.fa_name) > 0:
+                ret av.fa_name
+            end
+        end
+    end
+    ret key
+end
+
+func lay_elem_display(ei: int): str:
+    if ei < 0:
+        ret ""
+    end
+    e := g_lay_elems.get(ei)
+    if str.Equals(i18.Lang(), "fa") and str.Len(e.fa_name) > 0:
+        ret e.fa_name
+    end
+    ret e.key
+end
+
+func lay_list_has_elem(csv: str, ei: int): bool:
+    if str.Len(csv) == 0 or ei < 0:
+        ret false
+    end
+    e := g_lay_elems.get(ei)
+    mut parts := str.Split(csv, ",")
+    defer parts.free()
+    repeat parts.len() in i:
+        t := parts.get(i)
+        if str.Len(t) == 0:
+            continue
+        end
+        if str.Equals(t, "*"):
+            ret true
+        end
+        if byte_at(t, 0) == 35:
+            bit := lay_cat_bit(str.Substr(t, 1, str.Len(t) - 1))
+            if bit != 0 and (e.cats & bit) != 0:
+                ret true
+            end
+        else str.Equals(t, e.key):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lay_list_has_token(csv: str, tok_: str): bool:
+    ret lay_csv_has(csv, tok_)
 end
 
 func lay_add_value(group: str, spelling: str, canonical: str):
@@ -38,6 +340,21 @@ func lay_dyn_value(group: str, v: str): str:
     repeat g_sm_lay_val_group.len() in i:
         if str.Equals(g_sm_lay_val_group.get(i), group) and str.Equals(g_sm_lay_val_spell.get(i), v):
             ret g_sm_lay_val_canon.get(i)
+        end
+    end
+    l := lay_loose(v)
+    repeat g_sm_lay_val_group.len() in j:
+        if str.Equals(g_sm_lay_val_group.get(j), group) and str.Equals(lay_loose(g_sm_lay_val_spell.get(j)), l):
+            ret g_sm_lay_val_canon.get(j)
+        end
+    end
+    ret ""
+end
+
+func lay_value_generator(group: str, canon: str): str:
+    repeat g_lay_valgen_group.len() in i:
+        if str.Equals(g_lay_valgen_group.get(i), group) and str.Equals(g_lay_valgen_canon.get(i), canon):
+            ret g_lay_valgen_gen.get(i)
         end
     end
     ret ""
@@ -90,6 +407,14 @@ func lay_is_int(v: str): bool:
     ret lay_all_digits(str.Substr(v, p, str.Len(v) - p))
 end
 
+func lay_is_uint(v: str): bool:
+    mut p := 0
+    if str.Len(v) > 0 and byte_at(v, 0) == 43:
+        p = 1
+    end
+    ret lay_all_digits(str.Substr(v, p, str.Len(v) - p))
+end
+
 func lay_is_float(v: str): bool:
     mut p := 0
     if str.Len(v) > 0 and (byte_at(v, 0) == 43 or byte_at(v, 0) == 45):
@@ -97,13 +422,22 @@ func lay_is_float(v: str): bool:
     end
     mut dig := false
     mut dot := false
+    mut exp := false
     n := str.Len(v)
     until p < n:
         b := byte_at(v, p)
         if b >= 48 and b <= 57:
             dig = true
-        else b == 46 and not dot:
+        else b == 46 and not dot and not exp:
             dot = true
+        else (b == 101 or b == 69) and dig and not exp and p + 1 < n:
+            exp = true
+            if byte_at(v, p + 1) == 43 or byte_at(v, p + 1) == 45:
+                p += 1
+            end
+            if p + 1 >= n:
+                ret false
+            end
         else:
             ret false
         end
@@ -112,37 +446,286 @@ func lay_is_float(v: str): bool:
     ret dig
 end
 
+func lay_is_ufloat(v: str): bool:
+    ret str.Len(v) > 0 and byte_at(v, 0) != 45 and lay_is_float(v)
+end
+
+func lay_is_token(v: str): bool:
+    if str.Len(v) == 0:
+        ret false
+    end
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b == 32 or b == 9 or b == 10 or b == 13 or b == 12:
+            ret false
+        end
+    end
+    ret true
+end
+
 func lay_is_email(v: str): bool:
     atp := str.IndexOf(v, "@")
-    if atp <= 0:
+    if atp <= 0 or not lay_is_token(v):
         ret false
     end
     dot := str.IndexFrom(v, ".", atp + 1)
     ret dot >= 0 and dot + 1 < str.Len(v)
 end
 
-func lay_is_url(v: str): bool:
-    if str.StartsWith(v, "http://") or str.StartsWith(v, "https://") or str.StartsWith(v, "mailto:"):
-        ret true
+func lay_url_chars_ok(v: str): bool:
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b == 32 or b == 9 or b == 10 or b == 13 or b == 34 or b == 60 or b == 62 or b == 96:
+            ret false
+        end
     end
+    ret true
+end
+
+func lay_url_scheme_len(v: str): int:
+    n := str.Len(v)
+    if n == 0:
+        ret 0
+    end
+    b0 := byte_at(v, 0)
+    if not ((b0 >= 97 and b0 <= 122) or (b0 >= 65 and b0 <= 90)):
+        ret 0
+    end
+    mut i := 1
+    until i < n:
+        b := byte_at(v, i)
+        if b == 58:
+            ret i
+        end
+        ok := (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 43 or b == 45 or b == 46
+        if not ok:
+            ret 0
+        end
+        i += 1
+    end
+    ret 0
+end
+
+func lay_is_abs_url(v: str): bool:
+    if not lay_url_chars_ok(v):
+        ret false
+    end
+    sl := lay_url_scheme_len(v)
+    if sl == 0:
+        ret str.StartsWith(v, "//") and str.Len(v) > 2
+    end
+    scheme := str.Lower(str.Substr(v, 0, sl))
+    rest := str.Substr(v, sl + 1, str.Len(v) - sl - 1)
+    if str.Equals(scheme, "http") or str.Equals(scheme, "https") or str.Equals(scheme, "ws") or str.Equals(scheme, "wss") or str.Equals(scheme, "ftp"):
+        ret str.StartsWith(rest, "//") and str.Len(rest) > 2
+    end
+    ret str.Len(rest) > 0
+end
+
+func lay_is_rel_url(v: str): bool:
+    if str.Len(v) == 0 or not lay_url_chars_ok(v):
+        ret false
+    end
+    if str.StartsWith(v, "//"):
+        ret false
+    end
+    ret lay_url_scheme_len(v) == 0
+end
+
+func lay_is_url(v: str): bool:
     if str.Len(v) == 0:
         ret false
     end
-    b0 := byte_at(v, 0)
-    if b0 == 47 or b0 == 35 or b0 == 46:
-        ret true
+    ret lay_is_abs_url(v) or lay_is_rel_url(v)
+end
+
+func lay_is_mime(v: str): bool:
+    sl := str.IndexOf(v, "/")
+    if sl <= 0 or sl + 1 >= str.Len(v) or not lay_is_token(v):
+        ret false
     end
-    mut has_sep := false
-    repeat str.Len(v) in i:
-        b := byte_at(v, i)
-        if b == 32 or b == 9 or b == 34 or b == 39 or b == 60 or b == 62:
+    ret str.IndexFrom(v, "/", sl + 1) < 0
+end
+
+func lay_digits_at(v: str, p: int, n: int): bool:
+    if p + n > str.Len(v):
+        ret false
+    end
+    repeat n in i:
+        b := byte_at(v, p + i)
+        if b < 48 or b > 57:
             ret false
         end
-        if b == 46 or b == 47:
-            has_sep = true
+    end
+    ret true
+end
+
+func lay_num_at(v: str, p: int, n: int): int:
+    mut x := 0
+    repeat n in i:
+        x = x * 10 + (byte_at(v, p + i) - 48)
+    end
+    ret x
+end
+
+func lay_is_date(v: str): bool:
+    if str.Len(v) != 10 or not lay_digits_at(v, 0, 4) or byte_at(v, 4) != 45 or not lay_digits_at(v, 5, 2) or byte_at(v, 7) != 45 or not lay_digits_at(v, 8, 2):
+        ret false
+    end
+    m := lay_num_at(v, 5, 2)
+    d := lay_num_at(v, 8, 2)
+    ret m >= 1 and m <= 12 and d >= 1 and d <= 31
+end
+
+func lay_is_time(v: str): bool:
+    n := str.Len(v)
+    if n < 5 or not lay_digits_at(v, 0, 2) or byte_at(v, 2) != 58 or not lay_digits_at(v, 3, 2):
+        ret false
+    end
+    if lay_num_at(v, 0, 2) > 23 or lay_num_at(v, 3, 2) > 59:
+        ret false
+    end
+    if n == 5:
+        ret true
+    end
+    if n < 8 or byte_at(v, 5) != 58 or not lay_digits_at(v, 6, 2) or lay_num_at(v, 6, 2) > 59:
+        ret false
+    end
+    if n == 8:
+        ret true
+    end
+    ret byte_at(v, 8) == 46 and n > 9 and lay_digits_at(v, 9, n - 9)
+end
+
+func lay_is_datetime(v: str): bool:
+    if str.Len(v) < 16:
+        ret false
+    end
+    if not lay_is_date(str.Substr(v, 0, 10)):
+        ret false
+    end
+    sep := byte_at(v, 10)
+    if sep != 84 and sep != 32:
+        ret false
+    end
+    mut rest := str.Substr(v, 11, str.Len(v) - 11)
+    if str.EndsWith(rest, "Z"):
+        rest = str.Substr(rest, 0, str.Len(rest) - 1)
+    else str.Len(rest) > 6:
+        z := str.Len(rest) - 6
+        zb := byte_at(rest, z)
+        if (zb == 43 or zb == 45) and byte_at(rest, z + 3) == 58:
+            rest = str.Substr(rest, 0, z)
         end
     end
-    ret has_sep
+    ret lay_is_time(rest)
+end
+
+func lay_is_duration(v: str): bool:
+    n := str.Len(v)
+    if n < 3 or byte_at(v, 0) != 80:
+        ret false
+    end
+    mut seen_digit := false
+    mut any_unit := false
+    mut in_time := false
+    mut i := 1
+    until i < n:
+        b := byte_at(v, i)
+        if (b >= 48 and b <= 57) or b == 46:
+            seen_digit = true
+        else b == 84 and not in_time:
+            in_time = true
+            seen_digit = false
+        else (b == 68 or b == 87) and not in_time and seen_digit:
+            any_unit = true
+            seen_digit = false
+        else (b == 72 or b == 77 or b == 83) and in_time and seen_digit:
+            any_unit = true
+            seen_digit = false
+        else:
+            ret false
+        end
+        i += 1
+    end
+    ret any_unit and not seen_digit
+end
+
+func lay_is_ulength(v: str): bool:
+    t := str.Trim(v)
+    n := str.Len(t)
+    if n == 0 or byte_at(t, 0) == 45:
+        ret false
+    end
+    if str.EndsWith(t, ")"):
+        ret str.IndexOf(t, "(") > 0
+    end
+    mut i := 0
+    mut digits := false
+    until i < n and ((byte_at(t, i) >= 48 and byte_at(t, i) <= 57) or byte_at(t, i) == 46):
+        digits = true
+        i += 1
+    end
+    if not digits:
+        ret lay_is_token(t)
+    end
+    ret i == n or byte_at(t, i) == 37 or byte_at(t, i) == 32 or byte_at(t, i) >= 65
+end
+
+func lay_is_charset(v: str): bool:
+    l := str.Lower(v)
+    ret str.Equals(l, "utf-8") or str.Equals(l, "utf8")
+end
+
+func lay_is_srcset(v: str): bool:
+    mut parts := str.Split(v, ",")
+    defer parts.free()
+    if parts.len() == 0:
+        ret false
+    end
+    repeat parts.len() in i:
+        mut f := str.Fields(parts.get(i))
+        defer f.free()
+        if f.len() == 0 or f.len() > 2 or not lay_is_url(f.get(0)):
+            ret false
+        end
+        if f.len() == 2:
+            d := f.get(1)
+            dl := str.Len(d)
+            if dl < 2:
+                ret false
+            end
+            unit := byte_at(d, dl - 1)
+            if unit != 119 and unit != 120:
+                ret false
+            end
+            if not lay_is_ufloat(str.Substr(d, 0, dl - 1)):
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func lay_is_media_query(v: str): bool:
+    if str.Len(v) == 0:
+        ret false
+    end
+    mut depth := 0
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b == 40:
+            depth += 1
+        else b == 41:
+            depth -= 1
+            if depth < 0:
+                ret false
+            end
+        else b == 123 or b == 125 or b == 59:
+            ret false
+        end
+    end
+    ret depth == 0
 end
 
 func lay_color_is_css_fn(v: str): bool:
@@ -159,8 +742,8 @@ func lay_map_color(v: str): str:
     if lay_color_is_css_fn(v):
         ret v
     end
-    if str.Equals(v, "currentColor") or str.Equals(v, "currentcolor"):
-        ret "currentColor"
+    if str.Equals(v, "currentColor") or str.Equals(v, "currentcolor") or str.Equals(v, "transparent") or str.Equals(v, "inherit"):
+        ret v
     end
     ret lay_dyn_value("color", v)
 end
@@ -180,7 +763,7 @@ func lay_value_type_name(vt: int): str:
     if vt == VT_INT:
         ret i18.Tr("an integer")
     end
-    if vt == VT_FLOAT:
+    if vt == VT_FLOAT or vt == VT_NUMBER:
         ret i18.Tr("a number")
     end
     if vt == VT_BOOL:
@@ -207,32 +790,116 @@ func lay_value_type_name(vt: int): str:
     if vt == VT_LENGTH:
         ret i18.Tr("a length")
     end
+    if vt == VT_TOKEN:
+        ret i18.Tr("a single word without spaces")
+    end
+    if vt == VT_UINT:
+        ret i18.Tr("a non-negative integer")
+    end
+    if vt == VT_UFLOAT:
+        ret i18.Tr("a non-negative number")
+    end
+    if vt == VT_ABS_URL:
+        ret i18.Tr("an absolute URL")
+    end
+    if vt == VT_REL_URL:
+        ret i18.Tr("a relative URL")
+    end
+    if vt == VT_MIME:
+        ret i18.Tr("a MIME type")
+    end
+    if vt == VT_DATE:
+        ret i18.Tr("a date (YYYY-MM-DD)")
+    end
+    if vt == VT_TIME:
+        ret i18.Tr("a time (HH:MM or HH:MM:SS)")
+    end
+    if vt == VT_DATETIME:
+        ret i18.Tr("a date and time")
+    end
+    if vt == VT_DURATION:
+        ret i18.Tr("a duration")
+    end
+    if vt == VT_IDREF:
+        ret i18.Tr("the id of another element")
+    end
+    if vt == VT_CHARSET:
+        ret i18.Tr("'utf-8'")
+    end
+    if vt == VT_SRCSET:
+        ret i18.Tr("a list of image candidates")
+    end
+    if vt == VT_MEDIA_QUERY:
+        ret i18.Tr("a media query")
+    end
+    if vt == VT_ULENGTH:
+        ret i18.Tr("a non-negative size")
+    end
     ret i18.Tr("a value")
 end
 
-func lay_attr_value_ok(ai: int, value: str): bool:
-    if ai < 0:
-        ret true
-    end
-    v := i18.LayoutValue(value)
-    vt := g_sm_lay_attr_vtype.get(ai)
-    if vt == VT_STRING:
+func lay_single_value_ok(ai: int, v: str): bool:
+    attr := g_lay_attrs.get(ai)
+    vt := attr.vtype
+    if vt == VT_STRING or vt == VT_CODE:
         ret true
     end
     if vt == VT_INT:
         ret lay_is_int(v)
     end
-    if vt == VT_FLOAT:
+    if vt == VT_UINT:
+        ret lay_is_uint(v)
+    end
+    if vt == VT_FLOAT or vt == VT_NUMBER:
         ret lay_is_float(v)
+    end
+    if vt == VT_UFLOAT:
+        ret lay_is_ufloat(v)
     end
     if vt == VT_BOOL:
         ret str.Equals(v, "true") or str.Equals(v, "false")
+    end
+    if vt == VT_TOKEN or vt == VT_IDREF:
+        ret lay_is_token(v)
     end
     if vt == VT_EMAIL:
         ret lay_is_email(v)
     end
     if vt == VT_URL:
         ret lay_is_url(v)
+    end
+    if vt == VT_ABS_URL:
+        ret lay_is_abs_url(v)
+    end
+    if vt == VT_REL_URL:
+        ret lay_is_rel_url(v)
+    end
+    if vt == VT_MIME:
+        ret lay_is_mime(v)
+    end
+    if vt == VT_DATE:
+        ret lay_is_date(v)
+    end
+    if vt == VT_TIME:
+        ret lay_is_time(v)
+    end
+    if vt == VT_DATETIME:
+        ret lay_is_datetime(v) or lay_is_date(v) or lay_is_time(v)
+    end
+    if vt == VT_DURATION:
+        ret lay_is_duration(v)
+    end
+    if vt == VT_CHARSET:
+        ret lay_is_charset(v)
+    end
+    if vt == VT_SRCSET:
+        ret lay_is_srcset(v)
+    end
+    if vt == VT_MEDIA_QUERY:
+        ret lay_is_media_query(v)
+    end
+    if vt == VT_ULENGTH:
+        ret lay_is_ulength(v)
     end
     if vt == VT_COLOR:
         ret str.Len(lay_map_color(v)) > 0
@@ -244,8 +911,100 @@ func lay_attr_value_ok(ai: int, value: str): bool:
         ret str.Len(lay_map_lang(v)) > 0
     end
     if vt == VT_ENUM:
-        allowed := g_sm_lay_attr_allowed.get(ai)
-        ret lay_csv_has(allowed, v) or str.Len(lay_dyn_value(allowed, v)) > 0
+        ret lay_csv_has(attr.allowed, v) or str.Len(lay_dyn_value(attr.allowed, v)) > 0
     end
     ret true
+end
+
+func lay_attr_value_ok(ai: int, value: str): bool:
+    if ai < 0:
+        ret true
+    end
+    v := i18.LayoutValue(value)
+    attr := g_lay_attrs.get(ai)
+    if attr.multiple and attr.vtype != VT_STRING:
+        mut parts := str.Fields(v)
+        defer parts.free()
+        if parts.len() == 0:
+            ret false
+        end
+        repeat parts.len() in i:
+            if not lay_single_value_ok(ai, parts.get(i)):
+                ret false
+            end
+        end
+        ret true
+    end
+    ret lay_single_value_ok(ai, v)
+end
+
+func lay_map_value(ai: int, value: str): str:
+    if ai < 0:
+        ret value
+    end
+    v := i18.LayoutValue(value)
+    attr := g_lay_attrs.get(ai)
+    vt := attr.vtype
+    if vt == VT_COLOR:
+        c := lay_map_color(v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == VT_DIR:
+        c := lay_map_dir(v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == VT_LANG:
+        c := lay_map_lang(v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    if vt == VT_ENUM:
+        if attr.multiple:
+            mut parts := str.Fields(v)
+            defer parts.free()
+            mut out := ""
+            repeat parts.len() in i:
+                p := parts.get(i)
+                c := lay_dyn_value(attr.allowed, p)
+                if i > 0:
+                    out += " "
+                end
+                out += str.Len(c) > 0 ? c : p
+            end
+            ret out
+        end
+        c := lay_dyn_value(attr.allowed, v)
+        ret str.Len(c) > 0 ? c : v
+    end
+    ret value
+end
+
+func lay_suggest_from(name: str, cands: Vector<str>): str:
+    ret sema_suggest_list(name, cands)
+end
+
+func lay_elem_names(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    fa := str.Equals(i18.Lang(), "fa")
+    repeat g_lay_elems.len() in i:
+        e := g_lay_elems.get(i)
+        nm := fa and str.Len(e.fa_name) > 0 ? e.fa_name : e.key
+        if str.IndexOf(nm, "_") < 0:
+            out.push(nm)
+        end
+    end
+    ret out
+end
+
+func lay_attr_names_for(ei: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    fa := str.Equals(i18.Lang(), "fa")
+    ekey := ei >= 0 ? g_lay_elems.get(ei).key : ""
+    repeat g_lay_attrs.len() in i:
+        av := g_lay_attrs.get(i)
+        if str.Len(av.scope) > 0 and not lay_csv_has(av.scope, ekey):
+            continue
+        end
+        out.push(fa and str.Len(av.fa_name) > 0 ? av.fa_name : av.key)
+    end
+    ret out
 end

@@ -1,9 +1,10 @@
 package driver
 
 import os
-import io
 import str
 import time
+import net.http
+import net.router
 
 include tok "../token.salam"
 include src "../source.salam"
@@ -123,6 +124,7 @@ pub func LayoutBuild(opt &: Dr): int:
         _pok := ps.Run(lgr, toks, a, prog)
         tok.StreamFree(toks)
         table := cc.TableBuild("", opt.defines)
+        cc.TableSetPack(table, modpack)
         _ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
 
         base_dir := dir_of(path)
@@ -132,7 +134,9 @@ pub func LayoutBuild(opt &: Dr): int:
         end
         mut s := sm.New(lgr, path, lp.Code(modpack))
         sm.SetCc(s, table)
-        _sok := sm.Run(s, a, prog)
+        if not sm.Run(s, a, prog):
+            rc = 1
+        end
 
         lb := lo.FindLayout(a, prog)
         if lb == 0:
@@ -271,6 +275,7 @@ pub func Web(opt &: Dr): int:
     _pok := ps.Run(lgr, toks, a, prog)
     tok.StreamFree(toks)
     table := cc.TableBuild("", opt.defines)
+    cc.TableSetPack(table, modpack)
     base_dir := dir_of(path)
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
     _ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
@@ -292,7 +297,9 @@ pub func Web(opt &: Dr): int:
     end
     mut s := sm.New(lgr, path, lp.Code(modpack))
     sm.SetCc(s, table)
-    _sok := sm.RunCached(s, a, prog)
+    if not sm.RunCached(s, a, prog):
+        rc = 1
+    end
 
     lo.LocalizeNames(a, lb)
 
@@ -406,24 +413,24 @@ pub func Serve(opt &: Dr): int:
         port = 8000
     end
 
-    mut src_text := "import net.http\nimport net.router\n\nfunc main:\n    mut r := router.NewRouter()\n    router.EnableListing(r)\n    router.Static(r, \"/\", "
-    src_text = src_text + salam_str_literal(dir) + ")\n    mut s := http.NewServer(" + co.I64Toa(port as i64)
-    src_text = src_text + ")\n    http.SetHost(s, " + salam_str_literal(host)
-    src_text = src_text + ")\n    http.EnableAccessLog(s)\n    http.Use(s, r)\n    http.Run(s)\nend\n"
+    mut r := router.NewRouter()
+    router.EnableListing(r)
+    router.Static(r, "/", dir)
+    mut s := http.NewServer(port)
+    http.SetHost(s, host)
+    http.EnableAccessLog(s)
+    http.Use(s, r)
 
-    salam_path := scratch_dir() + "/salam-serve-" + driver_pid() + "-" + time.NowMicros() + ".salam"
-    if os.WriteFile(salam_path, src_text) < 0:
-        io.EPrintln(
-            co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(salam_path))
+    addr := host + ":" + co.I64Toa(port as i64)
+    if not http.RunBackground(s):
+        lgr := lg.New(opt.log_level, resolve_color(opt.color))
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("salam: cannot listen on %s"), co.ArgStr(addr))
         )
         ret 2
     end
-
-    opt.inputs.push(salam_path)
-    opt.input = salam_path
-
-    println "salam: serving " + dir + " at http://" + host + ":" + co.I64Toa(port as i64) + "/ (Ctrl+C to stop)"
-    rc := Run(opt)
-    _rm := os.Remove(salam_path)
-    ret rc
+    println "salam: serving " + dir + " at http://" + addr + "/ (Ctrl+C to stop)"
+    until true:
+        time.Sleep(60000)
+    end
 end

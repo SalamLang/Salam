@@ -148,13 +148,23 @@ compiler's interpreter. If one fails, the build reports E123.
 
 ## Tests
 
-Each element and attribute gets success tests in `tests/{en,fa}/web/` (layout
-build plus `// EXPECT:` substrings, `// EXPECT-NOT:` for text that must not
-appear) and failure tests in `tests/{en,fa}/web_errors/` (`// EXPECT: E0xx`
-plus `// EXPECT-MSG:`). Run them with:
+Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
+
+| directory     | holds                                                       |
+| ------------- | ----------------------------------------------------------- |
+| `elements/`   | one element or attribute family per file                    |
+| `style/`      | CSS emission: properties, lengths, selectors, global styles |
+| `components/` | components and `include`                                    |
+| `pages/`      | whole-page output: root content, direction, titles          |
+| `errors/`     | everything that must be rejected                            |
+
+A success test is a layout build plus `// EXPECT:` substrings, with
+`// EXPECT-NOT:` for text that must not appear. A failure test is
+`// EXPECT: E0xx` plus `// EXPECT-MSG:`. Run the lot, or one directory:
 
 ```sh
-sh tools/bash/run-tests.sh web web_errors
+sh tools/bash/run-tests.sh layout
+sh tools/bash/run-tests.sh layout/errors
 ```
 
 `compiler/tests_port/layout_test.salam` fails if the schema has problems

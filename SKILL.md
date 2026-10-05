@@ -1785,7 +1785,8 @@ Global attributes (`id`, `class`, `title`, `lang`, `dir`, `hidden`, `tabindex`,
 attributes (`data view`, or any `data <name>` which becomes `data-<name>`),
 and every `on<event>` handler work on all elements. All standard CSS properties
 are registered (`background color`, `z index`, ...), with `hover`/`focus`/
-`active`/`before`/`after` prefixes (`hover color = "red"`).
+`active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
+`تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
 
 **Everything is checked at compile time**:
 

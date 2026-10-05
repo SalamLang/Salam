@@ -189,6 +189,80 @@ func vm_struct_lit(ip &: Interp, a &: at.Ast, n: int, sdef: int, R: Value*, base
     ret sv
 end
 
+func vm_is_std_vector(ip &: Interp, sp: SStruct*, mm: int): bool:
+    if sp.fnames.len() != 3 or not str.Equals(sp.fnames.get(0), "data") or not str.Equals(sp.fnames.get(1), "count") or not str.Equals(sp.fnames.get(2), "capacity"):
+        ret false
+    end
+    fl := vm_file_of(ip, mm)
+    ret str.EndsWith(fl, "collections/vector.salam")
+end
+
+func vm_ptr_get(pa: i64, pe: int, i: i64, out &: Value): bool:
+    if pe == PTR_I64:
+        p := pa as i64*
+        out = Value { kind = VAL_INT, ity = ITY_I64, i = p[i] }
+        ret true
+    end
+    if pe == PTR_I32:
+        p2 := pa as i32*
+        out = Value { kind = VAL_INT, ity = ITY_I32, i = p2[i] as i64 }
+        ret true
+    end
+    if pe == PTR_I8:
+        p3 := pa as i8*
+        out = Value { kind = VAL_INT, ity = ITY_I8, i = p3[i] as i64 }
+        ret true
+    end
+    if pe == PTR_U8:
+        p4 := pa as u8*
+        out = Value { kind = VAL_INT, ity = ITY_U8, i = p4[i] as i64 }
+        ret true
+    end
+    if pe == PTR_F64:
+        p5 := pa as f64*
+        out = Value { kind = VAL_FLOAT, f = p5[i] }
+        ret true
+    end
+    if pe == PTR_U64:
+        p6 := pa as u64*
+        out = Value { kind = VAL_INT, ity = ITY_U64, i = p6[i] as i64 }
+        ret true
+    end
+    ret false
+end
+
+func vm_ptr_put(pa: i64, pe: int, i: i64, v: Value): bool:
+    if v.kind == VAL_INT:
+        if pe == PTR_I64 or pe == PTR_U64:
+            p := pa as i64*
+            p[i] = v.i
+            ret true
+        end
+        if pe == PTR_I32:
+            p2 := pa as i32*
+            p2[i] = v.i as i32
+            ret true
+        end
+        if pe == PTR_I8:
+            p3 := pa as i8*
+            p3[i] = v.i as i8
+            ret true
+        end
+        if pe == PTR_U8:
+            p4 := pa as u8*
+            p4[i] = v.i as u8
+            ret true
+        end
+        ret false
+    end
+    if v.kind == VAL_FLOAT and pe == PTR_F64:
+        p5 := pa as f64*
+        p5[i] = v.f
+        ret true
+    end
+    ret false
+end
+
 func vm_index(ip &: Interp, a &: at.Ast, n: int, iav: Value, idxv: Value): Value:
     if iav.kind == VAL_STRUCT:
         stv := ip.sts.get(iav.id)
@@ -971,11 +1045,42 @@ func vm_exec(
                         mci.cdef = sdef
                         mci.cfn = mm
                         mci.cvi = 0
+                        mci.isvec = false
                         if mm != 0:
                             mdenv := find_def_env(ip, mm)
                             mci.cenv = mdenv != 0 ? mdenv : ip.globals
                             mci.cvi = vm_get(ip, a, mm, mci.cenv, true)
                             mci.cfile = vm_file_of(ip, mm)
+                            mci.isvec = mci.vk != 0 and vm_is_std_vector(ip, ip.sts.ref(recvr.id), mm)
+                        end
+                    end
+                    if mci.isvec and mci.cfn != 0:
+                        vsp := ip.sts.ref(recvr.id)
+                        vcnt := vsp.fvals.get(1).i
+                        if mci.vk == 3:
+                            R[x] = Value { kind = VAL_INT, ity = ITY_I32, i = vcnt }
+                            vm_fix(R, x, mci.ity)
+                            pc += VM_W
+                            continue
+                        end
+                        vi0 := R[z]
+                        vdat := vsp.fvals.get(0)
+                        if vi0.kind == VAL_INT and vdat.kind == VAL_PTR and vdat.pa != (0 as i64) and ((vi0.i as u64) & (0xFFFFFFFF as u64)) < ((vcnt as u64) & (0xFFFFFFFF as u64)):
+                            if mci.vk == 1:
+                                mut gv := Value {}
+                                if vm_ptr_get(vdat.pa, vdat.pe, vi0.i, gv):
+                                    R[x] = gv
+                                    vm_fix(R, x, mci.ity)
+                                    pc += VM_W
+                                    continue
+                                end
+                            else:
+                                if vm_ptr_put(vdat.pa, vdat.pe, vi0.i, R[z + 1]):
+                                    R[x] = Value {}
+                                    pc += VM_W
+                                    continue
+                                end
+                            end
                         end
                     end
                     if mci.cfn != 0 and mci.cvi > 0:

@@ -12,6 +12,11 @@ include sm "../semantic/semantic.salam"
 
 mut g_vm := Interp {}
 mut g_ast := at.NewAst()
+mut g_run_main := 0
+mut g_run_rc := 0
+mut g_run_program := 0
+mut g_glob_mods := Vector {} as Vector<int>
+mut g_glob_decls := Vector {} as Vector<int>
 mut g_threads_on := false
 mut g_gil := sync.Mutex {}
 mut g_task_fn := Vector {} as Vector<Value>
@@ -43,7 +48,12 @@ func build_fn_files(ip &: Interp, a &: at.Ast, program: int):
     end
 end
 
-func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
+func run_on_big_stack(_arg: void*):
+    g_run_rc = run_execute(g_vm, g_ast, g_run_main)
+end
+
+func run_prepare(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int, main_out &: int): int:
+    main_out = 0
     build_fn_files(ip, a, program)
     collect_decls(ip, a, program)
     if ip.failed:
@@ -55,18 +65,31 @@ func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
     end
     fixup_generic_envs(ip, a, sem)
     rehome_synthetic_funcs(ip, a)
-    interp_eval_globals(ip, a, sem, program)
-    if ip.failed:
-        ret run_fail(ip)
-    end
+    g_run_program = program
+    g_glob_mods.clear()
+    g_glob_decls.clear()
+    plan_globals(ip, a, sem, g_glob_mods, g_glob_decls)
     main_fn := find_func(ip, a, ip.entry, 0 - 1)
     if main_fn == 0:
+        eval_globals(ip, a, program, g_glob_mods, g_glob_decls)
+        if ip.failed:
+            ret run_fail(ip)
+        end
         lg.Log(
             ip.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
                 i18.Tr("no entry point: define a '%s' function"), co.ArgStr(ip.entry)
             )
         )
         ret 1
+    end
+    main_out = main_fn
+    ret 0
+end
+
+func run_execute(ip &: Interp, a &: at.Ast, main_fn: int): int:
+    eval_globals(ip, a, g_run_program, g_glob_mods, g_glob_decls)
+    if ip.failed:
+        ret run_fail(ip)
     end
     mut noargs := Vector {} as Vector<Value>
     defer noargs.free()
@@ -87,6 +110,15 @@ func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
         ret rc.i as int
     end
     ret 0
+end
+
+func run_program(ip &: Interp, a &: at.Ast, sem &: sm.Sema, program: int): int:
+    mut main_fn := 0
+    prc := run_prepare(ip, a, sem, program, main_fn)
+    if main_fn == 0:
+        ret prc
+    end
+    ret run_execute(ip, a, main_fn)
 end
 
 func ts_save(ip &: Interp): ThreadState:

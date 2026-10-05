@@ -1,0 +1,337 @@
+package semantic
+
+import str
+import os
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const FONT_OK := 0
+const FONT_UNKNOWN := 1
+const FONT_MISMATCH := 2
+const FONT_MISSING := 3
+
+func lay_font_strip_url(url: str): str:
+    mut end_at := str.Len(url)
+    q := str.IndexOf(url, "?")
+    if q >= 0 and q < end_at:
+        end_at = q
+    end
+    h := str.IndexOf(url, "#")
+    if h >= 0 and h < end_at:
+        end_at = h
+    end
+    ret str.Substr(url, 0, end_at)
+end
+
+func lay_font_ext_format(url: str): str:
+    p := lay_font_strip_url(url)
+    mut dot := 0 - 1
+    repeat str.Len(p) in i:
+        b := byte_at(p, i)
+        if b == 46:
+            dot = i
+        else b == 47:
+            dot = 0 - 1
+        end
+    end
+    if dot < 0:
+        ret ""
+    end
+    ext := str.Lower(str.Substr(p, dot + 1, str.Len(p) - dot - 1))
+    if str.Equals(ext, "ttf"):
+        ret "truetype"
+    end
+    if str.Equals(ext, "otf"):
+        ret "opentype"
+    end
+    if str.Equals(ext, "woff") or str.Equals(ext, "woff2"):
+        ret ext
+    end
+    if str.Equals(ext, "ttc"):
+        ret "collection"
+    end
+    ret ""
+end
+
+func lay_font_byte(f: File*, off: int): int:
+    _s := f.seek(off as i64, 0)
+    b := f.read(1 as u64)
+    ret str.Len(b) == 0 ? 0 : byte_at(b, 0)
+end
+
+func lay_font_magic_format(path: str): str:
+    f := os.Open(path, "rb")
+    if f == null:
+        ret ""
+    end
+    b0 := lay_font_byte(f, 0)
+    b1 := lay_font_byte(f, 1)
+    b2 := lay_font_byte(f, 2)
+    b3 := lay_font_byte(f, 3)
+    f.close()
+    if b0 == 0 and b1 == 1 and b2 == 0 and b3 == 0:
+        ret "truetype"
+    end
+    tag := char_from_code(b0) + char_from_code(b1) + char_from_code(b2) + char_from_code(b3)
+    if str.Equals(tag, "true"):
+        ret "truetype"
+    end
+    if str.Equals(tag, "OTTO"):
+        ret "opentype"
+    end
+    if str.Equals(tag, "wOFF"):
+        ret "woff"
+    end
+    if str.Equals(tag, "wOF2"):
+        ret "woff2"
+    end
+    if str.Equals(tag, "ttcf"):
+        ret "collection"
+    end
+    ret ""
+end
+
+func lay_font_is_remote(url: str): bool:
+    ret lay_url_scheme_len(url) > 0 or str.StartsWith(url, "//") or str.StartsWith(url, "/")
+end
+
+func lay_font_resolve(url: str, declared: str, dir: str, fmt &: str, found &: str): int:
+    fmt = ""
+    found = ""
+    ext := lay_font_ext_format(url)
+    if lay_font_is_remote(url):
+        if str.Len(declared) > 0 and str.Len(ext) > 0 and not str.Equals(declared, ext):
+            found = ext
+            ret FONT_MISMATCH
+        end
+        fmt = str.Len(declared) > 0 ? declared : ext
+        ret str.Len(fmt) > 0 ? FONT_OK : FONT_UNKNOWN
+    end
+    rel := lay_font_strip_url(url)
+    path := str.Len(dir) > 0 ? dir + "/" + rel : rel
+    if not os.Exists(path):
+        fmt = str.Len(declared) > 0 ? declared : ext
+        ret FONT_MISSING
+    end
+    magic := lay_font_magic_format(path)
+    if str.Len(magic) > 0:
+        if str.Len(declared) > 0 and not str.Equals(declared, magic):
+            found = magic
+            ret FONT_MISMATCH
+        end
+        if str.Len(ext) > 0 and not str.Equals(ext, magic):
+            found = magic
+            ret FONT_MISMATCH
+        end
+        fmt = magic
+        ret FONT_OK
+    end
+    fmt = str.Len(declared) > 0 ? declared : ext
+    ret str.Len(fmt) > 0 ? FONT_OK : FONT_UNKNOWN
+end
+
+func lay_font_url_safe(url: str): bool:
+    sl := lay_url_scheme_len(url)
+    if sl == 0:
+        ret true
+    end
+    scheme := str.Lower(str.Substr(url, 0, sl))
+    if str.Equals(scheme, "http") or str.Equals(scheme, "https"):
+        ret true
+    end
+    ret str.Equals(scheme, "data") and str.StartsWith(str.Lower(url), "data:font/")
+end
+
+func lay_font_name_ok(v: str): bool:
+    if str.Len(str.Trim(v)) == 0:
+        ret false
+    end
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b < 32 or b == 127 or b == 34 or b == 39 or b == 92 or b == 59 or b == 60 or b == 62 or b == 123 or b == 125:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lay_font_weight_one(w: str): bool:
+    if str.Equals(w, "normal") or str.Equals(w, "bold"):
+        ret true
+    end
+    if not lay_is_uint(w):
+        ret false
+    end
+    n := w.to_int()
+    ret n >= 1 and n <= 1000
+end
+
+func lay_font_weight_ok(v: str): bool:
+    mut parts := str.Fields(v)
+    defer parts.free()
+    if parts.len() == 1:
+        ret lay_font_weight_one(parts.get(0))
+    end
+    if parts.len() == 2:
+        ret lay_is_uint(parts.get(0)) and lay_is_uint(parts.get(1)) and lay_font_weight_one(parts.get(0)) and lay_font_weight_one(parts.get(1))
+    end
+    ret false
+end
+
+func lay_is_hex(b: int): bool:
+    ret (b >= 48 and b <= 57) or (b >= 65 and b <= 70) or (b >= 97 and b <= 102)
+end
+
+func lay_font_range_one(r: str): bool:
+    n := str.Len(r)
+    if n < 3 or (byte_at(r, 0) != 85 and byte_at(r, 0) != 117) or byte_at(r, 1) != 43:
+        ret false
+    end
+    mut digits := 0
+    mut wild := 0
+    mut dash := false
+    mut i := 2
+    until i < n:
+        b := byte_at(r, i)
+        if b == 45 and not dash and wild == 0 and digits > 0:
+            dash = true
+            digits = 0
+        else b == 63 and not dash:
+            wild += 1
+        else lay_is_hex(b) and wild == 0:
+            digits += 1
+            if digits > 6:
+                ret false
+            end
+        else:
+            ret false
+        end
+        i += 1
+    end
+    ret digits + wild > 0 and digits + wild <= 6
+end
+
+func lay_font_range_ok(v: str): bool:
+    mut parts := str.Split(v, ",")
+    defer parts.free()
+    if parts.len() == 0:
+        ret false
+    end
+    repeat parts.len() in i:
+        if not lay_font_range_one(str.Trim(parts.get(i))):
+            ret false
+        end
+    end
+    ret true
+end
+
+func lay_font_attr_value(a &: at.Ast, el: int, key: str, out &: str): int:
+    repeat at.ChildCount(a, el) in i:
+        cid := at.Child(a, el, i)
+        c := at.Get(a, cid)
+        if c.kind != at.AST_LAYOUT_ATTR:
+            continue
+        end
+        if str.Equals(c.name, key) or str.Equals(lay_attr_key(c.name), key):
+            if lay_attr_text(a, cid, out):
+                ret cid
+            end
+            ret 0
+        end
+    end
+    ret 0
+end
+
+func lay_font_invalid(s &: Sema, a &: at.Ast, node: int, key: str, v: str, what: str):
+    serr(
+        s, 18, span_of(a, node), co.Format3(
+            i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(lay_attr_display(key)), co.ArgStr(v), co.ArgStr(what)
+        )
+    )
+end
+
+func lay_check_font(s &: Sema, a &: at.Ast, el: int):
+    mut nv := ""
+    nid := lay_font_attr_value(a, el, "name", nv)
+    if nid != 0 and not lay_font_name_ok(nv):
+        lay_font_invalid(s, a, nid, "name", nv, i18.Tr("a font name (no quotes, backslashes, ';', '<', '>' or braces)"))
+    end
+    mut wv := ""
+    wid := lay_font_attr_value(a, el, "weight", wv)
+    if wid != 0 and not lay_font_weight_ok(wv):
+        lay_font_invalid(s, a, wid, "weight", wv, i18.Tr("a font weight (1 to 1000, normal, bold, or a range like '100 900')"))
+    end
+    mut rv := ""
+    rid := lay_font_attr_value(a, el, "range", rv)
+    if rid != 0 and not lay_font_range_ok(rv):
+        lay_font_invalid(s, a, rid, "range", rv, i18.Tr("a unicode range like 'U+0600-06FF, U+200C'"))
+    end
+    mut uv := ""
+    uid := lay_font_attr_value(a, el, "url", uv)
+    if uid == 0:
+        ret
+    end
+    mut tv := ""
+    tid := lay_font_attr_value(a, el, "type", tv)
+    mut declared := ""
+    if tid != 0:
+        declared = lay_dyn_value("font_format", i18.LayoutValue(tv))
+    end
+    mut urls := str.Fields(uv)
+    defer urls.free()
+    repeat urls.len() in i:
+        u := urls.get(i)
+        if not lay_font_url_safe(u):
+            lay_font_invalid(s, a, uid, "url", u, i18.Tr("a font address (http, https, a relative path or data:font/...)"))
+            continue
+        end
+        if str.StartsWith(u, "data:"):
+            if str.Len(declared) == 0:
+                serr(
+                    s, 126, span_of(a, uid), co.Format1(
+                        i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr("data:font/...")
+                    )
+                )
+            end
+            continue
+        end
+        mut fmt := ""
+        mut found := ""
+        rc := lay_font_resolve(u, declared, s.dir, fmt, found)
+        if rc == FONT_MISMATCH:
+            serr(
+                s, 127, span_of(a, tid != 0 ? tid : uid), co.Format3(
+                    i18.Tr("font '%s' is %s, but it is declared as %s"), co.ArgStr(u), co.ArgStr(found), co.ArgStr(str.Len(declared) > 0 ? declared : lay_font_ext_format(u))
+                )
+            )
+        else rc == FONT_MISSING:
+            swarn(
+                s, 128, span_of(a, uid), co.Format1(
+                    i18.Tr("font file '%s' was not found next to the source; it must exist when the page is served"), co.ArgStr(u)
+                )
+            )
+            if str.Len(fmt) == 0:
+                serr(
+                    s, 126, span_of(a, uid), co.Format1(
+                        i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(u)
+                    )
+                )
+            end
+        else rc == FONT_UNKNOWN:
+            serr(
+                s, 126, span_of(a, uid), co.Format1(
+                    i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(u)
+                )
+            )
+        end
+    end
+end
+
+pub func LayoutFontFormat(url: str, declared: str, dir: str): str:
+    mut fmt := ""
+    mut found := ""
+    _rc := lay_font_resolve(url, declared, dir, fmt, found)
+    ret fmt
+end

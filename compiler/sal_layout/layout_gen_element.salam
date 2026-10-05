@@ -81,7 +81,7 @@ func quote_css_value_if_needed(value: str): str:
             ret value
         end
     end
-    ret `"` + value + `"`
+    ret css_string(value)
 end
 
 func gen_element_n(
@@ -136,7 +136,7 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
         val = attr_value_map(ai, v)
     end
     if str.Equals(rest, "content"):
-        val = `"` + v + `"`
+        val = css_string(v)
     else:
         val = quote_css_value_if_needed(val)
     end
@@ -234,7 +234,11 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
                     cv = c
                 end
             end
-            la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
+            if str.Equals(prop, "font-family"):
+                la.css += css_decl(cx.compact, prop, css_font_family(cv))
+            else:
+                la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
+            end
         end
     end
     if ei < 0:
@@ -353,6 +357,10 @@ func gen_native(
         end
         ret true
     end
+    if str.Equals(gen, "font_face"):
+        gen_font_face(cx, la)
+        ret true
+    end
     if not is_native_generator(gen):
         gen_std(cx, diag, a, el, gen, la, klass, has_klass, tag)
         ret true
@@ -386,7 +394,7 @@ func lo_atoi(v: str): int:
 end
 
 func is_native_generator(g: str): bool:
-    ret str.Equals(g, "heading") or str.Equals(g, "media") or str.Equals(g, "style") or str.Equals(g, "global") or str.Equals(g, "script")
+    ret str.Equals(g, "heading") or str.Equals(g, "media") or str.Equals(g, "style") or str.Equals(g, "global") or str.Equals(g, "script") or str.Equals(g, "font_face")
 end
 
 func gen_element(
@@ -470,4 +478,98 @@ end
 
 func plural_suffix(n: int): str:
     ret n == 1 ? "" : "s"
+end
+
+func lo_font_value(la: LoAttrs, key: str, group: str): str:
+    mut v := ""
+    if not lo_attr_get(la, key, v):
+        ret ""
+    end
+    if str.Len(group) == 0:
+        ret v
+    end
+    m := sm.LayoutDynValue(group, i18.LayoutValue(v))
+    ret str.Len(m) > 0 ? m : v
+end
+
+func gen_font_face(cx &: LoCtx, la: LoAttrs):
+    declared := lo_font_value(la, "type", "font_format")
+    dir := lo_dir_of(cx.file)
+    mut urls := str.Fields(lo_font_value(la, "url", ""))
+    defer urls.free()
+    mut src := ""
+    repeat urls.len() in i:
+        u := urls.get(i)
+        fmt := sm.LayoutFontFormat(u, declared, dir)
+        if str.Len(src) > 0:
+            src += cx.compact ? "," : ", "
+        end
+        src += "url(" + css_string(u) + ")"
+        if str.Len(fmt) > 0:
+            src += " format(" + css_string(fmt) + ")"
+        end
+    end
+    mut body := css_decl(cx.compact, "font-family", css_string(lo_font_value(la, "name", "")))
+    body += css_decl(cx.compact, "src", src)
+    weight := lo_font_value(la, "weight", "")
+    if str.Len(weight) > 0:
+        body += css_decl(cx.compact, "font-weight", weight)
+    end
+    style := lo_font_value(la, "style", "font_style")
+    if str.Len(style) > 0:
+        body += css_decl(cx.compact, "font-style", style)
+    end
+    display := lo_font_value(la, "display", "font_display")
+    if str.Len(display) > 0:
+        body += css_decl(cx.compact, "font-display", display)
+    end
+    range := lo_font_value(la, "range", "")
+    if str.Len(range) > 0:
+        body += css_decl(cx.compact, "unicode-range", range)
+    end
+    emit_rule(cx, css_rule(cx.compact, "@font-face", body))
+end
+
+func css_font_family(v: str): str:
+    generic := ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "inherit", "initial", "unset", "revert"]
+    mut parts := str.Split(v, ",")
+    defer parts.free()
+    mut out := ""
+    repeat parts.len() in i:
+        p := str.Trim(parts.get(i))
+        if str.Len(p) == 0:
+            continue
+        end
+        if str.Len(out) > 0:
+            out += ", "
+        end
+        b0 := byte_at(p, 0)
+        mut bare := b0 == 34 or b0 == 39 or css_is_ident(p)
+        repeat len(generic) in g:
+            if str.Equals(str.Lower(p), generic[g]):
+                bare = true
+            end
+        end
+        out += bare ? p : css_string(p)
+    end
+    ret out
+end
+
+func css_is_ident(p: str): bool:
+    n := str.Len(p)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(p, 0)
+    if b0 >= 48 and b0 <= 57:
+        ret false
+    end
+    repeat n in i:
+        b := byte_at(p, i)
+        ok := (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b >= 128
+        if not ok:
+            ret false
+        end
+    end
+    ret true
 end

@@ -52,7 +52,7 @@ pub const link := LayoutElement {
 | `required`              | attributes that must be present (emitted first)                                                                                                 |
 | `when`                  | `"attr"` or `"attr=value"`: this variant applies only then                                                                                      |
 | `unique`                | `"parent"` or `"document"`: at most one there                                                                                                   |
-| `generator`             | `heading`, `media`, `style`, `global`, `script` (built in) or a function in `std/layoutgen`                                                     |
+| `generator`             | `heading`, `media`, `style`, `global`, `script` (built-in) or a function in `std/layoutgen`                                                     |
 | `placement`             | `"head"` sends the tag to `<head>`                                                                                                              |
 | `position`              | `"first"`: must be the first element inside its parent (E125)                                                                                   |
 | `styled`                | `false` rejects CSS attributes on this element                                                                                                  |

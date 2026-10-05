@@ -29,6 +29,8 @@ struct LoAttrs:
     pub vals: Vector<str> = Vector {}
     pub gen: str = ""
     pub gen_skip: str = ""
+    pub inline_style: str = ""
+    pub dynstyle: str = ""
 end
 
 func repeat_count(a &: at.Ast, el: int): i64:
@@ -52,18 +54,53 @@ func gen_children(
     saved := cx.parents
     me := at.Get(a, el).name
     cx.parents = str.Len(saved) > 0 ? me + "," + saved : me
+    gen_items(cx, diag, a, el, klass, has_klass)
+    cx.parents = saved
+end
+
+func gen_items(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, klass: str, has_klass: bool
+):
     repeat at.ChildCount(a, el) in i:
         cid := at.Child(a, el, i)
-        if at.KindOf(a, cid) == at.AST_LAYOUT_ELEMENT:
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
             gen_element_n(cx, diag, a, cid, klass, has_klass)
+        else k == at.AST_IF or k == at.AST_EACH:
+            gen_control(cx, diag, a, cid, klass, has_klass)
         end
     end
-    cx.parents = saved
+end
+
+func gen_control(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, nid: int, klass: str, has_klass: bool
+):
+    n := at.Get(a, nid)
+    html_line(cx, val_str(a, n.a))
+    gen_items(cx, diag, a, n.b, klass, has_klass)
+    if n.kind == at.AST_IF and n.c != 0:
+        html_line(cx, dyn_marker("else"))
+        if at.KindOf(a, n.c) == at.AST_IF:
+            gen_control(cx, diag, a, n.c, klass, has_klass)
+        else:
+            gen_items(cx, diag, a, n.c, klass, has_klass)
+        end
+    end
+    html_line(cx, dyn_marker("end"))
+end
+
+func dyn_marker(tag: str): str:
+    ret char_from_code(2) + "salam-" + tag + char_from_code(3)
+end
+
+func is_dyn(v: str): bool:
+    ret str.IndexOf(v, char_from_code(2)) >= 0
 end
 
 func has_child_elements(a &: at.Ast, el: int): bool:
     repeat at.ChildCount(a, el) in i:
-        if at.KindOf(a, at.Child(a, el, i)) == at.AST_LAYOUT_ELEMENT:
+        k := at.KindOf(a, at.Child(a, el, i))
+        if k == at.AST_LAYOUT_ELEMENT or k == at.AST_IF or k == at.AST_EACH:
             ret true
         end
     end
@@ -71,7 +108,7 @@ func has_child_elements(a &: at.Ast, el: int): bool:
 end
 
 func quote_css_value_if_needed(value: str): str:
-    if str.IndexOf(value, " ") < 0:
+    if str.IndexOf(value, " ") < 0 or str.IndexOf(value, "(") >= 0:
         ret value
     end
     n := str.Len(value)
@@ -199,7 +236,7 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
             la.userclass = v
             la.has_userclass = true
         else dest == sm.LA_STYLE:
-            lo_emit_attr(la, "style", v, primary, false)
+            la.inline_style = v
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
             lo_emit_attr(la, sm.LayoutAttrOut(ai), mapped, primary, false)
         else dest == sm.LA_SOURCE:
@@ -209,13 +246,25 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
             if str.IndexOf(out, "*") >= 0:
                 out = nm
             end
-            if sm.LayoutAttrVtype(ai) == sm.VT_BOOL:
+            if sm.LayoutAttrVtype(ai) == sm.VT_BOOL and is_dyn(v):
+                if primary:
+                    la.first += v
+                else:
+                    la.rest += v
+                end
+            else sm.LayoutAttrVtype(ai) == sm.VT_BOOL:
                 if not str.Equals(v, "false"):
                     lo_emit_attr(la, out, "", primary, true)
                 end
             else:
                 lo_emit_attr(la, out, mapped, primary, false)
             end
+        else (dest == sm.LA_HTML_OR_CSS or dest == sm.LA_CSS) and is_dyn(v):
+            mut dprop := sm.LayoutAttrOut(ai)
+            if str.Len(dprop) == 0:
+                dprop = hyphenate(key)
+            end
+            la.dynstyle += dprop + ":" + v + ";"
         else dest == sm.LA_HTML_OR_CSS:
             if lo_all_digits(v):
                 lo_emit_attr(la, sm.LayoutAttrOut(ai), v, primary, false)
@@ -240,6 +289,13 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
                 la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
             end
         end
+    end
+    if str.Len(la.inline_style) > 0 or str.Len(la.dynstyle) > 0:
+        mut st := la.inline_style
+        if str.Len(st) > 0 and str.Len(la.dynstyle) > 0 and byte_at(st, str.Len(st) - 1) != 59:
+            st += ";"
+        end
+        lo_emit_attr(la, "style", st + la.dynstyle, false, false)
     end
     if ei < 0:
         ret

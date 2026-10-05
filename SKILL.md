@@ -1760,24 +1760,52 @@ layout:
 end
 ```
 
-**Elements** (see `std/layout/elements/`): `layout box header footer nav
-section article heading paragraph span bold strong italic font line break list
-item link head_link image media iframe canvas table row cell form label input
-button script style meta global`.
+**Elements** (`std/layout/elements/`, one `LayoutElement` const per element or
+context variant): `layout box main header footer nav section article heading
+paragraph span bold strong italic font line break list item link head_link image
+media iframe canvas table row column/cell form label input button script style
+meta global`. Every element also accepts its HTML tag name (`div`, `a`, `img`,
+`td`, ...). Persian names come from the `@fa` aliases.
 
-**Style properties** (`std/layout/style/`): `background color
-border border_color border_radius box_shadow box_sizing display position
-top right bottom left width height min/max_width min/max_height margin margin_top
-padding gap grid_template_columns flex_wrap align_items justify_content
-aspect_ratio font_family font_size font_weight line_height text_align
-text_decoration text_transform text_shadow letter/opacity overflow cursor
-touch_action tap_highlight`.
+The same name can mean different tags by context. Inside `table`, `header`,
+`main` and `footer` become `<thead>`, `<tbody>` and `<tfoot>`. `column` is `<th>`
+inside a table header row (or with `heading = true`) and `<td>` everywhere else.
+A plain `table: row: column:` emits `<table><tr><td>` with no implicit tbody.
 
-**Attributes** (`std/layout/attributes/`): identity (`id`, `class`),
-forms (`type`, `name`, `value`, `required`, `placeholder`), links/media
-(`href`, `src`, `alt`, `target`), i18n (`lang`, `dir`), ARIA, data-attrs, and
-`selector`. **Value enums** (`std/layout/values/`): named `colors`,
-`units`, `directions`, `input-types`, `languages`, `targets`.
+**Attributes are scoped per element.** The same Salam name maps to the right HTML
+name for each element: `url` is `href` on `link`/`head link` and `src` on
+`image`/`iframe`/`script` (`source`, `href`, `src` and `نشانی` are aliases).
+Global attributes (`id`, `class`, `title`, `lang`, `dir`, `hidden`, `tabindex`,
+`role`, `content`, `repeat`), ARIA (`aria label` ... and any `aria <name>`), data
+attributes (`data view`, or any `data <name>` which becomes `data-<name>`),
+and every `on<event>` handler work on all elements. All standard CSS properties
+are registered (`background color`, `z index`, ...), with `hover`/`focus`/
+`active`/`before`/`after` prefixes (`hover color = "red"`).
+
+**Everything is checked at compile time**:
+
+| code        | meaning                                                                  |
+| ----------- | ------------------------------------------------------------------------ |
+| E004 / E117 | wrong direct parent / missing required ancestor (`item` outside `list`)  |
+| E005        | missing required attribute (`link` and `image` need `url`)               |
+| E018        | value has the wrong type (url, int, uint, float, color, date, mime, ...) |
+| E111 / E112 | unknown element / unknown attribute, with "did you mean"                 |
+| E113 / E114 | attribute not allowed on this element / given twice                      |
+| E115 / E116 | child not allowed here / forbidden anywhere inside (link in link)        |
+| E118 / E119 | void element with children / element that cannot hold text               |
+| E120        | element allowed only once (`main`, table `header`)                       |
+| E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id               |
+
+Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+on any of these errors.
+
+**Generators.** Most elements use the data-driven default generator. A
+`generator` field on an element or on an enum value picks a std generator: a
+plain Salam function in `std/layoutgen` that takes a `layoutgen.Node` and returns
+a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
+`input: type = "jalali date" end` emits `<input type="text" class="elm_1">` plus
+the JS that validates and normalises Jalali dates. The schema format is
+documented in `docs/LAYOUT_SCHEMA.md`.
 
 Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with

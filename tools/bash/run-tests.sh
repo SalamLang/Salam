@@ -285,13 +285,34 @@ EOF_MSGS
             fi
             ;;
         layout)
-            expect=$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             html="$WORK/layout_${jobid}_$$.html"
             "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
-            if [ -f "$html" ] && grep -qF "$expect" "$html"; then
-                echo "PASS $label (has '$expect')"
+            lmiss=""
+            lbad=""
+            lfirst=""
+            if [ -f "$html" ]; then
+                while IFS= read -r want_txt; do
+                    [ -n "$want_txt" ] || continue
+                    [ -n "$lfirst" ] || lfirst="$want_txt"
+                    grep -qF -- "$want_txt" "$html" || lmiss="$want_txt"
+                done <<EOF_LAYOUT
+$(grep -oE '(EXPECT|انتظار|توقع): .*' "$f" | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+EOF_LAYOUT
+                while IFS= read -r bad_txt; do
+                    [ -n "$bad_txt" ] || continue
+                    grep -qF -- "$bad_txt" "$html" && lbad="$bad_txt"
+                done <<EOF_LAYOUT_NOT
+$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+EOF_LAYOUT_NOT
             else
-                echo "FAIL $label (want '$expect')"
+                lmiss="(no html produced)"
+            fi
+            if [ -z "$lmiss" ] && [ -z "$lbad" ]; then
+                echo "PASS $label (has '$lfirst')"
+            elif [ -n "$lbad" ]; then
+                echo "FAIL $label (unwanted '$lbad')"
+            else
+                echo "FAIL $label (want '$lmiss')"
             fi
             rm -f "$html"
             ;;
@@ -864,6 +885,28 @@ if want errors; then
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
             add_job errors "errors/$lang/$name" "$f" "$lang" -
+        done
+    done
+fi
+
+if want web; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/web/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            add_job layout "web/$lang/$name" "$f" "$lang" -
+        done
+    done
+fi
+
+if want web_errors; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/web_errors/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            add_job errors "web_errors/$lang/$name" "$f" "$lang" -
         done
     done
 fi

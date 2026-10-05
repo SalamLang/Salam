@@ -27,8 +27,18 @@ pub const CC_STR := 1
 
 const K_CC_NUM_BOOL_FLAGS := 24
 
+const K_CC_NUM_NAMES := 33
+
 k_cc_all_bool_flags := [
     "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_OS_UEFI", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_OS_SALAMOS"
+]
+
+k_cc_canon_name := [
+    "SALAM_OS_WINDOWS", "SALAM_OS_WIN64", "SALAM_OS_WIN32", "SALAM_OS_WASM", "SALAM_OS_ANDROID", "SALAM_OS_LINUX", "SALAM_OS_MAC", "SALAM_OS_BSD", "SALAM_OS_FREEBSD", "SALAM_OS_OPENBSD", "SALAM_OS_NETBSD", "SALAM_OS_UNIX", "SALAM_OS_UEFI", "SALAM_OS_SALAMOS", "SALAM_ARCH_X64", "SALAM_ARCH_X86", "SALAM_ARCH_ARM64", "SALAM_ARCH_ARM", "SALAM_ARCH_WASM", "SALAM_MEM_DEBUG", "SALAM_ASAN", "SALAM_SAFE", "SALAM_FREESTANDING", "SALAM_KERNEL", "SALAM_JS", "SALAM_OS", "SALAM_ARCH", "SALAM_VERSION", "SALAM_VERSION_CODE", "SALAM_GIT_COMMIT", "SALAM_GIT_DATE", "SALAM_GIT_DIRTY", "SALAM_BUILD_DATE"
+]
+
+k_cc_fa_name := [
+    "سلام سیستم ویندوز", "سلام سیستم ویندوز۶۴", "سلام سیستم ویندوز۳۲", "سلام سیستم وب‌اسمبلی", "سلام سیستم اندروید", "سلام سیستم لینوکس", "سلام سیستم مک", "سلام سیستم بی‌اس‌دی", "سلام سیستم فری‌بی‌اس‌دی", "سلام سیستم اوپن‌بی‌اس‌دی", "سلام سیستم نت‌بی‌اس‌دی", "سلام سیستم یونیکس", "سلام سیستم یوئی‌اف‌آی", "سلام سیستم سلام", "سلام معماری ایکس۶۴", "سلام معماری ایکس۸۶", "سلام معماری آرم۶۴", "سلام معماری آرم", "سلام معماری وب‌اسمبلی", "سلام اشکال‌زدایی حافظه", "سلام سنجش حافظه", "سلام ایمن", "سلام خودایستا", "سلام هسته", "سلام جاوااسکریپت", "سلام سیستم", "سلام معماری", "سلام نگارش", "سلام کد نگارش", "سلام کامیت گیت", "سلام تاریخ گیت", "سلام گیت ناپاک", "سلام تاریخ ساخت"
 ]
 
 struct Bres:
@@ -52,6 +62,35 @@ end
 
 pub struct Table:
     pub entries: Vector<Entry> = Vector {}
+    pub pack: int = 0
+end
+
+func cc_fa_mode(t: Table): bool:
+    ret t.pack == 2
+end
+
+func cc_is_defined_name(t: Table, name: str): bool:
+    if cc_fa_mode(t):
+        ret str.Equals(name, "تعریف شده") or str.Equals(name, "تعریف‌شده")
+    end
+    ret str.Equals(name, "defined")
+end
+
+func cc_canon_name(t: Table, name: str): str:
+    if not cc_fa_mode(t):
+        ret name
+    end
+    repeat K_CC_NUM_NAMES in i:
+        if str.Equals(k_cc_fa_name[i], name):
+            ret k_cc_canon_name[i]
+        end
+    end
+    repeat K_CC_NUM_NAMES in j:
+        if str.Equals(k_cc_canon_name[j], name):
+            ret ""
+        end
+    end
+    ret name
 end
 
 func cc_push_bool(t &: Table, name: str, val: bool):
@@ -233,7 +272,9 @@ func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
         ret Bres {}
     end
     callee := at.Get(a, n.a)
-    if callee.kind != at.AST_IDENTIFIER or str.Len(callee.name) == 0 or not str.Equals(callee.name, "defined"):
+    if callee.kind != at.AST_IDENTIFIER or str.Len(callee.name) == 0 or not cc_is_defined_name(
+        t, callee.name
+    ):
         ret Bres {}
     end
     if n.list.len() != 1:
@@ -247,7 +288,8 @@ func cc_fold_defined_call(a: at.Ast, t: Table, id: int): Bres:
     if arg.kind != at.AST_IDENTIFIER or str.Len(arg.name) == 0:
         ret Bres {}
     end
-    ret Bres { ok = true, bval = Lookup(t, arg.name) >= 0 }
+    dn := cc_canon_name(t, arg.name)
+    ret Bres { ok = true, bval = str.Len(dn) > 0 and Lookup(t, dn) >= 0 }
 end
 
 func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
@@ -265,7 +307,8 @@ func cc_fold_scalar(a: at.Ast, t: Table, id: int, lenient: bool): Scalar:
         ret Scalar {}
     end
     if n.kind == at.AST_IDENTIFIER:
-        ci := Lookup(t, n.name)
+        cn := cc_canon_name(t, n.name)
+        ci := str.Len(cn) > 0 ? Lookup(t, cn) : (0 - 1)
         if ci < 0:
             if lenient:
                 ret Scalar { ok = true, is_str = false, bval = false, sval = "" }
@@ -420,20 +463,24 @@ func cc_note_pruned(a &: at.Ast, file: str, id: int):
     end
 end
 
-func cc_is_defined_call(a &: at.Ast, n: at.Node): bool:
+func cc_is_defined_call(t: Table, a &: at.Ast, n: at.Node): bool:
     if n.kind != at.AST_CALL or n.a == 0:
         ret false
     end
     callee := at.Get(a, n.a)
-    ret callee.kind == at.AST_IDENTIFIER and str.Equals(callee.name, "defined")
+    ret callee.kind == at.AST_IDENTIFIER and cc_is_defined_name(t, callee.name)
 end
 
 func cc_literalize(a &: at.Ast, t: Table, id: int):
     mut n := at.Get(a, id)
-    if not str.StartsWith(n.name, "SALAM_"):
+    if not str.StartsWith(n.name, "SALAM_") and not str.StartsWith(n.name, "سلام "):
         ret
     end
-    ci := Lookup(t, n.name)
+    cn := cc_canon_name(t, n.name)
+    if str.Len(cn) == 0:
+        ret
+    end
+    ci := Lookup(t, cn)
     if ci < 0:
         ret
     end
@@ -540,7 +587,7 @@ func cc_resolve_slot(
         ret id
     end
     n := at.Get(a, id)
-    if cc_is_defined_call(a, n):
+    if cc_is_defined_call(t, a, n):
         ret id
     end
     nty := cc_resolve_slot(a, log, file, t, n.ty, ok)
@@ -631,6 +678,22 @@ pub func TableBuild(target_triple: str, defines: Vector<str>): Table:
     end
     cc_push_missing_bool_defaults(t)
     ret t
+end
+
+pub func OtherLangName(name: str, want_fa: bool): str:
+    repeat K_CC_NUM_NAMES in i:
+        if want_fa and str.Equals(k_cc_canon_name[i], name):
+            ret k_cc_fa_name[i]
+        end
+        if not want_fa and str.Equals(k_cc_fa_name[i], name):
+            ret k_cc_canon_name[i]
+        end
+    end
+    ret ""
+end
+
+pub func TableSetPack(t &: Table, pack: int):
+    t.pack = pack
 end
 
 pub func TableFree(t &: Table):

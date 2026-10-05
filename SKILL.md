@@ -1686,6 +1686,32 @@ else:                 const SEP := "/"
 end
 ```
 
+**In Persian these constants have Persian names, and only those work.** Persian
+has no upper case, so the `سلام ` prefix is what marks a name as the language's
+own rather than yours; the words are joined with spaces, the way multi-word
+names already are elsewhere:
+
+| English | Persian |
+| --- | --- |
+| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
+| `SALAM_ARCH_X64` / `_ARM64` | `سلام معماری ایکس۶۴` / `آرم۶۴` |
+| `SALAM_OS` / `SALAM_ARCH` | `سلام سیستم` / `سلام معماری` |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT` | `سلام نگارش` / `سلام کامیت گیت` |
+| `defined(X)` | `تعریف‌شده(X)` |
+
+```salam
+اگر سلام سیستم لینوکس:
+    سرچاپ سلام سیستم، سلام معماری، سلام نگارش
+پایان
+```
+
+The two spellings do not mix, and the error names the one you wanted:
+`SALAM_OS_LINUX` in a Persian file reports *this file's language writes that
+built-in constant as `سلام سیستم لینوکس`*, and the reverse in an English file. Which set
+applies is decided per file, by the same language detection the keywords use, so
+a Persian program importing English `std/` is fine. Your own `-DNAME` defines
+are never translated, in either language.
+
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
 `link dynamic "user32"` → `-luser32`).
@@ -2340,28 +2366,37 @@ join(ر)
 All of §6 applies. In addition:
 
 1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
-2. **Enum patterns in `همخوان` are bare member names** (`سبز:`), not
+2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
+   like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
+   `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
+   an English file `«` is not a delimiter at all. Leaving one open reports its
+   own error rather than the double-quote one, since the fix is different:
+   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`.
+3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
+   `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
+   Persian file. See §8.
+4. **Enum patterns in `همخوان` are bare member names** (`سبز:`), not
    `رنگ.سبز:`; the qualified form is a parse error in a pattern.
-3. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
+5. **`ترابرد` labels are blocks**: each label ends with its own `پایان`, and
    fallthrough continues into the next label unless you `بشکن`.
-4. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
-5. **No `٫` decimal separator**; write `۱۲.۵`.
-6. **Output digits are ASCII** and booleans print as `true`/`false`.
-7. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
+6. **`و` is reserved** and cannot be a name; pick `و۱`, `واحد`, ...
+7. **No `٫` decimal separator**; write `۱۲.۵`.
+8. **Output digits are ASCII** and booleans print as `true`/`false`.
+9. **`اعشار` is f32.** Use `اعشار۶۴` unless you want single precision
    (`۰.۱ برگردان اعشار` prints `0.10000000149011612`). A float literal is
    already `اعشار۶۴`: casting a literal is allowed, but casting a variable
    to the type it already has is a useless cast (E093).
-8. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
+10. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
    write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
-9. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
+11. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
    `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
    `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
-10. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
+12. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
     `حدبالا` or `حد_بالا`.
-11. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
+13. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
     The English name is not a fallback in a Persian file, and an invented
     translation will not resolve.
-12. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
+14. **Diagnostics are Persian.** The error codes (`E001`, `E087`, ...) are the
     same as in English, so search `tests/en/errors/` by code.
 
 ## 18. Complete Persian programs

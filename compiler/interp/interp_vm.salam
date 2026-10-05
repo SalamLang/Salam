@@ -1,0 +1,1002 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package interp
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+
+const VM_W := 6
+
+const VOP_LOADK := 1
+const VOP_MOV := 2
+const VOP_COPY := 3
+const VOP_COERCE := 4
+const VOP_ADDI := 5
+const VOP_SUBI := 6
+const VOP_MULI := 7
+const VOP_DIVI := 8
+const VOP_MODI := 9
+const VOP_ANDI := 10
+const VOP_ORI := 11
+const VOP_XORI := 12
+const VOP_SHLI := 13
+const VOP_SHRI := 14
+const VOP_ADDF := 15
+const VOP_SUBF := 16
+const VOP_MULF := 17
+const VOP_DIVF := 18
+const VOP_CMPI := 19
+const VOP_CMPF := 20
+const VOP_BIN := 21
+const VOP_CBIN := 22
+const VOP_UN := 23
+const VOP_NOT := 24
+const VOP_BOOL := 25
+const VOP_NEGI := 26
+const VOP_NEGF := 27
+const VOP_CAST := 28
+const VOP_CASTI := 29
+const VOP_CASTF := 30
+const VOP_JMP := 31
+const VOP_JF := 32
+const VOP_JT := 33
+const VOP_LOOP := 34
+const VOP_GETG := 35
+const VOP_GETM := 36
+const VOP_CALL := 37
+const VOP_MCALL := 38
+const VOP_CALLV := 39
+const VOP_PRINT := 40
+const VOP_PRINTS := 41
+const VOP_IDX := 42
+const VOP_STIDX := 43
+const VOP_IDXLOC := 44
+const VOP_FIELD := 45
+const VOP_SETFIELD := 46
+const VOP_EVAL := 47
+const VOP_EXEC := 48
+const VOP_RET := 49
+const VOP_RETN := 50
+const VOP_DEFAULT := 51
+const VOP_REPNUM := 52
+const VOP_REPJF := 53
+const VOP_REPSTEP := 54
+const VOP_LEN := 55
+
+const VMK_BRK := 1
+const VMK_CONT := 2
+
+struct VmCall:
+    pub fn: int = 0
+    pub env: int = 0
+    pub call: int = 0
+    pub obj: int = 0
+    pub method: str = ""
+    pub back: Vector<int> = Vector {}
+end
+
+struct VmFn:
+    pub code: Vector<int> = Vector {}
+    pub kv: Vector<Value> = Vector {}
+    pub ks: Vector<str> = Vector {}
+    pub sync: Vector<int> = Vector {}
+    pub calls: Vector<VmCall> = Vector {}
+    pub nreg: int = 0
+    pub nparam: int = 0
+    pub has_this: bool = false
+    pub defenv: int = 0
+    pub fnnode: int = 0
+    pub param_ity: Vector<int> = Vector {}
+    pub param_ref: Vector<bool> = Vector {}
+    pub param_def: Vector<int> = Vector {}
+end
+
+struct VmC:
+    pub ok: bool = true
+    pub f: VmFn = VmFn {}
+    pub names: Vector<str> = Vector {}
+    pub regs: Vector<int> = Vector {}
+    pub nlocal: int = 0
+    pub top: int = 0
+    pub patch: Vector<int> = Vector {}
+    pub patch_kind: Vector<int> = Vector {}
+    pub loop_mark: Vector<int> = Vector {}
+    pub loop_cont: Vector<int> = Vector {}
+end
+
+func vc_emit(c &: VmC, op: int, x: int, y: int, z: int, w: int, v: int): int:
+    pc := c.f.code.len()
+    c.f.code.push(op)
+    c.f.code.push(x)
+    c.f.code.push(y)
+    c.f.code.push(z)
+    c.f.code.push(w)
+    c.f.code.push(v)
+    ret pc
+end
+
+func vc_here(c &: VmC): int:
+    ret c.f.code.len()
+end
+
+func vc_set(c &: VmC, pc: int, slot: int, v: int):
+    c.f.code.set(pc + slot, v)
+end
+
+func vc_tmp(c &: VmC): int:
+    r := c.top
+    c.top += 1
+    if c.top > c.f.nreg:
+        c.f.nreg = c.top
+    end
+    ret r
+end
+
+func vc_kv(c &: VmC, v: Value): int:
+    c.f.kv.push(v)
+    ret c.f.kv.len() - 1
+end
+
+func vc_ks(c &: VmC, s: str): int:
+    repeat c.f.ks.len() in i:
+        if str.Equals(c.f.ks.get(i), s):
+            ret i
+        end
+    end
+    c.f.ks.push(s)
+    ret c.f.ks.len() - 1
+end
+
+func vc_lookup(c &: VmC, name: str): int:
+    mut i := c.names.len() - 1
+    until i >= 0:
+        if str.Equals(c.names.get(i), name):
+            ret c.regs.get(i)
+        end
+        i -= 1
+    end
+    ret 0 - 1
+end
+
+func vc_declare(c &: VmC, name: str): int:
+    r := c.top
+    c.top += 1
+    if c.top > c.f.nreg:
+        c.f.nreg = c.top
+    end
+    c.names.push(name)
+    c.regs.push(r)
+    c.nlocal = c.top
+    ret r
+end
+
+func vc_scope_mark(c &: VmC): int:
+    ret c.names.len()
+end
+
+func vc_scope_pop(c &: VmC, mark: int, top: int):
+    until c.names.len() > mark:
+        _n := c.names.pop()
+        _r := c.regs.pop()
+    end
+    c.top = top
+    c.nlocal = top
+end
+
+func vc_ity(a &: at.Ast, n: int): int:
+    if n == 0:
+        ret ITY_NONE
+    end
+    ret int_ty_from_typestr(at.At(a, n).type_str)
+end
+
+func vc_isf(a &: at.Ast, n: int): bool:
+    ret n != 0 and is_float_typename(at.At(a, n).type_str)
+end
+
+func vc_sync(c &: VmC): int:
+    idx := c.f.sync.len()
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    mut pairs := Vector {} as Vector<int>
+    defer pairs.free()
+    mut i := c.names.len() - 1
+    until i >= 0:
+        nm := c.names.get(i)
+        mut dup := false
+        repeat seen.len() in j:
+            if str.Equals(seen.get(j), nm):
+                dup = true
+                break
+            end
+        end
+        if not dup:
+            seen.push(nm)
+            pairs.push(vc_ks(c, nm))
+            pairs.push(c.regs.get(i))
+        end
+        i -= 1
+    end
+    c.f.sync.push(pairs.len() / 2)
+    repeat pairs.len() in k:
+        c.f.sync.push(pairs.get(k))
+    end
+    ret idx
+end
+
+func vc_patch_add(c &: VmC, pc: int, slot: int, kind: int):
+    c.patch.push(pc * 8 + slot)
+    c.patch_kind.push(kind)
+end
+
+func vc_loop_begin(c &: VmC):
+    c.loop_mark.push(c.patch.len())
+    c.loop_cont.push(0 - 1)
+end
+
+func vc_loop_end(c &: VmC, cont_pc: int, end_pc: int):
+    mark := c.loop_mark.pop()
+    _lc := c.loop_cont.pop()
+    mut i := mark
+    until i < c.patch.len():
+        e := c.patch.get(i)
+        k := c.patch_kind.get(i)
+        c.f.code.set(e / 8 + e % 8, k == VMK_BRK ? end_pc : cont_pc)
+        i += 1
+    end
+    until c.patch.len() > mark:
+        _p := c.patch.pop()
+        _k := c.patch_kind.pop()
+    end
+end
+
+func vc_scan_bad(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nd := at.At(a, n)
+    k := nd.kind
+    if k == at.AST_DEFER or k == at.AST_TRY or k == at.AST_LAMBDA:
+        ret true
+    end
+    if k == at.AST_MATCH and nd.match_is_expr:
+        ret true
+    end
+    if vc_scan_bad(a, nd.a) or vc_scan_bad(a, nd.b) or vc_scan_bad(a, nd.c) or vc_scan_bad(a, nd.d):
+        ret true
+    end
+    repeat nd.list.len() in i:
+        if vc_scan_bad(a, nd.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func vc_escape_expr(c &: VmC, n: int): int:
+    d := vc_tmp(c)
+    _e := vc_emit(c, VOP_EVAL, d, n, vc_sync(c), 0, 0)
+    ret d
+end
+
+func vc_escape_stmt(c &: VmC, n: int):
+    pc := vc_emit(c, VOP_EXEC, n, vc_sync(c), 0 - 1, 0 - 1, 0)
+    if c.loop_mark.len() > 0:
+        vc_patch_add(c, pc, 3, VMK_BRK)
+        vc_patch_add(c, pc, 4, VMK_CONT)
+    end
+end
+
+func vc_is_builtin_name(nm: str): bool:
+    ret str.Equals(nm, "input") or str.Equals(nm, "lang") or str.Equals(nm, "args") or str.Equals(nm, "sizeof") or str.Equals(nm, "salam_panic") or str.Equals(nm, "char_code") or str.Equals(nm, "char_from_code") or str.Equals(nm, "strcmp") or str.Equals(nm, "listdir") or str.Equals(nm, "hash") or str.Equals(nm, "spawn") or str.Equals(nm, "join") or str.Equals(nm, "callhandler") or str.Equals(nm, "open") or str.StartsWith(nm, "atomic_")
+end
+
+func vc_is_print(nm: str): bool:
+    ret str.Equals(nm, "print") or str.Equals(nm, "println") or str.Equals(nm, "printerr") or str.Equals(nm, "printerrln")
+end
+
+func vc_global_value(ip &: Interp, c &: VmC, name: str, out &: Value): bool:
+    mut w := 0
+    slot := env_find(ip, c.f.defenv, name, w)
+    if slot < 0:
+        ret false
+    end
+    out = env_slot_val(ip, w, slot)
+    ret true
+end
+
+func vc_args_plain(c &: VmC, a &: at.Ast, call: int, fn: int): bool:
+    repeat at.ChildCount(a, call) in i:
+        arg := at.Child(a, call, i)
+        k := at.KindOf(a, arg)
+        if k == at.AST_INDEX or k == at.AST_MEMBER:
+            ret false
+        end
+        if k == at.AST_IDENTIFIER and vc_lookup(c, at.At(a, arg).name) < 0:
+            if fn == 0:
+                ret false
+            end
+            if i < at.ChildCount(a, fn) and at.At(a, at.Child(a, fn, i)).is_ref:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func vc_call_args(c &: VmC, ip &: Interp, a &: at.Ast, call: int, ci &: VmCall): int:
+    na := at.ChildCount(a, call)
+    base := c.top
+    repeat na:
+        _r := vc_tmp(c)
+    end
+    repeat na in i:
+        arg := at.Child(a, call, i)
+        save := c.top
+        r := vc_expr(c, ip, a, arg)
+        if r != base + i:
+            _m := vc_emit(c, VOP_MOV, base + i, r, 0, 0, 0)
+        end
+        c.top = save
+        if at.KindOf(a, arg) == at.AST_IDENTIFIER:
+            ci.back.push(vc_lookup(c, at.At(a, arg).name))
+        else:
+            ci.back.push(0 - 1)
+        end
+    end
+    ret base
+end
+
+func vc_add_call(c &: VmC, ci: VmCall): int:
+    c.f.calls.push(ci)
+    ret c.f.calls.len() - 1
+end
+
+func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
+    node := at.At(a, n)
+    callee := node.a
+    cn := at.At(a, callee)
+    na := at.ChildCount(a, n)
+    if cn.kind == at.AST_IDENTIFIER:
+        nm := cn.name
+        if vc_lookup(c, nm) < 0 and vc_is_print(nm):
+            err := str.Equals(nm, "printerr") or str.Equals(nm, "printerrln")
+            nl := str.Equals(nm, "println") or str.Equals(nm, "printerrln")
+            repeat na in i:
+                if i != 0:
+                    _s := vc_emit(c, VOP_PRINTS, vc_ks(c, " "), err ? 1 : 0, 0, 0, 0)
+                end
+                save := c.top
+                r := vc_expr(c, ip, a, at.Child(a, n, i))
+                _p := vc_emit(c, VOP_PRINT, r, err ? 1 : 0, 0, 0, 0)
+                c.top = save
+            end
+            if nl:
+                _s2 := vc_emit(c, VOP_PRINTS, vc_ks(c, "\n"), err ? 1 : 0, 0, 0, 0)
+            end
+            d := vc_tmp(c)
+            _l := vc_emit(c, VOP_LOADK, d, vc_kv(c, val_null()), 0, 0, 0)
+            ret d
+        end
+        if vc_lookup(c, nm) < 0 and str.Equals(nm, "len") and na == 1:
+            save2 := c.top
+            r2 := vc_expr(c, ip, a, at.Child(a, n, 0))
+            c.top = save2
+            d2 := vc_tmp(c)
+            _l2 := vc_emit(c, VOP_LEN, d2, r2, n, 0, 0)
+            ret d2
+        end
+        if vc_lookup(c, nm) < 0 and (vc_is_builtin_name(nm) or str.Equals(nm, "len")):
+            ret vc_escape_expr(c, n)
+        end
+        lr := vc_lookup(c, nm)
+        if lr >= 0:
+            if not vc_args_plain(c, a, n, 0):
+                ret vc_escape_expr(c, n)
+            end
+            mut ci0 := VmCall { call = n, method = nm }
+            base0 := vc_call_args(c, ip, a, n, ci0)
+            k0 := vc_add_call(c, ci0)
+            c.top = base0
+            d0 := vc_tmp(c)
+            _cv := vc_emit(c, VOP_CALLV, d0, lr, base0, na, k0)
+            ret d0
+        end
+        mut gv := val_null()
+        if vc_global_value(ip, c, nm, gv):
+            ret vc_escape_expr(c, n)
+        end
+        fn := find_func(ip, a, nm, na)
+        if fn == 0 or not vc_args_plain(c, a, n, fn):
+            ret vc_escape_expr(c, n)
+        end
+        hp := at.At(a, fn).home_pkg
+        mut henv := ip.globals
+        if str.Len(hp) > 0:
+            hm := find_module(ip, hp)
+            if hm != 0:
+                henv = ip.mods.get(hm).env
+            end
+        end
+        mut ci := VmCall { fn = fn, env = henv, call = n }
+        base := vc_call_args(c, ip, a, n, ci)
+        k := vc_add_call(c, ci)
+        c.top = base
+        d3 := vc_tmp(c)
+        _c := vc_emit(c, VOP_CALL, d3, base, na, k, vc_ity(a, n))
+        ret d3
+    end
+    if cn.kind == at.AST_MEMBER:
+        obj := cn.a
+        method := cn.name
+        onod := at.At(a, obj)
+        if onod.kind == at.AST_IDENTIFIER and vc_lookup(c, onod.name) < 0:
+            mut mv := val_null()
+            if not vc_global_value(ip, c, onod.name, mv) or mv.kind != VAL_MODULE:
+                ret vc_escape_expr(c, n)
+            end
+            md := ip.mods.get(mv.id)
+            if str.Equals(method, "FormatFloat") and str.Equals(md.name, "conv"):
+                ret vc_escape_expr(c, n)
+            end
+            slot := env_find_local(ip, md.env, method)
+            if slot < 0:
+                ret vc_escape_expr(c, n)
+            end
+            fv := env_slot_val(ip, md.env, slot)
+            if fv.kind != VAL_FUNC:
+                ret vc_escape_expr(c, n)
+            end
+            cl := ip.closures.get(fv.id)
+            if not vc_args_plain(c, a, n, cl.fn):
+                ret vc_escape_expr(c, n)
+            end
+            mut cim := VmCall { fn = cl.fn, env = cl.env, call = n }
+            basem := vc_call_args(c, ip, a, n, cim)
+            km := vc_add_call(c, cim)
+            c.top = basem
+            dm := vc_tmp(c)
+            _cm := vc_emit(c, VOP_CALL, dm, basem, na, km, vc_ity(a, n))
+            ret dm
+        end
+        if onod.kind == at.AST_INDEX or onod.kind == at.AST_MEMBER or not vc_args_plain(c, a, n, 0):
+            ret vc_escape_expr(c, n)
+        end
+        save3 := c.top
+        rr := vc_expr(c, ip, a, obj)
+        rcv := vc_tmp(c)
+        _mr := vc_emit(c, VOP_MOV, rcv, rr, 0, 0, 0)
+        mut cic := VmCall { call = n, obj = obj, method = method }
+        basec := vc_call_args(c, ip, a, n, cic)
+        kc := vc_add_call(c, cic)
+        c.top = save3
+        dc := vc_tmp(c)
+        _mc := vc_emit(c, VOP_MCALL, dc, rcv, basec, na, kc)
+        ret dc
+    end
+    ret vc_escape_expr(c, n)
+end
+
+func vc_binop_int(op: int): int:
+    if op == tok.TK_PLUS: ret VOP_ADDI end
+    if op == tok.TK_MINUS: ret VOP_SUBI end
+    if op == tok.TK_STAR: ret VOP_MULI end
+    if op == tok.TK_SLASH: ret VOP_DIVI end
+    if op == tok.TK_PERCENT: ret VOP_MODI end
+    if op == tok.TK_AMP: ret VOP_ANDI end
+    if op == tok.TK_PIPE: ret VOP_ORI end
+    if op == tok.TK_CARET: ret VOP_XORI end
+    if op == tok.TK_SHL: ret VOP_SHLI end
+    if op == tok.TK_SHR: ret VOP_SHRI end
+    ret 0
+end
+
+func vc_binop_flt(op: int): int:
+    if op == tok.TK_PLUS: ret VOP_ADDF end
+    if op == tok.TK_MINUS: ret VOP_SUBF end
+    if op == tok.TK_STAR: ret VOP_MULF end
+    if op == tok.TK_SLASH: ret VOP_DIVF end
+    ret 0
+end
+
+func vc_is_cmp(op: int): bool:
+    ret op == tok.TK_EQ or op == tok.TK_NE or op == tok.TK_LT or op == tok.TK_GT or op == tok.TK_LE or op == tok.TK_GE
+end
+
+func vc_arith(c &: VmC, a &: at.Ast, n: int, op: int, ln: int, rn: int, x: int, y: int, d: int):
+    li := vc_ity(a, ln)
+    ri := vc_ity(a, rn)
+    ni := vc_ity(a, n)
+    if li != ITY_NONE and ri != ITY_NONE:
+        iop := vc_binop_int(op)
+        if iop != 0:
+            rt := (op == tok.TK_SHL or op == tok.TK_SHR) ? li : int_ty_common(li, ri)
+            _i := vc_emit(c, iop, d, x, y, rt, n)
+            if ni != ITY_NONE and ni != rt:
+                _co := vc_emit(c, VOP_COERCE, d, ni, 0, 0, 0)
+            end
+            ret
+        end
+        if vc_is_cmp(op):
+            _cm := vc_emit(c, VOP_CMPI, d, x, y, op, int_ty_common(li, ri))
+            ret
+        end
+    end
+    lf := vc_isf(a, ln)
+    rf := vc_isf(a, rn)
+    if (lf or li != ITY_NONE) and (rf or ri != ITY_NONE) and (lf or rf):
+        fop := vc_binop_flt(op)
+        if fop != 0:
+            _f := vc_emit(c, fop, d, x, y, node_is_f32(a, n) ? 1 : 0, 0)
+            ret
+        end
+        if vc_is_cmp(op):
+            _cf := vc_emit(c, VOP_CMPF, d, x, y, op, 0)
+            ret
+        end
+    end
+    _b := vc_emit(c, VOP_BIN, d, x, y, op, n)
+end
+
+func vc_expr(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
+    if not c.ok or n == 0:
+        ret vc_tmp(c)
+    end
+    node := at.At(a, n)
+    k := node.kind
+    if k == at.AST_LITERAL:
+        d := vc_tmp(c)
+        _l := vc_emit(c, VOP_LOADK, d, vc_kv(c, eval(ip, a, ip.globals, n)), 0, 0, 0)
+        ret d
+    end
+    if k == at.AST_IDENTIFIER:
+        if node.unwrap_subj:
+            ret vc_escape_expr(c, n)
+        end
+        r := vc_lookup(c, node.name)
+        if r >= 0:
+            ret r
+        end
+        if c.f.has_this:
+            ret vc_escape_expr(c, n)
+        end
+        d1 := vc_tmp(c)
+        _g := vc_emit(c, VOP_GETG, d1, vc_ks(c, node.name), n, 0, 0)
+        ret d1
+    end
+    if k == at.AST_THIS:
+        if c.f.has_this:
+            ret 0
+        end
+        ret vc_escape_expr(c, n)
+    end
+    if k == at.AST_BINARY:
+        op := node.op
+        if op == tok.TK_AND or op == tok.TK_OR:
+            d2 := vc_tmp(c)
+            save := c.top
+            x := vc_expr(c, ip, a, node.a)
+            _b1 := vc_emit(c, VOP_BOOL, d2, x, 0, 0, 0)
+            c.top = save
+            j := vc_emit(c, op == tok.TK_AND ? VOP_JF : VOP_JT, d2, 0, 0, 0, 0)
+            y := vc_expr(c, ip, a, node.b)
+            _b2 := vc_emit(c, VOP_BOOL, d2, y, 0, 0, 0)
+            c.top = save
+            vc_set(c, j, 2, vc_here(c))
+            ret d2
+        end
+        save2 := c.top
+        x2 := vc_expr(c, ip, a, node.a)
+        y2 := vc_expr(c, ip, a, node.b)
+        c.top = save2
+        d3 := vc_tmp(c)
+        vc_arith(c, a, n, op, node.a, node.b, x2, y2, d3)
+        ret d3
+    end
+    if k == at.AST_UNARY:
+        save3 := c.top
+        x3 := vc_expr(c, ip, a, node.a)
+        c.top = save3
+        d4 := vc_tmp(c)
+        if node.op == tok.TK_NOT:
+            _n := vc_emit(c, VOP_NOT, d4, x3, 0, 0, 0)
+            ret d4
+        end
+        if node.op == tok.TK_MINUS and vc_ity(a, node.a) != ITY_NONE:
+            _ng := vc_emit(c, VOP_NEGI, d4, x3, vc_ity(a, node.a), 0, 0)
+            ret d4
+        end
+        if node.op == tok.TK_MINUS and vc_isf(a, node.a):
+            _nf := vc_emit(c, VOP_NEGF, d4, x3, 0, 0, 0)
+            ret d4
+        end
+        _u := vc_emit(c, VOP_UN, d4, x3, node.op, n, vc_ity(a, n))
+        ret d4
+    end
+    if k == at.AST_CAST:
+        save4 := c.top
+        x4 := vc_expr(c, ip, a, node.a)
+        c.top = save4
+        d5 := vc_tmp(c)
+        ts := node.ty != 0 ? at.At(a, node.ty).type_str : ""
+        srci := vc_ity(a, node.a)
+        if node.ty != 0 and is_int_typename(ts) and not str.Equals(ts, "char") and (srci != ITY_NONE or vc_isf(a, node.a)) and not (vc_isf(a, node.a) and int_ty_is_unsigned(int_ty_from_typestr(ts))):
+            _ci := vc_emit(c, VOP_CASTI, d5, x4, int_ty_from_typestr(ts), 0, 0)
+            ret d5
+        end
+        if node.ty != 0 and is_float_typename(ts) and (srci != ITY_NONE or vc_isf(a, node.a)):
+            _cf := vc_emit(c, VOP_CASTF, d5, x4, str.Equals(ts, "f32") ? 1 : 0, 0, 0)
+            ret d5
+        end
+        _ca := vc_emit(c, VOP_CAST, d5, x4, n, vc_ity(a, n), 0)
+        ret d5
+    end
+    if k == at.AST_TERNARY:
+        d6 := vc_tmp(c)
+        save5 := c.top
+        cv := vc_expr(c, ip, a, node.a)
+        c.top = save5
+        jf := vc_emit(c, VOP_JF, cv, 0, 0, 0, 0)
+        t1 := vc_expr(c, ip, a, node.b)
+        _m1 := vc_emit(c, VOP_MOV, d6, t1, 0, 0, 0)
+        c.top = save5
+        je := vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0)
+        vc_set(c, jf, 2, vc_here(c))
+        t2 := vc_expr(c, ip, a, node.c)
+        _m2 := vc_emit(c, VOP_MOV, d6, t2, 0, 0, 0)
+        c.top = save5
+        vc_set(c, je, 1, vc_here(c))
+        ret d6
+    end
+    if k == at.AST_CALL:
+        ret vc_call(c, ip, a, n)
+    end
+    if k == at.AST_INDEX and not node.synthetic:
+        save6 := c.top
+        b := vc_expr(c, ip, a, node.a)
+        ix := vc_expr(c, ip, a, node.b)
+        c.top = save6
+        d7 := vc_tmp(c)
+        _ix := vc_emit(c, VOP_IDX, d7, b, ix, n, vc_ity(a, n))
+        ret d7
+    end
+    if k == at.AST_MEMBER:
+        obj := node.a
+        onod := at.At(a, obj)
+        if onod.kind == at.AST_IDENTIFIER and vc_lookup(c, onod.name) < 0 and not (c.f.has_this and str.Equals(onod.name, "this")):
+            mut mv := val_null()
+            if c.f.has_this or not vc_global_value(ip, c, onod.name, mv) or mv.kind != VAL_MODULE:
+                ret vc_escape_expr(c, n)
+            end
+            md := ip.mods.get(mv.id)
+            d8 := vc_tmp(c)
+            _gm := vc_emit(c, VOP_GETM, d8, md.env, vc_ks(c, node.name), n, mv.id)
+            ret d8
+        end
+        if onod.kind == at.AST_MEMBER and onod.a != 0 and at.KindOf(a, onod.a) == at.AST_IDENTIFIER and vc_lookup(c, at.At(a, onod.a).name) < 0:
+            ret vc_escape_expr(c, n)
+        end
+        save7 := c.top
+        ob := vc_expr(c, ip, a, obj)
+        c.top = save7
+        d9 := vc_tmp(c)
+        _fd := vc_emit(c, VOP_FIELD, d9, ob, vc_ks(c, node.name), n, 0)
+        ret d9
+    end
+    ret vc_escape_expr(c, n)
+end
+
+func vc_store_local(c &: VmC, dst: int, src: int, ts: str):
+    _cp := vc_emit(c, VOP_COPY, dst, src, 0, 0, 0)
+    ity := int_ty_from_typestr(ts)
+    if ity != ITY_NONE:
+        _co := vc_emit(c, VOP_COERCE, dst, ity, 0, 0, 0)
+    end
+end
+
+func vc_assign(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
+    node := at.At(a, n)
+    target := node.a
+    tn := at.At(a, target)
+    save := c.top
+    if tn.kind == at.AST_IDENTIFIER:
+        lr := vc_lookup(c, tn.name)
+        if lr < 0:
+            vc_escape_stmt(c, n)
+            ret
+        end
+        if node.op == tok.TK_ASSIGN:
+            r := vc_expr(c, ip, a, node.b)
+            vc_store_local(c, lr, r, tn.type_str)
+            c.top = save
+            ret
+        end
+        base := compound_base(node.op)
+        r2 := vc_expr(c, ip, a, node.b)
+        li := vc_ity(a, target)
+        ri := vc_ity(a, node.b)
+        iop := vc_binop_int(base)
+        if li != ITY_NONE and ri != ITY_NONE and iop != 0:
+            rt := (base == tok.TK_SHL or base == tok.TK_SHR) ? li : int_ty_common(li, ri)
+            _i := vc_emit(c, iop, lr, lr, r2, rt, n)
+            if rt != li:
+                _co := vc_emit(c, VOP_COERCE, lr, li, 0, 0, 0)
+            end
+            c.top = save
+            ret
+        end
+        fop := vc_binop_flt(base)
+        if vc_isf(a, target) and (vc_isf(a, node.b) or ri != ITY_NONE) and fop != 0:
+            _f := vc_emit(c, fop, lr, lr, r2, node_is_f32(a, n) ? 1 : 0, 0)
+            c.top = save
+            ret
+        end
+        _cb := vc_emit(c, VOP_CBIN, lr, lr, r2, base, n)
+        if li != ITY_NONE:
+            _co2 := vc_emit(c, VOP_COERCE, lr, li, 0, 0, 0)
+        end
+        c.top = save
+        ret
+    end
+    if tn.kind == at.AST_MEMBER and at.KindOf(a, member_chain_root(a, target)) != at.AST_INDEX:
+        onod := at.At(a, tn.a)
+        if onod.kind == at.AST_IDENTIFIER and vc_lookup(c, onod.name) < 0:
+            vc_escape_stmt(c, n)
+            ret
+        end
+        if node.op == tok.TK_ASSIGN:
+            r3 := vc_expr(c, ip, a, node.b)
+            v := vc_tmp(c)
+            _cp := vc_emit(c, VOP_COPY, v, r3, 0, 0, 0)
+            ob := vc_expr(c, ip, a, tn.a)
+            _sf := vc_emit(c, VOP_SETFIELD, ob, vc_ks(c, tn.name), v, target, 0)
+            c.top = save
+            ret
+        end
+        ob2 := vc_expr(c, ip, a, tn.a)
+        obr := vc_tmp(c)
+        _mo := vc_emit(c, VOP_MOV, obr, ob2, 0, 0, 0)
+        cur := vc_tmp(c)
+        _fd := vc_emit(c, VOP_FIELD, cur, obr, vc_ks(c, tn.name), target, 0)
+        r4 := vc_expr(c, ip, a, node.b)
+        _cb2 := vc_emit(c, VOP_CBIN, cur, cur, r4, compound_base(node.op), n)
+        _sf2 := vc_emit(c, VOP_SETFIELD, obr, vc_ks(c, tn.name), cur, target, 0)
+        c.top = save
+        ret
+    end
+    if tn.kind == at.AST_INDEX:
+        if node.op == tok.TK_ASSIGN:
+            r5 := vc_expr(c, ip, a, node.b)
+            v2 := vc_tmp(c)
+            _cp2 := vc_emit(c, VOP_COPY, v2, r5, 0, 0, 0)
+            b := vc_expr(c, ip, a, tn.a)
+            ix := vc_expr(c, ip, a, tn.b)
+            _st := vc_emit(c, VOP_STIDX, b, ix, v2, target, 0)
+            c.top = save
+            ret
+        end
+        b2 := vc_expr(c, ip, a, tn.a)
+        br := vc_tmp(c)
+        _mb := vc_emit(c, VOP_MOV, br, b2, 0, 0, 0)
+        ix2 := vc_expr(c, ip, a, tn.b)
+        ixr := vc_tmp(c)
+        _mi := vc_emit(c, VOP_MOV, ixr, ix2, 0, 0, 0)
+        cur2 := vc_tmp(c)
+        _il := vc_emit(c, VOP_IDXLOC, cur2, br, ixr, target, 0)
+        r6 := vc_expr(c, ip, a, node.b)
+        _cb3 := vc_emit(c, VOP_CBIN, cur2, cur2, r6, compound_base(node.op), n)
+        _st2 := vc_emit(c, VOP_STIDX, br, ixr, cur2, target, 1)
+        c.top = save
+        ret
+    end
+    vc_escape_stmt(c, n)
+end
+
+func vc_repeat(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
+    node := at.At(a, n)
+    save := c.top
+    mark := vc_scope_mark(c)
+    kk := vc_tmp(c)
+    endv := vc_tmp(c)
+    step := vc_tmp(c)
+    mut rmode := 0
+    if node.c != 0:
+        s0 := c.top
+        r0 := vc_expr(c, ip, a, node.a)
+        _n0 := vc_emit(c, VOP_REPNUM, kk, r0, node.a, vc_ks(c, "repeat range start must be a number"), 0)
+        c.top = s0
+        r1 := vc_expr(c, ip, a, node.c)
+        _n1 := vc_emit(c, VOP_REPNUM, endv, r1, node.c, vc_ks(c, "repeat range bound must be a number"), 0)
+        c.top = s0
+        if node.d != 0:
+            r2 := vc_expr(c, ip, a, node.d)
+            _n2 := vc_emit(c, VOP_REPNUM, step, r2, node.d, vc_ks(c, "repeat step must be a number"), 0)
+            c.top = s0
+        else:
+            _k1 := vc_emit(c, VOP_LOADK, step, vc_kv(c, val_int(1 as i64)), 0, 0, 0)
+        end
+        _rs := vc_emit(c, VOP_REPSTEP, kk, endv, step, node.d != 0 ? node.d : n, 0)
+    else:
+        s1 := c.top
+        r3 := vc_expr(c, ip, a, node.a)
+        _n3 := vc_emit(c, VOP_REPNUM, endv, r3, node.a, vc_ks(c, "repeat count must be a number"), 1)
+        c.top = s1
+        rmode = (str.Equals(node.type_str, "u64") or str.Equals(node.type_str, "usize")) ? 2 : 1
+        _k2 := vc_emit(c, VOP_LOADK, kk, vc_kv(c, val_int(0 as i64)), 0, 0, 0)
+        _k3 := vc_emit(c, VOP_LOADK, step, vc_kv(c, val_int(1 as i64)), 0, 0, 0)
+    end
+    top := vc_here(c)
+    jx := vc_emit(c, VOP_REPJF, kk, endv, step, rmode, 0)
+    vc_loop_begin(c)
+    bmark := vc_scope_mark(c)
+    btop := c.top
+    if str.Len(node.name) != 0:
+        lv := vc_declare(c, node.name)
+        _m := vc_emit(c, VOP_MOV, lv, kk, 0, 0, 0)
+        ity := int_ty_from_typestr(node.type_str)
+        _co := vc_emit(c, VOP_COERCE, lv, ity, 0, 0, 0)
+    end
+    vc_stmts(c, ip, a, node.b)
+    vc_scope_pop(c, bmark, btop)
+    cont := vc_here(c)
+    _ad := vc_emit(c, VOP_ADDI, kk, kk, step, ITY_I64, 0)
+    _lp := vc_emit(c, VOP_LOOP, top, 0, 0, 0, 0)
+    endpc := vc_here(c)
+    vc_set(c, jx, 5, endpc)
+    vc_loop_end(c, cont, endpc)
+    vc_scope_pop(c, mark, save)
+end
+
+func vc_stmts(c &: VmC, ip &: Interp, a &: at.Ast, owner: int):
+    repeat at.ChildCount(a, owner) in i:
+        vc_stmt(c, ip, a, at.Child(a, owner, i))
+        if not c.ok:
+            ret
+        end
+    end
+end
+
+func vc_block(c &: VmC, ip &: Interp, a &: at.Ast, owner: int):
+    mark := vc_scope_mark(c)
+    top := c.top
+    vc_stmts(c, ip, a, owner)
+    vc_scope_pop(c, mark, top)
+end
+
+func vc_stmt(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
+    if not c.ok or n == 0:
+        ret
+    end
+    node := at.At(a, n)
+    k := node.kind
+    if k == at.AST_BLOCK:
+        vc_block(c, ip, a, n)
+        ret
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        save := c.top
+        if node.a != 0:
+            r := vc_expr(c, ip, a, node.a)
+            c.top = save
+            dst := vc_declare(c, node.name)
+            if r != dst:
+                vc_store_local(c, dst, r, node.type_str)
+            else:
+                _cp := vc_emit(c, VOP_COPY, dst, r, 0, 0, 0)
+            end
+        else:
+            dst2 := vc_declare(c, node.name)
+            _df := vc_emit(c, VOP_DEFAULT, dst2, vc_ks(c, node.type_str), 0, 0, 0)
+        end
+        ret
+    end
+    if k == at.AST_EXPR_STMT:
+        save2 := c.top
+        _e := vc_expr(c, ip, a, node.a)
+        c.top = save2
+        ret
+    end
+    if k == at.AST_ASSIGN:
+        vc_assign(c, ip, a, n)
+        ret
+    end
+    if k == at.AST_IF:
+        save3 := c.top
+        cv := vc_expr(c, ip, a, node.a)
+        c.top = save3
+        jf := vc_emit(c, VOP_JF, cv, 0, 0, 0, 0)
+        vc_block(c, ip, a, node.b)
+        if node.c != 0:
+            je := vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0)
+            vc_set(c, jf, 2, vc_here(c))
+            if at.KindOf(a, node.c) == at.AST_IF:
+                vc_stmt(c, ip, a, node.c)
+            else:
+                vc_block(c, ip, a, node.c)
+            end
+            vc_set(c, je, 1, vc_here(c))
+        else:
+            vc_set(c, jf, 2, vc_here(c))
+        end
+        ret
+    end
+    if k == at.AST_UNTIL:
+        top := vc_here(c)
+        save4 := c.top
+        cv2 := vc_expr(c, ip, a, node.a)
+        c.top = save4
+        jx := vc_emit(c, VOP_JF, cv2, 0, 0, 0, 0)
+        vc_loop_begin(c)
+        vc_block(c, ip, a, node.b)
+        _lp := vc_emit(c, VOP_LOOP, top, 0, 0, 0, 0)
+        endpc := vc_here(c)
+        vc_set(c, jx, 2, endpc)
+        vc_loop_end(c, top, endpc)
+        ret
+    end
+    if k == at.AST_REPEAT:
+        vc_repeat(c, ip, a, n)
+        ret
+    end
+    if k == at.AST_RETURN:
+        if node.a != 0:
+            save5 := c.top
+            r2 := vc_expr(c, ip, a, node.a)
+            _rt := vc_emit(c, VOP_RET, r2, 0, 0, 0, 0)
+            c.top = save5
+        else:
+            _rn := vc_emit(c, VOP_RETN, 0, 0, 0, 0, 0)
+        end
+        ret
+    end
+    if k == at.AST_BREAK or k == at.AST_CONTINUE:
+        if c.loop_mark.len() == 0:
+            vc_escape_stmt(c, n)
+            ret
+        end
+        pc := vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0)
+        vc_patch_add(c, pc, 1, k == at.AST_BREAK ? VMK_BRK : VMK_CONT)
+        ret
+    end
+    vc_escape_stmt(c, n)
+end
+
+func vm_compile(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool): VmC:
+    mut c := VmC {}
+    c.f.defenv = defenv
+    c.f.fnnode = fnnode
+    c.f.has_this = has_this
+    fnn := at.At(a, fnnode)
+    if fnn.a == 0 or at.HasMultiBreak(a, fnn.a) or vc_scan_bad(a, fnn.a):
+        c.ok = false
+        ret c
+    end
+    if has_this:
+        _t := vc_declare(c, "this")
+    end
+    c.f.nparam = at.ChildCount(a, fnnode)
+    repeat at.ChildCount(a, fnnode) in i:
+        pn := at.At(a, at.Child(a, fnnode, i))
+        _p := vc_declare(c, pn.name)
+        c.f.param_ity.push(int_ty_from_typestr(pn.type_str))
+        c.f.param_ref.push(pn.is_ref)
+        c.f.param_def.push(pn.a)
+    end
+    vc_stmts(c, ip, a, fnn.a)
+    _rn := vc_emit(c, VOP_RETN, 0, 0, 0, 0, 0)
+    ret c
+end

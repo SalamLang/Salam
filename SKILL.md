@@ -1700,6 +1700,11 @@ way multi-word names already are elsewhere:
 | `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
 | `defined(X)`                                     | `تعریف‌شده(X)`                                   |
 
+These names are matched the way Persian keywords are, so a ZWNJ, a space, an
+Arabic yeh for a Persian one and an Arabic kaf for a keheh are all the same
+name: `سلام اشکال‌زدایی حافظه` and `سلام اشکال زدایی حافظه` both name
+`SALAM_MEM_DEBUG`. Write whichever reads better.
+
 ```salam
 اگر سلام سیستم لینوکس:
     سرچاپ سلام سیستم، سلام معماری، سلام نگارش

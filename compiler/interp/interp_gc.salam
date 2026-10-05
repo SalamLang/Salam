@@ -1,0 +1,233 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package interp
+
+func gc_st_put(ip &: Interp, s: SStruct): int:
+    ip.gc_new += 1
+    if ip.sts_free.len() > 0:
+        id := ip.sts_free.pop()
+        ip.sts.set(id, s)
+        ret id
+    end
+    ip.sts.push(s)
+    ret ip.sts.len() - 1
+end
+
+func gc_arr_put(ip &: Interp, ar: Arr): int:
+    ip.gc_new += 1
+    if ip.arrs_free.len() > 0:
+        id := ip.arrs_free.pop()
+        ip.arrs.set(id, ar)
+        ret id
+    end
+    ip.arrs.push(ar)
+    ret ip.arrs.len() - 1
+end
+
+func gc_map_put(ip &: Interp, m: SMap): int:
+    ip.gc_new += 1
+    if ip.maps_free.len() > 0:
+        id := ip.maps_free.pop()
+        ip.maps.set(id, m)
+        ret id
+    end
+    ip.maps.push(m)
+    ret ip.maps.len() - 1
+end
+
+func gc_var_put(ip &: Interp, v: SVariant): int:
+    ip.gc_new += 1
+    if ip.vars_free.len() > 0:
+        id := ip.vars_free.pop()
+        ip.variants.set(id, v)
+        ret id
+    end
+    ip.variants.push(v)
+    ret ip.variants.len() - 1
+end
+
+func gc_safe(ip &: Interp): bool:
+    ret not g_threads_on and ip.depth == ip.vm_direct + 1
+end
+
+func gc_flags(n: int): Vector<bool>:
+    mut v := Vector {} as Vector<bool>
+    repeat n:
+        v.push(false)
+    end
+    ret v
+end
+
+func gc_push(work &: Vector<Value>, v: Value):
+    k := v.kind
+    if k == VAL_STRUCT or k == VAL_ARRAY or k == VAL_MAP or k == VAL_VARIANT or k == VAL_MAPITER:
+        work.push(v)
+    end
+end
+
+func gc_push_all(work &: Vector<Value>, vals: Vector<Value>):
+    repeat vals.len() in i:
+        gc_push(work, vals.get(i))
+    end
+end
+
+func gc_collect(ip &: Interp):
+    mut ms := gc_flags(ip.sts.len())
+    mut ma := gc_flags(ip.arrs.len())
+    mut mm := gc_flags(ip.maps.len())
+    mut mv := gc_flags(ip.variants.len())
+    defer ms.free()
+    defer ma.free()
+    defer mm.free()
+    defer mv.free()
+    mut work := Vector {} as Vector<Value>
+    defer work.free()
+    repeat ip.envs.len() in ei:
+        gc_push_all(work, ip.envs.ref(ei).vals)
+    end
+    gc_push_all(work, ip.match_subj)
+    gc_push_all(work, ip.mem_boxes)
+    gc_push_all(work, ip.extern_fns)
+    repeat ip.vm_fns.len() in fi:
+        fp := ip.vm_fns.get(fi) as VmFn*
+        gc_push_all(work, fp.kv)
+    end
+    mut fk := 0
+    until fk + 1 < ip.vm_frames.len():
+        R := ip.vm_frames.get(fk) as Value*
+        n := ip.vm_frames.get(fk + 1) as int
+        repeat n in ri:
+            gc_push(work, R[ri])
+        end
+        fk += 2
+    end
+    until work.len() > 0:
+        v := work.pop()
+        id := v.id
+        if v.kind == VAL_STRUCT:
+            if id > 0 and id < ms.len() and not ms.get(id):
+                ms.set(id, true)
+                gc_push_all(work, ip.sts.ref(id).fvals)
+            end
+        else v.kind == VAL_ARRAY:
+            if id > 0 and id < ma.len() and not ma.get(id):
+                ma.set(id, true)
+                ar := ip.arrs.ref(id)
+                if ar.is_view:
+                    gc_push(work, Value { kind = VAL_ARRAY, id = ar.base })
+                end
+                gc_push_all(work, ar.items)
+            end
+        else v.kind == VAL_MAP:
+            if id > 0 and id < mm.len() and not mm.get(id):
+                mm.set(id, true)
+                mp := ip.maps.ref(id)
+                gc_push_all(work, mp.keys)
+                gc_push_all(work, mp.vals)
+            end
+        else v.kind == VAL_MAPITER:
+            if id > 0 and id < ip.iters.len():
+                gc_push(work, Value { kind = VAL_MAP, id = ip.iters.get(id).map })
+            end
+        else:
+            if id > 0 and id < mv.len() and not mv.get(id):
+                mv.set(id, true)
+                vp := ip.variants.ref(id)
+                if vp.has_boxed:
+                    gc_push(work, vp.boxed)
+                end
+            end
+        end
+    end
+    mut fs := gc_flags(ip.sts.len())
+    defer fs.free()
+    repeat ip.sts_free.len() in q0:
+        fs.set(ip.sts_free.get(q0), true)
+    end
+    mut live := 0
+    mut si := 1
+    until si < ip.sts.len():
+        if ms.get(si):
+            live += 1
+        else not fs.get(si):
+            sp := ip.sts.ref(si)
+            sp.fnames.free()
+            sp.fvals.free()
+            ip.sts.set(si, SStruct {})
+            ip.sts_free.push(si)
+        end
+        si += 1
+    end
+    mut fa := gc_flags(ip.arrs.len())
+    defer fa.free()
+    repeat ip.arrs_free.len() in q1:
+        fa.set(ip.arrs_free.get(q1), true)
+    end
+    mut ai := 1
+    until ai < ip.arrs.len():
+        if ma.get(ai):
+            live += 1
+        else not fa.get(ai):
+            ap := ip.arrs.ref(ai)
+            ap.items.free()
+            ip.arrs.set(ai, Arr {})
+            ip.arrs_free.push(ai)
+        end
+        ai += 1
+    end
+    mut fm := gc_flags(ip.maps.len())
+    defer fm.free()
+    repeat ip.maps_free.len() in q2:
+        fm.set(ip.maps_free.get(q2), true)
+    end
+    mut mi := 1
+    until mi < ip.maps.len():
+        if mm.get(mi):
+            live += 1
+        else not fm.get(mi):
+            mp2 := ip.maps.ref(mi)
+            mp2.keys.free()
+            mp2.vals.free()
+            mp2.used.free()
+            mp2.index.free()
+            ip.maps.set(mi, SMap {})
+            ip.maps_free.push(mi)
+        end
+        mi += 1
+    end
+    mut fv := gc_flags(ip.variants.len())
+    defer fv.free()
+    repeat ip.vars_free.len() in q3:
+        fv.set(ip.vars_free.get(q3), true)
+    end
+    mut vi := 1
+    until vi < ip.variants.len():
+        if mv.get(vi):
+            live += 1
+        else not fv.get(vi):
+            ip.variants.set(vi, SVariant {})
+            ip.vars_free.push(vi)
+        end
+        vi += 1
+    end
+    ip.gc_new = 0
+    ip.gc_next = live * 2 > ip.gc_min ? live * 2 : ip.gc_min
+end
+
+func gc_maybe(ip &: Interp):
+    if ip.gc_new >= ip.gc_next and gc_safe(ip):
+        gc_collect(ip)
+    end
+end

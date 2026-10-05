@@ -27,6 +27,10 @@ func vm_get(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool)
     if ip.vm_state == 0:
         ev := os.Env("SALAM_VM")
         ip.vm_state = str.Equals(ev, "0") ? 2 : (str.Equals(ev, "trace") ? 3 : 1)
+        if str.Equals(os.Env("SALAM_GC_STRESS"), "1"):
+            ip.gc_min = 64
+            ip.gc_next = 64
+        end
     end
     if ip.vm_state == 2 or fnnode <= 0:
         ret 0
@@ -576,6 +580,11 @@ func vm_regs_get(f: VmFn*): Value*:
     ret mem.Allocate(((f.nreg + 1) as u64) * sizeof(Value)) as Value*
 end
 
+func vm_frame_pop(ip &: Interp):
+    _fa := ip.vm_frames.pop()
+    _fb := ip.vm_frames.pop()
+end
+
 func vm_regs_put(f: VmFn*, R: Value*):
     if not g_threads_on:
         f.pool.push(R as i64)
@@ -598,7 +607,9 @@ func vm_call_vm(
     if str.Len(file) > 0:
         ip.cur_file = file
     end
+    ip.vm_direct += 1
     r := vm_exec(ip, a, vi, env, has_this, thisv, argp, nargs)
+    ip.vm_direct -= 1
     ip.depth -= 1
     ip.cur_file = saved_file
     vm_tb_pop(ip, tracked)
@@ -619,6 +630,9 @@ func vm_exec(
     f := FT[vi - 1] as VmFn*
     R := vm_regs_get(f)
     defer vm_regs_put(f, R)
+    ip.vm_frames.push(R as i64)
+    ip.vm_frames.push((f.nreg + 1) as i64)
+    defer vm_frame_pop(ip)
     C := f.code.data
     K := f.kv.data
     AX := f.aux.data
@@ -905,6 +919,9 @@ func vm_exec(
             end
             VOP_LOOP:
                 tick(ip)
+                if ip.gc_new >= ip.gc_next:
+                    gc_maybe(ip)
+                end
                 if ip.failed:
                     running = false
                     continue

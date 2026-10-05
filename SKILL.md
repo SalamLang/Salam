@@ -1768,7 +1768,9 @@ names and placement rules in `docs/LAYOUT_ELEMENTS.md`. Common ones: `box`
 (img), `list`/`ordered list`/`item`, `table`/`row`/`column`, `form`, `input`,
 `select`/`option`, `text area`, `button`, `label`, `video`/`audio`/`source`,
 `figure`, `details`/`summary`, `dialog`. Every element also accepts its HTML tag
-name (`div`, `a`, `img`, `td`, ...).
+name (`div`, `a`, `img`, `li`, ...), except the table parts that come from
+context: write `header`/`main`/`footer` and `column` inside `table`, never
+`thead`/`tbody`/`tfoot`/`th`/`td`.
 
 The same name can mean different tags by context. Inside `table`, `header`,
 `main` and `footer` become `<thead>`, `<tbody>` and `<tfoot>`. `column` is `<th>`

@@ -1761,11 +1761,13 @@ end
 ```
 
 **Elements** (`std/layout/elements/`, one `LayoutElement` const per element or
-context variant): `layout box main header footer nav section article heading
-paragraph span bold strong italic font line break list item link head_link image
-media iframe canvas table row column/cell form label input button script style
-meta global`. Every element also accepts its HTML tag name (`div`, `a`, `img`,
-`td`, ...). Persian names come from the `@fa` aliases.
+context variant): every current HTML element, with the full list, Persian
+names and placement rules in `docs/LAYOUT_ELEMENTS.md`. Common ones: `box`
+(div), `paragraph`, `heading` (`size = 1..6`), `span`, `link` (a), `image`
+(img), `list`/`ordered list`/`item`, `table`/`row`/`column`, `form`, `input`,
+`select`/`option`, `text area`, `button`, `label`, `video`/`audio`/`source`,
+`figure`, `details`/`summary`, `dialog`. Every element also accepts its HTML tag
+name (`div`, `a`, `img`, `td`, ...).
 
 The same name can mean different tags by context. Inside `table`, `header`,
 `main` and `footer` become `<thead>`, `<tbody>` and `<tfoot>`. `column` is `<th>`

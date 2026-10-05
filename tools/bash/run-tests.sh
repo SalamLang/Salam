@@ -260,6 +260,16 @@ if [ "${1:-}" = "--worker" ]; then
             got=$("$SALAM_ABS" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
             wk_check "$expabs" "$got"
             ;;
+        translate)
+            other=en
+            [ "$lang" = en ] && other=fa
+            tdir="$WORK/tr_${jobid}_$$"
+            mkdir -p "$tdir"
+            "$SALAM_ABS" translate "$other" "$f" --lang="$lang" --output="$tdir/t.salam" --no-color >/dev/null 2>&1
+            got=$("$SALAM_ABS" exec "$tdir/t.salam" --no-color --log-level=error --lang="$other" 2>&1 | tr -d '\r')
+            rm -rf "$tdir"
+            wk_check "$expabs" "$got"
+            ;;
         errors)
             code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
@@ -862,6 +872,19 @@ if want llvmapi; then
             note_result "SKIP llvmapi/$lang/* (needs libsalam_llvm.a on the link path; set SALAM_LLVM_LIBDIR: $why)" "llvmapi/$lang/all"
         fi
         rm -rf "$probe_dir"
+    done
+fi
+
+if want translate; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/translate/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="$(pick_expect "tests/$lang/translate/$name")"
+            [ -f "$exp" ] || continue
+            add_job translate "translate/$lang/$name" "$f" "$lang" "$exp"
+        done
     done
 fi
 

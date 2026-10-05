@@ -1798,6 +1798,9 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 | E118 / E119 | void element with children / element that cannot hold text                    |
 | E120        | element allowed only once (`main`, table `header`)                            |
 | E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
+| E123        | a std generator (`std/layoutgen`) failed to compile or run                    |
+| E125        | element must come first (`caption` in `table`, `legend`, `summary`)           |
+| W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
 on any of these errors.

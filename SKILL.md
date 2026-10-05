@@ -408,6 +408,7 @@ grid := [[1, 2, 3], [4, 5, 6]]        // int[2][3], 2-D
 mid := a[1: 3]                        // slice (view) of a[1] and a[2]; writes through to `a`
 whole := a[:]  head := a[: 2]  tail := a[1:]   // omitted bound = that end of `a`
 func sum(view: int[]): int: ... end   // int[] = slice parameter, any length
+sum(a)  sum([4, 5])  sum(a[1:])       // an array passes as a slice directly, no copy
 len(a)                                // length builtin
 ```
 

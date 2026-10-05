@@ -39,6 +39,39 @@ func loopless_break(a &: at.Ast, nid: int): bool:
     ret false
 end
 
+func node_flag_set(v &: Vector<bool>, id: int):
+    until v.len() <= id:
+        v.push(false)
+    end
+    v.set(id, true)
+end
+
+func node_flag(v: Vector<bool>, id: int): bool:
+    ret id > 0 and id < v.len() and v.get(id)
+end
+
+func note_noret_call(s &: Sema, a &: at.Ast, call: int, sig: int):
+    if sig <= 0:
+        ret
+    end
+    sg := sig_at(s, sig)
+    if sg.decl != 0 and at.At(a, sg.decl).is_noret:
+        node_flag_set(s.noret_calls, call)
+    end
+end
+
+func fn_body_terminates(s &: Sema, a &: at.Ast, body: int): bool:
+    saved := s.term_covers_all
+    s.term_covers_all = true
+    r := sema_stmt_terminates(s, a, body)
+    s.term_covers_all = saved
+    ret r
+end
+
+func arm_terminates(s &: Sema, a &: at.Ast, body: int): bool:
+    ret sema_stmt_terminates(s, a, body) and not loopless_break(a, body)
+end
+
 func sema_stmt_terminates(s &: Sema, a &: at.Ast, nid: int): bool:
     if nid == 0:
         ret false
@@ -61,43 +94,32 @@ func sema_stmt_terminates(s &: Sema, a &: at.Ast, nid: int): bool:
     if n.kind == at.AST_UNTIL:
         ret n.a != 0 and at.KindOf(a, n.a) == at.AST_LITERAL and at.Get(a, n.a).op == tok.TK_KW_TRUE and not loopless_break(a, n.b)
     end
-    if n.kind == at.AST_MATCH:
-        mut has_else := false
-        if at.ChildCount(a, nid) == 0:
+    if n.kind == at.AST_MATCH or n.kind == at.AST_SWITCH:
+        if at.ChildCount(a, nid) == 0 or (n.kind == at.AST_SWITCH and not s.term_covers_all):
             ret false
         end
-        repeat at.ChildCount(a, nid) in j:
-            arm := at.Child(a, nid, j)
-            if at.Get(a, arm).op == tok.TK_KW_ELSE:
-                has_else = true
+        if not node_flag(s.exhaustive, nid) and not (s.term_covers_all and node_flag(s.covers_all, nid)):
+            ret false
+        end
+        falls := n.kind == at.AST_SWITCH
+        mut next_ok := false
+        mut j := at.ChildCount(a, nid) - 1
+        until j >= 0:
+            body := at.At(a, at.Child(a, nid, j)).b
+            mut ok := arm_terminates(s, a, body)
+            if not ok and falls and next_ok and not loopless_break(a, body):
+                ok = true
             end
-            if not sema_stmt_terminates(s, a, at.Get(a, arm).b):
+            if not ok:
                 ret false
             end
+            next_ok = true
+            j -= 1
         end
-        ret has_else
-    end
-    if n.kind == at.AST_SWITCH:
-        ret false
+        ret true
     end
     if n.kind == at.AST_EXPR_STMT:
-        c := n.a
-        if c != 0 and at.KindOf(a, c) == at.AST_CALL:
-            ca := at.Get(a, c).a
-            if ca != 0 and at.KindOf(a, ca) == at.AST_IDENTIFIER:
-                symid := scope_lookup(s, s.cur, at.Get(a, ca).name)
-                if symid != 0:
-                    sv := sym_at(s, symid)
-                    if sv.kind == SYM_FUNC and sv.overloads.len() == 1:
-                        sg := sig_at(s, sv.overloads.get(0))
-                        if sg.decl != 0 and at.Get(a, sg.decl).is_noret:
-                            ret true
-                        end
-                    end
-                end
-            end
-        end
-        ret false
+        ret n.a != 0 and node_flag(s.noret_calls, n.a)
     end
     ret false
 end

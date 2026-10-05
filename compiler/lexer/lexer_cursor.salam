@@ -5,6 +5,9 @@ include tok "../token.salam"
 include lg "../logger.salam"
 include i18n "../i18n.salam"
 
+mut g_lx_intern := Vector {} as Vector<str>
+mut g_lx_intern_n := 0
+
 func lx_pos(L &: Lx): co.SrcPos:
     ret co.MakePos(L.line as u32, L.col as u32, L.pos as u32)
 end
@@ -46,6 +49,73 @@ end
 
 func lex_slice(L &: Lx, start: int): str:
     ret str.SubstrIn(L.s, start, L.pos - start)
+end
+
+func lx_intern_hash(s: str, start: int, n: int): u64:
+    mut h := 0xcbf29ce484222325 as u64
+    repeat n in i:
+        h = (h ^ (byte_at(s, start + i) as u64)) * (0x100000001b3 as u64)
+    end
+    ret h
+end
+
+func lx_intern_grow():
+    old := g_lx_intern
+    ncap := old.len() == 0 ? 4096 : old.len() * 2
+    mut t := Vector {} as Vector<str>
+    repeat ncap:
+        t.push("")
+    end
+    mask := (ncap - 1) as u64
+    repeat old.len() in i:
+        k := old.get(i)
+        if str.Len(k) > 0:
+            mut j := (lx_intern_hash(k, 0, str.Len(k)) & mask) as int
+            until str.Len(t.get(j)) > 0:
+                j = (j + 1) & (ncap - 1)
+            end
+            t.set(j, k)
+        end
+    end
+    g_lx_intern = t
+    if old.len() > 0:
+        old.free()
+    end
+end
+
+func lex_intern(L &: Lx, start: int): str:
+    n := L.pos - start
+    if n <= 0 or n > 64:
+        ret lex_slice(L, start)
+    end
+    if g_lx_intern_n * 2 >= g_lx_intern.len():
+        lx_intern_grow()
+    end
+    cap := g_lx_intern.len()
+    mut i := (lx_intern_hash(L.s, start, n) & ((cap - 1) as u64)) as int
+    until true:
+        k := g_lx_intern.get(i)
+        if str.Len(k) == 0:
+            break
+        end
+        if str.Len(k) == n:
+            mut same := true
+            repeat n in j:
+                if byte_at(k, j) != byte_at(L.s, start + j):
+                    same = false
+                    break
+                end
+            end
+            if same:
+                ret k
+            end
+        end
+        i = (i + 1) & (cap - 1)
+    end
+    s := lex_slice(L, start)
+    g_lx_intern.set(i, s)
+    g_lx_intern_n += 1
+    ret s
 end
 
 func match_ch(L &: Lx, c: int): bool:

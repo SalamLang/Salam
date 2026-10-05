@@ -144,12 +144,48 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
             ret mk_str(a, interp, vid)
         end
     end
+    k := v.kind
+    if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST:
+        na := k == at.AST_CALL ? v.a : subst_value(a, v.a, f)
+        nb := subst_value(a, v.b, f)
+        nc := subst_value(a, v.c, f)
+        mut args := Vector {} as Vector<int>
+        mut changed := na != v.a or nb != v.b or nc != v.c
+        repeat v.list.len() in i:
+            arg := v.list.get(i)
+            sa := subst_value(a, arg, f)
+            if sa != arg:
+                changed = true
+            end
+            args.push(sa)
+        end
+        if not changed:
+            args.free()
+            ret vid
+        end
+        cp := at.NewNode(a, k)
+        mut cn := v
+        cn.a = na
+        cn.b = nb
+        cn.c = nc
+        cn.list = args
+        cn.dims = Vector {} as Vector<int>
+        repeat v.dims.len() in d:
+            cn.dims.push(v.dims.get(d))
+        end
+        cn.captures = Vector {} as Vector<int>
+        cn.typarams = Vector {} as Vector<str>
+        cn.typaram_bounds = Vector {} as Vector<str>
+        cn.aliases = Vector {} as Vector<str>
+        at.Put(a, cp, cn)
+        ret cp
+    end
     ret vid
 end
 
 func find_comp(ex &: LoExpand, name: str): int:
     repeat ex.comp_name.len() in i:
-        if str.Equals(ex.comp_name.get(i), name):
+        if lp.IdentEqual(ex.comp_name.get(i), name):
             ret i
         end
     end
@@ -218,7 +254,7 @@ end
 func find_layout_block(a &: at.Ast, program: int): int:
     repeat at.ChildCount(a, program) in i:
         did := at.Child(a, program, i)
-        if at.KindOf(a, did) == at.AST_LAYOUT_BLOCK:
+        if at.KindOf(a, did) == at.AST_LAYOUT_BLOCK and str.Len(at.Get(a, did).name) == 0:
             ret did
         end
     end
@@ -494,8 +530,59 @@ func expand_item(
         out.push(el)
         ret
     end
+    if item.kind == at.AST_IF:
+        out.push(expand_if(ex, a, iid, fr, dir, depth))
+        ret
+    end
+    if item.kind == at.AST_EACH:
+        cp := at.NewNode(a, at.AST_EACH)
+        copy_span(a, cp, iid)
+        mut cn := at.Get(a, cp)
+        cn.name = item.name
+        cn.c = item.c
+        cn.a = subst_value(a, item.a, fr)
+        cn.b = expand_container(ex, a, item.b, fr, dir, depth)
+        at.Put(a, cp, cn)
+        out.push(cp)
+        ret
+    end
 
     out.push(iid)
+end
+
+func expand_container(ex &: LoExpand, a &: at.Ast, cid: int, fr &: LoFrame, dir: str, depth: int): int:
+    blk := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, blk, cid)
+    mut kids := Vector {} as Vector<int>
+    expand_items(ex, a, kids, cid, fr, dir, depth)
+    mut bn := at.Get(a, blk)
+    mut old := bn.list
+    bn.list = kids
+    at.Put(a, blk, bn)
+    old.free()
+    ret blk
+end
+
+func expand_if(ex &: LoExpand, a &: at.Ast, iid: int, fr &: LoFrame, dir: str, depth: int): int:
+    item := at.Get(a, iid)
+    cp := at.NewNode(a, at.AST_IF)
+    copy_span(a, cp, iid)
+    cond := subst_value(a, item.a, fr)
+    then_b := expand_container(ex, a, item.b, fr, dir, depth)
+    mut else_b := 0
+    if item.c != 0:
+        if at.KindOf(a, item.c) == at.AST_IF:
+            else_b = expand_if(ex, a, item.c, fr, dir, depth)
+        else:
+            else_b = expand_container(ex, a, item.c, fr, dir, depth)
+        end
+    end
+    mut cn := at.Get(a, cp)
+    cn.a = cond
+    cn.b = then_b
+    cn.c = else_b
+    at.Put(a, cp, cn)
+    ret cp
 end
 
 func expand_items(

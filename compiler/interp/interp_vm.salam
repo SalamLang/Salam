@@ -86,6 +86,7 @@ const VOP_SIZEOF := 62
 const VOP_STRCMP := 63
 const VOP_FMTF := 64
 const VOP_SLIT := 65
+const VOP_CASE := 66
 
 const VMK_BRK := 1
 const VMK_CONT := 2
@@ -848,7 +849,21 @@ func vc_expr(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
         onod := at.At(a, obj)
         if onod.kind == at.AST_IDENTIFIER and vc_lookup(c, onod.name) < 0 and not (c.f.has_this and str.Equals(onod.name, "this")):
             mut mv := val_null()
-            if c.f.has_this or not vc_global_value(ip, c, onod.name, mv) or mv.kind != VAL_MODULE:
+            if not vc_global_value(ip, c, onod.name, mv):
+                edef := find_enum(ip, onod.name)
+                if edef != 0 and not c.f.has_this:
+                    repeat at.ChildCount(a, edef) in ei:
+                        if str.Equals(at.At(a, at.Child(a, edef, ei)).name, node.name):
+                            ev := eval(ip, a, c.f.defenv, n)
+                            de := vc_tmp(c)
+                            _le := vc_emit(c, VOP_LOADK, de, vc_kv(c, ev), 0, 0, 0)
+                            ret de
+                        end
+                    end
+                end
+                ret vc_escape_expr(c, n)
+            end
+            if c.f.has_this or mv.kind != VAL_MODULE:
                 ret vc_escape_expr(c, n)
             end
             md := ip.mods.get(mv.id)
@@ -1101,6 +1116,125 @@ func vc_stmts(c &: VmC, ip &: Interp, a &: at.Ast, owner: int):
     end
 end
 
+func vc_scan_defer(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nd := at.At(a, n)
+    if nd.kind == at.AST_DEFER:
+        ret true
+    end
+    if nd.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if vc_scan_defer(a, nd.a) or vc_scan_defer(a, nd.b) or vc_scan_defer(a, nd.c) or vc_scan_defer(a, nd.d):
+        ret true
+    end
+    repeat nd.list.len() in i:
+        if vc_scan_defer(a, nd.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func vc_switch(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
+    node := at.At(a, n)
+    if vc_scan_defer(a, n) or vc_loop_unwind(c) >= 0:
+        vc_escape_stmt(c, n)
+        ret
+    end
+    save := c.top
+    sv := vc_expr(c, ip, a, node.a)
+    sreg := vc_tmp(c)
+    _ms := vc_emit(c, VOP_MOV, sreg, sv, 0, 0, 0)
+    flag := vc_tmp(c)
+    mark := c.patch.len()
+    c.loop_mark.push(mark)
+    c.loop_cont.push(0 - 1)
+    cnt := at.ChildCount(a, n)
+    mut prev_body_jmp := 0 - 1
+    mut next_test := Vector {} as Vector<int>
+    defer next_test.free()
+    repeat cnt in i:
+        cs := at.Child(a, n, i)
+        csn := at.At(a, cs)
+        here := vc_here(c)
+        repeat next_test.len() in q:
+            vc_set(c, next_test.get(q), 1, here)
+        end
+        next_test.clear()
+        mut to_body := Vector {} as Vector<int>
+        if csn.op == tok.TK_KW_ELSE:
+            to_body.push(vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0))
+        else:
+            repeat at.ChildCount(a, cs) in j:
+                item := at.Child(a, cs, j)
+                itn := at.At(a, item)
+                s2 := c.top
+                lo := vc_expr(c, ip, a, itn.a)
+                mut hi := 0
+                if itn.op == tok.TK_KW_TO:
+                    hi = vc_expr(c, ip, a, itn.c)
+                end
+                _cm := vc_emit(c, VOP_CASE, flag, sreg, lo, itn.op, hi)
+                c.top = s2
+                to_body.push(vc_emit(c, VOP_JT, flag, 0, 0, 0, 0))
+            end
+            next_test.push(vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0))
+        end
+        body := vc_here(c)
+        repeat to_body.len() in q2:
+            p := to_body.get(q2)
+            if c.f.code.get(p) == VOP_JMP:
+                vc_set(c, p, 1, body)
+            else:
+                vc_set(c, p, 2, body)
+            end
+        end
+        to_body.free()
+        if prev_body_jmp >= 0:
+            vc_set(c, prev_body_jmp, 1, body)
+        end
+        vc_block(c, ip, a, csn.b)
+        prev_body_jmp = vc_emit(c, VOP_JMP, 0, 0, 0, 0, 0)
+    end
+    endpc := vc_here(c)
+    repeat next_test.len() in q3:
+        vc_set(c, next_test.get(q3), 1, endpc)
+    end
+    if prev_body_jmp >= 0:
+        vc_set(c, prev_body_jmp, 1, endpc)
+    end
+    _lm := c.loop_mark.pop()
+    _lc := c.loop_cont.pop()
+    mut keep := Vector {} as Vector<int>
+    mut keepk := Vector {} as Vector<int>
+    defer keep.free()
+    defer keepk.free()
+    mut pi := mark
+    until pi < c.patch.len():
+        e := c.patch.get(pi)
+        kd := c.patch_kind.get(pi)
+        if kd == VMK_BRK:
+            c.f.code.set(e / 8 + e % 8, endpc)
+        else:
+            keep.push(e)
+            keepk.push(kd)
+        end
+        pi += 1
+    end
+    until c.patch.len() > mark:
+        _pp := c.patch.pop()
+        _pk := c.patch_kind.pop()
+    end
+    repeat keep.len() in r:
+        c.patch.push(keep.get(r))
+        c.patch_kind.push(keepk.get(r))
+    end
+    c.top = save
+end
+
 func vc_has_defer(a &: at.Ast, owner: int): bool:
     repeat at.ChildCount(a, owner) in i:
         if at.KindOf(a, at.Child(a, owner, i)) == at.AST_DEFER:
@@ -1206,6 +1340,10 @@ func vc_stmt(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
     end
     if k == at.AST_REPEAT:
         vc_repeat(c, ip, a, n)
+        ret
+    end
+    if k == at.AST_SWITCH:
+        vc_switch(c, ip, a, n)
         ret
     end
     if k == at.AST_RETURN:

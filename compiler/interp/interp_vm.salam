@@ -1284,11 +1284,7 @@ func vc_stmt(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
             r := vc_expr(c, ip, a, node.a)
             c.top = save
             dst := vc_declare(c, node.name)
-            if r != dst:
-                vc_store_local(c, dst, r, node.type_str)
-            else:
-                _cp := vc_emit(c, VOP_COPY, dst, r, 0, 0, 0)
-            end
+            vc_store_local(c, dst, r, node.type_str)
         else:
             dst2 := vc_declare(c, node.name)
             _df := vc_emit(c, VOP_DEFAULT, dst2, vc_ks(c, node.type_str), 0, 0, 0)
@@ -1414,10 +1410,11 @@ func vc_arg_byval(ip &: Interp, a &: at.Ast, call: int, arg: int): bool:
     ret false
 end
 
-func vc_ro_use(ip &: Interp, a &: at.Ast, par: Vector<int>, id: int): bool:
+func vc_ro_use(ip &: Interp, a &: at.Ast, path: Vector<int>, id: int): bool:
     mut cur := id
+    mut depth := path.len() - 1
     until true:
-        pp := par.get(cur)
+        pp := depth >= 0 ? path.get(depth) : 0
         if pp == 0:
             break
         end
@@ -1427,11 +1424,12 @@ func vc_ro_use(ip &: Interp, a &: at.Ast, par: Vector<int>, id: int): bool:
                 ret false
             end
             cur = pp
+            depth -= 1
         else:
             break
         end
     end
-    p2 := par.get(cur)
+    p2 := depth >= 0 ? path.get(depth) : 0
     if p2 == 0:
         ret false
     end
@@ -1471,39 +1469,37 @@ func vc_ro_use(ip &: Interp, a &: at.Ast, par: Vector<int>, id: int): bool:
     ret false
 end
 
-func vc_ro_walk(ip &: Interp, a &: at.Ast, n: int, parent: int, name: str, par &: Vector<int>, ok &: bool):
+func vc_ro_walk(ip &: Interp, a &: at.Ast, n: int, name: str, path &: Vector<int>, ok &: bool):
     if n == 0 or not ok:
         ret
     end
-    until par.len() <= n:
-        par.push(0)
-    end
-    par.set(n, parent)
     nd := at.At(a, n)
     if (nd.kind == at.AST_VAR_DECL or nd.kind == at.AST_CONST_DECL or nd.kind == at.AST_PARAM or nd.kind == at.AST_REPEAT) and str.Equals(nd.name, name):
         ok = false
         ret
     end
     if nd.kind == at.AST_IDENTIFIER and str.Equals(nd.name, name):
-        if nd.unwrap_subj or not vc_ro_use(ip, a, par, n):
+        if nd.unwrap_subj or not vc_ro_use(ip, a, path, n):
             ok = false
         end
         ret
     end
-    vc_ro_walk(ip, a, nd.a, n, name, par, ok)
-    vc_ro_walk(ip, a, nd.b, n, name, par, ok)
-    vc_ro_walk(ip, a, nd.c, n, name, par, ok)
-    vc_ro_walk(ip, a, nd.d, n, name, par, ok)
+    path.push(n)
+    vc_ro_walk(ip, a, nd.a, name, path, ok)
+    vc_ro_walk(ip, a, nd.b, name, path, ok)
+    vc_ro_walk(ip, a, nd.c, name, path, ok)
+    vc_ro_walk(ip, a, nd.d, name, path, ok)
     repeat nd.list.len() in i:
-        vc_ro_walk(ip, a, nd.list.get(i), n, name, par, ok)
+        vc_ro_walk(ip, a, nd.list.get(i), name, path, ok)
     end
+    _pp := path.pop()
 end
 
 func vc_param_ro(ip &: Interp, a &: at.Ast, body: int, name: str): bool:
     mut par := Vector {} as Vector<int>
     defer par.free()
     mut ok := true
-    vc_ro_walk(ip, a, body, 0, name, par, ok)
+    vc_ro_walk(ip, a, body, name, par, ok)
     ret ok
 end
 

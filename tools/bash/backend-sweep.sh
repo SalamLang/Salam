@@ -148,7 +148,7 @@ for section in $SECTIONS; do
                 # shellcheck disable=SC2086
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" js "$ROOT/$f" $defs \
                     --output=sweep.js --no-color --log-level=error --lang="$lang") >/dev/null 2>&1; then
-                    (cd "$WORK" && timeout 90 node sweep.js </dev/null) >"$WORK/run.out" 2>&1
+                    (cd "$ROOT" && timeout 90 node "$WORK/sweep.js" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?
                     got=$(tr -d '\r' <"$WORK/run.out")
                 else
@@ -160,7 +160,7 @@ for section in $SECTIONS; do
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
                     --backend=llvm --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
                     [ -x "$WORK/sweep.exe" ]; then
-                    (cd "$WORK" && timeout 90 ./sweep.exe </dev/null) >"$WORK/run.out" 2>&1
+                    (cd "$ROOT" && timeout 90 "$WORK/sweep.exe" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?
                     got=$(tr -d '\r' <"$WORK/run.out")
                 else

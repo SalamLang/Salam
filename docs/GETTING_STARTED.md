@@ -258,6 +258,29 @@ salam layout build page.salam --inline
 salam layout build a.salam b.salam
 ```
 
+A page is a tree of elements with `name = value` attributes:
+
+```salam
+layout:
+    title = "Hello"
+    header:
+        heading: size = 1 content = "Welcome" end
+    end
+    list:
+        item: content = "Fast" end
+        item: content = "Typed" end
+    end
+    link: url = "https://salamlang.ir" content = "Learn more" end
+end
+```
+
+Elements and attributes are checked when the page is built: a misspelled name,
+a value of the wrong type (a URL, a number, a color), a missing required
+attribute or an element in the wrong place (an `item` outside a `list`) is a
+compile error, with a suggestion for the closest valid name. See
+[LAYOUT_ELEMENTS.md](LAYOUT_ELEMENTS.md) for every element and
+[LAYOUT_SCHEMA.md](LAYOUT_SCHEMA.md) for how they are defined.
+
 ## 🖥️ Interactive REPLs
 
 ```sh

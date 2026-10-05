@@ -1688,17 +1688,17 @@ end
 ```
 
 **In Persian these constants have Persian names, and only those work.** Persian
-has no upper case, so the `سلام ` prefix is what marks a name as the language's
+has no upper case, so the `سلام` prefix is what marks a name as the language's
 own rather than yours; the words are joined with spaces, the way multi-word
 names already are elsewhere:
 
-| English | Persian |
-| --- | --- |
+| English                                          | Persian                                          |
+| ------------------------------------------------ | ------------------------------------------------ |
 | `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
-| `SALAM_ARCH_X64` / `_ARM64` | `سلام معماری ایکس۶۴` / `آرم۶۴` |
-| `SALAM_OS` / `SALAM_ARCH` | `سلام سیستم` / `سلام معماری` |
-| `SALAM_VERSION` / `SALAM_GIT_COMMIT` | `سلام نگارش` / `سلام کامیت گیت` |
-| `defined(X)` | `تعریف‌شده(X)` |
+| `SALAM_ARCH_X64` / `_ARM64`                      | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
+| `SALAM_OS` / `SALAM_ARCH`                        | `سلام سیستم` / `سلام معماری`                     |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `defined(X)`                                     | `تعریف‌شده(X)`                                   |
 
 ```salam
 اگر سلام سیستم لینوکس:
@@ -1707,8 +1707,8 @@ names already are elsewhere:
 ```
 
 The two spellings do not mix, and the error names the one you wanted:
-`SALAM_OS_LINUX` in a Persian file reports *this file's language writes that
-built-in constant as `سلام سیستم لینوکس`*, and the reverse in an English file. Which set
+`SALAM_OS_LINUX` in a Persian file reports _this file's language writes that
+built-in constant as `سلام سیستم لینوکس`_, and the reverse in an English file. Which set
 applies is decided per file, by the same language detection the keywords use, so
 a Persian program importing English `std/` is fine. Your own `-DNAME` defines
 are never translated, in either language.
@@ -2388,10 +2388,10 @@ All of §6 applies. In addition:
    already `اعشار۶۴`: casting a literal is allowed, but casting a variable
    to the type it already has is a useless cast (E093).
 10. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
-   write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
+    write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
 11. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
-   `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
-   `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+    `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
+    `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
 12. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
     `حدبالا` or `حد_بالا`.
 13. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.

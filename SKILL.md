@@ -1687,17 +1687,17 @@ end
 ```
 
 **In Persian these constants have Persian names, and only those work.** Persian
-has no upper case, so the `سلام ` prefix is what marks a name as the language's
-own rather than yours; the words are joined with spaces, the way multi-word
-names already are elsewhere:
+has no upper case, so a leading `سلام` is what marks a name as the language's
+own rather than yours; the rest of the words follow it separated by spaces, the
+way multi-word names already are elsewhere:
 
-| English | Persian |
-| --- | --- |
+| English                                          | Persian                                          |
+| ------------------------------------------------ | ------------------------------------------------ |
 | `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
-| `SALAM_ARCH_X64` / `_ARM64` | `سلام معماری ایکس۶۴` / `آرم۶۴` |
-| `SALAM_OS` / `SALAM_ARCH` | `سلام سیستم` / `سلام معماری` |
-| `SALAM_VERSION` / `SALAM_GIT_COMMIT` | `سلام نگارش` / `سلام کامیت گیت` |
-| `defined(X)` | `تعریف‌شده(X)` |
+| `SALAM_ARCH_X64` / `_ARM64`                      | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
+| `SALAM_OS` / `SALAM_ARCH`                        | `سلام سیستم` / `سلام معماری`                     |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `defined(X)`                                     | `تعریف‌شده(X)`                                   |
 
 ```salam
 اگر سلام سیستم لینوکس:
@@ -1706,11 +1706,16 @@ names already are elsewhere:
 ```
 
 The two spellings do not mix, and the error names the one you wanted:
-`SALAM_OS_LINUX` in a Persian file reports *this file's language writes that
-built-in constant as `سلام سیستم لینوکس`*, and the reverse in an English file. Which set
+`SALAM_OS_LINUX` in a Persian file reports _this file's language writes that
+built-in constant as `سلام سیستم لینوکس`_, and the reverse in an English file. Which set
 applies is decided per file, by the same language detection the keywords use, so
 a Persian program importing English `std/` is fine. Your own `-DNAME` defines
 are never translated, in either language.
+
+`SALAM_JS` / `سلام جاوااسکریپت` is the one flag that is only _defined_ on the JS
+backend rather than defaulting to false, so test it with `defined` in either
+language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
+English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
 
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
@@ -2371,7 +2376,9 @@ All of §6 applies. In addition:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
    an English file `«` is not a delimiter at all. Leaving one open reports its
    own error rather than the double-quote one, since the fix is different:
-   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`.
+   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
+   with no `«` before it is its own error too, rather than being swallowed
+   into the identifier that follows it.
 3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
    `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
    Persian file. See §8.
@@ -2387,10 +2394,10 @@ All of §6 applies. In addition:
    already `اعشار۶۴`: casting a literal is allowed, but casting a variable
    to the type it already has is a useless cast (E093).
 10. **No typed declarations**, as in English: `ک: صحیح = ۰` is a parse error;
-   write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
+    write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
 11. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
-   `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
-   `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+    `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
+    `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
 12. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
     `حدبالا` or `حد_بالا`.
 13. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.

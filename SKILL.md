@@ -2376,7 +2376,9 @@ All of §6 applies. In addition:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
    an English file `«` is not a delimiter at all. Leaving one open reports its
    own error rather than the double-quote one, since the fix is different:
-   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`.
+   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
+   with no `«` before it is its own error too, rather than being swallowed
+   into the identifier that follows it.
 3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
    `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
    Persian file. See §8.

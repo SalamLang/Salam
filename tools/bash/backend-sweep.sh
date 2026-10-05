@@ -51,6 +51,11 @@ checked, and none of them is an interpreter bug:
     stdlib/ssh_selftest exhausts memory in interpreted SSH crypto, so give
     it a 'ulimit -v' rather than letting the OOM killer choose a victim.
 
+Under 'llvm' every section was swept on 2026-10-05 and the backend came out
+clean: 681 agree over the default sections and 259 more over interop,
+editor-selected and stdlib, with no divergence except interop/redis_demo.
+Nothing there needs re-checking unless codegen changes.
+
 Under 'js' the same sections give about 100 DIVERGEs, and all of them were
 triaged on 2026-10-05 without finding a bug. 74 print nothing where output
 was expected and 15 throw, which is the program bailing out of a feature js

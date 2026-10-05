@@ -108,7 +108,9 @@ Value types: `string`, `token` (one word, no spaces), `int`, `uint`, `float`,
 `color`, `length`, `enum`, `lang`, `dir`, `mime`, `date`, `time`, `datetime`,
 `duration`, `idref` (must name an `id` in the same layout), `charset`,
 `srcset`, `media_query`, `code` (event handler JavaScript), `ulength`
-(non-negative size: a bare number, a CSS length or a CSS function).
+(non-negative size: a bare number, a CSS length or a CSS function), `bool_enum`
+(`true`/`false` like a boolean, or one of the `allowed` values, as for
+`hidden = "until-found"`).
 
 ## Values
 

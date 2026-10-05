@@ -20,9 +20,10 @@ description: >-
 
 Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
-**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with a
-tree-walking interpreter (`salam exec`, pure compute only) and cross-compiled via
-LLVM. Source can be written in English or Persian, with the same grammar and
+**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with an
+interpreter (`salam exec`, pure compute only) that compiles each function to
+register bytecode on first call (`SALAM_VM=0` falls back to the plain
+tree-walker), and cross-compiled via LLVM. Source can be written in English or Persian, with the same grammar and
 the same compiler rules in both.
 
 This skill has two parts:

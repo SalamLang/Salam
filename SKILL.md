@@ -1688,9 +1688,9 @@ end
 ```
 
 **In Persian these constants have Persian names, and only those work.** Persian
-has no upper case, so the `سلام` prefix is what marks a name as the language's
-own rather than yours; the words are joined with spaces, the way multi-word
-names already are elsewhere:
+has no upper case, so a leading `سلام` is what marks a name as the language's
+own rather than yours; the rest of the words follow it separated by spaces, the
+way multi-word names already are elsewhere:
 
 | English                                          | Persian                                          |
 | ------------------------------------------------ | ------------------------------------------------ |
@@ -1712,6 +1712,11 @@ built-in constant as `سلام سیستم لینوکس`_, and the reverse in an 
 applies is decided per file, by the same language detection the keywords use, so
 a Persian program importing English `std/` is fine. Your own `-DNAME` defines
 are never translated, in either language.
+
+`SALAM_JS` / `سلام جاوااسکریپت` is the one flag that is only _defined_ on the JS
+backend rather than defaulting to false, so test it with `defined` in either
+language - `اگر تعریف‌شده(سلام جاوااسکریپت):` - the same as you would in
+English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
 
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
@@ -2372,7 +2377,9 @@ All of §6 applies. In addition:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
    an English file `«` is not a delimiter at all. Leaving one open reports its
    own error rather than the double-quote one, since the fix is different:
-   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`.
+   `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
+   with no `«` before it is its own error too, rather than being swallowed
+   into the identifier that follows it.
 3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
    `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
    Persian file. See §8.

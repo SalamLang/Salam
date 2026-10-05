@@ -1784,17 +1784,17 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 
 **Everything is checked at compile time**:
 
-| code        | meaning                                                                  |
-| ----------- | ------------------------------------------------------------------------ |
-| E004 / E117 | wrong direct parent / missing required ancestor (`item` outside `list`)  |
-| E005        | missing required attribute (`link` and `image` need `url`)               |
-| E018        | value has the wrong type (url, int, uint, float, color, date, mime, ...) |
-| E111 / E112 | unknown element / unknown attribute, with "did you mean"                 |
-| E113 / E114 | attribute not allowed on this element / given twice                      |
-| E115 / E116 | child not allowed here / forbidden anywhere inside (link in link)        |
-| E118 / E119 | void element with children / element that cannot hold text               |
-| E120        | element allowed only once (`main`, table `header`)                       |
-| E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id               |
+| code        | meaning                                                                       |
+| ----------- | ----------------------------------------------------------------------------- |
+| E004 / E117 | wrong direct parent / missing required ancestor (`item` outside `list`)       |
+| E005        | missing required attribute (`link` and `image` need `url`)                    |
+| E018        | value has the wrong type (URL, int, uint, float, color, date, MIME type, ...) |
+| E111 / E112 | unknown element / unknown attribute, with "did you mean"                      |
+| E113 / E114 | attribute not allowed on this element / given twice                           |
+| E115 / E116 | child not allowed here / forbidden anywhere inside (link in link)             |
+| E118 / E119 | void element with children / element that cannot hold text                    |
+| E120        | element allowed only once (`main`, table `header`)                            |
+| E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
 on any of these errors.

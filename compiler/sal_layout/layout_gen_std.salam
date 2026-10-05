@@ -1,0 +1,203 @@
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include src "../source.salam"
+include at "../ast.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include ip "../interp/interp.salam"
+
+const K_LO_GEN_FIELDS := 6
+
+func gen_std_quote(s: str): str:
+    mut out := `"`
+    n := str.Len(s)
+    repeat n in i:
+        b := byte_at(s, i)
+        if b == 92:
+            out += "\\\\"
+        else b == 34:
+            out += "\\\""
+        else b == 10:
+            out += "\\n"
+        else b == 9:
+            out += "\\t"
+        else b == 13:
+            out += "\\r"
+        else b < 32:
+            hex := "0123456789abcdef"
+            out += "\\x" + str.Substr(hex, b / 16, 1) + str.Substr(hex, b % 16, 1)
+        else:
+            out += str.Substr(s, i, 1)
+        end
+    end
+    ret out + `"`
+end
+
+func gen_std_marker(idx: int): str:
+    ret char_from_code(2) + "salam-gen-" + co.U64Toa(idx as u64) + char_from_code(3)
+end
+
+func gen_std(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, gen: str, la &: LoAttrs, klass: str, has_klass: bool, tag: str
+):
+    idx := cx.gen_count
+    cx.gen_count += 1
+    cx.uid_next += 1
+    uid := "elm_" + co.U64Toa(cx.uid_next as u64)
+    save_html := cx.html
+    save_indent := cx.indent
+    cx.html = ""
+    cx.indent = 0
+    gen_children(cx, diag, a, el, klass, has_klass)
+    inner := cx.html
+    cx.html = save_html
+    cx.indent = save_indent
+    v := "n" + co.U64Toa(idx as u64)
+    mut b := "    mut " + v + " := layoutgen.Node {}\n"
+    b += "    " + v + ".name = " + gen_std_quote(at.Get(a, el).name) + "\n"
+    b += "    " + v + ".tag = " + gen_std_quote(tag) + "\n"
+    b += "    " + v + ".uid = " + gen_std_quote(uid) + "\n"
+    b += "    " + v + ".class_name = " + gen_std_quote(has_klass ? klass : "") + "\n"
+    b += "    " + v + ".attrs = " + gen_std_quote(la.first + la.rest) + "\n"
+    b += "    " + v + ".content = " + gen_std_quote(la.content) + "\n"
+    b += "    " + v + ".inner = " + gen_std_quote(inner) + "\n"
+    b += "    " + v + ".parents = " + gen_std_quote(cx.parents) + "\n"
+    b += "    " + v + ".compact = " + (cx.compact ? "true" : "false") + "\n"
+    repeat la.keys.len() in i:
+        k := la.keys.get(i)
+        b += "    layoutgen.Set(" + v + ", " + gen_std_quote(k) + ", " + gen_std_quote(la.vals.get(i)) + ")\n"
+    end
+    b += "    layoutgen.Emit(layoutgen." + gen + "(" + v + "))\n"
+    cx.gen_src += b
+    cx.gen_nodes.push(el)
+    cx.gen_names.push(gen)
+    html_line(cx, gen_std_marker(idx))
+end
+
+func gen_std_compile_run(lgr: lg.Logger, source: str, out &: str, err &: str): bool:
+    pack := lp.Load("en")
+    mut sf := src.New()
+    sf.path = "<layout generators>"
+    sf.text = source
+    sf.len = str.Len(source)
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    mut a2 := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a2, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", Vector {} as Vector<str>)
+    _pr := cc.PruneProgram(a2, lgr, sf.path, table, prog)
+    mut s := sm.New(lgr, sf.path, "en")
+    sm.SetCc(s, table)
+    sok := sm.Run(s, a2, prog)
+    if not lok or not pok or not sok:
+        err = dg.RenderAll(s.diag, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_HUMAN, false)
+        if str.Len(err) == 0:
+            err = i18.Tr("the layout generator package did not compile")
+        end
+        sm.Free(s)
+        at.FreeAst(a2)
+        ret false
+    end
+    mut opts := ip.NewOptions()
+    opts.capture = true
+    opts.lang = "en"
+    opts.timeout_ms = 20000
+    mut vm := ip.New(lgr, "main", opts)
+    _rc := ip.Run(vm, a2, s, prog)
+    out = vm.out_text
+    fail := ip.FailText(vm)
+    ok := str.Len(fail) == 0
+    if not ok:
+        err = fail + vm.err_text
+    end
+    ip.Free(vm)
+    sm.Free(s)
+    at.FreeAst(a2)
+    ret ok
+end
+
+func gen_std_append_unique(cx &: LoCtx, piece: str, css: bool):
+    if str.Len(piece) == 0:
+        ret
+    end
+    repeat cx.css_seen.len() in i:
+        if str.Equals(cx.css_seen.get(i), piece):
+            ret
+        end
+    end
+    cx.css_seen.push(piece)
+    if css:
+        cx.css += piece
+        if not cx.compact and not str.EndsWith(piece, "\n"):
+            cx.css += "\n"
+        end
+    else:
+        cx.js += piece
+        if not str.EndsWith(piece, "\n"):
+            cx.js += "\n"
+        end
+    end
+end
+
+func gen_std_finish(cx &: LoCtx, diag &: dg.Engine, a &: at.Ast):
+    if cx.gen_count == 0:
+        ret
+    end
+    program := "import layoutgen\n\nfunc main:\n" + cx.gen_src + "end\n"
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut out := ""
+    mut err := ""
+    if not gen_std_compile_run(quiet, program, out, err):
+        dg.Report(
+            diag, dg.SEV_ERROR, 123, cx.file, span_of(a, cx.gen_nodes.get(0)), co.Format2(
+                i18.Tr("layout generator '%s' failed: %s"), co.ArgStr(cx.gen_names.get(0)), co.ArgStr(err)
+            )
+        )
+        repeat cx.gen_count in k:
+            cx.html = str.Replace(cx.html, gen_std_marker(k), "")
+        end
+        ret
+    end
+    mut recs := str.Split(out, char_from_code(30))
+    defer recs.free()
+    repeat cx.gen_count in i:
+        if i >= recs.len():
+            dg.Report(
+                diag, dg.SEV_ERROR, 123, cx.file, span_of(a, cx.gen_nodes.get(i)), co.Format2(
+                    i18.Tr("layout generator '%s' failed: %s"), co.ArgStr(cx.gen_names.get(i)), co.ArgStr("no output")
+                )
+            )
+            cx.html = str.Replace(cx.html, gen_std_marker(i), "")
+            continue
+        end
+        mut rec := recs.get(i)
+        if str.StartsWith(rec, "\n"):
+            rec = str.Substr(rec, 1, str.Len(rec) - 1)
+        end
+        mut f := str.Split(rec, char_from_code(31))
+        until f.len() < K_LO_GEN_FIELDS:
+            f.push("")
+        end
+        cx.html = str.Replace(cx.html, gen_std_marker(i), f.get(0))
+        gen_std_append_unique(cx, f.get(4), true)
+        gen_std_append_unique(cx, f.get(1), true)
+        gen_std_append_unique(cx, f.get(5), false)
+        gen_std_append_unique(cx, f.get(2), false)
+        if str.Len(f.get(3)) > 0:
+            cx.head += f.get(3)
+        end
+        f.free()
+    end
+end

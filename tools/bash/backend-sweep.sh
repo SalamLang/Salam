@@ -32,6 +32,25 @@ a failure, since the runner does not treat it as one either.
 A DIVERGE is not automatically a bug: the JS backend has no 64-bit integers,
 sockets, sqlite or FFI, and the interpreter refuses variadic externs and is
 far slower, so check the cause before reporting one.
+
+Every DIVERGE the default sections produce under 'exec' as of 2026-10-05 was
+checked, and none of them is an interpreter bug:
+
+    interop/ffi_libm is a variadic extern, which it refuses with a clear
+    error, and interop/redis_demo (en and fa) wants a live redis server.
+
+    general/websocket_wss_loopback fails because std/tls enforces a 15s
+    handshake read deadline (HANDSHAKE_READ_TIMEOUT_MS in std/tls/record)
+    and the interpreted crypto needs about 75s a side, so the peer tears the
+    connection down mid-handshake. The ssl/ section, which is not in the
+    default set, fails the same way, and stdlib/tls_selftest runs the same
+    crypto into the sweep timeout.
+
+    stdlib/nn_transformer_demo is interpreted matmul meeting that timeout.
+
+    stdlib/ssh_selftest exhausts memory in interpreted SSH crypto, so give
+    it a 'ulimit -v' rather than letting the OOM killer choose a victim.
+
 USAGE
     exit 2
 }

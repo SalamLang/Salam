@@ -16,6 +16,7 @@ package interp
 
 import str
 import os
+import mem
 
 include co "../sal_core.salam"
 include tok "../token.salam"
@@ -25,9 +26,9 @@ include i18 "../i18n.salam"
 func vm_get(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool): int:
     if ip.vm_state == 0:
         ev := os.Env("SALAM_VM")
-        ip.vm_state = str.Equals(ev, "0") ? 2 : 1
+        ip.vm_state = str.Equals(ev, "0") ? 2 : (str.Equals(ev, "trace") ? 3 : 1)
     end
-    if ip.vm_state != 1 or fnnode <= 0:
+    if ip.vm_state == 2 or fnnode <= 0:
         ret 0
     end
     until ip.vm_of.len() <= fnnode:
@@ -38,7 +39,7 @@ func vm_get(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool)
         ret 0
     end
     if st > 0:
-        fp := ip.vm_fns.ref(st - 1)
+        fp := ip.vm_fns.get(st - 1) as VmFn*
         if fp.defenv != defenv or fp.has_this != has_this:
             ret 0
         end
@@ -52,10 +53,28 @@ func vm_get(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool)
     c.patch_kind.free()
     c.loop_mark.free()
     c.loop_cont.free()
+    if ip.vm_state == 3:
+        fnm := at.At(a, fnnode).name
+        if not c.ok:
+            printerrln "vm: " + fnm + " not compiled"
+        else c.escapes.len() > 0:
+            mut sb := ""
+            repeat c.escapes.len() in ei:
+                en := at.At(a, c.escapes.get(ei))
+                sb = sb + " " + en.kind + "@" + en.begin_line
+            end
+            printerrln "vm: " + fnm + " escapes:" + sb
+        else:
+            printerrln "vm: " + fnm + " compiled, " + (c.f.code.len() / VM_W) + " ops"
+        end
+    end
+    c.escapes.free()
     if not c.ok or ip.failed:
         ret 0
     end
-    ip.vm_fns.push(c.f)
+    fpn := mem.Allocate(sizeof(VmFn) as u64) as VmFn*
+    fpn[0] = c.f
+    ip.vm_fns.push(fpn as i64)
     ip.vm_of.set(fnnode, ip.vm_fns.len())
     ret ip.vm_fns.len()
 end
@@ -79,7 +98,7 @@ func vm_coerce_node(ip &: Interp, a &: at.Ast, n: int, v: Value): Value:
     ret coerce_int_ty(v, ity)
 end
 
-func vm_env_make(ip &: Interp, f &: VmFn, R: Value*, sync: int): int:
+func vm_env_make(ip &: Interp, f: VmFn*, R: Value*, sync: int): int:
     e := env_new(ip, f.defenv)
     cnt := f.sync.get(sync)
     repeat cnt in i:
@@ -90,7 +109,7 @@ func vm_env_make(ip &: Interp, f &: VmFn, R: Value*, sync: int): int:
     ret e
 end
 
-func vm_env_back(ip &: Interp, f &: VmFn, R: Value*, sync: int, e: int):
+func vm_env_back(ip &: Interp, f: VmFn*, R: Value*, sync: int, e: int):
     cnt := f.sync.get(sync)
     repeat cnt in i:
         nm := f.ks.get(f.sync.get(sync + 1 + i * 2))
@@ -374,26 +393,109 @@ func vm_back(ci &: VmCall, R: Value*, args: Vector<Value>):
     end
 end
 
-func vm_exec(
-    ip &: Interp, a &: at.Ast, vi: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
-): Value:
-    mut f := ip.vm_fns.get(vi - 1)
-    mut regs := Vector {} as Vector<Value>
-    defer regs.free()
-    repeat f.nreg + 1:
-        regs.push(Value {})
+func vm_backp(ci &: VmCall, R: Value*, argp: Value*):
+    repeat ci.back.len() in i:
+        r := ci.back.get(i)
+        if r >= 0:
+            R[r] = argp[i]
+        end
     end
-    R := regs.data
+end
+
+inline func vm_wrap(rt: int, v: i64): i64:
+    if rt == ITY_I64 or rt == ITY_U64 or rt == ITY_NONE:
+        ret v
+    end
+    if rt == ITY_I32:
+        w32 := v as i32
+        ret w32
+    end
+    if rt == ITY_U32:
+        ret ((v as u64) & (0xFFFFFFFF as u64)) as i64
+    end
+    ret int_ty_wrap(rt, v)
+end
+
+inline func vm_fix(R: Value*, x: int, ity: int):
+    if ity != ITY_NONE and R[x].kind == VAL_INT and R[x].ity != ity:
+        R[x].i = vm_wrap(ity, R[x].i)
+        R[x].ity = ity
+    end
+end
+
+func vm_reg_at(R: Value*, i: int): Value*:
+    ret ((R as i64) + (i as i64) * (sizeof(Value) as i64)) as Value*
+end
+
+func vm_regs_get(f: VmFn*): Value*:
+    if not g_threads_on and f.pool.len() > 0:
+        ret f.pool.pop() as Value*
+    end
+    ret mem.Allocate(((f.nreg + 1) as u64) * sizeof(Value)) as Value*
+end
+
+func vm_regs_put(f: VmFn*, R: Value*):
+    if not g_threads_on:
+        f.pool.push(R as i64)
+        ret
+    end
+    mem.Free(R as void*)
+end
+
+func vm_call_vm(
+    ip &: Interp, a &: at.Ast, call: int, fn: int, file: str, vi: int, env: int, has_this: bool, thisv: Value, argp: Value*, nargs: int
+): Value:
+    ip.depth += 1
+    if ip.depth > ip.max_depth:
+        rt_error(ip, a, fn, i18.Tr("call stack too deep (possible infinite recursion)"))
+        ip.depth -= 1
+        ret Value {}
+    end
+    tracked := vm_tb_push(ip, call)
+    saved_file := ip.cur_file
+    if str.Len(file) > 0:
+        ip.cur_file = file
+    end
+    r := vm_exec(ip, a, vi, env, has_this, thisv, argp, nargs)
+    ip.depth -= 1
+    ip.cur_file = saved_file
+    vm_tb_pop(ip, tracked)
+    ret r
+end
+
+func vm_file_of(ip &: Interp, fn: int): str:
+    if fn > 0 and fn < ip.fn_file.len():
+        ret ip.fn_file.get(fn)
+    end
+    ret ""
+end
+
+func vm_exec(
+    ip &: Interp, a &: at.Ast, vi: int, defenv: int, has_this: bool, thisv: Value, argp: Value*, nargs: int
+): Value:
+    FT := ip.vm_fns.data
+    f := FT[vi - 1] as VmFn*
+    R := vm_regs_get(f)
+    defer vm_regs_put(f, R)
     C := f.code.data
+    K := f.kv.data
+    AX := f.aux.data
+    PRF := f.param_ref.data
+    PIT := f.param_ity.data
     pbase := has_this ? 1 : 0
     if has_this:
         R[0] = thisv
     end
     repeat f.nparam in pi:
         reg := pbase + pi
-        if pi < args.len():
-            av := args.get(pi)
-            R[reg] = f.param_ref.get(pi) ? av : val_copy_deep(ip, av)
+        if pi < nargs:
+            if f.has_ref and PRF[pi]:
+                R[reg] = argp[pi]
+            else argp[pi].kind == VAL_STRUCT or argp[pi].kind == VAL_ARRAY:
+                R[reg] = val_copy_deep(ip, argp[pi])
+            else:
+                R[reg] = argp[pi]
+            end
         else f.param_def.get(pi) != 0:
             mk0 := env_mark(ip)
             e0 := env_new(ip, defenv)
@@ -409,14 +511,15 @@ func vm_exec(
                 ret val_null()
             end
         end
-        pty := f.param_ity.get(pi)
-        if pty != ITY_NONE and R[reg].kind == VAL_INT:
-            R[reg] = coerce_int_ty(R[reg], pty)
+        pty := PIT[pi]
+        if pty != ITY_NONE and R[reg].kind == VAL_INT and R[reg].ity != pty:
+            R[reg].i = vm_wrap(pty, R[reg].i)
+            R[reg].ity = pty
         end
     end
     saved_med := ip.match_expr_depth
     ip.match_expr_depth = 0
-    mut retv := val_null()
+    mut retv := Value {}
     mut pc := 0
     mut running := true
     until running:
@@ -426,7 +529,7 @@ func vm_exec(
         z := C[pc + 3]
         switch op:
             VOP_LOADK:
-                R[x] = f.kv.get(y)
+                R[x] = K[y]
                 pc += VM_W
                 continue
             end
@@ -453,16 +556,41 @@ func vm_exec(
                 continue
             end
             VOP_ADDI, VOP_SUBI, VOP_MULI, VOP_DIVI, VOP_MODI, VOP_ANDI, VOP_ORI, VOP_XORI, VOP_SHLI, VOP_SHRI:
-                xv := R[y]
-                yv := R[z]
                 rt := C[pc + 4]
-                if op == VOP_ADDI and xv.kind == VAL_INT and yv.kind == VAL_INT and (rt == ITY_I64 or rt == ITY_U64):
+                if op <= VOP_MULI and R[y].kind == VAL_INT and R[z].kind == VAL_INT:
+                    ua := R[y].i as u64
+                    ub := R[z].i as u64
+                    mut ur := ua * ub
+                    if op == VOP_ADDI:
+                        ur = ua + ub
+                    else op == VOP_SUBI:
+                        ur = ua - ub
+                    end
                     R[x].kind = VAL_INT
                     R[x].ity = rt
-                    R[x].i = ((xv.i as u64) + (yv.i as u64)) as i64
+                    R[x].i = vm_wrap(rt, ur as i64)
                     pc += VM_W
                     continue
                 end
+                if (op == VOP_DIVI or op == VOP_MODI) and R[y].kind == VAL_INT and R[z].kind == VAL_INT and (rt == ITY_I64 or rt == ITY_I32) and R[z].i != (0 as i64):
+                    da := vm_wrap(rt, R[y].i)
+                    db := vm_wrap(rt, R[z].i)
+                    mut dr := 0 as i64
+                    if db == ((0 as i64) - (1 as i64)):
+                        dr = op == VOP_DIVI ? vm_wrap(rt, ((0 as u64) - (da as u64)) as i64) : (0 as i64)
+                    else op == VOP_DIVI:
+                        dr = da / db
+                    else:
+                        dr = da % db
+                    end
+                    R[x].kind = VAL_INT
+                    R[x].ity = rt
+                    R[x].i = dr
+                    pc += VM_W
+                    continue
+                end
+                xv := R[y]
+                yv := R[z]
                 mut iv := val_null()
                 if not vm_iop(ip, a, C[pc + 5], op, rt, xv, yv, iv):
                     iv = binary_values(ip, a, C[pc + 5], vm_iop_tok(op), xv, yv)
@@ -502,13 +630,13 @@ func vm_exec(
                 continue
             end
             VOP_CMPI:
-                cx := R[y]
-                cy := R[z]
-                if cx.kind == VAL_INT and cy.kind == VAL_INT:
+                if R[y].kind == VAL_INT and R[z].kind == VAL_INT:
                     crt := C[pc + 5]
-                    R[x] = val_bool(vm_icmp(C[pc + 4], int_ty_wrap(crt, cx.i), int_ty_wrap(crt, cy.i), int_ty_is_unsigned(crt)))
+                    icres := vm_icmp(C[pc + 4], vm_wrap(crt, R[y].i), vm_wrap(crt, R[z].i), crt >= ITY_U8)
+                    R[x].kind = VAL_BOOL
+                    R[x].b = icres
                 else:
-                    R[x] = binary_values(ip, a, 0, C[pc + 4], cx, cy)
+                    R[x] = binary_values(ip, a, 0, C[pc + 4], R[y], R[z])
                 end
                 pc += VM_W
                 continue
@@ -554,7 +682,8 @@ func vm_exec(
                     running = false
                     continue
                 end
-                R[x] = vm_coerce_node(ip, a, C[pc + 4], uv)
+                R[x] = uv
+                vm_fix(R, x, C[pc + 5])
                 pc += VM_W
                 continue
             end
@@ -594,11 +723,19 @@ func vm_exec(
                     running = false
                     continue
                 end
-                R[x] = vm_coerce_node(ip, a, z, ccv)
+                R[x] = ccv
+                vm_fix(R, x, C[pc + 4])
                 pc += VM_W
                 continue
             end
             VOP_CASTI:
+                if R[y].kind == VAL_INT:
+                    R[x].kind = VAL_INT
+                    R[x].i = vm_wrap(z, R[y].i)
+                    R[x].ity = z
+                    pc += VM_W
+                    continue
+                end
                 R[x] = val_int_ty(to_int(R[y]), z)
                 pc += VM_W
                 continue
@@ -614,8 +751,7 @@ func vm_exec(
                 continue
             end
             VOP_JF, VOP_JT:
-                jv := R[x]
-                jc := jv.kind == VAL_BOOL ? jv.b : to_bool(jv)
+                jc := R[x].kind == VAL_BOOL ? R[x].b : to_bool(R[x])
                 if jc == (op == VOP_JT):
                     pc = y
                 else:
@@ -637,7 +773,8 @@ func vm_exec(
                 mut gw := 0
                 gslot := env_find(ip, f.defenv, gname, gw)
                 if gslot >= 0:
-                    R[x] = vm_coerce_node(ip, a, z, env_slot_val(ip, gw, gslot))
+                    R[x] = env_slot_val(ip, gw, gslot)
+                    vm_fix(R, x, C[pc + 4])
                 else:
                     gfn := find_func(ip, a, gname, 0 - 1)
                     if gfn != 0:
@@ -673,7 +810,31 @@ func vm_exec(
                 continue
             end
             VOP_CALL:
-                ci := f.calls.get(C[pc + 4])
+                ci := f.calls.ref(C[pc + 4])
+                mut dvi := ci.vi
+                if dvi == 0:
+                    dvi = vm_get(ip, a, ci.fn, ci.env, false)
+                    ci.vi = dvi > 0 ? dvi : (0 - 1)
+                    if ci.fn < ip.fn_file.len():
+                        ci.file = ip.fn_file.get(ci.fn)
+                    end
+                end
+                if dvi > 0:
+                    dres := vm_call_vm(ip, a, ci.call, ci.fn, ci.file, dvi, ci.env, false, Value {}, vm_reg_at(R, y), z)
+                    if ip.failed:
+                        running = false
+                        continue
+                    end
+                    vm_backp(ci, R, vm_reg_at(R, y))
+                    R[x] = dres
+                    crt2 := C[pc + 5]
+                    if crt2 != ITY_NONE and R[x].kind == VAL_INT and R[x].ity != crt2:
+                        R[x].i = vm_wrap(crt2, R[x].i)
+                        R[x].ity = crt2
+                    end
+                    pc += VM_W
+                    continue
+                end
                 mut cargs := vm_call_args(R, y, z)
                 ctr := vm_tb_push(ip, ci.call)
                 cres := call_func(ip, a, ci.fn, ci.env, false, val_null(), cargs)
@@ -685,7 +846,8 @@ func vm_exec(
                 end
                 vm_back(ci, R, cargs)
                 cargs.free()
-                R[x] = vm_coerce_node(ip, a, ci.call, cres)
+                R[x] = cres
+                vm_fix(R, x, ci.ity)
                 pc += VM_W
                 continue
             end
@@ -713,12 +875,13 @@ func vm_exec(
                 end
                 vm_back(cvi, R, vargs)
                 vargs.free()
-                R[x] = vm_coerce_node(ip, a, cvi.call, vres)
+                R[x] = vres
+                vm_fix(R, x, cvi.ity)
                 pc += VM_W
                 continue
             end
             VOP_MCALL:
-                mci := f.calls.get(C[pc + 5])
+                mci := f.calls.ref(C[pc + 5])
                 mut recvr := R[y]
                 mut back_addr := 0 as i64
                 mut back_ts := ""
@@ -727,7 +890,42 @@ func vm_exec(
                     back_ts = recvr.s
                     recvr = interp_mem_load(ip, a, back_addr, back_ts)
                 end
-                mut margs := vm_call_args(R, z, C[pc + 4])
+                mna := C[pc + 4]
+                if recvr.kind == VAL_STRUCT and not (mna == 0 and str.Equals(mci.method, "free")):
+                    sdef := ip.sts.ref(recvr.id).def
+                    if mci.cdef != sdef or mci.cfn == 0:
+                        mut mm := struct_method_arity(a, sdef, mci.method, mna)
+                        if mm == 0:
+                            mm = struct_method(a, sdef, mci.method)
+                        end
+                        mci.cdef = sdef
+                        mci.cfn = mm
+                        mci.cvi = 0
+                        if mm != 0:
+                            mdenv := find_def_env(ip, mm)
+                            mci.cenv = mdenv != 0 ? mdenv : ip.globals
+                            mci.cvi = vm_get(ip, a, mm, mci.cenv, true)
+                            mci.cfile = vm_file_of(ip, mm)
+                        end
+                    end
+                    if mci.cfn != 0 and mci.cvi > 0:
+                        margp := vm_reg_at(R, z)
+                        mres2 := vm_call_vm(ip, a, mci.call, mci.cfn, mci.cfile, mci.cvi, mci.cenv, true, recvr, margp, mna)
+                        if ip.failed:
+                            running = false
+                            continue
+                        end
+                        if back_addr != (0 as i64):
+                            interp_mem_store(ip, a, back_addr, back_ts, recvr)
+                        end
+                        vm_backp(mci, R, margp)
+                        R[x] = mres2
+                        vm_fix(R, x, mci.ity)
+                        pc += VM_W
+                        continue
+                    end
+                end
+                mut margs := vm_call_args(R, z, mna)
                 mres := method_call_values(ip, a, 0, mci.call, mci.obj, mci.method, recvr, margs, back_addr, back_ts)
                 if ip.failed:
                     margs.free()
@@ -736,7 +934,8 @@ func vm_exec(
                 end
                 vm_back(mci, R, margs)
                 margs.free()
-                R[x] = vm_coerce_node(ip, a, mci.call, mres)
+                R[x] = mres
+                vm_fix(R, x, mci.ity)
                 pc += VM_W
                 continue
             end
@@ -751,16 +950,69 @@ func vm_exec(
                 continue
             end
             VOP_IDX:
+                if R[y].kind == VAL_PTR and R[y].pa != (0 as i64) and R[z].kind == VAL_INT:
+                    lpe := R[y].pe
+                    if lpe == PTR_I64:
+                        lp64 := R[y].pa as i64*
+                        lv64 := lp64[R[z].i]
+                        R[x].kind = VAL_INT
+                        R[x].ity = ITY_I64
+                        R[x].i = lv64
+                        vm_fix(R, x, C[pc + 5])
+                        pc += VM_W
+                        continue
+                    end
+                    if lpe == PTR_I32:
+                        lp32 := R[y].pa as i32*
+                        lv32 := lp32[R[z].i] as i64
+                        R[x].kind = VAL_INT
+                        R[x].ity = ITY_I32
+                        R[x].i = lv32
+                        vm_fix(R, x, C[pc + 5])
+                        pc += VM_W
+                        continue
+                    end
+                    if lpe == PTR_F64:
+                        lpf := R[y].pa as f64*
+                        lvf := lpf[R[z].i]
+                        R[x].kind = VAL_FLOAT
+                        R[x].f = lvf
+                        pc += VM_W
+                        continue
+                    end
+                end
                 ixv := vm_index(ip, a, C[pc + 4], R[y], R[z])
                 if ip.failed:
                     running = false
                     continue
                 end
-                R[x] = vm_coerce_node(ip, a, C[pc + 4], ixv)
+                R[x] = ixv
+                vm_fix(R, x, C[pc + 5])
                 pc += VM_W
                 continue
             end
             VOP_STIDX:
+                if R[x].kind == VAL_PTR and R[x].pa != (0 as i64) and R[y].kind == VAL_INT:
+                    spe := R[x].pe
+                    if spe == PTR_I64 and R[z].kind == VAL_INT:
+                        sp64 := R[x].pa as i64*
+                        sp64[R[y].i] = R[z].i
+                        pc += VM_W
+                        continue
+                    end
+                    if spe == PTR_I32 and R[z].kind == VAL_INT:
+                        sp32 := R[x].pa as i32*
+                        sp32[R[y].i] = R[z].i as i32
+                        pc += VM_W
+                        continue
+                    end
+                    if spe == PTR_F64 and R[z].kind == VAL_FLOAT:
+                        spf := R[x].pa as f64*
+                        spf[R[y].i] = R[z].f
+                        pc += VM_W
+                        continue
+                    end
+                end
                 mut sloc := vm_index_loc(ip, a, C[pc + 4], R[x], R[y])
                 if ip.failed:
                     running = false
@@ -792,14 +1044,17 @@ func vm_exec(
                 fo := R[y]
                 if fo.kind == VAL_STRUCT:
                     fsp := ip.sts.ref(fo.id)
-                    fname := f.ks.get(z)
-                    mut ffi := C[pc + 5] - 1
-                    if ffi < 0 or ffi >= fsp.fnames.len() or not str.Equals(fsp.fnames.get(ffi), fname):
-                        ffi = st_find_field(ip, fo.id, fname)
-                        C[pc + 5] = ffi + 1
+                    fcache := C[pc + 5]
+                    mut ffi := (fcache & 0xFFFFF) - 1
+                    fslot := pc / VM_W
+                    if ffi < 0 or AX[fslot] != fsp.def + 1 or ffi >= fsp.fvals.len():
+                        ffi = st_find_field(ip, fo.id, f.ks.get(z))
+                        C[pc + 5] = (ffi + 1) | ((vc_ity(a, C[pc + 4]) + 1) << 20)
+                        AX[fslot] = fsp.def + 1
                     end
                     if ffi >= 0:
-                        R[x] = vm_coerce_node(ip, a, C[pc + 4], fsp.fvals.get(ffi))
+                        R[x] = fsp.fvals.get(ffi)
+                        vm_fix(R, x, (C[pc + 5] >> 20) - 1)
                         pc += VM_W
                         continue
                     end
@@ -956,9 +1211,11 @@ func vm_exec(
     if ip.failed:
         ret val_null()
     end
-    repeat f.nparam in ri:
-        if f.param_ref.get(ri) and ri < args.len():
-            args.set(ri, R[pbase + ri])
+    if f.has_ref:
+        repeat f.nparam in ri:
+            if f.param_ref.get(ri) and ri < nargs:
+                argp[ri] = R[pbase + ri]
+            end
         end
     end
     ret retv

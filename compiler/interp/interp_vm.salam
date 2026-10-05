@@ -87,6 +87,14 @@ struct VmCall:
     pub obj: int = 0
     pub method: str = ""
     pub back: Vector<int> = Vector {}
+    pub vi: int = 0
+    pub file: str = ""
+    pub cdef: int = 0
+    pub cfn: int = 0
+    pub cenv: int = 0
+    pub cvi: int = 0
+    pub cfile: str = ""
+    pub ity: int = 0
 end
 
 struct VmFn:
@@ -103,6 +111,9 @@ struct VmFn:
     pub param_ity: Vector<int> = Vector {}
     pub param_ref: Vector<bool> = Vector {}
     pub param_def: Vector<int> = Vector {}
+    pub pool: Vector<i64> = Vector {}
+    pub has_ref: bool = false
+    pub aux: Vector<int> = Vector {}
 end
 
 struct VmC:
@@ -116,6 +127,7 @@ struct VmC:
     pub patch_kind: Vector<int> = Vector {}
     pub loop_mark: Vector<int> = Vector {}
     pub loop_cont: Vector<int> = Vector {}
+    pub escapes: Vector<int> = Vector {}
 end
 
 func vc_emit(c &: VmC, op: int, x: int, y: int, z: int, w: int, v: int): int:
@@ -288,12 +300,14 @@ func vc_scan_bad(a &: at.Ast, n: int): bool:
 end
 
 func vc_escape_expr(c &: VmC, n: int): int:
+    c.escapes.push(n)
     d := vc_tmp(c)
     _e := vc_emit(c, VOP_EVAL, d, n, vc_sync(c), 0, 0)
     ret d
 end
 
 func vc_escape_stmt(c &: VmC, n: int):
+    c.escapes.push(n)
     pc := vc_emit(c, VOP_EXEC, n, vc_sync(c), 0 - 1, 0 - 1, 0)
     if c.loop_mark.len() > 0:
         vc_patch_add(c, pc, 3, VMK_BRK)
@@ -361,8 +375,10 @@ func vc_call_args(c &: VmC, ip &: Interp, a &: at.Ast, call: int, ci &: VmCall):
     ret base
 end
 
-func vc_add_call(c &: VmC, ci: VmCall): int:
-    c.f.calls.push(ci)
+func vc_add_call(c &: VmC, a &: at.Ast, ci: VmCall): int:
+    mut cc := ci
+    cc.ity = vc_ity(a, ci.call)
+    c.f.calls.push(cc)
     ret c.f.calls.len() - 1
 end
 
@@ -410,7 +426,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
             end
             mut ci0 := VmCall { call = n, method = nm }
             base0 := vc_call_args(c, ip, a, n, ci0)
-            k0 := vc_add_call(c, ci0)
+            k0 := vc_add_call(c, a, ci0)
             c.top = base0
             d0 := vc_tmp(c)
             _cv := vc_emit(c, VOP_CALLV, d0, lr, base0, na, k0)
@@ -418,7 +434,22 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
         end
         mut gv := val_null()
         if vc_global_value(ip, c, nm, gv):
-            ret vc_escape_expr(c, n)
+            gfid := fn_id_of(gv)
+            if gfid < 0 or gfid >= ip.closures.len():
+                ret vc_escape_expr(c, n)
+            end
+            gcl := ip.closures.get(gfid)
+            gfn := at.At(a, gcl.fn)
+            if gfn.kind != at.AST_FUNC_DEF or not str.Equals(gfn.name, nm) or at.ChildCount(a, gcl.fn) != na or not vc_args_plain(c, a, n, gcl.fn):
+                ret vc_escape_expr(c, n)
+            end
+            mut cig := VmCall { fn = gcl.fn, env = gcl.env, call = n }
+            baseg := vc_call_args(c, ip, a, n, cig)
+            kg := vc_add_call(c, a, cig)
+            c.top = baseg
+            dg := vc_tmp(c)
+            _cg := vc_emit(c, VOP_CALL, dg, baseg, na, kg, vc_ity(a, n))
+            ret dg
         end
         fn := find_func(ip, a, nm, na)
         if fn == 0 or not vc_args_plain(c, a, n, fn):
@@ -434,7 +465,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
         end
         mut ci := VmCall { fn = fn, env = henv, call = n }
         base := vc_call_args(c, ip, a, n, ci)
-        k := vc_add_call(c, ci)
+        k := vc_add_call(c, a, ci)
         c.top = base
         d3 := vc_tmp(c)
         _c := vc_emit(c, VOP_CALL, d3, base, na, k, vc_ity(a, n))
@@ -467,7 +498,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
             end
             mut cim := VmCall { fn = cl.fn, env = cl.env, call = n }
             basem := vc_call_args(c, ip, a, n, cim)
-            km := vc_add_call(c, cim)
+            km := vc_add_call(c, a, cim)
             c.top = basem
             dm := vc_tmp(c)
             _cm := vc_emit(c, VOP_CALL, dm, basem, na, km, vc_ity(a, n))
@@ -482,7 +513,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
         _mr := vc_emit(c, VOP_MOV, rcv, rr, 0, 0, 0)
         mut cic := VmCall { call = n, obj = obj, method = method }
         basec := vc_call_args(c, ip, a, n, cic)
-        kc := vc_add_call(c, cic)
+        kc := vc_add_call(c, a, cic)
         c.top = save3
         dc := vc_tmp(c)
         _mc := vc_emit(c, VOP_MCALL, dc, rcv, basec, na, kc)
@@ -575,7 +606,7 @@ func vc_expr(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
             ret vc_escape_expr(c, n)
         end
         d1 := vc_tmp(c)
-        _g := vc_emit(c, VOP_GETG, d1, vc_ks(c, node.name), n, 0, 0)
+        _g := vc_emit(c, VOP_GETG, d1, vc_ks(c, node.name), n, vc_ity(a, n), 0)
         ret d1
     end
     if k == at.AST_THIS:
@@ -994,9 +1025,15 @@ func vm_compile(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: b
         _p := vc_declare(c, pn.name)
         c.f.param_ity.push(int_ty_from_typestr(pn.type_str))
         c.f.param_ref.push(pn.is_ref)
+        if pn.is_ref:
+            c.f.has_ref = true
+        end
         c.f.param_def.push(pn.a)
     end
     vc_stmts(c, ip, a, fnn.a)
     _rn := vc_emit(c, VOP_RETN, 0, 0, 0, 0, 0)
+    repeat c.f.code.len() / VM_W:
+        c.f.aux.push(0)
+    end
     ret c
 end

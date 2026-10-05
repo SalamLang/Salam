@@ -53,6 +53,8 @@ func vm_get(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool)
     c.patch_kind.free()
     c.loop_mark.free()
     c.loop_cont.free()
+    c.dmarks.free()
+    c.loop_dmark.free()
     if ip.vm_state == 3:
         fnm := at.At(a, fnnode).name
         if not c.ok:
@@ -119,6 +121,72 @@ func vm_env_back(ip &: Interp, f: VmFn*, R: Value*, sync: int, e: int):
             R[r] = env_slot_val(ip, e, slot)
         end
     end
+end
+
+func vm_run_defers(ip &: Interp, a &: at.Ast, f: VmFn*, R: Value*, ds &: Vector<int>, mark: int):
+    until ds.len() > mark:
+        sync := ds.pop()
+        node := ds.pop()
+        mk := env_mark(ip)
+        e := vm_env_make(ip, f, R, sync)
+        mut fr := Frame {}
+        mut rv := Value {}
+        _fl := exec_stmt(ip, a, e, fr, node, rv)
+        run_defers_from(ip, a, fr, 0)
+        fr.defer_stmts.free()
+        fr.defer_envs.free()
+        vm_env_back(ip, f, R, sync, e)
+        env_release(ip, mk)
+    end
+end
+
+func vm_struct_lit(ip &: Interp, a &: at.Ast, n: int, sdef: int, R: Value*, base: int): Value:
+    sdn := at.At(a, sdef)
+    mut nf := 0
+    repeat at.ChildCount(a, sdef) in ci:
+        if at.KindOf(a, at.Child(a, sdef, ci)) == at.AST_FIELD:
+            nf += 1
+        end
+    end
+    sv := mk_struct(ip, sdn.name, sdef, nf)
+    fenv := struct_home_env(ip, a, sdef)
+    mut fi := 0
+    mut next := base
+    repeat at.ChildCount(a, sdef) in i:
+        fnode := at.At(a, at.Child(a, sdef, i))
+        if fnode.kind != at.AST_FIELD:
+            continue
+        end
+        mut provided := false
+        repeat at.ChildCount(a, n) in j:
+            pn := at.At(a, at.Child(a, n, j))
+            if str.Len(pn.name) != 0 and str.Equals(pn.name, fnode.name):
+                provided = true
+                break
+            end
+        end
+        mut fval := Value {}
+        if provided:
+            fval = R[next]
+            next += 1
+        else fnode.a != 0:
+            fval = eval(ip, a, fenv, fnode.a)
+        else:
+            fts := fnode.ty != 0 ? at.At(a, fnode.ty).type_str : ""
+            if str.Find(fts, "[") < 0:
+                fval = zero_for_base(base_typename(fts))
+            end
+            if fval.kind == VAL_NULL:
+                fval = default_for_type(ip, fts)
+            end
+        end
+        if ip.failed:
+            ret Value {}
+        end
+        st_field_set(ip, sv.id, fi, fnode.name, val_copy_deep(ip, fval))
+        fi += 1
+    end
+    ret sv
 end
 
 func vm_index(ip &: Interp, a &: at.Ast, n: int, iav: Value, idxv: Value): Value:
@@ -520,6 +588,8 @@ func vm_exec(
     saved_med := ip.match_expr_depth
     ip.match_expr_depth = 0
     mut retv := Value {}
+    mut dstack := Vector {} as Vector<int>
+    defer dstack.free()
     mut pc := 0
     mut running := true
     until running:
@@ -1115,16 +1185,22 @@ func vm_exec(
                 end
                 if xfl == FLOW_RETURN or xfl == FLOW_MATCH_RET:
                     retv = xrv
+                    if f.has_defer:
+                        vm_run_defers(ip, a, f, R, dstack, 0)
+                    end
                     running = false
                     continue
                 end
-                if xfl == FLOW_BREAK and z >= 0:
-                    ip.break_levels = 0
-                    pc = z
-                    continue
-                end
-                if xfl == FLOW_CONTINUE and C[pc + 4] >= 0:
-                    pc = C[pc + 4]
+                if (xfl == FLOW_BREAK and z >= 0) or (xfl == FLOW_CONTINUE and C[pc + 4] >= 0):
+                    if C[pc + 5] >= 0:
+                        vm_run_defers(ip, a, f, R, dstack, R[C[pc + 5]].i as int)
+                    end
+                    if xfl == FLOW_BREAK:
+                        ip.break_levels = 0
+                        pc = z
+                    else:
+                        pc = C[pc + 4]
+                    end
                     continue
                 end
                 pc += VM_W
@@ -1132,12 +1208,76 @@ func vm_exec(
             end
             VOP_RET:
                 retv = R[x]
+                if f.has_defer:
+                    vm_run_defers(ip, a, f, R, dstack, 0)
+                end
                 running = false
                 continue
             end
             VOP_RETN:
-                retv = val_null()
+                retv = Value {}
+                if f.has_defer:
+                    vm_run_defers(ip, a, f, R, dstack, 0)
+                end
                 running = false
+                continue
+            end
+            VOP_DEFER:
+                dstack.push(x)
+                dstack.push(y)
+                pc += VM_W
+                continue
+            end
+            VOP_DMARK:
+                R[x].kind = VAL_INT
+                R[x].ity = ITY_I64
+                R[x].i = dstack.len() as i64
+                pc += VM_W
+                continue
+            end
+            VOP_RUNDEF:
+                vm_run_defers(ip, a, f, R, dstack, R[x].i as int)
+                if ip.failed:
+                    running = false
+                    continue
+                end
+                pc += VM_W
+                continue
+            end
+            VOP_SLIT:
+                if C[pc + 4] == 0:
+                    if str.Equals(at.At(a, y).name, "HashMap"):
+                        R[x] = val_map(map_new(ip))
+                    else:
+                        R[x] = val_arr(arr_new(ip, 4))
+                    end
+                    pc += VM_W
+                    continue
+                end
+                slv := vm_struct_lit(ip, a, y, C[pc + 4], R, z)
+                if ip.failed:
+                    running = false
+                    continue
+                end
+                R[x] = slv
+                pc += VM_W
+                continue
+            end
+            VOP_SIZEOF:
+                R[x] = val_int(interp_sizeof_typename(ip, a, at.At(a, y).type_str))
+                vm_fix(R, x, z)
+                pc += VM_W
+                continue
+            end
+            VOP_STRCMP:
+                R[x] = val_int(str.Compare(to_str(ip, R[y]), to_str(ip, R[z])) as i64)
+                vm_fix(R, x, C[pc + 4])
+                pc += VM_W
+                continue
+            end
+            VOP_FMTF:
+                R[x] = val_str(co.FmtF64(to_float(R[y])))
+                pc += VM_W
                 continue
             end
             VOP_DEFAULT:
@@ -1188,6 +1328,43 @@ func vm_exec(
                 else:
                     pc = C[pc + 5]
                 end
+                continue
+            end
+            VOP_XCALL, VOP_ICALL:
+                xci := f.calls.ref(C[pc + 4])
+                mut xargs := vm_call_args(R, y, z)
+                mut xres := Value {}
+                if op == VOP_ICALL:
+                    mut xh := false
+                    xres = call_intrinsic(ip, xci.method, xargs, xh)
+                else:
+                    xres = call_native_extern(ip, a, 0, xci.call, xci.fn, xargs)
+                end
+                xargs.free()
+                if ip.failed:
+                    running = false
+                    continue
+                end
+                R[x] = xres
+                vm_fix(R, x, xci.ity)
+                pc += VM_W
+                continue
+            end
+            VOP_SETG:
+                sgn := f.ks.get(y)
+                mut sgw := 0
+                sgs := env_find(ip, f.defenv, sgn, sgw)
+                if sgs < 0:
+                    rt_error(
+                        ip, a, z, co.Format1(
+                            i18.Tr("assignment to undeclared variable '%s'"), co.ArgStr(sgn)
+                        )
+                    )
+                    running = false
+                    continue
+                end
+                env_slot_set(ip, sgw, sgs, R[x])
+                pc += VM_W
                 continue
             end
             VOP_LEN:

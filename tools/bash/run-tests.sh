@@ -492,7 +492,24 @@ want() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
         case "$s" in c | codegen) s=general ;; interp | interpreter) s="exec" ;; esac
+        case "$s" in web | web_errors) s=layout ;; esac
+        [ "${s%%/*}" = "$1" ] && return 0
+    done
+    return 1
+}
+
+want_sub() {
+    [ -z "$SECTIONS" ] && return 0
+    for s in $SECTIONS; do
+        case "$s" in
+        web) s=layout/elements ;;
+        web_errors) s=layout/errors ;;
+        esac
         [ "$s" = "$1" ] && return 0
+        case "$s" in
+        */*) ;;
+        *) [ "$s" = "${1%%/*}" ] && return 0 ;;
+        esac
     done
     return 1
 }
@@ -889,28 +906,6 @@ if want errors; then
     done
 fi
 
-if want web; then
-    for lang in $LANGS; do
-        for f in tests/"$lang"/web/*.salam; do
-            [ -e "$f" ] || continue
-            name=$(basename "$f" .salam)
-            case "$name" in _*) continue ;; esac
-            add_job layout "web/$lang/$name" "$f" "$lang" -
-        done
-    done
-fi
-
-if want web_errors; then
-    for lang in $LANGS; do
-        for f in tests/"$lang"/web_errors/*.salam; do
-            [ -e "$f" ] || continue
-            name=$(basename "$f" .salam)
-            case "$name" in _*) continue ;; esac
-            add_job errors "web_errors/$lang/$name" "$f" "$lang" -
-        done
-    done
-fi
-
 if want port; then
     if [ -z "$SECTIONS" ] && [ "${SALAM_TEST_PORT:-0}" != "1" ]; then
         note_result "SKIP port/* (heavy; set SALAM_TEST_PORT=1 or run the 'port' section)" "port/all"
@@ -927,11 +922,17 @@ fi
 
 if want layout; then
     for lang in $LANGS; do
-        for f in tests/"$lang"/layout/*.salam; do
-            [ -e "$f" ] || continue
-            name=$(basename "$f" .salam)
-            case "$name" in _*) continue ;; esac
-            add_job layout "layout/$lang/$name" "$f" "$lang" -
+        for sub in elements style components pages errors; do
+            [ -d "tests/$lang/layout/$sub" ] || continue
+            want_sub "layout/$sub" || continue
+            for f in tests/"$lang"/layout/"$sub"/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                runner=layout
+                [ "$sub" = errors ] && runner=errors
+                add_job "$runner" "layout/$lang/$sub/$name" "$f" "$lang" -
+            done
         done
     done
 fi

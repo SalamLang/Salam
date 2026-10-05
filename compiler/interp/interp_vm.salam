@@ -125,6 +125,7 @@ struct VmFn:
     pub param_ity: Vector<int> = Vector {}
     pub param_ref: Vector<bool> = Vector {}
     pub param_def: Vector<int> = Vector {}
+    pub param_ro: Vector<bool> = Vector {}
     pub pool: Vector<i64> = Vector {}
     pub has_ref: bool = false
     pub aux: Vector<int> = Vector {}
@@ -375,12 +376,39 @@ func vc_args_plain(c &: VmC, a &: at.Ast, call: int, fn: int): bool:
             if fn == 0:
                 ret false
             end
-            if i >= at.ChildCount(a, fn) or at.At(a, at.Child(a, fn, i)).is_ref:
+            if i >= at.ChildCount(a, fn):
+                ret false
+            end
+            if at.At(a, at.Child(a, fn, i)).is_ref and not (k == at.AST_MEMBER and at.At(a, arg).a != 0 and vc_plain_chain(c, a, at.At(a, arg).a)):
                 ret false
             end
         end
     end
     ret true
+end
+
+func vc_direct_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int, fn: int, env: int): int:
+    if not vc_args_plain(c, a, n, fn):
+        ret vc_escape_expr(c, n)
+    end
+    na := at.ChildCount(a, n)
+    d := vc_tmp(c)
+    mut ci := VmCall { fn = fn, env = env, call = n }
+    base := vc_call_args(c, ip, a, n, ci)
+    k := vc_add_call(c, a, ci)
+    _c := vc_emit(c, VOP_CALL, d, base, na, k, vc_ity(a, n))
+    repeat na in i:
+        arg := at.Child(a, n, i)
+        an := at.At(a, arg)
+        if an.kind == at.AST_MEMBER and i < at.ChildCount(a, fn) and at.At(a, at.Child(a, fn, i)).is_ref:
+            s2 := c.top
+            ob := vc_expr(c, ip, a, an.a)
+            _sf := vc_emit(c, VOP_SETFIELD, ob, vc_ks(c, an.name), base + i, arg, 0)
+            c.top = s2
+        end
+    end
+    c.top = d + 1
+    ret d
 end
 
 func vc_call_args(c &: VmC, ip &: Interp, a &: at.Ast, call: int, ci &: VmCall): int:
@@ -509,23 +537,14 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
             end
             gcl := ip.closures.get(gfid)
             gfn := at.At(a, gcl.fn)
-            if gfn.kind != at.AST_FUNC_DEF or not str.Equals(gfn.name, nm) or at.ChildCount(a, gcl.fn) != na or not vc_args_plain(c, a, n, gcl.fn):
+            if gfn.kind != at.AST_FUNC_DEF or not str.Equals(gfn.name, nm) or at.ChildCount(a, gcl.fn) != na:
                 ret vc_escape_expr(c, n)
             end
-            mut cig := VmCall { fn = gcl.fn, env = gcl.env, call = n }
-            baseg := vc_call_args(c, ip, a, n, cig)
-            kg := vc_add_call(c, a, cig)
-            c.top = baseg
-            dg := vc_tmp(c)
-            _cg := vc_emit(c, VOP_CALL, dg, baseg, na, kg, vc_ity(a, n))
-            ret dg
+            ret vc_direct_call(c, ip, a, n, gcl.fn, gcl.env)
         end
         fn := find_func(ip, a, nm, na)
         if fn == 0:
             ret vc_extern_call(c, ip, a, n, nm)
-        end
-        if not vc_args_plain(c, a, n, fn):
-            ret vc_escape_expr(c, n)
         end
         hp := at.At(a, fn).home_pkg
         mut henv := ip.globals
@@ -535,13 +554,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
                 henv = ip.mods.get(hm).env
             end
         end
-        mut ci := VmCall { fn = fn, env = henv, call = n }
-        base := vc_call_args(c, ip, a, n, ci)
-        k := vc_add_call(c, a, ci)
-        c.top = base
-        d3 := vc_tmp(c)
-        _c := vc_emit(c, VOP_CALL, d3, base, na, k, vc_ity(a, n))
-        ret d3
+        ret vc_direct_call(c, ip, a, n, fn, henv)
     end
     if cn.kind == at.AST_MEMBER:
         obj := cn.a
@@ -573,16 +586,7 @@ func vc_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int): int:
                 ret vc_escape_expr(c, n)
             end
             cl := ip.closures.get(fv.id)
-            if not vc_args_plain(c, a, n, cl.fn):
-                ret vc_escape_expr(c, n)
-            end
-            mut cim := VmCall { fn = cl.fn, env = cl.env, call = n }
-            basem := vc_call_args(c, ip, a, n, cim)
-            km := vc_add_call(c, a, cim)
-            c.top = basem
-            dm := vc_tmp(c)
-            _cm := vc_emit(c, VOP_CALL, dm, basem, na, km, vc_ity(a, n))
-            ret dm
+            ret vc_direct_call(c, ip, a, n, cl.fn, cl.env)
         end
         if onod.kind == at.AST_INDEX or (onod.kind == at.AST_MEMBER and not vc_plain_chain(c, a, obj)) or not vc_args_plain(c, a, n, 0):
             ret vc_escape_expr(c, n)
@@ -615,16 +619,7 @@ func vc_extern_call(c &: VmC, ip &: Interp, a &: at.Ast, n: int, nm: str): int:
     if efi != 0:
         ef := ip.extern_fns.get(efi)
         ecl := ip.closures.get(ef.id)
-        if not vc_args_plain(c, a, n, ecl.fn):
-            ret vc_escape_expr(c, n)
-        end
-        mut cie := VmCall { fn = ecl.fn, env = ecl.env, call = n }
-        basee := vc_call_args(c, ip, a, n, cie)
-        ke := vc_add_call(c, a, cie)
-        c.top = basee
-        de := vc_tmp(c)
-        _ce := vc_emit(c, VOP_CALL, de, basee, na, ke, vc_ity(a, n))
-        ret de
+        ret vc_direct_call(c, ip, a, n, ecl.fn, ecl.env)
     end
     if IntrinsicLookup(nm) >= 0:
         if not vc_args_plain(c, a, n, 0):
@@ -1383,6 +1378,135 @@ func vc_stmt(c &: VmC, ip &: Interp, a &: at.Ast, n: int):
     vc_escape_stmt(c, n)
 end
 
+func vc_scalar_ts(ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    if is_int_typename(ts) or is_float_typename(ts) or str.Equals(ts, "bool") or str.Equals(ts, "str") or str.Equals(ts, "char"):
+        ret true
+    end
+    ret byte_at(ts, str.Len(ts) - 1) == 42
+end
+
+func vc_array_ts(ts: str): bool:
+    n := str.Len(ts)
+    ret n > 0 and (byte_at(ts, n - 1) == 93 or byte_at(ts, n - 1) == 42)
+end
+
+func vc_callee_fn(ip &: Interp, a &: at.Ast, call: int): int:
+    cal := at.At(a, call).a
+    if cal == 0 or at.KindOf(a, cal) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    ret find_func(ip, a, at.At(a, cal).name, at.ChildCount(a, call))
+end
+
+func vc_arg_byval(ip &: Interp, a &: at.Ast, call: int, arg: int): bool:
+    fn := vc_callee_fn(ip, a, call)
+    if fn == 0:
+        ret false
+    end
+    repeat at.ChildCount(a, call) in i:
+        if at.Child(a, call, i) == arg:
+            ret i < at.ChildCount(a, fn) and not at.At(a, at.Child(a, fn, i)).is_ref
+        end
+    end
+    ret false
+end
+
+func vc_ro_use(ip &: Interp, a &: at.Ast, par: Vector<int>, id: int): bool:
+    mut cur := id
+    until true:
+        pp := par.get(cur)
+        if pp == 0:
+            break
+        end
+        pk := at.KindOf(a, pp)
+        if (pk == at.AST_MEMBER or pk == at.AST_INDEX) and at.At(a, pp).a == cur:
+            if pk == at.AST_INDEX and not vc_array_ts(at.At(a, cur).type_str):
+                ret false
+            end
+            cur = pp
+        else:
+            break
+        end
+    end
+    p2 := par.get(cur)
+    if p2 == 0:
+        ret false
+    end
+    k2 := at.KindOf(a, p2)
+    n2 := at.At(a, p2)
+    if cur != id:
+        if not vc_scalar_ts(at.At(a, cur).type_str):
+            ret false
+        end
+        if k2 == at.AST_ASSIGN and n2.a == cur:
+            ret false
+        end
+        if k2 == at.AST_INCDEC:
+            ret false
+        end
+        if k2 == at.AST_CALL:
+            if n2.a == cur:
+                ret false
+            end
+            ret vc_arg_byval(ip, a, p2, cur) or vc_is_print(at.At(a, n2.a).name)
+        end
+        ret true
+    end
+    if k2 == at.AST_VAR_DECL and n2.a == id:
+        ret true
+    end
+    if k2 == at.AST_ASSIGN and n2.op == tok.TK_ASSIGN and n2.b == id:
+        ret true
+    end
+    if k2 == at.AST_CALL and n2.a != id:
+        cn := at.At(a, n2.a)
+        if cn.kind == at.AST_IDENTIFIER and (str.Equals(cn.name, "len") or vc_is_print(cn.name)):
+            ret true
+        end
+        ret vc_arg_byval(ip, a, p2, id)
+    end
+    ret false
+end
+
+func vc_ro_walk(ip &: Interp, a &: at.Ast, n: int, parent: int, name: str, par &: Vector<int>, ok &: bool):
+    if n == 0 or not ok:
+        ret
+    end
+    until par.len() <= n:
+        par.push(0)
+    end
+    par.set(n, parent)
+    nd := at.At(a, n)
+    if (nd.kind == at.AST_VAR_DECL or nd.kind == at.AST_CONST_DECL or nd.kind == at.AST_PARAM or nd.kind == at.AST_REPEAT) and str.Equals(nd.name, name):
+        ok = false
+        ret
+    end
+    if nd.kind == at.AST_IDENTIFIER and str.Equals(nd.name, name):
+        if nd.unwrap_subj or not vc_ro_use(ip, a, par, n):
+            ok = false
+        end
+        ret
+    end
+    vc_ro_walk(ip, a, nd.a, n, name, par, ok)
+    vc_ro_walk(ip, a, nd.b, n, name, par, ok)
+    vc_ro_walk(ip, a, nd.c, n, name, par, ok)
+    vc_ro_walk(ip, a, nd.d, n, name, par, ok)
+    repeat nd.list.len() in i:
+        vc_ro_walk(ip, a, nd.list.get(i), n, name, par, ok)
+    end
+end
+
+func vc_param_ro(ip &: Interp, a &: at.Ast, body: int, name: str): bool:
+    mut par := Vector {} as Vector<int>
+    defer par.free()
+    mut ok := true
+    vc_ro_walk(ip, a, body, 0, name, par, ok)
+    ret ok
+end
+
 func vm_compile(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: bool): VmC:
     mut c := VmC {}
     c.f.defenv = defenv
@@ -1406,6 +1530,7 @@ func vm_compile(ip &: Interp, a &: at.Ast, fnnode: int, defenv: int, has_this: b
             c.f.has_ref = true
         end
         c.f.param_def.push(pn.a)
+        c.f.param_ro.push(not pn.is_ref and vc_param_ro(ip, a, fnn.a, pn.name))
     end
     vc_body(c, ip, a, fnn.a)
     _rn := vc_emit(c, VOP_RETN, 0, 0, 0, 0, 0)

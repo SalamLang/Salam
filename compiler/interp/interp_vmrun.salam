@@ -135,7 +135,9 @@ func vm_run_defers(ip &: Interp, a &: at.Ast, f: VmFn*, R: Value*, ds &: Vector<
         e := vm_env_make(ip, f, R, sync)
         mut fr := Frame {}
         mut rv := Value {}
+        ip.tw_depth += 1
         _fl := exec_stmt(ip, a, e, fr, node, rv)
+        ip.tw_depth -= 1
         run_defers_from(ip, a, fr, 0)
         fr.defer_stmts.free()
         fr.defer_envs.free()
@@ -174,7 +176,9 @@ func vm_struct_lit(ip &: Interp, a &: at.Ast, n: int, sdef: int, R: Value*, base
             fval = R[next]
             next += 1
         else fnode.a != 0:
+            ip.tw_depth += 1
             fval = eval(ip, a, fenv, fnode.a)
+            ip.tw_depth -= 1
         else:
             fts := fnode.ty != 0 ? at.At(a, fnode.ty).type_str : ""
             if str.Find(fts, "[") < 0:
@@ -647,7 +651,7 @@ func vm_exec(
         if pi < nargs:
             if f.has_ref and PRF[pi]:
                 R[reg] = argp[pi]
-            else argp[pi].kind == VAL_STRUCT or argp[pi].kind == VAL_ARRAY:
+            else (argp[pi].kind == VAL_STRUCT or argp[pi].kind == VAL_ARRAY) and not f.param_ro.get(pi):
                 R[reg] = val_copy_deep(ip, argp[pi])
             else:
                 R[reg] = argp[pi]
@@ -661,7 +665,9 @@ func vm_exec(
             repeat pi in pj:
                 env_define(ip, e0, at.At(a, at.Child(a, f.fnnode, pj)).name, R[pbase + pj])
             end
+            ip.tw_depth += 1
             R[reg] = eval(ip, a, e0, f.param_def.get(pi))
+            ip.tw_depth -= 1
             env_release(ip, mk0)
             if ip.failed:
                 ret val_null()
@@ -1128,7 +1134,13 @@ func vm_exec(
                     end
                     if mci.cfn != 0 and mci.cvi > 0:
                         margp := vm_reg_at(R, z)
+                        if back_addr != (0 as i64):
+                            ip.tw_depth += 1
+                        end
                         mres2 := vm_call_vm(ip, a, mci.call, mci.cfn, mci.cfile, mci.cvi, mci.cenv, true, recvr, margp, mna)
+                        if back_addr != (0 as i64):
+                            ip.tw_depth -= 1
+                        end
                         if ip.failed:
                             running = false
                             continue
@@ -1144,7 +1156,10 @@ func vm_exec(
                     end
                 end
                 mut margs := vm_call_args(R, z, mna)
+                mtw := back_addr != (0 as i64) ? 1 : 0
+                ip.tw_depth += mtw
                 mres := method_call_values(ip, a, 0, mci.call, mci.obj, mci.method, recvr, margs, back_addr, back_ts)
+                ip.tw_depth -= mtw
                 if ip.failed:
                     margs.free()
                     running = false
@@ -1303,7 +1318,9 @@ func vm_exec(
             VOP_EVAL:
                 emk := env_mark(ip)
                 ee := vm_env_make(ip, f, R, z)
+                ip.tw_depth += 1
                 evv := eval(ip, a, ee, y)
+                ip.tw_depth -= 1
                 vm_env_back(ip, f, R, z, ee)
                 env_release(ip, emk)
                 if ip.failed:
@@ -1321,7 +1338,9 @@ func vm_exec(
                 xe := vm_env_make(ip, f, R, y)
                 mut xfr := Frame {}
                 mut xrv := val_null()
+                ip.tw_depth += 1
                 xfl := exec_stmt(ip, a, xe, xfr, x, xrv)
+                ip.tw_depth -= 1
                 run_defers_from(ip, a, xfr, 0)
                 xfr.defer_stmts.free()
                 xfr.defer_envs.free()

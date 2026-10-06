@@ -25,6 +25,9 @@ import os.temp
 
 include mcptxt "mcp_text.salam"
 
+mut g_root := ""
+mut g_work := ""
+
 @en "Outcome"
 pub struct Outcome:
     pub code: int = 0
@@ -50,13 +53,17 @@ end
 
 if SALAM_OS_WINDOWS:
     func _shell_wrap(line: str): str: ret "\"".concat(line).concat("\"") end
+    func _cd_prefix(dir_path: str): str: ret "cd /d ".concat(_quote(dir_path)).concat(" && ") end
 else:
     func _shell_wrap(line: str): str: ret line end
+    func _cd_prefix(dir_path: str): str: ret "cd ".concat(_quote(dir_path)).concat(" && ") end
 end
 
 func _cmdline(exe: str, args: Vector<str>, out_path: str, err_path: str): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
+    work := Workdir()
+    if work.len() > 0 and SafeArg(work): str.BufAppend(sb, _cd_prefix(work)) end
     str.BufAppend(sb, _quote(exe))
     mut i := 0
     until i < args.len():
@@ -80,7 +87,10 @@ end
 @fa "برنامه"
 pub func Binary(): str:
     pinned := env.GetOr("SALAM_MCP_BIN", "")
-    if pinned.len() > 0: ret pinned end
+    if pinned.len() > 0:
+        if path.IsAbs(pinned) or pinned.find("/") < 0: ret pinned end
+        ret path.Abs(pinned)
+    end
     root := Root()
     win := path.Join(root, "salam.exe")
     if file.Exists(win): ret win end
@@ -92,7 +102,47 @@ end
 @en "Root"
 @fa "ریشه"
 pub func Root(): str:
-    ret env.GetOr("SALAM_MCP_ROOT", ".")
+    if g_root.len() == 0:
+        g_root = path.Abs(env.GetOr("SALAM_MCP_ROOT", "."))
+    end
+    ret g_root
+end
+
+@en "Workdir"
+@fa "پوشه کار"
+pub func Workdir(): str:
+    if g_work.len() > 0 and os.IsDir(g_work): ret g_work end
+    g_work = temp.Directory()
+    ret g_work
+end
+
+@en "Cleanup"
+@fa "پاکسازی"
+pub func Cleanup():
+    if g_work.len() == 0: ret end
+    temp.RemoveDir(g_work)
+    g_work = ""
+end
+
+@en "Resolve"
+@fa "مسیر کامل"
+pub func Resolve(p: str): str:
+    if not SafePath(p): ret "" end
+    root := Root()
+    if path.IsAbs(p):
+        full := path.Abs(p)
+        if full == root or str.StartsWith(full, root.concat("/")): ret full end
+        ret ""
+    end
+    ret path.Join(root, p)
+end
+
+@en "Relative"
+@fa "مسیر نسبی"
+pub func Relative(p: str): str:
+    prefix := Root().concat("/")
+    if str.StartsWith(p, prefix): ret p.substr(prefix.len(), p.len() - prefix.len()) end
+    ret p
 end
 
 @en "SafeArg"

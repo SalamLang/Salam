@@ -28,7 +28,58 @@ include mcpexec "mcp_exec.salam"
 include mcpout "mcp_result.salam"
 
 func _bad_path(p: str): mcpout.ToolResult:
-    ret mcpout.Failure("Refused path '".concat(p).concat("': paths must be workspace-relative, must not contain '..', and must not contain shell metacharacters."))
+    ret mcpout.Failure("Refused path '".concat(p).concat("': paths must be inside the workspace (relative to it, or absolute under it), must not contain '..', and must not contain shell metacharacters."))
+end
+
+func _rfind(s: str, ch: str): int:
+    mut at := 0 - 1
+    mut i := 0
+    until i < s.len():
+        if s.substr(i, 1) == ch: at = i end
+        i += 1
+    end
+    ret at
+end
+
+func _log_diag(ln: str, found &: bool): value.Value:
+    found = false
+    mut d := value.NewValueObject()
+    mut lvl := "error"
+    mut skip := 9
+    mut at := ln.find("][ERROR] ")
+    if at < 0:
+        at = ln.find("][WARN] ")
+        skip = 8
+        lvl = "warning"
+    end
+    if at < 0: ret d end
+    msg := ln.substr(at + skip, ln.len() - at - skip).trim()
+    if not str.EndsWith(msg, ")"): ret d end
+    open_p := _rfind(msg, "(")
+    if open_p < 0: ret d end
+    loc := msg.substr(open_p + 1, msg.len() - open_p - 2)
+    c2 := _rfind(loc, ":")
+    if c2 < 0: ret d end
+    head := loc.substr(0, c2)
+    c1 := _rfind(head, ":")
+    if c1 < 0: ret d end
+    line_n := head.substr(c1 + 1, head.len() - c1 - 1).to_int()
+    col_n := loc.substr(c2 + 1, loc.len() - c2 - 1).to_int()
+    if line_n <= 0: ret d end
+    mut body := msg.substr(0, open_p).trim()
+    mut code := ""
+    if body.find(": ") == 4 and (str.StartsWith(body, "E") or str.StartsWith(body, "W")):
+        code = body.substr(0, 4)
+        body = body.substr(6, body.len() - 6)
+    end
+    value.ObjectSet(d, "level", value.ValueString(lvl))
+    value.ObjectSet(d, "code", value.ValueString(code))
+    value.ObjectSet(d, "message", value.ValueString(body))
+    value.ObjectSet(d, "file", value.ValueString(head.substr(0, c1)))
+    value.ObjectSet(d, "line", value.ValueInt(line_n as i64))
+    value.ObjectSet(d, "column", value.ValueInt(col_n as i64))
+    found = true
+    ret d
 end
 
 func _diag_array(err: str): value.Value:
@@ -41,19 +92,24 @@ func _diag_array(err: str): value.Value:
         if not encerr.IsError(e): value.ArrayPush(arr, d) end
         i += 1
     end
+    if value.ArrayLen(arr) > 0: ret arr end
+    raw := mcptxt.Lines(err)
+    mut j := 0
+    until j < raw.len():
+        mut found := false
+        d := _log_diag(raw.get(j), found)
+        if found: value.ArrayPush(arr, d) end
+        j += 1
+    end
     ret arr
 end
 
 func _diag_text(err: str): str:
-    lines := mcpexec.Diagnostics(err)
+    arr := _diag_array(err)
     mut out := Vector {} as Vector<str>
     mut i := 0
-    until i < lines.len():
-        mut e := encerr.EncodingError {}
-        d := json.Decode(lines.get(i), e)
-        if not encerr.IsError(e):
-            out.push(_one_diag(d))
-        end
+    until i < value.ArrayLen(arr):
+        out.push(_one_diag(value.ArrayGet(arr, i)))
         i += 1
     end
     ret mcpout.Bullets(out)
@@ -137,9 +193,13 @@ end
 @en "Build"
 @fa "ساخت"
 pub func Build(path: str, backend: str, release: bool, target: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
+    if backend.len() > 0 and backend != "c" and backend != "llvm":
+        ret mcpout.Failure("unknown backend '".concat(backend).concat("': use c or llvm."))
+    end
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
     out := temp.File()
-    a := _base("build", path)
+    a := _base("build", full)
     a.push("--output=".concat(out))
     _push_backend(a, backend, release, target)
     r := mcpexec.Run(a)
@@ -150,8 +210,9 @@ end
 @en "Check"
 @fa "بررسی"
 pub func Check(path: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
-    a := _base("inspect", path)
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
+    a := _base("inspect", full)
     a.push("--emit-symbol")
     r := mcpexec.Run(a)
     ret _finish("salam check (analyze only) ".concat(path), r, false)
@@ -160,26 +221,29 @@ end
 @en "Run"
 @fa "اجرا"
 pub func Run(path: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
-    r := mcpexec.Run(_base("run", path))
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
+    r := mcpexec.Run(_base("run", full))
     ret _finish("salam run ".concat(path), r, true)
 end
 
 @en "Exec"
 @fa "تفسیر"
 pub func Exec(path: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
-    r := mcpexec.Run(_base("exec", path))
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
+    r := mcpexec.Run(_base("exec", full))
     ret _finish("salam exec ".concat(path), r, true)
 end
 
 @en "Format"
 @fa "قالب‌بندی"
 pub func Format(path: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
     a := Vector {} as Vector<str>
     a.push("format")
-    a.push(path)
+    a.push(full)
     a.push("--check")
     r := mcpexec.Run(a)
     if not r.launched: ret mcpout.Failure(r.reason) end
@@ -191,14 +255,19 @@ end
 @en "Inspect"
 @fa "بازرسی"
 pub func Inspect(path: str, emit: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
+    if emit.len() > 0 and emit != "symbols" and emit != "tokens" and emit != "ast":
+        ret mcpout.Failure("unknown emit '".concat(emit).concat("': use tokens, ast or symbols."))
+    end
     mut flag := "--emit-symbol"
     if emit == "tokens": flag = "--emit-tokens" end
     if emit == "ast": flag = "--emit-ast" end
-    a := _base("inspect", path)
+    a := _base("inspect", full)
     a.push(flag)
     r := mcpexec.Run(a)
     if not r.launched: ret mcpout.Failure(r.reason) end
+    if r.code != 0 and r.out.trim().len() == 0: ret _finish("salam inspect ".concat(path), r, false) end
     body := mcptxt.Truncate(r.out, 60000)
     ret mcpout.Rich(body, _diag_array(r.err), r.code != 0)
 end
@@ -206,9 +275,10 @@ end
 @en "LlvmIr"
 @fa "کد میانی"
 pub func LlvmIr(path: str, target: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
     out := temp.File()
-    a := _base("llvm", path)
+    a := _base("llvm", full)
     a.push("--output=".concat(out))
     if target.len() > 0: a.push("--target=".concat(target)) end
     r := mcpexec.Run(a)
@@ -221,9 +291,10 @@ end
 @en "Js"
 @fa "جاوااسکریپت"
 pub func Js(path: str): mcpout.ToolResult:
-    if not mcpexec.SafePath(path): ret _bad_path(path) end
+    full := mcpexec.Resolve(path)
+    if full.len() == 0: ret _bad_path(path) end
     out := temp.File().concat(".js")
-    a := _base("js", path)
+    a := _base("js", full)
     a.push("--output=".concat(out))
     r := mcpexec.Run(a)
     code := file.ReadText(out)

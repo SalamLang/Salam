@@ -1,0 +1,114 @@
+---
+name: 'Publish to the gh-pages branch'
+description: 'Mirror a local directory into a subtree of the gh-pages branch, leaving the other subtrees alone.'
+author: 'SalamLang'
+
+branding:
+  icon: 'globe'
+  color: 'green'
+
+inputs:
+  source:
+    description: 'Local directory whose contents are published.'
+    required: true
+  target:
+    description: 'Path inside the branch that receives the contents. Empty publishes at the root.'
+    required: false
+    default: ''
+  keep:
+    description: 'Space-separated paths inside the target that the sync must not delete.'
+    required: false
+    default: ''
+  branch:
+    description: 'Branch that GitHub Pages serves.'
+    required: false
+    default: 'gh-pages'
+  token:
+    description: 'Token with contents write access to this repository.'
+    required: true
+  message:
+    description: 'Commit subject for the published change.'
+    required: false
+    default: 'Publish site'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check the inputs
+      shell: bash
+      env:
+        SRC: ${{ inputs.source }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -eu
+        if [ ! -d "$SRC" ]; then
+          echo "::error::source directory '$SRC' does not exist"
+          exit 1
+        fi
+        if [ -z "$(ls -A "$SRC")" ]; then
+          echo "::error::source directory '$SRC' is empty, refusing to publish"
+          exit 1
+        fi
+        case "$TARGET" in
+        /* | *..*)
+          echo "::error::target '$TARGET' must be a relative path inside the branch"
+          exit 1
+          ;;
+        esac
+
+    - name: Publish the directory
+      shell: bash
+      env:
+        SRC: ${{ inputs.source }}
+        TARGET: ${{ inputs.target }}
+        KEEP: ${{ inputs.keep }}
+        BRANCH: ${{ inputs.branch }}
+        TOKEN: ${{ inputs.token }}
+        MESSAGE: ${{ inputs.message }}
+        REPO: ${{ github.repository }}
+        SERVER: ${{ github.server_url }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -eu
+        src=$(cd "$SRC" && pwd)
+        remote="${SERVER#https://}"
+        url="https://x-access-token:${TOKEN}@${remote}/${REPO}.git"
+        attempt=1
+        until [ "$attempt" -gt 3 ]; do
+          work=$(mktemp -d)
+          git -C "$work" init -q
+          git -C "$work" remote add origin "$url"
+          if git -C "$work" fetch -q --depth=1 origin "$BRANCH" 2>/dev/null; then
+            git -C "$work" checkout -q -b "$BRANCH" FETCH_HEAD
+          else
+            echo "branch $BRANCH does not exist yet, starting an empty one"
+            git -C "$work" checkout -q --orphan "$BRANCH"
+          fi
+          dest="$work"
+          [ -n "$TARGET" ] && dest="$work/$TARGET"
+          mkdir -p "$dest"
+          set -- --archive --delete --exclude .git
+          for path in $KEEP; do
+            set -- "$@" --exclude "/$path"
+          done
+          rsync "$@" "$src"/ "$dest"/
+          touch "$work/.nojekyll"
+          git -C "$work" add -A
+          if git -C "$work" diff --cached --quiet; then
+            echo "nothing changed, not publishing"
+            exit 0
+          fi
+          git -C "$work" -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "$MESSAGE" -m "From ${SHA} [skip ci]"
+          if git -C "$work" push -q origin "$BRANCH"; then
+            echo "published $SRC to $BRANCH:${TARGET:-/}"
+            exit 0
+          fi
+          echo "push rejected, another job published first; retrying"
+          rm -rf "$work"
+          attempt=$((attempt + 1))
+          sleep 5
+        done
+        echo "::error::could not publish $SRC to $BRANCH after 3 attempts"
+        exit 1

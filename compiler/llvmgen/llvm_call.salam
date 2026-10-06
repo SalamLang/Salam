@@ -168,8 +168,10 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
         co.SbFree(sp)
     end
     cc := StdcallCc(v, fname)
+    iok := is_ext ? lv_extern_io_pre(v, fname) : 0
     if str.Equals(rts, "void"):
         emit(v, "call" + cc + " void" + callty + " @" + fname + "(" + argsx + ")")
+        lv_extern_io_post(v, iok)
         ret make_llv("0", "void")
     end
     rty := ty_of(v, s, a, rts)
@@ -177,13 +179,33 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     if sret != 0 and str.Equals(rty, "i64") and not str.Equals(v.usize, "i64"):
         narrow := new_tmp(v)
         emit(v, narrow + " = call" + cc + " " + v.usize + callty + " @" + fname + "(" + argsx + ")")
+        lv_extern_io_post(v, iok)
         r0 := new_tmp(v)
         emit(v, r0 + " = " + (sret == 1 ? "sext " : "zext ") + v.usize + " " + narrow + " to i64")
         ret make_llv(r0, rts)
     end
     r := new_tmp(v)
     emit(v, r + " = call" + cc + " " + rty + callty + " @" + fname + "(" + argsx + ")")
+    lv_extern_io_post(v, iok)
     ret make_llv(r, rts)
+end
+
+func lv_extern_io_pre(v &: Lv, nm: str): int:
+    if not v.single_threaded or v.freestanding:
+        ret 0
+    end
+    k := cg.ExternIoKind(nm)
+    if k != 0:
+        need(v, LV_H_OUTBUF)
+        emit(v, "call void @salam_out_flush()")
+    end
+    ret k
+end
+
+func lv_extern_io_post(v &: Lv, k: int):
+    if k == 2:
+        emit(v, new_tmp(v) + " = call i32 @fflush(ptr null)")
+    end
 end
 
 func ast_str_lit_len(a &: at.Ast, n: int): i64:
@@ -278,9 +300,12 @@ func call_pkg(
         own_pkg = py.name
     end
     fname := is_ext ? fname_ : mangle_in(v, s, own_pkg, "", fname_, sig)
-    ret emit_call(
+    iok := is_ext ? lv_extern_io_pre(v, fname) : 0
+    rv := emit_call(
         v, s, a, n, sig, "", fname, sm.ToString(s, sm.SigAt(s, sig).ret_type)
     )
+    lv_extern_io_post(v, iok)
+    ret rv
 end
 
 func runtime_fn(s &: sm.Sema, name: str, out_pk &: int): int:

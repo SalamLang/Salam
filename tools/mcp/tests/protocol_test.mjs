@@ -13,10 +13,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const serverPath = process.argv[2];
+const serverPath = process.argv[2] && resolve(process.argv[2]);
 const repoRoot = resolve(process.argv[3] ?? process.cwd());
 if (!serverPath) {
   console.error("usage: protocol_test.mjs <path-to-salam-mcp> [repo-root]");
@@ -58,7 +59,7 @@ function check(name, condition, detail) {
  * Sends every message, then reads replies until the process exits. The server
  * shuts down on stdin EOF, so closing stdin is also the end-of-test signal.
  */
-function converse(messages, env = {}) {
+function converse(messages, env = {}, cwd = undefined) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(serverPath, [], {
       env: {
@@ -68,6 +69,7 @@ function converse(messages, env = {}) {
         ...env,
       },
       stdio: ["pipe", "pipe", "pipe"],
+      cwd,
     });
 
     let out = "";
@@ -334,12 +336,71 @@ async function testTools() {
     ok.result.content[0].text,
   );
   check("path traversal is refused", traversal.result.isError === true);
-  check("unknown tool is a protocol error", unknownTool.error?.code === -32601);
+  check("unknown tool is invalid params", unknownTool.error?.code === -32602);
   check(
     "keyword table covers all three languages",
     keywords.result.content[0].text.includes("english") &&
       keywords.result.content[0].text.includes("persian"),
   );
+}
+
+// --- workspace ---------------------------------------------------------
+
+async function testWorkspace() {
+  console.log("workspace (server started outside the checkout)");
+  const call = (id, name, args) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { _meta: meta, name, arguments: args },
+  });
+  const elsewhere = mkdtempSync(join(tmpdir(), "salam-mcp-cwd-"));
+  const okAbs = join(repoRoot, "tools/mcp/tests/fixtures/ok.salam");
+  let raw;
+  try {
+    ({ raw } = await converse(
+      [
+        call(1, "salam_check", { path: "tools/mcp/tests/fixtures/ok.salam" }),
+        call(2, "salam_check", { path: okAbs }),
+        call(3, "salam_read_source", { path: "/etc/hostname" }),
+        call(4, "salam_build", { path: "tools/mcp/tests/fixtures/broken.salam" }),
+        call(5, "salam_find_examples", { query: "println", limit: 3 }),
+        call(6, "salam_build", { path: "tools/mcp/tests/fixtures/ok.salam", backend: "bogus" }),
+        call(7, "salam_inspect", { path: "tools/mcp/tests/fixtures/ok.salam", emit: "bogus" }),
+      ],
+      {},
+      elsewhere,
+    ));
+  } finally {
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
+  const [rel, abs, outside, build, examples, backend, emit] = parseLines(raw);
+  check(
+    "relative paths resolve against SALAM_MCP_ROOT, not the cwd",
+    rel.result.isError === false,
+    rel.result.content?.[0]?.text,
+  );
+  check(
+    "an absolute path inside the workspace is accepted",
+    abs.result.isError === false,
+    abs.result.content?.[0]?.text,
+  );
+  check("an absolute path outside the workspace is refused", outside.result.isError === true);
+  check(
+    "a failed build still yields structured diagnostics",
+    build.result.isError === true &&
+      build.result.structuredContent?.diagnostics?.length > 0 &&
+      build.result.structuredContent.diagnostics.every((d) => d.line > 0 && d.code),
+    JSON.stringify(build.result.structuredContent),
+  );
+  check(
+    "example paths are workspace-relative",
+    examples.result.structuredContent?.length > 0 &&
+      examples.result.structuredContent.every((e) => e.startsWith("tests/")),
+    examples.result.structuredContent?.[0],
+  );
+  check("an unknown backend is refused", backend.result.isError === true);
+  check("an unknown emit stage is refused", emit.result.isError === true);
 }
 
 // --- resources ---------------------------------------------------------
@@ -396,6 +457,7 @@ const suites = [
   testModern,
   testLegacy,
   testTools,
+  testWorkspace,
   testResources,
 ];
 for (const suite of suites) {

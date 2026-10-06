@@ -256,6 +256,48 @@ func push_lit(out2 &: Vector<PfSeg>, lit &: str.StringBuilder):
     co.SbFree(lit)
 end
 
+func pf_concat_side_ok(ts: str): bool:
+    if str.Len(ts) == 0:
+        ret false
+    end
+    ret str.Equals(ts, "str") or str.Equals(ts, "uchar") or str.Equals(ts, "bool") or str.Equals(ts, "char") or ts_is_float(ts) or ts_is_int(ts)
+end
+
+func pf_is_str_concat(a &: at.Ast, id: int): bool:
+    n := at.Get(a, id)
+    if n.kind != at.AST_BINARY or n.op != tok.TK_PLUS or n.a == 0 or n.b == 0:
+        ret false
+    end
+    if not str.Equals(n.type_str, "str") and not str.Equals(n.type_str, "uchar"):
+        ret false
+    end
+    ta := at.Get(a, n.a).type_str
+    tb := at.Get(a, n.b).type_str
+    if not pf_concat_side_ok(ta) or not pf_concat_side_ok(tb):
+        ret false
+    end
+    ret str.Equals(ta, "str") or str.Equals(ta, "uchar") or str.Equals(tb, "str") or str.Equals(tb, "uchar")
+end
+
+func pf_push_arg(a &: at.Ast, argid: int, lit &: str.StringBuilder, out2 &: Vector<PfSeg>):
+    if pf_is_str_concat(a, argid):
+        n := at.Get(a, argid)
+        pf_push_arg(a, n.a, lit, out2)
+        pf_push_arg(a, n.b, lit, out2)
+        ret
+    end
+    if pf_try_fold(a, argid, lit):
+        ret
+    end
+    push_lit(out2, lit)
+    argn := at.Get(a, argid)
+    out2.push(
+        PfSeg {
+            kind = pf_kind_of(argn.type_str), text = "", expr = argid
+        }
+    )
+end
+
 func pf_build_impl(a &: at.Ast, call: int, nl: bool, out2 &: Vector<PfSeg>):
     mut lit := co.SbNew()
     cn := at.Get(a, call)
@@ -264,16 +306,7 @@ func pf_build_impl(a &: at.Ast, call: int, nl: bool, out2 &: Vector<PfSeg>):
         if i > 0:
             co.SbPutc(lit, 32)
         end
-        if pf_try_fold(a, argid, lit):
-            continue
-        end
-        push_lit(out2, lit)
-        argn := at.Get(a, argid)
-        out2.push(
-            PfSeg {
-                kind = pf_kind_of(argn.type_str), text = "", expr = argid
-            }
-        )
+        pf_push_arg(a, argid, lit, out2)
     end
     if nl:
         co.SbPutc(lit, 10)

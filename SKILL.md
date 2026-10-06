@@ -1856,8 +1856,8 @@ Rules, all checked at compile time:
 **Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
 rule, never an element. It sits directly under `layout`; `name` and `url`
 (`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
-`woff2`, `ttc`) is optional: without it the compiler reads the URL's extension,
-then the magic bytes of a local file next to the source. A remote URL with
+`woff2`, `ttc`) is optional: without it the compiler reads the extension from
+the URL, then the magic bytes of a local file next to the source. A remote URL with
 neither is E126, and a type that disagrees with the extension or the file is
 E127. The compiler never fetches over the network. Optional: `weight`
 (`300`, `"100 900"`), `style` (`italic`), `display` (`swap`), `range`

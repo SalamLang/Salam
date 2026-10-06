@@ -1768,7 +1768,9 @@ names and placement rules in `docs/LAYOUT_ELEMENTS.md`. Common ones: `box`
 (img), `list`/`ordered list`/`item`, `table`/`row`/`column`, `form`, `input`,
 `select`/`option`, `text area`, `button`, `label`, `video`/`audio`/`source`,
 `figure`, `details`/`summary`, `dialog`. Every element also accepts its HTML tag
-name (`div`, `a`, `img`, `td`, ...).
+name (`div`, `a`, `img`, `li`, ...), except the table parts that come from
+context: write `header`/`main`/`footer` and `column` inside `table`, never
+`thead`/`tbody`/`tfoot`/`th`/`td`.
 
 The same name can mean different tags by context. Inside `table`, `header`,
 `main` and `footer` become `<thead>`, `<tbody>` and `<tfoot>`. `column` is `<th>`
@@ -1783,7 +1785,8 @@ Global attributes (`id`, `class`, `title`, `lang`, `dir`, `hidden`, `tabindex`,
 attributes (`data view`, or any `data <name>` which becomes `data-<name>`),
 and every `on<event>` handler work on all elements. All standard CSS properties
 are registered (`background color`, `z index`, ...), with `hover`/`focus`/
-`active`/`before`/`after` prefixes (`hover color = "red"`).
+`active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
+`تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
 
 **Everything is checked at compile time**:
 

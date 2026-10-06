@@ -51,6 +51,22 @@ checked, and none of them is an interpreter bug:
     stdlib/ssh_selftest exhausts memory in interpreted SSH crypto, so give
     it a 'ulimit -v' rather than letting the OOM killer choose a victim.
 
+Under 'llvm' every section was swept on 2026-10-05 and the backend came out
+clean: 681 agree over the default sections and 259 more over interop,
+editor-selected and stdlib, with no divergence except interop/redis_demo.
+Nothing there needs re-checking unless codegen changes.
+
+Under 'js' the same sections give about 100 DIVERGEs, and all of them were
+triaged on 2026-10-05 without finding a bug. 74 print nothing where output
+was expected and 15 throw, which is the program bailing out of a feature js
+does not have (FFI, sockets, sqlite, threads, channels, atomics). Of the 14
+that print a *different* value, 11 are the 2^53 limit on integers (u64 max
+comes out as 18446744073709552000), one is 'v.cap()' because a js array has
+no capacity separate from its length, one is a load through a raw
+mem.Allocate pointer, and one is fa/general/condcomp_js_defined, which is
+correct: SALAM_JS really is defined on this backend and the .out file holds
+the native answer.
+
 USAGE
     exit 2
 }
@@ -148,7 +164,7 @@ for section in $SECTIONS; do
                 # shellcheck disable=SC2086
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" js "$ROOT/$f" $defs \
                     --output=sweep.js --no-color --log-level=error --lang="$lang") >/dev/null 2>&1; then
-                    (cd "$WORK" && timeout 90 node sweep.js </dev/null) >"$WORK/run.out" 2>&1
+                    (cd "$ROOT" && timeout 90 node "$WORK/sweep.js" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?
                     got=$(tr -d '\r' <"$WORK/run.out")
                 else
@@ -160,7 +176,7 @@ for section in $SECTIONS; do
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
                     --backend=llvm --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
                     [ -x "$WORK/sweep.exe" ]; then
-                    (cd "$WORK" && timeout 90 ./sweep.exe </dev/null) >"$WORK/run.out" 2>&1
+                    (cd "$ROOT" && timeout 90 "$WORK/sweep.exe" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?
                     got=$(tr -d '\r' <"$WORK/run.out")
                 else

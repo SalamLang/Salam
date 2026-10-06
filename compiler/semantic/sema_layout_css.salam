@@ -1,0 +1,617 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include i18 "../i18n.salam"
+
+const K_CSS_UNIT_CAP := 128
+const K_CSS_MAX_TOKENS := 24
+
+func css_ws(b: int): bool:
+    ret b == 32 or b == 9 or b == 10 or b == 13
+end
+
+func css_scan_number(s: str, start: int, out_end &: int): bool:
+    n := str.Len(s)
+    mut p := start
+    if p < n and (byte_at(s, p) == 43 or byte_at(s, p) == 45):
+        p += 1
+    end
+    mut dig := false
+    until p < n and byte_at(s, p) >= 48 and byte_at(s, p) <= 57:
+        p += 1
+        dig = true
+    end
+    if p < n and byte_at(s, p) == 46:
+        mut q := p + 1
+        until q < n and byte_at(s, q) >= 48 and byte_at(s, q) <= 57:
+            q += 1
+        end
+        if q > p + 1:
+            p = q
+            dig = true
+        end
+    end
+    if not dig:
+        ret false
+    end
+    out_end = p
+    ret true
+end
+
+func css_norm_unit(s: str, pos: int, length: int): str:
+    mut out := ""
+    mut prev_space := false
+    mut q := pos
+    qend := pos + length
+    until q < qend and str.Len(out) < K_CSS_UNIT_CAP:
+        rem := qend - q
+        b0 := byte_at(s, q)
+        if rem >= 3 and b0 == 0xE2 and byte_at(s, q + 1) == 0x80 and byte_at(s, q + 2) == 0x8C:
+            if not prev_space:
+                out += " "
+                prev_space = true
+            end
+            q += 3
+            continue
+        end
+        if rem >= 2 and b0 == 0xD9 and (byte_at(s, q + 1) == 0x8A or byte_at(s, q + 1) == 0x83):
+            out += byte_at(s, q + 1) == 0x8A ? "ی" : "ک"
+            prev_space = false
+            q += 2
+            continue
+        end
+        if css_ws(b0):
+            if not prev_space:
+                out += " "
+                prev_space = true
+            end
+            q += 1
+            continue
+        end
+        if b0 >= 65 and b0 <= 90:
+            out += char_from_code(b0 + 32)
+        else:
+            out += str.Substr(s, q, 1)
+        end
+        prev_space = false
+        q += 1
+    end
+    ret out
+end
+
+func css_unit_of(s: str, pos: int, length: int): str:
+    ret lay_dyn_value("unit", css_norm_unit(s, pos, length))
+end
+
+func lay_css_digits(v: str): str:
+    mut out := ""
+    n := str.Len(v)
+    mut i := 0
+    until i < n:
+        b := byte_at(v, i)
+        if i + 1 < n and b == 0xDB and byte_at(v, i + 1) >= 0xB0 and byte_at(v, i + 1) <= 0xB9:
+            out += char_from_code(48 + byte_at(v, i + 1) - 0xB0)
+            i += 2
+            continue
+        end
+        if i + 1 < n and b == 0xD9 and byte_at(v, i + 1) >= 0xA0 and byte_at(v, i + 1) <= 0xA9:
+            out += char_from_code(48 + byte_at(v, i + 1) - 0xA0)
+            i += 2
+            continue
+        end
+        if i + 1 < n and b == 0xD9 and byte_at(v, i + 1) == 0xAB:
+            out += "."
+            i += 2
+            continue
+        end
+        out += str.Substr(v, i, 1)
+        i += 1
+    end
+    ret out
+end
+
+func lay_map_length(v: str, bare_px: bool): str:
+    if str.Len(v) == 0:
+        ret v
+    end
+    mut tstart := Vector {} as Vector<int>
+    mut tlen := Vector {} as Vector<int>
+    defer tstart.free()
+    defer tlen.free()
+    n := str.Len(v)
+    mut p := 0
+    mut depth := 0
+    until p < n:
+        until p < n and css_ws(byte_at(v, p)):
+            p += 1
+        end
+        if p >= n:
+            break
+        end
+        if tstart.len() == K_CSS_MAX_TOKENS:
+            ret v
+        end
+        s0 := p
+        until p < n and (depth > 0 or not css_ws(byte_at(v, p))):
+            b := byte_at(v, p)
+            if b == 40:
+                depth += 1
+            else b == 41 and depth > 0:
+                depth -= 1
+            end
+            p += 1
+        end
+        tstart.push(s0)
+        tlen.push(p - s0)
+    end
+    ntok := tstart.len()
+    if ntok == 0:
+        ret v
+    end
+    mut out := ""
+    mut i := 0
+    until i < ntok:
+        tp := tstart.get(i)
+        tl := tlen.get(i)
+        tend := tp + tl
+        if str.Len(out) > 0:
+            out += " "
+        end
+        mut numend := 0
+        ok := css_scan_number(v, tp, numend)
+        if not ok or numend > tend:
+            out += str.Substr(v, tp, tl)
+            i += 1
+            continue
+        end
+        attached := tend - numend
+        mut canon := ""
+        mut consumed := 1
+        if attached > 0:
+            canon = css_unit_of(v, numend, attached)
+        else i + 2 < ntok:
+            l1 := tlen.get(i + 1)
+            l2 := tlen.get(i + 2)
+            if l1 + 1 + l2 < K_CSS_UNIT_CAP:
+                joined := str.Substr(v, tstart.get(i + 1), l1) + " " + str.Substr(v, tstart.get(i + 2), l2)
+                canon = css_unit_of(joined, 0, str.Len(joined))
+                if str.Len(canon) > 0:
+                    consumed = 3
+                end
+            end
+        end
+        if str.Len(canon) == 0 and attached == 0 and i + 1 < ntok:
+            canon = css_unit_of(v, tstart.get(i + 1), tlen.get(i + 1))
+            if str.Len(canon) > 0:
+                consumed = 2
+            end
+        end
+        if str.Len(canon) == 0 and attached == 0 and bare_px:
+            canon = "px"
+        end
+        if str.Len(canon) == 0:
+            out += str.Substr(v, tp, tl)
+            i += 1
+            continue
+        end
+        out += str.Substr(v, tp, numend - tp)
+        out += canon
+        i += consumed
+    end
+    ret out
+end
+
+func lay_css_split(v: str, sep: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut depth := 0
+    mut quote := 0
+    mut start := 0
+    n := str.Len(v)
+    repeat n in i:
+        b := byte_at(v, i)
+        if quote != 0:
+            if b == quote:
+                quote = 0
+            end
+            continue
+        end
+        if b == 34 or b == 39:
+            quote = b
+        else b == 40:
+            depth += 1
+        else b == 41 and depth > 0:
+            depth -= 1
+        else depth == 0 and (b == sep or (sep == 32 and css_ws(b))):
+            if i > start:
+                piece := str.Trim(str.Substr(v, start, i - start))
+                if str.Len(piece) > 0:
+                    out.push(piece)
+                end
+            end
+            start = i + 1
+        end
+    end
+    if n > start:
+        piece := str.Trim(str.Substr(v, start, n - start))
+        if str.Len(piece) > 0:
+            out.push(piece)
+        end
+    end
+    ret out
+end
+
+func css_is_dim(t: str, units: str): bool:
+    mut e := 0
+    if not css_scan_number(t, 0, e) or e == str.Len(t):
+        ret false
+    end
+    ret lay_csv_has(units, str.Lower(str.Substr(t, e, str.Len(t) - e)))
+end
+
+func css_is_zero(t: str): bool:
+    mut e := 0
+    if not css_scan_number(t, 0, e) or e != str.Len(t):
+        ret false
+    end
+    repeat str.Len(t) in i:
+        b := byte_at(t, i)
+        if b >= 49 and b <= 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+func css_fn_name(t: str): str:
+    n := str.Len(t)
+    if n < 3 or byte_at(t, n - 1) != 41:
+        ret ""
+    end
+    p := str.IndexOf(t, "(")
+    if p <= 0:
+        ret ""
+    end
+    ret str.Lower(str.Substr(t, 0, p))
+end
+
+func css_is_ident(t: str): bool:
+    n := str.Len(t)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(t, 0)
+    if b0 >= 48 and b0 <= 57:
+        ret false
+    end
+    repeat n in i:
+        b := byte_at(t, i)
+        ok := (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b >= 128
+        if not ok:
+            ret false
+        end
+    end
+    ret true
+end
+
+func css_global(t: str): bool:
+    l := str.Lower(t)
+    ret str.Equals(l, "inherit") or str.Equals(l, "initial") or str.Equals(l, "unset") or str.Equals(l, "revert") or str.Equals(l, "revert-layer")
+end
+
+func css_generic_fn(f: str): bool:
+    ret str.Equals(f, "var") or str.Equals(f, "env") or str.Equals(f, "calc") or str.Equals(f, "min") or str.Equals(f, "max") or str.Equals(f, "clamp") or str.Equals(f, "attr")
+end
+
+func css_length_units(): str:
+    ret "px,em,rem,ex,rex,ch,rch,cap,ic,lh,rlh,vw,vh,vi,vb,vmin,vmax,svw,svh,lvw,lvh,dvw,dvh,cqw,cqh,cqi,cqb,cqmin,cqmax,cm,mm,q,in,pt,pc"
+end
+
+func css_alt_ok(alt: str, t: str): bool:
+    if str.Len(alt) == 0:
+        ret false
+    end
+    if byte_at(alt, 0) == 64:
+        ret str.Len(lay_dyn_value(str.Substr(alt, 1, str.Len(alt) - 1), t)) > 0
+    end
+    f := css_fn_name(t)
+    if str.Equals(alt, "length"):
+        ret lay_is_float(t) or css_is_dim(t, css_length_units())
+    end
+    if str.Equals(alt, "percentage"):
+        ret css_is_dim(t, "%")
+    end
+    if str.Equals(alt, "number"):
+        ret lay_is_float(t)
+    end
+    if str.Equals(alt, "integer"):
+        ret lay_is_int(t)
+    end
+    if str.Equals(alt, "time"):
+        ret css_is_dim(t, "s,ms") or css_is_zero(t)
+    end
+    if str.Equals(alt, "angle"):
+        ret css_is_dim(t, "deg,rad,grad,turn") or css_is_zero(t)
+    end
+    if str.Equals(alt, "flex"):
+        ret css_is_dim(t, "fr")
+    end
+    if str.Equals(alt, "resolution"):
+        ret css_is_dim(t, "dpi,dpcm,dppx,x")
+    end
+    if str.Equals(alt, "color"):
+        if str.Len(lay_map_color(t)) > 0:
+            ret true
+        end
+        ret str.Equals(f, "rgb") or str.Equals(f, "rgba") or str.Equals(f, "hsl") or str.Equals(f, "hsla") or str.Equals(f, "hwb") or str.Equals(f, "lab") or str.Equals(f, "lch") or str.Equals(f, "oklab") or str.Equals(f, "oklch") or str.Equals(f, "color") or str.Equals(f, "color-mix") or str.Equals(f, "light-dark")
+    end
+    if str.Equals(alt, "image"):
+        ret str.Equals(f, "url") or str.Equals(f, "image-set") or str.Equals(f, "image") or str.Equals(f, "cross-fade") or str.Equals(f, "element") or str.Equals(f, "paint") or str.EndsWith(f, "gradient")
+    end
+    if str.Equals(alt, "easing"):
+        ret str.Equals(f, "cubic-bezier") or str.Equals(f, "steps") or str.Equals(f, "linear")
+    end
+    if str.Equals(alt, "string"):
+        n := str.Len(t)
+        ret n >= 2 and (byte_at(t, 0) == 34 or byte_at(t, 0) == 39) and byte_at(t, n - 1) == byte_at(t, 0)
+    end
+    if str.Equals(alt, "ident"):
+        ret css_is_ident(t) and not css_global(t)
+    end
+    ret str.Equals(str.Lower(t), alt)
+end
+
+func css_token_kind(spec: str, t: str): str:
+    if css_global(t):
+        ret "global"
+    end
+    if css_generic_fn(css_fn_name(t)):
+        ret "fn"
+    end
+    mut alts := lay_css_split(spec, 32)
+    defer alts.free()
+    repeat alts.len() in i:
+        a := alts.get(i)
+        if str.Equals(a, "list") or str.Equals(a, "ratio") or str.StartsWith(a, "max"):
+            continue
+        end
+        if css_alt_ok(a, t):
+            ret a
+        end
+    end
+    ret ""
+end
+
+func css_spec_has(spec: str, word: str): bool:
+    mut alts := lay_css_split(spec, 32)
+    defer alts.free()
+    repeat alts.len() in i:
+        if str.Equals(alts.get(i), word):
+            ret true
+        end
+    end
+    ret false
+end
+
+func css_spec_max(spec: str): int:
+    mut alts := lay_css_split(spec, 32)
+    defer alts.free()
+    repeat alts.len() in i:
+        a := alts.get(i)
+        if str.StartsWith(a, "max") and str.Len(a) > 3:
+            mut m := 0
+            repeat str.Len(a) - 3 in k:
+                m = m * 10 + (byte_at(a, 3 + k) - 48)
+            end
+            ret m
+        end
+    end
+    ret 1
+end
+
+func css_whole_keyword(spec: str, v: str): str:
+    mut alts := lay_css_split(spec, 32)
+    defer alts.free()
+    repeat alts.len() in i:
+        a := alts.get(i)
+        if str.Len(a) > 1 and byte_at(a, 0) == 64:
+            c := lay_dyn_value(str.Substr(a, 1, str.Len(a) - 1), v)
+            if str.Len(c) > 0:
+                ret c
+            end
+        end
+    end
+    ret ""
+end
+
+func css_is_ratio(v: str): bool:
+    sl := str.IndexOf(v, "/")
+    if sl < 0:
+        ret lay_is_ufloat(str.Trim(v))
+    end
+    ret lay_is_ufloat(str.Trim(str.Substr(v, 0, sl))) and lay_is_ufloat(str.Trim(str.Substr(v, sl + 1, str.Len(v) - sl - 1)))
+end
+
+func css_prepare(v: str): str:
+    ret lay_map_length(lay_css_digits(str.Trim(v)), false)
+end
+
+func lay_css_value_ok(spec: str, raw: str): bool:
+    if str.Len(str.Trim(raw)) == 0:
+        ret false
+    end
+    if str.Len(css_whole_keyword(spec, str.Trim(raw))) > 0:
+        ret true
+    end
+    v := css_prepare(raw)
+    if css_spec_has(spec, "ratio") and css_is_ratio(v):
+        ret true
+    end
+    maxn := css_spec_max(spec)
+    mut items := css_spec_has(spec, "list") ? lay_css_split(v, 44) : lay_css_split(v, 1)
+    defer items.free()
+    if items.len() == 0:
+        ret false
+    end
+    repeat items.len() in i:
+        mut toks := lay_css_split(items.get(i), 32)
+        if toks.len() == 0 or toks.len() > maxn:
+            toks.free()
+            ret false
+        end
+        repeat toks.len() in k:
+            if str.Len(css_token_kind(spec, toks.get(k))) == 0:
+                toks.free()
+                ret false
+            end
+        end
+        toks.free()
+    end
+    ret true
+end
+
+func lay_css_map(spec: str, raw: str): str:
+    whole := css_whole_keyword(spec, str.Trim(raw))
+    if str.Len(whole) > 0:
+        ret whole
+    end
+    v := css_prepare(raw)
+    if css_spec_has(spec, "ratio") and css_is_ratio(v):
+        ret v
+    end
+    length_px := css_spec_has(spec, "length") and not css_spec_has(spec, "number") and not css_spec_has(spec, "integer")
+    is_list := css_spec_has(spec, "list")
+    mut items := is_list ? lay_css_split(v, 44) : lay_css_split(v, 1)
+    defer items.free()
+    mut out := ""
+    repeat items.len() in i:
+        mut toks := lay_css_split(items.get(i), 32)
+        mut piece := ""
+        repeat toks.len() in k:
+            t := toks.get(k)
+            kind := css_token_kind(spec, t)
+            mut m := t
+            if str.StartsWith(kind, "@"):
+                m = lay_dyn_value(str.Substr(kind, 1, str.Len(kind) - 1), t)
+            else str.Equals(kind, "color"):
+                c := lay_map_color(t)
+                if str.Len(c) > 0:
+                    m = c
+                end
+            else str.Equals(kind, "length") and length_px and lay_is_float(t):
+                m = t + "px"
+            end
+            if str.Len(piece) > 0:
+                piece += " "
+            end
+            piece += m
+        end
+        toks.free()
+        if str.Len(out) > 0:
+            out += ", "
+        end
+        out += piece
+    end
+    ret out
+end
+
+func css_group_list(group: str): str:
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    repeat g_sm_lay_val_group.len() in i:
+        if not str.Equals(g_sm_lay_val_group.get(i), group):
+            continue
+        end
+        c := g_sm_lay_val_canon.get(i)
+        mut dup := false
+        repeat seen.len() in k:
+            if str.Equals(seen.get(k), c):
+                dup = true
+            end
+        end
+        if not dup:
+            seen.push(c)
+        end
+    end
+    if seen.len() == 0 or seen.len() > 16:
+        ret ""
+    end
+    mut out := ""
+    repeat seen.len() in j:
+        if j > 0:
+            out += ", "
+        end
+        out += "'" + seen.get(j) + "'"
+    end
+    ret out
+end
+
+func lay_css_describe(spec: str): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut alts := lay_css_split(spec, 32)
+    defer alts.free()
+    mut keywords := ""
+    repeat alts.len() in i:
+        a := alts.get(i)
+        if str.Equals(a, "list") or str.StartsWith(a, "max"):
+            continue
+        end
+        if str.Equals(a, "length"):
+            parts.push(i18.Tr("a length"))
+        else str.Equals(a, "percentage"):
+            parts.push(i18.Tr("a percentage"))
+        else str.Equals(a, "number"):
+            parts.push(i18.Tr("a number"))
+        else str.Equals(a, "integer"):
+            parts.push(i18.Tr("an integer"))
+        else str.Equals(a, "time"):
+            parts.push(i18.Tr("a time such as 0.3s"))
+        else str.Equals(a, "angle"):
+            parts.push(i18.Tr("an angle such as 45deg"))
+        else str.Equals(a, "color"):
+            parts.push(i18.Tr("a color"))
+        else str.Equals(a, "image"):
+            parts.push(i18.Tr("an image such as url(...)"))
+        else str.Equals(a, "string"):
+            parts.push(i18.Tr("a quoted string"))
+        else str.Equals(a, "ident"):
+            parts.push(i18.Tr("a name"))
+        else str.Equals(a, "ratio"):
+            parts.push(i18.Tr("a ratio such as 16 / 9"))
+        else str.Equals(a, "easing"):
+            parts.push(i18.Tr("a timing function"))
+        else str.Equals(a, "flex"):
+            parts.push(i18.Tr("a fraction such as 1fr"))
+        else str.Equals(a, "resolution"):
+            parts.push(i18.Tr("a resolution such as 2x"))
+        else byte_at(a, 0) == 64:
+            listed := css_group_list(str.Substr(a, 1, str.Len(a) - 1))
+            if str.Len(listed) > 0:
+                keywords = str.Len(keywords) > 0 ? keywords + ", " + listed : listed
+            else:
+                parts.push(i18.Tr("one of the allowed values"))
+            end
+        else:
+            keywords = str.Len(keywords) > 0 ? keywords + ", '" + a + "'" : "'" + a + "'"
+        end
+    end
+    if str.Len(keywords) > 0:
+        parts.push(keywords)
+    end
+    if parts.len() == 0:
+        ret i18.Tr("a value")
+    end
+    mut out := parts.get(0)
+    mut k := 1
+    until k < parts.len():
+        if k == parts.len() - 1:
+            out = co.Format2(i18.Tr("%s or %s"), co.ArgStr(out), co.ArgStr(parts.get(k)))
+        else:
+            out = co.Format2(i18.Tr("%s, %s"), co.ArgStr(out), co.ArgStr(parts.get(k)))
+        end
+        k += 1
+    end
+    ret out
+end

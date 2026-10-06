@@ -112,6 +112,8 @@ Value types: `string`, `token` (one word, no spaces), `int`, `uint`, `float`,
 (`true`/`false` like a boolean, or one of the `allowed` values, as for
 `hidden = "until-found"`).
 
+`css` is the value type of CSS properties. `allowed` lists what a value may be: the type words `length`, `percentage`, `number`, `integer`, `time`, `angle`, `color`, `image`, `string`, `ident`, `ratio`, `easing`, `flex` and `resolution`, plus `@group` for keyword values defined in `values/`. `maxN` allows up to N space-separated values (as in `margin`) and `list` a comma list (as in `transition-property`). CSS-wide keywords and `var()`/`calc()`-style functions are always accepted. The full table is in `docs/CSS_PROPERTIES.md`.
+
 ## Values
 
 ```salam

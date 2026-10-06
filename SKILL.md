@@ -1794,6 +1794,14 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 `active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
 `تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
 
+**CSS values are checked.** About 310 simple properties validate their value
+(keyword, length, number, time, angle, color, ...) and accept Persian keywords
+and units: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`. A
+wrong value is E018 with the accepted forms listed. Shorthands such as
+`background`, `border`, `font`, `flex`, `grid`, `transition`, `transform` and
+`box shadow` still pass their value through unchecked. The full list with
+status per property is `docs/CSS_PROPERTIES.md`.
+
 **Values are expressions.** An attribute value can use constants, operators
 and parentheses, and a static layout folds it at compile time:
 `box: content = 4 * 10 end` prints `40`; `title = SITE + " | Home"` reads a

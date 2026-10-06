@@ -17,6 +17,8 @@ struct LayCheck:
     pub doc_unique: Vector<int> = Vector {}
     pub comps: Vector<str> = Vector {}
     pub unexpanded: bool = false
+    pub runtime: bool = false
+    pub in_each: int = 0
 end
 
 func lay_pseudo_index(name: str, plen &: int): int:
@@ -68,11 +70,11 @@ func lay_attr_text(a &: at.Ast, attr: int, out &: str): bool:
             ret true
         end
         if vv.op == tok.TK_INT:
-            out = co.U64Toa(vv.value_int)
+            out = co.U64Toa(vv.value_int) + LayoutNumUnit(vv.name)
             ret true
         end
         if vv.op == tok.TK_FLOAT:
-            out = co.Format1("%g", co.ArgFloat(vv.value_float))
+            out = co.Format1("%g", co.ArgFloat(vv.value_float)) + LayoutNumUnit(vv.name)
             ret true
         end
         if vv.op == tok.TK_KW_TRUE:
@@ -263,6 +265,18 @@ func lay_resolve_elem(a &: at.Ast, el: int, stack: Vector<int>): int:
     ret cands.get(0)
 end
 
+func lay_resolve_control(a &: at.Ast, nid: int, stack &: Vector<int>):
+    n := at.Get(a, nid)
+    lay_resolve_walk(a, n.b, stack)
+    if n.kind == at.AST_IF and n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_resolve_control(a, n.c, stack)
+        else:
+            lay_resolve_walk(a, n.c, stack)
+        end
+    end
+end
+
 func lay_resolve_walk(a &: at.Ast, nid: int, stack &: Vector<int>):
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
@@ -272,7 +286,12 @@ func lay_resolve_walk(a &: at.Ast, nid: int, stack &: Vector<int>):
     end
     repeat at.ChildCount(a, nid) in j:
         cid := at.Child(a, nid, j)
-        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+        ck := at.KindOf(a, cid)
+        if ck == at.AST_IF or ck == at.AST_EACH:
+            lay_resolve_control(a, cid, stack)
+            continue
+        end
+        if ck != at.AST_LAYOUT_ELEMENT:
             continue
         end
         repeat at.ChildCount(a, cid) in m:
@@ -536,14 +555,61 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
         if av.dest == LA_CONTENT:
             has_text = true
         end
+        if not lay_fold_attr(s, a, aid, ai):
+            continue
+        end
         mut v := ""
         if not lay_attr_text(a, aid, v):
+            continue
+        end
+        if str.IndexOf(v, char_from_code(2)) >= 0:
+            if str.IndexOf(v, "salam-bad-") >= 0:
+                serr(
+                    s, 132, span_of(a, aid), co.Format2(
+                        i18.Tr("'%s' on '%s' must be known at compile time; choose between fixed values with 'if' instead"), co.ArgStr(lay_attr_display(key)), co.ArgStr(lay_elem_display(ei))
+                    )
+                )
+            else str.Equals(key, "id") and ck.in_each > 0:
+                ck.ids.push(v)
+            end
+            continue
+        end
+        if str.Equals(key, "id") and ck.in_each > 0:
+            serr(
+                s, 134, span_of(a, aid), co.Format2(
+                    i18.Tr("element '%s' inside 'each' has the fixed id '%s', which would repeat; build the id from the item instead"), co.ArgStr(lay_elem_display(ei)), co.ArgStr(v)
+                )
+            )
+            continue
+        end
+        if (av.vtype == VT_URL or av.vtype == VT_ABS_URL) and lay_url_runs_code(v):
+            serr(
+                s, 18, span_of(a, aid), co.Format2(
+                    i18.Tr("invalid value for '%s': '%s' could run code; use an http, https, mailto, tel or relative address"), co.ArgStr(lay_attr_display(key)), co.ArgStr(v)
+                )
+            )
             continue
         end
         if not lay_attr_value_ok(ai, v):
             serr(
                 s, 18, span_of(a, aid), co.Format3(
                     i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(lay_attr_display(key)), co.ArgStr(v), co.ArgStr(lay_value_type_name(av.vtype))
+                )
+            )
+            continue
+        end
+        if (av.dest == LA_CSS or av.dest == LA_HTML_OR_CSS) and not lay_css_value_safe(v):
+            serr(
+                s, 18, span_of(a, aid), co.Format3(
+                    i18.Tr("invalid value for '%s': '%s' is not %s"), co.ArgStr(lay_attr_display(key)), co.ArgStr(v), co.ArgStr(i18.Tr("a CSS value (no '{', '}', ';', '<', '>' or line breaks)"))
+                )
+            )
+            continue
+        end
+        if av.dest == LA_CONTENT and lay_raw_text_escapes(e, v):
+            serr(
+                s, 18, span_of(a, aid), co.Format1(
+                    i18.Tr("the body of '%s' cannot contain '</style' or '</script': it would end the element early"), co.ArgStr(lay_elem_display(ei))
                 )
             )
             continue
@@ -620,7 +686,7 @@ end
 
 func lay_is_component(ck: LayCheck, name: str): bool:
     repeat ck.comps.len() in i:
-        if str.Equals(ck.comps.get(i), name):
+        if su_ident_eq(ck.comps.get(i), name):
             ret true
         end
     end
@@ -632,7 +698,12 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     defer sib.free()
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
-        if at.KindOf(a, cid) != at.AST_LAYOUT_ELEMENT:
+        ckind := at.KindOf(a, cid)
+        if ckind == at.AST_IF or ckind == at.AST_EACH:
+            lay_check_control(s, a, cid, ck)
+            continue
+        end
+        if ckind != at.AST_LAYOUT_ELEMENT:
             continue
         end
         cn := at.Get(a, cid)
@@ -668,6 +739,9 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         e := g_lay_elems.get(ei)
         lay_check_placement(s, a, cid, ei, ck)
         lay_check_attrs(s, a, cid, ei, ck)
+        if str.Equals(e.generator, "font_face"):
+            lay_check_font(s, a, cid)
+        end
         lay_check_repeat(s, a, cid, lay_elem_display(ei))
         if str.Equals(e.unique, "parent"):
             mut again := false
@@ -737,6 +811,10 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
     if at.KindOf(a, nid) != at.AST_LAYOUT_BLOCK:
         ret
     end
+    lbnode := at.Get(a, nid)
+    if str.Len(lbnode.name) > 0 and not lbnode.view_glue:
+        ret
+    end
     lay_ensure()
     lg.Log(
         s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, i18.Tr("validating layout block")
@@ -758,6 +836,7 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
         end
     end
     ck.unexpanded = lay_tree_has_include(a, nid)
+    ck.runtime = lbnode.view_glue
     if not g_lay_schema_reported:
         g_lay_schema_reported = true
         repeat g_lay_schema_errors.len() in se:
@@ -794,4 +873,83 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
             )
         end
     end
+end
+
+func lay_raw_text_escapes(e: LayElem, v: str): bool:
+    if e.kind != LK_RAW and not str.Equals(e.generator, "style") and not str.Equals(e.generator, "script"):
+        ret false
+    end
+    low := str.Lower(v)
+    ret str.IndexOf(low, "</style") >= 0 or str.IndexOf(low, "</script") >= 0
+end
+
+func lay_css_value_safe(v: str): bool:
+    repeat str.Len(v) in i:
+        b := byte_at(v, i)
+        if b == 123 or b == 125 or b == 59 or b == 60 or b == 62 or b == 10 or b == 13:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lay_url_runs_code(v: str): bool:
+    sl := lay_url_scheme_len(str.Trim(v))
+    if sl == 0:
+        ret false
+    end
+    scheme := str.Lower(str.Substr(str.Trim(v), 0, sl))
+    if str.Equals(scheme, "javascript") or str.Equals(scheme, "vbscript"):
+        ret true
+    end
+    ret str.Equals(scheme, "data") and not lay_is_abs_url(str.Trim(v))
+end
+
+
+func lay_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    n := at.Get(a, nid)
+    if not ck.runtime:
+        serr(
+            s, 133, span_of(a, nid), i18.Tr("'if' and 'each' inside a layout need runtime values; declare a runtime layout such as 'layout Home(user: str):'")
+        )
+        ret
+    end
+    if n.kind == at.AST_EACH:
+        ck.in_each += 1
+        lay_check_children(s, a, n.b, ck)
+        ck.in_each -= 1
+        ret
+    end
+    lay_check_children(s, a, n.b, ck)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_check_control(s, a, n.c, ck)
+        else:
+            lay_check_children(s, a, n.c, ck)
+        end
+    end
+end
+
+pub func LayoutNumUnit(lexeme: str): str:
+    n := str.Len(lexeme)
+    if n > 1 and byte_at(lexeme, 0) == 48 and (byte_at(lexeme, 1) == 120 or byte_at(lexeme, 1) == 88 or byte_at(lexeme, 1) == 98 or byte_at(lexeme, 1) == 111):
+        ret ""
+    end
+    mut i := n
+    until i > 0:
+        b := byte_at(lexeme, i - 1)
+        if (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 37:
+            i -= 1
+        else:
+            break
+        end
+    end
+    if i == 0 or i == n:
+        ret ""
+    end
+    b0 := byte_at(lexeme, i - 1)
+    if not ((b0 >= 48 and b0 <= 57) or b0 >= 128 or b0 == 46):
+        ret ""
+    end
+    ret str.Substr(lexeme, i, n - i)
 end

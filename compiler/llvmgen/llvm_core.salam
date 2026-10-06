@@ -348,12 +348,32 @@ func outbuf_yield(v &: Lv): bool:
     ret not v.freestanding and not target_is_windows_of(v.triple)
 end
 
+func outbuf_arch(v &: Lv): str:
+    dash := str.IndexOf(v.triple, "-")
+    if dash < 0:
+        ret v.triple
+    end
+    ret str.Substr(v.triple, 0, dash)
+end
+
+func outbuf_old_arm(v &: Lv): bool:
+    arch := outbuf_arch(v)
+    ret str.Equals(arch, "arm") or str.Equals(arch, "armeb") or str.StartsWith(arch, "armv4") or str.StartsWith(arch, "armv5")
+end
+
 func outbuf_lock(v &: Lv): str:
     mut spin := "  br label %try\n"
     if outbuf_yield(v):
         spin = "  %y = call i32 @sched_yield()\n" + "  br label %try\n"
     end
-    ret "@salam_ob_lk = internal global i32 0, align 4\n" + "define internal void @salam_out_lock() nounwind {\n" + "entry:\n" + "  br label %try\n" + "try:\n" + "  %old = atomicrmw xchg ptr @salam_ob_lk, i32 1 acquire, align 4\n" + "  %free = icmp eq i32 %old, 0\n" + "  br i1 %free, label %done, label %wait\n" + "wait:\n" + spin + "done:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_unlock() nounwind {\n" + "entry:\n" + "  store atomic i32 0, ptr @salam_ob_lk release, align 4\n" + "  ret void\n" + "}\n"
+    g := "@salam_ob_lk = internal global i32 0, align 4\n"
+    if outbuf_old_arm(v) and not str.Contains(v.triple, "linux"):
+        ret g + "define internal void @salam_out_lock() nounwind {\n" + "entry:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_unlock() nounwind {\n" + "entry:\n" + "  ret void\n" + "}\n"
+    end
+    if outbuf_old_arm(v):
+        ret g + "define internal void @salam_out_lock() nounwind {\n" + "entry:\n" + "  br label %try\n" + "try:\n" + "  %cur = load volatile i32, ptr @salam_ob_lk, align 4\n" + "  %busy = icmp ne i32 %cur, 0\n" + "  br i1 %busy, label %wait, label %cas\n" + "cas:\n" + "  %kc = inttoptr i32 -61504 to ptr\n" + "  %r = call i32 %kc(i32 0, i32 1, ptr @salam_ob_lk)\n" + "  %ok = icmp eq i32 %r, 0\n" + "  br i1 %ok, label %done, label %wait\n" + "wait:\n" + spin + "done:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_unlock() nounwind {\n" + "entry:\n" + "  %mb = inttoptr i32 -61536 to ptr\n" + "  call void %mb()\n" + "  store volatile i32 0, ptr @salam_ob_lk, align 4\n" + "  ret void\n" + "}\n"
+    end
+    ret g + "define internal void @salam_out_lock() nounwind {\n" + "entry:\n" + "  br label %try\n" + "try:\n" + "  %old = atomicrmw xchg ptr @salam_ob_lk, i32 1 acquire, align 4\n" + "  %free = icmp eq i32 %old, 0\n" + "  br i1 %free, label %done, label %wait\n" + "wait:\n" + spin + "done:\n" + "  ret void\n" + "}\n" + "define internal void @salam_out_unlock() nounwind {\n" + "entry:\n" + "  store atomic i32 0, ptr @salam_ob_lk release, align 4\n" + "  ret void\n" + "}\n"
 end
 
 func outbuf_extra(v &: Lv): str:

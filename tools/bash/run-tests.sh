@@ -922,6 +922,14 @@ fi
 
 if want layout; then
     for lang in $LANGS; do
+        for stray in tests/"$lang"/layout/*.salam tests/"$lang"/web/*.salam \
+            tests/"$lang"/web_errors/*.salam; do
+            [ -e "$stray" ] || continue
+            subs="elements/, style/, components/, pages/ or errors/"
+            note_result \
+                "FAIL layout/$lang ($stray is in no layout subdirectory, so nothing runs it; move it into $subs)" \
+                "layout/$lang/stray/$(basename "$stray" .salam)"
+        done
         for sub in elements style components pages errors; do
             [ -d "tests/$lang/layout/$sub" ] || continue
             want_sub "layout/$sub" || continue

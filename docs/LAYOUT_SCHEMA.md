@@ -160,7 +160,10 @@ Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
 
 A success test is a layout build plus `// EXPECT:` substrings, with
 `// EXPECT-NOT:` for text that must not appear. A failure test is
-`// EXPECT: E0xx` plus `// EXPECT-MSG:`. Run the lot, or one directory:
+`// EXPECT: E0xx` plus `// EXPECT-MSG:`. A `.salam` file left directly in
+`tests/{en,fa}/layout/` belongs to no subdirectory and so would never run;
+the runner reports that as a failure rather than skipping it. Run the lot, or
+one directory:
 
 ```sh
 sh tools/bash/run-tests.sh layout

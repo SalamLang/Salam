@@ -1,0 +1,111 @@
+import jwt
+import net.http
+import net.router
+
+mut guard := jwt.NewGuard("a-server-secret-only-the-server-knows")
+
+func login(ctx: i64):
+    mut err := 0
+    mut c := jwt.NewClaims()
+    c.sub = "42"
+    jwt.SetStr(c, "scope", "read")
+    jwt.SetRaw(c, "roles", `["editor"]`)
+    token := jwt.Issue(guard, c, 3600, err)
+    jwt.SetSessionCookieInsecure(ctx, guard, token, 3600)
+    http.Ctx_text(ctx, token)
+end
+
+func me(ctx: i64):
+    mut t := jwt.Token {}
+    if jwt.Require(ctx, guard, t):
+        http.Ctx_text(ctx, "hello user " + t.claims.sub)
+    end
+end
+
+func admin(ctx: i64):
+    mut t := jwt.Token {}
+    if jwt.RequireScope(ctx, guard, "admin", t):
+        http.Ctx_text(ctx, "admin panel")
+    end
+end
+
+func edit(ctx: i64):
+    mut t := jwt.Token {}
+    if jwt.RequireClaim(ctx, guard, "roles", "editor", t):
+        http.Ctx_text(ctx, "editor")
+    end
+end
+
+func profile(ctx: i64):
+    mut t := jwt.Token {}
+    if jwt.RequireSubject(ctx, guard, http.Ctx_param(ctx, "id"), t):
+        http.Ctx_text(ctx, "your own profile")
+    end
+end
+
+func manual(ctx: i64):
+    mut err := 0
+    t := jwt.Check(ctx, guard, err)
+    if jwt.BearerToken(ctx).len() == 0 and jwt.TokenFrom(ctx, guard).len() == 0:
+        jwt.MissingCredential(ctx, guard)
+    else err != jwt.JWT_OK:
+        jwt.Unauthorized(ctx, guard, jwt.ErrorText(err))
+    else t.claims.sub == "0":
+        jwt.Forbidden(ctx, "the user is blocked")
+    else:
+        http.Ctx_text(ctx, "valid")
+    end
+end
+
+func logout(ctx: i64):
+    jwt.ClearSessionCookie(ctx, guard)
+    http.Ctx_text(ctx, "you are logged out")
+end
+
+func main:
+    guard.cookie = "session"
+    mut r := router.NewRouter()
+    router.Post(r, "/login", login)
+    router.Get(r, "/me", me)
+    router.Get(r, "/admin", admin)
+    router.Get(r, "/edit", edit)
+    router.Get(r, "/users/:id", profile)
+    router.Get(r, "/check", manual)
+    router.Post(r, "/logout", logout)
+    mut s := http.NewServer(19611)
+    http.Use(s, r)
+    _ := http.RunBackground(s)
+    base := "http://127.0.0.1:19611"
+
+    login_response := http.Post(base + "/login", "")
+    token := http.Body(login_response)
+    println http.CookieMap(login_response).get("session") == token
+    mut headers := http.NewHeaders()
+    headers.insert("Authorization", "Bearer " + token)
+    println jwt.ParseBearer("Bearer " + token) == token
+    ask(base, "/me", headers)
+    ask(base, "/admin", headers)
+    ask(base, "/edit", headers)
+    ask(base, "/users/42", headers)
+    ask(base, "/users/7", headers)
+    ask(base, "/check", headers)
+    ask(base, "/me", http.NewHeaders())
+    mut bad := http.NewHeaders()
+    bad.insert("Authorization", "Bearer x.y.z")
+    ask(base, "/check", bad)
+    mut cookie := http.NewHeaders()
+    cookie.insert("Cookie", "session=" + token)
+    ask(base, "/me", cookie)
+
+    mut access := ""
+    mut refresh := ""
+    mut err := 0
+    println jwt.IssuePair(guard, "42", 900, 86400, access, refresh, err), access != refresh
+    one := jwt.IssueFor(guard, "42", 60, err)
+    println jwt.Verify(one, guard.secret, guard.opts, err).claims.sub, guard.realm
+end
+
+func ask(base: str, path: str, headers: HashMap<str, str>):
+    response := http.GetWith(base + path, headers)
+    println path, http.Status(response), http.Body(response)
+end

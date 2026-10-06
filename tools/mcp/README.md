@@ -13,7 +13,16 @@ Because it is a single native binary with no runtime dependencies, anyone who
 has `salam` can run it. There is no Node, Python or package manager in the
 loop.
 
-## 🔨 Build
+## 🔨 Install
+
+You need a `salam` compiler from this checkout. If `./salam` is missing,
+build it first:
+
+```sh
+tools/bash/build-selfhost.sh --output "$PWD/salam"
+```
+
+Then build the server:
 
 ```sh
 tools/mcp/build.sh            # -> ./salam-mcp
@@ -21,19 +30,62 @@ tools/mcp/build.sh            # -> ./salam-mcp
 
 Build it with the compiler from this checkout, not an installed one. An older
 `salam` on `PATH` parses some flags differently and the server then fails in
-ways that look like server bugs.
+ways that look like server bugs. `build.sh` picks `$SALAM`, then `./salam`,
+then `salam` on `PATH`, and compiles in a temporary directory so it never
+leaves a `.salam-build` behind. All build output goes to stderr.
 
 ## 🔌 Wire it up
 
-`.mcp.json` in the repository root already configures it for anything that
-reads project-scoped MCP config (Claude Code included), so building the binary
-is enough.
+### Claude Code in this repository
 
-For a Claude Code **plugin** (the server plus a language skill and
-`/salam-check`, `/salam-api`, `/salam-run` shortcuts), install
-`tools/mcp/claude-plugin`, which expects `salam-mcp` on `PATH`.
+Nothing to do beyond having a compiler. `.mcp.json` in the repository root
+starts the server through `tools/mcp/run.sh`:
 
-Any other MCP client:
+```json
+{ "mcpServers": { "salam": { "command": "sh", "args": ["tools/mcp/run.sh"] } } }
+```
+
+The launcher finds the checkout from its own path, rebuilds `salam-mcp` when
+the binary is missing or older than any `tools/mcp/*.salam` file, sets
+`SALAM_MCP_ROOT` to the checkout unless it is already set, and then `exec`s
+the server. A fresh clone or a new worktree therefore works on first use;
+the first start takes a few seconds longer while it builds.
+
+Claude Code starts stdio servers in the project root, so the relative path
+is enough. The config deliberately avoids `${CLAUDE_PROJECT_DIR}`: Claude
+Code does not always define it when it expands `.mcp.json`, and an unset
+variable is passed through literally, which used to fail with
+`ENOENT ... posix_spawn '${CLAUDE_PROJECT_DIR}/salam-mcp'`.
+
+Approve the project server the first time Claude Code asks (or via `/mcp`),
+then check it:
+
+```sh
+claude mcp list               # salam: sh tools/mcp/run.sh - Connected
+```
+
+If it does not connect, run the launcher by hand and read stderr:
+
+```sh
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | sh tools/mcp/run.sh
+```
+
+### Claude Code plugin
+
+`tools/mcp/claude-plugin` bundles the server with a language skill and the
+`/salam-check`, `/salam-api` and `/salam-run` shortcuts. The plugin starts
+`salam-mcp` from `PATH`, so build it and put it there first:
+
+```sh
+tools/mcp/build.sh "$HOME/.local/bin/salam-mcp"
+```
+
+Outside a Salam checkout the server uses the project directory as its
+workspace and looks for `std/` next to the compiler, so point
+`SALAM_MCP_BIN` or `SALAM_STD` at a checkout if the stdlib tools report that
+`std` is missing.
+
+### Any other MCP client
 
 ```json
 {
@@ -51,8 +103,8 @@ Any other MCP client:
 | Variable         | Default                                        | Purpose                              |
 | ---------------- | ---------------------------------------------- | ------------------------------------ |
 | `SALAM_MCP_BIN`  | `<root>/salam[.exe]`, else `salam` from `PATH` | Which compiler to drive              |
-| `SALAM_MCP_ROOT` | `.`                                            | Workspace that paths resolve against |
-| `SALAM_STD`      | `<root>/std`                                   | Standard library root                |
+| `SALAM_MCP_ROOT` | `.` (the launcher sets it to the checkout)     | Workspace that paths resolve against |
+| `SALAM_STD`      | `<root>/std`, else `std` beside the compiler   | Standard library root                |
 
 The compiler default prefers the binary in the workspace over `PATH` on
 purpose: an installed `salam` is often older than the checkout, and the
@@ -62,22 +114,11 @@ than as a version error.
 On Windows, point `command` at `salam-mcp.exe`. Process spawning does not add
 the extension for you.
 
-### 🖥️ Platform-specific setup
+### 🖥️ Windows
 
-**macOS / Linux** - build and add to PATH:
-
-```sh
-tools/mcp/build.sh
-export PATH="$PWD:$PATH"   # add salam-mcp to PATH for Claude Code plugin
-```
-
-**Windows** - build from the repository root (requires `salam` on PATH):
-
-```bat
-tools\mcp\build.bat
-```
-
-Then point `command` in your MCP config at the full path to `salam-mcp.exe`.
+There is no launcher script for Windows yet. Build `salam-mcp.exe` with
+`salam build tools/mcp/main.salam --output=salam-mcp.exe` and point
+`command` in your MCP config at its full path.
 
 ## 🛠️ Tools
 
@@ -120,12 +161,16 @@ Then point `command` in your MCP config at the full path to `salam-mcp.exe`.
 
 ## 🔒 Safety
 
-The server is **read-only**: it never writes to the workspace. Build artifacts
-go to temp paths and are deleted, and `salam_format` always runs with
+The server is **read-only**: it never writes to the workspace. The compiler
+runs inside a private temporary directory (so its `.salam-build` cache lands
+there, not in your checkout), build artifacts go to temp paths, the directory
+is removed when the server exits, and `salam_format` always runs with
 `--check`.
 
-Paths from a tool call are validated rather than escaped; anything containing
-shell metacharacters or `..` is refused outright.
+Paths from a tool call resolve against `SALAM_MCP_ROOT`, never against the
+server's own working directory. They are validated rather than escaped:
+anything containing shell metacharacters or `..`, or an absolute path outside
+the workspace, is refused outright.
 
 ## 📡 Protocol
 
@@ -169,6 +214,8 @@ cannot regenerate anything; there the hook reports that and passes.
 
 | File                  | Role                                                       |
 | --------------------- | ---------------------------------------------------------- |
+| `run.sh`              | Launcher: rebuilds the binary when stale, then execs it    |
+| `build.sh`            | Builds `salam-mcp` in a scratch directory                  |
 | `main.salam`          | Entry point and the stdio read loop                        |
 | `mcp_rpc.salam`       | JSON-RPC framing, EOF-aware line reads, protocol constants |
 | `mcp_server.salam`    | Method dispatch and dual-era version negotiation           |

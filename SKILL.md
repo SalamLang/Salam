@@ -1668,8 +1668,14 @@ are **language intrinsics** on an `i64*` cell (a `__atomic_*` built-in in the C
 backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq*cst; plain reads and
 writes in JS, which has no threads). `atomic_add` returns the value \_after* the
 add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`
-nor the `__sync` family, so under `SALAM_CC_TCC` the `atomic` package falls
+nor the `__sync` family, so under `SALAM_CC_TCC` the **`atomic` package** falls
 back to a mutex per cell - same semantics, higher cost, invisible to callers.
+The **bare intrinsics have no such fallback**: they are always a `__atomic_*`
+built-in, so on a tcc older than 0.9.28 a program that calls them fails to
+build with a `#error` naming `tools/bash/install-tcc.sh`. The pinned tcc
+(`tools/ci/tinycc-ref.txt`, 0.9.28rc) has the built-ins, which is why CI is
+unaffected; note it does _not_ define `__ATOMIC_SEQ_CST`, so that macro is not
+a usable feature test - `__TINYC__ < 928` is.
 A declared function of the same name shadows an intrinsic.
 
 There is no `async`/`await`.

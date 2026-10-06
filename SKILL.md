@@ -1788,6 +1788,93 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 `active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
 `تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
 
+**Values are expressions.** An attribute value can use constants, operators
+and parentheses, and a static layout folds it at compile time:
+`box: content = 4 * 10 end` prints `40`; `title = SITE + " | Home"` reads a
+global `const`; `width = WIDE + "px"`, `margin = -5`, `size = N > 3 ? 2 : 3`.
+Word operators (`and`, `or`, `not`, `و`, `یا`) need parentheses:
+`content = (A and B)`. Unquoted CSS words keep their hyphens
+(`justify content = space-between`, `background = linear-gradient(red, blue)`),
+so write subtraction with spaces (`a - b`). A static layout cannot read a
+variable or call a Salam function (E129); a bad fold (division by zero,
+overflow, `true + 1`) is E130. A constant named like a value word
+(`const red := ...` then `color = red`) wins, with W131.
+
+**Runtime layouts.** `layout:` is a static page built at compile time. A
+_named_ layout with typed parameters is a runtime page: the compiler builds
+the whole document and its CSS at compile time and turns the layout into a
+`pure func Name(params): str` that only fills in escaped values. There is no
+template interpreter. Call it like any function, e.g. from a router handler:
+
+```salam
+import net.http
+import rand
+
+component Card(title: str, n: int):          // typed component: also Card(...) -> str fragment
+    box: heading: size = 3 content = title end end
+end
+
+layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
+    title = "Hi " + user
+    paragraph: content = "Lucky number: " + lucky end
+    if lucky > 50:
+        paragraph: content = "Big!" end
+    else:
+        paragraph: content = "Small" end
+    end
+    list:
+        each i, it in items:
+            item: content = i + ": " + it end
+        end
+    end
+    input: type = "checkbox" checked = admin end   // bool attribute toggled at runtime
+    Card: title = user n = lucky end
+end
+
+func home_h(ctx: i64):
+    http.Ctx_html(ctx, Home(http.Ctx_query(ctx, "name"), rand.IntN(100) as int, items(), false))
+end
+```
+
+Rules, all checked at compile time:
+
+- The layout function is `pure`: no I/O, network, random numbers or global
+  writes inside the UI (E012). Fetch data in the handler and pass it in.
+- Text and attribute values are always HTML-escaped; there is no raw-HTML type.
+- A runtime value for a URL attribute must be a `web.Url`, and a runtime CSS
+  value must be a `web.Color`, a `web.Length` or a number (E135). Build them
+  with `web.ParseUrl(s, ok)`, `web.ParseColor`, `web.ParseLength`, `web.Px(n)`,
+  `web.Rgb(r, g, b)`. Their fields are private, so they cannot be forged (E017).
+  A runtime CSS value is written as an inline `style`; class CSS stays static.
+- Enum-like attributes, `heading size`, `hover ...` styles and `style`/`script`
+  bodies must be known at compile time (E132); pick between fixed variants with
+  `if`. `if`/`each` need a runtime layout (E133). A fixed `id` inside `each`
+  would repeat (E134). A runtime font `url` needs a static `type`.
+- Typed components can be called directly (`Card("x", 1)`) and return their
+  own `<style>` plus HTML, with class names prefixed by the component name.
+
+**Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
+rule, never an element. It sits directly under `layout`; `name` and `url`
+(`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
+`woff2`, `ttc`) is optional: without it the compiler reads the URL's extension,
+then the magic bytes of a local file next to the source. A remote URL with
+neither is E126, and a type that disagrees with the extension or the file is
+E127. The compiler never fetches over the network. Optional: `weight`
+(`300`, `"100 900"`), `style` (`italic`), `display` (`swap`), `range`
+(`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
+
+```salam
+layout:
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
+    box: content = "hi" font family = "Estedad, sans-serif" end
+end
+```
+
+**Safety.** URL-typed attributes reject `javascript:`, `vbscript:` and any
+`data:` that is not image/font/audio/video. CSS values cannot contain
+`{ } ; < >` or line breaks. A `style`/`script` body cannot contain
+`</style` or `</script`. Quoted CSS strings are escaped.
+
 **Everything is checked at compile time**:
 
 | code        | meaning                                                                       |
@@ -1803,6 +1890,12 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 | E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
 | E123        | a std generator (`std/layoutgen`) failed to compile or run                    |
 | E125        | element must come first (`caption` in `table`, `legend`, `summary`)           |
+| E126 / E127 | font type cannot be detected / declared type disagrees with the file          |
+| W128        | a local font file is missing next to the source                               |
+| E129 / E130 | value not known at compile time / a constant expression that cannot fold      |
+| W131        | a constant hides a layout value word of the same name                         |
+| E132 / E133 | value must be static here / `if`/`each` in a static layout                    |
+| E134 / E135 | fixed id inside `each` / runtime value of an unsafe type for this attribute   |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero

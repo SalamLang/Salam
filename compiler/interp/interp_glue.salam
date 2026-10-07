@@ -106,6 +106,14 @@ func writeback_value_place(
         if ip.failed:
             ret false
         end
+        if base.kind == VAL_PTR and base.pa != (0 as i64):
+            pidx := to_int(eval(ip, a, env, an.b))
+            if ip.failed:
+                ret false
+            end
+            mem_ptr_store(ip, a, base, pidx, v)
+            ret true
+        end
         if base.kind != VAL_ARRAY:
             ret false
         end
@@ -133,7 +141,9 @@ func interp_writeback_refs(
         if pn.is_ref and i < args.len() and i < at.ChildCount(a, call):
             arg := at.Child(a, call, i)
             k := at.KindOf(a, arg)
-            if k == at.AST_IDENTIFIER:
+            if at.At(a, arg).ref_arg_ptr:
+                _skip := 0
+            else k == at.AST_IDENTIFIER:
                 mut where := 0
                 slot := env_find(ip, env, at.At(a, arg).name, where)
                 if slot >= 0:
@@ -152,6 +162,24 @@ func interp_writeback_refs(
     end
 end
 
+func deref_ptr_ref_args(
+    ip &: Interp, a &: at.Ast, call: int, fnnode: int, args: Vector<Value>, ptrs &: Vector<Value>
+):
+    repeat at.ChildCount(a, fnnode) in i:
+        if i >= args.len() or i >= at.ChildCount(a, call):
+            ret
+        end
+        mut keep := val_null()
+        pn := at.At(a, at.Child(a, fnnode, i))
+        v := args.get(i)
+        if pn.is_ref and at.At(a, at.Child(a, call, i)).ref_arg_ptr and v.kind == VAL_PTR and v.pe != PTR_STRUCT and v.pa != (0 as i64):
+            keep = v
+            args.set(i, mem_ptr_load(ip, a, v, 0 as i64))
+        end
+        ptrs.push(keep)
+    end
+end
+
 func invoke(
     ip &: Interp, a &: at.Ast, env: int, call: int, fnnode: int, defenv: int, has_this: bool, thisv: Value, args: Vector<Value>
 ): Value:
@@ -160,6 +188,9 @@ func invoke(
         ip.tb_call.push(call)
         ip.tb_file.push(ip.cur_file)
     end
+    mut ptrs := Vector {} as Vector<Value>
+    defer ptrs.free()
+    deref_ptr_ref_args(ip, a, call, fnnode, args, ptrs)
     r := call_func(ip, a, fnnode, defenv, has_this, thisv, args)
     if tracked:
         _tc := ip.tb_call.pop()
@@ -167,6 +198,12 @@ func invoke(
     end
     if ip.failed:
         ret r
+    end
+    repeat ptrs.len() in pi:
+        pv := ptrs.get(pi)
+        if pv.kind == VAL_PTR and pi < args.len():
+            mem_ptr_store(ip, a, pv, 0 as i64, args.get(pi))
+        end
     end
     interp_writeback_refs(ip, a, env, call, fnnode, args)
     ret r

@@ -272,7 +272,7 @@ if [ "${1:-}" = "--worker" ]; then
         [ -z "${extra_out:-}" ] || out="$out
 $extra_out"
         msg_missing=""
-        msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
+        msgs=$(grep -oE '(EXPECT-MSG|انتظار[- ]پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار[- ]پیام): //' | tr -d '\r')
         if [ -n "$msgs" ]; then
             while IFS= read -r want_msg; do
                 [ -n "$want_msg" ] || continue

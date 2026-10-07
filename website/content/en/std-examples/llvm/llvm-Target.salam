@@ -1,0 +1,51 @@
+import llvm
+import os
+
+func build(ctx: llvm.Context): llvm.Module:
+    mod := llvm.NewModule(ctx, "calc")
+    b := llvm.NewBuilder(ctx)
+    i32 := llvm.Int32Type(ctx)
+    mut two := Vector {} as Vector<llvm.Type>
+    two.push(i32)
+    two.push(i32)
+    fn := llvm.AddFunction(mod, "salam_add", llvm.FunctionType(i32, two, false))
+    llvm.PositionAtEnd(b, llvm.AppendBlock(ctx, fn, "entry"))
+    _ := llvm.Ret(b, llvm.Add(b, llvm.Param(fn, 0), llvm.Param(fn, 1), "s"))
+    llvm.FreeBuilder(b)
+    ret mod
+end
+
+func main:
+    llvm.InitTargets()
+    println llvm.DefaultTriple().len() > 0
+    println llvm.CodeGenLevelOf(llvm.OPT_O2) == llvm.CODEGEN_LEVEL_DEFAULT, llvm.PassPipelineOf(llvm.OPT_O3)
+    println llvm.OPT_O0, llvm.OPT_O1, llvm.OPT_OS, llvm.OPT_OZ
+    println llvm.CODEGEN_LEVEL_NONE, llvm.CODEGEN_LEVEL_LESS, llvm.CODEGEN_LEVEL_AGGRESSIVE
+    println llvm.CODEGEN_FILE_ASSEMBLY, llvm.CODEGEN_FILE_OBJECT, llvm.RELOC_DEFAULT, llvm.RELOC_PIC, llvm.CODE_MODEL_DEFAULT
+
+    machine := llvm.NewTargetMachine("", llvm.OPT_O2, false)
+    if not machine.ok:
+        println "the target machine was not built:", machine.err
+        ret
+    end
+    ctx := llvm.NewContext()
+    mod := build(ctx)
+    llvm.ApplyDataLayout(mod, machine.tm)
+    optimized := llvm.RunOpt(mod, machine.tm, llvm.OPT_O2)
+    println optimized.ok
+    dir := os.TempDir()
+    println llvm.EmitAsm(mod, machine.tm, dir + "/salam_add_en.s").ok
+    println llvm.EmitObject(mod, machine.tm, dir + "/salam_add_en.o").ok
+    println llvm.EmitBitcode(mod, dir + "/salam_add_en.bc").ok
+
+    println llvm.ParallelJobs() > 0
+    parts := llvm.ParallelPartitions(mod, 4)
+    println parts >= 1
+    mod2 := build(ctx)
+    parallel := llvm.OptimizeEmitParallel(mod2, machine.tm, llvm.OPT_O2, 2, dir + "/salam_part_en")
+    println parallel.ok, parallel.objects.len() >= 1
+    llvm.FreeModule(mod)
+    llvm.FreeModule(mod2)
+    llvm.FreeTargetMachine(machine.tm)
+    llvm.FreeContext(ctx)
+end

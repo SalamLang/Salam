@@ -1,0 +1,72 @@
+import graphql
+import encoding.value
+import net.http
+import net.router
+
+mut schema := graphql.NewSchema()
+
+func me(slot: i64):
+    ctx := graphql.Context(slot)
+    mut name := "guest"
+    if value.ObjectHas(ctx, "user"):
+        name = value.AsString(value.ObjectGet(ctx, "user"))
+    end
+    graphql.ResolveStr(slot, name + " (" + graphql.ParentTypeName(slot) + "." + graphql.FieldName(slot) + ")")
+end
+
+func add(slot: i64):
+    graphql.ResolveInt(slot, graphql.ArgInt(slot, "a") + graphql.ArgInt(slot, "b"))
+end
+
+func endpoint(ctx: i64):
+    res := graphql.HandleHttpSimple(schema, http.Ctx_method(ctx), http.Ctx_header(ctx, "Content-Type"), http.Ctx_body(ctx), http.Ctx_raw_query(ctx))
+    http.Ctx_status(ctx, res.status)
+    http.Ctx_set_header(ctx, "Content-Type", res.contentType)
+    http.Ctx_text(ctx, res.body)
+end
+
+func main:
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    graphql.ParseSchemaInto(schema, "type Query { me: String! add(a: Int!, b: Int!): Int! }", err)
+    _ := graphql.SetResolver(schema, "Query", "me", me)
+    _ := graphql.SetResolver(schema, "Query", "add", add)
+
+    mut r := router.NewRouter()
+    router.Post(r, "/graphql", endpoint)
+    router.Get(r, "/graphql", endpoint)
+    mut srv := http.NewServer(19640)
+    http.Use(srv, r)
+    _ := http.RunBackground(srv)
+
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "x", value.ValueInt(40))
+    body := graphql.BuildRequestBody("query Sum($x: Int!) { add(a: $x, b: 2) }", "Sum", vars)
+    println body
+    mut headers := http.NewHeaders()
+    headers.insert("Content-Type", "application/json")
+    resp := http.PostWith("http://127.0.0.1:19640/graphql", body, headers)
+    println http.Status(resp), http.Body(resp)
+    mut cr := graphql.ParseResponse(http.Body(resp))
+    println graphql.ResponseOk(cr), cr.hasData, value.AsInt(graphql.ResponseField(cr, "add"))
+    graphql.FreeClientResponse(cr)
+
+    qs := graphql.BuildRequestQueryString("{ me }", "", value.ValueNull())
+    resp2 := http.Get("http://127.0.0.1:19640/graphql?" + qs)
+    println http.Body(resp2)
+    resp3 := http.PostWith("http://127.0.0.1:19640/graphql", graphql.BuildQueryBody("{ nope }"), headers)
+    mut cr3 := graphql.ParseResponse(http.Body(resp3))
+    println http.Status(resp3), graphql.ResponseOk(cr3), graphql.ResponseErrorMessage(cr3)
+    graphql.FreeClientResponse(cr3)
+
+    mut req := graphql.ParseHttpRequestJSON(`{"query":"{ me }"}`)
+    mut context := value.NewValueObject()
+    value.ObjectSet(context, "user", value.ValueString("Maryam"))
+    mut res := graphql.HandleRequest(schema, req, value.ValueNull(), context)
+    println graphql.ResultToJSON(res)
+    graphql.FreeResult(res)
+    graphql.FreeHttpRequest(req)
+    bad := graphql.ParseHttpRequest("PUT", "application/json", "{}", "")
+    println bad.ok, bad.error
+    resp4 := graphql.HandleHttp(schema, "POST", "application/json", "not json", "", value.ValueNull(), value.ValueNull())
+    println resp4.status
+end

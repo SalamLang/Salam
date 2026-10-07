@@ -1,0 +1,69 @@
+import aws
+
+func main:
+    mut cfg := aws.ForAws("eu-west-1", "")
+    cfg = aws.WithCredentials(cfg, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+    at := 1369353600 as i64
+
+    listing := `<ListBucketResult><Name>photos</Name><Prefix>2026/</Prefix><KeyCount>2</KeyCount><IsTruncated>true</IsTruncated><NextContinuationToken>tok2</NextContinuationToken>
+<Contents><Key>2026/a.jpg</Key><Size>1200</Size><ETag>"aa11"</ETag><LastModified>2026-03-20T10:00:00.000Z</LastModified><StorageClass>STANDARD</StorageClass></Contents>
+<Contents><Key>2026/b.jpg</Key><Size>800</Size><ETag>"bb22"</ETag><LastModified>2026-03-21T10:00:00.000Z</LastModified><StorageClass>STANDARD</StorageClass></Contents>
+<CommonPrefixes><Prefix>2026/thumbs/</Prefix></CommonPrefixes></ListBucketResult>`
+    mut list := aws.ParseListing(listing, 200)
+    println list.ok, list.name, list.truncated, list.next_token, aws.ListCount(list), aws.ListTotalSize(list)
+    entry := aws.ListAt(list, 0)
+    println entry.key, entry.size, entry.etag, entry.last_modified, entry.storage_class
+    println aws.ListPrefixCount(list), aws.ListPrefixAt(list, 0)
+    println aws.ListToResult(list).ok
+    aws.ListFree(list)
+
+    mut keys := aws.NewKeyList()
+    aws.KeyPush(keys, "tmp/1")
+    aws.KeyPush(keys, "tmp/2")
+    println aws.KeyCount(keys), aws.KeyAt(keys, 1)
+    aws.KeyFree(keys)
+    println aws.S3ExpiryRule("logs/", 30, 7)
+
+    queue := "https://sqs.eu-west-1.amazonaws.com/123456789012/jobs"
+    reply := "<ReceiveMessageResponse><ReceiveMessageResult><Message><MessageId>m-1</MessageId><ReceiptHandle>AQEB==</ReceiptHandle><MD5OfBody>fafb</MD5OfBody><Body>invoice 42</Body><Attribute><Name>ApproximateReceiveCount</Name><Value>2</Value></Attribute><MessageAttribute><Name>tenant</Name><Value><DataType>String</DataType><StringValue>acme</StringValue></Value></MessageAttribute></Message></ReceiveMessageResult></ReceiveMessageResponse>"
+    mut messages := aws.ParseReceive(reply, 200)
+    println messages.ok, aws.MessageCount(messages)
+    msg := aws.MessageAt(messages, 0)
+    println msg.id, msg.body, msg.receipt, msg.receive_count, aws.MessageAttribute(msg, "tenant")
+    aws.MessageListFree(messages)
+
+    mut out := aws.OutMessage { body = "job", delay = 30, group_id = "g1", dedup_id = "d1" }
+    aws.HeaderSet(out.attributes, "tenant", "acme")
+    mut send := aws.SqsSendCall(queue, out)
+    println aws.CallBodyText(send)
+    aws.CallFree(send)
+    mut receive := aws.SqsReceiveCall(queue, aws.ReceiveOptions { max_messages = 99, wait_seconds = 60 })
+    println aws.CallBodyText(receive)
+    aws.CallFree(receive)
+    println aws.SQS_VERSION, aws.SQS_MAX_MESSAGES, aws.SQS_MAX_WAIT, aws.SQS_MAX_BATCH
+    println aws.SqsRedrivePolicy("arn:aws:sqs:eu-west-1:123456789012:dead", 5)
+
+    mut call := aws.NewQueryCall("sts", "GetCallerIdentity", aws.STS_VERSION)
+    aws.CallParam(call, "Name", "ali")
+    aws.CallParamInt(call, "DurationSeconds", 900)
+    println aws.CallBodyText(call)
+    head := aws.PreparedCall(cfg, call, at)
+    println head.find("POST / HTTP/1.1") == 0, head.find("Host: sts.eu-west-1.amazonaws.com") >= 0
+    aws.CallFree(call)
+
+    mut dynamo := aws.NewJsonCall("dynamodb", "DynamoDB_20120810.ListTables", "{}")
+    aws.CallRegion(dynamo, "eu-central-1")
+    aws.CallHeader(dynamo, "x-amz-meta-app", "salam")
+    println aws.PreparedCall(cfg, dynamo, at).find("X-Amz-Target: DynamoDB_20120810.ListTables") >= 0
+    logs := aws.NewJson11Call("logs", "Logs_20140328.DescribeLogGroups", "{}")
+    println logs.content_type
+
+    mut rest := aws.NewRestCall("lambda", "GET", "/2015-03-31/functions")
+    aws.CallQuery(rest, "MaxItems", "5")
+    aws.CallBody(rest, "", "application/json")
+    aws.CallEndpoint(rest, "http://127.0.0.1:4566")
+    println aws.PreparedCall(cfg, rest, at).find("GET /2015-03-31/functions?MaxItems=5 HTTP/1.1") == 0
+
+    failure := `{"__type":"com.amazon#ResourceNotFoundException","message":"Table not found"}`
+    println aws.ServiceErrorCode(failure), aws.ServiceErrorMessage(failure, 400)
+end

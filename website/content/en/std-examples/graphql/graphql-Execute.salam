@@ -1,0 +1,95 @@
+import graphql
+import encoding.value
+
+func book(id: str, title: str, year: i64): value.Value:
+    mut b := value.NewValueObject()
+    value.ObjectSet(b, "id", value.ValueString(id))
+    value.ObjectSet(b, "title", value.ValueString(title))
+    value.ObjectSet(b, "year", value.ValueInt(year))
+    ret b
+end
+
+func hello(slot: i64):
+    graphql.ResolveStr(slot, "Hello " + graphql.ArgStr(slot, "name"))
+end
+
+func books(slot: i64):
+    mut list := value.NewValueArray()
+    value.ArrayPush(list, book("1", "The Blind Owl", 1936))
+    value.ArrayPush(list, book("2", "Savushun", 1969))
+    graphql.Resolve(slot, list)
+end
+
+func one_book(slot: i64):
+    if graphql.ArgInt(slot, "id") == 2:
+        graphql.Resolve(slot, book("2", "Savushun", 1969))
+    else:
+        graphql.ResolveNull(slot)
+    end
+end
+
+func age(slot: i64):
+    year := value.AsInt(graphql.ParentField(slot, "year"))
+    graphql.ResolveInt(slot, 2026 - year)
+end
+
+func score(slot: i64):
+    graphql.ResolveFloat(slot, graphql.ArgFloat(slot, "base") * 2.0)
+end
+
+func in_stock(slot: i64):
+    graphql.ResolveBool(slot, graphql.ArgBool(slot, "only") or graphql.HasArg(slot, "x"))
+end
+
+func broken(slot: i64):
+    graphql.Fail(slot, "service unavailable")
+end
+
+func main:
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    mut s := graphql.ParseSchema(`
+type Query {
+  hello(name: String = "world"): String!
+  books: [Book!]!
+  book(id: Int!): Book
+  score(base: Float!): Float!
+  inStock(only: Boolean!): Boolean!
+  broken: String
+}
+type Book {
+  id: ID!
+  title: String!
+  year: Int!
+  age: Int!
+}`, err)
+    _ := graphql.SetResolver(s, "Query", "hello", hello)
+    _ := graphql.SetResolver(s, "Query", "books", books)
+    _ := graphql.SetResolver(s, "Query", "book", one_book)
+    _ := graphql.SetResolver(s, "Query", "score", score)
+    _ := graphql.SetResolver(s, "Query", "inStock", in_stock)
+    _ := graphql.SetResolver(s, "Query", "broken", broken)
+    _ := graphql.SetResolver(s, "Book", "age", age)
+    println graphql.HasResolver(s, "Book", "age"), graphql.HasResolver(s, "Book", "title")
+
+    mut r := graphql.Run(s, `{ hello books { title year age } }`)
+    println graphql.ResultOk(r)
+    println graphql.ResultToJSONStable(r)
+    graphql.FreeResult(r)
+
+    mut vars := value.NewValueObject()
+    value.ObjectSet(vars, "id", value.ValueInt(2))
+    mut r2 := graphql.ExecuteSource(s, `query One($id: Int!) { book(id: $id) { title } missing: book(id: 9) { title } score(base: 1.5) inStock(only: true) hello(name: "Maryam") }`, "One", vars, value.ValueNull(), value.ValueNull())
+    println graphql.ResultToJSONStable(r2)
+    graphql.FreeResult(r2)
+
+    mut r3 := graphql.Run(s, `{ broken hello }`)
+    println graphql.ResultOk(r3), graphql.ResultErrorMessage(r3)
+    println graphql.ResultToJSONStable(r3)
+    graphql.FreeResult(r3)
+
+    mut r4 := graphql.Run(s, `{ nope }`)
+    println graphql.ResultErrorMessage(r4)
+    graphql.FreeResult(r4)
+    graphql.ResetSlots()
+    graphql.FreeSchema(s)
+end

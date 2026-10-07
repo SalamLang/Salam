@@ -8,7 +8,7 @@ export SALAM_STD
 want="$root/${src%.salam}.out"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-cd "$tmp"
+cd "$tmp" || exit 1
 
 if [ ! -f "$want" ]; then
     if grep -q "^چیدمان:\|^layout:" "$root/$src"; then

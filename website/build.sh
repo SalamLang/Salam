@@ -15,8 +15,8 @@ esac
 export SALAM
 jobs=$(nproc 2>/dev/null || echo 4)
 fail=0
-ls website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
-    xargs -P "$jobs" -n 1 sh website/check-example.sh || fail=1
+printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
+    xargs -0 -P "$jobs" -n 1 sh website/check-example.sh || fail=1
 [ "$fail" -eq 0 ] || {
     echo "website: example output does not match its .out file" >&2
     exit 1

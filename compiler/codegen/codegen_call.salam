@@ -287,6 +287,9 @@ func cg_lower_print_free(
         end
         co.SbPuts(sb, "const char* " + tv + " = " + conv + "; ")
         co.SbPuts(sb, "salam_rt_write(" + fd + ", (void *)" + tv + ", salam_cstrlen(" + tv + ")); ")
+        if cg_is_derived_call(a, sg.expr):
+            co.SbPuts(sb, CG_MEM_FREE + "((void*)" + tv + "); ")
+        end
     end
     co.SbPuts(sb, "})")
     r := co.SbCstr(sb)
@@ -315,6 +318,9 @@ func cg_lower_print_buf(
         if sg.kind == PF_STR:
             co.SbPuts(pre, "const char* " + tv + " = (" + e + "); ")
             co.SbPuts(body, "salam_out_str(" + tv + "); ")
+            if cg_is_derived_call(a, sg.expr):
+                co.SbPuts(post, CG_MEM_FREE + "((void*)" + tv + "); ")
+            end
         else sg.kind == PF_BOOL:
             co.SbPuts(pre, "int " + tv + " = (" + e + ") ? 1 : 0; ")
             co.SbPuts(body, "salam_out_bool(" + tv + "); ")
@@ -440,6 +446,7 @@ func cg_lower_print(
     mut fb := co.SbNew()
     mut ab := co.SbNew()
     mut pre := co.SbNew()
+    mut post := co.SbNew()
     repeat segs.len() in i2:
         sg2 := segs.get(i2)
         if sg2.kind == PF_LIT:
@@ -491,6 +498,13 @@ func cg_lower_print(
             co.SbPuts(fb, pf_spec_impl(sg2.kind))
             av = e
         end
+        if cg_is_derived_call(a, sg2.expr):
+            g.tmpn += 1
+            dv := "__pd" + co.I64Toa(g.tmpn as i64)
+            co.SbPuts(pre, "const char* " + dv + " = " + av + "; ")
+            co.SbPuts(post, CG_MEM_FREE + "((void*)" + dv + "); ")
+            av = dv
+        end
         if nseq > 1 or err:
             g.tmpn += 1
             pi := g.tmpn
@@ -503,9 +517,19 @@ func cg_lower_print(
     cfmt := cg_cescape(co.SbCstr(fb))
     al := co.SbCstr(ab)
     prestr := co.SbCstr(pre)
+    poststr := co.SbCstr(post)
     co.SbFree(fb)
     co.SbFree(ab)
     co.SbFree(pre)
+    co.SbFree(post)
+    if str.Len(poststr) > 0:
+        if err:
+            ret "({ " + prestr + cg_order_stdout(
+                g, "", "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; " + CG_MEM_FREE + "((void*)__erb); } })"
+            ) + "; " + poststr + "})"
+        end
+        ret "({ " + prestr + cg_order_stdout(g, "", "printf(" + cfmt + al + ")") + "; " + poststr + "})"
+    end
     if err:
         ret cg_order_stdout(
             g, prestr, "({ int32_t __ern = snprintf((void*)0, (uint64_t)0, " + cfmt + al + "); char *__erb = __ern > 0 ? (char*)" + CG_MEM_ALLOC + "((uint64_t)__ern + 1) : (char*)0; if (__erb) snprintf(__erb, " + "(uint64_t)__ern + 1, " + cfmt + al + "); if (__erb) { int64_t __err_r = (int64_t)SALAM_RAW_WRITE(2, " + "__erb, __ern); (void)__err_r; } })"

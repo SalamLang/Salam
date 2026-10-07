@@ -104,6 +104,43 @@ func to_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, val: Llv): str:
     ret r
 end
 
+func lv_is_derived_call(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    if nn.kind != at.AST_CALL or not nn.synthetic or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
+end
+
+func lv_dv_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    ts := nn.type_str
+    if str.Len(ts) == 0:
+        ret false
+    end
+    if not is_str(s, ts):
+        ret str.Equals(ts, "char") or is_float(ts) or (is_int_ts(ts) and not is_bool(ts))
+    end
+    if nn.kind == at.AST_IDENTIFIER:
+        ret str.Equals(nn.name, "_sb")
+    end
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS:
+        ret true
+    end
+    if nn.kind != at.AST_CALL or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
+end
+
 func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
     node := at.Get(a, n)
     ts := node.type_str
@@ -167,6 +204,14 @@ func binary_string(
         r := new_tmp(v)
         need(v, LV_H_STRCAT)
         emit(v, r + " = call ptr @salam_ll_strcat(ptr " + l + ", ptr " + r2 + ")")
+        if v.in_derive:
+            if lv_dv_owned(s, a, node.a):
+                emit(v, "call void @free(ptr " + l + ")")
+            end
+            if lv_dv_owned(s, a, node.b):
+                emit(v, "call void @free(ptr " + r2 + ")")
+            end
+        end
         out2 = make_llv(r, "str")
         ret true
     end
@@ -607,6 +652,9 @@ func lower_print_free(
             ref = strconst(v, "?")
         end
         write_free(v, ref, err)
+        if sg.kind == cg.PF_STR and lv_is_derived_call(a, sg.expr):
+            emit(v, "call void @free(ptr " + ref + ")")
+        end
         i += 1
     end
 end
@@ -670,6 +718,12 @@ func lower_print_buf(
         emit(v, "call void @salam_out_end1()")
     end
     emit(v, "call void @salam_out_unlock()")
+    repeat segs.len() in fi:
+        fsg := segs.get(fi)
+        if fsg.kind == cg.PF_STR and lv_is_derived_call(a, fsg.expr):
+            emit(v, "call void @free(ptr " + refs.get(fi) + ")")
+        end
+    end
 end
 
 func lv_lower_print(
@@ -726,6 +780,8 @@ func lv_lower_print(
 
     mut fmt := co.SbNew()
     mut argsb := co.SbNew()
+    mut dfree := Vector {} as Vector<str>
+    defer dfree.free()
     repeat segs.len() in k:
         sg := segs.get(k)
         if sg.kind == cg.PF_LIT:
@@ -745,6 +801,9 @@ func lv_lower_print(
             mut av := ""
             if sg.kind == cg.PF_STR:
                 av = ", ptr " + val.ref
+                if lv_is_derived_call(a, sg.expr):
+                    dfree.push(val.ref)
+                end
             else sg.kind == cg.PF_BOOL:
                 t2 := strconst(v, "true")
                 f2 := strconst(v, "false")
@@ -797,6 +856,9 @@ func lv_lower_print(
             t2b := new_tmp(v)
             emit(v, t2b + " = call i32 @fflush(ptr null)")
         end
+    end
+    repeat dfree.len() in di:
+        emit(v, "call void @free(ptr " + dfree.get(di) + ")")
     end
     co.SbFree(fmt)
     co.SbFree(argsb)

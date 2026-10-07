@@ -188,3 +188,278 @@ func scan_utf8_char(L &: Lx):
     end
     emit_val(L, tok.TK_UTF8_CHAR, b, text, tok.ValueStr(bytes))
 end
+
+func blk_ws(c: int): bool:
+    ret c == 32 or c == 9 or c == 13
+end
+
+func blk_line_end(L &: Lx, from: int): int:
+    mut i := from
+    until i < L.n and byte_at(L.s, i) != 10:
+        i += 1
+    end
+    ret i
+end
+
+func blk_find_close(L &: Lx, from: int, line_start &: int, close_at &: int): bool:
+    mut i := from
+    until i < L.n:
+        mut j := i
+        until j < L.n and (byte_at(L.s, j) == 32 or byte_at(L.s, j) == 9):
+            j += 1
+        end
+        if j + 2 < L.n and byte_at(L.s, j) == 96 and byte_at(L.s, j + 1) == 96 and byte_at(L.s, j + 2) == 96:
+            line_start = i
+            close_at = j
+            ret true
+        end
+        i = blk_line_end(L, i) + 1
+    end
+    ret false
+end
+
+func blk_is_open(L &: Lx, i: int): bool:
+    ret byte_at(L.s, i) == 36 and byte_at(L.s, i + 1) == 123 and byte_at(L.s, i + 2) == 123
+end
+
+func blk_is_escape(L &: Lx, i: int): bool:
+    ret byte_at(L.s, i) == 36 and blk_is_open(L, i + 1)
+end
+
+func blk_skip_quoted(L &: Lx, from: int, line_end: int): int:
+    q := byte_at(L.s, from)
+    if q == 194:
+        mut g := from + 2
+        until g + 1 < line_end and not (byte_at(L.s, g) == 194 and byte_at(L.s, g + 1) == 187):
+            g += 1
+        end
+        ret g + 1 < line_end ? g + 2 : (0 - 1)
+    end
+    mut i := from + 1
+    until i < line_end:
+        c := byte_at(L.s, i)
+        if c == 92 and q != 96:
+            i += 2
+            continue
+        end
+        if c == q:
+            ret i + 1
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func blk_inj_end(L &: Lx, from: int, line_end: int): int:
+    mut depth := 0
+    mut i := from
+    until i < line_end:
+        c := byte_at(L.s, i)
+        if c == 34 or c == 39 or c == 96 or (c == 194 and byte_at(L.s, i + 1) == 171):
+            i = blk_skip_quoted(L, i, line_end)
+            if i < 0:
+                ret 0 - 1
+            end
+            continue
+        end
+        if c == 123:
+            depth += 1
+        else c == 125:
+            if depth == 0:
+                ret byte_at(L.s, i + 1) == 125 ? i : (0 - 1)
+            end
+            depth -= 1
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func blk_has_injection(L &: Lx, from: int, upto: int): bool:
+    mut i := from
+    until i < upto:
+        if blk_is_escape(L, i):
+            i += 4
+            continue
+        end
+        if blk_is_open(L, i):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func blk_emit_piece(L &: Lx, piece &: str.StringBuilder):
+    text := str.BufStr(piece)
+    emit_val(L, tok.TK_RAW_STRING, lx_pos(L), "`" + text + "`", tok.ValueStr(text))
+    str.BufReset(piece)
+end
+
+func blk_lex_injection(L &: Lx, e: int):
+    until L.pos < e:
+        if blk_ws(peek(L)):
+            adv(L)
+            continue
+        end
+        scan_one(L)
+    end
+end
+
+func scan_block(L &: Lx):
+    start := L.pos
+    b := lx_pos(L)
+    adv(L)
+    adv(L)
+    adv(L)
+    mut bad_open := false
+    until not at_end(L) and peek(L) != 10:
+        if not blk_ws(peek(L)) and not bad_open:
+            error_at(L, lx_pos(L), "a ``` text block starts on the next line: put nothing after the opening ```")
+            bad_open = true
+        end
+        adv(L)
+    end
+    mut line_start := 0
+    mut close_at := 0
+    if at_end(L) or not blk_find_close(L, L.pos + 1, line_start, close_at):
+        error_at(L, b, "unterminated ``` text block: close it with ``` at the start of its own line")
+        until not at_end(L):
+            adv(L)
+        end
+        emit_val(L, tok.TK_RAW_STRING, b, lex_slice(L, start), tok.ValueStr(""))
+        ret
+    end
+    adv(L)
+    indent := str.SubstrIn(L.s, line_start, close_at - line_start)
+    ilen := close_at - line_start
+    has_inj := blk_has_injection(L, L.pos, line_start)
+    desugar := not L.keep_comments and has_inj
+    split := L.keep_comments and L.split_blocks and has_inj
+    mut seg_start := start
+    mut seg_b := b
+    mut piece := str.NewBuilder()
+    mut whole := str.NewBuilder()
+    if desugar:
+        emit(L, tok.TK_LPAREN, lx_pos(L), "(")
+    end
+    mut first := true
+    until L.pos < line_start:
+        if not first:
+            str.BufAppendChar(piece, 10)
+            str.BufAppendChar(whole, 10)
+        end
+        first = false
+        le := blk_line_end(L, L.pos)
+        mut blank := true
+        mut k := L.pos
+        until k < le:
+            if not blk_ws(byte_at(L.s, k)):
+                blank = false
+                break
+            end
+            k += 1
+        end
+        if blank:
+            until L.pos < le:
+                adv(L)
+            end
+            adv(L)
+            continue
+        end
+        if ilen > 0 and not str.Equals(str.SubstrIn(L.s, L.pos, ilen), indent):
+            error_at(L, lx_pos(L), "this line of the ``` text block is indented less than its closing ```")
+            until not (L.pos < le and blk_ws(peek(L))):
+                adv(L)
+            end
+        else:
+            repeat ilen:
+                adv(L)
+            end
+        end
+        until L.pos < le:
+            c := peek(L)
+            if c == 13 and L.pos + 1 == le:
+                adv(L)
+                continue
+            end
+            if blk_is_escape(L, L.pos):
+                str.BufAppend(piece, "${{")
+                str.BufAppend(whole, "${{")
+                repeat 4:
+                    adv(L)
+                end
+                continue
+            end
+            if blk_is_open(L, L.pos):
+                ib := lx_pos(L)
+                e := blk_inj_end(L, L.pos + 3, le)
+                if e < 0:
+                    error_at(L, ib, "unterminated ${{ injection: close it with }} on the same line")
+                    until L.pos < le:
+                        adv(L)
+                    end
+                    continue
+                end
+                mut empty := true
+                mut q := L.pos + 3
+                until q < e:
+                    if not blk_ws(byte_at(L.s, q)):
+                        empty = false
+                        break
+                    end
+                    q += 1
+                end
+                if empty:
+                    error_at(L, ib, "empty ${{ }} injection: put an expression between ${{ and }}")
+                    until L.pos < e + 2:
+                        adv(L)
+                    end
+                    continue
+                end
+                adv(L)
+                adv(L)
+                adv(L)
+                if desugar:
+                    blk_emit_piece(L, piece)
+                    emit(L, tok.TK_PLUS, lx_pos(L), "+")
+                    emit(L, tok.TK_LPAREN, lx_pos(L), "(")
+                    blk_lex_injection(L, e)
+                    emit(L, tok.TK_RPAREN, lx_pos(L), ")")
+                    emit(L, tok.TK_PLUS, lx_pos(L), "+")
+                else split:
+                    emit_val(L, tok.TK_RAW_STRING, seg_b, lex_slice(L, seg_start), tok.ValueStr(""))
+                    blk_lex_injection(L, e)
+                else:
+                    until L.pos < e:
+                        adv(L)
+                    end
+                end
+                if split:
+                    seg_start = L.pos
+                    seg_b = lx_pos(L)
+                end
+                adv(L)
+                adv(L)
+                continue
+            end
+            str.BufAppendChar(piece, c)
+            str.BufAppendChar(whole, c)
+            adv(L)
+        end
+        adv(L)
+    end
+    until L.pos < close_at + 3:
+        adv(L)
+    end
+    if desugar:
+        blk_emit_piece(L, piece)
+        emit(L, tok.TK_RPAREN, lx_pos(L), ")")
+    else split:
+        emit_val(L, tok.TK_RAW_STRING, seg_b, lex_slice(L, seg_start), tok.ValueStr(""))
+    else:
+        emit_val(L, tok.TK_RAW_STRING, b, lex_slice(L, start), tok.ValueStr(str.BufStr(whole)))
+    end
+    str.BufFree(piece)
+    str.BufFree(whole)
+end

@@ -354,17 +354,17 @@ verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
 `str.CharAt(s, i)`, classify with `str.IsDigit(code)` etc.
 
-**String/char literal forms** (no interpolation exists; build strings with `+`
-or `fmt.Sprintf`):
+**String/char literal forms** (values go into text with a ` ``` ` text block and
+`${{ expr }}`, see below, or with `+` and `fmt.Sprintf`):
 
-| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                                                                                                                                                                |
-| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                                                                                                                                                     |
-| `"""text"""` | `str`                    | yes                                              | **yes**   | triple-double-quote is the _only_ multiline form; still processes escapes                                                                                                                                                                                                                                                            |
-| `'c'`        | `char`                   | yes                                              | -         | one raw byte unless escaped, not UTF-8 safe for non-ASCII                                                                                                                                                                                                                                                                            |
-| `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. **There is no triple-backtick form**; ` ``` ` lexes as an empty backtick string followed by a runaway one, not a multiline literal. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
-| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                                                                                                                                                           |
-| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                                                                                                                                                                 |
+| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                            |
+| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                 |
+| `"""text"""` | `str`                    | yes                                              | **yes**   | multiline, still processes escapes; for code or long text prefer a ` ``` ` text block                                                                                                            |
+| `'c'`        | `char`                   | yes                                              | -         | one raw byte unless escaped, not UTF-8 safe for non-ASCII                                                                                                                                        |
+| `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
+| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                       |
+| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                             |
 
 **Prefer backtick strings for any text containing literal `"`**: JSON blobs,
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
@@ -382,6 +382,42 @@ data := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"
 Only fall back to `"..."` with escaped quotes when the string must also contain
 a literal backtick, or when it needs an escape sequence (`\n`, `\uXXXX`, …)
 that backtick strings don't process.
+
+**Text blocks** (` ``` `) hold multi-line text, such as generated C, LLVM IR,
+SQL, HTML or help text, without `"\n" + "..."` chains. The opening ` ``` ` ends
+its line; the closing ` ``` ` starts its own line, and its indentation is
+removed from every line, so the block sits indented in the code. The first and
+last line breaks are not part of the value. The text is raw like a backtick
+string: `\n`, `"` and `'` are kept as typed.
+
+````salam
+const OB_SIZE := 65536
+
+func header(name: str): str:
+    ret ```
+        #define SALAM_OB_SZ ${{ OB_SIZE }}
+        #define HALF ${{OB_SIZE / 2}}
+        /* built for ${{ name }} */
+        static int nl(void) { return '\n' == 10; }
+        ```
+end
+````
+
+- `${{ expr }}` puts the value of any expression into the text: `str`,
+  numbers, `bool` and `char`, the same as `+` on a string. Spaces inside are
+  free (`${{x}}`, `${{ x }}`), but `$`, `{{` and `}}` must be written without
+  spaces in them, so `$ {{x}}` and `} }` are plain text.
+- When every injected value is a constant, the whole block folds into one
+  literal at compile time; otherwise it becomes a `+` chain.
+- `$${{` writes the characters `${{`. A lone `$`, `{{`, `}}` or `$$` is plain
+  text, so C, JS and shell code need no escaping.
+- An injection must close on the line it opens. Errors: text after the opening
+  ` ``` `, a missing closing ` ``` `, a line indented less than the closing
+  ` ``` `, an unclosed `${{` and an empty `${{ }}`.
+- It works the same in Persian files: `${{ نام }}`, and `salam translate`
+  translates the code inside `${{ }}` while keeping the text as it is.
+- `std/` and `compiler/` can only use text blocks once a released seed
+  compiler understands them (see the seed lag rule).
 
 **Type aliases:** `type NodeId = int`, `type Bytes = u8*` gives a new name for an
 existing type (declared at top level, before functions). An alias is the same
@@ -2531,6 +2567,9 @@ All of §6 applies. In addition:
    `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
    with no `«` before it is its own error too, rather than being swallowed
    into the identifier that follows it.
+   Text blocks (` ``` `, §6) work the same in a Persian file, and the code
+   inside `${{ }}` uses Persian names: `${{ نام }}`, `${{ عدد + 1 }}`,
+   `${{ «}}» }}`.
 3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
    `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
    Persian file. See §8.

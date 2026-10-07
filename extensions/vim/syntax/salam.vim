@@ -58,6 +58,13 @@ syn match salamEscapeError contained "\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|[0abfnrtv\"'
 syn region salamString start=+"+ skip=+\\\\\|\\"+ end=+"+ oneline
       \ contains=salamEscape,salamEscapeError,@Spell
 syn region salamRawString start=+`+ end=+`+ contains=@Spell
+syn region salamTextBlock matchgroup=salamTextBlockDelim start=+```+ end=+^\s*\zs```+
+      \ contains=salamTextBlockEscape,salamInjection,@Spell
+syn match  salamTextBlockEscape contained "\$\${{"
+syn region salamInjection contained oneline matchgroup=salamInjectionDelim start=+\${{+ end=+}}+
+      \ contains=TOP
+syn region salamInjectionBraces contained transparent oneline matchgroup=salamDelimiter start=+{+ end=+}+
+      \ containedin=salamInjection,salamInjectionBraces contains=TOP
 syn region salamTripleString start=+"""+ end=+"""+ keepend
       \ contains=salamEscape,salamEscapeError,@Spell
 syn match  salamCharacter "u\='\%(\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|.\)\|[^'\\]\)'"
@@ -104,6 +111,10 @@ hi def link salamAnnotation    PreProc
 hi def link salamString        String
 hi def link salamTripleString  String
 hi def link salamRawString     String
+hi def link salamTextBlock     String
+hi def link salamTextBlockDelim String
+hi def link salamTextBlockEscape SpecialChar
+hi def link salamInjectionDelim Special
 hi def link salamCharacter     Character
 hi def link salamEscape        SpecialChar
 hi def link salamEscapeError   Error

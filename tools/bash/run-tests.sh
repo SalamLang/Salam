@@ -269,6 +269,8 @@ if [ "${1:-}" = "--worker" ]; then
     wk_errors() {
         code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
         out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+        [ -z "${extra_out:-}" ] || out="$out
+$extra_out"
         msg_missing=""
         msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
         if [ -n "$msgs" ]; then
@@ -309,27 +311,7 @@ EOF_MSGS
         if [ -n "$lfail" ]; then
             echo "FAIL $label ($lfail)"
         else
-            out="$extra_out"
-            msg_missing=""
-            msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
-            if [ -n "$msgs" ]; then
-                while IFS= read -r want_msg; do
-                    [ -n "$want_msg" ] || continue
-                    printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
-                done <<EOF_MSGS
-$msgs
-EOF_MSGS
-            fi
-            if [ -n "$lcode" ] && printf '%s\n' "$out" | grep -qF "$lcode" && [ -z "$msg_missing" ]; then
-                echo "PASS $label ($lcode)"
-            else
-                if [ -n "$msg_missing" ]; then
-                    echo "FAIL $label (want message '$msg_missing')"
-                else
-                    echo "FAIL $label (want $lcode)"
-                fi
-                echo "  $out"
-            fi
+            wk_errors
         fi
         extra_out=""
     }

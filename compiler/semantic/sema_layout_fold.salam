@@ -1,0 +1,478 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const LV_NONE := 0
+const LV_INT := 1
+const LV_FLOAT := 2
+const LV_BOOL := 3
+const LV_STR := 4
+
+const LF_OK := 0
+const LF_RUNTIME := 1
+const LF_REPORTED := 2
+
+struct LayVal:
+    pub kind: int = LV_NONE
+    pub i: i64 = 0 as i64
+    pub f: f64 = 0.0
+    pub b: bool = false
+    pub s: str = ""
+end
+
+struct LayFoldCx:
+    pub prog: int = 0
+    pub shadow: Vector<str> = Vector {}
+    pub used: Vector<str> = Vector {}
+    pub err_node: int = 0
+    pub err_msg: str = ""
+end
+
+func lv_text(v: LayVal): str:
+    if v.kind == LV_STR:
+        ret v.s
+    end
+    if v.kind == LV_INT:
+        ret co.I64Toa(v.i)
+    end
+    if v.kind == LV_FLOAT:
+        ret co.Format1("%g", co.ArgFloat(v.f))
+    end
+    if v.kind == LV_BOOL:
+        ret v.b ? "true" : "false"
+    end
+    ret ""
+end
+
+func lv_num(v: LayVal): bool:
+    ret v.kind == LV_INT or v.kind == LV_FLOAT
+end
+
+func lv_flt(v: LayVal): f64:
+    ret v.kind == LV_FLOAT ? v.f : v.i as f64
+end
+
+func lay_const_sym(s &: Sema, name: str): int:
+    sid := scope_lookup(s, s.cur, name)
+    if sid <= 0:
+        ret 0
+    end
+    sy := s.syms.get(sid)
+    if sy.kind == SYM_CONST and sy.decl != 0:
+        ret sid
+    end
+    ret 0
+end
+
+func lay_fold_err(cx &: LayFoldCx, nid: int, msg: str): int:
+    if cx.err_node == 0:
+        cx.err_node = nid
+        cx.err_msg = msg
+    end
+    ret LF_REPORTED
+end
+
+func lay_const_decl(a &: at.Ast, prog: int, name: str): int:
+    if prog == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_CONST_DECL and str.Equals(d.name, name):
+            ret did
+        end
+    end
+    ret 0
+end
+
+func lay_fold_ident(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
+    name := at.Get(a, nid).name
+    repeat cx.shadow.len() in i:
+        if str.Equals(cx.shadow.get(i), name):
+            ret LF_RUNTIME
+        end
+    end
+    decl := lay_const_decl(a, cx.prog, name)
+    if decl == 0:
+        ret LF_RUNTIME
+    end
+    init := at.Get(a, decl).a
+    if init == 0:
+        ret LF_RUNTIME
+    end
+    cx.used.push(name)
+    ret lay_fold(cx, a, init, out, depth + 1)
+end
+
+func lay_fold_unary(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
+    n := at.Get(a, nid)
+    mut v := LayVal {}
+    rc := lay_fold(cx, a, n.a, v, depth + 1)
+    if rc != LF_OK:
+        ret rc
+    end
+    if n.op == tok.TK_MINUS and v.kind == LV_INT:
+        if v.i == fold_i64_min():
+            ret lay_fold_err(cx, nid, i18.Tr("this layout value overflows a 64-bit integer"))
+        end
+        out = LayVal { kind = LV_INT, i = 0 - v.i }
+        ret LF_OK
+    end
+    if n.op == tok.TK_MINUS and v.kind == LV_FLOAT:
+        out = LayVal { kind = LV_FLOAT, f = 0.0 - v.f }
+        ret LF_OK
+    end
+    if n.op == tok.TK_PLUS and lv_num(v):
+        out = v
+        ret LF_OK
+    end
+    if n.op == tok.TK_NOT and v.kind == LV_BOOL:
+        out = LayVal { kind = LV_BOOL, b = not v.b }
+        ret LF_OK
+    end
+    ret lay_fold_err(cx, nid, co.Format1(i18.Tr("operator '%s' cannot be applied to this layout value"), co.ArgStr(lay_op_text(n.op))))
+end
+
+func lay_fold_int_op(cx &: LayFoldCx, nid: int, op: int, x: i64, y: i64, out &: LayVal): int:
+    if op == tok.TK_PLUS:
+        if not add_ok(x, y):
+            ret lay_fold_err(cx, nid, i18.Tr("this layout value overflows a 64-bit integer"))
+        end
+        out = LayVal { kind = LV_INT, i = x + y }
+        ret LF_OK
+    end
+    if op == tok.TK_MINUS:
+        if not sub_ok(x, y):
+            ret lay_fold_err(cx, nid, i18.Tr("this layout value overflows a 64-bit integer"))
+        end
+        out = LayVal { kind = LV_INT, i = x - y }
+        ret LF_OK
+    end
+    if op == tok.TK_STAR:
+        if not mul_ok(x, y):
+            ret lay_fold_err(cx, nid, i18.Tr("this layout value overflows a 64-bit integer"))
+        end
+        out = LayVal { kind = LV_INT, i = x * y }
+        ret LF_OK
+    end
+    if op == tok.TK_SLASH or op == tok.TK_PERCENT:
+        if y == 0 as i64:
+            ret lay_fold_err(cx, nid, i18.Tr("division by zero in a layout value"))
+        end
+        if x == fold_i64_min() and y == (0 - 1):
+            ret lay_fold_err(cx, nid, i18.Tr("this layout value overflows a 64-bit integer"))
+        end
+        out = LayVal { kind = LV_INT, i = op == tok.TK_SLASH ? x / y : x % y }
+        ret LF_OK
+    end
+    ret LF_RUNTIME
+end
+
+func lay_fold_cmp(op: int, c: int, out &: LayVal): bool:
+    mut r := false
+    if op == tok.TK_EQ:
+        r = c == 0
+    else op == tok.TK_NE:
+        r = c != 0
+    else op == tok.TK_LT:
+        r = c < 0
+    else op == tok.TK_GT:
+        r = c > 0
+    else op == tok.TK_LE:
+        r = c <= 0
+    else op == tok.TK_GE:
+        r = c >= 0
+    else:
+        ret false
+    end
+    out = LayVal { kind = LV_BOOL, b = r }
+    ret true
+end
+
+func lay_fold_binary(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
+    n := at.Get(a, nid)
+    op := n.op
+    mut x := LayVal {}
+    rx := lay_fold(cx, a, n.a, x, depth + 1)
+    if rx != LF_OK:
+        ret rx
+    end
+    if (op == tok.TK_AND or op == tok.TK_OR) and x.kind == LV_BOOL:
+        if (op == tok.TK_AND and not x.b) or (op == tok.TK_OR and x.b):
+            out = x
+            ret LF_OK
+        end
+    end
+    mut y := LayVal {}
+    ry := lay_fold(cx, a, n.b, y, depth + 1)
+    if ry != LF_OK:
+        ret ry
+    end
+    if op == tok.TK_AND or op == tok.TK_OR:
+        if x.kind == LV_BOOL and y.kind == LV_BOOL:
+            out = y
+            ret LF_OK
+        end
+    else op == tok.TK_PLUS and (x.kind == LV_STR or y.kind == LV_STR):
+        if x.kind == LV_NONE or y.kind == LV_NONE:
+            ret LF_RUNTIME
+        end
+        out = LayVal { kind = LV_STR, s = lv_text(x) + lv_text(y) }
+        ret LF_OK
+    else x.kind == LV_STR and y.kind == LV_STR:
+        if lay_fold_cmp(op, str.Compare(x.s, y.s), out):
+            ret LF_OK
+        end
+    else x.kind == LV_BOOL and y.kind == LV_BOOL and (op == tok.TK_EQ or op == tok.TK_NE):
+        _c := lay_fold_cmp(op, x.b == y.b ? 0 : 1, out)
+        ret LF_OK
+    else x.kind == LV_INT and y.kind == LV_INT:
+        if lay_fold_cmp(op, x.i < y.i ? 0 - 1 : (x.i > y.i ? 1 : 0), out):
+            ret LF_OK
+        end
+        rc := lay_fold_int_op(cx, nid, op, x.i, y.i, out)
+        if rc != LF_RUNTIME:
+            ret rc
+        end
+    else lv_num(x) and lv_num(y):
+        fx := lv_flt(x)
+        fy := lv_flt(y)
+        if lay_fold_cmp(op, fx < fy ? 0 - 1 : (fx > fy ? 1 : 0), out):
+            ret LF_OK
+        end
+        if op == tok.TK_PLUS:
+            out = LayVal { kind = LV_FLOAT, f = fx + fy }
+            ret LF_OK
+        else op == tok.TK_MINUS:
+            out = LayVal { kind = LV_FLOAT, f = fx - fy }
+            ret LF_OK
+        else op == tok.TK_STAR:
+            out = LayVal { kind = LV_FLOAT, f = fx * fy }
+            ret LF_OK
+        else op == tok.TK_SLASH:
+            if fy == 0.0:
+                ret lay_fold_err(cx, nid, i18.Tr("division by zero in a layout value"))
+            end
+            out = LayVal { kind = LV_FLOAT, f = fx / fy }
+            ret LF_OK
+        end
+    end
+    ret lay_fold_err(cx, nid, co.Format3(i18.Tr("operator '%s' cannot combine %s and %s in a layout value"), co.ArgStr(lay_op_text(op)), co.ArgStr(lay_val_kind_name(x)), co.ArgStr(lay_val_kind_name(y))))
+end
+
+func lay_val_kind_name(v: LayVal): str:
+    if v.kind == LV_INT:
+        ret i18.Tr("an integer")
+    end
+    if v.kind == LV_FLOAT:
+        ret i18.Tr("a float")
+    end
+    if v.kind == LV_BOOL:
+        ret i18.Tr("a bool")
+    end
+    if v.kind == LV_STR:
+        ret i18.Tr("a string")
+    end
+    ret i18.Tr("a value")
+end
+
+func lay_fold(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
+    if nid == 0:
+        ret LF_RUNTIME
+    end
+    if depth > 64:
+        ret lay_fold_err(cx, nid, i18.Tr("layout value is nested too deeply (a constant that refers to itself?)"))
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_LITERAL:
+        if n.op == tok.TK_KW_TRUE or n.op == tok.TK_KW_FALSE:
+            out = LayVal { kind = LV_BOOL, b = n.op == tok.TK_KW_TRUE }
+            ret LF_OK
+        end
+        if n.value_kind == tok.TV_STRING:
+            out = LayVal { kind = LV_STR, s = n.value_str }
+            ret LF_OK
+        end
+        if n.op == tok.TK_INT or n.value_kind == tok.TV_INT:
+            out = LayVal { kind = LV_INT, i = n.value_int as i64 }
+            ret LF_OK
+        end
+        if n.op == tok.TK_FLOAT or n.value_kind == tok.TV_FLOAT:
+            out = LayVal { kind = LV_FLOAT, f = n.value_float }
+            ret LF_OK
+        end
+        ret LF_RUNTIME
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        ret lay_fold_ident(cx, a, nid, out, depth)
+    end
+    if n.kind == at.AST_UNARY:
+        ret lay_fold_unary(cx, a, nid, out, depth)
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_fold_binary(cx, a, nid, out, depth)
+    end
+    if n.kind == at.AST_TERNARY:
+        mut c := LayVal {}
+        rc := lay_fold(cx, a, n.a, c, depth + 1)
+        if rc != LF_OK:
+            ret rc
+        end
+        if c.kind != LV_BOOL:
+            ret lay_fold_err(cx, n.a, i18.Tr("the condition of a layout value must be a bool"))
+        end
+        ret lay_fold(cx, a, c.b ? n.b : n.c, out, depth + 1)
+    end
+    ret LF_RUNTIME
+end
+
+func lay_mk_literal(a &: at.Ast, from: int, v: LayVal): int:
+    lit := at.NewNode(a, at.AST_LITERAL)
+    src := at.Get(a, from)
+    at.SetSpan(a, lit, src.begin_line, src.begin_col, src.begin_index, src.end_line, src.end_col, src.end_index, src.length)
+    mut tv := tok.ValueNone()
+    if v.kind == LV_BOOL:
+        at.SetOp(a, lit, v.b ? tok.TK_KW_TRUE : tok.TK_KW_FALSE)
+        tv.kind = tok.TV_BOOL
+        tv.bval = v.b
+        at.SetName(a, lit, v.b ? "true" : "false")
+    else v.kind == LV_INT and v.i >= 0 as i64:
+        at.SetOp(a, lit, tok.TK_INT)
+        tv.kind = tok.TV_INT
+        tv.ival = v.i as u64
+        at.SetName(a, lit, co.I64Toa(v.i))
+    else:
+        at.SetOp(a, lit, tok.TK_STRING)
+        tv.kind = tok.TV_STRING
+        tv.sval = lv_text(v)
+        at.SetName(a, lit, tv.sval)
+    end
+    at.SetTokenValue(a, lit, tv)
+    ret lit
+end
+
+func lay_is_css_function(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if n.kind != at.AST_CALL or n.a == 0:
+        ret false
+    end
+    callee := at.Get(a, n.a)
+    if callee.kind != at.AST_IDENTIFIER:
+        ret false
+    end
+    sid := scope_lookup(s, s.cur, callee.name)
+    ret sid <= 0 or s.syms.get(sid).kind != SYM_FUNC
+end
+
+func lay_fold_attr(s &: Sema, a &: at.Ast, attr: int, ai: int): bool:
+    vid := at.Get(a, attr).a
+    if vid == 0:
+        ret true
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_LITERAL:
+        ret true
+    end
+    if lay_is_css_function(s, a, vid):
+        ret true
+    end
+    if v.kind == at.AST_IDENTIFIER and lay_const_sym(s, v.name) == 0:
+        if ai >= 0 and g_lay_attrs.get(ai).dest == LA_CONTENT and scope_lookup(s, s.cur, v.name) > 0:
+            serr(
+                s, 129, span_of(a, vid), co.Format1(
+                    i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(v.name)
+                )
+            )
+            ret false
+        end
+        ret true
+    end
+    mut out := LayVal {}
+    mut cx := LayFoldCx { prog = s.program }
+    defer cx.shadow.free()
+    defer cx.used.free()
+    rc := lay_fold(cx, a, vid, out, 0)
+    repeat cx.used.len() in ui:
+        usid := lay_const_sym(s, cx.used.get(ui))
+        if usid != 0:
+            mut usy := s.syms.get(usid)
+            usy.used = true
+            s.syms.set(usid, usy)
+        end
+    end
+    if rc == LF_REPORTED:
+        serr(s, 130, span_of(a, cx.err_node), cx.err_msg)
+        ret false
+    end
+    if rc == LF_RUNTIME:
+        serr(
+            s, 129, span_of(a, vid), co.Format1(
+                i18.Tr("'%s' is not known at compile time: a static layout can only use literals, constants and operators on them"), co.ArgStr(lay_expr_text(a, vid))
+            )
+        )
+        ret false
+    end
+    if v.kind == at.AST_IDENTIFIER and ai >= 0 and g_lay_attrs.get(ai).vtype != VT_STRING and lay_attr_value_ok(ai, v.name):
+        swarn(
+            s, 131, span_of(a, vid), co.Format2(
+                i18.Tr("constant '%s' hides the layout value '%s'; quote the word to mean the value"), co.ArgStr(v.name), co.ArgStr(v.name)
+            )
+        )
+    end
+    lit := lay_mk_literal(a, vid, out)
+    mut an := at.Get(a, attr)
+    an.a = lit
+    at.Put(a, attr, an)
+    ret true
+end
+
+func lay_expr_text(a &: at.Ast, nid: int): str:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret n.name
+    end
+    if n.kind == at.AST_MEMBER:
+        ret lay_expr_text(a, n.a) + "." + n.name
+    end
+    if n.kind == at.AST_CALL:
+        ret lay_expr_text(a, n.a) + "(...)"
+    end
+    if n.kind == at.AST_BINARY:
+        ret lay_expr_text(a, n.a) + " " + lay_op_text(n.op) + " " + lay_expr_text(a, n.b)
+    end
+    if n.kind == at.AST_LITERAL:
+        ret n.value_kind == tok.TV_STRING ? `"` + n.value_str + `"` : n.name
+    end
+    ret "..."
+end
+
+func lay_op_text(op: int): str:
+    ops := [tok.TK_PLUS, tok.TK_MINUS, tok.TK_STAR, tok.TK_SLASH, tok.TK_PERCENT, tok.TK_EQ, tok.TK_NE, tok.TK_LT, tok.TK_GT, tok.TK_LE, tok.TK_GE, tok.TK_AND, tok.TK_OR, tok.TK_NOT]
+    txt := ["+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "and", "or", "not"]
+    repeat len(ops) in i:
+        if ops[i] == op:
+            ret txt[i]
+        end
+    end
+    ret "?"
+end
+
+pub func LayoutFoldLiteral(a &: at.Ast, prog: int, nid: int, shadow: Vector<str>): int:
+    mut cx := LayFoldCx { prog = prog }
+    defer cx.used.free()
+    repeat shadow.len() in i:
+        cx.shadow.push(shadow.get(i))
+    end
+    defer cx.shadow.free()
+    mut out := LayVal {}
+    if lay_fold(cx, a, nid, out, 0) != LF_OK:
+        ret 0
+    end
+    ret lay_mk_literal(a, nid, out)
+end

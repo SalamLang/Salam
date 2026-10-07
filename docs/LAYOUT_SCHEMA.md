@@ -52,7 +52,7 @@ pub const link := LayoutElement {
 | `required`              | attributes that must be present (emitted first)                                                                                                 |
 | `when`                  | `"attr"` or `"attr=value"`: this variant applies only then                                                                                      |
 | `unique`                | `"parent"` or `"document"`: at most one there                                                                                                   |
-| `generator`             | `heading`, `media`, `style`, `global`, `script` (built-in) or a function in `std/layoutgen`                                                     |
+| `generator`             | `heading`, `media`, `style`, `global`, `script`, `font_face` (built-in) or a function in `std/layoutgen`                                        |
 | `placement`             | `"head"` sends the tag to `<head>`                                                                                                              |
 | `position`              | `"first"`: must be the first element inside its parent (E125)                                                                                   |
 | `styled`                | `false` rejects CSS attributes on this element                                                                                                  |
@@ -112,6 +112,8 @@ Value types: `string`, `token` (one word, no spaces), `int`, `uint`, `float`,
 (`true`/`false` like a boolean, or one of the `allowed` values, as for
 `hidden = "until-found"`).
 
+`css` is the value type of CSS properties. `allowed` lists what a value may be: the type words `length`, `percentage`, `number`, `integer`, `time`, `angle`, `color`, `image`, `string`, `ident`, `ratio`, `easing`, `flex` and `resolution`, plus `@group` for keyword values defined in `values/`. `maxN` allows up to N space-separated values (as in `margin`) and `list` a comma list (as in `transition-property`). CSS-wide keywords and `var()`/`calc()`-style functions are always accepted. The full table is in `docs/CSS_PROPERTIES.md`.
+
 ## Values
 
 ```salam
@@ -160,7 +162,10 @@ Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
 
 A success test is a layout build plus `// EXPECT:` substrings, with
 `// EXPECT-NOT:` for text that must not appear. A failure test is
-`// EXPECT: E0xx` plus `// EXPECT-MSG:`. Run the lot, or one directory:
+`// EXPECT: E0xx` plus `// EXPECT-MSG:`. A `.salam` file left directly in
+`tests/{en,fa}/layout/` belongs to no subdirectory and so would never run;
+the runner reports that as a failure rather than skipping it. Run the lot, or
+one directory:
 
 ```sh
 sh tools/bash/run-tests.sh layout

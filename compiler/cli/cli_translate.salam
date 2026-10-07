@@ -29,6 +29,7 @@ include at "../ast.salam"
 include ps "../parser/parser.salam"
 include src "../source.salam"
 include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
 
 const K_TR_METHOD_COUNT := 38
 const K_TR_CTX_COUNT := 5
@@ -353,18 +354,27 @@ func tr_apply_marker(text: str, target_code: str): str:
     mut out_lines := Vector {} as Vector<str>
     defer out_lines.free()
     mut removed := false
-    mut scan_max := lines.len()
-    if scan_max > 8:
-        scan_max = 8
-    end
+    mut header := true
+    mut in_block := false
     mut i := 0
     until i < lines.len():
         line := lines.get(i)
-        if not removed and i < scan_max and tr_is_marker_line(line):
+        trimmed := str.Trim(line)
+        if header and not in_block and not removed and tr_is_marker_line(line):
             removed = true
-        else:
-            out_lines.push(line)
+            i += 1
+            continue
         end
+        if header:
+            if in_block:
+                in_block = not str.Contains(trimmed, "*/")
+            else str.StartsWith(trimmed, "/*"):
+                in_block = not str.Contains(str.Substr(trimmed, 2, str.Len(trimmed) - 2), "*/")
+            else str.Len(trimmed) > 0 and not str.StartsWith(trimmed, "//"):
+                header = false
+            end
+        end
+        out_lines.push(line)
         i += 1
     end
     body := str.Join(out_lines, "\n")
@@ -402,6 +412,97 @@ func tr_declared_names(toks: tok.TokenStream, n: int): Vector<str>:
         i += 1
     end
     ret names
+end
+
+func tr_component_names(toks: tok.TokenStream, n: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_KW_COMPONENT:
+            mut j := i + 1
+            mut cname := ""
+            until j < n and tok.StreamAt(toks, j).kind == tok.TK_IDENT:
+                cname = str.Len(cname) > 0 ? cname + " " + tok.StreamAt(toks, j).lexeme : tok.StreamAt(toks, j).lexeme
+                j += 1
+            end
+            if str.Len(cname) > 0:
+                names.push(cname)
+            end
+            if j < n and tok.StreamAt(toks, j).kind == tok.TK_LPAREN:
+                j += 1
+                mut depth := 1
+                mut want := true
+                mut pname := ""
+                until j < n and depth > 0:
+                    k := tok.StreamAt(toks, j).kind
+                    if k == tok.TK_LPAREN or k == tok.TK_LBRACKET:
+                        depth += 1
+                    else k == tok.TK_RPAREN or k == tok.TK_RBRACKET:
+                        depth -= 1
+                    end
+                    if depth == 1 and k == tok.TK_IDENT and want:
+                        pname = str.Len(pname) > 0 ? pname + " " + tok.StreamAt(toks, j).lexeme : tok.StreamAt(toks, j).lexeme
+                    else depth >= 1 and want and str.Len(pname) > 0:
+                        names.push(pname)
+                        pname = ""
+                        want = false
+                    end
+                    if depth == 1 and k == tok.TK_COMMA:
+                        want = true
+                    end
+                    j += 1
+                end
+                if str.Len(pname) > 0:
+                    names.push(pname)
+                end
+            end
+            i = j
+            continue
+        end
+        i += 1
+    end
+    ret names
+end
+
+func tr_imported_packages(toks: tok.TokenStream, n: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        if tok.StreamAt(toks, i).kind == tok.TK_KW_IMPORT:
+            mut j := i + 1
+            mut last := ""
+            mut word := ""
+            until j < n:
+                k := tok.StreamAt(toks, j).kind
+                if k == tok.TK_IDENT:
+                    word = str.Len(word) > 0 ? word + " " + tok.StreamAt(toks, j).lexeme : tok.StreamAt(toks, j).lexeme
+                else k == tok.TK_DOT:
+                    word = ""
+                else:
+                    break
+                end
+                last = word
+                j += 1
+            end
+            if str.Len(last) > 0:
+                names.push(last)
+            end
+            i = j
+            continue
+        end
+        i += 1
+    end
+    ret names
+end
+
+func tr_has_ident(names: Vector<str>, w: str): bool:
+    repeat names.len() in i:
+        if lp.IdentEqual(names.get(i), w):
+            ret true
+        end
+    end
+    ret false
 end
 
 func tr_has(names: Vector<str>, w: str): bool:
@@ -495,7 +596,7 @@ end
 
 func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: str, sfile: src.SourceFile, out &: str): bool:
     mut toks := tok.StreamNew(sfile.path)
-    ok := lx.RunEx(lgr, srcpack, sfile, true, toks)
+    ok := lx.RunSplit(lgr, srcpack, sfile, true, true, toks)
     if not ok:
         tok.StreamFree(toks)
         ret false
@@ -514,6 +615,10 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut alias_rhs := false
     names := tr_declared_names(toks, n)
     defer names.free()
+    comp_names := tr_component_names(toks, n)
+    defer comp_names.free()
+    pkgs := tr_imported_packages(toks, n)
+    defer pkgs.free()
     mut gaps := Vector {} as Vector<int>
     defer gaps.free()
     tr_compare_gaps(srcpack, sfile, gaps)
@@ -524,14 +629,36 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             break
         end
         bi := t.begin_index as int
-        ei := t.end_index as int
+        mut ei := t.end_index as int
         if bi > cursor:
             co.SbPuts(sb, str.Substr(text, cursor, bi - cursor))
         end
         mut lexeme := t.lexeme
         mut skip_emit := false
         if t.kind == tok.TK_STMT_END:
-            skip_emit = true
+            if ei > bi:
+                lexeme = str.Substr(text, bi, ei - bi)
+            else:
+                skip_emit = true
+            end
+        else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and str.StartsWith(t.lexeme, "«") and str.EndsWith(t.lexeme, "»"):
+            inner := str.Substr(t.lexeme, 2, str.Len(t.lexeme) - 4)
+            lexeme = `"` + str.Replace(inner, `"`, `\"`) + `"`
+        else (t.kind == tok.TK_LAYOUT_ELEMENT or t.kind == tok.TK_LAYOUT_ATTR_NAME) and not tr_has_ident(comp_names, t.lexeme):
+            want_fa := targetpack == lp.LP_FA
+            mapped := t.kind == tok.TK_LAYOUT_ELEMENT ? sm.LayoutElemSpelling(t.lexeme, want_fa) : sm.LayoutAttrSpelling(t.lexeme, want_fa)
+            if str.Len(mapped) > 0:
+                raw_name := str.Substr(text, bi, ei - bi)
+                mut tail := ""
+                mut k := str.Len(raw_name)
+                until k > 0 and (co.ByteAt(raw_name, k - 1) == 32 or co.ByteAt(raw_name, k - 1) == 9):
+                    k -= 1
+                end
+                if k < str.Len(raw_name):
+                    tail = str.Substr(raw_name, k, str.Len(raw_name) - k)
+                end
+                lexeme = mapped + tail
+            end
         else t.kind == tok.TK_META:
             mapped := tr_ctx_word(targetpack, t.lexeme)
             lexeme = "@" + (str.Len(mapped) > 0 ? mapped : t.lexeme)
@@ -550,7 +677,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             lexeme = targetpack == lp.LP_FA ? "\xD8\x8C" : ","
         else t.kind >= tok.TK_EQ and t.kind <= tok.TK_GE:
             sym := compare_symbol(t.kind)
-            if targetpack != lp.LP_FA:
+            if targetpack != lp.LP_FA or t.layout_mode:
                 lexeme = sym
             else not str.Equals(t.lexeme, sym) or tr_in_gap(gaps, bi):
                 lexeme = lp.Spelling(targetpack, t.kind)
@@ -569,6 +696,11 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                 if str.Len(pkg_mapped) > 0:
                     lexeme = pkg_mapped
                 end
+            else prev_kind != tok.TK_DOT and tr_next_kind(toks, i, n) == tok.TK_DOT and tr_has_ident(pkgs, t.lexeme) and not tr_has(names, t.lexeme):
+                recv_mapped := tr_pkg_alias(std_root, t.lexeme)
+                if str.Len(recv_mapped) > 0:
+                    lexeme = recv_mapped
+                end
             else:
                 mut type_mapped := ""
                 if prev_kind == tok.TK_DOT and tr_next_kind(toks, i, n) == tok.TK_LT:
@@ -585,7 +717,23 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                     pkg_dirname := tr_pkg_canon(std_root, dot_receiver)
                     mut sym_mapped := ""
                     if str.Len(pkg_dirname) > 0:
-                        sym_mapped = tr_pkg_member(std_root, pkg_dirname, t.lexeme, targetpack != lp.LP_FA)
+                        mut words := t.lexeme
+                        mut j := i
+                        sym_mapped = tr_pkg_member(std_root, pkg_dirname, words, targetpack != lp.LP_FA)
+                        mut best_j := i
+                        until j + 1 < n and j - i < 6 and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, j + 1).begin_line == t.begin_line:
+                            j += 1
+                            words = words + " " + tok.StreamAt(toks, j).lexeme
+                            cand := tr_pkg_member(std_root, pkg_dirname, words, targetpack != lp.LP_FA)
+                            if str.Len(cand) > 0:
+                                sym_mapped = cand
+                                best_j = j
+                            end
+                        end
+                        if str.Len(sym_mapped) > 0 and best_j > i:
+                            ei = tok.StreamAt(toks, best_j).end_index as int
+                            i = best_j
+                        end
                     end
                     if str.Len(sym_mapped) > 0:
                         lexeme = sym_mapped
@@ -593,6 +741,18 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                         method_mapped := tr_method_word(targetpack, t.lexeme)
                         if str.Len(method_mapped) > 0:
                             lexeme = method_mapped
+                        else not tr_has(names, t.lexeme):
+                            repeat pkgs.len() in pk:
+                                if str.Len(lexeme) == str.Len(t.lexeme) and str.Equals(lexeme, t.lexeme):
+                                    pdir := tr_pkg_canon(std_root, pkgs.get(pk))
+                                    if str.Len(pdir) > 0:
+                                        mm := tr_pkg_member(std_root, pdir, t.lexeme, targetpack != lp.LP_FA)
+                                        if str.Len(mm) > 0:
+                                            lexeme = mm
+                                        end
+                                    end
+                                end
+                            end
                         end
                     end
                 end
@@ -759,6 +919,12 @@ func translate_cmd(opt &: dr.Dr): int:
     c.fallback = fallback
     c.rewrite = opt.translate_rewrite
     c.stdlib_root = str.Len(opt.stdlib_path) > 0 ? opt.stdlib_path : "std"
+    if str.Len(opt.stdlib_path) == 0 and not os.IsDir("std"):
+        sroot := sm.GetStdlibRoot()
+        if str.Len(sroot) > 0 and os.IsDir(sroot + "/std"):
+            c.stdlib_root = sroot + "/std"
+        end
+    end
     single_input := inputs.len() == 1
     repeat inputs.len() in idx:
         p := inputs.get(idx)

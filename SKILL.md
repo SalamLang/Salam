@@ -354,17 +354,17 @@ verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
 `str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
 `str.CharAt(s, i)`, classify with `str.IsDigit(code)` etc.
 
-**String/char literal forms** (no interpolation exists; build strings with `+`
-or `fmt.Sprintf`):
+**String/char literal forms** (values go into text with a ` ``` ` text block and
+`${{ expr }}`, see below, or with `+` and `fmt.Sprintf`):
 
-| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                                                                                                                                                                |
-| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                                                                                                                                                     |
-| `"""text"""` | `str`                    | yes                                              | **yes**   | triple-double-quote is the _only_ multiline form; still processes escapes                                                                                                                                                                                                                                                            |
-| `'c'`        | `char`                   | yes                                              | -         | one raw byte unless escaped, not UTF-8 safe for non-ASCII                                                                                                                                                                                                                                                                            |
-| `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. **There is no triple-backtick form**; ` ``` ` lexes as an empty backtick string followed by a runaway one, not a multiline literal. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
-| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                                                                                                                                                           |
-| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                                                                                                                                                                 |
+| Syntax       | Type                     | Escapes (`\n \t \" \\ \xHH \uHHHH \UHHHHHHHH` …) | Multiline | Notes                                                                                                                                                                                            |
+| ------------ | ------------------------ | ------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `"text"`     | `str`                    | yes                                              | no        | normal string; raw newline in source is an error                                                                                                                                                 |
+| `"""text"""` | `str`                    | yes                                              | **yes**   | multiline, still processes escapes; for code or long text prefer a ` ``` ` text block                                                                                                            |
+| `'c'`        | `char`                   | yes                                              | -         | one raw byte unless escaped, not UTF-8 safe for non-ASCII                                                                                                                                        |
+| `` `text` `` | `str`                    | **none, fully raw**                              | **yes**   | backtick string; every byte up to the next `` ` `` is taken literally, including `"`, `'`, `\`, and real newlines. Only a literal backtick can't appear inside it (no escape exists for `` ` ``) |
+| `u'c'`       | `char` (UTF-8 codepoint) | no                                               | -         | must decode to exactly one Unicode codepoint; use for non-ASCII single chars, e.g. `u'م'`, `u'中'`, `u'€'`                                                                                       |
+| `u"c"`       | `char` (UTF-8 codepoint) | yes                                              | -         | same as `u'c'` but escapes are processed first, e.g. `u"\U0001F600"`                                                                                                                             |
 
 **Prefer backtick strings for any text containing literal `"`**: JSON blobs,
 `regex` patterns, shell commands, HTML/CSS fragments, instead of escaping:
@@ -382,6 +382,42 @@ data := "{\"name\": \"salam\", \"version\": 2, \"active\": true, \"pi\": 3.5, \"
 Only fall back to `"..."` with escaped quotes when the string must also contain
 a literal backtick, or when it needs an escape sequence (`\n`, `\uXXXX`, …)
 that backtick strings don't process.
+
+**Text blocks** (` ``` `) hold multi-line text, such as generated C, LLVM IR,
+SQL, HTML or help text, without `"\n" + "..."` chains. The opening ` ``` ` ends
+its line; the closing ` ``` ` starts its own line, and its indentation is
+removed from every line, so the block sits indented in the code. The first and
+last line breaks are not part of the value. The text is raw like a backtick
+string: `\n`, `"` and `'` are kept as typed.
+
+````salam
+const OB_SIZE := 65536
+
+func header(name: str): str:
+    ret ```
+        #define SALAM_OB_SZ ${{ OB_SIZE }}
+        #define HALF ${{OB_SIZE / 2}}
+        /* built for ${{ name }} */
+        static int nl(void) { return '\n' == 10; }
+        ```
+end
+````
+
+- `${{ expr }}` puts the value of any expression into the text: `str`,
+  numbers, `bool` and `char`, the same as `+` on a string. Spaces inside are
+  free (`${{x}}`, `${{ x }}`), but `$`, `{{` and `}}` must be written without
+  spaces in them, so `$ {{x}}` and `} }` are plain text.
+- When every injected value is a constant, the whole block folds into one
+  literal at compile time; otherwise it becomes a `+` chain.
+- `$${{` writes the characters `${{`. A lone `$`, `{{`, `}}` or `$$` is plain
+  text, so C, JS and shell code need no escaping.
+- An injection must close on the line it opens. Errors: text after the opening
+  ` ``` `, a missing closing ` ``` `, a line indented less than the closing
+  ` ``` `, an unclosed `${{` and an empty `${{ }}`.
+- It works the same in Persian files: `${{ نام }}`, and `salam translate`
+  translates the code inside `${{ }}` while keeping the text as it is.
+- `std/` and `compiler/` can only use text blocks once a released seed
+  compiler understands them (see the seed lag rule).
 
 **Type aliases:** `type NodeId = int`, `type Bytes = u8*` gives a new name for an
 existing type (declared at top level, before functions). An alias is the same
@@ -1668,8 +1704,14 @@ are **language intrinsics** on an `i64*` cell (a `__atomic_*` built-in in the C
 backend, a real `atomicrmw`/`cmpxchg` in LLVM, both seq*cst; plain reads and
 writes in JS, which has no threads). `atomic_add` returns the value \_after* the
 add, `atomic_swap` the value before it. tcc 0.9.27 has neither the `__atomic`
-nor the `__sync` family, so under `SALAM_CC_TCC` the `atomic` package falls
+nor the `__sync` family, so under `SALAM_CC_TCC` the **`atomic` package** falls
 back to a mutex per cell - same semantics, higher cost, invisible to callers.
+The **bare intrinsics have no such fallback**: they are always a `__atomic_*`
+built-in, so on a tcc older than 0.9.28 a program that calls them fails to
+build with a `#error` naming `tools/bash/install-tcc.sh`. The pinned tcc
+(`tools/ci/tinycc-ref.txt`, 0.9.28rc) has the built-ins, which is why CI is
+unaffected; note it does _not_ define `__ATOMIC_SEQ_CST`, so that macro is not
+a usable feature test - `__TINYC__ < 928` is.
 A declared function of the same name shadows an intrinsic.
 
 There is no `async`/`await`.
@@ -1788,6 +1830,103 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 `active`/`before`/`after` prefixes (`hover color = "red"`; in Persian `اشاره`,
 `تمرکز`, `فشردن`, `پیش‌از`, `پس‌از`).
 
+**CSS values are checked.** Almost every property validates its value
+(keyword, length, number, time, angle, color, ...) and accepts Persian keywords
+and units: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
+Shorthands are checked too: `border = "1 solid red"`, `font = "bold 16/1.5
+serif"`, `transition = "opacity 0.3s ease"`, `transform = "rotate(45deg)"`,
+`box shadow = "0 2 4 black"`. Bare numbers in a shorthand get `px`, except zero.
+A wrong value is E018. Only `grid`, `grid template` and `offset` still pass
+through unchecked. The full list with status per property is
+`docs/CSS_PROPERTIES.md`.
+
+**Values are expressions.** An attribute value can use constants, operators
+and parentheses, and a static layout folds it at compile time:
+`box: content = 4 * 10 end` prints `40`; `title = SITE + " | Home"` reads a
+global `const`; `width = WIDE + "px"`, `margin = -5`, `size = N > 3 ? 2 : 3`.
+Word operators (`and`, `or`, `not`, `و`, `یا`) need parentheses:
+`content = (A and B)`. Unquoted CSS words keep their hyphens
+(`justify content = space-between`, `background = linear-gradient(red, blue)`),
+so write subtraction with spaces (`a - b`). A static layout cannot read a
+variable or call a Salam function (E129); a bad fold (division by zero,
+overflow, `true + 1`) is E130. A constant named like a value word
+(`const red := ...` then `color = red`) wins, with W131.
+
+**Runtime layouts.** `layout:` is a static page built at compile time. A
+_named_ layout with typed parameters is a runtime page: the compiler builds
+the whole document and its CSS at compile time and turns the layout into a
+`pure func Name(params): str` that only fills in escaped values. There is no
+template interpreter. Call it like any function, e.g. from a router handler:
+
+```salam
+import net.http
+import rand
+
+component Card(title: str, n: int):          // typed component: also Card(...) -> str fragment
+    box: heading: size = 3 content = title end end
+end
+
+layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
+    title = "Hi " + user
+    paragraph: content = "Lucky number: " + lucky end
+    if lucky > 50:
+        paragraph: content = "Big!" end
+    else:
+        paragraph: content = "Small" end
+    end
+    list:
+        each i, it in items:
+            item: content = i + ": " + it end
+        end
+    end
+    input: type = "checkbox" checked = admin end   // bool attribute toggled at runtime
+    Card: title = user n = lucky end
+end
+
+func home_h(ctx: i64):
+    http.Ctx_html(ctx, Home(http.Ctx_query(ctx, "name"), rand.IntN(100) as int, items(), false))
+end
+```
+
+Rules, all checked at compile time:
+
+- The layout function is `pure`: no I/O, network, random numbers or global
+  writes inside the UI (E012). Fetch data in the handler and pass it in.
+- Text and attribute values are always HTML-escaped; there is no raw-HTML type.
+- A runtime value for a URL attribute must be a `web.Url`, and a runtime CSS
+  value must be a `web.Color`, a `web.Length` or a number (E135). Build them
+  with `web.ParseUrl(s, ok)`, `web.ParseColor`, `web.ParseLength`, `web.Px(n)`,
+  `web.Rgb(r, g, b)`. Their fields are private, so they cannot be forged (E017).
+  A runtime CSS value is written as an inline `style`; class CSS stays static.
+- Enum-like attributes, `heading size`, `hover ...` styles and `style`/`script`
+  bodies must be known at compile time (E132); pick between fixed variants with
+  `if`. `if`/`each` need a runtime layout (E133). A fixed `id` inside `each`
+  would repeat (E134). A runtime font `url` needs a static `type`.
+- Typed components can be called directly (`Card("x", 1)`) and return their
+  own `<style>` plus HTML, with class names prefixed by the component name.
+
+**Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
+rule, never an element. It sits directly under `layout`; `name` and `url`
+(`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
+`woff2`, `ttc`) is optional: without it the compiler reads the extension from
+the URL, then the magic bytes of a local file next to the source. A remote URL with
+neither is E126, and a type that disagrees with the extension or the file is
+E127. The compiler never fetches over the network. Optional: `weight`
+(`300`, `"100 900"`), `style` (`italic`), `display` (`swap`), `range`
+(`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
+
+```salam
+layout:
+    font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
+    box: content = "hi" font family = "Estedad, sans-serif" end
+end
+```
+
+**Safety.** URL-typed attributes reject `javascript:`, `vbscript:` and any
+`data:` that is not image/font/audio/video. CSS values cannot contain
+`{ } ; < >` or line breaks. A `style`/`script` body cannot contain
+`</style` or `</script`. Quoted CSS strings are escaped.
+
 **Everything is checked at compile time**:
 
 | code        | meaning                                                                       |
@@ -1803,6 +1942,12 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 | E121 / E122 | `for`/`aria controls` point at a missing id / duplicate id                    |
 | E123        | a std generator (`std/layoutgen`) failed to compile or run                    |
 | E125        | element must come first (`caption` in `table`, `legend`, `summary`)           |
+| E126 / E127 | font type cannot be detected / declared type disagrees with the file          |
+| W128        | a local font file is missing next to the source                               |
+| E129 / E130 | value not known at compile time / a constant expression that cannot fold      |
+| W131        | a constant hides a layout value word of the same name                         |
+| E132 / E133 | value must be static here / `if`/`each` in a static layout                    |
+| E134 / E135 | fixed id inside `each` / runtime value of an unsafe type for this attribute   |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
@@ -2422,6 +2567,9 @@ All of §6 applies. In addition:
    `رشته‌ی '«' بسته نشده است؛ آن را با '»' ببندید، نه با دابل‌کوتیشن`. A `»`
    with no `«` before it is its own error too, rather than being swallowed
    into the identifier that follows it.
+   Text blocks (` ``` `, §6) work the same in a Persian file, and the code
+   inside `${{ }}` uses Persian names: `${{ نام }}`, `${{ عدد + 1 }}`,
+   `${{ «}}» }}`.
 3. **The language's own constants are Persian here** (`سلام سیستم ویندوز`,
    `سلام نگارش`, `تعریف‌شده(…)`); the `SALAM_*` spellings do not work in a
    Persian file. See §8.

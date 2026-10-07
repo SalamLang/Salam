@@ -590,6 +590,67 @@ func lower_print_free(
     end
 end
 
+func lower_print_buf(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, segs &: Vector<cg.PfSeg>, err: bool
+):
+    need(v, LV_H_OUTBUF)
+    mut refs := Vector {} as Vector<str>
+    defer refs.free()
+    repeat segs.len() in i:
+        sg := segs.get(i)
+        if sg.kind == cg.PF_LIT:
+            refs.push("")
+            continue
+        end
+        val := lv_expr(v, s, a, sg.expr)
+        if sg.kind == cg.PF_STR or sg.kind == cg.PF_BOOL:
+            refs.push(val.ref)
+        else sg.kind == cg.PF_CHAR:
+            refs.push(conv(v, s, a, val, "i32"))
+        else sg.kind == cg.PF_F64:
+            refs.push(call_runtime_val(v, s, a, "salam_fmt_f64", "double", conv(v, s, a, val, "f64"), "ptr"))
+        else sg.kind == cg.PF_U32 or sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
+            refs.push(conv(v, s, a, val, "u64"))
+        else:
+            refs.push(conv(v, s, a, val, "i64"))
+        end
+    end
+    emit(v, "call void @salam_out_lock()")
+    if err:
+        emit(v, "call void @salam_out_flush_l()")
+    end
+    repeat segs.len() in j:
+        sg := segs.get(j)
+        r := refs.get(j)
+        if sg.kind == cg.PF_LIT:
+            tn := str.Len(sg.text)
+            if tn > 0:
+                emit(v, "call void @salam_out_write(ptr " + strconst(v, sg.text) + ", i64 " + co.I64Toa(tn as i64) + ")")
+            end
+        else sg.kind == cg.PF_STR or sg.kind == cg.PF_F64:
+            emit(v, "call void @salam_out_str(ptr " + r + ")")
+        else sg.kind == cg.PF_BOOL:
+            sp := new_tmp(v)
+            emit(v, sp + " = select i1 " + r + ", ptr " + strconst(v, "true") + ", ptr " + strconst(v, "false"))
+            sl := new_tmp(v)
+            emit(v, sl + " = select i1 " + r + ", i64 4, i64 5")
+            emit(v, "call void @salam_out_write(ptr " + sp + ", i64 " + sl + ")")
+        else sg.kind == cg.PF_CHAR:
+            emit(v, "call void @salam_out_byte(i32 " + r + ")")
+        else sg.kind == cg.PF_U32 or sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
+            emit(v, "call void @salam_out_u64(i64 " + r + ")")
+        else:
+            emit(v, "call void @salam_out_i64(i64 " + r + ")")
+        end
+    end
+    if err:
+        emit(v, "call void @salam_out_flush_fd_l(i32 2)")
+    else:
+        emit(v, "call void @salam_out_end1()")
+    end
+    emit(v, "call void @salam_out_unlock()")
+end
+
 func lv_lower_print(
     v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
 ):
@@ -626,12 +687,20 @@ func lv_lower_print(
             co.SbFree(raw)
             if rawlen > (0 as i64):
                 need(v, LV_H_OUTBUF)
+                emit(v, "call void @salam_out_lock()")
                 emit(
                     v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(rawlen) + ")"
                 )
+                emit(v, "call void @salam_out_end1()")
+                emit(v, "call void @salam_out_unlock()")
             end
             ret
         end
+    end
+
+    if v.single_threaded:
+        lower_print_buf(v, s, a, segs, err)
+        ret
     end
 
     mut fmt := co.SbNew()

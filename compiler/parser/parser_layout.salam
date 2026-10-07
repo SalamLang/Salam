@@ -4,12 +4,26 @@ include tok "../token.salam"
 include at "../ast.salam"
 
 func layout_body(p &: Ps, a &: at.Ast, parent: int):
-    until not p_at(p, tok.TK_KW_END) and not p_at_eof(p):
+    layout_body_ex(p, a, parent, false)
+end
+
+func layout_body_ex(p &: Ps, a &: at.Ast, parent: int, stop_else: bool):
+    until not p_at(p, tok.TK_KW_END) and not p_at_eof(p) and not (stop_else and p_at(p, tok.TK_KW_ELSE)):
         p_skip_terminators(p)
-        if p_at(p, tok.TK_KW_END) or p_at_eof(p):
+        if p_at(p, tok.TK_KW_END) or p_at_eof(p) or (stop_else and p_at(p, tok.TK_KW_ELSE)):
             break
         end
-        if p_at(p, tok.TK_LAYOUT_ELEMENT):
+        if p_at(p, tok.TK_KW_IF):
+            n := p_mk(p, a, at.AST_IF)
+            p_advance(p)
+            layout_if_tail(p, a, n)
+            at.AddChild(a, parent, n)
+        else p_at(p, tok.TK_KW_EACH):
+            at.AddChild(a, parent, layout_each(p, a))
+        else p_at(p, tok.TK_KW_ELSE):
+            p_error(p, "'else' without a matching 'if' in layout")
+            p_advance(p)
+        else p_at(p, tok.TK_LAYOUT_ELEMENT):
             at.AddChild(a, parent, layout_element(p, a))
         else p_at(p, tok.TK_LAYOUT_ATTR_NAME):
             at.AddChild(a, parent, layout_attribute(p, a))
@@ -23,6 +37,60 @@ func layout_body(p &: Ps, a &: at.Ast, parent: int):
             p_sync(p)
         end
     end
+end
+
+func layout_if_tail(p &: Ps, a &: at.Ast, n: int):
+    ps_set_a(a, n, parse_expr(p, a))
+    p_expect(p, tok.TK_COLON, "':' after the layout 'if' condition")
+    p_skip_terminators(p)
+    then_b := p_mk(p, a, at.AST_BLOCK)
+    layout_body_ex(p, a, then_b, true)
+    p_fin(p, a, then_b)
+    ps_set_b(a, n, then_b)
+    if p_match(p, tok.TK_KW_ELSE):
+        if p_match(p, tok.TK_COLON):
+            p_skip_terminators(p)
+            else_b := p_mk(p, a, at.AST_BLOCK)
+            layout_body_ex(p, a, else_b, false)
+            p_fin(p, a, else_b)
+            ps_set_c(a, n, else_b)
+            p_expect(p, tok.TK_KW_END, "'end' to close the layout 'if'")
+        else:
+            m := p_mk(p, a, at.AST_IF)
+            layout_if_tail(p, a, m)
+            ps_set_c(a, n, m)
+        end
+    else:
+        p_expect(p, tok.TK_KW_END, "'end' to close the layout 'if'")
+    end
+    p_fin(p, a, n)
+    p_skip_terminators(p)
+end
+
+func layout_each(p &: Ps, a &: at.Ast): int:
+    n := p_mk(p, a, at.AST_EACH)
+    p_advance(p)
+    if p_at(p, tok.TK_IDENT) and p_peek2(p).kind == tok.TK_COMMA:
+        kn := p_mk(p, a, at.AST_IDENTIFIER)
+        at.SetName(a, kn, p_peek(p).lexeme)
+        p_advance(p)
+        p_fin(p, a, kn)
+        ps_set_c(a, n, kn)
+        p_advance(p)
+    end
+    at.SetName(a, n, p_name(p, "expected a name after 'each' in layout"))
+    p_expect(p, tok.TK_KW_IN, "'in' before the collection, as in 'each item in items:'")
+    ps_set_a(a, n, parse_expr(p, a))
+    p_expect(p, tok.TK_COLON, "':' after the layout 'each' header")
+    p_skip_terminators(p)
+    body := p_mk(p, a, at.AST_BLOCK)
+    layout_body_ex(p, a, body, false)
+    p_fin(p, a, body)
+    ps_set_b(a, n, body)
+    p_expect(p, tok.TK_KW_END, "'end' to close the layout 'each'")
+    p_fin(p, a, n)
+    p_skip_terminators(p)
+    ret n
 end
 
 func layout_element(p &: Ps, a &: at.Ast): int:
@@ -60,6 +128,16 @@ func parse_layout_block(p &: Ps, a &: at.Ast): int:
     p_rule(p, "layout_block")
     n := p_mk(p, a, at.AST_LAYOUT_BLOCK)
     p_advance(p)
+    if not p_at(p, tok.TK_COLON):
+        at.SetName(a, n, parse_decl_name(p))
+        params := p_mk(p, a, at.AST_BLOCK)
+        if p_match(p, tok.TK_LPAREN):
+            parse_params(p, a, params)
+            p_expect(p, tok.TK_RPAREN, "')' after layout parameters")
+        end
+        p_fin(p, a, params)
+        ps_set_b(a, n, params)
+    end
     p_expect(p, tok.TK_COLON, "':' after 'layout'")
     p_skip_terminators(p)
     layout_body(p, a, n)
@@ -72,24 +150,9 @@ func parse_component(p &: Ps, a &: at.Ast): int:
     p_rule(p, "component")
     n := p_mk(p, a, at.AST_LAYOUT_COMPONENT)
     p_advance(p)
-    at.SetName(a, n, p_name(p, "expected component name"))
+    at.SetName(a, n, parse_decl_name(p))
     if p_match(p, tok.TK_LPAREN):
-        if not p_at(p, tok.TK_RPAREN):
-            mut go := true
-            until go:
-                param := p_mk(p, a, at.AST_PARAM)
-                pname := p_name(p, "expected component parameter name")
-                at.SetName(a, param, pname)
-                if pname.len() > 0 and p_match(p, tok.TK_ASSIGN):
-                    ps_set_a(a, param, parse_expr(p, a))
-                end
-                p_fin(p, a, param)
-                if pname.len() > 0:
-                    at.AddChild(a, n, param)
-                end
-                go = p_match(p, tok.TK_COMMA)
-            end
-        end
+        parse_params(p, a, n)
         p_expect(p, tok.TK_RPAREN, "')' after component parameters")
     end
     p_expect(p, tok.TK_COLON, "':' after component header")

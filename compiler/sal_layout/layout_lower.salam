@@ -1,0 +1,714 @@
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include dg "../diag.salam"
+include lp "../langpack.salam"
+include at "../ast.salam"
+include cc "../condcomp.salam"
+include src "../source.salam"
+include sm "../semantic/semantic.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+
+const SL_TEXT := 1
+const SL_ATTR := 2
+const SL_URL := 3
+const SL_CSS := 4
+const SL_BOOL := 5
+const SL_CSSURL := 6
+const SL_IF := 7
+const SL_EACH := 8
+const SL_BAD := 9
+
+
+struct LoSlot:
+    pub kind: int = 0
+    pub expr: int = 0
+    pub out: str = ""
+    pub item: str = ""
+    pub key: int = 0
+    pub loop: int = 0
+end
+
+struct LoLower:
+    pub prog: int = 0
+    pub slots: Vector<LoSlot> = Vector {}
+    pub shadow: Vector<str> = Vector {}
+    pub funcs: Vector<str> = Vector {}
+    pub loop: int = 0
+    pub web: str = "web"
+end
+
+func lo_mark(tag: str, n: int): str:
+    ret char_from_code(2) + "salam-" + tag + "-" + co.U64Toa(n as u64) + char_from_code(3)
+end
+
+func lo_in_shadow(lw &: LoLower, name: str): bool:
+    repeat lw.shadow.len() in i:
+        if str.Equals(lw.shadow.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_is_prog_func(lw &: LoLower, name: str): bool:
+    repeat lw.funcs.len() in i:
+        if str.Equals(lw.funcs.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lo_refs_runtime(lw &: LoLower, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret lo_in_shadow(lw, n.name)
+    end
+    if n.kind == at.AST_CALL:
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+            if lo_is_prog_func(lw, at.Get(a, n.a).name):
+                ret true
+            end
+        else:
+            ret true
+        end
+        repeat n.list.len() in i:
+            if lo_refs_runtime(lw, a, n.list.get(i)):
+                ret true
+            end
+        end
+        ret false
+    end
+    if n.kind == at.AST_MEMBER or n.kind == at.AST_INDEX:
+        ret true
+    end
+    ret lo_refs_runtime(lw, a, n.a) or lo_refs_runtime(lw, a, n.b) or lo_refs_runtime(lw, a, n.c)
+end
+
+func lo_slot_kind(el: int, ei: int, name: str): int:
+    if el == 0:
+        if str.Equals(name, "title") or str.Equals(name, "content"):
+            ret SL_TEXT
+        end
+        ret SL_BAD
+    end
+    if sm.LayoutPseudoPrefixLen(name) > 0:
+        ret SL_BAD
+    end
+    mut key := sm.LayoutAttrKey(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ai := sm.LayoutAttrFor(ei, key)
+    if ai < 0:
+        ret SL_ATTR
+    end
+    dest := sm.LayoutAttrDest(ai)
+    vt := sm.LayoutAttrVtype(ai)
+    if ei >= 0 and str.Equals(sm.LayoutElemGenerator(ei), "font_face"):
+        ret str.Equals(key, "url") ? SL_CSSURL : SL_BAD
+    end
+    if vt == sm.VT_ENUM or vt == sm.VT_DIR or vt == sm.VT_LANG or vt == sm.VT_CODE:
+        ret SL_BAD
+    end
+    if dest == sm.LA_CONTENT:
+        k := ei >= 0 ? sm.LayoutElemKind(ei) : sm.LK_NORMAL
+        g := ei >= 0 ? sm.LayoutElemGenerator(ei) : ""
+        if k == sm.LK_RAW or str.Equals(g, "style") or str.Equals(g, "script"):
+            ret SL_BAD
+        end
+        ret SL_TEXT
+    end
+    if dest == sm.LA_SOURCE:
+        ret SL_URL
+    end
+    if dest == sm.LA_CSS or dest == sm.LA_HTML_OR_CSS:
+        ret SL_CSS
+    end
+    if dest == sm.LA_HTML:
+        if vt == sm.VT_BOOL:
+            ret SL_BOOL
+        end
+        if vt == sm.VT_URL or vt == sm.VT_ABS_URL or vt == sm.VT_REL_URL:
+            ret SL_URL
+        end
+        ret SL_ATTR
+    end
+    ret SL_BAD
+end
+
+func lo_bool_out(ei: int, name: str): str:
+    mut key := sm.LayoutAttrKey(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ai := sm.LayoutAttrFor(ei, key)
+    if ai >= 0 and str.Len(sm.LayoutAttrOut(ai)) > 0 and str.IndexOf(sm.LayoutAttrOut(ai), "*") < 0:
+        ret sm.LayoutAttrOut(ai)
+    end
+    ret hyphenate(key)
+end
+
+func lo_add_slot(lw &: LoLower, a &: at.Ast, from: int, sl0: LoSlot): int:
+    idx := lw.slots.len()
+    mut sl := sl0
+    sl.loop = lw.loop
+    lw.slots.push(sl)
+    tag := sl.kind == SL_BAD ? "bad" : "dyn"
+    ret mk_str(a, lo_mark(tag, idx), from)
+end
+
+func lo_value(lw &: LoLower, a &: at.Ast, attr: int, el: int, ei: int):
+    an := at.Get(a, attr)
+    vid := an.a
+    if vid == 0:
+        ret
+    end
+    v := at.Get(a, vid)
+    if v.kind == at.AST_LITERAL:
+        ret
+    end
+    lit := sm.LayoutFoldLiteral(a, lw.prog, vid, lw.shadow)
+    if lit != 0:
+        mut n1 := at.Get(a, attr)
+        n1.a = lit
+        at.Put(a, attr, n1)
+        ret
+    end
+    if not lo_refs_runtime(lw, a, vid):
+        ret
+    end
+    k := lo_slot_kind(el, ei, an.name)
+    mut sl := LoSlot { kind = k, expr = vid }
+    if k == SL_BOOL:
+        sl.out = lo_bool_out(ei, an.name)
+    end
+    mark := lo_add_slot(lw, a, vid, sl)
+    mut n2 := at.Get(a, attr)
+    n2.a = mark
+    at.Put(a, attr, n2)
+end
+
+func lo_walk(lw &: LoLower, a &: at.Ast, container: int, el: int, ei: int):
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            lo_value(lw, a, cid, el, ei)
+        else k == at.AST_LAYOUT_ELEMENT:
+            lo_walk(lw, a, cid, cid, sm.LayoutElemOf(a, cid))
+        else k == at.AST_IF:
+            lo_walk_if(lw, a, cid, el, ei)
+        else k == at.AST_EACH:
+            n := at.Get(a, cid)
+            sl := LoSlot { kind = SL_EACH, expr = n.a, item = n.name, key = n.c }
+            mark := lo_add_slot(lw, a, cid, sl)
+            mut nn := at.Get(a, cid)
+            nn.a = mark
+            at.Put(a, cid, nn)
+            lw.shadow.push(n.name)
+            if n.c != 0:
+                lw.shadow.push(at.Get(a, n.c).name)
+            end
+            lw.loop += 1
+            lo_walk(lw, a, n.b, el, ei)
+            lw.loop -= 1
+            _p1 := lw.shadow.pop()
+            if n.c != 0:
+                _p2 := lw.shadow.pop()
+            end
+        end
+    end
+end
+
+func lo_walk_if(lw &: LoLower, a &: at.Ast, nid: int, el: int, ei: int):
+    n := at.Get(a, nid)
+    sl := LoSlot { kind = SL_IF, expr = n.a }
+    mark := lo_add_slot(lw, a, nid, sl)
+    mut nn := at.Get(a, nid)
+    nn.a = mark
+    at.Put(a, nid, nn)
+    lo_walk(lw, a, n.b, el, ei)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lo_walk_if(lw, a, n.c, el, ei)
+        else:
+            lo_walk(lw, a, n.c, el, ei)
+        end
+    end
+end
+
+func lo_parse_text(log: lg.Logger, a &: at.Ast, text: str, path: str): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(quiet, lp.Load("en"), sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(quiet, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    if prog == 0:
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "internal: could not build the runtime layout function")
+    end
+    ret prog
+end
+
+func lo_web_call(lw &: LoLower, fn_name: str, arg: str): str:
+    ret lw.web + "." + fn_name + "(_salam_b, " + arg + ")\n"
+end
+
+func lo_slot_writer(kind: int): str:
+    if kind == SL_URL:
+        ret "PageUrl"
+    end
+    if kind == SL_CSS:
+        ret "PageCss"
+    end
+    if kind == SL_CSSURL:
+        ret "PageCssUrl"
+    end
+    ret "PageText"
+end
+
+func lo_marker_at(doc: str, p: int, tag &: str, num &: int): int:
+    close := str.IndexFrom(doc, char_from_code(3), p)
+    if close < 0:
+        ret 0 - 1
+    end
+    inner := str.Substr(doc, p + 1, close - p - 1)
+    if not str.StartsWith(inner, "salam-"):
+        ret 0 - 1
+    end
+    rest := str.Substr(inner, 6, str.Len(inner) - 6)
+    dash := str.IndexOf(rest, "-")
+    if dash < 0:
+        tag = rest
+        num = 0 - 1
+    else:
+        tag = str.Substr(rest, 0, dash)
+        num = str.Substr(rest, dash + 1, str.Len(rest) - dash - 1).to_int()
+    end
+    ret close + 1
+end
+
+func lo_build_source(lw &: LoLower, doc: str, chunks &: Vector<str>): str:
+    mut body := "mut _salam_b := " + lw.web + ".PageBegin()\n"
+    repeat lw.slots.len() in bi:
+        bs := lw.slots.get(bi)
+        if bs.kind == SL_BAD and bs.loop == 0:
+            body += "_salam_v" + co.U64Toa(bi as u64) + " := __salam_dyn_" + co.U64Toa(bi as u64) + "\n"
+        end
+    end
+    mut p := 0
+    mut start := 0
+    n := str.Len(doc)
+    stx := char_from_code(2)
+    until p < n:
+        q := str.IndexFrom(doc, stx, p)
+        if q < 0:
+            break
+        end
+        mut tag := ""
+        mut num := 0
+        after := lo_marker_at(doc, q, tag, num)
+        if after < 0:
+            p = q + 1
+            continue
+        end
+        if q > start:
+            body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
+            chunks.push(str.Substr(doc, start, q - start))
+        end
+        if (str.Equals(tag, "dyn") or str.Equals(tag, "bad")) and num >= 0 and num < lw.slots.len():
+            sl := lw.slots.get(num)
+            vname := "_salam_v" + co.U64Toa(num as u64)
+            if sl.kind == SL_IF:
+                body += "if __salam_dyn_" + co.U64Toa(num as u64) + ":\n"
+            else sl.kind == SL_EACH:
+                mut head := "each "
+                if sl.key != 0:
+                    head += "__salam_key_" + co.U64Toa(num as u64) + ", "
+                end
+                body += head + "__salam_item_" + co.U64Toa(num as u64) + " in __salam_dyn_" + co.U64Toa(num as u64) + ":\n"
+            else sl.kind == SL_BAD:
+                if sl.loop > 0:
+                    body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
+                end
+            else sl.kind == SL_BOOL:
+                body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
+                body += "if " + vname + ":\n"
+                body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
+                chunks.push(" " + sl.out)
+                body += "end\n"
+            else:
+                body += vname + " := __salam_dyn_" + co.U64Toa(num as u64) + "\n"
+                body += lo_web_call(lw, lo_slot_writer(sl.kind), vname)
+            end
+        else str.Equals(tag, "else"):
+            body += "else:\n"
+        else str.Equals(tag, "end"):
+            body += "end\n"
+        end
+        p = after
+        start = after
+    end
+    if start < n:
+        body += lo_web_call(lw, "PageStatic", "__salam_chunk_" + co.U64Toa(chunks.len() as u64))
+        chunks.push(str.Substr(doc, start, n - start))
+    end
+    body += "ret " + lw.web + ".PageEnd(_salam_b)\n"
+    ret "import " + lw.web + "\n\npure func __salam_view(): str:\n" + body + "end\n"
+end
+
+func lo_placeholder_num(name: str, prefix: str): int:
+    if not str.StartsWith(name, prefix):
+        ret 0 - 1
+    end
+    ret str.Substr(name, str.Len(prefix), str.Len(name) - str.Len(prefix)).to_int()
+end
+
+func lo_splice(lw &: LoLower, a &: at.Ast, nid: int, chunks: Vector<str>, from: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        c := lo_placeholder_num(n.name, "__salam_chunk_")
+        if c >= 0 and c < chunks.len():
+            ret mk_str(a, chunks.get(c), from)
+        end
+        d := lo_placeholder_num(n.name, "__salam_dyn_")
+        if d >= 0 and d < lw.slots.len():
+            ret lw.slots.get(d).expr
+        end
+        ret nid
+    end
+    mut m := at.Get(a, nid)
+    m.a = lo_splice(lw, a, n.a, chunks, from)
+    m.b = lo_splice(lw, a, n.b, chunks, from)
+    m.c = lo_splice(lw, a, n.c, chunks, from)
+    m.d = lo_splice(lw, a, n.d, chunks, from)
+    repeat n.list.len() in i:
+        m.list.set(i, lo_splice(lw, a, n.list.get(i), chunks, from))
+    end
+    if n.kind == at.AST_EACH:
+        it := lo_placeholder_num(n.name, "__salam_item_")
+        if it >= 0 and it < lw.slots.len():
+            sl := lw.slots.get(it)
+            m.name = sl.item
+            if sl.key != 0:
+                m.c = sl.key
+            end
+        end
+    end
+    if n.kind == at.AST_EXPR_STMT or n.kind == at.AST_RETURN:
+        m.view_glue = true
+    end
+    if n.kind == at.AST_VAR_DECL and str.Equals(n.name, "_salam_b"):
+        m.view_glue = true
+    end
+    at.Put(a, nid, m)
+    ret nid
+end
+
+func lo_span_tree(a &: at.Ast, nid: int, from: int, base: int):
+    if nid < base:
+        ret
+    end
+    n := at.Get(a, nid)
+    copy_span(a, nid, from)
+    lo_span_tree(a, n.a, from, base)
+    lo_span_tree(a, n.b, from, base)
+    lo_span_tree(a, n.c, from, base)
+    lo_span_tree(a, n.d, from, base)
+    lo_span_tree(a, n.ty, from, base)
+    repeat n.list.len() in i:
+        lo_span_tree(a, n.list.get(i), from, base)
+    end
+end
+
+func lo_glue_slot(a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0 - 1
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret lo_placeholder_num(n.name, "_salam_v")
+    end
+    if n.kind == at.AST_BLOCK:
+        ret 0 - 1
+    end
+    mut r := lo_glue_slot(a, n.a)
+    if r < 0:
+        r = lo_glue_slot(a, n.b)
+    end
+    if r < 0:
+        repeat n.list.len() in i:
+            if r < 0:
+                r = lo_glue_slot(a, n.list.get(i))
+            end
+        end
+    end
+    ret r
+end
+
+func lo_fix_glue_spans(lw &: LoLower, a &: at.Ast, nid: int, base: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK:
+        repeat n.list.len() in i:
+            lo_fix_glue_spans(lw, a, n.list.get(i), base)
+        end
+        ret
+    end
+    if n.kind == at.AST_IF or n.kind == at.AST_EACH or n.kind == at.AST_EXPR_STMT:
+        k := lo_glue_slot(a, n.kind == at.AST_EXPR_STMT ? nid : n.a)
+        if k >= 0 and k < lw.slots.len():
+            lo_span_tree_shallow(a, nid, lw.slots.get(k).expr, base)
+        end
+    end
+    if n.kind == at.AST_IF or n.kind == at.AST_EACH:
+        lo_fix_glue_spans(lw, a, n.b, base)
+        lo_fix_glue_spans(lw, a, n.c, base)
+    end
+end
+
+func lo_span_tree_shallow(a &: at.Ast, nid: int, from: int, base: int):
+    if nid < base:
+        ret
+    end
+    n := at.Get(a, nid)
+    copy_span(a, nid, from)
+    if n.kind == at.AST_BLOCK:
+        ret
+    end
+    lo_span_tree_shallow(a, n.a, from, base)
+    if n.kind != at.AST_IF and n.kind != at.AST_EACH:
+        lo_span_tree_shallow(a, n.b, from, base)
+        repeat n.list.len() in i:
+            lo_span_tree_shallow(a, n.list.get(i), from, base)
+        end
+    end
+end
+
+func lo_collect_funcs(lw &: LoLower, a &: at.Ast, prog: int):
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and str.Len(d.name) > 0:
+            lw.funcs.push(d.name)
+        end
+    end
+end
+
+func lo_lower_one(
+    log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, lb: int, file: str, imp &: int, fragment: bool
+): int:
+    _ex := ExpandBlock(log, pack, ct, a, prog, lb, lo_dir_of(file))
+    sm.LayoutResolve(a, lb)
+    mut lw := LoLower { prog = prog }
+    lw.web = lo_web_pkg(pack)
+    defer lw.slots.free()
+    defer lw.shadow.free()
+    defer lw.funcs.free()
+    lo_collect_funcs(lw, a, prog)
+    lbn := at.Get(a, lb)
+    if lbn.b != 0:
+        repeat at.ChildCount(a, lbn.b) in pi:
+            lw.shadow.push(at.Get(a, at.Child(a, lbn.b, pi)).name)
+        end
+    end
+    lo_walk(lw, a, lb, 0, 0 - 1)
+    mut quiet := dg.NewDefault(0, false, 0)
+    g_lo_cls_prefix = fragment ? hyphenate(str.Lower(lbn.name)) + "-" : ""
+    r := Generate(log, quiet, file, a, lb, true)
+    g_lo_cls_prefix = ""
+    mut doc := ""
+    if fragment:
+        if str.Len(r.css) > 0:
+            doc = "<style>" + r.css + "</style>"
+        end
+        doc += r.html
+        if str.Len(r.js) > 0:
+            doc += "<script>" + r.js + "</script>"
+        end
+    else:
+        doc = Document(r, true, "", "", true)
+    end
+    mut chunks := Vector {} as Vector<str>
+    defer chunks.free()
+    text := lo_build_source(lw, doc, chunks)
+    base := at.Count(a)
+    sp := lo_parse_text(log, a, text, file)
+    if sp == 0:
+        ret 0
+    end
+    mut fid := 0
+    repeat at.ChildCount(a, sp) in ci:
+        cid := at.Child(a, sp, ci)
+        ck := at.KindOf(a, cid)
+        if ck == at.AST_IMPORT and imp == 0:
+            imp = cid
+        else ck == at.AST_FUNC_DEF:
+            fid = cid
+        end
+    end
+    if fid == 0:
+        ret 0
+    end
+    fnode := at.Get(a, fid)
+    body := lo_splice(lw, a, fnode.a, chunks, lb)
+    lo_span_tree(a, fid, lb, base)
+    lo_fix_glue_spans(lw, a, body, base)
+    mut fn := at.Get(a, fid)
+    fn.name = lbn.name
+    fn.a = body
+    fn.is_pure = true
+    mut params := Vector {} as Vector<int>
+    if lbn.b != 0:
+        repeat at.ChildCount(a, lbn.b) in pj:
+            params.push(at.Child(a, lbn.b, pj))
+        end
+    end
+    mut oldp := fn.list
+    fn.list = params
+    oldp.free()
+    fn.file_boundary = true
+    at.Put(a, fid, fn)
+    if fn.ty != 0 and str.Equals(lp.Code(pack), "fa"):
+        at.SetName(a, fn.ty, "رشته")
+    end
+    mut lbm := at.Get(a, lb)
+    lbm.view_glue = true
+    at.Put(a, lb, lbm)
+    ret fid
+end
+
+func lo_all_typed(a &: at.Ast, cid: int): bool:
+    mut n := 0
+    repeat at.ChildCount(a, cid) in i:
+        p := at.Get(a, at.Child(a, cid, i))
+        if p.kind == at.AST_PARAM:
+            if p.ty == 0:
+                ret false
+            end
+            n += 1
+        end
+    end
+    ret n > 0
+end
+
+func lo_fragment_block(a &: at.Ast, cid: int): int:
+    c := at.Get(a, cid)
+    lb := at.NewNode(a, at.AST_LAYOUT_BLOCK)
+    copy_span(a, lb, cid)
+    params := at.NewNode(a, at.AST_BLOCK)
+    copy_span(a, params, cid)
+    repeat at.ChildCount(a, cid) in i:
+        pid := at.Child(a, cid, i)
+        if at.KindOf(a, pid) == at.AST_PARAM:
+            at.AddChild(a, params, at.Clone(a, pid))
+        end
+    end
+    if c.a != 0:
+        repeat at.ChildCount(a, c.a) in j:
+            at.AddChild(a, lb, at.Clone(a, at.Child(a, c.a, j)))
+        end
+    end
+    mut ln := at.Get(a, lb)
+    ln.name = c.name
+    ln.b = params
+    at.Put(a, lb, ln)
+    ret lb
+end
+
+func lo_web_pkg(pack: lp.Langpack): str:
+    ret str.Equals(lp.Code(pack), "fa") ? "وب" : "web"
+end
+
+func lo_has_import(a &: at.Ast, prog: int, name: str): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_IMPORT and str.Equals(d.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+pub func PrepareViews(log: lg.Logger, pack: lp.Langpack, ct: cc.Table, a &: at.Ast, prog: int, file: str): int:
+    if prog == 0:
+        ret 0
+    end
+    mut views := Vector {} as Vector<int>
+    defer views.free()
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) > 0 and not d.view_glue:
+            views.push(did)
+        end
+    end
+    mut frags := Vector {} as Vector<int>
+    defer frags.free()
+    repeat at.ChildCount(a, prog) in ci:
+        cid := at.Child(a, prog, ci)
+        c := at.Get(a, cid)
+        if c.kind == at.AST_LAYOUT_COMPONENT and not c.view_glue and lo_all_typed(a, cid):
+            frags.push(cid)
+        end
+    end
+    if views.len() == 0 and frags.len() == 0:
+        ret 0
+    end
+    mut imp := 0
+    mut fns := Vector {} as Vector<int>
+    defer fns.free()
+    repeat views.len() in v:
+        fid := lo_lower_one(log, pack, ct, a, prog, views.get(v), file, imp, false)
+        if fid != 0:
+            fns.push(fid)
+        end
+    end
+    repeat frags.len() in fi:
+        cid2 := frags.get(fi)
+        mut cn := at.Get(a, cid2)
+        cn.view_glue = true
+        at.Put(a, cid2, cn)
+        flb := lo_fragment_block(a, cid2)
+        fid2 := lo_lower_one(log, pack, ct, a, prog, flb, file, imp, true)
+        if fid2 != 0:
+            fns.push(fid2)
+        end
+    end
+    mut pn := at.Get(a, prog)
+    mut list := Vector {} as Vector<int>
+    if imp != 0 and not lo_has_import(a, prog, lo_web_pkg(pack)):
+        list.push(imp)
+    end
+    repeat pn.list.len() in k:
+        list.push(pn.list.get(k))
+    end
+    repeat fns.len() in f:
+        list.push(fns.get(f))
+    end
+    mut old := pn.list
+    pn.list = list
+    at.Put(a, prog, pn)
+    old.free()
+    ret fns.len()
+end

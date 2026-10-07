@@ -260,6 +260,16 @@ if [ "${1:-}" = "--worker" ]; then
             got=$("$SALAM_ABS" exec "$f" --no-color --log-level=error --lang="$lang" 2>&1 | tr -d '\r')
             wk_check "$expabs" "$got"
             ;;
+        translate)
+            other=en
+            [ "$lang" = en ] && other=fa
+            tdir="$WORK/tr_${jobid}_$$"
+            mkdir -p "$tdir"
+            "$SALAM_ABS" translate "$other" "$f" --lang="$lang" --output="$tdir/t.salam" --no-color >/dev/null 2>&1
+            got=$("$SALAM_ABS" exec "$tdir/t.salam" --no-color --log-level=error --lang="$other" 2>&1 | tr -d '\r')
+            rm -rf "$tdir"
+            wk_check "$expabs" "$got"
+            ;;
         errors)
             code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
             out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
@@ -882,6 +892,19 @@ if want llvmapi; then
     done
 fi
 
+if want translate; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/translate/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            exp="$(pick_expect "tests/$lang/translate/$name")"
+            [ -f "$exp" ] || continue
+            add_job translate "translate/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
 if want exec; then
     for lang in $LANGS; do
         for f in tests/"$lang"/exec/*.salam; do
@@ -922,6 +945,14 @@ fi
 
 if want layout; then
     for lang in $LANGS; do
+        for stray in tests/"$lang"/layout/*.salam tests/"$lang"/web/*.salam \
+            tests/"$lang"/web_errors/*.salam; do
+            [ -e "$stray" ] || continue
+            subs="elements/, style/, components/, pages/ or errors/"
+            note_result \
+                "FAIL layout/$lang ($stray is in no layout subdirectory, so nothing runs it; move it into $subs)" \
+                "layout/$lang/stray/$(basename "$stray" .salam)"
+        done
         for sub in elements style components pages errors; do
             [ -d "tests/$lang/layout/$sub" ] || continue
             want_sub "layout/$sub" || continue

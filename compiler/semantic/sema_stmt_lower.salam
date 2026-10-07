@@ -167,6 +167,7 @@ func ea_mcall(
     call := ea_node(a, at.AST_CALL, sp)
     mut cv := at.Get(a, call)
     cv.a = mem
+    cv.view_glue = true
     at.Put(a, call, cv)
     if arg != 0:
         at.AddChild(a, call, arg)
@@ -458,6 +459,22 @@ func check_no_effect(s &: Sema, a &: at.Ast, ea: int):
 end
 
 func check_stmt(s &: Sema, a &: at.Ast, nid: int):
+    if nid != 0 and at.Get(a, nid).view_glue:
+        if view_glue_type_error(s, a, nid):
+            ret
+        end
+        s.pure_off += 1
+        save_skip := s.skip_lang
+        s.skip_lang = true
+        check_stmt_body(s, a, nid)
+        s.skip_lang = save_skip
+        s.pure_off -= 1
+        ret
+    end
+    check_stmt_body(s, a, nid)
+end
+
+func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
     if nid == 0:
         ret
     end
@@ -783,7 +800,8 @@ func check_stmt(s &: Sema, a &: at.Ast, nid: int):
                 )
             end
             dn5 := at.Get(a, n5.d)
-            if dn5.kind == at.AST_LITERAL and dn5.value_kind == tok.TV_INT and dn5.value_int == 0 as u64:
+            step_neg := dn5.kind == at.AST_LITERAL and dn5.value_kind == tok.TV_INT and (dn5.value_int as i64) < 0 and not str.StartsWith(dn5.type_str, "u")
+            if dn5.kind == at.AST_LITERAL and dn5.value_kind == tok.TV_INT and (dn5.value_int == 0 as u64 or step_neg):
                 serr(
                     s, 63, span_of(a, n5.d), i18.Tr("repeat step must be a positive number (the direction comes from the bounds)")
                 )
@@ -1233,4 +1251,44 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     end
     at.SetTypeStr(a, nid, type_to_string(s, t))
     ret t
+end
+
+func view_glue_type_error(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if n.kind != at.AST_EXPR_STMT or n.a == 0 or at.KindOf(a, n.a) != at.AST_CALL:
+        ret false
+    end
+    call := at.Get(a, n.a)
+    if call.a == 0 or at.KindOf(a, call.a) != at.AST_MEMBER or call.list.len() != 2:
+        ret false
+    end
+    m := at.Get(a, call.a).name
+    if not str.Equals(m, "PageText") and not str.Equals(m, "PageUrl") and not str.Equals(m, "PageCss") and not str.Equals(m, "PageCssUrl"):
+        ret false
+    end
+    arg := call.list.get(1)
+    t := sema_check_expr(s, a, arg)
+    if type_is_error(s, t):
+        ret true
+    end
+    shown := type_disp(s, t)
+    raw := type_to_string(s, t)
+    tv := ty_at(s, t)
+    is_url := str.EndsWith(raw, "Url") or str.EndsWith(raw, "نشانی وب")
+    is_safe := is_url or str.EndsWith(raw, "Color") or str.EndsWith(raw, "Length") or str.EndsWith(raw, "رنگ وب") or str.EndsWith(raw, "اندازه وب")
+    is_num := type_is_numeric(s, t)
+    is_plain := is_num or tv.kind == TY_STR or tv.kind == TY_BOOL
+    mut msg := ""
+    if (str.Equals(m, "PageUrl") or str.Equals(m, "PageCssUrl")) and not is_url:
+        msg = i18.Tr("this value is a %s, but an address from runtime must be a web.Url; build it with web.ParseUrl, which rejects unsafe schemes like javascript:")
+    else str.Equals(m, "PageCss") and not (is_num or (is_safe and not is_url)):
+        msg = i18.Tr("this value is a %s, but a style value from runtime must be a web.Color, a web.Length or a number; build it with web.ParseColor or web.ParseLength")
+    else str.Equals(m, "PageText") and not (is_plain or is_safe):
+        msg = i18.Tr("this value is a %s and cannot be shown as text; pass a str, a number or a bool")
+    end
+    if str.Len(msg) == 0:
+        ret false
+    end
+    serr(s, 135, span_of(a, nid), co.Format1(msg, co.ArgStr(shown)))
+    ret true
 end

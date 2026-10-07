@@ -7,6 +7,16 @@ include at "../ast.salam"
 include i18 "../i18n.salam"
 include sm "../semantic/semantic.salam"
 
+func cg_atomic_guard(g &: Cg):
+    if g.atomic_guard:
+        ret
+    end
+    g.atomic_guard = true
+    outh(
+        g, "#if defined(__TINYC__) && __TINYC__ < 928\n" + "#error \"the atomic intrinsics need tcc 0.9.28 or newer: this tcc has no __atomic builtins. Build the pinned one with tools/bash/install-tcc.sh, or use std/atomic, which falls back to a mutex.\"\n" + "#endif\n"
+    )
+end
+
 func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     cn := at.Get(a, n)
     if cn.list.len() > i:
@@ -284,6 +294,109 @@ func cg_lower_print_free(
     ret r
 end
 
+func cg_lower_print_buf(
+    g &: Cg, s &: sm.Sema, a &: at.Ast, segs &: Vector<PfSeg>, err: bool
+): str:
+    mut pre := co.SbNew()
+    mut body := co.SbNew()
+    mut post := co.SbNew()
+    repeat segs.len() in i:
+        sg := segs.get(i)
+        if sg.kind == PF_LIT:
+            tl := str.Len(sg.text)
+            if tl > 0:
+                co.SbPuts(body, "salam_out_put_(" + cg_cescape(sg.text) + ", " + co.I64Toa(tl as i64) + "); ")
+            end
+            continue
+        end
+        e := cg_expr(g, s, a, sg.expr)
+        g.tmpn += 1
+        tv := "__po" + co.I64Toa(g.tmpn as i64)
+        if sg.kind == PF_STR:
+            co.SbPuts(pre, "const char* " + tv + " = (" + e + "); ")
+            co.SbPuts(body, "salam_out_str(" + tv + "); ")
+        else sg.kind == PF_BOOL:
+            co.SbPuts(pre, "int " + tv + " = (" + e + ") ? 1 : 0; ")
+            co.SbPuts(body, "salam_out_bool(" + tv + "); ")
+        else sg.kind == PF_CHAR:
+            co.SbPuts(pre, "int32_t " + tv + " = (int32_t)(" + e + "); ")
+            co.SbPuts(body, "salam_out_byte(" + tv + "); ")
+        else sg.kind == PF_F64:
+            co.SbPuts(pre, "const char* " + tv + " = salam_fmt_f64((double)(" + e + ")); ")
+            co.SbPuts(body, "salam_out_str(" + tv + "); ")
+            co.SbPuts(post, CG_MEM_FREE + "((void*)" + tv + "); ")
+        else sg.kind == PF_U32 or sg.kind == PF_U64 or sg.kind == PF_SIZE:
+            co.SbPuts(pre, "uint64_t " + tv + " = (uint64_t)(" + e + "); ")
+            co.SbPuts(body, "salam_out_u64(" + tv + "); ")
+        else:
+            co.SbPuts(pre, "int64_t " + tv + " = (int64_t)(" + e + "); ")
+            co.SbPuts(body, "salam_out_i64(" + tv + "); ")
+        end
+    end
+    mut r := "({ " + co.SbCstr(pre) + "salam_out_lock(); "
+    if err:
+        r = r + "salam_out_flush_l(1); " + co.SbCstr(body) + "salam_out_flush_l(2); salam_out_unlock(); "
+    else:
+        r = r + co.SbCstr(body) + "SALAM_OUT_END1(); salam_out_unlock(); "
+    end
+    r = r + co.SbCstr(post) + "})"
+    co.SbFree(pre)
+    co.SbFree(body)
+    co.SbFree(post)
+    ret r
+end
+
+func cg_extern_io_kind(nm: str): int:
+    if str.Equals(nm, "printf") or str.Equals(nm, "puts") or str.Equals(nm, "putchar") or str.Equals(nm, "vprintf"):
+        ret 2
+    end
+    if str.Equals(nm, "write") or str.Equals(nm, "writev") or str.Equals(nm, "_write") or str.Equals(nm, "fwrite") or str.Equals(nm, "fputs") or str.Equals(nm, "fputc") or str.Equals(nm, "fprintf") or str.Equals(nm, "dprintf"):
+        ret 1
+    end
+    if str.Equals(nm, "fflush") or str.Equals(nm, "read") or str.Equals(nm, "recv") or str.Equals(nm, "recvfrom") or str.Equals(nm, "recvmsg") or str.Equals(nm, "accept") or str.Equals(nm, "accept4") or str.Equals(nm, "connect"):
+        ret 1
+    end
+    if str.Equals(nm, "poll") or str.Equals(nm, "ppoll") or str.Equals(nm, "select") or str.Equals(nm, "pselect") or str.Equals(nm, "epoll_wait") or str.Equals(nm, "epoll_pwait") or str.Equals(nm, "kevent"):
+        ret 1
+    end
+    if str.Equals(nm, "sleep") or str.Equals(nm, "usleep") or str.Equals(nm, "nanosleep") or str.Equals(nm, "clock_nanosleep") or str.Equals(nm, "pause"):
+        ret 1
+    end
+    if str.Equals(nm, "wait") or str.Equals(nm, "waitpid") or str.Equals(nm, "wait4") or str.Equals(nm, "fork") or str.Equals(nm, "vfork") or str.Equals(nm, "system") or str.Equals(nm, "popen"):
+        ret 1
+    end
+    if str.StartsWith(nm, "exec") or str.StartsWith(nm, "posix_spawn"):
+        ret 1
+    end
+    if str.Equals(nm, "_exit") or str.Equals(nm, "_Exit") or str.Equals(nm, "abort") or str.Equals(nm, "raise") or str.Equals(nm, "kill"):
+        ret 1
+    end
+    if str.Equals(nm, "getchar") or str.Equals(nm, "fgets") or str.Equals(nm, "getline") or str.Equals(nm, "scanf") or str.Equals(nm, "fgetc") or str.Equals(nm, "getc"):
+        ret 1
+    end
+    ret 0
+end
+
+func cg_wrap_extern_io(g &: Cg, s &: sm.Sema, sig: int, nm: str, call: str): str:
+    if not g.single_threaded or g.freestanding:
+        ret call
+    end
+    k := cg_extern_io_kind(nm)
+    if k == 0:
+        ret call
+    end
+    if k == 1:
+        ret "(salam_out_flush(), " + call + ")"
+    end
+    rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
+    if str.Len(rts) == 0 or str.Equals(rts, "void"):
+        ret "(salam_out_flush(), " + call + ", (void)fflush(0))"
+    end
+    g.tmpn += 1
+    tv := "__sio" + co.I64Toa(g.tmpn as i64)
+    ret "({ salam_out_flush(); " + cg_ctype(rts) + " " + tv + " = " + call + "; fflush(0); " + tv + "; })"
+end
+
 func cg_lower_print(
     g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, nl: bool, err: bool
 ): str:
@@ -314,6 +427,9 @@ func cg_lower_print(
             ret "SALAM_OUT_LIT(" + lit + ", " + co.I64Toa(rawlen) + ")"
         end
         co.SbFree(raw)
+    end
+    if g.single_threaded:
+        ret cg_lower_print_buf(g, s, a, segs, err)
     end
     mut nseq := 0
     repeat segs.len() in ic:
@@ -430,6 +546,7 @@ func call_ident(
     if sm.AtomicArity(nm) > 0 and cn.list.len() == sm.AtomicArity(nm) and sm.Lookup(
         s, s.global, nm
     ) == 0:
+        cg_atomic_guard(g)
         pexp := cg_expr(g, s, a, cn.list.get(0))
         if str.Equals(nm, "atomic_load"):
             g.tmpn += 1
@@ -580,6 +697,9 @@ func call_ident(
     if sig != 0 and type_is_byval_agg(s, sm.SigAt(s, sig).ret_type) and not is_extern_call:
         ret call_sret(g, s, sm.SigAt(s, sig).ret_type, mangled3, args)
     end
+    if is_extern_call:
+        ret cg_wrap_extern_io(g, s, sig, nm, mangled3 + "(" + args + ")")
+    end
     ret mangled3 + "(" + args + ")"
 end
 
@@ -610,6 +730,9 @@ func call_pkg(
     args := call_args(g, s, a, n, sig)
     if sig != 0 and type_is_byval_agg(s, sm.SigAt(s, sig).ret_type) and not is_extern_call:
         ret call_sret(g, s, sm.SigAt(s, sig).ret_type, mangled, args)
+    end
+    if is_extern_call:
+        ret cg_wrap_extern_io(g, s, sig, nm, mangled + "(" + args + ")")
     end
     ret mangled + "(" + args + ")"
 end

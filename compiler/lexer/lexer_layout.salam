@@ -43,73 +43,220 @@ func layout_scan_quoted(L &: Lx):
     end
 end
 
-func layout_scan_func_value(L &: Lx):
-    mut depth := 0
-    until true:
-        layout_skip_inline_ws(L)
-        d := peek(L)
-        if d == 0 or d == 10:
-            eb := lx_pos(L)
-            error_at(L, eb, "unterminated function value in layout")
-            ret
-        end
-        if d == 40:
-            depth += 1
-            scan_op(L)
-            continue
-        end
-        if d == 41:
-            depth -= 1
-            scan_op(L)
-            if depth <= 0:
-                ret
-            end
-            continue
-        end
-        if d == 34:
-            layout_scan_quoted(L)
-            continue
-        end
-        if at_digit(L, 0) != 0:
-            scan_number(L)
-            continue
-        end
-        if is_ident_start(d):
-            scan_ident(L)
-            continue
-        end
-        scan_op(L)
+func layout_value_operand(L &: Lx): bool:
+    c := peek(L)
+    if c == 34:
+        layout_scan_quoted(L)
+        ret true
     end
+    if c == 194 and peek2(L, 1) == 171 and L.pack == lp.LP_FA:
+        scan_guillemet_string(L)
+        ret true
+    end
+    if c == 96 and peek2(L, 1) == 96 and peek2(L, 2) == 96:
+        scan_block(L)
+        ret true
+    end
+    if c == 96:
+        scan_raw_string(L)
+        ret true
+    end
+    if at_digit(L, 0) != 0:
+        scan_number(L)
+        ret true
+    end
+    if is_ident_start(c) and not (c >= 128 and layout_at_unicode_op(L)):
+        if layout_css_word(L):
+            ret true
+        end
+        scan_ident(L)
+        ret true
+    end
+    ret false
+end
+
+func layout_css_word(L &: Lx): bool:
+    mut j := 0
+    mut hyphen := false
+    until L.pos + j < L.n:
+        b := peek2(L, j)
+        if is_ident_cont(b):
+            j += 1
+        else b == 45 and is_ident_start(peek2(L, j + 1)) and not (peek2(L, j + 1) >= 128):
+            hyphen = true
+            j += 1
+        else:
+            break
+        end
+    end
+    if not hyphen:
+        ret false
+    end
+    b0 := lx_pos(L)
+    text := str.SubstrIn(L.s, L.pos, j)
+    repeat j:
+        adv(L)
+    end
+    emit(L, tok.TK_IDENT, b0, text)
+    ret true
+end
+
+func layout_at_unicode_op(L &: Lx): bool:
+    c := peek(L)
+    c1 := peek2(L, 1)
+    c2 := peek2(L, 2)
+    ret (c == 239 and c1 == 188 and (c2 == 139 or c2 == 141)) or (c == 226 and c1 == 136 and c2 == 146) or (c == 216 and c1 == 159)
+end
+
+func layout_word_at(L &: Lx): str:
+    mut j := 0
+    until L.pos + j < L.n:
+        b := peek2(L, j)
+        if b == 32 or b == 9 or b == 13 or b == 10 or b == 0 or b == 58 or b == 61 or b == 40 or b == 41:
+            break
+        end
+        j += 1
+    end
+    ret str.SubstrIn(L.s, L.pos, j)
+end
+
+func layout_is_word_op(L &: Lx, w: str): bool:
+    k := lp.LookupKeyword(L.pack, w)
+    ret k >= tok.TK_EQ and k <= tok.TK_NOT
+end
+
+func layout_words_continue(L &: Lx): bool:
+    first := layout_word_at(L)
+    k := lp.LookupKeyword(L.pack, first)
+    if k == tok.TK_KW_END or str.Equals(first, "end") or (k >= tok.TK_EQ and k <= tok.TK_NOT):
+        ret false
+    end
+    mut j := 0
+    until L.pos + j < L.n:
+        b := peek2(L, j)
+        if b == 61:
+            ret peek2(L, j + 1) == 61
+        end
+        if b == 58:
+            ret false
+        end
+        if b == 10 or b == 0:
+            ret true
+        end
+        if is_ident_cont(b) or b == 32 or b == 9:
+            j += 1
+            continue
+        end
+        ret true
+    end
+    ret false
+end
+
+func layout_continues(c: int, c1: int): bool:
+    if c == 43 or c == 45 or c == 42 or c == 47 or c == 37 or c == 46 or c == 91 or c == 40 or c == 60 or c == 62 or c == 38 or c == 124 or c == 94 or c == 63:
+        ret true
+    end
+    ret (c == 61 or c == 33) and c1 == 61
 end
 
 func layout_value(L &: Lx):
     layout_skip_inline_ws(L)
-    c := peek(L)
-    if c == 0 or c == 10:
+    c0 := peek(L)
+    if c0 == 0 or c0 == 10:
         b := lx_pos(L)
         error_at(L, b, "layout attribute requires a value")
         ret
     end
-    if c == 34:
-        layout_scan_quoted(L)
-        ret
-    end
-    if c == 96:
-        scan_raw_string(L)
-        ret
-    end
-    if at_digit(L, 0) != 0:
-        scan_number(L)
-        ret
-    end
-    if is_ident_start(c):
-        scan_ident(L)
-        if peek(L) == 40:
-            layout_scan_func_value(L)
+    mut depth := 0
+    mut want := true
+    mut quest := 0
+    mut prev_ident := false
+    mut last := 0 - 1
+    until true:
+        layout_skip_inline_ws(L)
+        if L.pos == last:
+            sb := lx_pos(L)
+            error_at(L, sb, "unexpected character in layout value")
+            adv(L)
+            continue
+        end
+        last = L.pos
+        c := peek(L)
+        if c == 0 or c == 10:
+            if depth > 0:
+                eb := lx_pos(L)
+                error_at(L, eb, "unclosed '(' or '[' in layout value")
+            end
+            ret
+        end
+        if depth > 0:
+            if c == 40 or c == 91:
+                depth += 1
+            else c == 41 or c == 93:
+                depth -= 1
+            end
+            scan_one(L)
+            want = false
+            continue
+        end
+        if want:
+            prev_ident = false
+            if c == 40 or c == 91:
+                depth += 1
+                scan_op(L)
+                continue
+            end
+            if layout_value_operand(L):
+                want = false
+                prev_ident = is_ident_start(c) and not (c >= 128 and layout_at_unicode_op(L))
+                continue
+            end
+            if is_ident_start(c) and not layout_at_unicode_op(L):
+                scan_ident(L)
+                want = false
+                prev_ident = true
+                continue
+            end
+            scan_one(L)
+            continue
+        end
+        if c == 58 and quest > 0:
+            quest -= 1
+            scan_op(L)
+            want = true
+            continue
+        end
+        if layout_continues(c, peek2(L, 1)) or layout_at_unicode_op(L):
+            if c == 63 or (c == 216 and peek2(L, 1) == 159):
+                quest += 1
+            end
+            if c == 40 or c == 91:
+                depth += 1
+                scan_op(L)
+                continue
+            end
+            scan_one(L)
+            want = c != 41 and c != 93
+            continue
+        end
+        if is_ident_start(c) and prev_ident and layout_words_continue(L):
+            scan_ident(L)
+            continue
+        end
+        if is_ident_start(c):
+            w := layout_word_at(L)
+            if layout_is_word_op(L, w):
+                eb := lx_pos(L)
+                error_at(L, eb, "a word operator inside a layout value needs parentheses, for example (a and b)")
+                repeat str.Len(w):
+                    adv(L)
+                end
+                want = true
+                continue
+            end
         end
         ret
     end
-    scan_op(L)
 end
 
 func layout_try_end_inline(L &: Lx, b: co.SrcPos): bool:
@@ -160,10 +307,65 @@ func layout_report_bad_name(L &: Lx, b: co.SrcPos, name: str, namelen: int):
     end
 end
 
+func layout_control(L &: Lx, k: int, word: str):
+    b := lx_pos(L)
+    repeat str.Len(word):
+        adv(L)
+    end
+    emit(L, k, b, word)
+    mut depth := 0
+    mut last := 0 - 1
+    until true:
+        layout_skip_inline_ws(L)
+        if L.pos == last:
+            sb := lx_pos(L)
+            error_at(L, sb, "unexpected character in layout value")
+            adv(L)
+            continue
+        end
+        last = L.pos
+        c := peek(L)
+        if c == 0 or c == 10:
+            eb := lx_pos(L)
+            error_at(L, eb, "expected ':' at the end of this layout 'if', 'else' or 'each' line")
+            ret
+        end
+        if c == 58 and depth == 0:
+            layout_emit_punct(L, tok.TK_COLON, ":")
+            break
+        end
+        if c == 40 or c == 91:
+            depth += 1
+        else (c == 41 or c == 93) and depth > 0:
+            depth -= 1
+        end
+        if c == 63 or (c == 216 and peek2(L, 1) == 159):
+            eb2 := lx_pos(L)
+            error_at(L, eb2, "a '?' ternary cannot be used in a layout 'if' or 'each' line")
+        end
+        scan_one(L)
+    end
+    if k != tok.TK_KW_ELSE:
+        L.layout_depth += 1
+    end
+    L.layout_sub = LX_SUB_NAME
+end
+
 func layout_name(L &: Lx):
     b := lx_pos(L)
     if layout_try_end_inline(L, b):
         ret
+    end
+    if is_ident_start(peek(L)):
+        w := layout_word_at(L)
+        mut ck := lp.LookupKeyword(L.pack, w)
+        if ck == tok.TK_KW_STEP:
+            ck = tok.TK_KW_EACH
+        end
+        if ck == tok.TK_KW_IF or ck == tok.TK_KW_ELSE or ck == tok.TK_KW_EACH:
+            layout_control(L, ck, w)
+            ret
+        end
     end
     start := L.pos
     until not at_end(L):

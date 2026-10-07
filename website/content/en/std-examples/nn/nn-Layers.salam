@@ -1,0 +1,83 @@
+import nn
+import autograd
+import optim
+import tensor
+import os
+import compress
+
+func main:
+    mut store := nn.ParamStore {}
+    mut rng := tensor.NewRng(3)
+    fc1 := nn.NewLinear(store, "fc1", 2, 8, rng)
+    fc2 := nn.NewLinearNoBias(store, "fc2", 8, 1, rng)
+    mut model := nn.Sequential {}
+    model.add(fc1)
+    model.add(nn.TanhLayer {})
+    model.add(fc2)
+    println store.count()
+
+    mut inputs := tensor.Reshape(tensor.Arange(8), tensor.Shape2(4, 2))
+    tensor.ScaleInPlace(inputs, 0.25)
+    mut target := tensor.Zeros2(4, 1)
+    repeat 4 in i:
+        target.set_at(i, inputs.at2(i, 0) + inputs.at2(i, 1))
+    end
+    mut adam := optim.Adam { lr = 0.05 }
+    mut tape := autograd.NewTape(1)
+    mut last := 0.0
+    repeat 300:
+        tape.reset()
+        store.zero_grad()
+        output := model.forward(tape, store, autograd.Input(tape, inputs))
+        loss := autograd.MSELoss(tape, output, autograd.Constant(tape, target))
+        autograd.Backward(tape, loss)
+        adam.step(store)
+        last = autograd.Value(tape, loss).at(0)
+    end
+    println last < 0.01
+    mut p := store.at(fc1.w)
+    println p.name, tensor.ShapeString(p.value), tensor.ShapeString(p.grad)
+    weight_node := nn.Bind(tape, store, fc1.w)
+    println tensor.ShapeString(autograd.Value(tape, weight_node))
+
+    path := os.TempDir() + "/salam_mlp_en.ckpt"
+    println nn.SaveCheckpoint(path, store), nn.LoadCheckpoint(path, store)
+    mut buffer := nn.SaveCheckpointBuf(store)
+    println nn.LoadCheckpointBuf(buffer, store)
+    compress.BufFree(buffer)
+
+    mut images := tensor.Ones(tensor.Shape4(2, 1, 8, 8))
+    conv := nn.NewConv2D(store, "conv", 1, 4, 3, 1, 1, rng)
+    mut batch_norm := nn.NewBatchNorm(store, "bn", 4)
+    group_norm := nn.NewGroupNorm(store, "gn", 4, 2)
+    pool := nn.MaxPool2D { size = 2, stride = 2 }
+    average := nn.AvgPool2D {}
+    h := conv.forward(tape, store, autograd.Input(tape, images))
+    h2 := group_norm.forward(tape, store, batch_norm.forward(tape, store, h))
+    h3 := average.forward(tape, pool.forward(tape, nn.ReluLayer {}.forward(tape, store, h2)))
+    flat := nn.Flatten(tape, h3)
+    println tensor.ShapeString(autograd.Value(tape, h)), tensor.ShapeString(autograd.Value(tape, flat))
+
+    row := autograd.Input(tape, tensor.Ones(tensor.Shape2(2, 4)))
+    layer_norm := nn.NewLayerNorm(store, "ln", 4)
+    rms_norm := nn.NewRMSNorm(store, "rms", 4)
+    drop := nn.Dropout { p = 0.0 }
+    gelu := nn.GeluLayer {}
+    out := gelu.forward(tape, store, drop.forward(tape, rms_norm.forward(tape, store, layer_norm.forward(tape, store, row))))
+    println tensor.ShapeString(autograd.Value(tape, out))
+
+    mut weight := tensor.Zeros2(64, 64)
+    nn.XavierUniform(weight, 64, 64, rng)
+    println tensor.MaxAll(tensor.Abs(weight)) <= 0.22
+    nn.XavierNormal(weight, 64, 64, rng)
+    nn.KaimingUniform(weight, 64, rng)
+    println tensor.MaxAll(tensor.Abs(weight)) <= 0.31
+    nn.KaimingNormal(weight, 64, rng)
+    println tensor.MaxAll(tensor.Abs(weight)) > 0.0
+
+    tape.free()
+    adam.free()
+    model.free()
+    batch_norm.free()
+    store.free()
+end

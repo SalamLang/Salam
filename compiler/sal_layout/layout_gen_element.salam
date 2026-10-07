@@ -29,6 +29,8 @@ struct LoAttrs:
     pub vals: Vector<str> = Vector {}
     pub gen: str = ""
     pub gen_skip: str = ""
+    pub inline_style: str = ""
+    pub dynstyle: str = ""
 end
 
 func repeat_count(a &: at.Ast, el: int): i64:
@@ -52,18 +54,53 @@ func gen_children(
     saved := cx.parents
     me := at.Get(a, el).name
     cx.parents = str.Len(saved) > 0 ? me + "," + saved : me
+    gen_items(cx, diag, a, el, klass, has_klass)
+    cx.parents = saved
+end
+
+func gen_items(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, el: int, klass: str, has_klass: bool
+):
     repeat at.ChildCount(a, el) in i:
         cid := at.Child(a, el, i)
-        if at.KindOf(a, cid) == at.AST_LAYOUT_ELEMENT:
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ELEMENT:
             gen_element_n(cx, diag, a, cid, klass, has_klass)
+        else k == at.AST_IF or k == at.AST_EACH:
+            gen_control(cx, diag, a, cid, klass, has_klass)
         end
     end
-    cx.parents = saved
+end
+
+func gen_control(
+    cx &: LoCtx, diag &: dg.Engine, a &: at.Ast, nid: int, klass: str, has_klass: bool
+):
+    n := at.Get(a, nid)
+    html_line(cx, val_str(a, n.a))
+    gen_items(cx, diag, a, n.b, klass, has_klass)
+    if n.kind == at.AST_IF and n.c != 0:
+        html_line(cx, dyn_marker("else"))
+        if at.KindOf(a, n.c) == at.AST_IF:
+            gen_control(cx, diag, a, n.c, klass, has_klass)
+        else:
+            gen_items(cx, diag, a, n.c, klass, has_klass)
+        end
+    end
+    html_line(cx, dyn_marker("end"))
+end
+
+func dyn_marker(tag: str): str:
+    ret char_from_code(2) + "salam-" + tag + char_from_code(3)
+end
+
+func is_dyn(v: str): bool:
+    ret str.IndexOf(v, char_from_code(2)) >= 0
 end
 
 func has_child_elements(a &: at.Ast, el: int): bool:
     repeat at.ChildCount(a, el) in i:
-        if at.KindOf(a, at.Child(a, el, i)) == at.AST_LAYOUT_ELEMENT:
+        k := at.KindOf(a, at.Child(a, el, i))
+        if k == at.AST_LAYOUT_ELEMENT or k == at.AST_IF or k == at.AST_EACH:
             ret true
         end
     end
@@ -71,7 +108,7 @@ func has_child_elements(a &: at.Ast, el: int): bool:
 end
 
 func quote_css_value_if_needed(value: str): str:
-    if str.IndexOf(value, " ") < 0:
+    if str.IndexOf(value, " ") < 0 or str.IndexOf(value, "(") >= 0:
         ret value
     end
     n := str.Len(value)
@@ -81,7 +118,7 @@ func quote_css_value_if_needed(value: str): str:
             ret value
         end
     end
-    ret `"` + value + `"`
+    ret css_string(value)
 end
 
 func gen_element_n(
@@ -136,8 +173,8 @@ func lo_pseudo(cx &: LoCtx, la &: LoAttrs, ei: int, nm: str, v: str): bool:
         val = attr_value_map(ai, v)
     end
     if str.Equals(rest, "content"):
-        val = `"` + v + `"`
-    else:
+        val = css_string(v)
+    else ai < 0 or sm.LayoutAttrVtype(ai) != sm.VT_CSS:
         val = quote_css_value_if_needed(val)
     end
     decl := css_decl(cx.compact, prop, val)
@@ -199,7 +236,7 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
             la.userclass = v
             la.has_userclass = true
         else dest == sm.LA_STYLE:
-            lo_emit_attr(la, "style", v, primary, false)
+            la.inline_style = v
         else dest == sm.LA_DIR or dest == sm.LA_LANG:
             lo_emit_attr(la, sm.LayoutAttrOut(ai), mapped, primary, false)
         else dest == sm.LA_SOURCE:
@@ -210,13 +247,25 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
                 out = nm
             end
             vtb := sm.LayoutAttrVtype(ai)
-            if vtb == sm.VT_BOOL or (vtb == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false"))):
+            if vtb == sm.VT_BOOL and is_dyn(v):
+                if primary:
+                    la.first += v
+                else:
+                    la.rest += v
+                end
+            else vtb == sm.VT_BOOL or (vtb == sm.VT_BOOL_ENUM and (str.Equals(v, "true") or str.Equals(v, "false"))):
                 if not str.Equals(v, "false"):
                     lo_emit_attr(la, out, "", primary, true)
                 end
             else:
                 lo_emit_attr(la, out, mapped, primary, false)
             end
+        else (dest == sm.LA_HTML_OR_CSS or dest == sm.LA_CSS) and is_dyn(v):
+            mut dprop := sm.LayoutAttrOut(ai)
+            if str.Len(dprop) == 0:
+                dprop = hyphenate(key)
+            end
+            la.dynstyle += dprop + ":" + v + ";"
         else dest == sm.LA_HTML_OR_CSS:
             if lo_all_digits(v):
                 lo_emit_attr(la, sm.LayoutAttrOut(ai), v, primary, false)
@@ -235,8 +284,21 @@ func lo_collect_attrs(cx &: LoCtx, a &: at.Ast, el: int, ei: int, tag: str, la &
                     cv = c
                 end
             end
-            la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
+            if str.Equals(prop, "font-family"):
+                la.css += css_decl(cx.compact, prop, css_font_family(cv))
+            else sm.LayoutAttrVtype(ai) == sm.VT_CSS:
+                la.css += css_decl(cx.compact, prop, cv)
+            else:
+                la.css += css_decl(cx.compact, prop, quote_css_value_if_needed(cv))
+            end
         end
+    end
+    if str.Len(la.inline_style) > 0 or str.Len(la.dynstyle) > 0:
+        mut st := la.inline_style
+        if str.Len(st) > 0 and str.Len(la.dynstyle) > 0 and byte_at(st, str.Len(st) - 1) != 59:
+            st += ";"
+        end
+        lo_emit_attr(la, "style", st + la.dynstyle, false, false)
     end
     if ei < 0:
         ret
@@ -354,6 +416,10 @@ func gen_native(
         end
         ret true
     end
+    if str.Equals(gen, "font_face"):
+        gen_font_face(cx, la)
+        ret true
+    end
     if not is_native_generator(gen):
         gen_std(cx, diag, a, el, gen, la, klass, has_klass, tag)
         ret true
@@ -387,7 +453,7 @@ func lo_atoi(v: str): int:
 end
 
 func is_native_generator(g: str): bool:
-    ret str.Equals(g, "heading") or str.Equals(g, "media") or str.Equals(g, "style") or str.Equals(g, "global") or str.Equals(g, "script")
+    ret str.Equals(g, "heading") or str.Equals(g, "media") or str.Equals(g, "style") or str.Equals(g, "global") or str.Equals(g, "script") or str.Equals(g, "font_face")
 end
 
 func gen_element(
@@ -470,5 +536,126 @@ func gen_element(
 end
 
 func plural_suffix(n: int): str:
-    ret n == 1 ? "" : "s"
+    ret i18.Plural(n)
+end
+
+func lo_font_value(la: LoAttrs, key: str, group: str): str:
+    mut v := ""
+    if not lo_attr_get(la, key, v):
+        ret ""
+    end
+    if str.Len(group) == 0:
+        ret v
+    end
+    m := sm.LayoutDynValue(group, i18.LayoutValue(v))
+    ret str.Len(m) > 0 ? m : v
+end
+
+func gen_font_face(cx &: LoCtx, la: LoAttrs):
+    declared := lo_font_value(la, "type", "font_format")
+    dir := lo_dir_of(cx.file)
+    mut urls := str.Fields(lo_font_value(la, "url", ""))
+    defer urls.free()
+    mut src := ""
+    repeat urls.len() in i:
+        u := urls.get(i)
+        fmt := sm.LayoutFontFormat(u, declared, dir)
+        if str.Len(src) > 0:
+            src += cx.compact ? "," : ", "
+        end
+        src += "url(" + css_string(u) + ")"
+        if str.Len(fmt) > 0:
+            src += " format(" + css_string(fmt) + ")"
+        end
+    end
+    mut body := css_decl(cx.compact, "font-family", css_string(lo_font_value(la, "name", "")))
+    body += css_decl(cx.compact, "src", src)
+    weight := lo_font_value(la, "weight", "")
+    if str.Len(weight) > 0:
+        body += css_decl(cx.compact, "font-weight", weight)
+    end
+    style := lo_font_value(la, "style", "font_style")
+    if str.Len(style) > 0:
+        body += css_decl(cx.compact, "font-style", style)
+    end
+    display := lo_font_value(la, "display", "font_display")
+    if str.Len(display) > 0:
+        body += css_decl(cx.compact, "font-display", display)
+    end
+    range := lo_font_value(la, "range", "")
+    if str.Len(range) > 0:
+        body += css_decl(cx.compact, "unicode-range", range)
+    end
+    emit_rule(cx, css_rule(cx.compact, "@font-face", body))
+end
+
+func css_font_family(v: str): str:
+    generic := ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "inherit", "initial", "unset", "revert"]
+    mut parts := css_split_top(v)
+    defer parts.free()
+    mut out := ""
+    repeat parts.len() in i:
+        p := str.Trim(parts.get(i))
+        if str.Len(p) == 0:
+            continue
+        end
+        if str.Len(out) > 0:
+            out += ", "
+        end
+        b0 := byte_at(p, 0)
+        mut bare := b0 == 34 or b0 == 39 or css_is_ident(p) or str.IndexOf(p, "(") > 0
+        repeat len(generic) in g:
+            if str.Equals(str.Lower(p), generic[g]):
+                bare = true
+            end
+        end
+        out += bare ? p : css_string(p)
+    end
+    ret out
+end
+
+func css_split_top(v: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut depth := 0
+    mut quote := 0
+    mut start := 0
+    n := str.Len(v)
+    repeat n in i:
+        b := byte_at(v, i)
+        if quote != 0:
+            if b == quote:
+                quote = 0
+            end
+        else b == 34 or b == 39:
+            quote = b
+        else b == 40:
+            depth += 1
+        else b == 41 and depth > 0:
+            depth -= 1
+        else b == 44 and depth == 0:
+            out.push(str.Substr(v, start, i - start))
+            start = i + 1
+        end
+    end
+    out.push(str.Substr(v, start, n - start))
+    ret out
+end
+
+func css_is_ident(p: str): bool:
+    n := str.Len(p)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(p, 0)
+    if b0 >= 48 and b0 <= 57:
+        ret false
+    end
+    repeat n in i:
+        b := byte_at(p, i)
+        ok := (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or (b >= 48 and b <= 57) or b == 45 or b == 95 or b >= 128
+        if not ok:
+            ret false
+        end
+    end
+    ret true
 end

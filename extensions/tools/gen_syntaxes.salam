@@ -237,6 +237,9 @@ contexts:
           scope: invalid.illegal.newline.salam
           pop: true
         - include: string-escapes
+    - match: '%%BT3%%'
+      scope: punctuation.definition.string.begin.salam
+      push: text-block
     - match: '%%BT%%'
       scope: punctuation.definition.string.begin.salam
       push:
@@ -246,6 +249,40 @@ contexts:
           pop: true
     - match: '{{nbb}}u?''(\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|.)|[^''\\])'''
       scope: string.quoted.single.salam
+
+  text-block:
+    - meta_scope: string.quoted.other.block.salam
+    - match: '^\s*(%%BT3%%)'
+      captures:
+        1: punctuation.definition.string.end.salam
+      pop: true
+    - match: '\$\$\{\{'
+      scope: constant.character.escape.salam
+    - match: '\$\{\{'
+      scope: punctuation.section.interpolation.begin.salam
+      push: text-block-injection
+
+  text-block-injection:
+    - clear_scopes: 1
+    - meta_scope: meta.interpolation.salam
+    - meta_content_scope: source.salam.embedded
+    - match: '\}\}'
+      scope: punctuation.section.interpolation.end.salam
+      pop: true
+    - match: '(?=\n)'
+      pop: true
+    - include: text-block-braces
+    - include: main
+
+  text-block-braces:
+    - match: '\{'
+      scope: punctuation.section.braces.salam
+      push:
+        - match: '\}'
+          scope: punctuation.section.braces.salam
+          pop: true
+        - include: text-block-braces
+        - include: main
 
   string-escapes:
     - match: '\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|[0abfnrtv"''\\])'
@@ -489,6 +526,13 @@ syn match salamEscapeError contained "\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|[0abfnrtv\"'
 syn region salamString start=+"+ skip=+\\\\\|\\"+ end=+"+ oneline
       \ contains=salamEscape,salamEscapeError,@Spell
 syn region salamRawString start=+%%BT%%+ end=+%%BT%%+ contains=@Spell
+syn region salamTextBlock matchgroup=salamTextBlockDelim start=+%%BT3%%+ end=+^\s*\zs%%BT3%%+
+      \ contains=salamTextBlockEscape,salamInjection,@Spell
+syn match  salamTextBlockEscape contained "\$\${{"
+syn region salamInjection contained oneline matchgroup=salamInjectionDelim start=+\${{+ end=+}}+
+      \ contains=TOP
+syn region salamInjectionBraces contained transparent oneline matchgroup=salamDelimiter start=+{+ end=+}+
+      \ containedin=salamInjection,salamInjectionBraces contains=TOP
 syn region salamTripleString start=+"""+ end=+"""+ keepend
       \ contains=salamEscape,salamEscapeError,@Spell
 syn match  salamCharacter "u\='\%(\\\%(x\x\x\|u{\x\+}\|u\x\{4}\|.\)\|[^'\\]\)'"
@@ -535,6 +579,10 @@ hi def link salamAnnotation    PreProc
 hi def link salamString        String
 hi def link salamTripleString  String
 hi def link salamRawString     String
+hi def link salamTextBlock     String
+hi def link salamTextBlockDelim String
+hi def link salamTextBlockEscape SpecialChar
+hi def link salamInjectionDelim Special
 hi def link salamCharacter     Character
 hi def link salamEscape        SpecialChar
 hi def link salamEscapeError   Error
@@ -779,18 +827,94 @@ An empty string lets the compiler find it."
     table)
   "Syntax table for ‘salam-mode’.")
 
+(defun salam--fence (position)
+  "Make the character at POSITION a generic string fence."
+  (put-text-property position (1+ position) 'syntax-table (string-to-syntax "|")))
+
+(defun salam--punctuation (start end)
+  "Give the characters from START to END punctuation syntax."
+  (put-text-property start end 'syntax-table (string-to-syntax ".")))
+
+(defun salam--fence-p (position char)
+  "Return non-nil when POSITION holds CHAR marked as a string fence."
+  (and position
+       (eq (char-after position) char)
+       (equal (get-text-property position 'syntax-table) (string-to-syntax "|"))))
+
+(defun salam--text-block-p (state)
+  "Return non-nil when the syntax STATE is inside a text block."
+  (and (eq (nth 3 state) t)
+       (or (salam--fence-p (nth 8 state) ?%%BT%%)
+           (salam--fence-p (nth 8 state) ?}))))
+
+(defun salam--injection-close-p (state)
+  "Return non-nil when STATE sits right inside the braces of an injection."
+  (let ((open (nth 1 state)))
+    (and open
+         (not (nth 3 state))
+         (not (nth 4 state))
+         (> open (1+ (point-min)))
+         (eq (char-after open) ?{)
+         (eq (char-before open) ?{)
+         (salam--fence-p (- open 2) ?$))))
+
 (defun salam--propertize (start end)
-  "Mark every %%TQE%% between START and END as a generic string fence.
-Without this the first two quotes of %%TQE%% read as an empty string and the
-third opens one, which would mis-colour the rest of the buffer."
+  "Mark the string fences between START and END.
+Every %%TQE%% becomes a generic string fence.  Without this the first two
+quotes of %%TQE%% read as an empty string and the third opens one, which
+would mis-colour the rest of the buffer.  A text block opened by three
+backticks is fenced the same way, and each ${{ ... }} injection inside
+one is cut out of the string so that its code is highlighted as code."
   (goto-char start)
-  (while (search-forward "%%TQE%%" end t)
-    (let ((open (- (point) 3)))
-      (put-text-property open (1+ open) 'syntax-table (string-to-syntax "|"))
-      (put-text-property (1+ open) (point) 'syntax-table (string-to-syntax ".")))))
+  (while (re-search-forward "%%TQE%%\\|%%BT3%%\\|\\$\\$?{{\\|}}\\|\\\\" end t)
+    (let* ((from (match-beginning 0))
+           (to (match-end 0))
+           (first (char-after from))
+           (state (save-excursion (syntax-ppss from))))
+      (cond
+       ((nth 4 state))
+       ((eq first ?\")
+        (when (or (not (nth 3 state)) (salam--fence-p (nth 8 state) ?\"))
+          (salam--fence from)
+          (salam--punctuation (1+ from) to)))
+       ((eq first ?%%BT%%)
+        (cond
+         ((not (nth 3 state))
+          (salam--fence from)
+          (salam--punctuation (1+ from) to))
+         ((and (salam--text-block-p state)
+               (save-excursion
+                 (goto-char from)
+                 (skip-chars-backward " \t")
+                 (bolp)))
+          (salam--punctuation from (1- to))
+          (salam--fence (1- to)))))
+       ((eq first ?\\)
+        (when (salam--text-block-p state)
+          (salam--punctuation from to)))
+       ((eq first ?$)
+        (when (and (salam--text-block-p state) (= (- to from) 3))
+          (salam--fence from)
+          (salam--punctuation (1+ from) (+ from 2))))
+       ((salam--injection-close-p state)
+        (salam--fence (1+ from)))
+       (t
+        (goto-char (1+ from)))))))
+
+(defun salam--match-injection-delimiter (limit)
+  "Find the next ${{ or }} before LIMIT that delimits a text block injection."
+  (let ((found nil))
+    (while (and (not found) (re-search-forward "\\${{\\|}}" limit t))
+      (let ((from (match-beginning 0)))
+        (when (if (eq (char-after from) ?$)
+                  (salam--fence-p from ?$)
+                (salam--fence-p (1+ from) ?}))
+          (setq found t))))
+    found))
 
 (defvar salam-font-lock-keywords
   (list
+   (list #'salam--match-injection-delimiter '(0 font-lock-preprocessor-face t))
    (list (concat "^\\s-*\\(//!\\)\\(.*\\)$")
          '(1 font-lock-preprocessor-face t)
          '(2 font-lock-preprocessor-face t))
@@ -1053,6 +1177,7 @@ KATE_TPL := `<?xml version="1.0" encoding="UTF-8"?>
         <Detect2Chars attribute="Comment" context="BlockComment" char="/" char1="*" beginRegion="Comment"/>
         <StringDetect attribute="String" context="TripleString" String="&quot;&quot;&quot;"/>
         <DetectChar attribute="String" context="String" char="&quot;"/>
+        <StringDetect attribute="String" context="TextBlock" String="%%BT3%%"/>
         <DetectChar attribute="String" context="RawString" char="%%BT%%"/>
         <RegExpr attribute="Char" String="u?'(\\(x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\}|u[0-9A-Fa-f]{4}|.)|[^'\\])'"/>
         <RegExpr attribute="Annotation" String="@[A-Za-z_][%%IDC%%]*"/>
@@ -1114,6 +1239,24 @@ KATE_TPL := `<?xml version="1.0" encoding="UTF-8"?>
       <context name="RawString" attribute="String" lineEndContext="#stay">
         <DetectChar attribute="String" context="#pop" char="%%BT%%"/>
       </context>
+
+      <context name="TextBlock" attribute="String" lineEndContext="#stay">
+        <StringDetect attribute="String" context="#pop" String="%%BT3%%" firstNonSpace="true"/>
+        <StringDetect attribute="Escape" String="$${{"/>
+        <StringDetect attribute="Interpolation" context="Injection" String="${{"/>
+      </context>
+
+      <context name="Injection" attribute="Normal Text" lineEndContext="#pop">
+        <Detect2Chars attribute="Interpolation" context="#pop" char="}" char1="}"/>
+        <DetectChar attribute="Symbol" context="InjectionBraces" char="{"/>
+        <IncludeRules context="Normal"/>
+      </context>
+
+      <context name="InjectionBraces" attribute="Normal Text" lineEndContext="#pop">
+        <DetectChar attribute="Symbol" context="#pop" char="}"/>
+        <DetectChar attribute="Symbol" context="InjectionBraces" char="{"/>
+        <IncludeRules context="Normal"/>
+      </context>
     </contexts>
 
     <itemDatas>
@@ -1130,6 +1273,7 @@ KATE_TPL := `<?xml version="1.0" encoding="UTF-8"?>
       <itemData name="Char"         defStyleNum="dsChar"/>
       <itemData name="Escape"       defStyleNum="dsSpecialChar"/>
       <itemData name="Escape Error" defStyleNum="dsError"/>
+      <itemData name="Interpolation" defStyleNum="dsSpecialChar"/>
       <itemData name="Comment"      defStyleNum="dsComment"/>
       <itemData name="Directive"    defStyleNum="dsPreprocessor"/>
       <itemData name="Directive Key" defStyleNum="dsAttribute"/>
@@ -1166,6 +1310,7 @@ GTK_LANG_TPL := `<?xml version="1.0" encoding="UTF-8"?>
     <style id="annotation"     name="Annotation"     map-to="def:preprocessor"/>
     <style id="string"         name="String"         map-to="def:string"/>
     <style id="escape"         name="Escape"         map-to="def:special-char"/>
+    <style id="interpolation"  name="Interpolation"  map-to="def:special-char"/>
     <style id="char"           name="Character"      map-to="def:character"/>
     <style id="number"         name="Number"         map-to="def:decimal"/>
     <style id="float"          name="Float"          map-to="def:floating-point"/>
@@ -1213,6 +1358,40 @@ GTK_LANG_TPL := `<?xml version="1.0" encoding="UTF-8"?>
       <end>"</end>
       <include>
         <context ref="escape"/>
+      </include>
+    </context>
+
+    <context id="text-block" class="string" class-disabled="no-spell-check">
+      <start>%%BT3%%</start>
+      <end>^\s*%%BT3%%</end>
+      <include>
+        <context sub-pattern="0" where="start" style-ref="string"/>
+        <context sub-pattern="0" where="end" style-ref="string"/>
+        <context id="text-block-text" style-ref="string">
+          <match>(?!^\s*%%BT3%%)(?:[^$\n]|\$(?!\$?\{\{))+</match>
+        </context>
+        <context id="text-block-escape" style-ref="escape">
+          <match>\$\$\{\{</match>
+        </context>
+        <context id="text-block-injection" end-at-line-end="true" class-disabled="string">
+          <start>\$\{\{</start>
+          <end>\}\}</end>
+          <include>
+            <context sub-pattern="0" where="start" style-ref="interpolation"/>
+            <context sub-pattern="0" where="end" style-ref="interpolation"/>
+            <context ref="text-block-braces"/>
+            <context ref="salam"/>
+          </include>
+        </context>
+      </include>
+    </context>
+
+    <context id="text-block-braces">
+      <start>\{</start>
+      <end>\}</end>
+      <include>
+        <context ref="text-block-braces"/>
+        <context ref="salam"/>
       </include>
     </context>
 
@@ -1296,6 +1475,7 @@ GTK_LANG_TPL := `<?xml version="1.0" encoding="UTF-8"?>
         <context ref="block-comment"/>
         <context ref="triple-string"/>
         <context ref="string"/>
+        <context ref="text-block"/>
         <context ref="raw-string"/>
         <context ref="char"/>
         <context ref="annotation"/>
@@ -1352,7 +1532,7 @@ NPP_TPL := `<!-- Generated by extensions/tools/gen_syntaxes.salam -->
             <Keywords name="Keywords6">%%K_INTRTYPES%%</Keywords>
             <Keywords name="Keywords7">%%K_CONTEXTUAL%%</Keywords>
             <Keywords name="Keywords8">%%K_INTRMETHODS%%</Keywords>
-            <Keywords name="Delimiters">00&quot;	01\	02&quot;	03&apos;	04\	05&apos;	06%%BT%%	07	08%%BT%%	09	10	11	12	13	14	15	16	17	18	19	20	21	22	23</Keywords>
+            <Keywords name="Delimiters">00&quot;	01\	02&quot;	03&apos;	04\	05&apos;	06%%BT3%%	07	08%%BT3%%	09%%BT%%	10	11%%BT%%	12	13	14	15	16	17	18	19	20	21	22	23</Keywords>
         </KeywordLists>
         <Styles>
             <WordsStyle name="DEFAULT" fgColor="000000" bgColor="FFFFFF" fontStyle="0" nesting="0" />
@@ -1374,7 +1554,7 @@ NPP_TPL := `<!-- Generated by extensions/tools/gen_syntaxes.salam -->
             <WordsStyle name="DELIMITERS1" fgColor="A31515" bgColor="FFFFFF" fontStyle="0" nesting="0" />
             <WordsStyle name="DELIMITERS2" fgColor="A31515" bgColor="FFFFFF" fontStyle="0" nesting="0" />
             <WordsStyle name="DELIMITERS3" fgColor="A31515" bgColor="FFFFFF" fontStyle="0" nesting="0" />
-            <WordsStyle name="DELIMITERS4" fgColor="000000" bgColor="FFFFFF" fontStyle="0" nesting="0" />
+            <WordsStyle name="DELIMITERS4" fgColor="A31515" bgColor="FFFFFF" fontStyle="0" nesting="0" />
             <WordsStyle name="DELIMITERS5" fgColor="000000" bgColor="FFFFFF" fontStyle="0" nesting="0" />
             <WordsStyle name="DELIMITERS6" fgColor="000000" bgColor="FFFFFF" fontStyle="0" nesting="0" />
             <WordsStyle name="DELIMITERS7" fgColor="000000" bgColor="FFFFFF" fontStyle="0" nesting="0" />
@@ -1437,6 +1617,7 @@ color brightyellow "@[A-Za-z_][A-Za-z0-9_]*"
 
 color green ""(\\.|[^"\\])*""
 color green "%%BT%%[^%%BT%%]*%%BT%%"
+color green start="%%BT3%%[[:space:]]*$" end="^[[:space:]]*%%BT3%%"
 color green "'(\\.|[^'\\])'"
 
 color brightblack "//.*"
@@ -1473,6 +1654,12 @@ rules:
       skip: "\\\\."
       rules:
         - constant.specialChar: "\\\\."
+
+  - constant.string:
+      start: '%%BT3%%'
+      end: '^\s*%%BT3%%'
+      rules:
+        - constant.specialChar: '\$\$\{\{'
 
   - constant.string:
       start: '%%BT%%'
@@ -1583,6 +1770,14 @@ VSCODE_TPL := `{
           ]
         },
         {
+          "name": "string.quoted.other.block.salam",
+          "begin": "%%BT3%%",
+          "end": "^\\s*(%%BT3%%)",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.salam" } },
+          "endCaptures": { "1": { "name": "punctuation.definition.string.end.salam" } },
+          "patterns": [{ "include": "#text-block-content" }]
+        },
+        {
           "name": "string.quoted.raw.salam",
           "begin": "%%BT%%",
           "end": "%%BT%%",
@@ -1592,6 +1787,31 @@ VSCODE_TPL := `{
         {
           "name": "string.quoted.single.salam",
           "match": "%%NBB%%u?'(\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\}|u[0-9A-Fa-f]{4}|.)|[^'\\\\])'"
+        }
+      ]
+    },
+    "text-block-content": {
+      "patterns": [
+        { "name": "constant.character.escape.salam", "match": "\\$\\$\\{\\{" },
+        {
+          "name": "meta.interpolation.salam",
+          "contentName": "meta.embedded.line.salam",
+          "begin": "\\$\\{\\{",
+          "end": "\\}\\}|$",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.salam" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.salam" } },
+          "patterns": [{ "include": "#text-block-braces" }, { "include": "$self" }]
+        }
+      ]
+    },
+    "text-block-braces": {
+      "patterns": [
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "meta.brace.curly.salam" } },
+          "endCaptures": { "0": { "name": "meta.brace.curly.salam" } },
+          "patterns": [{ "include": "#text-block-braces" }, { "include": "$self" }]
         }
       ]
     },
@@ -1705,6 +1925,7 @@ secondary=%%G_SECONDARY%%
 docComment=TODO FIXME XXX HACK NOTE
 
 [lexer_properties=C]
+lexer.cpp.backquoted.strings=1
 
 [settings]
 lexer_filetype=C
@@ -2247,6 +2468,7 @@ end
 
 func emit_sublime_syntax(lx: Lex): str:
     mut s := SUBLIME_SYNTAX_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%IDS%%", ONIG_IDS)
     s = str.Replace(s, "%%IDC%%", ONIG_IDC)
@@ -2479,6 +2701,7 @@ end
 
 func emit_vim_syntax(lx: Lex): str:
     mut s := VIM_SYNTAX_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     mut joined := str.NewBuilder()
     defer str.BufFree(joined)
@@ -2559,6 +2782,7 @@ end
 
 func emit_emacs_mode(lx: Lex, version: str): str:
     mut s := EMACS_MODE_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%TQE%%", "\\\"\\\"\\\"")
     s = str.Replace(s, "%%VERSION%%", version)
@@ -2616,6 +2840,7 @@ end
 
 func fill_common(tpl: str, lx: Lex): str:
     mut s := tpl
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%NBB%%", xml_escape(onig_nbb()))
     s = str.Replace(s, "%%NBA%%", xml_escape(onig_nba()))
@@ -2698,6 +2923,7 @@ end
 
 func emit_notepadpp(lx: Lex): str:
     mut s := NPP_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%K_CONTROL%%", join_space(lx.control))
     s = str.Replace(s, "%%K_STORAGE%%", join_space(lx.storage))
@@ -2743,6 +2969,7 @@ end
 
 func emit_nano(lx: Lex): str:
     mut s := NANO_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%N_DIGIT%%", EL_DIGIT)
     s = str.Replace(s, "%%N_CONTROL%%", alt(lx.control))
@@ -2797,6 +3024,7 @@ end
 
 func emit_micro(lx: Lex): str:
     mut s := MICRO_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%M_NONASCII_DIGIT%%", "\u0660-\u0669\u06f0-\u06f9")
 
@@ -2820,6 +3048,7 @@ end
 
 func emit_vscode_grammar(lx: Lex): str:
     mut s := VSCODE_TPL
+    s = str.Replace(s, "%%BT3%%", "\x60\x60\x60")
     s = str.Replace(s, "%%BT%%", "\x60")
     s = str.Replace(s, "%%TQ%%", "\\\"\\\"\\\"")
     s = str.Replace(s, "%%NBB%%", json.Escape(onig_nbb()))

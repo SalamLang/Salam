@@ -1,0 +1,73 @@
+import rpc
+import encoding.value
+import net.http
+import net.router
+import sync
+
+mut server := rpc.NewServer(0, rpc.RPC_CODEC_JSON)
+mut ready := sync.NewWaitGroup()
+
+func add(c: i64):
+    rpc.ReplyInt(c, rpc.CallParamInt(c, "a", 0) + rpc.CallParamInt(c, "b", 1))
+end
+
+func clock(c: i64):
+    rpc.ReplyStr(c, "12:00")
+end
+
+func note(c: i64):
+    rpc.ReplyNull(c)
+end
+
+func run_server():
+    _ := rpc.Listen(server)
+    sync.Done(ready)
+    _ := rpc.ServeCount(server, 1)
+end
+
+func endpoint(ctx: i64):
+    http.Ctx_json(ctx, rpc.HandleText(http.Ctx_body(ctx)))
+end
+
+func main:
+    rpc.Register("add", add)
+    rpc.Register("time", clock)
+    rpc.Register("note", note)
+    rpc.SetFraming(server, rpc.RPC_FRAME_LINE)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+    println rpc.Port(server) > 0
+
+    mut client := rpc.DialClient("127.0.0.1", rpc.Port(server), rpc.RPC_CODEC_JSON)
+    rpc.ClientSetFraming(client, rpc.RPC_FRAME_LINE)
+    println rpc.ClientOk(client)
+    mut params := value.NewValueArray()
+    value.ArrayPush(params, value.ValueInt(2))
+    value.ArrayPush(params, value.ValueInt(40))
+    println rpc.ResultInt(rpc.Call(client, "add", params))
+    println rpc.ResultStr(rpc.CallNoParams(client, "time"))
+    mut args := Vector {} as Vector<value.Value>
+    args.push(value.ValueInt(1))
+    args.push(value.ValueInt(2))
+    println rpc.ResultInt(rpc.CallArgs(client, "add", args))
+    println rpc.Notify(client, "note", value.NewValueArray())
+    mut batch := Vector {} as Vector<rpc.Request>
+    batch.push(rpc.NewRequest("add", params, 10))
+    batch.push(rpc.NewRequest("missing", value.NewValueArray(), 11))
+    answers := rpc.CallBatch(client, batch)
+    println answers.items.len(), rpc.ResultInt(answers.items[0])
+    println rpc.IsErrorResponse(answers.items[1]), rpc.ErrorCode(answers.items[1]), rpc.ErrorMessage(answers.items[1])
+    rpc.CloseClient(client)
+    println rpc.ClientOk(client), rpc.ClientError(client).len() >= 0
+    join(t)
+    rpc.StopServer(server)
+
+    mut r := router.NewRouter()
+    router.Post(r, "/rpc", endpoint)
+    mut s := http.NewServer(19631)
+    http.Use(s, r)
+    _ := http.RunBackground(s)
+    answer := rpc.CallHTTP("http://127.0.0.1:19631/rpc", "add", params, 7)
+    println rpc.ResultInt(answer)
+end

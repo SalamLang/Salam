@@ -1,0 +1,48 @@
+import llm
+import tensor
+
+func main:
+    mut tokenizer := llm.NewTokenizer(llm.TOK_BPE)
+    each text in ["a", "b", "c", "ab"]:
+        _ := tokenizer.add_token(text, 0.0)
+    end
+    tokenizer.add_merge("a", "b")
+    tokenizer.finish()
+    tokenizer.add_bos = false
+    mut ids := tokenizer.encode("abcab")
+    println tokenizer.size(), ids.len(), tokenizer.token_text(ids.get(0)), tokenizer.decode(ids)
+    println llm.TOK_SPM, llm.ROPE_NORMAL, llm.ROPE_NEOX
+
+    mut config := llm.Config { vocab = tokenizer.size(), dim = 8, layers = 2, heads = 2, kv_heads = 1, ff = 16, ctx = 32 }
+    println config.head_dim()
+    mut model := llm.RandomModel(config, 7)
+    mut cache := llm.NewKVCache(config)
+    println model.ok, model.layers.len(), cache.ctx
+
+    mut logits := llm.Forward(model, cache, ids)
+    println tensor.ShapeString(logits), cache.len
+    mut last := llm.LogitsRow(logits, ids.len() - 1)
+    greedy := llm.Greedy(logits, ids.len() - 1)
+    println tensor.ShapeString(last), greedy == tensor.ArgMaxAll(last)
+
+    mut sampler := llm.NewSampler(1)
+    sampler.temperature = 0.8
+    sampler.top_k = 3
+    sampler.top_p = 0.9
+    sampler.repeat_penalty = 1.1
+    mut recent := Vector {} as Vector<int>
+    next := sampler.sample(logits, ids.len() - 1, recent)
+    println next >= 0 and next < tokenizer.size()
+
+    cache.reset()
+    generated := llm.GenerateIds(model, cache, ids, 4, sampler, -1)
+    println generated.len()
+    cache.reset()
+    text := llm.Generate(model, cache, tokenizer, "ab", 3, sampler)
+    println text.len() > 0
+    tensor.Free(logits)
+    tensor.Free(last)
+    cache.free()
+    model.free()
+    tokenizer.free()
+end

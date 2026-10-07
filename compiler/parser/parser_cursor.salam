@@ -333,7 +333,68 @@ func p_munch_name(p &: Ps): str:
         first = false
         p_advance(p)
     end
+    p_note_multi_name(p, b)
     ret b
+end
+
+func p_note_multi_name(p &: Ps, name: str):
+    if not str.Contains(name, " "):
+        ret
+    end
+    repeat p.multi_names.len() in i:
+        if str.Equals(p.multi_names.get(i), name):
+            ret
+        end
+    end
+    p.multi_names.push(name)
+end
+
+func tk_is_assign_op(k: int): bool:
+    ret k == tok.TK_ASSIGN or k == tok.TK_PLUS_EQ or k == tok.TK_MINUS_EQ or k == tok.TK_STAR_EQ or k == tok.TK_SLASH_EQ or k == tok.TK_PERCENT_EQ or k == tok.TK_POWER_EQ or k == tok.TK_AMP_EQ or k == tok.TK_PIPE_EQ or k == tok.TK_CARET_EQ or k == tok.TK_SHL_EQ or k == tok.TK_SHR_EQ
+end
+
+func tk_wants_value(k: int): bool:
+    if tk_is_assign_op(k) or k == tok.TK_COLON_ASSIGN:
+        ret true
+    end
+    ret k >= tok.TK_PLUS and k <= tok.TK_GE
+end
+
+func p_value_run_words(p &: Ps, line: u32): int:
+    mut n := 0
+    until p_at_value_word_n(p, n) and p_peekn(p, n).begin_line == line:
+        n += 1
+    end
+    ret n
+end
+
+func p_at_value_word_n(p &: Ps, n: int): bool:
+    k := p_peekn(p, n).kind
+    ret k == tok.TK_IDENT or k == tok.TK_KW_PACKAGE
+end
+
+func p_value_words_before_target(p &: Ps): int:
+    line := p_peek(p).begin_line
+    n := p_value_run_words(p, line)
+    if n < 2 or not tk_is_assign_op(p_peekn(p, n).kind):
+        ret n
+    end
+    mut j := 1
+    until j < n - 1:
+        mut cand := p_peekn(p, j).lexeme
+        mut k := j + 1
+        until k < n:
+            cand = cand + " " + p_peekn(p, k).lexeme
+            k += 1
+        end
+        repeat p.multi_names.len() in i:
+            if str.Equals(p.multi_names.get(i), cand):
+                ret j
+            end
+        end
+        j += 1
+    end
+    ret n - 1
 end
 
 func p_is_alias_word_keyword(k: int): bool:
@@ -365,11 +426,20 @@ func p_munch_value_name(p &: Ps): str:
         ret p_name(p, "expected name")
     end
     line := p_peek(p).begin_line
+    mut limit := 0 - 1
+    if p.pos > 0 and tk_wants_value(p_prev(p).kind):
+        limit = p_value_words_before_target(p)
+    end
     mut b := p_peek(p).lexeme
+    mut taken := 1
     p_advance(p)
-    until p_at_mergeable_value_word(p) and p_peek(p).begin_line == line and not tk_is_new_binding(p_peek2(p).kind):
+    until p_at_mergeable_value_word(p) and p_peek(p).begin_line == line and not tk_is_new_binding(p_peek2(p).kind) and (limit < 0 or taken < limit):
         b = b + " " + p_peek(p).lexeme
+        taken += 1
         p_advance(p)
+    end
+    if limit < 0:
+        p_note_multi_name(p, b)
     end
     ret b
 end

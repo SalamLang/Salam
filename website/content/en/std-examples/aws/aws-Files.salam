@@ -1,0 +1,47 @@
+import aws
+
+func main:
+    cfg := aws.FromProfile("default", "backup")
+    if not aws.Configured(cfg):
+        println "the default profile was not found in ~/.aws"
+        ret
+    end
+
+    o := aws.PutOptions { part_size = aws.S3_PART_DEFAULT }
+    up := aws.S3UploadFile(cfg, "db/dump.sql", "/tmp/dump_en.sql", o)
+    println up.ok, up.bytes, up.parts, up.etag
+    println aws.S3FileEtag("/tmp/dump_en.sql", aws.S3_PART_DEFAULT) == up.etag
+    _ := aws.S3UploadFileAs(cfg, "img/logo.png", "/tmp/logo_en.png", "image/png")
+    down := aws.S3DownloadFile(cfg, "db/dump.sql", "/tmp/restore_en.sql")
+    println down.ok, down.path, down.error
+
+    dir := aws.S3UploadDir(cfg, "/var/www/site", "site/", aws.PutOptions {})
+    println dir.ok, dir.files, dir.bytes, dir.skipped, dir.failed_path
+    _ := aws.S3DownloadPrefix(cfg, "site/", "/tmp/site_en")
+
+    println aws.S3_PART_MIN, aws.S3_PART_MAX_COUNT
+    mut upload := aws.S3CreateUpload(cfg, "video.mp4", aws.PutOptions { content_type = "video/mp4" })
+    if not upload.ok:
+        println upload.error
+        ret
+    end
+    chunk := "x" * aws.S3_PART_MIN
+    _ := aws.S3UploadPart(cfg, upload, 1, chunk as void*, chunk.len())
+    _ := aws.S3UploadPartCopy(cfg, upload, 2, "old.mp4", aws.CopyOptions {}, 0, 5242879)
+    println aws.UploadParts(upload), aws.UploadBytes(upload)
+    parts := aws.S3ListParts(cfg, "video.mp4", upload.upload_id)
+    repeat aws.PartCount(parts) in i:
+        p := aws.PartAt(parts, i)
+        println p.number, p.etag, p.size
+    end
+    println aws.S3CompleteUpload(cfg, upload).ok
+    aws.UploadFreeParts(upload)
+
+    pending := aws.S3ListUploads(cfg, "")
+    repeat aws.UploadCount(pending) in j:
+        u := aws.UploadAt(pending, j)
+        _ := aws.S3AbortUpload(cfg, aws.Upload { key = u.key, upload_id = u.upload_id })
+    end
+    _ := aws.S3PutLarge(cfg, "big.bin", chunk as void*, chunk.len(), 0, aws.PutOptions {})
+    _ := aws.S3CopyLarge(cfg, "big.bin", "big2.bin", 0, aws.CopyOptions {})
+end

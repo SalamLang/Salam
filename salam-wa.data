@@ -14972,6 +14972,7 @@ import conv
 import str
 extern:
 func printf(fmt: str, ...): int
+func free(p: void*)
 end
 if SALAM_OS_WINDOWS:
 extern:
@@ -14986,11 +14987,16 @@ extern:
 func write(fd: int, buf: void*, n: u32): int
 end
 end
+func _own(t: str): str:
+r := str.Clone(t)
+if t.len() > 0: free(t as void*) end
+ret r
+end
 export:
-func salam_tostr_i32(x: int): str: ret str.Clone(conv.FormatInt(x as i64)) end
-func salam_tostr_i64(x: i64): str: ret str.Clone(conv.FormatInt(x)) end
-func salam_tostr_u32(x: u32): str: ret str.Clone(conv.FormatUint(x as u64)) end
-func salam_tostr_u64(x: u64): str: ret str.Clone(conv.FormatUint(x)) end
+func salam_tostr_i32(x: int): str: ret _own(conv.FormatInt(x as i64)) end
+func salam_tostr_i64(x: i64): str: ret _own(conv.FormatInt(x)) end
+func salam_tostr_u32(x: u32): str: ret _own(conv.FormatUint(x as u64)) end
+func salam_tostr_u64(x: u64): str: ret _own(conv.FormatUint(x)) end
 func salam_tostr_bool(b: bool): str:
 ret str.Clone(conv.FormatBool(b))
 end
@@ -15000,7 +15006,7 @@ end
 end
 if not SALAM_KERNEL:
 export:
-func salam_tostr_f64(x: f64): str: ret str.Clone(conv.FormatFloat(x)) end
+func salam_tostr_f64(x: f64): str: ret _own(conv.FormatFloat(x)) end
 end
 end
 if SALAM_OS_WINDOWS:
@@ -15041,6 +15047,28 @@ inline pure func _ub(bp: i8*, i: int): int:
 mut v := bp[i] as int
 if v < 0: v = v + 256 end
 ret v
+end
+func _format_mag(x: u64, neg: bool): str:
+lead := neg ? 1 : 0
+mut ndigits := 1
+mut t := x
+until t >= (10 as u64):
+t /= (10 as u64)
+ndigits += 1
+end
+total := ndigits + lead
+buf := malloc((total + 1) as u64)
+p := buf as i8*
+p[total] = 0 as i8
+if neg: p[0] = 45 as i8 end
+mut v := x
+mut i := total - 1
+until i >= lead:
+p[i] = ((v % (10 as u64)) as int + 48) as i8
+v /= (10 as u64)
+i -= 1
+end
+ret buf as str
 end
 pure func _native_digit(bp: i8*, i: int, n: int): int:
 if i + 1 >= n:
@@ -15161,31 +15189,12 @@ end
 end
 @en "FormatUint"
 @fa "قالب عدد بی علامت"
-pub func FormatUint(x: u64): str:
-mut ndigits := 1
-mut t := x
-until t >= (10 as u64):
-t /= (10 as u64)
-ndigits += 1
-end
-buf := malloc((ndigits + 1) as u64)
-p := buf as i8*
-p[ndigits] = 0 as i8
-mut v := x
-mut i := ndigits - 1
-until i >= 0:
-p[i] = ((v % (10 as u64)) as int + 48) as i8
-v /= (10 as u64)
-i -= 1
-end
-ret buf as str
-end
+pub func FormatUint(x: u64): str: ret _format_mag(x, false) end
 @en "FormatInt"
 @fa "قالب عدد"
 pub func FormatInt(n: i64): str:
-if n >= 0: ret FormatUint(n as u64) end
-mag := (0 as u64) - (n as u64)
-ret "-".concat(FormatUint(mag))
+if n >= 0: ret _format_mag(n as u64, false) end
+ret _format_mag((0 as u64) - (n as u64), true)
 end
 @en "FormatBool"
 @fa "قالب منطقی"
@@ -16333,6 +16342,7 @@ func strtol(s: str, endptr: void*, base: int): i64
 func strtod(s: str, endptr: void*): f64
 pure func strlen(s: str): u64
 noret func abort()
+noret func exit(code: int)
 end
 mut _salam_argc := 0
 mut _salam_argv := null as void*
@@ -16378,6 +16388,14 @@ printerrln "salam: array index ".concat(conv.FormatInt(idx)).concat(" out of bou
 abort()
 end
 ret idx
+end
+func salam_div0(kind: int): i64:
+printerrln kind == 1 ? "runtime error: modulo by zero" : "runtime error: division by zero"
+if SALAM_FREESTANDING:
+abort()
+else:
+exit(1)
+end
 end
 noret func salam_panic(msg: str):
 printerrln "salam panic: ".concat(msg)
@@ -122333,6 +122351,12 @@ r := _str_alloc((la + lb + 1) as u64)
 mem.Copy(r, a as void*, la as u64)
 mem.Copy(((r as i64) + la) as void*, b as void*, lb as u64)
 ret r as str
+end
+func salam_strcat_own(a: str, fa: int, b: str, fb: int): str:
+r := salam_strcat(a, b)
+if fa != 0: mem.Free(a as void*) end
+if fb != 0: mem.Free(b as void*) end
+ret r
 end
 func salam_char_from_code(c: int): str:
 r := _str_alloc(2 as u64)

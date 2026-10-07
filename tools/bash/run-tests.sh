@@ -54,6 +54,24 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    wk_new() {
+        name=$(basename "$f" .out)
+        jobdir="$WORK/newjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        buildlog="$jobdir/build.log"
+        (cd "$jobdir" && "$SALAM_ABS" new "$name" --lang="$lang" --no-color) >"$buildlog" 2>&1
+        (cd "$jobdir/$name" && "$SALAM_ABS" build --output="$jobdir/a.exe" --no-color --log-level=error) >>"$buildlog" 2>&1
+        if [ ! -x "$jobdir/a.exe" ]; then
+            echo "FAIL $label (generated project does not build)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+            rm -rf "$jobdir"
+            return
+        fi
+        got=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/a.exe" </dev/null 2>&1 | tr -d '\r')
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_fmt() {
         name=$(basename "$f" .salam)
         jobdir="$WORK/fmtjob_${jobid}_$$"
@@ -348,6 +366,7 @@ EOF_LAYOUT_NOT
             ;;
         fmt) wk_fmt ;;
         repl) wk_repl ;;
+        new) wk_new ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
@@ -571,6 +590,16 @@ if want repl; then
             exp="tests/$lang/repl/$name.out"
             [ -f "$exp" ] || continue
             add_job repl "repl/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
+if want new; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/new/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            add_job new "new/$lang/$name" "$f" "$lang" "$f"
         done
     done
 fi

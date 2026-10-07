@@ -1,17 +1,76 @@
 lesson.part = Larger programs
 lesson.title = Working with C
-lesson.summary = Calling C functions with extern, and linking libraries
+lesson.summary = Calling C functions with extern, printf and other variadic functions, pointers and buffers, linking libraries, and handing Salam functions to C
 lesson.seo_title = Calling C libraries from Salam | Lesson 22 of the Salam course
-lesson.description = C interoperability in Salam: declaring C functions with extern, linking a library with link dynamic, and exposing Salam functions to C with export.
-lesson.lead = Salam talks to C libraries directly, which means every C library in the world is available from Salam.
+lesson.description = C interoperability in Salam: declaring libc functions with extern, variadic printf, matching C types, buffers with mem and u8 pointers, the NUL byte trap of str, link dynamic, static and framework, export blocks for callbacks such as qsort, and typed C function pointers.
+lesson.lead = Salam talks to C libraries directly, with no glue code and no wrapper generator. That puts the C standard library and every other library written in C within reach of a Salam program.
 lesson.body <<
 <h2 id="extern">extern</h2>
-<p>Inside an <code>extern:</code> block, declare C functions with their parameter and result types, then call them like any Salam function:</p>
+<p>Inside an <code>extern:</code> block, declare C functions with their parameter and result types, then call them like any Salam function. The declarations have no body: the code lives in the C library, and Salam only needs to know how to call it.</p>
 {{example.ffi-extern}}
+<p>The compiler trusts these declarations completely. If a declaration does not match the real C function, for example an <code>int</code> where C expects a <code>double</code>, nothing warns you and the program reads garbage, so copy each signature carefully from the library's header or manual page.</p>
+
+<h2 id="types">Matching C types</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>C</th><th>Salam</th></tr></thead>
+<tbody>
+<tr><td><code>int</code>, <code>unsigned int</code></td><td><code>int</code> (<code>i32</code>), <code>uint</code> (<code>u32</code>)</td></tr>
+<tr><td><code>long long</code>, <code>int64_t</code>, <code>uint8_t</code>, ...</td><td><code>i64</code>, <code>i64</code>, <code>u8</code>, ...</td></tr>
+<tr><td><code>size_t</code></td><td><code>usize</code></td></tr>
+<tr><td><code>ssize_t</code>, <code>intptr_t</code></td><td><code>size</code></td></tr>
+<tr><td><code>double</code>, <code>float</code></td><td><code>f64</code>, <code>f32</code></td></tr>
+<tr><td><code>const char*</code> holding text</td><td><code>str</code></td></tr>
+<tr><td><code>char*</code> or <code>unsigned char*</code> holding bytes</td><td><code>u8*</code>, or <code>void*</code></td></tr>
+<tr><td><code>void*</code>, <code>T*</code></td><td><code>void*</code>, <code>T*</code></td></tr>
+<tr><td>a function pointer</td><td><code>void*</code>, or <code>extern func (...) R</code></td></tr>
+</tbody></table></div>
+<p>A Salam <code>str</code> already ends with a zero byte, so it can be passed straight to any C function that wants a string.</p>
+
+<h2 id="printf">printf and other variadic functions</h2>
+<p>A C function that takes a variable number of arguments, such as <code>printf</code>, is declared with <code>...</code> after its fixed parameters. The C format rules apply: <code>%d</code> for an <code>int</code>, <code>%f</code> for an <code>f64</code>, <code>%s</code> for a <code>str</code>, and widths such as <code>%-8s</code> and <code>%6.2f</code> for columns:</p>
+{{example.ffi-printf}}
+<p>Output from <code>printf</code> and from <code>println</code> comes out in the order the program wrote it, because Salam empties its own output buffer before calling a C function that writes. The <code>%-8s</code> padding counts bytes, not letters, so text in Persian or any other non-Latin script lines up differently; for anything but plain ASCII, <code>println</code> or the <a href="/std/fmt/">fmt</a> package is the better tool.</p>
+
+<h2 id="pointers">Pointers, buffers and the zero byte</h2>
+<p>Many C functions write into memory you give them. Allocate it with <a href="/std/mem/">mem</a>, pass the pointer, and free it when you are done; <code>defer</code> right after the allocation keeps that from being forgotten. Index a pointer like an array: <code>buf[i]</code> reads or writes one element.</p>
+{{example.ffi-buffer}}
+<p>Watch the middle of that output. A <code>str</code> ends at its first zero byte, so the five bytes <code>H i 0 ! !</code> turn into the two-byte string <code>Hi</code>, and nothing reports it: the rest is simply gone. Text from C is fine as a <code>str</code>; binary data such as images, compressed files or network packets is not. Keep binary data as a pointer and a length, and read it through the pointer, as the loop that adds up all five bytes does.</p>
+<p>A C function that may return no string, such as <code>getenv</code> for a variable that is not set, returns a null pointer. Check it with <code>(value as void*) == null</code> before you use the value. A string returned by C belongs to the C library, so never free it yourself.</p>
 
 <h2 id="link">Linking a library</h2>
-<p>For an outside library, write <code>link dynamic "sqlite3"</code> (or <code>link static</code>) before the declarations. A function that takes a variable number of arguments, such as <code>printf</code>, needs <code>...</code> in its declaration.</p>
+<p>Functions from the C standard library need nothing extra. For any other library, tell the linker which one to use with <code>link</code>, written before the <code>extern</code> block. The kind is always written out:</p>
+<ul>
+<li><code>link dynamic "sqlite3"</code> links the shared library, like <code>-lsqlite3</code> in a C build</li>
+<li><code>link static "z"</code> asks for the static library <code>libz.a</code>, which is copied into the program</li>
+<li><code>link framework "Cocoa"</code> links a macOS framework</li>
+</ul>
+<p>A bare <code>link "m"</code> is an error that names the three kinds. Since a framework exists only on macOS, wrap it in a compile-time <code>if</code>, as in this example, which links the C math library:</p>
+{{example.ffi-link}}
 
-<h2 id="export">export</h2>
-<p>Functions that C code has to call go in an <code>export:</code> block, so they are reachable from C under their plain name.</p>
+<h2 id="export">export: Salam functions for C</h2>
+<p>Some C functions call you back. <code>qsort</code> sorts an array of any type, and asks a function of yours to compare two elements. A Salam function that C has to call goes in an <code>export:</code> block: it is then a real C function under its plain name, and <code>&amp;name</code> is its address, which you pass where C expects a function pointer:</p>
+{{example.ffi-qsort}}
+<p>The comparison gets two <code>void*</code> pointers to the elements, casts them to <code>i32*</code> and reads them with <code>[0]</code>. The numbers have to sit in memory that C can reach, so the program copies them into a buffer from <code>mem</code>, lets <code>qsort</code> sort them in place, and reads the result back through the pointer.</p>
+<p>An exported function is always an ordinary public C symbol, which brings a few rules:</p>
+<ul>
+<li>every function in the block needs a body; declarations without one belong in <code>extern</code></li>
+<li>no variables, no generic functions, and no <code>...</code> parameters</li>
+<li>no <code>pub</code>, <code>inline</code> or <code>noinline</code>; only <code>deprecated</code>, <code>pure</code> and <code>noret</code> are allowed</li>
+<li>the name must be a single word, because it becomes the C name, and is best kept to Latin letters: the LLVM backend cannot emit a non-ASCII export name yet</li>
+</ul>
+
+<h2 id="pointer">Calling through a C function pointer</h2>
+<p>The other direction works too. <code>(&amp;name) as extern func (f64) f64</code> turns the address of a C function, or of an exported Salam one, into a typed value you can store, pass around and call. <code>extern func (...) R</code> is also a parameter type, so one Salam function can work with any C function of that shape:</p>
+{{example.ffi-pointer}}
+<p>A plain Salam function name used as a value is its address as an <code>i64</code>, which is what callback tables such as a web router take. For a <code>void*</code> slot, or for a cast to a typed C function, write <code>&amp;name</code>.</p>
+
+<h2 id="rules">Rules of thumb</h2>
+<ul>
+<li>Copy every C signature exactly; the compiler cannot check it.</li>
+<li>Use <code>str</code> for text and a pointer plus a length for bytes.</li>
+<li>Free what you allocate with <code>mem</code>, and nothing that C hands back unless its documentation says so.</li>
+<li>Check pointers that C may return as null before using them.</li>
+<li>Prefer the Salam standard library when it already covers the job: it does the C calls for you and works the same on every system.</li>
+</ul>
+<div class="note"><p>Different systems sometimes need different C functions. The <code>extern</code> block can go inside a top-level <code>if SALAM_OS_WINDOWS:</code>, as shown in <a href="/learn/compile-time/">Conditional compilation</a>.</p></div>
 >>

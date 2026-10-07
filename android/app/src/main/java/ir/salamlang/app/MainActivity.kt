@@ -328,17 +328,24 @@ class MainActivity : ComponentActivity() {
         // String form below is the only one that ever fires - without it
         // those releases would hand tel:/mailto:/intent: links to the
         // WebView itself, which cannot open them.
-        private fun routeUrl(url: Uri): Boolean =
+        private fun routeUrl(
+            view: WebView,
+            url: Uri,
+            isRedirect: Boolean,
+        ): Boolean =
             when (url.scheme?.lowercase()) {
                 "https" -> {
+                    if (isRedirect) Log.d(TAG, "following redirect: $url")
                     false
                 }
 
                 // android:usesCleartextTraffic="false" is only honoured from API 23, so on 21
-                // and 22 nothing stops a plain http navigation. Refusing it here ourselves keeps
-                // one behaviour across the whole supported range.
+                // and 22 nothing stops a plain http navigation. Never load it as is: retry the
+                // same address over https, so a redirect hop through http still lands.
                 "http" -> {
-                    Log.w(TAG, "blocked cleartext navigation: $url")
+                    val secure = url.buildUpon().scheme("https").build()
+                    Log.w(TAG, "upgrading cleartext navigation: $url -> $secure")
+                    view.loadUrl(secure.toString())
                     true
                 }
 
@@ -352,8 +359,12 @@ class MainActivity : ComponentActivity() {
             view: WebView,
             request: WebResourceRequest,
         ): Boolean {
-            Log.d(TAG, "shouldOverride: ${request.url} (mainFrame=${request.isForMainFrame})")
-            return routeUrl(request.url)
+            val isRedirect = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && request.isRedirect
+            Log.d(
+                TAG,
+                "shouldOverride: ${request.url} (mainFrame=${request.isForMainFrame} redirect=$isRedirect)",
+            )
+            return routeUrl(view, request.url, isRedirect)
         }
 
         @Deprecated("Superseded by the WebResourceRequest form on API 24+; kept for 21-23.")
@@ -363,7 +374,7 @@ class MainActivity : ComponentActivity() {
         ): Boolean {
             Log.d(TAG, "shouldOverride (legacy): $url")
             if (url == null) return false
-            return routeUrl(url.toUri())
+            return routeUrl(view, url.toUri(), false)
         }
 
         override fun onPageFinished(
@@ -476,7 +487,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "SalamWV"
-        private const val HOME_URL = "https://editor.salamlang.ir"
+        private const val HOME_URL = "https://app.salamlang.ir"
         private const val SPLASH_TIMEOUT_MS = 12_000L
     }
 }

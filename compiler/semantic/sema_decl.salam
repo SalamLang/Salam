@@ -130,6 +130,33 @@ func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
     ret sigid
 end
 
+func serr_method_field_clash(s &: Sema, a &: at.Ast, mid: int, name: str, owner: str):
+    serr(
+        s, 27, span_of(a, mid), co.Format3(
+            i18.Tr("method '%s' has the same name as field '%s' of '%s'"), co.ArgStr(name), co.ArgStr(name), co.ArgStr(owner)
+        )
+    )
+end
+
+func method_shadowed_by_field(s &: Sema, a &: at.Ast, ssym: int, name: str): bool:
+    f := scope_lookup_local(s, sym_at(s, ssym).members, name)
+    if f == 0 or sym_at(s, f).kind != SYM_FIELD:
+        ret false
+    end
+    d := sym_at(s, ssym).decl
+    if d == 0 or at.KindOf(a, d) != at.AST_STRUCT_DEF:
+        ret false
+    end
+    dl := at.Get(a, d).list
+    repeat dl.len() in i:
+        m := at.Get(a, dl.get(i))
+        if m.kind == at.AST_FUNC_DEF and str.Equals(m.name, name):
+            ret true
+        end
+    end
+    ret false
+end
+
 func get_or_make_func(s &: Sema, sc: int, name: str, kind: int): int:
     sym := scope_lookup_local(s, sc, name)
     if sym != 0:
@@ -438,7 +465,10 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                     fv.decl = mid
                     fv.is_pub = m.is_pub
                     sym_put(s, f, fv)
-                    if scope_define(s, sym_at(s, ssym).members, f) != 0:
+                    clash := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
+                    if clash != 0 and sym_at(s, clash).kind == SYM_METHOD:
+                        serr_method_field_clash(s, a, sym_at(s, clash).decl, m.name, d.name)
+                    else scope_define(s, sym_at(s, ssym).members, f) != 0:
                         serr(
                             s, 27, span_of(a, mid), co.Format2(
                                 i18.Tr("duplicate field '%s' in struct '%s'"), co.ArgStr(m.name), co.ArgStr(d.name)
@@ -446,6 +476,11 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                         )
                     end
                 else m.kind == at.AST_FUNC_DEF:
+                    fclash := scope_lookup_local(s, sym_at(s, ssym).members, m.name)
+                    if fclash != 0 and sym_at(s, fclash).kind == SYM_FIELD:
+                        serr_method_field_clash(s, a, mid, m.name, d.name)
+                        continue
+                    end
                     mm := get_or_make_func(
                         s, sym_at(s, ssym).members, m.name, SYM_METHOD
                     )

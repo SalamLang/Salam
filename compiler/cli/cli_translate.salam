@@ -30,6 +30,7 @@ include ps "../parser/parser.salam"
 include src "../source.salam"
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
+include cc "../condcomp.salam"
 
 const K_TR_METHOD_COUNT := 38
 const K_TR_CTX_COUNT := 5
@@ -161,6 +162,60 @@ func tr_ctx_word_here(targetpack: int, name: str, prev_kind: int, next_kind: int
     end
     at_line_start := prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_KW_PUB or prev_kind == tok.TK_COLON
     ret at_line_start and next_kind == tok.TK_IDENT and (str.Equals(mapped, "use") or str.Equals(mapped, "شامل"))
+end
+
+func tr_is_link_word(name: str): bool:
+    ret str.Equals(name, "link") or str.Equals(name, "پیوند")
+end
+
+func tr_link_kind_word(targetpack: int, name: str): str:
+    mapped := tr_ctx_word(targetpack, name)
+    if str.Equals(mapped, "static") or str.Equals(mapped, "dynamic") or str.Equals(mapped, "framework") or str.Equals(mapped, "ایستا") or str.Equals(mapped, "پویا") or str.Equals(mapped, "چارچوب"):
+        ret mapped
+    end
+    ret ""
+end
+
+func tr_builtin_word(targetpack: int, name: str): str:
+    if targetpack == lp.LP_FA:
+        if str.Equals(name, "defined"):
+            ret "تعریف‌شده"
+        end
+        ret lp.BuiltinSpellOf(lp.LP_FA, name)
+    end
+    if lp.IdentEqual(name, "تعریف‌شده"):
+        ret "defined"
+    end
+    canon := lp.BuiltinCanonOf(lp.LP_FA, name)
+    if str.Equals(canon, name):
+        ret ""
+    end
+    ret canon
+end
+
+func tr_const_span(toks: tok.TokenStream, i: int, n: int, targetpack: int, last &: int): str:
+    t := tok.StreamAt(toks, i)
+    if targetpack == lp.LP_FA:
+        last = i
+        ret cc.OtherLangName(t.lexeme, true)
+    end
+    mut words := t.lexeme
+    mut best := ""
+    mut j := i
+    until j + 1 < n and j - i < 6:
+        nx := tok.StreamAt(toks, j + 1)
+        if nx.kind != tok.TK_IDENT or nx.begin_line != t.begin_line:
+            break
+        end
+        j += 1
+        words = words + " " + nx.lexeme
+        cand := cc.OtherLangName(words, false)
+        if str.Len(cand) > 0:
+            best = cand
+            last = j
+        end
+    end
+    ret best
 end
 
 func tr_keyword_spelling(targetpack: int, kind: int): str:
@@ -403,7 +458,7 @@ func tr_declared_names(toks: tok.TokenStream, n: int): Vector<str>:
     mut i := 0
     until i < n:
         t := tok.StreamAt(toks, i)
-        if t.kind == tok.TK_IDENT and tr_is_decl_name(toks, i, n, prev_kind):
+        if t.kind == tok.TK_IDENT and (prev_kind == tok.TK_KW_FUNC or tr_is_decl_name(toks, i, n, prev_kind)):
             names.push(t.lexeme)
         end
         if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
@@ -613,6 +668,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut dot_receiver := ""
     mut angle_depth := 0
     mut alias_rhs := false
+    mut const_last := 0
     names := tr_declared_names(toks, n)
     defer names.free()
     comp_names := tr_component_names(toks, n)
@@ -662,8 +718,20 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         else t.kind == tok.TK_META:
             mapped := tr_ctx_word(targetpack, t.lexeme)
             lexeme = "@" + (str.Len(mapped) > 0 ? mapped : t.lexeme)
+        else t.kind == tok.TK_IDENT and (prev_kind == tok.TK_STMT_END or prev_kind < 0) and tr_is_link_word(tr_ctx_word(targetpack, t.lexeme)) and (tr_next_kind(toks, i, n) == tok.TK_STRING or tr_next_kind(toks, i, n) == tok.TK_IDENT):
+            lexeme = tr_ctx_word(targetpack, t.lexeme)
+        else t.kind == tok.TK_IDENT and prev_kind == tok.TK_IDENT and tr_is_link_word(prev_ident_lexeme) and str.Len(tr_link_kind_word(targetpack, t.lexeme)) > 0:
+            lexeme = tr_link_kind_word(targetpack, t.lexeme)
         else t.kind == tok.TK_IDENT and i + 1 < n and tr_ctx_word_here(targetpack, t.lexeme, prev_kind, tok.StreamAt(toks, i + 1).kind):
             lexeme = tr_ctx_word(targetpack, t.lexeme)
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and tr_next_kind(toks, i, n) == tok.TK_LPAREN and not tr_has(names, t.lexeme) and str.Len(tr_builtin_word(targetpack, t.lexeme)) > 0:
+            lexeme = tr_builtin_word(targetpack, t.lexeme)
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and str.Len(tr_const_span(toks, i, n, targetpack, const_last)) > 0:
+            lexeme = tr_const_span(toks, i, n, targetpack, const_last)
+            if const_last > i:
+                ei = tok.StreamAt(toks, const_last).end_index as int
+                i = const_last
+            end
         else t.kind == tok.TK_IDENT and i + 1 < n and prev_kind != tok.TK_IDENT and prev_kind != tok.TK_DOT and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT and (str.Equals(t.lexeme, "dyn") or str.Equals(t.lexeme, "پویا")):
             lexeme = targetpack == lp.LP_FA ? "پویا" : "dyn"
         else t.kind == tok.TK_NOT and (prev_kind == tok.TK_DOT or prev_kind == tok.TK_IDENT):

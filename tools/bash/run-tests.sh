@@ -267,6 +267,18 @@ if [ "${1:-}" = "--worker" ]; then
             mkdir -p "$tdir"
             "$SALAM_ABS" translate "$other" "$f" --lang="$lang" --output="$tdir/t.salam" --no-color >/dev/null 2>&1
             got=$("$SALAM_ABS" exec "$tdir/t.salam" --no-color --log-level=error --lang="$other" 2>&1 | tr -d '\r')
+            if [ "$got" = "$(tr -d '\r' <"$expabs")" ]; then
+                (cd "$tdir" && "$SALAM_ABS" build t.salam --output="$tdir/t.exe" --no-color --log-level=error --lang="$other") >"$tdir/b1.log" 2>&1
+                got_b=$("$tdir/t.exe" 2>&1 | tr -d '\r')
+                "$SALAM_ABS" translate "$lang" "$tdir/t.salam" --lang="$other" --output="$tdir/back.salam" --no-color >/dev/null 2>&1
+                (cd "$tdir" && "$SALAM_ABS" build back.salam --output="$tdir/back.exe" --no-color --log-level=error --lang="$lang") >"$tdir/b2.log" 2>&1
+                got_r=$("$tdir/back.exe" 2>&1 | tr -d '\r')
+                if [ "$got_b" != "$got" ]; then
+                    got="build of the $other translation: $got_b $(head -3 "$tdir/b1.log")"
+                elif [ "$got_r" != "$got" ]; then
+                    got="translated back to $lang: $got_r $(head -3 "$tdir/b2.log")"
+                fi
+            fi
             rm -rf "$tdir"
             wk_check "$expabs" "$got"
             ;;

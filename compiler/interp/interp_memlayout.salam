@@ -390,6 +390,37 @@ func interp_mem_ptr_field(
     ret field_place(ip, a, v.pa, find_struct(ip, v.s), name, addr, ts)
 end
 
+func vec_elem_place(
+    ip &: Interp, a &: at.Ast, env: int, vecv: Value, idxn: int, ets: str, addr &: i64, ts &: str
+): bool:
+    sdef := ip.sts.get(vecv.id).def
+    if sdef == 0 or struct_method(a, sdef, "ref") == 0 or struct_method(a, sdef, "operator_index") == 0:
+        ret false
+    end
+    if str.Len(ets) == 0:
+        ret false
+    end
+    di := st_find_field(ip, vecv.id, "data")
+    ci := st_find_field(ip, vecv.id, "count")
+    if di < 0 or ci < 0:
+        ret false
+    end
+    dv := ip.sts.get(vecv.id).fvals.get(di)
+    if dv.kind != VAL_PTR or dv.pa == (0 as i64):
+        ret false
+    end
+    iv := to_int(eval(ip, a, env, idxn))
+    if ip.failed:
+        ret false
+    end
+    if iv < (0 as i64) or iv >= to_int(ip.sts.get(vecv.id).fvals.get(ci)):
+        ret false
+    end
+    addr = dv.pa + iv * interp_sizeof_typename(ip, a, ets)
+    ts = ets
+    ret true
+end
+
 func interp_mem_lvalue(
     ip &: Interp, a &: at.Ast, env: int, n: int, addr &: i64, ts &: str
 ): bool:
@@ -397,6 +428,9 @@ func interp_mem_lvalue(
     node := at.At(a, n)
     if k == at.AST_INDEX:
         base := eval(ip, a, env, node.a)
+        if not ip.failed and base.kind == VAL_STRUCT:
+            ret vec_elem_place(ip, a, env, base, node.b, node.type_str, addr, ts)
+        end
         if ip.failed or base.kind != VAL_PTR or base.pe != PTR_STRUCT or base.pa == (0 as i64):
             ret false
         end

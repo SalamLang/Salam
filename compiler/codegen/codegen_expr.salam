@@ -455,6 +455,81 @@ func cg_dyn_box(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     ret "({ " + cc2 + "* __dp" + t + " = (" + cc2 + "*)" + CG_MEM_ALLOC + "((uint64_t)sizeof(" + cc2 + ")); *__dp" + t + " = (" + cg_expr(g, s, a, nn.a) + "); (_Salam_dyn_" + ci + "){ (void*)__dp" + t + ", &_Salam_vtbl_" + ci + "_" + cc2 + " }; })"
 end
 
+func cg_is_vec_ts(s &: sm.Sema, ts: str): bool:
+    if str.Len(ts) == 0 or str.EndsWith(ts, "*"):
+        ret false
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, ts, sname)
+    if ssym == 0:
+        ret false
+    end
+    mems := sm.SymAt(s, ssym).members
+    df := sm.LookupLocal(s, mems, "data")
+    cf := sm.LookupLocal(s, mems, "count")
+    rf := sm.LookupLocal(s, mems, "ref")
+    if df == 0 or cf == 0 or rf == 0 or sm.LookupLocal(s, mems, "operator_index") == 0:
+        ret false
+    end
+    ret sm.SymAt(s, df).kind == sm.SYM_FIELD and sm.SymAt(s, cf).kind == sm.SYM_FIELD and sm.TypeAt(s, sm.SymAt(s, df).ty).kind == sm.TY_PTR
+end
+
+func cg_elem_place_ok(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    k := at.KindOf(a, n)
+    if k == at.AST_IDENTIFIER or k == at.AST_THIS:
+        ret true
+    end
+    if k == at.AST_MEMBER:
+        mts := at.Get(a, at.Get(a, n).a).type_str
+        ret str.EndsWith(mts, "*") or cg_elem_place_ok(s, a, at.Get(a, n).a)
+    end
+    if k == at.AST_INDEX:
+        cont := at.Get(a, n).a
+        cts := at.Get(a, cont).type_str
+        if str.EndsWith(cts, "*"):
+            ret true
+        end
+        if cg_is_vec_ts(s, cts):
+            ret cg_elem_place_ok(s, a, cont)
+        end
+        ret cg_addressable(s, a, n)
+    end
+    ret false
+end
+
+func cg_vec_index_place(s &: sm.Sema, a &: at.Ast, ix: int): bool:
+    cont := at.Get(a, ix).a
+    if cont == 0:
+        ret false
+    end
+    ret cg_is_vec_ts(s, at.Get(a, cont).type_str) and cg_elem_place_ok(s, a, cont)
+end
+
+func cg_vec_elem_place(g &: Cg, s &: sm.Sema, a &: at.Ast, ix: int): str:
+    if ix == 0 or at.KindOf(a, ix) != at.AST_INDEX:
+        ret ""
+    end
+    ixn := at.Get(a, ix)
+    if ixn.a == 0 or ixn.b == 0:
+        ret ""
+    end
+    cts := at.Get(a, ixn.a).type_str
+    if not cg_vec_index_place(s, a, ix):
+        ret ""
+    end
+    mut cont := cg_vec_elem_place(g, s, a, ixn.a)
+    if str.Len(cont) == 0:
+        cont = cg_expr(g, s, a, ixn.a)
+    end
+    idx := cg_expr(g, s, a, ixn.b)
+    if not g.safe:
+        ret "((" + cont + ").data[" + idx + "])"
+    end
+    g.tmpn += 1
+    vp := "__vp" + g.tmpn
+    ret "(*({ " + cg_ctype(cts) + "* " + vp + " = &(" + cont + "); &" + vp + "->data[SALAM_IDX(" + idx + ", " + vp + "->count)]; }))"
+end
+
 func cg_emit_op_call(
     g &: Cg, s &: sm.Sema, a &: at.Ast, lhs: int, ssym: int, sname: str, mname: str, rhs: int
 ): str:
@@ -1094,6 +1169,10 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         objts := an2.type_str
         ptr := str.Len(objts) > 0 and str.EndsWith(objts, "*")
+        velem := cg_vec_elem_place(g, s, a, nn.a)
+        if str.Len(velem) > 0:
+            ret velem + (ptr ? "->" : ".") + cg_cident(nn.name)
+        end
         ret cg_expr(g, s, a, nn.a) + (ptr ? "->" : ".") + cg_cident(nn.name)
     end
     if k == at.AST_INDEX:

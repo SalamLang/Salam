@@ -236,6 +236,6 @@ a child outfills the pipe buffer, which compiler dumps routinely do).
 
 - [Model Context Protocol](https://modelcontextprotocol.io) - protocol specification
 - [Claude Code](https://claude.ai/code) - the primary MCP client for Salam development
-- [Salam Playground](https://salamlang.github.io/Salam/) - try Salam in your browser
+- [Salam Playground](https://editor.salamlang.ir/) - try Salam in your browser
 - [Discord](https://discord.gg/HfY3QHDPdv) - real-time community chat
 - [Telegram](https://t.me/SalamProgrammingLanguage) - community on Telegram

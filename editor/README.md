@@ -6,7 +6,7 @@ Switching to **فارسی** or **العربية** flips the whole UI **and** the
 true [right-to-left](https://en.wikipedia.org/wiki/Right-to-left_script); English is
 [left-to-right](https://en.wikipedia.org/wiki/Writing_system#Directionality). No server, no C toolchain in the browser.
 
-🔗 **Live playground**: [salamlang.github.io/Salam](https://salamlang.github.io/Salam/)
+🔗 **Live playground**: [editor.salamlang.ir](https://editor.salamlang.ir/)
 
 **The editor itself is written entirely in Salam**, not hand-authored HTML/CSS/JS:
 

@@ -7,7 +7,7 @@
 - ✏️ Write code in **English** or **Persian (فارسی)**.
 - ⚡ The general language transpiles to C and compiles to a native executable.
 - 🌐 A built-in **layout DSL** compiles `.salam` files directly to HTML, CSS, and JavaScript.
-- 🔗 Runs in the browser via the [web playground](https://salamlang.github.io/Salam/).
+- 🔗 Runs in the browser via the [web playground](https://editor.salamlang.ir/).
 
 ## ✅ Prerequisites
 
@@ -307,13 +307,13 @@ See the [Docker section in the main README](../README.md#-docker--docker-compose
 | Editor                 | Extension                                                                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Visual Studio Code** | [salam-programming-language](https://marketplace.visualstudio.com/items?itemName=salamlanguage.salam-programming-language) - syntax highlighting |
-| **Web Playground**     | [salamlang.github.io/Salam](https://salamlang.github.io/Salam/) - no install needed                                                              |
+| **Web Playground**     | [editor.salamlang.ir](https://editor.salamlang.ir/) - no install needed                                                                          |
 
 ## 📚 Where to Go Next
 
 | Resource                                                                                                                     | Description                                                     |
 | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [Web Playground](https://salamlang.github.io/Salam/)                                                                         | Try Salam in your browser - no install needed                   |
+| [Web Playground](https://editor.salamlang.ir/)                                                                               | Try Salam in your browser - no install needed                   |
 | [GitHub Releases](https://github.com/SalamLang/Salam/releases)                                                               | Pre-built binaries for Linux, macOS, and Windows                |
 | [Examples](../tests/en/)                                                                                                     | Ready-to-run programs covering basics, types, stdlib, and more  |
 | [Editor readme](../editor/README.md)                                                                                         | How the WebAssembly playground is built and served              |

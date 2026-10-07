@@ -266,6 +266,73 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
         rm -f "$outbin" "$crosslog"
     }
+    wk_errors() {
+        code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+        out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+        msg_missing=""
+        msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
+        if [ -n "$msgs" ]; then
+            while IFS= read -r want_msg; do
+                [ -n "$want_msg" ] || continue
+                printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
+            done <<EOF_MSGS
+$msgs
+EOF_MSGS
+        fi
+        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
+            echo "PASS $label ($code)"
+        else
+            if [ -n "$msg_missing" ]; then
+                echo "FAIL $label (want message '$msg_missing')"
+            else
+                echo "FAIL $label (want $code)"
+            fi
+            echo "  $out"
+        fi
+    }
+    wk_layout_errors() {
+        lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+        lfail=""
+        extra_out=""
+        case "$lcode" in
+        E* | خطا*)
+            html="$WORK/layout_err_${jobid}_$$.html"
+            rm -f "$html"
+            if extra_out=$("$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
+                lfail="layout build exited 0 despite $lcode"
+            elif [ -e "$html" ]; then
+                lfail="layout build wrote output despite $lcode"
+            fi
+            rm -f "$html"
+            ;;
+        esac
+        if [ -n "$lfail" ]; then
+            echo "FAIL $label ($lfail)"
+        else
+            out="$extra_out"
+            msg_missing=""
+            msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
+            if [ -n "$msgs" ]; then
+                while IFS= read -r want_msg; do
+                    [ -n "$want_msg" ] || continue
+                    printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
+                done <<EOF_MSGS
+$msgs
+EOF_MSGS
+            fi
+            if [ -n "$lcode" ] && printf '%s\n' "$out" | grep -qF "$lcode" && [ -z "$msg_missing" ]; then
+                echo "PASS $label ($lcode)"
+            else
+                if [ -n "$msg_missing" ]; then
+                    echo "FAIL $label (want message '$msg_missing')"
+                else
+                    echo "FAIL $label (want $lcode)"
+                fi
+                echo "  $out"
+            fi
+        fi
+        extra_out=""
+    }
     run_worker() {
         case "$kind" in
         build)
@@ -289,28 +356,10 @@ if [ "${1:-}" = "--worker" ]; then
             wk_check "$expabs" "$got"
             ;;
         errors)
-            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
-            msg_missing=""
-            msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
-            if [ -n "$msgs" ]; then
-                while IFS= read -r want_msg; do
-                    [ -n "$want_msg" ] || continue
-                    printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
-                done <<EOF_MSGS
-$msgs
-EOF_MSGS
-            fi
-            if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
-                echo "PASS $label ($code)"
-            else
-                if [ -n "$msg_missing" ]; then
-                    echo "FAIL $label (want message '$msg_missing')"
-                else
-                    echo "FAIL $label (want $code)"
-                fi
-                echo "  $out"
-            fi
+            wk_errors
+            ;;
+        layout_errors)
+            wk_layout_errors
             ;;
         layout)
             html="$WORK/layout_${jobid}_$$.html"
@@ -990,7 +1039,7 @@ if want layout; then
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
                 runner=layout
-                [ "$sub" = errors ] && runner=errors
+                [ "$sub" = errors ] && runner=layout_errors
                 add_job "$runner" "layout/$lang/$sub/$name" "$f" "$lang" -
             done
         done

@@ -87,6 +87,8 @@ pub func LayoutBuild(opt &: Dr): int:
     minify_ws := not opt.no_minify
     mut diag := dg.NewDefault(opt.log_level, resolve_color(opt.color), lg.PH_CODEGEN)
     mut rc := 0
+    mut nerr := 0
+    mut nwarn := 0
 
     mut modules := Vector {} as Vector<str>
     mut htmls := Vector {} as Vector<str>
@@ -113,30 +115,44 @@ pub func LayoutBuild(opt &: Dr): int:
                 lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
             )
             rc = 2
+            nerr += 1
             continue
         end
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "layout build " + path)
         modpack := lx.Detect(sf, pack)
         mut toks := tok.StreamNew(path)
-        _lok := lx.Run(lgr, modpack, sf, toks)
+        lok := lx.Run(lgr, modpack, sf, toks)
         mut a := at.NewAst()
         mut prog := 0
-        _pok := ps.Run(lgr, toks, a, prog)
+        pok := ps.Run(lgr, toks, a, prog)
         tok.StreamFree(toks)
         table := cc.TableBuild("", opt.defines)
         cc.TableSetPack(table, modpack)
-        _ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+        ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+        if not lok or not pok or not ck:
+            rc = 1
+            nerr += 1
+            at.FreeAst(a)
+            continue
+        end
 
         base_dir := dir_of(path)
         eerr := lo.Expand(lgr, modpack, table, a, prog, base_dir)
         if eerr > 0:
             rc = 1
+            nerr += eerr
         end
         _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
         mut s := sm.New(lgr, path, lp.Code(modpack))
         sm.SetCc(s, table)
-        if not sm.Run(s, a, prog):
+        sema_ok := sm.Run(s, a, prog)
+        nerr += dg.ErrorCount(s.diag)
+        nwarn += dg.WarningCount(s.diag)
+        if not sema_ok or eerr > 0:
             rc = 1
+            sm.Free(s)
+            at.FreeAst(a)
+            continue
         end
 
         lb := lo.FindLayout(a, prog)
@@ -161,8 +177,16 @@ pub func LayoutBuild(opt &: Dr): int:
         at.FreeAst(a)
     end
 
-    if dg.HasErrors(diag):
-        rc = 1
+    nerr += diag.errors
+    nwarn += diag.warnings
+    if nerr > 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(
+                i18.Tr("layout build failed with %d error%s; no output written"), co.ArgInt(nerr as i64), co.ArgStr(plural_suffix(nerr))
+            )
+        )
+        dg.Free(diag)
+        ret rc != 0 ? rc : 1
     end
 
     mut mcss := ""
@@ -223,7 +247,7 @@ pub func LayoutBuild(opt &: Dr): int:
     end
     lg.Log(
         lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format4(
-            "layout build complete (%d error%s, %d warning%s)", co.ArgInt(diag.errors as i64), co.ArgStr(plural_suffix(diag.errors)), co.ArgInt(diag.warnings as i64), co.ArgStr(plural_suffix(diag.warnings))
+            "layout build complete (%d error%s, %d warning%s)", co.ArgInt(nerr as i64), co.ArgStr(plural_suffix(nerr)), co.ArgInt(nwarn as i64), co.ArgStr(plural_suffix(nwarn))
         )
     )
     dg.Free(diag)
@@ -270,16 +294,20 @@ pub func Web(opt &: Dr): int:
 
     modpack := lx.Detect(sf, pack)
     mut toks := tok.StreamNew(path)
-    _lok := lx.Run(lgr, modpack, sf, toks)
+    lok := lx.Run(lgr, modpack, sf, toks)
     mut a := at.NewAst()
     mut prog := 0
-    _pok := ps.Run(lgr, toks, a, prog)
+    pok := ps.Run(lgr, toks, a, prog)
     tok.StreamFree(toks)
     table := cc.TableBuild("", opt.defines)
     cc.TableSetPack(table, modpack)
     base_dir := dir_of(path)
     lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
-    _ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+    ck := cc.PruneProgram(a, lgr, sf.path, table, prog)
+    if not lok or not pok or not ck:
+        at.FreeAst(a)
+        ret 1
+    end
 
     lb := lo.FindLayout(a, prog)
     if lb == 0:

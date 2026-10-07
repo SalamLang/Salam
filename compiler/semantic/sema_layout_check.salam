@@ -19,6 +19,9 @@ struct LayCheck:
     pub unexpanded: bool = false
     pub runtime: bool = false
     pub in_each: int = 0
+    pub cls_names: Vector<str> = Vector {}
+    pub cls_sigs: Vector<str> = Vector {}
+    pub cls_nodes: Vector<int> = Vector {}
 end
 
 func lay_pseudo_index(name: str, plen &: int): int:
@@ -471,6 +474,10 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
     e := g_lay_elems.get(ei)
     mut seen := Vector {} as Vector<str>
     defer seen.free()
+    mut decls := Vector {} as Vector<str>
+    defer decls.free()
+    mut klass := ""
+    mut klass_node := 0
     mut has_text := false
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
@@ -521,6 +528,11 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
                         i18.Tr("attribute '%s' is not allowed on '%s'"), co.ArgStr(name), co.ArgStr(lay_elem_display(ei))
                     )
                 )
+            else:
+                mut pv := ""
+                if lay_attr_text(a, aid, pv):
+                    decls.push(name + "=" + pv)
+                end
             end
             continue
         end
@@ -614,6 +626,12 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             )
             continue
         end
+        if av.dest == LA_CLASS:
+            klass = v
+            klass_node = aid
+        else pl > 0 or av.dest == LA_CSS or (av.dest == LA_HTML_OR_CSS and not lay_all_digits(v)):
+            decls.push(name + "=" + v)
+        end
         if str.Equals(key, "id"):
             mut dupid := false
             repeat ck.ids.len() in q:
@@ -639,6 +657,9 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             refs.free()
         end
     end
+    if str.Len(klass) > 0 and decls.len() > 0 and not str.Equals(e.generator, "media") and not str.Equals(e.generator, "global"):
+        lay_check_class_styles(s, a, el, ei, klass, klass_node, decls, ck)
+    end
     if has_text and not lay_accepts_text(ei):
         serr(
             s, 119, span_of(a, el), co.Format1(
@@ -663,6 +684,48 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             )
         )
     end
+end
+
+func lay_style_sig(decls &: Vector<str>): str:
+    n := decls.len()
+    repeat n in i:
+        mut j := i
+        until j > 0 and str.Compare(decls.get(j - 1), decls.get(j)) > 0:
+            tmp := decls.get(j)
+            decls.set(j, decls.get(j - 1))
+            decls.set(j - 1, tmp)
+            j -= 1
+        end
+    end
+    mut out := ""
+    repeat n in k:
+        out += decls.get(k) + char_from_code(31)
+    end
+    ret out
+end
+
+func lay_check_class_styles(
+    s &: Sema, a &: at.Ast, el: int, ei: int, klass: str, klass_node: int, decls &: Vector<str>, ck &: LayCheck
+):
+    sig := lay_style_sig(decls)
+    repeat ck.cls_names.len() in i:
+        if not str.Equals(ck.cls_names.get(i), klass):
+            continue
+        end
+        if str.Equals(ck.cls_sigs.get(i), sig):
+            ret
+        end
+        other := ck.cls_nodes.get(i)
+        serr(
+            s, 136, span_of(a, klass_node), co.Format4(
+                i18.Tr("class '%s' on '%s' has different styles from the '%s' at line %d that uses the same class; give one of them its own class or make their styles the same"), co.ArgStr(klass), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(at.Get(a, other).op - 1)), co.ArgInt(span_of(a, other).begin.line as i64)
+            )
+        )
+        ret
+    end
+    ck.cls_names.push(klass)
+    ck.cls_sigs.push(sig)
+    ck.cls_nodes.push(el)
 end
 
 func lay_check_repeat(s &: Sema, a &: at.Ast, element: int, shown: str):
@@ -905,6 +968,9 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
     defer ck.ref_names.free()
     defer ck.doc_unique.free()
     defer ck.comps.free()
+    defer ck.cls_names.free()
+    defer ck.cls_sigs.free()
+    defer ck.cls_nodes.free()
     if s.program != 0:
         repeat at.ChildCount(a, s.program) in pi:
             pid := at.Child(a, s.program, pi)

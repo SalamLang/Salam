@@ -1951,6 +1951,7 @@ end
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+| E136        | one `class` given different styles on two elements                            |
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A

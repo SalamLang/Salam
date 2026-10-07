@@ -1,19 +1,74 @@
 lesson.part = Larger programs
 lesson.title = Conditional compilation
-lesson.summary = Separate code per operating system, decided while compiling
+lesson.summary = Code for each operating system and processor, build flags with -D, and debug-only checks, all decided while compiling
 lesson.seo_title = Conditional compilation and platform flags in Salam | Lesson 21
-lesson.description = Conditional compilation in Salam: a top-level if on SALAM_OS_WINDOWS or SALAM_OS_LINUX to write code for one operating system.
-lesson.lead = Sometimes code has to differ a little between Windows and Linux. Salam makes that choice while compiling, so it costs nothing at run time.
+lesson.description = Conditional compilation in Salam: if on SALAM_OS_WINDOWS, SALAM_OS_LINUX and SALAM_ARCH_X64, platform constants, SALAM_OS as a value, your own -D flags with defined(), -d constants, debug-only checks with SALAM_SAFE, and checking other platforms with --target.
+lesson.lead = Sometimes code has to differ a little between Windows, macOS and Linux, or between a debug build and a release build. Salam makes that choice while compiling, so the branch that does not apply is not in the program at all and costs nothing at run time.
 lesson.body <<
 <h2 id="if">if at compile time</h2>
-<p>An <code>if</code> at the top level of a file, with a condition known while compiling, keeps only the branch that applies:</p>
+<p>An <code>if</code> at the top level of a file, with a condition known while compiling, keeps only the branch that applies. Whatever is declared inside it, such as constants, globals, <code>extern</code> blocks or functions, exists only on the platforms where that branch is taken. Here each platform gets its own path separator, and the rest of the program uses <code>SEP</code> without caring where it runs:</p>
 {{example.comptime}}
+<p>A top-level <code>if</code> needs a condition the compiler can work out on its own. Writing <code>if count &gt; 3:</code> at the top level is the error "top-level if condition must be a compile-time constant".</p>
 
 <h2 id="flags">The flags you get</h2>
+<p>The compiler defines a set of <code>bool</code> flags that describe the machine the program is built for. One operating system flag and one processor flag are true, plus the family flags that go with them: Linux and macOS also set <code>SALAM_OS_UNIX</code>, Android sets <code>SALAM_OS_LINUX</code> as well, and macOS and the BSDs set <code>SALAM_OS_BSD</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Flag</th><th>True when building for</th></tr></thead>
+<tbody>
+<tr><td><code>SALAM_OS_WINDOWS</code></td><td>Windows, together with <code>SALAM_OS_WIN64</code> or <code>SALAM_OS_WIN32</code></td></tr>
+<tr><td><code>SALAM_OS_LINUX</code></td><td>Linux and Android</td></tr>
+<tr><td><code>SALAM_OS_MAC</code></td><td>macOS</td></tr>
+<tr><td><code>SALAM_OS_ANDROID</code></td><td>Android</td></tr>
+<tr><td><code>SALAM_OS_FREEBSD</code>, <code>SALAM_OS_OPENBSD</code>, <code>SALAM_OS_NETBSD</code></td><td>each BSD</td></tr>
+<tr><td><code>SALAM_OS_BSD</code></td><td>macOS and the BSDs</td></tr>
+<tr><td><code>SALAM_OS_UNIX</code></td><td>every Unix-like system, WebAssembly included</td></tr>
+<tr><td><code>SALAM_OS_WASM</code></td><td>WebAssembly</td></tr>
+<tr><td><code>SALAM_ARCH_X64</code>, <code>SALAM_ARCH_X86</code></td><td>64-bit and 32-bit Intel and AMD</td></tr>
+<tr><td><code>SALAM_ARCH_ARM64</code>, <code>SALAM_ARCH_ARM</code></td><td>64-bit and 32-bit ARM</td></tr>
+<tr><td><code>SALAM_ARCH_WASM</code></td><td>WebAssembly</td></tr>
+<tr><td><code>SALAM_SAFE</code></td><td>any build made without <code>--release</code></td></tr>
+</tbody></table></div>
+<p>A few more hold a value instead of <code>true</code> or <code>false</code>. <code>SALAM_OS</code> is text such as <code>"windows"</code>, <code>"linux"</code>, <code>"mac"</code>, <code>"android"</code> or <code>"freebsd"</code>, and <code>SALAM_ARCH</code> is <code>"x64"</code>, <code>"x86"</code>, <code>"arm64"</code>, <code>"arm"</code> or <code>"wasm"</code>. <code>SALAM_VERSION</code> is the compiler version as text, such as <code>"0.5.0"</code>, and <code>SALAM_VERSION_CODE</code> the same version as a number, <code>500</code>. In a Persian program each of these names has a Persian spelling; the <a href="/learn/keywords/">glossary</a> lists them all.</p>
+
+<h2 id="inline">Inside a function</h2>
+<p>The same <code>if</code> works inside a function body. When its condition is made of these flags, the compiler keeps the branch that applies and throws the others away, exactly as at the top level. An <code>else</code> with a condition chains the platforms:</p>
+{{example.comptime-inline}}
+<p>Always give the platform branches an <code>else</code>. A function that does <code>if SALAM_OS_WINDOWS: ret ... end</code> and then carries on with the Unix code builds fine on Linux, but on Windows that <code>if</code> becomes "always return", and the code after it is error E070, unreachable code. With an <code>else</code> both builds are clean.</p>
+<p>The branch that is kept is not a block of its own: what it declares stays visible after the <code>if</code>. You can write <code>user := "USERNAME"</code> in the Windows branch and <code>user := "USER"</code> in the other one, and use <code>user</code> below them.</p>
+
+<h2 id="value">Flags as ordinary values</h2>
+<p>Outside an <code>if</code> these names are plain constants. You can print one, store it in a variable, use it in a <code>switch</code>, or mix it with a test that runs at run time, as in <code>if SALAM_OS_WINDOWS and retries &gt; 0:</code>, where only the second half is left for the running program:</p>
+{{example.comptime-value}}
+<p>What this program prints depends on the machine it is built for, so it is shown without its output. On a 64-bit Linux PC it prints <code>built for linux on x64</code>, then <code>family: linux</code>, <code>64-bit: true</code> and the version.</p>
+
+<h2 id="define">Your own flags with -D</h2>
+<p>You can add flags of your own from the command line. <code>-DNAME</code> defines a flag that is <code>true</code>, and <code>-DNAME=value</code> one that holds text. <code>defined(NAME)</code> asks whether a flag was given at all:</p>
+{{example.comptime-define}}
+<p>That output comes from a plain <code>salam run</code>. With <code>salam run app.salam -DMODE=fast -DVERBOSE</code> the same program prints <code>samples: 10</code> and <code>verbose output is on</code>. This is the usual way to keep a feature, a test hook or extra logging out of the normal build.</p>
+<p>Two details matter. At the top level a flag nobody defined counts as <code>false</code>, but inside a function an unknown name is still unknown: <code>if VERBOSE:</code> without <code>-DVERBOSE</code> is error E001. And comparing a missing flag with text, <code>MODE == "fast"</code>, is not a compile-time condition at all. Asking <code>defined(...)</code> first, as above, works in both places.</p>
+
+<h2 id="consts">Constants from the command line</h2>
+<p>A flag decides which code is compiled. When all you want is a value, such as a port number or a build label, use <code>-d</code> instead: <code>salam build app.salam -dPORT=9090 -dLABEL=beta</code> gives the program the constants <code>PORT</code> and <code>LABEL</code>, as if the file said <code>const PORT := 9090</code>. The value is read as a number, or as <code>true</code> or <code>false</code>, when it looks like one, and as text otherwise; a bare <code>-dDEBUG</code> means <code>true</code>. The name must be written in capitals, and a constant the file declares itself wins over one given with <code>-d</code>.</p>
+
+<h2 id="safe">Debug-only checks</h2>
+<p><code>SALAM_SAFE</code> is <code>true</code> in every build made without <code>--release</code>. That makes it the place for checks you want while developing and do not want to pay for in the program you ship:</p>
+{{example.comptime-safe}}
+<p>Binary search only works on sorted input. In the debug build the extra loop notices the unsorted array and says so, which explains why the second search misses a number that is there. Built with <code>--release</code>, the loop is not compiled at all and the program prints only the two results.</p>
+
+<h2 id="check">Checking the other platforms</h2>
+<p>Because the branches that do not apply are thrown away before type checking, a mistake inside them stays hidden on your machine: a call to a function that does not exist, written in the Windows branch, compiles without a word on Linux. To check another platform without owning one, compile for it with <code>--target</code>:</p>
 <ul>
-<li>Operating system: <code>SALAM_OS_WINDOWS</code>, <code>SALAM_OS_MAC</code>, <code>SALAM_OS_LINUX</code>, <code>SALAM_OS_UNIX</code>, <code>SALAM_OS_ANDROID</code>, <code>SALAM_OS_WASM</code>, and the BSD family</li>
-<li>Processor: <code>SALAM_ARCH_X64</code>, <code>SALAM_ARCH_ARM64</code>, <code>SALAM_ARCH_WASM</code> and the rest</li>
-<li>As text: <code>SALAM_OS</code> and <code>SALAM_ARCH</code>, holding values such as <code>"linux"</code> and <code>"arm64"</code></li>
+<li><code>salam obj app.salam --target=x86_64-windows-gnu</code> checks the Windows branches</li>
+<li><code>salam obj app.salam --target=aarch64-apple-darwin</code> checks the macOS branches</li>
 </ul>
-<p>These names are ordinary constants in normal code too, so you can print one or use it in a switch.</p>
+<p><code>obj</code> stops once it has an object file, so it needs no linker or system libraries for that target, and every error it reports is a real one.</p>
+
+<h2 id="rules">Rules of thumb</h2>
+<ul>
+<li>Keep platform differences in one small place, such as a constant or a short function, and the rest of the program the same everywhere.</li>
+<li>Give every platform <code>if</code> an <code>else</code>, especially when a branch returns.</li>
+<li>Test your own flags with <code>defined(NAME)</code>, so a build without them still compiles.</li>
+<li>Before you share platform code, build it once with <code>--target</code> for each system you support.</li>
+</ul>
+<div class="note"><p>To call a different C library on each system, put the <code>extern</code> declarations themselves inside a top-level <code>if</code>. The next lesson, <a href="/learn/c-interop/">Working with C</a>, starts from there.</p></div>
 >>

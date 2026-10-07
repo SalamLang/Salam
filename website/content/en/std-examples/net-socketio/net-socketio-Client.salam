@@ -1,0 +1,67 @@
+import net.socketio
+import net.websocket
+import str
+
+mut server := websocket.Server {}
+mut report := ""
+
+func test_server():
+    mut conn := websocket.Accept(server)
+    _ := websocket.SendText(conn, `0{"sid":"s1","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
+    mut going := true
+    until going:
+        m := websocket.Poll(conn, 3000)
+        if m.kind != websocket.TEXT:
+            break
+        end
+        packet := m.text.substr(1, m.text.len() - 1)
+        if packet == "0":
+            _ := websocket.SendText(conn, `40{"sid":"a1"}`)
+        else str.StartsWith(packet, `2["chat"`):
+            _ := websocket.SendText(conn, `42["chat","welcome"]`)
+            _ := websocket.SendText(conn, `429["question","2+2"]`)
+        else str.Contains(packet, `"add"`):
+            id := packet.substr(1, str.Find(packet, "[") - 1)
+            _ := websocket.SendText(conn, "43" + id + "[5]")
+        else str.StartsWith(packet, "39"):
+            report += "reply: " + packet.substr(2, packet.len() - 2)
+        else packet == "1":
+            going = false
+        end
+    end
+    websocket.Close(conn)
+end
+
+func main:
+    server = websocket.Listen(0)
+    t := spawn(test_server)
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.reconnection = false
+    c := socketio.DialWith("http://127.0.0.1:" + websocket.Port(server), o)
+    println socketio.IsConnected(c), socketio.Sid(c), socketio.Id(c), socketio.Namespace(c), socketio.TransportName(c)
+
+    socketio.On(c, "chat", (e: socketio.Event):
+        println "message:", socketio.ArgStr(e, 0)
+    end)
+    socketio.On(c, "question", (e: socketio.Event):
+        println "question:", socketio.ArgStr(e, 0), e.ack_id >= 0
+        _ := socketio.ReplyStr(e, "four")
+    end)
+    println socketio.ListenerCount(c, "chat"), socketio.HasListeners(c, "news")
+    _ := socketio.EmitStr(c, "chat", "hello")
+    socketio.RunFor(c, 500)
+
+    mut a := socketio.NewArgs()
+    socketio.AddInt(a, 2)
+    socketio.AddInt(a, 3)
+    mut k := socketio.EmitAck(c, "add", a, 2000)
+    println k.ok, socketio.AckInt(k, 0)
+    socketio.AckFree(k)
+    socketio.ArgsFree(a)
+
+    socketio.Close(c)
+    join(t)
+    websocket.CloseServer(server)
+    println report
+end

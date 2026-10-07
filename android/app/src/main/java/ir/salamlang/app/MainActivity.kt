@@ -476,7 +476,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "SalamWV"
-        private const val HOME_URL = "https://salamlang.github.io/Salam"
+        private const val HOME_URL = "https://editor.salamlang.ir"
         private const val SPLASH_TIMEOUT_MS = 12_000L
     }
 }

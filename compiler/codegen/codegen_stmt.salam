@@ -204,6 +204,63 @@ func cg_is_array_place(a &: at.Ast, n: int): bool:
     ret k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX or k == at.AST_THIS or k == at.AST_CALL or k == at.AST_BINARY or k == at.AST_UNARY
 end
 
+func cg_str_fill_code(s &: sm.Sema, lv: str, ts: str, depth: int): str:
+    if depth > 8 or str.Len(ts) == 0:
+        ret ""
+    end
+    mut base := ""
+    mut ptr := false
+    mut eptr := 0
+    mut pdepth := 0
+    mut dims := Vector {} as Vector<int>
+    defer dims.free()
+    parse_typestr_ex(ts, 96, base, ptr, dims, eptr, pdepth)
+    if ptr or eptr > 0 or cg_is_slice_ts(ts) or str.Len(base) == 0:
+        ret ""
+    end
+    mut inner := ""
+    mut idx := ""
+    repeat dims.len() in di:
+        idx = idx + "[__zf" + depth + "_" + di + "]"
+    end
+    if str.Equals(base, "str"):
+        inner = lv + idx + " = \"\";"
+    else cg_is_int_typestr(base) or str.Equals(base, "bool") or str.Equals(base, "char") or str.Equals(base, "f32") or str.Equals(base, "f64") or str.Equals(base, "int") or str.Equals(base, "float"):
+        ret ""
+    else:
+        ssym := struct_by_name(s, base)
+        if ssym == 0:
+            ret ""
+        end
+        mut sb := co.SbNew()
+        msc := sm.ScopeAt(s, sm.SymAt(s, ssym).members)
+        repeat msc.symbols.len() in j:
+            f := sm.SymAt(s, msc.symbols.get(j))
+            if f.kind != sm.SYM_FIELD or f.ty == sm.TYPE_NONE:
+                continue
+            end
+            fc := cg_str_fill_code(s, lv + idx + "." + cg_cident(f.name), sm.ToString(s, f.ty), depth + 1)
+            if str.Len(fc) > 0:
+                co.SbPuts(sb, fc + " ")
+            end
+        end
+        inner = co.SbCstr(sb)
+        co.SbFree(sb)
+        if str.Len(inner) == 0:
+            ret ""
+        end
+        inner = "{ " + inner + "}"
+    end
+    mut code := inner
+    mut k := dims.len()
+    until k > 0:
+        k -= 1
+        iv := "__zf" + depth + "_" + k
+        code = "for (int64_t " + iv + " = 0; " + iv + " < " + dims.get(k) + "; " + iv + "++) { " + code + " }"
+    end
+    ret code
+end
+
 func cg_vardecl_inline(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     ts := str.Len(nn.type_str) > 0 ? nn.type_str : "int32_t"
@@ -284,6 +341,12 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             ret
         end
         cg_line(g, cg_vardecl_inline(g, s, a, n) + ";")
+        if nn.a == 0 and str.Len(nn.name) > 0:
+            zf := cg_str_fill_code(s, cg_cident(nn.name), nn.type_str, 0)
+            if str.Len(zf) > 0:
+                cg_line(g, zf)
+            end
+        end
         if str.Len(nn.name) > 0:
             cg_line(g, "(void)" + cg_cident(nn.name) + ";")
         end

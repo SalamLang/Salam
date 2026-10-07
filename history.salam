@@ -1,0 +1,150 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package history
+
+import dom
+
+extern:
+    func salam_js_global(name: str): func () i64
+end
+
+const CAP := 200
+const MERGE_MS := 700.0
+
+mut store := 0 as i64
+mut first := 0
+mut count := 0
+mut pos := 0
+mut pre_s := 0
+mut pre_e := 0
+mut end_caret := 0
+
+func ensure_store():
+    if store != 0: ret end
+    obj_ctor := salam_js_global("Object")
+    store = obj_ctor()
+end
+
+func slot(i: int): int: ret (first + i) % CAP end
+
+func str_at(field: str, i: int): str: ret dom.GetStr(store, field + slot(i)) end
+
+func num_at(field: str, i: int): f64: ret dom.GetNum(store, field + slot(i)) end
+
+func set_sel(i: int, s: int, e: int):
+    k := slot(i)
+    dom.SetNum(store, "s" + k, s as f64)
+    dom.SetNum(store, "e" + k, e as f64)
+end
+
+func write(i: int, text: str, s: int, e: int, kind: str, at: f64):
+    k := slot(i)
+    dom.SetStr(store, "t" + k, text)
+    dom.SetStr(store, "k" + k, kind)
+    dom.SetNum(store, "m" + k, at)
+    set_sel(i, s, e)
+end
+
+func merge_ok(kind: str, prev: str): bool:
+    if kind == "type" or kind == "delete": ret kind == prev end
+    if kind == "space": ret prev == "type" or prev == "space" end
+    ret false
+end
+
+func merges(kind: str, at: f64): bool:
+    if merge_ok(kind, str_at("k", pos)) == false: ret false end
+    if at - num_at("m", pos) > MERGE_MS: ret false end
+    if pre_s != pre_e: ret false end
+    ret pre_s == end_caret
+end
+
+func advance():
+    if pos + 1 >= CAP:
+        first = (first + 1) % CAP
+        pos -= 1
+    end
+    pos += 1
+    count = pos + 1
+end
+
+func after_move():
+    pre_s = num_at("s", pos) as int
+    pre_e = num_at("e", pos) as int
+    end_caret = pre_e
+end
+
+@fa "بازنشانی"
+pub func Reset(text: str, s: int, e: int):
+    ensure_store()
+    first = 0
+    count = 1
+    pos = 0
+    write(0, text, s, e, "load", dom.Now())
+    pre_s = s
+    pre_e = e
+    end_caret = e
+end
+
+@fa "متن"
+pub func Text(): str: ret str_at("t", pos) end
+
+@fa "آغاز گزینش"
+pub func SelStart(): int: ret num_at("s", pos) as int end
+
+@fa "پایان گزینش"
+pub func SelEnd(): int: ret num_at("e", pos) as int end
+
+@fa "نشانه"
+pub func Mark(s: int, e: int):
+    if count == 0: ret end
+    pre_s = s
+    pre_e = e
+    set_sel(pos, s, e)
+end
+
+@fa "ثبت"
+pub func Record(text: str, s: int, e: int, kind: str):
+    ensure_store()
+    if count == 0:
+        Reset(text, s, e)
+        ret
+    end
+    if text == str_at("t", pos):
+        Mark(s, e)
+        ret
+    end
+    at := dom.Now()
+    if merges(kind, at) == false: advance() end
+    write(pos, text, s, e, kind, at)
+    pre_s = s
+    pre_e = e
+    end_caret = e
+end
+
+@fa "واگرد"
+pub func Undo(): bool:
+    if pos <= 0: ret false end
+    pos -= 1
+    after_move()
+    ret true
+end
+
+@fa "ازنو"
+pub func Redo(): bool:
+    if pos + 1 >= count: ret false end
+    pos += 1
+    after_move()
+    ret true
+end

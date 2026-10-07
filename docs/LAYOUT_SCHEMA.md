@@ -23,6 +23,10 @@ set. Every spelling in either language is accepted in both English and
 Persian files, and spaces, `_`, `-` and ZWNJ are ignored when names are
 compared.
 
+CSS values are the exception. An English file accepts only the `@en`
+spellings of keywords and units, ASCII digits, `,` and `%`. A Persian file
+accepts both, plus Persian digits, `،` and `٪`.
+
 ## Elements
 
 ```salam

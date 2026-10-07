@@ -12,6 +12,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![GitHub Release](https://img.shields.io/github/v/release/salamlang/salam?style=for-the-badge&color=007ACC)](https://github.com/SalamLang/Salam/releases)
 [![GitHub repository size](https://img.shields.io/github/repo-size/salamlang/salam?style=for-the-badge&color=444444)](https://github.com/SalamLang/Salam)
 
+[![Website](https://img.shields.io/badge/Website-English-1A1A1A?style=for-the-badge&labelColor=333333&color=FF5C00)](https://salamlang.github.io/Salam/)
+[![Website](https://img.shields.io/badge/Website-Persian-1A1A1A?style=for-the-badge&labelColor=333333&color=FF5C00)](https://www.salamlang.ir/)
 [![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://editor.salamlang.ir/)
 
 ---

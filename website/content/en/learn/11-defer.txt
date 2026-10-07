@@ -1,22 +1,62 @@
 lesson.part = Functions
 lesson.title = defer and function modifiers
-lesson.summary = Running cleanup at the end of a function with defer, plus pure and inline
+lesson.summary = Running cleanup at the end of a block with defer, in what order and when, plus the pure, inline, noinline, noret and deprecated modifiers
 lesson.seo_title = defer and function modifiers in Salam | Lesson 11 of the Salam course
-lesson.description = The defer statement for cleanup at the end of a function, and the pure, inline, noret and deprecated modifiers in Salam.
-lesson.lead = defer keeps cleanup next to the code that needs it, and the function modifiers tell the compiler how a function behaves.
+lesson.description = The defer statement in Salam: cleanup order, defer on every return path, defer inside loops and blocks, when a deferred statement reads its values, freeing collections and closing files, and the pure, inline, noinline, noret and deprecated modifiers.
+lesson.lead = defer keeps cleanup next to the code that needs it, so it cannot be forgotten on an early return. The function modifiers tell the compiler how a function behaves, and some of them it checks for you.
 lesson.body <<
 <h2 id="defer">defer</h2>
-<p>A statement written after <code>defer</code> runs at the end of the block, whichever way the function leaves it. With several defers, the last one runs first. The commonest use is freeing memory right beside the line that allocated it.</p>
+<p>A statement written after <code>defer</code> does not run where it stands. It runs when the surrounding block ends. With several defers, the last one runs first, the way you undo steps in reverse order. The commonest use is releasing something right beside the line that acquired it.</p>
 {{example.defer}}
 
+<h2 id="exit">Every way out</h2>
+<p>A deferred statement runs whichever way the block is left: at its end, at a <code>ret</code> in the middle, or at a <code>break</code> out of a loop. That is the whole point. A function with several <code>ret</code> statements needs one <code>defer</code>, not a copy of the cleanup before each <code>ret</code>.</p>
+{{example.defer-return}}
+<p>The deferred line runs after the result has been worked out but before the caller gets it, so it is printed before <code>position:</code>. The same holds in <code>main</code>: a <code>ret 1</code> still runs <code>main</code>'s defers, which is why <code>os.Exit</code> is not allowed there.</p>
+
+<h2 id="blocks">defer belongs to its block</h2>
+<p>A defer runs at the end of the block it is written in, not at the end of the function. Inside a loop that means at the end of every round, and inside an <code>if</code> at the end of that branch.</p>
+{{example.defer-blocks}}
+<p>So something acquired inside a loop body and deferred there is released before the next round starts, which is usually exactly what you want.</p>
+
+<h2 id="when">When the values are read</h2>
+<p>A deferred statement reads its variables when it runs, not when the <code>defer</code> line is reached. If a variable changes in between, the defer sees the new value. To keep the value from the moment of the <code>defer</code>, copy it into another variable first.</p>
+{{example.defer-late}}
+
+<h2 id="free">Freeing collections</h2>
+<p>A <code>Vector</code> or a <code>HashMap</code> takes memory that you give back with <code>free()</code>. Write <code>defer x.free()</code> on the line right after creating it, and every path out of the function frees it, including the early <code>ret 0</code> here.</p>
+{{example.defer-free}}
+<p>The <a href="/learn/collections/">collections lesson</a> covers <code>Vector</code> and <code>HashMap</code>, and the <a href="/learn/memory/">memory lesson</a> explains what needs freeing and why.</p>
+
+<h2 id="files">Closing files</h2>
+<p>The same pattern closes files. Check that the open worked, then defer the close straight away; the code that follows may return early without leaving the file open. Here <code>main</code> also defers deleting the temporary file, so it is gone when the program ends.</p>
+{{example.defer-file}}
+<p>A defer may call a function that returns a value, as <code>os.Remove</code> does; the value is simply dropped. There is no block form <code>defer: ... end</code>. When the cleanup takes several steps, put them in a function and defer the call.</p>
+
 <h2 id="modifiers">Function modifiers</h2>
-<p>These modifiers may be written before <code>func</code>:</p>
-<ul>
-<li><code>pure</code>: the function has no side effects, so it neither prints nor changes a global, and the compiler checks that.</li>
-<li><code>inline</code> and <code>noinline</code>: a hint that the body should, or should not, be placed at the call site.</li>
-<li><code>noret</code>: the function never returns, like one that ends the program.</li>
-<li><code>deprecated</code>: the function is obsolete, and using it warns.</li>
-<li><code>pub</code>: the function is reachable outside its package, which the packages lesson covers.</li>
-</ul>
+<p>These words go before <code>func</code> and say something about the function. Some are promises the compiler checks, others are hints:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Modifier</th><th>Meaning</th><th>What the compiler does</th></tr></thead>
+<tbody>
+<tr><td><code>pure</code></td><td>No side effects: the result depends only on the arguments</td><td>Rejects printing, writing a global or calling an impure function inside it</td></tr>
+<tr><td><code>inline</code></td><td>Place the body at the call site</td><td>Takes it as a hint, useful for small functions called very often</td></tr>
+<tr><td><code>noinline</code></td><td>Keep it a real call</td><td>Takes it as a hint, handy when profiling or debugging</td></tr>
+<tr><td><code>noret</code></td><td>The function never returns, for example it ends the program</td><td>Treats code after a call to it as unreachable</td></tr>
+<tr><td><code>deprecated</code></td><td>The function is obsolete</td><td>Warns at every call (W013)</td></tr>
+<tr><td><code>pub</code></td><td>Visible outside its package</td><td>See the <a href="/learn/packages/">packages lesson</a></td></tr>
+</tbody>
+</table></div>
 {{example.fn-mods}}
+<p>Add a <code>println</code> to <code>net price</code> and the build stops with "'pure' function 'net price' cannot call 'println': it has side effects". That check is what makes <code>pure</code> worth writing: a pure function is safe to call anywhere, any number of times.</p>
+{{example.fn-noret}}
+<p>Called with an age of -3, <code>check age</code> prints "error: impossible age -3" and the program exits with code 2. Because <code>fail</code> is <code>noret</code>, the compiler knows the call never comes back, and a statement written right after it is rejected as unreachable (E070). It does not check the body, though: a <code>noret</code> function that does return crashes the program, so make sure it always ends in <code>os.Exit</code> or another call that never returns. Calling <code>old total</code> builds and runs, with a W013 warning.</p>
+
+<h2 id="rules">Rules of thumb</h2>
+<ul>
+<li>Write the <code>defer</code> on the line right after you acquire the thing it releases.</li>
+<li>Defers run in reverse order, at the end of their own block.</li>
+<li>A deferred statement sees the values its variables have when it runs.</li>
+<li>Mark a function <code>pure</code> when it is, and let the compiler keep it that way.</li>
+<li>Use <code>noret</code> only for functions that really end the program.</li>
+</ul>
 >>

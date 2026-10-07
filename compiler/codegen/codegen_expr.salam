@@ -77,6 +77,25 @@ func cg_self_cmp(a &: at.Ast, n: int): str:
     ret (op == tok.TK_EQ or op == tok.TK_LE or op == tok.TK_GE) ? "((bool)1)" : "((bool)0)"
 end
 
+func cg_div_guard(g &: Cg, a &: at.Ast, op: int, lts: str, b: int, eb: str): str:
+    if not g.safe or b == 0:
+        ret eb
+    end
+    is_div := op == tok.TK_SLASH or op == tok.TK_SLASH_EQ
+    is_mod := op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ
+    if not is_div and not is_mod:
+        ret eb
+    end
+    bn := at.Get(a, b)
+    if not cg_is_int_typestr(lts) or not cg_is_int_typestr(bn.type_str):
+        ret eb
+    end
+    if bn.kind == at.AST_LITERAL and bn.op == tok.TK_INT:
+        ret eb
+    end
+    ret "((" + cg_ctype(bn.type_str) + ")SALAM_NZ(" + eb + ", " + (is_mod ? "1" : "0") + "))"
+end
+
 func cg_op(k: int): str:
     if k == tok.TK_PLUS:
         ret "+"
@@ -184,6 +203,39 @@ end
 
 func cg_is_str_ts(s &: sm.Sema, ts: str): bool:
     ret str.Equals(ts, "str") or str.Equals(ts, "uchar") or cg_ts_is_string_enum(s, ts)
+end
+
+func cg_is_derived_call(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    if nn.kind != at.AST_CALL or not nn.synthetic or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
+end
+
+func cg_dv_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    nn := at.Get(a, n)
+    if not cg_is_str_ts(s, nn.type_str):
+        ret true
+    end
+    if nn.kind == at.AST_IDENTIFIER:
+        ret str.Equals(nn.name, "_sb")
+    end
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS:
+        ret true
+    end
+    if nn.kind != at.AST_CALL or nn.a == 0:
+        ret false
+    end
+    cn := at.Get(a, nn.a)
+    ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
 end
 
 func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
@@ -900,6 +952,11 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         if nn.op == tok.TK_PLUS and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
             oa := cg_str_operand(g, s, a, nn.a)
             ob := cg_str_operand(g, s, a, nn.b)
+            if g.in_derive:
+                fa := cg_dv_owned(s, a, nn.a) ? "1" : "0"
+                fb := cg_dv_owned(s, a, nn.b) ? "1" : "0"
+                ret "salam_strcat_own(" + oa + ", " + fa + ", " + ob + ", " + fb + ")"
+            end
             ret "salam_strcat(" + oa + ", " + ob + ")"
         end
         if nn.op == tok.TK_STAR and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
@@ -955,11 +1012,11 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             if cg_op_is_cmp(nn.op):
                 ret "((" + cty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + cty + ")(" + ebq + "))"
             end
-            ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + aty + ")(" + ebq + ")))"
+            ret "((" + cty + ")((" + aty + ")(" + eaq + ") " + cg_op(nn.op) + " (" + aty + ")(" + cg_div_guard(g, a, nn.op, an.type_str, nn.b, ebq) + ")))"
         end
         ea3 := cg_expr(g, s, a, nn.a)
         eb3 := cg_expr(g, s, a, nn.b)
-        ret "(" + ea3 + " " + cg_op(nn.op) + " " + eb3 + ")"
+        ret "(" + ea3 + " " + cg_op(nn.op) + " " + cg_div_guard(g, a, nn.op, an.type_str, nn.b, eb3) + ")"
     end
     if k == at.AST_TERNARY:
         ea := cg_expr(g, s, a, nn.a)

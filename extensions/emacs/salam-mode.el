@@ -118,18 +118,94 @@ An empty string lets the compiler find it."
     table)
   "Syntax table for ‘salam-mode’.")
 
+(defun salam--fence (position)
+  "Make the character at POSITION a generic string fence."
+  (put-text-property position (1+ position) 'syntax-table (string-to-syntax "|")))
+
+(defun salam--punctuation (start end)
+  "Give the characters from START to END punctuation syntax."
+  (put-text-property start end 'syntax-table (string-to-syntax ".")))
+
+(defun salam--fence-p (position char)
+  "Return non-nil when POSITION holds CHAR marked as a string fence."
+  (and position
+       (eq (char-after position) char)
+       (equal (get-text-property position 'syntax-table) (string-to-syntax "|"))))
+
+(defun salam--text-block-p (state)
+  "Return non-nil when the syntax STATE is inside a text block."
+  (and (eq (nth 3 state) t)
+       (or (salam--fence-p (nth 8 state) ?`)
+           (salam--fence-p (nth 8 state) ?}))))
+
+(defun salam--injection-close-p (state)
+  "Return non-nil when STATE sits right inside the braces of an injection."
+  (let ((open (nth 1 state)))
+    (and open
+         (not (nth 3 state))
+         (not (nth 4 state))
+         (> open (1+ (point-min)))
+         (eq (char-after open) ?{)
+         (eq (char-before open) ?{)
+         (salam--fence-p (- open 2) ?$))))
+
 (defun salam--propertize (start end)
-  "Mark every \"\"\" between START and END as a generic string fence.
-Without this the first two quotes of \"\"\" read as an empty string and the
-third opens one, which would mis-colour the rest of the buffer."
+  "Mark the string fences between START and END.
+Every \"\"\" becomes a generic string fence.  Without this the first two
+quotes of \"\"\" read as an empty string and the third opens one, which
+would mis-colour the rest of the buffer.  A text block opened by three
+backticks is fenced the same way, and each ${{ ... }} injection inside
+one is cut out of the string so that its code is highlighted as code."
   (goto-char start)
-  (while (search-forward "\"\"\"" end t)
-    (let ((open (- (point) 3)))
-      (put-text-property open (1+ open) 'syntax-table (string-to-syntax "|"))
-      (put-text-property (1+ open) (point) 'syntax-table (string-to-syntax ".")))))
+  (while (re-search-forward "\"\"\"\\|```\\|\\$\\$?{{\\|}}\\|\\\\" end t)
+    (let* ((from (match-beginning 0))
+           (to (match-end 0))
+           (first (char-after from))
+           (state (save-excursion (syntax-ppss from))))
+      (cond
+       ((nth 4 state))
+       ((eq first ?\")
+        (when (or (not (nth 3 state)) (salam--fence-p (nth 8 state) ?\"))
+          (salam--fence from)
+          (salam--punctuation (1+ from) to)))
+       ((eq first ?`)
+        (cond
+         ((not (nth 3 state))
+          (salam--fence from)
+          (salam--punctuation (1+ from) to))
+         ((and (salam--text-block-p state)
+               (save-excursion
+                 (goto-char from)
+                 (skip-chars-backward " \t")
+                 (bolp)))
+          (salam--punctuation from (1- to))
+          (salam--fence (1- to)))))
+       ((eq first ?\\)
+        (when (salam--text-block-p state)
+          (salam--punctuation from to)))
+       ((eq first ?$)
+        (when (and (salam--text-block-p state) (= (- to from) 3))
+          (salam--fence from)
+          (salam--punctuation (1+ from) (+ from 2))))
+       ((salam--injection-close-p state)
+        (salam--fence (1+ from)))
+       (t
+        (goto-char (1+ from)))))))
+
+(defun salam--match-injection-delimiter (limit)
+  "Find the next ${{ or }} before LIMIT that delimits a text block injection."
+  (let ((found nil))
+    (while (and (not found) (re-search-forward "\\${{\\|}}" limit t))
+      (let ((from (match-beginning 0)))
+        (when (if (eq (char-after from) ?$)
+                  (salam--fence-p from ?$)
+                (salam--fence-p (1+ from) ?}))
+          (setq found t))))
+    found))
 
 (defvar salam-font-lock-keywords
   (list
+   (list #'salam--match-injection-delimiter '(0 font-lock-preprocessor-face t))
    (list (concat "^\\s-*\\(//!\\)\\(.*\\)$")
          '(1 font-lock-preprocessor-face t)
          '(2 font-lock-preprocessor-face t))

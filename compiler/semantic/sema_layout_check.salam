@@ -19,6 +19,9 @@ struct LayCheck:
     pub unexpanded: bool = false
     pub runtime: bool = false
     pub in_each: int = 0
+    pub cls_names: Vector<str> = Vector {}
+    pub cls_sigs: Vector<str> = Vector {}
+    pub cls_nodes: Vector<int> = Vector {}
 end
 
 func lay_pseudo_index(name: str, plen &: int): int:
@@ -471,6 +474,10 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
     e := g_lay_elems.get(ei)
     mut seen := Vector {} as Vector<str>
     defer seen.free()
+    mut decls := Vector {} as Vector<str>
+    defer decls.free()
+    mut klass := ""
+    mut klass_node := 0
     mut has_text := false
     repeat at.ChildCount(a, el) in i:
         aid := at.Child(a, el, i)
@@ -521,6 +528,11 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
                         i18.Tr("attribute '%s' is not allowed on '%s'"), co.ArgStr(name), co.ArgStr(lay_elem_display(ei))
                     )
                 )
+            else:
+                mut pv := ""
+                if lay_attr_text(a, aid, pv):
+                    decls.push(name + "=" + pv)
+                end
             end
             continue
         end
@@ -614,6 +626,12 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             )
             continue
         end
+        if av.dest == LA_CLASS:
+            klass = v
+            klass_node = aid
+        else pl > 0 or av.dest == LA_CSS or (av.dest == LA_HTML_OR_CSS and not lay_all_digits(v)):
+            decls.push(name + "=" + v)
+        end
         if str.Equals(key, "id"):
             mut dupid := false
             repeat ck.ids.len() in q:
@@ -639,6 +657,9 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             refs.free()
         end
     end
+    if str.Len(klass) > 0 and decls.len() > 0 and not str.Equals(e.generator, "media") and not str.Equals(e.generator, "global"):
+        lay_check_class_styles(s, a, el, ei, klass, klass_node, decls, ck)
+    end
     if has_text and not lay_accepts_text(ei):
         serr(
             s, 119, span_of(a, el), co.Format1(
@@ -663,6 +684,48 @@ func lay_check_attrs(s &: Sema, a &: at.Ast, el: int, ei: int, ck &: LayCheck):
             )
         )
     end
+end
+
+func lay_style_sig(decls &: Vector<str>): str:
+    n := decls.len()
+    repeat n in i:
+        mut j := i
+        until j > 0 and str.Compare(decls.get(j - 1), decls.get(j)) > 0:
+            tmp := decls.get(j)
+            decls.set(j, decls.get(j - 1))
+            decls.set(j - 1, tmp)
+            j -= 1
+        end
+    end
+    mut out := ""
+    repeat n in k:
+        out += decls.get(k) + char_from_code(31)
+    end
+    ret out
+end
+
+func lay_check_class_styles(
+    s &: Sema, a &: at.Ast, el: int, ei: int, klass: str, klass_node: int, decls &: Vector<str>, ck &: LayCheck
+):
+    sig := lay_style_sig(decls)
+    repeat ck.cls_names.len() in i:
+        if not str.Equals(ck.cls_names.get(i), klass):
+            continue
+        end
+        if str.Equals(ck.cls_sigs.get(i), sig):
+            ret
+        end
+        other := ck.cls_nodes.get(i)
+        serr(
+            s, 136, span_of(a, klass_node), co.Format4(
+                i18.Tr("class '%s' on '%s' has different styles from the '%s' at line %d that uses the same class; give one of them its own class or make their styles the same"), co.ArgStr(klass), co.ArgStr(lay_elem_display(ei)), co.ArgStr(lay_elem_display(at.Get(a, other).op - 1)), co.ArgInt(span_of(a, other).begin.line as i64)
+            )
+        )
+        ret
+    end
+    ck.cls_names.push(klass)
+    ck.cls_sigs.push(sig)
+    ck.cls_nodes.push(el)
 end
 
 func lay_check_repeat(s &: Sema, a &: at.Ast, element: int, shown: str):
@@ -722,14 +785,7 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                     )
                 )
             else:
-                mut names := lay_elem_names()
-                hint := lay_suggest_from(cn.name, names)
-                names.free()
-                serr(
-                    s, 111, span_of(a, cid), co.Format2(
-                        i18.Tr("unknown layout element '%s'%s"), co.ArgStr(cn.name), co.ArgStr(hint)
-                    )
-                )
+                lay_report_unknown(s, a, cid, cn.name)
             end
             ck.stack.push(0 - 1)
             lay_check_children(s, a, cid, ck)
@@ -791,6 +847,86 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
     end
 end
 
+func lay_report_unknown(s &: Sema, a &: at.Ast, cid: int, name: str):
+    sp := span_of(a, cid)
+    repeat dg.Count(s.diag) in i:
+        d := dg.ItemAt(s.diag, i)
+        if d.code == 111 and d.sev == dg.SEV_ERROR and str.Equals(d.file, s.file) and d.span.begin.line == sp.begin.line and d.span.begin.col == sp.begin.col:
+            ret
+        end
+    end
+    mut names := lay_elem_names()
+    hint := lay_suggest_from(name, names)
+    names.free()
+    serr(
+        s, 111, sp, co.Format2(
+            i18.Tr("unknown layout element '%s'%s"), co.ArgStr(name), co.ArgStr(hint)
+        )
+    )
+end
+
+func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    n := at.Get(a, nid)
+    lay_comp_check_items(s, a, n.b, ck)
+    if n.kind == at.AST_IF and n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_comp_check_control(s, a, n.c, ck)
+        else:
+            lay_comp_check_items(s, a, n.c, ck)
+        end
+    end
+end
+
+func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    if nid == 0:
+        ret
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_IF or k == at.AST_EACH:
+            lay_comp_check_control(s, a, cid, ck)
+            continue
+        end
+        if k != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        cn := at.Get(a, cid)
+        slot := str.Equals(cn.name, "content") or str.Equals(cn.name, "محتوا")
+        if not slot and not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
+            if ck.unexpanded:
+                swarn(
+                    s, 2, span_of(a, cid), co.Format1(
+                        i18.Tr("unrecognized layout element '%s' (ignored)"), co.ArgStr(cn.name)
+                    )
+                )
+            else:
+                lay_report_unknown(s, a, cid, cn.name)
+            end
+        end
+        lay_comp_check_items(s, a, cid, ck)
+    end
+end
+
+func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
+    if at.KindOf(a, nid) != at.AST_LAYOUT_COMPONENT or s.program == 0:
+        ret
+    end
+    lay_ensure()
+    mut ck := LayCheck {}
+    defer ck.stack.free()
+    defer ck.comps.free()
+    repeat at.ChildCount(a, s.program) in pi:
+        pid := at.Child(a, s.program, pi)
+        if at.KindOf(a, pid) == at.AST_LAYOUT_COMPONENT:
+            ck.comps.push(at.Get(a, pid).name)
+        end
+    end
+    ck.unexpanded = lay_tree_has_include(a, at.Get(a, nid).a)
+    ck.stack.push(lay_elem_by_key("layout"))
+    lay_comp_check_items(s, a, at.Get(a, nid).a, ck)
+end
+
 func lay_tree_has_include(a &: at.Ast, nid: int): bool:
     repeat at.ChildCount(a, nid) in i:
         cid := at.Child(a, nid, i)
@@ -827,6 +963,9 @@ func sema_check_layout(s &: Sema, a &: at.Ast, nid: int, _parent: str):
     defer ck.ref_names.free()
     defer ck.doc_unique.free()
     defer ck.comps.free()
+    defer ck.cls_names.free()
+    defer ck.cls_sigs.free()
+    defer ck.cls_nodes.free()
     if s.program != 0:
         repeat at.ChildCount(a, s.program) in pi:
             pid := at.Child(a, s.program, pi)

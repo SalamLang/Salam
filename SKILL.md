@@ -1892,6 +1892,9 @@ Rules, all checked at compile time:
 
 - The layout function is `pure`: no I/O, network, random numbers or global
   writes inside the UI (E012). Fetch data in the handler and pass it in.
+  Reading a `Vector`/`HashMap` parameter is fine (`len`, `is_empty`, `get`,
+  `first`, `last`, `xs[i]`, `has`, `get_or`, `size`, `each x in xs`); a
+  method that changes it (`push`, `pop`, `set`, `put`, `remove`, `ref`) is E012.
 - Text and attribute values are always HTML-escaped; there is no raw-HTML type.
 - A runtime value for a URL attribute must be a `web.Url`, and a runtime CSS
   value must be a `web.Color`, a `web.Length` or a number (E135). Build them
@@ -1948,10 +1951,11 @@ end
 | W131        | a constant hides a layout value word of the same name                         |
 | E132 / E133 | value must be static here / `if`/`each` in a static layout                    |
 | E134 / E135 | fixed id inside `each` / runtime value of an unsafe type for this attribute   |
+| E136        | one `class` given different styles on two elements                            |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
 Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
-on any of these errors.
+and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
 `generator` field on an element or on an enum value picks a std generator: a

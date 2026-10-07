@@ -722,14 +722,7 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
                     )
                 )
             else:
-                mut names := lay_elem_names()
-                hint := lay_suggest_from(cn.name, names)
-                names.free()
-                serr(
-                    s, 111, span_of(a, cid), co.Format2(
-                        i18.Tr("unknown layout element '%s'%s"), co.ArgStr(cn.name), co.ArgStr(hint)
-                    )
-                )
+                lay_report_unknown(s, a, cid, cn.name)
             end
             ck.stack.push(0 - 1)
             lay_check_children(s, a, cid, ck)
@@ -789,6 +782,91 @@ func lay_check_children(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
         lay_check_children(s, a, cid, ck)
         _pe := ck.stack.pop()
     end
+end
+
+func lay_report_unknown(s &: Sema, a &: at.Ast, cid: int, name: str):
+    sp := span_of(a, cid)
+    repeat dg.Count(s.diag) in i:
+        d := dg.ItemAt(s.diag, i)
+        if d.code == 111 and d.sev == dg.SEV_ERROR and str.Equals(d.file, s.file) and d.span.begin.line == sp.begin.line and d.span.begin.col == sp.begin.col:
+            ret
+        end
+    end
+    mut names := lay_elem_names()
+    hint := lay_suggest_from(name, names)
+    names.free()
+    serr(
+        s, 111, sp, co.Format2(
+            i18.Tr("unknown layout element '%s'%s"), co.ArgStr(name), co.ArgStr(hint)
+        )
+    )
+end
+
+func lay_comp_check_control(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    n := at.Get(a, nid)
+    lay_comp_check_items(s, a, n.b, ck)
+    if n.kind == at.AST_IF and n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lay_comp_check_control(s, a, n.c, ck)
+        else:
+            lay_comp_check_items(s, a, n.c, ck)
+        end
+    end
+end
+
+func lay_comp_check_items(s &: Sema, a &: at.Ast, nid: int, ck &: LayCheck):
+    if nid == 0:
+        ret
+    end
+    repeat at.ChildCount(a, nid) in i:
+        cid := at.Child(a, nid, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_IF or k == at.AST_EACH:
+            lay_comp_check_control(s, a, cid, ck)
+            continue
+        end
+        if k != at.AST_LAYOUT_ELEMENT:
+            continue
+        end
+        cn := at.Get(a, cid)
+        slot := str.Equals(cn.name, "content") or str.Equals(cn.name, "محتوا")
+        if not slot and not lay_is_component(ck, cn.name) and lay_resolve_elem(a, cid, ck.stack) < 0:
+            if ck.unexpanded:
+                swarn(
+                    s, 2, span_of(a, cid), co.Format1(
+                        i18.Tr("unrecognized layout element '%s' (ignored)"), co.ArgStr(cn.name)
+                    )
+                )
+            else:
+                lay_report_unknown(s, a, cid, cn.name)
+            end
+        end
+        lay_comp_check_items(s, a, cid, ck)
+    end
+end
+
+func sema_check_layout_component(s &: Sema, a &: at.Ast, nid: int):
+    if at.KindOf(a, nid) != at.AST_LAYOUT_COMPONENT or s.program == 0:
+        ret
+    end
+    lay_ensure()
+    mut ck := LayCheck {}
+    defer ck.stack.free()
+    defer ck.comps.free()
+    repeat at.ChildCount(a, s.program) in pi:
+        pid := at.Child(a, s.program, pi)
+        pk := at.KindOf(a, pid)
+        if pk == at.AST_LAYOUT_COMPONENT:
+            ck.comps.push(at.Get(a, pid).name)
+            if lay_tree_has_include(a, at.Get(a, pid).a):
+                ck.unexpanded = true
+            end
+        else pk == at.AST_LAYOUT_BLOCK and lay_tree_has_include(a, pid):
+            ck.unexpanded = true
+        end
+    end
+    ck.stack.push(lay_elem_by_key("layout"))
+    lay_comp_check_items(s, a, at.Get(a, nid).a, ck)
 end
 
 func lay_tree_has_include(a &: at.Ast, nid: int): bool:

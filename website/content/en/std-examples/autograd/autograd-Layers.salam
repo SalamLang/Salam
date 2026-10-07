@@ -1,0 +1,77 @@
+import autograd
+import tensor
+
+func rounded(t: tensor.Tensor): str:
+    mut text := ""
+    repeat t.numel() in i:
+        if i > 0:
+            text += " "
+        end
+        text += "" + ((t.at(i) * 100.0 + 10000.5) as int - 10000)
+    end
+    ret text
+end
+
+func cube(t: tensor.Tensor): f64:
+    mut total := 0.0
+    repeat t.numel() in i:
+        total += t.at(i) * t.at(i) * t.at(i)
+    end
+    ret total
+end
+
+func main:
+    mut tape := autograd.NewTape(7)
+    mut image := tensor.Reshape(tensor.Arange(16), tensor.Shape4(1, 1, 4, 4))
+    mut kernel := tensor.Ones(tensor.Shape4(2, 1, 2, 2))
+    mut bias := tensor.Zeros1(2)
+    img := autograd.Input(tape, image)
+    weight := autograd.Constant(tape, kernel)
+    b := autograd.Constant(tape, bias)
+    conv := autograd.Conv2D(tape, img, weight, b, 2, 2, 0, 0)
+    println tensor.ShapeString(autograd.Value(tape, conv))
+    println rounded(autograd.Value(tape, autograd.MaxPool2D(tape, img, 2, 2, 2, 2)))
+    println rounded(autograd.Value(tape, autograd.AvgPool2D(tape, img, 2, 2, 2, 2)))
+    println tensor.ShapeString(autograd.Value(tape, autograd.GroupNorm(tape, conv, autograd.Constant(tape, tensor.Ones(tensor.Shape1(2))), autograd.Constant(tape, tensor.Zeros1(2)), 2, 0.00001)))
+    mut running_mean := tensor.Zeros1(2)
+    mut running_var := tensor.Ones(tensor.Shape1(2))
+    norm := autograd.BatchNorm(tape, conv, autograd.Constant(tape, tensor.Ones(tensor.Shape1(2))), autograd.Constant(tape, tensor.Zeros1(2)), running_mean, running_var, 0.1, 0.00001)
+    println tensor.ShapeString(autograd.Value(tape, norm)), rounded(running_mean)
+
+    mut row := tensor.Reshape(tensor.Arange(8), tensor.Shape2(2, 4))
+    r := autograd.Input(tape, row)
+    gamma := autograd.Constant(tape, tensor.Ones(tensor.Shape1(4)))
+    beta := autograd.Constant(tape, tensor.Zeros1(4))
+    println rounded(autograd.Value(tape, autograd.LayerNorm(tape, r, gamma, beta, 0.00001)))
+    println tensor.ShapeString(autograd.Value(tape, autograd.RMSNorm(tape, r, gamma, 0.00001)))
+    println rounded(autograd.Value(tape, autograd.Narrow(tape, r, 1, 1, 2)))
+    println rounded(autograd.Value(tape, autograd.SliceAxis0(tape, r, 1, 1)))
+    println tensor.ShapeString(autograd.Value(tape, autograd.Concat2(tape, r, r, 0)))
+    mut order := Vector {} as Vector<int>
+    order.push(1)
+    order.push(0)
+    println tensor.ShapeString(autograd.Value(tape, autograd.Permute(tape, r, order)))
+    mut three_dim := tensor.Ones(tensor.Shape3(2, 2, 3))
+    s := autograd.Input(tape, three_dim)
+    println tensor.ShapeString(autograd.Value(tape, autograd.BatchMatMul(tape, s, autograd.Permute(tape, s, tensor.Shape3(0, 2, 1)))))
+    println tensor.ShapeString(autograd.Value(tape, autograd.RoPE(tape, r, 2, 1, 0, 10000.0)))
+    println rounded(autograd.Value(tape, autograd.Dropout(tape, r, 0.0)))
+
+    mut vocab := tensor.Reshape(tensor.Arange(6), tensor.Shape2(3, 2))
+    mut indices := Vector {} as Vector<int>
+    indices.push(2)
+    indices.push(0)
+    println rounded(autograd.Value(tape, autograd.Embedding(tape, autograd.Constant(tape, vocab), indices)))
+
+    mut prediction := tensor.Full(tensor.Shape1(2), 1.0)
+    mut target := tensor.Zeros1(2)
+    println rounded(autograd.Value(tape, autograd.MSELoss(tape, autograd.Input(tape, prediction), autograd.Constant(tape, target))))
+    println rounded(autograd.Value(tape, autograd.BCEWithLogits(tape, autograd.Input(tape, target), autograd.Constant(tape, target))))
+    mut logits := tensor.Zeros2(2, 3)
+    println rounded(autograd.Value(tape, autograd.CrossEntropyLogits(tape, autograd.Input(tape, logits), indices)))
+
+    mut point := tensor.Arange(3)
+    analytic := tensor.Mul(tensor.Square(point), tensor.Full(tensor.Shape1(3), 3.0))
+    println autograd.GradCheck((t: tensor.Tensor): ret cube(t) end, point, analytic, 0.001, 0.01)
+    tape.free()
+end

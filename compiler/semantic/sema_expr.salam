@@ -240,11 +240,20 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
                 derive_rewrite_eq(s, a, nid, fname, op == tok.TK_NE)
                 ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
             end
-            serr(
-                s, 21, sp, co.Format1(
-                    i18.Tr("values of type '%s' cannot be compared field by field; define operator_eq on the struct"), co.ArgStr(type_disp(s, l))
+            lk0 := ty_at(s, l).kind
+            if lk0 == TY_VEC or lk0 == TY_MAP or derive_method_sig(s, ssym, "free", 0) != 0:
+                serr(
+                    s, 21, sp, co.Format1(
+                        i18.Tr("'%s' cannot be compared with '=='; compare its elements in a loop"), co.ArgStr(type_disp(s, l))
+                    )
                 )
-            )
+            else:
+                serr(
+                    s, 21, sp, co.Format2(
+                        i18.Tr("values of type '%s' cannot be compared with '==' because one of its fields cannot be; define 'func ==(other: %s): bool' on the struct"), co.ArgStr(type_disp(s, l)), co.ArgStr(type_disp(s, l))
+                    )
+                )
+            end
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
     end
@@ -349,6 +358,45 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
         serr(
             s, 21, sp, co.Format1(
                 i18.Tr("values of enum '%s' cannot be compared: a member holds data without '=='"), co.ArgStr(type_disp(s, l))
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    lak := ty_at(s, l).kind
+    rak := ty_at(s, r).kind
+    if tk_is_eq(op) and lak == TY_ARRAY and rak == TY_ARRAY:
+        if not type_equiv(s, l, r):
+            serr(
+                s, 21, sp, co.Format2(
+                    i18.Tr("cannot compare '%s' and '%s': arrays must have the same element type and length"), co.ArgStr(type_disp(s, l)), co.ArgStr(type_disp(s, r))
+                )
+            )
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+        afn := derive_struct_eq(s, a, l, sp)
+        if str.Len(afn) > 0:
+            derive_rewrite_eq(s, a, nid, afn, op == tok.TK_NE)
+            ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+        end
+        serr(
+            s, 21, sp, co.Format1(
+                i18.Tr("arrays of type '%s' cannot be compared with '==' because their elements cannot be"), co.ArgStr(type_disp(s, l))
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    if tk_is_cmp(op) and (lak == TY_ARRAY or rak == TY_ARRAY):
+        serr(
+            s, 21, sp, co.Format2(
+                i18.Tr("cannot order '%s' and '%s': arrays only support '==' and '!='"), co.ArgStr(type_disp(s, l)), co.ArgStr(type_disp(s, r))
+            )
+        )
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    if tk_is_eq(op) and (lak == TY_SLICE or rak == TY_SLICE) and type_equiv(s, l, r):
+        serr(
+            s, 21, sp, co.Format1(
+                i18.Tr("slices of type '%s' cannot be compared with '=='; compare their elements in a loop"), co.ArgStr(type_disp(s, l))
             )
         )
         ret sema_decorate(s, a, nid, sema_err_ty(s))

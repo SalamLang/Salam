@@ -2,7 +2,7 @@
 
 Every CSS property the layout DSL knows, generated from `std/layout/style/`. A property is written with spaces in place of hyphens (`background image` becomes `background-image`), in English or in Persian.
 
-Every property also accepts the CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) and the functions `var()`, `env()`, `calc()`, `min()`, `max()`, `clamp()` and `attr()`. Persian keyword values and units work too: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`. A bare number on a length property becomes pixels.
+Every property also accepts the CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`), `var()`, `env()` and `attr()`. Math functions (`calc()`, `min()`, `max()`, `clamp()`, `round()` and the rest) are accepted where their result type fits: `width = "calc(100% - 20px)"` works, `width = "calc(10px + 1s)"` is E018. Inside them a bare number next to a length becomes pixels, and `+`/`-` get the spaces CSS needs. Persian keyword values and units work too: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`. A bare number on a length property becomes pixels.
 
 |                                            | count |
 | ------------------------------------------ | ----- |
@@ -478,6 +478,34 @@ Function arguments are checked too: `rotate(banana)` and `rgb(1 2)` are E018. In
 | `repeat()`                    | تکرار                 | count or `auto-fill`/`auto-fit`, track list                                  |
 | `minmax()`                    | کمینه‌بیشینه          | 2 track sizes                                                                |
 | `fit-content()`               | اندازه‌محتوا          | length-percentage                                                            |
+| `calc()`                      | محاسبه                | an expression with `+`, `-`, `*`, `/`                                        |
+| `min()`                       | کمینه                 | expressions of one type                                                      |
+| `max()`                       | بیشینه                | expressions of one type                                                      |
+| `clamp()`                     | محدود                 | min, value, max (`none` allowed at the ends)                                 |
+| `round()`                     | گرد‌کردن              | optional strategy, value, optional step                                      |
+| `mod()`                       | پیمانه                |                                                                              |
+| `rem()`                       | باقیمانده             |                                                                              |
+| `abs()`                       | قدرمطلق               |                                                                              |
+| `sign()`                      | علامت                 |                                                                              |
+| `sin()`                       | سینوس                 |                                                                              |
+| `cos()`                       | کسینوس                |                                                                              |
+| `tan()`                       | تانژانت               |                                                                              |
+| `asin()`                      | آرک‌سینوس             |                                                                              |
+| `acos()`                      | آرک‌کسینوس            |                                                                              |
+| `atan()`                      | آرک‌تانژانت           |                                                                              |
+| `atan2()`                     | آرک‌تانژانت‌دو        |                                                                              |
+| `pow()`                       | توان                  |                                                                              |
+| `sqrt()`                      | جذر                   |                                                                              |
+| `hypot()`                     | وتر                   |                                                                              |
+| `log()`                       | لگاریتم               |                                                                              |
+| `exp()`                       | نمایی                 |                                                                              |
+| `calc-size()`                 | محاسبه‌اندازه         |                                                                              |
+| `sibling-index()`             | شماره‌هم‌نیا          |                                                                              |
+| `sibling-count()`             | تعداد‌هم‌نیا          |                                                                              |
+| `progress()`                  | پیشرفت                |                                                                              |
+| `var()`                       | متغیر                 | `--name`, optional fallback                                                  |
+| `env()`                       | محیط                  | name, optional indices and fallback                                          |
+| `attr()`                      | ویژگی                 | attribute name, optional type or unit, optional fallback                     |
 | `inset()`                     | فرورفته               | 1 to 4 length-percentages, optional `round` radius                           |
 | `circle()`                    | دایره                 | optional radius and `at` position                                            |
 | `ellipse()`                   | بیضی                  | optional 2 radii and `at` position                                           |

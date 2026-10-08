@@ -1,0 +1,613 @@
+package semantic
+
+import str
+
+struct CssCalc:
+    pub ty: str = ""
+    pub out: str = ""
+    pub lit: bool = false
+end
+
+func css_math_fn(f: str): bool:
+    ret lay_csv_has("calc,min,max,clamp,round,mod,rem,abs,sign,sin,cos,tan,asin,acos,atan,atan2,pow,sqrt,hypot,log,exp,calc-size,sibling-index,sibling-count,progress", f)
+end
+
+func css_ref_fn(f: str): bool:
+    ret str.Equals(f, "var") or str.Equals(f, "env") or str.Equals(f, "attr")
+end
+
+func cm_unit_type(u: str): str:
+    if str.Equals(u, "%"):
+        ret "pct"
+    end
+    if lay_csv_has(css_length_units(), u):
+        ret "len"
+    end
+    if lay_csv_has("deg,rad,grad,turn", u):
+        ret "ang"
+    end
+    if lay_csv_has("s,ms", u):
+        ret "time"
+    end
+    if lay_csv_has("dpi,dpcm,dppx,x", u):
+        ret "res"
+    end
+    if str.Equals(u, "fr"):
+        ret "flex"
+    end
+    ret ""
+end
+
+func cm_letter(b: int): bool:
+    ret (b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b >= 128
+end
+
+func cm_ident_byte(b: int): bool:
+    ret cm_letter(b) or (b >= 48 and b <= 57) or b == 45 or b == 95
+end
+
+func cm_skip(s: str, p &: int):
+    until p < str.Len(s) and css_ws(byte_at(s, p)):
+        p += 1
+    end
+end
+
+func cm_word_end(s: str, p: int): int:
+    mut q := p
+    until q < str.Len(s) and cm_letter(byte_at(s, q)):
+        q += 1
+    end
+    ret q
+end
+
+func cm_close(s: str, open: int): int:
+    mut depth := 0
+    mut quote := 0
+    repeat str.Len(s) - open in k:
+        i := open + k
+        b := byte_at(s, i)
+        if quote != 0:
+            if b == quote:
+                quote = 0
+            end
+        else b == 34 or b == 39:
+            quote = b
+        else b == 40:
+            depth += 1
+        else b == 41:
+            depth -= 1
+            if depth == 0:
+                ret i
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func cm_num_ok(ty: str): bool:
+    ret str.Equals(ty, "num") or str.Equals(ty, "any")
+end
+
+func cm_add_type(a: str, b: str): str:
+    if str.Equals(a, "any"):
+        ret b
+    end
+    if str.Equals(b, "any") or str.Equals(a, b):
+        ret a
+    end
+    pa := str.Equals(a, "pct")
+    pb := str.Equals(b, "pct")
+    la := str.Equals(a, "len") or str.Equals(a, "lenpct")
+    lb := str.Equals(b, "len") or str.Equals(b, "lenpct")
+    if (pa or la) and (pb or lb):
+        ret "lenpct"
+    end
+    if pa and (str.Equals(b, "ang") or str.Equals(b, "time")):
+        ret b
+    end
+    if pb and (str.Equals(a, "ang") or str.Equals(a, "time")):
+        ret a
+    end
+    ret ""
+end
+
+func cm_lengthish(ty: str): bool:
+    ret str.Equals(ty, "len") or str.Equals(ty, "pct") or str.Equals(ty, "lenpct")
+end
+
+func cm_add(l &: CssCalc, r &: CssCalc, op: str): bool:
+    if l.lit and str.Equals(l.ty, "num") and cm_lengthish(r.ty):
+        l.out += "px"
+        l.ty = "len"
+    end
+    if r.lit and str.Equals(r.ty, "num") and cm_lengthish(l.ty):
+        r.out += "px"
+        r.ty = "len"
+    end
+    ty := cm_add_type(l.ty, r.ty)
+    if str.Len(ty) == 0:
+        ret false
+    end
+    l.out = l.out + " " + op + " " + r.out
+    l.ty = ty
+    l.lit = false
+    ret true
+end
+
+func cm_number(s: str, p &: int, res &: CssCalc): bool:
+    mut e := 0
+    if not css_scan_number(s, p, e):
+        ret false
+    end
+    num := str.Substr(s, p, e - p)
+    p = e
+    n := str.Len(s)
+    if p < n and byte_at(s, p) == 37:
+        p += 1
+        res.out = num + "%"
+        res.ty = "pct"
+        ret true
+    end
+    we := cm_word_end(s, p)
+    if we > p:
+        u := css_unit_of(s, p, we - p)
+        ty := cm_unit_type(u)
+        if str.Len(ty) == 0:
+            ret false
+        end
+        p = we
+        res.out = num + u
+        res.ty = ty
+        ret true
+    end
+    mut q := p
+    cm_skip(s, q)
+    w1 := cm_word_end(s, q)
+    if w1 > q:
+        mut r := w1
+        cm_skip(s, r)
+        w2 := cm_word_end(s, r)
+        if w2 > r and r > w1:
+            u2 := css_unit_of(s, q, w2 - q)
+            if str.Len(cm_unit_type(u2)) > 0:
+                p = w2
+                res.out = num + u2
+                res.ty = cm_unit_type(u2)
+                ret true
+            end
+        end
+        u1 := css_unit_of(s, q, w1 - q)
+        if str.Len(cm_unit_type(u1)) > 0:
+            p = w1
+            res.out = num + u1
+            res.ty = cm_unit_type(u1)
+            ret true
+        end
+    end
+    res.out = num
+    res.ty = "num"
+    res.lit = true
+    ret true
+end
+
+func cm_call(s: str, p &: int, name: str, res &: CssCalc): bool:
+    close := cm_close(s, p)
+    if close < 0:
+        ret false
+    end
+    tok := name + str.Substr(s, p, close - p + 1)
+    p = close + 1
+    rw := css_fn_rewrite(tok)
+    if str.Len(rw) == 0:
+        ret false
+    end
+    f := css_fn_name(rw)
+    if css_math_fn(f):
+        ret css_math_eval(rw, res)
+    end
+    if str.Len(lay_dyn_value("css_fn", f)) == 0 and not css_ref_fn(f):
+        ret false
+    end
+    res.out = rw
+    res.ty = str.Equals(f, "anchor") or str.Equals(f, "anchor-size") ? "len" : "any"
+    ret true
+end
+
+func cm_factor(s: str, p &: int, res &: CssCalc): bool:
+    cm_skip(s, p)
+    n := str.Len(s)
+    if p >= n:
+        ret false
+    end
+    b := byte_at(s, p)
+    if b == 40:
+        close := cm_close(s, p)
+        if close < 0:
+            ret false
+        end
+        inner := str.Substr(s, p + 1, close - p - 1)
+        p = close + 1
+        mut sub := CssCalc {}
+        if not cm_full(inner, sub):
+            ret false
+        end
+        res.out = "(" + sub.out + ")"
+        res.ty = sub.ty
+        ret true
+    end
+    if (b >= 48 and b <= 57) or b == 46 or ((b == 43 or b == 45) and p + 1 < n and ((byte_at(s, p + 1) >= 48 and byte_at(s, p + 1) <= 57) or byte_at(s, p + 1) == 46)):
+        ret cm_number(s, p, res)
+    end
+    mut q := p
+    if b == 45 or b == 43:
+        q += 1
+    end
+    until q < n and cm_ident_byte(byte_at(s, q)):
+        q += 1
+    end
+    if q == p:
+        ret false
+    end
+    word := str.Substr(s, p, q - p)
+    p = q
+    if p < n and byte_at(s, p) == 40:
+        ret cm_call(s, p, word, res)
+    end
+    mut k := lay_dyn_value("css_g_mathconst", word)
+    if byte_at(word, 0) == 45 or byte_at(word, 0) == 43:
+        k = str.Equals(k, "infinity") ? str.Substr(word, 0, 1) + k : ""
+    end
+    if str.Len(k) > 0:
+        res.out = k
+        res.ty = "num"
+        ret true
+    end
+    v := lay_dyn_value("css_g_mathvar", word)
+    if str.Len(v) > 0:
+        res.out = v
+        res.ty = str.Equals(v, "size") ? "len" : "any"
+        ret true
+    end
+    ret false
+end
+
+func cm_product(s: str, p &: int, res &: CssCalc): bool:
+    if not cm_factor(s, p, res):
+        ret false
+    end
+    until true:
+        mut q := p
+        cm_skip(s, q)
+        if q >= str.Len(s):
+            ret true
+        end
+        op := byte_at(s, q)
+        if op != 42 and op != 47:
+            ret true
+        end
+        p = q + 1
+        mut r := CssCalc {}
+        if not cm_factor(s, p, r):
+            ret false
+        end
+        if op == 42:
+            if cm_num_ok(res.ty):
+                res.ty = str.Equals(res.ty, "any") and str.Equals(r.ty, "num") ? "any" : r.ty
+            else not cm_num_ok(r.ty):
+                ret false
+            end
+            res.out = res.out + " * " + r.out
+        else:
+            if not cm_num_ok(r.ty):
+                ret false
+            end
+            res.out = res.out + " / " + r.out
+        end
+        res.lit = false
+    end
+end
+
+func cm_sum(s: str, p &: int, res &: CssCalc): bool:
+    if not cm_product(s, p, res):
+        ret false
+    end
+    until true:
+        mut q := p
+        cm_skip(s, q)
+        if q >= str.Len(s):
+            ret true
+        end
+        op := byte_at(s, q)
+        if op != 43 and op != 45:
+            ret true
+        end
+        p = q + 1
+        mut r := CssCalc {}
+        if not cm_product(s, p, r):
+            ret false
+        end
+        if not cm_add(res, r, op == 43 ? "+" : "-"):
+            ret false
+        end
+    end
+end
+
+func cm_full(s: str, res &: CssCalc): bool:
+    mut p := 0
+    if not cm_sum(s, p, res):
+        ret false
+    end
+    cm_skip(s, p)
+    ret p == str.Len(s)
+end
+
+func cm_join(args: Vector<CssCalc>): str:
+    mut out := ""
+    repeat args.len() in i:
+        if i > 0:
+            out += ", "
+        end
+        out += args.get(i).out
+    end
+    ret out
+end
+
+func cm_same(args &: Vector<CssCalc>, from: int): str:
+    mut ty := "any"
+    repeat args.len() - from in k:
+        mut a := args.get(from + k)
+        if a.lit and str.Equals(a.ty, "num") and cm_lengthish(ty):
+            a.out += "px"
+            a.ty = "len"
+            args.set(from + k, a)
+        end
+        ty = cm_add_type(ty, a.ty)
+        if str.Len(ty) == 0:
+            ret ""
+        end
+    end
+    if cm_lengthish(ty):
+        repeat args.len() - from in j:
+            mut b := args.get(from + j)
+            if b.lit and str.Equals(b.ty, "num"):
+                b.out += "px"
+                b.ty = "len"
+                args.set(from + j, b)
+            end
+        end
+    end
+    ret ty
+end
+
+func cm_all_num(args: Vector<CssCalc>): bool:
+    repeat args.len() in i:
+        if not cm_num_ok(args.get(i).ty):
+            ret false
+        end
+    end
+    ret true
+end
+
+func css_math_eval(t: str, res &: CssCalc): bool:
+    f := css_fn_name(t)
+    open := str.IndexOf(t, "(")
+    inner := str.Trim(str.Substr(t, open + 1, str.Len(t) - open - 2))
+    mut parts := lay_css_split(inner, 44)
+    defer parts.free()
+    mut args := Vector {} as Vector<CssCalc>
+    defer args.free()
+    mut lead := ""
+    repeat parts.len() in i:
+        piece := parts.get(i)
+        if i == 0 and str.Equals(f, "round"):
+            rounding := lay_dyn_value("css_g_roundstrat", piece)
+            if str.Len(rounding) > 0:
+                lead = rounding
+                continue
+            end
+        end
+        if i == 0 and str.Equals(f, "calc-size"):
+            basis := lay_dyn_value("css_g_sizebasis", piece)
+            if str.Len(basis) > 0:
+                args.push(CssCalc { ty = "any", out = basis })
+                continue
+            end
+        end
+        if str.Equals(f, "clamp") and (i == 0 or i == 2) and str.Equals(lay_dyn_value("css_g_none", piece), "none"):
+            args.push(CssCalc { ty = "any", out = "none" })
+            continue
+        end
+        mut a := CssCalc {}
+        if not cm_full(piece, a):
+            ret false
+        end
+        args.push(a)
+    end
+    n := args.len()
+    mut ty := ""
+    if str.Equals(f, "calc"):
+        if n != 1:
+            ret false
+        end
+        ty = args.get(0).ty
+    else str.Equals(f, "min") or str.Equals(f, "max") or str.Equals(f, "hypot"):
+        if n < 1:
+            ret false
+        end
+        ty = cm_same(args, 0)
+    else str.Equals(f, "clamp"):
+        if n != 3:
+            ret false
+        end
+        ty = cm_same(args, 0)
+    else str.Equals(f, "round"):
+        if n < 1 or n > 2:
+            ret false
+        end
+        ty = cm_same(args, 0)
+    else str.Equals(f, "mod") or str.Equals(f, "rem"):
+        if n != 2:
+            ret false
+        end
+        ty = cm_same(args, 0)
+    else str.Equals(f, "atan2"):
+        if n != 2 or str.Len(cm_same(args, 0)) == 0:
+            ret false
+        end
+        ty = "ang"
+    else str.Equals(f, "abs"):
+        if n != 1:
+            ret false
+        end
+        ty = args.get(0).ty
+    else str.Equals(f, "sign"):
+        if n != 1:
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "sin") or str.Equals(f, "cos") or str.Equals(f, "tan"):
+        if n != 1 or not (cm_num_ok(args.get(0).ty) or str.Equals(args.get(0).ty, "ang")):
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "asin") or str.Equals(f, "acos") or str.Equals(f, "atan"):
+        if n != 1 or not cm_all_num(args):
+            ret false
+        end
+        ty = "ang"
+    else str.Equals(f, "pow"):
+        if n != 2 or not cm_all_num(args):
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "sqrt") or str.Equals(f, "exp"):
+        if n != 1 or not cm_all_num(args):
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "log"):
+        if n < 1 or n > 2 or not cm_all_num(args):
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "calc-size"):
+        if n != 2 or not (str.Equals(args.get(0).ty, "any") or cm_lengthish(args.get(0).ty)) or not (str.Equals(args.get(1).ty, "any") or cm_lengthish(args.get(1).ty)):
+            ret false
+        end
+        ty = "len"
+    else str.Equals(f, "sibling-index") or str.Equals(f, "sibling-count"):
+        if n != 0:
+            ret false
+        end
+        ty = "num"
+    else str.Equals(f, "progress"):
+        if n != 3 or str.Len(cm_same(args, 0)) == 0:
+            ret false
+        end
+        ty = "num"
+    end
+    if str.Len(ty) == 0:
+        ret false
+    end
+    mut body := cm_join(args)
+    if str.Len(lead) > 0:
+        body = str.Len(body) > 0 ? lead + ", " + body : lead
+    end
+    res.out = f + "(" + body + ")"
+    res.ty = ty
+    res.lit = false
+    ret true
+end
+
+func css_math_alts_ok(alts: str, sep: int, ty: str): bool:
+    if str.Equals(ty, "any"):
+        ret true
+    end
+    mut parts := lay_css_split(alts, sep)
+    defer parts.free()
+    repeat parts.len() in i:
+        a := parts.get(i)
+        if (str.Equals(a, "number") or str.Equals(a, "integer")) and str.Equals(ty, "num"):
+            ret true
+        end
+        if str.Equals(a, "length") and (str.Equals(ty, "len") or str.Equals(ty, "lenpct")):
+            ret true
+        end
+        if str.Equals(a, "percentage") and (str.Equals(ty, "pct") or str.Equals(ty, "lenpct")):
+            ret true
+        end
+        if str.Equals(a, "angle") and str.Equals(ty, "ang"):
+            ret true
+        end
+        if str.Equals(a, "time") and str.Equals(ty, "time"):
+            ret true
+        end
+        if str.Equals(a, "resolution") and str.Equals(ty, "res"):
+            ret true
+        end
+        if str.Equals(a, "flex") and str.Equals(ty, "flex"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func css_ref_ok(f: str, inner: str): bool:
+    mut parts := lay_css_split(inner, 44)
+    defer parts.free()
+    if parts.len() == 0:
+        ret false
+    end
+    mut head := lay_css_split(parts.get(0), 32)
+    defer head.free()
+    if head.len() == 0:
+        ret false
+    end
+    name := head.get(0)
+    if str.Equals(f, "var"):
+        ret head.len() == 1 and str.StartsWith(name, "--") and str.Len(name) > 2 and css_is_ident(name)
+    end
+    if not css_is_ident(name):
+        ret false
+    end
+    if str.Equals(f, "env"):
+        repeat head.len() - 1 in i:
+            if not lay_is_uint(head.get(i + 1)):
+                ret false
+            end
+        end
+        ret true
+    end
+    if head.len() > 2:
+        ret false
+    end
+    if head.len() == 2:
+        t := head.get(1)
+        ret str.Equals(css_fn_name(t), "type") or str.Equals(t, "raw-string") or str.Equals(t, "%") or str.Len(cm_unit_type(lay_dyn_value("unit", t))) > 0
+    end
+    ret true
+end
+
+func css_ref_map(inner: str): str:
+    mut depth := 0
+    mut quote := 0
+    repeat str.Len(inner) in i:
+        b := byte_at(inner, i)
+        if quote != 0:
+            if b == quote:
+                quote = 0
+            end
+        else b == 34 or b == 39:
+            quote = b
+        else b == 40:
+            depth += 1
+        else b == 41:
+            depth -= 1
+        else b == 44 and depth == 0:
+            rest := str.Trim(str.Substr(inner, i + 1, str.Len(inner) - i - 1))
+            head := str.Trim(str.Substr(inner, 0, i))
+            ret str.Len(rest) > 0 ? head + ", " + lay_map_length(rest, false) : head + ","
+        end
+    end
+    ret inner
+end

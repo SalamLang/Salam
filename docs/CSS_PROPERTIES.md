@@ -412,7 +412,7 @@ Tests: `tests/{en,fa}/layout/style/prop_<name>.salam` checks the generated CSS, 
 
 ## Functions
 
-Function arguments are checked too: `rotate(banana)` and `rgb(1 2)` are E018. In a Persian file each function also has a Persian name, and units, digits and keywords inside it may be Persian: `دگرگونی = "چرخش(۴۵ درجه)"` gives `transform: rotate(45deg)`. In an English file only the English names, units and digits work. Multi-word Persian names are joined with ZWNJ, `_` or `-`.
+Function parameters are checked too: `rotate(banana)` and `rgb(1 2)` are E018. In a Persian file each function also has a Persian name, and units, digits and keywords inside it may be Persian: `دگرگونی = "چرخش(۴۵ درجه)"` gives `transform: rotate(45deg)`. In an English file only the English names, units and digits work. Multi-word Persian names are joined with ZWNJ, `_` or `-`.
 
 | Function                      | Persian               | Takes                                                                        |
 | ----------------------------- | --------------------- | ---------------------------------------------------------------------------- |

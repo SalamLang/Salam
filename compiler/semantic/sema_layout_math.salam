@@ -253,8 +253,9 @@ func cm_factor(s: str, p &: int, res &: CssCalc): bool:
     if p < n and byte_at(s, p) == 40:
         ret cm_call(s, p, word, res)
     end
-    mut k := lay_dyn_value("css_g_mathconst", word)
-    if byte_at(word, 0) == 45 or byte_at(word, 0) == 43:
+    signed := byte_at(word, 0) == 45 or byte_at(word, 0) == 43
+    mut k := lay_dyn_value("css_g_mathconst", signed ? str.Substr(word, 1, str.Len(word) - 1) : word)
+    if signed:
         k = str.Equals(k, "infinity") ? str.Substr(word, 0, 1) + k : ""
     end
     if str.Len(k) > 0:
@@ -354,29 +355,33 @@ end
 
 func cm_same(args &: Vector<CssCalc>, from: int): str:
     mut ty := "any"
+    mut has_lit := false
     repeat args.len() - from in k:
-        mut a := args.get(from + k)
-        if a.lit and str.Equals(a.ty, "num") and cm_lengthish(ty):
-            a.out += "px"
-            a.ty = "len"
-            args.set(from + k, a)
+        a := args.get(from + k)
+        if a.lit and str.Equals(a.ty, "num"):
+            has_lit = true
+            continue
         end
         ty = cm_add_type(ty, a.ty)
         if str.Len(ty) == 0:
             ret ""
         end
     end
-    if cm_lengthish(ty):
-        repeat args.len() - from in j:
-            mut b := args.get(from + j)
-            if b.lit and str.Equals(b.ty, "num"):
-                b.out += "px"
-                b.ty = "len"
-                args.set(from + j, b)
-            end
+    if not has_lit:
+        ret ty
+    end
+    if not cm_lengthish(ty):
+        ret cm_add_type(ty, "num")
+    end
+    repeat args.len() - from in j:
+        mut b := args.get(from + j)
+        if b.lit and str.Equals(b.ty, "num"):
+            b.out += "px"
+            b.ty = "len"
+            args.set(from + j, b)
         end
     end
-    ret ty
+    ret cm_add_type(ty, "len")
 end
 
 func cm_all_num(args: Vector<CssCalc>): bool:
@@ -588,6 +593,30 @@ func css_ref_ok(f: str, inner: str): bool:
     ret true
 end
 
+func css_fallback_map(v: str): str:
+    mut items := lay_css_split(v, 44)
+    defer items.free()
+    mut out := ""
+    repeat items.len() in i:
+        mut toks := lay_css_split(lay_map_length(items.get(i), false), 32)
+        mut piece := ""
+        repeat toks.len() in k:
+            mut t := toks.get(k)
+            if str.Len(css_fn_name(t)) > 0 or str.Len(css_fn_raw_name(t)) > 0:
+                t = css_fn_rewrite(t)
+                if str.Len(t) == 0:
+                    toks.free()
+                    ret ""
+                end
+            end
+            piece = str.Len(piece) > 0 ? piece + " " + t : t
+        end
+        toks.free()
+        out = i > 0 ? out + ", " + piece : piece
+    end
+    ret out
+end
+
 func css_ref_map(inner: str): str:
     mut depth := 0
     mut quote := 0
@@ -606,7 +635,11 @@ func css_ref_map(inner: str): str:
         else b == 44 and depth == 0:
             rest := str.Trim(str.Substr(inner, i + 1, str.Len(inner) - i - 1))
             head := str.Trim(str.Substr(inner, 0, i))
-            ret str.Len(rest) > 0 ? head + ", " + lay_map_length(rest, false) : head + ","
+            if str.Len(rest) == 0:
+                ret head + ","
+            end
+            mapped := css_fallback_map(rest)
+            ret str.Len(mapped) > 0 ? head + ", " + mapped : ""
         end
     end
     ret inner

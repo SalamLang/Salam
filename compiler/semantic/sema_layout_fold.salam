@@ -110,6 +110,55 @@ func lay_fold_ident(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth
     ret lay_fold(cx, a, init, out, depth + 1)
 end
 
+func lay_fold_array_base(cx &: LayFoldCx, a &: at.Ast, nid: int, depth: int): int:
+    if nid == 0 or depth > 64:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_ARRAY_LIT:
+        ret nid
+    end
+    if n.kind == at.AST_IDENTIFIER:
+        repeat cx.shadow.len() in i:
+            if str.Equals(cx.shadow.get(i), n.name):
+                ret 0
+            end
+        end
+        decl := lay_const_decl(a, cx.prog, n.name)
+        if decl == 0:
+            ret 0
+        end
+        init := at.Get(a, decl).a
+        if init == 0:
+            ret 0
+        end
+        cx.used.push(n.name)
+        ret lay_fold_array_base(cx, a, init, depth + 1)
+    end
+    ret 0
+end
+
+func lay_fold_index(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
+    n := at.Get(a, nid)
+    mut iv := LayVal {}
+    ri := lay_fold(cx, a, n.b, iv, depth + 1)
+    if ri != LF_OK:
+        ret ri
+    end
+    if iv.kind != LV_INT:
+        ret lay_fold_err(cx, n.b, i18.Tr("a layout value index must be an integer"))
+    end
+    arr := lay_fold_array_base(cx, a, n.a, depth + 1)
+    if arr == 0:
+        ret LF_RUNTIME
+    end
+    an := at.Get(a, arr)
+    if iv.i < 0 as i64 or iv.i >= an.list.len() as i64:
+        ret lay_fold_err(cx, nid, i18.Tr("layout value index is out of range"))
+    end
+    ret lay_fold(cx, a, an.list.get(iv.i as int), out, depth + 1)
+end
+
 func lay_fold_unary(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int): int:
     n := at.Get(a, nid)
     mut v := LayVal {}
@@ -317,6 +366,9 @@ func lay_fold(cx &: LayFoldCx, a &: at.Ast, nid: int, out &: LayVal, depth: int)
     end
     if n.kind == at.AST_BINARY:
         ret lay_fold_binary(cx, a, nid, out, depth)
+    end
+    if n.kind == at.AST_INDEX:
+        ret lay_fold_index(cx, a, nid, out, depth)
     end
     if n.kind == at.AST_TERNARY:
         mut c := LayVal {}

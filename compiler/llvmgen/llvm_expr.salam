@@ -593,7 +593,7 @@ func write_free(v &: Lv, ref: str, err: bool):
     emit(v, ln + " = call " + v.usize + " @strlen(ptr " + ref + ")")
     if err:
         emit(
-            v, new_tmp(v) + " = call " + v.usize + " @write(i32 2, ptr " + ref + ", " + v.usize + " " + ln + ")"
+            v, new_tmp(v) + " = call " + v.usize + " @" + write_name(v) + "(i32 2, ptr " + ref + ", " + v.usize + " " + ln + ")"
         )
     else:
         mut n64 := ln
@@ -619,7 +619,7 @@ func lower_print_free(
                 lit := strconst(v, sg.text)
                 if err:
                     emit(
-                        v, new_tmp(v) + " = call " + v.usize + " @write(i32 2, ptr " + lit + ", " + v.usize + " " + co.I64Toa(n as i64) + ")"
+                        v, new_tmp(v) + " = call " + v.usize + " @" + write_name(v) + "(i32 2, ptr " + lit + ", " + v.usize + " " + co.I64Toa(n as i64) + ")"
                     )
                 else:
                     need(v, LV_H_OUTBUF)
@@ -841,9 +841,19 @@ func lv_lower_print(
     end
     t := new_tmp(v)
     if err and target_is_windows_of(v.triple):
-        emit(
-            v, t + " = call i32 (ptr, ...) @printf(ptr " + f + co.SbCstr(argsb) + ")"
-        )
+        u := v.usize
+        emit(v, t + " = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr null, " + u + " 0, ptr " + f + co.SbCstr(argsb) + ")")
+        en := new_tmp(v)
+        emit(v, en + " = " + (str.Equals(u, "i32") ? "add i32 " + t + ", 0" : "sext i32 " + t + " to " + u))
+        ecap := new_tmp(v)
+        emit(v, ecap + " = add " + u + " " + en + ", 1")
+        ebuf := new_tmp(v)
+        emit(v, ebuf + " = call ptr @malloc(" + u + " " + ecap + ")")
+        ef := new_tmp(v)
+        emit(v, ef + " = call i32 (ptr, " + u + ", ptr, ...) @snprintf(ptr " + ebuf + ", " + u + " " + ecap + ", ptr " + f + co.SbCstr(argsb) + ")")
+        ew := new_tmp(v)
+        emit(v, ew + " = call " + u + " @" + write_name(v) + "(i32 2, ptr " + ebuf + ", " + u + " " + en + ")")
+        emit(v, "call void @free(ptr " + ebuf + ")")
     else err:
         emit(
             v, t + " = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr " + f + co.SbCstr(argsb) + ")"

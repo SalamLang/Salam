@@ -345,7 +345,8 @@ EOF_MSGS
             ;;
         layout)
             html="$WORK/layout_${jobid}_$$.html"
-            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
+            buildlog="$WORK/layout_${jobid}_$$.log"
+            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
             lmiss=""
             lbad=""
             lfirst=""
@@ -372,8 +373,9 @@ EOF_LAYOUT_NOT
                 echo "FAIL $label (unwanted '$lbad')"
             else
                 echo "FAIL $label (want '$lmiss')"
+                sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
             fi
-            rm -f "$html"
+            rm -f "$html" "$buildlog"
             ;;
         llvm)
             jobdir="$WORK/llvmjob_${jobid}_$$"

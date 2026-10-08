@@ -85,33 +85,6 @@ func css_unit_of(s: str, pos: int, length: int): str:
     ret lay_dyn_value("unit", css_norm_unit(s, pos, length))
 end
 
-func lay_css_digits(v: str): str:
-    mut out := ""
-    n := str.Len(v)
-    mut i := 0
-    until i < n:
-        b := byte_at(v, i)
-        if i + 1 < n and b == 0xDB and byte_at(v, i + 1) >= 0xB0 and byte_at(v, i + 1) <= 0xB9:
-            out += char_from_code(48 + byte_at(v, i + 1) - 0xB0)
-            i += 2
-            continue
-        end
-        if i + 1 < n and b == 0xD9 and byte_at(v, i + 1) >= 0xA0 and byte_at(v, i + 1) <= 0xA9:
-            out += char_from_code(48 + byte_at(v, i + 1) - 0xA0)
-            i += 2
-            continue
-        end
-        if i + 1 < n and b == 0xD9 and byte_at(v, i + 1) == 0xAB:
-            out += "."
-            i += 2
-            continue
-        end
-        out += str.Substr(v, i, 1)
-        i += 1
-    end
-    ret out
-end
-
 func lay_map_length(v: str, bare_px: bool): str:
     if str.Len(v) == 0:
         ret v
@@ -382,9 +355,13 @@ func css_is_count_tok(a: str, prefix: str): bool:
     ret true
 end
 
-func css_alts_kind(alts: str, sep: int, t: str): str:
-    if css_global(t):
+func css_alts_kind(alts: str, sep: int, raw: str): str:
+    if css_global(raw):
         ret "global"
+    end
+    t := css_fn_rewrite(raw)
+    if str.Len(t) == 0:
+        ret ""
     end
     if css_generic_fn(css_fn_name(t)):
         ret "fn"
@@ -550,6 +527,35 @@ func css_phrase_fix(spec: str, v: str): str:
     ret out
 end
 
+func css_fa_byte(v: str, i: int, out &: str): int:
+    b := byte_at(v, i)
+    if i + 1 >= str.Len(v):
+        ret 0
+    end
+    c := byte_at(v, i + 1)
+    if b == 0xDB and c >= 0xB0 and c <= 0xB9:
+        out += char_from_code(48 + c - 0xB0)
+        ret 2
+    end
+    if b == 0xD9 and c >= 0xA0 and c <= 0xA9:
+        out += char_from_code(48 + c - 0xA0)
+        ret 2
+    end
+    if b == 0xD9 and c == 0xAB:
+        out += "."
+        ret 2
+    end
+    if b == 0xD8 and c == 0x8C:
+        out += ","
+        ret 2
+    end
+    if b == 0xD9 and c == 0xAA:
+        out += "%"
+        ret 2
+    end
+    ret 0
+end
+
 func css_fa_marks(v: str): str:
     mut out := ""
     mut quote := 0
@@ -563,14 +569,19 @@ func css_fa_marks(v: str): str:
             end
         else b == 34 or b == 39:
             quote = b
-        else i + 1 < n and b == 0xD8 and byte_at(v, i + 1) == 0x8C:
-            out += ","
-            i += 2
-            continue
-        else i + 1 < n and b == 0xD9 and byte_at(v, i + 1) == 0xAA:
-            out += "%"
-            i += 2
-            continue
+        else b == 40 and (str.EndsWith(str.Lower(out), "url") or str.EndsWith(out, "آدرس")):
+            close := str.IndexFrom(v, ")", i)
+            if close > i:
+                out += str.Substr(v, i, close - i)
+                i = close
+                continue
+            end
+        else:
+            used := css_fa_byte(v, i, out)
+            if used > 0:
+                i += used
+                continue
+            end
         end
         out += str.Substr(v, i, 1)
         i += 1
@@ -582,7 +593,7 @@ func css_localize(v: str): str:
     if g_lay_css_en_only:
         ret str.Trim(v)
     end
-    ret css_fa_marks(lay_css_digits(str.Trim(v)))
+    ret css_fa_marks(str.Trim(v))
 end
 
 func css_prepare_spec(spec: str, v: str): str:
@@ -590,6 +601,10 @@ func css_prepare_spec(spec: str, v: str): str:
 end
 
 func css_map_token(kind: str, t: str, length_px: bool, zero_px: bool): str:
+    if str.Len(css_fn_name(t)) > 0:
+        rw := css_fn_rewrite(t)
+        ret str.Len(rw) > 0 ? rw : t
+    end
     if str.StartsWith(kind, "@"):
         c := lay_dyn_value(str.Substr(kind, 1, str.Len(kind) - 1), t)
         ret str.Len(c) > 0 ? c : t
@@ -764,6 +779,204 @@ func css_set_item(setspec: str, item: str, out &: str): bool:
     ret true
 end
 
+func css_seq_item(seqspec: str, item: str, out &: str): bool:
+    mut comps := lay_css_split(str.Substr(seqspec, 4, str.Len(seqspec) - 4), 124)
+    defer comps.free()
+    mut toks := lay_css_split(item, 32)
+    defer toks.free()
+    n := toks.len()
+    mut ti := 0
+    mut slashed := false
+    repeat comps.len() in c:
+        mut comp := comps.get(c)
+        opt := str.EndsWith(comp, "?")
+        if opt:
+            comp = str.Substr(comp, 0, str.Len(comp) - 1)
+        end
+        mut alts := ""
+        mut mn := 0
+        mut mx := 0
+        mut sl := false
+        css_comp_parse(comp, alts, mn, mx, sl)
+        if str.IndexOf(comp, "*") < 0:
+            mn = 1
+        end
+        if opt:
+            mn = 0
+        end
+        if sl and not slashed:
+            if ti >= n or not str.Equals(toks.get(ti), "/"):
+                continue
+            end
+            slashed = true
+            out += " /"
+            ti += 1
+            if mn == 0:
+                mn = 1
+            end
+        end
+        lpx := css_alts_length_px(alts, 43)
+        mut took := 0
+        until took < mx and ti < n:
+            k := css_alts_kind(alts, 43, toks.get(ti))
+            if str.Len(k) == 0:
+                break
+            end
+            if str.Len(out) > 0:
+                out += " "
+            end
+            out += css_map_token(k, toks.get(ti), lpx, false)
+            took += 1
+            ti += 1
+        end
+        if took < mn:
+            ret false
+        end
+    end
+    ret ti == n
+end
+
+func css_fn_raw_name(t: str): str:
+    n := str.Len(t)
+    if n < 3 or byte_at(t, n - 1) != 41:
+        ret ""
+    end
+    p := str.IndexOf(t, "(")
+    if p <= 0:
+        ret ""
+    end
+    ret str.Substr(t, 0, p)
+end
+
+func css_is_ascii(t: str): bool:
+    repeat str.Len(t) in i:
+        if byte_at(t, i) >= 128:
+            ret false
+        end
+    end
+    ret true
+end
+
+func css_url_arg_ok(v: str): bool:
+    n := str.Len(v)
+    if n == 0:
+        ret false
+    end
+    b0 := byte_at(v, 0)
+    if b0 == 34 or b0 == 39:
+        ret n >= 2 and byte_at(v, n - 1) == b0
+    end
+    repeat n in i:
+        b := byte_at(v, i)
+        if css_ws(b) or b == 34 or b == 39 or b == 40 or b == 41:
+            ret false
+        end
+    end
+    ret true
+end
+
+func css_arg_item(spec: str, item: str, out &: str): bool:
+    ret css_walk(spec, item, out)
+end
+
+func css_args_from(specs: Vector<str>, si: int, items: Vector<str>, ii: int, outs &: Vector<str>): bool:
+    if si == specs.len():
+        ret ii == items.len()
+    end
+    sp := specs.get(si)
+    mode := byte_at(sp, 0)
+    many := mode == 42 or mode == 43
+    body := (mode == 63 or many) ? str.Trim(str.Substr(sp, 1, str.Len(sp) - 1)) : sp
+    if not many:
+        if ii < items.len():
+            mut o := ""
+            if css_arg_item(body, items.get(ii), o):
+                outs.push(o)
+                if css_args_from(specs, si + 1, items, ii + 1, outs):
+                    ret true
+                end
+                _dropped := outs.pop()
+            end
+        end
+        ret mode == 63 and css_args_from(specs, si + 1, items, ii, outs)
+    end
+    mut k := 0
+    until ii + k < items.len():
+        mut o := ""
+        if not css_arg_item(body, items.get(ii + k), o):
+            break
+        end
+        outs.push(o)
+        k += 1
+    end
+    until true:
+        if (mode == 42 or k > 0) and css_args_from(specs, si + 1, items, ii + k, outs):
+            ret true
+        end
+        if k == 0:
+            break
+        end
+        _dropped := outs.pop()
+        k -= 1
+    end
+    ret false
+end
+
+func css_args_match(spec: str, inner: str, out &: str): bool:
+    mut specs := lay_css_split(spec, 59)
+    defer specs.free()
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    if str.Len(inner) > 0:
+        mut parts := lay_css_split(inner, 44)
+        repeat parts.len() in i:
+            items.push(parts.get(i))
+        end
+        parts.free()
+        if items.len() == 0:
+            ret false
+        end
+    end
+    mut outs := Vector {} as Vector<str>
+    defer outs.free()
+    if not css_args_from(specs, 0, items, 0, outs):
+        ret false
+    end
+    repeat outs.len() in j:
+        if j > 0:
+            out += ", "
+        end
+        out += outs.get(j)
+    end
+    ret true
+end
+
+func css_fn_rewrite(t: str): str:
+    name := css_fn_raw_name(t)
+    if str.Len(name) == 0:
+        ret t
+    end
+    canon := lay_dyn_value("css_fn", name)
+    if str.Len(canon) == 0:
+        ret css_is_ascii(name) ? t : ""
+    end
+    inner := str.Trim(str.Substr(t, str.Len(name) + 1, str.Len(t) - str.Len(name) - 2))
+    if str.Equals(canon, "url"):
+        ret css_url_arg_ok(inner) ? canon + "(" + inner + ")" : ""
+    end
+    mut tried := false
+    repeat g_lay_fn_canon.len() in i:
+        if str.Equals(g_lay_fn_canon.get(i), canon) and str.Len(g_lay_fn_args.get(i)) > 0:
+            tried = true
+            mut out := ""
+            if css_args_match(g_lay_fn_args.get(i), inner, out):
+                ret canon + "(" + out + ")"
+            end
+        end
+    end
+    ret tried ? "" : canon + "(" + inner + ")"
+end
+
 func css_font_size_tok(t: str): bool:
     if css_is_dim(t, css_length_units()) or css_is_dim(t, "%"):
         ret true
@@ -850,6 +1063,10 @@ func css_item(spec: str, item: str, out &: str): bool:
     setspec := css_spec_find(spec, "set:")
     if str.Len(setspec) > 0:
         ret css_set_item(setspec, item, out)
+    end
+    seqspec := css_spec_find(spec, "seq:")
+    if str.Len(seqspec) > 0:
+        ret css_seq_item(seqspec, item, out)
     end
     maxn := css_spec_max(spec)
     slashn := css_spec_count(spec, "slash")

@@ -411,3 +411,79 @@ Tests: `tests/{en,fa}/layout/style/prop_<name>.salam` checks the generated CSS, 
 | `writing-mode`                  | `writing mode`                  | حالت نوشتار                      | `horizontal-tb`, `vertical-rl`, `vertical-lr`                                                           | Done         | en, fa: `prop_writing_mode`                  |                                                                                                                |
 | `z-index`                       | `z index`                       | ترتیب لایه                       | integer / `auto`                                                                                        | Done         | en, fa: `prop_z_index`                       |                                                                                                                |
 | `zoom`                          | `zoom`                          | بزرگ‌نمایی                       | number / percentage / `normal`                                                                          | Done         | en, fa: `prop_zoom`                          |                                                                                                                |
+
+## Functions
+
+Function arguments are checked too: `rotate(banana)` and `rgb(1 2)` are E018. In a Persian file each function also has a Persian name, and units, digits and keywords inside it may be Persian: `دگرگونی = "چرخش(۴۵ درجه)"` gives `transform: rotate(45deg)`. In an English file only the English names, units and digits work. Multi-word Persian names are joined with ZWNJ, `_` or `-`.
+
+| Function                      | Persian               | Takes                                                                        |
+| ----------------------------- | --------------------- | ---------------------------------------------------------------------------- |
+| `matrix()`                    | ماتریس                | 6 numbers                                                                    |
+| `matrix3d()`                  | ماتریس‌سه‌بعدی        | 16 numbers                                                                   |
+| `translate()`                 | جابه‌جایی             | 1 or 2 length-percentages                                                    |
+| `translateX()`                | جابه‌جایی‌افقی        | length-percentage                                                            |
+| `translateY()`                | جابه‌جایی‌عمودی       | length-percentage                                                            |
+| `translateZ()`                | جابه‌جایی‌عمقی        | length                                                                       |
+| `translate3d()`               | جابه‌جایی‌سه‌بعدی     | 2 length-percentages, length                                                 |
+| `scale()`                     | مقیاس                 | 1 or 2 numbers or percentages                                                |
+| `scaleX()`                    | مقیاس‌افقی            | number or percentage                                                         |
+| `scaleY()`                    | مقیاس‌عمودی           | number or percentage                                                         |
+| `scaleZ()`                    | مقیاس‌عمقی            | number or percentage                                                         |
+| `scale3d()`                   | مقیاس‌سه‌بعدی         | 3 numbers or percentages                                                     |
+| `rotate()`                    | چرخش                  | angle                                                                        |
+| `rotateX()`                   | چرخش‌افقی             | angle                                                                        |
+| `rotateY()`                   | چرخش‌عمودی            | angle                                                                        |
+| `rotateZ()`                   | چرخش‌عمقی             | angle                                                                        |
+| `rotate3d()`                  | چرخش‌سه‌بعدی          | 3 numbers, angle                                                             |
+| `skew()`                      | کجی                   | 1 or 2 angles                                                                |
+| `skewX()`                     | کجی‌افقی              | angle                                                                        |
+| `skewY()`                     | کجی‌عمودی             | angle                                                                        |
+| `perspective()`               | پرسپکتیو              | length or `none`                                                             |
+| `blur()`                      | تاری                  | optional length                                                              |
+| `brightness()`                | روشنایی               | optional number or percentage                                                |
+| `contrast()`                  | کنتراست               | optional number or percentage                                                |
+| `grayscale()`                 | خاکستری               | optional number or percentage                                                |
+| `invert()`                    | وارونه                | optional number or percentage                                                |
+| `opacity()`                   | شفافیت                | optional number or percentage                                                |
+| `saturate()`                  | اشباع                 | optional number or percentage                                                |
+| `sepia()`                     | سپیا                  | optional number or percentage                                                |
+| `hue-rotate()`                | چرخش‌فام              | optional angle                                                               |
+| `drop-shadow()`               | سایه‌افکن             | 2 or 3 lengths and a color                                                   |
+| `rgb()`                       |                       | legacy commas, modern `r g b / a`, or `from <color> ...`                     |
+| `rgba()`                      |                       | same as `rgb()`                                                              |
+| `hsl()`                       |                       | legacy commas, modern `h s l / a`, or relative                               |
+| `hsla()`                      |                       | same as `hsl()`                                                              |
+| `hwb()`                       |                       | `h w b / a` or relative                                                      |
+| `lab()`                       |                       | `l a b / a` or relative                                                      |
+| `oklab()`                     |                       | `l a b / a` or relative                                                      |
+| `lch()`                       |                       | `l c h / a` or relative                                                      |
+| `oklch()`                     |                       | `l c h / a` or relative                                                      |
+| `color()`                     | رنگ                   | color space and 3 channels, or relative                                      |
+| `color-mix()`                 | ترکیب‌رنگ             | optional `in <space> [hue]`, then 2 or more colors with optional percentages |
+| `light-dark()`                | روشن‌تاریک            | 2 colors                                                                     |
+| `contrast-color()`            | رنگ‌متضاد             | color                                                                        |
+| `url()`                       | آدرس                  | quoted or bare address                                                       |
+| `linear-gradient()`           | گرادیان‌خطی           | optional angle or `to` side, optional `in <space>`, color stops              |
+| `repeating-linear-gradient()` | گرادیان‌خطی‌تکراری    | optional angle or `to` side, optional `in <space>`, color stops              |
+| `radial-gradient()`           | گرادیان‌شعاعی         | optional shape, size and `at` position, color stops                          |
+| `repeating-radial-gradient()` | گرادیان‌شعاعی‌تکراری  | optional shape, size and `at` position, color stops                          |
+| `conic-gradient()`            | گرادیان‌مخروطی        | optional `from` angle and `at` position, color stops                         |
+| `repeating-conic-gradient()`  | گرادیان‌مخروطی‌تکراری | optional `from` angle and `at` position, color stops                         |
+| `image-set()`                 | مجموعه‌تصویر          | images with resolutions or `type()`                                          |
+| `type()`                      | نوع                   | string                                                                       |
+| `cross-fade()`                | آمیزش‌تصویر           | images or colors with percentages                                            |
+| `cubic-bezier()`              | بزیه‌مکعبی            | 4 numbers                                                                    |
+| `steps()`                     | گام‌ها                | integer, optional position                                                   |
+| `linear()`                    | خطی                   | numbers with optional percentages                                            |
+| `repeat()`                    | تکرار                 | count or `auto-fill`/`auto-fit`, track list                                  |
+| `minmax()`                    | کمینه‌بیشینه          | 2 track sizes                                                                |
+| `fit-content()`               | اندازه‌محتوا          | length-percentage                                                            |
+| `inset()`                     | فرورفته               | 1 to 4 length-percentages, optional `round` radius                           |
+| `circle()`                    | دایره                 | optional radius and `at` position                                            |
+| `ellipse()`                   | بیضی                  | optional 2 radii and `at` position                                           |
+| `polygon()`                   | چند‌ضلعی              | optional fill rule, points                                                   |
+| `path()`                      | مسیر                  | optional fill rule, string                                                   |
+| `rect()`                      | مستطیل                | 4 edges or `auto`, optional `round`                                          |
+| `xywh()`                      |                       | 4 length-percentages, optional `round`                                       |
+| `ray()`                       | پرتو                  | angle, optional size, `contain` and `at` position                            |
+| `shape()`                     | شکل                   | `from` point, then drawing commands                                          |

@@ -2176,7 +2176,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - **Language detection is automatic** from the keywords in the file; pass
   `--lang=fa` to force it (`salam build app.salam --lang=fa`). Diagnostics are
   printed in Persian for Persian files.
-- **The entry function is `ریشه`**, not `main`: `روال ریشه:` ... `پایان`.
+- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`.
   Its return value is the exit code, as in English (`برگشت ۱` to fail).
 - **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
   number literals, mixed freely with ASCII. The decimal point is always `.`
@@ -2188,7 +2188,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
   (arguments, parameters, enum members, array literals, struct literals,
   match patterns). A new line also separates call arguments and parameters.
 - **Names:** identifiers may be Persian and may contain spaces or ZWNJ
-  (`روال جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
+  (`تابع جمع دو عدد(...)`, `تکه‌ها`). A space and a ZWNJ (U+200C) are the
   same inside a name, so `آرگومان ها` and `آرگومان‌ها` are one name. Arabic
   `ي`/`ك` equal Persian `ی`/`ک`.
 - **Keywords with ZWNJ** (`نادرست‌چاپ`, `درون‌داد`, `بی‌کاره`, ...) may be
@@ -2206,7 +2206,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 
 | English             | Persian             | English                   | Persian                       |
 | ------------------- | ------------------- | ------------------------- | ----------------------------- |
-| `func`              | `روال`              | `ret`                     | `برگشت`                       |
+| `func`              | `تابع`              | `ret`                     | `برگشت`                       |
 | `if`                | `اگر`               | `else`                    | `وگرنه`                       |
 | `until` (while)     | `تا`                | `repeat`                  | `تکرار`                       |
 | `to` (in repeat)    | `تا`                | `by` (step)               | `هر`                          |
@@ -2232,10 +2232,10 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
 
 Context words (keywords only in their position, usable as names elsewhere):
-`static` `ایستا` (`ایستا روال`, `پیوند ایستا`), `dynamic` `پویا`
+`static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
-`mut func` is `ناپایا روال`.
+`mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use
 them** - the English spelling is an error (`E001`):
@@ -2334,7 +2334,7 @@ through it; never guess a name, read the `@fa` line in `std/<pkg>/`:
 واردسازی ریاضی
 واردسازی سیستم عامل
 
-روال ریشه:
+تابع ریشه:
     سرچاپ رشته.طول("سلام")، ریاضی.جذر(۱۶.۰)
     سرچاپ سیستم عامل.آرگومان‌ها().طول()
 پایان
@@ -2365,7 +2365,7 @@ Give your own `pub` API both spellings the same way:
 ```salam
 @en "Twice"
 @fa "دوبار"
-همگانی روال دوبار(ع: صحیح): صحیح:
+همگانی تابع دوبار(ع: صحیح): صحیح:
     برگشت ع * ۲
 پایان
 ```
@@ -2379,18 +2379,18 @@ Give your own `pub` API both spellings the same way:
 ساختار نقطه:
     همگانی ایکس: صحیح = ۰
     همگانی ایگرگ: صحیح = ۰
-    همگانی روال جمع(): صحیح:
+    همگانی تابع جمع(): صحیح:
         برگشت این.ایکس + این.ایگرگ
     پایان
 پایان
 
 جداشمار رنگ: قرمز، سبز، آبی پایان
 
-روال دوبرابر(ن: صحیح): صحیح:
+تابع دوبرابر(ن: صحیح): صحیح:
     برگشت ن * ۲
 پایان
 
-روال ریشه:
+تابع ریشه:
     نام := "سارا"                        // immutable
     ناپایا ک := ۰                        // mutable
     ع := ۲.۵ برگردان اعشار۶۴             // cast with برگردان
@@ -2456,7 +2456,7 @@ More forms, each checked with the current compiler:
 رده := (نمره: صحیح):
     برگشت نمره >= ۱۰ ? "قبول" : "مردود"
 پایان
-روال به‌کاربردن(ر: روال (صحیح) صحیح، مقدار: صحیح): صحیح:
+تابع به‌کاربردن(ر: تابع (صحیح) صحیح، مقدار: صحیح): صحیح:
     برگشت ر(مقدار)
 پایان
 
@@ -2465,7 +2465,7 @@ More forms, each checked with the current compiler:
     دایره(شعاع: اعشار۶۴)
     مستطیل(پهنا: اعشار۶۴، بلندی: اعشار۶۴)
 پایان
-روال مساحت(ش: شکل): اعشار۶۴:
+تابع مساحت(ش: شکل): اعشار۶۴:
     برگشت همخوان ش:
         دایره(ر): ۳.۱۴ * ر * ر پایان
         مستطیل(پ، ب) اگر پ == ب: پ * پ پایان
@@ -2487,18 +2487,18 @@ More forms, each checked with the current compiler:
 
 // interfaces, impl on a built-in type, generics, پویا (dyn)
 میانجی رتبه‌دار:
-    روال رتبه(): صحیح
+    تابع رتبه(): صحیح
 پایان
 کاربست رتبه‌دار بر رشته:
-    روال رتبه(): صحیح: برگشت len(این) پایان
+    تابع رتبه(): صحیح: برگشت len(این) پایان
 پایان
-روال بالاتر<ت: رتبه‌دار>(الف: ت، ب: ت): صحیح:
+تابع بالاتر<ت: رتبه‌دار>(الف: ت، ب: ت): صحیح:
     اگر الف.رتبه() > ب.رتبه():
         برگشت الف.رتبه()
     پایان
     برگشت ب.رتبه()
 پایان
-روال توصیف(ش: پویا شکل‌دار):             // پویا is dyn
+تابع توصیف(ش: پویا شکل‌دار):             // پویا is dyn
     سرچاپ ش.نام()
 پایان
 
@@ -2506,10 +2506,10 @@ More forms, each checked with the current compiler:
 ساختار شمارنده:
     ن: صحیح = ۰
     همگانی پایا سقف := ۱۰۰
-    همگانی ایستا روال تازه(آغاز: صحیح): شمارنده:
+    همگانی ایستا تابع تازه(آغاز: صحیح): شمارنده:
         برگشت شمارنده { ن = آغاز }
     پایان
-    همگانی ناپایا روال بیفزای():
+    همگانی ناپایا تابع بیفزای():
         این.ن += ۱
     پایان
 پایان
@@ -2519,7 +2519,7 @@ More forms, each checked with the current compiler:
 پایان
 
 // Variant
-روال شرح(م: گوناگون<صحیح، رشته>): رشته:
+تابع شرح(م: گوناگون<صحیح، رشته>): رشته:
     برگشت همخوان م:
         صحیح ع: "عدد " + ع پایان
         رشته ر: "متن " + ر پایان
@@ -2527,7 +2527,7 @@ More forms, each checked with the current compiler:
 پایان
 
 // reference parameter, defer, pointers
-روال واریز(ح &: حساب، مبلغ: صحیح):
+تابع واریز(ح &: حساب، مبلغ: صحیح):
     ح.موجودی += مبلغ
 پایان
 دیرکن سرچاپ "پاکسازی"
@@ -2535,7 +2535,7 @@ More forms, each checked with the current compiler:
 
 // packages: بسته in the library file, فراخوانی in the user
 بسته ابزار
-همگانی روال چهاربرابر(ع: صحیح): صحیح:
+همگانی تابع چهاربرابر(ع: صحیح): صحیح:
     برگشت ع * ۴
 پایان
 // ...and in the program:
@@ -2544,7 +2544,7 @@ More forms, each checked with the current compiler:
 
 // C functions and compile-time branches
 درون‌داد:
-    روال sqrt(x: اعشار۶۴): اعشار۶۴
+    تابع sqrt(x: اعشار۶۴): اعشار۶۴
 پایان
 پیوند پویا "sqlite3"
 اگر SALAM_OS_WINDOWS:
@@ -2562,7 +2562,7 @@ join(ر)
 
 All of §6 applies. In addition:
 
-1. **Entry is `ریشه`.** A Persian file with `روال main` has no entry point.
+1. **Entry is `ریشه`.** A Persian file with `تابع main` has no entry point.
 2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
    like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
@@ -2592,7 +2592,7 @@ All of §6 applies. In addition:
     write `ک := ۰` or `ک := ۰ برگردان صحیح۶۴`.
 11. **Top-level order** is the same (§6 rule 8): `بسته`, `واردسازی`,
     `فراخوانی`, `پایا`/`ناپایا` globals, then `ساختار`/`جداشمار`/`گونه`/
-    `میانجی`/`کاربست`, then `روال`s, private before `همگانی`.
+    `میانجی`/`کاربست`, then `تابع`s, private before `همگانی`.
 12. **`پایا` names are one word**: `پایا حد بالا := ۳` is a parse error; use
     `حدبالا` or `حد_بالا`.
 13. **Unknown Persian std name?** Read the `@fa` line in `std/<pkg>/*.salam`.
@@ -2615,7 +2615,7 @@ A command-line program with a struct, a vector, a map and a match:
     همگانی نمره: صحیح = ۰
 پایان
 
-روال سطح از(نمره: صحیح): سطح:
+تابع سطح از(نمره: صحیح): سطح:
     اگر نمره >= ۱۷:
         برگشت سطح.زیاد
     وگرنه نمره >= ۱۲:
@@ -2624,7 +2624,7 @@ A command-line program with a struct, a vector, a map and a match:
     برگشت سطح.کم
 پایان
 
-روال برچسب(س: سطح): رشته:
+تابع برچسب(س: سطح): رشته:
     برگشت همخوان س:
         کم: "ضعیف" پایان
         متوسط: "خوب" پایان
@@ -2632,7 +2632,7 @@ A command-line program with a struct, a vector, a map and a match:
     پایان
 پایان
 
-روال ریشه:
+تابع ریشه:
     ناپایا کلاس := وکتور {} برگردان وکتور<دانشجو>
     دیرکن کلاس.آزادکن()
     کلاس.بیفزا(دانشجو { نام = "سارا"، نمره = ۱۹ })

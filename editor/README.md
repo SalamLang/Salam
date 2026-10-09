@@ -108,6 +108,35 @@ view if it has gone off screen. Loading an example is recorded rather than
 reset, so a mis-clicked example is one Ctrl+Z away from the code it replaced;
 switching UI language, which retranslates the buffer, starts a fresh timeline.
 
+## Autocomplete
+
+Suggestions appear as you type, in the language selected in the UI (English or
+فارسی). They are shown in a row under the editor, which works on a phone keyboard
+too: tap a suggestion to insert it.
+
+- **Keywords** (code): `func`, `if`, `repeat`, `print`, ... The Persian UI
+  suggests the Persian keywords.
+- **Layout pages**: inside a `layout:` block, element names (`paragraph`,
+  `heading`, `box`, ...) and attribute names (`content`, `url`, `click`, ...).
+  Inside an element body and on the element's line both are offered, so
+  attributes are suggested on the root `layout:` line, inside `header:`, and so on.
+- **Event listeners** (`click = ():` ... `end`) are code, so only keywords are
+  suggested inside them.
+- Nothing is suggested inside a string, a comment, or right after `=` or `.`.
+
+| Key          | Does                                                 |
+| ------------ | ---------------------------------------------------- |
+| typing       | shows suggestions for the word before the caret      |
+| `Tab`        | inserts the selected suggestion, or the first one    |
+| `↓` / `↑`    | move the selection                                   |
+| `Enter`      | inserts the selected suggestion (only after `↓`/`↑`) |
+| `Esc`        | hides the suggestions                                |
+| `Ctrl+Space` | lists suggestions, even before anything is typed     |
+
+The vocabulary lives in `complete.salam` (keywords from `compiler/langpack.salam`,
+layout names from `std/layout`). The scan that decides where the caret is works on
+the text before it, tracking `layout:`, element and `end` blocks.
+
 ## 🔨 Building
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)

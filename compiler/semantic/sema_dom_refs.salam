@@ -1,0 +1,89 @@
+package semantic
+
+import str
+import collections
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func dom_ref_member_name(m: str): bool:
+    ret str.Equals(m, "ById") or str.Equals(m, "با شناسه")
+end
+
+func dom_ref_query_name(m: str): bool:
+    ret str.Equals(m, "Query") or str.Equals(m, "پرسمان")
+end
+
+func dom_ref_known_id(s &: Sema, id: str): bool:
+    ret collections.contains(s.layout_ids, id)
+end
+
+func dom_ref_check_call(s &: Sema, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    if n.a == 0 or at.KindOf(a, n.a) != at.AST_MEMBER:
+        ret
+    end
+    callee := at.Get(a, n.a)
+    is_byid := dom_ref_member_name(callee.name)
+    is_query := dom_ref_query_name(callee.name)
+    if not is_byid and not is_query:
+        ret
+    end
+    if callee.a == 0 or at.KindOf(a, callee.a) != at.AST_IDENTIFIER:
+        ret
+    end
+    recv := at.Get(a, callee.a)
+    pk := scope_lookup(s, s.global, recv.name)
+    if pk == 0:
+        ret
+    end
+    pkv := sym_at(s, pk)
+    if pkv.kind != SYM_PACKAGE or not str.Equals(pkv.pkgname, "dom"):
+        ret
+    end
+    if n.list.len() == 0:
+        ret
+    end
+    argid := n.list.get(0)
+    argn := at.Get(a, argid)
+    if argn.kind != at.AST_LITERAL or argn.value_kind != tok.TV_STRING:
+        ret
+    end
+    mut sel := argn.value_str
+    if is_query:
+        if str.Len(sel) == 0 or byte_at(sel, 0) != 35:
+            ret
+        end
+        sel = str.Substr(sel, 1, str.Len(sel) - 1)
+    end
+    if not dom_ref_known_id(s, sel):
+        serr(
+            s, 138, span_of(a, argid), co.Format1(
+                i18.Tr("no element with id '%s' in this file's layout"), co.ArgStr(sel)
+            )
+        )
+    end
+end
+
+func dom_ref_scan(s &: Sema, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_CALL:
+        dom_ref_check_call(s, a, nid)
+    end
+    dom_ref_scan(s, a, n.a)
+    dom_ref_scan(s, a, n.b)
+    dom_ref_scan(s, a, n.c)
+    dom_ref_scan(s, a, n.d)
+    repeat n.list.len() in i:
+        dom_ref_scan(s, a, n.list.get(i))
+    end
+end
+
+pub func CheckDomRefs(s &: Sema, a &: at.Ast, program: int):
+    dom_ref_scan(s, a, program)
+end

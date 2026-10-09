@@ -371,6 +371,94 @@ func scan_includes(
     end
 end
 
+func comp_param_type(a &: at.Ast, comp_def: int, name: str): int:
+    repeat at.ChildCount(a, comp_def) in i:
+        pid := at.Child(a, comp_def, i)
+        p := at.Get(a, pid)
+        if p.kind == at.AST_PARAM and str.Equals(p.name, name):
+            ret p.ty
+        end
+    end
+    ret 0
+end
+
+func lit_value_category(a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind != at.AST_LITERAL:
+        ret 0
+    end
+    if n.op == tok.TK_KW_TRUE or n.op == tok.TK_KW_FALSE:
+        ret 1
+    end
+    if n.value_kind == tok.TV_STRING:
+        ret 2
+    end
+    if n.op == tok.TK_INT or n.value_kind == tok.TV_INT:
+        ret 3
+    end
+    if n.op == tok.TK_FLOAT or n.value_kind == tok.TV_FLOAT:
+        ret 4
+    end
+    ret 0
+end
+
+func lit_category_name(cat: int): str:
+    if cat == 1:
+        ret "a bool"
+    end
+    if cat == 2:
+        ret "a string"
+    end
+    if cat == 3:
+        ret "an integer"
+    end
+    if cat == 4:
+        ret "a float"
+    end
+    ret "a value"
+end
+
+func check_component_arg_type(
+    ex &: LoExpand, a &: at.Ast, comp_def: int, comp_name: str, param_name: str, value: int
+):
+    ty := comp_param_type(a, comp_def, param_name)
+    if ty == 0:
+        ret
+    end
+    tn := at.Get(a, ty)
+    kind := sm.TypePrimKindFromName(tn.name, "")
+    if kind < 0:
+        ret
+    end
+    cat := lit_value_category(a, value)
+    if cat == 0:
+        ret
+    end
+    mut ok := true
+    if kind == sm.TY_BOOL:
+        ok = cat == 1
+    else kind == sm.TY_STR:
+        ok = cat == 2
+    else (kind >= sm.TY_I8 and kind <= sm.TY_USIZE) or kind == sm.TY_SIZE:
+        ok = cat == 3
+    else kind == sm.TY_F32 or kind == sm.TY_F64:
+        ok = cat == 3 or cat == 4
+    else:
+        ret
+    end
+    if not ok:
+        lg.Log(
+            ex.log, lg.PH_DRIVER, lg.LOG_ERROR, co.Format4(
+                "component '%s' parameter '%s' expects '%s', got %s", co.ArgStr(comp_name), co.ArgStr(param_name), co.ArgStr(tn.name), co.ArgStr(lit_category_name(cat))
+            )
+        )
+        ex.errors += 1
+    end
+end
+
 func expand_component(
     ex &: LoExpand, a &: at.Ast, out &: Vector<int>, invocation: int, ci: int, caller &: LoFrame, dir: str, depth: int
 ):
@@ -414,7 +502,9 @@ func expand_component(
                 fr.content.push(txt)
                 got_content = true
             else:
-                frame_set(fr, an.name, subst_value(a, an.a, caller))
+                sub_val := subst_value(a, an.a, caller)
+                check_component_arg_type(ex, a, comp_def, comp_name, an.name, sub_val)
+                frame_set(fr, an.name, sub_val)
             end
         else an.kind == at.AST_LAYOUT_ELEMENT:
             before := fr.content.len()

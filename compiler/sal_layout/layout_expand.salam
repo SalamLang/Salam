@@ -145,7 +145,27 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         end
     end
     k := v.kind
-    if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST:
+    if k == at.AST_LAMBDA:
+        nbody := subst_block(a, v.a, f)
+        if nbody == v.a:
+            ret vid
+        end
+        cp := at.NewNode(a, at.AST_LAMBDA)
+        mut cn := v
+        cn.a = nbody
+        mut params := Vector {} as Vector<int>
+        repeat v.list.len() in pi:
+            params.push(v.list.get(pi))
+        end
+        cn.list = params
+        cn.captures = Vector {} as Vector<int>
+        cn.typarams = Vector {} as Vector<str>
+        cn.typaram_bounds = Vector {} as Vector<str>
+        cn.aliases = Vector {} as Vector<str>
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if k == at.AST_BINARY or k == at.AST_UNARY or k == at.AST_TERNARY or k == at.AST_INDEX or k == at.AST_MEMBER or k == at.AST_CALL or k == at.AST_CAST or k == at.AST_ASSIGN:
         na := k == at.AST_CALL ? v.a : subst_value(a, v.a, f)
         nb := subst_value(a, v.b, f)
         nc := subst_value(a, v.c, f)
@@ -181,6 +201,123 @@ func subst_value(a &: at.Ast, vid: int, f &: LoFrame): int:
         ret cp
     end
     ret vid
+end
+
+func subst_stmt(a &: at.Ast, nid: int, f &: LoFrame): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BLOCK:
+        ret subst_block(a, nid, f)
+    end
+    if n.kind == at.AST_VAR_DECL:
+        na := subst_value(a, n.a, f)
+        if na == n.a:
+            ret nid
+        end
+        cp := at.NewNode(a, at.AST_VAR_DECL)
+        mut cn := n
+        cn.a = na
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if n.kind == at.AST_EXPR_STMT or n.kind == at.AST_RETURN or n.kind == at.AST_DEFER or n.kind == at.AST_BREAK or n.kind == at.AST_CONTINUE:
+        na := subst_value(a, n.a, f)
+        if na == n.a:
+            ret nid
+        end
+        cp := at.NewNode(a, n.kind)
+        mut cn := n
+        cn.a = na
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if n.kind == at.AST_IF:
+        na := subst_value(a, n.a, f)
+        nb := subst_stmt(a, n.b, f)
+        nc := subst_stmt(a, n.c, f)
+        if na == n.a and nb == n.b and nc == n.c:
+            ret nid
+        end
+        cp := at.NewNode(a, at.AST_IF)
+        mut cn := n
+        cn.a = na
+        cn.b = nb
+        cn.c = nc
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if n.kind == at.AST_UNTIL:
+        na := subst_value(a, n.a, f)
+        nb := subst_stmt(a, n.b, f)
+        if na == n.a and nb == n.b:
+            ret nid
+        end
+        cp := at.NewNode(a, at.AST_UNTIL)
+        mut cn := n
+        cn.a = na
+        cn.b = nb
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if n.kind == at.AST_EACH:
+        na := subst_value(a, n.a, f)
+        nb := subst_stmt(a, n.b, f)
+        if na == n.a and nb == n.b:
+            ret nid
+        end
+        cp := at.NewNode(a, at.AST_EACH)
+        mut cn := n
+        cn.a = na
+        cn.b = nb
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    if n.kind == at.AST_REPEAT:
+        na := subst_value(a, n.a, f)
+        nc := subst_value(a, n.c, f)
+        nd := subst_value(a, n.d, f)
+        nb := subst_stmt(a, n.b, f)
+        if na == n.a and nc == n.c and nd == n.d and nb == n.b:
+            ret nid
+        end
+        cp := at.NewNode(a, at.AST_REPEAT)
+        mut cn := n
+        cn.a = na
+        cn.c = nc
+        cn.d = nd
+        cn.b = nb
+        at.Put(a, cp, cn)
+        ret cp
+    end
+    ret nid
+end
+
+func subst_block(a &: at.Ast, nid: int, f &: LoFrame): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    mut changed := false
+    mut items := Vector {} as Vector<int>
+    repeat n.list.len() in i:
+        child := n.list.get(i)
+        s := subst_stmt(a, child, f)
+        if s != child:
+            changed = true
+        end
+        items.push(s)
+    end
+    if not changed:
+        items.free()
+        ret nid
+    end
+    cp := at.NewNode(a, at.AST_BLOCK)
+    mut cn := n
+    cn.list = items
+    at.Put(a, cp, cn)
+    ret cp
 end
 
 func find_comp(ex &: LoExpand, name: str): int:

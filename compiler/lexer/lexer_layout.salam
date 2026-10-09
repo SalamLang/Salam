@@ -159,12 +159,108 @@ func layout_continues(c: int, c1: int): bool:
     ret (c == 61 or c == 33) and c1 == 61
 end
 
+func layout_lambda_header_here(L &: Lx): bool:
+    mut j := 1
+    until true:
+        b := peek2(L, j)
+        if b == 32 or b == 9:
+            j += 1
+            continue
+        end
+        break
+    end
+    b0 := peek2(L, j)
+    mut shape_ok := false
+    if b0 == 41:
+        shape_ok = true
+    else is_ident_start(b0):
+        mut k := j
+        until not is_ident_cont(peek2(L, k)):
+            k += 1
+        end
+        until true:
+            b := peek2(L, k)
+            if b == 32 or b == 9:
+                k += 1
+                continue
+            end
+            break
+        end
+        shape_ok = peek2(L, k) == 58
+    end
+    if not shape_ok:
+        ret false
+    end
+    mut depth := 1
+    mut m := 1
+    until true:
+        if L.pos + m >= L.n or m > 2000:
+            ret false
+        end
+        b := peek2(L, m)
+        if b == 10 or b == 0:
+            ret false
+        end
+        if b == 40 or b == 91:
+            depth += 1
+        else b == 41 or b == 93:
+            depth -= 1
+            if depth == 0:
+                break
+            end
+        end
+        m += 1
+    end
+    mut k2 := m + 1
+    until true:
+        b := peek2(L, k2)
+        if b == 32 or b == 9 or b == 13:
+            k2 += 1
+            continue
+        end
+        break
+    end
+    ret peek2(L, k2) == 58
+end
+
+func layout_scan_embedded_lambda(L &: Lx):
+    mut depth := 0
+    until true:
+        skip_trivia(L)
+        if at_end(L):
+            eb := lx_pos(L)
+            error_at(L, eb, "unclosed function body in a layout attribute value")
+            ret
+        end
+        is_open := peek(L) == 40 and layout_lambda_header_here(L)
+        scan_one(L)
+        if is_open:
+            depth += 1
+            continue
+        end
+        if L.last == tok.TK_KW_END:
+            depth -= 1
+            if depth <= 0:
+                ret
+            end
+            continue
+        end
+        if L.last == tok.TK_KW_IF or L.last == tok.TK_KW_UNTIL or L.last == tok.TK_KW_EACH or L.last == tok.TK_KW_REPEAT or L.last == tok.TK_KW_MATCH or L.last == tok.TK_KW_SWITCH:
+            depth += 1
+        end
+    end
+end
+
 func layout_value(L &: Lx):
     layout_skip_inline_ws(L)
     c0 := peek(L)
     if c0 == 0 or c0 == 10:
         b := lx_pos(L)
         error_at(L, b, "layout attribute requires a value")
+        ret
+    end
+    if c0 == 40 and layout_lambda_header_here(L):
+        layout_scan_embedded_lambda(L)
         ret
     end
     mut depth := 0

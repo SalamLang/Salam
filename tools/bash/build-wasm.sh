@@ -68,9 +68,52 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     exit 1
 }
 
+# The bundle is stamped with the Salam version and a hash of what goes into it.
+# Every distinct build therefore asks for file names that no browser or service
+# worker cache can still hold, even when the compiler changed without a VERSION
+# bump, and the files themselves can be cached for as long as the site likes.
+VERSION=$(tr -d ' \t\r\n' <VERSION)
+[ -n "$VERSION" ] || {
+    echo "error: cannot read VERSION (run this from the repository root)" >&2
+    exit 1
+}
+if command -v sha256sum >/dev/null 2>&1; then
+    HASHER="sha256sum"
+else
+    HASHER="shasum -a 256"
+fi
+HASH=$(
+    {
+        # shellcheck disable=SC2086
+        cat $SRCS
+        find "$STD_MIN" -name '*.salam' | sort | while IFS= read -r f; do
+            printf '%s\n' "${f#"$STD_MIN"}"
+            cat "$f"
+        done
+        cat "$0"
+    } | $HASHER | cut -c1-10
+)
+[ -n "$HASH" ] || {
+    echo "error: could not hash the compiler build" >&2
+    exit 1
+}
+BUILD_ID="$VERSION-$HASH"
+sed "s|^pub mut VERSION := \".*\"$|pub mut VERSION := \"$BUILD_ID\"|" \
+    "$OUT_DIR/build_info.salam" >"$OUT_DIR/build_info.salam.tmp"
+mv "$OUT_DIR/build_info.salam.tmp" "$OUT_DIR/build_info.salam"
+sed "s|^const SW_VERSION = \".*\";$|const SW_VERSION = \"$BUILD_ID\";|" \
+    "$OUT_DIR/sw.js" >"$OUT_DIR/sw.js.tmp"
+mv "$OUT_DIR/sw.js.tmp" "$OUT_DIR/sw.js"
+if ! grep -q "^pub mut VERSION := \"$BUILD_ID\"$" "$OUT_DIR/build_info.salam" ||
+    ! grep -q "^const SW_VERSION = \"$BUILD_ID\";$" "$OUT_DIR/sw.js"; then
+    echo "error: could not stamp editor/build_info.salam and editor/sw.js" >&2
+    exit 1
+fi
+BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
+
 # shellcheck disable=SC2086
 "$EMCC" -O2 -I.salam-build $SRCS \
-    -o "$OUT_DIR/salam-wa.js" \
+    -o "$BUNDLE.js" \
     --preload-file "$STD_MIN"@/std \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
@@ -82,6 +125,6 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     -s FILESYSTEM=1 \
     -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_last_failed','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
-echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
+echo "built $BUNDLE.js (+ .wasm, .data)"
 "$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"
 echo "built $OUT_DIR/index.html"

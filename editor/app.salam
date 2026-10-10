@@ -18,6 +18,7 @@ include "examples_data.salam"
 include "anim.salam"
 include "history.salam"
 include "complete.salam"
+include "build_info.salam"
 
 extern:
     func salam_js_call(obj: i64, method: str, a: str, b: str, c: str[2]): func (str, str) str
@@ -27,6 +28,9 @@ extern:
     func salam_js_global(name: str): func () i64
     func salam_js_get_prop(obj: i64, name: str): bool
 end
+
+// How long the compiler may take to start before the editor says so.
+const STALL_MS := 25000
 
 mut g_lang := "en"
 mut g_mode := "app"
@@ -74,6 +78,7 @@ mut run_timer := 0 as i64
 mut dd_open := false
 mut menu_open := false
 mut copy_flash_timer := 0 as i64
+mut wasm_timer := 0 as i64
 mut dragging := false
 mut ac_list := ""
 mut ac_sel := 0 - 1
@@ -117,6 +122,10 @@ func T(key: str): str:
         "loading":
             if g_lang == "fa": ret "بارگذاری کامپایلر…" end
             ret "loading compiler…"
+        end
+        "stalled":
+            if g_lang == "fa": ret "کامپایلر بالا نیامد؛ صفحه را تازه کن" end
+            ret "compiler did not start; reload the page"
         end
         "custom":
             if g_lang == "fa": ret "سفارشی" end
@@ -773,6 +782,13 @@ func render_highlight():
     render_line_numbers(src)
 end
 
+// Error text is Salam prose in the source language, so its direction follows
+// the text itself rather than the UI language: Persian diagnostics read right
+// to left, English ones left to right, and mixed output stays readable.
+func set_output_dir(is_error: bool):
+    dom.SetAttr(el_output, "dir", is_error ? "auto" : "ltr")
+end
+
 func set_status(key: str, cls: str):
     dom.SetText(el_status, T(key))
     dom.SetAttr(el_status, "class", "status " + cls)
@@ -844,7 +860,7 @@ func show_phase(src: str):
         cls = "output codeview"
     end
     dom.SetAttr(el_output, "class", cls)
-    dom.SetAttr(el_output, "dir", is_err ? dir_of(g_lang) : "ltr")
+    set_output_dir(is_err)
     set_status(is_err ? "error" : "done", is_err ? "err" : "ok")
 end
 
@@ -867,7 +883,7 @@ func run():
             dom.SetStr(el_preview, "srcdoc", res)
             set_status("done", "ok")
         else:
-            dom.SetStr(el_preview, "srcdoc", "<pre style=\"white-space:pre-wrap;padding:16px;color:#c0392b\">" + esc_html(res) + "</pre>")
+            dom.SetStr(el_preview, "srcdoc", "<pre dir=\"auto\" style=\"white-space:pre-wrap;padding:16px;color:#c0392b;text-align:start\">" + esc_html(res) + "</pre>")
             set_status("error", "err")
         end
     else:
@@ -878,8 +894,10 @@ func run():
             dom.SetText(el_output, out)
             dom.SetAttr(el_output, "class", "output error")
         else:
+            dom.SetAttr(el_output, "class", "output")
             anim.Show(out)
         end
+        set_output_dir(is_err)
         set_status(is_err ? "error" : "done", is_err ? "err" : "ok")
     end
 end
@@ -1332,6 +1350,19 @@ func on_gutter_move(ev: i64):
     end
 end
 
+// Reported when the compiler bundle has not started after this long, so a
+// failed or blocked download does not leave the editor on "loading…".
+func on_wasm_stalled():
+    if g_wasm_ready: ret end
+    set_status("stalled", "err")
+end
+
+func start_wasm():
+    boot_wasm()
+    dom.ClearTimeout(wasm_timer)
+    wasm_timer = dom.SetTimeout((): ret on_wasm_stalled() end, STALL_MS)
+end
+
 func boot_wasm():
     set_status("loading", "busy")
     obj_ctor := salam_js_global("Object")
@@ -1339,7 +1370,7 @@ func boot_wasm():
     salam_js_set_prop(g_module, "onRuntimeInitialized", (): ret on_wasm_ready() end)
     dom.SetProp(dom.Window(), "Module", g_module)
     script_el := dom.Create("script")
-    dom.SetAttr(script_el, "src", "salam-wa.js")
+    dom.SetAttr(script_el, "src", "salam-wa-" + build_info.VERSION + ".js")
     dom.Append(dom.Body(), script_el)
 end
 
@@ -1784,7 +1815,9 @@ func Init():
     render_highlight()
     rebuild_dropdown()
     wire_events()
-    boot_wasm()
+    // After the first paint: the editor is usable and visible while the
+    // compiler bundle loads, which matters on a slow phone connection.
+    dom.SetTimeout((): ret start_wasm() end, 0)
 end
 
 func main:

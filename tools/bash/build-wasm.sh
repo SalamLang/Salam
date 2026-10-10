@@ -46,6 +46,27 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
+# The bundle is stamped with the Salam version. A release therefore asks for
+# file names that no browser or service worker cache can still hold, so a new
+# version is never served from an older one, and the untouched files can be
+# cached for as long as the site likes.
+VERSION=$(tr -d ' \t\r\n' <VERSION)
+[ -n "$VERSION" ] || {
+    echo "error: cannot read VERSION (run this from the repository root)" >&2
+    exit 1
+}
+sed "s|^pub mut VERSION := \".*\"$|pub mut VERSION := \"$VERSION\"|" \
+    "$OUT_DIR/build_info.salam" >"$OUT_DIR/build_info.salam.tmp"
+mv "$OUT_DIR/build_info.salam.tmp" "$OUT_DIR/build_info.salam"
+sed "s|^const SW_VERSION = \".*\";$|const SW_VERSION = \"$VERSION\";|" \
+    "$OUT_DIR/sw.js" >"$OUT_DIR/sw.js.tmp"
+mv "$OUT_DIR/sw.js.tmp" "$OUT_DIR/sw.js"
+grep -q "^pub mut VERSION := \"$VERSION\"$" "$OUT_DIR/build_info.salam" || {
+    echo "error: could not stamp editor/build_info.salam" >&2
+    exit 1
+}
+BUNDLE="$OUT_DIR/salam-wa-$VERSION"
+
 STD_MIN="$(pwd)/.wasm-build/std-min"
 rm -rf "$STD_MIN"
 mkdir -p "$STD_MIN"
@@ -70,7 +91,7 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 
 # shellcheck disable=SC2086
 "$EMCC" -O2 -I.salam-build $SRCS \
-    -o "$OUT_DIR/salam-wa.js" \
+    -o "$BUNDLE.js" \
     --preload-file "$STD_MIN"@/std \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
@@ -82,6 +103,6 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     -s FILESYSTEM=1 \
     -s EXPORTED_FUNCTIONS="['_salam_web_run_app','_salam_web_build_layout','_salam_web_emit','_salam_web_syntax_ok','_salam_web_last_failed','_salam_web_version','_malloc','_free']" \
     -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','FS']"
-echo "built $OUT_DIR/salam-wa.js (+ .wasm, .data)"
+echo "built $BUNDLE.js (+ .wasm, .data)"
 "$SALAM" web "$OUT_DIR/page.salam" --output="$OUT_DIR/index.html"
 echo "built $OUT_DIR/index.html"

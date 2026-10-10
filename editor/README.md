@@ -137,6 +137,24 @@ The vocabulary lives in `complete.salam` (keywords from `compiler/langpack.salam
 layout names from `std/layout`). The scan that decides where the caret is works on
 the text before it, tracking `layout:`, element and `end` blocks.
 
+## Caching the compiler
+
+The compiler bundle is about 5.7 MB (`salam-wa-<version>.wasm` and `.data`, plus
+the `.js` loader). It is cached so a reload does not download it again:
+
+- The file names carry the Salam version (`salam-wa-0.5.3.*`). The version comes
+  from `editor/build_info.salam`, which `tools/bash/build-wasm.sh` stamps from
+  `VERSION`, so a new release asks for file names no cache holds.
+- `editor/sw.js` (a service worker) stores those three files under a cache named
+  for the version, and deletes the caches of other versions when it activates.
+  Only those three files are cached; the page itself always comes from the network.
+- The worker is registered after the page loads, and the compiler starts after the
+  first paint. If it has not started after 25 seconds, the status line says so
+  instead of staying on "loading compiler…".
+
+`SW_VERSION` in `sw.js` and `VERSION` in `build_info.salam` are kept in step by
+`tools/salam/update-version.salam`, which CI checks.
+
 ## 🔨 Building
 
 Requires the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)

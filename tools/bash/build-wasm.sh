@@ -46,27 +46,6 @@ command -v "$EMCC" >/dev/null 2>&1 || [ -e "$EMCC" ] || {
 OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
-# The bundle is stamped with the Salam version. A release therefore asks for
-# file names that no browser or service worker cache can still hold, so a new
-# version is never served from an older one, and the untouched files can be
-# cached for as long as the site likes.
-VERSION=$(tr -d ' \t\r\n' <VERSION)
-[ -n "$VERSION" ] || {
-    echo "error: cannot read VERSION (run this from the repository root)" >&2
-    exit 1
-}
-sed "s|^pub mut VERSION := \".*\"$|pub mut VERSION := \"$VERSION\"|" \
-    "$OUT_DIR/build_info.salam" >"$OUT_DIR/build_info.salam.tmp"
-mv "$OUT_DIR/build_info.salam.tmp" "$OUT_DIR/build_info.salam"
-sed "s|^const SW_VERSION = \".*\";$|const SW_VERSION = \"$VERSION\";|" \
-    "$OUT_DIR/sw.js" >"$OUT_DIR/sw.js.tmp"
-mv "$OUT_DIR/sw.js.tmp" "$OUT_DIR/sw.js"
-grep -q "^pub mut VERSION := \"$VERSION\"$" "$OUT_DIR/build_info.salam" || {
-    echo "error: could not stamp editor/build_info.salam" >&2
-    exit 1
-}
-BUNDLE="$OUT_DIR/salam-wa-$VERSION"
-
 STD_MIN="$(pwd)/.wasm-build/std-min"
 rm -rf "$STD_MIN"
 mkdir -p "$STD_MIN"
@@ -88,6 +67,49 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
     echo "no generated C in .salam-build; the compiler build produced nothing" >&2
     exit 1
 }
+
+# The bundle is stamped with the Salam version and a hash of what goes into it.
+# Every distinct build therefore asks for file names that no browser or service
+# worker cache can still hold, even when the compiler changed without a VERSION
+# bump, and the files themselves can be cached for as long as the site likes.
+VERSION=$(tr -d ' \t\r\n' <VERSION)
+[ -n "$VERSION" ] || {
+    echo "error: cannot read VERSION (run this from the repository root)" >&2
+    exit 1
+}
+if command -v sha256sum >/dev/null 2>&1; then
+    HASHER="sha256sum"
+else
+    HASHER="shasum -a 256"
+fi
+HASH=$(
+    {
+        # shellcheck disable=SC2086
+        cat $SRCS
+        find "$STD_MIN" -name '*.salam' | sort | while IFS= read -r f; do
+            printf '%s\n' "${f#"$STD_MIN"}"
+            cat "$f"
+        done
+        cat "$0"
+    } | $HASHER | cut -c1-10
+)
+[ -n "$HASH" ] || {
+    echo "error: could not hash the compiler build" >&2
+    exit 1
+}
+BUILD_ID="$VERSION-$HASH"
+sed "s|^pub mut VERSION := \".*\"$|pub mut VERSION := \"$BUILD_ID\"|" \
+    "$OUT_DIR/build_info.salam" >"$OUT_DIR/build_info.salam.tmp"
+mv "$OUT_DIR/build_info.salam.tmp" "$OUT_DIR/build_info.salam"
+sed "s|^const SW_VERSION = \".*\";$|const SW_VERSION = \"$BUILD_ID\";|" \
+    "$OUT_DIR/sw.js" >"$OUT_DIR/sw.js.tmp"
+mv "$OUT_DIR/sw.js.tmp" "$OUT_DIR/sw.js"
+if ! grep -q "^pub mut VERSION := \"$BUILD_ID\"$" "$OUT_DIR/build_info.salam" ||
+    ! grep -q "^const SW_VERSION = \"$BUILD_ID\";$" "$OUT_DIR/sw.js"; then
+    echo "error: could not stamp editor/build_info.salam and editor/sw.js" >&2
+    exit 1
+fi
+BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
 
 # shellcheck disable=SC2086
 "$EMCC" -O2 -I.salam-build $SRCS \

@@ -47,7 +47,7 @@ OUT_DIR="editor"
 mkdir -p "$OUT_DIR"
 
 # The bundle is stamped with the Salam version. A release therefore asks for
-# file names that no browser or service worker cache can still hold, so a new
+# filenames that no browser or service worker cache can still hold, so a new
 # version is never served from an older one, and the untouched files can be
 # cached for as long as the site likes.
 VERSION=$(tr -d ' \t\r\n' <VERSION)

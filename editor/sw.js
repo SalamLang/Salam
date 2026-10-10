@@ -1,7 +1,7 @@
 // Cache for the Salam playground's compiler bundle.
 //
-// The bundle file names carry the Salam version, so a release never reads what
-// an older release cached: a new version asks for file names that no cache has,
+// The bundle filenames carry the Salam version, so a release never reads what
+// an older release cached: a new version asks for filenames that no cache has,
 // and this worker then stores them under a new cache name. The old cache is
 // dropped when this worker activates.
 //

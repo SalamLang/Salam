@@ -9,12 +9,13 @@
 // its assets always reflect the deployed release.
 
 const SW_VERSION = "0.5.3";
-const CACHE = "salam-editor-" + SW_VERSION;
+const CACHE_PREFIX = "salam-editor-";
+const CACHE = `${CACHE_PREFIX}${SW_VERSION}`;
 
 const ASSETS = [
-  "./salam-wa-" + SW_VERSION + ".js",
-  "./salam-wa-" + SW_VERSION + ".wasm",
-  "./salam-wa-" + SW_VERSION + ".data",
+  `./salam-wa-${SW_VERSION}.js`,
+  `./salam-wa-${SW_VERSION}.wasm`,
+  `./salam-wa-${SW_VERSION}.data`,
 ].map((asset) => new URL(asset, self.registration.scope).pathname);
 
 self.addEventListener("install", (event) => {
@@ -40,7 +41,9 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)),
+          keys
+            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE)
+            .map((key) => caches.delete(key)),
         ),
       )
       .then(() => self.clients.claim()),
@@ -52,16 +55,11 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") {
     return;
   }
-  let path;
-  try {
-    const url = new URL(request.url);
-    if (url.origin !== self.location.origin || !ASSETS.includes(url.pathname)) {
-      return;
-    }
-    path = url.pathname;
-  } catch (error) {
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin || !ASSETS.includes(url.pathname)) {
     return;
   }
+  const path = url.pathname;
   event.respondWith(
     caches.open(CACHE).then((cache) =>
       cache.match(path).then((hit) => {

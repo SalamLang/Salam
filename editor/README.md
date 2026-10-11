@@ -142,11 +142,11 @@ the text before it, tracking `layout:`, element and `end` blocks.
 The compiler bundle is about 5.7 MB (`salam-wa-<version>.wasm` and `.data`, plus
 the `.js` loader). It is cached so a reload does not download it again:
 
-- The file names carry the Salam version and a hash of the build
+- The filenames carry the Salam version and a hash of the build
   (`salam-wa-0.5.3-<hash>.*`). The id comes from `editor/build_info.salam`, which
   `tools/bash/build-wasm.sh` stamps from `VERSION` plus a hash of the generated
   compiler C and the staged stdlib, so any new build, even one without a
-  `VERSION` bump, asks for file names no cache holds.
+  `VERSION` bump, asks for filenames no cache holds.
 - `editor/sw.js` (a service worker) stores those three files under a cache named
   for the version, and deletes the caches of other versions when it activates.
   Only those three files are cached; the page itself always comes from the network.

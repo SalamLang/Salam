@@ -69,7 +69,7 @@ SRCS=$(find .salam-build -name '*.c' | sort | tr '\n' ' ')
 }
 
 # The bundle is stamped with the Salam version and a hash of what goes into it.
-# Every distinct build therefore asks for file names that no browser or service
+# Every distinct build therefore asks for filenames that no browser or service
 # worker cache can still hold, even when the compiler changed without a VERSION
 # bump, and the files themselves can be cached for as long as the site likes.
 VERSION=$(tr -d ' \t\r\n' <VERSION)

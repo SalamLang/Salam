@@ -1,14 +1,14 @@
 // Cache for the Salam playground's compiler bundle.
 //
-// The bundle file names carry the Salam version, so a release never reads what
-// an older release cached: a new version asks for file names that no cache has,
+// The bundle filenames carry the Salam version, so a release never reads what
+// an older release cached: a new version asks for filenames that no cache has,
 // and this worker then stores them under a new cache name. The old cache is
 // dropped when this worker activates.
 //
 // Everything except those three files is left to the network, so the page and
 // its assets always reflect the deployed release.
 
-const SW_VERSION = "0.5.4-73ef4ecff8";
+const SW_VERSION = "0.5.4-3c8fcf0b5a";
 const CACHE_PREFIX = "salam-editor-";
 const CACHE = `${CACHE_PREFIX}${SW_VERSION}`;
 

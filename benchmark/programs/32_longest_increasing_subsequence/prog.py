@@ -11,12 +11,10 @@ for i in range(N):
 for i in range(N):
     for j in range(i):
         if seq[j] < seq[i]:
-            if dp[j] + 1 > dp[i]:
-                dp[i] = dp[j] + 1
+            dp[i] = max(dp[i], dp[j] + 1)
 
 answer = dp[0]
 for i in range(N):
-    if dp[i] > answer:
-        answer = dp[i]
+    answer = max(answer, dp[i])
 
 print(answer)

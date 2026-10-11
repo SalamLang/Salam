@@ -14,7 +14,6 @@ for i in range(NITEMS):
     vi = value[i]
     for w in range(CAPACITY, wi - 1, -1):
         cand = dp[w - wi] + vi
-        if cand > dp[w]:
-            dp[w] = cand
+        dp[w] = max(dp[w], cand)
 
 print(dp[CAPACITY])

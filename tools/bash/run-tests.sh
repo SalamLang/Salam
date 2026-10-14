@@ -54,6 +54,24 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    wk_new() {
+        name=$(basename "$f" .out)
+        jobdir="$WORK/newjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        buildlog="$jobdir/build.log"
+        (cd "$jobdir" && "$SALAM_ABS" new "$name" --lang="$lang" --no-color) >"$buildlog" 2>&1
+        (cd "$jobdir/$name" && "$SALAM_ABS" build --output="$jobdir/a.exe" --no-color --log-level=error) >>"$buildlog" 2>&1
+        if [ ! -x "$jobdir/a.exe" ]; then
+            echo "FAIL $label (generated project does not build)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+            rm -rf "$jobdir"
+            return
+        fi
+        got=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/a.exe" </dev/null 2>&1 | tr -d '\r')
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_fmt() {
         name=$(basename "$f" .salam)
         jobdir="$WORK/fmtjob_${jobid}_$$"
@@ -248,6 +266,55 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
         rm -f "$outbin" "$crosslog"
     }
+    wk_errors() {
+        code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+        out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+        [ -z "${extra_out:-}" ] || out="$out
+$extra_out"
+        msg_missing=""
+        msgs=$(grep -oE '(EXPECT-MSG|انتظار[- ]پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار[- ]پیام): //' | tr -d '\r')
+        if [ -n "$msgs" ]; then
+            while IFS= read -r want_msg; do
+                [ -n "$want_msg" ] || continue
+                printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
+            done <<EOF_MSGS
+$msgs
+EOF_MSGS
+        fi
+        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
+            echo "PASS $label ($code)"
+        else
+            if [ -n "$msg_missing" ]; then
+                echo "FAIL $label (want message '$msg_missing')"
+            else
+                echo "FAIL $label (want $code)"
+            fi
+            echo "  $out"
+        fi
+    }
+    wk_layout_errors() {
+        lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+        lfail=""
+        extra_out=""
+        case "$lcode" in
+        E* | خطا*)
+            html="$WORK/layout_err_${jobid}_$$.html"
+            rm -f "$html"
+            if extra_out=$("$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
+                lfail="layout build exited 0 despite $lcode"
+            elif [ -e "$html" ]; then
+                lfail="layout build wrote output despite $lcode"
+            fi
+            rm -f "$html"
+            ;;
+        esac
+        if [ -n "$lfail" ]; then
+            echo "FAIL $label ($lfail)"
+        else
+            wk_errors
+        fi
+        extra_out=""
+    }
     run_worker() {
         case "$kind" in
         build)
@@ -271,32 +338,15 @@ if [ "${1:-}" = "--worker" ]; then
             wk_check "$expabs" "$got"
             ;;
         errors)
-            code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-            out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
-            msg_missing=""
-            msgs=$(grep -oE '(EXPECT-MSG|انتظار-پیام): .*' "$f" | sed -E 's/^(EXPECT-MSG|انتظار-پیام): //' | tr -d '\r')
-            if [ -n "$msgs" ]; then
-                while IFS= read -r want_msg; do
-                    [ -n "$want_msg" ] || continue
-                    printf '%s\n' "$out" | grep -qF -- "$want_msg" || msg_missing="$want_msg"
-                done <<EOF_MSGS
-$msgs
-EOF_MSGS
-            fi
-            if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
-                echo "PASS $label ($code)"
-            else
-                if [ -n "$msg_missing" ]; then
-                    echo "FAIL $label (want message '$msg_missing')"
-                else
-                    echo "FAIL $label (want $code)"
-                fi
-                echo "  $out"
-            fi
+            wk_errors
+            ;;
+        layout_errors)
+            wk_layout_errors
             ;;
         layout)
             html="$WORK/layout_${jobid}_$$.html"
-            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >/dev/null 2>&1
+            buildlog="$WORK/layout_${jobid}_$$.log"
+            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
             lmiss=""
             lbad=""
             lfirst=""
@@ -323,8 +373,9 @@ EOF_LAYOUT_NOT
                 echo "FAIL $label (unwanted '$lbad')"
             else
                 echo "FAIL $label (want '$lmiss')"
+                sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
             fi
-            rm -f "$html"
+            rm -f "$html" "$buildlog"
             ;;
         llvm)
             jobdir="$WORK/llvmjob_${jobid}_$$"
@@ -348,6 +399,7 @@ EOF_LAYOUT_NOT
             ;;
         fmt) wk_fmt ;;
         repl) wk_repl ;;
+        new) wk_new ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
@@ -571,6 +623,16 @@ if want repl; then
             exp="tests/$lang/repl/$name.out"
             [ -f "$exp" ] || continue
             add_job repl "repl/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
+if want new; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/new/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            add_job new "new/$lang/$name" "$f" "$lang" "$f"
         done
     done
 fi
@@ -961,7 +1023,7 @@ if want layout; then
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
                 runner=layout
-                [ "$sub" = errors ] && runner=errors
+                [ "$sub" = errors ] && runner=layout_errors
                 add_job "$runner" "layout/$lang/$sub/$name" "$f" "$lang" -
             done
         done

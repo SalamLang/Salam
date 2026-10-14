@@ -10,17 +10,29 @@ case "$SALAM" in
 */*) SALAM="$root/$SALAM" ;;
 esac
 
+examples=${WEBSITE_EXAMPLES:-check}
+case "$examples" in
+check | skip | only) ;;
+*)
+    echo "website: WEBSITE_EXAMPLES must be check, skip or only, not '$examples'" >&2
+    exit 2
+    ;;
+esac
+
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 
-export SALAM
-jobs=$(nproc 2>/dev/null || echo 4)
-fail=0
-printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
-    xargs -0 -P "$jobs" -n 1 sh website/check-example.sh || fail=1
-[ "$fail" -eq 0 ] || {
-    echo "website: example output does not match its .out file" >&2
-    exit 1
-}
+if [ "$examples" != skip ]; then
+    export SALAM
+    jobs=$(nproc 2>/dev/null || echo 4)
+    fail=0
+    printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
+        xargs -0 -P "$jobs" -n 1 sh website/check-example.sh || fail=1
+    [ "$fail" -eq 0 ] || {
+        echo "website: example output does not match its .out file" >&2
+        exit 1
+    }
+fi
+[ "$examples" = only ] && exit 0
 
 mkdir -p website/dist/api
 for page in website/content/*/std/*.txt; do

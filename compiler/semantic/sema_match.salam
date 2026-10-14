@@ -167,6 +167,47 @@ func match_enum_name(s &: Sema, subj: int): str:
     ret ""
 end
 
+func match_member_known(s &: Sema, a &: at.Ast, subj: int, name: str): bool:
+    if ty_at(s, subj).kind == TY_ENUM:
+        syd := ty_at(s, subj).decl
+        if syd == 0 or sym_at(s, syd).members == 0:
+            ret false
+        end
+        probe := at.NewNode(a, at.AST_IDENTIFIER)
+        at.SetName(a, probe, name)
+        ret enum_member_find(s, a, sym_at(s, syd).members, probe) != 0
+    end
+    ret enum_case_index(s, a, subj, name) >= 0
+end
+
+func match_join_spaced_arm(s &: Sema, a &: at.Ast, arm: int, subj: int):
+    if subj < 0:
+        ret
+    end
+    if ty_at(s, subj).kind != TY_ENUM and enum_data_sym(s, subj) == 0:
+        ret
+    end
+    repeat at.ChildCount(a, arm) in i:
+        pat := at.Child(a, arm, i)
+        pv := at.Get(a, pat)
+        if pv.a == 0 or str.Len(pv.name) == 0 or pv.enum_payload or pv.op == tok.TK_LBRACE:
+            continue
+        end
+        if at.KindOf(a, pv.a) != at.AST_IDENTIFIER:
+            continue
+        end
+        full := at.Get(a, pv.a).name + " " + pv.name
+        dot := str.LastIndex(full, ".")
+        tail := dot < 0 ? full : str.Substr(full, dot + 1, str.Len(full) - dot - 1)
+        if match_member_known(s, a, subj, tail):
+            at.SetName(a, pv.a, full)
+            mut pv2 := at.Get(a, pat)
+            pv2.name = ""
+            at.Put(a, pat, pv2)
+        end
+    end
+end
+
 func match_unqualify_arm(s &: Sema, a &: at.Ast, arm: int, subj: int):
     ename := match_enum_name(s, subj)
     if str.Len(ename) == 0:
@@ -238,6 +279,7 @@ func sema_check_match(
         mut coll_off := 0 - 1
         mut coll_cnt := 0
 
+        match_join_spaced_arm(s, a, arm, subj)
         match_unqualify_arm(s, a, arm, subj)
         struct_arm_prepare(s, a, arm, subj)
         tags_mark := seen_tags.len()

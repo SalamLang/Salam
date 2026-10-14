@@ -23,6 +23,10 @@ set. Every spelling in either language is accepted in both English and
 Persian files, and spaces, `_`, `-` and ZWNJ are ignored when names are
 compared.
 
+CSS values are the exception. An English file accepts only the `@en`
+spellings of keywords and units, ASCII digits, `,` and `%`. A Persian file
+accepts both, plus Persian digits, `،` and `٪`.
+
 ## Elements
 
 ```salam
@@ -112,7 +116,30 @@ Value types: `string`, `token` (one word, no spaces), `int`, `uint`, `float`,
 (`true`/`false` like a boolean, or one of the `allowed` values, as for
 `hidden = "until-found"`).
 
-`css` is the value type of CSS properties. `allowed` lists what a value may be: the type words `length`, `percentage`, `number`, `integer`, `time`, `angle`, `color`, `image`, `string`, `ident`, `ratio`, `easing`, `flex` and `resolution`, plus `@group` for keyword values defined in `values/`. `maxN` allows up to N space-separated values (as in `margin`) and `list` a comma list (as in `transition-property`). CSS-wide keywords and `var()`/`calc()`-style functions are always accepted. The full table is in `docs/CSS_PROPERTIES.md`.
+`css` is the value type of CSS properties. `allowed` lists what a value may be: the type words `length`, `percentage`, `number`, `integer`, `time`, `angle`, `color`, `image`, `string`, `ident`, `ratio`, `easing`, `flex` and `resolution`, plus `@group` for keyword values defined in `values/`. `maxN` allows up to N space-separated values (as in `margin`) and `list` a comma list (as in `transition-property`). CSS-wide keywords and `var()`/`var()`, `env()` and `attr()` are always accepted, and math functions when their result type fits. The full table is in `docs/CSS_PROPERTIES.md`.
+
+## Functions
+
+```salam
+@en "rotate"
+@fa "چرخش"
+pub const css_fn_rotate := LayoutFunction { generated_name = "rotate" args = "angle" }
+```
+
+A CSS function used inside a `css` value is looked up in `functions/`, by any
+of its names, and printed under `generated_name`. `args` lists its
+comma-separated arguments, separated by `;`. Each one is an `allowed` spec,
+optionally prefixed with `?` (may be left out), `*` (zero or more) or `+`
+(one or more). Several consts with the same `generated_name` are overloads,
+tried in order. A function with no `args` is only renamed. `url()` is
+special: its argument is copied as written.
+
+Two spec forms help inside functions. `set:A|B` takes space-separated parts
+in any order; `seq:A|B` takes them in order. A part is alternatives joined by
+`+`, with `*N` or `*N-M` for a count. In `seq:` a part without a count is
+required once and a trailing `?` makes it optional. A part starting with `/`
+comes after a `/`. `seq:number+percentage*3|/number+percentage` is the modern
+`rgb()` syntax.
 
 ## Values
 

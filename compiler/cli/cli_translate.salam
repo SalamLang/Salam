@@ -594,6 +594,20 @@ func tr_is_space(text: str, i: int, n: int): bool:
     ret str.Equals(c, " ") or str.Equals(c, "\t") or str.Equals(c, "\n") or str.Equals(c, "\r")
 end
 
+func tr_css_value_en(attr: str, raw: str): str:
+    n := str.Len(raw)
+    mut inner := ""
+    if n >= 4 and str.StartsWith(raw, "«") and str.EndsWith(raw, "»"):
+        inner = str.Substr(raw, 2, n - 4)
+    else n >= 2 and co.ByteAt(raw, 0) == 34 and co.ByteAt(raw, n - 1) == 34 and str.IndexOf(raw, "\\") < 0:
+        inner = str.Substr(raw, 1, n - 2)
+    else:
+        ret ""
+    end
+    mapped := sm.LayoutCssValueEn(attr, inner)
+    ret str.Equals(mapped, inner) ? "" : mapped
+end
+
 func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: str, sfile: src.SourceFile, out &: str): bool:
     mut toks := tok.StreamNew(sfile.path)
     ok := lx.RunSplit(lgr, srcpack, sfile, true, true, toks)
@@ -613,6 +627,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut dot_receiver := ""
     mut angle_depth := 0
     mut alias_rhs := false
+    mut css_attr := ""
     names := tr_declared_names(toks, n)
     defer names.free()
     comp_names := tr_component_names(toks, n)
@@ -641,6 +656,8 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             else:
                 skip_emit = true
             end
+        else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and prev_kind == tok.TK_ASSIGN and str.Len(css_attr) > 0 and str.Len(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi))) > 0:
+            lexeme = `"` + str.Replace(tr_css_value_en(css_attr, str.Substr(text, bi, ei - bi)), `"`, `\"`) + `"`
         else t.kind == tok.TK_STRING and targetpack != lp.LP_FA and str.StartsWith(t.lexeme, "«") and str.EndsWith(t.lexeme, "»"):
             inner := str.Substr(t.lexeme, 2, str.Len(t.lexeme) - 4)
             lexeme = `"` + str.Replace(inner, `"`, `\"`) + `"`
@@ -777,6 +794,11 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         end
         if t.kind == tok.TK_IDENT:
             prev_ident_lexeme = t.lexeme
+        end
+        if t.kind == tok.TK_LAYOUT_ATTR_NAME:
+            css_attr = t.lexeme
+        else t.kind != tok.TK_ASSIGN and t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
+            css_attr = ""
         end
         if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
             prev_kind = t.kind

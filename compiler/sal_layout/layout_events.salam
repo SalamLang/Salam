@@ -1,0 +1,167 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+include sm "../semantic/semantic.salam"
+include co "../sal_core.salam"
+
+mut g_lo_ev_seq := 0
+
+func lo_ev_fresh_name(): str:
+    g_lo_ev_seq += 1
+    ret "__sl_ev_" + co.U64Toa(g_lo_ev_seq as u64)
+end
+
+func lo_ev_call_text(name: str, nparams: int): str:
+    if nparams <= 0:
+        ret name + "()"
+    end
+    ret name + "(event)"
+end
+
+func lo_ev_vtype(ei: int, name: str): int:
+    mut key := sm.LayoutAttrKey(name)
+    if str.Len(key) == 0:
+        key = name
+    end
+    ai := sm.LayoutAttrFor(ei, key)
+    if ai < 0:
+        ret 0 - 1
+    end
+    ret sm.LayoutAttrVtype(ai)
+end
+
+func lo_ev_prog_func_params(a &: at.Ast, prog: int, name: str): int:
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_FUNC_DEF and str.Equals(d.name, name):
+            ret d.list.len()
+        end
+    end
+    ret 0 - 1
+end
+
+func lo_ev_hoist_lambda(a &: at.Ast, lam: int, ids &: Vector<int>): str:
+    l := at.Get(a, lam)
+    fid := at.NewNode(a, at.AST_FUNC_DEF)
+    copy_span(a, fid, lam)
+    name := lo_ev_fresh_name()
+    mut params := Vector {} as Vector<int>
+    repeat l.list.len() in pi:
+        params.push(l.list.get(pi))
+    end
+    mut fn := at.Get(a, fid)
+    fn.name = name
+    fn.list = params
+    fn.a = l.a
+    at.Put(a, fid, fn)
+    ids.push(fid)
+    ret lo_ev_call_text(name, params.len())
+end
+
+func lo_ev_rewrite_attr(a &: at.Ast, prog: int, attr: int, ei: int, ids &: Vector<int>, names &: Vector<str>):
+    an := at.Get(a, attr)
+    if str.Len(an.name) == 0 or an.a == 0:
+        ret
+    end
+    vt := lo_ev_vtype(ei, an.name)
+    if vt != sm.VT_CODE:
+        ret
+    end
+    v := at.Get(a, an.a)
+    mut call_text := ""
+    if v.kind == at.AST_LAMBDA:
+        call_text = lo_ev_hoist_lambda(a, an.a, ids)
+    else v.kind == at.AST_IDENTIFIER:
+        np := lo_ev_prog_func_params(a, prog, v.name)
+        if np < 0:
+            ret
+        end
+        call_text = lo_ev_call_text(v.name, np)
+    else:
+        ret
+    end
+    names.push(call_text)
+    mut n2 := at.Get(a, attr)
+    n2.a = mk_str(a, call_text, attr)
+    at.Put(a, attr, n2)
+end
+
+func lo_ev_walk(a &: at.Ast, prog: int, container: int, ei: int, ids &: Vector<int>, names &: Vector<str>):
+    repeat at.ChildCount(a, container) in i:
+        cid := at.Child(a, container, i)
+        k := at.KindOf(a, cid)
+        if k == at.AST_LAYOUT_ATTR:
+            lo_ev_rewrite_attr(a, prog, cid, ei, ids, names)
+        else k == at.AST_LAYOUT_ELEMENT:
+            lo_ev_walk(a, prog, cid, sm.LayoutElemOf(a, cid), ids, names)
+        else k == at.AST_IF:
+            lo_ev_walk_if(a, prog, cid, ei, ids, names)
+        else k == at.AST_EACH:
+            n := at.Get(a, cid)
+            lo_ev_walk(a, prog, n.b, ei, ids, names)
+        end
+    end
+end
+
+func lo_ev_walk_if(a &: at.Ast, prog: int, nid: int, ei: int, ids &: Vector<int>, names &: Vector<str>):
+    n := at.Get(a, nid)
+    lo_ev_walk(a, prog, n.b, ei, ids, names)
+    if n.c != 0:
+        if at.KindOf(a, n.c) == at.AST_IF:
+            lo_ev_walk_if(a, prog, n.c, ei, ids, names)
+        else:
+            lo_ev_walk(a, prog, n.c, ei, ids, names)
+        end
+    end
+end
+
+pub func HoistEventHandlers(a &: at.Ast, prog: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    if prog == 0:
+        ret names
+    end
+    mut ids := Vector {} as Vector<int>
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK and not d.view_glue:
+            lo_ev_walk(a, prog, did, 0 - 1, ids, names)
+        end
+    end
+    if ids.len() == 0:
+        ids.free()
+        ret names
+    end
+    mut pn := at.Get(a, prog)
+    mut list := Vector {} as Vector<int>
+    repeat pn.list.len() in k:
+        list.push(pn.list.get(k))
+    end
+    repeat ids.len() in e:
+        list.push(ids.get(e))
+    end
+    mut old := pn.list
+    pn.list = list
+    at.Put(a, prog, pn)
+    old.free()
+    ids.free()
+    ret names
+end

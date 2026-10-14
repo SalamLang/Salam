@@ -15,7 +15,13 @@ func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     emit_alloca(v, slot + " = alloca " + ty_of(v, s, a, ts))
     local_add(v, node.name, slot, ts)
     if node.a != 0:
-        init_val := conv(v, s, a, lv_expr(v, s, a, node.a), ts)
+        mut init_val := conv(v, s, a, lv_expr(v, s, a, node.a), ts)
+        if v.in_derive and str.Equals(ts, "str") and not lv_dv_owned(s, a, node.a):
+            cp := new_tmp(v)
+            need(v, LV_H_STRCAT)
+            emit(v, cp + " = call ptr @salam_ll_strcat(ptr " + init_val + ", ptr " + strconst(v, "") + ")")
+            init_val = cp
+        end
         emit(v, "store " + ty_of(v, s, a, ts) + " " + init_val + ", ptr " + slot)
         ret
     end
@@ -28,9 +34,96 @@ func lv_vardecl(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         emit(
             v, "call void @llvm.memset.p0." + v.usize + "(ptr " + slot + ", i8 0, " + v.usize + " " + sz + ", i1 false)"
         )
+        lv_str_fill(v, s, a, slot, ts, 0)
         ret
     end
     emit(v, "store " + ty_of(v, s, a, ts) + " " + zv + ", ptr " + slot)
+    lv_str_fill(v, s, a, slot, ts, 0)
+end
+
+func lv_needs_str_fill(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, depth: int): bool:
+    if depth > 8 or str.Len(ts) == 0 or is_ptr_ts(ts) or is_slice(ts):
+        ret false
+    end
+    if str.Equals(ts, "str"):
+        ret true
+    end
+    if is_int_ts(ts) or is_float(ts) or is_bool(ts):
+        ret false
+    end
+    if array_count(ts) > (0 as i64):
+        ret lv_needs_str_fill(v, s, a, array_elem(ts), depth + 1)
+    end
+    ss := struct_sym(v, s, a, ts)
+    if ss == 0:
+        ret false
+    end
+    syms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
+    repeat syms.len() in i:
+        f := sm.SymAt(s, syms.get(i))
+        if f.kind == sm.SYM_FIELD and f.ty != sm.TYPE_NONE and lv_needs_str_fill(v, s, a, sm.ToString(s, f.ty), depth + 1):
+            ret true
+        end
+    end
+    ret false
+end
+
+func lv_str_fill(v &: Lv, s &: sm.Sema, a &: at.Ast, ptr: str, ts: str, depth: int):
+    if not lv_needs_str_fill(v, s, a, ts, depth):
+        ret
+    end
+    if str.Equals(ts, "str"):
+        emit(v, "store ptr " + strconst(v, "") + ", ptr " + ptr)
+        ret
+    end
+    cnt := array_count(ts)
+    if cnt > (0 as i64):
+        ctr := "%zf." + co.I64Toa(v.tmp as i64)
+        v.tmp += 1
+        emit_alloca(v, ctr + " = alloca i64")
+        emit(v, "store i64 0, ptr " + ctr)
+        headL := new_lbl(v, "zf_head")
+        bodyL := new_lbl(v, "zf_body")
+        endL := new_lbl(v, "zf_end")
+        emit_term(v, "br label %" + headL)
+        emit_label(v, headL)
+        iv := new_tmp(v)
+        emit(v, iv + " = load i64, ptr " + ctr)
+        ck := new_tmp(v)
+        emit(v, ck + " = icmp ult i64 " + iv + ", " + co.I64Toa(cnt))
+        emit_term(v, "br i1 " + ck + ", label %" + bodyL + ", label %" + endL)
+        emit_label(v, bodyL)
+        ep := new_tmp(v)
+        emit(v, ep + " = getelementptr inbounds " + ty_of(v, s, a, ts) + ", ptr " + ptr + ", i64 0, i64 " + iv)
+        lv_str_fill(v, s, a, ep, array_elem(ts), depth + 1)
+        nx := new_tmp(v)
+        emit(v, nx + " = add i64 " + iv + ", 1")
+        emit(v, "store i64 " + nx + ", ptr " + ctr)
+        emit_term(v, "br label %" + headL)
+        emit_label(v, endL)
+        ret
+    end
+    ss := struct_sym(v, s, a, ts)
+    if ss == 0:
+        ret
+    end
+    syms := sm.ScopeAt(s, sm.SymAt(s, ss).members).symbols
+    mut idx := 0
+    repeat syms.len() in i:
+        f := sm.SymAt(s, syms.get(i))
+        if f.kind != sm.SYM_FIELD:
+            continue
+        end
+        if f.ty != sm.TYPE_NONE:
+            fts := sm.ToString(s, f.ty)
+            if lv_needs_str_fill(v, s, a, fts, depth + 1):
+                fp := new_tmp(v)
+                emit(v, fp + " = getelementptr inbounds " + struct_ltype(ts) + ", ptr " + ptr + ", i32 0, i32 " + co.I64Toa(idx as i64))
+                lv_str_fill(v, s, a, fp, fts, depth + 1)
+            end
+        end
+        idx += 1
+    end
 end
 
 func compound_base(op: int): int:

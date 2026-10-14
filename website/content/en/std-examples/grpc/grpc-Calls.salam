@@ -1,0 +1,99 @@
+import grpc
+import compress
+import sync
+
+mut server := grpc.NewServer(0)
+mut ready := sync.NewWaitGroup()
+
+func hello(c: i64):
+    mut ok := false
+    name := grpc.RecvStr(c, ok)
+    _ := grpc.SendStr(c, "hello " + name)
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func countdown(c: i64):
+    mut ok := false
+    _ := grpc.Recv(c, ok)
+    repeat 3 in i:
+        _ := grpc.Send(c, compress.BufFromStr("" + (3 - i)))
+    end
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func trace(c: i64):
+    mut ok := false
+    _ := grpc.RecvStr(c, ok)
+    _ := grpc.SendStr(c, grpc.MDGet(grpc.CallMetadata(c), "x-trace") + " " + grpc.CallPath(c))
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func forbidden(c: i64):
+    grpc.Fail(c, grpc.GRPC_PERMISSION_DENIED, "the token expired")
+end
+
+func run_server():
+    _ := grpc.Listen(server)
+    sync.Done(ready)
+    _ := grpc.ServeCount(server, 1)
+end
+
+func main:
+    hello_path := grpc.MethodPath("demo.Greeter", "SayHello")
+    println hello_path
+    grpc.RegisterMethod(hello_path, hello)
+    grpc.RegisterStreamMethod("/demo.Greeter/Countdown", countdown, false, true)
+    grpc.RegisterMethod("/demo.Greeter/Trace", trace)
+    grpc.RegisterMethod("/demo.Greeter/Admin", forbidden)
+    println grpc.MethodCount(), grpc.HasMethod(hello_path)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+
+    mut ch := grpc.Dial("127.0.0.1", grpc.Port(server))
+    grpc.SetTimeout(ch, 5000)
+    println grpc.ChannelOk(ch)
+    mut result := grpc.Status {}
+    println grpc.UnaryCallStr(ch, hello_path, "Maryam", result), grpc.StatusOk(result)
+
+    call := grpc.StartCall(ch, "/demo.Greeter/Countdown", grpc.NewMetadata())
+    _ := grpc.SendMessage(ch, call, compress.BufFromStr("go"), true)
+    mut more := true
+    until more:
+        mut ok := false
+        msg := grpc.RecvMessage(ch, call, ok)
+        if not ok:
+            more = false
+        else:
+            println "message:", compress.BufToStrUnsafe(msg)
+        end
+    end
+    println grpc.MDCount(grpc.CallHeaders(ch, call))
+    println grpc.StatusString(grpc.FinishCall(ch, call))
+
+    mut md := grpc.NewMetadata()
+    _ := grpc.MDAdd(md, "x-trace", "t-42")
+    mut result2 := grpc.Status {}
+    answer := grpc.UnaryCall(ch, "/demo.Greeter/Trace", compress.BufFromStr("x"), md, result2)
+    println compress.BufToStrUnsafe(answer)
+
+    call2 := grpc.StartCall(ch, "/demo.Greeter/Trace", md)
+    _ := grpc.SendMessage(ch, call2, compress.BufFromStr("y"), false)
+    _ := grpc.CloseSend(ch, call2)
+    mut ok2 := false
+    _ := grpc.RecvMessage(ch, call2, ok2)
+    _ := grpc.FinishCall(ch, call2)
+    println ok2, grpc.CallTrailers(ch, call2).items.len() >= 0
+
+    mut result3 := grpc.Status {}
+    _ := grpc.UnaryCallStr(ch, "/demo.Greeter/Admin", "", result3)
+    println result3.code, result3.message, grpc.StatusName(result3.code)
+    mut result4 := grpc.Status {}
+    _ := grpc.UnaryCallStr(ch, "/demo.Greeter/Nope", "", result4)
+    println grpc.StatusString(result4)
+    grpc.CloseChannel(ch)
+    join(t)
+    grpc.StopServer(server)
+    grpc.ResetMethods()
+    println grpc.MethodCount()
+end

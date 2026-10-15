@@ -14,7 +14,8 @@ website/
 │   └── pages/*.html     one file per page; the file name is the URL
 ├── content/<lang>/
 │   ├── *.txt            strings for that language
-│   └── examples/        Salam programs shown on the site, with their .out
+│   ├── examples/        Salam programs shown on the site, with their .out
+│   └── static/          folders copied as-is into that language's output
 └── assets/              css, js, fonts (Vazirmatn, Vazir Code), images
 ```
 

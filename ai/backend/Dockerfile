@@ -14,4 +14,5 @@ COPY --from=build /out/salam-ai /usr/local/bin/salam-ai
 USER salam
 ENV AI_PORT=8080 AI_HOST=0.0.0.0
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/salam-ai", "--health"]
 CMD ["/usr/local/bin/salam-ai"]

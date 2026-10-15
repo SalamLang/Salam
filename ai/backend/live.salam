@@ -1,0 +1,400 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ailive
+
+import net.tcp
+import encoding.json
+import encoding.value
+import encoding.encerr
+import sync
+import str
+
+mut HOST := ""
+mut PORT := 4096
+mut AUTH := ""
+mut LOCK := sync.Mutex {}
+mut CV := sync.CondVar {}
+mut CONNECTED := false
+mut GEN := 0 as i64
+mut TRACKED := HashMap {} as HashMap<str, str>
+mut ORDER := HashMap {} as HashMap<str, str>
+mut PHASE := HashMap {} as HashMap<str, str>
+mut IDLE := HashMap {} as HashMap<str, str>
+mut FAILED := HashMap {} as HashMap<str, str>
+mut PART_KIND := HashMap {} as HashMap<str, str>
+mut PART_TEXT := HashMap {} as HashMap<str, str>
+mut PART_SID := HashMap {} as HashMap<str, str>
+mut MSG_ROLE := HashMap {} as HashMap<str, str>
+mut PENDING := HashMap {} as HashMap<str, str>
+
+func field(v: value.Value, key: str): value.Value:
+    mut ok := false
+    got := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret got
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func hex_value(s: str): int:
+    mut n := 0
+    mut i := 0
+    digits := "0123456789abcdef"
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower.substr(i, 1)
+        if c == ";":
+            break
+        end
+        d := digits.find(c)
+        if d < 0:
+            ret -1
+        end
+        n = n * 16 + d
+        i += 1
+    end
+    if i == 0:
+        ret -1
+    end
+    ret n
+end
+
+func bump():
+    GEN += 1
+    sync.Broadcast(CV)
+end
+
+func add_part(sid: str, pid: str):
+    order := ORDER.has(sid) ? ORDER.get(sid) : ""
+    if ("\n" + order + "\n").find("\n" + pid + "\n") >= 0:
+        ret
+    end
+    if order.len() == 0:
+        ORDER.put(sid, pid)
+    else:
+        ORDER.put(sid, order + "\n" + pid)
+    end
+end
+
+func on_part(p: value.Value):
+    pid := text_of(p, "id")
+    sid := text_of(p, "sessionID")
+    kind := text_of(p, "type")
+    if pid.len() == 0 or not TRACKED.has(sid):
+        ret
+    end
+    PART_KIND.put(pid, kind)
+    PART_SID.put(pid, sid)
+    mid := text_of(p, "messageID")
+    if MSG_ROLE.has(mid) and MSG_ROLE.get(mid) == "user":
+        ret
+    end
+    waiting := PENDING.has(pid) ? PENDING.get(pid) : ""
+    _p := PENDING.remove(pid)
+    if kind == "text":
+        add_part(sid, pid)
+        full := text_of(p, "text")
+        mut old := PART_TEXT.has(pid) ? PART_TEXT.get(pid) : ""
+        if waiting.len() > 0:
+            old = old + waiting
+            PART_TEXT.put(pid, old)
+        end
+        if full.len() >= old.len():
+            PART_TEXT.put(pid, full)
+        end
+        PHASE.put(sid, "writing")
+    else kind == "reasoning":
+        if PHASE.has(sid) and PHASE.get(sid) != "writing":
+            PHASE.put(sid, "thinking")
+        end
+    else kind == "tool":
+        status := text_of(field(p, "state"), "status")
+        if status == "running" or status == "pending":
+            PHASE.put(sid, "searching")
+        else PHASE.has(sid) and PHASE.get(sid) == "searching":
+            PHASE.put(sid, "thinking")
+        end
+    end
+    bump()
+end
+
+func on_delta(props: value.Value):
+    sid := text_of(props, "sessionID")
+    pid := text_of(props, "partID")
+    if not TRACKED.has(sid) or text_of(props, "field") != "text":
+        ret
+    end
+    mid := text_of(props, "messageID")
+    if MSG_ROLE.has(mid) and MSG_ROLE.get(mid) == "user":
+        ret
+    end
+    if not PART_KIND.has(pid):
+        held := PENDING.has(pid) ? PENDING.get(pid) : ""
+        PENDING.put(pid, held + text_of(props, "delta"))
+        ret
+    end
+    if PART_KIND.get(pid) != "text":
+        ret
+    end
+    add_part(sid, pid)
+    old := PART_TEXT.has(pid) ? PART_TEXT.get(pid) : ""
+    PART_TEXT.put(pid, old + text_of(props, "delta"))
+    PART_SID.put(pid, sid)
+    PHASE.put(sid, "writing")
+    bump()
+end
+
+func on_event(data: str):
+    mut err := encerr.EncodingError {}
+    mut ev := json.Decode(data, err)
+    if not value.IsObject(ev):
+        value.ValueFree(ev)
+        ret
+    end
+    kind := text_of(ev, "type")
+    props := field(ev, "properties")
+    _l := sync.Lock(LOCK)
+    if kind == "message.part.delta":
+        on_delta(props)
+    else kind == "message.part.updated":
+        on_part(field(props, "part"))
+    else kind == "message.updated":
+        info := field(props, "info")
+        sid := text_of(info, "sessionID")
+        if TRACKED.has(sid):
+            MSG_ROLE.put(text_of(info, "id"), text_of(info, "role"))
+            if not value.IsNull(field(info, "error")):
+                FAILED.put(sid, "1")
+                bump()
+            end
+        end
+    else kind == "session.idle":
+        sid := text_of(props, "sessionID")
+        if TRACKED.has(sid):
+            IDLE.put(sid, "1")
+            bump()
+        end
+    else kind == "session.status":
+        sid := text_of(props, "sessionID")
+        state := text_of(field(props, "status"), "type")
+        if TRACKED.has(sid) and state == "idle":
+            IDLE.put(sid, "1")
+            bump()
+        else TRACKED.has(sid) and state == "busy":
+            _i := IDLE.remove(sid)
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    value.ValueFree(ev)
+end
+
+func on_block(block: str):
+    mut data := Vector {} as Vector<str>
+    each line in block.split("\n"):
+        l := str.TrimSuffix(line, "\r")
+        if str.StartsWith(l, "data:"):
+            data.push(str.Trim(l.substr(5, l.len() - 5)))
+        end
+    end
+    if data.len() > 0:
+        on_event(str.Join(data, "\n"))
+    end
+end
+
+func set_connected(v: bool):
+    _l := sync.Lock(LOCK)
+    CONNECTED = v
+    bump()
+    _u := sync.Unlock(LOCK)
+end
+
+func consume(c: tcp.Conn):
+    mut raw := ""
+    mut body := ""
+    mut head_done := false
+    mut chunked := false
+    until true:
+        got := tcp.Read(c, 65536)
+        if got.len() == 0:
+            ret
+        end
+        raw = raw + got
+        if not head_done:
+            he := raw.find("\r\n\r\n")
+            if he < 0:
+                continue
+            end
+            head := str.Lower(raw.substr(0, he))
+            if head.find(" 200") < 0:
+                ret
+            end
+            chunked = head.find("transfer-encoding: chunked") >= 0
+            raw = raw.substr(he + 4, raw.len() - he - 4)
+            head_done = true
+            set_connected(true)
+        end
+        if chunked:
+            until true:
+                le := raw.find("\r\n")
+                if le < 0:
+                    break
+                end
+                size := hex_value(raw.substr(0, le))
+                if size < 0:
+                    ret
+                end
+                if size == 0:
+                    ret
+                end
+                if raw.len() < le + 2 + size + 2:
+                    break
+                end
+                body = body + raw.substr(le + 2, size)
+                raw = raw.substr(le + 2 + size + 2, raw.len() - le - 4 - size)
+            end
+        else:
+            body = body + raw
+            raw = ""
+        end
+        body = str.Replace(body, "\r\n", "\n")
+        until true:
+            be := body.find("\n\n")
+            if be < 0:
+                break
+            end
+            on_block(body.substr(0, be))
+            body = body.substr(be + 2, body.len() - be - 2)
+        end
+    end
+end
+
+func reader():
+    until true:
+        c := tcp.Dial(HOST, PORT)
+        if tcp.ConnOk(c):
+            tcp.SetReadDeadline(c, 45000)
+            req := "GET /event HTTP/1.1\r\nHost: " + HOST + "\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\nUser-Agent: salam-ai\r\nAuthorization: " + AUTH + "\r\n\r\n"
+            if tcp.Write(c, req) > 0:
+                consume(c)
+            end
+            tcp.Close(c)
+        end
+        set_connected(false)
+        sync.SleepMs(1000)
+    end
+end
+
+func forget(sid: str):
+    order := ORDER.has(sid) ? ORDER.get(sid) : ""
+    if order.len() > 0:
+        each pid in order.split("\n"):
+            _a := PART_TEXT.remove(pid)
+            _b := PART_KIND.remove(pid)
+            _c := PART_SID.remove(pid)
+        end
+    end
+    _d := ORDER.remove(sid)
+    _e := PHASE.remove(sid)
+    _f := IDLE.remove(sid)
+    _g := FAILED.remove(sid)
+    if PART_KIND.size() > 20000:
+        PART_KIND = HashMap {} as HashMap<str, str>
+        PART_SID = HashMap {} as HashMap<str, str>
+    end
+    if MSG_ROLE.size() > 20000:
+        MSG_ROLE = HashMap {} as HashMap<str, str>
+    end
+    if PENDING.size() > 2000:
+        PENDING = HashMap {} as HashMap<str, str>
+    end
+end
+
+pub func Start(host: str, port: int, auth: str):
+    HOST = host
+    PORT = port
+    AUTH = auth
+    LOCK = sync.NewMutex()
+    CV = sync.NewCondVar()
+    _t := spawn(reader)
+end
+
+pub func Connected(): bool:
+    _l := sync.Lock(LOCK)
+    v := CONNECTED
+    _u := sync.Unlock(LOCK)
+    ret v
+end
+
+pub func Begin(sid: str):
+    _l := sync.Lock(LOCK)
+    forget(sid)
+    TRACKED.put(sid, "1")
+    PHASE.put(sid, "thinking")
+    bump()
+    _u := sync.Unlock(LOCK)
+end
+
+pub func End(sid: str):
+    _l := sync.Lock(LOCK)
+    forget(sid)
+    _t := TRACKED.remove(sid)
+    bump()
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Gen(): i64:
+    _l := sync.Lock(LOCK)
+    g := GEN
+    _u := sync.Unlock(LOCK)
+    ret g
+end
+
+pub func Wait(seen: i64, ms: int): i64:
+    _l := sync.Lock(LOCK)
+    if GEN == seen:
+        _w := sync.WaitCondTimeout(CV, LOCK, ms as i64)
+    end
+    g := GEN
+    _u := sync.Unlock(LOCK)
+    ret g
+end
+
+pub func Snapshot(sid: str, text &: str, phase &: str, idle &: bool, failed &: bool): bool:
+    _l := sync.Lock(LOCK)
+    tracked := TRACKED.has(sid)
+    mut pieces := Vector {} as Vector<str>
+    if tracked and ORDER.has(sid):
+        each pid in ORDER.get(sid).split("\n"):
+            t := PART_TEXT.has(pid) ? str.Trim(PART_TEXT.get(pid)) : ""
+            if t.len() > 0:
+                pieces.push(t)
+            end
+        end
+    end
+    text = str.Join(pieces, "\n\n")
+    phase = PHASE.has(sid) ? PHASE.get(sid) : "thinking"
+    idle = IDLE.has(sid)
+    failed = FAILED.has(sid)
+    _u := sync.Unlock(LOCK)
+    ret tracked
+end

@@ -22,9 +22,13 @@ import str
 import encoding.json
 import conv
 import crypto
+import net.tcp
+import chan
+import sync
 
 include aistore "store.salam"
 include aiengine "engine.salam"
+include ailive "live.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -32,8 +36,15 @@ const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
+const STREAM_WORKERS := 64
+const STREAM_SECONDS := 900
+const CHECK_SECONDS := 10
 
 mut ORIGINS := ","
+mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
+mut STREAM_SRV := tcp.Server {}
+mut CHECK_LOCK := sync.Mutex {}
+mut CHECKED := HashMap {} as HashMap<str, str>
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -62,10 +73,32 @@ func main:
     if engine_pass.len() > 0:
         engine_auth = "Basic " + encoding.Base64Encode(env_or("AI_ENGINE_USER", "salam") + ":" + engine_pass)
     end
-    aiengine.Configure(str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/"), engine_auth, env_or("AI_ENGINE_AGENT", "salam"))
+    engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
+    aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"))
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
+    end
+    CHECK_LOCK = sync.NewMutex()
+    mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
+    mut engine_port := 80
+    colon := engine_host.find(":")
+    if colon > 0:
+        engine_port = engine_host.substr(colon + 1, engine_host.len() - colon - 1).to_int()
+        engine_host = engine_host.substr(0, colon)
+    end
+    ailive.Start(engine_host, engine_port, engine_auth)
+    stream_port := env_or("AI_STREAM_PORT", "8081").to_int()
+    STREAM_SRV = tcp.Bind(stream_port)
+    if tcp.Ok(STREAM_SRV):
+        STREAM_JOBS.init(256)
+        repeat STREAM_WORKERS:
+            _w := spawn(stream_worker)
+        end
+        _a := spawn(stream_acceptor)
+        println "salam-ai streaming on port", stream_port
+    else:
+        println "cannot listen for streams on port", stream_port
     end
     port := env_or("AI_PORT", "8080").to_int()
     mut r := router.NewRouter()
@@ -160,7 +193,10 @@ func bearer(ctx: i64): str:
 end
 
 func current_user(ctx: i64): i64:
-    token := bearer(ctx)
+    ret user_from_token(bearer(ctx))
+end
+
+func user_from_token(token: str): i64:
     if token.len() < 20:
         ret 0
     end
@@ -408,7 +444,21 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
         r.failed = true
         r.done = true
     else:
-        r = aiengine.Poll(sid)
+        mut text := ""
+        mut phase := ""
+        mut idle := false
+        mut failed := false
+        tracked := ailive.Snapshot(sid, text, phase, idle, failed)
+        if tracked and ailive.Connected() and not idle and not failed and not check_due(sid):
+            r.text = text
+            r.phase = phase
+        else:
+            r = aiengine.Poll(sid)
+            if not r.done and tracked and text.len() > r.text.len():
+                r.text = text
+                r.phase = phase
+            end
+        end
     end
     if not r.done and aistore.Now() - created > PENDING_SECONDS:
         aiengine.Abort(sid)
@@ -427,8 +477,32 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
         aistore.Unlock()
         r.text = body
         r.failed = status == "error"
+        if sid.len() > 0:
+            ailive.End(sid)
+            forget_check(sid)
+        end
     end
     ret r
+end
+
+func check_due(sid: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    t := aistore.Now()
+    mut due := false
+    if not CHECKED.has(sid):
+        CHECKED.put(sid, i64s(t))
+    else t - (CHECKED.get(sid).to_int() as i64) >= CHECK_SECONDS:
+        CHECKED.put(sid, i64s(t))
+        due = true
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+    ret due
+end
+
+func forget_check(sid: str):
+    _l := sync.Lock(CHECK_LOCK)
+    _r := CHECKED.remove(sid)
+    _u := sync.Unlock(CHECK_LOCK)
 end
 
 func get_chat(ctx: i64):
@@ -553,7 +627,10 @@ func send_message(ctx: i64):
     amid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
     aistore.Unlock()
+    ailive.Begin(sid)
+    forget_check(sid)
     if not aiengine.Send(sid, text):
+        ailive.End(sid)
         aistore.Lock()
         _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", amid))
         aistore.Unlock()
@@ -638,5 +715,185 @@ func stop_message(ctx: i64):
     aistore.Lock()
     _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done' WHERE chat_id = ?2 AND status = 'pending'", two(body, id))
     aistore.Unlock()
+    if sid.len() > 0:
+        ailive.End(sid)
+        forget_check(sid)
+    end
     reply(ctx, 200, `{"ok": true, "body": ` + json.Str(body) + "}")
+end
+
+func cors_lines(origin: str): str:
+    mut h := "Vary: Origin\r\n"
+    if allowed_origin(origin):
+        h = h + "Access-Control-Allow-Origin: " + origin + "\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Max-Age: 86400\r\n"
+    end
+    ret h
+end
+
+func stream_plain(c: tcp.Conn, status: str, origin: str, body: str):
+    _w := tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n" + body)
+end
+
+func stream_error(c: tcp.Conn, status: str, origin: str, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    stream_plain(c, status, origin, json.Object(m))
+end
+
+func send_event(c: tcp.Conn, name: str, data: str): bool:
+    ret tcp.Write(c, "event: " + name + "\ndata: " + data + "\n\n") > 0
+end
+
+func text_event(t: str): str:
+    ret "{" + json.Member("t", t) + "}"
+end
+
+func serve_stream(c: tcp.Conn):
+    tcp.SetReadDeadline(c, 10000)
+    mut req := ""
+    until req.find("\r\n\r\n") < 0:
+        got := tcp.Read(c, 8192)
+        if got.len() == 0 or req.len() > 32768:
+            ret
+        end
+        req = req + got
+    end
+    lines := req.substr(0, req.find("\r\n\r\n")).split("\n")
+    first := str.Trim(lines.get(0)).split(" ")
+    if first.len() < 2:
+        ret
+    end
+    method := first.get(0)
+    mut path := first.get(1)
+    mut origin := ""
+    mut auth := ""
+    each line in lines:
+        l := str.Trim(line)
+        lower := str.Lower(l)
+        if str.StartsWith(lower, "origin:"):
+            origin = str.Trim(l.substr(7, l.len() - 7))
+        else str.StartsWith(lower, "authorization:"):
+            auth = str.Trim(l.substr(14, l.len() - 14))
+        end
+    end
+    if method == "OPTIONS":
+        _w := tcp.Write(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n")
+        ret
+    end
+    q := path.find("?")
+    if q >= 0:
+        path = path.substr(0, q)
+    end
+    seg := path.split("/")
+    if method != "GET" or seg.len() != 6 or seg.get(1) != "chats" or seg.get(3) != "messages" or seg.get(5) != "stream":
+        stream_error(c, "404 Not Found", origin, "not_found", "این مسیر وجود ندارد.")
+        ret
+    end
+    id := seg.get(2)
+    mid := seg.get(4)
+    mut token := ""
+    if str.StartsWith(auth, "Bearer "):
+        token = str.Trim(auth.substr(7, auth.len() - 7))
+    end
+    uid := user_from_token(token)
+    if uid == 0:
+        stream_error(c, "401 Unauthorized", origin, "unauthorized", "لطفا دوباره وارد شوید.")
+        ret
+    end
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        stream_error(c, "404 Not Found", origin, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT body, status, created FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
+    mut found := false
+    mut body := ""
+    mut status := ""
+    mut created := 0 as i64
+    if aistore.Next(rows):
+        found = true
+        body = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if not found:
+        stream_error(c, "404 Not Found", origin, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n"
+    if tcp.Write(c, head + ": stream\n\n") <= 0:
+        ret
+    end
+    sid := str.TrimSuffix(owned, "|")
+    if status != "pending":
+        _d := send_event(c, "done", "{" + json.Member("body", body) + ", " + json.Member("status", status) + "}")
+        ret
+    end
+    mut sent := ""
+    mut phase_sent := ""
+    mut gen := ailive.Gen()
+    start := aistore.Now()
+    until true:
+        r := settle(mid, sid, created)
+        if r.done:
+            final := r.failed ? "error" : "done"
+            _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + "}")
+            ret
+        end
+        mut ok := true
+        if r.text != sent:
+            if str.StartsWith(r.text, sent):
+                ok = send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len())))
+            else:
+                ok = send_event(c, "reset", text_event(r.text))
+            end
+            sent = r.text
+        end
+        if ok and r.phase != phase_sent:
+            ok = send_event(c, "phase", "{" + json.Member("phase", r.phase) + "}")
+            phase_sent = r.phase
+        end
+        if not ok or aistore.Now() - start > STREAM_SECONDS:
+            ret
+        end
+        if ailive.Connected():
+            next := ailive.Wait(gen, 15000)
+            if next == gen:
+                if tcp.Write(c, ": ping\n\n") <= 0:
+                    ret
+                end
+            end
+            gen = next
+            sync.SleepMs(40)
+        else:
+            sync.SleepMs(700)
+        end
+    end
+end
+
+func stream_worker():
+    mut open := true
+    until true:
+        fd := STREAM_JOBS.recv(open)
+        if not open:
+            break
+        end
+        c := tcp.ConnFromFd(fd)
+        serve_stream(c)
+        tcp.Close(c)
+    end
+end
+
+func stream_acceptor():
+    until true:
+        c := tcp.Accept(STREAM_SRV)
+        if tcp.ConnOk(c):
+            STREAM_JOBS.send(c.fd)
+        end
+    end
 end

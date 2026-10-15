@@ -1,0 +1,179 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiengine
+
+import net.http
+import encoding.json
+import encoding.value
+import encoding.encerr
+import str
+
+mut ENGINE_URL := ""
+mut ENGINE_AUTH := ""
+mut ENGINE_AGENT := ""
+
+pub struct Reply:
+    pub text: str = ""
+    pub phase: str = "thinking"
+    pub done: bool = false
+    pub failed: bool = false
+end
+
+func headers(): HashMap<str, str>:
+    mut h := http.NewHeaders()
+    h.insert("Content-Type", "application/json")
+    if ENGINE_AUTH.len() > 0:
+        h.insert("Authorization", ENGINE_AUTH)
+    end
+    ret h
+end
+
+func ok_status(r: http.Response): bool:
+    code := http.Status(r)
+    ret code >= 200 and code < 300
+end
+
+func busy_now(sid: str): bool:
+    r := http.GetWith(ENGINE_URL + "/session/status", headers())
+    if not ok_status(r):
+        ret true
+    end
+    ret json.Has(http.Body(r), sid)
+end
+
+func field(v: value.Value, key: str): value.Value:
+    mut ok := false
+    got := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret got
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func flag(v: value.Value, key: str): bool:
+    f := field(v, key)
+    ret value.IsBool(f) and value.AsBool(f)
+end
+
+pub func Configure(url: str, auth: str, agent: str):
+    ENGINE_URL = url
+    ENGINE_AUTH = auth
+    ENGINE_AGENT = agent
+end
+
+pub func NewSession(title: str): str:
+    r := http.PostWith(ENGINE_URL + "/session", `{"title": ` + json.Str(title) + "}", headers())
+    if not ok_status(r):
+        ret ""
+    end
+    ret json.Get(http.Body(r), "id")
+end
+
+pub func Send(sid: str, text: str): bool:
+    body := `{"agent": ` + json.Str(ENGINE_AGENT) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
+    ret ok_status(http.PostWith(ENGINE_URL + "/session/" + sid + "/prompt_async", body, headers()))
+end
+
+pub func Abort(sid: str):
+    _r := http.PostWith(ENGINE_URL + "/session/" + sid + "/abort", "{}", headers())
+end
+
+pub func Delete(sid: str):
+    _r := http.DeleteWith(ENGINE_URL + "/session/" + sid, headers())
+end
+
+pub func Poll(sid: str): Reply:
+    mut out := Reply {}
+    busy := busy_now(sid)
+    r := http.GetWith(ENGINE_URL + "/session/" + sid + "/message", headers())
+    if not ok_status(r):
+        out.failed = not busy
+        out.done = out.failed
+        ret out
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(http.Body(r), err)
+    if not value.IsArray(list):
+        out.failed = true
+        out.done = true
+        ret out
+    end
+    n := value.ArrayLen(list)
+    mut start := 0
+    repeat n in i:
+        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user":
+            start = i + 1
+        end
+    end
+    mut pieces := Vector {} as Vector<str>
+    mut last_finish := ""
+    mut last_done := false
+    mut searching := false
+    mut errored := false
+    mut k := start
+    until k < n:
+        m := value.ArrayGet(list, k)
+        info := field(m, "info")
+        if text_of(info, "role") == "assistant":
+            if not value.IsNull(field(info, "error")):
+                errored = true
+            end
+            last_finish = text_of(info, "finish")
+            last_done = not value.IsNull(field(field(info, "time"), "completed"))
+            searching = false
+            parts := field(m, "parts")
+            if value.IsArray(parts):
+                repeat value.ArrayLen(parts) in j:
+                    p := value.ArrayGet(parts, j)
+                    kind := text_of(p, "type")
+                    if kind == "text" and not flag(p, "synthetic"):
+                        t := str.Trim(text_of(p, "text"))
+                        if t.len() > 0:
+                            pieces.push(t)
+                        end
+                    else kind == "tool":
+                        status := text_of(field(p, "state"), "status")
+                        if status == "running" or status == "pending":
+                            searching = true
+                        end
+                    end
+                end
+            end
+        end
+        k += 1
+    end
+    value.ValueFree(list)
+    out.text = str.Join(pieces, "\n\n")
+    if errored and not busy:
+        out.failed = true
+        out.done = true
+        ret out
+    end
+    out.done = not busy and last_done and last_finish != "tool-calls"
+    if searching:
+        out.phase = "searching"
+    else out.text.len() > 0:
+        out.phase = "writing"
+    end
+    ret out
+end

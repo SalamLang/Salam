@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setToken, type Chat, type Message, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook } from "./icons";
@@ -39,6 +39,7 @@ export function App() {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const pollTimer = useRef<number | null>(null);
+  const streamCtrl = useRef<AbortController | null>(null);
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
 
@@ -77,6 +78,8 @@ export function App() {
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
     pollTimer.current = null;
+    streamCtrl.current?.abort();
+    streamCtrl.current = null;
   };
 
   const poll = useCallback(
@@ -88,15 +91,49 @@ export function App() {
           const r = await api.poll(chatId, mid);
           if (activeRef.current !== chatId) return;
           setMessages((ms) => ms.map((m) => (m.id === mid ? { ...m, body: r.body, status: r.status, phase: r.phase } : m)));
-          if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 600);
+          if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
           pollTimer.current = window.setTimeout(tick, 2000);
         }
       };
-      pollTimer.current = window.setTimeout(tick, 400);
+      pollTimer.current = window.setTimeout(tick, 300);
     },
     [],
+  );
+
+  const follow = useCallback(
+    (chatId: string, mid: number) => {
+      stopPolling();
+      const ctrl = new AbortController();
+      streamCtrl.current = ctrl;
+      const update = (fn: (m: Message) => Message) => {
+        if (ctrl.signal.aborted || activeRef.current !== chatId) return;
+        setMessages((ms) => ms.map((m) => (m.id === mid ? fn(m) : m)));
+      };
+      let finished = false;
+      streamMessage(
+        chatId,
+        mid,
+        {
+          delta: (t) => update((m) => ({ ...m, body: m.body + t, phase: "writing" })),
+          reset: (t) => update((m) => ({ ...m, body: t, phase: "writing" })),
+          phase: (p) => update((m) => ({ ...m, phase: p })),
+          done: (body, status) => {
+            finished = true;
+            update((m) => ({ ...m, body, status, phase: "done" }));
+          },
+        },
+        ctrl.signal,
+      )
+        .then((ok) => {
+          if (!ok && !finished && !ctrl.signal.aborted) poll(chatId, mid);
+        })
+        .catch(() => {
+          if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
+        });
+    },
+    [poll],
   );
 
   const openChat = useCallback(
@@ -116,7 +153,7 @@ export function App() {
         if (activeRef.current !== id) return;
         setMessages(r.messages);
         const pending = r.messages.find((m) => m.status === "pending");
-        if (pending) poll(id, pending.id);
+        if (pending) follow(id, pending.id);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           notify("این گفت‌وگو پیدا نشد.");
@@ -128,7 +165,7 @@ export function App() {
         setLoadingChat(false);
       }
     },
-    [notify, poll],
+    [notify, follow],
   );
 
   useEffect(() => {
@@ -174,7 +211,7 @@ export function App() {
         const rest = cs.filter((c) => c.id !== id);
         return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
       });
-      poll(id, r.assistant.id);
+      follow(id, r.assistant.id);
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));
       notify(e instanceof ApiError ? e.message : "فرستادن پیام ناموفق بود.");

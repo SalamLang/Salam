@@ -1,5 +1,3 @@
-/// <reference types="@rsbuild/core/types" />
-
 interface ImportMetaEnv {
   readonly PUBLIC_API_URL?: string;
 }

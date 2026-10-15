@@ -25,6 +25,7 @@ include mcprpc "mcp_rpc.salam"
 include mcptool "mcp_tools.salam"
 include mcpdoc "mcp_docs.salam"
 include mcpout "mcp_result.salam"
+include mcpexec "mcp_exec.salam"
 
 func _schema(raw: str): value.Value:
     mut e := encerr.EncodingError {}
@@ -43,6 +44,10 @@ func _tool(list &: value.Value, name: str, title: str, desc: str, schema: str):
 end
 
 func _path_schema(extra: str): str:
+    if mcpexec.Hosted():
+        src := "{\"type\":\"object\",\"properties\":{\"source\":{\"type\":\"string\",\"description\":\"Full text of a Salam program. The server compiles it as main.salam in a private scratch directory.\"}"
+        ret src.concat(extra).concat("},\"required\":[\"source\"],\"additionalProperties\":false}")
+    end
     base := "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .salam file or directory, relative to the workspace root or absolute inside it.\"}"
     ret base.concat(extra).concat("},\"required\":[\"path\"],\"additionalProperties\":false}")
 end
@@ -53,89 +58,137 @@ end
 
 func _register_compiler(list &: value.Value):
     _tool(
-        list, "salam_check", "Check Salam source", "Fastest correctness check: lexes, parses and type-checks a .salam file without codegen or linking, and returns exact diagnostics (code, message, line, column). Call this after every edit to Salam source, before trying to build or run. It does not run the C backend, so a small class of errors (notably a bare 'ret' in main) passes here and still fails salam_build - if a check passes but a build fails, that is why.", _path_schema("")
+        list, "salam_check", "Check Salam source",
+        "Fastest correctness check: lexes, parses and type-checks a .salam file without codegen or linking, and returns exact diagnostics (code, message, line, column). Call this after every edit to Salam source, before trying to build or run. It does not run the C backend, so a small class of errors (notably a bare 'ret' in main) passes here and still fails salam_build - if a check passes but a build fails, that is why.",
+        _path_schema("")
     )
+    if not mcpexec.Hosted():
+        _tool(
+            list, "salam_build", "Build Salam source",
+            "Full compile to a native executable, including codegen and linking. Use when a check passes but you need to confirm the whole pipeline works, or to test a specific backend or cross-compile target. The artifact is written to a temp path and discarded.",
+            _path_schema(",\"backend\":{\"type\":\"string\",\"enum\":[\"llvm\",\"c\"],\"description\":\"Code generator. Defaults to the compiler's own default.\"},\"release\":{\"type\":\"boolean\",\"description\":\"Strip bounds and safety checks.\"},\"target\":{\"type\":\"string\",\"description\":\"Cross-compile target triple, e.g. x86_64-w64-windows-gnu.\"}")
+        )
+        _tool(
+            list, "salam_run", "Build and run",
+            "Compiles and executes a Salam program, returning its stdout, stderr and exit code. Use to verify behaviour, not just compilation.",
+            _path_schema("")
+        )
+        _tool(
+            list, "salam_exec", "Interpret without a C toolchain",
+            "Runs a program through the tree-walking interpreter, skipping the C toolchain entirely. Faster to start than salam_run. Do NOT trust it for unsigned (u32/u64) arithmetic, bit manipulation or crypto - the interpreter is known to miscompute those; use salam_run for that code.",
+            _path_schema("")
+        )
+    end
     _tool(
-        list, "salam_build", "Build Salam source", "Full compile to a native executable, including codegen and linking. Use when a check passes but you need to confirm the whole pipeline works, or to test a specific backend or cross-compile target. The artifact is written to a temp path and discarded.", _path_schema(",\"backend\":{\"type\":\"string\",\"enum\":[\"llvm\",\"c\"],\"description\":\"Code generator. Defaults to the compiler's own default.\"},\"release\":{\"type\":\"boolean\",\"description\":\"Strip bounds and safety checks.\"},\"target\":{\"type\":\"string\",\"description\":\"Cross-compile target triple, e.g. x86_64-w64-windows-gnu.\"}")
-    )
-    _tool(
-        list, "salam_run", "Build and run", "Compiles and executes a Salam program, returning its stdout, stderr and exit code. Use to verify behaviour, not just compilation.", _path_schema("")
-    )
-    _tool(
-        list, "salam_exec", "Interpret without a C toolchain", "Runs a program through the tree-walking interpreter, skipping the C toolchain entirely. Faster to start than salam_run. Do NOT trust it for unsigned (u32/u64) arithmetic, bit manipulation or crypto - the interpreter is known to miscompute those; use salam_run for that code.", _path_schema("")
-    )
-    _tool(
-        list, "salam_format", "Check formatting", "Reports whether a file or directory matches Salam's canonical formatting. Read-only: it never rewrites the user's files.", _path_schema("")
+        list, "salam_format", "Check formatting",
+        "Reports whether a file or directory matches Salam's canonical formatting. Read-only: it never rewrites the user's files.",
+        _path_schema("")
     )
 end
 
 func _register_inspect(list &: value.Value):
     _tool(
-        list, "salam_inspect", "Dump tokens, AST or symbols", "Dumps the compiler's own view of a file as XML. Use when you need to understand how Salam actually parsed something, or to enumerate the symbols a file defines.", _path_schema(",\"emit\":{\"type\":\"string\",\"enum\":[\"tokens\",\"ast\",\"symbols\"],\"description\":\"Which stage to dump. Defaults to symbols.\"}")
+        list, "salam_inspect", "Dump tokens, AST or symbols",
+        "Dumps the compiler's own view of a file as XML. Use when you need to understand how Salam actually parsed something, or to enumerate the symbols a file defines.",
+        _path_schema(",\"emit\":{\"type\":\"string\",\"enum\":[\"tokens\",\"ast\",\"symbols\"],\"description\":\"Which stage to dump. Defaults to symbols.\"}")
     )
     _tool(
-        list, "salam_llvm_ir", "Emit LLVM IR", "Emits textual LLVM IR for a file. Use for codegen or optimisation questions, or to compare backends.", _path_schema(",\"target\":{\"type\":\"string\",\"description\":\"Optional cross-compile target triple.\"}")
+        list, "salam_llvm_ir", "Emit LLVM IR",
+        "Emits textual LLVM IR for a file. Use for codegen or optimisation questions, or to compare backends.",
+        _path_schema(",\"target\":{\"type\":\"string\",\"description\":\"Optional cross-compile target triple.\"}")
     )
     _tool(
-        list, "salam_js", "Compile to JavaScript", "Compiles a Salam program to browser-ready JavaScript. Use for web or extension targets.", _path_schema("")
+        list, "salam_js", "Compile to JavaScript",
+        "Compiles a Salam program to browser-ready JavaScript. Use for web or extension targets.",
+        _path_schema("")
     )
     _tool(
-        list, "salam_version", "Compiler version", "Reports the version, git commit and build date of the salam compiler this server drives. Call once when you need to know what you are targeting.", _no_args()
+        list, "salam_version", "Compiler version",
+        "Reports the version, git commit and build date of the salam compiler this server drives. Call once when you need to know what you are targeting.",
+        _no_args()
     )
 end
 
 func _register_knowledge(list &: value.Value):
     _tool(
-        list, "salam_stdlib_packages", "List stdlib packages", "Lists every importable std package in this checkout, nested ones under the dotted name an import line uses - 'encoding.json', 'net.http'. Call this before writing imports so you use packages that actually exist.", _no_args()
+        list, "salam_stdlib_packages", "List stdlib packages",
+        "Lists every importable std package in this checkout, nested ones under the dotted name an import line uses - 'encoding.json', 'net.http'. Call this before writing imports so you use packages that actually exist.",
+        _no_args()
     )
     _tool(
-        list, "salam_stdlib_symbols", "List a package's public API", "Lists the public declarations (func, struct, enum, const, type) of one std package, straight from its source. ALWAYS call this before using an unfamiliar std package - guessing stdlib function names is the most common cause of invalid Salam.", "{\"type\":\"object\",\"properties\":{\"package\":{\"type\":\"string\",\"description\":\"Package name as an import line spells it, e.g. 'str', 'encoding.json', 'os.shell'.\"},\"query\":{\"type\":\"string\",\"description\":\"Optional case-insensitive filter on the declaration line.\"}},\"required\":[\"package\"],\"additionalProperties\":false}"
+        list, "salam_stdlib_symbols", "List a package's public API",
+        "Lists the public declarations (func, struct, enum, const, type) of one std package, straight from its source. ALWAYS call this before using an unfamiliar std package - guessing stdlib function names is the most common cause of invalid Salam.",
+        "{\"type\":\"object\",\"properties\":{\"package\":{\"type\":\"string\",\"description\":\"Package name as an import line spells it, e.g. 'str', 'encoding.json', 'os.shell'.\"},\"query\":{\"type\":\"string\",\"description\":\"Optional case-insensitive filter on the declaration line.\"}},\"required\":[\"package\"],\"additionalProperties\":false}"
     )
     _tool(
-        list, "salam_find_examples", "Search working example code", "Searches the shipped test corpus - the largest body of known-good Salam in the repo - for lines matching a query. Use to find a real, compiling usage of a feature before writing your own.", "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Case-insensitive substring, e.g. 'HashMap' or 'defer'.\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum files to return (default 20).\"}},\"required\":[\"query\"],\"additionalProperties\":false}"
+        list, "salam_find_examples", "Search working example code",
+        "Searches the shipped test corpus - the largest body of known-good Salam in the repo - for lines matching a query. Use to find a real, compiling usage of a feature before writing your own.",
+        "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Case-insensitive substring, e.g. 'HashMap' or 'defer'.\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum files to return (default 20).\"}},\"required\":[\"query\"],\"additionalProperties\":false}"
     )
     _tool(
-        list, "salam_read_source", "Read a workspace file", "Reads a line-numbered slice of a file in the Salam checkout, for looking at real stdlib or test source.", "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path relative to the workspace root, or absolute inside it.\"},\"start\":{\"type\":\"integer\",\"description\":\"1-based first line (default 1).\"},\"count\":{\"type\":\"integer\",\"description\":\"How many lines (default 200).\"}},\"required\":[\"path\"],\"additionalProperties\":false}"
+        list, "salam_read_source", "Read a workspace file",
+        "Reads a line-numbered slice of a file in the Salam checkout, for looking at real stdlib or test source.",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path relative to the workspace root, or absolute inside it.\"},\"start\":{\"type\":\"integer\",\"description\":\"1-based first line (default 1).\"},\"count\":{\"type\":\"integer\",\"description\":\"How many lines (default 200).\"}},\"required\":[\"path\"],\"additionalProperties\":false}"
     )
     _tool(
-        list, "salam_keywords", "English/Persian keyword table", "Returns Salam's keyword table in both source languages, parsed from the compiler's own language pack. Use when reading or writing Salam written in Persian.", _no_args()
+        list, "salam_keywords", "English/Persian keyword table",
+        "Returns Salam's keyword table in both source languages, parsed from the compiler's own language pack. Use when reading or writing Salam written in Persian.",
+        _no_args()
     )
+end
+
+func _target(p: value.Value): mcptool.Target:
+    if mcpexec.Hosted(): ret mcptool.FromSource(mcprpc.ParamStr(p, "source", "")) end
+    ret mcptool.FromPath(mcprpc.ParamStr(p, "path", ""))
+end
+
+func _on_target(name: str, t: mcptool.Target, p: value.Value): mcpout.ToolResult:
+    switch name:
+        "salam_check":
+            ret mcptool.Check(t)
+        end
+        "salam_build":
+            ret mcptool.Build(t, mcprpc.ParamStr(p, "backend", ""), mcprpc.ParamBool(p, "release", false), mcprpc.ParamStr(p, "target", ""))
+        end
+        "salam_run":
+            ret mcptool.Run(t)
+        end
+        "salam_exec":
+            ret mcptool.Exec(t)
+        end
+        "salam_format":
+            ret mcptool.Format(t)
+        end
+        "salam_inspect":
+            ret mcptool.Inspect(t, mcprpc.ParamStr(p, "emit", "symbols"))
+        end
+        "salam_llvm_ir":
+            ret mcptool.LlvmIr(t, mcprpc.ParamStr(p, "target", ""))
+        end
+    end
+    ret mcptool.Js(t)
+end
+
+func _takes_target(name: str): bool:
+    switch name:
+        "salam_check", "salam_build", "salam_run", "salam_exec", "salam_format", "salam_inspect", "salam_llvm_ir", "salam_js":
+            ret true
+        end
+    end
+    ret false
 end
 
 func _call_compiler(name: str, p: value.Value, handled &: bool): mcpout.ToolResult:
     handled = true
-    path := mcprpc.ParamStr(p, "path", "")
-    switch name:
-        "salam_check":
-            ret mcptool.Check(path)
-        end
-        "salam_build":
-            ret mcptool.Build(path, mcprpc.ParamStr(p, "backend", ""), mcprpc.ParamBool(p, "release", false), mcprpc.ParamStr(p, "target", ""))
-        end
-        "salam_run":
-            ret mcptool.Run(path)
-        end
-        "salam_exec":
-            ret mcptool.Exec(path)
-        end
-        "salam_format":
-            ret mcptool.Format(path)
-        end
-        "salam_inspect":
-            ret mcptool.Inspect(path, mcprpc.ParamStr(p, "emit", "symbols"))
-        end
-        "salam_llvm_ir":
-            ret mcptool.LlvmIr(path, mcprpc.ParamStr(p, "target", ""))
-        end
-        "salam_js":
-            ret mcptool.Js(path)
-        end
-        "salam_version":
-            ret mcptool.Version()
-        end
+    if name == "salam_version": ret mcptool.Version() end
+    if not _takes_target(name):
+        handled = false
+        ret mcpout.Text("")
     end
-    handled = false
-    ret mcpout.Text("")
+    t := _target(p)
+    r := _on_target(name, t, p)
+    mcptool.Release(t)
+    ret r
 end
 
 func _call_knowledge(name: str, p: value.Value, handled &: bool): mcpout.ToolResult:

@@ -40,7 +40,7 @@ func _cors(ctx: i64):
         http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
     end
     http.Ctx_set_header(ctx, "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-    http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID")
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Method, Mcp-Name, MCP-Protocol-Version")
     http.Ctx_set_header(ctx, "Access-Control-Expose-Headers", "Mcp-Session-Id")
     http.Ctx_set_header(ctx, "Access-Control-Max-Age", "86400")
     http.Ctx_set_header(ctx, "X-Content-Type-Options", "nosniff")
@@ -56,6 +56,27 @@ func _rpc_error(ctx: i64, status: int, code: int, message: str):
     http.Ctx_set_header(ctx, "Cache-Control", "no-store")
     http.Ctx_status(ctx, status)
     http.Ctx_json(ctx, mcprpc.ErrorMessage("null", code, message))
+end
+
+func _named(req: mcprpc.Request): str:
+    switch req.method:
+        "tools/call", "prompts/get":
+            ret mcprpc.ParamStr(req.params, "name", "")
+        end
+        "resources/read":
+            ret mcprpc.ParamStr(req.params, "uri", "")
+        end
+    end
+    ret ""
+end
+
+func _headers_match(ctx: i64, req: mcprpc.Request): bool:
+    if req.bad_json: ret true end
+    method := http.Ctx_header(ctx, "Mcp-Method")
+    if method.len() > 0 and method != req.method: ret false end
+    name := http.Ctx_header(ctx, "Mcp-Name")
+    if name.len() > 0 and name != _named(req): ret false end
+    ret true
 end
 
 func _post(ctx: i64):
@@ -75,6 +96,12 @@ func _post(ctx: i64):
         ret
     end
     req := mcprpc.Parse(http.Ctx_body(ctx))
+    if not _headers_match(ctx, req):
+        http.Ctx_set_header(ctx, "Cache-Control", "no-store")
+        http.Ctx_status(ctx, 400)
+        http.Ctx_json(ctx, mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrHeaderMismatch, "Mcp-Method or Mcp-Name header does not match the request body"))
+        ret
+    end
     mut legacy := not req.has_proto
     reply := mcpsrv.Dispatch(req, legacy)
     http.Ctx_set_header(ctx, "Cache-Control", "no-store")

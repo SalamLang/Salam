@@ -569,6 +569,19 @@ async function testHttp() {
     const names = list.result.tools.map((t) => t.name);
     check("modern requests over HTTP carry resultType", list.result.resultType === "complete");
     check(
+      "modern list results are cacheable",
+      typeof list.result.ttlMs === "number" &&
+        ["public", "private"].includes(list.result.cacheScope),
+    );
+    check(
+      "modern results name the server in _meta",
+      list.result._meta?.["io.modelcontextprotocol/serverInfo"]?.name === "salam-mcp",
+    );
+    check(
+      "legacy results carry no cache fields",
+      initBody.result?.ttlMs === undefined,
+    );
+    check(
       "hosted mode offers no tool that runs code",
       !names.includes("salam_run") &&
         !names.includes("salam_exec") &&
@@ -629,6 +642,24 @@ async function testHttp() {
         )
       ).status === 400,
     );
+    const mismatch = await post(
+      { jsonrpc: "2.0", id: 5, method: "tools/list", params: { _meta: meta } },
+      { "Mcp-Method": "tools/call" },
+    );
+    check(
+      "a mismatched Mcp-Method header is 400 with -32020",
+      mismatch.status === 400 && (await mismatch.json()).error?.code === -32020,
+    );
+    const matched = await post(
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: { _meta: meta, name: "salam_version", arguments: {} },
+      },
+      { "Mcp-Method": "tools/call", "Mcp-Name": "salam_version" },
+    );
+    check("matching Mcp-Method and Mcp-Name headers pass", matched.status === 200);
     check(
       "a non-JSON body is 415",
       (await post("{}", { "Content-Type": "text/plain" })).status === 415,
@@ -637,7 +668,7 @@ async function testHttp() {
     check(
       "CORS preflight allows MCP headers",
       pre.status === 204 &&
-        (pre.headers.get("access-control-allow-headers") ?? "").includes("MCP-Protocol-Version"),
+        (pre.headers.get("access-control-allow-headers") ?? "").includes("Mcp-Method"),
     );
     const home = await fetch(`${base}/`);
     check(

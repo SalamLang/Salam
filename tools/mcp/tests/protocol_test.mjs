@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createServer } from "node:net";
 
 const serverPath = process.argv[2] && resolve(process.argv[2]);
 const repoRoot = resolve(process.argv[3] ?? process.cwd());
@@ -450,6 +451,235 @@ async function testResources() {
   check("missing resource returns -32602", missing.error?.code === -32602);
 }
 
+async function testKeywords() {
+  console.log("keywords");
+  const [reply] = parseLines(
+    (
+      await converse([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { _meta: meta, name: "salam_keywords", arguments: {} },
+        },
+      ])
+    ).raw,
+  );
+  const rows = reply.result.structuredContent.map((r) => r.split("\t"));
+  const persian = (en) => rows.find((r) => r[0] === en)?.[1];
+  check("func pairs with its Persian spelling", persian("func") === "تابع");
+  check("ret pairs with its Persian spelling", persian("ret") === "برگشت");
+  check("if pairs with its Persian spelling", persian("if") === "اگر");
+}
+
+function freePort() {
+  return new Promise((resolvePromise, reject) => {
+    const probe = createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolvePromise(port));
+    });
+  });
+}
+
+async function testHttp() {
+  console.log("http transport");
+  const port = await freePort();
+  const child = spawn(serverPath, ["--http"], {
+    env: {
+      ...process.env,
+      SALAM_MCP_ROOT: repoRoot,
+      SALAM_MCP_BIN: compiler,
+      SALAM_MCP_HOST: "127.0.0.1",
+      SALAM_MCP_PORT: String(port),
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    let up = false;
+    for (let i = 0; i < 100 && !up; i += 1) {
+      up = await fetch(`${base}/health`).then(
+        (r) => r.ok,
+        () => false,
+      );
+      if (!up) await new Promise((r) => setTimeout(r, 100));
+    }
+    check("server answers /health", up);
+    if (!up) return;
+
+    const post = (body, headers = {}) =>
+      fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          ...headers,
+        },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+    const call = async (name, args) =>
+      (
+        await (
+          await post({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { _meta: meta, name, arguments: args },
+          })
+        ).json()
+      ).result;
+
+    const init = await post({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1" },
+      },
+    });
+    const initBody = await init.json();
+    check("initialize over POST returns 200 JSON", init.status === 200);
+    check(
+      "initialize over POST negotiates the version",
+      initBody.result?.protocolVersion === "2025-06-18",
+    );
+    check(
+      "legacy requests over HTTP omit resultType",
+      initBody.result?.resultType === undefined,
+    );
+
+    const note = await post({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+    });
+    check("a notification gets 202", note.status === 202);
+
+    const list = await (
+      await post({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+        params: { _meta: meta },
+      })
+    ).json();
+    const names = list.result.tools.map((t) => t.name);
+    check("modern requests over HTTP carry resultType", list.result.resultType === "complete");
+    check(
+      "modern list results are cacheable",
+      typeof list.result.ttlMs === "number" &&
+        ["public", "private"].includes(list.result.cacheScope),
+    );
+    check(
+      "modern results name the server in _meta",
+      list.result._meta?.["io.modelcontextprotocol/serverInfo"]?.name === "salam-mcp",
+    );
+    check(
+      "legacy results carry no cache fields",
+      initBody.result?.ttlMs === undefined,
+    );
+    check(
+      "hosted mode offers no tool that runs code",
+      !names.includes("salam_run") &&
+        !names.includes("salam_exec") &&
+        !names.includes("salam_build"),
+    );
+    const checkTool = list.result.tools.find((t) => t.name === "salam_check");
+    check(
+      "hosted compiler tools take source",
+      checkTool?.inputSchema.required?.[0] === "source",
+    );
+
+    const bad = await call("salam_check", {
+      source: "func main:\n    println missing_name\nend\n",
+    });
+    const diag = bad.structuredContent?.diagnostics?.[0];
+    check("a source check reports diagnostics", bad.isError === true && diag?.line === 2);
+    check("diagnostics name the staged file, not a temp path", diag?.file === "main.salam");
+
+    const good = await call("salam_check", {
+      source: 'func main:\n    println "salam"\nend\n',
+    });
+    check("a clean source passes", good.isError === false);
+
+    const empty = await call("salam_check", { source: "  " });
+    check("an empty source is refused", empty.isError === true);
+
+    const run = await (
+      await post({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { _meta: meta, name: "salam_run", arguments: { source: "x" } },
+      })
+    ).json();
+    check("salam_run is refused in hosted mode", run.error?.code === -32602);
+
+    const together = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        call("salam_check", { source: `func main:\n    println ${i}\nend\n` }),
+      ),
+    );
+    check(
+      "concurrent checks all succeed",
+      together.every((r) => r.isError === false),
+    );
+
+    check("GET /mcp is 405", (await fetch(`${base}/mcp`)).status === 405);
+    check(
+      "DELETE /mcp is 405",
+      (await fetch(`${base}/mcp`, { method: "DELETE" })).status === 405,
+    );
+    check(
+      "an unknown MCP-Protocol-Version header is 400",
+      (
+        await post(
+          { jsonrpc: "2.0", id: 4, method: "ping" },
+          { "MCP-Protocol-Version": "1900-01-01" },
+        )
+      ).status === 400,
+    );
+    const mismatch = await post(
+      { jsonrpc: "2.0", id: 5, method: "tools/list", params: { _meta: meta } },
+      { "Mcp-Method": "tools/call" },
+    );
+    check(
+      "a mismatched Mcp-Method header is 400 with -32020",
+      mismatch.status === 400 && (await mismatch.json()).error?.code === -32020,
+    );
+    const matched = await post(
+      {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: { _meta: meta, name: "salam_version", arguments: {} },
+      },
+      { "Mcp-Method": "tools/call", "Mcp-Name": "salam_version" },
+    );
+    check("matching Mcp-Method and Mcp-Name headers pass", matched.status === 200);
+    check(
+      "a non-JSON body is 415",
+      (await post("{}", { "Content-Type": "text/plain" })).status === 415,
+    );
+    const pre = await fetch(`${base}/mcp`, { method: "OPTIONS" });
+    check(
+      "CORS preflight allows MCP headers",
+      pre.status === 204 &&
+        (pre.headers.get("access-control-allow-headers") ?? "").includes("Mcp-Method"),
+    );
+    const home = await fetch(`${base}/`);
+    check(
+      "the setup page is served",
+      home.status === 200 && (await home.text()).includes("mcp.salamlang.ir/mcp"),
+    );
+  } finally {
+    child.kill();
+  }
+}
+
 // --- runner ------------------------------------------------------------
 
 const suites = [
@@ -459,6 +689,8 @@ const suites = [
   testTools,
   testWorkspace,
   testResources,
+  testKeywords,
+  testHttp,
 ];
 for (const suite of suites) {
   await suite();

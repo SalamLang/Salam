@@ -18,6 +18,7 @@ package mcptool
 
 import str
 import os.temp
+import fs.path
 import fs.file
 import encoding.json
 import encoding.value
@@ -27,8 +28,26 @@ include mcptxt "mcp_text.salam"
 include mcpexec "mcp_exec.salam"
 include mcpout "mcp_result.salam"
 
-func _bad_path(p: str): mcpout.ToolResult:
-    ret mcpout.Failure("Refused path '".concat(p).concat("': paths must be inside the workspace (relative to it, or absolute under it), must not contain '..', and must not contain shell metacharacters."))
+@en "Target"
+pub struct Target:
+    pub ok: bool = false
+    pub full: str = ""
+    pub label: str = ""
+    pub work: str = ""
+    pub problem: str = ""
+end
+
+func _scrub(t: Target, s: str): str:
+    if t.work.len() == 0: ret s end
+    ret str.Replace(s, t.work.concat("/"), "")
+end
+
+func _exec(t: Target, args: Vector<str>): mcpexec.Outcome:
+    if t.work.len() == 0: ret mcpexec.Run(args) end
+    mut r := mcpexec.RunIn(t.work, args)
+    r.out = _scrub(t, r.out)
+    r.err = _scrub(t, r.err)
+    ret r
 end
 
 func _rfind(s: str, ch: str): int:
@@ -175,10 +194,10 @@ func _human(err: str): str:
     ret mcptxt.Join(keep, "\n")
 end
 
-func _base(cmd: str, path: str): Vector<str>:
+func _base(cmd: str, full: str): Vector<str>:
     a := Vector {} as Vector<str>
     a.push(cmd)
-    a.push(path)
+    a.push(full)
     a.push("--error-format=json")
     a.push("--log-level=error")
     ret a
@@ -190,116 +209,140 @@ func _push_backend(a: Vector<str>, backend: str, release: bool, target: str):
     if target.len() > 0: a.push("--target=".concat(target)) end
 end
 
+@en "FromPath"
+@fa "از مسیر"
+pub func FromPath(p: str): Target:
+    full := mcpexec.Resolve(p)
+    if full.len() == 0:
+        ret Target { problem = "Refused path '".concat(p).concat("': paths must be inside the workspace (relative to it, or absolute under it), must not contain '..', and must not contain shell metacharacters.") }
+    end
+    ret Target { ok = true, full = full, label = p }
+end
+
+@en "FromSource"
+@fa "از متن"
+pub func FromSource(source: str): Target:
+    if source.trim().len() == 0:
+        ret Target { problem = "source is empty: pass the full text of a Salam program." }
+    end
+    if source.len() > 262144:
+        ret Target { problem = "source is larger than 256 KB." }
+    end
+    work := mcpexec.Stage(source)
+    if work.len() == 0:
+        ret Target { problem = "could not stage the source on the server." }
+    end
+    ret Target { ok = true, full = path.Join(work, "main.salam"), label = "main.salam", work = work }
+end
+
+@en "Release"
+@fa "رها کن"
+pub func Release(t: Target):
+    mcpexec.Unstage(t.work)
+end
+
 @en "Build"
 @fa "ساخت"
-pub func Build(path: str, backend: str, release: bool, target: str): mcpout.ToolResult:
+pub func Build(t: Target, backend: str, release: bool, target: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
     if backend.len() > 0 and backend != "c" and backend != "llvm":
         ret mcpout.Failure("unknown backend '".concat(backend).concat("': use c or llvm."))
     end
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
     out := temp.File()
-    a := _base("build", full)
+    a := _base("build", t.full)
     a.push("--output=".concat(out))
     _push_backend(a, backend, release, target)
-    r := mcpexec.Run(a)
+    r := _exec(t, a)
     temp.Remove(out)
-    ret _finish("salam build ".concat(path), r, false)
+    ret _finish("salam build ".concat(t.label), r, false)
 end
 
 @en "Check"
 @fa "بررسی"
-pub func Check(path: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
-    a := _base("inspect", full)
+pub func Check(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    a := _base("inspect", t.full)
     a.push("--emit-symbol")
-    r := mcpexec.Run(a)
-    ret _finish("salam check (analyze only) ".concat(path), r, false)
+    r := _exec(t, a)
+    ret _finish("salam check (analyze only) ".concat(t.label), r, false)
 end
 
 @en "Run"
 @fa "اجرا"
-pub func Run(path: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
-    r := mcpexec.Run(_base("run", full))
-    ret _finish("salam run ".concat(path), r, true)
+pub func Run(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    r := _exec(t, _base("run", t.full))
+    ret _finish("salam run ".concat(t.label), r, true)
 end
 
 @en "Exec"
 @fa "تفسیر"
-pub func Exec(path: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
-    r := mcpexec.Run(_base("exec", full))
-    ret _finish("salam exec ".concat(path), r, true)
+pub func Exec(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
+    r := _exec(t, _base("exec", t.full))
+    ret _finish("salam exec ".concat(t.label), r, true)
 end
 
 @en "Format"
 @fa "قالب‌بندی"
-pub func Format(path: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
+pub func Format(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
     a := Vector {} as Vector<str>
     a.push("format")
-    a.push(full)
+    a.push(t.full)
     a.push("--check")
-    r := mcpexec.Run(a)
+    r := _exec(t, a)
     if not r.launched: ret mcpout.Failure(r.reason) end
-    if r.code == 0: ret mcpout.Text("Already formatted: ".concat(path)) end
+    if r.code == 0: ret mcpout.Text("Already formatted: ".concat(t.label)) end
     body := "Needs formatting (run `salam format` to fix):\n\n".concat(mcptxt.HeadLines(r.out.concat(r.err), 60))
     ret mcpout.Failure(body)
 end
 
 @en "Inspect"
 @fa "بازرسی"
-pub func Inspect(path: str, emit: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
+pub func Inspect(t: Target, emit: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
     if emit.len() > 0 and emit != "symbols" and emit != "tokens" and emit != "ast":
         ret mcpout.Failure("unknown emit '".concat(emit).concat("': use tokens, ast or symbols."))
     end
     mut flag := "--emit-symbol"
     if emit == "tokens": flag = "--emit-tokens" end
     if emit == "ast": flag = "--emit-ast" end
-    a := _base("inspect", full)
+    a := _base("inspect", t.full)
     a.push(flag)
-    r := mcpexec.Run(a)
+    r := _exec(t, a)
     if not r.launched: ret mcpout.Failure(r.reason) end
-    if r.code != 0 and r.out.trim().len() == 0: ret _finish("salam inspect ".concat(path), r, false) end
+    if r.code != 0 and r.out.trim().len() == 0: ret _finish("salam inspect ".concat(t.label), r, false) end
     body := mcptxt.Truncate(r.out, 60000)
     ret mcpout.Rich(body, _diag_array(r.err), r.code != 0)
 end
 
 @en "LlvmIr"
 @fa "کد میانی"
-pub func LlvmIr(path: str, target: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
+pub func LlvmIr(t: Target, target: str): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
     out := temp.File()
-    a := _base("llvm", full)
+    a := _base("llvm", t.full)
     a.push("--output=".concat(out))
     if target.len() > 0: a.push("--target=".concat(target)) end
-    r := mcpexec.Run(a)
+    r := _exec(t, a)
     ir := file.ReadText(out)
     temp.Remove(out)
-    if r.code != 0: ret _finish("salam llvm ".concat(path), r, false) end
-    ret mcpout.Text(mcptxt.Truncate(ir, 60000))
+    if r.code != 0: ret _finish("salam llvm ".concat(t.label), r, false) end
+    ret mcpout.Text(mcptxt.Truncate(_scrub(t, ir), 60000))
 end
 
 @en "Js"
 @fa "جاوااسکریپت"
-pub func Js(path: str): mcpout.ToolResult:
-    full := mcpexec.Resolve(path)
-    if full.len() == 0: ret _bad_path(path) end
+pub func Js(t: Target): mcpout.ToolResult:
+    if not t.ok: ret mcpout.Failure(t.problem) end
     out := temp.File().concat(".js")
-    a := _base("js", full)
+    a := _base("js", t.full)
     a.push("--output=".concat(out))
-    r := mcpexec.Run(a)
+    r := _exec(t, a)
     code := file.ReadText(out)
     temp.Remove(out)
-    if r.code != 0: ret _finish("salam js ".concat(path), r, false) end
+    if r.code != 0: ret _finish("salam js ".concat(t.label), r, false) end
     ret mcpout.Text(mcptxt.Truncate(code, 60000))
 end
 

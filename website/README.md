@@ -61,6 +61,14 @@ generator builds the JSON-LD graph (`Organization`, `WebSite`,
 page (`{{faq.html}}`) and its `FAQPage` structured data, so the two never
 disagree. Put a Search Console token in `site.google_verification`.
 
+For AI tools, each language also gets an `llms.txt` (the site description, then
+every page, lesson and std package as a link with its summary, plus links to
+the agent skill, the Claude Code plugin and the MCP server) and an
+`llms-full.txt` with the text of every lesson and std page in Markdown. Their
+headings and descriptions come from the `llms.*` keys, the agent links from
+`link.skill`, `link.claude_plugin` and `link.mcp`. `site.chat_widget`, when
+set, loads that chat support script at the end of every page.
+
 Examples: `examples/name.salam` becomes `{{example.name}}`, a code window with
 the highlighted code and, when `name.out` exists, its output. The highlighter
 takes its word lists from `code.keywords`, `code.types` and `code.builtins`.

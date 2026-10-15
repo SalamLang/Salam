@@ -736,6 +736,215 @@ func write(path: str, data: str, errs &: Vector<str>):
     end
 end
 
+func tag_name(t: str): str:
+    mut stop := t.len()
+    mut k := 0
+    until k < t.len():
+        c := t.substr(k, 1)
+        if c == " " or c == "\n" or c == "\t":
+            stop = k
+            break
+        end
+        k += 1
+    end
+    ret str.TrimSuffix(t.substr(0, stop), "/")
+end
+
+func is_block_tag(name: str): bool:
+    ret " p /p div /div br ul /ul ol /ol table /table /h2 /h3 /h4 /li dl /dl dt dd ".find(" " + name + " ") >= 0
+end
+
+func decode_entities(s: str): str:
+    mut r := str.Replace(s, "&lt;", "<")
+    r = str.Replace(r, "&gt;", ">")
+    r = str.Replace(r, "&quot;", "\"")
+    r = str.Replace(r, "&#39;", "'")
+    r = str.Replace(r, "&nbsp;", " ")
+    r = str.Replace(r, "&#123;", "{")
+    r = str.Replace(r, "&#125;", "}")
+    ret str.Replace(r, "&amp;", "&")
+end
+
+func tidy_lines(s: str): str:
+    mut out := Vector {} as Vector<str>
+    mut in_code := false
+    mut gap := false
+    mut last := ""
+    each raw in s.split("\n"):
+        line := str.TrimRight(raw)
+        t := str.Trim(line)
+        if in_code:
+            out.push(line)
+            if t == "```":
+                in_code = false
+                last = t
+            end
+            continue
+        end
+        if t.len() == 0:
+            gap = out.len() > 0
+            continue
+        end
+        if gap and not (str.StartsWith(t, "|") and str.StartsWith(last, "|")):
+            out.push("")
+        end
+        gap = false
+        out.push(t)
+        last = t
+        if str.StartsWith(t, "```"):
+            in_code = true
+        end
+    end
+    ret str.Join(out, "\n")
+end
+
+func html_to_text(html: str): str:
+    cps := str.CodePoints(html)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut in_pre := false
+    mut in_label := false
+    mut in_out := false
+    mut cells := 0
+    mut head_row := false
+    mut skip := 0
+    mut k := 0
+    until k < cps.len():
+        cp := cps.get(k)
+        if cp != 60:
+            if skip == 0:
+                str.BufAppendCp(b, cp)
+            end
+            k += 1
+            continue
+        end
+        mut j := k + 1
+        until j < cps.len() and cps.get(j) != 62:
+            j += 1
+        end
+        raw := text_of(cps, k + 1, j)
+        name := tag_name(raw)
+        k = j + 1
+        if name == "button" or name == "script" or name == "style":
+            skip += 1
+        else name == "/button" or name == "/script" or name == "/style":
+            if skip > 0:
+                skip -= 1
+            end
+        else skip > 0:
+            continue
+        else name == "span" and raw.find(`class="label"`) >= 0 and not in_pre:
+            in_label = true
+            str.BufAppend(b, "\n\n")
+        else name == "/span" and in_label:
+            in_label = false
+            in_out = true
+            in_pre = true
+            str.BufAppend(b, ":\n\n```text\n")
+        else name == "/div" and in_out:
+            in_out = false
+            in_pre = false
+            str.BufAppend(b, "\n```\n\n")
+        else name == "pre":
+            in_pre = true
+            str.BufAppend(b, "\n\n```salam\n")
+        else name == "/pre":
+            in_pre = false
+            str.BufAppend(b, "\n```\n\n")
+        else in_pre:
+            continue
+        else name == "code" or name == "/code":
+            str.BufAppend(b, "`")
+        else name == "h2":
+            str.BufAppend(b, "\n\n## ")
+        else name == "h3":
+            str.BufAppend(b, "\n\n### ")
+        else name == "h4":
+            str.BufAppend(b, "\n\n#### ")
+        else name == "li":
+            str.BufAppend(b, "\n- ")
+        else name == "tr":
+            cells = 0
+            head_row = false
+            str.BufAppend(b, "\n")
+        else name == "th" or name == "td":
+            cells += 1
+            if name == "th":
+                head_row = true
+            end
+            str.BufAppend(b, "| ")
+        else name == "/td" or name == "/th":
+            str.BufAppend(b, " ")
+        else name == "/tr":
+            str.BufAppend(b, "|\n")
+            if head_row:
+                str.BufAppend(b, "|")
+                repeat cells in _:
+                    str.BufAppend(b, " --- |")
+                end
+                str.BufAppend(b, "\n")
+            end
+        else is_block_tag(name):
+            str.BufAppend(b, "\n")
+        end
+    end
+    ret tidy_lines(decode_entities(str.BufStr(b)))
+end
+
+func title_head(s: str): str:
+    pos := s.find(" | ")
+    ret pos > 0 ? s.substr(0, pos) : s
+end
+
+func llms_link(b &: str.StringBuilder, name: str, url: str, desc: str):
+    str.BufAppend(b, "- [" + name + "](" + url + ")")
+    if desc.len() > 0:
+        str.BufAppend(b, ": " + desc)
+    end
+    str.BufAppend(b, "\n")
+end
+
+func llms_index(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>): str:
+    site_url := ctx_or(ctx, "site.url", "")
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "# " + ctx_or(ctx, "site.name", "Salam") + "\n\n")
+    str.BufAppend(b, "> " + ctx_or(ctx, "site.description", "") + "\n\n")
+    str.BufAppend(b, strip_tags(ctx_or(ctx, "llms.intro", "")) + "\n\n")
+    str.BufAppend(b, "## " + ctx_or(ctx, "llms.pages", "Pages") + "\n\n")
+    each p in pages:
+        if p.slug != "index" and p.slug != "404":
+            llms_link(b, title_head(ctx_or(ctx, p.slug + ".title", p.slug)), site_url + p.url, ctx_or(ctx, p.slug + ".description", ""))
+        end
+    end
+    str.BufAppend(b, "\n## " + ctx_or(ctx, "llms.course", "Course") + "\n\n")
+    each l in lessons:
+        llms_link(b, l.title, site_url + l.url, l.summary)
+    end
+    str.BufAppend(b, "\n## " + ctx_or(ctx, "llms.std", "Standard library") + "\n\n")
+    each p in pkgs:
+        llms_link(b, pkg_label(p), site_url + p.url, p.summary)
+    end
+    str.BufAppend(b, "\n## " + ctx_or(ctx, "llms.agents", "For AI agents") + "\n\n")
+    llms_link(b, ctx_or(ctx, "llms.full", "llms-full.txt"), site_url + "/llms-full.txt", ctx_or(ctx, "llms.full_desc", ""))
+    llms_link(b, ctx_or(ctx, "llms.skill", "Salam skill"), ctx_or(ctx, "link.skill", ""), ctx_or(ctx, "llms.skill_desc", ""))
+    llms_link(b, ctx_or(ctx, "llms.plugin", "Claude Code plugin"), ctx_or(ctx, "link.claude_plugin", ""), ctx_or(ctx, "llms.plugin_desc", ""))
+    llms_link(b, ctx_or(ctx, "llms.mcp", "MCP server"), ctx_or(ctx, "link.mcp", ""), ctx_or(ctx, "llms.mcp_desc", ""))
+    str.BufAppend(b, "\n## Optional\n\n")
+    llms_link(b, ctx_or(ctx, "llms.github", "GitHub"), ctx_or(ctx, "link.github", ""), "")
+    llms_link(b, ctx_or(ctx, "llms.releases", "Releases"), ctx_or(ctx, "link.releases", ""), "")
+    llms_link(b, ctx_or(ctx, "llms.editor", "Online editor"), ctx_or(ctx, "link.editor", ""), "")
+    ret str.BufStr(b)
+end
+
+func llms_section(b &: str.StringBuilder, title: str, url: str, lead: str, body_html: str):
+    str.BufAppend(b, "\n\n---\n\n# " + title + "\n\n" + url + "\n\n")
+    if lead.len() > 0:
+        str.BufAppend(b, html_to_text(lead) + "\n\n")
+    end
+    str.BufAppend(b, html_to_text(body_html) + "\n")
+end
+
 func alias_of(d: ApiDecl, lang: str): str:
     each pair in d.a:
         if pair.len() >= 2 and pair.get(0) == lang:
@@ -1361,6 +1570,9 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         end
         write(target, rebase(html, url_base), errs)
     end
+    mut full := str.NewBuilder()
+    defer str.BufFree(full)
+    str.BufAppend(full, "# " + ctx_or(ctx, "site.name", "Salam") + "\n\n> " + ctx_or(ctx, "site.description", "") + "\n\n" + strip_tags(ctx_or(ctx, "llms.intro", "")) + "\n")
     lesson_tmpl := io.ReadFile(ROOT + "/templates/lesson.html")
     repeat lessons.len() in li:
         l := lessons.get(li)
@@ -1372,6 +1584,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         lc.put("lesson.sidebar", course_sidebar(lc, lessons, li))
         body := render(l.path, lc.get("lesson.body"), lc, errs)
         lc.put("lesson.body_html", body)
+        llms_section(full, l.title, site_url + l.url, ctx_or(lc, "lesson.lead", ""), body)
         lc.put("lesson.toc", body_toc(body))
         lc.put("lesson.prev", li > 0 ? lesson_link(lc, lessons.get(li - 1), "learn.prev_label", "prev") : "")
         lc.put("lesson.next", li + 1 < lessons.len() ? lesson_link(lc, lessons.get(li + 1), "learn.next_label", "next") : "")
@@ -1400,6 +1613,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         body := intro + "\n" + std_api_html(pc, p, api, examples, errs)
         pc.put("active.std", "true")
         pc.put("pkg.body_html", body)
+        llms_section(full, pkg_label(p), site_url + p.url, p.summary, body)
         pc.put("pkg.toc", body_toc(body))
         pc.put("pkg.sidebar", std_sidebar(pc, pkgs, pi))
         pc.put("pkg.import", highlight(ctx_or(pc, "stdref.kw_import", "import") + " " + ctx_or(pc, "pkg.import", p.name), code_classes(pc)))
@@ -1420,6 +1634,8 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     str.BufAppend(sitemap, "</urlset>\n")
     write(out_dir + "/sitemap.xml", str.BufStr(sitemap), errs)
     write(out_dir + "/site.webmanifest", manifest_json(ctx), errs)
+    write(out_dir + "/llms.txt", llms_index(ctx, pages, lessons, pkgs), errs)
+    write(out_dir + "/llms-full.txt", str.BufStr(full), errs)
     write(out_dir + "/robots.txt", "User-agent: *\nAllow: /\nSitemap: " + site_url + "/sitemap.xml\n", errs)
     ret pages.len() + lessons.len() + pkgs.len()
 end

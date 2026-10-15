@@ -6,8 +6,8 @@ Every property also accepts the CSS-wide keywords (`inherit`, `initial`, `unset`
 
 |                                          | count |
 | ---------------------------------------- | ----- |
-| Done, value checked, tested in en and fa | 396   |
-| Total                                    | 396   |
+| Done, value checked, tested in en and fa | 483   |
+| Total                                    | 483   |
 
 Tests: `tests/{en,fa}/layout/style/prop_<name>.salam` checks the generated CSS, `tests/{en,fa}/layout/errors/prop_<name>_bad.salam` checks that a wrong value is error E018.
 
@@ -410,6 +410,94 @@ Tests: `tests/{en,fa}/layout/style/prop_<name>.salam` checks the generated CSS, 
 | `z-index`                       | `z index`                       | ترتیب لایه                       | integer / `auto`                                                                                        | Done   | en, fa: `prop_z_index`                       |              |
 | `zoom`                          | `zoom`                          | بزرگ‌نمایی                       | number / percentage / `normal`                                                                          | Done   | en, fa: `prop_zoom`                          |              |
 
+| `anchor-name` | `anchor name` | نام لنگر | dashed ident list / `none` | Done | en, fa: `prop_anchor_name` | |
+| `anchor-scope` | `anchor scope` | دامنه لنگر | dashed ident list / `all` | Done | en, fa: `prop_anchor_scope` | |
+| `position-anchor` | `position anchor` | لنگر جایگاه | dashed ident / `auto` | Done | en, fa: `prop_position_anchor` | |
+| `position-area` | `position area` | ناحیه جایگاه | up to 2 keywords (`top`, `span-right`, `center`, ...) | Done | en, fa: `prop_position_area` | |
+| `position-try-fallbacks` | `position try fallbacks` | جایگزین های جایگاه | comma list of tactics and/or `position-area` values | Done | en, fa: `prop_position_try_fallbacks` | |
+| `position-try-order` | `position try order` | ترتیب تلاش جایگاه | `normal` / `most-width` / `most-height` / `most-block-size` / `most-inline-size` | Done | en, fa: `prop_position_try_order` | |
+| `position-try` | `position try` | تلاش جایگاه | `position-try-order` then `position-try-fallbacks`, shorthand | Done | en, fa: `prop_position_try` | |
+| `position-visibility` | `position visibility` | پیدایی جایگاه | up to 2 of `always`, `anchors-visible`, `no-overflow` | Done | en, fa: `prop_position_visibility` | |
+| `animation-timeline` | `animation timeline` | خط زمان پویانمایی | comma list of dashed idents, `scroll()`, `view()` / `none`, `auto` | Done | en, fa: `prop_animation_timeline` | |
+| `animation-range` | `animation range` | بازه پویانمایی | comma list of range names with optional length/percentage | Done | en, fa: `prop_animation_range` | |
+| `animation-range-start` | `animation range start` | آغاز بازه پویانمایی | comma list of a range name or length/percentage | Done | en, fa: `prop_animation_range_start` | |
+| `animation-range-end` | `animation range end` | انتهای بازه پویانمایی | comma list of a range name or length/percentage | Done | en, fa: `prop_animation_range_end` | |
+| `scroll-timeline` | `scroll timeline` | خط زمان پیمایش | dashed ident, optional axis, shorthand | Done | en, fa: `prop_scroll_timeline` | |
+| `scroll-timeline-name` | `scroll timeline name` | نام خط زمان پیمایش | comma list of dashed idents / `none` | Done | en, fa: `prop_scroll_timeline_name` | |
+| `scroll-timeline-axis` | `scroll timeline axis` | محور خط زمان پیمایش | comma list of `block` / `inline` / `x` / `y` | Done | en, fa: `prop_scroll_timeline_axis` | |
+| `view-timeline` | `view timeline` | خط زمان دید | dashed ident, optional axis and inset, shorthand | Done | en, fa: `prop_view_timeline` | |
+| `view-timeline-name` | `view timeline name` | نام خط زمان دید | comma list of dashed idents / `none` | Done | en, fa: `prop_view_timeline_name` | |
+| `view-timeline-axis` | `view timeline axis` | محور خط زمان دید | comma list of `block` / `inline` / `x` / `y` | Done | en, fa: `prop_view_timeline_axis` | |
+| `view-timeline-inset` | `view timeline inset` | فرورفتگی خط زمان دید | up to 2 lengths/percentages or `auto` | Done | en, fa: `prop_view_timeline_inset` | |
+| `timeline-scope` | `timeline scope` | دامنه خط زمان | comma list of dashed idents / `none`, `all` | Done | en, fa: `prop_timeline_scope` | |
+| `view-transition-class` | `view transition class` | کلاس گذار دید | space list of idents / `none` | Done | en, fa: `prop_view_transition_class` | |
+| `field-sizing` | `field sizing` | اندازه فیلد | `fixed` / `content` | Done | en, fa: `prop_field_sizing` | |
+| `interpolate-size` | `interpolate size` | میان‌یابی اندازه | `numeric-only` / `allow-keywords` | Done | en, fa: `prop_interpolate_size` | |
+| `text-box` | `text box` | جعبه متن | `normal` or a trim keyword with an edge keyword | Done | en, fa: `prop_text_box` | |
+| `text-box-trim` | `text box trim` | برش جعبه متن | `none` / `trim-start` / `trim-end` / `trim-both` | Done | en, fa: `prop_text_box_trim` | |
+| `text-box-edge` | `text box edge` | لبه جعبه متن | up to 2 of `auto`, `text`, `cap`, `ex`, `alphabetic`, ... | Done | en, fa: `prop_text_box_edge` | |
+| `text-spacing-trim` | `text spacing trim` | برش فاصله متن | `normal` / `space-all` / `space-first` / `trim-start` | Done | en, fa: `prop_text_spacing_trim` | |
+| `text-autospace` | `text autospace` | فاصله خودکار متن | up to 3 autospace keywords | Done | en, fa: `prop_text_autospace` | |
+| `initial-letter` | `initial letter` | حرف آغازین | `normal` / number, with an optional `drop`/`raise` count | Done | en, fa: `prop_initial_letter` | |
+| `reading-flow` | `reading flow` | جریان خواندن | `normal` / `source-order` / flex and grid flow keywords | Done | en, fa: `prop_reading_flow` | |
+| `reading-order` | `reading order` | ترتیب خواندن | an integer | Done | en, fa: `prop_reading_order` | |
+| `overlay` | `overlay` | روکش | `auto` / `none` | Done | en, fa: `prop_overlay` | |
+| `dynamic-range-limit` | `dynamic range limit` | حد بازه پویا | `standard` / `no-limit` / `constrained` / `dynamic-range-limit-mix()` | Done | en, fa: `prop_dynamic_range_limit` | |
+| `hyphenate-limit-chars` | `hyphenate limit chars` | حد نویسه خط تیره | up to 3 of an integer or `auto` | Done | en, fa: `prop_hyphenate_limit_chars` | |
+| `math-shift` | `math shift` | جابه‌جایی ریاضی | `normal` / `compact` | Done | en, fa: `prop_math_shift` | |
+| `object-view-box` | `object view box` | جعبه دید شیء | `inset()`, `xywh()`, `rect()` / `none` | Done | en, fa: `prop_object_view_box` | |
+| `page` | `page` | برگه | an ident / `auto` | Done | en, fa: `prop_page` | |
+| `text-size-adjust` | `text size adjust` | تنظیم اندازه متن | a percentage / `none` | Done | en, fa: `prop_text_size_adjust` | |
+| `caret-animation` | `caret animation` | پویانمایی نشانگر | `auto` / `manual` | Done | en, fa: `prop_caret_animation` | |
+| `interactivity` | `interactivity` | تعامل‌پذیری | `auto` / `inert` | Done | en, fa: `prop_interactivity` | |
+| `scroll-marker-group` | `scroll marker group` | گروه نشانگر پیمایش | `none` / `before` / `after` | Done | en, fa: `prop_scroll_marker_group` | |
+| `scroll-target-group` | `scroll target group` | گروه هدف پیمایش | `auto` / `none` | Done | en, fa: `prop_scroll_target_group` | |
+| `corner-shape` | `corner shape` | شکل گوشه | up to 4 of `round`, `scoop`, `bevel`, `notch`, `square`, `squircle`, `superellipse()` | Done | en, fa: `prop_corner_shape` | |
+| `corner-top-left-shape` | `corner top left shape` | شکل گوشه بالا چپ | a corner shape keyword or `superellipse()` | Done | en, fa: `prop_corner_top_left_shape` | |
+| `corner-top-right-shape` | `corner top right shape` | شکل گوشه بالا راست | a corner shape keyword or `superellipse()` | Done | en, fa: `prop_corner_top_right_shape` | |
+| `corner-bottom-left-shape` | `corner bottom left shape` | شکل گوشه پایین چپ | a corner shape keyword or `superellipse()` | Done | en, fa: `prop_corner_bottom_left_shape` | |
+| `corner-bottom-right-shape` | `corner bottom right shape` | شکل گوشه پایین راست | a corner shape keyword or `superellipse()` | Done | en, fa: `prop_corner_bottom_right_shape` | |
+| `font-palette` | `font palette` | پالت قلم | `normal` / `light` / `dark` / an ident / `palette-mix()` | Done | en, fa: `prop_font_palette` | |
+| `font-variant-alternates` | `font variant alternates` | جایگزین های نسخه قلم | up to 9 of `historical-forms` or a function like `swash()` | Done | en, fa: `prop_font_variant_alternates` | |
+| `font-variant-position` | `font variant position` | جایگاه نسخه قلم | `normal` / `sub` / `super` | Done | en, fa: `prop_font_variant_position` | |
+| `font-variant-emoji` | `font variant emoji` | گونه شکلک قلم | `normal` / `text` / `emoji` / `unicode` | Done | en, fa: `prop_font_variant_emoji` | |
+| `font-synthesis-weight` | `font synthesis weight` | ساخت وزن قلم | `auto` / `none` | Done | en, fa: `prop_font_synthesis_weight` | |
+| `font-synthesis-style` | `font synthesis style` | ساخت سبک قلم | `auto` / `none` / `oblique-only` | Done | en, fa: `prop_font_synthesis_style` | |
+| `font-synthesis-small-caps` | `font synthesis small caps` | ساخت حروف کوچک قلم | `auto` / `none` | Done | en, fa: `prop_font_synthesis_small_caps` | |
+| `font-synthesis-position` | `font synthesis position` | ساخت جایگاه قلم | `auto` / `none` | Done | en, fa: `prop_font_synthesis_position` | |
+| `font-language-override` | `font language override` | جایگزینی زبان قلم | a quoted string / `normal` | Done | en, fa: `prop_font_language_override` | |
+| `font-width` | `font width` | پهنای قلم | a percentage / a font-stretch keyword | Done | en, fa: `prop_font_width` | |
+| `content` | `generated content` | محتوای تولیدی | `normal` / `none`, or strings, images, `counter()`, with optional quote marks | Done | en, fa: `prop_content` | |
+| `cx` | `cx` | مرکز x | length / percentage | Done | en, fa: `prop_cx` | |
+| `cy` | `cy` | مرکز y | length / percentage | Done | en, fa: `prop_cy` | |
+| `r` | `r` | شعاع | length / percentage | Done | en, fa: `prop_r` | |
+| `rx` | `rx` | شعاع x | length / percentage / `auto` | Done | en, fa: `prop_rx` | |
+| `ry` | `ry` | شعاع y | length / percentage / `auto` | Done | en, fa: `prop_ry` | |
+| `x` | `x` | مختصات x | length / percentage | Done | en, fa: `prop_x` | |
+| `y` | `y` | مختصات y | length / percentage | Done | en, fa: `prop_y` | |
+| `d` | `d` | داده مسیر | `path()` / `none` | Done | en, fa: `prop_d` | |
+| `dominant-baseline` | `dominant baseline` | خط پایه غالب | a baseline keyword (`middle`, `central`, `alphabetic`, ...) | Done | en, fa: `prop_dominant_baseline` | |
+| `alignment-baseline` | `alignment baseline` | خط پایه تراز | a baseline keyword (`middle`, `central`, `alphabetic`, ...) | Done | en, fa: `prop_alignment_baseline` | |
+| `baseline-shift` | `baseline shift` | جابه‌جایی خط پایه | length / percentage / `sub` / `super` / `top` / `center` / `bottom` | Done | en, fa: `prop_baseline_shift` | |
+| `baseline-source` | `baseline source` | منبع خط پایه | `auto` / `first` / `last` | Done | en, fa: `prop_baseline_source` | |
+| `text-anchor` | `text anchor` | لنگر متن | `start` / `middle` / `end` | Done | en, fa: `prop_text_anchor` | |
+| `vector-effect` | `vector effect` | جلوه برداری | `none` / `non-scaling-stroke` | Done | en, fa: `prop_vector_effect` | |
+| `shape-rendering` | `shape rendering` | پرداخت شکل | `auto` / `optimizeSpeed` / `crispEdges` / `geometricPrecision` | Done | en, fa: `prop_shape_rendering` | |
+| `color-interpolation` | `color interpolation` | میان‌یابی رنگ | `auto` / `sRGB` / `linearRGB` | Done | en, fa: `prop_color_interpolation` | |
+| `color-interpolation-filters` | `color interpolation filters` | میان‌یابی رنگ پالایه | `auto` / `sRGB` / `linearRGB` | Done | en, fa: `prop_color_interpolation_filters` | |
+| `flood-color` | `flood color` | رنگ سیل | color | Done | en, fa: `prop_flood_color` | |
+| `flood-opacity` | `flood opacity` | شفافیت سیل | number / percentage | Done | en, fa: `prop_flood_opacity` | |
+| `lighting-color` | `lighting color` | رنگ نورپردازی | color | Done | en, fa: `prop_lighting_color` | |
+| `stop-color` | `stop color` | رنگ ایست | color | Done | en, fa: `prop_stop_color` | |
+| `stop-opacity` | `stop opacity` | شفافیت ایست | number / percentage | Done | en, fa: `prop_stop_opacity` | |
+| `marker-start` | `marker start` | نشانگر آغاز | image / `none` | Done | en, fa: `prop_marker_start` | |
+| `marker-mid` | `marker mid` | نشانگر میانه | image / `none` | Done | en, fa: `prop_marker_mid` | |
+| `marker-end` | `marker end` | نشانگر انتها | image / `none` | Done | en, fa: `prop_marker_end` | |
+| `-webkit-text-stroke` | `webkit text stroke` | خط دور متن | length and color, in either order | Done | en, fa: `prop_webkit_text_stroke` | |
+| `-webkit-text-stroke-width` | `webkit text stroke width` | ضخامت خط دور متن | length / `thin` / `medium` / `thick` | Done | en, fa: `prop_webkit_text_stroke_width` | |
+| `-webkit-text-stroke-color` | `webkit text stroke color` | رنگ خط دور متن | color | Done | en, fa: `prop_webkit_text_stroke_color` | |
+| `-webkit-text-fill-color` | `webkit text fill color` | رنگ پر متن | color | Done | en, fa: `prop_webkit_text_fill_color` | |
+
 ## Functions
 
 Function parameters are checked too: `rotate(banana)` and `rgb(1 2)` are E018. In a Persian file each function also has a Persian name, and units, digits and keywords inside it may be Persian: `دگرگونی = "چرخش(۴۵ درجه)"` gives `transform: rotate(45deg)`. In an English file only the English names, units and digits work. Multi-word Persian names are joined with ZWNJ, `_` or `-`.
@@ -504,6 +592,21 @@ Function parameters are checked too: `rotate(banana)` and `rgb(1 2)` are E018. I
 | `var()`                       | متغیر                 | `--name`, optional fallback                                                  |
 | `env()`                       | محیط                  | name, optional indices and fallback                                          |
 | `attr()`                      | ویژگی                 | attribute name, optional type or unit, optional fallback                     |
+| `anchor()`                    | لنگر                  | optional anchor name, side or percentage, optional fallback                  |
+| `anchor-size()`               | اندازه‌لنگر           | optional anchor name and size, optional fallback                             |
+| `scroll()`                    | پیمایش                | optional scroller and axis                                                   |
+| `view()`                      | دید                   | optional axis and inset                                                      |
+| `counter()`                   | شمارنده               | name, optional list style                                                    |
+| `counters()`                  | شمارنده‌ها            | name, separator string, optional list style                                  |
+| `stylistic()`                 |                       | name                                                                         |
+| `styleset()`                  |                       | names                                                                        |
+| `character-variant()`         |                       | names                                                                        |
+| `swash()`                     |                       | name                                                                         |
+| `ornaments()`                 |                       | name                                                                         |
+| `annotation()`                |                       | name                                                                         |
+| `palette-mix()`               |                       |                                                                              |
+| `superellipse()`              |                       | number or `infinity`                                                         |
+| `dynamic-range-limit-mix()`   |                       |                                                                              |
 | `inset()`                     | فرورفته               | 1 to 4 length-percentages, optional `round` radius                           |
 | `circle()`                    | دایره                 | optional radius and `at` position                                            |
 | `ellipse()`                   | بیضی                  | optional 2 radii and `at` position                                           |

@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aistore
+
+import db.mysql
+import sync
+import time
+import str
+
+mut DB := mysql.Database {}
+mut LOCK := sync.Mutex {}
+mut HOST := ""
+mut USER := ""
+mut PASS := ""
+mut NAME := ""
+mut PORT := 3306
+
+func connect(): bool:
+    DB = mysql.Open(HOST, USER, PASS, NAME, PORT)
+    if not mysql.Ok(DB):
+        ret false
+    end
+    _c := mysql.SetCharset(DB, "utf8mb4")
+    ret true
+end
+
+func ensure():
+    if not mysql.Ok(DB) or not mysql.Ping(DB):
+        if mysql.Ok(DB):
+            mysql.Close(DB)
+        end
+        _c := connect()
+    end
+end
+
+func quote(v: str): str:
+    ret "'" + mysql.Escape(DB, v) + "'"
+end
+
+func bind(sql: str, args: Vector<str>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    n := sql.len()
+    mut i := 0
+    until i < n:
+        c := sql.substr(i, 1)
+        if c == "?" and i + 1 < n:
+            mut j := i + 1
+            mut num := 0
+            until j < n and sql.substr(j, 1) >= "0" and sql.substr(j, 1) <= "9":
+                num = num * 10 + sql.substr(j, 1).to_int()
+                j += 1
+            end
+            if j > i + 1 and num >= 1 and num <= args.len():
+                str.BufAppend(b, quote(args.get(num - 1)))
+                i = j
+                continue
+            end
+        end
+        str.BufAppend(b, c)
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func lost(): bool:
+    code := mysql.Errno(DB)
+    ret code == 2006 or code == 2013 or code == 2055
+end
+
+pub func Open(host: str, user: str, pass: str, name: str, port: int): bool:
+    HOST = host
+    USER = user
+    PASS = pass
+    NAME = name
+    PORT = port
+    LOCK = sync.NewMutex()
+    if not connect():
+        ret false
+    end
+    tables := Vector {} as Vector<str>
+    tables.push("CREATE TABLE IF NOT EXISTS users (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(80) NOT NULL, email VARCHAR(200) NOT NULL UNIQUE, pass VARCHAR(255) NOT NULL, created BIGINT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS sessions (token CHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, expires BIGINT NOT NULL, INDEX sessions_user (user_id), CONSTRAINT sessions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS chats (id CHAR(24) PRIMARY KEY, user_id BIGINT NOT NULL, title VARCHAR(255) NOT NULL, engine_sid VARCHAR(100) NOT NULL DEFAULT '', created BIGINT NOT NULL, updated BIGINT NOT NULL, INDEX chats_user (user_id, updated), CONSTRAINT chats_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    tables.push("CREATE TABLE IF NOT EXISTS messages (id BIGINT AUTO_INCREMENT PRIMARY KEY, chat_id CHAR(24) NOT NULL, role VARCHAR(16) NOT NULL, body MEDIUMTEXT NOT NULL, status VARCHAR(16) NOT NULL, created BIGINT NOT NULL, INDEX messages_chat (chat_id, id), CONSTRAINT messages_chat_fk FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+    each sql in tables:
+        if mysql.Exec(DB, sql) != 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+pub func Error(): str:
+    ret mysql.Error(DB)
+end
+
+pub func Now(): i64:
+    ret time.Now()
+end
+
+pub func Stmt(sql: str, args: Vector<str>): mysql.Result:
+    ensure()
+    mut res := mysql.Query(DB, bind(sql, args))
+    if not mysql.QueryOk(res) and lost():
+        ensure()
+        res = mysql.Query(DB, bind(sql, args))
+    end
+    ret res
+end
+
+pub func Run(sql: str, args: Vector<str>): bool:
+    ensure()
+    mut rc := mysql.Exec(DB, bind(sql, args))
+    if rc != 0 and lost():
+        ensure()
+        rc = mysql.Exec(DB, bind(sql, args))
+    end
+    ret rc == 0
+end
+
+pub func LastId(): str:
+    ret "" + mysql.LastInsertId(DB)
+end
+
+pub func OneText(sql: str, args: Vector<str>): str:
+    mut rows := Stmt(sql, args)
+    mut out := ""
+    if mysql.Next(rows):
+        out = mysql.Text(rows, 0)
+    end
+    mysql.Finish(rows)
+    ret out
+end
+
+pub func Lock():
+    _l := sync.Lock(LOCK)
+end
+
+pub func Unlock():
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Next(rows &: mysql.Result): bool:
+    ret mysql.Next(rows)
+end
+
+pub func Text(rows: mysql.Result, col: int): str:
+    ret mysql.Text(rows, col)
+end
+
+pub func Int64(rows: mysql.Result, col: int): i64:
+    ret mysql.Int64(rows, col)
+end
+
+pub func Finish(rows: mysql.Result):
+    mysql.Finish(rows)
+end

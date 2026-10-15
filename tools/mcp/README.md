@@ -13,6 +13,45 @@ Because it is a single native binary with no runtime dependencies, anyone who
 has `salam` can run it. There is no Node, Python or package manager in the
 loop.
 
+## 🌐 Hosted server
+
+The server is also online at **`https://mcp.salamlang.ir/mcp`**, so any MCP
+client can use it with nothing installed:
+
+```sh
+claude mcp add --transport http salam https://mcp.salamlang.ir/mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "salam": { "type": "http", "url": "https://mcp.salamlang.ir/mcp" }
+  }
+}
+```
+
+In claude.ai or Claude Desktop, add the same URL under Settings, Connectors,
+Add custom connector.
+
+The hosted server cannot see your files, so its compiler tools take the
+program text in a `source` argument instead of a `path`. It never runs code:
+`salam_run`, `salam_exec` and `salam_build` exist only when you run the server
+yourself. Everything else, including the stdlib, example and keyword tools,
+works the same.
+
+To host your own, build the image from the repository root and put it behind
+a TLS proxy:
+
+```sh
+docker build -f tools/mcp/Dockerfile -t salam-mcp .
+docker run -d -p 127.0.0.1:8080:8080 --read-only --tmpfs /tmp:size=256m salam-mcp
+```
+
+Or run `salam-mcp --http` directly; it listens on `SALAM_MCP_HOST:SALAM_MCP_PORT`
+and serves MCP at `/mcp`, a setup page at `/` and `GET /health` for probes.
+`salam-mcp --health` exits 0 when a local server answers, for container
+health checks.
+
 ## 🔨 Install
 
 You need a `salam` compiler from this checkout. If `./salam` is missing,
@@ -106,6 +145,16 @@ workspace and looks for `std/` next to the compiler, so point
 | `SALAM_MCP_ROOT` | `.` (the launcher sets it to the checkout)     | Workspace that paths resolve against |
 | `SALAM_STD`      | `<root>/std`, else `std` beside the compiler   | Standard library root                |
 
+With `--http` the server also reads:
+
+| Variable            | Default   | Purpose                                                    |
+| ------------------- | --------- | ---------------------------------------------------------- |
+| `SALAM_MCP_HOST`    | `0.0.0.0` | Address to listen on                                       |
+| `SALAM_MCP_PORT`    | `8080`    | Port to listen on                                          |
+| `SALAM_MCP_JOBS`    | `4`       | Compiler processes allowed at once; extra calls wait       |
+| `SALAM_MCP_TIMEOUT` | `30`      | Seconds before a compiler process is killed                |
+| `SALAM_MCP_ORIGINS` | empty     | Comma separated browser origins to allow; empty allows all |
+
 The compiler default prefers the binary in the workspace over `PATH` on
 purpose: an installed `salam` is often older than the checkout, and the
 resulting flag-parsing differences surface as confusing tool failures rather
@@ -172,6 +221,13 @@ server's own working directory. They are validated rather than escaped:
 anything containing shell metacharacters or `..`, or an absolute path outside
 the workspace, is refused outright.
 
+In HTTP mode each call writes its `source` to a fresh temporary directory,
+compiles it there and deletes the directory afterwards, so concurrent callers
+never share files. Compiler processes are capped at `SALAM_MCP_JOBS` and
+killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 1 MB
+and sources to 256 KB, and the tools that execute a program are not offered.
+Run the container read-only with a size-limited `/tmp`, as above.
+
 ## 📡 Protocol
 
 Implements MCP **2026-07-28** and is **dual-era**: a client that opens with the
@@ -182,8 +238,17 @@ clients declare their version per request in `_meta` and may call
 `UnsupportedProtocolVersionError` (`-32022`) listing what is available, as the
 spec requires.
 
-Transport is stdio: one JSON-RPC message per line, nothing but MCP messages on
-stdout, logging on stderr, and the process exits when stdin closes.
+Two transports:
+
+- **stdio** (default): one JSON-RPC message per line, nothing but MCP messages
+  on stdout, logging on stderr, and the process exits when stdin closes.
+- **Streamable HTTP** (`--http`): `POST /mcp` with a JSON-RPC message returns
+  the response as `application/json`; notifications get `202 Accepted`. The
+  server is stateless, so it issues no `Mcp-Session-Id` and answers `GET` and
+  `DELETE` on `/mcp` with `405`. An unsupported `MCP-Protocol-Version` header
+  gets `400` and a body that is not JSON gets `415`. Each HTTP request is
+  negotiated on its own: one that carries the protocol version in `_meta`
+  gets modern semantics, any other gets legacy semantics.
 
 ## 🧪 Tests
 
@@ -216,7 +281,9 @@ cannot regenerate anything; there the hook reports that and passes.
 | --------------------- | ---------------------------------------------------------- |
 | `run.sh`              | Launcher: rebuilds the binary when stale, then execs it    |
 | `build.sh`            | Builds `salam-mcp` in a scratch directory                  |
-| `main.salam`          | Entry point and the stdio read loop                        |
+| `main.salam`          | Entry point: stdio loop, `--http` and `--health`           |
+| `mcp_http.salam`      | Streamable HTTP transport, CORS and the setup page         |
+| `Dockerfile`          | Image for the hosted server                                |
 | `mcp_rpc.salam`       | JSON-RPC framing, EOF-aware line reads, protocol constants |
 | `mcp_server.salam`    | Method dispatch and dual-era version negotiation           |
 | `mcp_registry.salam`  | Tool catalog (JSON Schemas) and `tools/call` routing       |

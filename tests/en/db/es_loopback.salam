@@ -1,0 +1,363 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import sync
+import net.tcp
+import db.elasticsearch
+
+const PORT := 19846
+const DEAD_PORT := 19847
+
+mut wg := sync.NewWaitGroup()
+mut health_calls := 0
+mut last_auth := ""
+mut last_type := ""
+mut last_target := ""
+mut last_body := ""
+mut last_flavor := ""
+
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+func read_request(c: tcp.Conn, head &: str, body &: str): bool:
+    mut buf := ""
+    mut head_end := -1
+    mut want := 0
+    until true:
+        if head_end < 0:
+            at := buf.find("\r\n\r\n")
+            if at >= 0:
+                head_end = at + 4
+                head = buf.substr(0, head_end)
+                cl := hdr_get(head, "Content-Length")
+                if cl.len() > 0: want = cl.to_int() end
+            end
+        end
+        if head_end >= 0 and str.ByteLen(buf) - head_end >= want: break end
+        chunk := tcp.Read(c, 65536)
+        if chunk.len() == 0: break end
+        buf = buf + chunk
+    end
+    if head_end < 0: ret false end
+    body = str.ByteSub(buf, head_end, str.ByteLen(buf) - head_end)
+    ret true
+end
+
+func reason(status: int): str:
+    switch status:
+        200: ret "OK" end
+        201: ret "Created" end
+        404: ret "Not Found" end
+        409: ret "Conflict" end
+        503: ret "Service Unavailable" end
+    end
+    ret "Status"
+end
+
+func respond(c: tcp.Conn, status: int, body: str):
+    head := "HTTP/1.1 " + str.FromInt(status as i64) + " " + reason(status) + "\r\nContent-Type: application/json\r\nContent-Length: " + str.FromInt(str.ByteLen(body) as i64) + "\r\nConnection: close\r\n\r\n"
+    tcp.Write(c, head)
+    if body.len() > 0: tcp.Write(c, body) end
+end
+
+func respond_chunked(c: tcp.Conn, body: str):
+    tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+    n := str.ByteLen(body)
+    half := n / 2
+    first := str.ByteSub(body, 0, half)
+    second := str.ByteSub(body, half, n - half)
+    tcp.Write(c, conv_hex(half) + "\r\n" + first + "\r\n")
+    tcp.Write(c, conv_hex(n - half) + "\r\n" + second + "\r\n0\r\n\r\n")
+end
+
+func conv_hex(n: int): str:
+    digits := "0123456789abcdef"
+    if n == 0: ret "0" end
+    mut out := ""
+    mut v := n
+    until v > 0:
+        out = digits.substr(v % 16, 1) + out
+        v = v / 16
+    end
+    ret out
+end
+
+func route(c: tcp.Conn, method: str, target: str, body: str): bool:
+    switch true:
+        target == "/__quit":
+            respond(c, 200, "{}")
+            ret false
+        end
+        method == "HEAD" and target == "/":
+            respond(c, 200, "")
+            break
+        end
+        method == "GET" and target == "/" and last_flavor == "es":
+            respond(c, 200, `{"name":"node-2","cluster_name":"mock","version":{"number":"8.15.3","build_flavor":"default","lucene_version":"9.11.1"},"tagline":"You Know, for Search"}`)
+            break
+        end
+        method == "GET" and target == "/":
+            respond(c, 200, `{"name":"node-1","cluster_name":"mock","cluster_uuid":"u1","version":{"distribution":"opensearch","number":"2.17.0","lucene_version":"9.11.1"},"tagline":"The OpenSearch Project"}`)
+            break
+        end
+        method == "GET" and target == "/_cluster/health":
+            health_calls += 1
+            if health_calls == 1:
+                respond(c, 503, `{"error":{"type":"cluster_block_exception","reason":"not ready"},"status":503}`)
+            else:
+                respond(c, 200, `{"cluster_name":"mock","status":"green","timed_out":false,"number_of_nodes":3,"number_of_data_nodes":2,"active_primary_shards":5,"active_shards":10,"unassigned_shards":0,"active_shards_percent_as_number":100.0}`)
+            end
+            break
+        end
+        method == "PUT" and str.StartsWith(target, "/items/_doc/1"):
+            respond(c, 201, `{"_index":"items","_id":"1","_version":1,"result":"created","_seq_no":0,"_primary_term":1}`)
+            break
+        end
+        method == "POST" and target == "/items/_doc":
+            respond(c, 201, `{"_index":"items","_id":"auto-7","_version":1,"result":"created","_seq_no":1,"_primary_term":1}`)
+            break
+        end
+        method == "GET" and target == "/items/_doc/1":
+            respond(c, 200, `{"_index":"items","_id":"1","_version":3,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"title":"سلام","n":3}}`)
+            break
+        end
+        method == "GET" and str.StartsWith(target, "/items/_doc/"):
+            respond(c, 404, `{"_index":"items","_id":"x","found":false}`)
+            break
+        end
+        method == "HEAD" and target == "/items/_doc/1":
+            respond(c, 200, "")
+            break
+        end
+        method == "HEAD":
+            respond(c, 404, "")
+            break
+        end
+        method == "POST" and str.StartsWith(target, "/items/_update/1"):
+            respond(c, 409, `{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[1]: version conflict"}],"type":"version_conflict_engine_exception","reason":"[1]: version conflict"},"status":409}`)
+            break
+        end
+        method == "POST" and target == "/items/_search":
+            respond_chunked(c, `{"took":3,"timed_out":false,"hits":{"total":{"value":2,"relation":"eq"},"max_score":1.5,"hits":[{"_index":"items","_id":"1","_score":1.5,"_source":{"title":"a"},"highlight":{"title":["<em>a</em>"]}},{"_index":"items","_id":"2","_score":0.5,"_source":{"title":"b"},"sort":[2]}]},"aggregations":{"avg_n":{"value":2.5},"tags":{"buckets":[{"key":"x","doc_count":4},{"key":"y","doc_count":1}]}}}`)
+            break
+        end
+        method == "POST" and target == "/items/_count":
+            respond(c, 200, `{"count":7}`)
+            break
+        end
+        method == "POST" and str.StartsWith(target, "/_bulk"):
+            respond(c, 200, `{"took":5,"errors":true,"items":[{"index":{"_index":"items","_id":"1","status":201,"result":"created","_version":1}},{"create":{"_index":"items","_id":"2","status":409,"error":{"type":"version_conflict_engine_exception","reason":"document already exists"}}},{"delete":{"_index":"items","_id":"3","status":200,"result":"deleted","_version":2}}]}`)
+            break
+        end
+        method == "POST" and target == "/_sql?format=json":
+            if str.Contains(body, `"cursor"`):
+                respond(c, 200, `{"rows":[["c",3,null]]}`)
+            else:
+                respond(c, 200, `{"columns":[{"name":"name","type":"keyword"},{"name":"n","type":"long"},{"name":"w","type":"double"}],"rows":[["a",1,1.5],["b",2,2.5]],"cursor":"CUR1"}`)
+            end
+            break
+        end
+        method == "POST" and target == "/_plugins/_sql?format=jdbc":
+            if str.Contains(body, `"cursor"`):
+                respond(c, 200, `{"datarows":[["z",9,null]],"status":200}`)
+            else:
+                respond(c, 200, `{"schema":[{"name":"name","type":"keyword"},{"name":"COUNT(*)","alias":"n","type":"long"}],"datarows":[["x",7],["y",8]],"total":3,"size":2,"cursor":"OSCUR","status":200}`)
+            end
+            break
+        end
+        method == "POST" and str.Contains(target, "/_search/point_in_time"):
+            respond(c, 200, `{"pit_id":"OSPIT","_shards":{"total":1},"creation_time":1}`)
+            break
+        end
+        method == "DELETE" and target == "/_search/point_in_time":
+            respond(c, 200, `{"pits":[{"successful":true,"pit_id":"OSPIT"}]}`)
+            break
+        end
+        method == "POST" and str.StartsWith(target, "/items/_pit"):
+            respond(c, 200, `{"id":"ESPIT"}`)
+            break
+        end
+        method == "DELETE" and target == "/_pit":
+            respond(c, 200, `{"succeeded":true,"num_freed":1}`)
+            break
+        end
+        method == "POST" and target == "/_sql/close":
+            respond(c, 200, `{"succeeded":true}`)
+            break
+        end
+        method == "GET" and str.StartsWith(target, "/_cat/indices"):
+            respond(c, 200, `[{"health":"green","status":"open","index":"items","uuid":"x1","pri":"1","rep":"0","docs.count":"7","docs.deleted":"1","store.size":"1024"}]`)
+            break
+        end
+        else:
+            respond(c, 404, `{"error":"no handler for ` + method + " " + target + `"}`)
+        end
+    end
+    ret true
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    if not tcp.Ok(srv): ret end
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): running = false
+        else:
+            mut head := ""
+            mut body := ""
+            if read_request(c, head, body):
+                line_end := head.find("\r\n")
+                parts := head.substr(0, line_end).split(" ")
+                last_auth = hdr_get(head, "Authorization")
+                last_type = hdr_get(head, "Content-Type")
+                last_target = parts.get(1)
+                last_body = body
+                last_flavor = hdr_get(head, "X-Flavor")
+                running = route(c, parts.get(0), parts.get(1), body)
+            end
+            tcp.Close(c)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    mut cfg := elasticsearch.Config { max_retries = 2 }
+    cfg.nodes.push("http://127.0.0.1:" + str.FromInt(DEAD_PORT as i64))
+    cfg.nodes.push("http://elastic:pa%3Ass@127.0.0.1:" + str.FromInt(PORT as i64))
+    mut c := elasticsearch.NewClient(cfg)
+    println "ok:", elasticsearch.Ok(c)
+    println "ping:", elasticsearch.Ping(c)
+    println "auth:", last_auth == "Basic " + elasticsearch.EncodeBasic("elastic", "pa:ss")
+    info := elasticsearch.GetInfo(c)
+    println "info:", info.name, info.distribution, info.version, info.lucene_version
+
+    h := elasticsearch.ClusterHealth(c)
+    println "health after 503 retry:", h.ok, h.status, h.nodes, h.active_shards, h.active_shards_percent
+
+    w := elasticsearch.IndexWith(c, "items", "1", `{"title":"a"}`, elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR, routing = "r 1" })
+    println "index:", w.ok, w.status, w.result, w.id, w.version, w.seq_no
+    println "target:", last_target
+    println "type:", last_type
+    auto := elasticsearch.Index(c, "items", "", `{"title":"b"}`)
+    println "auto id:", auto.id
+
+    d := elasticsearch.Get(c, "items", "1")
+    println "get:", d.found, d.version, d.seq_no, d.source
+    miss := elasticsearch.Get(c, "items", "a/b c")
+    println "missing:", miss.found, miss.error == "", last_target
+    println "exists:", elasticsearch.Exists(c, "items", "1"), elasticsearch.Exists(c, "items", "2")
+
+    u := elasticsearch.Update(c, "items", "1", `{"n":4}`)
+    println "conflict:", u.ok, u.status
+    println "error:", u.error
+    println "error type:", elasticsearch.ErrorType(c)
+    println "status:", elasticsearch.Status(c)
+
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("n"))
+    res := elasticsearch.Search(c, "items", elasticsearch.SearchRequest { query = elasticsearch.Match("title", "a"), size = 2, sort = sort })
+    println "sent:", last_body
+    println "search:", res.ok, res.took, res.total, res.total_relation, res.max_score, res.hits.len()
+    each hit in res.hits:
+        println "  hit", hit.id, hit.score, hit.source, hit.highlight, hit.sort
+    end
+    println "avg:", elasticsearch.AggValue(res, "avg_n")
+    each b in elasticsearch.AggBuckets(res, "tags"):
+        println "  bucket", b.key, b.doc_count
+    end
+    println "count:", elasticsearch.Count(c, "items", elasticsearch.Term("tag", "x"))
+
+    mut bulk := elasticsearch.NewBulk()
+    elasticsearch.BulkIndex(bulk, "items", "1", "{\n  \"title\": \"a\"\n}")
+    elasticsearch.BulkCreate(bulk, "items", "2", `{"title":"b"}`)
+    elasticsearch.BulkDelete(bulk, "items", "3")
+    br := elasticsearch.RunBulk(c, bulk)
+    println "bulk type:", last_type
+    print last_body
+    println "bulk:", br.ok, br.errors, br.succeeded, br.failed, br.error
+    each it in br.items:
+        println "  item", it.action, it.id, it.status, it.ok, it.result, it.error_type
+    end
+
+    println "distribution:", elasticsearch.Distribution(c), elasticsearch.IsOpenSearch(c)
+    mut params := Vector {} as Vector<str>
+    params.push("7")
+    params.push(`"x"`)
+    params.push("1.5")
+    params.push("true")
+    mut osrows := elasticsearch.SqlWith(c, "SELECT name, COUNT(*) AS n FROM items WHERE n > ? AND name <> ? AND w > ? AND ok = ? GROUP BY name", params, 2)
+    println "opensearch sql:", last_target
+    println "  sent:", last_body
+    println "  ", osrows.Ok(), osrows.ColumnCount(), osrows.ColumnName(1), osrows.ColumnTypeName(1)
+    until osrows.Next():
+        println "  row", osrows.Text(0), osrows.Int(1), osrows.IsNull(1)
+    end
+    osrows.Close()
+    println "  paged with:", last_target, last_body
+    ospit := elasticsearch.OpenPit(c, "items", "1m")
+    println "opensearch pit:", ospit, last_target, elasticsearch.ClosePit(c, ospit), last_target, last_body
+
+    mut escfg := elasticsearch.Config {}
+    escfg.nodes.push("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    escfg.headers.put("X-Flavor", "es")
+    mut esc := elasticsearch.NewClient(escfg)
+    println "distribution:", elasticsearch.Distribution(esc), elasticsearch.IsOpenSearch(esc)
+    espit := elasticsearch.OpenPit(esc, "items", "1m")
+    println "elasticsearch pit:", espit, last_target, elasticsearch.ClosePit(esc, espit), last_target, last_body
+    mut esparams := Vector {} as Vector<str>
+    esparams.push("1")
+    mut rows := elasticsearch.SqlWith(esc, "SELECT name, n, w FROM items WHERE n >= ?", esparams, 0)
+    println "elasticsearch sql:", last_target, last_body
+    println "sql:", rows.Ok(), rows.ColumnCount(), rows.ColumnName(1), rows.ColumnTypeName(1)
+    until rows.Next():
+        println "  row", rows.Text(0), rows.Int(1), rows.Float(2), rows.IsNull(2)
+    end
+    rows.Close()
+    println "sql paged with:", last_target, last_body
+
+    elasticsearch.Close(esc)
+    conn := elasticsearch.Conn(c)
+    println "conn:", conn.Kind(), conn.Ok(), conn.Exec("DELETE FROM items")
+    q := conn.Query("SELECT name, n, w FROM items")
+    mut seen := 0
+    until q.Next(): seen += 1 end
+    q.Close()
+    println "conn rows:", seen
+
+    each ix in elasticsearch.CatIndices(c, "it*"):
+        println "cat:", ix.index, ix.health, ix.primaries, ix.docs_count, ix.store_size
+    end
+
+    nodes := elasticsearch.Nodes(c)
+    println "nodes:", nodes.len()
+    elasticsearch.Perform(c, "GET", "/__quit", "")
+    join(t)
+    elasticsearch.Close(c)
+    println "closed:", elasticsearch.Ok(c)
+end

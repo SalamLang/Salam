@@ -50,6 +50,26 @@ func lambda_ahead(p &: Ps, a &: at.Ast): bool:
     ret is_lambda
 end
 
+func lambda_return_type_ahead(p &: Ps, a &: at.Ast): bool:
+    if not p_at(p, tok.TK_COLON):
+        ret false
+    end
+    nk := p_peek2(p).kind
+    if nk == tok.TK_STMT_END or (tok.IsKeyword(nk) and nk != tok.TK_KW_FUNC):
+        ret false
+    end
+    save_pos := p.pos
+    save_panic := p.panic
+    save_had_error := p.had_error
+    p.panic = true
+    parse_type_anno(p, a)
+    found := p_at(p, tok.TK_COLON) and p.pos > save_pos + 1
+    p.pos = save_pos
+    p.panic = save_panic
+    p.had_error = save_had_error
+    ret found
+end
+
 func builtin_callable_name(k: int): str:
     if k == tok.TK_KW_PRINT:
         ret "print"
@@ -143,6 +163,15 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         p_fin(p, a, n)
         ret n
     end
+    if t.kind == tok.TK_KW_FUNC and p_peek2(p).kind == tok.TK_LPAREN:
+        before := p.pos
+        p_advance(p)
+        if lambda_ahead(p, a):
+            p_error_at(p, t, "a lambda is written without 'func': '(x: int): ret x * 2 end'")
+            ret parse_lambda(p, a)
+        end
+        p.pos = before
+    end
     if t.kind == tok.TK_LPAREN:
         if lambda_ahead(p, a):
             ret parse_lambda(p, a)
@@ -228,6 +257,13 @@ func parse_lambda(p &: Ps, a &: at.Ast): int:
         end
     end
     p_expect(p, tok.TK_RPAREN, "')' after lambda parameters")
+    if lambda_return_type_ahead(p, a):
+        p_foreign_error(p, "remove the return type; it is inferred from the body: '(x: int): ret x * 2 end'", "a lambda cannot declare a return type")
+        save_panic := p.panic
+        p.panic = true
+        parse_type_anno(p, a)
+        p.panic = save_panic
+    end
     if p_at(p, tok.TK_COLON):
         ps_set_a(a, n, parse_block(p, a))
     else:

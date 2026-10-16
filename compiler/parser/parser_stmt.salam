@@ -1,5 +1,7 @@
 package parser
 
+import str
+
 include tok "../token.salam"
 include at "../ast.salam"
 
@@ -11,11 +13,107 @@ func parse_cond_expr(p &: Ps, a &: at.Ast): int:
     ret e
 end
 
+func p_word(p &: Ps, k: int): str:
+    t := p_peekn(p, k)
+    if t.kind != tok.TK_IDENT:
+        ret ""
+    end
+    ret t.lexeme
+end
+
+func p_line_has(p &: Ps, kind: int): bool:
+    line := p_peek(p).begin_line
+    mut i := 1
+    until i < 400:
+        t := p_peekn(p, i)
+        if t.kind == tok.TK_EOF or t.begin_line != line:
+            ret false
+        end
+        if t.kind == kind:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func p_line_has_semicolon(p &: Ps): bool:
+    line := p_peek(p).begin_line
+    mut i := 1
+    until i < 400:
+        t := p_peekn(p, i)
+        if t.kind == tok.TK_EOF or t.begin_line != line:
+            ret false
+        end
+        if t.kind == tok.TK_STMT_END and str.Equals(t.lexeme, ";"):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func p_at_elif(p &: Ps): bool:
+    w := p_word(p, 0)
+    if not str.Equals(w, "elif") and not str.Equals(w, "elsif") and not str.Equals(w, "elseif"):
+        ret false
+    end
+    ret p_line_has(p, tok.TK_COLON)
+end
+
+func p_assign_after(p &: Ps, k: int): bool:
+    n := p_peekn(p, k).kind
+    ret n == tok.TK_ASSIGN or n == tok.TK_COLON_ASSIGN or n == tok.TK_COLON or n == tok.TK_DOT
+end
+
+func parse_foreign_statement(p &: Ps, a &: at.Ast, handled &: bool): int:
+    handled = true
+    w := p_word(p, 0)
+    run := p_ident_run_len(p)
+    if str.Equals(w, "let") or str.Equals(w, "var"):
+        after := p_peekn(p, run).kind
+        if run >= 2 and (after == tok.TK_COLON_ASSIGN or after == tok.TK_ASSIGN or after == tok.TK_COLON):
+            p_foreign_error(p, "write 'name := value', or 'mut name := value' if it is reassigned later", "Salam has no 'let' or 'var'")
+            p_advance(p)
+            n := parse_bare_var_decl(p, a)
+            p_term(p)
+            ret n
+        end
+    end
+    if str.Equals(w, "for"):
+        next_kind := p_peekn(p, run).kind
+        if run >= 2 and (next_kind == tok.TK_KW_IN or next_kind == tok.TK_COMMA) and p_line_has(p, tok.TK_COLON):
+            p_foreign_error(p, "write 'each item in items:' (or 'each i, item in items:'), or count with 'repeat n in i:'", "Salam has no 'for' loop")
+            ret parse_each(p, a)
+        end
+        if p_peekn(p, 1).kind == tok.TK_LPAREN or (run >= 2 and next_kind == tok.TK_COLON_ASSIGN and p_line_has_semicolon(p)):
+            p_foreign_error(p, "count with 'repeat n in i:' or 'repeat a to b in i:', iterate with 'each item in items:', or loop on a condition with 'until cond:'", "Salam has no 'for' loop")
+            p.panic = true
+            ret 0
+        end
+    end
+    if str.Equals(w, "while") and not p_assign_after(p, run) and p_line_has(p, tok.TK_COLON):
+        p_foreign_error(p, "write 'until cond:', which runs its body while cond is true; keep the condition as it is", "'while' does not exist in Salam")
+        ret parse_until(p, a)
+    end
+    if str.Equals(w, "return") and not p_assign_after(p, run):
+        p_foreign_error(p, "write 'ret value', or a bare 'ret' when the function returns nothing", "Salam spells 'return' as 'ret'")
+        ret parse_return(p, a)
+    end
+    if p_at_elif(p):
+        p_foreign_error(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'")
+        p.panic = true
+        ret 0
+    end
+    handled = false
+    ret 0
+end
+
 func fill_block_body(p &: Ps, a &: at.Ast, n: int):
     p_skip_terminators(p)
-    until not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at_eof(p):
+    until not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at_eof(p) and not p_at_elif(p):
         p_skip_terminators(p)
-        if p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at_eof(p):
+        if p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at_eof(p) or p_at_elif(p):
             break
         end
         s := parse_statement(p, a)
@@ -99,6 +197,11 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
         ret n
     end
     if k == tok.TK_IDENT:
+        mut handled := false
+        fs := parse_foreign_statement(p, a, handled)
+        if handled:
+            ret fs
+        end
         m := p_ident_run_len(p)
         after := p_peekn(p, m).kind
         if after == tok.TK_COLON or after == tok.TK_COLON_ASSIGN:
@@ -213,7 +316,11 @@ func parse_if_tail(p &: Ps, a &: at.Ast): int:
     fill_block_body(p, a, b)
     p_fin(p, a, b)
     p_skip_terminators(p)
-    if p_match(p, tok.TK_KW_ELSE):
+    if p_at_elif(p):
+        p_foreign_error(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'")
+        p_advance(p)
+        ps_set_c(a, n, parse_if_tail(p, a))
+    else p_match(p, tok.TK_KW_ELSE):
         p_match(p, tok.TK_KW_IF)
         if not p_at(p, tok.TK_COLON):
             ps_set_c(a, n, parse_if_tail(p, a))

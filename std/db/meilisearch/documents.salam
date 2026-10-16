@@ -1,0 +1,212 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package meilisearch
+
+@en "DocumentsQuery"
+@fa "پرس_و_جوی_سند"
+pub struct DocumentsQuery:
+    pub offset: int = 0
+    pub limit: int = 0
+    pub fields: Vector<str> = Vector {} as Vector<str>
+    pub filter: str = ""
+    pub ids: Vector<str> = Vector {} as Vector<str>
+    pub sort: Vector<str> = Vector {} as Vector<str>
+    pub retrieve_vectors: bool = false
+end
+
+func _filter_json(filter: str): str:
+    t := str.TrimRight(filter)
+    if t.len() > 0 and t.substr(0, 1) == "[":
+        ret t
+    end
+    ret json.Str(filter)
+end
+
+func _docs_path(uid: str, primary_key: str, csv_delimiter: str): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if primary_key.len() > 0:
+        keys.push("primaryKey")
+        vals.push(primary_key)
+    end
+    if csv_delimiter.len() > 0:
+        keys.push("csvDelimiter")
+        vals.push(csv_delimiter)
+    end
+    ret _ipath(uid) + "/documents" + _query(keys, vals)
+end
+
+func _decode_error(e: encerr.EncodingError, err &: Error):
+    _fail(err, 0, "decode_error", "decode", "" + e.message)
+end
+
+@en "AddDocuments"
+@fa "افزودن_سندها"
+pub func AddDocuments(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "POST", _docs_path(uid, primary_key, ""), "application/json", documents, err))
+end
+
+@en "UpdateDocuments"
+@fa "به_روزرسانی_سندها"
+pub func UpdateDocuments(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "PUT", _docs_path(uid, primary_key, ""), "application/json", documents, err))
+end
+
+@en "AddDocumentsNdjson"
+@fa "افزودن_سندهای_ان_دی_جیسون"
+pub func AddDocumentsNdjson(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "POST", _docs_path(uid, primary_key, ""), "application/x-ndjson", documents, err))
+end
+
+@en "UpdateDocumentsNdjson"
+@fa "به_روزرسانی_سندهای_ان_دی_جیسون"
+pub func UpdateDocumentsNdjson(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "PUT", _docs_path(uid, primary_key, ""), "application/x-ndjson", documents, err))
+end
+
+@en "AddDocumentsCsv"
+@fa "افزودن_سندهای_سی_اس_وی"
+pub func AddDocumentsCsv(c: Client, uid: str, documents: str, primary_key: str, delimiter: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "POST", _docs_path(uid, primary_key, delimiter), "text/csv", documents, err))
+end
+
+@en "UpdateDocumentsCsv"
+@fa "به_روزرسانی_سندهای_سی_اس_وی"
+pub func UpdateDocumentsCsv(c: Client, uid: str, documents: str, primary_key: str, delimiter: str, err &: Error): TaskInfo:
+    ret _task_info(_send(c, "PUT", _docs_path(uid, primary_key, delimiter), "text/csv", documents, err))
+end
+
+@en "AddDocumentsInBatches"
+@fa "افزودن_سندها_در_دسته_ها"
+pub func AddDocumentsInBatches(c: Client, uid: str, documents: Vector<str>, batch_size: int, primary_key: str, err &: Error): Vector<TaskInfo>:
+    mut out := Vector {} as Vector<TaskInfo>
+    mut size := batch_size
+    if size <= 0: size = 1000 end
+    mut i := 0
+    until i < documents.len():
+        mut chunk := Vector {} as Vector<str>
+        mut j := i
+        until j < documents.len() and j < i + size:
+            chunk.push(documents.get(j))
+            j += 1
+        end
+        info := AddDocuments(c, uid, json.Array(chunk), primary_key, err)
+        if not Ok(err): ret out end
+        out.push(info)
+        i = j
+    end
+    ret out
+end
+
+@en "AddDocumentsOf"
+@fa "افزودن_سندهای_نوع"
+pub func AddDocumentsOf<T>(c: Client, uid: str, documents: Vector<T>, primary_key: str, err &: Error): TaskInfo:
+    mut items := Vector {} as Vector<str>
+    each d in documents:
+        items.push(json.Marshal(d))
+    end
+    ret AddDocuments(c, uid, json.Array(items), primary_key, err)
+end
+
+@en "GetDocument"
+@fa "دریافت_سند"
+pub func GetDocument(c: Client, uid: str, id: str, fields: Vector<str>, err &: Error): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if fields.len() > 0:
+        keys.push("fields")
+        vals.push(str.Join(fields, ","))
+    end
+    ret _call(c, "GET", _ipath(uid) + "/documents/" + _esc(id) + _query(keys, vals), "", err)
+end
+
+@en "GetDocumentAs"
+@fa "دریافت_سند_به_نوع"
+pub func GetDocumentAs<T>(c: Client, uid: str, id: str, out &: T, err &: Error): bool:
+    body := GetDocument(c, uid, id, Vector {} as Vector<str>, err)
+    if not Ok(err): ret false end
+    mut e := encerr.EncodingError {}
+    if not json.UnmarshalLenient(body, out, e):
+        _decode_error(e, err)
+        ret false
+    end
+    ret true
+end
+
+@en "GetDocuments"
+@fa "دریافت_سندها"
+pub func GetDocuments(c: Client, uid: str, q: DocumentsQuery, err &: Error): Page:
+    mut m := Vector {} as Vector<str>
+    if q.offset > 0: m.push(json.MemberInt("offset", q.offset as i64)) end
+    if q.limit > 0: m.push(json.MemberInt("limit", q.limit as i64)) end
+    if q.fields.len() > 0: m.push(json.MemberRaw("fields", _strs_json(q.fields))) end
+    if q.filter.len() > 0: m.push(json.MemberRaw("filter", _filter_json(q.filter))) end
+    if q.ids.len() > 0: m.push(json.MemberRaw("ids", _strs_json(q.ids))) end
+    if q.sort.len() > 0: m.push(json.MemberRaw("sort", _strs_json(q.sort))) end
+    if q.retrieve_vectors: m.push(json.MemberBool("retrieveVectors", true)) end
+    body := _call(c, "POST", _ipath(uid) + "/documents/fetch", json.Object(m), err)
+    ret _page(body)
+end
+
+@en "DocumentsAs"
+@fa "سندها_به_نوع"
+pub func DocumentsAs<T>(p: Page, out &: Vector<T>, err &: Error): bool:
+    each item in p.results:
+        mut v := T {}
+        mut e := encerr.EncodingError {}
+        if not json.UnmarshalLenient(item, v, e):
+            _decode_error(e, err)
+            ret false
+        end
+        out.push(v)
+    end
+    ret true
+end
+
+@en "DeleteDocument"
+@fa "حذف_سند"
+pub func DeleteDocument(c: Client, uid: str, id: str, err &: Error): TaskInfo:
+    ret _task_info(_call(c, "DELETE", _ipath(uid) + "/documents/" + _esc(id), "", err))
+end
+
+@en "DeleteDocuments"
+@fa "حذف_سندها"
+pub func DeleteDocuments(c: Client, uid: str, ids: Vector<str>, err &: Error): TaskInfo:
+    ret _task_info(_call(c, "POST", _ipath(uid) + "/documents/delete-batch", _strs_json(ids), err))
+end
+
+@en "DeleteDocumentsByFilter"
+@fa "حذف_سندها_با_فیلتر"
+pub func DeleteDocumentsByFilter(c: Client, uid: str, filter: str, err &: Error): TaskInfo:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("filter", _filter_json(filter)))
+    ret _task_info(_call(c, "POST", _ipath(uid) + "/documents/delete", json.Object(m), err))
+end
+
+@en "DeleteAllDocuments"
+@fa "حذف_همه_سندها"
+pub func DeleteAllDocuments(c: Client, uid: str, err &: Error): TaskInfo:
+    ret _task_info(_call(c, "DELETE", _ipath(uid) + "/documents", "", err))
+end
+
+@en "UpdateDocumentsByFunction"
+@fa "به_روزرسانی_سندها_با_تابع"
+pub func UpdateDocumentsByFunction(c: Client, uid: str, function: str, filter: str, context: str, err &: Error): TaskInfo:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("function", function))
+    if filter.len() > 0: m.push(json.MemberRaw("filter", _filter_json(filter))) end
+    if context.len() > 0: m.push(json.MemberRaw("context", context)) end
+    ret _task_info(_call(c, "POST", _ipath(uid) + "/documents/edit", json.Object(m), err))
+end

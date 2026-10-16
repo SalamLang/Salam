@@ -54,6 +54,7 @@ mut tr_pkg_ready := false
 mut tr_pkg_root := ""
 mut tr_pkg_en := Vector {} as Vector<str>
 mut tr_pkg_fa := Vector {} as Vector<str>
+mut tr_pkg_dir := Vector {} as Vector<str>
 
 struct TrCtx:
     pub target: int = 0
@@ -187,15 +188,13 @@ func tr_extract_tag(line: str, tag_prefix: str): str:
     ret str.Substr(rest, q1 + 1, q2 - q1 - 1)
 end
 
-func tr_index_package_file(path: str):
+func tr_read_pkg_tags(path: str, en_out &: str, fa_out &: str):
     text := os.ReadFile(path)
     if str.Len(text) == 0:
         ret
     end
     lines := str.Split(text, "\n")
     defer lines.free()
-    mut en_val := ""
-    mut fa_val := ""
     repeat lines.len() in i:
         line := lines.get(i)
         trimmed := str.TrimLeft(line)
@@ -204,16 +203,46 @@ func tr_index_package_file(path: str):
         end
         e := tr_extract_tag(line, "@en ")
         if str.Len(e) > 0:
-            en_val = e
+            en_out = e
         end
         f := tr_extract_tag(line, "@fa ")
         if str.Len(f) > 0:
-            fa_val = f
+            fa_out = f
         end
     end
-    if str.Len(en_val) > 0 and str.Len(fa_val) > 0:
-        tr_pkg_en.push(en_val)
-        tr_pkg_fa.push(fa_val)
+end
+
+func tr_index_dir(std_root: str, rel: str, parent_en: str, parent_fa: str, depth: int):
+    dirpath := str.Len(rel) == 0 ? std_root : pth.PathJoin(std_root, rel)
+    entries := os.ListDir(dirpath)
+    defer entries.free()
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.StartsWith(name, "."):
+            continue
+        end
+        sub := str.Len(rel) == 0 ? name : rel + "/" + name
+        full := pth.PathJoin(std_root, sub)
+        if not os.IsDir(full):
+            continue
+        end
+        mut en_tag := ""
+        mut fa_tag := ""
+        file := pth.PathJoin(full, name + ".salam")
+        if os.Exists(file):
+            tr_read_pkg_tags(file, en_tag, fa_tag)
+        end
+        en_path := str.Len(parent_en) > 0 ? parent_en + "." + name : name
+        fa_seg := str.Len(fa_tag) > 0 ? fa_tag : name
+        fa_path := str.Len(parent_fa) > 0 ? parent_fa + "." + fa_seg : fa_seg
+        if str.Len(fa_tag) > 0:
+            tr_pkg_en.push(en_path)
+            tr_pkg_fa.push(fa_path)
+            tr_pkg_dir.push(sub)
+        end
+        if depth < 4:
+            tr_index_dir(std_root, sub, en_path, fa_path, depth + 1)
+        end
     end
 end
 
@@ -223,61 +252,78 @@ func tr_build_pkg_index(std_root: str):
     end
     tr_pkg_en.free()
     tr_pkg_fa.free()
+    tr_pkg_dir.free()
     tr_pkg_en = Vector {} as Vector<str>
     tr_pkg_fa = Vector {} as Vector<str>
+    tr_pkg_dir = Vector {} as Vector<str>
     tr_pkg_ready = true
     tr_pkg_root = std_root
     if not os.IsDir(std_root):
         ret
     end
-    dirs := os.ListDir(std_root)
-    defer dirs.free()
-    repeat dirs.len() in i:
-        name := dirs.get(i)
-        if str.StartsWith(name, "."):
-            continue
-        end
-        dirpath := pth.PathJoin(std_root, name)
-        if not os.IsDir(dirpath):
-            continue
-        end
-        file := pth.PathJoin(dirpath, name + ".salam")
-        if os.Exists(file):
-            tr_index_package_file(file)
-        end
-    end
+    tr_index_dir(std_root, "", "", "", 0)
 end
 
-func tr_pkg_alias(std_root: str, name: str): str:
+func tr_pkg_find(std_root: str, path: str, from_fa: bool): int:
     tr_build_pkg_index(std_root)
-    n := tr_pkg_en.len()
-    mut i := 0
-    until i < n:
-        if str.Equals(tr_pkg_en.get(i), name):
-            ret tr_pkg_fa.get(i)
+    repeat tr_pkg_en.len() in i:
+        if from_fa:
+            if lp.IdentEqual(tr_pkg_fa.get(i), path):
+                ret i
+            end
+        else str.Equals(tr_pkg_en.get(i), path):
+            ret i
         end
-        if str.Equals(tr_pkg_fa.get(i), name):
-            ret tr_pkg_en.get(i)
-        end
-        i += 1
     end
-    ret ""
+    ret 0 - 1
 end
 
-func tr_pkg_canon(std_root: str, name: str): str:
-    tr_build_pkg_index(std_root)
-    n := tr_pkg_en.len()
-    mut i := 0
-    until i < n:
-        if str.Equals(tr_pkg_en.get(i), name) or str.Equals(tr_pkg_fa.get(i), name):
-            ret tr_pkg_en.get(i)
-        end
-        i += 1
+func tr_last_seg(path: str): str:
+    dot := str.LastIndex(path, ".")
+    if dot < 0:
+        ret path
     end
-    ret ""
+    ret str.Substr(path, dot + 1, str.Len(path) - dot - 1)
 end
 
-func tr_scan_file_member(path: str, name: str, from_fa: bool): str:
+func tr_pkg_target_alias(idx: int, targetpack: int): str:
+    ret tr_last_seg(targetpack == lp.LP_FA ? tr_pkg_fa.get(idx) : tr_pkg_en.get(idx))
+end
+
+func tr_decl_name(line: str): str:
+    mut rest := str.TrimLeft(line)
+    mut changed := true
+    until changed:
+        changed = false
+        each pre in ["pub ", "inline ", "pure ", "extern "]:
+            if str.StartsWith(rest, pre):
+                rest = str.TrimLeft(str.Substr(rest, str.Len(pre), str.Len(rest) - str.Len(pre)))
+                changed = true
+            end
+        end
+    end
+    mut kw_found := false
+    each kw in ["func ", "const ", "struct ", "interface ", "enum ", "type ", "mut "]:
+        if not kw_found and str.StartsWith(rest, kw):
+            rest = str.TrimLeft(str.Substr(rest, str.Len(kw), str.Len(rest) - str.Len(kw)))
+            kw_found = true
+        end
+    end
+    if not kw_found:
+        ret ""
+    end
+    mut end_at := 0
+    until end_at < str.Len(rest):
+        c := co.ByteAt(rest, end_at)
+        if not ((c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95):
+            break
+        end
+        end_at += 1
+    end
+    ret str.Substr(rest, 0, end_at)
+end
+
+func tr_scan_file_member(path: str, name: str, from_fa: bool, methods: bool): str:
     text := os.ReadFile(path)
     if str.Len(text) == 0:
         ret ""
@@ -285,22 +331,41 @@ func tr_scan_file_member(path: str, name: str, from_fa: bool): str:
     lines := str.Split(text, "\n")
     defer lines.free()
     mut pending_en := ""
+    mut pending_method := false
+    mut struct_indent := 0 - 1
     mut i := 0
     until i < lines.len():
         line := lines.get(i)
+        trimmed_line := str.TrimLeft(line)
+        indent := str.Len(line) - str.Len(trimmed_line)
+        if str.StartsWith(trimmed_line, "struct ") or str.StartsWith(trimmed_line, "pub struct ") or str.StartsWith(trimmed_line, "interface ") or str.StartsWith(trimmed_line, "pub interface "):
+            struct_indent = indent
+        else struct_indent >= 0 and indent == struct_indent and str.Equals(str.TrimRight(trimmed_line), "end"):
+            struct_indent = 0 - 1
+        end
         e := tr_extract_tag(line, "@en ")
         if str.Len(e) > 0:
             pending_en = e
+            pending_method = struct_indent >= 0 and indent > struct_indent
             i += 1
             continue
         end
         f := tr_extract_tag(line, "@fa ")
         if str.Len(f) > 0:
-            if str.Len(pending_en) > 0:
-                if from_fa and str.Equals(f, name):
-                    ret pending_en
+            mut header := false
+            mut k := i + 1
+            until k < lines.len() and str.Len(str.Trim(lines.get(k))) == 0:
+                k += 1
+            end
+            if k < lines.len() and str.StartsWith(str.TrimLeft(lines.get(k)), "package "):
+                header = true
+            end
+            if str.Len(pending_en) > 0 and pending_method == methods and not header:
+                decl := k < lines.len() ? tr_decl_name(lines.get(k)) : ""
+                if from_fa and lp.IdentEqual(f, name):
+                    ret str.Len(decl) > 0 ? decl : pending_en
                 end
-                if not from_fa and str.Equals(pending_en, name):
+                if not from_fa and (str.Equals(pending_en, name) or str.Equals(decl, name)):
                     ret f
                 end
             end
@@ -317,8 +382,8 @@ func tr_scan_file_member(path: str, name: str, from_fa: bool): str:
     ret ""
 end
 
-func tr_pkg_member(std_root: str, pkg_dirname: str, name: str, from_fa: bool): str:
-    dirpath := pth.PathJoin(std_root, pkg_dirname)
+func tr_pkg_member(std_root: str, pkg_dir: str, name: str, from_fa: bool, methods: bool): str:
+    dirpath := pth.PathJoin(std_root, pkg_dir)
     if not os.IsDir(dirpath):
         ret ""
     end
@@ -329,7 +394,7 @@ func tr_pkg_member(std_root: str, pkg_dirname: str, name: str, from_fa: bool): s
     until i < files.len() and str.Len(result) == 0:
         fname := files.get(i)
         if str.EndsWith(fname, ".salam"):
-            found := tr_scan_file_member(pth.PathJoin(dirpath, fname), name, from_fa)
+            found := tr_scan_file_member(pth.PathJoin(dirpath, fname), name, from_fa, methods)
             if str.Len(found) > 0:
                 result = found
             end
@@ -337,6 +402,96 @@ func tr_pkg_member(std_root: str, pkg_dirname: str, name: str, from_fa: bool): s
         i += 1
     end
     ret result
+end
+
+func tr_word_kind(kind: int): bool:
+    ret kind == tok.TK_IDENT or tok.IsKeyword(kind) or kind == tok.TK_AND or kind == tok.TK_OR or kind == tok.TK_NOT
+end
+
+func tr_member_words(std_root: str, pkg_dir: str, toks: tok.TokenStream, i: int, n: int, from_fa: bool, methods: bool, best_j &: int): str:
+    first := tok.StreamAt(toks, i)
+    mut words := first.lexeme
+    mut found := tr_pkg_member(std_root, pkg_dir, words, from_fa, methods)
+    best_j = i
+    mut j := i
+    until j + 1 < n and j - i < 6 and (from_fa and tr_word_kind(tok.StreamAt(toks, j + 1).kind) or tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT) and tok.StreamAt(toks, j + 1).begin_line == first.begin_line:
+        j += 1
+        words = words + " " + tok.StreamAt(toks, j).lexeme
+        cand := tr_pkg_member(std_root, pkg_dir, words, from_fa, methods)
+        if str.Len(cand) > 0:
+            found = cand
+            best_j = j
+        end
+    end
+    ret found
+end
+
+func tr_builtin_words(targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, best_j &: int): str:
+    first := tok.StreamAt(toks, i)
+    mut words := first.lexeme
+    mut found := ""
+    if tr_next_is_call(toks, i, n):
+        found = tr_method_word(targetpack, words)
+        best_j = i
+    end
+    if not from_fa:
+        ret found
+    end
+    mut j := i
+    until j + 1 < n and j - i < 3 and tr_word_kind(tok.StreamAt(toks, j + 1).kind) and tok.StreamAt(toks, j + 1).begin_line == first.begin_line:
+        j += 1
+        words = words + " " + tok.StreamAt(toks, j).lexeme
+        if tr_next_is_call(toks, j, n):
+            cand := tr_method_word(targetpack, words)
+            if str.Len(cand) > 0:
+                found = cand
+                best_j = j
+            end
+        end
+    end
+    ret found
+end
+
+func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, best_j &: int): str:
+    best_j = i
+    if member_pkg >= 0:
+        ret tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, false, best_j)
+    end
+    if var_pkg >= 0:
+        found := tr_member_words(std_root, tr_pkg_dir.get(var_pkg), toks, i, n, from_fa, true, best_j)
+        if str.Len(found) > 0 and tr_next_is_call(toks, best_j, n):
+            ret found
+        end
+    end
+    builtin := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
+    if str.Len(builtin) > 0:
+        ret builtin
+    end
+    best_j = i
+    if declared:
+        ret ""
+    end
+    repeat alias_pkg.len() in pk:
+        if alias_pkg.get(pk) >= 0:
+            found := tr_member_words(std_root, tr_pkg_dir.get(alias_pkg.get(pk)), toks, i, n, from_fa, true, best_j)
+            if str.Len(found) > 0 and tr_next_is_call(toks, best_j, n):
+                ret found
+            end
+        end
+    end
+    best_j = i
+    ret ""
+end
+
+func tr_builtin_word(targetpack: int, name: str): str:
+    if targetpack == lp.LP_FA:
+        ret lp.BuiltinSpellOf(lp.LP_FA, name)
+    end
+    canon := lp.BuiltinCanonOf(lp.LP_FA, name)
+    if str.Equals(canon, name):
+        ret ""
+    end
+    ret canon
 end
 
 func tr_is_marker_line(line: str): bool:
@@ -471,22 +626,25 @@ func tr_imported_packages(toks: tok.TokenStream, n: int): Vector<str>:
     until i < n:
         if tok.StreamAt(toks, i).kind == tok.TK_KW_IMPORT:
             mut j := i + 1
-            mut last := ""
+            mut path := ""
             mut word := ""
             until j < n:
                 k := tok.StreamAt(toks, j).kind
                 if k == tok.TK_IDENT:
                     word = str.Len(word) > 0 ? word + " " + tok.StreamAt(toks, j).lexeme : tok.StreamAt(toks, j).lexeme
                 else k == tok.TK_DOT:
+                    path = str.Len(path) > 0 ? path + "." + word : word
                     word = ""
                 else:
                     break
                 end
-                last = word
                 j += 1
             end
-            if str.Len(last) > 0:
-                names.push(last)
+            if str.Len(word) > 0:
+                path = str.Len(path) > 0 ? path + "." + word : word
+            end
+            if str.Len(path) > 0:
+                names.push(path)
             end
             i = j
             continue
@@ -494,6 +652,65 @@ func tr_imported_packages(toks: tok.TokenStream, n: int): Vector<str>:
         i += 1
     end
     ret names
+end
+
+func tr_alias_words(toks: tok.TokenStream, i: int, n: int, aliases: Vector<str>, count &: int): int:
+    first := tok.StreamAt(toks, i)
+    mut words := first.lexeme
+    mut j := i
+    until true:
+        if tr_next_kind(toks, j, n) == tok.TK_DOT:
+            repeat aliases.len() in a:
+                if lp.IdentEqual(aliases.get(a), words):
+                    count = j - i + 1
+                    ret a
+                end
+            end
+        end
+        if j + 1 >= n or j - i >= 5:
+            break
+        end
+        nx := tok.StreamAt(toks, j + 1)
+        if nx.kind != tok.TK_IDENT or nx.begin_line != first.begin_line:
+            break
+        end
+        j += 1
+        words = words + " " + nx.lexeme
+    end
+    ret 0 - 1
+end
+
+func tr_var_packages(toks: tok.TokenStream, n: int, aliases: Vector<str>, alias_pkg: Vector<int>, var_names &: Vector<str>, var_pkgs &: Vector<int>):
+    mut prev := 0 - 1
+    mut i := 0
+    until i + 3 < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_IDENT and prev != tok.TK_DOT:
+            op := tok.StreamAt(toks, i + 1).kind
+            if op == tok.TK_COLON_ASSIGN or op == tok.TK_ASSIGN:
+                mut count := 0
+                a := tr_alias_words(toks, i + 2, n, aliases, count)
+                if a >= 0 and alias_pkg.get(a) >= 0:
+                    var_names.push(t.lexeme)
+                    var_pkgs.push(alias_pkg.get(a))
+                end
+            end
+        end
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
+            prev = t.kind
+        end
+        i += 1
+    end
+end
+
+func tr_var_package(var_names: Vector<str>, var_pkgs: Vector<int>, name: str): int:
+    mut found := 0 - 1
+    repeat var_names.len() in v:
+        if lp.IdentEqual(var_names.get(v), name):
+            found = var_pkgs.get(v)
+        end
+    end
+    ret found
 end
 
 func tr_has_ident(names: Vector<str>, w: str): bool:
@@ -528,7 +745,7 @@ end
 
 func tr_is_decl_name(toks: tok.TokenStream, i: int, n: int, prev_kind: int): bool:
     nk := tr_next_kind(toks, i, n)
-    if nk != tok.TK_COLON and nk != tok.TK_COLON_ASSIGN:
+    if prev_kind == tok.TK_DOT or (nk != tok.TK_COLON and nk != tok.TK_COLON_ASSIGN):
         ret false
     end
     if not tr_prev_same_line(toks, i):
@@ -623,8 +840,11 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut cursor := 0
     mut prev_kind := 0 - 1
     mut expect_entry := false
-    mut prev_ident_lexeme := ""
-    mut dot_receiver := ""
+    mut pending_recv := 0 - 1
+    mut member_pkg := 0 - 1
+    mut in_import := false
+    mut imp_path := ""
+    from_fa := targetpack != lp.LP_FA
     mut angle_depth := 0
     mut alias_rhs := false
     mut css_attr := ""
@@ -634,6 +854,21 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     defer comp_names.free()
     pkgs := tr_imported_packages(toks, n)
     defer pkgs.free()
+    mut aliases := Vector {} as Vector<str>
+    defer aliases.free()
+    mut alias_pkg := Vector {} as Vector<int>
+    defer alias_pkg.free()
+    each ip in pkgs:
+        aliases.push(tr_last_seg(ip))
+        alias_pkg.push(tr_pkg_find(std_root, ip, from_fa))
+    end
+    mut var_names := Vector {} as Vector<str>
+    defer var_names.free()
+    mut var_pkgs := Vector {} as Vector<int>
+    defer var_pkgs.free()
+    tr_var_packages(toks, n, aliases, alias_pkg, var_names, var_pkgs)
+    mut prev_ident := ""
+    mut dot_var := ""
     mut gaps := Vector {} as Vector<int>
     defer gaps.free()
     tr_compare_gaps(srcpack, sfile, gaps)
@@ -650,6 +885,18 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         end
         mut lexeme := t.lexeme
         mut skip_emit := false
+        recv_prev := pending_recv
+        pending_recv = 0 - 1
+        mut recv_count := 0
+        mut recv_a := 0 - 1
+        mut kw_j := i
+        mut dot_member := ""
+        if prev_kind == tok.TK_DOT and tr_word_kind(t.kind) and (t.kind == tok.TK_IDENT or from_fa):
+            dot_member = tr_resolve_member(std_root, targetpack, toks, i, n, from_fa, member_pkg, tr_var_package(var_names, var_pkgs, dot_var), alias_pkg, tr_has(names, t.lexeme), kw_j)
+        end
+        if t.kind == tok.TK_IDENT and not in_import and prev_kind != tok.TK_DOT and not tr_has(names, t.lexeme):
+            recv_a = tr_alias_words(toks, i, n, aliases, recv_count)
+        end
         if t.kind == tok.TK_STMT_END:
             if ei > bi:
                 lexeme = str.Substr(text, bi, ei - bi)
@@ -679,6 +926,30 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         else t.kind == tok.TK_META:
             mapped := tr_ctx_word(targetpack, t.lexeme)
             lexeme = "@" + (str.Len(mapped) > 0 ? mapped : t.lexeme)
+        else t.kind == tok.TK_IDENT and in_import:
+            mut words := t.lexeme
+            mut j := i
+            until j + 1 < n and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, j + 1).begin_line == t.begin_line:
+                j += 1
+                words = words + " " + tok.StreamAt(toks, j).lexeme
+            end
+            imp_path = str.Len(imp_path) > 0 ? imp_path + "." + words : words
+            ei = tok.StreamAt(toks, j).end_index as int
+            i = j
+            idx := tr_pkg_find(std_root, imp_path, from_fa)
+            lexeme = idx >= 0 ? tr_pkg_target_alias(idx, targetpack) : str.Substr(text, bi, ei - bi)
+        else t.kind == tok.TK_IDENT and recv_a >= 0 and alias_pkg.get(recv_a) >= 0:
+            last := i + recv_count - 1
+            ei = tok.StreamAt(toks, last).end_index as int
+            i = last
+            lexeme = tr_pkg_target_alias(alias_pkg.get(recv_a), targetpack)
+            pending_recv = alias_pkg.get(recv_a)
+        else from_fa and prev_kind == tok.TK_DOT and t.kind != tok.TK_IDENT and str.Len(dot_member) > 0:
+            lexeme = dot_member
+            ei = tok.StreamAt(toks, kw_j).end_index as int
+            i = kw_j
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and tr_next_is_call(toks, i, n) and not tr_has(names, t.lexeme) and str.Len(tr_builtin_word(targetpack, t.lexeme)) > 0:
+            lexeme = tr_builtin_word(targetpack, t.lexeme)
         else t.kind == tok.TK_IDENT and i + 1 < n and tr_ctx_word_here(targetpack, t.lexeme, prev_kind, tok.StreamAt(toks, i + 1).kind):
             lexeme = tr_ctx_word(targetpack, t.lexeme)
         else t.kind == tok.TK_IDENT and i + 1 < n and prev_kind != tok.TK_IDENT and prev_kind != tok.TK_DOT and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT and (str.Equals(t.lexeme, "dyn") or str.Equals(t.lexeme, "پویا")):
@@ -708,21 +979,11 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         else t.kind == tok.TK_IDENT:
             if expect_entry and str.Equals(t.lexeme, src_entry):
                 lexeme = tgt_entry
-            else prev_kind == tok.TK_KW_IMPORT:
-                pkg_mapped := tr_pkg_alias(std_root, t.lexeme)
-                if str.Len(pkg_mapped) > 0:
-                    lexeme = pkg_mapped
-                end
-            else prev_kind != tok.TK_DOT and tr_next_kind(toks, i, n) == tok.TK_DOT and tr_has_ident(pkgs, t.lexeme) and not tr_has(names, t.lexeme):
-                recv_mapped := tr_pkg_alias(std_root, t.lexeme)
-                if str.Len(recv_mapped) > 0:
-                    lexeme = recv_mapped
-                end
             else:
                 mut type_mapped := ""
                 if prev_kind == tok.TK_DOT and tr_next_kind(toks, i, n) == tok.TK_LT:
                     type_mapped = tr_type_word(targetpack, t.lexeme)
-                else prev_kind != tok.TK_DOT and not tr_is_decl_name(toks, i, n, prev_kind):
+                else prev_kind != tok.TK_DOT and not tr_is_decl_name(toks, i, n, prev_kind) and not ((prev_kind == tok.TK_LBRACE or prev_kind == tok.TK_COMMA) and tr_next_kind(toks, i, n) == tok.TK_ASSIGN):
                     type_pos := (prev_kind == tok.TK_COLON and tr_prev_same_line(toks, i)) or (prev_kind == tok.TK_ASSIGN and alias_rhs) or prev_kind == tok.TK_KW_AS or prev_kind == tok.TK_KW_ON or prev_kind == tok.TK_LT or (prev_kind == tok.TK_COMMA and angle_depth > 0) or tr_next_kind(toks, i, n) == tok.TK_LBRACE
                     if type_pos or not tr_has(names, t.lexeme):
                         type_mapped = tr_type_word(targetpack, t.lexeme)
@@ -731,45 +992,13 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                 if str.Len(type_mapped) > 0:
                     lexeme = type_mapped
                 else prev_kind == tok.TK_DOT:
-                    pkg_dirname := tr_pkg_canon(std_root, dot_receiver)
-                    mut sym_mapped := ""
-                    if str.Len(pkg_dirname) > 0:
-                        mut words := t.lexeme
-                        mut j := i
-                        sym_mapped = tr_pkg_member(std_root, pkg_dirname, words, targetpack != lp.LP_FA)
-                        mut best_j := i
-                        until j + 1 < n and j - i < 6 and tok.StreamAt(toks, j + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, j + 1).begin_line == t.begin_line:
-                            j += 1
-                            words = words + " " + tok.StreamAt(toks, j).lexeme
-                            cand := tr_pkg_member(std_root, pkg_dirname, words, targetpack != lp.LP_FA)
-                            if str.Len(cand) > 0:
-                                sym_mapped = cand
-                                best_j = j
-                            end
-                        end
-                        if str.Len(sym_mapped) > 0 and best_j > i:
-                            ei = tok.StreamAt(toks, best_j).end_index as int
-                            i = best_j
-                        end
-                    end
+                    sym_mapped := dot_member
+                    best_j := kw_j
                     if str.Len(sym_mapped) > 0:
                         lexeme = sym_mapped
-                    else tr_next_is_call(toks, i, n):
-                        method_mapped := tr_method_word(targetpack, t.lexeme)
-                        if str.Len(method_mapped) > 0:
-                            lexeme = method_mapped
-                        else not tr_has(names, t.lexeme):
-                            repeat pkgs.len() in pk:
-                                if str.Len(lexeme) == str.Len(t.lexeme) and str.Equals(lexeme, t.lexeme):
-                                    pdir := tr_pkg_canon(std_root, pkgs.get(pk))
-                                    if str.Len(pdir) > 0:
-                                        mm := tr_pkg_member(std_root, pdir, t.lexeme, targetpack != lp.LP_FA)
-                                        if str.Len(mm) > 0:
-                                            lexeme = mm
-                                        end
-                                    end
-                                end
-                            end
+                        if best_j > i:
+                            ei = tok.StreamAt(toks, best_j).end_index as int
+                            i = best_j
                         end
                     end
                 end
@@ -780,7 +1009,19 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         end
         expect_entry = t.kind == tok.TK_KW_FUNC
         if t.kind == tok.TK_DOT:
-            dot_receiver = prev_ident_lexeme
+            member_pkg = recv_prev
+            dot_var = prev_kind == tok.TK_IDENT ? prev_ident : ""
+        else t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
+            member_pkg = 0 - 1
+        end
+        if t.kind == tok.TK_IDENT:
+            prev_ident = t.lexeme
+        end
+        if t.kind == tok.TK_KW_IMPORT:
+            in_import = true
+            imp_path = ""
+        else t.kind == tok.TK_STMT_END:
+            in_import = false
         end
         if t.kind == tok.TK_KW_TYPE:
             alias_rhs = true
@@ -791,9 +1032,6 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             angle_depth += 1
         else t.kind == tok.TK_GT and angle_depth > 0:
             angle_depth -= 1
-        end
-        if t.kind == tok.TK_IDENT:
-            prev_ident_lexeme = t.lexeme
         end
         if t.kind == tok.TK_LAYOUT_ATTR_NAME:
             css_attr = t.lexeme

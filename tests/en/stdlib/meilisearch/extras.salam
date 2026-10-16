@@ -1,0 +1,147 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19808
+
+func show(label: str, err: meilisearch.Error):
+    println label + ": " + fake.Last()
+    if not meilisearch.Ok(err):
+        println "  error: " + meilisearch.ErrorString(err)
+    end
+end
+
+func main:
+    queued := `{"taskUid":40,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate","enqueuedAt":"2025-01-02T03:04:05Z","customMetadata":"import-7"}`
+    fake.On("POST", "/indexes/movies/documents", 202, queued)
+    fake.On("PUT", "/indexes/movies/documents", 202, queued)
+    fake.On("DELETE", "/indexes/movies/documents/9", 202, queued)
+    fake.On("POST", "/indexes/movies/documents/delete-batch", 202, queued)
+    fake.On("POST", "/indexes/movies/documents/delete", 202, queued)
+    fake.On("DELETE", "/indexes/movies/documents", 202, queued)
+    fake.On("POST", "/indexes/movies/documents/edit", 202, queued)
+    fake.On("GET", "/indexes/movies/documents/9", 200, `{"id":9,"_vectors":{"default":[0.1]}}`)
+    fake.On("POST", "/indexes/movies/documents/fetch", 200, `{"results":[],"offset":0,"limit":20,"total":0}`)
+    fake.On("POST", "/indexes/movies/search", 200, `{"hits":[],"query":"q","processingTimeMs":1,"limit":20,"offset":0,"estimatedTotalHits":0,"requestUid":"0199a1b2-req","performanceDetails":{"search":"1ms"},"queryVector":[0.5,0.25],"metadata":{"queryUid":"x"}}`)
+    fake.On("POST", "/multi-search", 200, `{"hits":[],"processingTimeMs":1,"limit":5,"offset":0,"estimatedTotalHits":0,"facetsByIndex":{"movies":{"distribution":{}}},"remoteErrors":{"ms-1":{"code":"remote_could_not_send_request"}}}`)
+    fake.On("POST", "/indexes/movies/facet-search", 200, `{"facetHits":[],"facetQuery":null,"processingTimeMs":0,"remoteErrors":{}}`)
+    fake.On("POST", "/indexes/movies/similar", 200, `{"hits":[],"id":"1","processingTimeMs":2}`)
+    fake.On("POST", "/indexes/movies/compact", 202, `{"taskUid":41,"indexUid":"movies","status":"enqueued","type":"indexCompaction","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("POST", "/indexes/movies/fields", 200, `{"results":[{"name":"title","displayed":{"enabled":true},"searchable":{"enabled":true},"sortable":{"enabled":false},"distinct":{"enabled":false},"rankingRule":{"enabled":false,"order":null},"filterable":{"enabled":true,"sortBy":"alpha","facetSearch":false,"equality":true,"comparison":false},"localized":{"locales":[]}}],"offset":0,"limit":20,"total":1}`)
+    fake.On("GET", "/indexes/movies/stats", 200, `{"numberOfDocuments":3,"rawDocumentDbSize":100,"avgDocumentSize":33,"isIndexing":false,"numberOfEmbeddings":0,"numberOfEmbeddedDocuments":0,"fieldDistribution":{},"indexSize":4096,"usedIndexSize":2048,"internalDatabaseSizes":{"documents":"1 KiB"}}`)
+    fake.On("POST", "/tasks/compact", 200, `{"status":"succeeded","preSize":"10 MiB","postSize":"2 MiB","actionRequired":null,"errorMessage":null}`)
+    fake.On("GET", "/tasks/40/documents", 200, "{\"id\":1}\n{\"id\":2}\n")
+    fake.On("GET", "/tasks/40", 200, `{"uid":40,"indexUid":"movies","status":"succeeded","type":"documentAdditionOrUpdate","customMetadata":"import-7","network":{"origin":{"remoteName":"ms-0"}}}`)
+    fake.On("GET", "/batches/2", 200, `{"uid":2,"batchStrategy":"batched all enqueued tasks"}`)
+    fake.On("GET", "/proxy/meili/health", 200, `{"status":"available"}`)
+    fake.On("GET", "/slow", 200, `{}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    tagged := meilisearch.WithMetadata(c, "import-7")
+    info := meilisearch.AddDocuments(tagged, "movies", `[{"id":1}]`, "id", err)
+    show("tagged add", err)
+    println "  -> metadata " + info.custom_metadata
+    meilisearch.AddDocumentsWith(tagged, "movies", "id\n1\n", meilisearch.DocumentOptions { content_type = "text/csv", csv_delimiter = ";", skip_creation = true }, err)
+    show("add with", err)
+    meilisearch.AddDocumentsWith(c, "movies", `[{"id":1}]`, meilisearch.DocumentOptions { update = true }, err)
+    show("update with", err)
+    meilisearch.DeleteDocument(tagged, "movies", "9", err)
+    show("tagged delete", err)
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    meilisearch.DeleteDocuments(tagged, "movies", ids, err)
+    show("tagged delete batch", err)
+    meilisearch.DeleteDocumentsByFilter(tagged, "movies", "id > 1", err)
+    show("tagged delete filter", err)
+    meilisearch.DeleteAllDocuments(tagged, "movies", err)
+    show("tagged delete all", err)
+    meilisearch.UpdateDocumentsByFunction(tagged, "movies", "doc.n = 1", "", "", err)
+    show("tagged edit", err)
+    println "untagged: " + c.metadata.len()
+
+    mut fields := Vector {} as Vector<str>
+    fields.push("id")
+    println "doc: " + meilisearch.GetDocumentWith(c, "movies", "9", meilisearch.DocumentsQuery { fields = fields, retrieve_vectors = true, use_network = true }, err)
+    show("doc with", err)
+    meilisearch.GetDocuments(c, "movies", meilisearch.DocumentsQuery { use_network = true }, err)
+    show("fetch network", err)
+
+    r := meilisearch.Search(c, "movies", meilisearch.SearchRequest { query = "q", show_performance_details = true, use_network = true, personalize = `{"userContext":"likes sci-fi"}`, inline_rule = `{"actions":{"pin":[{"id":"1","position":0}]}}` }, err)
+    show("search", err)
+    println "  -> request " + r.request_uid + " perf " + r.performance_details + " vector " + r.query_vector + " metadata " + r.metadata
+
+    mut qs := Vector {} as Vector<meilisearch.MultiQuery>
+    qs.push(meilisearch.MultiQuery { index_uid = "movies", request = meilisearch.SearchRequest { query = "q" }, query_position = 2 })
+    fed := meilisearch.FederatedSearch(c, qs, meilisearch.Federation { limit = 5, distinct = "genre", personalize = `{"userContext":"x"}`, show_performance_details = true }, err)
+    show("federated", err)
+    println "  -> by index " + fed.facets_by_index + " remote errors " + fed.remote_errors
+
+    mut fr := meilisearch.FacetSearchRequest { facet_name = "genre", ranking_score_threshold = 0.5, hybrid_embedder = "default", hybrid_semantic_ratio = 0.5, media = `{"image":"x.png"}`, use_network = true }
+    fr.locales.push("fas")
+    fr.vector.push(1.5)
+    fs := meilisearch.FacetSearch(c, "movies", fr, err)
+    show("facet", err)
+    println "  -> remote errors " + fs.remote_errors
+
+    meilisearch.SimilarDocuments(c, "movies", meilisearch.SimilarRequest { id = "1", embedder = "default", show_performance_details = true }, err)
+    show("similar", err)
+
+    ci := meilisearch.CompactIndex(c, "movies", err)
+    show("compact", err)
+    println "  -> " + ci.task_uid + " " + ci.kind
+
+    mut fq := meilisearch.FieldsQuery { limit = 20, filter = `{"filterable": true}` }
+    fq.attribute_patterns.push("ti*")
+    page := meilisearch.ListFields(c, "movies", fq, err)
+    show("fields", err)
+    println "  -> total " + page.total
+    each f in page.results:
+        println "  " + f.name + " displayed=" + f.displayed + " searchable=" + f.searchable + " sortable=" + f.sortable + " distinct=" + f.distinct + " filterable=" + f.filterable
+        println "    ranking=" + f.ranking_rule + " localized=" + f.localized
+    end
+    meilisearch.ListFields(c, "movies", meilisearch.FieldsQuery {}, err)
+    show("fields plain", err)
+
+    s := meilisearch.GetIndexStats(c, "movies", err)
+    println "stats: " + s.index_size + " " + s.used_index_size + " " + s.internal_database_sizes
+
+    comp := meilisearch.CompactTasks(c, err)
+    show("compact tasks", err)
+    println "  -> " + comp.status + " " + comp.pre_size + " " + comp.post_size + " [" + comp.action_required + "] [" + comp.error_message + "]"
+    println "task documents: " + meilisearch.GetTaskDocuments(c, 40, err).len()
+    t := meilisearch.GetTask(c, 40, err)
+    println "task: " + t.custom_metadata + " " + t.network
+    println "batch: " + meilisearch.GetBatch(c, 2, err).batch_strategy
+
+    meilisearch.CreateDump(c, err)
+    println "empty post: " + fake.LastLength() + ", " + fake.LastHost()
+
+    proxied := meilisearch.New("http://127.0.0.1:" + PORT + "/proxy/meili/", "")
+    println "proxied: " + meilisearch.Health(proxied, err) + " " + fake.Last()
+
+    fake.Slow("GET", "/slow", 1500)
+    quick := meilisearch.WithTimeout(c, 200)
+    println "timeout set: " + quick.timeout_ms + " keeps key: " + (quick.api_key == c.api_key)
+    meilisearch.Request(quick, "GET", "/slow", "", err)
+    println "slow: " + err.code + " " + err.kind
+    ret 0
+end

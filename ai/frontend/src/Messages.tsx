@@ -10,6 +10,7 @@ const PHASE_TEXT: Record<string, string> = {
   searching: "در حال بررسی مستندات سلام",
   working: "در حال کار روی رایانه‌ی شما",
   writing: "در حال نوشتن",
+  checking: "در حال اصلاح کد با کامپایلر سلام",
 };
 
 const FRAME_MS = 33;

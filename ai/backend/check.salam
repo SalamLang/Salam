@@ -1,0 +1,190 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aicheck
+
+import os
+import str
+import sync
+import fs.file
+import fs.path
+import os.temp
+
+const MAX_BLOCKS := 6
+const MAX_REPORT := 3000
+const TOP_EN := "expected a top-level definition"
+const TOP_FA := "یک تعریف سطح‌بالا انتظار می‌رفت"
+
+mut BIN := ""
+mut LOCK := sync.Mutex {}
+
+func persian(code: str): bool:
+    each cp in str.CodePoints(code):
+        if cp >= 1536 and cp <= 1791:
+            ret true
+        end
+    end
+    ret false
+end
+
+func salam_fence(info: str): bool:
+    lang := str.Lower(str.Trim(info))
+    ret lang == "salam" or lang == "سلام" or lang == "sl"
+end
+
+func blocks(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut inside := false
+    mut keep := false
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    each line in text.split("\n"):
+        t := str.Trim(line)
+        if not inside:
+            if str.StartsWith(t, "```"):
+                inside = true
+                keep = salam_fence(t.substr(3, t.len() - 3))
+                str.BufReset(b)
+            end
+            continue
+        end
+        if t == "```":
+            inside = false
+            if keep and out.len() < MAX_BLOCKS:
+                out.push(str.BufStr(b))
+            end
+            continue
+        end
+        if keep:
+            str.BufAppend(b, str.TrimSuffix(line, "\r"))
+            str.BufAppend(b, "\n")
+        end
+    end
+    ret out
+end
+
+func compile(code: str): str:
+    dir := temp.Directory()
+    if dir.len() == 0:
+        ret ""
+    end
+    src := path.Join(dir, "main.salam")
+    log := path.Join(dir, "out.txt")
+    if file.WriteText(src, code) < 0:
+        temp.RemoveDir(dir)
+        ret ""
+    end
+    _l := sync.Lock(LOCK)
+    code_ := os.Run("cd '" + dir + "' && timeout 20 '" + BIN + "' inspect main.salam --emit-symbol --log-level=error --no-color --xml-out=/dev/null > out.txt 2>&1")
+    _u := sync.Unlock(LOCK)
+    mut out := ""
+    if code_ != 0:
+        out = file.ReadText(log)
+        if out.len() == 0:
+            out = "error"
+        end
+    end
+    temp.RemoveDir(dir)
+    ret out
+end
+
+func errors_of(out: str, syntax_only: bool): Vector<str>:
+    mut found := Vector {} as Vector<str>
+    lines := out.split("\n")
+    repeat lines.len() in i:
+        l := lines.get(i)
+        head := str.StartsWith(l, "error") or str.StartsWith(l, "خطا")
+        if not head:
+            continue
+        end
+        coded := str.StartsWith(l, "error[") or str.StartsWith(l, "خطا[")
+        if syntax_only and coded:
+            continue
+        end
+        if l.find(TOP_EN) >= 0 or l.find(TOP_FA) >= 0:
+            continue
+        end
+        mut item := l
+        if i + 1 < lines.len():
+            item = item + "\n" + lines.get(i + 1)
+        end
+        if i + 3 < lines.len():
+            item = item + "\n" + lines.get(i + 3)
+        end
+        found.push(item)
+        if found.len() >= 4:
+            break
+        end
+    end
+    ret found
+end
+
+func check_block(code: str): str:
+    out := compile(code)
+    if out.len() == 0:
+        ret ""
+    end
+    if out.find(TOP_EN) < 0 and out.find(TOP_FA) < 0:
+        if code.find("include ") >= 0:
+            ret str.Join(errors_of(out, true), "\n")
+        end
+        ret str.Join(errors_of(out, false), "\n")
+    end
+    mut wrapped := ""
+    if persian(code):
+        wrapped = "تابع ریشه:\n" + code + "پایان\n"
+    else:
+        wrapped = "func main:\n" + code + "end\n"
+    end
+    again := compile(wrapped)
+    if again.len() == 0:
+        ret ""
+    end
+    ret str.Join(errors_of(again, true), "\n")
+end
+
+pub func Configure(bin: str):
+    LOCK = sync.NewMutex()
+    if bin.len() > 0 and file.Exists(bin):
+        BIN = bin
+    end
+end
+
+pub func Enabled(): bool:
+    ret BIN.len() > 0
+end
+
+pub func Problems(text: str): str:
+    if BIN.len() == 0 or text.find("```") < 0:
+        ret ""
+    end
+    mut report := Vector {} as Vector<str>
+    found := blocks(text)
+    repeat found.len() in i:
+        problems := check_block(found.get(i))
+        if problems.len() > 0:
+            report.push("Code block " + (i + 1) + ":\n" + found.get(i) + "Compiler:\n" + problems)
+        end
+    end
+    mut kept := Vector {} as Vector<str>
+    mut size := 0
+    each part in report:
+        if kept.len() > 0 and size + part.len() > MAX_REPORT:
+            break
+        end
+        kept.push(part)
+        size += part.len()
+    end
+    ret str.Join(kept, "\n\n")
+end

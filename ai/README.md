@@ -174,6 +174,14 @@ API answers and web streams write something at least every 10 seconds: SSE
 JSON body. Streaming completions also send the activity steps as
 `reasoning_content`. A proxy read timeout of 30 seconds or more is enough.
 
+Before an answer is final, every `salam` code block in it goes through the
+Salam compiler (`AI_SALAM_BIN`, shipped in the image at `/srv/salam/salam`).
+A whole program must compile; a fragment is wrapped in a main function and
+only syntax errors count. If a block fails, the errors go back to the engine
+in the same session and the model answers again, at most twice. Desktop chats
+fall back to `AI_ENGINE_AGENT` when the engine has no `AI_ENGINE_AGENT_DESKTOP`
+agent, and a turn the engine never starts fails after 45 seconds.
+
 The proxy must send `/bridge/poll` and `/bridge/result` to the streaming port
 with buffering off and a read timeout above 30 seconds. It must never expose
 `/bridge/mcp` publicly.

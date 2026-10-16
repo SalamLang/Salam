@@ -61,7 +61,7 @@ const plain = await chat(key, { model: "gpt-4o", messages: [{ role: "system", co
 const pj = await plain.json();
 check("a completion has the OpenAI shape", plain.status === 200 && pj.object === "chat.completion" && pj.choices[0].message.role === "assistant" && pj.choices[0].finish_reason === "stop" && typeof pj.usage.total_tokens === "number", pj);
 check("the answer contains no em or en dash", !DASHES.test(pj.choices[0].message.content), pj.choices[0].message.content);
-check("system instructions reach the engine", pj.choices[0].message.content.includes("Instructions from the calling"), pj.choices[0].message.content);
+check("system instructions reach the engine as marked caller context", pj.choices[0].message.content.includes("<caller_instructions>"), pj.choices[0].message.content);
 
 const st = await chat(key, { model: "salam", stream: true, stream_options: { include_usage: true }, messages: [{ role: "user", content: [{ type: "text", text: "Stream please" }] }] });
 const raw = await st.text();

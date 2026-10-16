@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19802
+
+func main:
+    fake.On("GET", "/tasks/5", 200, `{"uid":5,"batchUid":null,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate","details":{"receivedDocuments":2},"error":null,"duration":null,"enqueuedAt":"2025-01-02T03:04:05Z","startedAt":null,"finishedAt":null}`)
+    fake.On("GET", "/tasks/5", 200, `{"uid":5,"batchUid":3,"indexUid":"movies","status":"processing","type":"documentAdditionOrUpdate","details":{"receivedDocuments":2},"error":null,"duration":null,"enqueuedAt":"2025-01-02T03:04:05Z","startedAt":"2025-01-02T03:04:06Z","finishedAt":null}`)
+    fake.On("GET", "/tasks/5", 200, `{"uid":5,"batchUid":3,"indexUid":"movies","status":"succeeded","type":"documentAdditionOrUpdate","canceledBy":null,"details":{"receivedDocuments":2,"indexedDocuments":2},"error":null,"duration":"PT0.012S","enqueuedAt":"2025-01-02T03:04:05Z","startedAt":"2025-01-02T03:04:06Z","finishedAt":"2025-01-02T03:04:07Z"}`)
+    fake.On("GET", "/tasks/6", 200, `{"uid":6,"batchUid":4,"indexUid":"movies","status":"failed","type":"settingsUpdate","details":{},"error":{"message":"Attribute ` + "`genre`" + ` is not filterable.","code":"invalid_search_filter","type":"invalid_request","link":"https://docs.meilisearch.com/errors#invalid_search_filter"},"duration":"PT0.001S","enqueuedAt":"2025-01-02T03:04:05Z","startedAt":"2025-01-02T03:04:06Z","finishedAt":"2025-01-02T03:04:07Z"}`)
+    fake.On("GET", "/tasks/9", 200, `{"uid":9,"indexUid":"movies","status":"enqueued","type":"indexDeletion"}`)
+    fake.On("GET", "/tasks", 200, `{"results":[{"uid":2,"indexUid":"movies","status":"succeeded","type":"indexCreation","details":{"primaryKey":"id"}},{"uid":1,"indexUid":"books","status":"canceled","type":"indexCreation","canceledBy":4}],"total":40,"limit":2,"from":2,"next":0}`)
+    fake.On("POST", "/tasks/cancel", 200, `{"taskUid":10,"indexUid":null,"status":"enqueued","type":"taskCancelation","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("DELETE", "/tasks", 200, `{"taskUid":11,"indexUid":null,"status":"enqueued","type":"taskDeletion","enqueuedAt":"2025-01-02T03:04:05Z"}`)
+    fake.On("GET", "/batches/3", 200, `{"uid":3,"details":{"receivedDocuments":2},"progress":null,"stats":{"totalNbTasks":1,"status":{"succeeded":1}},"duration":"PT0.012S","startedAt":"2025-01-02T03:04:06Z","finishedAt":"2025-01-02T03:04:07Z"}`)
+    fake.On("GET", "/batches", 200, `{"results":[{"uid":3,"stats":{"totalNbTasks":1}},{"uid":2,"stats":{"totalNbTasks":4}}],"total":2,"limit":20,"from":3,"next":null}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    t := meilisearch.GetTask(c, 5, err)
+    println "task: " + t.uid + " " + t.status + " batch=" + t.batch_uid + " details=" + t.details + " ok=" + meilisearch.Ok(t.error)
+
+    done := meilisearch.WaitForTask(c, 5, 5000, 1, err)
+    println "waited: " + done.status + " batch=" + done.batch_uid + " took=" + done.duration + " finished=" + done.finished_at
+    println "details: " + done.details + " canceled_by=" + done.canceled_by
+
+    failed := meilisearch.WaitForTask(c, 6, 5000, 1, err)
+    println "failed: " + failed.status + " " + failed.error.code
+    println "error: " + meilisearch.ErrorString(err)
+
+    meilisearch.WaitForTask(c, 9, 30, 10, err)
+    println "timeout: " + err.code
+
+    info := meilisearch.TaskInfo { task_uid = 5 }
+    mut ok_err := meilisearch.Error {}
+    println "wait: " + meilisearch.Wait(c, info, ok_err).status
+    mut bad := meilisearch.Error { code = "earlier" }
+    println "wait after error: " + meilisearch.Wait(c, info, bad).uid + " " + bad.code
+
+    mut q := meilisearch.TaskQuery { limit = 2, from = 2, reverse = true }
+    q.statuses.push(meilisearch.STATUS_SUCCEEDED)
+    q.statuses.push(meilisearch.STATUS_CANCELED)
+    q.index_uids.push("movies")
+    q.index_uids.push("books")
+    q.uids.push(1)
+    q.uids.push(2)
+    q.types.push("indexCreation")
+    q.after_enqueued_at = "2025-01-01T00:00:00Z"
+    page := meilisearch.GetTasks(c, q, err)
+    println fake.Last()
+    println "tasks: total=" + page.total + " limit=" + page.limit + " from=" + page.from + " next=" + page.next + " n=" + page.results.len()
+    each item in page.results:
+        println "  " + item.uid + " " + item.index_uid + " " + item.status + " canceled_by=" + item.canceled_by
+    end
+
+    mut cq := meilisearch.TaskQuery {}
+    cq.statuses.push(meilisearch.STATUS_ENQUEUED)
+    cq.batch_uids.push(3)
+    cq.canceled_by.push(4)
+    cq.before_finished_at = "2025-02-01T00:00:00Z"
+    cancel := meilisearch.CancelTasks(c, cq, err)
+    println fake.Last()
+    println "cancel: " + cancel.task_uid + " " + cancel.kind
+    del := meilisearch.DeleteTasks(c, cq, err)
+    println fake.Last()
+    println "delete: " + del.task_uid + " " + del.kind
+
+    b := meilisearch.GetBatch(c, 3, err)
+    println "batch: " + b.uid + " stats=" + b.stats + " progress=[" + b.progress + "] " + b.duration
+    bp := meilisearch.GetBatches(c, meilisearch.TaskQuery {}, err)
+    println fake.Last()
+    println "batches: total=" + bp.total + " from=" + bp.from + " next=" + bp.next
+    each item in bp.results:
+        println "  " + item.uid + " " + item.stats
+    end
+    ret 0
+end

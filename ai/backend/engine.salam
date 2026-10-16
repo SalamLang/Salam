@@ -14,16 +14,32 @@
 
 package aiengine
 
-import net.http
+import net.tcp
 import encoding.json
 import encoding.value
 import encoding.encerr
 import str
+import sync
+import time
 
-mut ENGINE_URL := ""
+const CALL_MS := 20000
+const SEND_MS := 60000
+
+mut ENGINE_HOST := "127.0.0.1"
+mut ENGINE_PORT := 4096
+mut ENGINE_BASE := ""
 mut ENGINE_AUTH := ""
 mut ENGINE_AGENT := ""
 mut DESKTOP_AGENT := ""
+mut LOCK := sync.Mutex {}
+mut AGENTS := ""
+mut AGENTS_AT := 0 as i64
+mut SESSION_AGENT := HashMap {} as HashMap<str, str>
+
+struct Answer:
+    pub status: int = 0
+    pub body: str = ""
+end
 
 pub struct Reply:
     pub text: str = ""
@@ -31,6 +47,8 @@ pub struct Reply:
     pub done: bool = false
     pub failed: bool = false
     pub activity: str = "[]"
+    pub started: bool = false
+    pub idle: bool = false
 end
 
 pub struct Usage:
@@ -46,26 +64,129 @@ pub struct Usage:
     pub ms: i64 = 0
 end
 
-func headers(): HashMap<str, str>:
-    mut h := http.NewHeaders()
-    h.insert("Content-Type", "application/json")
-    if ENGINE_AUTH.len() > 0:
-        h.insert("Authorization", ENGINE_AUTH)
+func hex_value(s: str): int:
+    mut n := 0
+    mut i := 0
+    digits := "0123456789abcdef"
+    lower := str.Lower(str.Trim(s))
+    until i < lower.len():
+        c := lower.substr(i, 1)
+        if c == ";":
+            break
+        end
+        d := digits.find(c)
+        if d < 0:
+            ret -1
+        end
+        n = n * 16 + d
+        i += 1
     end
-    ret h
+    if i == 0:
+        ret -1
+    end
+    ret n
 end
 
-func ok_status(r: http.Response): bool:
-    code := http.Status(r)
-    ret code >= 200 and code < 300
+func dechunk(raw: str, ok &: bool): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    ok = false
+    until pos < raw.len():
+        rest := raw.substr(pos, raw.len() - pos)
+        le := rest.find("\r\n")
+        if le < 0:
+            break
+        end
+        size := hex_value(rest.substr(0, le))
+        if size < 0:
+            break
+        end
+        if size == 0:
+            ok = true
+            break
+        end
+        if rest.len() < le + 2 + size:
+            break
+        end
+        str.BufAppend(b, rest.substr(le + 2, size))
+        pos = pos + le + 2 + size + 2
+    end
+    ret str.BufStr(b)
 end
 
-func busy_now(sid: str): bool:
-    r := http.GetWith(ENGINE_URL + "/session/status", headers())
-    if not ok_status(r):
+func call(method: str, path: str, body: str, wait_ms: int): Answer:
+    mut out := Answer {}
+    c := tcp.Dial(ENGINE_HOST, ENGINE_PORT)
+    if not tcp.ConnOk(c):
+        tcp.Close(c)
+        ret out
+    end
+    tcp.SetReadDeadline(c, wait_ms)
+    tcp.SetWriteDeadline(c, wait_ms)
+    mut req := method + " " + ENGINE_BASE + path + " HTTP/1.1\r\nHost: " + ENGINE_HOST + "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nConnection: close\r\n"
+    if ENGINE_AUTH.len() > 0:
+        req = req + "Authorization: " + ENGINE_AUTH + "\r\n"
+    end
+    if method != "GET":
+        req = req + "Content-Type: application/json\r\nContent-Length: " + body.len() + "\r\n"
+    end
+    req = req + "\r\n" + body
+    if tcp.Write(c, req) <= 0:
+        tcp.Close(c)
+        ret out
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    until true:
+        got := tcp.Read(c, 65536)
+        if got.len() == 0:
+            break
+        end
+        str.BufAppend(b, got)
+    end
+    tcp.Close(c)
+    raw := str.BufStr(b)
+    he := raw.find("\r\n\r\n")
+    sp := raw.find(" ")
+    if he < 0 or sp < 0 or sp > he:
+        ret out
+    end
+    head := str.Lower(raw.substr(0, he))
+    mut rest := raw.substr(he + 4, raw.len() - he - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        mut whole := false
+        rest = dechunk(rest, whole)
+        if not whole:
+            ret out
+        end
+    else:
+        cl := head.find("content-length:")
+        if cl >= 0:
+            tail := head.substr(cl + 15, head.len() - cl - 15)
+            le := tail.find("\r\n")
+            want := str.Trim(le >= 0 ? tail.substr(0, le) : tail).to_int()
+            if rest.len() < want:
+                ret out
+            end
+        end
+    end
+    out.status = raw.substr(sp + 1, 3).to_int()
+    out.body = rest
+    ret out
+end
+
+func ok_status(r: Answer): bool:
+    ret r.status >= 200 and r.status < 300
+end
+
+func busy_now(sid: str, known &: bool): bool:
+    r := call("GET", "/session/status", "", CALL_MS)
+    known = ok_status(r)
+    if not known:
         ret true
     end
-    ret json.Has(http.Body(r), sid)
+    ret json.Has(r.body, sid)
 end
 
 func field(v: value.Value, key: str): value.Value:
@@ -98,24 +219,74 @@ func flag(v: value.Value, key: str): bool:
     ret value.IsBool(f) and value.AsBool(f)
 end
 
+func agent_exists(name: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    mut names := AGENTS
+    stale := now - AGENTS_AT > 300000
+    _u := sync.Unlock(LOCK)
+    if stale or names.len() == 0:
+        r := call("GET", "/agent", "", CALL_MS)
+        if not ok_status(r):
+            ret true
+        end
+        mut found := Vector {} as Vector<str>
+        mut err := encerr.EncodingError {}
+        list := json.Decode(r.body, err)
+        if value.IsArray(list):
+            repeat value.ArrayLen(list) in i:
+                found.push(text_of(value.ArrayGet(list, i), "name"))
+            end
+        end
+        value.ValueFree(list)
+        names = "\n" + str.Join(found, "\n") + "\n"
+        _a := sync.Lock(LOCK)
+        AGENTS = names
+        AGENTS_AT = now
+        _b := sync.Unlock(LOCK)
+    end
+    ret names.find("\n" + name + "\n") >= 0
+end
+
 func send_as(sid: str, agent: str, text: str): bool:
+    _l := sync.Lock(LOCK)
+    SESSION_AGENT.put(sid, agent)
+    if SESSION_AGENT.size() > 5000:
+        SESSION_AGENT = HashMap {} as HashMap<str, str>
+        SESSION_AGENT.put(sid, agent)
+    end
+    _u := sync.Unlock(LOCK)
     body := `{"agent": ` + json.Str(agent) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
-    ret ok_status(http.PostWith(ENGINE_URL + "/session/" + sid + "/prompt_async", body, headers()))
+    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", body, SEND_MS))
 end
 
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
-    ENGINE_URL = url
+    LOCK = sync.NewMutex()
+    mut rest := str.TrimPrefix(url, "http://")
+    slash := rest.find("/")
+    if slash >= 0:
+        ENGINE_BASE = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        ENGINE_PORT = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        ENGINE_HOST = rest.substr(0, colon)
+    else:
+        ENGINE_PORT = 80
+        ENGINE_HOST = rest
+    end
     ENGINE_AUTH = auth
     ENGINE_AGENT = agent
     DESKTOP_AGENT = desktop
 end
 
 pub func NewSession(title: str): str:
-    r := http.PostWith(ENGINE_URL + "/session", `{"title": ` + json.Str(title) + "}", headers())
+    r := call("POST", "/session", `{"title": ` + json.Str(title) + "}", SEND_MS)
     if not ok_status(r):
         ret ""
     end
-    ret json.Get(http.Body(r), "id")
+    ret json.Get(r.body, "id")
 end
 
 pub func Send(sid: str, text: str): bool:
@@ -123,15 +294,26 @@ pub func Send(sid: str, text: str): bool:
 end
 
 pub func SendDesktop(sid: str, text: str): bool:
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
+        ret send_as(sid, ENGINE_AGENT, text)
+    end
     ret send_as(sid, DESKTOP_AGENT, text)
 end
 
+pub func Followup(sid: str, text: str): bool:
+    _l := sync.Lock(LOCK)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    _u := sync.Unlock(LOCK)
+    ret send_as(sid, agent, text)
+end
+
 pub func Abort(sid: str):
-    _r := http.PostWith(ENGINE_URL + "/session/" + sid + "/abort", "{}", headers())
+    _r := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
 end
 
 pub func Delete(sid: str):
-    _r := http.DeleteWith(ENGINE_URL + "/session/" + sid, headers())
+    _r := call("DELETE", "/session/" + sid, "", CALL_MS)
 end
 
 pub func UsageOf(sid: str): Usage:
@@ -139,12 +321,12 @@ pub func UsageOf(sid: str): Usage:
     if sid.len() == 0:
         ret u
     end
-    r := http.GetWith(ENGINE_URL + "/session/" + sid + "/message", headers())
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
     if not ok_status(r):
         ret u
     end
     mut err := encerr.EncodingError {}
-    list := json.Decode(http.Body(r), err)
+    list := json.Decode(r.body, err)
     if not value.IsArray(list):
         ret u
     end
@@ -203,18 +385,21 @@ end
 
 pub func Poll(sid: str): Reply:
     mut out := Reply {}
-    busy := busy_now(sid)
-    r := http.GetWith(ENGINE_URL + "/session/" + sid + "/message", headers())
+    mut known := false
+    busy := busy_now(sid, known)
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if r.status == 0 or not known:
+        ret out
+    end
     if not ok_status(r):
         out.failed = not busy
         out.done = out.failed
         ret out
     end
     mut err := encerr.EncodingError {}
-    list := json.Decode(http.Body(r), err)
+    list := json.Decode(r.body, err)
     if not value.IsArray(list):
-        out.failed = true
-        out.done = true
+        value.ValueFree(list)
         ret out
     end
     n := value.ArrayLen(list)
@@ -234,6 +419,7 @@ pub func Poll(sid: str): Reply:
         m := value.ArrayGet(list, k)
         info := field(m, "info")
         if text_of(info, "role") == "assistant":
+            out.started = true
             if not value.IsNull(field(info, "error")):
                 errored = true
             end
@@ -268,6 +454,7 @@ pub func Poll(sid: str): Reply:
         out.done = true
         ret out
     end
+    out.idle = not busy
     out.done = not busy and last_done and last_finish != "tool-calls"
     if searching:
         out.phase = "searching"

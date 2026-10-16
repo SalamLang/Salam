@@ -29,7 +29,7 @@ export type Message = {
   activity?: ActivityStep[];
   ms?: number;
 };
-export type Phase = "thinking" | "searching" | "writing" | "done";
+export type Phase = "thinking" | "searching" | "writing" | "checking" | "done";
 export type ThinkStep = { kind: "think"; text: string };
 export type ToolStep = {
   kind: "tool";

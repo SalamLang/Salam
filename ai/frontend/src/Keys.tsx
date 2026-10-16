@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, ApiError, PAGE_SIZE, type ApiKey, type ApiRequest } from "./api";
 import { fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
 import { IconAlert, IconKey } from "./icons";
@@ -10,11 +10,80 @@ export const API_MODEL = "salam";
 const PLACEHOLDER = "sk-salam-...";
 const HOURLY_LIMIT = 100;
 const SAMPLE_PROMPT = "یک برنامه‌ی سلام بنویس که «سلام دنیا» را چاپ کند.";
+const SALAM_KEY = "sk-salam-KEY";
 
-type Example = { title: string; code: string };
-type Tab = { id: string; label: string; install?: string; examples: Example[] };
+const SALAM_CHAT = `import net.http
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+func main:
+    mut headers := http.NewHeaders()
+    headers.put("Authorization", "Bearer sk-salam-KEY")
+    headers.put("Content-Type", "application/json")
+    body := \`{"model": "salam", "messages": [{"role": "user", "content": "یک برنامه‌ی کوتاه سلام بنویس."}]}\`
+    r := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
+    if http.Status(r) != 200:
+        println "error", http.Status(r), http.Body(r)
+        ret 1
+    end
+    mut err := encerr.EncodingError {}
+    reply := json.Decode(http.Body(r), err)
+    choice := value.ArrayGet(value.ObjectGet(reply, "choices"), 0)
+    println value.AsString(value.ObjectGet(value.ObjectGet(choice, "message"), "content"))
+    ret 0
+end`;
+
+const SALAM_STREAM = `import net.http
+import encoding.json
+import encoding.value
+import encoding.encerr
+
+func main:
+    mut headers := http.NewHeaders()
+    headers.put("Authorization", "Bearer sk-salam-KEY")
+    headers.put("Content-Type", "application/json")
+    body := \`{"model": "salam", "stream": true, "messages": [{"role": "user", "content": "یک برنامه‌ی کوتاه سلام بنویس."}]}\`
+    r := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
+    if http.Status(r) != 200:
+        println "error", http.Status(r), http.Body(r)
+        ret 1
+    end
+    each line in http.Body(r).split("\\n"):
+        if not line.starts_with("data: ") or line == "data: [DONE]":
+            continue
+        end
+        mut err := encerr.EncodingError {}
+        chunk := json.Decode(line.substr(6, line.len() - 6), err)
+        choices := value.ObjectGet(chunk, "choices")
+        if value.ArrayLen(choices) > 0:
+            delta := value.ObjectGet(value.ArrayGet(choices, 0), "delta")
+            if value.ObjectHas(delta, "content"):
+                print value.AsString(value.ObjectGet(delta, "content"))
+            end
+        end
+    end
+    println ""
+    ret 0
+end`;
+
+type Example = { title: string; code: string; note?: ReactNode };
+type Tab = { id: string; label: string; install?: string; file?: string; run?: string; examples: Example[] };
 
 function buildTabs(key: string): Tab[] {
+  const pyClient = `from openai import OpenAI
+
+client = OpenAI(
+    base_url="${API_BASE_URL}",
+    api_key="${key}",
+)`;
+  const jsClient = `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${API_BASE_URL}",
+  apiKey: "${key}",
+  defaultHeaders: { "X-Salam-Project": "my-project" },
+});`;
   return [
     {
       id: "curl",
@@ -49,18 +118,29 @@ function buildTabs(key: string): Tab[] {
       ],
     },
     {
+      id: "salam",
+      label: "Salam",
+      file: "chat.salam",
+      run: "salam run chat.salam",
+      examples: [
+        { title: "Salam", code: SALAM_CHAT.replace(SALAM_KEY, key) },
+        {
+          title: "پاسخ جریانی",
+          code: SALAM_STREAM.replace(SALAM_KEY, key),
+          note: "کلاینت HTTP کتابخانه‌ی استاندارد سلام وقتی برمی‌گردد که جریان پاسخ تمام شده باشد. پس این برنامه همه‌ی تکه‌های جریانی را بعد از پایان پاسخ یکجا چاپ می‌کند، نه هم‌زمان با رسیدنشان.",
+        },
+      ],
+    },
+    {
       id: "python",
       label: "Python",
       install: "pip install openai",
+      file: "chat.py",
+      run: "python chat.py",
       examples: [
         {
           title: "Python",
-          code: `from openai import OpenAI
-
-client = OpenAI(
-    base_url="${API_BASE_URL}",
-    api_key="${key}",
-)
+          code: `${pyClient}
 
 response = client.chat.completions.create(
     model="${API_MODEL}",
@@ -71,14 +151,17 @@ print(response.choices[0].message.content)`,
         },
         {
           title: "پاسخ جریانی",
-          code: `stream = client.chat.completions.create(
+          code: `${pyClient}
+
+stream = client.chat.completions.create(
     model="${API_MODEL}",
     messages=[{"role": "user", "content": "${SAMPLE_PROMPT}"}],
     stream=True,
 )
 for chunk in stream:
     if chunk.choices:
-        print(chunk.choices[0].delta.content or "", end="", flush=True)`,
+        print(chunk.choices[0].delta.content or "", end="", flush=True)
+print()`,
         },
       ],
     },
@@ -86,16 +169,12 @@ for chunk in stream:
       id: "js",
       label: "JavaScript",
       install: "npm install openai",
+      file: "chat.mjs",
+      run: "node chat.mjs",
       examples: [
         {
           title: "JavaScript",
-          code: `import OpenAI from "openai";
-
-const client = new OpenAI({
-  baseURL: "${API_BASE_URL}",
-  apiKey: "${key}",
-  defaultHeaders: { "X-Salam-Project": "my-project" },
-});
+          code: `${jsClient}
 
 const response = await client.chat.completions.create({
   model: "${API_MODEL}",
@@ -105,14 +184,17 @@ console.log(response.choices[0].message.content);`,
         },
         {
           title: "پاسخ جریانی",
-          code: `const stream = await client.chat.completions.create({
+          code: `${jsClient}
+
+const stream = await client.chat.completions.create({
   model: "${API_MODEL}",
   messages: [{ role: "user", content: "${SAMPLE_PROMPT}" }],
   stream: true,
 });
 for await (const chunk of stream) {
   process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
-}`,
+}
+process.stdout.write("\\n");`,
         },
       ],
     },
@@ -163,8 +245,16 @@ function Examples({ secret }: { secret: string }) {
             ابتدا کتابخانه‌ی رسمی OpenAI را نصب کنید: <code className="inline-code" dir="ltr">{current.install}</code>
           </p>
         )}
+        {current.file && current.run && (
+          <p className="muted small example-install">
+            هر نمونه کامل است. آن را در پرونده‌ی <code className="inline-code" dir="ltr">{current.file}</code> بگذارید و با <code className="inline-code" dir="ltr">{current.run}</code> اجرا کنید.
+          </p>
+        )}
         {current.examples.map((ex) => (
-          <Code key={ex.title} title={ex.title} code={ex.code} />
+          <div key={ex.title}>
+            <Code title={ex.title} code={ex.code} />
+            {ex.note && <p className="muted small example-note">{ex.note}</p>}
+          </div>
         ))}
       </div>
       <ul className="example-notes">

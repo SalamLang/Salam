@@ -1,27 +1,178 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type RequestFilters } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
-import { fmtDate, fmtDateTime, fmtDay, fmtNum, fmtRelative } from "./format";
+import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconClose, IconSearch, IconShield } from "./icons";
 import { RequestList } from "./Requests";
 
 type Picked = { id: number; name: string } | null;
+type UsageMode = "all" | "chat" | "api";
+type ChartMode = "calls" | "tokens";
+
+const USAGE_MODES: { id: UsageMode; label: string }[] = [
+  { id: "all", label: "همه" },
+  { id: "chat", label: "گفت‌وگو" },
+  { id: "api", label: "API" },
+];
+
+const CHART_MODES: { id: ChartMode; label: string }[] = [
+  { id: "calls", label: "فراخوانی‌ها" },
+  { id: "tokens", label: "توکن‌ها" },
+];
+
+const PERIOD_LABELS: Record<UsagePeriodKey, string> = {
+  today: "امروز",
+  week: "این هفته",
+  month: "این ماه",
+  last_month: "ماه قبل",
+  all: "کل",
+};
 
 function errText(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback;
 }
 
-function Tile({ label, value, sub, tone }: { label: string; value: number; sub?: string; tone?: "danger" }) {
+function exactTitle(n: number): string | undefined {
+  return Math.abs(n) >= 10000 ? fmtNum(n) : undefined;
+}
+
+function Tile({ label, value, sub, tone, compact, display }: { label: string; value: number; sub?: string; tone?: "danger"; compact?: boolean; display?: string }) {
   return (
     <div className={`card tile ${tone || ""}`}>
       <span className="tile-label">{label}</span>
-      <strong className="tile-value">{fmtNum(value)}</strong>
+      <strong className="tile-value" title={compact ? exactTitle(value) : undefined}>
+        {display ?? (compact ? fmtCompact(value) : fmtNum(value))}
+      </strong>
       {sub && <span className="tile-sub">{sub}</span>}
     </div>
   );
 }
 
-function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
+function Segmented<T extends string>({ label, options, value, onChange }: { label: string; options: { id: T; label: string }[]; value: T; onChange: (v: T) => void }) {
+  return (
+    <div className="tabs seg-tabs" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.id} type="button" className={o.id === value ? "active" : ""} aria-pressed={o.id === value} onClick={() => onChange(o.id)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function pickUsage(p: UsagePeriod, mode: UsageMode): UsageTotals {
+  if (mode === "chat") return p.chat;
+  if (mode === "api") return p.api;
+  return {
+    count: p.chat.count + p.api.count,
+    input: p.chat.input + p.api.input,
+    output: p.chat.output + p.api.output,
+    reasoning: p.chat.reasoning + p.api.reasoning,
+    cache_read: p.chat.cache_read + p.api.cache_read,
+    cache_write: p.chat.cache_write + p.api.cache_write,
+    cost: p.chat.cost + p.api.cost,
+  };
+}
+
+function periodSub(p: UsagePeriod): string {
+  if (p.key === "month" || p.key === "last_month") return fmtMonth(p.from);
+  return "";
+}
+
+function CompactCell({ n }: { n: number }) {
+  return <td title={exactTitle(n)}>{fmtCompact(n)}</td>;
+}
+
+function UsageTiles({ usage }: { usage: UsagePeriod[] }) {
+  const find = (key: UsagePeriodKey) => usage.find((p) => p.key === key);
+  const today = find("today");
+  const month = find("month");
+  const all = find("all");
+  const tile = (label: string, p: UsagePeriod | undefined) => {
+    if (!p) return null;
+    const t = tokenSplit(pickUsage(p, "all"));
+    return <Tile key={p.key} label={label} value={t.total} compact sub={`${fmtCompact(t.input)} ورودی، ${fmtCompact(t.output)} خروجی`} />;
+  };
+  const monthCost = month ? pickUsage(month, "all").cost : 0;
+  return (
+    <div className="tiles">
+      {tile("توکن‌های امروز", today)}
+      {tile(month ? `توکن‌های ${fmtMonth(month.from)}` : "توکن‌های این ماه", month)}
+      {tile("توکن‌های کل", all)}
+      {month && monthCost > 0 && <Tile label="هزینه‌ی این ماه" value={monthCost} display={fmtCost(monthCost)} sub={fmtMonth(month.from)} />}
+    </div>
+  );
+}
+
+function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
+  const [mode, setMode] = useState<UsageMode>("all");
+  const rows = usage.map((p) => ({ p, t: pickUsage(p, mode) }));
+  const showCost = rows.some((r) => r.t.cost > 0);
+  const countLabel = mode === "chat" ? "پاسخ" : mode === "api" ? "درخواست" : "پاسخ و درخواست";
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>مصرف توکن</h3>
+        <Segmented label="منبع مصرف" options={USAGE_MODES} value={mode} onChange={setMode} />
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">دوره</th>
+              <th scope="col">{countLabel}</th>
+              <th scope="col">ورودی</th>
+              <th scope="col">خروجی</th>
+              <th scope="col">کش</th>
+              <th scope="col">جمع</th>
+              {showCost && <th scope="col">هزینه</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ p, t }) => {
+              const sp = tokenSplit(t);
+              const sub = periodSub(p);
+              return (
+                <tr key={p.key}>
+                  <td title={p.key === "all" ? undefined : `${fmtDateTime(p.from)} تا ${fmtDateTime(p.to)}`}>
+                    <span className="strong">{PERIOD_LABELS[p.key] || p.key}</span>
+                    {sub && <span className="cell-sub">{sub}</span>}
+                  </td>
+                  <td>{fmtNum(t.count)}</td>
+                  <CompactCell n={sp.input} />
+                  <CompactCell n={sp.output} />
+                  <CompactCell n={sp.cache} />
+                  <td className="strong" title={exactTitle(sp.total)}>
+                    {fmtCompact(sp.total)}
+                  </td>
+                  {showCost && <td>{t.cost > 0 ? fmtCost(t.cost) : <span className="muted">-</span>}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small usage-note">
+        ورودی شامل توکن‌های کش هم هست و ستون کش همان بخش را جدا نشان می‌دهد. خروجی شامل توکن‌های استدلال است. «همه» جمع گفت‌وگوهای سایت و درخواست‌های API است.
+      </p>
+    </section>
+  );
+}
+
+function DailyPanel({ daily }: { daily: AdminSummary["daily"] }) {
+  const [mode, setMode] = useState<ChartMode>("calls");
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{mode === "tokens" ? "مصرف توکن در ۱۴ روز گذشته" : "فراخوانی‌های MCP و درخواست‌های API در ۱۴ روز گذشته"}</h3>
+        <Segmented label="داده‌ی نمودار" options={CHART_MODES} value={mode} onChange={setMode} />
+      </div>
+      <DailyChart daily={daily} mode={mode} />
+    </section>
+  );
+}
+
+function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: ChartMode }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [hover, setHover] = useState<number | null>(null);
@@ -42,7 +193,13 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
   const axis = 44;
   const plotW = width - axis;
   const plotH = height - top - bottom;
-  const max = Math.max(1, ...daily.map((d) => Math.max(d.calls, d.api)));
+  const tokens = mode === "tokens";
+  const va = (d: AdminSummary["daily"][number]) => (tokens ? d.tokens_in || 0 : d.calls);
+  const vb = (d: AdminSummary["daily"][number]) => (tokens ? d.tokens_out || 0 : d.api);
+  const ca = tokens ? "in" : "mcp";
+  const cb = tokens ? "out" : "api";
+  const fmtAxis = tokens ? fmtCompact : fmtNum;
+  const max = Math.max(1, ...daily.map((d) => Math.max(va(d), vb(d))));
   const nice = (() => {
     const p = 10 ** Math.floor(Math.log10(max));
     for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= max) return m * p;
@@ -57,8 +214,8 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
   const y = (v: number) => top + plotH - (v / nice) * plotH;
   const ticks = [0, nice / 2, nice];
   const labelEvery = slot < 34 ? 2 : 1;
-  const totalCalls = daily.reduce((s, d) => s + d.calls, 0);
-  const totalApi = daily.reduce((s, d) => s + d.api, 0);
+  const totalA = daily.reduce((s, d) => s + va(d), 0);
+  const totalB = daily.reduce((s, d) => s + vb(d), 0);
 
   const bar = (bx: number, by: number, bw: number, bh: number) => {
     if (bh <= 0) return "";
@@ -74,25 +231,31 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
         width={width}
         height={height}
         role="img"
-        aria-label={`نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalCalls)} فراخوانی MCP و ${fmtNum(totalApi)} درخواست API`}
+        aria-label={
+          tokens
+            ? `نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} توکن ورودی و ${fmtNum(totalB)} توکن خروجی`
+            : `نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} فراخوانی MCP و ${fmtNum(totalB)} درخواست API`
+        }
         onMouseLeave={() => setHover(null)}
       >
         {ticks.map((t) => (
           <g key={t}>
             <line className="chart-grid" x1={0} x2={plotW} y1={y(t)} y2={y(t)} />
             <text className="chart-label" x={plotW + 8} y={y(t)} dominantBaseline="middle" textAnchor="start">
-              {fmtNum(t)}
+              {fmtAxis(t)}
             </text>
           </g>
         ))}
         {daily.map((d, i) => {
           const x0 = gx(i);
           const mcpX = x0 + barW + gap;
-          const label = `${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی MCP، ${fmtNum(d.api)} درخواست API، ${fmtNum(d.users)} کاربر`;
+          const label = tokens
+            ? `${fmtDay(d.day)}: ${fmtNum(va(d))} توکن ورودی، ${fmtNum(vb(d))} توکن خروجی`
+            : `${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی MCP، ${fmtNum(d.api)} درخواست API، ${fmtNum(d.users)} کاربر`;
           return (
             <g key={d.day}>
-              <path className={`chart-bar mcp ${hover === i ? "active" : ""}`} d={bar(mcpX, y(d.calls), barW, top + plotH - y(d.calls))} />
-              <path className={`chart-bar api ${hover === i ? "active" : ""}`} d={bar(x0, y(d.api), barW, top + plotH - y(d.api))} />
+              <path className={`chart-bar ${ca} ${hover === i ? "active" : ""}`} d={bar(mcpX, y(va(d)), barW, top + plotH - y(va(d)))} />
+              <path className={`chart-bar ${cb} ${hover === i ? "active" : ""}`} d={bar(x0, y(vb(d)), barW, top + plotH - y(vb(d)))} />
               <rect
                 className="chart-hit"
                 x={plotW - (i + 1) * slot}
@@ -119,29 +282,44 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
       {hovered && hover !== null && (
         <div
           className="chart-tip"
-          style={{ left: Math.min(width - 90, Math.max(90, gx(hover) + groupW / 2)), top: Math.max(0, y(Math.max(hovered.calls, hovered.api)) - 8) }}
+          style={{ left: Math.min(width - 90, Math.max(90, gx(hover) + groupW / 2)), top: Math.max(0, y(Math.max(va(hovered), vb(hovered))) - 8) }}
           aria-hidden="true"
         >
           <strong>{fmtDay(hovered.day)}</strong>
-          <span>
-            <i className="swatch mcp" />
-            {fmtNum(hovered.calls)} فراخوانی MCP
-          </span>
-          <span>
-            <i className="swatch api" />
-            {fmtNum(hovered.api)} درخواست API
-          </span>
-          <span>{fmtNum(hovered.users)} کاربر</span>
+          {tokens ? (
+            <>
+              <span>
+                <i className={`swatch ${ca}`} />
+                {fmtNum(va(hovered))} توکن ورودی
+              </span>
+              <span>
+                <i className={`swatch ${cb}`} />
+                {fmtNum(vb(hovered))} توکن خروجی
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                <i className="swatch mcp" />
+                {fmtNum(hovered.calls)} فراخوانی MCP
+              </span>
+              <span>
+                <i className="swatch api" />
+                {fmtNum(hovered.api)} درخواست API
+              </span>
+              <span>{fmtNum(hovered.users)} کاربر</span>
+            </>
+          )}
         </div>
       )}
       <ul className="chart-legend">
         <li>
-          <span className="swatch mcp" aria-hidden="true" />
-          فراخوانی‌های MCP
+          <span className={`swatch ${ca}`} aria-hidden="true" />
+          {tokens ? "توکن‌های ورودی" : "فراخوانی‌های MCP"}
         </li>
         <li>
-          <span className="swatch api" aria-hidden="true" />
-          درخواست‌های API
+          <span className={`swatch ${cb}`} aria-hidden="true" />
+          {tokens ? "توکن‌های خروجی" : "درخواست‌های API"}
         </li>
       </ul>
       <details className="chart-table">
@@ -149,22 +327,40 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr>
-                <th scope="col">روز</th>
-                <th scope="col">فراخوانی MCP</th>
-                <th scope="col">درخواست API</th>
-                <th scope="col">کاربر</th>
-              </tr>
+              {tokens ? (
+                <tr>
+                  <th scope="col">روز</th>
+                  <th scope="col">توکن ورودی</th>
+                  <th scope="col">توکن خروجی</th>
+                  <th scope="col">جمع</th>
+                </tr>
+              ) : (
+                <tr>
+                  <th scope="col">روز</th>
+                  <th scope="col">فراخوانی MCP</th>
+                  <th scope="col">درخواست API</th>
+                  <th scope="col">کاربر</th>
+                </tr>
+              )}
             </thead>
             <tbody>
-              {daily.map((d) => (
-                <tr key={d.day}>
-                  <td>{fmtDay(d.day)}</td>
-                  <td>{fmtNum(d.calls)}</td>
-                  <td>{fmtNum(d.api)}</td>
-                  <td>{fmtNum(d.users)}</td>
-                </tr>
-              ))}
+              {daily.map((d) =>
+                tokens ? (
+                  <tr key={d.day}>
+                    <td>{fmtDay(d.day)}</td>
+                    <td>{fmtNum(va(d))}</td>
+                    <td>{fmtNum(vb(d))}</td>
+                    <td>{fmtNum(va(d) + vb(d))}</td>
+                  </tr>
+                ) : (
+                  <tr key={d.day}>
+                    <td>{fmtDay(d.day)}</td>
+                    <td>{fmtNum(d.calls)}</td>
+                    <td>{fmtNum(d.api)}</td>
+                    <td>{fmtNum(d.users)}</td>
+                  </tr>
+                ),
+              )}
             </tbody>
           </table>
         </div>
@@ -266,6 +462,8 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">برنامه</th>
               <th scope="col">فراخوانی MCP</th>
               <th scope="col">API</th>
+              <th scope="col">توکن</th>
+              <th scope="col">آخرین ورود</th>
               <th scope="col">آخرین فعالیت</th>
             </tr>
           </thead>
@@ -286,12 +484,14 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.apps)}</td>
                 <td>{fmtNum(u.mcp_calls)}</td>
                 <td>{fmtNum(u.api_requests)}</td>
+                <td title={exactTitle(u.tokens || 0)}>{fmtCompact(u.tokens || 0)}</td>
+                <td title={u.last_login ? `${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود` : undefined}>{fmtRelative(u.last_login || 0)}</td>
                 <td title={u.last_active ? fmtDateTime(u.last_active) : undefined}>{fmtRelative(u.last_active)}</td>
               </tr>
             ))}
             {data && data.users.length === 0 && (
               <tr>
-                <td colSpan={9} className="empty-cell">
+                <td colSpan={11} className="empty-cell">
                   کاربری پیدا نشد.
                 </td>
               </tr>
@@ -740,10 +940,13 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
             <Tile label="درخواست‌های API در ۲۴ ساعت" value={s.api_requests_24h} />
             <Tile label="خطاهای API در ۲۴ ساعت" value={s.api_errors_24h} sub={`${fmtNum(apiErrRate)}٪ از درخواست‌ها`} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
           </div>
-          <section className="card panel">
-            <h3>فراخوانی‌های MCP و درخواست‌های API در ۱۴ روز گذشته</h3>
-            <DailyChart daily={s.daily} />
-          </section>
+          {s.usage && s.usage.length > 0 && (
+            <>
+              <UsageTiles usage={s.usage} />
+              <UsagePanel usage={s.usage} />
+            </>
+          )}
+          <DailyPanel daily={s.daily} />
           <div className="split three">
             <TopList title="ابزارهای پرکاربرد" items={s.top_tools.map((t) => ({ name: t.tool, count: t.count }))} ltr />
             <TopList title="برنامه‌های پرکاربرد" items={s.top_clients} />

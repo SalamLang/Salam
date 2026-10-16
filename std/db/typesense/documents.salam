@@ -151,6 +151,26 @@ func _import_result(body: str): ImportResult:
     ret r
 end
 
+func _ts_import(c: Client, collection: str, items: Vector<str>, opts: WriteOptions, err &: Error): ImportResult:
+    ret ImportDocuments(c, collection, items, opts, err)
+end
+
+func _ts_write(c: Client, collection: str, document: str, action: str, err &: Error): str:
+    ret IndexDocument(c, collection, document, WriteOptions { action = action }, err)
+end
+
+func _ts_fetch(c: Client, collection: str, id: str, err &: Error): str:
+    ret GetDocument(c, collection, id, err)
+end
+
+func _ts_failed(err: Error): bool:
+    ret err.kind.len() > 0
+end
+
+func _ts_decode_fail(e: encerr.EncodingError, err &: Error):
+    _fail(err, 0, KIND_DECODE, e.message)
+end
+
 @en "IndexDocument"
 @fa "نمایه سازی سند"
 pub func IndexDocument(c: Client, collection: str, document: str, opts: WriteOptions, err &: Error): str:
@@ -203,7 +223,7 @@ pub func DocumentExists(c: Client, collection: str, id: str, err &: Error): bool
         _clear(err)
         ret false
     end
-    ret Ok(err)
+    ret _ts_ok(err)
 end
 
 @en "DeleteDocument"
@@ -218,7 +238,7 @@ pub func DeleteByFilter(c: Client, collection: str, filter_by: str, batch_size: 
     mut q := "?filter_by=" + _esc(filter_by)
     if batch_size > 0: q = q + "&batch_size=" + batch_size end
     body := _call(c, "DELETE", _dpath(collection) + q, "", err)
-    if not Ok(err): ret 0 end
+    if not _ts_ok(err): ret 0 end
     ret _get_i64(body, "num_deleted", 0 as i64)
 end
 
@@ -226,7 +246,7 @@ end
 @fa "به‌روزرسانی با پالایه"
 pub func UpdateByFilter(c: Client, collection: str, filter_by: str, partial: str, err &: Error): i64:
     body := _call(c, "PATCH", _dpath(collection) + "?filter_by=" + _esc(filter_by), partial, err)
-    if not Ok(err): ret 0 end
+    if not _ts_ok(err): ret 0 end
     ret _get_i64(body, "num_updated", 0 as i64)
 end
 
@@ -234,7 +254,7 @@ end
 @fa "درون ریزی جیسون خطی"
 pub func ImportJSONL(c: Client, collection: str, jsonl: str, opts: WriteOptions, err &: Error): ImportResult:
     body := _send(c, "POST", _dpath(collection) + "/import" + _write_query(opts), "text/plain", jsonl, err)
-    if not Ok(err): ret ImportResult {} end
+    if not _ts_ok(err): ret ImportResult {} end
     ret _import_result(body)
 end
 
@@ -258,19 +278,19 @@ pub func ImportOf<T>(c: Client, collection: str, documents: Vector<T>, opts: Wri
     each d in documents:
         items.push(json.Marshal(d))
     end
-    ret ImportDocuments(c, collection, items, opts, err)
+    ret _ts_import(c, collection, items, opts, err)
 end
 
 @en "CreateDocumentOf"
 @fa "ساخت سند از نوع"
 pub func CreateDocumentOf<T>(c: Client, collection: str, document: T, err &: Error): str:
-    ret CreateDocument(c, collection, json.Marshal(document), err)
+    ret _ts_write(c, collection, json.Marshal(document), "", err)
 end
 
 @en "UpsertDocumentOf"
 @fa "درج سند از نوع"
 pub func UpsertDocumentOf<T>(c: Client, collection: str, document: T, err &: Error): str:
-    ret UpsertDocument(c, collection, json.Marshal(document), err)
+    ret _ts_write(c, collection, json.Marshal(document), ACTION_UPSERT, err)
 end
 
 @en "DecodeDocument"
@@ -278,7 +298,7 @@ end
 pub func DecodeDocument<T>(document: str, out &: T, err &: Error): bool:
     mut e := encerr.EncodingError {}
     if not json.UnmarshalLenient(document, out, e):
-        _decode_error(e, err)
+        _ts_decode_fail(e, err)
         ret false
     end
     ret true
@@ -287,9 +307,14 @@ end
 @en "GetDocumentAs"
 @fa "دریافت سند به نوع"
 pub func GetDocumentAs<T>(c: Client, collection: str, id: str, out &: T, err &: Error): bool:
-    body := GetDocument(c, collection, id, err)
-    if not Ok(err): ret false end
-    ret DecodeDocument(body, out, err)
+    body := _ts_fetch(c, collection, id, err)
+    if _ts_failed(err): ret false end
+    mut e := encerr.EncodingError {}
+    if not json.UnmarshalLenient(body, out, e):
+        _ts_decode_fail(e, err)
+        ret false
+    end
+    ret true
 end
 
 @en "DecodeDocuments"
@@ -297,7 +322,11 @@ end
 pub func DecodeDocuments<T>(documents: Vector<str>, out &: Vector<T>, err &: Error): bool:
     each item in documents:
         mut v := T {}
-        if not DecodeDocument(item, v, err): ret false end
+        mut e := encerr.EncodingError {}
+        if not json.UnmarshalLenient(item, v, e):
+            _ts_decode_fail(e, err)
+            ret false
+        end
         out.push(v)
     end
     ret true

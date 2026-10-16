@@ -14,6 +14,8 @@
 
 package diag
 
+import io
+import os
 import str
 
 include co "sal_core.salam"
@@ -51,6 +53,36 @@ pub struct Engine:
     pub warnings: int = 0
     pub log: lg.Logger = lg.New(2, false)
     pub phase: int = 0
+end
+
+func is_std_path(file: str): bool:
+    ret str.StartsWith(file, "std/") or str.Find(file, "/std/") >= 0
+end
+
+func source_for(e: Engine, file: str, src_text: str, cache &: HashMap<str, str>): str:
+    if str.Len(file) == 0:
+        ret src_text
+    end
+    if cache.has(file):
+        ret cache.get(file)
+    end
+    mut text := src_text
+    mut found := false
+    each ent in e.log.src_table:
+        if not found and str.Equals(ent.file, file):
+            text = ent.text
+            found = true
+        end
+    end
+    if not found and os.Exists(file) and not os.IsDir(file):
+        text = io.ReadFile(file)
+        found = true
+    end
+    if not found and is_std_path(file):
+        text = ""
+    end
+    cache.put(file, text)
+    ret text
 end
 
 func tr(s: str): str:
@@ -176,14 +208,18 @@ pub func RenderAll(
     e: Engine, src_text: str, src_len: int, style: DiagStyle, format: DiagFormat, color: bool
 ): str:
     mut out := ""
+    mut cache := HashMap {} as HashMap<str, str>
+    defer cache.free()
     n := e.items.len()
     mut i := 0
     until i < n:
         d := e.items[i]
         is_error := d.sev == SEV_ERROR
         lvl := is_error ? "error" : "warning"
+        text := source_for(e, d.file, src_text, cache)
+        text_len := str.Equals(text, src_text) ? src_len : str.Len(text)
         out = out + Render(
-            lvl, d.code, is_error, d.file, d.span, src_text, src_len, d.body, "", style, format, color
+            lvl, d.code, is_error, d.file, d.span, text, text_len, d.body, "", style, format, color
         )
         i += 1
     end

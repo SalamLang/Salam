@@ -33,6 +33,13 @@ claude mcp add --transport http salam https://mcp.salamlang.ir/mcp
 In claude.ai or Claude Desktop, add the same URL under Settings, Connectors,
 Add custom connector.
 
+The first connection opens a browser window to sign in with a Salam account
+from [ai.salamlang.ir](https://ai.salamlang.ir) and allow the app. The client
+then keeps an access token and refreshes it on its own. Each tool call is
+recorded against the account and the app, with its arguments, so people can
+review what their apps did under
+[Connected apps](https://ai.salamlang.ir/apps) and disconnect them there.
+
 The hosted server cannot see your files, so its compiler tools take the
 program text in a `source` argument instead of a `path`. It never runs code:
 `salam_run`, `salam_exec` and `salam_build` exist only when you run the server
@@ -147,13 +154,40 @@ workspace and looks for `std/` next to the compiler, so point
 
 With `--http` the server also reads:
 
-| Variable            | Default   | Purpose                                                    |
-| ------------------- | --------- | ---------------------------------------------------------- |
-| `SALAM_MCP_HOST`    | `0.0.0.0` | Address to listen on                                       |
-| `SALAM_MCP_PORT`    | `8080`    | Port to listen on                                          |
-| `SALAM_MCP_JOBS`    | `4`       | Compiler processes allowed at once; extra calls wait       |
-| `SALAM_MCP_TIMEOUT` | `30`      | Seconds before a compiler process is killed                |
-| `SALAM_MCP_ORIGINS` | empty     | Comma separated browser origins to allow; empty allows all |
+| Variable                | Default                                                    | Purpose                                                                 |
+| ----------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `SALAM_MCP_HOST`        | `0.0.0.0`                                                  | Address to listen on                                                    |
+| `SALAM_MCP_PORT`        | `8080`                                                     | Port to listen on                                                       |
+| `SALAM_MCP_JOBS`        | `4`                                                        | Compiler processes allowed at once; extra calls wait                    |
+| `SALAM_MCP_TIMEOUT`     | `30`                                                       | Seconds before a compiler process is killed                             |
+| `SALAM_MCP_ORIGINS`     | empty                                                      | Comma separated browser origins to allow; empty allows all              |
+| `SALAM_MCP_AUTH_URL`    | empty                                                      | Base URL of the authorization server's API; setting it turns sign-in on |
+| `SALAM_MCP_AUTH_SECRET` | empty                                                      | Shared secret for token introspection and activity reports              |
+| `SALAM_MCP_ISSUER`      | `https://ai-api.salamlang.ir`                              | Issuer listed in the protected resource metadata                        |
+| `SALAM_MCP_RESOURCES`   | `https://mcp.salamlang.ir/mcp,http://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them      |
+
+### 🔑 Sign-in
+
+With `SALAM_MCP_AUTH_URL` set, the server is an OAuth 2.1 resource server as
+the MCP authorization spec describes. The authorization server is the Salam AI
+backend in [`ai/backend`](../../ai/backend), which owns the accounts.
+
+- `GET /.well-known/oauth-protected-resource` (and `/mcp` appended) is the
+  RFC 9728 metadata: the resource URI and its authorization server.
+- A request without a valid token gets `401` with
+  `WWW-Authenticate: Bearer resource_metadata="...", scope="mcp"`, plus
+  `error="invalid_token"` when a token was sent; a token without the `mcp`
+  scope gets `403` with `error="insufficient_scope"`.
+- Tokens are checked by RFC 7662 introspection against
+  `SALAM_MCP_AUTH_URL/oauth/introspect`, cached for at most 30 seconds, and
+  accepted only when their audience is one of `SALAM_MCP_RESOURCES`. A
+  disconnected app therefore stops working within 30 seconds.
+- Every `tools/call` and `resources/read` is reported to
+  `SALAM_MCP_AUTH_URL/internal/mcp/events` from a background queue, so a slow
+  report never delays a reply.
+
+Without `SALAM_MCP_AUTH_URL` (and always over stdio) nothing changes: no
+sign-in, no reports.
 
 The compiler default prefers the binary in the workspace over `PATH` on
 purpose: an installed `salam` is often older than the checkout, and the
@@ -283,6 +317,7 @@ cannot regenerate anything; there the hook reports that and passes.
 | `build.sh`            | Builds `salam-mcp` in a scratch directory                  |
 | `main.salam`          | Entry point: stdio loop, `--http` and `--health`           |
 | `mcp_http.salam`      | Streamable HTTP transport, CORS and the setup page         |
+| `mcp_auth.salam`      | Bearer checks, protected resource metadata, activity queue |
 | `Dockerfile`          | Image for the hosted server                                |
 | `mcp_rpc.salam`       | JSON-RPC framing, EOF-aware line reads, protocol constants |
 | `mcp_server.salam`    | Method dispatch and dual-era version negotiation           |

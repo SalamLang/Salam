@@ -281,10 +281,22 @@ $extra_out"
 $msgs
 EOF_MSGS
         fi
-        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
+        msg_present=""
+        nots=$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+        if [ -n "$nots" ]; then
+            while IFS= read -r bad_msg; do
+                [ -n "$bad_msg" ] || continue
+                printf '%s\n' "$out" | grep -qF -- "$bad_msg" && msg_present="$bad_msg"
+            done <<EOF_NOTS
+$nots
+EOF_NOTS
+        fi
+        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ] && [ -z "$msg_present" ]; then
             echo "PASS $label ($code)"
         else
-            if [ -n "$msg_missing" ]; then
+            if [ -n "$msg_present" ]; then
+                echo "FAIL $label (unexpected '$msg_present')"
+            elif [ -n "$msg_missing" ]; then
                 echo "FAIL $label (want message '$msg_missing')"
             else
                 echo "FAIL $label (want $code)"

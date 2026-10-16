@@ -143,7 +143,13 @@ export function App() {
         try {
           const r = await api.poll(chatId, mid);
           if (activeRef.current !== chatId) return;
-          setMessages((ms) => ms.map((m) => (m.id === mid ? { ...m, body: r.body, status: r.status, phase: r.phase } : m)));
+          setMessages((ms) =>
+            ms.map((m) =>
+              m.id === mid
+                ? { ...m, body: r.body, status: r.status, phase: r.phase, activity: r.activity && r.activity.length > 0 ? r.activity : m.activity }
+                : m,
+            ),
+          );
           if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
@@ -172,9 +178,17 @@ export function App() {
           delta: (t) => update((m) => ({ ...m, body: m.body + t, phase: "writing" })),
           reset: (t) => update((m) => ({ ...m, body: t, phase: "writing" })),
           phase: (p) => update((m) => ({ ...m, phase: p })),
-          done: (body, status) => {
+          activity: (steps) => update((m) => ({ ...m, activity: steps })),
+          done: (body, status, activity, ms) => {
             finished = true;
-            update((m) => ({ ...m, body, status, phase: "done" }));
+            update((m) => ({
+              ...m,
+              body,
+              status,
+              phase: "done",
+              activity: activity && activity.length > 0 ? activity : m.activity,
+              ms: ms ?? m.ms,
+            }));
           },
         },
         ctrl.signal,

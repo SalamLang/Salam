@@ -1389,7 +1389,7 @@ Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
   `Close()` is required
 - `interface Tx`: `Ok Exec Query Commit Rollback`
 - Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
-QuoteLiteral`; constants `SQLITE MYSQL POSTGRES` and `TYPE_NULL TYPE_INT
+QuoteLiteral`; constants `SQLITE MYSQL POSTGRES ELASTICSEARCH` and `TYPE_NULL TYPE_INT
 TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
 - **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
 CloseAll Free`): a fixed set of connections leased one at a time. It holds
@@ -1413,6 +1413,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+- **`db.elasticsearch`** (Elasticsearch 7/8, Elastic Cloud and OpenSearch over `net.httpx`; no outside library). `NewClient(Config)` takes several nodes (rotated, a node that refuses connections is skipped for `DEAD_NODE_MS`, 502/503/504 retried), basic auth, `api_key` (encoded or `id:key`), `bearer`, `cloud_id`, `ca_file`/`insecure` and `timeout_ms`; `Connect ConnectAuth ConnectApiKey ConnectCloud` are shortcuts. Documents and query clauses are raw JSON `str`. Documents: `Index Create Get Exists Update Upsert UpdateScript Delete MGet Count` (+`...With(Options)` for `refresh`, `routing`, `if_seq_no`/`if_primary_term`). Search: build a `SearchRequest { query, size, sort, aggs, ... }` from `Match Term Terms Range Bool And Or Not Filtered MultiMatch Knn SortDesc` and `AddAgg(aggs, name, TermsAgg(...))`, then `Search`; read `res.hits`, `AggValue`, `AggBuckets`. Paging: `SearchScroll/Scroll/ClearScroll`, `OpenPit` + `search_after`. Bulk: `NewBulk`, `BulkIndex/BulkUpdate/BulkDelete(b, ...)`, `RunBulk` (check `res.items` when `res.errors`). Admin: `CreateIndex PutMapping Refresh PutAlias SwapAlias Reindex DeleteByQuery UpdateByQuery CatIndices ClusterHealth`. SQL: `Sql`/`SqlWith` return `SqlRows` (a `db.Rows` that pages with the cursor), and `Conn(c)` is a read-only `dyn db.Connection` (`Exec` is -1, no transactions). Anything else: `Perform(c, method, path, body)`. Check `Error(c)`/`ErrorType(c)`/`Status(c)` after a call; a `Get` of a missing doc is `found = false` with no error.
 
 ```salam
 import db

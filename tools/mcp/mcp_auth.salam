@@ -36,6 +36,7 @@ mut g_resources := Vector {} as Vector<str>
 mut g_lock := sync.Mutex {}
 mut g_cache := HashMap {} as HashMap<str, str>
 mut g_queue := chan.Chan {} as chan.Chan<str>
+mut g_dropped := 0
 
 @en "Principal"
 pub struct Principal:
@@ -176,7 +177,7 @@ pub func Configure():
     g_service = env.GetOr("SALAM_MCP_SERVICE_TOKEN", "")
     if g_service.len() < 32: g_service = "" end
     g_issuer = str.TrimSuffix(env.GetOr("SALAM_MCP_ISSUER", "https://ai-api.salamlang.ir"), "/")
-    list := env.GetOr("SALAM_MCP_RESOURCES", "https://mcp.salamlang.ir/mcp,http://mcp.salamlang.ir/mcp")
+    list := env.GetOr("SALAM_MCP_RESOURCES", "https://mcp.salamlang.ir/mcp")
     mut cur := ""
     mut i := 0
     until i <= list.len():
@@ -287,5 +288,21 @@ pub func Record(p: Principal, method: str, tool: str, ok: bool, ms: i64, args: s
     m.push(json.Member("args", args))
     m.push(json.Member("ip", ip))
     m.push(json.Member("agent", agent))
-    _s := g_queue.try_send(json.Object(m))
+    if not g_queue.try_send(json.Object(m)):
+        _l := sync.Lock(g_lock)
+        g_dropped += 1
+        total := g_dropped
+        _u := sync.Unlock(g_lock)
+        mcprpc.Log("activity queue full; dropped an event (".concat(str.FromInt(total)).concat(" so far)"))
+    end
+end
+
+@en "Dropped"
+@fa "دورریخته"
+pub func Dropped(): int:
+    if not Enabled(): ret 0 end
+    _l := sync.Lock(g_lock)
+    v := g_dropped
+    _u := sync.Unlock(g_lock)
+    ret v
 end

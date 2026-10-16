@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { api, ApiError, PAGE_SIZE, type ApiKey, type ApiRequest } from "./api";
 import { fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
 import { IconAlert, IconKey } from "./icons";
-import { CopyButton } from "./Markdown";
+import { CopyButton, useHighlighted } from "./Markdown";
 import { RequestList } from "./Requests";
 
 export const API_BASE_URL = "https://ai-api.salamlang.ir";
@@ -67,7 +67,7 @@ func main:
     ret 0
 end`;
 
-type Example = { title: string; code: string; note?: ReactNode };
+type Example = { title: string; lang: string; code: string; note?: ReactNode };
 type Tab = { id: string; label: string; install?: string; file?: string; run?: string; examples: Example[] };
 
 function buildTabs(key: string): Tab[] {
@@ -91,6 +91,7 @@ const client = new OpenAI({
       examples: [
         {
           title: "ترمینال",
+          lang: "bash",
           code: `curl ${API_BASE_URL}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
   -H "Content-Type: application/json" \\
@@ -104,6 +105,7 @@ const client = new OpenAI({
         },
         {
           title: "پاسخ جریانی",
+          lang: "bash",
           code: `curl -N ${API_BASE_URL}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
   -H "Content-Type: application/json" \\
@@ -123,9 +125,10 @@ const client = new OpenAI({
       file: "chat.salam",
       run: "salam run chat.salam",
       examples: [
-        { title: "Salam", code: SALAM_CHAT.replace(SALAM_KEY, key) },
+        { title: "Salam", lang: "salam", code: SALAM_CHAT.replace(SALAM_KEY, key) },
         {
           title: "پاسخ جریانی",
+          lang: "salam",
           code: SALAM_STREAM.replace(SALAM_KEY, key),
           note: "کلاینت HTTP کتابخانه‌ی استاندارد سلام وقتی برمی‌گردد که جریان پاسخ تمام شده باشد. پس این برنامه همه‌ی تکه‌های جریانی را بعد از پایان پاسخ یکجا چاپ می‌کند، نه هم‌زمان با رسیدنشان.",
         },
@@ -140,6 +143,7 @@ const client = new OpenAI({
       examples: [
         {
           title: "Python",
+          lang: "python",
           code: `${pyClient}
 
 response = client.chat.completions.create(
@@ -151,6 +155,7 @@ print(response.choices[0].message.content)`,
         },
         {
           title: "پاسخ جریانی",
+          lang: "python",
           code: `${pyClient}
 
 stream = client.chat.completions.create(
@@ -174,6 +179,7 @@ print()`,
       examples: [
         {
           title: "JavaScript",
+          lang: "javascript",
           code: `${jsClient}
 
 const response = await client.chat.completions.create({
@@ -184,6 +190,7 @@ console.log(response.choices[0].message.content);`,
         },
         {
           title: "پاسخ جریانی",
+          lang: "javascript",
           code: `${jsClient}
 
 const stream = await client.chat.completions.create({
@@ -201,7 +208,8 @@ process.stdout.write("\\n");`,
   ];
 }
 
-function Code({ title, code }: Example) {
+function Code({ title, lang, code }: Example) {
+  const html = useHighlighted(code, lang);
   return (
     <div className="code-block">
       <div className="code-head">
@@ -209,7 +217,7 @@ function Code({ title, code }: Example) {
         <CopyButton text={code} />
       </div>
       <pre dir="ltr">
-        <code>{code}</code>
+        <code dangerouslySetInnerHTML={{ __html: html }} />
       </pre>
     </div>
   );
@@ -252,7 +260,7 @@ function Examples({ secret }: { secret: string }) {
         )}
         {current.examples.map((ex) => (
           <div key={ex.title}>
-            <Code title={ex.title} code={ex.code} />
+            <Code title={ex.title} lang={ex.lang} code={ex.code} />
             {ex.note && <p className="muted small example-note">{ex.note}</p>}
           </div>
         ))}

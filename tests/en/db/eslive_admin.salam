@@ -1,0 +1,145 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import time
+import encoding.json
+import db.elasticsearch
+
+const IDX := "esadmin_items"
+
+func strs(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b.len() > 0: v.push(b) end
+    ret v
+end
+
+func pipelines(c: elasticsearch.Client):
+    body := `{"description":"salam test","processors":[{"set":{"field":"seen","value":"yes"}},{"lowercase":{"field":"tag"}}]}`
+    println "put pipeline:", elasticsearch.PutPipeline(c, "esadmin_pipe", body)
+    println "get pipeline:", str.Contains(elasticsearch.GetPipeline(c, "esadmin_pipe"), "salam test")
+    sim := elasticsearch.SimulatePipeline(c, "esadmin_pipe", `{"docs":[{"_source":{"tag":"LOUD"}}]}`)
+    println "simulate:", json.GetPath(sim, "docs.0.doc._source.tag"), json.GetPath(sim, "docs.0.doc._source.seen")
+    w := elasticsearch.IndexWith(c, IDX, "p1", `{"tag":"MiXeD","n":1}`, elasticsearch.Options { pipeline = "esadmin_pipe", refresh = "true" })
+    p1 := elasticsearch.Get(c, IDX, "p1").source
+    println "index through pipeline:", w.ok, json.Get(p1, "tag"), json.Get(p1, "seen"), json.Get(p1, "n")
+    println "delete pipeline:", elasticsearch.DeletePipeline(c, "esadmin_pipe"), elasticsearch.GetPipeline(c, "esadmin_pipe").len()
+end
+
+func streams(c: elasticsearch.Client):
+    tpl := `{"index_patterns":["esadmin-logs*"],"data_stream":{},"template":{"settings":{"number_of_replicas":0},"mappings":{"properties":{"@timestamp":{"type":"date"},"msg":{"type":"keyword"}}}}}`
+    println "stream template:", elasticsearch.PutIndexTemplate(c, "esadmin_logs_tpl", tpl)
+    elasticsearch.DeleteDataStream(c, "esadmin-logs")
+    println "create stream:", elasticsearch.CreateDataStream(c, "esadmin-logs")
+    mut b := elasticsearch.NewBulk()
+    repeat 3 in i:
+        elasticsearch.BulkCreate(b, "esadmin-logs", "", `{"@timestamp":"2026-10-16T10:00:0` + str.FromInt(i as i64) + `Z","msg":"m` + str.FromInt(i as i64) + `"}`)
+    end
+    br := elasticsearch.RunBulkWith(c, "", b, elasticsearch.Options { refresh = "true" })
+    println "bulk into stream:", br.ok, br.succeeded
+    println "rollover:", elasticsearch.Rollover(c, "esadmin-logs", "")
+    ds := elasticsearch.GetDataStream(c, "esadmin-logs")
+    println "stream generation:", json.GetPath(ds, "data_streams.0.generation"), json.Items(json.GetPath(ds, "data_streams.0.indices")).len()
+    println "count in stream:", elasticsearch.Count(c, "esadmin-logs", "")
+    println "delete stream:", elasticsearch.DeleteDataStream(c, "esadmin-logs"), elasticsearch.DeleteIndexTemplate(c, "esadmin_logs_tpl")
+end
+
+func lifecycle(c: elasticsearch.Client):
+    mut policy := `{"policy":{"phases":{"hot":{"actions":{"rollover":{"max_age":"7d"}}},"delete":{"min_age":"30d","actions":{"delete":{}}}}}}`
+    if elasticsearch.IsOpenSearch(c):
+        policy = `{"policy":{"description":"salam","default_state":"hot","states":[{"name":"hot","actions":[],"transitions":[{"state_name":"delete","conditions":{"min_index_age":"30d"}}]},{"name":"delete","actions":[{"delete":{}}],"transitions":[]}]}}`
+    end
+    elasticsearch.DeleteLifecyclePolicy(c, "esadmin_policy")
+    println "put policy:", elasticsearch.PutLifecyclePolicy(c, "esadmin_policy", policy)
+    println "get policy:", elasticsearch.GetLifecyclePolicy(c, "esadmin_policy").len() > 0
+    println "delete policy:", elasticsearch.DeleteLifecyclePolicy(c, "esadmin_policy")
+end
+
+func snapshots(c: elasticsearch.Client):
+    elasticsearch.DeleteRepository(c, "esadmin_repo")
+    println "repository:", elasticsearch.PutRepository(c, "esadmin_repo", `{"type":"fs","settings":{"location":"/tmp/esadmin_repo"}}`)
+    println "snapshot:", elasticsearch.CreateSnapshot(c, "esadmin_repo", "snap1", `{"indices":"` + IDX + `","include_global_state":false}`)
+    println "list:", elasticsearch.ListSnapshots(c, "esadmin_repo")
+    elasticsearch.DeleteIndex(c, IDX)
+    println "restore:", elasticsearch.RestoreSnapshot(c, "esadmin_repo", "snap1", `{"indices":"` + IDX + `"}`), elasticsearch.IndexExists(c, IDX)
+    elasticsearch.WaitForStatus(c, "yellow", "30s")
+    elasticsearch.Refresh(c, IDX)
+    println "restored docs:", elasticsearch.Count(c, IDX, "")
+    println "delete snapshot:", elasticsearch.DeleteSnapshot(c, "esadmin_repo", "snap1"), elasticsearch.DeleteRepository(c, "esadmin_repo")
+end
+
+func tasks(c: elasticsearch.Client):
+    id := elasticsearch.StartUpdateByQuery(c, IDX, elasticsearch.MatchAll(), elasticsearch.Script("ctx._source.n += 100", ""))
+    println "task started:", id.len() > 0
+    mut task := elasticsearch.GetTask(c, id)
+    mut tries := 0
+    until not task.completed and tries < 200:
+        time.Sleep(50)
+        task = elasticsearch.GetTask(c, id)
+        tries += 1
+    end
+    println "task done:", task.ok, task.completed, str.Contains(task.action, "update/byquery"), json.Get(task.response, "updated")
+    elasticsearch.Refresh(c, IDX)
+    println "after task:", elasticsearch.Get(c, IDX, "d1").source
+    println "cancel unknown:", elasticsearch.CancelTask(c, "nosuchnode:1")
+    println "cluster settings:", elasticsearch.PutClusterSettings(c, `{"persistent":{"indices.recovery.max_bytes_per_sec":"51mb"}}`), str.Contains(elasticsearch.GetClusterSettings(c), "51mb")
+    elasticsearch.PutClusterSettings(c, `{"persistent":{"indices.recovery.max_bytes_per_sec":null}}`)
+end
+
+func searching(c: elasticsearch.Client):
+    tpl := `{"query":{"term":{"tag":"{{tag}}"}},"size":"{{size}}"}`
+    println "stored template:", elasticsearch.PutStoredScript(c, "esadmin_tpl", "mustache", tpl)
+    res := elasticsearch.SearchTemplate(c, IDX, "esadmin_tpl", `{"tag":"b","size":2}`)
+    println "template search:", res.ok, res.total, res.hits.len()
+    println "script delete:", elasticsearch.DeleteStoredScript(c, "esadmin_tpl")
+    println "valid:", elasticsearch.ValidateQuery(c, IDX, elasticsearch.Match("tag", "a")), elasticsearch.ValidateQuery(c, IDX, `{"no_such":{}}`)
+    ex := elasticsearch.Explain(c, IDX, "d1", elasticsearch.Term("tag", "b"))
+    println "explain:", json.Get(ex, "matched")
+    fc := elasticsearch.FieldCaps(c, IDX, strs("tag", "n"))
+    println "field caps:", json.Items(json.Get(fc, "indices")).len(), json.GetPath(fc, "fields.tag.keyword.type")
+    tv := elasticsearch.TermVectors(c, IDX, "d1", strs("title", ""))
+    println "term vectors:", json.Get(tv, "found")
+    println "stats docs:", json.GetPath(elasticsearch.IndexStats(c, IDX), "_all.primaries.docs.count")
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortAsc("n"))
+    a := elasticsearch.SubmitAsyncSearch(c, IDX, elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "c"), size = 1, sort = sort }, "5s")
+    println "async:", a.ok, a.id.len() > 0, a.running, a.result.total, a.result.hits.get(0).id
+    again := elasticsearch.GetAsyncSearch(c, a.id, "")
+    println "async again:", again.ok, again.result.total
+    println "async delete:", elasticsearch.DeleteAsyncSearch(c, a.id)
+end
+
+func main:
+    mut c := elasticsearch.Connect(os.Env("SALAM_TEST_ES"))
+    println "ok:", elasticsearch.Ping(c)
+    elasticsearch.DeleteIndex(c, IDX)
+    mapping := `{"settings":{"number_of_shards":1,"number_of_replicas":0},"mappings":{"properties":{"title":{"type":"text","term_vector":"yes"},"tag":{"type":"keyword"},"n":{"type":"integer"}}}}`
+    println "create:", elasticsearch.CreateIndex(c, IDX, mapping)
+    mut b := elasticsearch.NewBulk()
+    tags := "abc"
+    repeat 30 in i:
+        elasticsearch.BulkIndex(b, IDX, "d" + str.FromInt(i as i64), `{"title":"salam number ` + str.FromInt(i as i64) + `","tag":"` + tags.substr(i % 3, 1) + `","n":` + str.FromInt(i as i64) + `}`)
+    end
+    println "seed:", elasticsearch.RunBulkWith(c, "", b, elasticsearch.Options { refresh = "true" }).succeeded
+    pipelines(c)
+    streams(c)
+    lifecycle(c)
+    snapshots(c)
+    tasks(c)
+    searching(c)
+    println "drop:", elasticsearch.DeleteIndex(c, IDX)
+    elasticsearch.Close(c)
+end

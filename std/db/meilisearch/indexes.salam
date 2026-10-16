@@ -1,0 +1,167 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package meilisearch
+
+@en "Index"
+@fa "نمایه"
+pub struct Index:
+    pub uid: str = ""
+    pub primary_key: str = ""
+    pub created_at: str = ""
+    pub updated_at: str = ""
+end
+
+@en "IndexPage"
+@fa "صفحه_نمایه"
+pub struct IndexPage:
+    pub results: Vector<Index> = Vector {} as Vector<Index>
+    pub offset: i64 = 0
+    pub limit: i64 = 0
+    pub total: i64 = 0
+end
+
+@en "IndexStats"
+@fa "آمار_نمایه"
+pub struct IndexStats:
+    pub number_of_documents: i64 = 0
+    pub raw_document_db_size: i64 = 0
+    pub avg_document_size: i64 = 0
+    pub is_indexing: bool = false
+    pub number_of_embeddings: i64 = 0
+    pub number_of_embedded_documents: i64 = 0
+    pub field_distribution: str = ""
+end
+
+@en "IndexSwap"
+@fa "جابجایی_نمایه"
+pub struct IndexSwap:
+    pub first: str = ""
+    pub second: str = ""
+    pub rename: bool = false
+end
+
+func _index(body: str): Index:
+    ret Index {
+        uid = _get_str(body, "uid"), primary_key = _get_str(body, "primaryKey"), created_at = _get_str(body, "createdAt"),
+        updated_at = _get_str(body, "updatedAt")
+    }
+end
+
+func _index_stats(body: str): IndexStats:
+    ret IndexStats {
+        number_of_documents = _get_i64(body, "numberOfDocuments", 0 as i64), raw_document_db_size = _get_i64(body, "rawDocumentDbSize", 0 as i64),
+        avg_document_size = _get_i64(body, "avgDocumentSize", 0 as i64), is_indexing = _get_bool(body, "isIndexing"),
+        number_of_embeddings = _get_i64(body, "numberOfEmbeddings", 0 as i64),
+        number_of_embedded_documents = _get_i64(body, "numberOfEmbeddedDocuments", 0 as i64),
+        field_distribution = _get_raw(body, "fieldDistribution")
+    }
+end
+
+func _ipath(uid: str): str:
+    ret "/indexes/" + _esc(uid)
+end
+
+func _paging(offset: int, limit: int): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if offset > 0:
+        keys.push("offset")
+        vals.push(conv.FormatInt(offset as i64))
+    end
+    if limit > 0:
+        keys.push("limit")
+        vals.push(conv.FormatInt(limit as i64))
+    end
+    ret _query(keys, vals)
+end
+
+@en "CreateIndex"
+@fa "ایجاد_نمایه"
+pub func CreateIndex(c: Client, uid: str, primary_key: str, err &: Error): TaskInfo:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("uid", uid))
+    if primary_key.len() > 0:
+        m.push(json.Member("primaryKey", primary_key))
+    end
+    ret _task_info(_call(c, "POST", "/indexes", json.Object(m), err))
+end
+
+@en "GetIndex"
+@fa "دریافت_نمایه"
+pub func GetIndex(c: Client, uid: str, err &: Error): Index:
+    body := _call(c, "GET", _ipath(uid), "", err)
+    if not Ok(err): ret Index {} end
+    ret _index(body)
+end
+
+@en "ListIndexes"
+@fa "فهرست_نمایه_ها"
+pub func ListIndexes(c: Client, offset: int, limit: int, err &: Error): IndexPage:
+    body := _call(c, "GET", "/indexes" + _paging(offset, limit), "", err)
+    mut out := IndexPage {
+        offset = _get_i64(body, "offset", 0 as i64), limit = _get_i64(body, "limit", 0 as i64),
+        total = _get_i64(body, "total", 0 as i64)
+    }
+    each item in _elements(_get_raw(body, "results")):
+        out.results.push(_index(item))
+    end
+    ret out
+end
+
+@en "UpdateIndex"
+@fa "به_روزرسانی_نمایه"
+pub func UpdateIndex(c: Client, uid: str, primary_key: str, err &: Error): TaskInfo:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("primaryKey", primary_key))
+    ret _task_info(_call(c, "PATCH", _ipath(uid), json.Object(m), err))
+end
+
+@en "RenameIndex"
+@fa "تغییر_نام_نمایه"
+pub func RenameIndex(c: Client, uid: str, new_uid: str, err &: Error): TaskInfo:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("uid", new_uid))
+    ret _task_info(_call(c, "PATCH", _ipath(uid), json.Object(m), err))
+end
+
+@en "DeleteIndex"
+@fa "حذف_نمایه"
+pub func DeleteIndex(c: Client, uid: str, err &: Error): TaskInfo:
+    ret _task_info(_call(c, "DELETE", _ipath(uid), "", err))
+end
+
+@en "SwapIndexes"
+@fa "جابجایی_نمایه_ها"
+pub func SwapIndexes(c: Client, swaps: Vector<IndexSwap>, err &: Error): TaskInfo:
+    mut items := Vector {} as Vector<str>
+    each s in swaps:
+        mut pair := Vector {} as Vector<str>
+        pair.push(s.first)
+        pair.push(s.second)
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("indexes", _strs_json(pair)))
+        if s.rename:
+            m.push(json.MemberBool("rename", true))
+        end
+        items.push(json.Object(m))
+    end
+    ret _task_info(_call(c, "POST", "/swap-indexes", json.Array(items), err))
+end
+
+@en "GetIndexStats"
+@fa "دریافت_آمار_نمایه"
+pub func GetIndexStats(c: Client, uid: str, err &: Error): IndexStats:
+    ret _index_stats(_call(c, "GET", _ipath(uid) + "/stats", "", err))
+end

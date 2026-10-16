@@ -38,6 +38,8 @@ const ANSWER_SECONDS := 600
 const MAX_KEYS := 20
 const CALLER_MAX := 8000
 const PARALLEL_PER_USER := 4
+const BEAT_MS := 10000
+const WRITE_MS := 30000
 
 mut HOURLY := 100
 mut BUSY_LOCK := sync.Mutex {}
@@ -286,6 +288,40 @@ func usage_json(prompt_chars: int, completion_chars: int, real: aiengine.Usage):
     ret json.Object(u)
 end
 
+func step_notes(activity: str, from: int, all: bool, upto &: int): str:
+    mut err := encerr.EncodingError {}
+    list := json.Decode(activity, err)
+    if encerr.IsError(err) or not value.IsArray(list):
+        value.ValueFree(list)
+        ret ""
+    end
+    total := value.ArrayLen(list)
+    last := all ? total : total - 1
+    mut lines := Vector {} as Vector<str>
+    mut i := from
+    until i < last:
+        step := value.ArrayGet(list, i)
+        mut line := ""
+        if text_field(step, "kind") == "think":
+            line = str.Trim(text_field(step, "text"))
+        else:
+            line = str.Trim(text_field(step, "title") + " " + text_field(step, "detail"))
+        end
+        if line.len() > 0:
+            lines.push(line)
+        end
+        i += 1
+    end
+    value.ValueFree(list)
+    if last > from:
+        upto = last
+    end
+    if lines.len() == 0:
+        ret ""
+    end
+    ret str.Join(lines, "\n") + "\n"
+end
+
 func finish_log(rid: str, status: str, response: str, started: i64):
     mut a := one(status)
     a.push(clip(response, MAX_LOG))
@@ -392,27 +428,59 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     end
     ailive.Begin(sid)
     tcp.SetReadDeadline(c, 0)
+    tcp.SetWriteDeadline(c, WRITE_MS)
+    mut opened := false
     if stream:
-        if tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") <= 0:
-            aiengine.Abort(sid)
+        opened = tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") > 0
+        if opened:
+            opened = tcp.Write(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, "")) > 0
         end
-        _f := tcp.Write(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, ""))
     end
     mut sent := ""
     mut gen := ailive.Gen()
     mut status := "done"
     mut final := ""
-    until true:
+    mut told := 0
+    mut beat := time.NowMillis()
+    if stream and not opened:
+        status = "aborted"
+        aiengine.Abort(sid)
+    end
+    until status == "done":
         r := aiturn.Progress(sid, t, ANSWER_SECONDS)
-        if stream and str.StartsWith(r.text, sent) and r.text.len() > sent.len():
-            piece := r.text.substr(sent.len(), r.text.len() - sent.len())
-            if tcp.Write(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", "")) <= 0:
-                aiengine.Abort(sid)
-                status = "aborted"
-                final = r.text
-                break
+        mut ok := true
+        if stream:
+            notes := step_notes(r.activity, told, r.done, told)
+            if notes.len() > 0:
+                ok = tcp.Write(c, chunk(cid, t, "{" + json.Member("reasoning_content", notes) + "}", "")) > 0
+                beat = time.NowMillis()
             end
-            sent = r.text
+            if ok and str.StartsWith(r.text, sent) and r.text.len() > sent.len():
+                piece := r.text.substr(sent.len(), r.text.len() - sent.len())
+                ok = tcp.Write(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", "")) > 0
+                sent = r.text
+                beat = time.NowMillis()
+            end
+        end
+        if ok and not r.done and time.NowMillis() - beat >= BEAT_MS:
+            if stream:
+                ok = tcp.Write(c, ": ping\n\n") > 0
+            else:
+                if not opened:
+                    opened = tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") > 0
+                    ok = opened
+                end
+                if ok:
+                    ok = tcp.Write(c, "\n") > 0
+                end
+            end
+            beat = time.NowMillis()
+        end
+        if not ok:
+            aiengine.Abort(sid)
+            status = "aborted"
+            final = r.text
+            break
         end
         if r.done:
             final = r.text
@@ -422,16 +490,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
             break
         end
         if ailive.Connected():
-            next := ailive.Wait(gen, 15000)
-            if stream and next == gen:
-                if tcp.Write(c, ": ping\n\n") <= 0:
-                    aiengine.Abort(sid)
-                    status = "aborted"
-                    final = r.text
-                    break
-                end
-            end
-            gen = next
+            gen = ailive.Wait(gen, BEAT_MS / 2)
             sync.SleepMs(40)
         else:
             sync.SleepMs(700)
@@ -443,10 +502,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     aiengine.Delete(sid)
     finish_log(rid, status, final, started)
     aiturn.SaveUsage("api_requests", rid, usage)
+    if status == "aborted":
+        ret
+    end
     if stream:
-        if status == "aborted":
-            ret
-        end
         if status == "error" and final.len() == 0:
             _e := tcp.Write(c, "data: " + `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}` + "\n\n")
         else:
@@ -469,6 +528,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         ret
     end
     if status == "error" and final.len() == 0:
+        if opened:
+            _x := tcp.Write(c, `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}`)
+            ret
+        end
         oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
         ret
     end
@@ -486,6 +549,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     m.push(json.Member("model", MODEL))
     m.push(json.MemberRaw("choices", "[" + json.Object(choice) + "]"))
     m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
+    if opened:
+        _o := tcp.Write(c, json.Object(m))
+        ret
+    end
     respond(c, "200 OK", json.Object(m))
 end
 
@@ -584,6 +651,9 @@ end
 
 pub func Configure(hourly: int):
     BUSY_LOCK = sync.NewMutex()
+    aistore.Lock()
+    _r := aistore.Run("UPDATE api_requests SET status = 'error' WHERE status = 'pending'", Vector {} as Vector<str>)
+    aistore.Unlock()
     if hourly > 0:
         HOURLY = hourly
     end

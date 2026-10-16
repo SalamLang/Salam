@@ -163,9 +163,16 @@ calls:
 4. `POST /bridge/mcp` (streaming port) is an MCP server for the engine. It
    offers `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`,
    `grep`, `docker`, `wsl` and `run_tests`. Every tool takes the session id,
-   which picks the chat and so the device. A call waits for the device's
-   answer for up to ten minutes, or until the device has been silent for 45
-   seconds.
+   which picks the chat and so the device. A call lives for up to ten
+   minutes, or until the device has been silent for 45 seconds. One MCP
+   request holds it for at most `AI_BRIDGE_HOLD_SECONDS` (default 40), so
+   engine-side request timeouts never cut it off. A call still running then
+   returns a `call_id`, and the `wait` tool picks up its result.
+
+API answers and web streams write something at least every 10 seconds: SSE
+`: ping` comments, or, for a non-streaming completion, whitespace before the
+JSON body. Streaming completions also send the activity steps as
+`reasoning_content`. A proxy read timeout of 30 seconds or more is enough.
 
 The proxy must send `/bridge/poll` and `/bridge/result` to the streaming port
 with buffering off and a read timeout above 30 seconds. It must never expose

@@ -4,6 +4,7 @@ import { EventList } from "./Events";
 import { fmtDate, fmtDateTime, fmtNum, fmtRelative, initial } from "./format";
 import { IconActivity, IconBadgeCheck, IconChevronDown, IconPlug } from "./icons";
 import { CopyButton } from "./Markdown";
+import { confirmDialog } from "./Confirm";
 
 export const MCP_COMMAND = "claude mcp add --transport http salam https://mcp.salamlang.ir/mcp";
 
@@ -81,7 +82,14 @@ export function Apps({ notify }: { notify: (msg: string) => void }) {
   }, [load]);
 
   const revoke = async (app: ConnectedApp) => {
-    if (!confirm(`اتصال «${app.client.name}» قطع شود؟ این برنامه دیگر نمی‌تواند از ابزارهای سلام با حساب شما استفاده کند.`)) return;
+    const ok = await confirmDialog({
+      title: "قطع اتصال برنامه",
+      subject: app.client.name,
+      message: "این برنامه دیگر نمی‌تواند از ابزارهای سلام با حساب شما استفاده کند.",
+      confirmLabel: "قطع اتصال",
+      icon: "alert",
+    });
+    if (!ok) return;
     setRemoving(app.id);
     try {
       await api.revokeApp(app.id);

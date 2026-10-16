@@ -4,6 +4,7 @@ import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconClose, IconSearch, IconShield } from "./icons";
 import { RequestList } from "./Requests";
+import { confirmDialog, Subject } from "./Confirm";
 
 type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
@@ -760,7 +761,18 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
   };
 
   const revoke = async (a: AdminApp) => {
-    if (!confirm(`اتصال «${a.client.name}» برای ${a.user.name} قطع شود؟`)) return;
+    const ok = await confirmDialog({
+      title: "قطع اتصال برنامه",
+      subject: a.client.name,
+      message: (
+        <>
+          اتصال این برنامه برای <Subject>{a.user.name}</Subject> قطع می‌شود.
+        </>
+      ),
+      confirmLabel: "قطع اتصال",
+      icon: "alert",
+    });
+    if (!ok) return;
     setBusy(a.id);
     try {
       await api.adminRevokeApp(a.id);

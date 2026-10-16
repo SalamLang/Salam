@@ -1,17 +1,82 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeDirection, highlight } from "./highlight";
 import { IconCheck, IconCopy } from "./icons";
+import { highlightRich, preloadHighlighter } from "./shiki";
 
 const LANG_NAMES: Record<string, string> = {
   salam: "سلام",
   text: "متن",
+  plain: "متن",
+  txt: "متن",
+  output: "خروجی",
   sh: "ترمینال",
   bash: "ترمینال",
   shell: "ترمینال",
   console: "ترمینال",
+  zsh: "ترمینال",
+  powershell: "PowerShell",
+  json: "JSON",
+  yaml: "YAML",
+  yml: "YAML",
+  toml: "TOML",
+  python: "Python",
+  py: "Python",
+  javascript: "JavaScript",
+  js: "JavaScript",
+  typescript: "TypeScript",
+  ts: "TypeScript",
+  c: "C",
+  cpp: "C++",
+  go: "Go",
+  rust: "Rust",
+  rs: "Rust",
+  java: "Java",
+  php: "PHP",
+  html: "HTML",
+  css: "CSS",
+  sql: "SQL",
+  diff: "Diff",
+  dockerfile: "Dockerfile",
+  docker: "Dockerfile",
+  llvm: "LLVM IR",
 };
+
+const RICH_EVERY_MS = 250;
+
+function useHighlighted(code: string, lang: string): string {
+  const quick = highlight(code, lang);
+  const [rich, setRich] = useState<{ key: string; html: string } | null>(null);
+  const last = useRef(0);
+  const key = `${lang}\u0000${code}`;
+
+  useEffect(() => {
+    preloadHighlighter();
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const run = () => {
+      last.current = Date.now();
+      highlightRich(code, lang)
+        .then((html) => {
+          if (alive && html !== null) setRich({ key, html });
+        })
+        .catch(() => {});
+    };
+    const wait = Math.max(0, RICH_EVERY_MS - (Date.now() - last.current));
+    const timer = window.setTimeout(run, wait);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [code, lang, key]);
+
+  if (rich && rich.key === key) return rich.html;
+  if (rich && code.startsWith(rich.key.slice(lang.length + 1))) return rich.html + highlight(code.slice(rich.key.length - lang.length - 1), lang);
+  return quick;
+}
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -43,6 +108,7 @@ export function CopyButton({ text, label = "رونوشت" }: { text: string; lab
 
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const dir = codeDirection(code, lang);
+  const html = useHighlighted(code, lang);
   const name = LANG_NAMES[lang] || lang || "کد";
   return (
     <div className="code-block">
@@ -51,7 +117,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         <CopyButton text={code} />
       </div>
       <pre dir={dir}>
-        <code dangerouslySetInnerHTML={{ __html: highlight(code, lang) }} />
+        <code dangerouslySetInnerHTML={{ __html: html }} />
       </pre>
     </div>
   );

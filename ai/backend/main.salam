@@ -33,6 +33,7 @@ include aiadmin "admin.salam"
 include aiengine "engine.salam"
 include ailive "live.salam"
 include aiturn "turn.salam"
+include aiopenai "openai.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -81,6 +82,7 @@ func main:
         ret 1
     end
     aiturn.Init()
+    aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
     colon := engine_host.find(":")
@@ -118,6 +120,7 @@ func main:
     router.Post(r, "/chats/:id/stop", stop_message)
     aioauth.Routes(r)
     aiadmin.Routes(r)
+    aiopenai.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop"]:
         router.Options(r, path, preflight)
     end
@@ -691,14 +694,45 @@ func serve_stream(c: tcp.Conn):
     mut path := first.get(1)
     mut origin := ""
     mut auth := ""
+    mut headers := HashMap {} as HashMap<str, str>
     each line in lines:
         l := str.Trim(line)
+        colon := l.find(":")
+        if colon > 0:
+            headers.put(str.Lower(str.Trim(l.substr(0, colon))), str.Trim(l.substr(colon + 1, l.len() - colon - 1)))
+        end
         lower := str.Lower(l)
         if str.StartsWith(lower, "origin:"):
             origin = str.Trim(l.substr(7, l.len() - 7))
         else str.StartsWith(lower, "authorization:"):
             auth = str.Trim(l.substr(14, l.len() - 14))
         end
+    end
+    mut bare := path
+    cut := bare.find("?")
+    if cut >= 0:
+        bare = bare.substr(0, cut)
+    end
+    if aiopenai.Handles(bare):
+        head_end := req.find("\r\n\r\n") + 4
+        mut body := req.substr(head_end, req.len() - head_end)
+        mut want := 0
+        if headers.has("content-length"):
+            want = headers.get("content-length").to_int()
+        end
+        if want > 2097152:
+            stream_error(c, "413 Payload Too Large", origin, "too_large", "request body is larger than 2 MB")
+            ret
+        end
+        until body.len() < want:
+            more := tcp.Read(c, 65536)
+            if more.len() == 0:
+                ret
+            end
+            body = body + more
+        end
+        aiopenai.Serve(c, method, bare, headers, body)
+        ret
     end
     if method == "OPTIONS":
         _w := tcp.Write(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n")

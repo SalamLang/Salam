@@ -27,6 +27,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_APP_URL`                                 | the web app, where people sign in and approve apps                                        | `https://ai.salamlang.ir`                                  |
 | `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                  | `https://mcp.salamlang.ir/mcp,http://mcp.salamlang.ir/mcp` |
 | `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters | empty (both endpoints refuse every call)                   |
+| `AI_API_HOURLY`                              | requests per hour each account may send to `/v1`                                          | `100`                                                      |
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
@@ -43,6 +44,44 @@ The API:
 | `POST /chats/:id/stop`                                                                         | stop the answer being written                                                    |
 | `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls   |
 | `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                            |
+
+### OpenAI-compatible API
+
+`https://ai-api.salamlang.ir/v1` speaks the OpenAI chat completions protocol, so
+any OpenAI client works with `base_url` set to it and model `salam`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://ai-api.salamlang.ir/v1", api_key="sk-salam-...")
+reply = client.chat.completions.create(
+    model="salam",
+    messages=[{"role": "user", "content": "Write hello world in Salam"}],
+)
+```
+
+| Method and path                               | Purpose                                                                                            |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `GET /v1/models`                              | lists `salam`                                                                                      |
+| `POST /v1/chat/completions`                   | `messages`, optional `stream` (with `stream_options.include_usage`), `user` and `metadata.project` |
+| `GET /keys`, `POST /keys`, `DELETE /keys/:id` | the signed-in user's API keys; the secret is returned once at creation                             |
+| `GET /keys/requests`, `GET /admin/requests`   | the request log, the user's own or (for admins) everyone's                                         |
+
+- Keys look like `sk-salam-...` and are stored only as SHA-256 hashes. Each
+  account may hold 20 active keys and send `AI_API_HOURLY` requests an hour.
+- Every request is logged with its account, key, project, end user, the
+  prompt and the answer (each up to 64 KB), duration, IP and user agent. The
+  project is the `X-Salam-Project` header, else `metadata.project`, else the
+  key's name.
+- The whole conversation, system messages included, is sent to the assistant
+  as one turn in a fresh engine session that is deleted afterwards. Token
+  counts in `usage` are estimates (4 characters per token). Tool calling and
+  images are not supported.
+- `/v1` is served by the streaming listener (`AI_STREAM_PORT`), so the proxy
+  must send `/v1/` there with buffering off, like the chat stream route.
+
+`node ai/backend/tests/api_flow.mjs` tests it against a running API, with
+`ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.
 
 ### Sign in with Salam (OAuth 2.1)
 

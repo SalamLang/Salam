@@ -7,8 +7,9 @@ guessable from other languages. Everything here has been verified against the
 compiler in this checkout, with the exact diagnostic it produces.
 
 If you have the `salam` MCP server available, use it rather than guessing:
-`salam_check` after every edit, `salam_stdlib_symbols` before using any std
-package, `salam_find_examples` to see a working usage.
+`salam_docs` for how a construct is written, `salam_stdlib_search` and
+`salam_stdlib_symbols` before using any std function, `salam_find_examples` to
+see a working usage, and `salam_check` after every edit.
 
 ---
 
@@ -127,18 +128,20 @@ func add(a: int, b: int): int:
     ret a + b
 end
 
-pub func Scale(v: f64, by: f64): f64: ret v * by end   // one-liners are fine
+pub func Scale(v: f64, factor: f64): f64: ret v * factor end   // one-liners are fine
 
 func fill(out &: Vector<str>):                          // `&:` = by reference
     out.push("x")
 end
 ```
 
-`func main:` implicitly returns `i32`, so it must end with `ret 0`, not a bare
-`ret`. Note that a bare `ret` passes Salam's own analysis and only fails later
-in the C backend, with a raw `'return' with no value` error from gcc, so
-`salam_check` will call the file clean while `salam_build` fails. When a check
-passes but a build does not, look for this first.
+`func main:` returns the process exit code: `ret 3` exits with 3, and a `main`
+that ends without `ret` (or with a bare `ret`) exits with 0.
+
+Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
+`type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
+`salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not
+parse.
 
 ## 6. Strings
 
@@ -324,17 +327,6 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)
   fail with `unknown command '--version'`.
 
-- **`str.Split` can crash on its last element.** On a gcc-linked build,
-  `str.Split("a/b/c/d", "/")` reports the right length and correct elements
-  `0..n-2`, then segfaults reading the last one. Avoid it in code that must be
-  backend-portable; walk the string with `find`/`substr` instead. The same bug
-  reaches anything built on it, including `os.shell.Exec` and `io.Lines`.
-
-- **`os.shell.Run` deadlocks on large child output.** It waits for the child
-  before draining its pipes, so a child that writes more than the pipe buffer
-  (~64KB) blocks forever. For anything that might produce real volume,
-  redirect to a file and read it back, or use `os.RunCapture`.
-
 - **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
   wraparound and casts are computed exactly, but a result (or an intermediate
@@ -342,16 +334,18 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
 
-- **`os.Args()` has a broken generic type.** Binding any element to a local
-  (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.
-  Pass argv-derived values _inline_ as call arguments only.
+- **A file's module is keyed by its filename.** Two included files with the
+  same name (`a/io.salam` and `b/io.salam`), or one of your files named after a
+  std package you import (`shell.salam` next to `import os.shell`), clash. The
+  compiler rejects it with `package name 'io' is claimed by two different
+files`; give every source file a name unique across the whole project.
 
-- **Enum values cannot cross a package boundary.** A `pub enum`'s members are
-  not usable from another package; use `pub const int` values instead.
-
-- **A file's module is keyed by filename, not package.** Two packages that each
-  contain a file called `io.salam` collide at link time. Give every source file
-  a name unique across the whole project.
+- **A side-effect-free endless loop can crash under clang.** C11 lets a
+  compiler assume such a loop terminates, so with the C backend and clang at
+  `-O2` an `until true:` loop whose body has no I/O or memory writes can be
+  deleted and the program segfaults instead of spinning. Give a busy-wait a
+  real effect (a sleep, a print, an atomic) or build it with
+  `--backend=llvm`.
 
 - **The interpreter's HTTPS is slow: raise `--timeout` for it.** `salam exec`
   supports networking now, including the TLS path in `net.http`, but the

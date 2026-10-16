@@ -24,16 +24,14 @@ include mcpreg "mcp_registry.salam"
 include mcpsrc "mcp_resources.salam"
 include mcpout "mcp_result.salam"
 include mcpexec "mcp_exec.salam"
+include mcpprompt "mcp_prompts.salam"
 
 func _server_name(): str: ret "salam-mcp" end
 
 func _server_version(): str: ret SALAM_VERSION end
 
 func _instructions(): str:
-    if mcpexec.Hosted():
-        ret "Tools for the Salam programming language, hosted at mcp.salamlang.ir. Before writing Salam: call salam_stdlib_packages and salam_stdlib_symbols so you use APIs that exist, and salam_find_examples for a working usage. After every change: pass the whole program as source to salam_check, which type-checks without codegen and returns exact line/column diagnostics. Read the salam://guide/agents.md resource for the language's declaration-ordering rules and common pitfalls."
-    end
-    ret "Tools for the Salam programming language. Before writing Salam: call salam_stdlib_packages and salam_stdlib_symbols so you use APIs that exist, and salam_find_examples for a working usage. After every edit: call salam_check, which type-checks without codegen and returns exact line/column diagnostics. Read the salam://guide/agents.md resource for the language's declaration-ordering rules and common pitfalls."
+    ret mcpprompt.Instructions()
 end
 
 func _legacy_versions(): Vector<str>:
@@ -71,6 +69,7 @@ func _capabilities(): value.Value:
     mut caps := value.NewValueObject()
     value.ObjectSet(caps, "tools", value.NewValueObject())
     value.ObjectSet(caps, "resources", value.NewValueObject())
+    value.ObjectSet(caps, "prompts", value.NewValueObject())
     ret caps
 end
 
@@ -159,6 +158,35 @@ func _empty_list(key: str, legacy: bool): value.Value:
     ret r
 end
 
+func _templates_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "resourceTemplates", mcpsrc.Templates())
+    ret r
+end
+
+func _prompts_list(legacy: bool): value.Value:
+    mut r := _cacheable(legacy, 3600000)
+    value.ObjectSet(r, "prompts", mcpprompt.List())
+    ret r
+end
+
+func _get_prompt(req: mcprpc.Request, legacy: bool): str:
+    name := mcprpc.ParamStr(req.params, "name", "")
+    if not mcpprompt.Has(name):
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidParams, "Unknown prompt: ".concat(name))
+    end
+    args := mcprpc.ParamObject(req.params, "arguments")
+    missing := mcpprompt.MissingArg(name, args)
+    if missing.len() > 0:
+        ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrInvalidParams, "Missing required argument: ".concat(missing))
+    end
+    mut r := _result(legacy)
+    got := mcpprompt.Get(name, args)
+    value.ObjectSet(r, "description", value.ObjectGet(got, "description"))
+    value.ObjectSet(r, "messages", value.ObjectGet(got, "messages"))
+    ret mcprpc.ResultMessage(req.id_json, r)
+end
+
 func _version_error(req: mcprpc.Request): str:
     mut data := value.NewValueObject()
     value.ObjectSet(data, "supported", _supported())
@@ -209,10 +237,13 @@ func _respond(req: mcprpc.Request, legacy: bool): str:
             ret _read_resource(req, legacy)
         end
         "resources/templates/list":
-            ret mcprpc.ResultMessage(req.id_json, _empty_list("resourceTemplates", legacy))
+            ret mcprpc.ResultMessage(req.id_json, _templates_list(legacy))
         end
         "prompts/list":
-            ret mcprpc.ResultMessage(req.id_json, _empty_list("prompts", legacy))
+            ret mcprpc.ResultMessage(req.id_json, _prompts_list(legacy))
+        end
+        "prompts/get":
+            ret _get_prompt(req, legacy)
         end
     end
     ret mcprpc.ErrorMessage(req.id_json, mcprpc.McpErrMethodNotFound, "Unknown method: ".concat(req.method))

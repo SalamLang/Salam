@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
-import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
+import { isDesktop } from "./desktop";
+import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 
@@ -145,6 +146,12 @@ export function Sidebar(p: Props) {
             <IconKey width={16} height={16} />
             <span>کلیدهای API</span>
           </a>
+          {!isDesktop && (
+            <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer">
+              <IconMonitor width={16} height={16} />
+              <span>دریافت ایجنت سلام</span>
+            </a>
+          )}
           {p.user.admin && (
             <a
               href="/admin"

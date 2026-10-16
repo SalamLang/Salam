@@ -5,8 +5,8 @@ use crate::tools::{self, Call, Preview};
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 

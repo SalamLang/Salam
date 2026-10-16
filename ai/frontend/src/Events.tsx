@@ -36,16 +36,18 @@ export function EventList({ events, loading, hasMore, onMore, showUser, showClie
                 <div className="event-who">
                   {showUser && ev.user && (
                     <span>
-                      {onUser ? (
+                      {onUser && ev.user.id !== 0 ? (
                         <button type="button" className="link" onClick={() => onUser(ev.user!.id, ev.user!.name)}>
                           <bdi>{ev.user.name}</bdi>
                         </button>
                       ) : (
                         <bdi>{ev.user.name}</bdi>
                       )}{" "}
-                      <span className="muted" dir="ltr">
-                        {ev.user.email}
-                      </span>
+                      {ev.user.email && (
+                        <span className="muted" dir="ltr">
+                          {ev.user.email}
+                        </span>
+                      )}
                     </span>
                   )}
                   {showClient && (

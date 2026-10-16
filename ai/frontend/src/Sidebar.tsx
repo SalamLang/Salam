@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
-import { IconChat, IconClose, IconEdit, IconLogout, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 
 function groupOf(updated: number): string {
@@ -128,6 +128,15 @@ export function Sidebar(p: Props) {
           >
             <IconPlug width={16} height={16} />
             <span>برنامه‌های متصل</span>
+          </a>
+          <a
+            href="/keys"
+            className={`chat-link ${p.page === "keys" ? "active" : ""}`}
+            aria-current={p.page === "keys" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/keys"))}
+          >
+            <IconKey width={16} height={16} />
+            <span>کلیدهای API</span>
           </a>
           {p.user.admin && (
             <a

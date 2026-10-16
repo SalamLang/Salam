@@ -5,6 +5,7 @@ import { Apps } from "./Apps";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
+import { Keys } from "./Keys";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -22,12 +23,13 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "admin";
+type Route = "chat" | "connect" | "apps" | "keys" | "admin";
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
   if (p === "/connect") return "connect";
   if (p === "/apps") return "apps";
+  if (p === "/keys") return "keys";
   if (p === "/admin") return "admin";
   return "chat";
 }
@@ -36,6 +38,7 @@ const PAGE_TITLES: Record<Route, string> = {
   chat: "دستیار سلام",
   connect: "اتصال برنامه",
   apps: "برنامه‌های متصل",
+  keys: "کلیدهای API",
   admin: "مدیریت",
 };
 
@@ -362,8 +365,10 @@ export function App() {
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        {route === "apps" || route === "admin" ? (
-          <div className="scroller page-scroller">{route === "apps" ? <Apps notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}</div>
+        {route === "apps" || route === "keys" || route === "admin" ? (
+          <div className="scroller page-scroller">
+            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+          </div>
         ) : (
           <>
             <div className="scroller" ref={scroller} onScroll={onScroll}>

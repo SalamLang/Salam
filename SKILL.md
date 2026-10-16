@@ -1413,6 +1413,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+- **`db.typesense`** (Typesense over HTTP, 29.x and 30.x): `New NewCluster SetNearestNode AddNode AddHeader Free Ok IsNotFound IsConflict ErrorString Request RequestAs Health ServerVersion Status Stats Metrics CreateSnapshot ClearCache CompactDB SchemaChanges UpdateConfig CreateCollection GetCollection CollectionExists ListCollections UpdateCollection AddFields DropFields CloneCollection TruncateCollection DeleteCollection UpsertAlias GetAlias ListAliases DeleteAlias CreateDocument UpsertDocument EmplaceDocument UpdateDocument GetDocument GetDocumentAs DeleteDocument DeleteByFilter UpdateByFilter ImportDocuments ImportJSONL ImportOf ExportDocuments Search SearchRaw MultiSearch UnionSearch HitsAs Highlight CreateKey SearchOnlyKey GetKey ListKeys DeleteKey ScopedSearchKey GenerateScopedSearchKey UpsertSynonymSet UpsertSynonymItem UpsertSynonym UpsertCurationSet UpsertCurationItem UpsertOverride UpsertPreset UpsertSearchPreset UpsertStopwords ImportStemmingDictionary CreateAnalyticsRule SendEvent FlushAnalytics CreateConversationModel CreateNLSearchModel`. Every call ends with `err &: typesense.Error` (empty `kind` = success, `Ok(err)`; `IsNotFound`/`IsConflict` for 404/409). A client holds several nodes and skips one that fails for `healthcheck_ms`, retrying `retries` times, so a 5xx or a dead node is not an error until every try failed. Build a schema with `Schema { name }` plus `NewField`/`FacetField`/`VectorField`/`EmbeddingField` (`Field.kind` is the type, `sort` is 1/-1/0 for on/off/default). `SearchParams` sends only what you set; anything without a field goes through `Set(p, key, value)`, and a query string over `MAX_GET_QUERY` bytes goes through `/multi_search` by itself. Imports answer 200 even when lines fail: check `ImportResult.failed`. Synonym sets and curation sets are Typesense 30; `UpsertSynonym`/`UpsertOverride` are the 29 per collection forms. `ScopedSearchKey` signs a browser key locally.
 
 ```salam
 import db
@@ -2349,7 +2350,8 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
-(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
+`db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`), `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`.
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`

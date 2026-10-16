@@ -49,7 +49,7 @@ check("an empty key name is refused", empty.res.status === 400);
 
 console.log("models and auth");
 const models = await (await fetch(`${V1}/models`)).json();
-check("/models lists salam", models.object === "list" && models.data[0].id === "salam", models);
+check("/models lists salam-ai only", models.object === "list" && models.data[0].id === "salam-ai", models);
 const noKey = await chat("sk-salam-wrong", { model: "salam", messages: [{ role: "user", content: "hi" }] });
 const noKeyBody = await noKey.json();
 check("a wrong key gets 401 invalid_api_key", noKey.status === 401 && noKeyBody.error.code === "invalid_api_key", noKeyBody);

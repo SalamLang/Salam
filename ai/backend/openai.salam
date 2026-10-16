@@ -31,7 +31,7 @@ include aiengine "engine.salam"
 include ailive "live.salam"
 include aiturn "turn.salam"
 
-const MODEL := "salam"
+const MODEL := "salam-ai"
 const MAX_PROMPT := 65536
 const MAX_LOG := 65536
 const ANSWER_SECONDS := 600
@@ -205,7 +205,7 @@ func approx_tokens(chars: int): i64:
     ret (chars + 3) / 4
 end
 
-func chunk(rid: str, created: i64, delta: str, finish: str): str:
+func chunk(cid: str, created: i64, delta: str, finish: str): str:
     mut ch := Vector {} as Vector<str>
     ch.push(json.MemberInt("index", 0))
     ch.push(json.MemberRaw("delta", delta))
@@ -215,7 +215,7 @@ func chunk(rid: str, created: i64, delta: str, finish: str): str:
         ch.push(json.MemberRaw("finish_reason", "null"))
     end
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("id", "chatcmpl-" + rid))
+    m.push(json.Member("id", cid))
     m.push(json.Member("object", "chat.completion.chunk"))
     m.push(json.MemberInt("created", created))
     m.push(json.Member("model", MODEL))
@@ -249,7 +249,7 @@ func models(c: tcp.Conn):
     m.push(json.Member("id", MODEL))
     m.push(json.Member("object", "model"))
     m.push(json.MemberInt("created", 1760572800))
-    m.push(json.Member("owned_by", "salamlang"))
+    m.push(json.Member("owned_by", "salam"))
     respond(c, "200 OK", `{"object": "list", "data": [` + json.Object(m) + "]}")
 end
 
@@ -318,6 +318,7 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
     _i := aistore.Run("INSERT INTO api_requests (user_id, key_id, project, end_user, model, stream, status, prompt, response, prompt_chars, ip, agent, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, '', ?8, ?9, ?10, ?11)", a)
     rid := aistore.LastId()
     aistore.Unlock()
+    cid := "chatcmpl-" + crypto.RandomHex(12)
     sid := aiengine.NewSession("api " + kname)
     if sid.len() == 0 or not aiengine.Send(sid, prompt):
         if sid.len() > 0:
@@ -333,7 +334,7 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
         if tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") <= 0:
             aiengine.Abort(sid)
         end
-        _f := tcp.Write(c, chunk(rid, t, `{"role": "assistant", "content": ""}`, ""))
+        _f := tcp.Write(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, ""))
     end
     mut sent := ""
     mut gen := ailive.Gen()
@@ -343,7 +344,7 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
         r := aiturn.Progress(sid, t, ANSWER_SECONDS)
         if stream and str.StartsWith(r.text, sent) and r.text.len() > sent.len():
             piece := r.text.substr(sent.len(), r.text.len() - sent.len())
-            if tcp.Write(c, chunk(rid, t, "{" + json.Member("content", piece) + "}", "")) <= 0:
+            if tcp.Write(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", "")) <= 0:
                 aiengine.Abort(sid)
                 status = "aborted"
                 final = r.text
@@ -386,12 +387,12 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
             _e := tcp.Write(c, "data: " + `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}` + "\n\n")
         else:
             if final.len() > sent.len() and str.StartsWith(final, sent):
-                _p := tcp.Write(c, chunk(rid, t, "{" + json.Member("content", final.substr(sent.len(), final.len() - sent.len())) + "}", ""))
+                _p := tcp.Write(c, chunk(cid, t, "{" + json.Member("content", final.substr(sent.len(), final.len() - sent.len())) + "}", ""))
             end
-            _s := tcp.Write(c, chunk(rid, t, "{}", "stop"))
+            _s := tcp.Write(c, chunk(cid, t, "{}", "stop"))
             if with_usage:
                 mut u := Vector {} as Vector<str>
-                u.push(json.Member("id", "chatcmpl-" + rid))
+                u.push(json.Member("id", cid))
                 u.push(json.Member("object", "chat.completion.chunk"))
                 u.push(json.MemberInt("created", t))
                 u.push(json.Member("model", MODEL))
@@ -415,7 +416,7 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
     choice.push(json.MemberRaw("message", json.Object(msg)))
     choice.push(json.Member("finish_reason", "stop"))
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("id", "chatcmpl-" + rid))
+    m.push(json.Member("id", cid))
     m.push(json.Member("object", "chat.completion"))
     m.push(json.MemberInt("created", t))
     m.push(json.Member("model", MODEL))

@@ -48,21 +48,21 @@ The API:
 ### OpenAI-compatible API
 
 `https://ai-api.salamlang.ir` speaks the OpenAI chat completions protocol, so
-any OpenAI client works with `base_url` set to it and model `salam`:
+any OpenAI client works with `base_url` set to it and model `salam-ai`:
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(base_url="https://ai-api.salamlang.ir", api_key="sk-salam-...")
 reply = client.chat.completions.create(
-    model="salam",
+    model="salam-ai",
     messages=[{"role": "user", "content": "Write hello world in Salam"}],
 )
 ```
 
 | Method and path                               | Purpose                                                                                            |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `GET /models`                                 | lists `salam`                                                                                      |
+| `GET /models`                                 | lists `salam-ai`                                                                                   |
 | `POST /chat/completions`                      | `messages`, optional `stream` (with `stream_options.include_usage`), `user` and `metadata.project` |
 | `GET /keys`, `POST /keys`, `DELETE /keys/:id` | the signed-in user's API keys; the secret is returned once at creation                             |
 | `GET /keys/requests`, `GET /admin/requests`   | the request log, the user's own or (for admins) everyone's                                         |

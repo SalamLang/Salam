@@ -6,7 +6,7 @@ import { CopyButton } from "./Markdown";
 import { RequestList } from "./Requests";
 
 export const API_BASE_URL = "https://ai-api.salamlang.ir";
-export const API_MODEL = "salam-ai";
+export const API_MODEL = "salam";
 const PLACEHOLDER = "sk-salam-...";
 const HOURLY_LIMIT = 100;
 const SAMPLE_PROMPT = "یک برنامه‌ی سلام بنویس که «سلام دنیا» را چاپ کند.";

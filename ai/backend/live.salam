@@ -21,6 +21,8 @@ import encoding.encerr
 import sync
 import str
 
+include aiact "activity.salam"
+
 mut HOST := ""
 mut PORT := 4096
 mut AUTH := ""
@@ -38,6 +40,9 @@ mut PART_TEXT := HashMap {} as HashMap<str, str>
 mut PART_SID := HashMap {} as HashMap<str, str>
 mut MSG_ROLE := HashMap {} as HashMap<str, str>
 mut PENDING := HashMap {} as HashMap<str, str>
+mut STEPS := HashMap {} as HashMap<str, str>
+mut REASON := HashMap {} as HashMap<str, str>
+mut TOOLSTEP := HashMap {} as HashMap<str, str>
 
 func field(v: value.Value, key: str): value.Value:
     mut ok := false
@@ -96,6 +101,18 @@ func add_part(sid: str, pid: str):
     end
 end
 
+func add_step(sid: str, pid: str):
+    order := STEPS.has(sid) ? STEPS.get(sid) : ""
+    if ("\n" + order + "\n").find("\n" + pid + "\n") >= 0:
+        ret
+    end
+    if order.len() == 0:
+        STEPS.put(sid, pid)
+    else:
+        STEPS.put(sid, order + "\n" + pid)
+    end
+end
+
 func on_part(p: value.Value):
     pid := text_of(p, "id")
     sid := text_of(p, "sessionID")
@@ -124,11 +141,28 @@ func on_part(p: value.Value):
         end
         PHASE.put(sid, "writing")
     else kind == "reasoning":
+        add_step(sid, pid)
+        full := text_of(p, "text")
+        mut old := REASON.has(pid) ? REASON.get(pid) : ""
+        if waiting.len() > 0:
+            old = old + waiting
+            REASON.put(pid, old)
+        end
+        if full.len() >= old.len():
+            REASON.put(pid, full)
+        end
         if PHASE.has(sid) and PHASE.get(sid) != "writing":
             PHASE.put(sid, "thinking")
         end
     else kind == "tool":
-        status := text_of(field(p, "state"), "status")
+        state := field(p, "state")
+        status := text_of(state, "status")
+        add_step(sid, pid)
+        mut tool_out := text_of(state, "output")
+        if tool_out.len() == 0:
+            tool_out = text_of(state, "error")
+        end
+        TOOLSTEP.put(pid, aiact.Describe(text_of(p, "tool"), status, field(state, "input"), tool_out, status == "error"))
         if status == "running" or status == "pending":
             PHASE.put(sid, "searching")
         else PHASE.has(sid) and PHASE.get(sid) == "searching":
@@ -151,6 +185,12 @@ func on_delta(props: value.Value):
     if not PART_KIND.has(pid):
         held := PENDING.has(pid) ? PENDING.get(pid) : ""
         PENDING.put(pid, held + text_of(props, "delta"))
+        ret
+    end
+    if PART_KIND.get(pid) == "reasoning":
+        old_r := REASON.has(pid) ? REASON.get(pid) : ""
+        REASON.put(pid, old_r + text_of(props, "delta"))
+        bump()
         ret
     end
     if PART_KIND.get(pid) != "text":
@@ -320,6 +360,16 @@ func forget(sid: str):
             _c := PART_SID.remove(pid)
         end
     end
+    steps := STEPS.has(sid) ? STEPS.get(sid) : ""
+    if steps.len() > 0:
+        each pid in steps.split("\n"):
+            _r := REASON.remove(pid)
+            _t := TOOLSTEP.remove(pid)
+            _k := PART_KIND.remove(pid)
+            _s := PART_SID.remove(pid)
+        end
+    end
+    _st := STEPS.remove(sid)
     _d := ORDER.remove(sid)
     _e := PHASE.remove(sid)
     _f := IDLE.remove(sid)
@@ -404,4 +454,24 @@ pub func Snapshot(sid: str, text &: str, phase &: str, idle &: bool, failed &: b
     failed = FAILED.has(sid)
     _u := sync.Unlock(LOCK)
     ret tracked
+end
+
+pub func SetRedactions(words: str):
+    aiact.Configure(words)
+end
+
+pub func Activity(sid: str): str:
+    _l := sync.Lock(LOCK)
+    mut items := Vector {} as Vector<str>
+    if STEPS.has(sid):
+        each pid in STEPS.get(sid).split("\n"):
+            if TOOLSTEP.has(pid):
+                items.push(TOOLSTEP.get(pid))
+            else REASON.has(pid) and str.Trim(REASON.get(pid)).len() > 0:
+                items.push(aiact.ThoughtStep(REASON.get(pid)))
+            end
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret json.Array(items)
 end

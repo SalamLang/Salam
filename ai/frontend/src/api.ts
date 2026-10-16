@@ -26,8 +26,20 @@ export type Message = {
   status: "done" | "pending" | "error";
   created: number;
   phase?: Phase;
+  activity?: ActivityStep[];
+  ms?: number;
 };
 export type Phase = "thinking" | "searching" | "writing" | "done";
+export type ThinkStep = { kind: "think"; text: string };
+export type ToolStep = {
+  kind: "tool";
+  icon: string;
+  title: string;
+  detail: string;
+  link: string;
+  status: "running" | "done" | "error";
+};
+export type ActivityStep = ThinkStep | ToolStep;
 
 export type ClientKind = "cimd" | "dcr";
 export type OAuthClient = {
@@ -276,7 +288,13 @@ export type StreamHandlers = {
   delta: (text: string) => void;
   reset: (text: string) => void;
   phase: (phase: Phase) => void;
-  done: (body: string, status: Message["status"]) => void;
+  activity: (steps: ActivityStep[]) => void;
+  done: (
+    body: string,
+    status: Message["status"],
+    activity?: ActivityStep[],
+    ms?: number,
+  ) => void;
 };
 
 export async function streamMessage(
@@ -321,6 +339,9 @@ export async function streamMessage(
         phase?: Phase;
         body?: string;
         status?: Message["status"];
+        steps?: ActivityStep[];
+        activity?: ActivityStep[];
+        ms?: number;
       };
       try {
         payload = JSON.parse(data.join("\n"));
@@ -330,8 +351,15 @@ export async function streamMessage(
       if (event === "delta") on.delta(payload.t ?? "");
       else if (event === "reset") on.reset(payload.t ?? "");
       else if (event === "phase" && payload.phase) on.phase(payload.phase);
+      else if (event === "activity" && Array.isArray(payload.steps))
+        on.activity(payload.steps);
       else if (event === "done") {
-        on.done(payload.body ?? "", payload.status ?? "done");
+        on.done(
+          payload.body ?? "",
+          payload.status ?? "done",
+          Array.isArray(payload.activity) ? payload.activity : undefined,
+          payload.ms,
+        );
         reader.cancel().catch(() => {});
         return true;
       }
@@ -369,10 +397,13 @@ export const api = {
       { text },
     ),
   poll: (id: string, mid: number) =>
-    call<{ id: number; body: string; status: Message["status"]; phase: Phase }>(
-      "GET",
-      `/chats/${id}/messages/${mid}`,
-    ),
+    call<{
+      id: number;
+      body: string;
+      status: Message["status"];
+      phase: Phase;
+      activity?: ActivityStep[];
+    }>("GET", `/chats/${id}/messages/${mid}`),
   stop: (id: string) => call<{ body: string }>("POST", `/chats/${id}/stop`),
   consentRequest: (id: string) =>
     call<{ request: ConsentRequest }>(

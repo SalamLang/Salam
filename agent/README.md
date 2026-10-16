@@ -2,7 +2,7 @@
 
 A desktop app for Windows, macOS and Linux that opens <https://ai.salamlang.ir>
 and lets the assistant work on your computer. With your approval it can run
-shell commands (bash, sh, PowerShell, cmd), use Docker and WSL, read, search,
+shell commands (Bash, sh, PowerShell, cmd), use Docker and WSL, read, search,
 create and edit files in a folder you choose, and run your tests.
 
 It is a [Tauri 2](https://tauri.app) app written in Rust. It uses the
@@ -68,7 +68,7 @@ These variables are ignored in release builds.
 ## Names and icons
 
 Everything the user sees is Persian: the product name ایجنت سلام, the window
-title, the loader page and the installer descriptions. File names stay ASCII:
+title, the loader page and the installer descriptions. Filenames stay ASCII:
 the binary is `salam-agent` and the identifier is `ir.salamlang.agent`.
 
 The icons in `src-tauri/icons/` (including the multi-size `icon.ico` used for

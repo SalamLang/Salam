@@ -134,7 +134,7 @@ bun run build
 `PUBLIC_API_URL` points the app at another API, for example `PUBLIC_API_URL=http://localhost:8080 bun run dev`.
 
 Code in answers is highlighted with [Shiki](https://shiki.style) using the
-same TextMate grammar as the VS Code extension,
+same TextMate grammar as the Visual Studio Code extension,
 `extensions/vscode/syntaxes/salam.tmLanguage.json`, which
 `extensions/tools/gen_syntaxes.salam` generates from the compiler's keyword
 tables. The build imports it through the `@salam/grammar` alias, so it needs
@@ -152,9 +152,10 @@ calls:
 1. The app registers once with `POST /bridge/devices` and keeps the `sd-...`
    secret in the OS keychain.
 2. It long-polls `GET /bridge/poll` on the streaming port with
-   `Authorization: Bearer sd-...`. Each answer is `204` or `{call: {id, tool,
-args, chat, workspace}}`. It runs the tool after the user approves and posts
-   `{call_id, status: ok|error|denied, output}` to `POST /bridge/result`.
+   `Authorization: Bearer sd-...`. Each answer is `204` or
+   `{call: {id, tool, args, chat, workspace}}`. It runs the tool after the
+   user approves and posts `{call_id, status: ok|error|denied, output}` to
+   `POST /bridge/result`.
 3. A chat created with `{device_id, workspace}` is an agent chat. Its messages
    go to the `AI_ENGINE_AGENT_DESKTOP` profile, with a `<desktop_session>`
    block that carries the chat's random session id. The block is not stored

@@ -1413,6 +1413,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+- **`db.meilisearch`** (Meilisearch over HTTP, the whole v1 API): `New WithAgent Ok ErrorString Request RequestAs Health IsHealthy GetVersion GetStats CreateIndex GetIndex ListIndexes UpdateIndex RenameIndex DeleteIndex SwapIndexes GetIndexStats AddDocuments UpdateDocuments AddDocumentsNdjson AddDocumentsCsv AddDocumentsInBatches AddDocumentsOf GetDocument GetDocumentAs GetDocuments DocumentsAs DeleteDocument DeleteDocuments DeleteDocumentsByFilter DeleteAllDocuments Search Query HitsAs MultiSearch FederatedSearch FacetSearch SimilarDocuments GetSettings UpdateSettings ResetSettings Get/Update/Reset<Setting> GetTask GetTasks WaitForTask Wait CancelTasks DeleteTasks GetBatch GetBatches CreateKey GetKey GetKeys UpdateKey DeleteKey TenantToken`. Every call ends with `err &: meilisearch.Error` (empty `code` = success, check with `Ok(err)`). Writes return a `TaskInfo` and apply later; chain `meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", json, "id", err), err)` when the next step needs the change. Hits and documents are raw JSON strings; decode into structs with `HitsAs`/`GetDocumentAs` (lenient, extra fields like `_formatted` are ignored). `SearchRequest` sends only what you set (-1 numbers, empty strings/lists and false flags are omitted); `filter` takes an expression or a raw JSON array.
 
 ```salam
 import db
@@ -2349,7 +2350,8 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
-(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
+`db/meilisearch` `میلیسرچ` (imported as `دیتابیس.میلیسرچ`), `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`.
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`

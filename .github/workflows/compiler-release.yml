@@ -74,6 +74,18 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      typesense:
+        image: typesense/typesense:30.2
+        ports:
+          - 8108:8108
+        env:
+          TYPESENSE_API_KEY: salam-ci-typesense-key
+          TYPESENSE_DATA_DIR: /tmp
+        options: >-
+          --health-cmd "bash -c 'echo > /dev/tcp/127.0.0.1/8108'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       meilisearch:
         image: getmeili/meilisearch:v1.55.0
         ports:
@@ -360,6 +372,9 @@ jobs:
           if sudo systemctl start postgresql && sudo -u postgres psql -qc "ALTER USER postgres PASSWORD 'postgres'"; then
             export SALAM_TEST_PG="host=localhost user=postgres password=postgres dbname=postgres"
           fi
+          if curl -sf http://127.0.0.1:8108/health >/dev/null; then
+            export SALAM_TEST_TYPESENSE="http://127.0.0.1:8108 salam-ci-typesense-key"
+          fi
           if docker run -d --name salam-es -p 127.0.0.1:9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false \
               -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
             && timeout 180 sh -c 'until curl -sf "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
@@ -367,6 +382,11 @@ jobs:
           fi
           if curl -sf http://127.0.0.1:7700/health >/dev/null; then
             export SALAM_TEST_MEILI="http://127.0.0.1:7700 salam-ci-meili-master-key"
+          fi
+          if docker run -d --name salam-opensearch -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
+              -e DISABLE_INSTALL_DEMO_CONFIG=true -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" opensearchproject/opensearch:2.17.1 \
+            && timeout 240 sh -c 'until curl -sf "http://127.0.0.1:9201/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_OPENSEARCH="http://127.0.0.1:9201"
           fi
           SALAM_TEST_PORT=1 SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
@@ -2547,26 +2567,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TAG="v$(tr -d '[:space:]' < VERSION)"
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v$VERSION"
           cd agent-release
-          rm -f SHA256SUMS SHA512SUMS ./*.sha256
           shopt -s nullglob
-          files=(salam-agent-*)
-          [ "${#files[@]}" -gt 0 ] || { echo "::error::no agent files were built"; exit 1; }
-          mkdir ../agent-upload
-          for f in "${files[@]}"; do
-            mv "$f" "../agent-upload/$(printf '%s' "$f" | sed -E 's/^salam-agent-[0-9][^-]*-/salam-agent-/')"
-          done
-          cd ../agent-upload
-          : > salam-agent-SHA256SUMS
-          : > salam-agent-SHA512SUMS
-          for f in salam-agent-*; do
-            case "$f" in salam-agent-SHA*) continue ;; esac
-            sha256sum "$f" > "$f.sha256"
-            cat "$f.sha256" >> salam-agent-SHA256SUMS
-            sha512sum "$f" >> salam-agent-SHA512SUMS
-          done
-          sha256sum -c salam-agent-SHA256SUMS
+          files=(salam-agent-"$VERSION"-*)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no salam-agent-$VERSION files were built; agent/src-tauri must carry VERSION"; exit 1; }
+          mv SHA256SUMS "salam-agent-$VERSION-SHA256SUMS"
+          mv SHA512SUMS "salam-agent-$VERSION-SHA512SUMS"
+          sha256sum -c "salam-agent-$VERSION-SHA256SUMS"
           gh release upload "$TAG" --clobber salam-agent-*
           {
             echo "### Salam Agent attached to $TAG"

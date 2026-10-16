@@ -1,0 +1,359 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package typesense
+
+@en "ACTION_CREATE"
+@fa "کنش ساخت"
+pub const ACTION_CREATE := "create"
+
+@en "ACTION_UPSERT"
+@fa "کنش درج"
+pub const ACTION_UPSERT := "upsert"
+
+@en "ACTION_UPDATE"
+@fa "کنش به‌روزرسانی"
+pub const ACTION_UPDATE := "update"
+
+@en "ACTION_EMPLACE"
+@fa "کنش جایگذاری"
+pub const ACTION_EMPLACE := "emplace"
+
+@en "DIRTY_COERCE_OR_REJECT"
+@fa "ناپاک تبدیل با رد"
+pub const DIRTY_COERCE_OR_REJECT := "coerce_or_reject"
+
+@en "DIRTY_COERCE_OR_DROP"
+@fa "ناپاک تبدیل با کنار"
+pub const DIRTY_COERCE_OR_DROP := "coerce_or_drop"
+
+@en "DIRTY_DROP"
+@fa "ناپاک کنار گذاشتن"
+pub const DIRTY_DROP := "drop"
+
+@en "DIRTY_REJECT"
+@fa "ناپاک رد"
+pub const DIRTY_REJECT := "reject"
+
+@en "WriteOptions"
+@fa "گزینه های نوشتن"
+pub struct WriteOptions:
+    pub action: str = ""
+    pub dirty_values: str = ""
+    pub batch_size: int = 0
+    pub return_id: bool = false
+    pub return_doc: bool = false
+    pub remote_embedding_batch_size: int = 0
+end
+
+@en "ImportError"
+@fa "خطای درون ریزی"
+pub struct ImportError:
+    pub line: int = 0
+    pub id: str = ""
+    pub code: int = 0
+    pub error: str = ""
+    pub document: str = ""
+end
+
+@en "ImportResult"
+@fa "نتیجه درون ریزی"
+pub struct ImportResult:
+    pub success: int = 0
+    pub failed: int = 0
+    pub ids: Vector<str> = Vector {} as Vector<str>
+    pub documents: Vector<str> = Vector {} as Vector<str>
+    pub errors: Vector<ImportError> = Vector {} as Vector<ImportError>
+    pub lines: Vector<str> = Vector {} as Vector<str>
+end
+
+@en "ExportOptions"
+@fa "گزینه های برون بری"
+pub struct ExportOptions:
+    pub filter_by: str = ""
+    pub include_fields: str = ""
+    pub exclude_fields: str = ""
+end
+
+func _dpath(collection: str): str:
+    ret _cpath(collection) + "/documents"
+end
+
+func _write_query(opts: WriteOptions): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if opts.action.len() > 0:
+        keys.push("action")
+        vals.push(opts.action)
+    end
+    if opts.dirty_values.len() > 0:
+        keys.push("dirty_values")
+        vals.push(opts.dirty_values)
+    end
+    if opts.batch_size > 0:
+        keys.push("batch_size")
+        vals.push(str.FromInt(opts.batch_size as i64))
+    end
+    if opts.return_id:
+        keys.push("return_id")
+        vals.push("true")
+    end
+    if opts.return_doc:
+        keys.push("return_doc")
+        vals.push("true")
+    end
+    if opts.remote_embedding_batch_size > 0:
+        keys.push("remote_embedding_batch_size")
+        vals.push(str.FromInt(opts.remote_embedding_batch_size as i64))
+    end
+    ret _query(keys, vals)
+end
+
+func _lines(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if text.len() == 0: ret out end
+    each line in text.split("\n"):
+        t := str.Trim(line)
+        if t.len() > 0: out.push(t) end
+    end
+    ret out
+end
+
+func _import_result(body: str): ImportResult:
+    mut r := ImportResult { lines = _lines(body) }
+    repeat r.lines.len() in i:
+        line := r.lines.get(i)
+        if _get_bool(line, "success"):
+            r.success += 1
+            id := _get_str(line, "id")
+            if id.len() > 0: r.ids.push(id) end
+            doc := _get_raw(line, "document")
+            if doc.len() > 0: r.documents.push(doc) end
+        else:
+            r.failed += 1
+            r.errors.push(ImportError {
+                line = i, id = _get_str(line, "id"), code = _get_i64(line, "code", 0 as i64) as int, error = _get_str(line, "error"),
+                document = _get_str(line, "document")
+            })
+        end
+    end
+    ret r
+end
+
+func _ts_import(c: Client, collection: str, items: Vector<str>, opts: WriteOptions, err &: Error): ImportResult:
+    ret ImportDocuments(c, collection, items, opts, err)
+end
+
+func _ts_write(c: Client, collection: str, document: str, action: str, err &: Error): str:
+    ret IndexDocument(c, collection, document, WriteOptions { action = action }, err)
+end
+
+func _ts_fetch(c: Client, collection: str, id: str, err &: Error): str:
+    ret GetDocument(c, collection, id, err)
+end
+
+func _ts_failed(err: Error): bool:
+    ret err.kind.len() > 0
+end
+
+func _ts_decode_fail(e: encerr.EncodingError, err &: Error):
+    _fail(err, 0, KIND_DECODE, e.message)
+end
+
+@en "IndexDocument"
+@fa "نمایه سازی سند"
+pub func IndexDocument(c: Client, collection: str, document: str, opts: WriteOptions, err &: Error): str:
+    ret _call(c, "POST", _dpath(collection) + _write_query(opts), document, err)
+end
+
+@en "CreateDocument"
+@fa "ساخت سند"
+pub func CreateDocument(c: Client, collection: str, document: str, err &: Error): str:
+    ret IndexDocument(c, collection, document, WriteOptions {}, err)
+end
+
+@en "UpsertDocument"
+@fa "درج سند"
+pub func UpsertDocument(c: Client, collection: str, document: str, err &: Error): str:
+    ret IndexDocument(c, collection, document, WriteOptions { action = ACTION_UPSERT }, err)
+end
+
+@en "EmplaceDocument"
+@fa "جایگذاری سند"
+pub func EmplaceDocument(c: Client, collection: str, document: str, err &: Error): str:
+    ret IndexDocument(c, collection, document, WriteOptions { action = ACTION_EMPLACE }, err)
+end
+
+@en "UpdateDocument"
+@fa "به‌روزرسانی سند"
+pub func UpdateDocument(c: Client, collection: str, id: str, partial: str, err &: Error): str:
+    ret _call(c, "PATCH", _dpath(collection) + "/" + _esc(id), partial, err)
+end
+
+@en "UpdateDocumentWith"
+@fa "به‌روزرسانی سند با گزینه"
+pub func UpdateDocumentWith(c: Client, collection: str, id: str, partial: str, dirty_values: str, err &: Error): str:
+    mut q := ""
+    if dirty_values.len() > 0: q = "?dirty_values=" + _esc(dirty_values) end
+    ret _call(c, "PATCH", _dpath(collection) + "/" + _esc(id) + q, partial, err)
+end
+
+@en "GetDocument"
+@fa "دریافت سند"
+pub func GetDocument(c: Client, collection: str, id: str, err &: Error): str:
+    ret _call(c, "GET", _dpath(collection) + "/" + _esc(id), "", err)
+end
+
+@en "DocumentExists"
+@fa "سند وجود دارد"
+pub func DocumentExists(c: Client, collection: str, id: str, err &: Error): bool:
+    _ := GetDocument(c, collection, id, err)
+    if IsNotFound(err):
+        _clear(err)
+        ret false
+    end
+    ret _ts_ok(err)
+end
+
+@en "DeleteDocument"
+@fa "حذف سند"
+pub func DeleteDocument(c: Client, collection: str, id: str, err &: Error): str:
+    ret _call(c, "DELETE", _dpath(collection) + "/" + _esc(id), "", err)
+end
+
+@en "DeleteByFilter"
+@fa "حذف با پالایه"
+pub func DeleteByFilter(c: Client, collection: str, filter_by: str, batch_size: int, err &: Error): i64:
+    mut q := "?filter_by=" + _esc(filter_by)
+    if batch_size > 0: q = q + "&batch_size=" + batch_size end
+    body := _call(c, "DELETE", _dpath(collection) + q, "", err)
+    if not _ts_ok(err): ret 0 end
+    ret _get_i64(body, "num_deleted", 0 as i64)
+end
+
+@en "UpdateByFilter"
+@fa "به‌روزرسانی با پالایه"
+pub func UpdateByFilter(c: Client, collection: str, filter_by: str, partial: str, err &: Error): i64:
+    body := _call(c, "PATCH", _dpath(collection) + "?filter_by=" + _esc(filter_by), partial, err)
+    if not _ts_ok(err): ret 0 end
+    ret _get_i64(body, "num_updated", 0 as i64)
+end
+
+@en "ImportJSONL"
+@fa "درون ریزی جیسون خطی"
+pub func ImportJSONL(c: Client, collection: str, jsonl: str, opts: WriteOptions, err &: Error): ImportResult:
+    body := _send(c, "POST", _dpath(collection) + "/import" + _write_query(opts), "text/plain", jsonl, err)
+    if not _ts_ok(err): ret ImportResult {} end
+    ret _import_result(body)
+end
+
+@en "ImportDocuments"
+@fa "درون ریزی سندها"
+pub func ImportDocuments(c: Client, collection: str, documents: Vector<str>, opts: WriteOptions, err &: Error): ImportResult:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat documents.len() in i:
+        if i > 0: str.BufAppend(sb, "\n") end
+        str.BufAppend(sb, json.Minify(documents.get(i)))
+    end
+    ret ImportJSONL(c, collection, str.BufStr(sb), opts, err)
+end
+
+@en "ImportOf"
+@fa "درون ریزی از نوع"
+pub func ImportOf<T>(c: Client, collection: str, documents: Vector<T>, opts: WriteOptions, err &: Error): ImportResult:
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    each d in documents:
+        items.push(json.Marshal(d))
+    end
+    ret _ts_import(c, collection, items, opts, err)
+end
+
+@en "CreateDocumentOf"
+@fa "ساخت سند از نوع"
+pub func CreateDocumentOf<T>(c: Client, collection: str, document: T, err &: Error): str:
+    ret _ts_write(c, collection, json.Marshal(document), "", err)
+end
+
+@en "UpsertDocumentOf"
+@fa "درج سند از نوع"
+pub func UpsertDocumentOf<T>(c: Client, collection: str, document: T, err &: Error): str:
+    ret _ts_write(c, collection, json.Marshal(document), ACTION_UPSERT, err)
+end
+
+@en "DecodeDocument"
+@fa "رمزگشایی سند"
+pub func DecodeDocument<T>(document: str, out &: T, err &: Error): bool:
+    mut e := encerr.EncodingError {}
+    if not json.UnmarshalLenient(document, out, e):
+        _ts_decode_fail(e, err)
+        ret false
+    end
+    ret true
+end
+
+@en "GetDocumentAs"
+@fa "دریافت سند به نوع"
+pub func GetDocumentAs<T>(c: Client, collection: str, id: str, out &: T, err &: Error): bool:
+    body := _ts_fetch(c, collection, id, err)
+    if _ts_failed(err): ret false end
+    mut e := encerr.EncodingError {}
+    if not json.UnmarshalLenient(body, out, e):
+        _ts_decode_fail(e, err)
+        ret false
+    end
+    ret true
+end
+
+@en "DecodeDocuments"
+@fa "رمزگشایی سندها"
+pub func DecodeDocuments<T>(documents: Vector<str>, out &: Vector<T>, err &: Error): bool:
+    each item in documents:
+        mut v := T {}
+        mut e := encerr.EncodingError {}
+        if not json.UnmarshalLenient(item, v, e):
+            _ts_decode_fail(e, err)
+            ret false
+        end
+        out.push(v)
+    end
+    ret true
+end
+
+@en "ExportJSONL"
+@fa "برون بری جیسون خطی"
+pub func ExportJSONL(c: Client, collection: str, opts: ExportOptions, err &: Error): str:
+    mut keys := Vector {} as Vector<str>
+    mut vals := Vector {} as Vector<str>
+    if opts.filter_by.len() > 0:
+        keys.push("filter_by")
+        vals.push(opts.filter_by)
+    end
+    if opts.include_fields.len() > 0:
+        keys.push("include_fields")
+        vals.push(opts.include_fields)
+    end
+    if opts.exclude_fields.len() > 0:
+        keys.push("exclude_fields")
+        vals.push(opts.exclude_fields)
+    end
+    ret _call(c, "GET", _dpath(collection) + "/export" + _query(keys, vals), "", err)
+end
+
+@en "ExportDocuments"
+@fa "برون بری سندها"
+pub func ExportDocuments(c: Client, collection: str, opts: ExportOptions, err &: Error): Vector<str>:
+    ret _lines(ExportJSONL(c, collection, opts, err))
+end

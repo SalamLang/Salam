@@ -1,0 +1,663 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "typesense"
+@fa "تایپسنس"
+package typesense
+
+import mem
+import str
+import conv
+import time
+import crypto
+import encoding
+import encoding.json
+import encoding.encerr
+import net.httpx
+
+@en "VERSION"
+@fa "نسخه کلاینت"
+pub const VERSION := "1.0.0"
+
+@en "KIND_HTTP"
+@fa "نوع اچ تی تی پی"
+pub const KIND_HTTP := "http"
+
+@en "KIND_NETWORK"
+@fa "نوع شبکه"
+pub const KIND_NETWORK := "network"
+
+@en "KIND_INVALID"
+@fa "نوع نامعتبر"
+pub const KIND_INVALID := "invalid"
+
+@en "KIND_DECODE"
+@fa "نوع رمزگشایی"
+pub const KIND_DECODE := "decode"
+
+@en "Client"
+@fa "کلاینت"
+pub struct Client:
+    pub nodes: Vector<str> = Vector {} as Vector<str>
+    pub nearest: str = ""
+    pub api_key: str = ""
+    pub timeout_ms: int = 10000
+    pub retries: int = 3
+    pub retry_interval_ms: int = 100
+    pub healthcheck_ms: int = 60000
+    pub headers: Vector<str> = Vector {} as Vector<str>
+    pub state: Vector<i64> = Vector {} as Vector<i64>
+end
+
+@en "Error"
+@fa "خطا"
+pub struct Error:
+    pub status: int = 0
+    pub kind: str = ""
+    pub message: str = ""
+end
+
+@en "ClusterStatus"
+@fa "وضعیت خوشه"
+pub struct ClusterStatus:
+    pub state: str = ""
+    pub committed_index: i64 = 0
+    pub queued_writes: i64 = 0
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _ws(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _bp(s)
+    mut p := i
+    until p < l:
+        code := _ub(bp, p)
+        if code != 32 and code != 9 and code != 10 and code != 13: ret p end
+        p += 1
+    end
+    ret p
+end
+
+func _value_end(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _bp(s)
+    mut p := i
+    mut depth := 0
+    mut in_str := false
+    until p < l:
+        code := _ub(bp, p)
+        if in_str:
+            if code == 92:
+                p += 1
+            else code == 34:
+                in_str = false
+                if depth == 0: ret p + 1 end
+            end
+        else code == 34:
+            in_str = true
+        else code == 123 or code == 91:
+            depth += 1
+        else code == 125 or code == 93:
+            if depth == 0: ret p end
+            depth -= 1
+            if depth == 0: ret p + 1 end
+        else code == 44:
+            if depth == 0: ret p end
+        end
+        p += 1
+    end
+    ret p
+end
+
+func _items(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    l := str.ByteLen(raw)
+    bp := _bp(raw)
+    mut p := _ws(raw, 0)
+    if p >= l or _ub(bp, p) != 91: ret out end
+    p = _ws(raw, p + 1)
+    until p < l:
+        if _ub(bp, p) == 93: ret out end
+        e := _value_end(raw, p)
+        if e <= p: ret out end
+        out.push(str.TrimRight(str.ByteSub(raw, p, e - p)))
+        p = _ws(raw, e)
+        if p < l and _ub(bp, p) == 44:
+            p = _ws(raw, p + 1)
+        end
+    end
+    ret out
+end
+
+func _starts_with_byte(raw: str, code: int): bool:
+    l := str.ByteLen(raw)
+    p := _ws(raw, 0)
+    ret p < l and _ub(_bp(raw), p) == code
+end
+
+func _unquote(raw: str): str:
+    if raw.len() == 0: ret "" end
+    if _ub(_bp(raw), 0) != 34: ret raw end
+    ret json.Get(`{"v":` + raw + `}`, "v")
+end
+
+func _strings(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each item in _items(raw):
+        out.push(_unquote(item))
+    end
+    ret out
+end
+
+func _strs_json(items: Vector<str>): str:
+    mut quoted := Vector {} as Vector<str>
+    each item in items:
+        quoted.push(json.Str(item))
+    end
+    ret json.Array(quoted)
+end
+
+func _i64(text: str): i64:
+    l := str.ByteLen(text)
+    bp := _bp(text)
+    mut p := 0
+    mut neg := false
+    if l > 0 and _ub(bp, 0) == 45:
+        neg = true
+        p = 1
+    end
+    mut n := 0 as i64
+    until p < l:
+        code := _ub(bp, p)
+        if code < 48 or code > 57: break end
+        n = n * (10 as i64) + ((code - 48) as i64)
+        p += 1
+    end
+    if neg: ret 0 as i64 - n end
+    ret n
+end
+
+func _f64(text: str): f64:
+    if text.len() == 0 or text == "null": ret 0.0 end
+    ret conv.ParseFloat(text)
+end
+
+func _get_i64(text: str, key: str, fallback: i64): i64:
+    v := json.Get(text, key)
+    if v.len() == 0 or v == "null": ret fallback end
+    ret _i64(v)
+end
+
+func _get_str(text: str, key: str): str:
+    v := json.Get(text, key)
+    if v == "null": ret "" end
+    ret v
+end
+
+func _get_bool(text: str, key: str): bool:
+    ret json.Get(text, key) == "true"
+end
+
+func _get_raw(text: str, key: str): str:
+    v := json.Get(text, key)
+    if v == "null": ret "" end
+    ret v
+end
+
+func _object_with(members: Vector<str>, extra: str): str:
+    mut all := Vector {} as Vector<str>
+    each m in members:
+        all.push(m)
+    end
+    inner := _object_inner(extra)
+    if inner.len() > 0: all.push(inner) end
+    ret json.Object(all)
+end
+
+func _object_inner(raw: str): str:
+    t := str.Trim(raw)
+    if t.len() < 2: ret "" end
+    if not _starts_with_byte(t, 123): ret "" end
+    ret str.Trim(t.substr(1, t.len() - 2))
+end
+
+func _esc(segment: str): str:
+    ret encoding.URLEncode(segment)
+end
+
+func _query(keys: Vector<str>, vals: Vector<str>): str:
+    mut out := ""
+    repeat keys.len() in i:
+        if i == 0:
+            out = out + "?"
+        else:
+            out = out + "&"
+        end
+        out = out + _esc(keys.get(i)) + "=" + _esc(vals.get(i))
+    end
+    ret out
+end
+
+func _clear(err &: Error):
+    err.status = 0
+    err.kind = ""
+    err.message = ""
+end
+
+func _fail(err &: Error, status: int, kind: str, message: str):
+    err.status = status
+    err.kind = kind
+    err.message = message
+end
+
+func _ts_ok(err: Error): bool:
+    ret err.kind.len() == 0
+end
+
+func _raw_str(r: httpx.Raw): str:
+    if r.data == null or r.len <= 0: ret "" end
+    d := mem.Allocate((r.len + 1) as u64)
+    if d == null: ret "" end
+    mem.Copy(d, r.data, r.len as u64)
+    bp := d as u8*
+    bp[r.len] = 0 as u8
+    ret d as str
+end
+
+func _node_path(node: str): str:
+    at := node.find("://")
+    if at < 0: ret "" end
+    rest := node.substr(at + 3, node.len() - at - 3)
+    slash := rest.find("/")
+    if slash < 0: ret "" end
+    ret rest.substr(slash, rest.len() - slash)
+end
+
+func _host_header(ep: httpx.Endpoint): str:
+    if ep.secure and ep.port == 443: ret ep.host end
+    if not ep.secure and ep.port == 80: ret ep.host end
+    ret ep.host + ":" + ep.port
+end
+
+func _normalize(url: str): str:
+    mut h := str.Trim(url)
+    until h.len() > 0 and h.substr(h.len() - 1, 1) == "/":
+        h = h.substr(0, h.len() - 1)
+    end
+    if h.len() > 0 and h.find("://") < 0:
+        h = "http://" + h
+    end
+    ret h
+end
+
+func _reset_state(c &: Client):
+    c.state.free()
+    c.state = Vector {} as Vector<i64>
+    c.state.push(0 as i64 - 1)
+    repeat c.nodes.len() + 1:
+        c.state.push(0 as i64)
+    end
+end
+
+func _pick(c: Client): int:
+    n := c.nodes.len()
+    if c.state.len() < n + 2: ret 0 - 2 end
+    now := time.NowMillis()
+    if c.nearest.len() > 0 and c.state.get(n + 1) <= now: ret 0 - 1 end
+    if n == 0:
+        if c.nearest.len() > 0: ret 0 - 1 end
+        ret 0 - 2
+    end
+    mut cursor := c.state.get(0) as int
+    repeat n:
+        cursor = (cursor + 1) % n
+        if c.state.get(cursor + 1) <= now:
+            c.state.set(0, cursor as i64)
+            ret cursor
+        end
+    end
+    cursor = (cursor + 1) % n
+    c.state.set(0, cursor as i64)
+    ret cursor
+end
+
+func _mark(c: Client, idx: int, healthy: bool):
+    n := c.nodes.len()
+    if c.state.len() < n + 2: ret end
+    mut slot := idx + 1
+    if idx < 0: slot = n + 1 end
+    if healthy:
+        c.state.set(slot, 0 as i64)
+    else:
+        c.state.set(slot, time.NowMillis() + (c.healthcheck_ms as i64))
+    end
+end
+
+func _head(c: Client, ep: httpx.Endpoint, method: str, target: str, ctype: str, n: int): str:
+    mut h := method + " " + target + " HTTP/1.1\r\n"
+    h = h + "Host: " + _host_header(ep) + "\r\n"
+    h = h + "User-Agent: typesense-salam/" + VERSION + "\r\n"
+    h = h + "Accept: application/json\r\n"
+    if c.api_key.len() > 0:
+        h = h + "X-TYPESENSE-API-KEY: " + c.api_key + "\r\n"
+    end
+    each line in c.headers:
+        h = h + line + "\r\n"
+    end
+    if n > 0 or method == "POST" or method == "PUT" or method == "PATCH":
+        if ctype.len() > 0:
+            h = h + "Content-Type: " + ctype + "\r\n"
+        end
+        h = h + "Content-Length: " + n + "\r\n"
+    end
+    ret h + "Connection: close\r\n\r\n"
+end
+
+func _http_error(status: int, body: str, err &: Error):
+    mut msg := ""
+    if json.Valid(body):
+        msg = _get_str(body, "message")
+    end
+    if msg.len() == 0: msg = str.Trim(body) end
+    if msg.len() == 0: msg = "HTTP " + status end
+    _fail(err, status, KIND_HTTP, msg)
+end
+
+func _send(c: Client, method: str, path: str, ctype: str, body: str, err &: Error): str:
+    _clear(err)
+    mut attempts := c.retries + 1
+    if attempts < 1: attempts = 1 end
+    repeat attempts in attempt:
+        idx := _pick(c)
+        if idx == -2:
+            _fail(err, 0, KIND_INVALID, "client has no nodes")
+            ret ""
+        end
+        mut node := c.nearest
+        if idx >= 0: node = c.nodes.get(idx) end
+        ep := httpx.ParseEndpoint(node)
+        if not ep.ok:
+            _fail(err, 0, KIND_INVALID, "not a node url: " + node)
+            ret ""
+        end
+        head := _head(c, ep, method, _node_path(node) + path, ctype, body.len())
+        mut r := httpx.SendRawTimeout(ep, head, body as void*, body.len(), c.timeout_ms)
+        if r.status == 0 or r.status >= 500:
+            if r.status == 0:
+                mut msg := r.error
+                if msg.len() == 0: msg = "no answer from " + node end
+                _fail(err, 0, KIND_NETWORK, msg)
+            else:
+                _http_error(r.status, _raw_str(r), err)
+            end
+            httpx.FreeRaw(r)
+            _mark(c, idx, false)
+            if attempt + 1 < attempts and c.retry_interval_ms > 0:
+                time.Sleep(c.retry_interval_ms)
+            end
+            continue
+        end
+        _mark(c, idx, true)
+        _clear(err)
+        text := _raw_str(r)
+        httpx.FreeRaw(r)
+        if r.status >= 200 and r.status < 300:
+            ret text
+        end
+        _http_error(r.status, text, err)
+        ret ""
+    end
+    ret ""
+end
+
+func _call(c: Client, method: str, path: str, body: str, err &: Error): str:
+    mut ct := ""
+    if body.len() > 0 or method == "POST" or method == "PUT" or method == "PATCH":
+        ct = "application/json"
+    end
+    ret _send(c, method, path, ct, body, err)
+end
+
+func _success(body: str): bool:
+    ret _get_bool(body, "success")
+end
+
+func _cpath(collection: str): str:
+    ret "/collections/" + _esc(collection)
+end
+
+@en "New"
+@fa "جدید"
+pub func New(url: str, api_key: str): Client:
+    mut nodes := Vector {} as Vector<str>
+    nodes.push(url)
+    ret NewCluster(nodes, api_key)
+end
+
+@en "NewCluster"
+@fa "خوشه جدید"
+pub func NewCluster(urls: Vector<str>, api_key: str): Client:
+    mut c := Client { api_key = api_key }
+    each u in urls:
+        n := _normalize(u)
+        if n.len() > 0: c.nodes.push(n) end
+    end
+    _reset_state(c)
+    ret c
+end
+
+@en "SetNearestNode"
+@fa "تنظیم نزدیک‌ترین گره"
+pub func SetNearestNode(c &: Client, url: str):
+    c.nearest = _normalize(url)
+    _reset_state(c)
+end
+
+@en "AddNode"
+@fa "افزودن گره"
+pub func AddNode(c &: Client, url: str):
+    n := _normalize(url)
+    if n.len() == 0: ret end
+    c.nodes.push(n)
+    _reset_state(c)
+end
+
+@en "AddHeader"
+@fa "افزودن سرصفحه"
+pub func AddHeader(c &: Client, name: str, value: str):
+    c.headers.push(name + ": " + value)
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(c &: Client):
+    c.nodes.free()
+    c.headers.free()
+    c.state.free()
+    c.nodes = Vector {} as Vector<str>
+    c.headers = Vector {} as Vector<str>
+    c.state = Vector {} as Vector<i64>
+end
+
+@en "NodeHealthy"
+@fa "گره سالم است"
+pub func NodeHealthy(c: Client, index: int): bool:
+    n := c.nodes.len()
+    if c.state.len() < n + 2: ret false end
+    mut slot := index + 1
+    if index < 0: slot = n + 1 end
+    if slot < 1 or slot > n + 1: ret false end
+    ret c.state.get(slot) <= time.NowMillis()
+end
+
+@en "Ok"
+@fa "موفق"
+pub func Ok(err: Error): bool:
+    ret err.kind.len() == 0
+end
+
+@en "IsNotFound"
+@fa "پیدا نشد"
+pub func IsNotFound(err: Error): bool:
+    ret err.status == 404
+end
+
+@en "IsConflict"
+@fa "تداخل دارد"
+pub func IsConflict(err: Error): bool:
+    ret err.status == 409
+end
+
+@en "ErrorString"
+@fa "متن خطا"
+pub func ErrorString(err: Error): str:
+    if err.kind.len() == 0: ret "" end
+    mut out := "typesense"
+    if err.status > 0:
+        out = out + " " + err.status
+    else:
+        out = out + " " + err.kind
+    end
+    if err.message.len() > 0:
+        out = out + ": " + err.message
+    end
+    ret out
+end
+
+@en "Request"
+@fa "درخواست"
+pub func Request(c: Client, method: str, path: str, body: str, err &: Error): str:
+    ret _call(c, method, path, body, err)
+end
+
+@en "RequestAs"
+@fa "درخواست با نوع"
+pub func RequestAs(c: Client, method: str, path: str, content_type: str, body: str, err &: Error): str:
+    ret _send(c, method, path, content_type, body, err)
+end
+
+@en "Health"
+@fa "سلامت"
+pub func Health(c: Client, err &: Error): bool:
+    body := _call(c, "GET", "/health", "", err)
+    if not _ts_ok(err): ret false end
+    ret _get_bool(body, "ok")
+end
+
+@en "IsHealthy"
+@fa "سالم است"
+pub func IsHealthy(c: Client): bool:
+    mut err := Error {}
+    ret Health(c, err)
+end
+
+@en "Debug"
+@fa "اشکال زدایی"
+pub func Debug(c: Client, err &: Error): str:
+    ret _call(c, "GET", "/debug", "", err)
+end
+
+@en "ServerVersion"
+@fa "نسخه سرور"
+pub func ServerVersion(c: Client, err &: Error): str:
+    body := Debug(c, err)
+    if not _ts_ok(err): ret "" end
+    ret _get_str(body, "version")
+end
+
+@en "Stats"
+@fa "آمار"
+pub func Stats(c: Client, err &: Error): str:
+    ret _call(c, "GET", "/stats.json", "", err)
+end
+
+@en "Metrics"
+@fa "سنجه ها"
+pub func Metrics(c: Client, err &: Error): str:
+    ret _call(c, "GET", "/metrics.json", "", err)
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(c: Client, err &: Error): ClusterStatus:
+    body := _call(c, "GET", "/status", "", err)
+    if not _ts_ok(err): ret ClusterStatus {} end
+    ret ClusterStatus {
+        state = _get_str(body, "state"), committed_index = _get_i64(body, "committed_index", 0 as i64),
+        queued_writes = _get_i64(body, "queued_writes", 0 as i64)
+    }
+end
+
+@en "CreateSnapshot"
+@fa "ساخت تصویر لحظه ای"
+pub func CreateSnapshot(c: Client, snapshot_path: str, err &: Error): bool:
+    body := _call(c, "POST", "/operations/snapshot?snapshot_path=" + _esc(snapshot_path), "", err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "Vote"
+@fa "رای گیری"
+pub func Vote(c: Client, err &: Error): bool:
+    body := _call(c, "POST", "/operations/vote", "", err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "ClearCache"
+@fa "پاک کردن حافظه نهان"
+pub func ClearCache(c: Client, err &: Error): bool:
+    body := _call(c, "POST", "/operations/cache/clear", "", err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "CompactDB"
+@fa "فشرده سازی پایگاه"
+pub func CompactDB(c: Client, err &: Error): bool:
+    body := _call(c, "POST", "/operations/db/compact", "", err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "ResetPeers"
+@fa "بازنشانی همتاها"
+pub func ResetPeers(c: Client, err &: Error): bool:
+    body := _call(c, "POST", "/operations/reset_peers", "", err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "SchemaChanges"
+@fa "تغییرات طرح"
+pub func SchemaChanges(c: Client, err &: Error): Vector<str>:
+    ret _items(_call(c, "GET", "/operations/schema_changes", "", err))
+end
+
+@en "UpdateConfig"
+@fa "به‌روزرسانی پیکربندی"
+pub func UpdateConfig(c: Client, config: str, err &: Error): bool:
+    body := _call(c, "POST", "/config", config, err)
+    ret _ts_ok(err) and _success(body)
+end
+
+@en "SetSlowRequestLog"
+@fa "تنظیم گزارش درخواست کند"
+pub func SetSlowRequestLog(c: Client, millis: int, err &: Error): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberInt("log-slow-requests-time-ms", millis as i64))
+    ret UpdateConfig(c, json.Object(m), err)
+end

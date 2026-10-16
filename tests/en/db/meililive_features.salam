@@ -1,0 +1,146 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+import os
+import str
+
+const INDEX := "salam_live_features"
+const ACTORS := "salam_live_actors"
+
+func check(label: str, err: meilisearch.Error):
+    if not meilisearch.Ok(err):
+        println label + " failed: " + meilisearch.ErrorString(err)
+    end
+end
+
+func settle(c: meilisearch.Client, label: str, info: meilisearch.TaskInfo, err &: meilisearch.Error): meilisearch.Task:
+    t := meilisearch.WaitForTask(c, info.task_uid, 30000, 20, err)
+    println label + ": " + t.status
+    check(label, err)
+    ret t
+end
+
+func main:
+    parts := str.Fields(os.Env("SALAM_TEST_MEILI"))
+    if parts.len() < 2:
+        println "set SALAM_TEST_MEILI to url and master key"
+        ret 1
+    end
+    c := meilisearch.WithTimeout(meilisearch.New(parts.get(0), parts.get(1)), 30000)
+    mut err := meilisearch.Error {}
+
+    before := meilisearch.GetExperimentalFeatures(c, err)
+    check("features", err)
+    meilisearch.UpdateExperimentalFeatures(c, `{"metrics": true, "logsRoute": true, "editDocumentsByFunction": true, "dynamicSearchRules": true, "getTaskDocumentsRoute": true, "taskQueueCompactionRoute": true, "chatCompletions": true, "foreignKeys": true, "renderRoute": true}`, err)
+    check("enable features", err)
+
+    meilisearch.WaitForTask(c, meilisearch.DeleteIndex(c, INDEX, err).task_uid, 30000, 20, err)
+    meilisearch.WaitForTask(c, meilisearch.DeleteIndex(c, ACTORS, err).task_uid, 30000, 20, err)
+    settle(c, "create", meilisearch.CreateIndex(c, INDEX, "id", err), err)
+
+    tagged := meilisearch.WithMetadata(c, "live-import")
+    docs := `[{"id": 1, "title": "Heat", "genre": "Crime"}, {"id": 2, "title": "Up", "genre": "Family"}, {"id": 3, "title": "Alien", "genre": "Horror"}]`
+    added := settle(c, "add tagged", meilisearch.AddDocuments(tagged, INDEX, docs, "", err), err)
+    println "metadata: " + added.custom_metadata
+    meilisearch.GetTaskDocuments(c, added.uid, err)
+    println "finished task documents: " + err.code
+
+    skipped := settle(c, "skip creation", meilisearch.AddDocumentsWith(c, INDEX, `[{"id": 9, "title": "Ghost"}, {"id": 1, "title": "Heat 2"}]`, meilisearch.DocumentOptions { update = true, skip_creation = true }, err), err)
+    println "skip creation details: " + (skipped.details.len() > 0)
+    println "ghost: " + meilisearch.GetDocument(c, INDEX, "9", Vector {} as Vector<str>, err).len() + " " + err.code
+    mut title := Vector {} as Vector<str>
+    title.push("title")
+    println "heat: " + meilisearch.GetDocument(c, INDEX, "1", title, err)
+
+    mut filterable := Vector {} as Vector<str>
+    filterable.push("genre")
+    settle(c, "filterable", meilisearch.UpdateFilterableAttributes(c, INDEX, filterable, err), err)
+    settle(c, "edit", meilisearch.UpdateDocumentsByFunction(c, INDEX, "doc.title = doc.title.to_upper()", "genre = Horror", "", err), err)
+    println "edited: " + meilisearch.GetDocument(c, INDEX, "3", title, err)
+
+    fields := meilisearch.ListFields(c, INDEX, meilisearch.FieldsQuery {}, err)
+    check("fields", err)
+    mut names := Vector {} as Vector<str>
+    each f in fields.results:
+        names.push(f.name + ":" + f.filterable)
+    end
+    println "fields: " + fields.total + " " + str.Join(names, " ")
+    only := meilisearch.ListFields(c, INDEX, meilisearch.FieldsQuery { filter = `{"filterable": true}` }, err)
+    println "filterable fields: " + only.total
+
+    settle(c, "compact", meilisearch.CompactIndex(c, INDEX, err), err)
+    stats := meilisearch.GetIndexStats(c, INDEX, err)
+    println "documents: " + stats.number_of_documents + " sized: " + (stats.index_size > 0)
+
+    rule := `{"active": true, "conditions": {"query": {"words": "alien"}}, "actions": {"pin": [{"id": "2", "position": 0}]}}`
+    settle(c, "rule", meilisearch.UpdateSearchRule(c, "salam-pin-up", rule, err), err)
+    got := meilisearch.GetSearchRule(c, "salam-pin-up", err)
+    check("get rule", err)
+    println "rule: " + got.uid + " active=" + got.active
+    rules := meilisearch.ListSearchRules(c, meilisearch.SearchRuleQuery { limit = 100, active = 1 }, err)
+    check("list rules", err)
+    mut seen := false
+    each r in rules.results:
+        if r.uid == "salam-pin-up": seen = true end
+    end
+    println "rules listed: " + seen
+    pinned := meilisearch.Search(c, INDEX, meilisearch.SearchRequest { query = "alien", show_performance_details = true }, err)
+    check("pinned search", err)
+    println "pinned first: " + str.Contains(pinned.hits.get(0), `"id":2`) + " hits=" + pinned.hits.len() + " perf=" + (pinned.performance_details.len() > 0) + " request uid=" + (pinned.request_uid.len() > 0)
+    settle(c, "delete rule", meilisearch.DeleteSearchRule(c, "salam-pin-up", err), err)
+
+    settle(c, "actors", meilisearch.CreateIndex(c, ACTORS, "id", err), err)
+    settle(c, "foreign keys", meilisearch.UpdateForeignKeys(c, INDEX, `[{"foreignIndexUid": "` + ACTORS + `", "fieldName": "actor_ids"}]`, err), err)
+    println "foreign keys: " + meilisearch.GetForeignKeys(c, INDEX, err)
+    settle(c, "foreign keys reset", meilisearch.ResetForeignKeys(c, INDEX, err), err)
+
+    println "chat update ok: " + (meilisearch.UpdateChatSettings(c, "salam-live", `{"source": "openAi", "apiKey": "sk-not-real", "prompts": {"system": "Answer briefly."}}`, err).len() > 0)
+    check("chat settings", err)
+    ws := meilisearch.ListChatWorkspaces(c, 0, 50, err)
+    check("workspaces", err)
+    mut found := false
+    each w in ws.results:
+        if w == "salam-live": found = true end
+    end
+    println "workspace listed: " + found
+    println "chat prompt kept: " + str.Contains(meilisearch.GetChatSettings(c, "salam-live", err), "Answer briefly.")
+    println "workspace deleted: " + meilisearch.DeleteChatWorkspace(c, "salam-live", err)
+
+    rendered := meilisearch.RenderTemplate(c, `{"template": {"kind": "inlineDocumentTemplate", "inline": "{{doc.title}} ({{doc.genre}})"}, "input": {"kind": "inlineDocument", "inline": {"title": "Up", "genre": "Family"}}}`, err)
+    check("render", err)
+    println "rendered: " + str.Contains(rendered, "Up (Family)")
+
+    hook := meilisearch.CreateWebhook(c, "http://127.0.0.1:9/salam-hook", `{"X-Salam": "1"}`, err)
+    check("webhook", err)
+    println "webhook: " + hook.url + " editable=" + hook.is_editable
+    moved := meilisearch.UpdateWebhook(c, hook.uuid, "http://127.0.0.1:9/salam-hook-2", "", err)
+    println "webhook moved: " + moved.url
+    mut listed := false
+    each w in meilisearch.ListWebhooks(c, err):
+        if w.uuid == hook.uuid: listed = true end
+    end
+    println "webhook listed: " + listed + " fetched: " + (meilisearch.GetWebhook(c, hook.uuid, err).uuid == hook.uuid)
+    println "webhook deleted: " + meilisearch.DeleteWebhook(c, hook.uuid, err)
+
+    println "metrics: " + str.Contains(meilisearch.GetMetrics(c, err), "meilisearch_")
+    println "stderr logs: " + meilisearch.SetStderrLogs(c, "info", err)
+
+    settle(c, "drop", meilisearch.DeleteIndex(c, INDEX, err), err)
+    settle(c, "drop actors", meilisearch.DeleteIndex(c, ACTORS, err), err)
+    meilisearch.UpdateExperimentalFeatures(c, before, err)
+    check("restore features", err)
+    println "features restored: " + (meilisearch.GetExperimentalFeatures(c, err) == before)
+    ret 0
+end

@@ -309,12 +309,19 @@ check and rejects a `Variant` subject outright (semantic error, points you at
 `match`). `break` inside a `switch` exits the switch only; `continue` is not
 caught by it and still targets an enclosing loop.
 
-## 12. Enum members require a comma
+## 12. Enum members on one line need commas
 
-`enum E: A, B, C end` - the comma between members is mandatory, not optional
-style. A bare newline is not enough because member names may contain spaces
-(`enum Status: not started, in progress, done end`), so leaving the comma out
-is a compile error, not a silent misparse.
+`enum E: A, B, C end` - on a single line the comma between members is
+mandatory, because member names may contain spaces (`enum Status: not
+started, in progress, done end`): `enum E: A B end` declares one member named
+`A B`. One member per line works without commas:
+
+```salam
+enum Color:
+    Red
+    Green
+end
+```
 
 ---
 

@@ -1450,9 +1450,9 @@ naive port into compile errors (each corresponds to a case in
    zero times with no diagnostic (only a literal `until false:` is caught, as
    `E068`). See the box in §2.
 2. **Unused = error.** An unused variable, `mut`, parameter, import, or function
-   is a hard error. Prefix the name with `_` to intentionally keep it
-   (`_unused`, `func _helper()`, `_result := …`). Only mark something `mut` if
-   you actually reassign it (`unused_mut`).
+   is a hard error. Remove it; a `_` prefix silences the check but leaves dead
+   code behind, so keep it for a parameter whose signature is fixed (a
+   callback). Only mark something `mut` if you actually reassign it.
 3. **Reassignment requires `mut`.** `x := 1; x = 2` fails; use `mut x := 1`.
 4. **Heap collections must be freed.** `Vector/HashMap/Set/...` allocate; call
    `.free()` (idiom: `defer v.free()` right after creation). Also free elements
@@ -1461,8 +1461,10 @@ naive port into compile errors (each corresponds to a case in
    are supported on integers** with C precedence and compound forms
    (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
-6. **No exceptions / no try-catch.** Signal failure with a `bool` return, an
-   `Option<T>`, or a sentinel value, and check it at the call site.
+6. **No exceptions / no try-catch.** Signal failure with a `bool` return and
+   an `err &:` out-parameter (the std style), an `option.Option<T>`
+   (`import option`), a `result.Result<T, E>` (`import result`), or a sentinel
+   value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
@@ -1500,8 +1502,7 @@ naive port into compile errors (each corresponds to a case in
 16. **No typed declarations.** `x: T = v` is a parse error; write
     `x := v as T` (see §2).
 
-When the compiler complains, fix the code; do not try to suppress the check
-(except the deliberate `_` prefix for genuinely-unused names).
+When the compiler complains, fix the code; do not try to suppress the check.
 
 ---
 

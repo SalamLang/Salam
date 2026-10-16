@@ -358,8 +358,8 @@ export const api = {
         before: f.before,
       })}`,
     ),
-  adminApps: (user?: number) =>
-    call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user })}`),
+  adminApps: (user?: number, before?: number) =>
+    call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user, before })}`),
   adminRevokeApp: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/apps/${id}`),
   keys: () => call<{ keys: ApiKey[] }>("GET", "/keys"),

@@ -524,19 +524,40 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
+  const [more, setMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     let live = true;
     setApps(null);
     setError("");
+    setMore(false);
     api
       .adminApps(picked?.id)
-      .then((r) => live && setApps(r.apps))
+      .then((r) => {
+        if (!live) return;
+        setApps(r.apps);
+        setMore(r.apps.length >= 50);
+      })
       .catch((e) => live && setError(errText(e, "بارگذاری برنامه‌ها ناموفق بود.")));
     return () => {
       live = false;
     };
   }, [picked]);
+
+  const loadMore = async () => {
+    if (!apps || apps.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.adminApps(picked?.id, apps[apps.length - 1].id);
+      setApps((cur) => [...(cur ?? []), ...r.apps]);
+      setMore(r.apps.length >= 50);
+    } catch (e) {
+      notify(errText(e, "بارگذاری برنامه‌ها ناموفق بود."));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const revoke = async (a: AdminApp) => {
     if (!confirm(`اتصال «${a.client.name}» برای ${a.user.name} قطع شود؟`)) return;
@@ -627,6 +648,17 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
             </tbody>
           </table>
         </div>
+      )}
+      {loadingMore && (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      )}
+      {more && !loadingMore && (
+        <button type="button" className="button ghost more" onClick={loadMore}>
+          نمایش موارد بیشتر
+        </button>
       )}
     </section>
   );

@@ -61,7 +61,7 @@ function AssistantMessage({ m }: { m: Message }) {
   const typing = pending || text.length < m.body.length;
   const phase = m.phase || "thinking";
   const showPhase = pending && (text.length === 0 || phase === "searching");
-  const visible = typing ? text.replace(/\n?`{1,3}[^\n`]*$/, "") : text;
+  const visible = typing ? text.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : text;
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />

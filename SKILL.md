@@ -1974,6 +1974,7 @@ merged `style.css`/`script.js`.
 ## 10. Tooling & verification
 
 ```sh
+salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
@@ -1984,16 +1985,18 @@ salam format app.salam                  # reformat in place (--check to verify; 
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
-salam app.salam --emit-tokens | --emit-ast | --emit-symbol   # inspect a stage
+salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 
 > **Version check is `salam version`, a subcommand.** There is no `--version`
-> or `-v` flag: `salam --version` fails with `unknown command '--version'`.
+> or `-v` flag: `salam --version` fails with `unknown command '--version'` and
+> suggests `salam version`.
 
-**Always verify a converted program.** Prefer `salam exec file.salam` for a quick
-check of pure logic; use `salam build … --output=…` (or `salam run`) when it uses
-FFI, threads, or the full stdlib. Resolve every diagnostic; in Salam most are hard
-errors (§6).
+**Always verify a converted program.** Run `salam check file.salam` after every
+edit (exit 1 on any error, `--error-format=json` for one JSON object per
+diagnostic), then `salam exec file.salam` for a quick check of pure logic; use
+`salam build … --output=…` (or `salam run`) when it uses FFI, threads, or the
+full stdlib. Resolve every diagnostic; in Salam most are hard errors (§6).
 
 > **`salam exec` (the interpreter) is a subset of the compiled language.** Some
 > features (notably `Variant` type-pattern `match`, and parts of FFI/threads)
@@ -2001,10 +2004,6 @@ errors (§6).
 > "undefined variable 'i64'" on a `match` arm, that feature isn't interpreted:
 > verify it with `salam run` / `salam build` instead. Treat the **compiled
 > backend as the source of truth**, which is also what a self-hosting port targets.
->
-> On this machine the `salam` binary at the repo root is a Linux ELF; run it via
-> WSL (e.g. `wsl.exe -e ./salam exec file.salam` from the repo root, using a
-> repo-relative path).
 
 ---
 

@@ -392,7 +392,7 @@ end
 ```
 
 ```sh
-salam check  hello.salam     # via MCP: fastest, no codegen
+salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
 salam run    hello.salam     # build and execute
 salam format hello.salam --check
 ```

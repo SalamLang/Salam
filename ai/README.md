@@ -21,6 +21,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_ENGINE_URL`                              | the private assistant engine                                                                                                            | `http://127.0.0.1:4096`                         |
 | `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`       | basic auth for the engine, when set                                                                                                     | `salam`, empty                                  |
 | `AI_ENGINE_AGENT`                            | the engine profile to answer with                                                                                                       | `salam`                                         |
+| `AI_ENGINE_AGENT_DESKTOP`                    | the engine profile for desktop agent chats; it needs the bridge MCP server (see below)                                                  | `salam-agent`                                   |
+| `AI_BRIDGE_SECRET`                           | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                  | empty (the bridge refuses every call)           |
 | `AI_ALLOWED_ORIGINS`                         | comma separated origins allowed by CORS                                                                                                 | `https://ai.salamlang.ir,http://localhost:3000` |
 | `AI_ADMIN_IDS`                               | comma separated account IDs that may open `/admin`; preferred over emails                                                               | empty                                           |
 | `AI_ADMIN_EMAILS`                            | comma separated emails that may open `/admin`; these emails can no longer be used to sign up, so add them only after the account exists | empty                                           |
@@ -43,6 +45,7 @@ The API:
 | `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message              |
 | `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending` |
 | `POST /chats/:id/stop`                                                                         | stop the answer being written                                                    |
+| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove desktop apps    |
 | `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls   |
 | `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                            |
 
@@ -139,3 +142,34 @@ the whole repository, not only `ai/frontend`. Shiki and the grammars load in
 the background after the page; until then a small built-in highlighter
 colours the code, and other languages (shell, Python, JSON and so on) load
 only when an answer uses them.
+
+## Desktop agent bridge
+
+The desktop app (`ai-desktop/`) lets the assistant work on the user's own
+computer. The engine never reaches that computer directly. The API relays the
+calls:
+
+1. The app registers once with `POST /bridge/devices` and keeps the `sd-...`
+   secret in the OS keychain.
+2. It long-polls `GET /bridge/poll` on the streaming port with
+   `Authorization: Bearer sd-...`. Each answer is `204` or `{call: {id, tool,
+args, chat, workspace}}`. It runs the tool after the user approves and posts
+   `{call_id, status: ok|error|denied, output}` to `POST /bridge/result`.
+3. A chat created with `{device_id, workspace}` is an agent chat. Its messages
+   go to the `AI_ENGINE_AGENT_DESKTOP` profile, with a `<desktop_session>`
+   block that carries the chat's random session id. The block is not stored
+   with the message.
+4. `POST /bridge/mcp` (streaming port) is an MCP server for the engine. It
+   offers `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`,
+   `grep`, `docker`, `wsl` and `run_tests`. Every tool takes the session id,
+   which picks the chat and so the device. A call waits for the device's
+   answer for up to ten minutes, or until the device has been silent for 45
+   seconds.
+
+The proxy must send `/bridge/poll` and `/bridge/result` to the streaming port
+with buffering off and a read timeout above 30 seconds. It must never expose
+`/bridge/mcp` publicly.
+
+Give only the desktop profile this MCP server in the engine's configuration:
+a remote server at `http://127.0.0.1:8081/bridge/mcp` with the header
+`Authorization: Bearer $AI_BRIDGE_SECRET`.

@@ -35,6 +35,7 @@ include aiengine "engine.salam"
 include ailive "live.salam"
 include aiturn "turn.salam"
 include aiopenai "openai.salam"
+include aibridge "bridge.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -42,7 +43,8 @@ const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
-const STREAM_WORKERS := 64
+const STREAM_WORKERS := 128
+const BRIDGE_SLOTS := 48
 const STREAM_SECONDS := 900
 const STREAMS_PER_USER := 4
 
@@ -80,7 +82,8 @@ func main:
         engine_auth = "Basic " + encoding.Base64Encode(env_or("AI_ENGINE_USER", "salam") + ":" + engine_pass)
     end
     engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
-    aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"))
+    aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
+    aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS)
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
@@ -126,6 +129,7 @@ func main:
     aioauth.Routes(r)
     aiadmin.Routes(r)
     aiopenai.Routes(r)
+    aibridge.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop"]:
         router.Options(r, path, preflight)
     end
@@ -335,11 +339,16 @@ func me(ctx: i64):
     reply(ctx, 200, `{"user": ` + out + "}")
 end
 
-func chat_json(id: str, title: str, updated: str): str:
+func chat_json(id: str, title: str, updated: str, device: str, workspace: str): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("id", id))
     m.push(json.Member("title", title))
     m.push(json.MemberRaw("updated", updated))
+    if device != "0" and device.len() > 0:
+        m.push(json.MemberBool("agent", true))
+        m.push(json.MemberRaw("device_id", device))
+        m.push(json.Member("workspace", workspace))
+    end
     ret json.Object(m)
 end
 
@@ -384,9 +393,9 @@ func list_chats(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, title, updated FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
     until aistore.Next(rows):
-        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2)))
+        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -398,16 +407,37 @@ func create_chat(ctx: i64):
     if uid == 0:
         ret
     end
+    body := http.Ctx_body(ctx)
+    mut device := json.Get(body, "device_id")
+    workspace := str.Trim(json.Get(body, "workspace"))
+    mut token := ""
+    if device.len() > 0 and device != "0":
+        if aibridge.DeviceOs(uid, device).len() == 0:
+            fail(ctx, 404, "device", "این دستگاه پیدا نشد. برنامه‌ی دسکتاپ را دوباره وصل کنید.")
+            ret
+        end
+        if workspace.len() == 0 or workspace.len() > 1000:
+            fail(ctx, 400, "workspace", "یک پوشه‌ی کاری انتخاب کنید.")
+            ret
+        end
+        token = crypto.RandomHex(16)
+    else:
+        device = "0"
+    end
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
+    mut a := four(id, i64s(uid), DEFAULT_TITLE, t)
+    a.push(device)
+    a.push(device == "0" ? "" : workspace)
+    a.push(token)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated) VALUES (?1, ?2, ?3, ?4, ?4)", four(id, i64s(uid), DEFAULT_TITLE, t))
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
         ret
     end
-    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t) + "}")
+    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace) + "}")
 end
 
 func sync_pending(id: str, sid: str):
@@ -473,9 +503,9 @@ func get_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
-    mut crow := aistore.Stmt("SELECT id, title, updated FROM chats WHERE id = ?1", one(id))
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
     if aistore.Next(crow):
-        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2))
+        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
     end
     aistore.Finish(crow)
     mut rows := aistore.Stmt("SELECT id, role, body, status, created FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
@@ -550,6 +580,16 @@ func send_message(ctx: i64):
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
+    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token FROM chats WHERE id = ?1", one(id))
+    mut device := "0"
+    mut workspace := ""
+    mut token := ""
+    if aistore.Next(rows):
+        device = aistore.Text(rows, 0)
+        workspace = aistore.Text(rows, 1)
+        token = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
     aistore.Unlock()
     if pending != "0":
         fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.")
@@ -582,7 +622,13 @@ func send_message(ctx: i64):
     aistore.Unlock()
     ailive.Begin(sid)
     forget_check(sid)
-    if not aiengine.Send(sid, text):
+    mut sent := false
+    if device != "0" and token.len() > 0:
+        sent = aiengine.SendDesktop(sid, desktop_preamble(uid, device, workspace, token) + text)
+    else:
+        sent = aiengine.Send(sid, text)
+    end
+    if not sent:
         ailive.End(sid)
         aistore.Lock()
         _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", amid))
@@ -595,6 +641,15 @@ func send_message(ctx: i64):
     m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t)))
     m.push(json.Member("title", new_title))
     reply(ctx, 201, json.Object(m))
+end
+
+func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:
+    os_name := aibridge.DeviceOs(uid, device)
+    mut state := "connected"
+    if not aibridge.Online(device):
+        state = "not connected right now"
+    end
+    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through the Salam desktop app. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</desktop_session>\n\n"
 end
 
 func poll_message(ctx: i64):
@@ -763,7 +818,7 @@ func serve_stream(c: tcp.Conn):
     if cut >= 0:
         bare = bare.substr(0, cut)
     end
-    if aiopenai.Handles(bare):
+    if aiopenai.Handles(bare) or aibridge.Handles(bare):
         head_end := req.find("\r\n\r\n") + 4
         mut body := req.substr(head_end, req.len() - head_end)
         mut want := 0
@@ -781,7 +836,11 @@ func serve_stream(c: tcp.Conn):
             end
             body = body + more
         end
-        aiopenai.Serve(c, method, bare, headers, body)
+        if aibridge.Handles(bare):
+            aibridge.Serve(c, method, bare, headers, body)
+        else:
+            aiopenai.Serve(c, method, bare, headers, body)
+        end
         ret
     end
     if method == "OPTIONS":

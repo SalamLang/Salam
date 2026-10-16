@@ -1,0 +1,182 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import conv
+import sync
+import net.tcp
+import db.elasticsearch
+
+const PORT := 19849
+
+mut wg := sync.NewWaitGroup()
+mut seen := Vector {} as Vector<str>
+mut flavor := "elasticsearch"
+
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+func read_request(c: tcp.Conn, head &: str, body &: str): bool:
+    mut buf := ""
+    mut head_end := -1
+    mut want := 0
+    until true:
+        if head_end < 0:
+            at := buf.find("\r\n\r\n")
+            if at >= 0:
+                head_end = at + 4
+                head = buf.substr(0, head_end)
+                cl := hdr_get(head, "Content-Length")
+                if cl.len() > 0: want = cl.to_int() end
+            end
+        end
+        if head_end >= 0 and str.ByteLen(buf) - head_end >= want: break end
+        chunk := tcp.Read(c, 65536)
+        if chunk.len() == 0: break end
+        buf = buf + chunk
+    end
+    if head_end < 0: ret false end
+    body = str.ByteSub(buf, head_end, str.ByteLen(buf) - head_end)
+    ret true
+end
+
+func reply(c: tcp.Conn, method: str, target: str): bool:
+    mut body := `{"acknowledged":true,"task":"node:7","completed":true,"valid":true,"matched":true,"found":true,"snapshots":[{"snapshot":"s1"},{"snapshot":"s2"}],"id":"AS1","is_running":false,"response":{"took":1,"hits":{"total":{"value":3,"relation":"eq"},"hits":[]}}}`
+    switch true:
+        target == "/__quit":
+            body = "{}"
+            break
+        end
+        method == "GET" and target == "/":
+            body = `{"version":{"number":"x","distribution":"` + flavor + `"}}`
+            break
+        end
+        target == "/_tasks/node%3A9/_cancel":
+            body = `{"node_failures":[{"type":"failed_node_exception"}]}`
+        end
+    end
+    tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str.FromInt(str.ByteLen(body) as i64) + "\r\nConnection: close\r\n\r\n" + body)
+    ret target != "/__quit"
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    if not tcp.Ok(srv): ret end
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): running = false
+        else:
+            mut head := ""
+            mut body := ""
+            if read_request(c, head, body):
+                line := head.substr(0, head.find("\r\n")).split(" ")
+                if line.get(1) != "/":
+                    mut entry := line.get(0) + " " + line.get(1)
+                    if body.len() > 0: entry = entry + " " + body end
+                    seen.push(entry)
+                end
+                running = reply(c, line.get(0), line.get(1))
+            end
+            tcp.Close(c)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func show(label: str, value: str):
+    println label, value
+    each e in seen:
+        println "  ", e
+    end
+    seen = Vector {} as Vector<str>
+end
+
+func calls(c: elasticsearch.Client):
+    show("put pipeline", conv.FormatBool(elasticsearch.PutPipeline(c, "p 1", `{"processors":[]}`)))
+    show("get pipeline", elasticsearch.GetPipeline(c, "p 1").len() > 0 ? "body" : "empty")
+    show("delete pipeline", conv.FormatBool(elasticsearch.DeletePipeline(c, "p 1")))
+    show("simulate", elasticsearch.SimulatePipeline(c, "", `{"docs":[]}`).len() > 0 ? "body" : "empty")
+    show("create stream", conv.FormatBool(elasticsearch.CreateDataStream(c, "logs-a")))
+    show("get stream", elasticsearch.GetDataStream(c, "logs-*").len() > 0 ? "body" : "empty")
+    show("delete stream", conv.FormatBool(elasticsearch.DeleteDataStream(c, "logs-a")))
+    show("rollover", conv.FormatBool(elasticsearch.Rollover(c, "logs-a", "")))
+    show("put policy", conv.FormatBool(elasticsearch.PutLifecyclePolicy(c, "keep", `{"policy":{}}`)))
+    show("delete policy", conv.FormatBool(elasticsearch.DeleteLifecyclePolicy(c, "keep")))
+    show("repository", conv.FormatBool(elasticsearch.PutRepository(c, "r", `{"type":"fs"}`)))
+    show("snapshot", conv.FormatBool(elasticsearch.CreateSnapshot(c, "r", "s1", "")))
+    show("restore", conv.FormatBool(elasticsearch.RestoreSnapshot(c, "r", "s1", "")))
+    show("list", str.Join(elasticsearch.ListSnapshots(c, "r"), ","))
+    show("delete snapshot", conv.FormatBool(elasticsearch.DeleteSnapshot(c, "r", "s1")))
+    show("delete repository", conv.FormatBool(elasticsearch.DeleteRepository(c, "r")))
+    show("cluster settings", conv.FormatBool(elasticsearch.PutClusterSettings(c, `{"persistent":{}}`)))
+    show("get cluster settings", elasticsearch.GetClusterSettings(c).len() > 0 ? "body" : "empty")
+    t := elasticsearch.GetTask(c, "node:7")
+    show("task", conv.FormatBool(t.completed))
+    show("cancel ok", conv.FormatBool(elasticsearch.CancelTask(c, "node:7")))
+    show("cancel failed", conv.FormatBool(elasticsearch.CancelTask(c, "node:9")))
+    mut reindex := Vector {} as Vector<str>
+    reindex.push(`"source": {"index": "a"}`)
+    reindex.push(`"dest": {"index": "b"}`)
+    show("start reindex", elasticsearch.StartReindex(c, "{" + str.Join(reindex, ", ") + "}"))
+    show("start delete", elasticsearch.StartDeleteByQuery(c, "a", ""))
+    show("start update", elasticsearch.StartUpdateByQuery(c, "a", elasticsearch.Term("t", "x"), elasticsearch.Script("ctx._source.n = 1", "")))
+    show("stored script", conv.FormatBool(elasticsearch.PutStoredScript(c, "s", "painless", "ctx._source.n++")))
+    show("stored template", conv.FormatBool(elasticsearch.PutStoredScript(c, "t", "mustache", `{"query":{"match_all":{}}}`)))
+    show("delete script", conv.FormatBool(elasticsearch.DeleteStoredScript(c, "s")))
+    show("template search", str.FromInt(elasticsearch.SearchTemplate(c, "a", "t", `{"q":1}`).total))
+    a := elasticsearch.SubmitAsyncSearch(c, "a,b", elasticsearch.SearchRequest { size = 0 }, "1s")
+    show("async", a.id + " " + conv.FormatBool(a.running) + " " + str.FromInt(a.result.total))
+    show("async get", elasticsearch.GetAsyncSearch(c, "AS1", "2s").id)
+    show("async delete", conv.FormatBool(elasticsearch.DeleteAsyncSearch(c, "AS1")))
+    show("explain", elasticsearch.Explain(c, "a", "1", elasticsearch.MatchAll()).len() > 0 ? "body" : "empty")
+    show("validate", conv.FormatBool(elasticsearch.ValidateQuery(c, "", elasticsearch.MatchAll())))
+    mut f := Vector {} as Vector<str>
+    f.push("title")
+    f.push("n*")
+    show("field caps", elasticsearch.FieldCaps(c, "a", f).len() > 0 ? "body" : "empty")
+    show("term vectors", elasticsearch.TermVectors(c, "a", "1", f).len() > 0 ? "body" : "empty")
+    show("stats", elasticsearch.IndexStats(c, "").len() > 0 ? "body" : "empty")
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    mut cfg := elasticsearch.Config { keep_alive = false }
+    cfg.nodes.push("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    mut c := elasticsearch.NewClient(cfg)
+    println "== elasticsearch"
+    calls(c)
+    elasticsearch.Close(c)
+    flavor = "opensearch"
+    mut o := elasticsearch.NewClient(cfg)
+    println "== opensearch"
+    show("put policy", conv.FormatBool(elasticsearch.PutLifecyclePolicy(o, "keep", `{"policy":{}}`)))
+    a := elasticsearch.SubmitAsyncSearch(o, "a", elasticsearch.SearchRequest { size = 0 }, "1s")
+    show("async", a.id)
+    show("async delete", conv.FormatBool(elasticsearch.DeleteAsyncSearch(o, "AS1")))
+    elasticsearch.Perform(o, "GET", "/__quit", "")
+    join(t)
+    elasticsearch.Close(o)
+end

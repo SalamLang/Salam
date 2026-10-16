@@ -779,6 +779,14 @@ if want db; then
                     fi
                     continue
                     ;;
+                oslivesec_*)
+                    if [ -z "${SALAM_TEST_OPENSEARCH_SECURE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH_SECURE to \"https-url admin password\" for a server with the security plugin)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 oslive_*)
                     if [ -z "${SALAM_TEST_OPENSEARCH:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH to \"url [user password [insecure]]\")" "db/$lang/$name"

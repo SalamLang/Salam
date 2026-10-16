@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
+import { AgentBar, useAgent } from "./Agent";
 import { Apps } from "./Apps";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
+import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
-import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook } from "./icons";
+import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
@@ -16,6 +18,13 @@ const SUGGESTIONS = [
   { icon: IconBook, title: "کتابخانه‌ی استاندارد", text: "چطور در سلام یک فایل متنی را خط به خط بخوانم؟ با مثال کامل." },
   { icon: IconSwap, title: "تبدیل کد", text: "این تابع پایتون را به سلام فارسی تبدیل کن:\n\ndef fib(n):\n    return n if n < 2 else fib(n-1) + fib(n-2)" },
   { icon: IconGlobe, title: "یک وب‌سرور", text: "با سلام یک وب‌سرور ساده بساز که در مسیر /hello متن «سلام دنیا» برگرداند." },
+];
+
+const AGENT_SUGGESTIONS = [
+  { icon: IconSearch, title: "آشنایی با پروژه", text: "این پروژه را بررسی کن و کوتاه توضیح بده چه کار می‌کند و ساختارش چیست." },
+  { icon: IconBug, title: "رفع خطا", text: "تست‌های این پروژه را اجرا کن و اگر خطایی بود علتش را پیدا و درست کن." },
+  { icon: IconTerminal, title: "داکر", text: "کانتینرهای داکر در حال اجرا را نشان بده و بگو کدام‌ها مشکل دارند." },
+  { icon: IconFolder, title: "مستندسازی", text: "برای این پروژه یک README کوتاه و کاربردی بنویس." },
 ];
 
 function chatIdFromPath(): string | null {
@@ -60,12 +69,16 @@ export function App() {
   const [loadingChat, setLoadingChat] = useState(false);
   const [sidebar, setSidebar] = useState(false);
   const [toast, setToast] = useState("");
+  const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
+  const [mode, setMode] = useState<AgentMode>("ask");
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const pollTimer = useRef<number | null>(null);
   const streamCtrl = useRef<AbortController | null>(null);
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
+  const messagesRef = useRef<Message[]>(messages);
+  messagesRef.current = messages;
   const signedIn = user !== null;
   const onConnect = route === "connect";
 
@@ -108,6 +121,12 @@ export function App() {
     if (!signedIn || onConnect) return;
     api.chats().then((r) => setChats(r.chats)).catch((e) => notify(e.message));
   }, [signedIn, onConnect, notify]);
+
+  const midFor = useCallback((chat: string) => {
+    if (chat !== activeRef.current) return undefined;
+    return messagesRef.current.find((m) => m.role === "assistant" && m.status === "pending")?.id;
+  }, []);
+  const tools = useAgent(isDesktop && signedIn, midFor, notify);
 
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
@@ -178,6 +197,11 @@ export function App() {
       setActiveId(id);
       go(id, replace);
       stick.current = true;
+      if (isDesktop) {
+        const m = id ? savedMode(id) : "ask";
+        setMode(m);
+        if (id) agent.setMode(id, m).catch(() => {});
+      }
       if (!id) {
         setMessages([]);
         return;
@@ -243,7 +267,7 @@ export function App() {
   useEffect(() => {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, tools.calls]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -252,13 +276,47 @@ export function App() {
   };
 
   const busy = messages.some((m) => m.status === "pending");
+  const activeChat = chats.find((c) => c.id === activeId);
+  const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
+  const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
+  const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
+
+  const pickWorkspace = async () => {
+    try {
+      const path = await agent.pickFolder();
+      if (path) {
+        setWorkspace(path);
+        saveWorkspace(path);
+      }
+    } catch {
+      notify("انتخاب پوشه ناموفق بود.");
+    }
+  };
+
+  const changeMode = (m: AgentMode) => {
+    setMode(m);
+    if (activeId) {
+      saveMode(activeId, m);
+      agent.setMode(activeId, m).catch(() => {});
+    }
+  };
 
   const send = async (text: string) => {
     let id = activeId;
     try {
       if (!id) {
-        const r = await api.createChat();
+        const device = tools.info?.device;
+        if (isDesktop && workspace && !device) {
+          notify("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.");
+          return;
+        }
+        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : undefined);
         id = r.chat.id;
+        if (r.chat.agent) {
+          saveMode(id, mode);
+          await agent.setMode(id, mode).catch(() => {});
+        }
         setChats((cs) => [r.chat, ...cs]);
         setActiveId(id);
         activeRef.current = id;
@@ -376,9 +434,13 @@ export function App() {
                 <div className="welcome">
                   <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
                   <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
-                  <p className="muted">هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.</p>
+                  <p className="muted">
+                    {agentChat
+                      ? "دستیار روی پوشه‌ی کاری شما کار می‌کند: فایل‌ها را می‌خواند، تغییر می‌دهد، فرمان اجرا می‌کند و تست‌ها را می‌گیرد. پیش از هر تغییر از شما اجازه می‌گیرد."
+                      : "هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر."}
+                  </p>
                   <div className="suggestions">
-                    {SUGGESTIONS.map((s) => (
+                    {(agentChat ? AGENT_SUGGESTIONS : SUGGESTIONS).map((s) => (
                       <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>
                         <span className="suggestion-icon">
                           <s.icon width={18} height={18} />
@@ -393,12 +455,42 @@ export function App() {
                 <div className="thread">
                   {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
                   {messages.map((m) => (
-                    <MessageView key={m.id} m={m} name={user.name} />
+                    <MessageView key={m.id} m={m} name={user.name} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
                   ))}
                 </div>
               )}
             </div>
-            <Composer busy={busy} disabled={loadingChat} onSend={send} onStop={stop} autoFocus={!activeId} />
+            {waitingElsewhere && (
+              <button type="button" className="agent-waiting" onClick={() => openChat(waitingElsewhere.chat)}>
+                یک کار در گفت‌وگوی دیگری منتظر اجازه‌ی شماست. نمایش
+              </button>
+            )}
+            <Composer
+              busy={busy}
+              disabled={loadingChat}
+              onSend={send}
+              onStop={stop}
+              autoFocus={!activeId}
+              placeholder={agentChat ? "بگویید روی این پروژه چه کاری انجام شود…" : undefined}
+              note={agentChat ? "دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار را انتخاب کنید." : undefined}
+              bar={
+                isDesktop && (!activeChat || activeChat.agent) ? (
+                  <AgentBar
+                    info={tools.info}
+                    workspace={activeChat ? activeChat.workspace || "" : workspace}
+                    locked={activeChat !== undefined}
+                    elsewhere={activeChat?.agent === true && tools.info?.device !== null && tools.info?.device !== undefined && String(activeChat.device_id) !== tools.info.device.id}
+                    mode={mode}
+                    onPick={pickWorkspace}
+                    onClear={() => {
+                      setWorkspace("");
+                      saveWorkspace("");
+                    }}
+                    onMode={changeMode}
+                  />
+                ) : undefined
+              }
+            />
           </>
         )}
       </main>

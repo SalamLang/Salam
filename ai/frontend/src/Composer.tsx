@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { IconSend, IconStop } from "./icons";
 
 type Props = {
@@ -7,9 +7,12 @@ type Props = {
   onSend: (text: string) => void;
   onStop: () => void;
   autoFocus?: boolean;
+  bar?: ReactNode;
+  placeholder?: string;
+  note?: string;
 };
 
-export function Composer({ busy, disabled, onSend, onStop, autoFocus }: Props) {
+export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note }: Props) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -40,6 +43,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus }: Props) {
 
   return (
     <div className="composer-wrap">
+      {bar}
       <form
         className="composer"
         onSubmit={(e) => {
@@ -53,7 +57,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus }: Props) {
           rows={1}
           value={text}
           maxLength={12000}
-          placeholder="پرسش خود را درباره‌ی زبان سلام بنویسید…"
+          placeholder={placeholder || "پرسش خود را درباره‌ی زبان سلام بنویسید…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
           aria-label="پیام"
@@ -68,7 +72,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus }: Props) {
           </button>
         )}
       </form>
-      <p className="disclaimer">دستیار سلام ممکن است اشتباه کند. کد مهم را با کامپایلر سلام بررسی کنید.</p>
+      <p className="disclaimer">{note || "دستیار سلام ممکن است اشتباه کند. کد مهم را با کامپایلر سلام بررسی کنید."}</p>
     </div>
   );
 }

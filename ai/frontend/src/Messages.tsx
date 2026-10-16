@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { ToolCard, type CallView } from "./Agent";
 import type { Message } from "./api";
+import type { AgentAnswer } from "./desktop";
 import { CopyButton, Markdown } from "./Markdown";
 
 const PHASE_TEXT: Record<string, string> = {
   thinking: "در حال فکر کردن",
   searching: "در حال بررسی مستندات سلام",
+  working: "در حال کار روی رایانه‌ی شما",
   writing: "در حال نوشتن",
 };
 
@@ -54,18 +57,32 @@ function useSmoothText(target: string, animate: boolean): string {
   return shown;
 }
 
-function AssistantMessage({ m }: { m: Message }) {
+type Tools = {
+  calls?: CallView[];
+  onDecide?: (id: string, a: AgentAnswer) => void;
+  onStop?: (id: string) => void;
+};
+
+function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
   const [animate] = useState(m.status === "pending");
   const text = useSmoothText(m.body, animate);
   const pending = m.status === "pending";
   const typing = pending || text.length < m.body.length;
   const phase = m.phase || "thinking";
-  const showPhase = pending && (text.length === 0 || phase === "searching");
+  const waiting = calls.some((c) => c.state === "pending" || c.state === "running");
+  const showPhase = pending && !waiting && (text.length === 0 || phase === "searching");
   const visible = typing ? text.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : text;
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
       <div className="msg-body">
+        {calls.length > 0 && (
+          <div className="tool-list">
+            {calls.map((c) => (
+              <ToolCard key={c.call_id} c={c} onDecide={onDecide} onStop={onStop} />
+            ))}
+          </div>
+        )}
         {visible ? (
           <div className={typing ? "streaming" : undefined}>
             <Markdown text={visible} />
@@ -78,7 +95,7 @@ function AssistantMessage({ m }: { m: Message }) {
               <i />
               <i />
             </span>
-            {PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+            {calls.length > 0 && phase !== "searching" ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
         {!typing && m.body && (
@@ -91,7 +108,7 @@ function AssistantMessage({ m }: { m: Message }) {
   );
 }
 
-export function MessageView({ m, name }: { m: Message; name: string }) {
+export function MessageView({ m, name, ...tools }: { m: Message; name: string } & Tools) {
   if (m.role === "user") {
     return (
       <div className="msg user">
@@ -102,5 +119,5 @@ export function MessageView({ m, name }: { m: Message; name: string }) {
       </div>
     );
   }
-  return <AssistantMessage m={m} />;
+  return <AssistantMessage m={m} {...tools} />;
 }

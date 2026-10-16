@@ -101,7 +101,7 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 - Source files are keyed by **filename**, not package: two files named
   `io.salam` in one program, or your own `shell.salam` next to
   `import os.shell`, are rejected with "package name ... is claimed by two
-  different files". Keep every file name unique.
+  different files". Keep every filename unique.
 - `switch` falls through like C: an arm without `break` (or `ret`) runs the
   next arm too, including `else:`.
 - A side-effect-free endless loop can be deleted by clang on the C backend, so

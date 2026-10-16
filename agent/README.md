@@ -1,4 +1,4 @@
-# Salam desktop agent
+# Salam Agent (ایجنت سلام)
 
 A desktop app for Windows, macOS and Linux that opens <https://ai.salamlang.ir>
 and lets the assistant work on your computer. With your approval it can run
@@ -48,7 +48,7 @@ Needs Rust 1.80+. On Linux it also needs the WebKitGTK 4.1 development
 packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libsoup-3.0-dev`).
 
 ```sh
-cd ai-desktop/src-tauri
+cd agent/src-tauri
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo run
@@ -64,3 +64,21 @@ cargo run
 ```
 
 These variables are ignored in release builds.
+
+## Names and icons
+
+Everything the user sees is Persian: the product name ایجنت سلام, the window
+title, the loader page and the installer descriptions. File names stay ASCII:
+the binary is `salam-agent` and the identifier is `ir.salamlang.agent`.
+
+The icons in `src-tauri/icons/` (including the multi-size `icon.ico` used for
+the Windows executable) and `dist/favicon.ico` are generated from the
+official logo, `design/logo/logo-box.svg`:
+
+```sh
+cd agent/src-tauri
+bunx @tauri-apps/cli icon ../../design/logo/logo-box.svg -o icons
+rm -rf icons/android icons/ios icons/Square*.png icons/StoreLogo.png
+cp icons/icon.ico ../dist/favicon.ico
+cp ../../design/logo/logo-box.svg ../dist/logo.svg
+```

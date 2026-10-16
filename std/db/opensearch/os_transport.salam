@@ -25,17 +25,17 @@ import net.tcp
 const _READ_CHUNK := 65536
 const _MAX_RESPONSE := 268435456
 
-func _st(c: Client): _OsState*:
+func _os_st(c: Client): _OsState*:
     ret c.handle as _OsState*
 end
 
-func _parse_node(raw: str, user &: str, pass &: str): _Node:
+func _os_parse_node(raw: str, user &: str, pass &: str): _OsNode:
     mut text := str.Trim(raw)
     if not str.Contains(text, "://"): text = "http://" + text end
     u := url.Parse(text)
     scheme := u.scheme.lower()
-    if scheme != "http" and scheme != "https": ret _Node { url = text } end
-    if u.host.len() == 0: ret _Node { url = text } end
+    if scheme != "http" and scheme != "https": ret _OsNode { url = text } end
+    if u.host.len() == 0: ret _OsNode { url = text } end
     secure := scheme == "https"
     port := u.port > 0 ? u.port : DEFAULT_PORT
     if u.userinfo.len() > 0 and user.len() == 0:
@@ -57,19 +57,19 @@ func _parse_node(raw: str, user &: str, pass &: str): _Node:
     default_port := secure ? 443 : 80
     if port != default_port: host_header = host_header + ":" + str.FromInt(port as i64) end
     shown := scheme + "://" + host_header + prefix
-    ret _Node {
+    ret _OsNode {
         host = u.host, port = port, secure = secure, ok = true, prefix = prefix, host_header = host_header,
         url = shown
     }
 end
 
-func _auth_header(user: str, pass: str, bearer: str): str:
+func _os_auth_header(user: str, pass: str, bearer: str): str:
     if bearer.len() > 0: ret "Bearer " + bearer end
     if user.len() > 0: ret "Basic " + encoding.Base64Encode(user + ":" + pass) end
     ret str.Clone("")
 end
 
-func _split_target(path: str, p &: str, q &: str):
+func _os_split_target(path: str, p &: str, q &: str):
     mut full := path
     if not str.StartsWith(full, "/"): full = "/" + full end
     at := full.find("?")
@@ -82,13 +82,13 @@ func _split_target(path: str, p &: str, q &: str):
     q = full.substr(at + 1, full.len() - at - 1)
 end
 
-func _head(st: _OsState*, node: _Node, method: str, path: str, ctype: str, body: str): str:
+func _os_head(st: _OsState*, node: _OsNode, method: str, path: str, ctype: str, body: str): str:
     blen := str.ByteLen(body)
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut rel := ""
     mut query := ""
-    _split_target(path, rel, query)
+    _os_split_target(path, rel, query)
     full_path := node.prefix + rel
     str.BufAppend(sb, method)
     str.BufAppend(sb, " ")
@@ -112,7 +112,7 @@ func _head(st: _OsState*, node: _Node, method: str, path: str, ctype: str, body:
     end
     if st[0].aws_region.len() > 0:
         now := st[0].aws_time > 0 ? st[0].aws_time : time.Now()
-        signed := _sigv4_headers(
+        signed := _os_sigv4_headers(
             method, node.host_header, full_path, query, body, st[0].aws_region, st[0].aws_service,
             st[0].aws_access_key, st[0].aws_secret_key, st[0].aws_session_token, now
         )
@@ -127,7 +127,7 @@ func _head(st: _OsState*, node: _Node, method: str, path: str, ctype: str, body:
     ret str.BufStr(sb)
 end
 
-func _hdr(head: str, name: str): str:
+func _os_hdr(head: str, name: str): str:
     lower := head.lower()
     needle := "\r\n" + name.lower() + ":"
     a := lower.find(needle)
@@ -138,17 +138,17 @@ func _hdr(head: str, name: str): str:
     ret str.Trim(head.substr(start, stop - start))
 end
 
-func _hexval(code: int): int:
+func _os_hexval(code: int): int:
     if code >= 48 and code <= 57: ret code - 48 end
     if code >= 97 and code <= 102: ret code - 87 end
     if code >= 65 and code <= 70: ret code - 55 end
     ret -1
 end
 
-func _dechunk(body: str, ok &: bool): str:
+func _os_dechunk(body: str, ok &: bool): str:
     ok = false
     n := str.ByteLen(body)
-    bp := _bp(body)
+    bp := _os_bp(body)
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut p := 0
@@ -156,7 +156,7 @@ func _dechunk(body: str, ok &: bool): str:
         mut size := 0
         mut digits := 0
         until p < n:
-            v := _hexval(_ub(bp, p))
+            v := _os_hexval(_os_ub(bp, p))
             if v < 0: break end
             size = size * 16 + v
             digits += 1
@@ -173,12 +173,12 @@ func _dechunk(body: str, ok &: bool): str:
         if p + size > n: ret str.BufStr(sb) end
         str.BufAppend(sb, str.ByteSub(body, p, size))
         p += size
-        if p + 1 < n and _ub(bp, p) == 13: p += 2 end
+        if p + 1 < n and _os_ub(bp, p) == 13: p += 2 end
     end
     ret str.BufStr(sb)
 end
 
-func _finish(raw: str): Response:
+func _os_finish(raw: str): Response:
     if raw.len() == 0: ret Response { error = "the server closed without answering" } end
     sep := raw.find("\r\n\r\n")
     if sep < 0: ret Response { error = "the response head never ended" } end
@@ -186,12 +186,12 @@ func _finish(raw: str): Response:
     mut body := str.ByteSub(raw, sep + 4, str.ByteLen(raw) - sep - 4)
     sp := head.find(" ")
     status := sp < 0 ? 0 : head.substr(sp + 1, 3).to_int()
-    if str.Contains(_hdr(head, "Transfer-Encoding").lower(), "chunked"):
+    if str.Contains(_os_hdr(head, "Transfer-Encoding").lower(), "chunked"):
         mut ok := false
-        body = _dechunk(body, ok)
+        body = _os_dechunk(body, ok)
         if not ok: ret Response { status = status, error = "the chunked response body could not be decoded" } end
     else:
-        cl := _hdr(head, "Content-Length")
+        cl := _os_hdr(head, "Content-Length")
         if cl.len() > 0:
             want := cl.to_int()
             if want < str.ByteLen(body): body = str.ByteSub(body, 0, want) end
@@ -200,7 +200,7 @@ func _finish(raw: str): Response:
     ret Response { status = status, ok = status >= 200 and status < 300, body = body }
 end
 
-func _read_plain(c: tcp.Conn): str:
+func _os_read_plain(c: tcp.Conn): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut total := 0
@@ -213,7 +213,7 @@ func _read_plain(c: tcp.Conn): str:
     ret str.BufStr(sb)
 end
 
-func _read_tls(c &: tls.Conn): str:
+func _os_read_tls(c &: tls.Conn): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut total := 0
@@ -226,7 +226,7 @@ func _read_tls(c &: tls.Conn): str:
     ret str.BufStr(sb)
 end
 
-func _send(st: _OsState*, node: _Node, head: str, body: str): Response:
+func _os_send(st: _OsState*, node: _OsNode, head: str, body: str): Response:
     c := tcp.Dial(node.host, node.port)
     if not tcp.ConnOk(c):
         ret Response { error = "could not connect to " + node.host + ":" + str.FromInt(node.port as i64) }
@@ -242,9 +242,9 @@ func _send(st: _OsState*, node: _Node, head: str, body: str): Response:
             tcp.Close(c)
             ret Response { error = "could not send the body" }
         end
-        raw := _read_plain(c)
+        raw := _os_read_plain(c)
         tcp.Close(c)
-        ret _finish(raw)
+        ret _os_finish(raw)
     end
     mut cfg := tls.NewConfig(node.host)
     cfg.ca_file = st[0].ca_file
@@ -263,19 +263,19 @@ func _send(st: _OsState*, node: _Node, head: str, body: str): Response:
         tls.Close(t)
         ret Response { error = "could not send the body" }
     end
-    raw := _read_tls(t)
+    raw := _os_read_tls(t)
     tls.Close(t)
-    ret _finish(raw)
+    ret _os_finish(raw)
 end
 
-func _parse_error(r &: Response):
+func _os_parse_error(r &: Response):
     if r.ok: ret end
     body := r.body
-    et := _path(body, "error.type")
+    et := _os_path(body, "error.type")
     if et.len() > 0:
         r.error_type = et
-        r.error_reason = _path(body, "error.reason")
-        cause := _path(body, "error.root_cause.0.reason")
+        r.error_reason = _os_path(body, "error.reason")
+        cause := _os_path(body, "error.root_cause.0.reason")
         if cause.len() > 0 and cause != r.error_reason:
             r.error = et + ": " + r.error_reason + " (" + cause + ")"
         else:
@@ -283,13 +283,13 @@ func _parse_error(r &: Response):
         end
         ret
     end
-    plain := _jstr(body, "error")
+    plain := _os_jstr(body, "error")
     if plain.len() > 0 and not str.StartsWith(plain, "{"):
         r.error_reason = plain
         r.error = "HTTP " + str.FromInt(r.status as i64) + ": " + plain
         ret
     end
-    msg := _jstr(body, "message")
+    msg := _os_jstr(body, "message")
     if msg.len() > 0:
         r.error_reason = msg
         r.error = "HTTP " + str.FromInt(r.status as i64) + ": " + msg
@@ -302,18 +302,18 @@ func _parse_error(r &: Response):
     r.error = "HTTP " + str.FromInt(r.status as i64)
 end
 
-func _record(st: _OsState*, r: Response):
+func _os_record(st: _OsState*, r: Response):
     st[0].status = r.status
     st[0].err = r.error
     st[0].err_type = r.error_type
     st[0].err_reason = r.error_reason
 end
 
-func _retryable(status: int): bool:
+func _os_retryable(status: int): bool:
     ret status == 502 or status == 503 or status == 504
 end
 
-func _pick(st: _OsState*): int:
+func _os_pick(st: _OsState*): int:
     n := st[0].nodes.len()
     now := time.MonoMillis()
     start := st[0].cursor % n
@@ -332,27 +332,27 @@ func _pick(st: _OsState*): int:
     ret best
 end
 
-func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
+func _os_do(c: Client, method: str, path: str, body: str, ctype: str): Response:
     if c.handle == null: ret Response { error = "no client" } end
-    st := _st(c)
+    st := _os_st(c)
     if st[0].config_err.len() > 0:
         r := Response { error = st[0].config_err }
-        _record(st, r)
+        _os_record(st, r)
         ret r
     end
     n := st[0].nodes.len()
     if n == 0:
         r := Response { error = "no nodes configured" }
-        _record(st, r)
+        _os_record(st, r)
         ret r
     end
     tries := st[0].max_retries + 1
     mut last := Response {}
     repeat tries in attempt:
-        ni := _pick(st)
+        ni := _os_pick(st)
         node := st[0].nodes.get(ni)
-        head := _head(st, node, method, path, ctype, body)
-        sent := _send(st, node, head, body)
+        head := _os_head(st, node, method, path, ctype, body)
+        sent := _os_send(st, node, head, body)
         if sent.error.len() > 0 and sent.status == 0:
             if str.StartsWith(sent.error, "could not connect") or str.StartsWith(sent.error, "TLS"):
                 st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
@@ -362,46 +362,46 @@ func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
         end
         st[0].dead_until.set(ni, 0 as i64)
         mut r := sent
-        _parse_error(r)
-        if _retryable(r.status) and attempt + 1 < tries:
+        _os_parse_error(r)
+        if _os_retryable(r.status) and attempt + 1 < tries:
             last = r
             continue
         end
-        _record(st, r)
+        _os_record(st, r)
         ret r
     end
-    _record(st, last)
+    _os_record(st, last)
     ret last
 end
 
-func _seg(s: str): str:
+func _os_seg(s: str): str:
     ret encoding.URLEncode(s)
 end
 
-func _idx(s: str): str:
+func _os_idx(s: str): str:
     e := encoding.URLEncode(s)
     ret str.Replace(str.Replace(str.Replace(e, "%2C", ","), "%2A", "*"), "%2a", "*")
 end
 
-func _qadd(q &: Vector<str>, key: str, val: str):
+func _os_qadd(q &: Vector<str>, key: str, val: str):
     if val.len() == 0: ret end
     q.push(key + "=" + encoding.URLEncode(val))
 end
 
-func _qs(q: Vector<str>): str:
+func _os_qs(q: Vector<str>): str:
     if q.len() == 0: ret str.Clone("") end
     ret "?" + str.Join(q, "&")
 end
 
-func _opts_query(q &: Vector<str>, o: Options):
-    _qadd(q, "refresh", o.refresh)
-    _qadd(q, "routing", o.routing)
-    _qadd(q, "pipeline", o.pipeline)
-    _qadd(q, "timeout", o.timeout)
-    _qadd(q, "wait_for_active_shards", o.wait_for_active_shards)
-    _qadd(q, "version_type", o.version_type)
-    if o.if_seq_no >= 0: _qadd(q, "if_seq_no", conv.FormatInt(o.if_seq_no)) end
-    if o.if_primary_term >= 0: _qadd(q, "if_primary_term", conv.FormatInt(o.if_primary_term)) end
-    if o.version >= 0: _qadd(q, "version", conv.FormatInt(o.version)) end
-    if o.require_alias: _qadd(q, "require_alias", "true") end
+func _os_opts_query(q &: Vector<str>, o: Options):
+    _os_qadd(q, "refresh", o.refresh)
+    _os_qadd(q, "routing", o.routing)
+    _os_qadd(q, "pipeline", o.pipeline)
+    _os_qadd(q, "timeout", o.timeout)
+    _os_qadd(q, "wait_for_active_shards", o.wait_for_active_shards)
+    _os_qadd(q, "version_type", o.version_type)
+    if o.if_seq_no >= 0: _os_qadd(q, "if_seq_no", conv.FormatInt(o.if_seq_no)) end
+    if o.if_primary_term >= 0: _os_qadd(q, "if_primary_term", conv.FormatInt(o.if_primary_term)) end
+    if o.version >= 0: _os_qadd(q, "version", conv.FormatInt(o.version)) end
+    if o.require_alias: _os_qadd(q, "require_alias", "true") end
 end

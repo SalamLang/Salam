@@ -115,7 +115,7 @@ func _head(st: _EsState*, node: _Node, method: str, path: str, ctype: str, blen:
         str.BufAppend(sb, "\r\n")
     end
     str.BufAppend(sb, st[0].extra_headers)
-    str.BufAppend(sb, "Connection: close\r\n\r\n")
+    str.BufAppend(sb, st[0].keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n")
     ret str.BufStr(sb)
 end
 
@@ -180,6 +180,32 @@ func _retryable(status: int): bool:
     ret status == 502 or status == 503 or status == 504
 end
 
+func _send_once(st: _EsState*, ni: int, node: _Node, method: str, head: str, body: str, blen: int): _WireResp:
+    if not st[0].keep_alive:
+        mut raw := httpx.SendRawTLS(node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node))
+        if raw.error.len() > 0:
+            e := str.Clone(raw.error)
+            httpx.FreeRaw(raw)
+            ret _WireResp { err = e }
+        end
+        out := _WireResp { status = raw.status, body = _raw_body(raw) }
+        httpx.FreeRaw(raw)
+        ret out
+    end
+    w := st[0].wires.get(ni) as _Wire*
+    repeat 2:
+        if not w[0].open:
+            e := _wire_connect(w, node, _tls_cfg(st, node), st[0].timeout_ms)
+            if e.len() > 0: ret _WireResp { err = e } end
+        end
+        resp := _wire_roundtrip(w, method, head, body, blen)
+        if resp.err.len() == 0: ret resp end
+        _wire_close(w)
+        if not resp.stale: ret resp end
+    end
+    ret _WireResp { err = "the connection was closed twice in a row" }
+end
+
 func _pick(st: _EsState*): int:
     n := st[0].nodes.len()
     now := time.MonoMillis()
@@ -220,22 +246,18 @@ func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
         ni := _pick(st)
         node := st[0].nodes.get(ni)
         head := _head(st, node, method, path, ctype, blen)
-        mut raw := httpx.SendRawTLS(
-            node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node)
-        )
+        mut sent := _send_once(st, ni, node, method, head, body, blen)
         mem.Free(head as void*)
-        if raw.error.len() > 0:
-            if str.StartsWith(raw.error, "could not connect") or str.StartsWith(raw.error, "TLS"):
+        if sent.err.len() > 0:
+            if str.StartsWith(sent.err, "could not connect") or str.StartsWith(sent.err, "TLS"):
                 st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
             end
-            last = Response { error = node.url + ": " + raw.error }
-            httpx.FreeRaw(raw)
+            last = Response { error = node.url + ": " + sent.err }
             continue
         end
         st[0].dead_until.set(ni, 0 as i64)
-        mut r := Response { status = raw.status, ok = raw.status >= 200 and raw.status < 300 }
-        r.body = _raw_body(raw)
-        httpx.FreeRaw(raw)
+        mut r := Response { status = sent.status, ok = sent.status >= 200 and sent.status < 300 }
+        r.body = sent.body
         _parse_error(r)
         if _retryable(r.status) and attempt + 1 < tries:
             last = r

@@ -1,0 +1,309 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import mem
+import str
+import tls
+import net.httpx
+import net.internal.rawsock
+
+const _WIRE_CHUNK := 65536
+
+struct _Wire:
+    pub fd: i64 = -1
+    pub secure: bool = false
+    pub tc: tls.Conn = tls.Conn {}
+    pub open: bool = false
+    pub buf: void* = null
+    pub len: i64 = 0
+    pub cap: i64 = 0
+    pub pos: i64 = 0
+    pub uses: int = 0
+end
+
+struct _WireResp:
+    pub status: int = 0
+    pub body: str = ""
+    pub err: str = ""
+    pub stale: bool = false
+end
+
+func _wire_new(): _Wire*:
+    w := mem.AllocateZeroed(sizeof(_Wire) as u64) as _Wire*
+    w[0] = _Wire {}
+    ret w
+end
+
+func _wire_close(w: _Wire*):
+    if w[0].open:
+        if w[0].secure:
+            tls.Close(w[0].tc)
+        else:
+            rawsock.Close(rawsock.FromFd(w[0].fd))
+        end
+    end
+    w[0].open = false
+    w[0].fd = -1
+    w[0].len = 0
+    w[0].pos = 0
+    w[0].uses = 0
+end
+
+func _wire_free(w: _Wire*):
+    _wire_close(w)
+    if w[0].buf != null: mem.Free(w[0].buf) end
+    mem.Free(w as void*)
+end
+
+func _wire_connect(w: _Wire*, node: _Node, cfg: tls.Config, timeout_ms: int): str:
+    _wire_close(w)
+    sock := rawsock.Connect(node.ep.host, node.ep.port)
+    if not rawsock.Ok(sock):
+        ret "could not connect to " + node.ep.host + ":" + str.FromInt(node.ep.port as i64)
+    end
+    if timeout_ms > 0: rawsock.SetTimeout(sock, timeout_ms) end
+    rawsock.SetNoDelay(sock, true)
+    w[0].fd = sock.fd
+    w[0].secure = node.ep.secure
+    if node.ep.secure:
+        w[0].tc = tls.WrapClient(sock.fd, cfg)
+        if not tls.ConnOk(w[0].tc):
+            e := tls.ConnError(w[0].tc)
+            tls.Close(w[0].tc)
+            w[0].fd = -1
+            ret "TLS: " + e
+        end
+    end
+    w[0].open = true
+    ret ""
+end
+
+func _wire_write(w: _Wire*, p: void*, n: int): bool:
+    if n <= 0: ret true end
+    mut sent := 0
+    if w[0].secure:
+        sent = tls.WriteBytes(w[0].tc, p, n)
+    else:
+        sent = rawsock.SendBytes(rawsock.FromFd(w[0].fd), p, n)
+    end
+    ret sent == n
+end
+
+func _wire_fill(w: _Wire*): bool:
+    if w[0].pos > 0:
+        rest := w[0].len - w[0].pos
+        if rest > 0:
+            mem.MemMove(w[0].buf, (w[0].buf as i64 + w[0].pos) as void*, rest as u64)
+        end
+        w[0].len = rest
+        w[0].pos = 0
+    end
+    if w[0].cap - w[0].len < 4096:
+        mut ncap := w[0].cap * 2
+        if ncap < _WIRE_CHUNK: ncap = _WIRE_CHUNK end
+        nb := mem.Allocate(ncap as u64)
+        if nb == null: ret false end
+        if w[0].len > 0: mem.Copy(nb, w[0].buf, w[0].len as u64) end
+        if w[0].buf != null: mem.Free(w[0].buf) end
+        w[0].buf = nb
+        w[0].cap = ncap
+    end
+    dst := (w[0].buf as i64 + w[0].len) as void*
+    room := (w[0].cap - w[0].len) as int
+    mut n := 0
+    if w[0].secure:
+        n = tls.ReadBytes(w[0].tc, dst, room)
+    else:
+        n = rawsock.RecvBytes(rawsock.FromFd(w[0].fd), dst, room)
+    end
+    if n <= 0: ret false end
+    w[0].len = w[0].len + (n as i64)
+    ret true
+end
+
+func _wire_byte(w: _Wire*, i: i64): int:
+    p := (w[0].buf as i64 + w[0].pos + i) as u8*
+    ret p[0] as int
+end
+
+func _wire_avail(w: _Wire*): i64:
+    ret w[0].len - w[0].pos
+end
+
+func _wire_need(w: _Wire*, n: i64): bool:
+    until _wire_avail(w) < n:
+        if not _wire_fill(w): ret false end
+    end
+    ret true
+end
+
+func _wire_take(w: _Wire*, n: i64): str:
+    out := mem.Allocate((n + 1) as u64)
+    if n > 0: mem.Copy(out, (w[0].buf as i64 + w[0].pos) as void*, n as u64) end
+    op := out as u8*
+    op[n] = 0 as u8
+    w[0].pos = w[0].pos + n
+    ret out as str
+end
+
+func _wire_find(w: _Wire*, from: i64, double: bool): i64:
+    avail := _wire_avail(w)
+    mut i := from
+    span := double ? 4 : 2
+    until i + span <= avail:
+        if _wire_byte(w, i) == 13 and _wire_byte(w, i + 1) == 10:
+            if not double: ret i end
+            if _wire_byte(w, i + 2) == 13 and _wire_byte(w, i + 3) == 10: ret i end
+        end
+        i += 1
+    end
+    ret -1
+end
+
+func _wire_line(w: _Wire*, line &: str): bool:
+    mut scanned := 0 as i64
+    until true:
+        at := _wire_find(w, scanned, false)
+        if at >= 0:
+            line = _wire_take(w, at)
+            w[0].pos = w[0].pos + 2
+            ret true
+        end
+        scanned = _wire_avail(w) > 1 ? _wire_avail(w) - 1 : 0
+        if not _wire_fill(w): ret false end
+    end
+end
+
+func _hex_value(s: str): i64:
+    mut v := 0 as i64
+    mut seen := false
+    repeat s.len() in i:
+        c := s[i] as int
+        mut d := -1
+        switch true:
+            c >= 48 and c <= 57:
+                d = c - 48
+                break
+            end
+            c >= 97 and c <= 102:
+                d = c - 87
+                break
+            end
+            c >= 65 and c <= 70:
+                d = c - 55
+            end
+        end
+        if d < 0:
+            if seen: ret v end
+            if c == 32: continue end
+            ret -1
+        end
+        v = v * 16 + (d as i64)
+        seen = true
+    end
+    ret seen ? v : -1
+end
+
+func _wire_chunked(w: _Wire*, body &: str): bool:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until true:
+        mut line := ""
+        if not _wire_line(w, line): ret false end
+        size := _hex_value(line)
+        mem.Free(line as void*)
+        if size < 0: ret false end
+        if size == 0:
+            until true:
+                mut trailer := ""
+                if not _wire_line(w, trailer): ret false end
+                empty := trailer.len() == 0
+                mem.Free(trailer as void*)
+                if empty: break end
+            end
+            body = str.BufStr(sb)
+            ret true
+        end
+        if not _wire_need(w, size + 2): ret false end
+        part := _wire_take(w, size)
+        str.BufAppend(sb, part)
+        mem.Free(part as void*)
+        w[0].pos = w[0].pos + 2
+    end
+end
+
+func _wire_roundtrip(w: _Wire*, method: str, head: str, body: str, blen: int): _WireResp:
+    reused := w[0].uses > 0
+    if not _wire_write(w, head as void*, str.ByteLen(head)) or not _wire_write(w, body as void*, blen):
+        ret _WireResp { err = "could not send the request", stale = reused }
+    end
+    mut head_end := -1 as i64
+    until head_end < 0:
+        head_end = _wire_find(w, 0, true)
+        if head_end >= 0: break end
+        if not _wire_fill(w):
+            if _wire_avail(w) == 0:
+                ret _WireResp { err = "the server closed the connection", stale = reused }
+            end
+            ret _WireResp { err = "the response head never ended" }
+        end
+    end
+    rhead := _wire_take(w, head_end + 4)
+    defer mem.Free(rhead as void*)
+    sp := rhead.find(" ")
+    status := sp >= 0 ? rhead.substr(sp + 1, 3).to_int() : 0
+    te := httpx.HeaderValue(rhead, "Transfer-Encoding").lower()
+    cl := httpx.HeaderValue(rhead, "Content-Length")
+    connection := httpx.HeaderValue(rhead, "Connection").lower()
+    mut close_after := connection == "close" or (str.StartsWith(rhead, "HTTP/1.0") and connection != "keep-alive")
+    mut out := _WireResp { status = status }
+    no_body := method == "HEAD" or status == 204 or status == 304 or (status >= 100 and status < 200)
+    switch true:
+        no_body:
+            out.body = str.Clone("")
+            break
+        end
+        str.Contains(te, "chunked"):
+            mut text := ""
+            if not _wire_chunked(w, text):
+                _wire_close(w)
+                ret _WireResp { err = "the chunked response body could not be decoded" }
+            end
+            out.body = text
+            break
+        end
+        cl.len() > 0:
+            n := cl.to_int() as i64
+            if not _wire_need(w, n):
+                _wire_close(w)
+                ret _WireResp { err = "the response body ended early" }
+            end
+            out.body = _wire_take(w, n)
+            break
+        end
+        else:
+            mut more := true
+            until more:
+                more = _wire_fill(w)
+            end
+            out.body = _wire_take(w, _wire_avail(w))
+            close_after = true
+        end
+    end
+    w[0].uses = w[0].uses + 1
+    if close_after: _wire_close(w) end
+    ret out
+end

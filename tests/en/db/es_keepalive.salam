@@ -1,0 +1,187 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import sync
+import net.tcp
+import db.elasticsearch
+
+const PORT := 19848
+const DROP_AFTER := 4
+
+mut wg := sync.NewWaitGroup()
+mut connections := 0
+mut requests := 0
+mut last_conn_header := ""
+
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+func read_request(c: tcp.Conn, head &: str, body &: str): bool:
+    mut buf := ""
+    mut head_end := -1
+    mut want := 0
+    until true:
+        if head_end < 0:
+            at := buf.find("\r\n\r\n")
+            if at >= 0:
+                head_end = at + 4
+                head = buf.substr(0, head_end)
+                cl := hdr_get(head, "Content-Length")
+                if cl.len() > 0: want = cl.to_int() end
+            end
+        end
+        if head_end >= 0 and str.ByteLen(buf) - head_end >= want: break end
+        chunk := tcp.Read(c, 65536)
+        if chunk.len() == 0: break end
+        buf = buf + chunk
+    end
+    if head_end < 0: ret false end
+    body = str.ByteSub(buf, head_end, str.ByteLen(buf) - head_end)
+    ret true
+end
+
+func send_json(c: tcp.Conn, status: str, body: str):
+    tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + str.FromInt(str.ByteLen(body) as i64) + "\r\n\r\n" + body)
+end
+
+func send_chunked(c: tcp.Conn, body: str):
+    n := str.ByteLen(body)
+    tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n")
+    tcp.Write(c, "5;ext=1\r\n" + str.ByteSub(body, 0, 5) + "\r\n")
+    tcp.Write(c, "a\r\n" + str.ByteSub(body, 5, 10) + "\r\n")
+    rest := n - 15
+    tcp.Write(c, "0" + elasticsearch_hex(rest) + "\r\n" + str.ByteSub(body, 15, rest) + "\r\n0\r\nX-Trailer: yes\r\n\r\n")
+end
+
+func elasticsearch_hex(n: int): str:
+    digits := "0123456789ABCDEF"
+    if n == 0: ret "0" end
+    mut out := ""
+    mut v := n
+    until v > 0:
+        out = digits.substr(v % 16, 1) + out
+        v = v / 16
+    end
+    ret out
+end
+
+func answer(c: tcp.Conn, method: str, target: str): bool:
+    switch true:
+        target == "/__quit":
+            send_json(c, "200 OK", "{}")
+            ret false
+        end
+        method == "HEAD" and target == "/":
+            tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 543\r\n\r\n")
+            break
+        end
+        method == "HEAD":
+            tcp.Write(c, "HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n")
+            break
+        end
+        target == "/_cluster/health":
+            send_chunked(c, `{"cluster_name":"keep","status":"green","number_of_nodes":1}`)
+            break
+        end
+        target == "/close-me":
+            tcp.Write(c, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}")
+            break
+        end
+        target == "/no-length":
+            tcp.Write(c, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"unframed\":true}")
+            break
+        end
+        else:
+            send_json(c, "200 OK", `{"count":` + str.FromInt(requests as i64) + `}`)
+        end
+    end
+    ret true
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    if not tcp.Ok(srv): ret end
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): running = false
+        else:
+            connections += 1
+            mut served := 0
+            mut alive := true
+            until alive and running:
+                mut head := ""
+                mut body := ""
+                if not read_request(c, head, body):
+                    alive = false
+                else:
+                    requests += 1
+                    served += 1
+                    line := head.substr(0, head.find("\r\n")).split(" ")
+                    last_conn_header = hdr_get(head, "Connection")
+                    target := line.get(1)
+                    running = answer(c, line.get(0), target)
+                    if target == "/close-me" or target == "/no-length": alive = false end
+                    if served == DROP_AFTER: alive = false end
+                end
+            end
+            tcp.Close(c)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    println "ping:", elasticsearch.Ping(c), "header:", last_conn_header
+    println "missing:", elasticsearch.Exists(c, "i", "x")
+    h := elasticsearch.ClusterHealth(c)
+    println "chunked health:", h.ok, h.status, h.nodes
+    println "count:", elasticsearch.Count(c, "i", "")
+    println "connections after 4 requests:", connections, "requests:", requests
+    println "count after silent drop:", elasticsearch.Count(c, "i", "")
+    println "connections:", connections, "requests:", requests
+    r := elasticsearch.Perform(c, "GET", "/close-me", "")
+    println "close-me:", r.ok, r.body
+    u := elasticsearch.Perform(c, "GET", "/no-length", "")
+    println "no-length:", u.ok, u.body
+    println "after close:", elasticsearch.Count(c, "i", "")
+    println "connections:", connections, "requests:", requests
+    repeat 20:
+        elasticsearch.Count(c, "i", "")
+    end
+    println "after 20 more:", connections, requests
+    elasticsearch.Perform(c, "GET", "/__quit", "")
+    join(t)
+    elasticsearch.Close(c)
+
+    mut cfg := elasticsearch.Config { keep_alive = false }
+    cfg.nodes.push("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    mut plain := elasticsearch.NewClient(cfg)
+    println "keep_alive off:", elasticsearch.Ping(plain), elasticsearch.Error(plain).len() > 0
+    elasticsearch.Close(plain)
+end

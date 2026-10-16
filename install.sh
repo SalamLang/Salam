@@ -1341,13 +1341,13 @@ PATH_CHANGED=0
 PATH_RC=""
 PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
 
-if [ "$MODIFY_PATH" != 1 ]; then
+if on_path "$INSTALL_DIR"; then
+    step "Checking your PATH"
+    info "$INSTALL_DIR is already on it"
+elif [ "$MODIFY_PATH" != 1 ]; then
     step "Leaving your PATH alone"
     info "--no-modify-path was given"
     info "run salam as $INSTALL_DIR/salam, or add that directory to PATH yourself"
-elif on_path "$INSTALL_DIR"; then
-    step "Checking your PATH"
-    info "$INSTALL_DIR is already on it"
 elif [ "$INSTALL_DIR" != "$DEFAULT_DIR" ]; then
     step "Leaving your PATH alone"
     info "PATH is only updated for the default directory, $DEFAULT_DIR"

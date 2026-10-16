@@ -1,0 +1,116 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "_fake.salam"
+
+const PORT := 19804
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func show(label: str, t: meilisearch.TaskInfo, err: meilisearch.Error):
+    println label + ": " + fake.Last()
+    println "  -> task " + t.task_uid + " " + t.kind
+    if not meilisearch.Ok(err):
+        println "  error: " + meilisearch.ErrorString(err)
+    end
+end
+
+func main:
+    queued := `{"taskUid":20,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate","enqueuedAt":"2025-01-02T03:04:05Z"}`
+    fake.On("POST", "/indexes/movies/documents", 202, queued)
+    fake.On("PUT", "/indexes/movies/documents", 202, queued)
+    fake.On("GET", "/indexes/movies/documents/42", 200, `{"id":42,"title":"Heat \"1995\"","year":1995,"tags":["crime","drama"]}`)
+    fake.On("GET", "/indexes/movies/documents/bad", 200, `{"id":"not a number"}`)
+    fake.On("POST", "/indexes/movies/documents/fetch", 200, `{"results":[{"id":1,"title":"Up","year":2009},{"id":2,"title":"Heat, again","year":1995,"nested":{"a":[1,2,{"b":"]"}]}}],"offset":0,"limit":2,"total":19654}`)
+    fake.On("DELETE", "/indexes/movies/documents/42", 202, `{"taskUid":21,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    fake.On("POST", "/indexes/movies/documents/delete-batch", 202, `{"taskUid":22,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    fake.On("POST", "/indexes/movies/documents/delete", 202, `{"taskUid":23,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    fake.On("DELETE", "/indexes/movies/documents", 202, `{"taskUid":24,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    fake.On("POST", "/indexes/movies/documents/edit", 202, `{"taskUid":25,"indexUid":"movies","status":"enqueued","type":"documentEdition"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    show("add", meilisearch.AddDocuments(c, "movies", `[{"id":1,"title":"Up"}]`, "id", err), err)
+    show("update", meilisearch.UpdateDocuments(c, "movies", `[{"id":1,"year":2009}]`, "", err), err)
+    show("ndjson", meilisearch.AddDocumentsNdjson(c, "movies", "{\"id\":1}\n{\"id\":2}\n", "id", err), err)
+    show("ndjson update", meilisearch.UpdateDocumentsNdjson(c, "movies", "{\"id\":2}\n", "", err), err)
+    show("csv", meilisearch.AddDocumentsCsv(c, "movies", "id,title\n1,Up\n", "id", ";", err), err)
+    show("csv update", meilisearch.UpdateDocumentsCsv(c, "movies", "id,title\n1,Up\n", "", "", err), err)
+
+    mut many := Vector {} as Vector<str>
+    repeat 5 in i:
+        many.push(`{"id":` + i + `}`)
+    end
+    infos := meilisearch.AddDocumentsInBatches(c, "movies", many, 2, "id", err)
+    println "batches: " + infos.len() + " last: " + fake.Last()
+
+    mut typed := Vector {} as Vector<Movie>
+    typed.push(Movie { id = 7, title = "Alien", year = 1979 })
+    typed.push(Movie { id = 8, title = "Aliens", year = 1986 })
+    show("typed", meilisearch.AddDocumentsOf(c, "movies", typed, "id", err), err)
+
+    mut fields := Vector {} as Vector<str>
+    println "doc: " + meilisearch.GetDocument(c, "movies", "42", fields, err)
+    fields.push("title")
+    fields.push("year")
+    meilisearch.GetDocument(c, "movies", "42", fields, err)
+    println fake.Last()
+
+    mut m := Movie {}
+    println "as: " + meilisearch.GetDocumentAs(c, "movies", "42", m, err) + " " + m.id + " " + m.title + " " + m.year
+    mut b := Movie {}
+    println "bad: " + meilisearch.GetDocumentAs(c, "movies", "bad", b, err) + " " + err.code
+    mut g := Movie {}
+    println "missing: " + meilisearch.GetDocumentAs(c, "movies", "nope", g, err) + " " + err.code
+
+    mut q := meilisearch.DocumentsQuery { limit = 2, filter = "year > 1990 AND title = 'Up'", retrieve_vectors = true }
+    q.fields.push("id")
+    q.fields.push("title")
+    q.sort.push("year:desc")
+    page := meilisearch.GetDocuments(c, "movies", q, err)
+    println fake.Last()
+    println "page: offset=" + page.offset + " limit=" + page.limit + " total=" + page.total + " n=" + page.results.len()
+    each r in page.results:
+        println "  " + r
+    end
+    mut movies := Vector {} as Vector<Movie>
+    println "decoded: " + meilisearch.DocumentsAs(page, movies, err) + " " + movies.len() + " " + movies.get(1).title
+
+    mut q2 := meilisearch.DocumentsQuery { offset = 10, filter = `[["year = 1995", "year = 2009"], "title EXISTS"]` }
+    q2.ids.push("1")
+    q2.ids.push("2")
+    meilisearch.GetDocuments(c, "movies", q2, err)
+    println fake.Last()
+
+    show("delete one", meilisearch.DeleteDocument(c, "movies", "42", err), err)
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    ids.push("x\"y")
+    show("delete batch", meilisearch.DeleteDocuments(c, "movies", ids, err), err)
+    show("delete filter", meilisearch.DeleteDocumentsByFilter(c, "movies", "year < 1950", err), err)
+    show("delete all", meilisearch.DeleteAllDocuments(c, "movies", err), err)
+    show("edit", meilisearch.UpdateDocumentsByFunction(c, "movies", "doc.title = doc.title.to_upper()", "id > 3", `{"x":1}`, err), err)
+    show("edit plain", meilisearch.UpdateDocumentsByFunction(c, "movies", "doc.n += 1", "", "", err), err)
+    ret 0
+end

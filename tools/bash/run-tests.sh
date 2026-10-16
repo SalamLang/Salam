@@ -787,6 +787,22 @@ if want db; then
                     fi
                     continue
                     ;;
+                eslive_*)
+                    if [ -z "${SALAM_TEST_ES:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_ES to an Elasticsearch URL)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                meililive_*)
+                    if [ -z "${SALAM_TEST_MEILI:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MEILI to \"url master-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done

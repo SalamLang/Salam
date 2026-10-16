@@ -19,6 +19,8 @@ import encoding.json
 import encoding.value
 import encoding.encerr
 import str
+import sync
+import time
 
 const CALL_MS := 20000
 const SEND_MS := 60000
@@ -29,6 +31,10 @@ mut ENGINE_BASE := ""
 mut ENGINE_AUTH := ""
 mut ENGINE_AGENT := ""
 mut DESKTOP_AGENT := ""
+mut LOCK := sync.Mutex {}
+mut AGENTS := ""
+mut AGENTS_AT := 0 as i64
+mut SESSION_AGENT := HashMap {} as HashMap<str, str>
 
 struct Answer:
     pub status: int = 0
@@ -41,6 +47,8 @@ pub struct Reply:
     pub done: bool = false
     pub failed: bool = false
     pub activity: str = "[]"
+    pub started: bool = false
+    pub idle: bool = false
 end
 
 pub struct Usage:
@@ -211,12 +219,49 @@ func flag(v: value.Value, key: str): bool:
     ret value.IsBool(f) and value.AsBool(f)
 end
 
+func agent_exists(name: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    mut names := AGENTS
+    stale := now - AGENTS_AT > 300000
+    _u := sync.Unlock(LOCK)
+    if stale or names.len() == 0:
+        r := call("GET", "/agent", "", CALL_MS)
+        if not ok_status(r):
+            ret true
+        end
+        mut found := Vector {} as Vector<str>
+        mut err := encerr.EncodingError {}
+        list := json.Decode(r.body, err)
+        if value.IsArray(list):
+            repeat value.ArrayLen(list) in i:
+                found.push(text_of(value.ArrayGet(list, i), "name"))
+            end
+        end
+        value.ValueFree(list)
+        names = "\n" + str.Join(found, "\n") + "\n"
+        _a := sync.Lock(LOCK)
+        AGENTS = names
+        AGENTS_AT = now
+        _b := sync.Unlock(LOCK)
+    end
+    ret names.find("\n" + name + "\n") >= 0
+end
+
 func send_as(sid: str, agent: str, text: str): bool:
+    _l := sync.Lock(LOCK)
+    SESSION_AGENT.put(sid, agent)
+    if SESSION_AGENT.size() > 5000:
+        SESSION_AGENT = HashMap {} as HashMap<str, str>
+        SESSION_AGENT.put(sid, agent)
+    end
+    _u := sync.Unlock(LOCK)
     body := `{"agent": ` + json.Str(agent) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
     ret ok_status(call("POST", "/session/" + sid + "/prompt_async", body, SEND_MS))
 end
 
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
+    LOCK = sync.NewMutex()
     mut rest := str.TrimPrefix(url, "http://")
     slash := rest.find("/")
     if slash >= 0:
@@ -249,7 +294,18 @@ pub func Send(sid: str, text: str): bool:
 end
 
 pub func SendDesktop(sid: str, text: str): bool:
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
+        ret send_as(sid, ENGINE_AGENT, text)
+    end
     ret send_as(sid, DESKTOP_AGENT, text)
+end
+
+pub func Followup(sid: str, text: str): bool:
+    _l := sync.Lock(LOCK)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    _u := sync.Unlock(LOCK)
+    ret send_as(sid, agent, text)
 end
 
 pub func Abort(sid: str):
@@ -363,6 +419,7 @@ pub func Poll(sid: str): Reply:
         m := value.ArrayGet(list, k)
         info := field(m, "info")
         if text_of(info, "role") == "assistant":
+            out.started = true
             if not value.IsNull(field(info, "error")):
                 errored = true
             end
@@ -397,6 +454,7 @@ pub func Poll(sid: str): Reply:
         out.done = true
         ret out
     end
+    out.idle = not busy
     out.done = not busy and last_done and last_finish != "tool-calls"
     if searching:
         out.phase = "searching"

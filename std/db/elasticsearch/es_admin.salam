@@ -1,0 +1,334 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import str
+import encoding.json
+
+@en "AsyncSearch"
+@fa "جستجوی ناهمگام"
+pub struct AsyncSearch:
+    pub ok: bool = false
+    pub id: str = ""
+    pub running: bool = false
+    pub partial: bool = false
+    pub result: SearchResult = SearchResult {}
+    pub error: str = ""
+end
+
+@en "Task"
+@fa "کار"
+pub struct Task:
+    pub ok: bool = false
+    pub id: str = ""
+    pub completed: bool = false
+    pub action: str = ""
+    pub response: str = ""
+    pub raw: str = ""
+end
+
+func _raw_or_empty(r: Response): str:
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+func _task_id(r: Response): str:
+    if not r.ok: ret str.Clone("") end
+    ret json.Get(r.body, "task")
+end
+
+func _async_of(r: Response): AsyncSearch:
+    if not r.ok: ret AsyncSearch { error = r.error } end
+    body := r.body
+    mut res := ParseSearchResult(json.Get(body, "response"))
+    res.status = r.status
+    ret AsyncSearch {
+        ok = true,
+        id = json.Get(body, "id"),
+        running = json.Get(body, "is_running") == "true" or json.Get(body, "state") == "RUNNING",
+        partial = json.Get(body, "is_partial") == "true",
+        result = res
+    }
+end
+
+func _async_path(c: Client, id: str): str:
+    if _opensearch(c): ret "/_plugins/_asynchronous_search/" + _seg(id) end
+    ret "/_async_search/" + _seg(id)
+end
+
+func _policy_path(c: Client, name: str): str:
+    if _opensearch(c): ret "/_plugins/_ism/policies/" + _seg(name) end
+    ret "/_ilm/policy/" + _seg(name)
+end
+
+func _wait_false(path: str): str:
+    if path.find("?") >= 0: ret path + "&wait_for_completion=false" end
+    ret path + "?wait_for_completion=false"
+end
+
+@en "PutPipeline"
+@fa "تنظیم خط لوله"
+pub func PutPipeline(c: Client, id: str, body: str): bool:
+    ret Perform(c, "PUT", "/_ingest/pipeline/" + _seg(id), body).ok
+end
+
+@en "GetPipeline"
+@fa "دریافت خط لوله"
+pub func GetPipeline(c: Client, id: str): str:
+    ret _raw_or_empty(Perform(c, "GET", "/_ingest/pipeline/" + _seg(id), ""))
+end
+
+@en "DeletePipeline"
+@fa "حذف خط لوله"
+pub func DeletePipeline(c: Client, id: str): bool:
+    ret Perform(c, "DELETE", "/_ingest/pipeline/" + _seg(id), "").ok
+end
+
+@en "SimulatePipeline"
+@fa "شبیه‌سازی خط لوله"
+pub func SimulatePipeline(c: Client, id: str, body: str): str:
+    mut path := "/_ingest/pipeline/_simulate"
+    if id.len() > 0: path = "/_ingest/pipeline/" + _seg(id) + "/_simulate" end
+    ret _raw_or_empty(Perform(c, "POST", path, body))
+end
+
+@en "CreateDataStream"
+@fa "ایجاد جریان داده"
+pub func CreateDataStream(c: Client, name: str): bool:
+    ret Perform(c, "PUT", "/_data_stream/" + _seg(name), "").ok
+end
+
+@en "GetDataStream"
+@fa "دریافت جریان داده"
+pub func GetDataStream(c: Client, name: str): str:
+    ret _raw_or_empty(Perform(c, "GET", "/_data_stream/" + _idx(name), ""))
+end
+
+@en "DeleteDataStream"
+@fa "حذف جریان داده"
+pub func DeleteDataStream(c: Client, name: str): bool:
+    ret Perform(c, "DELETE", "/_data_stream/" + _idx(name), "").ok
+end
+
+@en "Rollover"
+@fa "چرخش نمایه"
+pub func Rollover(c: Client, target: str, body: str): bool:
+    ret Perform(c, "POST", "/" + _idx(target) + "/_rollover", body).ok
+end
+
+@en "PutLifecyclePolicy"
+@fa "تنظیم سیاست چرخه عمر"
+pub func PutLifecyclePolicy(c: Client, name: str, body: str): bool:
+    ret Perform(c, "PUT", _policy_path(c, name), body).ok
+end
+
+@en "GetLifecyclePolicy"
+@fa "دریافت سیاست چرخه عمر"
+pub func GetLifecyclePolicy(c: Client, name: str): str:
+    ret _raw_or_empty(Perform(c, "GET", _policy_path(c, name), ""))
+end
+
+@en "DeleteLifecyclePolicy"
+@fa "حذف سیاست چرخه عمر"
+pub func DeleteLifecyclePolicy(c: Client, name: str): bool:
+    ret Perform(c, "DELETE", _policy_path(c, name), "").ok
+end
+
+@en "PutRepository"
+@fa "تنظیم مخزن پشتیبان"
+pub func PutRepository(c: Client, name: str, body: str): bool:
+    ret Perform(c, "PUT", "/_snapshot/" + _seg(name), body).ok
+end
+
+@en "DeleteRepository"
+@fa "حذف مخزن پشتیبان"
+pub func DeleteRepository(c: Client, name: str): bool:
+    ret Perform(c, "DELETE", "/_snapshot/" + _seg(name), "").ok
+end
+
+@en "CreateSnapshot"
+@fa "ایجاد پشتیبان"
+pub func CreateSnapshot(c: Client, repository: str, snapshot: str, body: str): bool:
+    path := "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot) + "?wait_for_completion=true"
+    ret Perform(c, "PUT", path, body).ok
+end
+
+@en "RestoreSnapshot"
+@fa "بازیابی پشتیبان"
+pub func RestoreSnapshot(c: Client, repository: str, snapshot: str, body: str): bool:
+    path := "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot) + "/_restore?wait_for_completion=true"
+    ret Perform(c, "POST", path, body).ok
+end
+
+@en "DeleteSnapshot"
+@fa "حذف پشتیبان"
+pub func DeleteSnapshot(c: Client, repository: str, snapshot: str): bool:
+    ret Perform(c, "DELETE", "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot), "").ok
+end
+
+@en "ListSnapshots"
+@fa "فهرست پشتیبان‌ها"
+pub func ListSnapshots(c: Client, repository: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    r := Perform(c, "GET", "/_snapshot/" + _seg(repository) + "/_all", "")
+    if not r.ok: ret out end
+    each raw in json.Items(json.Get(r.body, "snapshots")):
+        out.push(json.Get(raw, "snapshot"))
+    end
+    ret out
+end
+
+@en "GetClusterSettings"
+@fa "دریافت تنظیمات خوشه"
+pub func GetClusterSettings(c: Client): str:
+    ret _raw_or_empty(Perform(c, "GET", "/_cluster/settings?flat_settings=true", ""))
+end
+
+@en "PutClusterSettings"
+@fa "تنظیم تنظیمات خوشه"
+pub func PutClusterSettings(c: Client, body: str): bool:
+    ret Perform(c, "PUT", "/_cluster/settings", body).ok
+end
+
+@en "GetTask"
+@fa "دریافت کار"
+pub func GetTask(c: Client, id: str): Task:
+    r := Perform(c, "GET", "/_tasks/" + _seg(id), "")
+    if not r.ok: ret Task { id = str.Clone(id) } end
+    ret Task {
+        ok = true,
+        id = str.Clone(id),
+        completed = json.Get(r.body, "completed") == "true",
+        action = json.GetPath(r.body, "task.action"),
+        response = json.Get(r.body, "response"),
+        raw = r.body
+    }
+end
+
+@en "CancelTask"
+@fa "لغو کار"
+pub func CancelTask(c: Client, id: str): bool:
+    r := Perform(c, "POST", "/_tasks/" + _seg(id) + "/_cancel", "")
+    ret r.ok and not json.Has(r.body, "node_failures") and not json.Has(r.body, "task_failures")
+end
+
+@en "StartReindex"
+@fa "شروع نمایه‌سازی دوباره"
+pub func StartReindex(c: Client, body: str): str:
+    ret _task_id(Perform(c, "POST", "/_reindex?wait_for_completion=false", body))
+end
+
+@en "StartDeleteByQuery"
+@fa "شروع حذف با پرسمان"
+pub func StartDeleteByQuery(c: Client, index: str, query: str): str:
+    path := _wait_false(_by_query_path(index, "_delete_by_query", Options {}))
+    ret _task_id(Perform(c, "POST", path, _by_query_body(query, "")))
+end
+
+@en "StartUpdateByQuery"
+@fa "شروع به‌روزرسانی با پرسمان"
+pub func StartUpdateByQuery(c: Client, index: str, query: str, script: str): str:
+    path := _wait_false(_by_query_path(index, "_update_by_query", Options {}))
+    ret _task_id(Perform(c, "POST", path, _by_query_body(query, script)))
+end
+
+@en "PutStoredScript"
+@fa "تنظیم اسکریپت ذخیره"
+pub func PutStoredScript(c: Client, id: str, lang: str, source: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("lang", lang))
+    if lang == "mustache" and str.StartsWith(str.Trim(source), "{"):
+        m.push(json.MemberRaw("source", source))
+    else:
+        m.push(json.Member("source", source))
+    end
+    ret Perform(c, "PUT", "/_scripts/" + _seg(id), _one("script", json.Object(m))).ok
+end
+
+@en "DeleteStoredScript"
+@fa "حذف اسکریپت ذخیره"
+pub func DeleteStoredScript(c: Client, id: str): bool:
+    ret Perform(c, "DELETE", "/_scripts/" + _seg(id), "").ok
+end
+
+@en "SearchTemplate"
+@fa "جستجو با الگو"
+pub func SearchTemplate(c: Client, index: str, id: str, params: str): SearchResult:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.MemberRaw("params", params.len() > 0 ? params : "{}"))
+    ret _search_result(Perform(c, "POST", _search_path(index, "_search/template"), json.Object(m)))
+end
+
+@en "SubmitAsyncSearch"
+@fa "ارسال جستجوی ناهمگام"
+pub func SubmitAsyncSearch(c: Client, index: str, req: SearchRequest, wait: str): AsyncSearch:
+    mut path := _search_path(index, "_async_search") + "?keep_on_completion=true"
+    if _opensearch(c):
+        path = "/_plugins/_asynchronous_search?keep_on_completion=true"
+        if index.len() > 0: path = path + "&index=" + _idx(index) end
+    end
+    if wait.len() > 0: path = path + "&wait_for_completion_timeout=" + _seg(wait) end
+    ret _async_of(Perform(c, "POST", path, SearchBody(req)))
+end
+
+@en "GetAsyncSearch"
+@fa "دریافت جستجوی ناهمگام"
+pub func GetAsyncSearch(c: Client, id: str, wait: str): AsyncSearch:
+    mut path := _async_path(c, id)
+    if wait.len() > 0: path = path + "?wait_for_completion_timeout=" + _seg(wait) end
+    ret _async_of(Perform(c, "GET", path, ""))
+end
+
+@en "DeleteAsyncSearch"
+@fa "حذف جستجوی ناهمگام"
+pub func DeleteAsyncSearch(c: Client, id: str): bool:
+    ret Perform(c, "DELETE", _async_path(c, id), "").ok
+end
+
+@en "Explain"
+@fa "توضیح امتیاز"
+pub func Explain(c: Client, index: str, id: str, query: str): str:
+    ret _raw_or_empty(Perform(c, "POST", "/" + _idx(index) + "/_explain/" + _seg(id), _one("query", query)))
+end
+
+@en "ValidateQuery"
+@fa "اعتبارسنجی پرسمان"
+pub func ValidateQuery(c: Client, index: str, query: str): bool:
+    r := Perform(c, "POST", _search_path(index, "_validate/query"), _one("query", query))
+    ret r.ok and json.Get(r.body, "valid") == "true"
+end
+
+@en "FieldCaps"
+@fa "توانایی فیلدها"
+pub func FieldCaps(c: Client, index: str, fields: Vector<str>): str:
+    mut list := str.Join(fields, ",")
+    if list.len() == 0: list = str.Clone("*") end
+    ret _raw_or_empty(Perform(c, "GET", _search_path(index, "_field_caps") + "?fields=" + _idx(list), ""))
+end
+
+@en "TermVectors"
+@fa "بردارهای واژه"
+pub func TermVectors(c: Client, index: str, id: str, fields: Vector<str>): str:
+    mut path := "/" + _idx(index) + "/_termvectors/" + _seg(id)
+    if fields.len() > 0: path = path + "?fields=" + _idx(str.Join(fields, ",")) end
+    ret _raw_or_empty(Perform(c, "GET", path, ""))
+end
+
+@en "IndexStats"
+@fa "آمار نمایه"
+pub func IndexStats(c: Client, index: str): str:
+    ret _raw_or_empty(Perform(c, "GET", _search_path(index, "_stats"), ""))
+end

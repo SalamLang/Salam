@@ -12,9 +12,12 @@ type Props = {
   note?: string;
 };
 
+const RTL_FIRST = /^[^A-Za-z\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]*[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/;
+
 export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note }: Props) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+  const hint = placeholder || "پرسش خود را درباره‌ی زبان سلام بنویسید…";
 
   useEffect(() => {
     const el = ref.current;
@@ -53,11 +56,11 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
       >
         <textarea
           ref={ref}
-          dir="auto"
+          dir={text ? "auto" : RTL_FIRST.test(hint) ? "rtl" : "ltr"}
           rows={1}
           value={text}
           maxLength={12000}
-          placeholder={placeholder || "پرسش خود را درباره‌ی زبان سلام بنویسید…"}
+          placeholder={hint}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
           aria-label="پیام"

@@ -14,6 +14,7 @@ COPY --from=build /opt/salam-linux-x86_64/salam /srv/salam/salam
 COPY --from=build /opt/salam-linux-x86_64/std /srv/salam/std
 COPY --from=build /out/salam-mcp /usr/local/bin/salam-mcp
 COPY docs/ai /srv/salam/docs/ai
+COPY SKILL.md /srv/salam/SKILL.md
 COPY compiler/langpack.salam /srv/salam/compiler/langpack.salam
 COPY tests /srv/salam/tests
 USER salam

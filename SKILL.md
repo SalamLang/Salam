@@ -1610,7 +1610,7 @@ with external linkage, and it is never dropped as dead code:
 
 ```salam
 export:
-    func on_ready(ctx: void*): int:     // C sees `int on_ready(void* ctx)`
+    func on_ready(_ctx: void*): int:    // C sees `int on_ready(void* _ctx)`; `_` because C fixes the signature
         ret 0
     end
 end

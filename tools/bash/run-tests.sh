@@ -779,6 +779,14 @@ if want db; then
                     fi
                     continue
                     ;;
+                eslive_secure*)
+                    if [ -z "${SALAM_TEST_ES_SECURE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_ES_SECURE to \"url user password ca_file\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 eslive_*)
                     if [ -z "${SALAM_TEST_ES:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_ES to an Elasticsearch URL)" "db/$lang/$name"

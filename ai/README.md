@@ -129,3 +129,13 @@ bun run build
 ```
 
 `PUBLIC_API_URL` points the app at another API, for example `PUBLIC_API_URL=http://localhost:8080 bun run dev`.
+
+Code in answers is highlighted with [Shiki](https://shiki.style) using the
+same TextMate grammar as the VS Code extension,
+`extensions/vscode/syntaxes/salam.tmLanguage.json`, which
+`extensions/tools/gen_syntaxes.salam` generates from the compiler's keyword
+tables. The build imports it through the `@salam/grammar` alias, so it needs
+the whole repository, not only `ai/frontend`. Shiki and the grammars load in
+the background after the page; until then a small built-in highlighter
+colours the code, and other languages (shell, Python, JSON and so on) load
+only when an answer uses them.

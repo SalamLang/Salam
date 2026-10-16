@@ -1,0 +1,62 @@
+lesson.part = Libraries
+lesson.title = Search with OpenSearch
+lesson.summary = Connect to OpenSearch, store documents, build queries, read hits and aggregations, page through results, and use SQL and vector search
+lesson.seo_title = Full text search with OpenSearch in Salam | Lesson 25 of the Salam course
+lesson.description = A hands-on tutorial for the db.opensearch package of the Salam programming language: connecting to an OpenSearch cluster, creating an index with a mapping, indexing documents one by one and in bulk, building queries, reading hits, highlights and aggregations, paging with point in time, SQL and PPL, vector search and error handling, with runnable examples.
+lesson.lead = OpenSearch is a search engine: you give it documents as JSON, and it finds the ones that match a query, ranks them, and counts them by any field you like. This lesson builds a small book search with the <code>db.opensearch</code> package, one step at a time.
+lesson.body <<
+<h2 id="setup">A server to talk to</h2>
+<p>Every example that talks to a cluster expects one at <code>http://localhost:9200</code>. The quickest way to get one is Docker: <code>docker run -p 9200:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true opensearchproject/opensearch:2.17.1</code>. Those examples are checked by the compiler but not run here, because there is no server behind this page; the ones that only build requests or read answers are run, and their real output is shown.</p>
+<p>The package is part of the standard library and needs nothing else installed. Import it as <code>db.opensearch</code> and call it as <code>opensearch</code>.</p>
+
+<h2 id="connect">Connecting</h2>
+<p><code>Connect</code> takes a node url and gives back a client. Nothing is sent until the first call, so check that the cluster answers with <code>Ping</code>, then ask it about itself with <code>GetInfo</code> and <code>ClusterHealth</code>.</p>
+{{example.search-connect}}
+<p>A real deployment usually needs more: several nodes, a user and password, your own certificate authority, a time limit. Put them in a <code>Config</code> and pass it to <code>NewClient</code>. The client spreads requests over the nodes, skips one that refuses connections for a minute, and retries a request that got a 502, 503 or 504 on another node. <code>ConnectInsecure</code> is for the demo setup that ships with a self signed certificate, and <code>ConnectAWS</code> signs every request with AWS SigV4 for Amazon OpenSearch Service; use <code>SERVICE_AOSS</code> instead of <code>SERVICE_ES</code> for a Serverless collection.</p>
+{{example.search-config}}
+
+<h2 id="documents">An index and its documents</h2>
+<p>An index is where documents live, and its mapping says what each field is: <code>text</code> is split into words for full text search, <code>keyword</code> is matched exactly, and numbers and dates can be compared and sorted. OpenSearch guesses a mapping if you give none, but a guess cannot be changed later, so it pays to create the index yourself. <code>Property</code> writes one field and <code>Properties</code> puts them together.</p>
+<p>Documents are JSON text, and every write returns a <code>WriteResult</code> with the id, the result and the version. A new document is searchable after the next refresh, about a second later; <code>REFRESH_WAIT_FOR</code> makes the call wait for it, which is handy in tests and scripts. <code>Get</code> reads a document back by id, and <code>JsonPath</code> picks a value out of its source.</p>
+{{example.search-documents}}
+
+<h2 id="bulk">Many documents at once</h2>
+<p>Sending documents one request at a time is slow. A <code>Bulk</code> collects index, create, update and delete actions and sends them together. This example only builds the batch and prints the body it would send, so it runs here:</p>
+{{example.search-bulk}}
+<p><code>BulkSend</code> sends it. A bulk request succeeds as a whole even when some actions fail, so look at each item: <code>ok</code>, <code>status</code> and the error type and reason say what went wrong for that one document.</p>
+{{example.search-bulk-send}}
+
+<h2 id="queries">Building queries</h2>
+<p>A query is JSON as well, and the package has a builder for each common kind. <code>Match</code> searches the words of a text field, <code>Term</code> wants an exact value, and <code>Range</code>, <code>RangeInt</code> and <code>DateRange</code> compare. To combine them, fill a <code>BoolQuery</code>: <code>must</code> has to match and adds to the score, <code>filter</code> has to match but does not score, <code>should</code> raises the score, and <code>must_not</code> excludes. A <code>SearchRequest</code> adds paging, sorting and which fields to return; <code>SearchBody</code> shows what will be sent.</p>
+{{example.search-query}}
+<div class="note"><p>Anything the builders do not cover can be written by hand as a backtick string, since a query is only text. The builders, the request body and the answer can all be mixed with your own JSON.</p></div>
+
+<h2 id="results">Reading the hits</h2>
+<p><code>SearchWith</code> runs the request and returns a <code>SearchResult</code>: the total number of matches, the time it took, and the hits of this page, best first. Each <code>Hit</code> has its id, score and source, plus the highlighted fragments you asked for.</p>
+{{example.search-search}}
+<p>The same reader works on an answer you already have, through <code>ParseSearch</code>. That is how this example runs here without a server:</p>
+{{example.search-results}}
+
+<h2 id="aggs">Counting with aggregations</h2>
+<p>Aggregations answer questions about all the matches at once: how many books per author, the average year, a histogram by month. Add them to a request with <code>AddAgg</code>, set <code>size</code> to 0 if you only want the numbers, and read the answer with <code>Buckets</code> for groups and <code>AggValue</code> for single values. Other readers cover the rest: <code>AggField</code> for one number of a <code>stats</code> result, <code>AggPercentile</code> for percentiles.</p>
+{{example.search-aggs}}
+
+<h2 id="paging">Paging through everything</h2>
+<p><code>from</code> and <code>size</code> are fine for the first pages a person looks at, but not for walking through a whole index. For that, open a point in time with <code>CreatePit</code>, which freezes a view of the index, sort by a field, and ask for each next page with <code>search_after</code> set to the sort values of the last hit. An empty page means you are done; close the point in time with <code>DeletePit</code>.</p>
+{{example.search-paging}}
+
+<h2 id="sql">SQL and PPL</h2>
+<p>OpenSearch also answers SQL. <code>Conn</code> turns a client into a <code>db.Connection</code>, the same interface the SQL engines use, so <code>db.QueryInt</code> and the row loop from the <a href="/std/db/">db</a> package work unchanged. PPL is OpenSearch's piped query language, handy for logs; <code>Ppl</code> returns rows the same way. Long results come in pages, and the rows fetch the next page as you go.</p>
+{{example.search-sql}}
+
+<h2 id="vectors">Vector search</h2>
+<p>A <code>knn_vector</code> field holds an embedding, a list of numbers that places a text or an image in space so that similar things are close together. <code>KnnIndexBody</code> creates an index with one, and <code>Knn</code> finds the documents nearest to a vector. <code>Neural</code> and <code>Hybrid</code> go one step further and let OpenSearch make the vector from text with a model it hosts.</p>
+{{example.search-vectors}}
+
+<h2 id="errors">When something goes wrong</h2>
+<p>No call stops your program. A call that fails returns false, -1 or an empty result, and the client remembers what happened: <code>Status</code> is the HTTP status of the last request (0 when no answer came), <code>Error</code> is a readable message, and <code>ErrorType</code> and <code>ErrorReason</code> are what OpenSearch said, such as <code>version_conflict_engine_exception</code>. A bad url is caught when the client is made, and <code>Ok</code> tells you.</p>
+{{example.search-errors}}
+
+<h2 id="next">Where to go next</h2>
+<p>The <a href="/std/db-opensearch/">db/opensearch reference</a> lists every function with an example, including index templates, aliases, snapshots, ingest pipelines, ISM policies, the security plugin, alerting and ML Commons. For anything the package has no function for, <code>Perform</code> sends any request you write.</p>
+>>

@@ -1,0 +1,74 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19822
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub genre: str = ""
+    pub year: int = 0
+end
+
+func main:
+    queued := `{"taskUid":10,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate"}`
+    fake.On("POST", "/indexes/movies/documents", 202, queued)
+    fake.On("PUT", "/indexes/movies/documents", 202, queued)
+    fake.On("GET", "/tasks/10", 200, `{"uid":10,"indexUid":"movies","status":"succeeded","type":"documentAdditionOrUpdate","details":{"receivedDocuments":3,"indexedDocuments":3}}`)
+    fake.On("GET", "/indexes/movies/documents/2", 200, `{"id":2,"title":"Moana","genre":"Family","year":2016}`)
+    fake.On("POST", "/indexes/movies/documents/fetch", 200, `{"results":[{"id":1,"title":"Heat","genre":"Crime","year":1995},{"id":2,"title":"Moana","genre":"Family","year":2016}],"offset":0,"limit":2,"total":3}`)
+    fake.On("DELETE", "/indexes/movies/documents/3", 202, `{"taskUid":11,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    fake.On("POST", "/indexes/movies/documents/delete", 202, `{"taskUid":12,"indexUid":"movies","status":"enqueued","type":"documentDeletion"}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    docs := `[{"id": 1, "title": "Heat", "genre": "Crime", "year": 1995}, {"id": 2, "title": "Moana", "genre": "Family", "year": 2016}, {"id": 3, "title": "Alien", "genre": "Horror", "year": 1979}]`
+    task := meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", docs, "id", err), err)
+    println "add: " + task.status + " " + task.details
+
+    mut movies := Vector {} as Vector<Movie>
+    movies.push(Movie { id = 4, title = "Up", genre = "Family", year = 2009 })
+    meilisearch.Wait(c, meilisearch.AddDocumentsOf(c, "movies", movies, "id", err), err)
+    println "typed add sent: " + (fake.Last().len() > 0)
+
+    meilisearch.Wait(c, meilisearch.UpdateDocuments(c, "movies", `[{"id": 1, "year": 1996}]`, "", err), err)
+    println "partial update: " + meilisearch.Ok(err)
+
+    mut movie := Movie {}
+    if meilisearch.GetDocumentAs(c, "movies", "2", movie, err):
+        println "document 2: " + movie.title + " (" + movie.year + ")"
+    end
+
+    mut q := meilisearch.DocumentsQuery { limit = 2, filter = "year > 1990" }
+    q.fields.push("title")
+    page := meilisearch.GetDocuments(c, "movies", q, err)
+    mut found := Vector {} as Vector<Movie>
+    meilisearch.DocumentsAs(page, found, err)
+    println "page of " + page.total + ":"
+    each item in found:
+        println "  " + item.id + " " + item.title
+    end
+
+    println "delete one: " + meilisearch.DeleteDocument(c, "movies", "3", err).kind
+    println "delete old: " + meilisearch.DeleteDocumentsByFilter(c, "movies", "year < 1980", err).kind
+    ret 0
+end

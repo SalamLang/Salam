@@ -1,0 +1,427 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "meilisearch"
+@fa "میلیسرچ"
+package meilisearch
+
+import str
+import conv
+import time
+import jwt
+import encoding
+import encoding.json
+import encoding.encerr
+import net.httpx
+
+@en "VERSION"
+@fa "نسخه کلاینت"
+pub const VERSION := "1.0.0"
+
+@en "Client"
+@fa "کلاینت"
+pub struct Client:
+    pub host: str = ""
+    pub api_key: str = ""
+    pub agent: str = ""
+    pub timeout_ms: int = 0
+    pub metadata: str = ""
+end
+
+@en "Error"
+@fa "خطا"
+pub struct Error:
+    pub status: int = 0
+    pub code: str = ""
+    pub kind: str = ""
+    pub message: str = ""
+    pub link: str = ""
+end
+
+@en "Page"
+@fa "صفحه"
+pub struct Page:
+    pub results: Vector<str> = Vector {} as Vector<str>
+    pub offset: i64 = 0
+    pub limit: i64 = 0
+    pub total: i64 = 0
+    pub from: i64 = -1
+    pub next: i64 = -1
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _ws(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _bp(s)
+    mut p := i
+    until p < l:
+        code := _ub(bp, p)
+        if code != 32 and code != 9 and code != 10 and code != 13: ret p end
+        p += 1
+    end
+    ret p
+end
+
+func _value_end(s: str, i: int): int:
+    l := str.ByteLen(s)
+    bp := _bp(s)
+    mut p := i
+    mut depth := 0
+    mut in_str := false
+    until p < l:
+        code := _ub(bp, p)
+        if in_str:
+            if code == 92:
+                p += 1
+            else code == 34:
+                in_str = false
+                if depth == 0: ret p + 1 end
+            end
+        else code == 34:
+            in_str = true
+        else code == 123 or code == 91:
+            depth += 1
+        else code == 125 or code == 93:
+            if depth == 0: ret p end
+            depth -= 1
+            if depth == 0: ret p + 1 end
+        else code == 44:
+            if depth == 0: ret p end
+        end
+        p += 1
+    end
+    ret p
+end
+
+func _elements(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    l := str.ByteLen(raw)
+    bp := _bp(raw)
+    mut p := _ws(raw, 0)
+    if p >= l or _ub(bp, p) != 91: ret out end
+    p = _ws(raw, p + 1)
+    until p < l:
+        if _ub(bp, p) == 93: ret out end
+        e := _value_end(raw, p)
+        if e <= p: ret out end
+        out.push(str.TrimRight(str.ByteSub(raw, p, e - p)))
+        p = _ws(raw, e)
+        if p < l and _ub(bp, p) == 44:
+            p = _ws(raw, p + 1)
+        end
+    end
+    ret out
+end
+
+func _unquote(raw: str): str:
+    if raw.len() == 0: ret "" end
+    bp := _bp(raw)
+    if _ub(bp, 0) != 34: ret raw end
+    ret json.Get(`{"v":` + raw + `}`, "v")
+end
+
+func _strings(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each item in _elements(raw):
+        out.push(_unquote(item))
+    end
+    ret out
+end
+
+func _strs_json(items: Vector<str>): str:
+    mut quoted := Vector {} as Vector<str>
+    each item in items:
+        quoted.push(json.Str(item))
+    end
+    ret json.Array(quoted)
+end
+
+func _i64(text: str): i64:
+    l := str.ByteLen(text)
+    bp := _bp(text)
+    mut p := 0
+    mut neg := false
+    if l > 0 and _ub(bp, 0) == 45:
+        neg = true
+        p = 1
+    end
+    mut n := 0 as i64
+    until p < l:
+        code := _ub(bp, p)
+        if code < 48 or code > 57: break end
+        n = n * (10 as i64) + ((code - 48) as i64)
+        p += 1
+    end
+    if neg: ret 0 as i64 - n end
+    ret n
+end
+
+func _f64(text: str): f64:
+    if text.len() == 0: ret 0.0 end
+    ret conv.ParseFloat(text)
+end
+
+func _get_i64(text: str, key: str, fallback: i64): i64:
+    v := json.Get(text, key)
+    if v.len() == 0 or v == "null": ret fallback end
+    ret _i64(v)
+end
+
+func _get_str(text: str, key: str): str:
+    v := json.Get(text, key)
+    if v == "null": ret "" end
+    ret v
+end
+
+func _get_bool(text: str, key: str): bool:
+    ret json.Get(text, key) == "true"
+end
+
+func _get_raw(text: str, key: str): str:
+    l := str.ByteLen(text)
+    bp := _bp(text)
+    mut p := _ws(text, 0)
+    if p >= l or _ub(bp, p) != 123: ret "" end
+    p = _ws(text, p + 1)
+    until p < l:
+        if _ub(bp, p) != 34: ret "" end
+        ke := _value_end(text, p)
+        name := _unquote(str.ByteSub(text, p, ke - p))
+        p = _ws(text, ke)
+        if p >= l or _ub(bp, p) != 58: ret "" end
+        vs := _ws(text, p + 1)
+        ve := _value_end(text, vs)
+        if name == key:
+            v := str.TrimRight(str.ByteSub(text, vs, ve - vs))
+            if v == "null": ret "" end
+            ret v
+        end
+        p = _ws(text, ve)
+        if p < l and _ub(bp, p) == 44:
+            p = _ws(text, p + 1)
+        else:
+            ret ""
+        end
+    end
+    ret ""
+end
+
+func _esc(segment: str): str:
+    ret encoding.URLEncode(segment)
+end
+
+func _query(keys: Vector<str>, vals: Vector<str>): str:
+    mut out := ""
+    repeat keys.len() in i:
+        if i == 0:
+            out = out + "?"
+        else:
+            out = out + "&"
+        end
+        out = out + _esc(keys.get(i)) + "=" + _esc(vals.get(i))
+    end
+    ret out
+end
+
+func _page(body: str): Page:
+    ret Page {
+        results = _elements(_get_raw(body, "results")), offset = _get_i64(body, "offset", 0 as i64),
+        limit = _get_i64(body, "limit", 0 as i64), total = _get_i64(body, "total", 0 as i64), from = _get_i64(body, "from", -1 as i64),
+        next = _get_i64(body, "next", -1 as i64)
+    }
+end
+
+func _clear(err &: Error):
+    err.status = 0
+    err.code = ""
+    err.kind = ""
+    err.message = ""
+    err.link = ""
+end
+
+func _fail(err &: Error, status: int, code: str, kind: str, message: str):
+    err.status = status
+    err.code = code
+    err.kind = kind
+    err.message = message
+    err.link = ""
+end
+
+func _headers(c: Client, content_type: str): str:
+    mut h := "Accept: application/json\r\n"
+    if content_type.len() > 0:
+        h = h + "Content-Type: " + content_type + "\r\n"
+    end
+    if c.api_key.len() > 0:
+        h = h + "Authorization: Bearer " + c.api_key + "\r\n"
+    end
+    mut agent := "Meilisearch Salam (v" + VERSION + ")"
+    if c.agent.len() > 0:
+        agent = agent + " ; " + c.agent
+    end
+    h = h + "X-Meilisearch-Client: " + agent + "\r\n"
+    ret h
+end
+
+func _prefix(host: str): str:
+    scheme := host.find("://")
+    if scheme < 0: ret "" end
+    rest := host.substr(scheme + 3, host.len() - scheme - 3)
+    slash := rest.find("/")
+    if slash < 0: ret "" end
+    ret rest.substr(slash, rest.len() - slash)
+end
+
+func _endpoint_host(ep: httpx.Endpoint): str:
+    if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
+        ret ep.host + ":" + conv.FormatInt(ep.port as i64)
+    end
+    ret ep.host
+end
+
+func _send(c: Client, method: str, path: str, content_type: str, body: str, err &: Error): str:
+    _clear(err)
+    if c.host.len() == 0:
+        _fail(err, 0, "invalid_host", "invalid_request", "client has no host")
+        ret ""
+    end
+    ep := httpx.ParseEndpoint(c.host)
+    if not ep.ok:
+        _fail(err, 0, "invalid_host", "invalid_request", "cannot parse the host " + c.host)
+        ret ""
+    end
+    n := str.ByteLen(body)
+    mut head := method + " " + _prefix(c.host) + path + " HTTP/1.1\r\nHost: " + _endpoint_host(ep) + "\r\nConnection: close\r\n" + _headers(c, content_type)
+    if n > 0 or method == "POST" or method == "PUT" or method == "PATCH":
+        head = head + "Content-Length: " + conv.FormatInt(n as i64) + "\r\n"
+    end
+    head = head + "\r\n"
+    mut data := null as void*
+    if n > 0: data = body as void* end
+    started := time.NowMillis()
+    mut r := httpx.SendRawTimeout(ep, head, data, n, c.timeout_ms)
+    defer httpx.FreeRaw(r)
+    if r.status == 0:
+        if c.timeout_ms > 0 and time.NowMillis() - started >= c.timeout_ms as i64:
+            _fail(err, 0, "timeout", "communication", "no answer from " + c.host + " in " + conv.FormatInt(c.timeout_ms as i64) + " ms")
+            ret ""
+        end
+        mut msg := r.error
+        if msg.len() == 0: msg = "could not reach " + c.host end
+        _fail(err, 0, "communication_error", "communication", msg)
+        ret ""
+    end
+    text := httpx.RawText(r)
+    if r.status >= 200 and r.status < 300:
+        ret text
+    end
+    err.status = r.status
+    if json.Valid(text) and json.Has(text, "message"):
+        err.code = _get_str(text, "code")
+        err.kind = _get_str(text, "type")
+        err.message = _get_str(text, "message")
+        err.link = _get_str(text, "link")
+    else:
+        err.code = "http_" + conv.FormatInt(r.status as i64)
+        err.kind = "http"
+        err.message = text
+    end
+    if err.code.len() == 0:
+        err.code = "http_" + conv.FormatInt(r.status as i64)
+    end
+    ret ""
+end
+
+func _call(c: Client, method: str, path: str, body: str, err &: Error): str:
+    mut ct := ""
+    if body.len() > 0: ct = "application/json" end
+    ret _send(c, method, path, ct, body, err)
+end
+
+@en "New"
+@fa "جدید"
+pub func New(host: str, api_key: str): Client:
+    mut h := str.TrimRight(host)
+    until h.len() > 0 and h.substr(h.len() - 1, 1) == "/":
+        h = h.substr(0, h.len() - 1)
+    end
+    if h.len() > 0 and h.find("://") < 0:
+        h = "http://" + h
+    end
+    ret Client { host = h, api_key = api_key }
+end
+
+@en "WithAgent"
+@fa "با عامل"
+pub func WithAgent(c: Client, agent: str): Client:
+    mut out := c
+    out.agent = agent
+    ret out
+end
+
+@en "WithTimeout"
+@fa "با مهلت"
+pub func WithTimeout(c: Client, timeout_ms: int): Client:
+    mut out := c
+    out.timeout_ms = timeout_ms
+    ret out
+end
+
+@en "WithMetadata"
+@fa "با فراداده"
+pub func WithMetadata(c: Client, metadata: str): Client:
+    mut out := c
+    out.metadata = metadata
+    ret out
+end
+
+@en "Ok"
+@fa "موفق"
+pub func Ok(err: Error): bool:
+    ret err.code.len() == 0
+end
+
+@en "ErrorString"
+@fa "متن خطا"
+pub func ErrorString(err: Error): str:
+    if err.code.len() == 0: ret "" end
+    mut out := "meilisearch"
+    if err.status > 0:
+        out = out + " " + conv.FormatInt(err.status as i64)
+    end
+    out = out + " [" + err.code + "]"
+    if err.message.len() > 0:
+        out = out + ": " + err.message
+    end
+    ret out
+end
+
+@en "Request"
+@fa "درخواست"
+pub func Request(c: Client, method: str, path: str, body: str, err &: Error): str:
+    ret _call(c, method, path, body, err)
+end
+
+@en "RequestAs"
+@fa "درخواست با نوع"
+pub func RequestAs(c: Client, method: str, path: str, content_type: str, body: str, err &: Error): str:
+    ret _send(c, method, path, content_type, body, err)
+end

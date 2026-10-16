@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import db.typesense
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func main:
+    c := typesense.New("http://localhost:8108", "search-key")
+    mut err := typesense.Error {}
+
+    mut p := typesense.NewSearch("dune", "title,description")
+    p.query_by_weights = "3,1"
+    p.filter_by = "year:>1950 && genres:=[scifi]"
+    p.sort_by = "_text_match:desc,year:desc"
+    p.facet_by = "genres,year"
+    p.max_facet_values = 10
+    p.per_page = 20
+    p.page = 1
+    p.num_typos = "2,1"
+    p.highlight_start_tag = "<b>"
+    p.highlight_end_tag = "</b>"
+    typesense.Set(p, "prioritize_exact_match", "false")
+    println typesense.SearchQuery(p)
+    println typesense.SearchParamsJSON(p)
+
+    r := typesense.Search(c, "books", p, err)
+    if not typesense.Ok(err):
+        println typesense.ErrorString(err)
+        ret 1
+    end
+    println r.found, r.out_of, r.page, r.search_time_ms, r.search_cutoff
+    each h in r.hits:
+        println h.document, h.text_match, h.curated, typesense.Highlight(h, "title")
+        println h.highlight, h.highlights, h.text_match_info, h.vector_distance, h.geo_distance_meters, h.hybrid_search_info, h.raw.len()
+    end
+    each f in r.facets:
+        print f.field_name, f.sampled, f.stats, ":"
+        each fc in f.counts:
+            print " " + fc.value + "=" + fc.count + " " + fc.highlighted
+        end
+        println ""
+    end
+    mut books := Vector {} as Vector<Book>
+    if typesense.HitsAs(r, books, err):
+        println books.len()
+    end
+    println r.request_params, r.raw.len()
+
+    mut g := typesense.NewSearch("*", "")
+    g.group_by = "genres"
+    g.group_limit = 3
+    g.include_fields = "id,title"
+    rg := typesense.Search(c, "books", g, err)
+    println rg.found, rg.found_docs
+    each grp in rg.groups:
+        println str.Join(grp.key, ","), grp.found, grp.hits.len()
+    end
+
+    mut v := typesense.NewSearch("*", "")
+    v.vector_query = "embedding:([0.12, 0.45, 0.87], k: 10)"
+    v.exclude_fields = "embedding"
+    println typesense.SearchRaw(c, "books", v, err)
+
+    mut rag := typesense.NewSearch("which books are about deserts?", "title_vector")
+    rag.conversation = true
+    rag.conversation_model_id = "books-assistant"
+    rag.conversation_id = ""
+    rag.prefix = "false"
+    rag.exhaustive_search = true
+    rag.search_cutoff_ms = 200
+    rag.use_cache = true
+    rag.cache_ttl = 60
+    println typesense.Search(c, "books", rag, err).conversation
+
+    mut nl := typesense.NewSearch("science fiction books after 1960 sorted by year", "title")
+    nl.nl_query = true
+    nl.nl_model_id = "gpt-4o-nl"
+    println typesense.Search(c, "books", nl, err).parsed_nl_query
+
+    mut reqs := Vector {} as Vector<typesense.SearchRequest>
+    reqs.push(typesense.SearchRequest { collection = "books", params = typesense.NewSearch("dune", "") })
+    reqs.push(typesense.SearchRequest { collection = "authors", params = typesense.NewSearch("herbert", "name"), api_key = "scoped-key" })
+    common := typesense.NewSearch("", "title")
+    each m in typesense.MultiSearch(c, reqs, common, err):
+        println m.found, m.code, m.error
+    end
+    println typesense.MultiSearchRaw(c, reqs, common, err).len()
+    u := typesense.UnionSearch(c, reqs, common, err)
+    each h in u.hits:
+        println h.collection, h.search_index, h.document
+    end
+    mut rr := typesense.ParseSearchResult(`{"found": 0, "hits": []}`)
+    println rr.found, rr.code, rr.error, typesense.MAX_GET_QUERY
+    typesense.FreeResult(rr)
+end

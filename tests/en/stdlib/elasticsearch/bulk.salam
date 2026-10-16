@@ -1,0 +1,57 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19865
+
+func main:
+    fake.On("POST", "/_bulk", 200, `{"took":12,"errors":true,"items":[{"index":{"_index":"logs","_id":"1","status":201,"result":"created","_version":1}},{"create":{"_index":"logs","_id":"2","status":409,"error":{"type":"version_conflict_engine_exception","reason":"[2]: document already exists"}}},{"update":{"_index":"logs","_id":"3","status":200,"result":"updated","_version":2}},{"update":{"_index":"logs","_id":"4","status":201,"result":"created","_version":1}},{"delete":{"_index":"logs","_id":"5","status":404,"result":"not_found"}}]}`)
+    fake.On("POST", "/logs/_bulk", 200, `{"took":3,"errors":false,"items":[{"index":{"_index":"logs","_id":"auto","status":201,"result":"created","_version":1}}]}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    mut b := elasticsearch.NewBulk()
+    elasticsearch.BulkIndex(b, "logs", "1", "{\n  \"level\": \"info\",\n  \"msg\": \"started\"\n}")
+    elasticsearch.BulkCreate(b, "logs", "2", `{"level":"warn"}`)
+    elasticsearch.BulkUpdate(b, "logs", "3", `{"level":"error"}`)
+    elasticsearch.BulkUpsert(b, "logs", "4", `{"level":"debug"}`)
+    elasticsearch.BulkDelete(b, "logs", "5")
+    println "actions:", elasticsearch.BulkLen(b)
+    print elasticsearch.BulkBody(b)
+    res := elasticsearch.RunBulk(c, b)
+    println "sent:", fake.Last()
+    println "result:", res.ok, res.status, res.took, res.errors, res.succeeded, res.failed
+    println "error:", res.error
+    each it in res.items:
+        println "  ", it.action, it.index, it.id, it.status, it.ok, it.result, it.version, it.error_type, it.error_reason
+    end
+
+    elasticsearch.BulkReset(b)
+    println "after reset:", elasticsearch.BulkLen(b), elasticsearch.BulkBody(b).len()
+    elasticsearch.BulkIndex(b, "", "", `{"level":"info"}`)
+    second := elasticsearch.RunBulkWith(c, "logs", b, elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR, pipeline = "logs-clean" })
+    println "default index:", second.ok, second.succeeded, fake.Last()
+    empty := elasticsearch.RunBulk(c, elasticsearch.NewBulk())
+    println "empty bulk:", empty.ok, empty.items.len()
+    parsed := elasticsearch.ParseBulkResult(`{"took":1,"errors":false,"items":[{"delete":{"_id":"9","status":200,"result":"deleted"}}]}`)
+    println "parsed:", parsed.ok, parsed.items.get(0).action, parsed.items.get(0).result
+    elasticsearch.Close(c)
+end

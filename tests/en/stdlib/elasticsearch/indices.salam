@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19866
+const ACK := `{"acknowledged":true}`
+
+func step(label: str, ok: bool):
+    println label, ok
+    println "  ", fake.Last()
+end
+
+func main:
+    fake.On("PUT", "/books", 200, ACK)
+    fake.On("HEAD", "/books", 200, "")
+    fake.On("GET", "/books", 200, `{"books":{"aliases":{},"settings":{}}}`)
+    fake.On("GET", "/books/_mapping", 200, `{"books":{"mappings":{"properties":{"title":{"type":"text"}}}}}`)
+    fake.On("PUT", "/books/_mapping", 200, ACK)
+    fake.On("GET", "/books/_settings", 200, `{"books":{"settings":{"index":{"number_of_replicas":"0"}}}}`)
+    fake.On("PUT", "/books/_settings", 200, ACK)
+    fake.On("POST", "/books/_refresh", 200, `{"_shards":{"total":1}}`)
+    fake.On("POST", "/_refresh", 200, `{"_shards":{"total":5}}`)
+    fake.On("POST", "/books/_flush", 200, `{"_shards":{"total":1}}`)
+    fake.On("POST", "/books/_forcemerge", 200, `{"_shards":{"total":1}}`)
+    fake.On("POST", "/books/_close", 200, ACK)
+    fake.On("POST", "/books/_open", 200, ACK)
+    fake.On("PUT", "/books/_alias/library", 200, ACK)
+    fake.On("HEAD", "/_alias/library", 200, "")
+    fake.On("GET", "/_alias/library", 200, `{"books":{"aliases":{"library":{}}},"books_v2":{"aliases":{"library":{}}}}`)
+    fake.On("POST", "/_aliases", 200, ACK)
+    fake.On("DELETE", "/books/_alias/library", 200, ACK)
+    fake.On("PUT", "/_index_template/books_tpl", 200, ACK)
+    fake.On("HEAD", "/_index_template/books_tpl", 200, "")
+    fake.On("DELETE", "/_index_template/books_tpl", 200, ACK)
+    fake.On("POST", "/_reindex", 200, `{"created":40,"updated":2}`)
+    fake.On("POST", "/_analyze", 200, `{"tokens":[{"token":"book"},{"token":"of"},{"token":"kings"}]}`)
+    fake.On("POST", "/books/_analyze", 200, `{"tokens":[{"token":"شاهنامه"}]}`)
+    fake.On("DELETE", "/books", 200, ACK)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    mapping := `{"settings":{"number_of_shards":1},"mappings":{"properties":{"title":{"type":"text"},"year":{"type":"integer"}}}}`
+    step("create index:", elasticsearch.CreateIndex(c, "books", mapping))
+    println "exists:", elasticsearch.IndexExists(c, "books"), elasticsearch.IndexExists(c, "nope")
+    println "get index:", elasticsearch.GetIndex(c, "books")
+    println "mapping:", elasticsearch.GetMapping(c, "books")
+    step("put mapping:", elasticsearch.PutMapping(c, "books", `{"properties":{"isbn":{"type":"keyword"}}}`))
+    println "settings:", elasticsearch.GetSettings(c, "books")
+    step("put settings:", elasticsearch.PutSettings(c, "books", `{"index":{"refresh_interval":"5s"}}`))
+    step("refresh:", elasticsearch.Refresh(c, "books"))
+    step("refresh all:", elasticsearch.Refresh(c, ""))
+    step("flush:", elasticsearch.Flush(c, "books"))
+    step("force merge:", elasticsearch.ForceMerge(c, "books", 1))
+    step("close:", elasticsearch.CloseIndex(c, "books"))
+    step("open:", elasticsearch.OpenIndex(c, "books"))
+    step("alias:", elasticsearch.PutAlias(c, "books", "library"))
+    println "alias exists:", elasticsearch.AliasExists(c, "library")
+    println "alias targets:", elasticsearch.GetAlias(c, "library")
+    step("swap alias:", elasticsearch.SwapAlias(c, "library", "books", "books_v2"))
+    step("delete alias:", elasticsearch.DeleteAlias(c, "books", "library"))
+    step("template:", elasticsearch.PutIndexTemplate(c, "books_tpl", `{"index_patterns":["books-*"],"template":{"settings":{"number_of_replicas":0}}}`))
+    println "template exists:", elasticsearch.IndexTemplateExists(c, "books_tpl")
+    step("delete template:", elasticsearch.DeleteIndexTemplate(c, "books_tpl"))
+    println "reindex:", elasticsearch.Reindex(c, "books", "books_v2")
+    println "  ", fake.Last()
+    println "analyze:", elasticsearch.Analyze(c, "", "standard", "Book of Kings")
+    println "  ", fake.Last()
+    println "index analyze:", elasticsearch.Analyze(c, "books", "", "شاهنامه")
+    step("delete index:", elasticsearch.DeleteIndex(c, "books"))
+    elasticsearch.Close(c)
+end

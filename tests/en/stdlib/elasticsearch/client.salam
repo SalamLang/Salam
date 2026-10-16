@@ -1,0 +1,87 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19860
+const CLOUD_ID := "demo:ZXUtd2VzdC0xLmF3cy5mb3VuZC5pbyRjZWM2ZjI2MWE3NGJmMjRjZTMzYmI4ODExYjg0Mjk0ZiRjNmYyZTRmZDZkMTQ0M2Q2ZjM4ZDkzY2U2ZTk2MzM2Yw=="
+
+func show_nodes(label: str, c: elasticsearch.Client):
+    println label, elasticsearch.Ok(c), elasticsearch.Nodes(c), "auth:", elasticsearch.AuthHeader(c)
+end
+
+func main:
+    fake.On("HEAD", "/", 200, "")
+    fake.On("GET", "/", 200, `{"name":"node-1","cluster_name":"demo","cluster_uuid":"u-1","version":{"number":"8.15.3","build_flavor":"default","lucene_version":"9.11.1"},"tagline":"You Know, for Search"}`)
+    fake.On("GET", "/_cluster/health", 200, `{"cluster_name":"demo","status":"green","number_of_nodes":1}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    url := "http://127.0.0.1:" + str.FromInt(PORT as i64)
+
+    mut c := elasticsearch.ConnectAuth(url, "elastic", "s3cret")
+    println "ping:", elasticsearch.Ping(c)
+    println fake.Last()
+    info := elasticsearch.GetInfo(c)
+    println "info:", info.ok, info.name, info.cluster_name, info.version, info.distribution, info.lucene_version
+    println "distribution:", elasticsearch.Distribution(c), elasticsearch.IsOpenSearch(c)
+    elasticsearch.Close(c)
+    println "closed:", elasticsearch.Ok(c)
+
+    mut k := elasticsearch.ConnectApiKey(url, "key-id:key-secret")
+    elasticsearch.Ping(k)
+    println "api key:", fake.Last()
+    elasticsearch.Close(k)
+
+    mut cfg := elasticsearch.DefaultConfig()
+    cfg.nodes = Vector {} as Vector<str>
+    cfg.nodes.push(url)
+    cfg.bearer = "service-token"
+    cfg.timeout_ms = 5000
+    cfg.max_retries = 1
+    cfg.keep_alive = false
+    cfg.headers.put("X-Opaque-Id", "salam-example")
+    mut b := elasticsearch.NewClient(cfg)
+    h := elasticsearch.ClusterHealth(b)
+    println "bearer:", fake.Last()
+    println "health:", h.ok, h.status, h.nodes
+    elasticsearch.Close(b)
+
+    mut many := elasticsearch.Connect("http://es-1:9200, https://admin:p%40ss@es-2.example.com/prefix/ ,localhost")
+    show_nodes("nodes:", many)
+    elasticsearch.Close(many)
+
+    println "cloud url:", elasticsearch.DecodeCloudId(CLOUD_ID)
+    mut cloud := elasticsearch.ConnectCloud(CLOUD_ID, "ZW5jb2RlZC1rZXk=")
+    show_nodes("cloud:", cloud)
+    elasticsearch.Close(cloud)
+
+    mut bad := elasticsearch.Connect("ftp://nowhere")
+    println "bad url:", elasticsearch.Ok(bad), elasticsearch.Error(bad)
+    elasticsearch.Close(bad)
+
+    mut raw := elasticsearch.Connect(url)
+    r := elasticsearch.Perform(raw, "GET", "/_cat/health?format=json", "")
+    println "perform:", r.ok, r.status, r.error_type
+    println "  ", r.error
+    println "state:", elasticsearch.Status(raw), elasticsearch.ErrorType(raw)
+    println "reason:", elasticsearch.ErrorReason(raw)
+    println "basic:", elasticsearch.EncodeBasic("elastic", "s3cret")
+    println "defaults:", elasticsearch.DEFAULT_URL, elasticsearch.DEFAULT_PORT, elasticsearch.DEAD_NODE_MS
+    elasticsearch.Close(raw)
+end

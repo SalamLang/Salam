@@ -1,0 +1,51 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19867
+
+func main:
+    fake.On("HEAD", "/", 200, "")
+    fake.On("GET", "/", 200, `{"name":"node-1","cluster_name":"library","cluster_uuid":"abc","version":{"distribution":"opensearch","number":"2.17.1","build_flavor":"","lucene_version":"9.11.1"},"tagline":"The OpenSearch Project: https://opensearch.org/"}`)
+    fake.On("GET", "/_cluster/health", 200, `{"cluster_name":"library","status":"yellow","timed_out":false,"number_of_nodes":3,"number_of_data_nodes":2,"active_primary_shards":10,"active_shards":18,"relocating_shards":0,"initializing_shards":1,"unassigned_shards":2,"number_of_pending_tasks":0,"active_shards_percent_as_number":85.7}`)
+    fake.On("GET", "/_cluster/stats", 200, `{"cluster_name":"library","indices":{"count":4}}`)
+    fake.On("GET", "/_nodes", 200, `{"_nodes":{"total":3}}`)
+    fake.On("GET", "/_cat/indices/books*", 200, `[{"health":"green","status":"open","index":"books","uuid":"u1","pri":"1","rep":"1","docs.count":"1200","docs.deleted":"3","store.size":"52428"},{"health":"yellow","status":"open","index":"books_v2","uuid":"u2","pri":"2","rep":"0","docs.count":"1240","docs.deleted":"0","store.size":"61440"}]`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    println "ping:", elasticsearch.Ping(c), fake.Last()
+    info := elasticsearch.GetInfo(c)
+    println "info:", info.name, info.cluster_name, info.cluster_uuid, info.version, info.distribution, info.lucene_version
+    println "tagline:", info.tagline
+    println "opensearch:", elasticsearch.IsOpenSearch(c), elasticsearch.Distribution(c)
+    h := elasticsearch.ClusterHealth(c)
+    println "health:", h.ok, h.cluster_name, h.status, h.timed_out, h.nodes, h.data_nodes
+    println "shards:", h.active_primary_shards, h.active_shards, h.relocating_shards, h.initializing_shards, h.unassigned_shards, h.pending_tasks, h.active_shards_percent
+    w := elasticsearch.WaitForStatus(c, "green", "10s")
+    println "wait:", w.ok, w.status, fake.Last()
+    println "stats:", elasticsearch.ClusterStats(c)
+    println "nodes:", elasticsearch.NodesInfo(c)
+    each ix in elasticsearch.CatIndices(c, "books*"):
+        println "index:", ix.index, ix.health, ix.status, ix.uuid, ix.primaries, ix.replicas, ix.docs_count, ix.docs_deleted, ix.store_size
+    end
+    println "  ", fake.Last()
+    elasticsearch.Close(c)
+end

@@ -1,0 +1,60 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19870
+const DEAD := 19871
+
+func main:
+    fake.On("GET", "/_cluster/health", 503, `{"error":{"type":"cluster_block_exception","reason":"blocked by: [SERVICE_UNAVAILABLE/1/state not recovered]"},"status":503}`)
+    fake.On("GET", "/_cluster/health", 200, `{"cluster_name":"library","status":"green","number_of_nodes":1}`)
+    fake.On("POST", "/books/_count", 200, `{"count":7}`)
+    fake.On("HEAD", "/", 200, "")
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    live := "http://127.0.0.1:" + str.FromInt(PORT as i64)
+    dead := "http://127.0.0.1:" + str.FromInt(DEAD as i64)
+
+    mut cfg := elasticsearch.Config { max_retries = 2, timeout_ms = 2000 }
+    cfg.nodes.push(dead)
+    cfg.nodes.push(live)
+    mut c := elasticsearch.NewClient(cfg)
+    before := fake.Count()
+    h := elasticsearch.ClusterHealth(c)
+    println "health after a 503 and a dead node:", h.ok, h.status, "requests that reached the server:", fake.Count() - before
+    println "count:", elasticsearch.Count(c, "books", "")
+    println "status:", elasticsearch.Status(c), "error:", elasticsearch.Error(c).len()
+
+    repeat 3:
+        elasticsearch.Ping(c)
+    end
+    println "pings go straight to the live node:", elasticsearch.Error(c).len() == 0
+    elasticsearch.Close(c)
+
+    mut one := elasticsearch.Connect(dead)
+    println "dead node:", elasticsearch.Ping(one), str.Contains(elasticsearch.Error(one), "could not connect")
+    elasticsearch.Close(one)
+
+    mut plain_cfg := elasticsearch.Config { keep_alive = false }
+    plain_cfg.nodes.push(live)
+    mut plain := elasticsearch.NewClient(plain_cfg)
+    println "keep_alive off:", elasticsearch.Ping(plain), elasticsearch.Count(plain, "books", "")
+    elasticsearch.Close(plain)
+end

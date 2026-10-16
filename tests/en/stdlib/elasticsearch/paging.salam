@@ -1,0 +1,97 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19864
+
+func page(ids: str, scroll: str): str:
+    ret `{"_scroll_id":"` + scroll + `","took":1,"hits":{"total":{"value":3,"relation":"eq"},"hits":[` + ids + `]}}`
+end
+
+func main:
+    fake.On("POST", "/books/_search", 200, page(`{"_id":"1"},{"_id":"2"}`, "S1"))
+    fake.On("POST", "/_search/scroll", 200, page(`{"_id":"3"}`, "S1"))
+    fake.On("POST", "/_search/scroll", 200, page("", "S1"))
+    fake.On("DELETE", "/_search/scroll", 200, `{"succeeded":true,"num_freed":1}`)
+    fake.On("GET", "/", 200, `{"version":{"number":"8.15.3"}}`)
+    fake.On("POST", "/books/_pit", 200, `{"id":"PIT-1"}`)
+    fake.On("POST", "/_search", 200, `{"pit_id":"PIT-1","hits":{"total":{"value":3,"relation":"eq"},"hits":[{"_id":"1","sort":[10,1]},{"_id":"2","sort":[20,2]}]}}`)
+    fake.On("POST", "/_search", 200, `{"pit_id":"PIT-1","hits":{"total":{"value":3,"relation":"eq"},"hits":[{"_id":"3","sort":[30,3]}]}}`)
+    fake.On("POST", "/_search", 200, `{"pit_id":"PIT-1","hits":{"total":{"value":3,"relation":"eq"},"hits":[]}}`)
+    fake.On("DELETE", "/_pit", 200, `{"succeeded":true,"num_freed":1}`)
+    fake.On("POST", "/books/_msearch", 200, `{"responses":[{"status":200,"hits":{"total":{"value":7,"relation":"eq"},"hits":[]}},{"status":400,"error":{"type":"parsing_exception","reason":"bad query"}}]}`)
+    fake.On("POST", "/books/_delete_by_query", 200, `{"deleted":4}`)
+    fake.On("POST", "/books/_update_by_query", 200, `{"updated":6}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortAsc("year"))
+    mut res := elasticsearch.SearchScroll(c, "books", elasticsearch.SearchRequest { query = elasticsearch.MatchAll(), size = 2, sort = sort }, "1m")
+    println "scroll start:", fake.Last()
+    mut seen := 0
+    until res.ok and res.hits.len() > 0:
+        each h in res.hits:
+            println "  scrolled", h.id
+        end
+        seen += res.hits.len()
+        res = elasticsearch.Scroll(c, res.scroll_id, "1m")
+    end
+    println "scroll next:", fake.Last()
+    println "scrolled total:", seen, elasticsearch.ClearScroll(c, res.scroll_id)
+    println "  ", fake.Last()
+
+    pit := elasticsearch.OpenPit(c, "books", "1m")
+    println "pit:", pit, fake.Last()
+    mut after := ""
+    mut more := true
+    until more:
+        p := elasticsearch.Search(c, "", elasticsearch.SearchRequest { size = 2, sort = sort, pit_id = pit, pit_keep_alive = "1m", search_after = after })
+        if p.hits.len() == 0:
+            more = false
+        else:
+            each h in p.hits:
+                println "  pit hit", h.id, h.sort
+            end
+            after = p.hits.get(p.hits.len() - 1).sort
+        end
+    end
+    println "pit page:", fake.Last()
+    println "pit closed:", elasticsearch.ClosePit(c, pit), fake.Last()
+
+    mut bodies := Vector {} as Vector<str>
+    bodies.push(elasticsearch.SearchBody(elasticsearch.SearchRequest { query = elasticsearch.Term("tag", "a"), size = 0 }))
+    bodies.push("{\n \"query\": {\"bogus\": {}}\n}")
+    each r in elasticsearch.MSearch(c, "books", bodies):
+        println "msearch:", r.ok, r.status, r.total, r.error
+    end
+    println "  ", fake.Last()
+
+    println "delete by query:", elasticsearch.DeleteByQuery(c, "books", elasticsearch.Term("status", "draft"))
+    println "  ", fake.Last()
+    println "with options:", elasticsearch.DeleteByQueryWith(c, "books", "", elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR, conflicts = "proceed", routing = "r1" })
+    println "  ", fake.Last()
+    println "update by query:", elasticsearch.UpdateByQuery(c, "books", elasticsearch.Term("tag", "a"), elasticsearch.Script("ctx._source.views += 1", ""))
+    println "  ", fake.Last()
+    println "update with:", elasticsearch.UpdateByQueryWith(c, "books", "", elasticsearch.Script("ctx._source.views = 0", ""), elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE, timeout = "1m" })
+    println "  ", fake.Last()
+    elasticsearch.Close(c)
+end

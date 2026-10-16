@@ -1,0 +1,80 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19861
+
+func show_write(label: str, w: elasticsearch.WriteResult):
+    println label, w.ok, w.status, w.result, w.index, w.id, w.version, w.seq_no, w.primary_term
+    println "  ", fake.Last()
+    if not w.ok: println "  error:", w.error end
+end
+
+func main:
+    created := `{"_index":"books","_id":"1","_version":1,"result":"created","_seq_no":0,"_primary_term":1}`
+    fake.On("PUT", "/books/_doc/1", 201, created)
+    fake.On("POST", "/books/_doc", 201, `{"_index":"books","_id":"Zx81","_version":1,"result":"created","_seq_no":1,"_primary_term":1}`)
+    fake.On("PUT", "/books/_create/2", 409, `{"error":{"type":"version_conflict_engine_exception","reason":"[2]: document already exists"},"status":409}`)
+    fake.On("GET", "/books/_doc/1", 200, `{"_index":"books","_id":"1","_version":3,"_seq_no":5,"_primary_term":1,"found":true,"_source":{"title":"Shahnameh","year":1010}}`)
+    fake.On("GET", "/books/_doc/404", 404, `{"_index":"books","_id":"404","found":false}`)
+    fake.On("GET", "/books/_source/1", 200, `{"title":"Shahnameh","year":1010}`)
+    fake.On("HEAD", "/books/_doc/1", 200, "")
+    fake.On("POST", "/books/_update/1", 200, `{"_index":"books","_id":"1","_version":4,"result":"updated","_seq_no":6,"_primary_term":1}`)
+    fake.On("DELETE", "/books/_doc/1", 200, `{"_index":"books","_id":"1","_version":5,"result":"deleted","_seq_no":7,"_primary_term":1}`)
+    fake.On("POST", "/books/_mget", 200, `{"docs":[{"_index":"books","_id":"1","found":true,"_version":1,"_source":{"title":"Shahnameh"}},{"_index":"books","_id":"9","found":false}]}`)
+    fake.On("POST", "/books/_count", 200, `{"count":42}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    show_write("index:", elasticsearch.Index(c, "books", "1", `{"title":"Shahnameh","year":1010}`))
+    show_write("index with options:", elasticsearch.IndexWith(c, "books", "1", "{\n  \"title\": \"Masnavi\"\n}", elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR, routing = "poetry", pipeline = "clean", if_seq_no = 0, if_primary_term = 1 }))
+    show_write("auto id:", elasticsearch.Index(c, "books", "", `{"title":"Golestan"}`))
+    show_write("create existing:", elasticsearch.Create(c, "books", "2", `{"title":"Bustan"}`))
+    show_write("create auto id:", elasticsearch.CreateWith(c, "books", "", `{"title":"Divan"}`, elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE }))
+
+    d := elasticsearch.Get(c, "books", "1")
+    println "get:", d.found, d.id, d.version, d.seq_no, d.primary_term, d.source
+    missing := elasticsearch.Get(c, "books", "404")
+    println "missing:", missing.found, missing.error.len()
+    filtered := elasticsearch.GetWith(c, "books", "1", elasticsearch.Options { source = "title", routing = "poetry" })
+    println "get with:", filtered.found, fake.Last()
+    println "source:", elasticsearch.GetSource(c, "books", "1")
+    println "exists:", elasticsearch.Exists(c, "books", "1"), elasticsearch.Exists(c, "books", "2")
+
+    show_write("update:", elasticsearch.Update(c, "books", "1", `{"year":1011}`))
+    show_write("update with:", elasticsearch.UpdateWith(c, "books", "1", `{"year":1012}`, elasticsearch.Options { retry_on_conflict = 3, source = "true" }))
+    show_write("upsert:", elasticsearch.Upsert(c, "books", "1", `{"title":"Shahnameh"}`))
+    println "script:", elasticsearch.Script("ctx._source.year += params.n", `{"n": 1}`)
+    show_write("update script:", elasticsearch.UpdateScript(c, "books", "1", "ctx._source.year += params.n", `{"n": 1}`))
+    show_write("delete:", elasticsearch.Delete(c, "books", "1"))
+    show_write("delete with:", elasticsearch.DeleteWith(c, "books", "1", elasticsearch.Options { refresh = elasticsearch.REFRESH_FALSE, timeout = "5s" }))
+
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    ids.push("9")
+    each doc in elasticsearch.MGet(c, "books", ids):
+        println "mget:", doc.id, doc.found, doc.source
+    end
+    println "  ", fake.Last()
+    println "count:", elasticsearch.Count(c, "books", elasticsearch.Term("author", "ferdowsi"))
+    println "  ", fake.Last()
+    elasticsearch.Close(c)
+end

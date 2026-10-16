@@ -1,0 +1,108 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19851
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("GET", "/health", 200, `{"ok":true}`)
+    fake.On("GET", "/debug", 200, `{"state":1,"version":"30.2"}`)
+    fake.On("GET", "/status", 200, `{"committed_index":9,"queued_writes":2,"state":"LEADER"}`)
+    fake.On("GET", "/stats.json", 200, `{"latency_ms":{},"search_requests_per_second":0}`)
+    fake.On("GET", "/metrics.json", 200, `{"system_memory_used_bytes":"1024"}`)
+    fake.On("POST", "/operations/snapshot", 201, `{"success":true}`)
+    fake.On("POST", "/operations/vote", 200, `{"success":false}`)
+    fake.On("POST", "/operations/cache/clear", 200, `{"success":true}`)
+    fake.On("POST", "/operations/db/compact", 200, `{"success":true}`)
+    fake.On("POST", "/operations/reset_peers", 200, `{"success":true}`)
+    fake.On("GET", "/operations/schema_changes", 200, `[{"collection":"books","validated_docs":10,"altered_docs":3}]`)
+    fake.On("POST", "/config", 200, `{"success":true}`)
+    fake.On("GET", "/forbidden", 401, `{"message": "Forbidden - a valid ` + "`x-typesense-api-key`" + ` header must be sent."}`)
+    fake.On("GET", "/conflict", 409, `{"message": "A collection with name ` + "`books`" + ` already exists."}`)
+    fake.On("GET", "/plain", 400, `not json at all`)
+    fake.On("GET", "/ts/health", 200, `{"ok":true}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+
+    mut c := typesense.New("127.0.0.1:" + PORT + "/", "xyz")
+    defer typesense.Free(c)
+    println "nodes: " + str.Join(c.nodes, ",")
+    println "defaults: timeout=" + c.timeout_ms + " retries=" + c.retries + " interval=" + c.retry_interval_ms + " healthcheck=" + c.healthcheck_ms
+    mut err := typesense.Error {}
+
+    println "health: " + typesense.Health(c, err)
+    show("health", err)
+    println "healthy: " + typesense.IsHealthy(c)
+    println "version: " + typesense.ServerVersion(c, err)
+    println "debug: " + typesense.Debug(c, err)
+    st := typesense.Status(c, err)
+    println "status: " + st.state + " " + st.committed_index + " " + st.queued_writes
+    println "stats: " + typesense.Stats(c, err)
+    println "metrics: " + typesense.Metrics(c, err)
+    println "snapshot: " + typesense.CreateSnapshot(c, "/tmp/ts snap", err)
+    show("snapshot", err)
+    println "vote: " + typesense.Vote(c, err)
+    println "cache: " + typesense.ClearCache(c, err)
+    println "compact: " + typesense.CompactDB(c, err)
+    println "peers: " + typesense.ResetPeers(c, err)
+    changes := typesense.SchemaChanges(c, err)
+    println "schema changes: " + changes.len() + " " + changes.get(0)
+    println "slow log: " + typesense.SetSlowRequestLog(c, 2000, err)
+    show("slow log", err)
+
+    _ := typesense.Request(c, "GET", "/forbidden", "", err)
+    println "401: status=" + err.status + " kind=" + err.kind + " not_found=" + typesense.IsNotFound(err)
+    println "  " + typesense.ErrorString(err)
+    _ := typesense.Request(c, "GET", "/conflict", "", err)
+    println "409: conflict=" + typesense.IsConflict(err) + " " + typesense.ErrorString(err)
+    _ := typesense.Request(c, "GET", "/plain", "", err)
+    println "400: " + typesense.ErrorString(err)
+    _ := typesense.Request(c, "GET", "/missing", "", err)
+    println "404: not_found=" + typesense.IsNotFound(err) + " " + typesense.ErrorString(err)
+    println "ok after error: " + typesense.Ok(err)
+    body := typesense.Request(c, "GET", "/health", "", err)
+    println "ok again: " + typesense.Ok(err) + " " + body + " [" + typesense.ErrorString(err) + "]"
+
+    typesense.AddHeader(c, "X-Tenant", "acme")
+    _ := typesense.RequestAs(c, "POST", "/config", "application/x-ndjson", `{"a":1}`, err)
+    show("request as", err)
+    _ := typesense.Request(c, "POST", "/operations/vote", "", err)
+    show("empty post", err)
+
+    mut prefixed := typesense.New("http://127.0.0.1:" + PORT + "/ts", "")
+    defer typesense.Free(prefixed)
+    println "prefixed: " + typesense.Health(prefixed, err)
+    show("prefixed", err)
+
+    mut none := typesense.NewCluster(Vector {} as Vector<str>, "k")
+    defer typesense.Free(none)
+    println "no nodes: " + typesense.Health(none, err) + " " + typesense.ErrorString(err)
+    mut bad := typesense.New("ftp://example.com", "k")
+    defer typesense.Free(bad)
+    println "bad url: " + typesense.Health(bad, err) + " " + typesense.ErrorString(err)
+end

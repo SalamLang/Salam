@@ -1,6 +1,7 @@
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
 const SECRET = process.env.BRIDGE_SECRET ?? "";
+const HOLD = 1000 * Number(process.env.HOLD_SECONDS ?? 2);
 
 let passed = 0;
 const failures = [];
@@ -108,6 +109,22 @@ await answer(secret, { call_id: call2.id, status: "denied", output: "" });
 const done2 = await settle(session, chat.json.chat.id, sent2.json.assistant.id);
 check("a refused call reaches the model as an error", done2.body.includes("error The user refused this call."), done2.body);
 
+console.log("long call");
+const third = poll(secret);
+await new Promise((r) => setTimeout(r, 300));
+const sent3 = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: make build" });
+const call3 = (await (await third).json()).call;
+const keepPolling = (async () => {
+  for (let i = 0; i < 4; i += 1) await (await poll(secret)).text();
+})();
+await new Promise((r) => setTimeout(r, 2 * HOLD + 1500));
+await answer(secret, { call_id: call3.id, status: "ok", output: "built after a long time" });
+const done3 = await settle(session, chat.json.chat.id, sent3.json.assistant.id);
+check("a call longer than the hold time is picked up with wait", done3.status === "done" && done3.body.includes("ok built after a long time after") && /after [2-9] waits/.test(done3.body), done3.body);
+await keepPolling;
+const lostWait = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "wait", arguments: { session: "0".repeat(32), call_id: call3.id } } });
+check("waiting on a finished or foreign call is a tool error", lostWait.json.result.isError === true, lostWait.json);
+
 console.log("mcp endpoint");
 const unauth = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "nope-nope-nope-nope");
 check("the MCP endpoint needs the bridge secret", unauth.res.status === 401);
@@ -115,7 +132,7 @@ const init = await mcp({ jsonrpc: "2.0", id: "a", method: "initialize", params: 
 check("initialize answers with tools capability", init.json.id === "a" && init.json.result.capabilities.tools !== undefined && init.json.result.serverInfo.name === "salam-agent", init.json);
 const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 const names = tools.json.result.tools.map((t) => t.name);
-check("tools/list has every desktop tool", ["shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests"].every((n) => names.includes(n)), names);
+check("tools/list has every desktop tool", ["shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "wait"].every((n) => names.includes(n)), names);
 check("every tool requires the session", tools.json.result.tools.every((t) => t.inputSchema.required.includes("session")));
 const stray = await mcp({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "shell", arguments: { session: "0".repeat(32), command: "ls" } } });
 check("an unknown session is a tool error", stray.json.result.isError === true, stray.json);

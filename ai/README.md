@@ -36,18 +36,18 @@ The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, a
 
 The API:
 
-| Method and path                                                                                | Purpose                                                                          |
-| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                 |
-| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                         |
-| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                              |
-| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                               |
-| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message              |
-| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending` |
-| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                    |
-| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove desktop apps    |
-| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls   |
-| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                            |
+| Method and path                                                                                | Purpose                                                                               |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                      |
+| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                              |
+| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                   |
+| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                                    |
+| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                   |
+| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`      |
+| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                         |
+| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs |
+| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls        |
+| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                 |
 
 ### OpenAI-compatible API
 
@@ -145,7 +145,7 @@ only when an answer uses them.
 
 ## Desktop agent bridge
 
-The desktop app (`ai-desktop/`) lets the assistant work on the user's own
+Salam Agent (ایجنت سلام, `agent/`) lets the assistant work on the user's own
 computer. The engine never reaches that computer directly. The API relays the
 calls:
 

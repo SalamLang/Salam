@@ -779,6 +779,14 @@ if want db; then
                     fi
                     continue
                     ;;
+                tslive_*)
+                    if [ -z "${SALAM_TEST_TYPESENSE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_TYPESENSE to \"url api-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 eslive_*)
                     if [ -z "${SALAM_TEST_ES:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_ES to an Elasticsearch URL)" "db/$lang/$name"

@@ -45,7 +45,7 @@ const LANG_NAMES: Record<string, string> = {
 
 const RICH_EVERY_MS = 250;
 
-function useHighlighted(code: string, lang: string): string {
+export function useHighlighted(code: string, lang: string): string {
   const quick = highlight(code, lang);
   const [rich, setRich] = useState<{ key: string; html: string } | null>(null);
   const last = useRef(0);

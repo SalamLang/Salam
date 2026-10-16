@@ -36,31 +36,31 @@ mkdir "$stage/$name"
 cp "$repo/LICENSE" "$stage/$name/LICENSE"
 
 case "$os" in
-    linux)
-        cp "$(pick "$bundle"/deb/*.deb)" "$out/$name.deb"
-        cp "$(pick "$bundle"/rpm/*.rpm)" "$out/$name.rpm"
-        appimages=("$bundle"/appimage/*.AppImage)
-        if [ ${#appimages[@]} -gt 0 ]; then
-            cp "$(pick "${appimages[@]}")" "$out/$name.AppImage"
-        fi
-        cp "$rel/salam-agent" "$stage/$name/salam-agent"
-        chmod 755 "$stage/$name/salam-agent"
-        ;;
-    windows)
-        cp "$(pick "$bundle"/nsis/*-setup.exe)" "$out/$name-setup.exe"
-        msi_files=("$bundle"/msi/*.msi)
-        if [ ${#msi_files[@]} -gt 0 ]; then
-            cp "$(pick "${msi_files[@]}")" "$out/$name.msi"
-        fi
-        cp "$rel/salam-agent.exe" "$stage/$name/salam-agent.exe"
-        ;;
-    macos)
-        cp "$(pick "$bundle"/dmg/*.dmg)" "$out/$name.dmg"
-        cp -R "$(pick "$bundle"/macos/*.app)" "$stage/$name/"
-        ;;
-    *)
-        die "unknown os: $os"
-        ;;
+linux)
+    cp "$(pick "$bundle"/deb/*.deb)" "$out/$name.deb"
+    cp "$(pick "$bundle"/rpm/*.rpm)" "$out/$name.rpm"
+    appimages=("$bundle"/appimage/*.AppImage)
+    if [ ${#appimages[@]} -gt 0 ]; then
+        cp "$(pick "${appimages[@]}")" "$out/$name.AppImage"
+    fi
+    cp "$rel/salam-agent" "$stage/$name/salam-agent"
+    chmod 755 "$stage/$name/salam-agent"
+    ;;
+windows)
+    cp "$(pick "$bundle"/nsis/*-setup.exe)" "$out/$name-setup.exe"
+    msi_files=("$bundle"/msi/*.msi)
+    if [ ${#msi_files[@]} -gt 0 ]; then
+        cp "$(pick "${msi_files[@]}")" "$out/$name.msi"
+    fi
+    cp "$rel/salam-agent.exe" "$stage/$name/salam-agent.exe"
+    ;;
+macos)
+    cp "$(pick "$bundle"/dmg/*.dmg)" "$out/$name.dmg"
+    cp -R "$(pick "$bundle"/macos/*.app)" "$stage/$name/"
+    ;;
+*)
+    die "unknown os: $os"
+    ;;
 esac
 
 (cd "$stage" && tar -czf "$out/$name.tar.gz" "$name")

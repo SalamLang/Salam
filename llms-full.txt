@@ -30746,6 +30746,9 @@ func main:
     println json.Minify(pretty) == json.Minify(text)
     println json.Indent4(`{"a":1}`)
     println json.IndentTabs(`{"a":1}`) == "{\n\t\"a\": 1\n}", json.IndentWith(`[1]`, "--")
+    nested := `{"user":{"tags":["a","b"],"name":"Ali"}}`
+    println json.GetPath(nested, "user.name"), json.GetPath(nested, "user.tags.1"), json.Items(json.GetPath(nested, "user.tags")).len()
+    println json.Unquote(`"\u0633\u0644\u0627\u0645"`)
 end
 ```
 
@@ -30774,6 +30777,8 @@ true
 true [
 --1
 ]
+Ali b 2
+سلام
 ```
 
 ### `Get`
@@ -30963,6 +30968,36 @@ func Keys(text: str): Vector<str>
 ```
 
 The keys of the top-level object, in the order of the text.
+
+The example for this item is shown with the ones above: encoding-json-Build.salam
+
+### `Items`
+
+```salam
+func Items(text: str): Vector<str>
+```
+
+The raw text of each element of a top-level array, ready for `Get` or `Items` again.
+
+The example for this item is shown with the ones above: encoding-json-Build.salam
+
+### `Unquote`
+
+```salam
+func Unquote(raw: str): str
+```
+
+Decodes a raw JSON string token, escapes included; anything else comes back unchanged.
+
+The example for this item is shown with the ones above: encoding-json-Build.salam
+
+### `GetPath`
+
+```salam
+func GetPath(text: str, path: str): str
+```
+
+Follows a dotted path through objects and arrays, such as `hits.hits.0._source`; strings come back decoded, anything else as raw JSON, and a missing step gives an empty string.
 
 The example for this item is shown with the ones above: encoding-json-Build.salam
 
@@ -41957,6 +41992,7 @@ An HTTP response.
 net-httpx-Send.salam
 
 ```salam
+import tls
 import net.httpx
 import net.tcp
 import mem
@@ -41964,7 +42000,7 @@ import mem
 mut server := tcp.Server {}
 
 func responder():
-    repeat 2:
+    repeat 3:
         conn := tcp.Accept(server)
         _ := tcp.Read(conn, 4096)
         tcp.WriteHTTP(conn, "200 OK", "text/plain", "hello from the server")
@@ -41985,6 +42021,11 @@ func main:
     mut raw := httpx.SendRawTimeout(local, head, null, 0, 2000)
     println raw.ok, raw.status, raw.len, httpx.RawText(raw)
     httpx.FreeRaw(raw)
+    mut cfg := tls.NewConfig("127.0.0.1")
+    cfg.ca_file = "/etc/ssl/certs/ca-certificates.crt"
+    mut secured := httpx.SendRawTLS(local, head, null, 0, 2000, cfg)
+    println secured.status, secured.len
+    httpx.FreeRaw(secured)
     join(t)
     tcp.CloseServer(server)
     println httpx.RawLimit() > 0
@@ -42007,6 +42048,7 @@ true api.example.com 8443 true
 true 200 hello from the server []
 text/plain
 true 200 21 hello from the server
+200 21
 true
 1048576
 3
@@ -42118,6 +42160,16 @@ func SendRawTimeout(ep: Endpoint, head: str, body: void*, n: int, timeout_ms: in
 ```
 
 The same, with a timeout.
+
+The example for this item is shown with the ones above: net-httpx-Send.salam
+
+### `SendRawTLS`
+
+```salam
+func SendRawTLS(ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int, cfg: tls.Config): Raw
+```
+
+Like `SendRawTimeout`, with your own `tls.Config`: a private CA in `ca_file`, or `insecure_skip_verify` for local testing. A plain `http` endpoint ignores it.
 
 The example for this item is shown with the ones above: net-httpx-Send.salam
 
@@ -59487,7 +59539,7 @@ https://salamlang.github.io/Salam/std/db/
 
 One interface shared by the database engines, schema migrations and a connection pool.
 
-Every database engine has its own package: db/sqlite, db/mysql, db/postgres, and for key and value db/redis. This package gives the `Connection` interface that the three SQL engines implement; write your code against it and changing engine is one line.
+Every database engine has its own package: db/sqlite, db/mysql, db/postgres, for key and value db/redis, and for search db/meilisearch and db/elasticsearch, which also answers SQL queries through `Connection`. This package gives the `Connection` interface that the three SQL engines implement; write your code against it and changing engine is one line.
 
 Migrations move the database schema along with the code: every change has a number and `MigrateUp` applies only the ones not applied yet. Never paste a value a user typed straight into SQL; send it through `QuoteLiteral` or as a prepared parameter.
 
@@ -59770,6 +59822,16 @@ const POSTGRES: str = "postgres"
 ```
 
 The name of the PostgreSQL engine.
+
+The example for this item is shown with the ones above: db-Connection.salam
+
+### `ELASTICSEARCH`
+
+```salam
+const ELASTICSEARCH: str = "elasticsearch"
+```
+
+The name of the Elasticsearch engine.
 
 The example for this item is shown with the ones above: db-Connection.salam
 
@@ -63033,6 +63095,4865 @@ func FreeReply(r: Reply)
 Frees the reply.
 
 The example for this item is shown with the ones above: db-redis-Client.salam
+
+
+---
+
+# db/elasticsearch
+
+https://salamlang.github.io/Salam/std/db-elasticsearch/
+
+An Elasticsearch and OpenSearch client: documents, search, aggregations, bulk, SQL and index management.
+
+Elasticsearch is a search engine and document store spoken to with JSON over HTTP. This package is written in Salam on top of `net.httpx` and `tls`, with no outside library. It works with Elasticsearch 7 and 8, Elastic Cloud (`ConnectCloud`) and OpenSearch; SQL and point in time calls switch to the OpenSearch endpoints by themselves. A client can list several nodes: it rotates over them, skips a node that refuses connections for `DEAD_NODE_MS`, and retries on 502, 503 and 504. Documents and query clauses are plain JSON text, so you can mix the builders here with JSON you write by hand, and `Perform` reaches every API that has no function of its own. After any call, `Error`, `ErrorType` and `Status` describe what the server said. The examples need a running cluster, so they are only checked.
+
+## Types
+
+### `Config`
+
+```salam
+struct Config
+```
+
+Everything a client needs: nodes, credentials, TLS, timeout, retries and extra headers.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `nodes` | `Vector` | Node URLs; each may list several separated by commas. |
+| `cloud_id` | `str = ""` | An Elastic Cloud id, used before `nodes`. |
+| `username` | `str = ""` | The user for basic authentication. |
+| `password` | `str = ""` | The password for basic authentication. |
+| `api_key` | `str = ""` | An API key, encoded or `id:key`; wins over basic authentication. |
+| `bearer` | `str = ""` | A bearer token, such as a service account token. |
+| `ca_file` | `str = ""` | A PEM file of the CA that signed the cluster certificate, for example `http_ca.crt`. |
+| `insecure` | `bool = false` | Skip TLS certificate checks. Only for local testing. |
+| `timeout_ms` | `int = 30000` | The connect and read timeout of one request in milliseconds; 0 waits forever. |
+| `max_retries` | `int = 3` | How many more nodes to try after a connection failure or a 502, 503 or 504. |
+| `headers` | `HashMap` | Extra headers sent with every request. |
+
+db-elasticsearch-Client.salam
+
+```salam
+import db.elasticsearch
+
+func main:
+    mut cfg := elasticsearch.DefaultConfig()
+    cfg.username = "elastic"
+    cfg.password = "s3cret"
+    cfg.ca_file = "/etc/elasticsearch/certs/http_ca.crt"
+    cfg.timeout_ms = 10000
+    cfg.headers.put("X-Opaque-Id", "salam-docs")
+    mut c := elasticsearch.NewClient(cfg)
+    if not elasticsearch.Ping(c):
+        println "cannot reach elasticsearch:", elasticsearch.Error(c)
+        ret
+    end
+    info := elasticsearch.GetInfo(c)
+    println info.distribution, info.version, elasticsearch.ClusterHealth(c).status
+
+    mapping := `{"mappings":{"properties":{"title":{"type":"text"},"year":{"type":"integer"}}}}`
+    if not elasticsearch.IndexExists(c, "books"):
+        elasticsearch.CreateIndex(c, "books", mapping)
+    end
+    w := elasticsearch.IndexWith(c, "books", "1", `{"title":"Shahnameh","year":1010}`, elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR })
+    println w.result, w.version
+
+    d := elasticsearch.Get(c, "books", "1")
+    if d.found: println d.source end
+    u := elasticsearch.UpdateWith(c, "books", "1", `{"year":1011}`, elasticsearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    if not u.ok: println "conflict:", elasticsearch.ErrorType(c) end
+    elasticsearch.UpdateScript(c, "books", "1", "ctx._source.year += params.n", `{"n": 1}`)
+    println elasticsearch.Exists(c, "books", "1"), elasticsearch.Count(c, "books", "")
+
+    r := elasticsearch.Perform(c, "GET", "/_cat/health?format=json", "")
+    println r.status, r.body
+    elasticsearch.Delete(c, "books", "1")
+    elasticsearch.Close(c)
+end
+```
+
+### `Client`
+
+```salam
+struct Client
+```
+
+A client handle. It is cheap to pass by value; free it with `Close`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `handle` | `void*` | The internal state pointer. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Response`
+
+```salam
+struct Response
+```
+
+The raw answer of `Perform`: status, body and the parsed error envelope.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `status` | `int = 0` | The HTTP status, or the status reported for this item. |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `body` | `str = ""` | The response body. |
+| `error` | `str = ""` | The error text, empty on success. |
+| `error_type` | `str = ""` | The Elasticsearch `error.type`. |
+| `error_reason` | `str = ""` | The Elasticsearch `error.reason`. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Options`
+
+```salam
+struct Options
+```
+
+Optional request parameters shared by the write calls: refresh, routing, pipeline, optimistic concurrency and more.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `refresh` | `str = ""` | `true`, `wait_for` or `false`; see the `REFRESH_*` constants. |
+| `routing` | `str = ""` | A custom routing value. |
+| `pipeline` | `str = ""` | An ingest pipeline to run first. |
+| `timeout` | `str = ""` | A server side timeout such as `30s`. |
+| `wait_for_active_shards` | `str = ""` | How many shard copies must be active, or `all`. |
+| `source` | `str = ""` | Source filtering: for `Options` a comma list of fields, for `SearchRequest` the fields to return; on results the raw `_source` JSON. |
+| `conflicts` | `str = ""` | `proceed` to skip version conflicts in by query operations. |
+| `if_seq_no` | `i64 = -1` | Only write when the document still has this sequence number; -1 turns it off. |
+| `if_primary_term` | `i64 = -1` | The primary term that goes with `if_seq_no`. |
+| `retry_on_conflict` | `int = -1` | How many times an update retries on a version conflict; -1 leaves the default. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `WriteResult`
+
+```salam
+struct WriteResult
+```
+
+The outcome of indexing, creating, updating or deleting one document.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `status` | `int = 0` | The HTTP status, or the status reported for this item. |
+| `index` | `str = ""` | The index name. |
+| `id` | `str = ""` | The document id. |
+| `result` | `str = ""` | `created`, `updated`, `deleted`, `noop` or `not_found`. |
+| `version` | `i64 = 0` | The document version, or the cluster version for `Info`. |
+| `seq_no` | `i64 = -1` | The sequence number, for optimistic concurrency; -1 when unknown. |
+| `primary_term` | `i64 = 0` | The primary term, for optimistic concurrency. |
+| `error` | `str = ""` | The error text, empty on success. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Document`
+
+```salam
+struct Document
+```
+
+One fetched document with its metadata and raw `_source`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `found` | `bool = false` | Whether the document exists. |
+| `index` | `str = ""` | The index name. |
+| `id` | `str = ""` | The document id. |
+| `version` | `i64 = 0` | The document version, or the cluster version for `Info`. |
+| `seq_no` | `i64 = -1` | The sequence number, for optimistic concurrency; -1 when unknown. |
+| `primary_term` | `i64 = 0` | The primary term, for optimistic concurrency. |
+| `source` | `str = ""` | Source filtering: for `Options` a comma list of fields, for `SearchRequest` the fields to return; on results the raw `_source` JSON. |
+| `fields` | `str = ""` | Stored or runtime fields: raw JSON on results, a field list on `SearchRequest`. |
+| `error` | `str = ""` | The error text, empty on success. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Hit`
+
+```salam
+struct Hit
+```
+
+One search hit.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `str = ""` | The index name. |
+| `id` | `str = ""` | The document id. |
+| `score` | `f64 = 0` | The relevance score. |
+| `source` | `str = ""` | Source filtering: for `Options` a comma list of fields, for `SearchRequest` the fields to return; on results the raw `_source` JSON. |
+| `sort` | `str = ""` | Sort clauses on a request; on a hit the raw sort values, to pass to `search_after`. |
+| `highlight` | `str = ""` | Highlighting: the section on a request, the raw fragments on a hit. |
+| `fields` | `str = ""` | Stored or runtime fields: raw JSON on results, a field list on `SearchRequest`. |
+| `raw` | `str = ""` | The raw JSON it was parsed from. |
+
+db-elasticsearch-Search.salam
+
+```salam
+import db.elasticsearch
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+    mut must := Vector {} as Vector<str>
+    must.push(elasticsearch.Match("title", "persian poetry"))
+    mut filters := Vector {} as Vector<str>
+    filters.push(elasticsearch.Range("year", "900", "1500"))
+    filters.push(elasticsearch.Not(elasticsearch.Term("status", "draft")))
+    mut aggs := elasticsearch.AddAgg("", "by_author", elasticsearch.SubAggs(elasticsearch.TermsAgg("author", 5), elasticsearch.AddAgg("", "avg_year", elasticsearch.AvgAgg("year"))))
+    aggs = elasticsearch.AddAgg(aggs, "newest", elasticsearch.MaxAgg("year"))
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("year"))
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    req := elasticsearch.SearchRequest {
+        query = elasticsearch.Filtered(elasticsearch.And(must), filters), size = 10, sort = sort, aggs = aggs, highlight = elasticsearch.Highlight(fields)
+    }
+    res := elasticsearch.Search(c, "books", req)
+    if not res.ok:
+        println elasticsearch.Error(c)
+        ret
+    end
+    println res.total, res.total_relation, res.took
+    each h in res.hits:
+        println h.id, h.score, h.source, h.highlight
+    end
+    println elasticsearch.AggValue(res, "newest")
+    each b in elasticsearch.AggBuckets(res, "by_author"):
+        println b.key, b.doc_count, elasticsearch.AggValueIn(b.raw, "avg_year")
+    end
+
+    mut page := elasticsearch.SearchScroll(c, "books", elasticsearch.SearchRequest { query = elasticsearch.MatchAll(), size = 500 }, "1m")
+    until page.hits.len() > 0:
+        println "page of", page.hits.len()
+        page = elasticsearch.Scroll(c, page.scroll_id, "1m")
+    end
+    elasticsearch.ClearScroll(c, page.scroll_id)
+
+    pit := elasticsearch.OpenPit(c, "books", "1m")
+    first := elasticsearch.Search(c, "", elasticsearch.SearchRequest { pit_id = pit, size = 100, sort = sort })
+    if first.hits.len() > 0:
+        last := first.hits.get(first.hits.len() - 1)
+        next := elasticsearch.Search(c, "", elasticsearch.SearchRequest { pit_id = pit, size = 100, sort = sort, search_after = last.sort })
+        println next.hits.len()
+    end
+    elasticsearch.ClosePit(c, pit)
+    println elasticsearch.DeleteByQuery(c, "books", elasticsearch.Term("status", "draft"))
+end
+```
+
+### `SearchResult`
+
+```salam
+struct SearchResult
+```
+
+A parsed search response: totals, hits, aggregations and paging ids.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `status` | `int = 0` | The HTTP status, or the status reported for this item. |
+| `took` | `i64 = 0` | Milliseconds the server spent. |
+| `timed_out` | `bool = false` | Whether the server timed out. |
+| `total` | `i64 = 0` | The number of matching documents. |
+| `total_relation` | `str = ""` | `eq` when `total` is exact, `gte` when it is a lower bound. |
+| `max_score` | `f64 = 0` | The best score. |
+| `hits` | `Vector` | The hits of this page. |
+| `aggregations` | `str = ""` | The raw aggregations JSON. |
+| `suggest` | `str = ""` | Suggesters: the section on a request, the raw result on a response. |
+| `scroll_id` | `str = ""` | The id for the next `Scroll`. |
+| `pit_id` | `str = ""` | A point in time id: on a request to search it, on a result the refreshed id. |
+| `raw` | `str = ""` | The raw JSON it was parsed from. |
+| `error` | `str = ""` | The error text, empty on success. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SearchRequest`
+
+```salam
+struct SearchRequest
+```
+
+A search request; `SearchBody` turns it into JSON. Empty fields are left out.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `query` | `str = ""` | The query clause JSON; empty matches everything. |
+| `from` | `int = -1` | The offset of the first hit; -1 leaves it out. |
+| `size` | `int = -1` | How many hits to return; -1 leaves it out. |
+| `sort` | `Vector` | Sort clauses on a request; on a hit the raw sort values, to pass to `search_after`. |
+| `source` | `Vector` | Source filtering: for `Options` a comma list of fields, for `SearchRequest` the fields to return; on results the raw `_source` JSON. |
+| `source_excludes` | `Vector` | Fields to leave out of `_source`. |
+| `no_source` | `bool = false` | Return no `_source` at all. |
+| `fields` | `Vector` | Stored or runtime fields: raw JSON on results, a field list on `SearchRequest`. |
+| `aggs` | `str = ""` | The aggregations object, built with `AddAgg`. |
+| `highlight` | `str = ""` | Highlighting: the section on a request, the raw fragments on a hit. |
+| `post_filter` | `str = ""` | A filter applied after aggregations. |
+| `knn` | `str = ""` | A `Knn` clause for vector search. |
+| `collapse` | `str = ""` | A field to collapse hits on, one hit per value. |
+| `suggest` | `str = ""` | Suggesters: the section on a request, the raw result on a response. |
+| `search_after` | `str = ""` | The raw sort values of the last hit of the previous page. |
+| `pit_id` | `str = ""` | A point in time id: on a request to search it, on a result the refreshed id. |
+| `pit_keep_alive` | `str = ""` | How long to keep the point in time alive, such as `1m`. |
+| `track_total_hits` | `str = ""` | `true` for an exact total, or a number as the counting limit. |
+| `min_score` | `str = ""` | Leave out hits scoring below this. |
+| `timeout` | `str = ""` | A server side timeout such as `30s`. |
+| `extra` | `Vector` | Raw members added to the body, such as `"explain": true`. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Bucket`
+
+```salam
+struct Bucket
+```
+
+One bucket of a bucket aggregation.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `key` | `str = ""` | The bucket key, or `key_as_string` when there is one. |
+| `doc_count` | `i64 = 0` | How many documents fell into the bucket. |
+| `raw` | `str = ""` | The raw bucket JSON, for sub aggregations with `AggValueIn`. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Bulk`
+
+```salam
+struct Bulk
+```
+
+A bulk request being built; add actions with the `Bulk*` functions.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `lines` | `Vector` | The NDJSON lines so far. |
+| `count` | `int = 0` | How many actions were added. |
+
+db-elasticsearch-Bulk.salam
+
+```salam
+import str
+import db.elasticsearch
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+    mut b := elasticsearch.NewBulk()
+    repeat 1000 in i:
+        id := str.FromInt(i as i64)
+        elasticsearch.BulkIndex(b, "logs", id, `{"line":` + id + `,"level":"info"}`)
+    end
+    elasticsearch.BulkUpdate(b, "logs", "7", `{"level":"warn"}`)
+    elasticsearch.BulkUpsert(b, "logs", "new", `{"line":-1}`)
+    elasticsearch.BulkDelete(b, "logs", "8")
+    println elasticsearch.BulkLen(b)
+    res := elasticsearch.RunBulkWith(c, "", b, elasticsearch.Options { refresh = elasticsearch.REFRESH_TRUE })
+    println res.ok, res.succeeded, res.failed, res.took
+    if res.errors:
+        each it in res.items:
+            if not it.ok: println it.action, it.id, it.status, it.error_type, it.error_reason end
+        end
+    end
+    elasticsearch.BulkReset(b)
+end
+```
+
+### `BulkItem`
+
+```salam
+struct BulkItem
+```
+
+The result of one action in a bulk request.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `action` | `str = ""` | `index`, `create`, `update` or `delete`. |
+| `index` | `str = ""` | The index name. |
+| `id` | `str = ""` | The document id. |
+| `status` | `int = 0` | The HTTP status, or the status reported for this item. |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `result` | `str = ""` | `created`, `updated`, `deleted`, `noop` or `not_found`. |
+| `version` | `i64 = 0` | The document version, or the cluster version for `Info`. |
+| `error_type` | `str = ""` | The Elasticsearch `error.type`. |
+| `error_reason` | `str = ""` | The Elasticsearch `error.reason`. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkResult`
+
+```salam
+struct BulkResult
+```
+
+The result of a bulk request, with one item per action.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `status` | `int = 0` | The HTTP status, or the status reported for this item. |
+| `took` | `i64 = 0` | Milliseconds the server spent. |
+| `errors` | `bool = false` | Whether any action failed. |
+| `succeeded` | `int = 0` | How many actions succeeded. |
+| `failed` | `int = 0` | How many actions failed. |
+| `items` | `Vector` | One result per action, in order. |
+| `error` | `str = ""` | The error text, empty on success. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `Info`
+
+```salam
+struct Info
+```
+
+What the root endpoint says about the cluster.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `name` | `str = ""` | The name of the node that answered. |
+| `cluster_name` | `str = ""` | The cluster name. |
+| `cluster_uuid` | `str = ""` | The cluster uuid. |
+| `version` | `str = ""` | The server version number. |
+| `distribution` | `str = ""` | `elasticsearch` or `opensearch`. |
+| `build_flavor` | `str = ""` | The build flavor, such as `default`. |
+| `lucene_version` | `str = ""` | The Lucene version. |
+| `tagline` | `str = ""` | The tagline the server sends. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Health`
+
+```salam
+struct Health
+```
+
+Cluster health.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `ok` | `bool = false` | Whether it succeeded. |
+| `cluster_name` | `str = ""` | The cluster name. |
+| `status` | `str = ""` | `green`, `yellow` or `red`. |
+| `timed_out` | `bool = false` | Whether the server timed out. |
+| `nodes` | `int = 0` | The number of nodes. |
+| `data_nodes` | `int = 0` | The number of data nodes. |
+| `active_primary_shards` | `int = 0` | Active primary shards. |
+| `active_shards` | `int = 0` | Active shards. |
+| `relocating_shards` | `int = 0` | Shards being moved. |
+| `initializing_shards` | `int = 0` | Shards being initialized. |
+| `unassigned_shards` | `int = 0` | Shards with no node. |
+| `pending_tasks` | `int = 0` | Cluster tasks waiting. |
+| `active_shards_percent` | `f64 = 0` | The percent of shards that are active. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `IndexInfo`
+
+```salam
+struct IndexInfo
+```
+
+One row of `CatIndices`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `health` | `str = ""` | `green`, `yellow` or `red`. |
+| `status` | `str = ""` | `open` or `close`. |
+| `index` | `str = ""` | The index name. |
+| `uuid` | `str = ""` | The index uuid. |
+| `primaries` | `int = 0` | The number of primary shards. |
+| `replicas` | `int = 0` | The number of replicas. |
+| `docs_count` | `i64 = 0` | The number of documents. |
+| `docs_deleted` | `i64 = 0` | Deleted documents not yet merged away. |
+| `store_size` | `str = ""` | The size on disk in bytes. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `SqlRows`
+
+```salam
+struct SqlRows
+```
+
+SQL query results; implements `db.Rows` and fetches further pages with the cursor as you call `Next`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `handle` | `void*` | The internal state pointer. |
+
+db-elasticsearch-Sql.salam
+
+```salam
+import db
+import db.elasticsearch
+
+func report(conn: dyn db.Connection):
+    rows := conn.Query("SELECT level, COUNT(*) AS n FROM logs GROUP BY level")
+    until rows.Next():
+        println rows.Text(0), rows.Int(1)
+    end
+    rows.Close()
+end
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+    mut params := Vector {} as Vector<str>
+    params.push("100")
+    mut rows := elasticsearch.SqlWith(c, "SELECT line, level FROM logs WHERE line < ? ORDER BY line", params, 50)
+    println rows.ColumnCount(), rows.ColumnName(0), rows.ColumnTypeName(0), rows.ColumnType(0) == db.TYPE_INT
+    until rows.Next():
+        println rows.Int64(0), rows.Text(1), rows.IsNull(1)
+    end
+    rows.Close()
+    print elasticsearch.SqlText(c, "SELECT level FROM logs LIMIT 3")
+    println elasticsearch.SqlTranslate(c, "SELECT line FROM logs WHERE level = 'warn'")
+    report(elasticsearch.Conn(c))
+end
+```
+
+#### `Ok`
+
+```salam
+func Ok(): bool
+```
+
+Whether the query succeeded.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Error`
+
+```salam
+func Error(): str
+```
+
+The error of the query, empty on success.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Next`
+
+```salam
+func Next(): bool
+```
+
+Moves to the next row, fetching the next page when needed.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `ColumnCount`
+
+```salam
+func ColumnCount(): int
+```
+
+The number of columns.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `ColumnName`
+
+```salam
+func ColumnName(col: int): str
+```
+
+The name of a column.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `ColumnTypeName`
+
+```salam
+func ColumnTypeName(col: int): str
+```
+
+The Elasticsearch type of a column, such as `long` or `keyword`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `ColumnType`
+
+```salam
+func ColumnType(col: int): int
+```
+
+The `db.TYPE_*` kind of a column, `TYPE_NULL` for a null cell.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `IsNull`
+
+```salam
+func IsNull(col: int): bool
+```
+
+Whether a cell of the current row is null.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Text`
+
+```salam
+func Text(col: int): str
+```
+
+A cell as text; empty for null.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Int`
+
+```salam
+func Int(col: int): int
+```
+
+A cell as an int.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Int64`
+
+```salam
+func Int64(col: int): i64
+```
+
+A cell as an i64.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Float`
+
+```salam
+func Float(col: int): f64
+```
+
+A cell as a float.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Close`
+
+```salam
+func Close(): int
+```
+
+Frees the rows and closes an open cursor.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `Database`
+
+```salam
+struct Database
+```
+
+A client seen through `db.Connection`, so code written for the db interfaces can read Elasticsearch with SQL.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `handle` | `void*` | The internal state pointer. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Kind`
+
+```salam
+func Kind(): str
+```
+
+Always `db.ELASTICSEARCH`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Ok`
+
+```salam
+func Ok(): bool
+```
+
+Whether the client is valid.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Ping`
+
+```salam
+func Ping(): bool
+```
+
+Whether the cluster answers.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Exec`
+
+```salam
+func Exec(_sql: str): int
+```
+
+Always -1: Elasticsearch SQL is read only. Write with Index, Bulk or DeleteByQuery.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Query`
+
+```salam
+func Query(sql: str): dyn db.Rows
+```
+
+Runs a SQL query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Begin`
+
+```salam
+func Begin(): dyn db.Tx
+```
+
+Returns a transaction whose calls all fail; Elasticsearch has no transactions.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `LastInsertId`
+
+```salam
+func LastInsertId(): i64
+```
+
+Always 0.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Changes`
+
+```salam
+func Changes(): i64
+```
+
+Always 0.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Error`
+
+```salam
+func Error(): str
+```
+
+The error of the last call.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Quote`
+
+```salam
+func Quote(s: str): str
+```
+
+Quotes a string literal for SQL.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Close`
+
+```salam
+func Close(): int
+```
+
+Closes the client.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `Txn`
+
+```salam
+struct Txn
+```
+
+The transaction `Database.Begin` returns. Elasticsearch has no transactions, so every call fails.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `handle` | `void*` | The internal state pointer. |
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Ok`
+
+```salam
+func Ok(): bool
+```
+
+Always false.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Exec`
+
+```salam
+func Exec(_sql: str): int
+```
+
+Always -1.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Query`
+
+```salam
+func Query(_sql: str): dyn db.Rows
+```
+
+Returns empty rows.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Commit`
+
+```salam
+func Commit(): int
+```
+
+Always -1.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+#### `Rollback`
+
+```salam
+func Rollback(): int
+```
+
+Always -1.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+## Constants and variables
+
+### `DEFAULT_URL`
+
+```salam
+const DEFAULT_URL: str = "http://localhost:9200"
+```
+
+The node used when a config lists none: `http://localhost:9200`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DEFAULT_PORT`
+
+```salam
+const DEFAULT_PORT: i32 = 9200
+```
+
+The port used when a node URL has none: 9200.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DEAD_NODE_MS`
+
+```salam
+const DEAD_NODE_MS: i32 = 60000
+```
+
+How long, in milliseconds, a node that refused a connection is skipped before it is tried again.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `REFRESH_TRUE`
+
+```salam
+const REFRESH_TRUE: str = "true"
+```
+
+`refresh` value: make the change searchable right away.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `REFRESH_WAIT_FOR`
+
+```salam
+const REFRESH_WAIT_FOR: str = "wait_for"
+```
+
+`refresh` value: wait until the next refresh makes the change searchable.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `REFRESH_FALSE`
+
+```salam
+const REFRESH_FALSE: str = "false"
+```
+
+`refresh` value: return without waiting for a refresh (the default).
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+## Functions
+
+### `MatchAll`
+
+```salam
+func MatchAll(): str
+```
+
+A query matching every document.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MatchNone`
+
+```salam
+func MatchNone(): str
+```
+
+A query matching no document.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Match`
+
+```salam
+func Match(field: str, text: str): str
+```
+
+A full text `match` query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MatchAnd`
+
+```salam
+func MatchAnd(field: str, text: str): str
+```
+
+A `match` query that needs every word.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MatchFuzzy`
+
+```salam
+func MatchFuzzy(field: str, text: str): str
+```
+
+A `match` query with automatic fuzziness, forgiving typos.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MatchPhrase`
+
+```salam
+func MatchPhrase(field: str, text: str): str
+```
+
+A query for the exact phrase.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MatchPhrasePrefix`
+
+```salam
+func MatchPhrasePrefix(field: str, text: str): str
+```
+
+A phrase query whose last word is a prefix, for search as you type.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MultiMatch`
+
+```salam
+func MultiMatch(text: str, fields: Vector<str>): str
+```
+
+A `match` over several fields; a field may carry a boost like `title^2`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Term`
+
+```salam
+func Term(field: str, value: str): str
+```
+
+An exact value `term` query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `TermInt`
+
+```salam
+func TermInt(field: str, value: i64): str
+```
+
+A `term` query on a number.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `TermBool`
+
+```salam
+func TermBool(field: str, value: bool): str
+```
+
+A `term` query on a boolean.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Terms`
+
+```salam
+func Terms(field: str, values: Vector<str>): str
+```
+
+Matches any of several exact values.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Range`
+
+```salam
+func Range(field: str, low: str, high: str): str
+```
+
+An inclusive `range` query; an empty bound is open. Bounds are numbers or dates as text.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `RangeExclusive`
+
+```salam
+func RangeExclusive(field: str, low: str, high: str): str
+```
+
+A `range` query that excludes its bounds.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `FieldExists`
+
+```salam
+func FieldExists(field: str): str
+```
+
+Matches documents that have a value in the field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Prefix`
+
+```salam
+func Prefix(field: str, value: str): str
+```
+
+Matches values that start with a prefix.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Wildcard`
+
+```salam
+func Wildcard(field: str, pattern: str): str
+```
+
+A wildcard query with `*` and `?`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Regexp`
+
+```salam
+func Regexp(field: str, pattern: str): str
+```
+
+A regular expression query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Fuzzy`
+
+```salam
+func Fuzzy(field: str, value: str): str
+```
+
+A `fuzzy` term query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Ids`
+
+```salam
+func Ids(ids: Vector<str>): str
+```
+
+Matches documents by id.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `QueryString`
+
+```salam
+func QueryString(query: str): str
+```
+
+A `query_string` query in Lucene syntax.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SimpleQueryString`
+
+```salam
+func SimpleQueryString(query: str, fields: Vector<str>): str
+```
+
+A forgiving `simple_query_string` query for user input, over the given fields.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Bool`
+
+```salam
+func Bool(must: Vector<str>, filter: Vector<str>, should: Vector<str>, must_not: Vector<str>): str
+```
+
+A `bool` query from must, filter, should and must_not clauses; any list may be empty.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `And`
+
+```salam
+func And(clauses: Vector<str>): str
+```
+
+Matches when every clause matches.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Or`
+
+```salam
+func Or(clauses: Vector<str>): str
+```
+
+Matches when at least one clause matches.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Not`
+
+```salam
+func Not(clause: str): str
+```
+
+Matches when the clause does not.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Filtered`
+
+```salam
+func Filtered(query: str, filters: Vector<str>): str
+```
+
+A scored query narrowed by unscored filters.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `ConstantScore`
+
+```salam
+func ConstantScore(filter: str): str
+```
+
+Runs a filter and gives every match the same score.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Nested`
+
+```salam
+func Nested(path: str, query: str): str
+```
+
+A query on nested objects under a path.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `GeoDistance`
+
+```salam
+func GeoDistance(field: str, lat: f64, lon: f64, distance: str): str
+```
+
+Matches geo points within a distance, such as `10km`, of a point.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Knn`
+
+```salam
+func Knn(field: str, vector: Vector<f64>, k: int, num_candidates: int): str
+```
+
+An approximate nearest neighbour clause for dense vector search; put it in `SearchRequest.knn`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SortAsc`
+
+```salam
+func SortAsc(field: str): str
+```
+
+An ascending sort clause.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SortDesc`
+
+```salam
+func SortDesc(field: str): str
+```
+
+A descending sort clause.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Highlight`
+
+```salam
+func Highlight(fields: Vector<str>): str
+```
+
+A highlight section for the given fields.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `TermsAgg`
+
+```salam
+func TermsAgg(field: str, size: int): str
+```
+
+A `terms` bucket aggregation, the top values of a field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AvgAgg`
+
+```salam
+func AvgAgg(field: str): str
+```
+
+The average of a field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SumAgg`
+
+```salam
+func SumAgg(field: str): str
+```
+
+The sum of a field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MinAgg`
+
+```salam
+func MinAgg(field: str): str
+```
+
+The smallest value of a field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MaxAgg`
+
+```salam
+func MaxAgg(field: str): str
+```
+
+The largest value of a field.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `ValueCountAgg`
+
+```salam
+func ValueCountAgg(field: str): str
+```
+
+How many values a field has.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `CardinalityAgg`
+
+```salam
+func CardinalityAgg(field: str): str
+```
+
+The approximate number of distinct values.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `StatsAgg`
+
+```salam
+func StatsAgg(field: str): str
+```
+
+Count, min, max, average and sum together.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `HistogramAgg`
+
+```salam
+func HistogramAgg(field: str, interval: f64): str
+```
+
+Buckets of a fixed numeric width.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `DateHistogramAgg`
+
+```salam
+func DateHistogramAgg(field: str, calendar_interval: str): str
+```
+
+Buckets per calendar interval such as `day` or `month`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `FilterAgg`
+
+```salam
+func FilterAgg(query: str): str
+```
+
+A single bucket of the documents matching a query.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `TopHitsAgg`
+
+```salam
+func TopHitsAgg(size: int): str
+```
+
+The best hits inside each bucket.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AddAgg`
+
+```salam
+func AddAgg(aggs: str, name: str, agg: str): str
+```
+
+Adds a named aggregation to an aggregations object; start from an empty string.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SubAggs`
+
+```salam
+func SubAggs(agg: str, aggs: str): str
+```
+
+Nests an aggregations object under a bucket aggregation.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AddMember`
+
+```salam
+func AddMember(obj: str, key: str, raw: str): str
+```
+
+Adds a raw member to a JSON object, for options without a helper.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SearchBody`
+
+```salam
+func SearchBody(req: SearchRequest): str
+```
+
+The JSON body of a `SearchRequest`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `NewBulk`
+
+```salam
+func NewBulk(): Bulk
+```
+
+An empty bulk request.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkIndex`
+
+```salam
+func BulkIndex(b &: Bulk, index: str, id: str, doc: str)
+```
+
+Adds an index action; an empty id lets Elasticsearch pick one. Multi line JSON is minified.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkCreate`
+
+```salam
+func BulkCreate(b &: Bulk, index: str, id: str, doc: str)
+```
+
+Adds a create action, which fails for an existing id.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkUpdate`
+
+```salam
+func BulkUpdate(b &: Bulk, index: str, id: str, partial: str)
+```
+
+Adds a partial update action.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkUpsert`
+
+```salam
+func BulkUpsert(b &: Bulk, index: str, id: str, doc: str)
+```
+
+Adds an update that creates the document when it is missing.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkDelete`
+
+```salam
+func BulkDelete(b &: Bulk, index: str, id: str)
+```
+
+Adds a delete action.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkLen`
+
+```salam
+func BulkLen(b: Bulk): int
+```
+
+How many actions the bulk request holds.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkBody`
+
+```salam
+func BulkBody(b: Bulk): str
+```
+
+The NDJSON body of the bulk request.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `BulkReset`
+
+```salam
+func BulkReset(b &: Bulk)
+```
+
+Empties the bulk request for reuse.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `ParseBulkResult`
+
+```salam
+func ParseBulkResult(body: str): BulkResult
+```
+
+Parses a raw bulk response.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `RunBulk`
+
+```salam
+func RunBulk(c: Client, b: Bulk): BulkResult
+```
+
+Sends the bulk request. `ok` is false when any action failed; check `items`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `RunBulkWith`
+
+```salam
+func RunBulkWith(c: Client, index: str, b: Bulk, opts: Options): BulkResult
+```
+
+`RunBulk` with a default index for actions that name none, and options.
+
+The example for this item is shown with the ones above: db-elasticsearch-Bulk.salam
+
+### `Ping`
+
+```salam
+func Ping(c: Client): bool
+```
+
+Whether the cluster answers.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetInfo`
+
+```salam
+func GetInfo(c: Client): Info
+```
+
+The name, version and distribution of the cluster; `distribution` is `opensearch` on OpenSearch.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ClusterHealth`
+
+```salam
+func ClusterHealth(c: Client): Health
+```
+
+The health of the cluster.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `WaitForStatus`
+
+```salam
+func WaitForStatus(c: Client, status: str, timeout: str): Health
+```
+
+Waits until the cluster reaches a status such as `yellow`, or the timeout runs out; `ok` is false on timeout.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ClusterStats`
+
+```salam
+func ClusterStats(c: Client): str
+```
+
+The raw cluster statistics JSON.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `NodesInfo`
+
+```salam
+func NodesInfo(c: Client): str
+```
+
+The raw node information JSON.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `CatIndices`
+
+```salam
+func CatIndices(c: Client, pattern: str): Vector<IndexInfo>
+```
+
+The indices that match a pattern (all of them when it is empty), sorted by name.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `CreateIndex`
+
+```salam
+func CreateIndex(c: Client, index: str, body: str): bool
+```
+
+Creates an index with an optional settings and mappings body.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DeleteIndex`
+
+```salam
+func DeleteIndex(c: Client, index: str): bool
+```
+
+Deletes an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `IndexExists`
+
+```salam
+func IndexExists(c: Client, index: str): bool
+```
+
+Whether an index (or alias) exists.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetIndex`
+
+```salam
+func GetIndex(c: Client, index: str): str
+```
+
+The raw JSON definition of an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetMapping`
+
+```salam
+func GetMapping(c: Client, index: str): str
+```
+
+The raw mappings JSON of an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `PutMapping`
+
+```salam
+func PutMapping(c: Client, index: str, body: str): bool
+```
+
+Adds fields to the mappings of an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetSettings`
+
+```salam
+func GetSettings(c: Client, index: str): str
+```
+
+The raw settings JSON of an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `PutSettings`
+
+```salam
+func PutSettings(c: Client, index: str, body: str): bool
+```
+
+Changes dynamic settings of an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Refresh`
+
+```salam
+func Refresh(c: Client, index: str): bool
+```
+
+Makes recent changes searchable; an empty index refreshes all.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Flush`
+
+```salam
+func Flush(c: Client, index: str): bool
+```
+
+Flushes an index to disk; an empty index flushes all.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ForceMerge`
+
+```salam
+func ForceMerge(c: Client, index: str, max_segments: int): bool
+```
+
+Merges segments, down to `max_segments` when it is above 0.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `OpenIndex`
+
+```salam
+func OpenIndex(c: Client, index: str): bool
+```
+
+Opens a closed index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `CloseIndex`
+
+```salam
+func CloseIndex(c: Client, index: str): bool
+```
+
+Closes an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `PutAlias`
+
+```salam
+func PutAlias(c: Client, index: str, alias: str): bool
+```
+
+Points an alias at an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DeleteAlias`
+
+```salam
+func DeleteAlias(c: Client, index: str, alias: str): bool
+```
+
+Removes an alias from an index.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `AliasExists`
+
+```salam
+func AliasExists(c: Client, alias: str): bool
+```
+
+Whether an alias exists.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetAlias`
+
+```salam
+func GetAlias(c: Client, alias: str): Vector<str>
+```
+
+The indices an alias points at.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `SwapAlias`
+
+```salam
+func SwapAlias(c: Client, alias: str, old_index: str, new_index: str): bool
+```
+
+Moves an alias from one index to another atomically, the usual zero downtime reindex step.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `UpdateAliases`
+
+```salam
+func UpdateAliases(c: Client, actions: str): bool
+```
+
+Runs a raw JSON array of alias actions atomically.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `PutIndexTemplate`
+
+```salam
+func PutIndexTemplate(c: Client, name: str, body: str): bool
+```
+
+Creates or replaces a composable index template.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DeleteIndexTemplate`
+
+```salam
+func DeleteIndexTemplate(c: Client, name: str): bool
+```
+
+Deletes an index template.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `IndexTemplateExists`
+
+```salam
+func IndexTemplateExists(c: Client, name: str): bool
+```
+
+Whether an index template exists.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Reindex`
+
+```salam
+func Reindex(c: Client, source: str, dest: str): i64
+```
+
+Copies every document of one index into another and returns how many were written; -1 on error.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Analyze`
+
+```salam
+func Analyze(c: Client, index: str, analyzer: str, text: str): Vector<str>
+```
+
+The tokens an analyzer makes of a text; an empty index uses the cluster analyzers.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Index`
+
+```salam
+func Index(c: Client, index: str, id: str, doc: str): WriteResult
+```
+
+Stores a document. With an empty id Elasticsearch picks one, returned in `id`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `IndexWith`
+
+```salam
+func IndexWith(c: Client, index: str, id: str, doc: str, opts: Options): WriteResult
+```
+
+`Index` with options.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Create`
+
+```salam
+func Create(c: Client, index: str, id: str, doc: str): WriteResult
+```
+
+Stores a document only if its id is new; a duplicate fails with status 409.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `CreateWith`
+
+```salam
+func CreateWith(c: Client, index: str, id: str, doc: str, opts: Options): WriteResult
+```
+
+`Create` with options.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Get`
+
+```salam
+func Get(c: Client, index: str, id: str): Document
+```
+
+Fetches a document by id. A missing document has `found` false and no error.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetWith`
+
+```salam
+func GetWith(c: Client, index: str, id: str, opts: Options): Document
+```
+
+`Get` with options; `source` filters the returned fields.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `GetSource`
+
+```salam
+func GetSource(c: Client, index: str, id: str): str
+```
+
+Only the `_source` of a document, empty when it is missing.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Exists`
+
+```salam
+func Exists(c: Client, index: str, id: str): bool
+```
+
+Whether a document exists.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Update`
+
+```salam
+func Update(c: Client, index: str, id: str, partial: str): WriteResult
+```
+
+Merges a partial document into an existing one.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `UpdateWith`
+
+```salam
+func UpdateWith(c: Client, index: str, id: str, partial: str, opts: Options): WriteResult
+```
+
+`Update` with options, including `if_seq_no` and `if_primary_term` for optimistic concurrency.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Upsert`
+
+```salam
+func Upsert(c: Client, index: str, id: str, doc: str): WriteResult
+```
+
+Updates a document, or creates it when it does not exist.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Script`
+
+```salam
+func Script(source: str, params: str): str
+```
+
+A painless script object with optional raw JSON params.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `UpdateScript`
+
+```salam
+func UpdateScript(c: Client, index: str, id: str, source: str, params: str): WriteResult
+```
+
+Updates a document with a painless script.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Delete`
+
+```salam
+func Delete(c: Client, index: str, id: str): WriteResult
+```
+
+Deletes a document by id.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DeleteWith`
+
+```salam
+func DeleteWith(c: Client, index: str, id: str, opts: Options): WriteResult
+```
+
+`Delete` with options.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `MGet`
+
+```salam
+func MGet(c: Client, index: str, ids: Vector<str>): Vector<Document>
+```
+
+Fetches several documents in one request, in the order of the ids.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Count`
+
+```salam
+func Count(c: Client, index: str, query: str): i64
+```
+
+The number of documents matching a query (all when it is empty); -1 on error.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DefaultConfig`
+
+```salam
+func DefaultConfig(): Config
+```
+
+A config for `DEFAULT_URL` with the default timeout and retries.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `NewClient`
+
+```salam
+func NewClient(cfg: Config): Client
+```
+
+Builds a client from a config. Node URLs may carry credentials (`https://user:pass@host:9200`) and a path prefix, and one string may list several nodes separated by commas.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Connect`
+
+```salam
+func Connect(url: str): Client
+```
+
+A client for one URL, or several separated by commas.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ConnectAuth`
+
+```salam
+func ConnectAuth(url: str, username: str, password: str): Client
+```
+
+A client that sends HTTP basic authentication.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ConnectApiKey`
+
+```salam
+func ConnectApiKey(url: str, api_key: str): Client
+```
+
+A client that authenticates with an API key, either encoded or as `id:key`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ConnectCloud`
+
+```salam
+func ConnectCloud(cloud_id: str, api_key: str): Client
+```
+
+A client for an Elastic Cloud deployment, from its cloud id and an API key.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Ok`
+
+```salam
+func Ok(c: Client): bool
+```
+
+Whether the client has at least one valid node.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Error`
+
+```salam
+func Error(c: Client): str
+```
+
+The error of the last call: the type and reason Elasticsearch sent, or a connection or config error. Empty after a success.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ErrorType`
+
+```salam
+func ErrorType(c: Client): str
+```
+
+The `error.type` of the last failed call, for example `version_conflict_engine_exception`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ErrorReason`
+
+```salam
+func ErrorReason(c: Client): str
+```
+
+The `error.reason` of the last failed call.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Status`
+
+```salam
+func Status(c: Client): int
+```
+
+The HTTP status of the last call, 0 when no answer came.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Nodes`
+
+```salam
+func Nodes(c: Client): Vector<str>
+```
+
+The node URLs the client rotates over.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `AuthHeader`
+
+```salam
+func AuthHeader(c: Client): str
+```
+
+The `Authorization` header value the client sends.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `DecodeCloudId`
+
+```salam
+func DecodeCloudId(cloud_id: str): str
+```
+
+Turns an Elastic Cloud id into the HTTPS URL of its Elasticsearch endpoint; empty when it cannot be decoded.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Close`
+
+```salam
+func Close(c &: Client)
+```
+
+Frees the client. The handle is null afterwards.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Perform`
+
+```salam
+func Perform(c: Client, method: str, path: str, body: str): Response
+```
+
+Sends any request with a JSON body and returns the raw response. Use it for every API this package does not wrap.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `PerformNdjson`
+
+```salam
+func PerformNdjson(c: Client, method: str, path: str, body: str): Response
+```
+
+Like `Perform`, with an `application/x-ndjson` body.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `Distribution`
+
+```salam
+func Distribution(c: Client): str
+```
+
+`elasticsearch` or `opensearch`, asked from the server once and remembered.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `IsOpenSearch`
+
+```salam
+func IsOpenSearch(c: Client): bool
+```
+
+Whether the cluster is OpenSearch. SQL and point in time calls pick the right endpoints on their own.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `EncodeBasic`
+
+```salam
+func EncodeBasic(username: str, password: str): str
+```
+
+The base64 of `user:password` used by basic authentication.
+
+The example for this item is shown with the ones above: db-elasticsearch-Client.salam
+
+### `ParseSearchResult`
+
+```salam
+func ParseSearchResult(body: str): SearchResult
+```
+
+Parses a raw search response, for example one from `Perform`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Search`
+
+```salam
+func Search(c: Client, index: str, req: SearchRequest): SearchResult
+```
+
+Runs a search on an index, a comma separated list, a pattern, or with an empty index on a point in time.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SearchQuery`
+
+```salam
+func SearchQuery(c: Client, index: str, query: str, size: int): SearchResult
+```
+
+Runs a query and returns up to `size` hits.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SearchRaw`
+
+```salam
+func SearchRaw(c: Client, index: str, body: str): SearchResult
+```
+
+Runs a search with a raw JSON body.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `SearchScroll`
+
+```salam
+func SearchScroll(c: Client, index: str, req: SearchRequest, keep_alive: str): SearchResult
+```
+
+Starts a scroll; keep calling `Scroll` with `scroll_id` until a page comes back empty.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Scroll`
+
+```salam
+func Scroll(c: Client, scroll_id: str, keep_alive: str): SearchResult
+```
+
+The next page of a scroll.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `ClearScroll`
+
+```salam
+func ClearScroll(c: Client, scroll_id: str): bool
+```
+
+Releases a scroll early.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `OpenPit`
+
+```salam
+func OpenPit(c: Client, index: str, keep_alive: str): str
+```
+
+Opens a point in time on an index for consistent deep paging with `search_after`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `ClosePit`
+
+```salam
+func ClosePit(c: Client, pit_id: str): bool
+```
+
+Closes a point in time.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `DeleteByQuery`
+
+```salam
+func DeleteByQuery(c: Client, index: str, query: str): i64
+```
+
+Deletes every document matching a query and returns how many; -1 on error.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `DeleteByQueryWith`
+
+```salam
+func DeleteByQueryWith(c: Client, index: str, query: str, opts: Options): i64
+```
+
+`DeleteByQuery` with options such as `refresh` and `conflicts`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `UpdateByQuery`
+
+```salam
+func UpdateByQuery(c: Client, index: str, query: str, script: str): i64
+```
+
+Runs a script on every document matching a query and returns how many changed; -1 on error.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `UpdateByQueryWith`
+
+```salam
+func UpdateByQueryWith(c: Client, index: str, query: str, script: str, opts: Options): i64
+```
+
+`UpdateByQuery` with options.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `MSearch`
+
+```salam
+func MSearch(c: Client, index: str, bodies: Vector<str>): Vector<SearchResult>
+```
+
+Runs several searches in one request; each result has its own `ok` and `error`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AggValueIn`
+
+```salam
+func AggValueIn(aggs: str, name: str): f64
+```
+
+The `value` of a metric aggregation inside raw aggregations JSON, such as `Bucket.raw`.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AggBucketsIn`
+
+```salam
+func AggBucketsIn(aggs: str, name: str): Vector<Bucket>
+```
+
+The buckets of a bucket aggregation inside raw aggregations JSON.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AggValue`
+
+```salam
+func AggValue(res: SearchResult, name: str): f64
+```
+
+The `value` of a metric aggregation in a result.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AggBuckets`
+
+```salam
+func AggBuckets(res: SearchResult, name: str): Vector<Bucket>
+```
+
+The buckets of a bucket aggregation in a result.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `AggRaw`
+
+```salam
+func AggRaw(res: SearchResult, name: str): str
+```
+
+The raw JSON of one aggregation in a result.
+
+The example for this item is shown with the ones above: db-elasticsearch-Search.salam
+
+### `Sql`
+
+```salam
+func Sql(c: Client, query: str): SqlRows
+```
+
+Runs a SQL query through Elasticsearch SQL, or the OpenSearch SQL plugin.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `SqlWith`
+
+```salam
+func SqlWith(c: Client, query: str, params: Vector<str>, fetch_size: int): SqlRows
+```
+
+Runs SQL with `?` parameters given as raw JSON values, and a page size.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `SqlText`
+
+```salam
+func SqlText(c: Client, query: str): str
+```
+
+The result of a SQL query as a text table (CSV on OpenSearch).
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `SqlTranslate`
+
+```salam
+func SqlTranslate(c: Client, query: str): str
+```
+
+The query DSL a SQL query turns into (the explain plan on OpenSearch).
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+### `Conn`
+
+```salam
+func Conn(c: Client): dyn db.Connection
+```
+
+The client as a `db.Connection`. Closing it closes the client.
+
+The example for this item is shown with the ones above: db-elasticsearch-Sql.salam
+
+
+---
+
+# db/meilisearch
+
+https://salamlang.github.io/Salam/std/db-meilisearch/
+
+A Meilisearch client: indexes, documents, full text, faceted, hybrid and federated search, settings, tasks and API keys.
+
+Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package speaks its HTTP API directly with `net.http` and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens. The examples need a running server, so they are only checked.
+
+Every call takes an `Error` as its last argument and fills it when something fails; check it with `Ok`. Writes do not happen at once: they return a `TaskInfo` and Meilisearch applies them in order, so call `Wait` when the next step needs the change. Search hits and documents come back as raw JSON text; read them into your own structs with `HitsAs` and `GetDocumentAs`. For a route with no function of its own, use `Request`.
+
+## Types
+
+### `SearchRequest`
+
+```salam
+struct SearchRequest
+```
+
+Everything a search can ask for. Only fields you set are sent: empty text and lists, -1 numbers and false flags are left out.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `query` | `str = ""` | The words to search for; empty lists every document. |
+| `offset` | `int = -1` | How many hits to skip. |
+| `limit` | `int = -1` | How many hits to return; 20 by default. |
+| `page` | `int = -1` | The page number, for numbered pages with an exact total. |
+| `hits_per_page` | `int = -1` | The hits on each numbered page. |
+| `filter` | `str = ""` | A filter expression such as `year > 2000 AND genre = Drama`, or a JSON array of them. |
+| `facets` | `Vector` | Count the values of these fields among the hits. |
+| `attributes_to_retrieve` | `Vector` | Return only these fields. |
+| `attributes_to_crop` | `Vector` | Cut these fields around the matched words. |
+| `crop_length` | `int = -1` | How many words a cropped field keeps. |
+| `crop_marker` | `str = ""` | The text that marks a cut. |
+| `attributes_to_highlight` | `Vector` | Wrap the matched words of these fields in tags. |
+| `highlight_pre_tag` | `str = ""` | The tag before a match; `<em>` by default. |
+| `highlight_post_tag` | `str = ""` | The tag after a match. |
+| `show_matches_position` | `bool = false` | Return where every match is. |
+| `sort` | `Vector` | Sort rules such as `year:desc`. |
+| `matching_strategy` | `str = ""` | One of the `MATCH_` values. |
+| `show_ranking_score` | `bool = false` | Return the relevancy score of each hit. |
+| `show_ranking_score_details` | `bool = false` | Return how the score was built. |
+| `ranking_score_threshold` | `f64 = -1` | Drop hits scoring below this, from 0 to 1. |
+| `attributes_to_search_on` | `Vector` | Search only these fields. |
+| `distinct` | `str = ""` | Return at most one hit for each value of this field. |
+| `locales` | `Vector` | The languages of the query, such as `fas`. |
+| `vector` | `Vector` | Search by this vector. |
+| `hybrid_embedder` | `str = ""` | The embedder for AI powered search; setting it turns hybrid search on. |
+| `hybrid_semantic_ratio` | `f64 = -1` | How much meaning outweighs keywords, from 0 to 1. |
+| `retrieve_vectors` | `bool = false` | Also return the stored vectors. |
+| `media` | `str = ""` | Raw JSON media for multimodal search, such as an image. |
+| `extra` | `str = ""` | A raw JSON object whose fields are added to the request, for parameters this struct does not have yet. |
+
+db-meilisearch-Search.salam
+
+```salam
+import db.meilisearch
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+end
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "searchKey")
+    mut err := meilisearch.Error {}
+
+    quick := meilisearch.Query(c, "movies", "botman", err)
+    println quick.query, quick.estimated_total_hits, quick.processing_time_ms
+
+    mut r := meilisearch.SearchRequest { query = "space", limit = 10, offset = 0, filter = "year > 2000 AND genre = Drama" }
+    r.facets.push("genre")
+    r.sort.push("year:desc")
+    r.attributes_to_retrieve.push("id")
+    r.attributes_to_retrieve.push("title")
+    r.attributes_to_highlight.push("title")
+    r.highlight_pre_tag = "<mark>"
+    r.highlight_post_tag = "</mark>"
+    r.attributes_to_crop.push("overview")
+    r.crop_length = 20
+    r.crop_marker = "..."
+    r.matching_strategy = meilisearch.MATCH_ALL
+    r.show_ranking_score = true
+    r.show_ranking_score_details = false
+    r.show_matches_position = false
+    r.ranking_score_threshold = 0.2
+    r.attributes_to_search_on.push("title")
+    r.locales.push("eng")
+    r.distinct = "studio"
+    res := meilisearch.Search(c, "movies", r, err)
+    if not meilisearch.Ok(err):
+        println meilisearch.ErrorString(err)
+        ret
+    end
+    println res.index_uid, res.offset, res.limit, res.facet_distribution, res.facet_stats, res.raw.len()
+    each hit in res.hits:
+        println hit
+    end
+    mut movies := Vector {} as Vector<Movie>
+    if meilisearch.HitsAs(res, movies, err):
+        println movies.len()
+    end
+
+    pages := meilisearch.Search(c, "movies", meilisearch.SearchRequest { query = "space", page = 2, hits_per_page = 20 }, err)
+    println pages.page, pages.hits_per_page, pages.total_hits, pages.total_pages
+
+    mut hybrid := meilisearch.SearchRequest { query = "a sad robot", hybrid_embedder = "default", hybrid_semantic_ratio = 0.7, retrieve_vectors = false, matching_strategy = meilisearch.MATCH_LAST }
+    hybrid.vector.push(0.1)
+    hybrid.media = `{"image": "https://example.com/robot.png"}`
+    hybrid.extra = `{"showPerformanceDetails": true}`
+    println meilisearch.Search(c, "movies", hybrid, err).semantic_hit_count, meilisearch.MATCH_FREQUENCY
+
+    mut queries := Vector {} as Vector<meilisearch.MultiQuery>
+    queries.push(meilisearch.MultiQuery { index_uid = "movies", request = meilisearch.SearchRequest { query = "moana" } })
+    queries.push(meilisearch.MultiQuery { index_uid = "books", request = meilisearch.SearchRequest { query = "moana" }, weight = 0.5, remote = "" })
+    each one in meilisearch.MultiSearch(c, queries, err):
+        println one.index_uid, one.hits.len()
+    end
+    fed := meilisearch.FederatedSearch(c, queries, meilisearch.Federation { offset = 0, limit = 20, page = -1, hits_per_page = -1, facets_by_index = `{"movies": ["genre"]}`, merge_facets = `{}` }, err)
+    println fed.hits.len()
+
+    mut fr := meilisearch.FacetSearchRequest { facet_name = "genre", facet_query = "dra", query = "space", filter = "year > 2000", matching_strategy = meilisearch.MATCH_ALL, exhaustive_facet_count = true }
+    fr.attributes_to_search_on.push("title")
+    fs := meilisearch.FacetSearch(c, "movies", fr, err)
+    println fs.facet_query, fs.processing_time_ms
+    each h in fs.hits:
+        println h.value, h.count
+    end
+
+    mut sr := meilisearch.SimilarRequest { id = "143", embedder = "default", limit = 5, offset = 0, filter = "year > 2000", show_ranking_score = true, show_ranking_score_details = false, ranking_score_threshold = 0.5, retrieve_vectors = false }
+    sr.attributes_to_retrieve.push("title")
+    println meilisearch.SimilarDocuments(c, "movies", sr, err).hits.len()
+end
+```
+
+### `SearchResult`
+
+```salam
+struct SearchResult
+```
+
+The answer to a search. Numbers the server did not send are -1.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index_uid` | `str = ""` | The index, in multi-search results. |
+| `hits` | `Vector` | Each hit as its own JSON text; read them into structs with `HitsAs`. |
+| `query` | `str = ""` | The query that was run. |
+| `processing_time_ms` | `i64 = 0` | How long the search took, in milliseconds. |
+| `offset` | `i64 = -1` | How many hits were skipped. |
+| `limit` | `i64 = -1` | The page size. |
+| `estimated_total_hits` | `i64 = -1` | About how many documents match. |
+| `page` | `i64 = -1` | The page number, with numbered pages. |
+| `hits_per_page` | `i64 = -1` | The hits on each page. |
+| `total_hits` | `i64 = -1` | Exactly how many documents match, with numbered pages. |
+| `total_pages` | `i64 = -1` | How many pages there are. |
+| `facet_distribution` | `str = ""` | The value counts of the requested facets, as raw JSON. |
+| `facet_stats` | `str = ""` | The minimum and maximum of numeric facets, as raw JSON. |
+| `semantic_hit_count` | `i64 = -1` | How many hits came from meaning rather than keywords. |
+| `raw` | `str = ""` | The whole response body. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `MultiQuery`
+
+```salam
+struct MultiQuery
+```
+
+One search inside a multi-search.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index_uid` | `str = ""` | The index to search. |
+| `request` | `SearchRequest` | The search itself. |
+| `weight` | `f64 = -1` | In a federated search, how much this query counts; -1 leaves it out. |
+| `remote` | `str = ""` | In a federated search across instances, the remote to ask. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `Federation`
+
+```salam
+struct Federation
+```
+
+How a federated search merges its queries into one list.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `offset` | `int = -1` | How many merged hits to skip. |
+| `limit` | `int = -1` | How many merged hits to return. |
+| `page` | `int = -1` | The page number. |
+| `hits_per_page` | `int = -1` | The hits on each page. |
+| `facets_by_index` | `str = ""` | Facets to count for each index, as raw JSON. |
+| `merge_facets` | `str = ""` | How to merge those facets, as raw JSON. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `FacetSearchRequest`
+
+```salam
+struct FacetSearchRequest
+```
+
+A search among the values of one facet.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `facet_name` | `str = ""` | The facet field. |
+| `facet_query` | `str = ""` | The text the values should start with. |
+| `query` | `str = ""` | Count only documents matching this search. |
+| `filter` | `str = ""` | Count only documents matching this filter. |
+| `matching_strategy` | `str = ""` | One of the `MATCH_` values. |
+| `attributes_to_search_on` | `Vector` | Search only these fields. |
+| `exhaustive_facet_count` | `bool = false` | Count exactly, which is slower. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `FacetHit`
+
+```salam
+struct FacetHit
+```
+
+One facet value.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `value` | `str = ""` | The value. |
+| `count` | `i64 = 0` | How many documents have it. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `FacetSearchResult`
+
+```salam
+struct FacetSearchResult
+```
+
+The answer to a facet search.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `hits` | `Vector` | The matching values. |
+| `facet_query` | `str = ""` | The facet query that was run. |
+| `processing_time_ms` | `i64 = 0` | How long it took, in milliseconds. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `SimilarRequest`
+
+```salam
+struct SimilarRequest
+```
+
+Documents that resemble one document, by its vectors.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `id` | `str = ""` | The document to compare with. |
+| `embedder` | `str = ""` | The embedder whose vectors are compared. |
+| `offset` | `int = -1` | How many hits to skip. |
+| `limit` | `int = -1` | How many hits to return. |
+| `filter` | `str = ""` | Only documents matching this filter. |
+| `attributes_to_retrieve` | `Vector` | Return only these fields. |
+| `show_ranking_score` | `bool = false` | Return the similarity score. |
+| `show_ranking_score_details` | `bool = false` | Return how the score was built. |
+| `ranking_score_threshold` | `f64 = -1` | Drop hits scoring below this. |
+| `retrieve_vectors` | `bool = false` | Also return the stored vectors. |
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `Version`
+
+```salam
+struct Version
+```
+
+The server version.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `pkg_version` | `str = ""` | The version, such as `1.15.2`. |
+| `commit_sha` | `str = ""` | The commit the server was built from. |
+| `commit_date` | `str = ""` | The date of that commit. |
+
+db-meilisearch-Client.salam
+
+```salam
+import db.meilisearch
+
+func main:
+    c := meilisearch.WithAgent(meilisearch.New("http://127.0.0.1:7700", "masterKey"), "my-app/1.0")
+    mut err := meilisearch.Error {}
+    if not meilisearch.IsHealthy(c):
+        println "Meilisearch is not reachable at " + c.host
+        ret
+    end
+    println meilisearch.Health(c, err), meilisearch.VERSION
+
+    v := meilisearch.GetVersion(c, err)
+    println v.pkg_version, v.commit_sha, v.commit_date
+    st := meilisearch.GetStats(c, err)
+    println st.database_size, st.used_database_size, st.last_update, st.indexes
+
+    dump := meilisearch.CreateDump(c, err)
+    println dump.task_uid, meilisearch.CreateSnapshot(c, err).status
+    println meilisearch.GetExperimentalFeatures(c, err)
+    println meilisearch.UpdateExperimentalFeatures(c, `{"metrics": true}`, err)
+    println meilisearch.GetMetrics(c, err).len()
+    println meilisearch.GetNetwork(c, err)
+    println meilisearch.UpdateNetwork(c, `{"self": "ms-0"}`, err)
+    println meilisearch.Export(c, `{"url": "http://backup:7700", "apiKey": "key"}`, err).kind
+
+    body := meilisearch.Request(c, "GET", "/indexes?limit=1", "", err)
+    if not meilisearch.Ok(err):
+        println meilisearch.ErrorString(err)
+        println err.status, err.code, err.kind, err.message, err.link
+        ret
+    end
+    println body
+    println meilisearch.RequestAs(c, "POST", "/indexes/movies/documents", "application/x-ndjson", "{\"id\": 1}\n", err)
+    p := meilisearch.Page {}
+    println p.results.len(), p.offset, p.limit, p.total, p.from, p.next, c.api_key.len() > 0, c.agent
+end
+```
+
+### `Stats`
+
+```salam
+struct Stats
+```
+
+Statistics of the whole instance.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `database_size` | `i64 = 0` | The database size on disk, in bytes. |
+| `used_database_size` | `i64 = 0` | The bytes actually in use. |
+| `last_update` | `str = ""` | When anything last changed. |
+| `indexes` | `str = ""` | The statistics of every index, as raw JSON. |
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Client`
+
+```salam
+struct Client
+```
+
+Where the server is and which key to use. A plain value; make one with `New` and share it freely.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `host` | `str = ""` | The server address, such as `http://127.0.0.1:7700`, with no trailing slash. |
+| `api_key` | `str = ""` | The API key sent as `Authorization: Bearer`; empty sends no header. |
+| `agent` | `str = ""` | Extra text added to the client header, such as your app name. |
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Error`
+
+```salam
+struct Error
+```
+
+What went wrong. An empty `code` means the call worked; every function clears it before it starts.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `status` | `int = 0` | The HTTP status; 0 when the server could not be reached or the error happened in the client. |
+| `code` | `str = ""` | The Meilisearch error code, such as `index_not_found`, or `communication_error`, `timeout` and `decode_error` from the client. |
+| `kind` | `str = ""` | The error type: `invalid_request`, `auth`, `internal` and so on. |
+| `message` | `str = ""` | The human readable message. |
+| `link` | `str = ""` | A link to the page of the Meilisearch documentation about this error. |
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Page`
+
+```salam
+struct Page
+```
+
+One page of raw JSON documents, from `GetDocuments`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `results` | `Vector` | Each document as its own JSON text. |
+| `offset` | `i64 = 0` | How many documents were skipped. |
+| `limit` | `i64 = 0` | The page size. |
+| `total` | `i64 = 0` | How many documents match in total. |
+| `from` | `i64 = -1` | Unused for documents; -1. |
+| `next` | `i64 = -1` | Unused for documents; -1. |
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `TaskInfo`
+
+```salam
+struct TaskInfo
+```
+
+The receipt of a change. Meilisearch applies every write later, in order; wait for it with `Wait`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `task_uid` | `i64 = -1` | The task number; -1 when the call failed. |
+| `index_uid` | `str = ""` | The index it changes, if any. |
+| `status` | `str = ""` | The status when it was queued. |
+| `kind` | `str = ""` | The task type, such as `documentAdditionOrUpdate`. |
+| `enqueued_at` | `str = ""` | When it was queued. |
+
+db-meilisearch-GetTasks.salam
+
+```salam
+import db.meilisearch
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    info := meilisearch.DeleteIndex(c, "old_movies", err)
+    t := meilisearch.WaitForTask(c, info.task_uid, 30000, 100, err)
+    println t.uid, t.batch_uid, t.index_uid, t.status, t.kind, t.canceled_by, t.details, t.duration
+    println t.enqueued_at, t.started_at, t.finished_at
+    if t.status == meilisearch.STATUS_FAILED:
+        println t.error.code, t.error.message
+    end
+    println meilisearch.GetTask(c, info.task_uid, err).status
+
+    mut q := meilisearch.TaskQuery { limit = 20, from = -1, reverse = true, after_enqueued_at = "2025-01-01T00:00:00Z" }
+    q.statuses.push(meilisearch.STATUS_SUCCEEDED)
+    q.statuses.push(meilisearch.STATUS_FAILED)
+    q.index_uids.push("movies")
+    q.types.push("documentAdditionOrUpdate")
+    q.uids.push(1)
+    q.batch_uids.push(1)
+    q.canceled_by.push(2)
+    q.before_enqueued_at = "2030-01-01T00:00:00Z"
+    q.before_started_at = "2030-01-01T00:00:00Z"
+    q.after_started_at = "2025-01-01T00:00:00Z"
+    q.before_finished_at = "2030-01-01T00:00:00Z"
+    q.after_finished_at = "2025-01-01T00:00:00Z"
+    page := meilisearch.GetTasks(c, q, err)
+    println page.total, page.limit, page.from, page.next
+    each task in page.results:
+        println task.uid, task.kind, task.status
+    end
+
+    mut pending := meilisearch.TaskQuery {}
+    pending.statuses.push(meilisearch.STATUS_ENQUEUED)
+    pending.statuses.push(meilisearch.STATUS_PROCESSING)
+    println meilisearch.CancelTasks(c, pending, err).task_uid
+    mut finished := meilisearch.TaskQuery {}
+    finished.statuses.push(meilisearch.STATUS_CANCELED)
+    println meilisearch.DeleteTasks(c, finished, err).task_uid
+
+    batches := meilisearch.GetBatches(c, meilisearch.TaskQuery { limit = 5 }, err)
+    println batches.total, batches.limit, batches.from, batches.next
+    each b in batches.results:
+        one := meilisearch.GetBatch(c, b.uid, err)
+        println one.uid, one.details, one.stats, one.progress, one.duration, one.started_at, one.finished_at
+    end
+end
+```
+
+### `Task`
+
+```salam
+struct Task
+```
+
+A task with its result.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uid` | `i64 = -1` | The task number. |
+| `batch_uid` | `i64 = -1` | The batch it ran in; -1 before it runs. |
+| `index_uid` | `str = ""` | The index it changes. |
+| `status` | `str = ""` | One of the `STATUS_` values. |
+| `kind` | `str = ""` | The task type. |
+| `canceled_by` | `i64 = -1` | The task that canceled it; -1 if none. |
+| `details` | `str = ""` | Details that depend on the type, as raw JSON. |
+| `error` | `Error` | Why it failed. |
+| `duration` | `str = ""` | How long it ran, as an ISO 8601 duration. |
+| `enqueued_at` | `str = ""` | When it was queued. |
+| `started_at` | `str = ""` | When it started. |
+| `finished_at` | `str = ""` | When it finished. |
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `TaskQuery`
+
+```salam
+struct TaskQuery
+```
+
+Which tasks to list, cancel or delete. Empty fields are left out.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uids` | `Vector` | Only these tasks. |
+| `batch_uids` | `Vector` | Only tasks of these batches. |
+| `canceled_by` | `Vector` | Only tasks canceled by these tasks. |
+| `statuses` | `Vector` | Only these statuses. |
+| `types` | `Vector` | Only these task types. |
+| `index_uids` | `Vector` | Only tasks of these indexes. |
+| `limit` | `int = 0` | The page size; 0 for the default. Listing only. |
+| `from` | `i64 = -1` | Start from this task number; -1 for the newest. Listing only. |
+| `reverse` | `bool = false` | Oldest first. Listing only. |
+| `before_enqueued_at` | `str = ""` | Queued before this date. |
+| `after_enqueued_at` | `str = ""` | Queued after this date. |
+| `before_started_at` | `str = ""` | Started before this date. |
+| `after_started_at` | `str = ""` | Started after this date. |
+| `before_finished_at` | `str = ""` | Finished before this date. |
+| `after_finished_at` | `str = ""` | Finished after this date. |
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `TaskPage`
+
+```salam
+struct TaskPage
+```
+
+One page of tasks.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `results` | `Vector` | The tasks, newest first. |
+| `limit` | `i64 = 0` | The page size. |
+| `from` | `i64 = -1` | The first task number on this page. |
+| `next` | `i64 = -1` | Pass this as `from` for the next page; -1 on the last page. |
+| `total` | `i64 = 0` | How many tasks match. |
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `Batch`
+
+```salam
+struct Batch
+```
+
+A batch: tasks that Meilisearch ran together.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uid` | `i64 = -1` | The batch number. |
+| `details` | `str = ""` | Details of its tasks, as raw JSON. |
+| `stats` | `str = ""` | Counts by status, type and index, as raw JSON. |
+| `progress` | `str = ""` | Progress while it runs, as raw JSON; empty when done. |
+| `duration` | `str = ""` | How long it ran. |
+| `started_at` | `str = ""` | When it started. |
+| `finished_at` | `str = ""` | When it finished. |
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `BatchPage`
+
+```salam
+struct BatchPage
+```
+
+One page of batches.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `results` | `Vector` | The batches. |
+| `limit` | `i64 = 0` | The page size. |
+| `from` | `i64 = -1` | The first batch number on this page. |
+| `next` | `i64 = -1` | Pass this as `from` for the next page; -1 on the last page. |
+| `total` | `i64 = 0` | How many batches match. |
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `Key`
+
+```salam
+struct Key
+```
+
+An API key.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uid` | `str = ""` | The key id, a UUID. |
+| `key` | `str = ""` | The secret key value to send. |
+| `name` | `str = ""` | Its name. |
+| `description` | `str = ""` | Its description. |
+| `actions` | `Vector` | What it may do, such as `search` or `*` for everything. |
+| `indexes` | `Vector` | Which indexes it may use; `*` for all. |
+| `expires_at` | `str = ""` | When it stops working; empty for never. |
+| `created_at` | `str = ""` | When it was made. |
+| `updated_at` | `str = ""` | When it last changed. |
+
+db-meilisearch-CreateKey.salam
+
+```salam
+import db.meilisearch
+import time
+
+func main:
+    admin := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    mut r := meilisearch.KeyRequest { name = "Front end search", description = "Used by the web app", expires_at = "2030-01-01T00:00:00Z", uid = "" }
+    r.actions.push("search")
+    r.indexes.push("movies")
+    k := meilisearch.CreateKey(admin, r, err)
+    if not meilisearch.Ok(err):
+        println meilisearch.ErrorString(err)
+        ret
+    end
+    println k.uid, k.key, k.name, k.description, k.expires_at, k.created_at, k.updated_at
+    println k.actions.len(), k.indexes.len()
+
+    println meilisearch.GetKey(admin, k.uid, err).name
+    page := meilisearch.GetKeys(admin, 0, 20, err)
+    println page.total, page.offset, page.limit
+    each one in page.results:
+        println one.name
+    end
+    println meilisearch.UpdateKey(admin, k.uid, "Web search", "Search only, movies only", err).name
+
+    rules := `{"movies": {"filter": "user_id = 42"}}`
+    token := meilisearch.TenantToken(k.uid, k.key, rules, time.Now() + 3600, err)
+    user := meilisearch.New("http://127.0.0.1:7700", token)
+    println meilisearch.Query(user, "movies", "", err).hits.len()
+
+    println meilisearch.DeleteKey(admin, k.uid, err)
+end
+```
+
+### `KeyRequest`
+
+```salam
+struct KeyRequest
+```
+
+A new API key.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uid` | `str = ""` | A UUID to use as its id; empty lets the server pick one. |
+| `name` | `str = ""` | Its name. |
+| `description` | `str = ""` | Its description. |
+| `actions` | `Vector` | What it may do. |
+| `indexes` | `Vector` | Which indexes it may use. |
+| `expires_at` | `str = ""` | An RFC 3339 date when it stops working; empty for never. |
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `KeyPage`
+
+```salam
+struct KeyPage
+```
+
+One page of keys.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `results` | `Vector` | The keys. |
+| `offset` | `i64 = 0` | How many were skipped. |
+| `limit` | `i64 = 0` | The page size. |
+| `total` | `i64 = 0` | How many keys there are. |
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `Index`
+
+```salam
+struct Index
+```
+
+An index: a named collection of documents.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `uid` | `str = ""` | The index name. |
+| `primary_key` | `str = ""` | The field that identifies a document; empty until it is known. |
+| `created_at` | `str = ""` | When the index was made. |
+| `updated_at` | `str = ""` | When it last changed. |
+
+db-meilisearch-CreateIndex.salam
+
+```salam
+import db.meilisearch
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    info := meilisearch.CreateIndex(c, "movies", "id", err)
+    println info.task_uid, info.index_uid, info.status, info.kind, info.enqueued_at
+    done := meilisearch.Wait(c, info, err)
+    if not meilisearch.Ok(err):
+        println meilisearch.ErrorString(err)
+        ret
+    end
+    println done.status
+
+    i := meilisearch.GetIndex(c, "movies", err)
+    println i.uid, i.primary_key, i.created_at, i.updated_at
+    page := meilisearch.ListIndexes(c, 0, 20, err)
+    println page.total, page.offset, page.limit
+    each idx in page.results:
+        println idx.uid
+    end
+
+    meilisearch.WaitForTask(c, meilisearch.UpdateIndex(c, "movies", "movie_id", err).task_uid, 10000, 50, err)
+    meilisearch.Wait(c, meilisearch.RenameIndex(c, "movies", "films", err), err)
+
+    mut swaps := Vector {} as Vector<meilisearch.IndexSwap>
+    swaps.push(meilisearch.IndexSwap { first = "films", second = "films_next" })
+    swaps.push(meilisearch.IndexSwap { first = "drafts", second = "drafts_v2", rename = true })
+    meilisearch.Wait(c, meilisearch.SwapIndexes(c, swaps, err), err)
+
+    s := meilisearch.GetIndexStats(c, "films", err)
+    println s.number_of_documents, s.raw_document_db_size, s.avg_document_size, s.is_indexing
+    println s.number_of_embeddings, s.number_of_embedded_documents, s.field_distribution
+    meilisearch.Wait(c, meilisearch.DeleteIndex(c, "films", err), err)
+end
+```
+
+### `IndexPage`
+
+```salam
+struct IndexPage
+```
+
+One page of indexes.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `results` | `Vector` | The indexes on this page. |
+| `offset` | `i64 = 0` | How many were skipped. |
+| `limit` | `i64 = 0` | The page size. |
+| `total` | `i64 = 0` | How many indexes there are. |
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `IndexStats`
+
+```salam
+struct IndexStats
+```
+
+Statistics of one index.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `number_of_documents` | `i64 = 0` | How many documents it holds. |
+| `raw_document_db_size` | `i64 = 0` | The size of the stored documents, in bytes. |
+| `avg_document_size` | `i64 = 0` | The average document size, in bytes. |
+| `is_indexing` | `bool = false` | A task is changing it right now. |
+| `number_of_embeddings` | `i64 = 0` | How many vectors it holds. |
+| `number_of_embedded_documents` | `i64 = 0` | How many documents have at least one vector. |
+| `field_distribution` | `str = ""` | How many documents have each field, as raw JSON. |
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `IndexSwap`
+
+```salam
+struct IndexSwap
+```
+
+Two indexes for `SwapIndexes`.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `first` | `str = ""` | The first index. |
+| `second` | `str = ""` | The second index. |
+| `rename` | `bool = false` | Rename `first` to `second` instead of swapping, when `second` does not exist. |
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `DocumentsQuery`
+
+```salam
+struct DocumentsQuery
+```
+
+Which documents `GetDocuments` returns. Zero values and empty lists are left out.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `offset` | `int = 0` | How many to skip. |
+| `limit` | `int = 0` | How many to return. |
+| `fields` | `Vector` | Return only these fields. |
+| `filter` | `str = ""` | A filter expression, or a JSON array of them; the fields must be filterable. |
+| `ids` | `Vector` | Return only these documents. |
+| `sort` | `Vector` | Sort rules such as `year:desc`; the fields must be sortable. |
+| `retrieve_vectors` | `bool = false` | Also return the stored vectors. |
+
+db-meilisearch-AddDocuments.salam
+
+```salam
+import db.meilisearch
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+
+    docs := `[{"id": 1, "title": "Carol", "year": 2015}, {"id": 2, "title": "Moana", "year": 2016}]`
+    meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", docs, "id", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocuments(c, "movies", `[{"id": 2, "year": 2017}]`, "", err), err)
+    meilisearch.Wait(c, meilisearch.AddDocumentsNdjson(c, "movies", "{\"id\": 3, \"title\": \"Heat\"}\n", "", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsNdjson(c, "movies", "{\"id\": 3, \"year\": 1995}\n", "", err), err)
+    meilisearch.Wait(c, meilisearch.AddDocumentsCsv(c, "movies", "id:number;title\n4;Up\n", "", ";", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsCsv(c, "movies", "id:number,year:number\n4,2009\n", "", "", err), err)
+
+    mut typed := Vector {} as Vector<Movie>
+    typed.push(Movie { id = 5, title = "Alien", year = 1979 })
+    meilisearch.Wait(c, meilisearch.AddDocumentsOf(c, "movies", typed, "id", err), err)
+
+    mut many := Vector {} as Vector<str>
+    repeat 2500 in i:
+        many.push(`{"id": ` + (100 + i) + `, "title": "Movie ` + i + `"}`)
+    end
+    tasks := meilisearch.AddDocumentsInBatches(c, "movies", many, 1000, "id", err)
+    each t in tasks:
+        meilisearch.Wait(c, t, err)
+    end
+
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    println meilisearch.GetDocument(c, "movies", "1", fields, err)
+    mut m := Movie {}
+    if meilisearch.GetDocumentAs(c, "movies", "2", m, err):
+        println m.title, m.year
+    end
+
+    mut q := meilisearch.DocumentsQuery { limit = 10, filter = "year > 2000", retrieve_vectors = false }
+    q.fields.push("id")
+    q.fields.push("title")
+    q.sort.push("year:desc")
+    q.ids.push("1")
+    q.ids.push("2")
+    page := meilisearch.GetDocuments(c, "movies", meilisearch.DocumentsQuery { offset = 0, limit = 20 }, err)
+    mut movies := Vector {} as Vector<Movie>
+    if meilisearch.DocumentsAs(page, movies, err):
+        println movies.len(), page.total
+    end
+    println meilisearch.GetDocuments(c, "movies", q, err).results.len()
+
+    meilisearch.Wait(c, meilisearch.UpdateDocumentsByFunction(c, "movies", "doc.title = doc.title.to_upper()", "id < 10", "", err), err)
+    meilisearch.Wait(c, meilisearch.DeleteDocument(c, "movies", "5", err), err)
+    mut ids := Vector {} as Vector<str>
+    ids.push("3")
+    ids.push("4")
+    meilisearch.Wait(c, meilisearch.DeleteDocuments(c, "movies", ids, err), err)
+    meilisearch.Wait(c, meilisearch.DeleteDocumentsByFilter(c, "movies", "id >= 100", err), err)
+    meilisearch.Wait(c, meilisearch.DeleteAllDocuments(c, "movies", err), err)
+    println meilisearch.ErrorString(err)
+end
+```
+
+## Constants and variables
+
+### `MATCH_LAST`
+
+```salam
+const MATCH_LAST: str = "last"
+```
+
+Matching strategy: drop query words from the end until enough documents match. The default.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `MATCH_ALL`
+
+```salam
+const MATCH_ALL: str = "all"
+```
+
+Matching strategy: every query word must match.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `MATCH_FREQUENCY`
+
+```salam
+const MATCH_FREQUENCY: str = "frequency"
+```
+
+Matching strategy: drop the most common words first.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `VERSION`
+
+```salam
+const VERSION: str = "1.0.0"
+```
+
+The version of this client, sent to the server in the `X-Meilisearch-Client` header.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `STATUS_ENQUEUED`
+
+```salam
+const STATUS_ENQUEUED: str = "enqueued"
+```
+
+Task status: waiting in the queue.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `STATUS_PROCESSING`
+
+```salam
+const STATUS_PROCESSING: str = "processing"
+```
+
+Task status: running.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `STATUS_SUCCEEDED`
+
+```salam
+const STATUS_SUCCEEDED: str = "succeeded"
+```
+
+Task status: done.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `STATUS_FAILED`
+
+```salam
+const STATUS_FAILED: str = "failed"
+```
+
+Task status: failed; see its error.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `STATUS_CANCELED`
+
+```salam
+const STATUS_CANCELED: str = "canceled"
+```
+
+Task status: canceled.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+## Functions
+
+### `GetSettings`
+
+```salam
+func GetSettings(c: Client, uid: str, err &: Error): str
+```
+
+Every setting of an index, as raw JSON.
+
+db-meilisearch-UpdateSettings.salam
+
+```salam
+import db.meilisearch
+
+func show(items: Vector<str>):
+    each s in items:
+        print s + " "
+    end
+    println ""
+end
+
+func main:
+    c := meilisearch.New("http://127.0.0.1:7700", "masterKey")
+    mut err := meilisearch.Error {}
+    println meilisearch.GetSettings(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.UpdateSettings(c, "movies", `{"rankingRules": ["words", "typo"], "stopWords": ["the"]}`, err), err)
+    println meilisearch.GetSetting(c, "movies", "ranking-rules", err)
+    meilisearch.Wait(c, meilisearch.UpdateSetting(c, "movies", "pagination", `{"maxTotalHits": 5000}`, err), err)
+    meilisearch.Wait(c, meilisearch.ResetSetting(c, "movies", "pagination", err), err)
+
+    mut rankingRules := Vector {} as Vector<str>
+    rankingRules.push("words")
+    rankingRules.push("typo")
+    rankingRules.push("proximity")
+    rankingRules.push("attribute")
+    rankingRules.push("sort")
+    rankingRules.push("exactness")
+    meilisearch.Wait(c, meilisearch.UpdateRankingRules(c, "movies", rankingRules, err), err)
+    show(meilisearch.GetRankingRules(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetRankingRules(c, "movies", err), err)
+
+    mut searchableAttributes := Vector {} as Vector<str>
+    searchableAttributes.push("title")
+    searchableAttributes.push("overview")
+    meilisearch.Wait(c, meilisearch.UpdateSearchableAttributes(c, "movies", searchableAttributes, err), err)
+    show(meilisearch.GetSearchableAttributes(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetSearchableAttributes(c, "movies", err), err)
+
+    mut displayedAttributes := Vector {} as Vector<str>
+    displayedAttributes.push("*")
+    meilisearch.Wait(c, meilisearch.UpdateDisplayedAttributes(c, "movies", displayedAttributes, err), err)
+    show(meilisearch.GetDisplayedAttributes(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetDisplayedAttributes(c, "movies", err), err)
+
+    mut filterableAttributes := Vector {} as Vector<str>
+    filterableAttributes.push("genre")
+    filterableAttributes.push("year")
+    meilisearch.Wait(c, meilisearch.UpdateFilterableAttributes(c, "movies", filterableAttributes, err), err)
+    show(meilisearch.GetFilterableAttributes(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetFilterableAttributes(c, "movies", err), err)
+
+    mut sortableAttributes := Vector {} as Vector<str>
+    sortableAttributes.push("year")
+    meilisearch.Wait(c, meilisearch.UpdateSortableAttributes(c, "movies", sortableAttributes, err), err)
+    show(meilisearch.GetSortableAttributes(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetSortableAttributes(c, "movies", err), err)
+
+    mut stopWords := Vector {} as Vector<str>
+    stopWords.push("the")
+    stopWords.push("a")
+    meilisearch.Wait(c, meilisearch.UpdateStopWords(c, "movies", stopWords, err), err)
+    show(meilisearch.GetStopWords(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetStopWords(c, "movies", err), err)
+
+    mut dictionary := Vector {} as Vector<str>
+    dictionary.push("J. R. R.")
+    meilisearch.Wait(c, meilisearch.UpdateDictionary(c, "movies", dictionary, err), err)
+    show(meilisearch.GetDictionary(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetDictionary(c, "movies", err), err)
+
+    mut separatorTokens := Vector {} as Vector<str>
+    separatorTokens.push("|")
+    meilisearch.Wait(c, meilisearch.UpdateSeparatorTokens(c, "movies", separatorTokens, err), err)
+    show(meilisearch.GetSeparatorTokens(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetSeparatorTokens(c, "movies", err), err)
+
+    mut nonSeparatorTokens := Vector {} as Vector<str>
+    nonSeparatorTokens.push("@")
+    meilisearch.Wait(c, meilisearch.UpdateNonSeparatorTokens(c, "movies", nonSeparatorTokens, err), err)
+    show(meilisearch.GetNonSeparatorTokens(c, "movies", err))
+    meilisearch.Wait(c, meilisearch.ResetNonSeparatorTokens(c, "movies", err), err)
+
+    meilisearch.Wait(c, meilisearch.UpdateDistinctAttribute(c, "movies", "sku", err), err)
+    println meilisearch.GetDistinctAttribute(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetDistinctAttribute(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateProximityPrecision(c, "movies", "byAttribute", err), err)
+    println meilisearch.GetProximityPrecision(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetProximityPrecision(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdatePrefixSearch(c, "movies", "indexingTime", err), err)
+    println meilisearch.GetPrefixSearch(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetPrefixSearch(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateSearchCutoffMs(c, "movies", 150, err), err)
+    println meilisearch.GetSearchCutoffMs(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetSearchCutoffMs(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateFacetSearch(c, "movies", true, err), err)
+    println meilisearch.GetFacetSearch(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetFacetSearch(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateSynonyms(c, "movies", `{"logan": ["wolverine"], "wolverine": ["logan"]}`, err), err)
+    println meilisearch.GetSynonyms(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetSynonyms(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateTypoTolerance(c, "movies", `{"minWordSizeForTypos": {"oneTypo": 4, "twoTypos": 10}}`, err), err)
+    println meilisearch.GetTypoTolerance(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetTypoTolerance(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdatePagination(c, "movies", `{"maxTotalHits": 5000}`, err), err)
+    println meilisearch.GetPagination(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetPagination(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateFaceting(c, "movies", `{"maxValuesPerFacet": 200}`, err), err)
+    println meilisearch.GetFaceting(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetFaceting(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateEmbedders(c, "movies", `{"default": {"source": "userProvided", "dimensions": 3}}`, err), err)
+    println meilisearch.GetEmbedders(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetEmbedders(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateLocalizedAttributes(c, "movies", `[{"attributePatterns": ["*_fa"], "locales": ["fas"]}]`, err), err)
+    println meilisearch.GetLocalizedAttributes(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetLocalizedAttributes(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.UpdateChat(c, "movies", `{"description": "A movie catalog"}`, err), err)
+    println meilisearch.GetChat(c, "movies", err)
+    meilisearch.Wait(c, meilisearch.ResetChat(c, "movies", err), err)
+    meilisearch.Wait(c, meilisearch.ResetSettings(c, "movies", err), err)
+    println meilisearch.ErrorString(err)
+end
+```
+
+### `UpdateSettings`
+
+```salam
+func UpdateSettings(c: Client, uid: str, settings: str, err &: Error): TaskInfo
+```
+
+Changes several settings at once; pass a JSON object with only the settings to change.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSettings`
+
+```salam
+func ResetSettings(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Puts every setting back to its default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSetting`
+
+```salam
+func GetSetting(c: Client, uid: str, name: str, err &: Error): str
+```
+
+One setting by its route name, such as `ranking-rules`, as raw JSON; for settings newer than this package.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSetting`
+
+```salam
+func UpdateSetting(c: Client, uid: str, name: str, value: str, err &: Error): TaskInfo
+```
+
+Changes one setting by its route name, with the right HTTP method for it.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSetting`
+
+```salam
+func ResetSetting(c: Client, uid: str, name: str, err &: Error): TaskInfo
+```
+
+Puts one setting back to its default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetRankingRules`
+
+```salam
+func GetRankingRules(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the ranking rules, in order.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateRankingRules`
+
+```salam
+func UpdateRankingRules(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the ranking rules, in order.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetRankingRules`
+
+```salam
+func ResetRankingRules(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the ranking rules, in order to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSearchableAttributes`
+
+```salam
+func GetSearchableAttributes(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the fields searched, most important first.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSearchableAttributes`
+
+```salam
+func UpdateSearchableAttributes(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the fields searched, most important first.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSearchableAttributes`
+
+```salam
+func ResetSearchableAttributes(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the fields searched, most important first to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetDisplayedAttributes`
+
+```salam
+func GetDisplayedAttributes(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the fields returned in hits.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateDisplayedAttributes`
+
+```salam
+func UpdateDisplayedAttributes(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the fields returned in hits.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetDisplayedAttributes`
+
+```salam
+func ResetDisplayedAttributes(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the fields returned in hits to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetFilterableAttributes`
+
+```salam
+func GetFilterableAttributes(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the fields you can filter and facet on; an entry with feature options comes back as its JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateFilterableAttributes`
+
+```salam
+func UpdateFilterableAttributes(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the fields you can filter and facet on; an entry with feature options comes back as its JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetFilterableAttributes`
+
+```salam
+func ResetFilterableAttributes(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the fields you can filter and facet on; an entry with feature options comes back as its JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSortableAttributes`
+
+```salam
+func GetSortableAttributes(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the fields you can sort by.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSortableAttributes`
+
+```salam
+func UpdateSortableAttributes(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the fields you can sort by.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSortableAttributes`
+
+```salam
+func ResetSortableAttributes(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the fields you can sort by to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetStopWords`
+
+```salam
+func GetStopWords(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the words ignored in queries.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateStopWords`
+
+```salam
+func UpdateStopWords(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the words ignored in queries.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetStopWords`
+
+```salam
+func ResetStopWords(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the words ignored in queries to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetDictionary`
+
+```salam
+func GetDictionary(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the words kept whole, such as `J. R. R.`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateDictionary`
+
+```salam
+func UpdateDictionary(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the words kept whole, such as `J. R. R.`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetDictionary`
+
+```salam
+func ResetDictionary(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the words kept whole, such as `J. R. R.` to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSeparatorTokens`
+
+```salam
+func GetSeparatorTokens(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the extra characters that split words.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSeparatorTokens`
+
+```salam
+func UpdateSeparatorTokens(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the extra characters that split words.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSeparatorTokens`
+
+```salam
+func ResetSeparatorTokens(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the extra characters that split words to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetNonSeparatorTokens`
+
+```salam
+func GetNonSeparatorTokens(c: Client, uid: str, err &: Error): Vector<str>
+```
+
+Returns the characters that no longer split words.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateNonSeparatorTokens`
+
+```salam
+func UpdateNonSeparatorTokens(c: Client, uid: str, items: Vector<str>, err &: Error): TaskInfo
+```
+
+Sets the characters that no longer split words.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetNonSeparatorTokens`
+
+```salam
+func ResetNonSeparatorTokens(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the characters that no longer split words to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetDistinctAttribute`
+
+```salam
+func GetDistinctAttribute(c: Client, uid: str, err &: Error): str
+```
+
+Returns the field that keeps only one document for each value.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateDistinctAttribute`
+
+```salam
+func UpdateDistinctAttribute(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the field that keeps only one document for each value.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetDistinctAttribute`
+
+```salam
+func ResetDistinctAttribute(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the field that keeps only one document for each value to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetProximityPrecision`
+
+```salam
+func GetProximityPrecision(c: Client, uid: str, err &: Error): str
+```
+
+Returns how word distance is measured: `byWord` or `byAttribute`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateProximityPrecision`
+
+```salam
+func UpdateProximityPrecision(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets how word distance is measured: `byWord` or `byAttribute`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetProximityPrecision`
+
+```salam
+func ResetProximityPrecision(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets how word distance is measured: `byWord` or `byAttribute` to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetPrefixSearch`
+
+```salam
+func GetPrefixSearch(c: Client, uid: str, err &: Error): str
+```
+
+Returns when prefix search works: `indexingTime` or `disabled`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdatePrefixSearch`
+
+```salam
+func UpdatePrefixSearch(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets when prefix search works: `indexingTime` or `disabled`.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetPrefixSearch`
+
+```salam
+func ResetPrefixSearch(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets when prefix search works: `indexingTime` or `disabled` to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSearchCutoffMs`
+
+```salam
+func GetSearchCutoffMs(c: Client, uid: str, err &: Error): i64
+```
+
+Returns the longest a search may run, in milliseconds; -1 when unset.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSearchCutoffMs`
+
+```salam
+func UpdateSearchCutoffMs(c: Client, uid: str, value: i64, err &: Error): TaskInfo
+```
+
+Sets the longest a search may run, in milliseconds; -1 when unset.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSearchCutoffMs`
+
+```salam
+func ResetSearchCutoffMs(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the longest a search may run, in milliseconds; -1 when unset to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetFacetSearch`
+
+```salam
+func GetFacetSearch(c: Client, uid: str, err &: Error): bool
+```
+
+Returns whether facet search is on.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateFacetSearch`
+
+```salam
+func UpdateFacetSearch(c: Client, uid: str, value: bool, err &: Error): TaskInfo
+```
+
+Sets whether facet search is on.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetFacetSearch`
+
+```salam
+func ResetFacetSearch(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets whether facet search is on to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetSynonyms`
+
+```salam
+func GetSynonyms(c: Client, uid: str, err &: Error): str
+```
+
+Returns the synonyms, as a JSON object of word lists.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateSynonyms`
+
+```salam
+func UpdateSynonyms(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the synonyms, as a JSON object of word lists.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetSynonyms`
+
+```salam
+func ResetSynonyms(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the synonyms, as a JSON object of word lists to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetTypoTolerance`
+
+```salam
+func GetTypoTolerance(c: Client, uid: str, err &: Error): str
+```
+
+Returns the typo tolerance options, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateTypoTolerance`
+
+```salam
+func UpdateTypoTolerance(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the typo tolerance options, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetTypoTolerance`
+
+```salam
+func ResetTypoTolerance(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the typo tolerance options, as JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetPagination`
+
+```salam
+func GetPagination(c: Client, uid: str, err &: Error): str
+```
+
+Returns the pagination options, such as `maxTotalHits`, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdatePagination`
+
+```salam
+func UpdatePagination(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the pagination options, such as `maxTotalHits`, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetPagination`
+
+```salam
+func ResetPagination(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the pagination options, such as `maxTotalHits`, as JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetFaceting`
+
+```salam
+func GetFaceting(c: Client, uid: str, err &: Error): str
+```
+
+Returns the faceting options, such as `maxValuesPerFacet`, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateFaceting`
+
+```salam
+func UpdateFaceting(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the faceting options, such as `maxValuesPerFacet`, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetFaceting`
+
+```salam
+func ResetFaceting(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the faceting options, such as `maxValuesPerFacet`, as JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetEmbedders`
+
+```salam
+func GetEmbedders(c: Client, uid: str, err &: Error): str
+```
+
+Returns the embedders for AI powered search, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateEmbedders`
+
+```salam
+func UpdateEmbedders(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the embedders for AI powered search, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetEmbedders`
+
+```salam
+func ResetEmbedders(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the embedders for AI powered search, as JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetLocalizedAttributes`
+
+```salam
+func GetLocalizedAttributes(c: Client, uid: str, err &: Error): str
+```
+
+Returns the languages of fields, as a JSON array of rules.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateLocalizedAttributes`
+
+```salam
+func UpdateLocalizedAttributes(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the languages of fields, as a JSON array of rules.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetLocalizedAttributes`
+
+```salam
+func ResetLocalizedAttributes(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the languages of fields, as a JSON array of rules to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `GetChat`
+
+```salam
+func GetChat(c: Client, uid: str, err &: Error): str
+```
+
+Returns the conversational search options, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `UpdateChat`
+
+```salam
+func UpdateChat(c: Client, uid: str, value: str, err &: Error): TaskInfo
+```
+
+Sets the conversational search options, as JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `ResetChat`
+
+```salam
+func ResetChat(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Resets the conversational search options, as JSON to the default.
+
+The example for this item is shown with the ones above: db-meilisearch-UpdateSettings.salam
+
+### `Search`
+
+```salam
+func Search(c: Client, uid: str, r: SearchRequest, err &: Error): SearchResult
+```
+
+Searches an index. On error the result is empty and the error is filled.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `Query`
+
+```salam
+func Query(c: Client, uid: str, q: str, err &: Error): SearchResult
+```
+
+Searches an index for some words with every other option left at its default.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `HitsAs`
+
+```salam
+func HitsAs<T>(r: SearchResult, out &: Vector<T>, err &: Error): bool
+```
+
+Reads every hit into Salam structs; fields like `_formatted` that the struct does not have are ignored.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `MultiSearch`
+
+```salam
+func MultiSearch(c: Client, queries: Vector<MultiQuery>, err &: Error): Vector<SearchResult>
+```
+
+Runs several searches in one request and returns one result each.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `FederatedSearch`
+
+```salam
+func FederatedSearch(c: Client, queries: Vector<MultiQuery>, f: Federation, err &: Error): SearchResult
+```
+
+Runs several searches and merges their hits into one ranked list.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `FacetSearch`
+
+```salam
+func FacetSearch(c: Client, uid: str, r: FacetSearchRequest, err &: Error): FacetSearchResult
+```
+
+Searches among the values of a facet, for a filter box that completes as you type.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `SimilarDocuments`
+
+```salam
+func SimilarDocuments(c: Client, uid: str, r: SimilarRequest, err &: Error): SearchResult
+```
+
+Documents that resemble a given document; the index needs an embedder.
+
+The example for this item is shown with the ones above: db-meilisearch-Search.salam
+
+### `Health`
+
+```salam
+func Health(c: Client, err &: Error): str
+```
+
+The health status: `available` when the server is up.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `IsHealthy`
+
+```salam
+func IsHealthy(c: Client): bool
+```
+
+The server answers and is available.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetVersion`
+
+```salam
+func GetVersion(c: Client, err &: Error): Version
+```
+
+The server version.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetStats`
+
+```salam
+func GetStats(c: Client, err &: Error): Stats
+```
+
+Statistics of the whole instance.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `CreateDump`
+
+```salam
+func CreateDump(c: Client, err &: Error): TaskInfo
+```
+
+Starts a dump, a portable backup of every index.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `CreateSnapshot`
+
+```salam
+func CreateSnapshot(c: Client, err &: Error): TaskInfo
+```
+
+Starts a snapshot of the database.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetExperimentalFeatures`
+
+```salam
+func GetExperimentalFeatures(c: Client, err &: Error): str
+```
+
+The experimental features and whether each is on, as raw JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `UpdateExperimentalFeatures`
+
+```salam
+func UpdateExperimentalFeatures(c: Client, features: str, err &: Error): str
+```
+
+Turns experimental features on or off; pass a JSON object such as `{"metrics": true}`.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetNetwork`
+
+```salam
+func GetNetwork(c: Client, err &: Error): str
+```
+
+The network settings used for federated search across instances, as raw JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `UpdateNetwork`
+
+```salam
+func UpdateNetwork(c: Client, network: str, err &: Error): str
+```
+
+Changes the network settings.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Export`
+
+```salam
+func Export(c: Client, request: str, err &: Error): TaskInfo
+```
+
+Starts sending indexes to another Meilisearch; pass the JSON body of the export route.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetMetrics`
+
+```salam
+func GetMetrics(c: Client, err &: Error): str
+```
+
+The Prometheus metrics as text; the `metrics` feature must be on.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `New`
+
+```salam
+func New(host: str, api_key: str): Client
+```
+
+Makes a client. A missing `http://` is added and a trailing slash is dropped.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `WithAgent`
+
+```salam
+func WithAgent(c: Client, agent: str): Client
+```
+
+A copy of the client that names your app in the client header.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Ok`
+
+```salam
+func Ok(err: Error): bool
+```
+
+The last call worked.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `ErrorString`
+
+```salam
+func ErrorString(err: Error): str
+```
+
+The error as one line, such as `meilisearch 404 [index_not_found]: Index `movies` not found.`; empty when there is no error.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `Request`
+
+```salam
+func Request(c: Client, method: str, path: str, body: str, err &: Error): str
+```
+
+Sends any request with a JSON body and returns the raw response body; for routes with no function of their own.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `RequestAs`
+
+```salam
+func RequestAs(c: Client, method: str, path: str, content_type: str, body: str, err &: Error): str
+```
+
+The same, with the content type you choose.
+
+The example for this item is shown with the ones above: db-meilisearch-Client.salam
+
+### `GetTask`
+
+```salam
+func GetTask(c: Client, uid: i64, err &: Error): Task
+```
+
+One task.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `GetTasks`
+
+```salam
+func GetTasks(c: Client, q: TaskQuery, err &: Error): TaskPage
+```
+
+A page of tasks.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `WaitForTask`
+
+```salam
+func WaitForTask(c: Client, uid: i64, timeout_ms: int, interval_ms: int, err &: Error): Task
+```
+
+Polls a task every few milliseconds until it ends. A failed task fills the error with the task error; running past the timeout gives the code `timeout`. A timeout of 0 waits forever.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `Wait`
+
+```salam
+func Wait(c: Client, info: TaskInfo, err &: Error): Task
+```
+
+Waits up to five seconds for the task of a write; does nothing when the write itself already failed, so you can chain it.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `CancelTasks`
+
+```salam
+func CancelTasks(c: Client, q: TaskQuery, err &: Error): TaskInfo
+```
+
+Cancels the queued or running tasks that match; at least one filter is required.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `DeleteTasks`
+
+```salam
+func DeleteTasks(c: Client, q: TaskQuery, err &: Error): TaskInfo
+```
+
+Deletes finished tasks from the history; at least one filter is required.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `GetBatch`
+
+```salam
+func GetBatch(c: Client, uid: i64, err &: Error): Batch
+```
+
+One batch.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `GetBatches`
+
+```salam
+func GetBatches(c: Client, q: TaskQuery, err &: Error): BatchPage
+```
+
+A page of batches, filtered the same way as tasks.
+
+The example for this item is shown with the ones above: db-meilisearch-GetTasks.salam
+
+### `CreateKey`
+
+```salam
+func CreateKey(c: Client, r: KeyRequest, err &: Error): Key
+```
+
+Creates an API key; needs the master key.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `GetKey`
+
+```salam
+func GetKey(c: Client, key_or_uid: str, err &: Error): Key
+```
+
+One key, by its uid or its value.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `GetKeys`
+
+```salam
+func GetKeys(c: Client, offset: int, limit: int, err &: Error): KeyPage
+```
+
+A page of keys.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `UpdateKey`
+
+```salam
+func UpdateKey(c: Client, key_or_uid: str, name: str, description: str, err &: Error): Key
+```
+
+Changes the name and description of a key; nothing else of a key can change.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `DeleteKey`
+
+```salam
+func DeleteKey(c: Client, key_or_uid: str, err &: Error): bool
+```
+
+Deletes a key; it stops working at once.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `TenantToken`
+
+```salam
+func TenantToken(api_key_uid: str, api_key: str, search_rules: str, expires_at: i64, err &: Error): str
+```
+
+Signs a tenant token for one user: a search key that applies your filter rules to every search, made with no request to the server. Pass the uid and value of a key that may search, the search rules as JSON (empty means every index) and a Unix expiry time (0 for none).
+
+The example for this item is shown with the ones above: db-meilisearch-CreateKey.salam
+
+### `CreateIndex`
+
+```salam
+func CreateIndex(c: Client, uid: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Creates an index; leave the primary key empty to let Meilisearch guess it from the first documents.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `GetIndex`
+
+```salam
+func GetIndex(c: Client, uid: str, err &: Error): Index
+```
+
+One index.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `ListIndexes`
+
+```salam
+func ListIndexes(c: Client, offset: int, limit: int, err &: Error): IndexPage
+```
+
+A page of indexes; 0 for offset and limit means the server defaults.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `UpdateIndex`
+
+```salam
+func UpdateIndex(c: Client, uid: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Sets the primary key of an index that has no documents yet.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `RenameIndex`
+
+```salam
+func RenameIndex(c: Client, uid: str, new_uid: str, err &: Error): TaskInfo
+```
+
+Gives an index a new name.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `DeleteIndex`
+
+```salam
+func DeleteIndex(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Deletes an index and all its documents.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `SwapIndexes`
+
+```salam
+func SwapIndexes(c: Client, swaps: Vector<IndexSwap>, err &: Error): TaskInfo
+```
+
+Swaps the contents of index pairs in one atomic step; the way to rebuild an index with no downtime.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `GetIndexStats`
+
+```salam
+func GetIndexStats(c: Client, uid: str, err &: Error): IndexStats
+```
+
+Statistics of one index.
+
+The example for this item is shown with the ones above: db-meilisearch-CreateIndex.salam
+
+### `AddDocuments`
+
+```salam
+func AddDocuments(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Adds documents, or replaces those with the same id; pass a JSON array or object.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `UpdateDocuments`
+
+```salam
+func UpdateDocuments(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Adds documents, or merges the given fields into those with the same id.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `AddDocumentsNdjson`
+
+```salam
+func AddDocumentsNdjson(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Adds documents written as NDJSON, one JSON object per line.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `UpdateDocumentsNdjson`
+
+```salam
+func UpdateDocumentsNdjson(c: Client, uid: str, documents: str, primary_key: str, err &: Error): TaskInfo
+```
+
+Merges NDJSON documents.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `AddDocumentsCsv`
+
+```salam
+func AddDocumentsCsv(c: Client, uid: str, documents: str, primary_key: str, delimiter: str, err &: Error): TaskInfo
+```
+
+Adds documents written as CSV; empty delimiter means a comma. Write `year:number` in the header for a number column.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `UpdateDocumentsCsv`
+
+```salam
+func UpdateDocumentsCsv(c: Client, uid: str, documents: str, primary_key: str, delimiter: str, err &: Error): TaskInfo
+```
+
+Merges CSV documents.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `AddDocumentsInBatches`
+
+```salam
+func AddDocumentsInBatches(c: Client, uid: str, documents: Vector<str>, batch_size: int, primary_key: str, err &: Error): Vector<TaskInfo>
+```
+
+Adds many documents, given one JSON object each, in batches of the given size; returns one task per batch.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `AddDocumentsOf`
+
+```salam
+func AddDocumentsOf<T>(c: Client, uid: str, documents: Vector<T>, primary_key: str, err &: Error): TaskInfo
+```
+
+Adds Salam structs as documents; each one is turned into JSON.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `GetDocument`
+
+```salam
+func GetDocument(c: Client, uid: str, id: str, fields: Vector<str>, err &: Error): str
+```
+
+One document as raw JSON; an empty list of fields returns them all.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `GetDocumentAs`
+
+```salam
+func GetDocumentAs<T>(c: Client, uid: str, id: str, out &: T, err &: Error): bool
+```
+
+One document read into a Salam struct; fields the struct does not have are ignored.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `GetDocuments`
+
+```salam
+func GetDocuments(c: Client, uid: str, q: DocumentsQuery, err &: Error): Page
+```
+
+A page of documents.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `DocumentsAs`
+
+```salam
+func DocumentsAs<T>(p: Page, out &: Vector<T>, err &: Error): bool
+```
+
+Reads every document of a page into Salam structs.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `DeleteDocument`
+
+```salam
+func DeleteDocument(c: Client, uid: str, id: str, err &: Error): TaskInfo
+```
+
+Deletes one document.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `DeleteDocuments`
+
+```salam
+func DeleteDocuments(c: Client, uid: str, ids: Vector<str>, err &: Error): TaskInfo
+```
+
+Deletes the documents with these ids.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `DeleteDocumentsByFilter`
+
+```salam
+func DeleteDocumentsByFilter(c: Client, uid: str, filter: str, err &: Error): TaskInfo
+```
+
+Deletes the documents that match a filter.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `DeleteAllDocuments`
+
+```salam
+func DeleteAllDocuments(c: Client, uid: str, err &: Error): TaskInfo
+```
+
+Deletes every document but keeps the index and its settings.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
+
+### `UpdateDocumentsByFunction`
+
+```salam
+func UpdateDocumentsByFunction(c: Client, uid: str, function: str, filter: str, context: str, err &: Error): TaskInfo
+```
+
+Changes documents with a Rhai script, optionally only those matching a filter and with a JSON context; needs the `editDocumentsByFunction` feature.
+
+The example for this item is shown with the ones above: db-meilisearch-AddDocuments.salam
 
 
 ---

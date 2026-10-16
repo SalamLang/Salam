@@ -2500,6 +2500,63 @@ jobs:
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}" "${sums[@]}"
 
+  build-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Build Salam Agent
+    permissions:
+      contents: write
+    uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+    with:
+      attach: true
+
+  attach-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Attach Salam Agent to the release
+    needs: [create-release, build-agent]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Download the agent release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
+      - name: Upload the agent files to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="v$(tr -d '[:space:]' < VERSION)"
+          cd agent-release
+          sums=$(find . -maxdepth 1 -name 'salam-agent-*.sha256' -printf '%f\n' | head -n1)
+          [ -n "$sums" ] || { echo "::error::no agent files were built"; exit 1; }
+          prefix=$(printf '%s' "$sums" | sed -E 's/^(salam-agent-[0-9][^-]*)-.*/\1/')
+          mv SHA256SUMS "$prefix-SHA256SUMS"
+          mv SHA512SUMS "$prefix-SHA512SUMS"
+          sha256sum -c "$prefix-SHA256SUMS"
+          gh release upload "$TAG" --clobber salam-agent-*
+          {
+            echo "### Salam Agent attached to $TAG"
+            echo ""
+            printf -- '- %s\n' salam-agent-*
+          } >> "$GITHUB_STEP_SUMMARY"
+
   nightly-report:
     name: Report nightly outcome
     if: |

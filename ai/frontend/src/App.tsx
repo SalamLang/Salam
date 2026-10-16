@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
+import { Admin, NoAccess } from "./Admin";
+import { Apps } from "./Apps";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
+import { Connect } from "./Connect";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -19,6 +22,23 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
+type Route = "chat" | "connect" | "apps" | "admin";
+
+function routeFromPath(): Route {
+  const p = location.pathname.replace(/\/+$/, "");
+  if (p === "/connect") return "connect";
+  if (p === "/apps") return "apps";
+  if (p === "/admin") return "admin";
+  return "chat";
+}
+
+const PAGE_TITLES: Record<Route, string> = {
+  chat: "دستیار سلام",
+  connect: "اتصال برنامه",
+  apps: "برنامه‌های متصل",
+  admin: "مدیریت",
+};
+
 function go(id: string | null, replace = false) {
   const url = id ? `/c/${id}` : "/";
   if (location.pathname === url) return;
@@ -29,6 +49,7 @@ function go(id: string | null, replace = false) {
 export function App() {
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
+  const [route, setRoute] = useState<Route>(routeFromPath);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeId, setActiveId] = useState<string | null>(chatIdFromPath());
@@ -42,6 +63,8 @@ export function App() {
   const streamCtrl = useRef<AbortController | null>(null);
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
+  const signedIn = user !== null;
+  const onConnect = route === "connect";
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -54,7 +77,15 @@ export function App() {
     setChats([]);
     setMessages([]);
     setActiveId(null);
-    go(null, true);
+    if (routeFromPath() === "chat") go(null, true);
+  }, []);
+
+  const onAuth = useCallback((u: User) => {
+    setUser(u);
+    api
+      .me()
+      .then((r) => setUser(r.user))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -71,9 +102,9 @@ export function App() {
   }, [signOut]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!signedIn || onConnect) return;
     api.chats().then((r) => setChats(r.chats)).catch((e) => notify(e.message));
-  }, [user, notify]);
+  }, [signedIn, onConnect, notify]);
 
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
@@ -140,6 +171,7 @@ export function App() {
     async (id: string | null, replace = false) => {
       stopPolling();
       setSidebar(false);
+      setRoute("chat");
       setActiveId(id);
       go(id, replace);
       stick.current = true;
@@ -168,13 +200,42 @@ export function App() {
     [notify, follow],
   );
 
+  const leaveChat = () => {
+    stopPolling();
+    setSidebar(false);
+    setActiveId(null);
+    setMessages([]);
+  };
+
+  const navigate = (path: string) => {
+    leaveChat();
+    if (location.pathname !== path) history.pushState(null, "", path);
+    setRoute(routeFromPath());
+  };
+
   useEffect(() => {
-    if (!user) return;
-    openChat(chatIdFromPath(), true);
-    const onPop = () => openChat(chatIdFromPath(), true);
+    if (!signedIn) return;
+    if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
+    const onPop = () => {
+      if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
+      else {
+        stopPolling();
+        setSidebar(false);
+        setActiveId(null);
+        setMessages([]);
+        setRoute(routeFromPath());
+      }
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [user, openChat]);
+  }, [signedIn, openChat]);
+
+  useEffect(() => {
+    if (signedIn) return;
+    const onPop = () => setRoute(routeFromPath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [signedIn]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -263,9 +324,11 @@ export function App() {
     );
   }
 
-  if (!user) return <Auth onAuth={setUser} theme={theme} toggleTheme={toggleTheme} />;
+  if (route === "connect") return <Connect user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
 
-  const title = chats.find((c) => c.id === activeId)?.title || "دستیار سلام";
+  if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
+
+  const title = route === "chat" ? chats.find((c) => c.id === activeId)?.title || "دستیار سلام" : PAGE_TITLES[route];
   const firstName = user.name.trim().split(/\s+/)[0];
 
   return (
@@ -273,7 +336,9 @@ export function App() {
       <Sidebar
         user={user}
         chats={chats}
-        activeId={activeId}
+        activeId={route === "chat" ? activeId : null}
+        page={route}
+        onNavigate={navigate}
         open={sidebar}
         theme={theme}
         onClose={() => setSidebar(false)}
@@ -297,34 +362,40 @@ export function App() {
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        <div className="scroller" ref={scroller} onScroll={onScroll}>
-          {messages.length === 0 && !loadingChat ? (
-            <div className="welcome">
-              <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
-              <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
-              <p className="muted">هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.</p>
-              <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>
-                    <span className="suggestion-icon">
-                      <s.icon width={18} height={18} />
-                    </span>
-                    <strong>{s.title}</strong>
-                    <span>{s.text.split("\n")[0]}</span>
-                  </button>
-                ))}
-              </div>
+        {route === "apps" || route === "admin" ? (
+          <div className="scroller page-scroller">{route === "apps" ? <Apps notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}</div>
+        ) : (
+          <>
+            <div className="scroller" ref={scroller} onScroll={onScroll}>
+              {messages.length === 0 && !loadingChat ? (
+                <div className="welcome">
+                  <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
+                  <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
+                  <p className="muted">هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.</p>
+                  <div className="suggestions">
+                    {SUGGESTIONS.map((s) => (
+                      <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>
+                        <span className="suggestion-icon">
+                          <s.icon width={18} height={18} />
+                        </span>
+                        <strong>{s.title}</strong>
+                        <span>{s.text.split("\n")[0]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="thread">
+                  {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
+                  {messages.map((m) => (
+                    <MessageView key={m.id} m={m} name={user.name} />
+                  ))}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="thread">
-              {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
-              {messages.map((m) => (
-                <MessageView key={m.id} m={m} name={user.name} />
-              ))}
-            </div>
-          )}
-        </div>
-        <Composer busy={busy} disabled={loadingChat} onSend={send} onStop={stop} autoFocus={!activeId} />
+            <Composer busy={busy} disabled={loadingChat} onSend={send} onStop={stop} autoFocus={!activeId} />
+          </>
+        )}
       </main>
       {toast && (
         <div className="toast" role="status">

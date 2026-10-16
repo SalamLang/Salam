@@ -126,3 +126,46 @@ export const IconGlobe = (p: P) => (
     <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
   </Base>
 );
+export const IconPlug = (p: P) => (
+  <Base {...p}>
+    <path d="M9 3v4M15 3v4M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v4" />
+  </Base>
+);
+export const IconShield = (p: P) => (
+  <Base {...p}>
+    <path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z" />
+  </Base>
+);
+export const IconBadgeCheck = (p: P) => (
+  <Base {...p}>
+    <path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z" />
+    <path d="M8.5 12l2.5 2.5 4.5-5" />
+  </Base>
+);
+export const IconAlert = (p: P) => (
+  <Base {...p}>
+    <path d="M12 4L2.5 20h19L12 4z" />
+    <path d="M12 10v4M12 17v.5" />
+  </Base>
+);
+export const IconChevronDown = (p: P) => (
+  <Base {...p}>
+    <path d="M6 9l6 6 6-6" />
+  </Base>
+);
+export const IconActivity = (p: P) => (
+  <Base {...p}>
+    <path d="M3 12h4l3-7 4 14 3-7h4" />
+  </Base>
+);
+export const IconSearch = (p: P) => (
+  <Base {...p}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l4.5 4.5" />
+  </Base>
+);
+export const IconLink = (p: P) => (
+  <Base {...p}>
+    <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+  </Base>
+);

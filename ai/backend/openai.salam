@@ -247,13 +247,23 @@ func chunk(cid: str, created: i64, delta: str, finish: str): str:
     ret "data: " + json.Object(m) + "\n\n"
 end
 
-func usage_json(prompt_chars: int, completion_chars: int): str:
-    p := approx_tokens(prompt_chars)
-    q := approx_tokens(completion_chars)
+func usage_json(prompt_chars: int, completion_chars: int, real: aiengine.Usage): str:
+    mut p := approx_tokens(prompt_chars)
+    mut q := approx_tokens(completion_chars)
+    mut cached := 0 as i64
+    mut reasoning := 0 as i64
+    if real.ok:
+        p = real.input + real.cache_read + real.cache_write
+        q = real.output + real.reasoning
+        cached = real.cache_read
+        reasoning = real.reasoning
+    end
     mut u := Vector {} as Vector<str>
     u.push(json.MemberInt("prompt_tokens", p))
     u.push(json.MemberInt("completion_tokens", q))
     u.push(json.MemberInt("total_tokens", p + q))
+    u.push(json.MemberRaw("prompt_tokens_details", "{" + json.MemberInt("cached_tokens", cached) + "}"))
+    u.push(json.MemberRaw("completion_tokens_details", "{" + json.MemberInt("reasoning_tokens", reasoning) + "}"))
     ret json.Object(u)
 end
 
@@ -410,8 +420,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     end
     ailive.End(sid)
     aiturn.Forget(sid)
+    usage := aiengine.UsageOf(sid)
     aiengine.Delete(sid)
     finish_log(rid, status, final, started)
+    aiturn.SaveUsage("api_requests", rid, usage)
     if stream:
         if status == "aborted":
             ret
@@ -430,7 +442,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
                 u.push(json.MemberInt("created", t))
                 u.push(json.Member("model", MODEL))
                 u.push(json.MemberRaw("choices", "[]"))
-                u.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len())))
+                u.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
                 _u := tcp.Write(c, "data: " + json.Object(u) + "\n\n")
             end
         end
@@ -454,7 +466,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     m.push(json.MemberInt("created", t))
     m.push(json.Member("model", MODEL))
     m.push(json.MemberRaw("choices", "[" + json.Object(choice) + "]"))
-    m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len())))
+    m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
     respond(c, "200 OK", json.Object(m))
 end
 
@@ -561,7 +573,7 @@ end
 pub func Requests(where: str, args: Vector<str>, with_user: bool): str:
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT r.id, r.created, r.key_id, COALESCE(k.name, ''), r.project, r.end_user, r.model, r.stream, r.status, r.ms, r.prompt, r.response, r.prompt_chars, r.completion_chars, r.ip, r.agent, u.id, u.name, u.email FROM api_requests r JOIN users u ON u.id = r.user_id LEFT JOIN api_keys k ON k.id = r.key_id WHERE " + where + " ORDER BY r.id DESC LIMIT 50", args)
+    mut rows := aistore.Stmt("SELECT r.id, r.created, r.key_id, COALESCE(k.name, ''), r.project, r.end_user, r.model, r.stream, r.status, r.ms, r.prompt, r.response, r.prompt_chars, r.completion_chars, r.ip, r.agent, u.id, u.name, u.email, r.tokens_in, r.tokens_out, r.tokens_reasoning, r.cache_read, r.cache_write, r.cost, r.tools FROM api_requests r JOIN users u ON u.id = r.user_id LEFT JOIN api_keys k ON k.id = r.key_id WHERE " + where + " ORDER BY r.id DESC LIMIT 50", args)
     until aistore.Next(rows):
         mut k := Vector {} as Vector<str>
         k.push(json.MemberRaw("id", aistore.Text(rows, 2)))
@@ -582,6 +594,15 @@ pub func Requests(where: str, args: Vector<str>, with_user: bool): str:
         m.push(json.MemberRaw("completion_chars", aistore.Text(rows, 13)))
         m.push(json.Member("ip", aistore.Text(rows, 14)))
         m.push(json.Member("agent", aistore.Text(rows, 15)))
+        mut tk := Vector {} as Vector<str>
+        tk.push(json.MemberRaw("input", aistore.Text(rows, 19)))
+        tk.push(json.MemberRaw("output", aistore.Text(rows, 20)))
+        tk.push(json.MemberRaw("reasoning", aistore.Text(rows, 21)))
+        tk.push(json.MemberRaw("cache_read", aistore.Text(rows, 22)))
+        tk.push(json.MemberRaw("cache_write", aistore.Text(rows, 23)))
+        tk.push(json.MemberRaw("cost", aistore.Text(rows, 24)))
+        tk.push(json.MemberRaw("tools", aistore.Text(rows, 25)))
+        m.push(json.MemberRaw("usage", json.Object(tk)))
         if with_user:
             mut u := Vector {} as Vector<str>
             u.push(json.MemberRaw("id", aistore.Text(rows, 16)))

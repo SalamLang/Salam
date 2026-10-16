@@ -25,6 +25,7 @@ import crypto
 import net.tcp
 import chan
 import sync
+import time
 
 include aistore "store.salam"
 include aiweb "web.salam"
@@ -152,6 +153,13 @@ func preflight(ctx: i64):
     aiweb.Preflight(ctx)
 end
 
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    ret s.substr(0, max)
+end
+
 func i64s(n: i64): str:
     ret conv.FormatInt(n)
 end
@@ -221,7 +229,14 @@ end
 func start_session(ctx: i64, status: int, id: str, name: str, email: str):
     token := crypto.RandomToken(32)
     aistore.Lock()
-    _ok := aistore.Run("INSERT INTO sessions (token, user_id, expires) VALUES (?1, ?2, ?3)", three(token_hash(token), id, i64s(aistore.Now() + SESSION_DAYS * 86400)))
+    ip := clip(aiweb.ClientIp(ctx), 64)
+    agent := clip(http.Ctx_header(ctx, "User-Agent"), 255)
+    mut a := three(token_hash(token), id, i64s(aistore.Now() + SESSION_DAYS * 86400))
+    a.push(i64s(aistore.Now()))
+    a.push(ip)
+    a.push(agent)
+    _ok := aistore.Run("INSERT INTO sessions (token, user_id, expires, created, ip, agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", a)
+    _lg := aistore.Run("UPDATE users SET last_login = ?1, logins = logins + 1, last_ip = ?2 WHERE id = ?3", three(i64s(aistore.Now()), ip, id))
     _gc := aistore.Run("DELETE FROM sessions WHERE expires < ?1", one(i64s(aistore.Now())))
     aistore.Unlock()
     mut m := Vector {} as Vector<str>
@@ -427,6 +442,11 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
         r.text = body
         r.failed = status == "error"
         if sid.len() > 0:
+            mut usage := aiengine.UsageOf(sid)
+            if usage.ms <= 0:
+                usage.ms = time.NowMillis() - created * 1000
+            end
+            aiturn.SaveUsage("messages", mid, usage)
             ailive.End(sid)
             forget_check(sid)
         end

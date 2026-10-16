@@ -15,10 +15,56 @@ const dayFmt = new Intl.DateTimeFormat("fa-IR", {
   month: "short",
   day: "numeric",
 });
+const monthFmt = new Intl.DateTimeFormat("fa-IR", {
+  month: "long",
+  year: "numeric",
+  timeZone: "Asia/Tehran",
+});
+const compactFmt = new Intl.NumberFormat("fa-IR", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const costFmt = new Intl.NumberFormat("fa-IR", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 4,
+});
+const bigCostFmt = new Intl.NumberFormat("fa-IR", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
 const relFmt = new Intl.RelativeTimeFormat("fa", { numeric: "auto" });
 
 export function fmtNum(n: number): string {
   return numberFmt.format(n);
+}
+
+export function fmtCompact(n: number): string {
+  return Math.abs(n) < 10000 ? numberFmt.format(n) : compactFmt.format(n);
+}
+
+export function fmtCost(n: number): string {
+  return n >= 1 ? bigCostFmt.format(n) : costFmt.format(n);
+}
+
+export function fmtMonth(ts: number): string {
+  return ts ? monthFmt.format(ts * 1000) : "";
+}
+
+export type TokenCounts = {
+  input: number;
+  output: number;
+  reasoning: number;
+  cache_read: number;
+  cache_write: number;
+};
+
+export function tokenSplit(u: TokenCounts) {
+  const cache = u.cache_read + u.cache_write;
+  const input = u.input + cache;
+  const output = u.output + u.reasoning;
+  return { input, output, cache, total: input + output };
 }
 
 export function fmtDate(ts: number): string {

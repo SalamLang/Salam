@@ -56,6 +56,32 @@ export type AppEvent = {
   user?: PersonRef;
   client: { name: string; host: string };
 };
+export type UsageTotals = {
+  count: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+};
+export type UsagePeriodKey = "today" | "week" | "month" | "last_month" | "all";
+export type UsagePeriod = {
+  key: UsagePeriodKey;
+  from: number;
+  to: number;
+  chat: UsageTotals;
+  api: UsageTotals;
+};
+export type RequestUsage = {
+  input: number;
+  output: number;
+  reasoning: number;
+  cache_read: number;
+  cache_write: number;
+  cost: number;
+  tools: number;
+};
 export type AdminSummary = {
   users: number;
   users_7d: number;
@@ -71,7 +97,15 @@ export type AdminSummary = {
   top_tools: { tool: string; count: number }[];
   top_clients: { name: string; count: number }[];
   top_projects: { name: string; count: number }[];
-  daily: { day: string; calls: number; api: number; users: number }[];
+  daily: {
+    day: string;
+    calls: number;
+    api: number;
+    users: number;
+    tokens_in: number;
+    tokens_out: number;
+  }[];
+  usage: UsagePeriod[];
 };
 export type AdminUser = {
   id: number;
@@ -83,6 +117,9 @@ export type AdminUser = {
   apps: number;
   mcp_calls: number;
   api_requests: number;
+  tokens: number;
+  last_login: number;
+  logins: number;
   last_active: number;
 };
 export type AdminApp = {
@@ -128,6 +165,7 @@ export type ApiRequest = {
   ip: string;
   agent: string;
   user?: PersonRef;
+  usage: RequestUsage;
 };
 export type RequestFilters = {
   user?: number;

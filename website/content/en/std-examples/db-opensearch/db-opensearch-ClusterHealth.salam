@@ -1,0 +1,43 @@
+import db.opensearch
+
+func main:
+    c := opensearch.Connect("http://localhost:9200")
+    h := opensearch.ClusterHealth(c)
+    println h.ok, h.cluster_name, h.status, h.timed_out, h.nodes, h.data_nodes, h.active_primary_shards
+    println h.active_shards, h.relocating_shards, h.initializing_shards, h.unassigned_shards, h.pending_tasks, h.active_shards_percent
+    println opensearch.WaitForStatus(c, "books", "yellow", "30s").status
+    println opensearch.ClusterStats(c).len() > 0, opensearch.ClusterState(c, "metadata").len() > 0
+    println opensearch.PutClusterSettings(c, `{"cluster.routing.allocation.enable":"all"}`, "")
+    println opensearch.GetClusterSettings(c)
+    println opensearch.AllocationExplain(c, `{"index":"books","shard":0,"primary":true}`).len()
+    println opensearch.NodesInfo(c, "os").len() > 0, opensearch.NodesStats(c, "jvm").len() > 0, opensearch.HotThreads(c).len() > 0
+    each row in opensearch.Cat(c, "shards?h=index,shard,state"):
+        println row
+    end
+    println opensearch.CatText(c, "nodes"), opensearch.Plugins(c), opensearch.HasPlugin(c, "opensearch-knn")
+
+    rx := opensearch.ReindexBody(c, `{"source":{"index":"books"},"dest":{"index":"books_v4"}}`, false)
+    t := opensearch.GetTask(c, rx.task)
+    println t.ok, t.id, t.completed, t.action, t.description, t.status, t.response, t.error
+    println opensearch.WaitTask(c, rx.task, "60s").completed, opensearch.CancelTask(c, rx.task)
+    println opensearch.ListTasks(c, "*reindex").len() > 0
+
+    println opensearch.PutRepository(c, "backups", "fs", `{"location":"/mnt/backups"}`), opensearch.VerifyRepository(c, "backups")
+    println opensearch.GetRepository(c, "backups"), opensearch.CreateSnapshot(c, "backups", "nightly-1", "books", true)
+    println opensearch.Snapshots(c, "backups"), opensearch.GetSnapshot(c, "backups", "nightly-1").len() > 0
+    println opensearch.SnapshotStatus(c, "backups", "nightly-1").len() > 0
+    println opensearch.RestoreSnapshot(c, "backups", "nightly-1", `{"indices":"books","rename_pattern":"(.+)","rename_replacement":"restored_$1"}`, true)
+    println opensearch.DeleteSnapshot(c, "backups", "nightly-1"), opensearch.DeleteRepository(c, "backups")
+
+    mut procs := Vector {} as Vector<str>
+    procs.push(opensearch.Processor("lowercase", `{"field":"tag"}`))
+    procs.push(opensearch.Processor("set", `{"field":"seen","value":true}`))
+    println opensearch.PutPipeline(c, "clean", opensearch.Pipeline("tidy incoming books", procs))
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"tag":"POETRY"}`)
+    println opensearch.SimulatePipeline(c, "clean", docs), opensearch.GetPipeline(c, "clean").len() > 0
+    println opensearch.DeletePipeline(c, "clean")
+
+    println opensearch.PutScript(c, "double", "doc['stock'].value * 2"), opensearch.GetScript(c, "double")
+    println opensearch.PutSearchTemplate(c, "by_tag", `{"query":{"term":{"tag":"{{tag}}"}}}`), opensearch.DeleteScript(c, "by_tag"), opensearch.DeleteScript(c, "double")
+end

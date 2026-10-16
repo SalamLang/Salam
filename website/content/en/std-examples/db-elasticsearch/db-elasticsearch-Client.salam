@@ -1,0 +1,36 @@
+import db.elasticsearch
+
+func main:
+    mut cfg := elasticsearch.DefaultConfig()
+    cfg.username = "elastic"
+    cfg.password = "s3cret"
+    cfg.ca_file = "/etc/elasticsearch/certs/http_ca.crt"
+    cfg.timeout_ms = 10000
+    cfg.headers.put("X-Opaque-Id", "salam-docs")
+    mut c := elasticsearch.NewClient(cfg)
+    if not elasticsearch.Ping(c):
+        println "cannot reach elasticsearch:", elasticsearch.Error(c)
+        ret
+    end
+    info := elasticsearch.GetInfo(c)
+    println info.distribution, info.version, elasticsearch.ClusterHealth(c).status
+
+    mapping := `{"mappings":{"properties":{"title":{"type":"text"},"year":{"type":"integer"}}}}`
+    if not elasticsearch.IndexExists(c, "books"):
+        elasticsearch.CreateIndex(c, "books", mapping)
+    end
+    w := elasticsearch.IndexWith(c, "books", "1", `{"title":"Shahnameh","year":1010}`, elasticsearch.Options { refresh = elasticsearch.REFRESH_WAIT_FOR })
+    println w.result, w.version
+
+    d := elasticsearch.Get(c, "books", "1")
+    if d.found: println d.source end
+    u := elasticsearch.UpdateWith(c, "books", "1", `{"year":1011}`, elasticsearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    if not u.ok: println "conflict:", elasticsearch.ErrorType(c) end
+    elasticsearch.UpdateScript(c, "books", "1", "ctx._source.year += params.n", `{"n": 1}`)
+    println elasticsearch.Exists(c, "books", "1"), elasticsearch.Count(c, "books", "")
+
+    r := elasticsearch.Perform(c, "GET", "/_cat/health?format=json", "")
+    println r.status, r.body
+    elasticsearch.Delete(c, "books", "1")
+    elasticsearch.Close(c)
+end

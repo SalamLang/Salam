@@ -1,0 +1,95 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19874
+
+func main:
+    fake.On("POST", "/sales/_search", 200, `{"took":9,"timed_out":false,"hits":{"total":{"value":1200,"relation":"eq"},"max_score":null,"hits":[]},"aggregations":{"by_city":{"doc_count_error_upper_bound":0,"sum_other_doc_count":310,"buckets":[{"key":"Tehran","doc_count":540,"revenue":{"value":81234.5}},{"key":"Shiraz","doc_count":210,"revenue":{"value":30120.0}},{"key":"Tabriz","doc_count":140,"revenue":{"value":19870.25}}]},"avg_price":{"value":24.75},"total":{"value":129224.75},"cheapest":{"value":2.5},"dearest":{"value":180.0},"priced":{"value":1188},"customers":{"value":893},"price_stats":{"count":1188,"min":2.5,"max":180.0,"avg":24.75,"sum":29403.0},"price_ext":{"count":1188,"min":2.5,"max":180.0,"avg":24.75,"sum":29403.0,"variance":310.2,"std_deviation":17.61},"latency":{"values":{"50.0":120.0,"99.0":870.5}},"price_hist":{"buckets":[{"key":0.0,"doc_count":400},{"key":50.0,"doc_count":700},{"key":100.0,"doc_count":100}]},"monthly":{"buckets":[{"key_as_string":"2026-08-01","key":1785542400000,"doc_count":380,"sales":{"value":40100.0}},{"key_as_string":"2026-09-01","key":1788220800000,"doc_count":820,"sales":{"value":89124.75}}]},"price_bands":{"buckets":[{"key":"*-10.0","to":10.0,"doc_count":200},{"key":"10.0-50.0","from":10.0,"to":50.0,"doc_count":800},{"key":"50.0-*","from":50.0,"doc_count":200}]},"keyed_bands":{"buckets":{"cheap":{"to":10.0,"doc_count":200},"normal":{"from":10.0,"doc_count":1000}}},"refunds":{"doc_count":12},"items":{"doc_count":3400,"top_skus":{"buckets":[{"key":"B-1","doc_count":90}]}},"no_price":{"doc_count":12},"top":{"hits":{"total":{"value":540,"relation":"eq"},"hits":[{"_index":"sales","_id":"s1","_score":1.0,"_source":{"sku":"B-1"}}]}},"pairs":{"after_key":{"city":"Yazd","channel":"web"},"buckets":[{"key":{"city":"Tehran","channel":"shop"},"doc_count":300},{"key":{"city":"Tehran","channel":"web"},"doc_count":240}]}}}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19874")
+
+    mut pcts := Vector {} as Vector<f64>
+    pcts.push(50.0)
+    pcts.push(99.0)
+    mut bounds := Vector {} as Vector<f64>
+    bounds.push(10.0)
+    bounds.push(50.0)
+    mut pair := Vector {} as Vector<str>
+    pair.push("city")
+    pair.push("channel")
+    by_city := opensearch.SubAggs(opensearch.TermsAgg("city", 3), opensearch.AddAgg("{}", "revenue", opensearch.SumAgg("price")))
+    mut aggs := opensearch.AddAgg("{}", "by_city", by_city)
+    aggs = opensearch.AddAgg(aggs, "avg_price", opensearch.AvgAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "total", opensearch.SumAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "cheapest", opensearch.MinAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "dearest", opensearch.MaxAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "priced", opensearch.ValueCountAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "customers", opensearch.CardinalityAgg("customer_id"))
+    aggs = opensearch.AddAgg(aggs, "price_stats", opensearch.StatsAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "price_ext", opensearch.ExtendedStatsAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "latency", opensearch.PercentilesAgg("latency_ms", pcts))
+    aggs = opensearch.AddAgg(aggs, "price_hist", opensearch.HistogramAgg("price", 50.0))
+    aggs = opensearch.AddAgg(aggs, "monthly", opensearch.SubAggs(opensearch.DateHistogramAgg("sold_at", "month"), opensearch.AddAgg("{}", "sales", opensearch.SumAgg("price"))))
+    aggs = opensearch.AddAgg(aggs, "price_bands", opensearch.RangeAgg("price", bounds))
+    aggs = opensearch.AddAgg(aggs, "refunds", opensearch.FilterAgg(opensearch.TermBool("refunded", true)))
+    aggs = opensearch.AddAgg(aggs, "items", opensearch.SubAggs(opensearch.NestedAgg("items"), opensearch.AddAgg("{}", "top_skus", opensearch.TermsAgg("items.sku", 5))))
+    aggs = opensearch.AddAgg(aggs, "no_price", opensearch.MissingAgg("price"))
+    aggs = opensearch.AddAgg(aggs, "top", opensearch.TopHitsAgg(1))
+    aggs = opensearch.AddAgg(aggs, "pairs", opensearch.CompositeAgg(pair, 2))
+    println "aggs body:", aggs
+
+    r := opensearch.SearchWith(c, "sales", opensearch.SearchRequest { size = 0, aggs = aggs, track_total_hits = "true" })
+    println "search:", r.ok, r.total, r.hits.len()
+    each b in opensearch.Buckets(r.aggregations, "by_city"):
+        println "  city:", b.key, b.doc_count, opensearch.AggValue(b.raw, "revenue")
+    end
+    println "metrics:", opensearch.AggValue(r.aggregations, "avg_price"), opensearch.AggValue(r.aggregations, "total"), opensearch.AggValue(r.aggregations, "cheapest"), opensearch.AggValue(r.aggregations, "dearest")
+    println "counts:", opensearch.AggValue(r.aggregations, "priced"), opensearch.AggValue(r.aggregations, "customers")
+    println "stats:", opensearch.AggField(r.aggregations, "price_stats", "min"), opensearch.AggField(r.aggregations, "price_stats", "max"), opensearch.AggField(r.aggregations, "price_stats", "sum")
+    println "spread:", opensearch.AggField(r.aggregations, "price_ext", "std_deviation")
+    println "percentiles:", opensearch.AggPercentile(r.aggregations, "latency", 50.0), opensearch.AggPercentile(r.aggregations, "latency", 99.0)
+    each b in opensearch.Buckets(r.aggregations, "price_hist"):
+        println "  bucket of 50 from", b.key + ":", b.doc_count
+    end
+    each b in opensearch.Buckets(r.aggregations, "monthly"):
+        println "  month:", b.key_as_string, b.key, b.doc_count, opensearch.AggValue(b.raw, "sales")
+    end
+    each b in opensearch.Buckets(r.aggregations, "price_bands"):
+        println "  band:", b.key, b.doc_count
+    end
+    each b in opensearch.Buckets(r.aggregations, "keyed_bands"):
+        println "  keyed band:", b.key, b.doc_count
+    end
+    println "refunds:", opensearch.AggField(r.aggregations, "refunds", "doc_count")
+    each b in opensearch.Buckets(opensearch.AggRaw(r.aggregations, "items"), "top_skus"):
+        println "  nested sku:", b.key, b.doc_count
+    end
+    println "missing price:", opensearch.AggField(r.aggregations, "no_price", "doc_count")
+    top := opensearch.ParseSearch(opensearch.AggRaw(r.aggregations, "top"))
+    println "top hit:", top.total, top.hits.get(0).id, top.hits.get(0).source
+    pairs := opensearch.AggRaw(r.aggregations, "pairs")
+    println "composite next page after:", opensearch.JsonPathRaw(pairs, "after_key")
+    each b in opensearch.Buckets(r.aggregations, "pairs"):
+        println "  pair:", b.key, b.doc_count
+    end
+    ret 0
+end

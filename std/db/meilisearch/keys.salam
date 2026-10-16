@@ -1,0 +1,146 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package meilisearch
+
+@en "Key"
+@fa "کلید"
+pub struct Key:
+    pub uid: str = ""
+    pub key: str = ""
+    pub name: str = ""
+    pub description: str = ""
+    pub actions: Vector<str> = Vector {} as Vector<str>
+    pub indexes: Vector<str> = Vector {} as Vector<str>
+    pub expires_at: str = ""
+    pub created_at: str = ""
+    pub updated_at: str = ""
+end
+
+@en "KeyRequest"
+@fa "درخواست کلید"
+pub struct KeyRequest:
+    pub uid: str = ""
+    pub name: str = ""
+    pub description: str = ""
+    pub actions: Vector<str> = Vector {} as Vector<str>
+    pub indexes: Vector<str> = Vector {} as Vector<str>
+    pub expires_at: str = ""
+end
+
+@en "KeyPage"
+@fa "صفحه کلید"
+pub struct KeyPage:
+    pub results: Vector<Key> = Vector {} as Vector<Key>
+    pub offset: i64 = 0
+    pub limit: i64 = 0
+    pub total: i64 = 0
+end
+
+func _key(body: str): Key:
+    ret Key {
+        uid = _get_str(body, "uid"), key = _get_str(body, "key"), name = _get_str(body, "name"),
+        description = _get_str(body, "description"), actions = _strings(_get_raw(body, "actions")),
+        indexes = _strings(_get_raw(body, "indexes")), expires_at = _get_str(body, "expiresAt"),
+        created_at = _get_str(body, "createdAt"), updated_at = _get_str(body, "updatedAt")
+    }
+end
+
+@en "CreateKey"
+@fa "ایجاد کلید"
+pub func CreateKey(c: Client, r: KeyRequest, err &: Error): Key:
+    mut m := Vector {} as Vector<str>
+    _str_member(m, "uid", r.uid)
+    _str_member(m, "name", r.name)
+    _str_member(m, "description", r.description)
+    m.push(json.MemberRaw("actions", _strs_json(r.actions)))
+    m.push(json.MemberRaw("indexes", _strs_json(r.indexes)))
+    if r.expires_at.len() > 0:
+        m.push(json.Member("expiresAt", r.expires_at))
+    else:
+        m.push(json.MemberRaw("expiresAt", "null"))
+    end
+    body := _call(c, "POST", "/keys", json.Object(m), err)
+    if not Ok(err): ret Key {} end
+    ret _key(body)
+end
+
+@en "GetKey"
+@fa "دریافت کلید"
+pub func GetKey(c: Client, key_or_uid: str, err &: Error): Key:
+    body := _call(c, "GET", "/keys/" + _esc(key_or_uid), "", err)
+    if not Ok(err): ret Key {} end
+    ret _key(body)
+end
+
+@en "GetKeys"
+@fa "دریافت کلیدها"
+pub func GetKeys(c: Client, offset: int, limit: int, err &: Error): KeyPage:
+    body := _call(c, "GET", "/keys" + _paging(offset, limit), "", err)
+    mut out := KeyPage {
+        offset = _get_i64(body, "offset", 0 as i64), limit = _get_i64(body, "limit", 0 as i64),
+        total = _get_i64(body, "total", 0 as i64)
+    }
+    each item in _elements(_get_raw(body, "results")):
+        out.results.push(_key(item))
+    end
+    ret out
+end
+
+@en "UpdateKey"
+@fa "به‌روزرسانی کلید"
+pub func UpdateKey(c: Client, key_or_uid: str, name: str, description: str, err &: Error): Key:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("name", name))
+    m.push(json.Member("description", description))
+    body := _call(c, "PATCH", "/keys/" + _esc(key_or_uid), json.Object(m), err)
+    if not Ok(err): ret Key {} end
+    ret _key(body)
+end
+
+@en "DeleteKey"
+@fa "حذف کلید"
+pub func DeleteKey(c: Client, key_or_uid: str, err &: Error): bool:
+    _call(c, "DELETE", "/keys/" + _esc(key_or_uid), "", err)
+    ret Ok(err)
+end
+
+@en "TenantToken"
+@fa "توکن مستاجر"
+pub func TenantToken(api_key_uid: str, api_key: str, search_rules: str, expires_at: i64, err &: Error): str:
+    _clear(err)
+    if api_key_uid.len() == 0 or api_key.len() == 0:
+        _fail(err, 0, "invalid_tenant_token", "invalid_request", "tenant tokens need the API key and its uid")
+        ret ""
+    end
+    mut rules := str.TrimRight(search_rules)
+    if rules.len() == 0: rules = `["*"]` end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("searchRules", rules))
+    m.push(json.Member("apiKeyUid", api_key_uid))
+    if expires_at > 0 as i64:
+        if expires_at <= time.Now():
+            _fail(err, 0, "invalid_tenant_token", "invalid_request", "the expiry date is in the past")
+            ret ""
+        end
+        m.push(json.MemberInt("exp", expires_at))
+    end
+    mut code := 0
+    token := jwt.SignJSON(json.Object(m), jwt.JWT_HS256, "", api_key, code)
+    if code != jwt.JWT_OK:
+        _fail(err, 0, "invalid_tenant_token", "invalid_request", "could not sign the tenant token")
+        ret ""
+    end
+    ret token
+end

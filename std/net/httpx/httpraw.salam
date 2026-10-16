@@ -171,7 +171,7 @@ func _raw_finish(a &: RawAcc, err: str): Raw:
     end
     head := _raw_head_str(a, head_end)
     mut body_len := a.len - head_end
-    if str.Contains(HeaderValue(head, "Transfer-Encoding").lower(), "chunked"):
+    if body_len > 0 and str.Contains(HeaderValue(head, "Transfer-Encoding").lower(), "chunked"):
         mut decoded := 0
         if not _raw_dechunk(a, head_end, decoded):
             mem.Free(a.data)
@@ -198,8 +198,7 @@ func _raw_status(head: str): int:
     ret head.substr(sp + 1, 3).to_int()
 end
 
-func _dial_tls(ep: Endpoint, timeout_ms: int): tls.Conn:
-    cfg := tls.NewConfig(ep.host)
+func _dial_tls(ep: Endpoint, timeout_ms: int, cfg: tls.Config): tls.Conn:
     if timeout_ms <= 0: ret tls.Dial(ep.host, ep.port, cfg) end
     t := tcp.Dial(ep.host, ep.port)
     if not tcp.ConnOk(t): ret tls.Conn { err = "could not connect to " + ep.host } end
@@ -225,9 +224,9 @@ func _raw_send_plain(
 end
 
 func _raw_send_tls(
-    ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int
+    ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int, cfg: tls.Config
 ): Raw:
-    mut c := _dial_tls(ep, timeout_ms)
+    mut c := _dial_tls(ep, timeout_ms, cfg)
     if not tls.ConnOk(c):
         e := tls.ConnError(c)
         tls.Close(c)
@@ -254,7 +253,17 @@ pub func SendRawTimeout(
     ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int
 ): Raw:
     if not ep.ok: ret Raw { error = "the endpoint could not be parsed" } end
-    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms) end
+    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms, tls.NewConfig(ep.host)) end
+    ret _raw_send_plain(ep, head, body, n, timeout_ms)
+end
+
+@en "SendRawTLS"
+@fa "ارسال خام با پیکربندی امن"
+pub func SendRawTLS(
+    ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int, cfg: tls.Config
+): Raw:
+    if not ep.ok: ret Raw { error = "the endpoint could not be parsed" } end
+    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms, cfg) end
     ret _raw_send_plain(ep, head, body, n, timeout_ms)
 end
 

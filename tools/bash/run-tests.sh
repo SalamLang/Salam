@@ -779,6 +779,14 @@ if want db; then
                     fi
                     continue
                     ;;
+                tslive_*)
+                    if [ -z "${SALAM_TEST_TYPESENSE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_TYPESENSE to \"url api-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 oslivesec_*)
                     if [ -z "${SALAM_TEST_OPENSEARCH_SECURE:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH_SECURE to \"https-url admin password\" for a server with the security plugin)" "db/$lang/$name"
@@ -790,6 +798,22 @@ if want db; then
                 oslive_*)
                     if [ -z "${SALAM_TEST_OPENSEARCH:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH to \"url [user password [insecure]]\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                eslive_*)
+                    if [ -z "${SALAM_TEST_ES:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_ES to an Elasticsearch URL)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                meililive_*)
+                    if [ -z "${SALAM_TEST_MEILI:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MEILI to \"url master-key\")" "db/$lang/$name"
                     else
                         add_job build "db/$lang/$name" "$f" "$lang" "$exp"
                     fi

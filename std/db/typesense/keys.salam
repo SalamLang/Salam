@@ -1,0 +1,134 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package typesense
+
+@en "KEY_ACTION_ALL"
+@fa "کنش کلید همه"
+pub const KEY_ACTION_ALL := "*"
+
+@en "KEY_ACTION_SEARCH"
+@fa "کنش کلید جستجو"
+pub const KEY_ACTION_SEARCH := "documents:search"
+
+@en "KeySpec"
+@fa "مشخصات کلید"
+pub struct KeySpec:
+    pub description: str = ""
+    pub actions: Vector<str> = Vector {} as Vector<str>
+    pub collections: Vector<str> = Vector {} as Vector<str>
+    pub expires_at: i64 = 0
+    pub value: str = ""
+    pub autodelete: bool = false
+end
+
+@en "Key"
+@fa "کلید"
+pub struct Key:
+    pub id: i64 = 0
+    pub value: str = ""
+    pub value_prefix: str = ""
+    pub description: str = ""
+    pub actions: Vector<str> = Vector {} as Vector<str>
+    pub collections: Vector<str> = Vector {} as Vector<str>
+    pub expires_at: i64 = 0
+    pub autodelete: bool = false
+end
+
+func _key(raw: str): Key:
+    ret Key {
+        id = _get_i64(raw, "id", 0 as i64), value = _get_str(raw, "value"), value_prefix = _get_str(raw, "value_prefix"),
+        description = _get_str(raw, "description"), actions = _strings(_get_raw(raw, "actions")),
+        collections = _strings(_get_raw(raw, "collections")), expires_at = _get_i64(raw, "expires_at", 0 as i64),
+        autodelete = _get_bool(raw, "autodelete")
+    }
+end
+
+@en "KeySpecJSON"
+@fa "جیسون مشخصات کلید"
+pub func KeySpecJSON(spec: KeySpec): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("description", spec.description))
+    m.push(json.MemberRaw("actions", _strs_json(spec.actions)))
+    m.push(json.MemberRaw("collections", _strs_json(spec.collections)))
+    if spec.expires_at > 0: m.push(json.MemberInt("expires_at", spec.expires_at)) end
+    if spec.value.len() > 0: m.push(json.Member("value", spec.value)) end
+    if spec.autodelete: m.push(json.MemberBool("autodelete", true)) end
+    ret json.Object(m)
+end
+
+@en "CreateKey"
+@fa "ساخت کلید"
+pub func CreateKey(c: Client, spec: KeySpec, err &: Error): Key:
+    body := _call(c, "POST", "/keys", KeySpecJSON(spec), err)
+    if not _ts_ok(err): ret Key {} end
+    ret _key(body)
+end
+
+@en "SearchOnlyKey"
+@fa "کلید فقط جستجو"
+pub func SearchOnlyKey(c: Client, description: str, collections: Vector<str>, err &: Error): Key:
+    mut actions := Vector {} as Vector<str>
+    actions.push(KEY_ACTION_SEARCH)
+    ret CreateKey(c, KeySpec { description = description, actions = actions, collections = collections }, err)
+end
+
+@en "GetKey"
+@fa "دریافت کلید"
+pub func GetKey(c: Client, id: i64, err &: Error): Key:
+    body := _call(c, "GET", "/keys/" + conv.FormatInt(id), "", err)
+    if not _ts_ok(err): ret Key {} end
+    ret _key(body)
+end
+
+@en "ListKeys"
+@fa "فهرست کلیدها"
+pub func ListKeys(c: Client, err &: Error): Vector<Key>:
+    body := _call(c, "GET", "/keys", "", err)
+    mut out := Vector {} as Vector<Key>
+    if not _ts_ok(err): ret out end
+    each item in _items(_get_raw(body, "keys")):
+        out.push(_key(item))
+    end
+    ret out
+end
+
+@en "DeleteKey"
+@fa "حذف کلید"
+pub func DeleteKey(c: Client, id: i64, err &: Error): i64:
+    body := _call(c, "DELETE", "/keys/" + conv.FormatInt(id), "", err)
+    if not _ts_ok(err): ret 0 end
+    ret _get_i64(body, "id", 0 as i64)
+end
+
+@en "GenerateScopedSearchKey"
+@fa "ساخت کلید جستجوی محدود"
+pub func GenerateScopedSearchKey(search_key: str, embedded_params: str): str:
+    digest := mem.Allocate(32 as u64)
+    if digest == null: ret "" end
+    defer mem.Free(digest)
+    crypto.HmacSha256Bytes(search_key, embedded_params, digest)
+    mut prefix := search_key
+    if str.ByteLen(prefix) > 4: prefix = str.ByteSub(prefix, 0, 4) end
+    raw := encoding.Base64EncodeBytes(digest, 32) + prefix + embedded_params
+    ret encoding.Base64Encode(raw)
+end
+
+@en "ScopedSearchKey"
+@fa "کلید جستجوی محدود"
+pub func ScopedSearchKey(search_key: str, p: SearchParams, expires_at: i64): str:
+    mut extra := Vector {} as Vector<str>
+    if expires_at > 0: extra.push(json.MemberInt("expires_at", expires_at)) end
+    ret GenerateScopedSearchKey(search_key, json.Minify(_params_json(p, extra)))
+end

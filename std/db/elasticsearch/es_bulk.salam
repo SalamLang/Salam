@@ -1,0 +1,165 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import str
+import encoding.json
+
+func _bulk_action(action: str, index: str, id: str): str:
+    mut m := Vector {} as Vector<str>
+    if index.len() > 0: m.push(json.Member("_index", index)) end
+    if id.len() > 0: m.push(json.Member("_id", id)) end
+    ret _one(action, json.Object(m))
+end
+
+func _bulk_item(raw: str): BulkItem:
+    keys := json.Keys(raw)
+    if keys.len() == 0: ret BulkItem {} end
+    action := keys.get(0)
+    body := json.Get(raw, action)
+    status := _int(json.Get(body, "status"))
+    ret BulkItem {
+        action = action,
+        index = json.Get(body, "_index"),
+        id = json.Get(body, "_id"),
+        status = status,
+        ok = status >= 200 and status < 300,
+        result = json.Get(body, "result"),
+        version = _i64(json.Get(body, "_version")),
+        error_type = json.GetPath(body, "error.type"),
+        error_reason = json.GetPath(body, "error.reason")
+    }
+end
+
+@en "NewBulk"
+@fa "دسته‌ای تازه"
+pub func NewBulk(): Bulk:
+    ret Bulk {}
+end
+
+@en "BulkIndex"
+@fa "نمایه کردن دسته‌ای"
+pub func BulkIndex(b &: Bulk, index: str, id: str, doc: str):
+    b.lines.push(_bulk_action("index", index, id))
+    b.lines.push(_one_line(doc))
+    b.count += 1
+end
+
+@en "BulkCreate"
+@fa "ایجاد دسته‌ای"
+pub func BulkCreate(b &: Bulk, index: str, id: str, doc: str):
+    b.lines.push(_bulk_action("create", index, id))
+    b.lines.push(_one_line(doc))
+    b.count += 1
+end
+
+@en "BulkUpdate"
+@fa "به‌روزرسانی دسته‌ای"
+pub func BulkUpdate(b &: Bulk, index: str, id: str, partial: str):
+    b.lines.push(_bulk_action("update", index, id))
+    b.lines.push(_one("doc", _one_line(partial)))
+    b.count += 1
+end
+
+@en "BulkUpsert"
+@fa "درج روزآمد دسته‌ای"
+pub func BulkUpsert(b &: Bulk, index: str, id: str, doc: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("doc", _one_line(doc)))
+    m.push(json.MemberBool("doc_as_upsert", true))
+    b.lines.push(_bulk_action("update", index, id))
+    b.lines.push(json.Object(m))
+    b.count += 1
+end
+
+@en "BulkDelete"
+@fa "حذف دسته‌ای"
+pub func BulkDelete(b &: Bulk, index: str, id: str):
+    b.lines.push(_bulk_action("delete", index, id))
+    b.count += 1
+end
+
+@en "BulkLen"
+@fa "طول دسته‌ای"
+pub func BulkLen(b: Bulk): int:
+    ret b.count
+end
+
+@en "BulkBody"
+@fa "بدنه دسته‌ای"
+pub func BulkBody(b: Bulk): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    each line in b.lines:
+        str.BufAppend(sb, line)
+        str.BufAppend(sb, "\n")
+    end
+    ret str.BufStr(sb)
+end
+
+@en "BulkReset"
+@fa "بازنشانی دسته‌ای"
+pub func BulkReset(b &: Bulk):
+    b.lines = Vector {} as Vector<str>
+    b.count = 0
+end
+
+@en "ParseBulkResult"
+@fa "تجزیه نتیجه دسته‌ای"
+pub func ParseBulkResult(body: str): BulkResult:
+    mut res := BulkResult {}
+    res.took = _i64(json.Get(body, "took"))
+    res.errors = json.Get(body, "errors") == "true"
+    each raw in json.Items(json.Get(body, "items")):
+        item := _bulk_item(raw)
+        if item.ok: res.succeeded += 1
+        else:
+            res.failed += 1
+        end
+        res.items.push(item)
+    end
+    res.ok = not res.errors and json.Has(body, "items")
+    ret res
+end
+
+@en "RunBulk"
+@fa "اجرای دسته‌ای"
+pub func RunBulk(c: Client, b: Bulk): BulkResult:
+    ret RunBulkWith(c, "", b, Options {})
+end
+
+@en "RunBulkWith"
+@fa "اجرای دسته‌ای با گزینه"
+pub func RunBulkWith(c: Client, index: str, b: Bulk, opts: Options): BulkResult:
+    if b.count == 0: ret BulkResult { ok = true } end
+    mut q := Vector {} as Vector<str>
+    _opts_query(q, opts)
+    mut path := "/_bulk"
+    if index.len() > 0: path = "/" + _idx(index) + "/_bulk" end
+    r := PerformNdjson(c, "POST", path + _qs(q), BulkBody(b))
+    mut res := ParseBulkResult(r.body)
+    res.status = r.status
+    switch true:
+        not r.ok:
+            res.ok = false
+            res.error = r.error
+            break
+        end
+        res.errors:
+            res.error = str.FromInt(res.failed as i64) + " of " + str.FromInt(res.items.len() as i64) + " bulk actions failed"
+        end
+    end
+    ret res
+end

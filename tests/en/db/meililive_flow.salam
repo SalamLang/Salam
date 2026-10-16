@@ -1,0 +1,216 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+import os
+import str
+
+const INDEX := "salam_live_movies"
+const OTHER := "salam_live_books"
+
+struct Movie:
+    pub id: int = 0
+    pub title: str = ""
+    pub genre: str = ""
+    pub year: int = 0
+end
+
+func check(label: str, err: meilisearch.Error):
+    if not meilisearch.Ok(err):
+        println label + " failed: " + meilisearch.ErrorString(err)
+    end
+end
+
+func settle(c: meilisearch.Client, label: str, info: meilisearch.TaskInfo, err &: meilisearch.Error):
+    t := meilisearch.WaitForTask(c, info.task_uid, 30000, 20, err)
+    println label + ": " + t.status
+    check(label, err)
+end
+
+func titles(r: meilisearch.SearchResult): str:
+    mut out := Vector {} as Vector<str>
+    mut movies := Vector {} as Vector<Movie>
+    mut err := meilisearch.Error {}
+    meilisearch.HitsAs(r, movies, err)
+    each m in movies:
+        out.push(m.title)
+    end
+    ret str.Join(out, ", ")
+end
+
+func main:
+    parts := str.Fields(os.Env("SALAM_TEST_MEILI"))
+    if parts.len() < 1:
+        println "set SALAM_TEST_MEILI"
+        ret 1
+    end
+    mut key := ""
+    if parts.len() > 1: key = parts.get(1) end
+    c := meilisearch.New(parts.get(0), key)
+    mut err := meilisearch.Error {}
+
+    println "healthy: " + meilisearch.IsHealthy(c)
+    v := meilisearch.GetVersion(c, err)
+    println "has version: " + (v.pkg_version.len() > 0)
+
+    meilisearch.WaitForTask(c, meilisearch.DeleteIndex(c, INDEX, err).task_uid, 30000, 20, err)
+    meilisearch.WaitForTask(c, meilisearch.DeleteIndex(c, OTHER, err).task_uid, 30000, 20, err)
+
+    settle(c, "create", meilisearch.CreateIndex(c, INDEX, "id", err), err)
+    idx := meilisearch.GetIndex(c, INDEX, err)
+    println "index: " + idx.uid + " pk=" + idx.primary_key
+
+    docs := `[
+        {"id": 1, "title": "Carol", "genre": "Romance", "year": 2015},
+        {"id": 2, "title": "Wonder Woman", "genre": "Action", "year": 2017},
+        {"id": 3, "title": "Life of Pi", "genre": "Adventure", "year": 2012},
+        {"id": 4, "title": "Mad Max: Fury Road", "genre": "Action", "year": 2015},
+        {"id": 5, "title": "Moana", "genre": "Fantasy", "year": 2016},
+        {"id": 6, "title": "Philadelphia", "genre": "Drama", "year": 1993}
+    ]`
+    settle(c, "add", meilisearch.AddDocuments(c, INDEX, docs, "", err), err)
+
+    mut more := Vector {} as Vector<Movie>
+    more.push(Movie { id = 7, title = "Heat", genre = "Crime", year = 1995 })
+    more.push(Movie { id = 8, title = "Alien", genre = "Horror", year = 1979 })
+    settle(c, "add typed", meilisearch.AddDocumentsOf(c, INDEX, more, "", err), err)
+    settle(c, "ndjson", meilisearch.AddDocumentsNdjson(c, INDEX, "{\"id\": 9, \"title\": \"Up\", \"genre\": \"Fantasy\", \"year\": 2009}\n", "", err), err)
+    settle(c, "csv", meilisearch.AddDocumentsCsv(c, INDEX, "id:number;title;genre;year:number\n10;Arrival;Drama;2016\n", "", ";", err), err)
+    settle(c, "partial update", meilisearch.UpdateDocuments(c, INDEX, `[{"id": 6, "genre": "Legal"}]`, "", err), err)
+
+    mut filterable := Vector {} as Vector<str>
+    filterable.push("genre")
+    filterable.push("year")
+    settle(c, "filterable", meilisearch.UpdateFilterableAttributes(c, INDEX, filterable, err), err)
+    mut sortable := Vector {} as Vector<str>
+    sortable.push("year")
+    settle(c, "sortable", meilisearch.UpdateSortableAttributes(c, INDEX, sortable, err), err)
+    settle(c, "synonyms", meilisearch.UpdateSynonyms(c, INDEX, `{"film": ["movie"]}`, err), err)
+    println "filterable now: " + str.Join(meilisearch.GetFilterableAttributes(c, INDEX, err), ",")
+    println "synonyms now: " + meilisearch.GetSynonyms(c, INDEX, err)
+
+    stats := meilisearch.GetIndexStats(c, INDEX, err)
+    println "documents: " + stats.number_of_documents
+
+    r := meilisearch.Query(c, INDEX, "wonder", err)
+    check("query", err)
+    println "wonder: " + titles(r) + " (" + r.estimated_total_hits + ")"
+
+    mut req := meilisearch.SearchRequest { filter = "genre = Action", limit = 10 }
+    req.sort.push("year:asc")
+    req.facets.push("genre")
+    action := meilisearch.Search(c, INDEX, req, err)
+    check("filter search", err)
+    println "action by year: " + titles(action)
+    println "facets: " + action.facet_distribution
+
+    mut paged := meilisearch.SearchRequest { hits_per_page = 3, page = 2, filter = "year > 2000" }
+    paged.sort.push("year:desc")
+    pr := meilisearch.Search(c, INDEX, paged, err)
+    check("paged", err)
+    println "pages: page=" + pr.page + " total_hits=" + pr.total_hits + " total_pages=" + pr.total_pages + " hits=" + pr.hits.len()
+    paged.sort.push("title:asc")
+    meilisearch.Search(c, INDEX, paged, err)
+    println "unsortable: " + err.code
+
+    mut hl := meilisearch.SearchRequest { query = "fury", highlight_pre_tag = "[", highlight_post_tag = "]" }
+    hl.attributes_to_highlight.push("title")
+    hl.attributes_to_retrieve.push("id")
+    h := meilisearch.Search(c, INDEX, hl, err)
+    println "highlight: " + h.hits.get(0)
+
+    bad := meilisearch.Search(c, INDEX, meilisearch.SearchRequest { filter = "title = x" }, err)
+    println "bad filter: " + err.code + " " + err.kind + " hits=" + bad.hits.len()
+
+    fs := meilisearch.FacetSearch(c, INDEX, meilisearch.FacetSearchRequest { facet_name = "genre", facet_query = "fan" }, err)
+    check("facet search", err)
+    each fh in fs.hits:
+        println "facet hit: " + fh.value + " " + fh.count
+    end
+
+    mut m := Movie {}
+    println "get as: " + meilisearch.GetDocumentAs(c, INDEX, "10", m, err) + " " + m.title + " " + m.year + " " + err.code
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    println "get fields: " + meilisearch.GetDocument(c, INDEX, "6", fields, err)
+    meilisearch.GetDocument(c, INDEX, "999", fields, err)
+    println "missing doc: " + err.code
+
+    mut dq := meilisearch.DocumentsQuery { limit = 3, filter = "year < 2000" }
+    dq.fields.push("title")
+    dq.fields.push("year")
+    dp := meilisearch.GetDocuments(c, INDEX, dq, err)
+    check("documents", err)
+    println "old movies: total=" + dp.total + " n=" + dp.results.len()
+
+    settle(c, "create other", meilisearch.CreateIndex(c, OTHER, "id", err), err)
+    settle(c, "books", meilisearch.AddDocuments(c, OTHER, `[{"id": 1, "title": "Moana and the sea"}]`, "", err), err)
+    mut queries := Vector {} as Vector<meilisearch.MultiQuery>
+    queries.push(meilisearch.MultiQuery { index_uid = INDEX, request = meilisearch.SearchRequest { query = "moana" } })
+    queries.push(meilisearch.MultiQuery { index_uid = OTHER, request = meilisearch.SearchRequest { query = "moana" } })
+    multi := meilisearch.MultiSearch(c, queries, err)
+    check("multi", err)
+    each one in multi:
+        println "multi " + one.index_uid + ": " + one.hits.len()
+    end
+    fed := meilisearch.FederatedSearch(c, queries, meilisearch.Federation { limit = 5 }, err)
+    check("federated", err)
+    println "federated hits: " + fed.hits.len()
+
+    mut kr := meilisearch.KeyRequest { uid = "0b6c1a5e-3f8a-4d9e-9b2a-5c7d8e9f0a1b", name = "salam live search", description = "tenant tokens" }
+    kr.actions.push("search")
+    kr.indexes.push(INDEX)
+    meilisearch.DeleteKey(c, kr.uid, err)
+    k := meilisearch.CreateKey(c, kr, err)
+    check("create key", err)
+    println "key: " + (k.uid == kr.uid) + " " + (k.key.len() > 0) + " " + k.name + " " + str.Join(k.actions, ",") + " " + str.Join(k.indexes, ",")
+    upd := meilisearch.UpdateKey(c, k.uid, "renamed", "still tenant tokens", err)
+    println "key renamed: " + upd.name
+    found := meilisearch.GetKey(c, k.key, err)
+    println "key by value: " + (found.uid == k.uid)
+
+    token := meilisearch.TenantToken(k.uid, k.key, `{"` + INDEX + `": {"filter": "genre = Fantasy"}}`, 0, err)
+    check("token", err)
+    tc := meilisearch.New(parts.get(0), token)
+    scoped := meilisearch.Search(tc, INDEX, meilisearch.SearchRequest { limit = 20 }, err)
+    check("tenant search", err)
+    println "tenant sees: " + scoped.hits.len()
+    meilisearch.Query(tc, OTHER, "moana", err)
+    println "tenant other index: " + err.code
+    println "key deleted: " + meilisearch.DeleteKey(c, k.uid, err)
+
+    settle(c, "delete one", meilisearch.DeleteDocument(c, INDEX, "1", err), err)
+    mut ids := Vector {} as Vector<str>
+    ids.push("2")
+    ids.push("3")
+    settle(c, "delete batch", meilisearch.DeleteDocuments(c, INDEX, ids, err), err)
+    settle(c, "delete filter", meilisearch.DeleteDocumentsByFilter(c, INDEX, "year < 2000", err), err)
+    println "left: " + meilisearch.GetIndexStats(c, INDEX, err).number_of_documents
+    settle(c, "delete all", meilisearch.DeleteAllDocuments(c, INDEX, err), err)
+    println "empty: " + meilisearch.GetIndexStats(c, INDEX, err).number_of_documents
+
+    mut tq := meilisearch.TaskQuery { limit = 2 }
+    tq.index_uids.push(INDEX)
+    tq.statuses.push(meilisearch.STATUS_SUCCEEDED)
+    tasks := meilisearch.GetTasks(c, tq, err)
+    check("tasks", err)
+    println "tasks page: " + tasks.results.len() + " " + tasks.results.get(0).index_uid
+
+    settle(c, "reset settings", meilisearch.ResetSettings(c, INDEX, err), err)
+    settle(c, "drop", meilisearch.DeleteIndex(c, INDEX, err), err)
+    settle(c, "drop other", meilisearch.DeleteIndex(c, OTHER, err), err)
+    meilisearch.GetIndex(c, INDEX, err)
+    println "gone: " + err.code
+    ret 0
+end

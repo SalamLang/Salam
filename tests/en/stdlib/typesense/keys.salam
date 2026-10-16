@@ -1,0 +1,78 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import encoding
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19856
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("POST", "/keys", 201, `{"actions":["documents:search"],"autodelete":false,"collections":["books"],"description":"search books","expires_at":64723363199,"id":7,"value":"ZTBCnClz82I5wlke1nj26By7dDLhfQYG"}`)
+    fake.On("POST", "/keys", 201, `{"actions":["*"],"autodelete":true,"collections":["*"],"description":"admin","expires_at":1906054106,"id":8,"value":"my-own-value"}`)
+    fake.On("GET", "/keys/7", 200, `{"actions":["documents:search"],"autodelete":false,"collections":["books"],"description":"search books","expires_at":64723363199,"id":7,"value_prefix":"ZTBC"}`)
+    fake.On("GET", "/keys", 200, `{"keys":[{"actions":["documents:search"],"collections":["books"],"description":"search books","expires_at":64723363199,"id":7,"value_prefix":"ZTBC"},{"actions":["*"],"collections":["*"],"description":"admin","expires_at":1906054106,"id":8,"value_prefix":"my-o"}]}`)
+    fake.On("DELETE", "/keys/7", 200, `{"id":7}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "admin-key")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+
+    mut cols := Vector {} as Vector<str>
+    cols.push("books")
+    k := typesense.SearchOnlyKey(c, "search books", cols, err)
+    show("search only", err)
+    println "  id=" + k.id + " value=" + k.value + " actions=" + str.Join(k.actions, ",") + " collections=" + str.Join(k.collections, ",") + " expires=" + k.expires_at
+
+    mut all := Vector {} as Vector<str>
+    all.push(typesense.KEY_ACTION_ALL)
+    spec := typesense.KeySpec { description = "admin", actions = all, collections = all, expires_at = 1906054106, value = "my-own-value", autodelete = true }
+    println "spec: " + typesense.KeySpecJSON(spec)
+    a := typesense.CreateKey(c, spec, err)
+    show("create", err)
+    println "  id=" + a.id + " autodelete=" + a.autodelete + " value=" + a.value
+
+    g := typesense.GetKey(c, 7, err)
+    show("get", err)
+    println "  prefix=" + g.value_prefix + " value=[" + g.value + "] description=" + g.description
+    each item in typesense.ListKeys(c, err):
+        println "  key " + item.id + " " + item.value_prefix + " " + item.description
+    end
+    println "delete: " + typesense.DeleteKey(c, 7, err)
+    show("delete", err)
+    _ := typesense.GetKey(c, 99, err)
+    println "missing: " + typesense.IsNotFound(err)
+
+    println "vector: " + typesense.GenerateScopedSearchKey("RN23GFr1s6jQ9kgSNg2O7fYcAUXU7127", `{"filter_by":"company_id:124","expires_at":1906054106}`)
+    scope := typesense.SearchParams { filter_by = "company_id:124", exclude_fields = "salary" }
+    scoped := typesense.ScopedSearchKey("RN23GFr1s6jQ9kgSNg2O7fYcAUXU7127", scope, 1906054106)
+    println "scoped: " + scoped
+    decoded := encoding.Base64Decode(scoped)
+    println "embedded: " + str.ByteSub(decoded, 48, str.ByteLen(decoded) - 48)
+    println "prefix: " + str.ByteSub(decoded, 44, 4)
+    println "short key: " + typesense.GenerateScopedSearchKey("ab", `{}`)
+end

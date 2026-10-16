@@ -1,0 +1,118 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import str
+import encoding.json
+
+func _health_of(body: str, ok: bool): Health:
+    ret Health {
+        ok = ok,
+        cluster_name = json.Get(body, "cluster_name"),
+        status = json.Get(body, "status"),
+        timed_out = json.Get(body, "timed_out") == "true",
+        nodes = _int(json.Get(body, "number_of_nodes")),
+        data_nodes = _int(json.Get(body, "number_of_data_nodes")),
+        active_primary_shards = _int(json.Get(body, "active_primary_shards")),
+        active_shards = _int(json.Get(body, "active_shards")),
+        relocating_shards = _int(json.Get(body, "relocating_shards")),
+        initializing_shards = _int(json.Get(body, "initializing_shards")),
+        unassigned_shards = _int(json.Get(body, "unassigned_shards")),
+        pending_tasks = _int(json.Get(body, "number_of_pending_tasks")),
+        active_shards_percent = _f64(json.Get(body, "active_shards_percent_as_number"))
+    }
+end
+
+@en "Ping"
+@fa "پینگ"
+pub func Ping(c: Client): bool:
+    ret Perform(c, "HEAD", "/", "").status == 200
+end
+
+@en "GetInfo"
+@fa "دریافت اطلاعات"
+pub func GetInfo(c: Client): Info:
+    r := Perform(c, "GET", "/", "")
+    if not r.ok: ret Info {} end
+    body := r.body
+    mut dist := json.GetPath(body, "version.distribution")
+    if dist.len() == 0: dist = str.Clone("elasticsearch") end
+    ret Info {
+        ok = true,
+        name = json.Get(body, "name"),
+        cluster_name = json.Get(body, "cluster_name"),
+        cluster_uuid = json.Get(body, "cluster_uuid"),
+        version = json.GetPath(body, "version.number"),
+        distribution = dist,
+        build_flavor = json.GetPath(body, "version.build_flavor"),
+        lucene_version = json.GetPath(body, "version.lucene_version"),
+        tagline = json.Get(body, "tagline")
+    }
+end
+
+@en "ClusterHealth"
+@fa "سلامت خوشه"
+pub func ClusterHealth(c: Client): Health:
+    r := Perform(c, "GET", "/_cluster/health", "")
+    ret _health_of(r.body, r.ok)
+end
+
+@en "WaitForStatus"
+@fa "انتظار برای وضعیت"
+pub func WaitForStatus(c: Client, status: str, timeout: str): Health:
+    path := "/_cluster/health?wait_for_status=" + _seg(status) + "&timeout=" + _seg(timeout)
+    r := Perform(c, "GET", path, "")
+    ret _health_of(r.body, r.ok and json.Get(r.body, "timed_out") != "true")
+end
+
+@en "ClusterStats"
+@fa "آمار خوشه"
+pub func ClusterStats(c: Client): str:
+    r := Perform(c, "GET", "/_cluster/stats", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "NodesInfo"
+@fa "اطلاعات گره‌ها"
+pub func NodesInfo(c: Client): str:
+    r := Perform(c, "GET", "/_nodes", "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "CatIndices"
+@fa "فهرست نمایه‌ها"
+pub func CatIndices(c: Client, pattern: str): Vector<IndexInfo>:
+    mut out := Vector {} as Vector<IndexInfo>
+    mut path := "/_cat/indices"
+    if pattern.len() > 0: path = path + "/" + _idx(pattern) end
+    r := Perform(c, "GET", path + "?format=json&bytes=b&s=index", "")
+    if not r.ok: ret out end
+    each raw in json.Items(r.body):
+        out.push(IndexInfo {
+            health = json.Get(raw, "health"),
+            status = json.Get(raw, "status"),
+            index = json.Get(raw, "index"),
+            uuid = json.Get(raw, "uuid"),
+            primaries = _int(json.Get(raw, "pri")),
+            replicas = _int(json.Get(raw, "rep")),
+            docs_count = _i64(json.Get(raw, "docs.count")),
+            docs_deleted = _i64(json.Get(raw, "docs.deleted")),
+            store_size = json.Get(raw, "store.size")
+        })
+    end
+    ret out
+end

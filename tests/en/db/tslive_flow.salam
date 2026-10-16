@@ -1,0 +1,176 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import os
+import str
+import db.typesense
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub year: int = 0
+    pub genre: str = ""
+end
+
+func check(label: str, err: typesense.Error):
+    if typesense.Ok(err):
+        println label + ": ok"
+    else:
+        println label + ": " + typesense.ErrorString(err)
+    end
+end
+
+func cleanup(c: typesense.Client):
+    mut err := typesense.Error {}
+    _ := typesense.DeleteAlias(c, "tslive_library", err)
+    _ := typesense.DeleteCollection(c, "tslive_books", err)
+    _ := typesense.DeleteCollection(c, "tslive_copy", err)
+    _ := typesense.DeleteSynonymSet(c, "tslive_vehicles", err)
+    _ := typesense.DeleteCurationSet(c, "tslive_promos", err)
+    _ := typesense.DeletePreset(c, "tslive_listing", err)
+    _ := typesense.DeleteStopwords(c, "tslive_common", err)
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    cleanup(c)
+    println "health: " + typesense.Health(c, err)
+    println "leader: " + typesense.Status(c, err).state
+
+    mut s := typesense.Schema { name = "tslive_books", default_sorting_field = "year" }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("year", typesense.TYPE_INT32))
+    s.fields.push(typesense.FacetField("genre", typesense.TYPE_STRING))
+    col := typesense.CreateCollection(c, s, err)
+    check("create", err)
+    println "  fields=" + col.fields.len() + " sort=" + col.default_sorting_field
+    _ := typesense.CreateCollection(c, s, err)
+    println "  again conflict=" + typesense.IsConflict(err)
+    println "  exists=" + typesense.CollectionExists(c, "tslive_books", err)
+
+    mut books := Vector {} as Vector<Book>
+    books.push(Book { id = "1", title = "Dune", year = 1965, genre = "scifi" })
+    books.push(Book { id = "2", title = "Dune Messiah", year = 1969, genre = "scifi" })
+    books.push(Book { id = "3", title = "Emma", year = 1815, genre = "novel" })
+    books.push(Book { id = "4", title = "Foundation", year = 1951, genre = "scifi" })
+    imp := typesense.ImportOf(c, "tslive_books", books, typesense.WriteOptions { action = typesense.ACTION_CREATE }, err)
+    check("import", err)
+    println "  success=" + imp.success + " failed=" + imp.failed
+    mut bad := Vector {} as Vector<str>
+    bad.push(`{"id":"5","title":"Bad","year":"x","genre":"none"}`)
+    bad.push(`{"id":"6","title":"Middlemarch","year":"1871","genre":"novel"}`)
+    imp2 := typesense.ImportDocuments(c, "tslive_books", bad, typesense.WriteOptions { dirty_values = typesense.DIRTY_COERCE_OR_REJECT }, err)
+    println "  coerced success=" + imp2.success + " failed=" + imp2.failed + " code=" + imp2.errors.get(0).code
+    println "upsert: " + typesense.UpsertDocument(c, "tslive_books", `{"id":"7","title":"Hamlet","year":1603,"genre":"play"}`, err)
+    println "update: " + typesense.UpdateDocument(c, "tslive_books", "7", `{"year":1600}`, err)
+    mut b := Book {}
+    println "typed: " + typesense.GetDocumentAs(c, "tslive_books", "7", b, err) + " " + b.title + " " + b.year
+    _ := typesense.CreateDocument(c, "tslive_books", `{"id":"7","title":"x","year":1,"genre":"x"}`, err)
+    println "duplicate: " + typesense.IsConflict(err)
+    _ := typesense.GetDocument(c, "tslive_books", "404", err)
+    println "missing: " + typesense.IsNotFound(err)
+
+    mut p := typesense.NewSearch("dune", "title")
+    p.facet_by = "genre"
+    p.sort_by = "year:desc"
+    r := typesense.Search(c, "tslive_books", p, err)
+    check("search", err)
+    println "  found=" + r.found + " out_of=" + r.out_of
+    each h in r.hits:
+        println "  " + h.document + " " + typesense.Highlight(h, "title")
+    end
+    each f in r.facets:
+        each fc in f.counts:
+            println "  facet " + f.field_name + " " + fc.value + "=" + fc.count
+        end
+    end
+    mut typed := Vector {} as Vector<Book>
+    println "  typed=" + typesense.HitsAs(r, typed, err) + " " + typed.get(0).year
+
+    mut g := typesense.NewSearch("*", "")
+    g.group_by = "genre"
+    g.sort_by = "year:asc"
+    rg := typesense.Search(c, "tslive_books", g, err)
+    println "groups: " + rg.groups.len() + " docs=" + rg.found_docs
+    each grp in rg.groups:
+        println "  " + str.Join(grp.key, ",") + " " + grp.found
+    end
+
+    mut long := typesense.NewSearch("*", "")
+    long.filter_by = "id:[" + str.Repeat("missing,", 600) + "1]"
+    println "long query: " + typesense.Search(c, "tslive_books", long, err).found + " ok=" + typesense.Ok(err)
+
+    mut reqs := Vector {} as Vector<typesense.SearchRequest>
+    reqs.push(typesense.SearchRequest { collection = "tslive_books", params = typesense.NewSearch("dune", "") })
+    reqs.push(typesense.SearchRequest { collection = "tslive_books", params = typesense.NewSearch("emma", "") })
+    ms := typesense.MultiSearch(c, reqs, typesense.NewSearch("", "title"), err)
+    println "multi: " + ms.get(0).found + " " + ms.get(1).found
+    u := typesense.UnionSearch(c, reqs, typesense.NewSearch("", "title"), err)
+    println "union: " + u.found
+
+    mut words := Vector {} as Vector<str>
+    words.push("novel")
+    words.push("book")
+    mut syn := Vector {} as Vector<typesense.Synonym>
+    syn.push(typesense.Synonym { id = "books", synonyms = words })
+    println "synonym set: " + typesense.UpsertSynonymSet(c, "tslive_vehicles", syn, err).items.len()
+    mut pins := Vector {} as Vector<typesense.Pin>
+    pins.push(typesense.Pin { id = "4", position = 1 })
+    mut rules := Vector {} as Vector<typesense.CurationRule>
+    rules.push(typesense.CurationRule { id = "pin", query = "dune", match_type = typesense.MATCH_EXACT, includes = pins })
+    println "curation set: " + typesense.UpsertCurationSet(c, "tslive_promos", rules, err).items.len()
+    _ := typesense.UpdateCollection(c, "tslive_books", `{"synonym_sets":["tslive_vehicles"],"curation_sets":["tslive_promos"]}`, err)
+    check("attach sets", err)
+    rc := typesense.Search(c, "tslive_books", typesense.NewSearch("dune", "title"), err)
+    println "  pinned=" + rc.hits.get(0).document + " curated=" + rc.hits.get(0).curated
+    println "  synonym hits=" + typesense.Search(c, "tslive_books", typesense.NewSearch("book", "genre"), err).found
+
+    mut pp := typesense.NewSearch("", "title")
+    pp.per_page = 1
+    _ := typesense.UpsertSearchPreset(c, "tslive_listing", pp, err)
+    mut viap := typesense.NewSearch("dune", "")
+    viap.preset = "tslive_listing"
+    println "preset hits: " + typesense.Search(c, "tslive_books", viap, err).hits.len()
+    mut sw := Vector {} as Vector<str>
+    sw.push("the")
+    println "stopwords: " + typesense.UpsertStopwords(c, "tslive_common", sw, "en", err).stopwords.len()
+
+    mut cols := Vector {} as Vector<str>
+    cols.push("tslive_books")
+    k := typesense.SearchOnlyKey(c, "tslive search", cols, err)
+    check("key", err)
+    scoped := typesense.ScopedSearchKey(k.value, typesense.SearchParams { filter_by = "genre:=novel" }, 0)
+    mut sc := typesense.New(parts.get(0), scoped)
+    defer typesense.Free(sc)
+    println "  scoped found=" + typesense.Search(sc, "tslive_books", typesense.NewSearch("*", ""), err).found
+    _ := typesense.CreateDocument(sc, "tslive_books", `{"id":"9","title":"x","year":1,"genre":"x"}`, err)
+    println "  scoped write status=" + err.status
+    println "  deleted=" + (typesense.DeleteKey(c, k.id, err) == k.id)
+
+    println "alias: " + typesense.UpsertAlias(c, "tslive_library", "tslive_books", err).collection_name
+    println "via alias: " + typesense.Search(c, "tslive_library", typesense.NewSearch("emma", "title"), err).found
+    println "clone: " + typesense.CloneCollection(c, "tslive_books", "tslive_copy", err).fields.len()
+    exp := typesense.ExportDocuments(c, "tslive_books", typesense.ExportOptions { filter_by = "year:<1900", include_fields = "id" }, err)
+    println "export: " + exp.len()
+    println "update by filter: " + typesense.UpdateByFilter(c, "tslive_books", "genre:=novel", `{"genre":"classic"}`, err)
+    println "delete by filter: " + typesense.DeleteByFilter(c, "tslive_books", "genre:=classic", 0, err)
+    println "truncate: " + typesense.TruncateCollection(c, "tslive_books", err)
+    cleanup(c)
+    _ := typesense.GetCollection(c, "tslive_books", err)
+    println "gone: " + typesense.IsNotFound(err)
+end

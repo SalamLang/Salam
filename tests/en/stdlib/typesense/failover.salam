@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import time
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19852
+const DEAD := 19859
+
+func main:
+    fake.On("GET", "/health", 200, `{"ok":true}`)
+    fake.On("GET", "/flaky", 503, `{"message":"Not Ready or Lagging"}`)
+    fake.On("GET", "/flaky", 200, `{"ok":"second try"}`)
+    fake.On("GET", "/down", 500, `{"message":"exploded"}`)
+    fake.On("GET", "/slow", 200, `{"ok":true}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    live := "http://127.0.0.1:" + PORT
+    dead := "http://127.0.0.1:" + DEAD
+    mut err := typesense.Error {}
+
+    mut nodes := Vector {} as Vector<str>
+    nodes.push(dead)
+    nodes.push(live)
+    mut c := typesense.NewCluster(nodes, "k")
+    defer typesense.Free(c)
+    c.retry_interval_ms = 0
+    println "both healthy: " + typesense.NodeHealthy(c, 0) + " " + typesense.NodeHealthy(c, 1)
+    before := fake.Count()
+    println "failover health: " + typesense.Health(c, err) + " [" + typesense.ErrorString(err) + "]"
+    println "dead node marked: " + typesense.NodeHealthy(c, 0) + " live node: " + typesense.NodeHealthy(c, 1)
+    println "requests reaching live node: " + (fake.Count() - before)
+    println "next request skips dead node: " + typesense.Health(c, err)
+    println "still one request each: " + (fake.Count() - before)
+
+    mut one := typesense.New(live, "k")
+    defer typesense.Free(one)
+    one.retry_interval_ms = 0
+    println "503 then 200: " + typesense.Request(one, "GET", "/flaky", "", err) + " [" + typesense.ErrorString(err) + "]"
+    before_down := fake.Count()
+    _ := typesense.Request(one, "GET", "/down", "", err)
+    println "500 every time: " + typesense.ErrorString(err) + " attempts=" + (fake.Count() - before_down)
+    one.retries = 0
+    before_once := fake.Count()
+    _ := typesense.Request(one, "GET", "/down", "", err)
+    println "no retries: attempts=" + (fake.Count() - before_once)
+
+    mut near := typesense.New(live, "k")
+    defer typesense.Free(near)
+    near.retry_interval_ms = 0
+    typesense.SetNearestNode(near, dead)
+    println "nearest: " + near.nearest
+    println "nearest down, falls back: " + typesense.Health(near, err)
+    println "nearest marked down: " + (not typesense.NodeHealthy(near, -1))
+
+    mut slow := typesense.New(live, "k")
+    defer typesense.Free(slow)
+    slow.timeout_ms = 300
+    slow.retries = 0
+    t0 := time.NowMillis()
+    _ := typesense.Request(slow, "GET", "/slow", "", err)
+    took := time.NowMillis() - t0
+    println "timeout: kind=" + err.kind + " status=" + err.status + " fast=" + (took < 1400)
+
+    mut gone := typesense.New(dead, "k")
+    defer typesense.Free(gone)
+    gone.retries = 1
+    gone.retry_interval_ms = 10
+    println "all down: " + typesense.Health(gone, err) + " kind=" + err.kind
+    gone.healthcheck_ms = 0
+    typesense.AddNode(gone, live)
+    println "added node: " + typesense.Health(gone, err)
+end

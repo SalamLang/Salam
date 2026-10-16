@@ -1,0 +1,176 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19857
+
+const RULE := `{"excludes":[{"id":"9"}],"filter_by":"stock:>0","filter_curated_hits":false,"id":"pin","includes":[{"id":"3","position":1},{"id":"5","position":2}],"remove_matched_tokens":true,"rule":{"match":"exact","query":"car","tags":["spring"],"filter_by":"brand:=x"},"sort_by":"price:asc","replace_query":"automobile","stop_processing":false,"effective_from_ts":100,"effective_to_ts":200,"metadata":{"by":"ops"}}`
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func rule(r: typesense.CurationRule):
+    mut pins := Vector {} as Vector<str>
+    each p in r.includes:
+        pins.push(p.id + "@" + p.position)
+    end
+    println "  rule " + r.id + " q=" + r.query + " match=" + r.match_type + " rf=" + r.rule_filter_by + " tags=" + str.Join(r.tags, ",") + " in=" + str.Join(pins, ",") + " ex=" + str.Join(r.excludes, ",")
+    println "    filter=" + r.filter_by + " sort=" + r.sort_by + " replace=" + r.replace_query + " rm=" + r.remove_matched_tokens + " fch=" + r.filter_curated_hits + " stop=" + r.stop_processing + " from=" + r.effective_from_ts + " to=" + r.effective_to_ts + " meta=" + r.metadata
+end
+
+func main:
+    fake.On("PUT", "/synonym_sets/vehicles", 200, `{"items":[{"id":"cars","root":"","synonyms":["car","automobile"]}],"name":"vehicles"}`)
+    fake.On("GET", "/synonym_sets/vehicles", 200, `{"items":[{"id":"cars","root":"","synonyms":["car","automobile"]},{"id":"auto","root":"car","synonyms":["auto"],"locale":"en","symbols_to_index":["+"]}],"name":"vehicles"}`)
+    fake.On("GET", "/synonym_sets", 200, `[{"items":[],"name":"vehicles"},{"items":[],"name":"colors"}]`)
+    fake.On("DELETE", "/synonym_sets/vehicles", 200, `{"name":"vehicles"}`)
+    fake.On("PUT", "/synonym_sets/vehicles/items/auto", 200, `{"id":"auto","root":"car","synonyms":["auto"]}`)
+    fake.On("GET", "/synonym_sets/vehicles/items/auto", 200, `{"id":"auto","root":"car","synonyms":["auto"]}`)
+    fake.On("GET", "/synonym_sets/vehicles/items", 200, `[{"id":"cars","synonyms":["car"]},{"id":"auto","synonyms":["auto"]}]`)
+    fake.On("DELETE", "/synonym_sets/vehicles/items/auto", 200, `{"id":"auto"}`)
+    fake.On("PUT", "/collections/books/synonyms/cars", 200, `{"id":"cars","synonyms":["car","automobile"]}`)
+    fake.On("GET", "/collections/books/synonyms/cars", 200, `{"id":"cars","root":"","synonyms":["car","automobile"]}`)
+    fake.On("GET", "/collections/books/synonyms", 200, `{"synonyms":[{"id":"cars","root":"","synonyms":["car","automobile"]}]}`)
+    fake.On("DELETE", "/collections/books/synonyms/cars", 200, `{"id":"cars"}`)
+    fake.On("PUT", "/curation_sets/promos", 200, `{"items":[` + RULE + `],"name":"promos"}`)
+    fake.On("GET", "/curation_sets/promos", 200, `{"items":[` + RULE + `],"name":"promos"}`)
+    fake.On("GET", "/curation_sets", 200, `[{"items":[` + RULE + `],"name":"promos"}]`)
+    fake.On("DELETE", "/curation_sets/promos", 200, `{"name":"promos"}`)
+    fake.On("PUT", "/curation_sets/promos/items/pin", 200, RULE)
+    fake.On("GET", "/curation_sets/promos/items/pin", 200, RULE)
+    fake.On("GET", "/curation_sets/promos/items", 200, `[` + RULE + `]`)
+    fake.On("DELETE", "/curation_sets/promos/items/pin", 200, `{"id":"pin"}`)
+    fake.On("PUT", "/collections/books/overrides/pin", 200, RULE)
+    fake.On("GET", "/collections/books/overrides/pin", 200, RULE)
+    fake.On("GET", "/collections/books/overrides", 200, `{"overrides":[` + RULE + `]}`)
+    fake.On("DELETE", "/collections/books/overrides/pin", 200, `{"id":"pin"}`)
+    fake.On("PUT", "/presets/listing", 200, `{"name":"listing","value":{"per_page":5,"query_by":"title"}}`)
+    fake.On("GET", "/presets/listing", 200, `{"name":"listing","value":{"per_page":5,"query_by":"title"}}`)
+    fake.On("GET", "/presets", 200, `{"presets":[{"name":"listing","value":{"per_page":5}},{"name":"other","value":{"searches":[]}}]}`)
+    fake.On("DELETE", "/presets/listing", 200, `{"name":"listing"}`)
+    fake.On("PUT", "/stopwords/common", 200, `{"id":"common","locale":"en","stopwords":["the","a"]}`)
+    fake.On("GET", "/stopwords/common", 200, `{"stopwords":{"id":"common","locale":"en","stopwords":["a","the"]}}`)
+    fake.On("GET", "/stopwords", 200, `{"stopwords":[{"id":"common","locale":"en","stopwords":["a","the"]}]}`)
+    fake.On("DELETE", "/stopwords/common", 200, `{"id":"common"}`)
+    fake.On("POST", "/stemming/dictionaries/import", 200, "{\"root\":\"person\",\"word\":\"people\"}\n{\"root\":\"goose\",\"word\":\"geese\"}")
+    fake.On("GET", "/stemming/dictionaries/irregular", 200, `{"id":"irregular","words":[{"root":"goose","word":"geese"},{"root":"person","word":"people"}]}`)
+    fake.On("GET", "/stemming/dictionaries", 200, `{"dictionaries":["irregular","plurals"]}`)
+    fake.On("DELETE", "/stemming/dictionaries/irregular", 200, `{"id":"irregular"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "k")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+
+    mut words := Vector {} as Vector<str>
+    words.push("car")
+    words.push("automobile")
+    mut items := Vector {} as Vector<typesense.Synonym>
+    items.push(typesense.Synonym { id = "cars", synonyms = words })
+    mut one := Vector {} as Vector<str>
+    one.push("auto")
+    mut syms := Vector {} as Vector<str>
+    syms.push("+")
+    println "synonym json: " + typesense.SynonymJSON(typesense.Synonym { id = "auto", root = "car", synonyms = one, locale = "en", symbols_to_index = syms })
+    set := typesense.UpsertSynonymSet(c, "vehicles", items, err)
+    show("synonym set", err)
+    println "  " + set.name + " items=" + set.items.len()
+    each s in typesense.GetSynonymSet(c, "vehicles", err).items:
+        println "  item " + s.id + " root=" + s.root + " words=" + str.Join(s.synonyms, ",") + " locale=" + s.locale + " symbols=" + str.Join(s.symbols_to_index, ",")
+    end
+    each s in typesense.ListSynonymSets(c, err):
+        println "  set " + s.name
+    end
+    it := typesense.UpsertSynonymItem(c, "vehicles", typesense.Synonym { id = "auto", root = "car", synonyms = one }, err)
+    show("synonym item", err)
+    println "  " + it.id + " " + it.root + " " + typesense.GetSynonymItem(c, "vehicles", "auto", err).root + " " + typesense.ListSynonymItems(c, "vehicles", err).len()
+    println "delete item: " + typesense.DeleteSynonymItem(c, "vehicles", "auto", err) + " set: " + typesense.DeleteSynonymSet(c, "vehicles", err)
+
+    leg := typesense.UpsertSynonym(c, "books", typesense.Synonym { id = "cars", synonyms = words }, err)
+    show("legacy synonym", err)
+    println "  " + leg.id + " " + typesense.GetSynonym(c, "books", "cars", err).id + " " + typesense.ListSynonyms(c, "books", err).len() + " " + typesense.DeleteSynonym(c, "books", "cars", err)
+
+    mut pins := Vector {} as Vector<typesense.Pin>
+    pins.push(typesense.Pin { id = "3", position = 1 })
+    pins.push(typesense.Pin { id = "5", position = 2 })
+    mut ex := Vector {} as Vector<str>
+    ex.push("9")
+    mut tags := Vector {} as Vector<str>
+    tags.push("spring")
+    r := typesense.CurationRule {
+        id = "pin", query = "car", match_type = typesense.MATCH_EXACT, rule_filter_by = "brand:=x", tags = tags, includes = pins,
+        excludes = ex, filter_by = "stock:>0", sort_by = "price:asc", replace_query = "automobile", remove_matched_tokens = true,
+        stop_processing = false, effective_from_ts = 100, effective_to_ts = 200, metadata = `{"by":"ops"}`
+    }
+    println "curation json: " + typesense.CurationJSON(r)
+    println "minimal json: " + typesense.CurationJSON(typesense.CurationRule { id = "m", query = "x", match_type = typesense.MATCH_CONTAINS, filter_curated_hits = true, extra = `{"diversity":{}}` })
+    mut rules := Vector {} as Vector<typesense.CurationRule>
+    rules.push(r)
+    cs := typesense.UpsertCurationSet(c, "promos", rules, err)
+    show("curation set", err)
+    println "  " + cs.name + " items=" + cs.items.len()
+    rule(typesense.GetCurationSet(c, "promos", err).items.get(0))
+    println "  sets=" + typesense.ListCurationSets(c, err).len()
+    rule(typesense.UpsertCurationItem(c, "promos", r, err))
+    show("curation item", err)
+    println "  get=" + typesense.GetCurationItem(c, "promos", "pin", err).id + " list=" + typesense.ListCurationItems(c, "promos", err).len()
+    println "delete item: " + typesense.DeleteCurationItem(c, "promos", "pin", err) + " set: " + typesense.DeleteCurationSet(c, "promos", err)
+
+    rule(typesense.UpsertOverride(c, "books", r, err))
+    show("override", err)
+    println "  get=" + typesense.GetOverride(c, "books", "pin", err).id + " list=" + typesense.ListOverrides(c, "books", err).len() + " delete=" + typesense.DeleteOverride(c, "books", "pin", err)
+
+    mut p := typesense.NewSearch("", "title")
+    p.per_page = 5
+    pr := typesense.UpsertSearchPreset(c, "listing", p, err)
+    show("preset", err)
+    println "  " + pr.name + " " + pr.value
+    _ := typesense.UpsertPreset(c, "listing", `{"searches":[]}`, err)
+    show("raw preset", err)
+    println "  get=" + typesense.GetPreset(c, "listing", err).value
+    each x in typesense.ListPresets(c, err):
+        println "  preset " + x.name + " " + x.value
+    end
+    println "  delete=" + typesense.DeletePreset(c, "listing", err)
+
+    mut sw := Vector {} as Vector<str>
+    sw.push("the")
+    sw.push("a")
+    st := typesense.UpsertStopwords(c, "common", sw, "en", err)
+    show("stopwords", err)
+    println "  " + st.id + " " + st.locale + " " + str.Join(st.stopwords, ",")
+    g := typesense.GetStopwords(c, "common", err)
+    println "  get=" + g.id + " " + str.Join(g.stopwords, ",") + " list=" + typesense.ListStopwords(c, err).len() + " delete=" + typesense.DeleteStopwords(c, "common", err)
+
+    mut stem := Vector {} as Vector<typesense.StemWord>
+    stem.push(typesense.StemWord { word = "people", root = "person" })
+    stem.push(typesense.StemWord { word = "geese", root = "goose" })
+    println "stemming: " + typesense.ImportStemmingDictionary(c, "irregular", stem, err)
+    show("stemming", err)
+    d := typesense.GetStemmingDictionary(c, "irregular", err)
+    each w in d.words:
+        println "  " + w.word + " -> " + w.root
+    end
+    println "  list=" + str.Join(typesense.ListStemmingDictionaries(c, err), ",") + " delete=" + typesense.DeleteStemmingDictionary(c, "irregular", err)
+end

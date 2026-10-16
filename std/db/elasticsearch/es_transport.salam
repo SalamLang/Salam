@@ -1,0 +1,317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import mem
+import str
+import conv
+import tls
+import encoding
+import encoding.json
+import encoding.url
+import net.httpx
+import time
+
+func _st(c: Client): _EsState*:
+    ret c.handle as _EsState*
+end
+
+func _parse_node(raw: str, user &: str, pass &: str): _Node:
+    mut text := str.Trim(raw)
+    if not str.Contains(text, "://"): text = "http://" + text end
+    u := url.Parse(text)
+    scheme := u.scheme.lower()
+    if scheme != "http" and scheme != "https": ret _Node { url = text } end
+    if u.host.len() == 0: ret _Node { url = text } end
+    secure := scheme == "https"
+    port := u.port > 0 ? u.port : DEFAULT_PORT
+    if u.userinfo.len() > 0 and user.len() == 0:
+        info := url.DecodedUserinfo(u)
+        colon := info.find(":")
+        if colon >= 0:
+            user = info.substr(0, colon)
+            pass = info.substr(colon + 1, info.len() - colon - 1)
+        else:
+            user = info
+        end
+    end
+    mut prefix := u.path
+    until str.EndsWith(prefix, "/"):
+        prefix = prefix.substr(0, prefix.len() - 1)
+    end
+    mut host_header := u.host
+    if u.host.find(":") >= 0: host_header = "[" + u.host + "]" end
+    default_port := secure ? 443 : 80
+    if port != default_port: host_header = host_header + ":" + str.FromInt(port as i64) end
+    shown := scheme + "://" + host_header + prefix
+    ep := httpx.Endpoint { host = u.host, port = port, secure = secure, ok = true }
+    ret _Node { ep = ep, prefix = prefix, host_header = host_header, url = shown }
+end
+
+func _cloud_url(cloud_id: str): str:
+    colon := cloud_id.find(":")
+    mut encoded := cloud_id
+    if colon >= 0: encoded = cloud_id.substr(colon + 1, cloud_id.len() - colon - 1) end
+    mut ok := false
+    decoded := encoding.Base64DecodeStrict(encoded, ok)
+    if not ok: ret str.Clone("") end
+    parts := decoded.split("$")
+    if parts.len() < 2: ret str.Clone("") end
+    mut host := parts.get(0)
+    mut port := "443"
+    hc := host.find(":")
+    if hc >= 0:
+        port = host.substr(hc + 1, host.len() - hc - 1)
+        host = host.substr(0, hc)
+    end
+    es := parts.get(1)
+    if host.len() == 0 or es.len() == 0: ret str.Clone("") end
+    ret "https://" + es + "." + host + ":" + port
+end
+
+func _auth_header(user: str, pass: str, api_key: str, bearer: str): str:
+    if api_key.len() > 0:
+        if api_key.find(":") >= 0: ret "ApiKey " + encoding.Base64Encode(api_key) end
+        ret "ApiKey " + api_key
+    end
+    if bearer.len() > 0: ret "Bearer " + bearer end
+    if user.len() > 0: ret "Basic " + encoding.Base64Encode(user + ":" + pass) end
+    ret str.Clone("")
+end
+
+func _head(st: _EsState*, node: _Node, method: str, path: str, ctype: str, blen: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, method)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, node.prefix)
+    if not str.StartsWith(path, "/"): str.BufAppend(sb, "/") end
+    str.BufAppend(sb, path)
+    str.BufAppend(sb, " HTTP/1.1\r\nHost: ")
+    str.BufAppend(sb, node.host_header)
+    str.BufAppend(sb, "\r\nUser-Agent: salam-elasticsearch/1.0\r\nAccept: application/json\r\n")
+    if blen > 0 or method == "POST" or method == "PUT":
+        str.BufAppend(sb, "Content-Type: ")
+        str.BufAppend(sb, ctype)
+        str.BufAppend(sb, "\r\nContent-Length: ")
+        str.BufAppendInt(sb, blen as i64)
+        str.BufAppend(sb, "\r\n")
+    end
+    if st[0].auth.len() > 0:
+        str.BufAppend(sb, "Authorization: ")
+        str.BufAppend(sb, st[0].auth)
+        str.BufAppend(sb, "\r\n")
+    end
+    str.BufAppend(sb, st[0].extra_headers)
+    str.BufAppend(sb, "Connection: close\r\n\r\n")
+    ret str.BufStr(sb)
+end
+
+func _tls_cfg(st: _EsState*, node: _Node): tls.Config:
+    mut cfg := tls.NewConfig(node.ep.host)
+    cfg.ca_file = st[0].ca_file
+    cfg.insecure_skip_verify = st[0].insecure
+    ret cfg
+end
+
+func _raw_body(raw: httpx.Raw): str:
+    if raw.data == null or raw.len <= 0: ret str.Clone("") end
+    p := mem.Allocate((raw.len + 1) as u64)
+    mem.Copy(p, raw.data, raw.len as u64)
+    bp := p as u8*
+    bp[raw.len] = 0 as u8
+    ret p as str
+end
+
+func _parse_error(r &: Response):
+    if r.ok: ret end
+    body := r.body
+    et := json.GetPath(body, "error.type")
+    if et.len() > 0:
+        r.error_type = et
+        r.error_reason = json.GetPath(body, "error.reason")
+        cause := json.GetPath(body, "error.root_cause.0.reason")
+        if cause.len() > 0 and cause != r.error_reason:
+            r.error = et + ": " + r.error_reason + " (" + cause + ")"
+        else:
+            r.error = et + ": " + r.error_reason
+        end
+        ret
+    end
+    plain := json.Get(body, "error")
+    if plain.len() > 0 and not str.StartsWith(plain, "{"):
+        r.error_reason = plain
+        r.error = "HTTP " + str.FromInt(r.status as i64) + ": " + plain
+        ret
+    end
+    r.error = "HTTP " + str.FromInt(r.status as i64)
+end
+
+func _set_state(st: _EsState*, status: int, err: str, err_type: str, err_reason: str):
+    old_err := st[0].err
+    old_type := st[0].err_type
+    old_reason := st[0].err_reason
+    st[0].status = status
+    st[0].err = str.Clone(err)
+    st[0].err_type = str.Clone(err_type)
+    st[0].err_reason = str.Clone(err_reason)
+    mem.Free(old_err as void*)
+    mem.Free(old_type as void*)
+    mem.Free(old_reason as void*)
+end
+
+func _record(st: _EsState*, r: Response):
+    _set_state(st, r.status, r.error, r.error_type, r.error_reason)
+end
+
+func _retryable(status: int): bool:
+    ret status == 502 or status == 503 or status == 504
+end
+
+func _pick(st: _EsState*): int:
+    n := st[0].nodes.len()
+    now := time.MonoMillis()
+    start := st[0].cursor % n
+    repeat n in k:
+        i := (start + k) % n
+        if st[0].dead_until.get(i) <= now:
+            st[0].cursor = (i + 1) % n
+            ret i
+        end
+    end
+    mut best := start
+    repeat n in k:
+        if st[0].dead_until.get(k) < st[0].dead_until.get(best): best = k end
+    end
+    st[0].cursor = (best + 1) % n
+    ret best
+end
+
+func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
+    if c.handle == null: ret Response { error = "no client" } end
+    st := _st(c)
+    if st[0].config_err.len() > 0:
+        r := Response { error = st[0].config_err }
+        _record(st, r)
+        ret r
+    end
+    n := st[0].nodes.len()
+    if n == 0:
+        r := Response { error = "no nodes configured" }
+        _record(st, r)
+        ret r
+    end
+    blen := str.ByteLen(body)
+    tries := st[0].max_retries + 1
+    mut last := Response {}
+    repeat tries in attempt:
+        ni := _pick(st)
+        node := st[0].nodes.get(ni)
+        head := _head(st, node, method, path, ctype, blen)
+        mut raw := httpx.SendRawTLS(
+            node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node)
+        )
+        mem.Free(head as void*)
+        if raw.error.len() > 0:
+            if str.StartsWith(raw.error, "could not connect") or str.StartsWith(raw.error, "TLS"):
+                st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
+            end
+            last = Response { error = node.url + ": " + raw.error }
+            httpx.FreeRaw(raw)
+            continue
+        end
+        st[0].dead_until.set(ni, 0 as i64)
+        mut r := Response { status = raw.status, ok = raw.status >= 200 and raw.status < 300 }
+        r.body = _raw_body(raw)
+        httpx.FreeRaw(raw)
+        _parse_error(r)
+        if _retryable(r.status) and attempt + 1 < tries:
+            last = r
+            continue
+        end
+        _record(st, r)
+        ret r
+    end
+    _record(st, last)
+    ret last
+end
+
+func _flavor(c: Client): str:
+    if c.handle == null: ret "" end
+    st := _st(c)
+    if st[0].flavor.len() == 0:
+        r := _do(c, "GET", "/", "", "application/json")
+        if r.ok:
+            d := json.GetPath(r.body, "version.distribution")
+            st[0].flavor = d.len() > 0 ? d : str.Clone("elasticsearch")
+        end
+    end
+    ret st[0].flavor
+end
+
+func _opensearch(c: Client): bool:
+    ret _flavor(c) == "opensearch"
+end
+
+func _seg(s: str): str:
+    ret encoding.URLEncode(s)
+end
+
+func _idx(s: str): str:
+    e := encoding.URLEncode(s)
+    ret str.Replace(str.Replace(str.Replace(e, "%2C", ","), "%2A", "*"), "%2a", "*")
+end
+
+func _qadd(q &: Vector<str>, key: str, val: str):
+    if val.len() == 0: ret end
+    q.push(key + "=" + encoding.URLEncode(val))
+end
+
+func _qs(q: Vector<str>): str:
+    if q.len() == 0: ret str.Clone("") end
+    ret "?" + str.Join(q, "&")
+end
+
+func _opts_query(q &: Vector<str>, o: Options):
+    _qadd(q, "refresh", o.refresh)
+    _qadd(q, "routing", o.routing)
+    _qadd(q, "pipeline", o.pipeline)
+    _qadd(q, "timeout", o.timeout)
+    _qadd(q, "wait_for_active_shards", o.wait_for_active_shards)
+    if o.if_seq_no >= 0: _qadd(q, "if_seq_no", conv.FormatInt(o.if_seq_no)) end
+    if o.if_primary_term >= 0: _qadd(q, "if_primary_term", conv.FormatInt(o.if_primary_term)) end
+end
+
+func _i64(raw: str): i64:
+    if raw.len() == 0 or raw == "null": ret 0 end
+    ret conv.ParseInt(raw)
+end
+
+func _int(raw: str): int:
+    ret _i64(raw) as int
+end
+
+func _f64(raw: str): f64:
+    if raw.len() == 0 or raw == "null": ret 0.0 end
+    ret raw.to_float()
+end
+
+func _strs(items: Vector<str>): str:
+    mut quoted := Vector {} as Vector<str>
+    each it in items:
+        quoted.push(json.Str(it))
+    end
+    ret json.Array(quoted)
+end

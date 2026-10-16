@@ -74,6 +74,30 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      typesense:
+        image: typesense/typesense:30.2
+        ports:
+          - 8108:8108
+        env:
+          TYPESENSE_API_KEY: salam-ci-typesense-key
+          TYPESENSE_DATA_DIR: /tmp
+        options: >-
+          --health-cmd "bash -c 'echo > /dev/tcp/127.0.0.1/8108'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      meilisearch:
+        image: getmeili/meilisearch:v1.55.0
+        ports:
+          - 7700:7700
+        env:
+          MEILI_MASTER_KEY: salam-ci-meili-master-key
+          MEILI_NO_ANALYTICS: 'true'
+        options: >-
+          --health-cmd "wget -qO- http://127.0.0.1:7700/health || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -348,10 +372,21 @@ jobs:
           if sudo systemctl start postgresql && sudo -u postgres psql -qc "ALTER USER postgres PASSWORD 'postgres'"; then
             export SALAM_TEST_PG="host=localhost user=postgres password=postgres dbname=postgres"
           fi
+          if curl -sf http://127.0.0.1:8108/health >/dev/null; then
+            export SALAM_TEST_TYPESENSE="http://127.0.0.1:8108 salam-ci-typesense-key"
+          fi
+          if docker run -d --name salam-es -p 127.0.0.1:9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false \
+              -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            && timeout 180 sh -c 'until curl -sf "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_ES="http://127.0.0.1:9200"
+          fi
           if docker run -d --name salam-opensearch -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
               -e DISABLE_INSTALL_DEMO_CONFIG=true -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" opensearchproject/opensearch:2.17.1 \
             && timeout 240 sh -c 'until curl -sf "http://127.0.0.1:9201/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
             export SALAM_TEST_OPENSEARCH="http://127.0.0.1:9201"
+          fi
+          if curl -sf http://127.0.0.1:7700/health >/dev/null; then
+            export SALAM_TEST_MEILI="http://127.0.0.1:7700 salam-ci-meili-master-key"
           fi
           SALAM_TEST_PORT=1 SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
@@ -2489,6 +2524,75 @@ jobs:
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}" "${sums[@]}"
+
+  build-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Build Salam Agent
+    permissions:
+      contents: write
+    uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+    with:
+      attach: true
+
+  attach-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Attach Salam Agent to the release
+    needs: [create-release, build-agent]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Download the agent release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
+      - name: Upload the agent files to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="v$(tr -d '[:space:]' < VERSION)"
+          cd agent-release
+          rm -f SHA256SUMS SHA512SUMS ./*.sha256
+          shopt -s nullglob
+          files=(salam-agent-*)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no agent files were built"; exit 1; }
+          mkdir ../agent-upload
+          for f in "${files[@]}"; do
+            mv "$f" "../agent-upload/$(printf '%s' "$f" | sed -E 's/^salam-agent-[0-9][^-]*-/salam-agent-/')"
+          done
+          cd ../agent-upload
+          : > salam-agent-SHA256SUMS
+          : > salam-agent-SHA512SUMS
+          for f in salam-agent-*; do
+            case "$f" in salam-agent-SHA*) continue ;; esac
+            sha256sum "$f" > "$f.sha256"
+            cat "$f.sha256" >> salam-agent-SHA256SUMS
+            sha512sum "$f" >> salam-agent-SHA512SUMS
+          done
+          sha256sum -c salam-agent-SHA256SUMS
+          gh release upload "$TAG" --clobber salam-agent-*
+          {
+            echo "### Salam Agent attached to $TAG"
+            echo ""
+            printf -- '- %s\n' salam-agent-*
+          } >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

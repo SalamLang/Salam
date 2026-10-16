@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19854
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub year: int = 0
+end
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("POST", "/collections/books/documents", 201, `{"id":"1","title":"Dune","year":1965}`)
+    fake.On("PATCH", "/collections/books/documents/1", 200, `{"id":"1","title":"Dune","year":1966}`)
+    fake.On("GET", "/collections/books/documents/1", 200, `{"id":"1","title":"Dune","year":1966}`)
+    fake.On("GET", "/collections/books/documents/2", 200, `{"id":"2","title":"Emma","year":"not a number"}`)
+    fake.On("DELETE", "/collections/books/documents/1", 200, `{"id":"1","title":"Dune","year":1966}`)
+    fake.On("DELETE", "/collections/books/documents", 200, `{"num_deleted":3}`)
+    fake.On("PATCH", "/collections/books/documents", 200, `{"num_updated":5}`)
+    fake.On("POST", "/collections/books/documents/import", 200, "{\"success\":true,\"id\":\"1\"}\n{\"success\":true,\"id\":\"2\"}\n{\"code\":400,\"error\":\"Field `year` must be an int32.\",\"id\":\"3\",\"success\":false}")
+    fake.On("POST", "/collections/books/documents/import", 200, "{\"success\":true,\"document\":{\"id\":\"4\",\"title\":\"Ulysses\",\"year\":1922}}\n{\"code\":409,\"document\":\"{\\\"id\\\":\\\"5\\\"}\",\"error\":\"A document with id 5 already exists.\",\"success\":false}")
+    fake.On("GET", "/collections/books/documents/export", 200, "{\"id\":\"1\",\"title\":\"Dune\",\"year\":1965}\n{\"id\":\"2\",\"title\":\"Emma\",\"year\":1815}\n")
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "k")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    doc := `{"id":"1","title":"Dune","year":1965}`
+
+    println "create: " + typesense.CreateDocument(c, "books", doc, err)
+    show("create", err)
+    _ := typesense.UpsertDocument(c, "books", doc, err)
+    show("upsert", err)
+    _ := typesense.EmplaceDocument(c, "books", doc, err)
+    show("emplace", err)
+    _ := typesense.IndexDocument(c, "books", doc, typesense.WriteOptions { action = typesense.ACTION_UPDATE, dirty_values = typesense.DIRTY_COERCE_OR_DROP }, err)
+    show("index", err)
+    println "update: " + typesense.UpdateDocument(c, "books", "1", `{"year":1966}`, err)
+    show("update", err)
+    _ := typesense.UpdateDocumentWith(c, "books", "1", `{"year":"1966"}`, typesense.DIRTY_COERCE_OR_REJECT, err)
+    show("update with", err)
+    println "get: " + typesense.GetDocument(c, "books", "1", err)
+    println "exists: " + typesense.DocumentExists(c, "books", "1", err) + " " + typesense.DocumentExists(c, "books", "9", err) + " ok=" + typesense.Ok(err)
+    mut b := Book {}
+    println "typed: " + typesense.GetDocumentAs(c, "books", "1", b, err) + " " + b.title + " " + b.year
+    mut bad := Book {}
+    println "typed bad: " + typesense.GetDocumentAs(c, "books", "2", bad, err) + " kind=" + err.kind
+    _ := typesense.CreateDocumentOf(c, "books", Book { id = "7", title = "Hamlet", year = 1603 }, err)
+    show("create of", err)
+    _ := typesense.UpsertDocumentOf(c, "books", Book { id = "7", title = "Hamlet", year = 1600 }, err)
+    show("upsert of", err)
+    _ := typesense.GetDocument(c, "books", "a b/c", err)
+    show("escaped id", err)
+    println "delete: " + typesense.DeleteDocument(c, "books", "1", err)
+    show("delete", err)
+    println "delete by filter: " + typesense.DeleteByFilter(c, "books", "year:<1900", 100, err)
+    show("delete by filter", err)
+    println "update by filter: " + typesense.UpdateByFilter(c, "books", "year:<1900", `{"old":true}`, err)
+    show("update by filter", err)
+
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id":"1","title":"Dune","year":1965}`)
+    docs.push("{\n  \"id\": \"2\",\n  \"title\": \"Emma\"\n}")
+    docs.push(`{"id":"3","year":"x"}`)
+    r := typesense.ImportDocuments(c, "books", docs, typesense.WriteOptions { action = typesense.ACTION_UPSERT, batch_size = 50, return_id = true, remote_embedding_batch_size = 20 }, err)
+    show("import", err)
+    println "  success=" + r.success + " failed=" + r.failed + " ids=" + r.ids.len() + " lines=" + r.lines.len()
+    each e in r.errors:
+        println "  line " + e.line + " id=" + e.id + " code=" + e.code + " " + e.error
+    end
+    mut books := Vector {} as Vector<Book>
+    books.push(Book { id = "4", title = "Ulysses", year = 1922 })
+    books.push(Book { id = "5", title = "Beloved", year = 1987 })
+    r2 := typesense.ImportOf(c, "books", books, typesense.WriteOptions { action = typesense.ACTION_CREATE, return_doc = true }, err)
+    show("import of", err)
+    println "  success=" + r2.success + " failed=" + r2.failed + " docs=" + r2.documents.get(0)
+    println "  failed doc=" + r2.errors.get(0).document + " code=" + r2.errors.get(0).code
+    _ := typesense.ImportJSONL(c, "books", "{\"id\":\"9\"}", typesense.WriteOptions { action = typesense.ACTION_EMPLACE, dirty_values = typesense.DIRTY_DROP }, err)
+    show("import jsonl", err)
+
+    lines := typesense.ExportDocuments(c, "books", typesense.ExportOptions { filter_by = "year:>1800", include_fields = "id,title", exclude_fields = "year" }, err)
+    show("export", err)
+    each l in lines:
+        println "  " + l
+    end
+    mut back := Vector {} as Vector<Book>
+    println "decode: " + typesense.DecodeDocuments(lines, back, err) + " " + back.len() + " " + back.get(1).title
+    println "jsonl: " + typesense.ExportJSONL(c, "books", typesense.ExportOptions {}, err).len()
+end

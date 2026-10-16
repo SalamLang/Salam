@@ -1,0 +1,130 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import str
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19853
+
+const BOOKS := `{"created_at":1792179421,"curation_sets":["promos"],"default_sorting_field":"year","enable_nested_fields":false,"fields":[{"facet":false,"index":true,"infix":false,"locale":"","name":"title","optional":false,"sort":false,"stem":false,"stem_dictionary":"","store":true,"truncate_len":100,"type":"string"},{"facet":true,"index":true,"infix":false,"locale":"","name":"year","optional":false,"sort":true,"stem":false,"stem_dictionary":"","store":true,"type":"int32"},{"facet":false,"index":true,"name":"embedding","num_dim":3,"optional":true,"type":"float[]","vec_dist":"cosine","embed":null}],"name":"books","num_documents":42,"symbols_to_index":["+"],"synonym_sets":["vehicles"],"token_separators":["-"],"metadata":{"owner":"lib"}}`
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func describe(col: typesense.Collection):
+    println "  " + col.name + " docs=" + col.num_documents + " created=" + col.created_at + " sort=" + col.default_sorting_field + " nested=" + col.enable_nested_fields
+    println "  sets=" + str.Join(col.synonym_sets, ",") + " curation=" + str.Join(col.curation_sets, ",") + " seps=" + str.Join(col.token_separators, ",") + " symbols=" + str.Join(col.symbols_to_index, ",") + " meta=" + col.metadata
+    each f in col.fields:
+        println "  field " + f.name + " " + f.kind + " facet=" + f.facet + " optional=" + f.optional + " index=" + f.index + " sort=" + f.sort + " dim=" + f.num_dim + " dist=" + f.vec_dist + " trunc=" + f.truncate_len
+    end
+end
+
+func main:
+    fake.On("POST", "/collections", 201, BOOKS)
+    fake.On("POST", "/collections", 409, `{"message": "A collection with name ` + "`books`" + ` already exists."}`)
+    fake.On("POST", "/collections", 201, `{"name":"copy","fields":[],"num_documents":0}`)
+    fake.On("GET", "/collections/books", 200, BOOKS)
+    fake.On("GET", "/collections", 200, `[` + BOOKS + `,{"name":"films","fields":[],"num_documents":7}]`)
+    fake.On("PATCH", "/collections/books", 200, `{"fields":[{"name":"author","type":"string"}]}`)
+    fake.On("DELETE", "/collections/books", 200, BOOKS)
+    fake.On("DELETE", "/collections/books/documents", 200, `{"num_deleted":42}`)
+    fake.On("PUT", "/aliases/library", 200, `{"name":"library","collection_name":"books"}`)
+    fake.On("GET", "/aliases/library", 200, `{"name":"library","collection_name":"books"}`)
+    fake.On("GET", "/aliases", 200, `{"aliases":[{"name":"library","collection_name":"books"},{"name":"cinema","collection_name":"films"}]}`)
+    fake.On("DELETE", "/aliases/library", 200, `{"name":"library","collection_name":"books"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "k")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+
+    mut s := typesense.Schema { name = "books", default_sorting_field = "year", enable_nested_fields = true, metadata = `{"owner":"lib"}` }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("year", typesense.TYPE_INT32))
+    s.fields.push(typesense.Field { name = "tags", kind = typesense.TYPE_STRING_ARRAY, facet = true, optional = true, index = false, store = false, sort = -1, infix = true, locale = "fa", stem = true })
+    s.fields.push(typesense.Field { name = "price", kind = typesense.TYPE_FLOAT, sort = 1, range_index = true, extra = `{"hnsw_params":{"M":16}}` })
+    s.fields.push(typesense.Field { name = "author_id", kind = typesense.TYPE_STRING, reference = "authors.id", async_reference = true })
+    s.fields.push(typesense.VectorField("embedding", 3))
+    mut from := Vector {} as Vector<str>
+    from.push("title")
+    s.fields.push(typesense.EmbeddingField("auto_embedding", from, "ts/all-MiniLM-L12-v2"))
+    s.fields.push(typesense.Field { name = ".*_facet", kind = typesense.TYPE_AUTO, facet = true })
+    s.token_separators.push("-")
+    s.symbols_to_index.push("+")
+    s.synonym_sets.push("vehicles")
+    s.curation_sets.push("promos")
+    println "schema: " + typesense.SchemaJSON(s)
+
+    col := typesense.CreateCollection(c, s, err)
+    show("create", err)
+    describe(col)
+    _ := typesense.CreateCollection(c, s, err)
+    println "again: conflict=" + typesense.IsConflict(err) + " " + typesense.ErrorString(err)
+    cp := typesense.CloneCollection(c, "books", "copy", err)
+    show("clone", err)
+    println "  " + cp.name
+    _ := typesense.CreateCollectionJSON(c, `{"name":"raw","fields":[]}`, err)
+    show("create json", err)
+
+    describe(typesense.GetCollection(c, "books", err))
+    println "exists: " + typesense.CollectionExists(c, "books", err) + " " + typesense.CollectionExists(c, "nope", err) + " ok=" + typesense.Ok(err)
+    all := typesense.ListCollections(c, err)
+    show("list", err)
+    each x in all:
+        println "  " + x.name + " " + x.num_documents
+    end
+    mut excl := Vector {} as Vector<str>
+    excl.push("fields")
+    _ := typesense.ListCollectionsPage(c, 10, 5, excl, err)
+    show("page", err)
+
+    println "update: " + typesense.UpdateCollection(c, "books", `{"metadata":{"v":2}}`, err)
+    show("update", err)
+    mut add := Vector {} as Vector<typesense.Field>
+    add.push(typesense.NewField("author", typesense.TYPE_STRING))
+    _ := typesense.AddFields(c, "books", add, err)
+    show("add fields", err)
+    mut drop := Vector {} as Vector<str>
+    drop.push("author")
+    drop.push("tags")
+    _ := typesense.DropFields(c, "books", drop, err)
+    show("drop fields", err)
+    _ := typesense.SetCollectionMetadata(c, "books", `{"owner":"me"}`, err)
+    show("metadata", err)
+    println "truncate: " + typesense.TruncateCollection(c, "books", err)
+    show("truncate", err)
+    println "delete: " + typesense.DeleteCollection(c, "books", err).name
+    show("delete", err)
+
+    a := typesense.UpsertAlias(c, "library", "books", err)
+    show("alias", err)
+    println "  " + a.name + " -> " + a.collection_name
+    println "get alias: " + typesense.GetAlias(c, "library", err).collection_name
+    each al in typesense.ListAliases(c, err):
+        println "  alias " + al.name + " -> " + al.collection_name
+    end
+    println "delete alias: " + typesense.DeleteAlias(c, "library", err).name
+    show("delete alias", err)
+    _ := typesense.GetAlias(c, "gone", err)
+    println "missing alias: " + typesense.ErrorString(err)
+end

@@ -1,0 +1,109 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.typesense
+
+include fake "_fake.salam"
+
+const PORT := 19858
+
+const RULE := `{"collection":"prods","event_type":"search","name":"pq","params":{"destination_collection":"pq","limit":100},"rule_tag":"homepage","type":"popular_queries"}`
+
+func show(label: str, err: typesense.Error):
+    println label + ": " + fake.Last()
+    if not typesense.Ok(err):
+        println "  error: " + typesense.ErrorString(err)
+    end
+end
+
+func main:
+    fake.On("POST", "/analytics/rules", 200, RULE)
+    fake.On("PUT", "/analytics/rules/pq", 200, RULE)
+    fake.On("GET", "/analytics/rules/pq", 200, RULE)
+    fake.On("GET", "/analytics/rules", 200, `[` + RULE + `]`)
+    fake.On("GET", "/analytics/rules", 200, `{"rules":[{"name":"old","params":{"destination":{"collection":"pq"},"limit":100,"source":{"collections":["books"]}},"type":"popular_queries"}]}`)
+    fake.On("DELETE", "/analytics/rules/pq", 200, RULE)
+    fake.On("POST", "/analytics/events", 200, `{"ok":true}`)
+    fake.On("GET", "/analytics/events", 200, `{"events":[{"event_type":"click","name":"clicks","doc_id":"1","user_id":"u1"}]}`)
+    fake.On("POST", "/analytics/flush", 200, `{"ok": true}`)
+    fake.On("GET", "/analytics/status", 200, `{"doc_log_events":1,"query_log_events":0}`)
+    fake.On("POST", "/conversations/models", 200, `{"id":"m1","model_name":"openai/gpt-4o","history_collection":"hist","max_bytes":16384}`)
+    fake.On("GET", "/conversations/models/m1", 200, `{"id":"m1","model_name":"openai/gpt-4o"}`)
+    fake.On("GET", "/conversations/models", 200, `[{"id":"m1"},{"id":"m2"}]`)
+    fake.On("PUT", "/conversations/models/m1", 200, `{"id":"m1","system_prompt":"be brief"}`)
+    fake.On("DELETE", "/conversations/models/m1", 200, `{"id":"m1"}`)
+    fake.On("POST", "/nl_search_models", 200, `{"id":"n1","model_name":"openai/gpt-4o"}`)
+    fake.On("GET", "/nl_search_models/n1", 200, `{"id":"n1"}`)
+    fake.On("GET", "/nl_search_models", 200, `[{"id":"n1"}]`)
+    fake.On("PUT", "/nl_search_models/n1", 200, `{"id":"n1","temperature":0.2}`)
+    fake.On("DELETE", "/nl_search_models/n1", 200, `{"id":"n1"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    mut c := typesense.New("127.0.0.1:" + PORT, "k")
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+
+    r := typesense.AnalyticsRule {
+        name = "pq", kind = typesense.RULE_POPULAR_QUERIES, collection = "prods", event_type = typesense.EVENT_SEARCH,
+        rule_tag = "homepage", params = `{"destination_collection":"pq","limit":100}`
+    }
+    println "rule json: " + typesense.AnalyticsRuleJSON(r)
+    made := typesense.CreateAnalyticsRule(c, r, err)
+    show("create rule", err)
+    println "  " + made.name + " " + made.kind + " " + made.collection + " " + made.event_type + " " + made.rule_tag + " " + made.params
+    _ := typesense.UpsertAnalyticsRule(c, r, err)
+    show("upsert rule", err)
+    println "get rule: " + typesense.GetAnalyticsRule(c, "pq", err).kind
+    each x in typesense.ListAnalyticsRules(c, "homepage", err):
+        println "  v30 rule " + x.name + " " + x.collection
+    end
+    show("list rules", err)
+    each x in typesense.ListAnalyticsRules(c, "", err):
+        println "  v29 rule " + x.name + " " + x.kind + " " + x.params
+    end
+    _ := typesense.UpsertAnalyticsRuleJSON(c, "pq", `{"type":"popular_queries","params":{}}`, err)
+    show("upsert json", err)
+    println "delete rule: " + typesense.DeleteAnalyticsRule(c, "pq", err)
+
+    println "event: " + typesense.SendEvent(c, "clicks", typesense.EVENT_CLICK, `{"doc_id":"1","user_id":"u1"}`, err)
+    show("event", err)
+    println "event json: " + typesense.SendEventJSON(c, `{"type":"click","name":"clicks","data":{}}`, err)
+    events := typesense.GetEvents(c, "u1", "clicks", 10, err)
+    show("events", err)
+    println "  " + events.len() + " " + events.get(0)
+    println "flush: " + typesense.FlushAnalytics(c, err)
+    println "status: " + typesense.AnalyticsStatus(c, err)
+
+    m := typesense.ConversationModel {
+        id = "m1", model_name = "openai/gpt-4o", api_key = "sk-x", history_collection = "hist", system_prompt = "You answer questions about books.",
+        max_bytes = 16384, ttl = 86400, extra = `{"temperature":0.2}`
+    }
+    println "model json: " + typesense.ConversationModelJSON(m)
+    println "create model: " + typesense.CreateConversationModel(c, m, err)
+    println "get model: " + typesense.GetConversationModel(c, "m1", err)
+    println "models: " + typesense.ListConversationModels(c, err).len()
+    println "update model: " + typesense.UpdateConversationModel(c, "m1", typesense.ConversationModel { system_prompt = "be brief" }, err)
+    show("update model", err)
+    println "delete model: " + typesense.DeleteConversationModel(c, "m1", err)
+
+    println "create nl: " + typesense.CreateNLSearchModel(c, `{"id":"n1","model_name":"openai/gpt-4o","api_key":"sk-x"}`, err)
+    show("create nl", err)
+    println "get nl: " + typesense.GetNLSearchModel(c, "n1", err)
+    println "nl models: " + typesense.ListNLSearchModels(c, err).len()
+    println "update nl: " + typesense.UpdateNLSearchModel(c, "n1", `{"temperature":0.2}`, err)
+    println "delete nl: " + typesense.DeleteNLSearchModel(c, "n1", err)
+end

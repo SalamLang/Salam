@@ -1,0 +1,49 @@
+import db.elasticsearch
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+    mut must := Vector {} as Vector<str>
+    must.push(elasticsearch.Match("title", "persian poetry"))
+    mut filters := Vector {} as Vector<str>
+    filters.push(elasticsearch.Range("year", "900", "1500"))
+    filters.push(elasticsearch.Not(elasticsearch.Term("status", "draft")))
+    mut aggs := elasticsearch.AddAgg("", "by_author", elasticsearch.SubAggs(elasticsearch.TermsAgg("author", 5), elasticsearch.AddAgg("", "avg_year", elasticsearch.AvgAgg("year"))))
+    aggs = elasticsearch.AddAgg(aggs, "newest", elasticsearch.MaxAgg("year"))
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("year"))
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    req := elasticsearch.SearchRequest {
+        query = elasticsearch.Filtered(elasticsearch.And(must), filters), size = 10, sort = sort, aggs = aggs, highlight = elasticsearch.Highlight(fields)
+    }
+    res := elasticsearch.Search(c, "books", req)
+    if not res.ok:
+        println elasticsearch.Error(c)
+        ret
+    end
+    println res.total, res.total_relation, res.took
+    each h in res.hits:
+        println h.id, h.score, h.source, h.highlight
+    end
+    println elasticsearch.AggValue(res, "newest")
+    each b in elasticsearch.AggBuckets(res, "by_author"):
+        println b.key, b.doc_count, elasticsearch.AggValueIn(b.raw, "avg_year")
+    end
+
+    mut page := elasticsearch.SearchScroll(c, "books", elasticsearch.SearchRequest { query = elasticsearch.MatchAll(), size = 500 }, "1m")
+    until page.hits.len() > 0:
+        println "page of", page.hits.len()
+        page = elasticsearch.Scroll(c, page.scroll_id, "1m")
+    end
+    elasticsearch.ClearScroll(c, page.scroll_id)
+
+    pit := elasticsearch.OpenPit(c, "books", "1m")
+    first := elasticsearch.Search(c, "", elasticsearch.SearchRequest { pit_id = pit, size = 100, sort = sort })
+    if first.hits.len() > 0:
+        last := first.hits.get(first.hits.len() - 1)
+        next := elasticsearch.Search(c, "", elasticsearch.SearchRequest { pit_id = pit, size = 100, sort = sort, search_after = last.sort })
+        println next.hits.len()
+    end
+    elasticsearch.ClosePit(c, pit)
+    println elasticsearch.DeleteByQuery(c, "books", elasticsearch.Term("status", "draft"))
+end

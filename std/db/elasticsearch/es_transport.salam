@@ -22,6 +22,7 @@ import encoding
 import encoding.json
 import encoding.url
 import net.httpx
+import time
 
 func _st(c: Client): _EsState*:
     ret c.handle as _EsState*
@@ -169,6 +170,25 @@ func _retryable(status: int): bool:
     ret status == 502 or status == 503 or status == 504
 end
 
+func _pick(st: _EsState*): int:
+    n := st[0].nodes.len()
+    now := time.MonoMillis()
+    start := st[0].cursor % n
+    repeat n in k:
+        i := (start + k) % n
+        if st[0].dead_until.get(i) <= now:
+            st[0].cursor = (i + 1) % n
+            ret i
+        end
+    end
+    mut best := start
+    repeat n in k:
+        if st[0].dead_until.get(k) < st[0].dead_until.get(best): best = k end
+    end
+    st[0].cursor = (best + 1) % n
+    ret best
+end
+
 func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
     if c.handle == null: ret Response { error = "no client" } end
     st := _st(c)
@@ -184,22 +204,25 @@ func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
         ret r
     end
     blen := str.ByteLen(body)
-    mut tries := st[0].max_retries + 1
-    if tries < n: tries = n end
+    tries := st[0].max_retries + 1
     mut last := Response {}
     repeat tries in attempt:
-        node := st[0].nodes.get(st[0].cursor % n)
-        st[0].cursor = (st[0].cursor + 1) % n
+        ni := _pick(st)
+        node := st[0].nodes.get(ni)
         head := _head(st, node, method, path, ctype, blen)
         mut raw := httpx.SendRawTLS(
             node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node)
         )
         mem.Free(head as void*)
         if raw.error.len() > 0:
+            if str.StartsWith(raw.error, "could not connect") or str.StartsWith(raw.error, "TLS"):
+                st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
+            end
             last = Response { error = node.url + ": " + raw.error }
             httpx.FreeRaw(raw)
             continue
         end
+        st[0].dead_until.set(ni, 0 as i64)
         mut r := Response { status = raw.status, ok = raw.status >= 200 and raw.status < 300 }
         r.body = _raw_body(raw)
         httpx.FreeRaw(raw)

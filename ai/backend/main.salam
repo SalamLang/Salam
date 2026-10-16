@@ -32,6 +32,7 @@ include aioauth "oauth.salam"
 include aiadmin "admin.salam"
 include aiengine "engine.salam"
 include ailive "live.salam"
+include aiturn "turn.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -41,12 +42,9 @@ const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
 const STREAM_WORKERS := 64
 const STREAM_SECONDS := 900
-const CHECK_SECONDS := 10
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
-mut CHECK_LOCK := sync.Mutex {}
-mut CHECKED := HashMap {} as HashMap<str, str>
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -82,7 +80,7 @@ func main:
         println "cannot open the database:", aistore.Error()
         ret 1
     end
-    CHECK_LOCK = sync.NewMutex()
+    aiturn.Init()
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
     colon := engine_host.find(":")
@@ -323,7 +321,7 @@ func message_json(id: str, role: str, body: str, status: str, created: str): str
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("id", id))
     m.push(json.Member("role", role))
-    m.push(json.Member("body", body))
+    m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
     m.push(json.Member("status", status))
     m.push(json.MemberRaw("created", created))
     ret json.Object(m)
@@ -404,37 +402,7 @@ func sync_pending(id: str, sid: str):
 end
 
 func settle(mid: str, sid: str, created: i64): aiengine.Reply:
-    mut r := aiengine.Reply {}
-    if sid.len() == 0:
-        r.failed = true
-        r.done = true
-    else:
-        mut text := ""
-        mut phase := ""
-        mut idle := false
-        mut failed := false
-        tracked := ailive.Snapshot(sid, text, phase, idle, failed)
-        if tracked and failed and not idle:
-            aiengine.Abort(sid)
-            r.text = text
-            r.done = true
-            r.failed = true
-        else tracked and ailive.Connected() and not idle and not failed and not check_due(sid):
-            r.text = text
-            r.phase = phase
-        else:
-            r = aiengine.Poll(sid)
-            if not r.done and tracked and text.len() > r.text.len():
-                r.text = text
-                r.phase = phase
-            end
-        end
-    end
-    if not r.done and aistore.Now() - created > PENDING_SECONDS:
-        aiengine.Abort(sid)
-        r.done = true
-        r.failed = r.text.len() == 0
-    end
+    mut r := aiturn.Progress(sid, created, PENDING_SECONDS)
     if r.done:
         mut status := "done"
         mut body := r.text
@@ -455,24 +423,8 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
     ret r
 end
 
-func check_due(sid: str): bool:
-    _l := sync.Lock(CHECK_LOCK)
-    t := aistore.Now()
-    mut due := false
-    if not CHECKED.has(sid):
-        CHECKED.put(sid, i64s(t))
-    else t - (CHECKED.get(sid).to_int() as i64) >= CHECK_SECONDS:
-        CHECKED.put(sid, i64s(t))
-        due = true
-    end
-    _u := sync.Unlock(CHECK_LOCK)
-    ret due
-end
-
 func forget_check(sid: str):
-    _l := sync.Lock(CHECK_LOCK)
-    _r := CHECKED.remove(sid)
-    _u := sync.Unlock(CHECK_LOCK)
+    aiturn.Forget(sid)
 end
 
 func get_chat(ctx: i64):
@@ -645,6 +597,7 @@ func poll_message(ctx: i64):
         ret
     end
     mut phase := "done"
+    body = aiturn.Plain(body)
     if status == "pending":
         r := settle(mid, str.TrimSuffix(owned, "|"), created)
         body = r.text
@@ -801,7 +754,7 @@ func serve_stream(c: tcp.Conn):
     end
     sid := str.TrimSuffix(owned, "|")
     if status != "pending":
-        _d := send_event(c, "done", "{" + json.Member("body", body) + ", " + json.Member("status", status) + "}")
+        _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + "}")
         ret
     end
     mut sent := ""

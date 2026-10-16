@@ -65,11 +65,7 @@ impl Workspace {
             self.root.clone()
         } else {
             let p = Path::new(rel);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                self.root.join(p)
-            }
+            if p.is_absolute() { p.to_path_buf() } else { self.root.join(p) }
         };
         let path = canonical_prefix(&normalize(&joined));
         let inside = path.starts_with(&self.root);

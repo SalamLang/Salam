@@ -3,7 +3,7 @@ pub mod exec;
 pub mod fs;
 pub mod search;
 
-use crate::workspace::{in_git_dir, Workspace};
+use crate::workspace::{Workspace, in_git_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -359,7 +359,7 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
         other => {
             return Err(format!(
                 "This version of Salam Agent does not know the tool {other}. Ask the user to update Salam Agent."
-            ))
+            ));
         }
     };
     Ok(Plan { preview, action })
@@ -480,11 +480,13 @@ mod tests {
         assert_eq!(p.preview.kind, Kind::Write);
         assert!(p.preview.detail.contains("-hello world") && p.preview.detail.contains("+hello salam"));
         assert!(plan(&call("write_file", json!({"path": ".git/config", "content": ""})), &w).is_err());
-        assert!(plan(
-            &call("edit_file", json!({"path": "missing.txt", "old_text": "a", "new_text": "b"})),
-            &w
-        )
-        .is_err());
+        assert!(
+            plan(
+                &call("edit_file", json!({"path": "missing.txt", "old_text": "a", "new_text": "b"})),
+                &w
+            )
+            .is_err()
+        );
         assert!(
             plan(&call("write_file", json!({"path": "../x.txt", "content": "x"})), &w)
                 .unwrap()

@@ -64,6 +64,58 @@ func _pkg_dir(root: str, pkg: str): str:
     ret p
 end
 
+func _last_dot(s: str): int:
+    mut at := 0 - 1
+    mut i := 0
+    until i < s.len():
+        if s.substr(i, 1) == ".": at = i end
+        i += 1
+    end
+    ret at
+end
+
+func _fa_name(root: str, pkg: str): str:
+    mut leaf := pkg
+    dot := _last_dot(pkg)
+    if dot >= 0: leaf = pkg.substr(dot + 1, pkg.len() - dot - 1) end
+    lines := mcptxt.Lines(file.ReadText(path.Join(_pkg_dir(root, pkg), leaf.concat(".salam"))))
+    mut i := 0
+    until i < lines.len():
+        if lines.get(i).trim() == "package ".concat(leaf):
+            mut j := i - 1
+            until j >= 0 and j >= i - 3:
+                ln := lines.get(j).trim()
+                if str.StartsWith(ln, "@fa \"") and str.EndsWith(ln, "\""):
+                    ret ln.substr(5, ln.len() - 6)
+                end
+                j -= 1
+            end
+            ret ""
+        end
+        i += 1
+    end
+    ret ""
+end
+
+func _loose(name: str): str:
+    mut zwnj := Vector {} as Vector<int>
+    zwnj.push(8204)
+    ret str.Replace(str.Replace(name.trim(), " ", ""), str.FromCodePoints(zwnj), "")
+end
+
+func _english_name(root: str, name: str): str:
+    want := _loose(name)
+    if want.len() == 0: ret "" end
+    mut all := Vector {} as Vector<str>
+    _collect_pkgs(all, root, "")
+    mut i := 0
+    until i < all.len():
+        if _loose(_fa_name(root, all.get(i))) == want: ret all.get(i) end
+        i += 1
+    end
+    ret ""
+end
+
 func _pkg_sources(pkg_dir: str): Vector<str>:
     out := Vector {} as Vector<str>
     if not dir.Exists(pkg_dir): ret out end
@@ -232,7 +284,18 @@ pub func Packages(): mcpout.ToolResult:
     end
     mut items := Vector {} as Vector<str>
     _collect_pkgs(items, root, "")
-    body := "Importable std packages (".concat(str.FromInt(items.len())).concat("):\n\n").concat(mcpout.Bullets(items))
+    mut shown := Vector {} as Vector<str>
+    mut i := 0
+    until i < items.len():
+        fa := _fa_name(root, items.get(i))
+        if fa.len() > 0:
+            shown.push(items.get(i).concat(" (").concat(fa).concat(")"))
+        else:
+            shown.push(items.get(i))
+        end
+        i += 1
+    end
+    body := "Importable std packages (".concat(str.FromInt(items.len())).concat("), with the Persian name in parentheses; both spellings work in imports:\n\n").concat(mcpout.Bullets(shown))
     ret mcpout.Rich(body, mcpout.StrArray(items), false)
 end
 
@@ -240,8 +303,15 @@ end
 @fa "نمادها"
 pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
     if not mcpexec.SafePath(pkg): ret mcpout.Failure("unsupported package name: ".concat(pkg)) end
-    root := _pkg_dir(_std_root(), pkg)
-    if not dir.Exists(root): ret mcpout.Failure("no such std package: ".concat(pkg)) end
+    mut name := pkg
+    mut root := _pkg_dir(_std_root(), name)
+    if not dir.Exists(root):
+        name = _english_name(_std_root(), pkg)
+        if name.len() == 0:
+            ret mcpout.Failure("no such std package: ".concat(pkg).concat(". Use the import name in English or Persian; salam_stdlib_packages lists both."))
+        end
+        root = _pkg_dir(_std_root(), name)
+    end
     files := _pkg_sources(root)
     mut all := Vector {} as Vector<str>
     mut i := 0
@@ -255,9 +325,9 @@ pub func Symbols(pkg: str, query: str): mcpout.ToolResult:
         i += 1
     end
     if all.len() == 0:
-        ret mcpout.Text("No public declarations matched in std/".concat(str.Replace(pkg, ".", "/")).concat("."))
+        ret mcpout.Text("No public declarations matched in std/".concat(str.Replace(name, ".", "/")).concat("."))
     end
-    body := "Public declarations in std/".concat(str.Replace(pkg, ".", "/")).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
+    body := "Public declarations in std/".concat(str.Replace(name, ".", "/")).concat(" (").concat(str.FromInt(all.len())).concat("):\n\n").concat(mcpout.Bullets(all))
     ret mcpout.Rich(body, mcpout.StrArray(all), false)
 end
 

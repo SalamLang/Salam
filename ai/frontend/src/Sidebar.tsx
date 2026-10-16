@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
-import { IconChat, IconClose, IconEdit, IconLogout, IconMoon, IconPlus, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 
 function groupOf(updated: number): string {
@@ -26,6 +26,8 @@ type Props = {
   onDelete: (id: string) => void;
   onLogout: () => void;
   onToggleTheme: () => void;
+  page: string;
+  onNavigate: (path: string) => void;
 };
 
 export function Sidebar(p: Props) {
@@ -116,6 +118,37 @@ export function Sidebar(p: Props) {
               ))}
             </div>
           ))}
+        </nav>
+        <nav className="sidebar-links" aria-label="بخش‌های حساب">
+          <a
+            href="/apps"
+            className={`chat-link ${p.page === "apps" ? "active" : ""}`}
+            aria-current={p.page === "apps" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/apps"))}
+          >
+            <IconPlug width={16} height={16} />
+            <span>برنامه‌های متصل</span>
+          </a>
+          <a
+            href="/keys"
+            className={`chat-link ${p.page === "keys" ? "active" : ""}`}
+            aria-current={p.page === "keys" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/keys"))}
+          >
+            <IconKey width={16} height={16} />
+            <span>کلیدهای API</span>
+          </a>
+          {p.user.admin && (
+            <a
+              href="/admin"
+              className={`chat-link ${p.page === "admin" ? "active" : ""}`}
+              aria-current={p.page === "admin" ? "page" : undefined}
+              onClick={(e) => (e.preventDefault(), p.onNavigate("/admin"))}
+            >
+              <IconShield width={16} height={16} />
+              <span>مدیریت</span>
+            </a>
+          )}
         </nav>
         <div className="sidebar-foot">
           <div className="avatar" aria-hidden="true">

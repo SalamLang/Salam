@@ -9,7 +9,10 @@ COPY *.salam ./
 RUN mkdir -p /out && /opt/salam-linux-x86_64/salam build main.salam --output=/out/salam-ai
 
 FROM debian:trixie-slim
-RUN useradd --system --uid 10001 --no-create-home salam
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --no-create-home salam
 COPY --from=build /out/salam-ai /usr/local/bin/salam-ai
 USER salam
 ENV AI_PORT=8080 AI_HOST=0.0.0.0

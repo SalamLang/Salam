@@ -166,6 +166,10 @@ args, chat, workspace}}`. It runs the tool after the user approves and posts
    answer for up to ten minutes, or until the device has been silent for 45
    seconds.
 
+The proxy must send `/bridge/poll` and `/bridge/result` to the streaming port
+with buffering off and a read timeout above 30 seconds. It must never expose
+`/bridge/mcp` publicly.
+
 Give only the desktop profile this MCP server in the engine's configuration:
 a remote server at `http://127.0.0.1:8081/bridge/mcp` with the header
 `Authorization: Bearer $AI_BRIDGE_SECRET`.

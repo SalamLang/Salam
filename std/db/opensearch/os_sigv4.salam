@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import mem
+import str
+import sort
+import time
+import crypto
+import encoding
+
+func _os_hex_buf(p: void*, n: int): str:
+    digits := "0123456789abcdef"
+    hp := _os_bp(digits)
+    bp := p as i8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        b := _os_ub(bp, i)
+        str.BufAppendChar(sb, _os_ub(hp, b / 16))
+        str.BufAppendChar(sb, _os_ub(hp, b % 16))
+    end
+    ret str.BufStr(sb)
+end
+
+func _os_sha256_hex(s: str): str:
+    out := mem.Allocate(32 as u64)
+    defer mem.Free(out)
+    crypto.Sha256Bytes(s as void*, str.ByteLen(s), out)
+    ret _os_hex_buf(out, 32)
+end
+
+func _os_hmac_into(key: void*, klen: int, msg: str, out: void*):
+    crypto.HmacSha256Raw(key, klen, msg as void*, str.ByteLen(msg), out)
+end
+
+func _os_aws_enc(s: str, keep_slash: bool): str:
+    digits := "0123456789ABCDEF"
+    hp := _os_bp(digits)
+    bp := _os_bp(s)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat str.ByteLen(s) in i:
+        code := _os_ub(bp, i)
+        alpha := (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
+        digit := code >= 48 and code <= 57
+        mark := code == 45 or code == 46 or code == 95 or code == 126
+        if alpha or digit or mark or (keep_slash and code == 47):
+            str.BufAppendChar(sb, code)
+        else:
+            str.BufAppendChar(sb, 37)
+            str.BufAppendChar(sb, _os_ub(hp, code / 16))
+            str.BufAppendChar(sb, _os_ub(hp, code % 16))
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _os_canonical_query(query: str): str:
+    if query.len() == 0: ret str.Clone("") end
+    mut pairs := Vector {} as Vector<str>
+    defer pairs.free()
+    each part in query.split("&"):
+        if part.len() == 0: continue end
+        at := part.find("=")
+        mut k := part
+        mut v := ""
+        if at >= 0:
+            k = part.substr(0, at)
+            v = part.substr(at + 1, part.len() - at - 1)
+        end
+        pairs.push(_os_aws_enc(encoding.URLDecode(k), false) + "=" + _os_aws_enc(encoding.URLDecode(v), false))
+    end
+    sorted := sort.Sorted(pairs)
+    ret str.Join(sorted, "&")
+end
+
+func _os_amz_date(epoch: i64): str:
+    iso := time.FormatISOUTC(epoch)
+    ret str.Replace(str.Replace(iso, "-", ""), ":", "")
+end
+
+func _os_sigv4_headers(
+    method: str, host: str, path: str, query: str, body: str, region: str, service: str, access_key: str,
+    secret_key: str, token: str, epoch: i64
+): str:
+    amz := _os_amz_date(epoch)
+    day := amz.substr(0, 8)
+    payload := _os_sha256_hex(body)
+    mut names := "host;x-amz-content-sha256;x-amz-date"
+    mut canon_headers := "host:" + host + "\nx-amz-content-sha256:" + payload + "\nx-amz-date:" + amz + "\n"
+    if token.len() > 0:
+        names = names + ";x-amz-security-token"
+        canon_headers = canon_headers + "x-amz-security-token:" + token + "\n"
+    end
+    uri := path.len() == 0 ? "/" : _os_aws_enc(path, true)
+    canonical := method + "\n" + uri + "\n" + _os_canonical_query(query) + "\n" + canon_headers + "\n" + names + "\n" + payload
+    scope := day + "/" + region + "/" + service + "/aws4_request"
+    to_sign := "AWS4-HMAC-SHA256\n" + amz + "\n" + scope + "\n" + _os_sha256_hex(canonical)
+    k1 := mem.Allocate(32 as u64)
+    k2 := mem.Allocate(32 as u64)
+    defer mem.Free(k1)
+    defer mem.Free(k2)
+    secret := "AWS4" + secret_key
+    _os_hmac_into(secret as void*, str.ByteLen(secret), day, k1)
+    _os_hmac_into(k1, 32, region, k2)
+    _os_hmac_into(k2, 32, service, k1)
+    _os_hmac_into(k1, 32, "aws4_request", k2)
+    _os_hmac_into(k2, 32, to_sign, k1)
+    sig := _os_hex_buf(k1, 32)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "X-Amz-Date: ")
+    str.BufAppend(sb, amz)
+    str.BufAppend(sb, "\r\nX-Amz-Content-Sha256: ")
+    str.BufAppend(sb, payload)
+    str.BufAppend(sb, "\r\n")
+    if token.len() > 0:
+        str.BufAppend(sb, "X-Amz-Security-Token: ")
+        str.BufAppend(sb, token)
+        str.BufAppend(sb, "\r\n")
+    end
+    str.BufAppend(sb, "Authorization: AWS4-HMAC-SHA256 Credential=")
+    str.BufAppend(sb, access_key)
+    str.BufAppend(sb, "/")
+    str.BufAppend(sb, scope)
+    str.BufAppend(sb, ", SignedHeaders=")
+    str.BufAppend(sb, names)
+    str.BufAppend(sb, ", Signature=")
+    str.BufAppend(sb, sig)
+    str.BufAppend(sb, "\r\n")
+    ret str.BufStr(sb)
+end
+
+@en "SignRequest"
+@fa "امضای درخواست آمازون"
+pub func SignRequest(
+    method: str, host: str, path: str, body: str, region: str, service: str, access_key: str,
+    secret_key: str, token: str, epoch: i64
+): str:
+    mut p := ""
+    mut q := ""
+    _os_split_target(path, p, q)
+    ret _os_sigv4_headers(method, host, p, q, body, region, service, access_key, secret_key, token, epoch)
+end

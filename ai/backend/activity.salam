@@ -1,0 +1,347 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiact
+
+import str
+import encoding.json
+import encoding.value
+
+const SITE := "https://www.salamlang.ir"
+const SKILL_URL := "https://github.com/SalamLang/Salam/blob/main/SKILL.md"
+const EN_DOCS := "https://salamlang.github.io/Salam"
+const DETAIL_MAX := 120
+const THOUGHT_MAX := 6000
+
+mut REDACT := Vector {} as Vector<str>
+
+func field(v: value.Value, key: str): value.Value:
+    if not value.IsObject(v):
+        ret value.ValueNull()
+    end
+    mut ok := false
+    got := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret got
+end
+
+func text_of(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func int_of(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func clip(s: str, max: int): str:
+    t := str.Trim(str.Replace(str.Replace(s, "\r", " "), "\n", " "))
+    if t.len() <= max:
+        ret t
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut used := 0
+    each cp in str.CodePoints(t):
+        w := cp < 128 ? 1 : (cp < 2048 ? 2 : (cp < 65536 ? 3 : 4))
+        if used + w > max:
+            break
+        end
+        str.BufAppendCp(b, cp)
+        used += w
+    end
+    ret str.BufStr(b) + "…"
+end
+
+func fa_num(n: i64): str:
+    ret str.ToPersianDigits("" + n)
+end
+
+func last_slash(s: str): int:
+    mut at := -1
+    mut i := 0
+    until i < s.len():
+        if s.substr(i, 1) == "/":
+            at = i
+        end
+        i += 1
+    end
+    ret at
+end
+
+func rel_path(p: str): str:
+    mut r := p
+    i := str.Find(r, "/work/")
+    if i >= 0:
+        r = r.substr(i + 6, r.len() - i - 6)
+    end
+    ret str.TrimPrefix(r, "./")
+end
+
+func std_package(rel: str): str:
+    if not str.StartsWith(rel, "std/"):
+        ret ""
+    end
+    rest := rel.substr(4, rel.len() - 4)
+    cut := str.EndsWith(rest, ".salam") or str.EndsWith(rest, ".md") ? last_slash(rest) : rest.len()
+    if cut <= 0:
+        ret ""
+    end
+    ret str.Replace(rest.substr(0, cut), "/", ".")
+end
+
+func std_link(pkg: str): str:
+    if pkg.len() == 0:
+        ret SITE + "/std/"
+    end
+    ret SITE + "/std/" + str.Replace(pkg, ".", "-") + "/"
+end
+
+func source_name(rel: str, link &: str): str:
+    if rel.len() == 0 or rel == "." or rel == "work":
+        link = SITE + "/learn/"
+        ret "همه‌ی مستندات سلام"
+    end
+    if str.Find(rel, "SKILL.md") >= 0:
+        link = SKILL_URL
+        ret "راهنمای کامل زبان سلام"
+    end
+    if str.Find(rel, "llms-fa") >= 0:
+        link = SITE + "/learn/"
+        ret "آموزش و مرجع فارسی سلام"
+    end
+    if str.Find(rel, "llms-en") >= 0:
+        link = EN_DOCS + "/learn/"
+        ret "آموزش و مرجع انگلیسی سلام"
+    end
+    pkg := std_package(rel)
+    if pkg.len() > 0:
+        link = std_link(pkg)
+        ret "بسته‌ی " + pkg + " در کتابخانه‌ی استاندارد"
+    end
+    if str.StartsWith(rel, "std"):
+        link = std_link("")
+        ret "کتابخانه‌ی استاندارد سلام"
+    end
+    link = ""
+    ret rel
+end
+
+func step(icon: str, title: str, detail: str, link: str, status: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("kind", "tool"))
+    m.push(json.Member("icon", icon))
+    m.push(json.Member("title", title))
+    m.push(json.Member("detail", detail))
+    m.push(json.Member("link", link))
+    m.push(json.Member("status", status))
+    ret json.Object(m)
+end
+
+func short_status(s: str): str:
+    if s == "completed":
+        ret "done"
+    end
+    if s == "error":
+        ret "error"
+    end
+    ret "running"
+end
+
+func base_tool(name: str): str:
+    known := ["salam_check", "salam_build", "salam_run", "salam_exec", "salam_format", "salam_inspect", "salam_js", "salam_llvm_ir", "salam_keywords", "salam_version", "salam_read_source", "salam_stdlib_packages", "salam_stdlib_symbols", "salam_find_examples", "salam_docs", "salam_search", "salam_hints", "read_file", "write_file", "edit_file", "list_dir", "run_tests", "shell", "docker", "wsl", "grep", "glob", "read", "list"]
+    each k in known:
+        if name == k or str.EndsWith(name, "_" + k):
+            ret k
+        end
+    end
+    ret name
+end
+
+func check_result(output: str): str:
+    if output.len() == 0:
+        ret ""
+    end
+    if str.Find(output, "exit code: 0") >= 0:
+        ret "بدون خطا"
+    end
+    mut n := 0
+    mut at := str.Find(output, "error[")
+    until at >= 0:
+        n += 1
+        at = str.IndexFrom(output, "error[", at + 6)
+    end
+    if n > 0:
+        ret fa_num(n as i64) + " خطا پیدا شد"
+    end
+    ret "خطا پیدا شد"
+end
+
+func lines_detail(offset: i64, limit: i64): str:
+    if offset <= 0 and limit <= 0:
+        ret ""
+    end
+    from := offset <= 0 ? 1 as i64 : offset
+    if limit <= 0:
+        ret "از خط " + fa_num(from)
+    end
+    ret "خطوط " + fa_num(from) + " تا " + fa_num(from + limit)
+end
+
+pub func Configure(words: str):
+    REDACT = Vector {} as Vector<str>
+    each w in words.split(","):
+        t := str.Trim(w)
+        if t.len() > 0:
+            REDACT.push(t)
+            REDACT.push(str.Lower(t))
+        end
+    end
+end
+
+pub func Thought(text: str): str:
+    mut t := str.Replace(text, "/work/", "")
+    each w in REDACT:
+        if w.len() > 0:
+            t = str.Replace(t, w, "assistant")
+        end
+    end
+    each w in ["system prompt", "System prompt", "the prompt", "my prompt", "caller_instructions", "desktop_session"]:
+        t = str.Replace(t, w, "instructions")
+    end
+    t = str.Trim(t)
+    if t.len() > THOUGHT_MAX:
+        t = t.substr(0, THOUGHT_MAX) + "…"
+    end
+    ret t
+end
+
+pub func ThoughtStep(text: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("kind", "think"))
+    m.push(json.Member("text", Thought(text)))
+    ret json.Object(m)
+end
+
+pub func Describe(name: str, raw_status: str, args: value.Value, output: str, failed: bool): str:
+    status := failed ? "error" : short_status(raw_status)
+    tool := base_tool(name)
+    mut link := ""
+    switch tool:
+        "grep":
+            src := source_name(rel_path(text_of(args, "path")), link)
+            mut what := "«" + clip(text_of(args, "pattern"), DETAIL_MAX) + "»"
+            inc := text_of(args, "include")
+            if inc.len() > 0:
+                what = what + " در فایل‌های " + inc
+            end
+            ret step("search", "جست‌وجو در " + src, what, link, status)
+        end
+        "read":
+            rel := rel_path(text_of(args, "filePath"))
+            src := source_name(rel, link)
+            mut detail := lines_detail(int_of(args, "offset"), int_of(args, "limit"))
+            if std_package(rel).len() > 0:
+                file := rel.substr(last_slash(rel) + 1, rel.len() - last_slash(rel) - 1)
+                detail = detail.len() > 0 ? file + "، " + detail : file
+            end
+            ret step("read", "مطالعه‌ی " + src, detail, link, status)
+        end
+        "glob", "list":
+            ret step("files", "پیدا کردن فایل‌های مرتبط", clip(text_of(args, "pattern") + text_of(args, "path"), DETAIL_MAX), "", status)
+        end
+        "salam_check", "salam_build":
+            ret step("check", "بررسی کد با کامپایلر سلام", check_result(output), "", status)
+        end
+        "salam_run", "salam_exec":
+            ret step("run", "اجرای کد سلام", clip(output, DETAIL_MAX), "", status)
+        end
+        "salam_stdlib_packages":
+            ret step("package", "مرور بسته‌های کتابخانه‌ی استاندارد", "", std_link(""), status)
+        end
+        "salam_stdlib_symbols":
+            pkg := text_of(args, "package")
+            mut detail := ""
+            q := text_of(args, "query")
+            if q.len() > 0:
+                detail = "«" + clip(q, DETAIL_MAX) + "»"
+            end
+            ret step("package", pkg.len() > 0 ? "بررسی توابع بسته‌ی " + pkg : "بررسی توابع کتابخانه‌ی استاندارد", detail, std_link(pkg), status)
+        end
+        "salam_find_examples":
+            ret step("example", "جست‌وجوی نمونه‌کد", "«" + clip(text_of(args, "query"), DETAIL_MAX) + "»", "", status)
+        end
+        "salam_docs", "salam_search", "salam_hints":
+            q := text_of(args, "query") + text_of(args, "topic")
+            ret step("read", "جست‌وجو در مستندات سلام", q.len() > 0 ? "«" + clip(q, DETAIL_MAX) + "»" : "", SITE + "/learn/", status)
+        end
+        "salam_keywords":
+            ret step("keyword", "بررسی کلیدواژه‌های سلام", "", "", status)
+        end
+        "salam_format":
+            ret step("code", "مرتب کردن کد", "", "", status)
+        end
+        "salam_inspect":
+            ret step("code", "تحلیل ساختار کد", "", "", status)
+        end
+        "salam_js":
+            ret step("code", "ترجمه‌ی کد به جاوااسکریپت", "", "", status)
+        end
+        "salam_llvm_ir":
+            ret step("code", "بررسی خروجی LLVM", "", "", status)
+        end
+        "salam_version":
+            ret step("keyword", "بررسی نسخه‌ی سلام", "", "", status)
+        end
+        "salam_read_source":
+            rel := rel_path(text_of(args, "path"))
+            src := source_name(rel, link)
+            ret step("read", "مطالعه‌ی کد منبع " + src, "", link, status)
+        end
+        "shell":
+            ret step("run", "اجرای فرمان روی رایانه‌ی شما", clip(text_of(args, "command"), DETAIL_MAX), "", status)
+        end
+        "read_file":
+            ret step("read", "خواندن فایل", clip(text_of(args, "path"), DETAIL_MAX), "", status)
+        end
+        "write_file":
+            ret step("code", "نوشتن فایل", clip(text_of(args, "path"), DETAIL_MAX), "", status)
+        end
+        "edit_file":
+            ret step("code", "ویرایش فایل", clip(text_of(args, "path"), DETAIL_MAX), "", status)
+        end
+        "list_dir":
+            ret step("files", "مرور پوشه", clip(text_of(args, "path"), DETAIL_MAX), "", status)
+        end
+        "run_tests":
+            ret step("check", "اجرای آزمون‌ها", "", "", status)
+        end
+        "docker":
+            ret step("run", "اجرای فرمان Docker", clip(text_of(args, "command") + text_of(args, "args"), DETAIL_MAX), "", status)
+        end
+        "wsl":
+            ret step("run", "اجرای فرمان در WSL", clip(text_of(args, "command"), DETAIL_MAX), "", status)
+        end
+    end
+    ret step("tool", "استفاده از ابزارهای سلام", "", "", status)
+end

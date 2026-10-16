@@ -1389,7 +1389,7 @@ Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
   `Close()` is required
 - `interface Tx`: `Ok Exec Query Commit Rollback`
 - Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
-QuoteLiteral`; constants `SQLITE MYSQL POSTGRES` and `TYPE_NULL TYPE_INT
+QuoteLiteral`; constants `SQLITE MYSQL POSTGRES OPENSEARCH` and `TYPE_NULL TYPE_INT
 TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
 - **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
 CloseAll Free`): a fixed set of connections leased one at a time. It holds
@@ -1413,6 +1413,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+- **`db.opensearch`** (OpenSearch over its REST API, native TCP/TLS, no outside library): connect with `Connect ConnectAuth ConnectInsecure ConnectAWS NewClient(Config)` (several nodes with retries and dead node skipping, basic/bearer auth, AWS SigV4 for `SERVICE_ES`/`SERVICE_AOSS`, `ca_file`, `insecure` for a self signed test server). Documents `Index IndexWith Create Get GetSource Exists Update UpdateWith Upsert UpdateScript Delete MGet Count DeleteByQuery UpdateByQuery Reindex`; bulk `NewBulk BulkIndex BulkCreate BulkUpdate BulkUpsert BulkDelete BulkSend BulkFree`; search `Search SearchWith(SearchRequest) SearchRaw SearchParamsWith MSearch SearchScroll Scroll ClearScroll CreatePit DeletePit SearchTemplate Explain Validate`; results `Buckets AggValue AggField Suggestions JsonPath`; query DSL builders return JSON text (`Match Term Terms Range BoolOf(BoolQuery{}) Nested Knn KnnFiltered Neural Hybrid ScriptScore FunctionScore SortDesc Highlight TermsAgg AvgAgg DateHistogramAgg AddAgg SubAggs`); admin `CreateIndex CreateIndexWith PutMapping PutSettings Refresh PutAlias SwapAlias PutIndexTemplate CreateDataStream Rollover CatIndices ClusterHealth WaitForStatus GetTask PutPipeline SimulatePipeline CreateSnapshot`; plugins `Sql SqlWith Ppl SqlExplain` (JDBC rows that page with the cursor), k-NN `KnnIndexBody KnnVectorField KnnWarmup`, ISM `PutPolicy AddPolicy ExplainPolicy DeleteAfterPolicy`, security `WhoAmI PutUser PutRole RoleBody PutRoleMapping ChangePassword`, `PutSearchPipeline NormalizationPipeline`, alerting monitors and `Ml*`; anything else through `Perform`. Every call records `Status Error ErrorType ErrorReason` on the client; `Conn(c)` is a `dyn db.Connection` whose `Query` runs SQL (`Exec` only does SQL `DELETE`, there are no transactions). `Get` of a missing id is `found = false` with an empty `error`. A bulk delete of a missing id counts as ok.
 
 ```salam
 import db
@@ -2349,7 +2350,8 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
-(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
+`db/opensearch` `اپن سرچ` (imported as `دیتابیس.اپن سرچ`), `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`.
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`

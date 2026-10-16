@@ -4,7 +4,21 @@ export type User = {
   email: string;
   admin?: boolean;
 };
-export type Chat = { id: string; title: string; updated: number };
+export type Chat = {
+  id: string;
+  title: string;
+  updated: number;
+  agent?: boolean;
+  device_id?: number;
+  workspace?: string;
+};
+export type Device = {
+  id: number;
+  name: string;
+  os: string;
+  created: number;
+  online: boolean;
+};
 export type Message = {
   id: number;
   role: "user" | "assistant";
@@ -340,7 +354,9 @@ export const api = {
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => call<{ user: User }>("GET", "/me"),
   chats: () => call<{ chats: Chat[] }>("GET", "/chats"),
-  createChat: () => call<{ chat: Chat }>("POST", "/chats"),
+  createChat: (agent?: { device_id: string; workspace: string }) =>
+    call<{ chat: Chat }>("POST", "/chats", agent),
+  devices: () => call<{ devices: Device[] }>("GET", "/bridge/devices"),
   chat: (id: string) =>
     call<{ chat: Chat; messages: Message[] }>("GET", `/chats/${id}`),
   renameChat: (id: string, title: string) =>

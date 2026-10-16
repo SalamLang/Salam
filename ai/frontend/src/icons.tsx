@@ -175,3 +175,20 @@ export const IconKey = (p: P) => (
     <path d="M11 12l9-9M16 7l3 3M14 9l2 2" />
   </Base>
 );
+export const IconFolder = (p: P) => (
+  <Base {...p}>
+    <path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-10z" />
+  </Base>
+);
+export const IconTerminal = (p: P) => (
+  <Base {...p}>
+    <rect x="3" y="4.5" width="18" height="15" rx="2" />
+    <path d="M7 9.5l3 2.5-3 2.5M12.5 15H17" />
+  </Base>
+);
+export const IconFile = (p: P) => (
+  <Base {...p}>
+    <path d="M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8L14 3.5z" />
+    <path d="M14 3.5V8h4.5" />
+  </Base>
+);

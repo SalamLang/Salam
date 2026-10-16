@@ -5,7 +5,6 @@ use crate::device::{Device, DeviceStore};
 use crate::tools::Preview;
 use serde::Serialize;
 use serde_json::json;
-use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -104,24 +103,4 @@ pub fn agent_stop(app: AppHandle, call_id: String) -> bool {
 #[tauri::command]
 pub fn agent_pending(app: AppHandle) -> Vec<Preview> {
     app.state::<Approvals>().pending()
-}
-
-#[tauri::command]
-pub async fn agent_retry(app: AppHandle) -> bool {
-    let url = config::app_url();
-    let reachable = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map(|c| c.get(url.clone()).send())
-        .ok();
-    let ok = match reachable {
-        Some(f) => matches!(f.await, Ok(r) if r.status().as_u16() < 500),
-        None => false,
-    };
-    if ok {
-        if let Some(w) = app.get_webview_window("main") {
-            return w.navigate(url).is_ok();
-        }
-    }
-    false
 }

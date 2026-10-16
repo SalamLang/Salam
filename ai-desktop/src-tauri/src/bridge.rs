@@ -59,11 +59,18 @@ pub async fn run(app: AppHandle) {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         };
-        let res = http
+        let poll = http
             .get(format!("{}/bridge/poll", config::bridge_url()))
             .bearer_auth(&secret)
-            .send()
-            .await;
+            .send();
+        tokio::pin!(poll);
+        let res = tokio::select! {
+            r = &mut poll => r,
+            _ = tokio::time::sleep(Duration::from_millis(1500)) => {
+                set_connected(&app, true);
+                poll.await
+            }
+        };
         match res {
             Ok(r) if r.status().as_u16() == 200 => {
                 set_connected(&app, true);

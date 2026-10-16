@@ -6,6 +6,7 @@ mod device;
 mod tools;
 mod workspace;
 
+use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
@@ -42,6 +43,32 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+async fn connect_main(app: AppHandle) {
+    let url = config::app_url();
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .unwrap_or_else(|_| bridge::client());
+    let mut offline_shown = false;
+    loop {
+        let reachable = matches!(http.get(url.clone()).send().await, Ok(r) if r.status().as_u16() < 500);
+        if let Some(w) = app.get_webview_window("main") {
+            if reachable {
+                let _ = w.navigate(url);
+                return;
+            }
+            if !offline_shown {
+                if let Ok(mut here) = w.url() {
+                    here.set_fragment(Some("offline"));
+                    let _ = w.navigate(here);
+                }
+                offline_shown = true;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
 fn allow_dev_origin(app: &tauri::App) -> tauri::Result<()> {
     if !cfg!(debug_assertions) || std::env::var("SALAM_APP_URL").is_err() {
         return Ok(());
@@ -75,7 +102,6 @@ pub fn run() {
             commands::agent_decide,
             commands::agent_stop,
             commands::agent_pending,
-            commands::agent_retry,
         ])
         .setup(|app| {
             #[cfg(unix)]
@@ -84,6 +110,7 @@ pub fn run() {
             app.manage(device::DeviceStore::load(&handle));
             allow_dev_origin(app)?;
             open_main(&handle)?;
+            tauri::async_runtime::spawn(connect_main(handle.clone()));
             tauri::async_runtime::spawn(bridge::run(handle));
             Ok(())
         })

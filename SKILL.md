@@ -1986,6 +1986,7 @@ salam format app.salam                  # reformat in place (--check to verify; 
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
+salam update [X.Y.Z] [--check]          # upgrade salam and std/ to the newest release (or X.Y.Z)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 

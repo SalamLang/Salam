@@ -42,6 +42,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       publish: ${{ steps.v.outputs.publish }}
+      salam_release: ${{ steps.v.outputs.salam_release }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,19 +65,24 @@ jobs:
           fi
           tag="agent-v$conf"
           publish=false
+          salam_release=
           if [ "$EVENT" != pull_request ] && [ "$ATTACH" != true ] && [ "$REPO" = SalamLang/Salam ]; then
             if gh api "repos/$REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
               echo "::notice::$tag already exists; building without publishing. Bump the version to release."
             else
               publish=true
             fi
+            if gh release view "v$conf" --repo "$REPO" >/dev/null 2>&1; then
+              salam_release="v$conf"
+            fi
           fi
           {
             echo "version=$conf"
             echo "tag=$tag"
             echo "publish=$publish"
+            echo "salam_release=$salam_release"
           } >> "$GITHUB_OUTPUT"
-          echo "version=$conf tag=$tag publish=$publish"
+          echo "version=$conf tag=$tag publish=$publish salam_release=${salam_release:-none}"
 
   check:
     name: Check (${{ matrix.os }})
@@ -374,6 +380,24 @@ jobs:
           path: release/*
           if-no-files-found: error
           retention-days: 14
+      - name: Attach to the Salam release of the same version
+        if: needs.version.outputs.salam_release != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          SALAM_RELEASE: ${{ needs.version.outputs.salam_release }}
+        run: |
+          set -euo pipefail
+          mkdir attach
+          cp release/salam-agent-"$VERSION"-* attach/
+          cp release/SHA256SUMS "attach/salam-agent-$VERSION-SHA256SUMS"
+          cp release/SHA512SUMS "attach/salam-agent-$VERSION-SHA512SUMS"
+          (cd attach && sha256sum -c "salam-agent-$VERSION-SHA256SUMS")
+          gh release upload "$SALAM_RELEASE" --clobber attach/*
+          {
+            echo "### Salam Agent attached to $SALAM_RELEASE"
+            echo ""
+            printf -- '- %s\n' attach/*
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Publish the GitHub release
         if: needs.version.outputs.publish == 'true'
         env:

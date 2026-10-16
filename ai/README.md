@@ -13,21 +13,22 @@ salam build ai/backend/main.salam --output=salam-ai
 
 or `docker build ai/backend`. It is configured through environment variables:
 
-| Variable                                     | Meaning                                                                                   | Default                                                    |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `AI_PORT`, `AI_HOST`                         | where the API listens                                                                     | `8080`, `0.0.0.0`                                          |
-| `AI_DB_HOST`, `AI_DB_PORT`                   | MariaDB server                                                                            | `127.0.0.1`, `3306`                                        |
-| `AI_DB_NAME`, `AI_DB_USER`, `AI_DB_PASSWORD` | MariaDB database and account                                                              | `salam_ai`, `salam_ai`, empty                              |
-| `AI_ENGINE_URL`                              | the private assistant engine                                                              | `http://127.0.0.1:4096`                                    |
-| `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`       | basic auth for the engine, when set                                                       | `salam`, empty                                             |
-| `AI_ENGINE_AGENT`                            | the engine profile to answer with                                                         | `salam`                                                    |
-| `AI_ALLOWED_ORIGINS`                         | comma separated origins allowed by CORS                                                   | `https://ai.salamlang.ir,http://localhost:3000`            |
-| `AI_ADMIN_EMAILS`                            | comma separated emails that may open `/admin`                                             | empty                                                      |
-| `AI_OAUTH_ISSUER`                            | this API's public URL, the OAuth issuer                                                   | `https://ai-api.salamlang.ir`                              |
-| `AI_APP_URL`                                 | the web app, where people sign in and approve apps                                        | `https://ai.salamlang.ir`                                  |
-| `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                  | `https://mcp.salamlang.ir/mcp,http://mcp.salamlang.ir/mcp` |
-| `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters | empty (both endpoints refuse every call)                   |
-| `AI_API_HOURLY`                              | requests per hour each account may send to the API                                        | `100`                                                      |
+| Variable                                     | Meaning                                                                                                                                 | Default                                         |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `AI_PORT`, `AI_HOST`                         | where the API listens                                                                                                                   | `8080`, `0.0.0.0`                               |
+| `AI_DB_HOST`, `AI_DB_PORT`                   | MariaDB server                                                                                                                          | `127.0.0.1`, `3306`                             |
+| `AI_DB_NAME`, `AI_DB_USER`, `AI_DB_PASSWORD` | MariaDB database and account                                                                                                            | `salam_ai`, `salam_ai`, empty                   |
+| `AI_ENGINE_URL`                              | the private assistant engine                                                                                                            | `http://127.0.0.1:4096`                         |
+| `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`       | basic auth for the engine, when set                                                                                                     | `salam`, empty                                  |
+| `AI_ENGINE_AGENT`                            | the engine profile to answer with                                                                                                       | `salam`                                         |
+| `AI_ALLOWED_ORIGINS`                         | comma separated origins allowed by CORS                                                                                                 | `https://ai.salamlang.ir,http://localhost:3000` |
+| `AI_ADMIN_IDS`                               | comma separated account ids that may open `/admin`; preferred over emails                                                               | empty                                           |
+| `AI_ADMIN_EMAILS`                            | comma separated emails that may open `/admin`; these emails can no longer be used to sign up, so add them only after the account exists | empty                                           |
+| `AI_OAUTH_ISSUER`                            | this API's public URL, the OAuth issuer                                                                                                 | `https://ai-api.salamlang.ir`                   |
+| `AI_APP_URL`                                 | the web app, where people sign in and approve apps                                                                                      | `https://ai.salamlang.ir`                       |
+| `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                                                                | `https://mcp.salamlang.ir/mcp`                  |
+| `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters                                               | empty (both endpoints refuse every call)        |
+| `AI_API_HOURLY`                              | requests per hour each account may send to the API                                                                                      | `100`                                           |
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
@@ -114,8 +115,9 @@ the MCP authorization spec:
 - Codes and tokens are stored only as SHA-256 hashes.
 
 `node ai/backend/tests/oauth_flow.mjs` runs the whole flow against a running
-API and MCP server (`API`, `MCP` and `ADMIN_EMAIL` select them; the admin
-email has to be in `AI_ADMIN_EMAILS`).
+API and MCP server (`API`, `MCP`, `ADMIN_EMAIL` and `RESERVED_EMAIL` select
+them). Run it on a fresh database with `AI_ADMIN_IDS=1`, so the first account
+it creates is the admin, and `AI_ADMIN_EMAILS=reserved@test.ir`.
 
 ## Frontend
 

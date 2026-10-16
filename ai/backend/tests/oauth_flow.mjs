@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const MCP = (process.env.MCP ?? "http://127.0.0.1:18092/mcp").replace(/\/$/, "");
 const ADMIN = process.env.ADMIN_EMAIL ?? "admin@test.ir";
+const RESERVED = process.env.RESERVED_EMAIL ?? "reserved@test.ir";
 const REDIRECT = "http://127.0.0.1:9999/callback";
 
 let passed = 0;
@@ -106,7 +107,8 @@ const noPkce = await fetch(`${API}/oauth/authorize?${new URLSearchParams({ respo
 const noPkceLoc = new URL(noPkce.headers.get("location") ?? "", "http://x");
 check("authorize without PKCE redirects back with invalid_request and iss", noPkceLoc.searchParams.get("error") === "invalid_request" && noPkceLoc.searchParams.get("iss") === API && noPkceLoc.searchParams.get("state") === "s1", noPkceLoc.href);
 const wrongRedirect = await fetch(`${API}/oauth/authorize?${new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: "https://evil.example/cb", code_challenge: "x".repeat(43), code_challenge_method: "S256" })}`, { redirect: "manual" });
-check("an unregistered redirect_uri never redirects there", !(wrongRedirect.headers.get("location") ?? "").startsWith("https://evil.example"), wrongRedirect.headers.get("location"));
+const wrongTarget = new URL(wrongRedirect.headers.get("location") ?? "/", API);
+check("an unregistered redirect_uri never redirects there", wrongTarget.hostname !== "evil.example", wrongTarget.href);
 const otherPort = await authorize(clientId, { redirect_uri: "http://127.0.0.1:41234/callback" });
 check("a loopback redirect on another port is accepted", otherPort.status === 302 && !!otherPort.request, otherPort.loc);
 const badTarget = await authorize(clientId, { resource: "https://elsewhere.example/mcp" });
@@ -119,6 +121,8 @@ check("the consent page can read the request", pending.json?.request?.client?.na
 const noUser = await api("POST", `/oauth/requests/${flow.request}/approve`);
 check("approving without signing in is 401", noUser.res.status === 401);
 
+const reserved = await api("POST", "/auth/register", { body: { name: "Not Admin", email: RESERVED, password: "password-123" } });
+check("an email listed in AI_ADMIN_EMAILS cannot be self-registered", reserved.res.status === 403, reserved.json);
 const adminToken = await account(ADMIN, "Admin");
 const me = await api("GET", "/me", { token: adminToken });
 check("/me marks the admin", me.json?.user?.admin === true, me.json);
@@ -138,6 +142,10 @@ const code2 = new URL(approved2.json.redirect).searchParams.get("code");
 const tok = await api("POST", "/oauth/token", { formBody: { grant_type: "authorization_code", code: code2, client_id: clientId, redirect_uri: REDIRECT, code_verifier: flow2.verifier, resource: MCP } });
 check("code exchange issues access and refresh tokens", tok.res.status === 200 && tok.json.token_type === "Bearer" && !!tok.json.access_token && !!tok.json.refresh_token, tok.json);
 check("token responses are not cacheable", (tok.res.headers.get("cache-control") ?? "").includes("no-store"));
+const flowR = await authorize(clientId);
+const codeR = new URL((await api("POST", `/oauth/requests/${flowR.request}/approve`, { token: adminToken })).json.redirect).searchParams.get("code");
+const noRedirect = await api("POST", "/oauth/token", { formBody: { grant_type: "authorization_code", code: codeR, client_id: clientId, code_verifier: flowR.verifier, resource: MCP } });
+check("a token request must repeat redirect_uri when authorize had one", noRedirect.json?.error === "invalid_grant", noRedirect.json);
 const replay = await api("POST", "/oauth/token", { formBody: { grant_type: "authorization_code", code: code2, client_id: clientId, redirect_uri: REDIRECT, code_verifier: flow2.verifier } });
 check("a replayed code is refused", replay.json?.error === "invalid_grant", replay.json);
 
@@ -153,6 +161,9 @@ const failedCall = await mcp(t3.access_token, rpc("tools/call", { name: "salam_c
 check("a failing tool call still answers", failedCall.json?.result?.isError === true);
 const bogus = await mcp("sa_this-is-not-a-real-token-at-all", rpc("tools/list"));
 check("an unknown token gets 401 invalid_token", bogus.res.status === 401 && (bogus.res.headers.get("www-authenticate") ?? "").includes('error="invalid_token"'));
+
+const plainHttp = await fetch(MCP, { method: "POST", headers: { "Content-Type": "application/json", "X-Forwarded-Proto": "http" }, body: JSON.stringify(rpc("tools/list")) });
+check("MCP over plain HTTP is refused before any token is sent", plainHttp.status === 400 && !plainHttp.headers.get("www-authenticate"));
 
 console.log("refresh");
 const r1 = await api("POST", "/oauth/token", { formBody: { grant_type: "refresh_token", refresh_token: t3.refresh_token, client_id: clientId } });

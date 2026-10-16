@@ -43,9 +43,12 @@ const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
 const STREAM_WORKERS := 64
 const STREAM_SECONDS := 900
+const STREAMS_PER_USER := 4
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
+mut STREAM_LOCK := sync.Mutex {}
+mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -68,8 +71,8 @@ func main:
         end
         ret 1
     end
-    aiweb.Configure(env_or("AI_ALLOWED_ORIGINS", "https://ai.salamlang.ir,http://localhost:3000"), os.Env("AI_ADMIN_EMAILS"), os.Env("AI_RESOURCE_SECRET"))
-    aioauth.Configure(env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_RESOURCES", "https://mcp.salamlang.ir/mcp,http://mcp.salamlang.ir/mcp"))
+    aiweb.Configure(env_or("AI_ALLOWED_ORIGINS", "https://ai.salamlang.ir,http://localhost:3000"), os.Env("AI_ADMIN_EMAILS"), os.Env("AI_ADMIN_IDS"), os.Env("AI_RESOURCE_SECRET"))
+    aioauth.Configure(env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_RESOURCES", "https://mcp.salamlang.ir/mcp"))
     engine_pass := os.Env("AI_ENGINE_PASSWORD")
     mut engine_auth := ""
     if engine_pass.len() > 0:
@@ -82,6 +85,7 @@ func main:
         ret 1
     end
     aiturn.Init()
+    STREAM_LOCK = sync.NewMutex()
     aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
@@ -210,7 +214,7 @@ func user_json(id: str, name: str, email: str): str:
     m.push(json.MemberRaw("id", id))
     m.push(json.Member("name", name))
     m.push(json.Member("email", email))
-    m.push(json.MemberBool("admin", aiweb.IsAdmin(email)))
+    m.push(json.MemberBool("admin", aiweb.IsAdmin(id, email)))
     ret json.Object(m)
 end
 
@@ -237,6 +241,10 @@ func register(ctx: i64):
     end
     if not valid_email(email):
         fail(ctx, 400, "email", "نشانی ایمیل درست نیست.")
+        ret
+    end
+    if aiweb.ReservedEmail(email):
+        fail(ctx, 403, "reserved", "با این ایمیل نمی‌توان حساب تازه ساخت.")
         ret
     end
     if pass.len() < 8 or pass.len() > 200:
@@ -675,8 +683,30 @@ func text_event(t: str): str:
     ret "{" + json.Member("t", t) + "}"
 end
 
+func stream_slot(uid: i64, delta: int): bool:
+    key := i64s(uid)
+    _l := sync.Lock(STREAM_LOCK)
+    mut have := 0
+    if STREAM_COUNT.has(key):
+        have = STREAM_COUNT.get(key).to_int()
+    end
+    mut ok := true
+    if delta > 0 and have >= STREAMS_PER_USER:
+        ok = false
+    else:
+        have = have + delta
+        if have <= 0:
+            _r := STREAM_COUNT.remove(key)
+        else:
+            STREAM_COUNT.put(key, "" + have)
+        end
+    end
+    _u := sync.Unlock(STREAM_LOCK)
+    ret ok
+end
+
 func serve_stream(c: tcp.Conn):
-    tcp.SetReadDeadline(c, 10000)
+    tcp.SetReadDeadline(c, 5000)
     mut req := ""
     until req.find("\r\n\r\n") < 0:
         got := tcp.Read(c, 8192)
@@ -763,6 +793,15 @@ func serve_stream(c: tcp.Conn):
         stream_error(c, "404 Not Found", origin, "not_found", "این گفت‌وگو پیدا نشد.")
         ret
     end
+    if not stream_slot(uid, 1):
+        stream_error(c, "429 Too Many Requests", origin, "streams", "پاسخ‌های زیادی را هم‌زمان دنبال می‌کنید. چند لحظه بعد دوباره تلاش کنید.")
+        ret
+    end
+    stream_answer(c, origin, id, mid, owned)
+    _s := stream_slot(uid, 0 - 1)
+end
+
+func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
     aistore.Lock()
     mut rows := aistore.Stmt("SELECT body, status, created FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
     mut found := false

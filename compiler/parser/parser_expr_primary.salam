@@ -70,6 +70,64 @@ func lambda_return_type_ahead(p &: Ps, a &: at.Ast): bool:
     ret found
 end
 
+func is_container_word(w: str): bool:
+    ret str.Equals(w, "Vector") or str.Equals(w, "HashMap") or str.Equals(w, "وکتور") or str.Equals(w, "بردار") or str.Equals(w, "نگاشت")
+end
+
+func generic_ctor_ahead(p &: Ps): bool:
+    t := p_peek(p)
+    if not is_container_word(t.lexeme) or p_peek2(p).kind != tok.TK_LT:
+        ret false
+    end
+    mut depth := 0
+    mut i := 1
+    until i < 64:
+        k := p_peekn(p, i).kind
+        if k == tok.TK_EOF or p_peekn(p, i).begin_line != t.begin_line:
+            ret false
+        end
+        if k == tok.TK_LT:
+            depth += 1
+        else k == tok.TK_GT:
+            depth -= 1
+            if depth == 0:
+                ret p_peekn(p, i + 1).kind == tok.TK_LPAREN
+            end
+        else k == tok.TK_SHR:
+            depth -= 2
+            if depth <= 0:
+                ret depth == 0 and p_peekn(p, i + 1).kind == tok.TK_LPAREN
+            end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func parse_generic_ctor(p &: Ps, a &: at.Ast): int:
+    t := p_peek(p)
+    p_foreign_error(p, "write 'Vector {} as Vector<int>' (or 'HashMap {} as HashMap<str, int>') for an empty container", "a container is not created by calling it")
+    lit := p_mk(p, a, at.AST_STRUCT_LIT)
+    at.SetName(a, lit, t.lexeme)
+    p_fin(p, a, lit)
+    cast := mk_from_node(a, at.AST_CAST, lit)
+    ps_set_a(a, cast, lit)
+    at.SetTypeNode(a, cast, parse_type(p, a))
+    if p_match(p, tok.TK_LPAREN):
+        mut depth := 1
+        until depth > 0 and not p_at_eof(p):
+            if p_at(p, tok.TK_LPAREN):
+                depth += 1
+            else p_at(p, tok.TK_RPAREN):
+                depth -= 1
+            end
+            p_advance(p)
+        end
+    end
+    p_fin(p, a, cast)
+    ret cast
+end
+
 func builtin_callable_name(k: int): str:
     if k == tok.TK_KW_PRINT:
         ret "print"
@@ -204,6 +262,9 @@ func parse_primary(p &: Ps, a &: at.Ast): int:
         p_fin(p, a, n)
         ret n
     end
+    if t.kind == tok.TK_IDENT and generic_ctor_ahead(p):
+        ret parse_generic_ctor(p, a)
+    end
     if t.kind == tok.TK_IDENT:
         if p_peek2(p).kind == tok.TK_LBRACE and not p.no_struct_lit:
             ret parse_struct_lit(p, a)
@@ -325,6 +386,7 @@ func parse_struct_lit(p &: Ps, a &: at.Ast): int:
     p_expect(p, tok.TK_LBRACE, "'{' in struct literal")
 
     p_skip_terminators(p)
+    mut colon_reported := false
     until not p_at(p, tok.TK_RBRACE) and not p_at_eof(p):
         fi := p_mk(p, a, at.AST_FIELD_INIT)
         mut fname := ""
@@ -337,7 +399,15 @@ func parse_struct_lit(p &: Ps, a &: at.Ast): int:
         if fname.len() == 0:
             break
         end
-        p_expect(p, tok.TK_ASSIGN, "'=' in field initializer")
+        if p_at(p, tok.TK_COLON) or p_at(p, tok.TK_COLON_ASSIGN):
+            if not colon_reported:
+                p_foreign_error(p, "write 'Point { x = 1, y = 2 }': struct fields are set with '='", "a struct literal sets fields with '=', not ':'")
+                colon_reported = true
+            end
+            p_advance(p)
+        else:
+            p_expect(p, tok.TK_ASSIGN, "'=' in field initializer")
+        end
         ps_set_a(a, fi, parse_expr(p, a))
         p_fin(p, a, fi)
         at.AddChild(a, n, fi)

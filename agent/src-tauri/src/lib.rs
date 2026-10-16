@@ -27,7 +27,7 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
     let target = config::app_url();
     let handle = app.clone();
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("دستیار سلام")
+        .title("ایجنت سلام")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
         .on_navigation(move |url| {
@@ -82,6 +82,8 @@ fn allow_dev_origin(app: &tauri::App) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    #[cfg(unix)]
+    config::import_login_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(w) = app.get_webview_window("main") {
@@ -104,8 +106,6 @@ pub fn run() {
             commands::agent_pending,
         ])
         .setup(|app| {
-            #[cfg(unix)]
-            config::import_login_path();
             let handle = app.handle().clone();
             app.manage(device::DeviceStore::load(&handle));
             allow_dev_origin(app)?;
@@ -115,5 +115,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running the Salam desktop app");
+        .expect("error while running Salam Agent");
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-const SERVICE: &str = "ir.salamlang.desktop";
+const SERVICE: &str = "ir.salamlang.agent";
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Saved {
@@ -45,7 +45,7 @@ impl DeviceStore {
         let dir = app
             .path()
             .app_config_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("salam-desktop"));
+            .unwrap_or_else(|_| std::env::temp_dir().join("salam-agent"));
         let file = dir.join("device.json");
         let saved: Saved = std::fs::read_to_string(&file)
             .ok()

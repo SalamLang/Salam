@@ -5,8 +5,8 @@ use crate::tools::{self, Call, Preview};
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -45,7 +45,7 @@ fn set_connected(app: &AppHandle, value: bool) {
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(40))
-        .user_agent(concat!("salam-desktop/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("salam-agent/", env!("CARGO_PKG_VERSION")))
         .build()
         .expect("http client")
 }

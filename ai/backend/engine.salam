@@ -31,6 +31,19 @@ pub struct Reply:
     pub failed: bool = false
 end
 
+pub struct Usage:
+    pub ok: bool = false
+    pub input: i64 = 0
+    pub output: i64 = 0
+    pub reasoning: i64 = 0
+    pub cache_read: i64 = 0
+    pub cache_write: i64 = 0
+    pub cost: f64 = 0.0
+    pub tools: int = 0
+    pub steps: int = 0
+    pub ms: i64 = 0
+end
+
 func headers(): HashMap<str, str>:
     mut h := http.NewHeaders()
     h.insert("Content-Type", "application/json")
@@ -70,6 +83,14 @@ func text_of(v: value.Value, key: str): str:
     ret ""
 end
 
+func num(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
 func flag(v: value.Value, key: str): bool:
     f := field(v, key)
     ret value.IsBool(f) and value.AsBool(f)
@@ -100,6 +121,73 @@ end
 
 pub func Delete(sid: str):
     _r := http.DeleteWith(ENGINE_URL + "/session/" + sid, headers())
+end
+
+pub func UsageOf(sid: str): Usage:
+    mut u := Usage {}
+    if sid.len() == 0:
+        ret u
+    end
+    r := http.GetWith(ENGINE_URL + "/session/" + sid + "/message", headers())
+    if not ok_status(r):
+        ret u
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(http.Body(r), err)
+    if not value.IsArray(list):
+        ret u
+    end
+    n := value.ArrayLen(list)
+    mut start := 0
+    repeat n in i:
+        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user":
+            start = i + 1
+        end
+    end
+    mut first := 0 as i64
+    mut last := 0 as i64
+    mut k := start
+    until k < n:
+        m := value.ArrayGet(list, k)
+        info := field(m, "info")
+        if text_of(info, "role") == "assistant":
+            u.ok = true
+            u.steps += 1
+            t := field(info, "tokens")
+            u.input += num(t, "input")
+            u.output += num(t, "output")
+            u.reasoning += num(t, "reasoning")
+            u.cache_read += num(field(t, "cache"), "read")
+            u.cache_write += num(field(t, "cache"), "write")
+            c := field(info, "cost")
+            if value.IsNumber(c):
+                u.cost += value.AsFloat(c)
+            end
+            tm := field(info, "time")
+            created := num(tm, "created")
+            completed := num(tm, "completed")
+            if first == 0 or (created > 0 and created < first):
+                first = created
+            end
+            if completed > last:
+                last = completed
+            end
+            parts := field(m, "parts")
+            if value.IsArray(parts):
+                repeat value.ArrayLen(parts) in j:
+                    if text_of(value.ArrayGet(parts, j), "type") == "tool":
+                        u.tools += 1
+                    end
+                end
+            end
+        end
+        k += 1
+    end
+    value.ValueFree(list)
+    if first > 0 and last >= first:
+        u.ms = last - first
+    end
+    ret u
 end
 
 pub func Poll(sid: str): Reply:

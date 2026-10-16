@@ -51,6 +51,13 @@ escaped automatically. `<page>.title` and `<page>.description` fill the
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.
 
+The Agent page links to the desktop builds on the `v<VERSION>` release:
+`agent.release` is the release page and `agent.download` the filename prefix
+the download links append to, for example
+`{{agent.download}}windows-x86_64-setup.exe`. The compiler release workflow
+builds the agent and uploads its files there without the agent's own version
+in their names, so the links do not change when the agent version does.
+
 SEO: each page's `<page>.title` is the full `<title>` (write the whole
 phrase, including the brand), `<page>.description` the meta description and
 `<page>.keywords` its keywords (falling back to `site.keywords`). The

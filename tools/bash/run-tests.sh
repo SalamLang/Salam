@@ -787,6 +787,14 @@ if want db; then
                     fi
                     continue
                     ;;
+                meililive_*)
+                    if [ -z "${SALAM_TEST_MEILI:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MEILI to \"url master-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
                 esac
                 add_job build "db/$lang/$name" "$f" "$lang" "$exp" "--cc=$DBCC -DSALAM_DB_MOCK"
             done

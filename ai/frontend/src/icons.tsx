@@ -131,6 +131,12 @@ export const IconPlug = (p: P) => (
     <path d="M9 3v4M15 3v4M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v4" />
   </Base>
 );
+export const IconMonitor = (p: P) => (
+  <Base {...p}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="M8 20h8M12 16v4" />
+  </Base>
+);
 export const IconShield = (p: P) => (
   <Base {...p}>
     <path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z" />

@@ -3,11 +3,13 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server for the
 Salam programming language, **written in Salam**.
 
-It gives an AI model two things it otherwise has to guess at: the compiler
-(check, build, run, format, inspect, emit IR) and the standard library (what
-packages exist, what they actually export, and working examples). Diagnostics
-come back as structured data with exact line and column positions, not as
-scraped text.
+It gives an AI model the three things it otherwise has to guess at: the
+language itself (the full reference, searchable by topic or error code), the
+standard library (what exists, its exact signatures, and working examples),
+and the compiler (check, build, run, format, translate, inspect, emit IR).
+Diagnostics come back as structured data with exact line and column
+positions, the offending source line, the compiler's help, and a hint when the
+code uses syntax borrowed from another language.
 
 Because it is a single native binary with no runtime dependencies, anyone who
 has `salam` can run it. There is no Node, Python or package manager in the
@@ -41,7 +43,8 @@ review what their apps did under
 [Connected apps](https://ai.salamlang.ir/apps) and disconnect them there.
 
 The hosted server cannot see your files, so its compiler tools take the
-program text in a `source` argument instead of a `path`. It never runs code:
+program text in a `source` argument (plus `files` for a multi-file program)
+instead of a `path`. It never runs code:
 `salam_run`, `salam_exec` and `salam_build` exist only when you run the server
 yourself. Everything else, including the stdlib, example and keyword tools,
 works the same.
@@ -146,11 +149,12 @@ workspace and looks for `std/` next to the compiler, so point
 
 ### 🌍 Environment Variables
 
-| Variable         | Default                                        | Purpose                              |
-| ---------------- | ---------------------------------------------- | ------------------------------------ |
-| `SALAM_MCP_BIN`  | `<root>/salam[.exe]`, else `salam` from `PATH` | Which compiler to drive              |
-| `SALAM_MCP_ROOT` | `.` (the launcher sets it to the checkout)     | Workspace that paths resolve against |
-| `SALAM_STD`      | `<root>/std`, else `std` beside the compiler   | Standard library root                |
+| Variable                | Default                                        | Purpose                                             |
+| ----------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| `SALAM_MCP_BIN`         | `<root>/salam[.exe]`, else `salam` from `PATH` | Which compiler to drive                             |
+| `SALAM_MCP_ROOT`        | `.` (the launcher sets it to the checkout)     | Workspace that paths resolve against                |
+| `SALAM_STD`             | `<root>/std`, else `std` beside the compiler   | Standard library root                               |
+| `SALAM_MCP_RUN_TIMEOUT` | `60`                                           | Seconds before `salam_run`/`salam_exec` are stopped |
 
 With `--http` the server also reads:
 
@@ -208,15 +212,20 @@ There is no launcher script for Windows yet. Build `salam-mcp.exe` with
 
 ## 🛠️ Tools
 
+Every compiler tool takes either a workspace `path` or the program text as
+`source`, plus `files` (`{"util.salam": "..."}`) for the files it includes.
+The hosted server takes only `source` and `files`.
+
 ### 🔧 Compiler
 
-| Tool           | Use it for                                                              |
-| -------------- | ----------------------------------------------------------------------- |
-| `salam_check`  | Type-check without codegen; the fast loop, run after every edit         |
-| `salam_build`  | Full compile including linking; supports `backend`, `release`, `target` |
-| `salam_run`    | Build and execute, capturing stdout, stderr and exit code               |
-| `salam_exec`   | Interpret without a C toolchain (not trustworthy for unsigned maths)    |
-| `salam_format` | Report formatting drift; never rewrites files                           |
+| Tool              | Use it for                                                                      |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `salam_check`     | Type-check without codegen; the fast loop, run after every edit                 |
+| `salam_build`     | Full compile including linking; supports `backend`, `release`, `target`         |
+| `salam_run`       | Build and execute with optional `stdin`, capturing stdout, stderr and exit code |
+| `salam_exec`      | Run on the interpreter without a C toolchain, with optional `stdin`             |
+| `salam_format`    | Return the canonical formatting of a file as text; never rewrites files         |
+| `salam_translate` | Return a program rewritten between English and Persian Salam                    |
 
 ### 🔬 Inspection
 
@@ -227,23 +236,63 @@ There is no launcher script for Windows yet. Build `salam-mcp.exe` with
 | `salam_js`      | Compile to browser-ready JavaScript                   |
 | `salam_version` | Version, commit and build date of the driven compiler |
 
-### 📚 Standard library and examples
+### 📚 Language, standard library and examples
 
-| Tool                    | Use it for                                       |
-| ----------------------- | ------------------------------------------------ |
-| `salam_stdlib_packages` | Every importable `std` package in this checkout  |
-| `salam_stdlib_symbols`  | A package's real public declarations, filterable |
-| `salam_find_examples`   | Search the test corpus for working usages        |
-| `salam_read_source`     | Read a line-numbered slice of any workspace file |
-| `salam_keywords`        | English/Persian keyword table                    |
+| Tool                    | Use it for                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `salam_docs`            | The reference section for a topic ("lambda", "loops") or an error code ("E085") |
+| `salam_stdlib_search`   | Find std functions, methods and types by what they do, across every package     |
+| `salam_stdlib_packages` | Every importable `std` package in this checkout                                 |
+| `salam_stdlib_symbols`  | One package's types, fields, methods, functions and constants with signatures   |
+| `salam_find_examples`   | Search the test corpus (then std) for working usages, with context lines        |
+| `salam_read_source`     | Read a line-numbered slice of any checkout file                                 |
+| `salam_keywords`        | English/Persian keyword table                                                   |
+
+Every tool carries MCP annotations: all of them are read-only and idempotent
+except `salam_run` and `salam_exec`, which execute the program.
+
+### 🩺 Diagnostics
+
+A failed check opens with a one-line summary (`salam check main.salam: 3
+errors`) and lists each diagnostic with:
+
+- the code, `file:line:column` and message;
+- the source line with a caret under the column;
+- the compiler's `help`, when it gives one;
+- a `hint` when the line uses syntax from another language (`for x in`,
+  `while`, `func (...)` lambdas, `elif`, `return`, braces, `.length`, `self`,
+  `True`/`None`, foreign type names) or when a keyword error really comes from
+  an unfinished line above;
+- for a coded error, the minimal failing program in `tests/en/errors` that
+  `salam_docs` shows for that code.
+
+When the first error is a parse error the result says so, since the rest are
+usually knock-on effects. The same data is in `structuredContent.diagnostics`.
+
+## 💬 Prompts
+
+| Prompt        | Arguments         | What it sets up                                      |
+| ------------- | ----------------- | ---------------------------------------------------- |
+| `salam-write` | `task`, `lang`    | Write a new program with the check-and-fix workflow  |
+| `salam-port`  | `code`, `from`    | Port code from another language into idiomatic Salam |
+| `salam-fix`   | `code`, `problem` | Diagnose and fix a program that fails or misbehaves  |
+
+Each one carries the workflow and the short list of rules that differ from
+other languages. The same list is in the server's `instructions`, so a client
+that injects them gives the model the rules before its first line of Salam.
 
 ## 📖 Resources
 
 | URI                         | Contents                                                       |
 | --------------------------- | -------------------------------------------------------------- |
-| `salam://guide/agents.md`   | The language guide (`docs/ai/AGENTS.md`)                       |
+| `salam://guide/skill.md`    | The complete language reference (`SKILL.md`)                   |
+| `salam://guide/agents.md`   | The short guide for agents (`docs/ai/AGENTS.md`)               |
 | `salam://stdlib/index.json` | Every package mapped to its public declarations, computed live |
 | `salam://guide/llms.txt`    | Orientation entry point                                        |
+
+Two templates: `salam://stdlib/{package}` is one package's API (as
+`salam_stdlib_symbols` shows it) and `salam://docs/{topic}` is the reference
+section for a topic or error code.
 
 ## 🔒 Safety
 
@@ -258,7 +307,12 @@ server's own working directory. They are validated rather than escaped:
 anything containing shell metacharacters or `..`, or an absolute path outside
 the workspace, is refused outright.
 
-In HTTP mode each call writes its `source` to a fresh temporary directory,
+`salam_run` and `salam_exec` read stdin from the `stdin` argument (empty by
+default, never the server's own stdin) and are killed after
+`SALAM_MCP_RUN_TIMEOUT` seconds (default 60; 0 turns the limit off), so an
+endless loop is reported as a timeout instead of hanging the server.
+
+In HTTP mode each call writes its `source` and `files` to a fresh temporary directory,
 compiles it there and deletes the directory afterwards, so concurrent callers
 never share files. Compiler processes are capped at `SALAM_MCP_JOBS` and
 killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 1 MB
@@ -294,8 +348,10 @@ node tools/mcp/tests/protocol_test.mjs ./salam-mcp "$PWD"
 ```
 
 Spawns real server processes and asserts on the wire format: framing,
-dual-era negotiation, error codes, structured diagnostics, path-traversal
-refusal. CI runs this on every change to `tools/mcp/`, `docs/ai/` or `std/`.
+dual-era negotiation, error codes, structured diagnostics and their hints,
+docs and stdlib search, multi-file and stdin inputs, run timeouts, prompts,
+resource templates, path-traversal refusal, and the sign-in responses
+against a mock introspection endpoint. CI runs this on every change to `tools/mcp/`, `docs/ai/` or `std/`.
 
 ## 🔄 Regenerating the committed stdlib index
 
@@ -324,18 +380,22 @@ cannot regenerate anything; there the hook reports that and passes.
 | `Dockerfile`          | Image for the hosted server                                |
 | `mcp_rpc.salam`       | JSON-RPC framing, EOF-aware line reads, protocol constants |
 | `mcp_server.salam`    | Method dispatch and dual-era version negotiation           |
-| `mcp_registry.salam`  | Tool catalog (JSON Schemas) and `tools/call` routing       |
-| `mcp_tools.salam`     | Compiler-driving handlers                                  |
-| `mcp_docs.salam`      | Stdlib, example-search and keyword handlers                |
-| `mcp_resources.salam` | Resource list/read, live stdlib index                      |
+| `mcp_registry.salam`  | Tool catalog (JSON Schemas, annotations) and routing       |
+| `mcp_tools.salam`     | Compiler-driving handlers and diagnostic enrichment        |
+| `mcp_hints.salam`     | Hints for syntax borrowed from other languages             |
+| `mcp_docs.salam`      | Stdlib, search, example, docs and keyword handlers         |
+| `mcp_api.salam`       | Parses `std/` into an in-memory declaration index          |
+| `mcp_guide.salam`     | Splits the reference into sections; error-code examples    |
+| `mcp_decl.salam`      | The declaration and section records                        |
+| `mcp_prompts.salam`   | Prompts, the language crib and the server instructions     |
+| `mcp_resources.salam` | Resources, templates, live stdlib index                    |
 | `mcp_exec.salam`      | Subprocess execution and argument validation               |
 | `mcp_result.salam`    | The `ToolResult` shape shared by every handler             |
 | `mcp_text.salam`      | Backend-safe string helpers                                |
 
-Two implementation notes worth knowing, both documented at the top of the file
-that works around them: the server avoids `str.Split` (it can segfault on its
-last element on gcc-linked builds) and avoids `os.shell.Run` (it deadlocks when
-a child outfills the pipe buffer, which compiler dumps routinely do).
+Compiler processes are started through `os.Run` with stdin, stdout and stderr
+redirected to temporary files, so a child that writes a lot of output (a full
+AST dump, say) can never block on a full pipe.
 
 ## 🔗 Links
 

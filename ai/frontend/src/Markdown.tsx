@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { hasRtl, highlight } from "./highlight";
+import { codeDirection, highlight } from "./highlight";
 import { IconCheck, IconCopy } from "./icons";
 
 const LANG_NAMES: Record<string, string> = {
@@ -41,18 +41,8 @@ export function CopyButton({ text, label = "رونوشت" }: { text: string; lab
   );
 }
 
-function codeDir(code: string): "rtl" | "ltr" {
-  const bare = code
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, "")
-    .replace(/`[^`]*`/g, "")
-    .replace(/«[^»\n]*»/g, "")
-    .replace(/\/\/[^\n]*/g, "")
-    .replace(/#[^\n]*/g, "");
-  return hasRtl(bare) ? "rtl" : "ltr";
-}
-
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const dir = codeDir(code);
+  const dir = codeDirection(code, lang);
   const name = LANG_NAMES[lang] || lang || "کد";
   return (
     <div className="code-block">

@@ -110,7 +110,7 @@ export function ActivityPanel({
   } else {
     const took = ms && ms > 0 ? seconds(ms) : "";
     headline = took ? `${took} فکر کرد` : "فکر کرد";
-    if (sources > 0) headline += ` · ${toPersianDigits(sources)} مرحله‌ی بررسی`;
+    if (sources > 0) headline += `، ${toPersianDigits(sources)} مرحله‌ی بررسی`;
   }
   const liveThought = pending && last?.kind === "think" ? lastLine(last.text) : "";
   return (

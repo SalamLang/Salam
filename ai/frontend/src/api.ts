@@ -289,7 +289,12 @@ export type StreamHandlers = {
   reset: (text: string) => void;
   phase: (phase: Phase) => void;
   activity: (steps: ActivityStep[]) => void;
-  done: (body: string, status: Message["status"], activity?: ActivityStep[], ms?: number) => void;
+  done: (
+    body: string,
+    status: Message["status"],
+    activity?: ActivityStep[],
+    ms?: number,
+  ) => void;
 };
 
 export async function streamMessage(
@@ -346,9 +351,15 @@ export async function streamMessage(
       if (event === "delta") on.delta(payload.t ?? "");
       else if (event === "reset") on.reset(payload.t ?? "");
       else if (event === "phase" && payload.phase) on.phase(payload.phase);
-      else if (event === "activity" && Array.isArray(payload.steps)) on.activity(payload.steps);
+      else if (event === "activity" && Array.isArray(payload.steps))
+        on.activity(payload.steps);
       else if (event === "done") {
-        on.done(payload.body ?? "", payload.status ?? "done", Array.isArray(payload.activity) ? payload.activity : undefined, payload.ms);
+        on.done(
+          payload.body ?? "",
+          payload.status ?? "done",
+          Array.isArray(payload.activity) ? payload.activity : undefined,
+          payload.ms,
+        );
         reader.cancel().catch(() => {});
         return true;
       }
@@ -386,10 +397,13 @@ export const api = {
       { text },
     ),
   poll: (id: string, mid: number) =>
-    call<{ id: number; body: string; status: Message["status"]; phase: Phase; activity?: ActivityStep[] }>(
-      "GET",
-      `/chats/${id}/messages/${mid}`,
-    ),
+    call<{
+      id: number;
+      body: string;
+      status: Message["status"];
+      phase: Phase;
+      activity?: ActivityStep[];
+    }>("GET", `/chats/${id}/messages/${mid}`),
   stop: (id: string) => call<{ body: string }>("POST", `/chats/${id}/stop`),
   consentRequest: (id: string) =>
     call<{ request: ConsentRequest }>(

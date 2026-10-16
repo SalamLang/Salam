@@ -50,12 +50,23 @@ function settle(id: number, ok: boolean) {
 
 const EXIT_MS = 140;
 
+const FONT_FACES = ["400 15px Shabnam", "500 15px Shabnam", "700 17px Shabnam"];
+
+function warmFonts() {
+  if (!document.fonts?.load) return;
+  for (const f of FONT_FACES) document.fonts.load(f, "حذف گفت‌وگو").catch(() => {});
+}
+
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function ConfirmHost() {
   const req = useSyncExternalStore(subscribe, current, current);
   const [shown, setShown] = useState<Request | null>(null);
   const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    warmFonts();
+  }, []);
 
   useEffect(() => {
     if (req && req.id !== shown?.id && !closing) {

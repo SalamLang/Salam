@@ -309,12 +309,19 @@ check and rejects a `Variant` subject outright (semantic error, points you at
 `match`). `break` inside a `switch` exits the switch only; `continue` is not
 caught by it and still targets an enclosing loop.
 
-## 12. Enum members require a comma
+## 12. Enum members on one line need commas
 
-`enum E: A, B, C end` - the comma between members is mandatory, not optional
-style. A bare newline is not enough because member names may contain spaces
-(`enum Status: not started, in progress, done end`), so leaving the comma out
-is a compile error, not a silent misparse.
+`enum E: A, B, C end` - on a single line the comma between members is
+mandatory, because member names may contain spaces (`enum Status: not
+started, in progress, done end`): `enum E: A B end` declares one member named
+`A B`. One member per line works without commas:
+
+```salam
+enum Color:
+    Red
+    Green
+end
+```
 
 ---
 
@@ -347,16 +354,14 @@ files`; give every source file a name unique across the whole project.
   real effect (a sleep, a print, an atomic) or build it with
   `--backend=llvm`.
 
-- **The interpreter's HTTPS is slow: raise `--timeout` for it.** `salam exec`
-  supports networking now, including the TLS path in `net.http`, but the
-  handshake's certificate-chain math runs as tree-walked Salam instead of
-  native code, so a real HTTPS request can take upward of a minute. The
-  default per-run deadline is 5 seconds, so a program that dials `https://`
-  under `salam exec` needs an explicit `--timeout` of tens of seconds or
-  more, or it will report a timed-out execution well before the handshake
-  finishes. Plain `http://` has none of this cost. For anything
-  latency-sensitive, `salam run`/`salam build` compiles the same TLS code to
-  native speed.
+- **The interpreter's HTTPS is slow.** `salam exec` supports networking,
+  including the TLS path in `net.http`, but the handshake's certificate-chain
+  math runs as interpreted Salam instead of native code, so a real HTTPS
+  request can take upward of a minute. `salam exec` has no deadline by
+  default; a caller that sets one (`--timeout=MS`, `SALAM_EXEC_TIMEOUT_MS`, or
+  the MCP server's `SALAM_MCP_RUN_TIMEOUT`) needs it in the tens of seconds
+  for HTTPS. Plain `http://` has none of this cost, and `salam run` compiles
+  the same TLS code to native speed.
 
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
@@ -392,7 +397,7 @@ end
 ```
 
 ```sh
-salam check  hello.salam     # via MCP: fastest, no codegen
+salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
 salam run    hello.salam     # build and execute
 salam format hello.salam --check
 ```

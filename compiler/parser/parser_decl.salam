@@ -564,6 +564,7 @@ func parse_impl(p &: Ps, a &: at.Ast): int:
 end
 
 func parse_struct(p &: Ps, a &: at.Ast): int:
+    head := p_peek(p)
     p_rule(p, "struct_def")
     n := p_mk(p, a, at.AST_STRUCT_DEF)
     p_advance(p)
@@ -614,7 +615,7 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
             p_advance(p)
         end
     end
-    p_expect(p, tok.TK_KW_END, "'end' to close struct")
+    p_expect_end(p, head, "'end' to close struct")
     p_fin(p, a, n)
     ret n
 end
@@ -823,6 +824,24 @@ func p_at_old_operator_word(p &: Ps): bool:
     ret tk_is_op_method_start(p_peekn(p, 1).kind) or tk_is_non_overloadable_op(p_peekn(p, 1).kind)
 end
 
+func foreign_func_ahead(p &: Ps): bool:
+    w := p_peek(p).lexeme
+    if not str.Equals(w, "def") and not str.Equals(w, "fn") and not str.Equals(w, "function") and not str.Equals(w, "fun"):
+        ret false
+    end
+    run := p_ident_run_len(p)
+    ret run >= 2 and p_peekn(p, run).kind == tok.TK_LPAREN
+end
+
+func foreign_class_ahead(p &: Ps): bool:
+    if not str.Equals(p_peek(p).lexeme, "class"):
+        ret false
+    end
+    run := p_ident_run_len(p)
+    nk := p_peekn(p, run).kind
+    ret run >= 2 and (nk == tok.TK_COLON or nk == tok.TK_LPAREN or nk == tok.TK_LBRACE)
+end
+
 func parse_function(p &: Ps, a &: at.Ast, allow_untyped: bool): int:
     p_rule(p, "function_def")
     n := p_mk(p, a, at.AST_FUNC_DEF)
@@ -961,6 +980,12 @@ func parse_top_level(p &: Ps, a &: at.Ast): int:
     else k == tok.TK_KW_MUT:
         n = parse_var_decl(p, a)
         p_term(p)
+    else k == tok.TK_IDENT and foreign_func_ahead(p):
+        p_foreign_error(p, "write 'func name(a: int): int:' and close the body with 'end'", "Salam declares functions with 'func'")
+        n = parse_function(p, a, true)
+    else k == tok.TK_IDENT and foreign_class_ahead(p):
+        p_foreign_error(p, "write 'struct Name:' with 'pub field: Type = value' lines and 'pub func' methods inside, closed by 'end'", "Salam has no classes; use 'struct'")
+        n = parse_struct(p, a)
     else k == tok.TK_IDENT:
         n = parse_bare_var_decl(p, a)
         p_term(p)

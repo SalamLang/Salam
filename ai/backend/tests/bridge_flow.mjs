@@ -112,7 +112,7 @@ console.log("mcp endpoint");
 const unauth = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "nope-nope-nope-nope");
 check("the MCP endpoint needs the bridge secret", unauth.res.status === 401);
 const init = await mcp({ jsonrpc: "2.0", id: "a", method: "initialize", params: { protocolVersion: "2025-06-18" } });
-check("initialize answers with tools capability", init.json.id === "a" && init.json.result.capabilities.tools !== undefined && init.json.result.serverInfo.name === "salam-desktop", init.json);
+check("initialize answers with tools capability", init.json.id === "a" && init.json.result.capabilities.tools !== undefined && init.json.result.serverInfo.name === "salam-agent", init.json);
 const tools = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
 const names = tools.json.result.tools.map((t) => t.name);
 check("tools/list has every desktop tool", ["shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests"].every((n) => names.includes(n)), names);

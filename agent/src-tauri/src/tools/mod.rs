@@ -356,7 +356,11 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
                 }
             }
         }
-        other => return Err(format!("This desktop app does not know the tool {other}. Update the app.")),
+        other => {
+            return Err(format!(
+                "This version of Salam Agent does not know the tool {other}. Ask the user to update Salam Agent."
+            ))
+        }
     };
     Ok(Plan { preview, action })
 }

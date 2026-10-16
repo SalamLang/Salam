@@ -27,7 +27,8 @@ http.createServer((req, res) => {
       const text = full.slice(0, Math.max(1, Math.floor(full.length * frac)));
       return send(200, [
         { info: { role: "user" }, parts: [{ type: "text", text: s.prompt }] },
-        { info: { role: "assistant", finish: done ? "stop" : "", time: done ? { completed: Date.now() } : {} }, parts: [{ type: "text", text }] },
+        { info: { role: "assistant", finish: "tool-calls", time: { created: s.start, completed: s.start + 200 }, cost: 0.0004, tokens: { input: 60, output: 8, reasoning: 2, cache: { read: 200, write: 10 } } }, parts: [{ type: "tool", tool: "salam_salam_check", state: { status: "completed" } }] },
+        { info: { role: "assistant", finish: done ? "stop" : "", time: done ? { created: s.start + 200, completed: s.start + 1200 } : { created: s.start + 200 }, cost: 0.0008, tokens: { input: 40, output: 12, reasoning: 3, cache: { read: 100, write: 0 } } }, parts: [{ type: "text", text }] },
       ]);
     }
     if ((m = /^\/session\/([^/]+)\/abort$/.exec(url.pathname))) return send(200, true);

@@ -73,9 +73,15 @@ check("the first chunk carries the assistant role", chunks[0].choices[0].delta.r
 check("the stream ends with stop, usage and [DONE]", chunks.some((c) => c.choices?.[0]?.finish_reason === "stop") && chunks.some((c) => c.usage && c.choices.length === 0) && events.at(-1) === "[DONE]", events.slice(-3));
 check("streamed text is the whole answer without dashes", streamed.startsWith("Echo: Stream please") && streamed.includes("done") && !DASHES.test(streamed), streamed);
 
+console.log("usage");
+const um = await chat(key, { model: "salam", messages: [{ role: "user", content: "usage please" }] });
+const uj = await um.json();
+check("usage reports the engine's real tokens", uj.usage.prompt_tokens === 410 && uj.usage.completion_tokens === 25 && uj.usage.total_tokens === 435, uj.usage);
+check("usage details carry cached and reasoning tokens", uj.usage.prompt_tokens_details?.cached_tokens === 300 && uj.usage.completion_tokens_details?.reasoning_tokens === 5, uj.usage);
+
 console.log("logging");
 const mine = await api("GET", "/keys/requests", session);
-const last = mine.json.requests[0];
+const last = mine.json.requests.find((r) => r.prompt.includes("Stream please"));
 const first = mine.json.requests.find((r) => r.project === "website-bot");
 check("requests are logged with status, prompt and response", last.status === "done" && last.stream === true && last.prompt.includes("Stream please") && last.response.includes("done"), last);
 check("project header and end user are recorded", first?.end_user === "end-user-7" && first?.key?.name === "test-bot", first);
@@ -83,6 +89,27 @@ const adm = await api("GET", "/admin/requests?project=website-bot", session);
 check("admin sees requests with the user", adm.json.requests[0]?.user?.email === ADMIN, adm.json.requests[0]);
 const sum = await api("GET", "/admin/summary", session);
 check("admin summary counts API requests and projects", sum.json.api_requests >= 2 && sum.json.top_projects.some((p) => p.name === "website-bot") && typeof sum.json.daily.at(-1).api === "number", sum.json);
+const stored = (await api("GET", "/keys/requests", session)).json.requests.find((r) => r.prompt.includes("usage please"));
+check("each request stores input, output, cache, cost and tools", stored?.usage?.input === 100 && stored.usage.output === 20 && stored.usage.cache_read === 300 && stored.usage.cache_write === 10 && stored.usage.reasoning === 5 && stored.usage.tools === 1 && Math.abs(stored.usage.cost - 0.0012) < 1e-9, stored?.usage);
+const chatRes = await api("POST", "/chats", session);
+const sent = await api("POST", `/chats/${chatRes.json.chat.id}/messages`, session, { text: "chat usage" });
+let polled;
+for (let i = 0; i < 40; i += 1) {
+  polled = await api("GET", `/chats/${chatRes.json.chat.id}/messages/${sent.json.assistant.id}`, session);
+  if (polled.json.status !== "pending") break;
+  await new Promise((r) => setTimeout(r, 300));
+}
+check("a chat answer completes", polled.json.status === "done", polled.json);
+const usum = (await api("GET", "/admin/summary", session)).json;
+const today = usum.usage?.find((p) => p.key === "today");
+check("admin usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => usum.usage?.some((p) => p.key === k)), usum.usage?.map((p) => p.key));
+check("today's chat usage counts the chat answer's tokens", today?.chat?.count >= 1 && today.chat.input >= 100 && today.chat.cache_read >= 300, today?.chat);
+check("today's API usage sums the API requests", today?.api?.input >= 100 && today.api.output >= 20, today?.api);
+const lastMonth = usum.usage.find((p) => p.key === "last_month");
+check("last month ends where this month starts", lastMonth.to === usum.usage.find((p) => p.key === "month").from && lastMonth.from < lastMonth.to);
+check("daily rows carry token totals", typeof usum.daily.at(-1).tokens_in === "number" && usum.daily.at(-1).tokens_in > 0, usum.daily.at(-1));
+const urow = (await api("GET", "/admin/users?q=admin", session)).json.users[0];
+check("users show tokens, last login and login count", urow.tokens > 0 && urow.last_login > 0 && urow.logins >= 1, urow);
 const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);

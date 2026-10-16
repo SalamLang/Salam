@@ -1,0 +1,73 @@
+const numberFmt = new Intl.NumberFormat("fa-IR");
+const dateFmt = new Intl.DateTimeFormat("fa-IR", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const dateTimeFmt = new Intl.DateTimeFormat("fa-IR", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const dayFmt = new Intl.DateTimeFormat("fa-IR", {
+  month: "short",
+  day: "numeric",
+});
+const relFmt = new Intl.RelativeTimeFormat("fa", { numeric: "auto" });
+
+export function fmtNum(n: number): string {
+  return numberFmt.format(n);
+}
+
+export function fmtDate(ts: number): string {
+  return ts ? dateFmt.format(ts * 1000) : "";
+}
+
+export function fmtDateTime(ts: number): string {
+  return ts ? dateTimeFmt.format(ts * 1000) : "";
+}
+
+export function fmtDay(day: string): string {
+  const d = new Date(`${day}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? day : dayFmt.format(d);
+}
+
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 365 * 86400],
+  ["month", 30 * 86400],
+  ["week", 7 * 86400],
+  ["day", 86400],
+  ["hour", 3600],
+  ["minute", 60],
+];
+
+export function fmtRelative(ts: number): string {
+  if (!ts) return "هرگز";
+  const diff = ts - Date.now() / 1000;
+  const abs = Math.abs(diff);
+  if (abs < 45) return "همین الان";
+  for (const [unit, size] of UNITS) {
+    if (abs >= size) return relFmt.format(Math.round(diff / size), unit);
+  }
+  return relFmt.format(Math.round(diff / 60), "minute");
+}
+
+export function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${fmtNum(Math.round(ms))} میلی‌ثانیه`;
+  return `${fmtNum(Math.round(ms / 100) / 10)} ثانیه`;
+}
+
+export function prettyArgs(args: string): string {
+  if (!args) return "";
+  try {
+    return JSON.stringify(JSON.parse(args), null, 2);
+  } catch {
+    return args;
+  }
+}
+
+export function initial(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || "?";
+}

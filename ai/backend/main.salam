@@ -22,9 +22,18 @@ import str
 import encoding.json
 import conv
 import crypto
+import net.tcp
+import chan
+import sync
 
 include aistore "store.salam"
+include aiweb "web.salam"
+include aioauth "oauth.salam"
+include aiadmin "admin.salam"
 include aiengine "engine.salam"
+include ailive "live.salam"
+include aiturn "turn.salam"
+include aiopenai "openai.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -32,8 +41,14 @@ const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
+const STREAM_WORKERS := 64
+const STREAM_SECONDS := 900
+const STREAMS_PER_USER := 4
 
-mut ORIGINS := ","
+mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
+mut STREAM_SRV := tcp.Server {}
+mut STREAM_LOCK := sync.Mutex {}
+mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -56,16 +71,41 @@ func main:
         end
         ret 1
     end
-    ORIGINS = "," + env_or("AI_ALLOWED_ORIGINS", "https://ai.salamlang.ir,http://localhost:3000") + ","
+    aiweb.Configure(env_or("AI_ALLOWED_ORIGINS", "https://ai.salamlang.ir,http://localhost:3000"), os.Env("AI_ADMIN_EMAILS"), os.Env("AI_ADMIN_IDS"), os.Env("AI_RESOURCE_SECRET"))
+    aioauth.Configure(env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_RESOURCES", "https://mcp.salamlang.ir/mcp"))
     engine_pass := os.Env("AI_ENGINE_PASSWORD")
     mut engine_auth := ""
     if engine_pass.len() > 0:
         engine_auth = "Basic " + encoding.Base64Encode(env_or("AI_ENGINE_USER", "salam") + ":" + engine_pass)
     end
-    aiengine.Configure(str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/"), engine_auth, env_or("AI_ENGINE_AGENT", "salam"))
+    engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
+    aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"))
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
+    end
+    aiturn.Init()
+    STREAM_LOCK = sync.NewMutex()
+    aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int())
+    mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
+    mut engine_port := 80
+    colon := engine_host.find(":")
+    if colon > 0:
+        engine_port = engine_host.substr(colon + 1, engine_host.len() - colon - 1).to_int()
+        engine_host = engine_host.substr(0, colon)
+    end
+    ailive.Start(engine_host, engine_port, engine_auth)
+    stream_port := env_or("AI_STREAM_PORT", "8081").to_int()
+    STREAM_SRV = tcp.Bind(stream_port)
+    if tcp.Ok(STREAM_SRV):
+        STREAM_JOBS.init(256)
+        repeat STREAM_WORKERS:
+            _w := spawn(stream_worker)
+        end
+        _a := spawn(stream_acceptor)
+        println "salam-ai streaming on port", stream_port
+    else:
+        println "cannot listen for streams on port", stream_port
     end
     port := env_or("AI_PORT", "8080").to_int()
     mut r := router.NewRouter()
@@ -82,6 +122,9 @@ func main:
     router.Post(r, "/chats/:id/messages", send_message)
     router.Get(r, "/chats/:id/messages/:mid", poll_message)
     router.Post(r, "/chats/:id/stop", stop_message)
+    aioauth.Routes(r)
+    aiadmin.Routes(r)
+    aiopenai.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop"]:
         router.Options(r, path, preflight)
     end
@@ -94,39 +137,19 @@ func main:
 end
 
 func allowed_origin(origin: str): bool:
-    ret origin.len() > 0 and ORIGINS.find("," + origin + ",") >= 0
-end
-
-func cors(ctx: i64):
-    origin := http.Ctx_header(ctx, "Origin")
-    if allowed_origin(origin):
-        http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", origin)
-        http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type")
-        http.Ctx_set_header(ctx, "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-        http.Ctx_set_header(ctx, "Access-Control-Max-Age", "86400")
-    end
-    http.Ctx_set_header(ctx, "Vary", "Origin")
-    http.Ctx_set_header(ctx, "Cache-Control", "no-store")
-    http.Ctx_set_header(ctx, "X-Content-Type-Options", "nosniff")
+    ret aiweb.AllowedOrigin(origin)
 end
 
 func reply(ctx: i64, status: int, body: str):
-    cors(ctx)
-    http.Ctx_status(ctx, status)
-    http.Ctx_json(ctx, body)
+    aiweb.Reply(ctx, status, body)
 end
 
 func fail(ctx: i64, status: int, code: str, message: str):
-    mut m := Vector {} as Vector<str>
-    m.push(json.Member("error", code))
-    m.push(json.Member("message", message))
-    reply(ctx, status, json.Object(m))
+    aiweb.Fail(ctx, status, code, message)
 end
 
 func preflight(ctx: i64):
-    cors(ctx)
-    http.Ctx_status(ctx, 204)
-    http.Ctx_text(ctx, "")
+    aiweb.Preflight(ctx)
 end
 
 func i64s(n: i64): str:
@@ -152,33 +175,15 @@ func three(v: str, w: str, x: str): Vector<str>:
 end
 
 func bearer(ctx: i64): str:
-    h := http.Ctx_header(ctx, "Authorization")
-    if str.StartsWith(h, "Bearer "):
-        ret str.Trim(h.substr(7, h.len() - 7))
-    end
-    ret ""
+    ret aiweb.Bearer(ctx)
 end
 
-func current_user(ctx: i64): i64:
-    token := bearer(ctx)
-    if token.len() < 20:
-        ret 0
-    end
-    aistore.Lock()
-    id := aistore.OneText("SELECT user_id FROM sessions WHERE token = ?1 AND expires > ?2", two(token_hash(token), i64s(aistore.Now())))
-    aistore.Unlock()
-    if id.len() == 0:
-        ret 0
-    end
-    ret id.to_int()
+func user_from_token(token: str): i64:
+    ret aiweb.UserFromToken(token)
 end
 
 func need_user(ctx: i64): i64:
-    uid := current_user(ctx)
-    if uid == 0:
-        fail(ctx, 401, "unauthorized", "لطفا دوباره وارد شوید.")
-    end
-    ret uid
+    ret aiweb.NeedUser(ctx)
 end
 
 func four(v: str, w: str, x: str, y: str): Vector<str>:
@@ -188,7 +193,7 @@ func four(v: str, w: str, x: str, y: str): Vector<str>:
 end
 
 func token_hash(token: str): str:
-    ret crypto.Sha256Hex(token)
+    ret aiweb.Hash(token)
 end
 
 func hash_password(pass: str): str:
@@ -209,6 +214,7 @@ func user_json(id: str, name: str, email: str): str:
     m.push(json.MemberRaw("id", id))
     m.push(json.Member("name", name))
     m.push(json.Member("email", email))
+    m.push(json.MemberBool("admin", aiweb.IsAdmin(id, email)))
     ret json.Object(m)
 end
 
@@ -235,6 +241,10 @@ func register(ctx: i64):
     end
     if not valid_email(email):
         fail(ctx, 400, "email", "نشانی ایمیل درست نیست.")
+        ret
+    end
+    if aiweb.ReservedEmail(email):
+        fail(ctx, 403, "reserved", "با این ایمیل نمی‌توان حساب تازه ساخت.")
         ret
     end
     if pass.len() < 8 or pass.len() > 200:
@@ -322,7 +332,7 @@ func message_json(id: str, role: str, body: str, status: str, created: str): str
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("id", id))
     m.push(json.Member("role", role))
-    m.push(json.Member("body", body))
+    m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
     m.push(json.Member("status", status))
     m.push(json.MemberRaw("created", created))
     ret json.Object(m)
@@ -403,32 +413,29 @@ func sync_pending(id: str, sid: str):
 end
 
 func settle(mid: str, sid: str, created: i64): aiengine.Reply:
-    mut r := aiengine.Reply {}
-    if sid.len() == 0:
-        r.failed = true
-        r.done = true
-    else:
-        r = aiengine.Poll(sid)
-    end
-    if not r.done and aistore.Now() - created > PENDING_SECONDS:
-        aiengine.Abort(sid)
-        r.done = true
-        r.failed = r.text.len() == 0
-    end
+    mut r := aiturn.Progress(sid, created, PENDING_SECONDS)
     if r.done:
         mut status := "done"
         mut body := r.text
         if r.failed and body.len() == 0:
             status = "error"
-            body = "پاسخی دریافت نشد. لطفا دوباره بپرسید."
+            body = "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
         end
         aistore.Lock()
         _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2 WHERE id = ?3 AND status = 'pending'", three(body, status, mid))
         aistore.Unlock()
         r.text = body
         r.failed = status == "error"
+        if sid.len() > 0:
+            ailive.End(sid)
+            forget_check(sid)
+        end
     end
     ret r
+end
+
+func forget_check(sid: str):
+    aiturn.Forget(sid)
 end
 
 func get_chat(ctx: i64):
@@ -553,7 +560,10 @@ func send_message(ctx: i64):
     amid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
     aistore.Unlock()
+    ailive.Begin(sid)
+    forget_check(sid)
     if not aiengine.Send(sid, text):
+        ailive.End(sid)
         aistore.Lock()
         _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", amid))
         aistore.Unlock()
@@ -598,6 +608,7 @@ func poll_message(ctx: i64):
         ret
     end
     mut phase := "done"
+    body = aiturn.Plain(body)
     if status == "pending":
         r := settle(mid, str.TrimSuffix(owned, "|"), created)
         body = r.text
@@ -638,5 +649,247 @@ func stop_message(ctx: i64):
     aistore.Lock()
     _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done' WHERE chat_id = ?2 AND status = 'pending'", two(body, id))
     aistore.Unlock()
+    if sid.len() > 0:
+        ailive.End(sid)
+        forget_check(sid)
+    end
     reply(ctx, 200, `{"ok": true, "body": ` + json.Str(body) + "}")
+end
+
+func cors_lines(origin: str): str:
+    mut h := "Vary: Origin\r\n"
+    if allowed_origin(origin):
+        h = h + "Access-Control-Allow-Origin: " + origin + "\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Max-Age: 86400\r\n"
+    end
+    ret h
+end
+
+func stream_plain(c: tcp.Conn, status: str, origin: str, body: str):
+    _w := tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n" + body)
+end
+
+func stream_error(c: tcp.Conn, status: str, origin: str, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    stream_plain(c, status, origin, json.Object(m))
+end
+
+func send_event(c: tcp.Conn, name: str, data: str): bool:
+    ret tcp.Write(c, "event: " + name + "\ndata: " + data + "\n\n") > 0
+end
+
+func text_event(t: str): str:
+    ret "{" + json.Member("t", t) + "}"
+end
+
+func stream_slot(uid: i64, delta: int): bool:
+    key := i64s(uid)
+    _l := sync.Lock(STREAM_LOCK)
+    mut have := 0
+    if STREAM_COUNT.has(key):
+        have = STREAM_COUNT.get(key).to_int()
+    end
+    mut ok := true
+    if delta > 0 and have >= STREAMS_PER_USER:
+        ok = false
+    else:
+        have = have + delta
+        if have <= 0:
+            _r := STREAM_COUNT.remove(key)
+        else:
+            STREAM_COUNT.put(key, "" + have)
+        end
+    end
+    _u := sync.Unlock(STREAM_LOCK)
+    ret ok
+end
+
+func serve_stream(c: tcp.Conn):
+    tcp.SetReadDeadline(c, 5000)
+    mut req := ""
+    until req.find("\r\n\r\n") < 0:
+        got := tcp.Read(c, 8192)
+        if got.len() == 0 or req.len() > 32768:
+            ret
+        end
+        req = req + got
+    end
+    lines := req.substr(0, req.find("\r\n\r\n")).split("\n")
+    first := str.Trim(lines.get(0)).split(" ")
+    if first.len() < 2:
+        ret
+    end
+    method := first.get(0)
+    mut path := first.get(1)
+    mut origin := ""
+    mut auth := ""
+    mut headers := HashMap {} as HashMap<str, str>
+    each line in lines:
+        l := str.Trim(line)
+        colon := l.find(":")
+        if colon > 0:
+            headers.put(str.Lower(str.Trim(l.substr(0, colon))), str.Trim(l.substr(colon + 1, l.len() - colon - 1)))
+        end
+        lower := str.Lower(l)
+        if str.StartsWith(lower, "origin:"):
+            origin = str.Trim(l.substr(7, l.len() - 7))
+        else str.StartsWith(lower, "authorization:"):
+            auth = str.Trim(l.substr(14, l.len() - 14))
+        end
+    end
+    mut bare := path
+    cut := bare.find("?")
+    if cut >= 0:
+        bare = bare.substr(0, cut)
+    end
+    if aiopenai.Handles(bare):
+        head_end := req.find("\r\n\r\n") + 4
+        mut body := req.substr(head_end, req.len() - head_end)
+        mut want := 0
+        if headers.has("content-length"):
+            want = headers.get("content-length").to_int()
+        end
+        if want > 2097152:
+            stream_error(c, "413 Payload Too Large", origin, "too_large", "request body is larger than 2 MB")
+            ret
+        end
+        until body.len() < want:
+            more := tcp.Read(c, 65536)
+            if more.len() == 0:
+                ret
+            end
+            body = body + more
+        end
+        aiopenai.Serve(c, method, bare, headers, body)
+        ret
+    end
+    if method == "OPTIONS":
+        _w := tcp.Write(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n")
+        ret
+    end
+    q := path.find("?")
+    if q >= 0:
+        path = path.substr(0, q)
+    end
+    seg := path.split("/")
+    if method != "GET" or seg.len() != 6 or seg.get(1) != "chats" or seg.get(3) != "messages" or seg.get(5) != "stream":
+        stream_error(c, "404 Not Found", origin, "not_found", "این مسیر وجود ندارد.")
+        ret
+    end
+    id := seg.get(2)
+    mid := seg.get(4)
+    mut token := ""
+    if str.StartsWith(auth, "Bearer "):
+        token = str.Trim(auth.substr(7, auth.len() - 7))
+    end
+    uid := user_from_token(token)
+    if uid == 0:
+        stream_error(c, "401 Unauthorized", origin, "unauthorized", "لطفا دوباره وارد شوید.")
+        ret
+    end
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        stream_error(c, "404 Not Found", origin, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    if not stream_slot(uid, 1):
+        stream_error(c, "429 Too Many Requests", origin, "streams", "پاسخ‌های زیادی را هم‌زمان دنبال می‌کنید. چند لحظه بعد دوباره تلاش کنید.")
+        ret
+    end
+    stream_answer(c, origin, id, mid, owned)
+    _s := stream_slot(uid, 0 - 1)
+end
+
+func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT body, status, created FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
+    mut found := false
+    mut body := ""
+    mut status := ""
+    mut created := 0 as i64
+    if aistore.Next(rows):
+        found = true
+        body = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if not found:
+        stream_error(c, "404 Not Found", origin, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors_lines(origin) + "\r\n"
+    if tcp.Write(c, head + ": stream\n\n") <= 0:
+        ret
+    end
+    sid := str.TrimSuffix(owned, "|")
+    if status != "pending":
+        _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + "}")
+        ret
+    end
+    mut sent := ""
+    mut phase_sent := ""
+    mut gen := ailive.Gen()
+    start := aistore.Now()
+    until true:
+        r := settle(mid, sid, created)
+        if r.done:
+            final := r.failed ? "error" : "done"
+            _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + "}")
+            ret
+        end
+        mut ok := true
+        if r.text != sent:
+            if str.StartsWith(r.text, sent):
+                ok = send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len())))
+            else:
+                ok = send_event(c, "reset", text_event(r.text))
+            end
+            sent = r.text
+        end
+        if ok and r.phase != phase_sent:
+            ok = send_event(c, "phase", "{" + json.Member("phase", r.phase) + "}")
+            phase_sent = r.phase
+        end
+        if not ok or aistore.Now() - start > STREAM_SECONDS:
+            ret
+        end
+        if ailive.Connected():
+            next := ailive.Wait(gen, 15000)
+            if next == gen:
+                if tcp.Write(c, ": ping\n\n") <= 0:
+                    ret
+                end
+            end
+            gen = next
+            sync.SleepMs(40)
+        else:
+            sync.SleepMs(700)
+        end
+    end
+end
+
+func stream_worker():
+    mut open := true
+    until true:
+        fd := STREAM_JOBS.recv(open)
+        if not open:
+            break
+        end
+        c := tcp.ConnFromFd(fd)
+        serve_stream(c)
+        tcp.Close(c)
+    end
+end
+
+func stream_acceptor():
+    until true:
+        c := tcp.Accept(STREAM_SRV)
+        if tcp.ConnOk(c):
+            STREAM_JOBS.send(c.fd)
+        end
+    end
 end

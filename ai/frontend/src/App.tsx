@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setToken, type Chat, type Message, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
+import { Admin, NoAccess } from "./Admin";
+import { Apps } from "./Apps";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
+import { Connect } from "./Connect";
+import { Keys } from "./Keys";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -19,6 +23,25 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
+type Route = "chat" | "connect" | "apps" | "keys" | "admin";
+
+function routeFromPath(): Route {
+  const p = location.pathname.replace(/\/+$/, "");
+  if (p === "/connect") return "connect";
+  if (p === "/apps") return "apps";
+  if (p === "/keys") return "keys";
+  if (p === "/admin") return "admin";
+  return "chat";
+}
+
+const PAGE_TITLES: Record<Route, string> = {
+  chat: "دستیار سلام",
+  connect: "اتصال برنامه",
+  apps: "برنامه‌های متصل",
+  keys: "کلیدهای API",
+  admin: "مدیریت",
+};
+
 function go(id: string | null, replace = false) {
   const url = id ? `/c/${id}` : "/";
   if (location.pathname === url) return;
@@ -29,6 +52,7 @@ function go(id: string | null, replace = false) {
 export function App() {
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
+  const [route, setRoute] = useState<Route>(routeFromPath);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeId, setActiveId] = useState<string | null>(chatIdFromPath());
@@ -39,8 +63,11 @@ export function App() {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const pollTimer = useRef<number | null>(null);
+  const streamCtrl = useRef<AbortController | null>(null);
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
+  const signedIn = user !== null;
+  const onConnect = route === "connect";
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -53,7 +80,15 @@ export function App() {
     setChats([]);
     setMessages([]);
     setActiveId(null);
-    go(null, true);
+    if (routeFromPath() === "chat") go(null, true);
+  }, []);
+
+  const onAuth = useCallback((u: User) => {
+    setUser(u);
+    api
+      .me()
+      .then((r) => setUser(r.user))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -70,13 +105,15 @@ export function App() {
   }, [signOut]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!signedIn || onConnect) return;
     api.chats().then((r) => setChats(r.chats)).catch((e) => notify(e.message));
-  }, [user, notify]);
+  }, [signedIn, onConnect, notify]);
 
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
     pollTimer.current = null;
+    streamCtrl.current?.abort();
+    streamCtrl.current = null;
   };
 
   const poll = useCallback(
@@ -88,21 +125,56 @@ export function App() {
           const r = await api.poll(chatId, mid);
           if (activeRef.current !== chatId) return;
           setMessages((ms) => ms.map((m) => (m.id === mid ? { ...m, body: r.body, status: r.status, phase: r.phase } : m)));
-          if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 600);
+          if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
           pollTimer.current = window.setTimeout(tick, 2000);
         }
       };
-      pollTimer.current = window.setTimeout(tick, 400);
+      pollTimer.current = window.setTimeout(tick, 300);
     },
     [],
+  );
+
+  const follow = useCallback(
+    (chatId: string, mid: number) => {
+      stopPolling();
+      const ctrl = new AbortController();
+      streamCtrl.current = ctrl;
+      const update = (fn: (m: Message) => Message) => {
+        if (ctrl.signal.aborted || activeRef.current !== chatId) return;
+        setMessages((ms) => ms.map((m) => (m.id === mid ? fn(m) : m)));
+      };
+      let finished = false;
+      streamMessage(
+        chatId,
+        mid,
+        {
+          delta: (t) => update((m) => ({ ...m, body: m.body + t, phase: "writing" })),
+          reset: (t) => update((m) => ({ ...m, body: t, phase: "writing" })),
+          phase: (p) => update((m) => ({ ...m, phase: p })),
+          done: (body, status) => {
+            finished = true;
+            update((m) => ({ ...m, body, status, phase: "done" }));
+          },
+        },
+        ctrl.signal,
+      )
+        .then((ok) => {
+          if (!ok && !finished && !ctrl.signal.aborted) poll(chatId, mid);
+        })
+        .catch(() => {
+          if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
+        });
+    },
+    [poll],
   );
 
   const openChat = useCallback(
     async (id: string | null, replace = false) => {
       stopPolling();
       setSidebar(false);
+      setRoute("chat");
       setActiveId(id);
       go(id, replace);
       stick.current = true;
@@ -116,7 +188,7 @@ export function App() {
         if (activeRef.current !== id) return;
         setMessages(r.messages);
         const pending = r.messages.find((m) => m.status === "pending");
-        if (pending) poll(id, pending.id);
+        if (pending) follow(id, pending.id);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           notify("این گفت‌وگو پیدا نشد.");
@@ -128,16 +200,45 @@ export function App() {
         setLoadingChat(false);
       }
     },
-    [notify, poll],
+    [notify, follow],
   );
 
+  const leaveChat = () => {
+    stopPolling();
+    setSidebar(false);
+    setActiveId(null);
+    setMessages([]);
+  };
+
+  const navigate = (path: string) => {
+    leaveChat();
+    if (location.pathname !== path) history.pushState(null, "", path);
+    setRoute(routeFromPath());
+  };
+
   useEffect(() => {
-    if (!user) return;
-    openChat(chatIdFromPath(), true);
-    const onPop = () => openChat(chatIdFromPath(), true);
+    if (!signedIn) return;
+    if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
+    const onPop = () => {
+      if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
+      else {
+        stopPolling();
+        setSidebar(false);
+        setActiveId(null);
+        setMessages([]);
+        setRoute(routeFromPath());
+      }
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [user, openChat]);
+  }, [signedIn, openChat]);
+
+  useEffect(() => {
+    if (signedIn) return;
+    const onPop = () => setRoute(routeFromPath());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [signedIn]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -174,7 +275,7 @@ export function App() {
         const rest = cs.filter((c) => c.id !== id);
         return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
       });
-      poll(id, r.assistant.id);
+      follow(id, r.assistant.id);
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));
       notify(e instanceof ApiError ? e.message : "فرستادن پیام ناموفق بود.");
@@ -226,9 +327,11 @@ export function App() {
     );
   }
 
-  if (!user) return <Auth onAuth={setUser} theme={theme} toggleTheme={toggleTheme} />;
+  if (route === "connect") return <Connect user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
 
-  const title = chats.find((c) => c.id === activeId)?.title || "دستیار سلام";
+  if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
+
+  const title = route === "chat" ? chats.find((c) => c.id === activeId)?.title || "دستیار سلام" : PAGE_TITLES[route];
   const firstName = user.name.trim().split(/\s+/)[0];
 
   return (
@@ -236,7 +339,9 @@ export function App() {
       <Sidebar
         user={user}
         chats={chats}
-        activeId={activeId}
+        activeId={route === "chat" ? activeId : null}
+        page={route}
+        onNavigate={navigate}
         open={sidebar}
         theme={theme}
         onClose={() => setSidebar(false)}
@@ -260,34 +365,42 @@ export function App() {
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        <div className="scroller" ref={scroller} onScroll={onScroll}>
-          {messages.length === 0 && !loadingChat ? (
-            <div className="welcome">
-              <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
-              <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
-              <p className="muted">هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.</p>
-              <div className="suggestions">
-                {SUGGESTIONS.map((s) => (
-                  <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>
-                    <span className="suggestion-icon">
-                      <s.icon width={18} height={18} />
-                    </span>
-                    <strong>{s.title}</strong>
-                    <span>{s.text.split("\n")[0]}</span>
-                  </button>
-                ))}
-              </div>
+        {route === "apps" || route === "keys" || route === "admin" ? (
+          <div className="scroller page-scroller">
+            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+          </div>
+        ) : (
+          <>
+            <div className="scroller" ref={scroller} onScroll={onScroll}>
+              {messages.length === 0 && !loadingChat ? (
+                <div className="welcome">
+                  <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
+                  <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
+                  <p className="muted">هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.</p>
+                  <div className="suggestions">
+                    {SUGGESTIONS.map((s) => (
+                      <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>
+                        <span className="suggestion-icon">
+                          <s.icon width={18} height={18} />
+                        </span>
+                        <strong>{s.title}</strong>
+                        <span>{s.text.split("\n")[0]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="thread">
+                  {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
+                  {messages.map((m) => (
+                    <MessageView key={m.id} m={m} name={user.name} />
+                  ))}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="thread">
-              {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
-              {messages.map((m) => (
-                <MessageView key={m.id} m={m} name={user.name} />
-              ))}
-            </div>
-          )}
-        </div>
-        <Composer busy={busy} disabled={loadingChat} onSend={send} onStop={stop} autoFocus={!activeId} />
+            <Composer busy={busy} disabled={loadingChat} onSend={send} onStop={stop} autoFocus={!activeId} />
+          </>
+        )}
       </main>
       {toast && (
         <div className="toast" role="status">

@@ -5,7 +5,7 @@ import type { Theme } from "./theme";
 
 type Mode = "login" | "register";
 
-export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void; theme: Theme; toggleTheme: () => void }) {
+export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User) => void; compact?: boolean; intro?: string }) {
   const [mode, setMode] = useState<Mode>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -37,6 +37,64 @@ export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void
     setError("");
   };
 
+  return (
+    <form className={`auth-card${compact ? " compact" : ""}`} onSubmit={submit} noValidate>
+      <img src="/logo.svg" alt="" className="auth-card-logo" width={44} height={44} />
+      <h2>{mode === "login" ? "ورود به حساب" : "ساخت حساب تازه"}</h2>
+      <p className="muted">{intro ?? (mode === "login" ? "خوش برگشتید! برای ادامه وارد شوید." : "برای گفت‌وگو با دستیار سلام یک حساب بسازید.")}</p>
+      <div className="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>
+          ورود
+        </button>
+        <button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>
+          ثبت‌نام
+        </button>
+      </div>
+      {mode === "register" && (
+        <label className="field">
+          <span>نام</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="مثلا سارا احمدی" maxLength={80} />
+        </label>
+      )}
+      <label className="field">
+        <span>ایمیل</span>
+        <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" />
+      </label>
+      <label className="field">
+        <span>گذرواژه</span>
+        <div className="password">
+          <input
+            type={show ? "text" : "password"}
+            dir="ltr"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            placeholder="دست‌کم ۸ نویسه"
+          />
+          <button type="button" className="icon-button" onClick={() => setShow((s) => !s)} aria-label={show ? "پنهان کردن گذرواژه" : "نمایش گذرواژه"}>
+            {show ? <IconEyeOff width={18} height={18} /> : <IconEye width={18} height={18} />}
+          </button>
+        </div>
+      </label>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <button type="submit" className="button primary wide" disabled={busy}>
+        {busy ? <span className="spinner" /> : mode === "login" ? "ورود" : "ساخت حساب"}
+      </button>
+      <p className="switch">
+        {mode === "login" ? "حساب ندارید؟ " : "حساب دارید؟ "}
+        <button type="button" className="link" onClick={() => switchMode(mode === "login" ? "register" : "login")}>
+          {mode === "login" ? "ثبت‌نام کنید" : "وارد شوید"}
+        </button>
+      </p>
+    </form>
+  );
+}
+
+export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void; theme: Theme; toggleTheme: () => void }) {
   return (
     <div className="auth">
       <button type="button" className="icon-button theme-corner" onClick={toggleTheme} aria-label="تغییر پوسته">
@@ -73,59 +131,7 @@ export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void
         </div>
       </section>
       <section className="auth-panel">
-        <form className="auth-card" onSubmit={submit} noValidate>
-          <img src="/logo.svg" alt="" className="auth-card-logo" width={44} height={44} />
-          <h2>{mode === "login" ? "ورود به حساب" : "ساخت حساب تازه"}</h2>
-          <p className="muted">{mode === "login" ? "خوش برگشتید! برای ادامه وارد شوید." : "برای گفت‌وگو با دستیار سلام یک حساب بسازید."}</p>
-          <div className="tabs" role="tablist">
-            <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>
-              ورود
-            </button>
-            <button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>
-              ثبت‌نام
-            </button>
-          </div>
-          {mode === "register" && (
-            <label className="field">
-              <span>نام</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="مثلا سارا احمدی" maxLength={80} />
-            </label>
-          )}
-          <label className="field">
-            <span>ایمیل</span>
-            <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" />
-          </label>
-          <label className="field">
-            <span>گذرواژه</span>
-            <div className="password">
-              <input
-                type={show ? "text" : "password"}
-                dir="ltr"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                placeholder="دست‌کم ۸ نویسه"
-              />
-              <button type="button" className="icon-button" onClick={() => setShow((s) => !s)} aria-label={show ? "پنهان کردن گذرواژه" : "نمایش گذرواژه"}>
-                {show ? <IconEyeOff width={18} height={18} /> : <IconEye width={18} height={18} />}
-              </button>
-            </div>
-          </label>
-          {error && (
-            <div className="form-error" role="alert">
-              {error}
-            </div>
-          )}
-          <button type="submit" className="button primary wide" disabled={busy}>
-            {busy ? <span className="spinner" /> : mode === "login" ? "ورود" : "ساخت حساب"}
-          </button>
-          <p className="switch">
-            {mode === "login" ? "حساب ندارید؟ " : "حساب دارید؟ "}
-            <button type="button" className="link" onClick={() => switchMode(mode === "login" ? "register" : "login")}>
-              {mode === "login" ? "ثبت‌نام کنید" : "وارد شوید"}
-            </button>
-          </p>
-        </form>
+        <AuthForm onAuth={onAuth} />
         <p className="auth-foot">
           <a href="https://www.salamlang.ir" target="_blank" rel="noreferrer">salamlang.ir</a>
           <span>·</span>

@@ -4,6 +4,7 @@ import { fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
 import { IconAlert, IconKey } from "./icons";
 import { CopyButton, useHighlighted } from "./Markdown";
 import { RequestList } from "./Requests";
+import { confirmDialog } from "./Confirm";
 
 export const API_BASE_URL = "https://ai-api.salamlang.ir";
 export const API_MODEL = "salam";
@@ -379,7 +380,14 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
   };
 
   const revoke = async (k: ApiKey) => {
-    if (!confirm(`کلید «${k.name}» باطل شود؟ برنامه‌هایی که از این کلید استفاده می‌کنند بلافاصله دیگر کار نخواهند کرد.`)) return;
+    const ok = await confirmDialog({
+      title: "باطل کردن کلید",
+      subject: k.name,
+      message: "برنامه‌هایی که از این کلید استفاده می‌کنند بلافاصله دیگر کار نخواهند کرد.",
+      confirmLabel: "باطل کن",
+      icon: "alert",
+    });
+    if (!ok) return;
     setRemoving(k.id);
     try {
       await api.revokeKey(k.id);

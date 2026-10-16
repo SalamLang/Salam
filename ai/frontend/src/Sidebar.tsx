@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Chat, User } from "./api";
 import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
+import { confirmDialog } from "./Confirm";
 
 function groupOf(updated: number): string {
   const now = new Date();
@@ -107,8 +108,14 @@ export function Sidebar(p: Props) {
                       type="button"
                       className="icon-button tiny danger"
                       aria-label="حذف گفت‌وگو"
-                      onClick={() => {
-                        if (confirm(`«${c.title}» حذف شود؟`)) p.onDelete(c.id);
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: "حذف گفت‌وگو",
+                          subject: c.title,
+                          message: "این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.",
+                          confirmLabel: "حذف",
+                        });
+                        if (ok) p.onDelete(c.id);
                       }}
                     >
                       <IconTrash width={15} height={15} />

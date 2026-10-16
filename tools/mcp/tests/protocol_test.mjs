@@ -17,6 +17,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 
 const serverPath = process.argv[2] && resolve(process.argv[2]);
 const repoRoot = resolve(process.argv[3] ?? process.cwd());
@@ -289,22 +290,22 @@ async function testTools() {
   const [pkgs, symbols, nested, broken, ok, traversal, unknownTool, keywords] =
     parseLines(raw);
 
+  const pkgNames = (pkgs.result.structuredContent?.packages ?? []).map((p) => p.name);
   check(
     "stdlib packages are discovered",
-    pkgs.result.structuredContent.length > 20,
-    `got ${pkgs.result.structuredContent?.length}`,
+    pkgNames.length > 20,
+    `got ${pkgNames.length}`,
   );
   check(
     "stdlib packages exclude non-importable dirs",
-    !pkgs.result.structuredContent.includes("excel_bak"),
+    !pkgNames.includes("excel_bak"),
   );
   // std/encoding/json is imported as `encoding.json`, so that is the name a
   // model needs back. Listing only the top level hides it behind `encoding`,
   // whose own directory holds nothing but the base64/hex helpers.
   check(
     "stdlib packages include nested ones by dotted name",
-    pkgs.result.structuredContent.includes("encoding.json") &&
-      pkgs.result.structuredContent.includes("net.http"),
+    pkgNames.includes("encoding.json") && pkgNames.includes("net.http"),
   );
   check(
     "symbol lookup finds a known declaration",
@@ -394,11 +395,11 @@ async function testWorkspace() {
       build.result.structuredContent.diagnostics.every((d) => d.line > 0 && d.code),
     JSON.stringify(build.result.structuredContent),
   );
+  const found = examples.result.structuredContent?.examples ?? [];
   check(
     "example paths are workspace-relative",
-    examples.result.structuredContent?.length > 0 &&
-      examples.result.structuredContent.every((e) => e.startsWith("tests/")),
-    examples.result.structuredContent?.[0],
+    found.length > 0 && found.every((e) => e.file.startsWith("tests/")),
+    JSON.stringify(found[0]),
   );
   check("an unknown backend is refused", backend.result.isError === true);
   check("an unknown emit stage is refused", emit.result.isError === true);
@@ -465,8 +466,8 @@ async function testKeywords() {
       ])
     ).raw,
   );
-  const rows = reply.result.structuredContent.map((r) => r.split("\t"));
-  const persian = (en) => rows.find((r) => r[0] === en)?.[1];
+  const rows = reply.result.structuredContent.keywords;
+  const persian = (en) => rows.find((r) => r.english === en)?.persian;
   check("func pairs with its Persian spelling", persian("func") === "تابع");
   check("ret pairs with its Persian spelling", persian("ret") === "برگشت");
   check("if pairs with its Persian spelling", persian("if") === "اگر");
@@ -590,7 +591,8 @@ async function testHttp() {
     const checkTool = list.result.tools.find((t) => t.name === "salam_check");
     check(
       "hosted compiler tools take source",
-      checkTool?.inputSchema.required?.[0] === "source",
+      checkTool?.inputSchema.properties?.source !== undefined &&
+        checkTool?.inputSchema.properties?.path === undefined,
     );
 
     const bad = await call("salam_check", {
@@ -680,6 +682,306 @@ async function testHttp() {
   }
 }
 
+// --- agent-facing behaviour --------------------------------------------
+
+function textOf(reply) {
+  return reply?.result?.content?.[0]?.text ?? "";
+}
+
+async function testAgentTools() {
+  console.log("agent-facing tools");
+  const call = (id, name, args) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { _meta: meta, name, arguments: args },
+  });
+  const foreign = [
+    "import sort",
+    "",
+    "func main:",
+    "    v := Vector {} as Vector<int>",
+    "    v.push(2)",
+    "    sort.SortBy(v, func (a: int, b: int): bool: ret a < b end)",
+    "    for x in v:",
+    "        println x",
+    "    end",
+    "    ret 0",
+    "end",
+    "",
+  ].join("\n");
+  const unfinished = "func main:\n    v := Vector {} as Vector<int>\n    println v.len(\n    each x in v:\n        println x\n    end\n    ret 0\nend\n";
+  const { raw } = await converse(
+    [
+      { jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: meta } },
+      call(2, "salam_check", { source: foreign }),
+      call(3, "salam_check", { source: unfinished }),
+      call(4, "salam_docs", { query: "lambda" }),
+      call(5, "salam_docs", { query: "E085" }),
+      call(6, "salam_docs", {}),
+      call(7, "salam_stdlib_search", { query: "read file" }),
+      call(8, "salam_stdlib_symbols", { package: "json" }),
+      call(9, "salam_stdlib_symbols", { package: "jsn" }),
+      call(10, "salam_find_examples", { query: "sort.SortBy(", limit: 2, context: 1 }),
+      call(11, "salam_format", { source: "func main:\n  x:=1\n  println x\n  ret 0\nend\n" }),
+      call(12, "salam_translate", { source: "func main:\n    println 1\n    ret 0\nend\n", to: "fa" }),
+      call(13, "salam_run", { source: 'func main:\n    name := input ""\n    println "hi ", name\n    ret 0\nend\n', stdin: "Sara\n" }),
+      call(14, "salam_run", {
+        files: {
+          "main.salam": 'include util "util.salam"\nfunc main:\n    println util.Twice(21)\n    ret 0\nend\n',
+          "util.salam": "package util\npub func Twice(x: int): int: ret x * 2 end\n",
+        },
+      }),
+      call(15, "salam_check", { source: "func main:\n    ret 0\nend\n", files: { "../evil.salam": "x" } }),
+      call(16, "salam_check", { path: "tools/mcp/tests/fixtures/ok.salam", source: "func main:\n    ret 0\nend\n" }),
+      call(17, "salam_exec", { source: "func main:\n    mut i := 0\n    until i >= 0:\n        i += 1\n        if i > 1000: i = 0 end\n    end\n    ret 0\nend\n" }),
+      call(18, "salam_check", { path: "tools/mcp/tests/fixtures/missing.salam" }),
+      { jsonrpc: "2.0", id: 19, method: "prompts/list", params: { _meta: meta } },
+      { jsonrpc: "2.0", id: 20, method: "prompts/get", params: { _meta: meta, name: "salam-write", arguments: { task: "print the first ten squares" } } },
+      { jsonrpc: "2.0", id: 21, method: "prompts/get", params: { _meta: meta, name: "salam-port", arguments: {} } },
+      { jsonrpc: "2.0", id: 22, method: "resources/templates/list", params: { _meta: meta } },
+      { jsonrpc: "2.0", id: 23, method: "resources/read", params: { _meta: meta, uri: "salam://stdlib/encoding.json" } },
+      { jsonrpc: "2.0", id: 24, method: "resources/read", params: { _meta: meta, uri: "salam://docs/error%20handling" } },
+      { jsonrpc: "2.0", id: 25, method: "resources/read", params: { _meta: meta, uri: "salam://guide/skill.md" } },
+      { jsonrpc: "2.0", id: 26, method: "server/discover", params: { _meta: meta } },
+    ],
+    { SALAM_MCP_RUN_TIMEOUT: "3" },
+  );
+  const r = Object.fromEntries(parseLines(raw).map((m) => [m.id, m]));
+
+  const tools = r[1].result.tools;
+  const names = tools.map((t) => t.name);
+  for (const n of ["salam_docs", "salam_stdlib_search", "salam_translate"]) {
+    check(`${n} is offered`, names.includes(n));
+  }
+  check(
+    "every tool carries annotations with readOnlyHint",
+    tools.every((t) => typeof t.annotations?.readOnlyHint === "boolean"),
+  );
+  check(
+    "only the tools that execute code are not read-only",
+    tools.filter((t) => !t.annotations.readOnlyHint).map((t) => t.name).sort().join() === "salam_exec,salam_run",
+  );
+  check(
+    "local compiler tools accept path or source",
+    tools.find((t) => t.name === "salam_check").inputSchema.properties.source !== undefined &&
+      tools.find((t) => t.name === "salam_check").inputSchema.properties.path !== undefined,
+  );
+
+  const foreignText = textOf(r[2]);
+  check("a check reports a one-line summary first", /^salam check main\.salam: \d+ errors/.test(foreignText), foreignText.split("\n")[0]);
+  check("a func-style lambda gets the lambda hint", foreignText.includes("A lambda is written `(x: int): ret x * 2 end`"));
+  check("a for loop gets the each/repeat hint", foreignText.includes("Salam has no `for` loop"));
+  check("diagnostics show the offending source line", foreignText.includes("| ") && foreignText.includes("for x in v:"));
+  check("the same hint is shown once", foreignText.split("Salam has no `for` loop").length === 2);
+  check("a parse-error cascade is called out", foreignText.includes("knock-on effects"));
+  const d0 = r[2].result.structuredContent.diagnostics.find((d) => d.hint);
+  check("structured diagnostics carry source and hint", typeof d0?.source === "string" && typeof d0?.hint === "string");
+
+  check(
+    "a keyword after an unfinished line points at the line above",
+    textOf(r[3]).includes("the line above is unfinished"),
+    textOf(r[3]),
+  );
+
+  check("salam_docs answers a topic from the reference", textOf(r[4]).includes("Functions") && textOf(r[4]).includes("SKILL.md"));
+  check("salam_docs explains an error code with a failing program", textOf(r[5]).includes("// EXPECT: E085"));
+  check("salam_docs with no query lists topics", textOf(r[6]).includes("Control flow"));
+
+  const search = r[7].result.structuredContent.results;
+  check(
+    "stdlib search puts a whole-file reader first for 'read file'",
+    ["ReadFile", "ReadAll", "ReadText"].includes(search[0]?.name) && search.slice(0, 5).some((d) => d.name === "ReadFile"),
+    JSON.stringify(search[0]),
+  );
+  check("stdlib search gives the file and line", search.every((d) => d.file.startsWith("std/") && d.line > 0));
+
+  check("a bare package leaf resolves to its dotted name", r[8].result.structuredContent?.package === "encoding.json");
+  const jsonDecls = r[8].result.structuredContent.declarations;
+  check("struct fields come with the struct", jsonDecls.some((d) => d.kind === "struct" && d.name === "JSONOptions" && d.fields?.includes("sort_keys")));
+  check("methods are attached to their receiver", jsonDecls.some((d) => d.kind === "method" && d.receiver === "JSONEncoder" && d.name === "Encode"));
+  check("one-line function bodies do not leak into signatures", jsonDecls.every((d) => !d.signature.includes(" ret ")));
+  check("an unknown package suggests the near one", r[9].result.isError === true && textOf(r[9]).includes("encoding.json"));
+
+  const ex = r[10].result.structuredContent.examples;
+  check("examples come with context lines", ex.length > 0 && ex[0].snippet.split("\n").length === 3 && ex[0].snippet.includes("> "));
+
+  check("format returns the canonical text", r[11].result.structuredContent?.changed === true && r[11].result.structuredContent.formatted.includes("    x := 1"));
+  check("translate returns Persian source", r[12].result.structuredContent?.translated?.includes("تابع"));
+  check("run feeds stdin to the program", r[13].result.structuredContent?.stdout?.includes("hi  Sara"), JSON.stringify(r[13].result.structuredContent));
+  check("a multi-file program runs from files", r[14].result.structuredContent?.stdout?.trim() === "42", textOf(r[14]));
+  check("a file name escaping the stage is refused", r[15].result.isError === true && textOf(r[15]).includes("Refused file name"));
+  check("path and source together are refused", r[16].result.isError === true);
+  check("an endless loop is stopped and reported as a timeout", r[17].result.structuredContent?.timedOut === true, textOf(r[17]));
+  check("a missing path says so and suggests source", r[18].result.isError === true && textOf(r[18]).includes("No such file"));
+
+  const prompts = r[19].result.prompts.map((p) => p.name).sort().join();
+  check("prompts are offered", prompts === "salam-fix,salam-port,salam-write", prompts);
+  const msg = r[20].result.messages?.[0]?.content?.text ?? "";
+  check("a prompt carries the task and the rules", msg.includes("first ten squares") && msg.includes("`until cond:` is WHILE"));
+  check("a prompt without its required argument is invalid params", r[21].error?.code === -32602);
+  check("resource templates are listed", r[22].result.resourceTemplates?.some((t) => t.uriTemplate === "salam://stdlib/{package}"));
+  check("a stdlib template resource is served", r[23].result.contents?.[0]?.text?.includes("import encoding.json"));
+  check("a docs template resource decodes its topic", (r[24].result.contents?.[0]?.text ?? "").startsWith("From "));
+  check("the full reference is served", (r[25].result.contents?.[0]?.text ?? "").includes("# Writing Salam"));
+  const instructions = r[26].result.instructions ?? "";
+  check("instructions carry the language crib", instructions.includes("There is no `for` and no `while`") && instructions.includes("salam_docs"));
+  check(
+    "every structuredContent is an object",
+    parseLines(raw).every((m) => m.result?.structuredContent === undefined || (typeof m.result.structuredContent === "object" && !Array.isArray(m.result.structuredContent))),
+  );
+}
+
+async function testHostedInputs() {
+  console.log("hosted inputs");
+  const port = await freePort();
+  const child = spawn(serverPath, ["--http"], {
+    env: {
+      ...process.env,
+      SALAM_MCP_ROOT: repoRoot,
+      SALAM_MCP_BIN: compiler,
+      SALAM_MCP_HOST: "127.0.0.1",
+      SALAM_MCP_PORT: String(port),
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    let up = false;
+    for (let i = 0; i < 100 && !up; i += 1) {
+      up = await fetch(`${base}/health`).then(
+        (res) => res.ok,
+        () => false,
+      );
+      if (!up) await new Promise((res) => setTimeout(res, 100));
+    }
+    if (!up) {
+      check("hosted server starts", false);
+      return;
+    }
+    const rpc = async (id, method, params) => {
+      const res = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params: { _meta: meta, ...params } }),
+      });
+      return res.json();
+    };
+    const list = await rpc(1, "tools/list", {});
+    const check_schema = list.result.tools.find((t) => t.name === "salam_check").inputSchema.properties;
+    check("hosted tools take source and files but not path", check_schema.source && check_schema.files && !check_schema.path);
+    const byPath = await rpc(2, "tools/call", { name: "salam_check", arguments: { path: "main.salam" } });
+    check("a path on the hosted server explains why it cannot work", textOf(byPath).includes("cannot read files from your machine"));
+    const multi = await rpc(3, "tools/call", {
+      name: "salam_check",
+      arguments: {
+        files: {
+          "main.salam": 'include util "util.salam"\nfunc main:\n    println util.Twice(2)\n    ret 0\nend\n',
+          "util.salam": "package util\npub func Twice(x: int): int: ret x * 2 end\n",
+        },
+      },
+    });
+    check("a hosted multi-file check passes", multi.result?.isError === false, textOf(multi));
+    const docs = await rpc(4, "tools/call", { name: "salam_docs", arguments: { query: "loops" } });
+    check("the hosted server answers docs", textOf(docs).includes("until"));
+  } finally {
+    child.kill();
+  }
+}
+
+async function testSignIn() {
+  console.log("sign-in");
+  const authPort = await freePort();
+  const port = await freePort();
+  const resource = `http://127.0.0.1:${port}/mcp`;
+  const auth = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      if (req.url === "/internal/mcp/events") {
+        res.writeHead(204).end();
+        return;
+      }
+      const token = (new URLSearchParams(body).get("token") ?? "").replace(/-token-for-tests$/, "");
+      if (token === "down") {
+        res.writeHead(500).end();
+        return;
+      }
+      const exp = Math.floor(Date.now() / 1000) + 600;
+      const grants = {
+        good: { active: true, aud: resource, scope: "mcp", exp, sub: "u1", client_name: "test" },
+        noscope: { active: true, aud: resource, scope: "profile", exp, sub: "u1", client_name: "test" },
+      };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(grants[token] ?? { active: false }));
+    });
+  });
+  await new Promise((r) => auth.listen(authPort, "127.0.0.1", r));
+  const child = spawn(serverPath, ["--http"], {
+    env: {
+      ...process.env,
+      SALAM_MCP_ROOT: repoRoot,
+      SALAM_MCP_BIN: compiler,
+      SALAM_MCP_HOST: "127.0.0.1",
+      SALAM_MCP_PORT: String(port),
+      SALAM_MCP_AUTH_URL: `http://127.0.0.1:${authPort}`,
+      SALAM_MCP_AUTH_SECRET: "test-secret",
+      SALAM_MCP_RESOURCES: resource,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    let up = false;
+    for (let i = 0; i < 100 && !up; i += 1) {
+      up = await fetch(`${base}/health`).then(
+        (res) => res.ok,
+        () => false,
+      );
+      if (!up) await new Promise((res) => setTimeout(res, 100));
+    }
+    if (!up) {
+      check("signed-in server starts", false);
+      return;
+    }
+    const ping = (token) =>
+      fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          ...(token ? { Authorization: `Bearer ${token}-token-for-tests` } : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { _meta: meta } }),
+      });
+    const good = await ping("good");
+    check("a valid token is accepted", good.status === 200, String(good.status));
+    const none = await ping("");
+    check("no token is 401 with a challenge", none.status === 401 && (none.headers.get("www-authenticate") ?? "").includes("resource_metadata"));
+    const noscope = await ping("noscope");
+    check(
+      "a token without the mcp scope is 403 insufficient_scope",
+      noscope.status === 403 && (noscope.headers.get("www-authenticate") ?? "").includes("insufficient_scope"),
+      `${noscope.status} ${noscope.headers.get("www-authenticate")}`,
+    );
+    const down = await ping("down");
+    check(
+      "an unreachable sign-in service is 503 with Retry-After, not 401",
+      down.status === 503 && down.headers.get("retry-after") === "5",
+      `${down.status} ${down.headers.get("www-authenticate")}`,
+    );
+    const inactive = await ping("revoked");
+    check(
+      "an inactive token is 401 invalid_token",
+      inactive.status === 401 && (inactive.headers.get("www-authenticate") ?? "").includes("invalid_token"),
+      String(inactive.status),
+    );
+  } finally {
+    child.kill();
+    auth.close();
+  }
+}
+
 // --- runner ------------------------------------------------------------
 
 const suites = [
@@ -690,6 +992,9 @@ const suites = [
   testWorkspace,
   testResources,
   testKeywords,
+  testAgentTools,
+  testHostedInputs,
+  testSignIn,
   testHttp,
 ];
 for (const suite of suites) {

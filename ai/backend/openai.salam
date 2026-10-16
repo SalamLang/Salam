@@ -1,0 +1,601 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiopenai
+
+import net.http
+import net.router
+import net.tcp
+import encoding.json
+import encoding.value
+import encoding.encerr
+import crypto
+import sync
+import time
+import str
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aiengine "engine.salam"
+include ailive "live.salam"
+include aiturn "turn.salam"
+
+const MODEL := "salam"
+const MAX_PROMPT := 65536
+const MAX_LOG := 65536
+const ANSWER_SECONDS := 600
+const MAX_KEYS := 20
+
+mut HOURLY := 100
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func clip(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    ret s.substr(0, max)
+end
+
+func header(h: HashMap<str, str>, name: str): str:
+    if h.has(name):
+        ret h.get(name)
+    end
+    ret ""
+end
+
+func cors(): str:
+    ret "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-Salam-Project, OpenAI-Organization, OpenAI-Project, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Retry-Count, X-Stainless-Timeout\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Max-Age: 86400\r\n"
+end
+
+func respond(c: tcp.Conn, status: str, body: str):
+    _w := tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors() + "\r\n" + body)
+end
+
+func oai_error(c: tcp.Conn, status: str, kind: str, code: str, message: str):
+    mut e := Vector {} as Vector<str>
+    e.push(json.Member("message", message))
+    e.push(json.Member("type", kind))
+    e.push(json.Member("code", code))
+    respond(c, status, `{"error": ` + json.Object(e) + "}")
+end
+
+func ip_of(h: HashMap<str, str>): str:
+    cf := header(h, "cf-connecting-ip")
+    if cf.len() > 0:
+        ret cf
+    end
+    real := header(h, "x-real-ip")
+    if real.len() > 0:
+        ret real
+    end
+    fwd := header(h, "x-forwarded-for")
+    comma := fwd.find(",")
+    if comma >= 0:
+        ret str.Trim(fwd.substr(0, comma))
+    end
+    ret fwd
+end
+
+func field(v: value.Value, key: str): value.Value:
+    if not value.IsObject(v) or not value.ObjectHas(v, key):
+        ret value.ValueNull()
+    end
+    ret value.ObjectGet(v, key)
+end
+
+func text_field(v: value.Value, key: str): str:
+    f := field(v, key)
+    if value.IsString(f):
+        ret value.AsString(f)
+    end
+    ret ""
+end
+
+func content_text(v: value.Value): str:
+    if value.IsString(v):
+        ret value.AsString(v)
+    end
+    mut parts := Vector {} as Vector<str>
+    if value.IsArray(v):
+        mut i := 0
+        until i < value.ArrayLen(v):
+            p := value.ArrayGet(v, i)
+            if text_field(p, "type") == "text":
+                parts.push(text_field(p, "text"))
+            end
+            i += 1
+        end
+    end
+    ret str.Join(parts, "\n")
+end
+
+func role_name(role: str): str:
+    switch role:
+        "assistant":
+            ret "Assistant"
+        end
+        "tool", "function":
+            ret "Tool result"
+        end
+    end
+    ret "User"
+end
+
+func flatten(messages: value.Value): str:
+    mut system := Vector {} as Vector<str>
+    mut turns := Vector {} as Vector<str>
+    mut last_user := ""
+    mut count := 0
+    mut i := 0
+    until i < value.ArrayLen(messages):
+        m := value.ArrayGet(messages, i)
+        role := text_field(m, "role")
+        text := str.Trim(content_text(field(m, "content")))
+        if text.len() > 0:
+            if role == "system" or role == "developer":
+                system.push(text)
+            else:
+                turns.push(role_name(role) + ": " + text)
+                count += 1
+                if role == "user":
+                    last_user = text
+                end
+            end
+        end
+        i += 1
+    end
+    mut out := ""
+    if system.len() > 0:
+        out = "Instructions from the calling application:\n" + str.Join(system, "\n\n") + "\n\n"
+    end
+    if count == 1 and last_user.len() > 0:
+        ret out + last_user
+    end
+    ret out + "Conversation so far:\n\n" + str.Join(turns, "\n\n") + "\n\nReply to the last user message."
+end
+
+func key_owner(raw: str, uid &: str, kid &: str, kname &: str): bool:
+    if not str.StartsWith(raw, "sk-salam-") or raw.len() > 200:
+        ret false
+    end
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, id, name FROM api_keys WHERE hash = ?1 AND revoked = 0", one(aiweb.Hash(raw)))
+    mut found := false
+    if aistore.Next(rows):
+        found = true
+        uid = aistore.Text(rows, 0)
+        kid = aistore.Text(rows, 1)
+        kname = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    if found:
+        _u := aistore.Run("UPDATE api_keys SET last_used = ?1 WHERE id = ?2", two(n(aistore.Now()), kid))
+    end
+    aistore.Unlock()
+    ret found
+end
+
+func approx_tokens(chars: int): i64:
+    ret (chars + 3) / 4
+end
+
+func chunk(cid: str, created: i64, delta: str, finish: str): str:
+    mut ch := Vector {} as Vector<str>
+    ch.push(json.MemberInt("index", 0))
+    ch.push(json.MemberRaw("delta", delta))
+    if finish.len() > 0:
+        ch.push(json.Member("finish_reason", finish))
+    else:
+        ch.push(json.MemberRaw("finish_reason", "null"))
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", cid))
+    m.push(json.Member("object", "chat.completion.chunk"))
+    m.push(json.MemberInt("created", created))
+    m.push(json.Member("model", MODEL))
+    m.push(json.MemberRaw("choices", "[" + json.Object(ch) + "]"))
+    ret "data: " + json.Object(m) + "\n\n"
+end
+
+func usage_json(prompt_chars: int, completion_chars: int): str:
+    p := approx_tokens(prompt_chars)
+    q := approx_tokens(completion_chars)
+    mut u := Vector {} as Vector<str>
+    u.push(json.MemberInt("prompt_tokens", p))
+    u.push(json.MemberInt("completion_tokens", q))
+    u.push(json.MemberInt("total_tokens", p + q))
+    ret json.Object(u)
+end
+
+func finish_log(rid: str, status: str, response: str, started: i64):
+    mut a := one(status)
+    a.push(clip(response, MAX_LOG))
+    a.push(n(time.NowMillis() - started))
+    a.push(n(response.len() as i64))
+    a.push(rid)
+    aistore.Lock()
+    _u := aistore.Run("UPDATE api_requests SET status = ?1, response = ?2, ms = ?3, completion_chars = ?4 WHERE id = ?5", a)
+    aistore.Unlock()
+end
+
+func models(c: tcp.Conn):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", MODEL))
+    m.push(json.Member("object", "model"))
+    m.push(json.MemberInt("created", 1760572800))
+    m.push(json.Member("owned_by", "salam"))
+    respond(c, "200 OK", `{"object": "list", "data": [` + json.Object(m) + "]}")
+end
+
+func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
+    auth := header(h, "authorization")
+    mut raw := ""
+    if str.StartsWith(str.Lower(auth), "bearer "):
+        raw = str.Trim(auth.substr(7, auth.len() - 7))
+    end
+    mut uid := ""
+    mut kid := ""
+    mut kname := ""
+    if not key_owner(raw, uid, kid, kname):
+        oai_error(c, "401 Unauthorized", "invalid_request_error", "invalid_api_key", "Missing or invalid API key. Create one at https://ai.salamlang.ir/keys")
+        ret
+    end
+    mut err := encerr.EncodingError {}
+    req := json.Decode(body, err)
+    if encerr.IsError(err) or not value.IsObject(req):
+        oai_error(c, "400 Bad Request", "invalid_request_error", "invalid_json", "The body must be a JSON object.")
+        ret
+    end
+    messages := field(req, "messages")
+    if not value.IsArray(messages) or value.ArrayLen(messages) == 0:
+        oai_error(c, "400 Bad Request", "invalid_request_error", "missing_messages", "messages must be a non-empty array.")
+        ret
+    end
+    prompt := flatten(messages)
+    if str.Trim(prompt).len() == 0:
+        oai_error(c, "400 Bad Request", "invalid_request_error", "empty_prompt", "The messages contain no text.")
+        ret
+    end
+    if prompt.len() > MAX_PROMPT:
+        oai_error(c, "400 Bad Request", "invalid_request_error", "context_length_exceeded", "The conversation is longer than 64 KB.")
+        ret
+    end
+    stream := value.IsBool(field(req, "stream")) and value.AsBool(field(req, "stream"))
+    with_usage := value.IsBool(field(field(req, "stream_options"), "include_usage")) and value.AsBool(field(field(req, "stream_options"), "include_usage"))
+    mut project := str.Trim(header(h, "x-salam-project"))
+    if project.len() == 0:
+        project = str.Trim(text_field(field(req, "metadata"), "project"))
+    end
+    if project.len() == 0:
+        project = kname
+    end
+    started := time.NowMillis()
+    t := aistore.Now()
+    aistore.Lock()
+    recent := aistore.OneText("SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2", two(uid, n(t - 3600)))
+    aistore.Unlock()
+    if recent.to_int() >= HOURLY:
+        oai_error(c, "429 Too Many Requests", "rate_limit_exceeded", "rate_limit_exceeded", "Hourly request limit reached. Try again later.")
+        ret
+    end
+    mut a := two(uid, kid)
+    a.push(clip(project, 100))
+    a.push(clip(text_field(req, "user"), 200))
+    a.push(clip(text_field(req, "model"), 60))
+    a.push(stream ? "1" : "0")
+    a.push(clip(prompt, MAX_LOG))
+    a.push(n(prompt.len() as i64))
+    a.push(clip(ip_of(h), 64))
+    a.push(clip(header(h, "user-agent"), 255))
+    a.push(n(t))
+    aistore.Lock()
+    _i := aistore.Run("INSERT INTO api_requests (user_id, key_id, project, end_user, model, stream, status, prompt, response, prompt_chars, ip, agent, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, '', ?8, ?9, ?10, ?11)", a)
+    rid := aistore.LastId()
+    aistore.Unlock()
+    cid := "chatcmpl-" + crypto.RandomHex(12)
+    sid := aiengine.NewSession("api " + kname)
+    if sid.len() == 0 or not aiengine.Send(sid, prompt):
+        if sid.len() > 0:
+            aiengine.Delete(sid)
+        end
+        finish_log(rid, "error", "", started)
+        oai_error(c, "503 Service Unavailable", "server_error", "engine_unavailable", "The Salam assistant is not available right now. Try again shortly.")
+        ret
+    end
+    ailive.Begin(sid)
+    tcp.SetReadDeadline(c, 0)
+    if stream:
+        if tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") <= 0:
+            aiengine.Abort(sid)
+        end
+        _f := tcp.Write(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, ""))
+    end
+    mut sent := ""
+    mut gen := ailive.Gen()
+    mut status := "done"
+    mut final := ""
+    until true:
+        r := aiturn.Progress(sid, t, ANSWER_SECONDS)
+        if stream and str.StartsWith(r.text, sent) and r.text.len() > sent.len():
+            piece := r.text.substr(sent.len(), r.text.len() - sent.len())
+            if tcp.Write(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", "")) <= 0:
+                aiengine.Abort(sid)
+                status = "aborted"
+                final = r.text
+                break
+            end
+            sent = r.text
+        end
+        if r.done:
+            final = r.text
+            if r.failed:
+                status = "error"
+            end
+            break
+        end
+        if ailive.Connected():
+            next := ailive.Wait(gen, 15000)
+            if stream and next == gen:
+                if tcp.Write(c, ": ping\n\n") <= 0:
+                    aiengine.Abort(sid)
+                    status = "aborted"
+                    final = r.text
+                    break
+                end
+            end
+            gen = next
+            sync.SleepMs(40)
+        else:
+            sync.SleepMs(700)
+        end
+    end
+    ailive.End(sid)
+    aiturn.Forget(sid)
+    aiengine.Delete(sid)
+    finish_log(rid, status, final, started)
+    if stream:
+        if status == "aborted":
+            ret
+        end
+        if status == "error" and final.len() == 0:
+            _e := tcp.Write(c, "data: " + `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}` + "\n\n")
+        else:
+            if final.len() > sent.len() and str.StartsWith(final, sent):
+                _p := tcp.Write(c, chunk(cid, t, "{" + json.Member("content", final.substr(sent.len(), final.len() - sent.len())) + "}", ""))
+            end
+            _s := tcp.Write(c, chunk(cid, t, "{}", "stop"))
+            if with_usage:
+                mut u := Vector {} as Vector<str>
+                u.push(json.Member("id", cid))
+                u.push(json.Member("object", "chat.completion.chunk"))
+                u.push(json.MemberInt("created", t))
+                u.push(json.Member("model", MODEL))
+                u.push(json.MemberRaw("choices", "[]"))
+                u.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len())))
+                _u := tcp.Write(c, "data: " + json.Object(u) + "\n\n")
+            end
+        end
+        _d := tcp.Write(c, "data: [DONE]\n\n")
+        ret
+    end
+    if status == "error" and final.len() == 0:
+        oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
+        ret
+    end
+    mut msg := Vector {} as Vector<str>
+    msg.push(json.Member("role", "assistant"))
+    msg.push(json.Member("content", final))
+    mut choice := Vector {} as Vector<str>
+    choice.push(json.MemberInt("index", 0))
+    choice.push(json.MemberRaw("message", json.Object(msg)))
+    choice.push(json.Member("finish_reason", "stop"))
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", cid))
+    m.push(json.Member("object", "chat.completion"))
+    m.push(json.MemberInt("created", t))
+    m.push(json.Member("model", MODEL))
+    m.push(json.MemberRaw("choices", "[" + json.Object(choice) + "]"))
+    m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len())))
+    respond(c, "200 OK", json.Object(m))
+end
+
+func key_json(id: str, name: str, prefix: str, created: str, last_used: str, requests: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("name", name))
+    m.push(json.Member("prefix", prefix))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("last_used", last_used))
+    m.push(json.MemberRaw("requests", requests))
+    ret json.Object(m)
+end
+
+func list_keys(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT k.id, k.name, k.prefix, k.created, k.last_used, (SELECT COUNT(*) FROM api_requests r WHERE r.key_id = k.id) FROM api_keys k WHERE k.user_id = ?1 AND k.revoked = 0 ORDER BY k.id DESC", one(n(uid)))
+    until aistore.Next(rows):
+        items.push(key_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"keys": ` + json.Array(items) + "}")
+end
+
+func create_key(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    name := str.Trim(json.Get(http.Ctx_body(ctx), "name"))
+    if name.len() == 0 or str.CodePoints(name).len() > 60:
+        aiweb.Fail(ctx, 400, "name", "نام کلید باید بین ۱ تا ۶۰ نویسه باشد.")
+        ret
+    end
+    aistore.Lock()
+    active := aistore.OneText("SELECT COUNT(*) FROM api_keys WHERE user_id = ?1 AND revoked = 0", one(n(uid)))
+    aistore.Unlock()
+    if active.to_int() >= MAX_KEYS:
+        aiweb.Fail(ctx, 409, "too_many", "حداکثر ۲۰ کلید فعال می‌توانید داشته باشید. یکی را باطل کنید.")
+        ret
+    end
+    secret := "sk-salam-" + crypto.RandomHex(24)
+    prefix := secret.substr(0, 15)
+    t := n(aistore.Now())
+    mut a := two(n(uid), name)
+    a.push(prefix)
+    a.push(aiweb.Hash(secret))
+    a.push(t)
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO api_keys (user_id, name, prefix, hash, created) VALUES (?1, ?2, ?3, ?4, ?5)", a)
+    id := aistore.LastId()
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ساخت کلید ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 201, `{"key": ` + key_json(id, name, prefix, t, "0", "0") + `, "secret": ` + json.Str(secret) + "}")
+end
+
+func revoke_key(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Ctx_param(ctx, "id")
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM api_keys WHERE id = ?1 AND user_id = ?2 AND revoked = 0", two(id, n(uid)))
+    if found.len() > 0:
+        _u := aistore.Run("UPDATE api_keys SET revoked = 1 WHERE id = ?1", one(id))
+    end
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این کلید پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+func own_requests(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    mut before := http.Ctx_query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    aiweb.Reply(ctx, 200, `{"requests": ` + Requests("r.user_id = ?1 AND r.id < ?2", two(n(uid), n(before)), false) + "}")
+end
+
+pub func Configure(hourly: int):
+    if hourly > 0:
+        HOURLY = hourly
+    end
+end
+
+pub func Requests(where: str, args: Vector<str>, with_user: bool): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT r.id, r.created, r.key_id, COALESCE(k.name, ''), r.project, r.end_user, r.model, r.stream, r.status, r.ms, r.prompt, r.response, r.prompt_chars, r.completion_chars, r.ip, r.agent, u.id, u.name, u.email FROM api_requests r JOIN users u ON u.id = r.user_id LEFT JOIN api_keys k ON k.id = r.key_id WHERE " + where + " ORDER BY r.id DESC LIMIT 50", args)
+    until aistore.Next(rows):
+        mut k := Vector {} as Vector<str>
+        k.push(json.MemberRaw("id", aistore.Text(rows, 2)))
+        k.push(json.Member("name", aistore.Text(rows, 3)))
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 1)))
+        m.push(json.MemberRaw("key", json.Object(k)))
+        m.push(json.Member("project", aistore.Text(rows, 4)))
+        m.push(json.Member("end_user", aistore.Text(rows, 5)))
+        m.push(json.Member("model", MODEL))
+        m.push(json.MemberBool("stream", aistore.Text(rows, 7) != "0"))
+        m.push(json.Member("status", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("ms", aistore.Text(rows, 9)))
+        m.push(json.Member("prompt", aistore.Text(rows, 10)))
+        m.push(json.Member("response", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("prompt_chars", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("completion_chars", aistore.Text(rows, 13)))
+        m.push(json.Member("ip", aistore.Text(rows, 14)))
+        m.push(json.Member("agent", aistore.Text(rows, 15)))
+        if with_user:
+            mut u := Vector {} as Vector<str>
+            u.push(json.MemberRaw("id", aistore.Text(rows, 16)))
+            u.push(json.Member("name", aistore.Text(rows, 17)))
+            u.push(json.Member("email", aistore.Text(rows, 18)))
+            m.push(json.MemberRaw("user", json.Object(u)))
+        end
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+pub func Handles(path: str): bool:
+    ret path == "/chat/completions" or path == "/models"
+end
+
+pub func Serve(c: tcp.Conn, method: str, path: str, h: HashMap<str, str>, body: str):
+    if method == "OPTIONS":
+        _w := tcp.Write(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors() + "\r\n")
+        ret
+    end
+    switch path:
+        "/models":
+            if method == "GET":
+                models(c)
+                ret
+            end
+            break
+        end
+        "/chat/completions":
+            if method == "POST":
+                completions(c, h, body)
+                ret
+            end
+            break
+        end
+    end
+    oai_error(c, "404 Not Found", "invalid_request_error", "unknown_url", "Unknown endpoint " + method + " " + path + ". Supported: GET /models, POST /chat/completions.")
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/keys", list_keys)
+    router.Post(r, "/keys", create_key)
+    router.Delete(r, "/keys/:id", revoke_key)
+    router.Get(r, "/keys/requests", own_requests)
+    each path in ["/keys", "/keys/:id", "/keys/requests"]:
+        router.Options(r, path, aiweb.Preflight)
+    end
+end

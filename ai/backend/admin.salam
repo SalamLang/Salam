@@ -22,6 +22,7 @@ import str
 include aistore "store.salam"
 include aiweb "web.salam"
 include aioauth "oauth.salam"
+include aiopenai "openai.salam"
 
 func n(v: i64): str:
     ret aiweb.I64s(v)
@@ -80,6 +81,10 @@ func summary(ctx: i64):
     m.push(json.MemberRaw("mcp_calls_24h", count("SELECT COUNT(*) FROM mcp_events WHERE created > ?1", one(day))))
     m.push(json.MemberRaw("mcp_errors_24h", count("SELECT COUNT(*) FROM mcp_events WHERE created > ?1 AND ok = 0", one(day))))
     m.push(json.MemberRaw("top_tools", ranking("SELECT tool, COUNT(*) AS n FROM mcp_events WHERE tool <> '' GROUP BY tool ORDER BY n DESC LIMIT 10", none, "tool")))
+    m.push(json.MemberRaw("api_requests", count("SELECT COUNT(*) FROM api_requests", none)))
+    m.push(json.MemberRaw("api_requests_24h", count("SELECT COUNT(*) FROM api_requests WHERE created > ?1", one(day))))
+    m.push(json.MemberRaw("api_errors_24h", count("SELECT COUNT(*) FROM api_requests WHERE created > ?1 AND status = 'error'", one(day))))
+    m.push(json.MemberRaw("top_projects", ranking("SELECT project, COUNT(*) AS n FROM api_requests WHERE project <> '' GROUP BY project ORDER BY n DESC LIMIT 10", none, "name")))
     m.push(json.MemberRaw("top_clients", ranking("SELECT COALESCE(c.name, e.client_id), COUNT(*) AS n FROM mcp_events e LEFT JOIN oauth_clients c ON c.id = e.client_id GROUP BY COALESCE(c.name, e.client_id) ORDER BY n DESC LIMIT 10", none, "name")))
     mut days := Vector {} as Vector<str>
     mut rows := aistore.Stmt("SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d') AS d, COUNT(*), COUNT(DISTINCT user_id) FROM mcp_events WHERE created >= ?1 GROUP BY d ORDER BY d", one(since))
@@ -88,6 +93,12 @@ func summary(ctx: i64):
         found.put(aistore.Text(rows, 0), aistore.Text(rows, 1) + "|" + aistore.Text(rows, 2))
     end
     aistore.Finish(rows)
+    mut api_rows := aistore.Stmt("SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d') AS d, COUNT(*) FROM api_requests WHERE created >= ?1 GROUP BY d", one(since))
+    mut api_days := HashMap {} as HashMap<str, str>
+    until aistore.Next(api_rows):
+        api_days.put(aistore.Text(api_rows, 0), aistore.Text(api_rows, 1))
+    end
+    aistore.Finish(api_rows)
     aistore.Unlock()
     mut i := 0
     until i < 14:
@@ -105,6 +116,7 @@ func summary(ctx: i64):
         d.push(json.Member("day", label))
         d.push(json.MemberRaw("calls", calls))
         d.push(json.MemberRaw("users", users))
+        d.push(json.MemberRaw("api", api_days.has(label) ? api_days.get(label) : "0"))
         days.push(json.Object(d))
         i += 1
     end
@@ -132,7 +144,7 @@ func list_users(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM users WHERE name LIKE ?1 OR email LIKE ?1", one(like))
-    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)) FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
+    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0)), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id) FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -144,6 +156,7 @@ func list_users(ctx: i64):
         m.push(json.MemberRaw("apps", aistore.Text(rows, 6)))
         m.push(json.MemberRaw("mcp_calls", aistore.Text(rows, 7)))
         m.push(json.MemberRaw("last_active", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("api_requests", aistore.Text(rows, 9)))
         items.push(json.Object(m))
     end
     aistore.Finish(rows)
@@ -214,6 +227,34 @@ func list_apps(ctx: i64):
     aiweb.Reply(ctx, 200, `{"apps": ` + json.Array(items) + "}")
 end
 
+func list_requests(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut before := http.Ctx_query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    mut where := "r.id < ?1"
+    mut args := one(n(before))
+    user := http.Ctx_query(ctx, "user")
+    if user.len() > 0:
+        args.push(user)
+        where = where + " AND r.user_id = ?" + args.len()
+    end
+    project := http.Ctx_query(ctx, "project")
+    if project.len() > 0:
+        args.push(project)
+        where = where + " AND r.project = ?" + args.len()
+    end
+    key := http.Ctx_query(ctx, "key")
+    if key.len() > 0:
+        args.push(key)
+        where = where + " AND r.key_id = ?" + args.len()
+    end
+    aiweb.Reply(ctx, 200, `{"requests": ` + aiopenai.Requests(where, args, true) + "}")
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -228,7 +269,8 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/events", list_events)
     router.Get(r, "/admin/apps", list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
-    each path in ["/admin/summary", "/admin/users", "/admin/events", "/admin/apps", "/admin/apps/:id"]:
+    router.Get(r, "/admin/requests", list_requests)
+    each path in ["/admin/summary", "/admin/users", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

@@ -169,3 +169,9 @@ export const IconLink = (p: P) => (
     <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
   </Base>
 );
+export const IconKey = (p: P) => (
+  <Base {...p}>
+    <circle cx="8" cy="15" r="4" />
+    <path d="M11 12l9-9M16 7l3 3M14 9l2 2" />
+  </Base>
+);

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSummary, type AdminUser, type AppEvent, type EventFilters } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type RequestFilters } from "./api";
 import { EventList } from "./Events";
 import { fmtDate, fmtDateTime, fmtDay, fmtNum, fmtRelative } from "./format";
 import { IconClose, IconSearch, IconShield } from "./icons";
+import { RequestList } from "./Requests";
 
 type Picked = { id: number; name: string } | null;
 
@@ -41,7 +42,7 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
   const axis = 44;
   const plotW = width - axis;
   const plotH = height - top - bottom;
-  const max = Math.max(1, ...daily.map((d) => d.calls));
+  const max = Math.max(1, ...daily.map((d) => Math.max(d.calls, d.api)));
   const nice = (() => {
     const p = 10 ** Math.floor(Math.log10(max));
     for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= max) return m * p;
@@ -49,16 +50,19 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
   })();
   const n = Math.max(1, daily.length);
   const slot = plotW / n;
-  const barW = Math.max(4, Math.min(28, slot - 6));
-  const x = (i: number) => plotW - (i + 1) * slot + (slot - barW) / 2;
+  const gap = 2;
+  const groupW = Math.max(8, Math.min(44, slot - 6));
+  const barW = (groupW - gap) / 2;
+  const gx = (i: number) => plotW - (i + 1) * slot + (slot - groupW) / 2;
   const y = (v: number) => top + plotH - (v / nice) * plotH;
   const ticks = [0, nice / 2, nice];
   const labelEvery = slot < 34 ? 2 : 1;
-  const total = daily.reduce((s, d) => s + d.calls, 0);
+  const totalCalls = daily.reduce((s, d) => s + d.calls, 0);
+  const totalApi = daily.reduce((s, d) => s + d.api, 0);
 
   const bar = (bx: number, by: number, bw: number, bh: number) => {
     if (bh <= 0) return "";
-    const r = Math.min(4, bw / 2, bh);
+    const r = Math.min(3, bw / 2, bh);
     return `M${bx},${by + bh}V${by + r}Q${bx},${by} ${bx + r},${by}H${bx + bw - r}Q${bx + bw},${by} ${bx + bw},${by + r}V${by + bh}Z`;
   };
 
@@ -66,7 +70,13 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
 
   return (
     <div className="chart" ref={wrap}>
-      <svg width={width} height={height} role="img" aria-label={`نمودار فراخوانی‌های MCP در ${fmtNum(daily.length)} روز گذشته، روی هم ${fmtNum(total)} فراخوانی`} onMouseLeave={() => setHover(null)}>
+      <svg
+        width={width}
+        height={height}
+        role="img"
+        aria-label={`نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalCalls)} فراخوانی MCP و ${fmtNum(totalApi)} درخواست API`}
+        onMouseLeave={() => setHover(null)}
+      >
         {ticks.map((t) => (
           <g key={t}>
             <line className="chart-grid" x1={0} x2={plotW} y1={y(t)} y2={y(t)} />
@@ -76,12 +86,13 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
           </g>
         ))}
         {daily.map((d, i) => {
-          const bx = x(i);
-          const by = y(d.calls);
-          const label = `${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی، ${fmtNum(d.users)} کاربر`;
+          const x0 = gx(i);
+          const mcpX = x0 + barW + gap;
+          const label = `${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی MCP، ${fmtNum(d.api)} درخواست API، ${fmtNum(d.users)} کاربر`;
           return (
             <g key={d.day}>
-              <path className={`chart-bar ${hover === i ? "active" : ""}`} d={bar(bx, by, barW, top + plotH - by)} />
+              <path className={`chart-bar mcp ${hover === i ? "active" : ""}`} d={bar(mcpX, y(d.calls), barW, top + plotH - y(d.calls))} />
+              <path className={`chart-bar api ${hover === i ? "active" : ""}`} d={bar(x0, y(d.api), barW, top + plotH - y(d.api))} />
               <rect
                 className="chart-hit"
                 x={plotW - (i + 1) * slot}
@@ -96,7 +107,7 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
                 onBlur={() => setHover(null)}
               />
               {(daily.length - 1 - i) % labelEvery === 0 && (
-                <text className="chart-label" x={bx + barW / 2} y={height - 8} textAnchor="middle">
+                <text className="chart-label" x={x0 + groupW / 2} y={height - 8} textAnchor="middle">
                   {fmtDay(d.day)}
                 </text>
               )}
@@ -106,12 +117,33 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
         <line className="chart-axis" x1={0} x2={plotW} y1={top + plotH} y2={top + plotH} />
       </svg>
       {hovered && hover !== null && (
-        <div className="chart-tip" style={{ left: Math.min(width - 80, Math.max(80, x(hover) + barW / 2)), top: Math.max(0, y(hovered.calls) - 8) }} aria-hidden="true">
+        <div
+          className="chart-tip"
+          style={{ left: Math.min(width - 90, Math.max(90, gx(hover) + groupW / 2)), top: Math.max(0, y(Math.max(hovered.calls, hovered.api)) - 8) }}
+          aria-hidden="true"
+        >
           <strong>{fmtDay(hovered.day)}</strong>
-          <span>{fmtNum(hovered.calls)} فراخوانی</span>
+          <span>
+            <i className="swatch mcp" />
+            {fmtNum(hovered.calls)} فراخوانی MCP
+          </span>
+          <span>
+            <i className="swatch api" />
+            {fmtNum(hovered.api)} درخواست API
+          </span>
           <span>{fmtNum(hovered.users)} کاربر</span>
         </div>
       )}
+      <ul className="chart-legend">
+        <li>
+          <span className="swatch mcp" aria-hidden="true" />
+          فراخوانی‌های MCP
+        </li>
+        <li>
+          <span className="swatch api" aria-hidden="true" />
+          درخواست‌های API
+        </li>
+      </ul>
       <details className="chart-table">
         <summary>نمایش جدول داده‌ها</summary>
         <div className="table-wrap">
@@ -119,7 +151,8 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
             <thead>
               <tr>
                 <th scope="col">روز</th>
-                <th scope="col">فراخوانی</th>
+                <th scope="col">فراخوانی MCP</th>
+                <th scope="col">درخواست API</th>
                 <th scope="col">کاربر</th>
               </tr>
             </thead>
@@ -128,6 +161,7 @@ function DailyChart({ daily }: { daily: AdminSummary["daily"] }) {
                 <tr key={d.day}>
                   <td>{fmtDay(d.day)}</td>
                   <td>{fmtNum(d.calls)}</td>
+                  <td>{fmtNum(d.api)}</td>
                   <td>{fmtNum(d.users)}</td>
                 </tr>
               ))}
@@ -231,6 +265,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">پیام</th>
               <th scope="col">برنامه</th>
               <th scope="col">فراخوانی MCP</th>
+              <th scope="col">API</th>
               <th scope="col">آخرین فعالیت</th>
             </tr>
           </thead>
@@ -238,7 +273,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             {data?.users.map((u) => (
               <tr key={u.id} className={picked?.id === u.id ? "selected" : ""}>
                 <td>
-                  <button type="button" className="link" onClick={() => onPick(picked?.id === u.id ? null : { id: u.id, name: u.name })} aria-pressed={picked?.id === u.id} title="نمایش فعالیت و برنامه‌های این کاربر">
+                  <button type="button" className="link" onClick={() => onPick(picked?.id === u.id ? null : { id: u.id, name: u.name })} aria-pressed={picked?.id === u.id} title="نمایش فعالیت، درخواست‌ها و برنامه‌های این کاربر">
                     <bdi>{u.name}</bdi>
                   </button>
                 </td>
@@ -250,12 +285,13 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.messages)}</td>
                 <td>{fmtNum(u.apps)}</td>
                 <td>{fmtNum(u.mcp_calls)}</td>
+                <td>{fmtNum(u.api_requests)}</td>
                 <td title={u.last_active ? fmtDateTime(u.last_active) : undefined}>{fmtRelative(u.last_active)}</td>
               </tr>
             ))}
             {data && data.users.length === 0 && (
               <tr>
-                <td colSpan={8} className="empty-cell">
+                <td colSpan={9} className="empty-cell">
                   کاربری پیدا نشد.
                 </td>
               </tr>
@@ -371,6 +407,114 @@ function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => voi
         showClient
         onUser={(id, name) => onPick({ id, name })}
         empty="رویدادی با این فیلترها پیدا نشد."
+      />
+    </section>
+  );
+}
+
+function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+  const [project, setProject] = useState("");
+  const [keyId, setKeyId] = useState("");
+  const [applied, setApplied] = useState<{ project: string; key?: number }>({ project: "" });
+  const [requests, setRequests] = useState<ApiRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState("");
+  const seq = useRef(0);
+
+  const load = useCallback(
+    async (before?: number) => {
+      const id = ++seq.current;
+      setLoading(true);
+      setError("");
+      const f: RequestFilters = { user: picked?.id, project: applied.project || undefined, key: applied.key, before };
+      try {
+        const r = await api.adminRequests(f);
+        if (id !== seq.current) return;
+        setRequests((cur) => (before ? [...cur, ...r.requests] : r.requests));
+        setHasMore(r.requests.length >= PAGE_SIZE);
+      } catch (e) {
+        if (id === seq.current) setError(errText(e, "بارگذاری درخواست‌ها ناموفق بود."));
+      } finally {
+        if (id === seq.current) setLoading(false);
+      }
+    },
+    [picked, applied],
+  );
+
+  useEffect(() => {
+    setRequests([]);
+    load();
+  }, [load]);
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const k = Number.parseInt(keyId.trim(), 10);
+    setApplied({ project: project.trim(), key: Number.isFinite(k) && k > 0 ? k : undefined });
+  };
+
+  const clear = () => {
+    setProject("");
+    setKeyId("");
+    setApplied({ project: "" });
+  };
+
+  const byKey = (id: number) => {
+    setKeyId(String(id));
+    setApplied((a) => ({ ...a, key: id }));
+  };
+
+  const byProject = (name: string) => {
+    setProject(name);
+    setApplied((a) => ({ ...a, project: name }));
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>درخواست‌های API</h3>
+      </div>
+      <form className="filters" onSubmit={submit}>
+        {picked && (
+          <span className="chip">
+            کاربر: <bdi>{picked.name}</bdi>
+            <button type="button" className="icon-button tiny" onClick={() => onPick(null)} aria-label="برداشتن فیلتر کاربر">
+              <IconClose width={14} height={14} />
+            </button>
+          </span>
+        )}
+        <label className="filter-field">
+          <span className="sr-only">نام پروژه</span>
+          <input dir="auto" value={project} onChange={(e) => setProject(e.target.value)} placeholder="نام پروژه" />
+        </label>
+        <label className="filter-field">
+          <span className="sr-only">شناسه‌ی کلید</span>
+          <input dir="ltr" inputMode="numeric" value={keyId} onChange={(e) => setKeyId(e.target.value.replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).replace(/[^0-9]/g, ""))} placeholder="شناسه‌ی کلید" />
+        </label>
+        <button type="submit" className="button ghost small">
+          اعمال فیلتر
+        </button>
+        {(applied.project || applied.key) && (
+          <button type="button" className="link" onClick={clear}>
+            پاک کردن
+          </button>
+        )}
+      </form>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <RequestList
+        requests={requests}
+        loading={loading}
+        hasMore={hasMore}
+        onMore={() => load(requests[requests.length - 1]?.id)}
+        showUser
+        onUser={(id, name) => onPick({ id, name })}
+        onKey={byKey}
+        onProject={byProject}
+        empty="درخواستی با این فیلترها پیدا نشد."
       />
     </section>
   );
@@ -530,6 +674,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
 
   const s = summary;
   const errRate = s && s.mcp_calls_24h > 0 ? Math.round((s.mcp_errors_24h / s.mcp_calls_24h) * 1000) / 10 : 0;
+  const apiErrRate = s && s.api_requests_24h > 0 ? Math.round((s.api_errors_24h / s.api_requests_24h) * 1000) / 10 : 0;
 
   return (
     <div className="page wide">
@@ -558,15 +703,19 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
             <Tile label="گفت‌وگوها" value={s.chats} sub={`${fmtNum(s.messages)} پیام`} />
             <Tile label="برنامه‌های متصل" value={s.apps} />
             <Tile label="فراخوانی‌های MCP" value={s.mcp_calls} sub={`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`} />
-            <Tile label="خطاهای ۲۴ ساعت اخیر" value={s.mcp_errors_24h} sub={`${fmtNum(errRate)}٪ از فراخوانی‌ها`} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
+            <Tile label="خطاهای MCP در ۲۴ ساعت" value={s.mcp_errors_24h} sub={`${fmtNum(errRate)}٪ از فراخوانی‌ها`} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
+            <Tile label="درخواست‌های API" value={s.api_requests} />
+            <Tile label="درخواست‌های API در ۲۴ ساعت" value={s.api_requests_24h} />
+            <Tile label="خطاهای API در ۲۴ ساعت" value={s.api_errors_24h} sub={`${fmtNum(apiErrRate)}٪ از درخواست‌ها`} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
           </div>
           <section className="card panel">
-            <h3>فراخوانی‌های MCP در ۱۴ روز گذشته</h3>
+            <h3>فراخوانی‌های MCP و درخواست‌های API در ۱۴ روز گذشته</h3>
             <DailyChart daily={s.daily} />
           </section>
-          <div className="split">
+          <div className="split three">
             <TopList title="ابزارهای پرکاربرد" items={s.top_tools.map((t) => ({ name: t.tool, count: t.count }))} ltr />
             <TopList title="برنامه‌های پرکاربرد" items={s.top_clients} />
+            <TopList title="پروژه‌های پرکاربرد API" items={s.top_projects} />
           </div>
         </>
       )}
@@ -575,13 +724,14 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <Users picked={picked} onPick={setPicked} />
           {picked && (
             <div className="picked-bar" role="status">
-              نمایش رویدادها و برنامه‌های <bdi className="strong">{picked.name}</bdi>
+              نمایش رویدادها، درخواست‌های API و برنامه‌های <bdi className="strong">{picked.name}</bdi>
               <button type="button" className="link" onClick={() => setPicked(null)}>
                 نمایش همه
               </button>
             </div>
           )}
           <Events picked={picked} onPick={setPicked} />
+          <RequestsFeed picked={picked} onPick={setPicked} />
           <AppsTable picked={picked} notify={notify} />
         </>
       )}

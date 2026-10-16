@@ -65,9 +65,13 @@ export type AdminSummary = {
   mcp_calls: number;
   mcp_calls_24h: number;
   mcp_errors_24h: number;
+  api_requests: number;
+  api_requests_24h: number;
+  api_errors_24h: number;
   top_tools: { tool: string; count: number }[];
   top_clients: { name: string; count: number }[];
-  daily: { day: string; calls: number; users: number }[];
+  top_projects: { name: string; count: number }[];
+  daily: { day: string; calls: number; api: number; users: number }[];
 };
 export type AdminUser = {
   id: number;
@@ -78,6 +82,7 @@ export type AdminUser = {
   messages: number;
   apps: number;
   mcp_calls: number;
+  api_requests: number;
   last_active: number;
 };
 export type AdminApp = {
@@ -94,6 +99,40 @@ export type EventFilters = {
   user?: number;
   tool?: string;
   client?: string;
+  before?: number;
+};
+
+export type ApiKey = {
+  id: number;
+  name: string;
+  prefix: string;
+  created: number;
+  last_used: number;
+  requests: number;
+};
+export type RequestStatus = "pending" | "done" | "error" | "aborted";
+export type ApiRequest = {
+  id: number;
+  created: number;
+  key: { id: number; name: string };
+  project: string;
+  end_user: string;
+  model: string;
+  stream: boolean;
+  status: RequestStatus;
+  ms: number;
+  prompt: string;
+  response: string;
+  prompt_chars: number;
+  completion_chars: number;
+  ip: string;
+  agent: string;
+  user?: PersonRef;
+};
+export type RequestFilters = {
+  user?: number;
+  project?: string;
+  key?: number;
   before?: number;
 };
 
@@ -323,4 +362,23 @@ export const api = {
     call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user })}`),
   adminRevokeApp: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/apps/${id}`),
+  keys: () => call<{ keys: ApiKey[] }>("GET", "/keys"),
+  createKey: (name: string) =>
+    call<{ key: ApiKey; secret: string }>("POST", "/keys", { name }),
+  revokeKey: (id: number) => call<{ ok: boolean }>("DELETE", `/keys/${id}`),
+  myRequests: (before?: number) =>
+    call<{ requests: ApiRequest[] }>(
+      "GET",
+      `/keys/requests${query({ before })}`,
+    ),
+  adminRequests: (f: RequestFilters) =>
+    call<{ requests: ApiRequest[] }>(
+      "GET",
+      `/admin/requests${query({
+        user: f.user,
+        project: f.project,
+        key: f.key,
+        before: f.before,
+      })}`,
+    ),
 };

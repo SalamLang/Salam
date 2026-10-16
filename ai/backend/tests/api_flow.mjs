@@ -1,5 +1,5 @@
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
-const V1 = (process.env.V1 ?? "http://127.0.0.1:18091/v1").replace(/\/$/, "");
+const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
 const ADMIN = process.env.ADMIN_EMAIL ?? "admin@test.ir";
 const DASHES = new RegExp(`[${String.fromCodePoint(0x2013, 0x2014)}]`);
 
@@ -49,7 +49,7 @@ check("an empty key name is refused", empty.res.status === 400);
 
 console.log("models and auth");
 const models = await (await fetch(`${V1}/models`)).json();
-check("/v1/models lists salam", models.object === "list" && models.data[0].id === "salam", models);
+check("/models lists salam", models.object === "list" && models.data[0].id === "salam", models);
 const noKey = await chat("sk-salam-wrong", { model: "salam", messages: [{ role: "user", content: "hi" }] });
 const noKeyBody = await noKey.json();
 check("a wrong key gets 401 invalid_api_key", noKey.status === 401 && noKeyBody.error.code === "invalid_api_key", noKeyBody);
@@ -89,7 +89,8 @@ check("another user does not see these requests", theirs.json.requests.length ==
 
 console.log("limits and revocation");
 let limited = 0;
-for (let i = 0; i < 6; i += 1) {
+const tries = Number(process.env.HOURLY ?? 8) + 1;
+for (let i = 0; i < tries; i += 1) {
   const r = await chat(key, { model: "salam", messages: [{ role: "user", content: `n${i}` }] });
   if (r.status === 429) limited += 1;
   await r.text();

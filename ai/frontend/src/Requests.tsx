@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ApiRequest, RequestStatus } from "./api";
-import { fmtDateTime, fmtDuration, fmtNum, fmtRelative } from "./format";
+import { fmtCompact, fmtCost, fmtDateTime, fmtDuration, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconChevronDown } from "./icons";
 import { CopyButton } from "./Markdown";
 
@@ -28,6 +28,24 @@ function TextBlock({ title, text }: { title: string; text: string }) {
   );
 }
 
+function usageSummary(r: ApiRequest): { text: string; title: string } | null {
+  const u = r.usage;
+  if (!u) return null;
+  const t = tokenSplit(u);
+  if (t.total === 0 && !u.tools) return null;
+  const parts = [`${fmtCompact(t.input)} ورودی`, `${fmtCompact(t.output)} خروجی`];
+  const exact = [`${fmtNum(t.input)} توکن ورودی`, `${fmtNum(t.output)} توکن خروجی`];
+  if (t.cache > 0) {
+    parts.push(`${fmtCompact(t.cache)} کش`);
+    exact.push(`${fmtNum(t.cache)} توکن کش`);
+  }
+  if (u.tools > 0) {
+    parts.push(`${fmtNum(u.tools)} ابزار`);
+    exact.push(`${fmtNum(u.tools)} فراخوانی ابزار`);
+  }
+  return { text: `توکن: ${parts.join("، ")}`, title: exact.join("، ") };
+}
+
 type ItemProps = {
   r: ApiRequest;
   showUser?: boolean;
@@ -40,6 +58,8 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
   const [open, setOpen] = useState(false);
   const st = STATUS[r.status] || STATUS.done;
   const detailId = `request-${r.id}`;
+  const usage = usageSummary(r);
+  const tk = r.usage ? tokenSplit(r.usage) : null;
   return (
     <li className="event request">
       <div className="event-row">
@@ -65,6 +85,11 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
           ))}
         <span className={`badge ${st.badge}`}>{st.label}</span>
         {r.status !== "pending" && <span className="event-meta">{fmtDuration(r.ms)}</span>}
+        {usage && (
+          <span className="event-meta" title={usage.title}>
+            {usage.text}
+          </span>
+        )}
         <time className="event-meta event-time" dateTime={new Date(r.created * 1000).toISOString()} title={fmtDateTime(r.created)}>
           {fmtRelative(r.created)}
         </time>
@@ -113,6 +138,38 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
                 {fmtNum(r.prompt_chars)} پرسش، {fmtNum(r.completion_chars)} پاسخ
               </dd>
             </div>
+            {r.usage && tk && (
+              <>
+                <div>
+                  <dt>توکن ورودی</dt>
+                  <dd>
+                    {fmtNum(tk.input)}
+                    {tk.cache > 0 && ` (${fmtNum(r.usage.input)} تازه، ${fmtNum(r.usage.cache_read)} خوانده از کش، ${fmtNum(r.usage.cache_write)} نوشته در کش)`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>توکن خروجی</dt>
+                  <dd>
+                    {fmtNum(tk.output)}
+                    {r.usage.reasoning > 0 && ` (${fmtNum(r.usage.reasoning)} توکن استدلال)`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>جمع توکن‌ها</dt>
+                  <dd>{fmtNum(tk.total)}</dd>
+                </div>
+                <div>
+                  <dt>فراخوانی ابزار</dt>
+                  <dd>{fmtNum(r.usage.tools || 0)}</dd>
+                </div>
+                {r.usage.cost > 0 && (
+                  <div>
+                    <dt>هزینه</dt>
+                    <dd>{fmtCost(r.usage.cost)}</dd>
+                  </div>
+                )}
+              </>
+            )}
             {r.end_user && (
               <div>
                 <dt>کاربر نهایی</dt>

@@ -54,9 +54,9 @@ Persian digits.
 The Agent page links to the desktop builds on the `v<VERSION>` release:
 `agent.release` is the release page and `agent.download` the filename prefix
 the download links append to, for example
-`{{agent.download}}windows-x86_64-setup.exe`. The compiler release workflow
-builds the agent and uploads its files there without the agent's own version
-in their names, so the links do not change when the agent version does.
+`{{agent.download}}windows-x86_64-setup.exe`. The agent carries the same
+version as `VERSION` (kept in sync by `tools/salam/update-version.salam`), and
+the compiler release workflow builds it and uploads its files to that release.
 
 SEO: each page's `<page>.title` is the full `<title>` (write the whole
 phrase, including the brand), `<page>.description` the meta description and

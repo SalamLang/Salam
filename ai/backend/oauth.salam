@@ -23,6 +23,8 @@ import encoding.encerr
 import crypto
 import mem
 import str
+import tls
+import net.dns
 
 include aistore "store.salam"
 include aiweb "web.salam"
@@ -33,6 +35,7 @@ const ACCESS_SECONDS := 3600
 const REFRESH_SECONDS := 2592000
 const CIMD_SECONDS := 3600
 const MAX_CIMD_BYTES := 16384
+const FETCH_TIMEOUT_MS := 5000
 const MAX_ARGS := 16384
 const SCOPE := "mcp"
 
@@ -60,6 +63,7 @@ struct Pending:
     pub scope: str = ""
     pub resource: str = ""
     pub created: i64 = 0
+    pub redirect_given: bool = true
 end
 
 func one(v: str): Vector<str>:
@@ -262,6 +266,151 @@ func cimd_url_ok(id: str): bool:
     ret path_of(id).len() > 1
 end
 
+func octets(ip: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    each part in ip.split("."):
+        if part.len() == 0 or part.len() > 3:
+            ret Vector {}
+        end
+        out.push(part.to_int())
+    end
+    ret out
+end
+
+func public_ipv4(ip: str): bool:
+    o := octets(ip)
+    if o.len() != 4:
+        ret false
+    end
+    a := o.get(0)
+    b := o.get(1)
+    if a == 0 or a == 10 or a == 127 or a >= 224:
+        ret false
+    end
+    if a == 100 and b >= 64 and b <= 127:
+        ret false
+    end
+    if a == 169 and b == 254:
+        ret false
+    end
+    if a == 172 and b >= 16 and b <= 31:
+        ret false
+    end
+    if a == 192 and (b == 168 or (b == 0 and o.get(2) == 0)):
+        ret false
+    end
+    if a == 198 and (b == 18 or b == 19):
+        ret false
+    end
+    ret true
+end
+
+func public_ip(ip: str): bool:
+    v := str.Lower(ip)
+    if v.find(":") < 0:
+        ret public_ipv4(v)
+    end
+    if v == "::" or v == "::1" or str.StartsWith(v, "fe8") or str.StartsWith(v, "fe9") or str.StartsWith(v, "fea") or str.StartsWith(v, "feb") or str.StartsWith(v, "fc") or str.StartsWith(v, "fd") or str.StartsWith(v, "ff"):
+        ret false
+    end
+    if str.StartsWith(v, "::ffff:"):
+        ret public_ipv4(v.substr(7, v.len() - 7))
+    end
+    ret true
+end
+
+func hex_int(h: str): int:
+    mut total := 0
+    mut i := 0
+    until i < h.len():
+        c := str.Lower(h.substr(i, 1))
+        mut d := 0 - 1
+        if c >= "0" and c <= "9":
+            d = c.to_int()
+        else c >= "a" and c <= "f":
+            d = "abcdef".find(c) + 10
+        end
+        if d < 0:
+            ret total
+        end
+        total = total * 16 + d
+        i += 1
+    end
+    ret total
+end
+
+func dechunk(body: str): str:
+    mut out := ""
+    mut rest := body
+    until true:
+        line_end := rest.find("\r\n")
+        if line_end < 0:
+            ret ""
+        end
+        size := hex_int(str.Trim(rest.substr(0, line_end)))
+        if size == 0:
+            ret out
+        end
+        start := line_end + 2
+        if start + size > rest.len():
+            ret ""
+        end
+        out = out + rest.substr(start, size)
+        rest = rest.substr(start + size + 2, rest.len() - start - size - 2)
+    end
+end
+
+func fetch_capped(url: str): str:
+    hostport := host_of(url)
+    host := bare_host(hostport)
+    mut port := 443
+    colon := hostport.find(":")
+    if colon > 0 and not str.StartsWith(hostport, "["):
+        port = hostport.substr(colon + 1, hostport.len() - colon - 1).to_int()
+    end
+    if port <= 0 or port > 65535:
+        ret ""
+    end
+    ip := dns.Lookup(host)
+    if ip.len() == 0 or not public_ip(ip):
+        ret ""
+    end
+    mut c := tls.Dial(ip, port, tls.NewConfig(host))
+    if not c.open:
+        tls.Close(c)
+        ret ""
+    end
+    c.h.rec.read_deadline_ms = FETCH_TIMEOUT_MS
+    request := "GET " + path_of(url) + " HTTP/1.1\r\nHost: " + hostport + "\r\nAccept: application/json\r\nUser-Agent: salam-ai-oauth\r\nConnection: close\r\n\r\n"
+    if tls.Write(c, request) <= 0:
+        tls.Close(c)
+        ret ""
+    end
+    mut raw := ""
+    until true:
+        got := tls.Read(c, 4096)
+        if got.len() == 0:
+            break
+        end
+        raw = raw + got
+        if raw.len() > MAX_CIMD_BYTES + 8192:
+            tls.Close(c)
+            ret ""
+        end
+    end
+    tls.Close(c)
+    head_end := raw.find("\r\n\r\n")
+    if head_end < 0 or not (str.StartsWith(raw, "HTTP/1.1 200") or str.StartsWith(raw, "HTTP/1.0 200")):
+        ret ""
+    end
+    head := str.Lower(raw.substr(0, head_end))
+    body := raw.substr(head_end + 4, raw.len() - head_end - 4)
+    if head.find("transfer-encoding: chunked") >= 0:
+        ret dechunk(body)
+    end
+    ret body
+end
+
 func strings_of(v: value.Value): Vector<str>:
     mut out := Vector {} as Vector<str>
     if not value.IsArray(v):
@@ -337,13 +486,7 @@ func fetch_cimd(id: str): Client:
     if not cimd_url_ok(id):
         ret c
     end
-    mut headers := http.NewHeaders()
-    headers.put("Accept", "application/json")
-    r := http.GetWith(id, headers)
-    if http.Status(r) != 200:
-        ret c
-    end
-    body := http.Body(r)
+    body := fetch_capped(id)
     if body.len() == 0 or body.len() > MAX_CIMD_BYTES:
         ret c
     end
@@ -631,6 +774,7 @@ end
 func authorize(ctx: i64):
     client_id := http.Ctx_query(ctx, "client_id")
     mut redirect := http.Ctx_query(ctx, "redirect_uri")
+    given := redirect.len() > 0
     state := http.Ctx_query(ctx, "state")
     c := find_client(client_id)
     if not c.ok:
@@ -680,9 +824,10 @@ func authorize(ctx: i64):
     args.push(scope)
     args.push(normal_resource(resource))
     args.push(n(now()))
+    args.push(given ? "1" : "0")
     aistore.Lock()
     _gc := aistore.Run("DELETE FROM oauth_requests WHERE created < ?1", one(n(now() - 86400)))
-    ok := aistore.Run("INSERT INTO oauth_requests (id, client_id, redirect_uri, state, challenge, scope, resource, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", args)
+    ok := aistore.Run("INSERT INTO oauth_requests (id, client_id, redirect_uri, state, challenge, scope, resource, created, redirect_given) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", args)
     aistore.Unlock()
     if not ok:
         error_redirect(ctx, redirect, state, "server_error", "could not start the authorization")
@@ -698,7 +843,7 @@ func load_request(id: str): Pending:
         ret p
     end
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT client_id, redirect_uri, state, challenge, scope, resource, created, answered FROM oauth_requests WHERE id = ?1 AND created > ?2", two(id, n(now() - REQUEST_SECONDS)))
+    mut rows := aistore.Stmt("SELECT client_id, redirect_uri, state, challenge, scope, resource, created, answered, redirect_given FROM oauth_requests WHERE id = ?1 AND created > ?2", two(id, n(now() - REQUEST_SECONDS)))
     if aistore.Next(rows):
         p.found = true
         p.client_id = aistore.Text(rows, 0)
@@ -709,6 +854,7 @@ func load_request(id: str): Pending:
         p.resource = aistore.Text(rows, 5)
         p.created = aistore.Int64(rows, 6)
         p.answered = aistore.Text(rows, 7) != "0"
+        p.redirect_given = aistore.Text(rows, 8) != "0"
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -771,8 +917,9 @@ func approve(ctx: i64):
     args.push(p.scope)
     args.push(p.resource)
     args.push(n(now() + CODE_SECONDS))
+    args.push(p.redirect_given ? "1" : "0")
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO oauth_codes (code, user_id, client_id, redirect_uri, challenge, scope, resource, expires) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", args)
+    ok := aistore.Run("INSERT INTO oauth_codes (code, user_id, client_id, redirect_uri, challenge, scope, resource, expires, redirect_given) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", args)
     aistore.Unlock()
     if not ok:
         aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
@@ -858,7 +1005,7 @@ func exchange_code(ctx: i64):
         ret
     end
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT user_id, client_id, redirect_uri, challenge, scope, resource, expires, used, grant_id FROM oauth_codes WHERE code = ?1", one(aiweb.Hash(code)))
+    mut rows := aistore.Stmt("SELECT user_id, client_id, redirect_uri, challenge, scope, resource, expires, used, grant_id, redirect_given FROM oauth_codes WHERE code = ?1", one(aiweb.Hash(code)))
     mut found := false
     mut uid := ""
     mut owner := ""
@@ -869,6 +1016,7 @@ func exchange_code(ctx: i64):
     mut expires := 0 as i64
     mut used := false
     mut old_grant := ""
+    mut redirect_given := true
     if aistore.Next(rows):
         found = true
         uid = aistore.Text(rows, 0)
@@ -880,6 +1028,7 @@ func exchange_code(ctx: i64):
         expires = aistore.Int64(rows, 6)
         used = aistore.Text(rows, 7) != "0"
         old_grant = aistore.Text(rows, 8)
+        redirect_given = aistore.Text(rows, 9) != "0"
     end
     aistore.Finish(rows)
     if found and not used:
@@ -906,7 +1055,7 @@ func exchange_code(ctx: i64):
         token_error(ctx, 400, "invalid_grant", "authorization code was issued to another client")
         ret
     end
-    if redirect.len() > 0 and redirect != want_redirect:
+    if (redirect_given or redirect.len() > 0) and redirect != want_redirect:
         token_error(ctx, 400, "invalid_grant", "redirect_uri does not match the authorization request")
         ret
     end

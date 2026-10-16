@@ -36,8 +36,11 @@ const MAX_PROMPT := 65536
 const MAX_LOG := 65536
 const ANSWER_SECONDS := 600
 const MAX_KEYS := 20
+const PARALLEL_PER_USER := 4
 
 mut HOURLY := 100
+mut BUSY_LOCK := sync.Mutex {}
+mut BUSY := HashMap {} as HashMap<str, str>
 
 func one(v: str): Vector<str>:
     mut a := Vector {} as Vector<str>
@@ -201,6 +204,27 @@ func key_owner(raw: str, uid &: str, kid &: str, kname &: str): bool:
     ret found
 end
 
+func busy(uid: str, delta: int): bool:
+    _l := sync.Lock(BUSY_LOCK)
+    mut have := 0
+    if BUSY.has(uid):
+        have = BUSY.get(uid).to_int()
+    end
+    mut ok := true
+    if delta > 0 and have >= PARALLEL_PER_USER:
+        ok = false
+    else:
+        have = have + delta
+        if have <= 0:
+            _r := BUSY.remove(uid)
+        else:
+            BUSY.put(uid, "" + have)
+        end
+    end
+    _u := sync.Unlock(BUSY_LOCK)
+    ret ok
+end
+
 func approx_tokens(chars: int): i64:
     ret (chars + 3) / 4
 end
@@ -266,6 +290,15 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
         oai_error(c, "401 Unauthorized", "invalid_request_error", "invalid_api_key", "Missing or invalid API key. Create one at https://ai.salamlang.ir/keys")
         ret
     end
+    if not busy(uid, 1):
+        oai_error(c, "429 Too Many Requests", "rate_limit_exceeded", "too_many_parallel_requests", "Too many requests in flight for this account. Wait for one to finish.")
+        ret
+    end
+    answer(c, h, body, uid, kid, kname)
+    _b := busy(uid, 0 - 1)
+end
+
+func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kname: str):
     mut err := encerr.EncodingError {}
     req := json.Decode(body, err)
     if encerr.IsError(err) or not value.IsObject(req):
@@ -519,6 +552,7 @@ func own_requests(ctx: i64):
 end
 
 pub func Configure(hourly: int):
+    BUSY_LOCK = sync.NewMutex()
     if hourly > 0:
         HOURLY = hourly
     end

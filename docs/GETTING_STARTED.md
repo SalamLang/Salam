@@ -75,6 +75,25 @@ certutil -urlcache -split -f https://raw.githubusercontent.com/SalamLang/Salam/r
 
 Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLang/Salam/releases).
 
+### Updating
+
+Once Salam is installed, it updates itself:
+
+```sh
+salam update            # newest release: compiler, std/ and bundled tools together
+salam update --check    # only say whether a newer release is out
+salam update 0.5.4      # install that exact release, older ones included
+```
+
+`salam update` asks GitHub for the latest release and runs the same
+installer as above against the directory `salam` runs from, so the whole
+bundle is replaced at once and an old `std/` never lingers. It leaves PATH
+alone. A copy that Homebrew, Scoop, Chocolatey, winget, npm, Nix, snap or a
+Linux distribution package installed is left to that package manager, and
+`salam update` prints the command to run instead (`--force` overrides that).
+A compiler built from a source checkout is updated with `git pull` and a
+rebuild.
+
 ## 🔨 Build the Compiler from Source
 
 The compiler source lives in [`compiler/`](../compiler/). All build commands are run from that directory.

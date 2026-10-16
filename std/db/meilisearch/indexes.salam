@@ -42,6 +42,9 @@ pub struct IndexStats:
     pub number_of_embeddings: i64 = 0
     pub number_of_embedded_documents: i64 = 0
     pub field_distribution: str = ""
+    pub index_size: i64 = 0
+    pub used_index_size: i64 = 0
+    pub internal_database_sizes: str = ""
 end
 
 @en "IndexSwap"
@@ -50,6 +53,50 @@ pub struct IndexSwap:
     pub first: str = ""
     pub second: str = ""
     pub rename: bool = false
+end
+
+@en "Field"
+@fa "فیلد"
+pub struct Field:
+    pub name: str = ""
+    pub displayed: bool = false
+    pub searchable: bool = false
+    pub sortable: bool = false
+    pub distinct: bool = false
+    pub filterable: bool = false
+    pub ranking_rule: str = ""
+    pub localized: str = ""
+    pub raw: str = ""
+end
+
+@en "FieldsQuery"
+@fa "پرسش فیلدها"
+pub struct FieldsQuery:
+    pub offset: int = -1
+    pub limit: int = -1
+    pub attribute_patterns: Vector<str> = Vector {} as Vector<str>
+    pub filter: str = ""
+end
+
+@en "FieldPage"
+@fa "صفحه فیلد"
+pub struct FieldPage:
+    pub results: Vector<Field> = Vector {} as Vector<Field>
+    pub offset: i64 = 0
+    pub limit: i64 = 0
+    pub total: i64 = 0
+end
+
+func _enabled(item: str, key: str): bool:
+    ret _get_bool(_get_raw(item, key), "enabled")
+end
+
+func _field(item: str): Field:
+    ret Field {
+        name = _get_str(item, "name"), displayed = _enabled(item, "displayed"), searchable = _enabled(item, "searchable"),
+        sortable = _enabled(item, "sortable"), distinct = _enabled(item, "distinct"), filterable = _enabled(item, "filterable"),
+        ranking_rule = _get_raw(item, "rankingRule"), localized = _get_raw(item, "localized"), raw = item
+    }
 end
 
 func _index(body: str): Index:
@@ -65,7 +112,8 @@ func _index_stats(body: str): IndexStats:
         avg_document_size = _get_i64(body, "avgDocumentSize", 0 as i64), is_indexing = _get_bool(body, "isIndexing"),
         number_of_embeddings = _get_i64(body, "numberOfEmbeddings", 0 as i64),
         number_of_embedded_documents = _get_i64(body, "numberOfEmbeddedDocuments", 0 as i64),
-        field_distribution = _get_raw(body, "fieldDistribution")
+        field_distribution = _get_raw(body, "fieldDistribution"), index_size = _get_i64(body, "indexSize", 0 as i64),
+        used_index_size = _get_i64(body, "usedIndexSize", 0 as i64), internal_database_sizes = _get_raw(body, "internalDatabaseSizes")
     }
 end
 
@@ -164,4 +212,36 @@ end
 @fa "دریافت آمار نمایه"
 pub func GetIndexStats(c: Client, uid: str, err &: Error): IndexStats:
     ret _index_stats(_call(c, "GET", _ipath(uid) + "/stats", "", err))
+end
+
+@en "CompactIndex"
+@fa "فشرده‌سازی نمایه"
+pub func CompactIndex(c: Client, uid: str, err &: Error): TaskInfo:
+    ret _task_info(_call(c, "POST", _ipath(uid) + "/compact", "", err))
+end
+
+@en "ListFields"
+@fa "فهرست فیلدها"
+pub func ListFields(c: Client, uid: str, q: FieldsQuery, err &: Error): FieldPage:
+    mut m := Vector {} as Vector<str>
+    if q.offset >= 0: m.push(json.MemberInt("offset", q.offset as i64)) end
+    if q.limit >= 0: m.push(json.MemberInt("limit", q.limit as i64)) end
+    mut f := Vector {} as Vector<str>
+    if q.attribute_patterns.len() > 0:
+        f.push(json.MemberRaw("attributePatterns", _strs_json(q.attribute_patterns)))
+    end
+    t := str.TrimRight(q.filter)
+    if t.len() > 2 and t.substr(0, 1) == "{":
+        f.push(str.TrimRight(t.substr(1, t.len() - 2)))
+    end
+    if f.len() > 0: m.push(json.MemberRaw("filter", json.Object(f))) end
+    body := _call(c, "POST", _ipath(uid) + "/fields", json.Object(m), err)
+    mut out := FieldPage {
+        offset = _get_i64(body, "offset", 0 as i64), limit = _get_i64(body, "limit", 0 as i64),
+        total = _get_i64(body, "total", 0 as i64)
+    }
+    each item in _elements(_get_raw(body, "results")):
+        out.results.push(_field(item))
+    end
+    ret out
 end

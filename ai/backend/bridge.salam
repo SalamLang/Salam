@@ -44,12 +44,14 @@ const TOOLS := `[
 {"name": "grep", "description": "Search file contents with a regular expression, respecting .gitignore. Returns path:line: text.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "pattern": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"}, "ignore_case": {"type": "boolean"}}, "required": ["session", "pattern"]}},
 {"name": "docker", "description": "Run the docker CLI with the given arguments, for example [\"ps\", \"-a\"] or [\"compose\", \"up\", \"-d\"].", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session", "args"]}},
 {"name": "wsl", "description": "Windows only: run a bash command inside WSL. distro is optional; leave command empty to list the installed distros.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "distro": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}},
-{"name": "run_tests", "description": "Detect the project's test runner (cargo, npm, bun, pnpm, yarn, go, pytest, make) and run it, or run command if given.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}}
+{"name": "run_tests", "description": "Detect the project's test runner (cargo, npm, bun, pnpm, yarn, go, pytest, make) and run it, or run command if given.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}},
+{"name": "wait", "description": "Wait for a call that is still running on the user's computer and return its result. Use the call_id from the earlier result that said the call is still running. Do not repeat the original call.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "call_id": {"type": "string"}}, "required": ["session", "call_id"]}}
 ]`
-const INSTRUCTIONS := "These tools act on the user's own computer through Salam Agent, the desktop app on the user's computer. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call."
+const INSTRUCTIONS := "These tools act on the user's own computer through Salam Agent, the desktop app on the user's computer. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call. A call that takes long, or waits for the user's approval, returns a call_id; then call wait with it until the result arrives instead of repeating the call."
 
 mut SECRET := ""
 mut SLOTS := 32
+mut HOLD_MS := 40000 as i64
 mut ACTIVE := 0
 mut LOCK := sync.Mutex {}
 mut SEEN := HashMap {} as HashMap<str, str>
@@ -57,6 +59,7 @@ mut CALLS := HashMap {} as HashMap<str, str>
 mut OWNER := HashMap {} as HashMap<str, str>
 mut TAKEN := HashMap {} as HashMap<str, str>
 mut RESULTS := HashMap {} as HashMap<str, str>
+mut STARTED := HashMap {} as HashMap<str, i64>
 
 func one(v: str): Vector<str>:
     mut a := Vector {} as Vector<str>
@@ -258,7 +261,100 @@ func forget(id: str):
     if RESULTS.has(id):
         _r := RESULTS.remove(id)
     end
+    if STARTED.has(id):
+        _s := STARTED.remove(id)
+    end
     _u := sync.Unlock(LOCK)
+end
+
+func sweep():
+    now := time.NowMillis()
+    mut old := Vector {} as Vector<str>
+    _l := sync.Lock(LOCK)
+    each k, v in STARTED:
+        if now - v > CALL_MS + 60000:
+            old.push(k)
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    each k in old:
+        forget(k)
+    end
+end
+
+func session_device(session: str, chat &: str, dev &: str, workspace &: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.id, c.device_id, c.workspace FROM chats c JOIN bridge_devices d ON d.id = c.device_id AND d.user_id = c.user_id AND d.revoked = 0 WHERE c.bridge_token = ?1", one(session))
+    if aistore.Next(rows):
+        chat = aistore.Text(rows, 0)
+        dev = aistore.Text(rows, 1)
+        workspace = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+end
+
+func await_call(id: str, dev: str): str:
+    if not slot(1):
+        ret tool_text("Too many tool calls are running. Call wait again with call_id \"" + id + "\" in a moment.", false)
+    end
+    held := time.NowMillis()
+    _a := sync.Lock(LOCK)
+    began := STARTED.has(id) ? STARTED.get(id) : held
+    _b := sync.Unlock(LOCK)
+    mut got := ""
+    mut lost := false
+    until got.len() == 0:
+        _c := sync.Lock(LOCK)
+        if RESULTS.has(id):
+            got = RESULTS.get(id)
+        end
+        _d := sync.Unlock(LOCK)
+        if got.len() == 0:
+            now := time.NowMillis()
+            if now - began > CALL_MS or not online(dev):
+                lost = true
+                break
+            end
+            if now - held > HOLD_MS:
+                break
+            end
+            sync.SleepMs(100)
+        end
+    end
+    _s := slot(0 - 1)
+    if lost:
+        forget(id)
+        ret tool_text("Salam Agent did not answer in time or disconnected.", true)
+    end
+    if got.len() == 0:
+        ret tool_text("The call is still running on the user's computer (it may be waiting for the user's approval). Call wait with call_id \"" + id + "\" and the same session to get its result. Do not repeat the original call.", false)
+    end
+    forget(id)
+    status := json.Get(got, "status")
+    mut output := clip(json.Get(got, "output"), MAX_OUTPUT)
+    if status == "denied" and output.len() == 0:
+        output = "The user refused this call."
+    end
+    ret tool_text(output, status != "ok")
+end
+
+func wait_call(args: str): str:
+    session := json.Get(args, "session")
+    id := json.Get(args, "call_id")
+    mut chat := ""
+    mut dev := ""
+    mut workspace := ""
+    if session.len() == 32:
+        session_device(session, chat, dev, workspace)
+    end
+    _l := sync.Lock(LOCK)
+    mine := dev.len() > 0 and OWNER.has(id) and OWNER.get(id) == dev and CALLS.has(id) and json.Get(CALLS.get(id), "chat") == chat
+    _u := sync.Unlock(LOCK)
+    if not mine:
+        ret tool_text("No call with this call_id is running for this session. It may have finished already; run the original call again only if its result is really needed.", true)
+    end
+    ret await_call(id, dev)
 end
 
 func call_tool(params: str): str:
@@ -267,6 +363,9 @@ func call_tool(params: str): str:
     if args.len() == 0:
         args = "{}"
     end
+    if name == "wait":
+        ret wait_call(args)
+    end
     if not known_tool(name):
         ret tool_text("Unknown tool " + name + ".", true)
     end
@@ -274,27 +373,17 @@ func call_tool(params: str): str:
     if session.len() != 32:
         ret tool_text("The session argument is missing or wrong. Copy it exactly from the desktop session block in the user's message.", true)
     end
-    aistore.Lock()
-    mut rows := aistore.Stmt("SELECT c.id, c.device_id, c.workspace FROM chats c JOIN bridge_devices d ON d.id = c.device_id AND d.user_id = c.user_id AND d.revoked = 0 WHERE c.bridge_token = ?1", one(session))
     mut chat := ""
     mut dev := ""
     mut workspace := ""
-    if aistore.Next(rows):
-        chat = aistore.Text(rows, 0)
-        dev = aistore.Text(rows, 1)
-        workspace = aistore.Text(rows, 2)
-    end
-    aistore.Finish(rows)
-    aistore.Unlock()
+    session_device(session, chat, dev, workspace)
     if chat.len() == 0:
         ret tool_text("This session is not linked to Salam Agent. Tell the user to open the conversation in Salam Agent.", true)
     end
     if not online(dev):
         ret tool_text("Salam Agent is not connected right now. Ask the user to open it and try again.", true)
     end
-    if not slot(1):
-        ret tool_text("Too many tool calls are running. Try again in a moment.", true)
-    end
+    sweep()
     id := crypto.RandomHex(12)
     mut m := Vector {} as Vector<str>
     m.push(json.Member("id", id))
@@ -305,35 +394,9 @@ func call_tool(params: str): str:
     _l := sync.Lock(LOCK)
     CALLS.put(id, json.Object(m))
     OWNER.put(id, dev)
+    STARTED.put(id, time.NowMillis())
     _u := sync.Unlock(LOCK)
-    start := time.NowMillis()
-    mut got := ""
-    mut lost := false
-    until got.len() == 0:
-        _a := sync.Lock(LOCK)
-        if RESULTS.has(id):
-            got = RESULTS.get(id)
-        end
-        _b := sync.Unlock(LOCK)
-        if got.len() == 0:
-            if time.NowMillis() - start > CALL_MS or not online(dev):
-                lost = true
-                break
-            end
-            sync.SleepMs(100)
-        end
-    end
-    forget(id)
-    _s := slot(0 - 1)
-    if lost:
-        ret tool_text("Salam Agent did not answer in time or disconnected.", true)
-    end
-    status := json.Get(got, "status")
-    mut output := clip(json.Get(got, "output"), MAX_OUTPUT)
-    if status == "denied" and output.len() == 0:
-        output = "The user refused this call."
-    end
-    ret tool_text(output, status != "ok")
+    ret await_call(id, dev)
 end
 
 func rpc_id(body: str): str:
@@ -501,11 +564,14 @@ func revoke_device(ctx: i64):
     aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
-pub func Configure(secret: str, slots: int):
+pub func Configure(secret: str, slots: int, hold_seconds: int):
     SECRET = secret
     LOCK = sync.NewMutex()
     if slots > 0:
         SLOTS = slots
+    end
+    if hold_seconds > 0:
+        HOLD_MS = (hold_seconds as i64) * 1000
     end
 end
 

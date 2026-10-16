@@ -99,6 +99,7 @@ func main:
         engine_host = engine_host.substr(0, colon)
     end
     ailive.Start(engine_host, engine_port, engine_auth)
+    ailive.SetRedactions(os.Env("AI_REDACT_WORDS"))
     stream_port := env_or("AI_STREAM_PORT", "8081").to_int()
     STREAM_SRV = tcp.Bind(stream_port)
     if tcp.Ok(STREAM_SRV):
@@ -352,13 +353,23 @@ func chat_json(id: str, title: str, updated: str, device: str, workspace: str): 
     ret json.Object(m)
 end
 
-func message_json(id: str, role: str, body: str, status: str, created: str): str:
+func activity_raw(s: str): str:
+    t := str.Trim(s)
+    if str.StartsWith(t, "[") and str.EndsWith(t, "]"):
+        ret t
+    end
+    ret "[]"
+end
+
+func message_json(id: str, role: str, body: str, status: str, created: str, activity: str, ms: str): str:
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("id", id))
     m.push(json.Member("role", role))
     m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
     m.push(json.Member("status", status))
     m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("activity", activity_raw(activity)))
+    m.push(json.MemberRaw("ms", ms.len() > 0 ? ms : "0"))
     ret json.Object(m)
 end
 
@@ -467,7 +478,7 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
             body = "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
         end
         aistore.Lock()
-        _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2 WHERE id = ?3 AND status = 'pending'", three(body, status, mid))
+        _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))
         aistore.Unlock()
         r.text = body
         r.failed = status == "error"
@@ -508,9 +519,9 @@ func get_chat(ctx: i64):
         head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
     end
     aistore.Finish(crow)
-    mut rows := aistore.Stmt("SELECT id, role, body, status, created FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
-        items.push(message_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+        items.push(message_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -637,8 +648,8 @@ func send_message(ctx: i64):
         ret
     end
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberRaw("user", message_json(umid, "user", text, "done", t)))
-    m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t)))
+    m.push(json.MemberRaw("user", message_json(umid, "user", text, "done", t, "[]", "0")))
+    m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
     m.push(json.Member("title", new_title))
     reply(ctx, 201, json.Object(m))
 end
@@ -683,10 +694,12 @@ func poll_message(ctx: i64):
         ret
     end
     mut phase := "done"
+    mut activity := "[]"
     body = aiturn.Plain(body)
     if status == "pending":
         r := settle(mid, str.TrimSuffix(owned, "|"), created)
         body = r.text
+        activity = activity_raw(r.activity)
         if r.done:
             status = r.failed ? "error" : "done"
         else:
@@ -698,6 +711,7 @@ func poll_message(ctx: i64):
     m.push(json.Member("body", body))
     m.push(json.Member("status", status))
     m.push(json.Member("phase", phase))
+    m.push(json.MemberRaw("activity", activity))
     reply(ctx, 200, json.Object(m))
 end
 
@@ -721,8 +735,9 @@ func stop_message(ctx: i64):
     if body.len() == 0:
         body = "پاسخ متوقف شد."
     end
+    stopped_activity := sid.len() > 0 ? activity_raw(ailive.Activity(sid)) : "[]"
     aistore.Lock()
-    _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done' WHERE chat_id = ?2 AND status = 'pending'", two(body, id))
+    _u := aistore.Run("UPDATE messages SET body = ?1, status = 'done', activity = ?3 WHERE chat_id = ?2 AND status = 'pending'", three(body, id, stopped_activity))
     aistore.Unlock()
     if sid.len() > 0:
         ailive.End(sid)
@@ -882,16 +897,20 @@ end
 
 func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT body, status, created FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
+    mut rows := aistore.Stmt("SELECT body, status, created, COALESCE(activity, ''), ms FROM messages WHERE id = ?1 AND chat_id = ?2 AND role = 'assistant'", two(mid, id))
     mut found := false
     mut body := ""
     mut status := ""
     mut created := 0 as i64
+    mut stored_activity := ""
+    mut stored_ms := "0"
     if aistore.Next(rows):
         found = true
         body = aistore.Text(rows, 0)
         status = aistore.Text(rows, 1)
         created = aistore.Int64(rows, 2)
+        stored_activity = aistore.Text(rows, 3)
+        stored_ms = aistore.Text(rows, 4)
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -906,21 +925,35 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
     end
     sid := str.TrimSuffix(owned, "|")
     if status != "pending":
-        _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + "}")
+        _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + ", " + json.MemberRaw("activity", activity_raw(stored_activity)) + ", " + json.MemberRaw("ms", stored_ms.len() > 0 ? stored_ms : "0") + "}")
         ret
     end
     mut sent := ""
     mut phase_sent := ""
+    mut activity_sent := "[]"
+    mut activity_steps := 0
+    mut activity_at := 0 as i64
     mut gen := ailive.Gen()
     start := aistore.Now()
     until true:
         r := settle(mid, sid, created)
         if r.done:
             final := r.failed ? "error" : "done"
-            _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + "}")
+            took := time.NowMillis() - created * 1000
+            _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + ", " + json.MemberRaw("activity", activity_raw(r.activity)) + ", " + json.MemberRaw("ms", i64s(took)) + "}")
             ret
         end
         mut ok := true
+        if r.activity != activity_sent:
+            steps_now := r.activity.split("\"kind\"").len()
+            now_ms := time.NowMillis()
+            if steps_now != activity_steps or now_ms - activity_at >= 300:
+                ok = send_event(c, "activity", "{" + json.MemberRaw("steps", activity_raw(r.activity)) + "}")
+                activity_sent = r.activity
+                activity_steps = steps_now
+                activity_at = now_ms
+            end
+        end
         if r.text != sent:
             if str.StartsWith(r.text, sent):
                 ok = send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len())))

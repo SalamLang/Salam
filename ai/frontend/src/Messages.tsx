@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ToolCard, type CallView } from "./Agent";
 import type { Message } from "./api";
 import type { AgentAnswer } from "./desktop";
+import { ActivityPanel } from "./Activity";
 import { CopyButton, Markdown } from "./Markdown";
 
 const PHASE_TEXT: Record<string, string> = {
@@ -70,12 +71,14 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
   const typing = pending || text.length < m.body.length;
   const phase = m.phase || "thinking";
   const waiting = calls.some((c) => c.state === "pending" || c.state === "running");
-  const showPhase = pending && !waiting && (text.length === 0 || phase === "searching");
+  const steps = m.activity ?? [];
+  const showPhase = pending && calls.length > 0 && !waiting && text.length === 0;
   const visible = typing ? text.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : text;
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
       <div className="msg-body">
+        <ActivityPanel steps={steps} pending={pending} ms={m.ms} created={m.created} />
         {calls.length > 0 && (
           <div className="tool-list">
             {calls.map((c) => (
@@ -95,7 +98,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
               <i />
               <i />
             </span>
-            {calls.length > 0 && phase !== "searching" ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+            {calls.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
         {!typing && m.body && (

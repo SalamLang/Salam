@@ -192,3 +192,24 @@ export const IconFile = (p: P) => (
     <path d="M14 3.5V8h4.5" />
   </Base>
 );
+export const IconSpark = (p: P) => (
+  <Base {...p}>
+    <path d="M12 3l1.8 4.9L19 9.7l-5.2 1.8L12 16.4l-1.8-4.9L5 9.7l5.2-1.8L12 3zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z" />
+  </Base>
+);
+export const IconPackage = (p: P) => (
+  <Base {...p}>
+    <path d="M21 8l-9-5-9 5v8l9 5 9-5V8zM3 8l9 5 9-5M12 13v8" />
+  </Base>
+);
+export const IconPlay = (p: P) => (
+  <Base {...p}>
+    <path d="M7 4.5v15l12-7.5-12-7.5z" />
+  </Base>
+);
+export const IconTag = (p: P) => (
+  <Base {...p}>
+    <path d="M3 12V4h8l10 10-8 8L3 12z" />
+    <circle cx="7.5" cy="8.5" r="1.3" />
+  </Base>
+);

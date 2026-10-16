@@ -66,7 +66,8 @@ pub fn import_login_path() {
     if let Ok(Ok(out)) = rx.recv_timeout(Duration::from_secs(4)) {
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if out.status.success() && path.contains('/') {
-            std::env::set_var("PATH", path);
+            // SAFETY: called first thing in run(), before Tauri, GTK or the async runtime start any thread that reads the environment.
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
 }

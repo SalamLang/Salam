@@ -82,6 +82,8 @@ fn allow_dev_origin(app: &tauri::App) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    #[cfg(unix)]
+    config::import_login_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(w) = app.get_webview_window("main") {
@@ -104,8 +106,6 @@ pub fn run() {
             commands::agent_pending,
         ])
         .setup(|app| {
-            #[cfg(unix)]
-            config::import_login_path();
             let handle = app.handle().clone();
             app.manage(device::DeviceStore::load(&handle));
             allow_dev_origin(app)?;

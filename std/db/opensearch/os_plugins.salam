@@ -1,0 +1,450 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package opensearch
+
+import str
+import conv
+import encoding.json
+
+@en "AuthInfo"
+@fa "اطلاعات احراز"
+pub struct AuthInfo:
+    pub ok: bool = false
+    pub user: str = ""
+    pub roles: Vector<str> = Vector {}
+    pub backend_roles: Vector<str> = Vector {}
+    pub tenants: Vector<str> = Vector {}
+    pub error: str = ""
+end
+
+@en "KnnMethod"
+@fa "روش همسایه‌یابی"
+pub struct KnnMethod:
+    pub name: str = "hnsw"
+    pub engine: str = "lucene"
+    pub space_type: str = "l2"
+    pub m: int = 0
+    pub ef_construction: int = 0
+end
+
+func _strings(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each it in _items(raw):
+        out.push(_unquote(it))
+    end
+    ret out
+end
+
+func _plugin(c: Client, method: str, path: str, body: str): str:
+    r := Perform(c, method, path, body)
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+func _ism_count(r: Response): int:
+    if not r.ok: ret -1 end
+    if _jbool(r.body, "failures"): ret -1 end
+    ret _int(_jraw(r.body, "updated_indices"))
+end
+
+@en "KnnIndexSettings"
+@fa "تنظیمات نمایه همسایه‌یابی"
+pub func KnnIndexSettings(shards: int, replicas: int): str:
+    mut idx := Vector {} as Vector<str>
+    idx.push(_m("knn", "true"))
+    if shards > 0: idx.push(_m("number_of_shards", str.FromInt(shards as i64))) end
+    if replicas >= 0: idx.push(_m("number_of_replicas", str.FromInt(replicas as i64))) end
+    ret _one("index", _obj(idx))
+end
+
+@en "KnnVectorField"
+@fa "فیلد بردار همسایه‌یابی"
+pub func KnnVectorField(dimension: int, method: KnnMethod): str:
+    mut mm := Vector {} as Vector<str>
+    mm.push(_m("name", json.Str(method.name)))
+    mm.push(_m("engine", json.Str(method.engine)))
+    mm.push(_m("space_type", json.Str(method.space_type)))
+    mut params := Vector {} as Vector<str>
+    if method.m > 0: params.push(_m("m", str.FromInt(method.m as i64))) end
+    if method.ef_construction > 0: params.push(_m("ef_construction", str.FromInt(method.ef_construction as i64))) end
+    if params.len() > 0: mm.push(_m("parameters", _obj(params))) end
+    mut m := Vector {} as Vector<str>
+    m.push(_m("type", `"knn_vector"`))
+    m.push(_m("dimension", str.FromInt(dimension as i64)))
+    m.push(_m("method", _obj(mm)))
+    ret _obj(m)
+end
+
+@en "KnnIndexBody"
+@fa "بدنه نمایه همسایه‌یابی"
+pub func KnnIndexBody(field: str, dimension: int, method: KnnMethod, extra_properties: Vector<str>): str:
+    mut props := Vector {} as Vector<str>
+    props.push(_m(field, KnnVectorField(dimension, method)))
+    each p in extra_properties:
+        props.push(p)
+    end
+    ret _two("settings", KnnIndexSettings(0, -1), "mappings", _one("properties", _obj(props)))
+end
+
+@en "KnnVector"
+@fa "بردار همسایه‌یابی"
+pub func KnnVector(values: Vector<f64>): str:
+    ret _floats(values)
+end
+
+@en "KnnStats"
+@fa "آمار همسایه‌یابی"
+pub func KnnStats(c: Client): str:
+    ret _plugin(c, "GET", "/_plugins/_knn/stats", "")
+end
+
+@en "KnnWarmup"
+@fa "گرم‌کردن همسایه‌یابی"
+pub func KnnWarmup(c: Client, index: str): bool:
+    ret Perform(c, "GET", "/_plugins/_knn/warmup/" + _idx(index), "").ok
+end
+
+@en "KnnClearCache"
+@fa "پاک‌سازی حافظه همسایه‌یابی"
+pub func KnnClearCache(c: Client, index: str): bool:
+    ret Perform(c, "POST", "/_plugins/_knn/clear_cache/" + _idx(index), "").ok
+end
+
+@en "KnnTrainModel"
+@fa "آموزش مدل همسایه‌یابی"
+pub func KnnTrainModel(c: Client, model_id: str, body: str): bool:
+    ret Perform(c, "POST", "/_plugins/_knn/models/" + _seg(model_id) + "/_train", body).ok
+end
+
+@en "KnnGetModel"
+@fa "دریافت مدل همسایه‌یابی"
+pub func KnnGetModel(c: Client, model_id: str): str:
+    ret _plugin(c, "GET", "/_plugins/_knn/models/" + _seg(model_id), "")
+end
+
+@en "KnnDeleteModel"
+@fa "حذف مدل همسایه‌یابی"
+pub func KnnDeleteModel(c: Client, model_id: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_knn/models/" + _seg(model_id), "").ok
+end
+
+@en "PutPolicy"
+@fa "تنظیم سیاست"
+pub func PutPolicy(c: Client, id: str, policy: str): bool:
+    r := Perform(c, "PUT", "/_plugins/_ism/policies/" + _seg(id), _one("policy", policy))
+    ret r.ok
+end
+
+@en "UpdatePolicy"
+@fa "به‌روزرسانی سیاست"
+pub func UpdatePolicy(c: Client, id: str, policy: str, seq_no: i64, primary_term: i64): bool:
+    q := "?if_seq_no=" + conv.FormatInt(seq_no) + "&if_primary_term=" + conv.FormatInt(primary_term)
+    ret Perform(c, "PUT", "/_plugins/_ism/policies/" + _seg(id) + q, _one("policy", policy)).ok
+end
+
+@en "GetPolicy"
+@fa "دریافت سیاست"
+pub func GetPolicy(c: Client, id: str): str:
+    ret _plugin(c, "GET", "/_plugins/_ism/policies/" + _seg(id), "")
+end
+
+@en "DeletePolicy"
+@fa "حذف سیاست"
+pub func DeletePolicy(c: Client, id: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_ism/policies/" + _seg(id), "").ok
+end
+
+@en "AddPolicy"
+@fa "افزودن سیاست"
+pub func AddPolicy(c: Client, index: str, policy_id: str): int:
+    ret _ism_count(Perform(c, "POST", "/_plugins/_ism/add/" + _idx(index), _one("policy_id", json.Str(policy_id))))
+end
+
+@en "RemovePolicy"
+@fa "برداشتن سیاست"
+pub func RemovePolicy(c: Client, index: str): int:
+    ret _ism_count(Perform(c, "POST", "/_plugins/_ism/remove/" + _idx(index), ""))
+end
+
+@en "ChangePolicy"
+@fa "تغییر سیاست"
+pub func ChangePolicy(c: Client, index: str, policy_id: str, state: str): int:
+    mut m := Vector {} as Vector<str>
+    m.push(_m("policy_id", json.Str(policy_id)))
+    if state.len() > 0: m.push(_m("state", json.Str(state))) end
+    ret _ism_count(Perform(c, "POST", "/_plugins/_ism/change_policy/" + _idx(index), _obj(m)))
+end
+
+@en "RetryPolicy"
+@fa "تلاش دوباره سیاست"
+pub func RetryPolicy(c: Client, index: str): int:
+    ret _ism_count(Perform(c, "POST", "/_plugins/_ism/retry/" + _idx(index), ""))
+end
+
+@en "ExplainPolicy"
+@fa "توضیح سیاست"
+pub func ExplainPolicy(c: Client, index: str): str:
+    ret _plugin(c, "GET", "/_plugins/_ism/explain/" + _idx(index), "")
+end
+
+@en "PolicyIdOf"
+@fa "شناسه سیاست نمایه"
+pub func PolicyIdOf(c: Client, index: str): str:
+    raw := ExplainPolicy(c, index)
+    if raw.len() == 0: ret str.Clone("") end
+    entry := _raw_member(raw, index)
+    v := _jstr(entry, "index.plugins.index_state_management.policy_id")
+    if v.len() > 0: ret v end
+    ret _jstr(entry, "policy_id")
+end
+
+@en "DeleteAfterPolicy"
+@fa "سیاست حذف پس از"
+pub func DeleteAfterPolicy(description: str, min_index_age: str, patterns: Vector<str>): str:
+    cond := _one("min_index_age", json.Str(min_index_age))
+    trans := "[" + _two("state_name", `"delete"`, "conditions", cond) + "]"
+    mut hot := Vector {} as Vector<str>
+    hot.push(_m("name", `"hot"`))
+    hot.push(_m("actions", "[]"))
+    hot.push(_m("transitions", trans))
+    mut del := Vector {} as Vector<str>
+    del.push(_m("name", `"delete"`))
+    del.push(_m("actions", `[{"delete":{}}]`))
+    del.push(_m("transitions", "[]"))
+    mut m := Vector {} as Vector<str>
+    m.push(_m("description", json.Str(description)))
+    m.push(_m("default_state", `"hot"`))
+    m.push(_m("states", "[" + _obj(hot) + "," + _obj(del) + "]"))
+    if patterns.len() > 0:
+        m.push(_m("ism_template", "[" + _two("index_patterns", _strs(patterns), "priority", "100") + "]"))
+    end
+    ret _obj(m)
+end
+
+@en "WhoAmI"
+@fa "من کیستم"
+pub func WhoAmI(c: Client): AuthInfo:
+    r := Perform(c, "GET", "/_plugins/_security/authinfo", "")
+    if not r.ok: ret AuthInfo { error = r.error } end
+    ret AuthInfo {
+        ok = true, user = _jstr(r.body, "user_name"), roles = _strings(_jraw(r.body, "roles")),
+        backend_roles = _strings(_jraw(r.body, "backend_roles")), tenants = json.Keys(_jraw(r.body, "tenants"))
+    }
+end
+
+@en "SecurityHealth"
+@fa "سلامت امنیت"
+pub func SecurityHealth(c: Client): str:
+    r := Perform(c, "GET", "/_plugins/_security/health", "")
+    if not r.ok: ret str.Clone("") end
+    ret _jstr(r.body, "status")
+end
+
+@en "PutUser"
+@fa "تنظیم کاربر"
+pub func PutUser(c: Client, name: str, password: str, backend_roles: Vector<str>, attributes: str): bool:
+    mut m := Vector {} as Vector<str>
+    m.push(_m("password", json.Str(password)))
+    if backend_roles.len() > 0: m.push(_m("backend_roles", _strs(backend_roles))) end
+    if attributes.len() > 0: m.push(_m("attributes", attributes)) end
+    ret Perform(c, "PUT", "/_plugins/_security/api/internalusers/" + _seg(name), _obj(m)).ok
+end
+
+@en "GetUser"
+@fa "دریافت کاربر"
+pub func GetUser(c: Client, name: str): str:
+    ret _jraw(_plugin(c, "GET", "/_plugins/_security/api/internalusers/" + _seg(name), ""), name)
+end
+
+@en "Users"
+@fa "کاربران"
+pub func Users(c: Client): Vector<str>:
+    ret json.Keys(_plugin(c, "GET", "/_plugins/_security/api/internalusers", ""))
+end
+
+@en "DeleteUser"
+@fa "حذف کاربر"
+pub func DeleteUser(c: Client, name: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_security/api/internalusers/" + _seg(name), "").ok
+end
+
+@en "ChangePassword"
+@fa "تغییر گذرواژه"
+pub func ChangePassword(c: Client, current: str, password: str): bool:
+    body := _two("current_password", json.Str(current), "password", json.Str(password))
+    ret Perform(c, "PUT", "/_plugins/_security/api/account", body).ok
+end
+
+@en "RoleBody"
+@fa "بدنه نقش"
+pub func RoleBody(cluster_permissions: Vector<str>, index_patterns: Vector<str>, allowed_actions: Vector<str>): str:
+    mut m := Vector {} as Vector<str>
+    if cluster_permissions.len() > 0: m.push(_m("cluster_permissions", _strs(cluster_permissions))) end
+    if index_patterns.len() > 0:
+        perm := _two("index_patterns", _strs(index_patterns), "allowed_actions", _strs(allowed_actions))
+        m.push(_m("index_permissions", "[" + perm + "]"))
+    end
+    ret _obj(m)
+end
+
+@en "PutRole"
+@fa "تنظیم نقش"
+pub func PutRole(c: Client, name: str, body: str): bool:
+    ret Perform(c, "PUT", "/_plugins/_security/api/roles/" + _seg(name), body).ok
+end
+
+@en "GetRole"
+@fa "دریافت نقش"
+pub func GetRole(c: Client, name: str): str:
+    ret _jraw(_plugin(c, "GET", "/_plugins/_security/api/roles/" + _seg(name), ""), name)
+end
+
+@en "DeleteRole"
+@fa "حذف نقش"
+pub func DeleteRole(c: Client, name: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_security/api/roles/" + _seg(name), "").ok
+end
+
+@en "PutRoleMapping"
+@fa "تنظیم نگاشت نقش"
+pub func PutRoleMapping(c: Client, role: str, users: Vector<str>, backend_roles: Vector<str>): bool:
+    body := _two("users", _strs(users), "backend_roles", _strs(backend_roles))
+    ret Perform(c, "PUT", "/_plugins/_security/api/rolesmapping/" + _seg(role), body).ok
+end
+
+@en "GetRoleMapping"
+@fa "دریافت نگاشت نقش"
+pub func GetRoleMapping(c: Client, role: str): str:
+    ret _jraw(_plugin(c, "GET", "/_plugins/_security/api/rolesmapping/" + _seg(role), ""), role)
+end
+
+@en "DeleteRoleMapping"
+@fa "حذف نگاشت نقش"
+pub func DeleteRoleMapping(c: Client, role: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_security/api/rolesmapping/" + _seg(role), "").ok
+end
+
+@en "PutSearchPipeline"
+@fa "تنظیم خط لوله جستجو"
+pub func PutSearchPipeline(c: Client, id: str, body: str): bool:
+    ret _ack(Perform(c, "PUT", "/_search/pipeline/" + _seg(id), body))
+end
+
+@en "GetSearchPipeline"
+@fa "دریافت خط لوله جستجو"
+pub func GetSearchPipeline(c: Client, id: str): str:
+    ret _jraw(_plugin(c, "GET", "/_search/pipeline/" + _seg(id), ""), id)
+end
+
+@en "DeleteSearchPipeline"
+@fa "حذف خط لوله جستجو"
+pub func DeleteSearchPipeline(c: Client, id: str): bool:
+    ret _ack(Perform(c, "DELETE", "/_search/pipeline/" + _seg(id), ""))
+end
+
+@en "NormalizationPipeline"
+@fa "خط لوله نرمال‌سازی"
+pub func NormalizationPipeline(normalization: str, combination: str, weights: Vector<f64>): str:
+    mut comb := Vector {} as Vector<str>
+    comb.push(_m("technique", json.Str(combination)))
+    if weights.len() > 0: comb.push(_m("parameters", _one("weights", _floats(weights)))) end
+    proc := _two("normalization", _one("technique", json.Str(normalization)), "combination", _obj(comb))
+    ret _one("phase_results_processors", "[" + _one("normalization-processor", proc) + "]")
+end
+
+@en "CreateMonitor"
+@fa "ایجاد پایشگر"
+pub func CreateMonitor(c: Client, body: str): str:
+    r := Perform(c, "POST", "/_plugins/_alerting/monitors", body)
+    if not r.ok: ret str.Clone("") end
+    ret _jstr(r.body, "_id")
+end
+
+@en "GetMonitor"
+@fa "دریافت پایشگر"
+pub func GetMonitor(c: Client, id: str): str:
+    ret _jraw(_plugin(c, "GET", "/_plugins/_alerting/monitors/" + _seg(id), ""), "monitor")
+end
+
+@en "UpdateMonitor"
+@fa "به‌روزرسانی پایشگر"
+pub func UpdateMonitor(c: Client, id: str, body: str): bool:
+    ret Perform(c, "PUT", "/_plugins/_alerting/monitors/" + _seg(id), body).ok
+end
+
+@en "DeleteMonitor"
+@fa "حذف پایشگر"
+pub func DeleteMonitor(c: Client, id: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_alerting/monitors/" + _seg(id), "").ok
+end
+
+@en "ExecuteMonitor"
+@fa "اجرای پایشگر"
+pub func ExecuteMonitor(c: Client, id: str, dry_run: bool): str:
+    q := dry_run ? "?dryrun=true" : ""
+    ret _plugin(c, "POST", "/_plugins/_alerting/monitors/" + _seg(id) + "/_execute" + q, "")
+end
+
+@en "SearchMonitors"
+@fa "جستجوی پایشگرها"
+pub func SearchMonitors(c: Client, query: str): SearchResult:
+    ret _search_result(Perform(c, "POST", "/_plugins/_alerting/monitors/_search", _one("query", query)))
+end
+
+@en "MlRegisterModel"
+@fa "ثبت مدل یادگیری"
+pub func MlRegisterModel(c: Client, body: str): str:
+    r := Perform(c, "POST", "/_plugins/_ml/models/_register", body)
+    if not r.ok: ret str.Clone("") end
+    ret _jstr(r.body, "task_id")
+end
+
+@en "MlDeployModel"
+@fa "استقرار مدل یادگیری"
+pub func MlDeployModel(c: Client, model_id: str): str:
+    r := Perform(c, "POST", "/_plugins/_ml/models/" + _seg(model_id) + "/_deploy", "")
+    if not r.ok: ret str.Clone("") end
+    ret _jstr(r.body, "task_id")
+end
+
+@en "MlUndeployModel"
+@fa "برچیدن مدل یادگیری"
+pub func MlUndeployModel(c: Client, model_id: str): bool:
+    ret Perform(c, "POST", "/_plugins/_ml/models/" + _seg(model_id) + "/_undeploy", "").ok
+end
+
+@en "MlGetModel"
+@fa "دریافت مدل یادگیری"
+pub func MlGetModel(c: Client, model_id: str): str:
+    ret _plugin(c, "GET", "/_plugins/_ml/models/" + _seg(model_id), "")
+end
+
+@en "MlDeleteModel"
+@fa "حذف مدل یادگیری"
+pub func MlDeleteModel(c: Client, model_id: str): bool:
+    ret Perform(c, "DELETE", "/_plugins/_ml/models/" + _seg(model_id), "").ok
+end
+
+@en "MlGetTask"
+@fa "دریافت کار یادگیری"
+pub func MlGetTask(c: Client, task_id: str): str:
+    ret _plugin(c, "GET", "/_plugins/_ml/tasks/" + _seg(task_id), "")
+end
+
+@en "MlPredict"
+@fa "پیش‌بینی مدل"
+pub func MlPredict(c: Client, algorithm: str, model_id: str, body: str): str:
+    ret _plugin(c, "POST", "/_plugins/_ml/_predict/" + _seg(algorithm) + "/" + _seg(model_id), body)
+end

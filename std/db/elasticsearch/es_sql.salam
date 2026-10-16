@@ -29,6 +29,7 @@ struct _SqlState:
     pub pos: int = 0
     pub cells: Vector<str> = Vector {}
     pub cursor: str = ""
+    pub os: bool = false
 end
 
 @en "SqlRows"
@@ -138,7 +139,7 @@ pub struct SqlRows:
         s := _sq(this.handle)
         if s[0].cursor.len() > 0 and s[0].client != null:
             c := Client { handle = s[0].client }
-            Perform(c, "POST", "/_sql/close", _one("cursor", json.Str(s[0].cursor)))
+            Perform(c, "POST", _sql_path(s[0].os, "close"), _one("cursor", json.Str(s[0].cursor)))
         end
         mem.Free(this.handle)
         this.handle = null
@@ -305,6 +306,16 @@ func _sql_kind(t: str): int:
     ret db.TYPE_TEXT
 end
 
+func _sql_path(os: bool, op: str): str:
+    switch op:
+        "query": ret os ? "/_plugins/_sql?format=jdbc" : "/_sql?format=json" end
+        "text": ret os ? "/_plugins/_sql?format=csv" : "/_sql?format=txt" end
+        "close": ret os ? "/_plugins/_sql/close" : "/_sql/close" end
+        "translate": ret os ? "/_plugins/_sql/_explain" : "/_sql/translate" end
+    end
+    ret ""
+end
+
 func _sql_fill(s: _SqlState*, r: Response):
     if not r.ok:
         s[0].ok = false
@@ -313,18 +324,23 @@ func _sql_fill(s: _SqlState*, r: Response):
         s[0].cursor = ""
         ret
     end
-    cols := json.Get(r.body, "columns")
+    mut cols := json.Get(r.body, "columns")
+    if cols.len() == 0: cols = json.Get(r.body, "schema") end
     if cols.len() > 0:
         mut names := Vector {} as Vector<str>
         mut types := Vector {} as Vector<str>
         each col in json.Items(cols):
-            names.push(json.Get(col, "name"))
+            mut name := json.Get(col, "alias")
+            if name.len() == 0: name = json.Get(col, "name") end
+            names.push(name)
             types.push(json.Get(col, "type"))
         end
         s[0].names = names
         s[0].types = types
     end
-    s[0].rows = json.Items(json.Get(r.body, "rows"))
+    mut rows := json.Get(r.body, "rows")
+    if rows.len() == 0: rows = json.Get(r.body, "datarows") end
+    s[0].rows = json.Items(rows)
     s[0].pos = 0
     s[0].cursor = json.Get(r.body, "cursor")
     s[0].ok = true
@@ -332,23 +348,56 @@ end
 
 func _sql_page(s: _SqlState*): bool:
     c := Client { handle = s[0].client }
-    r := Perform(c, "POST", "/_sql?format=json", _one("cursor", json.Str(s[0].cursor)))
+    r := Perform(c, "POST", _sql_path(s[0].os, "query"), _one("cursor", json.Str(s[0].cursor)))
     _sql_fill(s, r)
     ret s[0].ok
 end
 
-func _sql_request(c: Client, body: str): SqlRows:
+func _sql_request(c: Client, query: str, params: Vector<str>, fetch_size: int): SqlRows:
     s := mem.AllocateZeroed(sizeof(_SqlState) as u64) as _SqlState*
     s[0] = _SqlState {}
     s[0].client = c.handle
-    _sql_fill(s, Perform(c, "POST", "/_sql?format=json", body))
+    s[0].os = _opensearch(c)
+    _sql_fill(s, Perform(c, "POST", _sql_path(s[0].os, "query"), _sql_body(query, params, fetch_size, s[0].os)))
     ret SqlRows { handle = s as void* }
 end
 
-func _sql_body(query: str, params: Vector<str>, fetch_size: int): str:
+func _os_param(raw: str): str:
+    t := str.Trim(raw)
+    mut kind := "long"
+    switch true:
+        str.StartsWith(t, `"`):
+            kind = "string"
+            break
+        end
+        t == "true" or t == "false":
+            kind = "boolean"
+            break
+        end
+        t.find(".") >= 0 or t.find("e") >= 0 or t.find("E") >= 0:
+            kind = "double"
+        end
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("type", kind))
+    m.push(json.MemberRaw("value", t))
+    ret json.Object(m)
+end
+
+func _sql_body(query: str, params: Vector<str>, fetch_size: int, os: bool): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("query", query))
-    if params.len() > 0: m.push(json.MemberRaw("params", json.Array(params))) end
+    if params.len() > 0:
+        if os:
+            mut typed := Vector {} as Vector<str>
+            each p in params:
+                typed.push(_os_param(p))
+            end
+            m.push(json.MemberRaw("parameters", json.Array(typed)))
+        else:
+            m.push(json.MemberRaw("params", json.Array(params)))
+        end
+    end
     if fetch_size > 0: m.push(json.MemberInt("fetch_size", fetch_size as i64)) end
     ret json.Object(m)
 end
@@ -356,19 +405,20 @@ end
 @en "Sql"
 @fa "اس کیو ال"
 pub func Sql(c: Client, query: str): SqlRows:
-    ret _sql_request(c, _sql_body(query, Vector {} as Vector<str>, 0))
+    ret _sql_request(c, query, Vector {} as Vector<str>, 0)
 end
 
 @en "SqlWith"
 @fa "اس کیو ال با پارامتر"
 pub func SqlWith(c: Client, query: str, params: Vector<str>, fetch_size: int): SqlRows:
-    ret _sql_request(c, _sql_body(query, params, fetch_size))
+    ret _sql_request(c, query, params, fetch_size)
 end
 
 @en "SqlText"
 @fa "متن اس کیو ال"
 pub func SqlText(c: Client, query: str): str:
-    r := Perform(c, "POST", "/_sql?format=txt", _sql_body(query, Vector {} as Vector<str>, 0))
+    os := _opensearch(c)
+    r := Perform(c, "POST", _sql_path(os, "text"), _sql_body(query, Vector {} as Vector<str>, 0, os))
     if not r.ok: ret str.Clone("") end
     ret r.body
 end
@@ -376,7 +426,8 @@ end
 @en "SqlTranslate"
 @fa "ترجمه اس کیو ال"
 pub func SqlTranslate(c: Client, query: str): str:
-    r := Perform(c, "POST", "/_sql/translate", _sql_body(query, Vector {} as Vector<str>, 0))
+    os := _opensearch(c)
+    r := Perform(c, "POST", _sql_path(os, "translate"), _sql_body(query, Vector {} as Vector<str>, 0, os))
     if not r.ok: ret str.Clone("") end
     ret r.body
 end

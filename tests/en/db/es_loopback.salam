@@ -26,6 +26,7 @@ mut last_auth := ""
 mut last_type := ""
 mut last_target := ""
 mut last_body := ""
+mut last_flavor := ""
 
 func hdr_get(head: str, name: str): str:
     lower := head.lower()
@@ -111,6 +112,10 @@ func route(c: tcp.Conn, method: str, target: str, body: str): bool:
             respond(c, 200, "")
             break
         end
+        method == "GET" and target == "/" and last_flavor == "es":
+            respond(c, 200, `{"name":"node-2","cluster_name":"mock","version":{"number":"8.15.3","build_flavor":"default","lucene_version":"9.11.1"},"tagline":"You Know, for Search"}`)
+            break
+        end
         method == "GET" and target == "/":
             respond(c, 200, `{"name":"node-1","cluster_name":"mock","cluster_uuid":"u1","version":{"distribution":"opensearch","number":"2.17.0","lucene_version":"9.11.1"},"tagline":"The OpenSearch Project"}`)
             break
@@ -172,6 +177,30 @@ func route(c: tcp.Conn, method: str, target: str, body: str): bool:
             end
             break
         end
+        method == "POST" and target == "/_plugins/_sql?format=jdbc":
+            if str.Contains(body, `"cursor"`):
+                respond(c, 200, `{"datarows":[["z",9,null]],"status":200}`)
+            else:
+                respond(c, 200, `{"schema":[{"name":"name","type":"keyword"},{"name":"COUNT(*)","alias":"n","type":"long"}],"datarows":[["x",7],["y",8]],"total":3,"size":2,"cursor":"OSCUR","status":200}`)
+            end
+            break
+        end
+        method == "POST" and str.Contains(target, "/_search/point_in_time"):
+            respond(c, 200, `{"pit_id":"OSPIT","_shards":{"total":1},"creation_time":1}`)
+            break
+        end
+        method == "DELETE" and target == "/_search/point_in_time":
+            respond(c, 200, `{"pits":[{"successful":true,"pit_id":"OSPIT"}]}`)
+            break
+        end
+        method == "POST" and str.StartsWith(target, "/items/_pit"):
+            respond(c, 200, `{"id":"ESPIT"}`)
+            break
+        end
+        method == "DELETE" and target == "/_pit":
+            respond(c, 200, `{"succeeded":true,"num_freed":1}`)
+            break
+        end
         method == "POST" and target == "/_sql/close":
             respond(c, 200, `{"succeeded":true}`)
             break
@@ -205,6 +234,7 @@ func serve():
                 last_type = hdr_get(head, "Content-Type")
                 last_target = parts.get(1)
                 last_body = body
+                last_flavor = hdr_get(head, "X-Flavor")
                 running = route(c, parts.get(0), parts.get(1), body)
             end
             tcp.Close(c)
@@ -275,7 +305,35 @@ func main:
         println "  item", it.action, it.id, it.status, it.ok, it.result, it.error_type
     end
 
-    mut rows := elasticsearch.Sql(c, "SELECT name, n, w FROM items")
+    println "distribution:", elasticsearch.Distribution(c), elasticsearch.IsOpenSearch(c)
+    mut params := Vector {} as Vector<str>
+    params.push("7")
+    params.push(`"x"`)
+    params.push("1.5")
+    params.push("true")
+    mut osrows := elasticsearch.SqlWith(c, "SELECT name, COUNT(*) AS n FROM items WHERE n > ? AND name <> ? AND w > ? AND ok = ? GROUP BY name", params, 2)
+    println "opensearch sql:", last_target
+    println "  sent:", last_body
+    println "  ", osrows.Ok(), osrows.ColumnCount(), osrows.ColumnName(1), osrows.ColumnTypeName(1)
+    until osrows.Next():
+        println "  row", osrows.Text(0), osrows.Int(1), osrows.IsNull(1)
+    end
+    osrows.Close()
+    println "  paged with:", last_target, last_body
+    ospit := elasticsearch.OpenPit(c, "items", "1m")
+    println "opensearch pit:", ospit, last_target, elasticsearch.ClosePit(c, ospit), last_target, last_body
+
+    mut escfg := elasticsearch.Config {}
+    escfg.nodes.push("http://127.0.0.1:" + str.FromInt(PORT as i64))
+    escfg.headers.put("X-Flavor", "es")
+    mut esc := elasticsearch.NewClient(escfg)
+    println "distribution:", elasticsearch.Distribution(esc), elasticsearch.IsOpenSearch(esc)
+    espit := elasticsearch.OpenPit(esc, "items", "1m")
+    println "elasticsearch pit:", espit, last_target, elasticsearch.ClosePit(esc, espit), last_target, last_body
+    mut esparams := Vector {} as Vector<str>
+    esparams.push("1")
+    mut rows := elasticsearch.SqlWith(esc, "SELECT name, n, w FROM items WHERE n >= ?", esparams, 0)
+    println "elasticsearch sql:", last_target, last_body
     println "sql:", rows.Ok(), rows.ColumnCount(), rows.ColumnName(1), rows.ColumnTypeName(1)
     until rows.Next():
         println "  row", rows.Text(0), rows.Int(1), rows.Float(2), rows.IsNull(2)
@@ -283,6 +341,7 @@ func main:
     rows.Close()
     println "sql paged with:", last_target, last_body
 
+    elasticsearch.Close(esc)
     conn := elasticsearch.Conn(c)
     println "conn:", conn.Kind(), conn.Ok(), conn.Exec("DELETE FROM items")
     q := conn.Query("SELECT name, n, w FROM items")

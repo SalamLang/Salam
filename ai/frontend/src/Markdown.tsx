@@ -41,8 +41,18 @@ export function CopyButton({ text, label = "رونوشت" }: { text: string; lab
   );
 }
 
+function codeDir(code: string): "rtl" | "ltr" {
+  const bare = code
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, "")
+    .replace(/`[^`]*`/g, "")
+    .replace(/«[^»\n]*»/g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/#[^\n]*/g, "");
+  return hasRtl(bare) ? "rtl" : "ltr";
+}
+
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const dir = hasRtl(code) ? "rtl" : "ltr";
+  const dir = codeDir(code);
   const name = LANG_NAMES[lang] || lang || "کد";
   return (
     <div className="code-block">

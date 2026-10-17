@@ -1,0 +1,56 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19825
+
+func main:
+    fake.On("POST", "/indexes/movies/search", 200, `{"hits":[{"id":5,"title":"Arrival"}],"query":"aliens who talk","processingTimeMs":8,"limit":20,"offset":0,"estimatedTotalHits":1,"semanticHitCount":1}`)
+    fake.On("POST", "/multi-search", 200, `{"results":[{"indexUid":"movies","hits":[{"id":2}],"query":"moana","processingTimeMs":1,"limit":20,"offset":0,"estimatedTotalHits":1},{"indexUid":"books","hits":[],"query":"moana","processingTimeMs":0,"limit":20,"offset":0,"estimatedTotalHits":0}]}`)
+    fake.On("POST", "/multi-search", 200, `{"hits":[{"id":2,"_federation":{"indexUid":"movies"}},{"id":41,"_federation":{"indexUid":"books"}}],"processingTimeMs":2,"limit":10,"offset":0,"estimatedTotalHits":2}`)
+    fake.On("POST", "/indexes/movies/facet-search", 200, `{"facetHits":[{"value":"Family","count":2},{"value":"Fantasy","count":1}],"facetQuery":"fa","processingTimeMs":0}`)
+    fake.On("POST", "/indexes/movies/similar", 200, `{"hits":[{"id":6,"title":"Dune"}],"id":"5","processingTimeMs":3,"limit":3,"offset":0,"estimatedTotalHits":1}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "searchKey")
+    mut err := meilisearch.Error {}
+
+    hybrid := meilisearch.SearchRequest { query = "aliens who talk", hybrid_embedder = "default", hybrid_semantic_ratio = 0.8 }
+    res := meilisearch.Search(c, "movies", hybrid, err)
+    println "hybrid: " + res.hits.get(0) + ", by meaning: " + res.semantic_hit_count
+
+    mut queries := Vector {} as Vector<meilisearch.MultiQuery>
+    queries.push(meilisearch.MultiQuery { index_uid = "movies", request = meilisearch.SearchRequest { query = "moana" } })
+    queries.push(meilisearch.MultiQuery { index_uid = "books", request = meilisearch.SearchRequest { query = "moana" } })
+    each one in meilisearch.MultiSearch(c, queries, err):
+        println "multi " + one.index_uid + ": " + one.hits.len()
+    end
+
+    merged := meilisearch.FederatedSearch(c, queries, meilisearch.Federation { limit = 10 }, err)
+    println "federated: " + merged.hits.len() + " hits"
+
+    facets := meilisearch.FacetSearch(c, "movies", meilisearch.FacetSearchRequest { facet_name = "genre", facet_query = "fa" }, err)
+    each facet in facets.hits:
+        println "genre " + facet.value + ": " + facet.count
+    end
+
+    similar := meilisearch.SimilarDocuments(c, "movies", meilisearch.SimilarRequest { id = "5", embedder = "default", limit = 3 }, err)
+    println "like Arrival: " + similar.hits.get(0)
+    ret 0
+end

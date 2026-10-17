@@ -1,0 +1,54 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19823
+
+func main:
+    fake.On("POST", "/indexes/movies/documents", 202, `{"taskUid":20,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate","customMetadata":"nightly-import"}`)
+    fake.On("PUT", "/indexes/movies/documents", 202, `{"taskUid":21,"indexUid":"movies","status":"enqueued","type":"documentAdditionOrUpdate"}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    ndjson := "{\"id\": 5, \"title\": \"Arrival\"}\n{\"id\": 6, \"title\": \"Dune\"}\n"
+    meilisearch.AddDocumentsNdjson(c, "movies", ndjson, "id", err)
+    println "ndjson: " + fake.Last()
+
+    csv := "id;title;year:number\n7;Heat;1995\n"
+    meilisearch.AddDocumentsCsv(c, "movies", csv, "id", ";", err)
+    println "csv: " + fake.Last()
+
+    mut many := Vector {} as Vector<str>
+    repeat 5 in i:
+        many.push(`{"id": ` + (100 + i) + `, "title": "Movie ` + i + `"}`)
+    end
+    tasks := meilisearch.AddDocumentsInBatches(c, "movies", many, 2, "id", err)
+    println "batches sent: " + tasks.len()
+
+    tagged := meilisearch.WithMetadata(c, "nightly-import")
+    info := meilisearch.AddDocuments(tagged, "movies", `[{"id": 8, "title": "Up"}]`, "", err)
+    println "tagged task: " + info.task_uid + " " + info.custom_metadata
+
+    opts := meilisearch.DocumentOptions { update = true, skip_creation = true }
+    meilisearch.AddDocumentsWith(c, "movies", `[{"id": 8, "year": 2009}]`, opts, err)
+    println "update existing only: " + fake.Last()
+    ret 0
+end

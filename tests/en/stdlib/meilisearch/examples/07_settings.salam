@@ -1,0 +1,73 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+import str
+
+include fake "../_fake.salam"
+
+const PORT := 19826
+
+func main:
+    queued := `{"taskUid":30,"indexUid":"movies","status":"enqueued","type":"settingsUpdate"}`
+    base := "/indexes/movies/settings"
+    fake.On("PATCH", base, 202, queued)
+    fake.On("GET", "/tasks/30", 200, `{"uid":30,"indexUid":"movies","status":"succeeded","type":"settingsUpdate"}`)
+    fake.On("GET", base, 200, `{"filterableAttributes":["genre","year"],"sortableAttributes":["year"],"stopWords":["the"]}`)
+    fake.On("PUT", base + "/filterable-attributes", 202, queued)
+    fake.On("GET", base + "/filterable-attributes", 200, `["genre","year"]`)
+    fake.On("PUT", base + "/sortable-attributes", 202, queued)
+    fake.On("PUT", base + "/ranking-rules", 202, queued)
+    fake.On("PUT", base + "/synonyms", 202, queued)
+    fake.On("PATCH", base + "/typo-tolerance", 202, queued)
+    fake.On("PUT", base + "/distinct-attribute", 202, queued)
+    fake.On("GET", base + "/search-cutoff-ms", 200, `150`)
+    fake.On("DELETE", base + "/stop-words", 202, queued)
+    fake.On("DELETE", base, 202, queued)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    task := meilisearch.Wait(c, meilisearch.UpdateSettings(c, "movies", `{"filterableAttributes": ["genre", "year"], "stopWords": ["the"]}`, err), err)
+    println "settings: " + task.status
+    println "all: " + meilisearch.GetSettings(c, "movies", err)
+
+    mut filterable := Vector {} as Vector<str>
+    filterable.push("genre")
+    filterable.push("year")
+    meilisearch.UpdateFilterableAttributes(c, "movies", filterable, err)
+    println "filterable: " + str.Join(meilisearch.GetFilterableAttributes(c, "movies", err), ", ")
+
+    mut sortable := Vector {} as Vector<str>
+    sortable.push("year")
+    meilisearch.UpdateSortableAttributes(c, "movies", sortable, err)
+
+    mut rules := Vector {} as Vector<str>
+    rules.push("words")
+    rules.push("typo")
+    rules.push("year:desc")
+    meilisearch.UpdateRankingRules(c, "movies", rules, err)
+    println "ranking rules: " + fake.Last()
+
+    meilisearch.UpdateSynonyms(c, "movies", `{"film": ["movie"], "movie": ["film"]}`, err)
+    meilisearch.UpdateTypoTolerance(c, "movies", `{"minWordSizeForTypos": {"oneTypo": 4}}`, err)
+    meilisearch.UpdateDistinctAttribute(c, "movies", "title", err)
+    println "search cutoff ms: " + meilisearch.GetSearchCutoffMs(c, "movies", err)
+    println "reset stop words: " + meilisearch.ResetStopWords(c, "movies", err).kind
+    println "reset all: " + meilisearch.ResetSettings(c, "movies", err).kind
+    ret 0
+end

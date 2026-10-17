@@ -1,0 +1,69 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19821
+
+func main:
+    fake.On("POST", "/indexes", 202, `{"taskUid":1,"indexUid":"movies","status":"enqueued","type":"indexCreation","enqueuedAt":"2026-10-01T08:00:00Z"}`)
+    fake.On("GET", "/tasks/1", 200, `{"uid":1,"indexUid":"movies","status":"succeeded","type":"indexCreation","duration":"PT0.004S"}`)
+    fake.On("GET", "/indexes/movies", 200, `{"uid":"movies","primaryKey":"id","createdAt":"2026-10-01T08:00:00Z","updatedAt":"2026-10-01T08:00:00Z"}`)
+    fake.On("GET", "/indexes", 200, `{"results":[{"uid":"books","primaryKey":"isbn"},{"uid":"movies","primaryKey":"id"}],"offset":0,"limit":20,"total":2}`)
+    fake.On("PATCH", "/indexes/movies", 202, `{"taskUid":2,"indexUid":"movies","status":"enqueued","type":"indexUpdate"}`)
+    fake.On("POST", "/swap-indexes", 202, `{"taskUid":3,"indexUid":null,"status":"enqueued","type":"indexSwap"}`)
+    fake.On("GET", "/indexes/movies/stats", 200, `{"numberOfDocuments":3,"isIndexing":false,"fieldDistribution":{"id":3,"title":3,"genre":3}}`)
+    fake.On("POST", "/indexes/movies/fields", 200, `{"results":[{"name":"genre","displayed":{"enabled":true},"searchable":{"enabled":true},"sortable":{"enabled":false},"distinct":{"enabled":false},"filterable":{"enabled":true}},{"name":"title","displayed":{"enabled":true},"searchable":{"enabled":true},"sortable":{"enabled":false},"distinct":{"enabled":false},"filterable":{"enabled":false}}],"offset":0,"limit":20,"total":2}`)
+    fake.On("POST", "/indexes/movies/compact", 202, `{"taskUid":4,"indexUid":"movies","status":"enqueued","type":"indexCompaction"}`)
+    fake.On("DELETE", "/indexes/old_movies", 202, `{"taskUid":5,"indexUid":"old_movies","status":"enqueued","type":"indexDeletion"}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    info := meilisearch.CreateIndex(c, "movies", "id", err)
+    task := meilisearch.Wait(c, info, err)
+    println "create movies: " + task.status + " in " + task.duration
+
+    index := meilisearch.GetIndex(c, "movies", err)
+    println "index: " + index.uid + ", primary key: " + index.primary_key
+
+    page := meilisearch.ListIndexes(c, 0, 20, err)
+    println "indexes: " + page.total
+    each item in page.results:
+        println "  " + item.uid + " (" + item.primary_key + ")"
+    end
+
+    println "rename task: " + meilisearch.RenameIndex(c, "movies", "films", err).kind
+
+    mut swaps := Vector {} as Vector<meilisearch.IndexSwap>
+    swaps.push(meilisearch.IndexSwap { first = "movies", second = "movies_rebuilt" })
+    println "swap task: " + meilisearch.SwapIndexes(c, swaps, err).kind
+
+    stats := meilisearch.GetIndexStats(c, "movies", err)
+    println "documents: " + stats.number_of_documents + ", fields: " + stats.field_distribution
+
+    fields := meilisearch.ListFields(c, "movies", meilisearch.FieldsQuery {}, err)
+    each field in fields.results:
+        println "field " + field.name + ": searchable=" + field.searchable + " filterable=" + field.filterable
+    end
+
+    println "compact task: " + meilisearch.CompactIndex(c, "movies", err).kind
+    println "delete task: " + meilisearch.DeleteIndex(c, "old_movies", err).kind
+    ret 0
+end

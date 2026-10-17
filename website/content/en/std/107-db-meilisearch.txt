@@ -6,8 +6,75 @@ pkg.title = The db/meilisearch package in Salam | Meilisearch
 pkg.description = The db/meilisearch package in Salam: a complete client for the Meilisearch search engine with indexes, documents, typo tolerant, faceted, hybrid and federated search, settings, tasks, API keys and tenant tokens, with examples.
 pkg.import = db.meilisearch
 pkg.intro <<
-<p>Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package speaks its HTTP API directly with <code>net.http</code> and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens, webhooks, dynamic search rules and chat workspaces. The examples need a running server, so they are only checked.</p>
-<p>Every call takes an <code>Error</code> as its last argument and fills it when something fails; check it with <code>Ok</code>. Writes do not happen at once: they return a <code>TaskInfo</code> and Meilisearch applies them in order, so call <code>Wait</code> when the next step needs the change. Search hits and documents come back as raw JSON text; read them into your own structs with <code>HitsAs</code> and <code>GetDocumentAs</code>. For a route with no function of its own, use <code>Request</code>. Requests have no time limit until you set one with <code>WithTimeout</code>, and a client is a plain value, so threads can share it.</p>
+<p>Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package talks to its HTTP API directly with <code>net.httpx</code> and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens, webhooks, dynamic search rules and chat workspaces. This page starts with a tutorial; the full reference of every function and type comes after it.</p>
+
+<h2 id="tutorial">Tutorial: a movie search in eleven steps</h2>
+<p>The steps below build one small movie catalogue and search it. Each step is a complete program, and the output under it is what it printed against a real Meilisearch 1.55. Run them in order, because each step uses the data the earlier ones left behind.</p>
+<p>First start a server. With Docker that is one command; without it, download the <code>meilisearch</code> binary from the Meilisearch releases page and run it with the same key:</p>
+<pre class="code" dir="ltr"><code>docker run -p 7700:7700 -e MEILI_MASTER_KEY=masterKey getmeili/meilisearch:v1.55.0</code></pre>
+<p>The programs assume <code>http://127.0.0.1:7700</code> and the master key <code>masterKey</code>. A real deployment uses a long random master key and gives applications smaller keys, as step 9 shows.</p>
+
+<h2 id="connect">1. Connect</h2>
+<p><code>New</code> makes a client: a plain value with the address and the key, which threads can share. <code>WithTimeout</code> returns a copy that stops waiting after the given milliseconds; without it a request waits as long as the server takes. Every call that can fail takes an <code>Error</code> as its last argument. <code>Ok</code> tells you whether the call worked and <code>ErrorString</code> turns the error into one line.</p>
+{{example.meili-connect}}
+<p>The error carries everything Meilisearch sent: the HTTP <code>status</code>, the <code>code</code> to branch on (here <code>index_not_found</code>), the <code>message</code> and a <code>link</code> to its documentation. When the server cannot be reached at all, <code>code</code> is <code>communication_error</code>, or <code>timeout</code> when the time limit ran out.</p>
+
+<h2 id="index">2. Create an index and add documents</h2>
+<p>An index is a named collection of documents, each with a unique primary key. Documents can be Salam structs: <code>AddDocumentsOf</code> turns each one into JSON. <code>AddDocuments</code> takes JSON text instead, and <code>AddDocumentsNdjson</code> and <code>AddDocumentsCsv</code> take those formats.</p>
+{{example.meili-index}}
+<p>Meilisearch does not apply a change at once. A write returns a <code>TaskInfo</code>, a receipt with a task number, and the server applies the tasks in order in the background. <code>Wait</code> blocks until that task has finished, which is what you want when the next line depends on the change. A batch import does not need to wait after every call; wait once at the end, or not at all.</p>
+
+<h2 id="search">3. Search</h2>
+<p><code>Query</code> searches for some words with every option at its default. The hits come back as JSON text, and <code>HitsAs</code> reads them into your own struct. A struct with fewer fields than the document is fine: the extra fields are ignored.</p>
+{{example.meili-search}}
+<p>The query was misspelled on purpose: <code>spcae</code> still finds the movie whose overview says <em>space</em>, because Meilisearch tolerates typos out of the box.</p>
+
+<h2 id="filter">4. Filter, sort and count facets</h2>
+<p>Filtering and sorting need to be switched on for the fields involved; that is a setting of the index, and <code>UpdateSettings</code> changes several settings in one task. A <code>SearchRequest</code> holds every search option and sends only the ones you set.</p>
+{{example.meili-filter}}
+<p><code>facets</code> asks how many hits have each value of a field, which is how a search page shows filter options with counts. <code>attributes_to_retrieve</code> keeps the hits small by returning only the fields you need.</p>
+
+<h2 id="highlight">5. Highlight, crop and page through results</h2>
+<p>For a results page you usually want the matched words marked and long text cut down around them. Meilisearch adds a <code>_formatted</code> copy of each hit with both done. <code>page</code> and <code>hits_per_page</code> give numbered pages with an exact total; <code>offset</code> and <code>limit</code> are the cheaper choice for endless scrolling.</p>
+{{example.meili-highlight}}
+
+<h2 id="settings">6. Tune relevancy</h2>
+<p>Every index setting has its own <code>Get</code>, <code>Update</code> and <code>Reset</code> function. Synonyms make different words find each other, stop words are ignored in queries, and the searchable attributes choose which fields are searched and how much each one counts.</p>
+{{example.meili-settings}}
+<p>Other settings follow the same pattern: <code>UpdateRankingRules</code>, <code>UpdateTypoTolerance</code>, <code>UpdateDistinctAttribute</code>, <code>UpdatePagination</code>, <code>UpdateFaceting</code>, <code>UpdateDictionary</code> and the rest in the reference below. <code>GetSetting</code> and <code>UpdateSetting</code> reach any setting by its route name, including ones newer than this package.</p>
+
+<h2 id="multi">7. Search several indexes at once</h2>
+<p><code>MultiSearch</code> sends several searches in one request and returns one result each. <code>FederatedSearch</code> merges them into a single ranked list, which suits one search box over different kinds of content. <code>FacetSearch</code> searches the values of one facet, for a filter box that completes as you type.</p>
+{{example.meili-multi}}
+
+<h2 id="vectors">8. Vector and hybrid search</h2>
+<p>Meilisearch can also search by meaning. An embedder turns documents into vectors; it can call a model such as OpenAI or Hugging Face, or take vectors you computed yourself, which is what the <code>userProvided</code> source in this step does. A search with <code>hybrid_embedder</code> mixes keyword and vector results; a <code>hybrid_semantic_ratio</code> of 1 uses vectors only. <code>SimilarDocuments</code> finds the documents nearest to one you already have.</p>
+{{example.meili-vectors}}
+<p>A <code>userProvided</code> embedder needs a vector in every document, so this step uses its own index. Add the embedder while the index is still empty and send the vectors in each document under <code>_vectors</code>.</p>
+
+<h2 id="keys">9. API keys and tenant tokens</h2>
+<p>The master key can do everything, so applications should get smaller keys. <code>CreateKey</code> makes a key limited to some actions and indexes. A tenant token goes one step further: <code>TenantToken</code> signs, in your own program and without asking the server, a key that adds a filter to every search. Give each user their own token and they can search directly from the browser while seeing only their rows.</p>
+{{example.meili-keys}}
+
+<h2 id="update">10. Update and delete documents</h2>
+<p><code>AddDocuments</code> replaces a whole document with the same id; <code>UpdateDocuments</code> changes only the fields you send. Documents can be deleted one by one, by a list of ids, by a filter, or all at once.</p>
+{{example.meili-update}}
+
+<h2 id="tasks">11. Tasks and failures</h2>
+<p>A write that is accepted can still fail later, while the server applies it. The error then lives on the task, not on the call that queued it. <code>WaitForTask</code> copies it into your <code>Error</code>, so the usual check works. <code>GetTasks</code> lists past tasks with filters on index, type, status and dates.</p>
+{{example.meili-tasks}}
+
+<h2 id="more">More</h2>
+<p>The rest of the API works the same way; the reference below covers each function. A few pointers:</p>
+<ul>
+<li><code>CreateWebhook</code> registers a URL that Meilisearch calls when tasks finish, so you do not need to poll.</li>
+<li><code>UpdateSearchRule</code> pins or boosts chosen documents for chosen queries, such as a sale banner for <em>sale</em>; it needs the <code>dynamicSearchRules</code> experimental feature.</li>
+<li><code>UpdateChatSettings</code> and <code>ChatCompletion</code> answer questions in plain language from your indexes through an LLM; they need the <code>chatCompletions</code> feature.</li>
+<li><code>WithMetadata</code> tags every document write with a label that comes back on the task, to follow one import through the task list.</li>
+<li><code>CreateDump</code>, <code>CreateSnapshot</code>, <code>GetStats</code>, <code>GetMetrics</code> and <code>SetStderrLogs</code> are for running the server.</li>
+<li>For a route with no function of its own, <code>Request</code> sends any method, path and JSON body.</li>
+</ul>
+<p>The Salam repository has one runnable example for each part of the API, in English under <code>tests/en/stdlib/meilisearch/examples</code> and in Persian under <code>tests/fa/stdlib/meilisearch/examples</code>.</p>
 >>
 
 doc.SearchRule = A dynamic search rule: when its conditions hold, its actions pin or boost documents.

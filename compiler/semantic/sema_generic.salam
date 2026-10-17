@@ -306,6 +306,51 @@ func g_instance_name(s &: Sema, base: str, argtypes: Vector<int>): str:
     ret out
 end
 
+func g_template_key(a &: at.Ast, tmpl: int): str:
+    tn := at.Get(a, tmpl)
+    mut file := tn.src_file
+    mut cut := 0
+    mut seen := 0
+    mut i := str.Len(file) - 1
+    until i >= 0:
+        b := byte_at(file, i)
+        if b == 47 or b == 92:
+            seen += 1
+            if seen == 2:
+                cut = i + 1
+                break
+            end
+        end
+        i -= 1
+    end
+    if cut > 0:
+        file = str.Substr(file, cut, str.Len(file) - cut)
+    end
+    if str.Len(file) == 0:
+        ret "#" + tmpl
+    end
+    ret file + "#" + tn.begin_index + "#" + tn.name
+end
+
+func g_unique_instance_name(s &: Sema, a &: at.Ast, tmpl: int, base: str): str:
+    key := g_template_key(a, tmpl)
+    if not s.g_inst_owner.has(base) or str.Equals(s.g_inst_owner.get(base), key):
+        ret base
+    end
+    mut pkg := derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
+    if str.Len(pkg) == 0:
+        pkg = "main"
+    end
+    stem := base + "_" + g_sanitize(pkg)
+    mut name := stem
+    mut n := 2
+    until s.g_inst_owner.has(name) and not str.Equals(s.g_inst_owner.get(name), key):
+        name = stem + "_" + n
+        n += 1
+    end
+    ret name
+end
+
 func g_type_to_ast(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     nid := g_type_to_ast_bare(s, a, t, sp)
     if t >= 0:
@@ -618,11 +663,12 @@ func g_instantiate_func(
             ret 0
         end
     end
-    iname := g_instance_name(s, tn.name, argtypes)
+    iname := g_unique_instance_name(s, a, tmpl, g_instance_name(s, tn.name, argtypes))
     existing := scope_lookup_local(s, s.global, iname)
     if existing != 0:
         ret existing
     end
+    s.g_inst_owner.put(iname, g_template_key(a, tmpl))
     save_lang := s.lang
     if str.Len(tn.origin_lang) > 0:
         s.lang = tn.origin_lang

@@ -56,7 +56,7 @@ export function Sidebar(p: Props) {
             <img src="/logo.svg" alt="" width={30} height={30} />
             <span>
               دستیار سلام
-              <small>زبان برنامه‌نویسی فارسی</small>
+              <small>زبان برنامه‌نویسی ایرانی</small>
             </span>
           </a>
           <button type="button" className="icon-button only-mobile" onClick={p.onClose} aria-label="بستن فهرست">

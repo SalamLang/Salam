@@ -104,7 +104,7 @@ export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void
         <div className="auth-brand-inner">
           <img src="/logo.svg" alt="" className="auth-logo" width={72} height={72} />
           <h1>دستیار هوشمند سلام</h1>
-          <p className="lead">همراه شما برای یادگیری و نوشتن برنامه با سلام، نخستین زبان برنامه‌نویسی فارسی.</p>
+          <p className="lead">همراه شما برای یادگیری و نوشتن برنامه با سلام، نخستین زبان برنامه‌نویسی ایرانی.</p>
           <ul className="features">
             <li>
               <span className="feature-icon"><IconCode /></span>

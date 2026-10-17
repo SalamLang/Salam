@@ -2713,7 +2713,7 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>     |
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>       |
 | Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>        |
-| Search with Typesense (`دیتابیس.تایپسنس`)        | <https://www.salamlang.ir/learn/search/>        |
+| Search with Typesense (`دیتابیس.تایپسنس`)        | <https://www.salamlang.ir/learn/typesense/>     |
 | Search with OpenSearch (`دیتابیس.اپن سرچ`)       | <https://www.salamlang.ir/learn/opensearch/>    |
 | Search with Elasticsearch (`دیتابیس.الستیک سرچ`) | <https://www.salamlang.ir/learn/elasticsearch/> |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>      |

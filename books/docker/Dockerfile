@@ -1,4 +1,4 @@
-FROM texlive/texlive:TL2024-historic
+FROM texlive/texlive:latest@sha256:0f4884ca7d287f47ab466d2dd405d4c901c576585363f628863a7ca7eea21301
 
 LABEL org.opencontainers.image.title="Salam tutorial books (XeLaTeX)"
 LABEL org.opencontainers.image.description="XeLaTeX + xepersian toolchain that builds the English and Persian Salam books"

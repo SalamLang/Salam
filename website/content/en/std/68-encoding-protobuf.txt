@@ -15,7 +15,16 @@ pkg.intro <<
 <p>Protocol Buffers is Google's binary format for structured messages. The shape of the messages is defined in a <code>.proto</code> file, and this package reads it, generates Salam code for the messages and services, and also carries the low level tools for writing and reading fields.</p>
 <p>In the bytes, every field comes as a <strong>tag</strong>, the field number and the wire type, followed by its value. Numbers are usually written as a <strong>varint</strong>: each byte holds 7 bits of the number and its top bit says whether another byte follows.</p>
 
-<p>The guide below works through the jobs you meet in practice: writing a message by hand, reading one back while skipping fields you do not know, nesting messages, choosing between <code>int64</code> and <code>sint64</code>, and generating the code from a <code>.proto</code> file instead of writing it. Every byte buffer here is a <code>compress.ByteBuf</code> from <a href="/std/compress/">compress</a>, so programs import both packages.</p>
+<p>Use Protocol Buffers when you talk to a service that already speaks it, usually over <a href="/std/grpc/">grpc</a>, or when several languages share one schema. Between Salam programs, or when no <code>.proto</code> file exists, <a href="/std/encoding-msgpack/">encoding/msgpack</a> needs no schema and <a href="/std/encoding-json/">encoding/json</a> stays readable.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Generated readers do not accept packed repeated numbers.</strong> Proto3 writers such as <code>protoc</code>, Go and Java send a <code>repeated int32</code> as one length-prefixed block by default. The generated <code>Unmarshal</code> reads one tag per element and does not check the wire type, so a packed field fails or gives wrong numbers. The generated <code>Marshal</code> writes the unpacked form, which every reader accepts. Decode packed fields by hand as in the packed guide, or mark the field <code>[packed = false]</code> on the other side.</li>
+<li><strong>The generator skips message, enum and <code>map</code> fields.</strong> Members of a <code>oneof</code> become ordinary fields, so nothing stops two of them being set. Write those parts by hand.</li>
+<li><strong>Varints are <code>u64</code>.</strong> <code>ReadVarint</code> returns a <code>u64</code>; cast to <code>i64</code> or <code>int</code> yourself, and run <code>sint</code> fields through <code>ZigZagDecode64</code>.</li>
+<li><strong>Check <code>ok</code> once, at the end.</strong> Every reader clears the shared <code>ok</code> flag when the data runs out; nothing stops the program, so test it before you use the result.</li>
+</ul>
+
+<p>The guide below works through the jobs you meet in practice: writing a message by hand, reading one back while skipping fields you do not know, nesting messages, packed repeated numbers, choosing between <code>int64</code> and <code>sint64</code>, and generating the code from a <code>.proto</code> file instead of writing it. Every byte buffer here is a <code>compress.ByteBuf</code> from <a href="/std/compress/">compress</a>, so programs import both packages.</p>
 
 <h2 id="guide-encode">Writing a message by hand</h2>
 <p>A message is nothing more than its fields one after another. For each field call <code>WriteTag</code> with the field number from the <code>.proto</code> file and the wire type, then the writer for the value: <code>WriteVarint</code> for integers, enums and booleans, <code>WriteLenPrefixedStr</code> for strings and <code>WriteLenPrefixedBytes</code> for bytes and nested messages. The program below writes <code>User { id: 42, name: "Sara", admin: true }</code> and prints the bytes in hex.</p>
@@ -31,6 +40,11 @@ pkg.intro <<
 <p>A field whose type is another message is written as bytes: encode the inner message into its own buffer, then write it with wire type <code>WT_LEN</code> and <code>WriteLenPrefixedBytes</code>. A <code>repeated</code> field is the same tag written once per element. On the reading side <code>ReadLenPrefixedBuf</code> hands you the inner bytes as a new buffer, which you decode with the same loop and then free.</p>
 {{example.encoding-protobuf-nested}}
 
+<h2 id="guide-packed">Packed repeated numbers</h2>
+<p>A <code>repeated</code> field of numbers can travel in two shapes. Unpacked, each element has its own tag. Packed, the default in proto3, there is one tag with wire type <code>WT_LEN</code> and the varints follow one after another inside it. A correct reader accepts both, so look at the wire type: for <code>WT_LEN</code>, take the block with <code>ReadLenPrefixedBuf</code> and read varints until it is empty.</p>
+{{example.encoding-protobuf-packed}}
+<p>Packing saves one tag byte per element, which adds up in long lists of small numbers. This is also the code to use in place of the generated <code>Unmarshal</code> for a field that comes from <code>protoc</code>-generated code in another language.</p>
+
 <h2 id="guide-zigzag">Negative numbers: int64 or sint64</h2>
 <p>A plain <code>int32</code> or <code>int64</code> field writes a negative number as a huge unsigned value, which always takes ten bytes. The <code>sint32</code> and <code>sint64</code> types first map the number with ZigZag (0, -1, 1, -2 become 0, 1, 2, 3), so small negative numbers stay small. Use <code>ZigZagEncode64</code> before <code>WriteVarint</code> and <code>ZigZagDecode64</code> after <code>ReadVarint</code>, and pick <code>sint64</code> in the <code>.proto</code> file for fields such as offsets or temperature deltas that are often below zero.</p>
 {{example.encoding-protobuf-zigzag}}
@@ -38,7 +52,7 @@ pkg.intro <<
 <h2 id="guide-generate">Generating the code from a .proto file</h2>
 <p>For more than a couple of messages, let the package write the code. <code>GenerateSingle</code> turns a <code>.proto</code> source into a Salam package with one struct per message and a <code>Marshal</code> and <code>Unmarshal</code> function for each; <code>GenerateWithServices</code> adds gRPC client stubs for the services (see <a href="/std/grpc/">grpc</a>). The program below prints only the declarations of the generated code.</p>
 {{example.encoding-protobuf-codegen}}
-<p>Save the text to a file such as <code>point_pb.salam</code>, add <code>include pb "point_pb.salam"</code> to your program, and call <code>pb.MarshalPoint(p)</code> to get a <code>ByteBuf</code> and <code>pb.UnmarshalPoint(buf.data, buf.len, ok)</code> to read one back. The generator covers scalar fields, strings, bytes and repeated scalars. It leaves out fields whose type is another message or an enum, so write those few by hand as in the nested example above, or keep the enum as an <code>int32</code> in the <code>.proto</code> file.</p>
+<p>Save the text to a file such as <code>point_pb.salam</code>, add <code>include pb "point_pb.salam"</code> to your program, and call <code>pb.MarshalPoint(p)</code> to get a <code>ByteBuf</code> and <code>pb.UnmarshalPoint(buf.data, buf.len, ok)</code> to read one back. The generator covers scalar fields, strings, bytes and repeated scalars. It leaves out fields whose type is another message or an enum, gives <code>map</code> fields no code and turns <code>oneof</code> members into ordinary fields, so write those few by hand as in the nested example above, or keep the enum as an <code>int32</code> in the <code>.proto</code> file. Repeated numbers are read only in the unpacked form; see the packed guide.</p>
 
 <h2 id="guide-which">Which function for which field type</h2>
 <div class="table-wrap"><table>
@@ -115,7 +129,7 @@ doc.MakeTag = A field tag: the field number and the wire type in one number.
 doc.WriteTag = Writes the tag as a varint.
 doc.ReadTag = Reads a tag and splits out the field number and the wire type.
 doc.WriteVarint = Writes the number with variable length encoding (varint): 7 bits per byte, so small numbers are shorter.
-doc.ReadVarint = Reads one varint.
+doc.ReadVarint = Reads one varint as a <code>u64</code>; <code>ok</code> turns false when the bytes run out.
 doc.ZigZagEncode32 = Zigzag encoding: it moves small negative numbers to small positive ones so they get a short varint.
 doc.ZigZagDecode32 = Undoes 32 bit zigzag.
 doc.ZigZagEncode64 = 64 bit zigzag encoding.
@@ -133,7 +147,7 @@ doc.WriteLenPrefixedStr = Writes the length and then the string.
 doc.ReadLenPrefixedBuf = Reads one length prefixed part into a buffer.
 doc.ReadLenPrefixedStr = Reads one length prefixed part into a string.
 doc.SkipField = Steps over the value of a field of the given wire type; for unknown fields.
-doc.GenerateSingle = Generates Salam code from <code>.proto</code> text: one struct per message, with its serialising functions.
+doc.GenerateSingle = Generates Salam code from <code>.proto</code> text: one struct per message, with its serialising functions. Message, enum and map fields are left out, and the generated reader expects repeated numbers unpacked.
 doc.ServiceCount = The number of services.
 doc.ServiceNameAt = The name of service number <code>i</code>.
 doc.ServiceMethodCount = The number of methods of a service.

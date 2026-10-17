@@ -7,11 +7,25 @@ pkg.description = The net/tcp package in Salam: building a TCP server, connectin
 pkg.import = net.tcp
 pkg.intro <<
 <p>TCP is the base of most internet protocols: a reliable, ordered stream of bytes between two programs. A server listens on a port with <code>Bind</code> and takes each new client with <code>Accept</code>; a client connects with <code>Dial</code>.</p>
-<p><code>Accept</code> and <code>Read</code> wait until data arrives; to serve several clients, handle each in its own thread (<code>spawn</code>) or set a deadline. The examples run on <code>127.0.0.1</code>.</p>
+<p><code>Accept</code> and <code>Read</code> wait until something arrives, so a server that talks to several clients hands each connection to a thread, as the worker guide shows. Every example runs on <code>127.0.0.1</code> and needs no network.</p>
+<p>Use this package for your own protocols and for talking to servers that have no client in the standard library. For HTTP use <a href="/std/net-http/">net/http</a>; for messages that must not be split or ordered, <a href="/std/net-udp/">net/udp</a>; for live two-way traffic with browsers, <a href="/std/net-websocket/">net/websocket</a>. <a href="/std/tls/">tls</a> adds encryption on top of a connection from here.</p>
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>An empty <code>Read</code> means three things.</strong> The peer closed the connection, the read deadline passed, or an error happened; all return <code>""</code>. A message that starts with a zero byte also comes back empty, and text after a zero byte is lost, so use <code>ReadBytes</code> for binary data.</li>
+<li><strong><code>Write</code> may send only part of the text.</strong> It makes one system call and returns how many bytes went out. For large data, compare the result with the length, or use <code>WriteBytes</code>, which loops until everything is sent.</li>
+<li><strong>Messages are not kept apart.</strong> TCP is a byte stream; frame your messages with a delimiter or a length, as the framing guide does.</li>
+<li><strong><code>Bind</code> listens on every IPv4 interface</strong>, not only on <code>127.0.0.1</code>, so a test server is reachable from the network unless a firewall stops it. IPv6 clients cannot reach it; <code>Dial</code> itself tries every address a name resolves to, IPv6 included.</li>
+<li><strong>Nothing stops the program on failure.</strong> <code>Bind</code>, <code>Accept</code> and <code>Dial</code> return a value with fd -1; check <code>Ok</code> or <code>ConnOk</code>.</li>
+</ul>
 <h2 id="guide-request-reply">A request and reply protocol</h2>
 <p>Most small protocols take turns: the client sends one request, the server sends one reply, and so on until the client hangs up. The server below reads in a loop and stops when <code>Read</code> returns an empty string, which is how TCP tells you the other side closed the connection. The client waits for each reply before it sends the next request, so every <code>Read</code> sees exactly one message.</p>
 {{example.net-tcp-guide-commands}}
 <p>The server runs in its own thread with <code>spawn</code> and the main program waits for it with <code>join</code>. A real server would call <code>Accept</code> in a loop and hand each connection to a worker; while one client is served, the others wait in the queue of the listening socket.</p>
+
+<h2 id="guide-workers">Serving several clients with worker threads</h2>
+<p>A server that reads from one client at a time stalls everyone behind a slow client. The usual shape is one thread that only accepts, a <a href="/std/chan/">chan</a> that carries the new connections, and a few worker threads that serve them. A thread receives the connection as its socket number, <code>conn.fd</code>, and turns it back into a <code>Conn</code> with <code>ConnFromFd</code>.</p>
+{{example.net-tcp-guide-workers}}
+<p>The three clients connect before any of them sends a word, and only two workers exist, so the third connection waits in the channel until a worker is free; it is still answered. Closing the channel after the last <code>Accept</code> makes <code>recv</code> report <code>ok</code> false, which ends the worker loops so <code>join</code> returns. In a long-running server the acceptor loops forever, and the number of workers caps how many clients are served at the same time.</p>
 
 <h2 id="guide-framing">Messages in a byte stream</h2>
 <p>TCP moves bytes, not messages. Two writes can arrive as one read, and one write can arrive split over several reads. The lock step in the previous section hides that, but as soon as the other side sends several messages in a row you need a frame: a delimiter such as a newline, or a length in front of each message. The program below sends four lines in three uneven writes and puts them back together by keeping the unfinished part of the last read in <code>pending</code>.</p>
@@ -54,21 +68,21 @@ doc.Server.fd = The socket descriptor; -1 means invalid.
 doc.Server.port = The port the server listens on.
 doc.Conn = One TCP connection.
 doc.Conn.fd = The socket descriptor; -1 means invalid.
-doc.Bind = Listens on the given port; port zero means let the system pick a free one.
+doc.Bind = Listens on the given port on every IPv4 interface; port zero lets the system pick a free one. Check <code>Ok</code> afterwards: a port already in use gives an invalid server.
 doc.Ok = True when the server was created properly.
 doc.Port = The actual port of the server; for when you passed zero.
 doc.Accept = Waits for a client to connect and returns its connection.
 doc.CloseServer = Closes the server.
 doc.Dial = Connects to a host and port; when it fails, <code>ConnOk</code> is false.
 doc.ConnOk = True when the connection is up.
-doc.Read = Reads at most <code>max</code> bytes; an empty string when the other side has closed the connection.
-doc.Write = Sends the text and returns the number of bytes sent.
+doc.Read = Reads at most <code>max</code> bytes (4096 when <code>max</code> is 0 or less) as text; an empty string when the other side has closed the connection, the deadline passed or an error happened. The text stops at the first zero byte.
+doc.Write = Sends the text in one system call and returns the number of bytes sent, which can be fewer than the length for large data, or -1 on error.
 doc.ReadBytes = Reads at most <code>max</code> bytes into memory and returns how many; zero or less means the end or an error.
-doc.WriteBytes = Sends <code>n</code> bytes from memory.
+doc.WriteBytes = Sends <code>n</code> bytes from memory, looping until all are sent; returns how many went out.
 doc.Close = Closes the connection.
 doc.DialTLS = Makes an encrypted TLS connection; for HTTPS and the like.
 doc.UpgradeTLS = Upgrades an existing plain connection to TLS with the given configuration; as STARTTLS does.
-doc.ConnFromFd = Builds a connection from a socket descriptor that was made somewhere else.
+doc.ConnFromFd = Builds a connection from a socket descriptor, such as <code>conn.fd</code> passed to another thread through a channel.
 doc.WriteHTTP = Sends a complete HTTP/1.1 response with the status line, the content type, <code>Content-Length</code> and <code>Connection: close</code>; for very simple servers.
 doc.SetReadDeadline = How many milliseconds a read may wait at most.
 doc.SetWriteDeadline = How many milliseconds a write may wait at most.

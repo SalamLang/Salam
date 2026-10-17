@@ -19192,6 +19192,8 @@ struct _EsState:
 pub nodes: Vector<_Node> = Vector {}
 pub cursor: int = 0
 pub dead_until: Vector<i64> = Vector {}
+pub wires: Vector<i64> = Vector {}
+pub keep_alive: bool = true
 pub auth: str = ""
 pub extra_headers: str = ""
 pub ca_file: str = ""
@@ -19218,6 +19220,7 @@ pub ca_file: str = ""
 pub insecure: bool = false
 pub timeout_ms: int = 30000
 pub max_retries: int = 3
+pub keep_alive: bool = true
 pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
 end
 @en "Client"
@@ -19457,9 +19460,13 @@ if nodes.len() == 0 and st[0].config_err.len() == 0:
 nodes.push(_parse_node(DEFAULT_URL, user, pass))
 end
 mut dead := Vector {} as Vector<i64>
+mut wires := Vector {} as Vector<i64>
 repeat nodes.len():
 dead.push(0 as i64)
+wires.push(_wire_new() as i64)
 end
+st[0].wires = wires
+st[0].keep_alive = cfg.keep_alive
 st[0].nodes = nodes
 st[0].dead_until = dead
 st[0].auth = _auth_header(user, pass, cfg.api_key, cfg.bearer)
@@ -19562,6 +19569,10 @@ st := _st(c)
 mem.Free(st[0].err as void*)
 mem.Free(st[0].err_type as void*)
 mem.Free(st[0].err_reason as void*)
+each wp in st[0].wires:
+_wire_free(wp as _Wire*)
+end
+st[0].wires.free()
 st[0].nodes.free()
 st[0].dead_until.free()
 mem.Free(c.handle)
@@ -19595,6 +19606,278 @@ end
 package elasticsearch
 import str
 import encoding.json
+@en "AsyncSearch"
+@fa "جستجوی ناهمگام"
+pub struct AsyncSearch:
+pub ok: bool = false
+pub id: str = ""
+pub running: bool = false
+pub partial: bool = false
+pub result: SearchResult = SearchResult {}
+pub error: str = ""
+end
+@en "Task"
+@fa "کار"
+pub struct Task:
+pub ok: bool = false
+pub id: str = ""
+pub completed: bool = false
+pub action: str = ""
+pub response: str = ""
+pub raw: str = ""
+end
+func _task_seg(id: str): str:
+ret str.Replace(_seg(id), "%3A", ":")
+end
+func _raw_or_empty(r: Response): str:
+if not r.ok: ret str.Clone("") end
+ret r.body
+end
+func _task_id(r: Response): str:
+if not r.ok: ret str.Clone("") end
+ret json.Get(r.body, "task")
+end
+func _async_of(r: Response): AsyncSearch:
+if not r.ok: ret AsyncSearch { error = r.error } end
+body := r.body
+mut res := ParseSearchResult(json.Get(body, "response"))
+res.status = r.status
+ret AsyncSearch {
+ok = true, id = json.Get(body, "id"), running = json.Get(body, "is_running") == "true" or json.Get(body, "state") == "RUNNING",
+partial = json.Get(body, "is_partial") == "true", result = res
+}
+end
+func _async_path(c: Client, id: str): str:
+if _opensearch(c): ret "/_plugins/_asynchronous_search/" + _seg(id) end
+ret "/_async_search/" + _seg(id)
+end
+func _policy_path(c: Client, name: str): str:
+if _opensearch(c): ret "/_plugins/_ism/policies/" + _seg(name) end
+ret "/_ilm/policy/" + _seg(name)
+end
+func _wait_false(path: str): str:
+if path.find("?") >= 0: ret path + "&wait_for_completion=false" end
+ret path + "?wait_for_completion=false"
+end
+@en "PutPipeline"
+@fa "تنظیم خط لوله"
+pub func PutPipeline(c: Client, id: str, body: str): bool:
+ret Perform(c, "PUT", "/_ingest/pipeline/" + _seg(id), body).ok
+end
+@en "GetPipeline"
+@fa "دریافت خط لوله"
+pub func GetPipeline(c: Client, id: str): str:
+ret _raw_or_empty(Perform(c, "GET", "/_ingest/pipeline/" + _seg(id), ""))
+end
+@en "DeletePipeline"
+@fa "حذف خط لوله"
+pub func DeletePipeline(c: Client, id: str): bool:
+ret Perform(c, "DELETE", "/_ingest/pipeline/" + _seg(id), "").ok
+end
+@en "SimulatePipeline"
+@fa "شبیه‌سازی خط لوله"
+pub func SimulatePipeline(c: Client, id: str, body: str): str:
+mut path := "/_ingest/pipeline/_simulate"
+if id.len() > 0: path = "/_ingest/pipeline/" + _seg(id) + "/_simulate" end
+ret _raw_or_empty(Perform(c, "POST", path, body))
+end
+@en "CreateDataStream"
+@fa "ایجاد جریان داده"
+pub func CreateDataStream(c: Client, name: str): bool:
+ret Perform(c, "PUT", "/_data_stream/" + _seg(name), "").ok
+end
+@en "GetDataStream"
+@fa "دریافت جریان داده"
+pub func GetDataStream(c: Client, name: str): str:
+ret _raw_or_empty(Perform(c, "GET", "/_data_stream/" + _idx(name), ""))
+end
+@en "DeleteDataStream"
+@fa "حذف جریان داده"
+pub func DeleteDataStream(c: Client, name: str): bool:
+ret Perform(c, "DELETE", "/_data_stream/" + _idx(name), "").ok
+end
+@en "Rollover"
+@fa "چرخش نمایه"
+pub func Rollover(c: Client, target: str, body: str): bool:
+ret Perform(c, "POST", "/" + _idx(target) + "/_rollover", body).ok
+end
+@en "PutLifecyclePolicy"
+@fa "تنظیم سیاست چرخه عمر"
+pub func PutLifecyclePolicy(c: Client, name: str, body: str): bool:
+ret Perform(c, "PUT", _policy_path(c, name), body).ok
+end
+@en "GetLifecyclePolicy"
+@fa "دریافت سیاست چرخه عمر"
+pub func GetLifecyclePolicy(c: Client, name: str): str:
+ret _raw_or_empty(Perform(c, "GET", _policy_path(c, name), ""))
+end
+@en "DeleteLifecyclePolicy"
+@fa "حذف سیاست چرخه عمر"
+pub func DeleteLifecyclePolicy(c: Client, name: str): bool:
+ret Perform(c, "DELETE", _policy_path(c, name), "").ok
+end
+@en "PutRepository"
+@fa "تنظیم مخزن پشتیبان"
+pub func PutRepository(c: Client, name: str, body: str): bool:
+ret Perform(c, "PUT", "/_snapshot/" + _seg(name), body).ok
+end
+@en "DeleteRepository"
+@fa "حذف مخزن پشتیبان"
+pub func DeleteRepository(c: Client, name: str): bool:
+ret Perform(c, "DELETE", "/_snapshot/" + _seg(name), "").ok
+end
+@en "CreateSnapshot"
+@fa "ایجاد پشتیبان"
+pub func CreateSnapshot(c: Client, repository: str, snapshot: str, body: str): bool:
+path := "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot) + "?wait_for_completion=true"
+ret Perform(c, "PUT", path, body).ok
+end
+@en "RestoreSnapshot"
+@fa "بازیابی پشتیبان"
+pub func RestoreSnapshot(c: Client, repository: str, snapshot: str, body: str): bool:
+path := "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot) + "/_restore?wait_for_completion=true"
+ret Perform(c, "POST", path, body).ok
+end
+@en "DeleteSnapshot"
+@fa "حذف پشتیبان"
+pub func DeleteSnapshot(c: Client, repository: str, snapshot: str): bool:
+ret Perform(c, "DELETE", "/_snapshot/" + _seg(repository) + "/" + _seg(snapshot), "").ok
+end
+@en "ListSnapshots"
+@fa "فهرست پشتیبان‌ها"
+pub func ListSnapshots(c: Client, repository: str): Vector<str>:
+mut out := Vector {} as Vector<str>
+r := Perform(c, "GET", "/_snapshot/" + _seg(repository) + "/_all", "")
+if not r.ok: ret out end
+each raw in json.Items(json.Get(r.body, "snapshots")):
+out.push(json.Get(raw, "snapshot"))
+end
+ret out
+end
+@en "GetClusterSettings"
+@fa "دریافت تنظیمات خوشه"
+pub func GetClusterSettings(c: Client): str:
+ret _raw_or_empty(Perform(c, "GET", "/_cluster/settings?flat_settings=true", ""))
+end
+@en "PutClusterSettings"
+@fa "تنظیم تنظیمات خوشه"
+pub func PutClusterSettings(c: Client, body: str): bool:
+ret Perform(c, "PUT", "/_cluster/settings", body).ok
+end
+@en "GetTask"
+@fa "دریافت کار"
+pub func GetTask(c: Client, id: str): Task:
+r := Perform(c, "GET", "/_tasks/" + _task_seg(id), "")
+if not r.ok: ret Task { id = str.Clone(id) } end
+ret Task {
+ok = true, id = str.Clone(id), completed = json.Get(r.body, "completed") == "true", action = json.GetPath(r.body, "task.action"),
+response = json.Get(r.body, "response"), raw = r.body
+}
+end
+@en "CancelTask"
+@fa "لغو کار"
+pub func CancelTask(c: Client, id: str): bool:
+r := Perform(c, "POST", "/_tasks/" + _task_seg(id) + "/_cancel", "")
+ret r.ok and not json.Has(r.body, "node_failures") and not json.Has(r.body, "task_failures")
+end
+@en "StartReindex"
+@fa "شروع نمایه‌سازی دوباره"
+pub func StartReindex(c: Client, body: str): str:
+ret _task_id(Perform(c, "POST", "/_reindex?wait_for_completion=false", body))
+end
+@en "StartDeleteByQuery"
+@fa "شروع حذف با پرسمان"
+pub func StartDeleteByQuery(c: Client, index: str, query: str): str:
+path := _wait_false(_by_query_path(index, "_delete_by_query", Options {}))
+ret _task_id(Perform(c, "POST", path, _by_query_body(query, "")))
+end
+@en "StartUpdateByQuery"
+@fa "شروع به‌روزرسانی با پرسمان"
+pub func StartUpdateByQuery(c: Client, index: str, query: str, script: str): str:
+path := _wait_false(_by_query_path(index, "_update_by_query", Options {}))
+ret _task_id(Perform(c, "POST", path, _by_query_body(query, script)))
+end
+@en "PutStoredScript"
+@fa "تنظیم اسکریپت ذخیره"
+pub func PutStoredScript(c: Client, id: str, lang: str, source: str): bool:
+mut m := Vector {} as Vector<str>
+m.push(json.Member("lang", lang))
+if lang == "mustache" and str.StartsWith(str.Trim(source), "{"):
+m.push(json.MemberRaw("source", source))
+else:
+m.push(json.Member("source", source))
+end
+ret Perform(c, "PUT", "/_scripts/" + _seg(id), _one("script", json.Object(m))).ok
+end
+@en "DeleteStoredScript"
+@fa "حذف اسکریپت ذخیره"
+pub func DeleteStoredScript(c: Client, id: str): bool:
+ret Perform(c, "DELETE", "/_scripts/" + _seg(id), "").ok
+end
+@en "SearchTemplate"
+@fa "جستجو با الگو"
+pub func SearchTemplate(c: Client, index: str, id: str, params: str): SearchResult:
+mut m := Vector {} as Vector<str>
+m.push(json.Member("id", id))
+m.push(json.MemberRaw("params", params.len() > 0 ? params : "{}"))
+ret _search_result(Perform(c, "POST", _search_path(index, "_search/template"), json.Object(m)))
+end
+@en "SubmitAsyncSearch"
+@fa "ارسال جستجوی ناهمگام"
+pub func SubmitAsyncSearch(c: Client, index: str, req: SearchRequest, wait: str): AsyncSearch:
+mut path := _search_path(index, "_async_search") + "?keep_on_completion=true"
+if _opensearch(c):
+path = "/_plugins/_asynchronous_search?keep_on_completion=true"
+if index.len() > 0: path = path + "&index=" + _idx(index) end
+end
+if wait.len() > 0: path = path + "&wait_for_completion_timeout=" + _seg(wait) end
+ret _async_of(Perform(c, "POST", path, SearchBody(req)))
+end
+@en "GetAsyncSearch"
+@fa "دریافت جستجوی ناهمگام"
+pub func GetAsyncSearch(c: Client, id: str, wait: str): AsyncSearch:
+mut path := _async_path(c, id)
+if wait.len() > 0: path = path + "?wait_for_completion_timeout=" + _seg(wait) end
+ret _async_of(Perform(c, "GET", path, ""))
+end
+@en "DeleteAsyncSearch"
+@fa "حذف جستجوی ناهمگام"
+pub func DeleteAsyncSearch(c: Client, id: str): bool:
+ret Perform(c, "DELETE", _async_path(c, id), "").ok
+end
+@en "Explain"
+@fa "توضیح امتیاز"
+pub func Explain(c: Client, index: str, id: str, query: str): str:
+ret _raw_or_empty(Perform(c, "POST", "/" + _idx(index) + "/_explain/" + _seg(id), _one("query", query)))
+end
+@en "ValidateQuery"
+@fa "اعتبارسنجی پرسمان"
+pub func ValidateQuery(c: Client, index: str, query: str): bool:
+r := Perform(c, "POST", _search_path(index, "_validate/query"), _one("query", query))
+ret r.ok and json.Get(r.body, "valid") == "true"
+end
+@en "FieldCaps"
+@fa "توانایی فیلدها"
+pub func FieldCaps(c: Client, index: str, fields: Vector<str>): str:
+mut list := str.Join(fields, ",")
+if list.len() == 0: list = str.Clone("*") end
+ret _raw_or_empty(Perform(c, "GET", _search_path(index, "_field_caps") + "?fields=" + _idx(list), ""))
+end
+@en "TermVectors"
+@fa "بردارهای واژه"
+pub func TermVectors(c: Client, index: str, id: str, fields: Vector<str>): str:
+mut path := "/" + _idx(index) + "/_termvectors/" + _seg(id)
+if fields.len() > 0: path = path + "?fields=" + _idx(str.Join(fields, ",")) end
+ret _raw_or_empty(Perform(c, "GET", path, ""))
+end
+@en "IndexStats"
+@fa "آمار نمایه"
+pub func IndexStats(c: Client, index: str): str:
+ret _raw_or_empty(Perform(c, "GET", _search_path(index, "_stats"), ""))
+end
+package elasticsearch
+import str
+import encoding.json
 func _bulk_action(action: str, index: str, id: str): str:
 mut m := Vector {} as Vector<str>
 if index.len() > 0: m.push(json.Member("_index", index)) end
@@ -19607,8 +19890,9 @@ if keys.len() == 0: ret BulkItem {} end
 action := keys.get(0)
 body := json.Get(raw, action)
 status := _int(json.Get(body, "status"))
+failed := json.Has(body, "error") or status >= 500
 ret BulkItem {
-action = action, index = json.Get(body, "_index"), id = json.Get(body, "_id"), status = status, ok = status >= 200 and status < 300,
+action = action, index = json.Get(body, "_index"), id = json.Get(body, "_id"), status = status, ok = not failed,
 result = json.Get(body, "result"), version = _i64(json.Get(body, "_version")), error_type = json.GetPath(body, "error.type"),
 error_reason = json.GetPath(body, "error.reason")
 }
@@ -21198,7 +21482,7 @@ str.BufAppend(sb, st[0].auth)
 str.BufAppend(sb, "\r\n")
 end
 str.BufAppend(sb, st[0].extra_headers)
-str.BufAppend(sb, "Connection: close\r\n\r\n")
+str.BufAppend(sb, st[0].keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n")
 ret str.BufStr(sb)
 end
 func _tls_cfg(st: _EsState*, node: _Node): tls.Config:
@@ -21256,6 +21540,39 @@ end
 func _retryable(status: int): bool:
 ret status == 502 or status == 503 or status == 504
 end
+func _replay_ok(method: str, resp: _WireResp): bool:
+if not resp.sent or resp.quick: ret true end
+ret method == "GET" or method == "HEAD" or method == "PUT" or method == "DELETE"
+end
+func _resendable(method: str, resp: _WireResp): bool:
+ret resp.stale and _replay_ok(method, resp)
+end
+func _send_once(st: _EsState*, ni: int, node: _Node, method: str, head: str, body: str, blen: int): _WireResp:
+if not st[0].keep_alive:
+mut raw := httpx.SendRawTLS(node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node))
+if raw.error.len() > 0:
+e := str.Clone(raw.error)
+httpx.FreeRaw(raw)
+early := str.StartsWith(e, "could not connect") or str.StartsWith(e, "TLS") or str.StartsWith(e, "the endpoint")
+ret _WireResp { err = e, sent = not early }
+end
+out := _WireResp { status = raw.status, body = _raw_body(raw) }
+httpx.FreeRaw(raw)
+ret out
+end
+w := st[0].wires.get(ni) as _Wire*
+repeat 2:
+if not w[0].open:
+e := _wire_connect(w, node, _tls_cfg(st, node), st[0].timeout_ms)
+if e.len() > 0: ret _WireResp { err = e } end
+end
+resp := _wire_roundtrip(w, method, head, body, blen)
+if resp.err.len() == 0: ret resp end
+_wire_close(w)
+if not _resendable(method, resp): ret resp end
+end
+ret _WireResp { err = "the connection was closed twice in a row" }
+end
 func _pick(st: _EsState*): int:
 n := st[0].nodes.len()
 now := time.MonoMillis()
@@ -21295,22 +21612,19 @@ repeat tries in attempt:
 ni := _pick(st)
 node := st[0].nodes.get(ni)
 head := _head(st, node, method, path, ctype, blen)
-mut raw := httpx.SendRawTLS(
-node.ep, head, body as void*, blen, st[0].timeout_ms, _tls_cfg(st, node)
-)
+mut sent := _send_once(st, ni, node, method, head, body, blen)
 mem.Free(head as void*)
-if raw.error.len() > 0:
-if str.StartsWith(raw.error, "could not connect") or str.StartsWith(raw.error, "TLS"):
+if sent.err.len() > 0:
+if str.StartsWith(sent.err, "could not connect") or str.StartsWith(sent.err, "TLS"):
 st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
 end
-last = Response { error = node.url + ": " + raw.error }
-httpx.FreeRaw(raw)
+last = Response { error = node.url + ": " + sent.err }
+if not _replay_ok(method, sent): break end
 continue
 end
 st[0].dead_until.set(ni, 0 as i64)
-mut r := Response { status = raw.status, ok = raw.status >= 200 and raw.status < 300 }
-r.body = _raw_body(raw)
-httpx.FreeRaw(raw)
+mut r := Response { status = sent.status, ok = sent.status >= 200 and sent.status < 300 }
+r.body = sent.body
 _parse_error(r)
 if _retryable(r.status) and attempt + 1 < tries:
 last = r
@@ -21378,6 +21692,290 @@ each it in items:
 quoted.push(json.Str(it))
 end
 ret json.Array(quoted)
+end
+package elasticsearch
+import mem
+import str
+import tls
+import net.httpx
+import net.internal.rawsock
+const _WIRE_CHUNK := 65536
+struct _Wire:
+pub fd: i64 = -1
+pub secure: bool = false
+pub tc: tls.Conn = tls.Conn {}
+pub open: bool = false
+pub buf: void* = null
+pub len: i64 = 0
+pub cap: i64 = 0
+pub pos: i64 = 0
+pub uses: int = 0
+pub timeout_ms: int = 0
+end
+struct _WireResp:
+pub status: int = 0
+pub body: str = ""
+pub err: str = ""
+pub stale: bool = false
+pub sent: bool = false
+pub quick: bool = false
+end
+func _wire_new(): _Wire*:
+w := mem.AllocateZeroed(sizeof(_Wire) as u64) as _Wire*
+w[0] = _Wire {}
+ret w
+end
+func _wire_close(w: _Wire*):
+if w[0].open:
+if w[0].secure:
+tls.Close(w[0].tc)
+else:
+rawsock.Close(rawsock.FromFd(w[0].fd))
+end
+end
+w[0].open = false
+w[0].fd = -1
+w[0].len = 0
+w[0].pos = 0
+w[0].uses = 0
+end
+func _wire_free(w: _Wire*):
+_wire_close(w)
+if w[0].buf != null: mem.Free(w[0].buf) end
+mem.Free(w as void*)
+end
+func _wire_connect(w: _Wire*, node: _Node, cfg: tls.Config, timeout_ms: int): str:
+_wire_close(w)
+sock := rawsock.Connect(node.ep.host, node.ep.port)
+if not rawsock.Ok(sock):
+ret "could not connect to " + node.ep.host + ":" + str.FromInt(node.ep.port as i64)
+end
+if timeout_ms > 0: rawsock.SetTimeout(sock, timeout_ms) end
+rawsock.SetNoDelay(sock, true)
+w[0].timeout_ms = timeout_ms
+w[0].fd = sock.fd
+w[0].secure = node.ep.secure
+if node.ep.secure:
+w[0].tc = tls.WrapClient(sock.fd, cfg)
+if not tls.ConnOk(w[0].tc):
+e := tls.ConnError(w[0].tc)
+tls.Close(w[0].tc)
+w[0].fd = -1
+ret "TLS: " + e
+end
+end
+w[0].open = true
+ret ""
+end
+func _wire_write(w: _Wire*, p: void*, n: int): bool:
+if n <= 0: ret true end
+mut sent := 0
+if w[0].secure:
+sent = tls.WriteBytes(w[0].tc, p, n)
+else:
+sent = rawsock.SendBytes(rawsock.FromFd(w[0].fd), p, n)
+end
+ret sent == n
+end
+func _wire_fill(w: _Wire*): bool:
+if w[0].pos > 0:
+rest := w[0].len - w[0].pos
+if rest > 0:
+mem.MemMove(w[0].buf, (w[0].buf as i64 + w[0].pos) as void*, rest as u64)
+end
+w[0].len = rest
+w[0].pos = 0
+end
+if w[0].cap - w[0].len < 4096:
+mut ncap := w[0].cap * 2
+if ncap < _WIRE_CHUNK: ncap = _WIRE_CHUNK end
+nb := mem.Allocate(ncap as u64)
+if nb == null: ret false end
+if w[0].len > 0: mem.Copy(nb, w[0].buf, w[0].len as u64) end
+if w[0].buf != null: mem.Free(w[0].buf) end
+w[0].buf = nb
+w[0].cap = ncap
+end
+dst := (w[0].buf as i64 + w[0].len) as void*
+room := (w[0].cap - w[0].len) as int
+mut n := 0
+if w[0].secure:
+n = tls.ReadBytes(w[0].tc, dst, room)
+else:
+n = rawsock.RecvBytes(rawsock.FromFd(w[0].fd), dst, room)
+end
+if n <= 0: ret false end
+w[0].len = w[0].len + (n as i64)
+ret true
+end
+func _wire_byte(w: _Wire*, i: i64): int:
+p := (w[0].buf as i64 + w[0].pos + i) as u8*
+ret p[0] as int
+end
+func _wire_avail(w: _Wire*): i64:
+ret w[0].len - w[0].pos
+end
+func _wire_need(w: _Wire*, n: i64): bool:
+until _wire_avail(w) < n:
+if not _wire_fill(w): ret false end
+end
+ret true
+end
+func _wire_take(w: _Wire*, n: i64): str:
+out := mem.Allocate((n + 1) as u64)
+if n > 0: mem.Copy(out, (w[0].buf as i64 + w[0].pos) as void*, n as u64) end
+op := out as u8*
+op[n] = 0 as u8
+w[0].pos = w[0].pos + n
+ret out as str
+end
+func _wire_find(w: _Wire*, from: i64, double: bool): i64:
+avail := _wire_avail(w)
+mut i := from
+span := double ? 4 : 2
+until i + span <= avail:
+if _wire_byte(w, i) == 13 and _wire_byte(w, i + 1) == 10:
+if not double: ret i end
+if _wire_byte(w, i + 2) == 13 and _wire_byte(w, i + 3) == 10: ret i end
+end
+i += 1
+end
+ret -1
+end
+func _wire_line(w: _Wire*, line &: str): bool:
+mut scanned := 0 as i64
+until true:
+at := _wire_find(w, scanned, false)
+if at >= 0:
+line = _wire_take(w, at)
+w[0].pos = w[0].pos + 2
+ret true
+end
+scanned = _wire_avail(w) > 1 ? _wire_avail(w) - 1 : 0
+if not _wire_fill(w): ret false end
+end
+end
+func _hex_value(s: str): i64:
+mut v := 0 as i64
+mut seen := false
+repeat s.len() in i:
+c := s[i] as int
+mut d := -1
+switch true:
+c >= 48 and c <= 57:
+d = c - 48
+break
+end
+c >= 97 and c <= 102:
+d = c - 87
+break
+end
+c >= 65 and c <= 70:
+d = c - 55
+end
+end
+if d < 0:
+if seen: ret v end
+if c == 32: continue end
+ret -1
+end
+v = v * 16 + (d as i64)
+seen = true
+end
+ret seen ? v : -1
+end
+func _wire_chunked(w: _Wire*, body &: str): bool:
+mut sb := str.NewBuilder()
+defer str.BufFree(sb)
+until true:
+mut line := ""
+if not _wire_line(w, line): ret false end
+size := _hex_value(line)
+mem.Free(line as void*)
+if size < 0: ret false end
+if size == 0:
+until true:
+mut trailer := ""
+if not _wire_line(w, trailer): ret false end
+empty := trailer.len() == 0
+mem.Free(trailer as void*)
+if empty: break end
+end
+body = str.BufStr(sb)
+ret true
+end
+if not _wire_need(w, size + 2): ret false end
+part := _wire_take(w, size)
+str.BufAppend(sb, part)
+mem.Free(part as void*)
+w[0].pos = w[0].pos + 2
+end
+end
+func _wire_roundtrip(w: _Wire*, method: str, head: str, body: str, blen: int): _WireResp:
+reused := w[0].uses > 0
+if not _wire_write(w, head as void*, str.ByteLen(head)) or not _wire_write(w, body as void*, blen):
+ret _WireResp { err = "could not send the request", stale = reused }
+end
+waited := time.MonoMillis()
+mut head_end := -1 as i64
+until head_end < 0:
+head_end = _wire_find(w, 0, true)
+if head_end >= 0: break end
+if not _wire_fill(w):
+if _wire_avail(w) == 0:
+mut fast := 2000
+if w[0].timeout_ms > 0 and w[0].timeout_ms / 2 < fast: fast = w[0].timeout_ms / 2 end
+quick := time.MonoMillis() - waited < (fast as i64)
+ret _WireResp { err = "the server closed the connection", stale = reused, sent = true, quick = quick }
+end
+ret _WireResp { err = "the response head never ended", sent = true }
+end
+end
+rhead := _wire_take(w, head_end + 4)
+defer mem.Free(rhead as void*)
+sp := rhead.find(" ")
+status := sp >= 0 ? rhead.substr(sp + 1, 3).to_int() : 0
+te := httpx.HeaderValue(rhead, "Transfer-Encoding").lower()
+cl := httpx.HeaderValue(rhead, "Content-Length")
+connection := httpx.HeaderValue(rhead, "Connection").lower()
+mut close_after := connection == "close" or (str.StartsWith(rhead, "HTTP/1.0") and connection != "keep-alive")
+mut out := _WireResp { status = status }
+no_body := method == "HEAD" or status == 204 or status == 304 or (status >= 100 and status < 200)
+switch true:
+no_body:
+out.body = str.Clone("")
+break
+end
+str.Contains(te, "chunked"):
+mut text := ""
+if not _wire_chunked(w, text):
+_wire_close(w)
+ret _WireResp { err = "the chunked response body could not be decoded", sent = true }
+end
+out.body = text
+break
+end
+cl.len() > 0:
+n := cl.to_int() as i64
+if not _wire_need(w, n):
+_wire_close(w)
+ret _WireResp { err = "the response body ended early", sent = true }
+end
+out.body = _wire_take(w, n)
+break
+end
+else:
+mut more := true
+until more:
+more = _wire_fill(w)
+end
+out.body = _wire_take(w, _wire_avail(w))
+close_after = true
+end
+end
+w[0].uses = w[0].uses + 1
+if close_after: _wire_close(w) end
+ret out
 end
 package meilisearch
 @en "Version"
@@ -26621,6 +27219,9 @@ unassigned_shards = _os_int(_os_jraw(b, "unassigned_shards")), pending_tasks = _
 active_shards_percent = _os_f64(_os_jraw(b, "active_shards_percent_as_number"))
 }
 end
+func _os_task_seg(id: str): str:
+ret str.Replace(_os_seg(id), "%3A", ":")
+end
 func _os_task(r: Response, id: str): TaskInfo:
 mut t := TaskInfo { ok = r.ok, id = id, error = r.error }
 if r.body.len() == 0: ret t end
@@ -26780,7 +27381,7 @@ end
 @en "GetTask"
 @fa "دریافت کار"
 pub func GetTask(c: Client, task_id: str): TaskInfo:
-ret _os_task(Perform(c, "GET", "/_tasks/" + _os_seg(task_id), ""), task_id)
+ret _os_task(Perform(c, "GET", "/_tasks/" + _os_task_seg(task_id), ""), task_id)
 end
 @en "WaitTask"
 @fa "انتظار کار"
@@ -26788,12 +27389,12 @@ pub func WaitTask(c: Client, task_id: str, timeout: str): TaskInfo:
 mut q := Vector {} as Vector<str>
 _os_qadd(q, "wait_for_completion", "true")
 _os_qadd(q, "timeout", timeout)
-ret _os_task(Perform(c, "GET", "/_tasks/" + _os_seg(task_id) + _os_qs(q), ""), task_id)
+ret _os_task(Perform(c, "GET", "/_tasks/" + _os_task_seg(task_id) + _os_qs(q), ""), task_id)
 end
 @en "CancelTask"
 @fa "لغو کار"
 pub func CancelTask(c: Client, task_id: str): bool:
-ret Perform(c, "POST", "/_tasks/" + _os_seg(task_id) + "/_cancel", "").ok
+ret Perform(c, "POST", "/_tasks/" + _os_task_seg(task_id) + "/_cancel", "").ok
 end
 @en "ListTasks"
 @fa "فهرست کارها"
@@ -27129,7 +27730,7 @@ pub func Count(c: Client, index: str, query: str): i64:
 mut body := ""
 if query.len() > 0: body = _os_one("query", query) end
 method := body.len() > 0 ? "POST" : "GET"
-r := Perform(c, method, "/" + _os_idx(index) + "/_count", body)
+r := Perform(c, method, _os_ipath(index, "/_count"), body)
 if not r.ok: ret -1 end
 ret _os_ji64(r.body, "count", 0)
 end
@@ -27146,7 +27747,7 @@ _os_qadd(q, "refresh", o.refresh)
 _os_qadd(q, "routing", o.routing)
 _os_qadd(q, "conflicts", o.conflicts)
 _os_qadd(q, "timeout", o.timeout)
-ret _os_by_query(Perform(c, "POST", "/" + _os_idx(index) + "/_delete_by_query" + _os_qs(q), _os_one("query", query)))
+ret _os_by_query(Perform(c, "POST", _os_ipath(index, "/_delete_by_query") + _os_qs(q), _os_one("query", query)))
 end
 @en "UpdateByQuery"
 @fa "به‌روزرسانی پرسمانی"
@@ -27165,7 +27766,7 @@ _os_qadd(q, "timeout", o.timeout)
 mut m := Vector {} as Vector<str>
 if query.len() > 0: m.push(_os_m("query", query)) end
 if script.len() > 0: m.push(_os_m("script", script)) end
-ret _os_by_query(Perform(c, "POST", "/" + _os_idx(index) + "/_update_by_query" + _os_qs(q), _os_obj(m)))
+ret _os_by_query(Perform(c, "POST", _os_ipath(index, "/_update_by_query") + _os_qs(q), _os_obj(m)))
 end
 @en "Reindex"
 @fa "نمایه‌سازی دوباره"
@@ -28755,6 +29356,7 @@ ret _os_obj(m)
 end
 package opensearch
 import str
+import conv
 import encoding.json
 @en "SearchParams"
 @fa "پارامترهای جستجو"
@@ -28941,13 +29543,13 @@ end
 @fa "جستجوی الگو"
 pub func SearchTemplate(c: Client, index: str, template_id: str, params: str): SearchResult:
 body := _os_two("id", json.Str(template_id), "params", _os_body_or_empty(params))
-ret _os_search_result(Perform(c, "POST", "/" + _os_idx(index) + "/_search/template", body))
+ret _os_search_result(Perform(c, "POST", _os_ipath(index, "/_search/template"), body))
 end
 @en "SearchInlineTemplate"
 @fa "جستجوی الگوی درون‌خطی"
 pub func SearchInlineTemplate(c: Client, index: str, source: str, params: str): SearchResult:
 body := _os_two("source", source, "params", _os_body_or_empty(params))
-ret _os_search_result(Perform(c, "POST", "/" + _os_idx(index) + "/_search/template", body))
+ret _os_search_result(Perform(c, "POST", _os_ipath(index, "/_search/template"), body))
 end
 @en "RenderTemplate"
 @fa "نمایش الگو"
@@ -28966,7 +29568,7 @@ end
 @en "Validate"
 @fa "اعتبارسنجی پرسمان"
 pub func Validate(c: Client, index: str, query: str): bool:
-r := Perform(c, "POST", "/" + _os_idx(index) + "/_validate/query", _os_one("query", query))
+r := Perform(c, "POST", _os_ipath(index, "/_validate/query"), _os_one("query", query))
 if not r.ok: ret false end
 ret _os_jbool(r.body, "valid")
 end
@@ -28975,7 +29577,7 @@ end
 pub func FieldCaps(c: Client, index: str, fields: Vector<str>): str:
 mut q := Vector {} as Vector<str>
 _os_qadd(q, "fields", str.Join(fields, ","))
-r := Perform(c, "GET", "/" + _os_idx(index) + "/_field_caps" + _os_qs(q), "")
+r := Perform(c, "GET", _os_ipath(index, "/_field_caps") + _os_qs(q), "")
 if not r.ok: ret str.Clone("") end
 ret _os_jraw(r.body, "fields")
 end
@@ -29016,6 +29618,14 @@ end
 @fa "فیلد تجمیع"
 pub func AggField(aggregations: str, name: str, field: str): f64:
 ret _os_f64(_os_jraw(_os_raw_member(aggregations, name), field))
+end
+@en "AggPercentile"
+@fa "صدک تجمیع"
+pub func AggPercentile(aggregations: str, name: str, percent: f64): f64:
+mut key := conv.FormatFloat(percent)
+if key.find(".") < 0: key = key + ".0" end
+values := _os_jraw(_os_raw_member(aggregations, name), "values")
+ret _os_f64(_os_raw_member(values, key))
 end
 @en "AggRaw"
 @fa "تجمیع خام"

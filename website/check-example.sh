@@ -6,7 +6,7 @@ src=$1
 : "${SALAM_STD:=$root/std}"
 export SALAM_STD
 want="$root/${src%.salam}.out"
-tmp=$(mktemp -d)
+tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp" || exit 1
 

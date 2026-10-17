@@ -2,7 +2,7 @@
 \label{ch:concurrency}
 
 So far our programs have done one thing at a time, in order. \textbf{Concurrency}
-is doing several things at once splitting work across the multiple cores every
+is doing several things at once: splitting work across the multiple cores every
 modern computer has, so a big job finishes sooner. Salam expresses concurrency
 with \emph{threads}, and protects shared data with \emph{synchronization}. This
 chapter introduces both, along with the care they demand.
@@ -10,7 +10,7 @@ chapter introduces both, along with the care they demand.
 \section{Threads: running code in parallel}
 
 A \textbf{thread} is an independent strand of execution. Your program already has
-one the one running \code{main}. With \code{spawn} you can start another, which
+one, the one running \code{main}. With \code{spawn} you can start another, which
 runs a function of your choosing \emph{alongside} the rest of the program:
 
 \begin{salamen}
@@ -19,7 +19,7 @@ func greet():
 end
 
 func main:
-    handle : i64 = spawn(greet)
+    handle := spawn(greet)
     println "hello from main"
     join(handle)
     println "the thread has finished"
@@ -27,7 +27,7 @@ end
 \end{salamen}
 
 \code{spawn(greet)} starts \code{greet} running on a new thread and immediately
-returns a \textbf{handle} an \code{i64} that identifies the thread while
+returns a \textbf{handle} (an \code{i64} that identifies the thread) while
 \code{main} carries on. Because the two run concurrently, the order of the first
 two lines of output is not guaranteed. \code{join(handle)} then \emph{waits} for
 the thread to finish before continuing, so the final line always prints last.
@@ -44,6 +44,8 @@ means every worker sees exactly the same thing. The second form of \code{spawn}
 hands the new thread one value of its own:
 
 \begin{salamen}
+import mem
+
 struct Job:
     pub id: i64 = 0
 end
@@ -69,10 +71,10 @@ outlive the \code{spawn} call, and here \code{join} guarantees it does.
 
 \section{The danger of shared data}
 
-Threads become useful and dangerous the moment they touch the \emph{same}
+Threads become useful (and dangerous) the moment they touch the \emph{same}
 data. Suppose two threads each add to a shared counter a thousand times. You would
 expect the total to climb by two thousand. But incrementing a counter is really
-three steps under the hood read the value, add one, write it back and if two
+three steps under the hood (read the value, add one, write it back), and if two
 threads interleave those steps, they can read the same old value and each write
 back the same new one, losing an increment. This is a \textbf{race condition}: the
 result depends on the unpredictable timing of the threads, and it is one of the
@@ -89,8 +91,8 @@ The \code{sync} module provides them:
 \begin{salamen}
 import sync
 
-mut counter : int = 0
-mut lock : sync.Mutex = sync.NewMutex()
+mut counter := 0
+mut lock := sync.NewMutex()
 
 func work():
     repeat 1000:
@@ -101,8 +103,8 @@ func work():
 end
 
 func main:
-    t1 : i64 = spawn(work)
-    t2 : i64 = spawn(work)
+    t1 := spawn(work)
+    t2 := spawn(work)
     join(t1)
     join(t2)
     println "counter:", counter
@@ -116,7 +118,7 @@ counter: 2000
 
 \begin{sloppypar}
 Now the answer is reliably \code{2000}. Between \code{sync.Lock(lock)} and
-\code{sync.Unlock(lock)} the \emph{critical section} only one thread ever
+\code{sync.Unlock(lock)}, the \emph{critical section}, only one thread ever
 runs, so the read-add-write happens without interference. Create a mutex with
 \code{sync.NewMutex()}, and call \code{sync.Destroy} on it when all the threads are
 done.
@@ -125,7 +127,7 @@ done.
 \begin{warn}
 A mutex protects data only if \emph{every} access to that data goes through it.
 One thread that touches the shared counter without locking re-introduces the race.
-And always pair a \code{Lock} with an \code{Unlock} on every path a lock that is
+And always pair a \code{Lock} with an \code{Unlock} on every path: a lock that is
 never released leaves other threads waiting forever (a \emph{deadlock}). Keep
 critical sections short and make the lock/unlock pairing obvious.
 \end{warn}
@@ -134,14 +136,14 @@ critical sections short and make the lock/unlock pairing obvious.
 
 When you spawn several threads and need to wait for all of them, you can collect
 their handles and \code{join} each. For larger fan-outs, the \code{sync} module
-also offers a \textbf{wait group} a counter you raise as you spawn work and
+also offers a \textbf{wait group}: a counter you raise as you spawn work and
 that threads decrement as they finish, letting the main thread block until the
 count reaches zero:
 
 \begin{salamen}
 import sync
 
-mut wg : sync.WaitGroup = sync.NewWaitGroup()
+mut wg := sync.NewWaitGroup()
 
 func task():
     println "working"
@@ -164,17 +166,71 @@ when finished; \code{sync.Wait} blocks until every \code{Done} has arrived. A wa
 group is convenient when the number of workers is known but you do not want to
 track each handle by hand.
 
+\section{Channels and atomics}
+
+Locks are not the only tool. Often it is simpler for threads not to share a
+variable at all, but to \emph{send each other values}. A \textbf{channel} from the
+\code{chan} module is a thread-safe queue: one thread calls \code{send}, another
+calls \code{recv}, and the channel does all the locking inside. For a single
+shared number, the \code{atomic} module offers counters whose operations cannot be
+interrupted halfway, so they need no mutex either:
+
+\begin{salamen}
+import chan
+import atomic
+
+mut results := chan.Chan {} as chan.Chan<i64>
+mut done := atomic.NewI64(0 as i64)
+
+func square_worker():
+    repeat 1 to 3 in i:
+        results.send((i * i) as i64)
+    end
+    _ := atomic.Add(done, 1 as i64)
+    results.close()
+end
+
+func main:
+    results.init(4 as i64)
+    t := spawn(square_worker)
+    mut ok := true
+    mut v := results.recv(ok)
+    until ok:
+        println "got", v
+        v = results.recv(ok)
+    end
+    join(t)
+    println "workers finished:", atomic.Load(done)
+    results.free()
+    atomic.DestroyI64(done)
+end
+\end{salamen}
+
+\begin{progout}
+got 1
+got 4
+got 9
+workers finished: 1
+\end{progout}
+
+\code{init(n)} gives the channel room for \code{n} waiting values (\code{0} makes
+the sender wait until a receiver takes each one). \code{send} blocks while the
+channel is full; \code{recv(ok)} blocks until a value arrives and sets \code{ok}
+to \code{false} once the channel is closed and empty, which is how the loop above
+knows to stop. \code{atomic.NewI64}, \code{atomic.Add}, \code{atomic.Load} and
+\code{atomic.DestroyI64} create, change, read and release an atomic counter.
+
 \section{When concurrency pays and when it costs}
 
-Concurrency is not free. Threads have a setup cost, locks add overhead, and ---
-most of all concurrent code is harder to reason about and harder to debug than
+Concurrency is not free. Threads have a setup cost, locks add overhead, and,
+most of all, concurrent code is harder to reason about and harder to debug than
 sequential code. It pays off when there is genuine parallel work to do: a big
 computation you can split into independent chunks, or many slow operations (such
 as network requests) that can wait at the same time instead of one after another.
 
 \begin{tip}
 Reach for concurrency only when a measured need justifies it, and keep shared,
-mutable state to an absolute minimum the less data threads share, the fewer
+mutable state to an absolute minimum: the less data threads share, the fewer
 locks you need and the fewer races can occur. The simplest concurrent designs give
 each thread its own data to work on and combine the results at the end, touching
 shared state only briefly and under a lock. Start sequential; add threads when the
@@ -186,7 +242,7 @@ Salam's \code{spawn} creates a real operating-system thread (a \code{pthread} on
 Unix-like systems, a Windows thread on Windows), so threads run on separate cores
 and your program can genuinely use a multi-core machine. The \code{sync.Mutex} is
 a thin wrapper over the platform's native mutex. Because these are true OS
-threads, the costs and the rules are the same as in C which is why the
+threads, the costs and the rules are the same as in C, which is why the
 discipline around shared data matters, and why the standard library gives you the
 classic tools (mutexes, wait groups) to manage it.
 \end{deep}
@@ -195,7 +251,7 @@ classic tools (mutexes, wait groups) to manage it.
 
 \begin{itemize}[leftmargin=1.4em]
   \item \code{spawn(f)} runs the parameterless function \code{f} on a new thread
-        and returns an \code{i64} handle; \code{join(handle)} waits for it to
+        (\code{spawn(f, p)} passes it one pointer) and returns an \code{i64} handle; \code{join(handle)} waits for it to
         finish.
   \item Sharing mutable data between threads risks a \emph{race condition}, where
         the result depends on timing.
@@ -205,6 +261,9 @@ classic tools (mutexes, wait groups) to manage it.
         \code{Lock} must be matched by an \code{Unlock}.
   \item A \code{sync.WaitGroup} (\code{Add}, \code{Done}, \code{Wait}) waits for a
         known number of threads to complete.
+  \item A \code{chan.Chan<T>} (\code{init}, \code{send}, \code{recv},
+        \code{close}, \code{free}) passes values between threads; the
+        \code{atomic} module gives lock-free counters.
   \item Use concurrency only when real parallel work justifies it, and minimise
         shared mutable state.
 \end{itemize}
@@ -223,6 +282,9 @@ example, run it several times, and describe what you observe about the final tot
 
 \exercise Use a \code{WaitGroup} to run five tasks that each print their own
 number, and wait for all of them before printing ``done''.
+
+\exercise Rewrite the shared-counter example with an \code{atomic.NewI64}
+counter instead of a mutex, and confirm the total is still 2000.
 
 \exercise Explain in a comment why keeping the critical section (the code between
 \code{Lock} and \code{Unlock}) short is good practice.

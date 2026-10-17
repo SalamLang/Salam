@@ -7,6 +7,7 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include cc "../condcomp.salam"
+include pth "../sal_path.salam"
 
 func new_node_at(a &: at.Ast, kind: int, sp: co.SrcSpan): int:
     id := at.NewNode(a, kind)
@@ -308,33 +309,23 @@ end
 
 func g_template_key(a &: at.Ast, tmpl: int): str:
     tn := at.Get(a, tmpl)
-    mut file := tn.src_file
-    mut cut := 0
-    mut seen := 0
-    mut i := str.Len(file) - 1
-    until i >= 0:
-        b := byte_at(file, i)
-        if b == 47 or b == 92:
-            seen += 1
-            if seen == 2:
-                cut = i + 1
-                break
-            end
-        end
-        i -= 1
-    end
-    if cut > 0:
-        file = str.Substr(file, cut, str.Len(file) - cut)
-    end
+    file := pth.PathNormalize(tn.src_file)
     if str.Len(file) == 0:
         ret "#" + tmpl
     end
     ret file + "#" + tn.begin_index + "#" + tn.name
 end
 
+func g_name_taken(s &: Sema, name: str, key: str): bool:
+    if s.g_inst_owner.has(name):
+        ret not str.Equals(s.g_inst_owner.get(name), key)
+    end
+    ret scope_lookup_local(s, s.global, name) != 0
+end
+
 func g_unique_instance_name(s &: Sema, a &: at.Ast, tmpl: int, base: str): str:
     key := g_template_key(a, tmpl)
-    if not s.g_inst_owner.has(base) or str.Equals(s.g_inst_owner.get(base), key):
+    if not g_name_taken(s, base, key):
         ret base
     end
     mut pkg := derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
@@ -344,7 +335,7 @@ func g_unique_instance_name(s &: Sema, a &: at.Ast, tmpl: int, base: str): str:
     stem := base + "_" + g_sanitize(pkg)
     mut name := stem
     mut n := 2
-    until s.g_inst_owner.has(name) and not str.Equals(s.g_inst_owner.get(name), key):
+    until g_name_taken(s, name, key):
         name = stem + "_" + n
         n += 1
     end

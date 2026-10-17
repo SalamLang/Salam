@@ -195,6 +195,14 @@ func ea_binary(a &: at.Ast, op: int, l: int, r: int, sp: co.SrcSpan): int:
 end
 
 func each_finish(s &: Sema, a &: at.Ast, nid: int, seq_decl: int, fr: int):
+    mut pre := Vector {} as Vector<int>
+    if seq_decl != 0:
+        pre.push(seq_decl)
+    end
+    each_finish_pre(s, a, nid, pre, fr)
+end
+
+func each_finish_pre(s &: Sema, a &: at.Ast, nid: int, pre: Vector<int>, fr: int):
     mut nv := at.Get(a, nid)
     nv.kind = at.AST_BLOCK
     nv.name = ""
@@ -205,11 +213,136 @@ func each_finish(s &: Sema, a &: at.Ast, nid: int, seq_decl: int, fr: int):
     nv.synthetic = true
     nv.list.clear()
     at.Put(a, nid, nv)
-    if seq_decl != 0:
-        at.AddChild(a, nid, seq_decl)
+    each pd in pre:
+        at.AddChild(a, nid, pd)
     end
     at.AddChild(a, nid, fr)
     sema_check_block(s, a, nid)
+end
+
+func ea_assign(a &: at.Ast, name: str, val: int, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_ASSIGN, sp)
+    mut nv := at.Get(a, id)
+    nv.op = tok.TK_ASSIGN
+    nv.a = ea_ident(a, name, sp)
+    nv.b = val
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_ternary(a &: at.Ast, cond: int, yes: int, no: int, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_TERNARY, sp)
+    mut nv := at.Get(a, id)
+    nv.a = cond
+    nv.b = yes
+    nv.c = no
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_len(a &: at.Ast, seq: str, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_CALL, sp)
+    mut nv := at.Get(a, id)
+    nv.a = ea_ident(a, "len", sp)
+    at.Put(a, id, nv)
+    at.AddChild(a, id, ea_ident(a, seq, sp))
+    ret id
+end
+
+func ea_byte_at(s &: Sema, a &: at.Ast, seq: str, at_expr: int, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_CAST, sp)
+    mut nv := at.Get(a, id)
+    nv.a = ea_index(a, ea_ident(a, seq, sp), at_expr, sp)
+    nv.ty = preset_type_node(a, sp, sema_ty(s, TY_I32))
+    at.Put(a, id, nv)
+    ret id
+end
+
+func ea_plus(a &: at.Ast, name: str, k: int, sp: co.SrcSpan): int:
+    ret ea_binary(a, tok.TK_PLUS, ea_ident(a, name, sp), ea_int(a, k as u64, sp), sp)
+end
+
+func ea_not_cont(s &: Sema, a &: at.Ast, seq: str, idx: str, lenv: str, k: int, sp: co.SrcSpan): int:
+    past := ea_binary(a, tok.TK_GE, ea_plus(a, idx, k, sp), ea_ident(a, lenv, sp), sp)
+    low := ea_binary(a, tok.TK_LT, ea_byte_at(s, a, seq, ea_plus(a, idx, k, sp), sp), ea_int(a, 128 as u64, sp), sp)
+    high := ea_binary(a, tok.TK_GE, ea_byte_at(s, a, seq, ea_plus(a, idx, k, sp), sp), ea_int(a, 192 as u64, sp), sp)
+    ret ea_binary(a, tok.TK_OR, ea_binary(a, tok.TK_OR, past, low, sp), high, sp)
+end
+
+func ea_cut(s &: Sema, a &: at.Ast, seq: str, idx: str, lenv: str, wid: str, k: int, rest: int, sp: co.SrcSpan): int:
+    longer := ea_binary(a, tok.TK_GT, ea_ident(a, wid, sp), ea_int(a, k as u64, sp), sp)
+    cond := ea_binary(a, tok.TK_AND, longer, ea_not_cont(s, a, seq, idx, lenv, k, sp), sp)
+    ret ea_ternary(a, cond, ea_int(a, k as u64, sp), rest, sp)
+end
+
+func ea_width(a &: at.Ast, b: str, sp: co.SrcSpan): int:
+    w2 := ea_ternary(
+        a, ea_binary(a, tok.TK_GE, ea_ident(a, b, sp), ea_int(a, 192 as u64, sp), sp), ea_int(a, 2 as u64, sp), ea_int(a, 1 as u64, sp), sp
+    )
+    w3 := ea_ternary(
+        a, ea_binary(a, tok.TK_GE, ea_ident(a, b, sp), ea_int(a, 224 as u64, sp), sp), ea_int(a, 3 as u64, sp), w2, sp
+    )
+    lead4 := ea_binary(
+        a, tok.TK_AND, ea_binary(a, tok.TK_GE, ea_ident(a, b, sp), ea_int(a, 240 as u64, sp), sp), ea_binary(a, tok.TK_LT, ea_ident(a, b, sp), ea_int(a, 248 as u64, sp), sp), sp
+    )
+    stray := ea_binary(a, tok.TK_GE, ea_ident(a, b, sp), ea_int(a, 248 as u64, sp), sp)
+    ret ea_ternary(a, lead4, ea_int(a, 4 as u64, sp), ea_ternary(a, stray, ea_int(a, 1 as u64, sp), w3, sp), sp)
+end
+
+func each_str(
+    s &: Sema, a &: at.Ast, nid: int, seq: str, seq_decl: int, id: int, keyname: str, keysp: co.SrcSpan, valname: str, body: int, bytes_mode: bool
+):
+    sp := span_of(a, nid)
+    have_key := str.Len(keyname) > 0
+    idx := "__ei" + id
+    lenv := "__el" + id
+    wid := "__ew" + id
+    cnt := "__ec" + id
+    lead := "__eb" + id
+    mut pre := Vector {} as Vector<int>
+    if seq_decl != 0:
+        pre.push(seq_decl)
+    end
+    pre.push(ea_decl(a, lenv, ea_len(a, seq, sp), false, sp))
+    if not bytes_mode:
+        pre.push(ea_decl(a, wid, ea_int(a, 1 as u64, sp), true, sp))
+        if have_key:
+            pre.push(ea_decl(a, cnt, ea_int(a, 0 as u64, sp), true, sp))
+        end
+    end
+    fr := ea_node(a, at.AST_FOR, sp)
+    mut fv := at.Get(a, fr)
+    fv.a = ea_decl(a, idx, ea_int(a, 0 as u64, sp), true, sp)
+    fv.b = ea_binary(a, tok.TK_LT, ea_ident(a, idx, sp), ea_ident(a, lenv, sp), sp)
+    step := bytes_mode ? ea_int(a, 1 as u64, sp) : ea_ident(a, wid, sp)
+    fv.c = ea_assign(a, idx, ea_binary(a, tok.TK_PLUS, ea_ident(a, idx, sp), step, sp), sp)
+    blk := ea_node(a, at.AST_BLOCK, sp)
+    if bytes_mode:
+        if have_key:
+            at.AddChild(a, blk, ea_bind(a, keyname, ea_ident(a, idx, sp), keysp))
+        end
+        at.AddChild(a, blk, ea_bind(a, valname, ea_index(a, ea_ident(a, seq, sp), ea_ident(a, idx, sp), sp), sp))
+    else:
+        at.AddChild(a, blk, ea_decl(a, lead, ea_byte_at(s, a, seq, ea_ident(a, idx, sp), sp), false, sp))
+        at.AddChild(a, blk, ea_assign(a, wid, ea_width(a, lead, sp), sp))
+        fit := ea_cut(
+            s, a, seq, idx, lenv, wid, 1, ea_cut(s, a, seq, idx, lenv, wid, 2, ea_cut(s, a, seq, idx, lenv, wid, 3, ea_ident(a, wid, sp), sp), sp), sp
+        )
+        at.AddChild(a, blk, ea_assign(a, wid, fit, sp))
+        if have_key:
+            at.AddChild(a, blk, ea_assign(a, cnt, ea_binary(a, tok.TK_PLUS, ea_ident(a, cnt, sp), ea_int(a, 1 as u64, sp), sp), sp))
+            at.AddChild(a, blk, ea_bind(a, keyname, ea_binary(a, tok.TK_MINUS, ea_ident(a, cnt, sp), ea_int(a, 1 as u64, sp), sp), keysp))
+        end
+        piece := ea_mcall(a, seq, "__piece", ea_ident(a, idx, sp), sp)
+        at.AddChild(a, piece, ea_ident(a, wid, sp))
+        at.AddChild(a, blk, ea_bind(a, valname, piece, sp))
+    end
+    repeat at.ChildCount(a, body) in bi:
+        at.AddChild(a, blk, at.Child(a, body, bi))
+    end
+    fv.d = blk
+    at.Put(a, fr, fv)
+    each_finish_pre(s, a, nid, pre, fr)
 end
 
 func each_mname(s &: Sema, en: str): str:
@@ -217,11 +350,41 @@ func each_mname(s &: Sema, en: str): str:
     ret str.Len(f) > 0 ? f : en
 end
 
+func each_bytes_target(a &: at.Ast, e: int, recv &: int): bool:
+    cv := at.Get(a, e)
+    if cv.kind != at.AST_CALL or cv.list.len() != 0 or cv.a == 0:
+        ret false
+    end
+    mv := at.Get(a, cv.a)
+    if mv.kind != at.AST_MEMBER or mv.a == 0 or not str.Equals(intrinsic_method_canon(mv.name), "bytes"):
+        ret false
+    end
+    recv = mv.a
+    ret true
+end
+
 func check_each(s &: Sema, a &: at.Ast, nid: int):
     sp := span_of(a, nid)
     n0 := at.Get(a, nid)
-    it := sema_check_expr(s, a, n0.a)
-    an := at.Get(a, n0.a)
+    mut target := n0.a
+    mut bytes_mode := false
+    mut it := TYPE_NONE
+    mut recv := 0
+    if each_bytes_target(a, n0.a, recv):
+        rt := sema_check_expr(s, a, recv)
+        if type_is_error(s, rt):
+            ret
+        end
+        if ty_at(s, rt).kind == TY_STR:
+            bytes_mode = true
+            target = recv
+            it = rt
+        end
+    end
+    if not bytes_mode:
+        it = sema_check_expr(s, a, n0.a)
+    end
+    an := at.Get(a, target)
     if an.kind == at.AST_ARRAY_LIT and an.list.len() == 0:
         serr(
             s, 68, span_of(a, n0.a), i18.Tr("'each' over an empty array literal: the loop body can never run")
@@ -253,7 +416,8 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         end
     end
 
-    if not vec_like and not map_like and itv.kind != TY_ARRAY and itv.kind != TY_SLICE:
+    is_str := itv.kind == TY_STR
+    if not vec_like and not map_like and not is_str and itv.kind != TY_ARRAY and itv.kind != TY_SLICE:
         serr(
             s, 65, span_of(a, n0.a), co.Format1(
                 i18.Tr("each cannot iterate a value of type '%s'"), co.ArgStr(type_disp(s, it))
@@ -280,7 +444,12 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         seq = an.name
     else:
         seq = "__ea" + id
-        seq_decl = ea_decl(a, seq, n0.a, false, sp)
+        seq_decl = ea_decl(a, seq, target, false, sp)
+    end
+
+    if is_str:
+        each_str(s, a, nid, seq, seq_decl, id, keyname, have_key ? span_of(a, n0.c) : sp, valname, body, bytes_mode)
+        ret
     end
 
     if map_like:

@@ -8,6 +8,25 @@ pkg.import = llm
 pkg.intro <<
 <p>This package runs large language models of the Llama architecture, such as Llama, Qwen and Mistral, on the processor with no outside dependency. Download the quantised model in <a href="../gguf/">GGUF</a> form, read it with <code>LoadGgufModel</code> and make text with <code>Generate</code>.</p>
 <p>For more control, <code>Forward</code> gives the logits and a <code>Sampler</code> picks the next token with temperature, top-k, top-p and a repetition penalty. The runnable example builds a small random model so it works without a download.</p>
+<h2 id="guide-chat">A chat answer, streamed</h2>
+<p>Instruction tuned models expect the conversation in the exact format they were trained on. Qwen uses <code>&lt;|im_start|&gt;</code> and <code>&lt;|im_end|&gt;</code> around each turn, and the prompt ends by opening the assistant's turn so the model writes the reply. The format of any model is in its GGUF file under <code>tokenizer.chat_template</code>; see <a href="/std/gguf/"><code>gguf</code></a> for reading it.</p>
+<p>Instead of <code>Generate</code>, which returns the whole text at the end, this program runs the loop itself so every token is printed as soon as it is chosen. The first <code>Forward</code> call reads the whole prompt; after that each call feeds only the newest token, because the <code>KVCache</code> remembers everything before it. The loop stops at the end of turn token, after 80 tokens, or when the context is full.</p>
+<pre class="code" dir="ltr"><code>mkdir -p models
+curl -L -o models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf
+salam run llm-guide-chat.salam</code></pre>
+{{example.llm-guide-chat}}
+<p>Build with <code>salam build --release</code> for real use: the model runs on the processor, and a release build drops the bounds checks from the inner loops, which makes it noticeably faster.</p>
+
+<h2 id="guide-tokens">How text becomes tokens</h2>
+<p>A model never sees letters, only token ids. A BPE tokenizer starts from single characters and applies its list of merges in order, so frequent pieces such as <code>lower</code> become one token while rare words fall apart into many. Byte level BPE, the kind GPT 2, Llama 3 and Qwen use, writes a space as <code>&#288;</code>, so the space before a word is part of a token. This tokenizer is built by hand with five merges to make the steps visible.</p>
+{{example.llm-guide-tokens}}
+<p><code>tower</code> is not merged into <code>ow</code> pieces because the merges only know <code>lo</code> and <code>low</code>. Counting tokens this way is also how you check that a prompt fits in the model's context before sending it.</p>
+
+<h2 id="guide-sampling">Temperature and top-k</h2>
+<p>The model gives a score, a logit, for every token in the vocabulary, and the sampler turns the scores into a choice. <code>Greedy</code> always takes the highest. A <code>Sampler</code> draws at random in proportion to the probabilities: a temperature below one sharpens them toward the favourite, above one flattens them, and <code>top_k</code> drops all but the best <code>k</code> before drawing. The program draws 1000 times from four fixed scores with each setting and counts how often each token wins.</p>
+{{example.llm-guide-sampling}}
+<p>The seed passed to <code>NewSampler</code> makes the draws repeatable, which is why this output never changes. For factual answers use a low temperature; for varied writing, around 0.7 to 1.0 with <code>top_p</code> 0.9. <code>repeat_penalty</code> above 1 lowers the scores of recently used tokens and stops small models from looping.</p>
 >>
 
 doc.Config = The architecture configuration of a model, of the Llama kind.

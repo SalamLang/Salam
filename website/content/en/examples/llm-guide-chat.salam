@@ -1,0 +1,42 @@
+import llm
+import tensor
+
+func chat_prompt(system: str, user: str): str:
+    ret "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n"
+end
+
+func main:
+    path := "models/qwen2.5-0.5b-instruct-q8_0.gguf"
+    mut model := llm.Model {}
+    mut tok := llm.NewTokenizer(llm.TOK_BPE)
+    if not llm.LoadGgufModel(path, model, tok):
+        println "could not load", path
+        ret 1
+    end
+    mut cache := llm.NewKVCache(model.cfg)
+    mut sampler := llm.NewSampler(42)
+    sampler.temperature = 0.7
+    sampler.top_p = 0.9
+    sampler.repeat_penalty = 1.1
+    mut ids := tok.encode(chat_prompt("You are a helpful assistant. Answer in one sentence.", "Why is the sky blue?"))
+    mut logits := llm.Forward(model, cache, ids)
+    mut said := Vector {} as Vector<int>
+    mut step := Vector {} as Vector<int>
+    step.push(0)
+    until said.len() < 80 and cache.len < cache.ctx:
+        next := sampler.sample(logits, logits.dim(0) - 1, said)
+        tensor.Free(logits)
+        if next == tok.eos or tok.token_text(next) == "<|im_end|>":
+            break
+        end
+        said.push(next)
+        step.set(0, next)
+        print tok.decode(step)
+        logits = llm.Forward(model, cache, step)
+    end
+    println ""
+    println "tokens in prompt:", ids.len(), "answer:", said.len()
+    cache.free()
+    model.free()
+    tok.free()
+end

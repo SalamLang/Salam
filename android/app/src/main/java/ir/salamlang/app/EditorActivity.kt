@@ -89,8 +89,18 @@ class EditorActivity :
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(4), 0, dp(4), 0)
             }
-        title = label("", 16f, palette.text, true).apply { setSingleLine(true) }
-        subtitle = label("", 12f, palette.textDim).apply { setSingleLine(true) }
+        title =
+            label("", 16f, palette.text, true).apply {
+                setSingleLine(true)
+                textDirection = View.TEXT_DIRECTION_LOCALE
+                textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+            }
+        subtitle =
+            label("", 12f, palette.textDim).apply {
+                setSingleLine(true)
+                textDirection = View.TEXT_DIRECTION_LOCALE
+                textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+            }
         titles.addView(title)
         titles.addView(subtitle)
         bar.addView(weight(titles))
@@ -141,6 +151,20 @@ class EditorActivity :
         root.addView(symbols, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         setContentView(root)
+        root.viewTreeObserver.addOnGlobalLayoutListener { fitConsole(root.height) }
+    }
+
+    private fun fitConsole(available: Int) {
+        if (available <= 0) {
+            return
+        }
+        val keyboardOpen = available < resources.displayMetrics.heightPixels * 0.7f
+        val want = consoleHeight.coerceAtMost((available * if (keyboardOpen) 0.35f else 0.5f).toInt())
+        val lp = console.layoutParams
+        if (lp.height != want) {
+            lp.height = want
+            console.layoutParams = lp
+        }
     }
 
     private fun buildFindBar(): LinearLayout {
@@ -266,10 +290,10 @@ class EditorActivity :
         val first = list.firstOrNull { it.error } ?: list[0]
         val head =
             buildString {
-                if (errors > 0) append(getString(R.string.n_errors, errors))
+                if (errors > 0) append(resources.getQuantityString(R.plurals.n_errors, errors, errors))
                 if (warnings > 0) {
                     if (isNotEmpty()) append(" · ")
-                    append(getString(R.string.n_warnings, warnings))
+                    append(resources.getQuantityString(R.plurals.n_warnings, warnings, warnings))
                 }
             }
         problems.text = getString(R.string.problem_line, head, first.line, first.message)
@@ -326,7 +350,7 @@ class EditorActivity :
         if (run.isRunning) {
             run.stop()
         } else {
-            startJob(listOf("exec", file.absolutePath), file.parentFile ?: filesDir, true, null)
+            startJob(listOf("exec", file.name), file.parentFile ?: filesDir, true, null)
         }
     }
 
@@ -384,25 +408,25 @@ class EditorActivity :
 
     private fun formatMs(ms: Long): String = if (ms < 1000) "$ms ms" else String.format(java.util.Locale.US, "%.2f s", ms / 1000.0)
 
-    override fun onInput(line: String) {
+    override fun onConsoleInput(line: String) {
         run.input(line)
     }
 
-    override fun onStop() {
+    override fun onConsoleStop() {
         run.stop()
     }
 
-    override fun onClose() {
+    override fun onConsoleClose() {
         if (run.isRunning) {
             run.stop()
         }
         console.visibility = View.GONE
     }
 
-    override fun onResize(dy: Float) {
+    override fun onConsoleResize(dy: Float) {
         val limit = (findViewById<View>(android.R.id.content).height * 0.8f).toInt().coerceAtLeast(dp(120))
         consoleHeight = (consoleHeight + dy.toInt()).coerceIn(dp(90), limit)
-        console.layoutParams = console.layoutParams.apply { height = consoleHeight }
+        fitConsole(findViewById<View>(android.R.id.content).height)
     }
 
     private fun showMenu(anchor: View) {
@@ -460,7 +484,7 @@ class EditorActivity :
     }
 
     private fun formatFile() {
-        startJob(listOf("format", file.absolutePath), file.parentFile ?: filesDir, false) { rc ->
+        startJob(listOf("format", file.name), file.parentFile ?: filesDir, false) { rc ->
             if (rc == 0) {
                 val text = file.readText()
                 if (text != editor.text.toString()) {
@@ -478,7 +502,7 @@ class EditorActivity :
         val out = File(Workspace.cache(this), "translated.salam")
         out.delete()
         startJob(
-            listOf("translate", target, file.absolutePath, "--output=" + out.absolutePath),
+            listOf("translate", target, file.name, "--output=" + out.absolutePath),
             file.parentFile ?: filesDir,
             false,
         ) { rc ->
@@ -500,7 +524,7 @@ class EditorActivity :
     ) {
         val out = File(Workspace.cache(this), "inspect.$ext")
         out.delete()
-        startJob(listOf("inspect", file.absolutePath, flag, "--xml-out=" + out.absolutePath), file.parentFile ?: filesDir, false) { rc ->
+        startJob(listOf("inspect", file.name, flag, "--xml-out=" + out.absolutePath), file.parentFile ?: filesDir, false) { rc ->
             if (rc == 0 && out.isFile) {
                 openViewer(out, getString(titleRes))
             }
@@ -514,7 +538,7 @@ class EditorActivity :
     ) {
         val out = File(Workspace.cache(this), "emit.$ext")
         out.delete()
-        startJob(listOf(command, file.absolutePath, "--output=" + out.absolutePath), file.parentFile ?: filesDir, false) { rc ->
+        startJob(listOf(command, file.name, "--output=" + out.absolutePath), file.parentFile ?: filesDir, false) { rc ->
             if (rc == 0 && out.isFile) {
                 openViewer(out, getString(titleRes))
             }
@@ -542,7 +566,7 @@ class EditorActivity :
         val out = File(Workspace.cache(this), "preview.html")
         out.delete()
         startJob(
-            listOf("layout", "build", file.absolutePath, "--inline", "--output=" + out.absolutePath),
+            listOf("layout", "build", file.name, "--inline", "--output=" + out.absolutePath),
             file.parentFile ?: filesDir,
             false,
         ) { rc ->

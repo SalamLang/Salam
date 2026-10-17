@@ -7,8 +7,15 @@ pkg.description = The db package in Salam: one interface shared by SQLite, MySQL
 pkg.import = db
 pkg.flat = true
 pkg.intro <<
-<p>Every database engine has its own package: <a href="../db-sqlite/">db/sqlite</a>, <a href="../db-mysql/">db/mysql</a>, <a href="../db-postgres/">db/postgres</a>, for key and value <a href="../db-redis/">db/redis</a>, and for search <a href="../db-typesense/">db/typesense</a>, <a href="../db-meilisearch/">db/meilisearch</a>, <a href="../db-elasticsearch/">db/elasticsearch</a> and, for search and analytics, <a href="../db-opensearch/">db/opensearch</a>; the last two also answer SQL queries through <code>Connection</code>. This package gives the <code>Connection</code> interface that the three SQL engines implement; write your code against it and changing engine is one line.</p>
-<p>Migrations move the database schema along with the code: every change has a number and <code>MigrateUp</code> applies only the ones not applied yet. Never paste a value a user typed straight into SQL; send it through <code>QuoteLiteral</code> or as a prepared parameter.</p>
+<p>Every database engine has its own package: <a href="/std/db-sqlite/">db/sqlite</a>, <a href="/std/db-mysql/">db/mysql</a>, <a href="/std/db-postgres/">db/postgres</a>, for key and value <a href="/std/db-redis/">db/redis</a>, and for search <a href="/std/db-typesense/">db/typesense</a>, <a href="/std/db-meilisearch/">db/meilisearch</a>, <a href="/std/db-elasticsearch/">db/elasticsearch</a> and, for search and analytics, <a href="/std/db-opensearch/">db/opensearch</a>; the last two also answer SQL queries through <code>Connection</code>. This package gives the <code>Connection</code> interface that the three SQL engines implement; write your code against it and changing engine is one line.</p>
+<p>Migrations move the database schema along with the code: every change has a number and <code>MigrateUp</code> applies the ones numbered above the current schema version. Never paste a value a user typed straight into SQL; send it through <code>QuoteLiteral</code> or as a prepared parameter.</p>
+<div class="note"><p>Things that catch people out:</p>
+<ul>
+<li><code>QuoteLiteral</code> only doubles single quotes, which is the SQL standard that SQLite and PostgreSQL follow. MySQL also treats a backslash as an escape by default, so on MySQL quote with the connection's own <code>c.Quote</code>, which escapes backslashes as well.</li>
+<li><code>MigrateUp</code> compares version numbers, not a list of applied names. A migration numbered below the highest applied one, for example one merged from an older branch, is skipped without a word. Always give a new migration the next free number.</li>
+<li>MySQL commits every <code>CREATE</code>, <code>ALTER</code> and <code>DROP</code> on its own, so on MySQL a migration that fails halfway can leave the first statements applied. SQLite and PostgreSQL roll the whole migration back.</li>
+<li>Migration SQL is split into statements at each <code>;</code> outside single quotes. A PostgreSQL function body in <code>$$ ... $$</code> or a trigger with several statements is cut apart; run those with <code>c.Exec</code> instead.</li>
+</ul></div>
 <h2 id="guide-store">Writing code against Connection</h2>
 <p>Give your data functions a <code>dyn db.Connection</code> parameter instead of a SQLite or PostgreSQL database. They then work with every SQL engine, and tests can pass an in-memory SQLite database while production passes PostgreSQL. <code>db.Run</code> runs one statement and returns true on success; <code>c.Error()</code> says what went wrong; <code>c.LastInsertId()</code> gives the id of the row just inserted.</p>
 {{example.db-guide-store}}
@@ -23,7 +30,7 @@ pkg.intro <<
 <h2 id="guide-startup">Migrations at start up</h2>
 <p>Call <code>MigrateUp</code> every time the program starts. It records each applied version in a table of its own, so the first run creates the schema, later runs do nothing, and a release that adds migration 3 applies only that one. Existing data stays where it is.</p>
 {{example.db-guide-startup}}
-<p>Never change a migration that has already run somewhere: add a new one instead. Each migration runs in its own transaction, so a failing one leaves the schema at the previous version. <code>Rollback</code> undoes the last migration with its <code>down</code> SQL and <code>MigrateTo</code> moves to any version, which is useful in development but rarely in production.</p>
+<p>Never change a migration that has already run somewhere: add a new one instead. Each migration runs in its own transaction, so on SQLite and PostgreSQL a failing one leaves the schema at the previous version. <code>Rollback</code> undoes the last migration with its <code>down</code> SQL and <code>MigrateTo</code> moves to any version, which is useful in development but rarely in production.</p>
 
 <h2 id="guide-engines">Choosing the engine at run time</h2>
 <p>Because the rest of the program only sees <code>dyn db.Connection</code>, the engine can be picked from a setting. Here the <code>APP_DB</code> environment variable chooses PostgreSQL, MySQL or a SQLite file, and everything after <code>connect</code> is the same for all three.</p>
@@ -59,12 +66,12 @@ doc.NewMigratorIn = A migrator with a version table of another name.
 doc.FreeMigrator = Frees the memory.
 doc.AddMigration = Adds a migration with a number, a name and the up and down SQL; the order you add them in does not matter.
 doc.MigrationCount = The number of migrations.
-doc.SplitStatements = Splits SQL text into statements; a <code>;</code> inside a string is not a separator.
+doc.SplitStatements = Splits SQL text into statements at each <code>;</code>. A <code>;</code> inside a single quoted string is not a separator, but one inside a double quoted name, a comment or a <code>$$</code> block is.
 doc.EnsureTable = Makes the version table when it is not there.
 doc.SchemaVersion = The highest applied version; zero when there is none.
 doc.IsApplied = This version has been applied.
 doc.PendingCount = The number of migrations not applied yet.
-doc.MigrateUp = Applies every migration not applied yet, in order, and returns how many; each migration in its own transaction.
+doc.MigrateUp = Applies, in order, every migration whose version is above the current schema version, each in its own transaction, and returns how many ran. It stops at the first failure.
 doc.Rollback = Undoes the last migration.
 doc.MigrateTo = Goes up or down until the version reaches the given number and returns how many steps; zero means undo them all.
 doc.SQLITE = The name of the SQLite engine.
@@ -88,7 +95,7 @@ doc.CountRows = The number of rows in the result of a query.
 doc.Run = Runs one statement; true when it succeeded.
 doc.RunAll = Runs the statements in order and returns how many succeeded.
 doc.InTx = Runs every statement in one transaction; when one fails, none of them is applied.
-doc.QuoteLiteral = Returns the string as an SQL value, quoted and with <code>'</code> escaped.
+doc.QuoteLiteral = Returns the string as an SQL value: wrapped in single quotes, with each <code>'</code> inside doubled. Backslashes are left alone, so on MySQL use the connection's <code>Quote</code>.
 doc.NO_LEASE = The number <code>Acquire</code> returns when no connection is free.
 doc.Pool = A pool of connections, for programs that need several at once.
 doc.Pool.conns = The connections.

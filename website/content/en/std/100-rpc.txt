@@ -7,7 +7,7 @@ pkg.description = The rpc package in Salam: registering a method and answering, 
 pkg.import = rpc
 pkg.intro <<
 <p>With a remote procedure call one program calls another program's methods as if they were its own routines. On the server side you tie each method to a routine with <code>Register</code>; that routine takes the call's number, reads the parameters with <code>CallParamInt</code> and the like, and answers with <code>Reply...</code> or <code>Fail</code>.</p>
-<p>The messages are exchanged with the JSON codec (JSON-RPC 2.0) or MessagePack, and over TCP they are separated by one of three framings, line, header (like LSP) or length prefixed; the client and the server must have the same framing. <code>HandleText</code> does the same thing without a network, so you can put RPC behind an <a href="../net-http/">net/http</a> route.</p>
+<p>The messages are exchanged with the JSON codec (JSON-RPC 2.0) or MessagePack, and over TCP they are separated by one of three framings, line, header (like LSP) or length prefixed; the client and the server must have the same framing. <code>HandleText</code> does the same thing without a network, so you can put RPC behind an <a href="/std/net-http/">net/http</a> route.</p>
 <h2 id="guide-service">A small service without a network</h2>
 <p>The quickest way to design an RPC API is to build it with <code>HandleText</code>: it takes one JSON-RPC request (or a batch) as text and returns the answer as text, without any network. Every method is an ordinary function that receives a call slot <code>c</code>; it reads parameters with <code>CallParamStr</code>, <code>CallParamInt</code> and their siblings, and must answer exactly once, with a <code>Reply...</code> function or with <code>Fail</code>.</p>
 {{example.rpc-guide-todo}}
@@ -15,13 +15,18 @@ pkg.intro <<
 <p>The registry is global for the whole program, so method state, such as the todo list here, lives in a global variable or behind one. If several connections are served in parallel threads, protect that state with a lock from <a href="/std/sync/">sync</a>.</p>
 
 <h2 id="guide-tcp">A server and a client over TCP</h2>
-<p>For two programs, <code>NewServer</code> with port <code>0</code> lets the system pick a free port and <code>Port</code> reports it after <code>Listen</code>. <code>ServeCount</code> serves a fixed number of connections and returns, which suits tests; <code>Serve</code> runs until <code>StopServer</code>. On the other side, <code>DialClient</code> connects, <code>Call</code> sends one request and waits for its answer.</p>
+<p>For two programs, <code>NewServer</code> with port <code>0</code> lets the system pick a free port and <code>Port</code> reports it after <code>Listen</code>. <code>ServeCount</code> serves a fixed number of connections and returns, which suits tests; <code>Serve</code> runs until <code>StopServer</code>. Both answer one connection at a time: while a client stays connected, the next one waits in the queue. When several clients must be served at once, accept the connections yourself with <a href="/std/net-tcp/">net/tcp</a> (<code>tcp.Bind</code>, then <code>tcp.Accept</code> in a loop) and pass each connection's <code>fd</code> to <code>ServeConn</code> in its own thread from <a href="/std/thread/">thread</a>. On the other side, <code>DialClient</code> connects, <code>Call</code> sends one request and waits for its answer.</p>
 {{example.rpc-guide-tcp}}
 <p>A failed call does not crash anything. Check <code>IsErrorResponse</code> first and then read <code>ErrorCode</code> and <code>ErrorMessage</code>; reading <code>ResultFloat</code> on an error response returns 0. Your own error codes should stay outside the range -32768 to -32000 that JSON-RPC reserves, except for the -32000 to -32099 block meant for server errors, which is where -32010 comes from.</p>
 <p>Client and server must agree on the codec and the framing. JSON with line framing is the default and easy to debug with a terminal. <code>RPC_CODEC_MSGPACK</code> is smaller and faster and uses length prefixed frames; set both ends with <code>SetFraming</code> and <code>ClientSetFraming</code>.</p>
 
 <h2 id="guide-stdio">Talking over standard input and output</h2>
 <p>Editor tools, language servers and plugins often run as a child process and exchange messages over standard input and output. <code>ServeStdio</code> reads one request per line (or LSP style <code>Content-Length</code> frames with <code>RPC_FRAME_HEADER</code>), answers each on standard output, and returns the number of requests when the input ends. Logs must go to standard error, as here, or they would corrupt the answers.</p>
+<div class="note"><p>Two limits of <code>ServeStdio</code> to know before you build on it:</p>
+<ul>
+<li>With line framing, an empty line counts as the end of the input, so the service stops there.</li>
+<li><code>RPC_FRAME_HEADER</code> does not yet work with real LSP clients. They end headers with <code>\r\n</code> and send no newline after the body, so the blank <code>\r</code> line is answered with a parse error and the next header is read as part of the body. It also never returns at the end of the input. Use line framing over standard input and output for now.</li>
+</ul></div>
 {{example.rpc-guide-stdio}}
 <p>This program waits for input, so it is only compiled here. Build it and pipe two requests into it:</p>
 <pre class="code" dir="ltr"><code>salam build rpc-guide-stdio.salam --output=tool
@@ -127,10 +132,10 @@ doc.HandleText = Processes one JSON-RPC text and returns the answer; for notific
 doc.ServeConn = Answers one connection until it closes.
 doc.Listen = Starts listening.
 doc.Port = The port actually taken.
-doc.ServeCount = Answers n connections and returns.
-doc.Serve = Answers connections until it is stopped.
+doc.ServeCount = Answers n connections, one after another, and returns the total number served. It calls <code>Listen</code> first if needed.
+doc.Serve = Answers connections one at a time until <code>StopServer</code> is called. A client that keeps its connection open makes the others wait.
 doc.StopServer = Stops the server.
-doc.ServeStdio = Reads the requests from standard input and writes the answer to the output, like a language server (LSP).
+doc.ServeStdio = Reads requests from standard input, one per line, and writes each answer to standard output; returns the number of requests at the end of input or at the first empty line. Header framing does not yet handle real LSP traffic; see the note in the guide above.
 doc.RPC_PARSE_ERROR = Error code: the JSON text could not be read.
 doc.RPC_INVALID_REQUEST = Error code: the request is not in the right shape.
 doc.RPC_METHOD_NOT_FOUND = Error code: the method is not registered.

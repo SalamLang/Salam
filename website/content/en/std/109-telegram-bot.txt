@@ -8,6 +8,12 @@ pkg.import = telegram.bot
 pkg.intro <<
 <p>To build a bot, get a token from BotFather and make one with <code>NewBot</code>. A bot has two ways of taking messages: <code>Poll</code>, which asks Telegram itself and suits testing and simple servers, or a webhook, where Telegram POSTs the messages to your server.</p>
 <p>With a webhook you can send the answer straight in the body of the HTTP response; the <code>Reply...</code> functions build that JSON text. Set a secret with <code>SetWebhookSecret</code> and check its header on every request.</p>
+<div class="note"><p>Things that catch people out:</p>
+<ul>
+<li>Every API call is an HTTP <code>GET</code> with the parameters in the URL. Media therefore go by <code>file_id</code> or by a public URL that Telegram downloads; a file on your disk cannot be uploaded with this package. The URL also contains the token, so do not log request URLs.</li>
+<li><code>Poll</code> never returns, and it runs your function for one update at a time. A slow handler delays every chat. When <code>getUpdates</code> fails it writes the reason to standard error and tries again a second later.</li>
+<li>An answer sent in the webhook response is fire and forget: you do not learn whether it worked or get the new message id. When you need either, call the matching <code>Send...</code> function instead.</li>
+</ul></div>
 <h2 id="guide-router">Answering commands</h2>
 <p>Keep the logic of a bot in a function that takes an <code>Update</code> and returns the answer. Then the same function serves a webhook, which sends the answer back in the HTTP response, and a test like this one, which feeds it updates written by hand and needs no network and no token. <code>IsCommand</code>, <code>CommandName</code> and <code>CommandArgs</code> split <code>/add 2 3</code> into its parts, and <code>CommandName</code> drops the <code>@my_bot</code> suffix Telegram adds in groups.</p>
 {{example.telegram-bot-guide-router}}
@@ -24,6 +30,11 @@ pkg.intro <<
 <p>Run it with the token from BotFather in the environment:</p>
 <pre class="code" dir="ltr"><code>TELEGRAM_TOKEN=123456:ABC... salam run telegram-bot-guide-poll.salam</code></pre>
 <p>Every <code>Send...</code> call returns an <code>ApiResponse</code>. Check it with <code>Ok</code>: when it fails, <code>error_code</code> and <code>description</code> hold Telegram's reason (429 means you are sending too fast) and <code>http_err</code> is set when Telegram could not be reached at all.</p>
+
+<h2 id="guide-webhook">A webhook server</h2>
+<p>In production a webhook is the usual choice: Telegram sends each update to your HTTPS address as soon as it arrives, so nothing has to poll. <code>SetWebhookSecret</code> registers the address and a secret, and Telegram then puts that secret in the <code>X-Telegram-Bot-Api-Secret-Token</code> header (the constant <code>SECRET_HEADER</code>) of every request. Anything without it did not come from Telegram and gets a 401.</p>
+{{example.telegram-bot-guide-webhook}}
+<p>The answer goes back in the response body: <code>ReplyMessage</code> builds the JSON for a <code>sendMessage</code> call, and Telegram runs it. Reply with an empty body when there is nothing to say, and answer quickly, because Telegram waits for the response before it sends the next update for that chat. Telegram only calls HTTPS addresses on ports 443, 80, 88 or 8443, so run the program behind a proxy with a certificate, or behind a tunnel while you develop. <code>SetWebhookSecret</code> also drops updates that were waiting, so a restart does not replay old messages.</p>
 >>
 
 doc.User = One Telegram user.
@@ -101,8 +112,8 @@ doc.GetMe = The details of the bot itself; for testing the token.
 doc.GetUpdates = Takes the updates from the given position, with long polling.
 doc.SendMessage = Sends a text message; the chat by numeric id or by channel name, such as <code>@channel</code>.
 doc.SendMessageOptions = A message with options.
-doc.SendPhoto = Sends a photo by address or file id, with a caption.
-doc.SendDocument = Sends a file by address or file id, with a caption.
+doc.SendPhoto = Sends a photo by public URL or by the <code>file_id</code> of a photo Telegram already has, with a caption. Uploading a local file is not supported.
+doc.SendDocument = Sends a file by public URL or <code>file_id</code>, with a caption. Uploading a local file is not supported.
 doc.SendVideo = Sends a video by address or file id, with a caption.
 doc.SendAudio = Sends a song by address or file id, with a caption.
 doc.SendVoice = Sends a voice message by address or file id, with a caption.
@@ -142,7 +153,7 @@ doc.ForceReply = Makes the user reply.
 doc.IsCommand = The text starts with a <code>/</code>.
 doc.CommandName = The command name, without the <code>/</code> and without <code>@bot</code>.
 doc.CommandArgs = The rest of the text after the command.
-doc.Poll = The polling loop: it takes the updates with long polling and calls the function for each one; it does not return.
+doc.Poll = The polling loop: it takes the updates with long polling and calls the function for each one; it does not return. Updates are handled one at a time, and a failed request is retried after one second.
 doc.SECRET_HEADER = The name of the header the webhook secret arrives in.
 doc.ReplyMessage = A webhook reply that sends a message; make it the body of the HTTP response and no separate request is needed.
 doc.ReplyMessageOptions = The same, with options.

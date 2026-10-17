@@ -276,6 +276,12 @@ const char *PQcmdTuples(void *res)
     return r ? r->cmdtuples : "";
 }
 
+const char *PQcmdStatus(void *res)
+{
+    (void)res;
+    return "";
+}
+
 void PQclear(void *res)
 {
     PgResult *r = (PgResult *)res;

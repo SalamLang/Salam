@@ -32,6 +32,7 @@ struct _Wire:
     pub cap: i64 = 0
     pub pos: i64 = 0
     pub uses: int = 0
+    pub timeout_ms: int = 0
 end
 
 struct _WireResp:
@@ -39,6 +40,8 @@ struct _WireResp:
     pub body: str = ""
     pub err: str = ""
     pub stale: bool = false
+    pub sent: bool = false
+    pub quick: bool = false
 end
 
 func _wire_new(): _Wire*:
@@ -76,6 +79,7 @@ func _wire_connect(w: _Wire*, node: _Node, cfg: tls.Config, timeout_ms: int): st
     end
     if timeout_ms > 0: rawsock.SetTimeout(sock, timeout_ms) end
     rawsock.SetNoDelay(sock, true)
+    w[0].timeout_ms = timeout_ms
     w[0].fd = sock.fd
     w[0].secure = node.ep.secure
     if node.ep.secure:
@@ -250,13 +254,17 @@ func _wire_roundtrip(w: _Wire*, method: str, head: str, body: str, blen: int): _
     if not _wire_write(w, head as void*, str.ByteLen(head)) or not _wire_write(w, body as void*, blen):
         ret _WireResp { err = "could not send the request", stale = reused }
     end
+    waited := time.MonoMillis()
     mut head_end := -1 as i64
     until head_end < 0:
         head_end = _wire_find(w, 0, true)
         if head_end >= 0: break end
         if not _wire_fill(w):
             if _wire_avail(w) == 0:
-                ret _WireResp { err = "the server closed the connection", stale = reused }
+                mut fast := 2000
+                if w[0].timeout_ms > 0 and w[0].timeout_ms / 2 < fast: fast = w[0].timeout_ms / 2 end
+                quick := time.MonoMillis() - waited < (fast as i64)
+                ret _WireResp { err = "the server closed the connection", stale = reused, sent = true, quick = quick }
             end
             ret _WireResp { err = "the response head never ended" }
         end

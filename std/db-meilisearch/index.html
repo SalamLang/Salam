@@ -101,12 +101,390 @@
           
           <div class="lesson-toc">
             <strong>On this page</strong>
-            <ol><li><a href="#types">Types</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
+            <ol><li><a href="#tutorial">Tutorial: a movie search in eleven steps</a></li><li><a href="#connect">1. Connect</a></li><li><a href="#index">2. Create an index and add documents</a></li><li><a href="#search">3. Search</a></li><li><a href="#filter">4. Filter, sort and count facets</a></li><li><a href="#highlight">5. Highlight, crop and page through results</a></li><li><a href="#settings">6. Tune relevancy</a></li><li><a href="#multi">7. Search several indexes at once</a></li><li><a href="#vectors">8. Vector and hybrid search</a></li><li><a href="#keys">9. API keys and tenant tokens</a></li><li><a href="#update">10. Update and delete documents</a></li><li><a href="#tasks">11. Tasks and failures</a></li><li><a href="#more">More</a></li><li><a href="#types">Types</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
           </div>
           
           <div class="lesson-body">
-<p>Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package speaks its HTTP API directly with <code>net.http</code> and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens, webhooks, dynamic search rules and chat workspaces. The examples need a running server, so they are only checked.</p>
-<p>Every call takes an <code>Error</code> as its last argument and fills it when something fails; check it with <code>Ok</code>. Writes do not happen at once: they return a <code>TaskInfo</code> and Meilisearch applies them in order, so call <code>Wait</code> when the next step needs the change. Search hits and documents come back as raw JSON text; read them into your own structs with <code>HitsAs</code> and <code>GetDocumentAs</code>. For a route with no function of its own, use <code>Request</code>. Requests have no time limit until you set one with <code>WithTimeout</code>, and a client is a plain value, so threads can share it.</p>
+<p>Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package talks to its HTTP API directly with <code>net.httpx</code> and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens, webhooks, dynamic search rules and chat workspaces. This page starts with a tutorial; the full reference of every function and type comes after it.</p>
+
+<h2 id="tutorial">Tutorial: a movie search in eleven steps</h2>
+<p>The steps below build one small movie catalogue and search it. Each step is a complete program, and the output under it is what it printed against a real Meilisearch 1.55. Run them in order, because each step uses the data the earlier ones left behind.</p>
+<p>First start a server. With Docker that is one command; without it, download the <code>meilisearch</code> binary from the Meilisearch releases page and run it with the same key:</p>
+<pre class="code" dir="ltr"><code>docker run -p 7700:7700 -e MEILI_MASTER_KEY=masterKey getmeili/meilisearch:v1.55.0</code></pre>
+<p>The programs assume <code>http://127.0.0.1:7700</code> and the master key <code>masterKey</code>. A real deployment uses a long random master key and gives applications smaller keys, as step 9 shows.</p>
+
+<h2 id="connect">1. Connect</h2>
+<p><code>New</code> makes a client: a plain value with the address and the key, which threads can share. <code>WithTimeout</code> returns a copy that stops waiting after the given milliseconds; without it a request waits as long as the server takes. Every call that can fail takes an <code>Error</code> as its last argument. <code>Ok</code> tells you whether the call worked and <code>ErrorString</code> turns the error into one line.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-connect.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-connect" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-connect">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">WithTimeout</span>(meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>), <span class="tok-n">5000</span>)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">IsHealthy</span>(c):
+        <span class="tok-b">println</span> <span class="tok-s">&quot;Meilisearch is not running at &quot;</span> + c.host
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+    version := meilisearch.<span class="tok-f">GetVersion</span>(c, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;connected to Meilisearch &quot;</span> + version.pkg_version
+
+    meilisearch.<span class="tok-f">GetIndex</span>(c, <span class="tok-s">&quot;no_such_index&quot;</span>, err)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> meilisearch.<span class="tok-f">ErrorString</span>(err)
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>connected to Meilisearch 1.55.0
+meilisearch 404 [index_not_found]: Index `no_such_index` not found.</div></div>
+<p>The error carries everything Meilisearch sent: the HTTP <code>status</code>, the <code>code</code> to branch on (here <code>index_not_found</code>), the <code>message</code> and a <code>link</code> to its documentation. When the server cannot be reached at all, <code>code</code> is <code>communication_error</code>, or <code>timeout</code> when the time limit ran out.</p>
+
+<h2 id="index">2. Create an index and add documents</h2>
+<p>An index is a named collection of documents, each with a unique primary key. Documents can be Salam structs: <code>AddDocumentsOf</code> turns each one into JSON. <code>AddDocuments</code> takes JSON text instead, and <code>AddDocumentsNdjson</code> and <code>AddDocumentsCsv</code> take those formats.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-index.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-index" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-index">import db.meilisearch
+
+<span class="tok-k">struct</span> Movie:
+    <span class="tok-k">pub</span> id: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+    <span class="tok-k">pub</span> title: <span class="tok-t">str</span> = <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">pub</span> genre: <span class="tok-t">str</span> = <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">pub</span> year: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+    <span class="tok-k">pub</span> overview: <span class="tok-t">str</span> = <span class="tok-s">&quot;&quot;</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-f">movie</span>(id: <span class="tok-t">int</span>, title: <span class="tok-t">str</span>, genre: <span class="tok-t">str</span>, year: <span class="tok-t">int</span>, overview: <span class="tok-t">str</span>): Movie:
+    <span class="tok-k">ret</span> Movie { id = id, title = title, genre = genre, year = year, overview = overview }
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">CreateIndex</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;id&quot;</span>, err), err)
+
+    <span class="tok-k">mut</span> movies := Vector {} <span class="tok-k">as</span> Vector&lt;Movie&gt;
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">1</span>, <span class="tok-s">&quot;Heat&quot;</span>, <span class="tok-s">&quot;Crime&quot;</span>, <span class="tok-n">1995</span>, <span class="tok-s">&quot;A detective hunts a crew of professional thieves in Los Angeles.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">2</span>, <span class="tok-s">&quot;Moana&quot;</span>, <span class="tok-s">&quot;Family&quot;</span>, <span class="tok-n">2016</span>, <span class="tok-s">&quot;A girl sails across the ocean to save her island.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">3</span>, <span class="tok-s">&quot;Alien&quot;</span>, <span class="tok-s">&quot;Horror&quot;</span>, <span class="tok-n">1979</span>, <span class="tok-s">&quot;The crew of a space freighter meets a deadly creature.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">4</span>, <span class="tok-s">&quot;Up&quot;</span>, <span class="tok-s">&quot;Family&quot;</span>, <span class="tok-n">2009</span>, <span class="tok-s">&quot;An old man flies his house away with thousands of balloons.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">5</span>, <span class="tok-s">&quot;Arrival&quot;</span>, <span class="tok-s">&quot;Drama&quot;</span>, <span class="tok-n">2016</span>, <span class="tok-s">&quot;A linguist learns to talk with visitors from another world.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">6</span>, <span class="tok-s">&quot;Dune&quot;</span>, <span class="tok-s">&quot;Adventure&quot;</span>, <span class="tok-n">2021</span>, <span class="tok-s">&quot;A young noble fights for a desert planet.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">7</span>, <span class="tok-s">&quot;Interstellar&quot;</span>, <span class="tok-s">&quot;Drama&quot;</span>, <span class="tok-n">2014</span>, <span class="tok-s">&quot;Explorers travel through a wormhole to find a new home.&quot;</span>))
+    movies.<span class="tok-f">push</span>(<span class="tok-f">movie</span>(<span class="tok-n">8</span>, <span class="tok-s">&quot;Coco&quot;</span>, <span class="tok-s">&quot;Family&quot;</span>, <span class="tok-n">2017</span>, <span class="tok-s">&quot;A boy enters the land of the dead to find his family.&quot;</span>))
+
+    task := meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">AddDocumentsOf</span>(c, <span class="tok-s">&quot;movies&quot;</span>, movies, <span class="tok-s">&quot;id&quot;</span>, err), err)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> meilisearch.<span class="tok-f">ErrorString</span>(err)
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    <span class="tok-b">println</span> <span class="tok-s">&quot;indexing: &quot;</span> + task.status
+    stats := meilisearch.<span class="tok-f">GetIndexStats</span>(c, <span class="tok-s">&quot;movies&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;documents in movies: &quot;</span> + stats.number_of_documents
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>indexing: succeeded
+documents in movies: 8</div></div>
+<p>Meilisearch does not apply a change at once. A write returns a <code>TaskInfo</code>, a receipt with a task number, and the server applies the tasks in order in the background. <code>Wait</code> blocks until that task has finished, which is what you want when the next line depends on the change. A batch import does not need to wait after every call; wait once at the end, or not at all.</p>
+
+<h2 id="search">3. Search</h2>
+<p><code>Query</code> searches for some words with every option at its default. The hits come back as JSON text, and <code>HitsAs</code> reads them into your own struct. A struct with fewer fields than the document is fine: the extra fields are ignored.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-search.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-search" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-search">import db.meilisearch
+
+<span class="tok-k">struct</span> Movie:
+    <span class="tok-k">pub</span> id: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+    <span class="tok-k">pub</span> title: <span class="tok-t">str</span> = <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">pub</span> year: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    res := meilisearch.<span class="tok-f">Query</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;spcae&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;hits for \&quot;&quot;</span> + res.query + <span class="tok-s">&quot;\&quot;: &quot;</span> + res.estimated_total_hits
+    <span class="tok-k">mut</span> movies := Vector {} <span class="tok-k">as</span> Vector&lt;Movie&gt;
+    <span class="tok-k">if</span> meilisearch.<span class="tok-f">HitsAs</span>(res, movies, err):
+        <span class="tok-k">each</span> m <span class="tok-k">in</span> movies:
+            <span class="tok-b">println</span> <span class="tok-s">&quot;  &quot;</span> + m.title + <span class="tok-s">&quot; (&quot;</span> + m.year + <span class="tok-s">&quot;)&quot;</span>
+        <span class="tok-k">end</span>
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>hits for &quot;spcae&quot;: 1
+  Alien (1979)</div></div>
+<p>The query was misspelled on purpose: <code>spcae</code> still finds the movie whose overview says <em>space</em>, because Meilisearch tolerates typos out of the box.</p>
+
+<h2 id="filter">4. Filter, sort and count facets</h2>
+<p>Filtering and sorting need to be switched on for the fields involved; that is a setting of the index, and <code>UpdateSettings</code> changes several settings in one task. A <code>SearchRequest</code> holds every search option and sends only the ones you set.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-filter.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-filter" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-filter">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    settings := <span class="tok-s">`{&quot;filterableAttributes&quot;: [&quot;genre&quot;, &quot;year&quot;], &quot;sortableAttributes&quot;: [&quot;year&quot;]}`</span>
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateSettings</span>(c, <span class="tok-s">&quot;movies&quot;</span>, settings, err), err)
+
+    <span class="tok-k">mut</span> req := meilisearch.SearchRequest { filter = <span class="tok-s">&quot;genre = Family AND year &gt; 2010&quot;</span> }
+    req.sort.<span class="tok-f">push</span>(<span class="tok-s">&quot;year:desc&quot;</span>)
+    req.facets.<span class="tok-f">push</span>(<span class="tok-s">&quot;genre&quot;</span>)
+    req.attributes_to_retrieve.<span class="tok-f">push</span>(<span class="tok-s">&quot;title&quot;</span>)
+    req.attributes_to_retrieve.<span class="tok-f">push</span>(<span class="tok-s">&quot;year&quot;</span>)
+    res := meilisearch.<span class="tok-f">Search</span>(c, <span class="tok-s">&quot;movies&quot;</span>, req, err)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> meilisearch.<span class="tok-f">ErrorString</span>(err)
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    <span class="tok-k">each</span> hit <span class="tok-k">in</span> res.hits:
+        <span class="tok-b">println</span> hit
+    <span class="tok-k">end</span>
+
+    all := meilisearch.<span class="tok-f">Search</span>(c, <span class="tok-s">&quot;movies&quot;</span>, meilisearch.SearchRequest { facets = req.facets, limit = <span class="tok-n">0</span> }, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;genres: &quot;</span> + all.facet_distribution
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>{&quot;title&quot;:&quot;Coco&quot;,&quot;year&quot;:2017}
+{&quot;title&quot;:&quot;Moana&quot;,&quot;year&quot;:2016}
+genres: {&quot;genre&quot;:{&quot;Adventure&quot;:1,&quot;Crime&quot;:1,&quot;Drama&quot;:2,&quot;Family&quot;:3,&quot;Horror&quot;:1}}</div></div>
+<p><code>facets</code> asks how many hits have each value of a field, which is how a search page shows filter options with counts. <code>attributes_to_retrieve</code> keeps the hits small by returning only the fields you need.</p>
+
+<h2 id="highlight">5. Highlight, crop and page through results</h2>
+<p>For a results page you usually want the matched words marked and long text cut down around them. Meilisearch adds a <code>_formatted</code> copy of each hit with both done. <code>page</code> and <code>hits_per_page</code> give numbered pages with an exact total; <code>offset</code> and <code>limit</code> are the cheaper choice for endless scrolling.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-highlight.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-highlight" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-highlight">import db.meilisearch
+import encoding.json
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    <span class="tok-k">mut</span> req := meilisearch.SearchRequest { query = <span class="tok-s">&quot;crew&quot;</span>, hits_per_page = <span class="tok-n">1</span>, page = <span class="tok-n">1</span> }
+    req.attributes_to_highlight.<span class="tok-f">push</span>(<span class="tok-s">&quot;overview&quot;</span>)
+    req.highlight_pre_tag = <span class="tok-s">&quot;[&quot;</span>
+    req.highlight_post_tag = <span class="tok-s">&quot;]&quot;</span>
+    req.attributes_to_crop.<span class="tok-f">push</span>(<span class="tok-s">&quot;overview&quot;</span>)
+    req.crop_length = <span class="tok-n">6</span>
+    res := meilisearch.<span class="tok-f">Search</span>(c, <span class="tok-s">&quot;movies&quot;</span>, req, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;page &quot;</span> + res.page + <span class="tok-s">&quot; of &quot;</span> + res.total_pages + <span class="tok-s">&quot;, &quot;</span> + res.total_hits + <span class="tok-s">&quot; hits&quot;</span>
+    <span class="tok-k">each</span> hit <span class="tok-k">in</span> res.hits:
+        formatted := json.<span class="tok-f">Get</span>(hit, <span class="tok-s">&quot;_formatted&quot;</span>)
+        <span class="tok-b">println</span> json.<span class="tok-f">Get</span>(hit, <span class="tok-s">&quot;title&quot;</span>) + <span class="tok-s">&quot;: &quot;</span> + json.<span class="tok-f">Get</span>(formatted, <span class="tok-s">&quot;overview&quot;</span>)
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>page 1 of 2, 2 hits
+Alien: The [crew] of a space freighter…</div></div>
+
+<h2 id="settings">6. Tune relevancy</h2>
+<p>Every index setting has its own <code>Get</code>, <code>Update</code> and <code>Reset</code> function. Synonyms make different words find each other, stop words are ignored in queries, and the searchable attributes choose which fields are searched and how much each one counts.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-settings.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-settings" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-settings">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateSynonyms</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">`{&quot;cartoon&quot;: [&quot;family&quot;], &quot;space&quot;: [&quot;planet&quot;, &quot;wormhole&quot;]}`</span>, err), err)
+    <span class="tok-k">mut</span> stop := Vector {} <span class="tok-k">as</span> Vector&lt;<span class="tok-t">str</span>&gt;
+    stop.<span class="tok-f">push</span>(<span class="tok-s">&quot;the&quot;</span>)
+    stop.<span class="tok-f">push</span>(<span class="tok-s">&quot;a&quot;</span>)
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateStopWords</span>(c, <span class="tok-s">&quot;movies&quot;</span>, stop, err), err)
+    <span class="tok-k">mut</span> searchable := Vector {} <span class="tok-k">as</span> Vector&lt;<span class="tok-t">str</span>&gt;
+    searchable.<span class="tok-f">push</span>(<span class="tok-s">&quot;title&quot;</span>)
+    searchable.<span class="tok-f">push</span>(<span class="tok-s">&quot;overview&quot;</span>)
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateSearchableAttributes</span>(c, <span class="tok-s">&quot;movies&quot;</span>, searchable, err), err)
+
+    res := meilisearch.<span class="tok-f">Query</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;cartoon&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;hits for \&quot;cartoon\&quot;, a synonym of family: &quot;</span> + res.estimated_total_hits
+    space := meilisearch.<span class="tok-f">Query</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;space&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;hits for \&quot;space\&quot;: &quot;</span> + space.estimated_total_hits
+    <span class="tok-b">println</span> <span class="tok-s">&quot;searchable: &quot;</span> + meilisearch.<span class="tok-f">GetSetting</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;searchable-attributes&quot;</span>, err)
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>hits for &quot;cartoon&quot;, a synonym of family: 1
+hits for &quot;space&quot;: 3
+searchable: [&quot;title&quot;,&quot;overview&quot;]</div></div>
+<p>Other settings follow the same pattern: <code>UpdateRankingRules</code>, <code>UpdateTypoTolerance</code>, <code>UpdateDistinctAttribute</code>, <code>UpdatePagination</code>, <code>UpdateFaceting</code>, <code>UpdateDictionary</code> and the rest in the reference below. <code>GetSetting</code> and <code>UpdateSetting</code> reach any setting by its route name, including ones newer than this package.</p>
+
+<h2 id="multi">7. Search several indexes at once</h2>
+<p><code>MultiSearch</code> sends several searches in one request and returns one result each. <code>FederatedSearch</code> merges them into a single ranked list, which suits one search box over different kinds of content. <code>FacetSearch</code> searches the values of one facet, for a filter box that completes as you type.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-multi.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-multi" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-multi">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">AddDocuments</span>(c, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">`[{&quot;id&quot;: 1, &quot;title&quot;: &quot;Dune&quot;, &quot;author&quot;: &quot;Frank Herbert&quot;}, {&quot;id&quot;: 2, &quot;title&quot;: &quot;Coco and the Moon&quot;, &quot;author&quot;: &quot;A. Writer&quot;}]`</span>, <span class="tok-s">&quot;id&quot;</span>, err), err)
+
+    <span class="tok-k">mut</span> queries := Vector {} <span class="tok-k">as</span> Vector&lt;meilisearch.MultiQuery&gt;
+    queries.<span class="tok-f">push</span>(meilisearch.MultiQuery { index_uid = <span class="tok-s">&quot;movies&quot;</span>, request = meilisearch.SearchRequest { query = <span class="tok-s">&quot;dune&quot;</span> } })
+    queries.<span class="tok-f">push</span>(meilisearch.MultiQuery { index_uid = <span class="tok-s">&quot;books&quot;</span>, request = meilisearch.SearchRequest { query = <span class="tok-s">&quot;dune&quot;</span> } })
+    <span class="tok-k">each</span> r <span class="tok-k">in</span> meilisearch.<span class="tok-f">MultiSearch</span>(c, queries, err):
+        <span class="tok-b">println</span> r.index_uid + <span class="tok-s">&quot;: &quot;</span> + r.hits.<span class="tok-f">len</span>() + <span class="tok-s">&quot; hit&quot;</span>
+    <span class="tok-k">end</span>
+
+    merged := meilisearch.<span class="tok-f">FederatedSearch</span>(c, queries, meilisearch.Federation { limit = <span class="tok-n">5</span> }, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;federated: &quot;</span> + merged.hits.<span class="tok-f">len</span>() + <span class="tok-s">&quot; hits in one list&quot;</span>
+
+    genres := meilisearch.<span class="tok-f">FacetSearch</span>(c, <span class="tok-s">&quot;movies&quot;</span>, meilisearch.FacetSearchRequest { facet_name = <span class="tok-s">&quot;genre&quot;</span>, facet_query = <span class="tok-s">&quot;fam&quot;</span> }, err)
+    <span class="tok-k">each</span> g <span class="tok-k">in</span> genres.hits:
+        <span class="tok-b">println</span> <span class="tok-s">&quot;genre &quot;</span> + g.value + <span class="tok-s">&quot;: &quot;</span> + g.count
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>movies: 1 hit
+books: 1 hit
+federated: 2 hits in one list
+genre Family: 3</div></div>
+
+<h2 id="vectors">8. Vector and hybrid search</h2>
+<p>Meilisearch can also search by meaning. An embedder turns documents into vectors; it can call a model such as OpenAI or Hugging Face, or take vectors you computed yourself, which is what the <code>userProvided</code> source in this step does. A search with <code>hybrid_embedder</code> mixes keyword and vector results; a <code>hybrid_semantic_ratio</code> of 1 uses vectors only. <code>SimilarDocuments</code> finds the documents nearest to one you already have.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-vectors.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-vectors" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-vectors">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">CreateIndex</span>(c, <span class="tok-s">&quot;movies_ai&quot;</span>, <span class="tok-s">&quot;id&quot;</span>, err), err)
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateEmbedders</span>(c, <span class="tok-s">&quot;movies_ai&quot;</span>, <span class="tok-s">`{&quot;manual&quot;: {&quot;source&quot;: &quot;userProvided&quot;, &quot;dimensions&quot;: 3}}`</span>, err), err)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> meilisearch.<span class="tok-f">ErrorString</span>(err)
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    docs := <span class="tok-s">`[
+        {&quot;id&quot;: 2, &quot;title&quot;: &quot;Moana&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.9, 0.1, 0.0]}},
+        {&quot;id&quot;: 4, &quot;title&quot;: &quot;Up&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.8, 0.2, 0.1]}},
+        {&quot;id&quot;: 5, &quot;title&quot;: &quot;Arrival&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.1, 0.9, 0.3]}},
+        {&quot;id&quot;: 6, &quot;title&quot;: &quot;Dune&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.2, 0.8, 0.4]}},
+        {&quot;id&quot;: 7, &quot;title&quot;: &quot;Interstellar&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.1, 0.8, 0.5]}},
+        {&quot;id&quot;: 8, &quot;title&quot;: &quot;Coco&quot;, &quot;_vectors&quot;: {&quot;manual&quot;: [0.9, 0.0, 0.1]}}
+    ]`</span>
+    task := meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">AddDocuments</span>(c, <span class="tok-s">&quot;movies_ai&quot;</span>, docs, <span class="tok-s">&quot;&quot;</span>, err), err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;vectors stored: &quot;</span> + task.status
+
+    <span class="tok-k">mut</span> req := meilisearch.SearchRequest { hybrid_embedder = <span class="tok-s">&quot;manual&quot;</span>, hybrid_semantic_ratio = <span class="tok-n">1.0</span>, limit = <span class="tok-n">2</span> }
+    req.vector.<span class="tok-f">push</span>(<span class="tok-n">0.15</span>)
+    req.vector.<span class="tok-f">push</span>(<span class="tok-n">0.85</span>)
+    req.vector.<span class="tok-f">push</span>(<span class="tok-n">0.4</span>)
+    req.attributes_to_retrieve.<span class="tok-f">push</span>(<span class="tok-s">&quot;title&quot;</span>)
+    res := meilisearch.<span class="tok-f">Search</span>(c, <span class="tok-s">&quot;movies_ai&quot;</span>, req, err)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> meilisearch.<span class="tok-f">ErrorString</span>(err)
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    <span class="tok-k">each</span> hit <span class="tok-k">in</span> res.hits:
+        <span class="tok-b">println</span> <span class="tok-s">&quot;close to the query: &quot;</span> + hit
+    <span class="tok-k">end</span>
+
+    <span class="tok-k">mut</span> like := meilisearch.SimilarRequest { id = <span class="tok-s">&quot;2&quot;</span>, embedder = <span class="tok-s">&quot;manual&quot;</span>, limit = <span class="tok-n">2</span> }
+    like.attributes_to_retrieve.<span class="tok-f">push</span>(<span class="tok-s">&quot;title&quot;</span>)
+    <span class="tok-k">each</span> hit <span class="tok-k">in</span> meilisearch.<span class="tok-f">SimilarDocuments</span>(c, <span class="tok-s">&quot;movies_ai&quot;</span>, like, err).hits:
+        <span class="tok-b">println</span> <span class="tok-s">&quot;like Moana: &quot;</span> + hit
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>vectors stored: succeeded
+close to the query: {&quot;title&quot;:&quot;Dune&quot;}
+close to the query: {&quot;title&quot;:&quot;Arrival&quot;}
+like Moana: {&quot;title&quot;:&quot;Coco&quot;}
+like Moana: {&quot;title&quot;:&quot;Up&quot;}</div></div>
+<p>A <code>userProvided</code> embedder needs a vector in every document, so this step uses its own index. Add the embedder while the index is still empty and send the vectors in each document under <code>_vectors</code>.</p>
+
+<h2 id="keys">9. API keys and tenant tokens</h2>
+<p>The master key can do everything, so applications should get smaller keys. <code>CreateKey</code> makes a key limited to some actions and indexes. A tenant token goes one step further: <code>TenantToken</code> signs, in your own program and without asking the server, a key that adds a filter to every search. Give each user their own token and they can search directly from the browser while seeing only their rows.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-keys.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-keys" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-keys">import db.meilisearch
+import time
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    admin := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    <span class="tok-k">mut</span> r := meilisearch.KeyRequest { name = <span class="tok-s">&quot;Shop front end&quot;</span>, description = <span class="tok-s">&quot;Search the movies index only&quot;</span> }
+    r.actions.<span class="tok-f">push</span>(<span class="tok-s">&quot;search&quot;</span>)
+    r.indexes.<span class="tok-f">push</span>(<span class="tok-s">&quot;movies&quot;</span>)
+    key := meilisearch.<span class="tok-f">CreateKey</span>(admin, r, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;new key &quot;</span> + key.name + <span class="tok-s">&quot; can: &quot;</span> + key.actions.<span class="tok-f">get</span>(<span class="tok-n">0</span>)
+
+    rules := <span class="tok-s">`{&quot;movies&quot;: {&quot;filter&quot;: &quot;genre = Family&quot;}}`</span>
+    token := meilisearch.<span class="tok-f">TenantToken</span>(key.uid, key.key, rules, time.<span class="tok-f">Now</span>() + <span class="tok-n">3600</span>, err)
+    kids := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, token)
+    res := meilisearch.<span class="tok-f">Query</span>(kids, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;the token sees &quot;</span> + res.estimated_total_hits + <span class="tok-s">&quot; family movies&quot;</span>
+
+    meilisearch.<span class="tok-f">Query</span>(kids, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;books with the token: &quot;</span> + err.code
+
+    <span class="tok-b">println</span> <span class="tok-s">&quot;key deleted: &quot;</span> + meilisearch.<span class="tok-f">DeleteKey</span>(admin, key.uid, err)
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>new key Shop front end can: search
+the token sees 3 family movies
+books with the token: invalid_api_key
+key deleted: true</div></div>
+
+<h2 id="update">10. Update and delete documents</h2>
+<p><code>AddDocuments</code> replaces a whole document with the same id; <code>UpdateDocuments</code> changes only the fields you send. Documents can be deleted one by one, by a list of ids, by a filter, or all at once.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-update.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-update" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-update">import db.meilisearch
+
+<span class="tok-k">struct</span> Movie:
+    <span class="tok-k">pub</span> id: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+    <span class="tok-k">pub</span> title: <span class="tok-t">str</span> = <span class="tok-s">&quot;&quot;</span>
+    <span class="tok-k">pub</span> year: <span class="tok-t">int</span> = <span class="tok-n">0</span>
+<span class="tok-k">end</span>
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">UpdateDocuments</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">`[{&quot;id&quot;: 6, &quot;title&quot;: &quot;Dune: Part One&quot;}]`</span>, <span class="tok-s">&quot;&quot;</span>, err), err)
+    <span class="tok-k">mut</span> dune := Movie {}
+    <span class="tok-k">if</span> meilisearch.<span class="tok-f">GetDocumentAs</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;6&quot;</span>, dune, err):
+        <span class="tok-b">println</span> <span class="tok-s">&quot;renamed: &quot;</span> + dune.title + <span class="tok-s">&quot; (&quot;</span> + dune.year + <span class="tok-s">&quot;)&quot;</span>
+    <span class="tok-k">end</span>
+
+    meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">DeleteDocument</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;3&quot;</span>, err), err)
+    meilisearch.<span class="tok-f">GetDocument</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;3&quot;</span>, Vector {} <span class="tok-k">as</span> Vector&lt;<span class="tok-t">str</span>&gt;, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;after delete: &quot;</span> + err.code
+
+    removed := meilisearch.<span class="tok-f">Wait</span>(c, meilisearch.<span class="tok-f">DeleteDocumentsByFilter</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">&quot;year &lt; 2000&quot;</span>, err), err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;delete by filter: &quot;</span> + removed.status + <span class="tok-s">&quot; &quot;</span> + removed.details
+    <span class="tok-b">println</span> <span class="tok-s">&quot;left: &quot;</span> + meilisearch.<span class="tok-f">GetIndexStats</span>(c, <span class="tok-s">&quot;movies&quot;</span>, err).number_of_documents
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>renamed: Dune: Part One (2021)
+after delete: document_not_found
+delete by filter: succeeded {&quot;providedIds&quot;:0,&quot;deletedDocuments&quot;:1,&quot;originalFilter&quot;:&quot;\&quot;year &lt; 2000\&quot;&quot;}
+left: 6</div></div>
+
+<h2 id="tasks">11. Tasks and failures</h2>
+<p>A write that is accepted can still fail later, while the server applies it. The error then lives on the task, not on the call that queued it. <code>WaitForTask</code> copies it into your <code>Error</code>, so the usual check works. <code>GetTasks</code> lists past tasks with filters on index, type, status and dates.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">meili-tasks.salam</span><button type="button" class="copy-button" data-copy-target="ex-meili-tasks" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-meili-tasks">import db.meilisearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := meilisearch.<span class="tok-f">New</span>(<span class="tok-s">&quot;http://127.0.0.1:7700&quot;</span>, <span class="tok-s">&quot;masterKey&quot;</span>)
+    <span class="tok-k">mut</span> err := meilisearch.Error {}
+
+    info := meilisearch.<span class="tok-f">AddDocuments</span>(c, <span class="tok-s">&quot;movies&quot;</span>, <span class="tok-s">`[{&quot;title&quot;: &quot;No id here&quot;}]`</span>, <span class="tok-s">&quot;&quot;</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;queued task &quot;</span> + info.task_uid + <span class="tok-s">&quot;: &quot;</span> + info.status
+    task := meilisearch.<span class="tok-f">WaitForTask</span>(c, info.task_uid, <span class="tok-n">10000</span>, <span class="tok-n">50</span>, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;finished as &quot;</span> + task.status
+    <span class="tok-k">if</span> <span class="tok-k">not</span> meilisearch.<span class="tok-f">Ok</span>(err):
+        <span class="tok-b">println</span> <span class="tok-s">&quot;why: &quot;</span> + err.code
+    <span class="tok-k">end</span>
+
+    <span class="tok-k">mut</span> q := meilisearch.TaskQuery { limit = <span class="tok-n">3</span> }
+    q.index_uids.<span class="tok-f">push</span>(<span class="tok-s">&quot;movies&quot;</span>)
+    q.statuses.<span class="tok-f">push</span>(meilisearch.STATUS_SUCCEEDED)
+    page := meilisearch.<span class="tok-f">GetTasks</span>(c, q, err)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;recent successful tasks on movies:&quot;</span>
+    <span class="tok-k">each</span> t <span class="tok-k">in</span> page.results:
+        <span class="tok-b">println</span> <span class="tok-s">&quot;  &quot;</span> + t.kind
+    <span class="tok-k">end</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>queued task 13: enqueued
+finished as failed
+why: missing_document_id
+recent successful tasks on movies:
+  documentDeletion
+  documentDeletion
+  documentAdditionOrUpdate</div></div>
+
+<h2 id="more">More</h2>
+<p>The rest of the API works the same way; the reference below covers each function. A few pointers:</p>
+<ul>
+<li><code>CreateWebhook</code> registers a URL that Meilisearch calls when tasks finish, so you do not need to poll.</li>
+<li><code>UpdateSearchRule</code> pins or boosts chosen documents for chosen queries, such as a sale banner for <em>sale</em>; it needs the <code>dynamicSearchRules</code> experimental feature.</li>
+<li><code>UpdateChatSettings</code> and <code>ChatCompletion</code> answer questions in plain language from your indexes through an LLM; they need the <code>chatCompletions</code> feature.</li>
+<li><code>WithMetadata</code> tags every document write with a label that comes back on the task, to follow one import through the task list.</li>
+<li><code>CreateDump</code>, <code>CreateSnapshot</code>, <code>GetStats</code>, <code>GetMetrics</code> and <code>SetStderrLogs</code> are for running the server.</li>
+<li>For a route with no function of its own, <code>Request</code> sends any method, path and JSON body.</li>
+</ul>
+<p>The Salam repository has one runnable example for each part of the API, in English under <code>tests/en/stdlib/meilisearch/examples</code> and in Persian under <code>tests/fa/stdlib/meilisearch/examples</code>.</p>
 <h2 id="types">Types</h2>
 <article class="api-item"><h3 class="api-name" id="ChatWorkspacePage"><code dir="ltr">ChatWorkspacePage</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> ChatWorkspacePage</code></pre><div class="api-doc">One page of chat workspace names.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">results</code></td><td><code dir="ltr">Vector<str></code></td><td>The workspace names.</td></tr><tr><td><code dir="ltr">offset</code></td><td><code dir="ltr">i64 = 0</code></td><td>How many were skipped.</td></tr><tr><td><code dir="ltr">limit</code></td><td><code dir="ltr">i64 = 0</code></td><td>The page size.</td></tr><tr><td><code dir="ltr">total</code></td><td><code dir="ltr">i64 = 0</code></td><td>How many workspaces there are.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">db-meilisearch-ChatCompletion.salam</span><button type="button" class="copy-button" data-copy-target="ex-db-meilisearch-ChatCompletion" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-db-meilisearch-ChatCompletion">import db.meilisearch
 

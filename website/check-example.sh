@@ -10,6 +10,15 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp" || exit 1
 
+if [ -f "$root/${src%.salam}.server" ]; then
+    if "$SALAM" check "$root/$src" --no-color --log-level=error >/dev/null 2>&1; then
+        echo "ok   $src (needs a server, checked, not run)"
+        exit 0
+    fi
+    echo "FAIL $src (does not compile)"
+    exit 1
+fi
+
 if [ ! -f "$want" ]; then
     if grep -q "^صفحه:\|^چیدمان:\|^layout:" "$root/$src"; then
         cp "$root/$src" .
@@ -22,15 +31,6 @@ if [ ! -f "$want" ]; then
     fi
     if "$SALAM" inspect --emit-ast "$root/$src" --no-color --log-level=error >/dev/null 2>&1; then
         echo "ok   $src (checked, not run)"
-        exit 0
-    fi
-    echo "FAIL $src (does not compile)"
-    exit 1
-fi
-
-if [ -f "$root/${src%.salam}.server" ]; then
-    if "$SALAM" check "$root/$src" --no-color --log-level=error >/dev/null 2>&1; then
-        echo "ok   $src (needs a server, checked, not run)"
         exit 0
     fi
     echo "FAIL $src (does not compile)"

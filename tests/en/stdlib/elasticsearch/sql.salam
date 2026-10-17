@@ -1,0 +1,71 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19868
+
+func report(conn: dyn db.Connection):
+    println "conn:", conn.Kind(), conn.Ok(), conn.Ping()
+    rows := conn.Query("SELECT author, COUNT(*) AS n FROM books GROUP BY author")
+    until rows.Next():
+        println "  group", rows.Text(0), rows.Int(1)
+    end
+    rows.Close()
+    println "exec:", conn.Exec("DELETE FROM books"), conn.Error()
+    tx := conn.Begin()
+    println "tx:", tx.Ok(), tx.Commit(), tx.Rollback(), conn.LastInsertId(), conn.Changes()
+    println "quote:", conn.Quote("it's")
+end
+
+func main:
+    fake.On("GET", "/", 200, `{"version":{"number":"8.15.3"}}`)
+    fake.On("POST", "/_sql", 200, `{"columns":[{"name":"title","type":"text"},{"name":"year","type":"integer"},{"name":"price","type":"double"},{"name":"in_stock","type":"boolean"}],"rows":[["Shahnameh",1010,12.5,true],["Golestan",1258,null,false]],"cursor":"C1"}`)
+    fake.On("POST", "/_sql", 200, `{"rows":[["Bustan",1257,9.0,true]]}`)
+    fake.On("POST", "/_sql", 200, `{"columns":[{"name":"author","type":"keyword"},{"name":"n","type":"long"}],"rows":[["ferdowsi",70],["saadi",50]]}`)
+    fake.On("POST", "/_sql", 200, "title\n---------\nShahnameh\n")
+    fake.On("POST", "/_sql/translate", 200, `{"size":1000,"query":{"term":{"author":{"value":"saadi"}}}}`)
+    fake.On("POST", "/_sql", 400, `{"error":{"type":"verification_exception","reason":"Unknown column [nope]"},"status":400}`)
+    fake.On("HEAD", "/", 200, "")
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    mut params := Vector {} as Vector<str>
+    params.push("900")
+    params.push(`"poetry"`)
+    mut rows := elasticsearch.SqlWith(c, "SELECT title, year, price, in_stock FROM books WHERE year > ? AND genre = ? ORDER BY year", params, 2)
+    println "sent:", fake.Last()
+    println "columns:", rows.Ok(), rows.ColumnCount(), rows.ColumnName(0), rows.ColumnTypeName(1), rows.ColumnType(1) == db.TYPE_INT, rows.ColumnType(2) == db.TYPE_FLOAT
+    until rows.Next():
+        println "  row", rows.Text(0), rows.Int(1), rows.Int64(1), rows.Float(2), rows.IsNull(2), rows.Int(3)
+    end
+    println "next page:", fake.Last()
+    rows.Close()
+
+    report(elasticsearch.Conn(c))
+
+    print "text: ", elasticsearch.SqlText(c, "SELECT title FROM books LIMIT 1")
+    println "translate:", elasticsearch.SqlTranslate(c, "SELECT * FROM books WHERE author = 'saadi'")
+    mut bad := elasticsearch.Sql(c, "SELECT nope FROM books")
+    println "bad:", bad.Ok(), bad.Error()
+    bad.Close()
+    elasticsearch.Close(c)
+end

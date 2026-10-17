@@ -1,0 +1,114 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19872
+
+func written(label: str, w: opensearch.WriteResult):
+    println label + ":", w.ok, w.status, w.index, w.id, w.result, w.version, w.seq_no, w.primary_term, w.shards_total, w.shards_successful
+    if not w.ok: println "  error:", w.error end
+    println "  sent:", fake.Last()
+end
+
+func main:
+    created := `{"_index":"books","_id":"1","_version":1,"result":"created","_shards":{"total":2,"successful":1,"failed":0},"_seq_no":0,"_primary_term":1}`
+    fake.On("PUT", "/books/_doc/1", 201, created)
+    fake.On("POST", "/books/_doc", 201, `{"_index":"books","_id":"Zx81kpQB","_version":1,"result":"created","_shards":{"total":2,"successful":1,"failed":0},"_seq_no":1,"_primary_term":1}`)
+    fake.On("PUT", "/books/_create/1", 409, `{"error":{"root_cause":[{"type":"version_conflict_engine_exception","reason":"[1]: version conflict, document already exists (current version [1])"}],"type":"version_conflict_engine_exception","reason":"[1]: version conflict, document already exists (current version [1])"},"status":409}`)
+    fake.On("PUT", "/books/_create/2", 201, `{"_index":"books","_id":"2","_version":1,"result":"created","_seq_no":2,"_primary_term":1}`)
+    fake.On("GET", "/books/_doc/1", 200, `{"_index":"books","_id":"1","_version":1,"_seq_no":0,"_primary_term":1,"_routing":"poetry","found":true,"_source":{"title":"Shahnameh","author":"Ferdowsi","year":1010,"stock":3}}`)
+    fake.On("GET", "/books/_doc/404", 404, `{"_index":"books","_id":"404","found":false}`)
+    fake.On("GET", "/books/_source/1", 200, `{"title":"Shahnameh","author":"Ferdowsi","year":1010,"stock":3}`)
+    fake.On("HEAD", "/books/_doc/1", 200, "")
+    fake.On("HEAD", "/books/_doc/404", 404, "")
+    fake.On("POST", "/books/_update/1", 200, `{"_index":"books","_id":"1","_version":2,"result":"updated","_shards":{"total":2,"successful":1,"failed":0},"_seq_no":3,"_primary_term":1}`)
+    fake.On("POST", "/books/_update/1", 409, `{"error":{"type":"version_conflict_engine_exception","reason":"[1]: version conflict, required seqNo [0], primary term [1]. current document has seqNo [3] and primary term [1]"},"status":409}`)
+    fake.On("POST", "/books/_update/1", 200, `{"_index":"books","_id":"1","_version":3,"result":"updated","_seq_no":4,"_primary_term":1}`)
+    fake.On("POST", "/books/_update/9", 201, `{"_index":"books","_id":"9","_version":1,"result":"created","_seq_no":5,"_primary_term":1}`)
+    fake.On("DELETE", "/books/_doc/9", 200, `{"_index":"books","_id":"9","_version":2,"result":"deleted","_seq_no":6,"_primary_term":1}`)
+    fake.On("DELETE", "/books/_doc/9", 404, `{"_index":"books","_id":"9","_version":3,"result":"not_found","_seq_no":7,"_primary_term":1}`)
+    fake.On("POST", "/books/_mget", 200, `{"docs":[{"_index":"books","_id":"1","_version":3,"_seq_no":4,"_primary_term":1,"found":true,"_source":{"title":"Shahnameh"}},{"_index":"books","_id":"404","found":false}]}`)
+    fake.On("GET", "/books/_count", 200, `{"count":42,"_shards":{"total":1,"successful":1,"skipped":0,"failed":0}}`)
+    fake.On("POST", "/books/_count", 200, `{"count":7,"_shards":{"total":1,"successful":1,"skipped":0,"failed":0}}`)
+    fake.On("POST", "/books/_delete_by_query", 200, `{"took":14,"timed_out":false,"total":5,"deleted":5,"batches":1,"version_conflicts":0,"noops":0,"retries":{"bulk":0,"search":0},"failures":[]}`)
+    fake.On("POST", "/books/_update_by_query", 200, `{"took":20,"timed_out":false,"total":12,"updated":12,"deleted":0,"batches":1,"version_conflicts":0,"noops":0,"retries":{"bulk":0,"search":0},"failures":[]}`)
+    fake.On("POST", "/_reindex", 200, `{"took":31,"timed_out":false,"total":42,"created":42,"updated":0,"deleted":0,"batches":1,"version_conflicts":0,"noops":0,"failures":[]}`)
+    fake.On("POST", "/_reindex", 200, `{"task":"oTUltX4IQMOUUVeiohTt8A:12345"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19872")
+
+    written("index", opensearch.Index(c, "books", "1", `{"title":"Shahnameh","author":"Ferdowsi","year":1010,"stock":3}`))
+    written("index with options", opensearch.IndexWith(c, "books", "1", `{"title":"Shahnameh"}`, opensearch.Options {
+        refresh = opensearch.REFRESH_WAIT_FOR, routing = "poetry", pipeline = "clean", timeout = "5s",
+        wait_for_active_shards = "1", if_seq_no = 0, if_primary_term = 1
+    }))
+    written("index without id", opensearch.Index(c, "books", "", `{"title":"Masnavi"}`))
+    written("create existing", opensearch.Create(c, "books", "1", `{"title":"again"}`))
+    written("create with options", opensearch.CreateWith(c, "books", "2", `{"title":"Golestan"}`, opensearch.Options { refresh = opensearch.REFRESH_TRUE, version = 5, version_type = "external" }))
+
+    d := opensearch.Get(c, "books", "1")
+    println "get:", d.found, d.index, d.id, d.version, d.seq_no, d.primary_term, d.routing
+    println "  source:", d.source
+    mut only := Vector {} as Vector<str>
+    only.push("title")
+    only.push("year")
+    f := opensearch.GetFields(c, "books", "1", only, "poetry")
+    println "get fields sent:", fake.Last()
+    println "  found:", f.found
+    miss := opensearch.Get(c, "books", "404")
+    println "missing:", miss.found, miss.error.len(), opensearch.Status(c)
+    println "source only:", opensearch.GetSource(c, "books", "1")
+    println "exists:", opensearch.Exists(c, "books", "1"), opensearch.Exists(c, "books", "404")
+
+    written("update", opensearch.Update(c, "books", "1", `{"stock":2}`))
+    written("conditional update", opensearch.UpdateWith(c, "books", "1", `{"doc":{"stock":1}}`, opensearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term, retry_on_conflict = -1 }))
+    written("script update", opensearch.UpdateScript(c, "books", "1", opensearch.Script("ctx._source.stock += params.n", `{"n":5}`), `{"stock":5}`))
+    written("upsert", opensearch.Upsert(c, "books", "9", `{"title":"Kalila and Dimna","stock":1}`))
+    written("delete", opensearch.DeleteWith(c, "books", "9", opensearch.Options { refresh = opensearch.REFRESH_TRUE }))
+    written("delete again", opensearch.Delete(c, "books", "9"))
+
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    ids.push("404")
+    docs := opensearch.MGet(c, "books", ids)
+    println "mget sent:", fake.Last()
+    each doc in docs:
+        println "  doc:", doc.id, doc.found, doc.version, doc.source
+    end
+
+    println "count all:", opensearch.Count(c, "books", "")
+    println "count query:", opensearch.Count(c, "books", opensearch.Range("year", "1000", "1300"))
+    println "  sent:", fake.Last()
+
+    dq := opensearch.DeleteByQueryWith(c, "books", opensearch.Term("stock", "0"), opensearch.Options { refresh = "true", conflicts = "proceed" })
+    println "delete by query:", dq.ok, dq.took, dq.total, dq.deleted, dq.batches, dq.version_conflicts
+    println "  sent:", fake.Last()
+    ub := opensearch.UpdateByQuery(c, "books", opensearch.MatchAll(), opensearch.Script("ctx._source.seen = true", ""))
+    println "update by query:", ub.ok, ub.total, ub.updated, ub.noops, ub.failures.len()
+    println "  sent:", fake.Last()
+    rx := opensearch.Reindex(c, "books", "books_v2")
+    println "reindex:", rx.ok, rx.created, rx.timed_out
+    println "  sent:", fake.Last()
+    bg := opensearch.ReindexBody(c, `{"source":{"index":"books","query":{"term":{"author":"Ferdowsi"}}},"dest":{"index":"ferdowsi"}}`, false)
+    println "background reindex:", bg.ok, bg.task
+    println "  sent:", fake.Last()
+    ret 0
+end

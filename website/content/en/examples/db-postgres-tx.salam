@@ -1,0 +1,39 @@
+import db.postgres
+import str
+
+func placeOrder(d: postgres.Database, customer: str, book: int, qty: int): bool:
+    tx := d.Begin()
+    if not tx.Ok():
+        ret false
+    end
+    r := tx.Query("UPDATE books SET stock = stock - " + str.FromInt(qty) + " WHERE id = " + str.FromInt(book) + " AND stock >= " + str.FromInt(qty) + " RETURNING price * " + str.FromInt(qty))
+    defer r.Close()
+    if not r.Next():
+        tx.Rollback()
+        println customer, "wants", qty, "of book " + str.FromInt(book) + ": not enough stock, rolled back"
+        ret false
+    end
+    total := r.Text(0)
+    if tx.Exec("INSERT INTO orders (customer, book_id, qty, total) VALUES (" + postgres.Quote(d, customer) + ", " + str.FromInt(book) + ", " + str.FromInt(qty) + ", " + total + ")") != 0:
+        tx.Rollback()
+        ret false
+    end
+    if tx.Commit() != 0:
+        ret false
+    end
+    println customer, "bought", qty, "of book", book, "for", total
+    ret true
+end
+
+func main:
+    d := postgres.Open("host=127.0.0.1 user=postgres password=secret dbname=bookshop")
+    defer postgres.Close(d)
+
+    _ := placeOrder(d, "Sara", 1, 2)
+    _ := placeOrder(d, "Omid", 5, 1)
+    _ := placeOrder(d, "Lena", 5, 1)
+    _ := placeOrder(d, "Sara", 4, 3)
+
+    println "orders:", postgres.QueryInt(d, "SELECT count(*) FROM orders"), "takings:", postgres.QueryText(d, "SELECT sum(total) FROM orders")
+    println "Dune left:", postgres.QueryInt(d, "SELECT stock FROM books WHERE id = 1"), "Neuromancer left:", postgres.QueryInt(d, "SELECT stock FROM books WHERE id = 5")
+end

@@ -8,6 +8,37 @@ pkg.intro <<
 <p>A function that may fail can return an <code>error.Error</code>: either "nil", meaning everything went well, or an error with a <strong>kind</strong>, such as "not found", and a <strong>message</strong>. The kind is for the code to decide on; the message is for a person to read.</p>
 <p>When an error comes up from a lower layer, <code>Wrap</code> it so the current layer's explanation is added. The final message shows the whole chain, as in "could not save the report: the disk is full", and <code>RootMessage</code> gives the original cause.</p>
 <p>For transient errors, such as a dropped network connection, <code>RetryPolicy</code> says when and how often to try again and how long to wait between attempts; the delay doubles each time.</p>
+
+<h2 id="guide-layers">Errors through the layers of a program</h2>
+<p>A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail takes an <code>err &amp;: error.Error</code> out parameter, sets it to <code>error.Nil()</code> on success, and on failure either makes a new error or wraps the one it got from below. Only the top layer decides what to do, and it decides by <strong>kind</strong>, not by reading the message.</p>
+{{example.error-guide-layers}}
+<p>Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. <code>WithMeta</code> attaches a detail, here the missing id, that the code can read back with <code>Meta</code> without parsing text.</p>
+
+<h2 id="guide-retry">A retry loop</h2>
+<p><code>ShouldRetry</code> answers the whole question in one call: is there an error at all, is it the kind that may go away by itself (<code>unavailable</code>, <code>timeout</code> or <code>io</code>), and are there attempts left? <code>DelayForAttempt</code> gives the wait before the next try, doubling each time up to the maximum.</p>
+{{example.error-guide-retry}}
+<p>An invalid argument is never retried: sending the same bad request again gives the same answer. In a server, keep the total wait well below the time the caller is willing to wait for you.</p>
+
+<h2 id="guide-validate">Collect every problem at once</h2>
+<p>For a form or a config file, stopping at the first mistake makes the user fix them one by one. Collect the errors in a vector instead and show them all. <code>Newf</code> fills the <code>{}</code> placeholders of a message from a vector of strings, and a <code>field</code> meta entry says which input each error is about.</p>
+{{example.error-guide-validate}}
+
+<h2 id="guide-kinds">Choosing a kind</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Kind</th><th>Use it when</th><th>Retry?</th></tr></thead>
+<tbody>
+<tr><td><code>KindInvalidArgument</code></td><td>The caller passed bad input</td><td>No</td></tr>
+<tr><td><code>KindNotFound</code></td><td>The thing asked for does not exist</td><td>No</td></tr>
+<tr><td><code>KindAlreadyExists</code></td><td>Creating something that is already there</td><td>No</td></tr>
+<tr><td><code>KindPermissionDenied</code></td><td>The caller may not do this</td><td>No</td></tr>
+<tr><td><code>KindUnavailable</code></td><td>A service is down or busy</td><td>Yes</td></tr>
+<tr><td><code>KindTimeout</code></td><td>Something took too long</td><td>Yes</td></tr>
+<tr><td><code>KindIO</code></td><td>A file or device operation failed</td><td>Yes</td></tr>
+<tr><td><code>KindCanceled</code></td><td>The work was stopped on purpose</td><td>No</td></tr>
+<tr><td><code>KindInternal</code></td><td>A bug or a broken invariant</td><td>No</td></tr>
+</tbody>
+</table></div>
+<p>Keep messages short and in lower case without a final full stop, because <code>Message</code> joins them with ": " into one sentence. Put values the code needs, such as ids and file names, in <code>WithMeta</code>, and show <code>Format</code> in logs, where the trace and meta entries help most.</p>
 >>
 
 doc.KindUnknown = An unspecified kind.

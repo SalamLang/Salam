@@ -8,6 +8,46 @@ pkg.import = sync
 pkg.intro <<
 <p>When several threads change the same variable they have to take turns, or the result depends on the order the threads happen to run in. A <strong>mutex</strong> is the simplest answer: each thread takes the lock before touching the data and releases it afterwards.</p>
 <p>A <strong>wait group</strong> is for waiting until several pieces of work are done: call <code>Add</code> before starting them, <code>Done</code> at the end of each, and <code>Wait</code> on the main thread. Every tool in this package is created with a <code>New...</code> function and released with a <code>Destroy...</code> one.</p>
+
+<h2 id="guide-mutex">Keep data consistent with a mutex</h2>
+<p>A lock is not only for counters. Anything that has to stay true across several variables, such as "the money in all accounts adds up to the same total", needs every change to happen while the lock is held. Take the lock at the top of the function and put <code>Unlock</code> in a <code>defer</code>, so it is released on every return path, including the early <code>ret</code>.</p>
+{{example.sync-guide-transfer}}
+<p>Four threads move money around 4000 times and the total is still 1000. Without the lock two threads could read the same balance at once and one of the changes would be lost.</p>
+
+<h2 id="guide-rwmutex">Many readers, few writers</h2>
+<p>When data is read far more often than it is changed, such as settings or a cache, a plain mutex makes readers wait for each other for no reason. An <code>RWMutex</code> lets any number of readers in together with <code>RLock</code>, and gives a writer the data to itself with <code>WLock</code>.</p>
+{{example.sync-guide-settings}}
+<p>A reader must never write while holding only the read lock. If a reader may need to change the data, take the write lock instead.</p>
+
+<h2 id="guide-semaphore">Limit how many run at once</h2>
+<p>A <code>Semaphore</code> holds a number of permits. <code>Acquire</code> takes one and waits when none are left, <code>Release</code> gives it back. With two permits, at most two threads are inside the guarded part at any moment, which is how you cap parallel downloads or database connections.</p>
+{{example.sync-guide-limit}}
+<p><code>TryAcquire</code> takes a permit only if one is free and returns <code>false</code> at once otherwise, for work that should be skipped rather than queued.</p>
+
+<h2 id="guide-once">Set something up exactly once</h2>
+<p>Some setup is expensive and should happen only when it is first needed, but several threads may need it at the same moment. <code>Do</code> runs its function the first time it is called on a <code>Once</code>; every other caller waits until that run has finished and then goes on without running it again.</p>
+{{example.sync-guide-once}}
+
+<h2 id="guide-choose">Pitfalls, and which tool to use</h2>
+<ul>
+<li>A thread that already holds a <code>Mutex</code> and calls <code>Lock</code> on it again waits forever. Split the code so the inner part does not lock.</li>
+<li>When two locks are needed, every thread must take them in the same order. Taking A then B in one thread and B then A in another can stop both.</li>
+<li>Keep the locked part short. Do slow work, such as file or network calls, before taking the lock or after releasing it.</li>
+<li>Every <code>New...</code> has a matching <code>Destroy...</code>. Call it after the last thread using the value has been joined.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Situation</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Several threads change the same data</td><td><code>Mutex</code></td></tr>
+<tr><td>Data is read much more often than written</td><td><code>RWMutex</code></td></tr>
+<tr><td>Wait until N tasks are done</td><td><code>WaitGroup</code></td></tr>
+<tr><td>At most N tasks at a time</td><td><code>Semaphore</code></td></tr>
+<tr><td>Setup that must run once</td><td><code>Once</code></td></tr>
+<tr><td>Wait until some condition becomes true</td><td><code>CondVar</code> with a <code>Mutex</code></td></tr>
+<tr><td>A single shared number</td><td><a href="/std/atomic/">atomic</a>.<code>I64</code></td></tr>
+<tr><td>Hand values from one thread to another</td><td><a href="/std/chan/">chan</a>.<code>Chan</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Mutex = A mutex; only one thread holds it at a time.

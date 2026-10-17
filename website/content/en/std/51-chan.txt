@@ -7,6 +7,37 @@ pkg.description = The chan package in Salam: buffered and unbuffered channels, s
 pkg.intro <<
 <p>A channel is a queue that several threads send values into at one end and receive from at the other; it handles the locks and the waiting for you. You give the value type when you create it, as in <code>chan.Chan&lt;i64&gt;</code>, and call <code>init</code> with a capacity before using it.</p>
 <p>When the buffer is full, <code>send</code> waits; when it is empty, <code>recv</code> does. A channel of capacity zero is "unbuffered": the sender waits until a receiver takes the value. After <code>close</code>, sending returns false but receivers still get the values that are left; once the channel is empty, <code>ok</code> turns false and a receiving loop can end.</p>
+
+<h2 id="guide-receive-loop">The receive loop</h2>
+<p>Almost every consumer looks the same: receive in an endless <code>until true:</code> loop and <code>break</code> when <code>ok</code> turns false. That happens only after the channel is closed <em>and</em> empty, so no value is lost. The rule that goes with it: the side that sends is the side that closes, once it has nothing more to send.</p>
+
+<h2 id="guide-pipeline">A pipeline of stages</h2>
+<p>Channels connect stages that each do one thing. Here one thread generates numbers, a second squares them, and the main thread adds them up. Each stage closes its output channel when its input runs dry, so the end of the data flows down the pipeline by itself and every loop stops on its own.</p>
+{{example.chan-guide-pipeline}}
+<p>The channels hold only two values each. When the last stage is slow, the earlier ones wait in <code>send</code> instead of piling up memory, which is called back pressure.</p>
+
+<h2 id="guide-reply">Ask and wait for an answer</h2>
+<p>Two channels make a request and reply pair: one carries questions to a worker, the other brings the answers back. With capacity zero, each <code>send</code> waits until the other side has taken the value, so the two threads move in step and the answers come back in the order the questions went out.</p>
+{{example.chan-guide-reply}}
+
+<h2 id="guide-fanin">Many senders, one receiver</h2>
+<p>When several threads send into one channel, none of them can close it, because each one only knows that <em>it</em> is done. Count the senders with a <a href="/std/sync/">sync</a>.<code>WaitGroup</code> and let one more small thread wait for the group and then close the channel.</p>
+{{example.chan-guide-fanin}}
+<p>Values from different senders arrive interleaved in no fixed order, so the program counts them per sender instead of printing them as they come.</p>
+
+<h2 id="guide-full">When the channel is full</h2>
+<p><code>send</code> waits for room, which is not always what you want. A server under load is often better off refusing extra work at once than making every caller wait. <code>try_send</code> returns <code>false</code> immediately when there is no room, and <code>try_recv</code> does the same for an empty channel.</p>
+{{example.chan-guide-shed}}
+<p>Between the two extremes are <code>send_timeout</code> and <code>recv_timeout</code>, which wait at most the given number of milliseconds.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>If the channel is full or empty</th><th>Send</th><th>Receive</th></tr></thead>
+<tbody>
+<tr><td>Wait as long as it takes</td><td><code>send</code></td><td><code>recv</code></td></tr>
+<tr><td>Wait up to some milliseconds</td><td><code>send_timeout</code></td><td><code>recv_timeout</code></td></tr>
+<tr><td>Do not wait at all</td><td><code>try_send</code></td><td><code>try_recv</code></td></tr>
+</tbody>
+</table></div>
+<p>Two mistakes to avoid: receiving from a channel nobody will ever close or send to waits forever, and calling <code>free</code> while another thread is still using the channel. Join the threads first, then free.</p>
 >>
 
 doc.Chan = A channel of values of type <code>T</code>.

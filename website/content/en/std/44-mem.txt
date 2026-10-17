@@ -7,6 +7,43 @@ pkg.description = The mem package in Salam: allocating and freeing memory, copyi
 pkg.intro <<
 <p>Most programs never need this package: vectors, maps and strings look after their own memory. The <code>mem</code> package is for low-level work, such as talking to a C library or building a data structure of your own. Everything you take with <code>Allocate</code> has to be given back with <code>Free</code>.</p>
 <p>An <strong>arena</strong> is one large block you take pieces off the front of and then release all at once; it is very fast for work with many small objects that share a lifetime. A <strong>pool</strong> hands out and takes back blocks of one fixed size.</p>
+
+<h2 id="guide-buffer">A buffer that grows</h2>
+<p>The classic use of <code>Reallocate</code> is a buffer that does not know its final size. Keep the length and the capacity next to the pointer, and when the buffer is full ask for twice as much. <code>Reallocate</code> keeps the old contents, may move them to a new address, and works on a <code>null</code> pointer as well, so the first growth needs no special case.</p>
+{{example.mem-guide-buffer}}
+<p>Doubling means 22 bytes cost only four reallocations, and a million bytes about twenty. Always store the pointer that <code>Reallocate</code> returns: the old one may no longer be valid. For most programs a <code>Vector&lt;u8&gt;</code> does exactly this for you.</p>
+
+<h2 id="guide-arena">An arena per request</h2>
+<p>An arena shines when many small objects live and die together, such as everything made while handling one request or parsing one line. Allocate from the arena while you work, then call <code>ArenaReset</code> once at the end instead of freeing each object. The memory is reused for the next round, so the program never asks the system for more.</p>
+{{example.mem-guide-arena}}
+<p>Each allocation is rounded up to a multiple of 8 bytes, which is why one <code>Token</code> of two <code>int</code>s takes 8. <code>ArenaAlloc</code> returns <code>null</code> when the arena is full, so check the result or make the arena big enough for the largest round. After <code>ArenaReset</code> every pointer from the arena is stale; do not keep them across rounds.</p>
+
+<h2 id="guide-pool">A pool of fixed size blocks</h2>
+<p>A pool suits objects of one size that come and go in any order, such as the nodes of a list or a tree. <code>PoolFree</code> puts a block back on the pool's free list and the next <code>PoolAlloc</code> hands it out again, with no call to the system allocator either way. A pool has a fixed number of blocks; <code>PoolAlloc</code> returns <code>null</code> when they are all in use.</p>
+{{example.mem-guide-pool}}
+
+<h2 id="guide-leaks">Finding leaks</h2>
+<p>Build with <code>-DSALAM_MEM_DEBUG</code> and <code>Allocate</code> and <code>Free</code> start counting. <code>CheckLeaks</code> then prints the totals to standard error and warns if any bytes are still allocated. A normal build skips the counting and costs nothing.</p>
+{{example.mem-guide-leaks}}
+<p>With the flag, the same program reports the one buffer that was still allocated when <code>CheckLeaks</code> ran:</p>
+<pre class="code" dir="ltr"><code>$ salam run -DSALAM_MEM_DEBUG mem-guide-leaks.salam
+allocations: 2 frees: 1
+bytes still allocated: 7
+[salam memcheck] allocs=2 frees=1 live=7 peak=13
+[WARNING] leak bytes=7</code></pre>
+<p>The counters see only memory taken through this package. For everything else, including C libraries, <code>salam memcheck file.salam</code> builds with AddressSanitizer and reports each leak with the place it was allocated.</p>
+
+<h2 id="guide-which">Which allocator for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Situation</th><th>Use</th><th>Free with</th></tr></thead>
+<tbody>
+<tr><td>One block of any size</td><td><code>Allocate</code>, <code>AllocateZeroed</code></td><td><code>Free</code></td></tr>
+<tr><td>An array of N items</td><td><code>AllocateArray(n, sizeof(T))</code></td><td><code>Free</code></td></tr>
+<tr><td>A block that has to grow</td><td><code>Reallocate</code></td><td><code>Free</code></td></tr>
+<tr><td>Many small objects with one lifetime</td><td><code>NewArena</code> and <code>ArenaAlloc</code></td><td><code>ArenaReset</code>, then <code>ArenaFree</code></td></tr>
+<tr><td>Many objects of one size, freed in any order</td><td><code>NewPool</code> and <code>PoolAlloc</code></td><td><code>PoolFree</code>, then <code>PoolDestroy</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Arena = A memory arena.

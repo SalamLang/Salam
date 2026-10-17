@@ -1,0 +1,63 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteAnalyticsRule(c, "ex_ana_clicks", err)
+    _ := typesense.DeleteCollection(c, "ex_ana_products", err)
+    mut s := typesense.Schema { name = "ex_ana_products" }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    s.fields.push(typesense.Field { name = "popularity", kind = typesense.TYPE_INT32, optional = true })
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "name": "green tea", "popularity": 0}`)
+    docs.push(`{"id": "2", "name": "black tea", "popularity": 0}`)
+    _ := typesense.ImportDocuments(c, "ex_ana_products", docs, typesense.WriteOptions {}, err)
+
+    rule := typesense.AnalyticsRule {
+        name = "ex_ana_clicks", kind = typesense.RULE_COUNTER, collection = "ex_ana_products", event_type = typesense.EVENT_CLICK,
+        rule_tag = "ex_ana", params = `{"destination_collection": "ex_ana_products", "counter_field": "popularity", "weight": 1}`
+    }
+    println "rule json:", typesense.AnalyticsRuleJSON(rule)
+    made := typesense.CreateAnalyticsRule(c, rule, err)
+    println "created:", made.name, made.kind, made.event_type, typesense.ErrorString(err)
+    println "read back:", typesense.GetAnalyticsRule(c, "ex_ana_clicks", err).collection
+    println "tagged rules:", typesense.ListAnalyticsRules(c, "ex_ana", err).len()
+
+    repeat 2:
+        _ := typesense.SendEvent(c, "ex_ana_clicks", typesense.EVENT_CLICK, `{"doc_id": "2", "user_id": "u1"}`, err)
+    end
+    println "click sent:", typesense.SendEventJSON(c, `{"name": "ex_ana_clicks", "event_type": "click", "data": {"doc_id": "1", "user_id": "u2"}}`, err)
+    println "flushed:", typesense.FlushAnalytics(c, err)
+    println "status is json:", typesense.AnalyticsStatus(c, err).find("{") == 0
+
+    mut p := typesense.NewSearch("tea", "name")
+    p.sort_by = "popularity:desc"
+    each h in typesense.Search(c, "ex_ana_products", p, err).hits:
+        println "  ", h.document
+    end
+    changed := typesense.UpsertAnalyticsRule(c, typesense.AnalyticsRule {
+        name = "ex_ana_clicks", kind = typesense.RULE_COUNTER, collection = "ex_ana_products", event_type = typesense.EVENT_CLICK,
+        params = `{"destination_collection": "ex_ana_products", "counter_field": "popularity", "weight": 5}`
+    }, err)
+    println "weight changed:", changed.params.find("\"weight\":5") >= 0
+    println "deleted:", typesense.DeleteAnalyticsRule(c, "ex_ana_clicks", err)
+    _ := typesense.DeleteCollection(c, "ex_ana_products", err)
+end

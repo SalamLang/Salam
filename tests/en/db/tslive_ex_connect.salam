@@ -1,0 +1,69 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    url := parts.get(0)
+    key := parts.get(1)
+    mut c := typesense.New(url, key)
+    defer typesense.Free(c)
+    c.timeout_ms = 5000
+    c.retries = 2
+    c.retry_interval_ms = 50
+    typesense.AddHeader(c, "X-Request-Source", "salam-example")
+    mut err := typesense.Error {}
+
+    println "healthy:", typesense.Health(c, err), typesense.IsHealthy(c)
+    println "version known:", str.Len(typesense.ServerVersion(c, err)) > 0
+    println "debug has version:", str.Contains(typesense.Debug(c, err), "version")
+    st := typesense.Status(c, err)
+    println "raft state:", st.state, st.queued_writes >= 0
+    println "stats has latency:", str.Contains(typesense.Stats(c, err), "latency_ms")
+    println "metrics has memory:", str.Contains(typesense.Metrics(c, err), "typesense_memory")
+
+    _ := typesense.GetCollection(c, "ex_connect_missing", err)
+    println "missing collection:", typesense.IsNotFound(err), err.status, err.kind
+    println typesense.ErrorString(err)
+
+    mut bad := typesense.New(url, "wrong-key")
+    defer typesense.Free(bad)
+    _ := typesense.ListCollections(bad, err)
+    println "wrong key:", err.status, err.kind == typesense.KIND_HTTP
+
+    println "raw request:", typesense.Request(c, "GET", "/health", "", err)
+
+    mut nodes := Vector {} as Vector<str>
+    nodes.push("http://127.0.0.1:1")
+    nodes.push(url)
+    mut cluster := typesense.NewCluster(nodes, key)
+    defer typesense.Free(cluster)
+    cluster.retry_interval_ms = 0
+    println "cluster healthy:", typesense.Health(cluster, err)
+    println "dead node skipped:", not typesense.NodeHealthy(cluster, 0), typesense.NodeHealthy(cluster, 1)
+
+    mut near := typesense.New(url, key)
+    defer typesense.Free(near)
+    typesense.SetNearestNode(near, "http://127.0.0.1:1")
+    near.retry_interval_ms = 0
+    println "nearest down, still healthy:", typesense.Health(near, err), not typesense.NodeHealthy(near, -1)
+
+    mut gone := typesense.New("http://127.0.0.1:1", key)
+    defer typesense.Free(gone)
+    gone.retries = 0
+    println "unreachable:", typesense.Health(gone, err), err.kind == typesense.KIND_NETWORK
+end

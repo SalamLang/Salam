@@ -7,6 +7,51 @@ pkg.description = The archive package in Salam: making, listing and extracting z
 pkg.intro <<
 <p>An archive gathers several files into one. <strong>Zip</strong> compresses each file on its own; <strong>tar</strong> only puts the files one after another and is usually gzipped afterwards (<code>.tar.gz</code>).</p>
 <p>The functions work both in memory and on files. They take the archive data as an address and a length, such as <code>b.data</code> and <code>b.len</code> of a byte buffer.</p>
+
+<p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
+
+<h2 id="guide-zip">Zip a set of files</h2>
+<p>Each file you put into a zip is a <code>ZipFileInput</code>: its path inside the archive, the address and length of its bytes, and the method, 8 for DEFLATE or 0 to store it as it is. A name that ends with <code>/</code> is a folder. <code>ZipCreateFile</code> writes the archive to disk and returns false when it cannot; <code>ZipCreate</code> keeps it in memory, for example to send it as an HTTP response.</p>
+{{example.archive-guide-bundle}}
+<p>Text shrinks well. The logo is already compressed, so it uses method 0: running DEFLATE on it again would only cost time and could even make it bigger. The same rule holds for JPEG, PNG, MP4 and other zips.</p>
+
+<h2 id="guide-targz">Make and read a .tar.gz</h2>
+<p>Tar does not compress. It puts each file after a 512 byte header and pads its contents to a multiple of 512 bytes, so three small files already take 3.5 KB. The usual answer is to gzip the whole tar, and all that padding then nearly disappears. In memory that is <code>TarCreate</code> followed by <code>compress.GzipCompressBuf</code>; for a tar that is already on disk, <code>GzipCompressFile</code> and <code>GzipDecompressFile</code> do it file to file.</p>
+{{example.archive-guide-targz}}
+<p>Reading goes the other way: gunzip with <code>compress.GzipDecompressBuf</code>, check <code>ok</code>, then <code>TarList</code> and <code>TarExtractByName</code> on the plain tar. Directory entries in a tar have size 0 and <code>is_dir</code> set.</p>
+
+<h2 id="guide-detect">Tell the format from the first bytes</h2>
+<p>A file name can lie, the bytes cannot. Every format starts with a fixed signature, so a program that accepts uploads should look at the bytes before it picks a reader:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Format</th><th>Signature</th><th>Check</th></tr></thead>
+<tbody>
+<tr><td>zip</td><td><code>50 4b 03 04</code> (<code>PK</code>) at the start</td><td>compare the first four bytes</td></tr>
+<tr><td>gzip</td><td><code>1f 8b</code> at the start</td><td>compare the first two bytes</td></tr>
+<tr><td>RAR</td><td><code>Rar!</code> at the start</td><td><code>IsRar</code></td></tr>
+<tr><td>tar</td><td><code>ustar</code> at byte 257</td><td>compare five bytes from offset 257</td></tr>
+</tbody>
+</table></div>
+{{example.archive-guide-detect}}
+<p>The gzip sample is the tar from the line above it, gzipped, so the program opens it and counts the entries of the tar inside. A plain text file matches nothing.</p>
+
+<h2 id="guide-extract">Extract safely</h2>
+<p><code>ZipExtractAll</code> and <code>TarExtractAll</code> create the folders they need under the target directory. An archive from someone else can hold names like <code>../escape.txt</code> or <code>/etc/passwd</code> that would land outside it; both functions skip such entries, write the rest, and return false so you know something was left out. <code>ZipExtractByName</code> and <code>TarExtractByName</code> set <code>ok</code> to false when the name is not in the archive.</p>
+{{example.archive-guide-extract}}
+<p>A false result from an extract call is therefore not always a disk error: check the entry names with <code>ZipList</code> or <code>TarList</code> when you need to tell the two apart.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Files for Windows users or a browser download</td><td><code>ZipCreate</code>, <code>ZipCreateFile</code></td></tr>
+<tr><td>A backup or a release bundle on Unix</td><td><code>TarCreate</code>, then <code>compress.GzipCompressBuf</code></td></tr>
+<tr><td>See what is inside</td><td><code>ZipList</code>, <code>TarList</code>, <code>RarList</code>, then <code>FreeEntries</code></td></tr>
+<tr><td>One file out of an archive</td><td><code>ZipExtractByName</code>, <code>TarExtractByName</code></td></tr>
+<tr><td>Everything into a folder</td><td><code>ZipExtractAll</code>, <code>TarExtractAll</code></td></tr>
+<tr><td>A RAR file</td><td><code>RarList</code>; <code>RarExtractByName</code> only for entries stored without compression</td></tr>
+<tr><td>Bytes from and to disk</td><td><code>ReadBinaryFile</code>, <code>WriteBinaryFileBuf</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Entry = One archive entry.

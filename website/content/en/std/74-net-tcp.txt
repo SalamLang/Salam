@@ -8,6 +8,45 @@ pkg.import = net.tcp
 pkg.intro <<
 <p>TCP is the base of most internet protocols: a reliable, ordered stream of bytes between two programs. A server listens on a port with <code>Bind</code> and takes each new client with <code>Accept</code>; a client connects with <code>Dial</code>.</p>
 <p><code>Accept</code> and <code>Read</code> wait until data arrives; to serve several clients, handle each in its own thread (<code>spawn</code>) or set a deadline. The examples run on <code>127.0.0.1</code>.</p>
+<h2 id="guide-request-reply">A request and reply protocol</h2>
+<p>Most small protocols take turns: the client sends one request, the server sends one reply, and so on until the client hangs up. The server below reads in a loop and stops when <code>Read</code> returns an empty string, which is how TCP tells you the other side closed the connection. The client waits for each reply before it sends the next request, so every <code>Read</code> sees exactly one message.</p>
+{{example.net-tcp-guide-commands}}
+<p>The server runs in its own thread with <code>spawn</code> and the main program waits for it with <code>join</code>. A real server would call <code>Accept</code> in a loop and hand each connection to a worker; while one client is served, the others wait in the queue of the listening socket.</p>
+
+<h2 id="guide-framing">Messages in a byte stream</h2>
+<p>TCP moves bytes, not messages. Two writes can arrive as one read, and one write can arrive split over several reads. The lock step in the previous section hides that, but as soon as the other side sends several messages in a row you need a frame: a delimiter such as a newline, or a length in front of each message. The program below sends four lines in three uneven writes and puts them back together by keeping the unfinished part of the last read in <code>pending</code>.</p>
+{{example.net-tcp-guide-framing}}
+<p>For binary data, send a fixed size header with the length and read until you have that many bytes. <code>ReadBytes</code> and <code>WriteBytes</code> work on raw memory for that, and they do not stop at a zero byte the way a <code>str</code> does.</p>
+
+<h2 id="guide-timeouts">Timeouts and failed connections</h2>
+<p>Without a deadline, <code>Read</code> waits forever for a peer that never answers. <code>SetReadDeadline</code> limits how long one read may wait, <code>SetWriteDeadline</code> does the same for writes, and <code>SetDeadline</code> sets both. When the time runs out the read returns an empty string, the same as a closed connection, so treat both as the end of the conversation. <code>Dial</code> does not stop the program when nothing listens on the port: it returns a connection for which <code>ConnOk</code> is false.</p>
+{{example.net-tcp-guide-timeouts}}
+
+<h2 id="guide-http">A tiny HTTP server</h2>
+<p>HTTP/1.1 is text over TCP, so a few lines are enough for a status page or a health check. The request starts with a line such as <code>GET /hello HTTP/1.1</code>; <code>WriteHTTP</code> writes the status line, <code>Content-Type</code>, <code>Content-Length</code> and <code>Connection: close</code> for you. The client side shows the other half: it reads until the server closes the connection and splits the head from the body at the first empty line.</p>
+{{example.net-tcp-guide-http}}
+<p>This is fine for a debug endpoint. For a real web service use <a href="/std/net-http/">net/http</a>, which handles keep alive, chunked bodies, headers and routing.</p>
+
+<h2 id="guide-tls">Encrypted connections</h2>
+<p><code>DialTLS</code> connects and runs the TLS handshake in one call and returns a <code>tls.Conn</code>. From then on you read and write with the functions of the <a href="/std/tls/">tls</a> package, not with <code>tcp.Read</code>, because the bytes on the socket are encrypted. This example needs the internet; it prints the TLS version and the first line of the answer, which is <code>HTTP/1.1 200 OK</code> for example.com.</p>
+{{example.net-tcp-guide-https}}
+<p>Protocols such as SMTP and IMAP start in plain text and switch to TLS later with a STARTTLS command. For those, <code>Dial</code> first, talk until the server agrees, then call <code>UpgradeTLS</code> on the same connection.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Listen for clients</td><td><code>Bind</code>, then <code>Accept</code> in a loop; <code>Port</code> when you bound port 0</td></tr>
+<tr><td>Connect to a server</td><td><code>Dial</code>, then check <code>ConnOk</code></td></tr>
+<tr><td>Send and receive text</td><td><code>Write</code> and <code>Read</code></td></tr>
+<tr><td>Send and receive binary data</td><td><code>WriteBytes</code> and <code>ReadBytes</code></td></tr>
+<tr><td>Never hang on a silent peer</td><td><code>SetReadDeadline</code>, <code>SetWriteDeadline</code> or <code>SetDeadline</code></td></tr>
+<tr><td>Interactive traffic with small packets</td><td><code>SetNoDelay</code></td></tr>
+<tr><td>Notice dead idle connections</td><td><code>SetKeepAlive</code></td></tr>
+<tr><td>HTTPS and other TLS protocols</td><td><code>DialTLS</code>, or <code>UpgradeTLS</code> for STARTTLS</td></tr>
+<tr><td>Reuse connections to the same host</td><td><code>NewPool</code>, <code>Get</code> and <code>Put</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Server = A TCP server listening on one port.

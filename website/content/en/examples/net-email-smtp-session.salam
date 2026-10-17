@@ -1,0 +1,61 @@
+import net.email
+import net.tcp
+
+mut server := tcp.Server {}
+mut seen := Vector {} as Vector<str>
+
+func next_line(conn: tcp.Conn, buf &: str): str:
+    until buf.find("\r\n") < 0:
+        buf += tcp.Read(conn, 4096)
+    end
+    at := buf.find("\r\n")
+    line := buf.substr(0, at)
+    buf = buf.substr(at + 2, buf.len() - at - 2)
+    ret line
+end
+
+func mail_server():
+    conn := tcp.Accept(server)
+    mut buf := ""
+    _ := tcp.Write(conn, "220 mail.test ready\r\n")
+    mut open := true
+    until open:
+        line := next_line(conn, buf)
+        seen.push(line)
+        if line == "DATA":
+            _ := tcp.Write(conn, "354 end with a dot\r\n")
+            mut body := next_line(conn, buf)
+            until body != ".":
+                body = next_line(conn, buf)
+            end
+            _ := tcp.Write(conn, "250 queued as 1001\r\n")
+        else line == "QUIT":
+            _ := tcp.Write(conn, "221 bye\r\n")
+            open = false
+        else:
+            _ := tcp.Write(conn, "250 ok\r\n")
+        end
+    end
+    tcp.Close(conn)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(mail_server)
+    mut c := email.DialSMTP("127.0.0.1", tcp.Port(server))
+    println "connected:", c.ok
+    _ := email.Hello(c, "shop.test")
+    _ := email.MailFrom(c, "orders@shop.test")
+    each rcpt in ["sara@example.com", "reza@example.com"]:
+        _ := email.RcptTo(c, rcpt)
+    end
+    message := email.BuildMessage("orders@shop.test", "sara@example.com, reza@example.com", "Order 1001", "Your order has shipped.", "")
+    println "accepted:", email.Data(c, message), c.last_reply.trim()
+    email.Quit(c)
+    join(t)
+    tcp.CloseServer(server)
+    println "the server saw:"
+    each line in seen:
+        println " ", line
+    end
+end

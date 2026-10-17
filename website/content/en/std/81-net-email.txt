@@ -8,6 +8,33 @@ pkg.import = net.email
 pkg.intro <<
 <p>To send one email, <code>Send</code> is the simplest way. For more control, several recipients for instance, drive the SMTP client step by step. To read a mailbox, IMAP leaves the messages on the server and POP3 takes them away.</p>
 <p>Most servers accept nothing but an encrypted connection; use the <code>Dial...TLS</code> functions or <code>StartTLS</code>. The client example only compiles, because it needs a real server.</p>
+<p>The guide below starts with the message itself, then walks through an SMTP session, reading a mailbox with POP3 and IMAP, and sending through Gmail. The protocol examples talk to a tiny fake server in a thread of the same program, so you can run them offline and see every command that goes over the wire.</p>
+
+<h2 id="guide-message">What BuildMessage writes</h2>
+<p><code>BuildMessage(from, to, subject, text, html)</code> returns the full message text that SMTP sends. With only a text body it is a plain <code>text/plain</code> message, with only HTML it is <code>text/html</code>, and with both it becomes <code>multipart/alternative</code> so that each mail program shows the version it prefers. Bodies are UTF-8, so any language works in the body.</p>
+{{example.net-email-plain-message}}
+<p>The subject is written as it is. Plain ASCII subjects are always safe; for a subject in another script, encode it the way mail headers expect, <code>=?UTF-8?B?</code> plus the Base64 of the text plus <code>?=</code>, as the last lines do, and pass that string as the subject.</p>
+
+<h2 id="guide-smtp">An SMTP session step by step</h2>
+<p><code>Send</code> does everything in one call, but driving the client yourself lets you add several recipients, use another login method, or see where a server says no. The steps are always the same: <code>DialSMTP</code> (or <code>DialSMTPTLS</code>), <code>Hello</code>, an <code>Auth...</code> call on a real server, <code>MailFrom</code>, one <code>RcptTo</code> per recipient, <code>Data</code> with the message, and <code>Quit</code>. Each step returns true or false and leaves the server's answer in <code>last_reply</code>.</p>
+{{example.net-email-smtp-session}}
+<p>The <code>To</code> header in the message and the <code>RcptTo</code> calls are separate: the header is what people see, the <code>RcptTo</code> list is where the mail is delivered. A Bcc recipient is simply one who gets a <code>RcptTo</code> but is not in the header.</p>
+<p><code>Send</code> with <code>use_tls</code> false still switches to TLS with STARTTLS before it logs in, so it cannot talk to a local test server without TLS such as MailHog. For those, use the steps above without <code>StartTLS</code>.</p>
+
+<h2 id="guide-pop3">Reading a mailbox with POP3</h2>
+<p>POP3 is the simple way to fetch mail: log in with <code>User</code> and <code>Pass</code>, ask for the count and size with <code>Stat</code>, list the messages with <code>POP3List</code>, fetch one with <code>Retr</code>, and mark it for deletion with <code>Dele</code>. Deletions happen when <code>POP3Quit</code> ends the session.</p>
+{{example.net-email-pop3-inbox}}
+<p>In POP3 a line of the message that starts with a dot is sent with an extra dot. <code>Retr</code> removes it again, which is why the stored <code>..end of invoice</code> comes back as <code>.end of invoice</code>.</p>
+
+<h2 id="guide-imap">Finding unread mail with IMAP</h2>
+<p>IMAP keeps the mail on the server and lets you search it. After <code>Login</code>, <code>Command</code> sends any IMAP command and returns its lines and final status, and <code>Fetch</code> asks for parts of chosen messages. The usual pattern for new mail is <code>SELECT</code> a mailbox, <code>SEARCH UNSEEN</code> for the numbers of unread messages, then <code>Fetch</code> what you need of them.</p>
+{{example.net-email-imap-unread}}
+<p><code>Fetch</code> puts the parentheses around the item list itself, so pass <code>FLAGS</code> or <code>BODY[HEADER]</code>, not <code>(FLAGS)</code>.</p>
+
+<h2 id="guide-gmail">Sending through Gmail</h2>
+<p>Gmail, like most providers, accepts only encrypted connections and does not take your normal password. Turn on two step verification and create an app password, or use an OAuth token with <code>AuthXOAuth2</code>. Port 465 with <code>use_tls</code> true connects with TLS from the start. The program reads the address and secrets from environment variables so they stay out of the source:</p>
+<pre class="code" dir="ltr"><code>MAIL_USER=you@gmail.com MAIL_APP_PASSWORD='abcd efgh ijkl mnop' salam run net-email-gmail.salam</code></pre>
+{{example.net-email-gmail}}
 >>
 
 doc.BuildMessage = Builds a complete email message with From, To and Subject headers. When you give both plain text and HTML, the message becomes <code>multipart/alternative</code> so every mail program can show the version that suits it.

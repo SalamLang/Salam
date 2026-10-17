@@ -8,6 +8,40 @@ pkg.import = net.websocket
 pkg.intro <<
 <p>A WebSocket is a connection that stays open after one HTTP request, and either side sends a message whenever it likes; for live chat, notifications and games. The server takes connections with <code>Listen</code> and <code>Accept</code>, and a client connects with <code>Dial</code>.</p>
 <p>To serve several clients, read each connection in its own thread and use a <code>Hub</code> to send a message to every member of a room.</p>
+<p>Each example below runs a server and its clients in the same program, the server in a thread started with <code>spawn</code>, on a free port chosen by <code>Listen(0)</code>. That keeps them runnable offline; in a real program the clients are browsers using the JavaScript <code>WebSocket</code> API, which speaks the same protocol.</p>
+
+<h2 id="guide-json">Typed JSON messages</h2>
+<p>A WebSocket carries text or bytes; the structure is up to you. The common choice is one JSON object per message with a <code>type</code> field, and a server loop that reads a message, looks at the type and answers. <code>Receive</code> waits for the next message, <code>IsText</code> tells text from close or binary frames, and <code>json.Str</code> quotes user text safely when you build a reply by hand.</p>
+{{example.net-websocket-json}}
+<p>Always answer an unknown type with an error message instead of closing; clients built later may send types an older server does not know.</p>
+
+<h2 id="guide-rooms">Rooms with a Hub</h2>
+<p>A chat or a live score page sends one message to many connections. A <code>Hub</code> keeps connections by room name: <code>Register</code> adds a connection to a room, <code>Broadcast</code> sends text to every member and returns how many got it, and <code>RoomSize</code> counts the members. A natural room name is the path the client connected to, which the server sees in <code>conn.path</code>.</p>
+{{example.net-websocket-rooms}}
+<p>In a real server, read each connection in its own thread and call <code>Unregister</code> when it closes, so broadcasts do not go to connections that are gone.</p>
+
+<h2 id="guide-auth">Checking a token during the handshake</h2>
+<p>A WebSocket starts as an HTTP request, and its headers are kept in <code>conn.hdr</code>, so the server can check a token before it trusts the connection; read it with <code>httpx.HeaderValue</code> from <a href="/std/net-httpx/">net/httpx</a>. On the client side <code>DialWith</code> adds extra header lines. A connection without a valid token gets a short message and is closed, which the client sees as a close message from <code>Poll</code>.</p>
+{{example.net-websocket-auth}}
+<p>Browsers cannot set an <code>Authorization</code> header on a WebSocket. For browser clients put a short lived token in the URL, such as <code>/live?token=...</code>, and check <code>conn.path</code> instead.</p>
+
+<h2 id="guide-heartbeat">Waiting without blocking: Poll and ping</h2>
+<p>A client that waits a long time for an answer should know the connection is still alive, and proxies close connections that stay silent. <code>Poll(conn, ms)</code> waits at most that many milliseconds and returns a message of kind <code>TIMEOUT</code> when nothing arrived, which is the moment to send a <code>Ping</code>. The loop below waits for a job report, pinging every 100 ms, and gives up after 50 quiet rounds.</p>
+{{example.net-websocket-heartbeat}}
+<p>The send functions return 0 on success and a negative number when the connection is gone, so check the result of <code>SendText</code> and <code>Ping</code> in long running loops.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Server</th><th>Client</th></tr></thead>
+<tbody>
+<tr><td>Open</td><td><code>Listen</code>, <code>Accept</code> (TLS: <code>LoadWSSConfig</code>, <code>AcceptWSS</code>)</td><td><code>Dial</code>, <code>DialWith</code> (TLS: <code>DialWSS</code>)</td></tr>
+<tr><td>Send</td><td colspan="2"><code>SendText</code>, <code>SendBinary</code>, <code>Ping</code></td></tr>
+<tr><td>Receive</td><td colspan="2"><code>Receive</code> (waits), <code>Poll</code> (with a time limit), <code>ReceiveText</code> (text only)</td></tr>
+<tr><td>Tell messages apart</td><td colspan="2"><code>IsText</code>, <code>IsBinary</code>, <code>IsClose</code>, <code>IsPong</code>, or <code>m.kind</code></td></tr>
+<tr><td>Many clients</td><td><code>NewHub</code>, <code>Register</code>, <code>Broadcast</code>, <code>Unregister</code></td><td></td></tr>
+<tr><td>Close</td><td><code>Close</code>, <code>CloseServer</code></td><td><code>Close</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Server = A WebSocket server.

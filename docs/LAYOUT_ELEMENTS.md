@@ -1,6 +1,6 @@
 # Layout elements
 
-Every element the layout DSL knows, generated from `std/layout/elements/`. The HTML tag name is accepted as an English name too, except for the table parts that come from context: inside `table`, write `header`/`main`/`footer` and `column`, never `thead`/`tbody`/`tfoot`/`th`/`td`. Elements that share a name are context variants: the compiler picks one by where it sits (see `docs/LAYOUT_SCHEMA.md`).
+Every element the layout DSL knows, generated from `std/layout/elements/`. The HTML tag name is accepted as an English name too, except for the table parts that come from context: inside `table`, write `header`/`main`/`footer` and `column`, never `thead`/`tbody`/`tfoot`/`th`/`td`. Elements that share a name are context variants: the compiler picks one by where it sits (see `docs/LAYOUT_SCHEMA.md`). The ruby elements were `روبی`, `متن روبی` and `پرانتز روبی` in Persian, and those names still work.
 
 | element              | English names                         | Persian          | HTML           | kind    | must be inside                                        | required      |
 | -------------------- | ------------------------------------- | ---------------- | -------------- | ------- | ----------------------------------------------------- | ------------- |
@@ -89,9 +89,9 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `progress`           | `progress`                            | پیشرفت           | `<progress>`   | normal  |                                                       |               |
 | `quote`              | `quote`, `q`                          | نقل قول          | `<q>`          | normal  |                                                       |               |
 | `row`                | `row`, `tr`                           | ردیف             | `<tr>`         | normal  | `table`, `table header`, `table body`, `table footer` |               |
-| `ruby`               | `ruby`                                | روبی             | `<ruby>`       | normal  |                                                       |               |
-| `ruby parenthesis`   | `ruby parenthesis`, `rp`              | پرانتز روبی      | `<rp>`         | normal  | `ruby`                                                |               |
-| `ruby text`          | `ruby text`, `rt`                     | متن روبی         | `<rt>`         | normal  | `ruby`                                                |               |
+| `ruby`               | `ruby`                                | آوانما           | `<ruby>`       | normal  |                                                       |               |
+| `ruby parenthesis`   | `ruby parenthesis`, `rp`              | پرانتز آوانما    | `<rp>`         | normal  | `ruby`                                                |               |
+| `ruby text`          | `ruby text`, `rt`                     | متن آوانما       | `<rt>`         | normal  | `ruby`                                                |               |
 | `sample`             | `sample`, `samp`                      | نمونه خروجی      | `<samp>`       | normal  |                                                       |               |
 | `script`             | `script`                              | اسکریپت سفارشی   | `<script>`     | rawtext |                                                       |               |
 | `search`             | `search`                              | جستجو            | `<search>`     | normal  |                                                       |               |
@@ -100,7 +100,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `slot`               | `slot`                                | جایگاه           | `<slot>`       | normal  |                                                       |               |
 | `small`              | `small`                               | ریز              | `<small>`      | normal  |                                                       |               |
 | `source`             | `source`                              | منبع             | `<source>`     | void    | `picture`, `video`, `audio`                           |               |
-| `span`               | `span`                                | اسپن             | `<span>`       | normal  |                                                       |               |
+| `span`               | `span`                                | تکه              | `<span>`       | normal  |                                                       |               |
 | `strikethrough`      | `strikethrough`, `s`                  | خط خورده         | `<s>`          | normal  |                                                       |               |
 | `strong`             | `strong`                              | قوی              | `<strong>`     | normal  |                                                       |               |
 | `style`              | `style`, `style_tag`                  | ظاهر سفارشی, سبک | `<style>`      | rawtext |                                                       |               |

@@ -25,8 +25,23 @@ func lay_font_strip_url(url: str): str:
     ret str.Substr(url, 0, end_at)
 end
 
-func lay_font_ext_format(url: str): str:
-    p := lay_font_strip_url(url)
+func lay_font_word_format(w: str): str:
+    if str.Equals(w, "ttf") or str.Equals(w, "truetype"):
+        ret "truetype"
+    end
+    if str.Equals(w, "otf") or str.Equals(w, "opentype"):
+        ret "opentype"
+    end
+    if str.Equals(w, "woff") or str.Equals(w, "woff2"):
+        ret w
+    end
+    if str.Equals(w, "ttc") or str.Equals(w, "collection"):
+        ret "collection"
+    end
+    ret ""
+end
+
+func lay_font_path_format(p: str): str:
     mut dot := 0 - 1
     repeat str.Len(p) in i:
         b := byte_at(p, i)
@@ -39,20 +54,66 @@ func lay_font_ext_format(url: str): str:
     if dot < 0:
         ret ""
     end
-    ext := str.Lower(str.Substr(p, dot + 1, str.Len(p) - dot - 1))
-    if str.Equals(ext, "ttf"):
-        ret "truetype"
+    ret lay_font_word_format(str.Lower(str.Substr(p, dot + 1, str.Len(p) - dot - 1)))
+end
+
+func lay_font_data_format(url: str): str:
+    l := str.Lower(url)
+    if not str.StartsWith(l, "data:font/"):
+        ret ""
     end
-    if str.Equals(ext, "otf"):
-        ret "opentype"
+    mut e := 10
+    until e < str.Len(l) and byte_at(l, e) != 59 and byte_at(l, e) != 44:
+        e += 1
     end
-    if str.Equals(ext, "woff") or str.Equals(ext, "woff2"):
-        ret ext
+    ret lay_font_word_format(str.Substr(l, 10, e - 10))
+end
+
+func lay_font_ext_format(url: str): str:
+    if str.StartsWith(str.Lower(url), "data:"):
+        ret lay_font_data_format(url)
     end
-    if str.Equals(ext, "ttc"):
-        ret "collection"
+    ret lay_font_path_format(lay_font_strip_url(url))
+end
+
+func lay_font_hint_format(url: str): str:
+    q := str.IndexOf(url, "?")
+    if q < 0:
+        ret ""
+    end
+    mut query := str.Substr(url, q + 1, str.Len(url) - q - 1)
+    h := str.IndexOf(query, "#")
+    if h >= 0:
+        query = str.Substr(query, 0, h)
+    end
+    mut parts := str.Split(query, "&")
+    defer parts.free()
+    repeat parts.len() in i:
+        kv := parts.get(i)
+        at_eq := str.IndexOf(kv, "=")
+        if at_eq < 0:
+            continue
+        end
+        v := str.Substr(kv, at_eq + 1, str.Len(kv) - at_eq - 1)
+        mut f := lay_font_word_format(str.Lower(v))
+        if str.Len(f) == 0:
+            f = lay_font_path_format(v)
+        end
+        if str.Len(f) > 0:
+            ret f
+        end
     end
     ret ""
+end
+
+func lay_font_guess(declared: str, ext: str, url: str): str:
+    if str.Len(declared) > 0:
+        ret declared
+    end
+    if str.Len(ext) > 0:
+        ret ext
+    end
+    ret lay_font_hint_format(url)
 end
 
 func lay_font_byte(f: File*, off: int): int:
@@ -106,13 +167,13 @@ func lay_font_resolve(url: str, declared: str, dir: str, fmt &: str, found &: st
             found = ext
             ret FONT_MISMATCH
         end
-        fmt = str.Len(declared) > 0 ? declared : ext
+        fmt = lay_font_guess(declared, ext, url)
         ret str.Len(fmt) > 0 ? FONT_OK : FONT_UNKNOWN
     end
     rel := lay_font_strip_url(url)
     path := str.Len(dir) > 0 ? dir + "/" + rel : rel
     if not os.Exists(path):
-        fmt = str.Len(declared) > 0 ? declared : ext
+        fmt = lay_font_guess(declared, ext, url)
         ret FONT_MISSING
     end
     magic := lay_font_magic_format(path)
@@ -128,7 +189,7 @@ func lay_font_resolve(url: str, declared: str, dir: str, fmt &: str, found &: st
         fmt = magic
         ret FONT_OK
     end
-    fmt = str.Len(declared) > 0 ? declared : ext
+    fmt = lay_font_guess(declared, ext, url)
     ret str.Len(fmt) > 0 ? FONT_OK : FONT_UNKNOWN
 end
 
@@ -295,42 +356,33 @@ func lay_check_font(s &: Sema, a &: at.Ast, el: int):
             lay_font_invalid(s, a, uid, "url", u, i18.Tr("a font address (http, https, a relative path or data:font/...)"))
             continue
         end
-        if str.StartsWith(u, "data:"):
-            if str.Len(declared) == 0:
-                serr(
-                    s, 126, span_of(a, uid), co.Format1(
-                        i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr("data:font/...")
-                    )
-                )
-            end
-            continue
-        end
+        shown := str.StartsWith(u, "data:") ? "data:font/..." : u
         mut fmt := ""
         mut found := ""
         rc := lay_font_resolve(u, declared, s.dir, fmt, found)
         if rc == FONT_MISMATCH:
             serr(
                 s, 127, span_of(a, tid != 0 ? tid : uid), co.Format3(
-                    i18.Tr("font '%s' is %s, but it is declared as %s"), co.ArgStr(u), co.ArgStr(found), co.ArgStr(str.Len(declared) > 0 ? declared : lay_font_ext_format(u))
+                    i18.Tr("font '%s' is %s, but it is declared as %s"), co.ArgStr(shown), co.ArgStr(found), co.ArgStr(str.Len(declared) > 0 ? declared : lay_font_ext_format(u))
                 )
             )
         else rc == FONT_MISSING:
             swarn(
                 s, 128, span_of(a, uid), co.Format1(
-                    i18.Tr("font file '%s' was not found next to the source; it must exist when the page is served"), co.ArgStr(u)
+                    i18.Tr("font file '%s' was not found next to the source; it must exist when the page is served"), co.ArgStr(shown)
                 )
             )
             if str.Len(fmt) == 0:
                 serr(
                     s, 126, span_of(a, uid), co.Format1(
-                        i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(u)
+                        i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(shown)
                     )
                 )
             end
         else rc == FONT_UNKNOWN:
             serr(
                 s, 126, span_of(a, uid), co.Format1(
-                    i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(u)
+                    i18.Tr("cannot detect the font type of '%s'; add type = ttf, otf, woff or woff2"), co.ArgStr(shown)
                 )
             )
         end

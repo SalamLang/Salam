@@ -1837,7 +1837,7 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 
 **CSS values are checked.** Almost every property validates its value
 (keyword, length, number, time, angle, color, ...) and accepts Persian keywords
-and units: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
+and units: `نمایش = "فلکس"`, `فضا = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
 Shorthands are checked too: `border = "1 solid red"`, `font = "bold 16/1.5
 serif"`, `transition = "opacity 0.3s ease"`, `transform = "rotate(45deg)"`,
 `box shadow = "0 2 4 black"`. Bare numbers in a shorthand get `px`, except zero.
@@ -2229,7 +2229,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `چیدمان`                      |
+| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2240,6 +2240,9 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
+`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
+The older spelling `چیدمان` is still accepted.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use
@@ -2697,5 +2700,5 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |
 | C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
-| Layout DSL `چیدمان`                              | <https://www.salamlang.ir/learn/layout/>       |
+| Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

@@ -49,7 +49,8 @@ if [ "${1:-}" = "--worker" ]; then
     wk_repl() {
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        case "$fabs" in */layout_*.in) rcmd=layout ;; *) rcmd=cli ;; esac
+        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }

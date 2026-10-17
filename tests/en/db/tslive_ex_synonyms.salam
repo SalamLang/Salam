@@ -1,0 +1,72 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func titles(r: typesense.SearchResult): str:
+    mut out := Vector {} as Vector<str>
+    each h in r.hits:
+        out.push(h.document)
+    end
+    ret str.Join(out, " ")
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_syn_shop", err)
+    _ := typesense.DeleteSynonymSet(c, "ex_syn_clothes", err)
+    mut s := typesense.Schema { name = "ex_syn_shop" }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "name": "blue sneakers"}`)
+    docs.push(`{"id": "2", "name": "running trainers"}`)
+    docs.push(`{"id": "3", "name": "wool sweater"}`)
+    _ := typesense.ImportDocuments(c, "ex_syn_shop", docs, typesense.WriteOptions {}, err)
+    find := typesense.NewSearch("trainers", "name")
+    println "before:", typesense.Search(c, "ex_syn_shop", find, err).found
+
+    mut shoes := Vector {} as Vector<str>
+    shoes.push("sneakers")
+    shoes.push("trainers")
+    shoes.push("kicks")
+    mut items := Vector {} as Vector<typesense.Synonym>
+    items.push(typesense.Synonym { id = "shoes", synonyms = shoes })
+    set := typesense.UpsertSynonymSet(c, "ex_syn_clothes", items, err)
+    println "set:", set.name, set.items.len(), str.Join(set.items.get(0).synonyms, ",")
+    _ := typesense.UpdateCollection(c, "ex_syn_shop", `{"synonym_sets": ["ex_syn_clothes"]}`, err)
+    println "after:", titles(typesense.Search(c, "ex_syn_shop", find, err))
+
+    mut one := Vector {} as Vector<str>
+    one.push("jumper")
+    jumper := typesense.UpsertSynonymItem(c, "ex_syn_clothes", typesense.Synonym { id = "jumper", root = "sweater", synonyms = one }, err)
+    println "one-way:", jumper.root, "->", str.Join(jumper.synonyms, ",")
+    println "sweater finds jumper words too:", typesense.Search(c, "ex_syn_shop", typesense.NewSearch("sweater", "name"), err).found
+    println "items:", typesense.ListSynonymItems(c, "ex_syn_clothes", err).len(), typesense.GetSynonymItem(c, "ex_syn_clothes", "jumper", err).root
+
+    mut listed := false
+    each x in typesense.ListSynonymSets(c, err):
+        if x.name == "ex_syn_clothes": listed = true end
+    end
+    println "listed:", listed, typesense.GetSynonymSet(c, "ex_syn_clothes", err).items.len()
+    println "json:", typesense.SynonymJSON(jumper)
+    println "deleted item:", typesense.DeleteSynonymItem(c, "ex_syn_clothes", "jumper", err)
+    _ := typesense.DeleteCollection(c, "ex_syn_shop", err)
+    println "deleted set:", typesense.DeleteSynonymSet(c, "ex_syn_clothes", err)
+end

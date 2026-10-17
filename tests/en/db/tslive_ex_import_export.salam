@@ -1,0 +1,72 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+struct Movie:
+    pub id: str = ""
+    pub title: str = ""
+    pub year: int = 0
+    pub rating: f64 = 0.0
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_imp_movies", err)
+    mut s := typesense.Schema { name = "ex_imp_movies" }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("year", typesense.TYPE_INT32))
+    s.fields.push(typesense.NewField("rating", typesense.TYPE_FLOAT))
+    _ := typesense.CreateCollection(c, s, err)
+
+    mut movies := Vector {} as Vector<Movie>
+    movies.push(Movie { id = "1", title = "Casablanca", year = 1942, rating = 8.5 })
+    movies.push(Movie { id = "2", title = "Vertigo", year = 1958, rating = 8.3 })
+    movies.push(Movie { id = "3", title = "Alien", year = 1979, rating = 8.5 })
+    r := typesense.ImportOf(c, "ex_imp_movies", movies, typesense.WriteOptions { action = typesense.ACTION_CREATE, return_id = true }, err)
+    println "structs:", r.success, "written,", r.failed, "failed, ids", r.ids.get(0), r.ids.get(1), r.ids.get(2)
+
+    mut docs := Vector {} as Vector<str>
+    docs.push("{\n  \"id\": \"4\",\n  \"title\": \"Heat\",\n  \"year\": 1995,\n  \"rating\": 8.3\n}")
+    docs.push(`{"id": "1", "title": "Casablanca", "year": 1942, "rating": 8.5}`)
+    docs.push(`{"id": "5", "title": "Brazil", "year": "eighties", "rating": 7.9}`)
+    r2 := typesense.ImportDocuments(c, "ex_imp_movies", docs, typesense.WriteOptions { action = typesense.ACTION_CREATE, return_doc = true }, err)
+    println "json:", r2.success, "written,", r2.failed, "failed"
+    each e in r2.errors:
+        println "  line", e.line, "code", e.code, e.error
+    end
+    println "  first written:", r2.documents.get(0)
+
+    r3 := typesense.ImportJSONL(c, "ex_imp_movies", "{\"id\": \"5\", \"title\": \"Brazil\", \"year\": \"1985\", \"rating\": 7.9}\n{\"id\": \"2\", \"rating\": 8.4}", typesense.WriteOptions { action = typesense.ACTION_EMPLACE, dirty_values = typesense.DIRTY_COERCE_OR_REJECT, batch_size = 100 }, err)
+    println "jsonl emplace:", r3.success, r3.failed, r3.lines.len()
+
+    lines := typesense.ExportDocuments(c, "ex_imp_movies", typesense.ExportOptions { filter_by = "year:<1960", include_fields = "id,title,year,rating" }, err)
+    println "exported before 1960:", lines.len()
+    mut old := Vector {} as Vector<Movie>
+    if typesense.DecodeDocuments(lines, old, err):
+        each m in old:
+            println "  ", m.title, m.year, m.rating
+        end
+    end
+    println "jsonl bytes > 0:", typesense.ExportJSONL(c, "ex_imp_movies", typesense.ExportOptions { exclude_fields = "rating" }, err).len() > 0
+
+    println "updated by filter:", typesense.UpdateByFilter(c, "ex_imp_movies", "rating:>=8.5", `{"rating": 9.0}`, err)
+    println "deleted by filter:", typesense.DeleteByFilter(c, "ex_imp_movies", "year:<1950", 10, err)
+    println "left:", typesense.Search(c, "ex_imp_movies", typesense.NewSearch("*", ""), err).found
+    _ := typesense.DeleteCollection(c, "ex_imp_movies", err)
+end

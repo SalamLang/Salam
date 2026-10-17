@@ -67,8 +67,8 @@ These variables are ignored in release builds.
 
 ## Names and icons
 
-Everything the user sees is Persian: the product name ایجنت سلام, the window
-title, the loader page and the installer descriptions. Filenames stay ASCII:
+The window title and the product name are `Salam Agent`. The loader page and
+the installer descriptions are Persian (ایجنت سلام). Filenames stay ASCII:
 the binary is `salam-agent` and the identifier is `ir.salamlang.agent`.
 
 The icons in `src-tauri/icons/` (including the multi-size `icon.ico` used for
@@ -82,3 +82,8 @@ rm -rf icons/android icons/ios icons/Square*.png icons/StoreLogo.png
 cp icons/icon.ico ../dist/favicon.ico
 cp ../../design/logo/logo-box.svg ../dist/logo.svg
 ```
+
+The app also sets its icon at runtime: the window icon on Windows and Linux,
+and the Dock icon on macOS when the binary runs outside `Salam Agent.app`
+(for example from a terminal or `cargo run`). Without that, macOS shows its
+generic black "exec" icon for a bare executable.

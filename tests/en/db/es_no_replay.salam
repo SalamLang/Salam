@@ -1,0 +1,126 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import sync
+import net.tcp
+import db.elasticsearch
+
+const PORT := 19852
+
+mut wg := sync.NewWaitGroup()
+mut posts_a := 0
+mut posts_b := 0
+mut gets := 0
+
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    a := lower.find(needle)
+    if a < 0: ret "" end
+    start := a + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+func read_request(c: tcp.Conn, head &: str, body &: str): bool:
+    mut buf := ""
+    mut head_end := -1
+    mut want := 0
+    until true:
+        if head_end < 0:
+            at := buf.find("\r\n\r\n")
+            if at >= 0:
+                head_end = at + 4
+                head = buf.substr(0, head_end)
+                cl := hdr_get(head, "Content-Length")
+                if cl.len() > 0: want = cl.to_int() end
+            end
+        end
+        if head_end >= 0 and str.ByteLen(buf) - head_end >= want: break end
+        chunk := tcp.Read(c, 65536)
+        if chunk.len() == 0: break end
+        buf = buf + chunk
+    end
+    if head_end < 0: ret false end
+    body = str.ByteSub(buf, head_end, str.ByteLen(buf) - head_end)
+    ret true
+end
+
+func send_json(c: tcp.Conn, status: str, body: str):
+    tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + str.FromInt(str.ByteLen(body) as i64) + "\r\n\r\n" + body)
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    if not tcp.Ok(srv): ret end
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): running = false
+        else:
+            mut head := ""
+            mut body := ""
+            if read_request(c, head, body):
+                line := head.substr(0, head.find("\r\n")).split(" ")
+                method := line.get(0)
+                target := line.get(1)
+                if target == "/__quit":
+                    send_json(c, "200 OK", "{}")
+                    running = false
+                else str.StartsWith(target, "/slow"):
+                    if target == "/slow-a/_doc": posts_a += 1 end
+                    if target == "/slow-b/_doc": posts_b += 1 end
+                    if method == "GET": gets += 1 end
+                    sync.SleepMs(600)
+                else:
+                    send_json(c, "200 OK", "{}")
+                end
+            end
+            tcp.Close(c)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    url := "http://127.0.0.1:" + str.FromInt(PORT as i64)
+
+    mut cfg := elasticsearch.Config { max_retries = 2, timeout_ms = 300 }
+    cfg.nodes.push(url)
+    mut c := elasticsearch.NewClient(cfg)
+    p := elasticsearch.Perform(c, "POST", "/slow-a/_doc", `{"n":1}`)
+    println "post failed:", not p.ok, "error:", p.error.len() > 0
+    g := elasticsearch.Perform(c, "GET", "/slow-get", "")
+    println "get failed:", not g.ok
+
+    mut plain_cfg := elasticsearch.Config { max_retries = 2, timeout_ms = 300, keep_alive = false }
+    plain_cfg.nodes.push(url)
+    mut plain := elasticsearch.NewClient(plain_cfg)
+    q := elasticsearch.Perform(plain, "POST", "/slow-b/_doc", `{"n":2}`)
+    println "post without keep-alive failed:", not q.ok
+
+    elasticsearch.Perform(plain, "GET", "/__quit", "")
+    join(t)
+    println "POST that got no answer reached the server:", posts_a, "time(s)"
+    println "same without keep-alive:", posts_b, "time(s)"
+    println "GET that got no answer was retried:", gets, "time(s)"
+    elasticsearch.Close(c)
+    elasticsearch.Close(plain)
+end

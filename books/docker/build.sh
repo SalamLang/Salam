@@ -5,8 +5,6 @@ set -eu
 BOOKS_ROOT="${BOOKS_ROOT:-/books}"
 LATEXMK_OPTS="${LATEXMK_OPTS:--xelatex -interaction=nonstopmode -halt-on-error -file-line-error}"
 USE_GLOSSARY="${USE_GLOSSARY:-0}"
-TEXINPUTS=".:$BOOKS_ROOT:${TEXINPUTS:-}"
-export TEXINPUTS
 
 log() {
     printf "\n==> %s\n" "$*"

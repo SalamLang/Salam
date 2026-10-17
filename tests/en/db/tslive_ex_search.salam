@@ -1,0 +1,104 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+struct Book:
+    pub id: str = ""
+    pub title: str = ""
+    pub author: str = ""
+    pub year: int = 0
+end
+
+func seed(c: typesense.Client, err &: typesense.Error):
+    _ := typesense.DeleteCollection(c, "ex_search_books", err)
+    mut s := typesense.Schema { name = "ex_search_books", default_sorting_field = "year" }
+    s.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    s.fields.push(typesense.NewField("author", typesense.TYPE_STRING))
+    s.fields.push(typesense.NewField("year", typesense.TYPE_INT32))
+    _ := typesense.CreateCollection(c, s, err)
+    mut books := Vector {} as Vector<Book>
+    books.push(Book { id = "1", title = "Dune", author = "Frank Herbert", year = 1965 })
+    books.push(Book { id = "2", title = "Dune Messiah", author = "Frank Herbert", year = 1969 })
+    books.push(Book { id = "3", title = "Children of Dune", author = "Frank Herbert", year = 1976 })
+    books.push(Book { id = "4", title = "Foundation", author = "Isaac Asimov", year = 1951 })
+    books.push(Book { id = "5", title = "The Left Hand of Darkness", author = "Ursula K. Le Guin", year = 1969 })
+    books.push(Book { id = "6", title = "Neuromancer", author = "William Gibson", year = 1984 })
+    _ := typesense.ImportOf(c, "ex_search_books", books, typesense.WriteOptions {}, err)
+end
+
+func show(label: str, r: typesense.SearchResult):
+    println label + ": found", r.found, "of", r.out_of
+    each h in r.hits:
+        println "   ", h.document
+    end
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    seed(c, err)
+
+    show("dune", typesense.Search(c, "ex_search_books", typesense.NewSearch("dune", "title"), err))
+    show("typo", typesense.Search(c, "ex_search_books", typesense.NewSearch("fuondation", "title"), err))
+    show("prefix", typesense.Search(c, "ex_search_books", typesense.NewSearch("neuro", "title"), err))
+
+    mut f := typesense.NewSearch("*", "")
+    f.filter_by = "year:>=1960 && author:=Frank Herbert"
+    f.sort_by = "year:asc"
+    f.include_fields = "title,year"
+    show("filter and sort", typesense.Search(c, "ex_search_books", f, err))
+
+    mut w := typesense.NewSearch("herbert dune", "title,author")
+    w.query_by_weights = "2,1"
+    w.per_page = 2
+    w.page = 2
+    w.sort_by = "_text_match:desc,year:desc"
+    r := typesense.Search(c, "ex_search_books", w, err)
+    println "page", r.page, "of a", r.found, "result search, took less than a second:", r.search_time_ms < 1000
+    each h in r.hits:
+        println "   ", h.document
+    end
+
+    mut hl := typesense.NewSearch("hand darkness", "title")
+    hl.highlight_start_tag = "["
+    hl.highlight_end_tag = "]"
+    rh := typesense.Search(c, "ex_search_books", hl, err)
+    println "highlight:", typesense.Highlight(rh.hits.get(0), "title")
+
+    mut strict := typesense.NewSearch("fuondation", "title")
+    strict.num_typos = "0"
+    println "no typos allowed:", typesense.Search(c, "ex_search_books", strict, err).found
+    mut exact := typesense.NewSearch("dune", "title")
+    typesense.Set(exact, "prioritize_exact_match", "true")
+    exact.limit = 1
+    println "exact match first:", typesense.Search(c, "ex_search_books", exact, err).hits.get(0).document
+
+    mut typed := Vector {} as Vector<Book>
+    all := typesense.Search(c, "ex_search_books", typesense.NewSearch("herbert", "author"), err)
+    if typesense.HitsAs(all, typed, err):
+        each b in typed:
+            println "typed:", b.year, b.title
+        end
+    end
+    println "query string:", typesense.SearchQuery(f)
+    println "raw has hits:", typesense.SearchRaw(c, "ex_search_books", typesense.NewSearch("asimov", "author"), err).len() > 0
+
+    _ := typesense.Search(c, "ex_search_books", typesense.NewSearch("x", "missing_field"), err)
+    println "bad field:", typesense.ErrorString(err)
+    _ := typesense.DeleteCollection(c, "ex_search_books", err)
+end

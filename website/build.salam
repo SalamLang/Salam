@@ -120,6 +120,9 @@ func load_strings(path: str, ctx &: HashMap<str, str>, errs &: Vector<str>):
         end
         if str.EndsWith(key, "_cmd"):
             value = template.EscapeHTML(value)
+        else str.Contains(key, "_code_"):
+            cut := str.LastIndex(key, "_code_") + 6
+            value = highlight_lang(value, str.Substr(key, cut, key.len() - cut))
         end
         ctx.put(key, value)
     end
@@ -186,7 +189,19 @@ func next_visible(cps: Vector<int>, start: int): int:
     ret 0 - 1
 end
 
-func highlight(code: str, classes: HashMap<str, str>): str:
+func closes_triple(cps: Vector<int>, at: int, quote: int): bool:
+    ret at + 2 < cps.len() and cps.get(at) == quote and cps.get(at + 1) == quote and cps.get(at + 2) == quote
+end
+
+func comment_starts_here(cps: Vector<int>, i: int): bool:
+    if i == 0:
+        ret true
+    end
+    prev := cps.get(i - 1)
+    ret prev == 32 or prev == 9 or prev == 10
+end
+
+func highlight_with(code: str, classes: HashMap<str, str>, slash: bool, hash: bool, squote: bool): str:
     cps := str.CodePoints(code)
     n := cps.len()
     mut b := str.NewBuilder()
@@ -196,20 +211,32 @@ func highlight(code: str, classes: HashMap<str, str>): str:
         cp := cps.get(i)
         nx := i + 1 < n ? cps.get(i + 1) : 0 - 1
         mut j := i + 1
-        if cp == 47 and nx == 47:
+        if slash and cp == 47 and nx == 47:
             until j < n and cps.get(j) != 10:
                 j += 1
             end
             wrap(b, "c", cps, i, j)
-        else cp == 47 and nx == 42:
+        else slash and cp == 47 and nx == 42:
             j = i + 2
             until j < n and not (cps.get(j) == 42 and j + 1 < n and cps.get(j + 1) == 47):
                 j += 1
             end
             j = j + 2 > n ? n : j + 2
             wrap(b, "c", cps, i, j)
-        else cp == 34:
-            until j < n and cps.get(j) != 34 and cps.get(j) != 10:
+        else hash and cp == 35 and comment_starts_here(cps, i):
+            until j < n and cps.get(j) != 10:
+                j += 1
+            end
+            wrap(b, "c", cps, i, j)
+        else squote and (cp == 34 or cp == 39) and closes_triple(cps, i, cp):
+            j = i + 3
+            until j < n and not closes_triple(cps, j, cp):
+                j += 1
+            end
+            j = j < n ? j + 3 : n
+            wrap(b, "s", cps, i, j)
+        else cp == 34 or (squote and cp == 39):
+            until j < n and cps.get(j) != cp and cps.get(j) != 10:
                 if cps.get(j) == 92:
                     j += 1
                 end
@@ -248,10 +275,72 @@ func highlight(code: str, classes: HashMap<str, str>): str:
     ret str.BufStr(b)
 end
 
+func highlight(code: str, classes: HashMap<str, str>): str:
+    ret highlight_with(code, classes, true, false, false)
+end
+
 func add_class_words(classes &: HashMap<str, str>, words: str, class: str):
     each w in str.Fields(words):
         classes.put(w, class)
     end
+end
+
+func highlight_lang(code: str, lang: str): str:
+    mut classes := HashMap {} as HashMap<str, str>
+    mut slash := false
+    mut hash := false
+    mut squote := true
+    mut known := false
+    switch lang:
+        "python", "py":
+            known = true
+            hash = true
+            add_class_words(classes, "and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield True False None", "k")
+            add_class_words(classes, "int str float bool list dict set tuple bytes object", "t")
+            add_class_words(classes, "print len range open isinstance super self cls enumerate zip map filter sorted sum min max input", "b")
+            break
+        end
+        "javascript", "js", "typescript", "ts", "jsx", "tsx":
+            known = true
+            slash = true
+            add_class_words(classes, "const let var function return if else for while do switch case break continue new class extends import from export default async await try catch finally throw typeof instanceof in of null undefined true false this interface type enum implements public private readonly static yield void delete", "k")
+            add_class_words(classes, "string number boolean any unknown never Promise Array Map Set Record", "t")
+            add_class_words(classes, "console require JSON Math Object process document window fetch Error", "b")
+            break
+        end
+        "bash", "sh", "shell", "zsh", "console":
+            known = true
+            hash = true
+            add_class_words(classes, "if then else elif fi for while until do done case esac in function return exit export local set unset", "k")
+            add_class_words(classes, "echo cd curl wget cat grep sed awk git docker claude npm npx pip python python3 sudo sh bash ls mkdir rm cp mv chmod tar kill source", "b")
+            break
+        end
+        "json":
+            known = true
+            squote = false
+            add_class_words(classes, "true false null", "k")
+            break
+        end
+        "yaml", "yml", "toml", "ini":
+            known = true
+            hash = true
+            add_class_words(classes, "true false null yes no on off", "k")
+            break
+        end
+        "c", "cpp", "java", "go", "rust", "rs", "php":
+            known = true
+            slash = true
+            hash = lang == "php"
+            add_class_words(classes, "if else for while do switch case break continue return struct enum union typedef static const extern class public private protected new delete this null true false func package import var type interface go defer range chan map fn let mut impl trait pub use mod match loop where self as in unsafe async await function echo foreach", "k")
+            add_class_words(classes, "int char void long short unsigned signed float double bool size_t uint8_t uint32_t uint64_t int32_t int64_t string byte rune i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64 str String Vec Option Result", "t")
+            add_class_words(classes, "printf fprintf malloc free sizeof println fmt print", "b")
+            break
+        end
+    end
+    if not known:
+        ret template.EscapeHTML(code)
+    end
+    ret highlight_with(code, classes, slash, hash, squote)
 end
 
 func escape_text(s: str): str:

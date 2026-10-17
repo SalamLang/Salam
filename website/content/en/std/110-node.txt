@@ -6,12 +6,24 @@ pkg.title = The node package in Salam | Node.js
 pkg.description = The node package in Salam: running a program under Node.js, loading a module with require, files and directories, running another program, promises, and working with JavaScript objects, with examples.
 pkg.import = node
 pkg.intro <<
-<p>This package is for programs translated to JavaScript with <code>salam js</code> and run under Node.js, the VS Code editor extension for instance. Load any Node or npm module with <code>Require</code> and call its methods with the <code>Call...</code> functions. That is why the examples here are only checked.</p>
-<p>JavaScript objects are held as one <code>i64</code>. The call functions are named after the types of their arguments: <code>CallS1</code> for one string, <code>CallV1</code> for one JavaScript value.</p>
-<p>To try the programs below, translate each one and run the result with Node.js 18 or newer:</p>
+<p>This package is for Salam programs that are translated to JavaScript with <code>salam js</code> and run under Node.js, such as the VS Code extension or a build script that has to live in an npm project. It gives you the whole of Node: <code>Require</code> loads any built-in or npm module, the <code>Get...</code> and <code>Set...</code> functions read and write properties, and the <code>Call...</code> functions call methods. A few helpers wrap the common <code>fs</code>, <code>path</code>, <code>os</code> and <code>child_process</code> calls.</p>
+<p>Use it only when the program really runs under Node. A native Salam program reads files with <a href="/std/fs/">fs</a> and starts programs with <a href="/std/os-process/">os/process</a>, and code for a browser page uses <a href="/std/dom/">dom</a>. A native build cannot call these functions, so the examples on this page are type-checked by the site but not run.</p>
+<h3>Core ideas</h3>
+<ul>
+<li><strong>Handles.</strong> Every JavaScript value (object, array, function, promise, even <code>undefined</code>) is held in an <code>i64</code>. Nothing needs freeing; Node's garbage collector owns them.</li>
+<li><strong>Typed calls.</strong> Salam checks argument types, so each call shape has its own function, named after its arguments: <code>CallS2</code> passes two strings, <code>CallV1</code> one JavaScript value, <code>CallSFn0</code> a string and a function. Pick the one that matches the method you call; the result is always a handle.</li>
+<li><strong>Callbacks run later.</strong> A Salam lambda passed to <code>CallFn1</code>, <code>ExecFile</code> or <code>SetPropFn1</code> becomes a JavaScript function. Node calls it after <code>main</code> has returned, from its event loop.</li>
+</ul>
+<h3>Things that trip people up</h3>
+<ul>
+<li><code>GetStr</code> on a missing property returns an empty string and <code>GetNum</code> returns 0, without any error. When "missing" and "empty" mean different things, test <code>IsNullish(GetProp(obj, name))</code> first.</li>
+<li>Every number from JavaScript is an <code>f64</code>, and 64-bit integers do not work under <code>salam js</code>. Cast to <code>int</code> when you need one.</li>
+<li>Salam strings count bytes, also under Node: <code>"سلام".len()</code> is 8, while JavaScript's <code>length</code> of the same text is 4. Text itself passes through unchanged.</li>
+</ul>
+<p>To try a program, translate it and run the result with Node.js 18 or newer:</p>
 <pre class="code" dir="ltr"><code>salam js node-guide-files.salam --output=files.js
 node files.js</code></pre>
-<p>The output shown after each program is what it printed that way under Node 24.</p>
+<p>The output under each program is what it printed that way under Node 24.</p>
 
 <h2 id="guide-files">Files and directories</h2>
 <p>The file helpers wrap the synchronous calls of Node's <code>fs</code> and <code>path</code> modules, which keeps a script readable from top to bottom. For anything they do not cover, <code>Require("fs")</code> gives you the module itself. <code>readdirSync</code> returns a JavaScript array: its <code>length</code> is a number property and each element is a property named by its index, so <code>GetStr(names, "0")</code> reads the first one.</p>
@@ -30,7 +42,7 @@ debug: true
 db host: 127.0.0.1
 workers: 4
 {"name":"shop","port":8080,"debug":true,"db":{"host":"127.0.0.1"},"workers":4}</code></pre>
-<p>Numbers always arrive as <code>f64</code>, because JavaScript has only one number type. Cast with <code>as int</code> where you need an integer.</p>
+<p>Numbers always arrive as <code>f64</code>, because JavaScript has only one number type. Cast with <code>as int</code> where you need an integer. Note the <code>IsNullish</code> test: <code>GetNum(config, "workers")</code> on its own would have returned 0 for the missing field, not an error.</p>
 
 <h2 id="guide-module">Writing a Node module in Salam</h2>
 <p><code>Exports</code> is <code>module.exports</code> of the translated file, so the functions you attach to it with <code>SetPropFn0</code>, <code>SetPropFn1</code> and <code>SetPropFn1R</code> can be called by any JavaScript code that <code>require</code>s the file. Arguments and results are JavaScript values (<code>i64</code> handles): <code>ToStr</code> turns one into a Salam string, and the small <code>js_str</code> helper here goes the other way by pushing the string into an array and reading it back.</p>
@@ -46,13 +58,23 @@ hello-salam-world</code></pre>
 child printed 42
 all jobs finished</code></pre>
 <p>Node keeps the process alive while a child or a timer is pending, so <code>main</code> may return long before the callbacks run. Do not free or reuse anything a callback still needs.</p>
+<p><code>failed</code> is also true when the program ran but exited with a non-zero status. Both outputs are collected in memory, up to 32 MB each; a program that writes more is stopped and reported as failed. Use <code>ExecFileRaw</code> when you need the Node error object itself, for example its <code>code</code> property with the exit status.</p>
+
+<h2 id="guide-promise">Promises and asynchronous files</h2>
+<p>Most newer Node APIs return a promise instead of taking a callback. A promise is a handle like any other: call its <code>then</code> method with <code>CallFn1</code> to run code with the result, <code>catch</code> to handle a failure and <code>finally</code> (with <code>CallFn0</code>) for cleanup that must run either way. Here <code>fs.promises.readFile</code> reads one file that exists and one that does not.</p>
+{{example.node-guide-promise}}
+<pre class="code" dir="ltr"><code>reading started
+orders.csv has 2 orders
+refunds.csv failed with ENOENT
+temp folder removed</code></pre>
+<p>A Salam lambda cannot return a value to <code>then</code>, so promises do not chain the way they do in JavaScript. To run one step after another, start the next step inside the callback of the previous one, as the second read does here. <code>NewPromise</code> goes the other way and makes a promise of your own for JavaScript code to wait on: its function receives the <code>resolve</code> and <code>reject</code> functions, which you call with <code>Invoke1</code>.</p>
 >>
 
 doc.Require = Loads a Node module with <code>require</code>.
 doc.Exports = The <code>module.exports</code> object; for building a module.
 doc.GetProp = A property of an object that is itself an object.
-doc.GetNum = A numeric property.
-doc.GetStr = A string property.
+doc.GetNum = A numeric property, as <code>f64</code>; 0 when it is missing.
+doc.GetStr = A string property; an empty string when it is missing.
 doc.GetBool = A boolean property.
 doc.SetProp = Sets a property on an object.
 doc.SetStr = A string property.
@@ -99,7 +121,7 @@ doc.MkdtempSync = Makes a unique temporary directory with a prefix.
 doc.WriteFileSync = Writes a file.
 doc.ReadFileSync = Reads a file.
 doc.RmSyncRecursiveForce = Deletes a file or a directory with everything in it.
-doc.ExecFile = Runs a program with its arguments in the given directory and, once it finishes, calls the function with "it failed", the output and the error output.
+doc.ExecFile = Runs a program with its arguments in the given directory and, once it finishes, calls the function with "it failed", the output and the error output. A non-zero exit status counts as a failure, and each output is capped at 32 MB.
 doc.ExecFileRaw = The same, with the Node error object itself.
 
 ex.Require = node-Basics

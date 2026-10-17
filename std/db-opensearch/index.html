@@ -21,7 +21,7 @@
     <link rel="apple-touch-icon" href="/Salam/assets/img/apple-touch-icon.png" />
     <link rel="manifest" href="/Salam/site.webmanifest" />
     <link rel="preload" href="/Salam/assets/fonts/Vazirmatn.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="/Salam/assets/css/site.css?v=313b383f2b" />
+    <link rel="stylesheet" href="/Salam/assets/css/site.css?v=27e7350cf1" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Salam Programming Language" />
     <meta property="og:locale" content="en_US" />
@@ -101,13 +101,142 @@
           
           <div class="lesson-toc">
             <strong>On this page</strong>
-            <ol><li><a href="#types">Types</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
+            <ol><li><a href="#guide">Guide</a></li><li><a href="#types">Types</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
           </div>
           
           <div class="lesson-body">
 <p>OpenSearch is an open source search and analytics engine. This package speaks its REST API directly over <code>net.tcp</code> and <code>tls</code>, with no outside library: several nodes with retries and dead node skipping, basic, bearer and AWS SigV4 authentication (for Amazon OpenSearch Service and Serverless), and TLS with your own CA file or, for a test server, no verification. On top of that it covers documents, bulk, every common query and aggregation, scroll and point in time paging, index, alias, template and data stream admin, cluster, task, snapshot and pipeline admin, and the plugins that make OpenSearch what it is: SQL and PPL, k-NN and neural search, hybrid search pipelines, ISM policies, the security plugin, alerting monitors and ML Commons.</p>
 <p>Queries, aggregations and request bodies are plain JSON text: the builders such as <code>Match</code>, <code>BoolOf</code> and <code>TermsAgg</code> return it, and anything they do not cover can be written as a backtick string. Results come back as Salam structs whose JSON parts (a hit's source, the aggregations) are raw text you read with <code>Buckets</code>, <code>AggValue</code> and <code>JsonPath</code>. Every call records its status and error on the client, so read <code>Error</code> or <code>ErrorType</code> after a call that returned false. <code>Conn</code> boxes a client as a <code>db.Connection</code>, so SQL code written for the other engines can query OpenSearch too. For a route with no function of its own, use <code>Perform</code>. Only the examples for the query builders and request signing run here; the others need a server, so they are only checked.</p>
 <p><a href="../db-elasticsearch/">db/elasticsearch</a> also talks to the OpenSearch core API. Use this package when you need what only OpenSearch has: PPL, k-NN, neural and hybrid search, ISM, the security plugin, alerting, ML Commons, or AWS SigV4 for Amazon OpenSearch Service and Serverless.</p>
+<p>New to OpenSearch or to this package? The <a href="/Salam/learn/opensearch/">Search with OpenSearch lesson</a> builds a small book search step by step. The guide below is the short version, and the reference after it lists every function with an example.</p>
+<h2 id="guide">Guide</h2>
+<h3 id="guide-start">Connect and check the cluster</h3>
+<p>Make a client with <code>Connect</code>, or with <code>NewClient</code> and a <code>Config</code> for several nodes, credentials, a CA file, a time limit or AWS signing. Nothing is sent until the first call, so <code>Ping</code> is the cheap way to see that a cluster answers.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">opensearch-connect.salam</span><button type="button" class="copy-button" data-copy-target="ex-opensearch-connect" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-opensearch-connect">import db.opensearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    c := opensearch.<span class="tok-f">Connect</span>(<span class="tok-s">&quot;http://localhost:9200&quot;</span>)
+    <span class="tok-k">if</span> <span class="tok-k">not</span> opensearch.<span class="tok-f">Ping</span>(c):
+        <span class="tok-b">println</span> <span class="tok-s">&quot;no answer:&quot;</span>, opensearch.<span class="tok-f">Error</span>(c)
+        <span class="tok-k">ret</span> <span class="tok-n">1</span>
+    <span class="tok-k">end</span>
+    info := opensearch.<span class="tok-f">GetInfo</span>(c)
+    <span class="tok-b">println</span> info.distribution, info.version, info.cluster_name
+    h := opensearch.<span class="tok-f">ClusterHealth</span>(c)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;health:&quot;</span>, h.status, h.nodes, <span class="tok-s">&quot;nodes&quot;</span>
+    <span class="tok-k">ret</span> <span class="tok-n">0</span>
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>opensearch 2.17.1 docker-cluster
+health: green 1 nodes</div></div>
+<h3 id="guide-write">Store documents</h3>
+<p>Create the index with a mapping first (<code>CreateIndexWith</code> and <code>Property</code>), then write with <code>Index</code>, <code>Create</code>, <code>Update</code>, <code>Upsert</code> and <code>Delete</code>. For more than a handful of documents use a <code>Bulk</code>, and check each item of the result, since a bulk request succeeds as a whole even when some of its actions fail.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">opensearch-bulk.salam</span><button type="button" class="copy-button" data-copy-target="ex-opensearch-bulk" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-opensearch-bulk">import db.opensearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    <span class="tok-k">mut</span> b := opensearch.<span class="tok-f">NewBulk</span>()
+    opensearch.<span class="tok-f">BulkIndex</span>(b, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;1&quot;</span>, <span class="tok-s">`{&quot;title&quot;:&quot;Shahnameh&quot;,&quot;author&quot;:&quot;Ferdowsi&quot;,&quot;year&quot;:1010}`</span>)
+    opensearch.<span class="tok-f">BulkIndex</span>(b, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;2&quot;</span>, <span class="tok-s">`{&quot;title&quot;:&quot;Masnavi&quot;,&quot;author&quot;:&quot;Rumi&quot;,&quot;year&quot;:1258}`</span>)
+    opensearch.<span class="tok-f">BulkIndex</span>(b, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;3&quot;</span>, <span class="tok-s">`{&quot;title&quot;:&quot;Golestan&quot;,&quot;author&quot;:&quot;Saadi&quot;,&quot;year&quot;:1258}`</span>)
+    opensearch.<span class="tok-f">BulkUpdate</span>(b, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;2&quot;</span>, <span class="tok-s">`{&quot;stock&quot;:4}`</span>)
+    opensearch.<span class="tok-f">BulkDelete</span>(b, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;99&quot;</span>)
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">BulkLen</span>(b), <span class="tok-s">&quot;actions&quot;</span>
+    <span class="tok-b">print</span> opensearch.<span class="tok-f">BulkBody</span>(b)
+    opensearch.<span class="tok-f">BulkFree</span>(b)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>5 actions
+{&quot;index&quot;:{&quot;_index&quot;:&quot;books&quot;,&quot;_id&quot;:&quot;1&quot;}}
+{&quot;title&quot;:&quot;Shahnameh&quot;,&quot;author&quot;:&quot;Ferdowsi&quot;,&quot;year&quot;:1010}
+{&quot;index&quot;:{&quot;_index&quot;:&quot;books&quot;,&quot;_id&quot;:&quot;2&quot;}}
+{&quot;title&quot;:&quot;Masnavi&quot;,&quot;author&quot;:&quot;Rumi&quot;,&quot;year&quot;:1258}
+{&quot;index&quot;:{&quot;_index&quot;:&quot;books&quot;,&quot;_id&quot;:&quot;3&quot;}}
+{&quot;title&quot;:&quot;Golestan&quot;,&quot;author&quot;:&quot;Saadi&quot;,&quot;year&quot;:1258}
+{&quot;update&quot;:{&quot;_index&quot;:&quot;books&quot;,&quot;_id&quot;:&quot;2&quot;}}
+{&quot;doc&quot;:{&quot;stock&quot;:4}}
+{&quot;delete&quot;:{&quot;_index&quot;:&quot;books&quot;,&quot;_id&quot;:&quot;99&quot;}}</div></div>
+<h3 id="guide-query">Build a query</h3>
+<p>Every builder returns JSON text, so builders and hand written JSON mix freely. Put clauses in a <code>BoolQuery</code>, wrap it in a <code>SearchRequest</code> with paging, sorting and the fields you want, and look at <code>SearchBody</code> when a search does not do what you expect.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">opensearch-query.salam</span><button type="button" class="copy-button" data-copy-target="ex-opensearch-query" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-opensearch-query">import db.opensearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">Match</span>(<span class="tok-s">&quot;title&quot;</span>, <span class="tok-s">&quot;book of kings&quot;</span>)
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">Term</span>(<span class="tok-s">&quot;author&quot;</span>, <span class="tok-s">&quot;Ferdowsi&quot;</span>)
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">RangeInt</span>(<span class="tok-s">&quot;year&quot;</span>, <span class="tok-n">1000</span>, <span class="tok-n">1300</span>)
+
+    <span class="tok-k">mut</span> q := opensearch.BoolQuery {}
+    q.must.<span class="tok-f">push</span>(opensearch.<span class="tok-f">Match</span>(<span class="tok-s">&quot;title&quot;</span>, <span class="tok-s">&quot;kings&quot;</span>))
+    q.filter.<span class="tok-f">push</span>(opensearch.<span class="tok-f">RangeInt</span>(<span class="tok-s">&quot;year&quot;</span>, <span class="tok-n">1000</span>, <span class="tok-n">1300</span>))
+    q.must_not.<span class="tok-f">push</span>(opensearch.<span class="tok-f">Term</span>(<span class="tok-s">&quot;author&quot;</span>, <span class="tok-s">&quot;Anonymous&quot;</span>))
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">BoolOf</span>(q)
+
+    <span class="tok-k">mut</span> req := opensearch.SearchRequest { query = opensearch.<span class="tok-f">BoolOf</span>(q), size = <span class="tok-n">5</span> }
+    req.sort.<span class="tok-f">push</span>(opensearch.<span class="tok-f">SortDesc</span>(<span class="tok-s">&quot;year&quot;</span>))
+    req.source.<span class="tok-f">push</span>(<span class="tok-s">&quot;title&quot;</span>)
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">SearchBody</span>(req)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>{&quot;match&quot;:{&quot;title&quot;:&quot;book of kings&quot;}}
+{&quot;term&quot;:{&quot;author&quot;:&quot;Ferdowsi&quot;}}
+{&quot;range&quot;:{&quot;year&quot;:{&quot;gte&quot;:1000,&quot;lte&quot;:1300}}}
+{&quot;bool&quot;:{&quot;must&quot;:[{&quot;match&quot;:{&quot;title&quot;:&quot;kings&quot;}}],&quot;filter&quot;:[{&quot;range&quot;:{&quot;year&quot;:{&quot;gte&quot;:1000,&quot;lte&quot;:1300}}}],&quot;must_not&quot;:[{&quot;term&quot;:{&quot;author&quot;:&quot;Anonymous&quot;}}]}}
+{&quot;query&quot;:{&quot;bool&quot;:{&quot;must&quot;:[{&quot;match&quot;:{&quot;title&quot;:&quot;kings&quot;}}],&quot;filter&quot;:[{&quot;range&quot;:{&quot;year&quot;:{&quot;gte&quot;:1000,&quot;lte&quot;:1300}}}],&quot;must_not&quot;:[{&quot;term&quot;:{&quot;author&quot;:&quot;Anonymous&quot;}}]}},&quot;size&quot;:5,&quot;sort&quot;:[{&quot;year&quot;:{&quot;order&quot;:&quot;desc&quot;}}],&quot;_source&quot;:{&quot;includes&quot;:[&quot;title&quot;]}}</div></div>
+<h3 id="guide-read">Read hits and aggregations</h3>
+<p><code>SearchWith</code> returns hits with their source, score, sort values and highlights. Aggregations come back as raw JSON that <code>Buckets</code>, <code>AggValue</code>, <code>AggField</code> and <code>AggPercentile</code> read. <code>ParseSearch</code> reads an answer you already have, which also makes the code easy to test without a server.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">opensearch-aggs.salam</span><button type="button" class="copy-button" data-copy-target="ex-opensearch-aggs" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-opensearch-aggs">import db.opensearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    <span class="tok-k">mut</span> aggs := opensearch.<span class="tok-f">AddAgg</span>(<span class="tok-s">&quot;{}&quot;</span>, <span class="tok-s">&quot;authors&quot;</span>, opensearch.<span class="tok-f">TermsAgg</span>(<span class="tok-s">&quot;author&quot;</span>, <span class="tok-n">3</span>))
+    aggs = opensearch.<span class="tok-f">AddAgg</span>(aggs, <span class="tok-s">&quot;avg_year&quot;</span>, opensearch.<span class="tok-f">AvgAgg</span>(<span class="tok-s">&quot;year&quot;</span>))
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">SearchBody</span>(opensearch.SearchRequest { size = <span class="tok-n">0</span>, aggs = aggs })
+
+    answer := <span class="tok-s">`{&quot;took&quot;:2,&quot;hits&quot;:{&quot;total&quot;:{&quot;value&quot;:40,&quot;relation&quot;:&quot;eq&quot;},&quot;hits&quot;:[]},&quot;aggregations&quot;:{&quot;authors&quot;:{&quot;buckets&quot;:[{&quot;key&quot;:&quot;Saadi&quot;,&quot;doc_count&quot;:12},{&quot;key&quot;:&quot;Rumi&quot;,&quot;doc_count&quot;:9},{&quot;key&quot;:&quot;Hafez&quot;,&quot;doc_count&quot;:7}]},&quot;avg_year&quot;:{&quot;value&quot;:1265.5}}}`</span>
+    r := opensearch.<span class="tok-f">ParseSearch</span>(answer)
+    <span class="tok-k">each</span> b <span class="tok-k">in</span> opensearch.<span class="tok-f">Buckets</span>(r.aggregations, <span class="tok-s">&quot;authors&quot;</span>):
+        <span class="tok-b">println</span> b.key, b.doc_count
+    <span class="tok-k">end</span>
+    <span class="tok-b">println</span> <span class="tok-s">&quot;average year:&quot;</span>, opensearch.<span class="tok-f">AggValue</span>(r.aggregations, <span class="tok-s">&quot;avg_year&quot;</span>)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>{&quot;size&quot;:0,&quot;aggs&quot;:{&quot;authors&quot;:{&quot;terms&quot;:{&quot;field&quot;:&quot;author&quot;,&quot;size&quot;:3}},&quot;avg_year&quot;:{&quot;avg&quot;:{&quot;field&quot;:&quot;year&quot;}}}}
+Saadi 12
+Rumi 9
+Hafez 7
+average year: 1265.5</div></div>
+<h3 id="guide-tasks">Which function for which job</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>To do this</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>page through a whole index</td><td><code>CreatePit</code>, <code>search_after</code>, <code>DeletePit</code> (or <code>SearchScroll</code> and <code>Scroll</code>)</td></tr>
+<tr><td>run several searches in one request</td><td><code>MSearch</code></td></tr>
+<tr><td>change or delete what a query matches</td><td><code>UpdateByQuery</code>, <code>DeleteByQuery</code></td></tr>
+<tr><td>copy an index, then switch with no downtime</td><td><code>Reindex</code>, then <code>SwapAlias</code></td></tr>
+<tr><td>query with SQL or PPL</td><td><code>Conn</code> with the <a href="/Salam/std/db/">db</a> interface, <code>Sql</code>, <code>SqlWith</code>, <code>Ppl</code></td></tr>
+<tr><td>vector, neural and hybrid search</td><td><code>KnnIndexBody</code>, <code>Knn</code>, <code>Neural</code>, <code>Hybrid</code>, <code>NormalizationPipeline</code></td></tr>
+<tr><td>delete old indices on a schedule</td><td><code>DeleteAfterPolicy</code>, <code>PutPolicy</code>, <code>AddPolicy</code></td></tr>
+<tr><td>users and permissions</td><td><code>PutUser</code>, <code>RoleBody</code>, <code>PutRole</code>, <code>PutRoleMapping</code>, <code>WhoAmI</code></td></tr>
+<tr><td>transform documents while they are indexed</td><td><code>Pipeline</code>, <code>Processor</code>, <code>PutPipeline</code>, <code>SimulatePipeline</code></td></tr>
+<tr><td>back up and restore</td><td><code>PutRepository</code>, <code>CreateSnapshot</code>, <code>RestoreSnapshot</code></td></tr>
+<tr><td>anything else</td><td><code>Perform</code>, <code>PerformNdjson</code></td></tr>
+</tbody></table></div>
+<h3 id="guide-errors">Handle errors</h3>
+<p>Calls never stop the program. A failed call returns false, -1 or an empty result, and the client keeps the details: <code>Status</code>, <code>Error</code>, <code>ErrorType</code> and <code>ErrorReason</code>. A missing document is not an error: <code>Get</code> returns <code>found = false</code> with an empty <code>error</code>.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">opensearch-errors.salam</span><button type="button" class="copy-button" data-copy-target="ex-opensearch-errors" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-opensearch-errors">import db.opensearch
+
+<span class="tok-k">func</span> <span class="tok-k">main</span>:
+    <span class="tok-k">mut</span> cfg := opensearch.<span class="tok-f">DefaultConfig</span>()
+    cfg.nodes = Vector {} <span class="tok-k">as</span> Vector&lt;<span class="tok-t">str</span>&gt;
+    cfg.nodes.<span class="tok-f">push</span>(<span class="tok-s">&quot;http://127.0.0.1:1&quot;</span>)
+    cfg.max_retries = <span class="tok-n">0</span>
+    c := opensearch.<span class="tok-f">NewClient</span>(cfg)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;config ok:&quot;</span>, opensearch.<span class="tok-f">Ok</span>(c)
+
+    d := opensearch.<span class="tok-f">Get</span>(c, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">&quot;1&quot;</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;found:&quot;</span>, d.found
+    <span class="tok-b">println</span> <span class="tok-s">&quot;status:&quot;</span>, opensearch.<span class="tok-f">Status</span>(c)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;error:&quot;</span>, opensearch.<span class="tok-f">Error</span>(c)
+
+    bad := opensearch.<span class="tok-f">Connect</span>(<span class="tok-s">&quot;ftp://example.com&quot;</span>)
+    <span class="tok-b">println</span> <span class="tok-s">&quot;config ok:&quot;</span>, opensearch.<span class="tok-f">Ok</span>(bad), <span class="tok-s">&quot;|&quot;</span>, opensearch.<span class="tok-f">Error</span>(bad)
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>config ok: true
+found: false
+status: 0
+error: http://127.0.0.1:1: could not connect to 127.0.0.1:1
+config ok: false | the node url could not be parsed: ftp://example.com</div></div>
+<h3 id="guide-test">Test without a server</h3>
+<p>The tests of this package run against a small fake OpenSearch built with <a href="/Salam/std/net-http/">net/http</a>: it records each request and answers with canned JSON, so a test can check both what the client sent and how it read the answer. The suite under <code>tests/en/stdlib/opensearch</code> and its Persian twin under <code>tests/fa/stdlib/opensearch</code> cover every feature this way and make good starting points for your own tests.</p>
 <h2 id="types">Types</h2>
 <article class="api-item"><h3 class="api-name" id="BoolQuery"><code dir="ltr">BoolQuery</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">struct</span> BoolQuery</code></pre><div class="api-doc">The four clause lists and options of a bool query, for <code>BoolOf</code>.</div><div class="table-wrap"><table class="api-members"><thead><tr><th>Name</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code dir="ltr">must</code></td><td><code dir="ltr">Vector<str></code></td><td>Must match and adds to the score.</td></tr><tr><td><code dir="ltr">filter</code></td><td><code dir="ltr">Vector<str></code></td><td>Must match, but does not score; cached.</td></tr><tr><td><code dir="ltr">should</code></td><td><code dir="ltr">Vector<str></code></td><td>Should match; raises the score.</td></tr><tr><td><code dir="ltr">must_not</code></td><td><code dir="ltr">Vector<str></code></td><td>Must not match.</td></tr><tr><td><code dir="ltr">minimum_should_match</code></td><td><code dir="ltr">str = ""</code></td><td>How many should clauses must match, such as <code>1</code> or <code>75%</code>.</td></tr><tr><td><code dir="ltr">boost</code></td><td><code dir="ltr">f64 = 0</code></td><td>Multiplies the score; 0 leaves it out.</td></tr></tbody></table></div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">db-opensearch-Query.salam</span><button type="button" class="copy-button" data-copy-target="ex-db-opensearch-Query" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-db-opensearch-Query">import db.opensearch
 
@@ -283,6 +412,10 @@
     req.sort.<span class="tok-f">push</span>(opensearch.<span class="tok-f">SortDesc</span>(<span class="tok-s">&quot;year&quot;</span>))
     req.aggs = opensearch.<span class="tok-f">AddAgg</span>(opensearch.<span class="tok-f">AddAgg</span>(<span class="tok-s">&quot;{}&quot;</span>, <span class="tok-s">&quot;by_tag&quot;</span>, opensearch.<span class="tok-f">TermsAgg</span>(<span class="tok-s">&quot;tag&quot;</span>, <span class="tok-n">5</span>)), <span class="tok-s">&quot;avg_year&quot;</span>, opensearch.<span class="tok-f">AvgAgg</span>(<span class="tok-s">&quot;year&quot;</span>))
     req.aggs = opensearch.<span class="tok-f">AddAgg</span>(req.aggs, <span class="tok-s">&quot;stats&quot;</span>, opensearch.<span class="tok-f">StatsAgg</span>(<span class="tok-s">&quot;year&quot;</span>))
+    <span class="tok-k">mut</span> pcts := Vector {} <span class="tok-k">as</span> Vector&lt;<span class="tok-t">f64</span>&gt;
+    pcts.<span class="tok-f">push</span>(<span class="tok-n">50.0</span>)
+    pcts.<span class="tok-f">push</span>(<span class="tok-n">99.0</span>)
+    req.aggs = opensearch.<span class="tok-f">AddAgg</span>(req.aggs, <span class="tok-s">&quot;pages&quot;</span>, opensearch.<span class="tok-f">PercentilesAgg</span>(<span class="tok-s">&quot;pages&quot;</span>, pcts))
     req.suggest = opensearch.<span class="tok-f">TermSuggest</span>(<span class="tok-s">&quot;fix&quot;</span>, <span class="tok-s">&quot;kngs&quot;</span>, <span class="tok-s">&quot;title&quot;</span>)
     r := opensearch.<span class="tok-f">SearchWith</span>(c, <span class="tok-s">&quot;books&quot;</span>, req)
     <span class="tok-b">println</span> r.ok, r.status, r.took, r.timed_out, r.total, r.total_relation, r.max_score, r.error
@@ -294,6 +427,7 @@
     <span class="tok-k">end</span>
     <span class="tok-b">println</span> opensearch.<span class="tok-f">AggValue</span>(r.aggregations, <span class="tok-s">&quot;avg_year&quot;</span>), opensearch.<span class="tok-f">AggField</span>(r.aggregations, <span class="tok-s">&quot;stats&quot;</span>, <span class="tok-s">&quot;max&quot;</span>)
     <span class="tok-b">println</span> opensearch.<span class="tok-f">AggRaw</span>(r.aggregations, <span class="tok-s">&quot;stats&quot;</span>), opensearch.<span class="tok-f">Suggestions</span>(r.suggest, <span class="tok-s">&quot;fix&quot;</span>)
+    <span class="tok-b">println</span> opensearch.<span class="tok-f">AggPercentile</span>(r.aggregations, <span class="tok-s">&quot;pages&quot;</span>, <span class="tok-n">50.0</span>), opensearch.<span class="tok-f">AggPercentile</span>(r.aggregations, <span class="tok-s">&quot;pages&quot;</span>, <span class="tok-n">99.0</span>)
     <span class="tok-b">println</span> opensearch.<span class="tok-f">Search</span>(c, <span class="tok-s">&quot;books,articles&quot;</span>, opensearch.<span class="tok-f">MatchAll</span>()).total
     <span class="tok-b">println</span> opensearch.<span class="tok-f">SearchRaw</span>(c, <span class="tok-s">&quot;books&quot;</span>, <span class="tok-s">`{&quot;query&quot;:{&quot;match_all&quot;:{}},&quot;size&quot;:1}`</span>).hits.<span class="tok-f">len</span>()
     p := opensearch.SearchParams {
@@ -814,6 +948,7 @@ import db.opensearch
 <article class="api-item"><h3 class="api-name" id="Buckets"><code dir="ltr">Buckets</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Buckets</span>(aggregations: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>): Vector&lt;Bucket&gt;</code></pre><div class="api-doc">The buckets of a bucket aggregation, list or keyed.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="AggValue"><code dir="ltr">AggValue</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AggValue</span>(aggregations: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>): <span class="tok-t">f64</span></code></pre><div class="api-doc">The value of a single value aggregation such as <code>avg</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="AggField"><code dir="ltr">AggField</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AggField</span>(aggregations: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>, field: <span class="tok-t">str</span>): <span class="tok-t">f64</span></code></pre><div class="api-doc">One named number of an aggregation, such as <code>max</code> of <code>stats</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="AggPercentile"><code dir="ltr">AggPercentile</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AggPercentile</span>(aggregations: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>, percent: <span class="tok-t">f64</span>): <span class="tok-t">f64</span></code></pre><div class="api-doc">One percentile of a <code>percentiles</code> aggregation, such as <code>AggPercentile(aggs, "latency", 99.0)</code>; reads the <code>"99.0"</code> key that a dotted path cannot reach.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="AggRaw"><code dir="ltr">AggRaw</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">AggRaw</span>(aggregations: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">One aggregation as raw JSON.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Suggestions"><code dir="ltr">Suggestions</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Suggestions</span>(suggest: <span class="tok-t">str</span>, name: <span class="tok-t">str</span>): Vector&lt;<span class="tok-t">str</span>&gt;</code></pre><div class="api-doc">The texts a suggester offered.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="JsonPath"><code dir="ltr">JsonPath</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">JsonPath</span>(text: <span class="tok-t">str</span>, path: <span class="tok-t">str</span>): <span class="tok-t">str</span></code></pre><div class="api-doc">A value at a dotted path, with numbers for array items, such as <code>hits.hits.0._id</code>; strings come back unquoted.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SearchParams">db-opensearch-Search.salam</a></p></article>

@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.18)
 project(salam_engine C)
 
 if(NOT SALAM_ENGINE_GEN)
-  set(SALAM_ENGINE_GEN "${CMAKE_CURRENT_SOURCE_DIR}/build/gen")
+  if(ANDROID AND SALAM_ENGINE_GEN_ROOT)
+    set(SALAM_ENGINE_GEN "${SALAM_ENGINE_GEN_ROOT}/${ANDROID_ABI}/gen")
+  else()
+    set(SALAM_ENGINE_GEN "${CMAKE_CURRENT_SOURCE_DIR}/build/gen")
+  endif()
 endif()
 
 file(GLOB SALAM_GEN_SOURCES CONFIGURE_DEPENDS "${SALAM_ENGINE_GEN}/*.c")
@@ -26,10 +30,12 @@ set(SALAM_ENGINE_SOURCES
   $<TARGET_OBJECTS:salam_gen>)
 
 if(ANDROID)
-  add_library(salam SHARED ${SALAM_ENGINE_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/salam_jni.c")
+  add_library(salam SHARED ${SALAM_ENGINE_SOURCES}
+    "${CMAKE_CURRENT_SOURCE_DIR}/salam_jni.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/android_compat.c")
   target_link_libraries(salam PRIVATE m dl log)
   target_link_options(salam PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16384)
-  target_compile_options(salam_gen PRIVATE -ffunction-sections -fdata-sections)
+  target_compile_options(salam_gen PRIVATE -O2 -ffunction-sections -fdata-sections)
 else()
   add_library(salam STATIC ${SALAM_ENGINE_SOURCES})
   find_package(Threads REQUIRED)

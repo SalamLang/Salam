@@ -3,7 +3,7 @@
 # and, with --std, a minified copy of std/ for the apps to ship.
 #
 # Usage:
-#   tools/bash/build-mobile-engine.sh --out DIR [--target TRIPLE] [--std DIR]
+#   tools/bash/build-mobile-engine.sh [--out DIR [--target TRIPLE]] [--std DIR]
 #
 # The C lands in DIR/gen. Files whose content did not change keep their
 # timestamp, so CMake and Xcode only recompile what really changed. The
@@ -55,10 +55,29 @@ while [ $# -gt 0 ]; do
         ;;
     esac
 done
-[ -n "$OUT" ] || {
-    echo "build-mobile-engine: --out DIR is required" >&2
+[ -n "$OUT" ] || [ -n "$STD_OUT" ] || {
+    echo "build-mobile-engine: give --out DIR, --std DIR or both" >&2
     exit 2
 }
+
+stage_std() {
+    rm -rf "$STD_OUT"
+    mkdir -p "$STD_OUT"
+    (
+        cd "$ROOT/std"
+        find . -name '*.salam' | while IFS= read -r f; do
+            mkdir -p "$STD_OUT/$(dirname "$f")"
+            cp "$f" "$STD_OUT/$f"
+        done
+    )
+    "$SALAM" format --minify -r "$STD_OUT" >/dev/null
+    echo "minified std in $STD_OUT"
+}
+
+if [ -z "$OUT" ]; then
+    stage_std
+    exit 0
+fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/salam-mobile.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -95,15 +114,5 @@ done
 echo "engine C for ${TARGET:-host} in $OUT/gen"
 
 if [ -n "$STD_OUT" ]; then
-    rm -rf "$STD_OUT"
-    mkdir -p "$STD_OUT"
-    (
-        cd "$ROOT/std"
-        find . -name '*.salam' | while IFS= read -r f; do
-            mkdir -p "$STD_OUT/$(dirname "$f")"
-            cp "$f" "$STD_OUT/$f"
-        done
-    )
-    "$SALAM" format --minify -r "$STD_OUT" >/dev/null
-    echo "minified std in $STD_OUT"
+    stage_std
 fi

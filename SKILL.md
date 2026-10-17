@@ -2698,6 +2698,6 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
 | Layout DSL `چیدمان`                              | <https://www.salamlang.ir/learn/layout/>       |
-| Search with Typesense (`دیتابیس.تایپسنس`)       | <https://www.salamlang.ir/learn/search/>       |
+| Search with Typesense (`دیتابیس.تایپسنس`)        | <https://www.salamlang.ir/learn/search/>       |
 | Search with OpenSearch (`دیتابیس.اپن سرچ`)       | <https://www.salamlang.ir/learn/opensearch/>   |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

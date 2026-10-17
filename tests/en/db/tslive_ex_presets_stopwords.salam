@@ -1,0 +1,79 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_pre_notes", err)
+    _ := typesense.DeletePreset(c, "ex_pre_listing", err)
+    _ := typesense.DeleteStopwords(c, "ex_pre_common", err)
+    _ := typesense.DeleteStemmingDictionary(c, "ex_pre_irregular", err)
+
+    mut stem := Vector {} as Vector<typesense.StemWord>
+    stem.push(typesense.StemWord { word = "people", root = "person" })
+    stem.push(typesense.StemWord { word = "mice", root = "mouse" })
+    println "dictionary imported:", typesense.ImportStemmingDictionary(c, "ex_pre_irregular", stem, err)
+    d := typesense.GetStemmingDictionary(c, "ex_pre_irregular", err)
+    println "dictionary:", d.id, d.words.len(), "listed:", str.Join(typesense.ListStemmingDictionaries(c, err), ",").find("ex_pre_irregular") >= 0
+
+    mut s := typesense.Schema { name = "ex_pre_notes" }
+    s.fields.push(typesense.Field { name = "text", kind = typesense.TYPE_STRING, stem = true })
+    s.fields.push(typesense.Field { name = "tags", kind = typesense.TYPE_STRING, stem_dictionary = "ex_pre_irregular" })
+    s.fields.push(typesense.FacetField("score", typesense.TYPE_INT32))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "text": "the runner was running", "tags": "person", "score": 3}`)
+    docs.push(`{"id": "2", "text": "a quiet library", "tags": "mouse", "score": 9}`)
+    docs.push(`{"id": "3", "text": "the end", "tags": "city", "score": 5}`)
+    _ := typesense.ImportDocuments(c, "ex_pre_notes", docs, typesense.WriteOptions {}, err)
+    println "stemming, runs finds:", typesense.Search(c, "ex_pre_notes", typesense.NewSearch("runs", "text"), err).found
+    println "dictionary, people finds:", typesense.Search(c, "ex_pre_notes", typesense.NewSearch("people", "tags"), err).found
+
+    mut words := Vector {} as Vector<str>
+    words.push("the")
+    words.push("a")
+    sw := typesense.UpsertStopwords(c, "ex_pre_common", words, "en", err)
+    println "stopwords:", sw.id, sw.locale, sw.stopwords.len()
+    mut with := typesense.NewSearch("the", "text")
+    println "the, as a word:", typesense.Search(c, "ex_pre_notes", with, err).found
+    with.stopwords = "ex_pre_common"
+    println "the, as a stopword:", typesense.Search(c, "ex_pre_notes", with, err).found
+    println "get:", typesense.GetStopwords(c, "ex_pre_common", err).stopwords.len()
+
+    mut listing := typesense.NewSearch("", "text")
+    listing.sort_by = "score:desc"
+    listing.per_page = 1
+    p := typesense.UpsertSearchPreset(c, "ex_pre_listing", listing, err)
+    println "preset:", p.name, p.value
+    mut use := typesense.NewSearch("*", "")
+    use.preset = "ex_pre_listing"
+    println "through the preset:", typesense.Search(c, "ex_pre_notes", use, err).hits.get(0).document
+    println "raw preset:", typesense.UpsertPreset(c, "ex_pre_listing", `{"query_by": "text", "per_page": 2}`, err).value
+    println "get:", typesense.GetPreset(c, "ex_pre_listing", err).value
+
+    mut listed := false
+    each x in typesense.ListPresets(c, err):
+        if x.name == "ex_pre_listing": listed = true end
+    end
+    println "listed:", listed
+    println "deleted:", typesense.DeletePreset(c, "ex_pre_listing", err), typesense.DeleteStopwords(c, "ex_pre_common", err)
+    _ := typesense.DeleteCollection(c, "ex_pre_notes", err)
+    println "dictionary deleted:", typesense.DeleteStemmingDictionary(c, "ex_pre_irregular", err)
+end

@@ -1,0 +1,67 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_join_books", err)
+    _ := typesense.DeleteCollection(c, "ex_join_authors", err)
+
+    mut authors := typesense.Schema { name = "ex_join_authors" }
+    authors.fields.push(typesense.Field { name = "name", kind = typesense.TYPE_STRING, sort = 1 })
+    authors.fields.push(typesense.FacetField("country", typesense.TYPE_STRING))
+    _ := typesense.CreateCollection(c, authors, err)
+    mut a := Vector {} as Vector<str>
+    a.push(`{"id": "a1", "name": "Jane Austen", "country": "England"}`)
+    a.push(`{"id": "a2", "name": "Sadegh Hedayat", "country": "Iran"}`)
+    _ := typesense.ImportDocuments(c, "ex_join_authors", a, typesense.WriteOptions {}, err)
+
+    mut books := typesense.Schema { name = "ex_join_books" }
+    books.fields.push(typesense.NewField("title", typesense.TYPE_STRING))
+    books.fields.push(typesense.Field { name = "author_id", kind = typesense.TYPE_STRING, reference = "ex_join_authors.id" })
+    _ := typesense.CreateCollection(c, books, err)
+    mut b := Vector {} as Vector<str>
+    b.push(`{"id": "1", "title": "Emma", "author_id": "a1"}`)
+    b.push(`{"id": "2", "title": "Persuasion", "author_id": "a1"}`)
+    b.push(`{"id": "3", "title": "The Blind Owl", "author_id": "a2"}`)
+    _ := typesense.ImportDocuments(c, "ex_join_books", b, typesense.WriteOptions {}, err)
+    _ := typesense.CreateDocument(c, "ex_join_books", `{"id": "4", "title": "Ghost", "author_id": "a9"}`, err)
+    println "unknown author rejected:", err.status
+
+    mut p := typesense.NewSearch("*", "")
+    p.filter_by = "$ex_join_authors(country:=Iran)"
+    p.include_fields = "title,$ex_join_authors(name)"
+    r := typesense.Search(c, "ex_join_books", p, err)
+    println "books by Iranian authors:", r.found
+    each h in r.hits:
+        println "  ", h.document
+    end
+
+    mut english := typesense.NewSearch("*", "")
+    english.filter_by = "$ex_join_authors(country:=England)"
+    english.include_fields = "title,$ex_join_authors(name,country)"
+    english.sort_by = "$ex_join_authors(name:asc)"
+    re := typesense.Search(c, "ex_join_books", english, err)
+    println "books by English authors:", re.found, typesense.ErrorString(err)
+    each h in re.hits:
+        println "  ", h.document
+    end
+    _ := typesense.DeleteCollection(c, "ex_join_books", err)
+    _ := typesense.DeleteCollection(c, "ex_join_authors", err)
+end

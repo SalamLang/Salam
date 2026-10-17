@@ -1,0 +1,83 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import encoding.json
+import db.typesense
+
+func ids(r: typesense.SearchResult): str:
+    mut out := Vector {} as Vector<str>
+    each h in r.hits:
+        mut mark := ""
+        if h.curated: mark = "*" end
+        out.push(json.Get(h.document, "id") + mark)
+    end
+    ret str.Join(out, " ")
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_cur_phones", err)
+    _ := typesense.DeleteCurationSet(c, "ex_cur_promos", err)
+    mut s := typesense.Schema { name = "ex_cur_phones" }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("stock", typesense.TYPE_INT32))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "name": "phone basic", "stock": 5}`)
+    docs.push(`{"id": "2", "name": "phone pro", "stock": 0}`)
+    docs.push(`{"id": "3", "name": "phone max", "stock": 3}`)
+    docs.push(`{"id": "4", "name": "phone case", "stock": 9}`)
+    _ := typesense.ImportDocuments(c, "ex_cur_phones", docs, typesense.WriteOptions {}, err)
+    q := typesense.NewSearch("phone", "name")
+    println "plain order:", ids(typesense.Search(c, "ex_cur_phones", q, err))
+
+    mut pins := Vector {} as Vector<typesense.Pin>
+    pins.push(typesense.Pin { id = "3", position = 1 })
+    mut hide := Vector {} as Vector<str>
+    hide.push("4")
+    promote := typesense.CurationRule {
+        id = "promote-max", query = "phone", match_type = typesense.MATCH_EXACT, includes = pins, excludes = hide,
+        metadata = `{"banner": "New: phone max"}`
+    }
+    println "rule:", typesense.CurationJSON(promote)
+    mut rules := Vector {} as Vector<typesense.CurationRule>
+    rules.push(promote)
+    set := typesense.UpsertCurationSet(c, "ex_cur_promos", rules, err)
+    println "set:", set.name, set.items.len(), set.items.get(0).includes.get(0).id
+    _ := typesense.UpdateCollection(c, "ex_cur_phones", `{"curation_sets": ["ex_cur_promos"]}`, err)
+    r := typesense.Search(c, "ex_cur_phones", q, err)
+    println "curated order:", ids(r), "(* = placed by the rule)"
+    println "rule metadata comes back:", str.Contains(r.raw, "New: phone max")
+
+    stock := typesense.CurationRule { id = "in-stock", query = "pro", match_type = typesense.MATCH_CONTAINS, filter_by = "stock:>0", remove_matched_tokens = true }
+    _ := typesense.UpsertCurationItem(c, "ex_cur_promos", stock, err)
+    println "phone pro, in stock only:", typesense.Search(c, "ex_cur_phones", typesense.NewSearch("phone pro", "name"), err).found
+    println "items:", typesense.ListCurationItems(c, "ex_cur_promos", err).len(), typesense.GetCurationItem(c, "ex_cur_promos", "in-stock", err).filter_by
+
+    mut off := typesense.NewSearch("phone", "name")
+    typesense.Set(off, "enable_curations", "false")
+    println "rules switched off:", ids(typesense.Search(c, "ex_cur_phones", off, err))
+    mut manual := typesense.SearchParams { q = "phone", query_by = "name", hidden_hits = "1,2", pinned_hits = "4:1" }
+    typesense.Set(manual, "enable_curations", "false")
+    println "pinned and hidden per search:", ids(typesense.Search(c, "ex_cur_phones", manual, err))
+
+    println "deleted item:", typesense.DeleteCurationItem(c, "ex_cur_promos", "in-stock", err), "sets:", typesense.ListCurationSets(c, err).len() >= 1
+    _ := typesense.DeleteCollection(c, "ex_cur_phones", err)
+    println "deleted set:", typesense.DeleteCurationSet(c, "ex_cur_promos", err)
+end

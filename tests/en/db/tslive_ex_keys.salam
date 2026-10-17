@@ -1,0 +1,76 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import encoding
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    url := parts.get(0)
+    mut admin := typesense.New(url, parts.get(1))
+    defer typesense.Free(admin)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(admin, "ex_key_orders", err)
+    mut s := typesense.Schema { name = "ex_key_orders" }
+    s.fields.push(typesense.NewField("item", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("customer", typesense.TYPE_STRING))
+    _ := typesense.CreateCollection(admin, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "item": "tea", "customer": "sara"}`)
+    docs.push(`{"id": "2", "item": "coffee", "customer": "sara"}`)
+    docs.push(`{"id": "3", "item": "tea", "customer": "reza"}`)
+    _ := typesense.ImportDocuments(admin, "ex_key_orders", docs, typesense.WriteOptions {}, err)
+
+    mut cols := Vector {} as Vector<str>
+    cols.push("ex_key_orders")
+    k := typesense.SearchOnlyKey(admin, "ex_key search", cols, err)
+    println "search key:", k.actions.get(0), k.collections.get(0), "full value shown once:", k.value.len() > 20
+    got := typesense.GetKey(admin, k.id, err)
+    println "read back:", got.description, "value hidden:", got.value.len() == 0, "prefix matches:", got.value_prefix == k.value.substr(0, 4)
+    mut found := false
+    each x in typesense.ListKeys(admin, err):
+        if x.id == k.id: found = true end
+    end
+    println "listed:", found
+
+    mut browser := typesense.New(url, k.value)
+    defer typesense.Free(browser)
+    println "browser search:", typesense.Search(browser, "ex_key_orders", typesense.NewSearch("tea", "item"), err).found
+    _ := typesense.CreateDocument(browser, "ex_key_orders", `{"item": "cake", "customer": "x"}`, err)
+    println "browser write:", err.status
+
+    scoped := typesense.ScopedSearchKey(k.value, typesense.SearchParams { filter_by = "customer:=sara" }, 0)
+    println "scoped key embeds:", encoding.Base64Decode(scoped).find("customer:=sara") > 0
+    mut sara := typesense.New(url, scoped)
+    defer typesense.Free(sara)
+    println "sara sees:", typesense.Search(sara, "ex_key_orders", typesense.NewSearch("*", ""), err).found, "orders"
+    mut trick := typesense.NewSearch("*", "")
+    trick.filter_by = "customer:=reza"
+    println "and cannot widen it:", typesense.Search(sara, "ex_key_orders", trick, err).found
+    raw := typesense.GenerateScopedSearchKey(k.value, `{"filter_by": "customer:=reza", "expires_at": 1}`)
+    mut expired := typesense.New(url, raw)
+    defer typesense.Free(expired)
+    _ := typesense.Search(expired, "ex_key_orders", typesense.NewSearch("*", ""), err)
+    println "expired scoped key:", err.status
+
+    mut all := Vector {} as Vector<str>
+    all.push(typesense.KEY_ACTION_ALL)
+    own := typesense.CreateKey(admin, typesense.KeySpec { description = "ex_key own value", actions = all, collections = cols, value = "ex-key-chosen-value-123", autodelete = true, expires_at = 4102444800 }, err)
+    println "chosen value:", own.value, own.autodelete, own.expires_at
+    println "deleted:", typesense.DeleteKey(admin, k.id, err) == k.id, typesense.DeleteKey(admin, own.id, err) == own.id
+    _ := typesense.Search(browser, "ex_key_orders", typesense.NewSearch("tea", "item"), err)
+    println "deleted key stops working:", err.status
+    _ := typesense.DeleteCollection(admin, "ex_key_orders", err)
+end

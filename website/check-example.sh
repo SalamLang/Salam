@@ -28,6 +28,15 @@ if [ ! -f "$want" ]; then
     exit 1
 fi
 
+if [ -f "$root/${src%.salam}.server" ]; then
+    if "$SALAM" check "$root/$src" --no-color --log-level=error >/dev/null 2>&1; then
+        echo "ok   $src (needs a server, checked, not run)"
+        exit 0
+    fi
+    echo "FAIL $src (does not compile)"
+    exit 1
+fi
+
 if ! got=$("$SALAM" run "$root/$src" --no-color --log-level=error 2>&1 </dev/null); then
     printf 'FAIL %s\n%s\n' "$src" "$got"
     exit 1

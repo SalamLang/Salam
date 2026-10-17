@@ -1,0 +1,76 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_facet_shoes", err)
+    mut s := typesense.Schema { name = "ex_facet_shoes" }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("brand", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("colors", typesense.TYPE_STRING_ARRAY))
+    s.fields.push(typesense.FacetField("price", typesense.TYPE_INT32))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    docs.push(`{"id": "1", "name": "Trail runner", "brand": "Rahro", "colors": ["black", "red"], "price": 90}`)
+    docs.push(`{"id": "2", "name": "Road runner", "brand": "Rahro", "colors": ["white"], "price": 120}`)
+    docs.push(`{"id": "3", "name": "City walker", "brand": "Gamsar", "colors": ["black"], "price": 60}`)
+    docs.push(`{"id": "4", "name": "Hiking boot", "brand": "Kooh", "colors": ["brown", "black"], "price": 150}`)
+    docs.push(`{"id": "5", "name": "Sandal", "brand": "Gamsar", "colors": ["brown"], "price": 30}`)
+    _ := typesense.ImportDocuments(c, "ex_facet_shoes", docs, typesense.WriteOptions {}, err)
+
+    mut p := typesense.NewSearch("*", "")
+    p.facet_by = "brand,colors,price"
+    p.max_facet_values = 3
+    r := typesense.Search(c, "ex_facet_shoes", p, err)
+    each f in r.facets:
+        mut parts2 := Vector {} as Vector<str>
+        each fc in f.counts:
+            parts2.push(fc.value + "=" + fc.count)
+        end
+        println f.field_name + ":", str.Join(parts2, " ")
+        if f.field_name == "price":
+            println "  stats:", f.stats
+        end
+    end
+
+    mut narrow := typesense.NewSearch("*", "")
+    narrow.facet_by = "brand"
+    narrow.facet_query = "brand:ra"
+    rn := typesense.Search(c, "ex_facet_shoes", narrow, err)
+    println "brands starting with ra:", rn.facets.get(0).counts.get(0).value, rn.facets.get(0).counts.get(0).highlighted
+
+    mut filtered := typesense.NewSearch("runner", "name")
+    filtered.filter_by = "colors:=[black] && price:<100"
+    filtered.facet_by = "brand"
+    rf := typesense.Search(c, "ex_facet_shoes", filtered, err)
+    println "black runners under 100:", rf.found, rf.facets.get(0).counts.get(0).value
+
+    mut g := typesense.NewSearch("*", "")
+    g.group_by = "brand"
+    g.group_limit = 1
+    g.sort_by = "price:asc"
+    rg := typesense.Search(c, "ex_facet_shoes", g, err)
+    println "groups:", rg.found, "documents:", rg.found_docs
+    each grp in rg.groups:
+        println "  cheapest from", str.Join(grp.key, ","), "of", grp.found, "->", grp.hits.get(0).document
+    end
+    _ := typesense.DeleteCollection(c, "ex_facet_shoes", err)
+end

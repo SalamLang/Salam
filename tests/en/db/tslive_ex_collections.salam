@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    _ := typesense.DeleteCollection(c, "ex_col_products", err)
+    _ := typesense.DeleteCollection(c, "ex_col_products_copy", err)
+
+    mut s := typesense.Schema { name = "ex_col_products", default_sorting_field = "price", enable_nested_fields = true }
+    s.fields.push(typesense.NewField("name", typesense.TYPE_STRING))
+    s.fields.push(typesense.Field { name = "description", kind = typesense.TYPE_STRING, optional = true, infix = true })
+    s.fields.push(typesense.FacetField("brand", typesense.TYPE_STRING))
+    s.fields.push(typesense.FacetField("tags", typesense.TYPE_STRING_ARRAY))
+    s.fields.push(typesense.Field { name = "price", kind = typesense.TYPE_FLOAT, range_index = true })
+    s.fields.push(typesense.Field { name = "stock", kind = typesense.TYPE_INT32, sort = 1 })
+    s.fields.push(typesense.Field { name = "sku", kind = typesense.TYPE_STRING, index = false, optional = true })
+    s.fields.push(typesense.NewField("in_stock", typesense.TYPE_BOOL))
+    s.fields.push(typesense.Field { name = "added_at", kind = typesense.TYPE_INT64, optional = true })
+    s.fields.push(typesense.Field { name = "specs", kind = typesense.TYPE_OBJECT, optional = true })
+    s.fields.push(typesense.Field { name = "extra_.*", kind = typesense.TYPE_AUTO, optional = true })
+    s.token_separators.push("-")
+    s.symbols_to_index.push("+")
+    s.metadata = `{"team": "catalog"}`
+    println "schema:", typesense.SchemaJSON(s)
+
+    col := typesense.CreateCollection(c, s, err)
+    println "created:", col.name, typesense.Ok(err), col.num_documents, col.created_at > 0
+    each f in col.fields:
+        println "  field", f.name, f.kind, "facet=" + f.facet, "optional=" + f.optional, "index=" + f.index, "sort=" + f.sort
+    end
+    println "separators:", str.Join(col.token_separators, ","), "symbols:", str.Join(col.symbols_to_index, ","), "metadata:", col.metadata
+
+    _ := typesense.CreateCollection(c, s, err)
+    println "create again:", typesense.IsConflict(err)
+    println "exists:", typesense.CollectionExists(c, "ex_col_products", err), typesense.CollectionExists(c, "ex_col_nope", err)
+
+    mut found := false
+    each x in typesense.ListCollections(c, err):
+        if x.name == "ex_col_products": found = true end
+    end
+    println "listed:", found
+    mut skip := Vector {} as Vector<str>
+    skip.push("fields")
+    println "one per page:", typesense.ListCollectionsPage(c, 0, 1, skip, err).len()
+
+    mut add := Vector {} as Vector<typesense.Field>
+    add.push(typesense.FacetField("color", typesense.TYPE_STRING))
+    _ := typesense.AddFields(c, "ex_col_products", add, err)
+    println "added color:", typesense.Ok(err)
+    mut drop := Vector {} as Vector<str>
+    drop.push("sku")
+    _ := typesense.DropFields(c, "ex_col_products", drop, err)
+    println "dropped sku:", typesense.Ok(err)
+    _ := typesense.SetCollectionMetadata(c, "ex_col_products", `{"team": "search"}`, err)
+    after := typesense.GetCollection(c, "ex_col_products", err)
+    mut names := Vector {} as Vector<str>
+    each f in after.fields:
+        names.push(f.name)
+    end
+    println "fields now:", str.Join(names, ",")
+    println "metadata now:", after.metadata
+
+    _ := typesense.CreateDocument(c, "ex_col_products", `{"id": "1", "name": "Kettle", "brand": "Pars", "tags": ["kitchen"], "price": 19.5, "stock": 4, "in_stock": true, "color": "white"}`, err)
+    println "documents:", typesense.GetCollection(c, "ex_col_products", err).num_documents
+    copy := typesense.CloneCollection(c, "ex_col_products", "ex_col_products_copy", err)
+    println "clone:", copy.name, copy.fields.len() == after.fields.len(), copy.num_documents
+    println "truncated:", typesense.TruncateCollection(c, "ex_col_products", err)
+    println "deleted:", typesense.DeleteCollection(c, "ex_col_products", err).name, typesense.DeleteCollection(c, "ex_col_products_copy", err).name
+    _ := typesense.GetCollection(c, "ex_col_products", err)
+    println "gone:", typesense.IsNotFound(err)
+end

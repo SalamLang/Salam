@@ -119,7 +119,10 @@ abstract class SalamAssetsTask
                 val dir = root.resolve("tests/$lang/editor-selected")
                 val dst = examples.resolve(lang)
                 dst.mkdirs()
-                dir.listFiles { f -> f.name.endsWith(".salam") }?.forEach { it.copyTo(dst.resolve(it.name)) }
+                dir.listFiles { f -> f.name.endsWith(".salam") }?.forEach {
+                    val body = it.readText().replace(Regex("""^\s*/\*[\s\S]*?\*/\s*"""), "")
+                    dst.resolve(it.name.replace(Regex("^[0-9]+-"), "")).writeText(body)
+                }
             }
         }
     }

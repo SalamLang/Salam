@@ -42,6 +42,7 @@ class EngineService : Service() {
             return
         }
         val std = StdInstaller.ensure(this)
+        exportCertificates()
         Engine.load()
         Engine.nativeBoot(std.absolutePath)
         val fds = Engine.nativeRedirect() ?: IntArray(0)
@@ -51,6 +52,33 @@ class EngineService : Service() {
             stdin = FileOutputStream(ParcelFileDescriptor.adoptFd(fds[2]).fileDescriptor)
         }
         ready = true
+    }
+
+    private fun exportCertificates() {
+        try {
+            val out = java.io.File(filesDir, "cacerts.pem")
+            if (!out.isFile || System.currentTimeMillis() - out.lastModified() > 7L * 24 * 3600 * 1000) {
+                val dir = java.io.File("/system/etc/security/cacerts")
+                val pem = StringBuilder()
+                dir.listFiles()?.sortedBy { it.name }?.forEach { f ->
+                    val text = f.readText()
+                    val a = text.indexOf("-----BEGIN CERTIFICATE-----")
+                    val b = text.indexOf("-----END CERTIFICATE-----")
+                    if (a >= 0 && b > a) {
+                        pem.append(text, a, b + 25).append('\n')
+                    }
+                }
+                if (pem.isNotEmpty()) {
+                    out.writeText(pem.toString())
+                }
+            }
+            if (out.isFile) {
+                android.system.Os.setenv("SSL_CERT_FILE", out.absolutePath, true)
+            }
+            android.system.Os.setenv("HOME", filesDir.absolutePath, true)
+            android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, true)
+        } catch (_: Exception) {
+        }
     }
 
     private fun handle(msg: Message): Boolean {
@@ -219,8 +247,8 @@ class EngineService : Service() {
     }
 
     companion object {
-        private const val MARK = "\u0000\u001eSALAM-END:"
-        private const val MARK_END = "\u001e\u0000"
+        private const val MARK = "\u001e\u001fSALAM-END:"
+        private const val MARK_END = "\u001f\u001e"
         private const val STACK = 64L * 1024 * 1024
     }
 }

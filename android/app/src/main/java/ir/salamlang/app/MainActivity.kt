@@ -190,8 +190,8 @@ class MainActivity : BaseActivity() {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(14), 0, 0, 0)
                 }
-            texts.addView(label("", 15f, palette.text, true).apply { tag = "name" })
-            texts.addView(label("", 12f, palette.textDim).apply { tag = "meta" })
+            texts.addView(label("", 15f, palette.text, true).apply { tag = "name" }.startAligned())
+            texts.addView(label("", 12f, palette.textDim).apply { tag = "meta" }.startAligned())
             row.addView(weight(texts))
             return LinearLayout(this@MainActivity).apply {
                 setPadding(0, dp(3), 0, dp(3))
@@ -407,6 +407,13 @@ class MainActivity : BaseActivity() {
         val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
         intent.action = null
         askNewFile(intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: "shared", text)
+    }
+
+    private fun TextView.startAligned(): TextView {
+        textDirection = View.TEXT_DIRECTION_LOCALE
+        textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        return this
     }
 
     companion object {

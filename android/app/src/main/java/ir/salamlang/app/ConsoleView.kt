@@ -22,13 +22,13 @@ class ConsoleView(
     private val act: BaseActivity,
 ) : LinearLayout(act) {
     interface Listener {
-        fun onInput(line: String)
+        fun onConsoleInput(line: String)
 
-        fun onStop()
+        fun onConsoleStop()
 
-        fun onClose()
+        fun onConsoleClose()
 
-        fun onResize(dy: Float)
+        fun onConsoleResize(dy: Float)
     }
 
     var listener: Listener? = null
@@ -61,7 +61,7 @@ class ConsoleView(
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> lastY = e.rawY
                 MotionEvent.ACTION_MOVE -> {
-                    listener?.onResize(lastY - e.rawY)
+                    listener?.onConsoleResize(lastY - e.rawY)
                     lastY = e.rawY
                 }
             }
@@ -79,11 +79,11 @@ class ConsoleView(
         status = act.label("", 13f, p.textDim).apply { setPadding(act.dp(10), 0, 0, 0) }
         header.addView(act.weight(status))
         stopButton =
-            act.iconButton(R.drawable.ic_stop, R.string.stop, p.error) { listener?.onStop() }.apply {
+            act.iconButton(R.drawable.ic_stop, R.string.stop, p.error) { listener?.onConsoleStop() }.apply {
                 visibility = GONE
             }
         header.addView(stopButton)
-        header.addView(act.iconButton(R.drawable.ic_close, R.string.close, p.textDim) { listener?.onClose() })
+        header.addView(act.iconButton(R.drawable.ic_close, R.string.close, p.textDim) { listener?.onConsoleClose() })
         addView(header)
 
         output =
@@ -139,7 +139,7 @@ class ConsoleView(
         val line = input.text.toString()
         input.setText("")
         append(line + "\n", p.textDim)
-        listener?.onInput(line + "\n")
+        listener?.onConsoleInput(line + "\n")
     }
 
     fun clear() {

@@ -58,6 +58,7 @@ class SymbolBar(
                 this.text = text
                 gravity = Gravity.CENTER
                 typeface = Typeface.MONOSPACE
+                textDirection = android.view.View.TEXT_DIRECTION_LTR
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setTextColor(act.palette.text)
                 minWidth = act.dp(40)

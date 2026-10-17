@@ -6,8 +6,20 @@ pkg.title = The net/websocket package in Salam | WebSocket
 pkg.description = The net/websocket package in Salam: a WebSocket server and client, text and binary messages, ping, secure wss connections and broadcasting to rooms, with examples.
 pkg.import = net.websocket
 pkg.intro <<
-<p>A WebSocket is a connection that stays open after one HTTP request, and either side sends a message whenever it likes; for live chat, notifications and games. The server takes connections with <code>Listen</code> and <code>Accept</code>, and a client connects with <code>Dial</code>.</p>
-<p>To serve several clients, read each connection in its own thread and use a <code>Hub</code> to send a message to every member of a room.</p>
+<p>A WebSocket is a connection that starts as one HTTP request and then stays open, and either side sends a message whenever it likes: live chat, notifications, dashboards, games. This package has both ends. The server takes connections with <code>Listen</code> and <code>Accept</code> on its own port, and a client connects with <code>Dial</code>; <code>AcceptWSS</code> and <code>DialWSS</code> do the same over TLS. It runs its own listener and does not plug into the <a href="/std/net-http/">net/http</a> server. For the Socket.IO protocol that many JavaScript apps use (events, acknowledgements, reconnection) use <a href="/std/net-socketio/">net/socketio</a> instead; a plain browser <code>WebSocket</code> talks to this package directly.</p>
+<p>Core ideas:</p>
+<ul>
+<li><code>Receive</code> blocks until a whole message has arrived and returns a <code>Message</code>; check its kind with <code>IsText</code>, <code>IsBinary</code> and <code>IsClose</code>. Pings are answered for you. <code>Poll</code> waits at most a given time.</li>
+<li>A <code>Hub</code> groups connections into rooms so one call sends to every member.</li>
+<li>One connection is read by one thread. To serve many clients, give each connection its own thread.</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A <code>Hub</code> has no lock.</strong> When several connection threads share it, wrap <code>Register</code>, <code>Unregister</code> and <code>Broadcast</code> in a <a href="/std/sync/">sync</a> mutex.</li>
+<li><strong>Keep a copy of the connection for <code>Unregister</code>.</strong> When the other side closes, <code>Receive</code> clears <code>conn.fd</code>, and <code>Unregister</code> matches on that socket number, so unregistering with the closed connection removes nothing. Register a copy taken right after <code>Accept</code> and unregister with the same copy.</li>
+<li><strong>Text stops at a zero byte</strong> and is not checked as UTF-8. Send binary data as binary and read it from <code>m.data</code> and <code>m.len</code>; that buffer belongs to the connection and is reused by the next binary message, so copy what you keep.</li>
+<li>The server takes any origin and offers no subprotocols or compression; check <code>conn.hdr</code> yourself if you need an <code>Origin</code> rule. A frame larger than 100 MB closes the connection.</li>
+</ul>
 <p>Each example below runs a server and its clients in the same program, the server in a thread started with <code>spawn</code>, on a free port chosen by <code>Listen(0)</code>. That keeps them runnable offline; in a real program the clients are browsers using the JavaScript <code>WebSocket</code> API, which speaks the same protocol.</p>
 
 <h2 id="guide-json">Typed JSON messages</h2>
@@ -18,7 +30,12 @@ pkg.intro <<
 <h2 id="guide-rooms">Rooms with a Hub</h2>
 <p>A chat or a live score page sends one message to many connections. A <code>Hub</code> keeps connections by room name: <code>Register</code> adds a connection to a room, <code>Broadcast</code> sends text to every member and returns how many got it, and <code>RoomSize</code> counts the members. A natural room name is the path the client connected to, which the server sees in <code>conn.path</code>.</p>
 {{example.net-websocket-rooms}}
-<p>In a real server, read each connection in its own thread and call <code>Unregister</code> when it closes, so broadcasts do not go to connections that are gone.</p>
+<p>In a real server, read each connection in its own thread and call <code>Unregister</code> when it closes, so broadcasts do not go to connections that are gone. The next section shows that server.</p>
+
+<h2 id="guide-chat-server">A chat server with a thread per connection</h2>
+<p>Here every <code>member</code> thread accepts one connection, registers it in the <code>lobby</code> room, and then reads that connection until it closes, broadcasting each line to the room. Several threads may call <code>Accept</code> on the same server; each gets a different client. The hub is shared, so every hub call is wrapped in one mutex. The thread registers <code>entry</code>, a copy taken before any <code>Receive</code>, and unregisters with that same copy; with <code>conn</code> itself the room would still count two members at the end.</p>
+{{example.net-websocket-chat-server}}
+<p>A thread per client is fine for hundreds of connections. Start one <code>member</code> thread per expected client, or have each thread spawn the next one after its <code>Accept</code> returns, so there is always one waiting for the next visitor.</p>
 
 <h2 id="guide-auth">Checking a token during the handshake</h2>
 <p>A WebSocket starts as an HTTP request, and its headers are kept in <code>conn.hdr</code>, so the server can check a token before it trusts the connection; read it with <code>httpx.HeaderValue</code> from <a href="/std/net-httpx/">net/httpx</a>. On the client side <code>DialWith</code> adds extra header lines. A connection without a valid token gets a short message and is closed, which the client sees as a close message from <code>Poll</code>.</p>
@@ -66,8 +83,8 @@ doc.Conn.binlen = Its length.
 doc.Conn.bincap = Its capacity.
 doc.Message = One received message.
 doc.Message.kind = The message kind; one of the constants above.
-doc.Message.text = The text of a text message.
-doc.Message.data = The data of a binary message.
+doc.Message.text = The text of a text message, cut at the first zero byte.
+doc.Message.data = The bytes of a binary message. They live in the connection buffer and are overwritten by the next binary message.
 doc.Message.len = The length of the data.
 doc.NONE = There is no message.
 doc.TEXT = A text message.
@@ -76,12 +93,12 @@ doc.CLOSE = The other side closed the connection.
 doc.PING = A ping.
 doc.PONG = A ping reply.
 doc.TIMEOUT = No message arrived within the timeout.
-doc.Listen = A WebSocket server on the given port; zero means a free port.
+doc.Listen = A WebSocket server on the given port; zero means a free port, and then <code>Port</code> tells which one (the <code>port</code> field stays 0).
 doc.Ok = The server was created properly.
 doc.Port = The server port.
 doc.CloseServer = Closes the server.
-doc.Accept = Accepts the next client and completes the WebSocket handshake.
-doc.LoadWSSConfig = Loads the TLS certificate and key for accepting secure connections.
+doc.Accept = Waits for the next client and completes the WebSocket handshake. If the request is not a valid WebSocket upgrade the connection comes back closed, so check <code>IsOpen</code>.
+doc.LoadWSSConfig = Loads the TLS certificate and key that <code>AcceptWSS</code> uses. It is one setting for the whole program.
 doc.AcceptWSS = Accepts a secure (wss) connection.
 doc.Dial = Connects to a WebSocket server.
 doc.DialWith = The same, with extra headers; every header has to end with <code>\r\n</code>.
@@ -89,28 +106,28 @@ doc.DialWSS = A secure (wss) connection.
 doc.DialWSSWith = A secure connection with extra headers.
 doc.DialWSSUnverified = A secure connection without verifying the certificate; for testing with a self signed certificate only.
 doc.IsOpen = The connection is open.
-doc.Receive = Takes the next message, waiting for it. It answers pings by itself.
-doc.Poll = The same, up to the timeout; when nothing arrives the message kind is TIMEOUT.
-doc.ReceiveText = The text of the next text message.
+doc.Receive = Takes the next whole message, waiting as long as it takes. It answers pings by itself and joins fragmented messages; on a close it answers and closes the connection.
+doc.Poll = The same, waiting at most the given milliseconds; when nothing arrives the message kind is <code>TIMEOUT</code>. A negative time waits forever.
+doc.ReceiveText = The text of the next message, or an empty string when the next message is not text.
 doc.IsText = The message is a text one.
 doc.IsBinary = The message is a binary one.
 doc.IsClose = The message is a close.
 doc.IsPong = The message is a ping reply.
-doc.SendText = Sends a text message.
+doc.SendText = Sends a text message; returns 0, or a negative number when the connection is gone.
 doc.SendBinary = Sends a binary message from the bytes of a string.
 doc.SendBinaryBytes = Sends a binary message from memory.
 doc.Ping = Sends a ping; the other side should send a pong back.
 doc.Close = Sends the close frame and closes the connection.
-doc.Stop = Drops the connection without a close frame.
+doc.Stop = Sends a close frame if the connection is open and shuts the socket down without freeing the connection, so another thread blocked in <code>Receive</code> on it wakes up. Call <code>Close</code> afterwards to free it.
 doc.Hub = A hub: it groups connections into rooms so one message reaches every member of a room; for chat.
 doc.Hub.rooms = The rooms and their members.
 doc.RoomMembers = The members of one room.
 doc.RoomMembers.items = The connections.
 doc.NewHub = An empty hub.
-doc.Register = Adds a connection to a room.
-doc.Unregister = Takes a connection out of a room.
+doc.Register = Adds a copy of a connection to a room. Not thread safe.
+doc.Unregister = Takes a connection out of a room, matching on its socket; pass the same copy you registered, since a closed connection has lost its socket number.
 doc.RoomSize = The number of members in a room.
-doc.Broadcast = Sends a text message to every member of a room and returns how many got it.
+doc.Broadcast = Sends a text message to every open member of a room and returns how many got it; an unknown room gives 0.
 doc.BroadcastBinary = Sends a binary message to every member.
 doc.AcceptKey = Builds the handshake accept key from the client key (RFC 6455).
 doc.HandshakeRequest = The text of the client handshake request.

@@ -7,8 +7,21 @@ pkg.description = The net/http package in Salam: building a web server and an AP
 pkg.flat = true
 pkg.import = net.http
 pkg.intro <<
-<p>The Salam HTTP server hands requests to a <a href="../net-router/">router</a>, and the router calls the handler function. Every handler takes one <code>i64</code>, the context id of the request; you read the request and write the response with the <code>Ctx_...</code> functions, or turn it into a <code>Context</code> struct with <code>Ctx</code> so the names get shorter.</p>
-<p>To send a request, <code>Get</code> and <code>Post</code> are the simplest way; <code>Client</code> keeps cookies the way a browser does. The examples run the server with <code>RunBackground</code> on 127.0.0.1 and send requests to it from the same program.</p>
+<p>This package has both halves of HTTP/1.1: a server for web pages and JSON APIs, and a client for calling other services. The server hands each request to a <a href="/std/net-router/">net/router</a> router, which picks the handler by method and path. Every handler takes one <code>i64</code>, the context id of the request; you read the request and write the response with the <code>Ctx_...</code> functions, or turn the id into a <code>Context</code> struct with <code>Ctx</code> for shorter names.</p>
+<p>The packages around it:</p>
+<ul>
+<li><a href="/std/net-http-middleware/">net/http/middleware</a> for access logs, CORS and cache headers, <a href="/std/net-http-session/">net/http/session</a> for logins with a cookie, <a href="/std/net-http-validate/">net/http/validate</a> for checking input, and <a href="/std/net-http-swagger/">net/http/swagger</a> for API documentation;</li>
+<li><a href="/std/net-httpx/">net/httpx</a> when a client needs hand-written headers, binary bodies or a time limit, <a href="/std/net-http2/">net/http2</a> for HTTP/2, and <a href="/std/net-websocket/">net/websocket</a> for connections that stay open.</li>
+</ul>
+<p>Things people get wrong:</p>
+<ul>
+<li><strong>Register every route before <code>Use</code>.</strong> The server keeps a copy of the router.</li>
+<li><strong><code>Post</code>, <code>Put</code> and <code>Patch</code> label a body as a form</strong> (<code>application/x-www-form-urlencoded</code>) unless you pass a <code>Content-Type</code>; send JSON with <code>PostWith</code> and that header.</li>
+<li><strong>The client does not follow redirects and has no time limit.</strong> A 302 comes back as a 302 with its <code>Location</code> header; for a request that must not hang, use <code>net/httpx</code> with a timeout.</li>
+<li><strong><code>Ok</code> means a 2xx status.</strong> When the server could not be reached at all, <code>Status</code> is 0 and <code>Error</code> says why.</li>
+<li>A value read from a request is freed when the handler returns; see the end of the page.</li>
+</ul>
+<p>The examples run the server with <code>RunBackground</code> on 127.0.0.1 and send requests to it from the same program.</p>
 <h2 id="guide-api">A JSON API in one file</h2>
 <p>The most common job is a small JSON API: list some records, show one by its id, and create new ones. Register each route on the router with its handler, hand the router to the server with <code>Use</code>, and start it. Here the records are Salam structs: <code>json.Marshal</code> turns them into the response body, and <code>json.UnmarshalLenient</code> reads the posted body back into a struct, ignoring fields it does not know and leaving the missing ones at their defaults.</p>
 {{example.net-http-guide-api}}
@@ -36,6 +49,11 @@ pkg.intro <<
 curl http://127.0.0.1:8080/health</code></pre>
 <p>The limits are for the whole process: <code>SetMaxBodyBytes</code> and <code>SetMaxHeaderBytes</code> reject requests that are too large, <code>SetKeepAliveIdle</code> closes idle connections, and <code>SetKeepAliveMaxRequests</code> caps how many requests one connection may send. For HTTPS, call <code>RunTLS</code> with a certificate and key file instead of <code>Run</code>, or put the server behind a proxy that handles TLS.</p>
 
+<h2 id="guide-client">Calling an API as a client</h2>
+<p><code>Get</code>, <code>Post</code> and the other one-line calls send a request and return a <code>Response</code>; the <code>...With</code> forms take a map of extra headers. The program below shows the four answers a client has to handle. A <code>Post</code> without a content type reaches the server as a form, so a JSON API refuses it with 415; the same body through <code>PostWith</code> with <code>Content-Type: application/json</code> creates the ticket. A redirect is not followed, so <code>Get</code> returns the 302 and you read <code>Location</code> yourself. A server that is not running gives status 0 and the reason in <code>Error</code>.</p>
+{{example.net-http-guide-client}}
+<p>Gzip and chunked answers are decoded for you, and every request is sent with <code>Connection: close</code>. For a series of calls that share a login, <code>NewClient</code> keeps the cookies from each answer and sends them with the next request, plus any headers set with <code>SetHeader</code>. Its cookie jar is one map for every host, so use one <code>Client</code> per service you talk to. The one-line calls share some state inside the package, so do not run them from several threads at the same time.</p>
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Function</th></tr></thead>
@@ -48,7 +66,7 @@ curl http://127.0.0.1:8080/health</code></pre>
 <tr><td>Shorter names inside one handler</td><td><code>Ctx</code>, then <code>Param</code>, <code>Json</code> and the rest</td></tr>
 <tr><td>One request from a program</td><td><code>Get</code>, <code>Post</code>, <code>GetWith</code>, <code>PostWith</code>, <code>Request</code></td></tr>
 <tr><td>Several requests that share cookies</td><td><code>NewClient</code></td></tr>
-<tr><td>Check the answer</td><td><code>Ok</code> for network errors, <code>Status</code> for the HTTP code, <code>Error</code> for the reason</td></tr>
+<tr><td>Check the answer</td><td><code>Ok</code> for a 2xx status, <code>Status</code> for the code (0 when nothing answered), <code>Error</code> for the reason</td></tr>
 </tbody>
 </table></div>
 <p>A value you read from the request, such as <code>Ctx_param</code> or <code>Ctx_form</code>, belongs to that request and is freed when the handler returns. To keep it longer, in a global list or a session, store a copy made with <code>str.Clone</code> or a new string built with <code>+</code>.</p>
@@ -84,11 +102,11 @@ doc.Ctx_header = One request header; the name is case insensitive.
 doc.Ctx_param = One path parameter, such as <code>id</code> in <code>/books/:id</code>.
 doc.Ctx_form = One form field from an <code>application/x-www-form-urlencoded</code> body.
 doc.Ctx_status = The response status code; 200 by default.
-doc.Ctx_set_header = Sets one response header.
+doc.Ctx_set_header = Sets one response header. A second call with the same name, spelled the same way, replaces the value; a different spelling such as <code>cache-control</code> adds a second header.
 doc.Ctx_html = Sends an HTML response.
 doc.Ctx_json = Sends a JSON response; you build the JSON text yourself.
 doc.Ctx_text = Sends a text response.
-doc.Ctx_redirect = Redirects to another address with a 302.
+doc.Ctx_redirect = Redirects to another address with a 302 and an empty body.
 doc.Ctx_own = Hands a string the handler built to the context, so it is freed when the request ends; do not hand it a string that came from the context itself, such as the body.
 doc.Ctx_cookies = Every cookie of the request.
 doc.Ctx_cookie = The value of one cookie; an empty string when there is none.
@@ -136,9 +154,9 @@ doc.Response = The response to a client request.
 doc.Response.status = The status code.
 doc.Response.body = The body.
 doc.Response.head = The raw headers.
-doc.Response.err = The error message, when the request did not get through.
-doc.Get = Sends a GET request.
-doc.Post = A POST request with a body.
+doc.Response.err = The error message, when the request did not get through; the status is then 0.
+doc.Get = Sends a GET request. Redirects are not followed and there is no time limit.
+doc.Post = A POST request with a body, sent as <code>application/x-www-form-urlencoded</code>; use <code>PostWith</code> to give another content type.
 doc.Put = A PUT request.
 doc.Delete = A DELETE request.
 doc.Patch = A PATCH request.
@@ -154,7 +172,7 @@ doc.HeadWith = Like <code>Head</code>, with extra headers.
 doc.Request = A request with any method, headers and body.
 doc.RequestRaw = A request with the header text written out by you; every line has to end with <code>\r\n</code>.
 doc.NewHeaders = An empty map for headers or parameters.
-doc.Ok = True when the request got through and came back with a response; check the status code separately.
+doc.Ok = True when the status is 2xx. A request that got no answer has status 0, so <code>Ok</code> is false for it too; tell the two apart with <code>Status</code>.
 doc.Status = The response status code.
 doc.Error = The error message; empty when the request succeeded.
 doc.Headers = The response headers as a map; the names exactly as the server sent them, in the same case.
@@ -168,7 +186,7 @@ doc.SetCookieLines = Every <code>Set-Cookie</code> header of the response.
 doc.CookieMap = The names and values of the cookies the response set.
 doc.CookieHeader = Turns a cookie map into the value of a <code>Cookie</code> header.
 doc.Client = An HTTP client that keeps fixed headers and cookies between requests; a simple browser.
-doc.Client.cookies = The cookies it took from the responses.
+doc.Client.cookies = The cookies it took from the responses: one map for every host it talks to.
 doc.Client.headers = The headers sent with every request.
 doc.NewClient = A new client.
 doc.Client.SetHeader = Sets a header for every request from now on.

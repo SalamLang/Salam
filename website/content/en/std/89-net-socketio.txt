@@ -16,8 +16,15 @@ group.EIO_ = Socket.IO runs on a layer called Engine.IO. Every message on that l
 group.PKT_.title = Socket.IO packet kinds
 group.PKT_ = The kinds of Socket.IO packet: connecting to a namespace, disconnecting, an event, an acknowledgement, a connect error, and the binary event and binary acknowledgement whose bytes follow the packet separately.
 pkg.intro <<
-<p>Socket.IO is the usual live messaging library in the Node.js world. This package is a client that connects to any Socket.IO version 4 server; it has no server of its own. <code>Dial</code> connects, <code>On</code> sets a listener for an event and the <code>Emit...</code> functions send events. Listeners are called while the program processes messages with <code>Run</code>, <code>RunFor</code>, <code>Pump</code> or <code>Next</code>.</p>
-<p>The arguments of every event are a JSON array, read with <code>ArgStr</code>, <code>ArgInt</code> and the like. If the sender wants an answer, the event's <code>ack_id</code> is not negative and you answer it with <code>Reply</code>. For several namespaces on one connection, create a <code>Manager</code>.</p>
+<p>Socket.IO is the usual live messaging library in the Node.js world. This package is a client for Socket.IO 3 and 4 servers (Engine.IO protocol 4), over WebSocket or HTTP long polling; it has no server of its own. Use it when the other side already speaks Socket.IO, for example a Node.js chat or dashboard backend. When you control both ends and the client is a browser, a plain <a href="/std/net-websocket/">net/websocket</a> server is simpler, because Socket.IO adds its own packet format on top of the WebSocket.</p>
+<p>The model: <code>Dial</code> connects, <code>On</code> sets a listener for an event and the <code>Emit...</code> functions send events. Nothing is read in the background: listeners run only while the program processes messages with <code>Run</code>, <code>RunFor</code>, <code>Pump</code>, <code>Next</code> or <code>EmitAck</code>. The arguments of every event are a JSON array, read with <code>ArgStr</code>, <code>ArgInt</code> and the like. If the sender wants an answer, the event's <code>ack_id</code> is not negative and you answer it with <code>Reply</code>. For several namespaces on one connection, create a <code>Manager</code>.</p>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A program that never pumps never hears anything.</strong> Pings from the server are answered while you pump, so a client that sleeps for longer than the server's ping timeout is disconnected.</li>
+<li><strong><code>Next</code> returns connection events too</strong>, such as <code>EV_CONNECT</code>; loop until the kind you stop on, not until the first event that is not <code>EV_EVENT</code>. Its queue starts with the first <code>Next</code> call and keeps the newest <code>event_queue</code> events (256 by default), dropping the oldest.</li>
+<li><strong>Free what you build.</strong> <code>ArgsFree</code> for argument lists and <code>AckFree</code> for answers, or a long running client keeps growing.</li>
+<li>Socket.IO 2 servers (from before 2020) speak an older protocol and are not supported.</li>
+</ul>
 
 <h2 id="guide-next">Handling events in your own loop</h2>
 <p>Listeners with <code>On</code> are the usual style, but sometimes a plain loop reads better: a worker that handles one event at a time, or a program that must also do other work between messages. <code>Next</code> waits up to the given milliseconds and returns one <code>Event</code>. Its <code>kind</code> says what it is: a message from the server (<code>EV_EVENT</code>, with the name and the arguments), a change of the connection such as <code>EV_DISCONNECT</code> (the reason is in <code>message</code>), or <code>EV_TIMEOUT</code> when nothing came.</p>
@@ -29,10 +36,15 @@ pkg.intro <<
 {{example.net-socketio-auth}}
 <p>This needs a running server, so it is only checked here. With a Node.js server, the matching check is an <code>io.use((socket, next) =&gt; ...)</code> that reads <code>socket.handshake.auth.token</code> and calls <code>next(new Error("..."))</code> to refuse.</p>
 
+<h2 id="guide-ack">Acknowledgements in both directions</h2>
+<p>An acknowledgement is Socket.IO's request and reply: the sender numbers an event and the other side answers that number. <code>EmitAck</code> sends an event and waits, up to the time you give, for the server's answer; <code>ok</code> is false when it did not come in time. The other way round, when the server sends an event with an id, <code>e.ack_id</code> holds it and <code>Reply</code>, <code>ReplyStr</code> or <code>ReplyJSON</code> answers it. The fake server below shows both packets on the wire: <code>420[...]</code> is the client's event with ack id 0 and <code>4317["yes"]</code> is the client's answer to the server's ack id 17.</p>
+{{example.net-socketio-ack}}
+<p>Answer each acknowledged event once. Servers usually put a timeout on their own <code>emitWithAck</code>, so reply before you start slow work, or reply with a "started" status and send the result as a separate event.</p>
+
 <h2 id="guide-bot">A bot that stays connected</h2>
 <p>A long running client joins a room, answers some messages and survives network trouble. <code>EmitAck</code> sends an event and waits for the server's answer, which is how you know the join worked. <code>Run</code> then handles events until the client is closed, and reconnects on its own after a dropped connection, waiting <code>reconnection_delay</code> milliseconds and longer each time up to <code>reconnection_delay_max</code>. The <code>disconnect</code> and <code>reconnect</code> listeners let you log both.</p>
 {{example.net-socketio-chat-bot}}
-<p>Free what you no longer need: <code>ArgsFree</code> for an argument list you built and <code>AckFree</code> for an answer you have read. A program that sends many events in a loop otherwise keeps growing.</p>
+<p>A bot that only reacts to events can stay in <code>Run</code> for its whole life; it returns when <code>Close</code> is called or when reconnection gives up.</p>
 
 <h2 id="guide-which">Which way to receive</h2>
 <div class="table-wrap"><table>
@@ -64,8 +76,8 @@ doc.Options.randomization_factor = A random percentage added to or taken from th
 doc.Options.timeout = The connect timeout in milliseconds.
 doc.Options.insecure = Do not check the TLS certificate; for testing only.
 doc.Options.auto_connect = The client connects right away.
-doc.Options.event_queue = The most events in the queue.
-doc.Options.ack_timeout = The default acknowledgement timeout.
+doc.Options.event_queue = The most events <code>Next</code> keeps waiting; when it is full the oldest is dropped.
+doc.Options.ack_timeout = The acknowledgement timeout in milliseconds used when <code>EmitAck</code> is given 0.
 doc.Options.retries = How many times to resend messages that got no acknowledgement.
 doc.Options.trailing_slash = Add a slash to the end of the path, like the JavaScript client.
 doc.Options.remember_upgrade = If the upgrade to WebSocket worked once, use WebSocket directly next time.
@@ -148,7 +160,7 @@ doc.CloseManager = Closes the connection and all its sockets.
 doc.Close = Closes the socket.
 doc.Pump = Handles the messages that arrive within this timeout and calls the listeners.
 doc.PumpManager = Like the function above, for all the manager's sockets.
-doc.Next = The next event from the queue, or an event of kind <code>EV_NONE</code> if nothing arrived within the timeout. Listeners are called too.
+doc.Next = The next event from the queue, or an event of kind <code>EV_TIMEOUT</code> if nothing arrived within the timeout; a negative timeout waits forever. Listeners are called too. The queue starts with the first call.
 doc.NextEvent = Like the function above, but only message events.
 doc.Run = Handles messages until the socket closes.
 doc.RunFor = Handles messages for this many milliseconds.
@@ -174,7 +186,7 @@ doc.EmitFloat = With one float.
 doc.EmitBool = With one boolean.
 doc.EmitJSON = With one JSON text.
 doc.EmitBytes = With binary bytes.
-doc.EmitAck = Sends an event and waits until the acknowledgement arrives or the timeout runs out.
+doc.EmitAck = Sends an event and waits until the acknowledgement arrives or the timeout runs out; 0 uses <code>ack_timeout</code>, a negative value waits forever. Other events that arrive meanwhile go to the listeners.
 doc.EmitWithAck = Sends an event and calls the given function when the acknowledgement arrives or the timeout runs out; it does not wait.
 doc.Reply = Answers an event that asked for an acknowledgement.
 doc.ReplyJSON = Answers with one JSON text.

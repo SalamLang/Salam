@@ -6,11 +6,17 @@ pkg.title = The ssl package in Salam
 pkg.description = The ssl package in Salam: client and server TLS connections with an OpenSSL style interface, certificate verification, the hostname and the minimum version, with examples.
 pkg.import = ssl
 pkg.intro <<
-<p>This package gives the same OpenSSL style context and connection interface, but underneath it is Salam's own <a href="../tls/">tls</a> and it needs no outside library. For new code <a href="../tls/">tls</a> is simpler; this package is for code already written in this style. Set the hostname before <code>Connect</code> when certificates are verified.</p>
-<p>The flow: make a context, hand the TCP connection to it with <code>Wrap</code>, for a client set the hostname and call <code>Connect</code>, then read and write.</p>
+<p>This package gives an OpenSSL style context and connection interface (<code>SSL_CTX</code>, <code>SSL_connect</code>, <code>SSL_read</code> and friends, under Salam names), but underneath it is Salam's own <a href="/std/tls/">tls</a> and it needs no outside library. Use it when you port C code written against OpenSSL, or when you like that split between a shared context and many connections. For new code <a href="/std/tls/">tls</a> is shorter, and for web requests <a href="/std/net-http/">net/http</a> does all of it for you.</p>
+<p>The flow: make one context, hand each TCP socket to it with <code>Wrap</code>, for a client set the hostname and call <code>Connect</code> (a server calls <code>Accept</code>), then <code>Read</code> and <code>Write</code>. Things to know:</p>
+<ul>
+<li><strong>A client context checks certificates against the system roots from the start</strong>, with TLS 1.2 as the minimum. <code>LoadVerifyLocationsFile</code> replaces the system roots with your file; <code>SetDefaultVerifyPaths</code> switches back.</li>
+<li><strong><code>SetHostname</code> is required</strong> before <code>Connect</code> while verification is on; without it the handshake is refused.</li>
+<li><strong><code>Shutdown</code> and <code>Close</code> do not close the socket.</strong> As in OpenSSL, the TCP connection you wrapped is yours; close it with <a href="/std/net-tcp/">net/tcp</a> afterwards.</li>
+<li><code>SetMinVersion(ctx, TLS1_3)</code> is checked after the handshake: a server that only offers 1.2 is connected and then refused. <code>Read</code> returns a <code>str</code>, which stops at a zero byte.</li>
+</ul>
 
 <h2 id="guide-fetch">A complete client</h2>
-<p>The steps are always the same: one context for the whole program, then for each connection a TCP socket, <code>Wrap</code>, <code>SetHostname</code> and <code>Connect</code>. A context made with <code>NewClientContext</code> does not trust anything until you call <code>SetDefaultVerifyPaths</code> or <code>LoadVerifyLocationsFile</code>, and <code>SetVerify(ctx, VERIFY_PEER)</code> makes a failed check stop the handshake. <code>Read</code> returns an empty string when the server closes the connection, which is the end of a <code>Connection: close</code> response.</p>
+<p>The steps are always the same: one context for the whole program, then for each connection a TCP socket, <code>Wrap</code>, <code>SetHostname</code> and <code>Connect</code>. A context made with <code>NewClientContext</code> already trusts the system roots and stops the handshake when the check fails; the calls to <code>SetDefaultVerifyPaths</code> and <code>SetVerify(ctx, VERIFY_PEER)</code> in the program only make that explicit, the way OpenSSL code usually reads. <code>Read</code> returns an empty string when the server closes the connection, which is the end of a <code>Connection: close</code> response.</p>
 {{example.ssl-fetch-page}}
 <p>It needs network access, so it is only checked here. Run against the real hosts, it printed:</p>
 <pre class="code" dir="ltr"><code>HTTP/1.1 200 OK
@@ -37,10 +43,10 @@ doc.Wrap = Makes a new SSL connection over an open socket.
 doc.ConnOk = The connection was created.
 doc.Connect = Does the client handshake.
 doc.Accept = Does the server handshake.
-doc.Read = Reads up to this many bytes.
+doc.Read = Reads up to this many bytes as a string; empty when the other side closed. The text stops at a zero byte.
 doc.Write = Sends data and returns the number of bytes, or a negative number on an error.
-doc.Shutdown = Sends the close alert.
-doc.Close = Frees the connection.
+doc.Shutdown = Sends the close alert and ends the TLS session; the socket stays open.
+doc.Close = Sends the close alert if needed and frees the connection; the socket stays open, so close it yourself.
 doc.ErrorCode = The OpenSSL style error code for the result of one read or write.
 doc.ConnErrorString = The error text of this connection; unlike <code>LastErrorString</code> it is not shared between threads.
 doc.LastErrorString = The text of the last error, and clears it.
@@ -51,9 +57,9 @@ doc.NewClientContext = A client context with TLS 1.2 as the minimum, certificate
 doc.NewServerContext = A server context with a certificate and key from files.
 doc.CtxOk = The context was created.
 doc.SetVerify = The certificate verification mode.
-doc.LoadVerifyLocationsFile = Reads the root certificates from a file.
-doc.SetDefaultVerifyPaths = Loads the system roots.
-doc.SetMinVersion = The minimum TLS version.
+doc.LoadVerifyLocationsFile = Trusts the root certificates in this PEM file instead of the system roots; false when the file holds none.
+doc.SetDefaultVerifyPaths = Goes back to the system roots, the default for a new context.
+doc.SetMinVersion = The minimum TLS version, <code>TLS1_2</code> or <code>TLS1_3</code>; checked once the handshake is done.
 doc.CloseContext = Frees the context.
 doc.VERIFY_NONE = Verification mode: no verification.
 doc.VERIFY_PEER = Verification mode: verify the certificate of the other side.

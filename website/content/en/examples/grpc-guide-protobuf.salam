@@ -1,0 +1,80 @@
+import grpc
+import encoding.protobuf
+import compress
+import sync
+
+mut server := grpc.NewServer(0)
+mut ready := sync.NewWaitGroup()
+
+func encode_user(id: int, name: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    protobuf.WriteTag(b, 1, protobuf.WT_VARINT)
+    protobuf.WriteVarint(b, id as u64)
+    protobuf.WriteTag(b, 2, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedStr(b, name)
+    ret b
+end
+
+func get_user(c: i64):
+    mut ok := false
+    req := grpc.Recv(c, ok)
+    mut r := compress.ReaderFromBuf(req)
+    mut good := true
+    mut field := 0
+    mut wire := 0
+    protobuf.ReadTag(r, field, wire, good)
+    id := protobuf.ReadVarint(r, good) as int
+    if not good or field != 1:
+        grpc.Fail(c, grpc.GRPC_INVALID_ARGUMENT, "expected field 1 with the user id")
+        ret
+    end
+    if id != 7:
+        grpc.Fail(c, grpc.GRPC_NOT_FOUND, "no user " + id)
+        ret
+    end
+    mut reply := encode_user(7, "Maryam")
+    _ := grpc.Send(c, reply)
+    compress.BufFree(reply)
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func run_server():
+    _ := grpc.Listen(server)
+    sync.Done(ready)
+    _ := grpc.ServeCount(server, 1)
+end
+
+func ask(ch &: grpc.Channel, id: int):
+    mut req := compress.NewByteBuf()
+    protobuf.WriteTag(req, 1, protobuf.WT_VARINT)
+    protobuf.WriteVarint(req, id as u64)
+    mut st := grpc.Status {}
+    answer := grpc.UnaryCall(ch, "/users.Users/Get", req, grpc.NewMetadata(), st)
+    compress.BufFree(req)
+    if not grpc.StatusOk(st):
+        println "user", id, "->", grpc.StatusString(st)
+        ret
+    end
+    mut r := compress.ReaderFromBuf(answer)
+    mut good := true
+    mut field := 0
+    mut wire := 0
+    protobuf.ReadTag(r, field, wire, good)
+    uid := protobuf.ReadVarint(r, good)
+    protobuf.ReadTag(r, field, wire, good)
+    println "user", uid, "is", protobuf.ReadLenPrefixedStr(r, good)
+end
+
+func main:
+    grpc.RegisterMethod(grpc.MethodPath("users.Users", "Get"), get_user)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+    mut ch := grpc.Dial("127.0.0.1", grpc.Port(server))
+    grpc.SetTimeout(ch, 5000)
+    ask(ch, 7)
+    ask(ch, 8)
+    grpc.CloseChannel(ch)
+    join(t)
+    grpc.StopServer(server)
+end

@@ -1,0 +1,50 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19882
+
+func main:
+    fake.On("POST", "/_plugins/_alerting/monitors", 201, `{"_id":"mon-7","_version":1,"_seq_no":0,"_primary_term":1,"monitor":{"type":"monitor","name":"error spike","enabled":true}}`)
+    fake.On("GET", "/_plugins/_alerting/monitors/mon-7", 200, `{"_id":"mon-7","_version":1,"monitor":{"type":"monitor","name":"error spike","enabled":true,"schedule":{"period":{"interval":5,"unit":"MINUTES"}}}}`)
+    fake.On("PUT", "/_plugins/_alerting/monitors/mon-7", 200, `{"_id":"mon-7","_version":2}`)
+    fake.On("POST", "/_plugins/_alerting/monitors/mon-7/_execute", 200, `{"monitor_name":"error spike","period_start":1760000000000,"period_end":1760000300000,"input_results":{"results":[{"hits":{"total":{"value":17,"relation":"eq"}}}]},"trigger_results":{"t1":{"name":"too many","triggered":true}}}`)
+    fake.On("POST", "/_plugins/_alerting/monitors/_search", 200, `{"took":1,"timed_out":false,"hits":{"total":{"value":1,"relation":"eq"},"max_score":1.0,"hits":[{"_index":".opendistro-alerting-config","_id":"mon-7","_score":1.0,"_source":{"monitor":{"name":"error spike"}}}]}}`)
+    fake.On("DELETE", "/_plugins/_alerting/monitors/mon-7", 200, `{"_index":".opendistro-alerting-config","_id":"mon-7","result":"deleted"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19882")
+
+    query := opensearch.AddMember(`{"size":0}`, "query", opensearch.Match("level", "error"))
+    monitor := `{"type":"monitor","name":"error spike","enabled":true,"schedule":{"period":{"interval":5,"unit":"MINUTES"}},"inputs":[{"search":{"indices":["logs-*"],"query":` + query + `}}],"triggers":[{"name":"too many","severity":"1","condition":{"script":{"source":"ctx.results[0].hits.total.value > 10"}},"actions":[]}]}`
+    id := opensearch.CreateMonitor(c, monitor)
+    println "monitor id:", id
+    println "  sent:", fake.Last().split("\n").get(0)
+    got := opensearch.GetMonitor(c, id)
+    println "stored:", opensearch.JsonPath(got, "name"), opensearch.JsonPath(got, "schedule.period.interval")
+    println "update:", opensearch.UpdateMonitor(c, id, monitor)
+    run := opensearch.ExecuteMonitor(c, id, true)
+    println "dry run:", opensearch.JsonPath(run, "input_results.results.0.hits.total.value"), opensearch.JsonPath(run, "trigger_results.t1.triggered")
+    println "  sent:", fake.Last()
+    found := opensearch.SearchMonitors(c, opensearch.Match("monitor.name", "error"))
+    println "search:", found.total, found.hits.get(0).id
+    println "delete:", opensearch.DeleteMonitor(c, id)
+    ret 0
+end

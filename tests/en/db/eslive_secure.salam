@@ -1,0 +1,74 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import encoding.json
+import db.elasticsearch
+
+func cfg(url: str, user: str, pass: str, ca: str, insecure: bool): elasticsearch.Config:
+    mut c := elasticsearch.Config { username = user, password = pass, ca_file = ca, insecure = insecure, max_retries = 0 }
+    c.nodes.push(url)
+    ret c
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_ES_SECURE").split(" ")
+    url := parts.get(0)
+    user := parts.get(1)
+    pass := parts.get(2)
+    ca := parts.get(3)
+    mut plain := elasticsearch.NewClient(cfg(url, user, pass, "", false))
+    println "no ca:", elasticsearch.Ping(plain), str.Contains(elasticsearch.Error(plain), "TLS")
+    elasticsearch.Close(plain)
+    mut loose := elasticsearch.NewClient(cfg(url, user, pass, "", true))
+    println "insecure:", elasticsearch.Ping(loose)
+    elasticsearch.Close(loose)
+    mut c := elasticsearch.NewClient(cfg(url, user, pass, ca, false))
+    println "ca file:", elasticsearch.Ping(c), elasticsearch.GetInfo(c).ok
+    mut wrong := elasticsearch.NewClient(cfg(url, user, "not-the-password", ca, false))
+    r := elasticsearch.Perform(wrong, "GET", "/", "")
+    println "wrong password:", r.status, r.error_type
+    elasticsearch.Close(wrong)
+    key := elasticsearch.Perform(c, "POST", "/_security/api_key", `{"name":"salam-eslive"}`)
+    println "api key made:", key.ok
+    mut kc := cfg(url, "", "", ca, false)
+    kc.api_key = json.Get(key.body, "encoded")
+    mut k := elasticsearch.NewClient(kc)
+    println "api key:", elasticsearch.Ping(k)
+    elasticsearch.Close(k)
+    mut kc2 := cfg(url, "", "", ca, false)
+    kc2.api_key = json.Get(key.body, "id") + ":" + json.Get(key.body, "api_key")
+    mut k2 := elasticsearch.NewClient(kc2)
+    println "api key id:secret:", elasticsearch.Ping(k2)
+    elasticsearch.Close(k2)
+    tok := elasticsearch.Perform(c, "POST", "/_security/service/elastic/fleet-server/credential/token/salam-eslive", "")
+    mut bc := cfg(url, "", "", ca, false)
+    bc.bearer = json.GetPath(tok.body, "token.value")
+    mut b := elasticsearch.NewClient(bc)
+    println "bearer:", tok.ok, elasticsearch.Ping(b)
+    elasticsearch.Close(b)
+    elasticsearch.Perform(c, "DELETE", "/_security/service/elastic/fleet-server/credential/token/salam-eslive", "")
+    elasticsearch.DeleteIndex(c, "eslive_secure")
+    w := elasticsearch.IndexWith(c, "eslive_secure", "1", `{"a":"سلام"}`, elasticsearch.Options { refresh = "true" })
+    println "write over tls:", w.ok, elasticsearch.Get(c, "eslive_secure", "1").source
+    mut n := 0
+    repeat 50:
+        if elasticsearch.Count(c, "eslive_secure", "") == 1: n += 1 end
+    end
+    println "50 more requests:", n
+    println "sql over tls:", elasticsearch.SqlText(c, "SELECT a FROM eslive_secure").len() > 0
+    println "drop:", elasticsearch.DeleteIndex(c, "eslive_secure")
+    elasticsearch.Close(c)
+end

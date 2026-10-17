@@ -46,7 +46,9 @@ HTML allowed
 ```
 
 Values are inserted as HTML. Keys ending in `_cmd` are shell commands and are
-escaped automatically. `<page>.title` and `<page>.description` fill the
+escaped automatically. Keys containing `_code_<lang>`, for example `ai.api_code_python`, are
+syntax highlighted at build time (python, javascript, typescript, bash, json,
+yaml, toml, c, cpp, java, go, rust, php). `<page>.title` and `<page>.description` fill the
 `<title>` and meta tags. `site.dir` (`rtl` or `ltr`) and `site.lang` set the
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.

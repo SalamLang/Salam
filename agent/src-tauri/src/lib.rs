@@ -23,11 +23,31 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-pending",
 ];
 
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let bundled = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    if bundled {
+        return;
+    }
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
+    }
+}
+
 fn open_main(app: &AppHandle) -> tauri::Result<()> {
     let target = config::app_url();
     let handle = app.clone();
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("ایجنت سلام")
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone())?;
+    }
+    builder
+        .title("Salam Agent")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
         .on_navigation(move |url| {
@@ -106,6 +126,8 @@ pub fn run() {
             commands::agent_pending,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            set_dock_icon();
             let handle = app.handle().clone();
             app.manage(device::DeviceStore::load(&handle));
             allow_dev_origin(app)?;

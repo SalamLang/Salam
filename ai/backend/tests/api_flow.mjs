@@ -73,6 +73,29 @@ check("the first chunk carries the assistant role", chunks[0].choices[0].delta.r
 check("the stream ends with stop, usage and [DONE]", chunks.some((c) => c.choices?.[0]?.finish_reason === "stop") && chunks.some((c) => c.usage && c.choices.length === 0) && events.at(-1) === "[DONE]", events.slice(-3));
 check("streamed text is the whole answer without dashes", streamed.startsWith("Echo: Stream please") && streamed.includes("done") && !DASHES.test(streamed), streamed);
 
+console.log("long answers");
+const slowStream = await chat(key, { model: "salam", stream: true, messages: [{ role: "user", content: "slow: 12 stream" }] });
+const slowRaw = await slowStream.text();
+const slowText = slowRaw.split("\n\n").filter((b) => b.startsWith("data: {")).map((b) => JSON.parse(b.slice(6)).choices?.[0]?.delta?.content ?? "").join("");
+check("a stream that is silent for long sends keepalives", slowRaw.includes(": ping") && slowText.startsWith("Echo: slow: 12 stream") && slowRaw.trimEnd().endsWith("data: [DONE]"), slowRaw.slice(-300));
+const slowPlain = await chat(key, { model: "salam", messages: [{ role: "user", content: "slow: 12 plain" }] });
+const slowBody = await slowPlain.text();
+const slowJson = JSON.parse(slowBody);
+check("a long non-streaming answer keeps the connection alive and stays valid JSON", slowPlain.status === 200 && slowBody.startsWith("\n") && slowJson.choices[0].message.content.startsWith("Echo: slow: 12 plain"), slowBody.slice(0, 200));
+
+console.log("compiler check");
+const badCode = await (await chat(key, { model: "salam", messages: [{ role: "user", content: "bad code please" }] })).json();
+const fixedText = badCode.choices?.[0]?.message?.content ?? "";
+check("code that does not compile is sent back and fixed", fixedText.startsWith("Fixed (salam, saw errors)") && fixedText.includes('println "hi"') && !fixedText.includes("{"), fixedText);
+const snippet = await (await chat(key, { model: "salam", messages: [{ role: "user", content: "snippet code please" }] })).json();
+check("a fragment with only unknown names is not sent back", (snippet.choices?.[0]?.message?.content ?? "").startsWith("Use:"), snippet);
+
+console.log("engine never starts");
+const t0 = Date.now();
+const never = await chat(key, { model: "salam", messages: [{ role: "user", content: "never start" }] });
+const neverBody = await never.text();
+check("a turn the engine never starts fails within a minute", Date.now() - t0 < 70000 && neverBody.includes("engine_failed"), `${Date.now() - t0} ms ${neverBody.slice(-200)}`);
+
 console.log("usage");
 const um = await chat(key, { model: "salam", messages: [{ role: "user", content: "usage please" }] });
 const uj = await um.json();

@@ -21,13 +21,19 @@ import conv
 include aistore "store.salam"
 include aiengine "engine.salam"
 include ailive "live.salam"
+include aicheck "check.salam"
 
 const CHECK_SECONDS := 10
+const FIX_ROUNDS := 2
+const START_SECONDS := 45
 const EM := 8212
 const EN := 8211
 
 mut CHECK_LOCK := sync.Mutex {}
 mut CHECKED := HashMap {} as HashMap<str, str>
+mut ROUNDS := HashMap {} as HashMap<str, int>
+mut VERIFYING := HashMap {} as HashMap<str, str>
+mut ASKED := HashMap {} as HashMap<str, i64>
 
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
@@ -63,6 +69,45 @@ func comma_after(b &: str.StringBuilder, prev: int):
     end
 end
 
+func fix_prompt(report: str): str:
+    ret "<compiler_check>\nThe Salam code in your last answer does not compile with the Salam compiler:\n\n" + report + "\n\nLook up the right syntax (salam_docs, salam_find_examples), check every code block with salam_check until it passes, then write your whole answer again with the corrected code. Answer the user's last message directly. Do not mention this check.\n</compiler_check>"
+end
+
+func asked_at(sid: str, created: i64): i64:
+    _l := sync.Lock(CHECK_LOCK)
+    t := ASKED.has(sid) ? ASKED.get(sid) : created
+    _u := sync.Unlock(CHECK_LOCK)
+    ret t
+end
+
+func verify(sid: str, text: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
+    if round >= FIX_ROUNDS or VERIFYING.has(sid):
+        busy := VERIFYING.has(sid)
+        _u := sync.Unlock(CHECK_LOCK)
+        ret busy
+    end
+    VERIFYING.put(sid, "1")
+    _u := sync.Unlock(CHECK_LOCK)
+    report := aicheck.Problems(text)
+    mut sent := false
+    if report.len() > 0:
+        ailive.Begin(sid)
+        sent = aiengine.Followup(sid, fix_prompt(report))
+    end
+    _a := sync.Lock(CHECK_LOCK)
+    _v := VERIFYING.remove(sid)
+    if sent:
+        ROUNDS.put(sid, round + 1)
+        ASKED.put(sid, aistore.Now())
+    else:
+        ROUNDS.put(sid, FIX_ROUNDS)
+    end
+    _b := sync.Unlock(CHECK_LOCK)
+    ret sent
+end
+
 pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
     if not u.ok or id.len() == 0:
         ret
@@ -95,6 +140,8 @@ end
 pub func Forget(sid: str):
     _l := sync.Lock(CHECK_LOCK)
     _r := CHECKED.remove(sid)
+    _o := ROUNDS.remove(sid)
+    _a := ASKED.remove(sid)
     _u := sync.Unlock(CHECK_LOCK)
 end
 
@@ -180,6 +227,16 @@ pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
             r.text = text
             r.phase = phase
         end
+    end
+    if not r.done and r.idle and not r.started and aistore.Now() - asked_at(sid, created) > START_SECONDS:
+        aiengine.Abort(sid)
+        r.done = true
+        r.failed = true
+    end
+    if r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
+        r.done = false
+        r.text = ""
+        r.phase = "checking"
     end
     if not r.done and aistore.Now() - created > limit:
         aiengine.Abort(sid)

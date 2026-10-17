@@ -161,12 +161,30 @@ are `شروع با`, `ختم با` and `دربردارد`.
 their UTF-8 counterparts: they count and index code points, so
 `"سلام".len()` is 8 but `"سلام".char_count()` is 4, and `char_at(1)` returns
 `"ل"` as a `str`. An out-of-range `char_at` returns `""`, and `char_find`
-returns -1 when the substring is missing. On the JS backend strings are
-JavaScript strings, so `len`, `s[i]`, `substr` and `find` count UTF-16 units
-there instead of bytes. The `str` package follows the same rule, so on JS
-`str.IndexFrom`, `str.LastIndex`, `str.CodePointAt` and `str.CharAt` take
-and return UTF-16 indices that line up with `substr`. The `char_*` methods
-give the same answer on every backend, so prefer them for non-ASCII text.
+returns -1 when the substring is missing. Every backend counts the same way,
+the JS one included: `len`, `s[i]`, `substr` and `find` are byte based there
+too, and only DOM offsets (UTF-16) need converting at the boundary.
+
+Walk a string with `each`, which is one linear pass:
+
+```salam
+each ch in "سلام 👋":        // ch is a str holding one code point
+    print ch, "|"
+end
+each i, ch in "سلام":        // i is the character number: 0, 1, 2, 3
+    println i, ch
+end
+each i, b in "Hi".bytes():   // b is a char (one byte), i the byte index
+    println i, b as int
+end
+```
+
+Persian: `هر ح در متن:` and `هر ب در متن.بایت ها():`. Prefer this to
+`repeat s.char_count() in i: s.char_at(i)`, which rescans the string on
+every step. Invalid UTF-8 bytes come out one at a time (joining every `ch`
+gives back the string), and a character is a code point, not a grapheme
+cluster (use `str.Graphemes` for those). `s.bytes()` only works as the
+target of `each`.
 
 Text types, and which one to reach for:
 

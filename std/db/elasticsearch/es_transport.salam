@@ -180,10 +180,13 @@ func _retryable(status: int): bool:
     ret status == 502 or status == 503 or status == 504
 end
 
-func _resendable(method: str, resp: _WireResp): bool:
-    if not resp.stale: ret false end
+func _replay_ok(method: str, resp: _WireResp): bool:
     if not resp.sent or resp.quick: ret true end
     ret method == "GET" or method == "HEAD" or method == "PUT" or method == "DELETE"
+end
+
+func _resendable(method: str, resp: _WireResp): bool:
+    ret resp.stale and _replay_ok(method, resp)
 end
 
 func _send_once(st: _EsState*, ni: int, node: _Node, method: str, head: str, body: str, blen: int): _WireResp:
@@ -192,7 +195,8 @@ func _send_once(st: _EsState*, ni: int, node: _Node, method: str, head: str, bod
         if raw.error.len() > 0:
             e := str.Clone(raw.error)
             httpx.FreeRaw(raw)
-            ret _WireResp { err = e }
+            early := str.StartsWith(e, "could not connect") or str.StartsWith(e, "TLS") or str.StartsWith(e, "the endpoint")
+            ret _WireResp { err = e, sent = not early }
         end
         out := _WireResp { status = raw.status, body = _raw_body(raw) }
         httpx.FreeRaw(raw)
@@ -259,6 +263,7 @@ func _do(c: Client, method: str, path: str, body: str, ctype: str): Response:
                 st[0].dead_until.set(ni, time.MonoMillis() + DEAD_NODE_MS)
             end
             last = Response { error = node.url + ": " + sent.err }
+            if not _replay_ok(method, sent): break end
             continue
         end
         st[0].dead_until.set(ni, 0 as i64)

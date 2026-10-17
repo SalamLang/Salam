@@ -14,13 +14,18 @@ jobs:
     with:
       paths: |
         android/*
+        mobile/*
+        compiler/mobile_main.salam
+        compiler/interp/*
+        tools/bash/build-mobile-engine.sh
         .github/workflows/_changes.yml
         .github/workflows/app-android-pr-build.yml
   build:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    name: Build unsigned debug APK + AAB
+    name: Build unsigned debug APKs + AAB
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: write
@@ -29,6 +34,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Set up Salam
+        id: salam
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
 
       - name: Set up JDK 21 (Temurin) + Gradle cache
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -46,8 +55,10 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses \
             >/dev/null 2>&1 || true
 
-      - name: Build debug-signed APK + AAB
+      - name: Build debug-signed APKs + AAB
         working-directory: android
+        env:
+          SALAM: ${{ steps.salam.outputs.salam }}
         run: |
           set -eu
           chmod +x ./gradlew
@@ -65,12 +76,13 @@ jobs:
           short_sha="${GITHUB_SHA:0:7}"
           vname=$(jq -r '.elements[0].versionName' "$meta")
           vcode=$(jq -r '.elements[0].versionCode' "$meta")
-          apk_src="$apk_dir/$(jq -r '.elements[0].outputFile' "$meta")"
-          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
-          apk_name="salam-application-pr${PR_NUMBER}-${short_sha}.apk"
-          aab_name="salam-application-pr${PR_NUMBER}-${short_sha}.aab"
           mkdir -p dist
-          cp "$apk_src" "dist/$apk_name"
+          while IFS=$'\t' read -r out_file abi; do
+            cp "$apk_dir/$out_file" "dist/salam-application-pr${PR_NUMBER}-${short_sha}-${abi}.apk"
+          done < <(jq -r '.elements[] | [.outputFile, ((.filters[]? | select(.filterType=="ABI") | .value) // "universal")] | @tsv' "$meta")
+          apk_name="salam-application-pr${PR_NUMBER}-${short_sha}-universal.apk"
+          aab_src=$(find "$aab_dir" -maxdepth 1 -name '*.aab' | head -1)
+          aab_name="salam-application-pr${PR_NUMBER}-${short_sha}.aab"
           cp "$aab_src" "dist/$aab_name"
           {
             echo "apk_path=dist/$apk_name"
@@ -86,9 +98,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.apk.outputs.artifact }}
-          path: |
-            ${{ steps.apk.outputs.apk_path }}
-            ${{ steps.apk.outputs.aab_path }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 14
 

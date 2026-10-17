@@ -1,0 +1,90 @@
+---
+name: 📱 Application - Build (iOS)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: application-ios-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        ios/*
+        mobile/*
+        compiler/mobile_main.salam
+        compiler/interp/*
+        tools/bash/build-mobile-engine.sh
+        .github/workflows/_changes.yml
+        .github/workflows/app-ios-build.yml
+  build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    name: Build iOS app (simulator + unsigned device)
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Salam
+        id: salam
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Prepare engine C, std and examples
+        env:
+          SALAM: ${{ steps.salam.outputs.salam }}
+        run: sh ios/build-engine.sh
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: |
+          set -eu
+          version=$(tr -d ' \t\r\n' < ../VERSION)
+          IFS=. read -r major minor patch <<< "$version"
+          export SALAM_VERSION="$version"
+          export SALAM_BUILD=$(( major * 10000 + minor * 100 + ${patch:-0} ))
+          xcodegen generate
+
+      - name: Build for the simulator
+        working-directory: ios
+        run: |
+          set -eu
+          xcodebuild -project Salam.xcodeproj -scheme Salam -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
+
+      - name: Archive an unsigned device build
+        working-directory: ios
+        run: |
+          set -eu
+          xcodebuild -project Salam.xcodeproj -scheme Salam -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath build/Salam.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" archive
+          mkdir -p build/ipa/Payload
+          cp -R build/Salam.xcarchive/Products/Applications/Salam.app build/ipa/Payload/
+          (cd build/ipa && zip -qry ../salam-ios-unsigned.ipa Payload)
+          ls -la build/salam-ios-unsigned.ipa
+          du -sh build/Salam.xcarchive/Products/Applications/Salam.app
+
+      - name: Upload the unsigned IPA
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: salam-ios-unsigned
+          path: ios/build/salam-ios-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14

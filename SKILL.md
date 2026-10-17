@@ -35,7 +35,7 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-For Persian there is also a complete 25-lesson human tutorial on the official
+For Persian there is also a complete 27-lesson human tutorial on the official
 site: **<https://www.salamlang.ir/learn/>** (one page per topic, every example
 compiled and run). There is no English site yet; for English, this file and
 `tests/en/` are the reference.
@@ -2701,4 +2701,6 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
 | Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
+| Search with Typesense (`دیتابیس.تایپسنس`)        | <https://www.salamlang.ir/learn/search/>       |
+| Search with OpenSearch (`دیتابیس.اپن سرچ`)       | <https://www.salamlang.ir/learn/opensearch/>   |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

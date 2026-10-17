@@ -1,0 +1,107 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19879
+
+func floats(a: f64, b: f64, c: f64): Vector<f64>:
+    mut v := Vector {} as Vector<f64>
+    v.push(a)
+    v.push(b)
+    v.push(c)
+    ret v
+end
+
+func main:
+    fake.On("PUT", "/places", 200, `{"acknowledged":true,"shards_acknowledged":true,"index":"places"}`)
+    fake.On("POST", "/places/_search", 200, `{"took":4,"timed_out":false,"hits":{"total":{"value":2,"relation":"eq"},"max_score":0.97,"hits":[{"_index":"places","_id":"cafe-1","_score":0.97,"_source":{"name":"Naderi Cafe"}},{"_index":"places","_id":"cafe-2","_score":0.81,"_source":{"name":"Lamiz"}}]}}`)
+    fake.On("POST", "/places/_search", 200, `{"took":9,"timed_out":false,"hits":{"total":{"value":1,"relation":"eq"},"max_score":1.0,"hits":[{"_index":"places","_id":"cafe-1","_score":1.0,"_source":{"name":"Naderi Cafe"}}]}}`)
+    fake.On("GET", "/_plugins/_knn/warmup/places", 200, `{"_shards":{"total":1,"successful":1,"failed":0}}`)
+    fake.On("POST", "/_plugins/_knn/clear_cache/places", 200, `{"_shards":{"total":1,"successful":1,"failed":0}}`)
+    fake.On("GET", "/_plugins/_knn/stats", 200, `{"_nodes":{"total":1},"circuit_breaker_triggered":false,"nodes":{"n1":{"graph_memory_usage":12}}}`)
+    fake.On("POST", "/_plugins/_knn/models/pq-1/_train", 200, `{"model_id":"pq-1"}`)
+    fake.On("GET", "/_plugins/_knn/models/pq-1", 200, `{"model_id":"pq-1","state":"created","dimension":3,"engine":"faiss"}`)
+    fake.On("DELETE", "/_plugins/_knn/models/pq-1", 200, `{"model_id":"pq-1","result":"deleted"}`)
+    fake.On("PUT", "/_search/pipeline/hybrid", 200, `{"acknowledged":true}`)
+    fake.On("GET", "/_search/pipeline/hybrid", 200, `{"hybrid":{"phase_results_processors":[{"normalization-processor":{"normalization":{"technique":"min_max"}}}]}}`)
+    fake.On("DELETE", "/_search/pipeline/hybrid", 200, `{"acknowledged":true}`)
+    fake.On("POST", "/_plugins/_ml/models/_register", 200, `{"task_id":"t-11","status":"CREATED"}`)
+    fake.On("GET", "/_plugins/_ml/tasks/t-11", 200, `{"model_id":"m-31","task_type":"REGISTER_MODEL","state":"COMPLETED"}`)
+    fake.On("POST", "/_plugins/_ml/models/m-31/_deploy", 200, `{"task_id":"t-12","task_type":"DEPLOY_MODEL","status":"CREATED"}`)
+    fake.On("GET", "/_plugins/_ml/models/m-31", 200, `{"name":"all-MiniLM-L6-v2","model_state":"DEPLOYED","algorithm":"TEXT_EMBEDDING"}`)
+    fake.On("POST", "/_plugins/_ml/_predict/text_embedding/m-31", 200, `{"inference_results":[{"output":[{"name":"sentence_embedding","shape":[3],"data":[0.1,0.8,0.3]}]}]}`)
+    fake.On("POST", "/_plugins/_ml/models/m-31/_undeploy", 200, `{"n1":{"stats":{"m-31":"undeployed"}}}`)
+    fake.On("DELETE", "/_plugins/_ml/models/m-31", 200, `{"_index":".plugins-ml-model","_id":"m-31","result":"deleted"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19879")
+
+    method := opensearch.KnnMethod { name = "hnsw", engine = "lucene", space_type = "cosinesimil", m = 16, ef_construction = 128 }
+    println "default method:", opensearch.KnnVectorField(384, opensearch.KnnMethod {})
+    println "settings:", opensearch.KnnIndexSettings(1, 0)
+    mut extra := Vector {} as Vector<str>
+    extra.push(opensearch.Property("name", "text"))
+    extra.push(opensearch.Property("city", "keyword"))
+    println "create:", opensearch.CreateIndex(c, "places", opensearch.KnnIndexBody("embedding", 3, method, extra))
+    println "  sent:", fake.Last()
+
+    query := floats(0.1, 0.8, 0.3)
+    println "vector:", opensearch.KnnVector(query)
+    near := opensearch.Search(c, "places", opensearch.Knn("embedding", query, 2))
+    println "nearest:", near.total
+    each h in near.hits:
+        println "  ", h.id, h.score, h.source
+    end
+    println "  sent:", fake.Last()
+    filtered := opensearch.Search(c, "places", opensearch.KnnFiltered("embedding", query, 5, opensearch.Term("city", "Tehran")))
+    println "filtered:", filtered.total, filtered.hits.get(0).id
+    println "  sent:", fake.Last()
+    println "radial:", opensearch.KnnRadial("embedding", query, 0.3)
+    println "min score:", opensearch.KnnMinScore("embedding", query, 0.9)
+
+    println "warmup:", opensearch.KnnWarmup(c, "places"), "clear:", opensearch.KnnClearCache(c, "places")
+    println "stats:", opensearch.JsonPath(opensearch.KnnStats(c), "circuit_breaker_triggered")
+    println "train:", opensearch.KnnTrainModel(c, "pq-1", `{"training_index":"train","training_field":"embedding","dimension":3,"method":{"name":"ivf","engine":"faiss","parameters":{"nlist":4}}}`)
+    println "  model:", opensearch.JsonPath(opensearch.KnnGetModel(c, "pq-1"), "state"), "deleted:", opensearch.KnnDeleteModel(c, "pq-1")
+
+    mut weights := Vector {} as Vector<f64>
+    weights.push(0.3)
+    weights.push(0.7)
+    pipe := opensearch.NormalizationPipeline("min_max", "arithmetic_mean", weights)
+    println "hybrid pipeline:", opensearch.PutSearchPipeline(c, "hybrid", pipe)
+    println "  sent:", fake.Last()
+    println "  stored:", opensearch.GetSearchPipeline(c, "hybrid")
+
+    task := opensearch.MlRegisterModel(c, `{"name":"huggingface/sentence-transformers/all-MiniLM-L6-v2","version":"1.0.1","model_format":"TORCH_SCRIPT"}`)
+    println "register:", task, opensearch.JsonPath(opensearch.MlGetTask(c, task), "model_id")
+    println "deploy:", opensearch.MlDeployModel(c, "m-31"), opensearch.JsonPath(opensearch.MlGetModel(c, "m-31"), "model_state")
+    embed := opensearch.MlPredict(c, "text_embedding", "m-31", `{"text_docs":["a quiet cafe"]}`)
+    println "embedding:", opensearch.JsonPathRaw(embed, "inference_results.0.output.0.data")
+
+    mut both := Vector {} as Vector<str>
+    both.push(opensearch.Match("name", "cafe"))
+    both.push(opensearch.Neural("embedding", "a quiet cafe", "m-31", 5))
+    hy := opensearch.SearchParamsWith(c, "places", opensearch.AddMember("{}", "query", opensearch.Hybrid(both)), opensearch.SearchParams { search_pipeline = "hybrid" })
+    println "hybrid search:", hy.total, hy.hits.get(0).id
+    println "  sent:", fake.Last()
+    println "sparse:", opensearch.NeuralSparse("tokens", "a quiet cafe", "m-40")
+    println "undeploy:", opensearch.MlUndeployModel(c, "m-31"), "delete:", opensearch.MlDeleteModel(c, "m-31"), "pipeline gone:", opensearch.DeleteSearchPipeline(c, "hybrid")
+    ret 0
+end

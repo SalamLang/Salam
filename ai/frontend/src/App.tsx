@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AgentBar, useAgent } from "./Agent";
@@ -72,6 +72,7 @@ export function App() {
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
   const scroller = useRef<HTMLDivElement>(null);
+  const pageScroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const pollTimer = useRef<number | null>(null);
   const streamCtrl = useRef<AbortController | null>(null);
@@ -283,6 +284,11 @@ export function App() {
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages, tools.calls]);
 
+  useLayoutEffect(() => {
+    if (pageScroller.current) pageScroller.current.scrollTop = 0;
+    window.scrollTo(0, 0);
+  }, [route]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
@@ -438,7 +444,7 @@ export function App() {
           </button>
         </header>
         {route === "apps" || route === "keys" || route === "admin" ? (
-          <div className="scroller page-scroller">
+          <div className="scroller page-scroller" ref={pageScroller}>
             {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (

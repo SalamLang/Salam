@@ -10,6 +10,25 @@ group.H2_FLAG_ = The flags in the fifth byte of a frame. What each flag means de
 pkg.intro <<
 <p>This package implements HTTP/2 at the protocol level: it builds and reads frames, compresses the headers with HPACK and carries several requests at once over one connection as "streams". For building an ordinary web server <a href="../net-http/">net/http</a> is simpler; this package is for when you need the protocol itself.</p>
 <p>How it goes: build a <code>Transport</code> over a TCP or TLS socket, take a connection with <code>NewConn</code> and do the handshake. Then the client sends a request with <code>SendHeaders</code> and reads the answer in <code>StreamAt</code> after <code>AwaitStreamEnd</code>. Over TLS, the client and the server must have agreed on <code>h2</code> through ALPN.</p>
+
+<h2 id="guide-multiplex">Many requests on one connection</h2>
+<p>The point of HTTP/2 is that one connection carries many requests at the same time. Each request is a stream with an odd id chosen by the client (1, 3, 5 and so on), and the frames of different streams can be interleaved in both directions. The client below sends three requests before reading anything; the server, in the same program, answers them in reverse order, and each answer still lands on the right stream.</p>
+{{example.net-http2-multiplex}}
+<p><code>AwaitAnyHeaders</code> on the server reads frames until one arrives for a stream whose headers are complete and returns that stream's id, or <code>H2_POLL_ERROR</code> when the connection fails. A request that also has a body sends more frames on the same stream, so a server that accepts bodies should remember which ids it has already seen. <code>AwaitStreamEnd</code> on the client reads frames, for any stream, until the one you asked about has ended; the frames of the others are kept in their streams for later. Its last argument is a limit on how many frames to read, so a broken peer cannot keep you waiting forever.</p>
+
+<h2 id="guide-hpack">How much HPACK saves</h2>
+<p>Requests to one site repeat nearly the same headers every time. HPACK sends a header once, stores it in a table that both sides keep in step, and afterwards sends only its index. The first request below is already smaller than its HTTP/1.1 text because of the static table and the Huffman code; the second and third are about a quarter of the size, because almost everything is now in the dynamic table.</p>
+{{example.net-http2-hpack-savings}}
+<p>The <code>authorization</code> header is added with <code>HeadersAddSensitive</code>, so it is never put in the table and is sent in full every time. That costs a few bytes but stops an attacker who can influence other headers on the same connection from guessing the token by watching the compressed size, the attack known as CRIME.</p>
+
+<h2 id="guide-tls">HTTP/2 over TLS to a real server</h2>
+<p>Servers on the internet offer HTTP/2 only over TLS, and only to clients that ask for it during the TLS handshake. Set <code>alpn</code> to <code>h2</code> in the <a href="/std/tls/">tls</a> config, connect with <code>tls.Dial</code>, and wrap the connection with <code>TLSTransport</code>. If the server did not pick <code>h2</code>, <code>ClientHandshake</code> fails and you should fall back to HTTP/1.1.</p>
+{{example.net-http2-tls-get}}
+<p>It needs network access, so it is only checked here. Run against Cloudflare, it printed:</p>
+<pre class="code" dir="ltr"><code>status: 200
+server: cloudflare
+body bytes: 0</code></pre>
+<p>The body is empty because the request used <code>HEAD</code>. With <code>GET</code>, the page arrives in <code>s.data</code> as one buffer, after the package has already sent the window updates that flow control needs.</p>
 >>
 
 doc.HuffmanEncodedLen = The length of the bytes that come out of the HPACK Huffman code, for deciding whether compressing is worth it.

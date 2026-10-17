@@ -8,6 +8,45 @@ pkg.import = tls
 pkg.intro <<
 <p>The tls package is a complete implementation of TLS written in Salam and needs no outside library. A client connects with <code>Dial</code> and checks the server certificate against the system roots; a server reads its certificate and key with <code>NewServerConfig</code> and secures each connection with <code>WrapServer</code>.</p>
 <p>The cryptography tools here are also useful for building protocols of your own: the two sides make a shared secret with ECDH, derive a key from it with HKDF, and encrypt and seal the message with AES-GCM. Keys and data are passed around as base64.</p>
+
+<h2 id="guide-https">Connect to a server and handle a bad certificate</h2>
+<p><code>Dial</code> does the whole handshake and checks the certificate chain against the system roots and the name in <code>NewConfig</code>. When something is wrong, the connection is not open and <code>ConnError</code> says why: the certificate expired, it was issued for another name, or it does not chain to a trusted root. Always check <code>ConnOk</code> before you write. The program below tries a working site and three of the deliberately broken hosts at badssl.com.</p>
+{{example.tls-https-check}}
+<p>It needs network access, so it is only checked here. When it was run, it printed the lines below; the cipher and the number of certificates depend on the server.</p>
+<pre class="code" dir="ltr"><code>www.salamlang.ir TLS1.3 TLS_CHACHA20_POLY1305_SHA256 3 certificates
+expired.badssl.com refused: certificate verification failed: certificate expired
+wrong.host.badssl.com refused: certificate verification failed: hostname does not match certificate
+self-signed.badssl.com refused: certificate verification failed: no trusted issuer found</code></pre>
+<p>For a private server with its own certificate authority, set <code>ca_file</code> in the config to that CA's PEM file. <code>insecure_skip_verify</code> turns the check off; use it only for a quick local test, never in a program others rely on.</p>
+
+<h2 id="guide-seal">Encrypt records with AES-GCM</h2>
+<p><code>AesGcmSeal</code> encrypts a text and adds a tag, so that <code>AesGcmOpen</code> notices any change: a wrong key, a wrong nonce or a changed byte all make <code>ok</code> false instead of returning garbage. The key is 32 random bytes as base64; make it once with <code>RandomSalt(32)</code> and keep it secret. The nonce must never repeat under one key. The simple rule is a counter: <code>GcmNonce(0)</code> for the first message, <code>GcmNonce(1)</code> for the next, and the counter is stored next to the record so that it can be opened later.</p>
+{{example.tls-sealed-records}}
+<p>With a fixed key and nonce the output is always the same, which is why the program can print it. That is also the danger: the same nonce for two different texts lets an attacker learn about both, so never reset the counter while the key stays the same.</p>
+
+<h2 id="guide-channel">A shared key from public keys</h2>
+<p>Two programs that have never met can agree on a key without sending it. Each makes an ECDH key pair with <code>EcdhP256Generate</code> and sends the other only its public key. <code>EcdhP256Shared</code> then gives both the same secret, and <code>HkdfSha256</code> turns it into a key for AES-GCM. Someone who saw both public keys still cannot compute the secret. The <code>info</code> text names what the key is for, so one secret can safely give separate keys for separate uses.</p>
+{{example.tls-secure-channel}}
+<p>ECDH alone does not tell you <em>who</em> is on the other side. In a real protocol, sign the public key, or check it against one you already know, or someone in the middle can make a key with each side.</p>
+
+<h2 id="guide-sign">Sign and verify with P-256</h2>
+<p><code>P256Sign</code> signs a SHA-256 digest with a private key, and anyone with the public point can check it with <code>P256Verify</code>. It suits licence files, update manifests and messages that must be checked by many readers but written by one. The signature follows RFC 6979, so the same key and digest always give the same signature and no random number generator is involved.</p>
+{{example.tls-signed-license}}
+<p>The private key in the program is there so that the output stays the same. Keep a real one out of the source code: read it from a file or the environment, and ship only the public point with the program that checks.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>An HTTPS or other TLS client</td><td><code>NewConfig</code>, <code>Dial</code>, <code>Write</code>, <code>Read</code>, <code>Close</code>; for plain web requests, <a href="/std/net-http/">net/http</a> does this for you</td></tr>
+<tr><td>A TLS server</td><td><code>NewServerConfig</code>, then <code>WrapServer</code> on each accepted socket</td></tr>
+<tr><td>Upgrade a socket that is already open (STARTTLS)</td><td><code>WrapClient</code></td></tr>
+<tr><td>Encrypt data at rest</td><td><code>AesGcmSeal</code>, <code>AesGcmOpen</code>, <code>GcmNonce</code></td></tr>
+<tr><td>Agree on a key</td><td><code>EcdhP256Generate</code>, <code>EcdhP256Shared</code>, <code>HkdfSha256</code></td></tr>
+<tr><td>Sign and verify</td><td><code>P256Sign</code>, <code>P256Verify</code></td></tr>
+<tr><td>Check a certificate yourself</td><td><code>LoadRoots</code>, <code>VerifyCert</code>, <code>VerifyError</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.ServerConfig = The server configuration: the certificate chain and the private key.

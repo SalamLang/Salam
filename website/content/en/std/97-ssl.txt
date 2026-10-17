@@ -8,6 +8,29 @@ pkg.import = ssl
 pkg.intro <<
 <p>This package gives the same OpenSSL style context and connection interface, but underneath it is Salam's own <a href="../tls/">tls</a> and it needs no outside library. For new code <a href="../tls/">tls</a> is simpler; this package is for code already written in this style. Set the hostname before <code>Connect</code> when certificates are verified.</p>
 <p>The flow: make a context, hand the TCP connection to it with <code>Wrap</code>, for a client set the hostname and call <code>Connect</code>, then read and write.</p>
+
+<h2 id="guide-fetch">A complete client</h2>
+<p>The steps are always the same: one context for the whole program, then for each connection a TCP socket, <code>Wrap</code>, <code>SetHostname</code> and <code>Connect</code>. A context made with <code>NewClientContext</code> does not trust anything until you call <code>SetDefaultVerifyPaths</code> or <code>LoadVerifyLocationsFile</code>, and <code>SetVerify(ctx, VERIFY_PEER)</code> makes a failed check stop the handshake. <code>Read</code> returns an empty string when the server closes the connection, which is the end of a <code>Connection: close</code> response.</p>
+{{example.ssl-fetch-page}}
+<p>It needs network access, so it is only checked here. Run against the real hosts, it printed:</p>
+<pre class="code" dir="ltr"><code>HTTP/1.1 200 OK
+handshake failed: certificate verification failed: certificate expired</code></pre>
+
+<h2 id="guide-private-ca">Trusting only your own certificate authority</h2>
+<p>Services inside a company often use certificates from a private CA. Load that CA with <code>LoadVerifyLocationsFile</code> instead of the system roots: the client then accepts only servers whose certificate your CA signed, which is stricter than the public web. <code>SetMinVersion(ctx, TLS1_3)</code> refuses anything older than TLS 1.3, and after the handshake <code>PeerVerified</code> and <code>VerifyResult</code> tell you how the check went.</p>
+{{example.ssl-private-ca}}
+<p><code>VerifyResult</code> is <code>CERT_OK</code> (zero) when the certificate was accepted. Keep the CA file readable by the program but not writable, since anyone who can replace it can impersonate your servers.</p>
+
+<h2 id="guide-starttls">STARTTLS: encrypt a connection that is already open</h2>
+<p>Mail, IMAP, XMPP and some database protocols start in plain text and switch to TLS on the same connection when the client asks. This is why <code>Wrap</code> takes a socket descriptor rather than a host: talk to the server with <a href="/std/net-tcp/">net/tcp</a> until it agrees, then wrap the very same <code>fd</code> and carry on through <code>ssl.Read</code> and <code>ssl.Write</code>.</p>
+{{example.ssl-starttls}}
+<p>Against Gmail's submission port it printed the server's greeting in plain text and then its first encrypted reply; the ids at the end of each line change with every run:</p>
+<pre class="code" dir="ltr"><code>plain: 220 smtp.gmail.com ESMTP ... - gsmtp
+encrypted: 250-smtp.gmail.com at your service, [...]</code></pre>
+<p>A real mail client should check every reply code, not only the one for STARTTLS, and should send <code>EHLO</code> again after the switch, as the program does, because the server forgets everything it was told in plain text.</p>
+
+<h2 id="guide-errors">When something fails</h2>
+<p>There are three places to look. <code>LastErrorString</code> describes the last failure that has no connection yet, such as a context that could not read its certificate. <code>ConnErrorString</code> describes what went wrong on one connection, for example a failed certificate check. And when <code>Read</code> or <code>Write</code> returns zero or less, <code>ErrorCode(conn, n)</code> tells a clean close by the other side apart from a protocol or socket error, the same split OpenSSL's <code>SSL_get_error</code> makes.</p>
 >>
 
 doc.Wrap = Makes a new SSL connection over an open socket.

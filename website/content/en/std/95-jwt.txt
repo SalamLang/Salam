@@ -8,6 +8,35 @@ pkg.import = jwt
 pkg.intro <<
 <p>A JWT is a token the server signs after a user logs in and the client sends with every request; by checking the signature the server knows who the user is without going to the database. This package supports the HMAC algorithms, HS256, HS384 and HS512, and never accepts a token with the <code>none</code> algorithm.</p>
 <p>For an API, make a <code>Guard</code> and call <code>Require</code> or one of its siblings in every handler; when the token is wrong the error response is sent for you. The secret has to be long and random, for instance from <code>RandomToken</code> in <a href="../crypto/">crypto</a>.</p>
+
+<h2 id="guide-errors">Why a token is rejected</h2>
+<p><code>Verify</code> checks, in order, that the token has three parts, that its algorithm is the one you expect, that the signature matches, and then the times and the claims you asked for in <code>Options</code>. The first failure goes into <code>err</code>, and <code>ErrorText</code> turns it into a short reason. The program below fixes <code>now</code> so that it prints the same lines every time; in a server leave <code>now</code> at 0 and the current clock is used.</p>
+{{example.jwt-errors}}
+<p>Three things to notice. Changing even one claim breaks the signature, so a client cannot raise its own rights. <code>leeway</code> forgives a small clock difference between the machine that signed and the one that checks; a minute or two is usual. And a token signed with HS512 is refused when the options say HS256: the algorithm comes from your options, never from the token, which is how this package avoids the classic <code>alg</code> attacks.</p>
+
+<h2 id="guide-refresh">Short access tokens and a refresh token</h2>
+<p>A token cannot be taken back once issued, so access tokens should live for minutes, not days. To spare the user a new login every fifteen minutes, issue a second, long lived refresh token at login and accept it at one route only, where it buys a new access token. Mark each token with what it is for, so that a refresh token is refused as an access token. <code>IssuePair</code> on a <code>Guard</code> issues both in one call; the program does it by hand to show the checks.</p>
+{{example.jwt-refresh}}
+<p>Keep the refresh token in an <code>HttpOnly</code> cookie (<code>SetSessionCookie</code>) rather than in JavaScript, and store its <code>jti</code> on the server if you need to revoke it before it expires.</p>
+
+<h2 id="guide-rotation">Rotating the secret</h2>
+<p>Sooner or later the secret has to change. If you switch at once, every user is logged out. Instead, give each secret a key id and put it in the token header with <code>SignWithKid</code>. To check a token, read its header with <code>Decode</code>, which does not verify anything, pick the secret for that <code>kid</code>, and only then call <code>Verify</code>. Sign new tokens with the new key and keep the old one until the last token signed with it has expired.</p>
+{{example.jwt-key-rotation}}
+<p>Never trust anything else from <code>Decode</code>: the claims it returns are unverified, and only the key id is safe to use, because it only chooses which secret the real check runs with.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Protect HTTP routes</td><td><code>NewGuard</code>, then <code>Require</code>, <code>RequireScope</code>, <code>RequireClaim</code> or <code>RequireSubject</code> in each handler</td></tr>
+<tr><td>Log a user in</td><td><code>Issue</code> or <code>IssueFor</code>, and <code>SetSessionCookie</code> for browsers</td></tr>
+<tr><td>Access and refresh tokens together</td><td><code>IssuePair</code></td></tr>
+<tr><td>Sign a token outside HTTP</td><td><code>NewClaims</code>, <code>SetStr</code> and friends, then <code>SignHS256</code></td></tr>
+<tr><td>Check a token and read its claims</td><td><code>Verify</code>, then <code>Str</code>, <code>Int</code>, <code>Bool</code>, <code>HasScope</code></td></tr>
+<tr><td>Only a yes or no answer</td><td><code>IsValid</code></td></tr>
+<tr><td>Read the key id before checking</td><td><code>Decode</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Token = A decoded token.

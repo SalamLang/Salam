@@ -8,6 +8,25 @@ pkg.import = ssh
 pkg.intro <<
 <p>This package is an SSH client written in Salam and needs neither OpenSSH nor any other library. Make a <code>Config</code> with the host and the user, pick the login method, and connect with <code>Connect</code>; then send a command with <code>Exec</code>, or move files with <code>SftpOpen</code>. It suits automating deployments and backups.</p>
 <p>The host key is checked against the known_hosts file, the way <code>ssh</code> itself does. The buffer and reader functions build and read the data format of the SSH protocol; an ordinary program does not need them.</p>
+
+<h2 id="guide-deploy">Run a deployment, step by step</h2>
+<p><code>Exec</code> runs one command and waits for it, returning its standard output, its standard error and the exit code in an <code>ExecResult</code>. Each call opens a new channel, so a <code>cd</code> in one command does not carry over to the next; join commands with <code>&amp;&amp;</code> when they belong together. A deployment is then a list of steps that stops at the first one whose exit code is not zero.</p>
+{{example.ssh-deploy}}
+<p>This needs a real server, so it is only checked here. <code>WithKeyFile</code> only reads the file, so it returns false when the path is wrong; a key the package cannot use makes <code>Connect</code> fail instead. For a command that runs for a long time and whose output you want as it comes, such as <code>tail -f</code>, use <code>NewSession</code>, <code>Start</code> and <code>ReadStep</code> with <code>DrainOutput</code> instead, as the example in the reference shows.</p>
+
+<h2 id="guide-backup">Pull a backup over SFTP</h2>
+<p>SSH and SFTP share one connection: run the command that writes the file with <code>Exec</code>, then open SFTP on the same client and fetch it. <code>Stat</code> gives the size, <code>Download</code> copies the file, and <code>Remove</code> cleans up on the server once the copy has arrived. For whole directories there are <code>UploadDir</code>, <code>DownloadDir</code> and <code>MkdirAll</code>.</p>
+{{example.ssh-backup}}
+
+<h2 id="guide-host-keys">Host keys and known_hosts</h2>
+<p>The host key is how the client knows it is talking to the right machine and not to someone in between. The mode decides what happens with a key that is not in known_hosts yet. <code>HOSTKEY_MODE_STRICT</code> refuses it, which is right for automation: add the key once by hand, then every later change is an error you want to hear about. <code>HOSTKEY_MODE_ACCEPT_NEW</code> is the default; it records a new key the first time and refuses a changed one later, like <code>StrictHostKeyChecking=accept-new</code> in OpenSSH. <code>HOSTKEY_MODE_INSECURE</code> checks nothing and belongs only in tests.</p>
+{{example.ssh-host-keys}}
+<p>With an empty known_hosts the first, strict attempt is refused, the second records the key, and the third, strict again, now connects. <code>HostKeyFingerprint</code> returns the same SHA-256 fingerprint that <code>ssh-keygen -lf</code> prints, so you can compare it with what the server's administrator gave you. The client checks the server's RSA host key (<code>rsa-sha2-256</code>, <code>rsa-sha2-512</code> or <code>ssh-rsa</code>), so the server needs one; a default OpenSSH install usually has it.</p>
+
+<h2 id="guide-many-hosts">Many hosts from one list</h2>
+<p>A <code>Config</code> is a plain value, so it is easy to build one per line of an inventory and keep the same rules for all of them: the same user, the same known_hosts file and strict checking. Nothing connects until <code>Connect</code> is called, so the program below runs without a network.</p>
+{{example.ssh-inventory}}
+<p>To run the same command on all hosts, loop over the configs, connect, <code>Exec</code> and <code>Close</code>. If one host is down, <code>Ok</code> is false for that client and <code>Error</code> says why, and the loop can go on to the next.</p>
 >>
 
 doc.Config = The configuration of an SSH connection.

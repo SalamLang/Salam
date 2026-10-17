@@ -9,6 +9,49 @@ pkg.import = net.http
 pkg.intro <<
 <p>The Salam HTTP server hands requests to a <a href="../net-router/">router</a>, and the router calls the handler function. Every handler takes one <code>i64</code>, the context id of the request; you read the request and write the response with the <code>Ctx_...</code> functions, or turn it into a <code>Context</code> struct with <code>Ctx</code> so the names get shorter.</p>
 <p>To send a request, <code>Get</code> and <code>Post</code> are the simplest way; <code>Client</code> keeps cookies the way a browser does. The examples run the server with <code>RunBackground</code> on 127.0.0.1 and send requests to it from the same program.</p>
+<h2 id="guide-api">A JSON API in one file</h2>
+<p>The most common job is a small JSON API: list some records, show one by its id, and create new ones. Register each route on the router with its handler, hand the router to the server with <code>Use</code>, and start it. Here the records are Salam structs: <code>json.Marshal</code> turns them into the response body, and <code>json.UnmarshalLenient</code> reads the posted body back into a struct, ignoring fields it does not know and leaving the missing ones at their defaults.</p>
+{{example.net-http-guide-api}}
+<p>Nothing is sent until the handler returns: the status, the headers and the body are collected and go out together, and a second body call replaces the first. That is why a handler returns right after it writes an error. A <code>201</code> with a <code>Location</code> header is the usual answer to a create, and a <code>404</code> with a short JSON error is easier for a client to handle than an empty page. Path parameters such as <code>:id</code> always arrive as text, so convert them with <code>conv.Atoi</code> before comparing.</p>
+
+<h2 id="guide-forms">HTML forms, query strings and redirects</h2>
+<p>A browser form arrives as <code>application/x-www-form-urlencoded</code>. <code>Ctx_form</code> reads one field and decodes it, so <code>%40</code> becomes <code>@</code> and <code>+</code> becomes a space. <code>Ctx_query</code> does the same for the query string. After a successful POST, answer with <code>Ctx_redirect</code> so that pressing reload in the browser does not send the form again.</p>
+{{example.net-http-guide-forms}}
+<p>Anything a user typed must be escaped before it goes into HTML; otherwise a message containing <code>&lt;script&gt;</code> runs in every visitor's browser. <code>template.EscapeHTML</code> does that, as the <code>&amp;amp;</code> in the output shows. On the client side, <code>EncodeForm</code> builds a form body from a map and <code>WithQuery</code> adds a query string to a URL, both with correct escaping.</p>
+
+<h2 id="guide-groups">Route groups and a login check</h2>
+<p><code>router.Group</code> puts a route under a common prefix, which is how an API is versioned under <code>/api/v1</code>. There is no separate middleware chain: a check that several handlers share is a plain function that returns <code>true</code> when the request may go on, or writes the error response itself and returns <code>false</code>. Each handler calls it on its first line and returns when it fails.</p>
+{{example.net-http-guide-groups}}
+<p>A route that is not registered answers <code>404</code> on its own, so <code>/profile</code> without the prefix is not found. For a cookie based login instead of a token, see <a href="/std/net-http-session/">net/http/session</a>.</p>
+
+<h2 id="guide-static">Static files and server settings</h2>
+<p><code>router.Static</code> serves a whole directory under a prefix, with the content type taken from the file extension. A path that tries to climb out of the directory with <code>..</code> is refused, and a missing file is a <code>404</code>. <code>HideTokens</code> drops the version number from the <code>Server</code> header, so the answer says only <code>Salam</code>.</p>
+{{example.net-http-guide-static}}
+
+<h2 id="guide-deploy">Running a real server</h2>
+<p>The examples above use <code>RunBackground</code> so that one program can be both the server and its own client. A real service calls <code>Run</code>, which never returns. Read the port from the environment, listen on <code>0.0.0.0</code> when the server sits in a container or behind a proxy, and turn on the access log while you are getting it running.</p>
+{{example.net-http-guide-server}}
+<p>Run it and try it from a second terminal:</p>
+<pre class="code" dir="ltr"><code>PORT=8080 salam run server.salam
+curl http://127.0.0.1:8080/health</code></pre>
+<p>The limits are for the whole process: <code>SetMaxBodyBytes</code> and <code>SetMaxHeaderBytes</code> reject requests that are too large, <code>SetKeepAliveIdle</code> closes idle connections, and <code>SetKeepAliveMaxRequests</code> caps how many requests one connection may send. For HTTPS, call <code>RunTLS</code> with a certificate and key file instead of <code>Run</code>, or put the server behind a proxy that handles TLS.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Function</th></tr></thead>
+<tbody>
+<tr><td>Read a path parameter, query value or form field</td><td><code>Ctx_param</code>, <code>Ctx_query</code>, <code>Ctx_form</code></td></tr>
+<tr><td>Read the raw body or a request header</td><td><code>Ctx_body</code>, <code>Ctx_header</code></td></tr>
+<tr><td>Answer with text, JSON or HTML</td><td><code>Ctx_text</code>, <code>Ctx_json</code>, <code>Ctx_html</code></td></tr>
+<tr><td>Choose the status or add a header</td><td><code>Ctx_status</code>, <code>Ctx_set_header</code></td></tr>
+<tr><td>Send the browser somewhere else</td><td><code>Ctx_redirect</code></td></tr>
+<tr><td>Shorter names inside one handler</td><td><code>Ctx</code>, then <code>Param</code>, <code>Json</code> and the rest</td></tr>
+<tr><td>One request from a program</td><td><code>Get</code>, <code>Post</code>, <code>GetWith</code>, <code>PostWith</code>, <code>Request</code></td></tr>
+<tr><td>Several requests that share cookies</td><td><code>NewClient</code></td></tr>
+<tr><td>Check the answer</td><td><code>Ok</code> for network errors, <code>Status</code> for the HTTP code, <code>Error</code> for the reason</td></tr>
+</tbody>
+</table></div>
+<p>A value you read from the request, such as <code>Ctx_param</code> or <code>Ctx_form</code>, belongs to that request and is freed when the handler returns. To keep it longer, in a global list or a session, store a copy made with <code>str.Clone</code> or a new string built with <code>+</code>.</p>
 >>
 
 doc.SERVER_VERSION = The server version sent in the <code>Server</code> header of the responses.

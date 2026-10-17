@@ -17,12 +17,19 @@ group.Color = The values for <code>SetColorMode</code>. In automatic mode, colou
 group.Std.title = Standard file descriptors
 group.Std = The descriptors of standard input, output and error, for <code>IsTTY</code> and <code>MakeRaw</code>.
 pkg.intro <<
-<p>The <code>term</code> package has everything a good looking command line program needs: text colour and style, progress bars, and for full screen programs, cursor movement and reading keys one at a time.</p>
-<p>The colour functions, such as <code>Red</code>, return a new string and print nothing. When the output goes to a file or another program, or <code>NO_COLOR</code> is set, nothing is added and the text stays plain. <code>SetColorMode</code> changes that behaviour.</p>
-<p>The functions whose names start with <code>Seq</code> only return the escape sequence, and the one with the same name without the prefix sends it right away. To read keys, put the terminal into raw mode with <code>MakeRaw</code> or <code>MakeCbreak</code>, and always put it back with <code>Restore</code>.</p>
+<p>The <code>term</code> package has what a command line program needs to look good in a terminal: text colour and style, columns that line up, progress bars and spinners, and for full screen programs, cursor movement, the alternate screen and reading keys one at a time.</p>
+<p>The colour functions, such as <code>Red</code>, return a new string and print nothing. In the default <code>ColorAuto</code> mode they add nothing when the output goes to a file or another program, when <code>NO_COLOR</code> is set or when <code>TERM=dumb</code>, so the text stays plain; <code>SetColorMode</code> changes that, for a <code>--color</code> option for instance. The functions whose names start with <code>Seq</code> only return an escape sequence, and the one with the same name without the prefix sends it right away. To read keys, put the terminal into raw mode with <code>MakeRaw</code> or <code>MakeCbreak</code>, and always put it back with <code>Restore</code>.</p>
+<p>For one line questions such as a name or a yes or no, <a href="/std/cli/">cli</a> is simpler; for log lines, <a href="/std/log/">log</a>; for padding plain text, <a href="/std/fmt/">fmt</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Padding coloured text with <code>len</code>. A colour code adds bytes but no columns; use <code>PadRight</code> and the other functions here, which measure with <code>Width</code>.</li>
+<li>Trusting <code>Width</code> with every script. It counts one column per character: Chinese and Japanese characters, which take two columns, count as one, and invisible ones such as the zero width non-joiner in Persian <code>می‌شود</code> count as one too. Tables of such text need padding of your own.</li>
+<li>Leaving the terminal in raw mode. Call <code>Restore</code> with <code>defer</code> right after <code>MakeRaw</code>, and leave the alternate screen and show the cursor on every way out.</li>
+<li>Expecting a progress bar in a log. <code>BarDraw</code> draws nothing when the output is not a terminal, and <code>BarFinish</code> prints the final bar once, so a CI log gets one clean line.</li>
+</ul>
 
 <h2 id="guide-table">A coloured table that lines up</h2>
-<p>A colour code adds bytes to a string but no columns on the screen, so padding with <code>len</code> would push every coloured cell out of line. <code>PadRight</code>, <code>PadLeft</code> and <code>Truncate</code> measure with <code>Width</code>, which skips escape codes and counts wide characters such as Chinese as two columns, so a table lines up whether its cells are coloured or not.</p>
+<p>A colour code adds bytes to a string but no columns on the screen, so padding with <code>len</code> would push every coloured cell out of line. <code>PadRight</code>, <code>PadLeft</code> and <code>Truncate</code> measure with <code>Width</code>, which skips escape codes, so a table lines up whether its cells are coloured or not.</p>
 {{example.term-guide-table}}
 <p>The output above is plain because the program's output went to a file, not a terminal. Run it in a terminal and the status column turns green, yellow and red, with no change to the code. <code>FormatBytes</code> and <code>FormatDuration</code> turn raw numbers into the short forms people expect in a status table.</p>
 
@@ -30,6 +37,11 @@ pkg.intro <<
 <p>The same line often goes to two places: the terminal, where colour helps, and a log file, where escape codes are noise. Build the line once and pass it through <code>Strip</code> for the file. The colour functions already return plain text when colour is off, but <code>Strip</code> also cleans text that was coloured earlier or came from another program.</p>
 {{example.term-guide-log}}
 <p>The example forces colour on with <code>SetColorMode(ColorAlways)</code> so the difference between bytes and columns is visible. Leave the mode at <code>ColorAuto</code> in real programs: it turns colour off for pipes, files and <code>NO_COLOR</code>, which is what users expect.</p>
+
+<h2 id="guide-progress">A progress bar that also works in CI</h2>
+<p><code>NewBar</code> takes the total and a label; <code>BarAdd</code> moves it on and redraws it in place, and <code>BarFinish</code> fills it and ends the line. The fields change the look: a fixed <code>width</code> instead of one worked out from the terminal, the <code>fill</code> and <code>empty</code> characters, and <code>show_count</code> or <code>show_eta</code> for the numbers after the bar. <code>BarRender</code> returns the same text without drawing it, which is useful for a status line of your own.</p>
+{{example.term-guide-progress}}
+<p>On this page the output is not a terminal, so the five <code>BarAdd</code> calls drew nothing and <code>BarFinish</code> printed the finished bar once. In a terminal the same program shows one bar that fills up on a single line. <code>NewBar</code> picks <code>█</code> and <code>░</code> when the locale is UTF-8; the example sets plain characters so its output is the same everywhere. For work with no known total, <code>NewSpinner</code> with <code>SpinnerTick</code> in a loop and <code>SpinnerStop</code> at the end does the same job.</p>
 
 <h2 id="guide-menu">An arrow key menu</h2>
 <p>A full screen program follows a fixed pattern: check that standard input is a terminal, switch it to raw mode so keys arrive one at a time without being echoed, move to the alternate screen so the user's scrollback is left alone, and undo all of it in reverse order at the end. <code>ReadKey</code> turns the bytes of a key press into a <code>Key</code>, so arrows, Enter and Escape are simple comparisons.</p>
@@ -75,10 +87,10 @@ doc.Spinner.label = The text beside the spinner.
 doc.Spinner.color = The colour code of the frame; zero means no colour.
 doc.Spinner.drawn = Whether anything has been drawn on the screen.
 doc.FormatDuration = Makes a duration in milliseconds readable, such as <code>9.5s</code> or <code>1h 02m</code>.
-doc.FormatBytes = Writes a size with a fitting unit, such as <code>512 B</code> or <code>1.5 KB</code>; each unit is 1024 times the one before.
+doc.FormatBytes = Writes a size with a fitting unit and one decimal, such as <code>512 B</code>, <code>1.5 KB</code> or <code>1.7 MB</code>; each unit is 1024 times the one before.
 doc.NewBar = A new bar with a total and a label. In a UTF-8 environment it uses <code>█</code> and <code>░</code>, otherwise <code>#</code> and <code>-</code>.
 doc.BarRender = Returns the text of the bar without printing anything.
-doc.BarDraw = Redraws the bar on the same line; does nothing when the output is not a terminal.
+doc.BarDraw = Redraws the bar on the same line and hides the cursor the first time; does nothing when the output is not a terminal.
 doc.BarSet = Sets the current value, between zero and the total, and draws the bar.
 doc.BarAdd = Adds to the current value and draws the bar.
 doc.BarFinish = Fills the bar, draws it one last time and moves to the next line. When the output is not a terminal it prints the final bar once, without colour.
@@ -154,8 +166,8 @@ doc.OnColor256 = Makes the background one of 256 colours.
 doc.RGB = Writes the text in any red, green and blue colour.
 doc.OnRGB = Makes the background any red, green and blue colour.
 doc.Strip = Removes every escape sequence from the text.
-doc.Width = The number of characters that are seen on the screen; colour sequences do not count. Every character counts as one cell, East Asian wide characters included.
-doc.Truncate = Shortens the text to at most <code>n</code> visible characters and keeps the colours intact.
+doc.Width = The number of characters in the text, skipping escape sequences. Every character counts as one cell, so East Asian wide characters count as one and invisible ones, such as a zero width non-joiner, count too.
+doc.Truncate = Shortens the text to at most <code>n</code> characters as <code>Width</code> counts them, keeping the colour codes intact.
 doc.PadRight = Pads with spaces on the right until the width is <code>n</code>; for laying out columns.
 doc.PadLeft = Pads with spaces on the left until the width is <code>n</code>.
 doc.Center = Centres the text in a width of <code>n</code>.

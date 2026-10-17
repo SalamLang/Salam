@@ -5,9 +5,16 @@ pkg.summary = Structured errors with a kind, a message, a chain of causes, metad
 pkg.title = The error package in Salam | Structured errors and retries
 pkg.description = The error package in Salam: building an error with a kind and a message, wrapping an error with its cause, metadata, testing the kind, and a retry policy with exponential backoff, with examples.
 pkg.intro <<
-<p>A function that may fail can return an <code>error.Error</code>: either "nil", meaning everything went well, or an error with a <strong>kind</strong>, such as "not found", and a <strong>message</strong>. The kind is for the code to decide on; the message is for a person to read.</p>
-<p>When an error comes up from a lower layer, <code>Wrap</code> it so the current layer's explanation is added. The final message shows the whole chain, as in "could not save the report: the disk is full", and <code>RootMessage</code> gives the original cause.</p>
-<p>For transient errors, such as a dropped network connection, <code>RetryPolicy</code> says when and how often to try again and how long to wait between attempts; the delay doubles each time.</p>
+<p>Salam has no exceptions, so a function that may fail says so in its result. The <code>error</code> package gives your own code one error type for that: an <code>error.Error</code> is either nil, meaning everything went well, or an error with a <strong>kind</strong>, such as <code>not_found</code>, and a <strong>message</strong>. The kind is for the code to decide on; the message is for a person to read. The usual shape is an <code>err &amp;: error.Error</code> out parameter, as in the standard library.</p>
+<p>When an error comes up from a lower layer, <code>Wrap</code> it so the current layer's explanation is added. The final message shows the whole chain, as in <em>could not save the report: the disk is full</em>, and <code>RootMessage</code> gives the original cause. For transient errors, such as a dropped network connection, <code>RetryPolicy</code> says how often to try again and how long to wait between attempts.</p>
+<p>Neighbouring packages: <a href="/std/result/">result</a> and <a href="/std/option/">option</a> return a value or its absence in one result, which suits short chains with <code>?</code>; <a href="/std/os-error/">os/error</a> holds the last error of a file or process call. Many std packages, such as the database clients, have an <code>Error</code> type of their own; turn it into an <code>error.Error</code> at the edge of your code when you want one type throughout.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li><code>Wrap</code> and <code>WithMeta</code> on a nil error make a real error. Check <code>Ok</code> before you wrap.</li>
+<li>Every <code>Wrap</code>, <code>WithMeta</code> and <code>WrapKind</code> returns a new error with its own copies, and leaves the old one as it was. Free the ones you no longer need with <code>Free</code>.</li>
+<li><code>Is</code> and the <code>Is...</code> helpers look at every layer, not only the outer kind. After <code>WrapKind</code> to <code>internal</code>, an error that started as a timeout still answers true to <code>IsTimeout</code> and <code>IsRetryable</code> (see <a href="#guide-format">below</a>). Compare <code>Kind</code> when only the outer kind should count.</li>
+<li><code>DelayForAttempt</code> only computes the wait; your loop has to sleep. It adds no random jitter, so many clients that fail together retry together.</li>
+</ul>
 
 <h2 id="guide-layers">Errors through the layers of a program</h2>
 <p>A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail takes an <code>err &amp;: error.Error</code> out parameter, sets it to <code>error.Nil()</code> on success, and on failure either makes a new error or wraps the one it got from below. Only the top layer decides what to do, and it decides by <strong>kind</strong>, not by reading the message.</p>
@@ -22,6 +29,11 @@ pkg.intro <<
 <h2 id="guide-validate">Collect every problem at once</h2>
 <p>For a form or a config file, stopping at the first mistake makes the user fix them one by one. Collect the errors in a vector instead and show them all. <code>Newf</code> fills the <code>{}</code> placeholders of a message from a vector of strings, and a <code>field</code> meta entry says which input each error is about.</p>
 {{example.error-guide-validate}}
+
+<h2 id="guide-format">Logging an error with its trace</h2>
+<p><code>NewAt</code> and <code>WrapAt</code> also record where the error passed, which <code>Trace</code> joins with <code>-&gt;</code>. <code>WrapKind</code> gives the error a new outer kind, here <code>internal</code> once the program has decided it cannot start. <code>Format</code> puts everything on a few lines for a log: the outer kind in brackets, the full message, the trace and each meta entry.</p>
+{{example.error-guide-format}}
+<p>The last two lines are the trap from the list above: the error now reads as <code>internal</code>, but <code>Is</code> still finds the <code>io</code> kind of its root cause, so <code>IsRetryable</code> says yes. Each layer frees the error it got from below with <code>defer error.Free(inner)</code>; that is safe because the wrapped error has its own copies.</p>
 
 <h2 id="guide-kinds">Choosing a kind</h2>
 <div class="table-wrap"><table>
@@ -52,11 +64,11 @@ doc.KindCanceled = The work was cancelled.
 doc.KindInternal = An internal fault in the program.
 doc.KindIO = A read or write error.
 doc.KindUnimplemented = Not implemented yet.
-doc.Error = An error.
-doc.Error.kind = The kind of the error: one of the constants above, or one you define yourself.
+doc.Error = An error, or nil when <code>kind</code> is empty. It holds vectors, so free it with <code>Free</code>.
+doc.Error.kind = The outer kind of the error: one of the constants above, or one you define yourself; empty for nil.
 doc.Error.messages = The message from each layer, from the innermost cause to the outermost.
-doc.Error.kinds = The kind of each layer.
-doc.Error.trace = The places the error has passed through.
+doc.Error.kinds = The kind given at creation and each kind added by <code>WrapKind</code>.
+doc.Error.trace = The places recorded by <code>NewAt</code> and <code>WrapAt</code>, innermost first.
 doc.Error.meta_keys = The metadata keys.
 doc.Error.meta_vals = The metadata values.
 doc.RetryPolicy = A retry policy.
@@ -66,20 +78,20 @@ doc.RetryPolicy.max_delay_ms = The ceiling on the delay, in milliseconds; 5000 b
 doc.Nil = The nil error, meaning "no error".
 doc.IsNil = True when the error is nil.
 doc.Ok = The same as <code>IsNil</code>, and easier to read in a condition.
-doc.New = A new error with a kind and a message.
-doc.NewAt = A new error, with the name of the place it happened.
-doc.Newf = A new error with a formatted message; every <code>{}</code> is filled with the next value.
+doc.New = A new error with a kind and a message; an empty kind becomes <code>unknown</code>.
+doc.NewAt = A new error that also records the place it happened, such as a function name, in its trace.
+doc.Newf = A new error with a formatted message; every <code>{}</code> is filled with the next string from <code>args</code>.
 doc.Wrap = Puts a new message on an error and keeps the earlier ones; the kind does not change. When the error is nil it builds a new one of unknown kind.
-doc.WrapAt = Like <code>Wrap</code>, with the name of the place.
-doc.WrapKind = Like <code>Wrap</code>, and changes the kind too; the earlier kind is still recognised by <code>Is</code>.
-doc.WithMeta = Adds a key and value pair to the error, such as a user id or a file path.
-doc.Meta = The value of a metadata key, or an empty string when it is absent.
-doc.Kind = The kind of the error.
-doc.Is = True when the error's kind, or the kind of one of its causes, is this one.
-doc.Message = The full message with every layer.
+doc.WrapAt = Like <code>Wrap</code>, and adds the place to the trace.
+doc.WrapKind = Like <code>Wrap</code>, and sets a new outer kind. The earlier kinds stay in the error, so <code>Is</code> still finds them.
+doc.WithMeta = A copy of the error with a key and value pair added, such as a user id or a file path. On a nil error it makes an error of kind <code>unknown</code>.
+doc.Meta = The value of a metadata key, or an empty string when it is absent. With a repeated key, the first value wins.
+doc.Kind = The outer kind of the error; empty for nil.
+doc.Is = True when this kind is the error's kind at any layer, including kinds replaced by <code>WrapKind</code>.
+doc.Message = The full message, outermost layer first, joined with <code>: </code>.
 doc.RootMessage = The message of the innermost cause.
-doc.Trace = The recorded places, joined with <code>-></code>.
-doc.Format = The full text for a log: the kind in brackets, the message, the places and the metadata, each on its own line.
+doc.Trace = The recorded places, joined with <code> -&gt; </code>.
+doc.Format = The full text for a log: the kind in brackets and the message, then the trace and each meta entry on lines of their own. <code>&lt;nil&gt;</code> for nil.
 doc.IsNotFound = True when the error is of the "not found" kind.
 doc.IsInvalidArgument = For the "invalid argument" kind.
 doc.IsPermissionDenied = For the "permission denied" kind.
@@ -90,9 +102,9 @@ doc.IsUnavailable = For the "unavailable" kind.
 doc.IsInternal = For the "internal" kind.
 doc.IsRetryable = True when the error is transient and worth retrying: a timeout, unavailability or a read or write error.
 doc.NewRetryPolicy = Builds a policy with a maximum number of attempts and a base and maximum delay.
-doc.DelayForAttempt = How long to wait after attempt number <code>attempt</code> failed: the base delay after the first, then doubling each time up to the ceiling.
-doc.ShouldRetry = True when an error happened, is transient, and attempts are left.
-doc.Free = Releases the error's memory.
+doc.DelayForAttempt = How many milliseconds to wait after attempt number <code>attempt</code> failed: the base delay after the first, then doubling each time up to the ceiling. It does not sleep.
+doc.ShouldRetry = True when an error happened, is retryable at any layer, and <code>attempt</code> is still below <code>max_attempts</code>.
+doc.Free = Releases the error's vectors. Wrapped copies are not affected.
 
 ex.KindUnknown = error-New
 ex.KindNotFound = error-New

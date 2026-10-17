@@ -8,6 +8,14 @@ pkg.intro <<
 <p>A context tells long-running work when to stop: either someone called <code>Cancel</code>, or its deadline passed. Contexts form a tree: you start from <code>Background</code> and make a child each time with <code>WithCancel</code>, <code>WithTimeout</code> or <code>WithDeadline</code>.</p>
 <p>Cancelling a context ends all its children, but not its parent. The work should check <code>IsDone</code> from time to time, or wait on it with <code>Wait</code>. Free each context with <code>Free</code> when you are done with it, children before parents.</p>
 
+<p>Use a context when work that may take long has to stop early: a request whose client went away, a batch job with a time budget, a background thread at shutdown. It is built on <a href="/std/sync/">sync</a> and works across threads. For one stop flag and nothing else, an <a href="/std/atomic/">atomic</a>.<code>Flag</code> is enough; to pass results back, use a <a href="/std/chan/">chan</a>.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Expecting a context to interrupt a call. No standard library function takes one: a network request, a file read or a <code>sync.SleepMs</code> runs to its end. Check <code>IsDone</code> between steps, sleep with <code>Wait</code>, and give network calls their own timeout options.</li>
+<li>Freeing in the wrong order. A child keeps a copy of its parent that points at the parent's memory, and freeing the root destroys the lock the whole tree shares. Free children first, the root last, each exactly once.</li>
+<li>Assuming the deadlines follow a steady clock. They are measured with <code>sync.NowMs</code>, which on Linux and macOS is the wall clock, so setting the system time moves them.</li>
+</ul>
+
 <h2 id="guide-tree">Guide: one context per request</h2>
 <p>The usual shape is one context for a whole piece of work, such as an HTTP request or a batch job, and a child for every smaller task it starts. When the request is cancelled, every task under it sees <code>IsDone</code> turn true, while work hanging from another branch keeps going. The program below builds that tree and cancels the request in the middle.</p>
 {{example.ctx-guide-tree}}

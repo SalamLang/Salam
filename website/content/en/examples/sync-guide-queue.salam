@@ -1,0 +1,54 @@
+import sync
+
+mut lock := sync.Mutex {}
+mut has_work := sync.CondVar {}
+mut jobs_done := sync.WaitGroup {}
+mut queue := Vector {} as Vector<int>
+mut taken := 0
+mut closed := false
+mut total := 0
+
+func worker():
+    sync.Lock(lock)
+    until true:
+        until taken == queue.len() and not closed:
+            sync.WaitCond(has_work, lock)
+        end
+        if taken == queue.len(): break end
+        size := queue.get(taken)
+        taken += 1
+        sync.Unlock(lock)
+        cost := size * 2
+        sync.Lock(lock)
+        total += cost
+        sync.Done(jobs_done)
+    end
+    sync.Unlock(lock)
+end
+
+func main:
+    lock = sync.NewMutex()
+    has_work = sync.NewCondVar()
+    jobs_done = sync.NewWaitGroup()
+    workers := [spawn(worker), spawn(worker), spawn(worker)]
+    repeat 1 to 10 in size:
+        sync.Add(jobs_done, 1)
+        sync.Lock(lock)
+        queue.push(size)
+        sync.Signal(has_work)
+        sync.Unlock(lock)
+    end
+    sync.Wait(jobs_done)
+    println "all 10 jobs done, total cost", total
+    sync.Lock(lock)
+    println "nobody signals, waited 20 ms, woken:", sync.WaitCondTimeout(has_work, lock, 20)
+    closed = true
+    sync.Broadcast(has_work)
+    sync.Unlock(lock)
+    each t in workers: join(t) end
+    println "workers stopped"
+    queue.free()
+    sync.DestroyWaitGroup(jobs_done)
+    sync.DestroyCondVar(has_work)
+    sync.Destroy(lock)
+end

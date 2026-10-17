@@ -1,0 +1,84 @@
+lesson.part = Larger programs
+lesson.title = Search with Elasticsearch
+lesson.summary = Connecting, storing documents, building queries, aggregations, bulk loading, paging and SQL with db.elasticsearch
+lesson.seo_title = Elasticsearch and OpenSearch in Salam | Lesson 26 of the Salam course
+lesson.description = Using Elasticsearch and OpenSearch from Salam with the db.elasticsearch package: connecting with a password, API key or Elastic Cloud id, indexing and reading documents, building search queries, aggregations, bulk loading, deep paging with a point in time, SQL through the db interfaces and handling errors.
+lesson.lead = Elasticsearch is a search engine and document store: you give it JSON documents and it finds the ones that match a query, ranks them and counts them in any way you ask. This lesson builds a small library catalogue with the db.elasticsearch package, from the first connection to bulk loading and SQL.
+lesson.body <<
+<h2 id="setup">A cluster to talk to</h2>
+<p>The package speaks to Elasticsearch 7 and 8, to Elastic Cloud and to OpenSearch, over plain HTTP or TLS, with no outside library. For trying things out, one node in Docker is enough:</p>
+<pre><code>docker run -d -p 9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false docker.elastic.co/elasticsearch/elasticsearch:8.15.3</code></pre>
+<p>That node answers on <code>http://localhost:9200</code> without a password. The examples that need a running cluster are marked as only checked; the ones that build JSON or read answers run here, with their real output.</p>
+
+<h2 id="connect">Connecting</h2>
+<p><code>elasticsearch.Connect(url)</code> is the short form. For anything more, fill an <code>elasticsearch.Config</code> and pass it to <code>NewClient</code>: several nodes, a user and password, an API key, a bearer token, the CA file that signed the cluster certificate, a timeout and the number of retries. A node URL may also carry the credentials itself, as in <code>https://user:pass@host:9200</code>.</p>
+{{example.es-connect}}
+<p>Creating a client does not touch the network. <code>Ping</code> asks whether the cluster answers, <code>GetInfo</code> returns its name, version and distribution, and <code>ClusterHealth</code> its <code>green</code>, <code>yellow</code> or <code>red</code> status. When you are done, <code>Close</code> frees the client and the connections it keeps open.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>You have</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>A local node, no security</td><td><code>Connect("http://localhost:9200")</code></td></tr>
+<tr><td>A user and password</td><td><code>ConnectAuth(url, user, password)</code></td></tr>
+<tr><td>An API key</td><td><code>ConnectApiKey(url, key)</code>, encoded or as <code>id:key</code></td></tr>
+<tr><td>An Elastic Cloud deployment</td><td><code>ConnectCloud(cloud_id, api_key)</code></td></tr>
+<tr><td>A service account token</td><td><code>Config</code> with <code>bearer</code></td></tr>
+<tr><td>A self-signed cluster certificate</td><td><code>Config</code> with <code>ca_file</code></td></tr>
+</tbody>
+</table></div>
+
+<h2 id="documents">Storing and reading documents</h2>
+<p>A document is a JSON object stored in an index under an id. Documents and query clauses are plain <code>str</code> values holding JSON, so you can write them by hand, build them with <code>encoding.json</code> or use the builders of this package. <code>CreateIndex</code> sets up an index with its mappings; <code>Index</code> stores a document; <code>Get</code> reads it back; <code>Update</code> merges fields into it and <code>Delete</code> removes it.</p>
+{{example.es-documents}}
+<p>Every write returns a <code>WriteResult</code> with <code>ok</code>, the <code>result</code> (<code>created</code>, <code>updated</code>, <code>deleted</code>), the new <code>version</code> and the sequence numbers. Passing <code>if_seq_no</code> and <code>if_primary_term</code> from a <code>Get</code> turns the update into a compare and swap: if someone changed the document in between, the update fails with a version conflict instead of overwriting their change.</p>
+<p>A new document is searchable only after the index refreshes, about once a second. <code>Options { refresh = elasticsearch.REFRESH_WAIT_FOR }</code> makes the call wait for that, which is handy in tests and scripts.</p>
+
+<h2 id="queries">Building queries</h2>
+<p>Each query builder returns one JSON clause: <code>Match</code> for full text, <code>Term</code> and <code>Terms</code> for exact values, <code>Range</code> for numbers and dates, and <code>And</code>, <code>Or</code>, <code>Not</code> and <code>Filtered</code> to combine them. A <code>SearchRequest</code> holds the query with the size, sort order and the fields to return, and <code>SearchBody</code> shows the JSON that will be sent.</p>
+{{example.es-queries}}
+<p>Clauses inside <code>Filtered</code>'s filter list only decide whether a document matches; they do not change its score, and Elasticsearch can cache them. Put free text in the query and exact conditions such as dates, statuses and ids in the filter.</p>
+
+<h2 id="search">Searching and reading the answer</h2>
+<p><code>Search(c, index, request)</code> runs the request and parses the answer into a <code>SearchResult</code>: the <code>total</code> number of matches, the <code>hits</code> of this page, each with its <code>id</code>, <code>score</code>, <code>source</code> and <code>highlight</code>, and the time it took.</p>
+{{example.es-search}}
+<p>The same parsing is available on its own: <code>ParseSearchResult</code> reads any search answer, for example one you fetched with <code>Perform</code>.</p>
+{{example.es-results}}
+
+<h2 id="aggs">Aggregations</h2>
+<p>Aggregations summarise the matching documents instead of listing them: how many per author, the average year, the oldest book. Build them with <code>AddAgg(aggs, name, agg)</code>, nest one inside a bucket with <code>SubAggs</code>, and read them back with <code>AggValue</code> for a single number and <code>AggBuckets</code> for groups. A bucket's <code>raw</code> JSON goes to <code>AggValueIn</code> to read what is nested inside it.</p>
+{{example.es-aggs}}
+<p>Setting <code>size = 0</code> skips the hits when only the summary matters, which makes the request much cheaper.</p>
+
+<h2 id="bulk">Loading many documents</h2>
+<p>Sending documents one by one costs a round trip each. A <code>Bulk</code> collects index, create, update and delete actions and sends them in one request. The answer says per item whether it worked, so a partial failure is never silent.</p>
+{{example.es-bulk}}
+<p>For large loads, send a batch every thousand or so actions and start over with <code>BulkReset</code>. The client keeps the connection to each node open between calls, so over HTTPS the TLS handshake is paid once, not once per request.</p>
+{{example.es-bulk-run}}
+
+<h2 id="paging">Paging through everything</h2>
+<p><code>from</code> and <code>size</code> are fine for the first few pages of a result list. To walk through every match, open a point in time with <code>OpenPit</code>, sort by a field that ends in a unique value such as <code>_id</code>, and pass the <code>sort</code> values of the last hit as <code>search_after</code> to get the next page. The point in time keeps the view stable while you read. <code>SearchScroll</code> and <code>Scroll</code> do the same in the older style.</p>
+{{example.es-paging}}
+
+<h2 id="sql">SQL</h2>
+<p>Elasticsearch, and the SQL plugin of OpenSearch, also answer SQL. <code>Sql</code> and <code>SqlWith</code> return rows that implement <code>db.Rows</code> and fetch further pages by themselves as you call <code>Next</code>. <code>Conn(c)</code> wraps the client as a <code>db.Connection</code>, so a function written for SQLite or PostgreSQL can read from Elasticsearch too. That connection is read only: writes go through <code>Index</code>, <code>Bulk</code> and <code>DeleteByQuery</code>.</p>
+{{example.es-sql}}
+
+<h2 id="errors">Errors and retries</h2>
+<p>A call that fails returns its sentinel (<code>false</code>, <code>-1</code>, an empty string or a result with <code>ok</code> false), and the client remembers why: <code>Error(c)</code> gives the message, <code>ErrorType(c)</code> the Elasticsearch error type such as <code>version_conflict_engine_exception</code>, and <code>Status(c)</code> the HTTP status, 0 when no node answered. With several nodes the client rotates over them, skips a node that refused a connection for a minute, and retries on 502, 503 and 504.</p>
+{{example.es-errors}}
+<p>Anything the package has no function for is one <code>Perform(c, method, path, body)</code> away; it returns the status and the raw body.</p>
+
+<h2 id="more">Where to go next</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Need</th><th>Reach for</th></tr></thead>
+<tbody>
+<tr><td>Index settings, mappings, aliases and templates</td><td><code>PutMapping</code>, <code>PutSettings</code>, <code>SwapAlias</code>, <code>PutIndexTemplate</code></td></tr>
+<tr><td>Copying an index</td><td><code>Reindex</code>, or <code>StartReindex</code> and <code>GetTask</code> in the background</td></tr>
+<tr><td>Cleaning documents on the way in</td><td><code>PutPipeline</code> and <code>Options { pipeline = ... }</code></td></tr>
+<tr><td>Logs and other time series</td><td><code>CreateDataStream</code>, <code>Rollover</code>, <code>PutLifecyclePolicy</code></td></tr>
+<tr><td>Backups</td><td><code>PutRepository</code>, <code>CreateSnapshot</code>, <code>RestoreSnapshot</code></td></tr>
+<tr><td>Long searches</td><td><code>SubmitAsyncSearch</code> and <code>GetAsyncSearch</code></td></tr>
+<tr><td>Vector search</td><td><code>Knn</code> in <code>SearchRequest.knn</code></td></tr>
+</tbody>
+</table></div>
+<div class="note"><p>Every function, type and field is described, with examples, on the <a href="/std/db-elasticsearch/">db/elasticsearch reference page</a>.</p></div>
+>>

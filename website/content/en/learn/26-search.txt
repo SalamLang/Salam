@@ -1,0 +1,75 @@
+lesson.part = Larger programs
+lesson.title = Search with Typesense
+lesson.summary = Full text search for your data: collections, documents, typo tolerant queries, facets, synonyms, keys for the browser, vectors and maps
+lesson.seo_title = Full text search with Typesense in Salam | Lesson 26 of the Salam course
+lesson.description = Build search into a Salam program with Typesense and the db.typesense package: define a collection, import documents from your own structs, run typo tolerant and filtered searches, count facets, tune results with synonyms and curation, give the browser a scoped key, and search by vectors and location.
+lesson.lead = Most applications need a search box, and a good one forgives typos, ranks the best match first and answers in milliseconds. Typesense is an open source search engine built for exactly that, and the db.typesense package lets a Salam program use all of it. This lesson builds a small book catalog from an empty server to a scoped key a web page can use.
+lesson.body <<
+<h2 id="server">Running a server</h2>
+<p>Typesense is a separate program that keeps your data in its own index. The quickest way to start one on your machine is Docker. The <code>--api-key</code> value is the admin key your program sends with every request; use your own secret instead of <code>xyz</code> outside your own computer.</p>
+<pre class="code" dir="ltr"><code>docker run -p 8108:8108 typesense/typesense:30.2 --data-dir /tmp --api-key=xyz</code></pre>
+<p>The examples in this lesson talk to that server, so they are checked by the compiler but not run when this site is built. The output under each one is what it printed against a real Typesense 30.2 server, in the order of the lesson: each example builds on the data the earlier ones left behind.</p>
+
+<h2 id="connect">Connecting</h2>
+<p><code>typesense.New</code> takes the server address and the API key and gives back a <code>Client</code>. Nothing is sent yet; every function that talks to the server takes the client first and an <code>Error</code> last. When a call fails the error is filled in: <code>Ok</code> tells you whether it worked, <code>ErrorString</code> gives one readable line, and <code>IsNotFound</code> and <code>IsConflict</code> answer the two questions code asks most often. Release the client with <code>Free</code> when you are done.</p>
+{{example.search-connect}}
+<p>The error has three parts you can use: <code>status</code> is the HTTP status (0 when the server could not be reached at all), <code>kind</code> says what kind of failure it was, and <code>message</code> is the text the server sent.</p>
+
+<h2 id="schema">Collections and fields</h2>
+<p>Documents live in a collection, and the collection's schema says which fields exist and what type each one has. <code>NewField</code> makes a plain field, <code>FacetField</code> one you can count values of, and a <code>Field</code> literal lets you set everything else: <code>optional</code> for fields some documents leave out, <code>sort</code>, <code>locale</code> for the language of the text, <code>infix</code> for matches in the middle of a word, and more. The types are constants such as <code>TYPE_STRING</code>, <code>TYPE_INT32</code>, <code>TYPE_FLOAT</code>, <code>TYPE_STRING_ARRAY</code> and <code>TYPE_GEOPOINT</code>.</p>
+{{example.search-schema}}
+<p>A numeric <code>default_sorting_field</code> decides the order when a search does not ask for one. Change a collection later with <code>AddFields</code> and <code>DropFields</code>, look at it with <code>GetCollection</code> and <code>ListCollections</code>, and remove it with <code>DeleteCollection</code>. To rebuild a collection with no downtime, build the new one next to the old one and move an alias with <code>UpsertAlias</code>; programs that search the alias never notice the switch.</p>
+
+<h2 id="documents">Adding documents</h2>
+<p>A document is a JSON object whose fields match the schema. You can write that JSON yourself, but usually your program already has the data in a struct. <code>ImportOf</code> takes a <code>Vector</code> of any struct, turns each one into JSON with the compiler's own encoder and sends them all in one request. <code>GetDocumentAs</code> does the opposite and reads a stored document back into your struct.</p>
+{{example.search-import}}
+<p>An import answers even when some documents fail, so check <code>failed</code>; <code>errors</code> lists every failed line with its reason. <code>WriteOptions</code> chooses what happens to existing documents: <code>ACTION_CREATE</code> refuses them, <code>ACTION_UPSERT</code> replaces them, <code>ACTION_UPDATE</code> and <code>ACTION_EMPLACE</code> change only the fields you send. For one document at a time there are <code>CreateDocument</code>, <code>UpsertDocument</code>, <code>UpdateDocument</code> and <code>DeleteDocument</code>, and <code>DeleteByFilter</code> and <code>UpdateByFilter</code> change many at once.</p>
+
+<h2 id="search">Searching</h2>
+<p><code>NewSearch(q, query_by)</code> makes the parameters for a search: the text to look for and the fields to look in. <code>*</code> as the text matches every document, which is useful together with a filter. The result has <code>found</code>, the number of matches, and <code>hits</code>, one per document on this page; <code>hit.document</code> is the document as JSON.</p>
+{{example.search-query}}
+<p>Three things happened that you did not have to ask for. <code>persuasoin</code> still found <em>Persuasion</em>, because Typesense forgives a typo or two in each word. The best match came first. And <code>Highlight</code> shows which part of a field matched. The other parameters are fields on <code>SearchParams</code>: <code>filter_by</code> and <code>sort_by</code> as in the example, <code>page</code> and <code>per_page</code> for paging, <code>include_fields</code> to return less, <code>num_typos</code> to be stricter. A parameter without a field of its own goes through <code>typesense.Set(p, name, value)</code>.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>You want</th><th>Write</th></tr></thead>
+<tbody>
+<tr><td>Only some documents</td><td><code>p.filter_by = "year:&gt;1950 &amp;&amp; genre:=[scifi, novel]"</code></td></tr>
+<tr><td>A different order</td><td><code>p.sort_by = "year:desc"</code></td></tr>
+<tr><td>Page three, ten per page</td><td><code>p.page = 3</code> and <code>p.per_page = 10</code></td></tr>
+<tr><td>No typos at all</td><td><code>p.num_typos = "0"</code></td></tr>
+<tr><td>Your structs instead of JSON</td><td><code>typesense.HitsAs(result, books, err)</code></td></tr>
+</tbody>
+</table></div>
+
+<h2 id="facets">Facets and groups</h2>
+<p>A shop search usually shows a sidebar: how many results are shoes and how many are shirts, how many are under 100. Those counts are facets. Name the facet fields in <code>facet_by</code> and every result carries a <code>Facet</code> for each one, with the values and how many hits have them. <code>group_by</code> answers a different question: it keeps the best few hits for each value, here the oldest book of every genre.</p>
+{{example.search-facets}}
+
+<h2 id="multi">Many searches in one request</h2>
+<p>A page that searches books and authors at the same time does not need two round trips. <code>MultiSearch</code> sends a list of <code>SearchRequest</code>s in one request and returns one result per search; each result has its own <code>code</code> and <code>error</code>, so one bad search does not spoil the others. The parameters you pass as the common ones apply to all of them. <code>UnionSearch</code> goes one step further and merges the hits of all the searches into a single ranked list, and each hit says which search found it.</p>
+{{example.search-multi}}
+<p>The union matched four documents but returned three, because the common parameters asked for three per page.</p>
+
+<h2 id="tuning">Synonyms and curation</h2>
+<p>Search engines only know the words in your documents. A synonym set teaches them that some words mean the same thing, so a search for <code>sf</code> also finds books whose genre is <code>scifi</code>. A curation set is for the queries you care about most: when a query matches a rule, the rule can pin documents to positions, hide others, add a filter or change the sort. Both kinds of set are created once and then attached to any collection that should use them.</p>
+{{example.search-tuning}}
+<p>The <code>curated</code> flag tells your page that a hit was placed by a rule, for example to label it as promoted. A search can turn the rules off with <code>typesense.Set(p, "enable_curations", "false")</code>. Typesense 29 and older keep synonyms and rules per collection instead of in sets; for those servers use <code>UpsertSynonym</code> and <code>UpsertOverride</code>.</p>
+
+<h2 id="keys">A key for the browser</h2>
+<p>The admin key can do anything, so it must never reach a web page. <code>SearchOnlyKey</code> makes a key that may only search the collections you name. A scoped key goes further: <code>ScopedSearchKey</code> signs a search key together with search parameters, such as a filter that keeps every user to their own data. It is made in your program with no request to the server, and the browser cannot remove the filter, because changing it breaks the signature.</p>
+{{example.search-keys}}
+<p>Give the scoped key an expiry time (the last argument, a Unix time) when it is handed out per session, and delete keys you no longer need with <code>DeleteKey</code>.</p>
+
+<h2 id="vectors">Vectors and places</h2>
+<p>Words are not the only way to find things. A <code>TYPE_GEOPOINT</code> field holds a latitude and longitude, and a filter such as <code>location:(35.70, 51.42, 2 km)</code> keeps only what is near a point, while sorting by the same point puts the nearest first. A vector field (<code>VectorField</code>) holds a list of numbers that describes a document, usually made by a machine learning model, and <code>vector_query</code> finds the documents whose vectors are closest to yours. With <code>EmbeddingField</code>, Typesense makes the vectors itself from the text of other fields.</p>
+{{example.search-vector-geo}}
+
+<h2 id="production">Running it for real</h2>
+<ul>
+<li>A Typesense cluster has several nodes. Give <code>NewCluster</code> all of their addresses: a node that does not answer is skipped for <code>healthcheck_ms</code> and the request moves on to the next. <code>SetNearestNode</code> names one to try first.</li>
+<li>Tune the client with its fields: <code>timeout_ms</code> for a single request, <code>retries</code> and <code>retry_interval_ms</code> for how hard it tries.</li>
+<li>Use an alias in your searches, not a collection name, so you can rebuild the collection without downtime.</li>
+<li>Back up with <code>CreateSnapshot</code>, watch the server with <code>Health</code>, <code>Stats</code> and <code>Metrics</code>, and count clicks or popular queries with analytics rules (<code>CreateAnalyticsRule</code> and <code>SendEvent</code>).</li>
+<li>For an endpoint this package has no function for, <code>Request</code> sends any method and path with a JSON body.</li>
+</ul>
+<div class="note"><p>Every function, type and field is listed with its own example on the <a href="/std/db-typesense/">db/typesense reference page</a>. The repository also has a complete, tested program for each feature in <a href="https://github.com/SalamLang/Salam/tree/main/tests/en/db">tests/en/db</a>, in the files that start with <code>tslive_ex_</code>.</p></div>
+>>

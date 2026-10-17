@@ -6,7 +6,15 @@ pkg.title = The fs/file package in Salam | Reading, writing and inspecting files
 pkg.description = The fs/file package in Salam: reading text and lines, atomic writes, file information and permissions, MIME types, copying and renaming, and SHA-256 digests, with examples.
 pkg.import = fs.file
 pkg.intro <<
-<p>The <code>fs.file</code> package is the fullest set of tools for working with files. For settings and anything else that matters, use <code>AtomicWrite</code>: it writes to a temporary file and then replaces the original, so an interrupted program never leaves a half written file behind.</p>
+<p>The <code>fs.file</code> package is the fullest set of tools for working with one file: read it whole or as lines, write, append, replace it safely, copy, move and delete it, look up its size, times and permissions, hash it and guess its MIME type. Its copy, move, delete and atomic write functions record failures in <a href="/std/os-error/">os.error</a>; reads and plain writes do not, so check what they return. For folders use <a href="/std/fs-dir/">fs.dir</a>, for paths <a href="/std/fs-path/">fs.path</a>, and for streaming a large file the handle functions of <a href="/std/io/">io</a>.</p>
+<p>Writes return the number of bytes written, or -1. Reads return empty text when the file cannot be opened, the same as for an empty file; ask <code>Exists</code> when the difference matters.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Treating it as binary-safe. Every read and write goes through a <code>str</code>, which ends at the first zero byte, so <code>ReadAll</code>, <code>ReadBytes</code>, <code>WriteBytes</code> and the digest functions cut a binary file short. For images, archives and other binary data use <code>ReadBinaryFile</code> and <code>WriteBinaryFile</code> from <a href="/std/archive/">archive</a>, which carry a pointer and a length, and the pointer forms in <a href="/std/crypto/">crypto</a> such as <code>Sha256Bytes</code>.</li>
+<li>Expecting <code>Move</code> to cross disks. It is a rename and fails between file systems; <code>fs.dir.Move</code> falls back to copying, or copy and delete yourself.</li>
+<li>Assuming <code>AtomicWrite</code> keeps the old file's permissions. It writes a new file, which gets the default permissions; a file you had narrowed to <code>0o600</code> becomes readable again unless you <code>Chmod</code> it after each save.</li>
+<li>Using <code>Exists</code> to mean "is a file". It is true for directories too; combine it with <code>fs.dir.IsDir</code>.</li>
+</ul>
 <h2 id="guide-config">Read a settings file line by line</h2>
 <p><code>ReadLines</code> splits a file at its line breaks and drops a trailing <code>\r</code>, so a file saved on Windows reads the same as one saved on Linux. That makes simple <code>key = value</code> files easy: trim each line, skip blank lines and comments, and split at the first <code>=</code>.</p>
 {{example.fs-file-guide-config}}
@@ -19,10 +27,10 @@ pkg.intro <<
 <h2 id="guide-checksum">Check that a file arrived intact</h2>
 <p>Download pages often publish a SHA-256 digest next to each file. Compute the digest of your copy with <code>Sha256Hex</code> and compare the two: a change of even one byte gives a completely different digest. <code>Md5Hex</code> and <code>Sha1Hex</code> are fine for noticing accidental changes, such as a cache key, but anyone can build two different files with the same MD5 or SHA-1 on purpose, so do not trust them against an attacker.</p>
 {{example.fs-file-guide-checksum}}
-<p>The digest functions read the file into a string first, and a Salam string ends at the first zero byte. For text files that does not matter. A binary file that contains a zero byte, which most archives and images do, is hashed only up to that byte, so check such files with the system <code>sha256sum</code> or with the buffer functions in <a href="/std/crypto/">crypto</a>, such as <code>Sha256Bytes</code>. The same limit applies to <code>ReadAll</code> and <code>ReadText</code>.</p>
+<p>The digest functions read the file into a string first, and a Salam string ends at the first zero byte. For text files that does not matter. A binary file that contains a zero byte, which most archives and images do, is hashed only up to that byte, so check such files with the system <code>sha256sum</code> or with the buffer functions in <a href="/std/crypto/">crypto</a>, such as <code>Sha256Bytes</code>. The same limit applies to <code>ReadAll</code>, <code>ReadText</code>, <code>ReadBytes</code> and <code>WriteBytes</code>.</p>
 
 <h2 id="guide-save">Save without losing the old version</h2>
-<p><code>AtomicWrite</code> writes the new content to <code>name.tmp</code> next to the target and then renames it over the target in one step. A crash or power cut in the middle leaves either the old file or the new one, never half of each. Copying the old file to <code>.bak</code> first also keeps one previous version. When the folder does not exist, <code>AtomicWrite</code> returns <code>-1</code> and leaves its message in <a href="/std/os-error/">os.error</a>.</p>
+<p><code>AtomicWrite</code> writes the new content to <code>name.tmp</code> next to the target and then renames it over the target in one step. A program that crashes in the middle leaves either the old file or the new one, never half of each. It does not flush the data to the disk first, so after a power cut a file saved a moment earlier can still be lost on some file systems, and two programs saving the same file at once share the same <code>.tmp</code> name. Copying the old file to <code>.bak</code> first also keeps one previous version. When the folder does not exist, <code>AtomicWrite</code> returns <code>-1</code> and leaves its message in <a href="/std/os-error/">os.error</a>.</p>
 {{example.fs-file-guide-save}}
 
 <h2 id="guide-mime">Serve files with the right type</h2>
@@ -52,32 +60,32 @@ doc.FileInfo.size = The size in bytes.
 doc.FileInfo.mod_time = When it was last changed.
 doc.FileInfo.accessed_time = When it was last read.
 doc.FileInfo.created_time = When it was created.
-doc.FileInfo.permissions = The permissions, as octal digits.
-doc.FileInfo.exists = True when the file exists.
-doc.Open = Opens a file to work through it piece by piece; the modes are the same as <a href="/std/os/">os.Open</a>.
+doc.FileInfo.permissions = The permissions, as octal digits such as <code>644</code>.
+doc.FileInfo.exists = True when the path exists (a directory counts); the other fields are 0 when it does not.
+doc.Open = Opens a file to work through it piece by piece; the modes are the same as <a href="/std/os/">os.Open</a>. Returns null when it cannot.
 doc.Close = Closes an open file.
-doc.ReadText = Reads the whole file as text.
-doc.ReadAll = Reads the whole file; it suits binary files too.
-doc.ReadBytes = Reads the first <code>n</code> bytes of the file.
-doc.ReadLines = Returns the file's lines in a vector.
-doc.WriteText = Writes text to a file, replacing what was there.
-doc.WriteBytes = Writes binary data to a file.
-doc.Append = Adds to the end of a file.
-doc.AtomicWrite = Writes a file safely and all at once: either the complete new version survives or the old one does, never a half written file.
-doc.Size = The size of a file in bytes.
+doc.ReadText = Reads the whole file as text; empty when the file cannot be opened.
+doc.ReadAll = Reads the whole file, the same as <code>ReadText</code>. The result is a <code>str</code>, so a binary file is cut at its first zero byte.
+doc.ReadBytes = Reads up to the first <code>n</code> bytes of the file, such as a header to recognise its format; cut short at a zero byte.
+doc.ReadLines = Returns the file's lines in a vector, without the line breaks and with a trailing <code>\r</code> removed.
+doc.WriteText = Writes text to a file, creating it or replacing what was there; returns the bytes written, or -1.
+doc.WriteBytes = The same as <code>WriteText</code>. The data is a <code>str</code>, so it stops at the first zero byte and is not safe for binary content.
+doc.Append = Adds to the end of a file, creating it when missing; returns the bytes written, or -1.
+doc.AtomicWrite = Writes <code>path.tmp</code> and renames it over the file, so an interrupted program leaves either the complete new version or the old one, never a half written file. Returns 0 or -1 (with an <code>os.error</code> record). The new file gets default permissions, and the data is not flushed to disk first.
+doc.Size = The size of a file in bytes; -1 when it is missing or is a directory.
 doc.ModTime = When it was last changed.
 doc.AccessedTime = When it was last read.
 doc.CreatedTime = When it was created.
 doc.Permissions = The permissions, as octal digits.
 doc.Chmod = Changes the permissions; give the value in octal, such as <code>0o600</code>.
-doc.Extension = The file's extension, with its dot.
-doc.MimeType = The file's MIME type from its extension, for serving it over the web.
-doc.Stat = Everything about a file at once.
-doc.Copy = Copies a file.
-doc.Move = Moves a file.
-doc.Rename = Renames a file.
-doc.Delete = Deletes a file.
-doc.Exists = True when the file exists.
+doc.Extension = The file's extension with its dot and its original case, such as <code>.JPG</code>; empty when there is none.
+doc.MimeType = The file's MIME type from its extension, ignoring case, for serving it over the web; <code>application/octet-stream</code> for an unknown extension. The file is not opened.
+doc.Stat = Everything about a file at once. On Unix it runs the system <code>stat</code> command four times, so it is not faster than the single calls.
+doc.Copy = Copies a file's bytes, replacing the destination; permissions are not copied. 0 or -1.
+doc.Move = Moves a file by renaming it, so it fails (-1) between two disks. <code>fs.dir.Move</code> can copy instead.
+doc.Rename = Renames a file; the same as <code>Move</code>.
+doc.Delete = Deletes a file; 0 or -1. Any failure is recorded in <code>os.error</code> as <code>FileNotFound</code>, a missing permission included.
+doc.Exists = True when the path exists, file or directory.
 doc.Md5Hex = The MD5 digest of the file's content; for a quick comparison only, not for security.
 doc.Sha1Hex = The SHA-1 digest of the file's content.
 doc.Sha256Hex = The SHA-256 digest of the file's content, for checking that a download arrived intact.

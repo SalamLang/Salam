@@ -5,8 +5,14 @@ pkg.summary = Environment variables: reading them with the right type, .env file
 pkg.title = The env package in Salam | Environment variables and .env files
 pkg.description = The env package in Salam: reading environment variables as numbers and booleans, loading a .env file, the production and development profiles, and masking sensitive keys, with examples.
 pkg.intro <<
-<p>Settings such as a server port, a database address and API keys belong in environment variables rather than in the code. The <code>env</code> package reads them with the right type and gives you a default when they are not set. It can load them from a <code>.env</code> file too.</p>
-<p>The "profile" is read from <code>SALAM_ENV</code> and says whether the program is running in development, test or production. When <code>SALAM_ENV</code> is not set, <code>APP_ENV</code> and then <code>ENV</code> are tried, and the default is <code>development</code>. The value is lower-cased, and <code>prod</code>, <code>dev</code> and <code>testing</code> count as the long names.</p>
+<p>Settings such as a server port, a database address and API keys belong in environment variables rather than in the code, the "twelve-factor" way of configuring a service. The <code>env</code> package reads them with the right type and a default, masks secrets for logs, loads <code>.env</code> files, picks files per environment and fills <code>${NAME}</code> templates. For the bare value of one variable, <a href="/std/os/">os.Env</a> is enough; to parse or write <code>.env</code> files as data without touching the environment, use <a href="/std/encoding-envfile/">encoding/envfile</a>; for command line options, <a href="/std/flag/">flag</a>.</p>
+<p>The "profile" says whether the program is running in development, test or production. It is read from <code>SALAM_ENV</code>; when that is unset or empty, <code>APP_ENV</code> and then <code>ENV</code> are tried, and the default is <code>development</code>. <code>Profile</code> returns the value lower-cased but otherwise as written. <code>IsProduction</code>, <code>IsDevelopment</code> and <code>IsTest</code> also accept <code>prod</code>, <code>dev</code> and <code>testing</code>, but <code>LoadProfile</code> uses the name as written, so <code>SALAM_ENV=prod</code> loads <code>.env.prod</code>, not <code>.env.production</code>.</p>
+<p>What people get wrong:</p>
+<ul>
+<li>Trusting the typed getters to validate. <code>GetInt</code> turns <code>abc</code> into 0 and <code>12px</code> into 12, and <code>GetBool</code> knows only lower case <code>true</code>, <code>1</code>, <code>yes</code> and <code>on</code>, so <code>DEBUG=True</code> is false.</li>
+<li>Expecting a <code>.env</code> file to win. <code>Load</code> and <code>LoadProfile</code> never replace a variable that is already set, which is right in production; <code>Overload</code> and <code>LoadDotEnv</code> do replace.</li>
+<li>Logging secrets. Pass them through <code>Mask</code>, and keep <code>.env.local</code> files out of version control.</li>
+</ul>
 
 <h2 id="guide-config">Reading the whole configuration at start-up</h2>
 <p>Read every setting once, in one function, into a struct. The rest of the program then takes the struct and never calls <code>env</code> itself, which keeps the list of variables in one place and makes the code easy to test. Print the configuration at start-up, but pass secrets through <code>Mask</code> first.</p>
@@ -29,33 +35,33 @@ pkg.intro <<
 <h2 id="guide-pitfalls">Pitfalls</h2>
 <ul>
 <li><code>GetInt</code> and <code>GetFloat</code> return the default only when the variable is unset or empty. A value that is not a number is not rejected: <code>abc</code> gives <code>0</code> and <code>12px</code> gives <code>12</code>. Check the value yourself when a wrong setting must stop the program.</li>
-<li><code>GetBool</code> treats anything it does not recognise as <code>false</code>, whatever the default.</li>
+<li><code>GetBool</code> treats anything it does not recognise as <code>false</code>, whatever the default. It compares case-sensitively and accepts only <code>true</code>, <code>1</code>, <code>yes</code> and <code>on</code>; <code>TRUE</code> and <code>Yes</code> are false.</li>
 <li><code>Load</code> keeps existing values, <code>Overload</code> replaces them, and <code>LoadDotEnv</code> replaces them too. Use <code>Load</code> when the real environment should win, which is what you want in production.</li>
 <li><code>Set</code> changes the environment of this program and of the processes it starts afterwards, never the shell that started it.</li>
 </ul>
 >>
 
-doc.Get = The value of a variable, or an empty string.
-doc.GetOr = The value of a variable, or the default when it is not set.
-doc.Has = True when the variable is set.
+doc.Get = The value of a variable, or an empty string when it is not set; an empty and an unset variable look the same here.
+doc.GetOr = The value of a variable, or the default when it is not set or is empty.
+doc.Has = True when the variable is set, even to an empty value.
 doc.GetInt = The value as a whole number, or the default when it is not set or is empty. A value that is not a number is not rejected: <code>abc</code> gives 0 and <code>12px</code> gives 12.
 doc.GetFloat = The value as a decimal number, or the default when it is not set or is empty.
-doc.GetBool = The value as a boolean; <code>true</code>, <code>1</code> and <code>yes</code> count as true.
-doc.Set = Sets a variable for this program and for the processes it starts afterwards.
+doc.GetBool = The value as a boolean: exactly <code>true</code>, <code>1</code>, <code>yes</code> or <code>on</code> (lower case, spaces around allowed) count as true, anything else as false. The default is used only when the variable is unset or empty.
+doc.Set = Sets a variable for this program and for the processes it starts afterwards; true on success.
 doc.Unset = Removes a variable.
-doc.Mask = Masks a sensitive value for a log, showing only the first and last two characters.
+doc.Mask = Masks a sensitive value for a log: a value longer than eight characters keeps its first and last two characters around <code>****</code>, a shorter one becomes all stars, and an empty one stays empty.
 doc.GetMasked = Returns a variable's value masked.
-doc.Profile = The name of the run profile, from <code>SALAM_ENV</code>.
-doc.IsProduction = True in the <code>production</code> profile.
-doc.IsDevelopment = True in the <code>development</code> profile.
-doc.IsTest = True in the <code>test</code> profile.
+doc.Profile = The name of the run profile in lower case, from <code>SALAM_ENV</code>, else <code>APP_ENV</code>, else <code>ENV</code>, else <code>development</code>.
+doc.IsProduction = True in the <code>production</code> or <code>prod</code> profile.
+doc.IsDevelopment = True in the <code>development</code> or <code>dev</code> profile, which is the default.
+doc.IsTest = True in the <code>test</code> or <code>testing</code> profile.
 doc.IsStaging = True in the <code>staging</code> profile.
-doc.Load = Loads a <code>KEY=VALUE</code> file without changing variables that are already set. It returns how many variables it set.
+doc.Load = Loads a <code>KEY=VALUE</code> file without changing variables that are already set, expanding <code>${NAME}</code> references. It returns how many variables it set; a missing file sets none.
 doc.Overload = Like <code>Load</code>, but it replaces existing variables with the file's values too.
-doc.LoadText = Does the same from text instead of a file.
-doc.LoadDotEnv = Loads the <code>.env</code> file and, like <code>Overload</code>, replaces variables that are already set.
-doc.LoadProfile = Loads the <code>.env.&lt;profile&gt;</code> file from the given directory, such as <code>.env.test</code> in the test profile.
-doc.Expand = Replaces <code>${name}</code> and <code>${name:-default}</code> in text with the values of the variables.
+doc.LoadText = Does the same as <code>Load</code> from text instead of a file.
+doc.LoadDotEnv = Loads the given file and, like <code>Overload</code>, replaces variables that are already set.
+doc.LoadProfile = Loads <code>.env</code>, <code>.env.local</code>, <code>.env.&lt;profile&gt;</code> and <code>.env.&lt;profile&gt;.local</code> from the given directory, later files winning, without replacing variables already set. Missing files are skipped.
+doc.Expand = Replaces <code>${name}</code> and <code>${name:-default}</code> in text with the values of the variables; an unknown name without a default becomes empty.
 
 ex.GetOr = env-Get
 ex.Has = env-Get

@@ -114,8 +114,10 @@ reply = client.chat.completions.create(
   whose base URL already carries the version, and the proxy has to forward
   those prefixes to the streaming listener too.
 
-`HOURLY=<AI_API_HOURLY> node ai/backend/tests/api_flow.mjs` tests it against a running API, with
-`ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.
+`HOURLY=<AI_API_HOURLY> START_SECONDS=<AI_API_START_SECONDS> node ai/backend/tests/api_flow.mjs`
+tests it against a running API, with `ai/backend/tests/engine_mock.mjs` standing in for the
+assistant engine. The two idle cases wait for the backend to give up, so `START_SECONDS` has to
+be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is behaving.
 
 ### Plans and payments
 

@@ -1233,7 +1233,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
   const apiErrRate = s && s.api_requests_24h > 0 ? Math.round((s.api_errors_24h / s.api_requests_24h) * 1000) / 10 : 0;
 
   return (
-    <div className="page wide">
+    <div className="page">
       <header className="page-head">
         <h2>مدیریت</h2>
         <p className="muted">نمای کلی استفاده از دستیار و سرور MCP سلام.</p>

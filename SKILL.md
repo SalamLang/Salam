@@ -1401,6 +1401,17 @@ end
   `SetHTML`; the page cannot call back into Salam, `Eval` right after
   `SetHTML` usually hits the old page, and a failed `Create` returns a window
   that `IsClosed()` already.
+- Native audio: **`audio`** holds a `Clip` of interleaved **f32** samples with `rate`, `channels`, `frames` and `bits`.
+  Core: `New Sample SetSample Duration Peak RMS GainToDb DbToGain`.
+  Editing: `Slice Trim Concat Mix MixAt Gain Scale Normalize Clamp FadeIn FadeOut Reverse Pad Repeat Split TrimSilence`.
+  Converting: `ToMono ToStereo ToChannels ToRate ToBits Channel Deinterleave Interleave`.
+  Sniffing: `DetectFormat FormatFromExt FormatName FormatIsLossless`.
+  `MsbReader` and `MsbWriter` are the **MSB-first** bitstream pair every codec needs; `compress`'s `BitReader` is LSB-first and will not do.
+  **`audio.wav`**: `OpenWAV SaveWAV SaveWAVBits EncodeWAV EncodeWAVFloat EncodeMuLaw EncodeALaw DecodeWAV ProbeWAV ReadFormat Chunks FindChunk`, covering PCM 8/16/24/32, IEEE float, A-law and mu-law.
+  **`audio.dsp`**: `FFT IFFT FFTVec Magnitude PowerSpectrum` (radix-2, power-of-two lengths only), `MakeWindow ApplyWindow BesselI0`, `LowPass HighPass BandPass Notch Peaking LowShelf HighShelf BiquadStep BiquadProcessAll BiquadResponse`, `ResampleSinc ResampleCubic ResampleTo Correlation DCRemove`.
+  **`audio.codec`**: `Open Save Decode Encode Probe ProbeFile CanDecode CanEncode`, the format-agnostic entry points. They live in their own package because a parent cannot import its own children.
+  8-, 16- and 24-bit PCM round-trip a `Clip` bit for bit; a true 32-bit integer source loses its low 8 bits to the f32 significand.
+  Free every `Clip` with `audio.Free` and every `ByteBuf` with `compress.BufFree`.
 - Native media: **`image`** (`Open Save SaveQuality New Resize Crop DrawText ...`, RGBA; GIF reads frame one; JPEG drops alpha), **`opencv`** (needs the
   `salam_opencv_shim` library and OpenCV 4; `Color` is RGB while a `Mat` is
   BGR; free every `Mat`), **`graph`** (`Dijkstra ShortestPath PageRank Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
@@ -2447,7 +2458,9 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`),
 `db/meilisearch` `میلیسرچ` (imported as `دیتابیس.میلیسرچ`),
 `db/opensearch` `اپن سرچ` (imported as `دیتابیس.اپن سرچ`), `dom` `دام`,
-`term` `پایانه`, `cli` `خط فرمان`.
+`term` `پایانه`, `cli` `خط فرمان`, `audio` `صدا`, `audio/wav` `ویو`
+(imported as `صدا.ویو`), `audio/dsp` `پردازش سیگنال` (imported as
+`صدا.پردازش سیگنال`), `audio/codec` `کدک` (imported as `صدا.کدک`).
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`
 `تفکیک کردن`, `str.Join` `بپیوند`, `str.Trim` `پیرایش`, `str.Replace`

@@ -18,6 +18,9 @@ package mcphttp
 
 import str
 import env
+import io
+import os
+import sync
 import net.http
 import net.router
 import time
@@ -28,6 +31,49 @@ include mcpsrv "mcp_server.salam"
 include mcpauth "mcp_auth.salam"
 
 mut g_origins := ""
+mut g_live_lock := sync.Mutex {}
+mut g_live := 0
+mut g_soft_mb := 1500
+mut g_hard_mb := 3200
+
+func _enter():
+    _l := sync.Lock(g_live_lock)
+    g_live += 1
+    _u := sync.Unlock(g_live_lock)
+end
+
+func _leave():
+    _l := sync.Lock(g_live_lock)
+    if g_live > 0: g_live -= 1 end
+    _u := sync.Unlock(g_live_lock)
+end
+
+func _rss_mb(): int:
+    data := io.ReadFile("/proc/self/status")
+    at := data.find("VmRSS:")
+    if at < 0: ret 0 end
+    rest := data.substr(at + 6, data.len() - at - 6)
+    nl := rest.find("\n")
+    line := str.Trim(nl >= 0 ? rest.substr(0, nl) : rest)
+    ret str.Trim(str.TrimSuffix(line, "kB")).to_int() / 1024
+end
+
+func _watchdog():
+    start := time.NowMillis()
+    until true:
+        sync.SleepMs(20000)
+        mb := _rss_mb()
+        if mb > 0 and time.NowMillis() - start > 300000:
+            _l := sync.Lock(g_live_lock)
+            live := g_live
+            _u := sync.Unlock(g_live_lock)
+            if mb >= g_hard_mb or (mb >= g_soft_mb and live == 0):
+                mcprpc.Log("restarting to give memory back at ".concat(str.FromInt(mb)).concat(" MB with ").concat(str.FromInt(live)).concat(" calls in flight"))
+                os.Exit(0)
+            end
+        end
+    end
+end
 
 func _allowed(origin: str): bool:
     if origin.len() == 0 or g_origins.len() == 0: ret true end
@@ -167,6 +213,12 @@ func _metadata(ctx: i64):
 end
 
 func _post(ctx: i64):
+    _enter()
+    _serve_post(ctx)
+    _leave()
+end
+
+func _serve_post(ctx: i64):
     _cors(ctx)
     if not _allowed(http.Header(ctx, "Origin")):
         _plain(ctx, 403, "origin not allowed\n")
@@ -304,6 +356,12 @@ pub func Serve(host: str, port: int): bool:
     origins := env.GetOr("SALAM_MCP_ORIGINS", "").trim()
     if origins.len() > 0: g_origins = ",".concat(str.Replace(origins, " ", "")).concat(",") end
     http.SetMaxBodyBytes(4194304)
+    g_live_lock = sync.NewMutex()
+    g_soft_mb = env.GetOr("SALAM_MCP_MEMORY_SOFT_MB", "1500").to_int()
+    g_hard_mb = env.GetOr("SALAM_MCP_MEMORY_HARD_MB", "3200").to_int()
+    if g_soft_mb > 0:
+        _w := spawn(_watchdog)
+    end
     mut r := router.NewRouter()
     router.Get(r, "/", _home)
     router.Get(r, "/health", _health)

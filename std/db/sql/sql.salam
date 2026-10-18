@@ -1,0 +1,242 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "sql"
+@fa "اس کیو ال"
+package sql
+
+import str
+
+@en "SQLITE"
+@fa "اس کیو لایت"
+pub const SQLITE := 0
+
+@en "MYSQL"
+@fa "مای اس کیو ال"
+pub const MYSQL := 1
+
+@en "MARIADB"
+@fa "ماریادی بی"
+pub const MARIADB := 2
+
+@en "POSTGRES"
+@fa "پستگرس"
+pub const POSTGRES := 3
+
+@en "ERROR"
+@fa "خطا"
+pub const ERROR := 0
+
+@en "WARNING"
+@fa "هشدار"
+pub const WARNING := 1
+
+@en "NOTE"
+@fa "یادداشت"
+pub const NOTE := 2
+
+@en "Dialect"
+@fa "گویش"
+pub struct Dialect:
+    pub id: int = 0
+    pub name: str = "sqlite"
+    pub double_quoted_string: bool = false
+    pub backtick_ident: bool = false
+    pub bracket_ident: bool = false
+    pub hash_comment: bool = false
+    pub dollar_string: bool = false
+    pub backslash_escape: bool = false
+    pub qmark_param: bool = false
+    pub numbered_param: bool = false
+    pub named_param: bool = false
+    pub returning: bool = false
+    pub on_conflict: bool = false
+    pub on_duplicate: bool = false
+    pub limit_comma: bool = false
+    pub ilike: bool = false
+    pub colon_cast: bool = false
+    pub autoincrement_word: str = ""
+end
+
+@en "Diag"
+@fa "عیب"
+pub struct Diag:
+    pub severity: int = 0
+    pub code: str = ""
+    pub message: str = ""
+    pub help: str = ""
+    pub line: int = 1
+    pub col: int = 1
+    pub offset: int = 0
+    pub length: int = 0
+end
+
+@en "Report"
+@fa "گزارش"
+pub struct Report:
+    pub ok: bool = true
+    pub errors: int = 0
+    pub warnings: int = 0
+    pub statements: int = 0
+    pub items: Vector<Diag> = Vector {}
+end
+
+func sev_name(s: int): str:
+    if s == ERROR: ret "error" end
+    if s == WARNING: ret "warning" end
+    ret "note"
+end
+
+func add_diag(r &: Report, sev: int, code: str, message: str, help: str, line: int, col: int, off: int, length: int):
+    if r.items.len() >= 200:
+        ret
+    end
+    mut i := 0
+    until i < r.items.len():
+        d := r.items.get(i)
+        if d.offset == off and str.Equals(d.code, code):
+            ret
+        end
+        i = i + 1
+    end
+    r.items.push(
+        Diag {
+            severity = sev, code = code, message = message, help = help, line = line, col = col,
+            offset = off, length = length
+        }
+    )
+    if sev == ERROR:
+        r.errors = r.errors + 1
+        r.ok = false
+    else sev == WARNING:
+        r.warnings = r.warnings + 1
+    end
+end
+
+@en "DialectOf"
+@fa "گویش شماره"
+pub func DialectOf(id: int): Dialect:
+    if id == MYSQL or id == MARIADB:
+        ret Dialect {
+            id = id, name = id == MYSQL ? "mysql" : "mariadb", double_quoted_string = true,
+            backtick_ident = true, hash_comment = true, backslash_escape = true, qmark_param = true,
+            on_duplicate = true, limit_comma = true, returning = id == MARIADB, autoincrement_word = "AUTO_INCREMENT"
+        }
+    end
+    if id == POSTGRES:
+        ret Dialect {
+            id = POSTGRES, name = "postgres", dollar_string = true, numbered_param = true,
+            returning = true, on_conflict = true, ilike = true, colon_cast = true,
+            autoincrement_word = "GENERATED"
+        }
+    end
+    ret Dialect {
+        id = SQLITE, name = "sqlite", backtick_ident = true, bracket_ident = true, qmark_param = true,
+        named_param = true, returning = true, on_conflict = true, limit_comma = true,
+        autoincrement_word = "AUTOINCREMENT"
+    }
+end
+
+@en "DialectNamed"
+@fa "گویش نام"
+pub func DialectNamed(name: str): Dialect:
+    low := name.lower()
+    if str.Equals(low, "mysql"): ret DialectOf(MYSQL) end
+    if str.Equals(low, "mariadb"): ret DialectOf(MARIADB) end
+    if str.Equals(low, "postgres") or str.Equals(low, "postgresql") or str.Equals(low, "pgsql"):
+        ret DialectOf(POSTGRES)
+    end
+    ret DialectOf(SQLITE)
+end
+
+@en "FreeReport"
+@fa "آزادسازی گزارش"
+pub func FreeReport(r &: Report):
+    r.items.free()
+end
+
+@en "DiagText"
+@fa "متن عیب"
+pub func DiagText(d: Diag): str:
+    mut out := sev_name(d.severity) + "[" + d.code + "] " + str.FromInt(d.line as i64)
+    out = out + ":" + str.FromInt(d.col as i64) + ": " + d.message
+    if not str.IsEmpty(d.help):
+        out = out + "\n  help: " + d.help
+    end
+    ret out
+end
+
+@en "ReportText"
+@fa "متن گزارش"
+pub func ReportText(r: Report): str:
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < r.items.len():
+        if i > 0: str.BufAppend(sb, "\n") end
+        str.BufAppend(sb, DiagText(r.items.get(i)))
+        i = i + 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+@en "Lint"
+@fa "بازبینی"
+pub func Lint(sql: str, d: Dialect): Report:
+    mut p := Parser {}
+    parse_into(p, sql, d)
+    out := p.rep
+    free_parser(p)
+    ret out
+end
+
+@en "ParamCount"
+@fa "شمار پارامتر"
+pub func ParamCount(sql: str, d: Dialect): int:
+    mut r := Report {}
+    mut l := Lexer { src = sql, n = sql.len(), d = d }
+    lex_into(l, r)
+    mut n := 0
+    mut i := 0
+    until i < l.toks.len():
+        if l.toks.get(i).kind == TK_PARAM:
+            n = n + 1
+        end
+        i = i + 1
+    end
+    l.toks.free()
+    FreeReport(r)
+    ret n
+end
+
+@en "Placeholders"
+@fa "جانگهدارها"
+pub func Placeholders(sql: str, d: Dialect): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut r := Report {}
+    mut l := Lexer { src = sql, n = sql.len(), d = d }
+    lex_into(l, r)
+    mut i := 0
+    until i < l.toks.len():
+        t := l.toks.get(i)
+        if t.kind == TK_PARAM:
+            out.push(tok_text(sql, t))
+        end
+        i = i + 1
+    end
+    l.toks.free()
+    FreeReport(r)
+    ret out
+end

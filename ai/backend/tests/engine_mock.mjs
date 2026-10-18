@@ -58,6 +58,12 @@ http.createServer((req, res) => {
       if (!s) return send(404, {});
       if (s.dead) return send(200, [{ info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] }]);
       const full = answerFor(s);
+      if (s.prompt.includes("goes quiet")) {
+        return send(200, [
+          { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
+          { info: { role: "assistant", finish: "tool-calls", time: { created: s.start, completed: s.start + 100 }, cost: 0, tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [{ type: "text", text: "half an answer and then nothing" }] },
+        ]);
+      }
       if (s.prompt.includes("fail midway")) {
         const broke = Date.now() - s.start > 1500;
         return send(200, [

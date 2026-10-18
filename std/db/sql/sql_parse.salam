@@ -592,15 +592,26 @@ func parse_concat(p &: Parser): int:
     mut left := parse_unary(p)
     until p.failed == false:
         mut op := 0
+        mut pg_only := false
         if p_is_sym(p, "||"):
             op = OP_CONCAT
         else p_is_sym(p, "->") or p_is_sym(p, "->>"):
             op = OP_JSON
+        else p_is_sym(p, "#>") or p_is_sym(p, "#>>"):
+            op = OP_JSON_PATH
+            pg_only = true
         end
         if op == 0:
             break
         end
         tk := p.i
+        if pg_only and p.d.id != POSTGRES:
+            p_err(
+                p, "SQL214", "this json operator is postgres only",
+                "sqlite and mysql reach into json with the json_extract family"
+            )
+            break
+        end
         p_next(p)
         right := parse_unary(p)
         left = mk_bin(p, op, left, right, tk)
@@ -678,6 +689,8 @@ func parse_bit(p &: Parser): int:
             op = OP_BITAND
         else p_is_sym(p, "|"):
             op = OP_BITOR
+        else p_is_sym(p, "^"):
+            op = OP_BITXOR
         end
         if op == 0:
             break
@@ -691,6 +704,9 @@ func parse_bit(p &: Parser): int:
 end
 
 func cmp_sym_op(p: Parser): int:
+    if p_is_sym(p, "@>") or p_is_sym(p, "<@"):
+        ret OP_CONTAINS
+    end
     if p_is_sym(p, "=") or p_is_sym(p, "=="):
         ret OP_EQ
     end
@@ -737,6 +753,13 @@ func parse_cmp(p &: Parser): int:
         op := cmp_sym_op(p)
         if op != 0:
             tk := p.i
+            if op == OP_CONTAINS and p.d.id != POSTGRES:
+                p_err(
+                    p, "SQL214", "the containment operators are postgres only",
+                    "sqlite and mysql have no '@>' or '<@'"
+                )
+                break
+            end
             p_next(p)
             p_skip_kw(p, "ANY")
             p_skip_kw(p, "SOME")

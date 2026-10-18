@@ -18,6 +18,7 @@ import net.http
 import net.router
 import encoding
 import os
+import io
 import str
 import encoding.json
 import conv
@@ -52,11 +53,15 @@ const BEAT_MS := 10000
 const TICK_MS := 150
 const MAX_BODY := 8388608
 const BODY_MS := 30000
+const WATCH_MS := 20000
+const WATCH_GRACE_MS := 300000
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
 mut STREAM_LOCK := sync.Mutex {}
 mut STREAM_COUNT := HashMap {} as HashMap<str, str>
+mut MEM_SOFT_MB := 1200
+mut MEM_HARD_MB := 2600
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -121,6 +126,11 @@ func main:
         println "salam-ai streaming on port", stream_port
     else:
         println "cannot listen for streams on port", stream_port
+    end
+    MEM_SOFT_MB = env_or("AI_MEMORY_SOFT_MB", "1200").to_int()
+    MEM_HARD_MB = env_or("AI_MEMORY_HARD_MB", "2600").to_int()
+    if MEM_SOFT_MB > 0:
+        _m := spawn(watchdog)
     end
     port := env_or("AI_PORT", "8080").to_int()
     mut r := router.NewRouter()
@@ -844,6 +854,33 @@ func read_body(c: tcp.Conn, head: str, want: int, whole &: bool): str:
     ret str.BufStr(b)
 end
 
+func rss_mb(): int:
+    data := io.ReadFile("/proc/self/status")
+    at := data.find("VmRSS:")
+    if at < 0:
+        ret 0
+    end
+    rest := data.substr(at + 6, data.len() - at - 6)
+    nl := rest.find("\n")
+    line := str.Trim(nl >= 0 ? rest.substr(0, nl) : rest)
+    ret str.Trim(str.TrimSuffix(line, "kB")).to_int() / 1024
+end
+
+func watchdog():
+    start := time.NowMillis()
+    until true:
+        sync.SleepMs(WATCH_MS)
+        mb := rss_mb()
+        if mb > 0 and time.NowMillis() - start > WATCH_GRACE_MS:
+            live := aiweb.Live()
+            if mb >= MEM_HARD_MB or (mb >= MEM_SOFT_MB and live == 0):
+                println "salam-ai: restarting to give memory back at", mb, "MB with", live, "requests in flight"
+                os.Exit(0)
+            end
+        end
+    end
+end
+
 func serve_stream(c: tcp.Conn):
     tcp.SetReadDeadline(c, 5000)
     mut req := ""
@@ -905,7 +942,9 @@ func serve_stream(c: tcp.Conn):
             ret
         end
         if aibridge.Handles(bare):
+            aiweb.Enter()
             aibridge.Serve(c, method, bare, headers, body)
+            aiweb.Leave()
         else:
             aiopenai.Serve(c, method, bare, headers, body)
         end
@@ -944,7 +983,9 @@ func serve_stream(c: tcp.Conn):
         stream_error(c, "429 Too Many Requests", origin, "streams", "پاسخ‌های زیادی را هم‌زمان دنبال می‌کنید. چند لحظه بعد دوباره تلاش کنید.")
         ret
     end
+    aiweb.Enter()
     stream_answer(c, origin, id, mid, owned)
+    aiweb.Leave()
     _s := stream_slot(uid, 0 - 1)
 end
 

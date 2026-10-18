@@ -32,16 +32,20 @@ include ailive "live.salam"
 include aiturn "turn.salam"
 
 const MODEL := "salam"
-const MAX_PROMPT := 65536
+const MAX_PROMPT := 1048576
 const MAX_LOG := 65536
-const ANSWER_SECONDS := 600
 const MAX_KEYS := 20
-const CALLER_MAX := 8000
+const CALLER_MAX := 262144
 const PARALLEL_PER_USER := 4
 const BEAT_MS := 10000
 const WRITE_MS := 30000
+const WRITE_TRIES := 4
+const WRITE_PAUSE_MS := 50
+const DROPPED := "[Earlier messages were left out because the conversation is too long.]"
 
 mut HOURLY := 100
+mut ANSWER_LIMIT := 900 as i64
+mut START_LIMIT := 120 as i64
 mut BUSY_LOCK := sync.Mutex {}
 mut BUSY := HashMap {} as HashMap<str, str>
 
@@ -97,8 +101,38 @@ func cors(): str:
     ret "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, X-Salam-Project, OpenAI-Organization, OpenAI-Project, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Retry-Count, X-Stainless-Timeout\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Max-Age: 86400\r\n"
 end
 
+func bare_path(path: str): str:
+    mut p := path
+    each prefix in ["/openai/v1", "/openai", "/api/v1", "/v1"]:
+        if str.StartsWith(p, prefix + "/"):
+            p = p.substr(prefix.len(), p.len() - prefix.len())
+        end
+    end
+    ret p
+end
+
+func wr(c: tcp.Conn, data: str): bool:
+    mut off := 0
+    mut tries := 0
+    until off < data.len():
+        rest := data.substr(off, data.len() - off)
+        got := tcp.Write(c, rest)
+        if got > 0:
+            off += got
+            tries = 0
+        else:
+            tries += 1
+            if tries >= WRITE_TRIES:
+                ret false
+            end
+            sync.SleepMs(WRITE_PAUSE_MS)
+        end
+    end
+    ret true
+end
+
 func respond(c: tcp.Conn, status: str, body: str):
-    _w := tcp.Write(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors() + "\r\n" + body)
+    _w := wr(c, "HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + body.len() + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + cors() + "\r\n" + body)
 end
 
 func oai_error(c: tcp.Conn, status: str, kind: str, code: str, message: str):
@@ -171,6 +205,30 @@ func role_name(role: str): str:
     ret "User"
 end
 
+func fit(turns: Vector<str>, budget: int): Vector<str>:
+    mut total := 0
+    mut keep := 0
+    mut i := turns.len() - 1
+    until i >= 0:
+        total += turns.get(i).len() + 2
+        if total > budget and keep > 0:
+            break
+        end
+        keep += 1
+        i -= 1
+    end
+    if keep >= turns.len():
+        ret turns
+    end
+    mut out := one(DROPPED)
+    mut k := turns.len() - keep
+    until k < turns.len():
+        out.push(turns.get(k))
+        k += 1
+    end
+    ret out
+end
+
 func flatten(messages: value.Value): str:
     mut system := Vector {} as Vector<str>
     mut turns := Vector {} as Vector<str>
@@ -201,7 +259,8 @@ func flatten(messages: value.Value): str:
     if count == 1 and last_user.len() > 0:
         ret out + last_user
     end
-    ret out + "Conversation so far:\n\n" + str.Join(turns, "\n\n") + "\n\nReply to the last user message."
+    room := MAX_PROMPT - out.len() - 256
+    ret out + "Conversation so far:\n\n" + str.Join(fit(turns, room > 1024 ? room : 1024), "\n\n") + "\n\nReply to the last user message."
 end
 
 func key_owner(raw: str, uid &: str, kid &: str, kname &: str): bool:
@@ -363,6 +422,72 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
     _b := busy(uid, 0 - 1)
 end
 
+func stable(text: str): str:
+    mut end_at := text.len()
+    until end_at > 0:
+        if text.substr(end_at - 1, 1) != " ":
+            break
+        end
+        end_at -= 1
+    end
+    ret text.substr(0, end_at)
+end
+
+func keepalive(c: tcp.Conn, stream: bool, opened &: bool): bool:
+    if stream:
+        ret wr(c, ": ping\n\n")
+    end
+    if not opened:
+        opened = wr(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n")
+        if not opened:
+            ret false
+        end
+    end
+    ret wr(c, "\n")
+end
+
+func tail_of(sent: str, final: str): str:
+    if str.StartsWith(final, sent):
+        if final.len() > sent.len():
+            ret final.substr(sent.len(), final.len() - sent.len())
+        end
+        ret ""
+    end
+    if sent.len() == 0:
+        ret final
+    end
+    if final.len() == 0:
+        ret ""
+    end
+    ret "\n\n" + final
+end
+
+func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, final: str, status: str):
+    if status == "error" and final.len() == 0:
+        _e := wr(c, "data: " + `{"error": {"message": "The Salam assistant could not answer. Ask again in a moment.", "type": "server_error", "code": "engine_failed"}}` + "\n\n")
+    else:
+        tail := tail_of(sent, final)
+        if tail.len() > 0:
+            _p := wr(c, chunk(cid, created, "{" + json.Member("content", tail) + "}", ""))
+        end
+    end
+    _s := wr(c, chunk(cid, created, "{}", status == "done" ? "stop" : "length"))
+end
+
+func end_stream(c: tcp.Conn, cid: str, created: i64, with_usage: bool, usage: str):
+    if with_usage:
+        mut u := Vector {} as Vector<str>
+        u.push(json.Member("id", cid))
+        u.push(json.Member("object", "chat.completion.chunk"))
+        u.push(json.MemberInt("created", created))
+        u.push(json.Member("model", MODEL))
+        u.push(json.MemberRaw("choices", "[]"))
+        u.push(json.MemberRaw("usage", usage))
+        _u := wr(c, "data: " + json.Object(u) + "\n\n")
+    end
+    _d := wr(c, "data: [DONE]\n\n")
+end
+
 func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kname: str):
     mut err := encerr.EncodingError {}
     req := json.Decode(body, err)
@@ -381,7 +506,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         ret
     end
     if prompt.len() > MAX_PROMPT:
-        oai_error(c, "400 Bad Request", "invalid_request_error", "context_length_exceeded", "The conversation is longer than 64 KB.")
+        oai_error(c, "400 Bad Request", "invalid_request_error", "context_length_exceeded", "The newest message alone is longer than 1 MB.")
         ret
     end
     stream := value.IsBool(field(req, "stream")) and value.AsBool(field(req, "stream"))
@@ -431,9 +556,9 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     tcp.SetWriteDeadline(c, WRITE_MS)
     mut opened := false
     if stream:
-        opened = tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") > 0
+        opened = wr(c, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n")
         if opened:
-            opened = tcp.Write(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, "")) > 0
+            opened = wr(c, chunk(cid, t, `{"role": "assistant", "content": ""}`, ""))
         end
     end
     mut sent := ""
@@ -447,33 +572,32 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         aiengine.Abort(sid)
     end
     until status == "done":
-        r := aiturn.Progress(sid, t, ANSWER_SECONDS)
+        if time.NowMillis() - beat >= BEAT_MS:
+            if not keepalive(c, stream, opened):
+                aiengine.Abort(sid)
+                status = "aborted"
+                break
+            end
+            beat = time.NowMillis()
+        end
+        r := aiturn.Advance(sid, t, ANSWER_LIMIT, START_LIMIT, not stream)
         mut ok := true
         if stream:
             notes := step_notes(r.activity, told, r.done, told)
             if notes.len() > 0:
-                ok = tcp.Write(c, chunk(cid, t, "{" + json.Member("reasoning_content", notes) + "}", "")) > 0
+                ok = wr(c, chunk(cid, t, "{" + json.Member("reasoning_content", notes) + "}", ""))
                 beat = time.NowMillis()
             end
-            if ok and str.StartsWith(r.text, sent) and r.text.len() > sent.len():
-                piece := r.text.substr(sent.len(), r.text.len() - sent.len())
-                ok = tcp.Write(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", "")) > 0
-                sent = r.text
+            view := r.done ? r.text : stable(r.text)
+            if ok and str.StartsWith(view, sent) and view.len() > sent.len():
+                piece := view.substr(sent.len(), view.len() - sent.len())
+                ok = wr(c, chunk(cid, t, "{" + json.Member("content", piece) + "}", ""))
+                sent = view
                 beat = time.NowMillis()
             end
         end
         if ok and not r.done and time.NowMillis() - beat >= BEAT_MS:
-            if stream:
-                ok = tcp.Write(c, ": ping\n\n") > 0
-            else:
-                if not opened:
-                    opened = tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors() + "\r\n") > 0
-                    ok = opened
-                end
-                if ok:
-                    ok = tcp.Write(c, "\n") > 0
-                end
-            end
+            ok = keepalive(c, stream, opened)
             beat = time.NowMillis()
         end
         if not ok:
@@ -496,40 +620,27 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
             sync.SleepMs(700)
         end
     end
+    if stream and opened:
+        send_tail(c, cid, t, sent, final, status)
+    end
     ailive.End(sid)
     aiturn.Forget(sid)
     usage := aiengine.UsageOf(sid)
     aiengine.Delete(sid)
     finish_log(rid, status, final, started)
     aiturn.SaveUsage("api_requests", rid, usage)
-    if status == "aborted":
+    if stream:
+        if opened:
+            end_stream(c, cid, t, with_usage, usage_json(prompt.len(), final.len(), usage))
+        end
         ret
     end
-    if stream:
-        if status == "error" and final.len() == 0:
-            _e := tcp.Write(c, "data: " + `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}` + "\n\n")
-        else:
-            if final.len() > sent.len() and str.StartsWith(final, sent):
-                _p := tcp.Write(c, chunk(cid, t, "{" + json.Member("content", final.substr(sent.len(), final.len() - sent.len())) + "}", ""))
-            end
-            _s := tcp.Write(c, chunk(cid, t, "{}", "stop"))
-            if with_usage:
-                mut u := Vector {} as Vector<str>
-                u.push(json.Member("id", cid))
-                u.push(json.Member("object", "chat.completion.chunk"))
-                u.push(json.MemberInt("created", t))
-                u.push(json.Member("model", MODEL))
-                u.push(json.MemberRaw("choices", "[]"))
-                u.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
-                _u := tcp.Write(c, "data: " + json.Object(u) + "\n\n")
-            end
-        end
-        _d := tcp.Write(c, "data: [DONE]\n\n")
+    if status == "aborted":
         ret
     end
     if status == "error" and final.len() == 0:
         if opened:
-            _x := tcp.Write(c, `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}`)
+            _x := wr(c, `{"error": {"message": "The Salam assistant could not answer.", "type": "server_error", "code": "engine_failed"}}`)
             ret
         end
         oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
@@ -550,7 +661,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     m.push(json.MemberRaw("choices", "[" + json.Object(choice) + "]"))
     m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
     if opened:
-        _o := tcp.Write(c, json.Object(m))
+        _o := wr(c, json.Object(m))
         ret
     end
     respond(c, "200 OK", json.Object(m))
@@ -649,13 +760,19 @@ func own_requests(ctx: i64):
     aiweb.Reply(ctx, 200, `{"requests": ` + Requests("r.user_id = ?1 AND r.id < ?2", two(n(uid), n(before)), false) + "}")
 end
 
-pub func Configure(hourly: int):
+pub func Configure(hourly: int, answer_seconds: int, start_seconds: int):
     BUSY_LOCK = sync.NewMutex()
     aistore.Lock()
     _r := aistore.Run("UPDATE api_requests SET status = 'error' WHERE status = 'pending'", Vector {} as Vector<str>)
     aistore.Unlock()
     if hourly > 0:
         HOURLY = hourly
+    end
+    if answer_seconds > 0:
+        ANSWER_LIMIT = answer_seconds as i64
+    end
+    if start_seconds > 0:
+        START_LIMIT = start_seconds as i64
     end
 end
 
@@ -707,14 +824,16 @@ pub func Requests(where: str, args: Vector<str>, with_user: bool): str:
 end
 
 pub func Handles(path: str): bool:
-    ret path == "/chat/completions" or path == "/models"
+    bare := bare_path(path)
+    ret bare == "/chat/completions" or bare == "/models"
 end
 
-pub func Serve(c: tcp.Conn, method: str, path: str, h: HashMap<str, str>, body: str):
+pub func Serve(c: tcp.Conn, method: str, raw_path: str, h: HashMap<str, str>, body: str):
     if method == "OPTIONS":
-        _w := tcp.Write(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors() + "\r\n")
+        _w := wr(c, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n" + cors() + "\r\n")
         ret
     end
+    path := bare_path(raw_path)
     switch path:
         "/models":
             if method == "GET":

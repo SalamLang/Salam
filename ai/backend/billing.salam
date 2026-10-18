@@ -22,12 +22,14 @@ import encoding.json
 import encoding.value
 import encoding.encerr
 import str
+import sync
 
 include aistore "store.salam"
 include aiweb "web.salam"
 
 const CALL_MS := 20000
 const DAY := 86400
+const SWEEP_LIMIT := 50
 const PAGE := 50
 const MAX_NOTE := 200
 
@@ -39,6 +41,8 @@ mut ZIBAL_BASE := "https://gateway.zibal.ir"
 mut ZIBAL_START := "https://gateway.zibal.ir/start/"
 mut CALLBACK_BASE := "https://ai-api.salamlang.ir"
 mut APP_URL := "https://ai.salamlang.ir"
+mut SWEEP_MS := 600000
+mut STALE_SECONDS := 600 as i64
 mut FREE_API_HOURLY := 100
 mut FREE_CHAT_HOURLY := 60
 
@@ -565,6 +569,17 @@ func finish_payment(id: str, status: str, ref: str, card: str, message: str):
     aistore.Unlock()
 end
 
+func claim_stale(pid: str): bool:
+    aistore.Lock()
+    now := aistore.OneText("SELECT status FROM payments WHERE id = ?1", one(pid))
+    mut ok := false
+    if now == "pending" or now == "verifying":
+        ok = aistore.Run("UPDATE payments SET status = 'verifying' WHERE id = ?1", one(pid))
+    end
+    aistore.Unlock()
+    ret ok
+end
+
 func claim(pid: str): bool:
     aistore.Lock()
     now := aistore.OneText("SELECT status FROM payments WHERE id = ?1", one(pid))
@@ -891,7 +906,70 @@ func admin_payments(ctx: i64):
     aiweb.Reply(ctx, 200, `{"payments": ` + json.Array(items) + `, "income": ` + (paid.len() > 0 ? paid : "0") + "}")
 end
 
-pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: str, callback_base: str, app_url: str, free_api: int, free_chat: int):
+func settle_one(pid: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT user_id, plan, gateway, amount, token FROM payments WHERE id = ?1", one(pid))
+    mut uid := ""
+    mut plan := ""
+    mut gateway := ""
+    mut amount := 0 as i64
+    mut token := ""
+    if aistore.Next(rows):
+        uid = aistore.Text(rows, 0)
+        plan = aistore.Text(rows, 1)
+        gateway = aistore.Text(rows, 2)
+        amount = aistore.Int64(rows, 3)
+        token = aistore.Text(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if token.len() == 0 or not gateway_ok(gateway):
+        finish_payment(pid, "failed", "", "", "پرداخت نیمه‌کاره ماند و به درگاه نرسید.")
+        ret
+    end
+    if not claim_stale(pid):
+        ret
+    end
+    mut ref := ""
+    mut card := ""
+    mut fail := ""
+    mut paid := false
+    if gateway == "zarinpal":
+        paid = zarinpal_verify(amount * 10, token, ref, card, fail)
+    else:
+        paid = zibal_verify(amount * 10, token, ref, card, fail)
+    end
+    if not paid:
+        finish_payment(pid, "failed", "", "", fail)
+        ret
+    end
+    finish_payment(pid, "paid", ref, card, "پرداخت پس از بازگشت نیمه‌کاره تایید شد.")
+    _s := activate(uid, plan, "payment", pid, "0", 0, "")
+end
+
+func sweep():
+    mut ids := Vector {} as Vector<str>
+    cut := n(aistore.Now() - STALE_SECONDS)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id FROM payments WHERE status IN ('pending', 'verifying') AND created < ?1 ORDER BY id DESC LIMIT " + SWEEP_LIMIT, one(cut))
+    until aistore.Next(rows):
+        ids.push(aistore.Text(rows, 0))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    each pid in ids:
+        settle_one(pid)
+    end
+end
+
+func sweeper():
+    until true:
+        sweep()
+        sync.SleepMs(SWEEP_MS)
+    end
+end
+
+pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: str, callback_base: str, app_url: str, free_api: int, free_chat: int, sweep_seconds: int):
     ZARINPAL_MERCHANT = str.Trim(zarinpal)
     ZIBAL_MERCHANT = str.Trim(zibal)
     if zarinpal_base.len() > 0:
@@ -911,8 +989,15 @@ pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: st
     if free_api > 0:
         FREE_API_HOURLY = free_api
     end
+    if sweep_seconds > 0:
+        SWEEP_MS = sweep_seconds * 1000
+        STALE_SECONDS = sweep_seconds as i64
+    end
     if free_chat > 0:
         FREE_CHAT_HOURLY = free_chat
+    end
+    if ZARINPAL_MERCHANT.len() > 0 or ZIBAL_MERCHANT.len() > 0:
+        _t := spawn(sweeper)
     end
 end
 

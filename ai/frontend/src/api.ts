@@ -225,7 +225,7 @@ export type ApiKey = {
   last_used: number;
   requests: number;
 };
-export type RequestStatus = "pending" | "done" | "error" | "aborted";
+export type RequestStatus = "pending" | "done" | "error" | "aborted" | "lost";
 export type ApiRequest = {
   id: number;
   created: number;

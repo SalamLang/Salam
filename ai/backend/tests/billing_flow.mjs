@@ -98,6 +98,22 @@ const ziBack = await back("zibal", `trackId=${tokenOf(zi.json.url)}&success=1&st
 const afterZi = await api("GET", "/billing/subscription", buyer);
 check("the zibal payment moves the account to the bigger plan", ziBack.status === 302 && afterZi.json.subscription.plan.id === "pro", afterZi.json.subscription);
 
+console.log("a payment whose callback never arrives");
+const SWEEP = Number(process.env.SWEEP_SECONDS ?? 0);
+if (SWEEP > 0) {
+  const lost = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zarinpal" });
+  check("a checkout that is never returned from starts out pending", lost.res.status === 200 && (await api("GET", "/billing/payments", buyer)).json.payments[0].status === "pending", lost.json);
+  let settled = null;
+  for (let i = 0; i < Math.ceil((SWEEP * 3 + 10) / 2); i += 1) {
+    await new Promise((r) => setTimeout(r, 2000));
+    settled = (await api("GET", "/billing/payments", buyer)).json.payments.find((p) => p.id === lost.json.payment_id);
+    if (settled && settled.status !== "pending") break;
+  }
+  check("the sweep settles it with the gateway without the user coming back", settled?.status === "paid" && settled.ref === "987654321", settled);
+  const recovered = await api("GET", "/billing/subscription", buyer);
+  check("the plan the user paid for is activated by the sweep", recovered.json.subscription.plan.id === "plus", recovered.json.subscription);
+}
+
 console.log("the admin side");
 const forbidden = await api("GET", "/admin/subscriptions", buyer);
 check("a normal account cannot see the subscriptions", forbidden.res.status === 403);

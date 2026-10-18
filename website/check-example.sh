@@ -20,7 +20,7 @@ if [ -f "$root/${src%.salam}.server" ]; then
 fi
 
 if [ ! -f "$want" ]; then
-    if grep -q "^صفحه:\|^چیدمان:\|^layout:" "$root/$src"; then
+    if grep -q "^صفحه:\|^page:" "$root/$src"; then
         cp "$root/$src" .
         if "$SALAM" layout build "$(basename "$src")" --inline --no-color --log-level=error >/dev/null 2>&1; then
             echo "ok   $src (layout build)"

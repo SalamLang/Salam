@@ -1871,7 +1871,7 @@ CSS + JS. Elements open with `:` … `end`; **attributes and style properties ar
 
 ```salam
 //! mode: layout | title: Web page        // optional editor directive
-layout:
+page:
     title = "My Page"
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
@@ -1999,7 +1999,7 @@ Rules, all checked at compile time:
   own `<style>` plus HTML, with class names prefixed by the component name.
 
 **Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
-rule, never an element. It sits directly under `layout`; `name` and `url`
+rule, never an element. It sits directly under `page`; `name` and `url`
 (`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
 `woff2`, `ttc`) is optional: without it the compiler reads the extension from
 the URL, then the magic bytes of a local file next to the source. A remote URL with
@@ -2009,7 +2009,7 @@ E127. The compiler never fetches over the network. Optional: `weight`
 (`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
 
 ```salam
-layout:
+page:
     font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
     box: content = "hi" font family = "Estedad, sans-serif" end
 end
@@ -2315,7 +2315,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
+| `export`            | `برون‌داد`          | `page`                    | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2326,9 +2326,8 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
-`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
-(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
-The older spelling `چیدمان` is still accepted.
+`page` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`page:`, `صفحه خوشامد(نام: رشته):`); elsewhere the word is a normal name.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use

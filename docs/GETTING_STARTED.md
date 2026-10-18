@@ -219,7 +219,7 @@ salam exec                  # interpret the project here
 - `salam new <name>` scaffolds the project with a `salam.salam` entry file.
 
 Frontend (layout DSL) projects have no `main` function; there the same rule
-applies to the `layout` block instead:
+applies to the `page` block instead:
 
 ```sh
 salam web                   # build the page project here: salam.salam if
@@ -280,7 +280,7 @@ salam layout build a.salam b.salam
 A page is a tree of elements with `name = value` attributes:
 
 ```salam
-layout:
+page:
     title = "Hello"
     header:
         heading: size = 1 content = "Welcome" end

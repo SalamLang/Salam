@@ -35,8 +35,14 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`  | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                           | empty                                           |
 | `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`          | where those gateways live, for a sandbox or the test mock                                                                               | the real gateways                               |
 | `AI_BILLING_CALLBACK`                        | the public URL of this API, where the gateway sends the browser back                                                                    | `AI_OAUTH_ISSUER`                               |
+| `AI_BILLING_SWEEP_SECONDS`                   | how often to settle payments the gateway never returned from, and how long a payment may sit first                                      | `600`                                           |
 | `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `900`                                           |
 | `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `120`                                           |
+
+The API keeps a stream open for as long as an answer takes, so give the
+container room: it ran into a 512 MB limit in production and was killed by the
+kernel mid-stream. A request that was in flight when the process died is marked
+`lost` in the request log, and the service says so in its log on the next start.
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
@@ -149,6 +155,12 @@ Four plans, defined in one table in `billing.salam`:
   back to the callback twice never buys twice.
 - An admin can give any plan away for free from the admin page, with an optional
   number of days and a note, and can take it back.
+- A payment the browser never came back from is not lost. Every
+  `AI_BILLING_SWEEP_SECONDS` the server settles any payment left `pending` or
+  `verifying` for longer than that with the gateway itself, and activates the
+  plan when the gateway says it was paid. The sweep takes a payment over with
+  the same claim the callback uses, so the two never both activate, and both
+  gateways verify the same payment twice without complaint.
 
 `node ai/backend/tests/billing_flow.mjs` tests the whole thing against a running
 API with `ai/backend/tests/gateway_mock.mjs` standing in for both gateways

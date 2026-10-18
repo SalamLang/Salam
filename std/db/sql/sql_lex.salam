@@ -65,6 +65,7 @@ struct Token:
     pub line: int = 1
     pub col: int = 1
     pub quote: char = CH_NUL
+    pub sub: char = CH_NUL
 end
 
 struct Lexer:
@@ -75,6 +76,11 @@ struct Lexer:
     pub col: int = 1
     pub d: Dialect = Dialect {}
     pub toks: Vector<Token> = Vector {}
+end
+
+func char_to_text(c: char): str:
+    empty := ""
+    ret empty + c
 end
 
 func ch_upper(c: char): char:
@@ -152,6 +158,192 @@ end
 
 func lx_push(l &: Lexer, kind: int, off: int, line: int, col: int, q: char):
     l.toks.push(Token { kind = kind, off = off, len = l.i - off, line = line, col = col, quote = q })
+end
+
+func lx_push_sub(l &: Lexer, kind: int, off: int, line: int, col: int, sub: char):
+    l.toks.push(Token { kind = kind, off = off, len = l.i - off, line = line, col = col, sub = sub })
+end
+
+func bump_n(l &: Lexer, n: int):
+    mut k := 0
+    until k < n:
+        lx_bump(l)
+        k = k + 1
+    end
+end
+
+func cp_at(l: Lexer): int:
+    if l.i >= l.n:
+        ret 0 - 1
+    end
+    c0 := (l.src[l.i] as int) & 255
+    if c0 < 128:
+        ret c0
+    end
+    if c0 >= 192 and c0 < 224 and l.i + 1 < l.n:
+        c1 := (l.src[l.i + 1] as int) & 63
+        ret ((c0 & 31) << 6) | c1
+    end
+    if c0 >= 224 and c0 < 240 and l.i + 2 < l.n:
+        c1 := (l.src[l.i + 1] as int) & 63
+        c2 := (l.src[l.i + 2] as int) & 63
+        ret ((c0 & 15) << 12) | (c1 << 6) | c2
+    end
+    ret 0 - 1
+end
+
+func cp_width(cp: int): int:
+    if cp < 128:
+        ret 1
+    end
+    if cp < 2048:
+        ret 2
+    end
+    ret 3
+end
+
+func cp_is_eastern_digit(cp: int): bool:
+    if cp >= 0x06F0 and cp <= 0x06F9:
+        ret true
+    end
+    ret cp >= 0x0660 and cp <= 0x0669
+end
+
+func cp_is_curly_quote(cp: int): bool:
+    if cp == 0x2018 or cp == 0x2019 or cp == 0x201C or cp == 0x201D:
+        ret true
+    end
+    ret cp == 0x00AB or cp == 0x00BB
+end
+
+func cp_is_foreign_punct(cp: int): bool:
+    if cp == 0x00A0 or cp == 0x200B or cp == 0xFEFF:
+        ret true
+    end
+    if cp_is_curly_quote(cp):
+        ret true
+    end
+    if cp == 0x060C or cp == 0x066B or cp == 0x061B or cp == 0x061F:
+        ret true
+    end
+    if cp == 0x00D7 or cp == 0x2212 or cp == 0x2013 or cp == 0x2014:
+        ret true
+    end
+    ret cp == 0xFF08 or cp == 0xFF09
+end
+
+func word_breaks_here(l: Lexer): bool:
+    if not ch_high(lx_cur(l)):
+        ret false
+    end
+    ret cp_is_foreign_punct(cp_at(l))
+end
+
+func lx_eastern_number(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    until true:
+        cp := cp_at(l)
+        if cp_is_eastern_digit(cp):
+            bump_n(l, cp_width(cp))
+            continue
+        end
+        if cp >= 48 and cp <= 57:
+            lx_bump(l)
+            continue
+        end
+        break
+    end
+    add_diag(r, ERROR, "SQL007", "numbers in SQL have to be written with ASCII digits",
+        "write 0 to 9 instead of the Persian or Arabic digits", line, col, off, l.i - off)
+    lx_push(l, TK_NUMBER, off, line, col, CH_NUL)
+end
+
+func lx_curly_string(l &: Lexer, r &: Report):
+    off := l.i
+    line := l.line
+    col := l.col
+    bump_n(l, cp_width(cp_at(l)))
+    mut closed := false
+    until l.i < l.n:
+        cp := cp_at(l)
+        if cp == '\n' as int:
+            break
+        end
+        if cp_is_curly_quote(cp):
+            bump_n(l, cp_width(cp))
+            closed = true
+            break
+        end
+        bump_n(l, cp_width(cp))
+    end
+    if closed:
+        add_diag(r, ERROR, "SQL008", "this text is quoted with typographic quotes",
+            "SQL strings are quoted with ' ... '", line, col, off, l.i - off)
+    else:
+        add_diag(r, ERROR, "SQL001", "unterminated string literal",
+            "SQL strings are quoted with ' ... '", line, col, off, l.i - off)
+    end
+    lx_push(l, TK_STRING, off, line, col, '\'')
+end
+
+func lx_foreign(l &: Lexer, r &: Report, cp: int): bool:
+    if cp < 128:
+        ret false
+    end
+    if cp == 0x00A0 or cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0xFEFF:
+        off := l.i
+        line := l.line
+        col := l.col
+        bump_n(l, cp_width(cp))
+        add_diag(r, ERROR, "SQL006", "an invisible character is in this statement",
+            "delete it: only a plain space separates words in SQL", line, col, off, l.i - off)
+        ret true
+    end
+    if cp_is_eastern_digit(cp):
+        lx_eastern_number(l, r)
+        ret true
+    end
+    if cp_is_curly_quote(cp):
+        lx_curly_string(l, r)
+        ret true
+    end
+    mut sub := CH_NUL
+    mut label := ""
+    if cp == 0x060C or cp == 0x066B:
+        sub = ','
+        label = "an Arabic comma"
+    else cp == 0x061B:
+        sub = ';'
+        label = "an Arabic semicolon"
+    else cp == 0x061F:
+        sub = '?'
+        label = "an Arabic question mark"
+    else cp == 0x00D7:
+        sub = '*'
+        label = "a multiplication sign"
+    else cp == 0x2212 or cp == 0x2013 or cp == 0x2014:
+        sub = '-'
+        label = "a dash"
+    else cp == 0xFF08:
+        sub = '('
+        label = "a wide parenthesis"
+    else cp == 0xFF09:
+        sub = ')'
+        label = "a wide parenthesis"
+    else:
+        ret false
+    end
+    off := l.i
+    line := l.line
+    col := l.col
+    bump_n(l, cp_width(cp))
+    one := l.src.substr(off, l.i - off)
+    add_diag(r, ERROR, "SQL005", label + " '" + one + "' is not SQL punctuation",
+        "write '" + char_to_text(sub) + "' instead", line, col, off, l.i - off)
+    lx_push_sub(l, TK_SYM, off, line, col, sub)
+    ret true
 end
 
 func lx_line_comment(l &: Lexer):
@@ -457,7 +649,7 @@ func lx_word(l &: Lexer):
     off := l.i
     line := l.line
     col := l.col
-    until l.i < l.n and ch_ident_part(lx_cur(l)):
+    until l.i < l.n and ch_ident_part(lx_cur(l)) and not word_breaks_here(l):
         lx_bump(l)
     end
     mut kind := TK_IDENT
@@ -533,6 +725,11 @@ func lex_into(l &: Lexer, r &: Report):
             lx_param(l, r)
             continue
         end
+        if ch_high(c):
+            if lx_foreign(l, r, cp_at(l)):
+                continue
+            end
+        end
         if ch_ident_start(c):
             lx_word(l)
             continue
@@ -552,7 +749,15 @@ func tok_is_kw(src: str, t: Token, word: str): bool:
 end
 
 func tok_is_sym(src: str, t: Token, word: str): bool:
-    if t.kind != TK_SYM: ret false end
+    if t.kind != TK_SYM:
+        ret false
+    end
+    if t.sub != CH_NUL:
+        if word.len() != 1:
+            ret false
+        end
+        ret word[0] == t.sub
+    end
     ret range_eq_fold(src, t.off, t.len, word)
 end
 

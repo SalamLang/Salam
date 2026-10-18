@@ -9,6 +9,7 @@ const STATUS: Record<RequestStatus, { label: string; badge: string; dot: string 
   error: { label: "خطا", badge: "danger", dot: "error" },
   aborted: { label: "نیمه‌کاره", badge: "", dot: "idle" },
   pending: { label: "در حال پاسخ", badge: "pending", dot: "pending" },
+  lost: { label: "قطع سرویس", badge: "danger", dot: "error" },
 };
 
 export function preview(text: string, size = 140): string {

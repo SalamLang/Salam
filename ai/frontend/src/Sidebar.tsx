@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 
@@ -136,6 +136,15 @@ export function Sidebar(p: Props) {
           >
             <IconPlug width={16} height={16} />
             <span>برنامه‌های متصل</span>
+          </a>
+          <a
+            href="/plans"
+            className={`chat-link ${p.page === "plans" ? "active" : ""}`}
+            aria-current={p.page === "plans" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/plans"))}
+          >
+            <IconSpark width={16} height={16} />
+            <span>اشتراک‌ها</span>
           </a>
           <a
             href="/keys"

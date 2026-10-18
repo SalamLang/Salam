@@ -79406,12 +79406,12 @@ func _json_error(code: str, reason: str): str:
 ret `{"error":"`.concat(code).concat(`","reason":"`).concat(reason).concat(`"}`)
 end
 func _challenge(ctx: i64, g: Guard, token_was_offered: bool):
-http.Ctx_status(ctx, 401)
+http.SetStatus(ctx, 401)
 mut value := `Bearer realm="`.concat(g.realm).concat(`"`)
 if token_was_offered:
 value = value.concat(`, error="invalid_token"`)
 end
-http.Ctx_set_header(ctx, "WWW-Authenticate", value)
+http.SetHeader(ctx, "WWW-Authenticate", value)
 end
 @en "NewGuard"
 @fa "نگهبان جدید"
@@ -79426,14 +79426,14 @@ end
 @en "BearerToken"
 @fa "توکن حامل"
 pub func BearerToken(ctx: i64): str:
-ret _strip_bearer(http.Ctx_header(ctx, "Authorization"))
+ret _strip_bearer(http.Header(ctx, "Authorization"))
 end
 @en "TokenFrom"
 @fa "توکن از"
 pub func TokenFrom(ctx: i64, g: Guard): str:
 bearer := BearerToken(ctx)
 if bearer.len() > 0: ret bearer end
-if g.cookie.len() > 0: ret http.Ctx_cookie(ctx, g.cookie) end
+if g.cookie.len() > 0: ret http.CookieValue(ctx, g.cookie) end
 ret ""
 end
 @en "Check"
@@ -79450,19 +79450,19 @@ end
 @fa "غیرمجاز"
 pub func Unauthorized(ctx: i64, g: Guard, reason: str):
 _challenge(ctx, g, true)
-http.Ctx_json(ctx, _json_error("unauthorized", reason))
+http.Json(ctx, _json_error("unauthorized", reason))
 end
 @en "MissingCredential"
 @fa "بدون گواهی"
 pub func MissingCredential(ctx: i64, g: Guard):
 _challenge(ctx, g, false)
-http.Ctx_json(ctx, _json_error("unauthorized", "missing bearer token"))
+http.Json(ctx, _json_error("unauthorized", "missing bearer token"))
 end
 @en "Forbidden"
 @fa "ممنوع"
 pub func Forbidden(ctx: i64, reason: str):
-http.Ctx_status(ctx, 403)
-http.Ctx_json(ctx, _json_error("forbidden", reason))
+http.SetStatus(ctx, 403)
+http.Json(ctx, _json_error("forbidden", reason))
 end
 @en "Require"
 @fa "نیاز"
@@ -79837,7 +79837,7 @@ c.has_max_age = true
 c.http_only = true
 c.secure = secure
 c.same_site = "Lax"
-http.Ctx_set_cookie(ctx, c)
+http.SetCookie(ctx, c)
 end
 @en "Issue"
 @fa "صدور"
@@ -79889,7 +79889,7 @@ end
 @en "ClearSessionCookie"
 @fa "پاک کردن کوکی نشست"
 pub func ClearSessionCookie(ctx: i64, g: Guard):
-http.Ctx_clear_cookie(ctx, _cookie_name(g))
+http.ClearCookie(ctx, _cookie_name(g))
 end
 package jwt
 func _header_json(alg: str, kid: str): str:
@@ -105951,19 +105951,19 @@ salam_ctx_set(ctx.h, 5, "")
 end
 @en "Cookies"
 @fa "کوکی ها"
-pub func Cookies(ctx: Context): HashMap<str, str>: ret Ctx_cookies(ctx.h) end
+pub func Cookies(ctx: Context): HashMap<str, str>: ret _ctx_cookies(ctx.h) end
 @en "CookieValue"
 @fa "مقدار کوکی"
-pub func CookieValue(ctx: Context, name: str): str: ret Ctx_cookie(ctx.h, name) end
+pub func CookieValue(ctx: Context, name: str): str: ret _ctx_cookie(ctx.h, name) end
 @en "HasCookie"
 @fa "کوکی دارد"
-pub func HasCookie(ctx: Context, name: str): bool: ret Ctx_has_cookie(ctx.h, name) end
+pub func HasCookie(ctx: Context, name: str): bool: ret _ctx_has_cookie(ctx.h, name) end
 @en "SetCookie"
 @fa "تنظیم کوکی"
-pub func SetCookie(ctx: Context, c: Cookie): Ctx_set_cookie(ctx.h, c) end
+pub func SetCookie(ctx: Context, c: Cookie): _ctx_set_cookie(ctx.h, c) end
 @en "ClearCookie"
 @fa "پاک کردن کوکی"
-pub func ClearCookie(ctx: Context, name: str): Ctx_clear_cookie(ctx.h, name) end
+pub func ClearCookie(ctx: Context, name: str): _ctx_set_cookie(ctx.h, ExpiredCookie(name, "/", "")) end
 @en "ConnOf"
 @fa "اتصال مربوط به"
 pub func ConnOf(ctx: Context): tcp.Conn:
@@ -106039,6 +106039,20 @@ end
 end
 ret m
 end
+func _ctx_cookies(h: i64): HashMap<str, str>:
+ret _parse_cookie_header(salam_ctx_kv_get(h, 0, "Cookie"))
+end
+func _ctx_cookie(h: i64, name: str): str:
+m := _ctx_cookies(h)
+if m.has(name): ret m.get(name) end
+ret ""
+end
+func _ctx_has_cookie(h: i64, name: str): bool:
+ret _ctx_cookies(h).has(name)
+end
+func _ctx_set_cookie(h: i64, c: Cookie):
+salam_ctx_kv_set_cookie(h, c.name, _cookie_string(c))
+end
 @en "NewCookie"
 @fa "کوکی جدید"
 pub func NewCookie(name: str, value: str): Cookie:
@@ -106054,97 +106068,95 @@ end
 pub func ExpiredCookie(name: str, path: str, domain: str): Cookie:
 ret Cookie { name = name, value = "", path = path, domain = domain, max_age = 0 - 1, has_max_age = true, http_only = true }
 end
-@en "Ctx_cookies"
-@fa "کوکی های زمینه"
-pub func Ctx_cookies(h: i64): HashMap<str, str>:
-ret _parse_cookie_header(salam_ctx_kv_get(h, 0, "Cookie"))
+@en "Cookies"
+@fa "کوکی ها"
+pub func Cookies(h: i64): HashMap<str, str>:
+ret _ctx_cookies(h)
 end
-@en "Ctx_cookie"
-@fa "کوکی زمینه"
-pub func Ctx_cookie(h: i64, name: str): str:
-m := Ctx_cookies(h)
-if m.has(name): ret m.get(name) end
-ret ""
+@en "CookieValue"
+@fa "مقدار کوکی"
+pub func CookieValue(h: i64, name: str): str:
+ret _ctx_cookie(h, name)
 end
-@en "Ctx_has_cookie"
-@fa "زمینه کوکی دارد"
-pub func Ctx_has_cookie(h: i64, name: str): bool:
-ret Ctx_cookies(h).has(name)
+@en "HasCookie"
+@fa "کوکی دارد"
+pub func HasCookie(h: i64, name: str): bool:
+ret _ctx_has_cookie(h, name)
 end
-@en "Ctx_set_cookie"
-@fa "تنظیم کوکی زمینه"
-pub func Ctx_set_cookie(h: i64, c: Cookie):
-salam_ctx_kv_set_cookie(h, c.name, _cookie_string(c))
+@en "SetCookie"
+@fa "تنظیم کوکی"
+pub func SetCookie(h: i64, c: Cookie):
+_ctx_set_cookie(h, c)
 end
-@en "Ctx_clear_cookie"
-@fa "پاک کردن کوکی زمینه"
-pub func Ctx_clear_cookie(h: i64, name: str):
-Ctx_set_cookie(h, ExpiredCookie(name, "/", ""))
+@en "ClearCookie"
+@fa "پاک کردن کوکی"
+pub func ClearCookie(h: i64, name: str):
+_ctx_set_cookie(h, ExpiredCookie(name, "/", ""))
 end
-@en "Ctx_clear_cookie_at"
-@fa "پاک کردن کوکی زمینه در مسیر"
-pub func Ctx_clear_cookie_at(h: i64, name: str, path: str, domain: str):
-Ctx_set_cookie(h, ExpiredCookie(name, path, domain))
+@en "ClearCookieAt"
+@fa "پاک کردن کوکی در مسیر"
+pub func ClearCookieAt(h: i64, name: str, path: str, domain: str):
+_ctx_set_cookie(h, ExpiredCookie(name, path, domain))
 end
 package http
-@en "Ctx_method"
-@fa "روش زمینه"
-pub func Ctx_method(h: i64): str: ret salam_ctx_get(h, 0) end
-@en "Ctx_path"
-@fa "مسیر زمینه"
-pub func Ctx_path(h: i64): str: ret salam_ctx_get(h, 1) end
-@en "Ctx_body"
-@fa "بدنه زمینه"
-pub func Ctx_body(h: i64): str: ret salam_ctx_get(h, 3) end
-@en "Ctx_query"
-@fa "پرسمان زمینه"
-pub func Ctx_query(h: i64, key: str): str:
+@en "Method"
+@fa "روش"
+pub func Method(h: i64): str: ret salam_ctx_get(h, 0) end
+@en "Path"
+@fa "مسیر"
+pub func Path(h: i64): str: ret salam_ctx_get(h, 1) end
+@en "Body"
+@fa "بدنه"
+pub func Body(h: i64): str: ret salam_ctx_get(h, 3) end
+@en "Query"
+@fa "پرسمان"
+pub func Query(h: i64, key: str): str:
 ret _ctx_own(h, _query_parse(salam_ctx_get(h, 2), key))
 end
-@en "Ctx_raw_query"
-@fa "پرسمان خام زمینه"
-pub func Ctx_raw_query(h: i64): str: ret salam_ctx_get(h, 2) end
-@en "Ctx_header"
-@fa "سرصفحه زمینه"
-pub func Ctx_header(h: i64, name: str): str: ret salam_ctx_kv_get(h, 0, name) end
-@en "Ctx_param"
-@fa "پارامتر زمینه"
-pub func Ctx_param(h: i64, name: str): str: ret salam_ctx_kv_get(h, 1, name) end
-@en "Ctx_form"
-@fa "فرم زمینه"
-pub func Ctx_form(h: i64, field: str): str:
+@en "RawQuery"
+@fa "پرسمان خام"
+pub func RawQuery(h: i64): str: ret salam_ctx_get(h, 2) end
+@en "Header"
+@fa "سرصفحه"
+pub func Header(h: i64, name: str): str: ret salam_ctx_kv_get(h, 0, name) end
+@en "Param"
+@fa "پارامتر"
+pub func Param(h: i64, name: str): str: ret salam_ctx_kv_get(h, 1, name) end
+@en "Form"
+@fa "فرم"
+pub func Form(h: i64, field: str): str:
 ret _ctx_own(h, _query_parse(salam_ctx_get(h, 3), field))
 end
-@en "Ctx_status"
-@fa "وضعیت زمینه"
-pub func Ctx_status(h: i64, code: int): salam_ctx_set_status(h, code) end
-@en "Ctx_set_header"
-@fa "تنظیم سرصفحه زمینه"
-pub func Ctx_set_header(h: i64, k: str, v: str): salam_ctx_kv_add(h, 2, k, v) end
-@en "Ctx_html"
-@fa "اچ تی ام ال زمینه"
-pub func Ctx_html(h: i64, html: str):
+@en "SetStatus"
+@fa "تنظیم وضعیت"
+pub func SetStatus(h: i64, code: int): salam_ctx_set_status(h, code) end
+@en "SetHeader"
+@fa "تنظیم سرصفحه"
+pub func SetHeader(h: i64, k: str, v: str): salam_ctx_kv_add(h, 2, k, v) end
+@en "Html"
+@fa "اچ تی ام ال"
+pub func Html(h: i64, html: str):
 salam_ctx_set(h, 4, "text/html; charset=utf-8")
 salam_ctx_set(h, 5, html)
 end
-@en "Ctx_json"
-@fa "جیسون زمینه"
-pub func Ctx_json(h: i64, json: str):
+@en "Json"
+@fa "جیسون"
+pub func Json(h: i64, json: str):
 salam_ctx_set(h, 4, "application/json")
 salam_ctx_set(h, 5, json)
 end
-@en "Ctx_text"
-@fa "متن زمینه"
-pub func Ctx_text(h: i64, text: str):
+@en "Text"
+@fa "متن"
+pub func Text(h: i64, text: str):
 salam_ctx_set(h, 4, "text/plain; charset=utf-8")
 salam_ctx_set(h, 5, text)
 end
-@en "Ctx_own"
-@fa "مالکیت زمینه"
-pub func Ctx_own(h: i64, s: str): str: ret _ctx_own(h, s) end
-@en "Ctx_redirect"
-@fa "تغییرمسیر زمینه"
-pub func Ctx_redirect(h: i64, loc: str):
+@en "Own"
+@fa "مالکیت"
+pub func Own(h: i64, s: str): str: ret _ctx_own(h, s) end
+@en "Redirect"
+@fa "تغییرمسیر"
+pub func Redirect(h: i64, loc: str):
 salam_ctx_set_status(h, 302)
 salam_ctx_kv_add(h, 2, "Location", loc)
 salam_ctx_set(h, 4, "")
@@ -108185,32 +108197,32 @@ import conv
 @en "Log"
 @fa "ثبت رخداد"
 pub func Log(ctx: i64):
-println "[HTTP]", http.Ctx_method(ctx), http.Ctx_path(ctx)
+println "[HTTP]", http.Method(ctx), http.Path(ctx)
 end
 @en "AllowAll"
 @fa "اجازه به همه"
 pub func AllowAll(ctx: i64):
-http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
-http.Ctx_set_header(ctx, "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Content-Type, Authorization")
+http.SetHeader(ctx, "Access-Control-Allow-Origin", "*")
+http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+http.SetHeader(ctx, "Access-Control-Allow-Headers", "Content-Type, Authorization")
 end
 @en "Secure"
 @fa "امن"
 pub func Secure(ctx: i64):
-http.Ctx_set_header(ctx, "X-Content-Type-Options", "nosniff")
-http.Ctx_set_header(ctx, "X-Frame-Options", "DENY")
-http.Ctx_set_header(ctx, "X-XSS-Protection", "1; mode=block")
+http.SetHeader(ctx, "X-Content-Type-Options", "nosniff")
+http.SetHeader(ctx, "X-Frame-Options", "DENY")
+http.SetHeader(ctx, "X-XSS-Protection", "1; mode=block")
 end
 @en "NoCache"
 @fa "بدون کش"
 pub func NoCache(ctx: i64):
-http.Ctx_set_header(ctx, "Cache-Control", "no-store, no-cache, must-revalidate")
-http.Ctx_set_header(ctx, "Pragma", "no-cache")
+http.SetHeader(ctx, "Cache-Control", "no-store, no-cache, must-revalidate")
+http.SetHeader(ctx, "Pragma", "no-cache")
 end
 @en "Cache"
 @fa "کش"
 pub func Cache(ctx: i64, seconds: int):
-http.Ctx_set_header(ctx, "Cache-Control", "max-age=" + conv.FormatInt(seconds as i64))
+http.SetHeader(ctx, "Cache-Control", "max-age=" + conv.FormatInt(seconds as i64))
 end
 package http
 @en "UrlDecode"
@@ -108539,7 +108551,7 @@ end
 @en "Start"
 @fa "شروع"
 pub func Start(h: i64): Session:
-sid := http.Ctx_cookie(h, _cookie_name)
+sid := http.CookieValue(h, _cookie_name)
 mut ok := false
 mut s := Session {}
 if sid.len() > 0:
@@ -108548,17 +108560,17 @@ end
 if ok == false:
 s = New()
 end
-http.Ctx_set_cookie(h, _cookie_for(s.id))
+http.SetCookie(h, _cookie_for(s.id))
 ret s
 end
 @en "End"
 @fa "پایان"
 pub func End(h: i64):
-sid := http.Ctx_cookie(h, _cookie_name)
+sid := http.CookieValue(h, _cookie_name)
 if sid.len() > 0:
 Destroy(sid)
 end
-http.Ctx_clear_cookie(h, _cookie_name)
+http.ClearCookie(h, _cookie_name)
 end
 @en "Regenerate"
 @fa "بازتولید"
@@ -108569,7 +108581,7 @@ s.id = _gen_id()
 s.created_at = now
 s.last_seen = now
 Save(s)
-http.Ctx_set_cookie(h, _cookie_for(s.id))
+http.SetCookie(h, _cookie_for(s.id))
 end
 @en "CSRFToken"
 @fa "توکن سی اس آر اف"
@@ -108968,25 +108980,25 @@ _mounts.push(entry)
 ret _mounts.len() - 1
 end
 func _handle_ui(ctx: i64):
-i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), false)
+i := _mount_for(http.Path(ctx), http.Header(ctx, "Host"), false)
 if i < 0:
-http.Ctx_status(ctx, 404)
-http.Ctx_text(ctx, "404 Not Found")
+http.SetStatus(ctx, 404)
+http.Text(ctx, "404 Not Found")
 ret
 end
-http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
-http.Ctx_html(ctx, _mounts.get(i).page)
+http.SetHeader(ctx, "Cache-Control", "no-cache")
+http.Html(ctx, _mounts.get(i).page)
 end
 func _handle_spec(ctx: i64):
-i := _mount_for(http.Ctx_path(ctx), http.Ctx_header(ctx, "Host"), true)
+i := _mount_for(http.Path(ctx), http.Header(ctx, "Host"), true)
 if i < 0:
-http.Ctx_status(ctx, 404)
-http.Ctx_json(ctx, "{\"error\":\"not found\"}")
+http.SetStatus(ctx, 404)
+http.Json(ctx, "{\"error\":\"not found\"}")
 ret
 end
-http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
-http.Ctx_set_header(ctx, "Cache-Control", "no-cache")
-http.Ctx_json(ctx, _mounts.get(i).spec)
+http.SetHeader(ctx, "Access-Control-Allow-Origin", "*")
+http.SetHeader(ctx, "Cache-Control", "no-cache")
+http.Json(ctx, _mounts.get(i).spec)
 end
 func _mount_routes(r &: router.Router, prefix: str):
 p := _clean_prefix(prefix)
@@ -110550,8 +110562,8 @@ pub func Assert(ctx: i64, ok: bool, message: str):
 if ok:
 ret
 end
-http.Ctx_status(ctx, 400)
-http.Ctx_json(ctx, `{"error":"` + message + `"}`)
+http.SetStatus(ctx, 400)
+http.Json(ctx, `{"error":"` + message + `"}`)
 end
 package http2
 import compress

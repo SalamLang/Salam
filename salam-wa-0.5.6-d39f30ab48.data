@@ -31,6 +31,7 @@ const _TATWEEL := 0x0640
 pure func _map_cp(cp: int, flags: int): int:
 if (flags / StripTatweel) % 2 == 1 and cp == _TATWEEL: ret 0 - 1 end
 if (flags / StripHarakat) % 2 == 1 and IsHaraka(cp): ret 0 - 1 end
+if (flags / StripHarakat) % 2 == 1 and cp == 0x06C0: ret 0x0647 end
 if (flags / StripZWNJ) % 2 == 1 and cp == unicode.ZWNJ: ret 0 - 1 end
 if (flags / FoldLetters) % 2 == 1:
 if cp == 0x0643: ret 0x06A9 end
@@ -30675,6 +30676,7 @@ func PQftype(res: void*, col: int): u32
 func PQgetvalue(res: void*, row: int, col: int): void*
 func PQgetisnull(res: void*, row: int, col: int): int
 func PQcmdTuples(res: void*): str
+func PQcmdStatus(res: void*): str
 func PQclear(res: void*)
 func PQlibVersion(): int
 func PQserverVersion(conn: void*): int
@@ -30726,6 +30728,9 @@ ret PQgetisnull(res, row, col)
 end
 func _pq_cmd_tuples(res: void*): str:
 ret PQcmdTuples(res)
+end
+func _pq_cmd_status(res: void*): str:
+ret PQcmdStatus(res)
 end
 func _pq_clear(res: void*):
 PQclear(res)
@@ -30793,6 +30798,7 @@ struct _PgResult:
 pub status: int = 0
 pub err: str = ""
 pub cmd_tuples: str = ""
+pub cmd_status: str = ""
 pub nfields: int = 0
 pub nrows: int = 0
 pub names: Vector<str> = Vector {} as Vector<str>
@@ -31596,6 +31602,7 @@ _pq_clear(cur as void*)
 cur = _pq_result_new(PGRES_COMMAND_OK)
 end
 cur[0].cmd_tuples = _tag_count(tag)
+cur[0].cmd_status = tag
 else if kind == 73:
 _pq_clear(cur as void*)
 cur = _pq_result_new(PGRES_EMPTY_QUERY)
@@ -31672,6 +31679,10 @@ end
 func _pq_cmd_tuples(res: void*): str:
 r := res as _PgResult*
 ret r[0].cmd_tuples
+end
+func _pq_cmd_status(res: void*): str:
+r := res as _PgResult*
+ret r[0].cmd_status
 end
 func _pq_lib_version(): int:
 ret _PG_CLIENT_VERSION
@@ -32047,8 +32058,13 @@ pub func Commit(): int:
 if this.handle == null:
 ret -1
 end
-d := Database { handle = this.handle }
-ret d.Exec("COMMIT")
+res := _pq_exec(this.handle, "COMMIT")
+if res == null:
+ret -1
+end
+ok := _pq_result_status(res) == PGRES_COMMAND_OK and _pq_cmd_status(res) != "ROLLBACK"
+_pq_clear(res)
+ret ok ? 0 : -1
 end
 @en "Rollback"
 @fa "بازگردانی"
@@ -32328,9 +32344,9 @@ reply := _raw_command(c.handle, args)
 if reply == null:
 ret false
 end
-n := _reply_integer(reply)
+ok := _reply_type(reply) == REPLY_INTEGER
 _free_reply(reply)
-ret n >= 0
+ret ok
 end
 @en "HGet"
 @fa "دریافت فیلد هش"
@@ -36489,7 +36505,7 @@ end
 @fa "آمار حافظه"
 pub func MemStats(): str:
 if mem.MemDebugActive() == false:
-ret "mem stats unavailable (build with --debug-info/mem-debug or --asan to enable)"
+ret "mem stats unavailable (build with -DSALAM_MEM_DEBUG or --asan to enable)"
 end
 mut b := str.NewBuilder()
 defer str.BufFree(b)
@@ -37693,7 +37709,7 @@ if v < 0: v = v + 256 end
 ret v
 end
 pure func _needs_quote(field: str): bool:
-ret field.find(",") >= 0 or field.find(`"`) >= 0
+ret field.find(",") >= 0 or field.find(`"`) >= 0 or field.find("\n") >= 0 or field.find("\r") >= 0
 end
 @en "ReadLine"
 @fa "خواندن خط"
@@ -40985,7 +41001,7 @@ str.BufAppend(sb, "        mut fnum := 0\n")
 str.BufAppend(sb, "        mut wtype := 0\n")
 str.BufAppend(sb, "        mut tagOk := false\n")
 str.BufAppend(sb, "        protobuf.ReadTag(r, fnum, wtype, tagOk)\n")
-str.BufAppend(sb, "        if !tagOk:\n            ok = false\n            ret out\n        end\n")
+str.BufAppend(sb, "        if not tagOk:\n            ok = false\n            ret out\n        end\n")
 mut fi := 0
 mut any := false
 until fi < msg.fields.len():
@@ -41004,7 +41020,7 @@ str.BufAppend(sb, "            mut fok := false\n")
 str.BufAppend(sb, "            v := ")
 str.BufAppend(sb, _read_expr(f.kind, "fok"))
 str.BufAppendChar(sb, 10)
-str.BufAppend(sb, "            if !fok:\n                ok = false\n                ret out\n            end\n")
+str.BufAppend(sb, "            if not fok:\n                ok = false\n                ret out\n            end\n")
 if f.repeated:
 str.BufAppend(sb, "            out.")
 str.BufAppend(sb, f.name)
@@ -41024,7 +41040,7 @@ str.BufAppend(sb, "        if true:\n")
 end
 str.BufAppend(sb, "            mut skipOk := false\n")
 str.BufAppend(sb, "            protobuf.SkipField(r, wtype, skipOk)\n")
-str.BufAppend(sb, "            if !skipOk:\n                ok = false\n                ret out\n            end\n")
+str.BufAppend(sb, "            if not skipOk:\n                ok = false\n                ret out\n            end\n")
 str.BufAppend(sb, "        end\n")
 str.BufAppend(sb, "    end\n")
 str.BufAppend(sb, "    ret out\n")
@@ -41150,7 +41166,7 @@ str.BufAppend(sb, m.outputType)
 str.BufAppend(sb, ":\n")
 str.BufAppend(sb, "    mut mok := false\n")
 str.BufAppend(sb, "    mut raw := grpc.RecvMessage(ch, sid, mok)\n")
-str.BufAppend(sb, "    if !mok:\n")
+str.BufAppend(sb, "    if not mok:\n")
 str.BufAppend(sb, "        compress.BufFree(raw)\n")
 str.BufAppend(sb, "        ok = false\n")
 str.BufAppend(sb, "        ret ")
@@ -42711,7 +42727,7 @@ else e == 98: str.BufAppendChar(sb, 8)
 else e == 102: str.BufAppendChar(sb, 12)
 else e == 117:
 if p + 4 < n:
-str.BufAppendChar(sb, _hex4(s, p + 1))
+str.BufAppendCp(sb, _hex4(s, p + 1))
 p += 4
 end
 else:
@@ -42816,10 +42832,14 @@ if str.Contains(clean, "0b"):
 ret value.ValueInt(_parse_int_base(str.Replace(clean, "0b", ""), 2))
 end
 mut body := clean
-if body.len() > 0 and str.CharAt(body, 0) == "+":
+mut neg := false
+if body.len() > 0 and (str.CharAt(body, 0) == "+" or str.CharAt(body, 0) == "-"):
+neg = str.CharAt(body, 0) == "-"
 body = body.substr(1, body.len() - 1)
 end
-ret value.ValueInt(body.to_int() as i64)
+mag := _parse_int_base(body, 10)
+if neg: ret value.ValueInt(0 - mag) end
+ret value.ValueInt(mag)
 end
 func _parse_value(s: str, i: int, endpos &: int, err &: bool): value.Value:
 ret _parse_value_d(s, i, endpos, err, 0)
@@ -42879,7 +42899,7 @@ if str.Contains(tok, ":") or (str.Contains(rest, "-") and not str.Contains(tok, 
 looksNumeric = false
 end
 end
-if looksNumeric: ret _parse_number(tok) end
+if looksNumeric or tok == "inf" or tok == "nan": ret _parse_number(tok) end
 ret value.ValueString(tok)
 end
 func _parse_array(s: str, i: int, endpos &: int, err &: bool, depth: int): value.Value:
@@ -43035,7 +43055,11 @@ if value.AsBool(v): ret "true" end
 ret "false"
 end
 if value.IsInt(v): ret conv.FormatInt(value.AsInt(v)) end
-if value.IsFloat(v): ret conv.FormatFloat(value.AsFloat(v)) end
+if value.IsFloat(v):
+f := conv.FormatFloat(value.AsFloat(v))
+if str.Contains(f, ".") or str.Contains(f, "e") or str.Contains(f, "n"): ret f end
+ret f.concat(".0")
+end
 if value.IsString(v): ret `"`.concat(_escape_toml_string(value.AsString(v))).concat(`"`) end
 if value.IsArray(v):
 mut sb := str.NewBuilder()
@@ -43884,7 +43908,10 @@ pub func ObjectLen(v: Value): int: ret v.obj.size() end
 pub func ObjectHas(v: Value, key: str): bool: ret v.obj.has(key) end
 @en "ObjectGet"
 @fa "مقدار کلید"
-pub func ObjectGet(v: Value, key: str): Value: ret v.obj.get(key) end
+pub func ObjectGet(v: Value, key: str): Value:
+if v.obj.has(key): ret v.obj.get(key) end
+ret ValueNull()
+end
 @en "ObjectGetOk"
 @fa "مقدار کلید با وضعیت"
 pub func ObjectGetOk(v: Value, key: str, ok &: bool): Value:
@@ -47102,6 +47129,16 @@ out := str.BufStr(sb)
 str.BufFree(sb)
 ret out
 end
+func _value_text(v: value.Value): str:
+if value.IsString(v): ret value.AsString(v) end
+if value.IsInt(v): ret str.FromInt(value.AsInt(v)) end
+if value.IsFloat(v): ret str.FromFloat(value.AsFloat(v)) end
+if value.IsBool(v):
+if value.AsBool(v): ret "true" end
+ret "false"
+end
+ret ""
+end
 @en "UnescapeEntities"
 @fa "بازگردانی موجودیت‌ها"
 pub func UnescapeEntities(s: str): str: ret _unescape(s) end
@@ -47369,20 +47406,19 @@ end
 @fa "از مقدار"
 pub func FromValue(v: value.Value, rootTag: str): XMLNode:
 mut node := XMLNode { tag = rootTag }
-if value.IsString(v):
-node.text = value.AsString(v)
+if not value.IsObject(v):
+node.text = _value_text(v)
 ret node
 end
-if not value.IsObject(v): ret node end
 keys := value.ObjectKeys(v)
 mut i := 0
 until i < keys.len():
 k := keys.get(i)
 fv := value.ObjectGet(v, k)
 if k.len() > 0 and str.CharAt(k, 0) == "@":
-node.attrs.put(k.substr(1, k.len() - 1), value.AsString(fv))
+node.attrs.put(k.substr(1, k.len() - 1), _value_text(fv))
 else k == "#text":
-node.text = value.AsString(fv)
+node.text = _value_text(fv)
 else value.IsArray(fv):
 mut j := 0
 until j < value.ArrayLen(fv):
@@ -54326,13 +54362,32 @@ mem.Free(buf)
 ret out
 end
 else:
+func _fs_shell_quote(path: str): str:
+mut sb := str.NewBuilder()
+str.BufAppendChar(sb, 39)
+pp := path as void*
+repeat path.len() in i:
+c := _byte_at(pp, i as i64)
+if c == 39:
+str.BufAppend(sb, "'\\''")
+else:
+str.BufAppendChar(sb, c)
+end
+end
+str.BufAppendChar(sb, 39)
+out := str.BufStr(sb)
+str.BufFree(sb)
+ret out
+end
 func _fs_stat_field(path: str, fmt: str): i64:
 mut cmd := ""
+quoted := _fs_shell_quote(path)
 if SALAM_OS_MAC or SALAM_OS_BSD:
-cmd = "stat -f ".concat(fmt).concat(" ").concat(path).concat(" 2>/dev/null")
+cmd = "stat -f ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
 else:
-cmd = "stat -c ".concat(fmt).concat(" ").concat(path).concat(" 2>/dev/null")
+cmd = "stat -c ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
 end
+mem.Free(quoted as void*)
 fp := popen(cmd, "r")
 if fp == null: ret 0 - 1 end
 buf := mem.Allocate(256 as u64)
@@ -90821,6 +90876,9 @@ pub wq: tensor.Tensor = tensor.Tensor {}
 pub wk: tensor.Tensor = tensor.Tensor {}
 pub wv: tensor.Tensor = tensor.Tensor {}
 pub wo: tensor.Tensor = tensor.Tensor {}
+pub bq: tensor.Tensor = tensor.Tensor {}
+pub bk: tensor.Tensor = tensor.Tensor {}
+pub bv: tensor.Tensor = tensor.Tensor {}
 pub ffn_norm: tensor.Tensor = tensor.Tensor {}
 pub w_gate: tensor.Tensor = tensor.Tensor {}
 pub w_up: tensor.Tensor = tensor.Tensor {}
@@ -90833,6 +90891,9 @@ this.wq.free()
 this.wk.free()
 this.wv.free()
 this.wo.free()
+this.bq.free()
+this.bk.free()
+this.bv.free()
 this.ffn_norm.free()
 this.w_gate.free()
 this.w_up.free()
@@ -91063,6 +91124,17 @@ repeat d in k: po[i * d + k] = pt[id * d + k] end
 end
 ret out
 end
+func _add_bias(x &: tensor.Tensor, b &: tensor.Tensor):
+if b.is_empty(): ret end
+w := b.numel()
+if x.numel() % w != 0: ret end
+rows := x.numel() / w
+px := x.data.data
+pb := b.data.data
+repeat rows in i:
+repeat w in k: px[i * w + k] = px[i * w + k] + pb[k] end
+end
+end
 func _layer_forward(m &: Model, li: int, cache &: KVCache, x &: tensor.Tensor, pos0: int):
 cfg := m.cfg
 l := m.layers.get(li)
@@ -91071,6 +91143,9 @@ mut h := _rmsnorm(x, l.attn_norm, cfg.eps)
 mut q := tensor.MulTranspose(h, l.wq)
 mut k := tensor.MulTranspose(h, l.wk)
 mut v := tensor.MulTranspose(h, l.wv)
+_add_bias(q, l.bq)
+_add_bias(k, l.bk)
+_add_bias(v, l.bv)
 h.free()
 _rope(q, cfg.heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
 _rope(k, cfg.kv_heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
@@ -91176,6 +91251,12 @@ t := gguf.LoadTensorF32(g, idx, got)
 if not got: ok = false end
 ret t
 end
+func _blk_bias(g &: gguf.Gguf, p: str, name: str, ok &: bool): tensor.Tensor:
+key := p + name
+defer mem.Free(key as void*)
+if g.tensor_index(key) < 0: ret tensor.Empty() end
+ret _tensor(g, key, ok)
+end
 func _neox_arch(arch: str): bool:
 names := ["qwen2", "qwen", "qwen3", "phi2", "phi3", "gptneox", "stablelm", "gemma", "gemma2", "olmo"]
 repeat 10 in i:
@@ -91222,6 +91303,9 @@ l.wq = _blk_tensor(g, p, "attn_q.weight", ok)
 l.wk = _blk_tensor(g, p, "attn_k.weight", ok)
 l.wv = _blk_tensor(g, p, "attn_v.weight", ok)
 l.wo = _blk_tensor(g, p, "attn_output.weight", ok)
+l.bq = _blk_bias(g, p, "attn_q.bias", ok)
+l.bk = _blk_bias(g, p, "attn_k.bias", ok)
+l.bv = _blk_bias(g, p, "attn_v.bias", ok)
 l.ffn_norm = _blk_tensor(g, p, "ffn_norm.weight", ok)
 l.w_gate = _blk_tensor(g, p, "ffn_gate.weight", ok)
 l.w_up = _blk_tensor(g, p, "ffn_up.weight", ok)
@@ -92161,7 +92245,7 @@ func LLVMDisposeMessage(msg: void*)
 end
 @en "VERIFY_RETURN_STATUS"
 @fa "بررسی با بازگرداندن وضعیت"
-pub const VERIFY_RETURN_STATUS := 1
+pub const VERIFY_RETURN_STATUS := 2
 @en "Context"
 @fa "زمینه"
 pub struct Context:
@@ -105207,7 +105291,8 @@ chunk = tcp.Read(c.conn, 4096)
 end
 c.rxbuf += chunk
 end
-func _imap_read_line(c &: IMAPClient): str:
+func _imap_read_line(c &: IMAPClient, eof &: bool): str:
+eof = false
 mut idx := c.rxbuf.find("\r\n")
 mut tries := 0
 until idx < 0 and tries < 200:
@@ -105218,6 +105303,7 @@ end
 if idx < 0:
 line := c.rxbuf
 c.rxbuf = ""
+eof = true
 ret line
 end
 line := c.rxbuf.substr(0, idx)
@@ -105243,14 +105329,15 @@ mut done := false
 mut safety := 0
 until not done:
 safety += 1
-line := _imap_read_line(c)
+mut eof := false
+line := _imap_read_line(c, eof)
 if line.len() >= tag.len() and line.substr(0, tag.len()) == tag:
 r.status = line
 r.ok = str.Contains(line, " OK")
 done = true
 else:
 r.lines.push(line)
-if line.len() == 0 or safety > 10000:
+if eof or safety > 10000:
 done = true
 end
 end
@@ -105263,7 +105350,8 @@ if not tcp.ConnOk(conn):
 c.ok = false
 ret c
 end
-greeting := _imap_read_line(c)
+mut eof := false
+greeting := _imap_read_line(c, eof)
 c.ok = str.Contains(greeting, "* OK")
 ret c
 end
@@ -105284,7 +105372,8 @@ if not tls.ConnOk(tc):
 c.ok = false
 ret c
 end
-greeting := _imap_read_line(c)
+mut eof := false
+greeting := _imap_read_line(c, eof)
 c.ok = str.Contains(greeting, "* OK")
 ret c
 end
@@ -105693,8 +105782,7 @@ str.BufAppendChar(sb, 0)
 str.BufAppend(sb, username)
 str.BufAppendChar(sb, 0)
 str.BufAppend(sb, password)
-raw := str.BufStr(sb)
-ret _smtp_command(c, "AUTH PLAIN " + encoding.Base64Encode(raw))
+ret _smtp_command(c, "AUTH PLAIN " + encoding.Base64EncodeBytes(sb.data, sb.len as int))
 end
 @en "AuthXOAuth2"
 @fa "احراز هویت ایکس‌اواث۲"
@@ -136859,7 +136947,7 @@ EnterCriticalSection(m)
 ret false
 end
 f := _cv_sleep_fn as extern func (void*, void*, int) int
-ret f(c, m, ms as int) == 0
+ret f(c, m, ms as int) != 0
 end
 func now_ms_os(): i64:
 if _tick64_fn == null: ret GetTickCount() as i64 end
@@ -136938,7 +137026,7 @@ total := ts_read_nsec(ts) + (ms % 1000) * 1000000
 ts_write(ts, ts_read_sec(ts) + (ms / 1000) + (total / 1000000000), total % 1000000000)
 rc := pthread_cond_timedwait(c, m, ts)
 mem.Free(ts)
-ret rc != 0
+ret rc == 0
 end
 func now_ms_os(): i64:
 ts := mem.AllocateZeroed(32 as u64)
@@ -143188,9 +143276,17 @@ mem.Free(buf)
 if out == (0 - 1) as i64: ret _utcEpoch(y, mo, d, h, mi, s) end
 ret out
 end
+func _daysInMonth(y: int, m: int): int:
+if m == 2:
+if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0: ret 29 end
+ret 28
+end
+if m == 4 or m == 6 or m == 9 or m == 11: ret 30 end
+ret 31
+end
 func _resolve(p: _Parts): TimeResult:
 if p.month < 1 or p.month > 12: ret TimeResult { ok = false } end
-if p.day < 1 or p.day > 31: ret TimeResult { ok = false } end
+if p.day < 1 or p.day > _daysInMonth(p.year, p.month): ret TimeResult { ok = false } end
 if p.hour < 0 or p.hour > 24: ret TimeResult { ok = false } end
 if p.minute < 0 or p.minute > 59: ret TimeResult { ok = false } end
 if p.second < 0 or p.second > 60: ret TimeResult { ok = false } end
@@ -164995,7 +165091,7 @@ pub func Run():
 if this.handle == null or this.closed:
 ret
 end
-until this.closed:
+until not this.closed:
 salam_wv_cef_pump()
 if salam_wv_cef_is_closed(this.handle) != 0:
 this.closed = true
@@ -165076,6 +165172,7 @@ extern:
 func gtk_init_check(argc: void*, argv: void*): int
 func gtk_window_new(wintype: int): void*
 func gtk_window_set_default_size(window: void*, width: int, height: int)
+func gtk_window_resize(window: void*, width: int, height: int)
 func gtk_window_set_title(window: void*, title: str)
 func gtk_window_set_resizable(window: void*, resizable: int)
 func webkit_web_view_new(): void*
@@ -165116,7 +165213,7 @@ pub func Run():
 if this.window == null or this.closed:
 ret
 end
-until this.closed:
+until not this.closed:
 gtk_main_iteration_do(1)
 if gtk_widget_in_destruction(this.window) != 0:
 this.closed = true
@@ -165140,6 +165237,7 @@ end
 pub func SetSize(width: int, height: int, hints: int = HINT_NONE):
 if this.window != null and not this.closed:
 gtk_window_set_default_size(this.window, width, height)
+gtk_window_resize(this.window, width, height)
 gtk_window_set_resizable(this.window, hints == HINT_FIXED ? 0 : 1)
 end
 end
@@ -165440,7 +165538,7 @@ if this.hwnd == null or this.closed:
 ret
 end
 msg := mem.Allocate(48 as u64)
-until this.closed:
+until not this.closed:
 got := PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
 if got != 0:
 TranslateMessage(msg)
@@ -165579,7 +165677,7 @@ env_handler := make_com_obj(
 CreateCoreWebView2EnvironmentWithOptions(null, null, null, env_handler)
 msg := mem.Allocate(48 as u64)
 mut spins := 0
-until _wv2_env != null or spins > 200000:
+until _wv2_env == null and spins <= 200000:
 PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
 TranslateMessage(msg)
 DispatchMessageA(msg)
@@ -165595,7 +165693,7 @@ ctrl_handler := make_com_obj(
 create_ctrl_fn := (com_vtbl_slot(_wv2_env, 3)) as extern func (void*, void*, void*) i32
 create_ctrl_fn(_wv2_env, hwnd, ctrl_handler)
 spins = 0
-until _wv2_ctrl != null or spins > 200000:
+until _wv2_ctrl == null and spins <= 200000:
 PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
 TranslateMessage(msg)
 DispatchMessageA(msg)

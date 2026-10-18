@@ -134,6 +134,10 @@ check("the half answer arrives and is marked as cut off", cutSse.text.startsWith
 const deadStream = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "never start" }] });
 const deadSse = sse(await deadStream.text());
 check("a turn the engine never starts closes the stream with an error and a finish reason", deadStream.status === 200 && deadSse.ended && deadSse.error?.code === "engine_failed" && deadSse.finish.length === 1, deadSse.events.slice(-3));
+const tQuiet = Date.now();
+const quiet = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "goes quiet after starting" }] });
+const quietSse = sse(await quiet.text());
+check("an engine that goes quiet after starting does not hold the stream open", Date.now() - tQuiet < (START + 25) * 1000 && quietSse.ended && quietSse.finish[0] === "length" && quietSse.text.includes("half an answer"), `${Date.now() - tQuiet} ms ${quietSse.finish} ${quietSse.text.slice(0, 60)}`);
 const noCheck = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "bad code please" }] });
 const noCheckSse = sse(await noCheck.text());
 check("a streamed answer is never rewritten under the client, so no text is taken back", noCheckSse.ended && noCheckSse.finish[0] === "stop" && noCheckSse.text.startsWith("Here:") && !noCheckSse.text.includes("Fixed ("), noCheckSse.text.slice(0, 80));

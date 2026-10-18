@@ -127,6 +127,49 @@ func lx_at_value_end(L &: Lx): bool:
     ret k == tok.TK_INT or k == tok.TK_FLOAT or k == tok.TK_STRING or k == tok.TK_TRIPLE_STRING or k == tok.TK_RAW_STRING or k == tok.TK_CHAR or k == tok.TK_UTF8_CHAR or k == tok.TK_IDENT or k == tok.TK_RPAREN or k == tok.TK_RBRACKET or k == tok.TK_KW_TRUE or k == tok.TK_KW_FALSE or k == tok.TK_KW_NULL or k == tok.TK_KW_THIS
 end
 
+func soft_layout_header(L &: Lx, start: int): bool:
+    mut i := start - 1
+    until i >= 0 and (byte_at(L.s, i) == 32 or byte_at(L.s, i) == 9):
+        i -= 1
+    end
+    if i >= 0 and byte_at(L.s, i) != 10 and not (L.has_last and L.last == tok.TK_KW_PUB):
+        ret false
+    end
+    mut j := L.pos
+    until j < L.n and (byte_at(L.s, j) == 32 or byte_at(L.s, j) == 9):
+        j += 1
+    end
+    if j < L.n and byte_at(L.s, j) == 58:
+        j += 1
+        until j < L.n and (byte_at(L.s, j) == 32 or byte_at(L.s, j) == 9 or byte_at(L.s, j) == 13):
+            j += 1
+        end
+        ret j >= L.n or byte_at(L.s, j) == 10 or (byte_at(L.s, j) == 47 and j + 1 < L.n and byte_at(L.s, j + 1) == 47)
+    end
+    if j >= L.n or not is_ident_start(byte_at(L.s, j)):
+        ret false
+    end
+    mut depth := 0
+    mut last := 0
+    until j < L.n and byte_at(L.s, j) != 10:
+        c := byte_at(L.s, j)
+        if c == 40:
+            depth += 1
+        else c == 41 and depth > 0:
+            depth -= 1
+        else c == 61 and depth == 0:
+            ret false
+        else c == 47 and depth == 0 and j + 1 < L.n and byte_at(L.s, j + 1) == 47:
+            break
+        end
+        if c != 32 and c != 9 and c != 13:
+            last = c
+        end
+        j += 1
+    end
+    ret last == 58
+end
+
 func scan_ident(L &: Lx):
     start := L.pos
     b := lx_pos(L)
@@ -134,6 +177,9 @@ func scan_ident(L &: Lx):
     mut raw := lex_intern(L, start)
     mut k := lp.LookupKeywordIn(L.pack, raw, lx_at_value_end(L))
     if k == tok.TK_KW_INPUT and input_starts_name(L):
+        k = tok.TK_IDENT
+    end
+    if k == tok.TK_KW_LAYOUT and lp.IsSoftLayout(L.pack, raw) and not soft_layout_header(L, start):
         k = tok.TK_IDENT
     end
     e := spaced_keyword_end(L, k, raw)

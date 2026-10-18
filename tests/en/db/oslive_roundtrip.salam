@@ -1,0 +1,282 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db
+import db.opensearch
+
+const IDX := "oslive_items"
+const IDX2 := "oslive_items_copy"
+const VEC := "oslive_vectors"
+const MAPPING := `{"settings":{"number_of_shards":1,"number_of_replicas":0},"mappings":{"properties":{"title":{"type":"text"},"tag":{"type":"keyword"},"n":{"type":"integer"},"w":{"type":"double"}}}}`
+
+func doc(i: int): str:
+    tags := "abcd"
+    ret `{"title":"item number ` + str.FromInt(i as i64) + `","tag":"` + tags.substr(i % 4, 1) + `","n":` + str.FromInt(i as i64) + `,"w":` + str.FromInt((i % 10) as i64) + `.5}`
+end
+
+func strs(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    if b.len() > 0: v.push(b) end
+    ret v
+end
+
+func client(): opensearch.Client:
+    parts := str.Fields(os.Env("SALAM_TEST_OPENSEARCH"))
+    mut cfg := opensearch.Config {}
+    if parts.len() > 0: cfg.nodes.push(parts.get(0)) end
+    if parts.len() > 2:
+        cfg.username = parts.get(1)
+        cfg.password = parts.get(2)
+    end
+    if parts.len() > 3: cfg.insecure = parts.get(3) == "insecure" end
+    ret opensearch.NewClient(cfg)
+end
+
+func documents(c: opensearch.Client):
+    w := opensearch.IndexWith(c, IDX, "fa-1", `{"title":"سلام دنیا، این یک آزمایش است","tag":"fa","n":-1,"w":0.25}`, opensearch.Options { refresh = opensearch.REFRESH_WAIT_FOR })
+    println "index:", w.ok, w.result, w.id, w.version
+    d := opensearch.Get(c, IDX, "fa-1")
+    println "get:", d.found, d.source
+    println "source:", opensearch.GetSource(c, IDX, "fa-1")
+    println "exists:", opensearch.Exists(c, IDX, "fa-1"), opensearch.Exists(c, IDX, "nope")
+    miss := opensearch.Get(c, IDX, "nope")
+    println "missing:", miss.found, miss.error.len()
+    dup := opensearch.Create(c, IDX, "fa-1", `{"title":"x"}`)
+    println "create twice:", dup.ok, dup.status, opensearch.ErrorType(c)
+    u := opensearch.UpdateWith(c, IDX, "fa-1", `{"doc":{"n":-2}}`, opensearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    println "cas update:", u.ok, u.result, u.version
+    stale := opensearch.UpdateWith(c, IDX, "fa-1", `{"doc":{"n":-3}}`, opensearch.Options { if_seq_no = d.seq_no, if_primary_term = d.primary_term })
+    println "stale update:", stale.ok, stale.status, opensearch.ErrorType(c)
+    sc := opensearch.UpdateScript(c, IDX, "fa-1", opensearch.Script("ctx._source.n += params.k", `{"k":10}`), "")
+    println "script:", sc.ok, sc.result
+    up := opensearch.Upsert(c, IDX, "fa-2", `{"title":"upserted","tag":"fa","n":0,"w":0.0}`)
+    println "upsert:", up.ok, up.result
+    println "after script:", opensearch.Get(c, IDX, "fa-1").source
+    dl := opensearch.DeleteWith(c, IDX, "fa-2", opensearch.Options { refresh = opensearch.REFRESH_TRUE })
+    println "delete:", dl.ok, dl.result
+    gone := opensearch.Delete(c, IDX, "fa-2")
+    println "delete again:", gone.ok, gone.status, gone.result
+    mg := opensearch.MGet(c, IDX, strs("fa-1", "fa-2"))
+    println "mget:", mg.len(), mg.get(0).found, mg.get(1).found
+end
+
+func bulk(c: opensearch.Client):
+    mut b := opensearch.NewBulk()
+    repeat 500 in i:
+        opensearch.BulkIndex(b, IDX, "d" + str.FromInt(i as i64), doc(i))
+    end
+    opensearch.BulkCreate(b, IDX, "d0", doc(0))
+    br := opensearch.BulkSendWith(c, b, opensearch.REFRESH_TRUE)
+    println "bulk:", br.ok, br.errors, br.succeeded, br.failed, br.items.len()
+    println "bulk error:", br.error
+    last := br.items.get(br.items.len() - 1)
+    println "bulk conflict:", last.action, last.status, last.error_type
+    opensearch.BulkFree(b)
+    println "count:", opensearch.Count(c, IDX, ""), opensearch.Count(c, IDX, opensearch.Term("tag", "a"))
+end
+
+func search(c: opensearch.Client):
+    mut q := opensearch.BoolQuery {}
+    q.filter.push(opensearch.Term("tag", "b"))
+    q.filter.push(opensearch.RangeInt("n", 10, 40))
+    q.must_not.push(opensearch.TermInt("n", 13))
+    mut req := opensearch.SearchRequest { query = opensearch.BoolOf(q), size = 3 }
+    req.sort.push(opensearch.SortDesc("n"))
+    req.source.push("n")
+    req.aggs = opensearch.AddAgg(opensearch.AddAgg("{}", "avg_n", opensearch.AvgAgg("n")), "tags", opensearch.TermsAgg("tag", 5))
+    r := opensearch.SearchWith(c, IDX, req)
+    println "search:", r.ok, r.total, r.total_relation, r.hits.len()
+    each h in r.hits:
+        println "  hit:", h.id, h.source
+    end
+    println "avg:", opensearch.AggValue(r.aggregations, "avg_n")
+    each b in opensearch.Buckets(r.aggregations, "tags"):
+        println "  bucket:", b.key, b.doc_count
+    end
+    m := opensearch.Search(c, IDX, opensearch.Match("title", "سلام"))
+    println "persian match:", m.total, m.hits.get(0).id
+    mut hreq := opensearch.SearchRequest { query = opensearch.MatchPhrase("title", "item number 42") }
+    hreq.highlight = opensearch.Highlight(strs("title", ""))
+    hl := opensearch.SearchWith(c, IDX, hreq)
+    println "highlight:", hl.hits.get(0).highlight
+    bad := opensearch.SearchRaw(c, IDX, `{"query":{"nope":{}}}`)
+    println "bad query:", bad.ok, bad.status, opensearch.ErrorType(c)
+    ms := opensearch.MSearch(c, IDX, strs(`{"query":{"term":{"tag":"c"}},"size":0}`, `{"query":{"match_all":{}},"size":0}`))
+    println "msearch:", ms.len(), ms.get(0).total, ms.get(1).total
+    println "validate:", opensearch.Validate(c, IDX, opensearch.MatchAll()), opensearch.Validate(c, IDX, `{"nope":{}}`)
+end
+
+func paging(c: opensearch.Client):
+    mut req := opensearch.SearchRequest { query = opensearch.MatchAll(), size = 200 }
+    req.sort.push(opensearch.SortAsc("n"))
+    mut page := opensearch.SearchScroll(c, IDX, req, "1m")
+    mut seen := page.hits.len()
+    until page.hits.len() > 0:
+        page = opensearch.Scroll(c, page.scroll_id, "1m")
+        seen += page.hits.len()
+    end
+    println "scroll:", seen, opensearch.ClearScroll(c, page.scroll_id)
+    pit := opensearch.CreatePit(c, IDX, "1m")
+    println "pit:", pit.len() > 0, opensearch.ListPits(c).len() >= 1
+    mut preq := opensearch.SearchRequest { query = opensearch.Term("tag", "d"), size = 50, pit_id = pit, pit_keep_alive = "1m" }
+    preq.sort.push(opensearch.SortAsc("n"))
+    mut total := 0
+    mut pp := opensearch.SearchWith(c, "", preq)
+    until pp.hits.len() > 0:
+        total += pp.hits.len()
+        preq.search_after = pp.hits.get(pp.hits.len() - 1).sort
+        pp = opensearch.SearchWith(c, "", preq)
+    end
+    println "pit pages:", total, opensearch.DeletePit(c, pit)
+end
+
+func writes(c: opensearch.Client):
+    ub := opensearch.UpdateByQueryWith(c, IDX, opensearch.Term("tag", "a"), opensearch.Script("ctx._source.w = 9.0", ""), opensearch.Options { refresh = "true" })
+    println "update by query:", ub.ok, ub.updated
+    println "after:", opensearch.Count(c, IDX, opensearch.RangeNum("w", 9.0, 9.0))
+    rx := opensearch.Reindex(c, IDX, IDX2)
+    println "reindex:", rx.ok, rx.created
+    dq := opensearch.DeleteByQueryWith(c, IDX2, opensearch.Range("n", "100", ""), opensearch.Options { refresh = "true" })
+    println "delete by query:", dq.ok, dq.deleted, opensearch.Count(c, IDX2, "")
+end
+
+func sql(c: opensearch.Client):
+    conn := opensearch.Conn(c)
+    println "conn:", conn.Kind(), conn.Ok(), conn.Ping()
+    println "sql count:", db.QueryInt(conn, "SELECT COUNT(*) FROM " + IDX + " WHERE tag = 'c'")
+    rows := conn.Query("SELECT n, tag, w FROM " + IDX + " WHERE n < 3 AND n >= 0 ORDER BY n")
+    println "columns:", rows.ColumnCount(), rows.ColumnName(0), rows.ColumnName(1), rows.ColumnType(2)
+    until rows.Next():
+        println "  row:", rows.Int(0), rows.Text(1), rows.Float(2)
+    end
+    rows.Close()
+    mut paged := opensearch.SqlWith(c, "SELECT n FROM " + IDX + " WHERE tag = 'a' ORDER BY n", Vector {} as Vector<str>, 40)
+    mut n := 0
+    until paged.Next():
+        n += 1
+    end
+    paged.Close()
+    println "sql paged:", n
+    bad := conn.Query("SELECT nope FROM nowhere")
+    println "sql error:", bad.Ok(), conn.Error().len() > 0
+    bad.Close()
+    println "exec read only:", conn.Exec("UPDATE x SET y = 1")
+    ppl := opensearch.Ppl(c, "source=" + IDX + " | where n > 497 | sort n | fields n, tag")
+    until ppl.Next():
+        println "  ppl:", ppl.Int(0), ppl.Text(1)
+    end
+    ppl.Close()
+    println "explain:", opensearch.SqlExplain(c, "SELECT n FROM " + IDX).len() > 0
+end
+
+func knn(c: opensearch.Client):
+    opensearch.DeleteIndexIfExists(c, VEC)
+    mut extra := Vector {} as Vector<str>
+    extra.push(opensearch.Property("label", "keyword"))
+    body := opensearch.KnnIndexBody("v", 3, opensearch.KnnMethod {}, extra)
+    println "knn index:", opensearch.CreateIndex(c, VEC, body)
+    mut b := opensearch.NewBulk()
+    opensearch.BulkIndex(b, VEC, "x", `{"v":[1.0,0.0,0.0],"label":"x"}`)
+    opensearch.BulkIndex(b, VEC, "y", `{"v":[0.0,1.0,0.0],"label":"y"}`)
+    opensearch.BulkIndex(b, VEC, "z", `{"v":[0.0,0.0,1.0],"label":"z"}`)
+    opensearch.BulkIndex(b, VEC, "xy", `{"v":[0.7,0.7,0.0],"label":"x"}`)
+    println "knn bulk:", opensearch.BulkSendWith(c, b, "true").ok
+    opensearch.BulkFree(b)
+    mut v := Vector {} as Vector<f64>
+    v.push(0.9)
+    v.push(0.1)
+    v.push(0.0)
+    mut kreq := opensearch.SearchRequest { query = opensearch.Knn("v", v, 2), size = 2 }
+    kreq.source.push("label")
+    r := opensearch.SearchWith(c, VEC, kreq)
+    println "knn:", r.ok, r.hits.len(), r.hits.get(0).id, r.hits.get(1).id
+    f := opensearch.SearchWith(c, VEC, opensearch.SearchRequest { query = opensearch.KnnFiltered("v", v, 3, opensearch.Term("label", "y")), size = 3 })
+    println "knn filtered:", f.ok, f.hits.len(), f.hits.get(0).id
+    println "knn stats:", opensearch.KnnStats(c).len() > 0
+    println "knn drop:", opensearch.DeleteIndex(c, VEC)
+end
+
+func plugins(c: opensearch.Client):
+    pol := opensearch.DeleteAfterPolicy("oslive delete", "30d", Vector {} as Vector<str>)
+    opensearch.DeletePolicy(c, "oslive_policy")
+    println "ism put:", opensearch.PutPolicy(c, "oslive_policy", pol)
+    println "ism get:", opensearch.JsonPath(opensearch.GetPolicy(c, "oslive_policy"), "policy.default_state")
+    println "ism add:", opensearch.AddPolicy(c, IDX2, "oslive_policy")
+    println "ism remove:", opensearch.RemovePolicy(c, IDX2)
+    println "ism delete:", opensearch.DeletePolicy(c, "oslive_policy")
+    mut procs := Vector {} as Vector<str>
+    procs.push(opensearch.Processor("set", `{"field":"seen","value":true}`))
+    procs.push(opensearch.Processor("uppercase", `{"field":"tag"}`))
+    println "pipeline:", opensearch.PutPipeline(c, "oslive_pipe", opensearch.Pipeline("oslive", procs))
+    sim := opensearch.SimulatePipeline(c, "oslive_pipe", strs(`{"tag":"abc"}`, ""))
+    println "simulate:", sim.get(0)
+    pw := opensearch.IndexWith(c, IDX2, "piped", `{"tag":"zz","n":7}`, opensearch.Options { pipeline = "oslive_pipe", refresh = "true" })
+    println "piped:", pw.ok, opensearch.GetSource(c, IDX2, "piped")
+    println "pipeline drop:", opensearch.DeletePipeline(c, "oslive_pipe")
+    sp := `{"request_processors":[{"filter_query":{"query":{"term":{"tag":"b"}}}}]}`
+    println "search pipeline:", opensearch.PutSearchPipeline(c, "oslive_sp", sp)
+    spr := opensearch.SearchParamsWith(c, IDX, `{"size":0}`, opensearch.SearchParams { search_pipeline = "oslive_sp" })
+    println "filtered by pipeline:", spr.total
+    println "search pipeline drop:", opensearch.DeleteSearchPipeline(c, "oslive_sp")
+    println "script:", opensearch.PutScript(c, "oslive_script", "doc['n'].value * 2"), opensearch.GetScript(c, "oslive_script"), opensearch.DeleteScript(c, "oslive_script")
+    println "template:", opensearch.PutSearchTemplate(c, "oslive_tpl", `{"query":{"term":{"tag":"{{t}}"}},"size":0}`)
+    st := opensearch.SearchTemplate(c, IDX, "oslive_tpl", `{"t":"d"}`)
+    println "template search:", st.ok, st.total, opensearch.DeleteScript(c, "oslive_tpl")
+    println "plugins:", opensearch.HasPlugin(c, "opensearch-sql"), opensearch.HasPlugin(c, "opensearch-knn"), opensearch.HasPlugin(c, "nope")
+end
+
+func admin(c: opensearch.Client):
+    println "alias:", opensearch.PutAlias(c, IDX, "oslive_alias"), opensearch.AliasExists(c, "oslive_alias"), opensearch.AliasIndices(c, "oslive_alias")
+    println "swap:", opensearch.SwapAlias(c, "oslive_alias", IDX, IDX2), opensearch.AliasIndices(c, "oslive_alias")
+    println "alias drop:", opensearch.DeleteAlias(c, IDX2, "oslive_alias"), opensearch.AliasExists(c, "oslive_alias")
+    println "settings:", opensearch.PutSettings(c, IDX, `{"index":{"refresh_interval":"2s"}}`), opensearch.GetSetting(c, IDX, "index.refresh_interval")
+    println "mapping:", opensearch.PutMapping(c, IDX, "{" + opensearch.Property("extra", "keyword") + "}"), opensearch.JsonPath(opensearch.GetMapping(c, IDX), IDX + ".mappings.properties.extra.type")
+    println "health:", opensearch.WaitForStatus(c, IDX, "yellow", "30s").ok
+    println "refresh/flush/merge:", opensearch.Refresh(c, IDX), opensearch.Flush(c, IDX), opensearch.ForceMerge(c, IDX, 1)
+    println "analyze:", opensearch.Analyze(c, "", "standard", "Hello Salam World")
+    tpl := opensearch.IndexTemplate(strs("oslive_tpl_*", ""), `{"number_of_replicas":0}`, "{" + opensearch.Property("k", "keyword") + "}", 5)
+    println "index template:", opensearch.PutIndexTemplate(c, "oslive_tpl", tpl), opensearch.IndexTemplateExists(c, "oslive_tpl"), opensearch.DeleteIndexTemplate(c, "oslive_tpl")
+    println "close/open:", opensearch.CloseIndex(c, IDX2), opensearch.OpenIndex(c, IDX2)
+    each ix in opensearch.CatIndices(c, "oslive_*"):
+        println "cat:", ix.index, ix.status, ix.docs_count
+    end
+    t := opensearch.GetTask(c, "nope:1")
+    println "bad task:", t.ok, opensearch.Status(c)
+end
+
+func main:
+    mut c := client()
+    println "ok:", opensearch.Ok(c), opensearch.Ping(c)
+    info := opensearch.GetInfo(c)
+    println "info:", info.ok, info.distribution, info.version.len() > 0, info.cluster_name.len() > 0
+    println "health:", opensearch.ClusterHealth(c).ok
+    opensearch.DeleteIndexIfExists(c, IDX)
+    opensearch.DeleteIndexIfExists(c, IDX2)
+    println "create:", opensearch.CreateIndex(c, IDX, MAPPING), opensearch.IndexExists(c, IDX)
+    println "create again:", opensearch.CreateIndex(c, IDX, MAPPING), opensearch.ErrorType(c)
+    documents(c)
+    bulk(c)
+    search(c)
+    paging(c)
+    writes(c)
+    sql(c)
+    knn(c)
+    plugins(c)
+    admin(c)
+    println "drop:", opensearch.DeleteIndex(c, IDX), opensearch.DeleteIndex(c, IDX2), opensearch.IndexExists(c, IDX)
+    opensearch.Close(c)
+end

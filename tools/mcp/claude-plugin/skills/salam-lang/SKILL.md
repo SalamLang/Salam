@@ -11,13 +11,18 @@ not guessable, so verify with tools rather than assuming.
 
 ## Always do this
 
-1. **Never guess a stdlib API.** Call `salam_stdlib_packages` for what exists,
-   then `salam_stdlib_symbols` for a package's real public declarations.
-   Inventing function names is the most common cause of invalid Salam.
-2. **Check after every edit.** `salam_check` type-checks without codegen and
-   returns exact line/column diagnostics. It is much faster than `salam_build`.
-3. **Look at working code.** `salam_find_examples` searches the shipped test
-   corpus for a real, compiling usage.
+1. **Look the construct up.** `salam_docs` answers "how is X written in Salam"
+   from the full reference (loops, lambdas, structs, generics, error handling,
+   Persian) and explains an error code such as `E085`.
+2. **Never guess a stdlib API.** `salam_stdlib_search` finds a function by what
+   it does across every package; `salam_stdlib_symbols` shows one package's
+   types, fields, methods and functions with exact signatures. Inventing
+   function names is the most common cause of invalid Salam.
+3. **Check after every edit.** `salam_check` type-checks without codegen and
+   returns each diagnostic with its source line, the compiler's help and a hint
+   for syntax borrowed from other languages. Fix the first error first.
+4. **Look at working code.** `salam_find_examples` searches the shipped test
+   corpus for a real, compiling usage, with surrounding lines.
 
 If those tools are not available, the same information is in `std/` (the
 standard library is ordinary Salam source) and `tests/`.
@@ -44,7 +49,8 @@ functions and types (`E084`/`E085`), types must precede all functions
 `include` (`E108`).
 
 **Unused things are errors, not warnings:** unused import `E082`, unused
-variable `E059`, unused function `E066`. Prefix with `_` or remove.
+variable `E059`, unused function `E066`. Remove them; a `_` prefix is only for
+a parameter whose signature is fixed, such as a callback.
 
 **`switch` and `match` are not interchangeable.** `switch`/`ترابرد` is a
 fallthrough **statement** with bare labels (no `case`/`default`) - `break`
@@ -72,7 +78,7 @@ func main:
     mut total := 0             // mutable
     total = Double(x)
     println str.FromInt(total)
-    ret 0                      // optional: main's return value is the exit code
+    ret 0                      // main's return value is the exit code (0 when omitted)
 end
 ```
 
@@ -90,13 +96,16 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
 
 - Check the compiler version with `salam version`. There is no `--version`
   flag; `salam --version` fails with `unknown command '--version'`.
-- `str.Split` can segfault reading its **last** element on gcc-linked builds.
-  Prefer `find`/`substr`.
-- `os.shell.Run` deadlocks when the child writes more than ~64KB.
 - `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
 - Source files are keyed by **filename**, not package: two files named
-  `io.salam` anywhere in one program collide at link time.
+  `io.salam` in one program, or your own `shell.salam` next to
+  `import os.shell`, are rejected with "package name ... is claimed by two
+  different files". Keep every filename unique.
+- `switch` falls through like C: an arm without `break` (or `ret`) runs the
+  next arm too, including `else:`.
+- A side-effect-free endless loop can be deleted by clang on the C backend, so
+  the program segfaults instead of spinning; give a busy-wait a real effect.
 
 ## Multilingual source
 

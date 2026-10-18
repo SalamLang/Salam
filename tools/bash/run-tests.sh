@@ -49,7 +49,8 @@ if [ "${1:-}" = "--worker" ]; then
     wk_repl() {
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" cli --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
+        case "$fabs" in */layout_*.in) rcmd=layout ;; *) rcmd=cli ;; esac
+        got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }
@@ -281,10 +282,22 @@ $extra_out"
 $msgs
 EOF_MSGS
         fi
-        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ]; then
+        msg_present=""
+        nots=$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+        if [ -n "$nots" ]; then
+            while IFS= read -r bad_msg; do
+                [ -n "$bad_msg" ] || continue
+                printf '%s\n' "$out" | grep -qF -- "$bad_msg" && msg_present="$bad_msg"
+            done <<EOF_NOTS
+$nots
+EOF_NOTS
+        fi
+        if [ -n "$code" ] && printf '%s\n' "$out" | grep -qF "$code" && [ -z "$msg_missing" ] && [ -z "$msg_present" ]; then
             echo "PASS $label ($code)"
         else
-            if [ -n "$msg_missing" ]; then
+            if [ -n "$msg_present" ]; then
+                echo "FAIL $label (unexpected '$msg_present')"
+            elif [ -n "$msg_missing" ]; then
                 echo "FAIL $label (want message '$msg_missing')"
             else
                 echo "FAIL $label (want $code)"
@@ -762,6 +775,54 @@ if want db; then
                 pglive_*)
                     if [ -z "${SALAM_TEST_PG:-}" ]; then
                         note_result "SKIP db/$lang/$name (set SALAM_TEST_PG to a PostgreSQL connection string)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                tslive_*)
+                    if [ -z "${SALAM_TEST_TYPESENSE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_TYPESENSE to \"url api-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                oslivesec_*)
+                    if [ -z "${SALAM_TEST_OPENSEARCH_SECURE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH_SECURE to \"https-url admin password\" for a server with the security plugin)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                eslive_secure*)
+                    if [ -z "${SALAM_TEST_ES_SECURE:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_ES_SECURE to \"url user password ca_file\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                eslive_*)
+                    if [ -z "${SALAM_TEST_ES:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_ES to an Elasticsearch URL)" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                meililive_*)
+                    if [ -z "${SALAM_TEST_MEILI:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_MEILI to \"url master-key\")" "db/$lang/$name"
+                    else
+                        add_job build "db/$lang/$name" "$f" "$lang" "$exp"
+                    fi
+                    continue
+                    ;;
+                oslive_*)
+                    if [ -z "${SALAM_TEST_OPENSEARCH:-}" ]; then
+                        note_result "SKIP db/$lang/$name (set SALAM_TEST_OPENSEARCH to \"url [user password [insecure]]\")" "db/$lang/$name"
                     else
                         add_job build "db/$lang/$name" "$f" "$lang" "$exp"
                     fi

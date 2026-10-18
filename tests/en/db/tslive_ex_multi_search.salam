@@ -1,0 +1,75 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import db.typesense
+
+func make(c: typesense.Client, name: str, field: str, values: Vector<str>, err &: typesense.Error):
+    _ := typesense.DeleteCollection(c, name, err)
+    mut s := typesense.Schema { name = name }
+    s.fields.push(typesense.NewField(field, typesense.TYPE_STRING))
+    _ := typesense.CreateCollection(c, s, err)
+    mut docs := Vector {} as Vector<str>
+    each v in values:
+        docs.push(`{"` + field + `": "` + v + `"}`)
+    end
+    _ := typesense.ImportDocuments(c, name, docs, typesense.WriteOptions {}, err)
+end
+
+func main:
+    parts := os.Env("SALAM_TEST_TYPESENSE").split(" ")
+    mut c := typesense.New(parts.get(0), parts.get(1))
+    defer typesense.Free(c)
+    mut err := typesense.Error {}
+    mut books := Vector {} as Vector<str>
+    books.push("The Silent Sea")
+    books.push("Sea of Stars")
+    books.push("Mountain Song")
+    make(c, "ex_multi_books", "title", books, err)
+    mut films := Vector {} as Vector<str>
+    films.push("Sea Wolf")
+    films.push("Desert Wind")
+    make(c, "ex_multi_films", "title", films, err)
+
+    mut reqs := Vector {} as Vector<typesense.SearchRequest>
+    reqs.push(typesense.SearchRequest { collection = "ex_multi_books", params = typesense.NewSearch("sea", "") })
+    reqs.push(typesense.SearchRequest { collection = "ex_multi_films", params = typesense.NewSearch("sea", "") })
+    reqs.push(typesense.SearchRequest { collection = "ex_multi_missing", params = typesense.NewSearch("sea", "") })
+    mut common := typesense.NewSearch("", "title")
+    common.per_page = 5
+    results := typesense.MultiSearch(c, reqs, common, err)
+    println "searches:", results.len(), "request ok:", typesense.Ok(err)
+    each m in results:
+        if m.code != 0:
+            println "  failed:", m.code, m.error
+        else:
+            println "  found:", m.found
+        end
+    end
+
+    reqs.remove_at(2)
+    u := typesense.UnionSearch(c, reqs, common, err)
+    println "union:", u.found, "hits in one list"
+    each h in u.hits:
+        println "  ", h.collection, "search", h.search_index, h.document
+    end
+
+    mut long := typesense.NewSearch("*", "")
+    long.filter_by = "title:[" + str.Repeat("Nothing Like This,", 300) + "Mountain Song]"
+    println "query string bytes:", typesense.SearchQuery(long).len() > typesense.MAX_GET_QUERY
+    println "long query still works:", typesense.Search(c, "ex_multi_books", long, err).found
+    _ := typesense.DeleteCollection(c, "ex_multi_books", err)
+    _ := typesense.DeleteCollection(c, "ex_multi_films", err)
+end

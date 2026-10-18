@@ -46,13 +46,95 @@ func origin_desc(): str:
     ret dirty ? "built from source (local build, uncommitted changes)" : "built from source (local build)"
 end
 
+func edit_distance(a: str, b: str): int:
+    la := str.Len(a)
+    lb := str.Len(b)
+    mut prev := Vector {} as Vector<int>
+    repeat lb + 1 in j:
+        prev.push(j)
+    end
+    mut i := 1
+    until i <= la:
+        mut cur := Vector {} as Vector<int>
+        cur.push(i)
+        mut k := 1
+        until k <= lb:
+            mut cost := 1
+            if co.ByteAt(a, i - 1) == co.ByteAt(b, k - 1):
+                cost = 0
+            end
+            mut best := prev.get(k) + 1
+            if cur.get(k - 1) + 1 < best:
+                best = cur.get(k - 1) + 1
+            end
+            if prev.get(k - 1) + cost < best:
+                best = prev.get(k - 1) + cost
+            end
+            cur.push(best)
+            k += 1
+        end
+        prev.free()
+        prev = cur
+        i += 1
+    end
+    d := prev.get(lb)
+    prev.free()
+    ret d
+end
+
+pub func NearestCommand(word: str): str:
+    if str.EndsWith(word, ".salam"):
+        ret "run " + word
+    end
+    if str.StartsWith(word, "-"):
+        w := str.TrimPrefix(str.TrimPrefix(word, "-"), "-")
+        if str.Equals(w, "version") or str.Equals(w, "v"):
+            ret "version"
+        end
+        if str.Equals(w, "help") or str.Equals(w, "h"):
+            ret "help"
+        end
+        ret ""
+    end
+    names := ["build", "check", "run", "exec", "obj", "llvm", "js", "web", "serve", "new", "format", "doc", "translate", "layout", "debug", "memcheck", "inspect", "cli", "update", "help", "version"]
+    mut best := ""
+    mut best_d := 3
+    repeat names.len() in i:
+        d := edit_distance(word, names[i])
+        if d < best_d:
+            best_d = d
+            best = names[i]
+        end
+    end
+    if str.Equals(word, "compile") or str.Equals(word, "make"):
+        ret "build"
+    end
+    if str.Equals(word, "test") or str.Equals(word, "lint") or str.Equals(word, "typecheck") or str.Equals(word, "verify"):
+        ret "check"
+    end
+    if str.Equals(word, "fmt"):
+        ret "format"
+    end
+    if str.Equals(word, "selfupdate") or str.Equals(word, "self_update") or str.Equals(word, "install"):
+        ret "update"
+    end
+    if str.Equals(word, "repl") or str.Equals(word, "shell"):
+        ret "cli"
+    end
+    ret best
+end
+
 pub func ParseArgs(args: Vector<str>, out &: dr.Dr): bool:
     out = dr.NewOptions()
     start := dispatch_command(args, out)
     if out.command == dr.CMD_UNKNOWN:
-        io.EPrintln(co.Format1(i18.Tr("salam: unknown command '%s'"), co.ArgStr(args.get(1))))
-        io.EPrintln("")
-        io.EPrint(UsageText())
+        bad := args.get(1)
+        io.EPrintln(co.Format1(i18.Tr("salam: unknown command '%s'"), co.ArgStr(bad)))
+        near := NearestCommand(bad)
+        if str.Len(near) > 0:
+            io.EPrintln(co.Format1(i18.Tr("did you mean 'salam %s'?"), co.ArgStr(near)))
+        end
+        io.EPrintln(i18.Tr("run 'salam help' to see every command"))
         ret false
     end
     if not parse_options(args, start, out):
@@ -73,6 +155,8 @@ Usage:
 Commands:
   build    [files|dir] [build options]          Compile to an executable (cross-compile with --target); no
                                                 input builds the project here (entry file: salam.salam)
+  check    [file.salam|dir]                     Lex, parse and type-check without building; the fast way
+                                                to find errors (exit 1 when there are any)
   obj      <files...> [build options]           Compile to an object file (cross-compile with --target)
   llvm     <file.salam> [--output=FILE]         Emit LLVM IR (.ll) for the LLVM/wasm backend
   js       <files...> [--output=FILE]           Compile to browser-ready JavaScript (.js, or a
@@ -102,6 +186,8 @@ Commands:
   cli                                           Start the general REPL
   layout                                        Start the layout REPL
   help                                          Show this help
+  update   [X.Y.Z] [--check] [--force]          Upgrade salam, its standard library and bundled tools to
+                                                the newest release (or X.Y.Z); --check only reports
   version  [--short]                            Show version, git commit, and build date (--short: just the version number)
 
 Build options:
@@ -170,6 +256,17 @@ Serve options (salam serve [dir]):
   --port=N                 Port to listen on (default: 8000)
   --host=HOST              Address to bind: 127.0.0.1 (default), 0.0.0.0 (all
                            interfaces), localhost, or any resolvable host/IP
+
+Update options (salam update [X.Y.Z]):
+  --check                  Only report whether a newer release exists
+  --force                  Reinstall even when already up to date, or replace a
+                           copy that a package manager installed
+  X.Y.Z, --version=X.Y.Z   Install that release instead of the newest one
+                           (this can also move back to an older release)
+  The official installer (install.sh, or install.ps1 on Windows) replaces the
+  compiler, std/ and any bundled tools together, in the directory this salam
+  runs from. SALAM_INSTALLER names a local installer script to use instead of
+  downloading one; GITHUB_TOKEN lifts GitHub's API rate limit.
 
 LLVM backend options (salam llvm <file>):
   -O0|-O1|-O2|-O3|-Os|-Oz   Optimization level (default -O0 here, since
@@ -334,6 +431,10 @@ pub func RunCommand(args: Vector<str>): int:
         text := VersionText(opt.version_short)
         print text
         ret 0
+    end
+    if opt.command == dr.CMD_UPDATE:
+        r_up := update_cmd(opt)
+        ret r_up
     end
     if opt.command == dr.CMD_NEW:
         r_new := new_project(opt)

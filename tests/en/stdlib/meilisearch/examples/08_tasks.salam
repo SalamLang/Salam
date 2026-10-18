@@ -1,0 +1,65 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+
+include fake "../_fake.salam"
+
+const PORT := 19827
+
+func main:
+    fake.On("GET", "/tasks/40", 200, `{"uid":40,"indexUid":"movies","status":"processing","type":"documentAdditionOrUpdate"}`)
+    fake.On("GET", "/tasks/40", 200, `{"uid":40,"batchUid":7,"indexUid":"movies","status":"succeeded","type":"documentAdditionOrUpdate","duration":"PT0.120S","details":{"indexedDocuments":1000}}`)
+    fake.On("GET", "/tasks/41", 200, `{"uid":41,"indexUid":"movies","status":"failed","type":"settingsUpdate","error":{"message":"Attribute ` + "`rating`" + ` is not filterable.","code":"invalid_search_filter","type":"invalid_request","link":"https://docs.meilisearch.com/errors#invalid_search_filter"}}`)
+    fake.On("GET", "/tasks", 200, `{"results":[{"uid":41,"indexUid":"movies","status":"failed","type":"settingsUpdate"},{"uid":40,"indexUid":"movies","status":"succeeded","type":"documentAdditionOrUpdate"}],"total":2,"limit":20,"from":41,"next":null}`)
+    fake.On("POST", "/tasks/cancel", 200, `{"taskUid":42,"indexUid":null,"status":"enqueued","type":"taskCancelation"}`)
+    fake.On("DELETE", "/tasks", 200, `{"taskUid":43,"indexUid":null,"status":"enqueued","type":"taskDeletion"}`)
+    fake.On("GET", "/batches/7", 200, `{"uid":7,"stats":{"totalNbTasks":1,"status":{"succeeded":1}},"duration":"PT0.121S","batchStrategy":"batched all enqueued tasks"}`)
+    if not fake.Start(PORT):
+        println "the example server did not start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    done := meilisearch.WaitForTask(c, 40, 10000, 10, err)
+    println "task 40: " + done.status + " in " + done.duration + " " + done.details
+
+    failed := meilisearch.WaitForTask(c, 41, 10000, 10, err)
+    println "task 41: " + failed.status
+    if not meilisearch.Ok(err):
+        println "error: " + err.code + ": " + err.message
+    end
+
+    mut q := meilisearch.TaskQuery { limit = 20 }
+    q.index_uids.push("movies")
+    q.statuses.push(meilisearch.STATUS_SUCCEEDED)
+    q.statuses.push(meilisearch.STATUS_FAILED)
+    page := meilisearch.GetTasks(c, q, err)
+    println "tasks: " + page.total
+    each task in page.results:
+        println "  " + task.uid + " " + task.kind + " " + task.status
+    end
+
+    mut pending := meilisearch.TaskQuery {}
+    pending.statuses.push(meilisearch.STATUS_ENQUEUED)
+    println "cancel: " + meilisearch.CancelTasks(c, pending, err).kind
+    mut old := meilisearch.TaskQuery { before_finished_at = "2026-01-01T00:00:00Z" }
+    old.statuses.push(meilisearch.STATUS_SUCCEEDED)
+    println "clean up: " + meilisearch.DeleteTasks(c, old, err).kind
+
+    batch := meilisearch.GetBatch(c, done.batch_uid, err)
+    println "batch " + batch.uid + ": " + batch.batch_strategy
+    ret 0
+end

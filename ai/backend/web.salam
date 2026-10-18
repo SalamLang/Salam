@@ -1,0 +1,196 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiweb
+
+import net.http
+import encoding
+import encoding.json
+import crypto
+import conv
+import str
+
+include aistore "store.salam"
+
+mut ORIGINS := ","
+mut ADMINS := ","
+mut ADMIN_IDS := ","
+mut SECRET := ""
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+pub func Configure(origins: str, admins: str, admin_ids: str, secret: str):
+    ORIGINS = "," + str.Replace(origins, " ", "") + ","
+    ADMINS = "," + str.Lower(str.Replace(admins, " ", "")) + ","
+    ADMIN_IDS = "," + str.Replace(admin_ids, " ", "") + ","
+    SECRET = secret
+end
+
+pub func AllowedOrigin(origin: str): bool:
+    ret origin.len() > 0 and ORIGINS.find("," + origin + ",") >= 0
+end
+
+pub func ReservedEmail(email: str): bool:
+    ret email.len() > 0 and ADMINS.find("," + str.Lower(email) + ",") >= 0
+end
+
+pub func IsAdmin(uid: str, email: str): bool:
+    if uid.len() > 0 and ADMIN_IDS.find("," + uid + ",") >= 0:
+        ret true
+    end
+    ret ReservedEmail(email)
+end
+
+pub func Cors(ctx: i64):
+    origin := http.Ctx_header(ctx, "Origin")
+    if AllowedOrigin(origin):
+        http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", origin)
+        http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type")
+        http.Ctx_set_header(ctx, "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        http.Ctx_set_header(ctx, "Access-Control-Max-Age", "86400")
+    end
+    http.Ctx_set_header(ctx, "Vary", "Origin")
+    http.Ctx_set_header(ctx, "Cache-Control", "no-store")
+    http.Ctx_set_header(ctx, "X-Content-Type-Options", "nosniff")
+end
+
+pub func OpenCors(ctx: i64):
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version")
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    http.Ctx_set_header(ctx, "Access-Control-Max-Age", "86400")
+    http.Ctx_set_header(ctx, "Cache-Control", "no-store")
+    http.Ctx_set_header(ctx, "Pragma", "no-cache")
+    http.Ctx_set_header(ctx, "X-Content-Type-Options", "nosniff")
+end
+
+pub func Reply(ctx: i64, status: int, body: str):
+    Cors(ctx)
+    http.Ctx_status(ctx, status)
+    http.Ctx_json(ctx, body)
+end
+
+pub func Fail(ctx: i64, status: int, code: str, message: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("error", code))
+    m.push(json.Member("message", message))
+    Reply(ctx, status, json.Object(m))
+end
+
+pub func Preflight(ctx: i64):
+    Cors(ctx)
+    http.Ctx_status(ctx, 204)
+    http.Ctx_text(ctx, "")
+end
+
+pub func OpenPreflight(ctx: i64):
+    OpenCors(ctx)
+    http.Ctx_status(ctx, 204)
+    http.Ctx_text(ctx, "")
+end
+
+pub func I64s(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+pub func Hash(token: str): str:
+    ret crypto.Sha256Hex(token)
+end
+
+pub func ClientIp(ctx: i64): str:
+    cf := http.Ctx_header(ctx, "CF-Connecting-IP")
+    if cf.len() > 0:
+        ret cf
+    end
+    real := http.Ctx_header(ctx, "X-Real-IP")
+    if real.len() > 0:
+        ret real
+    end
+    fwd := http.Ctx_header(ctx, "X-Forwarded-For")
+    comma := fwd.find(",")
+    if comma >= 0:
+        ret str.Trim(fwd.substr(0, comma))
+    end
+    ret fwd
+end
+
+pub func Bearer(ctx: i64): str:
+    h := http.Ctx_header(ctx, "Authorization")
+    if str.StartsWith(h, "Bearer "):
+        ret str.Trim(h.substr(7, h.len() - 7))
+    end
+    ret ""
+end
+
+pub func UserFromToken(token: str): i64:
+    if token.len() < 20:
+        ret 0
+    end
+    aistore.Lock()
+    id := aistore.OneText("SELECT user_id FROM sessions WHERE token = ?1 AND expires > ?2", two(Hash(token), I64s(aistore.Now())))
+    aistore.Unlock()
+    if id.len() == 0:
+        ret 0
+    end
+    ret id.to_int()
+end
+
+pub func NeedUser(ctx: i64): i64:
+    uid := UserFromToken(Bearer(ctx))
+    if uid == 0:
+        Fail(ctx, 401, "unauthorized", "لطفا دوباره وارد شوید.")
+    end
+    ret uid
+end
+
+pub func UserEmail(uid: i64): str:
+    aistore.Lock()
+    email := aistore.OneText("SELECT email FROM users WHERE id = ?1", one(I64s(uid)))
+    aistore.Unlock()
+    ret email
+end
+
+pub func NeedAdmin(ctx: i64): i64:
+    uid := NeedUser(ctx)
+    if uid == 0:
+        ret 0
+    end
+    if not IsAdmin(I64s(uid), UserEmail(uid)):
+        Fail(ctx, 403, "forbidden", "این بخش فقط برای مدیران است.")
+        ret 0
+    end
+    ret uid
+end
+
+pub func ServiceCaller(ctx: i64): bool:
+    if SECRET.len() < 16:
+        ret false
+    end
+    h := http.Ctx_header(ctx, "Authorization")
+    if not str.StartsWith(h, "Basic "):
+        ret false
+    end
+    decoded := encoding.Base64Decode(str.Trim(h.substr(6, h.len() - 6)))
+    ret crypto.SecretEquals(decoded, "salam-mcp:" + SECRET)
+end

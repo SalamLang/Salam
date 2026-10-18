@@ -185,8 +185,11 @@ salam layout build page.salam                  # page.html + page.css + page.js
 salam layout build page.salam --inline         # one self-contained page.html
 salam layout build a.salam b.salam             # per-page html + merged style.css/script.js
 
+# type-check without building (exit 1 on errors; --error-format=json for tools)
+salam check app.salam
+
 # inspect any stage (general or layout)
-salam inspect app.salam --emit-tokens-xml | --emit-ast-xml | --emit-symbol-xml
+salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol
 salam inspect app.salam --log-level=trace
 salam build app.salam -DDEBUG                  # preprocessor define
 

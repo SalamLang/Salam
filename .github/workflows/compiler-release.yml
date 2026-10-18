@@ -74,6 +74,31 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      typesense:
+        image: typesense/typesense:30.2
+        ports:
+          - 8108:8108
+        env:
+          TYPESENSE_API_KEY: salam-ci-typesense-key
+          TYPESENSE_DATA_DIR: /tmp
+          TYPESENSE_ANALYTICS_MINUTE_RATE_LIMIT: '1000'
+        options: >-
+          --health-cmd "bash -c 'echo > /dev/tcp/127.0.0.1/8108'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      meilisearch:
+        image: getmeili/meilisearch:v1.55.0
+        ports:
+          - 7700:7700
+        env:
+          MEILI_MASTER_KEY: salam-ci-meili-master-key
+          MEILI_NO_ANALYTICS: 'true'
+        options: >-
+          --health-cmd "wget -qO- http://127.0.0.1:7700/health || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -348,6 +373,28 @@ jobs:
           if sudo systemctl start postgresql && sudo -u postgres psql -qc "ALTER USER postgres PASSWORD 'postgres'"; then
             export SALAM_TEST_PG="host=localhost user=postgres password=postgres dbname=postgres"
           fi
+          if curl -sf http://127.0.0.1:8108/health >/dev/null; then
+            export SALAM_TEST_TYPESENSE="http://127.0.0.1:8108 salam-ci-typesense-key"
+          fi
+          if docker run -d --name salam-es -p 127.0.0.1:9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e path.repo=/tmp \
+              -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            && timeout 180 sh -c 'until curl -sf "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_ES="http://127.0.0.1:9200"
+          fi
+          if docker run -d --name salam-es-secure -p 127.0.0.1:9202:9202 -e discovery.type=single-node -e http.port=9202 \
+              -e ELASTIC_PASSWORD=salam-ci-es-password -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.15.3 \
+            && timeout 180 sh -c 'until curl -sfk -u elastic:salam-ci-es-password "https://127.0.0.1:9202/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done' \
+            && docker cp salam-es-secure:/usr/share/elasticsearch/config/certs/http_ca.crt /tmp/es_http_ca.crt; then
+            export SALAM_TEST_ES_SECURE="https://localhost:9202 elastic salam-ci-es-password /tmp/es_http_ca.crt"
+          fi
+          if curl -sf http://127.0.0.1:7700/health >/dev/null; then
+            export SALAM_TEST_MEILI="http://127.0.0.1:7700 salam-ci-meili-master-key"
+          fi
+          if docker run -d --name salam-opensearch -p 127.0.0.1:9201:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true \
+              -e DISABLE_INSTALL_DEMO_CONFIG=true -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" opensearchproject/opensearch:2.17.1 \
+            && timeout 240 sh -c 'until curl -sf "http://127.0.0.1:9201/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do sleep 3; done'; then
+            export SALAM_TEST_OPENSEARCH="http://127.0.0.1:9201"
+          fi
           SALAM_TEST_PORT=1 SALAM="$GITHUB_WORKSPACE/salam" sh tools/bash/run-tests.sh 2>&1 | tee /tmp/tests.log || true
           grep -qE 'RESULT: [0-9]+ passed, 0 failed' /tmp/tests.log \
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
@@ -423,14 +470,14 @@ jobs:
           tar -czf "salam-${VERSION}-linux-x86_64.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-x86_64.zip" "salam-${VERSION}-linux-x86_64.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-zip
           path: |
             salam-*-linux-x86_64.zip
             salam-*-linux-x86_64.tar.gz
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux
           path: salam
@@ -504,7 +551,7 @@ jobs:
           tar -czf "salam-${VERSION}-linux-x86_64-musl.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-x86_64-musl.zip" "salam-${VERSION}-linux-x86_64-musl.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-musl-zip
           path: |
@@ -668,14 +715,14 @@ jobs:
           tar -czf "salam-${VERSION}-macos-arm64.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-macos-arm64.zip" "salam-${VERSION}-macos-arm64.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-macos-zip
           path: |
             salam-*-macos-arm64.zip
             salam-*-macos-arm64.tar.gz
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-macos
           path: salam
@@ -1188,7 +1235,7 @@ jobs:
 
       - name: Upload self-contained bundle
         if: matrix.primary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-windows-bundle
           path: |
@@ -1197,7 +1244,7 @@ jobs:
 
       - name: Upload salam.exe
         if: matrix.primary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-windows
           path: salam.exe
@@ -1290,7 +1337,7 @@ jobs:
             ccache-win-i686-v3-
 
       - name: Use this run's Linux salam as the cross-compiler
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux
           path: /tmp/host-salam
@@ -1468,7 +1515,7 @@ jobs:
           ls -la "salam-${VERSION}-windows-i686.zip" "salam-${VERSION}-windows-i686.tar.gz"
 
       - name: Upload 32-bit Windows bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-windows-i686-bundle
           path: |
@@ -1476,7 +1523,7 @@ jobs:
             salam-*-windows-i686.tar.gz
 
       - name: Upload 32-bit salam.exe
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-windows-i686
           path: salam.exe
@@ -1593,14 +1640,14 @@ jobs:
           tar -czf "salam-${VERSION}-linux-i686.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-i686.zip" "salam-${VERSION}-linux-i686.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-i686-zip
           path: |
             salam-*-linux-i686.zip
             salam-*-linux-i686.tar.gz
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-i686
           path: salam
@@ -1729,14 +1776,14 @@ jobs:
           tar -czf "salam-${VERSION}-linux-armhf.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-armhf.zip" "salam-${VERSION}-linux-armhf.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-armhf-zip
           path: |
             salam-*-linux-armhf.zip
             salam-*-linux-armhf.tar.gz
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-armhf
           path: salam
@@ -1919,14 +1966,14 @@ jobs:
           tar -czf "salam-${VERSION}-linux-aarch64.tar.gz" "$DIST"
           ls -la "salam-${VERSION}-linux-aarch64.zip" "salam-${VERSION}-linux-aarch64.tar.gz"
       - name: Upload versioned archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-aarch64-zip
           path: |
             salam-*-linux-aarch64.zip
             salam-*-linux-aarch64.tar.gz
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: salam-linux-aarch64
           path: salam
@@ -2009,7 +2056,7 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
       - name: Download Linux artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux
           path: ./release
@@ -2017,7 +2064,7 @@ jobs:
         run: |
           mv ./release/salam ./release/salam-linux
       - name: Download macOS artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-macos
           path: ./release
@@ -2025,7 +2072,7 @@ jobs:
         run: |
           mv ./release/salam ./release/salam-mac
       - name: Download Windows artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-windows
           path: ./release
@@ -2033,77 +2080,77 @@ jobs:
         run: |
           mv ./release/salam.exe ./release/salam-windows.exe
       - name: Download Windows self-contained bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-windows-bundle
           path: ./release
       - name: Download Linux versioned archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-zip
           path: ./release
       - name: Download macOS versioned archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-macos-zip
           path: ./release
       - name: Download Windows i686 binary
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-windows-i686
           path: ./release-win-i686
       - name: Download Windows i686 bundle
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-windows-i686-bundle
           path: ./release
       - name: Download Linux i686 binary
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-i686
           path: ./release-linux-i686
       - name: Download Linux i686 archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-i686-zip
           path: ./release
       - name: Download Linux aarch64 binary
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-aarch64
           path: ./release-linux-aarch64
       - name: Download Linux aarch64 archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-aarch64-zip
           path: ./release
       - name: Download Linux armhf binary
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-armhf
           path: ./release-linux-armhf
       - name: Download Linux armhf archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-armhf-zip
           path: ./release
       - name: Download the static musl archive
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-linux-musl-zip
           path: ./release
       - name: Download Android AAB + APKs
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-android-release
           path: ./release
@@ -2484,6 +2531,64 @@ jobs:
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
             "${assets[@]}" "${sums[@]}"
+
+  build-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Build Salam Agent
+    permissions:
+      contents: write
+    uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+    with:
+      attach: true
+
+  attach-agent:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'SalamLang/Salam' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    name: Attach Salam Agent to the release
+    needs: [create-release, build-agent]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Download the agent release set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
+      - name: Upload the agent files to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v$VERSION"
+          cd agent-release
+          shopt -s nullglob
+          files=(salam-agent-"$VERSION"-*)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no salam-agent-$VERSION files were built; agent/src-tauri must carry VERSION"; exit 1; }
+          mv SHA256SUMS "salam-agent-$VERSION-SHA256SUMS"
+          mv SHA512SUMS "salam-agent-$VERSION-SHA512SUMS"
+          sha256sum -c "salam-agent-$VERSION-SHA256SUMS"
+          gh release upload "$TAG" --clobber salam-agent-*
+          {
+            echo "### Salam Agent attached to $TAG"
+            echo ""
+            printf -- '- %s\n' salam-agent-*
+          } >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

@@ -1,0 +1,94 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.meilisearch
+import jwt
+import str
+
+include fake "_fake.salam"
+
+const PORT := 19807
+
+func show_key(k: meilisearch.Key):
+    println "  -> " + k.uid + " key=" + k.key + " name=" + k.name + " desc=" + k.description + " expires=[" + k.expires_at + "]"
+    mut acts := ""
+    each a in k.actions:
+        acts = acts + "<" + a + ">"
+    end
+    mut idx := ""
+    each i in k.indexes:
+        idx = idx + "<" + i + ">"
+    end
+    println "     actions=" + acts + " indexes=" + idx + " " + k.created_at + " " + k.updated_at
+end
+
+func main:
+    key_json := `{"name":"Search","description":"Front end","key":"d0552b41","uid":"6062abda-a5aa-4414-ac91-ecd7944c0f8d","actions":["search","documents.get"],"indexes":["movies","books"],"expiresAt":null,"createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-02T00:00:00Z"}`
+    fake.On("POST", "/keys", 201, key_json)
+    fake.On("GET", "/keys/6062abda-a5aa-4414-ac91-ecd7944c0f8d", 200, key_json)
+    fake.On("GET", "/keys", 200, `{"results":[` + key_json + `,{"name":null,"description":null,"key":"aa","uid":"bb","actions":["*"],"indexes":["*"],"expiresAt":"2030-01-01T00:00:00Z","createdAt":"x","updatedAt":"y"}],"offset":0,"limit":2,"total":5}`)
+    fake.On("PATCH", "/keys/d0552b41", 200, key_json)
+    fake.On("DELETE", "/keys/d0552b41", 204, ``)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := meilisearch.New("http://127.0.0.1:" + PORT, "masterKey")
+    mut err := meilisearch.Error {}
+
+    mut req := meilisearch.KeyRequest { name = "Search", description = "Front end" }
+    req.actions.push("search")
+    req.actions.push("documents.get")
+    req.indexes.push("movies")
+    req.indexes.push("books")
+    k := meilisearch.CreateKey(c, req, err)
+    println "create: " + fake.Last()
+    show_key(k)
+
+    mut req2 := meilisearch.KeyRequest { uid = "6062abda-a5aa-4414-ac91-ecd7944c0f8d", expires_at = "2030-01-01T00:00:00Z" }
+    req2.actions.push("*")
+    req2.indexes.push("*")
+    meilisearch.CreateKey(c, req2, err)
+    println "create with uid: " + fake.Last()
+
+    show_key(meilisearch.GetKey(c, "6062abda-a5aa-4414-ac91-ecd7944c0f8d", err))
+    page := meilisearch.GetKeys(c, 0, 2, err)
+    println "keys: " + fake.Last()
+    println "  total=" + page.total + " limit=" + page.limit + " n=" + page.results.len()
+    each item in page.results:
+        show_key(item)
+    end
+    meilisearch.UpdateKey(c, "d0552b41", "Renamed", "New text", err)
+    println "update: " + fake.Last()
+    println "delete: " + meilisearch.DeleteKey(c, "d0552b41", err) + " " + fake.Last()
+    println "delete missing: " + meilisearch.DeleteKey(c, "nope", err) + " " + err.code
+    missing := meilisearch.GetKey(c, "nope", err)
+    println "missing: [" + missing.uid + "] " + err.code
+
+    token := meilisearch.TenantToken("uid-of-the-search-key", "not-a-real-key", `{"movies":{"filter":"user_id = 1"}}`, 4102444800, err)
+    println "token ok: " + meilisearch.Ok(err) + " parts=" + str.Split(token, ".").len()
+    mut code := 0
+    t := jwt.VerifyHS256(token, "not-a-real-key", code)
+    println "verified: " + t.valid + " alg=" + t.alg + " typ=" + t.typ + " uid=" + jwt.Str(t, "apiKeyUid") + " exp=" + jwt.Int(t, "exp")
+    println "rules: " + jwt.Raw(t, "searchRules")
+    println "wrong key: " + jwt.VerifyHS256(token, "another-key", code).valid
+    star := meilisearch.TenantToken("uid-of-the-search-key", "not-a-real-key", "", 0, err)
+    st := jwt.Decode(star, code)
+    println "star rules: " + jwt.Raw(st, "searchRules") + " has exp: " + jwt.Has(st, "exp")
+    meilisearch.TenantToken("uid", "secret", "", 1000, err)
+    println "past: " + err.code + " " + err.message
+    meilisearch.TenantToken("", "secret", "", 0, err)
+    println "no uid: " + err.code
+    ret 0
+end

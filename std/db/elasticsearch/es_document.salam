@@ -1,0 +1,213 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package elasticsearch
+
+import str
+import encoding.json
+
+func _write_result(r: Response): WriteResult:
+    body := r.body
+    ret WriteResult {
+        ok = r.ok,
+        status = r.status,
+        index = json.Get(body, "_index"),
+        id = json.Get(body, "_id"),
+        result = json.Get(body, "result"),
+        version = _i64(json.Get(body, "_version")),
+        seq_no = r.ok ? _i64(json.Get(body, "_seq_no")) : -1,
+        primary_term = _i64(json.Get(body, "_primary_term")),
+        error = r.error
+    }
+end
+
+func _doc_of(raw: str): Document:
+    found := json.Get(raw, "found") == "true"
+    ret Document {
+        found = found,
+        index = json.Get(raw, "_index"),
+        id = json.Get(raw, "_id"),
+        version = _i64(json.Get(raw, "_version")),
+        seq_no = found ? _i64(json.Get(raw, "_seq_no")) : -1,
+        primary_term = _i64(json.Get(raw, "_primary_term")),
+        source = json.Get(raw, "_source"),
+        fields = json.Get(raw, "fields")
+    }
+end
+
+func _doc_path(index: str, kind: str, id: str): str:
+    ret "/" + _idx(index) + "/" + kind + "/" + _seg(id)
+end
+
+func _one_line(doc: str): str:
+    if doc.find("\n") < 0 and doc.find("\r") < 0: ret str.Clone(doc) end
+    ret json.Minify(doc)
+end
+
+func _update_query(o: Options): str:
+    mut q := Vector {} as Vector<str>
+    _opts_query(q, o)
+    if o.retry_on_conflict >= 0: _qadd(q, "retry_on_conflict", str.FromInt(o.retry_on_conflict as i64)) end
+    if o.source.len() > 0: _qadd(q, "_source", o.source) end
+    ret _qs(q)
+end
+
+@en "Index"
+@fa "نمایه کردن"
+pub func Index(c: Client, index: str, id: str, doc: str): WriteResult:
+    ret IndexWith(c, index, id, doc, Options {})
+end
+
+@en "IndexWith"
+@fa "نمایه کردن با گزینه"
+pub func IndexWith(c: Client, index: str, id: str, doc: str, opts: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _opts_query(q, opts)
+    if id.len() == 0:
+        ret _write_result(Perform(c, "POST", "/" + _idx(index) + "/_doc" + _qs(q), doc))
+    end
+    ret _write_result(Perform(c, "PUT", _doc_path(index, "_doc", id) + _qs(q), doc))
+end
+
+@en "Create"
+@fa "ایجاد"
+pub func Create(c: Client, index: str, id: str, doc: str): WriteResult:
+    ret CreateWith(c, index, id, doc, Options {})
+end
+
+@en "CreateWith"
+@fa "ایجاد با گزینه"
+pub func CreateWith(c: Client, index: str, id: str, doc: str, opts: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _opts_query(q, opts)
+    if id.len() == 0:
+        _qadd(q, "op_type", "create")
+        ret _write_result(Perform(c, "POST", "/" + _idx(index) + "/_doc" + _qs(q), doc))
+    end
+    ret _write_result(Perform(c, "PUT", _doc_path(index, "_create", id) + _qs(q), doc))
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(c: Client, index: str, id: str): Document:
+    ret GetWith(c, index, id, Options {})
+end
+
+@en "GetWith"
+@fa "دریافت با گزینه"
+pub func GetWith(c: Client, index: str, id: str, opts: Options): Document:
+    mut q := Vector {} as Vector<str>
+    _qadd(q, "routing", opts.routing)
+    _qadd(q, "_source", opts.source)
+    if opts.refresh == REFRESH_TRUE: _qadd(q, "refresh", "true") end
+    r := Perform(c, "GET", _doc_path(index, "_doc", id) + _qs(q), "")
+    mut d := _doc_of(r.body)
+    if not r.ok and not (r.status == 404 and json.Get(r.body, "found") == "false"):
+        d.error = r.error
+    end
+    ret d
+end
+
+@en "GetSource"
+@fa "دریافت منبع"
+pub func GetSource(c: Client, index: str, id: str): str:
+    r := Perform(c, "GET", _doc_path(index, "_source", id), "")
+    if not r.ok: ret str.Clone("") end
+    ret r.body
+end
+
+@en "Exists"
+@fa "موجود است"
+pub func Exists(c: Client, index: str, id: str): bool:
+    r := Perform(c, "HEAD", _doc_path(index, "_doc", id), "")
+    ret r.status == 200
+end
+
+@en "Update"
+@fa "به‌روزرسانی"
+pub func Update(c: Client, index: str, id: str, partial: str): WriteResult:
+    ret UpdateWith(c, index, id, partial, Options {})
+end
+
+@en "UpdateWith"
+@fa "به‌روزرسانی با گزینه"
+pub func UpdateWith(c: Client, index: str, id: str, partial: str, opts: Options): WriteResult:
+    body := _one("doc", partial)
+    ret _write_result(Perform(c, "POST", _doc_path(index, "_update", id) + _update_query(opts), body))
+end
+
+@en "Upsert"
+@fa "درج روزآمد"
+pub func Upsert(c: Client, index: str, id: str, doc: str): WriteResult:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("doc", doc))
+    m.push(json.MemberBool("doc_as_upsert", true))
+    ret _write_result(Perform(c, "POST", _doc_path(index, "_update", id), json.Object(m)))
+end
+
+@en "Script"
+@fa "اسکریپت"
+pub func Script(source: str, params: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("source", source))
+    m.push(json.Member("lang", "painless"))
+    if params.len() > 0: m.push(json.MemberRaw("params", params)) end
+    ret json.Object(m)
+end
+
+@en "UpdateScript"
+@fa "به‌روزرسانی با اسکریپت"
+pub func UpdateScript(c: Client, index: str, id: str, source: str, params: str): WriteResult:
+    body := _one("script", Script(source, params))
+    ret _write_result(Perform(c, "POST", _doc_path(index, "_update", id), body))
+end
+
+@en "Delete"
+@fa "حذف"
+pub func Delete(c: Client, index: str, id: str): WriteResult:
+    ret DeleteWith(c, index, id, Options {})
+end
+
+@en "DeleteWith"
+@fa "حذف با گزینه"
+pub func DeleteWith(c: Client, index: str, id: str, opts: Options): WriteResult:
+    mut q := Vector {} as Vector<str>
+    _opts_query(q, opts)
+    ret _write_result(Perform(c, "DELETE", _doc_path(index, "_doc", id) + _qs(q), ""))
+end
+
+@en "MGet"
+@fa "دریافت چندگانه"
+pub func MGet(c: Client, index: str, ids: Vector<str>): Vector<Document>:
+    mut out := Vector {} as Vector<Document>
+    body := _one("ids", _strs(ids))
+    r := Perform(c, "POST", "/" + _idx(index) + "/_mget", body)
+    if not r.ok: ret out end
+    each raw in json.Items(json.Get(r.body, "docs")):
+        out.push(_doc_of(raw))
+    end
+    ret out
+end
+
+@en "Count"
+@fa "شمارش"
+pub func Count(c: Client, index: str, query: str): i64:
+    mut body := ""
+    if query.len() > 0: body = _one("query", query) end
+    mut path := "/_count"
+    if index.len() > 0: path = "/" + _idx(index) + "/_count" end
+    r := Perform(c, "POST", path, body)
+    if not r.ok: ret -1 end
+    ret _i64(json.Get(r.body, "count"))
+end

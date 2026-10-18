@@ -19,14 +19,19 @@ package mcpexec
 import str
 import os
 import env
+import fs.dir
 import fs.file
 import fs.path
 import os.temp
+import chan
 
 include mcptxt "mcp_text.salam"
 
 mut g_root := ""
 mut g_work := ""
+mut g_hosted := false
+mut g_timeout := 0
+mut g_slots := chan.Chan {} as chan.Chan<int>
 
 @en "Outcome"
 pub struct Outcome:
@@ -35,6 +40,7 @@ pub struct Outcome:
     pub err: str = ""
     pub launched: bool = false
     pub reason: str = ""
+    pub timed_out: bool = false
 end
 
 func _is_unsafe(a: str): bool:
@@ -59,11 +65,15 @@ else:
     func _cd_prefix(dir_path: str): str: ret "cd ".concat(_quote(dir_path)).concat(" && ") end
 end
 
-func _cmdline(exe: str, args: Vector<str>, out_path: str, err_path: str): str:
+func _cmdline(work: str, exe: str, args: Vector<str>, in_path: str, out_path: str, err_path: str, limit_s: int): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    work := Workdir()
     if work.len() > 0 and SafeArg(work): str.BufAppend(sb, _cd_prefix(work)) end
+    if limit_s > 0 and not SALAM_OS_WINDOWS:
+        str.BufAppend(sb, "timeout -k 5 ")
+        str.BufAppend(sb, str.FromInt(limit_s))
+        str.BufAppend(sb, " ")
+    end
     str.BufAppend(sb, _quote(exe))
     mut i := 0
     until i < args.len():
@@ -71,6 +81,8 @@ func _cmdline(exe: str, args: Vector<str>, out_path: str, err_path: str): str:
         str.BufAppend(sb, _quote(args.get(i)))
         i += 1
     end
+    str.BufAppend(sb, " <")
+    str.BufAppend(sb, _quote(in_path))
     str.BufAppend(sb, " >")
     str.BufAppend(sb, _quote(out_path))
     str.BufAppend(sb, " 2>")
@@ -81,6 +93,74 @@ end
 
 func _reject(reason: str): Outcome:
     ret Outcome { code = 0 - 1, launched = false, reason = reason }
+end
+
+@en "Host"
+@fa "میزبانی"
+pub func Host(jobs: int, timeout_s: int):
+    g_hosted = true
+    g_timeout = timeout_s
+    g_slots.init(jobs as i64)
+    Root()
+    Workdir()
+end
+
+@en "Hosted"
+@fa "میزبانی شده"
+pub func Hosted(): bool:
+    ret g_hosted
+end
+
+@en "Stage"
+@fa "آماده سازی"
+pub func Stage(source: str): str:
+    dir_path := temp.Directory()
+    if dir_path.len() == 0: ret "" end
+    if file.WriteText(path.Join(dir_path, "main.salam"), source) < 0:
+        temp.RemoveDir(dir_path)
+        ret ""
+    end
+    ret dir_path
+end
+
+@en "SafeRelative"
+@fa "مسیر نسبی امن"
+pub func SafeRelative(name: str): bool:
+    if not SafePath(name): ret false end
+    if path.IsAbs(name) or str.StartsWith(name, "/") or str.StartsWith(name, "\\"): ret false end
+    if name.find(":") >= 0 or name.find("\\") >= 0: ret false end
+    if name.len() > 200: ret false end
+    ret true
+end
+
+@en "StageFiles"
+@fa "آماده سازی پرونده‌ها"
+pub func StageFiles(names: Vector<str>, texts: Vector<str>): str:
+    dir_path := temp.Directory()
+    if dir_path.len() == 0: ret "" end
+    mut i := 0
+    until i < names.len():
+        name := names.get(i)
+        if not SafeRelative(name):
+            temp.RemoveDir(dir_path)
+            ret ""
+        end
+        full := path.Join(dir_path, name)
+        parent := path.Dirname(full)
+        if parent != dir_path: dir.MkdirAll(parent) end
+        if file.WriteText(full, texts.get(i)) < 0:
+            temp.RemoveDir(dir_path)
+            ret ""
+        end
+        i += 1
+    end
+    ret dir_path
+end
+
+@en "Unstage"
+@fa "حذف آماده سازی"
+pub func Unstage(dir_path: str):
+    if dir_path.len() > 0: temp.RemoveDir(dir_path) end
 end
 
 @en "Binary"
@@ -178,6 +258,27 @@ end
 @en "Run"
 @fa "اجرا کن"
 pub func Run(args: Vector<str>): Outcome:
+    ret RunIn(Workdir(), args)
+end
+
+@en "RunIn"
+@fa "اجرا در پوشه"
+pub func RunIn(work: str, args: Vector<str>): Outcome:
+    ret RunWith(work, args, "", g_timeout)
+end
+
+@en "ProgramTimeout"
+@fa "مهلت برنامه"
+pub func ProgramTimeout(): int:
+    if g_hosted: ret g_timeout end
+    v := env.GetOr("SALAM_MCP_RUN_TIMEOUT", "60").to_int()
+    if v < 0: ret 0 end
+    ret v
+end
+
+@en "RunWith"
+@fa "اجرا با ورودی"
+pub func RunWith(work: str, args: Vector<str>, input_text: str, limit_s: int): Outcome:
     exe := Binary()
     if not SafeArg(exe): ret _reject("compiler path contains unsupported characters") end
     mut i := 0
@@ -188,15 +289,24 @@ pub func Run(args: Vector<str>): Outcome:
         i += 1
     end
 
+    if g_hosted: g_slots.send(1) end
+    in_path := temp.File()
+    file.WriteText(in_path, input_text)
     out_path := temp.File()
     err_path := temp.File()
-    code := os.Run(_shell_wrap(_cmdline(exe, args, out_path, err_path)))
+    code := os.Run(_shell_wrap(_cmdline(work, exe, args, in_path, out_path, err_path, limit_s)))
+    if g_hosted:
+        mut ok := false
+        _t := g_slots.recv(ok)
+    end
     out := file.ReadText(out_path)
     err := file.ReadText(err_path)
+    temp.Remove(in_path)
     temp.Remove(out_path)
     temp.Remove(err_path)
 
-    ret Outcome { code = code, out = out, err = err, launched = true }
+    timed_out := limit_s > 0 and (code == 124 or code == 137)
+    ret Outcome { code = code, out = out, err = err, launched = true, timed_out = timed_out }
 end
 
 @en "Diagnostics"

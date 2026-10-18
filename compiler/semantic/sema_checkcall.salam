@@ -521,10 +521,10 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                     ret sema_decorate(s, a, n, sema_err_ty(s))
                 end
             end
-            serr(
+            serr_help(
                 s, 12, sp, co.Format1(
                     i18.Tr("call to undefined function '%s'"), co.ArgStr(nm)
-                )
+                ), undefined_function_help(nm)
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
@@ -536,6 +536,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         if symv.kind == SYM_FUNC and symv.decl != 0 and at.TyparamCount(a, symv.decl) > 0:
             inst := g_infer_call(s, a, sym, argtypes, sp, call_expected)
             if inst == 0:
+                mark_failed_call_args(s, a, n)
                 ret sema_decorate(s, a, n, sema_err_ty(s))
             end
             sym = inst
@@ -605,6 +606,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 s.cur = save_cur
                 s.gen_pkg = save_gp
                 if inst2 == 0:
+                    mark_failed_call_args(s, a, n)
                     ret sema_decorate(s, a, n, sema_err_ty(s))
                 end
                 mut cv := at.Get(a, callee)
@@ -738,8 +740,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             if str.Equals(m, "iter"):
                 ret sema_decorate(s, a, n, type_map_iter(s, ov.key, ov.elem))
             end
-            serr(
-                s, 17, sp, co.Format1(i18.Tr("HashMap has no method '%s'"), co.ArgStr(m))
+            serr_help(
+                s, 17, sp, co.Format1(i18.Tr("HashMap has no method '%s'"), co.ArgStr(m)), method_alias_help("HashMap", m)
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
@@ -818,8 +820,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 check_pure_recv_mut(s, a, n, m3)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
             end
-            serr(
-                s, 17, sp, co.Format1(i18.Tr("Vector has no method '%s'"), co.ArgStr(m3))
+            serr_help(
+                s, 17, sp, co.Format1(i18.Tr("Vector has no method '%s'"), co.ArgStr(m3)), method_alias_help("Vector", m3)
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
@@ -1007,12 +1009,21 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 end
                 ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
             end
+            if str.Equals(m5, "__piece") and at.Get(a, n).synthetic and argtypes.len() == 2:
+                ret sema_decorate(s, a, n, sema_ty(s, TY_STR))
+            end
+            if str.Equals(intrinsic_method_canon(m5), "bytes"):
+                serr_help(
+                    s, 65, sp, i18.Tr("bytes() only works as the target of each: each b in s.bytes()"), i18.Tr("to read one byte, index the string: s[i]")
+                )
+                ret sema_decorate(s, a, n, sema_err_ty(s))
+            end
             ric := try_impl_call(s, a, n, callee, objt, argtypes)
             if ric != TYPE_NONE:
                 ret ric
             end
-            serr(
-                s, 17, sp, co.Format1(i18.Tr("str has no method '%s'"), co.ArgStr(m5))
+            serr_help(
+                s, 17, sp, co.Format1(i18.Tr("str has no method '%s'"), co.ArgStr(m5)), method_alias_help("str", m5)
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
@@ -1077,10 +1088,15 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             if ric3 != TYPE_NONE:
                 ret ric3
             end
-            serr(
+            mname := at.Get(a, callee).name
+            mut mhelp := ""
+            if str.Equals(mname, "to_string") or str.Equals(mname, "toString") or str.Equals(mname, "str") or str.Equals(mname, "String"):
+                mhelp = i18.Tr("convert with 'str.FromInt(n)' or 'str.FromFloat(x)' (import str)")
+            end
+            serr_help(
                 s, 29, sp, co.Format1(
                     i18.Tr("method call on non-struct type '%s'"), co.ArgStr(type_disp(s, objt))
-                )
+                ), mhelp
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end
@@ -1177,10 +1193,17 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 )
                 ret sema_decorate(s, a, n, sema_err_ty(s))
             end
-            serr(
+            odisp := type_disp(s, objt)
+            mut recv_kind := ""
+            if str.Contains(odisp, "HashMap") or str.Contains(odisp, "نگاشت"):
+                recv_kind = "HashMap"
+            else str.Contains(odisp, "Vector") or str.Contains(odisp, "وکتور"):
+                recv_kind = "Vector"
+            end
+            serr_help(
                 s, 17, sp, co.Format2(
-                    i18.Tr("no method '%s' for type '%s'"), co.ArgStr(mname), co.ArgStr(type_disp(s, objt))
-                )
+                    i18.Tr("no method '%s' for type '%s'"), co.ArgStr(mname), co.ArgStr(odisp)
+                ), method_alias_help(recv_kind, mname)
             )
             ret sema_decorate(s, a, n, sema_err_ty(s))
         end

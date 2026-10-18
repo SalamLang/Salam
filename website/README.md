@@ -14,7 +14,8 @@ website/
 │   └── pages/*.html     one file per page; the file name is the URL
 ├── content/<lang>/
 │   ├── *.txt            strings for that language
-│   └── examples/        Salam programs shown on the site, with their .out
+│   ├── examples/        Salam programs shown on the site, with their .out
+│   └── static/          folders copied as-is into that language's output
 └── assets/              css, js, fonts (Vazirmatn, Vazir Code), images
 ```
 
@@ -45,10 +46,18 @@ HTML allowed
 ```
 
 Values are inserted as HTML. Keys ending in `_cmd` are shell commands and are
-escaped automatically. `<page>.title` and `<page>.description` fill the
+escaped automatically. Keys containing `_code_<lang>`, for example `ai.api_code_python`, are
+syntax highlighted at build time (`python`, `javascript`, `typescript`, `bash`, `json`, `yaml`, `toml`, `c`, `cpp`, `java`, `go`, `rust`, `php`). `<page>.title` and `<page>.description` fill the
 `<title>` and meta tags. `site.dir` (`rtl` or `ltr`) and `site.lang` set the
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.
+
+The Agent page links to the desktop builds on the `v<VERSION>` release:
+`agent.release` is the release page and `agent.download` the filename prefix
+the download links append to, for example
+`{{agent.download}}windows-x86_64-setup.exe`. The agent carries the same
+version as `VERSION` (kept in sync by `tools/salam/update-version.salam`), and
+the compiler release workflow builds it and uploads its files to that release.
 
 SEO: each page's `<page>.title` is the full `<title>` (write the whole
 phrase, including the brand), `<page>.description` the meta description and
@@ -59,6 +68,13 @@ generator builds the JSON-LD graph (`Organization`, `WebSite`,
 `site.*` keys. `faq.N.q` / `faq.N.a` become both the visible FAQ on the home
 page (`{{faq.html}}`) and its `FAQPage` structured data, so the two never
 disagree. Put a Search Console token in `site.google_verification`.
+
+For AI tools, each language also gets an `llms.txt` (the site description, then
+every page, lesson and std package as a link with its summary, plus links to
+the agent skill, the Claude Code plugin and the MCP server) and an
+`llms-full.txt` with the text of every lesson and std page in Markdown. Their
+headings and descriptions come from the `llms.*` keys, the agent links from
+`link.skill`, `link.claude_plugin` and `link.mcp`.
 
 Examples: `examples/name.salam` becomes `{{example.name}}`, a code window with
 the highlighted code and, when `name.out` exists, its output. The highlighter

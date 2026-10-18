@@ -7,8 +7,9 @@ guessable from other languages. Everything here has been verified against the
 compiler in this checkout, with the exact diagnostic it produces.
 
 If you have the `salam` MCP server available, use it rather than guessing:
-`salam_check` after every edit, `salam_stdlib_symbols` before using any std
-package, `salam_find_examples` to see a working usage.
+`salam_docs` for how a construct is written, `salam_stdlib_search` and
+`salam_stdlib_symbols` before using any std function, `salam_find_examples` to
+see a working usage, and `salam_check` after every edit.
 
 ---
 
@@ -127,18 +128,20 @@ func add(a: int, b: int): int:
     ret a + b
 end
 
-pub func Scale(v: f64, by: f64): f64: ret v * by end   // one-liners are fine
+pub func Scale(v: f64, factor: f64): f64: ret v * factor end   // one-liners are fine
 
 func fill(out &: Vector<str>):                          // `&:` = by reference
     out.push("x")
 end
 ```
 
-`func main:` implicitly returns `i32`, so it must end with `ret 0`, not a bare
-`ret`. Note that a bare `ret` passes Salam's own analysis and only fails later
-in the C backend, with a raw `'return' with no value` error from gcc, so
-`salam_check` will call the file clean while `salam_build` fails. When a check
-passes but a build does not, look for this first.
+`func main:` returns the process exit code: `ret 3` exits with 3, and a `main`
+that ends without `ret` (or with a bare `ret`) exits with 0.
+
+Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
+`type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
+`salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not
+parse.
 
 ## 6. Strings
 
@@ -158,12 +161,30 @@ are `شروع با`, `ختم با` and `دربردارد`.
 their UTF-8 counterparts: they count and index code points, so
 `"سلام".len()` is 8 but `"سلام".char_count()` is 4, and `char_at(1)` returns
 `"ل"` as a `str`. An out-of-range `char_at` returns `""`, and `char_find`
-returns -1 when the substring is missing. On the JS backend strings are
-JavaScript strings, so `len`, `s[i]`, `substr` and `find` count UTF-16 units
-there instead of bytes. The `str` package follows the same rule, so on JS
-`str.IndexFrom`, `str.LastIndex`, `str.CodePointAt` and `str.CharAt` take
-and return UTF-16 indices that line up with `substr`. The `char_*` methods
-give the same answer on every backend, so prefer them for non-ASCII text.
+returns -1 when the substring is missing. Every backend counts the same way,
+the JS one included: `len`, `s[i]`, `substr` and `find` are byte based there
+too, and only DOM offsets (UTF-16) need converting at the boundary.
+
+Walk a string with `each`, which is one linear pass:
+
+```salam
+each ch in "سلام 👋":        // ch is a str holding one code point
+    print ch, "|"
+end
+each i, ch in "سلام":        // i is the character number: 0, 1, 2, 3
+    println i, ch
+end
+each i, b in "Hi".bytes():   // b is a char (one byte), i the byte index
+    println i, b as int
+end
+```
+
+Persian: `هر ح در متن:` and `هر ب در متن.بایت ها():`. Prefer this to
+`repeat s.char_count() in i: s.char_at(i)`, which rescans the string on
+every step. Invalid UTF-8 bytes come out one at a time (joining every `ch`
+gives back the string), and a character is a code point, not a grapheme
+cluster (use `str.Graphemes` for those). `s.bytes()` only works as the
+target of `each`.
 
 Text types, and which one to reach for:
 
@@ -306,12 +327,19 @@ check and rejects a `Variant` subject outright (semantic error, points you at
 `match`). `break` inside a `switch` exits the switch only; `continue` is not
 caught by it and still targets an enclosing loop.
 
-## 12. Enum members require a comma
+## 12. Enum members on one line need commas
 
-`enum E: A, B, C end` - the comma between members is mandatory, not optional
-style. A bare newline is not enough because member names may contain spaces
-(`enum Status: not started, in progress, done end`), so leaving the comma out
-is a compile error, not a silent misparse.
+`enum E: A, B, C end` - on a single line the comma between members is
+mandatory, because member names may contain spaces (`enum Status: not
+started, in progress, done end`): `enum E: A B end` declares one member named
+`A B`. One member per line works without commas:
+
+```salam
+enum Color:
+    Red
+    Green
+end
+```
 
 ---
 
@@ -324,17 +352,6 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)
   fail with `unknown command '--version'`.
 
-- **`str.Split` can crash on its last element.** On a gcc-linked build,
-  `str.Split("a/b/c/d", "/")` reports the right length and correct elements
-  `0..n-2`, then segfaults reading the last one. Avoid it in code that must be
-  backend-portable; walk the string with `find`/`substr` instead. The same bug
-  reaches anything built on it, including `os.shell.Exec` and `io.Lines`.
-
-- **`os.shell.Run` deadlocks on large child output.** It waits for the child
-  before draining its pipes, so a child that writes more than the pipe buffer
-  (~64KB) blocks forever. For anything that might produce real volume,
-  redirect to a file and read it back, or use `os.RunCapture`.
-
 - **JavaScript 64-bit integers are exact only up to 2^53.** `salam js` stores
   `i64`/`u64`/`size`/`usize` as JS numbers. Arithmetic, shifts, bitwise ops,
   wraparound and casts are computed exactly, but a result (or an intermediate
@@ -342,27 +359,27 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
 
-- **`os.Args()` has a broken generic type.** Binding any element to a local
-  (`a := argv.get(1)`) corrupts semantic analysis or crashes the compiler.
-  Pass argv-derived values _inline_ as call arguments only.
+- **A file's module is keyed by its filename.** Two included files with the
+  same name (`a/io.salam` and `b/io.salam`), or one of your files named after a
+  std package you import (`shell.salam` next to `import os.shell`), clash. The
+  compiler rejects it with `package name 'io' is claimed by two different
+files`; give every source file a name unique across the whole project.
 
-- **Enum values cannot cross a package boundary.** A `pub enum`'s members are
-  not usable from another package; use `pub const int` values instead.
+- **A side-effect-free endless loop can crash under clang.** C11 lets a
+  compiler assume such a loop terminates, so with the C backend and clang at
+  `-O2` an `until true:` loop whose body has no I/O or memory writes can be
+  deleted and the program segfaults instead of spinning. Give a busy-wait a
+  real effect (a sleep, a print, an atomic) or build it with
+  `--backend=llvm`.
 
-- **A file's module is keyed by filename, not package.** Two packages that each
-  contain a file called `io.salam` collide at link time. Give every source file
-  a name unique across the whole project.
-
-- **The interpreter's HTTPS is slow: raise `--timeout` for it.** `salam exec`
-  supports networking now, including the TLS path in `net.http`, but the
-  handshake's certificate-chain math runs as tree-walked Salam instead of
-  native code, so a real HTTPS request can take upward of a minute. The
-  default per-run deadline is 5 seconds, so a program that dials `https://`
-  under `salam exec` needs an explicit `--timeout` of tens of seconds or
-  more, or it will report a timed-out execution well before the handshake
-  finishes. Plain `http://` has none of this cost. For anything
-  latency-sensitive, `salam run`/`salam build` compiles the same TLS code to
-  native speed.
+- **The interpreter's HTTPS is slow.** `salam exec` supports networking,
+  including the TLS path in `net.http`, but the handshake's certificate-chain
+  math runs as interpreted Salam instead of native code, so a real HTTPS
+  request can take upward of a minute. `salam exec` has no deadline by
+  default; a caller that sets one (`--timeout=MS`, `SALAM_EXEC_TIMEOUT_MS`, or
+  the MCP server's `SALAM_MCP_RUN_TIMEOUT`) needs it in the tens of seconds
+  for HTTPS. Plain `http://` has none of this cost, and `salam run` compiles
+  the same TLS code to native speed.
 
 - **`open` and `input` are reserved built-ins.** Do not name anything after them.
 
@@ -398,7 +415,7 @@ end
 ```
 
 ```sh
-salam check  hello.salam     # via MCP: fastest, no codegen
+salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
 salam run    hello.salam     # build and execute
 salam format hello.salam --check
 ```

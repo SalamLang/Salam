@@ -35,7 +35,7 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-For Persian there is also a complete 25-lesson human tutorial on the official
+For Persian there is also a complete 28-lesson human tutorial on the official
 site: **<https://www.salamlang.ir/learn/>** (one page per topic, every example
 compiled and run). There is no English site yet; for English, this file and
 `tests/en/` are the reference.
@@ -207,6 +207,8 @@ repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direc
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
+each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
+each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -351,8 +353,17 @@ bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
 `sizeof(T)` returns `usize`.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
-`str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
-`str.CharAt(s, i)`, classify with `str.IsDigit(code)` etc.
+`str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
+Iterate a string with `each`: `each ch in s` gives each code point as a `str`
+(`"س"`, `"👋"`), `each i, ch in s` adds the character number `i` (0, 1, 2, ...,
+the same index `s.char_at(i)` takes), and `each b in s.bytes()` /
+`each i, b in s.bytes()` walk the raw bytes as `char` with the byte index. It is
+one linear pass, so prefer it over `repeat s.char_count() in i: s.char_at(i)`,
+which rescans from the start on every step. Invalid UTF-8 bytes come out one
+byte at a time, so joining every `ch` gives back the original string. A
+character is a code point, not a grapheme cluster: `"👋🏽"` is two steps; use
+`str.Graphemes(s)` for user-perceived characters. `s.bytes()` is only valid as
+the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 
 **String/char literal forms** (values go into text with a ` ``` ` text block and
 `${{ expr }}`, see below, or with `+` and `fmt.Sprintf`):
@@ -1389,7 +1400,7 @@ Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
   `Close()` is required
 - `interface Tx`: `Ok Exec Query Commit Rollback`
 - Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
-QuoteLiteral`; constants `SQLITE MYSQL POSTGRES` and `TYPE_NULL TYPE_INT
+QuoteLiteral`; constants `SQLITE MYSQL POSTGRES ELASTICSEARCH OPENSEARCH` and `TYPE_NULL TYPE_INT
 TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
 - **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
 CloseAll Free`): a fixed set of connections leased one at a time. It holds
@@ -1413,6 +1424,10 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.redis`** (`connect strings hashes lists sets pubsub`).
+- **`db.meilisearch`** (Meilisearch over HTTP, the whole v1 API): `New WithAgent WithTimeout WithMetadata Ok ErrorString Request RequestAs Health IsHealthy GetVersion GetStats CreateIndex GetIndex ListIndexes UpdateIndex RenameIndex DeleteIndex SwapIndexes GetIndexStats CompactIndex ListFields AddDocuments UpdateDocuments AddDocumentsWith AddDocumentsNdjson AddDocumentsCsv AddDocumentsInBatches AddDocumentsOf GetDocument GetDocumentWith GetDocumentAs GetDocuments DocumentsAs DeleteDocument DeleteDocuments DeleteDocumentsByFilter DeleteAllDocuments Search Query HitsAs MultiSearch FederatedSearch FacetSearch SimilarDocuments GetSettings UpdateSettings ResetSettings Get/Update/Reset<Setting> GetTask GetTasks WaitForTask Wait CancelTasks DeleteTasks GetTaskDocuments CompactTasks GetBatch GetBatches CreateKey GetKey GetKeys UpdateKey DeleteKey TenantToken ListWebhooks CreateWebhook GetWebhook UpdateWebhook DeleteWebhook ListSearchRules GetSearchRule UpdateSearchRule DeleteSearchRule DeleteAllSearchRules ListChatWorkspaces GetChatWorkspace DeleteChatWorkspace GetChatSettings UpdateChatSettings ResetChatSettings ChatCompletion SetStderrLogs NetworkControl RenderTemplate`. Requests go over `net.httpx`: no timeout unless `WithTimeout(c, ms)` (then `err.code == "timeout"`), and a `Client` is a plain value that threads can share. `CompactTasks` leaves the server refusing writes until it is restarted. Struct fields have Persian names too (`ک.میزبان`, `خ.کد`), and a Persian file must use them. Runnable examples for every part of the API live in `tests/en/stdlib/meilisearch/examples` and, with Persian names throughout, `tests/fa/stdlib/meilisearch/examples`. Every call ends with `err &: meilisearch.Error` (empty `code` = success, check with `Ok(err)`). Writes return a `TaskInfo` and apply later; chain `meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", json, "id", err), err)` when the next step needs the change. Hits and documents are raw JSON strings; decode into structs with `HitsAs`/`GetDocumentAs` (lenient, extra fields like `_formatted` are ignored). `SearchRequest` sends only what you set (-1 numbers, empty strings/lists and false flags are omitted); `filter` takes an expression or a raw JSON array.
+- **`db.elasticsearch`** (Elasticsearch 7/8, Elastic Cloud and OpenSearch over `net.httpx`; no outside library; `Distribution(c)` tells them apart and SQL/point in time switch endpoints on their own). `NewClient(Config)` takes several nodes (rotated, a node that refuses connections is skipped for `DEAD_NODE_MS`, 502/503/504 retried), basic auth, `api_key` (encoded or `id:key`), `bearer`, `cloud_id`, `ca_file`/`insecure`, `timeout_ms` and `keep_alive` (one pooled connection per node, on by default); `Connect ConnectAuth ConnectApiKey ConnectCloud` are shortcuts. Documents and query clauses are raw JSON `str`. Documents: `Index Create Get Exists Update Upsert UpdateScript Delete MGet Count` (+`...With(Options)` for `refresh`, `routing`, `if_seq_no`/`if_primary_term`). Search: build a `SearchRequest { query, size, sort, aggs, ... }` from `Match Term Terms Range Bool And Or Not Filtered MultiMatch Knn SortDesc` and `AddAgg(aggs, name, TermsAgg(...))`, then `Search`; read `res.hits`, `AggValue`, `AggBuckets`. Paging: `SearchScroll/Scroll/ClearScroll`, `OpenPit` + `search_after`. Bulk: `NewBulk`, `BulkIndex/BulkUpdate/BulkDelete(b, ...)`, `RunBulk` (check `res.items` when `res.errors`). Admin: `CreateIndex PutMapping Refresh PutAlias SwapAlias Reindex DeleteByQuery UpdateByQuery CatIndices ClusterHealth`, pipelines (`PutPipeline SimulatePipeline`), data streams (`CreateDataStream Rollover`), `PutLifecyclePolicy` (ILM, or ISM on OpenSearch), snapshots, cluster settings, background tasks (`StartReindex StartUpdateByQuery GetTask`), stored scripts and `SearchTemplate`, `SubmitAsyncSearch`, `Explain ValidateQuery FieldCaps TermVectors IndexStats`. SQL: `Sql`/`SqlWith` return `SqlRows` (a `db.Rows` that pages with the cursor), and `Conn(c)` is a read-only `dyn db.Connection` (`Exec` is -1, no transactions). Anything else: `Perform(c, method, path, body)`. Check `Error(c)`/`ErrorType(c)`/`Status(c)` after a call; a `Get` of a missing doc is `found = false` with no error.
+- **`db.typesense`** (Typesense over HTTP, 29.x and 30.x): `New NewCluster SetNearestNode AddNode AddHeader Free Ok IsNotFound IsConflict ErrorString Request RequestAs Health ServerVersion Status Stats Metrics CreateSnapshot ClearCache CompactDB SchemaChanges UpdateConfig CreateCollection GetCollection CollectionExists ListCollections UpdateCollection AddFields DropFields CloneCollection TruncateCollection DeleteCollection UpsertAlias GetAlias ListAliases DeleteAlias CreateDocument UpsertDocument EmplaceDocument UpdateDocument GetDocument GetDocumentAs DeleteDocument DeleteByFilter UpdateByFilter ImportDocuments ImportJSONL ImportOf ExportDocuments Search SearchRaw MultiSearch UnionSearch HitsAs Highlight CreateKey SearchOnlyKey GetKey ListKeys DeleteKey ScopedSearchKey GenerateScopedSearchKey UpsertSynonymSet UpsertSynonymItem UpsertSynonym UpsertCurationSet UpsertCurationItem UpsertOverride UpsertPreset UpsertSearchPreset UpsertStopwords ImportStemmingDictionary CreateAnalyticsRule SendEvent FlushAnalytics CreateConversationModel CreateNLSearchModel`. Every call ends with `err &: typesense.Error` (empty `kind` = success, `Ok(err)`; `IsNotFound`/`IsConflict` for 404/409). A client holds several nodes and skips one that fails for `healthcheck_ms`, retrying `retries` times, so a 5xx or a dead node is not an error until every try failed. Build a schema with `Schema { name }` plus `NewField`/`FacetField`/`VectorField`/`EmbeddingField` (`Field.kind` is the type, `sort` is 1/-1/0 for on/off/default). `SearchParams` sends only what you set; anything without a field goes through `Set(p, key, value)`, and a query string over `MAX_GET_QUERY` bytes goes through `/multi_search` by itself. Imports answer 200 even when lines fail: check `ImportResult.failed`. Synonym sets and curation sets are Typesense 30; `UpsertSynonym`/`UpsertOverride` are the 29 per collection forms. `ScopedSearchKey` signs a browser key locally.
+- **`db.opensearch`** (OpenSearch over its REST API, native TCP/TLS, no outside library; `db.elasticsearch` covers the shared core API too, pick this one for PPL, k-NN/neural/hybrid, ISM, the security plugin, alerting, ML Commons or AWS SigV4): connect with `Connect ConnectAuth ConnectInsecure ConnectAWS NewClient(Config)` (several nodes with retries and dead node skipping, basic/bearer auth, AWS SigV4 for `SERVICE_ES`/`SERVICE_AOSS`, `ca_file`, `insecure` for a self signed test server). Documents `Index IndexWith Create Get GetSource Exists Update UpdateWith Upsert UpdateScript Delete MGet Count DeleteByQuery UpdateByQuery Reindex`; bulk `NewBulk BulkIndex BulkCreate BulkUpdate BulkUpsert BulkDelete BulkSend BulkFree`; search `Search SearchWith(SearchRequest) SearchRaw SearchParamsWith MSearch SearchScroll Scroll ClearScroll CreatePit DeletePit SearchTemplate Explain Validate`; results `Buckets AggValue AggField Suggestions JsonPath`; query DSL builders return JSON text (`Match Term Terms Range BoolOf(BoolQuery{}) Nested Knn KnnFiltered Neural Hybrid ScriptScore FunctionScore SortDesc Highlight TermsAgg AvgAgg DateHistogramAgg AddAgg SubAggs`); admin `CreateIndex CreateIndexWith PutMapping PutSettings Refresh PutAlias SwapAlias PutIndexTemplate CreateDataStream Rollover CatIndices ClusterHealth WaitForStatus GetTask PutPipeline SimulatePipeline CreateSnapshot`; plugins `Sql SqlWith Ppl SqlExplain` (JDBC rows that page with the cursor), k-NN `KnnIndexBody KnnVectorField KnnWarmup`, ISM `PutPolicy AddPolicy ExplainPolicy DeleteAfterPolicy`, security `WhoAmI PutUser PutRole RoleBody PutRoleMapping ChangePassword`, `PutSearchPipeline NormalizationPipeline`, alerting monitors and `Ml*`; anything else through `Perform`. Every call records `Status Error ErrorType ErrorReason` on the client; `Conn(c)` is a `dyn db.Connection` whose `Query` runs SQL (`Exec` only does SQL `DELETE`, there are no transactions). `Get` of a missing id is `found = false` with an empty `error`. A bulk delete of a missing id counts as ok.
 
 ```salam
 import db
@@ -1450,9 +1465,9 @@ naive port into compile errors (each corresponds to a case in
    zero times with no diagnostic (only a literal `until false:` is caught, as
    `E068`). See the box in §2.
 2. **Unused = error.** An unused variable, `mut`, parameter, import, or function
-   is a hard error. Prefix the name with `_` to intentionally keep it
-   (`_unused`, `func _helper()`, `_result := …`). Only mark something `mut` if
-   you actually reassign it (`unused_mut`).
+   is a hard error. Remove it; a `_` prefix silences the check but leaves dead
+   code behind, so keep it for a parameter whose signature is fixed (a
+   callback). Only mark something `mut` if you actually reassign it.
 3. **Reassignment requires `mut`.** `x := 1; x = 2` fails; use `mut x := 1`.
 4. **Heap collections must be freed.** `Vector/HashMap/Set/...` allocate; call
    `.free()` (idiom: `defer v.free()` right after creation). Also free elements
@@ -1461,8 +1476,10 @@ naive port into compile errors (each corresponds to a case in
    are supported on integers** with C precedence and compound forms
    (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
-6. **No exceptions / no try-catch.** Signal failure with a `bool` return, an
-   `Option<T>`, or a sentinel value, and check it at the call site.
+6. **No exceptions / no try-catch.** Signal failure with a `bool` return and
+   an `err &:` out-parameter (the std style), an `option.Option<T>`
+   (`import option`), a `result.Result<T, E>` (`import result`), or a sentinel
+   value, and check it at the call site.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
@@ -1500,8 +1517,7 @@ naive port into compile errors (each corresponds to a case in
 16. **No typed declarations.** `x: T = v` is a parse error; write
     `x := v as T` (see §2).
 
-When the compiler complains, fix the code; do not try to suppress the check
-(except the deliberate `_` prefix for genuinely-unused names).
+When the compiler complains, fix the code; do not try to suppress the check.
 
 ---
 
@@ -1610,7 +1626,7 @@ with external linkage, and it is never dropped as dead code:
 
 ```salam
 export:
-    func on_ready(ctx: void*): int:     // C sees `int on_ready(void* ctx)`
+    func on_ready(_ctx: void*): int:    // C sees `int on_ready(void* _ctx)`; `_` because C fixes the signature
         ret 0
     end
 end
@@ -1832,7 +1848,7 @@ are registered (`background color`, `z index`, ...), with `hover`/`focus`/
 
 **CSS values are checked.** Almost every property validates its value
 (keyword, length, number, time, angle, color, ...) and accepts Persian keywords
-and units: `نمایش = "فلکس"`, `حاشیه = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
+and units: `نمایش = "فلکس"`, `فضا = "۱۰ پیکسل"`, `مدت گذار = "0.3 ثانیه"`.
 Shorthands are checked too: `border = "1 solid red"`, `font = "bold 16/1.5
 serif"`, `transition = "opacity 0.3s ease"`, `transform = "rotate(45deg)"`,
 `box shadow = "0 2 4 black"`. Bare numbers in a shorthand get `px`, except zero.
@@ -1974,6 +1990,7 @@ merged `style.css`/`script.js`.
 ## 10. Tooling & verification
 
 ```sh
+salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
@@ -1984,16 +2001,19 @@ salam format app.salam                  # reformat in place (--check to verify; 
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
-salam app.salam --emit-tokens | --emit-ast | --emit-symbol   # inspect a stage
+salam update [X.Y.Z] [--check]          # upgrade salam and std/ to the newest release (or X.Y.Z)
+salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 
 > **Version check is `salam version`, a subcommand.** There is no `--version`
-> or `-v` flag: `salam --version` fails with `unknown command '--version'`.
+> or `-v` flag: `salam --version` fails with `unknown command '--version'` and
+> suggests `salam version`.
 
-**Always verify a converted program.** Prefer `salam exec file.salam` for a quick
-check of pure logic; use `salam build … --output=…` (or `salam run`) when it uses
-FFI, threads, or the full stdlib. Resolve every diagnostic; in Salam most are hard
-errors (§6).
+**Always verify a converted program.** Run `salam check file.salam` after every
+edit (exit 1 on any error, `--error-format=json` for one JSON object per
+diagnostic), then `salam exec file.salam` for a quick check of pure logic; use
+`salam build … --output=…` (or `salam run`) when it uses FFI, threads, or the
+full stdlib. Resolve every diagnostic; in Salam most are hard errors (§6).
 
 > **`salam exec` (the interpreter) is a subset of the compiled language.** Some
 > features (notably `Variant` type-pattern `match`, and parts of FFI/threads)
@@ -2001,10 +2021,6 @@ errors (§6).
 > "undefined variable 'i64'" on a `match` arm, that feature isn't interpreted:
 > verify it with `salam run` / `salam build` instead. Treat the **compiled
 > backend as the source of truth**, which is also what a self-hosting port targets.
->
-> On this machine the `salam` binary at the repo root is a Linux ELF; run it via
-> WSL (e.g. `wsl.exe -e ./salam exec file.salam` from the repo root, using a
-> repo-relative path).
 
 ---
 
@@ -2224,7 +2240,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `چیدمان`                      |
+| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2235,6 +2251,9 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
+`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
+The older spelling `چیدمان` is still accepted.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use
@@ -2321,6 +2340,7 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `char_find` | `بیاب نویسه`  | `starts_with` | `شروع با`       |
 | `ends_with` | `ختم با`      | `includes`    | `دربردارد`      |
 | `copy`      | `رونوشت`      | `deep_copy`   | `رونوشت عمیق`   |
+| `bytes`     | `بایت ها`     |               |                 |
 
 The free built-in `len(x)` keeps its English name (there is no `طول(x)`
 function; use `x.طول()` or `len(x)`).
@@ -2348,7 +2368,10 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`
-(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`, `dom` `دام`,
+(imported as `شبکه.اچ تی تی پی`), `web` `وب`, `db` `دیتابیس`,
+`db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`),
+`db/meilisearch` `میلیسرچ` (imported as `دیتابیس.میلیسرچ`),
+`db/opensearch` `اپن سرچ` (imported as `دیتابیس.اپن سرچ`), `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`.
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`
@@ -2664,30 +2687,33 @@ The course at <https://www.salamlang.ir/learn/> teaches the whole language in
 Persian, one lesson per page, and every example on it is compiled and run
 when the site is built. Point Persian-speaking users to the matching lesson:
 
-| Topic                                            | Lesson                                         |
-| ------------------------------------------------ | ---------------------------------------------- |
-| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>        |
-| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>    |
-| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>        |
-| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>    |
-| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>      |
-| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>   |
-| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>        |
-| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>        |
-| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>    |
-| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>      |
-| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>        |
-| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>       |
-| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>  |
-| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>      |
-| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>        |
-| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
-| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
-| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
-| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
-| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
-| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |
-| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
-| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
-| Layout DSL `چیدمان`                              | <https://www.salamlang.ir/learn/layout/>       |
-| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |
+| Topic                                            | Lesson                                          |
+| ------------------------------------------------ | ----------------------------------------------- |
+| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>         |
+| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>     |
+| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>         |
+| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>     |
+| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>       |
+| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>    |
+| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>         |
+| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>         |
+| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>     |
+| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>       |
+| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>         |
+| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>        |
+| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>   |
+| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>       |
+| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>         |
+| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/>  |
+| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>      |
+| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>      |
+| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>         |
+| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>        |
+| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/>  |
+| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>     |
+| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>       |
+| Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>        |
+| Search with Typesense (`دیتابیس.تایپسنس`)        | <https://www.salamlang.ir/learn/typesense/>     |
+| Search with OpenSearch (`دیتابیس.اپن سرچ`)       | <https://www.salamlang.ir/learn/opensearch/>    |
+| Search with Elasticsearch (`دیتابیس.الستیک سرچ`) | <https://www.salamlang.ir/learn/elasticsearch/> |
+| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>      |

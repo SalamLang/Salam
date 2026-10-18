@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19869
+const ACK := `{"acknowledged":true}`
+
+func step(label: str, value: str):
+    println label, value
+    println "  ", fake.Last()
+end
+
+func yes(b: bool): str:
+    ret b ? "true" : "false"
+end
+
+func main:
+    fake.On("GET", "/", 200, `{"version":{"number":"8.15.3"}}`)
+    fake.On("PUT", "/_ingest/pipeline/clean", 200, ACK)
+    fake.On("GET", "/_ingest/pipeline/clean", 200, `{"clean":{"processors":[]}}`)
+    fake.On("POST", "/_ingest/pipeline/clean/_simulate", 200, `{"docs":[{"doc":{"_source":{"tag":"loud"}}}]}`)
+    fake.On("DELETE", "/_ingest/pipeline/clean", 200, ACK)
+    fake.On("PUT", "/_data_stream/logs-web", 200, ACK)
+    fake.On("GET", "/_data_stream/logs-web", 200, `{"data_streams":[{"name":"logs-web","generation":2}]}`)
+    fake.On("POST", "/logs-web/_rollover", 200, `{"acknowledged":true,"rolled_over":true}`)
+    fake.On("DELETE", "/_data_stream/logs-web", 200, ACK)
+    fake.On("PUT", "/_ilm/policy/month", 200, ACK)
+    fake.On("GET", "/_ilm/policy/month", 200, `{"month":{"policy":{}}}`)
+    fake.On("DELETE", "/_ilm/policy/month", 200, ACK)
+    fake.On("PUT", "/_snapshot/backups", 200, ACK)
+    fake.On("PUT", "/_snapshot/backups/nightly", 200, `{"snapshot":{"snapshot":"nightly","state":"SUCCESS"}}`)
+    fake.On("GET", "/_snapshot/backups/_all", 200, `{"snapshots":[{"snapshot":"weekly"},{"snapshot":"nightly"}]}`)
+    fake.On("POST", "/_snapshot/backups/nightly/_restore", 200, `{"snapshot":{"snapshot":"nightly"}}`)
+    fake.On("DELETE", "/_snapshot/backups/nightly", 200, ACK)
+    fake.On("DELETE", "/_snapshot/backups", 200, ACK)
+    fake.On("PUT", "/_cluster/settings", 200, ACK)
+    fake.On("GET", "/_cluster/settings", 200, `{"persistent":{"indices.recovery.max_bytes_per_sec":"100mb"},"transient":{}}`)
+    fake.On("POST", "/books/_update_by_query", 200, `{"task":"node-1:42"}`)
+    fake.On("POST", "/books/_delete_by_query", 200, `{"task":"node-1:43"}`)
+    fake.On("POST", "/_reindex", 200, `{"task":"node-1:44"}`)
+    fake.On("GET", "/_tasks/node-1:42", 200, `{"completed":false,"task":{"action":"indices:data/write/update/byquery"}}`)
+    fake.On("GET", "/_tasks/node-1:42", 200, `{"completed":true,"task":{"action":"indices:data/write/update/byquery"},"response":{"updated":120}}`)
+    fake.On("POST", "/_tasks/node-1:43/_cancel", 200, `{"nodes":{}}`)
+    fake.On("PUT", "/_scripts/by_author", 200, ACK)
+    fake.On("PUT", "/_scripts/bump", 200, ACK)
+    fake.On("POST", "/books/_search/template", 200, `{"hits":{"total":{"value":50,"relation":"eq"},"hits":[{"_id":"8"}]}}`)
+    fake.On("DELETE", "/_scripts/bump", 200, ACK)
+    fake.On("POST", "/books/_async_search", 200, `{"id":"AS-1","is_running":true,"is_partial":true,"response":{"hits":{"total":{"value":10,"relation":"gte"},"hits":[]}}}`)
+    fake.On("GET", "/_async_search/AS-1", 200, `{"id":"AS-1","is_running":false,"is_partial":false,"response":{"took":30,"hits":{"total":{"value":120,"relation":"eq"},"hits":[{"_id":"1"}]}}}`)
+    fake.On("DELETE", "/_async_search/AS-1", 200, ACK)
+    fake.On("POST", "/books/_validate/query", 200, `{"valid":true}`)
+    fake.On("POST", "/books/_explain/1", 200, `{"matched":true,"explanation":{"value":1.2}}`)
+    fake.On("GET", "/books/_field_caps", 200, `{"indices":["books"],"fields":{"title":{"text":{"type":"text"}}}}`)
+    fake.On("GET", "/books/_termvectors/1", 200, `{"found":true,"term_vectors":{}}`)
+    fake.On("GET", "/books/_stats", 200, `{"_all":{"primaries":{"docs":{"count":1200}}}}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    step("put pipeline:", yes(elasticsearch.PutPipeline(c, "clean", `{"processors":[{"lowercase":{"field":"tag"}}]}`)))
+    println "get pipeline:", elasticsearch.GetPipeline(c, "clean")
+    step("simulate:", elasticsearch.SimulatePipeline(c, "clean", `{"docs":[{"_source":{"tag":"LOUD"}}]}`))
+    step("delete pipeline:", yes(elasticsearch.DeletePipeline(c, "clean")))
+
+    step("create stream:", yes(elasticsearch.CreateDataStream(c, "logs-web")))
+    println "stream:", elasticsearch.GetDataStream(c, "logs-web")
+    step("rollover:", yes(elasticsearch.Rollover(c, "logs-web", `{"conditions":{"max_age":"7d"}}`)))
+    step("delete stream:", yes(elasticsearch.DeleteDataStream(c, "logs-web")))
+
+    step("put policy:", yes(elasticsearch.PutLifecyclePolicy(c, "month", `{"policy":{"phases":{"delete":{"min_age":"30d","actions":{"delete":{}}}}}}`)))
+    println "get policy:", elasticsearch.GetLifecyclePolicy(c, "month")
+    step("delete policy:", yes(elasticsearch.DeleteLifecyclePolicy(c, "month")))
+
+    step("repository:", yes(elasticsearch.PutRepository(c, "backups", `{"type":"fs","settings":{"location":"/mnt/backups"}}`)))
+    step("snapshot:", yes(elasticsearch.CreateSnapshot(c, "backups", "nightly", `{"indices":"books"}`)))
+    println "snapshots:", elasticsearch.ListSnapshots(c, "backups")
+    step("restore:", yes(elasticsearch.RestoreSnapshot(c, "backups", "nightly", `{"indices":"books","rename_pattern":"(.+)","rename_replacement":"restored-$1"}`)))
+    step("delete snapshot:", yes(elasticsearch.DeleteSnapshot(c, "backups", "nightly")))
+    step("delete repository:", yes(elasticsearch.DeleteRepository(c, "backups")))
+
+    step("cluster settings:", yes(elasticsearch.PutClusterSettings(c, `{"persistent":{"indices.recovery.max_bytes_per_sec":"100mb"}}`)))
+    println "settings:", elasticsearch.GetClusterSettings(c)
+
+    id := elasticsearch.StartUpdateByQuery(c, "books", elasticsearch.MatchAll(), elasticsearch.Script("ctx._source.views = 0", ""))
+    step("task id:", id)
+    mut task := elasticsearch.GetTask(c, id)
+    until task.ok and not task.completed:
+        task = elasticsearch.GetTask(c, id)
+    end
+    println "task:", task.id, task.completed, task.action, task.response
+    step("start delete:", elasticsearch.StartDeleteByQuery(c, "books", elasticsearch.Term("status", "draft")))
+    step("cancel:", yes(elasticsearch.CancelTask(c, "node-1:43")))
+    step("start reindex:", elasticsearch.StartReindex(c, `{"source":{"index":"books"},"dest":{"index":"books_v2"}}`))
+
+    step("template:", yes(elasticsearch.PutStoredScript(c, "by_author", "mustache", `{"query":{"term":{"author":"{{author}}"}},"size":"{{size}}"}`)))
+    step("painless:", yes(elasticsearch.PutStoredScript(c, "bump", "painless", "ctx._source.views += 1")))
+    found := elasticsearch.SearchTemplate(c, "books", "by_author", `{"author":"saadi","size":5}`)
+    step("template search:", str.FromInt(found.total))
+    step("delete script:", yes(elasticsearch.DeleteStoredScript(c, "bump")))
+
+    mut a := elasticsearch.SubmitAsyncSearch(c, "books", elasticsearch.SearchRequest { query = elasticsearch.MatchAll(), size = 1 }, "1s")
+    println "async:", a.ok, a.id, a.running, a.partial, a.result.total
+    println "  ", fake.Last()
+    until a.running:
+        a = elasticsearch.GetAsyncSearch(c, a.id, "2s")
+    end
+    println "async done:", a.running, a.partial, a.result.total, a.result.hits.get(0).id
+    step("async delete:", yes(elasticsearch.DeleteAsyncSearch(c, a.id)))
+
+    step("validate:", yes(elasticsearch.ValidateQuery(c, "books", elasticsearch.Match("title", "kings"))))
+    step("explain:", elasticsearch.Explain(c, "books", "1", elasticsearch.Match("title", "kings")))
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    fields.push("year")
+    step("field caps:", elasticsearch.FieldCaps(c, "books", fields))
+    step("term vectors:", elasticsearch.TermVectors(c, "books", "1", fields))
+    step("stats:", elasticsearch.IndexStats(c, "books"))
+    elasticsearch.Close(c)
+end

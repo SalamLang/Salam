@@ -1,0 +1,69 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.elasticsearch
+
+include fake "_fake.salam"
+
+const PORT := 19862
+
+func main:
+    hits := `{"took":4,"timed_out":false,"hits":{"total":{"value":2,"relation":"eq"},"max_score":2.5,"hits":[{"_index":"books","_id":"1","_score":2.5,"_source":{"title":"Shahnameh"},"highlight":{"title":["<em>Shahnameh</em>"]},"fields":{"year":[1010]}},{"_index":"books","_id":"7","_score":1.25,"_source":{"title":"Garshasp-nama"},"sort":[1066,"7"]}]}}`
+    fake.On("POST", "/books/_search", 200, hits)
+    fake.On("POST", "/books,articles/_search", 200, hits)
+    fake.On("POST", "/_search", 200, `{"took":1,"timed_out":true,"hits":{"total":{"value":10000,"relation":"gte"},"max_score":null,"hits":[]}}`)
+    fake.On("POST", "/books/_search", 400, `{"error":{"root_cause":[{"type":"parsing_exception","reason":"unknown query [bogus]"}],"type":"search_phase_execution_exception","reason":"all shards failed"},"status":400}`)
+    if not fake.Start(PORT):
+        println "fake server did not start"
+        ret
+    end
+    mut c := elasticsearch.Connect("http://127.0.0.1:" + str.FromInt(PORT as i64))
+
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortDesc("year"))
+    sort.push(elasticsearch.SortAsc("_id"))
+    mut title := Vector {} as Vector<str>
+    title.push("title")
+    mut skip := Vector {} as Vector<str>
+    skip.push("secret")
+    mut extra := Vector {} as Vector<str>
+    extra.push(`"explain": false`)
+    req := elasticsearch.SearchRequest {
+        query = elasticsearch.Match("title", "shahnameh"), from = 0, size = 2, sort = sort, source = title, source_excludes = skip, fields = title, highlight = elasticsearch.Highlight(title), post_filter = elasticsearch.Term("status", "published"), collapse = "author", track_total_hits = "true", min_score = "0.5", timeout = "2s", extra = extra
+    }
+    println "body:", elasticsearch.SearchBody(req)
+    res := elasticsearch.Search(c, "books", req)
+    println "search:", res.ok, res.status, res.took, res.timed_out, res.total, res.total_relation, res.max_score, res.hits.len()
+    each h in res.hits:
+        println "  hit", h.index, h.id, h.score, h.source
+        println "    highlight:", h.highlight, "fields:", h.fields, "sort:", h.sort
+    end
+
+    quick := elasticsearch.SearchQuery(c, "books,articles", elasticsearch.MatchPhrase("title", "book of kings"), 5)
+    println "query:", quick.total, fake.Last()
+    raw := elasticsearch.SearchRaw(c, "", `{"query":{"match_all":{}},"size":0}`)
+    println "raw:", raw.ok, raw.timed_out, raw.total, raw.total_relation, raw.hits.len()
+    no_src := elasticsearch.SearchBody(elasticsearch.SearchRequest { no_source = true, size = 0, track_total_hits = "100" })
+    println "no source:", no_src
+    mut vec := Vector {} as Vector<f64>
+    vec.push(0.1)
+    vec.push(0.2)
+    println "knn body:", elasticsearch.SearchBody(elasticsearch.SearchRequest { knn = elasticsearch.Knn("embedding", vec, 3, 30), size = 3 })
+    bad := elasticsearch.SearchRaw(c, "books", `{"query":{"bogus":{}}}`)
+    println "error:", bad.ok, bad.status, bad.error
+    parsed := elasticsearch.ParseSearchResult(`{"took":2,"hits":{"total":5,"hits":[{"_id":"x","_score":null}]},"_scroll_id":"S1","pit_id":"P1","suggest":{"s":[]}}`)
+    println "parsed:", parsed.ok, parsed.total, parsed.total_relation, parsed.scroll_id, parsed.pit_id, parsed.suggest, parsed.hits.get(0).id
+    elasticsearch.Close(c)
+end

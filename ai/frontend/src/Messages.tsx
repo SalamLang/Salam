@@ -1,0 +1,127 @@
+import { useEffect, useRef, useState } from "react";
+import { ToolCard, type CallView } from "./Agent";
+import type { Message } from "./api";
+import type { AgentAnswer } from "./desktop";
+import { ActivityPanel } from "./Activity";
+import { CopyButton, Markdown } from "./Markdown";
+
+const PHASE_TEXT: Record<string, string> = {
+  thinking: "در حال فکر کردن",
+  searching: "در حال بررسی مستندات سلام",
+  working: "در حال کار روی رایانه‌ی شما",
+  writing: "در حال نوشتن",
+  checking: "در حال اصلاح کد با کامپایلر سلام",
+};
+
+const FRAME_MS = 33;
+const CATCH_UP_MS = 260;
+
+function useSmoothText(target: string, animate: boolean): string {
+  const [shown, setShown] = useState(animate ? "" : target);
+  const shownRef = useRef(shown);
+
+  useEffect(() => {
+    if (!animate) {
+      shownRef.current = target;
+      setShown(target);
+      return;
+    }
+    let raf = 0;
+    let last = 0;
+    const tick = (ts: number) => {
+      const cur = shownRef.current;
+      if (!target.startsWith(cur)) {
+        shownRef.current = target;
+        setShown(target);
+        return;
+      }
+      const backlog = target.length - cur.length;
+      if (backlog <= 0) return;
+      if (last && ts - last < FRAME_MS) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      const dt = last ? ts - last : FRAME_MS;
+      last = ts;
+      const step = Math.max(2, Math.ceil(backlog * Math.min(1, dt / CATCH_UP_MS)));
+      let end = Math.min(target.length, cur.length + step);
+      const code = target.charCodeAt(end - 1);
+      if (end < target.length && code >= 0xd800 && code <= 0xdbff) end++;
+      const next = target.slice(0, end);
+      shownRef.current = next;
+      setShown(next);
+      if (end < target.length) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, animate]);
+
+  return shown;
+}
+
+type Tools = {
+  calls?: CallView[];
+  onDecide?: (id: string, a: AgentAnswer) => void;
+  onStop?: (id: string) => void;
+};
+
+function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
+  const [animate] = useState(m.status === "pending");
+  const text = useSmoothText(m.body, animate);
+  const pending = m.status === "pending";
+  const typing = pending || text.length < m.body.length;
+  const phase = m.phase || "thinking";
+  const waiting = calls.some((c) => c.state === "pending" || c.state === "running");
+  const steps = m.activity ?? [];
+  const showPhase = pending && calls.length > 0 && !waiting && text.length === 0;
+  const visible = typing ? text.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : text;
+  return (
+    <div className={`msg assistant ${m.status}`}>
+      <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
+      <div className="msg-body">
+        <ActivityPanel steps={steps} pending={pending} ms={m.ms} created={m.created} />
+        {calls.length > 0 && (
+          <div className="tool-list">
+            {calls.map((c) => (
+              <ToolCard key={c.call_id} c={c} onDecide={onDecide} onStop={onStop} />
+            ))}
+          </div>
+        )}
+        {visible ? (
+          <div className={typing ? "streaming" : undefined}>
+            <Markdown text={visible} />
+          </div>
+        ) : null}
+        {showPhase && (
+          <div className="phase" aria-live="polite">
+            <span className="dots">
+              <i />
+              <i />
+              <i />
+            </span>
+            {calls.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+          </div>
+        )}
+        {!typing && m.body && (
+          <div className="msg-tools">
+            <CopyButton text={m.body} label="رونوشت پاسخ" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function MessageView({ m, name, ...tools }: { m: Message; name: string } & Tools) {
+  if (m.role === "user") {
+    return (
+      <div className="msg user">
+        <div className="bubble" dir="auto">
+          {m.body}
+        </div>
+        <span className="sr-only">{name}</span>
+      </div>
+    );
+  }
+  return <AssistantMessage m={m} {...tools} />;
+}

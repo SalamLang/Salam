@@ -14,12 +14,19 @@
 
 package main
 
+import os
+import env
+import net.http
+
 include mcprpc "mcp_rpc.salam"
 include mcpsrv "mcp_server.salam"
 include mcpexec "mcp_exec.salam"
+include mcphttp "mcp_http.salam"
+include mcpauth "mcp_auth.salam"
 
-func main:
+func serve_stdio(): int:
     mcprpc.Log("ready (stdio); waiting for MCP messages on stdin")
+    mut legacy := false
     mut running := true
     until running:
         line := mcprpc.ReadLine()
@@ -28,10 +35,41 @@ func main:
             continue
         end
         if line.text.trim().len() == 0: continue end
-        reply := mcpsrv.Dispatch(mcprpc.Parse(line.text))
+        reply := mcpsrv.Dispatch(mcprpc.Parse(line.text), legacy)
         if reply.len() > 0: mcprpc.WriteMessage(reply) end
     end
     mcpexec.Cleanup()
     mcprpc.Log("stdin closed; exiting")
     ret 0
+end
+
+func serve_http(): int:
+    jobs := env.GetOr("SALAM_MCP_JOBS", "4").to_int()
+    timeout_s := env.GetOr("SALAM_MCP_TIMEOUT", "30").to_int()
+    mcpexec.Host(jobs, timeout_s)
+    mcpauth.Configure()
+    mcphttp.Serve(env.GetOr("SALAM_MCP_HOST", "0.0.0.0"), env.GetOr("SALAM_MCP_PORT", "8080").to_int())
+    mcpexec.Cleanup()
+    ret 1
+end
+
+func probe(): int:
+    r := http.Get("http://127.0.0.1:".concat(env.GetOr("SALAM_MCP_PORT", "8080")).concat("/health"))
+    if http.Status(r) == 200: ret 0 end
+    ret 1
+end
+
+func main:
+    args := os.Args()
+    mut mode := ""
+    if args.len() > 1: mode = args.get(1) end
+    switch mode:
+        "--http":
+            ret serve_http()
+        end
+        "--health":
+            ret probe()
+        end
+    end
+    ret serve_stdio()
 end

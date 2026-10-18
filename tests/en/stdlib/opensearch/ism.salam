@@ -1,0 +1,63 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+import db.opensearch
+
+include fake "_fake.salam"
+
+const PORT := 19880
+
+func main:
+    stored := `{"_id":"logs-30d","_version":1,"_seq_no":0,"_primary_term":1,"policy":{"policy_id":"logs-30d","description":"drop old logs","default_state":"hot","states":[{"name":"hot"},{"name":"delete"}]}}`
+    fake.On("PUT", "/_plugins/_ism/policies/logs-30d", 201, stored)
+    fake.On("GET", "/_plugins/_ism/policies/logs-30d", 200, stored)
+    fake.On("PUT", "/_plugins/_ism/policies/logs-30d", 200, `{"_id":"logs-30d","_version":2,"_seq_no":1,"_primary_term":1}`)
+    fake.On("POST", "/_plugins/_ism/add/logs-*", 200, `{"updated_indices":3,"failures":false,"failed_indices":[]}`)
+    fake.On("POST", "/_plugins/_ism/add/nope", 200, `{"updated_indices":0,"failures":true,"failed_indices":[{"index_name":"nope","reason":"no such index"}]}`)
+    fake.On("POST", "/_plugins/_ism/change_policy/logs-*", 200, `{"updated_indices":3,"failures":false,"failed_indices":[]}`)
+    fake.On("POST", "/_plugins/_ism/retry/logs-000001", 200, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
+    fake.On("GET", "/_plugins/_ism/explain/logs-000001", 200, `{"logs-000001":{"index.plugins.index_state_management.policy_id":"logs-30d","index.opendistro.index_state_management.policy_id":"logs-30d","index":"logs-000001","policy_id":"logs-30d","state":{"name":"hot"},"enabled":true},"total_managed_indices":1}`)
+    fake.On("POST", "/_plugins/_ism/remove/logs-*", 200, `{"updated_indices":3,"failures":false,"failed_indices":[]}`)
+    fake.On("DELETE", "/_plugins/_ism/policies/logs-30d", 200, `{"_index":".opendistro-ism-config","_id":"logs-30d","result":"deleted"}`)
+    if not fake.Start(PORT):
+        println "fake server failed to start"
+        ret 1
+    end
+    c := opensearch.Connect("http://127.0.0.1:19880")
+
+    mut patterns := Vector {} as Vector<str>
+    patterns.push("logs-*")
+    policy := opensearch.DeleteAfterPolicy("drop old logs", "30d", patterns)
+    println "policy:", policy
+    println "create:", opensearch.PutPolicy(c, "logs-30d", policy)
+    println "  sent:", fake.Last().split("\n").get(0)
+    got := opensearch.GetPolicy(c, "logs-30d")
+    println "stored:", opensearch.JsonPath(got, "policy.default_state"), opensearch.JsonPath(got, "policy.states.1.name")
+    seq := opensearch.JsonPath(got, "_seq_no").to_int() as i64
+    term := opensearch.JsonPath(got, "_primary_term").to_int() as i64
+    println "update:", opensearch.UpdatePolicy(c, "logs-30d", opensearch.DeleteAfterPolicy("drop old logs", "60d", patterns), seq, term)
+    println "  sent:", fake.Last().split("\n").get(0)
+    println "attach:", opensearch.AddPolicy(c, "logs-*", "logs-30d")
+    println "  sent:", fake.Last()
+    println "attach to a missing index:", opensearch.AddPolicy(c, "nope", "logs-30d")
+    println "change:", opensearch.ChangePolicy(c, "logs-*", "logs-30d", "hot")
+    println "  sent:", fake.Last()
+    println "retry:", opensearch.RetryPolicy(c, "logs-000001")
+    println "policy of index:", opensearch.PolicyIdOf(c, "logs-000001")
+    println "explain:", opensearch.JsonPath(opensearch.ExplainPolicy(c, "logs-000001"), "total_managed_indices")
+    println "detach:", opensearch.RemovePolicy(c, "logs-*")
+    println "delete:", opensearch.DeletePolicy(c, "logs-30d")
+    ret 0
+end

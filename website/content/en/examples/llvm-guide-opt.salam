@@ -1,0 +1,57 @@
+import llvm
+import io
+import os
+import str
+
+func main:
+    path := os.TempDir() + "/salam_guide_square.ll"
+    _ := io.WriteFile(path, `define i32 @square_sum(i32 %n) {
+entry:
+  %a = alloca i32
+  store i32 0, ptr %a
+  %x = mul i32 %n, %n
+  %old = load i32, ptr %a
+  %new = add i32 %old, %x
+  store i32 %new, ptr %a
+  %r = load i32, ptr %a
+  ret i32 %r
+}
+`)
+    parsed := llvm.ParseIR(path)
+    if not parsed.ok:
+        println parsed.err
+        ret 1
+    end
+    made := llvm.NewTargetMachine("x86_64-unknown-linux-gnu", llvm.OPT_O2, false)
+    if not made.ok:
+        println made.err
+        ret 1
+    end
+    llvm.SetTargetTriple(parsed.mod, "x86_64-unknown-linux-gnu")
+    llvm.ApplyDataLayout(parsed.mod, made.tm)
+    opt := llvm.RunOpt(parsed.mod, made.tm, llvm.OPT_O2)
+    if not opt.ok:
+        println opt.err
+        ret 1
+    end
+    text := llvm.ModuleToString(parsed.mod)
+    each line in str.Split(text, "\n"):
+        if str.StartsWith(line, "define") or str.StartsWith(line, "  "):
+            println line
+        end
+    end
+    asm := os.TempDir() + "/salam_guide_square.s"
+    emitted := llvm.EmitAsm(parsed.mod, made.tm, asm)
+    if not emitted.ok:
+        println emitted.err
+        ret 1
+    end
+    each line in str.Split(io.ReadFile(asm), "\n"):
+        if str.StartsWith(line, "\t") and not str.StartsWith(line, "\t."):
+            println str.Trim(str.Replace(line, "\t", " "))
+        end
+    end
+    llvm.FreeTargetMachine(made.tm)
+    llvm.FreeModule(parsed.mod)
+    llvm.FreeContext(parsed.ctx)
+end

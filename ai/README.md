@@ -31,6 +31,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                                                                | `https://mcp.salamlang.ir/mcp`                  |
 | `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters                                               | empty (both endpoints refuse every call)        |
 | `AI_API_HOURLY`                              | requests per hour each account may send to the API                                                                                      | `100`                                           |
+| `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `900`                                           |
+| `AI_API_START_SECONDS`                       | how long to wait for the engine to pick an API request up before giving up                                                              | `120`                                           |
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
@@ -79,11 +81,28 @@ reply = client.chat.completions.create(
   key's name.
 - The whole conversation, system messages included, is sent to the assistant
   as one turn in a fresh engine session that is deleted afterwards. Token
-  counts in `usage` are estimates (4 characters per token). Tool calling and
-  images are not supported.
+  counts in `usage` are estimates (4 characters per token). Images are not
+  supported, and `tools` is ignored: agent clients such as Cline must use
+  their prompt based tool protocol, not native function calling.
+- The flattened conversation may be up to 1 MB. Past that the oldest turns
+  are dropped, the prompt says so in one line, and the system block and the
+  newest turns are kept; only a single message larger than 1 MB is refused.
+  The request body itself may be up to 8 MB.
+- A streaming answer always ends: a chunk carrying `finish_reason` (`stop`,
+  or `length` when the turn was cut off) and then `data: [DONE]`. When the
+  assistant fails before writing anything, an `error` frame goes out first,
+  so clients report the reason instead of a stream that stopped for no
+  reason. Frames are always written whole, even when the socket takes them
+  in pieces.
+- Answers to streaming requests are not checked with the compiler, because
+  text that is already with the client cannot be taken back. Non-streaming
+  answers still go through the check below.
 - `/models` and `/chat/completions` are served by the streaming listener
   (`AI_STREAM_PORT`), so the proxy must send those two paths there with
-  buffering off, like the chat stream route.
+  buffering off, like the chat stream route. The same two paths behind a
+  `/v1`, `/openai` or `/openai/v1` prefix are served as well, for clients
+  whose base URL already carries the version, and the proxy has to forward
+  those prefixes to the streaming listener too.
 
 `HOURLY=<AI_API_HOURLY> node ai/backend/tests/api_flow.mjs` tests it against a running API, with
 `ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.

@@ -1,0 +1,62 @@
+import net.email
+import net.tcp
+import str
+
+mut server := tcp.Server {}
+
+func next_line(conn: tcp.Conn, buf &: str): str:
+    until buf.find("\r\n") < 0:
+        buf += tcp.Read(conn, 4096)
+    end
+    at := buf.find("\r\n")
+    line := buf.substr(0, at)
+    buf = buf.substr(at + 2, buf.len() - at - 2)
+    ret line
+end
+
+func pop_server():
+    mails := ["Subject: Welcome\r\n\r\nHello Sara.", "Subject: Invoice 12\r\n\r\nTotal: 40 USD\r\n..end of invoice"]
+    conn := tcp.Accept(server)
+    mut buf := ""
+    _ := tcp.Write(conn, "+OK ready\r\n")
+    mut line := next_line(conn, buf)
+    until line != "QUIT":
+        if line == "STAT":
+            _ := tcp.Write(conn, "+OK 2 " + (mails[0].len() + mails[1].len()) + "\r\n")
+        else line == "LIST":
+            _ := tcp.Write(conn, "+OK\r\n1 " + mails[0].len() + "\r\n2 " + mails[1].len() + "\r\n.\r\n")
+        else str.StartsWith(line, "RETR "):
+            n := line.substr(5, line.len() - 5).to_int()
+            _ := tcp.Write(conn, "+OK\r\n" + mails[n - 1] + "\r\n.\r\n")
+        else:
+            _ := tcp.Write(conn, "+OK\r\n")
+        end
+        line = next_line(conn, buf)
+    end
+    _ := tcp.Write(conn, "+OK bye\r\n")
+    tcp.Close(conn)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(pop_server)
+    mut c := email.DialPOP3("127.0.0.1", tcp.Port(server))
+    if not (c.ok and email.User(c, "sara") and email.Pass(c, "secret")):
+        println "login failed"
+        ret 1
+    end
+    println "stat:", email.Stat(c)
+    each entry in email.POP3List(c):
+        parts := str.Split(entry, " ")
+        number := parts[0].to_int()
+        text := email.Retr(c, number)
+        subject := str.Split(text, "\r\n")[0]
+        println "message", number, "(" + parts[1] + " bytes):", subject
+    end
+    println "last line of 2:", str.Split(email.Retr(c, 2), "\r\n")[3]
+    println "delete 1:", email.Dele(c, 1)
+    email.POP3Quit(c)
+    join(t)
+    tcp.CloseServer(server)
+    ret 0
+end

@@ -1,0 +1,40 @@
+import db
+import db.sqlite
+
+func transfer(c: dyn db.Connection, from_id: int, to_id: int, amount: int): str:
+    tx := c.Begin()
+    if not tx.Ok():
+        ret "could not start: " + c.Error()
+    end
+    _ := tx.Exec("UPDATE accounts SET balance = balance - " + amount + " WHERE id = " + from_id)
+    _ := tx.Exec("UPDATE accounts SET balance = balance + " + amount + " WHERE id = " + to_id)
+    rows := tx.Query("SELECT balance FROM accounts WHERE id = " + from_id)
+    mut left := 0
+    if rows.Next():
+        left = rows.Int(0)
+    end
+    _ := rows.Close()
+    if left < 0:
+        _ := tx.Rollback()
+        ret "refused, only " + (left + amount) + " left"
+    end
+    _ := tx.Commit()
+    ret "moved " + amount
+end
+
+func balances(c: dyn db.Connection): str:
+    ret db.QueryText(c, "SELECT group_concat(name || '=' || balance, ' ') FROM accounts")
+end
+
+func main:
+    c := sqlite.Conn(sqlite.Open(":memory:"))
+    mut setup := Vector {} as Vector<str>
+    defer setup.free()
+    setup.push("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT, balance INTEGER)")
+    setup.push("INSERT INTO accounts VALUES (1, 'ali', 100), (2, 'sara', 50)")
+    println db.InTx(c, setup)
+    println transfer(c, 1, 2, 30), "|", balances(c)
+    println transfer(c, 1, 2, 500), "|", balances(c)
+    println transfer(c, 2, 1, 80), "|", balances(c)
+    _ := c.Close()
+end

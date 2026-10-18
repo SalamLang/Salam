@@ -6,39 +6,86 @@ pkg.title = The net/httpx package in Salam
 pkg.description = The net/httpx package in Salam: sending an HTTP and HTTPS request with headers written by hand and reading the response as text or binary, with an example.
 pkg.import = net.httpx
 pkg.intro <<
-<p>This package is a thin layer under <a href="../net-http/">net/http</a>: you write the request line and the headers yourself and get the response untouched. It is what API clients that want full control of the headers are built on, such as the cloud service packages.</p>
+<p>This package sends one HTTP/1.1 request that you write by hand and gives back the answer as it came. Reach for it when you need full control of the request line and headers, for example to sign a request or to talk to an API with unusual headers; the <a href="/std/aws/">aws</a>, <a href="/std/webpush/">webpush</a>, <a href="/std/db-meilisearch/">db/meilisearch</a>, <a href="/std/db-elasticsearch/">db/elasticsearch</a> and <a href="/std/db-typesense/">db/typesense</a> packages are built on it. For everyday requests, with headers in a map, redirects and cookies, use <a href="/std/net-http/">net/http</a>. The examples run against a small server in a thread of the same program, so they need no network.</p>
+<p>Every call takes an <code>Endpoint</code> from <code>ParseEndpoint</code> (host, port and TLS on or off; any path in the URL is dropped, because the path goes in your request line) and a request head: the request line, the headers and an empty line, each line ending in <code>\r\n</code>. There are two families of calls:</p>
+<table>
+<tr><th>Call</th><th>Body as</th><th>Chunked bodies</th><th>Time limit</th><th>Size limit</th></tr>
+<tr><td><code>Send</code>, <code>SendText</code></td><td><code>str</code> in a <code>Response</code></td><td>left encoded</td><td>none</td><td>stops reading at 32 MB, silently</td></tr>
+<tr><td><code>SendRaw</code>, <code>SendRawTimeout</code>, <code>SendRawTLS</code></td><td>bytes in a <code>Raw</code>, freed with <code>FreeRaw</code></td><td>decoded</td><td>optional, in milliseconds</td><td><code>RawLimit</code>, 256 MB by default, reported as an error</td></tr>
+</table>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Always send <code>Connection: close</code>.</strong> Both families read until the server closes the connection; on a kept-alive connection the call waits forever (or until the time limit).</li>
+<li><strong><code>SendText</code> does not decode <code>Transfer-Encoding: chunked</code>.</strong> Many servers chunk their answers; use the raw calls, or the body has chunk sizes mixed into it.</li>
+<li><strong><code>ok</code> means a 2xx status</strong>, not "an answer arrived". Check <code>status</code> to tell a 404 from a dead server.</li>
+<li>A <code>str</code> stops at the first zero byte, so binary bodies need the raw calls.</li>
+</ul>
+
+<h2 id="guide-post">POST JSON with your own headers</h2>
+<p><code>ParseEndpoint</code> turns a URL into the host, port and whether to use TLS. The request head is plain text that you write: the request line, a <code>Host</code> header, and here an <code>Authorization</code> token, the content type and the body length, closed by an empty line. <code>SendText</code> sends the head and the body and returns the answer. <code>HeaderValue</code> finds a header in the response head, ignoring case.</p>
+{{example.net-httpx-post-json}}
+<p><code>Content-Length</code> must be the length in bytes, which is what <code>str.len()</code> returns, so it stays right for text in any language. A wrong length makes servers wait for more data or cut the body.</p>
+
+<h2 id="guide-errors">Status codes and failures</h2>
+<p>A <code>Response</code> tells three cases apart. <code>ok</code> is true only for a 2xx status. A 4xx or 5xx answer still has its <code>status</code> and <code>body</code>, which usually explain the problem. When no answer came at all, because the connection was refused, the host was unknown or the URL could not be parsed, <code>status</code> is 0 and <code>error</code> says why.</p>
+{{example.net-httpx-status-errors}}
+<p>A 503 or 429 often means "try again later"; read <code>Retry-After</code> with <code>HeaderValue</code> before you retry, and do not retry a 4xx such as 404, which will not change.</p>
+
+<h2 id="guide-client">A small API client</h2>
+<p>A struct that holds the endpoint and the token, with one method per kind of request, keeps the header writing in one place. The JSON in the replies is read with <a href="/std/encoding-json/">encoding/json</a>: <code>json.Get</code> for a field and <code>json.Items</code> to walk an array.</p>
+{{example.net-httpx-api-client}}
+
+<h2 id="guide-chunked">Chunked answers and time limits</h2>
+<p>A server that does not know the length of its answer in advance sends it in chunks, each one prefixed by its size in hex. <code>SendText</code> hands you that framing as it arrived; <code>SendRawTimeout</code> removes it. The last parameter of <code>SendRawTimeout</code> is a time limit in milliseconds for each read and write, so a server that accepts the connection and then says nothing cannot hang the program. The third request below hits such a server with a 300 ms limit.</p>
+{{example.net-httpx-chunked}}
+<p>A timeout is reported with the same message as a server that closed without answering, so treat both as "try again later". <code>Send</code> and <code>SendText</code> have no time limit at all; use the raw calls for any server you do not control. <code>SendRawTLS</code> takes the same limit plus a <code>tls.Config</code> for a private CA.</p>
+
+<h2 id="guide-binary">Binary downloads</h2>
+<p>A <code>str</code> ends at the first zero byte, so an image or a zip file read through <code>SendText</code> is cut short. Use <code>SendRawTimeout</code> instead: <code>data</code> points at the body bytes and <code>len</code> is their count. The program downloads twelve bytes of a PNG header and shows that <code>RawText</code>, which turns the body into a <code>str</code>, keeps only the eight bytes before the first zero.</p>
+{{example.net-httpx-binary}}
+<p>A <code>Raw</code> body is limited to <code>RawLimit</code> bytes, 256 MB unless you change it with <code>SetRawLimit</code>; a larger answer is reported as an error instead of filling memory. The <code>data</code> buffer belongs to you until <code>FreeRaw</code>.</p>
+
+<h2 id="guide-https">HTTPS</h2>
+<p>An <code>https://</code> URL gives an endpoint with <code>secure</code> set, and the same calls then speak TLS through <a href="/std/tls/">tls</a>, checking the server certificate. Nothing else changes. This example asks the GitHub API about the Salam repository, so it needs the internet; GitHub requires a <code>User-Agent</code> header.</p>
+{{example.net-httpx-https}}
+<p>When this page was written it printed:</p>
+<pre class="code" dir="ltr"><code>api.github.com 443 true
+status: 200
+rate limit left: 58
+SalamLang/Salam is written in TeX</code></pre>
+<p>The rate limit number counts down with each call from your address, and the language is what GitHub detects for the repository at the time.</p>
 >>
 
 doc.Endpoint = The address of one server: the host, the port and whether it is secure.
 doc.Endpoint.host = The host.
-doc.Endpoint.port = The port; 443 by default.
+doc.Endpoint.port = The port: the one in the URL, else 80 for http and 443 for https.
 doc.Endpoint.secure = Connect with TLS.
-doc.Endpoint.ok = The address was read correctly.
-doc.ParseEndpoint = Reads an address such as <code>https://api.example.com:8443</code>; the default port is 80 for http and 443 for https.
+doc.Endpoint.ok = The address was read correctly; false for anything that does not start with <code>http://</code> or <code>https://</code>.
+doc.ParseEndpoint = Reads an address such as <code>https://api.example.com:8443</code>; the default port is 80 for http and 443 for https. A path after the host is ignored.
 doc.Response = An HTTP response.
 doc.Response.status = The status code.
-doc.Response.head = The response headers, untouched.
-doc.Response.body = The body.
-doc.Response.ok = The request was sent and the response was read.
-doc.Response.error = The error message.
-doc.Send = Sends the request, with the headers you wrote and the given body, and returns the response.
+doc.Response.head = The status line and headers, untouched, ending with the empty line.
+doc.Response.body = The body as it came: a chunked body keeps its chunk sizes.
+doc.Response.ok = The status is 2xx.
+doc.Response.error = Why no answer came; empty when one did.
+doc.Send = Sends the request head you wrote and <code>n</code> bytes of body from a pointer, then reads until the server closes. No time limit, no chunked decoding, and reading stops at 32 MB.
 doc.SendText = Like <code>Send</code>, with a text body.
 doc.HeaderValue = The value of one header in the header text; the name is case insensitive.
-doc.CopyOut = Copies a string into fresh memory and returns its length.
+doc.CopyOut = Copies a string into fresh memory, returns the pointer and puts the length in <code>out_len</code>; free the pointer with <code>mem.Free</code>. Returns null for an empty string.
 doc.Raw = A response with a binary body.
 doc.Raw.status = The status code.
 doc.Raw.head = The headers.
 doc.Raw.data = The address of the body.
-doc.Raw.len = The length of the body.
-doc.Raw.ok = It succeeded.
+doc.Raw.len = The length of the body in bytes, after chunked decoding.
+doc.Raw.ok = The status is 2xx.
 doc.Raw.error = The error message.
-doc.SendRaw = Like <code>Send</code>, but keeps the response body binary; for images and files.
-doc.SendRawTimeout = The same, with a timeout.
+doc.SendRaw = Like <code>Send</code>, but keeps the body binary and decodes a chunked body; for images and files.
+doc.SendRawTimeout = The same, with a time limit in milliseconds for each read and write; 0 means none.
 doc.SendRawTLS = Like <code>SendRawTimeout</code>, with your own <code>tls.Config</code>: a private CA in <code>ca_file</code>, or <code>insecure_skip_verify</code> for local testing. A plain <code>http</code> endpoint ignores it.
 doc.FreeRaw = Frees the memory of a raw response.
-doc.RawText = The body of a raw response as a string.
-doc.RawLimit = The greatest body size that is read.
-doc.SetRawLimit = Changes that limit.
+doc.RawText = The body of a raw response as a string, cut at the first zero byte.
+doc.RawLimit = The greatest response size the raw calls read, in bytes; 256 MB by default.
+doc.SetRawLimit = Changes that limit for the whole program; zero or less is ignored.
 
 ex.Endpoint = net-httpx-Send
 ex.ParseEndpoint = net-httpx-Send

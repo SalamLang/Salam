@@ -1299,13 +1299,17 @@ end
   `RunTLS(s, cert, key)` or `RunBackground(s)` (returns once bound, serves on
   its own thread, so one process can run several servers). Limits
   `SetMaxBodyBytes SetMaxHeaderBytes SetKeepAliveIdle EnableAccessLog`. A
-  handler is `func h(ctx: i64)` passed by bare name, using `Ctx_text`, `Ctx_html`, `Ctx_json`, `Ctx_status`, `Ctx_set_header`, `Ctx_redirect`, `Ctx_param`, `Ctx_query`, `Ctx_form`, `Ctx_body`, `Ctx_header`, `Ctx_method`, `Ctx_path`, `Ctx_cookie` and `Ctx_set_cookie`, or `c := http.Ctx(ctx)` with the methods `Text`, `Json`, `Html`, `Param`,
-  `Query`, `Form`, `Body`, `Header`, `SetStatus`, `SetHeader` and `Redirect`. Pitfalls: **register every
+  handler is `func h(ctx: i64)` passed by bare name, using `Text`, `Html`,
+  `Json`, `SetStatus`, `SetHeader`, `Redirect`, `Param`, `Query`, `Form`,
+  `Body`, `Header`, `Method`, `Path`, `Cookies`, `CookieValue`, `HasCookie`,
+  `SetCookie`, `ClearCookie` and `Own`. Each of these also takes a
+  `Context`, so `c := http.Ctx(ctx)` lets you pass `c` to the same names
+  instead of the raw id. Pitfalls: **register every
   route before `Use`** (the server copies the router; a later route is a
   404); **strings read from a request are freed when the handler returns**,
-  so `str.Clone` what you keep in a global or session (`Ctx_own` hands a
+  so `str.Clone` what you keep in a global or session (`Own` hands a
   string you built to the request); router params are not URL-decoded; no
-  automatic 405; `Ctx_body` is a `str` (binary uploads are cut).
+  automatic 405; `Body` is a `str` (binary uploads are cut).
 - **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
   HSTS), **`net.http.validate`** `Required Length IsEmail Matches Assert`
   (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored,
@@ -1438,7 +1442,7 @@ end
 func me(ctx: i64):
     mut t := jwt.Token { }
     if not jwt.Require(ctx, guard(), t): ret end     // 401 already written
-    http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
+    http.Json(ctx, `{"sub":"` + t.claims.sub + `"}`)
 end
 ```
 
@@ -1619,7 +1623,7 @@ General mapping that applies to all source languages:
   `public`→`pub`; everything else is private by default.
 - String interpolation `"$a-$b"` → `a + "-" + b` or `fmt.Sprintf`.
 - `echo` → `print`/`println`. Superglobals (`$_GET`, `$_POST`) → the `web`
-  package's `Ctx_query`/`Ctx_form`/`Ctx_body`.
+  package's `Query`/`Form`/`Body`.
 - Exceptions → return `bool`/`Option`; dynamic typing → pick concrete types or
   `Variant`.
 
@@ -1969,7 +1973,7 @@ layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
 end
 
 func home_h(ctx: i64):
-    http.Ctx_html(ctx, Home(http.Ctx_query(ctx, "name"), rand.IntN(100) as int, items(), false))
+    http.Html(ctx, Home(http.Query(ctx, "name"), rand.IntN(100) as int, items(), false))
 end
 ```
 

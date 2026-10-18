@@ -48,6 +48,7 @@ const emit = (obj) => {
 };
 function streamParts(id, s) {
   if (!process.env.MOCK_LIVE) return;
+  if (s.prompt.includes("goes quiet") || s.prompt.includes("fail midway")) return;
   const full = answerFor(s);
   const pid = `prt_${id}_${++n}`;
   const mid = `msg_${id}_${n}`;

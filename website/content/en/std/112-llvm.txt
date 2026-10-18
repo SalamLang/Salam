@@ -7,9 +7,64 @@ pkg.description = The llvm package in Salam: building LLVM IR with a builder, ve
 pkg.flat = true
 pkg.import = llvm
 pkg.intro <<
-<p>LLVM is the compiler infrastructure that also backs Salam. With this package you can build your own compiler or interpreter: make a <code>Context</code> and a <code>Module</code>, write the instructions with a <code>Builder</code>, test the module with <code>Verify</code> and then run it with the JIT or turn it into an object file.</p>
-<p>If you have the IR as text, <code>Run</code> does the whole pipeline with one <code>Options</code>. For linking, LLD works inside the program itself for Linux with musl, Windows with MinGW and WASI; for the rest <code>LinkExternal</code> calls the system linker.</p>
-<p>This package needs the <code>libsalam_llvm</code> library. The examples on the site are only checked.</p>
+<p>LLVM is the compiler infrastructure behind Salam's own native backend. This package binds its C API so that a Salam program can be a compiler: build or read IR in a <code>Module</code>, check it with <code>Verify</code>, optimize it, then run it at once with the JIT or write an object file and link it into an executable. Use it when you are writing a language, a query compiler or a code generator. To run Salam code itself you do not need it; <code>salam build</code> already goes through LLVM.</p>
+<h3>Core ideas</h3>
+<ul>
+<li><strong>Context, module, builder.</strong> A <code>Context</code> owns everything LLVM allocates. A <code>Module</code> is one translation unit of functions and globals inside it. A <code>Builder</code> is a cursor that appends instructions to the end of a block.</li>
+<li><strong>Values are not numbers.</strong> <code>Add</code>, <code>Load</code> and the other instruction functions return a <code>Value</code>: the result the generated code will compute when it runs, not a result now.</li>
+<li><strong>Two ways in.</strong> Write IR as text and read it with <code>ParseIR</code>, or build it call by call. Both end in the same <code>Module</code>.</li>
+<li><strong>Two ways out.</strong> <code>RunJIT</code> compiles in memory and calls <code>main</code>. <code>Run</code> with an <code>Options</code> value, or <code>NewTargetMachine</code>, <code>RunOpt</code> and <code>EmitObject</code> step by step, write files for any target LLVM knows.</li>
+</ul>
+<h3>Things that trip people up</h3>
+<ul>
+<li><code>ParseIR</code>, <code>RunJIT</code> and <code>Run</code> take the <em>path</em> of a <code>.ll</code> file, not the IR text. Write the text to a file first, as the examples do.</li>
+<li><code>RunJIT</code> parses that file again by itself; it does not run a module you already have. Its <code>rc</code> is the <code>i32</code> that <code>main</code> returned.</li>
+<li>Invalid IR can crash LLVM later instead of producing an error. Call <code>Verify</code> on everything you build before you optimize or emit it.</li>
+<li>The linker inside the program (<code>LinkAuto</code>) still needs the target's C library files: a musl sysroot for Linux, MinGW for Windows, a WASI sysroot for WebAssembly. Without one the link fails with a message naming the directory it looked in; point <code>$SALAM_SYSROOTS</code> or <code>Options.sysroot</code> at one.</li>
+<li>Free in reverse order: builder, then module, then context.</li>
+</ul>
+<p>Programs that use this package link against <code>libsalam_llvm</code>, so the site only compiles them. Build the library as the repository's LLVM backend instructions describe, then run them with <code>salam run</code>. The output shown is what they printed with LLVM 22 on x86-64 Linux.</p>
+
+<h2 id="guide-text">Running IR you wrote as text</h2>
+<p>The shortest way in is to write LLVM IR as text, the same <code>.ll</code> format <code>clang -S -emit-llvm</code> prints, and save it to a file. <code>ParseIR</code> reads that file into a module in a fresh context and reports syntax errors in <code>err</code>; <code>Verify</code> then checks the rules the parser does not, such as every block ending in a branch or a return. <code>RunJIT</code> compiles the same file in memory and calls its <code>main</code>.</p>
+{{example.llvm-guide-text}}
+<p>The loop adds 1 to 10, so the program prints <code>valid: true</code> and then <code>sum of 1..10 = 55</code>. The value of <code>main</code> comes back as <code>rc</code>, just like an exit code, which keeps the round trip simple while you are experimenting.</p>
+
+<h2 id="guide-compiler">A tiny compiler with the builder</h2>
+<p>A real compiler does not glue strings together; it walks its own syntax tree and calls the builder. This one reads arithmetic in reverse Polish notation: a number pushes a constant on a stack, and an operator pops two values and pushes the instruction that combines them. A <code>Value</code> stands for a result that will exist at run time, so the stack holds instructions, not numbers.</p>
+{{example.llvm-guide-rpn}}
+<p><code>(2 + 3) * 4 - 6</code> is 14, and that is what the JIT returns. With constants only, LLVM's builder folds the whole expression while you build it, so the IR is just <code>ret i32 14</code>; with parameters or loaded values you would see the <code>add</code>, <code>mul</code> and <code>sub</code> instructions.</p>
+
+<h2 id="guide-verify">Let Verify catch your mistakes</h2>
+<p>Bugs in a code generator usually produce IR that is not valid, and LLVM may crash on it later instead of reporting it. Call <code>Verify</code> after building a module and before optimizing or running it. Here the block computes a value but never returns, so the module is rejected with a message that names the problem.</p>
+{{example.llvm-guide-verify}}
+
+<h2 id="guide-static">An object file and a static program</h2>
+<p><code>Run</code> takes the whole pipeline from one <code>Options</code> value: the optimization level, the target triple and what to produce. <code>OUT_OBJ</code> writes an object file for the chosen triple, even one that is not the machine you are on. For <code>x86_64-unknown-linux-musl</code>, LLD inside the program links it into a static executable with no system linker involved; <code>CanLinkTriple</code> says whether that is possible for a triple.</p>
+{{example.llvm-guide-static}}
+<p>On a machine without musl's files in <code>/usr/lib/x86_64-linux-musl</code> (the <code>musl-dev</code> package) or under <code>$SALAM_SYSROOTS</code>, the object is still written but the link step reports <code>no musl sysroot</code>. <code>CanLinkTriple</code> only tells you that LLD is built in and knows the triple; it does not look for the sysroot. The program it builds just exits with 7. For a Windows target use <code>x86_64-w64-windows-gnu</code> and an output ending in <code>.exe</code>; to work out sizes and file names from a triple without LLVM at all, see <a href="/std/llvm-triple/"><code>llvm/triple</code></a>.</p>
+
+<h2 id="guide-opt">Optimize, then read the result</h2>
+<p>Looking at the optimized IR and the machine code is how you check that your generator produces what you meant. <code>NewTargetMachine</code> describes the target CPU; give the module the same triple and its data layout with <code>SetTargetTriple</code> and <code>ApplyDataLayout</code>, then <code>RunOpt</code> runs LLVM's standard <code>O2</code> pipeline on it in place. <code>ModuleToString</code> prints the module as text and <code>EmitAsm</code> writes assembly to a file.</p>
+{{example.llvm-guide-opt}}
+<pre class="code" dir="ltr"><code>define i32 @square_sum(i32 %n) local_unnamed_addr #0 {
+  %x = mul i32 %n, %n
+  ret i32 %x
+movl %edi, %eax
+imull %edi, %eax
+retq</code></pre>
+<p>The input stores through a stack slot the way a naive code generator would. The optimizer turns the slot into registers, drops the add of zero and leaves one multiply, which becomes two x86 instructions. A front end can emit simple, slow-looking code like this and leave the cleanup to LLVM; that is the usual design. <code>OPT_OS</code> optimizes for size instead, and <code>EmitObject</code> writes a <code>.o</code> instead of assembly.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<table>
+<tr><th>Job</th><th>Functions</th></tr>
+<tr><td>Read IR text</td><td><code>ParseIR</code>, then <code>Verify</code></td></tr>
+<tr><td>Build IR from code</td><td><code>NewContext</code>, <code>NewModule</code>, <code>NewBuilder</code>, then <code>AddFunction</code>, <code>AppendBlock</code> and the instruction functions</td></tr>
+<tr><td>Run it now</td><td><code>RunJIT</code>, <code>RunJITArgs</code></td></tr>
+<tr><td>The whole pipeline from a file</td><td><code>Run</code> with <code>OptionsDefault</code></td></tr>
+<tr><td>Fine control over optimizing and emitting</td><td><code>NewTargetMachine</code>, <code>RunOpt</code>, <code>EmitObject</code>, <code>EmitAsm</code></td></tr>
+<tr><td>Link an object</td><td><code>LinkAuto</code>, or <code>LinkExternal</code> for the system linker</td></tr>
+</table>
 >>
 
 doc.TargetMachine = The target machine: the architecture, the CPU and the optimization level for generating code.
@@ -30,13 +85,13 @@ doc.ApplyDataLayout = Puts the target machine's data layout and triple on the mo
 doc.LinkResult = The result of linking.
 doc.LinkResult.ok = It worked.
 doc.LinkResult.err = The error message.
-doc.CanLinkTriple = This target links with the in process LLD: Windows with MinGW, Linux with musl and WASI.
+doc.CanLinkTriple = This target links with the in-process LLD: Windows with MinGW, Linux with musl and WASI. It does not check that the sysroot is installed.
 doc.LinkExternal = Links with the system linker, like cc.
 doc.HostLinkTriple = The host triple if the in process LLD can link for it; otherwise empty.
 doc.LinkElf = A static Linux executable with musl.
 doc.LinkWasi = A WebAssembly module for WASI.
 doc.LinkMingw = A Windows executable with MinGW.
-doc.LinkAuto = Picks the linker from the options' target triple.
+doc.LinkAuto = Picks the in-process linker from the options' target triple. It needs the target's sysroot (musl, MinGW or WASI) and fails for other triples.
 doc.Available = LLVM support is in this build.
 doc.Run = Runs the whole pipeline on a <code>.ll</code> file with the options: parsing, optimizing and emitting the output or running with the JIT.
 doc.LLD_ELF = The LLD flavour for ELF.

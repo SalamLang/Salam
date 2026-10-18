@@ -6,8 +6,49 @@ pkg.title = The jwt package in Salam | JWT tokens
 pkg.description = The jwt package in Salam: signing a token with HS256, checking the signature and the expiry, claims, an HTTP route guard, scopes and roles, and the session cookie, with examples.
 pkg.import = jwt
 pkg.intro <<
-<p>A JWT is a token the server signs after a user logs in and the client sends with every request; by checking the signature the server knows who the user is without going to the database. This package supports the HMAC algorithms, HS256, HS384 and HS512, and never accepts a token with the <code>none</code> algorithm.</p>
-<p>For an API, make a <code>Guard</code> and call <code>Require</code> or one of its siblings in every handler; when the token is wrong the error response is sent for you. The secret has to be long and random, for instance from <code>RandomToken</code> in <a href="../crypto/">crypto</a>.</p>
+<p>A JWT is a token the server signs after a user logs in and the client sends with every request; by checking the signature the server knows who the user is without going to the database. This package signs and checks tokens with the HMAC algorithms HS256, HS384 and HS512, never accepts the <code>none</code> algorithm, and has helpers for <a href="/std/net-http/">net/http</a> handlers. Every service that checks a token needs the same secret, so it suits one backend or a few services you trust; there are no RS256 or ES256 public key signatures. When the client is a browser on your own site, a server side <a href="/std/net-http-session/">net/http/session</a> is often simpler and can be revoked at once.</p>
+<p>For an API, make a <code>Guard</code> with the secret and call <code>Require</code> or one of its siblings at the top of every handler; when the token is missing or wrong, the 401 or 403 answer is sent for you. The secret has to be long and random, for instance from <code>RandomToken</code> in <a href="/std/crypto/">crypto</a>.</p>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A token without <code>exp</code> is accepted forever</strong> unless you set <code>opts.require_exp</code>. Tokens from <code>Issue</code> always have one, but a token signed some other way may not.</li>
+<li><strong>The secret is not checked for strength.</strong> Any non-empty string is used as it is; a short one can be guessed offline from a single token.</li>
+<li><strong>The claims are signed, not encrypted.</strong> Anyone holding a token can read them with a base64 decoder, so put no secrets in them.</li>
+<li><strong>A token cannot be taken back</strong> before it expires; keep access tokens short, as the refresh section shows.</li>
+</ul>
+
+<h2 id="guide-guard">Protecting API routes with a Guard</h2>
+<p>The usual shape: <code>/login</code> checks the user (left out here) and answers with a token from <code>Issue</code>, which adds <code>exp</code>, <code>iat</code> and the guard's algorithm. Every protected handler starts with a <code>Require...</code> call and returns at once when it is false. <code>RequireScope</code> reads the space separated <code>scope</code> claim, so the same token opens <code>/orders</code> but gets a 403 at <code>/admin</code>. The last request uses a token signed with the right secret but without <code>exp</code>; because the guard sets <code>require_exp</code>, it is refused.</p>
+{{example.jwt-guard}}
+<p><code>Require</code> takes the token from the <code>Authorization: Bearer</code> header, or from the cookie named in <code>guard.cookie</code> when there is no header. A 401 also carries a <code>WWW-Authenticate</code> header, as the HTTP rules ask.</p>
+
+<h2 id="guide-errors">Why a token is rejected</h2>
+<p><code>Verify</code> checks, in order, that the token has three parts, that its algorithm is the one you expect, that the signature matches, and then the times and the claims you asked for in <code>Options</code>. The first failure goes into <code>err</code>, and <code>ErrorText</code> turns it into a short reason. The program below fixes <code>now</code> so that it prints the same lines every time; in a server leave <code>now</code> at 0 and the current clock is used.</p>
+{{example.jwt-errors}}
+<p>Three things to notice. Changing even one claim breaks the signature, so a client cannot raise its own rights. <code>leeway</code> forgives a small clock difference between the machine that signed and the one that checks; a minute or two is usual. And a token signed with HS512 is refused when the options say HS256: the algorithm comes from your options, never from the token, which is how this package avoids the classic <code>alg</code> attacks.</p>
+
+<h2 id="guide-refresh">Short access tokens and a refresh token</h2>
+<p>A token cannot be taken back once issued, so access tokens should live for minutes, not days. To spare the user a new login every fifteen minutes, issue a second, long lived refresh token at login and accept it at one route only, where it buys a new access token. Mark each token with what it is for, so that a refresh token is refused as an access token. <code>IssuePair</code> on a <code>Guard</code> issues both in one call; the program does it by hand to show the checks.</p>
+{{example.jwt-refresh}}
+<p>Keep the refresh token in an <code>HttpOnly</code> cookie (<code>SetSessionCookie</code>) rather than in JavaScript, and store its <code>jti</code> on the server if you need to revoke it before it expires.</p>
+
+<h2 id="guide-rotation">Rotating the secret</h2>
+<p>Sooner or later the secret has to change. If you switch at once, every user is logged out. Instead, give each secret a key id and put it in the token header with <code>SignWithKid</code>. To check a token, read its header with <code>Decode</code>, which does not verify anything, pick the secret for that <code>kid</code>, and only then call <code>Verify</code>. Sign new tokens with the new key and keep the old one until the last token signed with it has expired.</p>
+{{example.jwt-key-rotation}}
+<p>Never trust anything else from <code>Decode</code>: the claims it returns are unverified, and only the key id is safe to use, because it only chooses which secret the real check runs with.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Protect HTTP routes</td><td><code>NewGuard</code>, then <code>Require</code>, <code>RequireScope</code>, <code>RequireClaim</code> or <code>RequireSubject</code> in each handler</td></tr>
+<tr><td>Log a user in</td><td><code>Issue</code> or <code>IssueFor</code>, and <code>SetSessionCookie</code> for browsers</td></tr>
+<tr><td>Access and refresh tokens together</td><td><code>IssuePair</code></td></tr>
+<tr><td>Sign a token outside HTTP</td><td><code>NewClaims</code>, <code>SetStr</code> and friends, then <code>SignHS256</code></td></tr>
+<tr><td>Check a token and read its claims</td><td><code>Verify</code>, then <code>Str</code>, <code>Int</code>, <code>Bool</code>, <code>HasScope</code></td></tr>
+<tr><td>Only a yes or no answer</td><td><code>IsValid</code></td></tr>
+<tr><td>Read the key id before checking</td><td><code>Decode</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Token = A decoded token.
@@ -51,7 +92,7 @@ doc.JWT_ERR_TYPE = Error code: the token type is not <code>JWT</code>.
 doc.IsSupportedAlg = This algorithm is supported.
 doc.DigestSize = The signature length of the algorithm in bytes.
 doc.ErrorText = The English explanation of an error code.
-doc.Issue = Signs the claims with the given issue and expiry times and the algorithm of the guard.
+doc.Issue = Sets <code>exp</code> to now plus <code>ttl</code> seconds and <code>iat</code> to now, fills in the guard's issuer and audience when the claims have none, and signs with the guard's algorithm.
 doc.IssueFor = A token with nothing but a subject and an expiry.
 doc.IssuePair = Makes a short lived access token and a long lived refresh token; the <code>kind</code> claim tells them apart.
 doc.SetSessionCookie = Puts the token in the secure, HttpOnly cookie of the guard.
@@ -62,7 +103,7 @@ doc.Guard.secret = The signing secret.
 doc.Guard.opts = The check options.
 doc.Guard.cookie = The name of a cookie the token is also read from; empty means the Authorization header only.
 doc.Guard.realm = The name that goes in the <code>WWW-Authenticate</code> header.
-doc.NewGuard = A new guard with a secret and the default options.
+doc.NewGuard = A new guard with a secret and the default options; set <code>opts.require_exp</code> on it for APIs.
 doc.ParseBearer = Pulls the token out of a <code>Bearer ...</code> header value.
 doc.BearerToken = The token in the Authorization header of the request.
 doc.TokenFrom = The token of the request, from the header or the cookie of the guard.
@@ -109,13 +150,13 @@ doc.Options.audience = The required audience.
 doc.Options.subject = The required subject.
 doc.Options.leeway = How many seconds of clock difference to accept.
 doc.Options.now = The time to check against; zero means now. For testing.
-doc.Options.require_exp = Reject a token with no <code>exp</code>.
+doc.Options.require_exp = Reject a token with no <code>exp</code>. Off by default, so without it a token with no expiry is valid forever.
 doc.Options.require_nbf = Reject one with no <code>nbf</code>.
 doc.Options.require_iat = Reject one with no <code>iat</code>.
 doc.Options.require_sub = Reject one with no <code>sub</code>.
 doc.Options.require_jti = Reject one with no <code>jti</code>.
 doc.Options.check_typ = Check that the type is <code>JWT</code>.
-doc.DefaultOptions = The default options, with HS256.
+doc.DefaultOptions = The default options: HS256, no leeway, and no claim required, not even <code>exp</code>.
 doc.OptionsFor = The default options with another algorithm.
 doc.Decode = Decodes a token without checking the signature; only to look at the contents, never to trust them.
 doc.Verify = Checks the signature, the algorithm and the times.

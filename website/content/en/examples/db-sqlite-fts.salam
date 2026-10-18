@@ -1,0 +1,35 @@
+import db.sqlite
+import os
+
+func main:
+    d := sqlite.Open("library.db")
+    defer sqlite.Close(d)
+
+    sqlite.Exec(d, """
+    DROP TABLE IF EXISTS book_search;
+    CREATE VIRTUAL TABLE book_search USING fts5(title, author, note);
+    INSERT INTO book_search (rowid, title, author, note)
+        SELECT id, title, author, COALESCE(note, '') FROM books;
+    """)
+
+    st := sqlite.Prepare(d, "SELECT rowid, highlight(book_search, 0, '[', ']') FROM book_search WHERE book_search MATCH ? ORDER BY rank")
+    defer sqlite.Finish(st)
+    each q in ["austen", "dun*", "signed", "author:butler OR neuro*"]:
+        sqlite.Reset(st)
+        sqlite.BindText(st, 1, q)
+        mut line := q + ":"
+        until sqlite.Next(st):
+            line = line + " " + sqlite.Text(st, 0) + "=" + sqlite.Text(st, 1)
+        end
+        println line
+    end
+
+    os.Remove("backup.db")
+    if sqlite.Exec(d, "VACUUM INTO 'backup.db'") != 0:
+        println "backup failed:", sqlite.Error(d)
+        ret 1
+    end
+    b := sqlite.Open("backup.db")
+    defer sqlite.Close(b)
+    println "backup has", sqlite.QueryInt(b, "SELECT COUNT(*) FROM books"), "books and", sqlite.QueryInt(b, "SELECT COUNT(*) FROM loans"), "loans"
+end

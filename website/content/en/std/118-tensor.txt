@@ -7,7 +7,36 @@ pkg.description = The tensor package in Salam: making and reshaping tensors, ele
 pkg.import = tensor
 pkg.intro <<
 <p>A tensor is a multi dimensional array of numbers: a vector is one dimensional, a matrix two, and a batch of images four. The data is 32 bit floats in row order. The <code>+</code>, <code>-</code>, <code>*</code> and <code>/</code> operators work element by element and take tensors of the same shape, or shapes that broadcast.</p>
-<p>This package is arithmetic, with no gradients. To train a network, use <a href="../autograd/">autograd</a> and <a href="../nn/">nn</a>. Matrix multiplication and convolution go multi threaded with <code>SetThreads</code>.</p>
+<p>This package is arithmetic, with no gradients. To train a network, use <a href="/std/autograd/">autograd</a> and <a href="/std/nn/">nn</a>, which work on these tensors. For exact 64 bit linear algebra (solving systems, inverses, decompositions) use <a href="/std/matrix/">matrix</a>; for statistics over plain lists, <a href="/std/stats/">stats</a>.</p>
+<p>Large operations run on several threads by themselves: element-wise work over 262144 values or more, and matrix products above about 32 million multiply-adds. The default is one thread per CPU core, at most 8; <code>SetThreads</code> changes it, and <code>SetThreads(1)</code> keeps everything on the calling thread.</p>
+<h2 id="guide-linear">A linear layer by hand</h2>
+<p>Most of a neural network is one line: multiply the inputs by a weight matrix and add a bias. Here three samples with two features each, a <code>3x2</code> matrix, meet a <code>2x3</code> weight matrix and give a score for each of three classes. The bias has shape <code>1x3</code> and is added to every row by broadcasting: a dimension of size one stretches to match the other operand.</p>
+{{example.tensor-guide-linear}}
+<p><code>ArgMaxAxis</code> with axis 1 picks, in each row, the column with the largest score, which is the predicted class. Axis 0 runs down the rows and axis 1 along them, so a reduction over axis 1 leaves one number per sample.</p>
+
+<h2 id="guide-normalize">Normalizing features</h2>
+<p>Features measured in different units train badly together, so they are usually shifted to mean zero and scaled to spread one. <code>MeanAxis</code> with <code>keepdim</code> set to true keeps the reduced axis with size one, giving a <code>1x2</code> row that broadcasts back over all eight samples. Without <code>keepdim</code> the result is a plain vector of two, as the last line shows.</p>
+{{example.tensor-guide-normalize}}
+<p>The second column is the first one times ten, and after scaling the two are equal: normalization removes the unit. <code>AllClose</code> compares within a tolerance, which is the right test for floats; <code>Equal</code> demands every bit to match.</p>
+
+<h2 id="guide-search">Finding the nearest vectors</h2>
+<p>Search by meaning works on vectors: each item is a row of numbers, and the item closest to a query is the one with the largest dot product. <code>MatVec</code> scores every row against the query in one call and <code>TopK</code> returns the best scores, writing their row numbers into the tensor you pass as the last argument.</p>
+{{example.tensor-guide-search}}
+<p>The rows here are already of similar length, so the dot product is a fair measure. For real embeddings, divide each row by its length first, which turns the dot product into cosine similarity. Scores are 32 bit floats, so the program rounds them before printing.</p>
+
+<h2 id="guide-shape">Reshaping, slicing and masks</h2>
+<p>Data often arrives flat. <code>Reshape</code> returns a copy of the same numbers, in the same order, with a new shape: twelve meter readings become three days of four periods. Reductions then answer questions along either axis, <code>SliceAxis0</code> and <code>Narrow</code> cut out rows or columns, and the comparison functions build masks of 0 and 1 that <code>MaskedFill</code> and <code>Where</code> use to pick values.</p>
+{{example.tensor-guide-shape}}
+<p>A mask is an ordinary tensor of 0 and 1, so <code>SumAll</code> on it counts the matches. The last line shows the failure mode from the list below: twelve values cannot be shaped into <code>5x2</code>, and instead of an error you get an empty tensor.</p>
+
+<h2 id="guide-pitfalls">Things to watch for</h2>
+<ul>
+<li>Shapes must match or broadcast. A mismatch does not stop the program: the result is an empty tensor, <code>ShapeString</code> prints <code>empty</code>, and the mistake travels on silently. Check <code>is_empty()</code> on results while you are unsure of the shapes.</li>
+<li>The data is <code>f32</code>. Fill a <code>Vector&lt;f32&gt;</code> and cast with <code>as f32</code> when you build a tensor from your own numbers.</li>
+<li>Every operation makes a new tensor. In a long loop, use the <code>...Into</code> and <code>...InPlace</code> forms, or call <code>Free</code> on results you no longer need.</li>
+<li>The <code>...InPlace</code> and <code>...Into</code> functions do not broadcast. When the shapes differ, <code>...InPlace</code> does nothing at all and <code>...Into</code> returns false. Use the operators when one side needs broadcasting.</li>
+<li>Printing goes through <code>f64</code>, so a value such as 0.1 prints as <code>0.10000000149011612</code>, the exact <code>f32</code> value. Round with <a href="/std/conv/"><code>conv.FormatFloatPrec</code></a> before showing numbers to people.</li>
+</ul>
 >>
 
 doc.Tensor = A multi dimensional array of 32 bit floats; the base of every neural network computation.
@@ -57,7 +86,7 @@ doc.Print = Prints the tensor.
 doc.MaxAbsDiff = The greatest difference between the elements.
 doc.AllClose = Every element is equal within a tolerance.
 doc.Equal = The shapes and the elements match.
-doc.Reshape = A copy with a new shape.
+doc.Reshape = A copy with a new shape; an empty tensor when the element counts differ.
 doc.SqueezeInPlace = Removes the dimensions of size one in place.
 doc.UnsqueezeInPlace = Adds a dimension of size one at the given place.
 doc.Permute = Changes the order of the dimensions.
@@ -72,8 +101,8 @@ doc.Col2ImAcc = The reverse, accumulating; for the convolution gradient.
 doc.Conv2DForward = A two dimensional convolution over an NCHW tensor with weights, bias, strides and padding.
 doc.MaxPool2DForward = Two dimensional max pooling; the places of the maxima come back too.
 doc.AvgPool2DForward = Two dimensional average pooling.
-doc.SetThreads = The number of threads for matrix multiplication and convolution.
-doc.Threads = The current number of threads.
+doc.SetThreads = The number of threads for large element-wise operations, matrix products and convolutions; 0 means one per core, at most 8.
+doc.Threads = The number of threads in use: the value given to <code>SetThreads</code>, or the core count capped at 8.
 doc.TSR_TOL = The default comparison tolerance.
 doc.Transpose2D = The transpose of a matrix.
 doc.MatMul = Matrix multiplication.
@@ -101,7 +130,7 @@ doc.FillBernoulli = One with probability p, zero otherwise.
 doc.RandUniform = A uniform random tensor from a seed.
 doc.RandNormal = A normal random tensor from a seed.
 doc.Add = Addition with broadcasting.
-doc.AddInto = Addition into a ready tensor.
+doc.AddInto = Addition into a ready tensor; all three must have the same shape, or it returns false.
 doc.Sub = Subtraction with broadcasting.
 doc.SubInto = Subtraction into a ready tensor.
 doc.Mul = Elementwise multiplication with broadcasting.
@@ -113,7 +142,7 @@ doc.SubScalar = Subtracts a number from every element.
 doc.Scale = Multiplies every element by a number.
 doc.DivScalar = Divides every element by a number.
 doc.Neg = The negation.
-doc.AddInPlace = Adds in place.
+doc.AddInPlace = Adds in place; does nothing when the shapes differ.
 doc.SubInPlace = Subtracts in place.
 doc.MulInPlace = Multiplies elementwise in place.
 doc.ScaleInPlace = Multiplies by a number in place.

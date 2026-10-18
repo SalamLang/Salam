@@ -8,7 +8,65 @@ pkg.import = aws
 pkg.intro <<
 <p>This package works with Amazon S3 and any storage compatible with it without the official SDK, including MinIO, Cloudflare R2, DigitalOcean Spaces, Wasabi, Backblaze and any other S3 compatible cloud storage. Build the configuration with <code>ForAws</code> or <code>ForEndpoint</code> and hand it the keys with <code>WithCredentials</code>, or let the package find them itself with <code>FromEnvironment</code> and <code>ResolveConfig</code>.</p>
 <p>The <code>S3...</code> functions work with objects and buckets: writing and reading, listing, copying, files and folders, multipart uploads for large files, and presigned URLs so a browser can talk to S3 directly. The <code>Sqs...</code> functions cover SQS message queues and the <code>AssumeRole...</code> functions cover temporary STS credentials. For other services, such as DynamoDB, call any API with <code>NewJsonCall</code> and <code>Invoke</code>.</p>
-<p>Never write keys into your code; use environment variables or an IAM role. The examples that need an AWS account are only checked on the site, not run.</p>
+<p>Use this package when a program stores files in object storage, hands out upload links, runs queue workers or calls another AWS API. It signs every request with Signature Version 4 itself and sends it over <a href="/std/net-httpx/">net/httpx</a>, so it needs no SDK and no C library. For a plain HTTP API that is not AWS, use <a href="/std/net-httpx/">net/httpx</a> directly.</p>
+<h3>Core ideas</h3>
+<ul>
+<li><strong>Config.</strong> A <code>Config</code> is a plain value: endpoint, region, bucket, keys and whether the bucket goes in the path. Every call takes it first. Change it with the <code>With...</code> functions or by setting a field; nothing is global.</li>
+<li><strong>Results, not errors.</strong> Calls return a struct with <code>ok</code>, the HTTP <code>status</code>, AWS's error <code>code</code> and a readable <code>error</code>. A network failure (<code>code</code> is <code>Transport</code>), a 429 or a 5xx answer is tried again with a doubling pause, up to <code>retry</code> attempts in all (3 by default), before you see it.</li>
+<li><strong>Keys are names.</strong> S3 has no folders. <code>reports/2026/may.csv</code> is one key, and "folders" are prefixes you list by.</li>
+</ul>
+<h3>Things that trip people up</h3>
+<ul>
+<li><code>S3Get</code> returns the body as a <code>str</code>, which stops at the first zero byte. For images, archives and other binary data use <code>S3GetBytes</code> or <code>S3DownloadFile</code>.</li>
+<li><code>S3ListPrefix</code> returns one page of at most 1000 keys. <code>S3ListAll</code> follows the pages for you, up to 100000 keys, and sets <code>truncated</code> when it stopped there. <code>S3Keys</code> returns an empty list when the listing failed, so it cannot tell "empty" from "error".</li>
+<li><code>Configured</code> also wants a bucket. A program that only uses SQS, STS or <code>Invoke</code> should check <code>access_key</code> and <code>secret_key</code> itself.</li>
+<li>Lists hold memory of their own: free them with <code>ListFree</code>, <code>KeyFree</code>, <code>MessageListFree</code>, <code>FreeBytes</code> and the like.</li>
+</ul>
+<p>Never write keys into your code; use environment variables or an IAM role. The examples that need an AWS account or a running MinIO are only checked on the site, not run.</p>
+<h2 id="guide-providers">One program, any S3 provider</h2>
+<p>Every provider speaks the same S3 API; what differs is the address, the region and whether the bucket goes in the path or in the host name. The <code>For...</code> functions fill those in, so the provider can be a setting of your program and the rest of the code never changes. R2 uses the region <code>auto</code> and path style addresses; AWS and Spaces put the bucket in the host name.</p>
+{{example.aws-guide-providers}}
+<p>None of these calls touch the network, so the output above is exact. Add the keys with <code>WithCredentials</code>, or start from <code>FromEnvironment</code>, which reads <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, <code>AWS_REGION</code> and <code>AWS_ENDPOINT_URL</code>.</p>
+
+<h2 id="guide-minio">Trying it locally with MinIO</h2>
+<p>MinIO runs an S3 compatible server on your own machine, which is the cheapest way to develop and test. Start it with Docker:</p>
+<pre class="code" dir="ltr"><code>docker run -p 9000:9000 -p 9001:9001 minio/minio server /data --console-address :9001</code></pre>
+<p>The default keys are <code>minioadmin</code> and <code>minioadmin</code>. The program creates the bucket if it is missing, writes two objects under a date prefix, lists that prefix and reads one object back. Keys are just names: the slashes only look like folders, and listing by prefix is how you walk them.</p>
+{{example.aws-guide-minio}}
+<p>Each call returns a <code>Result</code>. When <code>ok</code> is false, <code>status</code> is the HTTP status and <code>code</code> is S3's own error code, such as <code>NoSuchKey</code> or <code>AccessDenied</code>; branch on <code>code</code>, not on the message text. A list holds memory of its own, so free it with <code>ListFree</code> when you are done.</p>
+
+<h2 id="guide-files">Large files and binary data</h2>
+<p><code>S3UploadFile</code> reads a file from disk and picks the method by size. Up to the part size (8 MB by default, set <code>part_size</code> in <code>PutOptions</code>, never less than 5 MB) it sends one <code>PUT</code>; above that it streams the file in parts with a multipart upload, so memory use stays at one part. <code>S3DownloadFile</code> fetches the object in 8 MB ranges into <code>name.part</code> and renames it only when the whole file has arrived, so a failed download never leaves a half-written file under the real name.</p>
+{{example.aws-guide-files}}
+<p><code>TransferResult</code> tells you how many bytes moved and in how many parts. <code>storage_class</code>, <code>cache_control</code>, <code>sse</code> and the other <code>PutOptions</code> fields become the matching S3 headers. For a whole directory there is <code>S3UploadDir</code>.</p>
+
+<h2 id="guide-presign">Letting the browser upload directly</h2>
+<p>A presigned URL lets a browser upload or download one object without ever seeing your keys, and without the file passing through your server. Your server signs the URL; the browser sends a plain <code>PUT</code> to it. When <code>content_type</code> is set, it becomes part of the signature and the upload must send exactly that type. <code>response_content_disposition</code> on a download makes the browser save the file under the name you choose.</p>
+{{example.aws-guide-presign}}
+<p>Signing is a local computation, so this program runs without a network. It uses <code>S3PresignWith</code> with a fixed time to get the same URL on every run; in a real program use <code>S3PresignPut</code> or <code>S3PresignGet</code>, which sign with the current time. Keep <code>expires</code> short: anyone who has the URL can use it until then.</p>
+
+<h2 id="guide-worker">A queue worker with SQS</h2>
+<p>SQS holds jobs until a worker takes them. <code>SqsReceive</code> waits up to <code>wait_seconds</code> for messages, which costs far less than asking again and again. A received message is hidden from other workers, not removed: delete it with its <code>receipt</code> once the work is done, or release it with <code>SqsRelease</code> so another worker can try at once. A message that is neither comes back by itself when its visibility timeout ends.</p>
+{{example.aws-guide-worker}}
+<p>The program checks the keys itself instead of calling <code>Configured</code>, because a queue worker has no bucket. Run it with real AWS credentials and an existing queue named <code>image-jobs</code>. In a real worker, put the receive in a loop and make each job safe to run twice, because SQS delivers every message at least once.</p>
+
+<h2 id="guide-api">Calling any other AWS API</h2>
+<p>Most AWS services take a signed <code>POST</code> with a JSON body and an <code>X-Amz-Target</code> header that names the operation. <code>NewJsonCall</code> builds such a call (<code>NewJson11Call</code> for services that want JSON 1.1, <code>NewQueryCall</code> for the older form APIs, <code>NewRestCall</code> for REST ones), and <code>Invoke</code> signs and sends it. The endpoint comes from the service name and the region. This program looks up one DynamoDB item. <code>PreparedCall</code> shows the exact request <code>Invoke</code> would send, signed at a fixed time, without touching the network:</p>
+{{example.aws-guide-dynamodb}}
+<p>With real keys, <code>res := aws.Invoke(cfg, call)</code> sends it; <code>res.body</code> is the JSON answer and, on failure, <code>res.code</code> is the AWS error type such as <code>ResourceNotFoundException</code>. The JSON format of each operation is in the AWS API reference of that service.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<table>
+<tr><th>Job</th><th>Functions</th></tr>
+<tr><td>Choose the provider</td><td><code>ForAws</code>, <code>ForMinio</code>, <code>ForR2</code>, <code>ForSpaces</code>, <code>ForEndpoint</code>, <code>FromEnvironment</code></td></tr>
+<tr><td>Write and read small objects</td><td><code>S3Put</code>, <code>S3Get</code>, <code>S3Stat</code>, <code>S3Delete</code></td></tr>
+<tr><td>Files of any size</td><td><code>S3UploadFile</code>, <code>S3DownloadFile</code> (multipart when needed)</td></tr>
+<tr><td>Walk a folder</td><td><code>S3ListPrefix</code>, <code>S3ListAll</code>, <code>S3Keys</code></td></tr>
+<tr><td>Browser uploads and downloads</td><td><code>S3PresignPut</code>, <code>S3PresignGet</code>, <code>S3PresignPost</code></td></tr>
+<tr><td>Background jobs</td><td><code>SqsSend</code>, <code>SqsReceive</code>, <code>SqsDelete</code></td></tr>
+<tr><td>Temporary credentials</td><td><code>AssumeRole</code>, then <code>Apply</code></td></tr>
+<tr><td>Any other AWS API</td><td><code>NewJsonCall</code> and <code>Invoke</code></td></tr>
+</table>
 >>
 
 doc.SOURCE_ENV = Credential source: the <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code> environment variables.
@@ -104,7 +162,7 @@ doc.Config.session_token = The session token.
 doc.Config.path_style = Path addressing, <code>host/bucket/key</code>, instead of <code>bucket.host/key</code>.
 doc.Config.service = The service name in the signature.
 doc.Config.expires = The default expiry of presigned URLs, in seconds.
-doc.Config.retry = The number of attempts.
+doc.Config.retry = The number of attempts in all, from 1 to 10; network errors, 429 and 5xx answers are tried again.
 doc.Config.retry_base_ms = The base delay between attempts.
 doc.Config.anonymous = Unsigned, for public buckets.
 doc.Config.request_payer = The requester pays for the request.
@@ -122,7 +180,7 @@ doc.Result.request_id = The request id for AWS support.
 doc.Result.version_id = The object version id.
 doc.NewConfig = A configuration with an address and a bucket.
 doc.WithCredentials = The configuration with keys.
-doc.Configured = The address and the keys are set, or the configuration is anonymous.
+doc.Configured = The address, the bucket and the keys are all set, or the configuration is anonymous. It is false without a bucket, even for SQS or STS.
 doc.Failure = A failed result with a reason.
 doc.S3CreateBucket = Creates a bucket; outside us-east-1 it sends the region too.
 doc.S3CreateBucketAcl = A bucket with a canned ACL, such as <code>private</code>.
@@ -374,7 +432,7 @@ doc.S3PutBytes = Writes binary data.
 doc.S3PutBytesWith = Like the function above, with options.
 doc.S3Put = Writes text.
 doc.S3PutWith = Text with options.
-doc.S3Get = Reads an object as text.
+doc.S3Get = Reads an object as text. The body is a <code>str</code> and stops at the first zero byte; use <code>S3GetBytes</code> for binary data.
 doc.S3GetWith = With options.
 doc.S3GetBytes = Reads an object as binary.
 doc.S3GetBytesWith = Binary with options.
@@ -572,13 +630,13 @@ doc.ListOptions.url_encode = The keys come encoded.
 doc.KeyList = A list of keys.
 doc.KeyList.items = The keys.
 doc.S3List = One page of the object listing, with options.
-doc.S3ListPrefix = The objects under a prefix.
+doc.S3ListPrefix = The objects under a prefix: one page, at most 1000. Check <code>truncated</code> or use <code>S3ListAll</code>.
 doc.S3ListFolder = One "folder": the objects and subfolders with the <code>/</code> delimiter.
 doc.S3ListV1 = The old version of listing, for services that lack version 2.
-doc.S3ListAll = Fetches every page, one after the other.
+doc.S3ListAll = Fetches every page, one after the other, up to 100000 objects; <code>truncated</code> is set when it stopped there.
 doc.S3ListAllWith = Every page, with options.
 doc.S3ListVersions = The versions and delete markers.
-doc.S3Keys = All the keys under a prefix.
+doc.S3Keys = All the keys under a prefix. A failed listing gives an empty list, not an error.
 doc.ListCount = The number of objects.
 doc.ListAt = Object number i.
 doc.ListPrefixCount = The number of prefixes.

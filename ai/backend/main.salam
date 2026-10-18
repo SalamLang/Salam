@@ -49,6 +49,8 @@ const BRIDGE_SLOTS := 48
 const STREAM_SECONDS := 900
 const STREAMS_PER_USER := 4
 const BEAT_MS := 10000
+const MAX_BODY := 8388608
+const BODY_MS := 30000
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
@@ -96,7 +98,7 @@ func main:
         println "salam-ai checks code blocks with", env_or("AI_SALAM_BIN", "/srv/salam/salam")
     end
     STREAM_LOCK = sync.NewMutex()
-    aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int())
+    aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_API_ANSWER_SECONDS", "900").to_int(), env_or("AI_API_START_SECONDS", "120").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
     colon := engine_host.find(":")
@@ -801,6 +803,24 @@ func stream_slot(uid: i64, delta: int): bool:
     ret ok
 end
 
+func read_body(c: tcp.Conn, head: str, want: int, whole &: bool): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut have := head.len()
+    str.BufAppend(b, head)
+    until have < want:
+        more := tcp.Read(c, 65536)
+        if more.len() == 0:
+            whole = false
+            ret ""
+        end
+        str.BufAppend(b, more)
+        have += more.len()
+    end
+    whole = true
+    ret str.BufStr(b)
+end
+
 func serve_stream(c: tcp.Conn):
     tcp.SetReadDeadline(c, 5000)
     mut req := ""
@@ -841,21 +861,23 @@ func serve_stream(c: tcp.Conn):
     end
     if aiopenai.Handles(bare) or aibridge.Handles(bare):
         head_end := req.find("\r\n\r\n") + 4
-        mut body := req.substr(head_end, req.len() - head_end)
         mut want := 0
         if headers.has("content-length"):
             want = headers.get("content-length").to_int()
         end
-        if want > 2097152:
-            stream_error(c, "413 Payload Too Large", origin, "too_large", "request body is larger than 2 MB")
+        if want > MAX_BODY:
+            stream_error(c, "413 Payload Too Large", origin, "too_large", "request body is larger than 8 MB")
             ret
         end
-        until body.len() < want:
-            more := tcp.Read(c, 65536)
-            if more.len() == 0:
-                ret
-            end
-            body = body + more
+        mut whole := false
+        tcp.SetReadDeadline(c, BODY_MS)
+        if str.Lower(headers.has("expect") ? headers.get("expect") : "") == "100-continue":
+            _c := tcp.Write(c, "HTTP/1.1 100 Continue\r\n\r\n")
+        end
+        body := read_body(c, req.substr(head_end, req.len() - head_end), want, whole)
+        if not whole:
+            stream_error(c, "400 Bad Request", origin, "short_body", "the request body stopped before Content-Length")
+            ret
         end
         if aibridge.Handles(bare):
             aibridge.Serve(c, method, bare, headers, body)

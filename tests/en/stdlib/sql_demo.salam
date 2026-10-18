@@ -242,12 +242,66 @@ func main:
     testing.AssertEqInt(e.results.get(1).kind, sql.TYPE_FLOAT)
     sql.FreeAnalysis(e)
 
+    mut alt := sql.NewCatalog(my)
+    mut altr := sql.Apply(alt, """
+        CREATE TABLE t (a INT NOT NULL, b VARCHAR(10)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ALTER TABLE t MODIFY COLUMN b VARCHAR(50) NOT NULL;
+        ALTER TABLE t CHANGE b c TEXT;
+        ALTER TABLE t ADD COLUMN d DECIMAL(8,2) NOT NULL DEFAULT 0 COMMENT 'money';
+        ALTER TABLE t ADD INDEX ix (a);
+        ALTER TABLE t DROP COLUMN a, ADD COLUMN e INT;
+    """)
+    testing.AssertTrue(altr.ok)
+    sql.FreeReport(altr)
+    testing.AssertEqInt(sql.ColumnCount(alt, "t"), 3)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 0).name, "c")
+    testing.AssertEqInt(sql.ColumnAt(alt, "t", 0).kind, sql.TYPE_TEXT)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 1).name, "d")
+    testing.AssertEqInt(sql.ColumnAt(alt, "t", 1).kind, sql.TYPE_FLOAT)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 2).name, "e")
+    testing.AssertFalse(sql.HasColumn(alt, "t", "a"))
+    testing.AssertFalse(sql.HasColumn(alt, "t", "b"))
+    mut bad1 := sql.Apply(alt, "ALTER TABLE t DROP COLUMN nosuch")
+    testing.AssertEqStr(first_code(bad1), "SQL304")
+    sql.FreeReport(bad1)
+    mut bad2 := sql.Apply(alt, "ALTER TABLE nosuch ADD COLUMN x INT")
+    testing.AssertEqStr(first_code(bad2), "SQL303")
+    sql.FreeReport(bad2)
+    mut bad3 := sql.Apply(alt, "ALTER TABLE t ADD COLUMN c TEXT")
+    testing.AssertEqStr(first_code(bad3), "SQL302")
+    sql.FreeReport(bad3)
+    sql.FreeCatalog(alt)
+
+    mut keys := sql.NewCatalog(lite)
+    mut keysr := sql.Apply(keys, """
+        CREATE TABLE rowid_key (id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+        CREATE TABLE text_key (slug TEXT PRIMARY KEY, v TEXT NOT NULL);
+        CREATE TABLE table_key (x INTEGER, v TEXT NOT NULL, PRIMARY KEY (x));
+    """)
+    testing.AssertTrue(keysr.ok)
+    sql.FreeReport(keysr)
+    testing.AssertTrue(sql.ColumnAt(keys, "rowid_key", 0).auto)
+    testing.AssertTrue(sql.ColumnAt(keys, "table_key", 0).auto)
+    testing.AssertFalse(sql.ColumnAt(keys, "text_key", 0).auto)
+    testing.AssertTrue(check_ok("INSERT INTO rowid_key (v) VALUES (?)", keys))
+    testing.AssertTrue(check_ok("INSERT INTO table_key (v) VALUES (?)", keys))
+    testing.AssertEqStr(check_code("INSERT INTO text_key (v) VALUES (?)", keys), "SQL335")
+    sql.FreeCatalog(keys)
+
     mut pgcat := sql.NewCatalog(pg)
-    mut pgddl := sql.Apply(pgcat, "CREATE TABLE notes (id BIGSERIAL PRIMARY KEY, body TEXT NOT NULL, tags TEXT[])")
+    mut pgddl := sql.Apply(pgcat, """
+        CREATE TABLE notes (id BIGSERIAL PRIMARY KEY, body TEXT NOT NULL, tags TEXT[]);
+        CREATE TABLE marks (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, at TIMESTAMP WITH TIME ZONE NOT NULL);
+    """)
     testing.AssertTrue(pgddl.ok)
     sql.FreeReport(pgddl)
     testing.AssertEqInt(sql.ColumnAt(pgcat, "notes", 0).kind, sql.TYPE_INT)
     testing.AssertTrue(check_ok("SELECT id, body FROM notes WHERE id = $1 AND body = $2", pgcat))
+    testing.AssertTrue(sql.ColumnAt(pgcat, "notes", 0).auto)
+    testing.AssertTrue(sql.ColumnAt(pgcat, "marks", 0).auto)
+    testing.AssertEqInt(sql.ColumnAt(pgcat, "marks", 1).kind, sql.TYPE_TIME)
+    testing.AssertTrue(check_ok("INSERT INTO notes (body) VALUES ($1)", pgcat))
+    testing.AssertTrue(check_ok("INSERT INTO marks (at) VALUES ($1)", pgcat))
     pgr1 := check_code("SELECT id FROM notes WHERE id = 'abc'", pgcat)
     testing.AssertEqStr(pgr1, "SQL330")
     pgr2 := check_code("SELECT id FROM notes WHERE body = 5", pgcat)

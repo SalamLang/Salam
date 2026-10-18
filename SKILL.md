@@ -1484,6 +1484,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
+- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -2071,6 +2072,7 @@ salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
 salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
+salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)

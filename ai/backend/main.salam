@@ -18,6 +18,7 @@ import net.http
 import net.router
 import encoding
 import os
+import io
 import str
 import encoding.json
 import conv
@@ -52,11 +53,15 @@ const BEAT_MS := 10000
 const TICK_MS := 150
 const MAX_BODY := 8388608
 const BODY_MS := 30000
+const WATCH_MS := 20000
+const WATCH_GRACE_MS := 300000
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
 mut STREAM_LOCK := sync.Mutex {}
 mut STREAM_COUNT := HashMap {} as HashMap<str, str>
+mut MEM_SOFT_MB := 1200
+mut MEM_HARD_MB := 2600
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -121,6 +126,11 @@ func main:
         println "salam-ai streaming on port", stream_port
     else:
         println "cannot listen for streams on port", stream_port
+    end
+    MEM_SOFT_MB = env_or("AI_MEMORY_SOFT_MB", "1200").to_int()
+    MEM_HARD_MB = env_or("AI_MEMORY_HARD_MB", "2600").to_int()
+    if MEM_SOFT_MB > 0:
+        _m := spawn(watchdog)
     end
     port := env_or("AI_PORT", "8080").to_int()
     mut r := router.NewRouter()
@@ -246,7 +256,7 @@ func start_session(ctx: i64, status: int, id: str, name: str, email: str):
     token := crypto.RandomToken(32)
     aistore.Lock()
     ip := clip(aiweb.ClientIp(ctx), 64)
-    agent := clip(http.Ctx_header(ctx, "User-Agent"), 255)
+    agent := clip(http.Header(ctx, "User-Agent"), 255)
     mut a := three(token_hash(token), id, i64s(aistore.Now() + SESSION_DAYS * 86400))
     a.push(i64s(aistore.Now()))
     a.push(ip)
@@ -262,7 +272,7 @@ func start_session(ctx: i64, status: int, id: str, name: str, email: str):
 end
 
 func register_user(ctx: i64):
-    body := http.Ctx_body(ctx)
+    body := http.Body(ctx)
     name := str.Trim(json.Get(body, "name"))
     email := str.Lower(str.Trim(json.Get(body, "email")))
     pass := json.Get(body, "password")
@@ -303,7 +313,7 @@ func register_user(ctx: i64):
 end
 
 func login(ctx: i64):
-    body := http.Ctx_body(ctx)
+    body := http.Body(ctx)
     email := str.Lower(str.Trim(json.Get(body, "email")))
     pass := json.Get(body, "password")
     aistore.Lock()
@@ -429,7 +439,7 @@ func create_chat(ctx: i64):
     if uid == 0:
         ret
     end
-    body := http.Ctx_body(ctx)
+    body := http.Body(ctx)
     mut device := json.Get(body, "device_id")
     workspace := str.Trim(json.Get(body, "workspace"))
     mut token := ""
@@ -515,7 +525,7 @@ func get_chat(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
+    id := http.Param(ctx, "id")
     owned := own_chat(uid, id)
     if owned.len() == 0:
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
@@ -544,8 +554,8 @@ func rename_chat(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
-    title := short_title(json.Get(http.Ctx_body(ctx), "title"))
+    id := http.Param(ctx, "id")
+    title := short_title(json.Get(http.Body(ctx), "title"))
     aistore.Lock()
     _u := aistore.Run("UPDATE chats SET title = ?1 WHERE id = ?2 AND user_id = ?3", three(title, id, i64s(uid)))
     aistore.Unlock()
@@ -557,7 +567,7 @@ func delete_chat(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
+    id := http.Param(ctx, "id")
     owned := own_chat(uid, id)
     if owned.len() == 0:
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
@@ -580,8 +590,8 @@ func send_message(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
-    text := str.Trim(json.Get(http.Ctx_body(ctx), "text"))
+    id := http.Param(ctx, "id")
+    text := str.Trim(json.Get(http.Body(ctx), "text"))
     if text.len() == 0:
         fail(ctx, 400, "empty", "پیام خالی است.")
         ret
@@ -680,8 +690,8 @@ func poll_message(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
-    mid := http.Ctx_param(ctx, "mid")
+    id := http.Param(ctx, "id")
+    mid := http.Param(ctx, "mid")
     owned := own_chat(uid, id)
     if owned.len() == 0:
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
@@ -732,7 +742,7 @@ func stop_message(ctx: i64):
     if uid == 0:
         ret
     end
-    id := http.Ctx_param(ctx, "id")
+    id := http.Param(ctx, "id")
     owned := own_chat(uid, id)
     if owned.len() == 0:
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
@@ -844,6 +854,33 @@ func read_body(c: tcp.Conn, head: str, want: int, whole &: bool): str:
     ret str.BufStr(b)
 end
 
+func rss_mb(): int:
+    data := io.ReadFile("/proc/self/status")
+    at := data.find("VmRSS:")
+    if at < 0:
+        ret 0
+    end
+    rest := data.substr(at + 6, data.len() - at - 6)
+    nl := rest.find("\n")
+    line := str.Trim(nl >= 0 ? rest.substr(0, nl) : rest)
+    ret str.Trim(str.TrimSuffix(line, "kB")).to_int() / 1024
+end
+
+func watchdog():
+    start := time.NowMillis()
+    until true:
+        sync.SleepMs(WATCH_MS)
+        mb := rss_mb()
+        if mb > 0 and time.NowMillis() - start > WATCH_GRACE_MS:
+            live := aiweb.Live()
+            if mb >= MEM_HARD_MB or (mb >= MEM_SOFT_MB and live == 0):
+                println "salam-ai: restarting to give memory back at", mb, "MB with", live, "requests in flight"
+                os.Exit(0)
+            end
+        end
+    end
+end
+
 func serve_stream(c: tcp.Conn):
     tcp.SetReadDeadline(c, 5000)
     mut req := ""
@@ -905,7 +942,9 @@ func serve_stream(c: tcp.Conn):
             ret
         end
         if aibridge.Handles(bare):
+            aiweb.Enter()
             aibridge.Serve(c, method, bare, headers, body)
+            aiweb.Leave()
         else:
             aiopenai.Serve(c, method, bare, headers, body)
         end
@@ -944,7 +983,9 @@ func serve_stream(c: tcp.Conn):
         stream_error(c, "429 Too Many Requests", origin, "streams", "پاسخ‌های زیادی را هم‌زمان دنبال می‌کنید. چند لحظه بعد دوباره تلاش کنید.")
         ret
     end
+    aiweb.Enter()
     stream_answer(c, origin, id, mid, owned)
+    aiweb.Leave()
     _s := stream_slot(uid, 0 - 1)
 end
 

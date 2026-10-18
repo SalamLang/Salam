@@ -163,7 +163,7 @@ With `--http` the server also reads:
 | `SALAM_MCP_HOST`          | `0.0.0.0`                      | Address to listen on                                                                                                                       |
 | `SALAM_MCP_PORT`          | `8080`                         | Port to listen on                                                                                                                          |
 | `SALAM_MCP_JOBS`          | `4`                            | Compiler processes allowed at once; extra calls wait                                                                                       |
-| `SALAM_MCP_TIMEOUT`       | `30`                           | Seconds before a compiler process is killed                                                                                                |
+| `SALAM_MCP_TIMEOUT`       | `180`                          | Seconds before a compiler process is killed                                                                                                |
 | `SALAM_MCP_ORIGINS`       | empty                          | Comma separated browser origins to allow; empty allows all                                                                                 |
 | `SALAM_MCP_AUTH_URL`      | empty                          | Base URL of the authorization server's API; setting it turns sign-in on                                                                    |
 | `SALAM_MCP_AUTH_SECRET`   | empty                          | Shared secret for token introspection and activity reports                                                                                 |
@@ -315,7 +315,7 @@ endless loop is reported as a timeout instead of hanging the server.
 In HTTP mode each call writes its `source` and `files` to a fresh temporary directory,
 compiles it there and deletes the directory afterwards, so concurrent callers
 never share files. Compiler processes are capped at `SALAM_MCP_JOBS` and
-killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 1 MB
+killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 4 MB
 and sources to 256 KB, and the tools that execute a program are not offered.
 Run the container read-only with a size-limited `/tmp`, as above.
 

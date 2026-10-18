@@ -147,6 +147,20 @@ check("a base URL that already ends in /v1 works", versioned.status === 200 && v
 const versionedModels = await fetch(`${V1}/v1/models`);
 check("/v1/models works too", versionedModels.status === 200 && (await versionedModels.json()).data[0].id === "salam");
 
+console.log("tools the caller offers");
+const toolSpec = [{ type: "function", function: { name: "write_to_file", description: "Write content to a file on the user's machine", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } } }];
+const called = await (await chat(agentKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "write a factorial program and write it to a file" }] })).json();
+const call = called.choices?.[0]?.message?.tool_calls?.[0];
+check("a tool the caller offers comes back as a tool call", called.choices?.[0]?.finish_reason === "tool_calls" && call?.type === "function" && call.function.name === "write_to_file", called.choices?.[0]);
+check("the arguments parse and carry what the model asked for", JSON.parse(call?.function?.arguments ?? "{}").path === "factorial.salam", call?.function?.arguments);
+check("content is null when the answer is a tool call", called.choices?.[0]?.message?.content === null, called.choices?.[0]?.message);
+const streamedCall = await chat(agentKey, { model: "salam", stream: true, tools: toolSpec, messages: [{ role: "user", content: "write a factorial program and write it to a file" }] });
+const sc = sse(await streamedCall.text());
+const delta = sc.chunks.map((c) => c.choices?.[0]?.delta?.tool_calls?.[0]).find(Boolean);
+check("a streamed tool call arrives whole with a tool_calls finish", sc.ended && sc.finish[0] === "tool_calls" && delta?.function?.name === "write_to_file" && JSON.parse(delta.function.arguments).path === "factorial.salam", sc.events.slice(-3));
+const noTools = await (await chat(agentKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "just say hello" }] })).json();
+check("an answer that needs no tool still comes back as text", noTools.choices?.[0]?.finish_reason === "stop" && typeof noTools.choices?.[0]?.message?.content === "string", noTools.choices?.[0]);
+
 console.log("long conversations");
 const turns = [];
 for (let i = 0; i < 50; i += 1) turns.push({ role: i % 2 ? "assistant" : "user", content: `step ${i}: ${"x".repeat(3000)}` });

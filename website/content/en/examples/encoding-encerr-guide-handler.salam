@@ -1,0 +1,57 @@
+import encoding.encerr
+import encoding.json
+import encoding.envfile
+import encoding.msgpack
+import encoding.value
+import compress
+
+struct Limits:
+    pub max_users: int = 0
+    pub max_storage_gb: int = 0
+end
+
+func report(source: str, e: encerr.EncodingError):
+    if not encerr.IsError(e):
+        println source, "ok"
+        ret
+    end
+    mut what := "bad input"
+    if e.kind == encerr.KindUnexpectedEOF:
+        what = "cut off"
+    else e.kind == encerr.KindTrailingData:
+        what = "extra data after the end"
+    else e.kind == encerr.KindCustom:
+        what = "not supported"
+    end
+    println source, what, "at byte", e.position, "(" + e.message + ")"
+end
+
+func main:
+    mut e := encerr.NoError()
+    mut lim := Limits {}
+    _ := json.Unmarshal(`{"max_users": "fifty", "max_storage_gb": 20}`, lim, e)
+    report("limits.json:", e)
+
+    e = encerr.NoError()
+    _ := json.Decode(`{"plan": "team"} {"plan": "pro"}`, e)
+    report("plan.json:  ", e)
+
+    e = encerr.NoError()
+    mut env := envfile.ParseStrict("PLAN=team\nSEATS=\"12\n", e)
+    report(".env:       ", e)
+    envfile.Free(env)
+
+    mut obj := value.NewValueObject()
+    value.ObjectSet(obj, "seats", value.ValueInt(12))
+    bytes := msgpack.Marshal(obj)
+    e = encerr.NoError()
+    _ := msgpack.UnmarshalBytes(bytes.data, compress.BufLen(bytes) - 1, e)
+    report("cache.bin:  ", e)
+
+    _ := msgpack.Unmarshal(bytes, e)
+    report("stale error:", e)
+    e = encerr.NoError()
+    back := msgpack.Unmarshal(bytes, e)
+    report("after reset:", e)
+    println "seats:", value.AsInt(value.ObjectGet(back, "seats"))
+end

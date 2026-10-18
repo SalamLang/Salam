@@ -6,8 +6,42 @@ pkg.title = The grpc package in Salam | gRPC
 pkg.description = The grpc package in Salam: a gRPC server and client, unary and streaming calls, metadata, status codes, gzip compression and a TLS connection, with examples.
 pkg.import = grpc
 pkg.intro <<
-<p>gRPC is a way of calling a remote procedure that runs over <a href="../net-http2/">HTTP/2</a>, and it is common in microservices. On the server side you register each method under its path, like <code>/demo.Greeter/SayHello</code>; the method routine reads the client's message with <code>Recv</code>, answers with <code>Send</code> and ends it with <code>SetStatus</code> or <code>Fail</code>.</p>
-<p>On the client side, <code>UnaryCall</code> is a plain request, and for streams you use <code>StartCall</code>, <code>SendMessage</code>, <code>RecvMessage</code> and <code>FinishCall</code>. Messages are bytes; you usually build them with <a href="../encoding-protobuf/">protobuf</a>.</p>
+<p>gRPC is a way of calling a remote procedure that runs over <a href="/std/net-http2/">HTTP/2</a>, and it is common in microservices. On the server side you register each method under its path, like <code>/demo.Greeter/SayHello</code>; the method routine reads the client's message with <code>Recv</code>, answers with <code>Send</code> and ends it with <code>SetStatus</code> or <code>Fail</code>.</p>
+<p>On the client side, <code>UnaryCall</code> is a plain request, and for streams you use <code>StartCall</code>, <code>SendMessage</code>, <code>RecvMessage</code> and <code>FinishCall</code>. Messages are bytes; you usually build them with <a href="/std/encoding-protobuf/">protobuf</a>.</p>
+<p>Choose gRPC when the other side already speaks it, or when you want typed messages and streams between services. For a simpler protocol that also works over plain TCP, standard input and output or an HTTP route, see <a href="/std/rpc/">rpc</a> (JSON-RPC and MessagePack-RPC).</p>
+<div class="note"><p>Limits of the server side to know before you build on it:</p>
+<ul>
+<li>The server handles one connection at a time, and on that connection one call at a time: each method runs to the end before the next stream is read. A long streaming call holds up every other caller. That suits internal tools, tests and light services.</li>
+<li>The server speaks plaintext HTTP/2 (h2c) only. To accept TLS, put a proxy such as nginx or Envoy in front. The client can use TLS with <code>DialTLS</code>.</li>
+<li>The connection state lives in one global, so <code>ServeConn</code> must not run in several threads at once.</li>
+</ul></div>
+<h2 id="guide-protobuf">A unary call with protobuf messages</h2>
+<p>Real gRPC services exchange protobuf messages, not plain strings. A message is a list of fields, each written as a tag (field number and wire type) followed by the value; <a href="/std/encoding-protobuf/">encoding/protobuf</a> writes and reads them. The example defines a <code>Users.Get</code> method that takes a message with the user id in field 1 and answers with a user message: the id in field 1 and the name in field 2. Server and client run in one program, with the server on a port the system picks.</p>
+{{example.grpc-guide-protobuf}}
+<p><code>MethodPath</code> builds the path <code>/users.Users/Get</code> from the service and method names, which must match what the other side's <code>.proto</code> file says. When the request is wrong or the record does not exist, the method calls <code>Fail</code> with a status code instead of sending a message. The client checks <code>StatusOk</code> before it reads the answer, and <code>StatusString</code> gives a one line description such as <code>NOT_FOUND: no user 8</code>.</p>
+<p>Writing the fields by hand is fine for small messages. For a larger API, <code>protobuf.GenerateWithServices</code> turns a <code>.proto</code> file into Salam structs with <code>Marshal</code> and <code>Unmarshal</code> functions plus the service code, so the field numbers live in one place.</p>
+
+<h2 id="guide-auth">Tokens in metadata and error status codes</h2>
+<p>gRPC sends credentials and other per call values as metadata, the gRPC name for HTTP/2 headers. The client adds an entry with <code>MDAdd</code>, and the method reads it with <code>MDGet(CallMetadata(c), ...)</code>. Choose the status code by what went wrong: <code>GRPC_UNAUTHENTICATED</code> when no valid credential came, <code>GRPC_PERMISSION_DENIED</code> when the caller is known but not allowed.</p>
+{{example.grpc-guide-auth}}
+<p>Metadata keys are lower case. A value that is binary must use a key ending in <code>-bin</code> and is added with <code>MDAddBinary</code>. Clients often retry automatically on <code>GRPC_UNAVAILABLE</code> but never on an authentication error, so using the right code matters to the caller, not just to the logs.</p>
+
+<h2 id="guide-stream">Client streaming: many messages in, one answer out</h2>
+<p>A method registered with <code>RegisterStreamMethod(path, fn, true, false)</code> receives a stream from the client and answers once, which suits uploads and batches of readings. The method calls <code>Recv</code> in a loop until <code>ok</code> turns false, which happens when the client has sent its last message. On the client side, <code>StartCall</code> opens the call, <code>SendMessage</code> sends each message and its last argument marks the final one, then <code>RecvMessage</code> reads the answer and <code>FinishCall</code> returns the status.</p>
+{{example.grpc-guide-stream}}
+<p>If you do not know in advance which message is the last, send every message with <code>false</code> and call <code>CloseSend</code> at the end. For the other direction, a server stream, register with <code>false, true</code>, call <code>Send</code> several times in the method and read on the client with <code>RecvMessage</code> until <code>ok</code> is false.</p>
+
+<h2 id="guide-which">Which call shape for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Shape</th><th>Register with</th><th>Client calls</th></tr></thead>
+<tbody>
+<tr><td>One request, one answer</td><td><code>RegisterMethod</code></td><td><code>UnaryCall</code>, or <code>UnaryCallStr</code> for text</td></tr>
+<tr><td>Many requests, one answer</td><td><code>RegisterStreamMethod(path, fn, true, false)</code></td><td><code>StartCall</code>, <code>SendMessage</code>, <code>RecvMessage</code>, <code>FinishCall</code></td></tr>
+<tr><td>One request, many answers</td><td><code>RegisterStreamMethod(path, fn, false, true)</code></td><td><code>StartCall</code>, <code>SendMessage</code> with <code>true</code>, then <code>RecvMessage</code> in a loop</td></tr>
+<tr><td>Both directions</td><td><code>RegisterStreamMethod(path, fn, true, true)</code></td><td>the same functions, sending and reading in turn</td></tr>
+</tbody>
+</table></div>
+<p>To reach a public service over TLS, open the channel with <code>DialTLS(host, 443)</code>; everything else stays the same. <code>SetGzip</code> compresses the messages the client sends.</p>
 >>
 
 doc.Channel = A channel to a gRPC server over HTTP/2.
@@ -141,9 +175,9 @@ doc.SetStatus = Sets the final status of the call.
 doc.Fail = Ends the call with an error code and message.
 doc.Listen = Starts listening.
 doc.Port = The port actually taken.
-doc.ServeConn = Answers one connection until it closes.
-doc.ServeCount = Answers n connections and returns.
-doc.Serve = Answers connections until it is stopped.
+doc.ServeConn = Answers the calls on one connection, one after another, until the client closes it or sends GOAWAY.
+doc.ServeCount = Answers n connections, one after another, and returns the total served. It calls <code>Listen</code> first if needed.
+doc.Serve = Answers connections one at a time until <code>StopServer</code> is called.
 doc.StopServer = Stops the server.
 
 ex.Channel = grpc-Calls

@@ -1,0 +1,35 @@
+import db.postgres
+
+func show(d: postgres.Database, title: str, sql: str):
+    r := postgres.Query(d, sql)
+    defer r.Close()
+    println title
+    until r.Next():
+        mut line := " "
+        repeat r.ColumnCount() in i:
+            line = line + " " + r.Text(i)
+        end
+        println line
+    end
+end
+
+func main:
+    d := postgres.Open("host=127.0.0.1 user=postgres password=secret dbname=bookshop")
+    defer postgres.Close(d)
+
+    _ := postgres.Exec(d, `INSERT INTO books (title, author, year, price, stock) VALUES
+        ('Dune', 'Frank Herbert', 1965, 12.50, 5),
+        ('Foundation', 'Isaac Asimov', 1951, 8.75, 4)
+        ON CONFLICT (title) DO UPDATE SET stock = books.stock + EXCLUDED.stock`)
+    show(d, "restock, insert or add:", "SELECT title, stock FROM books WHERE title IN ('Dune', 'Foundation') ORDER BY title")
+
+    _ := postgres.Exec(d, `UPDATE books SET info = '{"pages": 412, "series": "Dune Chronicles", "awards": ["Hugo", "Nebula"]}' WHERE title = 'Dune';
+        UPDATE books SET info = '{"pages": 255, "series": "Foundation"}', tags = '{scifi,classic}' WHERE title = 'Foundation'`)
+    show(d, "jsonb fields:", "SELECT title, info->>'series', (info->>'pages')::int FROM books WHERE info ? 'series' ORDER BY title")
+    show(d, "won a Hugo:", `SELECT title FROM books WHERE info->'awards' @> '["Hugo"]'`)
+
+    show(d, "arrays:", "SELECT tag, count(*) FROM books, unnest(tags) AS tag GROUP BY tag ORDER BY count(*) DESC, tag")
+    show(d, "full text:", "SELECT title FROM books WHERE to_tsvector('english', title) @@ plainto_tsquery('english', 'guides galaxy')")
+    show(d, "best sellers:", `SELECT b.author, sum(o.total), rank() OVER (ORDER BY sum(o.total) DESC)
+        FROM orders o JOIN books b ON b.id = o.book_id GROUP BY b.author`)
+end

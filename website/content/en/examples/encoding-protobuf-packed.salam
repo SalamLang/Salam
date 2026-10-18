@@ -1,0 +1,50 @@
+import encoding.protobuf
+import compress
+
+func readScores(b: compress.ByteBuf): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut r := compress.ReaderFromBuf(b)
+    mut ok := true
+    until compress.RdLeft(r) > 0 and ok:
+        mut number := 0
+        mut wire := 0
+        protobuf.ReadTag(r, number, wire, ok)
+        if number == 1 and wire == protobuf.WT_LEN:
+            mut packed := protobuf.ReadLenPrefixedBuf(r, ok)
+            mut pr := compress.ReaderFromBuf(packed)
+            until compress.RdLeft(pr) > 0 and ok:
+                out.push(protobuf.ReadVarint(pr, ok) as int)
+            end
+            compress.BufFree(packed)
+        else number == 1 and wire == protobuf.WT_VARINT:
+            out.push(protobuf.ReadVarint(r, ok) as int)
+        else:
+            protobuf.SkipField(r, wire, ok)
+        end
+    end
+    ret out
+end
+
+func main:
+    scores := [7, 150, 3]
+
+    mut body := compress.NewByteBuf()
+    each s in scores:
+        protobuf.WriteVarint(body, s as u64)
+    end
+    mut packed := compress.NewByteBuf()
+    protobuf.WriteTag(packed, 1, protobuf.WT_LEN)
+    protobuf.WriteLenPrefixedBytes(packed, body.data, body.len)
+
+    mut unpacked := compress.NewByteBuf()
+    each s in scores:
+        protobuf.WriteTag(unpacked, 1, protobuf.WT_VARINT)
+        protobuf.WriteVarint(unpacked, s as u64)
+    end
+
+    println "packed:  ", compress.BufLen(packed), "bytes ->", readScores(packed)
+    println "unpacked:", compress.BufLen(unpacked), "bytes ->", readScores(unpacked)
+    compress.BufFree(unpacked)
+    compress.BufFree(packed)
+    compress.BufFree(body)
+end

@@ -1,0 +1,57 @@
+import net.email
+import net.tcp
+import str
+
+mut server := tcp.Server {}
+
+func next_line(conn: tcp.Conn, buf &: str): str:
+    until buf.find("\r\n") < 0:
+        buf += tcp.Read(conn, 4096)
+    end
+    at := buf.find("\r\n")
+    line := buf.substr(0, at)
+    buf = buf.substr(at + 2, buf.len() - at - 2)
+    ret line
+end
+
+func imap_server():
+    conn := tcp.Accept(server)
+    mut buf := ""
+    _ := tcp.Write(conn, "* OK IMAP ready\r\n")
+    mut done := false
+    until not done:
+        line := next_line(conn, buf)
+        tag := str.Split(line, " ")[0]
+        if str.Contains(line, " SELECT "):
+            _ := tcp.Write(conn, "* 3 EXISTS\r\n* 2 RECENT\r\n")
+        else str.Contains(line, " SEARCH "):
+            _ := tcp.Write(conn, "* SEARCH 2 3\r\n")
+        else str.Contains(line, " FETCH "):
+            _ := tcp.Write(conn, "* 2 FETCH (FLAGS (\\Recent))\r\n* 3 FETCH (FLAGS (\\Recent \\Flagged))\r\n")
+        else str.Contains(line, " LOGOUT"):
+            _ := tcp.Write(conn, "* BYE\r\n")
+            done = true
+        end
+        _ := tcp.Write(conn, tag + " OK done\r\n")
+    end
+    tcp.Close(conn)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(imap_server)
+    mut c := email.DialIMAP("127.0.0.1", tcp.Port(server))
+    println "logged in:", c.ok and email.Login(c, "sara", "secret")
+    selected := email.Command(c, "SELECT \"INBOX\"")
+    each line in selected.lines:
+        if str.EndsWith(line, " EXISTS"): println "inbox:", line end
+    end
+    unread := email.Command(c, "SEARCH UNSEEN")
+    println "unread:", unread.lines[0], "status:", unread.status
+    each line in email.Fetch(c, "2:3", "FLAGS"):
+        println " ", line
+    end
+    email.Logout(c)
+    join(t)
+    tcp.CloseServer(server)
+end

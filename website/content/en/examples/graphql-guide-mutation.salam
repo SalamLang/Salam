@@ -1,0 +1,60 @@
+import graphql
+import encoding.value
+
+mut todos := value.NewValueArray()
+
+func list(slot: i64):
+    graphql.Resolve(slot, todos)
+end
+
+func add_todo(slot: i64):
+    data := graphql.Arg(slot, "input")
+    title := value.AsString(value.ObjectGet(data, "title"))
+    if title == "":
+        graphql.Fail(slot, "title must not be empty")
+        ret
+    end
+    mut t := value.NewValueObject()
+    value.ObjectSet(t, "id", value.ValueInt(value.ArrayLen(todos) + 1))
+    value.ObjectSet(t, "title", value.ValueString(title))
+    mut done := false
+    if value.ObjectHas(data, "done"):
+        done = value.AsBool(value.ObjectGet(data, "done"))
+    end
+    value.ObjectSet(t, "done", value.ValueBool(done))
+    value.ArrayPush(todos, t)
+    graphql.Resolve(slot, t)
+end
+
+func main:
+    mut err := graphql.NewError(graphql.ERR_SYNTAX, "")
+    mut s := graphql.ParseSchema(`
+type Todo { id: Int! title: String! done: Boolean! }
+input TodoInput { title: String! done: Boolean = false }
+type Query { todos: [Todo!]! }
+type Mutation { addTodo(input: TodoInput!): Todo }`, err)
+    _ := graphql.SetResolver(s, "Query", "todos", list)
+    _ := graphql.SetResolver(s, "Mutation", "addTodo", add_todo)
+
+    add := `mutation Add($t: TodoInput!) { addTodo(input: $t) { id title done } }`
+    each title in ["write the report", "", "send invoices"]:
+        mut fields := value.NewValueObject()
+        value.ObjectSet(fields, "title", value.ValueString(title))
+        mut vars := value.NewValueObject()
+        value.ObjectSet(vars, "t", fields)
+        mut r := graphql.ExecuteSource(s, add, "Add", vars, value.ValueNull(), value.ValueNull())
+        if graphql.ResultOk(r):
+            println graphql.ResultToJSONStable(r)
+        else:
+            println "error:", graphql.ResultErrorMessage(r)
+        end
+        graphql.FreeResult(r)
+    end
+    mut all := graphql.Run(s, `{ todos { id title } }`)
+    println graphql.ResultToJSONStable(all)
+    graphql.FreeResult(all)
+    mut bad := graphql.Run(s, `mutation { addTodo(input: { done: true }) { id } }`)
+    println graphql.ResultErrorMessage(bad)
+    graphql.FreeResult(bad)
+    graphql.FreeSchema(s)
+end

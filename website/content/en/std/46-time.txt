@@ -5,9 +5,62 @@ pkg.summary = The current time, durations, formatting and parsing dates, the mon
 pkg.title = The time package in Salam | Durations, dates and timers
 pkg.description = The time package in Salam: the current time, durations and unit conversion, formatting and parsing ISO and HTTP dates, local and UTC time, measuring elapsed time, timers and tickers, with examples.
 pkg.intro <<
-<p>There are two kinds of "time" in this package. An <strong>instant</strong> is a number of seconds since the start of 1970 in UTC, the Unix epoch, and is what you use for dates and clock times. A <strong>duration</strong> is a span with nanosecond precision, such as "1 hour 30 minutes", which you can add up and compare.</p>
-<p>Functions such as <code>Year</code> and <code>FormatDate</code> work in the machine's local time, and their <code>UTC</code> counterparts work in UTC. To measure how long a piece of code took, use the <strong>monotonic</strong> clock (<code>MonoNanos</code>) rather than <code>Now</code>; the system clock can jump forwards or backwards.</p>
-<p>For the Persian and Hijri calendars and for time zones, see the <a href="../calendar/">calendar</a> package.</p>
+<p>The <code>time</code> package reads the clock, turns dates into text and back, does date arithmetic, measures how long code takes and waits. It works with two kinds of value:</p>
+<ul>
+<li>An <strong>instant</strong> is an <code>i64</code> count of seconds since the start of 1970 in UTC, the Unix epoch. <code>Now</code> returns one, and dates are stored, compared and sent as instants.</li>
+<li>A <strong>duration</strong> is a <code>Duration</code>, a span with nanosecond precision such as <code>1h30m</code>, which you can add up, compare and print.</li>
+</ul>
+<p>There are also two clocks. The <strong>wall clock</strong> (<code>Now</code>, <code>NowMillis</code>) tells the date and can jump when the system time is set. The <strong>monotonic clock</strong> (<code>MonoNanos</code>) only moves forward and is the one to measure spans and deadlines with; timers and tickers use it.</p>
+<p>For the Persian and Hijri calendars and for named time zones such as <code>Asia/Tehran</code>, see <a href="/std/calendar/">calendar</a>. For timing parts of a program while you debug it, <a href="/std/debug/">debug</a> has named timers.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li><code>Year</code>, <code>FormatDate</code>, <code>Format</code>, <code>FormatISO</code> and <code>Weekday</code> use the machine's local time zone, so the same instant prints differently on a server set to UTC and a laptop in Tehran. Use the <code>...UTC</code> functions and <code>FormatISOUTC</code> for anything stored or compared.</li>
+<li><code>FormatISO</code> has no offset, so the text cannot be read back to the same instant on another machine. Send <code>FormatISOUTC</code> or <code>FormatRFC3339</code>.</li>
+<li><code>Days(30)</code> is 30 times 24 hours, not a month. There is no month arithmetic; build the date with <code>FromUTCParts</code> and a month one higher (it rolls 13 over into January).</li>
+<li><code>FromUTCParts</code> and <code>FromLocalParts</code> accept any numbers and roll over: 30 February becomes 1 March. The parse functions, by contrast, reject a day that the month does not have.</li>
+<li>Timing code with <code>Now</code>. It has whole seconds and follows clock changes; use <code>MonoNanos</code>.</li>
+</ul>
+
+<h2 id="guide-dates">Dates from text, and date arithmetic</h2>
+<p>Dates usually arrive as text: from JSON, a database or a form. <code>ParseISO</code> reads the ISO 8601 form and returns a <code>TimeResult</code>; check <code>ok</code> before using <code>epoch</code>, because bad input is common. Once you have an instant, arithmetic is plain integer arithmetic: <code>AddDuration</code> moves it, and <code>DiffSeconds</code> gives the distance between two instants.</p>
+{{example.time-guide-expiry}}
+<p>The example fixes "today" with <code>FromUTCParts</code> so its output never changes; a real program would use <code>Now()</code>. Adding <code>Days(30)</code> adds exactly 30 times 24 hours. In UTC that is always 30 calendar days, but in a zone with daylight saving the local clock time can move by an hour, so keep stored instants in UTC and convert only for display.</p>
+
+<h2 id="guide-durations">Timeouts from settings</h2>
+<p>A setting such as <code>timeout = 1m30s</code> is easier to read than a number of milliseconds. <code>ParseDuration</code> understands <code>h</code>, <code>m</code>, <code>s</code>, <code>ms</code>, <code>us</code> and <code>ns</code>, in any combination and with fractions. Check the value against sensible limits too: a parse that worked is not yet a value that makes sense.</p>
+{{example.time-guide-timeouts}}
+<p>Durations add, subtract, multiply and compare without any unit conversions, and <code>to_str</code> prints them in the same short form that <code>ParseDuration</code> reads. When a quick default is enough, <code>ParseDurationOr</code> does the parse and the fallback in one call.</p>
+
+<h2 id="guide-schedule">The next run of a daily job</h2>
+<p>An instant is seconds since 1970 in UTC, so the start of its UTC day is <code>t - t % SecondsPerDay</code>, and the time of day is the rest. That is enough to work out when a job that runs every night at 02:30 UTC should run next.</p>
+{{example.time-guide-schedule}}
+<p>1 January 1970 was a Thursday, which is why the weekday table starts there. <code>Weekday</code> gives the same answer for the machine's local time. <code>FormatHTTPDate</code> is the form HTTP headers such as <code>Last-Modified</code> and <code>Expires</code> need.</p>
+
+<h2 id="guide-ticker">Heartbeats, deadlines and waiting for a condition</h2>
+<p>A <code>Ticker</code> fires at a fixed interval: <code>wait</code> sleeps until the next tick, and if the program comes back late it skips the missed ticks instead of firing them all at once, counting them in <code>dropped</code>. A <code>Timer</code> is a single deadline you check with <code>expired</code>, here an upper limit for the whole loop. <code>WaitUntil</code> checks a condition every <code>poll</code> until it holds or <code>limit</code> runs out, which is the usual way to wait for a server or a file to appear.</p>
+{{example.time-guide-ticker}}
+<p>All of these run on the calling thread and block it. To do other work between ticks, call <code>fired</code> in your loop instead of <code>wait</code>; to run something truly in the background, start a <a href="/std/thread/">thread</a>.</p>
+
+<h2 id="guide-measure">Measuring how long code takes</h2>
+<p>Take <code>MonoNanos</code> before the work and pass it to <code>SinceDuration</code> after. The monotonic clock only moves forward, so the result is right even if the system clock is changed while the code runs; <code>Now</code> is for dates, not for timing.</p>
+{{example.time-guide-measure}}
+<p>The example prints only comparisons, because the measured time is different on every run. To find the slow part of a larger program, the <a href="/std/debug/">debug</a> package has named timers that build on the same clock.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>The current instant</td><td><code>Now</code></td></tr>
+<tr><td>An instant from parts</td><td><code>FromUTCParts</code>, or <code>FromLocalParts</code> for local time</td></tr>
+<tr><td>Read a date from text</td><td><code>ParseISO</code>, <code>ParseHTTPDate</code>, <code>ParseFormat</code></td></tr>
+<tr><td>Write a date for machines</td><td><code>FormatISOUTC</code>, <code>FormatRFC3339</code>, <code>FormatHTTPDate</code></td></tr>
+<tr><td>Write a date for people</td><td><code>FormatDate</code>, <code>FormatTime</code>, <code>Format</code></td></tr>
+<tr><td>Move an instant or measure a gap</td><td><code>AddDuration</code>, <code>DiffSeconds</code>, <code>DurationBetween</code></td></tr>
+<tr><td>Time a piece of code</td><td><code>MonoNanos</code> with <code>SinceDuration</code></td></tr>
+<tr><td>Wait or repeat</td><td><code>Sleep</code>, <code>SleepFor</code>, <code>NewTimer</code>, <code>NewTicker</code>, <code>RepeatEvery</code>, <code>WaitUntil</code></td></tr>
+<tr><td>Jalali or Hijri dates, time zones</td><td><a href="/std/calendar/">calendar</a></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.Timer = A one-shot timer: it says whether the span you set has passed.
@@ -31,7 +84,7 @@ doc.Ticker.reset = Changes the interval and starts again from now.
 doc.Ticker.stop = Stops the ticker.
 doc.NewTimer = A timer that expires after the given span.
 doc.NewTicker = A ticker with the given interval; a zero or negative interval makes an inactive ticker.
-doc.AfterFunc = Waits for the given span and then runs the function. It happens on the same thread and does not return until the function is done.
+doc.AfterFunc = Waits for the given span and then runs the function. It happens on the same thread and does not return until the function is done, so it is a sleep followed by a call, not a background timer.
 doc.Every = Runs the function at a fixed interval for as long as it returns true, and returns how many times it ran.
 doc.RepeatEvery = Runs the function <code>count</code> times at the given interval.
 doc.WaitUntil = Checks the condition once every <code>poll</code> until it holds or <code>limit</code> passes, and says whether it held.
@@ -63,7 +116,7 @@ doc.FormatTime = The local clock time as <code>09:30:00</code>.
 doc.Format = The local date and time with a space between them.
 doc.FormatISO = The local date and time in ISO 8601 without an offset, such as <code>2024-03-20T09:30:00</code>.
 doc.FormatHTTPDate = The date format of HTTP headers, always in UTC: <code>Wed, 20 Mar 2024 14:05:09 GMT</code>.
-doc.Sleep = Holds the program for a number of milliseconds.
+doc.Sleep = Holds the calling thread for a number of milliseconds.
 doc.DiffSeconds = How many seconds there are from <code>earlier</code> to <code>later</code>.
 doc.Since = How many seconds have passed since that instant.
 doc.Until = How many seconds are left until that instant, negative when it is past.
@@ -115,7 +168,7 @@ doc.TimeResult = The result of parsing a date and time.
 doc.TimeResult.ok = Whether the text was read successfully.
 doc.TimeResult.epoch = The instant that was read, in seconds since the Unix epoch.
 doc.TimeResult.nanos = The fraction of a second, in nanoseconds.
-doc.ParseISO = Reads an ISO 8601 date and time, such as <code>2024-03-20T17:35:09+03:30</code>. Without an offset it assumes local time.
+doc.ParseISO = Reads an ISO 8601 date and time, such as <code>2024-03-20T17:35:09+03:30</code> or <code>2024-03-20</code>. Without an offset it assumes local time. A day the month does not have, such as 30 February, gives <code>ok</code> false.
 doc.ParseISOIn = Like <code>ParseISO</code>, but without an offset it assumes <code>offsetMinutes</code> minutes.
 doc.ParseHTTPDate = Reads the date format of HTTP headers.
 doc.ParseFormat = Reads text with a pattern. <code>%Y</code> is a four digit year, <code>%y</code> a two digit one, <code>%m</code> the month, <code>%d</code> the day, <code>%H</code> the hour, <code>%M</code> the minute, <code>%S</code> the second, <code>%f</code> the fraction, <code>%b</code> the English month name, <code>%a</code> the day name, which is ignored, <code>%z</code> an offset such as <code>+0330</code> and <code>%Z</code> a zone name such as UTC. One space in the pattern matches any number of spaces in the text.
@@ -123,8 +176,8 @@ doc.ParseISOOr = Like <code>ParseISO</code>, returning the default when the text
 doc.FormatISOUTC = Writes the instant in UTC in ISO 8601, such as <code>2024-03-20T14:05:09Z</code>.
 doc.FormatRFC3339 = Writes the instant in local time with its offset, such as <code>2024-03-20T17:35:09+03:30</code>, or <code>Z</code> when the offset is zero.
 doc.LocalOffsetMinutesAt = The difference between local time and UTC at that instant, in minutes. With daylight saving it can change over the year.
-doc.FromLocalParts = Builds an instant from a local year, month, day, hour, minute and second.
-doc.FromUTCParts = Builds an instant from UTC parts.
+doc.FromLocalParts = Builds an instant from a local year, month, day, hour, minute and second. Values out of range roll over into the next month or year.
+doc.FromUTCParts = Builds an instant from UTC parts. Values out of range roll over, so month 13 is January of the next year.
 doc.NowNanos = The current instant in nanoseconds since the Unix epoch.
 doc.NowMicros = The current instant in microseconds since the Unix epoch.
 doc.NowMillis = The current instant in milliseconds since the Unix epoch.

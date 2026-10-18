@@ -1,0 +1,196 @@
+pkg.en = db/sql
+pkg.name = db/sql
+pkg.group = Database
+pkg.summary = Read, check and type SQL without a database: a dialect-aware parser, a schema catalog and typed placeholders.
+pkg.title = The db/sql package in Salam | checking SQL queries
+pkg.description = The db/sql package in Salam: parsing SQL for SQLite, MySQL, MariaDB and PostgreSQL, building a catalog from your own CREATE TABLE statements, catching unknown tables and columns before the query runs, and reading back the type of every placeholder and every result column.
+pkg.import = db.sql
+pkg.intro <<
+<p>A query is a string, so a typo in it is found by the database, at run time, on the one code path nobody tested. This package reads the string instead: it lexes and parses SQL for one of four dialects, and when you hand it your schema it also resolves every table and column, names the ones that do not exist, and tells you the type of every placeholder and every column that comes back. Nothing here connects to a database; it is all static, so it belongs in a test or in a build step.</p>
+<p>It is the same idea as sqlc in Go, with the schema taken from the SQL you already write: the <code>CREATE TABLE</code> statements in your migrations are the catalog, so there is no second file to keep in step.</p>
+<div class="note"><p>Things that catch people out:</p>
+<ul>
+<li>The dialect is not advice. <code>?</code> is a placeholder in SQLite and MySQL and a plain operator in PostgreSQL, which numbers its own as <code>$1</code>; <code>"name"</code> is a quoted name everywhere except MySQL, where it is a string; <code>AUTOINCREMENT</code>, <code>AUTO_INCREMENT</code> and <code>GENERATED ... AS IDENTITY</code> belong to one engine each. Pass the dialect you will really run against.</li>
+<li><code>Check</code> only resolves names when the statement parses. A report with a syntax error in it says nothing about the columns, so fix the syntax first and run it again.</li>
+<li>A table whose columns are not known, from <code>CREATE TABLE ... AS SELECT</code> or a view the package could not read, is left open: columns on it are never reported as missing. No news is not always good news.</li>
+<li><code>Apply</code> reads the DDL in order, so a view has to come after the tables it selects from, exactly as it does in the database.</li>
+<li>Diagnostic messages are English in both language modes; the codes are the same, so a Persian program can match on <code>code</code>.</li>
+<li><code>Placeholders</code> hands back a <code>Vector&lt;str&gt;</code> you own: free the vector, and the strings in it, when you are done.</li>
+</ul></div>
+<h2 id="guide-lint">Reading a query without a database</h2>
+<p><code>Lint</code> parses one statement, or a whole script of them separated by <code>;</code>, and returns a <code>Report</code>. <code>r.ok</code> is false as soon as there is an error; <code>ReportText</code> renders the whole list the way a compiler would, with the line, the column, the message and a help line. Most of the dialect rules are in here: the same string is fine for SQLite and wrong for PostgreSQL, and the report says which part of it to change.</p>
+{{example.db-sql-Lint}}
+<p>The compiler ships the same checks as a command, so a whole project can be
+checked without writing a program for it: <code>salam sql check src --schema=db</code>
+reads the <code>.sql</code> files under <code>src</code>, and the SQL string literals out of
+its <code>.salam</code> files, and reports them with the position in the Salam source. A
+query glued together with <code>+</code> is a fragment rather than a statement, so it is
+counted and skipped instead of being reported as a syntax error - which is also the
+reason to bind values as placeholders instead of pasting them in.</p>
+<p>Every diagnostic carries a code. <code>SQL0xx</code> is lexical, <code>SQL1xx</code> is syntax, <code>SQL2xx</code> is a dialect rule, <code>SQL3xx</code> is a name or a count that does not match the schema. Match on the code when you want to allow one particular thing; never match on the message.</p>
+
+<h2 id="guide-catalog">Your migrations are the schema</h2>
+<p><code>Apply</code> runs DDL into a <code>Catalog</code>: <code>CREATE TABLE</code> adds a table with its columns, their types, their NOT NULL and PRIMARY KEY, <code>ALTER TABLE</code> adds, drops and renames, <code>DROP</code> removes, and <code>CREATE VIEW</code> records the view's columns. Feed it the same strings you give <code>db.AddMigration</code> and the catalog is the schema the program really has.</p>
+{{example.db-sql-Catalog}}
+<p>With a catalog, <code>Check</code> resolves names: an unknown column or table is an error with the closest real name offered, a column that two joined tables both have is an error until you qualify it, an INSERT is checked against the column list and against the columns that are NOT NULL with no default, and an UPDATE or DELETE with no WHERE is a warning, because that is almost never what was meant.</p>
+
+<h2 id="guide-analyze">The type of every placeholder</h2>
+<p><code>Analyze</code> does everything <code>Check</code> does and also hands back what the query takes and what it returns. Each <code>Param</code> says which column it was compared with, in which table, and the type that column has; each <code>ResultCol</code> says the name the column comes back under, its type, and whether it can be null. <code>SalamType</code> turns that into the Salam type to read it into, so a LEFT JOIN gives you <code>option.Option&lt;i64&gt;</code> where an inner join gives you <code>i64</code>.</p>
+{{example.db-sql-Analyze}}
+<p>That is enough to generate the binding code for a query, or to assert in a test that a query still takes and returns what the code around it believes. Placeholders are numbered in the order they appear, which is the order the driver binds them; for PostgreSQL the ordinal is the number in the <code>$n</code> itself, and a gap in those numbers is an error of its own.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Is this SQL well formed for my engine?</td><td><code>Lint</code></td></tr>
+<tr><td>How many values does it bind?</td><td><code>ParamCount</code>, <code>Placeholders</code></td></tr>
+<tr><td>Load the schema</td><td><code>NewCatalog</code>, <code>Apply</code></td></tr>
+<tr><td>Do the tables and columns exist?</td><td><code>Check</code></td></tr>
+<tr><td>What does it take and return?</td><td><code>Analyze</code></td></tr>
+<tr><td>Which Salam type reads a column?</td><td><code>SalamType</code></td></tr>
+<tr><td>Look around the schema</td><td><code>TableCount</code>, <code>TableName</code>, <code>ColumnCount</code>, <code>ColumnAt</code>, <code>HasTable</code>, <code>HasColumn</code></td></tr>
+</tbody>
+</table></div>
+>>
+
+doc.SQLITE = The SQLite dialect.
+doc.MYSQL = The MySQL dialect.
+doc.MARIADB = The MariaDB dialect: MySQL plus RETURNING.
+doc.POSTGRES = The PostgreSQL dialect.
+doc.ERROR = The severity of a diagnostic that makes the statement wrong.
+doc.WARNING = The severity of a diagnostic that is worth reading but does not make the statement wrong.
+doc.NOTE = The severity of a remark.
+doc.TYPE_NULL = The type of an SQL NULL. Same numbering as <code>db</code>'s column types.
+doc.TYPE_INT = An integer column.
+doc.TYPE_FLOAT = A floating point or decimal column.
+doc.TYPE_TEXT = A text column.
+doc.TYPE_BLOB = A binary column.
+doc.TYPE_BOOL = A boolean column.
+doc.TYPE_TIME = A date, time or timestamp column.
+doc.TYPE_UNKNOWN = A type the package could not work out.
+doc.STMT_UNKNOWN = A statement this package does not model.
+doc.STMT_SELECT = A SELECT, a VALUES or a set operation.
+doc.STMT_INSERT = An INSERT or a REPLACE.
+doc.STMT_UPDATE = An UPDATE.
+doc.STMT_DELETE = A DELETE.
+doc.STMT_DDL = A statement that changes the schema.
+doc.Dialect = Everything that differs between the engines: how names and strings are quoted, which placeholders exist, which clauses are supported. Build one with <code>DialectOf</code> or <code>DialectNamed</code>.
+doc.Dialect.id = Which engine: <code>SQLITE</code>, <code>MYSQL</code>, <code>MARIADB</code> or <code>POSTGRES</code>.
+doc.Dialect.name = The engine's name, as it appears in diagnostics.
+doc.Dialect.double_quoted_string = True when <code>"x"</code> is a string instead of a name (MySQL).
+doc.Dialect.backtick_ident = True when <code>`x`</code> is a name (MySQL, SQLite).
+doc.Dialect.bracket_ident = True when <code>[x]</code> is a name (SQLite).
+doc.Dialect.hash_comment = True when <code>#</code> starts a comment (MySQL).
+doc.Dialect.dollar_string = True when <code>$tag$ ... $tag$</code> is a string (PostgreSQL).
+doc.Dialect.backslash_escape = True when a backslash escapes inside a string (MySQL).
+doc.Dialect.qmark_param = True when <code>?</code> is a placeholder.
+doc.Dialect.numbered_param = True when <code>$1</code> is a placeholder.
+doc.Dialect.named_param = True when <code>:name</code> and <code>@name</code> are placeholders.
+doc.Dialect.returning = True when RETURNING is supported.
+doc.Dialect.on_conflict = True when ON CONFLICT is supported.
+doc.Dialect.on_duplicate = True when ON DUPLICATE KEY UPDATE is supported.
+doc.Dialect.limit_comma = True when <code>LIMIT start, count</code> is supported.
+doc.Dialect.ilike = True when ILIKE is supported.
+doc.Dialect.colon_cast = True when <code>x::type</code> is a cast.
+doc.Dialect.autoincrement_word = The engine's own word for an auto-incrementing key.
+doc.Diag = One diagnostic: what is wrong, where, and what to write instead.
+doc.Diag.severity = <code>ERROR</code>, <code>WARNING</code> or <code>NOTE</code>.
+doc.Diag.code = The code, for example <code>SQL311</code>. Match on this, not on the message.
+doc.Diag.message = What is wrong, in one line.
+doc.Diag.help = What to write instead; empty when there is nothing to suggest.
+doc.Diag.line = The line it starts on, counting from 1.
+doc.Diag.col = The column it starts at, counting from 1.
+doc.Diag.offset = The byte offset into the SQL it starts at.
+doc.Diag.length = How many bytes it covers.
+doc.Report = The diagnostics of one run, in the order they were found.
+doc.Report.ok = True when nothing is an error. Warnings do not clear it.
+doc.Report.errors = How many errors there are.
+doc.Report.warnings = How many warnings there are.
+doc.Report.statements = How many statements parsed, which is how a caller counts what it checked.
+doc.Report.items = The diagnostics themselves.
+doc.Column = One column of the schema.
+doc.Column.name = Its name, as the schema spells it.
+doc.Column.type_name = Its type, as the schema spells it.
+doc.Column.kind = Which of the <code>TYPE_*</code> kinds that type is.
+doc.Column.not_null = True when it cannot be null.
+doc.Column.has_default = True when it has a default, which is what lets an INSERT leave it out.
+doc.Column.primary = True when it is part of the primary key.
+doc.Column.auto = True when the engine fills it in.
+doc.Column.generated = True when it is computed and cannot be written.
+doc.Table = One table or view of the schema.
+doc.Table.name = Its name.
+doc.Table.is_view = True when it is a view.
+doc.Table.open = True when its columns are not known, which turns off column checking for it.
+doc.Table.columns = Its columns, in declaration order.
+doc.Catalog = The schema a query is checked against. Build one with <code>NewCatalog</code> and fill it with <code>Apply</code>.
+doc.Catalog.d = The dialect the DDL and the queries are read with.
+doc.Catalog.tables = The tables and views it holds.
+doc.Param = One placeholder, and the column it is bound against.
+doc.Param.marker = The placeholder as written: <code>?</code>, <code>$2</code>, <code>:name</code>.
+doc.Param.ordinal = Its position, counting from 1; for <code>$n</code> it is the number itself.
+doc.Param.table = The table of the column it was compared with, when there was one.
+doc.Param.column = The column it was compared with, when there was one.
+doc.Param.kind = That column's <code>TYPE_*</code> kind, or <code>TYPE_UNKNOWN</code>.
+doc.Param.not_null = True when that column cannot be null.
+doc.ResultCol = One column of what the statement returns.
+doc.ResultCol.name = The name it comes back under: the alias, or the column's own name.
+doc.ResultCol.table = The table it came from, when it is a plain column.
+doc.ResultCol.kind = Its <code>TYPE_*</code> kind.
+doc.ResultCol.nullable = True when it can come back null, which an outer join makes true for the whole of its side.
+doc.Analysis = What <code>Analyze</code> works out about one statement.
+doc.Analysis.ok = True when nothing is an error.
+doc.Analysis.kind = Which <code>STMT_*</code> statement it is.
+doc.Analysis.table = The table it reads from or writes to.
+doc.Analysis.params = Its placeholders, in binding order.
+doc.Analysis.results = The columns it returns.
+doc.Analysis.report = The diagnostics, as <code>Check</code> would give them.
+doc.Analysis.owned = The strings the analysis owns. <code>FreeAnalysis</code> releases them; nothing else should read it.
+doc.DialectOf = The dialect of one of <code>SQLITE</code>, <code>MYSQL</code>, <code>MARIADB</code> or <code>POSTGRES</code>.
+doc.DialectNamed = The dialect of a name such as <code>"sqlite"</code>, <code>"mysql"</code>, <code>"mariadb"</code> or <code>"postgres"</code>, which is what <code>db.SQLITE</code> and <code>c.Kind()</code> give you. An unknown name gives SQLite.
+doc.FreeReport = Release a report.
+doc.DiagText = One diagnostic as a line of text, with its help line under it.
+doc.ReportText = A whole report as text, one diagnostic per block.
+doc.Lint = Parse the SQL and report what is wrong with it, without a schema. Lexical, syntax and dialect problems only.
+doc.ParamCount = How many placeholders the SQL binds.
+doc.Placeholders = Every placeholder as written, in order. You own the vector and the strings in it.
+doc.NewCatalog = An empty catalog that reads DDL and queries with this dialect.
+doc.Apply = Run DDL into the catalog and report what was wrong with it. Call it once per migration, in order.
+doc.FreeCatalog = Release a catalog and every name in it.
+doc.TableCount = How many tables and views the catalog holds.
+doc.TableName = The name of the table at this position, or <code>""</code>.
+doc.HasTable = Whether the catalog has a table or view of this name, ignoring case.
+doc.ColumnCount = How many columns a table has, or 0 when there is no such table.
+doc.ColumnAt = The column at this position of a table, or an empty <code>Column</code>.
+doc.HasColumn = Whether a table has a column of this name, ignoring case.
+doc.KindName = The name of a <code>TYPE_*</code> kind: <code>"int"</code>, <code>"text"</code>, and so on.
+doc.SalamType = The Salam type that reads a column of this kind: <code>i64</code>, <code>f64</code>, <code>bool</code> or <code>str</code>, wrapped in <code>option.Option</code> when the value can be null.
+doc.Check = Parse the SQL and resolve it against a catalog: unknown tables and columns, ambiguous columns, INSERT arity and required columns, and the writes that have no WHERE.
+doc.Analyze = Everything <code>Check</code> does, plus the type of every placeholder and of every column returned. Release it with <code>FreeAnalysis</code>.
+doc.FreeAnalysis = Release an analysis and the strings in it.
+doc.StmtKindName = The name of a <code>STMT_*</code> kind: <code>"select"</code>, <code>"insert"</code>, and so on.
+
+ex.Lint = db-sql-Lint
+ex.ParamCount = db-sql-Lint
+ex.Placeholders = db-sql-Lint
+ex.Dialect = db-sql-Lint
+ex.DialectOf = db-sql-Lint
+ex.DialectNamed = db-sql-Lint
+ex.Report = db-sql-Lint
+ex.ReportText = db-sql-Lint
+ex.FreeReport = db-sql-Lint
+ex.DiagText = db-sql-Lint
+ex.Diag = db-sql-Lint
+ex.Catalog = db-sql-Catalog
+ex.NewCatalog = db-sql-Catalog
+ex.Apply = db-sql-Catalog
+ex.FreeCatalog = db-sql-Catalog
+ex.Check = db-sql-Catalog
+ex.TableCount = db-sql-Catalog
+ex.Column = db-sql-Catalog
+ex.Table = db-sql-Catalog
+ex.Analyze = db-sql-Analyze
+ex.Analysis = db-sql-Analyze
+ex.FreeAnalysis = db-sql-Analyze
+ex.Param = db-sql-Analyze
+ex.ResultCol = db-sql-Analyze
+ex.SalamType = db-sql-Analyze
+ex.StmtKindName = db-sql-Analyze

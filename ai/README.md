@@ -99,9 +99,10 @@ reply = client.chat.completions.create(
   answers still go through the check below.
 - `/models` and `/chat/completions` are served by the streaming listener
   (`AI_STREAM_PORT`), so the proxy must send those two paths there with
-  buffering off, like the chat stream route. A `/v1`, `/openai` or
-  `/openai/v1` prefix is accepted as well, for clients whose base URL
-  already carries the version.
+  buffering off, like the chat stream route. The same two paths behind a
+  `/v1`, `/openai` or `/openai/v1` prefix are served as well, for clients
+  whose base URL already carries the version, and the proxy has to forward
+  those prefixes to the streaming listener too.
 
 `HOURLY=<AI_API_HOURLY> node ai/backend/tests/api_flow.mjs` tests it against a running API, with
 `ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.

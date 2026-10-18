@@ -45,6 +45,7 @@ struct SqlJob:
     pub warnings: int = 0
     pub files: int = 0
     pub queries: int = 0
+    pub glued: int = 0
 end
 
 func sql_sev_name(s: int): str:
@@ -78,6 +79,20 @@ func sql_looks_like_sql(q: str): bool:
     ret hit
 end
 
+func sql_glued_at(stream: tok.TokenStream, at: int): bool:
+    if at > 0:
+        if stream.toks.get(at - 1).kind == tok.TK_PLUS:
+            ret true
+        end
+    end
+    if at + 1 < stream.toks.len():
+        if stream.toks.get(at + 1).kind == tok.TK_PLUS:
+            ret true
+        end
+    end
+    ret false
+end
+
 func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.Report):
     mut i := 0
     until i < r.items.len():
@@ -102,15 +117,16 @@ func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.
 end
 
 func sql_one(job &: SqlJob, file: str, base_line: int, base_col: int, query: str):
-    job.queries = job.queries + 1
     if job.has_schema:
         mut r := sql.Check(query, job.cat)
         sql_report(job, file, base_line, base_col, r)
+        job.queries = job.queries + r.statements
         sql.FreeReport(r)
         ret
     end
     mut r := sql.Lint(query, job.dialect)
     sql_report(job, file, base_line, base_col, r)
+    job.queries = job.queries + r.statements
     sql.FreeReport(r)
 end
 
@@ -141,8 +157,12 @@ func sql_scan_salam(job &: SqlJob, path: str):
             t := stream.toks.get(i)
             if t.kind == tok.TK_STRING and t.value.kind == tok.TV_STRING:
                 if sql_looks_like_sql(t.value.sval):
-                    w := sql_quote_width(sfile.text, t.begin_index as int)
-                    sql_one(job, path, t.begin_line as int, (t.begin_col as int) + w, t.value.sval)
+                    if sql_glued_at(stream, i):
+                        job.glued = job.glued + 1
+                    else:
+                        w := sql_quote_width(sfile.text, t.begin_index as int)
+                        sql_one(job, path, t.begin_line as int, (t.begin_col as int) + w, t.value.sval)
+                    end
                 end
             end
             i = i + 1
@@ -273,7 +293,11 @@ func sql_cmd(opt &: dr.Dr): int:
     counted := "checked " + str.FromInt(job.queries as i64) + " statement(s) in "
     scanned := counted + str.FromInt(job.files as i64) + " file(s): "
     tally := str.FromInt(job.errors as i64) + " error(s), "
-    println scanned + tally + str.FromInt(job.warnings as i64) + " warning(s)"
+    mut line := scanned + tally + str.FromInt(job.warnings as i64) + " warning(s)"
+    if job.glued > 0:
+        line = line + "; " + str.FromInt(job.glued as i64) + " built by concatenation, not checked"
+    end
+    println line
     if job.errors > 0:
         ret 1
     end

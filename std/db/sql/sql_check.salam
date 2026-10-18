@@ -41,6 +41,12 @@ pub const STMT_DELETE := 4
 @fa "دستور طرح"
 pub const STMT_DDL := 5
 
+k_sql_aggregates := [
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "TOTAL", "GROUP_CONCAT", "STRING_AGG", "ARRAY_AGG",
+    "JSON_AGG", "JSONB_AGG", "BIT_AND", "BIT_OR", "BOOL_AND", "BOOL_OR", "EVERY", "STDDEV",
+    "STDDEV_POP", "STDDEV_SAMP", "VARIANCE", "VAR_POP", "VAR_SAMP"
+]
+
 struct Scope:
     pub base: int = 0
     pub srcs: Vector<str> = Vector {}
@@ -476,6 +482,263 @@ func is_cmp_op(op: int): bool:
     ret op == OP_REGEXP or op == OP_MATCH
 end
 
+func is_aggregate_name(name: str): bool:
+    mut i := 0
+    until i < len(k_sql_aggregates):
+        if str.EqualFold(name, k_sql_aggregates[i]):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func expr_has_aggregate(ck &: Checker, id: int): bool:
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret false
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_FUNC:
+        if is_aggregate_name(c_name(ck, n.tok)):
+            ret true
+        end
+    end
+    if expr_has_aggregate(ck, n.a) or expr_has_aggregate(ck, n.b):
+        ret true
+    end
+    if expr_has_aggregate(ck, n.c) or expr_has_aggregate(ck, n.d):
+        ret true
+    end
+    mut i := 0
+    until i < n.list.len():
+        if expr_has_aggregate(ck, n.list.get(i)):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func collect_bare_cols(ck &: Checker, id: int, out &: Vector<int>):
+    k := nd_kind(ck.p.ast, id)
+    if k == N_NONE:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if k == N_COLUMN_REF:
+        out.push(id)
+        ret
+    end
+    if k == N_FUNC:
+        if is_aggregate_name(c_name(ck, n.tok)):
+            ret
+        end
+    end
+    if k == N_SUBQUERY or k == N_EXISTS:
+        ret
+    end
+    collect_bare_cols(ck, n.a, out)
+    collect_bare_cols(ck, n.b, out)
+    collect_bare_cols(ck, n.c, out)
+    collect_bare_cols(ck, n.d, out)
+    mut i := 0
+    until i < n.list.len():
+        collect_bare_cols(ck, n.list.get(i), out)
+        i = i + 1
+    end
+end
+
+func lit_is_number_text(ck &: Checker, node: int): bool:
+    n := ck.p.ast.nodes.get(node)
+    t := ck.p.toks.get(n.tok)
+    if t.len < 3:
+        ret false
+    end
+    mut i := t.off + 1
+    stop := t.off + t.len - 1
+    mut digits := 0
+    mut dots := 0
+    until i < stop:
+        c := ck.p.src[i]
+        if ch_digit(c):
+            digits = digits + 1
+        else c == '.':
+            dots = dots + 1
+        else c == '-' or c == '+':
+            if i != t.off + 1:
+                ret false
+            end
+        else:
+            ret false
+        end
+        i = i + 1
+    end
+    ret digits > 0 and dots < 2
+end
+
+func check_cmp_types(ck &: Checker, sc &: Scope, a: int, b: int):
+    mut cnode := 0 - 1
+    mut lnode := 0 - 1
+    if nd_kind(ck.p.ast, a) == N_COLUMN_REF and nd_kind(ck.p.ast, b) == N_LITERAL:
+        cnode = a
+        lnode = b
+    else nd_kind(ck.p.ast, b) == N_COLUMN_REF and nd_kind(ck.p.ast, a) == N_LITERAL:
+        cnode = b
+        lnode = a
+    end
+    if cnode < 0:
+        ret
+    end
+    idx := col_find(ck, sc, cnode)
+    if idx < 0:
+        ret
+    end
+    col_kind := sc.kinds.get(idx)
+    lit := ck.p.ast.nodes.get(lnode)
+    lit_k := lit_kind(lit.op)
+    if lit_k == TYPE_NULL:
+        ret
+    end
+    cname := c_name(ck, ck.p.ast.nodes.get(cnode).tok)
+    numeric := col_kind == TYPE_INT or col_kind == TYPE_FLOAT
+    if numeric and lit_k == TYPE_TEXT:
+        if lit_is_number_text(ck, lnode):
+            ret
+        end
+        msg := "\"" + cname + "\" is " + KindName(col_kind) + " and this compares it with text"
+        if ck.p.d.id == POSTGRES:
+            c_err(ck, lit.tok, "SQL330", msg, "postgres refuses this value for a numeric column")
+        else:
+            c_warn(ck, lit.tok, "SQL330", msg, "a number goes here without quotes")
+        end
+        ret
+    end
+    if col_kind == TYPE_TEXT and (lit_k == TYPE_INT or lit_k == TYPE_FLOAT):
+        if ck.p.d.id == POSTGRES:
+            c_err(
+                ck, lit.tok, "SQL330", "\"" + cname + "\" is text and postgres has no text = number operator",
+                "quote the value"
+            )
+        end
+    end
+end
+
+func check_group_by(ck &: Checker, sc &: Scope, id: int):
+    n := ck.p.ast.nodes.get(id)
+    if n.c < 0:
+        ret
+    end
+    glist := ck.p.ast.nodes.get(n.c).list
+    if glist.len() == 0:
+        ret
+    end
+    mut grouped := Vector {} as Vector<int>
+    mut i := 0
+    until i < glist.len():
+        g := glist.get(i)
+        if nd_kind(ck.p.ast, g) != N_COLUMN_REF:
+            grouped.free()
+            ret
+        end
+        gi := col_find(ck, sc, g)
+        if gi < 0:
+            grouped.free()
+            ret
+        end
+        grouped.push(gi)
+        i = i + 1
+    end
+    mut j := 0
+    until j < n.list.len():
+        rc := ck.p.ast.nodes.get(n.list.get(j))
+        if (rc.flags & F_STAR) == 0 and not expr_has_aggregate(ck, rc.a):
+            mut bare := Vector {} as Vector<int>
+            collect_bare_cols(ck, rc.a, bare)
+            mut b := 0
+            until b < bare.len():
+                bi := col_find(ck, sc, bare.get(b))
+                if bi >= 0:
+                    mut ok := false
+                    mut g := 0
+                    until g < grouped.len():
+                        if grouped.get(g) == bi:
+                            ok = true
+                        end
+                        g = g + 1
+                    end
+                    if not ok:
+                        cname := c_name(ck, ck.p.ast.nodes.get(bare.get(b)).tok)
+                        msg := "\"" + cname + "\" is neither grouped nor aggregated"
+                        help := "add it to GROUP BY, or wrap it in an aggregate such as MAX()"
+                        if ck.p.d.id == POSTGRES:
+                            c_err(ck, ck.p.ast.nodes.get(bare.get(b)).tok, "SQL332", msg, help)
+                        else:
+                            c_warn(ck, ck.p.ast.nodes.get(bare.get(b)).tok, "SQL332", msg, help)
+                        end
+                    end
+                end
+                b = b + 1
+            end
+            bare.free()
+        end
+        j = j + 1
+    end
+    grouped.free()
+end
+
+func scope_drop(sc &: Scope, idx: int):
+    sc.srcs.remove_at(idx)
+    sc.cols.remove_at(idx)
+    sc.kinds.remove_at(idx)
+    sc.nulls.remove_at(idx)
+end
+
+func check_using(ck &: Checker, sc &: Scope, join: int, left_at: int, right_at: int):
+    n := ck.p.ast.nodes.get(join)
+    open_scope := scope_has_open(sc)
+    mut rend := sc.cols.len()
+    mut i := 0
+    until i < n.list.len():
+        tk := ck.p.ast.nodes.get(n.list.get(i)).tok
+        name := c_name(ck, tk)
+        mut left_has := false
+        mut k := left_at
+        until k < right_at:
+            if str.EqualFold(sc.cols.get(k), name):
+                left_has = true
+            end
+            k = k + 1
+        end
+        mut right_at_idx := 0 - 1
+        mut m := right_at
+        until m < rend:
+            if str.EqualFold(sc.cols.get(m), name) and right_at_idx < 0:
+                right_at_idx = m
+            end
+            m = m + 1
+        end
+        if not open_scope:
+            if not left_has:
+                c_err(
+                    ck, tk, "SQL333", "the left side of this join has no column \"" + name + "\"",
+                    "USING needs the column on both sides; an ON condition can name them separately"
+                )
+            else right_at_idx < 0:
+                c_err(
+                    ck, tk, "SQL333", "the right side of this join has no column \"" + name + "\"",
+                    "USING needs the column on both sides; an ON condition can name them separately"
+                )
+            end
+        end
+        if left_has and right_at_idx >= 0:
+            scope_drop(sc, right_at_idx)
+            rend = rend - 1
+        end
+        i = i + 1
+    end
+end
+
 func cast_kind(ck &: Checker, id: int): int:
     tn := c_own(ck, type_text(ck.p, id))
     ret kind_from_type(tn)
@@ -625,6 +888,7 @@ func walk_expr(ck &: Checker, sc &: Scope, id: int):
         if is_cmp_op(n.op):
             bind_param(ck, sc, n.a, n.b)
             bind_param(ck, sc, n.b, n.a)
+            check_cmp_types(ck, sc, n.a, n.b)
         end
         walk_expr(ck, sc, n.a)
         walk_expr(ck, sc, n.b)
@@ -725,8 +989,13 @@ func build_from_scope(ck &: Checker, sc &: Scope, from: int, nullable: bool):
     if k == N_JOIN:
         left_null := nullable or n.op == J_RIGHT or n.op == J_FULL
         right_null := nullable or n.op == J_LEFT or n.op == J_FULL
+        left_at := sc.cols.len()
         build_from_scope(ck, sc, n.a, left_null)
+        right_at := sc.cols.len()
         build_from_scope(ck, sc, n.b, right_null)
+        if n.list.len() > 0:
+            check_using(ck, sc, from, left_at, right_at)
+        end
         ret
     end
     if k != N_TABLE_REF:
@@ -827,6 +1096,7 @@ func check_select_core(ck &: Checker, id: int, outer &: Scope, out &: Vector<Res
     end
     walk_expr(ck, sc, n.f)
     walk_expr(ck, sc, n.g)
+    check_group_by(ck, sc, id)
     scope_free(sc)
 end
 
@@ -1109,6 +1379,14 @@ func check_insert(ck &: Checker, id: int):
     end
     if n.c >= 0:
         conf := ck.p.ast.nodes.get(n.c)
+        if conf.a >= 0:
+            tlist := ck.p.ast.nodes.get(conf.a).list
+            mut ti := 0
+            until ti < tlist.len():
+                _tc := check_write_col(ck, t, tname, ck.p.ast.nodes.get(tlist.get(ti)).tok)
+                ti = ti + 1
+            end
+        end
         mut i := 0
         until i < conf.list.len():
             it := ck.p.ast.nodes.get(conf.list.get(i))

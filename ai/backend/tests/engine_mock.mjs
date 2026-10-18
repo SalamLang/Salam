@@ -38,6 +38,32 @@ async function callDesktop(s) {
   }
   s.start = Date.now();
 }
+const live = new Set();
+const emit = (obj) => {
+  for (const res of live) {
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    } catch {}
+  }
+};
+function streamParts(id, s) {
+  if (!process.env.MOCK_LIVE) return;
+  const full = answerFor(s);
+  const pid = `prt_${id}_${++n}`;
+  const mid = `msg_${id}_${n}`;
+  emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
+  let at = 0;
+  const step = () => {
+    if (s.dead || !live.size) return;
+    const piece = full.slice(at, at + 12);
+    at += 12;
+    if (piece) emit({ type: "message.part.delta", properties: { sessionID: id, partID: pid, messageID: mid, field: "text", delta: piece } });
+    if (at < full.length) setTimeout(step, 30);
+    else emit({ type: "session.idle", properties: { sessionID: id } });
+  };
+  setTimeout(step, 80);
+}
+
 http.createServer((req, res) => {
   let body = "";
   req.on("data", (d) => (body += d));
@@ -45,6 +71,13 @@ http.createServer((req, res) => {
     const url = new URL(req.url, "http://x");
     const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
     let m;
+    if (req.method === "GET" && url.pathname === "/event") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+      res.write(": ready\n\n");
+      live.add(res);
+      req.on("close", () => live.delete(res));
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/agent") return send(200, (process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").map((name) => ({ name })));
     if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
@@ -52,7 +85,7 @@ http.createServer((req, res) => {
       for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < s.span))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});

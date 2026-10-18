@@ -36,8 +36,9 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`          | where those gateways live, for a sandbox or the test mock                                                                               | the real gateways                               |
 | `AI_BILLING_CALLBACK`                        | the public URL of this API, where the gateway sends the browser back                                                                    | `AI_OAUTH_ISSUER`                               |
 | `AI_BILLING_SWEEP_SECONDS`                   | how often to settle payments the gateway never returned from, and how long a payment may sit first                                      | `600`                                           |
-| `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `900`                                           |
-| `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `120`                                           |
+| `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`     | restart to give memory back once past the first with nothing in flight, or past the second regardless                                   | `1200`, `2600`                                  |
+| `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `3600`                                          |
+| `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `180`                                           |
 
 The API keeps a stream open for as long as an answer takes, so give the
 container room: it ran into a 512 MB limit in production and was killed by the

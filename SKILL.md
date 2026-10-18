@@ -1622,8 +1622,8 @@ General mapping that applies to all source languages:
 - `class`/`interface`/`trait` → `struct`/`interface`/`impl`. Visibility
   `public`→`pub`; everything else is private by default.
 - String interpolation `"$a-$b"` → `a + "-" + b` or `fmt.Sprintf`.
-- `echo` → `print`/`println`. Superglobals (`$_GET`, `$_POST`) → the `web`
-  package's `Query`/`Form`/`Body`.
+- `echo` → `print`/`println`. Superglobals (`$_GET`, `$_POST`) → the
+  `net.http` package's `Query`/`Form`/`Body`.
 - Exceptions → return `bool`/`Option`; dynamic typing → pick concrete types or
   `Variant`.
 

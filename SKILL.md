@@ -823,7 +823,7 @@ both sites teaches the language only, not the libraries.
 - `int` is 32 bits. Helpers that return `int` (`json.GetInt`,
   `yaml.GetInt`, `conv.Atoi`, `"..".to_int()`) clamp or wrap anything larger;
   use the `i64` form (`conv.ParseInt`, `json.Unmarshal` into an `i64` field)
-  for ids, sizes and timestamps.
+  for IDs, sizes and timestamps.
 - Std functions that return a `str` hand you a fresh string you may free;
   arguments are never modified.
 - Packages that keep state in globals are not thread-safe: `regex`, the
@@ -837,15 +837,7 @@ both sites teaches the language only, not the libraries.
 
 ### Text & formatting
 
-- **`str`**: `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix
-Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find
-IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold
-CompareFold Compare Replace Len CharCount CharSubstr CharFind CodePoints
-FromCodePoints Graphemes GraphemeCount ReverseGraphemes NFC NFD NFKC NFKD
-Clone FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty IsDigit IsAlpha
-IsAlnum IsSpace IsPunct ToEnglishDigits ToPersianDigits ToArabicDigits
-DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits
-HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
+- **`str`**: `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold CompareFold Compare Replace Len CharCount CharSubstr CharFind CodePoints FromCodePoints Graphemes GraphemeCount ReverseGraphemes NFC NFD NFKC NFKD Clone FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty IsDigit IsAlpha IsAlnum IsSpace IsPunct ToEnglishDigits ToPersianDigits ToArabicDigits DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
   `BufAppend`, `BufAppendChar`, `BufAppendCp`, `BufAppendInt`, `BufStr`,
   `BufReset`, `BufFree`). `Len`, `Substr`, `IndexOf` count **bytes**;
   `CharCount`, `CharSubstr`, `CharFind` count code points; use those for
@@ -854,15 +846,13 @@ HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
   and `Trim` strips only ASCII space, tab, CR and LF (a no-break space
   stays). `ToInt` returns a 32-bit `int` and clamps.
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
-  `PadLeft PadRight Center` (count characters), and `Int Float FloatPrec Bool
-Hex Uint` to build the string args you pass to `Sprintf`. There are no
+  `PadLeft PadRight Center` (count characters), and `Int Float FloatPrec Bool Hex Uint` to build the string args you pass to `Sprintf`. There are no
   verbs (`%d`, `{:.2}`): format the value first with `FloatPrec`/`PadLeft`.
   A literal `{}` cannot be written in a template. `Hex`/`Uint` take a `u64`:
   `fmt.Hex(n as u64)`.
 - **`conv`**: `FormatInt FormatUint FormatHex FormatBool FormatFloat`
   (shortest round-trip) `FormatFloatShort` (6 digits, like `%g`)
-  `FormatFloatPrec ParseInt(i64) Atoi(int) ParseFloat ParseBool ParseHex
-IsNaNF`. Nothing reports bad input: `ParseInt("abc")` is 0, `ParseInt`
+  `FormatFloatPrec ParseInt(i64) Atoi(int) ParseFloat ParseBool ParseHex IsNaNF`. Nothing reports bad input: `ParseInt("abc")` is 0, `ParseInt`
   wraps past 64 bits and `Atoi` keeps only 32 (`Atoi("3000000000")` is
   `-1294967296`), `ParseBool` is case-sensitive (`"True"` is false), and a
   comma is not a decimal point (`ParseFloat("1,5")` is 1). Persian digits
@@ -875,50 +865,29 @@ IsNaNF`. Nothing reports bad input: `ParseInt("abc")` is 0, `ParseInt`
   `{{#if name}}...{{else}}...{{/if}}` and `{{! comment }}`: no loops,
   filters or dotted paths, and the context holds strings only. Escaping is
   not enough inside `<script>` or for a `href` (`javascript:` passes).
-- **`unicode`**: one code point at a time. `Category CategoryName IsLetter
-IsAlphabetic IsUpper IsLower IsDigit IsNumber IsAlnum IsPunct IsSymbol
-IsSpace IsControl IsMark ToUpper ToLower ToTitle ToFold Script ScriptName
-BidiClass PairedBracket CombiningClass Compose GraphemeBreak`. Case maps
+- **`unicode`**: one code point at a time. `Category CategoryName IsLetter IsAlphabetic IsUpper IsLower IsDigit IsNumber IsAlnum IsPunct IsSymbol IsSpace IsControl IsMark ToUpper ToLower ToTitle ToFold Script ScriptName BidiClass PairedBracket CombiningClass Compose GraphemeBreak`. Case maps
   are the simple 1:1 ones (`ß` stays `ß`).
-- **`arabic`**: Persian/Arabic normalisation for search. `Normalize(s,
-flags)` with the flags `FoldLetters StripHarakat StripTatweel FoldDigits
-FoldAlef FoldTehMarbuta StripZWNJ FoldPresentation`, the presets
-  `NormalizePersian SearchKey EqualLoose`, and `IsArabicScript IsHaraka
-IsTatweel`. `SearchKey` removes the ZWNJ (`هوش‌مند` matches `هوشمند` but
+- **`arabic`**: Persian/Arabic normalisation for search. `Normalize(s, flags)` with the flags `FoldLetters StripHarakat StripTatweel FoldDigits FoldAlef FoldTehMarbuta StripZWNJ FoldPresentation`, the presets
+  `NormalizePersian SearchKey EqualLoose`, and `IsArabicScript IsHaraka IsTatweel`. `SearchKey` removes the ZWNJ (`هوش‌مند` matches `هوشمند` but
   not `هوش مند`), lowers ASCII only, and runs NFKC, which also rewrites
   `²` and `ﬁ`. Show the original text, never the key.
-- **`bidi`**: the Unicode bidirectional algorithm. `ParagraphLevel(s,
-DirAuto|DirLTR|DirRTL) Levels VisualOrder Reorder`. It does not mirror
+- **`bidi`**: the Unicode bidirectional algorithm. `ParagraphLevel(s, DirAuto|DirLTR|DirRTL) Levels VisualOrder Reorder`. It does not mirror
   brackets, shape letters or break lines; reorder one line at a time.
-- **`i18n`**: `New(fallback) Set Has T Tf Interpolate Plural LoadLocale
-DetectLocale Free`. `Plural` knows only `.one` (exactly 1) and `.other`;
+- **`i18n`**: `New(fallback) Set Has T Tf Interpolate Plural LoadLocale DetectLocale Free`. `Plural` knows only `.one` (exactly 1) and `.other`;
   an empty translation counts as missing; `DetectLocale` reads
   `SALAM_LOCALE`, then `LANG`, then `LC_ALL`.
-- **`types`**: classify text: `IsInt IsFloat IsNumeric IsBool KindOf
-KindName` (`TypeKind*`). `IsInt` checks characters only (a 20-digit number
+- **`types`**: classify text: `IsInt IsFloat IsNumeric IsBool KindOf KindName` (`TypeKind*`). `IsInt` checks characters only (a 20-digit number
   passes, then overflows); only `true`/`false` are bools.
 
 ### Numbers
 
-- **`math`**: consts `PI E TAU`; `Sqrt Cbrt Pow(**) Hypot Exp Log Log2 Log10
-Sin Cos Tan Asin Acos Atan Atan2 Sinh Cosh Tanh Floor Ceil Round Trunc Abs
-Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
-  `MinI MaxI AbsI ClampI Gcd Lcm Factorial Pow10` and `MinI64 MaxI64 AbsI64
-GcdI64`. `Round` rounds halves toward +infinity (`Round(-2.5)` is -2),
+- **`math`**: consts `PI E TAU`; `Sqrt Cbrt Pow(**) Hypot Exp Log Log2 Log10 Sin Cos Tan Asin Acos Atan Atan2 Sinh Cosh Tanh Floor Ceil Round Trunc Abs Sign Min Max ClampF Lerp Radians Degrees Mod IsNaN IsInf NaN Inf`; integer:
+  `MinI MaxI AbsI ClampI Gcd Lcm Factorial Pow10` and `MinI64 MaxI64 AbsI64 GcdI64`. `Round` rounds halves toward +infinity (`Round(-2.5)` is -2),
   `Mod` keeps the sign of the first argument like `fmod`, `Factorial` (i64)
   is exact only up to 20.
 - **`bigint`**: arbitrary-precision signed integers, one `Int` type (sign +
-  base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase
-ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp
-CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs
-AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div
-Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod
-FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
-  `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt
-Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount
-TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes
-ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy
-NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
+  base-2^32 magnitude). Build: `Zero One FromInt FromUint Parse ParseBase ParseOr FromBytes Clone`; inspect: `Sign IsZero BitLen Bit IsOdd IsEven Cmp CmpAbs Equals Less Greater Min Max`; arithmetic: `Add Sub Mul Sqr Neg Abs AddInt SubInt MulInt Shl Shr`; division in **both** conventions - `DivMod Div Rem` truncate toward zero (matching Salam's `/` and `%`), `FloorDivMod FloorDiv FloorMod` round toward minus infinity, and `Mod` always lands in
+  `[0, |m|)`; number theory `Pow Pow10 ModExp Gcd Lcm ExtGcd ModInverse Sqrt Factorial`; two's-complement bitwise `And Or Xor AndNot Not PopCount TrailingZeros`; out: `ToStr ToStrBase ToHex ToInt ToIntClamped ToFloat ToBytes ByteLen`. In-place forms (`Set SetInt AddTo SubFrom MulBy AddIntTo MulIntBy NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
   should not allocate per iteration. **Every returning function hands over a
   fresh value the caller frees** (`defer x.free()`); operands are taken by
   value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
@@ -930,47 +899,31 @@ NegateIn ShlBy ShrBy`) mutate `x &: Int` and free the old value, for loops that
   give 0 / `""`.
 - **`decimal`**: exact fixed-point decimal - **this is the money type**. A
   `Dec` is a `bigint.Int` plus a scale, so `0.1 + 0.2` is exactly `0.3` and
-  nothing overflows. Build: `Zero FromInt FromScaled(1999, 2)` → 19.99 `New
-Parse ParseOr FromFloat` (lossy, documented); `Add Sub Mul` are **exact and
+  nothing overflows. Build: `Zero FromInt FromScaled(1999, 2)` → 19.99 `New Parse ParseOr FromFloat` (lossy, documented); `Add Sub Mul` are **exact and
   never round** (Add/Sub take the larger scale, Mul the sum); `Div` cannot be,
-  so it requires a scale _and_ a `Rounding` mode - `Div DivRound DivInt Pow
-MulInt AddInt SubInt Percent Sum`. Rounding: `Rounding.{Down,Up,Floor,Ceil,
-HalfUp,HalfDown,HalfEven}` with `Rescale Round`(HalfEven) `RoundHalfUp
-Truncate Trim`. Compare `Cmp Equals Less Greater Min Max Sign IsZero
-IsNegative Scale Unscaled` (1.0 equals 1.00). Out: `ToStr` (**always plain
+  so it requires a scale _and_ a `Rounding` mode - `Div DivRound DivInt Pow MulInt AddInt SubInt Percent Sum`. Rounding: `Rounding.{Down,Up,Floor,Ceil, HalfUp,HalfDown,HalfEven}` with `Rescale Round`(HalfEven) `RoundHalfUp Truncate Trim`. Compare `Cmp Equals Less Greater Min Max Sign IsZero IsNegative Scale Unscaled` (1.0 equals 1.00). Out: `ToStr` (**always plain
   notation, never exponential**) `ToStrFixed FormatGrouped ToInt ToFloat`.
   Money splitting that cannot lose a cent: `Split(total, n)` and
   `Allocate(total, ratios)` guarantee the parts sum back to the total exactly
   (100.00 by 3 → 33.34, 33.33, 33.33); free the result with `FreeAll`.
   Pitfalls: each `Mul` adds the scales, so round after every step a
   statement shows; `ToStrFixed FormatGrouped Round Percent` round half to
-  **even** (2.345 shows as 2.34, call `RoundHalfUp` first); `Div DivRound
-DivInt` by zero return 0; `b := a` shares digits (`Clone`).
-- **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange Int32Range IntWithLength
-FloatRange Float Bool BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Bytes
-TextFrom Alpha Alnum Digit Text UUID Hash`. **Not for secrets** (clock
+  **even** (2.345 shows as 2.34, call `RoundHalfUp` first); `Div DivRound DivInt` by zero return 0; `b := a` shares digits (`Clone`).
+- **`rand`**: `Seed SeedAuto Int Int32 IntN IntRange Int32Range IntWithLength FloatRange Float Bool BoolP Choice{Int,Str,Char} Shuffle{Int,Str} Bytes TextFrom Alpha Alnum Digit Text UUID Hash`. **Not for secrets** (clock
   seeded, predictable): tokens and keys come from `crypto.RandomToken`/
   `RandomBytes`. `IntN(0)` and a `Choice*` on an empty vector stop the
   program (modulo by zero); `IntRange(lo, hi)` with `lo > hi` returns
   numbers outside the range; `ChoiceChar`/`TextFrom` pick bytes, so Persian
   letters break (use `ChoiceStr` over whole letters); `Bytes` never yields
   0, so it is not key material.
-- **`stats`**: `Sum Mean Median Min Max Variance PopVariance Stdev PopStdev
-Geomean Percentile(v, p)` over `Vector<f64>`. An empty vector gives 0, which
+- **`stats`**: `Sum Mean Median Min Max Variance PopVariance Stdev PopStdev Geomean Percentile(v, p)` over `Vector<f64>`. An empty vector gives 0, which
   looks like data; `Variance`/`Stdev` are the sample (n-1) forms.
 - **`matrix`**: dense `f64` linear algebra, one row-major `Matrix` for
-  matrices and vectors. Build `Zeros Ones Full Eye Diag FromArray RowVector
-ColVector Arange Linspace Clone`; elementwise `Add Sub MulElem DivElem
-Scale Neg AddScaled` (+ `...InPlace`), `AddRowVector`-style broadcasts and
-  ufuncs `Abs Sqrt Exp Log Round Clip Chop`; products `MatMul TransposeMul
-MulTranspose MatVec Dot Outer Kron MatPow Trace`; shape `Reshape Row Col
-SubMatrix HStack VStack Triu Tril`; reduce `Sum Mean Min Max Var Std Median
-ArgMin ArgMax`; norms `Norm1 Norm2 NormInf NormFrobenius Cond2`; solve and
-  factor `Det Solve Inverse LeastSquares Decompose QRDecompose Cholesky
-SVDecompose EigSym EigVals MatrixRank PseudoInverse NullSpace RREF`,
+  matrices and vectors. Build `Zeros Ones Full Eye Diag FromArray RowVector ColVector Arange Linspace Clone`; elementwise `Add Sub MulElem DivElem Scale Neg AddScaled` (+ `...InPlace`), `AddRowVector`-style broadcasts and
+  ufuncs `Abs Sqrt Exp Log Round Clip Chop`; products `MatMul TransposeMul MulTranspose MatVec Dot Outer Kron MatPow Trace`; shape `Reshape Row Col SubMatrix HStack VStack Triu Tril`; reduce `Sum Mean Min Max Var Std Median ArgMin ArgMax`; norms `Norm1 Norm2 NormInf NormFrobenius Cond2`; solve and
+  factor `Det Solve Inverse LeastSquares Decompose QRDecompose Cholesky SVDecompose EigSym EigVals MatrixRank PseudoInverse NullSpace RREF`,
   `Expm Sqrtm`, iterative `SolveCG SolveJacobi PowerIteration`, statistics
-  `Covariance Correlation PCAFit LinearRegression`, named `Hilbert
-Vandermonde Toeplitz Random`, output `ToString ToStringPrec Print ToCSV`.
+  `Covariance Correlation PCAFit LinearRegression`, named `Hilbert Vandermonde Toeplitz Random`, output `ToString ToStringPrec Print ToCSV`.
   Shape errors and singular systems return a `0x0` matrix rather than
   panicking: check `is_empty()`. Compare with `AllClose`; `free` results in
   loops.
@@ -982,65 +935,38 @@ seed gives the same result on every machine at any thread count). The deep
 learning half is `f32` on `std/tensor`; the classical half is `f64` on
 `std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
 
-- **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor
-{data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2
-set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar
-FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
+- **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2 set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
   (equal, scalar, trailing `[N,D]+[D]`, `[N,1]`; `BroadcastShape Expand` for
-  the general case), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu
-Sqrt Square PowScalar Clip` and `*InPlace`/`*Into` forms; shape `Reshape
-Permute SliceAxis0 Narrow Concat2 Stack2 Pad2D`; reduce `SumAll MeanAll
-MaxAll ArgMaxAll SumAxis MeanAxis ArgMaxAxis Softmax LogSoftmax`; products
+  the general case), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar Clip` and `*InPlace`/`*Into` forms; shape `Reshape Permute SliceAxis0 Narrow Concat2 Stack2 Pad2D`; reduce `SumAll MeanAll MaxAll ArgMaxAll SumAxis MeanAxis ArgMaxAxis Softmax LogSoftmax`; products
   `MatMul MatMulInto BatchMatMul MatVec Dot Transpose2D`; conv
-  `Conv2DForward MaxPool2DForward Im2Col`; random `NewRng FillUniform
-FillNormal RandNormal`; masks and gathers `Greater EqualMask Where
-MaskedFill IndexSelect Gather OneHot TopK Tril Cumsum`; `SetThreads`,
+  `Conv2DForward MaxPool2DForward Im2Col`; random `NewRng FillUniform FillNormal RandNormal`; masks and gathers `Greater EqualMask Where MaskedFill IndexSelect Gather OneHot TopK Tril Cumsum`; `SetThreads`,
   `ToMatrix FromMatrix WriteTensor ReadTensor AllClose ShapeString`.
 - **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
-  caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log
-Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean
-SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding
-Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu
-Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
-  losses `MSELoss
-CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
+  caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
+  losses `MSELoss CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
   `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
 - **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
-  with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D
-AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU
-MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
+  with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
   `CausalMask(seq)` is the additive mask it adds), recurrent helper
   `LastStep`, the `Layer` interface with `Sequential` and the
   `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
-  init `XavierUniform XavierNormal
-KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
+  init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
   (SLMT, `.gz` aware) and the `*Buf` forms.
 - **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
-  `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR
-CosineLR WarmupCosine`.
+  `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
 - **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
   `predict_proba`, `transform`, `score`, `free`, hyperparameters as fields
-  (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler
-MinMaxScaler LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`;
-  models `LinearReg Ridge Lasso NewElasticNet LogisticRegression
-KNNClassifier KNNRegressor GaussianNB MultinomialNB DecisionTree
-RandomForest AdaBoost GradientBoosting HistGradientBoosting LinearSVM SVC
-LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA
-TruncatedSVD TSNE` (+ `KDTree`, `workers` on KNN/KMeans); metrics
-  `Accuracy ConfusionMatrix Precision Recall F1 RocAuc RocCurve LogLoss MSE
-MAE RMSE R2Score SilhouetteScore ...`; selection `TrainTestSplit KFold
-StratifiedKFold CrossValScore GridSearch`. Labels are a one-column matrix of
+  (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler MinMaxScaler LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`;
+  models `LinearReg Ridge Lasso NewElasticNet LogisticRegression KNNClassifier KNNRegressor GaussianNB MultinomialNB DecisionTree RandomForest AdaBoost GradientBoosting HistGradientBoosting LinearSVM SVC LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA TruncatedSVD TSNE` (+ `KDTree`, `workers` on KNN/KMeans); metrics
+  `Accuracy ConfusionMatrix Precision Recall F1 RocAuc RocCurve LogLoss MSE MAE RMSE R2Score SilhouetteScore ...`; selection `TrainTestSplit KFold StratifiedKFold CrossValScore GridSearch`. Labels are a one-column matrix of
   0, 1, 2...; `fit` returns false on bad shapes; fit scalers on the training
   rows only.
-- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression
-MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds
-to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
+- **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
   `XTensor YLabels`.
-- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix
-NpzList NpzRead NpzWrite`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`.
 - **`onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
@@ -1048,10 +974,8 @@ NpzList NpzRead NpzWrite`.
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
   `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
 - **`llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
-  SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache,
-tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
-  `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds
-Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
+  SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
+  `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
   `LoadGgufModel ModelFromGguf TokenizerFromGguf`.
 - Pitfalls across the family: a shape mismatch silently yields an empty
   tensor (check `is_empty()`); the `*InPlace`/`*Into` forms do not
@@ -1064,90 +988,66 @@ Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
   only (no K-quants such as `Q4_K_M`, no BF16), expand every weight to f32
   (Qwen2.5 0.5B needs about 3 GB), support Llama-layout models (Llama,
   Qwen2, Mistral; not Phi), and `encode` does not recognise special tokens
-  like `<|im_start|>` (insert their ids). `onnx` runs about 65 ops, all in
+  like `<|im_start|>` (insert their IDs). `onnx` runs about 65 ops, all in
   f32, with no grouped/dilated `Conv` and no external-data models.
 
 ### I/O, OS, filesystem
 
-- **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write
-ReadAll Readline Seek Close Copy EPrint EPrintln Flush`. A missing file is
+- **`io`**: `ReadFile WriteFile AppendFile Lines WriteLines Input Read Write ReadAll Readline Seek Close Copy EPrint EPrintln Flush`. A missing file is
   not an error: `ReadFile` gives `""` and `Lines` one empty line (check
   `os.Exists`). Lines split on `\n` only (a Windows `\r` stays), `Readline`
-  returns `""` for a blank line and at EOF alike, and everything is `str`,
+  returns `""` for a empty line and at EOF alike, and everything is `str`,
   so text only. `print`/`println` to a pipe or file are buffered:
   `io.Flush()` pushes the buffer out, and a panic loses what is still in it
   (`printerrln` is unbuffered).
-- **`os`**: `Args Env Cwd Chdir Exit Abort Pid Run RunCapture Output Exists
-IsDir FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove
-RemoveAll Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
+- **`os`**: `Args Env Cwd Chdir Exit Abort Pid Run RunCapture Output Exists IsDir FileSize Stat ReadFile WriteFile AppendFile Copy CopyTree Move Remove RemoveAll Mkdir MkdirAll Rmdir ListDir ListDirs Walk TempDir Open`.
   `Run`/`RunCapture`/`Output` hand the whole string to `/bin/sh` (never
   splice user input in); `RunCapture` captures stdout only (add `2>&1`).
   **`RemoveAll` and `Walk` follow symlinks to directories**, so `RemoveAll`
   deletes the link target's contents and `Walk` never ends on a loop.
   `Move` is a rename and fails (-1) across file systems. `Exit` skips
   `defer` (E109 inside `main`; use `ret`). `Args()[0]` is the program.
-- **`os.process`**: `Start(path, args) StartCaptured Wait Kill Terminate
-ReadStdout ReadStderr Cleanup ExitCode Pid IsRunning`. `IsRunning` is a
+- **`os.process`**: `Start(path, args) StartCaptured Wait Kill Terminate ReadStdout ReadStderr Cleanup ExitCode Pid IsRunning`. `IsRunning` is a
   flag, not a live check; `Kill` only signals, so `Wait` after it (zombie);
   `Wait` has no timeout; `Cleanup` a captured run (two temp files).
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
-  on failure; `File` always returns a path), **`os.user`** `Username HomeDir
-ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
+  on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
   `IsLinux IsWindows IsMac IsWasm OS Arch IsX64 IsArm64`, **`os.error`**
   `Last LastCode LastMessage HasError Clear` (the last file/process error).
-- **`fs.file`**: `Open Close ReadText ReadAll ReadBytes ReadLines WriteText
-WriteBytes Append AtomicWrite Size ModTime Stat Copy Move Rename Delete
-Exists Extension MimeType Md5Hex Sha256Hex`. **Not binary-safe**: every
+- **`fs.file`**: `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha256Hex`. **Not binary-safe**: every
   read, write and digest goes through `str` and stops at the first NUL
   (`ReadBytes` too); use `archive.ReadBinaryFile`/`WriteBinaryFile` and
   `crypto.Sha256Bytes`. `Exists` is true for directories too; `AtomicWrite`
   resets permissions to the default.
-- **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk
-Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
+- **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
   `Copy`/`Move` merge into an existing target; `RemoveAll Walk Size Copy`
-  follow symlinks. **`fs`** itself: `ModTime AccessedTime CreatedTime
-Chmod Permissions` (`CreatedTime` is 0 on most Linux file systems).
-- **`fs.path`** (`Join Split Clean Normalize IsAbs Abs Rel Parent Dirname
-Filename Basename Ext Stem IsSafe Validate`) and **`filepath`** (the same
-  work, never touching the disk: `Join Dir Base Ext Stem Clean Normalize
-IsAbs Abs Rel IsSafe Validate Separator`). `Join` does not clean
+  follow symlinks. **`fs`** itself: `ModTime AccessedTime CreatedTime Chmod Permissions` (`CreatedTime` is 0 on most Linux file systems).
+- **`fs.path`** (`Join Split Clean Normalize IsAbs Abs Rel Parent Dirname Filename Basename Ext Stem IsSafe Validate`) and **`filepath`** (the same
+  work, never touching the disk: `Join Dir Base Ext Stem Clean Normalize IsAbs Abs Rel IsSafe Validate Separator`). `Join` does not clean
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
   appended, not substituted; `Ext` is only the last extension; check user
   paths with `IsSafe` before using them.
-- **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked
-Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile
-Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
+- **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
   only lower-case `true 1 yes on`; `Load` never overrides a set variable
   (`Overload`/`LoadDotEnv` do).
-- **`flag`**: `New(name, desc) AddStr AddInt AddBool AddFloat Parse(fs,
-args) GetStr GetInt GetBool GetFloat WasSet HelpWanted Positional Usage
-Error Free`. `Parse` takes the arguments without the program name; a value
+- **`flag`**: `New(name, desc) AddStr AddInt AddBool AddFloat Parse(fs, args) GetStr GetInt GetBool GetFloat WasSet HelpWanted Positional Usage Error Free`. `Parse` takes the arguments without the program name; a value
   flag takes the next argument whatever it is (`--name --verbose`); a
   negative positional needs `--` first.
-- **`cli`** (subcommands): `New Register Dispatch RemainingArgs Usage
-RequireFlags Confirm Prompt PromptOr`, `CmdHelp CmdVersion CmdUnknown`.
-  `Dispatch` wants `RemainingArgs(os.Args())`; it owns `help -h --help
-version -v --version`.
-- **`config`**: INI/env/YAML settings with dotted keys: `LoadINI LoadEnv
-LoadYAML Parse* Get GetOr GetInt GetFloat GetBool Has Set Remove Keys
-Section Merge Format* Free`. Nothing reports an error (a missing file is an
+- **`cli`** (subcommands): `New Register Dispatch RemainingArgs Usage RequireFlags Confirm Prompt PromptOr`, `CmdHelp CmdVersion CmdUnknown`.
+  `Dispatch` wants `RemainingArgs(os.Args())`; it owns `help -h --help version -v --version`.
+- **`config`**: INI/env/YAML settings with dotted keys: `LoadINI LoadEnv LoadYAML Parse* Get GetOr GetInt GetFloat GetBool Has Set Remove Keys Section Merge Format* Free`. Nothing reports an error (a missing file is an
   empty config); in INI/env a `#` after a space starts a comment, so quote
   passwords.
-- **`log`**: `Debug Info Warn Error Fatal` + `*f` and `*KV` variants, `KV
-Field FieldInt FieldBool`, `SetLevel SetPrefix SetFormat(FormatText|
-FormatJSON) ShowTime ToFile ToStdout ToStderr SetRotation CloseFile`. A
+- **`log`**: `Debug Info Warn Error Fatal` + `*f` and `*KV` variants, `KV Field FieldInt FieldBool`, `SetLevel SetPrefix SetFormat(FormatText| FormatJSON) ShowTime ToFile ToStdout ToStderr SetRotation CloseFile`. A
   file log is buffered (call `CloseFile` on every exit path); settings are
   unlocked globals (set them at startup); text format does not escape line
   breaks (use JSON for user input).
 - **`debug`** `Assert Enter Exit Stack Trace StartTimer StopTimer MemStats`
-  (`Assert` runs in release builds too), **`runtime`** `OS Arch CpuCount
-TotalMemory AvailableMemory UsedMemory MarkStart UptimeMs BuildFlags`
+  (`Assert` runs in release builds too), **`runtime`** `OS Arch CpuCount TotalMemory AvailableMemory UsedMemory MarkStart UptimeMs BuildFlags`
   (machine-wide figures, -1 when unknown, each call on Windows starts
-  PowerShell), **`error`** structured errors: `New Newf Wrap WrapKind
-WithMeta Kind Is Message RootMessage Format Ok IsNil Free`, `Kind*`
-  constants, `IsNotFound IsTimeout IsRetryable ...`, `NewRetryPolicy
-DelayForAttempt ShouldRetry` (you do the sleeping; `Wrap` of a nil error
+  PowerShell), **`error`** structured errors: `New Newf Wrap WrapKind WithMeta Kind Is Message RootMessage Format Ok IsNil Free`, `Kind*`
+  constants, `IsNotFound IsTimeout IsRetryable ...`, `NewRetryPolicy DelayForAttempt ShouldRetry` (you do the sleeping; `Wrap` of a nil error
   makes a real one, so check `Ok` first). **`core`**: `Panic(msg)` (abort,
   exit 134, `defer` does not run).
 
@@ -1155,29 +1055,21 @@ DelayForAttempt ShouldRetry` (you do the sleeping; `Wrap` of a nil error
 
 - **`term`**: everything ANSI. **Never hand-roll `\x1b[` sequences** - this
   package is the one place they belong.
-  - Terminal: `IsTTY IsTerminal Size Cols Rows Write WriteErr Emit Flush
-Bell SetTitle EnableAnsi`. Raw mode: `MakeRaw` / `MakeCbreak` (Ctrl-C
+  - Terminal: `IsTTY IsTerminal Size Cols Rows Write WriteErr Emit Flush Bell SetTitle EnableAnsi`. Raw mode: `MakeRaw` / `MakeCbreak` (Ctrl-C
     still works) / `Restore`; **always `defer term.Restore(st)` on the next
     line**, or the user's shell stays raw.
-  - Colour: `Red Green Yellow Blue Magenta Cyan White Gray Bright* On* Bold
-Dim Italic Underline Inverse Strike Style Paint Color256 RGB OnRGB`, raw
+  - Colour: `Red Green Yellow Blue Magenta Cyan White Gray Bright* On* Bold Dim Italic Underline Inverse Strike Style Paint Color256 RGB OnRGB`, raw
     `Sgr Seq{Fg,Bg}256 Seq{Fg,Bg}RGB`. All honour
     `SetColorMode(ColorAuto|ColorAlways|ColorNever)`; ColorAuto obeys
     `NO_COLOR`/`CLICOLOR_FORCE`/`TERM=dumb`/isatty, so one code path serves a
-    terminal and a pipe. Probes `SupportsColor Supports256Color
-SupportsTrueColor`.
+    terminal and a pipe. Probes `SupportsColor Supports256Color SupportsTrueColor`.
   - Escape-aware `Strip Width Truncate PadRight PadLeft Center`: use these,
     not `len`/`fmt.PadRight`, on coloured text. `Width` counts one column per
     code point (CJK and the ZWNJ are miscounted).
-  - Cursor/screen, each a pure `Seq*` builder plus a write-now twin: `MoveTo
-Up Down Left Right Column Home Save/RestoreCursor Hide/ShowCursor
-ClearScreen ClearLine ClearBelow Scroll{Up,Down} SetScrollRegion
-Enter/ExitAltScreen Enable/DisableMouse`; build a frame with `Seq*` and
+  - Cursor/screen, each a pure `Seq*` builder plus a write-now twin: `MoveTo Up Down Left Right Column Home Save/RestoreCursor Hide/ShowCursor ClearScreen ClearLine ClearBelow Scroll{Up,Down} SetScrollRegion Enter/ExitAltScreen Enable/DisableMouse`; build a frame with `Seq*` and
     write once.
-  - Input: `Decode DecodeMouse` (pure, testable without a tty), `ReadKey
-GetKey ReadByte KeyReady ReadPassword`, `Key`/`MouseEvent`, `Key*` codes.
-  - Progress: `NewBar BarSet BarAdd BarDraw BarFinish`, `NewSpinner
-SpinnerTick SpinnerStop SpinnerFree`, `FormatBytes FormatDuration`; off a
+  - Input: `Decode DecodeMouse` (pure, testable without a tty), `ReadKey GetKey ReadByte KeyReady ReadPassword`, `Key`/`MouseEvent`, `Key*` codes.
+  - Progress: `NewBar BarSet BarAdd BarDraw BarFinish`, `NewSpinner SpinnerTick SpinnerStop SpinnerFree`, `FormatBytes FormatDuration`; off a
     terminal they write one plain final line.
 
 ```salam
@@ -1198,29 +1090,22 @@ end
 
 ### Collections (heap-allocated: call `.free()`, idiom `defer x.free()`)
 
-- **`Vector<T>`** (built-in; also `import collections`): `push pop get(i)
-ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter
-copy free`; index via `v[i]` (read) / `v[i] = x` (write); free functions
+- **`Vector<T>`** (built-in; also `import collections`): `push pop get(i) ref(i) set(i,x) len is_empty first last insert remove_at reserve clear iter copy free`; index via `v[i]` (read) / `v[i] = x` (write); free functions
   `contains index_of last_index_of count_of slice clone reverse swap extend`.
-- **`HashMap<K,V>`**: `put(k,v) get(k) get_or(k, def) has(k) remove(k) size
-is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
+- **`HashMap<K,V>`**: `put(k,v) get(k) get_or(k, def) has(k) remove(k) size is_empty iter copy free`; iterate with `each k, v in m:`. `get` of a
   missing key returns the zero value (a **null** `str` that crashes when
   used), so test `has` or use `get_or`. Iteration is in hash order, which
   changes as the map grows; sort the keys when order shows. `get` returns a
   copy of a struct value: change it and `put` it back.
-- **`Set<T>`** (`add has remove size`), **`Stack<T>`** (`push pop peek size
-is_empty`), **`Queue<T>`** (`enqueue dequeue peek size`),
+- **`Set<T>`** (`add has remove size`), **`Stack<T>`** (`push pop peek size is_empty`), **`Queue<T>`** (`enqueue dequeue peek size`),
   **`Deque<T>`** (`push_front push_back pop_front pop_back front_val back_val`),
   **`PriorityQueue<T>`** (`push pop peek`, a **min**-heap on `<`),
   **`LinkedList<T>`**, **`Counter<K>`** (`add add_n count distinct`),
-  **`OrderedMap`** (str to str in insertion order: `set get get_or has
-remove key_at val_at len`), **`Pair`**, **`CircularList`**.
+  **`OrderedMap`** (str to str in insertion order: `set get get_or has remove key_at val_at len`), **`Pair`**, **`CircularList`**.
 - Pitfalls: `b := a` shares the elements (`b.set(0, x)` changes `a`, a push on
-  one can move the other's memory); copy with `v.copy()`. `pop peek dequeue
-first last` and an index past the end stop the program on an empty
+  one can move the other's memory); copy with `v.copy()`. `pop peek dequeue first last` and an index past the end stop the program on an empty
   structure (a `--release` build reads garbage instead).
-- **`sort`**: `Sort SortDesc SortBy StableSortBy Sorted SortedBy IsSorted
-SortIndex BinarySearch LowerBound UpperBound Min Max Reverse Swap` + named
+- **`sort`**: `Sort SortDesc SortBy StableSortBy Sorted SortedBy IsSorted SortIndex BinarySearch LowerBound UpperBound Min Max Reverse Swap` + named
   algorithms (`QuickSort MergeSort HeapSort IntroSort …`). Comparators:
   `func (T, T) bool` (less). **`Sort`, `SortDesc`, `SortBy` and `SortIndex`
   are not stable** (use `StableSortBy`), and `SortBy` goes quadratic on
@@ -1255,27 +1140,19 @@ SortIndex BinarySearch LowerBound UpperBound Min Max Reverse Swap` + named
   Also `GetPath(text, "a.b.0.c")`, `Items Unquote`, and the dynamic tree
   `Decode(text, err): value.Value` / `Encode(v, opts)` / `EncodeDefault`.
   Pitfalls: **`GetInt` returns a 32-bit `int` and clamps** (3000000000 reads
-  as 2147483647): read ids and timestamps by `Unmarshal` into an `i64`.
+  as 2147483647): read IDs and timestamps by `Unmarshal` into an `i64`.
   `Get GetInt Has` see only the top level (`GetPath` for nested). `Unmarshal`
   fails on a missing field, an unknown key or a wrong type;
   `UnmarshalLenient` keeps defaults and skips unknown keys. Reset the
   `encerr.EncodingError` before each call.
 - **`xml`** (`import encoding.xml`): two models in one package.
-  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode
-DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr
-AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
+  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
     tokenizer `NewXMLTokenizer`/`NextToken` (checks nothing; run
     `WellFormed` first). Ignores namespaces and mixed-content order: fine
     for a config file.
   - **Full `Document`** (an arena of `int` node handles, strict parsing with
-    line/column errors, namespaces, bounded entity expansion): `Parse(text,
-err) ParseWith(text, opts, err) WellFormed`, `ParseOptions`
-    (`preserve_whitespace keep_comments namespaces expand_entities
-max_depth`; whitespace-only text is dropped by default). Read `Root Kind
-Name LocalName NamespaceURI Parent ChildCount ChildAt Elements
-ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue
-AttributeValueNS Text Line Column`; edit `NewDocument CreateElement
-CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
+    line/column errors, namespaces, bounded entity expansion): `Parse(text, err) ParseWith(text, opts, err) WellFormed`, `ParseOptions`
+    (`preserve_whitespace keep_comments namespaces expand_entities max_depth`; whitespace-only text is dropped by default). Read `Root Kind Name LocalName NamespaceURI Parent ChildCount ChildAt Elements ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue AttributeValueNS Text Line Column`; edit `NewDocument CreateElement CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     `Write WriteIndent WriteNode Canonical`. `Free(d)`, `FreeList(list)`.
   - **XPath 1.0**: `Select(d, context, expr, err): NodeList` (context `-1` =
     document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`;
@@ -1283,30 +1160,23 @@ CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     Name tests match the name as written, prefix included: use
     `local-name()`/`namespace-uri()` when the prefix may vary. Attributes
     come back as negative handles (`IsAttributeRef ReferencedAttribute`).
-  - **DTD validation**: `ParseDTD Validate ValidateInternalSubset
-CheckNamespaces ApplyDefaults` returning a `Report` (`ok`, `items` of
+  - **DTD validation**: `ParseDTD Validate ValidateInternalSubset CheckNamespaces ApplyDefaults` returning a `Report` (`ok`, `items` of
     `Violation`, `ReportText`, `FreeReport FreeDTD`).
-- **`yaml`** (`import encoding.yaml`): `Valid Get GetInt GetFloat GetBool Has
-Keys Len TypeOf Parse Decode ToJSON Encode Dump DumpWith SplitDocuments`
+- **`yaml`** (`import encoding.yaml`): `Valid Get GetInt GetFloat GetBool Has Keys Len TypeOf Parse Decode ToJSON Encode Dump DumpWith SplitDocuments`
   plus the `Object Array Member*` builders. No anchors or aliases (`&a`,
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
 - **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str>`,
-  `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue
-FromValue`. The separator is always a comma; a quoted field with a line
+  `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue FromValue`. The separator is always a comma; a quoted field with a line
   break cannot be read back (`ReadAll` splits lines first); `"Pen" ,blue`
   (space after the quote) ends the row silently; spaces are kept.
-- **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid
-EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
+- **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
   (a typo drops the rest), so use `DecodeStrict` on edited files. Triple
   quoted strings are invalid and dates stay strings; `Encode` loses comments
   and key order.
 - **`value`** (`import encoding.value`): the dynamic `Value` every format
-  shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray
-NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet
-ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone
-ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
+  shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
   `ObjectGet` of a missing key is null (chains are safe) but `ArrayGet` past
   the end stops the program; a copy shares its map/elements (`ValueClone`);
   keys come back in hash order; `Equal(1, 1.0)` is false.
@@ -1318,37 +1188,26 @@ ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
   (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
-  silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint
-ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
+  silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
   generated readers do not accept packed repeated fields).
-- **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query
-SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
+- **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
   `Parse` never fails or validates (check `scheme` and `host` yourself),
   nothing is lower-cased, and editing one parameter re-encodes the whole
   query. **`query`** (`import encoding.query`): `Get GetAll Has` on the text,
   or `Decode` to a `QueryMap` with `Set Add Remove Retain Encode`; missing
-  and empty look the same to `Get`. **`envfile`** (`import
-encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format
-Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`),
+  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`),
   and `${NAME}` only sees lines above it.
-- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode
-Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode
-URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
+- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
   the first zero byte (use `Base64DecodeBytes`); `HexDecode` stops at the
   first bad pair without error; URL-safe base64 (`-_`) is damaged by the
   lenient decoder.
-- **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree
-BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
+- **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip does not
   verify the CRC; the method is not stored in the output; free every buffer.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll
-ZipExtractByName TarCreate TarList TarExtractAll RarList RarExtractAll
-GzipCompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
-  zip methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll RarList RarExtractAll GzipCompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
+  ZIP methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
   cut, RAR extracts only stored entries.
-- **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook
-NewSheet` with sheet methods `set_string set_number get_cell get_string
-row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
+- **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
@@ -1366,8 +1225,7 @@ row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   only the last byte (write `(ب)+`). `^`/`$` anchor the whole text, never a
   line. At most 16 groups and `{n}` up to 64; a match over 400000 steps is
   reported as no match. Global state: one thread at a time.
-- **`crypto`**: `Sha1Hex Sha256Hex Sha512Hex Md5Hex`, `Sha256Bytes/Sha384Bytes/
-Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
+- **`crypto`**: `Sha1Hex Sha256Hex Sha512Hex Md5Hex`, `Sha256Bytes/Sha384Bytes/ Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
   `HmacSha256Hex/HmacSha384Hex/HmacSha512Hex` and the byte-oriented
   `HmacSha256Bytes/HmacSha384Bytes/HmacSha512Bytes` (write into a caller
   buffer) / `HmacSha256Raw/HmacSha384Raw/HmacSha512Raw` (pointer+length, for
@@ -1377,55 +1235,36 @@ Sha512Bytes` (+ streaming `Sha256New/Update/Final`), HMAC
   `pbkdf2-sha256$<rounds>$<salt>$<hex>` string yourself with
   `Pbkdf2HmacSha256Hex` and 600000 rounds (`VerifyPassword` reads the rounds
   from the string). Compare secrets with `SecretEquals`, never `==`.
-  `Sha256Hex` of a `str` hashes only up to the first NUL. `HashStr HashBytes
-HashInt` are hash-table hashes, not cryptographic.
+  `Sha256Hex` of a `str` hashes only up to the first NUL. `HashStr HashBytes HashInt` are hash-table hashes, not cryptographic.
 
 ### Time, memory, testing
 
-- **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO
-FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until
-ElapsedMs MonoNanos MonoMillis` and `YearUTC MonthUTC DayUTC HourUTC ...`;
-  `DateTime` type. An instant is an `i64` of Unix seconds. `Year Month Day
-Weekday Format FormatDate FormatISO` use the **local** zone (servers
+- **`time`**: `Now NowMillis NowMicros NowNanos Sleep(ms) Format FormatISO FormatDate FormatTime Year Month Day Hour Minute Second Weekday Since Until ElapsedMs MonoNanos MonoMillis` and `YearUTC MonthUTC DayUTC HourUTC ...`;
+  `DateTime` type. An instant is an `i64` of Unix seconds. `Year Month Day Weekday Format FormatDate FormatISO` use the **local** zone (servers
   differ from laptops: use the `...UTC` forms and `FormatISOUTC`/
   `FormatRFC3339` for anything stored); `Now` has whole seconds and follows
   clock changes, so time code with `MonoNanos`; `Days(30)` is not a month;
   `FromUTCParts` rolls over (30 February is 1 March) while the parsers
   reject impossible days. `Sleep` takes milliseconds.
   - **`Duration`** (nanoseconds, so it cannot be read in the wrong unit):
-    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days
-SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours
-days add sub mul div ratio neg abs truncate round cmp less equals
-is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration`/
-    `ParseDurationOr` (`DurationResult { ok, value }`); `SleepFor
-SinceDuration DurationBetween AddDuration`.
-  - **Parsing**: `ParseISO ParseISOIn ParseISOOr ParseHTTPDate
-ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`),
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration`/
+    `ParseDurationOr` (`DurationResult { ok, value }`); `SleepFor SinceDuration DurationBetween AddDuration`.
+  - **Parsing**: `ParseISO ParseISOIn ParseISOOr ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`),
     all returning `TimeResult { ok, epoch, nanos }`; an unzoned string is
     **local** time. `FromLocalParts` (DST-correct) / `FromUTCParts`,
     `LocalOffsetMinutesAt`.
   - **Timers** (monotonic): `NewTimer` (`expired remaining wait reset stop`),
     `NewTicker` (`fired wait remaining reset stop advance`, a slow body drops
-    ticks and counts them in `dropped`), `AfterFunc Every RepeatEvery
-WaitUntil`; a lambda captures locals by value, so callbacks share state
+    ticks and counts them in `dropped`), `AfterFunc Every RepeatEvery WaitUntil`; a lambda captures locals by value, so callbacks share state
     through `mut` globals.
 - **`calendar`**: Gregorian, `Jalali` (Persian solar) and `Hijri` (tabular
-  Islamic) dates through one Julian Day Number: `GregorianToJalali
-JalaliToGregorian GregorianToHijri HijriToGregorian JalaliToHijri
-HijriToJalali`, `*ToJDN`/`JDNTo*`; per calendar `IsLeap* DaysIn*Month
-IsValid*Date *MonthName{En,Fa,Ar} WeekdayName{En,Fa,Ar} Compare*`, the
+  Islamic) dates through one Julian Day Number: `GregorianToJalali JalaliToGregorian GregorianToHijri HijriToGregorian JalaliToHijri HijriToJalali`, `*ToJDN`/`JDNTo*`; per calendar `IsLeap* DaysIn*Month IsValid*Date *MonthName{En,Fa,Ar} WeekdayName{En,Fa,Ar} Compare*`, the
   system clock `Today{Gregorian,Jalali,Hijri} NowClockTime`, from an epoch
-  `EpochTo{Gregorian,Jalali,Hijri,ClockTime} *ToUnixUTC`, text `Format*
-FormatJalaliLongFa FormatHijriLongAr FormatGregorianLongEn`; arithmetic
-  `AddDays* AddWeeks* AddMonths* AddYears* DaysBetween* StartOfMonth*
-EndOfMonth* NextWeekdayOnOrAfter` (days are exact, **months and years
-  clamp**: 2024-01-31 + 1 month = 2024-02-29). Types `GregorianDate
-JalaliDate HijriDate ClockTime`.
-  - Zones: real IANA zones from the host tzdata, `LoadZone(name) LocalZone
-FreeZone ZoneOffsetSeconds ZoneIsDST ZoneAbbrevAt TimeZoneAt ZoneAt(name,
-epoch) ZonedToEpoch` (no tzdata on Windows: `ok = false`). The fixed
-    `TimeZone` values `TZUTC TZTehran TZKabul TZRiyadh TZDubai TZIstanbul
-TZLondon TZNewYork TZTokyo FixedOffsetZone TZLocal` with
+  `EpochTo{Gregorian,Jalali,Hijri,ClockTime} *ToUnixUTC`, text `Format* FormatJalaliLongFa FormatHijriLongAr FormatGregorianLongEn`; arithmetic
+  `AddDays* AddWeeks* AddMonths* AddYears* DaysBetween* StartOfMonth* EndOfMonth* NextWeekdayOnOrAfter` (days are exact, **months and years
+  clamp**: 2024-01-31 + 1 month = 2024-02-29). Types `GregorianDate JalaliDate HijriDate ClockTime`.
+  - Zones: real IANA zones from the host tzdata, `LoadZone(name) LocalZone FreeZone ZoneOffsetSeconds ZoneIsDST ZoneAbbrevAt TimeZoneAt ZoneAt(name, epoch) ZonedToEpoch` (no tzdata on Windows: `ok = false`). The fixed
+    `TimeZone` values `TZUTC TZTehran TZKabul TZRiyadh TZDubai TZIstanbul TZLondon TZNewYork TZTokyo FixedOffsetZone TZLocal` with
     `WallClock{Gregorian,Jalali,Hijri,Time} ConvertZoned*` are
     **standard time**: `TZLondon` is UTC+0 all year, so use
     `ZoneAt("Europe/London", epoch)` for DST zones.
@@ -1435,27 +1274,20 @@ TZLondon TZNewYork TZTokyo FixedOffsetZone TZLocal` with
     Saturday = 0 and takes a JDN, the other `Weekday*` count from Sunday = 0.
     Conversions do not validate (month 13 gives a wrong date): check with
     `IsValidJalaliDate` first.
-- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set
-MemMove`, arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
-  pools `NewPool PoolAlloc PoolFree PoolDestroy`; leak tooling `CheckLeaks
-LiveBytes AllocCount PeakBytes`. Nothing is checked (overruns and double
+- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set MemMove`, arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
+  pools `NewPool PoolAlloc PoolFree PoolDestroy`; leak tooling `CheckLeaks LiveBytes AllocCount PeakBytes`. Nothing is checked (overruns and double
   frees corrupt silently; `salam memcheck` finds them for `Allocate`
   blocks), every allocator can return null, and memory from a C library
   goes back to that library's free, never `mem.Free`.
-- **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat
-AssertEqBool AssertEqInt64 AssertNeInt AssertNeStr AssertContains AssertNil
-AssertNotNil AssertMsg Passed Failed Reset Summary()` (`ret
-testing.Summary()` from `main`). A failure says what differed, not where
+- **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat AssertEqBool AssertEqInt64 AssertNeInt AssertNeStr AssertContains AssertNil AssertNotNil AssertMsg Passed Failed Reset Summary()` (`ret testing.Summary()` from `main`). A failure says what differed, not where
   (put the case name in `AssertMsg`); an exit code keeps 8 bits, so 256
   failures read as 0; counters are unlocked globals (assert from the main
   thread).
 
 ### Networking & web
 
-- **`net.http`** (`import net.http`, called `http.`), client: `Get Post Put
-Patch Delete Head Options` (+ `*With(..., headers)` taking a
-  `HashMap<str,str>` from `NewHeaders`), `Request(method, url, headers,
-body)`, then `Status Body Error Ok GetHeader Headers SetCookieLines` (or the
+- **`net.http`** (`import net.http`, called `http.`), client: `Get Post Put Patch Delete Head Options` (+ `*With(..., headers)` taking a
+  `HashMap<str,str>` from `NewHeaders`), `Request(method, url, headers, body)`, then `Status Body Error Ok GetHeader Headers SetCookieLines` (or the
   fields `.status .body .err`); `NewClient()` keeps cookies (`c.Get`,
   `c.Post`, `c.SetHeader`). No redirects are followed and there is **no
   timeout** (use `net.httpx` for one); `Post`/`Put`/`Patch` label the body as
@@ -1463,51 +1295,37 @@ body)`, then `Status Body Error Ok GetHeader Headers SetCookieLines` (or the
   `Ok` is 2xx; the one-shot calls share package state, so not from several
   threads at once.
 - **Server** (`net.http` + `net.router`): `mut r := router.NewRouter()`,
-  `router.Get/Post/Put/Patch/Delete(r, "/books/:id", handler)`, `Group
-Static`; `mut s := http.NewServer(port)`, `http.Use(s, r)`, then `Run(s)`,
+  `router.Get/Post/Put/Patch/Delete(r, "/books/:id", handler)`, `Group Static`; `mut s := http.NewServer(port)`, `http.Use(s, r)`, then `Run(s)`,
   `RunTLS(s, cert, key)` or `RunBackground(s)` (returns once bound, serves on
   its own thread, so one process can run several servers). Limits
   `SetMaxBodyBytes SetMaxHeaderBytes SetKeepAliveIdle EnableAccessLog`. A
-  handler is `func h(ctx: i64)` passed by bare name, using `Ctx_text
-Ctx_html Ctx_json Ctx_status Ctx_set_header Ctx_redirect Ctx_param
-Ctx_query Ctx_form Ctx_body Ctx_header Ctx_method Ctx_path Ctx_cookie
-Ctx_set_cookie`, or `c := http.Ctx(ctx)` with `Text Json Html Param Query
-Form Body Header SetStatus SetHeader Redirect`. Pitfalls: **register every
+  handler is `func h(ctx: i64)` passed by bare name, using `Ctx_text`, `Ctx_html`, `Ctx_json`, `Ctx_status`, `Ctx_set_header`, `Ctx_redirect`, `Ctx_param`, `Ctx_query`, `Ctx_form`, `Ctx_body`, `Ctx_header`, `Ctx_method`, `Ctx_path`, `Ctx_cookie` and `Ctx_set_cookie`, or `c := http.Ctx(ctx)` with the methods `Text`, `Json`, `Html`, `Param`,
+  `Query`, `Form`, `Body`, `Header`, `SetStatus`, `SetHeader` and `Redirect`. Pitfalls: **register every
   route before `Use`** (the server copies the router; a later route is a
   404); **strings read from a request are freed when the handler returns**,
   so `str.Clone` what you keep in a global or session (`Ctx_own` hands a
   string you built to the request); router params are not URL-decoded; no
   automatic 405; `Ctx_body` is a `str` (binary uploads are cut).
-- **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet
-EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll
-Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
+- **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
   HSTS), **`net.http.validate`** `Required Length IsEmail Matches Assert`
   (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored,
   and you must `ret` after a failed `Assert`), **`net.http.session`**
-  `Configure Start Save Regenerate Destroy Value SetValue CSRFToken
-CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
+  `Configure Start Save Regenerate Destroy Value SetValue CSRFToken CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
   live in process memory).
-- **`net.httpx`**: raw requests with your own header text: `SendRaw
-SendRawTimeout SendRawTLS FreeRaw RawText Send SendText HeaderValue`. Send
+- **`net.httpx`**: raw requests with your own header text: `SendRaw SendRawTimeout SendRawTLS FreeRaw RawText Send SendText HeaderValue`. Send
   `Connection: close` (it reads until the server closes); `SendText` does not
   decode chunked bodies (the raw calls do).
-- **`net.http.swagger`** (OpenAPI + a documentation page): `New(title,
-version) Describe Server BearerAuth ApiKeyAuth`; `Scan(doc, router)` adds
+- **`net.http.swagger`** (OpenAPI + a documentation page): `New(title, version) Describe Server BearerAuth ApiKeyAuth`; `Scan(doc, router)` adds
   every registered route, `Route` creates one and `At(doc, method, pattern)`
   selects one (after an `At` that finds nothing the following calls do
-  nothing), then `Summary Details Tag OperationId Deprecated Secure Query
-QueryTyped QueryEnum Header PathParam`. `Accepts(doc, desc, NewTodo {})`
+  nothing), then `Summary Details Tag OperationId Deprecated Secure Query QueryTyped QueryEnum Header PathParam`. `Accepts(doc, desc, NewTodo {})`
   and `Returns(doc, 200, desc, Todo {})` take a **value and read its type**
-  (the schema comes from the struct and its `@json` names), plus `ReturnsText
-ReturnsHtml ReturnsFile ReturnsRaw ReturnsNothing ReturnsHeader AcceptsForm
-AcceptsRaw`. `Spec SpecIndent WriteSpec`; check with `Problems
-Undocumented Missing(doc, r)`; serve with `Mount(doc, r, "/docs")` or
+  (the schema comes from the struct and its `@json` names), plus `ReturnsText ReturnsHtml ReturnsFile ReturnsRaw ReturnsNothing ReturnsHeader AcceptsForm AcceptsRaw`. `Spec SpecIndent WriteSpec`; check with `Problems Undocumented Missing(doc, r)`; serve with `Mount(doc, r, "/docs")` or
   `Serve(doc, port)`; `Free(doc)`. **`Mount` copies the spec when called**:
   describe every route first, then `Mount`, then `http.Use`. The docs are
   public (CORS `*`).
 - **`net.websocket`** (RFC 6455 client and server, `ws://` and `wss://`):
-  `Listen Accept AcceptWSS Dial DialWith DialWSS DialWSSWith
-DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
+  `Listen Accept AcceptWSS Dial DialWith DialWSS DialWSSWith DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
   `Receive` (blocks) / **`Poll(c, ms)`** (returns a `TIMEOUT` message), plus
   a `Hub` for rooms and broadcast. A binary `Message` carries `.data`/`.len`
   next to `.text` (that buffer is reused by the next message, so copy it).
@@ -1522,30 +1340,22 @@ DialWSSUnverified`, `SendText SendBinary SendBinaryBytes Ping Close Stop`,
   blocks for the answer, `Reply ReplyStr ReplyJSON` answer `ev.ack_id`.
   Receive with `On Once Off OnAny` + `Run`/`RunFor`, or better
   **`Next(c, ms)`/`NextEvent(c, ms)`** in a loop (a lambda captures by
-  value). Arguments: `NewArgs AddStr AddInt AddJSON AddBytes`, `ArgCount
-ArgStr ArgInt ArgValue ArgBytes`, `Ack*`; free with `ArgsFree EventFree
-AckFree`. **Nothing runs in the background**: the connection only advances
+  value). Arguments: `NewArgs AddStr AddInt AddJSON AddBytes`, `ArgCount ArgStr ArgInt ArgValue ArgBytes`, `Ack*`; free with `ArgsFree EventFree AckFree`. **Nothing runs in the background**: the connection only advances
   inside `Pump`/`Next`/`Run`/`EmitAck`, so a program that stops pumping
   misses heartbeats and is dropped. `Next` also returns connection events
   (`EV_CONNECT`, ...). Socket.IO 2 servers are not supported. Wire helpers
   `EncodePacket DecodePacket EncodeEngine` are public for tests.
-- **`net.tcp`** (`import net.tcp`): `Bind(port) Accept Dial(host, port)
-Read Write ReadBytes WriteBytes Close CloseServer Ok ConnOk SetDeadline
-SetReadDeadline SetNoDelay UpgradeTLS DialTLS`, plus a connection `Pool`.
+- **`net.tcp`** (`import net.tcp`): `Bind(port) Accept Dial(host, port) Read Write ReadBytes WriteBytes Close CloseServer Ok ConnOk SetDeadline SetReadDeadline SetNoDelay UpgradeTLS DialTLS`, plus a connection `Pool`.
   An empty `Read` means closed, timed out or failed (and binary is cut at a
   NUL: use `ReadBytes`); `Write` may send part (`WriteBytes` loops); TCP has
   no message boundaries, so frame them; `Bind` listens on every IPv4
-  interface. **`net.udp`** `Bind Open Send SendTo Receive ReceiveBytes
-SetTimeout SetBroadcast JoinMulticast` (IPv4 only; a timeout looks like an
+  interface. **`net.udp`** `Bind Open Send SendTo Receive ReceiveBytes SetTimeout SetBroadcast JoinMulticast` (IPv4 only; a timeout looks like an
   empty packet; a short buffer drops the rest of the packet).
-- **`net.dns`** `Lookup` (system resolver, one IPv4) and `LookupA LookupAAAA
-LookupMX LookupTXT LookupCNAME LookupPTR QueryServer` (own UDP queries to
+- **`net.dns`** `Lookup` (system resolver, one IPv4) and `LookupA LookupAAAA LookupMX LookupTXT LookupCNAME LookupPTR QueryServer` (own UDP queries to
   `/etc/resolv.conf` servers, falling back to 8.8.8.8; no TCP retry for
-  truncated answers, no DNSSEC). **`net.mime`** `MimeType MimeExt
-ParseContentType ParamGet ParseMultipart NewMultipartWriter` (about 25
+  truncated answers, no DNSSEC). **`net.mime`** `MimeType MimeExt ParseContentType ParamGet ParseMultipart NewMultipartWriter` (about 25
   extensions; everything else is `application/octet-stream`; case
-  sensitive). **`net.proxy`** `NewHTTPProxy NewSOCKS5Proxy Dial NewChain
-DialChain` (no handshake timeout, no IPv6 proxy address, ignores
+  sensitive). **`net.proxy`** `NewHTTPProxy NewSOCKS5Proxy Dial NewChain DialChain` (no handshake timeout, no IPv6 proxy address, ignores
   `HTTPS_PROXY`). **`net.email`**: `Send` and `BuildMessage`, or drive
   `DialSMTP/DialSMTPTLS Hello StartTLS AuthPlain MailFrom RcptTo Data Quit`;
   `DialIMAP Login Select Fetch`, `DialPOP3 Retr Dele` (`BuildMessage` adds no
@@ -1553,56 +1363,43 @@ DialChain` (no handshake timeout, no IPv6 proxy address, ignores
   breaks on a password with `"` or `\`). **`net.http2`** frames, HPACK and
   streams (`NewConn ClientHandshake SendHeaders SendData Poll`; one thread
   per `Conn`).
-- **`tls`** (TLS 1.2/1.3 in pure Salam, no OpenSSL): `Dial WrapClient
-WrapServer NewConfig NewServerConfig ConnOk ConnError Read Write ReadBytes
-WriteBytes Close`, plus `AesGcmSeal AesGcmOpen HkdfSha256 EcdhP256*
-P256Sign P256Verify`. Check `ConnOk` after `Dial`; no client certificates;
+- **`tls`** (TLS 1.2/1.3 in pure Salam, no OpenSSL): `Dial WrapClient WrapServer NewConfig NewServerConfig ConnOk ConnError Read Write ReadBytes WriteBytes Close`, plus `AesGcmSeal`, `AesGcmOpen`, `HkdfSha256`, the `EcdhP256` functions,
+  `P256Sign` and `P256Verify`. Check `ConnOk` after `Dial`; no client certificates;
   about 800 KB/s for bulk transfers. **`ssl`** is an OpenSSL-style API over
   it (`NewClientContext SetHostname Wrap Connect Read Write Shutdown`;
   `SetHostname` is required before `Connect`, and `Close` does not close
   the TCP socket).
-- **`ssh`**: `Connect`/`Dial` with `NewConfig WithPassword WithKeyFile
-WithHostKeyMode`, `RunCommand Exec NewSession RequestPty Shell`, SFTP
+- **`ssh`**: `Connect`/`Dial` with `NewConfig WithPassword WithKeyFile WithHostKeyMode`, `RunCommand Exec NewSession RequestPty Shell`, SFTP
   `SftpOpen Upload Download ListDir Mkdir Remove Rename Stat`. RSA keys only
   (OpenSSH format, no passphrase; Ed25519 and ECDSA are not read) and the
   server needs an RSA host key; each `Exec` is a fresh shell (a `cd` does not
-  carry over). **`ftp`** `Dial DialTLS Login Binary List Upload Download
-Read Write Mkdir Delete Rename Quit` (call `Binary` before transfers;
+  carry over). **`ftp`** `Dial DialTLS Login Binary List Upload Download Read Write Mkdir Delete Rename Quit` (call `Binary` before transfers;
   `Read`/`Write` are `str`, so text only; no resume).
-- Clients: **`aws`** (S3/SQS/STS and S3-compatible: `NewConfig ForMinio
-ForR2 S3Put S3Get S3GetBytes S3UploadFile S3DownloadFile S3ListAll
-S3Delete ...`; `S3Get` is a `str`, so binary needs `S3GetBytes`;
+- Clients: **`aws`** (S3/SQS/STS and S3-compatible: `NewConfig ForMinio ForR2 S3Put S3Get S3GetBytes S3UploadFile S3DownloadFile S3ListAll S3Delete ...`; `S3Get` is a `str`, so binary needs `S3GetBytes`;
   `S3ListPrefix` returns one page of 1000), **`google`** (service account
   `ParseServiceAccount AccessToken Authorization`), **`telegram.bot`**
   (`NewBot SendMessage SendPhoto Poll SetWebhook InlineKeyboardMarkup ...`;
   every call is a GET, so no local file upload, and `Poll` never returns),
   **`webpush`** (`GenerateKeys KeysFrom Send`; new keys break every
-  subscription), **`graphql`** server (`Parse Execute SetResolver
-HandleHttp`; subscriptions run once; resolvers run field by field, so batch
+  subscription), **`graphql`** server (`Parse Execute SetResolver HandleHttp`; subscriptions run once; resolvers run field by field, so batch
   your loads), **`grpc`** (`Dial UnaryCall NewServer RegisterMethod Serve`;
   the server is h2c only, one call at a time), **`rpc`** (JSON-RPC 2.0 and
   MessagePack-RPC: `Register NewServer HandleText Call DialClient`).
-- Browser/JS targets: **`dom`** (`ById Query QueryAll SetText SetHtml
-SetStyle OnEvent OffEvent SetTimeout EveryFrame Store*`; a missing element
+- Browser/JS targets: **`dom`** (`ById Query QueryAll SetText SetHtml SetStyle OnEvent OffEvent SetTimeout EveryFrame Store*`; a missing element
   is JS null, not 0, so test `Exists(id)`; never `SetHtml` user text),
-  **`web.canvas`** (`Of Get FillRect BeginPath MoveTo LineTo Arc Fill
-FillText DrawImage`; paths pile up until `BeginPath`), **`web.keys`**
-  (`Init Track Down Pressed`), **`node`** (Node.js interop: `Require GetProp
-CallS1 ...`; handles are `i64`, every number is f64). **`web`** itself
+  **`web.canvas`** (`Of Get FillRect BeginPath MoveTo LineTo Arc Fill FillText DrawImage`; paths pile up until `BeginPath`), **`web.keys`**
+  (`Init Track Down Pressed`), **`node`** (Node.js interop: `Require GetProp CallS1 ...`; handles are `i64`, every number is f64). **`web`** itself
   holds the `Color Length Url` value types the layout DSL uses (§9); it is
   not a server.
-- **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate
-Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
+- **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
   bundled Chromium instead of the OS webview, see
   `std/webview/native/BUILD.md`). Put data into the HTML you pass to
   `SetHTML`; the page cannot call back into Salam, `Eval` right after
   `SetHTML` usually hits the old page, and a failed `Create` returns a window
   that `IsClosed()` already.
-- Native media: **`image`** (`Open Save SaveQuality New Resize Crop DrawText
-...`, RGBA; GIF reads frame one; JPEG drops alpha), **`opencv`** (needs the
+- Native media: **`image`** (`Open Save SaveQuality New Resize Crop DrawText ...`, RGBA; GIF reads frame one; JPEG drops alpha), **`opencv`** (needs the
   `salam_opencv_shim` library and OpenCV 4; `Color` is RGB while a `Mat` is
-  BGR; free every `Mat`), **`graph`** (`Dijkstra ShortestPath PageRank
-Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
+  BGR; free every `Mat`), **`graph`** (`Dijkstra ShortestPath PageRank Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
   on a negative weight), **`llvm`** (build, verify, JIT and link LLVM IR;
   `ParseIR`/`RunJIT` take a `.ll` **path**, call `Verify` before emitting,
   free builder, module, context in that order) and **`llvm.triple`**.
@@ -1613,13 +1410,10 @@ Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
   layer that uses them - one package, because the HTTP half is only useful
   with the token half and dead-code elimination means a CLI that merely signs
   a token links none of it.
-  - Tokens: `NewClaims SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn
-ClaimsJSON`; `Sign SignHS256/384/512 SignWithKid SignJSON SignatureOf`;
+  - Tokens: `NewClaims SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn ClaimsJSON`; `Sign SignHS256/384/512 SignWithKid SignJSON SignatureOf`;
     `Verify VerifyHS256 IsValid DefaultOptions OptionsFor`; `Decode` (parses,
-    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas
-HasScope HasAudience SecondsRemaining`; `ErrorText IsSupportedAlg`; error
-    codes `JWT_OK JWT_ERR_*`. `Options` carries the policy (`alg issuer
-audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
+    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `ErrorText IsSupportedAlg`; error
+    codes `JWT_OK JWT_ERR_*`. `Options` carries the policy (`alg issuer audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
     from `Options`, never from the token**; `"none"` and RS*/ES* are rejected
     (no asymmetric support). **`require_exp` is off by default**, so a token
     without `exp` is accepted forever unless you set it; the secret is not
@@ -1627,10 +1421,8 @@ audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
   - HTTP (needs `net.http` + `net.router`): `NewGuard` bundles the secret with
     an `Options`; `Require RequireScope RequireClaim RequireSubject` verify at
     the top of a handler and, on failure, write the 401/403 themselves and
-    return false. Also `Check` (verify, write nothing), `ParseBearer
-BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
-    (`Issue IssueFor IssuePair`) and cookies (`SetSessionCookie
-SetSessionCookieInsecure ClearSessionCookie`).
+    return false. Also `Check` (verify, write nothing), `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
+    (`Issue IssueFor IssuePair`) and cookies (`SetSessionCookie SetSessionCookieInsecure ClearSessionCookie`).
 
 Passwords and secrets live in **`crypto`**, not here: `HashPassword`
 `VerifyPassword` (PBKDF2-HMAC-SHA256), `SecretEquals` (constant-time compare),
@@ -1661,21 +1453,14 @@ that work on any driver. Take a `dyn db.Connection` and the same code runs on
 any engine (`tests/en/db/shared_iface.salam` runs one function against sqlite
 and postgres and expects identical output).
 
-- `interface Connection`: `Kind Ok Ping Exec Query Begin LastInsertId Changes
-Error Quote Close`
-- `interface Rows`: `Ok Next ColumnCount ColumnName ColumnType IsNull Text Int
-Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
+- `interface Connection`: `Kind Ok Ping Exec Query Begin LastInsertId Changes Error Quote Close`
+- `interface Rows`: `Ok Next ColumnCount ColumnName ColumnType IsNull Text Int Int64 Float Close` - forward-only, so the loop is `until r.Next():`, and
   `Close()` is required
 - `interface Tx`: `Ok Exec Query Commit Rollback`
-- Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx
-QuoteLiteral`; constants `SQLITE MYSQL POSTGRES ELASTICSEARCH OPENSEARCH` and `TYPE_NULL TYPE_INT
-TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
-- **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead
-CloseAll Free`): a fixed set of connections leased one at a time. It holds
+- Helpers: `QueryInt QueryInt64 QueryFloat QueryText CountRows Run RunAll InTx QuoteLiteral`; constants `SQLITE MYSQL POSTGRES ELASTICSEARCH OPENSEARCH` and `TYPE_NULL TYPE_INT TYPE_FLOAT TYPE_TEXT TYPE_BLOB`
+- **Pool** (`NewPool Add Acquire Leased Conn Release Size Idle InUse DropDead CloseAll Free`): a fixed set of connections leased one at a time. It holds
   connections you opened; it is not a factory. No locking of its own.
-- **Migrations** (`NewMigrator NewMigratorIn AddMigration MigrationCount
-EnsureTable SchemaVersion IsApplied PendingCount MigrateUp Rollback MigrateTo
-FreeMigrator SplitStatements`): each step runs in a transaction with the row
+- **Migrations** (`NewMigrator NewMigratorIn AddMigration MigrationCount EnsureTable SchemaVersion IsApplied PendingCount MigrateUp Rollback MigrateTo FreeMigrator SplitStatements`): each step runs in a transaction with the row
   recording it; steps split on `;` outside quotes, since MySQL rejects
   multi-statement queries.
 - Pitfalls: `QuoteLiteral` only doubles `'` (on MySQL use `c.Quote`, which
@@ -1688,17 +1473,14 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
 
 - **`db.sqlite`**:
   `Available Version Open Ok Exec Query Next Text Int Int64 Float IsNull Finish Prepare BindText BindInt BindFloat BindNull Reset LastInsertId Changes QueryInt QueryText Close Conn`. One `Database` is one connection: give each writing thread its own `Open`. There is no BLOB bind (store hex or base64), and `QueryInt`/`QueryText` take no parameters, so use them only on SQL you wrote.
-- **`db.postgres`** (native wire protocol, no libpq; TCP only, SCRAM/MD5/password auth, TLS via `sslmode`): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed (page large tables with `LIMIT`). No `COPY FROM STDIN`. `Commit` returns -1 when the server rolled the transaction back. `ServerVersion` is major * 10000 + minor.
+- **`db.postgres`** (native wire protocol, no libpq; TCP only, SCRAM/MD5/password auth, TLS via `sslmode`): `Available ClientVersion ServerVersion Open OpenFull Ok Ping Reset Close Error Exec ExecCount Query Quote QueryInt QueryText DatabaseName UserName HostName Port Conn`. Placeholders are `$1, $2`, not `?`. There is **no last insert id** - use `INSERT ... RETURNING id`; `LastInsertId()` goes through `lastval()` and is 0 when the session has used no sequence. Results are materialised, so every `Rows` must be closed (page large tables with `LIMIT`). No `COPY FROM STDIN`. `Commit` returns -1 when the server rolled the transaction back. `ServerVersion` is major \* 10000 + minor.
 - **`db.mysql`** (MariaDB/MySQL, native protocol, no libmysqlclient; TCP only, native_password and caching_sha2 auth, TLS when the server offers it, `SALAM_MYSQL_SSL_MODE` = DISABLED/REQUIRED/VERIFY_IDENTITY): `Open Ok Close Ping Error Errno Exec Query QueryOk Next Finish Text Int Int64 Float IsNull ColumnCount RowCount ColumnName AffectedRows LastInsertId Begin Commit Rollback Autocommit Escape SetCharset SelectDB QueryInt QueryText Conn`. This API hands every value over as text, so `ColumnType` answers `TYPE_TEXT` where the others report the column's own type; DDL commits implicitly, so `Tx.Rollback()` cannot undo it. **Threading**: a connection
   cannot be used by two threads at once (it segfaults, it does not error), so
   a threaded server gives each request its own connection. Call
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
-- **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select
-Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet
-HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember
-SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
+- **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
   the password (an ACL user needs `Command`); it can publish but not
@@ -2976,30 +2758,30 @@ The course at <https://www.salamlang.ir/learn/> teaches the whole language in
 Persian, one lesson per page, and every example on it is compiled and run
 when the site is built. Point Persian-speaking users to the matching lesson:
 
-| Topic                                            | Lesson                                          |
-| ------------------------------------------------ | ----------------------------------------------- |
-| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>         |
-| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>     |
-| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>         |
-| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>     |
-| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>       |
-| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>    |
-| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>         |
-| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>         |
-| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>     |
-| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>       |
-| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>         |
-| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>        |
-| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>   |
-| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>       |
-| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>         |
-| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/>  |
-| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>      |
-| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>      |
-| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>         |
-| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>        |
-| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/>  |
-| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>     |
-| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>       |
-| Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>        |
-| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>      |
+| Topic                                            | Lesson                                         |
+| ------------------------------------------------ | ---------------------------------------------- |
+| First program, `چاپ`/`سرچاپ`, comments, `ورودی`  | <https://www.salamlang.ir/learn/start/>        |
+| Variables, `ناپایا`, `پایا`, globals             | <https://www.salamlang.ir/learn/variables/>    |
+| Types, integer sizes, casts with `برگردان`       | <https://www.salamlang.ir/learn/types/>        |
+| Operators, bitwise, ternary, `و`/`یا`/`وارونه`   | <https://www.salamlang.ir/learn/operators/>    |
+| Strings and their methods                        | <https://www.salamlang.ir/learn/strings/>      |
+| `اگر`/`وگرنه`                                    | <https://www.salamlang.ir/learn/conditions/>   |
+| `تا`, `تکرار`, `هر`, `بشکن`, `گذر`               | <https://www.salamlang.ir/learn/loops/>        |
+| `همخوان` and `ترابرد`                            | <https://www.salamlang.ir/learn/match/>        |
+| Functions, defaults, overloads, multi-word names | <https://www.salamlang.ir/learn/functions/>    |
+| Lambdas and function types                       | <https://www.salamlang.ir/learn/lambdas/>      |
+| `دیرکن`, `ناب`, `درخط` and other modifiers       | <https://www.salamlang.ir/learn/defer/>        |
+| Arrays and slices                                | <https://www.salamlang.ir/learn/arrays/>       |
+| `وکتور` and `نگاشت`                              | <https://www.salamlang.ir/learn/collections/>  |
+| Structs, methods, `ایستا`, `شامل`                | <https://www.salamlang.ir/learn/structs/>      |
+| Enums, enums with data                           | <https://www.salamlang.ir/learn/enums/>        |
+| `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
+| Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
+| `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
+| Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
+| Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
+| Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |
+| C interop, `درون‌داد`, `پیوند`                   | <https://www.salamlang.ir/learn/c-interop/>    |
+| `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
+| Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
+| Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |

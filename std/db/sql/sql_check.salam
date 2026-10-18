@@ -53,6 +53,7 @@ struct Scope:
     pub cols: Vector<str> = Vector {}
     pub kinds: Vector<int> = Vector {}
     pub nulls: Vector<bool> = Vector {}
+    pub prims: Vector<bool> = Vector {}
     pub names: Vector<str> = Vector {}
     pub opens: Vector<bool> = Vector {}
 end
@@ -214,6 +215,7 @@ func scope_free(sc &: Scope):
     sc.cols.free()
     sc.kinds.free()
     sc.nulls.free()
+    sc.prims.free()
     sc.names.free()
     sc.opens.free()
 end
@@ -236,6 +238,7 @@ func scope_inherit(dst &: Scope, src: Scope):
         dst.cols.push(src.cols.get(i))
         dst.kinds.push(src.kinds.get(i))
         dst.nulls.push(true)
+        dst.prims.push(false)
         i = i + 1
     end
     mut j := 0
@@ -284,6 +287,7 @@ func scope_add_table(sc &: Scope, as_name: str, t: Table, nullable: bool):
         sc.cols.push(col.name)
         sc.kinds.push(col.kind)
         sc.nulls.push(nullable or not col.not_null)
+        sc.prims.push(col.primary)
         i = i + 1
     end
 end
@@ -298,6 +302,7 @@ func scope_add_results(sc &: Scope, as_name: str, rows: Vector<ResultCol>, nulla
         sc.cols.push(r.name)
         sc.kinds.push(r.kind)
         sc.nulls.push(nullable or r.nullable)
+        sc.prims.push(false)
         i = i + 1
     end
 end
@@ -649,6 +654,31 @@ func check_group_by(ck &: Checker, sc &: Scope, id: int):
         grouped.push(gi)
         i = i + 1
     end
+    mut determined := Vector {} as Vector<str>
+    mut si := 0
+    until si < sc.names.len():
+        src_name := sc.names.get(si)
+        mut pk_total := 0
+        mut pk_grouped := 0
+        mut c := 0
+        until c < sc.cols.len():
+            if sc.prims.get(c) and str.EqualFold(sc.srcs.get(c), src_name):
+                pk_total = pk_total + 1
+                mut g := 0
+                until g < grouped.len():
+                    if grouped.get(g) == c:
+                        pk_grouped = pk_grouped + 1
+                    end
+                    g = g + 1
+                end
+            end
+            c = c + 1
+        end
+        if pk_total > 0 and pk_grouped == pk_total:
+            determined.push(src_name)
+        end
+        si = si + 1
+    end
     mut j := 0
     until j < n.list.len():
         rc := ck.p.ast.nodes.get(n.list.get(j))
@@ -667,6 +697,13 @@ func check_group_by(ck &: Checker, sc &: Scope, id: int):
                         end
                         g = g + 1
                     end
+                    mut dt := 0
+                    until dt < determined.len():
+                        if str.EqualFold(determined.get(dt), sc.srcs.get(bi)):
+                            ok = true
+                        end
+                        dt = dt + 1
+                    end
                     if not ok:
                         cname := c_name(ck, ck.p.ast.nodes.get(bare.get(b)).tok)
                         msg := "\"" + cname + "\" is neither grouped nor aggregated"
@@ -684,6 +721,7 @@ func check_group_by(ck &: Checker, sc &: Scope, id: int):
         end
         j = j + 1
     end
+    determined.free()
     grouped.free()
 end
 
@@ -692,6 +730,7 @@ func scope_drop(sc &: Scope, idx: int):
     sc.cols.remove_at(idx)
     sc.kinds.remove_at(idx)
     sc.nulls.remove_at(idx)
+    sc.prims.remove_at(idx)
 end
 
 func check_using(ck &: Checker, sc &: Scope, join: int, left_at: int, right_at: int):

@@ -58,6 +58,13 @@ http.createServer((req, res) => {
       if (!s) return send(404, {});
       if (s.dead) return send(200, [{ info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] }]);
       const full = answerFor(s);
+      if (s.prompt.includes("fail midway")) {
+        const broke = Date.now() - s.start > 1500;
+        return send(200, [
+          { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
+          { info: { role: "assistant", error: broke ? { name: "ProviderError", data: { message: "the provider stopped" } } : null, finish: "", time: { created: s.start }, cost: 0, tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [{ type: "text", text: full.slice(0, Math.floor(full.length / 2)) }] },
+        ]);
+      }
       const frac = s.waiting ? 0 : Math.max(0, Math.min(1, (Date.now() - s.start - s.span + 1200) / 1200));
       const done = frac >= 1;
       const text = s.waiting || frac === 0 ? "" : full.slice(0, Math.max(1, Math.floor(full.length * frac)));

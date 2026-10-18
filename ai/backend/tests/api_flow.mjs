@@ -1,7 +1,35 @@
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
 const ADMIN = process.env.ADMIN_EMAIL ?? "admin@test.ir";
+const START = Number(process.env.START_SECONDS ?? 120);
 const DASHES = new RegExp(`[${String.fromCodePoint(0x2013, 0x2014)}]`);
+
+function sse(raw) {
+  const events = raw
+    .split("\n\n")
+    .map((b) => b.trim())
+    .filter((b) => b.startsWith("data: "))
+    .map((b) => b.slice(6));
+  const chunks = [];
+  let broken = 0;
+  for (const e of events) {
+    if (e === "[DONE]") continue;
+    try {
+      chunks.push(JSON.parse(e));
+    } catch {
+      broken += 1;
+    }
+  }
+  return {
+    events,
+    chunks,
+    broken,
+    ended: events.at(-1) === "[DONE]",
+    finish: chunks.flatMap((c) => c.choices?.map((ch) => ch.finish_reason) ?? []).filter(Boolean),
+    text: chunks.map((c) => c.choices?.[0]?.delta?.content ?? "").join(""),
+    error: chunks.find((c) => c.error)?.error,
+  };
+}
 
 let passed = 0;
 const failures = [];
@@ -94,7 +122,41 @@ console.log("engine never starts");
 const t0 = Date.now();
 const never = await chat(key, { model: "salam", messages: [{ role: "user", content: "never start" }] });
 const neverBody = await never.text();
-check("a turn the engine never starts fails within a minute", Date.now() - t0 < 70000 && neverBody.includes("engine_failed"), `${Date.now() - t0} ms ${neverBody.slice(-200)}`);
+check("a turn the engine never starts fails soon after the start limit", Date.now() - t0 < (START + 25) * 1000 && neverBody.includes("engine_failed"), `${Date.now() - t0} ms ${neverBody.slice(-200)}`);
+
+console.log("agent clients");
+const agentSession = await account("agent@test.ir", "Agent");
+const agentKey = (await api("POST", "/keys", agentSession, { name: "agent-bot" })).json.secret;
+const cut = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "fail midway please" }] });
+const cutSse = sse(await cut.text());
+check("an engine failure half way still closes the stream", cut.status === 200 && cutSse.broken === 0 && cutSse.ended && cutSse.finish.length === 1, cutSse.events.slice(-3));
+check("the half answer arrives and is marked as cut off", cutSse.text.startsWith("Echo: fail midway") && cutSse.finish[0] === "length", `${cutSse.finish} ${cutSse.text.slice(0, 80)}`);
+const deadStream = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "never start" }] });
+const deadSse = sse(await deadStream.text());
+check("a turn the engine never starts closes the stream with an error and a finish reason", deadStream.status === 200 && deadSse.ended && deadSse.error?.code === "engine_failed" && deadSse.finish.length === 1, deadSse.events.slice(-3));
+const noCheck = await chat(agentKey, { model: "salam", stream: true, messages: [{ role: "user", content: "bad code please" }] });
+const noCheckSse = sse(await noCheck.text());
+check("a streamed answer is never rewritten under the client, so no text is taken back", noCheckSse.ended && noCheckSse.finish[0] === "stop" && noCheckSse.text.startsWith("Here:") && !noCheckSse.text.includes("Fixed ("), noCheckSse.text.slice(0, 80));
+const versioned = await fetch(`${V1}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${agentKey}` }, body: JSON.stringify({ model: "salam", messages: [{ role: "user", content: "with a version prefix" }] }) });
+const versionedJson = await versioned.json();
+check("a base URL that already ends in /v1 works", versioned.status === 200 && versionedJson.choices?.[0]?.message?.content?.startsWith("Echo:"), versionedJson);
+const versionedModels = await fetch(`${V1}/v1/models`);
+check("/v1/models works too", versionedModels.status === 200 && (await versionedModels.json()).data[0].id === "salam");
+
+console.log("long conversations");
+const turns = [];
+for (let i = 0; i < 50; i += 1) turns.push({ role: i % 2 ? "assistant" : "user", content: `step ${i}: ${"x".repeat(3000)}` });
+const long = await chat(agentKey, { model: "salam", messages: [{ role: "system", content: `agent rules ${"y".repeat(40000)}` }, ...turns, { role: "user", content: "what now?" }] });
+const longJson = await long.json();
+check("a conversation and a system prompt past 64 KB are answered", long.status === 200 && longJson.choices?.[0]?.message?.content?.startsWith("Echo:"), longJson.error ?? longJson.choices?.[0]?.message?.content?.slice(0, 80));
+const longLog = (await api("GET", "/keys/requests", agentSession)).json.requests[0];
+check("the whole system prompt reaches the engine", longLog.prompt_chars > 180000 && longLog.prompt.includes("y".repeat(20000)), longLog.prompt_chars);
+const huge = [];
+for (let i = 0; i < 40; i += 1) huge.push({ role: i % 2 ? "assistant" : "user", content: `old ${i}: ${"z".repeat(30000)}` });
+const trimmed = await chat(agentKey, { model: "salam", messages: [...huge, { role: "user", content: "the newest question" }] });
+check("a conversation past the limit drops its oldest turns instead of failing", trimmed.status === 200, await trimmed.text());
+const trimmedLog = (await api("GET", "/keys/requests", agentSession)).json.requests[0];
+check("the newest turns survive the trim and the client is told", trimmedLog.prompt.includes("Earlier messages were left out") && trimmedLog.prompt_chars <= 1048576, trimmedLog.prompt_chars);
 
 console.log("usage");
 const um = await chat(key, { model: "salam", messages: [{ role: "user", content: "usage please" }] });

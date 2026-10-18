@@ -32,7 +32,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters                                               | empty (both endpoints refuse every call)        |
 | `AI_API_HOURLY`                              | requests per hour each account may send to the API                                                                                      | `100`                                           |
 | `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `900`                                           |
-| `AI_API_START_SECONDS`                       | how long to wait for the engine to pick an API request up before giving up                                                              | `120`                                           |
+| `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `120`                                           |
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 

@@ -1,0 +1,258 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package audio
+
+import compress
+
+@en "BitIn"
+@fa "خواننده بیت"
+pub struct BitIn:
+    pub data: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub acc: i64 = 0
+    pub nbits: int = 0
+    pub bad: bool = false
+end
+
+@en "BitOut"
+@fa "نویسنده بیت"
+pub struct BitOut:
+    pub buf: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    pub acc: i64 = 0
+    pub nbits: int = 0
+end
+
+func _mask(n: int): i64:
+    if n <= 0:
+        ret 0
+    end
+    if n >= 63:
+        ret -1
+    end
+    ret ((1 as i64) << n) - 1
+end
+
+func _fill(r &: BitIn, count: int):
+    until r.nbits < count:
+        if r.pos >= r.len:
+            r.bad = true
+            r.acc = r.acc << 8
+            r.nbits += 8
+        else:
+            bp := r.data as u8*
+            r.acc = (r.acc << 8) | (bp[r.pos] as i64)
+            r.pos += 1
+            r.nbits += 8
+        end
+    end
+end
+
+@en "NewBitIn"
+@fa "خواننده بیت جدید"
+pub func NewBitIn(p: void*, n: int): BitIn:
+    ret BitIn { data = p, len = n }
+end
+
+@en "BitInFromBuf"
+@fa "خواننده بیت از بافر"
+pub func BitInFromBuf(b: compress.ByteBuf): BitIn:
+    ret NewBitIn(b.data, b.len)
+end
+
+@en "BitInReadI64"
+@fa "خواندن بیت‌ها بزرگ"
+pub func BitInReadI64(r &: BitIn, count: int): i64:
+    if count <= 0 or count > 56:
+        ret 0
+    end
+    _fill(r, count)
+    left := r.nbits - count
+    v := (r.acc >> left) & _mask(count)
+    r.nbits = left
+    r.acc = r.acc & _mask(left)
+    ret v
+end
+
+@en "BitInRead"
+@fa "خواندن بیت‌ها"
+pub func BitInRead(r &: BitIn, count: int): int:
+    if count <= 0 or count > 32:
+        ret 0
+    end
+    ret BitInReadI64(r, count) as int
+end
+
+@en "BitInReadBit"
+@fa "خواندن بیت"
+pub func BitInReadBit(r &: BitIn): int:
+    ret BitInRead(r, 1)
+end
+
+@en "BitInReadSigned"
+@fa "خواندن بیت‌ها علامتدار"
+pub func BitInReadSigned(r &: BitIn, count: int): int:
+    if count <= 0 or count > 32:
+        ret 0
+    end
+    v := BitInReadI64(r, count)
+    top := (1 as i64) << (count - 1)
+    if (v & top) != 0:
+        ret (v - ((1 as i64) << count)) as int
+    end
+    ret v as int
+end
+
+@en "BitInUnary"
+@fa "خواندن یکانی"
+pub func BitInUnary(r &: BitIn): int:
+    mut n := 0
+    until not r.bad:
+        if BitInReadBit(r) == 1:
+            break
+        end
+        n += 1
+        if n > 1000000:
+            r.bad = true
+            break
+        end
+    end
+    ret n
+end
+
+@en "BitInSkip"
+@fa "پرش بیت"
+pub func BitInSkip(r &: BitIn, count: int):
+    mut left := count
+    until left > 0:
+        take := left > 32 ? 32 : left
+        BitInReadI64(r, take)
+        left -= take
+    end
+end
+
+@en "BitInAlign"
+@fa "همتراز کردن خواننده"
+pub func BitInAlign(r &: BitIn):
+    drop := r.nbits % 8
+    if drop > 0:
+        BitInReadI64(r, drop)
+    end
+    r.acc = 0
+    r.nbits = 0
+end
+
+@en "BitInTell"
+@fa "جای خواننده"
+pub func BitInTell(r: BitIn): int:
+    ret r.pos * 8 - r.nbits
+end
+
+@en "BitInSeek"
+@fa "جویدن خواننده"
+pub func BitInSeek(r &: BitIn, bitpos: int):
+    if bitpos < 0:
+        ret
+    end
+    r.pos = bitpos / 8
+    r.acc = 0
+    r.nbits = 0
+    r.bad = false
+    rem := bitpos % 8
+    if rem > 0:
+        BitInReadI64(r, rem)
+    end
+end
+
+@en "BitInLeft"
+@fa "باقیمانده خواننده"
+pub func BitInLeft(r: BitIn): int:
+    ret (r.len - r.pos) * 8 + r.nbits
+end
+
+@en "BitInBad"
+@fa "خواننده خراب"
+pub func BitInBad(r: BitIn): bool:
+    ret r.bad
+end
+
+@en "NewBitOut"
+@fa "نویسنده بیت جدید"
+pub func NewBitOut(): BitOut:
+    ret BitOut { buf = compress.NewByteBuf() }
+end
+
+@en "BitOutWrite"
+@fa "نوشتن بیت‌ها"
+pub func BitOutWrite(w &: BitOut, value: i64, count: int):
+    if count <= 0 or count > 56:
+        ret
+    end
+    w.acc = (w.acc << count) | (value & _mask(count))
+    w.nbits += count
+    until w.nbits >= 8:
+        b := (w.acc >> (w.nbits - 8)) & 255
+        compress.BufPush(w.buf, b as int)
+        w.nbits -= 8
+        w.acc = w.acc & _mask(w.nbits)
+    end
+end
+
+@en "BitOutWriteBit"
+@fa "نوشتن بیت"
+pub func BitOutWriteBit(w &: BitOut, bit: int):
+    BitOutWrite(w, bit as i64, 1)
+end
+
+@en "BitOutWriteUnary"
+@fa "نوشتن یکانی"
+pub func BitOutWriteUnary(w &: BitOut, n: int):
+    mut i := 0
+    until i < n:
+        BitOutWriteBit(w, 0)
+        i += 1
+    end
+    BitOutWriteBit(w, 1)
+end
+
+@en "BitOutAlign"
+@fa "همتراز کردن نویسنده"
+pub func BitOutAlign(w &: BitOut):
+    if w.nbits > 0:
+        pad := 8 - w.nbits
+        BitOutWrite(w, 0, pad)
+    end
+end
+
+@en "BitOutLen"
+@fa "طول نویسنده"
+pub func BitOutLen(w &: BitOut): int:
+    ret compress.BufLen(w.buf)
+end
+
+@en "BitOutFinish"
+@fa "پایان نویسنده"
+pub func BitOutFinish(w &: BitOut): compress.ByteBuf:
+    BitOutAlign(w)
+    ret w.buf
+end
+
+@en "BitOutFree"
+@fa "آزادسازی نویسنده"
+pub func BitOutFree(w &: BitOut):
+    compress.BufFree(w.buf)
+    w.acc = 0
+    w.nbits = 0
+end

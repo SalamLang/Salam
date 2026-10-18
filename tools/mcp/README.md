@@ -158,18 +158,20 @@ workspace and looks for `std/` next to the compiler, so point
 
 With `--http` the server also reads:
 
-| Variable                  | Default                        | Purpose                                                                                                                                    |
-| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SALAM_MCP_HOST`          | `0.0.0.0`                      | Address to listen on                                                                                                                       |
-| `SALAM_MCP_PORT`          | `8080`                         | Port to listen on                                                                                                                          |
-| `SALAM_MCP_JOBS`          | `4`                            | Compiler processes allowed at once; extra calls wait                                                                                       |
-| `SALAM_MCP_TIMEOUT`       | `180`                          | Seconds before a compiler process is killed                                                                                                |
-| `SALAM_MCP_ORIGINS`       | empty                          | Comma separated browser origins to allow; empty allows all                                                                                 |
-| `SALAM_MCP_AUTH_URL`      | empty                          | Base URL of the authorization server's API; setting it turns sign-in on                                                                    |
-| `SALAM_MCP_AUTH_SECRET`   | empty                          | Shared secret for token introspection and activity reports                                                                                 |
-| `SALAM_MCP_ISSUER`        | `https://ai-api.salamlang.ir`  | Issuer listed in the protected resource metadata                                                                                           |
-| `SALAM_MCP_RESOURCES`     | `https://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them                                                                         |
-| `SALAM_MCP_SERVICE_TOKEN` | empty                          | A bearer token (32 characters or more) for a trusted internal caller such as the Salam AI assistant; its calls are reported as the service |
+| Variable                   | Default                        | Purpose                                                                                                                                    |
+| -------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SALAM_MCP_HOST`           | `0.0.0.0`                      | Address to listen on                                                                                                                       |
+| `SALAM_MCP_PORT`           | `8080`                         | Port to listen on                                                                                                                          |
+| `SALAM_MCP_JOBS`           | `4`                            | Compiler processes allowed at once; extra calls wait                                                                                       |
+| `SALAM_MCP_TIMEOUT`        | `600`                          | Seconds before a compiler process is killed                                                                                                |
+| `SALAM_MCP_MEMORY_SOFT_MB` | `1500`                         | Restart to give memory back above this, once no call is in flight                                                                          |
+| `SALAM_MCP_MEMORY_HARD_MB` | `3200`                         | Restart above this even with calls in flight                                                                                               |
+| `SALAM_MCP_ORIGINS`        | empty                          | Comma separated browser origins to allow; empty allows all                                                                                 |
+| `SALAM_MCP_AUTH_URL`       | empty                          | Base URL of the authorization server's API; setting it turns sign-in on                                                                    |
+| `SALAM_MCP_AUTH_SECRET`    | empty                          | Shared secret for token introspection and activity reports                                                                                 |
+| `SALAM_MCP_ISSUER`         | `https://ai-api.salamlang.ir`  | Issuer listed in the protected resource metadata                                                                                           |
+| `SALAM_MCP_RESOURCES`      | `https://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them                                                                         |
+| `SALAM_MCP_SERVICE_TOKEN`  | empty                          | A bearer token (32 characters or more) for a trusted internal caller such as the Salam AI assistant; its calls are reported as the service |
 
 ### 🔑 Sign-in
 

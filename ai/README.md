@@ -30,7 +30,11 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_APP_URL`                                 | the web app, where people sign in and approve apps                                                                                      | `https://ai.salamlang.ir`                       |
 | `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                                                                | `https://mcp.salamlang.ir/mcp`                  |
 | `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters                                               | empty (both endpoints refuse every call)        |
-| `AI_API_HOURLY`                              | requests per hour each account may send to the API                                                                                      | `100`                                           |
+| `AI_API_HOURLY`                              | API requests per hour on the free plan                                                                                                  | `100`                                           |
+| `AI_CHAT_HOURLY`                             | chat messages per hour on the free plan                                                                                                 | `60`                                            |
+| `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`  | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                           | empty                                           |
+| `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`          | where those gateways live, for a sandbox or the test mock                                                                               | the real gateways                               |
+| `AI_BILLING_CALLBACK`                        | the public URL of this API, where the gateway sends the browser back                                                                    | `AI_OAUTH_ISSUER`                               |
 | `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `900`                                           |
 | `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `120`                                           |
 
@@ -38,18 +42,24 @@ The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, a
 
 The API:
 
-| Method and path                                                                                | Purpose                                                                               |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                      |
-| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                              |
-| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                   |
-| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                                    |
-| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                   |
-| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`      |
-| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                         |
-| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs |
-| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls        |
-| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                 |
+| Method and path                                                                                | Purpose                                                                                                     |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                                            |
+| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                                                    |
+| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                                         |
+| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                                                          |
+| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                                         |
+| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                            |
+| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                               |
+| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                       |
+| `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                        |
+| `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                       |
+| `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                      |
+| `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                  |
+| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                              |
+| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                       |
+| `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back |
+| `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                 |
 
 ### OpenAI-compatible API
 
@@ -106,6 +116,41 @@ reply = client.chat.completions.create(
 
 `HOURLY=<AI_API_HOURLY> node ai/backend/tests/api_flow.mjs` tests it against a running API, with
 `ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.
+
+### Plans and payments
+
+Four plans, defined in one table in `billing.salam`:
+
+| Plan    | Price            | Lasts   | Chat                     | API                     | In flight |
+| ------- | ---------------- | ------- | ------------------------ | ----------------------- | --------- |
+| رایگان  | free             | forever | `AI_CHAT_HOURLY` an hour | `AI_API_HOURLY` an hour | 4         |
+| پلاس    | 1,000,000 toman  | 30 days | 300 an hour              | 500 an hour             | 8         |
+| حرفه‌ای | 2,000,000 toman  | 30 days | 1000 an hour             | 2000 an hour            | 16        |
+| نامحدود | 10,000,000 toman | forever | no limit                 | no limit                | no limit  |
+
+- The free plan keeps the limits the service had before plans existed, so nothing
+  an account could do yesterday is refused today. The paid plans only add room,
+  and the unlimited plan removes every limit, including the expiry date.
+- An account with no row in `subscriptions` is on the free plan, so nothing has
+  to be created when someone signs up.
+- Buying the same plan again adds its days to what is left instead of throwing
+  them away. An account that already has the unlimited plan is not asked to buy
+  anything.
+- `subscriptions` keeps every plan an account ever had (`active`, `replaced`,
+  `canceled`), with where it came from (`payment` or `admin`), who gave it and
+  why. `payments` keeps every attempt, paid or not, with the gateway's reference
+  and the masked card.
+- Prices are in toman and sent to the gateways in rial. Zarinpal is called at
+  `/pg/v4/payment/request.json` and `/pg/v4/payment/verify.json`, zibal at
+  `/v1/request` and `/v1/verify`. Both are verified server-side before the plan
+  is activated, the paid amount is checked against the plan's price, and coming
+  back to the callback twice never buys twice.
+- An admin can give any plan away for free from the admin page, with an optional
+  number of days and a note, and can take it back.
+
+`node ai/backend/tests/billing_flow.mjs` tests the whole thing against a running
+API with `ai/backend/tests/gateway_mock.mjs` standing in for both gateways
+(`AI_ZARINPAL_BASE` and `AI_ZIBAL_BASE` point at it).
 
 ### Sign in with Salam (OAuth 2.1)
 

@@ -41,6 +41,58 @@ export type ToolStep = {
 };
 export type ActivityStep = ThinkStep | ToolStep;
 
+export type PlanId = "free" | "plus" | "pro" | "unlimited";
+export type Plan = {
+  id: PlanId;
+  name: string;
+  note: string;
+  price: number;
+  days: number;
+  api_hourly: number;
+  chat_hourly: number;
+  parallel: number;
+};
+export type Gateway = "zarinpal" | "zibal";
+export type Subscription = {
+  plan: Plan;
+  status: string;
+  source: string;
+  started: number;
+  expires: number;
+  api_used: number;
+  chat_used: number;
+};
+export type Payment = {
+  id: number;
+  user_id: number;
+  plan: PlanId;
+  plan_name: string;
+  gateway: Gateway;
+  amount: number;
+  status: "pending" | "verifying" | "paid" | "failed" | "canceled";
+  token: string;
+  ref: string;
+  card: string;
+  message: string;
+  created: number;
+  paid: number;
+  user?: { id: number; name: string; email: string };
+};
+export type AdminSubscription = {
+  id: number;
+  user_id: number;
+  plan: PlanId;
+  plan_name: string;
+  status: string;
+  source: string;
+  started: number;
+  expires: number;
+  price: number;
+  note: string;
+  payment_id: number;
+  user?: { id: number; name: string; email: string };
+};
+
 export type ClientKind = "cimd" | "dcr";
 export type OAuthClient = {
   id?: string;
@@ -447,6 +499,44 @@ export const api = {
     call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user, before })}`),
   adminRevokeApp: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/apps/${id}`),
+  plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
+  subscription: () =>
+    call<{ subscription: Subscription }>("GET", "/billing/subscription"),
+  checkout: (plan: PlanId, gateway: Gateway) =>
+    call<{ payment_id: number; gateway: Gateway; amount: number; url: string }>(
+      "POST",
+      "/billing/checkout",
+      { plan, gateway },
+    ),
+  payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
+  adminSubscriptions: (latest?: boolean, user?: number) =>
+    call<{
+      subscriptions: AdminSubscription[];
+      active: number;
+      income: number;
+    }>(
+      "GET",
+      `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user })}`,
+    ),
+  adminGrant: (body: {
+    email?: string;
+    user_id?: number;
+    plan: PlanId;
+    days?: number;
+    note?: string;
+  }) =>
+    call<{ subscription_id: number; plan: PlanId }>(
+      "POST",
+      "/admin/subscriptions",
+      body,
+    ),
+  adminCancelSubscription: (id: number) =>
+    call<{ ok: boolean }>("DELETE", `/admin/subscriptions/${id}`),
+  adminPayments: (f: { status?: string; user?: number; before?: number }) =>
+    call<{ payments: Payment[]; income: number }>(
+      "GET",
+      `/admin/payments${query({ status: f.status, user: f.user, before: f.before })}`,
+    ),
   keys: () => call<{ keys: ApiKey[] }>("GET", "/keys"),
   createKey: (name: string) =>
     call<{ key: ApiKey; secret: string }>("POST", "/keys", { name }),

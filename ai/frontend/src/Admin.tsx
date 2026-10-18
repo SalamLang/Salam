@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconClose, IconSearch, IconShield } from "./icons";
@@ -721,6 +721,318 @@ function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) 
   );
 }
 
+const PLAN_LABELS: { id: PlanId; label: string }[] = [
+  { id: "free", label: "رایگان" },
+  { id: "plus", label: "پلاس" },
+  { id: "pro", label: "حرفه‌ای" },
+  { id: "unlimited", label: "نامحدود" },
+];
+
+const PAY_WORDS: Record<Payment["status"], string> = {
+  pending: "در انتظار",
+  verifying: "در حال تایید",
+  paid: "پرداخت شده",
+  failed: "ناموفق",
+  canceled: "لغو شده",
+};
+
+const GATEWAY_WORDS: Record<string, string> = { zarinpal: "زرین‌پال", zibal: "زیبال" };
+
+function toman(n: number): string {
+  return `${fmtNum(n)} تومان`;
+}
+
+function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+  const [rows, setRows] = useState<AdminSubscription[] | null>(null);
+  const [active, setActive] = useState(0);
+  const [income, setIncome] = useState(0);
+  const [latest, setLatest] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<number | null>(null);
+  const [email, setEmail] = useState("");
+  const [plan, setPlan] = useState<PlanId>("pro");
+  const [days, setDays] = useState("");
+  const [note, setNote] = useState("");
+  const [granting, setGranting] = useState(false);
+
+  const load = useCallback(async () => {
+    setError("");
+    setRows(null);
+    try {
+      const r = await api.adminSubscriptions(latest, picked?.id);
+      setRows(r.subscriptions);
+      setActive(r.active);
+      setIncome(r.income);
+    } catch (e) {
+      setError(errText(e, "بارگذاری اشتراک‌ها ناموفق بود."));
+    }
+  }, [latest, picked]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const grant = async (e: FormEvent) => {
+    e.preventDefault();
+    const who = email.trim();
+    if (!who) return;
+    setGranting(true);
+    try {
+      await api.adminGrant({ email: who, plan, days: days.trim() ? Number(days) : undefined, note: note.trim() || undefined });
+      notify("اشتراک داده شد.");
+      setEmail("");
+      setNote("");
+      setDays("");
+      await load();
+    } catch (err) {
+      notify(errText(err, "دادن اشتراک ناموفق بود."));
+    } finally {
+      setGranting(false);
+    }
+  };
+
+  const cancel = async (row: AdminSubscription) => {
+    const ok = await confirmDialog({
+      title: "لغو اشتراک",
+      subject: row.user?.email ?? row.plan_name,
+      message: (
+        <>
+          اشتراک <Subject>{row.plan_name}</Subject> این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.
+        </>
+      ),
+      confirmLabel: "لغو اشتراک",
+      icon: "alert",
+    });
+    if (!ok) return;
+    setBusy(row.id);
+    try {
+      await api.adminCancelSubscription(row.id);
+      notify("اشتراک لغو شد.");
+      await load();
+    } catch (e) {
+      notify(errText(e, "لغو اشتراک ناموفق بود."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>اشتراک‌ها{picked ? " این کاربر" : ""}</h3>
+        <Segmented
+          label="نما"
+          options={[
+            { id: "active", label: `فعال (${fmtNum(active)})` },
+            { id: "latest", label: "آخرین اشتراک هر کاربر" },
+          ]}
+          value={latest ? "latest" : "active"}
+          onChange={(v) => setLatest(v === "latest")}
+        />
+      </div>
+      <form className="grant-form" onSubmit={grant}>
+        <label>
+          ایمیل کاربر
+          <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" required />
+        </label>
+        <label>
+          پلن
+          <select value={plan} onChange={(e) => setPlan(e.target.value as PlanId)}>
+            {PLAN_LABELS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          روز (اختیاری)
+          <input type="number" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder="پیش‌فرض پلن" />
+        </label>
+        <label>
+          یادداشت
+          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="چرا رایگان داده شد" />
+        </label>
+        <button type="submit" className="primary" disabled={granting}>
+          {granting ? "در حال ثبت..." : "دادن اشتراک رایگان"}
+        </button>
+      </form>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {rows === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <div className="table-wrap scroll-y">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">کاربر</th>
+                <th scope="col">پلن</th>
+                <th scope="col">از</th>
+                <th scope="col">تا</th>
+                <th scope="col">راه</th>
+                <th scope="col">مبلغ</th>
+                <th scope="col">وضعیت</th>
+                <th scope="col">یادداشت</th>
+                <th scope="col">
+                  <span className="sr-only">کارها</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows?.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <bdi>{r.user?.name}</bdi>
+                    <span className="cell-sub" dir="ltr">
+                      {r.user?.email}
+                    </span>
+                  </td>
+                  <td>{r.plan_name}</td>
+                  <td>{fmtDate(r.started)}</td>
+                  <td>{r.expires === 0 ? "بدون پایان" : fmtDate(r.expires)}</td>
+                  <td>{r.source === "admin" ? "هدیه‌ی مدیر" : "پرداخت"}</td>
+                  <td>{r.price === 0 ? "-" : toman(r.price)}</td>
+                  <td>
+                    <span className={`badge ${r.status === "active" ? "ok" : ""}`}>{r.status === "active" ? "فعال" : r.status === "canceled" ? "لغو شده" : "جایگزین شده"}</span>
+                  </td>
+                  <td>
+                    <bdi>{r.note}</bdi>
+                  </td>
+                  <td>
+                    {r.status === "active" && (
+                      <button type="button" className="link danger" disabled={busy === r.id} onClick={() => void cancel(r)}>
+                        لغو
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {rows?.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="muted">
+                    هنوز اشتراکی ثبت نشده است.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="panel-foot muted">مجموع پرداخت‌های موفق: {toman(income)}</div>
+    </section>
+  );
+}
+
+function Payments({ picked }: { picked: Picked }) {
+  const [rows, setRows] = useState<Payment[] | null>(null);
+  const [income, setIncome] = useState(0);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setRows(null);
+    setError("");
+    api
+      .adminPayments({ status: status || undefined, user: picked?.id })
+      .then((r) => {
+        if (!live) return;
+        setRows(r.payments);
+        setIncome(r.income);
+      })
+      .catch((e) => live && setError(errText(e, "بارگذاری پرداخت‌ها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [status, picked]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>پرداخت‌ها{picked ? " این کاربر" : ""}</h3>
+        <Segmented
+          label="وضعیت"
+          options={[
+            { id: "", label: "همه" },
+            { id: "paid", label: "پرداخت شده" },
+            { id: "pending", label: "در انتظار" },
+            { id: "failed", label: "ناموفق" },
+            { id: "canceled", label: "لغو شده" },
+          ]}
+          value={status}
+          onChange={setStatus}
+        />
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {rows === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <div className="table-wrap scroll-y">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">کاربر</th>
+                <th scope="col">پلن</th>
+                <th scope="col">مبلغ</th>
+                <th scope="col">درگاه</th>
+                <th scope="col">وضعیت</th>
+                <th scope="col">کد پیگیری</th>
+                <th scope="col">کارت</th>
+                <th scope="col">زمان</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows?.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <bdi>{r.user?.name}</bdi>
+                    <span className="cell-sub" dir="ltr">
+                      {r.user?.email}
+                    </span>
+                  </td>
+                  <td>{r.plan_name}</td>
+                  <td>{toman(r.amount)}</td>
+                  <td>{GATEWAY_WORDS[r.gateway] ?? r.gateway}</td>
+                  <td>
+                    <span className={`badge ${r.status === "paid" ? "ok" : r.status === "pending" || r.status === "verifying" ? "pending" : "danger"}`} title={r.message}>
+                      {PAY_WORDS[r.status]}
+                    </span>
+                  </td>
+                  <td dir="ltr">{r.ref || "-"}</td>
+                  <td dir="ltr">{r.card || "-"}</td>
+                  <td>{fmtDateTime(r.paid > 0 ? r.paid : r.created)}</td>
+                </tr>
+              ))}
+              {rows?.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="muted">
+                    پرداختی با این فیلتر نیست.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="panel-foot muted">مجموع پرداخت‌های موفق: {toman(income)}</div>
+    </section>
+  );
+}
+
 function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
@@ -977,6 +1289,8 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
               </button>
             </div>
           )}
+          <Subscriptions picked={picked} notify={notify} />
+          <Payments picked={picked} />
           <Events picked={picked} onPick={setPicked} />
           <RequestsFeed picked={picked} onPick={setPicked} />
           <AppsTable picked={picked} notify={notify} />

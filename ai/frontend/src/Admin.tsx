@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
-import { IconClose, IconSearch, IconShield } from "./icons";
+import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 
@@ -819,43 +819,62 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>اشتراک‌ها{picked ? " این کاربر" : ""}</h3>
+        <div className="panel-title">
+          <h3>اشتراک‌ها{picked ? " این کاربر" : ""}</h3>
+          {!picked && active > 0 && <span className="badge ok">{fmtNum(active)} اشتراک فعال</span>}
+        </div>
         <Segmented
           label="نما"
           options={[
-            { id: "active", label: `فعال (${fmtNum(active)})` },
+            { id: "active", label: "فعال" },
             { id: "latest", label: "آخرین اشتراک هر کاربر" },
           ]}
           value={latest ? "latest" : "active"}
           onChange={(v) => setLatest(v === "latest")}
         />
       </div>
-      <form className="grant-form" onSubmit={grant}>
-        <label>
-          ایمیل کاربر
-          <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" required />
-        </label>
-        <label>
-          پلن
-          <select value={plan} onChange={(e) => setPlan(e.target.value as PlanId)}>
-            {PLAN_LABELS.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          روز (اختیاری)
-          <input type="number" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder="پیش‌فرض پلن" />
-        </label>
-        <label>
-          یادداشت
-          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="چرا رایگان داده شد" />
-        </label>
-        <button type="submit" className="primary" disabled={granting}>
-          {granting ? "در حال ثبت..." : "دادن اشتراک رایگان"}
-        </button>
+      <form className="grant" onSubmit={grant}>
+        <div className="grant-head">
+          <h4>دادن اشتراک رایگان</h4>
+          <p className="muted">اشتراک فعال کاربر جایگزین می‌شود و اگر همین پلن را داشته باشد، به مدت باقی‌مانده‌اش اضافه می‌شود.</p>
+        </div>
+        <div className="grant-grid">
+          <label className="grant-field">
+            <span>ایمیل کاربر</span>
+            <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" required />
+          </label>
+          <label className="grant-field">
+            <span>پلن</span>
+            <div className="select">
+              <select value={plan} onChange={(e) => setPlan(e.target.value as PlanId)}>
+                {PLAN_LABELS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <IconChevronDown width={16} height={16} />
+            </div>
+          </label>
+          <label className="grant-field">
+            <span>
+              تعداد روز <span className="opt">اختیاری</span>
+            </span>
+            <input type="number" inputMode="numeric" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder="پیش‌فرض پلن" />
+          </label>
+          <label className="grant-field">
+            <span>
+              یادداشت <span className="opt">اختیاری</span>
+            </span>
+            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="چرا رایگان داده شد" />
+          </label>
+        </div>
+        <div className="grant-actions">
+          <button type="submit" className="button primary grant-go" disabled={granting}>
+            {granting ? <span className="spinner" /> : <IconBadgeCheck width={18} height={18} />}
+            دادن اشتراک
+          </button>
+        </div>
       </form>
       {error && (
         <div className="form-error" role="alert">

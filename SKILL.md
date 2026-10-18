@@ -208,6 +208,8 @@ repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direc
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
 each x in xs:  println x  end         // iterate a collection/array
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
+each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
+each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
 // break: exit the innermost loop (or switch, see below); break N: exit N levels;  continue: next iteration
 ```
 
@@ -352,8 +354,17 @@ bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
 `sizeof(T)` returns `usize`.
 **Integer bases:** decimal `255`, hex `0xFF`, binary `0b1010`, octal `0o17` (all
 verified). **`str` is UTF-8 bytes**: `str.Len(s)` is the byte count,
-`str.CharCount(s)` the codepoint count; iterate codepoints with `str.Chars(s)` /
-`str.CharAt(s, i)`, classify with `str.IsDigit(code)` etc.
+`str.CharCount(s)` the codepoint count; classify with `str.IsDigit(code)` etc.
+Iterate a string with `each`: `each ch in s` gives each code point as a `str`
+(`"س"`, `"👋"`), `each i, ch in s` adds the character number `i` (0, 1, 2, ...,
+the same index `s.char_at(i)` takes), and `each b in s.bytes()` /
+`each i, b in s.bytes()` walk the raw bytes as `char` with the byte index. It is
+one linear pass, so prefer it over `repeat s.char_count() in i: s.char_at(i)`,
+which rescans from the start on every step. Invalid UTF-8 bytes come out one
+byte at a time, so joining every `ch` gives back the original string. A
+character is a code point, not a grapheme cluster: `"👋🏽"` is two steps; use
+`str.Graphemes(s)` for user-perceived characters. `s.bytes()` is only valid as
+the target of `each` (E065 otherwise); read single bytes with `s[i]`.
 
 **String/char literal forms** (values go into text with a ` ``` ` text block and
 `${{ expr }}`, see below, or with `+` and `fmt.Sprintf`):
@@ -2616,6 +2627,7 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `char_find` | `بیاب نویسه`  | `starts_with` | `شروع با`       |
 | `ends_with` | `ختم با`      | `includes`    | `دربردارد`      |
 | `copy`      | `رونوشت`      | `deep_copy`   | `رونوشت عمیق`   |
+| `bytes`     | `بایت ها`     |               |                 |
 
 The free built-in `len(x)` (arrays, slices and `str` only) is spelled
 `طول(x)` in a Persian file: `len(x)` there is error E001 ("identifier must

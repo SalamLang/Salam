@@ -894,7 +894,9 @@ func serve_stream(c: tcp.Conn):
         mut whole := false
         tcp.SetReadDeadline(c, BODY_MS)
         if str.Lower(headers.has("expect") ? headers.get("expect") : "") == "100-continue":
-            _c := wr_all(c, "HTTP/1.1 100 Continue\r\n\r\n")
+            if not wr_all(c, "HTTP/1.1 100 Continue\r\n\r\n"):
+                ret
+            end
         end
         body := read_body(c, req.substr(head_end, req.len() - head_end), want, whole)
         if not whole:
@@ -995,7 +997,6 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
             _d := send_event(c, "done", "{" + json.Member("body", r.text) + ", " + json.Member("status", final) + ", " + json.MemberRaw("activity", activity_raw(r.activity)) + ", " + json.MemberRaw("ms", i64s(took)) + "}")
             ret
         end
-        mut ok := true
         sent_before := sent
         phase_before := phase_sent
         activity_before := activity_sent
@@ -1003,7 +1004,9 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
             steps_now := r.activity.split("\"kind\"").len()
             now_ms := time.NowMillis()
             if steps_now != activity_steps or now_ms - activity_at >= 300:
-                ok = send_event(c, "activity", "{" + json.MemberRaw("steps", activity_raw(r.activity)) + "}")
+                if not send_event(c, "activity", "{" + json.MemberRaw("steps", activity_raw(r.activity)) + "}"):
+                    ret
+                end
                 activity_sent = r.activity
                 activity_steps = steps_now
                 activity_at = now_ms
@@ -1011,17 +1014,23 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
         end
         if r.text != sent:
             if str.StartsWith(r.text, sent):
-                ok = send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len())))
+                if not send_event(c, "delta", text_event(r.text.substr(sent.len(), r.text.len() - sent.len()))):
+                    ret
+                end
             else:
-                ok = send_event(c, "reset", text_event(r.text))
+                if not send_event(c, "reset", text_event(r.text)):
+                    ret
+                end
             end
             sent = r.text
         end
-        if ok and r.phase != phase_sent:
-            ok = send_event(c, "phase", "{" + json.Member("phase", r.phase) + "}")
+        if r.phase != phase_sent:
+            if not send_event(c, "phase", "{" + json.Member("phase", r.phase) + "}"):
+                ret
+            end
             phase_sent = r.phase
         end
-        if not ok or aistore.Now() - start > STREAM_SECONDS:
+        if aistore.Now() - start > STREAM_SECONDS:
             ret
         end
         if activity_sent != activity_before or sent != sent_before or phase_sent != phase_before:

@@ -8,6 +8,7 @@ import { Composer } from "./Composer";
 import { Connect } from "./Connect";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
+import { Plans } from "./Plans";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -32,13 +33,14 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "admin";
+type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin";
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
   if (p === "/connect") return "connect";
   if (p === "/apps") return "apps";
   if (p === "/keys") return "keys";
+  if (p === "/plans") return "plans";
   if (p === "/admin") return "admin";
   return "chat";
 }
@@ -48,6 +50,7 @@ const PAGE_TITLES: Record<Route, string> = {
   connect: "اتصال برنامه",
   apps: "برنامه‌های متصل",
   keys: "کلیدهای API",
+  plans: "اشتراک‌ها",
   admin: "مدیریت",
 };
 
@@ -443,9 +446,9 @@ export function App() {
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        {route === "apps" || route === "keys" || route === "admin" ? (
+        {route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>

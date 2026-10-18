@@ -30,20 +30,19 @@ include aiweb "web.salam"
 include aiengine "engine.salam"
 include ailive "live.salam"
 include aiturn "turn.salam"
+include aibilling "billing.salam"
 
 const MODEL := "salam"
 const MAX_PROMPT := 1048576
 const MAX_LOG := 65536
 const MAX_KEYS := 20
 const CALLER_MAX := 262144
-const PARALLEL_PER_USER := 4
 const BEAT_MS := 10000
 const WRITE_MS := 30000
 const WRITE_TRIES := 4
 const WRITE_PAUSE_MS := 50
 const DROPPED := "[Earlier messages were left out because the conversation is too long.]"
 
-mut HOURLY := 100
 mut ANSWER_LIMIT := 900 as i64
 mut START_LIMIT := 120 as i64
 mut BUSY_LOCK := sync.Mutex {}
@@ -284,14 +283,14 @@ func key_owner(raw: str, uid &: str, kid &: str, kname &: str): bool:
     ret found
 end
 
-func busy(uid: str, delta: int): bool:
+func busy(uid: str, delta: int, most: int): bool:
     _l := sync.Lock(BUSY_LOCK)
     mut have := 0
     if BUSY.has(uid):
         have = BUSY.get(uid).to_int()
     end
     mut ok := true
-    if delta > 0 and have >= PARALLEL_PER_USER:
+    if delta > 0 and most > 0 and have >= most:
         ok = false
     else:
         have = have + delta
@@ -414,12 +413,13 @@ func completions(c: tcp.Conn, h: HashMap<str, str>, body: str):
         oai_error(c, "401 Unauthorized", "invalid_request_error", "invalid_api_key", "Missing or invalid API key. Create one at https://ai.salamlang.ir/keys")
         ret
     end
-    if not busy(uid, 1):
+    limits := aibilling.LimitsOf(uid)
+    if not busy(uid, 1, limits.parallel):
         oai_error(c, "429 Too Many Requests", "rate_limit_exceeded", "too_many_parallel_requests", "Too many requests in flight for this account. Wait for one to finish.")
         ret
     end
-    answer(c, h, body, uid, kid, kname)
-    _b := busy(uid, 0 - 1)
+    answer(c, h, body, uid, kid, kname, limits)
+    _b := busy(uid, 0 - 1, limits.parallel)
 end
 
 func stable(text: str): str:
@@ -488,7 +488,7 @@ func end_stream(c: tcp.Conn, cid: str, created: i64, with_usage: bool, usage: st
     _d := wr(c, "data: [DONE]\n\n")
 end
 
-func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kname: str):
+func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kname: str, limits: aibilling.Limits):
     mut err := encerr.EncodingError {}
     req := json.Decode(body, err)
     if encerr.IsError(err) or not value.IsObject(req):
@@ -523,8 +523,8 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     aistore.Lock()
     recent := aistore.OneText("SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2", two(uid, n(t - 3600)))
     aistore.Unlock()
-    if recent.to_int() >= HOURLY:
-        oai_error(c, "429 Too Many Requests", "rate_limit_exceeded", "rate_limit_exceeded", "Hourly request limit reached. Try again later.")
+    if limits.api_hourly > 0 and recent.to_int() >= limits.api_hourly:
+        oai_error(c, "429 Too Many Requests", "rate_limit_exceeded", "rate_limit_exceeded", "Hourly request limit of the " + limits.plan + " plan reached. Try again later or move to a bigger plan at https://ai.salamlang.ir/plans")
         ret
     end
     mut a := two(uid, kid)
@@ -760,14 +760,11 @@ func own_requests(ctx: i64):
     aiweb.Reply(ctx, 200, `{"requests": ` + Requests("r.user_id = ?1 AND r.id < ?2", two(n(uid), n(before)), false) + "}")
 end
 
-pub func Configure(hourly: int, answer_seconds: int, start_seconds: int):
+pub func Configure(answer_seconds: int, start_seconds: int):
     BUSY_LOCK = sync.NewMutex()
     aistore.Lock()
     _r := aistore.Run("UPDATE api_requests SET status = 'error' WHERE status = 'pending'", Vector {} as Vector<str>)
     aistore.Unlock()
-    if hourly > 0:
-        HOURLY = hourly
-    end
     if answer_seconds > 0:
         ANSWER_LIMIT = answer_seconds as i64
     end

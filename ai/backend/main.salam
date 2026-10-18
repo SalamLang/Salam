@@ -37,12 +37,12 @@ include aiturn "turn.salam"
 include aicheck "check.salam"
 include aiopenai "openai.salam"
 include aibridge "bridge.salam"
+include aibilling "billing.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
-const HOURLY_LIMIT := 60
 const PENDING_SECONDS := 600
 const STREAM_WORKERS := 128
 const BRIDGE_SLOTS := 48
@@ -98,7 +98,8 @@ func main:
         println "salam-ai checks code blocks with", env_or("AI_SALAM_BIN", "/srv/salam/salam")
     end
     STREAM_LOCK = sync.NewMutex()
-    aiopenai.Configure(env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_API_ANSWER_SECONDS", "900").to_int(), env_or("AI_API_START_SECONDS", "120").to_int())
+    aiopenai.Configure(env_or("AI_API_ANSWER_SECONDS", "900").to_int(), env_or("AI_API_START_SECONDS", "120").to_int())
+    aibilling.Configure(os.Env("AI_ZARINPAL_MERCHANT"), os.Env("AI_ZIBAL_MERCHANT"), os.Env("AI_ZARINPAL_BASE"), os.Env("AI_ZIBAL_BASE"), env_or("AI_BILLING_CALLBACK", env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir")), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_CHAT_HOURLY", "60").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
     colon := engine_host.find(":")
@@ -139,6 +140,7 @@ func main:
     aiadmin.Routes(r)
     aiopenai.Routes(r)
     aibridge.Routes(r)
+    aibilling.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop"]:
         router.Options(r, path, preflight)
     end
@@ -614,8 +616,9 @@ func send_message(ctx: i64):
         fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.")
         ret
     end
-    if recent.to_int() >= HOURLY_LIMIT:
-        fail(ctx, 429, "rate", "در یک ساعت گذشته پیام‌های زیادی فرستاده‌اید. کمی بعد دوباره تلاش کنید.")
+    limits := aibilling.LimitsOf(i64s(uid))
+    if limits.chat_hourly > 0 and recent.to_int() >= limits.chat_hourly:
+        fail(ctx, 429, "rate", "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید.")
         ret
     end
     if sid.len() == 0:

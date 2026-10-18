@@ -99,8 +99,16 @@ reply = client.chat.completions.create(
 - The whole conversation, system messages included, is sent to the assistant
   as one turn in a fresh engine session that is deleted afterwards. Token
   counts in `usage` are estimates (4 characters per token). Images are not
-  supported, and `tools` is ignored: agent clients such as Cline must use
-  their prompt based tool protocol, not native function calling.
+  supported.
+- `tools` works, so agent clients such as Cline and opencode can use native
+  function calling. The tools a request offers go to the assistant with their
+  descriptions and schemas, and when it decides to use one the answer comes
+  back as `tool_calls` with `finish_reason: tool_calls` and `content: null`,
+  the way the OpenAI API does it. A streamed answer holds the text back while
+  tools are on the table, so a call always arrives whole, in one delta. Past
+  `tool_calls` from the assistant and `role: tool` results are fed back into
+  the next turn, so the loop continues. One call per answer; `tool_choice` and
+  parallel calls are not read.
 - The flattened conversation may be up to 1 MB. Past that the oldest turns
   are dropped, the prompt says so in one line, and the system block and the
   newest turns are kept; only a single message larger than 1 MB is refused.

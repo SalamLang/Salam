@@ -19,6 +19,7 @@ import io
 import str
 import sort
 import mem
+import filepath
 import db.sql
 
 include dr "../driver/driver.salam"
@@ -37,6 +38,15 @@ k_sql_starts := [
     "REPLACE ", "TRUNCATE "
 ]
 
+k_sql_needs := [
+    " FROM ", " INTO ", " SET ", " FROM ", "", " TABLE ", "", " AS ", " INTO ", ""
+]
+
+k_sql_second := [
+    "", "", "", "", "TABLE INDEX VIEW UNIQUE TEMP TEMPORARY OR MATERIALIZED", "",
+    "TABLE INDEX VIEW", "", "", "TABLE"
+]
+
 struct SqlJob:
     pub dialect: sql.Dialect = sql.Dialect {}
     pub cat: sql.Catalog = sql.Catalog {}
@@ -46,7 +56,7 @@ struct SqlJob:
     pub files: int = 0
     pub queries: int = 0
     pub glued: int = 0
-    pub schema_path: str = ""
+    pub schema_files: Vector<str> = Vector {}
 end
 
 func sql_sev_name(s: int): str:
@@ -59,6 +69,22 @@ func sql_sev_name(s: int): str:
     ret "note"
 end
 
+func word_after(text: str, start: int): str:
+    n := str.Len(text)
+    mut i := start
+    until i < n and text[i] == ' ':
+        i = i + 1
+    end
+    mut j := i
+    until j < n and text[j] != ' ' and text[j] != '(':
+        j = j + 1
+    end
+    if j <= i:
+        ret str.Clone("")
+    end
+    ret str.Substr(text, i, j - i)
+end
+
 func sql_looks_like_sql(q: str): bool:
     trimmed := str.Trim(q)
     if str.Len(trimmed) < 12:
@@ -69,8 +95,26 @@ func sql_looks_like_sql(q: str): bool:
     mut hit := false
     mut i := 0
     until i < K_SQL_START_COUNT:
-        if str.StartsWith(upper, k_sql_starts[i]):
-            hit = true
+        start := k_sql_starts[i]
+        if str.StartsWith(upper, start):
+            needs := k_sql_needs[i]
+            second := k_sql_second[i]
+            mut good := true
+            if not str.IsEmpty(needs):
+                if not str.Contains(upper, needs):
+                    good = false
+                end
+            end
+            if good and not str.IsEmpty(second):
+                w := word_after(upper, str.Len(start) - 1)
+                if str.IsEmpty(w) or not str.Contains(second, w):
+                    good = false
+                end
+                mem.Free(w as void*)
+            end
+            if good:
+                hit = true
+            end
             break
         end
         i = i + 1
@@ -184,13 +228,20 @@ func sql_scan_sql_file(job &: SqlJob, path: str):
 end
 
 func sql_is_schema_file(job: SqlJob, path: str): bool:
-    if str.IsEmpty(job.schema_path):
+    if job.schema_files.len() == 0:
         ret false
     end
-    if str.Equals(job.schema_path, path):
-        ret true
+    want := filepath.Clean(path)
+    mut i := 0
+    until i < job.schema_files.len():
+        if str.Equals(job.schema_files.get(i), want):
+            mem.Free(want as void*)
+            ret true
+        end
+        i = i + 1
     end
-    ret str.StartsWith(path, job.schema_path)
+    mem.Free(want as void*)
+    ret false
 end
 
 func sql_scan_path(job &: SqlJob, path: str):
@@ -230,6 +281,7 @@ func sql_apply_schema_file(job &: SqlJob, path: str): bool:
         io.EPrintln(co.Format1(i18.Tr("salam: cannot read '%s'"), co.ArgStr(path)))
         ret false
     end
+    job.schema_files.push(filepath.Clean(path))
     mut r := sql.Apply(job.cat, text)
     sql_report(job, path, 1, 1, r)
     ok := r.errors == 0
@@ -245,7 +297,6 @@ func sql_load_schema(job &: SqlJob, spec: str): bool:
     end
     job.cat = sql.NewCatalog(job.dialect)
     job.has_schema = true
-    job.schema_path = spec
     if not os.IsDir(spec):
         ret sql_apply_schema_file(job, spec)
     end
@@ -309,6 +360,12 @@ func sql_cmd(opt &: dr.Dr): int:
     if job.has_schema:
         sql.FreeCatalog(job.cat)
     end
+    mut sf := 0
+    until sf < job.schema_files.len():
+        mem.Free(job.schema_files.get(sf) as void*)
+        sf = sf + 1
+    end
+    job.schema_files.free()
     counted := "checked " + str.FromInt(job.queries as i64) + " statement(s) in "
     scanned := counted + str.FromInt(job.files as i64) + " file(s): "
     tally := str.FromInt(job.errors as i64) + " error(s), "

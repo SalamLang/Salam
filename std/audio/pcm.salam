@@ -1,0 +1,366 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package audio
+
+import compress
+import encoding.binary
+
+const _S8 := 128.0
+const _S16 := 32768.0
+const _S24 := 8388608.0
+const _S32 := 2147483648.0
+const _BIAS := 132
+const _CLIP_MU := 8159
+const _SEG_UEND := [63, 127, 255, 511, 1023, 2047, 4095, 8191]
+const _SEG_AEND := [31, 63, 127, 255, 511, 1023, 2047, 4095]
+
+func _search(val: int, ends: int[]): int:
+    mut i := 0
+    until i < 8:
+        if val <= ends[i]:
+            ret i
+        end
+        i += 1
+    end
+    ret 8
+end
+
+func _i16(p: void*, off: int, big: bool): int:
+    bp := p as u8*
+    mut v := 0
+    if big:
+        v = ((bp[off] as int) << 8) | (bp[off + 1] as int)
+    else:
+        v = (bp[off] as int) | ((bp[off + 1] as int) << 8)
+    end
+    if v >= 32768:
+        ret v - 65536
+    end
+    ret v
+end
+
+func _i24(p: void*, off: int, big: bool): int:
+    bp := p as u8*
+    mut v := 0
+    if big:
+        v = ((bp[off] as int) << 16) | ((bp[off + 1] as int) << 8) | (bp[off + 2] as int)
+    else:
+        v = (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16)
+    end
+    if v >= 8388608:
+        ret v - 16777216
+    end
+    ret v
+end
+
+func _i32(p: void*, off: int, big: bool): i64:
+    bp := p as u8*
+    mut v := 0 as i64
+    if big:
+        v = ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+    else:
+        v = (bp[off] as i64) | ((bp[off + 1] as i64) << 8) | ((bp[off + 2] as i64) << 16) | ((bp[off + 3] as i64) << 24)
+    end
+    if v >= (2147483648 as i64):
+        ret v - (4294967296 as i64)
+    end
+    ret v
+end
+
+func _q(v: f64, hi: f64, lo: f64): f64:
+    mut x := v
+    if x >= 0.0:
+        x = x + 0.5
+    else:
+        x = x - 0.5
+    end
+    x = x as int as f64
+    if x > hi:
+        x = hi
+    end
+    if x < lo:
+        x = lo
+    end
+    ret x
+end
+
+func _clamp1(v: f64): f64:
+    if v > 1.0:
+        ret 1.0
+    end
+    if v < -1.0:
+        ret -1.0
+    end
+    ret v
+end
+
+@en "MuLawToPcm"
+@fa "میولا به پی‌سی‌ام"
+pub func MuLawToPcm(b: int): int:
+    u := (~b) & 255
+    mut t := (((u & 15) << 3) + _BIAS) << ((u & 112) >> 4)
+    t -= _BIAS
+    if (u & 128) != 0:
+        ret 0 - t
+    end
+    ret t
+end
+
+@en "PcmToMuLaw"
+@fa "پی‌سی‌ام به میولا"
+pub func PcmToMuLaw(sample: int): int:
+    mut p := sample >> 2
+    mut mask := 255
+    if p < 0:
+        p = 0 - p
+        mask = 127
+    end
+    if p > _CLIP_MU:
+        p = _CLIP_MU
+    end
+    p += _BIAS >> 2
+    seg := _search(p, _SEG_UEND)
+    if seg >= 8:
+        ret (127 ^ mask) & 255
+    end
+    ret (((seg << 4) | ((p >> (seg + 1)) & 15)) ^ mask) & 255
+end
+
+@en "ALawToPcm"
+@fa "ای‌لا به پی‌سی‌ام"
+pub func ALawToPcm(b: int): int:
+    a := b ^ 85
+    mut t := (a & 15) << 4
+    seg := (a & 112) >> 4
+    if seg == 0:
+        t += 8
+    else seg == 1:
+        t += 264
+    else:
+        t = (t + 264) << (seg - 1)
+    end
+    if (a & 128) != 0:
+        ret t
+    end
+    ret 0 - t
+end
+
+@en "PcmToALaw"
+@fa "پی‌سی‌ام به ای‌لا"
+pub func PcmToALaw(sample: int): int:
+    mut p := sample >> 3
+    mut mask := 213
+    if p < 0:
+        p = 0 - p - 1
+        mask = 85
+    end
+    seg := _search(p, _SEG_AEND)
+    if seg >= 8:
+        ret (127 ^ mask) & 255
+    end
+    mut aval := seg << 4
+    if seg < 2:
+        aval = aval | ((p >> 1) & 15)
+    else:
+        aval = aval | ((p >> seg) & 15)
+    end
+    ret (aval ^ mask) & 255
+end
+
+@en "PcmDepthValid"
+@fa "عمق پی‌سی‌ام معتبر"
+pub func PcmDepthValid(bits: int): bool:
+    ret bits == 8 or bits == 16 or bits == 24 or bits == 32
+end
+
+@en "DecodePcm"
+@fa "کدگشایی پی‌سی‌ام"
+pub func DecodePcm(p: void*, off: int, c &: Clip, bits: int, big: bool, unsigned8: bool): bool:
+    if c.samples == null or not PcmDepthValid(bits):
+        ret false
+    end
+    dst := Data(c)
+    n := SampleCount(c)
+    step := bits / 8
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        at := off + i * step
+        if bits == 8:
+            raw := bp[at] as int
+            if unsigned8:
+                dst[i] = ((raw - 128) as f64 / _S8) as f32
+            else:
+                mut s := raw
+                if s >= 128:
+                    s -= 256
+                end
+                dst[i] = ((s as f64) / _S8) as f32
+            end
+        else bits == 16:
+            dst[i] = ((_i16(p, at, big) as f64) / _S16) as f32
+        else bits == 24:
+            dst[i] = ((_i24(p, at, big) as f64) / _S24) as f32
+        else:
+            dst[i] = ((_i32(p, at, big) as f64) / _S32) as f32
+        end
+        i += 1
+    end
+    ret true
+end
+
+@en "DecodeFloatPcm"
+@fa "کدگشایی اعشاری"
+pub func DecodeFloatPcm(p: void*, total: int, off: int, c &: Clip, bits: int, big: bool): bool:
+    if c.samples == null or (bits != 32 and bits != 64):
+        ret false
+    end
+    dst := Data(c)
+    n := SampleCount(c)
+    mut rd := compress.NewByteReader(p, total)
+    rd.pos = off
+    mut i := 0
+    until i < n:
+        if bits == 32:
+            dst[i] = binary.ReadF32(rd, big) as f32
+        else:
+            dst[i] = binary.ReadF64(rd, big) as f32
+        end
+        i += 1
+    end
+    ret not rd.bad
+end
+
+@en "DecodeLawPcm"
+@fa "کدگشایی فشرده"
+pub func DecodeLawPcm(p: void*, off: int, c &: Clip, alaw: bool): bool:
+    if c.samples == null:
+        ret false
+    end
+    dst := Data(c)
+    n := SampleCount(c)
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        b := bp[off + i] as int
+        mut v := 0
+        if alaw:
+            v = ALawToPcm(b)
+        else:
+            v = MuLawToPcm(b)
+        end
+        dst[i] = ((v as f64) / _S16) as f32
+        i += 1
+    end
+    ret true
+end
+
+@en "EncodePcm"
+@fa "کدگذاری پی‌سی‌ام"
+pub func EncodePcm(b &: compress.ByteBuf, c: Clip, bits: int, big: bool, unsigned8: bool):
+    if IsEmpty(c) or not PcmDepthValid(bits):
+        ret
+    end
+    src := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        x := _clamp1(src[i] as f64)
+        if bits == 8:
+            if unsigned8:
+                mut q := (x * _S8 + 128.5) as int
+                if q > 255:
+                    q = 255
+                end
+                if q < 0:
+                    q = 0
+                end
+                compress.BufPush(b, q)
+            else:
+                q := _q(x * _S8, 127.0, -128.0) as int
+                compress.BufPush(b, q & 255)
+            end
+        else bits == 16:
+            q := _q(x * _S16, 32767.0, -32768.0) as int
+            if big:
+                binary.WriteI16BE(b, q)
+            else:
+                binary.WriteI16LE(b, q)
+            end
+        else bits == 24:
+            q := _q(x * _S24, 8388607.0, -8388608.0) as int
+            mut u := q
+            if u < 0:
+                u += 16777216
+            end
+            if big:
+                compress.BufPush(b, (u >> 16) & 255)
+                compress.BufPush(b, (u >> 8) & 255)
+                compress.BufPush(b, u & 255)
+            else:
+                compress.BufPush(b, u & 255)
+                compress.BufPush(b, (u >> 8) & 255)
+                compress.BufPush(b, (u >> 16) & 255)
+            end
+        else:
+            q := _q(x * _S32, 2147483647.0, -2147483648.0) as int
+            if big:
+                binary.WriteI32BE(b, q)
+            else:
+                binary.WriteI32LE(b, q)
+            end
+        end
+        i += 1
+    end
+end
+
+@en "EncodeFloatPcm"
+@fa "کدگذاری اعشاری"
+pub func EncodeFloatPcm(b &: compress.ByteBuf, c: Clip, bits: int, big: bool):
+    if IsEmpty(c):
+        ret
+    end
+    src := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        if bits == 64:
+            binary.WriteF64(b, src[i] as f64, big)
+        else:
+            binary.WriteF32(b, src[i] as f64, big)
+        end
+        i += 1
+    end
+end
+
+@en "EncodeLawPcm"
+@fa "کدگذاری فشرده"
+pub func EncodeLawPcm(b &: compress.ByteBuf, c: Clip, alaw: bool):
+    if IsEmpty(c):
+        ret
+    end
+    src := Data(c)
+    n := SampleCount(c)
+    mut i := 0
+    until i < n:
+        q := _q(_clamp1(src[i] as f64) * _S16, 32767.0, -32768.0) as int
+        if alaw:
+            compress.BufPush(b, PcmToALaw(q))
+        else:
+            compress.BufPush(b, PcmToMuLaw(q))
+        end
+        i += 1
+    end
+end

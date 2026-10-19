@@ -1,0 +1,497 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mp3"
+@fa "ام‌پی‌تری"
+package mp3
+
+import audio
+import audio.tag
+import compress
+import archive
+
+@en "Version25"
+@fa "نگارش دوونیم"
+pub const Version25 := 0
+
+@en "Version2"
+@fa "نگارش دو"
+pub const Version2 := 2
+
+@en "Version1"
+@fa "نگارش یک"
+pub const Version1 := 3
+
+@en "Layer1"
+@fa "لایه یک"
+pub const Layer1 := 3
+
+@en "Layer2"
+@fa "لایه دو"
+pub const Layer2 := 2
+
+@en "Layer3"
+@fa "لایه سه"
+pub const Layer3 := 1
+
+@en "ModeStereo"
+@fa "حالت دوکاناله"
+pub const ModeStereo := 0
+
+@en "ModeJoint"
+@fa "حالت پیوسته"
+pub const ModeJoint := 1
+
+@en "ModeDual"
+@fa "حالت دوگانه"
+pub const ModeDual := 2
+
+@en "ModeMono"
+@fa "حالت یک‌کاناله"
+pub const ModeMono := 3
+
+const _BITRATE_V1_L1 := [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0]
+const _BITRATE_V1_L2 := [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0]
+const _BITRATE_V1_L3 := [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
+const _BITRATE_V2_L1 := [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0]
+const _BITRATE_V2_L23 := [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+const _RATE_V1 := [44100, 48000, 32000, 0]
+const _RATE_V2 := [22050, 24000, 16000, 0]
+const _RATE_V25 := [11025, 12000, 8000, 0]
+
+@en "Header"
+@fa "سرآیند"
+pub struct Header:
+    @en "version"
+    @fa "نگارش"
+    pub version: int = 0
+    @en "layer"
+    @fa "لایه"
+    pub layer: int = 0
+    @en "bitrate"
+    @fa "نرخ بیت"
+    pub bitrate: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+    @en "mode"
+    @fa "حالت"
+    pub mode: int = 0
+    @en "mode_ext"
+    @fa "گسترش حالت"
+    pub mode_ext: int = 0
+    @en "padding"
+    @fa "لایی"
+    pub padding: int = 0
+    @en "crc"
+    @fa "سی‌آر‌سی"
+    pub crc: bool = false
+    @en "frame_size"
+    @fa "اندازه فریم"
+    pub frame_size: int = 0
+    @en "samples"
+    @fa "نمونه‌ها"
+    pub samples: int = 0
+end
+
+@en "VbrInfo"
+@fa "آگاهی نرخ متغیر"
+pub struct VbrInfo:
+    @en "frames"
+    @fa "فریم ها"
+    pub frames: int = 0
+    @en "bytes"
+    @fa "بایت‌ها"
+    pub bytes: int = 0
+    @en "vbr"
+    @fa "نرخ متغیر"
+    pub vbr: bool = false
+    @en "quality"
+    @fa "کیفیت"
+    pub quality: int = 0
+    @en "delay"
+    @fa "درنگ"
+    pub delay: int = 0
+    @en "padding"
+    @fa "لایی پایانی"
+    pub padding: int = 0
+    @en "found"
+    @fa "یافت شد"
+    pub found: bool = false
+end
+
+func _byte(p: void*, off: int): int:
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _be32(p: void*, off: int): int:
+    ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+
+func _bitrate_of(version: int, layer: int, index: int): int:
+    if index <= 0 or index >= 15:
+        ret 0
+    end
+    if version == Version1:
+        if layer == Layer1:
+            ret _BITRATE_V1_L1[index]
+        end
+        if layer == Layer2:
+            ret _BITRATE_V1_L2[index]
+        end
+        ret _BITRATE_V1_L3[index]
+    end
+    if layer == Layer1:
+        ret _BITRATE_V2_L1[index]
+    end
+    ret _BITRATE_V2_L23[index]
+end
+
+func _rate_of(version: int, index: int): int:
+    if index < 0 or index > 3:
+        ret 0
+    end
+    if version == Version1:
+        ret _RATE_V1[index]
+    end
+    if version == Version2:
+        ret _RATE_V2[index]
+    end
+    ret _RATE_V25[index]
+end
+
+@en "SamplesPerFrame"
+@fa "نمونه در فریم"
+pub func SamplesPerFrame(version: int, layer: int): int:
+    if layer == Layer1:
+        ret 384
+    end
+    if layer == Layer2:
+        ret 1152
+    end
+    if version == Version1:
+        ret 1152
+    end
+    ret 576
+end
+
+@en "ParseHeader"
+@fa "خواندن سرآیند"
+pub func ParseHeader(p: void*, n: int, at: int, out &: Header): bool:
+    if at + 4 > n:
+        ret false
+    end
+    if _byte(p, at) != 255:
+        ret false
+    end
+    b1 := _byte(p, at + 1)
+    if (b1 & 224) != 224:
+        ret false
+    end
+    mut h := Header {}
+    h.version = (b1 >> 3) & 3
+    if h.version == 1:
+        ret false
+    end
+    h.layer = (b1 >> 1) & 3
+    if h.layer == 0:
+        ret false
+    end
+    h.crc = (b1 & 1) == 0
+    b2 := _byte(p, at + 2)
+    h.bitrate = _bitrate_of(h.version, h.layer, (b2 >> 4) & 15)
+    h.rate = _rate_of(h.version, (b2 >> 2) & 3)
+    h.padding = (b2 >> 1) & 1
+    b3 := _byte(p, at + 3)
+    h.mode = (b3 >> 6) & 3
+    h.mode_ext = (b3 >> 4) & 3
+    h.channels = h.mode == ModeMono ? 1 : 2
+    if h.bitrate == 0 or h.rate == 0:
+        ret false
+    end
+    h.samples = SamplesPerFrame(h.version, h.layer)
+    if h.layer == Layer1:
+        h.frame_size = (12 * h.bitrate * 1000 / h.rate + h.padding) * 4
+    else:
+        mut factor := 144
+        if h.version != Version1:
+            factor = 72
+        end
+        if h.layer == Layer2:
+            factor = 144
+        end
+        h.frame_size = factor * h.bitrate * 1000 / h.rate + h.padding
+    end
+    if h.frame_size < 4:
+        ret false
+    end
+    out = h
+    ret true
+end
+
+@en "FindSync"
+@fa "یافتن همگامی"
+pub func FindSync(p: void*, n: int, from: int): int:
+    mut at := from
+    if at < 0:
+        at = 0
+    end
+    until at + 4 <= n:
+        mut h := Header {}
+        if ParseHeader(p, n, at, h):
+            if at + h.frame_size + 4 <= n:
+                mut nxt := Header {}
+                if ParseHeader(p, n, at + h.frame_size, nxt):
+                    ret at
+                end
+            else:
+                ret at
+            end
+        end
+        at += 1
+    end
+    ret -1
+end
+
+@en "AudioStart"
+@fa "آغاز صدا"
+pub func AudioStart(p: void*, n: int): int:
+    skip := tag.AudioStart(p, n)
+    found := FindSync(p, n, skip)
+    if found < 0:
+        ret skip
+    end
+    ret found
+end
+
+@en "IsMP3"
+@fa "ام‌پی‌تری است"
+pub func IsMP3(p: void*, n: int): bool:
+    if n < 4:
+        ret false
+    end
+    if tag.HasID3v2(p, n):
+        ret true
+    end
+    ret FindSync(p, n, 0) >= 0
+end
+
+@en "CountFrames"
+@fa "شمار فریم‌ها"
+pub func CountFrames(p: void*, n: int): int:
+    stop := tag.AudioEnd(p, n)
+    mut at := AudioStart(p, n)
+    mut count := 0
+    until at + 4 <= stop:
+        mut h := Header {}
+        if not ParseHeader(p, stop, at, h):
+            nxt := FindSync(p, stop, at + 1)
+            if nxt < 0:
+                break
+            end
+            at = nxt
+        else:
+            count += 1
+            at += h.frame_size
+        end
+    end
+    ret count
+end
+
+@en "ReadVbrInfo"
+@fa "خواندن آگاهی نرخ متغیر"
+pub func ReadVbrInfo(p: void*, n: int, out &: VbrInfo): bool:
+    start := AudioStart(p, n)
+    mut h := Header {}
+    if not ParseHeader(p, n, start, h):
+        ret false
+    end
+    mut side := 32
+    if h.version == Version1:
+        side = h.channels == 1 ? 17 : 32
+    else:
+        side = h.channels == 1 ? 9 : 17
+    end
+    mut at := start + 4
+    if h.crc:
+        at += 2
+    end
+    at += side
+    if at + 8 > n:
+        ret false
+    end
+    tag4 := _be32(p, at)
+    xing := tag4 == 1483304551 or tag4 == 1415073280
+    vbri := tag4 == 1448884812
+    if not xing and not vbri:
+        ret false
+    end
+    mut info := VbrInfo {}
+    if xing:
+        info.vbr = tag4 == 1483304551
+        flags := _be32(p, at + 4)
+        mut q := at + 8
+        if (flags & 1) != 0 and q + 4 <= n:
+            info.frames = _be32(p, q)
+            q += 4
+        end
+        if (flags & 2) != 0 and q + 4 <= n:
+            info.bytes = _be32(p, q)
+            q += 4
+        end
+        if (flags & 4) != 0:
+            q += 100
+        end
+        if (flags & 8) != 0 and q + 4 <= n:
+            info.quality = _be32(p, q)
+            q += 4
+        end
+        lame := at + 120
+        if lame + 3 <= n:
+            d := (_byte(p, lame) << 4) | ((_byte(p, lame + 1) >> 4) & 15)
+            pad := ((_byte(p, lame + 1) & 15) << 8) | _byte(p, lame + 2)
+            info.delay = d
+            info.padding = pad
+        end
+    else:
+        info.vbr = true
+        if at + 26 <= n:
+            info.bytes = _be32(p, at + 10)
+            info.frames = _be32(p, at + 14)
+        end
+    end
+    info.found = true
+    out = info
+    ret true
+end
+
+@en "ProbeMP3"
+@fa "بررسی ام‌پی‌تری"
+pub func ProbeMP3(p: void*, n: int, ok &: bool): audio.Info:
+    ok = false
+    mut info := audio.Info {}
+    start := AudioStart(p, n)
+    mut h := Header {}
+    if not ParseHeader(p, n, start, h):
+        ret info
+    end
+    info.format = audio.FormatMP3
+    info.rate = h.rate
+    info.channels = h.channels
+    info.bits = 16
+    info.lossless = false
+    mut vbr := VbrInfo {}
+    mut frames := 0
+    if ReadVbrInfo(p, n, vbr) and vbr.frames > 0:
+        frames = vbr.frames
+        info.vbr = vbr.vbr
+    else:
+        frames = CountFrames(p, n)
+    end
+    info.frames = frames * h.samples
+    if info.vbr and vbr.delay + vbr.padding > 0:
+        info.frames -= vbr.delay + vbr.padding
+        if info.frames < 0:
+            info.frames = 0
+        end
+    end
+    if h.rate > 0:
+        info.duration = (info.frames as f64) / (h.rate as f64)
+    end
+    if info.duration > 0.0:
+        audio_bytes := tag.AudioEnd(p, n) - start
+        info.bitrate = ((audio_bytes as f64) * 8.0 / info.duration) as int
+    else:
+        info.bitrate = h.bitrate * 1000
+    end
+    ok = true
+    ret info
+end
+
+@en "FrameAt"
+@fa "فریم در"
+pub func FrameAt(p: void*, n: int, index: int): int:
+    stop := tag.AudioEnd(p, n)
+    mut at := AudioStart(p, n)
+    mut i := 0
+    until at + 4 <= stop:
+        mut h := Header {}
+        if not ParseHeader(p, stop, at, h):
+            nxt := FindSync(p, stop, at + 1)
+            if nxt < 0:
+                ret -1
+            end
+            at = nxt
+        else:
+            if i == index:
+                ret at
+            end
+            i += 1
+            at += h.frame_size
+        end
+    end
+    ret -1
+end
+
+@en "SeekToSecond"
+@fa "جستن به ثانیه"
+pub func SeekToSecond(p: void*, n: int, seconds: f64): int:
+    start := AudioStart(p, n)
+    mut h := Header {}
+    if not ParseHeader(p, n, start, h) or h.samples <= 0 or h.rate <= 0:
+        ret -1
+    end
+    want := (seconds * (h.rate as f64) / (h.samples as f64)) as int
+    ret FrameAt(p, n, want)
+end
+
+@en "Headers"
+@fa "سرآیندها"
+pub func Headers(p: void*, n: int): Vector<Header>:
+    mut out := Vector {} as Vector<Header>
+    stop := tag.AudioEnd(p, n)
+    mut at := AudioStart(p, n)
+    until at + 4 <= stop:
+        mut h := Header {}
+        if not ParseHeader(p, stop, at, h):
+            nxt := FindSync(p, stop, at + 1)
+            if nxt < 0:
+                break
+            end
+            at = nxt
+        else:
+            out.push(h)
+            at += h.frame_size
+        end
+    end
+    ret out
+end
+
+@en "ProbeFileMP3"
+@fa "بررسی پرونده ام‌پی‌تری"
+pub func ProbeFileMP3(path: str, ok &: bool): audio.Info:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Info {}
+    end
+    out := ProbeMP3(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end

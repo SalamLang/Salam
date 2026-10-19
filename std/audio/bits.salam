@@ -1,0 +1,276 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package audio
+
+import compress
+
+@en "MsbReader"
+@fa "خواننده بیت"
+pub struct MsbReader:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "pos"
+    @fa "جا"
+    pub pos: int = 0
+    @en "acc"
+    @fa "انباره"
+    pub acc: i64 = 0
+    @en "nbits"
+    @fa "شمار بیت"
+    pub nbits: int = 0
+    @en "bad"
+    @fa "خراب"
+    pub bad: bool = false
+end
+
+@en "MsbWriter"
+@fa "نویسنده بیت"
+pub struct MsbWriter:
+    @en "buf"
+    @fa "بافر"
+    pub buf: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    @en "acc"
+    @fa "انباره"
+    pub acc: i64 = 0
+    @en "nbits"
+    @fa "شمار بیت"
+    pub nbits: int = 0
+end
+
+func _mask(n: int): i64:
+    if n <= 0:
+        ret 0
+    end
+    if n >= 63:
+        ret -1
+    end
+    ret ((1 as i64) << n) - 1
+end
+
+func _fill(r &: MsbReader, count: int):
+    until r.nbits < count:
+        if r.pos >= r.len:
+            r.bad = true
+            r.acc = r.acc << 8
+            r.nbits += 8
+        else:
+            bp := r.data as u8*
+            r.acc = (r.acc << 8) | (bp[r.pos] as i64)
+            r.pos += 1
+            r.nbits += 8
+        end
+    end
+end
+
+@en "NewMsbReader"
+@fa "خواننده بیت جدید"
+pub func NewMsbReader(p: void*, n: int): MsbReader:
+    ret MsbReader { data = p, len = n }
+end
+
+@en "MsbReaderFromBuf"
+@fa "خواننده بیت از بافر"
+pub func MsbReaderFromBuf(b: compress.ByteBuf): MsbReader:
+    ret NewMsbReader(b.data, b.len)
+end
+
+@en "MsbReadI64"
+@fa "خواندن بیت‌ها بزرگ"
+pub func MsbReadI64(r &: MsbReader, count: int): i64:
+    if count <= 0 or count > 56:
+        ret 0
+    end
+    _fill(r, count)
+    left := r.nbits - count
+    v := (r.acc >> left) & _mask(count)
+    r.nbits = left
+    r.acc = r.acc & _mask(left)
+    ret v
+end
+
+@en "MsbRead"
+@fa "خواندن بیت‌ها"
+pub func MsbRead(r &: MsbReader, count: int): int:
+    if count <= 0 or count > 32:
+        ret 0
+    end
+    ret MsbReadI64(r, count) as int
+end
+
+@en "MsbReadBit"
+@fa "خواندن بیت"
+pub func MsbReadBit(r &: MsbReader): int:
+    ret MsbRead(r, 1)
+end
+
+@en "MsbReadSigned"
+@fa "خواندن بیت‌ها علامتدار"
+pub func MsbReadSigned(r &: MsbReader, count: int): int:
+    if count <= 0 or count > 32:
+        ret 0
+    end
+    v := MsbReadI64(r, count)
+    top := (1 as i64) << (count - 1)
+    if (v & top) != 0:
+        ret (v - ((1 as i64) << count)) as int
+    end
+    ret v as int
+end
+
+@en "MsbUnary"
+@fa "خواندن یکانی"
+pub func MsbUnary(r &: MsbReader): int:
+    mut n := 0
+    until not r.bad:
+        if MsbReadBit(r) == 1:
+            break
+        end
+        n += 1
+        if n > 1000000:
+            r.bad = true
+            break
+        end
+    end
+    ret n
+end
+
+@en "MsbSkip"
+@fa "پرش بیت"
+pub func MsbSkip(r &: MsbReader, count: int):
+    mut left := count
+    until left > 0:
+        take := left > 32 ? 32 : left
+        MsbReadI64(r, take)
+        left -= take
+    end
+end
+
+@en "MsbAlign"
+@fa "همتراز کردن خواننده"
+pub func MsbAlign(r &: MsbReader):
+    drop := r.nbits % 8
+    if drop > 0:
+        MsbReadI64(r, drop)
+    end
+    r.acc = 0
+    r.nbits = 0
+end
+
+@en "MsbTell"
+@fa "جای خواننده"
+pub func MsbTell(r: MsbReader): int:
+    ret r.pos * 8 - r.nbits
+end
+
+@en "MsbSeek"
+@fa "جابجایی خواننده"
+pub func MsbSeek(r &: MsbReader, bitpos: int):
+    if bitpos < 0:
+        ret
+    end
+    r.pos = bitpos / 8
+    r.acc = 0
+    r.nbits = 0
+    r.bad = false
+    rem := bitpos % 8
+    if rem > 0:
+        MsbReadI64(r, rem)
+    end
+end
+
+@en "MsbLeft"
+@fa "باقیمانده خواننده"
+pub func MsbLeft(r: MsbReader): int:
+    ret (r.len - r.pos) * 8 + r.nbits
+end
+
+@en "MsbBad"
+@fa "خواننده خراب"
+pub func MsbBad(r: MsbReader): bool:
+    ret r.bad
+end
+
+@en "NewMsbWriter"
+@fa "نویسنده بیت جدید"
+pub func NewMsbWriter(): MsbWriter:
+    ret MsbWriter { buf = compress.NewByteBuf() }
+end
+
+@en "MsbWrite"
+@fa "نوشتن بیت‌ها"
+pub func MsbWrite(w &: MsbWriter, value: i64, count: int):
+    if count <= 0 or count > 56:
+        ret
+    end
+    w.acc = (w.acc << count) | (value & _mask(count))
+    w.nbits += count
+    until w.nbits >= 8:
+        b := (w.acc >> (w.nbits - 8)) & 255
+        compress.BufPush(w.buf, b as int)
+        w.nbits -= 8
+        w.acc = w.acc & _mask(w.nbits)
+    end
+end
+
+@en "MsbWriteBit"
+@fa "نوشتن بیت"
+pub func MsbWriteBit(w &: MsbWriter, bit: int):
+    MsbWrite(w, bit as i64, 1)
+end
+
+@en "MsbWriteUnary"
+@fa "نوشتن یکانی"
+pub func MsbWriteUnary(w &: MsbWriter, n: int):
+    mut i := 0
+    until i < n:
+        MsbWriteBit(w, 0)
+        i += 1
+    end
+    MsbWriteBit(w, 1)
+end
+
+@en "MsbPad"
+@fa "همتراز کردن نویسنده"
+pub func MsbPad(w &: MsbWriter):
+    if w.nbits > 0:
+        pad := 8 - w.nbits
+        MsbWrite(w, 0, pad)
+    end
+end
+
+@en "MsbLen"
+@fa "طول نویسنده"
+pub func MsbLen(w &: MsbWriter): int:
+    ret compress.BufLen(w.buf)
+end
+
+@en "MsbFinish"
+@fa "پایان نویسنده"
+pub func MsbFinish(w &: MsbWriter): compress.ByteBuf:
+    MsbPad(w)
+    ret w.buf
+end
+
+@en "MsbFree"
+@fa "آزادسازی نویسنده"
+pub func MsbFree(w &: MsbWriter):
+    compress.BufFree(w.buf)
+    w.acc = 0
+    w.nbits = 0
+end

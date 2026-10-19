@@ -166,6 +166,39 @@ func distinct_desugar_method(a &: at.Ast, f: int, tname: str, idx: int):
     distinct_this_to_self(a, fv.a)
 end
 
+func self_is_name(name: str): bool:
+    ret str.Equals(name, "Self") or str.Equals(name, "خود")
+end
+
+func self_rewrite(a &: at.Ast, nid: int, owner: str, tps: Vector<str>):
+    if nid == 0 or str.Len(owner) == 0:
+        ret
+    end
+    v := at.Get(a, nid)
+    if (v.kind == at.AST_TYPE or v.kind == at.AST_STRUCT_LIT) and self_is_name(v.name):
+        at.SetName(a, nid, owner)
+        if v.kind == at.AST_TYPE and v.list.len() == 0:
+            repeat tps.len() in t:
+                tn := at.NewNode(a, at.AST_TYPE)
+                at.SetSpan(
+                    a, tn, v.begin_line, v.begin_col, v.begin_index, v.end_line, v.end_col, v.end_index, v.length
+                )
+                at.SetName(a, tn, tps.get(t))
+                at.AddChild(a, nid, tn)
+            end
+        end
+    end
+    w := at.Get(a, nid)
+    self_rewrite(a, w.ty, owner, tps)
+    self_rewrite(a, w.a, owner, tps)
+    self_rewrite(a, w.b, owner, tps)
+    self_rewrite(a, w.c, owner, tps)
+    self_rewrite(a, w.d, owner, tps)
+    repeat w.list.len() in i:
+        self_rewrite(a, w.list.get(i), owner, tps)
+    end
+end
+
 func parse_distinct_body(p &: Ps, a &: at.Ast, tname: str):
     mut idx := 0
     p_skip_terminators(p)
@@ -180,6 +213,7 @@ func parse_distinct_body(p &: Ps, a &: at.Ast, tname: str):
             f := parse_function(p, a, false)
             if f != 0:
                 apply_fn_mods(a, f, mods)
+                self_rewrite(a, f, tname, Vector {} as Vector<str>)
                 distinct_desugar_method(a, f, tname, idx)
                 idx += 1
                 p.tail_defs.push(f)
@@ -422,11 +456,23 @@ func parse_typarams(p &: Ps, a &: at.Ast, n: int):
         end
         mut bound := ""
         if p_match(p, tok.TK_COLON):
-            bound = p_name(p, "expected an interface name after ':' in type parameter bound")
-            if bound.len() > 0 and p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
-                p_advance(p)
-                bound = bound + "." + p_peek(p).lexeme
-                p_advance(p)
+            mut more := true
+            until more:
+                mut one := p_name(p, "expected an interface name after ':' in type parameter bound")
+                if one.len() == 0:
+                    break
+                end
+                if p_at(p, tok.TK_DOT) and p_peek2(p).kind == tok.TK_IDENT:
+                    p_advance(p)
+                    one = one + "." + p_peek(p).lexeme
+                    p_advance(p)
+                end
+                if bound.len() > 0:
+                    bound = bound + " + " + one
+                else:
+                    bound = one
+                end
+                more = p_match(p, tok.TK_PLUS)
             end
         end
         at.AddTyparam(a, n, tp, bound)
@@ -482,7 +528,13 @@ func parse_interface(p &: Ps, a &: at.Ast): int:
             imut = true
             p_advance(p)
         end
-        if p_at(p, tok.TK_KW_FUNC):
+        if p_at_embed(p) and not imut:
+            e := parse_embed_field(p, a)
+            if e != 0:
+                at.AddChild(a, n, e)
+            end
+            ipend.clear()
+        else p_at(p, tok.TK_KW_FUNC):
             m := parse_interface_method(p, a)
             if m != 0:
                 mut mv := at.Get(a, m)
@@ -495,7 +547,7 @@ func parse_interface(p &: Ps, a &: at.Ast): int:
             end
             ipend.clear()
         else:
-            p_error(p, "expected a method signature ('func ...') in interface")
+            p_error(p, "expected a method signature ('func ...') or 'use <Interface>' in interface")
             if not p_at_eof(p):
                 p_advance(p)
             end
@@ -559,6 +611,9 @@ func parse_impl(p &: Ps, a &: at.Ast): int:
         end
     end
     p_expect(p, tok.TK_KW_END, "'end' to close impl block")
+    if at.Get(a, n).ty != 0:
+        self_rewrite(a, n, at.Get(a, at.Get(a, n).ty).name, Vector {} as Vector<str>)
+    end
     p_fin(p, a, n)
     ret n
 end
@@ -616,6 +671,7 @@ func parse_struct(p &: Ps, a &: at.Ast): int:
         end
     end
     p_expect_end(p, head, "'end' to close struct")
+    self_rewrite(a, n, at.Get(a, n).name, at.Get(a, n).typarams)
     p_fin(p, a, n)
     ret n
 end
@@ -658,6 +714,7 @@ func parse_static_member(p &: Ps, a &: at.Ast, sn: int, mods &: FnMods, metas: V
                     at.AddTyparam(a, m, stp.get(ti), stb.get(ti))
                 end
             end
+            self_rewrite(a, m, sname, stp)
         end
     end
     if m == 0:

@@ -206,7 +206,7 @@ repeat 1 to 5:  ...  end              // 1..5 inclusive
 repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
-each x in xs:  println x  end         // iterate a collection/array
+each x in xs:  println x  end         // iterate a collection/array/your own type
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
 each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
@@ -476,6 +476,22 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**`Self`** is the enclosing type, usable anywhere inside a `struct`, an
+`impl ... on T` block or a distinct type's body: as a return type, a parameter
+type, a field type, in a cast and as a struct literal. On a generic struct it
+means the struct with its own type parameters, so `Self` stands for
+`Pair<A, B>` without respelling it. It works in a `static func` too, which is
+where constructors live. Persian spells it `خود`. There is no `Self` in an
+`interface` (that would be an associated type, which Salam does not have).
+
+```salam
+struct Node:
+    pub v: int = 0
+    pub func With(n: int): Self:          ret Self { v = n }      end
+    pub static func Make(n: int): Self:   ret Self { v = n * 2 }  end
+end
+```
+
 **Static members:** `static func` and `const` inside a struct belong to the type,
 not to a value. Call them through the type name, also across packages
 (`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
@@ -511,6 +527,41 @@ end
 mut c := Counter {}
 c.Tick()
 ```
+
+**Iterating your own type with `each`:** `each` works on any struct that has
+one of two shapes, so you do not write an index loop by hand. No interface and
+no registration: the compiler checks the method shape.
+
+- **Sequence** - `len()` (or `size()`) returning an integer, plus
+  `get(i: int)`. `each x in it` walks `0 .. len()-1`, and `each i, x in it`
+  also binds the index.
+- **Cursor** - `iter()` returning a struct with `has_next(): bool`, `value()`
+  and `next()`. Add `key()` to that cursor and `each k, v in it` binds both;
+  without a `key()`, `each` over it takes a single binding.
+
+```salam
+struct RangeIter:
+    pub cur: int = 0
+    pub stop: int = 0
+    pub func has_next(): bool:  ret this.cur < this.stop  end
+    pub func value(): int:      ret this.cur              end
+    pub func next():            this.cur = this.cur + 1   end
+end
+struct Range:
+    pub lo: int = 0
+    pub hi: int = 0
+    pub func iter(): RangeIter:  ret RangeIter { cur = this.lo, stop = this.hi }  end
+end
+each v in Range { lo = 2, hi = 5 }:  println v  end      // 2 3 4
+```
+
+The method names are the usual built-ins, so a Persian file spells them
+`طول`, `بگیر`, `پیمایش`, `داردبعدی`, `مقدار`, `کلید` and `بعدی`. Every std
+container now has one of the two shapes, so `each x in set`,
+`each x in stack`, `each x in queue`, `each x in deque`, `each x in list` and
+`each k, v in ordered_map` all work. `PriorityQueue` is the exception: its
+heap order is not its sorted order, so it has no `iter()` - pop from it
+instead.
 
 **Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
 struct adds a field named `Animal` and promotes its fields and `pub` methods,
@@ -741,6 +792,7 @@ struct Circle:
 end
 
 func describe<T: Shape>(s: T):  println s.name(), s.area()  end   // static bound (monomorphized)
+func show<T: Shape + Named>(s: T):  println s.name()  end        // several bounds with '+'
 func draw(s: dyn Shape):  println s.area()  end                  // dynamic dispatch
 shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
@@ -758,6 +810,22 @@ pointer itself is shared).
 That works for interfaces declared in your program; for an interface from
 another package `deep_copy()` refuses, so give the struct its own
 `deep_copy()`.
+
+**One interface can `use` another** - the same keyword structs embed with
+(Persian `شامل`). The base's methods, defaults included, become part of the
+using interface, so `<T: Solid>`, `dyn Solid` and `impl Solid on T` all see the
+full set. Two bases that provide the same method name is E107, and a cycle is
+E107 too.
+
+```salam
+interface Shape:  func Area(): f64  end
+interface Named:  func Name(): str  end
+interface Solid:
+    use Shape
+    use Named
+    func Volume(): f64
+end
+```
 
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every
@@ -779,6 +847,20 @@ end
 interface Ranked:  func rank(): int  end
 impl Ranked on int:  func rank(): int:  ret this  end  end
 impl Ranked on str:  func rank(): int:  ret len(this)  end  end
+```
+
+**An `impl` block is checked against its interface.** Whatever the block
+supplies, the type must end up with every method the interface declares, with
+matching signatures, or the `impl` line itself is E002. So an **empty** block
+is the way to say "this struct implements this interface" and be told at the
+declaration site instead of at some distant `dyn` cast:
+
+```salam
+struct Circle:
+    pub r: f64 = 1.0
+    pub func Area(): f64:  ret 3.14159 * this.r * this.r  end
+end
+impl Shape on Circle:  end      // asserts conformance; E002 here if it drifts
 ```
 
 ---

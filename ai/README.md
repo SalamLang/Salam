@@ -105,10 +105,13 @@ reply = client.chat.completions.create(
   descriptions and schemas, and when it decides to use one the answer comes
   back as `tool_calls` with `finish_reason: tool_calls` and `content: null`,
   the way the OpenAI API does it. A streamed answer holds the text back while
-  tools are on the table, so a call always arrives whole, in one delta. Past
-  `tool_calls` from the assistant and `role: tool` results are fed back into
-  the next turn, so the loop continues. One call per answer; `tool_choice` and
-  parallel calls are not read.
+  tools are on the table, so a call always arrives whole, in one delta. An
+  answer that puts a sentence in front of the call keeps the sentence as
+  `content`, and several calls in one answer all come back. Past `tool_calls`
+  from the assistant and `role: tool` results are fed back into the next turn,
+  so the loop continues. `tool_choice` is not read. Names starting with
+  `salam_` belong to the assistant's own tools: a caller tool by such a name
+  is ignored, and such a call never reaches the client.
 - The flattened conversation may be up to 1 MB. Past that the oldest turns
   are dropped, the prompt says so in one line, and the system block and the
   newest turns are kept; only a single message larger than 1 MB is refused.

@@ -1864,7 +1864,7 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam layout build`,
+A `layout:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
@@ -2044,7 +2044,7 @@ end
 | E136        | one `class` given different styles on two elements                            |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
-Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
@@ -2055,7 +2055,7 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
+Build: `salam page build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with
 merged `style.css`/`script.js`.
 
@@ -2070,7 +2070,7 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
+salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam new name                          # scaffold a project

@@ -187,7 +187,7 @@ Every layout test lives under `tests/{en,fa}/layout/`, split by subject:
 | `pages/`      | whole-page output: root content, direction, titles          |
 | `errors/`     | everything that must be rejected                            |
 
-A success test is a layout build plus `// EXPECT:` substrings, with
+A success test is a page build plus `// EXPECT:` substrings, with
 `// EXPECT-NOT:` for text that must not appear. A failure test is
 `// EXPECT: E0xx` plus `// EXPECT-MSG:`. A `.salam` file left directly in
 `tests/{en,fa}/layout/` belongs to no subdirectory and so would never run;

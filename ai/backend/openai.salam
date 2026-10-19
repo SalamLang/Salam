@@ -507,49 +507,129 @@ func keepalive(c: tcp.Conn, stream: bool, opened &: bool): bool:
     ret wr(c, "\n")
 end
 
-func tool_wanted(said: str, name &: str, args &: str): bool:
-    mut body := str.Trim(said)
-    if str.StartsWith(body, "```"):
-        nl := body.find("\n")
-        if nl < 0:
-            ret false
+func offered_names(tools: value.Value): str:
+    if not value.IsArray(tools):
+        ret ""
+    end
+    mut out := ","
+    mut i := 0
+    until i < value.ArrayLen(tools):
+        t := value.ArrayGet(tools, i)
+        f := value.ObjectHas(t, "function") ? value.ObjectGet(t, "function") : t
+        got := text_field(f, "name")
+        if got.len() > 0:
+            out = out + got + ","
         end
-        body = str.Trim(body.substr(nl + 1, body.len() - nl - 1))
-        body = str.Trim(str.TrimSuffix(str.Trim(body), "```"))
+        i += 1
     end
-    if not str.StartsWith(body, "{") or body.len() > 200000:
-        ret false
+    ret out
+end
+
+func json_spans(text: str): Vector<str>:
+    mut spans := Vector {} as Vector<str>
+    mut depth := 0
+    mut start := 0 - 1
+    mut quoted := false
+    mut escaped := false
+    mut i := 0
+    until i < text.len():
+        c := text.substr(i, 1)
+        if quoted:
+            if escaped:
+                escaped = false
+            else c == "\\":
+                escaped = true
+            else c == "\"":
+                quoted = false
+            end
+        else c == "\"":
+            quoted = true
+        else c == "{":
+            if depth == 0:
+                start = i
+            end
+            depth += 1
+        else c == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    spans.push(text.substr(start, i - start + 1))
+                    start = 0 - 1
+                end
+            end
+        end
+        i += 1
     end
+    ret spans
+end
+
+func one_call(span: str, names: str, name &: str, args &: str): bool:
     mut err := encerr.EncodingError {}
-    root := json.Decode(body, err)
+    root := json.Decode(span, err)
     if encerr.IsError(err) or not value.IsObject(root):
         value.ValueFree(root)
         ret false
     end
-    got := text_field(root, "tool")
+    mut holder := root
+    if value.ObjectHas(root, "tool_call") and value.IsObject(value.ObjectGet(root, "tool_call")):
+        holder = value.ObjectGet(root, "tool_call")
+    else value.ObjectHas(root, "function") and value.IsObject(value.ObjectGet(root, "function")):
+        holder = value.ObjectGet(root, "function")
+    end
+    mut got := text_field(holder, "tool")
     if got.len() == 0:
+        got = text_field(holder, "name")
+    end
+    if got.len() == 0 or names.find("," + got + ",") < 0:
         value.ValueFree(root)
         ret false
     end
     name = got
     args = "{}"
-    if value.ObjectHas(root, "arguments"):
-        args = json.EncodeDefault(value.ObjectGet(root, "arguments"))
+    each key in ["arguments", "args", "input", "parameters"]:
+        if args == "{}" and value.ObjectHas(holder, key):
+            picked := value.ObjectGet(holder, key)
+            if value.IsString(picked):
+                args = value.AsString(picked)
+            else:
+                args = json.EncodeDefault(picked)
+            end
+        end
     end
     value.ValueFree(root)
     ret true
 end
 
-func call_json(name: str, args: str): str:
-    mut f := Vector {} as Vector<str>
-    f.push(json.Member("name", name))
-    f.push(json.Member("arguments", args))
-    mut c := Vector {} as Vector<str>
-    c.push(json.MemberInt("index", 0))
-    c.push(json.Member("id", "call_" + crypto.RandomHex(12)))
-    c.push(json.Member("type", "function"))
-    c.push(json.MemberRaw("function", json.Object(f)))
-    ret "[" + json.Object(c) + "]"
+func tool_calls_of(said: str, names: str, calls &: Vector<str>, prose &: str): bool:
+    if names.len() < 3 or said.len() == 0 or said.len() > 400000:
+        ret false
+    end
+    mut rest := said
+    each span in json_spans(said):
+        mut name := ""
+        mut args := ""
+        if one_call(span, names, name, args):
+            mut f := Vector {} as Vector<str>
+            f.push(json.Member("name", name))
+            f.push(json.Member("arguments", args))
+            mut c := Vector {} as Vector<str>
+            c.push(json.MemberInt("index", calls.len() as i64))
+            c.push(json.Member("id", "call_" + crypto.RandomHex(12)))
+            c.push(json.Member("type", "function"))
+            c.push(json.MemberRaw("function", json.Object(f)))
+            calls.push(json.Object(c))
+            rest = str.Replace(rest, span, "")
+        end
+    end
+    if calls.len() == 0:
+        ret false
+    end
+    prose = str.Trim(str.Replace(str.Replace(rest, "```json", ""), "```", ""))
+    ret true
+end
+
+func call_json(calls: Vector<str>): str:
+    ret json.Array(calls)
 end
 
 func tail_of(sent: str, final: str): str:
@@ -568,11 +648,14 @@ func tail_of(sent: str, final: str): str:
     ret "\n\n" + final
 end
 
-func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, final: str, status: str):
-    mut name := ""
-    mut args := ""
-    if sent.len() == 0 and status == "done" and tool_wanted(final, name, args):
-        _t := wr(c, chunk(cid, created, `{"tool_calls": ` + call_json(name, args) + "}", ""))
+func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, final: str, status: str, names: str):
+    mut calls := Vector {} as Vector<str>
+    mut prose := ""
+    if sent.len() == 0 and status == "done" and tool_calls_of(final, names, calls, prose):
+        if prose.len() > 0:
+            _p := wr(c, chunk(cid, created, "{" + json.Member("content", prose) + "}", ""))
+        end
+        _t := wr(c, chunk(cid, created, `{"tool_calls": ` + call_json(calls) + "}", ""))
         _f := wr(c, chunk(cid, created, "{}", "tool_calls"))
         ret
     end
@@ -623,7 +706,8 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         ret
     end
     stream := value.IsBool(field(req, "stream")) and value.AsBool(field(req, "stream"))
-    offered := value.IsArray(field(req, "tools")) and value.ArrayLen(field(req, "tools")) > 0
+    names := offered_names(field(req, "tools"))
+    offered := names.len() > 2
     with_usage := value.IsBool(field(field(req, "stream_options"), "include_usage")) and value.AsBool(field(field(req, "stream_options"), "include_usage"))
     mut project := str.Trim(header(h, "x-salam-project"))
     if project.len() == 0:
@@ -755,7 +839,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         end
     end
     if stream and opened:
-        send_tail(c, cid, t, sent, final, status)
+        send_tail(c, cid, t, sent, final, status, names)
     end
     ailive.End(sid)
     aiturn.Forget(sid)
@@ -780,14 +864,18 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
         ret
     end
-    mut name := ""
-    mut args := ""
-    wants := status == "done" and tool_wanted(final, name, args)
+    mut calls := Vector {} as Vector<str>
+    mut prose := ""
+    wants := status == "done" and tool_calls_of(final, names, calls, prose)
     mut msg := Vector {} as Vector<str>
     msg.push(json.Member("role", "assistant"))
     if wants:
-        msg.push(json.MemberRaw("content", "null"))
-        msg.push(json.MemberRaw("tool_calls", call_json(name, args)))
+        if prose.len() > 0:
+            msg.push(json.Member("content", prose))
+        else:
+            msg.push(json.MemberRaw("content", "null"))
+        end
+        msg.push(json.MemberRaw("tool_calls", call_json(calls)))
     else:
         msg.push(json.Member("content", final))
     end

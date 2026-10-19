@@ -476,6 +476,22 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**`Self`** is the enclosing type, usable anywhere inside a `struct`, an
+`impl ... on T` block or a distinct type's body: as a return type, a parameter
+type, a field type, in a cast and as a struct literal. On a generic struct it
+means the struct with its own type parameters, so `Self` stands for
+`Pair<A, B>` without respelling it. It works in a `static func` too, which is
+where constructors live. Persian spells it `خود`. There is no `Self` in an
+`interface` (that would be an associated type, which Salam does not have).
+
+```salam
+struct Node:
+    pub v: int = 0
+    pub func With(n: int): Self:          ret Self { v = n }      end
+    pub static func Make(n: int): Self:   ret Self { v = n * 2 }  end
+end
+```
+
 **Static members:** `static func` and `const` inside a struct belong to the type,
 not to a value. Call them through the type name, also across packages
 (`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
@@ -776,6 +792,7 @@ struct Circle:
 end
 
 func describe<T: Shape>(s: T):  println s.name(), s.area()  end   // static bound (monomorphized)
+func show<T: Shape + Named>(s: T):  println s.name()  end        // several bounds with '+'
 func draw(s: dyn Shape):  println s.area()  end                  // dynamic dispatch
 shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
@@ -793,6 +810,22 @@ pointer itself is shared).
 That works for interfaces declared in your program; for an interface from
 another package `deep_copy()` refuses, so give the struct its own
 `deep_copy()`.
+
+**One interface can `use` another** - the same keyword structs embed with
+(Persian `شامل`). The base's methods, defaults included, become part of the
+using interface, so `<T: Solid>`, `dyn Solid` and `impl Solid on T` all see the
+full set. Two bases that provide the same method name is E107, and a cycle is
+E107 too.
+
+```salam
+interface Shape:  func Area(): f64  end
+interface Named:  func Name(): str  end
+interface Solid:
+    use Shape
+    use Named
+    func Volume(): f64
+end
+```
 
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every
@@ -814,6 +847,20 @@ end
 interface Ranked:  func rank(): int  end
 impl Ranked on int:  func rank(): int:  ret this  end  end
 impl Ranked on str:  func rank(): int:  ret len(this)  end  end
+```
+
+**An `impl` block is checked against its interface.** Whatever the block
+supplies, the type must end up with every method the interface declares, with
+matching signatures, or the `impl` line itself is E002. So an **empty** block
+is the way to say "this struct implements this interface" and be told at the
+declaration site instead of at some distant `dyn` cast:
+
+```salam
+struct Circle:
+    pub r: f64 = 1.0
+    pub func Area(): f64:  ret 3.14159 * this.r * this.r  end
+end
+impl Shape on Circle:  end      // asserts conformance; E002 here if it drifts
 ```
 
 ---

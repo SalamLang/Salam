@@ -1,0 +1,304 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.dsp
+import audio.midi
+import audio.music
+import audio.synth
+import compress
+import filepath
+import math
+import mem
+import os
+import testing
+
+func peak_freq(c: audio.Clip, n: int): f64:
+    mut re := Vector {} as Vector<f64>
+    mut im := Vector {} as Vector<f64>
+    mut i := 0
+    until i < n:
+        w := dsp.WindowValue(dsp.WindowHann, i, n, 0.0)
+        re.push(audio.Sample(c, i, 0) * w)
+        im.push(0.0)
+        i += 1
+    end
+    dsp.FFTVec(re, im)
+    mags := dsp.Magnitude(re.ref(0), im.ref(0), n / 2)
+    bin := dsp.PeakBin(mags)
+    out := dsp.BinFrequency(bin, n, c.rate)
+    re.free()
+    im.free()
+    mags.free()
+    ret out
+end
+
+func main:
+    println "notes and frequencies"
+    testing.AssertEqFloat(music.NoteToFreq(69), 440.0, 0.000001)
+    testing.AssertEqFloat(music.NoteToFreq(81), 880.0, 0.000001)
+    testing.AssertEqFloat(music.NoteToFreq(57), 220.0, 0.000001)
+    testing.AssertEqFloat(music.NoteToFreq(60), 261.6255653005986, 0.0001)
+    testing.AssertEqInt(music.FreqToNote(440.0), 69)
+    testing.AssertEqInt(music.FreqToNote(261.63), 60)
+    testing.AssertEqInt(music.FreqToNote(0.0), 0)
+    testing.AssertEqInt(music.Octave(60), 4)
+    testing.AssertEqInt(music.PitchClass(61), 1)
+    testing.AssertEqInt(music.PitchClass(-1), 11)
+    testing.AssertEqInt(music.Transpose(60, 7), 67)
+    testing.AssertEqInt(music.Interval(60, 67), 7)
+    testing.AssertEqFloat(music.Cents(440.0, 880.0), 1200.0, 0.000001)
+    testing.AssertEqFloat(music.FreqToCents(440.0, 69), 0.0, 0.000001)
+    testing.AssertEqFloat(music.NoteToFreqCents(69, 1200.0), 880.0, 0.000001)
+
+    println "note names round-trip"
+    each pair in [60, 61, 69, 0, 127]:
+        name := music.NoteName(pair)
+        testing.AssertEqInt(music.ParseNote(name), pair)
+        mem.Free(name as void*)
+    end
+    n60 := music.NoteName(60)
+    testing.AssertEqStr(n60, "C4")
+    mem.Free(n60 as void*)
+    n61 := music.NoteName(61)
+    testing.AssertEqStr(n61, "C#4")
+    mem.Free(n61 as void*)
+    n69 := music.NoteName(69)
+    testing.AssertEqStr(n69, "A4")
+    mem.Free(n69 as void*)
+    testing.AssertEqInt(music.ParseNote("c4"), 60)
+    testing.AssertEqInt(music.ParseNote("Db4"), 61)
+    testing.AssertEqInt(music.ParseNote("x9"), -1)
+    testing.AssertEqInt(music.ParseNote(""), -1)
+    testing.AssertEqInt(music.ParseNote("C"), -1)
+
+    println "scales and chords"
+    mut maj := music.Scale(music.ScaleMajor)
+    testing.AssertEqInt(maj.len(), 7)
+    testing.AssertEqInt(maj.get(0), 0)
+    testing.AssertEqInt(maj.get(6), 11)
+    maj.free()
+    mut chrom := music.Scale(music.ScaleChromatic)
+    testing.AssertEqInt(chrom.len(), 12)
+    chrom.free()
+    mut pent := music.Scale(music.ScalePentatonic)
+    testing.AssertEqInt(pent.len(), 5)
+    pent.free()
+    mut blues := music.Scale(music.ScaleBlues)
+    testing.AssertEqInt(blues.len(), 6)
+    blues.free()
+    mut notes := music.ScaleNotes(60, music.ScaleMajor, 8)
+    testing.AssertEqInt(notes.len(), 8)
+    testing.AssertEqInt(notes.get(0), 60)
+    testing.AssertEqInt(notes.get(7), 72)
+    notes.free()
+    mut tri := music.ChordNotes(60, music.ChordMajor)
+    testing.AssertEqInt(tri.len(), 3)
+    testing.AssertEqInt(tri.get(1), 64)
+    testing.AssertEqInt(tri.get(2), 67)
+    tri.free()
+    mut m7 := music.ChordNotes(60, music.ChordMinor7)
+    testing.AssertEqInt(m7.len(), 4)
+    testing.AssertEqInt(m7.get(3), 70)
+    m7.free()
+    mut dim := music.Chord(music.ChordDiminished)
+    testing.AssertEqInt(dim.get(2), 6)
+    dim.free()
+
+    println "persian dastgah carries quarter tones"
+    mut shur := music.Dastgah(music.DastgahShur)
+    testing.AssertEqInt(shur.len(), 7)
+    testing.AssertEqFloat(shur.get(2), 350.0, 0.0)
+    shur.free()
+    mut mahur := music.Dastgah(music.DastgahMahur)
+    testing.AssertEqFloat(mahur.get(2), 400.0, 0.0)
+    mahur.free()
+    mut freqs := music.DastgahFreqs(60, music.DastgahShur)
+    testing.AssertEqInt(freqs.len(), 7)
+    testing.AssertEqFloat(freqs.get(0), music.NoteToFreq(60), 0.000001)
+    testing.AssertMsg(freqs.get(2) > music.NoteToFreq(63), "the third of shur sits above a minor third")
+    testing.AssertMsg(freqs.get(2) < music.NoteToFreq(64), "and below a major third")
+    freqs.free()
+    testing.AssertEqFloat(music.KoronCents, -50.0, 0.0)
+    testing.AssertEqFloat(music.SoriCents, 50.0, 0.0)
+
+    println "just and pythagorean tunings"
+    testing.AssertEqFloat(music.JustRatio(0), 1.0, 0.0)
+    testing.AssertEqFloat(music.JustRatio(7), 1.5, 0.0)
+    testing.AssertEqFloat(music.JustRatio(4), 1.25, 0.0)
+    testing.AssertEqFloat(music.PythagoreanRatio(0), 1.0, 0.0)
+    testing.AssertEqFloat(music.PythagoreanRatio(7), 1.5, 0.0)
+    testing.AssertEqFloat(music.PythagoreanRatio(2), 1.125, 0.0)
+    testing.AssertEqFloat(music.PythagoreanRatio(5), 4.0 / 3.0, 0.000001)
+    testing.AssertEqFloat(music.JustFreq(69, 7), 660.0, 0.000001)
+    testing.AssertEqFloat(music.BeatSeconds(120.0), 0.5, 0.0)
+    testing.AssertEqFloat(music.BeatSeconds(0.0), 0.0, 0.0)
+
+    println "oscillators make the pitch they are asked for"
+    mut sine := synth.Tone(440.0, 0.2, 44100, synth.WaveSine)
+    testing.AssertEqInt(sine.rate, 44100)
+    testing.AssertEqInt(sine.frames, 8820)
+    testing.AssertMsg(math.Abs(peak_freq(sine, 8192) - 440.0) < 12.0, "a sine should peak at its pitch")
+    testing.AssertMsg(audio.Peak(sine) > 0.9, "a sine should reach full scale")
+    mut saw := synth.Tone(220.0, 0.2, 44100, synth.WaveSaw)
+    testing.AssertMsg(math.Abs(peak_freq(saw, 8192) - 220.0) < 12.0, "a saw should peak at its pitch")
+    mut sq := synth.Tone(330.0, 0.2, 44100, synth.WaveSquare)
+    testing.AssertMsg(math.Abs(peak_freq(sq, 8192) - 330.0) < 12.0, "a square should peak at its pitch")
+    mut tr := synth.Tone(550.0, 0.2, 44100, synth.WaveTriangle)
+    testing.AssertMsg(math.Abs(peak_freq(tr, 8192) - 550.0) < 12.0, "a triangle should peak at its pitch")
+    testing.AssertEqFloat(synth.WaveValue(synth.WaveSine, 0.0, 0.5), 0.0, 0.000001)
+    testing.AssertEqFloat(synth.WaveValue(synth.WaveSaw, 0.5, 0.5), 0.0, 0.000001)
+    testing.AssertEqFloat(synth.WaveValue(synth.WaveSquare, 0.25, 0.5), 1.0, 0.0)
+    testing.AssertEqFloat(synth.WaveValue(synth.WaveSquare, 0.75, 0.5), -1.0, 0.0)
+
+    println "envelopes rise, hold and fall"
+    e := synth.ADSR { attack = 0.1, decay = 0.1, sustain = 0.5, release = 0.2 }
+    testing.AssertEqFloat(synth.ADSRAt(e, 0.0, 1.0), 0.0, 0.0)
+    testing.AssertEqFloat(synth.ADSRAt(e, 0.05, 1.0), 0.5, 0.000001)
+    testing.AssertEqFloat(synth.ADSRAt(e, 0.1, 1.0), 1.0, 0.000001)
+    testing.AssertEqFloat(synth.ADSRAt(e, 0.2, 1.0), 0.5, 0.000001)
+    testing.AssertEqFloat(synth.ADSRAt(e, 0.5, 1.0), 0.5, 0.000001)
+    testing.AssertEqFloat(synth.ADSRAt(e, 1.2, 1.0), 0.0, 0.000001)
+    testing.AssertEqFloat(synth.ADSRAt(e, 5.0, 1.0), 0.0, 0.0)
+    testing.AssertEqFloat(synth.ADSRTotal(e, 1.0), 1.2, 0.000001)
+    mut shaped := synth.ToneEnvelope(440.0, 0.2, 22050, synth.WaveSine, e, 0.8)
+    testing.AssertEqFloat(audio.Sample(shaped, 0, 0), 0.0, 0.0)
+    testing.AssertMsg(audio.Peak(shaped) <= 0.81, "the envelope should hold the gain down")
+
+    println "chords, noise and other voices"
+    mut cf := music.DastgahFreqs(57, music.DastgahShur)
+    mut ch := synth.Chord(cf, 0.2, 22050, synth.WaveSine)
+    testing.AssertMsg(audio.Peak(ch) > 0.1, "a chord should make sound")
+    testing.AssertMsg(not audio.IsClipped(ch), "a chord should not clip")
+    cf.free()
+    mut wn := synth.NoiseWhite(0.1, 22050)
+    testing.AssertMsg(audio.RMS(wn) > 0.3, "white noise should be loud")
+    mut pn := synth.NoisePink(0.1, 22050)
+    testing.AssertMsg(audio.RMS(pn) > 0.01, "pink noise should make sound")
+    mut bn := synth.NoiseBrown(0.1, 22050)
+    testing.AssertMsg(audio.RMS(bn) > 0.001, "brown noise should make sound")
+    mut fm := synth.FMTone(220.0, 2.0, 3.0, 0.2, 22050)
+    testing.AssertMsg(audio.Peak(fm) > 0.5, "fm should make sound")
+    mut add := synth.Additive(220.0, 6, 0.6, 0.2, 44100)
+    testing.AssertMsg(math.Abs(peak_freq(add, 8192) - 220.0) < 12.0, "additive should keep its fundamental")
+    mut ks := synth.KarplusStrong(220.0, 0.3, 22050, 0.99)
+    testing.AssertMsg(audio.Peak(ks) > 0.1, "karplus strong should make sound")
+
+    println "a rendered phrase"
+    mut phrase := Vector {} as Vector<synth.Note>
+    mut scale := music.ScaleNotes(60, music.ScaleMajor, 8)
+    mut k := 0
+    until k < scale.len():
+        phrase.push(synth.NoteAt(scale.get(k), (k as f64) * 0.1, 0.09, 0.4, synth.WaveSine))
+        k += 1
+    end
+    scale.free()
+    mut song := synth.RenderNotes(phrase, 22050, 2, e)
+    testing.AssertEqInt(song.channels, 2)
+    testing.AssertMsg(song.frames > 0, "the phrase should have length")
+    testing.AssertMsg(audio.Peak(song) > 0.1, "the phrase should make sound")
+    testing.AssertMsg(not audio.IsClipped(song), "the phrase should not clip")
+    phrase.free()
+    mut nothing := synth.RenderNotes(Vector {} as Vector<synth.Note>, 22050, 1, e)
+    testing.AssertTrue(audio.IsEmpty(nothing))
+
+    println "midi round-trip"
+    mut f := midi.NewSong(480)
+    testing.AssertEqInt(f.division, 480)
+    testing.AssertEqFloat(midi.Bpm(f), 120.0, 0.000001)
+    mut t := midi.NewTrack()
+    midi.AddTempo(t, 0, 120.0)
+    midi.AddProgram(t, 0, 0, 0)
+    midi.AddControl(t, 0, 7, 100, 0)
+    mut s := 0
+    until s < 4:
+        midi.AddNote(t, s * 480, 240, 60 + s * 2, 100, 0)
+        s += 1
+    end
+    midi.AddTrack(f, t)
+    testing.AssertEqInt(f.tracks.len(), 1)
+    testing.AssertEqInt(midi.TotalTicks(f), 3 * 480 + 240)
+    testing.AssertEqFloat(midi.TicksToSeconds(f, 480), 0.5, 0.000001)
+    testing.AssertEqInt(midi.SecondsToTicks(f, 0.5), 480)
+
+    enc := midi.EncodeMIDI(f)
+    testing.AssertMsg(compress.BufLen(enc) > 22, "the midi file should have a body")
+    testing.AssertTrue(midi.IsMIDI(enc.data, enc.len))
+    testing.AssertEqInt(audio.DetectFormat(enc.data, enc.len), audio.FormatMIDI)
+    mut ok := false
+    mut back := midi.DecodeMIDI(enc.data, enc.len, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(back.division, 480)
+    testing.AssertEqInt(back.tracks.len(), 1)
+    testing.AssertEqFloat(midi.Bpm(back), 120.0, 0.01)
+    testing.AssertEqInt(midi.TotalTicks(back), 3 * 480 + 240)
+
+    println "notes come back and render"
+    mut got := midi.Notes(back)
+    testing.AssertEqInt(got.len(), 4)
+    testing.AssertEqInt(got.get(0).note, 60)
+    testing.AssertEqInt(got.get(3).note, 66)
+    testing.AssertEqFloat(got.get(1).start, 0.5, 0.000001)
+    testing.AssertEqFloat(got.get(0).length, 0.25, 0.000001)
+    got.free()
+    mut rendered := midi.Render(back, 22050, 1)
+    testing.AssertMsg(rendered.frames > 0, "the midi should render")
+    testing.AssertMsg(audio.Peak(rendered) > 0.05, "the midi should make sound")
+    testing.AssertEqStr(midi.ProgramName(0), "Acoustic Grand Piano")
+    testing.AssertEqStr(midi.ProgramName(200), "")
+
+    println "midi on disk and refusals"
+    path := filepath.Join(os.TempDir(), "salam_audio_song.mid")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(midi.SaveMIDI(f, path))
+    mut dok := false
+    mut disk := midi.OpenMIDI(path, dok)
+    testing.AssertTrue(dok)
+    testing.AssertEqInt(disk.tracks.len(), 1)
+    mut gone := false
+    missing := filepath.Join(os.TempDir(), "salam_audio_song_none.mid")
+    defer mem.Free(missing as void*)
+    midi.OpenMIDI(missing, gone)
+    testing.AssertFalse(gone)
+    mut empty := midi.NewSong(480)
+    testing.AssertEqInt(compress.BufLen(midi.EncodeMIDI(empty)), 0)
+    testing.AssertFalse(midi.IsMIDI(enc.data, 8))
+    mut bad := false
+    midi.DecodeMIDI(enc.data, 8, bad)
+    testing.AssertFalse(bad)
+    midi.FreeSong(empty)
+
+    compress.BufFree(enc)
+    audio.Free(sine)
+    audio.Free(saw)
+    audio.Free(sq)
+    audio.Free(tr)
+    audio.Free(shaped)
+    audio.Free(ch)
+    audio.Free(wn)
+    audio.Free(pn)
+    audio.Free(bn)
+    audio.Free(fm)
+    audio.Free(add)
+    audio.Free(ks)
+    audio.Free(song)
+    audio.Free(nothing)
+    audio.Free(rendered)
+    midi.FreeSong(f)
+    midi.FreeSong(back)
+    midi.FreeSong(disk)
+    ret testing.Summary()
+end

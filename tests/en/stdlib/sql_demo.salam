@@ -62,6 +62,21 @@ func check_ok(q: str, c: sql.Catalog): bool:
     ret out
 end
 
+func filled(q: str, a: sql.Args, d: sql.Dialect): str:
+    mut r := sql.Report {}
+    out := sql.Fill(q, a, d, r)
+    sql.FreeReport(r)
+    ret out
+end
+
+func fill_code(q: str, a: sql.Args, d: sql.Dialect): str:
+    mut r := sql.Report {}
+    _out := sql.Fill(q, a, d, r)
+    code := first_code(r)
+    sql.FreeReport(r)
+    ret code
+end
+
 func main:
     lite := sql.DialectOf(sql.SQLITE)
     my := sql.DialectOf(sql.MYSQL)
@@ -378,6 +393,60 @@ func main:
     testing.AssertEqInt(gap.params.get(1).ordinal, 3)
     sql.FreeAnalysis(gap)
     sql.FreeCatalog(pgcat)
+
+    mut one := sql.NewArgs()
+    sql.AddInt(one, 5 as i64)
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE id = ?", one, lite), "SELECT a FROM t WHERE id = 5")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE id = $1", one, pg), "SELECT a FROM t WHERE id = 5")
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE id = $1 OR ref = $1", one, pg),
+        "SELECT a FROM t WHERE id = 5 OR ref = 5"
+    )
+    testing.AssertEqStr(filled("SELECT '?' , ? FROM t", one, lite), "SELECT '?' , 5 FROM t")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE c = '?' AND id = ?", one, lite), "SELECT a FROM t WHERE c = '?' AND id = 5")
+    testing.AssertEqStr(fill_code("SELECT a FROM t WHERE id = ? AND x = ?", one, lite), "SQL400")
+    testing.AssertEqStr(fill_code("SELECT a FROM t", one, lite), "SQL400")
+    testing.AssertEqStr(fill_code("SELECT a FROM t WHERE id = :id", one, lite), "SQL401")
+    sql.FreeArgs(one)
+
+    mut mix := sql.NewArgs()
+    sql.AddText(mix, "O'Brien")
+    sql.AddBool(mix, true)
+    sql.AddNull(mix)
+    sql.AddFloat(mix, 1.5)
+    testing.AssertEqInt(sql.ArgCount(mix), 4)
+    testing.AssertEqStr(
+        filled("INSERT INTO t (a, b, c, d) VALUES (?, ?, ?, ?)", mix, lite),
+        "INSERT INTO t (a, b, c, d) VALUES ('O''Brien', 1, NULL, 1.5)"
+    )
+    testing.AssertEqStr(
+        filled("INSERT INTO t (a, b, c, d) VALUES ($1, $2, $3, $4)", mix, pg),
+        "INSERT INTO t (a, b, c, d) VALUES ('O''Brien', TRUE, NULL, 1.5)"
+    )
+    sql.FreeArgs(mix)
+
+    mut evil := sql.NewArgs()
+    sql.AddText(evil, "x' OR '1'='1")
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE name = ?", evil, lite),
+        "SELECT a FROM t WHERE name = 'x'' OR ''1''=''1'"
+    )
+    sql.FreeArgs(evil)
+
+    mut slash := sql.NewArgs()
+    sql.AddText(slash, "a\\b")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE p = ?", slash, my), "SELECT a FROM t WHERE p = 'a\\\\b'")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE p = $1", slash, pg), "SELECT a FROM t WHERE p = 'a\\b'")
+    sql.FreeArgs(slash)
+
+    mut back := sql.NewArgs()
+    sql.AddInt(back, 7 as i64)
+    sql.AddInt(back, 9 as i64)
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE x = $2 AND y = $1", back, pg),
+        "SELECT a FROM t WHERE x = 9 AND y = 7"
+    )
+    sql.FreeArgs(back)
 
     sql.FreeCatalog(cat)
     ret testing.Summary()

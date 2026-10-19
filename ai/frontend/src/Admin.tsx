@@ -465,7 +465,9 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">API</th>
               <th scope="col">توکن</th>
               <th scope="col">آخرین ورود</th>
-              <th scope="col">آخرین فعالیت</th>
+              <th scope="col">آخرین چت</th>
+              <th scope="col">آخرین ایجنت</th>
+              <th scope="col">آخرین API</th>
             </tr>
           </thead>
           <tbody>
@@ -487,12 +489,14 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.api_requests)}</td>
                 <td title={exactTitle(u.tokens || 0)}>{fmtCompact(u.tokens || 0)}</td>
                 <td title={u.last_login ? `${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود` : undefined}>{fmtRelative(u.last_login || 0)}</td>
-                <td title={u.last_active ? fmtDateTime(u.last_active) : undefined}>{fmtRelative(u.last_active)}</td>
+                <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
+                <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
+                <td title={u.last_active_api ? fmtDateTime(u.last_active_api) : undefined}>{fmtRelative(u.last_active_api)}</td>
               </tr>
             ))}
             {data && data.users.length === 0 && (
               <tr>
-                <td colSpan={11} className="empty-cell">
+                <td colSpan={13} className="empty-cell">
                   کاربری پیدا نشد.
                 </td>
               </tr>

@@ -199,7 +199,9 @@ export type AdminUser = {
   tokens: number;
   last_login: number;
   logins: number;
-  last_active: number;
+  last_active_chat: number;
+  last_active_agent: number;
+  last_active_api: number;
 };
 export type AdminApp = {
   id: number;

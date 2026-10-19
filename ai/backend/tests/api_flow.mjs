@@ -158,6 +158,14 @@ const streamedCall = await chat(agentKey, { model: "salam", stream: true, tools:
 const sc = sse(await streamedCall.text());
 const delta = sc.chunks.map((c) => c.choices?.[0]?.delta?.tool_calls?.[0]).find(Boolean);
 check("a streamed tool call arrives whole with a tool_calls finish", sc.ended && sc.finish[0] === "tool_calls" && delta?.function?.name === "write_to_file" && JSON.parse(delta.function.arguments).path === "factorial.salam", sc.events.slice(-3));
+const runSpec = [{ type: "function", function: { name: "run_commands", description: "Run shell commands", parameters: { type: "object", properties: { commands: { type: "string" } }, required: ["commands"] } } }];
+const chatty = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "use the chatty tool please" }] })).json();
+check("a call with a sentence in front of it is still a tool call", chatty.choices?.[0]?.finish_reason === "tool_calls" && chatty.choices[0].message.tool_calls?.[0]?.function?.name === "run_commands", chatty.choices?.[0]?.message);
+check("the sentence is kept as the message content", (chatty.choices?.[0]?.message?.content ?? "").includes("look at the project"), chatty.choices?.[0]?.message?.content);
+const twice = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "use two tools now" }] })).json();
+check("two calls in one answer both come back", twice.choices?.[0]?.message?.tool_calls?.length === 2 && JSON.parse(twice.choices[0].message.tool_calls[1].function.arguments).commands === "ls", twice.choices?.[0]?.message?.tool_calls);
+const bogus = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "call an unknown tool" }] })).json();
+check("a name the caller never offered stays text, not a tool call", bogus.choices?.[0]?.finish_reason === "stop" && !bogus.choices?.[0]?.message?.tool_calls, bogus.choices?.[0]);
 const noTools = await (await chat(agentKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "just say hello" }] })).json();
 check("an answer that needs no tool still comes back as text", noTools.choices?.[0]?.finish_reason === "stop" && typeof noTools.choices?.[0]?.message?.content === "string", noTools.choices?.[0]);
 

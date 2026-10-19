@@ -195,8 +195,8 @@ the runner reports that as a failure rather than skipping it. Run the lot, or
 one directory:
 
 ```sh
-sh tools/bash/run-tests.sh layout
-sh tools/bash/run-tests.sh layout/errors
+sh tools/bash/run-tests.sh page
+sh tools/bash/run-tests.sh page/errors
 ```
 
 `compiler/tests_port/layout_test.salam` fails if the schema has problems

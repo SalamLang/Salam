@@ -233,7 +233,7 @@ const lastMonth = usum.usage.find((p) => p.key === "last_month");
 check("last month ends where this month starts", lastMonth.to === usum.usage.find((p) => p.key === "month").from && lastMonth.from < lastMonth.to);
 check("daily rows carry token totals", typeof usum.daily.at(-1).tokens_in === "number" && usum.daily.at(-1).tokens_in > 0, usum.daily.at(-1));
 const urow = (await api("GET", "/admin/users?q=admin", session)).json.users[0];
-check("users show tokens, last login and login count", urow.tokens > 0 && urow.last_login > 0 && urow.logins >= 1, urow);
+check("users show tokens, last login and login count", urow.tokens_in > 0 && urow.tokens_out > 0 && urow.last_login > 0 && urow.logins >= 1, urow);
 const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);

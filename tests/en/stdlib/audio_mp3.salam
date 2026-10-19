@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import audio
+import audio.codec
+import audio.mp3
+import audio.tag
+import compress
+import math
+import testing
+
+func main:
+    println "a constant bitrate mpeg-1 file"
+    mut ok := false
+    cbr := archive.ReadBinaryFile("tests/fixtures/audio/cbr.mp3", ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt(compress.BufLen(cbr), 1462)
+    testing.AssertTrue(mp3.IsMP3(cbr.data, cbr.len))
+    testing.AssertEqInt(audio.DetectFormat(cbr.data, cbr.len), audio.FormatMP3)
+    testing.AssertFalse(tag.HasID3v2(cbr.data, cbr.len))
+    testing.AssertEqInt(mp3.AudioStart(cbr.data, cbr.len), 0)
+
+    mut h := mp3.Header {}
+    testing.AssertTrue(mp3.ParseHeader(cbr.data, cbr.len, 0, h))
+    testing.AssertEqInt(h.version, mp3.Version1)
+    testing.AssertEqInt(h.layer, mp3.Layer3)
+    testing.AssertEqInt(h.rate, 44100)
+    testing.AssertEqInt(h.bitrate, 64)
+    testing.AssertEqInt(h.channels, 1)
+    testing.AssertEqInt(h.mode, mp3.ModeMono)
+    testing.AssertEqInt(h.samples, 1152)
+    testing.AssertEqInt(h.frame_size, 144 * 64 * 1000 / 44100 + h.padding)
+    testing.AssertEqInt(mp3.CountFrames(cbr.data, cbr.len), 7)
+
+    mut pok := false
+    cinfo := mp3.ProbeMP3(cbr.data, cbr.len, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(cinfo.format, audio.FormatMP3)
+    testing.AssertEqInt(cinfo.rate, 44100)
+    testing.AssertEqInt(cinfo.channels, 1)
+    testing.AssertEqInt(cinfo.bits, 16)
+    testing.AssertFalse(cinfo.lossless)
+    testing.AssertEqInt(cinfo.frames, 7 * 1152)
+    testing.AssertMsg(math.Abs(cinfo.duration - 0.1828) < 0.001, "about a fifth of a second")
+    testing.AssertMsg(math.AbsI(cinfo.bitrate - 64000) < 2000, "near 64 kbit")
+
+    println "frame walking and seeking"
+    testing.AssertEqInt(mp3.FrameAt(cbr.data, cbr.len, 0), 0)
+    testing.AssertMsg(mp3.FrameAt(cbr.data, cbr.len, 3) > 0, "the fourth frame should be found")
+    testing.AssertEqInt(mp3.FrameAt(cbr.data, cbr.len, 99), -1)
+    testing.AssertMsg(mp3.SeekToSecond(cbr.data, cbr.len, 0.1) > 0, "seeking inside the file works")
+    testing.AssertEqInt(mp3.SeekToSecond(cbr.data, cbr.len, 99.0), -1)
+    mut heads := mp3.Headers(cbr.data, cbr.len)
+    testing.AssertEqInt(heads.len(), 7)
+    testing.AssertEqInt(heads.get(0).rate, 44100)
+    testing.AssertEqInt(heads.get(6).rate, 44100)
+    mut total := 0
+    mut i := 0
+    until i < heads.len():
+        total += heads.get(i).frame_size
+        i += 1
+    end
+    testing.AssertEqInt(total, 1462)
+    heads.free()
+
+    println "a variable bitrate mpeg-2 file with a tag"
+    mut vok := false
+    vbr := archive.ReadBinaryFile("tests/fixtures/audio/vbr.mp3", vok)
+    testing.AssertTrue(vok)
+    testing.AssertTrue(tag.HasID3v2(vbr.data, vbr.len))
+    testing.AssertEqInt(tag.ID3v2Size(vbr.data, vbr.len), 44)
+    testing.AssertEqInt(mp3.AudioStart(vbr.data, vbr.len), 44)
+    mut vh := mp3.Header {}
+    testing.AssertTrue(mp3.ParseHeader(vbr.data, vbr.len, 44, vh))
+    testing.AssertEqInt(vh.version, mp3.Version2)
+    testing.AssertEqInt(vh.layer, mp3.Layer3)
+    testing.AssertEqInt(vh.rate, 22050)
+    testing.AssertEqInt(vh.channels, 2)
+    testing.AssertEqInt(vh.samples, 576)
+    testing.AssertEqInt(mp3.CountFrames(vbr.data, vbr.len), 11)
+
+    mut vinfo := mp3.VbrInfo {}
+    testing.AssertTrue(mp3.ReadVbrInfo(vbr.data, vbr.len, vinfo))
+    testing.AssertTrue(vinfo.found)
+    testing.AssertEqInt(vinfo.frames, 10)
+    testing.AssertEqInt(mp3.CountFrames(vbr.data, vbr.len), vinfo.frames + 1)
+    testing.AssertMsg(vinfo.bytes > 0, "the xing header should carry a byte count")
+
+    mut vpok := false
+    vprobe := mp3.ProbeMP3(vbr.data, vbr.len, vpok)
+    testing.AssertTrue(vpok)
+    testing.AssertEqInt(vprobe.rate, 22050)
+    testing.AssertEqInt(vprobe.channels, 2)
+    testing.AssertTrue(vprobe.vbr)
+    testing.AssertMsg(vprobe.frames > 0, "a vbr file still reports a length")
+
+    println "the bitrates really do vary"
+    mut vheads := mp3.Headers(vbr.data, vbr.len)
+    testing.AssertEqInt(vheads.len(), 11)
+    mut lo := 1000
+    mut hi := 0
+    mut k := 0
+    until k < vheads.len():
+        b := vheads.get(k).bitrate
+        if b < lo:
+            lo = b
+        end
+        if b > hi:
+            hi = b
+        end
+        k += 1
+    end
+    testing.AssertMsg(hi > lo, "a vbr file should use more than one bitrate")
+    vheads.free()
+
+    println "samples per frame by version and layer"
+    testing.AssertEqInt(mp3.SamplesPerFrame(mp3.Version1, mp3.Layer3), 1152)
+    testing.AssertEqInt(mp3.SamplesPerFrame(mp3.Version2, mp3.Layer3), 576)
+    testing.AssertEqInt(mp3.SamplesPerFrame(mp3.Version25, mp3.Layer3), 576)
+    testing.AssertEqInt(mp3.SamplesPerFrame(mp3.Version1, mp3.Layer1), 384)
+    testing.AssertEqInt(mp3.SamplesPerFrame(mp3.Version1, mp3.Layer2), 1152)
+
+    println "sync search and refusals"
+    testing.AssertEqInt(mp3.FindSync(cbr.data, cbr.len, 0), 0)
+    testing.AssertEqInt(mp3.FindSync(vbr.data, vbr.len, 0), 44)
+    mut junk := compress.NewByteBuf()
+    mut j := 0
+    until j < 64:
+        compress.BufPush(junk, j)
+        j += 1
+    end
+    testing.AssertEqInt(mp3.FindSync(junk.data, junk.len, 0), -1)
+    testing.AssertFalse(mp3.IsMP3(junk.data, junk.len))
+    testing.AssertEqInt(mp3.CountFrames(junk.data, junk.len), 0)
+    mut bad := mp3.Header {}
+    testing.AssertFalse(mp3.ParseHeader(junk.data, junk.len, 0, bad))
+    testing.AssertFalse(mp3.ParseHeader(cbr.data, cbr.len, 1460, bad))
+    mut nok := false
+    mp3.ProbeMP3(junk.data, junk.len, nok)
+    testing.AssertFalse(nok)
+    mut vn := mp3.VbrInfo {}
+    testing.AssertFalse(mp3.ReadVbrInfo(cbr.data, cbr.len, vn))
+
+    println "mp3 audio decoding is not carried yet"
+    testing.AssertFalse(codec.CanDecode(audio.FormatMP3))
+    testing.AssertFalse(codec.CanEncode(audio.FormatMP3))
+    mut dok := false
+    codec.Decode(cbr.data, cbr.len, dok)
+    testing.AssertFalse(dok)
+
+    println "probing from a path"
+    mut fok := false
+    finfo := mp3.ProbeFileMP3("tests/fixtures/audio/cbr.mp3", fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqInt(finfo.rate, 44100)
+    mut gone := false
+    mp3.ProbeFileMP3("tests/fixtures/audio/nope.mp3", gone)
+    testing.AssertFalse(gone)
+
+    compress.BufFree(cbr)
+    compress.BufFree(vbr)
+    compress.BufFree(junk)
+    ret testing.Summary()
+end

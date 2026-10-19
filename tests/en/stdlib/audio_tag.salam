@@ -1,0 +1,215 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import audio.tag
+import compress
+import filepath
+import mem
+import os
+import str
+import testing
+
+func fill(t &: tag.Tags):
+    t.title = str.Clone("Shiraz Nights")
+    t.artist = str.Clone("Darya")
+    t.album = str.Clone("Zagros")
+    t.albumartist = str.Clone("Various")
+    t.composer = str.Clone("Rahim")
+    t.genre = str.Clone("Folk")
+    t.comment = str.Clone("a note")
+    t.year = 2026
+    t.track = 3
+    t.tracks = 12
+    t.disc = 1
+    t.bpm = 96
+end
+
+func flac_with(comment: compress.ByteBuf): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 102)
+    compress.BufPush(out, 76)
+    compress.BufPush(out, 97)
+    compress.BufPush(out, 67)
+    compress.BufPush(out, 128 | tag.BlockVorbisComment)
+    n := compress.BufLen(comment)
+    compress.BufPush(out, (n >> 16) & 255)
+    compress.BufPush(out, (n >> 8) & 255)
+    compress.BufPush(out, n & 255)
+    compress.BufPushBuf(out, comment)
+    ret out
+end
+
+func main:
+    println "id3v1 round-trip"
+    mut src := tag.NewTags()
+    fill(src)
+    v1 := tag.WriteID3v1(src)
+    testing.AssertEqInt(compress.BufLen(v1), 128)
+    mut file1 := compress.NewByteBuf()
+    mut pad := 0
+    until pad < 64:
+        compress.BufPush(file1, 0)
+        pad += 1
+    end
+    compress.BufPushBuf(file1, v1)
+    testing.AssertTrue(tag.HasID3v1(file1.data, file1.len))
+    mut got1 := tag.NewTags()
+    testing.AssertTrue(tag.ReadID3v1(file1.data, file1.len, got1))
+    testing.AssertEqStr(got1.title, "Shiraz Nights")
+    testing.AssertEqStr(got1.artist, "Darya")
+    testing.AssertEqStr(got1.album, "Zagros")
+    testing.AssertEqStr(got1.comment, "a note")
+    testing.AssertEqInt(got1.year, 2026)
+    testing.AssertEqInt(got1.track, 3)
+    testing.AssertTrue(tag.HasTags(got1))
+    testing.AssertEqInt(tag.AudioEnd(file1.data, file1.len), 64)
+
+    println "id3v2 round-trip"
+    v2 := tag.WriteID3v2(src)
+    testing.AssertTrue(tag.HasID3v2(v2.data, v2.len))
+    testing.AssertEqInt(tag.ID3v2Version(v2.data, v2.len), 4)
+    testing.AssertEqInt(tag.ID3v2Size(v2.data, v2.len), compress.BufLen(v2))
+    mut got2 := tag.NewTags()
+    testing.AssertTrue(tag.ReadID3v2(v2.data, v2.len, got2))
+    testing.AssertEqStr(got2.title, "Shiraz Nights")
+    testing.AssertEqStr(got2.artist, "Darya")
+    testing.AssertEqStr(got2.album, "Zagros")
+    testing.AssertEqStr(got2.albumartist, "Various")
+    testing.AssertEqStr(got2.composer, "Rahim")
+    testing.AssertEqStr(got2.genre, "Folk")
+    testing.AssertEqInt(got2.year, 2026)
+    testing.AssertEqInt(got2.track, 3)
+    testing.AssertEqInt(got2.tracks, 12)
+    testing.AssertEqInt(got2.disc, 1)
+    testing.AssertEqInt(got2.bpm, 96)
+
+    println "persian text survives utf-8"
+    mut fa := tag.NewTags()
+    fa.title = str.Clone("شب‌های شیراز")
+    fa.artist = str.Clone("دریا")
+    fav2 := tag.WriteID3v2(fa)
+    mut faback := tag.NewTags()
+    testing.AssertTrue(tag.ReadID3v2(fav2.data, fav2.len, faback))
+    testing.AssertEqStr(faback.title, "شب‌های شیراز")
+    testing.AssertEqStr(faback.artist, "دریا")
+
+    println "vorbis comments round-trip"
+    vc := tag.WriteVorbisComment(src)
+    mut gotv := tag.NewTags()
+    testing.AssertTrue(tag.ReadVorbisComment(vc.data, 0, vc.len, gotv))
+    testing.AssertEqStr(gotv.title, "Shiraz Nights")
+    testing.AssertEqStr(gotv.artist, "Darya")
+    testing.AssertEqStr(gotv.genre, "Folk")
+    testing.AssertEqInt(gotv.year, 2026)
+    testing.AssertEqInt(gotv.track, 3)
+    testing.AssertEqInt(gotv.tracks, 12)
+    testing.AssertEqInt(gotv.bpm, 96)
+
+    println "vorbis comments inside a flac stream"
+    fl := flac_with(vc)
+    testing.AssertTrue(tag.IsFlacTagged(fl.data, fl.len))
+    blocks := tag.FlacBlocks(fl.data, fl.len)
+    testing.AssertEqInt(blocks.len(), 1)
+    testing.AssertEqInt(blocks.get(0).kind, tag.BlockVorbisComment)
+    testing.AssertTrue(blocks.get(0).last)
+    mut gotf := tag.NewTags()
+    testing.AssertTrue(tag.ReadFlacTags(fl.data, fl.len, gotf))
+    testing.AssertEqStr(gotf.album, "Zagros")
+
+    println "the dispatcher picks the right reader"
+    mut aok := false
+    mut auto := tag.ReadTags(v2.data, v2.len, aok)
+    testing.AssertTrue(aok)
+    testing.AssertEqStr(auto.title, "Shiraz Nights")
+    mut bok := false
+    mut autof := tag.ReadTags(fl.data, fl.len, bok)
+    testing.AssertTrue(bok)
+    testing.AssertEqStr(autof.artist, "Darya")
+    mut cok := false
+    mut auto1 := tag.ReadTags(file1.data, file1.len, cok)
+    testing.AssertTrue(cok)
+    testing.AssertEqStr(auto1.album, "Zagros")
+    mut dok := false
+    mut nothing := tag.ReadTags(vc.data, vc.len, dok)
+    testing.AssertFalse(dok)
+    testing.AssertFalse(tag.HasTags(nothing))
+
+    println "stripping tags leaves the audio alone"
+    mut full := compress.NewByteBuf()
+    compress.BufPushBuf(full, v2)
+    mut body := 0
+    until body < 100:
+        compress.BufPush(full, 65 + (body % 26))
+        body += 1
+    end
+    compress.BufPushBuf(full, v1)
+    testing.AssertEqInt(tag.AudioStart(full.data, full.len), compress.BufLen(v2))
+    testing.AssertEqInt(tag.AudioEnd(full.data, full.len), compress.BufLen(full) - 128)
+    bare := tag.StripTags(full.data, full.len)
+    testing.AssertEqInt(compress.BufLen(bare), 100)
+    testing.AssertEqInt(compress.BufGet(bare, 0), 65)
+    testing.AssertEqInt(compress.BufGet(bare, 25), 90)
+
+    println "genre names and empty tags"
+    testing.AssertEqStr(tag.GenreName(17), "Rock")
+    testing.AssertEqStr(tag.GenreName(8), "Jazz")
+    testing.AssertEqStr(tag.GenreName(200), "")
+    mut blank := tag.NewTags()
+    testing.AssertFalse(tag.HasTags(blank))
+    empty := tag.WriteID3v2(blank)
+    testing.AssertEqInt(compress.BufLen(empty), 10)
+    testing.AssertFalse(tag.ReadID3v2(empty.data, empty.len, blank))
+
+    println "tags on a file"
+    path := filepath.Join(os.TempDir(), "salam_audio_tag.mp3")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(archive.WriteBinaryFileBuf(path, full))
+    mut fok := false
+    mut fromdisk := tag.ReadTagsFile(path, fok)
+    testing.AssertTrue(fok)
+    testing.AssertEqStr(fromdisk.title, "Shiraz Nights")
+    mut gone := false
+    missing := filepath.Join(os.TempDir(), "salam_audio_tag_none.mp3")
+    defer mem.Free(missing as void*)
+    tag.ReadTagsFile(missing, gone)
+    testing.AssertFalse(gone)
+
+    tag.FreeTags(src)
+    tag.FreeTags(got1)
+    tag.FreeTags(got2)
+    tag.FreeTags(fa)
+    tag.FreeTags(faback)
+    tag.FreeTags(gotv)
+    tag.FreeTags(gotf)
+    tag.FreeTags(auto)
+    tag.FreeTags(autof)
+    tag.FreeTags(auto1)
+    tag.FreeTags(nothing)
+    tag.FreeTags(blank)
+    tag.FreeTags(fromdisk)
+    compress.BufFree(v1)
+    compress.BufFree(v2)
+    compress.BufFree(fav2)
+    compress.BufFree(vc)
+    compress.BufFree(fl)
+    compress.BufFree(file1)
+    compress.BufFree(full)
+    compress.BufFree(bare)
+    compress.BufFree(empty)
+    blocks.free()
+    ret testing.Summary()
+end

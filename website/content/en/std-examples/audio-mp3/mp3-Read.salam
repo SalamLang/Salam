@@ -1,0 +1,83 @@
+import audio
+import audio.mp3
+import audio.tag
+import compress
+
+func push_frame(b &: compress.ByteBuf, h1: int, h2: int, h3: int, size: int):
+    compress.BufPush(b, 255)
+    compress.BufPush(b, h1)
+    compress.BufPush(b, h2)
+    compress.BufPush(b, h3)
+    mut i := 4
+    until i < size:
+        compress.BufPush(b, 0)
+        i += 1
+    end
+end
+
+func main:
+    mut cbr := compress.NewByteBuf()
+    mut n := 0
+    until n < 3:
+        push_frame(cbr, 0xFB, 0x90, 0xC0, 417)
+        n += 1
+    end
+    println compress.BufLen(cbr)
+    println mp3.IsMP3(cbr.data, cbr.len), audio.FormatName(audio.DetectFormat(cbr.data, cbr.len))
+    println tag.HasID3v2(cbr.data, cbr.len), mp3.AudioStart(cbr.data, cbr.len)
+
+    mut h := mp3.Header {}
+    println mp3.ParseHeader(cbr.data, cbr.len, 0, h)
+    println h.version == mp3.Version1, h.layer == mp3.Layer3
+    println h.rate, h.bitrate, h.channels, h.mode == mp3.ModeMono
+    println h.samples, h.frame_size, h.padding, h.crc
+    println mp3.CountFrames(cbr.data, cbr.len)
+
+    mut pok := false
+    info := mp3.ProbeMP3(cbr.data, cbr.len, pok)
+    println pok, info.rate, info.channels, info.bits, info.lossless
+    println info.frames
+
+    println mp3.FrameAt(cbr.data, cbr.len, 0), mp3.FrameAt(cbr.data, cbr.len, 1)
+    println mp3.FrameAt(cbr.data, cbr.len, 99)
+    println mp3.SeekToSecond(cbr.data, cbr.len, 0.03) >= 0
+    mut heads := mp3.Headers(cbr.data, cbr.len)
+    println heads.len(), heads.get(0).rate, heads.get(2).bitrate
+    heads.free()
+
+    mut v2 := compress.NewByteBuf()
+    mut p := 0
+    until p < 2:
+        push_frame(v2, 0xF3, 0x80, 0x00, 208)
+        p += 1
+    end
+    mut vh := mp3.Header {}
+    println mp3.ParseHeader(v2.data, v2.len, 0, vh)
+    println vh.version == mp3.Version2, vh.rate, vh.channels, vh.samples, vh.frame_size
+    println mp3.CountFrames(v2.data, v2.len)
+
+    println mp3.SamplesPerFrame(mp3.Version1, mp3.Layer3), mp3.SamplesPerFrame(mp3.Version2, mp3.Layer3)
+    println mp3.SamplesPerFrame(mp3.Version25, mp3.Layer3), mp3.SamplesPerFrame(mp3.Version1, mp3.Layer1)
+    println mp3.SamplesPerFrame(mp3.Version1, mp3.Layer2)
+    println mp3.ModeStereo, mp3.ModeJoint, mp3.ModeDual, mp3.ModeMono
+
+    mut junk := compress.NewByteBuf()
+    mut j := 0
+    until j < 32:
+        compress.BufPush(junk, j)
+        j += 1
+    end
+    println mp3.FindSync(junk.data, junk.len, 0), mp3.IsMP3(junk.data, junk.len)
+    println mp3.CountFrames(junk.data, junk.len)
+    mut bad := mp3.Header {}
+    println mp3.ParseHeader(junk.data, junk.len, 0, bad)
+    mut nok := false
+    mp3.ProbeMP3(junk.data, junk.len, nok)
+    println nok
+    mut vn := mp3.VbrInfo {}
+    println mp3.ReadVbrInfo(cbr.data, cbr.len, vn), vn.found
+
+    compress.BufFree(cbr)
+    compress.BufFree(v2)
+    compress.BufFree(junk)
+end

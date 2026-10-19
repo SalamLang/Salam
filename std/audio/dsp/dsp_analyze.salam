@@ -1,0 +1,437 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package dsp
+
+import audio
+import math
+import mem
+
+@en "Spectrum"
+@fa "طیف"
+pub struct Spectrum:
+    @en "bins"
+    @fa "خانه‌ها"
+    pub bins: int = 0
+    @en "frames"
+    @fa "فریم ها"
+    pub frames: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "hop"
+    @fa "گام"
+    pub hop: int = 0
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+end
+
+@en "ZeroCrossingRate"
+@fa "نرخ صفرگذر"
+pub func ZeroCrossingRate(c: audio.Clip): f64:
+    if audio.IsEmpty(c) or c.frames < 2:
+        ret 0.0
+    end
+    mut crossings := 0
+    mut f := 1
+    until f < c.frames:
+        a := audio.Sample(c, f - 1, 0)
+        b := audio.Sample(c, f, 0)
+        if (a >= 0.0 and b < 0.0) or (a < 0.0 and b >= 0.0):
+            crossings += 1
+        end
+        f += 1
+    end
+    ret (crossings as f64) / ((c.frames - 1) as f64)
+end
+
+@en "FreeSpectrum"
+@fa "آزادسازی طیف"
+pub func FreeSpectrum(s &: Spectrum):
+    if s.data != null:
+        mem.Free(s.data)
+    end
+    s.data = null
+    s.bins = 0
+    s.frames = 0
+end
+
+@en "STFT"
+@fa "تبدیل فوریه کوتاه"
+pub func STFT(c: audio.Clip, size: int, hop: int, window: int): Spectrum:
+    mut out := Spectrum {}
+    if audio.IsEmpty(c) or not IsPow2(size) or hop <= 0:
+        ret out
+    end
+    bins := size / 2
+    count := (c.frames - size) / hop + 1
+    if count <= 0:
+        ret out
+    end
+    buf := mem.Allocate((count * bins * 8) as u64) as f64*
+    if buf == null:
+        ret out
+    end
+    re := mem.Allocate((size * 8) as u64) as f64*
+    im := mem.Allocate((size * 8) as u64) as f64*
+    if re == null or im == null:
+        mem.Free(buf as void*)
+        ret out
+    end
+    mut t := 0
+    until t < count:
+        start := t * hop
+        mut i := 0
+        until i < size:
+            w := WindowValue(window, i, size, 0.0)
+            re[i] = audio.Sample(c, start + i, 0) * w
+            im[i] = 0.0
+            i += 1
+        end
+        FFT(re, im, size)
+        mut k := 0
+        until k < bins:
+            buf[t * bins + k] = math.Hypot(re[k], im[k])
+            k += 1
+        end
+        t += 1
+    end
+    mem.Free(re as void*)
+    mem.Free(im as void*)
+    out.bins = bins
+    out.frames = count
+    out.rate = c.rate
+    out.hop = hop
+    out.data = buf as void*
+    ret out
+end
+
+@en "SpectrumAt"
+@fa "طیف در"
+pub func SpectrumAt(s: Spectrum, frame: int, bin: int): f64:
+    if s.data == null or frame < 0 or bin < 0 or frame >= s.frames or bin >= s.bins:
+        ret 0.0
+    end
+    p := s.data as f64*
+    ret p[frame * s.bins + bin]
+end
+
+@en "SpectralCentroid"
+@fa "مرکز طیفی"
+pub func SpectralCentroid(s: Spectrum, frame: int): f64:
+    if s.data == null or frame < 0 or frame >= s.frames:
+        ret 0.0
+    end
+    mut num := 0.0
+    mut den := 0.0
+    mut k := 0
+    until k < s.bins:
+        m := SpectrumAt(s, frame, k)
+        num += m * BinFrequency(k, s.bins * 2, s.rate)
+        den += m
+        k += 1
+    end
+    if den <= 0.0:
+        ret 0.0
+    end
+    ret num / den
+end
+
+@en "SpectralRolloff"
+@fa "افت طیفی"
+pub func SpectralRolloff(s: Spectrum, frame: int, share: f64): f64:
+    if s.data == null or frame < 0 or frame >= s.frames:
+        ret 0.0
+    end
+    mut total := 0.0
+    mut k := 0
+    until k < s.bins:
+        total += SpectrumAt(s, frame, k)
+        k += 1
+    end
+    if total <= 0.0:
+        ret 0.0
+    end
+    want := total * share
+    mut run := 0.0
+    mut i := 0
+    until i < s.bins:
+        run += SpectrumAt(s, frame, i)
+        if run >= want:
+            ret BinFrequency(i, s.bins * 2, s.rate)
+        end
+        i += 1
+    end
+    ret BinFrequency(s.bins - 1, s.bins * 2, s.rate)
+end
+
+@en "SpectralFlatness"
+@fa "تختی طیفی"
+pub func SpectralFlatness(s: Spectrum, frame: int): f64:
+    if s.data == null or frame < 0 or frame >= s.frames or s.bins == 0:
+        ret 0.0
+    end
+    mut logsum := 0.0
+    mut sum := 0.0
+    mut k := 0
+    until k < s.bins:
+        m := SpectrumAt(s, frame, k) + 0.000000001
+        logsum += math.Log(m)
+        sum += m
+        k += 1
+    end
+    geo := math.Exp(logsum / (s.bins as f64))
+    arith := sum / (s.bins as f64)
+    if arith <= 0.0:
+        ret 0.0
+    end
+    ret geo / arith
+end
+
+@en "SpectralFlux"
+@fa "شار طیفی"
+pub func SpectralFlux(s: Spectrum, frame: int): f64:
+    if s.data == null or frame <= 0 or frame >= s.frames:
+        ret 0.0
+    end
+    mut sum := 0.0
+    mut k := 0
+    until k < s.bins:
+        d := SpectrumAt(s, frame, k) - SpectrumAt(s, frame - 1, k)
+        if d > 0.0:
+            sum += d * d
+        end
+        k += 1
+    end
+    ret math.Sqrt(sum)
+end
+
+@en "DetectPitch"
+@fa "شناسایی زیروبمی"
+pub func DetectPitch(c: audio.Clip, from_frame: int, size: int): f64:
+    if audio.IsEmpty(c) or size < 64:
+        ret 0.0
+    end
+    if from_frame + size > c.frames:
+        ret 0.0
+    end
+    half := size / 2
+    mut min_lag := c.rate / 2000
+    mut max_lag := half
+    if min_lag < 2:
+        min_lag = 2
+    end
+    if max_lag > c.rate / 50:
+        max_lag = c.rate / 50
+    end
+    if max_lag <= min_lag:
+        ret 0.0
+    end
+    count := max_lag - min_lag + 1
+    scores := mem.Allocate((count * 8) as u64) as f64*
+    if scores == null:
+        ret 0.0
+    end
+    mut best := 0.0
+    mut lag := min_lag
+    until lag < max_lag + 1:
+        mut num := 0.0
+        mut ea := 0.0
+        mut eb := 0.0
+        mut i := 0
+        until i < half:
+            a := audio.Sample(c, from_frame + i, 0)
+            b := audio.Sample(c, from_frame + i + lag, 0)
+            num += a * b
+            ea += a * a
+            eb += b * b
+            i += 1
+        end
+        den := math.Sqrt(ea * eb)
+        mut sc := 0.0
+        if den > 0.0:
+            sc = num / den
+        end
+        scores[lag - min_lag] = sc
+        if sc > best:
+            best = sc
+        end
+        lag += 1
+    end
+    mut chosen := 0
+    if best >= 0.3:
+        want := best * 0.9
+        mut k := 1
+        until k < count - 1:
+            sc := scores[k]
+            if sc >= want and sc >= scores[k - 1] and sc >= scores[k + 1]:
+                chosen = k + min_lag
+                break
+            end
+            k += 1
+        end
+        if chosen == 0:
+            mut j := 0
+            until j < count:
+                if scores[j] >= want:
+                    chosen = j + min_lag
+                    break
+                end
+                j += 1
+            end
+        end
+    end
+    mem.Free(scores as void*)
+    if chosen <= 0:
+        ret 0.0
+    end
+    ret (c.rate as f64) / (chosen as f64)
+end
+
+@en "DetectOnsets"
+@fa "شناسایی آغازها"
+pub func DetectOnsets(c: audio.Clip, size: int, hop: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if audio.IsEmpty(c) or hop <= 0:
+        ret out
+    end
+    mut s := STFT(c, size, hop, WindowHann)
+    if s.data == null:
+        ret out
+    end
+    mut flux := Vector {} as Vector<f64>
+    mut mean := 0.0
+    mut t := 0
+    until t < s.frames:
+        v := SpectralFlux(s, t)
+        flux.push(v)
+        mean += v
+        t += 1
+    end
+    if s.frames > 0:
+        mean = mean / (s.frames as f64)
+    end
+    mut i := 1
+    until i < s.frames - 1:
+        v := flux.get(i)
+        if v > mean * 1.5 and v >= flux.get(i - 1) and v >= flux.get(i + 1):
+            out.push(i * hop)
+        end
+        i += 1
+    end
+    flux.free()
+    FreeSpectrum(s)
+    ret out
+end
+
+@en "DetectBPM"
+@fa "شناسایی ضربان"
+pub func DetectBPM(c: audio.Clip): f64:
+    if audio.IsEmpty(c) or c.rate <= 0:
+        ret 0.0
+    end
+    mut onsets := DetectOnsets(c, 1024, 256)
+    if onsets.len() < 4:
+        onsets.free()
+        ret 0.0
+    end
+    mut best_bpm := 0.0
+    mut best_score := 0.0
+    mut bpm := 60.0
+    until bpm < 200.0:
+        period := 60.0 / bpm * (c.rate as f64)
+        mut score := 0.0
+        mut i := 0
+        until i < onsets.len():
+            phase := (onsets.get(i) as f64) / period
+            frac := phase - math.Floor(phase)
+            d := frac < 0.5 ? frac : 1.0 - frac
+            score += 1.0 - 2.0 * d
+            i += 1
+        end
+        if score > best_score:
+            best_score = score
+            best_bpm = bpm
+        end
+        bpm += 0.5
+    end
+    onsets.free()
+    ret best_bpm
+end
+
+@en "LoudnessLUFS"
+@fa "بلندی لافز"
+pub func LoudnessLUFS(c: audio.Clip): f64:
+    if audio.IsEmpty(c):
+        ret audio.SilenceFloorDb
+    end
+    mut work := audio.Clone(c)
+    if work.samples == null:
+        ret audio.SilenceFloorDb
+    end
+    shelf := HighShelf(1500.0, 0.707, 4.0, c.rate)
+    BiquadProcessAll(shelf, work)
+    hp := HighPass(38.0, 0.5, c.rate)
+    BiquadProcessAll(hp, work)
+    mut sum := 0.0
+    mut n := 0
+    p := audio.Data(work)
+    mut f := 0
+    until f < work.frames:
+        mut ch := 0
+        until ch < work.channels:
+            v := p[f * work.channels + ch] as f64
+            sum += v * v
+            n += 1
+            ch += 1
+        end
+        f += 1
+    end
+    audio.Free(work)
+    if n == 0 or sum <= 0.0:
+        ret audio.SilenceFloorDb
+    end
+    mean := sum / (n as f64)
+    ret -0.691 + 10.0 * math.Log10(mean)
+end
+
+@en "NormalizeLUFS"
+@fa "هنجارسازی لافز"
+pub func NormalizeLUFS(c &: audio.Clip, target: f64):
+    if audio.IsEmpty(c):
+        ret
+    end
+    now := LoudnessLUFS(c)
+    if now <= audio.SilenceFloorDb:
+        ret
+    end
+    audio.Gain(c, target - now)
+end
+
+@en "TruePeakDb"
+@fa "اوج راستین دسیبل"
+pub func TruePeakDb(c: audio.Clip): f64:
+    if audio.IsEmpty(c):
+        ret audio.SilenceFloorDb
+    end
+    up := ResampleSinc(c, c.rate * 4, 16)
+    if audio.IsEmpty(up):
+        ret audio.PeakDb(c)
+    end
+    v := audio.PeakDb(up)
+    mut tmp := up
+    audio.Free(tmp)
+    ret v
+end

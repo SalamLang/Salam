@@ -1,0 +1,408 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tag
+
+import compress
+import str
+import mem
+
+@en "BlockStreamInfo"
+@fa "بلوک آگاهی جریان"
+pub const BlockStreamInfo := 0
+
+@en "BlockPadding"
+@fa "بلوک لایی"
+pub const BlockPadding := 1
+
+@en "BlockSeekTable"
+@fa "بلوک جدول جستن"
+pub const BlockSeekTable := 3
+
+@en "BlockVorbisComment"
+@fa "بلوک یادداشت وربیس"
+pub const BlockVorbisComment := 4
+
+@en "BlockPicture"
+@fa "بلوک تصویر"
+pub const BlockPicture := 6
+
+@en "Block"
+@fa "بلوک"
+pub struct Block:
+    @en "kind"
+    @fa "گونه"
+    pub kind: int = 0
+    @en "offset"
+    @fa "جابجایی"
+    pub offset: int = 0
+    @en "size"
+    @fa "اندازه"
+    pub size: int = 0
+    @en "last"
+    @fa "آخرین"
+    pub last: bool = false
+end
+
+func _byte(p: void*, off: int): int:
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _le32(p: void*, off: int): int:
+    ret _byte(p, off) | (_byte(p, off + 1) << 8) | (_byte(p, off + 2) << 16) | (_byte(p, off + 3) << 24)
+end
+
+func _bg32(p: void*, off: int): int:
+    ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+
+func _bg24(p: void*, off: int): int:
+    ret (_byte(p, off) << 16) | (_byte(p, off + 1) << 8) | _byte(p, off + 2)
+end
+
+func _slice_str(p: void*, off: int, len: int): str:
+    if len <= 0:
+        ret ""
+    end
+    mut b := compress.NewByteBufCap(len + 1)
+    compress.BufPushBytes(b, ((p as i64) + (off as i64)) as void*, len)
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    if out.len() == 0:
+        mem.Free(out as void*)
+        ret ""
+    end
+    ret out
+end
+
+func _lower_cp(cp: int): int:
+    if cp >= 65 and cp <= 90:
+        ret cp + 32
+    end
+    ret cp
+end
+
+func _key_is(p: void*, off: int, len: int, want: str): bool:
+    cps := str.CodePoints(want)
+    mut same := cps.len() == len
+    if same:
+        mut i := 0
+        until i < len:
+            if _lower_cp(_byte(p, off + i)) != _lower_cp(cps.get(i)):
+                same = false
+                break
+            end
+            i += 1
+        end
+    end
+    cps.free()
+    ret same
+end
+
+func _int_from(p: void*, off: int, len: int): int:
+    mut v := 0
+    mut i := 0
+    until i < len:
+        b := _byte(p, off + i)
+        if b >= 48 and b <= 57:
+            v = v * 10 + (b - 48)
+        end
+        i += 1
+    end
+    ret v
+end
+
+func _assign(dst &: str, p: void*, off: int, len: int):
+    if dst.len() > 0 or len <= 0:
+        ret
+    end
+    dst = _slice_str(p, off, len)
+end
+
+func _one_comment(p: void*, off: int, len: int, out &: Tags):
+    mut sep := -1
+    mut i := 0
+    until i < len:
+        if _byte(p, off + i) == 61:
+            sep = i
+            break
+        end
+        i += 1
+    end
+    if sep <= 0:
+        ret
+    end
+    vat := off + sep + 1
+    vlen := len - sep - 1
+    if _key_is(p, off, sep, "TITLE"):
+        _assign(out.title, p, vat, vlen)
+    else _key_is(p, off, sep, "ARTIST"):
+        _assign(out.artist, p, vat, vlen)
+    else _key_is(p, off, sep, "ALBUM"):
+        _assign(out.album, p, vat, vlen)
+    else _key_is(p, off, sep, "ALBUMARTIST"):
+        _assign(out.albumartist, p, vat, vlen)
+    else _key_is(p, off, sep, "COMPOSER"):
+        _assign(out.composer, p, vat, vlen)
+    else _key_is(p, off, sep, "GENRE"):
+        _assign(out.genre, p, vat, vlen)
+    else _key_is(p, off, sep, "COMMENT") or _key_is(p, off, sep, "DESCRIPTION"):
+        _assign(out.comment, p, vat, vlen)
+    else _key_is(p, off, sep, "LYRICS"):
+        _assign(out.lyrics, p, vat, vlen)
+    else _key_is(p, off, sep, "DATE") or _key_is(p, off, sep, "YEAR"):
+        if out.year == 0:
+            out.year = _int_from(p, vat, vlen)
+        end
+    else _key_is(p, off, sep, "TRACKNUMBER"):
+        if out.track == 0:
+            out.track = _int_from(p, vat, vlen)
+        end
+    else _key_is(p, off, sep, "TRACKTOTAL") or _key_is(p, off, sep, "TOTALTRACKS"):
+        if out.tracks == 0:
+            out.tracks = _int_from(p, vat, vlen)
+        end
+    else _key_is(p, off, sep, "DISCNUMBER"):
+        if out.disc == 0:
+            out.disc = _int_from(p, vat, vlen)
+        end
+    else _key_is(p, off, sep, "BPM"):
+        if out.bpm == 0:
+            out.bpm = _int_from(p, vat, vlen)
+        end
+    end
+end
+
+func _put_le32(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, (v >> 16) & 255)
+    compress.BufPush(b, (v >> 24) & 255)
+end
+
+func _count_fields(t: Tags): int:
+    mut n := 0
+    if t.title.len() > 0:
+        n += 1
+    end
+    if t.artist.len() > 0:
+        n += 1
+    end
+    if t.album.len() > 0:
+        n += 1
+    end
+    if t.albumartist.len() > 0:
+        n += 1
+    end
+    if t.composer.len() > 0:
+        n += 1
+    end
+    if t.genre.len() > 0:
+        n += 1
+    end
+    if t.comment.len() > 0:
+        n += 1
+    end
+    if t.lyrics.len() > 0:
+        n += 1
+    end
+    if t.year > 0:
+        n += 1
+    end
+    if t.track > 0:
+        n += 1
+    end
+    if t.tracks > 0:
+        n += 1
+    end
+    if t.disc > 0:
+        n += 1
+    end
+    if t.bpm > 0:
+        n += 1
+    end
+    ret n
+end
+
+func _put_field(b &: compress.ByteBuf, key: str, value: str):
+    if value.len() == 0:
+        ret
+    end
+    kb := compress.BufFromStr(key)
+    vb := compress.BufFromStr(value)
+    _put_le32(b, compress.BufLen(kb) + 1 + compress.BufLen(vb))
+    compress.BufPushBuf(b, kb)
+    compress.BufPush(b, 61)
+    compress.BufPushBuf(b, vb)
+    compress.BufFree(kb)
+    compress.BufFree(vb)
+end
+
+func _put_field_int(b &: compress.ByteBuf, key: str, value: int):
+    if value <= 0:
+        ret
+    end
+    kb := compress.BufFromStr(key)
+    _put_le32(b, compress.BufLen(kb) + 1 + _decimal_len(value))
+    compress.BufPushBuf(b, kb)
+    compress.BufPush(b, 61)
+    _push_decimal(b, value)
+    compress.BufFree(kb)
+end
+
+@en "IsFlacTagged"
+@fa "فلاک برچسبدار است"
+pub func IsFlacTagged(p: void*, n: int): bool:
+    if n < 8:
+        ret false
+    end
+    ret _byte(p, 0) == 102 and _byte(p, 1) == 76 and _byte(p, 2) == 97 and _byte(p, 3) == 67
+end
+
+@en "FlacBlocks"
+@fa "بلوک‌های فلاک"
+pub func FlacBlocks(p: void*, n: int): Vector<Block>:
+    mut out := Vector {} as Vector<Block>
+    if not IsFlacTagged(p, n):
+        ret out
+    end
+    mut at := 4
+    until at + 4 <= n:
+        head := _byte(p, at)
+        size := _bg24(p, at + 1)
+        body := at + 4
+        mut avail := n - body
+        if size < avail:
+            avail = size
+        end
+        last := (head & 128) != 0
+        out.push(Block { kind = head & 127, offset = body, size = avail, last = last })
+        if last:
+            break
+        end
+        at = body + avail
+    end
+    ret out
+end
+
+@en "ReadVorbisComment"
+@fa "خواندن یادداشت وربیس"
+pub func ReadVorbisComment(p: void*, off: int, len: int, out &: Tags): bool:
+    if len < 8:
+        ret false
+    end
+    stop := off + len
+    mut at := off
+    vendor := _le32(p, at)
+    at += 4 + vendor
+    if at + 4 > stop:
+        ret false
+    end
+    count := _le32(p, at)
+    at += 4
+    if count < 0 or count > 4096:
+        ret false
+    end
+    mut i := 0
+    until i < count:
+        if at + 4 > stop:
+            break
+        end
+        flen := _le32(p, at)
+        at += 4
+        if flen < 0 or at + flen > stop:
+            break
+        end
+        _one_comment(p, at, flen, out)
+        at += flen
+        i += 1
+    end
+    ret true
+end
+
+@en "ReadFlacTags"
+@fa "خواندن برچسب فلاک"
+pub func ReadFlacTags(p: void*, n: int, out &: Tags): bool:
+    mut blocks := FlacBlocks(p, n)
+    mut any := false
+    each b in blocks:
+        if b.kind == BlockVorbisComment:
+            if ReadVorbisComment(p, b.offset, b.size, out):
+                any = true
+            end
+        end
+        if b.kind == BlockPicture and b.size > 32 and out.art.len == 0:
+            mut at := b.offset + 4
+            mlen := _bg32(p, at)
+            at += 4
+            if mlen >= 0 and at + mlen <= b.offset + b.size:
+                mime := _slice_str(p, at, mlen)
+                at += mlen
+                if at + 4 <= b.offset + b.size:
+                    dlen := _bg32(p, at)
+                    at += 4 + dlen
+                    at += 16
+                    if at + 4 <= b.offset + b.size:
+                        plen := _bg32(p, at)
+                        at += 4
+                        if plen > 0 and at + plen <= b.offset + b.size:
+                            compress.BufPushBytes(out.art, ((p as i64) + (at as i64)) as void*, plen)
+                            if out.art_mime.len() == 0:
+                                out.art_mime = mime
+                                any = true
+                            else:
+                                mem.Free(mime as void*)
+                            end
+                        else:
+                            mem.Free(mime as void*)
+                        end
+                    else:
+                        mem.Free(mime as void*)
+                    end
+                else:
+                    mem.Free(mime as void*)
+                end
+            end
+        end
+    end
+    blocks.free()
+    ret any
+end
+
+@en "WriteVorbisComment"
+@fa "نوشتن یادداشت وربیس"
+pub func WriteVorbisComment(t: Tags): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    vendor := "Salam"
+    vb := compress.BufFromStr(vendor)
+    _put_le32(out, compress.BufLen(vb))
+    compress.BufPushBuf(out, vb)
+    compress.BufFree(vb)
+    _put_le32(out, _count_fields(t))
+    _put_field(out, "TITLE", t.title)
+    _put_field(out, "ARTIST", t.artist)
+    _put_field(out, "ALBUM", t.album)
+    _put_field(out, "ALBUMARTIST", t.albumartist)
+    _put_field(out, "COMPOSER", t.composer)
+    _put_field(out, "GENRE", t.genre)
+    _put_field(out, "COMMENT", t.comment)
+    _put_field(out, "LYRICS", t.lyrics)
+    _put_field_int(out, "DATE", t.year)
+    _put_field_int(out, "TRACKNUMBER", t.track)
+    _put_field_int(out, "TRACKTOTAL", t.tracks)
+    _put_field_int(out, "DISCNUMBER", t.disc)
+    _put_field_int(out, "BPM", t.bpm)
+    ret out
+end

@@ -1,0 +1,83 @@
+
+step 1: the schema you already have
+  loaded 2 tables, 5 columns on books
+
+step 2: the queries you already have
+  bad  SELECT id, titles FROM books WHERE author_id = ?
+       SQL311 no column named "titles" in this statement
+       did you mean "title"?
+  bad  SELECT b.title, a.nationality FROM books b JOIN authors a ON a.id = b.author_id
+       SQL311 "a" has no column "nationality"
+  bad  INSERT INTO books (title) VALUES (?)
+       SQL315 "author_id" is NOT NULL with no default and this INSERT leaves it out
+       add it to the column list and to every row
+  bad  SELECT id FROM books WHERE year = 'recent'
+       SQL330 "year" is int and this compares it with text
+       a number goes here without quotes
+  bad  DELETE FROM books
+       SQL320 this DELETE has no WHERE clause and removes every row
+       add a WHERE clause, or use TRUNCATE when that is what you mean
+
+step 3: the same five, put right
+  ok   SELECT id, title FROM books WHERE author_id = ?
+  ok   SELECT b.title, a.country FROM books b JOIN authors a ON a.id = b.author_id
+  ok   INSERT INTO books (author_id, title) VALUES (?, ?)
+  ok   SELECT id FROM books WHERE year = 2024
+  ok   DELETE FROM books WHERE id = ?
+
+step 4: what a query takes and gives back
+  it is a select on books
+  takes year as option.Option<i64>
+  gives title as str
+  gives price as option.Option<f64>
+  gives country as option.Option<str>
+
+step 5: the values go in safely
+  INSERT INTO books (title, year) VALUES ('O''Brien', 1988)
+
+step 6: or let it write the code for you
+package store
+
+import db
+import db.sql
+import mem
+import option
+
+struct BooksByAuthorRow:
+    pub id: i64 = 0 as i64
+    pub title: str = ""
+    pub year: option.Option<i64> = option.None() as option.Option<i64>
+end
+
+func fill_query(c: dyn db.Connection, raw: str, a: sql.Args): str:
+    mut rep := sql.Report {}
+    out := sql.Fill(raw, a, sql.DialectNamed(c.Kind()), rep)
+    sql.FreeReport(rep)
+    ret out
+end
+
+pub func BooksByAuthor(c: dyn db.Connection, author_id: i64): Vector<BooksByAuthorRow>:
+    mut a := sql.NewArgs()
+    sql.AddInt(a, author_id)
+    q := fill_query(c, "SELECT id, title, year FROM books WHERE author_id = ?", a)
+    sql.FreeArgs(a)
+    mut rows := Vector {} as Vector<BooksByAuthorRow>
+    r := c.Query(q)
+    if r.Ok():
+        until r.Next():
+            mut out := BooksByAuthorRow {}
+            out.id = r.Int64(0)
+            out.title = r.Text(1)
+            if r.IsNull(2):
+                out.year = option.None() as option.Option<i64>
+            else:
+                out.year = option.Some(r.Int64(2))
+            end
+            rows.push(out)
+        end
+        r.Close()
+    end
+    mem.Free(q as void*)
+    ret rows
+end
+

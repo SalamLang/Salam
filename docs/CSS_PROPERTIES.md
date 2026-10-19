@@ -11,7 +11,7 @@ The Persian margin family is `فضا` and the padding family is `فاصله` (`�
 | Done, value checked, tested in en and fa | 483   |
 | Total                                    | 483   |
 
-Tests: `tests/{en,fa}/layout/style/prop_<name>.salam` checks the generated CSS, `tests/{en,fa}/layout/errors/prop_<name>_bad.salam` checks that a wrong value is error E018.
+Tests: `tests/{en,fa}/page/style/prop_<name>.salam` checks the generated CSS, `tests/{en,fa}/page/errors/prop_<name>_bad.salam` checks that a wrong value is error E018.
 
 | CSS property                    | Salam (English)                 | Salam (Persian)                  | Accepts                                                                                                 | Status | Tests                                        | Why not done |
 | ------------------------------- | ------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------- | ------------ |

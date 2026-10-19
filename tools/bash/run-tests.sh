@@ -49,7 +49,7 @@ if [ "${1:-}" = "--worker" ]; then
     wk_repl() {
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        case "$fabs" in */layout_*.in) rcmd=layout ;; *) rcmd=cli ;; esac
+        case "$fabs" in */page_*.in) rcmd=page ;; *) rcmd=cli ;; esac
         got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
@@ -305,18 +305,18 @@ EOF_NOTS
             echo "  $out"
         fi
     }
-    wk_layout_errors() {
+    wk_page_errors() {
         lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
         lfail=""
         extra_out=""
         case "$lcode" in
         E* | خطا*)
-            html="$WORK/layout_err_${jobid}_$$.html"
+            html="$WORK/page_err_${jobid}_$$.html"
             rm -f "$html"
-            if extra_out=$("$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
-                lfail="layout build exited 0 despite $lcode"
+            if extra_out=$("$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
+                lfail="page build exited 0 despite $lcode"
             elif [ -e "$html" ]; then
-                lfail="layout build wrote output despite $lcode"
+                lfail="page build wrote output despite $lcode"
             fi
             rm -f "$html"
             ;;
@@ -353,13 +353,13 @@ EOF_NOTS
         errors)
             wk_errors
             ;;
-        layout_errors)
-            wk_layout_errors
+        page_errors)
+            wk_page_errors
             ;;
-        layout)
-            html="$WORK/layout_${jobid}_$$.html"
-            buildlog="$WORK/layout_${jobid}_$$.log"
-            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
+        page)
+            html="$WORK/page_${jobid}_$$.html"
+            buildlog="$WORK/page_${jobid}_$$.log"
+            "$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
             lmiss=""
             lbad=""
             lfirst=""
@@ -567,7 +567,8 @@ want() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
         case "$s" in c | codegen) s=general ;; interp | interpreter) s="exec" ;; esac
-        case "$s" in web | web_errors) s=layout ;; esac
+        case "$s" in web | web_errors | layout | layout_errors) s=page ;; esac
+        case "$s" in layout/*) s="page/${s#layout/}" ;; esac
         [ "${s%%/*}" = "$1" ] && return 0
     done
     return 1
@@ -577,8 +578,10 @@ want_sub() {
     [ -z "$SECTIONS" ] && return 0
     for s in $SECTIONS; do
         case "$s" in
-        web) s=layout/elements ;;
-        web_errors) s=layout/errors ;;
+        web) s=page/elements ;;
+        web_errors | layout_errors) s=page/errors ;;
+        layout) s=page ;;
+        layout/*) s="page/${s#layout/}" ;;
         esac
         [ "$s" = "$1" ] && return 0
         case "$s" in
@@ -1066,26 +1069,26 @@ if want port; then
     fi
 fi
 
-if want layout; then
+if want page; then
     for lang in $LANGS; do
-        for stray in tests/"$lang"/layout/*.salam tests/"$lang"/web/*.salam \
+        for stray in tests/"$lang"/page/*.salam tests/"$lang"/web/*.salam \
             tests/"$lang"/web_errors/*.salam; do
             [ -e "$stray" ] || continue
             subs="elements/, style/, components/, pages/ or errors/"
             note_result \
-                "FAIL layout/$lang ($stray is in no layout subdirectory, so nothing runs it; move it into $subs)" \
-                "layout/$lang/stray/$(basename "$stray" .salam)"
+                "FAIL page/$lang ($stray is in no page subdirectory, so nothing runs it; move it into $subs)" \
+                "page/$lang/stray/$(basename "$stray" .salam)"
         done
         for sub in elements style components pages errors; do
-            [ -d "tests/$lang/layout/$sub" ] || continue
-            want_sub "layout/$sub" || continue
-            for f in tests/"$lang"/layout/"$sub"/*.salam; do
+            [ -d "tests/$lang/page/$sub" ] || continue
+            want_sub "page/$sub" || continue
+            for f in tests/"$lang"/page/"$sub"/*.salam; do
                 [ -e "$f" ] || continue
                 name=$(basename "$f" .salam)
                 case "$name" in _*) continue ;; esac
-                runner=layout
-                [ "$sub" = errors ] && runner=layout_errors
-                add_job "$runner" "layout/$lang/$sub/$name" "$f" "$lang" -
+                runner=page
+                [ "$sub" = errors ] && runner=page_errors
+                add_job "$runner" "page/$lang/$sub/$name" "$f" "$lang" -
             done
         done
     done

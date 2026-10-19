@@ -9,6 +9,18 @@ const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
 const answerFor = (s) => {
   if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}`;
+  if (s.prompt.includes("<caller_tools>") && s.prompt.includes("write it to a file")) {
+    return JSON.stringify({ tool: "write_to_file", arguments: { path: "factorial.salam", content: "func main:\n    println 1\n    ret 0\nend\n" } });
+  }
+  if (s.prompt.includes("<caller_tools>") && s.prompt.includes("chatty tool")) {
+    return `I will look at the project first.\n${JSON.stringify({ tool: "run_commands", arguments: { commands: "ls -la" } })}`;
+  }
+  if (s.prompt.includes("<caller_tools>") && s.prompt.includes("two tools")) {
+    return `${JSON.stringify({ tool: "run_commands", arguments: { commands: "pwd" } })}\n${JSON.stringify({ tool: "run_commands", arguments: { commands: "ls" } })}`;
+  }
+  if (s.prompt.includes("<caller_tools>") && s.prompt.includes("unknown tool")) {
+    return JSON.stringify({ tool: "definitely_not_offered", arguments: { x: 1 } });
+  }
   if (s.prompt.includes("<compiler_check>")) return `Fixed (${s.agent}, ${s.prompt.includes("unexpected") ? "saw errors" : "no errors"}):\n${code('func main:\n    println "hi"\nend')}`;
   if (s.prompt.includes("bad code")) return `Here:\n${code('func main() {\n    println("hi");\n}')}`;
   if (s.prompt.includes("snippet code")) return `Use:\n${code("println name")}`;

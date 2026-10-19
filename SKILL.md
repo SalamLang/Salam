@@ -1864,14 +1864,14 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam layout build`,
+A `layout:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
 
 ```salam
 //! mode: layout | title: Web page        // optional editor directive
-layout:
+page:
     title = "My Page"
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
@@ -1999,7 +1999,7 @@ Rules, all checked at compile time:
   own `<style>` plus HTML, with class names prefixed by the component name.
 
 **Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
-rule, never an element. It sits directly under `layout`; `name` and `url`
+rule, never an element. It sits directly under `page`; `name` and `url`
 (`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
 `woff2`, `ttc`) is optional: without it the compiler reads the extension from
 the URL, then the magic bytes of a local file next to the source. A remote URL with
@@ -2009,7 +2009,7 @@ E127. The compiler never fetches over the network. Optional: `weight`
 (`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
 
 ```salam
-layout:
+page:
     font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
     box: content = "hi" font family = "Estedad, sans-serif" end
 end
@@ -2044,7 +2044,7 @@ end
 | E136        | one `class` given different styles on two elements                            |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
-Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
@@ -2055,7 +2055,7 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
+Build: `salam page build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with
 merged `style.css`/`script.js`.
 
@@ -2070,7 +2070,7 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
+salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
@@ -2316,7 +2316,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
+| `export`            | `برون‌داد`          | `page`                    | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2327,9 +2327,8 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
-`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
-(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
-The older spelling `چیدمان` is still accepted.
+`page` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`page:`, `صفحه خوشامد(نام: رشته):`); elsewhere the word is a normal name.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use

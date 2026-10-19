@@ -18,6 +18,9 @@ const answerFor = (s) => {
   if (s.prompt.includes("<caller_tools>") && s.prompt.includes("two tools")) {
     return `${JSON.stringify({ tool: "run_commands", arguments: { commands: "pwd" } })}\n${JSON.stringify({ tool: "run_commands", arguments: { commands: "ls" } })}`;
   }
+  if (s.prompt.includes("leaked internal")) {
+    return `Here is the program.\n${JSON.stringify({ tool: "salam_check", arguments: { source: "func main:\n    ret 0\nend\n" } })}\nIt compiles.`;
+  }
   if (s.prompt.includes("<caller_tools>") && s.prompt.includes("unknown tool")) {
     return JSON.stringify({ tool: "definitely_not_offered", arguments: { x: 1 } });
   }

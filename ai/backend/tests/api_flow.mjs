@@ -166,6 +166,10 @@ const twice = await (await chat(agentKey, { model: "salam", tools: runSpec, mess
 check("two calls in one answer both come back", twice.choices?.[0]?.message?.tool_calls?.length === 2 && JSON.parse(twice.choices[0].message.tool_calls[1].function.arguments).commands === "ls", twice.choices?.[0]?.message?.tool_calls);
 const bogus = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "call an unknown tool" }] })).json();
 check("a name the caller never offered stays text, not a tool call", bogus.choices?.[0]?.finish_reason === "stop" && !bogus.choices?.[0]?.message?.tool_calls, bogus.choices?.[0]);
+const leaked = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "show me a leaked internal call" }] })).json();
+const leakedText = leaked.choices?.[0]?.message?.content ?? "";
+check("a tool of ours that leaked into the text is taken out of the answer", !leakedText.includes("salam_check") && leakedText.includes("It compiles"), leakedText.slice(0, 120));
+check("the leak does not turn into a tool call for the client", !leaked.choices?.[0]?.message?.tool_calls && leaked.choices?.[0]?.finish_reason === "stop", leaked.choices?.[0]);
 const noTools = await (await chat(agentKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "just say hello" }] })).json();
 check("an answer that needs no tool still comes back as text", noTools.choices?.[0]?.finish_reason === "stop" && typeof noTools.choices?.[0]?.message?.content === "string", noTools.choices?.[0]);
 

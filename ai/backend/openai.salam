@@ -257,7 +257,7 @@ func tools_block(tools: value.Value): str:
     if lines.len() == 0:
         ret ""
     end
-    ret "<caller_tools>\n" + str.Join(lines, "\n") + "\n</caller_tools>\n\nThe application that sent this request runs these tools on the user's machine and reports the result back to you, so you do have file access, shell access and anything else they describe through them. When the task needs one, answer with exactly one JSON object and nothing else, no prose around it and no code fence:\n{\"tool\": \"<name>\", \"arguments\": { ... }}\nArguments must match that tool's schema. Never say that you cannot read or write files or run commands: ask for the tool instead. When the task needs no tool, answer normally.\n\n"
+    ret "<caller_tools>\n" + str.Join(lines, "\n") + "\n</caller_tools>\n\nThe application that sent this request runs the tools listed above on the user's machine and reports the result back to you, so you do have file access, shell access and anything else they describe. When the task needs one of them, answer with exactly one JSON object and nothing else, no prose around it and no code fence:\n{\"tool\": \"<name>\", \"arguments\": { ... }}\nThe name must be one of the names listed above and the arguments must match that tool's schema. This written form is only for those tools. Your own tools, the ones you call directly such as salam_check and salam_docs, are called the usual way and must never appear as text in your answer. Never say that you cannot read or write files or run commands: ask for the application's tool instead. When the task needs no tool, answer normally.\n\n"
 end
 
 func call_history(m: value.Value): str:
@@ -600,6 +600,29 @@ func one_call(span: str, names: str, name &: str, args &: str): bool:
     ret true
 end
 
+func strip_internal(said: str): str:
+    mut out := said
+    each span in json_spans(said):
+        mut err := encerr.EncodingError {}
+        root := json.Decode(span, err)
+        if not encerr.IsError(err) and value.IsObject(root):
+            mut got := text_field(root, "tool")
+            if got.len() == 0:
+                got = text_field(root, "name")
+            end
+            if str.StartsWith(got, "salam_") and value.ObjectHas(root, "arguments"):
+                out = str.Replace(out, span, "")
+            end
+        end
+        value.ValueFree(root)
+    end
+    cleaned := str.Trim(out)
+    if cleaned.len() == 0:
+        ret said
+    end
+    ret cleaned
+end
+
 func tool_calls_of(said: str, names: str, calls &: Vector<str>, prose &: str): bool:
     if names.len() < 3 or said.len() == 0 or said.len() > 400000:
         ret false
@@ -648,7 +671,8 @@ func tail_of(sent: str, final: str): str:
     ret "\n\n" + final
 end
 
-func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, final: str, status: str, names: str):
+func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, raw: str, status: str, names: str):
+    final := sent.len() == 0 ? strip_internal(raw) : raw
     mut calls := Vector {} as Vector<str>
     mut prose := ""
     if sent.len() == 0 and status == "done" and tool_calls_of(final, names, calls, prose):
@@ -864,9 +888,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
         ret
     end
+    clean := strip_internal(final)
     mut calls := Vector {} as Vector<str>
     mut prose := ""
-    wants := status == "done" and tool_calls_of(final, names, calls, prose)
+    wants := status == "done" and tool_calls_of(clean, names, calls, prose)
     mut msg := Vector {} as Vector<str>
     msg.push(json.Member("role", "assistant"))
     if wants:
@@ -877,7 +902,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         end
         msg.push(json.MemberRaw("tool_calls", call_json(calls)))
     else:
-        msg.push(json.Member("content", final))
+        msg.push(json.Member("content", clean))
     end
     mut choice := Vector {} as Vector<str>
     choice.push(json.MemberInt("index", 0))

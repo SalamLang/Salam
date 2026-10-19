@@ -10,7 +10,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `article`            | `article`                             | مقاله            | `<article>`    | normal  |                                                       |               |
 | `aside`              | `aside`, `sidebar`                    | کناری            | `<aside>`      | normal  |                                                       |               |
 | `audio`              | `audio`                               | صدا              | `<audio>`      | normal  |                                                       |               |
-| `base`               | `base`                                | پایه نشانی       | `<base>`       | void    | `page`                                              |               |
+| `base`               | `base`                                | پایه نشانی       | `<base>`       | void    | `page`                                                |               |
 | `block quote`        | `block quote`, `blockquote`           | نقل قول بلند     | `<blockquote>` | normal  |                                                       |               |
 | `bold`               | `bold`, `b`                           | پررنگ            | `<b>`          | normal  |                                                       |               |
 | `box`                | `box`, `div`                          | جعبه             | `<div>`        | normal  |                                                       |               |
@@ -38,7 +38,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `field set`          | `field set`, `fieldset`               | گروه فیلد        | `<fieldset>`   | normal  |                                                       |               |
 | `figure`             | `figure`                              | شکل              | `<figure>`     | normal  |                                                       |               |
 | `figure caption`     | `figure caption`, `figcaption`        | زیرنویس شکل      | `<figcaption>` | normal  | `figure`                                              |               |
-| `font`               | `font`                                | قلم              | `@font-face`   | void    | `page`                                              | `name`, `url` |
+| `font`               | `font`                                | قلم              | `@font-face`   | void    | `page`                                                | `name`, `url` |
 | `footer`             | `footer`                              | پاورقی           | `<footer>`     | normal  |                                                       |               |
 | `form`               | `form`                                | فرم              | `<form>`       | normal  |                                                       |               |
 | `global`             | `global`, `global style`              | سراسری           | (none)         | virtual |                                                       |               |
@@ -48,7 +48,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `h4`                 | `h4`                                  |                  | `<h4>`         | normal  |                                                       |               |
 | `h5`                 | `h5`                                  |                  | `<h5>`         | normal  |                                                       |               |
 | `h6`                 | `h6`                                  |                  | `<h6>`         | normal  |                                                       |               |
-| `head link`          | `head link`, `head_link`              | پیوند سر         | `<link>`       | void    | `page`                                              | `rel`, `url`  |
+| `head link`          | `head link`, `head_link`              | پیوند سر         | `<link>`       | void    | `page`                                                | `rel`, `url`  |
 | `header`             | `header`                              | سرصفحه           | `<header>`     | normal  |                                                       |               |
 | `header column`      | `column`, `cell`                      | ستون, سلول       | `<th>`         | normal  | `table header` > `row`                                |               |
 | `heading`            | `heading`                             | سرتیتر           | `<h1>`         | normal  |                                                       |               |
@@ -64,7 +64,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `item`               | `item`, `li`                          | مورد             | `<li>`         | normal  | `list`, `ordered list`, `menu`                        |               |
 | `keyboard`           | `keyboard`, `kbd`                     | صفحه کلید        | `<kbd>`        | normal  |                                                       |               |
 | `label`              | `label`                               | برچسب            | `<label>`      | normal  |                                                       |               |
-| `page`             | `page`                              | صفحه             | (none)         | virtual |                                                       |               |
+| `page`               | `page`                                | صفحه             | (none)         | virtual |                                                       |               |
 | `legend`             | `legend`                              | عنوان گروه       | `<legend>`     | normal  | `field set`                                           |               |
 | `line`               | `line`, `hr`                          | خط               | `<hr>`         | void    |                                                       |               |
 | `link`               | `link`, `a`                           | پیوند            | `<a>`          | normal  |                                                       | `url`         |
@@ -74,7 +74,7 @@ Every element the layout DSL knows, generated from `std/layout/elements/`. The H
 | `math`               | `math`                                | ریاضی            | `<math>`       | rawtext |                                                       |               |
 | `media`              | `media`                               | رسانه            | (none)         | virtual |                                                       |               |
 | `menu`               | `menu`                                | منو              | `<menu>`       | normal  |                                                       |               |
-| `meta`               | `meta`                                | متا              | `<meta>`       | void    | `page`                                              |               |
+| `meta`               | `meta`                                | متا              | `<meta>`       | void    | `page`                                                |               |
 | `meter`              | `meter`, `gauge`                      | سنجه             | `<meter>`      | normal  |                                                       | `value`       |
 | `nav`                | `nav`                                 | ناوبری           | `<nav>`        | normal  |                                                       |               |
 | `noscript`           | `noscript`, `no script`               | بدون اسکریپت     | `<noscript>`   | normal  |                                                       |               |

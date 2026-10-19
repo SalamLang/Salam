@@ -223,8 +223,8 @@ applies to the `page` block instead:
 
 ```sh
 salam web                   # build the page project here: salam.salam if
-                            # present, else the single .salam layout page
-salam layout build          # salam.salam if present, else EVERY layout
+                            # present, else the single .salam page page
+salam page build          # salam.salam if present, else EVERY layout
                             # page in the directory (multi-page site)
 ```
 
@@ -268,13 +268,13 @@ Salam includes a built-in DSL for describing web layouts.
 
 ```sh
 # compile a layout file to page.html + page.css + page.js
-salam layout build page.salam
+salam page build page.salam
 
 # produce a single self-contained HTML file
-salam layout build page.salam --inline
+salam page build page.salam --inline
 
 # compile multiple pages (merged style.css / script.js)
-salam layout build a.salam b.salam
+salam page build a.salam b.salam
 ```
 
 A page is a tree of elements with `name = value` attributes:
@@ -304,7 +304,7 @@ compile error, with a suggestion for the closest valid name. See
 
 ```sh
 salam cli      # general-language REPL
-salam layout   # layout DSL REPL
+salam page   # layout DSL REPL
 ```
 
 ## 🐳 Docker

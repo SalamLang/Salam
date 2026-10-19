@@ -49,7 +49,7 @@ if [ "${1:-}" = "--worker" ]; then
     wk_repl() {
         jobdir="$WORK/repljob_${jobid}_$$"
         mkdir -p "$jobdir"
-        case "$fabs" in */layout_*.in) rcmd=layout ;; *) rcmd=cli ;; esac
+        case "$fabs" in */layout_*.in) rcmd=page ;; *) rcmd=cli ;; esac
         got=$( (cd "$jobdir" && tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" "$rcmd" --lang="$lang" --no-color --log-level=error <"$fabs" 2>&1) | tr -d '\r')
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
@@ -313,10 +313,10 @@ EOF_NOTS
         E* | خطا*)
             html="$WORK/layout_err_${jobid}_$$.html"
             rm -f "$html"
-            if extra_out=$("$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
-                lfail="layout build exited 0 despite $lcode"
+            if extra_out=$("$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
+                lfail="page build exited 0 despite $lcode"
             elif [ -e "$html" ]; then
-                lfail="layout build wrote output despite $lcode"
+                lfail="page build wrote output despite $lcode"
             fi
             rm -f "$html"
             ;;
@@ -359,7 +359,7 @@ EOF_NOTS
         layout)
             html="$WORK/layout_${jobid}_$$.html"
             buildlog="$WORK/layout_${jobid}_$$.log"
-            "$SALAM_ABS" layout build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
+            "$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" >"$buildlog" 2>&1
             lmiss=""
             lbad=""
             lfirst=""

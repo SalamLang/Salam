@@ -40,7 +40,6 @@ mut PART_TEXT := HashMap {} as HashMap<str, str.StringBuilder>
 mut PART_SID := HashMap {} as HashMap<str, str>
 mut MSG_ROLE := HashMap {} as HashMap<str, str>
 mut PENDING := HashMap {} as HashMap<str, str>
-mut STEPS := HashMap {} as HashMap<str, str>
 mut REASON := HashMap {} as HashMap<str, str.StringBuilder>
 mut TOOLSTEP := HashMap {} as HashMap<str, str>
 
@@ -197,18 +196,6 @@ func add_part(sid: str, pid: str):
     end
 end
 
-func add_step(sid: str, pid: str):
-    order := STEPS.has(sid) ? STEPS.get(sid) : ""
-    if ("\n" + order + "\n").find("\n" + pid + "\n") >= 0:
-        ret
-    end
-    if order.len() == 0:
-        STEPS.put(sid, pid)
-    else:
-        STEPS.put(sid, order + "\n" + pid)
-    end
-end
-
 func on_part(p: value.Value):
     pid := text_of(p, "id")
     sid := text_of(p, "sessionID")
@@ -233,7 +220,7 @@ func on_part(p: value.Value):
         end
         PHASE.put(sid, "writing")
     else kind == "reasoning":
-        add_step(sid, pid)
+        add_part(sid, pid)
         full := text_of(p, "text")
         reason_add(pid, waiting)
         if full.len() >= reason_len(pid):
@@ -245,7 +232,7 @@ func on_part(p: value.Value):
     else kind == "tool":
         state := field(p, "state")
         status := text_of(state, "status")
-        add_step(sid, pid)
+        add_part(sid, pid)
         mut tool_out := text_of(state, "output")
         if tool_out.len() == 0:
             tool_out = text_of(state, "error")
@@ -441,21 +428,17 @@ func forget(sid: str):
     order := ORDER.has(sid) ? ORDER.get(sid) : ""
     if order.len() > 0:
         each pid in order.split("\n"):
-            text_drop(pid)
+            kind := PART_KIND.has(pid) ? PART_KIND.get(pid) : ""
+            if kind == "text":
+                text_drop(pid)
+            else:
+                reason_drop(pid)
+                _t := TOOLSTEP.remove(pid)
+            end
             _b := PART_KIND.remove(pid)
             _c := PART_SID.remove(pid)
         end
     end
-    steps := STEPS.has(sid) ? STEPS.get(sid) : ""
-    if steps.len() > 0:
-        each pid in steps.split("\n"):
-            reason_drop(pid)
-            _t := TOOLSTEP.remove(pid)
-            _k := PART_KIND.remove(pid)
-            _s := PART_SID.remove(pid)
-        end
-    end
-    _st := STEPS.remove(sid)
     _d := ORDER.remove(sid)
     _e := PHASE.remove(sid)
     _f := IDLE.remove(sid)
@@ -549,12 +532,18 @@ end
 pub func Activity(sid: str): str:
     _l := sync.Lock(LOCK)
     mut items := Vector {} as Vector<str>
-    if STEPS.has(sid):
-        each pid in STEPS.get(sid).split("\n"):
+    if ORDER.has(sid):
+        each pid in ORDER.get(sid).split("\n"):
+            kind := PART_KIND.has(pid) ? PART_KIND.get(pid) : ""
             if TOOLSTEP.has(pid):
                 items.push(TOOLSTEP.get(pid))
-            else reason_len(pid) > 0 and str.Trim(reason_text(pid)).len() > 0:
+            else kind == "reasoning" and reason_len(pid) > 0 and str.Trim(reason_text(pid)).len() > 0:
                 items.push(aiact.ThoughtStep(reason_text(pid)))
+            else kind == "text":
+                t := text_part(pid)
+                if str.Trim(t).len() > 0:
+                    items.push(aiact.TextStep(t))
+                end
             end
         end
     end

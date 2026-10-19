@@ -24,6 +24,7 @@ include aistore "store.salam"
 include aiweb "web.salam"
 include aioauth "oauth.salam"
 include aiopenai "openai.salam"
+include aiturn "turn.salam"
 
 const TEHRAN := 12600
 const EPOCH_JDN := 2440588
@@ -228,7 +229,7 @@ func list_users(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM users WHERE name LIKE ?1 OR email LIKE ?1", one(like))
-    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0)), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in + m.tokens_out + m.tokens_reasoning + m.cache_read + m.cache_write), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in + r.tokens_out + r.tokens_reasoning + r.cache_read + r.cache_write), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
+    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -239,11 +240,14 @@ func list_users(ctx: i64):
         m.push(json.MemberRaw("messages", aistore.Text(rows, 5)))
         m.push(json.MemberRaw("apps", aistore.Text(rows, 6)))
         m.push(json.MemberRaw("mcp_calls", aistore.Text(rows, 7)))
-        m.push(json.MemberRaw("last_active", aistore.Text(rows, 8)))
-        m.push(json.MemberRaw("api_requests", aistore.Text(rows, 9)))
-        m.push(json.MemberRaw("tokens", aistore.Text(rows, 10)))
-        m.push(json.MemberRaw("last_login", aistore.Text(rows, 11)))
-        m.push(json.MemberRaw("logins", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("last_active_chat", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("last_active_agent", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("last_active_api", aistore.Text(rows, 10)))
+        m.push(json.MemberRaw("api_requests", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("tokens_in", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("tokens_out", aistore.Text(rows, 13)))
+        m.push(json.MemberRaw("last_login", aistore.Text(rows, 14)))
+        m.push(json.MemberRaw("logins", aistore.Text(rows, 15)))
         items.push(json.Object(m))
     end
     aistore.Finish(rows)
@@ -346,6 +350,82 @@ func list_requests(ctx: i64):
     aiweb.Reply(ctx, 200, `{"requests": ` + aiopenai.Requests(where, args, true) + "}")
 end
 
+func admin_chat_json(id: str, title: str, updated: str, device: str, workspace: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.Member("title", title))
+    m.push(json.MemberRaw("updated", updated))
+    if device != "0" and device.len() > 0:
+        m.push(json.MemberBool("agent", true))
+        m.push(json.MemberRaw("device_id", device))
+        m.push(json.Member("workspace", workspace))
+    end
+    ret json.Object(m)
+end
+
+func admin_activity_raw(s: str): str:
+    t := str.Trim(s)
+    if str.StartsWith(t, "[") and str.EndsWith(t, "]"):
+        ret t
+    end
+    ret "[]"
+end
+
+func admin_message_json(id: str, role: str, body: str, status: str, created: str, activity: str, ms: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("role", role))
+    m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
+    m.push(json.Member("status", status))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("activity", admin_activity_raw(activity)))
+    m.push(json.MemberRaw("ms", ms.len() > 0 ? ms : "0"))
+    ret json.Object(m)
+end
+
+func list_user_chats(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    uid := http.Param(ctx, "id")
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(uid))
+    until aistore.Next(rows):
+        items.push(admin_chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"chats": ` + json.Array(items) + "}")
+end
+
+func get_admin_chat(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mut head := ""
+    aistore.Lock()
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
+    if aistore.Next(crow):
+        head = admin_chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
+    end
+    aistore.Finish(crow)
+    if head.len() == 0:
+        aistore.Unlock()
+        aiweb.Fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    until aistore.Next(rows):
+        items.push(admin_message_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"chat": ` + head + `, "messages": ` + json.Array(items) + "}")
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -357,11 +437,13 @@ end
 pub func Routes(r &: router.Router):
     router.Get(r, "/admin/summary", summary)
     router.Get(r, "/admin/users", list_users)
+    router.Get(r, "/admin/users/:id/chats", list_user_chats)
+    router.Get(r, "/admin/chats/:id", get_admin_chat)
     router.Get(r, "/admin/events", list_events)
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

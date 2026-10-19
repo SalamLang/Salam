@@ -131,11 +131,27 @@ func sql_glued_at(stream: tok.TokenStream, at: int): bool:
         end
     end
     if at + 1 < stream.toks.len():
-        if stream.toks.get(at + 1).kind == tok.TK_PLUS:
+        nk := stream.toks.get(at + 1).kind
+        if nk == tok.TK_PLUS or nk == tok.TK_DOT:
             ret true
         end
     end
     ret false
+end
+
+func sql_all_at_end(r: sql.Report, text: str): bool:
+    if r.items.len() == 0:
+        ret false
+    end
+    stop := str.Len(text)
+    mut i := 0
+    until i < r.items.len():
+        if r.items.get(i).offset < stop:
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
 end
 
 func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.Report):
@@ -161,15 +177,18 @@ func sql_report(job &: SqlJob, file: str, base_line: int, base_col: int, r: sql.
     end
 end
 
-func sql_one(job &: SqlJob, file: str, base_line: int, base_col: int, query: str):
+func sql_one(job &: SqlJob, file: str, base_line: int, base_col: int, query: str, literal: bool):
+    mut r := sql.Report {}
     if job.has_schema:
-        mut r := sql.Check(query, job.cat)
-        sql_report(job, file, base_line, base_col, r)
-        job.queries = job.queries + r.statements
+        r = sql.Check(query, job.cat)
+    else:
+        r = sql.Lint(query, job.dialect)
+    end
+    if literal and sql_all_at_end(r, query):
+        job.glued = job.glued + 1
         sql.FreeReport(r)
         ret
     end
-    mut r := sql.Lint(query, job.dialect)
     sql_report(job, file, base_line, base_col, r)
     job.queries = job.queries + r.statements
     sql.FreeReport(r)
@@ -206,7 +225,9 @@ func sql_scan_salam(job &: SqlJob, path: str):
                         job.glued = job.glued + 1
                     else:
                         w := sql_quote_width(sfile.text, t.begin_index as int)
-                        sql_one(job, path, t.begin_line as int, (t.begin_col as int) + w, t.value.sval)
+                        sql_one(
+                            job, path, t.begin_line as int, (t.begin_col as int) + w, t.value.sval, true
+                        )
                     end
                 end
             end
@@ -223,7 +244,7 @@ func sql_scan_sql_file(job &: SqlJob, path: str):
         ret
     end
     job.files = job.files + 1
-    sql_one(job, path, 1, 1, text)
+    sql_one(job, path, 1, 1, text, false)
     mem.Free(text as void*)
 end
 

@@ -535,6 +535,13 @@ func parse_primary(p &: Parser): int:
         nd_set_t2(p.ast, id, sch)
         ret id
     end
+    if p_is_sym(p, "?"):
+        p_err(
+            p, "SQL201", "'?' is not a placeholder in " + p.d.name,
+            "postgres numbers its placeholders: $1, $2"
+        )
+        ret 0 - 1
+    end
     p_err(
         p, "SQL105", "expected a value, found " + tok_desc(p.src, t),
         "a column name, a literal, a function call or a placeholder goes here"
@@ -592,15 +599,26 @@ func parse_concat(p &: Parser): int:
     mut left := parse_unary(p)
     until p.failed == false:
         mut op := 0
+        mut pg_only := false
         if p_is_sym(p, "||"):
             op = OP_CONCAT
         else p_is_sym(p, "->") or p_is_sym(p, "->>"):
             op = OP_JSON
+        else p_is_sym(p, "#>") or p_is_sym(p, "#>>"):
+            op = OP_JSON_PATH
+            pg_only = true
         end
         if op == 0:
             break
         end
         tk := p.i
+        if pg_only and p.d.id != POSTGRES:
+            p_err(
+                p, "SQL214", "this json operator is postgres only",
+                "sqlite and mysql reach into json with the json_extract family"
+            )
+            break
+        end
         p_next(p)
         right := parse_unary(p)
         left = mk_bin(p, op, left, right, tk)
@@ -678,6 +696,8 @@ func parse_bit(p &: Parser): int:
             op = OP_BITAND
         else p_is_sym(p, "|"):
             op = OP_BITOR
+        else p_is_sym(p, "^"):
+            op = OP_BITXOR
         end
         if op == 0:
             break
@@ -690,7 +710,23 @@ func parse_bit(p &: Parser): int:
     ret left
 end
 
+func pg_sym_op(p: Parser): bool:
+    if p_is_sym(p, "@>") or p_is_sym(p, "<@") or p_is_sym(p, "@@"):
+        ret true
+    end
+    if p_is_sym(p, "~") or p_is_sym(p, "~*") or p_is_sym(p, "!~") or p_is_sym(p, "!~*"):
+        ret true
+    end
+    if p_is_sym(p, "?") or p_is_sym(p, "?|") or p_is_sym(p, "?&"):
+        ret true
+    end
+    ret p_is_sym(p, "^@") or p_is_sym(p, "<->")
+end
+
 func cmp_sym_op(p: Parser): int:
+    if pg_sym_op(p):
+        ret OP_CONTAINS
+    end
     if p_is_sym(p, "=") or p_is_sym(p, "=="):
         ret OP_EQ
     end
@@ -737,6 +773,13 @@ func parse_cmp(p &: Parser): int:
         op := cmp_sym_op(p)
         if op != 0:
             tk := p.i
+            if op == OP_CONTAINS and p.d.id != POSTGRES:
+                p_err(
+                    p, "SQL214", "this operator is postgres only",
+                    "sqlite and mysql have no operator spelled like this"
+                )
+                break
+            end
             p_next(p)
             p_skip_kw(p, "ANY")
             p_skip_kw(p, "SOME")
@@ -1364,9 +1407,11 @@ func parse_conflict(p &: Parser, owner: int):
         end
         id := nd_new(p.ast, N_CONFLICT, tk)
         if p_eat_sym(p, "("):
+            target := nd_new(p.ast, N_LIST, p.i)
             mut cols := Vector {} as Vector<int>
             parse_name_items(p, cols)
-            nd_set_list(p.ast, id, cols)
+            nd_set_list(p.ast, target, cols)
+            nd_set_a(p.ast, id, target)
             p_expect_sym(p, ")", "after the conflict target")
             if p_eat_kw(p, "WHERE"):
                 nd_set_b(p.ast, id, parse_expr(p))
@@ -1800,20 +1845,11 @@ end
 
 func parse_table_options(p &: Parser):
     until p.failed == false and p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
-        if p_eat_kw(p, "WITHOUT"):
-            p_skip_kw(p, "ROWID")
+        if p_is_sym(p, "("):
+            skip_balanced(p)
             continue
         end
-        if p_name_here(p):
-            p_next(p)
-            p_skip_sym(p, "=")
-            if p_name_here(p) or p_kind(p) == TK_STRING or p_kind(p) == TK_NUMBER:
-                p_next(p)
-            end
-            p_skip_sym(p, ",")
-            continue
-        end
-        break
+        p_next(p)
     end
 end
 
@@ -1976,6 +2012,74 @@ func parse_create(p &: Parser): int:
     ret parse_other(p)
 end
 
+func parse_alter_action(p &: Parser): int:
+    tk := p.i
+    id := nd_new(p.ast, N_ALTER_ACTION, tk)
+    if p_eat_kw(p, "ADD"):
+        p_skip_kw(p, "COLUMN")
+        if p_eat_kw(p, "IF"):
+            p_expect_kw(p, "NOT", "after IF")
+            p_expect_kw(p, "EXISTS", "after IF NOT")
+            nd_add_flag(p.ast, id, F_IF_EXISTS)
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_ADD)
+        if constraint_here(p):
+            nd_set_b(p.ast, id, parse_table_constraint(p))
+        else:
+            nd_set_a(p.ast, id, parse_column_def(p))
+        end
+        ret id
+    end
+    if p_eat_kw(p, "DROP"):
+        p_skip_kw(p, "COLUMN")
+        if p_eat_kw(p, "IF"):
+            p_expect_kw(p, "EXISTS", "after IF")
+            nd_add_flag(p.ast, id, F_IF_EXISTS)
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_DROP)
+        nd_set_t1(p.ast, id, p_take_name(p))
+        p_skip_kw(p, "CASCADE")
+        p_skip_kw(p, "RESTRICT")
+        ret id
+    end
+    if p_eat_kw(p, "RENAME"):
+        if p_eat_kw(p, "TO"):
+            nd_set_op(p.ast, id, ALT_RENAME_TABLE)
+            nd_set_t2(p.ast, id, p_take_name(p))
+            ret id
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_RENAME_COL)
+        nd_set_t1(p.ast, id, p_take_name(p))
+        p_expect_kw(p, "TO", "after the old column name")
+        nd_set_t2(p.ast, id, p_take_name(p))
+        ret id
+    end
+    if p_is_kw(p, "MODIFY") or p_is_kw(p, "CHANGE"):
+        renames := p_is_kw(p, "CHANGE")
+        p_next(p)
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_MODIFY)
+        if renames and p_name_here(p):
+            nd_set_t1(p.ast, id, p.i)
+            p_next(p)
+        end
+        nd_set_a(p.ast, id, parse_column_def(p))
+        ret id
+    end
+    nd_set_op(p.ast, id, ALT_OTHER)
+    until p_kind(p) != TK_EOF and not p_is_sym(p, ";") and not p_is_sym(p, ","):
+        if p_is_sym(p, "("):
+            skip_balanced(p)
+            continue
+        end
+        p_next(p)
+    end
+    ret id
+end
+
 func parse_alter(p &: Parser): int:
     tk := p.i
     p_next(p)
@@ -1993,47 +2097,20 @@ func parse_alter(p &: Parser): int:
         p_next(p)
         nd_set_tok(p.ast, id, p_take_name(p))
     end
-    until p.failed == false:
-        if p_eat_kw(p, "ADD"):
-            p_skip_kw(p, "COLUMN")
-            if constraint_here(p):
-                nd_set_b(p.ast, id, parse_table_constraint(p))
-            else:
-                nd_set_a(p.ast, id, parse_column_def(p))
-            end
-        else p_eat_kw(p, "DROP"):
-            p_skip_kw(p, "COLUMN")
-            nd_set_t1(p.ast, id, p_take_name(p))
-            p_skip_kw(p, "CASCADE")
-            p_skip_kw(p, "RESTRICT")
-        else p_eat_kw(p, "RENAME"):
-            if p_eat_kw(p, "TO"):
-                nd_set_t2(p.ast, id, p_take_name(p))
-            else:
-                p_skip_kw(p, "COLUMN")
-                nd_set_t1(p.ast, id, p_take_name(p))
-                p_expect_kw(p, "TO", "after the old column name")
-                nd_set_t2(p.ast, id, p_take_name(p))
-            end
-        else p_eat_kw(p, "MODIFY") or p_eat_kw(p, "CHANGE"):
-            p_skip_kw(p, "COLUMN")
-            if p_name_here(p) and not p_is_sym(p, "("):
-                nd_set_t1(p.ast, id, p.i)
-            end
-            nd_set_a(p.ast, id, parse_column_def(p))
-        else p_eat_kw(p, "ALTER"):
-            p_skip_kw(p, "COLUMN")
-            nd_set_t1(p.ast, id, p_take_name(p))
-            until p_kind(p) != TK_EOF and not p_is_sym(p, ";") and not p_is_sym(p, ","):
-                p_next(p)
-            end
-        else:
-            ret parse_other(p)
+    mut actions := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        a := parse_alter_action(p)
+        if a >= 0:
+            actions.push(a)
         end
         if not p_eat_sym(p, ","):
             break
         end
     end
+    nd_set_list(p.ast, id, actions)
     ret id
 end
 

@@ -1409,9 +1409,21 @@ end
   `MsbReader` and `MsbWriter` are the **MSB-first** bitstream pair every codec needs; `compress`'s `BitReader` is LSB-first and will not do.
   **`audio.wav`**: `OpenWAV SaveWAV SaveWAVBits EncodeWAV EncodeWAVFloat EncodeMuLaw EncodeALaw DecodeWAV ProbeWAV ReadFormat Chunks FindChunk`, covering PCM 8/16/24/32, IEEE float, A-law and mu-law.
   **`audio.dsp`**: `FFT IFFT FFTVec Magnitude PowerSpectrum` (radix-2, power-of-two lengths only), `MakeWindow ApplyWindow BesselI0`, `LowPass HighPass BandPass Notch Peaking LowShelf HighShelf BiquadStep BiquadProcessAll BiquadResponse`, `ResampleSinc ResampleCubic ResampleTo Correlation DCRemove`.
-  **`audio.codec`**: `Open Save Decode Encode Probe ProbeFile CanDecode CanEncode`, the format-agnostic entry points. They live in their own package because a parent cannot import its own children.
+  Effects and dynamics: `Delay Echo Reverb Chorus Flanger Tremolo CompressorProcess LimiterProcess GateProcess TimeStretch PitchShift`.
+  Analysis: `STFT SpectrumAt SpectralCentroid SpectralRolloff SpectralFlatness SpectralFlux FreeSpectrum ZeroCrossingRate DetectPitch DetectOnsets DetectBPM LoudnessLUFS NormalizeLUFS TruePeakDb`.
+  Shared sample conversion lives in the core so every codec uses one copy: `DecodePcm EncodePcm DecodeFloatPcm EncodeFloatPcm DecodeLawPcm EncodeLawPcm PcmDepthValid MuLawToPcm PcmToMuLaw ALawToPcm PcmToALaw`.
+  **`audio.wav`**: `OpenWAV SaveWAV SaveWAVBits EncodeWAV EncodeWAVFloat EncodeMuLaw EncodeALaw DecodeWAV ProbeWAV ReadFormat Chunks FindChunk`, covering PCM 8/16/24/32, IEEE float, A-law and mu-law.
+  **`audio.aiff`**: `OpenAIFF SaveAIFF SaveAIFFBits EncodeAIFF DecodeAIFF ProbeAIFF ReadCommon`. Big-endian, the `sowt` little-endian variant, and the 80-bit extended float sample rate. 8-bit AIFF is **signed**, unlike WAVE.
+  **`audio.au`**: `OpenAU SaveAU EncodeAU EncodeAUEncoding DecodeAU ProbeAU ReadHeader`. A 24-byte big-endian header; 8-bit is signed here too.
+  **`audio.flac`**: `OpenFLAC SaveFLAC SaveFLACLevel EncodeFLAC EncodeFLACLevel DecodeFLAC ProbeFLAC ReadStreamInfo ReadFrameHeader Blocks VerifyFLAC CRC8 CRC16`. Real lossless compression both ways; the decoder handles constant, verbatim, fixed and LPC subframes and all four channel assignments. `FreeStreamInfo` releases the MD5.
+  **`audio.mp3`**: `ParseHeader FindSync CountFrames Headers FrameAt SeekToSecond ReadVbrInfo ProbeMP3 AudioStart IsMP3`. Frame and VBR-header parsing only; **mp3 audio decoding is not implemented**, and `codec.CanDecode(FormatMP3)` says so.
+  **`audio.tag`**: `ReadTags ReadTagsFile FreeTags WriteID3v1 WriteID3v2 ReadID3v1 ReadID3v2 ReadVorbisComment WriteVorbisComment ReadFlacTags StripTags AudioStart AudioEnd`. ID3v1, ID3v2.2-2.4 in all four encodings, Vorbis comments and cover art; text always comes back UTF-8. Every string is owned, so call `FreeTags`.
+  **`audio.music`**: `NoteToFreq FreqToNote NoteName ParseNote Scale ScaleNotes Chord ChordNotes Transpose Interval Cents JustRatio PythagoreanRatio BeatSeconds`. Persian modes are in **cents**, not semitones: `Dastgah DastgahFreqs NoteToFreqCents KoronCents SoriCents`, because a dastgah does not fall on the twelve-tone grid.
+  **`audio.synth`**: `Tone ToneEnvelope Chord NewOsc OscNext WaveValue ADSRAt ADSRTotal NoiseWhite NoisePink NoiseBrown FMTone Additive KarplusStrong NoteAt RenderNotes`.
+  **`audio.midi`**: `NewSong NewTrack AddTrack AddNote AddTempo AddProgram AddControl EncodeMIDI DecodeMIDI OpenMIDI SaveMIDI TicksToSeconds Bpm TotalTicks Notes Render FreeSong`. `Render` plays a song through `audio.synth`.
+  **`audio.codec`**: `Open Save Decode Encode Probe ProbeFile CanDecode CanEncode`, the format-agnostic entry points. They live in their own package because a parent cannot import its own children; it carries WAV, AIFF, au and FLAC.
   8-, 16- and 24-bit PCM round-trip a `Clip` bit for bit; a true 32-bit integer source loses its low 8 bits to the f32 significand.
-  Free every `Clip` with `audio.Free` and every `ByteBuf` with `compress.BufFree`.
+  Free every `Clip` with `audio.Free` and every `ByteBuf` with `compress.BufFree`; `Blocks`, `Headers`, `Notes`, `Scale` and friends return vectors the caller frees.
 - Native media: **`image`** (`Open Save SaveQuality New Resize Crop DrawText ...`, RGBA; GIF reads frame one; JPEG drops alpha), **`opencv`** (needs the
   `salam_opencv_shim` library and OpenCV 4; `Color` is RGB while a `Mat` is
   BGR; free every `Mat`), **`graph`** (`Dijkstra ShortestPath PageRank Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
@@ -2460,7 +2472,10 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `db/opensearch` `اپن سرچ` (imported as `دیتابیس.اپن سرچ`), `dom` `دام`,
 `term` `پایانه`, `cli` `خط فرمان`, `audio` `صدا`, `audio/wav` `ویو`
 (imported as `صدا.ویو`), `audio/dsp` `پردازش سیگنال` (imported as
-`صدا.پردازش سیگنال`), `audio/codec` `کدک` (imported as `صدا.کدک`).
+`صدا.پردازش سیگنال`), `audio/codec` `کدک` (imported as `صدا.کدک`),
+`audio/flac` `فلاک`, `audio/mp3` `ام‌پی‌تری`, `audio/aiff` `ایف`,
+`audio/au` `ای‌یو`, `audio/tag` `برچسب صدا`, `audio/music` `موسیقی`,
+`audio/synth` `صداساز`, `audio/midi` `میدی` (each imported under `صدا.`).
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`
 `تفکیک کردن`, `str.Join` `بپیوند`, `str.Trim` `پیرایش`, `str.Replace`

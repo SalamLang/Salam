@@ -94,7 +94,7 @@ example. The generator builds the `/learn/` overview, the sidebar and the
 previous/next links from the lesson files, grouped by `lesson.part`.
 
 An example without a `.out` file is not run: a `layout:` page is built with
-`salam layout build`, anything else is type-checked with `salam inspect`.
+`salam page build`, anything else is type-checked with `salam inspect`.
 
 ## Adding English (salamlang.org)
 

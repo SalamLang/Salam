@@ -1507,6 +1507,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
+- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -1886,14 +1887,14 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam layout build`,
+A `layout:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
 
 ```salam
 //! mode: layout | title: Web page        // optional editor directive
-layout:
+page:
     title = "My Page"
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
@@ -2021,7 +2022,7 @@ Rules, all checked at compile time:
   own `<style>` plus HTML, with class names prefixed by the component name.
 
 **Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
-rule, never an element. It sits directly under `layout`; `name` and `url`
+rule, never an element. It sits directly under `page`; `name` and `url`
 (`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
 `woff2`, `ttc`) is optional: without it the compiler reads the extension from
 the URL, then the magic bytes of a local file next to the source. A remote URL with
@@ -2031,7 +2032,7 @@ E127. The compiler never fetches over the network. Optional: `weight`
 (`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
 
 ```salam
-layout:
+page:
     font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
     box: content = "hi" font family = "Estedad, sans-serif" end
 end
@@ -2066,7 +2067,7 @@ end
 | E136        | one `class` given different styles on two elements                            |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
-Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
@@ -2077,7 +2078,7 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
+Build: `salam page build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with
 merged `style.css`/`script.js`.
 
@@ -2092,8 +2093,10 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
+salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
+salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
+salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
@@ -2336,7 +2339,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
+| `export`            | `برون‌داد`          | `page`                    | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2347,9 +2350,8 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
-`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
-(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
-The older spelling `چیدمان` is still accepted.
+`page` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`page:`, `صفحه خوشامد(نام: رشته):`); elsewhere the word is a normal name.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use

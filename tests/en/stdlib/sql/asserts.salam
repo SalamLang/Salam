@@ -1,0 +1,519 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import db.sql
+import testing
+import mem
+
+func first_code(r: sql.Report): str:
+    if r.items.len() == 0:
+        ret ""
+    end
+    ret r.items.get(0).code
+end
+
+func lint_code(q: str, d: sql.Dialect): str:
+    mut r := sql.Lint(q, d)
+    out := first_code(r)
+    sql.FreeReport(r)
+    ret out
+end
+
+func lint_ok(q: str, d: sql.Dialect): bool:
+    mut r := sql.Lint(q, d)
+    out := r.ok
+    sql.FreeReport(r)
+    ret out
+end
+
+func check_code(q: str, c: sql.Catalog): str:
+    mut r := sql.Check(q, c)
+    out := first_code(r)
+    sql.FreeReport(r)
+    ret out
+end
+
+func check_help(q: str, c: sql.Catalog): str:
+    mut r := sql.Check(q, c)
+    mut out := ""
+    if r.items.len() > 0:
+        out = r.items.get(0).help
+    end
+    sql.FreeReport(r)
+    ret out
+end
+
+func check_ok(q: str, c: sql.Catalog): bool:
+    mut r := sql.Check(q, c)
+    out := r.errors == 0 and r.warnings == 0
+    sql.FreeReport(r)
+    ret out
+end
+
+func filled(q: str, a: sql.Args, d: sql.Dialect): str:
+    mut r := sql.Report {}
+    out := sql.Fill(q, a, d, r)
+    sql.FreeReport(r)
+    ret out
+end
+
+func fill_code(q: str, a: sql.Args, d: sql.Dialect): str:
+    mut r := sql.Report {}
+    _out := sql.Fill(q, a, d, r)
+    code := first_code(r)
+    sql.FreeReport(r)
+    ret code
+end
+
+func main:
+    lite := sql.DialectOf(sql.SQLITE)
+    my := sql.DialectOf(sql.MYSQL)
+    pg := sql.DialectOf(sql.POSTGRES)
+    testing.AssertEqStr(lite.name, "sqlite")
+    testing.AssertEqStr(sql.DialectNamed("postgresql").name, "postgres")
+    testing.AssertEqStr(sql.DialectNamed("nothing").name, "sqlite")
+
+    testing.AssertTrue(lint_ok("SELECT id, name AS n FROM users u WHERE u.age BETWEEN ? AND ? ORDER BY name DESC LIMIT 10 OFFSET 5", lite))
+    testing.AssertTrue(lint_ok("WITH t AS (SELECT id FROM a) SELECT COUNT(*) FROM t", lite))
+    testing.AssertTrue(lint_ok("SELECT CASE WHEN a > 1 THEN 'x' ELSE 'y' END FROM t", lite))
+    testing.AssertTrue(lint_ok("INSERT INTO t (a, b) VALUES (1, 2), (3, 4)", lite))
+    testing.AssertTrue(lint_ok("SELECT a FROM t1 LEFT OUTER JOIN t2 USING (id) WHERE a IS NOT NULL", lite))
+    testing.AssertTrue(lint_ok("SELECT x::text FROM t WHERE y ILIKE $1", pg))
+    testing.AssertTrue(lint_ok("SELECT `a` FROM `t` WHERE b = \"text\" # a comment", my))
+    testing.AssertTrue(lint_ok("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT NOT NULL)", lite))
+    testing.AssertTrue(lint_ok("SELECT $tag$body$tag$ FROM t", pg))
+    testing.AssertTrue(lint_ok("INSERT INTO t (a) VALUES (?) ON DUPLICATE KEY UPDATE a = VALUES(a)", my))
+    testing.AssertTrue(lint_ok("UPDATE t SET a = DEFAULT WHERE id = 1", lite))
+
+    testing.AssertTrue(lint_ok("SELECT a FROM t WHERE a == 1 AND b != 2 AND c <> 3", lite))
+    testing.AssertTrue(lint_ok("SELECT a & 1, b | 2, c ^ 3, ~d, e << 1, f >> 1 FROM t", lite))
+    testing.AssertTrue(lint_ok("SELECT data -> 'k', data ->> 'k', data #> '{a}', data #>> '{a}' FROM t", pg))
+    testing.AssertTrue(lint_ok("SELECT a FROM t WHERE tags @> '{x}' OR '{y}' <@ tags", pg))
+    testing.AssertEqStr(lint_code("SELECT data #> '{a}' FROM t", lite), "SQL214")
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE tags @> '{x}'", my), "SQL214")
+
+    testing.AssertEqStr(lint_code("SELECT 'open FROM t", lite), "SQL001")
+    testing.AssertEqStr(lint_code("SELECT /* open FROM t", lite), "SQL002")
+    testing.AssertEqStr(lint_code("SELECT \"open FROM t", lite), "SQL003")
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE b = 1 \\ 2", lite), "SQL004")
+    testing.AssertEqStr(lint_code("INSERT INTO t (a VALUES (1)", lite), "SQL101")
+    testing.AssertEqStr(lint_code("UPDATE t SET WHERE a = 1", lite), "SQL102")
+    testing.AssertEqStr(lint_code("SELECT FROM t", lite), "SQL105")
+    testing.AssertEqStr(lint_code("SELECT a FROM t t2 t3", lite), "SQL115")
+
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE id = ?", pg), "SQL201")
+    testing.AssertEqStr(lint_code("INSERT INTO t (a) VALUES (?)", pg), "SQL201")
+    testing.AssertTrue(lint_ok("SELECT a FROM t WHERE data ? 'k' AND data ?| '{x}' AND data ?& '{y}'", pg))
+    testing.AssertEqInt(sql.ParamCount("SELECT a FROM t WHERE data ? 'k'", pg), 0)
+    testing.AssertTrue(lint_ok("SELECT a FROM d WHERE to_tsvector('english', t) @@ plainto_tsquery('english', 'x')", pg))
+    testing.AssertTrue(lint_ok("SELECT a FROM t WHERE n ~ '^a' AND n ~* 'b' AND n !~ 'c' AND n !~* 'd'", pg))
+    testing.AssertTrue(lint_ok("SELECT a FROM t WHERE n ^@ 'pre' ORDER BY v <-> '[1,2]'", pg))
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE n ~ 'x'", lite), "SQL214")
+    testing.AssertTrue(lint_ok("SELECT ~a, a & 1 FROM t", lite))
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE id = $1", lite), "SQL202")
+    testing.AssertEqStr(lint_code("SELECT a FROM `t`", pg), "SQL204")
+    testing.AssertEqStr(lint_code("SELECT a FROM t WHERE b ILIKE 'x'", lite), "SQL205")
+    testing.AssertEqStr(lint_code("SELECT a::text FROM t", my), "SQL206")
+    testing.AssertEqStr(lint_code("SELECT a FROM t LIMIT 1, 2", pg), "SQL207")
+    testing.AssertEqStr(lint_code("DELETE FROM t WHERE a = 1 RETURNING a", my), "SQL208")
+    testing.AssertEqStr(lint_code("INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING", my), "SQL209")
+    testing.AssertEqStr(lint_code("INSERT INTO t (a) VALUES (1) ON DUPLICATE KEY UPDATE a = 1", lite), "SQL210")
+    testing.AssertEqStr(lint_code("CREATE TABLE t (id INT AUTO_INCREMENT)", lite), "SQL211")
+    testing.AssertEqStr(lint_code("CREATE TABLE t (id INT AUTOINCREMENT)", pg), "SQL211")
+    testing.AssertEqStr(lint_code("TRUNCATE TABLE t", lite), "SQL212")
+    testing.AssertEqStr(lint_code("PRAGMA foreign_keys = ON", my), "SQL213")
+
+    mut multi := sql.Lint("SELECT a FROM t; INSERT INTO t (a) VALUES (1); DELETE FROM t WHERE a = 1", lite)
+    testing.AssertTrue(multi.ok)
+    testing.AssertEqInt(multi.statements, 3)
+    sql.FreeReport(multi)
+
+    testing.AssertEqInt(sql.ParamCount("SELECT a FROM t WHERE b = ? AND c = ?", lite), 2)
+    testing.AssertEqInt(sql.ParamCount("SELECT a FROM t WHERE b = '?'", lite), 0)
+    mut marks := sql.Placeholders("SELECT a FROM t WHERE b = $1 AND c = $2", pg)
+    testing.AssertEqInt(marks.len(), 2)
+    testing.AssertEqStr(marks.get(0), "$1")
+    testing.AssertEqStr(marks.get(1), "$2")
+    marks.free()
+
+    mut cat := sql.NewCatalog(lite)
+    mut ddl := sql.Apply(cat, """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            name TEXT,
+            age INTEGER DEFAULT 0,
+            paid BOOLEAN NOT NULL DEFAULT 0,
+            slug TEXT GENERATED ALWAYS AS (lower(email)) STORED
+        );
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            total REAL NOT NULL
+        );
+        ALTER TABLE orders ADD COLUMN note TEXT;
+        CREATE VIEW payers AS SELECT id, email FROM users WHERE paid = 1;
+    """)
+    testing.AssertTrue(ddl.ok)
+    sql.FreeReport(ddl)
+
+    testing.AssertEqInt(sql.TableCount(cat), 3)
+    testing.AssertTrue(sql.HasTable(cat, "USERS"))
+    testing.AssertFalse(sql.HasTable(cat, "sessions"))
+    testing.AssertTrue(sql.HasColumn(cat, "orders", "note"))
+    testing.AssertEqInt(sql.ColumnCount(cat, "users"), 6)
+    id_col := sql.ColumnAt(cat, "users", 0)
+    testing.AssertEqStr(id_col.name, "id")
+    testing.AssertEqInt(id_col.kind, sql.TYPE_INT)
+    testing.AssertTrue(id_col.primary)
+    testing.AssertTrue(id_col.not_null)
+    testing.AssertTrue(id_col.auto)
+    name_col := sql.ColumnAt(cat, "users", 2)
+    testing.AssertEqInt(name_col.kind, sql.TYPE_TEXT)
+    testing.AssertFalse(name_col.not_null)
+    testing.AssertEqInt(sql.ColumnAt(cat, "users", 4).kind, sql.TYPE_BOOL)
+    testing.AssertTrue(sql.ColumnAt(cat, "users", 5).generated)
+    testing.AssertEqInt(sql.ColumnAt(cat, "orders", 2).kind, sql.TYPE_FLOAT)
+    testing.AssertEqStr(sql.KindName(sql.TYPE_TEXT), "text")
+    testing.AssertEqStr(sql.SalamType(sql.TYPE_INT, true), "i64")
+    testing.AssertEqStr(sql.SalamType(sql.TYPE_TEXT, false), "option.Option<str>")
+
+    testing.AssertTrue(check_ok("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id WHERE u.age > ?", cat))
+    testing.AssertTrue(check_ok("WITH top AS (SELECT user_id, total FROM orders) SELECT user_id FROM top WHERE total > ?", cat))
+    testing.AssertTrue(check_ok("INSERT INTO users (email, name) VALUES (?, ?) RETURNING id", cat))
+    testing.AssertTrue(check_ok("SELECT COUNT(*) FROM orders o WHERE o.user_id IN (SELECT id FROM users WHERE email = ?)", cat))
+    testing.AssertTrue(check_ok("SELECT id, email FROM payers WHERE id = ?", cat))
+    testing.AssertTrue(check_ok("UPDATE users SET name = ? WHERE id = ?", cat))
+
+    testing.AssertEqStr(check_code("SELECT id, mail FROM users", cat), "SQL311")
+    testing.AssertEqStr(check_help("SELECT id, mail FROM users", cat), "did you mean \"email\"?")
+    testing.AssertEqStr(check_code("SELECT id FROM user", cat), "SQL317")
+    testing.AssertEqStr(check_help("SELECT id FROM user", cat), "did you mean \"users\"?")
+    testing.AssertEqStr(check_code("SELECT o.missing FROM orders o", cat), "SQL311")
+    testing.AssertEqStr(check_code("SELECT x.id FROM users u", cat), "SQL310")
+    testing.AssertEqStr(check_code("SELECT id FROM users u JOIN orders o ON o.user_id = u.id", cat), "SQL312")
+    testing.AssertEqStr(check_code("SELECT u.id FROM users u JOIN users u ON 1 = 1", cat), "SQL313")
+    testing.AssertEqStr(check_code("INSERT INTO users (email, name) VALUES (?)", cat), "SQL314")
+    testing.AssertEqStr(check_code("INSERT INTO users (name) VALUES (?)", cat), "SQL315")
+    testing.AssertEqStr(check_code("INSERT INTO users (email, email) VALUES (?, ?)", cat), "SQL316")
+    testing.AssertEqStr(check_code("INSERT INTO users (email, slug) VALUES (?, ?)", cat), "SQL318")
+    testing.AssertEqStr(check_code("DELETE FROM users", cat), "SQL320")
+    testing.AssertEqStr(check_code("SELECT id FROM users UNION SELECT id, email FROM users", cat), "SQL323")
+    testing.AssertEqStr(check_code("DROP TABLE sessions", cat), "SQL317")
+    testing.AssertEqStr(check_code("CREATE INDEX ix ON users (mail)", cat), "SQL311")
+
+    testing.AssertEqStr(check_code("SELECT id FROM users WHERE age = 'abc'", cat), "SQL330")
+    testing.AssertTrue(check_ok("SELECT id FROM users WHERE age = '42'", cat))
+    testing.AssertTrue(check_ok("SELECT id FROM users WHERE email = 'abc'", cat))
+    testing.AssertEqStr(check_code("SELECT email, COUNT(*) FROM users GROUP BY age", cat), "SQL332")
+    testing.AssertTrue(check_ok("SELECT email, COUNT(*) FROM users GROUP BY id", cat))
+    testing.AssertTrue(check_ok("SELECT id, COUNT(*) FROM users GROUP BY id", cat))
+    testing.AssertTrue(check_ok("SELECT id, MAX(age) FROM users GROUP BY id", cat))
+    testing.AssertTrue(check_ok("SELECT COUNT(*) FROM users", cat))
+    testing.AssertTrue(check_ok("SELECT u.id FROM users u JOIN orders o USING (id)", cat))
+    testing.AssertTrue(check_ok("SELECT id, total FROM users JOIN orders USING (id)", cat))
+    testing.AssertEqStr(check_code("SELECT u.id FROM users u JOIN orders o USING (email)", cat), "SQL333")
+    testing.AssertEqStr(check_code("SELECT u.id FROM users u JOIN orders o USING (nosuch)", cat), "SQL333")
+    testing.AssertTrue(check_ok("INSERT INTO users (email, name) VALUES (?, ?) ON CONFLICT (email) DO UPDATE SET name = ?", cat))
+    testing.AssertEqStr(check_code("INSERT INTO users (email) VALUES (?) ON CONFLICT (nosuch) DO NOTHING", cat), "SQL311")
+
+    testing.AssertEqStr(check_code("SELECT id FROM users WHERE id IN (SELECT id, email FROM users)", cat), "SQL324")
+    testing.AssertEqStr(check_code("SELECT id FROM users WHERE id = (SELECT id, email FROM users)", cat), "SQL324")
+    testing.AssertTrue(check_ok("SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)", cat))
+    testing.AssertTrue(check_ok("SELECT id FROM users WHERE id = (SELECT MAX(user_id) FROM orders)", cat))
+    testing.AssertEqStr(check_code("SELECT id AS x, email AS x FROM users", cat), "SQL325")
+    testing.AssertTrue(check_ok("SELECT id AS x, email AS y FROM users", cat))
+    testing.AssertTrue(check_ok("SELECT u.email, o.total FROM users u JOIN orders o ON o.user_id = u.id", cat))
+    testing.AssertTrue(check_ok("SELECT * FROM users u JOIN orders o ON o.user_id = u.id", cat))
+    testing.AssertEqStr(check_code("SELECT id, email AS id FROM users", cat), "SQL325")
+    testing.AssertEqStr(check_code("SELECT id, email FROM users ORDER BY 3", cat), "SQL326")
+    testing.AssertEqStr(check_code("SELECT id, email FROM users ORDER BY 0", cat), "SQL326")
+    testing.AssertTrue(check_ok("SELECT id, email FROM users ORDER BY 2", cat))
+    testing.AssertTrue(check_ok("SELECT email, COUNT(*) FROM users GROUP BY 1", cat))
+    testing.AssertEqStr(check_code("SELECT id FROM users LIMIT 'x'", cat), "SQL327")
+    testing.AssertTrue(check_ok("SELECT id FROM users LIMIT ?", cat))
+    testing.AssertEqStr(check_code("SELECT id FROM users WHERE COUNT(*) > 1", cat), "SQL328")
+    testing.AssertTrue(check_ok("SELECT id FROM users WHERE id > (SELECT COUNT(*) FROM orders)", cat))
+    testing.AssertTrue(check_ok("SELECT COUNT(*) FROM users GROUP BY age HAVING COUNT(*) > 1", cat))
+    testing.AssertEqStr(check_code("UPDATE users SET name = ?, name = ? WHERE id = ?", cat), "SQL329")
+    testing.AssertTrue(check_ok("UPDATE users SET name = ?, age = ? WHERE id = ?", cat))
+
+    mut a := sql.Analyze("SELECT id, name, age FROM users WHERE email = ? AND age > ?", cat)
+    testing.AssertTrue(a.ok)
+    testing.AssertEqInt(a.kind, sql.STMT_SELECT)
+    testing.AssertEqStr(a.table, "users")
+    testing.AssertEqStr(sql.StmtKindName(a.kind), "select")
+    testing.AssertEqInt(a.params.len(), 2)
+    testing.AssertEqStr(a.params.get(0).column, "email")
+    testing.AssertEqInt(a.params.get(0).kind, sql.TYPE_TEXT)
+    testing.AssertTrue(a.params.get(0).not_null)
+    testing.AssertEqStr(a.params.get(1).column, "age")
+    testing.AssertEqInt(a.params.get(1).ordinal, 2)
+    testing.AssertEqInt(a.results.len(), 3)
+    testing.AssertEqStr(a.results.get(0).name, "id")
+    testing.AssertFalse(a.results.get(0).nullable)
+    testing.AssertTrue(a.results.get(1).nullable)
+    sql.FreeAnalysis(a)
+
+    mut b := sql.Analyze("SELECT * FROM users u LEFT JOIN orders o ON o.user_id = u.id", cat)
+    testing.AssertEqInt(b.results.len(), 10)
+    testing.AssertEqStr(b.results.get(0).name, "id")
+    testing.AssertFalse(b.results.get(0).nullable)
+    testing.AssertEqStr(b.results.get(6).name, "id")
+    testing.AssertTrue(b.results.get(6).nullable)
+    sql.FreeAnalysis(b)
+
+    mut c := sql.Analyze("INSERT INTO users (email, name) VALUES (?, ?) RETURNING id, email", cat)
+    testing.AssertEqInt(c.kind, sql.STMT_INSERT)
+    testing.AssertEqStr(c.table, "users")
+    testing.AssertEqInt(c.params.len(), 2)
+    testing.AssertEqStr(c.params.get(1).column, "name")
+    testing.AssertFalse(c.params.get(1).not_null)
+    testing.AssertEqInt(c.results.len(), 2)
+    testing.AssertEqStr(c.results.get(1).name, "email")
+    sql.FreeAnalysis(c)
+
+    mut e := sql.Analyze("SELECT COUNT(*) AS n, MAX(total) AS top FROM orders", cat)
+    testing.AssertEqInt(e.results.len(), 2)
+    testing.AssertEqStr(e.results.get(0).name, "n")
+    testing.AssertEqInt(e.results.get(0).kind, sql.TYPE_INT)
+    testing.AssertFalse(e.results.get(0).nullable)
+    testing.AssertEqInt(e.results.get(1).kind, sql.TYPE_FLOAT)
+    testing.AssertTrue(e.results.get(1).nullable)
+    sql.FreeAnalysis(e)
+
+    mut agg := sql.Analyze(
+        "SELECT COUNT(*) AS n, SUM(total) AS s, MIN(id) AS lo, MAX(email) AS hi FROM users u JOIN orders o ON o.user_id = u.id",
+        cat
+    )
+    testing.AssertEqInt(agg.results.len(), 4)
+    testing.AssertFalse(agg.results.get(0).nullable)
+    testing.AssertEqInt(agg.results.get(1).kind, sql.TYPE_FLOAT)
+    testing.AssertTrue(agg.results.get(1).nullable)
+    testing.AssertEqInt(agg.results.get(2).kind, sql.TYPE_INT)
+    testing.AssertTrue(agg.results.get(2).nullable)
+    testing.AssertEqInt(agg.results.get(3).kind, sql.TYPE_TEXT)
+    testing.AssertTrue(agg.results.get(3).nullable)
+    sql.FreeAnalysis(agg)
+
+    mut alt := sql.NewCatalog(my)
+    mut altr := sql.Apply(alt, """
+        CREATE TABLE t (a INT NOT NULL, b VARCHAR(10)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ALTER TABLE t MODIFY COLUMN b VARCHAR(50) NOT NULL;
+        ALTER TABLE t CHANGE b c TEXT;
+        ALTER TABLE t ADD COLUMN d DECIMAL(8,2) NOT NULL DEFAULT 0 COMMENT 'money';
+        ALTER TABLE t ADD INDEX ix (a);
+        ALTER TABLE t DROP COLUMN a, ADD COLUMN e INT;
+    """)
+    testing.AssertTrue(altr.ok)
+    sql.FreeReport(altr)
+    testing.AssertEqInt(sql.ColumnCount(alt, "t"), 3)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 0).name, "c")
+    testing.AssertEqInt(sql.ColumnAt(alt, "t", 0).kind, sql.TYPE_TEXT)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 1).name, "d")
+    testing.AssertEqInt(sql.ColumnAt(alt, "t", 1).kind, sql.TYPE_FLOAT)
+    testing.AssertEqStr(sql.ColumnAt(alt, "t", 2).name, "e")
+    testing.AssertFalse(sql.HasColumn(alt, "t", "a"))
+    testing.AssertFalse(sql.HasColumn(alt, "t", "b"))
+    mut ifex := sql.Apply(alt, """
+        ALTER TABLE t ADD COLUMN IF NOT EXISTS c TEXT, ADD COLUMN IF NOT EXISTS f INT;
+        ALTER TABLE t DROP COLUMN IF EXISTS nothing_here;
+        CREATE INDEX IF NOT EXISTS t_c ON t (c);
+    """)
+    testing.AssertTrue(ifex.ok)
+    sql.FreeReport(ifex)
+    testing.AssertTrue(sql.HasColumn(alt, "t", "f"))
+    testing.AssertEqInt(sql.ColumnCount(alt, "t"), 4)
+
+    mut bad1 := sql.Apply(alt, "ALTER TABLE t DROP COLUMN nosuch")
+    testing.AssertEqStr(first_code(bad1), "SQL304")
+    sql.FreeReport(bad1)
+    mut bad2 := sql.Apply(alt, "ALTER TABLE nosuch ADD COLUMN x INT")
+    testing.AssertEqStr(first_code(bad2), "SQL303")
+    sql.FreeReport(bad2)
+    mut bad3 := sql.Apply(alt, "ALTER TABLE t ADD COLUMN c TEXT")
+    testing.AssertEqStr(first_code(bad3), "SQL302")
+    sql.FreeReport(bad3)
+    sql.FreeCatalog(alt)
+
+    mut keys := sql.NewCatalog(lite)
+    mut keysr := sql.Apply(keys, """
+        CREATE TABLE rowid_key (id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+        CREATE TABLE text_key (slug TEXT PRIMARY KEY, v TEXT NOT NULL);
+        CREATE TABLE table_key (x INTEGER, v TEXT NOT NULL, PRIMARY KEY (x));
+    """)
+    testing.AssertTrue(keysr.ok)
+    sql.FreeReport(keysr)
+    testing.AssertTrue(sql.ColumnAt(keys, "rowid_key", 0).auto)
+    testing.AssertTrue(sql.ColumnAt(keys, "table_key", 0).auto)
+    testing.AssertFalse(sql.ColumnAt(keys, "text_key", 0).auto)
+    testing.AssertTrue(check_ok("INSERT INTO rowid_key (v) VALUES (?)", keys))
+    testing.AssertTrue(check_ok("INSERT INTO table_key (v) VALUES (?)", keys))
+    testing.AssertEqStr(check_code("INSERT INTO text_key (v) VALUES (?)", keys), "SQL335")
+    sql.FreeCatalog(keys)
+
+    mut pgcat := sql.NewCatalog(pg)
+    mut pgddl := sql.Apply(pgcat, """
+        CREATE TABLE notes (id BIGSERIAL PRIMARY KEY, body TEXT NOT NULL, tags TEXT[]);
+        CREATE TABLE marks (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, at TIMESTAMP WITH TIME ZONE NOT NULL);
+    """)
+    testing.AssertTrue(pgddl.ok)
+    sql.FreeReport(pgddl)
+    testing.AssertEqInt(sql.ColumnAt(pgcat, "notes", 0).kind, sql.TYPE_INT)
+    testing.AssertTrue(check_ok("SELECT id, body FROM notes WHERE id = $1 AND body = $2", pgcat))
+    testing.AssertTrue(sql.ColumnAt(pgcat, "notes", 0).auto)
+    testing.AssertTrue(sql.ColumnAt(pgcat, "marks", 0).auto)
+    testing.AssertEqInt(sql.ColumnAt(pgcat, "marks", 1).kind, sql.TYPE_TIME)
+    testing.AssertTrue(check_ok("INSERT INTO notes (body) VALUES ($1)", pgcat))
+    testing.AssertTrue(check_ok("INSERT INTO marks (at) VALUES ($1)", pgcat))
+    pgr1 := check_code("SELECT id FROM notes WHERE id = 'abc'", pgcat)
+    testing.AssertEqStr(pgr1, "SQL330")
+    pgr2 := check_code("SELECT id FROM notes WHERE body = 5", pgcat)
+    testing.AssertEqStr(pgr2, "SQL330")
+    pgr3 := check_code("SELECT id, COUNT(*) FROM notes GROUP BY body", pgcat)
+    testing.AssertEqStr(pgr3, "SQL332")
+    testing.AssertTrue(check_ok("SELECT body, COUNT(*) FROM notes GROUP BY id", pgcat))
+
+    mut gap := sql.Analyze("SELECT id FROM notes WHERE id = $1 AND body = $3", pgcat)
+    testing.AssertFalse(gap.ok)
+    testing.AssertEqStr(first_code(gap.report), "SQL319")
+    testing.AssertEqInt(gap.params.len(), 2)
+    testing.AssertEqInt(gap.params.get(1).ordinal, 3)
+    sql.FreeAnalysis(gap)
+    sql.FreeCatalog(pgcat)
+
+    mut one := sql.NewArgs()
+    sql.AddInt(one, 5 as i64)
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE id = ?", one, lite), "SELECT a FROM t WHERE id = 5")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE id = $1", one, pg), "SELECT a FROM t WHERE id = 5")
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE id = $1 OR ref = $1", one, pg),
+        "SELECT a FROM t WHERE id = 5 OR ref = 5"
+    )
+    testing.AssertEqStr(filled("SELECT '?' , ? FROM t", one, lite), "SELECT '?' , 5 FROM t")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE c = '?' AND id = ?", one, lite), "SELECT a FROM t WHERE c = '?' AND id = 5")
+    testing.AssertEqStr(fill_code("SELECT a FROM t WHERE id = ? AND x = ?", one, lite), "SQL400")
+    testing.AssertEqStr(fill_code("SELECT a FROM t", one, lite), "SQL400")
+    testing.AssertEqStr(fill_code("SELECT a FROM t WHERE id = :id", one, lite), "SQL401")
+    sql.FreeArgs(one)
+
+    mut mix := sql.NewArgs()
+    sql.AddText(mix, "O'Brien")
+    sql.AddBool(mix, true)
+    sql.AddNull(mix)
+    sql.AddFloat(mix, 1.5)
+    testing.AssertEqInt(sql.ArgCount(mix), 4)
+    testing.AssertEqStr(
+        filled("INSERT INTO t (a, b, c, d) VALUES (?, ?, ?, ?)", mix, lite),
+        "INSERT INTO t (a, b, c, d) VALUES ('O''Brien', 1, NULL, 1.5)"
+    )
+    testing.AssertEqStr(
+        filled("INSERT INTO t (a, b, c, d) VALUES ($1, $2, $3, $4)", mix, pg),
+        "INSERT INTO t (a, b, c, d) VALUES ('O''Brien', TRUE, NULL, 1.5)"
+    )
+    sql.FreeArgs(mix)
+
+    mut evil := sql.NewArgs()
+    sql.AddText(evil, "x' OR '1'='1")
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE name = ?", evil, lite),
+        "SELECT a FROM t WHERE name = 'x'' OR ''1''=''1'"
+    )
+    sql.FreeArgs(evil)
+
+    mut slash := sql.NewArgs()
+    sql.AddText(slash, "a\\b")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE p = ?", slash, my), "SELECT a FROM t WHERE p = 'a\\\\b'")
+    testing.AssertEqStr(filled("SELECT a FROM t WHERE p = $1", slash, pg), "SELECT a FROM t WHERE p = 'a\\b'")
+    sql.FreeArgs(slash)
+
+    mut back := sql.NewArgs()
+    sql.AddInt(back, 7 as i64)
+    sql.AddInt(back, 9 as i64)
+    testing.AssertEqStr(
+        filled("SELECT a FROM t WHERE x = $2 AND y = $1", back, pg),
+        "SELECT a FROM t WHERE x = 9 AND y = 7"
+    )
+    sql.FreeArgs(back)
+
+    qsrc := """
+-- name: GetUser :one
+SELECT id, email, name FROM users WHERE email = ?;
+
+-- name: ListUsers :many
+SELECT id, email FROM users ORDER BY id;
+
+-- name: CreateUser :exec
+INSERT INTO users (email, name) VALUES (?, ?);
+
+-- name: DropUser :execrows
+DELETE FROM users WHERE id = ?;
+"""
+    mut qrep := sql.Report {}
+    mut queries := sql.ParseQueries(qsrc, qrep)
+    testing.AssertTrue(qrep.ok)
+    testing.AssertEqInt(queries.len(), 4)
+    testing.AssertEqStr(queries.get(0).name, "GetUser")
+    testing.AssertEqInt(queries.get(0).kind, sql.Q_ONE)
+    testing.AssertEqInt(queries.get(1).kind, sql.Q_MANY)
+    testing.AssertEqInt(queries.get(2).kind, sql.Q_EXEC)
+    testing.AssertEqInt(queries.get(3).kind, sql.Q_EXECROWS)
+    testing.AssertEqStr(queries.get(2).text, "INSERT INTO users (email, name) VALUES (?, ?)")
+
+    code := sql.Generate("store", queries, cat, qrep)
+    testing.AssertTrue(qrep.ok)
+    testing.AssertContains(code, "package store")
+    testing.AssertContains(code, "struct GetUserRow:")
+    testing.AssertContains(code, "pub id: i64 = 0 as i64")
+    testing.AssertContains(code, "pub email: str = \"\"")
+    testing.AssertContains(code, "pub name: option.Option<str>")
+    testing.AssertContains(code, "pub func GetUser(c: dyn db.Connection, email: str, ok &: bool): GetUserRow:")
+    testing.AssertContains(code, "pub func ListUsers(c: dyn db.Connection): Vector<ListUsersRow>")
+    testing.AssertContains(code, "pub func CreateUser(c: dyn db.Connection, email: str, name: str): bool:")
+    testing.AssertContains(code, "pub func DropUser(c: dyn db.Connection, id: i64): i64:")
+    testing.AssertContains(code, "sql.AddText(a, email)")
+    testing.AssertContains(code, "if r.IsNull(2):")
+    testing.AssertContains(code, "out.name = option.Some(r.Text(2))")
+    testing.AssertContains(code, "until r.Next():")
+    testing.AssertContains(code, "n = c.Changes()")
+    sql.FreeQueries(queries)
+    sql.FreeReport(qrep)
+
+    mut badq := sql.Report {}
+    mut bad := sql.ParseQueries("-- name: Oops :whatever\nSELECT 1;\n", badq)
+    testing.AssertEqStr(first_code(badq), "SQL502")
+    sql.FreeQueries(bad)
+    sql.FreeReport(badq)
+
+    mut badname := sql.Report {}
+    mut bn := sql.ParseQueries("-- name: switch :one\nSELECT id FROM users;\n", badname)
+    testing.AssertEqStr(first_code(badname), "SQL501")
+    sql.FreeQueries(bn)
+    sql.FreeReport(badname)
+
+    mut badcol := sql.Report {}
+    mut bc := sql.ParseQueries("-- name: Bad :one\nSELECT nosuch FROM users;\n", badcol)
+    code2 := sql.Generate("x", bc, cat, badcol)
+    testing.AssertFalse(badcol.ok)
+    testing.AssertEqStr(badcol.items.get(0).code, "SQL311")
+    testing.AssertContains(badcol.items.get(0).message, "Bad: ")
+    mem.Free(code2 as void*)
+    sql.FreeQueries(bc)
+    sql.FreeReport(badcol)
+
+    sql.FreeCatalog(cat)
+    ret testing.Summary()
+end

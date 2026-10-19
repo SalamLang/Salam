@@ -39,7 +39,8 @@ export type ToolStep = {
   link: string;
   status: "running" | "done" | "error";
 };
-export type ActivityStep = ThinkStep | ToolStep;
+export type TextStep = { kind: "text"; text: string };
+export type ActivityStep = ThinkStep | ToolStep | TextStep;
 
 export type PlanId = "free" | "plus" | "pro" | "unlimited";
 export type Plan = {

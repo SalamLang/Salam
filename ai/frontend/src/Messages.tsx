@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ToolCard, type CallView } from "./Agent";
-import type { Message } from "./api";
+import type { ActivityStep, Message, ThinkStep, ToolStep } from "./api";
 import type { AgentAnswer } from "./desktop";
 import { ActivityPanel } from "./Activity";
 import { CopyButton, Markdown } from "./Markdown";
@@ -65,21 +65,54 @@ type Tools = {
   onStop?: (id: string) => void;
 };
 
+type BoxGroup = { kind: "boxes"; items: (ThinkStep | ToolStep)[] };
+type TextGroup = { kind: "text"; text: string };
+
+function groupSteps(steps: ActivityStep[], body: string): (BoxGroup | TextGroup)[] {
+  const groups: (BoxGroup | TextGroup)[] = [];
+  let sawText = false;
+  for (const s of steps) {
+    if (s.kind === "text") {
+      sawText = true;
+      groups.push({ kind: "text", text: s.text });
+      continue;
+    }
+    const last = groups[groups.length - 1];
+    if (last && last.kind === "boxes") last.items.push(s);
+    else groups.push({ kind: "boxes", items: [s] });
+  }
+  if (!sawText && body) groups.push({ kind: "text", text: body });
+  return groups;
+}
+
+function TextGroupView({ text, live }: { text: string; live: boolean }) {
+  const shown = useSmoothText(text, live);
+  const typing = live && shown.length < text.length;
+  const visible = typing ? shown.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : shown;
+  if (!visible) return null;
+  return (
+    <div className={typing ? "streaming" : undefined}>
+      <Markdown text={visible} />
+    </div>
+  );
+}
+
 function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
-  const [animate] = useState(m.status === "pending");
-  const text = useSmoothText(m.body, animate);
   const pending = m.status === "pending";
-  const typing = pending || text.length < m.body.length;
   const phase = m.phase || "thinking";
   const waiting = calls.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
-  const showPhase = pending && calls.length > 0 && !waiting && text.length === 0;
-  const visible = typing ? text.replace(/(?:^|\n)[ \t]*`{1,3}[^\n`]*$/, "") : text;
+  const groups = groupSteps(steps, m.body);
+  const showPhase = pending && calls.length > 0 && !waiting && m.body.length === 0;
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
       <div className="msg-body">
-        <ActivityPanel steps={steps} pending={pending} ms={m.ms} created={m.created} />
+        {groups.map((g, i) => {
+          const isLast = i === groups.length - 1;
+          if (g.kind === "text") return <TextGroupView key={i} text={g.text} live={pending && isLast} />;
+          return <ActivityPanel key={i} steps={g.items} pending={pending && isLast} ms={isLast ? m.ms : undefined} created={m.created} />;
+        })}
         {calls.length > 0 && (
           <div className="tool-list">
             {calls.map((c) => (
@@ -87,11 +120,6 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
             ))}
           </div>
         )}
-        {visible ? (
-          <div className={typing ? "streaming" : undefined}>
-            <Markdown text={visible} />
-          </div>
-        ) : null}
         {showPhase && (
           <div className="phase" aria-live="polite">
             <span className="dots">
@@ -102,7 +130,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
             {calls.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
-        {!typing && m.body && (
+        {!pending && m.body && (
           <div className="msg-tools">
             <CopyButton text={m.body} label="رونوشت پاسخ" />
           </div>

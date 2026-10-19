@@ -108,6 +108,21 @@ export function Apps({ notify }: { notify: (msg: string) => void }) {
         <h2>برنامه‌های متصل</h2>
         <p className="muted">برنامه‌هایی مانند Claude Code، Codex یا Cursor که با حساب سلام شما به ابزارهای سلام وصل شده‌اند. هر زمان بخواهید می‌توانید اتصالشان را قطع کنید.</p>
       </header>
+      <section className="card empty-card">
+        <div className="notice-icon info">
+          <IconPlug />
+        </div>
+        <h3>اتصال یک ابزار جدید</h3>
+        <p className="muted">
+          ابزارهای سلام (بررسی و کامپایل کد، جست‌وجو در کتابخانه‌ی استاندارد و نمونه‌ها) را می‌توانید در دستیارهای برنامه‌نویسی مانند Claude Code، Codex یا Cursor به کار ببرید؛ در هر پلن، حتی پلن
+          رایگان، و بدون نیاز به ساختن توکن دستی. برای Claude Code این فرمان را در ترمینال اجرا کنید:
+        </p>
+        <ConnectHelp />
+        <p className="muted small">
+          در برنامه‌های دیگر نشانی <code className="inline-code" dir="ltr">https://mcp.salamlang.ir/mcp</code> را به عنوان سرور MCP اضافه کنید. با نخستین استفاده، صفحه‌ی ورود سلام باز می‌شود و پس از اجازه‌ی شما، برنامه در این فهرست دیده
+          می‌شود.
+        </p>
+      </section>
       {error && (
         <div className="form-error" role="alert">
           {error}{" "}
@@ -124,19 +139,7 @@ export function Apps({ notify }: { notify: (msg: string) => void }) {
       )}
       {apps && apps.length === 0 && (
         <section className="card empty-card">
-          <div className="notice-icon info">
-            <IconPlug />
-          </div>
           <h3>هنوز برنامه‌ای وصل نکرده‌اید</h3>
-          <p className="muted">
-            ابزارهای سلام (بررسی و کامپایل کد، جست‌وجو در کتابخانه‌ی استاندارد و نمونه‌ها) را می‌توانید در دستیارهای برنامه‌نویسی مانند Claude Code، Codex یا Cursor به کار ببرید. برای Claude Code
-            این فرمان را در ترمینال اجرا کنید:
-          </p>
-          <ConnectHelp />
-          <p className="muted small">
-            در برنامه‌های دیگر نشانی <code className="inline-code" dir="ltr">https://mcp.salamlang.ir/mcp</code> را به عنوان سرور MCP اضافه کنید. با نخستین استفاده، صفحه‌ی ورود سلام باز می‌شود و پس از اجازه‌ی شما، برنامه در این فهرست دیده
-            می‌شود.
-          </p>
         </section>
       )}
       {apps && apps.length > 0 && (

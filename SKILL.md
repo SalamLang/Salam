@@ -206,7 +206,7 @@ repeat 1 to 5:  ...  end              // 1..5 inclusive
 repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
-each x in xs:  println x  end         // iterate a collection/array
+each x in xs:  println x  end         // iterate a collection/array/your own type
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
 each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
@@ -511,6 +511,41 @@ end
 mut c := Counter {}
 c.Tick()
 ```
+
+**Iterating your own type with `each`:** `each` works on any struct that has
+one of two shapes, so you do not write an index loop by hand. No interface and
+no registration: the compiler checks the method shape.
+
+- **Sequence** - `len()` (or `size()`) returning an integer, plus
+  `get(i: int)`. `each x in it` walks `0 .. len()-1`, and `each i, x in it`
+  also binds the index.
+- **Cursor** - `iter()` returning a struct with `has_next(): bool`, `value()`
+  and `next()`. Add `key()` to that cursor and `each k, v in it` binds both;
+  without a `key()`, `each` over it takes a single binding.
+
+```salam
+struct RangeIter:
+    pub cur: int = 0
+    pub stop: int = 0
+    pub func has_next(): bool:  ret this.cur < this.stop  end
+    pub func value(): int:      ret this.cur              end
+    pub func next():            this.cur = this.cur + 1   end
+end
+struct Range:
+    pub lo: int = 0
+    pub hi: int = 0
+    pub func iter(): RangeIter:  ret RangeIter { cur = this.lo, stop = this.hi }  end
+end
+each v in Range { lo = 2, hi = 5 }:  println v  end      // 2 3 4
+```
+
+The method names are the usual built-ins, so a Persian file spells them
+`طول`, `بگیر`, `پیمایش`, `داردبعدی`, `مقدار`, `کلید` and `بعدی`. Every std
+container now has one of the two shapes, so `each x in set`,
+`each x in stack`, `each x in queue`, `each x in deque`, `each x in list` and
+`each k, v in ordered_map` all work. `PriorityQueue` is the exception: its
+heap order is not its sorted order, so it has no `iter()` - pop from it
+instead.
 
 **Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
 struct adds a field named `Animal` and promotes its fields and `pub` methods,

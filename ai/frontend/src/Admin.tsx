@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Message, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
+import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 
@@ -463,9 +464,12 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">برنامه</th>
               <th scope="col">فراخوانی MCP</th>
               <th scope="col">API</th>
-              <th scope="col">توکن</th>
+              <th scope="col">توکن ورودی</th>
+              <th scope="col">توکن خروجی</th>
               <th scope="col">آخرین ورود</th>
-              <th scope="col">آخرین فعالیت</th>
+              <th scope="col">آخرین چت</th>
+              <th scope="col">آخرین ایجنت</th>
+              <th scope="col">آخرین API</th>
             </tr>
           </thead>
           <tbody>
@@ -485,14 +489,17 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.apps)}</td>
                 <td>{fmtNum(u.mcp_calls)}</td>
                 <td>{fmtNum(u.api_requests)}</td>
-                <td title={exactTitle(u.tokens || 0)}>{fmtCompact(u.tokens || 0)}</td>
+                <td title={exactTitle(u.tokens_in || 0)}>{fmtCompact(u.tokens_in || 0)}</td>
+                <td title={exactTitle(u.tokens_out || 0)}>{fmtCompact(u.tokens_out || 0)}</td>
                 <td title={u.last_login ? `${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود` : undefined}>{fmtRelative(u.last_login || 0)}</td>
-                <td title={u.last_active ? fmtDateTime(u.last_active) : undefined}>{fmtRelative(u.last_active)}</td>
+                <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
+                <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
+                <td title={u.last_active_api ? fmtDateTime(u.last_active_api) : undefined}>{fmtRelative(u.last_active_api)}</td>
               </tr>
             ))}
             {data && data.users.length === 0 && (
               <tr>
-                <td colSpan={11} className="empty-cell">
+                <td colSpan={14} className="empty-cell">
                   کاربری پیدا نشد.
                 </td>
               </tr>
@@ -1052,6 +1059,128 @@ function Payments({ picked }: { picked: Picked }) {
   );
 }
 
+function ChatMessages({ chatId }: { chatId: string }) {
+  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setMessages(null);
+    setError("");
+    api
+      .adminChat(chatId)
+      .then((r) => live && setMessages(r.messages))
+      .catch((e) => live && setError(errText(e, "بارگذاری پیام‌ها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [chatId]);
+
+  if (error) return <div className="form-error" role="alert">{error}</div>;
+  if (messages === null)
+    return (
+      <div className="list-loading" role="status">
+        <span className="spinner" />
+        <span className="sr-only">در حال بارگذاری</span>
+      </div>
+    );
+  return (
+    <div className="admin-chat-messages">
+      {messages.map((m) => (
+        <div key={m.id} className={`admin-msg ${m.role}`}>
+          <span className="admin-msg-role">{m.role === "user" ? "کاربر" : "دستیار"}</span>
+          <div className="admin-msg-body" dir="auto">
+            {m.body ? <Markdown text={m.body} /> : <span className="muted">(بدون متن)</span>}
+          </div>
+        </div>
+      ))}
+      {messages.length === 0 && <p className="muted">پیامی در این گفت‌وگو نیست.</p>}
+    </div>
+  );
+}
+
+function Conversations({ picked }: { picked: Picked }) {
+  const [chats, setChats] = useState<Chat[] | null>(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    setChats(null);
+    setError("");
+    setOpen(null);
+    if (!picked) return;
+    let live = true;
+    api
+      .adminUserChats(picked.id)
+      .then((r) => live && setChats(r.chats))
+      .catch((e) => live && setError(errText(e, "بارگذاری گفت‌وگوها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [picked]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>گفت‌وگوها{picked ? ` این کاربر` : ""}</h3>
+      </div>
+      {!picked ? (
+        <p className="muted">برای دیدن گفت‌وگوها یک کاربر را از جدول کاربران انتخاب کنید.</p>
+      ) : error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : chats === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <div className="table-wrap scroll-y">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">عنوان</th>
+                <th scope="col">نوع</th>
+                <th scope="col">آخرین بروزرسانی</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chats.map((c) => (
+                <Fragment key={c.id}>
+                  <tr className={open === c.id ? "selected" : ""}>
+                    <td>
+                      <button type="button" className="link" onClick={() => setOpen((o) => (o === c.id ? null : c.id))} aria-expanded={open === c.id}>
+                        <bdi>{c.title}</bdi>
+                      </button>
+                    </td>
+                    <td>{c.agent ? "ایجنت" : "وب"}</td>
+                    <td title={fmtDateTime(c.updated)}>{fmtRelative(c.updated)}</td>
+                  </tr>
+                  {open === c.id && (
+                    <tr>
+                      <td colSpan={3}>
+                        <ChatMessages chatId={c.id} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+              {chats.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="empty-cell">
+                    گفت‌وگویی نیست.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
@@ -1308,6 +1437,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
               </button>
             </div>
           )}
+          <Conversations picked={picked} />
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />
           <Events picked={picked} onPick={setPicked} />

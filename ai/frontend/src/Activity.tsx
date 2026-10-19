@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { ActivityStep, ToolStep } from "./api";
+import type { ThinkStep, ToolStep } from "./api";
 import {
   IconAlert,
   IconBook,
@@ -91,7 +91,7 @@ export function ActivityPanel({
   ms,
   created,
 }: {
-  steps: ActivityStep[];
+  steps: (ThinkStep | ToolStep)[];
   pending: boolean;
   ms?: number;
   created: number;

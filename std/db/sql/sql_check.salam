@@ -49,6 +49,7 @@ k_sql_aggregates := [
 
 struct Scope:
     pub base: int = 0
+    pub name_base: int = 0
     pub srcs: Vector<str> = Vector {}
     pub cols: Vector<str> = Vector {}
     pub kinds: Vector<int> = Vector {}
@@ -220,6 +221,17 @@ func scope_free(sc &: Scope):
     sc.opens.free()
 end
 
+func scope_find_src_here(sc: Scope, name: str): int:
+    mut i := sc.name_base
+    until i < sc.names.len():
+        if str.EqualFold(sc.names.get(i), name):
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
 func scope_find_src(sc: Scope, name: str): int:
     mut i := 0
     until i < sc.names.len():
@@ -248,6 +260,7 @@ func scope_inherit(dst &: Scope, src: Scope):
         j = j + 1
     end
     dst.base = src.cols.len()
+    dst.name_base = src.names.len()
 end
 
 func lookup_table(ck: Checker, name: str, out &: Table): bool:
@@ -503,6 +516,9 @@ func expr_has_aggregate(ck &: Checker, id: int): bool:
     if k == N_NONE:
         ret false
     end
+    if k == N_SUBQUERY or k == N_EXISTS:
+        ret false
+    end
     n := ck.p.ast.nodes.get(id)
     if k == N_FUNC:
         if is_aggregate_name(c_name(ck, n.tok)):
@@ -580,6 +596,121 @@ func lit_is_number_text(ck &: Checker, node: int): bool:
         i = i + 1
     end
     ret digits > 0 and dots < 2
+end
+
+func lit_int_value(ck &: Checker, id: int): int:
+    if nd_kind(ck.p.ast, id) != N_LITERAL:
+        ret 0 - 1
+    end
+    n := ck.p.ast.nodes.get(id)
+    if n.op != LIT_INT:
+        ret 0 - 1
+    end
+    t := ck.p.toks.get(n.tok)
+    if t.len < 1 or t.len > 9:
+        ret 0 - 1
+    end
+    mut v := 0
+    mut i := 0
+    until i < t.len:
+        c := ck.p.src[t.off + i]
+        if not ch_digit(c):
+            ret 0 - 1
+        end
+        v = v * 10 + ((c as int) - 48)
+        i = i + 1
+    end
+    ret v
+end
+
+func check_subquery_arity(ck &: Checker, sc &: Scope, sub: int, want: int, tok: int):
+    k := nd_kind(ck.p.ast, sub)
+    if k != N_SELECT and k != N_SET_OP and k != N_WITH and k != N_VALUES:
+        ret
+    end
+    mut rows := Vector {} as Vector<ResultCol>
+    select_results(ck, sub, sc, rows, true)
+    got := rows.len()
+    rows.free()
+    if got == 0 or got == want:
+        ret
+    end
+    mut what := "one value is"
+    if want > 1:
+        what = str.FromInt(want as i64) + " values are"
+    end
+    c_err(
+        ck, tok, "SQL324", "this subquery returns " + str.FromInt(got as i64) + " columns but " + what + " expected",
+        "select just the column the comparison needs"
+    )
+end
+
+func check_ordinals(ck &: Checker, list_node: int, count: int, label: str):
+    if list_node < 0:
+        ret
+    end
+    items := ck.p.ast.nodes.get(list_node).list
+    mut i := 0
+    until i < items.len():
+        mut e := items.get(i)
+        if nd_kind(ck.p.ast, e) == N_ORDER_ITEM:
+            e = ck.p.ast.nodes.get(e).a
+        end
+        v := lit_int_value(ck, e)
+        if v >= 0:
+            if v < 1 or v > count:
+                c_err(
+                    ck, ck.p.ast.nodes.get(e).tok, "SQL326", label + " " + str.FromInt(v as i64) + " but the statement returns " + str.FromInt(count as i64) + " columns",
+                    "count the result columns from 1, or name the column instead"
+                )
+            end
+        end
+        i = i + 1
+    end
+end
+
+func check_limit_value(ck &: Checker, id: int, what: str):
+    if nd_kind(ck.p.ast, id) != N_LITERAL:
+        ret
+    end
+    n := ck.p.ast.nodes.get(id)
+    if n.op == LIT_INT:
+        ret
+    end
+    if n.op == LIT_STRING or n.op == LIT_BOOL or n.op == LIT_NULL:
+        c_err(
+            ck, n.tok, "SQL327", what + " takes a number",
+            "write the count without quotes, or bind it as a placeholder"
+        )
+    end
+end
+
+func check_duplicate_aliases(ck &: Checker, id: int):
+    n := ck.p.ast.nodes.get(id)
+    mut seen := Vector {} as Vector<str>
+    mut i := 0
+    until i < n.list.len():
+        rc := ck.p.ast.nodes.get(n.list.get(i))
+        if (rc.flags & F_STAR) == 0:
+            name := result_name(ck, n.list.get(i))
+            if not str.IsEmpty(name):
+                mut j := 0
+                until j < seen.len():
+                    if str.EqualFold(seen.get(j), name) and rc.t2 >= 0:
+                        c_warn(
+                            ck, rc.t2, "SQL325", "two result columns are both called \"" + name + "\"",
+                            "give one of them a different alias"
+                        )
+                        break
+                    end
+                    j = j + 1
+                end
+                seen.push(name)
+            end
+        end
+        i = i + 1
+    end
+    seen.free()
 end
 
 func check_cmp_types(ck &: Checker, sc &: Scope, a: int, b: int):
@@ -948,6 +1079,13 @@ func walk_expr(ck &: Checker, sc &: Scope, id: int):
             bind_param(ck, sc, n.a, n.b)
             bind_param(ck, sc, n.b, n.a)
             check_cmp_types(ck, sc, n.a, n.b)
+            if nd_kind(ck.p.ast, n.b) == N_SUBQUERY:
+                mut lw := 1
+                if nd_kind(ck.p.ast, n.a) == N_ROW:
+                    lw = ck.p.ast.nodes.get(n.a).list.len()
+                end
+                check_subquery_arity(ck, sc, ck.p.ast.nodes.get(n.b).a, lw, n.tok)
+            end
         end
         walk_expr(ck, sc, n.a)
         walk_expr(ck, sc, n.b)
@@ -963,9 +1101,11 @@ func walk_expr(ck &: Checker, sc &: Scope, id: int):
         bind_param(ck, sc, n.a, n.b)
         walk_expr(ck, sc, n.a)
         if nd_kind(ck.p.ast, n.b) == N_SELECT or nd_kind(ck.p.ast, n.b) == N_SET_OP or nd_kind(ck.p.ast, n.b) == N_WITH:
-            mut rows := Vector {} as Vector<ResultCol>
-            select_results(ck, n.b, sc, rows, false)
-            rows.free()
+            mut want := 1
+            if nd_kind(ck.p.ast, n.a) == N_ROW:
+                want = ck.p.ast.nodes.get(n.a).list.len()
+            end
+            check_subquery_arity(ck, sc, n.b, want, n.tok)
         else:
             walk_expr(ck, sc, n.b)
         end
@@ -1097,7 +1237,7 @@ func build_from_scope(ck &: Checker, sc &: Scope, from: int, nullable: bool):
         ret
     end
     alias := n.t2 >= 0 ? c_name(ck, n.t2) : tname
-    if scope_find_src(sc, alias) >= 0:
+    if scope_find_src_here(sc, alias) >= 0:
         c_err(
             ck, n.t2 >= 0 ? n.t2 : n.tok, "SQL313", "\"" + alias + "\" is used twice in this FROM",
             "give one of them a different alias"
@@ -1156,6 +1296,19 @@ func check_select_core(ck &: Checker, id: int, outer &: Scope, out &: Vector<Res
     walk_expr(ck, sc, n.f)
     walk_expr(ck, sc, n.g)
     check_group_by(ck, sc, id)
+    check_duplicate_aliases(ck, id)
+    check_limit_value(ck, n.f, "LIMIT")
+    check_limit_value(ck, n.g, "OFFSET")
+    if expr_has_aggregate(ck, n.b):
+        c_err(
+            ck, n.tok, "SQL328", "an aggregate cannot be used in WHERE",
+            "move the condition to HAVING, which runs after the grouping"
+        )
+    end
+    if want:
+        check_ordinals(ck, n.e, out.len(), "ORDER BY names column")
+        check_ordinals(ck, n.c, out.len(), "GROUP BY names column")
+    end
     scope_free(sc)
 end
 
@@ -1502,12 +1655,27 @@ func check_update(ck &: Checker, id: int):
     ck.table = tname
     if n.c >= 0:
         list := ck.p.ast.nodes.get(n.c).list
+        mut written := Vector {} as Vector<int>
         mut i := 0
         until i < list.len():
             it := ck.p.ast.nodes.get(list.get(i))
             mut ci := 0 - 1
             if have:
                 ci = check_write_col(ck, t, tname, it.tok)
+            end
+            if ci >= 0:
+                mut w := 0
+                until w < written.len():
+                    if written.get(w) == ci:
+                        c_err(
+                            ck, it.tok, "SQL329", "\"" + c_name(ck, it.tok) + "\" is assigned twice in this SET",
+                            "keep one assignment per column"
+                        )
+                        break
+                    end
+                    w = w + 1
+                end
+                written.push(ci)
             end
             if ci >= 0 and nd_kind(ck.p.ast, it.a) == N_PARAM:
                 col := t.columns.get(ci)
@@ -1516,6 +1684,7 @@ func check_update(ck &: Checker, id: int):
             walk_expr(ck, sc, it.a)
             i = i + 1
         end
+        written.free()
     end
     walk_expr(ck, sc, n.b)
     if n.b < 0:

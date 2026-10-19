@@ -459,12 +459,16 @@ end
 func sql_cmd(opt &: dr.Dr): int:
     mut inputs := Vector {} as Vector<str>
     defer inputs.free()
-    mut mode_check := false
+    mut mode := 0
+    mut seen_word := false
     mut i := 0
     until i < opt.inputs.len():
         a := opt.inputs.get(i)
-        if str.Equals(a, "check") and not mode_check and inputs.len() == 0:
-            mode_check = true
+        if not seen_word and inputs.len() == 0 and str.Equals(a, "check"):
+            seen_word = true
+        else not seen_word and inputs.len() == 0 and str.Equals(a, "generate"):
+            seen_word = true
+            mode = 1
         else:
             inputs.push(a)
         end
@@ -491,6 +495,19 @@ func sql_cmd(opt &: dr.Dr): int:
             end
             ret 1
         end
+    end
+    if mode == 1:
+        rc := sql_generate(opt, job, inputs)
+        if job.has_schema:
+            sql.FreeCatalog(job.cat)
+        end
+        mut sg := 0
+        until sg < job.schema_files.len():
+            mem.Free(job.schema_files.get(sg) as void*)
+            sg = sg + 1
+        end
+        job.schema_files.free()
+        ret rc
     end
     mut pre := 0
     until pre < inputs.len():
@@ -522,5 +539,90 @@ func sql_cmd(opt &: dr.Dr): int:
     if job.errors > 0:
         ret 1
     end
+    ret 0
+end
+
+func sql_collect_queries(job &: SqlJob, path: str, out &: Vector<sql.Query>, rep &: sql.Report): bool:
+    if os.IsDir(path):
+        mut found := os.Walk(path)
+        sort.Sort(found)
+        mut ok := true
+        mut i := 0
+        until i < found.len():
+            f := found.get(i)
+            if str.EndsWith(f, ".sql") and not sql_is_schema_file(job, f):
+                if not sql_collect_queries(job, f, out, rep):
+                    ok = false
+                end
+            end
+            i = i + 1
+        end
+        found.free()
+        ret ok
+    end
+    text := os.ReadFile(path)
+    if str.IsEmpty(text):
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot read '%s'"), co.ArgStr(path)))
+        ret false
+    end
+    job.files = job.files + 1
+    mut one := sql.ParseQueries(text, rep)
+    mut i := 0
+    until i < one.len():
+        out.push(one.get(i))
+        i = i + 1
+    end
+    one.free()
+    mem.Free(text as void*)
+    ret true
+end
+
+func sql_generate(opt &: dr.Dr, job &: SqlJob, inputs: Vector<str>): int:
+    if str.IsEmpty(opt.sql_schema):
+        io.EPrintln(i18.Tr("salam: 'sql generate' needs --schema=PATH"))
+        ret 2
+    end
+    mut rep := sql.Report {}
+    mut queries := Vector {} as Vector<sql.Query>
+    mut ok := true
+    mut i := 0
+    until i < inputs.len():
+        if not sql_collect_queries(job, inputs.get(i), queries, rep):
+            ok = false
+        end
+        i = i + 1
+    end
+    if not ok:
+        sql.FreeQueries(queries)
+        sql.FreeReport(rep)
+        ret 1
+    end
+    mut pkg := opt.sql_package
+    if str.IsEmpty(pkg):
+        pkg = "queries"
+    end
+    code := sql.Generate(pkg, queries, job.cat, rep)
+    sql_report(job, str.IsEmpty(opt.output) ? "<queries>" : opt.output, 1, 1, rep)
+    failed := job.errors > 0
+    sql.FreeReport(rep)
+    job.queries = queries.len()
+    sql.FreeQueries(queries)
+    if failed:
+        mem.Free(code as void*)
+        ret 1
+    end
+    if str.IsEmpty(opt.output):
+        print code
+    else:
+        if io.WriteFile(opt.output, code) < 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(opt.output)))
+            mem.Free(code as void*)
+            ret 1
+        end
+        println co.Format1(
+            i18.Tr("wrote %s"), co.ArgStr(opt.output)
+        ) + " (" + str.FromInt(job.queries as i64) + " queries)"
+    end
+    mem.Free(code as void*)
     ret 0
 end

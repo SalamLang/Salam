@@ -16,6 +16,7 @@ package main
 
 import db.sql
 import testing
+import mem
 
 func first_code(r: sql.Report): str:
     if r.items.len() == 0:
@@ -447,6 +448,71 @@ func main:
         "SELECT a FROM t WHERE x = 9 AND y = 7"
     )
     sql.FreeArgs(back)
+
+    qsrc := """
+-- name: GetUser :one
+SELECT id, email, name FROM users WHERE email = ?;
+
+-- name: ListUsers :many
+SELECT id, email FROM users ORDER BY id;
+
+-- name: CreateUser :exec
+INSERT INTO users (email, name) VALUES (?, ?);
+
+-- name: DropUser :execrows
+DELETE FROM users WHERE id = ?;
+"""
+    mut qrep := sql.Report {}
+    mut queries := sql.ParseQueries(qsrc, qrep)
+    testing.AssertTrue(qrep.ok)
+    testing.AssertEqInt(queries.len(), 4)
+    testing.AssertEqStr(queries.get(0).name, "GetUser")
+    testing.AssertEqInt(queries.get(0).kind, sql.Q_ONE)
+    testing.AssertEqInt(queries.get(1).kind, sql.Q_MANY)
+    testing.AssertEqInt(queries.get(2).kind, sql.Q_EXEC)
+    testing.AssertEqInt(queries.get(3).kind, sql.Q_EXECROWS)
+    testing.AssertEqStr(queries.get(2).text, "INSERT INTO users (email, name) VALUES (?, ?)")
+
+    code := sql.Generate("store", queries, cat, qrep)
+    testing.AssertTrue(qrep.ok)
+    testing.AssertContains(code, "package store")
+    testing.AssertContains(code, "struct GetUserRow:")
+    testing.AssertContains(code, "pub id: i64 = 0 as i64")
+    testing.AssertContains(code, "pub email: str = \"\"")
+    testing.AssertContains(code, "pub name: option.Option<str>")
+    testing.AssertContains(code, "pub func GetUser(c: dyn db.Connection, email: str, ok &: bool): GetUserRow:")
+    testing.AssertContains(code, "pub func ListUsers(c: dyn db.Connection): Vector<ListUsersRow>")
+    testing.AssertContains(code, "pub func CreateUser(c: dyn db.Connection, email: str, name: str): bool:")
+    testing.AssertContains(code, "pub func DropUser(c: dyn db.Connection, id: i64): i64:")
+    testing.AssertContains(code, "sql.AddText(a, email)")
+    testing.AssertContains(code, "if r.IsNull(2):")
+    testing.AssertContains(code, "out.name = option.Some(r.Text(2))")
+    testing.AssertContains(code, "until r.Next():")
+    testing.AssertContains(code, "n = c.Changes()")
+    sql.FreeQueries(queries)
+    sql.FreeReport(qrep)
+
+    mut badq := sql.Report {}
+    mut bad := sql.ParseQueries("-- name: Oops :whatever\nSELECT 1;\n", badq)
+    testing.AssertEqStr(first_code(badq), "SQL502")
+    sql.FreeQueries(bad)
+    sql.FreeReport(badq)
+
+    mut badname := sql.Report {}
+    mut bn := sql.ParseQueries("-- name: switch :one\nSELECT id FROM users;\n", badname)
+    testing.AssertEqStr(first_code(badname), "SQL501")
+    sql.FreeQueries(bn)
+    sql.FreeReport(badname)
+
+    mut badcol := sql.Report {}
+    mut bc := sql.ParseQueries("-- name: Bad :one\nSELECT nosuch FROM users;\n", badcol)
+    code2 := sql.Generate("x", bc, cat, badcol)
+    testing.AssertFalse(badcol.ok)
+    testing.AssertEqStr(badcol.items.get(0).code, "SQL311")
+    testing.AssertContains(badcol.items.get(0).message, "Bad: ")
+    mem.Free(code2 as void*)
+    sql.FreeQueries(bc)
+    sql.FreeReport(badcol)
 
     sql.FreeCatalog(cat)
     ret testing.Summary()

@@ -1,0 +1,229 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.flac
+import compress
+import filepath
+import math
+import mem
+import os
+import rand
+import testing
+
+func quantized(rate: int, channels: int, frames: int, bits: int, kind: int): audio.Clip:
+    mut c := audio.New(rate, channels, frames)
+    rand.Seed(12345 as i64)
+    mut i := 0
+    until i < frames:
+        t := (i as f64) / (rate as f64)
+        mut ch := 0
+        until ch < channels:
+            mut v := 0.0
+            if kind == 0:
+                v = 0.5 * math.Sin(2.0 * math.PI * (220.0 + 110.0 * (ch as f64)) * t)
+            else kind == 1:
+                v = rand.FloatRange(-0.8, 0.8)
+            else kind == 2:
+                v = 0.25
+            else:
+                v = ((i % 7) as f64) / 16.0 - 0.2
+            end
+            audio.SetSample(c, i, ch, v)
+            ch += 1
+        end
+        i += 1
+    end
+    mut q := audio.ToBits(c, bits)
+    q.bits = bits
+    audio.Free(c)
+    ret q
+end
+
+func worst(a: audio.Clip, b: audio.Clip): f64:
+    mut w := 0.0
+    mut f := 0
+    until f < a.frames:
+        mut ch := 0
+        until ch < a.channels:
+            d := math.Abs(audio.Sample(b, f, ch) - audio.Sample(a, f, ch))
+            if d > w:
+                w = d
+            end
+            ch += 1
+        end
+        f += 1
+    end
+    ret w
+end
+
+func roundtrip(src: audio.Clip, level: int): int:
+    enc := flac.EncodeFLACLevel(src, level)
+    testing.AssertMsg(compress.BufLen(enc) > 42, "flac encoder produced nothing")
+    testing.AssertMsg(flac.IsFLAC(enc.data, enc.len), "flac not a flac stream")
+    mut si := flac.StreamInfo {}
+    testing.AssertMsg(flac.ReadStreamInfo(enc.data, enc.len, si), "flac no streaminfo")
+    testing.AssertMsg(si.rate == src.rate, "flac rate")
+    testing.AssertMsg(si.channels == src.channels, "flac channels")
+    testing.AssertMsg(si.bits == src.bits, "flac bits")
+    testing.AssertMsg((si.total as int) == src.frames, "flac total")
+    testing.AssertMsg(si.md5.len == 16, "flac md5 length")
+    flac.FreeStreamInfo(si)
+    mut ok := false
+    mut back := flac.DecodeFLAC(enc.data, enc.len, ok)
+    testing.AssertMsg(ok, "flac decode failed")
+    testing.AssertMsg(back.frames == src.frames, "flac frame count")
+    testing.AssertMsg(back.channels == src.channels, "flac channel count")
+    testing.AssertMsg(back.rate == src.rate, "flac decoded rate")
+    testing.AssertMsg(back.bits == src.bits, "flac decoded bits")
+    testing.AssertMsg(worst(src, back) == 0.0, "flac not lossless")
+    testing.AssertMsg(flac.VerifyFLAC(enc.data, enc.len), "flac verify failed")
+    size := compress.BufLen(enc)
+    compress.BufFree(enc)
+    audio.Free(back)
+    ret size
+end
+
+func main:
+    println "a tone is lossless and compresses hard"
+    mut tone := quantized(44100, 2, 8000, 16, 0)
+    tone_size := roundtrip(tone, 5)
+    raw := tone.frames * tone.channels * 2
+    testing.AssertMsg(tone_size < raw / 2, "a tone should compress past half")
+
+    println "noise is lossless even though it cannot compress"
+    mut noise := quantized(44100, 2, 4000, 16, 1)
+    noise_size := roundtrip(noise, 5)
+    testing.AssertMsg(noise_size > raw / 8, "noise should not shrink much")
+
+    println "a constant block uses the constant subframe"
+    mut flat := quantized(8000, 1, 2000, 16, 2)
+    flat_size := roundtrip(flat, 5)
+    testing.AssertMsg(flat_size < 400, "a constant signal should be tiny")
+
+    println "a sawtooth, where a fixed predictor wins"
+    mut saw := quantized(16000, 1, 3000, 16, 3)
+    roundtrip(saw, 5)
+
+    println "mono, stereo and more channels"
+    mut m1 := quantized(22050, 1, 2000, 16, 0)
+    roundtrip(m1, 5)
+    mut m4 := quantized(48000, 4, 1500, 16, 0)
+    roundtrip(m4, 5)
+
+    println "8, 16 and 24 bit all stay lossless"
+    mut b8 := quantized(8000, 1, 2000, 8, 0)
+    roundtrip(b8, 5)
+    mut b24 := quantized(48000, 2, 2000, 24, 0)
+    roundtrip(b24, 5)
+
+    println "every level round-trips"
+    each lv in [0, 2, 5, 8]:
+        roundtrip(tone, lv)
+    end
+
+    println "odd lengths and a partial last block"
+    mut odd := quantized(44100, 2, 4097, 16, 0)
+    roundtrip(odd, 5)
+    mut tiny := quantized(44100, 1, 3, 16, 0)
+    roundtrip(tiny, 5)
+
+    println "probe reads the header alone"
+    enc := flac.EncodeFLAC(tone)
+    mut pok := false
+    info := flac.ProbeFLAC(enc.data, enc.len, pok)
+    testing.AssertTrue(pok)
+    testing.AssertEqInt(info.format, audio.FormatFLAC)
+    testing.AssertEqInt(info.rate, 44100)
+    testing.AssertEqInt(info.channels, 2)
+    testing.AssertEqInt(info.bits, 16)
+    testing.AssertEqInt(info.frames, 8000)
+    testing.AssertTrue(info.lossless)
+    testing.AssertMsg(info.duration > 0.18 and info.duration < 0.19, "about a fifth of a second")
+
+    println "metadata blocks and frame headers"
+    blocks := flac.Blocks(enc.data, enc.len)
+    testing.AssertEqInt(blocks.len(), 1)
+    testing.AssertEqInt(blocks.get(0).kind, flac.BlockStreamInfo)
+    testing.AssertTrue(blocks.get(0).last)
+    testing.AssertEqInt(blocks.get(0).size, 34)
+    mut si2 := flac.StreamInfo {}
+    testing.AssertTrue(flac.ReadStreamInfo(enc.data, enc.len, si2))
+    testing.AssertEqInt(si2.audio_offset, 42)
+    mut fi := flac.FrameInfo {}
+    head := flac.ReadFrameHeader(enc.data, enc.len, si2.audio_offset, si2, fi)
+    testing.AssertMsg(head > 0, "the first frame header should parse")
+    testing.AssertEqInt(fi.channels, 2)
+    testing.AssertEqInt(fi.bits, 16)
+    testing.AssertEqInt(fi.rate, 44100)
+    testing.AssertEqInt(fi.block_size, 4096)
+    flac.FreeStreamInfo(si2)
+
+    println "crc helpers"
+    mut probe := compress.NewByteBuf()
+    each b in [1, 2, 3, 4]:
+        compress.BufPush(probe, b)
+    end
+    testing.AssertMsg(flac.CRC8(probe.data, 0, 4) >= 0, "crc8 runs")
+    testing.AssertMsg(flac.CRC16(probe.data, 0, 4) >= 0, "crc16 runs")
+    testing.AssertEqInt(flac.CRC8(probe.data, 0, 0), 0)
+    testing.AssertEqInt(flac.CRC16Buf(probe, 0, 4), flac.CRC16(probe.data, 0, 4))
+
+    println "refusals"
+    testing.AssertFalse(flac.IsFLAC(probe.data, 4))
+    testing.AssertEqInt(compress.BufLen(flac.EncodeFLAC(audio.Clip {})), 0)
+    mut bad := false
+    flac.DecodeFLAC(probe.data, probe.len, bad)
+    testing.AssertFalse(bad)
+    testing.AssertFalse(flac.VerifyFLAC(probe.data, probe.len))
+    mut si3 := flac.StreamInfo {}
+    testing.AssertFalse(flac.ReadStreamInfo(probe.data, probe.len, si3))
+
+    println "files on disk"
+    path := filepath.Join(os.TempDir(), "salam_audio_flac.flac")
+    defer mem.Free(path as void*)
+    testing.AssertTrue(flac.SaveFLAC(tone, path))
+    mut dok := false
+    mut disk := flac.OpenFLAC(path, dok)
+    testing.AssertTrue(dok)
+    testing.AssertEqFloat(worst(tone, disk), 0.0, 0.0)
+    testing.AssertTrue(flac.SaveFLACLevel(tone, path, 8))
+    mut iok := false
+    dinfo := flac.ProbeFileFLAC(path, iok)
+    testing.AssertTrue(iok)
+    testing.AssertEqInt(dinfo.frames, 8000)
+    mut gone := false
+    missing := filepath.Join(os.TempDir(), "salam_audio_flac_none.flac")
+    defer mem.Free(missing as void*)
+    flac.OpenFLAC(missing, gone)
+    testing.AssertFalse(gone)
+
+    compress.BufFree(enc)
+    compress.BufFree(probe)
+    blocks.free()
+    audio.Free(tone)
+    audio.Free(noise)
+    audio.Free(flat)
+    audio.Free(saw)
+    audio.Free(m1)
+    audio.Free(m4)
+    audio.Free(b8)
+    audio.Free(b24)
+    audio.Free(odd)
+    audio.Free(tiny)
+    audio.Free(disk)
+    ret testing.Summary()
+end

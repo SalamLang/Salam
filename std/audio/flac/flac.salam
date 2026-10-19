@@ -1,0 +1,325 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "flac"
+@fa "فلاک"
+package flac
+
+import audio
+import compress
+import archive
+
+@en "BlockStreamInfo"
+@fa "بلوک آگاهی جریان"
+pub const BlockStreamInfo := 0
+
+@en "BlockPadding"
+@fa "بلوک لایی"
+pub const BlockPadding := 1
+
+@en "BlockApplication"
+@fa "بلوک برنامه"
+pub const BlockApplication := 2
+
+@en "BlockSeekTable"
+@fa "بلوک جدول جستن"
+pub const BlockSeekTable := 3
+
+@en "BlockVorbisComment"
+@fa "بلوک یادداشت وربیس"
+pub const BlockVorbisComment := 4
+
+@en "BlockCueSheet"
+@fa "بلوک برگه نشانه"
+pub const BlockCueSheet := 5
+
+@en "BlockPicture"
+@fa "بلوک تصویر"
+pub const BlockPicture := 6
+
+@en "MaxBlockSize"
+@fa "بیشینه اندازه بلوک"
+pub const MaxBlockSize := 65535
+
+@en "MaxChannels"
+@fa "بیشینه کانال"
+pub const MaxChannels := 8
+
+@en "StreamInfo"
+@fa "آگاهی جریان"
+pub struct StreamInfo:
+    @en "min_block"
+    @fa "کمینه بلوک"
+    pub min_block: int = 0
+    @en "max_block"
+    @fa "بیشینه بلوک"
+    pub max_block: int = 0
+    @en "min_frame"
+    @fa "کمینه فریم"
+    pub min_frame: int = 0
+    @en "max_frame"
+    @fa "بیشینه فریم"
+    pub max_frame: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+    @en "bits"
+    @fa "بیت ها"
+    pub bits: int = 0
+    @en "total"
+    @fa "شمار کل"
+    pub total: i64 = 0
+    @en "md5"
+    @fa "ام‌دی۵"
+    pub md5: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    @en "audio_offset"
+    @fa "جای صدا"
+    pub audio_offset: int = 0
+end
+
+@en "MetaBlock"
+@fa "بلوک فرا"
+pub struct MetaBlock:
+    @en "kind"
+    @fa "گونه"
+    pub kind: int = 0
+    @en "offset"
+    @fa "جابجایی"
+    pub offset: int = 0
+    @en "size"
+    @fa "اندازه"
+    pub size: int = 0
+    @en "last"
+    @fa "آخرین"
+    pub last: bool = false
+end
+
+func _byte(p: void*, off: int): int:
+    bp := p as u8*
+    ret bp[off] as int
+end
+
+func _be24(p: void*, off: int): int:
+    ret (_byte(p, off) << 16) | (_byte(p, off + 1) << 8) | _byte(p, off + 2)
+end
+
+@en "CRC8"
+@fa "سی‌آر‌سی۸"
+pub func CRC8(p: void*, off: int, n: int): int:
+    mut crc := 0
+    mut i := 0
+    until i < n:
+        crc = crc ^ _byte(p, off + i)
+        mut b := 0
+        until b < 8:
+            if (crc & 128) != 0:
+                crc = ((crc << 1) ^ 7) & 255
+            else:
+                crc = (crc << 1) & 255
+            end
+            b += 1
+        end
+        i += 1
+    end
+    ret crc
+end
+
+@en "CRC16"
+@fa "سی‌آر‌سی۱۶"
+pub func CRC16(p: void*, off: int, n: int): int:
+    mut crc := 0
+    mut i := 0
+    until i < n:
+        crc = crc ^ (_byte(p, off + i) << 8)
+        mut b := 0
+        until b < 8:
+            if (crc & 32768) != 0:
+                crc = ((crc << 1) ^ 32773) & 65535
+            else:
+                crc = (crc << 1) & 65535
+            end
+            b += 1
+        end
+        i += 1
+    end
+    ret crc
+end
+
+@en "CRC16Buf"
+@fa "سی‌آر‌سی۱۶ بافر"
+pub func CRC16Buf(b: compress.ByteBuf, off: int, n: int): int:
+    ret CRC16(b.data, off, n)
+end
+
+@en "IsFLAC"
+@fa "فلاک است"
+pub func IsFLAC(p: void*, n: int): bool:
+    if n < 8:
+        ret false
+    end
+    ret _byte(p, 0) == 102 and _byte(p, 1) == 76 and _byte(p, 2) == 97 and _byte(p, 3) == 67
+end
+
+@en "Blocks"
+@fa "بلوک‌ها"
+pub func Blocks(p: void*, n: int): Vector<MetaBlock>:
+    mut out := Vector {} as Vector<MetaBlock>
+    if not IsFLAC(p, n):
+        ret out
+    end
+    mut at := 4
+    until at + 4 <= n:
+        head := _byte(p, at)
+        size := _be24(p, at + 1)
+        body := at + 4
+        mut avail := n - body
+        if size < avail:
+            avail = size
+        end
+        last := (head & 128) != 0
+        out.push(MetaBlock { kind = head & 127, offset = body, size = avail, last = last })
+        if last:
+            break
+        end
+        at = body + avail
+    end
+    ret out
+end
+
+@en "ReadStreamInfo"
+@fa "خواندن آگاهی جریان"
+pub func ReadStreamInfo(p: void*, n: int, out &: StreamInfo): bool:
+    if not IsFLAC(p, n):
+        ret false
+    end
+    mut blocks := Blocks(p, n)
+    mut found := false
+    mut after := 4
+    each b in blocks:
+        if b.kind == BlockStreamInfo and b.size >= 34 and not found:
+            o := b.offset
+            mut si := StreamInfo {}
+            si.min_block = (_byte(p, o) << 8) | _byte(p, o + 1)
+            si.max_block = (_byte(p, o + 2) << 8) | _byte(p, o + 3)
+            si.min_frame = _be24(p, o + 4)
+            si.max_frame = _be24(p, o + 7)
+            si.rate = (_byte(p, o + 10) << 12) | (_byte(p, o + 11) << 4) | ((_byte(p, o + 12) >> 4) & 15)
+            si.channels = ((_byte(p, o + 12) >> 1) & 7) + 1
+            si.bits = (((_byte(p, o + 12) & 1) << 4) | ((_byte(p, o + 13) >> 4) & 15)) + 1
+            mut total := ((_byte(p, o + 13) & 15) as i64) << 32
+            total = total | ((_byte(p, o + 14) as i64) << 24)
+            total = total | ((_byte(p, o + 15) as i64) << 16)
+            total = total | ((_byte(p, o + 16) as i64) << 8)
+            total = total | (_byte(p, o + 17) as i64)
+            si.total = total
+            compress.BufPushBytes(si.md5, ((p as i64) + ((o + 18) as i64)) as void*, 16)
+            out = si
+            found = true
+        end
+        after = b.offset + b.size
+    end
+    blocks.free()
+    if not found:
+        ret false
+    end
+    out.audio_offset = after
+    ret out.rate > 0 and out.channels > 0 and out.channels <= MaxChannels and out.bits >= 4 and out.bits <= 32
+end
+
+@en "FreeStreamInfo"
+@fa "آزادسازی آگاهی جریان"
+pub func FreeStreamInfo(si &: StreamInfo):
+    compress.BufFree(si.md5)
+end
+
+@en "ProbeFLAC"
+@fa "بررسی فلاک"
+pub func ProbeFLAC(p: void*, n: int, ok &: bool): audio.Info:
+    ok = false
+    mut info := audio.Info {}
+    mut si := StreamInfo {}
+    if not ReadStreamInfo(p, n, si):
+        ret info
+    end
+    info.format = audio.FormatFLAC
+    info.rate = si.rate
+    info.channels = si.channels
+    info.bits = si.bits
+    info.frames = si.total as int
+    info.lossless = true
+    info.duration = (si.total as f64) / (si.rate as f64)
+    if info.duration > 0.0:
+        info.bitrate = ((n as f64) * 8.0 / info.duration) as int
+    end
+    FreeStreamInfo(si)
+    ok = true
+    ret info
+end
+
+@en "OpenFLAC"
+@fa "بازکردن فلاک"
+pub func OpenFLAC(path: str, ok &: bool): audio.Clip:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Clip {}
+    end
+    out := DecodeFLAC(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "ProbeFileFLAC"
+@fa "بررسی پرونده فلاک"
+pub func ProbeFileFLAC(path: str, ok &: bool): audio.Info:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Info {}
+    end
+    out := ProbeFLAC(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "SaveFLAC"
+@fa "ذخیره فلاک"
+pub func SaveFLAC(c: audio.Clip, path: str): bool:
+    buf := EncodeFLAC(c)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "SaveFLACLevel"
+@fa "ذخیره فلاک با سطح"
+pub func SaveFLACLevel(c: audio.Clip, path: str, level: int): bool:
+    buf := EncodeFLACLevel(c, level)
+    if compress.BufLen(buf) == 0:
+        compress.BufFree(buf)
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end

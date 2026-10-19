@@ -1,0 +1,180 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import math
+import testing
+
+func ramp(rate: int, channels: int, frames: int): audio.Clip:
+    mut c := audio.New(rate, channels, frames)
+    mut f := 0
+    until f < frames:
+        mut ch := 0
+        until ch < channels:
+            audio.SetSample(c, f, ch, ((f * channels + ch) as f64) / 64.0)
+            ch += 1
+        end
+        f += 1
+    end
+    ret c
+end
+
+func main:
+    println "core"
+    mut c := audio.New(44100, 2, 100)
+    testing.AssertFalse(audio.IsEmpty(c))
+    testing.AssertEqInt(c.rate, 44100)
+    testing.AssertEqInt(c.channels, 2)
+    testing.AssertEqInt(c.frames, 100)
+    testing.AssertEqInt(audio.SampleCount(c), 200)
+    testing.AssertEqInt(c.bits, 0)
+    testing.AssertMsg(audio.IsEmpty(audio.New(0, 2, 10)), "a zero rate gives an empty clip")
+    testing.AssertMsg(audio.IsEmpty(audio.New(8000, 0, 10)), "zero channels gives an empty clip")
+
+    println "access"
+    audio.SetSample(c, 0, 0, 0.5)
+    audio.SetSample(c, 0, 1, -0.25)
+    testing.AssertEqFloat(audio.Sample(c, 0, 0), 0.5, 0.0)
+    testing.AssertEqFloat(audio.Sample(c, 0, 1), -0.25, 0.0)
+    audio.AddSample(c, 0, 0, 0.25)
+    testing.AssertEqFloat(audio.Sample(c, 0, 0), 0.75, 0.0)
+    testing.AssertEqFloat(audio.Sample(c, 99, 1), 0.0, 0.0)
+    testing.AssertTrue(audio.InBounds(c, 99, 1))
+    testing.AssertFalse(audio.InBounds(c, 100, 0))
+    testing.AssertFalse(audio.InBounds(c, 0, 2))
+    testing.AssertEqFloat(audio.Sample(c, 500, 0), 0.0, 0.0)
+
+    println "duration"
+    d := audio.New(8000, 1, 4000)
+    testing.AssertEqFloat(audio.Duration(d), 0.5, 0.0)
+    testing.AssertEqInt(audio.FrameAt(d, 0.25), 2000)
+    testing.AssertEqFloat(audio.SecondsAt(d, 2000), 0.25, 0.0)
+    testing.AssertEqInt(audio.FrameAt(d, 99.0), 4000)
+    testing.AssertEqInt(audio.FrameAt(d, -1.0), 0)
+    sil := audio.NewSilence(8000, 1, 0.5)
+    testing.AssertEqInt(sil.frames, 4000)
+
+    println "measure"
+    mut m := audio.New(8000, 1, 4)
+    audio.SetSample(m, 0, 0, 1.0)
+    audio.SetSample(m, 1, 0, -0.5)
+    audio.SetSample(m, 2, 0, 0.0)
+    audio.SetSample(m, 3, 0, 0.25)
+    testing.AssertEqFloat(audio.Peak(m), 1.0, 0.0)
+    testing.AssertEqFloat(audio.PeakChannel(m, 0), 1.0, 0.0)
+    testing.AssertEqFloat(audio.RMS(m), math.Sqrt(0.328125), 0.000000001)
+    testing.AssertEqFloat(audio.GainToDb(1.0), 0.0, 0.0)
+    testing.AssertEqFloat(audio.GainToDb(0.5), -6.020599913279624, 0.000000001)
+    testing.AssertEqFloat(audio.DbToGain(0.0), 1.0, 0.0)
+    testing.AssertEqFloat(audio.DbToGain(audio.GainToDb(0.25)), 0.25, 0.000000001)
+    testing.AssertEqFloat(audio.GainToDb(0.0), audio.SilenceFloorDb, 0.0)
+    testing.AssertEqFloat(audio.DbToGain(audio.SilenceFloorDb), 0.0, 0.0)
+    testing.AssertEqFloat(audio.DcOffset(m), 0.1875, 0.000000001)
+    testing.AssertTrue(audio.IsClipped(m))
+    testing.AssertEqInt(audio.CountClipped(m), 1)
+    testing.AssertFalse(audio.IsSilent(m, -60.0))
+    testing.AssertEqInt(audio.FirstSound(m, -60.0), 0)
+    testing.AssertEqInt(audio.LastSound(m, -60.0), 3)
+    quiet := audio.New(8000, 1, 8)
+    testing.AssertTrue(audio.IsSilent(quiet, -60.0))
+    testing.AssertEqInt(audio.FirstSound(quiet, -60.0), -1)
+
+    println "edit"
+    r := ramp(8000, 1, 8)
+    sl := audio.Slice(r, 2, 3)
+    testing.AssertEqInt(sl.frames, 3)
+    testing.AssertEqFloat(audio.Sample(sl, 0, 0), 2.0 / 64.0, 0.0)
+    testing.AssertEqInt(audio.Slice(r, 6, 10).frames, 2)
+    mut rev := audio.Clone(r)
+    audio.Reverse(rev)
+    testing.AssertEqFloat(audio.Sample(rev, 0, 0), 7.0 / 64.0, 0.0)
+    testing.AssertEqFloat(audio.Sample(rev, 7, 0), 0.0, 0.0)
+    cat := audio.Concat(sl, sl)
+    testing.AssertEqInt(cat.frames, 6)
+    testing.AssertEqFloat(audio.Sample(cat, 3, 0), 2.0 / 64.0, 0.0)
+    rep := audio.Repeat(sl, 4)
+    testing.AssertEqInt(rep.frames, 12)
+    mix := audio.Mix(r, r, 1.0, 1.0)
+    testing.AssertEqFloat(audio.Sample(mix, 3, 0), 6.0 / 64.0, 0.0)
+    mut g := audio.Clone(r)
+    audio.Scale(g, 2.0)
+    testing.AssertEqFloat(audio.Sample(g, 1, 0), 2.0 / 64.0, 0.0)
+    mut gd := audio.Clone(r)
+    audio.Gain(gd, 0.0)
+    testing.AssertEqFloat(audio.Sample(gd, 1, 0), 1.0 / 64.0, 0.000000001)
+    mut nz := audio.Clone(r)
+    audio.Normalize(nz, 0.0)
+    testing.AssertEqFloat(audio.Peak(nz), 1.0, 0.000000001)
+    mut cl := audio.Clone(r)
+    audio.Scale(cl, 100.0)
+    audio.Clamp(cl)
+    testing.AssertEqFloat(audio.Peak(cl), 1.0, 0.0)
+    mut fi := audio.Clone(r)
+    audio.FadeIn(fi, audio.Duration(fi))
+    testing.AssertEqFloat(audio.Sample(fi, 0, 0), 0.0, 0.0)
+    mut fo := audio.Clone(r)
+    audio.FadeOut(fo, audio.Duration(fo))
+    testing.AssertEqFloat(audio.Sample(fo, 0, 0), 0.0, 0.0)
+    pad := audio.Pad(r, 0.001, 0.001)
+    testing.AssertEqInt(pad.frames, 8 + 8 + 8)
+    testing.AssertEqFloat(audio.Sample(pad, 0, 0), 0.0, 0.0)
+    mut head := audio.Clip {}
+    mut tail := audio.Clip {}
+    audio.Split(r, 0.0005, head, tail)
+    testing.AssertEqInt(head.frames, 4)
+    testing.AssertEqInt(tail.frames, 4)
+    testing.AssertEqFloat(audio.Sample(tail, 0, 0), 4.0 / 64.0, 0.0)
+    mut gap := audio.New(8000, 1, 8)
+    audio.SetSample(gap, 3, 0, 0.5)
+    audio.SetSample(gap, 4, 0, 0.5)
+    cut := audio.TrimSilence(gap, -60.0)
+    testing.AssertEqInt(cut.frames, 2)
+
+    println "convert"
+    st := ramp(8000, 2, 4)
+    mono := audio.ToMono(st)
+    testing.AssertEqInt(mono.channels, 1)
+    testing.AssertEqFloat(audio.Sample(mono, 0, 0), 0.5 / 64.0, 0.000000001)
+    up := audio.ToStereo(mono)
+    testing.AssertEqInt(up.channels, 2)
+    testing.AssertEqFloat(audio.Sample(up, 0, 0), audio.Sample(up, 0, 1), 0.0)
+    quad := audio.ToChannels(mono, 4)
+    testing.AssertEqInt(quad.channels, 4)
+    ch1 := audio.Channel(st, 1)
+    testing.AssertEqInt(ch1.channels, 1)
+    testing.AssertEqFloat(audio.Sample(ch1, 0, 0), 1.0 / 64.0, 0.0)
+    mut parts := audio.Deinterleave(st)
+    testing.AssertEqInt(parts.len(), 2)
+    woven := audio.Interleave(parts)
+    testing.AssertEqInt(woven.channels, 2)
+    testing.AssertEqFloat(audio.Sample(woven, 2, 1), audio.Sample(st, 2, 1), 0.0)
+    half := audio.ToRate(ramp(8000, 1, 8), 4000)
+    testing.AssertEqInt(half.rate, 4000)
+    testing.AssertEqInt(half.frames, 4)
+    q := audio.ToBits(ramp(8000, 1, 8), 4)
+    testing.AssertEqInt(q.bits, 4)
+    testing.AssertEqFloat(audio.Sample(q, 0, 0), 0.0, 0.0)
+
+    println "silence and free"
+    mut z := audio.Clone(r)
+    audio.Silence(z)
+    testing.AssertEqFloat(audio.Peak(z), 0.0, 0.0)
+    audio.Free(z)
+    testing.AssertTrue(audio.IsEmpty(z))
+    testing.AssertEqInt(z.frames, 0)
+
+    ret testing.Summary()
+end

@@ -166,6 +166,15 @@ const twice = await (await chat(agentKey, { model: "salam", tools: runSpec, mess
 check("two calls in one answer both come back", twice.choices?.[0]?.message?.tool_calls?.length === 2 && JSON.parse(twice.choices[0].message.tool_calls[1].function.arguments).commands === "ls", twice.choices?.[0]?.message?.tool_calls);
 const bogus = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "call an unknown tool" }] })).json();
 check("a name the caller never offered stays text, not a tool call", bogus.choices?.[0]?.finish_reason === "stop" && !bogus.choices?.[0]?.message?.tool_calls, bogus.choices?.[0]);
+const leaked = await (await chat(agentKey, { model: "salam", tools: runSpec, messages: [{ role: "user", content: "show me a leaked internal call" }] })).json();
+const leakedText = leaked.choices?.[0]?.message?.content ?? "";
+check("a tool of ours that leaked into the text is taken out of the answer", !leakedText.includes("salam_check") && leakedText.includes("It compiles"), leakedText.slice(0, 120));
+check("the leak does not turn into a tool call for the client", !leaked.choices?.[0]?.message?.tool_calls && leaked.choices?.[0]?.finish_reason === "stop", leaked.choices?.[0]);
+const reservedSpec = [...runSpec, { type: "function", function: { name: "salam_check", description: "Check code the way the caller wants", parameters: { type: "object", properties: { source: { type: "string" } }, required: ["source"] } } }];
+const reserved = await (await chat(agentKey, { model: "salam", tools: reservedSpec, messages: [{ role: "user", content: "use the chatty tool please" }] })).json();
+check("a caller tool still works when the same request offers a reserved name", reserved.choices?.[0]?.finish_reason === "tool_calls" && reserved.choices[0].message.tool_calls?.[0]?.function?.name === "run_commands", reserved.choices?.[0]?.message);
+const reservedLog = (await api("GET", "/keys/requests", agentSession)).json.requests[0];
+check("a caller tool named like one of ours is never offered to the model", reservedLog.prompt.includes("- run_commands") && !reservedLog.prompt.includes("- salam_check"), reservedLog.prompt.slice(0, 160));
 const noTools = await (await chat(agentKey, { model: "salam", tools: toolSpec, messages: [{ role: "user", content: "just say hello" }] })).json();
 check("an answer that needs no tool still comes back as text", noTools.choices?.[0]?.finish_reason === "stop" && typeof noTools.choices?.[0]?.message?.content === "string", noTools.choices?.[0]);
 

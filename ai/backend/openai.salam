@@ -44,6 +44,7 @@ const WRITE_MS := 30000
 const WRITE_TRIES := 4
 const WRITE_PAUSE_MS := 50
 const DROPPED := "[Earlier messages were left out because the conversation is too long.]"
+const TOOL_NS := "salam_"
 
 mut ANSWER_LIMIT := 3600 as i64
 mut START_LIMIT := 180 as i64
@@ -230,6 +231,18 @@ func fit(turns: Vector<str>, budget: int): Vector<str>:
     ret out
 end
 
+func caller_tool(t: value.Value): value.Value:
+    ret value.ObjectHas(t, "function") ? value.ObjectGet(t, "function") : t
+end
+
+func caller_name(f: value.Value): str:
+    got := text_field(f, "name")
+    if str.StartsWith(got, TOOL_NS) or got.find(",") >= 0:
+        ret ""
+    end
+    ret got
+end
+
 func tools_block(tools: value.Value): str:
     if not value.IsArray(tools) or value.ArrayLen(tools) == 0:
         ret ""
@@ -238,8 +251,8 @@ func tools_block(tools: value.Value): str:
     mut i := 0
     until i < value.ArrayLen(tools):
         t := value.ArrayGet(tools, i)
-        f := value.ObjectHas(t, "function") ? value.ObjectGet(t, "function") : t
-        name := text_field(f, "name")
+        f := caller_tool(t)
+        name := caller_name(f)
         if name.len() > 0:
             mut one_tool := "- " + name
             about := str.Trim(text_field(f, "description"))
@@ -257,7 +270,7 @@ func tools_block(tools: value.Value): str:
     if lines.len() == 0:
         ret ""
     end
-    ret "<caller_tools>\n" + str.Join(lines, "\n") + "\n</caller_tools>\n\nThe application that sent this request runs these tools on the user's machine and reports the result back to you, so you do have file access, shell access and anything else they describe through them. When the task needs one, answer with exactly one JSON object and nothing else, no prose around it and no code fence:\n{\"tool\": \"<name>\", \"arguments\": { ... }}\nArguments must match that tool's schema. Never say that you cannot read or write files or run commands: ask for the tool instead. When the task needs no tool, answer normally.\n\n"
+    ret "<caller_tools>\n" + str.Join(lines, "\n") + "\n</caller_tools>\n\nThe application that sent this request runs the tools listed above on the user's machine and reports the result back to you, so you do have file access, shell access and anything else they describe. When the task needs one of them, answer with exactly one JSON object and nothing else, no prose around it and no code fence:\n{\"tool\": \"<name>\", \"arguments\": { ... }}\nThe name must be one of the names listed above and the arguments must match that tool's schema. This written form is only for those tools. Your own tools, the ones you call directly such as salam_check and salam_docs, are called the usual way and must never appear as text in your answer. Never say that you cannot read or write files or run commands: ask for the application's tool instead. When the task needs no tool, answer normally.\n\n"
 end
 
 func call_history(m: value.Value): str:
@@ -515,8 +528,7 @@ func offered_names(tools: value.Value): str:
     mut i := 0
     until i < value.ArrayLen(tools):
         t := value.ArrayGet(tools, i)
-        f := value.ObjectHas(t, "function") ? value.ObjectGet(t, "function") : t
-        got := text_field(f, "name")
+        got := caller_name(caller_tool(t))
         if got.len() > 0:
             out = out + got + ","
         end
@@ -600,8 +612,37 @@ func one_call(span: str, names: str, name &: str, args &: str): bool:
     ret true
 end
 
+func strip_internal(said: str): str:
+    if said.find(TOOL_NS) < 0:
+        ret said
+    end
+    mut out := said
+    each span in json_spans(said):
+        mut err := encerr.EncodingError {}
+        root := json.Decode(span, err)
+        if not encerr.IsError(err) and value.IsObject(root):
+            mut got := text_field(root, "tool")
+            if got.len() == 0:
+                got = text_field(root, "name")
+            end
+            if str.StartsWith(got, TOOL_NS) and value.ObjectHas(root, "arguments"):
+                out = str.Replace(out, span, "")
+            end
+        end
+        value.ValueFree(root)
+    end
+    cleaned := str.Trim(out)
+    if cleaned.len() == 0:
+        ret said
+    end
+    ret cleaned
+end
+
 func tool_calls_of(said: str, names: str, calls &: Vector<str>, prose &: str): bool:
     if names.len() < 3 or said.len() == 0 or said.len() > 400000:
+        ret false
+    end
+    if said.find("\"tool\"") < 0 and said.find("\"name\"") < 0 and said.find("\"function\"") < 0 and said.find("\"tool_call\"") < 0:
         ret false
     end
     mut rest := said
@@ -648,7 +689,8 @@ func tail_of(sent: str, final: str): str:
     ret "\n\n" + final
 end
 
-func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, final: str, status: str, names: str):
+func send_tail(c: tcp.Conn, cid: str, created: i64, sent: str, raw: str, status: str, names: str):
+    final := sent.len() == 0 ? strip_internal(raw) : raw
     mut calls := Vector {} as Vector<str>
     mut prose := ""
     if sent.len() == 0 and status == "done" and tool_calls_of(final, names, calls, prose):
@@ -864,9 +906,10 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         oai_error(c, "502 Bad Gateway", "server_error", "engine_failed", "The Salam assistant could not answer.")
         ret
     end
+    clean := strip_internal(final)
     mut calls := Vector {} as Vector<str>
     mut prose := ""
-    wants := status == "done" and tool_calls_of(final, names, calls, prose)
+    wants := status == "done" and tool_calls_of(clean, names, calls, prose)
     mut msg := Vector {} as Vector<str>
     msg.push(json.Member("role", "assistant"))
     if wants:
@@ -877,7 +920,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
         end
         msg.push(json.MemberRaw("tool_calls", call_json(calls)))
     else:
-        msg.push(json.Member("content", final))
+        msg.push(json.Member("content", clean))
     end
     mut choice := Vector {} as Vector<str>
     choice.push(json.MemberInt("index", 0))

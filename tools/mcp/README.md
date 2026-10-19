@@ -37,9 +37,10 @@ Add custom connector.
 
 The first connection opens a browser window to sign in with a Salam account
 from [ai.salamlang.ir](https://ai.salamlang.ir) and allow the app. The client
-then keeps an access token and refreshes it on its own. Each tool call is
-recorded against the account and the app, with its arguments, so people can
-review what their apps did under
+then keeps an access token and refreshes it on its own. Any account works,
+including the free plan; nothing about the hosted server needs a paid plan or
+a manually created token. Each tool call is recorded against the account and
+the app, with its arguments, so people can review what their apps did under
 [Connected apps](https://ai.salamlang.ir/apps) and disconnect them there.
 
 The hosted server cannot see your files, so its compiler tools take the

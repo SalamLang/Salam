@@ -181,7 +181,9 @@ API with `ai/backend/tests/gateway_mock.mjs` standing in for both gateways
 ### Sign in with Salam (OAuth 2.1)
 
 The API is also the authorization server for the hosted MCP server at
-`mcp.salamlang.ir`, so MCP clients sign in with the same accounts. It follows
+`mcp.salamlang.ir`, so MCP clients sign in with the same accounts. Approving a
+client only needs a signed-in account; nothing here checks the account's
+plan, so the free plan gets the same MCP access as a paid one. It follows
 the MCP authorization spec:
 
 | Method and path                                                                                | Purpose                                                                          |

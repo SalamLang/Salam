@@ -1,0 +1,152 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+const IFE_TODO := 0
+const IFE_BUSY := 1
+const IFE_DONE := 2
+
+func ife_base_name(a &: at.Ast, field: int): str:
+    f := at.Get(a, field)
+    mut nm := ""
+    if f.ty != 0:
+        nm = at.Get(a, f.ty).name
+    end
+    if str.Len(nm) == 0:
+        nm = f.name
+    end
+    dot := str.IndexOf(nm, ".")
+    if dot >= 0:
+        nm = str.Substr(nm, dot + 1, str.Len(nm) - dot - 1)
+    end
+    ret nm
+end
+
+func ife_index_of(names: Vector<str>, want: str): int:
+    repeat names.len() in i:
+        if su_ident_eq(names.get(i), want):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func ife_method_owner(a &: at.Ast, owner: int, name: str): int:
+    o := at.Get(a, owner)
+    repeat o.list.len() in i:
+        mid := o.list.get(i)
+        m := at.Get(a, mid)
+        if m.kind == at.AST_FUNC_DEF and su_ident_eq(m.name, name):
+            ret mid
+        end
+    end
+    ret 0
+end
+
+func ife_expand(
+    s &: Sema, a &: at.Ast, nodes: Vector<int>, names: Vector<str>,
+    state &: Vector<int>, idx: int
+):
+    if state.get(idx) == IFE_DONE:
+        ret
+    end
+    did := nodes.get(idx)
+    if state.get(idx) == IFE_BUSY:
+        serr(
+            s, 107, span_of(a, did), co.Format1(
+                i18.Tr("interface '%s' uses itself, directly or through another interface"), co.ArgStr(names.get(idx))
+            )
+        )
+        state.set(idx, IFE_DONE)
+        ret
+    end
+    state.set(idx, IFE_BUSY)
+    mut bases := Vector {} as Vector<int>
+    defer bases.free()
+    dv := at.Get(a, did)
+    repeat dv.list.len() in i:
+        fid := dv.list.get(i)
+        f := at.Get(a, fid)
+        if f.kind == at.AST_FIELD and f.is_embedded:
+            bases.push(fid)
+        end
+    end
+    repeat bases.len() in b:
+        fid2 := bases.get(b)
+        bname := ife_base_name(a, fid2)
+        bi := ife_index_of(names, bname)
+        if bi < 0:
+            serr(
+                s, 1, span_of(a, fid2), co.Format1(
+                    i18.Tr("'use %s' in an interface must name another interface"), co.ArgStr(bname)
+                )
+            )
+            continue
+        end
+        ife_expand(s, a, nodes, names, state, bi)
+        bv := at.Get(a, nodes.get(bi))
+        repeat bv.list.len() in j:
+            mid := bv.list.get(j)
+            m := at.Get(a, mid)
+            if m.kind != at.AST_FUNC_DEF:
+                continue
+            end
+            prev := ife_method_owner(a, did, m.name)
+            if prev != 0:
+                if at.Get(a, prev).is_embedded:
+                    serr(
+                        s, 107, span_of(a, fid2), co.Format3(
+                            i18.Tr("interface '%s' uses more than one interface with a method '%s', including '%s'"), co.ArgStr(names.get(idx)), co.ArgStr(m.name), co.ArgStr(bname)
+                        )
+                    )
+                end
+                continue
+            end
+            cl := at.Clone(a, mid)
+            mut cv := at.Get(a, cl)
+            cv.is_embedded = true
+            at.Put(a, cl, cv)
+            at.AddChild(a, did, cl)
+        end
+    end
+    state.set(idx, IFE_DONE)
+end
+
+func sema_iface_extends(s &: Sema, a &: at.Ast, program: int):
+    mut nodes := Vector {} as Vector<int>
+    defer nodes.free()
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    mut any := false
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        d := at.Get(a, did)
+        if d.kind != at.AST_INTERFACE_DEF:
+            continue
+        end
+        nodes.push(did)
+        names.push(d.name)
+        repeat d.list.len() in j:
+            f := at.Get(a, d.list.get(j))
+            if f.kind == at.AST_FIELD and f.is_embedded:
+                any = true
+                break
+            end
+        end
+    end
+    if not any:
+        ret
+    end
+    mut state := Vector {} as Vector<int>
+    defer state.free()
+    repeat nodes.len():
+        state.push(IFE_TODO)
+    end
+    repeat nodes.len() in m:
+        ife_expand(s, a, nodes, names, state, m)
+    end
+end

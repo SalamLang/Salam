@@ -1315,6 +1315,8768 @@ end
 pub func DestroyFlag(f: Flag):
 cell_free(I64 { cell = f.cell, mu = f.mu })
 end
+@en "aiff"
+@fa "ایف"
+package aiff
+import audio
+import compress
+import archive
+import encoding.binary
+@en "CompNone"
+@fa "فشرده هیچ"
+pub const CompNone := 0
+@en "CompSowt"
+@fa "فشرده کوچک‌انتها"
+pub const CompSowt := 1
+@en "CompFloat32"
+@fa "فشرده اعشار۳۲"
+pub const CompFloat32 := 2
+@en "CompFloat64"
+@fa "فشرده اعشار۶۴"
+pub const CompFloat64 := 3
+@en "CompALaw"
+@fa "فشرده ای‌لا"
+pub const CompALaw := 4
+@en "CompMuLaw"
+@fa "فشرده میولا"
+pub const CompMuLaw := 5
+@en "Common"
+@fa "مشترک"
+pub struct Common:
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "frames"
+@fa "فریم ها"
+pub frames: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "compression"
+@fa "روش فشرده"
+pub compression: int = 0
+@en "data_offset"
+@fa "جای داده"
+pub data_offset: int = 0
+@en "data_size"
+@fa "اندازه داده"
+pub data_size: int = 0
+end
+func _tag(a: int, b: int, c: int, d: int): int:
+ret (a << 24) | (b << 16) | (c << 8) | d
+end
+func _tag_at(p: void*, off: int): int:
+bp := p as u8*
+ret _tag(bp[off] as int, bp[off + 1] as int, bp[off + 2] as int, bp[off + 3] as int)
+end
+func _u16(p: void*, off: int): int:
+bp := p as u8*
+ret ((bp[off] as int) << 8) | (bp[off + 1] as int)
+end
+func _u32(p: void*, off: int): i64:
+bp := p as u8*
+ret ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+end
+func _read_rate(p: void*, off: int): int:
+bp := p as u8*
+exp := (((bp[off] as int) & 127) << 8) | (bp[off + 1] as int)
+hi := ((bp[off + 2] as i64) << 24) | ((bp[off + 3] as i64) << 16) | ((bp[off + 4] as i64) << 8) | (bp[off + 5] as i64)
+if exp == 0 or hi == (0 as i64):
+ret 0
+end
+shift := exp - 16414
+if shift >= 0:
+if shift > 20:
+ret 0
+end
+ret (hi << shift) as int
+end
+drop := 0 - shift
+if drop > 62:
+ret 0
+end
+half := (1 as i64) << (drop - 1)
+ret ((hi + half) >> drop) as int
+end
+func _write_rate(b &: compress.ByteBuf, rate: int):
+if rate <= 0:
+mut z := 0
+until z < 10:
+compress.BufPush(b, 0)
+z += 1
+end
+ret
+end
+mut k := 0
+mut v := rate
+until v > 1:
+v = v >> 1
+k += 1
+end
+exp := 16383 + k
+hi := (rate as i64) << (31 - k)
+compress.BufPush(b, (exp >> 8) & 127)
+compress.BufPush(b, exp & 255)
+compress.BufPush(b, ((hi >> 24) & (255 as i64)) as int)
+compress.BufPush(b, ((hi >> 16) & (255 as i64)) as int)
+compress.BufPush(b, ((hi >> 8) & (255 as i64)) as int)
+compress.BufPush(b, (hi & (255 as i64)) as int)
+mut t := 0
+until t < 4:
+compress.BufPush(b, 0)
+t += 1
+end
+end
+func _comp_of(tag: int): int:
+if tag == _tag(78, 79, 78, 69):
+ret CompNone
+end
+if tag == _tag(115, 111, 119, 116):
+ret CompSowt
+end
+if tag == _tag(102, 108, 51, 50) or tag == _tag(70, 76, 51, 50):
+ret CompFloat32
+end
+if tag == _tag(102, 108, 54, 52) or tag == _tag(70, 76, 54, 52):
+ret CompFloat64
+end
+if tag == _tag(97, 108, 97, 119) or tag == _tag(65, 76, 65, 87):
+ret CompALaw
+end
+if tag == _tag(117, 108, 97, 119) or tag == _tag(85, 76, 65, 87):
+ret CompMuLaw
+end
+ret -1
+end
+@en "IsAIFF"
+@fa "ایف است"
+pub func IsAIFF(p: void*, n: int): bool:
+if n < 12:
+ret false
+end
+if _tag_at(p, 0) != _tag(70, 79, 82, 77):
+ret false
+end
+form := _tag_at(p, 8)
+ret form == _tag(65, 73, 70, 70) or form == _tag(65, 73, 70, 67)
+end
+@en "ReadCommon"
+@fa "خواندن مشترک"
+pub func ReadCommon(p: void*, n: int, out &: Common): bool:
+if not IsAIFF(p, n):
+ret false
+end
+mut c := Common {}
+mut have_comm := false
+mut have_ssnd := false
+mut at := 12
+until at + 8 <= n:
+tag := _tag_at(p, at)
+size := _u32(p, at + 4)
+body := at + 8
+mut avail := n - body
+if size < (avail as i64):
+avail = size as int
+end
+if tag == _tag(67, 79, 77, 77) and avail >= 18:
+c.channels = _u16(p, body)
+c.frames = _u32(p, body + 2) as int
+c.bits = _u16(p, body + 6)
+c.rate = _read_rate(p, body + 8)
+if avail >= 22:
+c.compression = _comp_of(_tag_at(p, body + 18))
+else:
+c.compression = CompNone
+end
+have_comm = true
+end
+if tag == _tag(83, 83, 78, 68) and avail >= 8:
+skip := _u32(p, body) as int
+c.data_offset = body + 8 + skip
+c.data_size = avail - 8 - skip
+if c.data_size < 0:
+c.data_size = 0
+end
+have_ssnd = true
+end
+mut step := avail
+if (step % 2) == 1:
+step += 1
+end
+at = body + step
+end
+if not have_comm or not have_ssnd:
+ret false
+end
+if c.channels <= 0 or c.rate <= 0 or c.compression < 0:
+ret false
+end
+if c.compression == CompFloat32:
+c.bits = 32
+end
+if c.compression == CompFloat64:
+c.bits = 64
+end
+if c.compression == CompALaw or c.compression == CompMuLaw:
+c.bits = 8
+end
+if not audio.PcmDepthValid(c.bits) and c.bits != 64:
+ret false
+end
+out = c
+ret true
+end
+@en "ProbeAIFF"
+@fa "بررسی ایف"
+pub func ProbeAIFF(p: void*, n: int, ok &: bool): audio.Info:
+ok = false
+mut info := audio.Info {}
+mut c := Common {}
+if not ReadCommon(p, n, c):
+ret info
+end
+info.format = audio.FormatAIFF
+info.rate = c.rate
+info.channels = c.channels
+info.bits = c.bits
+info.frames = c.frames
+info.lossless = c.compression != CompALaw and c.compression != CompMuLaw
+info.bitrate = c.rate * c.channels * c.bits
+info.duration = (c.frames as f64) / (c.rate as f64)
+ok = true
+ret info
+end
+@en "DecodeAIFF"
+@fa "کدگشایی ایف"
+pub func DecodeAIFF(p: void*, n: int, ok &: bool): audio.Clip:
+ok = false
+mut cm := Common {}
+if not ReadCommon(p, n, cm):
+ret audio.Clip {}
+end
+frame := (cm.bits / 8) * cm.channels
+if frame <= 0:
+ret audio.Clip {}
+end
+mut frames := cm.frames
+avail := cm.data_size / frame
+if avail < frames:
+frames = avail
+end
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(cm.rate, cm.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = cm.bits
+mut good := false
+if cm.compression == CompMuLaw:
+good = audio.DecodeLawPcm(p, cm.data_offset, out, false)
+out.bits = 16
+else cm.compression == CompALaw:
+good = audio.DecodeLawPcm(p, cm.data_offset, out, true)
+out.bits = 16
+else cm.compression == CompFloat32 or cm.compression == CompFloat64:
+good = audio.DecodeFloatPcm(p, n, cm.data_offset, out, cm.bits, true)
+else cm.compression == CompSowt:
+good = audio.DecodePcm(p, cm.data_offset, out, cm.bits, false, false)
+else:
+good = audio.DecodePcm(p, cm.data_offset, out, cm.bits, true, false)
+end
+if not good:
+audio.Free(out)
+ret audio.Clip {}
+end
+ok = true
+ret out
+end
+@en "EncodeAIFFBits"
+@fa "کدگذاری ایف با بیت"
+pub func EncodeAIFFBits(c: audio.Clip, bits: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c) or not audio.PcmDepthValid(bits):
+ret out
+end
+data_bytes := c.frames * c.channels * (bits / 8)
+compress.BufPush(out, 70)
+compress.BufPush(out, 79)
+compress.BufPush(out, 82)
+compress.BufPush(out, 77)
+binary.WriteU32BE(out, 4 + 8 + 18 + 8 + 8 + data_bytes)
+compress.BufPush(out, 65)
+compress.BufPush(out, 73)
+compress.BufPush(out, 70)
+compress.BufPush(out, 70)
+compress.BufPush(out, 67)
+compress.BufPush(out, 79)
+compress.BufPush(out, 77)
+compress.BufPush(out, 77)
+binary.WriteU32BE(out, 18)
+binary.WriteU16BE(out, c.channels)
+binary.WriteU32BE(out, c.frames)
+binary.WriteU16BE(out, bits)
+_write_rate(out, c.rate)
+compress.BufPush(out, 83)
+compress.BufPush(out, 83)
+compress.BufPush(out, 78)
+compress.BufPush(out, 68)
+binary.WriteU32BE(out, 8 + data_bytes)
+binary.WriteU32BE(out, 0)
+binary.WriteU32BE(out, 0)
+audio.EncodePcm(out, c, bits, true, false)
+ret out
+end
+@en "EncodeAIFF"
+@fa "کدگذاری ایف"
+pub func EncodeAIFF(c: audio.Clip): compress.ByteBuf:
+mut bits := c.bits
+if not audio.PcmDepthValid(bits):
+bits = 16
+end
+ret EncodeAIFFBits(c, bits)
+end
+@en "OpenAIFF"
+@fa "بازکردن ایف"
+pub func OpenAIFF(path: str, ok &: bool): audio.Clip:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Clip {}
+end
+out := DecodeAIFF(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "SaveAIFF"
+@fa "ذخیره ایف"
+pub func SaveAIFF(c: audio.Clip, path: str): bool:
+buf := EncodeAIFF(c)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "SaveAIFFBits"
+@fa "ذخیره ایف با بیت"
+pub func SaveAIFFBits(c: audio.Clip, path: str, bits: int): bool:
+buf := EncodeAIFFBits(c, bits)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "au"
+@fa "ای‌یو"
+package au
+import audio
+import compress
+import archive
+import encoding.binary
+@en "HeaderSize"
+@fa "اندازه سرآیند"
+pub const HeaderSize := 24
+@en "EncMuLaw"
+@fa "رمز میولا"
+pub const EncMuLaw := 1
+@en "EncPcm8"
+@fa "رمز پی‌سی‌ام۸"
+pub const EncPcm8 := 2
+@en "EncPcm16"
+@fa "رمز پی‌سی‌ام۱۶"
+pub const EncPcm16 := 3
+@en "EncPcm24"
+@fa "رمز پی‌سی‌ام۲۴"
+pub const EncPcm24 := 4
+@en "EncPcm32"
+@fa "رمز پی‌سی‌ام۳۲"
+pub const EncPcm32 := 5
+@en "EncFloat32"
+@fa "رمز اعشار۳۲"
+pub const EncFloat32 := 6
+@en "EncFloat64"
+@fa "رمز اعشار۶۴"
+pub const EncFloat64 := 7
+@en "EncALaw"
+@fa "رمز ای‌لا"
+pub const EncALaw := 27
+@en "Header"
+@fa "سرآیند"
+pub struct Header:
+@en "data_offset"
+@fa "جای داده"
+pub data_offset: int = 0
+@en "data_size"
+@fa "اندازه داده"
+pub data_size: int = 0
+@en "encoding"
+@fa "رمزگذاری"
+pub encoding: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+end
+func _u32(p: void*, off: int): i64:
+bp := p as u8*
+ret ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+end
+func _bits_of(encoding: int): int:
+if encoding == EncMuLaw or encoding == EncALaw or encoding == EncPcm8:
+ret 8
+end
+if encoding == EncPcm16:
+ret 16
+end
+if encoding == EncPcm24:
+ret 24
+end
+if encoding == EncPcm32 or encoding == EncFloat32:
+ret 32
+end
+if encoding == EncFloat64:
+ret 64
+end
+ret 0
+end
+@en "IsAU"
+@fa "ای‌یو است"
+pub func IsAU(p: void*, n: int): bool:
+if n < HeaderSize:
+ret false
+end
+bp := p as u8*
+ret (bp[0] as int) == 46 and (bp[1] as int) == 115 and (bp[2] as int) == 110 and (bp[3] as int) == 100
+end
+@en "ReadHeader"
+@fa "خواندن سرآیند"
+pub func ReadHeader(p: void*, n: int, out &: Header): bool:
+if not IsAU(p, n):
+ret false
+end
+mut h := Header {}
+h.data_offset = _u32(p, 4) as int
+size := _u32(p, 8)
+h.encoding = _u32(p, 12) as int
+h.rate = _u32(p, 16) as int
+h.channels = _u32(p, 20) as int
+if h.data_offset < HeaderSize or h.data_offset > n:
+ret false
+end
+mut avail := n - h.data_offset
+if size < (avail as i64) and size != (4294967295 as i64):
+avail = size as int
+end
+h.data_size = avail
+if h.rate <= 0 or h.channels <= 0 or _bits_of(h.encoding) == 0:
+ret false
+end
+out = h
+ret true
+end
+@en "ProbeAU"
+@fa "بررسی ای‌یو"
+pub func ProbeAU(p: void*, n: int, ok &: bool): audio.Info:
+ok = false
+mut info := audio.Info {}
+mut h := Header {}
+if not ReadHeader(p, n, h):
+ret info
+end
+bits := _bits_of(h.encoding)
+frame := (bits / 8) * h.channels
+if frame <= 0:
+ret info
+end
+info.format = audio.FormatAU
+info.rate = h.rate
+info.channels = h.channels
+info.bits = bits
+info.frames = h.data_size / frame
+info.lossless = h.encoding != EncMuLaw and h.encoding != EncALaw
+info.bitrate = h.rate * h.channels * bits
+info.duration = (info.frames as f64) / (h.rate as f64)
+ok = true
+ret info
+end
+@en "DecodeAU"
+@fa "کدگشایی ای‌یو"
+pub func DecodeAU(p: void*, n: int, ok &: bool): audio.Clip:
+ok = false
+mut h := Header {}
+if not ReadHeader(p, n, h):
+ret audio.Clip {}
+end
+bits := _bits_of(h.encoding)
+frame := (bits / 8) * h.channels
+frames := h.data_size / frame
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(h.rate, h.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = bits
+mut good := false
+if h.encoding == EncMuLaw:
+good = audio.DecodeLawPcm(p, h.data_offset, out, false)
+out.bits = 16
+else h.encoding == EncALaw:
+good = audio.DecodeLawPcm(p, h.data_offset, out, true)
+out.bits = 16
+else h.encoding == EncFloat32 or h.encoding == EncFloat64:
+good = audio.DecodeFloatPcm(p, n, h.data_offset, out, bits, true)
+else:
+good = audio.DecodePcm(p, h.data_offset, out, bits, true, false)
+end
+if not good:
+audio.Free(out)
+ret audio.Clip {}
+end
+ok = true
+ret out
+end
+@en "EncodeAUEncoding"
+@fa "کدگذاری ای‌یو با رمز"
+pub func EncodeAUEncoding(c: audio.Clip, encoding: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c):
+ret out
+end
+bits := _bits_of(encoding)
+if bits == 0:
+ret out
+end
+data_bytes := c.frames * c.channels * (bits / 8)
+compress.BufPush(out, 46)
+compress.BufPush(out, 115)
+compress.BufPush(out, 110)
+compress.BufPush(out, 100)
+binary.WriteU32BE(out, HeaderSize)
+binary.WriteU32BE(out, data_bytes)
+binary.WriteU32BE(out, encoding)
+binary.WriteU32BE(out, c.rate)
+binary.WriteU32BE(out, c.channels)
+if encoding == EncMuLaw:
+audio.EncodeLawPcm(out, c, false)
+else encoding == EncALaw:
+audio.EncodeLawPcm(out, c, true)
+else encoding == EncFloat32 or encoding == EncFloat64:
+audio.EncodeFloatPcm(out, c, bits, true)
+else:
+audio.EncodePcm(out, c, bits, true, false)
+end
+ret out
+end
+@en "EncodeAU"
+@fa "کدگذاری ای‌یو"
+pub func EncodeAU(c: audio.Clip): compress.ByteBuf:
+mut enc := EncPcm16
+if c.bits == 8:
+enc = EncPcm8
+else c.bits == 24:
+enc = EncPcm24
+else c.bits == 32:
+enc = EncPcm32
+end
+ret EncodeAUEncoding(c, enc)
+end
+@en "OpenAU"
+@fa "بازکردن ای‌یو"
+pub func OpenAU(path: str, ok &: bool): audio.Clip:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Clip {}
+end
+out := DecodeAU(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "SaveAU"
+@fa "ذخیره ای‌یو"
+pub func SaveAU(c: audio.Clip, path: str): bool:
+buf := EncodeAU(c)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "audio"
+@fa "صدا"
+package audio
+import mem
+@en "MaxSamples"
+@fa "بیشینه نمونه"
+pub const MaxSamples := 536870912
+@en "Clip"
+@fa "قطعه"
+pub struct Clip:
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "frames"
+@fa "فریم ها"
+pub frames: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "samples"
+@fa "نمونه ها"
+pub samples: void* = null
+end
+func _sp(c: Clip): f32*:
+ret c.samples as f32*
+end
+func _total(frames: int, channels: int): i64:
+ret (frames as i64) * (channels as i64)
+end
+@en "New"
+@fa "جدید"
+pub func New(rate: int, channels: int, frames: int): Clip:
+if rate <= 0 or channels <= 0 or frames < 0:
+ret Clip {}
+end
+total := _total(frames, channels)
+if total > (MaxSamples as i64):
+ret Clip {}
+end
+mut out := Clip { rate = rate, channels = channels, frames = frames }
+if total == (0 as i64):
+ret out
+end
+p := mem.AllocateZeroed((total * (4 as i64)) as u64)
+if p == null:
+ret Clip {}
+end
+out.samples = p
+ret out
+end
+@en "NewSilence"
+@fa "سکوت جدید"
+pub func NewSilence(rate: int, channels: int, seconds: f64): Clip:
+if rate <= 0 or seconds < 0.0:
+ret Clip {}
+end
+frames := ((seconds * (rate as f64)) + 0.5) as int
+ret New(rate, channels, frames)
+end
+@en "Free"
+@fa "آزادسازی"
+pub func Free(c &: Clip):
+if c.samples != null:
+mem.Free(c.samples)
+end
+c.samples = null
+c.rate = 0
+c.channels = 0
+c.frames = 0
+c.bits = 0
+end
+@en "IsEmpty"
+@fa "خالی است"
+pub func IsEmpty(c: Clip): bool:
+ret c.rate <= 0 or c.channels <= 0 or c.frames <= 0 or c.samples == null
+end
+@en "Clone"
+@fa "کپی"
+pub func Clone(c: Clip): Clip:
+mut out := New(c.rate, c.channels, c.frames)
+if out.samples != null and c.samples != null:
+mem.Copy(out.samples, c.samples, (_total(c.frames, c.channels) * (4 as i64)) as u64)
+end
+out.bits = c.bits
+ret out
+end
+@en "SampleCount"
+@fa "شمار نمونه"
+pub func SampleCount(c: Clip): int:
+ret c.frames * c.channels
+end
+@en "InBounds"
+@fa "در محدوده"
+pub func InBounds(c: Clip, frame: int, ch: int): bool:
+ret frame >= 0 and ch >= 0 and frame < c.frames and ch < c.channels
+end
+@en "Sample"
+@fa "نمونه"
+pub func Sample(c: Clip, frame: int, ch: int): f64:
+if c.samples == null or not InBounds(c, frame, ch):
+ret 0.0
+end
+p := _sp(c)
+ret p[frame * c.channels + ch] as f64
+end
+@en "SetSample"
+@fa "تنظیم نمونه"
+pub func SetSample(c &: Clip, frame: int, ch: int, v: f64):
+if c.samples == null or not InBounds(c, frame, ch):
+ret
+end
+p := _sp(c)
+p[frame * c.channels + ch] = v as f32
+end
+@en "AddSample"
+@fa "افزودن نمونه"
+pub func AddSample(c &: Clip, frame: int, ch: int, v: f64):
+if c.samples == null or not InBounds(c, frame, ch):
+ret
+end
+p := _sp(c)
+p[frame * c.channels + ch] = (p[frame * c.channels + ch] as f64 + v) as f32
+end
+@en "Data"
+@fa "داده"
+pub func Data(c: Clip): f32*:
+ret _sp(c)
+end
+@en "Duration"
+@fa "مدت"
+pub func Duration(c: Clip): f64:
+if c.rate <= 0:
+ret 0.0
+end
+ret (c.frames as f64) / (c.rate as f64)
+end
+@en "FrameAt"
+@fa "فریم در زمان"
+pub func FrameAt(c: Clip, seconds: f64): int:
+if c.rate <= 0:
+ret 0
+end
+mut f := (seconds * (c.rate as f64)) as int
+if f < 0:
+f = 0
+end
+if f > c.frames:
+f = c.frames
+end
+ret f
+end
+@en "SecondsAt"
+@fa "ثانیه در فریم"
+pub func SecondsAt(c: Clip, frame: int): f64:
+if c.rate <= 0:
+ret 0.0
+end
+ret (frame as f64) / (c.rate as f64)
+end
+@en "Silence"
+@fa "ساکت کردن"
+pub func Silence(c &: Clip):
+if c.samples == null:
+ret
+end
+mem.Set(c.samples, 0, (_total(c.frames, c.channels) * (4 as i64)) as u64)
+end
+package audio
+import compress
+@en "MsbReader"
+@fa "خواننده بیت"
+pub struct MsbReader:
+@en "data"
+@fa "داده"
+pub data: void* = null
+@en "len"
+@fa "طول"
+pub len: int = 0
+@en "pos"
+@fa "جا"
+pub pos: int = 0
+@en "acc"
+@fa "انباره"
+pub acc: i64 = 0
+@en "nbits"
+@fa "شمار بیت"
+pub nbits: int = 0
+@en "bad"
+@fa "خراب"
+pub bad: bool = false
+end
+@en "MsbWriter"
+@fa "نویسنده بیت"
+pub struct MsbWriter:
+@en "buf"
+@fa "بافر"
+pub buf: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+@en "acc"
+@fa "انباره"
+pub acc: i64 = 0
+@en "nbits"
+@fa "شمار بیت"
+pub nbits: int = 0
+end
+func _mask(n: int): i64:
+if n <= 0:
+ret 0
+end
+if n >= 63:
+ret -1
+end
+ret ((1 as i64) << n) - 1
+end
+func _fill(r &: MsbReader, count: int):
+until r.nbits < count:
+if r.pos >= r.len:
+r.bad = true
+r.acc = r.acc << 8
+r.nbits += 8
+else:
+bp := r.data as u8*
+r.acc = (r.acc << 8) | (bp[r.pos] as i64)
+r.pos += 1
+r.nbits += 8
+end
+end
+end
+@en "NewMsbReader"
+@fa "خواننده بیت جدید"
+pub func NewMsbReader(p: void*, n: int): MsbReader:
+ret MsbReader { data = p, len = n }
+end
+@en "MsbReaderFromBuf"
+@fa "خواننده بیت از بافر"
+pub func MsbReaderFromBuf(b: compress.ByteBuf): MsbReader:
+ret NewMsbReader(b.data, b.len)
+end
+@en "MsbReadI64"
+@fa "خواندن بیت‌ها بزرگ"
+pub func MsbReadI64(r &: MsbReader, count: int): i64:
+if count <= 0 or count > 56:
+ret 0
+end
+_fill(r, count)
+left := r.nbits - count
+v := (r.acc >> left) & _mask(count)
+r.nbits = left
+r.acc = r.acc & _mask(left)
+ret v
+end
+@en "MsbRead"
+@fa "خواندن بیت‌ها"
+pub func MsbRead(r &: MsbReader, count: int): int:
+if count <= 0 or count > 32:
+ret 0
+end
+ret MsbReadI64(r, count) as int
+end
+@en "MsbReadBit"
+@fa "خواندن بیت"
+pub func MsbReadBit(r &: MsbReader): int:
+ret MsbRead(r, 1)
+end
+@en "MsbReadSigned"
+@fa "خواندن بیت‌ها علامتدار"
+pub func MsbReadSigned(r &: MsbReader, count: int): int:
+if count <= 0 or count > 32:
+ret 0
+end
+v := MsbReadI64(r, count)
+top := (1 as i64) << (count - 1)
+if (v & top) != 0:
+ret (v - ((1 as i64) << count)) as int
+end
+ret v as int
+end
+@en "MsbUnary"
+@fa "خواندن یکانی"
+pub func MsbUnary(r &: MsbReader): int:
+mut n := 0
+until not r.bad:
+if MsbReadBit(r) == 1:
+break
+end
+n += 1
+if n > 1000000:
+r.bad = true
+break
+end
+end
+ret n
+end
+@en "MsbSkip"
+@fa "پرش بیت"
+pub func MsbSkip(r &: MsbReader, count: int):
+mut left := count
+until left > 0:
+take := left > 32 ? 32 : left
+MsbReadI64(r, take)
+left -= take
+end
+end
+@en "MsbAlign"
+@fa "همتراز کردن خواننده"
+pub func MsbAlign(r &: MsbReader):
+drop := r.nbits % 8
+if drop > 0:
+MsbReadI64(r, drop)
+end
+r.acc = 0
+r.nbits = 0
+end
+@en "MsbTell"
+@fa "جای خواننده"
+pub func MsbTell(r: MsbReader): int:
+ret r.pos * 8 - r.nbits
+end
+@en "MsbSeek"
+@fa "جابجایی خواننده"
+pub func MsbSeek(r &: MsbReader, bitpos: int):
+if bitpos < 0:
+ret
+end
+r.pos = bitpos / 8
+r.acc = 0
+r.nbits = 0
+r.bad = false
+rem := bitpos % 8
+if rem > 0:
+MsbReadI64(r, rem)
+end
+end
+@en "MsbLeft"
+@fa "باقیمانده خواننده"
+pub func MsbLeft(r: MsbReader): int:
+ret (r.len - r.pos) * 8 + r.nbits
+end
+@en "MsbBad"
+@fa "خواننده خراب"
+pub func MsbBad(r: MsbReader): bool:
+ret r.bad
+end
+@en "NewMsbWriter"
+@fa "نویسنده بیت جدید"
+pub func NewMsbWriter(): MsbWriter:
+ret MsbWriter { buf = compress.NewByteBuf() }
+end
+@en "MsbWrite"
+@fa "نوشتن بیت‌ها"
+pub func MsbWrite(w &: MsbWriter, value: i64, count: int):
+if count <= 0 or count > 56:
+ret
+end
+w.acc = (w.acc << count) | (value & _mask(count))
+w.nbits += count
+until w.nbits >= 8:
+b := (w.acc >> (w.nbits - 8)) & 255
+compress.BufPush(w.buf, b as int)
+w.nbits -= 8
+w.acc = w.acc & _mask(w.nbits)
+end
+end
+@en "MsbWriteBit"
+@fa "نوشتن بیت"
+pub func MsbWriteBit(w &: MsbWriter, bit: int):
+MsbWrite(w, bit as i64, 1)
+end
+@en "MsbWriteUnary"
+@fa "نوشتن یکانی"
+pub func MsbWriteUnary(w &: MsbWriter, n: int):
+mut i := 0
+until i < n:
+MsbWriteBit(w, 0)
+i += 1
+end
+MsbWriteBit(w, 1)
+end
+@en "MsbPad"
+@fa "همتراز کردن نویسنده"
+pub func MsbPad(w &: MsbWriter):
+if w.nbits > 0:
+pad := 8 - w.nbits
+MsbWrite(w, 0, pad)
+end
+end
+@en "MsbLen"
+@fa "طول نویسنده"
+pub func MsbLen(w &: MsbWriter): int:
+ret compress.BufLen(w.buf)
+end
+@en "MsbFinish"
+@fa "پایان نویسنده"
+pub func MsbFinish(w &: MsbWriter): compress.ByteBuf:
+MsbPad(w)
+ret w.buf
+end
+@en "MsbFree"
+@fa "آزادسازی نویسنده"
+pub func MsbFree(w &: MsbWriter):
+compress.BufFree(w.buf)
+w.acc = 0
+w.nbits = 0
+end
+@en "codec"
+@fa "کدک"
+package codec
+import audio
+import audio.wav
+import audio.aiff
+import audio.au
+import audio.flac
+import compress
+import archive
+@en "CanDecode"
+@fa "کدگشایی شدنی"
+pub func CanDecode(format: int): bool:
+ret format == audio.FormatWAV or format == audio.FormatAIFF or format == audio.FormatAU or format == audio.FormatFLAC
+end
+@en "CanEncode"
+@fa "کدگذاری شدنی"
+pub func CanEncode(format: int): bool:
+ret format == audio.FormatWAV or format == audio.FormatAIFF or format == audio.FormatAU or format == audio.FormatFLAC
+end
+@en "Formats"
+@fa "قالب‌ها"
+pub func Formats(): Vector<int>:
+mut out := Vector {} as Vector<int>
+out.push(audio.FormatWAV)
+out.push(audio.FormatAIFF)
+out.push(audio.FormatAU)
+out.push(audio.FormatFLAC)
+ret out
+end
+@en "Decode"
+@fa "کدگشایی"
+pub func Decode(p: void*, n: int, ok &: bool): audio.Clip:
+format := audio.DetectFormat(p, n)
+if format == audio.FormatWAV:
+ret wav.DecodeWAV(p, n, ok)
+end
+if format == audio.FormatAIFF:
+ret aiff.DecodeAIFF(p, n, ok)
+end
+if format == audio.FormatAU:
+ret au.DecodeAU(p, n, ok)
+end
+if format == audio.FormatFLAC:
+ret flac.DecodeFLAC(p, n, ok)
+end
+ok = false
+ret audio.Clip {}
+end
+@en "Probe"
+@fa "بررسی"
+pub func Probe(p: void*, n: int, ok &: bool): audio.Info:
+format := audio.DetectFormat(p, n)
+if format == audio.FormatWAV:
+ret wav.ProbeWAV(p, n, ok)
+end
+if format == audio.FormatAIFF:
+ret aiff.ProbeAIFF(p, n, ok)
+end
+if format == audio.FormatAU:
+ret au.ProbeAU(p, n, ok)
+end
+if format == audio.FormatFLAC:
+ret flac.ProbeFLAC(p, n, ok)
+end
+ok = false
+ret audio.Info {}
+end
+@en "Open"
+@fa "بازکردن"
+pub func Open(path: str, ok &: bool): audio.Clip:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Clip {}
+end
+out := Decode(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "ProbeFile"
+@fa "بررسی پرونده"
+pub func ProbeFile(path: str, ok &: bool): audio.Info:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Info {}
+end
+out := Probe(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "Encode"
+@fa "کدگذاری"
+pub func Encode(c: audio.Clip, format: int): compress.ByteBuf:
+if format == audio.FormatWAV:
+ret wav.EncodeWAV(c)
+end
+if format == audio.FormatAIFF:
+ret aiff.EncodeAIFF(c)
+end
+if format == audio.FormatAU:
+ret au.EncodeAU(c)
+end
+if format == audio.FormatFLAC:
+ret flac.EncodeFLAC(c)
+end
+ret compress.NewByteBuf()
+end
+@en "Save"
+@fa "ذخیره"
+pub func Save(c: audio.Clip, path: str): bool:
+format := audio.FormatFromExt(path)
+if not CanEncode(format):
+ret false
+end
+buf := Encode(c, format)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+package audio
+import math
+func _lerp(a: f64, b: f64, t: f64): f64:
+ret a + (b - a) * t
+end
+@en "Channel"
+@fa "کانال"
+pub func Channel(c: Clip, ch: int): Clip:
+if IsEmpty(c) or ch < 0 or ch >= c.channels:
+ret Clip {}
+end
+mut out := New(c.rate, 1, c.frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+mut f := 0
+until f < c.frames:
+dst[f] = src[f * c.channels + ch]
+f += 1
+end
+ret out
+end
+@en "Deinterleave"
+@fa "جداسازی کانال‌ها"
+pub func Deinterleave(c: Clip): Vector<Clip>:
+mut out := Vector {} as Vector<Clip>
+if IsEmpty(c):
+ret out
+end
+mut ch := 0
+until ch < c.channels:
+out.push(Channel(c, ch))
+ch += 1
+end
+ret out
+end
+@en "Interleave"
+@fa "درهم‌بافی کانال‌ها"
+pub func Interleave(parts: Vector<Clip>): Clip:
+if parts.len() == 0:
+ret Clip {}
+end
+first := parts.get(0)
+if IsEmpty(first):
+ret Clip {}
+end
+channels := parts.len()
+mut frames := first.frames
+mut i := 1
+until i < channels:
+p := parts.get(i)
+if p.rate != first.rate:
+ret Clip {}
+end
+if p.frames < frames:
+frames = p.frames
+end
+i += 1
+end
+mut out := New(first.rate, channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = first.bits
+dst := Data(out)
+mut ch := 0
+until ch < channels:
+part := parts.get(ch)
+src := Data(part)
+mut f := 0
+until f < frames:
+dst[f * channels + ch] = src[f * part.channels]
+f += 1
+end
+ch += 1
+end
+ret out
+end
+@en "ToMono"
+@fa "به یک‌کاناله"
+pub func ToMono(c: Clip): Clip:
+if IsEmpty(c):
+ret Clip {}
+end
+if c.channels == 1:
+ret Clone(c)
+end
+mut out := New(c.rate, 1, c.frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+inv := 1.0 / (c.channels as f64)
+mut f := 0
+until f < c.frames:
+mut sum := 0.0
+mut ch := 0
+until ch < c.channels:
+sum += src[f * c.channels + ch] as f64
+ch += 1
+end
+dst[f] = (sum * inv) as f32
+f += 1
+end
+ret out
+end
+@en "ToStereo"
+@fa "به دوکاناله"
+pub func ToStereo(c: Clip): Clip:
+ret ToChannels(c, 2)
+end
+@en "ToChannels"
+@fa "به کانال‌ها"
+pub func ToChannels(c: Clip, channels: int): Clip:
+if IsEmpty(c) or channels <= 0:
+ret Clip {}
+end
+if channels == c.channels:
+ret Clone(c)
+end
+if channels == 1:
+ret ToMono(c)
+end
+mut out := New(c.rate, channels, c.frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+mut f := 0
+until f < c.frames:
+mut ch := 0
+until ch < channels:
+mut from := ch
+if from >= c.channels:
+from = c.channels - 1
+end
+dst[f * channels + ch] = src[f * c.channels + from]
+ch += 1
+end
+f += 1
+end
+ret out
+end
+@en "ToRate"
+@fa "به نرخ"
+pub func ToRate(c: Clip, rate: int): Clip:
+if IsEmpty(c) or rate <= 0:
+ret Clip {}
+end
+if rate == c.rate:
+ret Clone(c)
+end
+ratio := (rate as f64) / (c.rate as f64)
+frames := ((c.frames as f64) * ratio) as int
+if frames <= 0:
+ret Clip {}
+end
+mut out := New(rate, c.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+step := (c.rate as f64) / (rate as f64)
+mut f := 0
+until f < frames:
+pos := (f as f64) * step
+mut i0 := pos as int
+if i0 < 0:
+i0 = 0
+end
+if i0 > c.frames - 1:
+i0 = c.frames - 1
+end
+mut i1 := i0 + 1
+if i1 > c.frames - 1:
+i1 = c.frames - 1
+end
+t := pos - (i0 as f64)
+mut ch := 0
+until ch < c.channels:
+a := src[i0 * c.channels + ch] as f64
+b := src[i1 * c.channels + ch] as f64
+dst[f * c.channels + ch] = _lerp(a, b, t) as f32
+ch += 1
+end
+f += 1
+end
+ret out
+end
+@en "ToBits"
+@fa "به بیت"
+pub func ToBits(c: Clip, bits: int): Clip:
+if IsEmpty(c) or bits <= 1 or bits > 32:
+ret Clip {}
+end
+mut out := Clone(c)
+if out.samples == null:
+ret out
+end
+out.bits = bits
+steps := math.Pow(2.0, (bits - 1) as f64)
+p := Data(out)
+n := SampleCount(out)
+mut i := 0
+until i < n:
+v := (p[i] as f64) * steps
+mut q := math.Floor(v + 0.5)
+if q > steps - 1.0:
+q = steps - 1.0
+end
+if q < 0.0 - steps:
+q = 0.0 - steps
+end
+p[i] = (q / steps) as f32
+i += 1
+end
+ret out
+end
+package audio
+import str
+import filepath
+import mem
+@en "FormatUnknown"
+@fa "قالب نامشخص"
+pub const FormatUnknown := 0
+@en "FormatWAV"
+@fa "قالب ویو"
+pub const FormatWAV := 1
+@en "FormatMP3"
+@fa "قالب ام‌پی‌تری"
+pub const FormatMP3 := 2
+@en "FormatFLAC"
+@fa "قالب فلاک"
+pub const FormatFLAC := 3
+@en "FormatOGG"
+@fa "قالب اوگ"
+pub const FormatOGG := 4
+@en "FormatAIFF"
+@fa "قالب ایف"
+pub const FormatAIFF := 5
+@en "FormatAU"
+@fa "قالب اواسنیدی"
+pub const FormatAU := 6
+@en "FormatOpus"
+@fa "قالب اوپوس"
+pub const FormatOpus := 7
+@en "FormatAAC"
+@fa "قالب ای‌ای‌سی"
+pub const FormatAAC := 8
+@en "FormatMIDI"
+@fa "قالب میدی"
+pub const FormatMIDI := 9
+@en "Info"
+@fa "آگاهی"
+pub struct Info:
+@en "format"
+@fa "قالب"
+pub format: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "frames"
+@fa "فریم ها"
+pub frames: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "bitrate"
+@fa "نرخ بیت"
+pub bitrate: int = 0
+@en "vbr"
+@fa "نرخ متغیر"
+pub vbr: bool = false
+@en "duration"
+@fa "مدت"
+pub duration: f64 = 0.0
+@en "lossless"
+@fa "بی اتلاف"
+pub lossless: bool = false
+end
+func _b(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _is4(p: void*, off: int, a: int, b: int, c: int, d: int): bool:
+ret _b(p, off) == a and _b(p, off + 1) == b and _b(p, off + 2) == c and _b(p, off + 3) == d
+end
+@en "DetectFormat"
+@fa "شناسایی قالب"
+pub func DetectFormat(p: void*, n: int): int:
+if n < 12:
+ret FormatUnknown
+end
+if _is4(p, 0, 82, 73, 70, 70) and _is4(p, 8, 87, 65, 86, 69):
+ret FormatWAV
+end
+if _is4(p, 0, 102, 76, 97, 67):
+ret FormatFLAC
+end
+if _is4(p, 0, 79, 103, 103, 83):
+ret FormatOGG
+end
+if _is4(p, 0, 70, 79, 82, 77):
+if _is4(p, 8, 65, 73, 70, 70) or _is4(p, 8, 65, 73, 70, 67):
+ret FormatAIFF
+end
+end
+if _is4(p, 0, 46, 115, 110, 100):
+ret FormatAU
+end
+if _is4(p, 0, 77, 84, 104, 100):
+ret FormatMIDI
+end
+if _is4(p, 4, 102, 116, 121, 112):
+ret FormatAAC
+end
+if _b(p, 0) == 73 and _b(p, 1) == 68 and _b(p, 2) == 51:
+ret FormatMP3
+end
+if _b(p, 0) == 255:
+second := _b(p, 1)
+if (second & 240) == 240:
+if (second & 6) != 0:
+ret FormatMP3
+end
+ret FormatAAC
+end
+if (second & 224) == 224:
+ret FormatMP3
+end
+end
+ret FormatUnknown
+end
+@en "FormatFromExt"
+@fa "قالب از پسوند"
+pub func FormatFromExt(path: str): int:
+raw := filepath.Ext(path)
+ext := str.Lower(raw)
+mem.Free(raw as void*)
+mut out := FormatUnknown
+if ext == ".wav" or ext == ".wave":
+out = FormatWAV
+else ext == ".mp3":
+out = FormatMP3
+else ext == ".flac":
+out = FormatFLAC
+else ext == ".ogg" or ext == ".oga":
+out = FormatOGG
+else ext == ".opus":
+out = FormatOpus
+else ext == ".aiff" or ext == ".aif" or ext == ".aifc":
+out = FormatAIFF
+else ext == ".au" or ext == ".snd":
+out = FormatAU
+else ext == ".aac" or ext == ".m4a" or ext == ".mp4":
+out = FormatAAC
+else ext == ".mid" or ext == ".midi":
+out = FormatMIDI
+end
+mem.Free(ext as void*)
+ret out
+end
+@en "FormatName"
+@fa "نام قالب"
+pub func FormatName(format: int): str:
+if format == FormatWAV:
+ret "wav"
+end
+if format == FormatMP3:
+ret "mp3"
+end
+if format == FormatFLAC:
+ret "flac"
+end
+if format == FormatOGG:
+ret "ogg"
+end
+if format == FormatAIFF:
+ret "aiff"
+end
+if format == FormatAU:
+ret "au"
+end
+if format == FormatOpus:
+ret "opus"
+end
+if format == FormatAAC:
+ret "aac"
+end
+if format == FormatMIDI:
+ret "midi"
+end
+ret "unknown"
+end
+@en "FormatIsLossless"
+@fa "قالب بی‌اتلاف است"
+pub func FormatIsLossless(format: int): bool:
+ret format == FormatWAV or format == FormatFLAC or format == FormatAIFF or format == FormatAU
+end
+@en "dsp"
+@fa "پردازش سیگنال"
+package dsp
+import math
+@en "Complex"
+@fa "مختلط"
+pub struct Complex:
+@en "re"
+@fa "حقیقی"
+pub re: f64 = 0.0
+@en "im"
+@fa "موهومی"
+pub im: f64 = 0.0
+end
+func _swap(p: f64*, i: int, j: int):
+t := p[i]
+p[i] = p[j]
+p[j] = t
+end
+func _bitrev(re: f64*, im: f64*, n: int):
+mut j := 0
+mut i := 1
+until i < n:
+mut bit := n >> 1
+until (j & bit) != 0:
+j = j ^ bit
+bit = bit >> 1
+end
+j = j | bit
+if i < j:
+_swap(re, i, j)
+_swap(im, i, j)
+end
+i += 1
+end
+end
+func _transform(re: f64*, im: f64*, n: int, sign: f64):
+_bitrev(re, im, n)
+mut span := 2
+until span <= n:
+half := span / 2
+ang := sign * 2.0 * math.PI / (span as f64)
+mut base := 0
+until base < n:
+mut k := 0
+until k < half:
+a := ang * (k as f64)
+wr := math.Cos(a)
+wi := math.Sin(a)
+i0 := base + k
+i1 := i0 + half
+xr := re[i1]
+xi := im[i1]
+vr := xr * wr - xi * wi
+vi := xr * wi + xi * wr
+ur := re[i0]
+ui := im[i0]
+re[i0] = ur + vr
+im[i0] = ui + vi
+re[i1] = ur - vr
+im[i1] = ui - vi
+k += 1
+end
+base += span
+end
+span = span << 1
+end
+end
+@en "IsPow2"
+@fa "توان دو است"
+pub func IsPow2(n: int): bool:
+ret n > 0 and (n & (n - 1)) == 0
+end
+@en "NextPow2"
+@fa "توان دو بعدی"
+pub func NextPow2(n: int): int:
+if n <= 1:
+ret 1
+end
+mut v := 1
+until v < n:
+v = v << 1
+if v >= 1073741824:
+break
+end
+end
+ret v
+end
+@en "CAdd"
+@fa "جمع مختلط"
+pub func CAdd(a: Complex, b: Complex): Complex:
+ret Complex { re = a.re + b.re, im = a.im + b.im }
+end
+@en "CSub"
+@fa "تفریق مختلط"
+pub func CSub(a: Complex, b: Complex): Complex:
+ret Complex { re = a.re - b.re, im = a.im - b.im }
+end
+@en "CMul"
+@fa "ضرب مختلط"
+pub func CMul(a: Complex, b: Complex): Complex:
+ret Complex { re = a.re * b.re - a.im * b.im, im = a.re * b.im + a.im * b.re }
+end
+@en "CScale"
+@fa "مقیاس مختلط"
+pub func CScale(a: Complex, k: f64): Complex:
+ret Complex { re = a.re * k, im = a.im * k }
+end
+@en "CConj"
+@fa "همیوغ مختلط"
+pub func CConj(a: Complex): Complex:
+ret Complex { re = a.re, im = 0.0 - a.im }
+end
+@en "CAbs"
+@fa "اندازه مختلط"
+pub func CAbs(a: Complex): f64:
+ret math.Hypot(a.re, a.im)
+end
+@en "CArg"
+@fa "زاویه مختلط"
+pub func CArg(a: Complex): f64:
+ret math.Atan2(a.im, a.re)
+end
+@en "CFromPolar"
+@fa "مختلط از قطبی"
+pub func CFromPolar(mag: f64, angle: f64): Complex:
+ret Complex { re = mag * math.Cos(angle), im = mag * math.Sin(angle) }
+end
+@en "FFT"
+@fa "تبدیل فوریه"
+pub func FFT(re: f64*, im: f64*, n: int): bool:
+if not IsPow2(n):
+ret false
+end
+_transform(re, im, n, -1.0)
+ret true
+end
+@en "IFFT"
+@fa "تبدیل فوریه وارون"
+pub func IFFT(re: f64*, im: f64*, n: int): bool:
+if not IsPow2(n):
+ret false
+end
+_transform(re, im, n, 1.0)
+inv := 1.0 / (n as f64)
+mut i := 0
+until i < n:
+re[i] = re[i] * inv
+im[i] = im[i] * inv
+i += 1
+end
+ret true
+end
+@en "FFTVec"
+@fa "تبدیل فوریه برداری"
+pub func FFTVec(re &: Vector<f64>, im &: Vector<f64>): bool:
+n := re.len()
+if n == 0 or im.len() != n or not IsPow2(n):
+ret false
+end
+ret FFT(re.ref(0), im.ref(0), n)
+end
+@en "IFFTVec"
+@fa "تبدیل فوریه وارون برداری"
+pub func IFFTVec(re &: Vector<f64>, im &: Vector<f64>): bool:
+n := re.len()
+if n == 0 or im.len() != n or not IsPow2(n):
+ret false
+end
+ret IFFT(re.ref(0), im.ref(0), n)
+end
+@en "Magnitude"
+@fa "اندازه"
+pub func Magnitude(re: f64*, im: f64*, n: int): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+mut i := 0
+until i < n:
+out.push(math.Hypot(re[i], im[i]))
+i += 1
+end
+ret out
+end
+@en "Phase"
+@fa "فاز"
+pub func Phase(re: f64*, im: f64*, n: int): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+mut i := 0
+until i < n:
+out.push(math.Atan2(im[i], re[i]))
+i += 1
+end
+ret out
+end
+@en "PowerSpectrum"
+@fa "طیف توان"
+pub func PowerSpectrum(re: f64*, im: f64*, n: int): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+mut i := 0
+until i < n:
+out.push(re[i] * re[i] + im[i] * im[i])
+i += 1
+end
+ret out
+end
+@en "BinFrequency"
+@fa "بسامد خانه"
+pub func BinFrequency(bin: int, n: int, rate: int): f64:
+if n <= 0:
+ret 0.0
+end
+ret (bin as f64) * (rate as f64) / (n as f64)
+end
+@en "PeakBin"
+@fa "خانه اوج"
+pub func PeakBin(mags: Vector<f64>): int:
+if mags.len() == 0:
+ret -1
+end
+mut best := 0
+mut hi := mags.get(0)
+mut i := 1
+until i < mags.len():
+v := mags.get(i)
+if v > hi:
+hi = v
+best = i
+end
+i += 1
+end
+ret best
+end
+package dsp
+import audio
+import math
+import mem
+@en "Spectrum"
+@fa "طیف"
+pub struct Spectrum:
+@en "bins"
+@fa "خانه‌ها"
+pub bins: int = 0
+@en "frames"
+@fa "فریم ها"
+pub frames: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "hop"
+@fa "گام"
+pub hop: int = 0
+@en "data"
+@fa "داده"
+pub data: void* = null
+end
+@en "ZeroCrossingRate"
+@fa "نرخ صفرگذر"
+pub func ZeroCrossingRate(c: audio.Clip): f64:
+if audio.IsEmpty(c) or c.frames < 2:
+ret 0.0
+end
+mut crossings := 0
+mut f := 1
+until f < c.frames:
+a := audio.Sample(c, f - 1, 0)
+b := audio.Sample(c, f, 0)
+if (a >= 0.0 and b < 0.0) or (a < 0.0 and b >= 0.0):
+crossings += 1
+end
+f += 1
+end
+ret (crossings as f64) / ((c.frames - 1) as f64)
+end
+@en "FreeSpectrum"
+@fa "آزادسازی طیف"
+pub func FreeSpectrum(s &: Spectrum):
+if s.data != null:
+mem.Free(s.data)
+end
+s.data = null
+s.bins = 0
+s.frames = 0
+end
+@en "STFT"
+@fa "تبدیل فوریه کوتاه"
+pub func STFT(c: audio.Clip, size: int, hop: int, window: int): Spectrum:
+mut out := Spectrum {}
+if audio.IsEmpty(c) or not IsPow2(size) or hop <= 0:
+ret out
+end
+bins := size / 2
+count := (c.frames - size) / hop + 1
+if count <= 0:
+ret out
+end
+buf := mem.Allocate((count * bins * 8) as u64) as f64*
+if buf == null:
+ret out
+end
+re := mem.Allocate((size * 8) as u64) as f64*
+im := mem.Allocate((size * 8) as u64) as f64*
+if re == null or im == null:
+mem.Free(buf as void*)
+ret out
+end
+mut t := 0
+until t < count:
+start := t * hop
+mut i := 0
+until i < size:
+w := WindowValue(window, i, size, 0.0)
+re[i] = audio.Sample(c, start + i, 0) * w
+im[i] = 0.0
+i += 1
+end
+FFT(re, im, size)
+mut k := 0
+until k < bins:
+buf[t * bins + k] = math.Hypot(re[k], im[k])
+k += 1
+end
+t += 1
+end
+mem.Free(re as void*)
+mem.Free(im as void*)
+out.bins = bins
+out.frames = count
+out.rate = c.rate
+out.hop = hop
+out.data = buf as void*
+ret out
+end
+@en "SpectrumAt"
+@fa "طیف در"
+pub func SpectrumAt(s: Spectrum, frame: int, bin: int): f64:
+if s.data == null or frame < 0 or bin < 0 or frame >= s.frames or bin >= s.bins:
+ret 0.0
+end
+p := s.data as f64*
+ret p[frame * s.bins + bin]
+end
+@en "SpectralCentroid"
+@fa "مرکز طیفی"
+pub func SpectralCentroid(s: Spectrum, frame: int): f64:
+if s.data == null or frame < 0 or frame >= s.frames:
+ret 0.0
+end
+mut num := 0.0
+mut den := 0.0
+mut k := 0
+until k < s.bins:
+m := SpectrumAt(s, frame, k)
+num += m * BinFrequency(k, s.bins * 2, s.rate)
+den += m
+k += 1
+end
+if den <= 0.0:
+ret 0.0
+end
+ret num / den
+end
+@en "SpectralRolloff"
+@fa "افت طیفی"
+pub func SpectralRolloff(s: Spectrum, frame: int, share: f64): f64:
+if s.data == null or frame < 0 or frame >= s.frames:
+ret 0.0
+end
+mut total := 0.0
+mut k := 0
+until k < s.bins:
+total += SpectrumAt(s, frame, k)
+k += 1
+end
+if total <= 0.0:
+ret 0.0
+end
+want := total * share
+mut run := 0.0
+mut i := 0
+until i < s.bins:
+run += SpectrumAt(s, frame, i)
+if run >= want:
+ret BinFrequency(i, s.bins * 2, s.rate)
+end
+i += 1
+end
+ret BinFrequency(s.bins - 1, s.bins * 2, s.rate)
+end
+@en "SpectralFlatness"
+@fa "تختی طیفی"
+pub func SpectralFlatness(s: Spectrum, frame: int): f64:
+if s.data == null or frame < 0 or frame >= s.frames or s.bins == 0:
+ret 0.0
+end
+mut logsum := 0.0
+mut sum := 0.0
+mut k := 0
+until k < s.bins:
+m := SpectrumAt(s, frame, k) + 0.000000001
+logsum += math.Log(m)
+sum += m
+k += 1
+end
+geo := math.Exp(logsum / (s.bins as f64))
+arith := sum / (s.bins as f64)
+if arith <= 0.0:
+ret 0.0
+end
+ret geo / arith
+end
+@en "SpectralFlux"
+@fa "شار طیفی"
+pub func SpectralFlux(s: Spectrum, frame: int): f64:
+if s.data == null or frame <= 0 or frame >= s.frames:
+ret 0.0
+end
+mut sum := 0.0
+mut k := 0
+until k < s.bins:
+d := SpectrumAt(s, frame, k) - SpectrumAt(s, frame - 1, k)
+if d > 0.0:
+sum += d * d
+end
+k += 1
+end
+ret math.Sqrt(sum)
+end
+@en "DetectPitch"
+@fa "شناسایی زیروبمی"
+pub func DetectPitch(c: audio.Clip, from_frame: int, size: int): f64:
+if audio.IsEmpty(c) or size < 64:
+ret 0.0
+end
+if from_frame + size > c.frames:
+ret 0.0
+end
+half := size / 2
+mut min_lag := c.rate / 2000
+mut max_lag := half
+if min_lag < 2:
+min_lag = 2
+end
+if max_lag > c.rate / 50:
+max_lag = c.rate / 50
+end
+if max_lag <= min_lag:
+ret 0.0
+end
+count := max_lag - min_lag + 1
+scores := mem.Allocate((count * 8) as u64) as f64*
+if scores == null:
+ret 0.0
+end
+mut best := 0.0
+mut lag := min_lag
+until lag < max_lag + 1:
+mut num := 0.0
+mut ea := 0.0
+mut eb := 0.0
+mut i := 0
+until i < half:
+a := audio.Sample(c, from_frame + i, 0)
+b := audio.Sample(c, from_frame + i + lag, 0)
+num += a * b
+ea += a * a
+eb += b * b
+i += 1
+end
+den := math.Sqrt(ea * eb)
+mut sc := 0.0
+if den > 0.0:
+sc = num / den
+end
+scores[lag - min_lag] = sc
+if sc > best:
+best = sc
+end
+lag += 1
+end
+mut chosen := 0
+if best >= 0.3:
+want := best * 0.9
+mut k := 1
+until k < count - 1:
+sc := scores[k]
+if sc >= want and sc >= scores[k - 1] and sc >= scores[k + 1]:
+chosen = k + min_lag
+break
+end
+k += 1
+end
+if chosen == 0:
+mut j := 0
+until j < count:
+if scores[j] >= want:
+chosen = j + min_lag
+break
+end
+j += 1
+end
+end
+end
+mem.Free(scores as void*)
+if chosen <= 0:
+ret 0.0
+end
+ret (c.rate as f64) / (chosen as f64)
+end
+@en "DetectOnsets"
+@fa "شناسایی آغازها"
+pub func DetectOnsets(c: audio.Clip, size: int, hop: int): Vector<int>:
+mut out := Vector {} as Vector<int>
+if audio.IsEmpty(c) or hop <= 0:
+ret out
+end
+mut s := STFT(c, size, hop, WindowHann)
+if s.data == null:
+ret out
+end
+mut flux := Vector {} as Vector<f64>
+mut mean := 0.0
+mut t := 0
+until t < s.frames:
+v := SpectralFlux(s, t)
+flux.push(v)
+mean += v
+t += 1
+end
+if s.frames > 0:
+mean = mean / (s.frames as f64)
+end
+mut i := 1
+until i < s.frames - 1:
+v := flux.get(i)
+if v > mean * 1.5 and v >= flux.get(i - 1) and v >= flux.get(i + 1):
+out.push(i * hop)
+end
+i += 1
+end
+flux.free()
+FreeSpectrum(s)
+ret out
+end
+@en "DetectBPM"
+@fa "شناسایی ضربان"
+pub func DetectBPM(c: audio.Clip): f64:
+if audio.IsEmpty(c) or c.rate <= 0:
+ret 0.0
+end
+mut onsets := DetectOnsets(c, 1024, 256)
+if onsets.len() < 4:
+onsets.free()
+ret 0.0
+end
+mut best_bpm := 0.0
+mut best_score := 0.0
+mut bpm := 60.0
+until bpm < 200.0:
+period := 60.0 / bpm * (c.rate as f64)
+mut score := 0.0
+mut i := 0
+until i < onsets.len():
+phase := (onsets.get(i) as f64) / period
+frac := phase - math.Floor(phase)
+d := frac < 0.5 ? frac : 1.0 - frac
+score += 1.0 - 2.0 * d
+i += 1
+end
+if score > best_score:
+best_score = score
+best_bpm = bpm
+end
+bpm += 0.5
+end
+onsets.free()
+ret best_bpm
+end
+@en "LoudnessLUFS"
+@fa "بلندی لافز"
+pub func LoudnessLUFS(c: audio.Clip): f64:
+if audio.IsEmpty(c):
+ret audio.SilenceFloorDb
+end
+mut work := audio.Clone(c)
+if work.samples == null:
+ret audio.SilenceFloorDb
+end
+shelf := HighShelf(1500.0, 0.707, 4.0, c.rate)
+BiquadProcessAll(shelf, work)
+hp := HighPass(38.0, 0.5, c.rate)
+BiquadProcessAll(hp, work)
+mut sum := 0.0
+mut n := 0
+p := audio.Data(work)
+mut f := 0
+until f < work.frames:
+mut ch := 0
+until ch < work.channels:
+v := p[f * work.channels + ch] as f64
+sum += v * v
+n += 1
+ch += 1
+end
+f += 1
+end
+audio.Free(work)
+if n == 0 or sum <= 0.0:
+ret audio.SilenceFloorDb
+end
+mean := sum / (n as f64)
+ret -0.691 + 10.0 * math.Log10(mean)
+end
+@en "NormalizeLUFS"
+@fa "هنجارسازی لافز"
+pub func NormalizeLUFS(c &: audio.Clip, target: f64):
+if audio.IsEmpty(c):
+ret
+end
+now := LoudnessLUFS(c)
+if now <= audio.SilenceFloorDb:
+ret
+end
+audio.Gain(c, target - now)
+end
+@en "TruePeakDb"
+@fa "اوج راستین دسیبل"
+pub func TruePeakDb(c: audio.Clip): f64:
+if audio.IsEmpty(c):
+ret audio.SilenceFloorDb
+end
+up := ResampleSinc(c, c.rate * 4, 16)
+if audio.IsEmpty(up):
+ret audio.PeakDb(c)
+end
+v := audio.PeakDb(up)
+mut tmp := up
+audio.Free(tmp)
+ret v
+end
+package dsp
+import audio
+import math
+import mem
+@en "Compressor"
+@fa "فشرده‌ساز"
+pub struct Compressor:
+@en "threshold"
+@fa "آستانه"
+pub threshold: f64 = -20.0
+@en "ratio"
+@fa "نسبت"
+pub ratio: f64 = 4.0
+@en "attack"
+@fa "حمله"
+pub attack: f64 = 0.005
+@en "release"
+@fa "رهایش"
+pub release: f64 = 0.1
+@en "makeup"
+@fa "جبران"
+pub makeup: f64 = 0.0
+end
+func _coef(seconds: f64, rate: int): f64:
+if seconds <= 0.0 or rate <= 0:
+ret 0.0
+end
+ret math.Exp(-1.0 / (seconds * (rate as f64)))
+end
+func _lerp_at(src: f32*, frames: int, channels: int, pos: f64, ch: int): f64:
+mut i0 := pos as int
+if i0 < 0:
+i0 = 0
+end
+if i0 > frames - 1:
+i0 = frames - 1
+end
+mut i1 := i0 + 1
+if i1 > frames - 1:
+i1 = frames - 1
+end
+t := pos - (i0 as f64)
+a := src[i0 * channels + ch] as f64
+b := src[i1 * channels + ch] as f64
+ret a + (b - a) * t
+end
+@en "Delay"
+@fa "تاخیر"
+pub func Delay(c &: audio.Clip, seconds: f64, mix: f64, feedback: f64):
+if audio.IsEmpty(c) or seconds <= 0.0:
+ret
+end
+lag := (seconds * (c.rate as f64)) as int
+if lag <= 0 or lag >= c.frames:
+ret
+end
+p := audio.Data(c)
+mut f := lag
+until f < c.frames:
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+back := (f - lag) * c.channels + ch
+echo := (p[back] as f64) * feedback
+p[at] = ((p[at] as f64) * (1.0 - mix) + echo * mix + (p[at] as f64) * mix * 0.0) as f32
+ch += 1
+end
+f += 1
+end
+end
+@en "Echo"
+@fa "پژواک"
+pub func Echo(c: audio.Clip, seconds: f64, repeats: int, decay: f64): audio.Clip:
+if audio.IsEmpty(c) or seconds <= 0.0 or repeats <= 0:
+ret audio.Clone(c)
+end
+lag := (seconds * (c.rate as f64)) as int
+if lag <= 0:
+ret audio.Clone(c)
+end
+mut out := audio.New(c.rate, c.channels, c.frames + lag * repeats)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := audio.Data(c)
+dst := audio.Data(out)
+mut r := 0
+until r < repeats + 1:
+gain := math.Pow(decay, r as f64)
+offset := lag * r
+mut f := 0
+until f < c.frames:
+mut ch := 0
+until ch < c.channels:
+at := (f + offset) * out.channels + ch
+dst[at] = ((dst[at] as f64) + (src[f * c.channels + ch] as f64) * gain) as f32
+ch += 1
+end
+f += 1
+end
+r += 1
+end
+ret out
+end
+@en "Reverb"
+@fa "بازآوا"
+pub func Reverb(c: audio.Clip, room: f64, mix: f64): audio.Clip:
+if audio.IsEmpty(c):
+ret audio.Clone(c)
+end
+mut out := audio.Clone(c)
+if out.samples == null:
+ret out
+end
+mut size := room
+if size < 0.0:
+size = 0.0
+end
+if size > 1.0:
+size = 1.0
+end
+combs := [1557, 1617, 1491, 1422]
+feed := 0.7 + 0.28 * size
+p := audio.Data(out)
+src := audio.Data(c)
+mut k := 0
+until k < 4:
+lag := combs[k] * c.rate / 44100
+if lag > 0 and lag < c.frames:
+mut f := lag
+until f < c.frames:
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+back := (f - lag) * c.channels + ch
+p[at] = ((p[at] as f64) + (p[back] as f64) * feed * 0.25) as f32
+ch += 1
+end
+f += 1
+end
+end
+k += 1
+end
+n := audio.SampleCount(out)
+mut i := 0
+until i < n:
+p[i] = ((src[i] as f64) * (1.0 - mix) + (p[i] as f64) * mix) as f32
+i += 1
+end
+audio.Clamp(out)
+ret out
+end
+@en "Chorus"
+@fa "همخوان"
+pub func Chorus(c: audio.Clip, depth: f64, speed: f64, mix: f64): audio.Clip:
+if audio.IsEmpty(c):
+ret audio.Clone(c)
+end
+out := audio.Clone(c)
+if out.samples == null:
+ret out
+end
+src := audio.Data(c)
+dst := audio.Data(out)
+base := 0.02 * (c.rate as f64)
+swing := depth * 0.01 * (c.rate as f64)
+mut f := 0
+until f < c.frames:
+t := (f as f64) / (c.rate as f64)
+lag := base + swing * math.Sin(2.0 * math.PI * speed * t)
+pos := (f as f64) - lag
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+mut wet := 0.0
+if pos >= 0.0:
+wet = _lerp_at(src, c.frames, c.channels, pos, ch)
+end
+dst[at] = ((src[at] as f64) * (1.0 - mix) + wet * mix) as f32
+ch += 1
+end
+f += 1
+end
+ret out
+end
+@en "Flanger"
+@fa "فلنجر"
+pub func Flanger(c: audio.Clip, depth: f64, speed: f64, mix: f64): audio.Clip:
+if audio.IsEmpty(c):
+ret audio.Clone(c)
+end
+out := audio.Clone(c)
+if out.samples == null:
+ret out
+end
+src := audio.Data(c)
+dst := audio.Data(out)
+swing := depth * 0.003 * (c.rate as f64)
+mut f := 0
+until f < c.frames:
+t := (f as f64) / (c.rate as f64)
+lag := swing * (0.5 + 0.5 * math.Sin(2.0 * math.PI * speed * t))
+pos := (f as f64) - lag
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+mut wet := 0.0
+if pos >= 0.0:
+wet = _lerp_at(src, c.frames, c.channels, pos, ch)
+end
+dst[at] = ((src[at] as f64) * (1.0 - mix) + wet * mix) as f32
+ch += 1
+end
+f += 1
+end
+ret out
+end
+@en "Tremolo"
+@fa "لرزش دامنه"
+pub func Tremolo(c &: audio.Clip, speed: f64, depth: f64):
+if audio.IsEmpty(c):
+ret
+end
+p := audio.Data(c)
+mut f := 0
+until f < c.frames:
+t := (f as f64) / (c.rate as f64)
+g := 1.0 - depth * 0.5 * (1.0 - math.Cos(2.0 * math.PI * speed * t))
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+p[at] = ((p[at] as f64) * g) as f32
+ch += 1
+end
+f += 1
+end
+end
+@en "CompressorProcess"
+@fa "پردازش فشرده‌ساز"
+pub func CompressorProcess(k: Compressor, c &: audio.Clip):
+if audio.IsEmpty(c):
+ret
+end
+limit_gain := audio.DbToGain(k.threshold)
+att := _coef(k.attack, c.rate)
+rel := _coef(k.release, c.rate)
+makeup := audio.DbToGain(k.makeup)
+mut env := 0.0
+p := audio.Data(c)
+mut f := 0
+until f < c.frames:
+mut peak := 0.0
+mut ch := 0
+until ch < c.channels:
+v := math.Abs(p[f * c.channels + ch] as f64)
+if v > peak:
+peak = v
+end
+ch += 1
+end
+if peak > env:
+env = att * env + (1.0 - att) * peak
+else:
+env = rel * env + (1.0 - rel) * peak
+end
+mut gain := 1.0
+if env > limit_gain and env > 0.0 and k.ratio > 0.0:
+over := audio.GainToDb(env) - k.threshold
+want := k.threshold + over / k.ratio
+gain = audio.DbToGain(want) / env
+end
+mut c2 := 0
+until c2 < c.channels:
+at := f * c.channels + c2
+p[at] = ((p[at] as f64) * gain * makeup) as f32
+c2 += 1
+end
+f += 1
+end
+end
+@en "LimiterProcess"
+@fa "پردازش محدودساز"
+pub func LimiterProcess(c &: audio.Clip, ceiling_db: f64):
+if audio.IsEmpty(c):
+ret
+end
+k := Compressor { threshold = ceiling_db, ratio = 50.0, attack = 0.001, release = 0.05 }
+CompressorProcess(k, c)
+limit := audio.DbToGain(ceiling_db)
+p := audio.Data(c)
+n := audio.SampleCount(c)
+mut i := 0
+until i < n:
+v := p[i] as f64
+if v > limit:
+p[i] = limit as f32
+else v < 0.0 - limit:
+p[i] = (0.0 - limit) as f32
+end
+i += 1
+end
+end
+@en "GateProcess"
+@fa "پردازش دروازه"
+pub func GateProcess(c &: audio.Clip, threshold_db: f64, release: f64):
+if audio.IsEmpty(c):
+ret
+end
+limit_gain := audio.DbToGain(threshold_db)
+rel := _coef(release, c.rate)
+mut env := 0.0
+p := audio.Data(c)
+mut f := 0
+until f < c.frames:
+mut peak := 0.0
+mut ch := 0
+until ch < c.channels:
+v := math.Abs(p[f * c.channels + ch] as f64)
+if v > peak:
+peak = v
+end
+ch += 1
+end
+if peak > env:
+env = peak
+else:
+env = rel * env + (1.0 - rel) * peak
+end
+g := env >= limit_gain ? 1.0 : 0.0
+mut c2 := 0
+until c2 < c.channels:
+at := f * c.channels + c2
+p[at] = ((p[at] as f64) * g) as f32
+c2 += 1
+end
+f += 1
+end
+end
+@en "TimeStretch"
+@fa "کشش زمانی"
+pub func TimeStretch(c: audio.Clip, factor: f64): audio.Clip:
+if audio.IsEmpty(c) or factor <= 0.0:
+ret audio.Clip {}
+end
+frames := ((c.frames as f64) * factor) as int
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(c.rate, c.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+win := 1024
+hop_out := win / 2
+mut hop_in := ((hop_out as f64) / factor) as int
+if hop_in < 1:
+hop_in = 1
+end
+src := audio.Data(c)
+dst := audio.Data(out)
+norm := mem.Allocate((frames * 8) as u64) as f64*
+if norm == null:
+ret out
+end
+mut i := 0
+until i < frames:
+norm[i] = 0.0
+i += 1
+end
+mut at_out := 0
+mut at_in := 0
+until at_out < frames:
+mut k := 0
+until k < win:
+si := at_in + k
+di := at_out + k
+if si >= c.frames or di >= frames:
+break
+end
+w := WindowValue(WindowHann, k, win, 0.0)
+mut ch := 0
+until ch < c.channels:
+dst[di * c.channels + ch] = ((dst[di * c.channels + ch] as f64) + (src[si * c.channels + ch] as f64) * w) as f32
+ch += 1
+end
+norm[di] += w
+k += 1
+end
+at_out += hop_out
+at_in += hop_in
+if at_in >= c.frames:
+break
+end
+end
+mut f := 0
+until f < frames:
+g := norm[f] > 0.0001 ? 1.0 / norm[f] : 0.0
+mut ch := 0
+until ch < c.channels:
+at := f * c.channels + ch
+dst[at] = ((dst[at] as f64) * g) as f32
+ch += 1
+end
+f += 1
+end
+mem.Free(norm as void*)
+ret out
+end
+@en "PitchShift"
+@fa "جابجایی زیروبمی"
+pub func PitchShift(c: audio.Clip, semitones: f64): audio.Clip:
+if audio.IsEmpty(c):
+ret audio.Clip {}
+end
+ratio := math.Pow(2.0, semitones / 12.0)
+mut stretched := TimeStretch(c, ratio)
+if audio.IsEmpty(stretched):
+ret audio.Clip {}
+end
+mut out := ResampleSinc(stretched, ((c.rate as f64) / ratio) as int, 16)
+audio.Free(stretched)
+if audio.IsEmpty(out):
+ret out
+end
+out.rate = c.rate
+ret out
+end
+package dsp
+import audio
+import math
+@en "Biquad"
+@fa "دوقطبی"
+pub struct Biquad:
+@en "b0"
+@fa "ب۰"
+pub b0: f64 = 1.0
+@en "b1"
+@fa "ب۱"
+pub b1: f64 = 0.0
+@en "b2"
+@fa "ب۲"
+pub b2: f64 = 0.0
+@en "a1"
+@fa "آ۱"
+pub a1: f64 = 0.0
+@en "a2"
+@fa "آ۲"
+pub a2: f64 = 0.0
+@en "z1"
+@fa "ز۱"
+pub z1: f64 = 0.0
+@en "z2"
+@fa "ز۲"
+pub z2: f64 = 0.0
+end
+func _norm(b0: f64, b1: f64, b2: f64, a0: f64, a1: f64, a2: f64): Biquad:
+if a0 == 0.0:
+ret Biquad {}
+end
+ret Biquad { b0 = b0 / a0, b1 = b1 / a0, b2 = b2 / a0, a1 = a1 / a0, a2 = a2 / a0 }
+end
+func _w0(freq: f64, rate: int): f64:
+ret 2.0 * math.PI * freq / (rate as f64)
+end
+@en "LowPass"
+@fa "صافی پایین"
+pub func LowPass(freq: f64, q: f64, rate: int): Biquad:
+w := _w0(freq, rate)
+c := math.Cos(w)
+alpha := math.Sin(w) / (2.0 * q)
+ret _norm((1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+end
+@en "HighPass"
+@fa "صافی بالا"
+pub func HighPass(freq: f64, q: f64, rate: int): Biquad:
+w := _w0(freq, rate)
+c := math.Cos(w)
+alpha := math.Sin(w) / (2.0 * q)
+ret _norm((1.0 + c) / 2.0, 0.0 - (1.0 + c), (1.0 + c) / 2.0, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+end
+@en "BandPass"
+@fa "صافی میان"
+pub func BandPass(freq: f64, q: f64, rate: int): Biquad:
+w := _w0(freq, rate)
+c := math.Cos(w)
+s := math.Sin(w)
+alpha := s / (2.0 * q)
+ret _norm(alpha, 0.0, 0.0 - alpha, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+end
+@en "Notch"
+@fa "صافی شکاف"
+pub func Notch(freq: f64, q: f64, rate: int): Biquad:
+w := _w0(freq, rate)
+c := math.Cos(w)
+alpha := math.Sin(w) / (2.0 * q)
+ret _norm(1.0, -2.0 * c, 1.0, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+end
+@en "AllPass"
+@fa "صافی همه"
+pub func AllPass(freq: f64, q: f64, rate: int): Biquad:
+w := _w0(freq, rate)
+c := math.Cos(w)
+alpha := math.Sin(w) / (2.0 * q)
+ret _norm(1.0 - alpha, -2.0 * c, 1.0 + alpha, 1.0 + alpha, -2.0 * c, 1.0 - alpha)
+end
+@en "Peaking"
+@fa "قله"
+pub func Peaking(freq: f64, q: f64, gain_db: f64, rate: int): Biquad:
+a := math.Pow(10.0, gain_db / 40.0)
+w := _w0(freq, rate)
+c := math.Cos(w)
+alpha := math.Sin(w) / (2.0 * q)
+ret _norm(1.0 + alpha * a, -2.0 * c, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * c, 1.0 - alpha / a)
+end
+@en "LowShelf"
+@fa "قفسه پایین"
+pub func LowShelf(freq: f64, q: f64, gain_db: f64, rate: int): Biquad:
+a := math.Pow(10.0, gain_db / 40.0)
+w := _w0(freq, rate)
+c := math.Cos(w)
+s := math.Sin(w)
+beta := s * math.Sqrt(a) / q
+ap := a + 1.0
+am := a - 1.0
+ret _norm(a * (ap - am * c + beta), 2.0 * a * (am - ap * c), a * (ap - am * c - beta), ap + am * c + beta, -2.0 * (am + ap * c), ap + am * c - beta)
+end
+@en "HighShelf"
+@fa "قفسه بالا"
+pub func HighShelf(freq: f64, q: f64, gain_db: f64, rate: int): Biquad:
+a := math.Pow(10.0, gain_db / 40.0)
+w := _w0(freq, rate)
+c := math.Cos(w)
+s := math.Sin(w)
+beta := s * math.Sqrt(a) / q
+ap := a + 1.0
+am := a - 1.0
+ret _norm(a * (ap + am * c + beta), -2.0 * a * (am + ap * c), a * (ap + am * c - beta), ap - am * c + beta, 2.0 * (am - ap * c), ap - am * c - beta)
+end
+@en "BiquadReset"
+@fa "بازنشانی دوقطبی"
+pub func BiquadReset(f &: Biquad):
+f.z1 = 0.0
+f.z2 = 0.0
+end
+@en "BiquadStep"
+@fa "گام دوقطبی"
+pub func BiquadStep(f &: Biquad, x: f64): f64:
+y := f.b0 * x + f.z1
+f.z1 = f.b1 * x - f.a1 * y + f.z2
+f.z2 = f.b2 * x - f.a2 * y
+ret y
+end
+@en "BiquadResponse"
+@fa "پاسخ دوقطبی"
+pub func BiquadResponse(f: Biquad, freq: f64, rate: int): f64:
+w := _w0(freq, rate)
+cw := math.Cos(w)
+sw := math.Sin(w)
+c2 := math.Cos(2.0 * w)
+s2 := math.Sin(2.0 * w)
+nr := f.b0 + f.b1 * cw + f.b2 * c2
+ni := 0.0 - (f.b1 * sw + f.b2 * s2)
+dr := 1.0 + f.a1 * cw + f.a2 * c2
+di := 0.0 - (f.a1 * sw + f.a2 * s2)
+dmag := math.Hypot(dr, di)
+if dmag == 0.0:
+ret 0.0
+end
+ret math.Hypot(nr, ni) / dmag
+end
+@en "BiquadProcess"
+@fa "پردازش دوقطبی"
+pub func BiquadProcess(f &: Biquad, c &: audio.Clip, ch: int):
+if audio.IsEmpty(c) or ch < 0 or ch >= c.channels:
+ret
+end
+p := audio.Data(c)
+mut i := 0
+until i < c.frames:
+idx := i * c.channels + ch
+p[idx] = BiquadStep(f, p[idx] as f64) as f32
+i += 1
+end
+end
+@en "BiquadProcessAll"
+@fa "پردازش همه کانال‌ها"
+pub func BiquadProcessAll(f: Biquad, c &: audio.Clip):
+mut ch := 0
+until ch < c.channels:
+mut local := f
+BiquadReset(local)
+BiquadProcess(local, c, ch)
+ch += 1
+end
+end
+@en "DCRemove"
+@fa "حذف جریان مستقیم"
+pub func DCRemove(c &: audio.Clip):
+if audio.IsEmpty(c):
+ret
+end
+off := audio.DcOffset(c)
+p := audio.Data(c)
+n := audio.SampleCount(c)
+mut i := 0
+until i < n:
+p[i] = ((p[i] as f64) - off) as f32
+i += 1
+end
+end
+package dsp
+import audio
+import math
+@en "QualityLinear"
+@fa "کیفیت خطی"
+pub const QualityLinear := 0
+@en "QualityCubic"
+@fa "کیفیت مکعبی"
+pub const QualityCubic := 1
+@en "QualitySinc"
+@fa "کیفیت سینک"
+pub const QualitySinc := 2
+@en "KaiserBeta"
+@fa "بتای کایزر"
+pub const KaiserBeta := 8.6
+func _sinc(x: f64): f64:
+if math.Abs(x) < 0.000000001:
+ret 1.0
+end
+a := math.PI * x
+ret math.Sin(a) / a
+end
+func _kwin(x: f64): f64:
+ax := math.Abs(x)
+if ax >= 1.0:
+ret 0.0
+end
+ret BesselI0(KaiserBeta * math.Sqrt(1.0 - ax * ax)) / BesselI0(KaiserBeta)
+end
+func _at(c: audio.Clip, frame: int, ch: int): f64:
+mut f := frame
+if f < 0:
+f = 0
+end
+if f > c.frames - 1:
+f = c.frames - 1
+end
+p := audio.Data(c)
+ret p[f * c.channels + ch] as f64
+end
+@en "ResampleCubic"
+@fa "بازنمونه مکعبی"
+pub func ResampleCubic(c: audio.Clip, rate: int): audio.Clip:
+if audio.IsEmpty(c) or rate <= 0:
+ret audio.Clip {}
+end
+if rate == c.rate:
+ret audio.Clone(c)
+end
+frames := ((c.frames as f64) * (rate as f64) / (c.rate as f64)) as int
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(rate, c.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+dst := audio.Data(out)
+step := (c.rate as f64) / (rate as f64)
+mut o := 0
+until o < frames:
+pos := (o as f64) * step
+i1 := pos as int
+t := pos - (i1 as f64)
+mut ch := 0
+until ch < c.channels:
+p0 := _at(c, i1 - 1, ch)
+p1 := _at(c, i1, ch)
+p2 := _at(c, i1 + 1, ch)
+p3 := _at(c, i1 + 2, ch)
+a := 0.5 * (0.0 - p0 + 3.0 * p1 - 3.0 * p2 + p3)
+b := 0.5 * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3)
+d := 0.5 * (0.0 - p0 + p2)
+v := ((a * t + b) * t + d) * t + p1
+dst[o * c.channels + ch] = v as f32
+ch += 1
+end
+o += 1
+end
+ret out
+end
+@en "ResampleSinc"
+@fa "بازنمونه سینک"
+pub func ResampleSinc(c: audio.Clip, rate: int, taps: int): audio.Clip:
+if audio.IsEmpty(c) or rate <= 0:
+ret audio.Clip {}
+end
+if rate == c.rate:
+ret audio.Clone(c)
+end
+mut half := taps
+if half < 2:
+half = 2
+end
+if half > 64:
+half = 64
+end
+frames := ((c.frames as f64) * (rate as f64) / (c.rate as f64)) as int
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(rate, c.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+dst := audio.Data(out)
+step := (c.rate as f64) / (rate as f64)
+mut cutoff := 1.0
+if rate < c.rate:
+cutoff = (rate as f64) / (c.rate as f64)
+end
+mut o := 0
+until o < frames:
+pos := (o as f64) * step
+center := math.Floor(pos) as int
+mut ch := 0
+until ch < c.channels:
+mut acc := 0.0
+mut wsum := 0.0
+mut k := 0 - half + 1
+until k < half + 1:
+idx := center + k
+t := pos - (idx as f64)
+w := _kwin(t / (half as f64)) * cutoff * _sinc(cutoff * t)
+acc += _at(c, idx, ch) * w
+wsum += w
+k += 1
+end
+if wsum != 0.0:
+acc = acc / wsum
+end
+dst[o * c.channels + ch] = acc as f32
+ch += 1
+end
+o += 1
+end
+ret out
+end
+@en "ResampleTo"
+@fa "بازنمونه به"
+pub func ResampleTo(c: audio.Clip, rate: int, quality: int): audio.Clip:
+if quality <= QualityLinear:
+ret audio.ToRate(c, rate)
+end
+if quality == QualityCubic:
+ret ResampleCubic(c, rate)
+end
+ret ResampleSinc(c, rate, 16)
+end
+@en "Correlation"
+@fa "همبستگی"
+pub func Correlation(a: audio.Clip, b: audio.Clip): f64:
+if audio.IsEmpty(a) or audio.IsEmpty(b):
+ret 0.0
+end
+mut n := a.frames
+if b.frames < n:
+n = b.frames
+end
+if n <= 0 or a.channels != b.channels:
+ret 0.0
+end
+mut sab := 0.0
+mut saa := 0.0
+mut sbb := 0.0
+mut f := 0
+until f < n:
+mut ch := 0
+until ch < a.channels:
+x := audio.Sample(a, f, ch)
+y := audio.Sample(b, f, ch)
+sab += x * y
+saa += x * x
+sbb += y * y
+ch += 1
+end
+f += 1
+end
+den := math.Sqrt(saa * sbb)
+if den == 0.0:
+ret 0.0
+end
+ret sab / den
+end
+package dsp
+import math
+@en "WindowRectangular"
+@fa "پنجره مستطیلی"
+pub const WindowRectangular := 0
+@en "WindowHann"
+@fa "پنجره هان"
+pub const WindowHann := 1
+@en "WindowHamming"
+@fa "پنجره همینگ"
+pub const WindowHamming := 2
+@en "WindowBlackman"
+@fa "پنجره بلکمن"
+pub const WindowBlackman := 3
+@en "WindowBlackmanHarris"
+@fa "پنجره بلکمن هریس"
+pub const WindowBlackmanHarris := 4
+@en "WindowSine"
+@fa "پنجره سینوسی"
+pub const WindowSine := 5
+@en "WindowVorbis"
+@fa "پنجره وربیس"
+pub const WindowVorbis := 6
+@en "WindowKaiser"
+@fa "پنجره کایزر"
+pub const WindowKaiser := 7
+@en "BesselI0"
+@fa "بسل صفر"
+pub func BesselI0(x: f64): f64:
+half := x / 2.0
+mut term := 1.0
+mut sum := 1.0
+mut k := 1
+until k < 64:
+term = term * (half / (k as f64))
+add := term * term
+sum += add
+if add < 0.000000000000001 * sum:
+break
+end
+k += 1
+end
+ret sum
+end
+@en "WindowValue"
+@fa "مقدار پنجره"
+pub func WindowValue(kind: int, i: int, n: int, param: f64): f64:
+if n <= 1:
+ret 1.0
+end
+d := (n - 1) as f64
+t := (i as f64) / d
+if kind == WindowRectangular:
+ret 1.0
+end
+if kind == WindowHann:
+ret 0.5 - 0.5 * math.Cos(2.0 * math.PI * t)
+end
+if kind == WindowHamming:
+ret 0.54 - 0.46 * math.Cos(2.0 * math.PI * t)
+end
+if kind == WindowBlackman:
+ret 0.42 - 0.5 * math.Cos(2.0 * math.PI * t) + 0.08 * math.Cos(4.0 * math.PI * t)
+end
+if kind == WindowBlackmanHarris:
+ret 0.35875 - 0.48829 * math.Cos(2.0 * math.PI * t) + 0.14128 * math.Cos(4.0 * math.PI * t) - 0.01168 * math.Cos(6.0 * math.PI * t)
+end
+if kind == WindowSine:
+ret math.Sin(math.PI * t)
+end
+if kind == WindowVorbis:
+s := math.Sin(math.PI * t)
+ret math.Sin(math.PI / 2.0 * s * s)
+end
+if kind == WindowKaiser:
+r := 2.0 * t - 1.0
+mut inside := 1.0 - r * r
+if inside < 0.0:
+inside = 0.0
+end
+ret BesselI0(param * math.Sqrt(inside)) / BesselI0(param)
+end
+ret 1.0
+end
+@en "WindowName"
+@fa "نام پنجره"
+pub func WindowName(kind: int): str:
+if kind == WindowRectangular:
+ret "rectangular"
+end
+if kind == WindowHann:
+ret "hann"
+end
+if kind == WindowHamming:
+ret "hamming"
+end
+if kind == WindowBlackman:
+ret "blackman"
+end
+if kind == WindowBlackmanHarris:
+ret "blackman-harris"
+end
+if kind == WindowSine:
+ret "sine"
+end
+if kind == WindowVorbis:
+ret "vorbis"
+end
+if kind == WindowKaiser:
+ret "kaiser"
+end
+ret "unknown"
+end
+@en "MakeWindow"
+@fa "ساخت پنجره"
+pub func MakeWindow(kind: int, n: int, param: f64): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+mut i := 0
+until i < n:
+out.push(WindowValue(kind, i, n, param))
+i += 1
+end
+ret out
+end
+@en "ApplyWindow"
+@fa "اعمال پنجره"
+pub func ApplyWindow(p: f64*, n: int, kind: int, param: f64):
+mut i := 0
+until i < n:
+p[i] = p[i] * WindowValue(kind, i, n, param)
+i += 1
+end
+end
+@en "WindowSum"
+@fa "جمع پنجره"
+pub func WindowSum(kind: int, n: int, param: f64): f64:
+mut sum := 0.0
+mut i := 0
+until i < n:
+sum += WindowValue(kind, i, n, param)
+i += 1
+end
+ret sum
+end
+package audio
+func _same_shape(a: Clip, b: Clip): bool:
+ret a.rate == b.rate and a.channels == b.channels
+end
+@en "Slice"
+@fa "برش"
+pub func Slice(c: Clip, from_frame: int, count: int): Clip:
+if IsEmpty(c) or count <= 0:
+ret Clip {}
+end
+mut start := from_frame
+if start < 0:
+start = 0
+end
+mut stop := start + count
+if stop > c.frames:
+stop = c.frames
+end
+if stop <= start:
+ret Clip {}
+end
+mut out := New(c.rate, c.channels, stop - start)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+mut i := 0
+n := (stop - start) * c.channels
+base := start * c.channels
+until i < n:
+dst[i] = src[base + i]
+i += 1
+end
+ret out
+end
+@en "Trim"
+@fa "برش زمانی"
+pub func Trim(c: Clip, from_s: f64, to_s: f64): Clip:
+a := FrameAt(c, from_s)
+b := FrameAt(c, to_s)
+ret Slice(c, a, b - a)
+end
+@en "Concat"
+@fa "پیوند"
+pub func Concat(a: Clip, b: Clip): Clip:
+if IsEmpty(a):
+ret Clone(b)
+end
+if IsEmpty(b):
+ret Clone(a)
+end
+if not _same_shape(a, b):
+ret Clip {}
+end
+mut out := New(a.rate, a.channels, a.frames + b.frames)
+if out.samples == null:
+ret out
+end
+out.bits = a.bits
+dst := Data(out)
+pa := Data(a)
+pb := Data(b)
+na := a.frames * a.channels
+nb := b.frames * b.channels
+mut i := 0
+until i < na:
+dst[i] = pa[i]
+i += 1
+end
+mut j := 0
+until j < nb:
+dst[na + j] = pb[j]
+j += 1
+end
+ret out
+end
+@en "MixAt"
+@fa "آمیختن در"
+pub func MixAt(dst &: Clip, src: Clip, at_frame: int, gain: f64):
+if IsEmpty(dst) or IsEmpty(src) or not _same_shape(dst, src):
+ret
+end
+pd := Data(dst)
+ps := Data(src)
+mut f := 0
+until f < src.frames:
+t := at_frame + f
+if t >= dst.frames:
+break
+end
+if t >= 0:
+mut ch := 0
+until ch < dst.channels:
+di := t * dst.channels + ch
+si := f * src.channels + ch
+pd[di] = ((pd[di] as f64) + (ps[si] as f64) * gain) as f32
+ch += 1
+end
+end
+f += 1
+end
+end
+@en "Mix"
+@fa "آمیختن"
+pub func Mix(a: Clip, b: Clip, gain_a: f64, gain_b: f64): Clip:
+if IsEmpty(a) or IsEmpty(b) or not _same_shape(a, b):
+ret Clip {}
+end
+frames := a.frames > b.frames ? a.frames : b.frames
+mut out := New(a.rate, a.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = a.bits
+MixAt(out, a, 0, gain_a)
+MixAt(out, b, 0, gain_b)
+ret out
+end
+@en "Split"
+@fa "شکافتن"
+pub func Split(c: Clip, at_s: f64, head &: Clip, tail &: Clip):
+at := FrameAt(c, at_s)
+head = Slice(c, 0, at)
+tail = Slice(c, at, c.frames - at)
+end
+@en "Gain"
+@fa "بهره"
+pub func Gain(c &: Clip, db: f64):
+if IsEmpty(c):
+ret
+end
+g := DbToGain(db)
+p := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+p[i] = ((p[i] as f64) * g) as f32
+i += 1
+end
+end
+@en "Scale"
+@fa "مقیاس"
+pub func Scale(c &: Clip, factor: f64):
+if IsEmpty(c):
+ret
+end
+p := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+p[i] = ((p[i] as f64) * factor) as f32
+i += 1
+end
+end
+@en "Clamp"
+@fa "محدود کردن"
+pub func Clamp(c &: Clip):
+if IsEmpty(c):
+ret
+end
+p := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+v := p[i] as f64
+if v > 1.0:
+p[i] = 1.0 as f32
+else v < -1.0:
+p[i] = -1.0 as f32
+end
+i += 1
+end
+end
+@en "Normalize"
+@fa "هنجارسازی"
+pub func Normalize(c &: Clip, target_db: f64):
+if IsEmpty(c):
+ret
+end
+hi := Peak(c)
+if hi <= 0.0:
+ret
+end
+Scale(c, DbToGain(target_db) / hi)
+end
+@en "Reverse"
+@fa "وارونه کردن"
+pub func Reverse(c &: Clip):
+if IsEmpty(c):
+ret
+end
+p := Data(c)
+mut a := 0
+mut b := c.frames - 1
+until a < b:
+mut ch := 0
+until ch < c.channels:
+ia := a * c.channels + ch
+ib := b * c.channels + ch
+t := p[ia]
+p[ia] = p[ib]
+p[ib] = t
+ch += 1
+end
+a += 1
+b -= 1
+end
+end
+@en "FadeIn"
+@fa "محو ورودی"
+pub func FadeIn(c &: Clip, seconds: f64):
+if IsEmpty(c) or seconds <= 0.0:
+ret
+end
+mut n := FrameAt(c, seconds)
+if n > c.frames:
+n = c.frames
+end
+if n <= 0:
+ret
+end
+p := Data(c)
+mut f := 0
+until f < n:
+g := (f as f64) / (n as f64)
+mut ch := 0
+until ch < c.channels:
+i := f * c.channels + ch
+p[i] = ((p[i] as f64) * g) as f32
+ch += 1
+end
+f += 1
+end
+end
+@en "FadeOut"
+@fa "محو خروجی"
+pub func FadeOut(c &: Clip, seconds: f64):
+if IsEmpty(c) or seconds <= 0.0:
+ret
+end
+mut n := FrameAt(c, seconds)
+if n > c.frames:
+n = c.frames
+end
+if n <= 0:
+ret
+end
+p := Data(c)
+start := c.frames - n
+mut f := 0
+until f < n:
+g := 1.0 - ((f as f64) / (n as f64))
+mut ch := 0
+until ch < c.channels:
+i := (start + f) * c.channels + ch
+p[i] = ((p[i] as f64) * g) as f32
+ch += 1
+end
+f += 1
+end
+end
+@en "Pad"
+@fa "لایی گذاری"
+pub func Pad(c: Clip, before_s: f64, after_s: f64): Clip:
+if IsEmpty(c):
+ret Clip {}
+end
+pre := FrameAt(c, before_s)
+post := FrameAt(c, after_s)
+mut out := New(c.rate, c.channels, pre + c.frames + post)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+n := c.frames * c.channels
+base := pre * c.channels
+mut i := 0
+until i < n:
+dst[base + i] = src[i]
+i += 1
+end
+ret out
+end
+@en "Repeat"
+@fa "تکرار صدا"
+pub func Repeat(c: Clip, times: int): Clip:
+if IsEmpty(c) or times <= 0:
+ret Clip {}
+end
+mut out := New(c.rate, c.channels, c.frames * times)
+if out.samples == null:
+ret out
+end
+out.bits = c.bits
+src := Data(c)
+dst := Data(out)
+n := c.frames * c.channels
+mut t := 0
+until t < times:
+mut i := 0
+until i < n:
+dst[t * n + i] = src[i]
+i += 1
+end
+t += 1
+end
+ret out
+end
+@en "TrimSilence"
+@fa "برش سکوت"
+pub func TrimSilence(c: Clip, threshold_db: f64): Clip:
+a := FirstSound(c, threshold_db)
+if a < 0:
+ret Clip {}
+end
+b := LastSound(c, threshold_db)
+ret Slice(c, a, b - a + 1)
+end
+@en "flac"
+@fa "فلاک"
+package flac
+import audio
+import compress
+import archive
+@en "BlockStreamInfo"
+@fa "بلوک آگاهی جریان"
+pub const BlockStreamInfo := 0
+@en "BlockPadding"
+@fa "بلوک لایی"
+pub const BlockPadding := 1
+@en "BlockApplication"
+@fa "بلوک برنامه"
+pub const BlockApplication := 2
+@en "BlockSeekTable"
+@fa "بلوک جدول جستن"
+pub const BlockSeekTable := 3
+@en "BlockVorbisComment"
+@fa "بلوک یادداشت وربیس"
+pub const BlockVorbisComment := 4
+@en "BlockCueSheet"
+@fa "بلوک برگه نشانه"
+pub const BlockCueSheet := 5
+@en "BlockPicture"
+@fa "بلوک تصویر"
+pub const BlockPicture := 6
+@en "MaxBlockSize"
+@fa "بیشینه اندازه بلوک"
+pub const MaxBlockSize := 65535
+@en "MaxChannels"
+@fa "بیشینه کانال"
+pub const MaxChannels := 8
+@en "StreamInfo"
+@fa "آگاهی جریان"
+pub struct StreamInfo:
+@en "min_block"
+@fa "کمینه بلوک"
+pub min_block: int = 0
+@en "max_block"
+@fa "بیشینه بلوک"
+pub max_block: int = 0
+@en "min_frame"
+@fa "کمینه فریم"
+pub min_frame: int = 0
+@en "max_frame"
+@fa "بیشینه فریم"
+pub max_frame: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "total"
+@fa "شمار کل"
+pub total: i64 = 0
+@en "md5"
+@fa "ام‌دی۵"
+pub md5: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+@en "audio_offset"
+@fa "جای صدا"
+pub audio_offset: int = 0
+end
+@en "MetaBlock"
+@fa "بلوک فرا"
+pub struct MetaBlock:
+@en "kind"
+@fa "گونه"
+pub kind: int = 0
+@en "offset"
+@fa "جابجایی"
+pub offset: int = 0
+@en "size"
+@fa "اندازه"
+pub size: int = 0
+@en "last"
+@fa "آخرین"
+pub last: bool = false
+end
+func _byte(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _be24(p: void*, off: int): int:
+ret (_byte(p, off) << 16) | (_byte(p, off + 1) << 8) | _byte(p, off + 2)
+end
+@en "CRC8"
+@fa "سی‌آر‌سی۸"
+pub func CRC8(p: void*, off: int, n: int): int:
+mut crc := 0
+mut i := 0
+until i < n:
+crc = crc ^ _byte(p, off + i)
+mut b := 0
+until b < 8:
+if (crc & 128) != 0:
+crc = ((crc << 1) ^ 7) & 255
+else:
+crc = (crc << 1) & 255
+end
+b += 1
+end
+i += 1
+end
+ret crc
+end
+@en "CRC16"
+@fa "سی‌آر‌سی۱۶"
+pub func CRC16(p: void*, off: int, n: int): int:
+mut crc := 0
+mut i := 0
+until i < n:
+crc = crc ^ (_byte(p, off + i) << 8)
+mut b := 0
+until b < 8:
+if (crc & 32768) != 0:
+crc = ((crc << 1) ^ 32773) & 65535
+else:
+crc = (crc << 1) & 65535
+end
+b += 1
+end
+i += 1
+end
+ret crc
+end
+@en "CRC16Buf"
+@fa "سی‌آر‌سی۱۶ بافر"
+pub func CRC16Buf(b: compress.ByteBuf, off: int, n: int): int:
+ret CRC16(b.data, off, n)
+end
+@en "IsFLAC"
+@fa "فلاک است"
+pub func IsFLAC(p: void*, n: int): bool:
+if n < 8:
+ret false
+end
+ret _byte(p, 0) == 102 and _byte(p, 1) == 76 and _byte(p, 2) == 97 and _byte(p, 3) == 67
+end
+@en "Blocks"
+@fa "بلوک‌ها"
+pub func Blocks(p: void*, n: int): Vector<MetaBlock>:
+mut out := Vector {} as Vector<MetaBlock>
+if not IsFLAC(p, n):
+ret out
+end
+mut at := 4
+until at + 4 <= n:
+head := _byte(p, at)
+size := _be24(p, at + 1)
+body := at + 4
+mut avail := n - body
+if size < avail:
+avail = size
+end
+last := (head & 128) != 0
+out.push(MetaBlock { kind = head & 127, offset = body, size = avail, last = last })
+if last:
+break
+end
+at = body + avail
+end
+ret out
+end
+@en "ReadStreamInfo"
+@fa "خواندن آگاهی جریان"
+pub func ReadStreamInfo(p: void*, n: int, out &: StreamInfo): bool:
+if not IsFLAC(p, n):
+ret false
+end
+mut blocks := Blocks(p, n)
+mut found := false
+mut after := 4
+each b in blocks:
+if b.kind == BlockStreamInfo and b.size >= 34 and not found:
+o := b.offset
+mut si := StreamInfo {}
+si.min_block = (_byte(p, o) << 8) | _byte(p, o + 1)
+si.max_block = (_byte(p, o + 2) << 8) | _byte(p, o + 3)
+si.min_frame = _be24(p, o + 4)
+si.max_frame = _be24(p, o + 7)
+si.rate = (_byte(p, o + 10) << 12) | (_byte(p, o + 11) << 4) | ((_byte(p, o + 12) >> 4) & 15)
+si.channels = ((_byte(p, o + 12) >> 1) & 7) + 1
+si.bits = (((_byte(p, o + 12) & 1) << 4) | ((_byte(p, o + 13) >> 4) & 15)) + 1
+mut total := ((_byte(p, o + 13) & 15) as i64) << 32
+total = total | ((_byte(p, o + 14) as i64) << 24)
+total = total | ((_byte(p, o + 15) as i64) << 16)
+total = total | ((_byte(p, o + 16) as i64) << 8)
+total = total | (_byte(p, o + 17) as i64)
+si.total = total
+compress.BufPushBytes(si.md5, ((p as i64) + ((o + 18) as i64)) as void*, 16)
+out = si
+found = true
+end
+after = b.offset + b.size
+end
+blocks.free()
+if not found:
+ret false
+end
+out.audio_offset = after
+ret out.rate > 0 and out.channels > 0 and out.channels <= MaxChannels and out.bits >= 4 and out.bits <= 32
+end
+@en "FreeStreamInfo"
+@fa "آزادسازی آگاهی جریان"
+pub func FreeStreamInfo(si &: StreamInfo):
+compress.BufFree(si.md5)
+end
+@en "ProbeFLAC"
+@fa "بررسی فلاک"
+pub func ProbeFLAC(p: void*, n: int, ok &: bool): audio.Info:
+ok = false
+mut info := audio.Info {}
+mut si := StreamInfo {}
+if not ReadStreamInfo(p, n, si):
+ret info
+end
+info.format = audio.FormatFLAC
+info.rate = si.rate
+info.channels = si.channels
+info.bits = si.bits
+info.frames = si.total as int
+info.lossless = true
+info.duration = (si.total as f64) / (si.rate as f64)
+if info.duration > 0.0:
+info.bitrate = ((n as f64) * 8.0 / info.duration) as int
+end
+FreeStreamInfo(si)
+ok = true
+ret info
+end
+@en "OpenFLAC"
+@fa "بازکردن فلاک"
+pub func OpenFLAC(path: str, ok &: bool): audio.Clip:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Clip {}
+end
+out := DecodeFLAC(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "ProbeFileFLAC"
+@fa "بررسی پرونده فلاک"
+pub func ProbeFileFLAC(path: str, ok &: bool): audio.Info:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Info {}
+end
+out := ProbeFLAC(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "SaveFLAC"
+@fa "ذخیره فلاک"
+pub func SaveFLAC(c: audio.Clip, path: str): bool:
+buf := EncodeFLAC(c)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "SaveFLACLevel"
+@fa "ذخیره فلاک با سطح"
+pub func SaveFLACLevel(c: audio.Clip, path: str, level: int): bool:
+buf := EncodeFLACLevel(c, level)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+package flac
+import audio
+import mem
+const _RATE_TABLE := [0, 88200, 176400, 192000, 8000, 16000, 22050, 24000, 32000, 44100, 48000, 96000, 0, 0, 0, 0]
+const _BPS_TABLE := [0, 8, 12, 0, 16, 20, 24, 32]
+const _FIXED_BLOCK := [0, 192, 576, 1152, 2304, 4608, 0, 0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+@en "FrameInfo"
+@fa "آگاهی فریم"
+pub struct FrameInfo:
+@en "block_size"
+@fa "اندازه بلوک"
+pub block_size: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "assignment"
+@fa "واگذاری"
+pub assignment: int = 0
+@en "variable"
+@fa "ناپایدار"
+pub variable: bool = false
+@en "number"
+@fa "شماره"
+pub number: i64 = 0
+end
+func _zigzag(u: i64): i64:
+ret (u >> 1) ^ (0 - (u & (1 as i64)))
+end
+func _read_utf8(r &: audio.MsbReader): i64:
+first := audio.MsbRead(r, 8)
+if first < 128:
+ret first
+end
+mut extra := 0
+mut value := 0 as i64
+if (first & 224) == 192:
+extra = 1
+value = (first & 31) as i64
+else (first & 240) == 224:
+extra = 2
+value = (first & 15) as i64
+else (first & 248) == 240:
+extra = 3
+value = (first & 7) as i64
+else (first & 252) == 248:
+extra = 4
+value = (first & 3) as i64
+else (first & 254) == 252:
+extra = 5
+value = (first & 1) as i64
+else:
+extra = 6
+value = 0 as i64
+end
+mut i := 0
+until i < extra:
+b := audio.MsbRead(r, 8)
+value = (value << 6) | ((b & 63) as i64)
+i += 1
+end
+ret value
+end
+func _residual(r &: audio.MsbReader, out: i64*, base: int, block: int, order: int): bool:
+method := audio.MsbRead(r, 2)
+if method > 1:
+ret false
+end
+param_bits := method == 0 ? 4 : 5
+escape := method == 0 ? 15 : 31
+porder := audio.MsbRead(r, 4)
+parts := 1 << porder
+if (block % parts) != 0:
+ret false
+end
+psize := block / parts
+mut at := order
+mut part := 0
+until part < parts:
+mut count := psize
+if part == 0:
+count = psize - order
+end
+if count < 0:
+ret false
+end
+param := audio.MsbRead(r, param_bits)
+if param == escape:
+raw := audio.MsbRead(r, 5)
+mut i := 0
+until i < count:
+if raw == 0:
+out[base + at] = 0 as i64
+else:
+out[base + at] = audio.MsbReadSigned(r, raw) as i64
+end
+at += 1
+i += 1
+end
+else:
+mut i := 0
+until i < count:
+q := audio.MsbUnary(r)
+mut v := (q as i64) << param
+if param > 0:
+v = v | (audio.MsbReadI64(r, param))
+end
+out[base + at] = _zigzag(v)
+at += 1
+i += 1
+end
+end
+if audio.MsbBad(r):
+ret false
+end
+part += 1
+end
+ret true
+end
+func _fixed_restore(out: i64*, base: int, block: int, order: int):
+if order == 0:
+ret
+end
+mut i := order
+until i < block:
+at := base + i
+if order == 1:
+out[at] = out[at] + out[at - 1]
+else order == 2:
+out[at] = out[at] + (2 as i64) * out[at - 1] - out[at - 2]
+else order == 3:
+out[at] = out[at] + (3 as i64) * out[at - 1] - (3 as i64) * out[at - 2] + out[at - 3]
+else:
+out[at] = out[at] + (4 as i64) * out[at - 1] - (6 as i64) * out[at - 2] + (4 as i64) * out[at - 3] - out[at - 4]
+end
+i += 1
+end
+end
+func _lpc_restore(out: i64*, base: int, block: int, order: int, coefs: i64*, shift: int):
+mut i := order
+until i < block:
+mut sum := 0 as i64
+mut k := 0
+until k < order:
+sum += coefs[k] * out[base + i - 1 - k]
+k += 1
+end
+out[base + i] = out[base + i] + (sum >> shift)
+i += 1
+end
+end
+func _subframe(r &: audio.MsbReader, out: i64*, base: int, block: int, bps: int): bool:
+if audio.MsbRead(r, 1) != 0:
+ret false
+end
+kind := audio.MsbRead(r, 6)
+wasted_flag := audio.MsbRead(r, 1)
+mut wasted := 0
+if wasted_flag != 0:
+wasted = audio.MsbUnary(r) + 1
+end
+bits := bps - wasted
+if bits <= 0 or bits > 32:
+ret false
+end
+mut good := false
+if kind == 0:
+v := audio.MsbReadSigned(r, bits) as i64
+mut i := 0
+until i < block:
+out[base + i] = v
+i += 1
+end
+good = true
+else kind == 1:
+mut i := 0
+until i < block:
+out[base + i] = audio.MsbReadSigned(r, bits) as i64
+i += 1
+end
+good = true
+else (kind & 56) == 8:
+order := kind & 7
+if order > 4 or order > block:
+ret false
+end
+mut i := 0
+until i < order:
+out[base + i] = audio.MsbReadSigned(r, bits) as i64
+i += 1
+end
+if not _residual(r, out, base, block, order):
+ret false
+end
+_fixed_restore(out, base, block, order)
+good = true
+else (kind & 32) != 0:
+order := (kind & 31) + 1
+if order > block:
+ret false
+end
+mut i := 0
+until i < order:
+out[base + i] = audio.MsbReadSigned(r, bits) as i64
+i += 1
+end
+precision := audio.MsbRead(r, 4) + 1
+if precision > 15:
+ret false
+end
+shift := audio.MsbReadSigned(r, 5)
+if shift < 0:
+ret false
+end
+coefs := mem.Allocate((order * 8) as u64) as i64*
+if coefs == null:
+ret false
+end
+mut k := 0
+until k < order:
+coefs[k] = audio.MsbReadSigned(r, precision) as i64
+k += 1
+end
+if _residual(r, out, base, block, order):
+_lpc_restore(out, base, block, order, coefs, shift)
+good = true
+end
+mem.Free(coefs as void*)
+if not good:
+ret false
+end
+else:
+ret false
+end
+if wasted > 0 and good:
+mut i := 0
+until i < block:
+out[base + i] = out[base + i] << wasted
+i += 1
+end
+end
+ret good and not audio.MsbBad(r)
+end
+func _decorrelate(buf: i64*, block: int, assignment: int):
+if assignment == 8:
+mut i := 0
+until i < block:
+buf[block + i] = buf[i] - buf[block + i]
+i += 1
+end
+else assignment == 9:
+mut i := 0
+until i < block:
+buf[i] = buf[i] + buf[block + i]
+i += 1
+end
+else assignment == 10:
+mut i := 0
+until i < block:
+side := buf[block + i]
+mut mid := buf[i] << 1
+mid = mid | (side & (1 as i64))
+buf[i] = (mid + side) >> 1
+buf[block + i] = (mid - side) >> 1
+i += 1
+end
+end
+end
+@en "ReadFrameHeader"
+@fa "خواندن سرآیند فریم"
+pub func ReadFrameHeader(p: void*, n: int, at: int, si: StreamInfo, out &: FrameInfo): int:
+if at + 5 > n:
+ret -1
+end
+mut r := audio.NewMsbReader(((p as i64) + (at as i64)) as void*, n - at)
+sync := audio.MsbRead(r, 14)
+if sync != 16382:
+ret -1
+end
+if audio.MsbRead(r, 1) != 0:
+ret -1
+end
+mut fi := FrameInfo {}
+fi.variable = audio.MsbRead(r, 1) != 0
+bs_code := audio.MsbRead(r, 4)
+sr_code := audio.MsbRead(r, 4)
+fi.assignment = audio.MsbRead(r, 4)
+bps_code := audio.MsbRead(r, 3)
+if audio.MsbRead(r, 1) != 0:
+ret -1
+end
+fi.number = _read_utf8(r)
+if bs_code == 6:
+fi.block_size = audio.MsbRead(r, 8) + 1
+else bs_code == 7:
+fi.block_size = audio.MsbRead(r, 16) + 1
+else:
+fi.block_size = _FIXED_BLOCK[bs_code]
+end
+if sr_code == 12:
+fi.rate = audio.MsbRead(r, 8) * 1000
+else sr_code == 13:
+fi.rate = audio.MsbRead(r, 16)
+else sr_code == 14:
+fi.rate = audio.MsbRead(r, 16) * 10
+else:
+fi.rate = _RATE_TABLE[sr_code]
+end
+if fi.rate == 0:
+fi.rate = si.rate
+end
+if bps_code == 0:
+fi.bits = si.bits
+else:
+fi.bits = _BPS_TABLE[bps_code]
+end
+if fi.assignment < 8:
+fi.channels = fi.assignment + 1
+else fi.assignment < 11:
+fi.channels = 2
+else:
+ret -1
+end
+if fi.block_size <= 0 or fi.block_size > MaxBlockSize or fi.bits <= 0:
+ret -1
+end
+if audio.MsbBad(r):
+ret -1
+end
+audio.MsbAlign(r)
+head_len := audio.MsbTell(r) / 8
+if at + head_len + 1 > n:
+ret -1
+end
+if CRC8(p, at, head_len) != (((p as u8*)[at + head_len]) as int):
+ret -1
+end
+out = fi
+ret head_len + 1
+end
+@en "DecodeFLAC"
+@fa "کدگشایی فلاک"
+pub func DecodeFLAC(p: void*, n: int, ok &: bool): audio.Clip:
+ok = false
+mut si := StreamInfo {}
+if not ReadStreamInfo(p, n, si):
+ret audio.Clip {}
+end
+total := si.total as int
+mut out := audio.New(si.rate, si.channels, total > 0 ? total : 0)
+if total > 0 and out.samples == null:
+FreeStreamInfo(si)
+ret out
+end
+scale := 1.0 / ((1 as i64) << (si.bits - 1)) as f64
+cap_block := si.max_block > 0 ? si.max_block : MaxBlockSize
+buf := mem.Allocate((cap_block * si.channels * 8) as u64) as i64*
+if buf == null:
+FreeStreamInfo(si)
+audio.Free(out)
+ret audio.Clip {}
+end
+dst := audio.Data(out)
+mut at := si.audio_offset
+mut written := 0
+mut frames_seen := 0
+until at < n:
+mut fi := FrameInfo {}
+head := ReadFrameHeader(p, n, at, si, fi)
+if head < 0:
+break
+end
+if fi.block_size > cap_block or fi.channels != si.channels:
+break
+end
+mut r := audio.NewMsbReader(((p as i64) + ((at + head) as i64)) as void*, n - at - head)
+mut good := true
+mut ch := 0
+until ch < fi.channels:
+mut bps := fi.bits
+if fi.assignment == 8 and ch == 1:
+bps += 1
+end
+if fi.assignment == 9 and ch == 0:
+bps += 1
+end
+if fi.assignment == 10 and ch == 1:
+bps += 1
+end
+if not _subframe(r, buf, ch * fi.block_size, fi.block_size, bps):
+good = false
+break
+end
+ch += 1
+end
+if not good:
+break
+end
+audio.MsbAlign(r)
+used := audio.MsbTell(r) / 8
+_decorrelate(buf, fi.block_size, fi.assignment)
+mut i := 0
+until i < fi.block_size:
+if written + i < out.frames:
+mut c2 := 0
+until c2 < fi.channels:
+v := (buf[c2 * fi.block_size + i] as f64) * scale
+dst[(written + i) * out.channels + c2] = v as f32
+c2 += 1
+end
+end
+i += 1
+end
+written += fi.block_size
+frames_seen += 1
+at = at + head + used + 2
+if written >= out.frames and out.frames > 0:
+break
+end
+end
+mem.Free(buf as void*)
+out.bits = si.bits
+FreeStreamInfo(si)
+if frames_seen == 0:
+audio.Free(out)
+ret audio.Clip {}
+end
+if written < out.frames:
+out.frames = written
+end
+ok = true
+ret out
+end
+package flac
+import audio
+import compress
+import crypto
+import mem
+@en "DefaultBlock"
+@fa "بلوک پیش‌فرض"
+pub const DefaultBlock := 4096
+func _unzigzag(v: i64): i64:
+if v < (0 as i64):
+ret ((0 - v) << 1) - (1 as i64)
+end
+ret v << 1
+end
+func _abs64(v: i64): i64:
+if v < (0 as i64):
+ret 0 - v
+end
+ret v
+end
+func _rice_cost(res: i64*, from: int, count: int, param: int): i64:
+mut total := 0 as i64
+mut i := 0
+until i < count:
+u := _unzigzag(res[from + i])
+total += (u >> param) + 1 + (param as i64)
+i += 1
+end
+ret total
+end
+func _best_param(res: i64*, from: int, count: int): int:
+if count <= 0:
+ret 0
+end
+mut sum := 0 as i64
+mut i := 0
+until i < count:
+sum += _unzigzag(res[from + i])
+i += 1
+end
+mut best := 0
+mut best_cost := _rice_cost(res, from, count, 0)
+mut p := 1
+until p < 15:
+c := _rice_cost(res, from, count, p)
+if c < best_cost:
+best_cost = c
+best = p
+end
+p += 1
+end
+ret best
+end
+func _fixed_residual(src: i64*, res: i64*, block: int, order: int):
+mut i := order
+until i < block:
+mut v := src[i]
+if order == 1:
+v = v - src[i - 1]
+else order == 2:
+v = v - (2 as i64) * src[i - 1] + src[i - 2]
+else order == 3:
+v = v - (3 as i64) * src[i - 1] + (3 as i64) * src[i - 2] - src[i - 3]
+else order == 4:
+v = v - (4 as i64) * src[i - 1] + (6 as i64) * src[i - 2] - (4 as i64) * src[i - 3] + src[i - 4]
+end
+res[i] = v
+i += 1
+end
+end
+func _order_cost(src: i64*, res: i64*, block: int, order: int): i64:
+if order >= block:
+ret 9223372036854775807
+end
+_fixed_residual(src, res, block, order)
+param := _best_param(res, order, block - order)
+ret _rice_cost(res, order, block - order, param)
+end
+func _is_constant(src: i64*, block: int): bool:
+mut i := 1
+until i < block:
+if src[i] != src[0]:
+ret false
+end
+i += 1
+end
+ret true
+end
+func _write_subframe(w &: audio.MsbWriter, src: i64*, res: i64*, block: int, bps: int):
+if _is_constant(src, block):
+audio.MsbWrite(w, 0, 1)
+audio.MsbWrite(w, 0, 6)
+audio.MsbWrite(w, 0, 1)
+audio.MsbWrite(w, src[0] & _mask(bps), bps)
+ret
+end
+mut best := 0
+mut best_cost := _order_cost(src, res, block, 0)
+mut o := 1
+until o < 5:
+if o < block:
+c := _order_cost(src, res, block, o)
+if c < best_cost:
+best_cost = c
+best = o
+end
+end
+o += 1
+end
+verbatim := (block as i64) * (bps as i64)
+if verbatim <= best_cost:
+audio.MsbWrite(w, 0, 1)
+audio.MsbWrite(w, 1, 6)
+audio.MsbWrite(w, 0, 1)
+mut i := 0
+until i < block:
+audio.MsbWrite(w, src[i] & _mask(bps), bps)
+i += 1
+end
+ret
+end
+_fixed_residual(src, res, block, best)
+param := _best_param(res, best, block - best)
+audio.MsbWrite(w, 0, 1)
+audio.MsbWrite(w, (8 | best) as i64, 6)
+audio.MsbWrite(w, 0, 1)
+mut i := 0
+until i < best:
+audio.MsbWrite(w, src[i] & _mask(bps), bps)
+i += 1
+end
+audio.MsbWrite(w, 0, 2)
+audio.MsbWrite(w, 0, 4)
+audio.MsbWrite(w, param as i64, 4)
+mut k := best
+until k < block:
+u := _unzigzag(res[k])
+q := (u >> param) as int
+audio.MsbWriteUnary(w, q)
+if param > 0:
+audio.MsbWrite(w, u & _mask(param), param)
+end
+k += 1
+end
+end
+func _mask(bits: int): i64:
+if bits <= 0:
+ret 0
+end
+if bits >= 63:
+ret -1
+end
+ret ((1 as i64) << bits) - (1 as i64)
+end
+func _rate_code(rate: int): int:
+if rate == 88200:
+ret 1
+end
+if rate == 176400:
+ret 2
+end
+if rate == 192000:
+ret 3
+end
+if rate == 8000:
+ret 4
+end
+if rate == 16000:
+ret 5
+end
+if rate == 22050:
+ret 6
+end
+if rate == 24000:
+ret 7
+end
+if rate == 32000:
+ret 8
+end
+if rate == 44100:
+ret 9
+end
+if rate == 48000:
+ret 10
+end
+if rate == 96000:
+ret 11
+end
+ret 13
+end
+func _bps_code(bits: int): int:
+if bits == 8:
+ret 1
+end
+if bits == 12:
+ret 2
+end
+if bits == 16:
+ret 4
+end
+if bits == 20:
+ret 5
+end
+if bits == 24:
+ret 6
+end
+if bits == 32:
+ret 7
+end
+ret 0
+end
+func _put_utf8(w &: audio.MsbWriter, value: i64):
+if value < (128 as i64):
+audio.MsbWrite(w, value, 8)
+ret
+end
+if value < (2048 as i64):
+audio.MsbWrite(w, (192 as i64) | (value >> 6), 8)
+audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+ret
+end
+if value < (65536 as i64):
+audio.MsbWrite(w, (224 as i64) | (value >> 12), 8)
+audio.MsbWrite(w, (128 as i64) | ((value >> 6) & (63 as i64)), 8)
+audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+ret
+end
+audio.MsbWrite(w, (240 as i64) | (value >> 18), 8)
+audio.MsbWrite(w, (128 as i64) | ((value >> 12) & (63 as i64)), 8)
+audio.MsbWrite(w, (128 as i64) | ((value >> 6) & (63 as i64)), 8)
+audio.MsbWrite(w, (128 as i64) | (value & (63 as i64)), 8)
+end
+func _quantize(c: audio.Clip, bits: int, dst: i64*, frame: int, count: int):
+hi := ((1 as i64) << (bits - 1)) - (1 as i64)
+lo := 0 - ((1 as i64) << (bits - 1))
+scale := ((1 as i64) << (bits - 1)) as f64
+src := audio.Data(c)
+mut ch := 0
+until ch < c.channels:
+mut i := 0
+until i < count:
+mut x := (src[(frame + i) * c.channels + ch] as f64) * scale
+if x >= 0.0:
+x = x + 0.5
+else:
+x = x - 0.5
+end
+mut q := x as i64
+if q > hi:
+q = hi
+end
+if q < lo:
+q = lo
+end
+dst[ch * count + i] = q
+i += 1
+end
+ch += 1
+end
+end
+func _md5_bytes(b &: compress.ByteBuf, src: i64*, count: int, channels: int, bits: int):
+bytes := bits / 8
+mut i := 0
+until i < count:
+mut ch := 0
+until ch < channels:
+v := src[ch * count + i]
+mut k := 0
+until k < bytes:
+compress.BufPush(b, ((v >> (k * 8)) & (255 as i64)) as int)
+k += 1
+end
+ch += 1
+end
+i += 1
+end
+end
+func _block_code(block: int): int:
+if block == 192:
+ret 1
+end
+if block == 576:
+ret 2
+end
+if block == 1152:
+ret 3
+end
+if block == 2304:
+ret 4
+end
+if block == 4608:
+ret 5
+end
+if block == 256:
+ret 8
+end
+if block == 512:
+ret 9
+end
+if block == 1024:
+ret 10
+end
+if block == 2048:
+ret 11
+end
+if block == 4096:
+ret 12
+end
+if block == 8192:
+ret 13
+end
+if block == 16384:
+ret 14
+end
+ret 7
+end
+func _put16(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, (v >> 8) & 255)
+compress.BufPush(b, v & 255)
+end
+func _put24(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, (v >> 16) & 255)
+compress.BufPush(b, (v >> 8) & 255)
+compress.BufPush(b, v & 255)
+end
+@en "EncodeFLACLevel"
+@fa "کدگذاری فلاک با سطح"
+pub func EncodeFLACLevel(c: audio.Clip, level: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c) or c.channels > MaxChannels:
+ret out
+end
+mut bits := c.bits
+if bits != 8 and bits != 16 and bits != 24:
+bits = 16
+end
+mut block := DefaultBlock
+if level <= 2:
+block = 1152
+end
+if level >= 6:
+block = 4096
+end
+if block > c.frames:
+block = c.frames
+end
+if block <= 0:
+ret out
+end
+work := mem.Allocate((block * c.channels * 8) as u64) as i64*
+res := mem.Allocate((block * 8) as u64) as i64*
+if work == null or res == null:
+ret out
+end
+mut raw := compress.NewByteBuf()
+mut frames := compress.NewByteBuf()
+mut at := 0
+mut min_frame := 16777215
+mut max_frame := 0
+until at < c.frames:
+mut count := block
+if at + count > c.frames:
+count = c.frames - at
+end
+_quantize(c, bits, work, at, count)
+_md5_bytes(raw, work, count, c.channels, bits)
+mut fw := audio.NewMsbWriter()
+audio.MsbWrite(fw, 16382, 14)
+audio.MsbWrite(fw, 0, 1)
+audio.MsbWrite(fw, 0, 1)
+bs_code := count == block ? _block_code(block) : 7
+audio.MsbWrite(fw, bs_code as i64, 4)
+rate_code := _rate_code(c.rate)
+audio.MsbWrite(fw, rate_code as i64, 4)
+audio.MsbWrite(fw, (c.channels - 1) as i64, 4)
+audio.MsbWrite(fw, _bps_code(bits) as i64, 3)
+audio.MsbWrite(fw, 0, 1)
+_put_utf8(fw, (at / block) as i64)
+if bs_code == 7:
+audio.MsbWrite(fw, (count - 1) as i64, 16)
+end
+if rate_code == 13:
+audio.MsbWrite(fw, c.rate as i64, 16)
+end
+head := audio.MsbFinish(fw)
+crc8 := CRC8(head.data, 0, compress.BufLen(head))
+mut body := audio.NewMsbWriter()
+mut ch := 0
+until ch < c.channels:
+_write_subframe(body, ((work as i64) + ((ch * count * 8) as i64)) as i64*, res, count, bits)
+ch += 1
+end
+payload := audio.MsbFinish(body)
+mut frame := compress.NewByteBuf()
+compress.BufPushBuf(frame, head)
+compress.BufPush(frame, crc8)
+compress.BufPushBuf(frame, payload)
+crc16 := CRC16(frame.data, 0, compress.BufLen(frame))
+compress.BufPush(frame, (crc16 >> 8) & 255)
+compress.BufPush(frame, crc16 & 255)
+size := compress.BufLen(frame)
+if size < min_frame:
+min_frame = size
+end
+if size > max_frame:
+max_frame = size
+end
+compress.BufPushBuf(frames, frame)
+compress.BufFree(frame)
+audio.MsbFree(body)
+audio.MsbFree(fw)
+at += count
+end
+mem.Free(work as void*)
+mem.Free(res as void*)
+digest := mem.Allocate(16 as u64)
+crypto.Md5Bytes(raw.data, compress.BufLen(raw), digest)
+compress.BufFree(raw)
+compress.BufPush(out, 102)
+compress.BufPush(out, 76)
+compress.BufPush(out, 97)
+compress.BufPush(out, 67)
+compress.BufPush(out, 128)
+compress.BufPush(out, 0)
+compress.BufPush(out, 0)
+compress.BufPush(out, 34)
+_put16(out, block)
+_put16(out, block)
+_put24(out, min_frame == 16777215 ? 0 : min_frame)
+_put24(out, max_frame)
+rate := c.rate
+compress.BufPush(out, (rate >> 12) & 255)
+compress.BufPush(out, (rate >> 4) & 255)
+total := c.frames as i64
+compress.BufPush(out, ((rate & 15) << 4) | (((c.channels - 1) & 7) << 1) | (((bits - 1) >> 4) & 1))
+compress.BufPush(out, (((bits - 1) & 15) << 4) | (((total >> 32) & (15 as i64)) as int))
+compress.BufPush(out, ((total >> 24) & (255 as i64)) as int)
+compress.BufPush(out, ((total >> 16) & (255 as i64)) as int)
+compress.BufPush(out, ((total >> 8) & (255 as i64)) as int)
+compress.BufPush(out, (total & (255 as i64)) as int)
+dp := digest as u8*
+mut m := 0
+until m < 16:
+compress.BufPush(out, dp[m] as int)
+m += 1
+end
+mem.Free(digest)
+compress.BufPushBuf(out, frames)
+compress.BufFree(frames)
+ret out
+end
+@en "EncodeFLAC"
+@fa "کدگذاری فلاک"
+pub func EncodeFLAC(c: audio.Clip): compress.ByteBuf:
+ret EncodeFLACLevel(c, 5)
+end
+@en "VerifyFLAC"
+@fa "بازبینی فلاک"
+pub func VerifyFLAC(p: void*, n: int): bool:
+mut si := StreamInfo {}
+if not ReadStreamInfo(p, n, si):
+ret false
+end
+mut ok := false
+mut back := DecodeFLAC(p, n, ok)
+if not ok:
+FreeStreamInfo(si)
+ret false
+end
+good := back.frames == (si.total as int) and back.channels == si.channels and back.rate == si.rate
+audio.Free(back)
+FreeStreamInfo(si)
+ret good
+end
+package audio
+import math
+@en "SilenceFloorDb"
+@fa "کف سکوت"
+pub const SilenceFloorDb := -200.0
+@en "GainToDb"
+@fa "بهره به دسیبل"
+pub func GainToDb(gain: f64): f64:
+g := math.Abs(gain)
+if g <= 0.0:
+ret SilenceFloorDb
+end
+d := 20.0 * math.Log10(g)
+if d < SilenceFloorDb:
+ret SilenceFloorDb
+end
+ret d
+end
+@en "DbToGain"
+@fa "دسیبل به بهره"
+pub func DbToGain(db: f64): f64:
+if db <= SilenceFloorDb:
+ret 0.0
+end
+ret math.Pow(10.0, db / 20.0)
+end
+@en "Peak"
+@fa "اوج"
+pub func Peak(c: Clip): f64:
+if IsEmpty(c):
+ret 0.0
+end
+p := Data(c)
+n := SampleCount(c)
+mut hi := 0.0
+mut i := 0
+until i < n:
+v := math.Abs(p[i] as f64)
+if v > hi:
+hi = v
+end
+i += 1
+end
+ret hi
+end
+@en "PeakDb"
+@fa "اوج دسیبل"
+pub func PeakDb(c: Clip): f64:
+ret GainToDb(Peak(c))
+end
+@en "PeakChannel"
+@fa "اوج کانال"
+pub func PeakChannel(c: Clip, ch: int): f64:
+if IsEmpty(c) or ch < 0 or ch >= c.channels:
+ret 0.0
+end
+p := Data(c)
+mut hi := 0.0
+mut f := 0
+until f < c.frames:
+v := math.Abs(p[f * c.channels + ch] as f64)
+if v > hi:
+hi = v
+end
+f += 1
+end
+ret hi
+end
+@en "RMS"
+@fa "جذر میانگین مربع"
+pub func RMS(c: Clip): f64:
+if IsEmpty(c):
+ret 0.0
+end
+p := Data(c)
+n := SampleCount(c)
+mut sum := 0.0
+mut i := 0
+until i < n:
+v := p[i] as f64
+sum += v * v
+i += 1
+end
+ret math.Sqrt(sum / (n as f64))
+end
+@en "RMSDb"
+@fa "جذر میانگین مربع دسیبل"
+pub func RMSDb(c: Clip): f64:
+ret GainToDb(RMS(c))
+end
+@en "RMSRange"
+@fa "جذر میانگین مربع بازه"
+pub func RMSRange(c: Clip, from_frame: int, count: int): f64:
+if IsEmpty(c) or count <= 0:
+ret 0.0
+end
+mut start := from_frame
+if start < 0:
+start = 0
+end
+mut stop := start + count
+if stop > c.frames:
+stop = c.frames
+end
+if stop <= start:
+ret 0.0
+end
+p := Data(c)
+mut sum := 0.0
+mut f := start
+until f < stop:
+mut ch := 0
+until ch < c.channels:
+v := p[f * c.channels + ch] as f64
+sum += v * v
+ch += 1
+end
+f += 1
+end
+total := ((stop - start) * c.channels) as f64
+ret math.Sqrt(sum / total)
+end
+@en "DcOffset"
+@fa "انحراف جریان مستقیم"
+pub func DcOffset(c: Clip): f64:
+if IsEmpty(c):
+ret 0.0
+end
+p := Data(c)
+n := SampleCount(c)
+mut sum := 0.0
+mut i := 0
+until i < n:
+sum += p[i] as f64
+i += 1
+end
+ret sum / (n as f64)
+end
+@en "IsClipped"
+@fa "بریده است"
+pub func IsClipped(c: Clip): bool:
+ret Peak(c) >= 1.0
+end
+@en "CountClipped"
+@fa "شمار بریده"
+pub func CountClipped(c: Clip): int:
+if IsEmpty(c):
+ret 0
+end
+p := Data(c)
+n := SampleCount(c)
+mut hits := 0
+mut i := 0
+until i < n:
+if math.Abs(p[i] as f64) >= 1.0:
+hits += 1
+end
+i += 1
+end
+ret hits
+end
+@en "IsSilent"
+@fa "ساکت است"
+pub func IsSilent(c: Clip, threshold_db: f64): bool:
+ret Peak(c) <= DbToGain(threshold_db)
+end
+@en "FirstSound"
+@fa "نخستین صدا"
+pub func FirstSound(c: Clip, threshold_db: f64): int:
+if IsEmpty(c):
+ret -1
+end
+limit := DbToGain(threshold_db)
+p := Data(c)
+mut f := 0
+until f < c.frames:
+mut ch := 0
+until ch < c.channels:
+if math.Abs(p[f * c.channels + ch] as f64) > limit:
+ret f
+end
+ch += 1
+end
+f += 1
+end
+ret -1
+end
+@en "LastSound"
+@fa "آخرین صدا"
+pub func LastSound(c: Clip, threshold_db: f64): int:
+if IsEmpty(c):
+ret -1
+end
+limit := DbToGain(threshold_db)
+p := Data(c)
+mut f := c.frames - 1
+until f >= 0:
+mut ch := 0
+until ch < c.channels:
+if math.Abs(p[f * c.channels + ch] as f64) > limit:
+ret f
+end
+ch += 1
+end
+f -= 1
+end
+ret -1
+end
+@en "midi"
+@fa "میدی"
+package midi
+import audio
+import audio.synth
+import compress
+import archive
+@en "NoteOff"
+@fa "نت خاموش"
+pub const NoteOff := 128
+@en "NoteOn"
+@fa "نت روشن"
+pub const NoteOn := 144
+@en "ControlChange"
+@fa "تغییر واپایش"
+pub const ControlChange := 176
+@en "ProgramChange"
+@fa "تغییر برنامه"
+pub const ProgramChange := 192
+@en "MetaEvent"
+@fa "رویداد فرا"
+pub const MetaEvent := 255
+@en "MetaTempo"
+@fa "فرا ضرباهنگ"
+pub const MetaTempo := 81
+@en "MetaTrackName"
+@fa "فرا نام ترک"
+pub const MetaTrackName := 3
+@en "MetaEndOfTrack"
+@fa "پایان ترک"
+pub const MetaEndOfTrack := 47
+@en "MetaTimeSignature"
+@fa "فرا کسر میزان"
+pub const MetaTimeSignature := 88
+@en "DefaultDivision"
+@fa "تقسیم پیش‌فرض"
+pub const DefaultDivision := 480
+@en "Event"
+@fa "رویداد"
+pub struct Event:
+@en "tick"
+@fa "تیک"
+pub tick: int = 0
+@en "status"
+@fa "وضعیت"
+pub status: int = 0
+@en "channel"
+@fa "کانال"
+pub channel: int = 0
+@en "data1"
+@fa "داده۱"
+pub data1: int = 0
+@en "data2"
+@fa "داده۲"
+pub data2: int = 0
+@en "meta"
+@fa "فرا"
+pub meta: int = 0
+@en "value"
+@fa "مقدار"
+pub value: i64 = 0
+end
+@en "Track"
+@fa "ترک"
+pub struct Track:
+@en "events"
+@fa "رویدادها"
+pub events: Vector<Event> = Vector {}
+end
+@en "Song"
+@fa "آهنگ"
+pub struct Song:
+@en "format"
+@fa "قالب"
+pub format: int = 0
+@en "division"
+@fa "تقسیم"
+pub division: int = 0
+@en "tempo"
+@fa "ضرباهنگ"
+pub tempo: i64 = 500000
+@en "tracks"
+@fa "ترک‌ها"
+pub tracks: Vector<Track> = Vector {}
+end
+func _byte(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _be16(p: void*, off: int): int:
+ret (_byte(p, off) << 8) | _byte(p, off + 1)
+end
+func _be32(p: void*, off: int): int:
+ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+func _varlen(p: void*, at &: int, stop: int): int:
+mut v := 0
+mut n := 0
+until n < 4:
+if at >= stop:
+ret v
+end
+b := _byte(p, at)
+at += 1
+v = (v << 7) | (b & 127)
+if (b & 128) == 0:
+ret v
+end
+n += 1
+end
+ret v
+end
+func _put_varlen(b &: compress.ByteBuf, v: int):
+if v < 128:
+compress.BufPush(b, v)
+ret
+end
+mut stack: int[5]
+mut n := 0
+mut x := v
+until x > 0:
+stack[n] = x & 127
+n += 1
+x = x >> 7
+if n >= 5:
+break
+end
+end
+mut i := n - 1
+until i >= 0:
+mut byte := stack[i]
+if i > 0:
+byte = byte | 128
+end
+compress.BufPush(b, byte)
+i -= 1
+end
+end
+func _put_be16(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, (v >> 8) & 255)
+compress.BufPush(b, v & 255)
+end
+func _put_be32(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, (v >> 24) & 255)
+compress.BufPush(b, (v >> 16) & 255)
+compress.BufPush(b, (v >> 8) & 255)
+compress.BufPush(b, v & 255)
+end
+@en "IsMIDI"
+@fa "میدی است"
+pub func IsMIDI(p: void*, n: int): bool:
+if n < 14:
+ret false
+end
+ret _byte(p, 0) == 77 and _byte(p, 1) == 84 and _byte(p, 2) == 104 and _byte(p, 3) == 100
+end
+@en "NewSong"
+@fa "آهنگ جدید"
+pub func NewSong(division: int): Song:
+mut f := Song {}
+f.format = 1
+f.division = division > 0 ? division : DefaultDivision
+f.tempo = 500000
+f.tracks = Vector {} as Vector<Track>
+ret f
+end
+@en "NewTrack"
+@fa "ترک جدید"
+pub func NewTrack(): Track:
+mut t := Track {}
+t.events = Vector {} as Vector<Event>
+ret t
+end
+@en "AddTrack"
+@fa "افزودن ترک"
+pub func AddTrack(f &: Song, t: Track):
+f.tracks.push(t)
+end
+@en "AddNote"
+@fa "افزودن نت"
+pub func AddNote(t &: Track, tick: int, length: int, note: int, velocity: int, channel: int):
+t.events.push(Event { tick = tick, status = NoteOn, channel = channel, data1 = note, data2 = velocity })
+t.events.push(Event { tick = tick + length, status = NoteOff, channel = channel, data1 = note, data2 = 0 })
+end
+@en "AddTempo"
+@fa "افزودن ضرباهنگ"
+pub func AddTempo(t &: Track, tick: int, bpm: f64):
+if bpm <= 0.0:
+ret
+end
+us := (60000000.0 / bpm) as i64
+t.events.push(Event { tick = tick, status = MetaEvent, meta = MetaTempo, value = us })
+end
+@en "AddProgram"
+@fa "افزودن برنامه"
+pub func AddProgram(t &: Track, tick: int, program: int, channel: int):
+t.events.push(Event { tick = tick, status = ProgramChange, channel = channel, data1 = program })
+end
+@en "AddControl"
+@fa "افزودن واپایش"
+pub func AddControl(t &: Track, tick: int, controller: int, value: int, channel: int):
+t.events.push(Event { tick = tick, status = ControlChange, channel = channel, data1 = controller, data2 = value })
+end
+@en "FreeSong"
+@fa "آزادسازی آهنگ"
+pub func FreeSong(f &: Song):
+mut i := 0
+until i < f.tracks.len():
+mut t := f.tracks.get(i)
+t.events.free()
+i += 1
+end
+f.tracks.free()
+end
+@en "TicksToSeconds"
+@fa "تیک به ثانیه"
+pub func TicksToSeconds(f: Song, ticks: int): f64:
+if f.division <= 0:
+ret 0.0
+end
+ret (ticks as f64) * ((f.tempo as f64) / 1000000.0) / (f.division as f64)
+end
+@en "SecondsToTicks"
+@fa "ثانیه به تیک"
+pub func SecondsToTicks(f: Song, seconds: f64): int:
+if f.tempo <= (0 as i64):
+ret 0
+end
+ret (seconds * (f.division as f64) / ((f.tempo as f64) / 1000000.0)) as int
+end
+@en "Bpm"
+@fa "ضربان"
+pub func Bpm(f: Song): f64:
+if f.tempo <= (0 as i64):
+ret 0.0
+end
+ret 60000000.0 / (f.tempo as f64)
+end
+@en "TotalTicks"
+@fa "تیک کل"
+pub func TotalTicks(f: Song): int:
+mut last := 0
+mut i := 0
+until i < f.tracks.len():
+t := f.tracks.get(i)
+mut k := 0
+until k < t.events.len():
+e := t.events.get(k)
+if e.tick > last:
+last = e.tick
+end
+k += 1
+end
+i += 1
+end
+ret last
+end
+@en "DecodeMIDI"
+@fa "کدگشایی میدی"
+pub func DecodeMIDI(p: void*, n: int, ok &: bool): Song:
+ok = false
+mut f := NewSong(DefaultDivision)
+if not IsMIDI(p, n):
+ret f
+end
+head_len := _be32(p, 4)
+if head_len < 6 or 8 + head_len > n:
+ret f
+end
+f.format = _be16(p, 8)
+count := _be16(p, 10)
+div := _be16(p, 12)
+if div == 0:
+ret f
+end
+f.division = div
+mut at := 8 + head_len
+mut seen := 0
+until seen < count:
+if at + 8 > n:
+break
+end
+if _byte(p, at) != 77 or _byte(p, at + 1) != 84 or _byte(p, at + 2) != 114 or _byte(p, at + 3) != 107:
+break
+end
+size := _be32(p, at + 4)
+body := at + 8
+mut stop := body + size
+if stop > n:
+stop = n
+end
+mut t := NewTrack()
+mut cur := body
+mut tick := 0
+mut running := 0
+until cur < stop:
+delta := _varlen(p, cur, stop)
+tick += delta
+if cur >= stop:
+break
+end
+mut status := _byte(p, cur)
+if status < 128:
+status = running
+else:
+cur += 1
+if status < 240:
+running = status
+end
+end
+kind := status & 240
+if status == MetaEvent:
+if cur >= stop:
+break
+end
+meta := _byte(p, cur)
+cur += 1
+len := _varlen(p, cur, stop)
+mut ev := Event { tick = tick, status = MetaEvent, meta = meta }
+if meta == MetaTempo and len >= 3 and cur + 3 <= stop:
+ev.value = ((_byte(p, cur) << 16) | (_byte(p, cur + 1) << 8) | _byte(p, cur + 2)) as i64
+if f.tempo == (500000 as i64):
+f.tempo = ev.value
+end
+end
+t.events.push(ev)
+cur += len
+if meta == MetaEndOfTrack:
+break
+end
+else status == 240 or status == 247:
+len := _varlen(p, cur, stop)
+cur += len
+else kind == NoteOff or kind == NoteOn or kind == ControlChange or kind == 160 or kind == 224:
+if cur + 2 > stop:
+break
+end
+d1 := _byte(p, cur)
+d2 := _byte(p, cur + 1)
+cur += 2
+mut st := kind
+if kind == NoteOn and d2 == 0:
+st = NoteOff
+end
+t.events.push(Event { tick = tick, status = st, channel = status & 15, data1 = d1, data2 = d2 })
+else kind == ProgramChange or kind == 208:
+if cur + 1 > stop:
+break
+end
+d1 := _byte(p, cur)
+cur += 1
+t.events.push(Event { tick = tick, status = kind, channel = status & 15, data1 = d1 })
+else:
+break
+end
+end
+f.tracks.push(t)
+at = body + size
+seen += 1
+end
+ok = f.tracks.len() > 0
+ret f
+end
+@en "EncodeMIDI"
+@fa "کدگذاری میدی"
+pub func EncodeMIDI(f: Song): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if f.tracks.len() == 0 or f.division <= 0:
+ret out
+end
+compress.BufPush(out, 77)
+compress.BufPush(out, 84)
+compress.BufPush(out, 104)
+compress.BufPush(out, 100)
+_put_be32(out, 6)
+_put_be16(out, f.tracks.len() > 1 ? 1 : 0)
+_put_be16(out, f.tracks.len())
+_put_be16(out, f.division)
+mut ti := 0
+until ti < f.tracks.len():
+t := f.tracks.get(ti)
+mut body := compress.NewByteBuf()
+mut last := 0
+mut i := 0
+until i < t.events.len():
+e := t.events.get(i)
+mut delta := e.tick - last
+if delta < 0:
+delta = 0
+end
+_put_varlen(body, delta)
+last = e.tick
+if e.status == MetaEvent:
+compress.BufPush(body, 255)
+compress.BufPush(body, e.meta)
+if e.meta == MetaTempo:
+compress.BufPush(body, 3)
+compress.BufPush(body, ((e.value >> 16) & (255 as i64)) as int)
+compress.BufPush(body, ((e.value >> 8) & (255 as i64)) as int)
+compress.BufPush(body, (e.value & (255 as i64)) as int)
+else:
+compress.BufPush(body, 0)
+end
+else e.status == ProgramChange:
+compress.BufPush(body, ProgramChange | (e.channel & 15))
+compress.BufPush(body, e.data1 & 127)
+else:
+compress.BufPush(body, e.status | (e.channel & 15))
+compress.BufPush(body, e.data1 & 127)
+compress.BufPush(body, e.data2 & 127)
+end
+i += 1
+end
+_put_varlen(body, 0)
+compress.BufPush(body, 255)
+compress.BufPush(body, MetaEndOfTrack)
+compress.BufPush(body, 0)
+compress.BufPush(out, 77)
+compress.BufPush(out, 84)
+compress.BufPush(out, 114)
+compress.BufPush(out, 107)
+_put_be32(out, compress.BufLen(body))
+compress.BufPushBuf(out, body)
+compress.BufFree(body)
+ti += 1
+end
+ret out
+end
+@en "OpenMIDI"
+@fa "بازکردن میدی"
+pub func OpenMIDI(path: str, ok &: bool): Song:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret NewSong(DefaultDivision)
+end
+out := DecodeMIDI(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "SaveMIDI"
+@fa "ذخیره میدی"
+pub func SaveMIDI(f: Song, path: str): bool:
+buf := EncodeMIDI(f)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "Notes"
+@fa "نت‌ها"
+pub func Notes(f: Song): Vector<synth.Note>:
+mut out := Vector {} as Vector<synth.Note>
+mut ti := 0
+until ti < f.tracks.len():
+t := f.tracks.get(ti)
+mut i := 0
+until i < t.events.len():
+e := t.events.get(i)
+if e.status == NoteOn and e.data2 > 0:
+mut length := 0
+mut k := i + 1
+until k < t.events.len():
+o := t.events.get(k)
+if o.status == NoteOff and o.data1 == e.data1 and o.channel == e.channel:
+length = o.tick - e.tick
+break
+end
+k += 1
+end
+if length <= 0:
+length = f.division
+end
+out.push(
+synth.Note {
+note = e.data1, start = TicksToSeconds(f, e.tick), length = TicksToSeconds(f, length), gain = (e.data2 as f64) / 127.0 * 0.5,
+wave = synth.WaveSine
+}
+)
+end
+i += 1
+end
+ti += 1
+end
+ret out
+end
+@en "Render"
+@fa "ساختن"
+pub func Render(f: Song, rate: int, channels: int): audio.Clip:
+mut notes := Notes(f)
+if notes.len() == 0:
+notes.free()
+ret audio.Clip {}
+end
+e := synth.ADSR { attack = 0.01, decay = 0.04, sustain = 0.6, release = 0.08 }
+out := synth.RenderNotes(notes, rate, channels, e)
+notes.free()
+ret out
+end
+@en "ProgramName"
+@fa "نام برنامه"
+pub func ProgramName(program: int): str:
+if program == 0:
+ret "Acoustic Grand Piano"
+end
+if program == 24:
+ret "Acoustic Guitar"
+end
+if program == 40:
+ret "Violin"
+end
+if program == 56:
+ret "Trumpet"
+end
+if program == 73:
+ret "Flute"
+end
+if program == 104:
+ret "Sitar"
+end
+ret ""
+end
+@en "mp3"
+@fa "ام‌پی‌تری"
+package mp3
+import audio
+import audio.tag
+import compress
+import archive
+@en "Version25"
+@fa "نگارش دوونیم"
+pub const Version25 := 0
+@en "Version2"
+@fa "نگارش دو"
+pub const Version2 := 2
+@en "Version1"
+@fa "نگارش یک"
+pub const Version1 := 3
+@en "Layer1"
+@fa "لایه یک"
+pub const Layer1 := 3
+@en "Layer2"
+@fa "لایه دو"
+pub const Layer2 := 2
+@en "Layer3"
+@fa "لایه سه"
+pub const Layer3 := 1
+@en "ModeStereo"
+@fa "حالت دوکاناله"
+pub const ModeStereo := 0
+@en "ModeJoint"
+@fa "حالت پیوسته"
+pub const ModeJoint := 1
+@en "ModeDual"
+@fa "حالت دوگانه"
+pub const ModeDual := 2
+@en "ModeMono"
+@fa "حالت یک‌کاناله"
+pub const ModeMono := 3
+const _BITRATE_V1_L1 := [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0]
+const _BITRATE_V1_L2 := [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0]
+const _BITRATE_V1_L3 := [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
+const _BITRATE_V2_L1 := [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0]
+const _BITRATE_V2_L23 := [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0]
+const _RATE_V1 := [44100, 48000, 32000, 0]
+const _RATE_V2 := [22050, 24000, 16000, 0]
+const _RATE_V25 := [11025, 12000, 8000, 0]
+@en "Header"
+@fa "سرآیند"
+pub struct Header:
+@en "version"
+@fa "نگارش"
+pub version: int = 0
+@en "layer"
+@fa "لایه"
+pub layer: int = 0
+@en "bitrate"
+@fa "نرخ بیت"
+pub bitrate: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "mode"
+@fa "حالت"
+pub mode: int = 0
+@en "mode_ext"
+@fa "گسترش حالت"
+pub mode_ext: int = 0
+@en "padding"
+@fa "لایی"
+pub padding: int = 0
+@en "crc"
+@fa "سی‌آر‌سی"
+pub crc: bool = false
+@en "frame_size"
+@fa "اندازه فریم"
+pub frame_size: int = 0
+@en "samples"
+@fa "نمونه‌ها"
+pub samples: int = 0
+end
+@en "VbrInfo"
+@fa "آگاهی نرخ متغیر"
+pub struct VbrInfo:
+@en "frames"
+@fa "فریم ها"
+pub frames: int = 0
+@en "bytes"
+@fa "بایت‌ها"
+pub bytes: int = 0
+@en "vbr"
+@fa "نرخ متغیر"
+pub vbr: bool = false
+@en "quality"
+@fa "کیفیت"
+pub quality: int = 0
+@en "delay"
+@fa "درنگ"
+pub delay: int = 0
+@en "padding"
+@fa "لایی پایانی"
+pub padding: int = 0
+@en "found"
+@fa "یافت شد"
+pub found: bool = false
+end
+func _byte(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _be32(p: void*, off: int): int:
+ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+func _bitrate_of(version: int, layer: int, index: int): int:
+if index <= 0 or index >= 15:
+ret 0
+end
+if version == Version1:
+if layer == Layer1:
+ret _BITRATE_V1_L1[index]
+end
+if layer == Layer2:
+ret _BITRATE_V1_L2[index]
+end
+ret _BITRATE_V1_L3[index]
+end
+if layer == Layer1:
+ret _BITRATE_V2_L1[index]
+end
+ret _BITRATE_V2_L23[index]
+end
+func _rate_of(version: int, index: int): int:
+if index < 0 or index > 3:
+ret 0
+end
+if version == Version1:
+ret _RATE_V1[index]
+end
+if version == Version2:
+ret _RATE_V2[index]
+end
+ret _RATE_V25[index]
+end
+@en "SamplesPerFrame"
+@fa "نمونه در فریم"
+pub func SamplesPerFrame(version: int, layer: int): int:
+if layer == Layer1:
+ret 384
+end
+if layer == Layer2:
+ret 1152
+end
+if version == Version1:
+ret 1152
+end
+ret 576
+end
+@en "ParseHeader"
+@fa "خواندن سرآیند"
+pub func ParseHeader(p: void*, n: int, at: int, out &: Header): bool:
+if at + 4 > n:
+ret false
+end
+if _byte(p, at) != 255:
+ret false
+end
+b1 := _byte(p, at + 1)
+if (b1 & 224) != 224:
+ret false
+end
+mut h := Header {}
+h.version = (b1 >> 3) & 3
+if h.version == 1:
+ret false
+end
+h.layer = (b1 >> 1) & 3
+if h.layer == 0:
+ret false
+end
+h.crc = (b1 & 1) == 0
+b2 := _byte(p, at + 2)
+h.bitrate = _bitrate_of(h.version, h.layer, (b2 >> 4) & 15)
+h.rate = _rate_of(h.version, (b2 >> 2) & 3)
+h.padding = (b2 >> 1) & 1
+b3 := _byte(p, at + 3)
+h.mode = (b3 >> 6) & 3
+h.mode_ext = (b3 >> 4) & 3
+h.channels = h.mode == ModeMono ? 1 : 2
+if h.bitrate == 0 or h.rate == 0:
+ret false
+end
+h.samples = SamplesPerFrame(h.version, h.layer)
+if h.layer == Layer1:
+h.frame_size = (12 * h.bitrate * 1000 / h.rate + h.padding) * 4
+else:
+mut factor := 144
+if h.version != Version1:
+factor = 72
+end
+if h.layer == Layer2:
+factor = 144
+end
+h.frame_size = factor * h.bitrate * 1000 / h.rate + h.padding
+end
+if h.frame_size < 4:
+ret false
+end
+out = h
+ret true
+end
+@en "FindSync"
+@fa "یافتن همگامی"
+pub func FindSync(p: void*, n: int, from: int): int:
+mut at := from
+if at < 0:
+at = 0
+end
+until at + 4 <= n:
+mut h := Header {}
+if ParseHeader(p, n, at, h):
+if at + h.frame_size + 4 <= n:
+mut nxt := Header {}
+if ParseHeader(p, n, at + h.frame_size, nxt):
+ret at
+end
+else:
+ret at
+end
+end
+at += 1
+end
+ret -1
+end
+@en "AudioStart"
+@fa "آغاز صدا"
+pub func AudioStart(p: void*, n: int): int:
+skip := tag.AudioStart(p, n)
+found := FindSync(p, n, skip)
+if found < 0:
+ret skip
+end
+ret found
+end
+@en "IsMP3"
+@fa "ام‌پی‌تری است"
+pub func IsMP3(p: void*, n: int): bool:
+if n < 4:
+ret false
+end
+if tag.HasID3v2(p, n):
+ret true
+end
+ret FindSync(p, n, 0) >= 0
+end
+@en "CountFrames"
+@fa "شمار فریم‌ها"
+pub func CountFrames(p: void*, n: int): int:
+stop := tag.AudioEnd(p, n)
+mut at := AudioStart(p, n)
+mut count := 0
+until at + 4 <= stop:
+mut h := Header {}
+if not ParseHeader(p, stop, at, h):
+nxt := FindSync(p, stop, at + 1)
+if nxt < 0:
+break
+end
+at = nxt
+else:
+count += 1
+at += h.frame_size
+end
+end
+ret count
+end
+@en "ReadVbrInfo"
+@fa "خواندن آگاهی نرخ متغیر"
+pub func ReadVbrInfo(p: void*, n: int, out &: VbrInfo): bool:
+start := AudioStart(p, n)
+mut h := Header {}
+if not ParseHeader(p, n, start, h):
+ret false
+end
+mut side := 32
+if h.version == Version1:
+side = h.channels == 1 ? 17 : 32
+else:
+side = h.channels == 1 ? 9 : 17
+end
+mut at := start + 4
+if h.crc:
+at += 2
+end
+at += side
+if at + 8 > n:
+ret false
+end
+tag4 := _be32(p, at)
+xing := tag4 == 1483304551 or tag4 == 1415073280
+vbri := tag4 == 1448884812
+if not xing and not vbri:
+ret false
+end
+mut info := VbrInfo {}
+if xing:
+info.vbr = tag4 == 1483304551
+flags := _be32(p, at + 4)
+mut q := at + 8
+if (flags & 1) != 0 and q + 4 <= n:
+info.frames = _be32(p, q)
+q += 4
+end
+if (flags & 2) != 0 and q + 4 <= n:
+info.bytes = _be32(p, q)
+q += 4
+end
+if (flags & 4) != 0:
+q += 100
+end
+if (flags & 8) != 0 and q + 4 <= n:
+info.quality = _be32(p, q)
+q += 4
+end
+lame := at + 120
+if lame + 3 <= n:
+d := (_byte(p, lame) << 4) | ((_byte(p, lame + 1) >> 4) & 15)
+pad := ((_byte(p, lame + 1) & 15) << 8) | _byte(p, lame + 2)
+info.delay = d
+info.padding = pad
+end
+else:
+info.vbr = true
+if at + 26 <= n:
+info.bytes = _be32(p, at + 10)
+info.frames = _be32(p, at + 14)
+end
+end
+info.found = true
+out = info
+ret true
+end
+@en "ProbeMP3"
+@fa "بررسی ام‌پی‌تری"
+pub func ProbeMP3(p: void*, n: int, ok &: bool): audio.Info:
+ok = false
+mut info := audio.Info {}
+start := AudioStart(p, n)
+mut h := Header {}
+if not ParseHeader(p, n, start, h):
+ret info
+end
+info.format = audio.FormatMP3
+info.rate = h.rate
+info.channels = h.channels
+info.bits = 16
+info.lossless = false
+mut vbr := VbrInfo {}
+mut frames := 0
+if ReadVbrInfo(p, n, vbr) and vbr.frames > 0:
+frames = vbr.frames
+info.vbr = vbr.vbr
+else:
+frames = CountFrames(p, n)
+end
+info.frames = frames * h.samples
+if info.vbr and vbr.delay + vbr.padding > 0:
+info.frames -= vbr.delay + vbr.padding
+if info.frames < 0:
+info.frames = 0
+end
+end
+if h.rate > 0:
+info.duration = (info.frames as f64) / (h.rate as f64)
+end
+if info.duration > 0.0:
+audio_bytes := tag.AudioEnd(p, n) - start
+info.bitrate = ((audio_bytes as f64) * 8.0 / info.duration) as int
+else:
+info.bitrate = h.bitrate * 1000
+end
+ok = true
+ret info
+end
+@en "FrameAt"
+@fa "فریم در"
+pub func FrameAt(p: void*, n: int, index: int): int:
+stop := tag.AudioEnd(p, n)
+mut at := AudioStart(p, n)
+mut i := 0
+until at + 4 <= stop:
+mut h := Header {}
+if not ParseHeader(p, stop, at, h):
+nxt := FindSync(p, stop, at + 1)
+if nxt < 0:
+ret -1
+end
+at = nxt
+else:
+if i == index:
+ret at
+end
+i += 1
+at += h.frame_size
+end
+end
+ret -1
+end
+@en "SeekToSecond"
+@fa "جستن به ثانیه"
+pub func SeekToSecond(p: void*, n: int, seconds: f64): int:
+start := AudioStart(p, n)
+mut h := Header {}
+if not ParseHeader(p, n, start, h) or h.samples <= 0 or h.rate <= 0:
+ret -1
+end
+want := (seconds * (h.rate as f64) / (h.samples as f64)) as int
+ret FrameAt(p, n, want)
+end
+@en "Headers"
+@fa "سرآیندها"
+pub func Headers(p: void*, n: int): Vector<Header>:
+mut out := Vector {} as Vector<Header>
+stop := tag.AudioEnd(p, n)
+mut at := AudioStart(p, n)
+until at + 4 <= stop:
+mut h := Header {}
+if not ParseHeader(p, stop, at, h):
+nxt := FindSync(p, stop, at + 1)
+if nxt < 0:
+break
+end
+at = nxt
+else:
+out.push(h)
+at += h.frame_size
+end
+end
+ret out
+end
+@en "ProbeFileMP3"
+@fa "بررسی پرونده ام‌پی‌تری"
+pub func ProbeFileMP3(path: str, ok &: bool): audio.Info:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Info {}
+end
+out := ProbeMP3(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "music"
+@fa "موسیقی"
+package music
+import math
+import str
+@en "A4Note"
+@fa "نت لا۴"
+pub const A4Note := 69
+@en "A4Freq"
+@fa "بسامد لا۴"
+pub const A4Freq := 440.0
+@en "ScaleMajor"
+@fa "گام بزرگ"
+pub const ScaleMajor := 0
+@en "ScaleMinor"
+@fa "گام کوچک"
+pub const ScaleMinor := 1
+@en "ScaleHarmonicMinor"
+@fa "گام کوچک هارمونیک"
+pub const ScaleHarmonicMinor := 2
+@en "ScaleMelodicMinor"
+@fa "گام کوچک ملودیک"
+pub const ScaleMelodicMinor := 3
+@en "ScalePentatonic"
+@fa "گام پنج‌نت"
+pub const ScalePentatonic := 4
+@en "ScalePentatonicMinor"
+@fa "گام پنج‌نت کوچک"
+pub const ScalePentatonicMinor := 5
+@en "ScaleBlues"
+@fa "گام بلوز"
+pub const ScaleBlues := 6
+@en "ScaleChromatic"
+@fa "گام کروماتیک"
+pub const ScaleChromatic := 7
+@en "ScaleDorian"
+@fa "گام دورین"
+pub const ScaleDorian := 8
+@en "ScalePhrygian"
+@fa "گام فریژین"
+pub const ScalePhrygian := 9
+@en "ScaleLydian"
+@fa "گام لیدین"
+pub const ScaleLydian := 10
+@en "ScaleMixolydian"
+@fa "گام میکسولیدین"
+pub const ScaleMixolydian := 11
+@en "ScaleLocrian"
+@fa "گام لوکرین"
+pub const ScaleLocrian := 12
+@en "ScaleWholeTone"
+@fa "گام تمام‌پرده"
+pub const ScaleWholeTone := 13
+@en "ChordMajor"
+@fa "آکورد بزرگ"
+pub const ChordMajor := 0
+@en "ChordMinor"
+@fa "آکورد کوچک"
+pub const ChordMinor := 1
+@en "ChordDiminished"
+@fa "آکورد کاسته"
+pub const ChordDiminished := 2
+@en "ChordAugmented"
+@fa "آکورد افزوده"
+pub const ChordAugmented := 3
+@en "ChordSus2"
+@fa "آکورد معلق۲"
+pub const ChordSus2 := 4
+@en "ChordSus4"
+@fa "آکورد معلق۴"
+pub const ChordSus4 := 5
+@en "ChordMajor7"
+@fa "آکورد بزرگ۷"
+pub const ChordMajor7 := 6
+@en "ChordMinor7"
+@fa "آکورد کوچک۷"
+pub const ChordMinor7 := 7
+@en "ChordDominant7"
+@fa "آکورد نمایان۷"
+pub const ChordDominant7 := 8
+@en "ChordDiminished7"
+@fa "آکورد کاسته۷"
+pub const ChordDiminished7 := 9
+@en "DastgahShur"
+@fa "دستگاه شور"
+pub const DastgahShur := 0
+@en "DastgahMahur"
+@fa "دستگاه ماهور"
+pub const DastgahMahur := 1
+@en "DastgahHomayoun"
+@fa "دستگاه همایون"
+pub const DastgahHomayoun := 2
+@en "DastgahSegah"
+@fa "دستگاه سه‌گاه"
+pub const DastgahSegah := 3
+@en "DastgahChahargah"
+@fa "دستگاه چهارگاه"
+pub const DastgahChahargah := 4
+@en "DastgahNava"
+@fa "دستگاه نوا"
+pub const DastgahNava := 5
+@en "DastgahRastPanjgah"
+@fa "دستگاه راست‌پنجگاه"
+pub const DastgahRastPanjgah := 6
+@en "KoronCents"
+@fa "سنت کرن"
+pub const KoronCents := -50.0
+@en "SoriCents"
+@fa "سنت سری"
+pub const SoriCents := 50.0
+const _SHARP_NAMES := [67, 67, 68, 68, 69, 70, 70, 71, 71, 65, 65, 66]
+const _SHARP_MARK := [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0]
+func _pow2(x: f64): f64:
+ret math.Pow(2.0, x)
+end
+@en "NoteToFreq"
+@fa "نت به بسامد"
+pub func NoteToFreq(note: int): f64:
+ret A4Freq * _pow2(((note - A4Note) as f64) / 12.0)
+end
+@en "NoteToFreqCents"
+@fa "نت به بسامد با سنت"
+pub func NoteToFreqCents(note: int, cents: f64): f64:
+ret A4Freq * _pow2((((note - A4Note) as f64) + cents / 100.0) / 12.0)
+end
+@en "FreqToNote"
+@fa "بسامد به نت"
+pub func FreqToNote(freq: f64): int:
+if freq <= 0.0:
+ret 0
+end
+v := 12.0 * math.Log2(freq / A4Freq) + (A4Note as f64)
+ret math.Floor(v + 0.5) as int
+end
+@en "FreqToCents"
+@fa "بسامد به سنت"
+pub func FreqToCents(freq: f64, note: int): f64:
+if freq <= 0.0:
+ret 0.0
+end
+ret 1200.0 * math.Log2(freq / NoteToFreq(note))
+end
+@en "Octave"
+@fa "اکتاو"
+pub func Octave(note: int): int:
+ret note / 12 - 1
+end
+@en "PitchClass"
+@fa "رده صدا"
+pub func PitchClass(note: int): int:
+mut c := note % 12
+if c < 0:
+c += 12
+end
+ret c
+end
+@en "Transpose"
+@fa "ترانهاد"
+pub func Transpose(note: int, semitones: int): int:
+ret note + semitones
+end
+@en "Interval"
+@fa "فاصله"
+pub func Interval(low: int, high: int): int:
+ret high - low
+end
+@en "NoteName"
+@fa "نام نت"
+pub func NoteName(note: int): str:
+pc := PitchClass(note)
+mut sb := str.NewBuilder()
+str.BufAppendCp(sb, _SHARP_NAMES[pc])
+if _SHARP_MARK[pc] == 1:
+str.BufAppendCp(sb, 35)
+end
+oct := Octave(note)
+if oct < 0:
+str.BufAppendCp(sb, 45)
+str.BufAppendInt(sb, (0 - oct) as i64)
+else:
+str.BufAppendInt(sb, oct as i64)
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+ret out
+end
+@en "ParseNote"
+@fa "خواندن نام نت"
+pub func ParseNote(name: str): int:
+mut cps := str.CodePoints(name)
+if cps.len() == 0:
+cps.free()
+ret -1
+end
+mut letter := cps.get(0)
+if letter >= 97 and letter <= 122:
+letter -= 32
+end
+mut base := -1
+if letter == 67:
+base = 0
+else letter == 68:
+base = 2
+else letter == 69:
+base = 4
+else letter == 70:
+base = 5
+else letter == 71:
+base = 7
+else letter == 65:
+base = 9
+else letter == 66:
+base = 11
+end
+if base < 0:
+cps.free()
+ret -1
+end
+mut i := 1
+until i < cps.len():
+c := cps.get(i)
+if c == 35:
+base += 1
+i += 1
+else c == 98 and i == 1:
+base -= 1
+i += 1
+else:
+break
+end
+end
+mut neg := false
+if i < cps.len() and cps.get(i) == 45:
+neg = true
+i += 1
+end
+mut oct := 0
+mut have := false
+until i < cps.len():
+c := cps.get(i)
+if c >= 48 and c <= 57:
+oct = oct * 10 + (c - 48)
+have = true
+i += 1
+else:
+break
+end
+end
+cps.free()
+if not have:
+ret -1
+end
+if neg:
+oct = 0 - oct
+end
+ret (oct + 1) * 12 + base
+end
+@en "Scale"
+@fa "گام"
+pub func Scale(kind: int): Vector<int>:
+mut out := Vector {} as Vector<int>
+if kind == ScaleMajor:
+each v in [0, 2, 4, 5, 7, 9, 11]:
+out.push(v)
+end
+else kind == ScaleMinor:
+each v in [0, 2, 3, 5, 7, 8, 10]:
+out.push(v)
+end
+else kind == ScaleHarmonicMinor:
+each v in [0, 2, 3, 5, 7, 8, 11]:
+out.push(v)
+end
+else kind == ScaleMelodicMinor:
+each v in [0, 2, 3, 5, 7, 9, 11]:
+out.push(v)
+end
+else kind == ScalePentatonic:
+each v in [0, 2, 4, 7, 9]:
+out.push(v)
+end
+else kind == ScalePentatonicMinor:
+each v in [0, 3, 5, 7, 10]:
+out.push(v)
+end
+else kind == ScaleBlues:
+each v in [0, 3, 5, 6, 7, 10]:
+out.push(v)
+end
+else kind == ScaleChromatic:
+each v in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]:
+out.push(v)
+end
+else kind == ScaleDorian:
+each v in [0, 2, 3, 5, 7, 9, 10]:
+out.push(v)
+end
+else kind == ScalePhrygian:
+each v in [0, 1, 3, 5, 7, 8, 10]:
+out.push(v)
+end
+else kind == ScaleLydian:
+each v in [0, 2, 4, 6, 7, 9, 11]:
+out.push(v)
+end
+else kind == ScaleMixolydian:
+each v in [0, 2, 4, 5, 7, 9, 10]:
+out.push(v)
+end
+else kind == ScaleLocrian:
+each v in [0, 1, 3, 5, 6, 8, 10]:
+out.push(v)
+end
+else kind == ScaleWholeTone:
+each v in [0, 2, 4, 6, 8, 10]:
+out.push(v)
+end
+end
+ret out
+end
+@en "ScaleNotes"
+@fa "نت‌های گام"
+pub func ScaleNotes(root: int, kind: int, count: int): Vector<int>:
+mut out := Vector {} as Vector<int>
+mut steps := Scale(kind)
+if steps.len() == 0 or count <= 0:
+steps.free()
+ret out
+end
+mut i := 0
+until i < count:
+deg := i % steps.len()
+oct := i / steps.len()
+out.push(root + steps.get(deg) + 12 * oct)
+i += 1
+end
+steps.free()
+ret out
+end
+@en "Chord"
+@fa "آکورد"
+pub func Chord(kind: int): Vector<int>:
+mut out := Vector {} as Vector<int>
+if kind == ChordMajor:
+each v in [0, 4, 7]:
+out.push(v)
+end
+else kind == ChordMinor:
+each v in [0, 3, 7]:
+out.push(v)
+end
+else kind == ChordDiminished:
+each v in [0, 3, 6]:
+out.push(v)
+end
+else kind == ChordAugmented:
+each v in [0, 4, 8]:
+out.push(v)
+end
+else kind == ChordSus2:
+each v in [0, 2, 7]:
+out.push(v)
+end
+else kind == ChordSus4:
+each v in [0, 5, 7]:
+out.push(v)
+end
+else kind == ChordMajor7:
+each v in [0, 4, 7, 11]:
+out.push(v)
+end
+else kind == ChordMinor7:
+each v in [0, 3, 7, 10]:
+out.push(v)
+end
+else kind == ChordDominant7:
+each v in [0, 4, 7, 10]:
+out.push(v)
+end
+else kind == ChordDiminished7:
+each v in [0, 3, 6, 9]:
+out.push(v)
+end
+end
+ret out
+end
+@en "ChordNotes"
+@fa "نت‌های آکورد"
+pub func ChordNotes(root: int, kind: int): Vector<int>:
+mut out := Vector {} as Vector<int>
+mut steps := Chord(kind)
+each s in steps:
+out.push(root + s)
+end
+steps.free()
+ret out
+end
+@en "Dastgah"
+@fa "دستگاه"
+pub func Dastgah(kind: int): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+if kind == DastgahShur:
+each v in [0.0, 200.0, 350.0, 500.0, 700.0, 800.0, 1000.0]:
+out.push(v)
+end
+else kind == DastgahMahur:
+each v in [0.0, 200.0, 400.0, 500.0, 700.0, 900.0, 1100.0]:
+out.push(v)
+end
+else kind == DastgahHomayoun:
+each v in [0.0, 150.0, 400.0, 500.0, 700.0, 800.0, 1100.0]:
+out.push(v)
+end
+else kind == DastgahSegah:
+each v in [0.0, 150.0, 350.0, 500.0, 650.0, 900.0, 1050.0]:
+out.push(v)
+end
+else kind == DastgahChahargah:
+each v in [0.0, 150.0, 400.0, 500.0, 700.0, 850.0, 1100.0]:
+out.push(v)
+end
+else kind == DastgahNava:
+each v in [0.0, 200.0, 350.0, 500.0, 700.0, 850.0, 1000.0]:
+out.push(v)
+end
+else kind == DastgahRastPanjgah:
+each v in [0.0, 200.0, 400.0, 500.0, 700.0, 850.0, 1100.0]:
+out.push(v)
+end
+end
+ret out
+end
+@en "DastgahFreqs"
+@fa "بسامدهای دستگاه"
+pub func DastgahFreqs(root: int, kind: int): Vector<f64>:
+mut out := Vector {} as Vector<f64>
+mut cents := Dastgah(kind)
+each c in cents:
+out.push(NoteToFreqCents(root, c))
+end
+cents.free()
+ret out
+end
+@en "JustRatio"
+@fa "نسبت طبیعی"
+pub func JustRatio(degree: int): f64:
+mut d := degree % 12
+if d < 0:
+d += 12
+end
+if d == 0:
+ret 1.0
+end
+if d == 1:
+ret 16.0 / 15.0
+end
+if d == 2:
+ret 9.0 / 8.0
+end
+if d == 3:
+ret 6.0 / 5.0
+end
+if d == 4:
+ret 5.0 / 4.0
+end
+if d == 5:
+ret 4.0 / 3.0
+end
+if d == 6:
+ret 45.0 / 32.0
+end
+if d == 7:
+ret 3.0 / 2.0
+end
+if d == 8:
+ret 8.0 / 5.0
+end
+if d == 9:
+ret 5.0 / 3.0
+end
+if d == 10:
+ret 9.0 / 5.0
+end
+ret 15.0 / 8.0
+end
+@en "JustFreq"
+@fa "بسامد طبیعی"
+pub func JustFreq(root: int, degree: int): f64:
+base := NoteToFreq(root)
+oct := degree / 12
+ret base * JustRatio(degree) * _pow2(oct as f64)
+end
+@en "PythagoreanRatio"
+@fa "نسبت فیثاغورسی"
+pub func PythagoreanRatio(degree: int): f64:
+mut d := degree % 12
+if d < 0:
+d += 12
+end
+if d == 0:
+ret 1.0
+end
+if d == 1:
+ret 256.0 / 243.0
+end
+if d == 2:
+ret 9.0 / 8.0
+end
+if d == 3:
+ret 32.0 / 27.0
+end
+if d == 4:
+ret 81.0 / 64.0
+end
+if d == 5:
+ret 4.0 / 3.0
+end
+if d == 6:
+ret 729.0 / 512.0
+end
+if d == 7:
+ret 3.0 / 2.0
+end
+if d == 8:
+ret 128.0 / 81.0
+end
+if d == 9:
+ret 27.0 / 16.0
+end
+if d == 10:
+ret 16.0 / 9.0
+end
+ret 243.0 / 128.0
+end
+@en "Cents"
+@fa "سنت"
+pub func Cents(a: f64, b: f64): f64:
+if a <= 0.0 or b <= 0.0:
+ret 0.0
+end
+ret 1200.0 * math.Log2(b / a)
+end
+@en "BeatSeconds"
+@fa "ثانیه ضربه"
+pub func BeatSeconds(bpm: f64): f64:
+if bpm <= 0.0:
+ret 0.0
+end
+ret 60.0 / bpm
+end
+package audio
+import compress
+import encoding.binary
+const _S8 := 128.0
+const _S16 := 32768.0
+const _S24 := 8388608.0
+const _S32 := 2147483648.0
+const _BIAS := 132
+const _CLIP_MU := 8159
+const _SEG_UEND := [63, 127, 255, 511, 1023, 2047, 4095, 8191]
+const _SEG_AEND := [31, 63, 127, 255, 511, 1023, 2047, 4095]
+func _search(val: int, ends: int[]): int:
+mut i := 0
+until i < 8:
+if val <= ends[i]:
+ret i
+end
+i += 1
+end
+ret 8
+end
+func _i16(p: void*, off: int, big: bool): int:
+bp := p as u8*
+mut v := 0
+if big:
+v = ((bp[off] as int) << 8) | (bp[off + 1] as int)
+else:
+v = (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+if v >= 32768:
+ret v - 65536
+end
+ret v
+end
+func _i24(p: void*, off: int, big: bool): int:
+bp := p as u8*
+mut v := 0
+if big:
+v = ((bp[off] as int) << 16) | ((bp[off + 1] as int) << 8) | (bp[off + 2] as int)
+else:
+v = (bp[off] as int) | ((bp[off + 1] as int) << 8) | ((bp[off + 2] as int) << 16)
+end
+if v >= 8388608:
+ret v - 16777216
+end
+ret v
+end
+func _i32(p: void*, off: int, big: bool): i64:
+bp := p as u8*
+mut v := 0 as i64
+if big:
+v = ((bp[off] as i64) << 24) | ((bp[off + 1] as i64) << 16) | ((bp[off + 2] as i64) << 8) | (bp[off + 3] as i64)
+else:
+v = (bp[off] as i64) | ((bp[off + 1] as i64) << 8) | ((bp[off + 2] as i64) << 16) | ((bp[off + 3] as i64) << 24)
+end
+if v >= (2147483648 as i64):
+ret v - (4294967296 as i64)
+end
+ret v
+end
+func _q(v: f64, hi: f64, lo: f64): f64:
+mut x := v
+if x >= 0.0:
+x = x + 0.5
+else:
+x = x - 0.5
+end
+x = x as int as f64
+if x > hi:
+x = hi
+end
+if x < lo:
+x = lo
+end
+ret x
+end
+func _clamp1(v: f64): f64:
+if v > 1.0:
+ret 1.0
+end
+if v < -1.0:
+ret -1.0
+end
+ret v
+end
+@en "MuLawToPcm"
+@fa "میولا به پی‌سی‌ام"
+pub func MuLawToPcm(b: int): int:
+u := (~b) & 255
+mut t := (((u & 15) << 3) + _BIAS) << ((u & 112) >> 4)
+t -= _BIAS
+if (u & 128) != 0:
+ret 0 - t
+end
+ret t
+end
+@en "PcmToMuLaw"
+@fa "پی‌سی‌ام به میولا"
+pub func PcmToMuLaw(sample: int): int:
+mut p := sample >> 2
+mut mask := 255
+if p < 0:
+p = 0 - p
+mask = 127
+end
+if p > _CLIP_MU:
+p = _CLIP_MU
+end
+p += _BIAS >> 2
+seg := _search(p, _SEG_UEND)
+if seg >= 8:
+ret (127 ^ mask) & 255
+end
+ret (((seg << 4) | ((p >> (seg + 1)) & 15)) ^ mask) & 255
+end
+@en "ALawToPcm"
+@fa "ای‌لا به پی‌سی‌ام"
+pub func ALawToPcm(b: int): int:
+a := b ^ 85
+mut t := (a & 15) << 4
+seg := (a & 112) >> 4
+if seg == 0:
+t += 8
+else seg == 1:
+t += 264
+else:
+t = (t + 264) << (seg - 1)
+end
+if (a & 128) != 0:
+ret t
+end
+ret 0 - t
+end
+@en "PcmToALaw"
+@fa "پی‌سی‌ام به ای‌لا"
+pub func PcmToALaw(sample: int): int:
+mut p := sample >> 3
+mut mask := 213
+if p < 0:
+p = 0 - p - 1
+mask = 85
+end
+seg := _search(p, _SEG_AEND)
+if seg >= 8:
+ret (127 ^ mask) & 255
+end
+mut aval := seg << 4
+if seg < 2:
+aval = aval | ((p >> 1) & 15)
+else:
+aval = aval | ((p >> seg) & 15)
+end
+ret (aval ^ mask) & 255
+end
+@en "PcmDepthValid"
+@fa "عمق پی‌سی‌ام معتبر"
+pub func PcmDepthValid(bits: int): bool:
+ret bits == 8 or bits == 16 or bits == 24 or bits == 32
+end
+@en "DecodePcm"
+@fa "کدگشایی پی‌سی‌ام"
+pub func DecodePcm(p: void*, off: int, c &: Clip, bits: int, big: bool, unsigned8: bool): bool:
+if c.samples == null or not PcmDepthValid(bits):
+ret false
+end
+dst := Data(c)
+n := SampleCount(c)
+step := bits / 8
+bp := p as u8*
+mut i := 0
+until i < n:
+at := off + i * step
+if bits == 8:
+raw := bp[at] as int
+if unsigned8:
+dst[i] = ((raw - 128) as f64 / _S8) as f32
+else:
+mut s := raw
+if s >= 128:
+s -= 256
+end
+dst[i] = ((s as f64) / _S8) as f32
+end
+else bits == 16:
+dst[i] = ((_i16(p, at, big) as f64) / _S16) as f32
+else bits == 24:
+dst[i] = ((_i24(p, at, big) as f64) / _S24) as f32
+else:
+dst[i] = ((_i32(p, at, big) as f64) / _S32) as f32
+end
+i += 1
+end
+ret true
+end
+@en "DecodeFloatPcm"
+@fa "کدگشایی اعشاری"
+pub func DecodeFloatPcm(p: void*, total: int, off: int, c &: Clip, bits: int, big: bool): bool:
+if c.samples == null or (bits != 32 and bits != 64):
+ret false
+end
+dst := Data(c)
+n := SampleCount(c)
+mut rd := compress.NewByteReader(p, total)
+rd.pos = off
+mut i := 0
+until i < n:
+if bits == 32:
+dst[i] = binary.ReadF32(rd, big) as f32
+else:
+dst[i] = binary.ReadF64(rd, big) as f32
+end
+i += 1
+end
+ret not rd.bad
+end
+@en "DecodeLawPcm"
+@fa "کدگشایی فشرده"
+pub func DecodeLawPcm(p: void*, off: int, c &: Clip, alaw: bool): bool:
+if c.samples == null:
+ret false
+end
+dst := Data(c)
+n := SampleCount(c)
+bp := p as u8*
+mut i := 0
+until i < n:
+b := bp[off + i] as int
+mut v := 0
+if alaw:
+v = ALawToPcm(b)
+else:
+v = MuLawToPcm(b)
+end
+dst[i] = ((v as f64) / _S16) as f32
+i += 1
+end
+ret true
+end
+@en "EncodePcm"
+@fa "کدگذاری پی‌سی‌ام"
+pub func EncodePcm(b &: compress.ByteBuf, c: Clip, bits: int, big: bool, unsigned8: bool):
+if IsEmpty(c) or not PcmDepthValid(bits):
+ret
+end
+src := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+x := _clamp1(src[i] as f64)
+if bits == 8:
+if unsigned8:
+mut q := (x * _S8 + 128.5) as int
+if q > 255:
+q = 255
+end
+if q < 0:
+q = 0
+end
+compress.BufPush(b, q)
+else:
+q := _q(x * _S8, 127.0, -128.0) as int
+compress.BufPush(b, q & 255)
+end
+else bits == 16:
+q := _q(x * _S16, 32767.0, -32768.0) as int
+if big:
+binary.WriteI16BE(b, q)
+else:
+binary.WriteI16LE(b, q)
+end
+else bits == 24:
+q := _q(x * _S24, 8388607.0, -8388608.0) as int
+mut u := q
+if u < 0:
+u += 16777216
+end
+if big:
+compress.BufPush(b, (u >> 16) & 255)
+compress.BufPush(b, (u >> 8) & 255)
+compress.BufPush(b, u & 255)
+else:
+compress.BufPush(b, u & 255)
+compress.BufPush(b, (u >> 8) & 255)
+compress.BufPush(b, (u >> 16) & 255)
+end
+else:
+q := _q(x * _S32, 2147483647.0, -2147483648.0) as int
+if big:
+binary.WriteI32BE(b, q)
+else:
+binary.WriteI32LE(b, q)
+end
+end
+i += 1
+end
+end
+@en "EncodeFloatPcm"
+@fa "کدگذاری اعشاری"
+pub func EncodeFloatPcm(b &: compress.ByteBuf, c: Clip, bits: int, big: bool):
+if IsEmpty(c):
+ret
+end
+src := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+if bits == 64:
+binary.WriteF64(b, src[i] as f64, big)
+else:
+binary.WriteF32(b, src[i] as f64, big)
+end
+i += 1
+end
+end
+@en "EncodeLawPcm"
+@fa "کدگذاری فشرده"
+pub func EncodeLawPcm(b &: compress.ByteBuf, c: Clip, alaw: bool):
+if IsEmpty(c):
+ret
+end
+src := Data(c)
+n := SampleCount(c)
+mut i := 0
+until i < n:
+q := _q(_clamp1(src[i] as f64) * _S16, 32767.0, -32768.0) as int
+if alaw:
+compress.BufPush(b, PcmToALaw(q))
+else:
+compress.BufPush(b, PcmToMuLaw(q))
+end
+i += 1
+end
+end
+@en "synth"
+@fa "صداساز"
+package synth
+import audio
+import math
+import mem
+import rand
+@en "WaveSine"
+@fa "موج سینوسی"
+pub const WaveSine := 0
+@en "WaveSquare"
+@fa "موج مربعی"
+pub const WaveSquare := 1
+@en "WaveSaw"
+@fa "موج اره‌ای"
+pub const WaveSaw := 2
+@en "WaveTriangle"
+@fa "موج مثلثی"
+pub const WaveTriangle := 3
+@en "WaveNoise"
+@fa "موج نوفه"
+pub const WaveNoise := 4
+@en "WavePulse"
+@fa "موج تپی"
+pub const WavePulse := 5
+@en "Osc"
+@fa "نوساز"
+pub struct Osc:
+@en "wave"
+@fa "موج"
+pub wave: int = 0
+@en "freq"
+@fa "بسامد"
+pub freq: f64 = 440.0
+@en "phase"
+@fa "فاز"
+pub phase: f64 = 0.0
+@en "duty"
+@fa "چرخه کار"
+pub duty: f64 = 0.5
+@en "rate"
+@fa "نرخ"
+pub rate: int = 44100
+end
+@en "ADSR"
+@fa "پوشش"
+pub struct ADSR:
+@en "attack"
+@fa "حمله"
+pub attack: f64 = 0.01
+@en "decay"
+@fa "افت"
+pub decay: f64 = 0.05
+@en "sustain"
+@fa "پایداری"
+pub sustain: f64 = 0.7
+@en "release"
+@fa "رهایش"
+pub release: f64 = 0.1
+end
+@en "Note"
+@fa "نت"
+pub struct Note:
+@en "note"
+@fa "شماره نت"
+pub note: int = 60
+@en "start"
+@fa "آغاز"
+pub start: f64 = 0.0
+@en "length"
+@fa "درازی"
+pub length: f64 = 0.5
+@en "gain"
+@fa "بهره"
+pub gain: f64 = 0.5
+@en "wave"
+@fa "موج"
+pub wave: int = 0
+@en "pan"
+@fa "میزان چپ راست"
+pub pan: f64 = 0.5
+end
+func _frac(x: f64): f64:
+ret x - math.Floor(x)
+end
+func _wave_at(wave: int, phase: f64, duty: f64): f64:
+p := _frac(phase)
+if wave == WaveSine:
+ret math.Sin(2.0 * math.PI * p)
+end
+if wave == WaveSquare:
+ret p < 0.5 ? 1.0 : -1.0
+end
+if wave == WavePulse:
+ret p < duty ? 1.0 : -1.0
+end
+if wave == WaveSaw:
+ret 2.0 * p - 1.0
+end
+if wave == WaveTriangle:
+ret p < 0.5 ? (4.0 * p - 1.0) : (3.0 - 4.0 * p)
+end
+if wave == WaveNoise:
+ret rand.FloatRange(-1.0, 1.0)
+end
+ret 0.0
+end
+@en "NewOsc"
+@fa "نوساز جدید"
+pub func NewOsc(wave: int, freq: f64, rate: int): Osc:
+ret Osc { wave = wave, freq = freq, rate = rate }
+end
+@en "OscNext"
+@fa "نمونه بعدی نوساز"
+pub func OscNext(o &: Osc): f64:
+v := _wave_at(o.wave, o.phase, o.duty)
+if o.rate > 0:
+o.phase += o.freq / (o.rate as f64)
+if o.phase >= 1.0:
+o.phase -= math.Floor(o.phase)
+end
+end
+ret v
+end
+@en "WaveValue"
+@fa "مقدار موج"
+pub func WaveValue(wave: int, phase: f64, duty: f64): f64:
+ret _wave_at(wave, phase, duty)
+end
+@en "ADSRAt"
+@fa "پوشش در زمان"
+pub func ADSRAt(e: ADSR, t: f64, held: f64): f64:
+if t < 0.0:
+ret 0.0
+end
+if t < e.attack:
+if e.attack <= 0.0:
+ret 1.0
+end
+ret t / e.attack
+end
+d := t - e.attack
+if d < e.decay:
+if e.decay <= 0.0:
+ret e.sustain
+end
+ret 1.0 + (e.sustain - 1.0) * (d / e.decay)
+end
+if t < held:
+ret e.sustain
+end
+r := t - held
+if r < e.release:
+if e.release <= 0.0:
+ret 0.0
+end
+ret e.sustain * (1.0 - r / e.release)
+end
+ret 0.0
+end
+@en "ADSRTotal"
+@fa "درازی کل پوشش"
+pub func ADSRTotal(e: ADSR, held: f64): f64:
+mut h := held
+if h < e.attack + e.decay:
+h = e.attack + e.decay
+end
+ret h + e.release
+end
+@en "Tone"
+@fa "نوا"
+pub func Tone(freq: f64, seconds: f64, rate: int, wave: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c):
+ret c
+end
+mut o := NewOsc(wave, freq, rate)
+p := audio.Data(c)
+mut i := 0
+until i < c.frames:
+p[i] = OscNext(o) as f32
+i += 1
+end
+ret c
+end
+@en "ToneEnvelope"
+@fa "نوا با پوشش"
+pub func ToneEnvelope(freq: f64, seconds: f64, rate: int, wave: int, e: ADSR, gain: f64): audio.Clip:
+total := ADSRTotal(e, seconds)
+c := audio.NewSilence(rate, 1, total)
+if audio.IsEmpty(c):
+ret c
+end
+mut o := NewOsc(wave, freq, rate)
+p := audio.Data(c)
+mut i := 0
+until i < c.frames:
+t := (i as f64) / (rate as f64)
+p[i] = (OscNext(o) * ADSRAt(e, t, seconds) * gain) as f32
+i += 1
+end
+ret c
+end
+@en "Chord"
+@fa "آکورد"
+pub func Chord(freqs: Vector<f64>, seconds: f64, rate: int, wave: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c) or freqs.len() == 0:
+ret c
+end
+scale := 1.0 / (freqs.len() as f64)
+p := audio.Data(c)
+each f in freqs:
+mut o := NewOsc(wave, f, rate)
+mut i := 0
+until i < c.frames:
+p[i] = ((p[i] as f64) + OscNext(o) * scale) as f32
+i += 1
+end
+end
+ret c
+end
+@en "NoiseWhite"
+@fa "نوفه سپید"
+pub func NoiseWhite(seconds: f64, rate: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c):
+ret c
+end
+p := audio.Data(c)
+mut i := 0
+until i < c.frames:
+p[i] = rand.FloatRange(-1.0, 1.0) as f32
+i += 1
+end
+ret c
+end
+@en "NoisePink"
+@fa "نوفه صورتی"
+pub func NoisePink(seconds: f64, rate: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c):
+ret c
+end
+p := audio.Data(c)
+mut b0 := 0.0
+mut b1 := 0.0
+mut b2 := 0.0
+mut i := 0
+until i < c.frames:
+w := rand.FloatRange(-1.0, 1.0)
+b0 = 0.99765 * b0 + w * 0.0990460
+b1 = 0.96300 * b1 + w * 0.2965164
+b2 = 0.57000 * b2 + w * 1.0526913
+p[i] = ((b0 + b1 + b2 + w * 0.1848) * 0.4) as f32
+i += 1
+end
+ret c
+end
+@en "NoiseBrown"
+@fa "نوفه قهوه‌ای"
+pub func NoiseBrown(seconds: f64, rate: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c):
+ret c
+end
+p := audio.Data(c)
+mut last := 0.0
+mut i := 0
+until i < c.frames:
+w := rand.FloatRange(-1.0, 1.0)
+last = (last + 0.02 * w) / 1.02
+p[i] = (last * 3.5) as f32
+i += 1
+end
+ret c
+end
+@en "FMTone"
+@fa "نوا اف‌ام"
+pub func FMTone(carrier: f64, ratio: f64, index: f64, seconds: f64, rate: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c):
+ret c
+end
+p := audio.Data(c)
+mut i := 0
+until i < c.frames:
+t := (i as f64) / (rate as f64)
+m := math.Sin(2.0 * math.PI * carrier * ratio * t)
+p[i] = math.Sin(2.0 * math.PI * carrier * t + index * m) as f32
+i += 1
+end
+ret c
+end
+@en "Additive"
+@fa "افزایشی"
+pub func Additive(freq: f64, partials: int, decay: f64, seconds: f64, rate: int): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c) or partials <= 0:
+ret c
+end
+p := audio.Data(c)
+mut norm := 0.0
+mut k := 1
+until k < partials + 1:
+norm += math.Pow(decay, (k - 1) as f64)
+k += 1
+end
+if norm <= 0.0:
+ret c
+end
+mut h := 1
+until h < partials + 1:
+amp := math.Pow(decay, (h - 1) as f64) / norm
+f := freq * (h as f64)
+if f < (rate as f64) / 2.0:
+mut i := 0
+until i < c.frames:
+t := (i as f64) / (rate as f64)
+p[i] = ((p[i] as f64) + amp * math.Sin(2.0 * math.PI * f * t)) as f32
+i += 1
+end
+end
+h += 1
+end
+ret c
+end
+@en "KarplusStrong"
+@fa "کارپلوس استرانگ"
+pub func KarplusStrong(freq: f64, seconds: f64, rate: int, damping: f64): audio.Clip:
+c := audio.NewSilence(rate, 1, seconds)
+if audio.IsEmpty(c) or freq <= 0.0:
+ret c
+end
+n := ((rate as f64) / freq + 0.5) as int
+if n < 2:
+ret c
+end
+buf := mem.Allocate((n * 8) as u64) as f64*
+if buf == null:
+ret c
+end
+mut i := 0
+until i < n:
+buf[i] = rand.FloatRange(-1.0, 1.0)
+i += 1
+end
+p := audio.Data(c)
+mut at := 0
+mut f := 0
+until f < c.frames:
+v := buf[at]
+nxt := (at + 1) % n
+buf[at] = damping * 0.5 * (v + buf[nxt])
+p[f] = v as f32
+at = nxt
+f += 1
+end
+mem.Free(buf as void*)
+ret c
+end
+@en "RenderNotes"
+@fa "ساختن نت‌ها"
+pub func RenderNotes(notes: Vector<Note>, rate: int, channels: int, e: ADSR): audio.Clip:
+if notes.len() == 0 or rate <= 0 or channels <= 0:
+ret audio.Clip {}
+end
+mut span := 0.0
+each nt in notes:
+stop := nt.start + ADSRTotal(e, nt.length)
+if stop > span:
+span = stop
+end
+end
+out := audio.NewSilence(rate, channels, span)
+if audio.IsEmpty(out):
+ret out
+end
+p := audio.Data(out)
+each nt in notes:
+freq := 440.0 * math.Pow(2.0, ((nt.note - 69) as f64) / 12.0)
+mut o := NewOsc(nt.wave, freq, rate)
+first := (nt.start * (rate as f64)) as int
+span2 := ADSRTotal(e, nt.length)
+count := (span2 * (rate as f64)) as int
+mut i := 0
+until i < count:
+at := first + i
+if at >= out.frames:
+break
+end
+t := (i as f64) / (rate as f64)
+v := OscNext(o) * ADSRAt(e, t, nt.length) * nt.gain
+mut ch := 0
+until ch < channels:
+mut g := 1.0
+if channels == 2:
+g = ch == 0 ? (1.0 - nt.pan) : nt.pan
+g = g * 2.0
+end
+idx := at * channels + ch
+p[idx] = ((p[idx] as f64) + v * g) as f32
+ch += 1
+end
+i += 1
+end
+end
+ret out
+end
+@en "NoteAt"
+@fa "نت در"
+pub func NoteAt(note: int, start: f64, length: f64, gain: f64, wave: int): Note:
+ret Note { note = note, start = start, length = length, gain = gain, wave = wave }
+end
+@en "tag"
+@fa "برچسب صدا"
+package tag
+import audio
+import compress
+import archive
+import str
+import mem
+@en "Tags"
+@fa "برچسب‌ها"
+pub struct Tags:
+@en "title"
+@fa "عنوان"
+pub title: str = ""
+@en "artist"
+@fa "هنرمند"
+pub artist: str = ""
+@en "album"
+@fa "آلبوم"
+pub album: str = ""
+@en "albumartist"
+@fa "هنرمند آلبوم"
+pub albumartist: str = ""
+@en "composer"
+@fa "آهنگساز"
+pub composer: str = ""
+@en "genre"
+@fa "سبک"
+pub genre: str = ""
+@en "comment"
+@fa "یادداشت"
+pub comment: str = ""
+@en "lyrics"
+@fa "ترانه"
+pub lyrics: str = ""
+@en "art_mime"
+@fa "گونه هنر"
+pub art_mime: str = ""
+@en "year"
+@fa "سال"
+pub year: int = 0
+@en "track"
+@fa "شماره قطعه"
+pub track: int = 0
+@en "tracks"
+@fa "شمار قطعه‌ها"
+pub tracks: int = 0
+@en "disc"
+@fa "شماره دیسک"
+pub disc: int = 0
+@en "bpm"
+@fa "ضربان"
+pub bpm: int = 0
+@en "art"
+@fa "هنر"
+pub art: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+end
+func _decimal_len(v: int): int:
+if v <= 0:
+ret 1
+end
+mut n := 0
+mut x := v
+until x > 0:
+n += 1
+x = x / 10
+end
+ret n
+end
+func _push_decimal(b &: compress.ByteBuf, v: int):
+if v <= 0:
+compress.BufPush(b, 48)
+ret
+end
+mut digits: int[12]
+mut n := 0
+mut x := v
+until x > 0:
+digits[n] = 48 + (x % 10)
+n += 1
+x = x / 10
+if n >= 12:
+break
+end
+end
+mut i := n - 1
+until i >= 0:
+compress.BufPush(b, digits[i])
+i -= 1
+end
+end
+func _free_one(s: str):
+if s.len() > 0:
+mem.Free(s as void*)
+end
+end
+func _trim_pad(p: void*, off: int, max: int): str:
+bp := p as u8*
+mut last := -1
+mut i := 0
+until i < max:
+b := bp[off + i] as int
+if b != 0 and b != 32:
+last = i
+end
+i += 1
+end
+if last < 0:
+ret ""
+end
+mut sb := str.NewBuilder()
+mut j := 0
+until j < last + 1:
+b := bp[off + j] as int
+if b != 0:
+str.BufAppendCp(sb, b)
+end
+j += 1
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+if out.len() == 0:
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+func _digits(p: void*, off: int, max: int): int:
+bp := p as u8*
+mut v := 0
+mut i := 0
+until i < max:
+b := bp[off + i] as int
+if b >= 48 and b <= 57:
+v = v * 10 + (b - 48)
+end
+i += 1
+end
+ret v
+end
+func _push_fixed(b &: compress.ByteBuf, s: str, width: int):
+cps := str.CodePoints(s)
+mut i := 0
+until i < width:
+if i < cps.len():
+cp := cps.get(i)
+if cp < 256:
+compress.BufPush(b, cp)
+else:
+compress.BufPush(b, 63)
+end
+else:
+compress.BufPush(b, 0)
+end
+i += 1
+end
+cps.free()
+end
+func _push_year(b &: compress.ByteBuf, year: int):
+if year <= 0 or year > 9999:
+mut i := 0
+until i < 4:
+compress.BufPush(b, 0)
+i += 1
+end
+ret
+end
+compress.BufPush(b, 48 + (year / 1000) % 10)
+compress.BufPush(b, 48 + (year / 100) % 10)
+compress.BufPush(b, 48 + (year / 10) % 10)
+compress.BufPush(b, 48 + year % 10)
+end
+@en "GenreName"
+@fa "نام سبک"
+pub func GenreName(id: int): str:
+if id == 0:
+ret "Blues"
+end
+if id == 1:
+ret "Classic Rock"
+end
+if id == 2:
+ret "Country"
+end
+if id == 7:
+ret "Hip-Hop"
+end
+if id == 8:
+ret "Jazz"
+end
+if id == 9:
+ret "Metal"
+end
+if id == 12:
+ret "Other"
+end
+if id == 13:
+ret "Pop"
+end
+if id == 17:
+ret "Rock"
+end
+if id == 20:
+ret "Alternative"
+end
+if id == 24:
+ret "Soundtrack"
+end
+if id == 32:
+ret "Classical"
+end
+if id == 52:
+ret "Electronic"
+end
+if id == 77:
+ret "Folk"
+end
+ret ""
+end
+@en "NewTags"
+@fa "برچسب‌های جدید"
+pub func NewTags(): Tags:
+ret Tags {}
+end
+@en "FreeTags"
+@fa "آزادسازی برچسب‌ها"
+pub func FreeTags(t &: Tags):
+_free_one(t.title)
+_free_one(t.artist)
+_free_one(t.album)
+_free_one(t.albumartist)
+_free_one(t.composer)
+_free_one(t.genre)
+_free_one(t.comment)
+_free_one(t.lyrics)
+_free_one(t.art_mime)
+t.title = ""
+t.artist = ""
+t.album = ""
+t.albumartist = ""
+t.composer = ""
+t.genre = ""
+t.comment = ""
+t.lyrics = ""
+t.art_mime = ""
+compress.BufFree(t.art)
+t.year = 0
+t.track = 0
+t.tracks = 0
+t.disc = 0
+t.bpm = 0
+end
+@en "HasTags"
+@fa "برچسب دارد"
+pub func HasTags(t: Tags): bool:
+ret t.title.len() > 0 or t.artist.len() > 0 or t.album.len() > 0 or t.year > 0 or t.track > 0
+end
+@en "HasID3v1"
+@fa "آی‌دی۳ یک دارد"
+pub func HasID3v1(p: void*, n: int): bool:
+if n < 128:
+ret false
+end
+bp := p as u8*
+at := n - 128
+ret (bp[at] as int) == 84 and (bp[at + 1] as int) == 65 and (bp[at + 2] as int) == 71
+end
+@en "ReadID3v1"
+@fa "خواندن آی‌دی۳ یک"
+pub func ReadID3v1(p: void*, n: int, out &: Tags): bool:
+if not HasID3v1(p, n):
+ret false
+end
+at := n - 128
+bp := p as u8*
+out.title = _trim_pad(p, at + 3, 30)
+out.artist = _trim_pad(p, at + 33, 30)
+out.album = _trim_pad(p, at + 63, 30)
+out.year = _digits(p, at + 93, 4)
+zero_at := bp[at + 125] as int
+trk := bp[at + 126] as int
+if zero_at == 0 and trk != 0:
+out.comment = _trim_pad(p, at + 97, 28)
+out.track = trk
+else:
+out.comment = _trim_pad(p, at + 97, 30)
+end
+g := bp[at + 127] as int
+name := GenreName(g)
+if name.len() > 0:
+out.genre = str.Clone(name)
+end
+ret true
+end
+@en "WriteID3v1"
+@fa "نوشتن آی‌دی۳ یک"
+pub func WriteID3v1(t: Tags): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+compress.BufPush(out, 84)
+compress.BufPush(out, 65)
+compress.BufPush(out, 71)
+_push_fixed(out, t.title, 30)
+_push_fixed(out, t.artist, 30)
+_push_fixed(out, t.album, 30)
+_push_year(out, t.year)
+_push_fixed(out, t.comment, 28)
+compress.BufPush(out, 0)
+mut trk := t.track
+if trk < 0 or trk > 255:
+trk = 0
+end
+compress.BufPush(out, trk)
+compress.BufPush(out, 255)
+ret out
+end
+@en "ReadTags"
+@fa "خواندن برچسب‌ها"
+pub func ReadTags(p: void*, n: int, ok &: bool): Tags:
+ok = false
+mut t := Tags {}
+mut any := false
+if HasID3v2(p, n):
+if ReadID3v2(p, n, t):
+any = true
+end
+end
+if IsFlacTagged(p, n):
+if ReadFlacTags(p, n, t):
+any = true
+end
+end
+if not any:
+if ReadID3v1(p, n, t):
+any = true
+end
+end
+ok = any
+ret t
+end
+@en "ReadTagsFile"
+@fa "خواندن برچسب‌های پرونده"
+pub func ReadTagsFile(path: str, ok &: bool): Tags:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret Tags {}
+end
+out := ReadTags(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "StripTags"
+@fa "برداشتن برچسب‌ها"
+pub func StripTags(p: void*, n: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+mut start := 0
+mut stop := n
+if HasID3v2(p, n):
+start = ID3v2Size(p, n)
+end
+if HasID3v1(p, n):
+stop = n - 128
+end
+if stop < start:
+stop = start
+end
+bp := p as u8*
+mut i := start
+until i < stop:
+compress.BufPush(out, bp[i] as int)
+i += 1
+end
+ret out
+end
+@en "AudioStart"
+@fa "آغاز صدا"
+pub func AudioStart(p: void*, n: int): int:
+if HasID3v2(p, n):
+ret ID3v2Size(p, n)
+end
+ret 0
+end
+@en "AudioEnd"
+@fa "پایان صدا"
+pub func AudioEnd(p: void*, n: int): int:
+if HasID3v1(p, n):
+ret n - 128
+end
+ret n
+end
+package tag
+import compress
+import str
+import mem
+@en "EncLatin1"
+@fa "رمز لاتین"
+pub const EncLatin1 := 0
+@en "EncUtf16"
+@fa "رمز یونی۱۶"
+pub const EncUtf16 := 1
+@en "EncUtf16BE"
+@fa "رمز یونی۱۶ بزرگ"
+pub const EncUtf16BE := 2
+@en "EncUtf8"
+@fa "رمز یونی۸"
+pub const EncUtf8 := 3
+func _b(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _tag4(p: void*, off: int): int:
+ret (_b(p, off) << 24) | (_b(p, off + 1) << 16) | (_b(p, off + 2) << 8) | _b(p, off + 3)
+end
+func _id(a: int, b: int, c: int, d: int): int:
+ret (a << 24) | (b << 16) | (c << 8) | d
+end
+func _syncsafe(p: void*, off: int): int:
+ret ((_b(p, off) & 127) << 21) | ((_b(p, off + 1) & 127) << 14) | ((_b(p, off + 2) & 127) << 7) | (_b(p, off + 3) & 127)
+end
+func _be32(p: void*, off: int): int:
+ret (_b(p, off) << 24) | (_b(p, off + 1) << 16) | (_b(p, off + 2) << 8) | _b(p, off + 3)
+end
+func _be24(p: void*, off: int): int:
+ret (_b(p, off) << 16) | (_b(p, off + 1) << 8) | _b(p, off + 2)
+end
+func _decode_text(p: void*, off: int, len: int, encoding: int): str:
+if len <= 0:
+ret ""
+end
+mut sb := str.NewBuilder()
+if encoding == EncUtf8:
+str.BufFree(sb)
+mut raw := compress.NewByteBuf()
+mut i := 0
+until i < len:
+b := _b(p, off + i)
+if b == 0:
+break
+end
+compress.BufPush(raw, b)
+i += 1
+end
+out := compress.BufToStrUnsafe(raw)
+compress.BufFree(raw)
+if out.len() == 0:
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+if encoding == EncLatin1:
+mut i := 0
+until i < len:
+b := _b(p, off + i)
+if b == 0:
+break
+end
+str.BufAppendCp(sb, b)
+i += 1
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+if out.len() == 0:
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+mut at := off
+mut left := len
+mut big := encoding == EncUtf16BE
+if encoding == EncUtf16 and left >= 2:
+b0 := _b(p, at)
+b1 := _b(p, at + 1)
+if b0 == 255 and b1 == 254:
+big = false
+at += 2
+left -= 2
+else b0 == 254 and b1 == 255:
+big = true
+at += 2
+left -= 2
+end
+end
+mut i := 0
+until i + 1 < left:
+mut u := 0
+if big:
+u = (_b(p, at + i) << 8) | _b(p, at + i + 1)
+else:
+u = _b(p, at + i) | (_b(p, at + i + 1) << 8)
+end
+i += 2
+if u == 0:
+break
+end
+if u >= 0xD800 and u <= 0xDBFF and i + 1 < left:
+mut lo := 0
+if big:
+lo = (_b(p, at + i) << 8) | _b(p, at + i + 1)
+else:
+lo = _b(p, at + i) | (_b(p, at + i + 1) << 8)
+end
+if lo >= 0xDC00 and lo <= 0xDFFF:
+i += 2
+u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)
+end
+end
+str.BufAppendCp(sb, u)
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+if out.len() == 0:
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+func _take(dst &: str, text: str):
+if text.len() == 0:
+if text.len() == 0:
+ret
+end
+end
+if dst.len() > 0:
+mem.Free(text as void*)
+ret
+end
+dst = text
+end
+func _pair(text: str, first &: int, second &: int):
+cps := str.CodePoints(text)
+mut a := 0
+mut b := 0
+mut seen_slash := false
+mut i := 0
+until i < cps.len():
+cp := cps.get(i)
+if cp == 47:
+seen_slash = true
+else cp >= 48 and cp <= 57:
+if seen_slash:
+b = b * 10 + (cp - 48)
+else:
+a = a * 10 + (cp - 48)
+end
+end
+i += 1
+end
+cps.free()
+first = a
+second = b
+end
+func _int_of(text: str): int:
+cps := str.CodePoints(text)
+mut v := 0
+mut i := 0
+until i < cps.len():
+cp := cps.get(i)
+if cp >= 48 and cp <= 57:
+v = v * 10 + (cp - 48)
+end
+i += 1
+end
+cps.free()
+ret v
+end
+func _store(p: void*, data: int, size: int, id: int, major: int, out &: Tags): bool:
+enc := _b(p, data)
+text_at := data + 1
+text_len := size - 1
+if id == _id(84, 73, 84, 50) or id == _id(84, 84, 50, 32):
+_take(out.title, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 80, 69, 49) or id == _id(84, 80, 49, 32):
+_take(out.artist, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 65, 76, 66) or id == _id(84, 65, 76, 32):
+_take(out.album, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 80, 69, 50):
+_take(out.albumartist, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 67, 79, 77):
+_take(out.composer, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 67, 79, 78):
+_take(out.genre, _decode_text(p, text_at, text_len, enc))
+ret true
+end
+if id == _id(84, 89, 69, 82) or id == _id(84, 68, 82, 67) or id == _id(84, 89, 69, 32):
+v := _decode_text(p, text_at, text_len, enc)
+if out.year == 0:
+out.year = _int_of(v)
+end
+mem.Free(v as void*)
+ret true
+end
+if id == _id(84, 66, 80, 77):
+v := _decode_text(p, text_at, text_len, enc)
+if out.bpm == 0:
+out.bpm = _int_of(v)
+end
+mem.Free(v as void*)
+ret true
+end
+if id == _id(84, 82, 67, 75) or id == _id(84, 82, 75, 32):
+v := _decode_text(p, text_at, text_len, enc)
+mut a := 0
+mut b := 0
+_pair(v, a, b)
+if out.track == 0:
+out.track = a
+out.tracks = b
+end
+mem.Free(v as void*)
+ret true
+end
+if id == _id(84, 80, 79, 83):
+v := _decode_text(p, text_at, text_len, enc)
+mut a := 0
+mut b := 0
+_pair(v, a, b)
+if out.disc == 0:
+out.disc = a
+end
+mem.Free(v as void*)
+ret true
+end
+if id == _id(67, 79, 77, 77):
+if size > 4:
+mut skip := text_at + 3
+skip = _skip_term(p, skip, data + size, enc)
+_take(out.comment, _decode_text(p, skip, data + size - skip, enc))
+end
+ret true
+end
+if id == _id(85, 83, 76, 84):
+if size > 4:
+mut skip := text_at + 3
+skip = _skip_term(p, skip, data + size, enc)
+_take(out.lyrics, _decode_text(p, skip, data + size - skip, enc))
+end
+ret true
+end
+if id == _id(65, 80, 73, 67) and major >= 3:
+mut at2 := text_at
+mime := _decode_text(p, at2, data + size - at2, EncLatin1)
+at2 = _skip_term(p, at2, data + size, EncLatin1)
+if at2 < data + size:
+at2 += 1
+at2 = _skip_term(p, at2, data + size, enc)
+left := data + size - at2
+if left > 0 and out.art.len == 0:
+compress.BufPushBytes(out.art, ((p as i64) + (at2 as i64)) as void*, left)
+_take(out.art_mime, mime)
+ret true
+end
+end
+mem.Free(mime as void*)
+ret true
+end
+ret false
+end
+func _skip_term(p: void*, from: int, stop: int, encoding: int): int:
+mut i := from
+if encoding == EncUtf16 or encoding == EncUtf16BE:
+until i + 1 < stop:
+if _b(p, i) == 0 and _b(p, i + 1) == 0:
+ret i + 2
+end
+i += 2
+end
+ret stop
+end
+until i < stop:
+if _b(p, i) == 0:
+ret i + 1
+end
+i += 1
+end
+ret stop
+end
+func _byte_len(s: str): int:
+tmp := compress.BufFromStr(s)
+n := compress.BufLen(tmp)
+compress.BufFree(tmp)
+ret n
+end
+func _put_syncsafe(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, (v >> 21) & 127)
+compress.BufPush(b, (v >> 14) & 127)
+compress.BufPush(b, (v >> 7) & 127)
+compress.BufPush(b, v & 127)
+end
+func _frame(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, text: str):
+if text.len() == 0:
+ret
+end
+compress.BufPush(b, a)
+compress.BufPush(b, c)
+compress.BufPush(b, d)
+compress.BufPush(b, e)
+_put_syncsafe(b, _byte_len(text) + 1)
+compress.BufPush(b, 0)
+compress.BufPush(b, 0)
+compress.BufPush(b, EncUtf8)
+payload := compress.BufFromStr(text)
+compress.BufPushBuf(b, payload)
+compress.BufFree(payload)
+end
+func _frame_head(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, payload: int):
+compress.BufPush(b, a)
+compress.BufPush(b, c)
+compress.BufPush(b, d)
+compress.BufPush(b, e)
+_put_syncsafe(b, payload + 1)
+compress.BufPush(b, 0)
+compress.BufPush(b, 0)
+compress.BufPush(b, EncUtf8)
+end
+func _frame_int(b &: compress.ByteBuf, a: int, c: int, d: int, e: int, value: int):
+if value <= 0:
+ret
+end
+_frame_head(b, a, c, d, e, _decimal_len(value))
+_push_decimal(b, value)
+end
+@en "HasID3v2"
+@fa "آی‌دی۳ دو دارد"
+pub func HasID3v2(p: void*, n: int): bool:
+if n < 10:
+ret false
+end
+ret _b(p, 0) == 73 and _b(p, 1) == 68 and _b(p, 2) == 51 and _b(p, 3) < 255
+end
+@en "ID3v2Version"
+@fa "نگارش آی‌دی۳ دو"
+pub func ID3v2Version(p: void*, n: int): int:
+if not HasID3v2(p, n):
+ret 0
+end
+ret _b(p, 3)
+end
+@en "ID3v2Size"
+@fa "اندازه آی‌دی۳ دو"
+pub func ID3v2Size(p: void*, n: int): int:
+if not HasID3v2(p, n):
+ret 0
+end
+mut total := 10 + _syncsafe(p, 6)
+if (_b(p, 5) & 16) != 0:
+total += 10
+end
+if total > n:
+total = n
+end
+ret total
+end
+@en "ReadID3v2"
+@fa "خواندن آی‌دی۳ دو"
+pub func ReadID3v2(p: void*, n: int, out &: Tags): bool:
+if not HasID3v2(p, n):
+ret false
+end
+major := _b(p, 3)
+if major < 2 or major > 4:
+ret false
+end
+mut body := 10 + _syncsafe(p, 6)
+if body > n:
+body = n
+end
+mut at := 10
+if (_b(p, 5) & 64) != 0 and at + 4 <= n:
+ext := major == 4 ? _syncsafe(p, at) : _be32(p, at)
+at += ext + 4
+end
+id_len := major == 2 ? 3 : 4
+head := major == 2 ? 6 : 10
+mut found := false
+until at + head <= body:
+mut id := 0
+mut size := 0
+if major == 2:
+id = _id(_b(p, at), _b(p, at + 1), _b(p, at + 2), 32)
+size = _be24(p, at + 3)
+else:
+id = _tag4(p, at)
+if major == 4:
+size = _syncsafe(p, at + 4)
+else:
+size = _be32(p, at + 4)
+end
+end
+if id == 0 or size <= 0:
+break
+end
+data := at + head
+if data + size > body:
+break
+end
+if _store(p, data, size, id, major, out):
+found = true
+end
+at = data + size
+if id_len == 0:
+break
+end
+end
+ret found
+end
+@en "WriteID3v2"
+@fa "نوشتن آی‌دی۳ دو"
+pub func WriteID3v2(t: Tags): compress.ByteBuf:
+mut body := compress.NewByteBuf()
+_frame(body, 84, 73, 84, 50, t.title)
+_frame(body, 84, 80, 69, 49, t.artist)
+_frame(body, 84, 65, 76, 66, t.album)
+_frame(body, 84, 80, 69, 50, t.albumartist)
+_frame(body, 84, 67, 79, 77, t.composer)
+_frame(body, 84, 67, 79, 78, t.genre)
+_frame_int(body, 84, 68, 82, 67, t.year)
+_frame_int(body, 84, 66, 80, 77, t.bpm)
+if t.track > 0:
+mut width := _decimal_len(t.track)
+if t.tracks > 0:
+width += 1 + _decimal_len(t.tracks)
+end
+_frame_head(body, 84, 82, 67, 75, width)
+_push_decimal(body, t.track)
+if t.tracks > 0:
+compress.BufPush(body, 47)
+_push_decimal(body, t.tracks)
+end
+end
+_frame_int(body, 84, 80, 79, 83, t.disc)
+mut out := compress.NewByteBuf()
+compress.BufPush(out, 73)
+compress.BufPush(out, 68)
+compress.BufPush(out, 51)
+compress.BufPush(out, 4)
+compress.BufPush(out, 0)
+compress.BufPush(out, 0)
+_put_syncsafe(out, compress.BufLen(body))
+compress.BufPushBuf(out, body)
+compress.BufFree(body)
+ret out
+end
+package tag
+import compress
+import str
+import mem
+@en "BlockStreamInfo"
+@fa "بلوک آگاهی جریان"
+pub const BlockStreamInfo := 0
+@en "BlockPadding"
+@fa "بلوک لایی"
+pub const BlockPadding := 1
+@en "BlockSeekTable"
+@fa "بلوک جدول جستن"
+pub const BlockSeekTable := 3
+@en "BlockVorbisComment"
+@fa "بلوک یادداشت وربیس"
+pub const BlockVorbisComment := 4
+@en "BlockPicture"
+@fa "بلوک تصویر"
+pub const BlockPicture := 6
+@en "Block"
+@fa "بلوک"
+pub struct Block:
+@en "kind"
+@fa "گونه"
+pub kind: int = 0
+@en "offset"
+@fa "جابجایی"
+pub offset: int = 0
+@en "size"
+@fa "اندازه"
+pub size: int = 0
+@en "last"
+@fa "آخرین"
+pub last: bool = false
+end
+func _byte(p: void*, off: int): int:
+bp := p as u8*
+ret bp[off] as int
+end
+func _le32(p: void*, off: int): int:
+ret _byte(p, off) | (_byte(p, off + 1) << 8) | (_byte(p, off + 2) << 16) | (_byte(p, off + 3) << 24)
+end
+func _bg32(p: void*, off: int): int:
+ret (_byte(p, off) << 24) | (_byte(p, off + 1) << 16) | (_byte(p, off + 2) << 8) | _byte(p, off + 3)
+end
+func _bg24(p: void*, off: int): int:
+ret (_byte(p, off) << 16) | (_byte(p, off + 1) << 8) | _byte(p, off + 2)
+end
+func _slice_str(p: void*, off: int, len: int): str:
+if len <= 0:
+ret ""
+end
+mut b := compress.NewByteBufCap(len + 1)
+compress.BufPushBytes(b, ((p as i64) + (off as i64)) as void*, len)
+out := compress.BufToStrUnsafe(b)
+compress.BufFree(b)
+if out.len() == 0:
+mem.Free(out as void*)
+ret ""
+end
+ret out
+end
+func _lower_cp(cp: int): int:
+if cp >= 65 and cp <= 90:
+ret cp + 32
+end
+ret cp
+end
+func _key_is(p: void*, off: int, len: int, want: str): bool:
+cps := str.CodePoints(want)
+mut same := cps.len() == len
+if same:
+mut i := 0
+until i < len:
+if _lower_cp(_byte(p, off + i)) != _lower_cp(cps.get(i)):
+same = false
+break
+end
+i += 1
+end
+end
+cps.free()
+ret same
+end
+func _int_from(p: void*, off: int, len: int): int:
+mut v := 0
+mut i := 0
+until i < len:
+b := _byte(p, off + i)
+if b >= 48 and b <= 57:
+v = v * 10 + (b - 48)
+end
+i += 1
+end
+ret v
+end
+func _assign(dst &: str, p: void*, off: int, len: int):
+if dst.len() > 0 or len <= 0:
+ret
+end
+dst = _slice_str(p, off, len)
+end
+func _one_comment(p: void*, off: int, len: int, out &: Tags):
+mut sep := -1
+mut i := 0
+until i < len:
+if _byte(p, off + i) == 61:
+sep = i
+break
+end
+i += 1
+end
+if sep <= 0:
+ret
+end
+vat := off + sep + 1
+vlen := len - sep - 1
+if _key_is(p, off, sep, "TITLE"):
+_assign(out.title, p, vat, vlen)
+else _key_is(p, off, sep, "ARTIST"):
+_assign(out.artist, p, vat, vlen)
+else _key_is(p, off, sep, "ALBUM"):
+_assign(out.album, p, vat, vlen)
+else _key_is(p, off, sep, "ALBUMARTIST"):
+_assign(out.albumartist, p, vat, vlen)
+else _key_is(p, off, sep, "COMPOSER"):
+_assign(out.composer, p, vat, vlen)
+else _key_is(p, off, sep, "GENRE"):
+_assign(out.genre, p, vat, vlen)
+else _key_is(p, off, sep, "COMMENT") or _key_is(p, off, sep, "DESCRIPTION"):
+_assign(out.comment, p, vat, vlen)
+else _key_is(p, off, sep, "LYRICS"):
+_assign(out.lyrics, p, vat, vlen)
+else _key_is(p, off, sep, "DATE") or _key_is(p, off, sep, "YEAR"):
+if out.year == 0:
+out.year = _int_from(p, vat, vlen)
+end
+else _key_is(p, off, sep, "TRACKNUMBER"):
+if out.track == 0:
+out.track = _int_from(p, vat, vlen)
+end
+else _key_is(p, off, sep, "TRACKTOTAL") or _key_is(p, off, sep, "TOTALTRACKS"):
+if out.tracks == 0:
+out.tracks = _int_from(p, vat, vlen)
+end
+else _key_is(p, off, sep, "DISCNUMBER"):
+if out.disc == 0:
+out.disc = _int_from(p, vat, vlen)
+end
+else _key_is(p, off, sep, "BPM"):
+if out.bpm == 0:
+out.bpm = _int_from(p, vat, vlen)
+end
+end
+end
+func _put_le32(b &: compress.ByteBuf, v: int):
+compress.BufPush(b, v & 255)
+compress.BufPush(b, (v >> 8) & 255)
+compress.BufPush(b, (v >> 16) & 255)
+compress.BufPush(b, (v >> 24) & 255)
+end
+func _count_fields(t: Tags): int:
+mut n := 0
+if t.title.len() > 0:
+n += 1
+end
+if t.artist.len() > 0:
+n += 1
+end
+if t.album.len() > 0:
+n += 1
+end
+if t.albumartist.len() > 0:
+n += 1
+end
+if t.composer.len() > 0:
+n += 1
+end
+if t.genre.len() > 0:
+n += 1
+end
+if t.comment.len() > 0:
+n += 1
+end
+if t.lyrics.len() > 0:
+n += 1
+end
+if t.year > 0:
+n += 1
+end
+if t.track > 0:
+n += 1
+end
+if t.tracks > 0:
+n += 1
+end
+if t.disc > 0:
+n += 1
+end
+if t.bpm > 0:
+n += 1
+end
+ret n
+end
+func _put_field(b &: compress.ByteBuf, key: str, value: str):
+if value.len() == 0:
+ret
+end
+kb := compress.BufFromStr(key)
+vb := compress.BufFromStr(value)
+_put_le32(b, compress.BufLen(kb) + 1 + compress.BufLen(vb))
+compress.BufPushBuf(b, kb)
+compress.BufPush(b, 61)
+compress.BufPushBuf(b, vb)
+compress.BufFree(kb)
+compress.BufFree(vb)
+end
+func _put_field_int(b &: compress.ByteBuf, key: str, value: int):
+if value <= 0:
+ret
+end
+kb := compress.BufFromStr(key)
+_put_le32(b, compress.BufLen(kb) + 1 + _decimal_len(value))
+compress.BufPushBuf(b, kb)
+compress.BufPush(b, 61)
+_push_decimal(b, value)
+compress.BufFree(kb)
+end
+@en "IsFlacTagged"
+@fa "فلاک برچسبدار است"
+pub func IsFlacTagged(p: void*, n: int): bool:
+if n < 8:
+ret false
+end
+ret _byte(p, 0) == 102 and _byte(p, 1) == 76 and _byte(p, 2) == 97 and _byte(p, 3) == 67
+end
+@en "FlacBlocks"
+@fa "بلوک‌های فلاک"
+pub func FlacBlocks(p: void*, n: int): Vector<Block>:
+mut out := Vector {} as Vector<Block>
+if not IsFlacTagged(p, n):
+ret out
+end
+mut at := 4
+until at + 4 <= n:
+head := _byte(p, at)
+size := _bg24(p, at + 1)
+body := at + 4
+mut avail := n - body
+if size < avail:
+avail = size
+end
+last := (head & 128) != 0
+out.push(Block { kind = head & 127, offset = body, size = avail, last = last })
+if last:
+break
+end
+at = body + avail
+end
+ret out
+end
+@en "ReadVorbisComment"
+@fa "خواندن یادداشت وربیس"
+pub func ReadVorbisComment(p: void*, off: int, len: int, out &: Tags): bool:
+if len < 8:
+ret false
+end
+stop := off + len
+mut at := off
+vendor := _le32(p, at)
+at += 4 + vendor
+if at + 4 > stop:
+ret false
+end
+count := _le32(p, at)
+at += 4
+if count < 0 or count > 4096:
+ret false
+end
+mut i := 0
+until i < count:
+if at + 4 > stop:
+break
+end
+flen := _le32(p, at)
+at += 4
+if flen < 0 or at + flen > stop:
+break
+end
+_one_comment(p, at, flen, out)
+at += flen
+i += 1
+end
+ret true
+end
+@en "ReadFlacTags"
+@fa "خواندن برچسب فلاک"
+pub func ReadFlacTags(p: void*, n: int, out &: Tags): bool:
+mut blocks := FlacBlocks(p, n)
+mut any := false
+each b in blocks:
+if b.kind == BlockVorbisComment:
+if ReadVorbisComment(p, b.offset, b.size, out):
+any = true
+end
+end
+if b.kind == BlockPicture and b.size > 32 and out.art.len == 0:
+mut at := b.offset + 4
+mlen := _bg32(p, at)
+at += 4
+if mlen >= 0 and at + mlen <= b.offset + b.size:
+mime := _slice_str(p, at, mlen)
+at += mlen
+if at + 4 <= b.offset + b.size:
+dlen := _bg32(p, at)
+at += 4 + dlen
+at += 16
+if at + 4 <= b.offset + b.size:
+plen := _bg32(p, at)
+at += 4
+if plen > 0 and at + plen <= b.offset + b.size:
+compress.BufPushBytes(out.art, ((p as i64) + (at as i64)) as void*, plen)
+if out.art_mime.len() == 0:
+out.art_mime = mime
+any = true
+else:
+mem.Free(mime as void*)
+end
+else:
+mem.Free(mime as void*)
+end
+else:
+mem.Free(mime as void*)
+end
+else:
+mem.Free(mime as void*)
+end
+end
+end
+end
+blocks.free()
+ret any
+end
+@en "WriteVorbisComment"
+@fa "نوشتن یادداشت وربیس"
+pub func WriteVorbisComment(t: Tags): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+vendor := "Salam"
+vb := compress.BufFromStr(vendor)
+_put_le32(out, compress.BufLen(vb))
+compress.BufPushBuf(out, vb)
+compress.BufFree(vb)
+_put_le32(out, _count_fields(t))
+_put_field(out, "TITLE", t.title)
+_put_field(out, "ARTIST", t.artist)
+_put_field(out, "ALBUM", t.album)
+_put_field(out, "ALBUMARTIST", t.albumartist)
+_put_field(out, "COMPOSER", t.composer)
+_put_field(out, "GENRE", t.genre)
+_put_field(out, "COMMENT", t.comment)
+_put_field(out, "LYRICS", t.lyrics)
+_put_field_int(out, "DATE", t.year)
+_put_field_int(out, "TRACKNUMBER", t.track)
+_put_field_int(out, "TRACKTOTAL", t.tracks)
+_put_field_int(out, "DISCNUMBER", t.disc)
+_put_field_int(out, "BPM", t.bpm)
+ret out
+end
+@en "wav"
+@fa "ویو"
+package wav
+import audio
+import compress
+import archive
+import str
+@en "CodecPCM"
+@fa "کدک پی‌سی‌ام"
+pub const CodecPCM := 1
+@en "CodecFloat"
+@fa "کدک اعشاری"
+pub const CodecFloat := 3
+@en "CodecALaw"
+@fa "کدک ای‌لا"
+pub const CodecALaw := 6
+@en "CodecMuLaw"
+@fa "کدک میولا"
+pub const CodecMuLaw := 7
+@en "CodecExtensible"
+@fa "کدک گسترش‌پذیر"
+pub const CodecExtensible := 65534
+@en "Format"
+@fa "قالب"
+pub struct Format:
+@en "codec"
+@fa "کدک"
+pub codec: int = 0
+@en "channels"
+@fa "کانال ها"
+pub channels: int = 0
+@en "rate"
+@fa "نرخ"
+pub rate: int = 0
+@en "bits"
+@fa "بیت ها"
+pub bits: int = 0
+@en "block_align"
+@fa "همترازی بلوک"
+pub block_align: int = 0
+@en "byte_rate"
+@fa "نرخ بایت"
+pub byte_rate: int = 0
+end
+@en "Chunk"
+@fa "تکه"
+pub struct Chunk:
+@en "tag"
+@fa "برچسب"
+pub tag: int = 0
+@en "offset"
+@fa "جابجایی"
+pub offset: int = 0
+@en "size"
+@fa "اندازه"
+pub size: int = 0
+end
+func _tag(a: int, b: int, c: int, d: int): int:
+ret (a << 24) | (b << 16) | (c << 8) | d
+end
+func _tag_at(p: void*, off: int): int:
+bp := p as u8*
+ret _tag(bp[off] as int, bp[off + 1] as int, bp[off + 2] as int, bp[off + 3] as int)
+end
+func _u16(p: void*, off: int): int:
+bp := p as u8*
+ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+func _u32(p: void*, off: int): i64:
+bp := p as u8*
+ret (bp[off] as i64) | ((bp[off + 1] as i64) << 8) | ((bp[off + 2] as i64) << 16) | ((bp[off + 3] as i64) << 24)
+end
+func _riff(): int:
+ret _tag(82, 73, 70, 70)
+end
+func _wave(): int:
+ret _tag(87, 65, 86, 69)
+end
+func _fmt(): int:
+ret _tag(102, 109, 116, 32)
+end
+func _data(): int:
+ret _tag(100, 97, 116, 97)
+end
+@en "Tag"
+@fa "برچسب"
+pub func Tag(s: str): int:
+mut cps := str.CodePoints(s)
+mut out := 0
+if cps.len() >= 4:
+out = _tag(cps.get(0), cps.get(1), cps.get(2), cps.get(3))
+end
+cps.free()
+ret out
+end
+@en "IsWAV"
+@fa "ویو است"
+pub func IsWAV(p: void*, n: int): bool:
+if n < 12:
+ret false
+end
+ret _tag_at(p, 0) == _riff() and _tag_at(p, 8) == _wave()
+end
+@en "Chunks"
+@fa "تکه‌ها"
+pub func Chunks(p: void*, n: int): Vector<Chunk>:
+mut out := Vector {} as Vector<Chunk>
+if not IsWAV(p, n):
+ret out
+end
+mut at := 12
+until at + 8 <= n:
+tag := _tag_at(p, at)
+size := _u32(p, at + 4)
+body := at + 8
+mut avail := n - body
+if size < (avail as i64):
+avail = size as int
+end
+out.push(Chunk { tag = tag, offset = body, size = avail })
+mut step := avail
+if (step % 2) == 1:
+step += 1
+end
+at = body + step
+end
+ret out
+end
+@en "FindChunk"
+@fa "یافتن تکه"
+pub func FindChunk(p: void*, n: int, tag: int, out &: Chunk): bool:
+if not IsWAV(p, n):
+ret false
+end
+mut at := 12
+until at + 8 <= n:
+t := _tag_at(p, at)
+size := _u32(p, at + 4)
+body := at + 8
+mut avail := n - body
+if size < (avail as i64):
+avail = size as int
+end
+if t == tag:
+out = Chunk { tag = t, offset = body, size = avail }
+ret true
+end
+mut step := avail
+if (step % 2) == 1:
+step += 1
+end
+at = body + step
+end
+ret false
+end
+@en "ReadFormat"
+@fa "خواندن قالب"
+pub func ReadFormat(p: void*, n: int, out &: Format): bool:
+mut ck := Chunk {}
+if not FindChunk(p, n, _fmt(), ck):
+ret false
+end
+if ck.size < 16:
+ret false
+end
+o := ck.offset
+mut f := Format {}
+f.codec = _u16(p, o)
+f.channels = _u16(p, o + 2)
+f.rate = _u32(p, o + 4) as int
+f.byte_rate = _u32(p, o + 8) as int
+f.block_align = _u16(p, o + 12)
+f.bits = _u16(p, o + 14)
+if f.codec == CodecExtensible and ck.size >= 40:
+f.codec = _u16(p, o + 24)
+end
+out = f
+ret f.channels > 0 and f.rate > 0
+end
+@en "ProbeWAV"
+@fa "بررسی ویو"
+pub func ProbeWAV(p: void*, n: int, ok &: bool): audio.Info:
+ok = false
+mut info := audio.Info {}
+mut f := Format {}
+if not ReadFormat(p, n, f):
+ret info
+end
+mut ck := Chunk {}
+if not FindChunk(p, n, _data(), ck):
+ret info
+end
+bytes_per := f.bits / 8
+if bytes_per <= 0 or f.channels <= 0:
+ret info
+end
+info.format = audio.FormatWAV
+info.rate = f.rate
+info.channels = f.channels
+info.bits = f.bits
+info.frames = ck.size / (bytes_per * f.channels)
+info.lossless = f.codec == CodecPCM or f.codec == CodecFloat
+info.bitrate = f.rate * f.channels * f.bits
+info.duration = f.rate > 0 ? (info.frames as f64) / (f.rate as f64) : 0.0
+ok = true
+ret info
+end
+@en "DecodeWAV"
+@fa "کدگشایی ویو"
+pub func DecodeWAV(p: void*, n: int, ok &: bool): audio.Clip:
+ok = false
+mut f := Format {}
+if not ReadFormat(p, n, f):
+ret audio.Clip {}
+end
+mut ck := Chunk {}
+if not FindChunk(p, n, _data(), ck):
+ret audio.Clip {}
+end
+bytes_per := f.bits / 8
+if bytes_per <= 0 or f.channels <= 0 or f.rate <= 0:
+ret audio.Clip {}
+end
+frames := ck.size / (bytes_per * f.channels)
+if frames <= 0:
+ret audio.Clip {}
+end
+mut out := audio.New(f.rate, f.channels, frames)
+if out.samples == null:
+ret out
+end
+out.bits = f.bits
+if not _read_samples(p, n, ck.offset, f, out):
+audio.Free(out)
+ret audio.Clip {}
+end
+ok = true
+ret out
+end
+@en "OpenWAV"
+@fa "بازکردن ویو"
+pub func OpenWAV(path: str, ok &: bool): audio.Clip:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Clip {}
+end
+out := DecodeWAV(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+@en "ProbeFileWAV"
+@fa "بررسی پرونده ویو"
+pub func ProbeFileWAV(path: str, ok &: bool): audio.Info:
+mut read_ok := false
+buf := archive.ReadBinaryFile(path, read_ok)
+if not read_ok:
+ok = false
+ret audio.Info {}
+end
+out := ProbeWAV(buf.data, buf.len, ok)
+compress.BufFree(buf)
+ret out
+end
+package wav
+import audio
+import compress
+import archive
+import encoding.binary
+import str
+func _push_tag(b &: compress.ByteBuf, a: int, c: int, d: int, e: int):
+compress.BufPush(b, a)
+compress.BufPush(b, c)
+compress.BufPush(b, d)
+compress.BufPush(b, e)
+end
+func _header(b &: compress.ByteBuf, codec: int, channels: int, rate: int, bits: int, data_bytes: int):
+block_align := channels * (bits / 8)
+byte_rate := rate * block_align
+_push_tag(b, 82, 73, 70, 70)
+binary.WriteU32LE(b, 36 + data_bytes)
+_push_tag(b, 87, 65, 86, 69)
+_push_tag(b, 102, 109, 116, 32)
+binary.WriteU32LE(b, 16)
+binary.WriteU16LE(b, codec)
+binary.WriteU16LE(b, channels)
+binary.WriteU32LE(b, rate)
+binary.WriteU32LE(b, byte_rate)
+binary.WriteU16LE(b, block_align)
+binary.WriteU16LE(b, bits)
+_push_tag(b, 100, 97, 116, 97)
+binary.WriteU32LE(b, data_bytes)
+end
+@en "EncodeWAVBits"
+@fa "کدگذاری ویو با بیت"
+pub func EncodeWAVBits(c: audio.Clip, bits: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c):
+ret out
+end
+if bits != 8 and bits != 16 and bits != 24 and bits != 32:
+ret out
+end
+data_bytes := c.frames * c.channels * (bits / 8)
+_header(out, CodecPCM, c.channels, c.rate, bits, data_bytes)
+audio.EncodePcm(out, c, bits, false, bits == 8)
+ret out
+end
+@en "EncodeWAV"
+@fa "کدگذاری ویو"
+pub func EncodeWAV(c: audio.Clip): compress.ByteBuf:
+mut bits := c.bits
+if bits != 8 and bits != 16 and bits != 24 and bits != 32:
+bits = 16
+end
+ret EncodeWAVBits(c, bits)
+end
+@en "EncodeWAVFloat"
+@fa "کدگذاری ویو اعشاری"
+pub func EncodeWAVFloat(c: audio.Clip): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c):
+ret out
+end
+data_bytes := c.frames * c.channels * 4
+_header(out, CodecFloat, c.channels, c.rate, 32, data_bytes)
+audio.EncodeFloatPcm(out, c, 32, false)
+ret out
+end
+@en "EncodeMuLaw"
+@fa "کدگذاری میولا"
+pub func EncodeMuLaw(c: audio.Clip): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c):
+ret out
+end
+data_bytes := c.frames * c.channels
+_header(out, CodecMuLaw, c.channels, c.rate, 8, data_bytes)
+audio.EncodeLawPcm(out, c, false)
+ret out
+end
+@en "EncodeALaw"
+@fa "کدگذاری ای‌لا"
+pub func EncodeALaw(c: audio.Clip): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+if audio.IsEmpty(c):
+ret out
+end
+data_bytes := c.frames * c.channels
+_header(out, CodecALaw, c.channels, c.rate, 8, data_bytes)
+audio.EncodeLawPcm(out, c, true)
+ret out
+end
+@en "SaveWAVBits"
+@fa "ذخیره ویو با بیت"
+pub func SaveWAVBits(c: audio.Clip, path: str, bits: int): bool:
+buf := EncodeWAVBits(c, bits)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "SaveWAV"
+@fa "ذخیره ویو"
+pub func SaveWAV(c: audio.Clip, path: str): bool:
+buf := EncodeWAV(c)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+@en "SaveWAVFloat"
+@fa "ذخیره ویو اعشاری"
+pub func SaveWAVFloat(c: audio.Clip, path: str): bool:
+buf := EncodeWAVFloat(c)
+if compress.BufLen(buf) == 0:
+compress.BufFree(buf)
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+package wav
+import audio
+func _read_samples(p: void*, n_total: int, data_off: int, f: Format, out &: audio.Clip): bool:
+if f.codec == CodecPCM:
+ret audio.DecodePcm(p, data_off, out, f.bits, false, f.bits == 8)
+end
+if f.codec == CodecFloat:
+ret audio.DecodeFloatPcm(p, n_total, data_off, out, f.bits, false)
+end
+if f.codec == CodecALaw:
+ret audio.DecodeLawPcm(p, data_off, out, true)
+end
+if f.codec == CodecMuLaw:
+ret audio.DecodeLawPcm(p, data_off, out, false)
+end
+ret false
+end
 package autograd
 import tensor
 extern:

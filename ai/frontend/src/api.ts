@@ -196,7 +196,8 @@ export type AdminUser = {
   apps: number;
   mcp_calls: number;
   api_requests: number;
-  tokens: number;
+  tokens_in: number;
+  tokens_out: number;
   last_login: number;
   logins: number;
   last_active_chat: number;
@@ -502,6 +503,10 @@ export const api = {
     call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user, before })}`),
   adminRevokeApp: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/apps/${id}`),
+  adminUserChats: (id: number) =>
+    call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
+  adminChat: (id: string) =>
+    call<{ chat: Chat; messages: Message[] }>("GET", `/admin/chats/${id}`),
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>
     call<{ subscription: Subscription }>("GET", "/billing/subscription"),

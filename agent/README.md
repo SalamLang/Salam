@@ -87,3 +87,18 @@ The app also sets its icon at runtime: the window icon on Windows and Linux,
 and the Dock icon on macOS when the binary runs outside `Salam Agent.app`
 (for example from a terminal or `cargo run`). Without that, macOS shows its
 generic black "exec" icon for a bare executable.
+
+macOS uses its own master, `design/logo/logo-box-macos.svg`, because Apple's
+icon grid differs from the other platforms: a 1024x1024 canvas with an 824x824
+rounded body centred and transparent margins, so the Dock draws the icon at the
+same size as native apps instead of shrinking a full-bleed square. Regenerate
+it after the command above, since the Tauri generator replaces `icon.icns`
+with the full-bleed artwork:
+
+```sh
+agent/scripts/make-macos-icon.sh
+```
+
+It writes `src-tauri/icons/icon.icns` and `src-tauri/icons/icon-macos.png`
+(the image the app uses for the Dock when it is not bundled) and needs
+`rsvg-convert`, `sips` and `iconutil`.

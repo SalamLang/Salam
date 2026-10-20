@@ -7,6 +7,7 @@ mod tools;
 mod workspace;
 
 use std::time::Duration;
+use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
@@ -33,15 +34,27 @@ fn set_dock_icon() {
     if bundled {
         return;
     }
-    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    let data = NSData::with_bytes(include_bytes!("../icons/icon-macos.png"));
     if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
         unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
     }
 }
 
+fn is_external(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "mailto")
+}
+
+fn open_external(app: &AppHandle, url: &tauri::Url) -> bool {
+    if !is_external(url) {
+        return false;
+    }
+    app.opener().open_url(url.as_str(), None::<&str>).is_ok()
+}
+
 fn open_main(app: &AppHandle) -> tauri::Result<()> {
     let target = config::app_url();
-    let handle = app.clone();
+    let navigation = app.clone();
+    let popup = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone())?;
@@ -54,10 +67,12 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
             if config::is_local_asset(url) || config::same_origin(url, &target) || url.scheme() == "about" {
                 return true;
             }
-            if matches!(url.scheme(), "http" | "https" | "mailto") {
-                let _ = handle.opener().open_url(url.as_str(), None::<&str>);
-            }
+            open_external(&navigation, url);
             false
+        })
+        .on_new_window(move |url, _features| {
+            open_external(&popup, &url);
+            NewWindowResponse::Deny
         })
         .build()?;
     Ok(())
@@ -138,4 +153,19 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Salam Agent");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_and_mail_links_leave_the_app() {
+        for link in ["https://www.salamlang.ir/learn/", "http://localhost:3000/chat", "mailto:hello@salamlang.ir"] {
+            assert!(is_external(&tauri::Url::parse(link).unwrap()), "{link} should open externally");
+        }
+        for link in ["tauri://localhost/index.html", "about:blank", "file:///etc/passwd"] {
+            assert!(!is_external(&tauri::Url::parse(link).unwrap()), "{link} should stay in the app");
+        }
+    }
 }

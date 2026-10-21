@@ -1061,6 +1061,14 @@ func isel_bin(g &: Ng, i: int):
         b = tmp
     end
     bimm := g.v_kind[b] == VK_INT and is_imm32(g.v_i[b])
+    if op == OP_ADD and bimm and g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]] and lea_mul_k(g, g.v_def[a]) > 0:
+        md := g.v_def[a]
+        x := use_reg(g, g.i_a[md])
+        rl := gpr(g)
+        _l := e_rm(g, M_LEA, 8, rl, Mem { k = MK_BI, b = x, i = x, s = lea_mul_k(g, md) - 1, d = g.v_i[b] })
+        set_res(g, i, rl)
+        ret
+    end
     if op == OP_MUL:
         r := gpr(g)
         if bimm and mul_small(g, r, use_reg(g, a), g.v_i[b]):
@@ -1350,6 +1358,40 @@ func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
     t := gpr(g)
     _c := e_copy(g, t, RDX)
     ret t
+end
+
+func lea_mul_k(g &: Ng, i: int): int:
+    if g.i_op[i] != OP_MUL or not is_cint(g, g.i_b[i]):
+        ret 0 - 1
+    end
+    k := g.v_i[g.i_b[i]]
+    if k == (2 as i64) or k == (3 as i64) or k == (5 as i64) or k == (9 as i64):
+        ret k as int
+    end
+    ret 0 - 1
+end
+
+func mul_add_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or lea_mul_k(g, i) < 0:
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret false
+        end
+        if g.i_op[j] == OP_ADD and g.i_ty[j] == g.i_ty[i]:
+            if g.i_a[j] == r and is_cint(g, g.i_b[j]) and is_imm32(g.v_i[g.i_b[j]]):
+                ret true
+            end
+            if g.i_b[j] == r and is_cint(g, g.i_a[j]) and is_imm32(g.v_i[g.i_a[j]]):
+                ret true
+            end
+        end
+        j = g.i_next[j]
+    end
+    ret false
 end
 
 func mul_small(g &: Ng, r: int, a: int, k: i64): bool:
@@ -2726,6 +2768,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_ADDR: isel_addr(g, i) ret end
         OP_ADD, OP_SUB, OP_MUL, OP_AND, OP_OR, OP_XOR:
             if op == OP_AND and and_test_ok(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if op == OP_MUL and mul_add_user(g, i):
                 g.skipi[i] = true
                 ret
             end

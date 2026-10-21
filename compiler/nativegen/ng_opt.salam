@@ -513,6 +513,73 @@ func known_nonneg(g &: Ng, v: int, blk: int): bool:
     ret false
 end
 
+func low_zero_cond(g &: Ng, c: int, v: int, mask: i64, on_true: bool): bool:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP or not is_cint(g, g.i_b[d]) or g.v_i[g.i_b[d]] != (0 as i64):
+        ret false
+    end
+    p := g.i_x[d]
+    if not ((p == CC_EQ and on_true) or (p == CC_NE and not on_true)):
+        ret false
+    end
+    a := g.i_a[d]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    ad := g.v_def[a]
+    if g.i_op[ad] != OP_AND or g.i_a[ad] != v or not is_cint(g, g.i_b[ad]):
+        ret false
+    end
+    ret (g.v_i[g.i_b[ad]] & mask) == mask
+end
+
+func known_low_zero(g &: Ng, v: int, blk: int, mask: i64): bool:
+    mut c := blk
+    repeat 64:
+        if c <= 0:
+            ret false
+        end
+        pr := g.b_idom[c]
+        if pr < 0:
+            ret false
+        end
+        t := g.b_last[pr]
+        if t >= 0 and g.i_op[t] == OP_CBR and g.b_npred[c] == 1:
+            if g.i_b[t] == c and g.i_c[t] != c and low_zero_cond(g, g.i_a[t], v, mask, true):
+                ret true
+            end
+            if g.i_c[t] == c and g.i_b[t] != c and low_zero_cond(g, g.i_a[t], v, mask, false):
+                ret true
+            end
+        end
+        c = pr
+    end
+    ret false
+end
+
+func exact_sdiv(g &: Ng, i: int): bool:
+    if g.i_op[i] != OP_SDIV:
+        ret false
+    end
+    b := g.i_b[i]
+    if not is_cint(g, b) or g.v_i[b] <= (1 as i64):
+        ret false
+    end
+    k := log2_exact(g.v_i[b] as u64)
+    if k <= 0:
+        ret false
+    end
+    if not known_low_zero(g, g.i_a[i], g.i_blk[i], ((1 as i64) << (k as i64)) - (1 as i64)):
+        ret false
+    end
+    g.i_op[i] = OP_ASHR
+    g.i_b[i] = const_int(g, g.i_ty[i], k as i64)
+    ret true
+end
+
 func signed_to_unsigned(g &: Ng, i: int): bool:
     op := g.i_op[i]
     b := g.i_b[i]
@@ -537,7 +604,10 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             op := g.i_op[i]
             mut ch := false
             if (op == OP_SDIV or op == OP_SREM) and g.dom_ok:
-                ch = signed_to_unsigned(g, i)
+                ch = exact_sdiv(g, i)
+                if not ch:
+                    ch = signed_to_unsigned(g, i)
+                end
             end
             if ch:
                 changed = true

@@ -159,6 +159,63 @@ func sniff(b64: str): str:
     ret kind
 end
 
+func valid_utf8(p: void*, n: int): bool:
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        c := bp[i] as int
+        mut need := 0
+        mut low := 128
+        mut high := 191
+        if c < 128:
+            need = 0
+        else c >= 194 and c <= 223:
+            need = 1
+        else c == 224:
+            need = 2
+            low = 160
+        else (c >= 225 and c <= 236) or c == 238 or c == 239:
+            need = 2
+        else c == 237:
+            need = 2
+            high = 159
+        else c == 240:
+            need = 3
+            low = 144
+        else c >= 241 and c <= 243:
+            need = 3
+        else c == 244:
+            need = 3
+            high = 143
+        else:
+            ret false
+        end
+        if i + need >= n:
+            ret false
+        end
+        mut k := 1
+        until k <= need:
+            d := bp[i + k] as int
+            lo := k == 1 ? low : 128
+            hi := k == 1 ? high : 191
+            if d < lo or d > hi:
+                ret false
+            end
+            k += 1
+        end
+        i += need + 1
+    end
+    ret true
+end
+
+func decodes(b64: str, size: int): bool:
+    buf := mem.Allocate((size + 16) as u64)
+    mut ok := false
+    n := encoding.Base64DecodeBytes(b64, buf, size + 16, ok)
+    mem.Free(buf)
+    ret ok and n == size
+end
+
 func image_ext(ext: str): bool:
     ret ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "gif" or ext == "webp"
 end
@@ -190,8 +247,8 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
         if not e.is_dir:
             if kept < MAX_ARCHIVE_FILES and is_text_name(e.name) and e.size <= (MAX_TEXT as i64) and used + (e.size as int) <= MAX_PROMPT_TEXT:
                 mut got := false
-                mut data := archive.ZipExtractByName(buf, n, e.name, got)
-                if got:
+                mut data := archive.ZipExtractByNameMax(buf, n, e.name, MAX_TEXT, got)
+                if got and compress.BufLen(data) <= MAX_TEXT and valid_utf8(data.data, compress.BufLen(data)):
                     t := compress.BufToStrUnsafe(data)
                     if t.len() == compress.BufLen(data):
                         str.BufAppend(prompt, block(name + "/" + e.name, t))
@@ -250,7 +307,7 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     if image_ext(ext):
         if not image_ok:
             problem = "مدل فعلی دستیار تصویر نمی‌پذیرد."
-        else not str.StartsWith(kind, "image/"):
+        else not str.StartsWith(kind, "image/") or not decodes(b64, size):
             problem = "فایل «" + name + "» تصویر معتبری نیست."
         else size > MAX_IMAGE:
             problem = "تصویر «" + name + "» بزرگ‌تر از ۵ مگابایت است."
@@ -264,7 +321,7 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     if ext == "pdf":
         if not pdf_ok:
             problem = "مدل فعلی دستیار فایل PDF نمی‌پذیرد. متن آن را در یک فایل متنی بفرستید."
-        else kind != "application/pdf":
+        else kind != "application/pdf" or not decodes(b64, size):
             problem = "فایل «" + name + "» PDF معتبری نیست."
         else size > MAX_PDF:
             problem = "فایل «" + name + "» بزرگ‌تر از ۱۰ مگابایت است."
@@ -293,8 +350,8 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
             ret u
         end
         t := encoding.Base64Decode(b64)
-        if t.len() != size:
-            problem = "فایل «" + name + "» متنی نیست."
+        if t.len() != size or not valid_utf8(t as void*, size):
+            problem = "فایل «" + name + "» متن UTF-8 نیست."
             ret u
         end
         used += size
@@ -485,11 +542,9 @@ pub func Parts(files: Vector<Upload>): str:
             str.BufAppend(b, json.Str(u.mime))
             str.BufAppend(b, `, "filename": `)
             str.BufAppend(b, json.Str(u.name))
-            str.BufAppend(b, `, "url": "data:`)
-            str.BufAppend(b, u.mime)
-            str.BufAppend(b, ";base64,")
-            str.BufAppend(b, u.data)
-            str.BufAppend(b, `"}`)
+            str.BufAppend(b, `, "url": `)
+            str.BufAppend(b, json.Str("data:" + u.mime + ";base64," + u.data))
+            str.BufAppend(b, "}")
         end
     end
     ret str.BufStr(b)
@@ -519,7 +574,8 @@ pub func Store(files &: Vector<Upload>, now: i64): bool:
     ret true
 end
 
-pub func Record(chat: str, mid: str, uid: str, files: Vector<Upload>, now: str):
+pub func Record(chat: str, mid: str, uid: str, files: Vector<Upload>, now: str): bool:
+    mut all := true
     each u in files:
         mut a := Vector {} as Vector<str>
         a.push(mid)
@@ -536,9 +592,11 @@ pub func Record(chat: str, mid: str, uid: str, files: Vector<Upload>, now: str):
         ok := aistore.Run("INSERT INTO message_files (message_id, chat_id, user_id, name, kind, mime, size, path, listing, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)", a)
         if not ok:
             println "could not record upload", u.path, aistore.Error()
+            all = false
         end
         aistore.Unlock()
     end
+    ret all
 end
 
 pub func Metas(files: Vector<Upload>): str:

@@ -164,7 +164,7 @@ const zip = (entries) => {
   const locals = [];
   const central = [];
   let offset = 0;
-  for (const [name, content] of entries) {
+  for (const [name, content, claim] of entries) {
     const data = Buffer.from(content);
     const packed = zlib.deflateRawSync(data);
     const crc = zlib.crc32(data);
@@ -175,7 +175,7 @@ const zip = (entries) => {
     local.writeUInt16LE(8, 8);
     local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(packed.length, 18);
-    local.writeUInt32LE(data.length, 22);
+    local.writeUInt32LE(claim ?? data.length, 22);
     local.writeUInt16LE(nm.length, 26);
     locals.push(local, nm, packed);
     const cen = Buffer.alloc(46);
@@ -185,7 +185,7 @@ const zip = (entries) => {
     cen.writeUInt16LE(8, 10);
     cen.writeUInt32LE(crc, 16);
     cen.writeUInt32LE(packed.length, 20);
-    cen.writeUInt32LE(data.length, 24);
+    cen.writeUInt32LE(claim ?? data.length, 24);
     cen.writeUInt16LE(nm.length, 28);
     cen.writeUInt32LE(offset, 42);
     central.push(cen, nm);
@@ -230,6 +230,10 @@ check("a zip is unpacked to its text files only", zipAnswer.body?.includes("proj
 const refused = async (file) => (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: [file] })).res.status;
 check("pdf is refused while the model cannot read it", (await refused({ name: "doc.pdf", data: b64("%PDF-1.4 fake pdf body here") })) === 400);
 check("rar is refused", (await refused({ name: "a.rar", data: b64("Rar!\x1a\x07\x00 not really") })) === 400);
+check("a zip entry that inflates past its claimed size is not read", (await refused({ name: "bomb.zip", data: b64(zip([["big.txt", Buffer.alloc(1048576, 97), 10]])) })) === 400);
+check("text that is not UTF-8 is refused", (await refused({ name: "latin.txt", data: b64(Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0xff])) })) === 400);
+const smuggled = b64(png.subarray(0, 16)).slice(0, 20) + Buffer.from('"}, {"type": "file", "url": "https://example.com/x"').toString("latin1");
+check("an image whose base64 hides extra JSON is refused", (await refused({ name: "trick.png", data: smuggled.padEnd(Math.ceil(smuggled.length / 4) * 4, "A") })) === 400);
 check("binary data named .txt is refused", (await refused({ name: "notes.txt", data: b64(Buffer.from([104, 105, 0, 104, 105])) })) === 400);
 check("a fake png is refused", (await refused({ name: "fake.png", data: b64("this is not an image at all") })) === 400);
 const filesUser = (await api("GET", "/me", filesSession)).json.user;

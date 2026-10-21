@@ -164,7 +164,11 @@ export function fileLoader(fetcher: (id: number) => Promise<{ mime: string; data
   return (id) => {
     let p = cache.get(id);
     if (!p) {
-      p = fetcher(id).then((r) => `data:${r.mime};base64,${r.data}`);
+      p = fetcher(id).then((r) => {
+        const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
+        return URL.createObjectURL(new Blob([bytes], { type: r.mime }));
+      });
+      p.catch(() => cache.delete(id));
       cache.set(id, p);
     }
     return p;

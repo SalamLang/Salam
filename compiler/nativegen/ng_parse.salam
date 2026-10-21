@@ -703,6 +703,75 @@ func line_tbaa(g &: Ng): int:
     ret 0
 end
 
+func id_char(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 46 or c == 95 or c == 36 or c == 45
+end
+
+func scan_readonly(g &: Ng, starts: Vector<int>, ends: Vector<int>):
+    nsym := g.sy_kind.len()
+    g.sy_ro.clear()
+    repeat nsym in s:
+        sec := g.sy_sec[s]
+        g.sy_ro.push(g.sy_def[s] and g.sy_local[s] and g.sy_kind[s] == SY_DATA and (sec == SEC_DATA or sec == SEC_BSS or sec == SEC_RODATA))
+    end
+    repeat g.r_sec.len() in r:
+        if g.r_sec[r] != SEC_TEXT and g.r_sym[r] < nsym:
+            g.sy_ro[g.r_sym[r]] = false
+        end
+    end
+    repeat starts.len() in f:
+        mut q := starts[f]
+        en := ends[f]
+        until q < en:
+            ls := q
+            until q < en and g.src[q] != (10 as u8):
+                q += 1
+            end
+            le := q
+            q += 1
+            mut kind := 0
+            mut x := ls
+            until x < le:
+                if src_at(g, x, " store ") or src_at(g, x, "store atomic") or (x == ls and src_at(g, x, "store")):
+                    kind = 2
+                    break
+                end
+                if src_at(g, x, "= load "):
+                    kind = 1
+                end
+                x += 1
+            end
+            if kind == 1:
+                continue
+            end
+            mut y := ls
+            until y < le:
+                if g.src[y] == (64 as u8) and y + 1 < le and g.src[y + 1] == (34 as u8):
+                    repeat nsym in s2:
+                        g.sy_ro[s2] = false
+                    end
+                    ret
+                end
+                if g.src[y] == (64 as u8):
+                    mut z := y + 1
+                    until z < le and id_char(g.src[z] as int):
+                        z += 1
+                    end
+                    if z > y + 1:
+                        id := tab_get(g.syms, g.src, y + 1, z - y - 1)
+                        if id >= 0 and id < nsym:
+                            g.sy_ro[id] = false
+                        end
+                    end
+                    y = z
+                    continue
+                end
+                y += 1
+            end
+        end
+    end
+end
+
 pub func ParseModule(g &: Ng):
     prescan_types(g)
     prescan_tbaa(g)
@@ -735,6 +804,9 @@ pub func ParseModule(g &: Ng):
         else:
             skip_line(g)
         end
+    end
+    if g.opt:
+        scan_readonly(g, starts, ends)
     end
     mut order := Vector {} as Vector<int>
     if g.opt:

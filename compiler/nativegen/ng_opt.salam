@@ -405,6 +405,68 @@ func fold_insv_rebuild(g &: Ng, i: int): bool:
     ret true
 end
 
+func cond_rel(g &: Ng, c1: int, c2: int): int:
+    if c1 == c2:
+        ret 1
+    end
+    if c1 < 0 or c2 < 0 or g.v_kind[c1] != VK_INS or g.v_kind[c2] != VK_INS:
+        ret 0
+    end
+    d1 := g.v_def[c1]
+    d2 := g.v_def[c2]
+    if g.i_op[d1] != OP_ICMP or g.i_op[d2] != OP_ICMP:
+        ret 0
+    end
+    a1 := g.i_a[d1]
+    b1 := g.i_b[d1]
+    a2 := g.i_a[d2]
+    b2 := g.i_b[d2]
+    mut p2 := g.i_x[d2]
+    if not (veq(g, a1, a2) and veq(g, b1, b2)):
+        if veq(g, a1, b2) and veq(g, b1, a2):
+            p2 = swap_pred(p2)
+        else:
+            ret 0
+        end
+    end
+    if g.i_x[d1] == p2:
+        ret 1
+    end
+    if g.i_x[d1] == neg_cc(p2):
+        ret 0 - 1
+    end
+    ret 0
+end
+
+func dom_cond_known(g &: Ng, c: int, blk: int, val &: bool): bool:
+    mut x := blk
+    repeat 32:
+        if x <= 0:
+            ret false
+        end
+        pr := g.b_idom[x]
+        if pr < 0:
+            ret false
+        end
+        t := g.b_last[pr]
+        if t >= 0 and g.i_op[t] == OP_CBR and g.i_b[t] != g.i_c[t] and g.b_npred[x] == 1 and g.b_pred[g.b_ps[x]] == pr:
+            rel := cond_rel(g, c, g.i_a[t])
+            if rel != 0:
+                if g.i_b[t] == x:
+                    val = rel == 1
+                    ret true
+                end
+                if g.i_c[t] == x:
+                    val = rel != 1
+                    ret true
+                end
+            end
+        end
+        x = pr
+    end
+    ret false
+end
+
 func fold_cbr(g &: Ng, i: int): bool:
     c := g.i_a[i]
     if g.i_b[i] == g.i_c[i]:
@@ -661,6 +723,37 @@ func udiv_pow2(g &: Ng, i: int): bool:
     ret true
 end
 
+func fold_ro_load(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_GLB or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    sy := g.v_def[a]
+    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy]:
+        ret false
+    end
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_INT or int_bits(g, t) < 8:
+        ret false
+    end
+    sz := tsize(g, t)
+    off := g.v_i[a]
+    if off < (0 as i64) or off + (sz as i64) > (g.sy_size[sy] as i64):
+        ret false
+    end
+    mut v := 0 as i64
+    if g.sy_sec[sy] != SEC_BSS:
+        base := g.sy_off[sy] + (off as int)
+        mut k := sz - 1
+        until k >= 0:
+            v = (v << (8 as i64)) | (sec_byte(g, g.sy_sec[sy], base + k) as i64)
+            k -= 1
+        end
+    end
+    replace_res(g, i, cval(g, t, v))
+    ret true
+end
+
 func rem_rem(g &: Ng, i: int): bool:
     op := g.i_op[i]
     if op != OP_SREM and op != OP_UREM:
@@ -706,6 +799,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             remap_ins(g, i)
             op := g.i_op[i]
             mut ch := false
+            if op == OP_LOAD:
+                ch = fold_ro_load(g, i)
+            end
             if op == OP_SREM or op == OP_UREM:
                 ch = rem_rem(g, i)
             end
@@ -743,6 +839,14 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 if fold_cbr(g, i):
                     ch = true
                     cfg_changed = true
+                else g.dom_ok and g.i_b[i] != g.i_c[i]:
+                    mut kv := false
+                    if dom_cond_known(g, g.i_a[i], g.i_blk[i], kv):
+                        g.i_a[i] = const_int(g, T_I1, kv ? (1 as i64) : (0 as i64))
+                        _fc := fold_cbr(g, i)
+                        ch = true
+                        cfg_changed = true
+                    end
                 end
             end
             if ch:

@@ -12,14 +12,16 @@ type Props = {
   bar?: ReactNode;
   placeholder?: string;
   note?: string;
+  draft?: string;
+  onDraftUsed?: () => void;
 };
 
 const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 let seq = 0;
 
-export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note }: Props) {
-  const [text, setText] = useState("");
+export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
+  const [text, setText] = useState(draft ?? "");
   const [files, setFiles] = useState<Pending[]>([]);
   const [problem, setProblem] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -39,6 +41,17 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
   useEffect(() => {
     if (autoFocus && matchMedia("(pointer: fine)").matches) ref.current?.focus();
   }, [autoFocus]);
+
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft);
+    onDraftUsed?.();
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(draft.length, draft.length);
+    }
+  }, [draft, onDraftUsed]);
 
   const add = (list: FileList | File[]) => {
     if (!caps) return;

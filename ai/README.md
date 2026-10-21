@@ -69,6 +69,8 @@ The API:
 | `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                       |
 | `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back |
 | `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                 |
+| `GET /admin/users/:id/chats`, `GET /admin/chats/:id`                                           | a user's chats, and one chat with its owner, messages and desktop calls (the `/admin/chats/<id>` page)      |
+| `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output   |
 
 ### OpenAI-compatible API
 

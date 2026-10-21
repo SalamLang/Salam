@@ -249,6 +249,8 @@ const tracedAgain = await api("GET", `/admin/messages/${sent.json.assistant.id}/
 check("a finished trace is saved", tracedAgain.json?.saved === true && tracedAgain.json.trace.length === steps.length, tracedAgain.json);
 const notAdmin = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, fallbackSession);
 check("only admins can read a trace", notAdmin.res.status === 403, notAdmin.res.status);
+const adminView = await api("GET", `/admin/chats/${chatRes.json.chat.id}`, session);
+check("the admin chat page names the chat's owner", adminView.json?.user?.email === ADMIN && adminView.json.messages.length >= 2, adminView.json?.user);
 const usum = (await api("GET", "/admin/summary", session)).json;
 const today = usum.usage?.find((p) => p.key === "today");
 check("admin usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => usum.usage?.some((p) => p.key === k)), usum.usage?.map((p) => p.key));

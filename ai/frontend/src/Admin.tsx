@@ -1,11 +1,9 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Message, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
-import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
-import { Trace } from "./Trace";
 import { confirmDialog, Subject } from "./Confirm";
 
 type Picked = { id: number; name: string } | null;
@@ -1070,69 +1068,13 @@ function Payments({ picked }: { picked: Picked }) {
   );
 }
 
-function ChatMessages({ chatId }: { chatId: string }) {
-  const [messages, setMessages] = useState<Message[] | null>(null);
-  const [error, setError] = useState("");
-  const [traced, setTraced] = useState<Set<number>>(new Set());
-  const toggleTrace = (id: number) =>
-    setTraced((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-  useEffect(() => {
-    let live = true;
-    setMessages(null);
-    setError("");
-    api
-      .adminChat(chatId)
-      .then((r) => live && setMessages(r.messages))
-      .catch((e) => live && setError(errText(e, "بارگذاری پیام‌ها ناموفق بود.")));
-    return () => {
-      live = false;
-    };
-  }, [chatId]);
-
-  if (error) return <div className="form-error" role="alert">{error}</div>;
-  if (messages === null)
-    return (
-      <div className="list-loading" role="status">
-        <span className="spinner" />
-        <span className="sr-only">در حال بارگذاری</span>
-      </div>
-    );
-  return (
-    <div className="admin-chat-messages">
-      {messages.map((m) => (
-        <div key={m.id} className={`admin-msg ${m.role}`}>
-          <span className="admin-msg-role">{m.role === "user" ? "کاربر" : "دستیار"}</span>
-          <div className="admin-msg-body" dir="auto">
-            {m.body ? <Markdown text={m.body} /> : <span className="muted">(بدون متن)</span>}
-          </div>
-          {m.role === "assistant" && (
-            <button type="button" className="link small-link" aria-expanded={traced.has(m.id)} onClick={() => toggleTrace(m.id)}>
-              {traced.has(m.id) ? "بستن جزئیات کامل" : "همه‌ی جزئیات: فکرها، کدها، فرمان‌ها و خروجی‌ها"}
-            </button>
-          )}
-          {m.role === "assistant" && traced.has(m.id) && <Trace messageId={m.id} />}
-        </div>
-      ))}
-      {messages.length === 0 && <p className="muted">پیامی در این گفت‌وگو نیست.</p>}
-    </div>
-  );
-}
-
 function Conversations({ picked }: { picked: Picked }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [error, setError] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
     setChats(null);
     setError("");
-    setOpen(null);
     if (!picked) return;
     let live = true;
     api
@@ -1172,24 +1114,15 @@ function Conversations({ picked }: { picked: Picked }) {
             </thead>
             <tbody>
               {chats.map((c) => (
-                <Fragment key={c.id}>
-                  <tr className={open === c.id ? "selected" : ""}>
-                    <td>
-                      <button type="button" className="link" onClick={() => setOpen((o) => (o === c.id ? null : c.id))} aria-expanded={open === c.id}>
-                        <bdi>{c.title}</bdi>
-                      </button>
-                    </td>
-                    <td>{c.agent ? "ایجنت" : "وب"}</td>
-                    <td title={fmtDateTime(c.updated)}>{fmtRelative(c.updated)}</td>
-                  </tr>
-                  {open === c.id && (
-                    <tr>
-                      <td colSpan={3}>
-                        <ChatMessages chatId={c.id} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+                <tr key={c.id}>
+                  <td className="cell-clip">
+                    <a className="link" href={`/admin/chats/${c.id}`} target="_blank" rel="noopener" title="باز کردن کامل این گفت‌وگو در زبانه‌ی تازه">
+                      <bdi>{c.title}</bdi>
+                    </a>
+                  </td>
+                  <td>{c.agent ? "ایجنت" : "وب"}</td>
+                  <td title={fmtDateTime(c.updated)}>{fmtRelative(c.updated)}</td>
+                </tr>
               ))}
               {chats.length === 0 && (
                 <tr>

@@ -64,6 +64,8 @@ recursive. Each function then goes through:
 3. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
+   A small recursive function is then inlined into itself once, which halves
+   the calls that are left.
 4. Folding to a fixed point: arithmetic and compares on constants, algebraic
    identities, casts, selects, constant branch conditions, `extractvalue` of a
    known `insertvalue`, a struct rebuilt field by field from itself, address
@@ -71,7 +73,8 @@ recursive. Each function then goes through:
    remainder become unsigned when the dividend is provably non-negative, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
 5. Block merging and jump threading, which turns short-circuit `and`/`or`
-   chains into direct branches.
+   chains into direct branches. A range check `x >= 0 and x < n` with `n`
+   known non-negative becomes one unsigned compare.
 6. If-conversion of small branches into `cmov`, except where the result flows
    into a later address, since a `cmov` there would serialize the following
    load (a binary search keeps its branch for this reason).
@@ -79,6 +82,8 @@ recursive. Each function then goes through:
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too.
 8. Loop-invariant code motion of pure instructions into loop preheaders.
+   Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
+   `paddd` loop followed by the scalar loop for the leftover elements.
 9. Strength reduction: an array address that is affine in a loop counter, such
    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
    Addresses that differ only by a constant share one pointer.
@@ -134,7 +139,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,unroll,licm,lsr,lcse,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,rvec,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -150,19 +155,20 @@ apart from the build timestamp.
 
 ## Where it stands
 
-On the benchmark suite most programs run within 0-20% of `gcc -O3`, and several
-are even with it or faster (`binary_search_stress`, `collatz`, `quicksort`,
-`monte_carlo_pi`, `caesar_cipher`, `sieve_eratosthenes`, `lcg_random`). The
-largest remaining gaps are `game_of_life`, where gcc unswitches the inner loop
-on the row bounds, and recursive `fib`, where gcc inlines the recursion into
-itself.
+On the benchmark suite most programs run within 0-20% of `gcc -O3`, and about a
+third are even with it or faster (among them `binary_search_stress`,
+`collatz`, `quicksort`, `sqrt_decomposition`, `monte_carlo_pi`,
+`caesar_cipher`, `sieve_eratosthenes`, `counting_sort` and `lcg_random`). The
+largest remaining gap is `game_of_life`, where gcc unswitches the inner loop on
+the row bounds.
 
 Not there yet:
 
 - No DWARF line tables (`-g`), so there is no source-level stepping, although
   backtraces work through `.eh_frame`.
-- No loop vectorization or loop unswitching. Only straight-line (SLP)
-  vectorization exists.
+- Loop vectorization covers integer sum reductions only, and there is no loop
+  unswitching. Other vector code comes from the straight-line (SLP)
+  vectorizer.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
 - Linking still uses lld or the system linker. A built-in static linker over
   the bundled musl `libc.a` would make Linux builds fully self-contained.

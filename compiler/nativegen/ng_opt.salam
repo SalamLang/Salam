@@ -248,6 +248,39 @@ func fold_cast(g &: Ng, i: int): bool:
     ret false
 end
 
+func select_bool(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    b := g.i_b[i]
+    c := g.i_c[i]
+    if g.t_kind[t] != TK_INT or int_bits(g, t) < 8 or not is_cint(g, b) or not is_cint(g, c):
+        ret false
+    end
+    vb := g.v_i[b]
+    vc := g.v_i[c]
+    if vb == (1 as i64) and vc == (0 as i64):
+        g.i_op[i] = OP_ZEXT
+        g.i_x[i] = T_I1
+        g.i_b[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    if vb == (0 as i64) and vc == (1 as i64):
+        cv := g.i_a[i]
+        nx := ins_new(g, OP_XOR, T_I1)
+        g.i_a[nx] = cv
+        g.i_b[nx] = const_int(g, T_I1, 1 as i64)
+        nv := new_res(g, nx)
+        ins_before(g, i, nx)
+        g.i_op[i] = OP_ZEXT
+        g.i_x[i] = T_I1
+        g.i_a[i] = nv
+        g.i_b[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    ret false
+end
+
 func fold_select(g &: Ng, i: int): bool:
     c := g.i_a[i]
     if is_cint(g, c):
@@ -520,6 +553,70 @@ func fdiv_pow2(g &: Ng, i: int): bool:
     nb := (bits & (0 - 9223372036854775807 as i64 - (1 as i64))) | ((rexp as i64) << (52 as i64))
     g.i_op[i] = OP_FMUL
     g.i_b[i] = new_val(g, VK_FLT, g.v_ty[b], nb)
+    ret true
+end
+
+func pow2_bits(bits: i64, expo &: int): bool:
+    e := ((bits >> (52 as i64)) & (2047 as i64)) as int
+    m := bits & (0xFFFFFFFFFFFFF as i64)
+    if m != (0 as i64) or e == 0 or e == 2047:
+        ret false
+    end
+    expo = e
+    ret true
+end
+
+func fmul_merge(g &: Ng, i: int): bool:
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    if g.v_kind[a] == VK_FLT and g.v_kind[b] != VK_FLT:
+        g.i_a[i] = b
+        g.i_b[i] = a
+        a = g.i_a[i]
+        b = g.i_b[i]
+    end
+    if g.v_kind[b] != VK_FLT or a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    if g.i_op[d] != OP_FMUL or g.v_uses[a] != 1:
+        ret false
+    end
+    mut b2 := g.i_b[d]
+    mut x := g.i_a[d]
+    if g.v_kind[x] == VK_FLT:
+        tmp := x
+        x = b2
+        b2 = tmp
+    end
+    if g.v_kind[b2] != VK_FLT:
+        ret false
+    end
+    mut e1 := 0
+    mut e2 := 0
+    if not pow2_bits(g.v_i[b], e1) or not pow2_bits(g.v_i[b2], e2):
+        ret false
+    end
+    ne := e1 + e2 - 1023
+    if ne <= 0 or ne >= 2047:
+        ret false
+    end
+    mut safe := e1 >= 1023 and e2 >= 1023
+    if not safe and x >= 0 and g.v_kind[x] == VK_INS:
+        xo := g.i_op[g.v_def[x]]
+        if xo == OP_SITOFP or xo == OP_UITOFP:
+            safe = e1 >= 123 and e2 >= 123 and ne >= 123 and e1 <= 1923 and e2 <= 1923 and ne <= 1923
+        end
+    end
+    if not safe:
+        ret false
+    end
+    if g.i_ty[i] == T_F32 and (ne < 1023 - 126 or ne > 1023 + 127):
+        ret false
+    end
+    sgn := (g.v_i[b] ^ g.v_i[b2]) & (0 - 9223372036854775807 as i64 - (1 as i64))
+    g.i_a[i] = x
+    g.i_b[i] = new_val(g, VK_FLT, g.v_ty[b], sgn | ((ne as i64) << (52 as i64)))
     ret true
 end
 
@@ -827,6 +924,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_cast(g, i)
             else op == OP_SELECT:
                 ch = fold_select(g, i)
+                if not ch and g.i_op[i] == OP_SELECT:
+                    ch = select_bool(g, i)
+                end
             else op == OP_ADDR:
                 ch = fold_addr(g, i)
             else op == OP_EXTV:
@@ -835,6 +935,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_insv_rebuild(g, i)
             else op == OP_FDIV:
                 ch = fdiv_pow2(g, i)
+            else op == OP_FMUL:
+                ch = fmul_merge(g, i)
             else op == OP_CBR:
                 if fold_cbr(g, i):
                     ch = true
@@ -1586,6 +1688,31 @@ func optimize(g &: Ng):
         remap_all(g)
         opt_rounds(g)
     end
+    if not g.off_gvn and gvn(g):
+        mut cfg0 := false
+        count_uses(g)
+        if fold_pass(g, cfg0):
+            remap_all(g)
+        end
+        if cfg0:
+            ensure_terms(g)
+            build_cfg(g)
+            simplify_phis(g)
+        end
+        dce(g)
+    end
+    if not g.off_lle:
+        mut nl := 0
+        mut lch := false
+        until nl < 8 and loop_load_elim(g):
+            nl += 1
+            lch = true
+        end
+        if lch:
+            simplify_phis(g)
+            opt_rounds(g)
+        end
+    end
     if not g.off_dbits and demanded_bits(g):
         simplify_phis(g)
         opt_rounds(g)
@@ -1598,6 +1725,9 @@ func optimize(g &: Ng):
     if not g.off_rvec and reduce_vectorize(g):
         remap_all(g)
         simplify_phis(g)
+        opt_rounds(g)
+    end
+    if not g.off_widen and widen_ivs(g):
         opt_rounds(g)
     end
     if not g.off_lsr and lsr(g):

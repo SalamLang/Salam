@@ -473,3 +473,172 @@ func lsr(g &: Ng): bool:
     end
     ret changed
 end
+
+func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int): bool:
+    if g.i_ty[ph] != T_I32 or g.i_pcount[ph] != 2:
+        ret false
+    end
+    pv := g.i_res[ph]
+    init := phi_val_for(g, ph, pre)
+    nx := phi_val_for(g, ph, latch)
+    if init < 0 or nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    nd := g.v_def[nx]
+    nop := g.i_op[nd]
+    if (nop != OP_ADD and nop != OP_SUB) or g.i_a[nd] != pv or (g.i_f[nd] & IF_NSW) == 0:
+        ret false
+    end
+    stp := g.i_b[nd]
+    if not lsr_inv_m(g, l, mark, stp):
+        ret false
+    end
+    mut nsext := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_SEXT and g.i_ty[i] == T_I64 and (g.i_a[i] == pv or g.i_a[i] == nx) and dominates(g, h, b):
+                nsext += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    if nsext == 0:
+        ret false
+    end
+    pt := g.b_last[pre]
+    mut wi := init
+    if is_cint(g, init):
+        wi = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[init]))
+    else:
+        si := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[si] = init
+        g.i_x[si] = T_I32
+        wi = new_res(g, si)
+        ins_before(g, pt, si)
+    end
+    mut ws := stp
+    if is_cint(g, stp):
+        ws = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[stp]))
+    else:
+        ss := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[ss] = stp
+        g.i_x[ss] = T_I32
+        ws = new_res(g, ss)
+        ins_before(g, pt, ss)
+    end
+    wp := ins_new(g, OP_PHI, T_I64)
+    g.i_ps[wp] = g.pool.len()
+    g.i_pcount[wp] = 2
+    wpv := new_res(g, wp)
+    ins_before(g, g.b_first[h], wp)
+    wn := ins_new(g, nop, T_I64)
+    g.i_a[wn] = wpv
+    g.i_b[wn] = ws
+    g.i_f[wn] = IF_NSW
+    wnv := new_res(g, wn)
+    ins_before(g, g.i_next[nd], wn)
+    g.pool.push(wi)
+    g.pool.push(pre)
+    g.pool.push(wnv)
+    g.pool.push(latch)
+    repl_grow(g)
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            nxj := g.i_next[j]
+            if g.i_op[j] == OP_SEXT and g.i_ty[j] == T_I64 and dominates(g, h, b2) and g.i_res[j] >= 0:
+                if g.i_a[j] == pv:
+                    g.v_repl[g.i_res[j]] = wpv
+                    ins_unlink(g, j)
+                else g.i_a[j] == nx and dominates(g, g.i_blk[nd], b2):
+                    g.v_repl[g.i_res[j]] = wnv
+                    ins_unlink(g, j)
+                end
+            end
+            if g.i_op[j] == OP_ICMP and dominates(g, h, b2):
+                pr := g.i_x[j]
+                if pr != CC_ULT and pr != CC_ULE and pr != CC_UGT and pr != CC_UGE:
+                    ca := g.i_a[j]
+                    cb := g.i_b[j]
+                    mut wa := 0 - 1
+                    if ca == pv: wa = wpv end
+                    if ca == nx and dominates(g, g.i_blk[nd], b2): wa = wnv end
+                    if wa >= 0 and lsr_inv_m(g, l, mark, cb) and g.v_ty[cb] == T_I32:
+                        mut wb := cb
+                        if is_cint(g, cb):
+                            wb = const_int(g, T_I64, norm_int(g, T_I32, g.v_i[cb]))
+                        else:
+                            sb := ins_new(g, OP_SEXT, T_I64)
+                            g.i_a[sb] = cb
+                            g.i_x[sb] = T_I32
+                            wb = new_res(g, sb)
+                            ins_before(g, pt, sb)
+                        end
+                        g.i_a[j] = wa
+                        g.i_b[j] = wb
+                    end
+                end
+            end
+            j = nxj
+        end
+    end
+    ret true
+end
+
+func widen_ivs(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut changed := false
+    mut mark := 5000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        mut phs := Vector {} as Vector<int>
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            phs.push(i)
+            i = g.i_next[i]
+        end
+        each ph in phs:
+            if widen_iv(g, l, mark, h, p, latch, ph):
+                changed = true
+            end
+        end
+        phs.free()
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end

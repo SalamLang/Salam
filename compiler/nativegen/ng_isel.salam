@@ -910,39 +910,270 @@ func ext_to32(g &: Ng, v: int, t: int, sign: bool): int:
     ret r2
 end
 
+func e_shift(g &: Ng, sub: int, sz: int, r: int, n: int):
+    if n == 0:
+        ret
+    end
+    s := e_ri(g, M_SHIFT_RI, sz, r, n as i64)
+    g.mc.cc[s] = sub
+end
+
+func log2_exact(v: u64): int:
+    if v == (0 as u64) or (v & (v - (1 as u64))) != (0 as u64):
+        ret 0 - 1
+    end
+    mut k := 0
+    until ((1 as u64) << (k as u64)) < v:
+        k += 1
+    end
+    ret k
+end
+
+func umagic(d: u64, mm &: u64, ll &: int):
+    mut l := 0
+    until l < 64 and ((1 as u64) << (l as u64)) < d:
+        l += 1
+    end
+    mut hi := (0 as u64) - d
+    if l < 64:
+        hi = ((1 as u64) << (l as u64)) - d
+    end
+    mut rem := hi
+    mut q := 0 as u64
+    mut bit := 63
+    until bit >= 0:
+        carry := rem >> (63 as u64)
+        rem = rem << (1 as u64)
+        q = q << (1 as u64)
+        if carry != (0 as u64) or rem >= d:
+            rem = rem - d
+            q = q | (1 as u64)
+        end
+        bit -= 1
+    end
+    mm = q + (1 as u64)
+    ll = l
+end
+
+func smagic(d: i64, mm &: i64, ss &: int):
+    two63 := (1 as u64) << (63 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    t := two63 + ((d as u64) >> (63 as u64))
+    anc := t - (1 as u64) - t % ad
+    mut p := 63
+    mut q1 := two63 / anc
+    mut r1 := two63 - q1 * anc
+    mut q2 := two63 / ad
+    mut r2 := two63 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p += 1
+        q1 = q1 * (2 as u64)
+        r1 = r1 * (2 as u64)
+        if r1 >= anc:
+            q1 = q1 + (1 as u64)
+            r1 = r1 - anc
+        end
+        q2 = q2 * (2 as u64)
+        r2 = r2 * (2 as u64)
+        if r2 >= ad:
+            q2 = q2 + (1 as u64)
+            r2 = r2 - ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := (q2 + (1 as u64)) as i64
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 64
+end
+
+func ext64(g &: Ng, v: int, t: int, sign: bool): int:
+    r := use_reg(g, v)
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret r
+    end
+    r2 := gpr(g)
+    if bits == 32 and not sign:
+        _m := e_rr(g, M_MOV_RR, 4, r2, r)
+        ret r2
+    end
+    mut op := M_MOVZX_RR
+    mut sz2 := bits <= 8 ? 1 : 2
+    if sign:
+        op = M_MOVSX_RR
+        if bits == 32:
+            sz2 = 4
+        end
+    end
+    if bits == 1:
+        sz2 = 1
+        op = M_MOVZX_RR
+    end
+    mi := e_rr(g, op, op == M_MOVSX_RR ? 8 : 4, r2, r)
+    g.mc.sz2[mi] = sz2
+    ret r2
+end
+
+func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
+    _l := e_ri(g, M_MOV_RI, 8, RAX, m)
+    mh := e_rr(g, M_MULHI, 8, 0 - 1, n)
+    g.mc.cc[mh] = signed ? 1 : 0
+    t := gpr(g)
+    _c := e_copy(g, t, RDX)
+    ret t
+end
+
+func rem_from_quot(g &: Ng, n: int, q: int, d: i64, sz: int): int:
+    r := gpr(g)
+    if is_imm32(d):
+        mi := e_rr(g, M_IMUL_RRI, sz, r, q)
+        g.mc.imm[mi] = d
+    else:
+        _m := e_ri(g, M_MOV_RI, 8, r, d)
+        _x := e_rr(g, M_IMUL_RR, sz, r, q)
+    end
+    out := gpr(g)
+    _c := e_copy(g, out, n)
+    _s := e_alu(g, ALU_SUB, sz, out, r)
+    ret out
+end
+
+func div_const(g &: Ng, i: int, d: i64): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    bits := int_bits(g, t)
+    sz := asz(g, t)
+    sign := op == OP_SDIV or op == OP_SREM
+    isrem := op == OP_SREM or op == OP_UREM
+    wbits := sz * 8
+    if sign:
+        dn := norm_int(g, t, d)
+        if dn == (0 as i64) or dn == (1 as i64) or dn == (0 - 1 as i64):
+            ret false
+        end
+        if bits == 64 and dn == (0 - 9223372036854775807 as i64) - (1 as i64):
+            ret false
+        end
+        mut ad := dn
+        if ad < (0 as i64):
+            ad = 0 - ad
+        end
+        k := log2_exact(ad as u64)
+        if k > 0:
+            n := ext_to32(g, g.i_a[i], t, true)
+            bias := gpr(g)
+            _c := e_copy(g, bias, n)
+            e_shift(g, SH_SAR, sz, bias, wbits - 1)
+            e_shift(g, SH_SHR, sz, bias, wbits - k)
+            u := gpr(g)
+            _c2 := e_copy(g, u, n)
+            _a := e_alu(g, ALU_ADD, sz, u, bias)
+            if isrem:
+                mask := (0 as i64) - ((1 as i64) << (k as i64))
+                if is_imm32(mask):
+                    _m := e_alui(g, ALU_AND, sz, u, mask)
+                else:
+                    mr := gpr(g)
+                    _mm := e_ri(g, M_MOV_RI, 8, mr, mask)
+                    _am := e_alu(g, ALU_AND, sz, u, mr)
+                end
+                out := gpr(g)
+                _c3 := e_copy(g, out, n)
+                _s := e_alu(g, ALU_SUB, sz, out, u)
+                set_res(g, i, out)
+                ret true
+            end
+            e_shift(g, SH_SAR, sz, u, k)
+            if dn < (0 as i64):
+                ng := e_rr(g, M_UNARY, sz, u, 0 - 1)
+                g.mc.cc[ng] = UN_NEG
+            end
+            set_res(g, i, u)
+            ret true
+        end
+        mut m := 0 as i64
+        mut sh := 0
+        smagic(dn, m, sh)
+        n2 := ext64(g, g.i_a[i], t, true)
+        q := mulhi(g, n2, m, true)
+        if dn > (0 as i64) and m < (0 as i64):
+            _a2 := e_alu(g, ALU_ADD, 8, q, n2)
+        else dn < (0 as i64) and m > (0 as i64):
+            _s2 := e_alu(g, ALU_SUB, 8, q, n2)
+        end
+        e_shift(g, SH_SAR, 8, q, sh)
+        sg := gpr(g)
+        _c4 := e_copy(g, sg, q)
+        e_shift(g, SH_SHR, 8, sg, 63)
+        _a3 := e_alu(g, ALU_ADD, 8, q, sg)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, n2, q, dn, 8))
+        else:
+            set_res(g, i, q)
+        end
+        ret true
+    end
+    du := uval(g, t, d)
+    if du <= (1 as u64):
+        ret false
+    end
+    k2 := log2_exact(du)
+    if k2 >= 0:
+        ra := ext_to32(g, g.i_a[i], t, false)
+        r := gpr(g)
+        _c5 := e_copy(g, r, ra)
+        if isrem:
+            mk := (du - (1 as u64)) as i64
+            if is_imm32(mk):
+                _a4 := e_alui(g, ALU_AND, sz, r, mk)
+            else:
+                m2 := gpr(g)
+                _mm2 := e_ri(g, M_MOV_RI, 8, m2, mk)
+                _aa := e_alu(g, ALU_AND, sz, r, m2)
+            end
+        else:
+            e_shift(g, SH_SHR, sz, r, k2)
+        end
+        set_res(g, i, r)
+        ret true
+    end
+    mut um := 0 as u64
+    mut l := 0
+    umagic(du, um, l)
+    n3 := ext64(g, g.i_a[i], t, false)
+    t1 := mulhi(g, n3, um as i64, false)
+    q2 := gpr(g)
+    _c6 := e_copy(g, q2, n3)
+    _s3 := e_alu(g, ALU_SUB, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, 1)
+    _a5 := e_alu(g, ALU_ADD, 8, q2, t1)
+    e_shift(g, SH_SHR, 8, q2, l - 1)
+    if isrem:
+        set_res(g, i, rem_from_quot(g, n3, q2, du as i64, 8))
+    else:
+        set_res(g, i, q2)
+    end
+    ret true
+end
+
 func isel_div(g &: Ng, i: int):
     op := g.i_op[i]
     t := g.i_ty[i]
     sz := asz(g, t)
     sign := op == OP_SDIV or op == OP_SREM
     b := g.i_b[i]
-    if not sign and g.v_kind[b] == VK_INT and g.v_i[b] > (0 as i64):
-        bv := g.v_i[b]
-        if (bv & (bv - (1 as i64))) == (0 as i64):
-            mut sh := 0
-            until ((1 as i64) << (sh as i64)) < bv:
-                sh += 1
-            end
-            ra := ext_to32(g, g.i_a[i], t, false)
-            r := gpr(g)
-            _c := e_copy(g, r, ra)
-            if op == OP_UDIV:
-                if sh > 0:
-                    s := e_ri(g, M_SHIFT_RI, sz, r, sh as i64)
-                    g.mc.cc[s] = SH_SHR
-                end
-            else:
-                if is_imm32(bv - (1 as i64)):
-                    _a := e_alui(g, ALU_AND, sz, r, bv - (1 as i64))
-                else:
-                    m := gpr(g)
-                    _mm := e_ri(g, M_MOV_RI, 8, m, bv - (1 as i64))
-                    _aa := e_alu(g, ALU_AND, sz, r, m)
-                end
-            end
-            set_res(g, i, r)
-            ret
-        end
+    if g.v_kind[b] == VK_INT and div_const(g, i, g.v_i[b]):
+        ret
     end
     ra2 := ext_to32(g, g.i_a[i], t, sign)
     rb := ext_to32(g, b, t, sign)

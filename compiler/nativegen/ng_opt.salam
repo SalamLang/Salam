@@ -143,7 +143,36 @@ func fold_bin(g &: Ng, i: int): bool:
     ret false
 end
 
+func rem_to_mask(g &: Ng, i: int):
+    a := g.i_a[i]
+    b := g.i_b[i]
+    p := g.i_x[i]
+    if (p != CC_EQ and p != CC_NE) or not is_cint(g, b) or g.v_i[b] != (0 as i64):
+        ret
+    end
+    if a < 0 or g.v_kind[a] != VK_INS or g.v_uses[a] != 1:
+        ret
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    if op != OP_SREM and op != OP_UREM:
+        ret
+    end
+    dv := g.i_b[d]
+    if not is_cint(g, dv):
+        ret
+    end
+    t := g.i_ty[d]
+    m := uval(g, t, g.v_i[dv])
+    if m < (2 as u64) or (m & (m - (1 as u64))) != (0 as u64):
+        ret
+    end
+    g.i_op[d] = OP_AND
+    g.i_b[d] = cval(g, t, (m - (1 as u64)) as i64)
+end
+
 func fold_icmp(g &: Ng, i: int): bool:
+    rem_to_mask(g, i)
     a := g.i_a[i]
     b := g.i_b[i]
     p := g.i_x[i]
@@ -237,6 +266,10 @@ func fold_addr(g &: Ng, i: int): bool:
         changed = true
     end
     base := g.i_a[i]
+    if base >= 0 and g.i_b[i] < 0 and is_cint(g, base):
+        replace_res(g, i, new_val(g, VK_INT, T_PTR, g.v_i[base] + g.i_d[i]))
+        ret true
+    end
     if base >= 0 and g.v_kind[base] == VK_INS:
         d := g.v_def[base]
         if d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[d] < 0:
@@ -255,6 +288,54 @@ func fold_addr(g &: Ng, i: int): bool:
     ret changed
 end
 
+func fold_extv(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if is_agg(g, t):
+        ret false
+    end
+    off := g.i_d[i]
+    sz := tsize(g, t) as i64
+    mut a := g.i_a[i]
+    repeat 64:
+        if a < 0:
+            ret false
+        end
+        k := g.v_kind[a]
+        if k == VK_ZERO:
+            if is_flt(g, t):
+                replace_res(g, i, new_val(g, VK_FLT, t, 0 as i64))
+            else:
+                replace_res(g, i, new_val(g, VK_INT, t, 0 as i64))
+            end
+            ret true
+        end
+        if k == VK_UNDEF:
+            replace_res(g, i, new_val(g, VK_UNDEF, t, 0 as i64))
+            ret true
+        end
+        if k != VK_INS:
+            ret false
+        end
+        d := g.v_def[a]
+        if d < 0 or g.i_op[d] != OP_INSV:
+            ret false
+        end
+        doff := g.i_d[d]
+        dt := g.i_x[d]
+        dsz := tsize(g, dt) as i64
+        if doff == off and dt == t:
+            replace_res(g, i, g.i_b[d])
+            ret true
+        end
+        if doff + dsz <= off or off + sz <= doff:
+            a = g.i_a[d]
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
 func fold_cbr(g &: Ng, i: int): bool:
     c := g.i_a[i]
     if g.i_b[i] == g.i_c[i]:
@@ -262,6 +343,16 @@ func fold_cbr(g &: Ng, i: int): bool:
         g.i_a[i] = 0 - 1
         g.i_c[i] = 0 - 1
         ret true
+    end
+    if c >= 0 and g.v_kind[c] == VK_INS and g.v_ty[c] == T_I1:
+        d := g.v_def[c]
+        if d >= 0 and g.i_op[d] == OP_XOR and is_cint(g, g.i_b[d]) and (g.v_i[g.i_b[d]] & (1 as i64)) != (0 as i64):
+            tb := g.i_b[i]
+            g.i_b[i] = g.i_c[i]
+            g.i_c[i] = tb
+            g.i_a[i] = g.i_a[d]
+            ret true
+        end
     end
     if is_cint(g, c):
         mut tgt := g.i_c[i]
@@ -297,6 +388,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_select(g, i)
             else op == OP_ADDR:
                 ch = fold_addr(g, i)
+            else op == OP_EXTV:
+                ch = fold_extv(g, i)
             else op == OP_CBR:
                 if fold_cbr(g, i):
                     ch = true
@@ -329,27 +422,28 @@ func has_side_effect(g &: Ng, i: int): bool:
     ret false
 end
 
-func dce_dec(g &: Ng, v: int):
-    if v < 0:
+func mark_live(g &: Ng, live &: Vector<bool>, v: int):
+    if v < 0 or g.v_kind[v] != VK_INS:
         ret
     end
-    g.v_uses[v] = g.v_uses[v] - 1
-    if g.v_uses[v] == 0 and g.v_kind[v] == VK_INS:
-        d := g.v_def[v]
-        if d >= 0 and g.i_blk[d] >= 0 and not has_side_effect(g, d):
-            g.work.push(d)
-        end
+    d := g.v_def[v]
+    if d >= 0 and not live[d]:
+        live[d] = true
+        g.work.push(d)
     end
 end
 
 func dce(g &: Ng):
-    count_uses(g)
+    mut live := Vector {} as Vector<bool>
+    repeat g.i_op.len():
+        live.push(false)
+    end
     g.work.clear()
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
-            r := g.i_res[i]
-            if not has_side_effect(g, i) and g.i_op[i] != OP_NOP and (r < 0 or g.v_uses[r] == 0):
+            if has_side_effect(g, i):
+                live[i] = true
                 g.work.push(i)
             end
             i = g.i_next[i]
@@ -357,21 +451,32 @@ func dce(g &: Ng):
     end
     until g.work.len() > 0:
         j := g.work.pop()
-        if g.i_blk[j] < 0:
-            continue
-        end
         op := g.i_op[j]
         m := val_mask(op)
-        if (m & 1) != 0: dce_dec(g, g.i_a[j]) end
-        if (m & 2) != 0: dce_dec(g, g.i_b[j]) end
-        if (m & 4) != 0: dce_dec(g, g.i_c[j]) end
-        if op == OP_PHI:
+        if (m & 1) != 0: mark_live(g, live, g.i_a[j]) end
+        if (m & 2) != 0: mark_live(g, live, g.i_b[j]) end
+        if (m & 4) != 0: mark_live(g, live, g.i_c[j]) end
+        if op == OP_CALL:
             repeat g.i_pn[j] in k:
-                dce_dec(g, g.pool[g.i_ps[j] + 2 * k])
+                mark_live(g, live, g.pool[g.i_ps[j] + 3 * k])
+            end
+        else op == OP_PHI:
+            repeat g.i_pn[j] in k2:
+                mark_live(g, live, g.pool[g.i_ps[j] + 2 * k2])
             end
         end
-        ins_unlink(g, j)
     end
+    each b2 in g.b_rpo:
+        mut i2 := g.b_first[b2]
+        until i2 >= 0:
+            nx := g.i_next[i2]
+            if not live[i2] and g.i_op[i2] != OP_NOP:
+                ins_unlink(g, i2)
+            end
+            i2 = nx
+        end
+    end
+    live.free()
 end
 
 func merge_blocks(g &: Ng): bool:
@@ -437,16 +542,178 @@ func merge_blocks(g &: Ng): bool:
     ret changed
 end
 
+func phi_val_for(g &: Ng, phi: int, pred: int): int:
+    ps := g.i_ps[phi]
+    repeat g.i_pn[phi] in k:
+        if g.pool[ps + 2 * k + 1] == pred:
+            ret g.pool[ps + 2 * k]
+        end
+    end
+    ret 0 - 2
+end
+
+func phi_add(g &: Ng, phi: int, val: int, pred: int):
+    ps := g.i_ps[phi]
+    n := g.i_pn[phi]
+    nps := g.pool.len()
+    repeat n in k:
+        g.pool.push(g.pool[ps + 2 * k])
+        g.pool.push(g.pool[ps + 2 * k + 1])
+    end
+    g.pool.push(val)
+    g.pool.push(pred)
+    g.i_ps[phi] = nps
+    g.i_pn[phi] = n + 1
+end
+
+func can_add_edge(g &: Ng, t: int, from_b: int, p: int, cphi: int, cval_: int): bool:
+    mut i := g.b_first[t]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        v := phi_val_for(g, i, from_b)
+        mut nv := v
+        if v == cphi:
+            nv = cval_
+        end
+        old := phi_val_for(g, i, p)
+        if old != (0 - 2) and old != nv:
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func add_edge_phis(g &: Ng, t: int, from_b: int, p: int, cphi: int, cval_: int):
+    mut i := g.b_first[t]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if phi_val_for(g, i, p) == (0 - 2):
+            v := phi_val_for(g, i, from_b)
+            mut nv := v
+            if v == cphi:
+                nv = cval_
+            end
+            phi_add(g, i, nv, p)
+        end
+        i = g.i_next[i]
+    end
+end
+
+func replace_succ(g &: Ng, term: int, old: int, nw: int):
+    if g.i_op[term] == OP_BR:
+        if g.i_b[term] == old:
+            g.i_b[term] = nw
+        end
+    else g.i_op[term] == OP_CBR:
+        if g.i_b[term] == old:
+            g.i_b[term] = nw
+        end
+        if g.i_c[term] == old:
+            g.i_c[term] = nw
+        end
+    end
+end
+
+func thread_block(g &: Ng, b: int): bool:
+    first := g.b_first[b]
+    if first < 0 or b == 0:
+        ret false
+    end
+    mut changed := false
+    if g.i_op[first] == OP_BR and g.b_last[b] == first:
+        t := g.i_b[first]
+        if t == b:
+            ret false
+        end
+        mut preds := Vector {} as Vector<int>
+        repeat g.b_pn[b] in k:
+            preds.push(g.b_pred[g.b_ps[b] + k])
+        end
+        each p in preds:
+            pt := g.b_last[p]
+            if p != b and pt >= 0 and can_add_edge(g, t, b, p, 0 - 3, 0 - 3):
+                add_edge_phis(g, t, b, p, 0 - 3, 0 - 3)
+                replace_succ(g, pt, b, t)
+                changed = true
+            end
+        end
+        preds.free()
+        ret changed
+    end
+    if g.i_op[first] != OP_PHI:
+        ret false
+    end
+    term := g.b_last[b]
+    if g.i_next[first] != term or g.i_op[term] != OP_CBR:
+        ret false
+    end
+    c := g.i_res[first]
+    if c < 0 or g.i_a[term] != c or g.v_uses[c] != 1:
+        ret false
+    end
+    tb := g.i_b[term]
+    fb := g.i_c[term]
+    if tb == b or fb == b or tb == fb:
+        ret false
+    end
+    ps := g.i_ps[first]
+    repeat g.i_pn[first] in k2:
+        v := resolve(g, g.pool[ps + 2 * k2])
+        p2 := g.pool[ps + 2 * k2 + 1]
+        pt2 := g.b_last[p2]
+        if pt2 < 0 or p2 == b:
+            continue
+        end
+        if is_cint(g, v):
+            tgt := ((g.v_i[v] & (1 as i64)) != (0 as i64)) ? tb : fb
+            if can_add_edge(g, tgt, b, p2, c, v):
+                add_edge_phis(g, tgt, b, p2, c, v)
+                replace_succ(g, pt2, b, tgt)
+                g.pool[ps + 2 * k2 + 1] = 0 - 1
+                changed = true
+            end
+        else g.i_op[pt2] == OP_BR:
+            if can_add_edge(g, tb, b, p2, c, v) and can_add_edge(g, fb, b, p2, c, v):
+                add_edge_phis(g, tb, b, p2, c, v)
+                add_edge_phis(g, fb, b, p2, c, v)
+                g.i_op[pt2] = OP_CBR
+                g.i_a[pt2] = v
+                g.i_b[pt2] = tb
+                g.i_c[pt2] = fb
+                g.pool[ps + 2 * k2 + 1] = 0 - 1
+                changed = true
+            end
+        end
+    end
+    ret changed
+end
+
+func thread_jumps(g &: Ng): bool:
+    count_uses(g)
+    repl_grow(g)
+    mut changed := false
+    each b in g.b_rpo:
+        if thread_block(g, b):
+            changed = true
+        end
+    end
+    ret changed
+end
+
 func optimize(g &: Ng):
     mut rounds := 0
     until rounds < 6:
         mut cfgc := false
+        count_uses(g)
         mut changed := fold_pass(g, cfgc)
         if cfgc:
             ensure_terms(g)
             build_cfg(g)
         end
         if merge_blocks(g):
+            build_cfg(g)
+            changed = true
+        end
+        if thread_jumps(g):
             build_cfg(g)
             changed = true
         end

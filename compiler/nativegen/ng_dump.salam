@@ -1,0 +1,95 @@
+package nativegen
+
+import os
+
+k_ng_opn := ["nop", "alloca", "load", "store", "addr", "add", "sub", "mul", "sdiv", "udiv", "srem", "urem", "and", "or", "xor", "shl", "lshr", "ashr", "fadd", "fsub", "fmul", "fdiv", "frem", "fneg", "icmp", "fcmp", "sext", "zext", "trunc", "ptrtoint", "inttoptr", "bitcast", "sitofp", "uitofp", "fptosi", "fptoui", "fpext", "fptrunc", "select", "phi", "call", "br", "cbr", "ret", "unreachable", "insertvalue", "extractvalue", "atomicrmw", "cmpxchg", "copy", "fence"]
+
+func dvs(g &: Ng, v: int): str:
+    if v < 0:
+        ret "_"
+    end
+    k := g.v_kind[v]
+    if k == VK_INT:
+        ret "" + g.v_i[v]
+    end
+    if k == VK_FLT:
+        ret "f" + g.v_i[v]
+    end
+    if k == VK_GLB:
+        ret "@" + tab_str(g.syms, g.v_def[v]) + (g.v_i[v] != (0 as i64) ? "+" + g.v_i[v] : "")
+    end
+    if k == VK_UNDEF:
+        ret "undef"
+    end
+    if k == VK_ZERO:
+        ret "zero"
+    end
+    if k == VK_ARG:
+        ret "%a" + g.v_i[v]
+    end
+    ret "%" + v
+end
+
+func dump_wanted(g &: Ng): bool:
+    want := os.Env("SALAM_NG_DUMP")
+    if want.len() == 0:
+        ret false
+    end
+    ret want == tab_str(g.syms, g.f_sym)
+end
+
+func dump_ir(g &: Ng, tag: str):
+    printerrln "== " + tag + " " + tab_str(g.syms, g.f_sym)
+    each b in g.b_rpo:
+        mut pr := ""
+        repeat g.b_pn[b] in k:
+            pr = pr + " b" + g.b_pred[g.b_ps[b] + k]
+        end
+        printerrln "b" + b + ": preds" + pr
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            mut line := "  "
+            if g.i_res[i] >= 0:
+                line = line + "%" + g.i_res[i] + " = "
+            end
+            line = line + k_ng_opn[op] + " t" + g.i_ty[i]
+            m := val_mask(op)
+            if (m & 1) != 0 or op == OP_CALL:
+                line = line + " " + dvs(g, g.i_a[i])
+            end
+            if (m & 2) != 0:
+                line = line + ", " + dvs(g, g.i_b[i])
+            else op == OP_BR or op == OP_CBR:
+                line = line + " b" + g.i_b[i]
+            end
+            if (m & 4) != 0:
+                line = line + ", " + dvs(g, g.i_c[i])
+            else op == OP_CBR:
+                line = line + " b" + g.i_c[i]
+            end
+            if op == OP_ADDR:
+                line = line + " *" + g.i_x[i] + " +" + g.i_d[i]
+            else op == OP_ALLOCA:
+                line = line + " T" + g.i_x[i]
+            else op == OP_ICMP or op == OP_FCMP:
+                line = line + " p" + g.i_x[i]
+            else op == OP_INSV or op == OP_EXTV:
+                line = line + " @" + g.i_d[i]
+            end
+            if op == OP_CALL:
+                line = line + "("
+                repeat g.i_pn[i] in k2:
+                    line = line + (k2 > 0 ? ", " : "") + dvs(g, g.pool[g.i_ps[i] + 3 * k2])
+                end
+                line = line + ")"
+            else op == OP_PHI:
+                repeat g.i_pn[i] in k3:
+                    line = line + " [" + dvs(g, g.pool[g.i_ps[i] + 2 * k3]) + ", b" + g.pool[g.i_ps[i] + 2 * k3 + 1] + "]"
+                end
+            end
+            printerrln line
+            i = g.i_next[i]
+        end
+    end
+end

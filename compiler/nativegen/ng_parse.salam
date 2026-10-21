@@ -492,8 +492,117 @@ func parse_declare(g &: Ng):
     skip_line(g)
 end
 
+func skip_function(g &: Ng):
+    until g.p < g.sn:
+        if g.src[g.p] == (10 as u8) and g.p + 1 < g.sn and g.src[g.p + 1] == (125 as u8):
+            g.p += 2
+            ret
+        end
+        g.p += 1
+    end
+end
+
+func define_sym(g &: Ng, start: int): int:
+    mut q := start
+    until q < g.sn and g.src[q] != (64 as u8) and g.src[q] != (10 as u8):
+        q += 1
+    end
+    if q >= g.sn or g.src[q] != (64 as u8):
+        ret 0 - 1
+    end
+    q += 1
+    s := q
+    until q < g.sn and is_idc(g.src[q] as int):
+        q += 1
+    end
+    ret tab_get(g.syms, g.src, s, q - s)
+end
+
+func compile_order(g &: Ng, starts: Vector<int>, ends: Vector<int>, fsyms: Vector<int>, order &: Vector<int>):
+    nf := starts.len()
+    nsym := g.sy_kind.len()
+    mut fidx := Vector {} as Vector<int>
+    repeat nsym:
+        fidx.push(0 - 1)
+    end
+    repeat nf in f:
+        if fsyms[f] >= 0:
+            fidx[fsyms[f]] = f
+        end
+    end
+    mut es := Vector {} as Vector<int>
+    mut en := Vector {} as Vector<int>
+    mut edges := Vector {} as Vector<int>
+    repeat nf in f2:
+        es.push(edges.len())
+        mut q := starts[f2]
+        until q < g.sn and g.src[q] != (10 as u8):
+            q += 1
+        end
+        e := ends[f2]
+        until q < e:
+            if g.src[q] == (64 as u8):
+                q += 1
+                s := q
+                until q < e and is_idc(g.src[q] as int):
+                    q += 1
+                end
+                id := tab_get(g.syms, g.src, s, q - s)
+                if id >= 0 and id < nsym and fidx[id] >= 0 and fidx[id] != f2:
+                    edges.push(fidx[id])
+                end
+            else:
+                q += 1
+            end
+        end
+        en.push(edges.len() - es[f2])
+    end
+    mut state := Vector {} as Vector<int>
+    repeat nf:
+        state.push(0)
+    end
+    mut stk := Vector {} as Vector<int>
+    mut sk := Vector {} as Vector<int>
+    repeat nf in root:
+        if state[root] != 0:
+            continue
+        end
+        state[root] = 1
+        stk.push(root)
+        sk.push(0)
+        until stk.len() > 0:
+            top := stk.len() - 1
+            f3 := stk[top]
+            k := sk[top]
+            if k < en[f3]:
+                sk[top] = k + 1
+                c := edges[es[f3] + k]
+                if state[c] == 0:
+                    state[c] = 1
+                    stk.push(c)
+                    sk.push(0)
+                end
+            else:
+                order.push(f3)
+                _p := stk.pop()
+                _q := sk.pop()
+            end
+        end
+    end
+    fidx.free()
+    es.free()
+    en.free()
+    edges.free()
+    state.free()
+    stk.free()
+    sk.free()
+end
+
 pub func ParseModule(g &: Ng):
     prescan_types(g)
+    mut starts := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    mut fsyms := Vector {} as Vector<int>
     until g.ok:
         skip_ws(g)
         if g.p >= g.sn:
@@ -510,11 +619,34 @@ pub func ParseModule(g &: Ng):
         end
         k := word_kw(g)
         if k == KW_DEFINE:
-            parse_define(g)
+            st := g.p
+            fsyms.push(define_sym(g, st))
+            skip_function(g)
+            starts.push(st)
+            ends.push(g.p)
         else k == KW_DECLARE:
             parse_declare(g)
         else:
             skip_line(g)
         end
     end
+    mut order := Vector {} as Vector<int>
+    if g.opt:
+        compile_order(g, starts, ends, fsyms, order)
+    else:
+        repeat starts.len() in f:
+            order.push(f)
+        end
+    end
+    each fi in order:
+        if not g.ok:
+            break
+        end
+        g.p = starts[fi]
+        parse_define(g)
+    end
+    starts.free()
+    ends.free()
+    fsyms.free()
+    order.free()
 end

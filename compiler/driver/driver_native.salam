@@ -1,0 +1,170 @@
+package driver
+
+import os
+import str
+import time
+
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include pf "../prof_self.salam"
+include lv "../llvmgen/llvmgen.salam"
+include lb "../llvm_bridge.salam"
+include ng "../nativegen/nativegen.salam"
+
+func native_target_os(triple: str, err &: str): int:
+    if str.Len(triple) == 0:
+        if SALAM_OS_WINDOWS:
+            ret ng.NG_OS_WINDOWS
+        end
+        if not SALAM_OS_LINUX or not SALAM_ARCH_X64:
+            err = i18.Tr("the native backend generates x86-64 code for Linux and Windows; use --backend=llvm or --backend=c on this host")
+            ret 0 - 1
+        end
+        ret ng.NG_OS_LINUX
+    end
+    if not (str.StartsWith(triple, "x86_64") or str.StartsWith(triple, "amd64")):
+        err = co.Format1(i18.Tr("the native backend generates x86-64 code only, not '%s'; use --backend=llvm for this target"), co.ArgStr(triple))
+        ret 0 - 1
+    end
+    if str.Contains(triple, "windows") or str.Contains(triple, "mingw") or str.Contains(triple, "win32"):
+        ret ng.NG_OS_WINDOWS
+    end
+    if str.Contains(triple, "linux"):
+        ret ng.NG_OS_LINUX
+    end
+    err = co.Format1(i18.Tr("the native backend supports Linux and Windows targets, not '%s'"), co.ArgStr(triple))
+    ret 0 - 1
+end
+
+func native_linker(triple: str): str:
+    if SALAM_OS_WINDOWS:
+        ret "gcc"
+    end
+    if str.Contains(triple, "windows") or str.Contains(triple, "mingw"):
+        ret "x86_64-w64-mingw32-gcc"
+    end
+    ret "cc"
+end
+
+func native_link_cmd(obj: str, exe: str, triple: str, o: lv.Options): str:
+    mut cmd := `"` + native_linker(triple) + `" "` + obj + `" -o "` + exe + `"`
+    each lp in o.lib_paths:
+        cmd += ` -L"` + lp + `"`
+    end
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0:
+            continue
+        end
+        if str.StartsWith(spec, "-") or str.Contains(spec, "/") or str.Contains(spec, "\\") or str.Contains(spec, "."):
+            cmd += ` "` + spec + `"`
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Equals(kind, "framework"):
+            continue
+        end
+        if str.Equals(kind, "static"):
+            cmd += " -Wl,-Bstatic -l" + spec + " -Wl,-Bdynamic"
+            continue
+        end
+        cmd += " -l" + spec
+    end
+    ret cmd + " -lm"
+end
+
+func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
+    mut lerr := ""
+    lrc := lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
+    if lrc == 0:
+        ret 0
+    end
+    if lrc > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, lerr)
+        ret 1
+    end
+    cmd := native_link_cmd(obj, exe, triple, o)
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
+    if os.Run(cmd) != 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("linking failed: %s"), co.ArgStr(cmd)))
+        ret 1
+    end
+    ret 0
+end
+
+func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bool, why: str): int:
+    if not ok:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+        ret 1
+    end
+    triple := o.target_triple
+    mut terr := ""
+    tos := native_target_os(triple, terr)
+    if tos < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, terr)
+        ret 1
+    end
+    _pt := pf.Begin(pf.TP_CODEGEN, opt.input)
+    mut g := ng.New(tos)
+    g.release = o.release
+    g.emit_asm = opt.native_asm
+    built := ng.Run(g, ll_src)
+    pf.End(pf.TP_CODEGEN, _pt)
+    if not built:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 1
+    end
+    stem := output_stem_of(opt.input)
+    if opt.native_asm:
+        apath := stem + ".s"
+        if not ng.WriteAsm(g, apath):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(apath)))
+            ret 2
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(apath)))
+    end
+    win := tos == ng.NG_OS_WINDOWS
+    if o.output_mode == lv.LV_OUT_OBJ:
+        mut opath := opt.output
+        if str.Len(opath) == 0:
+            opath = stem + (win ? ".obj" : ".o")
+        end
+        if not ng.WriteObject(g, opath):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+            ret 2
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(opath)))
+        ret 0
+    end
+    g_ll_tmp_seq += 1
+    obj := os.TempDir() + "/salam-native-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq + (win ? ".obj" : ".o")
+    if not ng.WriteObject(g, obj):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 2
+    end
+    mut exe := opt.output
+    if str.Len(exe) == 0:
+        exe = stem
+    end
+    exe = exe_name_for(exe, triple)
+    _pl := pf.Begin(pf.TP_LINK, exe)
+    rc := native_link(lgr, obj, exe, triple, o)
+    pf.End(pf.TP_LINK, _pl)
+    if opt.keep_temp:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept native object: " + obj)
+    else:
+        _rm := os.Remove(obj)
+    end
+    if rc != 0:
+        ret rc
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(exe)))
+    if str.Len(opt.exe_path) == 0:
+        opt.exe_path = exe
+    end
+    ret 0
+end

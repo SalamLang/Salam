@@ -1071,9 +1071,50 @@ func res_used(g &: Ng, i: int): bool:
     ret v >= 0 and g.v_uses[v] > 0
 end
 
+func isel_vint_add(g &: Ng, i: int):
+    t := g.i_ty[i]
+    ra := use_reg(g, g.i_a[i])
+    rv := wide_reg(g)
+    _c := e_copy(g, rv, ra)
+    rb := use_reg(g, g.i_b[i])
+    m := e_rr(g, M_VOP_RR, 8, rv, rb)
+    g.mc.cc[m] = g.t_elem[t] == T_I64 ? 0xD4 : 0xFE
+    set_res(g, i, rv)
+end
+
+func isel_vredadd(g &: Ng, i: int):
+    v := use_reg(g, g.i_a[i])
+    vt := g.v_ty[g.i_a[i]]
+    q := g.t_elem[vt] == T_I64
+    addop := q ? 0xD4 : 0xFE
+    t1 := wide_reg(g)
+    _c1 := e_copy(g, t1, v)
+    s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, 8, t1, v)
+    g.mc.cc[a1] = addop
+    mut fin := t1
+    if not q:
+        t2 := wide_reg(g)
+        _c2 := e_copy(g, t2, t1)
+        s2 := e_rr(g, M_SHUFPS, 4, t2, t2)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 8, t2, t1)
+        g.mc.cc[a2] = addop
+        fin = t2
+    end
+    r := gpr(g)
+    _m := e_rr(g, M_MOVQ_GX, q ? 8 : 4, r, fin)
+    set_res(g, i, r)
+end
+
 func isel_bin(g &: Ng, i: int):
     op := g.i_op[i]
     t := g.i_ty[i]
+    if is_vec(g, t):
+        isel_vint_add(g, i)
+        ret
+    end
     mut a := g.i_a[i]
     mut b := g.i_b[i]
     sz := asz(g, t)
@@ -3149,6 +3190,12 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_COPY:
             set_res(g, i, use_reg(g, g.i_a[i]))
+            ret
+        end
+        OP_VREDADD:
+            if res_used(g, i):
+                isel_vredadd(g, i)
+            end
             ret
         end
         OP_VBCAST:

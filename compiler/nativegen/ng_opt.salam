@@ -336,6 +336,66 @@ func fold_extv(g &: Ng, i: int): bool:
     ret false
 end
 
+func fold_insv_rebuild(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_STRUCT:
+        ret false
+    end
+    nf := g.t_nf[t]
+    mut src := 0 - 1
+    mut cnt := 0
+    mut a := i
+    mut offs := Vector {} as Vector<i64>
+    mut ok := true
+    repeat nf + 1:
+        if g.i_op[a] != OP_INSV:
+            break
+        end
+        b := g.i_b[a]
+        if b < 0 or g.v_kind[b] != VK_INS or g.i_op[g.v_def[b]] != OP_EXTV:
+            ok = false
+            break
+        end
+        e := g.v_def[b]
+        if g.i_d[e] != g.i_d[a] or (src >= 0 and g.i_a[e] != src):
+            ok = false
+            break
+        end
+        src = g.i_a[e]
+        offs.push(g.i_d[a])
+        cnt += 1
+        nx := g.i_a[a]
+        if nx < 0 or g.v_kind[nx] != VK_INS:
+            a = 0 - 1
+            if nx >= 0 and g.v_kind[nx] != VK_UNDEF:
+                ok = false
+            end
+            break
+        end
+        a = g.v_def[nx]
+    end
+    if not ok or a >= 0 or src < 0 or cnt != nf or g.v_ty[src] != t:
+        offs.free()
+        ret false
+    end
+    repeat nf in k:
+        fo := g.t_offs[g.t_fs[t] + k] as i64
+        mut found := false
+        each o in offs:
+            if o == fo:
+                found = true
+            end
+        end
+        if not found:
+            offs.free()
+            ret false
+        end
+    end
+    offs.free()
+    replace_res(g, i, src)
+    ret true
+end
+
 func fold_cbr(g &: Ng, i: int): bool:
     c := g.i_a[i]
     if g.i_b[i] == g.i_c[i]:
@@ -496,6 +556,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_addr(g, i)
             else op == OP_EXTV:
                 ch = fold_extv(g, i)
+            else op == OP_INSV:
+                ch = fold_insv_rebuild(g, i)
             else op == OP_FDIV:
                 ch = fdiv_pow2(g, i)
             else op == OP_CBR:

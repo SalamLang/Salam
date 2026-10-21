@@ -392,6 +392,80 @@ func fdiv_pow2(g &: Ng, i: int): bool:
     ret true
 end
 
+func guard_nonneg(g &: Ng, c: int, v: int, on_true: bool): bool:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    a := g.i_a[d]
+    b := g.i_b[d]
+    mut p := g.i_x[d]
+    mut k := 0 - 1
+    if a == v and is_cint(g, b):
+        k = b
+    else b == v and is_cint(g, a):
+        k = a
+        p = swap_pred(p)
+    else:
+        ret false
+    end
+    kv := g.v_i[k]
+    if on_true:
+        ret (p == CC_SGT and kv >= (0 - 1 as i64)) or (p == CC_SGE and kv >= (0 as i64))
+    end
+    ret (p == CC_SLE and kv >= (0 - 1 as i64)) or (p == CC_SLT and kv >= (0 as i64))
+end
+
+func known_nonneg(g &: Ng, v: int, blk: int): bool:
+    if is_cint(g, v):
+        ret g.v_i[v] >= (0 as i64)
+    end
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    dop := g.i_op[g.v_def[v]]
+    if dop == OP_ZEXT or dop == OP_UDIV or dop == OP_UREM:
+        ret true
+    end
+    mut c := blk
+    repeat 64:
+        if c <= 0:
+            ret false
+        end
+        pr := g.b_idom[c]
+        if pr < 0:
+            ret false
+        end
+        t := g.b_last[pr]
+        if t >= 0 and g.i_op[t] == OP_CBR and g.b_npred[c] == 1:
+            if g.i_b[t] == c and g.i_c[t] != c and guard_nonneg(g, g.i_a[t], v, true):
+                ret true
+            end
+            if g.i_c[t] == c and g.i_b[t] != c and guard_nonneg(g, g.i_a[t], v, false):
+                ret true
+            end
+        end
+        c = pr
+    end
+    ret false
+end
+
+func signed_to_unsigned(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if not is_cint(g, b) or g.v_i[b] <= (0 as i64):
+        ret false
+    end
+    if not known_nonneg(g, g.i_a[i], g.i_blk[i]):
+        ret false
+    end
+    g.i_op[i] = op == OP_SDIV ? OP_UDIV : OP_UREM
+    ret true
+end
+
 func fold_pass(g &: Ng, cfg_changed &: bool): bool:
     mut changed := false
     repl_grow(g)
@@ -402,7 +476,12 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             remap_ins(g, i)
             op := g.i_op[i]
             mut ch := false
-            if op >= OP_ADD and op <= OP_ASHR:
+            if (op == OP_SDIV or op == OP_SREM) and g.dom_ok:
+                ch = signed_to_unsigned(g, i)
+            end
+            if ch:
+                changed = true
+            else op >= OP_ADD and op <= OP_ASHR:
                 ch = fold_bin(g, i)
             else op == OP_ICMP:
                 ch = fold_icmp(g, i)
@@ -900,7 +979,10 @@ func optimize(g &: Ng):
     until rounds < 6:
         mut cfgc := false
         count_uses(g)
+        build_dom(g)
+        g.dom_ok = true
         mut changed := fold_pass(g, cfgc)
+        g.dom_ok = false
         if cfgc:
             ensure_terms(g)
             build_cfg(g)

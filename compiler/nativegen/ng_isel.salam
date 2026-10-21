@@ -1149,6 +1149,54 @@ func smagic(d: i64, mm &: i64, ss &: int):
     ss = p - 64
 end
 
+func smagic32(d: i64, mm &: i64, ss &: int):
+    two31 := (1 as u64) << (31 as u64)
+    mut ad := d as u64
+    if d < (0 as i64):
+        ad = (0 as u64) - (d as u64)
+    end
+    mut dsign := 0 as u64
+    if d < (0 as i64):
+        dsign = 1 as u64
+    end
+    t := two31 + dsign
+    nc_abs := t - (1 as u64) - t % ad
+    mut p := 31
+    mut q1 := two31 / nc_abs
+    mut r1 := two31 - q1 * nc_abs
+    mut q2 := two31 / ad
+    mut r2 := two31 - q2 * ad
+    mut delta := 0 as u64
+    until true:
+        p += 1
+        q1 = q1 * (2 as u64)
+        r1 = r1 * (2 as u64)
+        if r1 >= nc_abs:
+            q1 = q1 + (1 as u64)
+            r1 = r1 - nc_abs
+        end
+        q2 = q2 * (2 as u64)
+        r2 = r2 * (2 as u64)
+        if r2 >= ad:
+            q2 = q2 + (1 as u64)
+            r2 = r2 - ad
+        end
+        delta = ad - r2
+        if not (q1 < delta or (q1 == delta and r1 == (0 as u64))):
+            break
+        end
+    end
+    mut m := ((q2 + (1 as u64)) & (0xFFFFFFFF as u64)) as i64
+    if m >= ((1 as i64) << (31 as i64)):
+        m = m - ((1 as i64) << (32 as i64))
+    end
+    if d < (0 as i64):
+        m = 0 - m
+    end
+    mm = m
+    ss = p - 32
+end
+
 func ext64(g &: Ng, v: int, t: int, sign: bool): int:
     r := use_reg(g, v)
     bits := int_bits(g, t)
@@ -1279,6 +1327,37 @@ func div_const(g &: Ng, i: int, d: i64): bool:
                 g.mc.cc[ng] = UN_NEG
             end
             set_res(g, i, u)
+            ret true
+        end
+        if bits <= 32:
+            mut m32 := 0 as i64
+            mut sh32 := 0
+            smagic32(dn, m32, sh32)
+            n32 := ext64(g, g.i_a[i], t, true)
+            q32 := gpr(g)
+            mi32 := e_rr(g, M_IMUL_RRI, 8, q32, n32)
+            g.mc.imm[mi32] = m32
+            if dn > (0 as i64) and m32 < (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _a32 := e_alu(g, ALU_ADD, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else dn < (0 as i64) and m32 > (0 as i64):
+                e_shift(g, SH_SAR, 8, q32, 32)
+                _s32 := e_alu(g, ALU_SUB, 4, q32, n32)
+                e_shift(g, SH_SAR, 4, q32, sh32)
+            else:
+                e_shift(g, SH_SAR, 8, q32, 32 + sh32)
+            end
+            sg32 := gpr(g)
+            _c32 := e_copy(g, sg32, q32)
+            e_shift(g, SH_SHR, 4, sg32, 31)
+            _f32 := e_alu(g, ALU_ADD, 4, q32, sg32)
+            share_quot(g, i, q32)
+            if isrem:
+                set_res(g, i, rem_from_quot(g, n32, q32, dn, 4))
+            else:
+                set_res(g, i, q32)
+            end
             ret true
         end
         mut m := 0 as i64

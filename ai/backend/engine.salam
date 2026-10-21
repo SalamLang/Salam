@@ -35,6 +35,11 @@ mut LOCK := sync.Mutex {}
 mut AGENTS := ""
 mut AGENTS_AT := 0 as i64
 mut SESSION_AGENT := HashMap {} as HashMap<str, str>
+mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
+mut SESSION_MODEL := HashMap {} as HashMap<str, str>
+mut SESSION_TRY := HashMap {} as HashMap<str, int>
+mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
+mut FALLBACKS := Vector {} as Vector<str>
 
 struct Answer:
     pub status: int = 0
@@ -49,6 +54,7 @@ pub struct Reply:
     pub activity: str = "[]"
     pub started: bool = false
     pub idle: bool = false
+    pub acted: bool = false
 end
 
 pub struct Usage:
@@ -248,16 +254,41 @@ func agent_exists(name: str): bool:
     ret names.find("\n" + name + "\n") >= 0
 end
 
-func send_as(sid: str, agent: str, text: str): bool:
+func model_json(model: str): str:
+    slash := model.find("/")
+    if slash <= 0 or slash >= model.len() - 1:
+        ret ""
+    end
+    ret `, "model": {"providerID": ` + json.Str(model.substr(0, slash)) + `, "modelID": ` + json.Str(model.substr(slash + 1, model.len() - slash - 1)) + "}"
+end
+
+func remember(sid: str, agent: str, text: str, model: str, fresh: bool):
     _l := sync.Lock(LOCK)
-    SESSION_AGENT.put(sid, agent)
     if SESSION_AGENT.size() > 5000:
         SESSION_AGENT = HashMap {} as HashMap<str, str>
-        SESSION_AGENT.put(sid, agent)
+        SESSION_PROMPT = HashMap {} as HashMap<str, str>
+        SESSION_MODEL = HashMap {} as HashMap<str, str>
+        SESSION_TRY = HashMap {} as HashMap<str, int>
+        SESSION_RETRY_AT = HashMap {} as HashMap<str, i64>
+    end
+    SESSION_AGENT.put(sid, agent)
+    SESSION_MODEL.put(sid, model)
+    if fresh:
+        SESSION_PROMPT.put(sid, text)
+        SESSION_TRY.put(sid, 0)
+        _r := SESSION_RETRY_AT.remove(sid)
     end
     _u := sync.Unlock(LOCK)
-    body := `{"agent": ` + json.Str(agent) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
+end
+
+func post_prompt(sid: str, agent: str, text: str, model: str): bool:
+    body := `{"agent": ` + json.Str(agent) + model_json(model) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
     ret ok_status(call("POST", "/session/" + sid + "/prompt_async", body, SEND_MS))
+end
+
+func send_as(sid: str, agent: str, text: str): bool:
+    remember(sid, agent, text, "", true)
+    ret post_prompt(sid, agent, text, "")
 end
 
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
@@ -304,11 +335,59 @@ end
 pub func Followup(sid: str, text: str): bool:
     _l := sync.Lock(LOCK)
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
     _u := sync.Unlock(LOCK)
-    ret send_as(sid, agent, text)
+    remember(sid, agent, text, model, false)
+    ret post_prompt(sid, agent, text, model)
+end
+
+pub func SetFallbacks(list: str):
+    mut found := Vector {} as Vector<str>
+    each part in str.Split(list, ","):
+        m := str.Trim(part)
+        if model_json(m).len() > 0:
+            found.push(m)
+        end
+    end
+    FALLBACKS = found
+end
+
+pub func Fallbacks(): int:
+    ret FALLBACKS.len()
+end
+
+pub func Retry(sid: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    if SESSION_RETRY_AT.has(sid) and now - SESSION_RETRY_AT.get(sid) < 4000:
+        _e := sync.Unlock(LOCK)
+        ret true
+    end
+    tried := SESSION_TRY.has(sid) ? SESSION_TRY.get(sid) : FALLBACKS.len()
+    if tried >= FALLBACKS.len() or not SESSION_PROMPT.has(sid):
+        _f := sync.Unlock(LOCK)
+        ret false
+    end
+    SESSION_TRY.put(sid, tried + 1)
+    SESSION_RETRY_AT.put(sid, now)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    text := SESSION_PROMPT.get(sid)
+    model := FALLBACKS.get(tried)
+    _u := sync.Unlock(LOCK)
+    seen := Poll(sid)
+    if seen.acted or seen.text.len() > 0:
+        ret false
+    end
+    _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
+    println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
+    remember(sid, agent, text, model, false)
+    ret post_prompt(sid, agent, text, model)
 end
 
 pub func Abort(sid: str):
+    _l := sync.Lock(LOCK)
+    _p := SESSION_PROMPT.remove(sid)
+    _u := sync.Unlock(LOCK)
     _r := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
 end
 
@@ -437,6 +516,7 @@ pub func Poll(sid: str): Reply:
                             pieces.push(t)
                         end
                     else kind == "tool":
+                        out.acted = true
                         status := text_of(field(p, "state"), "status")
                         if status == "running" or status == "pending":
                             searching = true

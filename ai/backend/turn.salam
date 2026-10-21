@@ -82,6 +82,12 @@ func asked_at(sid: str, created: i64): i64:
     ret t
 end
 
+func retried(sid: str):
+    _l := sync.Lock(CHECK_LOCK)
+    ASKED.put(sid, aistore.Now())
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
 func verify(sid: str, text: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
@@ -229,8 +235,9 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
     mut idle := false
     mut failed := false
     tracked := ailive.Snapshot(sid, text, phase, idle, failed)
+    mut stop := false
     if tracked and failed and not idle:
-        aiengine.Abort(sid)
+        stop = true
         r.text = text
         r.done = true
         r.failed = true
@@ -248,6 +255,14 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
         aiengine.Abort(sid)
         r.done = true
         r.failed = true
+    else r.done and r.failed and r.text.len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
+        ailive.Begin(sid)
+        retried(sid)
+        r = aiengine.Reply {}
+        stop = false
+    end
+    if stop:
+        aiengine.Abort(sid)
     end
     if check and r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
         r.done = false

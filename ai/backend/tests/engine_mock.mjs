@@ -27,6 +27,7 @@ const answerFor = (s) => {
   if (s.prompt.includes("<compiler_check>")) return `Fixed (${s.agent}, ${s.prompt.includes("unexpected") ? "saw errors" : "no errors"}):\n${code('func main:\n    println "hi"\nend')}`;
   if (s.prompt.includes("bad code")) return `Here:\n${code('func main() {\n    println("hi");\n}')}`;
   if (s.prompt.includes("snippet code")) return `Use:\n${code("println name")}`;
+  if (s.model) return `Echo: ${s.prompt.slice(0, 40)} via ${s.model}`;
   return `Echo: ${s.prompt.slice(0, 40)} ${EM} done. Range 1${EN}5.`;
 };
 async function callDesktop(s) {
@@ -63,6 +64,10 @@ const emit = (obj) => {
 };
 function streamParts(id, s) {
   if (!process.env.MOCK_LIVE) return;
+  if (s.limited) {
+    setTimeout(() => emit({ type: "session.status", properties: { sessionID: id, status: { type: "retry", attempt: 1, message: "Rate limit exceeded. Please try again later." } } }), 80);
+    return;
+  }
   if (s.prompt.includes("goes quiet") || s.prompt.includes("fail midway")) return;
   const full = answerFor(s);
   const pid = `prt_${id}_${++n}`;
@@ -98,14 +103,21 @@ http.createServer((req, res) => {
     if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
       const busy = {};
-      for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < s.span))) busy[id] = { type: "busy" };
+      for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.model = b.model?.modelID ?? ""; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});
       if (s.dead) return send(200, [{ info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] }]);
+      if (s.limited && Date.now() - s.start <= 300) return send(200, [{ info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] }]);
+      if (s.limited) {
+        return send(200, [
+          { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
+          { info: { role: "assistant", error: { name: "APIError", data: { message: "Rate limit exceeded. Please try again later." } }, time: { created: s.start, completed: s.start + 300 }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [] },
+        ]);
+      }
       const full = answerFor(s);
       if (s.prompt.includes("goes quiet")) {
         return send(200, [

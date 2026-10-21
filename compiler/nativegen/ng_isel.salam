@@ -1069,6 +1069,33 @@ func isel_bin(g &: Ng, i: int):
         set_res(g, i, rl)
         ret
     end
+    if op == OP_ADD and not bimm:
+        mut mo := 0 - 1
+        mut other := 0 - 1
+        if g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]] and lea_mul_k(g, g.v_def[a]) > 0:
+            mo = g.v_def[a]
+            other = b
+        else g.v_kind[b] == VK_INS and g.skipi[g.v_def[b]] and lea_mul_k(g, g.v_def[b]) > 0:
+            mo = g.v_def[b]
+            other = a
+        end
+        if mo >= 0:
+            mut c := 0
+            mut sc := 0
+            lea_split(lea_mul_k(g, mo), c, sc)
+            x2 := use_reg(g, g.i_a[mo])
+            mut tr := x2
+            if c > 1:
+                tr = gpr(g)
+                _lt := e_rm(g, M_LEA, 8, tr, Mem { k = MK_BI, b = x2, i = x2, s = c - 1, d = 0 as i64 })
+            end
+            ro := use_reg(g, other)
+            rl2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, rl2, Mem { k = MK_BI, b = ro, i = tr, s = sc, d = 0 as i64 })
+            set_res(g, i, rl2)
+            ret
+        end
+    end
     if op == OP_MUL:
         r := gpr(g)
         if bimm and mul_small(g, r, use_reg(g, a), g.v_i[b]):
@@ -1436,19 +1463,49 @@ func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
 end
 
 func lea_mul_k(g &: Ng, i: int): int:
-    if g.i_op[i] != OP_MUL or not is_cint(g, g.i_b[i]):
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if not is_cint(g, b):
         ret 0 - 1
     end
-    k := g.v_i[g.i_b[i]]
-    if k == (2 as i64) or k == (3 as i64) or k == (5 as i64) or k == (9 as i64):
-        ret k as int
+    if op == OP_SHL:
+        sh := g.v_i[b]
+        if sh >= (1 as i64) and sh <= (3 as i64):
+            ret 1 << (sh as int)
+        end
+        ret 0 - 1
+    end
+    if op != OP_MUL:
+        ret 0 - 1
+    end
+    k := g.v_i[b]
+    each c in [2, 3, 4, 5, 6, 8, 9, 10, 12, 18, 20, 24, 36, 40, 72]:
+        if k == (c as i64):
+            ret c
+        end
     end
     ret 0 - 1
 end
 
+func lea_split(k: int, c &: int, sc &: int):
+    each s0 in [8, 4, 2, 1]:
+        if k % s0 == 0:
+            q := k / s0
+            if q == 1 or q == 3 or q == 5 or q == 9:
+                c = q
+                sc = s0
+                ret
+            end
+        end
+    end
+    c = 0
+    sc = 0
+end
+
 func mul_add_user(g &: Ng, i: int): bool:
     r := g.i_res[i]
-    if r < 0 or g.v_uses[r] != 1 or lea_mul_k(g, i) < 0:
+    k := lea_mul_k(g, i)
+    if r < 0 or g.v_uses[r] != 1 or k < 0:
         ret false
     end
     mut j := g.i_next[i]
@@ -1456,13 +1513,12 @@ func mul_add_user(g &: Ng, i: int): bool:
         if j < 0:
             ret false
         end
-        if g.i_op[j] == OP_ADD and g.i_ty[j] == g.i_ty[i]:
-            if g.i_a[j] == r and is_cint(g, g.i_b[j]) and is_imm32(g.v_i[g.i_b[j]]):
-                ret true
+        if g.i_op[j] == OP_ADD and g.i_ty[j] == g.i_ty[i] and (g.i_a[j] == r or g.i_b[j] == r) and g.i_a[j] != g.i_b[j]:
+            o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+            if is_cint(g, o):
+                ret is_imm32(g.v_i[o]) and (k == 2 or k == 3 or k == 5 or k == 9)
             end
-            if g.i_b[j] == r and is_cint(g, g.i_a[j]) and is_imm32(g.v_i[g.i_a[j]]):
-                ret true
-            end
+            ret true
         end
         j = g.i_next[j]
     end
@@ -2883,6 +2939,10 @@ func isel_ins(g &: Ng, i: int, b: int):
             ret
         end
         OP_SHL, OP_LSHR, OP_ASHR:
+            if op == OP_SHL and mul_add_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
             if res_used(g, i):
                 isel_shift(g, i)
             end

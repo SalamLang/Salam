@@ -50,7 +50,9 @@ func isel_init(g &: Ng):
     g.var_.clear()
     g.vao.clear()
     g.v_mem.clear()
+    g.vown.clear()
     repeat nv:
+        g.vown.push(false)
         g.vv.push(0 - 1)
         g.vsc.push(1)
         g.vak.push(AK_NONE)
@@ -59,10 +61,15 @@ func isel_init(g &: Ng):
         g.v_mem.push(0)
     end
     g.phit.clear()
+    g.skipi.clear()
+    g.sret_to.clear()
     repeat g.i_op.len():
         g.phit.push(0 - 1)
+        g.skipi.push(false)
+        g.sret_to.push(0 - 1)
     end
     count_uses(g)
+    compute_escape(g)
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
@@ -1186,17 +1193,205 @@ func f_to_u64(g &: Ng, ra: int, st: int): int:
     ret r
 end
 
+func clobbers_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end
+
+func uses_val(g &: Ng, i: int, v: int): bool:
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and g.i_a[i] == v: ret true end
+    if (m & 2) != 0 and g.i_b[i] == v: ret true end
+    if (m & 4) != 0 and g.i_c[i] == v: ret true end
+    op := g.i_op[i]
+    if op == OP_CALL:
+        repeat g.i_pn[i] in k:
+            if g.pool[g.i_ps[i] + 3 * k] == v:
+                ret true
+            end
+        end
+    else op == OP_PHI:
+        repeat g.i_pn[i] in k2:
+            if g.pool[g.i_ps[i] + 2 * k2] == v:
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func agg_load_defer(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0:
+        ret true
+    end
+    need := g.v_uses[r]
+    if need == 0:
+        ret true
+    end
+    if (g.i_f[i] & IF_VOLATILE) != 0:
+        ret false
+    end
+    mut seen := 0
+    mut j := g.i_next[i]
+    until j >= 0:
+        op := g.i_op[j]
+        if uses_val(g, j, r):
+            okuse := (op == OP_STORE and g.i_a[j] == r and g.i_b[j] != r) or op == OP_EXTV or op == OP_RET or (op == OP_INSV and g.i_a[j] == r and g.i_b[j] != r)
+            if not okuse:
+                ret false
+            end
+            seen += 1
+            if seen == need:
+                ret true
+            end
+        end
+        if clobbers_mem(op):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func set_loc(g &: Ng, r: int, m: Mem):
+    if m.k == MK_FRAME and m.i < 0:
+        g.vak[r] = AK_FRAME
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    if m.k == MK_BI and m.i < 0 and m.b >= 0:
+        g.vak[r] = AK_PTR
+        g.var_[r] = m.b
+        g.vao[r] = m.d as int
+        ret
+    end
+    g.vak[r] = AK_PTR
+    g.var_[r] = lea_reg(g, m)
+    g.vao[r] = 0
+end
+
+func mark_esc(g &: Ng, v: int):
+    if v >= 0:
+        g.v_esc[v] = true
+    end
+end
+
+func compute_escape(g &: Ng):
+    g.v_esc.clear()
+    repeat g.v_kind.len():
+        g.v_esc.push(false)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_LOAD:
+                _x := 0
+            else op == OP_STORE:
+                mark_esc(g, g.i_a[i])
+            else op == OP_ADDR:
+                mark_esc(g, g.i_b[i])
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0: mark_esc(g, g.i_a[i]) end
+                if (m & 2) != 0: mark_esc(g, g.i_b[i]) end
+                if (m & 4) != 0: mark_esc(g, g.i_c[i]) end
+                if op == OP_CALL:
+                    repeat g.i_pn[i] in k:
+                        mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
+                    end
+                else op == OP_PHI:
+                    repeat g.i_pn[i] in k2:
+                        mark_esc(g, g.pool[g.i_ps[i] + 2 * k2])
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut changed := true
+    until changed:
+        changed = false
+        each b2 in g.b_rpo:
+            mut j := g.b_first[b2]
+            until j >= 0:
+                if g.i_op[j] == OP_ADDR:
+                    r := g.i_res[j]
+                    base := g.i_a[j]
+                    if r >= 0 and g.v_esc[r] and base >= 0 and not g.v_esc[base]:
+                        g.v_esc[base] = true
+                        changed = true
+                    end
+                end
+                j = g.i_next[j]
+            end
+        end
+    end
+end
+
+func local_root(g &: Ng, v: int): int:
+    mut x := v
+    repeat 16:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret 0 - 1
+        end
+        d := g.v_def[x]
+        if g.i_op[d] == OP_ALLOCA:
+            if g.v_esc[x]:
+                ret 0 - 1
+            end
+            ret x
+        end
+        if g.i_op[d] != OP_ADDR:
+            ret 0 - 1
+        end
+        x = g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func sret_forward(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1:
+        ret 0 - 1
+    end
+    j := g.i_next[i]
+    if j < 0 or g.i_op[j] != OP_STORE or g.i_a[j] != r:
+        ret 0 - 1
+    end
+    q := g.i_b[j]
+    root := local_root(g, q)
+    if root < 0:
+        ret 0 - 1
+    end
+    repeat g.i_pn[i] in k:
+        av := g.pool[g.i_ps[i] + 3 * k]
+        if av == q or av == root or local_root(g, av) == root:
+            ret 0 - 1
+        end
+    end
+    ret j
+end
+
 func isel_load(g &: Ng, i: int):
     t := g.i_ty[i]
     a := g.i_a[i]
     if is_agg(g, t):
         r := g.i_res[i]
+        if agg_load_defer(g, i):
+            if r >= 0 and g.v_uses[r] > 0:
+                set_loc(g, r, mem_of(g, a, 0 as i64))
+            end
+            ret
+        end
         slot := new_slot(g, tsize(g, t), talign(g, t))
         emit_copy(g, frame_mem(slot, 0 as i64), mem_of(g, a, 0 as i64), tsize(g, t))
         if r >= 0:
             g.vak[r] = AK_FRAME
             g.var_[r] = slot
             g.vao[r] = 0
+            g.vown[r] = true
         end
         ret
     end
@@ -1361,7 +1556,7 @@ func isel_insv(g &: Ng, i: int):
     sz := tsize(g, t)
     mut slot := 0 - 1
     k := g.v_kind[a]
-    if k == VK_INS and g.vak[a] == AK_FRAME and g.vao[a] == 0 and g.v_uses[a] == 1 and def_op(g, a) != OP_PHI:
+    if k == VK_INS and g.vak[a] == AK_FRAME and g.vao[a] == 0 and g.v_uses[a] == 1 and g.vown[a]:
         slot = g.var_[a]
     else:
         slot = new_slot(g, sz, talign(g, t))
@@ -1376,6 +1571,7 @@ func isel_insv(g &: Ng, i: int):
         g.vak[r] = AK_FRAME
         g.var_[r] = slot
         g.vao[r] = 0
+        g.vown[r] = true
     end
 end
 
@@ -1473,9 +1669,19 @@ func isel_call(g &: Ng, i: int):
     mut regs := Vector {} as Vector<int>
     mut cls := Vector {} as Vector<int>
     mut rslot := 0 - 1
+    mut fwd := 0 - 1
     if is_agg(g, rt):
-        rslot = new_slot(g, tsize(g, rt), talign(g, rt))
-        regs.push(lea_reg(g, frame_mem(rslot, 0 as i64)))
+        fwd = sret_forward(g, i)
+        if fwd >= 0:
+            regs.push(lea_reg(g, mem_of(g, g.i_b[fwd], 0 as i64)))
+            g.skipi[fwd] = true
+        else ret_passthru(g, i):
+            regs.push(g.retp)
+            g.skipi[g.i_next[i]] = true
+        else:
+            rslot = new_slot(g, tsize(g, rt), talign(g, rt))
+            regs.push(lea_reg(g, frame_mem(rslot, 0 as i64)))
+        end
         cls.push(0)
     end
     repeat na in k:
@@ -1531,7 +1737,11 @@ func isel_call(g &: Ng, i: int):
             g.vak[v2] = AK_FRAME
             g.var_[v2] = rslot
             g.vao[v2] = 0
+            g.vown[v2] = true
         end
+        ret
+    end
+    if fwd >= 0:
         ret
     end
     if rt == T_VOID or v2 < 0:
@@ -1546,6 +1756,15 @@ func isel_call(g &: Ng, i: int):
         _c2 := e_copy(g, r3, RAX)
         g.vv[v2] = r3
     end
+end
+
+func ret_passthru(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.retp < 0:
+        ret false
+    end
+    j := g.i_next[i]
+    ret j >= 0 and g.i_op[j] == OP_RET and g.i_a[j] == r
 end
 
 func call_arg(g &: Ng, i: int, k: int): int:
@@ -1703,6 +1922,14 @@ end
 
 func isel_ins(g &: Ng, i: int, b: int):
     op := g.i_op[i]
+    if g.skipi[i]:
+        if op == OP_RET:
+            _c := e_copy(g, RAX, g.retp)
+            ri := mi_new(g, M_RET, 0)
+            g.mc.imm[ri] = 1 as i64
+        end
+        ret
+    end
     switch op:
         OP_NOP, OP_PHI: ret end
         OP_ALLOCA:

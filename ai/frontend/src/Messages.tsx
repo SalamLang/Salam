@@ -67,22 +67,64 @@ type Tools = {
 
 type BoxGroup = { kind: "boxes"; items: (ThinkStep | ToolStep)[] };
 type TextGroup = { kind: "text"; text: string };
+type CallItem = { kind: "call"; call: CallView };
+type CallsGroup = { kind: "calls"; calls: CallView[] };
+type TimelineItem = BoxGroup | TextGroup | CallItem | CallsGroup;
 
-function groupSteps(steps: ActivityStep[], body: string): (BoxGroup | TextGroup)[] {
-  const groups: (BoxGroup | TextGroup)[] = [];
+const DESKTOP_TOOLS = new Set([
+  "shell",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "list_dir",
+  "glob",
+  "grep",
+  "docker",
+  "wsl",
+  "run_tests",
+]);
+
+function withCalls(m: Message, live: CallView[]): CallView[] {
+  const all = new Map<string, CallView>();
+  for (const c of m.calls ?? []) all.set(c.call_id, c as CallView);
+  for (const c of live) all.set(c.call_id, c);
+  return [...all.values()];
+}
+
+function timeline(steps: ActivityStep[], body: string, calls: CallView[]): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  const used = new Set<string>();
+  let boxes: (ThinkStep | ToolStep)[] = [];
   let sawText = false;
+  const flush = () => {
+    if (boxes.length > 0) {
+      items.push({ kind: "boxes", items: boxes });
+      boxes = [];
+    }
+  };
   for (const s of steps) {
     if (s.kind === "text") {
+      flush();
       sawText = true;
-      groups.push({ kind: "text", text: s.text });
+      items.push({ kind: "text", text: s.text });
       continue;
     }
-    const last = groups[groups.length - 1];
-    if (last && last.kind === "boxes") last.items.push(s);
-    else groups.push({ kind: "boxes", items: [s] });
+    if (s.kind === "tool" && s.tool && DESKTOP_TOOLS.has(s.tool)) {
+      const call = calls.find((c) => !used.has(c.call_id) && c.tool === s.tool);
+      if (call) {
+        used.add(call.call_id);
+        flush();
+        items.push({ kind: "call", call });
+        continue;
+      }
+    }
+    boxes.push(s);
   }
-  if (!sawText && body) groups.push({ kind: "text", text: body });
-  return groups;
+  flush();
+  if (!sawText && body) items.push({ kind: "text", text: body });
+  const rest = calls.filter((c) => !used.has(c.call_id));
+  if (rest.length > 0) items.push({ kind: "calls", calls: rest });
+  return items;
 }
 
 function TextGroupView({ text, live }: { text: string; live: boolean }) {
@@ -100,26 +142,34 @@ function TextGroupView({ text, live }: { text: string; live: boolean }) {
 function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
   const pending = m.status === "pending";
   const phase = m.phase || "thinking";
-  const waiting = calls.some((c) => c.state === "pending" || c.state === "running");
+  const all = withCalls(m, calls);
+  const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
-  const groups = groupSteps(steps, m.body);
-  const showPhase = pending && calls.length > 0 && !waiting && m.body.length === 0;
+  const items = timeline(steps, m.body, all);
+  const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
       <div className="msg-body">
-        {groups.map((g, i) => {
-          const isLast = i === groups.length - 1;
+        {items.map((g, i) => {
+          const isLast = i === items.length - 1;
           if (g.kind === "text") return <TextGroupView key={i} text={g.text} live={pending && isLast} />;
+          if (g.kind === "call")
+            return (
+              <div key={i} className="tool-list">
+                <ToolCard c={g.call} onDecide={onDecide} onStop={onStop} />
+              </div>
+            );
+          if (g.kind === "calls")
+            return (
+              <div key={i} className="tool-list">
+                {g.calls.map((c) => (
+                  <ToolCard key={c.call_id} c={c} onDecide={onDecide} onStop={onStop} />
+                ))}
+              </div>
+            );
           return <ActivityPanel key={i} steps={g.items} pending={pending && isLast} ms={isLast ? m.ms : undefined} created={m.created} />;
         })}
-        {calls.length > 0 && (
-          <div className="tool-list">
-            {calls.map((c) => (
-              <ToolCard key={c.call_id} c={c} onDecide={onDecide} onStop={onStop} />
-            ))}
-          </div>
-        )}
         {showPhase && (
           <div className="phase" aria-live="polite">
             <span className="dots">
@@ -127,7 +177,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
               <i />
               <i />
             </span>
-            {calls.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+            {all.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
         {!pending && m.body && (

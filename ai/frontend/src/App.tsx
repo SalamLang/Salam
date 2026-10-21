@@ -228,7 +228,17 @@ export function App() {
       try {
         const r = await api.chat(id);
         if (activeRef.current !== id) return;
-        setMessages(r.messages);
+        const byMid = new Map<number, NonNullable<Message["calls"]>>();
+        for (const c of r.calls ?? []) {
+          const list = byMid.get(c.mid) ?? [];
+          list.push(c);
+          byMid.set(c.mid, list);
+        }
+        setMessages(
+          r.messages.map((m) =>
+            m.role === "assistant" && byMid.has(m.id) ? { ...m, calls: byMid.get(m.id) } : m,
+          ),
+        );
         const pending = r.messages.find((m) => m.status === "pending");
         if (pending) follow(id, pending.id);
       } catch (e) {

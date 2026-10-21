@@ -3,6 +3,7 @@ import { ToolCard, type CallView } from "./Agent";
 import type { ActivityStep, Message, ThinkStep, ToolStep } from "./api";
 import type { AgentAnswer } from "./desktop";
 import { ActivityPanel } from "./Activity";
+import { MessageFiles } from "./Attach";
 import { CopyButton, Markdown } from "./Markdown";
 
 const PHASE_TEXT: Record<string, string> = {
@@ -190,12 +191,17 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
   );
 }
 
-export function MessageView({ m, name, ...tools }: { m: Message; name: string } & Tools) {
+export function MessageView({ m, name, loadFile, ...tools }: { m: Message; name: string; loadFile?: (id: number) => Promise<string> } & Tools) {
   if (m.role === "user") {
     return (
       <div className="msg user">
-        <div className="bubble" dir="auto">
-          {m.body}
+        <div className="msg-user-stack">
+          {m.files && m.files.length > 0 && <MessageFiles files={m.files} load={loadFile ?? (() => Promise.reject(new Error("no loader")))} />}
+          {m.body && (
+            <div className="bubble" dir="auto">
+              {m.body}
+            </div>
+          )}
         </div>
         <span className="sr-only">{name}</span>
       </div>

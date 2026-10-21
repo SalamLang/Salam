@@ -63,6 +63,7 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
         .title("Salam Agent")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
+        .disable_drag_drop_handler()
         .on_navigation(move |url| {
             if config::is_local_asset(url) || config::same_origin(url, &target) || url.scheme() == "about" {
                 return true;
@@ -161,7 +162,11 @@ mod tests {
 
     #[test]
     fn only_web_and_mail_links_leave_the_app() {
-        for link in ["https://www.salamlang.ir/learn/", "http://localhost:3000/chat", "mailto:hello@salamlang.ir"] {
+        for link in [
+            "https://www.salamlang.ir/learn/",
+            "http://localhost:3000/chat",
+            "mailto:hello@salamlang.ir",
+        ] {
             assert!(is_external(&tauri::Url::parse(link).unwrap()), "{link} should open externally");
         }
         for link in ["tauri://localhost/index.html", "about:blank", "file:///etc/passwd"] {

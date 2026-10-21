@@ -47,6 +47,8 @@ kernel mid-stream. A request that was in flight when the process died is marked
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
+Every desktop tool call is also recorded in `bridge_calls`: the chat and assistant message it belongs to, the tool, its arguments (with the session token removed), the preview shown in the app, the full output and the final state. `GET /chats/:id` returns them as `calls`, in the order they ran, so reopening a chat shows the same text and command boxes as the live turn. Rows are deleted with their chat.
+
 The API:
 
 | Method and path                                                                                | Purpose                                                                                                     |
@@ -54,7 +56,7 @@ The API:
 | `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                                            |
 | `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                                                    |
 | `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                                         |
-| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                                                          |
+| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages and recorded agent calls, rename, delete                                                 |
 | `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                                         |
 | `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                            |
 | `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                               |

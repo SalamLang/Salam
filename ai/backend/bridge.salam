@@ -81,7 +81,92 @@ func clip(s: str, max: int): str:
     if s.len() <= max:
         ret s
     end
-    ret s.substr(0, max)
+    mut cut := max
+    until cut <= 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret s.substr(0, cut)
+end
+
+func safe_args(args: str): str:
+    mut err := encerr.EncodingError {}
+    mut root := json.Decode(args, err)
+    if encerr.IsError(err) or not value.IsObject(root):
+        value.ValueFree(root)
+        ret "{}"
+    end
+    _d := value.ObjectDelete(root, "session")
+    out := json.Encode(root, json.JSONOptions {})
+    value.ValueFree(root)
+    ret out
+end
+
+func start_call(id: str, chat: str, dev: str, tool: str, args: str):
+    mut uid := "0"
+    mut mid := "0"
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.user_id, COALESCE(m.id, 0) FROM chats c LEFT JOIN messages m ON m.chat_id = c.id AND m.role = 'assistant' AND m.status = 'pending' WHERE c.id = ?1 ORDER BY m.id DESC LIMIT 1", one(chat))
+    if aistore.Next(rows):
+        uid = aistore.Text(rows, 0)
+        mid = aistore.Text(rows, 1)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if uid == "0":
+        ret
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(id)
+    a.push(uid)
+    a.push(chat)
+    a.push(mid)
+    a.push(dev)
+    a.push(tool)
+    a.push(safe_args(args))
+    a.push(n(aistore.Now()))
+    aistore.Lock()
+    _r := aistore.Run("INSERT INTO bridge_calls (id, user_id, chat_id, message_id, device_id, tool, args, detail, output, status, state, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'running', 'running', ?8) ON DUPLICATE KEY UPDATE id = id", a)
+    aistore.Unlock()
+end
+
+func persist_result(id: str, body: str):
+    status := json.Get(body, "status")
+    mut state := "error"
+    if status == "ok":
+        state = "done"
+    else status == "denied":
+        state = "denied"
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(status)
+    a.push(state)
+    a.push(clip(json.Get(body, "output"), MAX_OUTPUT))
+    a.push(clip(json.Get(body, "summary"), 480))
+    a.push(json.Get(body, "detail"))
+    a.push(clip(json.Get(body, "lang"), 16))
+    a.push(clip(json.Get(body, "kind"), 8))
+    a.push(clip(json.Get(body, "cwd"), 990))
+    a.push(json.Get(body, "outside") == "true" ? "1" : "0")
+    a.push(n(aistore.Now()))
+    a.push(id)
+    aistore.Lock()
+    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = ?9, finished = ?10 WHERE id = ?11", a)
+    aistore.Unlock()
+end
+
+func persist_late(id: str, dev: str, body: str): bool:
+    aistore.Lock()
+    have := aistore.OneText("SELECT COUNT(*) FROM bridge_calls WHERE id = ?1 AND device_id = ?2", two(id, dev))
+    aistore.Unlock()
+    if have == "0":
+        ret false
+    end
+    persist_result(id, body)
+    ret true
 end
 
 func header(h: HashMap<str, str>, name: str): str:
@@ -231,9 +316,15 @@ func result(c: tcp.Conn, h: HashMap<str, str>, body: str):
     end
     _u := sync.Unlock(LOCK)
     if not mine:
+        if persist_late(id, dev, body):
+            touch(dev)
+            _r := respond(c, "200 OK", `{"ok": true}`)
+            ret
+        end
         fail(c, "404 Not Found", "not_found", "no such call is waiting for this device")
         ret
     end
+    persist_result(id, body)
     touch(dev)
     _r := respond(c, "200 OK", `{"ok": true}`)
 end
@@ -405,6 +496,7 @@ func call_tool(params: str): str:
     end
     sweep()
     id := crypto.RandomHex(12)
+    start_call(id, chat, dev, name, args)
     mut m := Vector {} as Vector<str>
     m.push(json.Member("id", id))
     m.push(json.Member("tool", name))

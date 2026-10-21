@@ -27,12 +27,14 @@ export type Message = {
   created: number;
   phase?: Phase;
   activity?: ActivityStep[];
+  calls?: MessageCall[];
   ms?: number;
 };
 export type Phase = "thinking" | "searching" | "writing" | "checking" | "done";
 export type ThinkStep = { kind: "think"; text: string };
 export type ToolStep = {
   kind: "tool";
+  tool?: string;
   icon: string;
   title: string;
   detail: string;
@@ -41,6 +43,21 @@ export type ToolStep = {
 };
 export type TextStep = { kind: "text"; text: string };
 export type ActivityStep = ThinkStep | ToolStep | TextStep;
+export type CallState = "pending" | "running" | "done" | "error" | "denied";
+export type MessageCall = {
+  call_id: string;
+  chat: string;
+  mid: number;
+  tool: string;
+  kind: "read" | "write" | "exec";
+  summary: string;
+  detail: string;
+  lang: string;
+  outside: boolean;
+  cwd: string;
+  state: CallState;
+  output: string;
+};
 
 export type PlanId = "free" | "plus" | "pro" | "unlimited";
 export type Plan = {
@@ -442,7 +459,10 @@ export const api = {
     call<{ chat: Chat }>("POST", "/chats", agent),
   devices: () => call<{ devices: Device[] }>("GET", "/bridge/devices"),
   chat: (id: string) =>
-    call<{ chat: Chat; messages: Message[] }>("GET", `/chats/${id}`),
+    call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
+      "GET",
+      `/chats/${id}`,
+    ),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
@@ -506,7 +526,10 @@ export const api = {
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminChat: (id: string) =>
-    call<{ chat: Chat; messages: Message[] }>("GET", `/admin/chats/${id}`),
+    call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
+      "GET",
+      `/admin/chats/${id}`,
+    ),
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>
     call<{ subscription: Subscription }>("GET", "/billing/subscription"),

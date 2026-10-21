@@ -1,7 +1,7 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phase 1 implemented** (`compiler/semantic/sema_own.salam`). Later
-phases below are planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 and 2 implemented** (`compiler/semantic/sema_own.salam`,
+`compiler/semantic/sema_strfree.salam`). Later phases below are planned. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -114,6 +114,40 @@ errors. Messages exist in English and Persian (`compiler/i18n.salam`).
 On the day phase 1 landed, `on` reported nothing across `compiler/`, every
 `std/` package reachable from the test suite, and all 3,129 test programs.
 
+## String temporaries (phase 2)
+
+Two changes stop the string garbage that `+` used to leave behind, with no
+change to what a program means:
+
+- **Fused chains.** `a + b + c + ...` on strings is flattened and built by one
+  call, `salam_strcat_v` in C or inline IR in LLVM. It measures every part,
+  allocates once, copies, and frees the parts it created itself: the
+  number, `char` and `float` to string conversions. Before, every `+` allocated
+  its own result and the intermediates were never freed.
+- **Auto-free of fresh locals.** `x := a + b` (immutable, declared directly in
+  a block) gets a synthesized `defer` that frees `x` at the end of its scope,
+  but only when every use of `x` is one that cannot keep the pointer:
+  - an operand of `+` or a comparison;
+  - an index read, or a `switch`/`match` subject;
+  - an argument to `print`/`println`;
+  - a `str` method returning a non-string, `substr` or `concat`;
+  - a `str` package function returning a non-string.
+
+  Returning, storing, assigning, capturing or passing `x` anywhere else keeps
+  today's behavior. JS and the interpreter see the deferred statement as a
+  bare read, so their garbage collectors stay in charge.
+
+`--ownership=off` turns the auto-free off along with the checks.
+
+Measured on a one-million-iteration loop that builds a five-part string:
+0.40s to 0.16s (C), 0.35s to 0.12s (LLVM); 157 MB leaked to 0. The compiler
+itself, built with these changes, leaks about 9% fewer blocks for `salam build`
+(193,185 to 175,468).
+
+The remaining string leaks come from call results (`f() + "x"`, or a
+`str.FromInt` result stored in a local). Whether a function returns a fresh
+string is an interprocedural fact, so they wait for phase 3 summaries.
+
 ## What is not checked yet
 
 Each item below is a phase on the roadmap, or a deliberate limit:
@@ -131,10 +165,8 @@ Each item below is a phase on the roadmap, or a deliberate limit:
 
 1. **Phase 1 (done).** Local use-after-free, double free, returned value freed
    by `defer`; warnings for may-paths and buffer moves.
-2. **Phase 2.** Free string temporaries. Sema marks each `str` expression that
-   is a fresh allocation; codegen frees intermediates and fuses `a + b + c`
-   into one allocation. This retires most of the self-host leak budget and
-   makes concatenation faster.
+2. **Phase 2 (done).** Fused concatenation chains and auto-free of
+   non-escaping fresh string locals; see above.
 3. **Phase 3.** Function summaries, inferred bottom-up over the call graph:
    which parameters are only read, mutated, freed, stored, or invalidated (for
    example `a.nodes`), and whether the result is fresh or an alias of a

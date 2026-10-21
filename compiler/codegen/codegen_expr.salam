@@ -238,6 +238,55 @@ func cg_dv_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
     ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
 end
 
+func cg_concat_parts(s &: sm.Sema, a &: at.Ast, n: int, acc &: Vector<int>):
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS and nn.a != 0 and nn.b != 0:
+        if cg_is_str_ts(s, at.Get(a, nn.a).type_str) or cg_is_str_ts(s, at.Get(a, nn.b).type_str):
+            cg_concat_parts(s, a, nn.a, acc)
+            cg_concat_parts(s, a, nn.b, acc)
+            ret
+        end
+    end
+    acc.push(n)
+end
+
+func cg_concat_chain(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    mut parts := Vector {} as Vector<int>
+    cg_concat_parts(s, a, nn.a, parts)
+    cg_concat_parts(s, a, nn.b, parts)
+    mut any_own := false
+    repeat parts.len() in i:
+        if not cg_is_str_ts(s, at.Get(a, parts.get(i)).type_str):
+            any_own = true
+        end
+    end
+    if parts.len() == 2 and not any_own:
+        oa := cg_str_operand(g, s, a, parts.get(0))
+        ob := cg_str_operand(g, s, a, parts.get(1))
+        parts.free()
+        ret "salam_strcat(" + oa + ", " + ob + ")"
+    end
+    mut es := co.SbNew()
+    mut os := co.SbNew()
+    repeat parts.len() in j:
+        pid := parts.get(j)
+        if j > 0:
+            co.SbPuts(es, ", ")
+            co.SbPuts(os, ", ")
+        end
+        co.SbPuts(es, cg_str_operand(g, s, a, pid))
+        co.SbPuts(os, cg_is_str_ts(s, at.Get(a, pid).type_str) ? "0" : "1")
+    end
+    cnt := parts.len()
+    parts.free()
+    ev := co.SbCstr(es)
+    ov := co.SbCstr(os)
+    co.SbFree(es)
+    co.SbFree(os)
+    ret "salam_strcat_v(" + str.FromInt(cnt as i64) + ", (const char*[]){" + ev + "}, (uint8_t[]){" + ov + "})"
+end
+
 func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     if cg_is_str_ts(s, nn.type_str):
@@ -985,14 +1034,14 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             ret "pow(SALAM_FPARG_D((double)(" + ea + ")), (double)(" + eb + "))"
         end
         if nn.op == tok.TK_PLUS and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
-            oa := cg_str_operand(g, s, a, nn.a)
-            ob := cg_str_operand(g, s, a, nn.b)
             if g.in_derive:
+                oa := cg_str_operand(g, s, a, nn.a)
+                ob := cg_str_operand(g, s, a, nn.b)
                 fa := cg_dv_owned(s, a, nn.a) ? "1" : "0"
                 fb := cg_dv_owned(s, a, nn.b) ? "1" : "0"
                 ret "salam_strcat_own(" + oa + ", " + fa + ", " + ob + ", " + fb + ")"
             end
-            ret "salam_strcat(" + oa + ", " + ob + ")"
+            ret cg_concat_chain(g, s, a, n)
         end
         if nn.op == tok.TK_STAR and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
             a_str := cg_is_str_ts(s, an.type_str)

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import zlib from "node:zlib";
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
@@ -231,6 +232,19 @@ check("pdf is refused while the model cannot read it", (await refused({ name: "d
 check("rar is refused", (await refused({ name: "a.rar", data: b64("Rar!\x1a\x07\x00 not really") })) === 400);
 check("binary data named .txt is refused", (await refused({ name: "notes.txt", data: b64(Buffer.from([104, 105, 0, 104, 105])) })) === 400);
 check("a fake png is refused", (await refused({ name: "fake.png", data: b64("this is not an image at all") })) === 400);
+const filesUser = (await api("GET", "/me", filesSession)).json.user;
+const uploadList = await api("GET", `/admin/files?user=${filesUser.id}`, session);
+const uploads = uploadList.json?.files ?? [];
+const SAFE = /^\d{4}\/\d{2}\/\d{8}-\d{6}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}\.(json|png|zip)$/;
+check("admin lists every upload with a dated uuid path", uploadList.json?.total === 3 && uploads.every((f) => SAFE.test(f.path) && f.user.email === "files@test.ir"), uploads.map((f) => f.path));
+check("a zip upload keeps the list of files it used", uploads.find((f) => f.kind === "archive")?.listing.includes("src/main.salam"), uploads.find((f) => f.kind === "archive"));
+const pngRow = uploads.find((f) => f.kind === "image");
+const downloaded = await api("GET", `/admin/files/${pngRow?.id}`, session);
+check("admin downloads the original bytes", downloaded.json?.data === b64(png) && downloaded.json.name === "dot.png", downloaded.json?.name);
+if (process.env.UPLOAD_DIR) check("the upload is a real file on disk, not a database blob", fs.readFileSync(`${process.env.UPLOAD_DIR}/${pngRow?.path}`).equals(png));
+check("only admins list uploads", (await api("GET", "/admin/files", filesSession)).res.status === 403);
+const imageCount = (await api("GET", "/admin/users?q=files@test.ir", session)).json.users[0];
+check("users show how many images they uploaded", imageCount?.images === 1 && imageCount.files === 3, imageCount);
 check("too many files are refused", (await (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: Array.from({ length: 7 }, (_, i) => ({ name: `f${i}.txt`, data: b64("hi") })) })).res.status) === 400);
 
 console.log("agent clients");

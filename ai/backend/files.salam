@@ -22,6 +22,9 @@ import encoding.value
 import encoding.encerr
 import archive
 import compress
+import crypto
+import os
+import time
 
 include aistore "store.salam"
 
@@ -33,8 +36,10 @@ const MAX_TEXT := 262144
 const MAX_ARCHIVE := 10485760
 const MAX_ARCHIVE_FILES := 60
 const MAX_PROMPT_TEXT := 600000
+const PAGE := 50
 
 TEXT_EXTS := ["txt", "md", "markdown", "rst", "json", "jsonc", "json5", "ndjson", "geojson", "yml", "yaml", "toml", "ini", "cfg", "conf", "config", "properties", "env", "csv", "tsv", "xml", "svg", "html", "htm", "css", "scss", "sass", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte", "py", "pyi", "ipynb", "rb", "php", "go", "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "cs", "java", "kt", "kts", "scala", "groovy", "gradle", "swift", "m", "mm", "dart", "lua", "pl", "pm", "r", "jl", "hs", "ex", "exs", "erl", "clj", "elm", "ml", "fs", "zig", "nim", "v", "sol", "sql", "graphql", "gql", "proto", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "dockerfile", "make", "mk", "cmake", "tf", "hcl", "nix", "log", "diff", "patch", "tex", "bib", "srt", "vtt", "salam", "lock", "editorconfig", "gitignore", "gitattributes", "dockerignore", "npmrc", "nvmrc", "babelrc", "eslintrc", "prettierrc", "htaccess"]
+mut UPLOAD_DIR := "/data/uploads"
 TEXT_NAMES := ["dockerfile", "makefile", "license", "readme", "changelog", "authors", "contributing", "procfile", "gemfile", "rakefile", "jenkinsfile", "vagrantfile", "cmakelists.txt", "go.mod", "go.sum", "cargo.toml"]
 
 pub struct Upload:
@@ -44,6 +49,8 @@ pub struct Upload:
     pub size: int = 0
     pub data: str = ""
     pub prompt: str = ""
+    pub raw: str = ""
+    pub path: str = ""
 end
 
 func base_name(name: str): str:
@@ -203,6 +210,7 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
             end
         end
     end
+    joined := str.Join(listing, "\n")
     archive.FreeEntries(entries)
     mem.Free(buf)
     if kept == 0:
@@ -215,7 +223,7 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
     end
     u.kind = "archive"
     u.mime = "application/zip"
-    u.data = str.Join(listing, "\n")
+    u.data = joined
     u.prompt = str.BufStr(prompt) + note
     ret true
 end
@@ -231,6 +239,7 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     end
     u.name = name
     u.size = size
+    u.raw = b64
     total += size
     if total > MAX_TOTAL:
         problem = "حجم همه‌ی فایل‌ها با هم بیشتر از ۱۲ مگابایت است."
@@ -309,6 +318,81 @@ func json_text(v: value.Value, key: str): str:
         ret value.AsString(got)
     end
     ret ""
+end
+
+func safe_ext(name: str): str:
+    ext := ext_of(name)
+    if ext.len() == 0 or ext.len() > 10:
+        ret "bin"
+    end
+    mut i := 0
+    until i < ext.len():
+        c := ext.substr(i, 1)
+        if not ((c >= "a" and c <= "z") or (c >= "0" and c <= "9")):
+            ret "bin"
+        end
+        i += 1
+    end
+    ret ext
+end
+
+func uuid4(): str:
+    h := crypto.RandomHex(16)
+    ret h.substr(0, 8) + "-" + h.substr(8, 4) + "-4" + h.substr(13, 3) + "-a" + h.substr(17, 3) + "-" + h.substr(20, 12)
+end
+
+func stored_name(name: str, now: i64): str:
+    day := str.Replace(time.FormatDate(now), "-", "")
+    clock := str.Replace(time.FormatTime(now), ":", "")
+    ret day.substr(0, 4) + "/" + day.substr(4, 2) + "/" + day + "-" + clock + "-" + uuid4() + "." + safe_ext(name)
+end
+
+func safe_rel(path: str): bool:
+    if path.len() == 0 or str.StartsWith(path, "/") or path.find("..") >= 0 or path.find("\\") >= 0:
+        ret false
+    end
+    ret true
+end
+
+func write_file(rel: str, b64: str, size: int): bool:
+    full := UPLOAD_DIR + "/" + rel
+    _d := os.MkdirAll(UPLOAD_DIR + "/" + rel.substr(0, 7))
+    buf := mem.Allocate((size + 16) as u64)
+    mut ok := false
+    n := encoding.Base64DecodeBytes(b64, buf, size + 16, ok)
+    mut wrote := false
+    if ok and n == size:
+        wrote = archive.WriteBinaryFile(full, buf, n)
+    end
+    mem.Free(buf)
+    ret wrote
+end
+
+func read_b64(rel: str): str:
+    if not safe_rel(rel):
+        ret ""
+    end
+    mut ok := false
+    mut data := archive.ReadBinaryFile(UPLOAD_DIR + "/" + rel, ok)
+    mut out := ""
+    if ok:
+        out = compress.BufToBase64(data)
+    end
+    compress.BufFree(data)
+    ret out
+end
+
+func file_json(name: str, kind: str, mime: str, rel: str): str:
+    data := read_b64(rel)
+    if data.len() == 0:
+        ret ""
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("name", name))
+    m.push(json.Member("kind", kind))
+    m.push(json.Member("mime", mime.len() > 0 ? mime : "application/octet-stream"))
+    m.push(json.Member("data", data))
+    ret json.Object(m)
 end
 
 func meta_json(id: str, name: str, kind: str, mime: str, size: str): str:
@@ -411,19 +495,48 @@ pub func Parts(files: Vector<Upload>): str:
     ret str.BufStr(b)
 end
 
-pub func Save(chat: str, mid: str, files: Vector<Upload>, now: str):
+pub func Configure(dir: str):
+    d := str.TrimSuffix(str.Trim(dir), "/")
+    if d.len() > 0:
+        UPLOAD_DIR = d
+    end
+    _m := os.MkdirAll(UPLOAD_DIR)
+end
+
+pub func Store(files &: Vector<Upload>, now: i64): bool:
+    mut i := 0
+    until i < files.len():
+        mut u := files.get(i)
+        rel := stored_name(u.name, now)
+        if not write_file(rel, u.raw, u.size):
+            println "could not write upload", UPLOAD_DIR + "/" + rel
+            ret false
+        end
+        u.path = rel
+        files.set(i, u)
+        i += 1
+    end
+    ret true
+end
+
+pub func Record(chat: str, mid: str, uid: str, files: Vector<Upload>, now: str):
     each u in files:
         mut a := Vector {} as Vector<str>
         a.push(mid)
         a.push(chat)
+        a.push(uid)
         a.push(u.name)
         a.push(u.kind)
-        a.push(u.mime)
+        a.push(u.mime.len() > 0 ? u.mime : "text/plain")
         a.push("" + u.size)
-        a.push(u.data)
+        a.push(u.path)
+        a.push(u.kind == "archive" ? u.data : "")
         a.push(now)
         aistore.Lock()
-        _r := aistore.Run("INSERT INTO message_files (message_id, chat_id, name, kind, mime, size, data, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
+        ok := aistore.Run("INSERT INTO message_files (message_id, chat_id, user_id, name, kind, mime, size, path, listing, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)", a)
+        if not ok:
+            println "could not record upload", u.path, aistore.Error()
+        end
         aistore.Unlock()
     end
 end
@@ -465,18 +578,85 @@ pub func Read(chat: str, fid: str): str:
     mut a := Vector {} as Vector<str>
     a.push(fid)
     a.push(chat)
-    mut out := ""
+    mut name := ""
+    mut kind := ""
+    mut mime := ""
+    mut rel := ""
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT name, kind, mime, data FROM message_files WHERE id = ?1 AND chat_id = ?2", a)
+    mut rows := aistore.Stmt("SELECT name, kind, mime, path FROM message_files WHERE id = ?1 AND chat_id = ?2", a)
     if aistore.Next(rows):
-        mut m := Vector {} as Vector<str>
-        m.push(json.Member("name", aistore.Text(rows, 0)))
-        m.push(json.Member("kind", aistore.Text(rows, 1)))
-        m.push(json.Member("mime", aistore.Text(rows, 2)))
-        m.push(json.Member("data", aistore.Text(rows, 3)))
-        out = json.Object(m)
+        name = aistore.Text(rows, 0)
+        kind = aistore.Text(rows, 1)
+        mime = aistore.Text(rows, 2)
+        rel = aistore.Text(rows, 3)
     end
     aistore.Finish(rows)
     aistore.Unlock()
-    ret out
+    if rel.len() == 0:
+        ret ""
+    end
+    ret file_json(name, kind, mime, rel)
+end
+
+pub func ReadAny(fid: str): str:
+    mut a := Vector {} as Vector<str>
+    a.push(fid)
+    mut name := ""
+    mut kind := ""
+    mut mime := ""
+    mut rel := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT name, kind, mime, path FROM message_files WHERE id = ?1", a)
+    if aistore.Next(rows):
+        name = aistore.Text(rows, 0)
+        kind = aistore.Text(rows, 1)
+        mime = aistore.Text(rows, 2)
+        rel = aistore.Text(rows, 3)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if rel.len() == 0:
+        ret ""
+    end
+    ret file_json(name, kind, mime, rel)
+end
+
+pub func List(user: str, kind: str, offset: int): str:
+    mut where := "1 = 1"
+    mut a := Vector {} as Vector<str>
+    a.push(user.len() > 0 ? user : "0")
+    a.push(kind)
+    if user.len() > 0:
+        where = where + " AND f.user_id = ?1"
+    end
+    if kind.len() > 0:
+        where = where + " AND f.kind = ?2"
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    total := aistore.OneText("SELECT COUNT(*) FROM message_files f WHERE " + where, a)
+    mut rows := aistore.Stmt("SELECT f.id, f.chat_id, f.message_id, f.name, f.kind, f.mime, f.size, f.path, f.listing, f.created, u.id, u.name, u.email, c.device_id FROM message_files f JOIN users u ON u.id = f.user_id JOIN chats c ON c.id = f.chat_id WHERE " + where + " ORDER BY f.id DESC LIMIT " + PAGE + " OFFSET " + offset, a)
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("chat_id", aistore.Text(rows, 1)))
+        m.push(json.MemberRaw("message_id", aistore.Text(rows, 2)))
+        m.push(json.Member("name", aistore.Text(rows, 3)))
+        m.push(json.Member("kind", aistore.Text(rows, 4)))
+        m.push(json.Member("mime", aistore.Text(rows, 5)))
+        m.push(json.MemberRaw("size", aistore.Text(rows, 6)))
+        m.push(json.Member("path", aistore.Text(rows, 7)))
+        m.push(json.Member("listing", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 9)))
+        mut um := Vector {} as Vector<str>
+        um.push(json.MemberRaw("id", aistore.Text(rows, 10)))
+        um.push(json.Member("name", aistore.Text(rows, 11)))
+        um.push(json.Member("email", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("user", json.Object(um)))
+        m.push(json.MemberBool("agent", aistore.Text(rows, 13) != "0"))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret `{"files": ` + json.Array(items) + `, "total": ` + (total.len() > 0 ? total : "0") + "}"
 end

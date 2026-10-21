@@ -33,6 +33,20 @@ export type Capabilities = {
   text: string[];
   text_names: string[];
 };
+export type AdminUpload = {
+  id: number;
+  chat_id: string;
+  message_id: number;
+  name: string;
+  kind: FileMeta["kind"];
+  mime: string;
+  size: number;
+  path: string;
+  listing: string;
+  created: number;
+  user: { id: number; name: string; email: string };
+  agent: boolean;
+};
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
@@ -223,6 +237,9 @@ export type AdminSummary = {
   users_7d: number;
   chats: number;
   messages: number;
+  uploads?: number;
+  uploads_images?: number;
+  uploads_bytes?: number;
   apps: number;
   mcp_calls: number;
   mcp_calls_24h: number;
@@ -257,6 +274,8 @@ export type AdminUser = {
   tokens_out: number;
   last_login: number;
   logins: number;
+  images?: number;
+  files?: number;
   last_active_chat: number;
   last_active_agent: number;
   last_active_api: number;
@@ -513,6 +532,16 @@ export const api = {
       files && files.length > 0 ? { text, files } : { text },
     ),
   capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  adminFiles: (q: { user?: number; kind?: string; offset?: number }) =>
+    call<{ files: AdminUpload[]; total: number }>(
+      "GET",
+      `/admin/files?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.kind ? { kind: q.kind } : {}), offset: String(q.offset ?? 0) })}`,
+    ),
+  adminFile: (id: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/files/${id}`,
+    ),
   chatFile: (id: string, fid: number) =>
     call<{ name: string; kind: string; mime: string; data: string }>(
       "GET",

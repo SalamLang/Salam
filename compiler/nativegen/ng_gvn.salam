@@ -9,6 +9,50 @@ pub struct Gvn:
     pub marks: Vector<int> = Vector {}
     pub wb: Vector<int> = Vector {}
     pub wm: Vector<int> = Vector {}
+    pub ep_out: Vector<int> = Vector {}
+    pub ep_out_p: Vector<int> = Vector {}
+    pub ep_out_d: Vector<int> = Vector {}
+    pub ld_addr: Vector<int> = Vector {}
+    pub ld_ty: Vector<int> = Vector {}
+    pub ld_ep: Vector<int> = Vector {}
+    pub ld_val: Vector<int> = Vector {}
+    pub ld_mark: Vector<int> = Vector {}
+end
+
+func mem_write(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+        ret true
+    end
+    ret op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0
+end
+
+func mem_cls(g &: Ng, i: int): int:
+    c := g.i_c[i]
+    if c == 1 or c == 2:
+        ret c
+    end
+    ret 0
+end
+
+func ld_find(t &: Gvn, a: int, ty: int, ep: int): int:
+    mut k := t.ld_addr.len() - 1
+    mut n := 0
+    until k >= 0 and n < 64:
+        if t.ld_ep[k] == ep and t.ld_addr[k] == a and t.ld_ty[k] == ty:
+            ret t.ld_val[k]
+        end
+        k -= 1
+        n += 1
+    end
+    ret 0 - 1
+end
+
+func ld_add(t &: Gvn, a: int, ty: int, ep: int, v: int):
+    t.ld_addr.push(a)
+    t.ld_ty.push(ty)
+    t.ld_ep.push(ep)
+    t.ld_val.push(v)
 end
 
 func gvn_pure(op: int): bool:
@@ -152,23 +196,89 @@ func gvn(g &: Ng): bool:
     build_dom(g)
     repl_grow(g)
     mut changed := false
+    repeat g.b_first.len():
+        t.ep_out.push(0 - 1)
+        t.ep_out_p.push(0 - 1)
+        t.ep_out_d.push(0 - 1)
+    end
+    mut next_ep := 1
     t.wb.push(0)
     t.wm.push(0 - 1)
+    t.ld_mark.push(0)
     until t.wb.len() > 0:
         b := t.wb.pop()
         mark := t.wm.pop()
+        lmark := t.ld_mark.pop()
         if mark >= 0:
             until t.added.len() > mark:
                 sj := t.added.pop()
                 t.slots[sj] = 0 - 2
             end
+            until t.ld_addr.len() > lmark:
+                _a1 := t.ld_addr.pop()
+                _a2 := t.ld_ty.pop()
+                _a3 := t.ld_ep.pop()
+                _a4 := t.ld_val.pop()
+            end
             continue
         end
         h := t.added.len()
+        hl := t.ld_addr.len()
+        mut ep := 0
+        mut epp := 0
+        mut epd := 0
+        idm := b > 0 ? g.b_idom[b] : 0 - 1
+        if idm >= 0 and g.b_npred[b] == 1 and g.b_pred[g.b_ps[b]] == idm and t.ep_out[idm] >= 0:
+            ep = t.ep_out[idm]
+            epp = t.ep_out_p[idm]
+            epd = t.ep_out_d[idm]
+        else:
+            ep = next_ep
+            epp = next_ep + 1
+            epd = next_ep + 2
+            next_ep += 3
+        end
         mut i := g.b_first[b]
         until i >= 0:
             nx := g.i_next[i]
             remap_ins(g, i)
+            iop := g.i_op[i]
+            if iop == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not g.off_lcse:
+                lc := mem_cls(g, i)
+                lep := lc == 1 ? epp : (lc == 2 ? epd : ep)
+                lv := ld_find(t, g.i_a[i], g.i_ty[i], lep)
+                if lv >= 0 and g.v_ty[lv] == g.i_ty[i]:
+                    g.v_repl[g.i_res[i]] = lv
+                    ins_unlink(g, i)
+                    changed = true
+                    i = nx
+                    continue
+                end
+                ld_add(t, g.i_a[i], g.i_ty[i], lep, g.i_res[i])
+                i = nx
+                continue
+            end
+            if mem_write(g, i):
+                sc := iop == OP_STORE ? mem_cls(g, i) : 0
+                ep = next_ep
+                next_ep += 1
+                if sc != 2:
+                    epp = next_ep
+                    next_ep += 1
+                end
+                if sc != 1:
+                    epd = next_ep
+                    next_ep += 1
+                end
+                if iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_lcse:
+                    sv := g.i_a[i]
+                    if sv >= 0 and g.v_kind[sv] == VK_INS and not is_agg(g, g.v_ty[sv]):
+                        ld_add(t, g.i_b[i], g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), sv)
+                    end
+                end
+                i = nx
+                continue
+            end
             if gvn_pure(g.i_op[i]) and g.i_res[i] >= 0 and not gvn_excluded(g, g.i_op[i]):
                 canon(g, i)
                 e := gvn_find(g, t, i)
@@ -183,11 +293,16 @@ func gvn(g &: Ng): bool:
             end
             i = nx
         end
+        t.ep_out[b] = ep
+        t.ep_out_p[b] = epp
+        t.ep_out_d[b] = epd
         t.wb.push(b)
         t.wm.push(h)
+        t.ld_mark.push(hl)
         repeat g.b_kn[b] in c:
             t.wb.push(g.b_kids[g.b_ks[b] + c])
             t.wm.push(0 - 1)
+            t.ld_mark.push(0)
         end
     end
     if changed:
@@ -198,5 +313,13 @@ func gvn(g &: Ng): bool:
     t.marks.free()
     t.wb.free()
     t.wm.free()
+    t.ep_out.free()
+    t.ep_out_p.free()
+    t.ep_out_d.free()
+    t.ld_addr.free()
+    t.ld_ty.free()
+    t.ld_ep.free()
+    t.ld_val.free()
+    t.ld_mark.free()
     ret changed
 end

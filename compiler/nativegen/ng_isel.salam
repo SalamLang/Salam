@@ -62,7 +62,9 @@ func isel_init(g &: Ng):
     g.v_mem.clear()
     g.vown.clear()
     g.v_cu.clear()
+    g.lfold.clear()
     repeat nv:
+        g.lfold.push(0 - 1)
         g.v_cu.push(0)
         g.vown.push(false)
         g.vv.push(0 - 1)
@@ -193,6 +195,14 @@ func use_reg(g &: Ng, v: int): int:
             r3 := gpr(g)
             _l3 := e_rm(g, M_LEA, 8, r3, mem_of(g, v, 0 as i64))
             ret r3
+        end
+        lfx := lf_mem(g, v)
+        if lfx >= 0:
+            g.lfold[v] = 0 - 1
+            rlx := gpr(g)
+            _ll := e_rm(g, M_LD, msz(g, g.v_ty[v]), rlx, mem_of(g, g.i_a[lfx], 0 as i64))
+            g.vv[v] = rlx
+            ret rlx
         end
         r4 := g.vv[v]
         if r4 >= 0:
@@ -884,6 +894,19 @@ func emit_icmp(g &: Ng, i: int): int:
         b = tmp
         p = swap_pred(p)
     end
+    if lf_mem(g, a) >= 0 and lf_mem(g, b) < 0:
+        tmp2 := a
+        a = b
+        b = tmp2
+        p = swap_pred(p)
+    end
+    lfi := lf_mem(g, b)
+    if lfi >= 0:
+        rl := use_reg(g, a)
+        mc := e_rm(g, M_ALU_RM, msz(g, g.v_ty[a]), rl, mem_of(g, g.i_a[lfi], 0 as i64))
+        g.mc.cc[mc] = ALU_CMP
+        ret icmp_cc(p)
+    end
     sz := msz(g, g.v_ty[a])
     ra := use_reg(g, a)
     if g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
@@ -1059,6 +1082,26 @@ func isel_bin(g &: Ng, i: int):
         tmp := a
         a = b
         b = tmp
+    end
+    if comm and lf_mem(g, a) >= 0 and lf_mem(g, b) < 0:
+        tmp2 := a
+        a = b
+        b = tmp2
+    end
+    lfb := lf_mem(g, b)
+    a_deferred := g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]]
+    if lfb >= 0 and not a_deferred and (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR):
+        mut subf := ALU_ADD
+        if op == OP_SUB: subf = ALU_SUB end
+        if op == OP_AND: subf = ALU_AND end
+        if op == OP_OR: subf = ALU_OR end
+        if op == OP_XOR: subf = ALU_XOR end
+        rf := gpr(g)
+        move_into(g, rf, a)
+        mf := e_rm(g, M_ALU_RM, asz(g, t), rf, mem_of(g, g.i_a[lfb], 0 as i64))
+        g.mc.cc[mf] = subf
+        set_res(g, i, rf)
+        ret
     end
     bimm := g.v_kind[b] == VK_INT and is_imm32(g.v_i[b])
     if op == OP_ADD and bimm and g.v_kind[a] == VK_INS and g.skipi[g.v_def[a]] and lea_mul_k(g, g.v_def[a]) > 0:
@@ -2268,6 +2311,85 @@ func sret_forward(g &: Ng, i: int): int:
     ret j
 end
 
+func writes_mem(op: int): bool:
+    ret op == OP_STORE or op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE
+end
+
+func lf_mem(g &: Ng, v: int): int:
+    if v < 0 or v >= g.lfold.len():
+        ret 0 - 1
+    end
+    ret g.lfold[v]
+end
+
+func lf_other_ok(g &: Ng, v: int): bool:
+    ret v >= 0 and (g.v_kind[v] == VK_INS or g.v_kind[v] == VK_ARG)
+end
+
+func load_fold_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 12:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if g.i_a[j] == r or g.i_b[j] == r:
+            if g.i_ty[j] == t and (op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR):
+                o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if o != r and lf_other_ok(g, o) and g.i_res[j] >= 0:
+                    ret j
+                end
+                ret 0 - 1
+            end
+            if op == OP_SUB and g.i_b[j] == r and g.i_a[j] != r and lf_other_ok(g, g.i_a[j]):
+                ret j
+            end
+            if op == OP_ICMP and g.i_a[j] != g.i_b[j]:
+                o2 := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+                if not lf_other_ok(g, o2):
+                    ret 0 - 1
+                end
+                cr := g.i_res[j]
+                if cr < 0 or g.v_uses[cr] != 1:
+                    ret 0 - 1
+                end
+                mut k := g.i_next[j]
+                repeat 12:
+                    if k < 0:
+                        ret 0 - 1
+                    end
+                    if g.i_a[k] == cr and (g.i_op[k] == OP_CBR or g.i_op[k] == OP_SELECT):
+                        ret j
+                    end
+                    if writes_mem(g.i_op[k]):
+                        ret 0 - 1
+                    end
+                    k = g.i_next[k]
+                end
+                ret 0 - 1
+            end
+            ret 0 - 1
+        end
+        if writes_mem(op):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
 func load_ext_user(g &: Ng, i: int): int:
     r := g.i_res[i]
     t := g.i_ty[i]
@@ -2330,6 +2452,10 @@ func isel_load(g &: Ng, i: int):
         r2 := xmm(g)
         _l := e_rm(g, M_FLD, fsz(t), r2, m)
         set_res(g, i, r2)
+        ret
+    end
+    if load_fold_user(g, i) >= 0:
+        g.lfold[g.i_res[i]] = i
         ret
     end
     r3 := gpr(g)

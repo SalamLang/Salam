@@ -162,7 +162,11 @@ mod tests {
 
     #[test]
     fn only_web_and_mail_links_leave_the_app() {
-        for link in ["https://www.salamlang.ir/learn/", "http://localhost:3000/chat", "mailto:hello@salamlang.ir"] {
+        for link in [
+            "https://www.salamlang.ir/learn/",
+            "http://localhost:3000/chat",
+            "mailto:hello@salamlang.ir",
+        ] {
             assert!(is_external(&tauri::Url::parse(link).unwrap()), "{link} should open externally");
         }
         for link in ["tauri://localhost/index.html", "about:blank", "file:///etc/passwd"] {

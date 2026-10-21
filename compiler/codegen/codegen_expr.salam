@@ -745,18 +745,30 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
 end
 
 func cg_global_ref(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
-    mut gsym := sm.Lookup(s, s.global, name)
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_lit_home)
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    mut gsym := 0
+    repeat homes.len() in i:
+        h := homes.get(i)
+        if gsym == 0 and h != 0 and h != s.global:
+            hs := sm.LookupLocal(s, h, name)
+            if hs != 0 and (sm.SymAt(s, hs).kind == sm.SYM_VAR or sm.SymAt(s, hs).kind == sm.SYM_CONST):
+                gsym = hs
+            end
+        end
+    end
+    if gsym == 0:
+        gsym = sm.Lookup(s, s.global, name)
+    end
     if gsym != 0:
         gk := sm.SymAt(s, gsym).kind
         if gk != sm.SYM_VAR and gk != sm.SYM_CONST:
             gsym = 0
         end
     end
-    mut homes := Vector {} as Vector<int>
-    defer homes.free()
-    homes.push(g.cur_lit_home)
-    homes.push(g.cur_fn_home)
-    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
     repeat homes.len() in i:
         if gsym == 0 and homes.get(i) != 0:
             hs := sm.Lookup(s, homes.get(i), name)
@@ -778,7 +790,10 @@ end
 func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str): str:
     if pkgid != 0 and at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
         pname := at.Get(a, pkgid).name
-        mut pk := sm.Lookup(s, s.global, pname)
+        mut pk := cg_home_sym(g, s, pname, sm.SYM_PACKAGE)
+        if pk == 0:
+            pk = sm.Lookup(s, s.global, pname)
+        end
         if pk == 0 and g.cur_fn_home != 0:
             pk = sm.Lookup(s, g.cur_fn_home, pname)
         end
@@ -807,9 +822,29 @@ func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str)
     ret cg_func_addr(g, s, a, name)
 end
 
+func cg_home_sym(g &: Cg, s &: sm.Sema, name: str, kind: int): int:
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    repeat homes.len() in i:
+        h := homes.get(i)
+        if h != 0 and h != s.global:
+            hs := sm.LookupLocal(s, h, name)
+            if hs != 0 and sm.SymAt(s, hs).kind == kind:
+                ret hs
+            end
+        end
+    end
+    ret 0
+end
+
 func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
-    mut fsym := sm.Lookup(s, s.global, name)
-    mut home_pkg := ""
+    mut fsym := cg_home_sym(g, s, name, sm.SYM_FUNC)
+    mut home_pkg := fsym != 0 ? sm.SymAt(s, fsym).pkgname : ""
+    if fsym == 0:
+        fsym = sm.Lookup(s, s.global, name)
+    end
     if fsym == 0 and g.cur_fn_home != 0:
         hs := sm.Lookup(s, g.cur_fn_home, name)
         if hs != 0 and sm.SymAt(s, hs).kind == sm.SYM_FUNC:
@@ -1159,12 +1194,15 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         an2 := at.Get(a, nn.a)
         if nn.a != 0 and an2.kind == at.AST_IDENTIFIER and not local_known(g, an2.name):
-            mut e := sm.Lookup(s, s.global, an2.name)
+            mut e := cg_home_sym(g, s, an2.name, sm.SYM_ENUM)
+            if e == 0:
+                e = sm.Lookup(s, s.global, an2.name)
+            end
             if (e == 0 or sm.SymAt(s, e).kind != sm.SYM_ENUM) and g.cur_fn_home != 0:
                 e = sm.Lookup(s, g.cur_fn_home, an2.name)
             end
             if e != 0 and sm.SymAt(s, e).kind == sm.SYM_ENUM:
-                ret cg_cident(sm.SymAt(s, e).name) + "_" + cg_cident(nn.name)
+                ret cg_cident(cg_enum_tname(s, e, sm.SymAt(s, e).name)) + "_" + cg_cident(nn.name)
             end
             if e != 0 and sm.SymAt(s, e).kind == sm.SYM_PACKAGE:
                 m := sm.LookupLocal(s, sm.SymAt(s, e).members, nn.name)
@@ -1187,14 +1225,17 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if nn.a != 0 and an2.kind == at.AST_MEMBER and an2.a != 0 and at.KindOf(a, an2.a) == at.AST_IDENTIFIER and not local_known(g, at.Get(a, an2.a).name):
             pkname := at.Get(a, an2.a).name
-            mut pk := sm.Lookup(s, s.global, pkname)
+            mut pk := cg_home_sym(g, s, pkname, sm.SYM_PACKAGE)
+            if pk == 0:
+                pk = sm.Lookup(s, s.global, pkname)
+            end
             if pk == 0 and g.cur_fn_home != 0:
                 pk = sm.Lookup(s, g.cur_fn_home, pkname)
             end
             if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
                 e2 := sm.LookupLocal(s, sm.SymAt(s, pk).members, an2.name)
                 if e2 != 0 and sm.SymAt(s, e2).kind == sm.SYM_ENUM:
-                    ret cg_cident(sm.SymAt(s, e2).name) + "_" + cg_cident(nn.name)
+                    ret cg_cident(cg_enum_tname(s, e2, sm.SymAt(s, e2).name)) + "_" + cg_cident(nn.name)
                 end
             end
         end

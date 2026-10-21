@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSession, type AdminSummary, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
+import { fmtSize } from "./Attach";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 
@@ -460,6 +461,9 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">عضویت</th>
               <th scope="col">گفت‌وگو</th>
               <th scope="col">پیام</th>
+              <th scope="col">تصویر</th>
+              <th scope="col">نشست</th>
+              <th scope="col">نسخه‌ی ایجنت</th>
               <th scope="col">برنامه</th>
               <th scope="col">فراخوانی MCP</th>
               <th scope="col">API</th>
@@ -485,6 +489,9 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td title={fmtDateTime(u.created)}>{fmtDate(u.created)}</td>
                 <td>{fmtNum(u.chats)}</td>
                 <td>{fmtNum(u.messages)}</td>
+                <td title={u.files ? `${fmtNum(u.files)} فایل روی هم` : undefined}>{fmtNum(u.images ?? 0)}</td>
+                <td>{fmtNum(u.sessions ?? 0)}</td>
+                <td dir="ltr" className="cell-ltr">{u.agent_version || "-"}</td>
                 <td>{fmtNum(u.apps)}</td>
                 <td>{fmtNum(u.mcp_calls)}</td>
                 <td>{fmtNum(u.api_requests)}</td>
@@ -498,7 +505,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             ))}
             {!data && !error && (
               <tr>
-                <td colSpan={14} className="empty-cell">
+                <td colSpan={17} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
                     <span>در حال بارگذاری کاربران…</span>
@@ -1294,6 +1301,373 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
   );
 }
 
+function shortAgent(ua: string): string {
+  const browser = /Edg\/[\d.]+|OPR\/[\d.]+|Firefox\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ Safari|Safari\/[\d.]+/.exec(ua)?.[0] ?? "";
+  const os = /Windows NT [\d.]+|Mac OS X [\d_]+|Android [\d.]+|iPhone OS [\d_]+|Linux/.exec(ua)?.[0]?.replace(/_/g, ".") ?? "";
+  return [browser.replace("Version/", "Safari ").replace(" Safari", ""), os].filter(Boolean).join("، ") || ua.slice(0, 60);
+}
+
+function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+  const [rows, setRows] = useState<AdminSession[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [client, setClient] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [client, picked]);
+
+  useEffect(() => {
+    let live = true;
+    setError("");
+    api
+      .adminSessions({ user: picked?.id, client: client || undefined, offset })
+      .then((r) => {
+        if (!live) return;
+        setRows(r.sessions);
+        setTotal(r.total);
+      })
+      .catch((e) => live && setError(errText(e, "بارگذاری نشست‌ها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [client, picked, offset, reload]);
+
+  const revoke = async (s: AdminSession) => {
+    const ok = await confirmDialog({
+      title: "بستن نشست",
+      subject: s.user.email,
+      message: (
+        <>
+          نشست <Subject>{s.client === "agent" ? "ایجنت" : "وب"}</Subject> این کاربر بسته می‌شود و در اولین درخواست بعدی، حداکثر تا یک دقیقه، از حساب خارج می‌شود.
+        </>
+      ),
+      confirmLabel: "بستن نشست",
+      icon: "alert",
+    });
+    if (!ok) return;
+    setBusy(s.id);
+    try {
+      await api.revokeSession(s.id);
+      notify("نشست بسته شد.");
+      setReload((n) => n + 1);
+    } catch (e) {
+      notify(errText(e, "بستن نشست ناموفق بود."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokeAll = async () => {
+    if (!picked) return;
+    const ok = await confirmDialog({
+      title: "خروج از همه‌ی نشست‌ها",
+      subject: picked.name,
+      message: <>همه‌ی نشست‌های وب و ایجنت این کاربر بسته می‌شود. او باید دوباره وارد شود.</>,
+      confirmLabel: "بستن همه",
+      icon: "alert",
+    });
+    if (!ok) return;
+    try {
+      const r = await api.revokeUserSessions(picked.id);
+      notify(`${fmtNum(r.revoked)} نشست بسته شد.`);
+      setReload((n) => n + 1);
+    } catch (e) {
+      notify(errText(e, "بستن نشست‌ها ناموفق بود."));
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>نشست‌ها{picked ? " این کاربر" : ""}</h3>
+        <div className="row-actions">
+          <Segmented
+            label="نوع"
+            options={[
+              { id: "", label: "همه" },
+              { id: "web", label: "وب" },
+              { id: "agent", label: "ایجنت" },
+            ]}
+            value={client}
+            onChange={setClient}
+          />
+          {picked && (
+            <button type="button" className="button ghost small danger" onClick={revokeAll}>
+              خروج از همه‌ی نشست‌ها
+            </button>
+          )}
+        </div>
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : rows === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <>
+          <div className="table-wrap scroll-y">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">کاربر</th>
+                  <th scope="col">از</th>
+                  <th scope="col">نسخه</th>
+                  <th scope="col">مرورگر یا سیستم</th>
+                  <th scope="col">IP</th>
+                  <th scope="col">ورود</th>
+                  <th scope="col">آخرین استفاده</th>
+                  <th scope="col">
+                    <span className="sr-only">کارها</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.id}>
+                    <td title={s.user.email}>
+                      <bdi>{s.user.name}</bdi>
+                    </td>
+                    <td>{s.client === "agent" ? "ایجنت" : "وب"}</td>
+                    <td dir="ltr" className="cell-ltr">
+                      {s.client_version || "-"}
+                    </td>
+                    <td dir="ltr" className="cell-ltr cell-clip" title={s.agent}>
+                      {shortAgent(s.agent)}
+                    </td>
+                    <td dir="ltr" className="cell-ltr">
+                      {s.ip || "-"}
+                    </td>
+                    <td title={fmtDateTime(s.created)}>{fmtRelative(s.created)}</td>
+                    <td title={s.last_used ? fmtDateTime(s.last_used) : undefined}>{s.last_used ? fmtRelative(s.last_used) : "-"}</td>
+                    <td className="cell-actions">
+                      {s.current ? (
+                        <span className="muted">نشست فعلی شما</span>
+                      ) : (
+                        <button type="button" className="button ghost small danger" disabled={busy === s.id} onClick={() => revoke(s)}>
+                          بستن نشست
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="empty-cell">
+                      نشست فعالی نیست.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="pager">
+            <span className="muted">
+              {fmtNum(total === 0 ? 0 : offset + 1)} تا {fmtNum(Math.min(total, offset + rows.length))} از {fmtNum(total)}
+            </span>
+            <div>
+              <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                قبلی
+              </button>
+              <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+                بعدی
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+const KIND_LABEL: Record<string, string> = { image: "تصویر", text: "متن یا کد", archive: "ZIP", pdf: "PDF" };
+
+async function saveUpload(f: AdminUpload, notify: (msg: string) => void) {
+  try {
+    const r = await api.adminFile(f.id);
+    const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: r.mime }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = r.name;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    notify(errText(e, "دریافت فایل ناموفق بود."));
+  }
+}
+
+function UploadPreview({ f }: { f: AdminUpload }) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    let live = true;
+    api
+      .adminFile(f.id)
+      .then((r) => live && setSrc(`data:${r.mime};base64,${r.data}`))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [f.id]);
+  return src ? <img src={src} alt={f.name} className="upload-preview" /> : <span className="spinner tiny" />;
+}
+
+function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) => void }) {
+  const [rows, setRows] = useState<AdminUpload[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [kind, setKind] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState<number | null>(null);
+  const tell = notify ?? (() => {});
+
+  useEffect(() => {
+    setOffset(0);
+  }, [kind, picked]);
+
+  useEffect(() => {
+    let live = true;
+    setRows(null);
+    setError("");
+    api
+      .adminFiles({ user: picked?.id, kind: kind || undefined, offset })
+      .then((r) => {
+        if (!live) return;
+        setRows(r.files);
+        setTotal(r.total);
+      })
+      .catch((e) => live && setError(errText(e, "بارگذاری فایل‌ها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [kind, picked, offset]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>فایل‌های بارگذاری‌شده{picked ? " این کاربر" : ""}</h3>
+        <Segmented
+          label="نوع"
+          options={[
+            { id: "", label: "همه" },
+            { id: "image", label: "تصویر" },
+            { id: "text", label: "متن و کد" },
+            { id: "archive", label: "ZIP" },
+          ]}
+          value={kind}
+          onChange={setKind}
+        />
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : rows === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <>
+          <div className="table-wrap scroll-y">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">فایل</th>
+                  <th scope="col">نوع</th>
+                  <th scope="col">حجم</th>
+                  <th scope="col">کاربر</th>
+                  <th scope="col">از</th>
+                  <th scope="col">زمان</th>
+                  <th scope="col">مسیر روی سرور</th>
+                  <th scope="col">
+                    <span className="sr-only">کارها</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((f) => (
+                  <Fragment key={f.id}>
+                    <tr className={open === f.id ? "selected" : ""}>
+                      <td className="cell-clip">
+                        <button type="button" className="link" onClick={() => setOpen((o) => (o === f.id ? null : f.id))} aria-expanded={open === f.id} title={f.name}>
+                          <bdi>{f.name}</bdi>
+                        </button>
+                      </td>
+                      <td>{KIND_LABEL[f.kind] ?? f.kind}</td>
+                      <td>{fmtSize(f.size)}</td>
+                      <td title={f.user.email}>
+                        <bdi>{f.user.name}</bdi>
+                      </td>
+                      <td>{f.agent ? "ایجنت" : "وب"}</td>
+                      <td title={fmtDateTime(f.created)}>{fmtRelative(f.created)}</td>
+                      <td dir="ltr" className="cell-ltr cell-clip" title={f.path}>
+                        {f.path}
+                      </td>
+                      <td className="cell-actions">
+                        <div className="row-actions">
+                          <button type="button" className="button ghost small" onClick={() => saveUpload(f, tell)}>
+                            دریافت
+                          </button>
+                          <a className="button ghost small" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener">
+                            گفت‌وگو
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                    {open === f.id && (
+                      <tr>
+                        <td colSpan={8}>
+                          {f.kind === "image" ? (
+                            <UploadPreview f={f} />
+                          ) : f.kind === "archive" ? (
+                            <pre dir="ltr" className="upload-listing">
+                              {f.listing || "(بدون فایل متنی)"}
+                            </pre>
+                          ) : (
+                            <p className="muted">برای دیدن محتوا فایل را دریافت کنید.</p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="empty-cell">
+                      فایلی بارگذاری نشده است.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="pager">
+            <span className="muted">
+              {fmtNum(total === 0 ? 0 : offset + 1)} تا {fmtNum(Math.min(total, offset + rows.length))} از {fmtNum(total)}
+            </span>
+            <div>
+              <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                قبلی
+              </button>
+              <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+                بعدی
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function NoAccess() {
   return (
     <div className="page">
@@ -1363,6 +1737,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <div className="tiles">
             <Tile label="کاربران" value={s.users} sub={`${fmtNum(s.users_7d)} در ۷ روز اخیر`} />
             <Tile label="گفت‌وگوها" value={s.chats} sub={`${fmtNum(s.messages)} پیام`} />
+            <Tile label="فایل‌های بارگذاری‌شده" value={s.uploads ?? 0} sub={`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`} />
             <Tile label="برنامه‌های متصل" value={s.apps} />
             <Tile label="فراخوانی‌های MCP" value={s.mcp_calls} sub={`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`} />
             <Tile label="خطاهای MCP در ۲۴ ساعت" value={s.mcp_errors_24h} sub={`${fmtNum(errRate)}٪ از فراخوانی‌ها`} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
@@ -1395,9 +1770,11 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
               </button>
             </div>
           )}
+          <Sessions picked={picked} notify={notify} />
           <Conversations picked={picked} />
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />
+          <Uploads picked={picked} notify={notify} />
           <Events picked={picked} onPick={setPicked} />
           <RequestsFeed picked={picked} onPick={setPicked} />
           <AppsTable picked={picked} notify={notify} />

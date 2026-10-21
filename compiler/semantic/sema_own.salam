@@ -1134,7 +1134,7 @@ func ow_move_deep(o &: Ow, st &: OwSt, nid: int, key: int, self_too: bool):
             b := base.get(j)
             if t == b or ow_tok_under(o, t, b):
                 hit.push(t)
-                weak.push(ow_tok_summary(o, b))
+                weak.push(ow_tok_summary(o, b) or base.len() > 1)
                 break
             end
         end
@@ -1195,7 +1195,7 @@ func ow_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
     ret SU_READ
 end
 
-func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, eff: int, byval: bool):
+func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, eff: int, byval: bool, slot: int):
     if key < 0 or not ow_rel(o, key):
         ret
     end
@@ -1204,7 +1204,18 @@ func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, 
     else eff == SU_FREE + 100:
         ow_free(s, o, a, st, call, key, false, false)
     else eff == SU_GROW:
-        ow_move_deep(o, st, call, key, byval)
+        gf := SuGrowFields(s, call, slot)
+        if byval or str.Equals(gf, "*"):
+            ow_move_deep(o, st, call, key, byval)
+        else:
+            mut parts := str.Split(gf, ",")
+            repeat parts.len() in i:
+                if str.Len(parts.get(i)) > 0:
+                    ow_move_deep(o, st, call, ow_key(o, key, parts.get(i)), false)
+                end
+            end
+            parts.free()
+        end
     end
 end
 
@@ -1266,7 +1277,7 @@ func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
             key := ow_path(o, a, arg)
             if key >= 0:
                 ow_use_prefix(s, o, a, st, arg, key)
-                ow_apply(s, o, a, st, nid, key, eff, false)
+                ow_apply(s, o, a, st, nid, key, eff, false, i + 1)
                 ow_write_fresh(o, st, key, arg)
                 continue
             end
@@ -1274,7 +1285,7 @@ func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
         mut t := ow_expr(s, o, a, st, arg)
         t.free()
         if eff != SU_READ:
-            ow_apply(s, o, a, st, nid, ow_path(o, a, arg), eff, ow_is_container(at.At(a, arg).type_str))
+            ow_apply(s, o, a, st, nid, ow_path(o, a, arg), eff, ow_is_container(at.At(a, arg).type_str), i + 1)
         end
         if str.EndsWith(at.At(a, arg).type_str, "*"):
             pk := ow_path(o, a, arg)
@@ -1351,7 +1362,7 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
         end
     else:
         ow_unfree_under(o, st, rkey)
-        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, a, nid, 0), false)
+        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, a, nid, 0), false, 0)
         ow_alias_result(s, o, a, st, nid, rkey, out)
     end
     ret out

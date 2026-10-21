@@ -11,6 +11,7 @@ const SU_KEEP := 1
 const SU_FREE := 2
 const SU_GROW := 3
 const SU_RET := 4
+const SU_ALIAS := 5
 
 func su_call_decl(s &: Sema, call: int): int:
     if call <= 0 or call >= s.call_decl.len():
@@ -112,7 +113,7 @@ func su_arg_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
     ret SU_READ
 end
 
-func su_classify(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int): int:
+func su_classify0(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, decl_out &: int): int:
     mut cur := id
     mut steps := 0
     until steps < 64:
@@ -153,6 +154,10 @@ func su_classify(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int): int:
         end
         if k == at.AST_RETURN:
             ret SU_RET
+        end
+        if (k == at.AST_VAR_DECL or k == at.AST_CONST_DECL) and at.At(a, p).a == cur:
+            decl_out = p
+            ret SU_ALIAS
         end
         if k == at.AST_ASSIGN:
             if at.At(a, p).a == cur:
@@ -236,6 +241,72 @@ func su_classify(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int): int:
     ret SU_KEEP
 end
 
+func su_root(pm &: HashMap<int, int>, id: int): int:
+    mut cur := id
+    mut p := su_parent(pm, cur)
+    until p != 0:
+        cur = p
+        p = su_parent(pm, cur)
+    end
+    ret cur
+end
+
+func su_classify_d(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, depth: int): int:
+    mut d := 0
+    c := su_classify0(s, a, pm, id, d)
+    if c != SU_ALIAS:
+        ret c
+    end
+    if depth >= 3 or d == 0:
+        ret SU_KEEP
+    end
+    name := at.At(a, d).name
+    if str.Len(name) == 0:
+        ret SU_KEEP
+    end
+    body := su_root(pm, id)
+    mut decls := Vector {} as Vector<int>
+    su_collect_kind(a, body, at.AST_VAR_DECL, decls)
+    mut cnt := 0
+    repeat decls.len() in i:
+        if str.Equals(at.At(a, decls.get(i)).name, name):
+            cnt += 1
+        end
+    end
+    decls.free()
+    if cnt != 1:
+        ret SU_KEEP
+    end
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, body, name, refs)
+    mut worst := SU_READ
+    repeat refs.len() in j:
+        r := refs.get(j)
+        if su_in_lambda(a, pm, r):
+            worst = SU_KEEP
+            break
+        end
+        c2 := su_classify_d(s, a, pm, r, depth + 1)
+        if c2 == SU_KEEP or c2 == SU_RET:
+            worst = SU_KEEP
+            break
+        end
+        if c2 == SU_GROW:
+            worst = SU_KEEP
+            break
+        end
+        if c2 == SU_FREE:
+            worst = SU_FREE
+        end
+    end
+    refs.free()
+    ret worst
+end
+
+func su_classify(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int): int:
+    ret su_classify_d(s, a, pm, id, 0)
+end
+
 func su_collect_refs(a &: at.Ast, nid: int, name: str, out &: Vector<int>):
     if nid == 0:
         ret
@@ -300,6 +371,7 @@ func su_call_fresh(s &: Sema, a &: at.Ast, call: int): bool:
             ret true
         end
     end
+
     fi := su_fn_idx(s, su_call_decl(s, call))
     if fi < 0:
         ret false
@@ -460,6 +532,53 @@ func su_must_free(s &: Sema, a &: at.Ast, fnid: int, name: str, is_this: bool): 
     ret false
 end
 
+func su_gf_merge(cur: str, add: str): str:
+    if str.Equals(cur, "*") or str.Len(add) == 0:
+        ret cur
+    end
+    if str.Equals(add, "*"):
+        ret "*"
+    end
+    mut out := cur
+    mut parts := str.Split(add, ",")
+    repeat parts.len() in i:
+        f := parts.get(i)
+        if str.Len(f) > 0 and not str.Contains(out, "," + f + ","):
+            out = str.Len(out) == 0 ? "," + f + "," : out + f + ","
+        end
+    end
+    parts.free()
+    ret out
+end
+
+func su_grow_field(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, r: int): str:
+    p := su_parent(pm, r)
+    if p == 0:
+        ret "*"
+    end
+    k := at.KindOf(a, p)
+    if k == at.AST_MEMBER and at.At(a, p).a == r:
+        q := su_parent(pm, p)
+        if q != 0 and at.KindOf(a, q) == at.AST_CALL and at.At(a, q).a == p:
+            ret "*"
+        end
+        ret "," + at.At(a, p).name + ","
+    end
+    if k == at.AST_CALL and at.At(a, p).a != r:
+        fi := su_fn_idx(s, su_call_decl(s, p))
+        if fi < 0:
+            ret "*"
+        end
+        repeat at.ChildCount(a, p) in i:
+            if at.Child(a, p, i) == r and i + 1 < su_np(s, fi):
+                g := s.sp_gf.get(s.sum_off.get(fi) + i + 1)
+                ret str.Len(g) == 0 ? "*" : g
+            end
+        end
+    end
+    ret "*"
+end
+
 func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
     fnid := s.own_fns.get(fi)
     body := at.At(a, fnid).a
@@ -499,6 +618,12 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
                 end
             else c == SU_GROW:
                 if su_set(s.sp_grow, s, fi, slot):
+                    changed = true
+                end
+                gi := s.sum_off.get(fi) + slot
+                ng := su_gf_merge(s.sp_gf.get(gi), su_grow_field(s, a, pm, r))
+                if not str.Equals(ng, s.sp_gf.get(gi)):
+                    s.sp_gf.set(gi, ng)
                     changed = true
                 end
             end
@@ -638,6 +763,7 @@ func su_infer(s &: Sema, a &: at.Ast):
     s.sp_free.clear()
     s.sp_grow.clear()
     s.sp_mfree.clear()
+    s.sp_gf.clear()
     s.sum_ralias.clear()
     s.sum_rchain.clear()
     s.sum_rref.clear()
@@ -657,6 +783,7 @@ func su_infer(s &: Sema, a &: at.Ast):
             s.sp_free.push(false)
             s.sp_grow.push(false)
             s.sp_mfree.push(false)
+            s.sp_gf.push("")
         end
         s.sum_fresh.push(true)
         s.sum_ralias.push(0 - 1)
@@ -738,4 +865,16 @@ pub func SuArgMustFree(s &: Sema, call: int, slot: int): bool:
         ret false
     end
     ret s.sp_mfree.get(s.sum_off.get(fi) + slot)
+end
+
+pub func SuGrowFields(s &: Sema, call: int, slot: int): str:
+    if not s.sum_ready:
+        ret "*"
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret "*"
+    end
+    g := s.sp_gf.get(s.sum_off.get(fi) + slot)
+    ret str.Len(g) == 0 ? "*" : g
 end

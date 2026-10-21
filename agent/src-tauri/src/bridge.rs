@@ -105,8 +105,24 @@ fn emit_call(app: &AppHandle, preview: &Preview, state: &str, output: &str) {
     let _ = app.emit("agent://call", CallEvent { preview, state, output });
 }
 
-async fn report(http: &reqwest::Client, secret: &str, call_id: &str, status: &str, output: &str) {
-    let body = json!({ "call_id": call_id, "status": status, "output": output });
+async fn report(
+    http: &reqwest::Client,
+    secret: &str,
+    call_id: &str,
+    status: &str,
+    output: &str,
+    preview: Option<&Preview>,
+) {
+    let mut body = json!({ "call_id": call_id, "status": status, "output": output });
+    if let Some(p) = preview {
+        body["tool"] = json!(p.tool);
+        body["kind"] = json!(p.kind);
+        body["summary"] = json!(p.summary);
+        body["detail"] = json!(p.detail);
+        body["lang"] = json!(p.lang);
+        body["outside"] = json!(p.outside);
+        body["cwd"] = json!(p.cwd);
+    }
     for _ in 0..3 {
         let sent = http
             .post(format!("{}/bridge/result", config::bridge_url()))
@@ -124,11 +140,11 @@ async fn report(http: &reqwest::Client, secret: &str, call_id: &str, status: &st
 async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Call) {
     let ws = match Workspace::open(&call.workspace) {
         Ok(ws) => ws,
-        Err(e) => return report(&http, &secret, &call.id, "error", &e).await,
+        Err(e) => return report(&http, &secret, &call.id, "error", &e, None).await,
     };
     let plan = match tools::plan(&call, &ws) {
         Ok(p) => p,
-        Err(e) => return report(&http, &secret, &call.id, "error", &e).await,
+        Err(e) => return report(&http, &secret, &call.id, "error", &e, None).await,
     };
     let approvals = app.state::<Approvals>();
     let preview = plan.preview;
@@ -142,7 +158,7 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
     };
     if let Decision::Deny(reason) = decision {
         emit_call(&app, &preview, "denied", &reason);
-        return report(&http, &secret, &call.id, "denied", &reason).await;
+        return report(&http, &secret, &call.id, "denied", &reason, Some(&preview)).await;
     }
     emit_call(&app, &preview, "running", "");
     let cancel = approvals.start(&call.id);
@@ -164,5 +180,5 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
         Err(e) => ("error", e.as_str()),
     };
     emit_call(&app, &preview, if status == "ok" { "done" } else { "error" }, output);
-    report(&http, &secret, &call.id, status, output).await;
+    report(&http, &secret, &call.id, status, output, Some(&preview)).await;
 }

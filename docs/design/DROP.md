@@ -2,6 +2,8 @@
 
 Status: **proposal, not implemented.** Written 2026-10-19 alongside the
 iterator-protocol and interface work, which deliberately left this out.
+The escape analysis this proposal was waiting on is now designed in
+`OWNERSHIP.md`; automatic drop is its phase 4.
 
 ## The problem
 

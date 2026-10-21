@@ -63,6 +63,7 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
         .title("Salam Agent")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
+        .disable_drag_drop_handler()
         .on_navigation(move |url| {
             if config::is_local_asset(url) || config::same_origin(url, &target) || url.scheme() == "about" {
                 return true;

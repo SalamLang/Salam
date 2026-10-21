@@ -39,6 +39,7 @@ include aicheck "check.salam"
 include aiopenai "openai.salam"
 include aibridge "bridge.salam"
 include aibilling "billing.salam"
+include aifiles "files.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -94,6 +95,7 @@ func main:
     engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
     aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
     aiengine.SetFallbacks(os.Env("AI_ENGINE_FALLBACK_MODELS"))
+    aifiles.Configure(env_or("AI_UPLOAD_DIR", "/data/uploads"))
     if aiengine.Fallbacks() > 0:
         println "salam-ai has", aiengine.Fallbacks(), "fallback models for failed turns"
     end
@@ -147,6 +149,8 @@ func main:
     router.Get(r, "/chats", list_chats)
     router.Post(r, "/chats", create_chat)
     router.Get(r, "/chats/:id", get_chat)
+    router.Get(r, "/capabilities", capabilities)
+    router.Get(r, "/chats/:id/files/:fid", get_file)
     router.Patch(r, "/chats/:id", rename_chat)
     router.Delete(r, "/chats/:id", delete_chat)
     router.Post(r, "/chats/:id/messages", send_message)
@@ -157,7 +161,7 @@ func main:
     aiopenai.Routes(r)
     aibridge.Routes(r)
     aibilling.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/capabilities", "/chats/:id/files/:fid"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -399,6 +403,13 @@ func message_json(id: str, role: str, body: str, status: str, created: str, acti
     ret json.Object(m)
 end
 
+func with_files(obj: str, files: str): str:
+    if files.len() == 0 or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "files": ` + files + "}"
+end
+
 func own_chat(uid: i64, id: str): str:
     aistore.Lock()
     sid := aistore.OneText("SELECT CONCAT(engine_sid, '|') FROM chats WHERE id = ?1 AND user_id = ?2", two(id, i64s(uid)))
@@ -516,6 +527,7 @@ func settle(mid: str, sid: str, created: i64): aiengine.Reply:
             aiturn.SaveUsage("messages", mid, usage)
             ailive.End(sid)
             forget_check(sid)
+            aiengine.Forget(sid)
         end
     end
     ret r
@@ -537,6 +549,7 @@ func get_chat(ctx: i64):
         ret
     end
     sync_pending(id, str.TrimSuffix(owned, "|"))
+    attached := aifiles.ForChat(id)
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
@@ -547,7 +560,8 @@ func get_chat(ctx: i64):
     aistore.Finish(crow)
     mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
-        items.push(message_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)))
+        mid := aistore.Text(rows, 0)
+        items.push(with_files(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), attached.has(mid) ? attached.get(mid) : ""))
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
@@ -617,8 +631,20 @@ func send_message(ctx: i64):
         ret
     end
     id := http.Param(ctx, "id")
-    text := str.Trim(json.Get(http.Body(ctx), "text"))
-    if text.len() == 0:
+    body := http.Body(ctx)
+    text := str.Trim(json.Get(body, "text"))
+    mut files := Vector {} as Vector<aifiles.Upload>
+    if body.find(`"files"`) >= 0:
+        mut image_ok := false
+        mut pdf_ok := false
+        aiengine.Accepts(image_ok, pdf_ok)
+        mut problem := ""
+        if not aifiles.Parse(body, image_ok, pdf_ok, files, problem):
+            fail(ctx, 400, "file", problem)
+            ret
+        end
+    end
+    if text.len() == 0 and files.len() == 0:
         fail(ctx, 400, "empty", "پیام خالی است.")
         ret
     end
@@ -670,7 +696,11 @@ func send_message(ctx: i64):
     end
     mut new_title := title
     if title == DEFAULT_TITLE:
-        new_title = short_title(text)
+        new_title = short_title(text.len() > 0 ? text : files.get(0).name)
+    end
+    if files.len() > 0 and not aifiles.Store(files, aistore.Now()):
+        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
+        ret
     end
     aistore.Lock()
     _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
@@ -679,13 +709,23 @@ func send_message(ctx: i64):
     amid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
     aistore.Unlock()
+    if not aifiles.Record(id, umid, i64s(uid), files, t):
+        aistore.Lock()
+        _x := aistore.Run("DELETE FROM message_files WHERE message_id = ?1", one(umid))
+        _y := aistore.Run("DELETE FROM messages WHERE id = ?1 OR id = ?2", two(umid, amid))
+        aistore.Unlock()
+        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    prompt := aifiles.PromptText(text, files)
+    parts := aifiles.Parts(files)
     ailive.Begin(sid)
     forget_check(sid)
     mut sent := false
     if device != "0" and token.len() > 0:
-        sent = aiengine.SendDesktop(sid, desktop_preamble(uid, device, workspace, token) + text)
+        sent = aiengine.SendDesktop(sid, desktop_preamble(uid, device, workspace, token) + prompt, parts)
     else:
-        sent = aiengine.Send(sid, text)
+        sent = aiengine.Send(sid, prompt, parts)
     end
     if not sent:
         ailive.End(sid)
@@ -696,10 +736,35 @@ func send_message(ctx: i64):
         ret
     end
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberRaw("user", message_json(umid, "user", text, "done", t, "[]", "0")))
+    m.push(json.MemberRaw("user", with_files(message_json(umid, "user", text, "done", t, "[]", "0"), files.len() > 0 ? aifiles.Metas(files) : "")))
     m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
     m.push(json.Member("title", new_title))
     reply(ctx, 201, json.Object(m))
+end
+
+func capabilities(ctx: i64):
+    mut image_ok := false
+    mut pdf_ok := false
+    aiengine.Accepts(image_ok, pdf_ok)
+    reply(ctx, 200, aifiles.Limits(image_ok, pdf_ok))
+end
+
+func get_file(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    found := aifiles.Read(id, http.Param(ctx, "fid"))
+    if found.len() == 0:
+        fail(ctx, 404, "not_found", "این فایل پیدا نشد.")
+        ret
+    end
+    reply(ctx, 200, found)
 end
 
 func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:

@@ -439,6 +439,75 @@ func sort_by_start(g &: Ng, ra &: Ra):
     end
 end
 
+func slot_conflict(ra &: Ra, head &: Vector<int>, nxt &: Vector<int>, sa: int, sb: int): bool:
+    mut x := head[sa]
+    until x >= 0:
+        mut y := head[sb]
+        until y >= 0:
+            if ranges_overlap(ra.rg_s, ra.rg_e, ra.v_r0[x], ra.v_rn[x], ra.rg_s, ra.rg_e, ra.v_r0[y], ra.v_rn[y]):
+                ret true
+            end
+            y = nxt[y]
+        end
+        x = nxt[x]
+    end
+    ret false
+end
+
+func coalesce_spills(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    ns := g.mc.fs_size.len()
+    mut head := Vector {} as Vector<int>
+    mut nxt := Vector {} as Vector<int>
+    repeat ns:
+        head.push(0 - 1)
+    end
+    repeat nv:
+        nxt.push(0 - 1)
+    end
+    mut v := VBASE
+    until v < nv:
+        sl := g.mc.vslot[v]
+        if g.mc.vloc[v] < 0 and sl >= 0 and ra.v_rn[v] > 0:
+            nxt[v] = head[sl]
+            head[sl] = v
+        end
+        v += 1
+    end
+    n := g.mc.op.len()
+    repeat n in i:
+        op := g.mc.op[i]
+        if op != M_COPY and op != M_FMOV_RR:
+            continue
+        end
+        a := g.mc.r0[i]
+        b := g.mc.r1[i]
+        if a < VBASE or b < VBASE or g.mc.vloc[a] >= 0 or g.mc.vloc[b] >= 0:
+            continue
+        end
+        sa := g.mc.vslot[a]
+        sb := g.mc.vslot[b]
+        if sa < 0 or sb < 0 or sa == sb or g.mc.vwide[a] != g.mc.vwide[b] or head[sa] < 0 or head[sb] < 0:
+            continue
+        end
+        if slot_conflict(ra, head, nxt, sa, sb):
+            continue
+        end
+        mut y := head[sb]
+        mut last := 0 - 1
+        until y >= 0:
+            g.mc.vslot[y] = sa
+            last = y
+            y = nxt[y]
+        end
+        nxt[last] = head[sa]
+        head[sa] = head[sb]
+        head[sb] = 0 - 1
+    end
+    head.free()
+    nxt.free()
+end
+
 func spill_vreg(g &: Ng, v: int):
     g.mc.vloc[v] = 0 - 1
     if g.mc.vslot[v] < 0:
@@ -753,6 +822,9 @@ func rewrite(g &: Ng):
             p0 := phys(g, r0)
             p1 := phys(g, r1)
             fl := g.mc.vcls[r0] == 1 or g.mc.vcls[r1] == 1
+            if s0 and s1 and g.mc.vslot[r0] == g.mc.vslot[r1]:
+                continue
+            end
             if s0 and s1:
                 sc := fl ? XMM15 : R11
                 reload(g, r1, sc)
@@ -1249,6 +1321,7 @@ func regalloc(g &: Ng):
     loop_weights(g)
     liveness(g, ra)
     linear_scan(g, ra)
+    coalesce_spills(g, ra)
     rewrite(g)
     color_slots(g)
     frame_layout(g)

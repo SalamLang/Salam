@@ -8,6 +8,10 @@ const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? "";
 const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
 const answerFor = (s) => {
+  if (s.files?.length || s.prompt.includes("<attached_file")) {
+    const blocks = [...s.prompt.matchAll(/<attached_file name="([^"]+)">/g)].map((m) => m[1]);
+    return `Saw images [${(s.files ?? []).join(", ")}] and text [${blocks.join(", ")}]`;
+  }
   if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}`;
   if (s.prompt.includes("<caller_tools>") && s.prompt.includes("write it to a file")) {
     return JSON.stringify({ tool: "write_to_file", arguments: { path: "factorial.salam", content: "func main:\n    println 1\n    ret 0\nend\n" } });
@@ -99,6 +103,8 @@ http.createServer((req, res) => {
       req.on("close", () => live.delete(res));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/config") return send(200, { model: "mock/vision", agent: { salam: {} } });
+    if (req.method === "GET" && url.pathname === "/config/providers") return send(200, { providers: [{ id: "mock", models: { vision: { capabilities: { input: { text: true, image: true, pdf: false } } } } }] });
     if (req.method === "GET" && url.pathname === "/agent") return send(200, (process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").map((name) => ({ name })));
     if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
@@ -106,7 +112,7 @@ http.createServer((req, res) => {
       for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.model = b.model?.modelID ?? ""; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; s.prompt = b.parts[0].text; s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});

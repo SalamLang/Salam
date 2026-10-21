@@ -105,14 +105,7 @@ fn emit_call(app: &AppHandle, preview: &Preview, state: &str, output: &str) {
     let _ = app.emit("agent://call", CallEvent { preview, state, output });
 }
 
-async fn report(
-    http: &reqwest::Client,
-    secret: &str,
-    call_id: &str,
-    status: &str,
-    output: &str,
-    preview: Option<&Preview>,
-) {
+async fn report(http: &reqwest::Client, secret: &str, call_id: &str, status: &str, output: &str, preview: Option<&Preview>) {
     let mut body = json!({ "call_id": call_id, "status": status, "output": output });
     if let Some(p) = preview {
         body["tool"] = json!(p.tool);

@@ -841,7 +841,7 @@ func emit_icmp(g &: Ng, i: int): int:
     sz := msz(g, g.v_ty[a])
     ra := use_reg(g, a)
     if g.v_kind[b] == VK_INT and is_imm32(g.v_i[b]):
-        if g.v_i[b] == (0 as i64) and (p == CC_EQ or p == CC_NE):
+        if g.v_i[b] == (0 as i64):
             _t := e_rr(g, M_TEST_RR, sz, ra, ra)
         else:
             mut imm := g.v_i[b]
@@ -893,16 +893,44 @@ func fcmp_cc(np: int): int:
     ret 0 - 1
 end
 
+func cond_user(g &: Ng, d: int): int:
+    v := g.i_res[d]
+    if v < 0 or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    mut j := g.i_next[d]
+    mut k := 0
+    until j >= 0 and k < 64:
+        op := g.i_op[j]
+        if g.i_a[j] == v and (op == OP_CBR or op == OP_SELECT):
+            ret j
+        end
+        if g.i_b[j] == v or g.i_c[j] == v:
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+        k += 1
+    end
+    ret 0 - 1
+end
+
 func fused_cond(g &: Ng, br: int): int:
     c := g.i_a[br]
     if c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
         ret 0 - 1
     end
     d := g.v_def[c]
-    if g.i_next[d] != br:
+    if cond_user(g, d) != br:
         ret 0 - 1
     end
     op := g.i_op[d]
+    if g.i_op[br] == OP_SELECT:
+        t := g.i_ty[br]
+        if op == OP_ICMP and not is_agg(g, t) and not is_flt(g, t):
+            ret d
+        end
+        ret 0 - 1
+    end
     if op == OP_ICMP:
         ret d
     end
@@ -2143,6 +2171,11 @@ end
 func isel_select(g &: Ng, i: int):
     t := g.i_ty[i]
     c := g.i_a[i]
+    fd := fused_cond(g, i)
+    if fd >= 0:
+        isel_select_fused(g, i, fd)
+        ret
+    end
     if is_agg(g, t):
         pa := lea_reg(g, agg_mem(g, g.i_b[i]))
         pb := lea_reg(g, agg_mem(g, g.i_c[i]))
@@ -2180,6 +2213,18 @@ func isel_select(g &: Ng, i: int):
     cm2 := e_rr(g, M_CMOV, asz(g, t), r3, rt)
     g.mc.cc[cm2] = X_NE
     set_res(g, i, r3)
+end
+
+func isel_select_fused(g &: Ng, i: int, d: int):
+    t := g.i_ty[i]
+    rt := use_reg(g, g.i_b[i])
+    rf := use_reg(g, g.i_c[i])
+    r := gpr(g)
+    _c := e_copy(g, r, rf)
+    cc := emit_icmp(g, d)
+    cm := e_rr(g, M_CMOV, asz(g, t), r, rt)
+    g.mc.cc[cm] = cc
+    set_res(g, i, r)
 end
 
 func isel_insv(g &: Ng, i: int):
@@ -2703,11 +2748,11 @@ func isel_ins(g &: Ng, i: int, b: int):
 end
 
 func is_fused(g &: Ng, i: int): bool:
-    nx := g.i_next[i]
-    if nx < 0 or g.i_op[nx] != OP_CBR:
+    u := cond_user(g, i)
+    if u < 0:
         ret false
     end
-    ret fused_cond(g, nx) == i
+    ret fused_cond(g, u) == i
 end
 
 func isel_fcmp_val(g &: Ng, i: int):

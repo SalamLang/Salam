@@ -651,20 +651,84 @@ func setup_phis(g &: Ng):
                     g.var_[r] = new_slot(g, tsize(g, t), talign(g, t))
                     g.vao[r] = 0
                 end
-            else:
-                g.phit[i] = new_reg_ty(g, t)
-                if r >= 0:
-                    g.vv[r] = new_reg_ty(g, t)
-                end
+            else r >= 0:
+                g.vv[r] = new_reg_ty(g, t)
             end
             i = g.i_next[i]
         end
     end
 end
 
+func par_copy(g &: Ng, dsts: Vector<int>, srcs: Vector<int>):
+    mut rd := Vector {} as Vector<int>
+    mut rs := Vector {} as Vector<int>
+    mut cd := Vector {} as Vector<int>
+    mut cv := Vector {} as Vector<int>
+    repeat dsts.len() in k:
+        v := srcs[k]
+        kv := g.v_kind[v]
+        if kv == VK_UNDEF:
+            continue
+        end
+        if kv == VK_INT or kv == VK_FLT or kv == VK_GLB or kv == VK_ZERO:
+            cd.push(dsts[k])
+            cv.push(v)
+            continue
+        end
+        r := use_reg(g, v)
+        if r != dsts[k]:
+            rd.push(dsts[k])
+            rs.push(r)
+        end
+    end
+    until rd.len() > 0:
+        mut pick := 0 - 1
+        repeat rd.len() in k2:
+            if pick < 0:
+                mut busy := false
+                repeat rs.len() in j:
+                    if j != k2 and rs[j] == rd[k2]:
+                        busy = true
+                    end
+                end
+                if not busy:
+                    pick = k2
+                end
+            end
+        end
+        if pick >= 0:
+            _c := e_copy(g, rd[pick], rs[pick])
+            last := rd.len() - 1
+            rd[pick] = rd[last]
+            rs[pick] = rs[last]
+            _p := rd.pop()
+            _q := rs.pop()
+        else:
+            d0 := rd[0]
+            tmp := vnew(g, g.mc.vcls[d0])
+            g.mc.vwide[tmp] = g.mc.vwide[d0]
+            _c2 := e_copy(g, tmp, d0)
+            repeat rs.len() in j2:
+                if rs[j2] == d0:
+                    rs[j2] = tmp
+                end
+            end
+        end
+    end
+    repeat cd.len() in k3:
+        move_into(g, cd[k3], cv[k3])
+    end
+    rd.free()
+    rs.free()
+    cd.free()
+    cv.free()
+end
+
 func phi_copies(g &: Ng, b: int):
     repeat g.b_sn[b] in k:
         s := g.b_succ[g.b_ss[b] + k]
+        mut dsts := Vector {} as Vector<int>
+        mut srcs := Vector {} as Vector<int>
         mut i := g.b_first[s]
         until i >= 0 and g.i_op[i] == OP_PHI:
             ps := g.i_ps[i]
@@ -676,14 +740,20 @@ func phi_copies(g &: Ng, b: int):
                         if g.v_kind[v] != VK_UNDEF:
                             emit_copy(g, frame_mem(g.phit[i], 0 as i64), agg_mem(g, v), tsize(g, t))
                         end
-                    else g.v_kind[v] != VK_UNDEF:
-                        move_into(g, g.phit[i], v)
+                    else g.i_res[i] >= 0:
+                        dsts.push(g.vv[g.i_res[i]])
+                        srcs.push(v)
                     end
                     break
                 end
             end
             i = g.i_next[i]
         end
+        if dsts.len() > 0:
+            par_copy(g, dsts, srcs)
+        end
+        dsts.free()
+        srcs.free()
     end
 end
 
@@ -2518,8 +2588,6 @@ func isel_function(g &: Ng):
                 t := g.i_ty[i]
                 if is_agg(g, t):
                     emit_copy(g, frame_mem(g.var_[r], 0 as i64), frame_mem(g.phit[i], 0 as i64), tsize(g, t))
-                else:
-                    _c := e_copy(g, g.vv[r], g.phit[i])
                 end
             end
             i = g.i_next[i]

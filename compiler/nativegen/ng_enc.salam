@@ -659,6 +659,18 @@ func enc_prologue(g &: Ng, e &: Enc):
         g.mc.pro_len = e.code.len()
         ret
     end
+    if g.mc.fpo:
+        repeat ngp in kf:
+            push_reg(e, g.mc.callee_used[kf])
+        end
+        if g.mc.fpo_pad > 0:
+            eb(e, 0x48)
+            eb(e, 0x83)
+            eb(e, 0xEC)
+            eb(e, g.mc.fpo_pad)
+        end
+        ret
+    end
     eb(e, 0x55)
     eb(e, 0x48)
     eb(e, 0x89)
@@ -680,6 +692,21 @@ end
 
 func enc_epilogue(g &: Ng, e &: Enc):
     ngp := ngp_count(g)
+    if g.mc.fpo:
+        if g.mc.fpo_pad > 0:
+            eb(e, 0x48)
+            eb(e, 0x83)
+            eb(e, 0xC4)
+            eb(e, g.mc.fpo_pad)
+        end
+        mut kf := ngp - 1
+        until kf >= 0:
+            pop_reg(e, g.mc.callee_used[kf])
+            kf -= 1
+        end
+        eb(e, 0xC3)
+        ret
+    end
     mut k2 := ngp
     until k2 + 1 < g.mc.callee_used.len():
         xr := g.mc.callee_used[k2]
@@ -913,6 +940,20 @@ func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): b
     ret false
 end
 
+func in_loop_of(g &: Ng, t: int, h: int): bool:
+    if t < 0 or t >= g.b_lp.len():
+        ret false
+    end
+    mut lp := g.b_lp[t]
+    until lp >= 0:
+        if g.lp_head[lp] == h:
+            ret true
+        end
+        lp = g.lp_par[lp]
+    end
+    ret false
+end
+
 func rotate_loops(g &: Ng):
     n := g.mc.op.len()
     mut lpos := Vector {} as Vector<int>
@@ -937,9 +978,22 @@ func rotate_loops(g &: Ng):
                 each b in body:
                     ord.push(b)
                 end
-                ord.push(jc)
-                ord.push(mi_dup(g, i2))
-                g.mc.tgt[ord[ord.len() - 1]] = fy
+                jt := g.mc.tgt[jc]
+                hl := g.mc.tgt[i2]
+                jin := in_loop_of(g, jt, hl)
+                fin := in_loop_of(g, fy, hl)
+                if fin and not jin:
+                    nj := mi_dup(g, jc)
+                    g.mc.cc[nj] = inv_cc(g.mc.cc[jc])
+                    g.mc.tgt[nj] = fy
+                    ord.push(nj)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = jt
+                else:
+                    ord.push(jc)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = fy
+                end
                 any = true
                 continue
             end

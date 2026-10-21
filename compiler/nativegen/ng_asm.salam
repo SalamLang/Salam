@@ -96,6 +96,18 @@ end
 
 func asm_epilogue(g &: Ng):
     ngp := ngp_count(g)
+    if g.mc.fpo:
+        if g.mc.fpo_pad > 0:
+            asl(g, "add rsp, " + g.mc.fpo_pad)
+        end
+        mut kf := ngp - 1
+        until kf >= 0:
+            asl(g, "pop " + k_r64[g.mc.callee_used[kf]])
+            kf -= 1
+        end
+        asl(g, "ret")
+        ret
+    end
     mut k2 := ngp
     until k2 + 1 < g.mc.callee_used.len():
         asl(g, "movaps " + regname(g.mc.callee_used[k2], 16) + ", XMMWORD PTR [rbp-" + g.mc.callee_used[k2 + 1] + "]")
@@ -132,8 +144,10 @@ func asm_ins(g &: Ng, i: int):
         M_MOV_RI:
             if sz == 8 and not is_imm32(imm):
                 asl(g, "movabs " + regname(r0, 8) + ", " + str.FromInt(imm))
+            else sz == 8 and imm < (0 as i64):
+                asl(g, "mov " + regname(r0, 8) + ", " + str.FromInt(imm))
             else:
-                asl(g, "mov " + regname(r0, sz) + ", " + str.FromInt(imm))
+                asl(g, "mov " + regname(r0, 4) + ", " + str.FromInt(imm & (0xFFFFFFFF as i64)))
             end
             ret
         end
@@ -229,19 +243,30 @@ func asm_ins(g &: Ng, i: int):
 end
 
 func asm_function(g &: Ng):
+    g.asm_fsym.push(g.f_sym)
+    g.asm_fpos.push(str.BufLen(g.asm) as int)
     name := tab_str(g.syms, g.f_sym)
     str.BufAppend(g.asm, "\n    .text\n    .p2align 4\n")
     if not g.sy_local[g.f_sym]:
         str.BufAppend(g.asm, "    .globl " + name + "\n")
     end
     str.BufAppend(g.asm, "    .type " + name + ", @function\n" + name + ":\n")
-    asl(g, "push rbp")
-    asl(g, "mov rbp, rsp")
     ngp := ngp_count(g)
-    repeat ngp in k:
-        asl(g, "push " + k_r64[g.mc.callee_used[k]])
+    if g.mc.fpo:
+        repeat ngp in kf:
+            asl(g, "push " + k_r64[g.mc.callee_used[kf]])
+        end
+        if g.mc.fpo_pad > 0:
+            asl(g, "sub rsp, " + g.mc.fpo_pad)
+        end
+    else:
+        asl(g, "push rbp")
+        asl(g, "mov rbp, rsp")
+        repeat ngp in k:
+            asl(g, "push " + k_r64[g.mc.callee_used[k]])
+        end
     end
-    if g.mc.frame_size > 0:
+    if g.mc.frame_size > 0 and not g.mc.fpo:
         if g.os == NG_OS_WINDOWS and g.mc.frame_size >= 4096:
             asl(g, "mov eax, " + g.mc.frame_size)
             asl(g, "call ___chkstk_ms")
@@ -411,10 +436,35 @@ func write_text(path: str, text: str): bool:
     ret ok
 end
 
+func asm_live_text(g &: Ng, b &: str.StringBuilder):
+    full := str.BufStr(g.asm)
+    total := str.BufLen(g.asm) as int
+    nf := g.asm_fsym.len()
+    if nf == 0:
+        str.BufAppend(b, full)
+        ret
+    end
+    if g.asm_fpos[0] > 0:
+        str.BufAppend(b, str.SubstrIn(full, 0, g.asm_fpos[0]))
+    end
+    repeat nf in k:
+        st := g.asm_fpos[k]
+        en := k + 1 < nf ? g.asm_fpos[k + 1] : total
+        fs := g.asm_fsym[k]
+        if g.sy_live.len() == 0 or (fs < g.sy_live.len() and g.sy_live[fs]):
+            str.BufAppend(b, str.SubstrIn(full, st, en - st))
+        end
+    end
+end
+
 pub func WriteAsm(g &: Ng, path: str): bool:
+    if g.opt and not g.dce_done:
+        gdce(g)
+        g.dce_done = true
+    end
     mut b := str.NewBuilder()
     str.BufAppend(b, "    .intel_syntax noprefix\n")
-    str.BufAppend(b, str.BufStr(g.asm))
+    asm_live_text(g, b)
     hold := g.asm
     g.asm = b
     asm_data(g, SEC_RODATA)

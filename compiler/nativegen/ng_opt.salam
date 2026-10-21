@@ -37,6 +37,60 @@ func replace_res(g &: Ng, i: int, nv: int):
     ins_unlink(g, i)
 end
 
+func eval_bin(g &: Ng, op: int, t: int, x: i64, y: i64, ok &: bool): i64:
+    ok = false
+    bits := int_bits(g, t)
+    mut r := 0 as i64
+    switch op:
+        OP_ADD: r = x + y break end
+        OP_SUB: r = x - y break end
+        OP_MUL: r = x * y break end
+        OP_AND: r = x & y break end
+        OP_OR: r = x | y break end
+        OP_XOR: r = x ^ y break end
+        OP_SHL:
+            if y < (0 as i64) or y >= (bits as i64): ret 0 end
+            r = x << y
+            break
+        end
+        OP_LSHR:
+            if y < (0 as i64) or y >= (bits as i64): ret 0 end
+            r = (uval(g, t, x) >> (y as u64)) as i64
+            break
+        end
+        OP_ASHR:
+            if y < (0 as i64) or y >= (bits as i64): ret 0 end
+            r = x >> y
+            break
+        end
+        OP_SDIV, OP_SREM:
+            if y == (0 as i64) or y == (0 - 1 as i64): ret 0 end
+            if op == OP_SDIV:
+                r = x / y
+            else:
+                r = x % y
+            end
+            break
+        end
+        OP_UDIV, OP_UREM:
+            if y == (0 as i64): ret 0 end
+            ux := uval(g, t, x)
+            uy := uval(g, t, y)
+            if op == OP_UDIV:
+                r = (ux / uy) as i64
+            else:
+                r = (ux % uy) as i64
+            end
+            break
+        end
+        else:
+            ret 0
+        end
+    end
+    ok = true
+    ret r
+end
+
 func fold_bin(g &: Ng, i: int): bool:
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -45,55 +99,10 @@ func fold_bin(g &: Ng, i: int): bool:
     ca := is_cint(g, a)
     cb := is_cint(g, b)
     if ca and cb:
-        x := g.v_i[a]
-        y := g.v_i[b]
-        bits := int_bits(g, t)
-        mut r := 0 as i64
-        switch op:
-            OP_ADD: r = x + y break end
-            OP_SUB: r = x - y break end
-            OP_MUL: r = x * y break end
-            OP_AND: r = x & y break end
-            OP_OR: r = x | y break end
-            OP_XOR: r = x ^ y break end
-            OP_SHL:
-                if y < (0 as i64) or y >= (bits as i64): ret false end
-                r = x << y
-                break
-            end
-            OP_LSHR:
-                if y < (0 as i64) or y >= (bits as i64): ret false end
-                r = (uval(g, t, x) >> (y as u64)) as i64
-                break
-            end
-            OP_ASHR:
-                if y < (0 as i64) or y >= (bits as i64): ret false end
-                r = x >> y
-                break
-            end
-            OP_SDIV, OP_SREM:
-                if y == (0 as i64) or y == (0 - 1 as i64): ret false end
-                if op == OP_SDIV:
-                    r = x / y
-                else:
-                    r = x % y
-                end
-                break
-            end
-            OP_UDIV, OP_UREM:
-                if y == (0 as i64): ret false end
-                ux := uval(g, t, x)
-                uy := uval(g, t, y)
-                if op == OP_UDIV:
-                    r = (ux / uy) as i64
-                else:
-                    r = (ux % uy) as i64
-                end
-                break
-            end
-            else:
-                ret false
-            end
+        mut ok := false
+        r := eval_bin(g, op, t, g.v_i[a], g.v_i[b], ok)
+        if not ok:
+            ret false
         end
         replace_res(g, i, cval(g, t, r))
         ret true
@@ -479,6 +488,55 @@ func guard_nonneg(g &: Ng, c: int, v: int, on_true: bool): bool:
     ret (p == CC_SLE and kv >= (0 - 1 as i64)) or (p == CC_SLT and kv >= (0 as i64))
 end
 
+func pos_cint(g &: Ng, v: int): bool:
+    ret is_cint(g, v) and norm_int(g, g.v_ty[v], g.v_i[v]) > (0 as i64)
+end
+
+func nonneg_rec(g &: Ng, v: int, depth: int, stk &: Vector<int>): bool:
+    if is_cint(g, v):
+        ret norm_int(g, g.v_ty[v], g.v_i[v]) >= (0 as i64)
+    end
+    if v < 0 or g.v_kind[v] != VK_INS or depth > 6:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    a := g.i_a[d]
+    b := g.i_b[d]
+    nsw := (g.i_f[d] & IF_NSW) != 0
+    switch op:
+        OP_ZEXT: ret int_bits(g, g.i_x[d]) < int_bits(g, g.i_ty[d]) end
+        OP_UREM: ret pos_cint(g, b) end
+        OP_UDIV: ret is_cint(g, b) and uval(g, g.v_ty[b], g.v_i[b]) >= (2 as u64) end
+        OP_LSHR: ret is_cint(g, b) and g.v_i[b] >= (1 as i64) end
+        OP_AND: ret nonneg_rec(g, a, depth + 1, stk) or nonneg_rec(g, b, depth + 1, stk) end
+        OP_SREM: ret nonneg_rec(g, a, depth + 1, stk) end
+        OP_SDIV, OP_ASHR: ret (pos_cint(g, b) or op == OP_ASHR) and nonneg_rec(g, a, depth + 1, stk) end
+        OP_ADD, OP_MUL:
+            ret nsw and nonneg_rec(g, a, depth + 1, stk) and nonneg_rec(g, b, depth + 1, stk)
+        end
+        OP_SELECT: ret nonneg_rec(g, b, depth + 1, stk) and nonneg_rec(g, g.i_c[d], depth + 1, stk) end
+        OP_PHI:
+            each x in stk:
+                if x == v:
+                    ret true
+                end
+            end
+            stk.push(v)
+            ps := g.i_ps[d]
+            mut all := true
+            repeat g.i_pcount[d] in k:
+                if all and not nonneg_rec(g, g.pool[ps + 2 * k], depth + 1, stk):
+                    all = false
+                end
+            end
+            _p := stk.pop()
+            ret all
+        end
+    end
+    ret false
+end
+
 func known_nonneg(g &: Ng, v: int, blk: int): bool:
     if is_cint(g, v):
         ret g.v_i[v] >= (0 as i64)
@@ -486,8 +544,10 @@ func known_nonneg(g &: Ng, v: int, blk: int): bool:
     if v < 0 or g.v_kind[v] != VK_INS:
         ret false
     end
-    dop := g.i_op[g.v_def[v]]
-    if dop == OP_ZEXT or dop == OP_UDIV or dop == OP_UREM:
+    mut stk := Vector {} as Vector<int>
+    st := nonneg_rec(g, v, 0, stk)
+    stk.free()
+    if st:
         ret true
     end
     mut c := blk
@@ -580,6 +640,28 @@ func exact_sdiv(g &: Ng, i: int): bool:
     ret true
 end
 
+func rem_rem(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op != OP_SREM and op != OP_UREM:
+        ret false
+    end
+    a := g.i_a[i]
+    b := g.i_b[i]
+    if not is_cint(g, b) or a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    iop := g.i_op[d]
+    if not ((iop == OP_UREM and pos_cint(g, b)) or (iop == OP_SREM and op == OP_SREM)):
+        ret false
+    end
+    if not is_cint(g, g.i_b[d]) or g.v_i[g.i_b[d]] != g.v_i[b]:
+        ret false
+    end
+    replace_res(g, i, a)
+    ret true
+end
+
 func signed_to_unsigned(g &: Ng, i: int): bool:
     op := g.i_op[i]
     b := g.i_b[i]
@@ -603,7 +685,10 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             remap_ins(g, i)
             op := g.i_op[i]
             mut ch := false
-            if (op == OP_SDIV or op == OP_SREM) and g.dom_ok:
+            if op == OP_SREM or op == OP_UREM:
+                ch = rem_rem(g, i)
+            end
+            if not ch and (op == OP_SDIV or op == OP_SREM) and g.dom_ok:
                 ch = exact_sdiv(g, i)
                 if not ch:
                     ch = signed_to_unsigned(g, i)

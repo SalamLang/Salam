@@ -1,0 +1,107 @@
+---
+name: Native backend gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-backend-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
+    with:
+      paths: |
+        compiler/*
+        std/*
+        tools/bash/backend-sweep.sh
+        tools/bash/run-one-build.sh
+        tools/bash/native-*.sh
+        .github/workflows/native-backend-gate.yml
+        .github/actions/setup-*
+        .github/workflows/_changes.yml
+
+  linux:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Encoder output matches GNU as
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            xargs -0 sh tools/bash/native-encoder-check.sh ./salam
+
+      - name: Compiler built by the native backend reproduces itself
+        run: sh tools/bash/native-selfhost-check.sh ./salam
+
+      - name: Test programs agree with the C backend
+        run: |
+          sh tools/bash/backend-sweep.sh ./salam native \
+            general features basics types switch match data editor-selected stdlib
+
+  windows-cross:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mingw-w64 and wine
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 wine64
+          WINE_BIN="$(command -v wine64 || command -v wine || true)"
+          if [ -z "$WINE_BIN" ]; then
+            echo "::error::no wine or wine64 binary found after installing wine64"
+            exit 1
+          fi
+          sudo ln -sf "$WINE_BIN" /usr/local/bin/wine
+
+      - name: Initialize the wine prefix
+        run: |
+          echo "WINEDEBUG=-all" >> "$GITHUB_ENV"
+          echo "XDG_RUNTIME_DIR=/tmp/xdg-runtime" >> "$GITHUB_ENV"
+          mkdir -p /tmp/xdg-runtime && chmod 0700 /tmp/xdg-runtime
+          export WINEDEBUG=-all XDG_RUNTIME_DIR=/tmp/xdg-runtime
+          timeout 60 wineboot --init >/tmp/wineboot-init.log 2>&1
+          timeout 30 wineserver -w || wineserver -k || true
+          if [ ! -f ~/.wine/system.reg ]; then
+            echo "::error::wine prefix init failed:"
+            cat /tmp/wineboot-init.log
+            exit 1
+          fi
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Windows programs built by the native backend run correctly
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            xargs -0 sh tools/bash/native-windows-check.sh ./salam

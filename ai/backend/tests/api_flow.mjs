@@ -375,6 +375,31 @@ const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);
 
+console.log("sessions");
+const signIn = async (email, headers) => {
+  const r = await fetch(`${API}/auth/register`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ name: "Sessions", email, password: "password-123" }) });
+  if (r.status === 409) return (await (await fetch(`${API}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ email, password: "password-123" }) })).json()).token;
+  return (await r.json()).token;
+};
+const agentToken = await signIn("sessions@test.ir", { "X-Salam-Client": "agent", "X-Salam-Version": "0.5.6" });
+const webToken = await signIn("sessions@test.ir", { "X-Salam-Client": "web", "X-Salam-Version": "bad version!" });
+const sessionsUser = (await api("GET", "/me", agentToken)).json.user;
+const sessionList = (await api("GET", `/admin/sessions?user=${sessionsUser.id}`, session)).json?.sessions ?? [];
+const agentRow = sessionList.find((x) => x.client === "agent");
+const webRow = sessionList.find((x) => x.client === "web");
+check("sessions record web or agent and the agent's version", sessionList.length === 2 && agentRow?.client_version === "0.5.6" && webRow?.client_version === "" && !JSON.stringify(sessionList).includes(agentToken), sessionList);
+const sessionsRow = (await api("GET", "/admin/users?q=sessions@test.ir", session)).json.users[0];
+check("users show their sessions and agent version", sessionsRow?.sessions === 2 && sessionsRow.agent_version === "0.5.6", sessionsRow);
+check("only admins list sessions", (await api("GET", "/admin/sessions", agentToken)).res.status === 403);
+const revoked = await api("DELETE", `/admin/sessions/${agentRow?.id}`, session);
+check("an admin can close one session", revoked.json?.ok === true, revoked.json);
+check("a closed session is signed out on its next request", (await api("GET", "/me", agentToken)).res.status === 401 && (await api("GET", "/me", webToken)).res.status === 200);
+const ownRow = ((await api("GET", "/admin/sessions?user=1", session)).json?.sessions ?? []).find((x) => x.current);
+check("an admin cannot close their own current session from the list", ownRow && (await api("DELETE", `/admin/sessions/${ownRow.id}`, session)).res.status === 400, ownRow);
+const again = await signIn("sessions@test.ir", { "X-Salam-Client": "agent" });
+const all = await api("DELETE", `/admin/users/${sessionsUser.id}/sessions`, session);
+check("closing all of a user's sessions signs every device out", all.json?.revoked === 2 && (await api("GET", "/me", webToken)).res.status === 401 && (await api("GET", "/me", again)).res.status === 401, all.json);
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

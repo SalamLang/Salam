@@ -542,6 +542,136 @@ func lsr(g &: Ng): bool:
     ret changed
 end
 
+func wide_ok(g &: Ng, l &: Lp, mark: int, pre: int, pv: int, nx: int, nd: int, ub: int, v: int, depth: int): int:
+    if v == pv:
+        ret 2
+    end
+    if v == nx:
+        ret dominates(g, g.i_blk[nd], ub) ? 2 : 0
+    end
+    if v < 0 or g.v_ty[v] != T_I32:
+        ret 0
+    end
+    if is_cint(g, v) or g.v_kind[v] == VK_ARG:
+        ret 1
+    end
+    if g.v_kind[v] != VK_INS:
+        ret 0
+    end
+    d := g.v_def[v]
+    if lsr_inv_m(g, l, mark, v) and dominates(g, g.i_blk[d], pre):
+        ret 1
+    end
+    op := g.i_op[d]
+    if depth > 4 or (op != OP_ADD and op != OP_SUB) or (g.i_f[d] & IF_NSW) == 0:
+        ret 0
+    end
+    ka := wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_a[d], depth + 1)
+    if ka == 0:
+        ret 0
+    end
+    kb := wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_b[d], depth + 1)
+    if kb == 0:
+        ret 0
+    end
+    ret ka > kb ? ka : kb
+end
+
+func wide_flat(g &: Ng, pre: int, pv: int, nx: int, v: int, sign: i64, tv &: Vector<int>, ts &: Vector<i64>, c &: i64):
+    if v != pv and v != nx:
+        if is_cint(g, v):
+            c = c + sign * norm_int(g, T_I32, g.v_i[v])
+            ret
+        end
+        if g.v_kind[v] == VK_INS:
+            d := g.v_def[v]
+            op := g.i_op[d]
+            if (op == OP_ADD or op == OP_SUB) and (g.i_f[d] & IF_NSW) != 0 and (wide_has_iv(g, pv, nx, v, 0) or not dominates(g, g.i_blk[d], pre)):
+                wide_flat(g, pre, pv, nx, g.i_a[d], sign, tv, ts, c)
+                wide_flat(g, pre, pv, nx, g.i_b[d], op == OP_ADD ? sign : 0 - sign, tv, ts, c)
+                ret
+            end
+        end
+    end
+    tv.push(v)
+    ts.push(sign)
+end
+
+func wide_has_iv(g &: Ng, pv: int, nx: int, v: int, depth: int): bool:
+    if v == pv or v == nx:
+        ret true
+    end
+    if depth > 4 or v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op != OP_ADD and op != OP_SUB:
+        ret false
+    end
+    ret wide_has_iv(g, pv, nx, g.i_a[d], depth + 1) or wide_has_iv(g, pv, nx, g.i_b[d], depth + 1)
+end
+
+func wide_add(g &: Ng, at: int, before: bool, a: int, b: int, sign: i64): int:
+    ni := ins_new(g, sign > (0 as i64) ? OP_ADD : OP_SUB, T_I64)
+    g.i_a[ni] = a
+    g.i_b[ni] = b
+    g.i_f[ni] = IF_NSW
+    nv := new_res(g, ni)
+    if before:
+        ins_before(g, at, ni)
+    end
+    ret nv
+end
+
+func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int, v: int): int:
+    mut tv := Vector {} as Vector<int>
+    mut ts := Vector {} as Vector<i64>
+    mut c := 0 as i64
+    wide_flat(g, g.i_blk[pt], pv, nx, v, 1 as i64, tv, ts, c)
+    mut inv := const_int(g, T_I64, c)
+    mut has_inv := c != (0 as i64)
+    repeat tv.len() in k:
+        t := tv[k]
+        if t == pv or t == nx:
+            continue
+        end
+        si := ins_new(g, OP_SEXT, T_I64)
+        g.i_a[si] = t
+        g.i_x[si] = T_I32
+        sv := new_res(g, si)
+        ins_before(g, pt, si)
+        if has_inv:
+            inv = wide_add(g, pt, true, inv, sv, ts[k])
+        else ts[k] > (0 as i64):
+            inv = sv
+        else:
+            inv = wide_add(g, pt, true, const_int(g, T_I64, 0 as i64), sv, ts[k])
+        end
+        has_inv = true
+    end
+    mut r := inv
+    mut have := has_inv
+    repeat tv.len() in k2:
+        t2 := tv[k2]
+        if t2 != pv and t2 != nx:
+            continue
+        end
+        w := t2 == pv ? wpv : wnv
+        if have:
+            r = wide_add(g, at, true, r, w, ts[k2])
+        else ts[k2] > (0 as i64):
+            r = w
+        else:
+            r = wide_add(g, at, true, const_int(g, T_I64, 0 as i64), w, ts[k2])
+        end
+        have = true
+    end
+    tv.free()
+    ts.free()
+    ret r
+end
+
 func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int): bool:
     if g.i_ty[ph] != T_I32 or g.i_pcount[ph] != 2:
         ret false
@@ -621,6 +751,11 @@ func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int
                     ins_unlink(g, j)
                 else g.i_a[j] == nx and dominates(g, g.i_blk[nd], b2):
                     g.v_repl[g.i_res[j]] = wnv
+                    ins_unlink(g, j)
+                else g.i_x[j] == T_I32 and wide_ok(g, l, mark, pre, pv, nx, nd, b2, g.i_a[j], 0) == 2:
+                    wv := wide_build(g, pt, j, pv, nx, wpv, wnv, g.i_a[j])
+                    repl_grow(g)
+                    g.v_repl[g.i_res[j]] = wv
                     ins_unlink(g, j)
                 end
             end

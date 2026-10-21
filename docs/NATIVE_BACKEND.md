@@ -94,6 +94,9 @@ recursive. Each function then goes through:
    chain. Loop load elimination keeps a value stored in one iteration and
    loaded in the next (`cur[j]` then `cur[j - 1]`) in a register, and 32-bit
    counters that are only sign-extended for indexing become 64-bit counters.
+   Index expressions built from such a counter (`row - col + n - 1`) are
+   rebuilt in 64 bits with their loop-invariant part summed once before the
+   loop.
    Range checks on the loop counter (`c - 1 >= 0 and c - 1 < w`) split the
    loop in two: a copy without the checks runs while the counter is inside
    the range where they all hold, and the original loop runs the iterations

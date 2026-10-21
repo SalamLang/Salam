@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSummary, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSession, type AdminSummary, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -462,6 +462,8 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">گفت‌وگو</th>
               <th scope="col">پیام</th>
               <th scope="col">تصویر</th>
+              <th scope="col">نشست</th>
+              <th scope="col">نسخه‌ی ایجنت</th>
               <th scope="col">برنامه</th>
               <th scope="col">فراخوانی MCP</th>
               <th scope="col">API</th>
@@ -488,6 +490,8 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.chats)}</td>
                 <td>{fmtNum(u.messages)}</td>
                 <td title={u.files ? `${fmtNum(u.files)} فایل روی هم` : undefined}>{fmtNum(u.images ?? 0)}</td>
+                <td>{fmtNum(u.sessions ?? 0)}</td>
+                <td dir="ltr" className="cell-ltr">{u.agent_version || "-"}</td>
                 <td>{fmtNum(u.apps)}</td>
                 <td>{fmtNum(u.mcp_calls)}</td>
                 <td>{fmtNum(u.api_requests)}</td>
@@ -501,7 +505,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             ))}
             {!data && !error && (
               <tr>
-                <td colSpan={15} className="empty-cell">
+                <td colSpan={17} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
                     <span>در حال بارگذاری کاربران…</span>
@@ -1297,6 +1301,192 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
   );
 }
 
+function shortAgent(ua: string): string {
+  const browser = /Edg\/[\d.]+|OPR\/[\d.]+|Firefox\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ Safari|Safari\/[\d.]+/.exec(ua)?.[0] ?? "";
+  const os = /Windows NT [\d.]+|Mac OS X [\d_]+|Android [\d.]+|iPhone OS [\d_]+|Linux/.exec(ua)?.[0]?.replace(/_/g, ".") ?? "";
+  return [browser.replace("Version/", "Safari ").replace(" Safari", ""), os].filter(Boolean).join("، ") || ua.slice(0, 60);
+}
+
+function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+  const [rows, setRows] = useState<AdminSession[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [client, setClient] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<number | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [client, picked]);
+
+  useEffect(() => {
+    let live = true;
+    setError("");
+    api
+      .adminSessions({ user: picked?.id, client: client || undefined, offset })
+      .then((r) => {
+        if (!live) return;
+        setRows(r.sessions);
+        setTotal(r.total);
+      })
+      .catch((e) => live && setError(errText(e, "بارگذاری نشست‌ها ناموفق بود.")));
+    return () => {
+      live = false;
+    };
+  }, [client, picked, offset, reload]);
+
+  const revoke = async (s: AdminSession) => {
+    const ok = await confirmDialog({
+      title: "بستن نشست",
+      subject: s.user.email,
+      message: (
+        <>
+          نشست <Subject>{s.client === "agent" ? "ایجنت" : "وب"}</Subject> این کاربر بسته می‌شود و در اولین درخواست بعدی، حداکثر تا یک دقیقه، از حساب خارج می‌شود.
+        </>
+      ),
+      confirmLabel: "بستن نشست",
+      icon: "alert",
+    });
+    if (!ok) return;
+    setBusy(s.id);
+    try {
+      await api.revokeSession(s.id);
+      notify("نشست بسته شد.");
+      setReload((n) => n + 1);
+    } catch (e) {
+      notify(errText(e, "بستن نشست ناموفق بود."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokeAll = async () => {
+    if (!picked) return;
+    const ok = await confirmDialog({
+      title: "خروج از همه‌ی نشست‌ها",
+      subject: picked.name,
+      message: <>همه‌ی نشست‌های وب و ایجنت این کاربر بسته می‌شود. او باید دوباره وارد شود.</>,
+      confirmLabel: "بستن همه",
+      icon: "alert",
+    });
+    if (!ok) return;
+    try {
+      const r = await api.revokeUserSessions(picked.id);
+      notify(`${fmtNum(r.revoked)} نشست بسته شد.`);
+      setReload((n) => n + 1);
+    } catch (e) {
+      notify(errText(e, "بستن نشست‌ها ناموفق بود."));
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>نشست‌ها{picked ? " این کاربر" : ""}</h3>
+        <div className="row-actions">
+          <Segmented
+            label="نوع"
+            options={[
+              { id: "", label: "همه" },
+              { id: "web", label: "وب" },
+              { id: "agent", label: "ایجنت" },
+            ]}
+            value={client}
+            onChange={setClient}
+          />
+          {picked && (
+            <button type="button" className="button ghost small danger" onClick={revokeAll}>
+              خروج از همه‌ی نشست‌ها
+            </button>
+          )}
+        </div>
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : rows === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">در حال بارگذاری</span>
+        </div>
+      ) : (
+        <>
+          <div className="table-wrap scroll-y">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">کاربر</th>
+                  <th scope="col">از</th>
+                  <th scope="col">نسخه</th>
+                  <th scope="col">مرورگر یا سیستم</th>
+                  <th scope="col">IP</th>
+                  <th scope="col">ورود</th>
+                  <th scope="col">آخرین استفاده</th>
+                  <th scope="col">
+                    <span className="sr-only">کارها</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.id}>
+                    <td title={s.user.email}>
+                      <bdi>{s.user.name}</bdi>
+                    </td>
+                    <td>{s.client === "agent" ? "ایجنت" : "وب"}</td>
+                    <td dir="ltr" className="cell-ltr">
+                      {s.client_version || "-"}
+                    </td>
+                    <td dir="ltr" className="cell-ltr cell-clip" title={s.agent}>
+                      {shortAgent(s.agent)}
+                    </td>
+                    <td dir="ltr" className="cell-ltr">
+                      {s.ip || "-"}
+                    </td>
+                    <td title={fmtDateTime(s.created)}>{fmtRelative(s.created)}</td>
+                    <td title={s.last_used ? fmtDateTime(s.last_used) : undefined}>{s.last_used ? fmtRelative(s.last_used) : "-"}</td>
+                    <td className="cell-actions">
+                      {s.current ? (
+                        <span className="muted">نشست فعلی شما</span>
+                      ) : (
+                        <button type="button" className="button ghost small danger" disabled={busy === s.id} onClick={() => revoke(s)}>
+                          بستن نشست
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="empty-cell">
+                      نشست فعالی نیست.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="pager">
+            <span className="muted">
+              {fmtNum(total === 0 ? 0 : offset + 1)} تا {fmtNum(Math.min(total, offset + rows.length))} از {fmtNum(total)}
+            </span>
+            <div>
+              <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                قبلی
+              </button>
+              <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+                بعدی
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 const KIND_LABEL: Record<string, string> = { image: "تصویر", text: "متن یا کد", archive: "ZIP", pdf: "PDF" };
 
 async function saveUpload(f: AdminUpload, notify: (msg: string) => void) {
@@ -1580,6 +1770,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
               </button>
             </div>
           )}
+          <Sessions picked={picked} notify={notify} />
           <Conversations picked={picked} />
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />

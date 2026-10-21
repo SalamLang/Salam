@@ -1,32 +1,46 @@
 package nativegen
 
-k_ra_gpr_sysv := [RAX, RCX, RDX, RSI, RDI, R8, R9, RBX, R12, R13, R14, R15]
-k_ra_gpr_win := [RAX, RCX, RDX, R8, R9, RBX, RSI, RDI, R12, R13, R14, R15]
+const RA_INF := 2147483647
+
+k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15]
+k_ra_gpr_win := [0, 1, 2, 8, 9, 3, 6, 7, 12, 13, 14, 15]
 k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 
 pub struct Ra:
-    pub iblk: Vector<int> = Vector {}
     pub fr_s: Vector<int> = Vector {}
     pub fr_e: Vector<int> = Vector {}
     pub fr_next: Vector<int> = Vector {}
     pub fr_head: Vector<int> = Vector {}
     pub fr_tail: Vector<int> = Vector {}
     pub fr_cur: Vector<int> = Vector {}
-    pub defb_head: Vector<int> = Vector {}
-    pub defb_blk: Vector<int> = Vector {}
-    pub defb_next: Vector<int> = Vector {}
-    pub lastdef: Vector<int> = Vector {}
-    pub lastue: Vector<int> = Vector {}
-    pub ue_v: Vector<int> = Vector {}
-    pub ue_b: Vector<int> = Vector {}
+    pub oc_blk: Vector<int> = Vector {}
+    pub oc_first: Vector<int> = Vector {}
+    pub oc_last: Vector<int> = Vector {}
+    pub oc_ue: Vector<bool> = Vector {}
+    pub oc_def: Vector<bool> = Vector {}
+    pub oc_next: Vector<int> = Vector {}
+    pub oc_head: Vector<int> = Vector {}
+    pub oc_cur: Vector<int> = Vector {}
+    pub li_blk: Vector<int> = Vector {}
+    pub li_next: Vector<int> = Vector {}
+    pub li_head: Vector<int> = Vector {}
+    pub rg_s: Vector<int> = Vector {}
+    pub rg_e: Vector<int> = Vector {}
+    pub v_r0: Vector<int> = Vector {}
+    pub v_rn: Vector<int> = Vector {}
+    pub v_rc: Vector<int> = Vector {}
     pub mark: Vector<int> = Vector {}
     pub order: Vector<int> = Vector {}
     pub tmp: Vector<int> = Vector {}
-    pub busy: Vector<int> = Vector {}
+    pub ts: Vector<int> = Vector {}
+    pub te: Vector<int> = Vector {}
     pub active: Vector<int> = Vector {}
+    pub inactive: Vector<int> = Vector {}
+    pub free_until: Vector<int> = Vector {}
     pub uses: Vector<int> = Vector {}
     pub defs: Vector<int> = Vector {}
     pub wl: Vector<int> = Vector {}
+    pub nuse: Vector<int> = Vector {}
 end
 
 func is_callee_saved(g &: Ng, r: int): bool:
@@ -75,65 +89,38 @@ func fr_use(ra &: Ra, r: int, pos: int):
     end
 end
 
-func fixed_overlap(ra &: Ra, r: int, s: int, e: int): bool:
-    mut k := ra.fr_cur[r]
-    until k >= 0 and ra.fr_e[k] < s:
-        k = ra.fr_next[k]
-    end
-    ra.fr_cur[r] = k
-    until k >= 0 and ra.fr_s[k] <= e:
-        if ra.fr_e[k] >= s:
-            ret true
+func occ(ra &: Ra, v: int, b: int, pos: int, is_def: bool):
+    c := ra.oc_cur[v]
+    if c >= 0 and ra.oc_blk[c] == b:
+        ra.oc_last[c] = pos
+        if is_def:
+            ra.oc_def[c] = true
         end
-        k = ra.fr_next[k]
+        ret
     end
-    ret false
-end
-
-func vext(g &: Ng, v: int, pos: int):
-    if g.mc.vstart[v] < 0 or pos < g.mc.vstart[v]:
-        g.mc.vstart[v] = pos
-    end
-    if pos > g.mc.vend[v]:
-        g.mc.vend[v] = pos
-    end
-end
-
-func defines_in(ra &: Ra, v: int, b: int): bool:
-    mut h := ra.defb_head[v]
-    until h >= 0:
-        if ra.defb_blk[h] == b:
-            ret true
-        end
-        h = ra.defb_next[h]
-    end
-    ret false
+    id := ra.oc_blk.len()
+    ra.oc_blk.push(b)
+    ra.oc_first.push(pos)
+    ra.oc_last.push(pos)
+    ra.oc_ue.push(not is_def)
+    ra.oc_def.push(is_def)
+    ra.oc_next.push(ra.oc_head[v])
+    ra.oc_head[v] = id
+    ra.oc_cur[v] = id
 end
 
 func liveness(g &: Ng, ra &: Ra):
     nv := g.mc.vcls.len()
-    g.mc.vstart.clear()
-    g.mc.vend.clear()
-    ra.defb_head.clear()
-    ra.lastdef.clear()
-    ra.lastue.clear()
+    ra.oc_head.clear()
+    ra.oc_cur.clear()
+    ra.li_head.clear()
+    ra.nuse.clear()
     repeat nv:
-        g.mc.vstart.push(0 - 1)
-        g.mc.vend.push(0 - 1)
-        ra.defb_head.push(0 - 1)
-        ra.lastdef.push(0 - 1)
-        ra.lastue.push(0 - 1)
+        ra.oc_head.push(0 - 1)
+        ra.oc_cur.push(0 - 1)
+        ra.li_head.push(0 - 1)
+        ra.nuse.push(0)
     end
-    ra.defb_blk.clear()
-    ra.defb_next.clear()
-    ra.ue_v.clear()
-    ra.ue_b.clear()
-    ra.fr_s.clear()
-    ra.fr_e.clear()
-    ra.fr_next.clear()
-    ra.fr_head.clear()
-    ra.fr_tail.clear()
-    ra.fr_cur.clear()
     repeat 32:
         ra.fr_head.push(0 - 1)
         ra.fr_tail.push(0 - 1)
@@ -145,12 +132,8 @@ func liveness(g &: Ng, ra &: Ra):
             mi_regs(g, i, ra.uses, ra.defs)
             each u in ra.uses:
                 if u >= VBASE:
-                    vext(g, u, 2 * i)
-                    if ra.lastdef[u] != b and ra.lastue[u] != b:
-                        ra.lastue[u] = b
-                        ra.ue_v.push(u)
-                        ra.ue_b.push(b)
-                    end
+                    occ(ra, u, b, 2 * i, false)
+                    ra.nuse[u] = ra.nuse[u] + 1
                 else u != RSP and u != RBP:
                     fr_use(ra, u, 2 * i)
                 end
@@ -165,15 +148,7 @@ func liveness(g &: Ng, ra &: Ra):
             end
             each d in ra.defs:
                 if d >= VBASE:
-                    vext(g, d, 2 * i + 1)
-                    if not defines_in(ra, d, b):
-                        ra.defb_blk.push(b)
-                        ra.defb_next.push(ra.defb_head[d])
-                        ra.defb_head[d] = ra.defb_blk.len() - 1
-                    end
-                    if ra.lastdef[d] != b:
-                        ra.lastdef[d] = b
-                    end
+                    occ(ra, d, b, 2 * i + 1, true)
                 else d != RSP and d != RBP:
                     fr_add(ra, d, 2 * i + 1, 2 * i + 1)
                 end
@@ -182,6 +157,7 @@ func liveness(g &: Ng, ra &: Ra):
         end
     end
     propagate_live(g, ra)
+    build_ranges(g, ra)
 end
 
 func propagate_live(g &: Ng, ra &: Ra):
@@ -190,29 +166,224 @@ func propagate_live(g &: Ng, ra &: Ra):
     repeat nb:
         ra.mark.push(0 - 1)
     end
-    mut stamp := 0
-    repeat ra.ue_v.len() in k:
-        v := ra.ue_v[k]
-        b0 := ra.ue_b[k]
-        stamp += 1
-        ra.wl.clear()
-        ra.wl.push(b0)
-        ra.mark[b0] = stamp
+    nv := g.mc.vcls.len()
+    mut v := VBASE
+    until v < nv:
+        mut h := ra.oc_head[v]
+        until h >= 0:
+            if ra.oc_ue[h]:
+                b0 := ra.oc_blk[h]
+                if ra.mark[b0] != v:
+                    ra.mark[b0] = v
+                    ra.wl.push(b0)
+                end
+            end
+            h = ra.oc_next[h]
+        end
         until ra.wl.len() > 0:
             b := ra.wl.pop()
-            vext(g, v, 2 * g.mc.bstart[b])
+            ra.li_blk.push(b)
+            ra.li_next.push(ra.li_head[v])
+            ra.li_head[v] = ra.li_blk.len() - 1
             repeat g.b_pn[b] in q:
                 p := g.b_pred[g.b_ps[b] + q]
-                vext(g, v, 2 * g.mc.bend[p] - 1)
-                if ra.mark[p] != stamp:
-                    ra.mark[p] = stamp
-                    if not defines_in(ra, v, p):
+                if ra.mark[p] != v:
+                    ra.mark[p] = v
+                    if not defined_in(ra, v, p):
                         ra.wl.push(p)
+                    else:
+                        ra.mark[p] = 0 - 2 - v
                     end
                 end
             end
         end
+        v += 1
     end
+end
+
+func defined_in(ra &: Ra, v: int, b: int): bool:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret ra.oc_def[h]
+        end
+        h = ra.oc_next[h]
+    end
+    ret false
+end
+
+func occ_of(ra &: Ra, v: int, b: int): int:
+    mut h := ra.oc_head[v]
+    until h >= 0:
+        if ra.oc_blk[h] == b:
+            ret h
+        end
+        h = ra.oc_next[h]
+    end
+    ret 0 - 1
+end
+
+func live_out(g &: Ng, ra &: Ra, v: int, b: int): bool:
+    repeat g.b_sn[b] in k:
+        s := g.b_succ[g.b_ss[b] + k]
+        if ra.mark[s] == v:
+            ret true
+        end
+    end
+    ret false
+end
+
+func bend_pos(g &: Ng, b: int): int:
+    ret 2 * g.mc.bend[b] - 1
+end
+
+func build_ranges(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    nb := g.b_first.len()
+    ra.v_r0.clear()
+    ra.v_rn.clear()
+    repeat nv:
+        ra.v_r0.push(0)
+        ra.v_rn.push(0)
+    end
+    repeat nb in b0:
+        ra.mark[b0] = 0 - 1
+    end
+    mut v := VBASE
+    until v < nv:
+        if ra.oc_head[v] < 0:
+            v += 1
+            continue
+        end
+        mut h := ra.li_head[v]
+        until h >= 0:
+            ra.mark[ra.li_blk[h]] = v
+            h = ra.li_next[h]
+        end
+        ra.ts.clear()
+        ra.te.clear()
+        mut h2 := ra.li_head[v]
+        until h2 >= 0:
+            b := ra.li_blk[h2]
+            ra.ts.push(2 * g.mc.bstart[b])
+            if live_out(g, ra, v, b):
+                ra.te.push(bend_pos(g, b))
+            else:
+                oc := occ_of(ra, v, b)
+                if oc >= 0:
+                    ra.te.push(ra.oc_last[oc])
+                else:
+                    ra.te.push(2 * g.mc.bstart[b])
+                end
+            end
+            h2 = ra.li_next[h2]
+        end
+        mut h3 := ra.oc_head[v]
+        until h3 >= 0:
+            b2 := ra.oc_blk[h3]
+            if ra.mark[b2] != v:
+                ra.ts.push(ra.oc_first[h3])
+                if live_out(g, ra, v, b2):
+                    ra.te.push(bend_pos(g, b2))
+                else:
+                    ra.te.push(ra.oc_last[h3])
+                end
+            end
+            h3 = ra.oc_next[h3]
+        end
+        n := ra.ts.len()
+        mut a := 1
+        until a < n:
+            ks := ra.ts[a]
+            ke := ra.te[a]
+            mut j := a - 1
+            until j >= 0 and ra.ts[j] > ks:
+                ra.ts[j + 1] = ra.ts[j]
+                ra.te[j + 1] = ra.te[j]
+                j -= 1
+            end
+            ra.ts[j + 1] = ks
+            ra.te[j + 1] = ke
+            a += 1
+        end
+        ra.v_r0[v] = ra.rg_s.len()
+        repeat n in q:
+            last := ra.rg_s.len() - 1
+            if last >= ra.v_r0[v] and ra.ts[q] <= ra.rg_e[last] + 1:
+                if ra.te[q] > ra.rg_e[last]:
+                    ra.rg_e[last] = ra.te[q]
+                end
+            else:
+                ra.rg_s.push(ra.ts[q])
+                ra.rg_e.push(ra.te[q])
+            end
+        end
+        ra.v_rn[v] = ra.rg_s.len() - ra.v_r0[v]
+        g.mc.vstart[v] = ra.rg_s[ra.v_r0[v]]
+        g.mc.vend[v] = ra.rg_e[ra.rg_s.len() - 1]
+        v += 1
+    end
+end
+
+func covers(ra &: Ra, v: int, pos: int): bool:
+    mut k := ra.v_rc[v]
+    lim := ra.v_r0[v] + ra.v_rn[v]
+    until k < lim and ra.rg_e[k] < pos:
+        k += 1
+    end
+    ra.v_rc[v] = k
+    ret k < lim and ra.rg_s[k] <= pos
+end
+
+func next_inter(ra &: Ra, a: int, b: int, from: int): int:
+    mut i := ra.v_rc[a]
+    mut j := ra.v_r0[b]
+    li := ra.v_r0[a] + ra.v_rn[a]
+    lj := ra.v_r0[b] + ra.v_rn[b]
+    until i < li and j < lj:
+        if ra.rg_e[i] < from:
+            i += 1
+            continue
+        end
+        if ra.rg_e[j] < from:
+            j += 1
+            continue
+        end
+        s := ra.rg_s[i] > ra.rg_s[j] ? ra.rg_s[i] : ra.rg_s[j]
+        e := ra.rg_e[i] < ra.rg_e[j] ? ra.rg_e[i] : ra.rg_e[j]
+        if s <= e:
+            ret s < from ? from : s
+        end
+        if ra.rg_e[i] < ra.rg_e[j]:
+            i += 1
+        else:
+            j += 1
+        end
+    end
+    ret 0 - 1
+end
+
+func fixed_inter(ra &: Ra, r: int, v: int, from: int): int:
+    mut k := ra.fr_cur[r]
+    until k >= 0 and ra.fr_e[k] < from:
+        k = ra.fr_next[k]
+    end
+    ra.fr_cur[r] = k
+    mut j := ra.v_r0[v]
+    lj := ra.v_r0[v] + ra.v_rn[v]
+    until k >= 0 and j < lj:
+        s := ra.fr_s[k] > ra.rg_s[j] ? ra.fr_s[k] : ra.rg_s[j]
+        e := ra.fr_e[k] < ra.rg_e[j] ? ra.fr_e[k] : ra.rg_e[j]
+        if s <= e:
+            ret s
+        end
+        if ra.fr_e[k] < ra.rg_e[j]:
+            k = ra.fr_next[k]
+        else:
+            j += 1
+        end
+    end
+    ret 0 - 1
 end
 
 func sort_by_start(g &: Ng, ra &: Ra):
@@ -249,49 +420,6 @@ func sort_by_start(g &: Ng, ra &: Ra):
     end
 end
 
-func reg_free(g &: Ng, ra &: Ra, r: int, v: int): bool:
-    if ra.busy[r] >= 0:
-        ret false
-    end
-    ret not fixed_overlap(ra, r, g.mc.vstart[v], g.mc.vend[v])
-end
-
-func pick_reg(g &: Ng, ra &: Ra, v: int): int:
-    cls := g.mc.vcls[v]
-    h := g.mc.vhint[v]
-    if h >= 0:
-        mut hr := h
-        if h >= VBASE:
-            hr = g.mc.vloc[h]
-        end
-        if hr >= 0 and hr != R10 and hr != R11 and hr < XMM14 and g.mc.vcls[hr] == cls and reg_free(g, ra, hr, v):
-            ret hr
-        end
-    end
-    if cls == 1:
-        each x in k_ra_xmm:
-            if reg_free(g, ra, x, v):
-                ret x
-            end
-        end
-        ret 0 - 1
-    end
-    if g.os == NG_OS_WINDOWS:
-        each r in k_ra_gpr_win:
-            if reg_free(g, ra, r, v):
-                ret r
-            end
-        end
-        ret 0 - 1
-    end
-    each r2 in k_ra_gpr_sysv:
-        if reg_free(g, ra, r2, v):
-            ret r2
-        end
-    end
-    ret 0 - 1
-end
-
 func spill_vreg(g &: Ng, v: int):
     g.mc.vloc[v] = 0 - 1
     if g.mc.vslot[v] < 0:
@@ -299,12 +427,65 @@ func spill_vreg(g &: Ng, v: int):
     end
 end
 
+func reg_ok_for(g &: Ng, r: int, cls: int): bool:
+    if r < 0 or r == RSP or r == RBP or r == R10 or r == R11 or r >= XMM14:
+        ret false
+    end
+    ret g.mc.vcls[r] == cls
+end
+
+func choose_reg(g &: Ng, ra &: Ra, v: int): int:
+    cls := g.mc.vcls[v]
+    e := g.mc.vend[v]
+    h := g.mc.vhint[v]
+    if h >= 0:
+        mut hr := h
+        if h >= VBASE:
+            hr = g.mc.vloc[h]
+        end
+        if reg_ok_for(g, hr, cls) and ra.free_until[hr] > e:
+            ret hr
+        end
+    end
+    if cls == 1:
+        each x in k_ra_xmm:
+            if ra.free_until[x] > e:
+                ret x
+            end
+        end
+        ret 0 - 1
+    end
+    if g.os == NG_OS_WINDOWS:
+        each r in k_ra_gpr_win:
+            if ra.free_until[r] > e:
+                ret r
+            end
+        end
+        ret 0 - 1
+    end
+    each r2 in k_ra_gpr_sysv:
+        if ra.free_until[r2] > e:
+            ret r2
+        end
+    end
+    ret 0 - 1
+end
+
+func spill_weight(g &: Ng, ra &: Ra, v: int): int:
+    len := g.mc.vend[v] - g.mc.vstart[v] + 1
+    ret (ra.nuse[v] + 1) * 100000 / len
+end
+
 func linear_scan(g &: Ng, ra &: Ra):
     nv := g.mc.vcls.len()
     ra.order.clear()
+    ra.v_rc.clear()
+    repeat nv in q0:
+        ra.v_rc.push(ra.v_r0[q0])
+    end
     mut k := VBASE
     until k < nv:
-        if g.mc.vstart[k] >= 0:
+        if ra.v_rn[k] > 0:
             ra.order.push(k)
         end
         k += 1
@@ -313,42 +494,88 @@ func linear_scan(g &: Ng, ra &: Ra):
     repeat 32 in fr:
         ra.fr_cur[fr] = ra.fr_head[fr]
     end
-    ra.busy.clear()
+    ra.free_until.clear()
     repeat 32:
-        ra.busy.push(0 - 1)
+        ra.free_until.push(0)
     end
     ra.active.clear()
+    ra.inactive.clear()
     each v in ra.order:
-        s := g.mc.vstart[v]
+        pos := g.mc.vstart[v]
+        cls := g.mc.vcls[v]
         mut j := 0
         until j < ra.active.len():
             a := ra.active[j]
-            if g.mc.vend[a] < s:
-                ra.busy[g.mc.vloc[a]] = 0 - 1
+            if g.mc.vend[a] < pos or g.mc.vloc[a] < 0:
                 ra.active[j] = ra.active[ra.active.len() - 1]
                 _p := ra.active.pop()
+            else not covers(ra, a, pos):
+                ra.inactive.push(a)
+                ra.active[j] = ra.active[ra.active.len() - 1]
+                _p2 := ra.active.pop()
             else:
                 j += 1
             end
         end
-        r := pick_reg(g, ra, v)
-        if r >= 0:
-            g.mc.vloc[v] = r
-            ra.busy[r] = v
+        mut j2 := 0
+        until j2 < ra.inactive.len():
+            a2 := ra.inactive[j2]
+            if g.mc.vend[a2] < pos or g.mc.vloc[a2] < 0:
+                ra.inactive[j2] = ra.inactive[ra.inactive.len() - 1]
+                _p3 := ra.inactive.pop()
+            else covers(ra, a2, pos):
+                ra.active.push(a2)
+                ra.inactive[j2] = ra.inactive[ra.inactive.len() - 1]
+                _p4 := ra.inactive.pop()
+            else:
+                j2 += 1
+            end
+        end
+        repeat 32 in r:
+            if reg_ok_for(g, r, cls):
+                ra.free_until[r] = RA_INF
+            else:
+                ra.free_until[r] = 0 - 1
+            end
+        end
+        each a3 in ra.active:
+            ra.free_until[g.mc.vloc[a3]] = 0 - 1
+        end
+        each a4 in ra.inactive:
+            r4 := g.mc.vloc[a4]
+            if ra.free_until[r4] > 0:
+                ni := next_inter(ra, a4, v, pos)
+                if ni >= 0 and ni < ra.free_until[r4]:
+                    ra.free_until[r4] = ni
+                end
+            end
+        end
+        repeat 32 in r5:
+            if ra.free_until[r5] > 0:
+                fi := fixed_inter(ra, r5, v, pos)
+                if fi >= 0 and fi < ra.free_until[r5]:
+                    ra.free_until[r5] = fi
+                end
+            end
+        end
+        reg := choose_reg(g, ra, v)
+        if reg >= 0:
+            g.mc.vloc[v] = reg
             ra.active.push(v)
             continue
         end
         mut victim := 0 - 1
         mut vi := 0 - 1
+        mut vw := spill_weight(g, ra, v)
         repeat ra.active.len() in q:
-            a2 := ra.active[q]
-            if g.mc.vcls[a2] == g.mc.vcls[v] and g.mc.vend[a2] > g.mc.vend[v]:
-                rr := g.mc.vloc[a2]
-                if not fixed_overlap(ra, rr, s, g.mc.vend[v]):
-                    if victim < 0 or g.mc.vend[a2] > g.mc.vend[victim]:
-                        victim = a2
-                        vi = q
-                    end
+            a5 := ra.active[q]
+            if g.mc.vcls[a5] == cls:
+                rr := g.mc.vloc[a5]
+                w := spill_weight(g, ra, a5)
+                if w < vw and fixed_inter(ra, rr, v, pos) < 0 and not inactive_blocks(g, ra, rr, v, pos):
+                    victim = a5
+                    vi = q
+                    vw = w
                 end
             end
         end
@@ -357,11 +584,19 @@ func linear_scan(g &: Ng, ra &: Ra):
             spill_vreg(g, victim)
             ra.active[vi] = v
             g.mc.vloc[v] = rr2
-            ra.busy[rr2] = v
         else:
             spill_vreg(g, v)
         end
     end
+end
+
+func inactive_blocks(g &: Ng, ra &: Ra, r: int, v: int, pos: int): bool:
+    each a in ra.inactive:
+        if g.mc.vloc[a] == r and next_inter(ra, a, v, pos) >= 0:
+            ret true
+        end
+    end
+    ret false
 end
 
 func mc_take(g &: Ng): Mc:
@@ -659,30 +894,49 @@ end
 
 func regalloc(g &: Ng):
     mut ra := Ra {}
+    nv := g.mc.vcls.len()
+    g.mc.vstart.clear()
+    g.mc.vend.clear()
+    repeat nv:
+        g.mc.vstart.push(0 - 1)
+        g.mc.vend.push(0 - 1)
+    end
     liveness(g, ra)
     linear_scan(g, ra)
     rewrite(g)
     frame_layout(g)
-    ra.iblk.free()
     ra.fr_s.free()
     ra.fr_e.free()
     ra.fr_next.free()
     ra.fr_head.free()
     ra.fr_tail.free()
     ra.fr_cur.free()
-    ra.defb_head.free()
-    ra.defb_blk.free()
-    ra.defb_next.free()
-    ra.lastdef.free()
-    ra.lastue.free()
-    ra.ue_v.free()
-    ra.ue_b.free()
+    ra.oc_blk.free()
+    ra.oc_first.free()
+    ra.oc_last.free()
+    ra.oc_ue.free()
+    ra.oc_def.free()
+    ra.oc_next.free()
+    ra.oc_head.free()
+    ra.oc_cur.free()
+    ra.li_blk.free()
+    ra.li_next.free()
+    ra.li_head.free()
+    ra.rg_s.free()
+    ra.rg_e.free()
+    ra.v_r0.free()
+    ra.v_rn.free()
+    ra.v_rc.free()
     ra.mark.free()
     ra.order.free()
     ra.tmp.free()
-    ra.busy.free()
+    ra.ts.free()
+    ra.te.free()
     ra.active.free()
+    ra.inactive.free()
+    ra.free_until.free()
     ra.uses.free()
     ra.defs.free()
     ra.wl.free()
+    ra.nuse.free()
 end

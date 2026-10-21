@@ -6,6 +6,8 @@ include at "../ast.salam"
 include tok "../token.salam"
 
 pub const SF_MARK := "__own_free"
+pub const SF_MARK_VEC := "__own_free_vec"
+pub const SF_MARK_MAP := "__own_free_map"
 
 pub struct SfCand:
     pub name: str = ""
@@ -14,6 +16,7 @@ pub struct SfCand:
     pub idx: int = 0
     pub use: int = 0
     pub ok: bool = true
+    pub kind: int = 0
 end
 
 func sf_is_concat(a &: at.Ast, nid: int): bool:
@@ -51,11 +54,45 @@ func sf_has_decl(cs &: Vector<SfCand>, d: int): bool:
     ret false
 end
 
+func sf_cont_kind(ts: str): int:
+    if ow_is_vec(ts):
+        ret 1
+    end
+    if ow_is_map(ts):
+        ret 2
+    end
+    ret 0
+end
+
+func sf_empty_lit(a &: at.Ast, init: int): bool:
+    mut e := init
+    until e != 0 and at.KindOf(a, e) == at.AST_CAST:
+        e = at.At(a, e).a
+    end
+    if e == 0 or at.KindOf(a, e) != at.AST_STRUCT_LIT:
+        ret false
+    end
+    repeat at.ChildCount(a, e) in i:
+        c := at.Child(a, e, i)
+        if c != 0 and at.KindOf(a, c) == at.AST_FIELD_INIT:
+            ret false
+        end
+    end
+    ret true
+end
+
 func sf_fresh_init(s &: Sema, a &: at.Ast, init: int): bool:
     if sf_is_concat(a, init):
         ret true
     end
-    ret init != 0 and at.KindOf(a, init) == at.AST_CALL and str.Equals(at.At(a, init).type_str, "str") and su_call_fresh(s, a, init)
+    if init == 0:
+        ret false
+    end
+    ts := at.At(a, init).type_str
+    if sf_cont_kind(ts) != 0:
+        ret sf_empty_lit(a, init) or (at.KindOf(a, init) == at.AST_CALL and su_call_fresh(s, a, init))
+    end
+    ret at.KindOf(a, init) == at.AST_CALL and str.Equals(ts, "str") and su_call_fresh(s, a, init)
 end
 
 func sf_collect(s &: Sema, a &: at.Ast, nid: int, arm: bool, cs &: Vector<SfCand>, seen &: Vector<str>, dup &: Vector<str>):
@@ -82,8 +119,11 @@ func sf_collect(s &: Sema, a &: at.Ast, nid: int, arm: bool, cs &: Vector<SfCand
     if k == at.AST_BLOCK and not arm:
         repeat at.ChildCount(a, nid) in j:
             c := at.Child(a, nid, j)
-            if c != 0 and at.KindOf(a, c) == at.AST_VAR_DECL and not at.At(a, c).is_mut and not sf_has_decl(cs, c) and sf_fresh_init(s, a, at.At(a, c).a):
-                cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j })
+            if c != 0 and at.KindOf(a, c) == at.AST_VAR_DECL and not sf_has_decl(cs, c) and sf_fresh_init(s, a, at.At(a, c).a):
+                ck := sf_cont_kind(at.At(a, at.At(a, c).a).type_str)
+                if ck != 0 or not at.At(a, c).is_mut:
+                    cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j, kind = ck })
+                end
             end
         end
     end
@@ -108,6 +148,25 @@ func sf_is_print(a &: at.Ast, callee: int): bool:
     ret str.Equals(nm, "print") or str.Equals(nm, "println") or str.Equals(nm, "printerr") or str.Equals(nm, "printerrln")
 end
 
+func sf_assigned(a &: at.Ast, pm &: HashMap<int, int>, r: int): bool:
+    mut cur := r
+    until true:
+        p := su_parent(pm, cur)
+        if p == 0:
+            ret false
+        end
+        k := at.KindOf(a, p)
+        if k == at.AST_ASSIGN:
+            ret at.At(a, p).a == cur
+        end
+        if (k == at.AST_MEMBER or k == at.AST_INDEX) and at.At(a, p).a == cur:
+            cur = p
+            continue
+        end
+        ret false
+    end
+end
+
 func sf_insert(a &: at.Ast, c: SfCand):
     useid := c.use
     idn := at.NewNode(a, at.AST_IDENTIFIER)
@@ -125,7 +184,7 @@ func sf_insert(a &: at.Ast, c: SfCand):
     es := at.NewNode(a, at.AST_EXPR_STMT)
     mut ev := at.Get(a, c.decl)
     ev.kind = at.AST_EXPR_STMT
-    ev.name = SF_MARK
+    ev.name = c.kind == 1 ? SF_MARK_VEC : (c.kind == 2 ? SF_MARK_MAP : SF_MARK)
     ev.synthetic = true
     ev.a = idn
     ev.b = 0
@@ -201,7 +260,8 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
                 if c.use == 0:
                     c.use = r
                 end
-                if su_in_lambda(a, pm, r) or su_classify(s, a, pm, r) != SU_READ:
+                cl := su_classify(s, a, pm, r)
+                if su_in_lambda(a, pm, r) or not (cl == SU_READ or (c.kind != 0 and cl == SU_GROW)) or sf_assigned(a, pm, r):
                     c.ok = false
                 end
             end

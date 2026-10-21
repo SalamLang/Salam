@@ -318,6 +318,9 @@ func su_fresh_expr(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, e
     if k == at.AST_BINARY:
         ret at.At(a, e).op == tok.TK_PLUS and str.Equals(at.At(a, e).type_str, "str")
     end
+    if k == at.AST_STRUCT_LIT:
+        ret sf_cont_kind(at.At(a, e).type_str) != 0 and sf_empty_lit(a, e)
+    end
     if k == at.AST_CALL:
         ret su_call_fresh(s, a, e)
     end
@@ -357,7 +360,10 @@ func su_local_fresh(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, 
             ok = false
             break
         end
-        c := su_classify(s, a, pm, r)
+        mut c := su_classify(s, a, pm, r)
+        if c == SU_GROW and sf_cont_kind(at.At(a, r).type_str) != 0:
+            c = SU_READ
+        end
         if c == SU_READ or c == SU_RET:
             p := su_parent(pm, r)
             if c == SU_READ and p != 0 and at.KindOf(a, p) == at.AST_ASSIGN and at.At(a, p).a == r:
@@ -474,6 +480,12 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
             if su_in_lambda(a, pm, r):
                 c = SU_KEEP
             end
+            if slot > 0 and at.At(a, at.Child(a, fnid, slot - 1)).is_ref:
+                rp0 := su_parent(pm, r)
+                if rp0 != 0 and at.KindOf(a, rp0) == at.AST_ASSIGN and at.At(a, rp0).a == r:
+                    c = SU_KEEP
+                end
+            end
             if c == SU_KEEP or c == SU_RET:
                 if su_set(s.sp_keep, s, fi, slot):
                     changed = true
@@ -499,7 +511,7 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
         mut fresh := rets.len() > 0
         repeat rets.len() in q:
             e := at.At(a, rets.get(q)).a
-            if e == 0 or not str.Equals(at.At(a, e).type_str, "str") or not su_fresh_expr(s, a, pm, body, e, 0):
+            if e == 0 or not (str.Equals(at.At(a, e).type_str, "str") or sf_cont_kind(at.At(a, e).type_str) != 0) or not su_fresh_expr(s, a, pm, body, e, 0):
                 fresh = false
                 break
             end

@@ -12,6 +12,41 @@ export type Chat = {
   device_id?: number;
   workspace?: string;
 };
+export type FileMeta = {
+  id: number;
+  name: string;
+  kind: "image" | "text" | "pdf" | "archive";
+  mime: string;
+  size: number;
+  url?: string;
+};
+export type OutgoingFile = { name: string; data: string };
+export type Capabilities = {
+  image: boolean;
+  pdf: boolean;
+  max_files: number;
+  max_total: number;
+  max_image: number;
+  max_pdf: number;
+  max_text: number;
+  max_archive: number;
+  text: string[];
+  text_names: string[];
+};
+export type AdminUpload = {
+  id: number;
+  chat_id: string;
+  message_id: number;
+  name: string;
+  kind: FileMeta["kind"];
+  mime: string;
+  size: number;
+  path: string;
+  listing: string;
+  created: number;
+  user: { id: number; name: string; email: string };
+  agent: boolean;
+};
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
@@ -30,6 +65,7 @@ export type Message = {
   activity?: ActivityStep[];
   calls?: MessageCall[];
   ms?: number;
+  files?: FileMeta[];
 };
 export type TraceItem =
   | { kind: "prompt"; text: string; at: number }
@@ -201,6 +237,9 @@ export type AdminSummary = {
   users_7d: number;
   chats: number;
   messages: number;
+  uploads?: number;
+  uploads_images?: number;
+  uploads_bytes?: number;
   apps: number;
   mcp_calls: number;
   mcp_calls_24h: number;
@@ -235,6 +274,8 @@ export type AdminUser = {
   tokens_out: number;
   last_login: number;
   logins: number;
+  images?: number;
+  files?: number;
   last_active_chat: number;
   last_active_agent: number;
   last_active_api: number;
@@ -484,11 +525,32 @@ export const api = {
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
-  send: (id: string, text: string) =>
+  send: (id: string, text: string, files?: OutgoingFile[]) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
       `/chats/${id}/messages`,
-      { text },
+      files && files.length > 0 ? { text, files } : { text },
+    ),
+  capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  adminFiles: (q: { user?: number; kind?: string; offset?: number }) =>
+    call<{ files: AdminUpload[]; total: number }>(
+      "GET",
+      `/admin/files?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.kind ? { kind: q.kind } : {}), offset: String(q.offset ?? 0) })}`,
+    ),
+  adminFile: (id: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/files/${id}`,
+    ),
+  chatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/chats/${id}/files/${fid}`,
+    ),
+  adminChatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/chats/${id}/files/${fid}`,
     ),
   poll: (id: string, mid: number) =>
     call<{

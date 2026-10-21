@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type AdminChatOwner, type Chat, type Message } from "./api";
 import { NoAccess } from "./Admin";
+import { fileLoader } from "./Attach";
 import { fmtDateTime, fmtNum } from "./format";
 import { MessageView } from "./Messages";
 import { Trace } from "./Trace";
@@ -12,6 +13,7 @@ export function AdminChat({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
   const [traced, setTraced] = useState<Set<number>>(new Set());
+  const loadFile = useMemo(() => fileLoader((fid) => api.adminChatFile(id, fid)), [id]);
 
   useEffect(() => {
     let live = true;
@@ -113,7 +115,7 @@ export function AdminChat({ id }: { id: string }) {
       </header>
       {data.messages.map((m) => (
         <div key={m.id} className="admin-turn">
-          <MessageView m={m} name={data.user?.name ?? ""} calls={m.calls} />
+          <MessageView m={m} name={data.user?.name ?? ""} calls={m.calls} loadFile={loadFile} />
           {m.role === "assistant" && m.status !== "done" && (
             <p className={`admin-turn-status ${m.status}`}>{m.status === "pending" ? "این پاسخ هنوز تمام نشده است." : "این پاسخ با خطا تمام شد."}</p>
           )}

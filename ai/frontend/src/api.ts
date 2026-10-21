@@ -12,6 +12,27 @@ export type Chat = {
   device_id?: number;
   workspace?: string;
 };
+export type FileMeta = {
+  id: number;
+  name: string;
+  kind: "image" | "text" | "pdf" | "archive";
+  mime: string;
+  size: number;
+  url?: string;
+};
+export type OutgoingFile = { name: string; data: string };
+export type Capabilities = {
+  image: boolean;
+  pdf: boolean;
+  max_files: number;
+  max_total: number;
+  max_image: number;
+  max_pdf: number;
+  max_text: number;
+  max_archive: number;
+  text: string[];
+  text_names: string[];
+};
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
@@ -30,6 +51,7 @@ export type Message = {
   activity?: ActivityStep[];
   calls?: MessageCall[];
   ms?: number;
+  files?: FileMeta[];
 };
 export type TraceItem =
   | { kind: "prompt"; text: string; at: number }
@@ -484,11 +506,22 @@ export const api = {
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
-  send: (id: string, text: string) =>
+  send: (id: string, text: string, files?: OutgoingFile[]) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
       `/chats/${id}/messages`,
-      { text },
+      files && files.length > 0 ? { text, files } : { text },
+    ),
+  capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  chatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/chats/${id}/files/${fid}`,
+    ),
+  adminChatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/chats/${id}/files/${fid}`,
     ),
   poll: (id: string, mid: number) =>
     call<{

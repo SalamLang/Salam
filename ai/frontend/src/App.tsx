@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
 import { Apps } from "./Apps";
+import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
@@ -320,6 +321,7 @@ export function App() {
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
+  const loadFile = useMemo(() => fileLoader((fid) => api.chatFile(activeId ?? "", fid)), [activeId]);
   const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
 
   const pickWorkspace = async () => {
@@ -342,14 +344,14 @@ export function App() {
     }
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, files: OutgoingFile[] = [], previews: Pending[] = []): Promise<boolean> => {
     let id = activeId;
     try {
       if (!id) {
         const device = tools.info?.device;
         if (isDesktop && workspace && !device) {
           notify("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.");
-          return;
+          return false;
         }
         const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : undefined);
         id = r.chat.id;
@@ -363,20 +365,24 @@ export function App() {
         go(id);
       }
       const now = Math.floor(Date.now() / 1000);
-      const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now };
+      const local: FileMeta[] = previews.map((p, i) => ({ id: -(i + 1), name: p.file.name, kind: p.kind, mime: p.file.type, size: p.file.size, url: p.preview }));
+      const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now, files: local.length > 0 ? local : undefined };
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
-      const r = await api.send(id, text);
-      setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), r.user, { ...r.assistant, phase: "thinking" }]);
+      const r = await api.send(id, text, files);
+      const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
+      setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), user, { ...r.assistant, phase: "thinking" }]);
       setChats((cs) => {
         const cur = cs.find((c) => c.id === id);
         const rest = cs.filter((c) => c.id !== id);
         return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
       });
       follow(id, r.assistant.id);
+      return true;
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));
       notify(e instanceof ApiError ? e.message : "فرستادن پیام ناموفق بود.");
+      return false;
     }
   };
 
@@ -497,7 +503,7 @@ export function App() {
                 <div className="thread">
                   {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
                   {messages.map((m) => (
-                    <MessageView key={m.id} m={m} name={user.name} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
+                    <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
                   ))}
                 </div>
               )}

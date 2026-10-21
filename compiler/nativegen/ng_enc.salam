@@ -829,7 +829,148 @@ func peephole_jumps(g &: Ng):
     end
 end
 
+func mi_dup(g &: Ng, src: int): int:
+    i := mi_new(g, g.mc.op[src], g.mc.sz[src])
+    g.mc.sz2[i] = g.mc.sz2[src]
+    g.mc.r0[i] = g.mc.r0[src]
+    g.mc.r1[i] = g.mc.r1[src]
+    g.mc.imm[i] = g.mc.imm[src]
+    g.mc.mk[i] = g.mc.mk[src]
+    g.mc.mb[i] = g.mc.mb[src]
+    g.mc.mi[i] = g.mc.mi[src]
+    g.mc.ms[i] = g.mc.ms[src]
+    g.mc.md[i] = g.mc.md[src]
+    g.mc.msym[i] = g.mc.msym[src]
+    g.mc.cc[i] = g.mc.cc[src]
+    g.mc.tgt[i] = g.mc.tgt[src]
+    ret i
+end
+
+func perm_int(v &: Vector<int>, ord: Vector<int>):
+    mut t := Vector {} as Vector<int>
+    each k in ord:
+        t.push(v[k])
+    end
+    v.clear()
+    each x in t:
+        v.push(x)
+    end
+    t.free()
+end
+
+func perm_i64(v &: Vector<i64>, ord: Vector<int>):
+    mut t := Vector {} as Vector<i64>
+    each k in ord:
+        t.push(v[k])
+    end
+    v.clear()
+    each x in t:
+        v.push(x)
+    end
+    t.free()
+end
+
+func dup_ok(op: int): bool:
+    ret op != M_LABEL and op != M_JMP and op != M_JCC and op != M_CALL and op != M_CALLR and op != M_RET and op != M_UD2 and op != M_DIV and op != M_LCMPXCHG and op != M_XCHG and op != M_LXADD
+end
+
+func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): bool:
+    n := g.mc.op.len()
+    body.clear()
+    mut j := li + 1
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j += 1
+            continue
+        end
+        if op == M_JCC:
+            break
+        end
+        if not dup_ok(op) or body.len() >= 4:
+            ret false
+        end
+        body.push(j)
+        j += 1
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    k := next_real(g, j)
+    if k < n and g.mc.op[k] == M_JMP:
+        fy = g.mc.tgt[k]
+        ret true
+    end
+    mut q := j + 1
+    until q < n and (g.mc.op[q] == M_NOP or g.mc.op[q] == M_COPY):
+        q += 1
+    end
+    if q < n and g.mc.op[q] == M_LABEL:
+        fy = g.mc.tgt[q]
+        ret true
+    end
+    ret false
+end
+
+func rotate_loops(g &: Ng):
+    n := g.mc.op.len()
+    mut lpos := Vector {} as Vector<int>
+    repeat g.mc.nlabels:
+        lpos.push(0 - 1)
+    end
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] < lpos.len():
+            lpos[g.mc.tgt[i]] = i
+        end
+    end
+    mut ord := Vector {} as Vector<int>
+    mut body := Vector {} as Vector<int>
+    mut any := false
+    repeat n in i2:
+        op := g.mc.op[i2]
+        if op == M_JMP and g.mc.tgt[i2] < lpos.len():
+            li := lpos[g.mc.tgt[i2]]
+            mut jc := 0 - 1
+            mut fy := 0 - 1
+            if li >= 0 and li < i2 and rotate_head(g, li, body, jc, fy) and g.mc.tgt[jc] != g.mc.tgt[i2] and fy != g.mc.tgt[i2]:
+                each b in body:
+                    ord.push(b)
+                end
+                ord.push(jc)
+                ord.push(mi_dup(g, i2))
+                g.mc.tgt[ord[ord.len() - 1]] = fy
+                any = true
+                continue
+            end
+        end
+        ord.push(i2)
+    end
+    if any:
+        perm_int(g.mc.op, ord)
+        perm_int(g.mc.sz, ord)
+        perm_int(g.mc.sz2, ord)
+        perm_int(g.mc.r0, ord)
+        perm_int(g.mc.r1, ord)
+        perm_i64(g.mc.imm, ord)
+        perm_int(g.mc.mk, ord)
+        perm_int(g.mc.mb, ord)
+        perm_int(g.mc.mi, ord)
+        perm_int(g.mc.ms, ord)
+        perm_i64(g.mc.md, ord)
+        perm_int(g.mc.msym, ord)
+        perm_int(g.mc.cc, ord)
+        perm_int(g.mc.tgt, ord)
+    end
+    lpos.free()
+    ord.free()
+    body.free()
+end
+
 func encode_function(g &: Ng):
+    if g.opt:
+        rotate_loops(g)
+    end
     peephole_jumps(g)
     mut e := Enc {}
     n := g.mc.op.len()

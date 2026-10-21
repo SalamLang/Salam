@@ -61,7 +61,9 @@ func isel_init(g &: Ng):
     g.vao.clear()
     g.v_mem.clear()
     g.vown.clear()
+    g.v_cu.clear()
     repeat nv:
+        g.v_cu.push(0)
         g.vown.push(false)
         g.vv.push(0 - 1)
         g.vsc.push(1)
@@ -85,6 +87,12 @@ func isel_init(g &: Ng):
         mut i := g.b_first[b]
         until i >= 0:
             op := g.i_op[i]
+            if op == OP_CBR or (op == OP_SELECT and sel_scalar(g, g.i_ty[i])):
+                cu := g.i_a[i]
+                if cu >= 0:
+                    g.v_cu[cu] = g.v_cu[cu] + 1
+                end
+            end
             if op == OP_LOAD:
                 a := g.i_a[i]
                 if a >= 0:
@@ -99,6 +107,14 @@ func isel_init(g &: Ng):
             i = g.i_next[i]
         end
     end
+end
+
+func sel_scalar(g &: Ng, t: int): bool:
+    ret not is_agg(g, t) and not is_flt(g, t) and not is_vec(g, t)
+end
+
+func cond_only(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.v_cu.len() and g.v_kind[v] == VK_INS and g.v_cu[v] == g.v_uses[v] and g.i_op[g.v_def[v]] == OP_ICMP
 end
 
 func def_op(g &: Ng, v: int): int:
@@ -916,6 +932,9 @@ end
 
 func fused_cond(g &: Ng, br: int): int:
     c := g.i_a[br]
+    if cond_only(g, c) and (g.i_op[br] == OP_CBR or sel_scalar(g, g.i_ty[br])):
+        ret g.v_def[c]
+    end
     if c < 0 or g.v_kind[c] != VK_INS or g.v_uses[c] != 1:
         ret 0 - 1
     end
@@ -926,7 +945,7 @@ func fused_cond(g &: Ng, br: int): int:
     op := g.i_op[d]
     if g.i_op[br] == OP_SELECT:
         t := g.i_ty[br]
-        if op == OP_ICMP and not is_agg(g, t) and not is_flt(g, t):
+        if op == OP_ICMP and sel_scalar(g, t):
             ret d
         end
         ret 0 - 1
@@ -2748,6 +2767,9 @@ func isel_ins(g &: Ng, i: int, b: int):
 end
 
 func is_fused(g &: Ng, i: int): bool:
+    if g.i_res[i] >= 0 and cond_only(g, g.i_res[i]):
+        ret true
+    end
     u := cond_user(g, i)
     if u < 0:
         ret false

@@ -471,6 +471,98 @@ func cond_rel(g &: Ng, c1: int, c2: int): int:
     ret 0
 end
 
+func iv_bounds(g &: Ng, v: int, blk: int, lo &: i64, hi &: i64): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    ph := g.v_def[v]
+    if g.i_op[ph] != OP_PHI or g.i_pcount[ph] != 2:
+        ret false
+    end
+    h := g.i_blk[ph]
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret false
+    end
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    cd := g.v_def[c]
+    if g.i_op[cd] != OP_ICMP or g.i_a[cd] != v or not is_cint(g, g.i_b[cd]):
+        ret false
+    end
+    p := g.i_x[cd]
+    if p != CC_SLT and p != CC_SLE:
+        ret false
+    end
+    body := g.i_b[t]
+    if body == h or g.b_npred[body] != 1 or not dominates(g, body, blk):
+        ret false
+    end
+    mut init := 0 - 1
+    mut step_ok := false
+    repeat 2 in k:
+        iv := g.pool[g.i_ps[ph] + 2 * k]
+        pb := g.pool[g.i_ps[ph] + 2 * k + 1]
+        if is_cint(g, iv) and not dominates(g, h, pb):
+            init = iv
+        else iv >= 0 and g.v_kind[iv] == VK_INS:
+            d := g.v_def[iv]
+            if g.i_op[d] == OP_ADD and g.i_a[d] == v and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] > (0 as i64) and (g.i_f[d] & IF_NSW) != 0 and dominates(g, h, pb):
+                step_ok = true
+            end
+        end
+    end
+    if init < 0 or not step_ok:
+        ret false
+    end
+    lo = norm_int(g, g.v_ty[v], g.v_i[init])
+    lim := norm_int(g, g.v_ty[v], g.v_i[g.i_b[cd]])
+    hi = p == CC_SLT ? lim - (1 as i64) : lim
+    ret lo <= hi
+end
+
+func fold_icmp_range(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    if not is_cint(g, b):
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not iv_bounds(g, a, g.i_blk[i], lo, hi):
+        ret false
+    end
+    k := norm_int(g, g.v_ty[b], g.v_i[b])
+    p := g.i_x[i]
+    mut res := 0 - 1
+    if p == CC_SLT:
+        if hi < k: res = 1 end
+        if lo >= k: res = 0 end
+    else p == CC_SLE:
+        if hi <= k: res = 1 end
+        if lo > k: res = 0 end
+    else p == CC_SGT:
+        if lo > k: res = 1 end
+        if hi <= k: res = 0 end
+    else p == CC_SGE:
+        if lo >= k: res = 1 end
+        if hi < k: res = 0 end
+    else p == CC_ULT and lo >= (0 as i64) and k >= (0 as i64):
+        if hi < k: res = 1 end
+        if lo >= k: res = 0 end
+    else p == CC_UGE and lo >= (0 as i64) and k >= (0 as i64):
+        if lo >= k: res = 1 end
+        if hi < k: res = 0 end
+    end
+    if res < 0:
+        ret false
+    end
+    replace_res(g, i, const_int(g, T_I1, res as i64))
+    ret true
+end
+
 func dom_cond_known(g &: Ng, c: int, blk: int, val &: bool): bool:
     mut x := blk
     repeat 32:
@@ -920,6 +1012,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 end
             else op == OP_ICMP:
                 ch = fold_icmp(g, i)
+                if not ch and g.dom_ok and g.i_op[i] == OP_ICMP:
+                    ch = fold_icmp_range(g, i)
+                end
             else op >= OP_SEXT and op <= OP_FPTRUNC:
                 ch = fold_cast(g, i)
             else op == OP_SELECT:
@@ -1687,6 +1782,19 @@ func optimize(g &: Ng):
     if not g.off_licm and licm(g):
         remap_all(g)
         opt_rounds(g)
+    end
+    if not g.off_unswitch:
+        mut nu2 := 0
+        mut uch := false
+        until nu2 < 4 and unswitch_loops(g):
+            nu2 += 1
+            uch = true
+            opt_rounds(g)
+        end
+        if uch and not g.off_licm and licm(g):
+            remap_all(g)
+            opt_rounds(g)
+        end
     end
     if not g.off_gvn and gvn(g):
         mut cfg0 := false

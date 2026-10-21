@@ -99,8 +99,10 @@ recursive. Each function then goes through:
    the range where they all hold, and the original loop runs the iterations
    at the edges.
    Small innermost loops whose trip count is only known at runtime
-   (`until j < i:` with `j += 1`) run two iterations per test, with the
-   original loop finishing the odd one.
+   (`until j < i:` with `j += 1`, or counting down) run two iterations per
+   test, with the original loop finishing the odd one. The test compares the
+   counter with a limit adjusted once before the loop, so it never computes a
+   counter value that could overflow.
 9. Strength reduction: an array address that is affine in a loop counter, such
    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
    Addresses that differ only by a constant share one pointer.

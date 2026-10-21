@@ -2,7 +2,7 @@ package nativegen
 
 const RUN_MAX_SIZE := 48
 
-func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, skip: int, maxsz: int): bool:
+func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, cc &: int, skip: int, maxsz: int): bool:
     t := g.b_last[h]
     if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & skip) != 0:
         ret false
@@ -17,7 +17,8 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
     if i < 0 or g.i_op[i] != OP_ICMP or g.i_next[i] != t or g.i_a[t] != g.i_res[i]:
         ret false
     end
-    if g.i_x[i] != CC_SLT or not lsr_inv_m(g, l, mark, g.i_b[i]) or g.v_uses[g.i_res[i]] != 1:
+    pr := g.i_x[i]
+    if (pr != CC_SLT and pr != CC_SLE and pr != CC_SGT and pr != CC_SGE) or not lsr_inv_m(g, l, mark, g.i_b[i]) or g.v_uses[g.i_res[i]] != 1:
         ret false
     end
     if blk_has_phi(g, g.i_b[t]):
@@ -36,11 +37,15 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
         ret false
     end
     nd := g.v_def[nx]
-    if g.i_op[nd] != OP_ADD or g.i_a[nd] != a or not is_cint(g, g.i_b[nd]) or (g.i_f[nd] & IF_NSW) == 0:
+    if (g.i_op[nd] != OP_ADD and g.i_op[nd] != OP_SUB) or g.i_a[nd] != a or not is_cint(g, g.i_b[nd]) or (g.i_f[nd] & IF_NSW) == 0:
         ret false
     end
-    s := g.v_i[g.i_b[nd]]
-    if s <= (0 as i64) or s > (64 as i64):
+    mut s := g.v_i[g.i_b[nd]]
+    if g.i_op[nd] == OP_SUB:
+        s = 0 - s
+    end
+    up := pr == CC_SLT or pr == CC_SLE
+    if s == (0 as i64) or s > (64 as i64) or s < (0 - 64 as i64) or (s > (0 as i64)) != up:
         ret false
     end
     mut size := 0
@@ -79,6 +84,7 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
     iv = ph
     step = s
     lim = g.i_b[i]
+    cc = pr
     ret true
 end
 
@@ -156,7 +162,43 @@ func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: in
     ov.free()
 end
 
-func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int):
+func run_limit(g &: Ng, pre: int, lim: int, step: i64, cc: int, ty: int): int:
+    mut adj := 0 - step
+    if cc == CC_SLE or cc == CC_SGE:
+        adj = step > (0 as i64) ? adj + 1 : adj - 1
+    end
+    lo := ty == T_I64 ? (0 as i64) - (9223372036854775807 as i64) - (1 as i64) : (0 - 2147483647 - 1) as i64
+    hi := ty == T_I64 ? 9223372036854775807 as i64 : 2147483647 as i64
+    sat := step > (0 as i64) ? lo : hi
+    pt := g.b_last[pre]
+    if is_cint(g, lim):
+        lv := norm_int(g, ty, g.v_i[lim])
+        if (adj < (0 as i64) and lv < lo - adj) or (adj > (0 as i64) and lv > hi - adj):
+            ret const_int(g, ty, sat)
+        end
+        ret const_int(g, ty, lv + adj)
+    end
+    ok := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[ok] = lim
+    g.i_b[ok] = const_int(g, ty, adj < (0 as i64) ? lo - adj : hi - adj)
+    g.i_x[ok] = adj < (0 as i64) ? CC_SGE : CC_SLE
+    okv := new_res(g, ok)
+    ins_before(g, pt, ok)
+    sm := ins_new(g, OP_ADD, ty)
+    g.i_a[sm] = lim
+    g.i_b[sm] = const_int(g, ty, adj)
+    smv := new_res(g, sm)
+    ins_before(g, pt, sm)
+    se := ins_new(g, OP_SELECT, ty)
+    g.i_a[se] = okv
+    g.i_b[se] = smv
+    g.i_c[se] = const_int(g, ty, sat)
+    sev := new_res(g, se)
+    ins_before(g, pt, se)
+    ret sev
+end
+
+func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int, cc: int):
     t := g.b_last[h]
     g.i_f[t] = g.i_f[t] | IF_NORUN
     body0 := g.i_b[t]
@@ -194,16 +236,11 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
             ivu = g.i_res[uphis[k]]
         end
     end
-    ad := ins_new(g, OP_ADD, g.i_ty[ph])
-    g.i_a[ad] = ivu
-    g.i_b[ad] = const_int(g, g.i_ty[ph], step)
-    g.i_f[ad] = IF_NSW
-    adv := new_res(g, ad)
-    ins_append(g, hu, ad)
+    limu := run_limit(g, pre, lim, step, cc, g.i_ty[ph])
     ic := ins_new(g, OP_ICMP, T_I1)
-    g.i_a[ic] = adv
-    g.i_b[ic] = lim
-    g.i_x[ic] = CC_SLT
+    g.i_a[ic] = ivu
+    g.i_b[ic] = limu
+    g.i_x[ic] = step > (0 as i64) ? CC_SLT : CC_SGT
     icv := new_res(g, ic)
     ins_append(g, hu, ic)
     mut u1 := Usw {}
@@ -315,8 +352,9 @@ func runtime_unroll(g &: Ng): bool:
         mut iv := 0 - 1
         mut step := 0 as i64
         mut lim := 0 - 1
-        if run_match(g, l, mark, h, latch, iv, step, lim, IF_NOVEC | IF_NORUN, RUN_MAX_SIZE):
-            run_unroll(g, l, mark, h, p, latch, iv, step, lim)
+        mut cc := 0
+        if run_match(g, l, mark, h, latch, iv, step, lim, cc, IF_NOVEC | IF_NORUN, RUN_MAX_SIZE):
+            run_unroll(g, l, mark, h, p, latch, iv, step, lim, cc)
             changed = true
         end
     end

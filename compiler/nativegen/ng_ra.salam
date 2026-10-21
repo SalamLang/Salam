@@ -424,6 +424,7 @@ func spill_vreg(g &: Ng, v: int):
     g.mc.vloc[v] = 0 - 1
     if g.mc.vslot[v] < 0:
         g.mc.vslot[v] = new_slot(g, 8, 8)
+        g.mc.fs_temp[g.mc.vslot[v]] = false
     end
 end
 
@@ -839,6 +840,306 @@ func rewrite(g &: Ng):
     mc_free_arrays(o)
 end
 
+func ranges_overlap(as_ &: Vector<int>, ae &: Vector<int>, a0: int, an: int, bs: Vector<int>, be: Vector<int>, b0: int, bn: int): bool:
+    mut i := a0
+    mut j := b0
+    until i < a0 + an and j < b0 + bn:
+        if as_[i] <= be[j] and bs[j] <= ae[i]:
+            ret true
+        end
+        if ae[i] < be[j]:
+            i += 1
+        else:
+            j += 1
+        end
+    end
+    ret false
+end
+
+func add_range(rs &: Vector<int>, re &: Vector<int>, s: int, e: int):
+    rs.push(s)
+    re.push(e)
+end
+
+func sort_merge(rs &: Vector<int>, re &: Vector<int>, from: int):
+    n := rs.len()
+    mut a := from + 1
+    until a < n:
+        ks := rs[a]
+        ke := re[a]
+        mut j := a - 1
+        until j >= from and rs[j] > ks:
+            rs[j + 1] = rs[j]
+            re[j + 1] = re[j]
+            j -= 1
+        end
+        rs[j + 1] = ks
+        re[j + 1] = ke
+        a += 1
+    end
+    mut w := from
+    mut k := from
+    until k < n:
+        if w > from and rs[k] <= re[w - 1] + 1:
+            if re[k] > re[w - 1]:
+                re[w - 1] = re[k]
+            end
+        else:
+            rs[w] = rs[k]
+            re[w] = re[k]
+            w += 1
+        end
+        k += 1
+    end
+    until rs.len() > w:
+        _a := rs.pop()
+        _b := re.pop()
+    end
+end
+
+func dominates(g &: Ng, a: int, b: int): bool:
+    mut x := b
+    repeat 100000:
+        if x == a:
+            ret true
+        end
+        if x == 0 or x < 0:
+            ret false
+        end
+        x = g.b_idom[x]
+    end
+    ret false
+end
+
+func color_slots(g &: Ng):
+    ns := g.mc.fs_size.len()
+    n := g.mc.op.len()
+    nb := g.b_first.len()
+    mut bs := Vector {} as Vector<int>
+    mut be := Vector {} as Vector<int>
+    repeat nb:
+        bs.push(0 - 1)
+        be.push(0 - 1)
+    end
+    mut posblk := Vector {} as Vector<int>
+    mut curb := 0 - 1
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] < nb:
+            if curb >= 0:
+                be[curb] = i - 1
+            end
+            curb = g.mc.tgt[i]
+            bs[curb] = i
+        end
+        posblk.push(curb)
+    end
+    if curb >= 0:
+        be[curb] = n - 1
+    end
+    mut lhead := Vector {} as Vector<int>
+    mut lmem_head := Vector {} as Vector<int>
+    mut lmem_next := Vector {} as Vector<int>
+    mut lmem_blk := Vector {} as Vector<int>
+    mut mark := Vector {} as Vector<int>
+    repeat nb:
+        mark.push(0 - 1)
+    end
+    mut wl := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        repeat g.b_sn[b] in k:
+            h := g.b_succ[g.b_ss[b] + k]
+            if dominates(g, h, b):
+                li := lhead.len()
+                lhead.push(h)
+                lmem_head.push(0 - 1)
+                mark[h] = li
+                lmem_blk.push(h)
+                lmem_next.push(lmem_head[li])
+                lmem_head[li] = lmem_blk.len() - 1
+                wl.clear()
+                if b != h:
+                    wl.push(b)
+                    mark[b] = li
+                    lmem_blk.push(b)
+                    lmem_next.push(lmem_head[li])
+                    lmem_head[li] = lmem_blk.len() - 1
+                end
+                until wl.len() > 0:
+                    x := wl.pop()
+                    repeat g.b_pn[x] in q:
+                        pp := g.b_pred[g.b_ps[x] + q]
+                        if mark[pp] != li:
+                            mark[pp] = li
+                            lmem_blk.push(pp)
+                            lmem_next.push(lmem_head[li])
+                            lmem_head[li] = lmem_blk.len() - 1
+                            wl.push(pp)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    nl := lhead.len()
+    mut inloop := Vector {} as Vector<bool>
+    repeat nl * nb:
+        inloop.push(false)
+    end
+    repeat nl in l0:
+        mut hh := lmem_head[l0]
+        until hh >= 0:
+            inloop[l0 * nb + lmem_blk[hh]] = true
+            hh = lmem_next[hh]
+        end
+    end
+    mut ss := Vector {} as Vector<int>
+    mut se := Vector {} as Vector<int>
+    repeat ns:
+        ss.push(0 - 1)
+        se.push(0 - 1)
+    end
+    repeat n in i2:
+        if g.mc.mk[i2] == MK_FRAME:
+            sl := g.mc.mb[i2]
+            if ss[sl] < 0:
+                ss[sl] = i2
+            end
+            se[sl] = i2
+        end
+    end
+    mut rr_s := Vector {} as Vector<int>
+    mut rr_e := Vector {} as Vector<int>
+    mut r0 := Vector {} as Vector<int>
+    mut rn := Vector {} as Vector<int>
+    repeat ns:
+        r0.push(0)
+        rn.push(0)
+    end
+    mut cands := Vector {} as Vector<int>
+    mut lhit := Vector {} as Vector<bool>
+    repeat nl:
+        lhit.push(false)
+    end
+    repeat ns in sl2:
+        if not g.mc.fs_temp[sl2] or ss[sl2] < 0:
+            continue
+        end
+        start := rr_s.len()
+        add_range(rr_s, rr_e, ss[sl2], se[sl2])
+        repeat nl in l1:
+            lhit[l1] = false
+        end
+        mut i3 := ss[sl2]
+        until i3 <= se[sl2]:
+            if g.mc.mk[i3] == MK_FRAME and g.mc.mb[i3] == sl2:
+                pb := posblk[i3]
+                if pb >= 0:
+                    repeat nl in l2:
+                        if not lhit[l2] and inloop[l2 * nb + pb]:
+                            lhit[l2] = true
+                        end
+                    end
+                end
+            end
+            i3 += 1
+        end
+        repeat nl in l3:
+            if lhit[l3]:
+                mut h3 := lmem_head[l3]
+                until h3 >= 0:
+                    lb := lmem_blk[h3]
+                    if bs[lb] >= 0:
+                        add_range(rr_s, rr_e, bs[lb], be[lb])
+                    end
+                    h3 = lmem_next[h3]
+                end
+            end
+        end
+        sort_merge(rr_s, rr_e, start)
+        r0[sl2] = start
+        rn[sl2] = rr_s.len() - start
+        cands.push(sl2)
+    end
+    nc := cands.len()
+    mut a := 1
+    until a < nc:
+        key := cands[a]
+        mut j := a - 1
+        until j >= 0 and rr_s[r0[cands[j]]] > rr_s[r0[key]]:
+            cands[j + 1] = cands[j]
+            j -= 1
+        end
+        cands[j + 1] = key
+        a += 1
+    end
+    mut pslots := Vector {} as Vector<int>
+    mut pr_s := Vector {} as Vector<int>
+    mut pr_e := Vector {} as Vector<int>
+    mut pr_0 := Vector {} as Vector<int>
+    mut pr_n := Vector {} as Vector<int>
+    each c in cands:
+        mut pick := 0 - 1
+        repeat pslots.len() in q2:
+            if pick < 0 and not ranges_overlap(pr_s, pr_e, pr_0[q2], pr_n[q2], rr_s, rr_e, r0[c], rn[c]):
+                pick = q2
+            end
+        end
+        if pick < 0:
+            pslots.push(c)
+            pr_0.push(pr_s.len())
+            repeat rn[c] in t:
+                pr_s.push(rr_s[r0[c] + t])
+                pr_e.push(rr_e[r0[c] + t])
+            end
+            pr_n.push(rn[c])
+        else:
+            root := pslots[pick]
+            if g.mc.fs_size[c] > g.mc.fs_size[root]:
+                g.mc.fs_size[root] = g.mc.fs_size[c]
+            end
+            if g.mc.fs_align[c] > g.mc.fs_align[root]:
+                g.mc.fs_align[root] = g.mc.fs_align[c]
+            end
+            g.mc.fs_alias[c] = root
+            st := pr_s.len()
+            repeat pr_n[pick] in t2:
+                pr_s.push(pr_s[pr_0[pick] + t2])
+                pr_e.push(pr_e[pr_0[pick] + t2])
+            end
+            repeat rn[c] in t3:
+                pr_s.push(rr_s[r0[c] + t3])
+                pr_e.push(rr_e[r0[c] + t3])
+            end
+            sort_merge(pr_s, pr_e, st)
+            pr_0[pick] = st
+            pr_n[pick] = pr_s.len() - st
+        end
+    end
+    bs.free()
+    be.free()
+    posblk.free()
+    lhead.free()
+    lmem_head.free()
+    lmem_next.free()
+    lmem_blk.free()
+    mark.free()
+    wl.free()
+    inloop.free()
+    ss.free()
+    se.free()
+    rr_s.free()
+    rr_e.free()
+    r0.free()
+    rn.free()
+    cands.free()
+    lhit.free()
+    pslots.free()
+    pr_s.free()
+    pr_e.free()
+    pr_0.free()
+    pr_n.free()
+end
+
 func frame_layout(g &: Ng):
     g.mc.callee_used.clear()
     mut used := Vector {} as Vector<bool>
@@ -867,6 +1168,9 @@ func frame_layout(g &: Ng):
         end
     end
     repeat g.mc.fs_size.len() in s:
+        if g.mc.fs_alias[s] >= 0:
+            continue
+        end
         sz := g.mc.fs_size[s]
         mut al := g.mc.fs_align[s]
         if al < 1:
@@ -877,6 +1181,11 @@ func frame_layout(g &: Ng):
         end
         curo = align_up(curo + sz, al)
         g.mc.fs_off[s] = curo
+    end
+    repeat g.mc.fs_size.len() in s2:
+        if g.mc.fs_alias[s2] >= 0:
+            g.mc.fs_off[s2] = g.mc.fs_off[g.mc.fs_alias[s2]]
+        end
     end
     each xr in xs:
         curo = align_up(curo + 16, 16)
@@ -904,6 +1213,7 @@ func regalloc(g &: Ng):
     liveness(g, ra)
     linear_scan(g, ra)
     rewrite(g)
+    color_slots(g)
     frame_layout(g)
     ra.fr_s.free()
     ra.fr_e.free()

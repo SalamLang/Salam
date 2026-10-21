@@ -70,6 +70,7 @@ func isel_init(g &: Ng):
     end
     count_uses(g)
     compute_escape(g)
+    build_dom(g)
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
@@ -1518,6 +1519,15 @@ func mark_esc(g &: Ng, v: int):
     end
 end
 
+func call_is_mem_intrinsic(g &: Ng, i: int): bool:
+    cv := g.i_a[i]
+    if cv < 0 or g.v_kind[cv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[cv]
+    ret s == g.sym_i_memcpy or s == g.sym_i_memmove or s == g.sym_i_memset
+end
+
 func compute_escape(g &: Ng):
     g.v_esc.clear()
     repeat g.v_kind.len():
@@ -1539,8 +1549,12 @@ func compute_escape(g &: Ng):
                 if (m & 2) != 0: mark_esc(g, g.i_b[i]) end
                 if (m & 4) != 0: mark_esc(g, g.i_c[i]) end
                 if op == OP_CALL:
+                    nocap := call_is_mem_intrinsic(g, i)
                     repeat g.i_pn[i] in k:
-                        mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
+                        fl := g.pool[g.i_ps[i] + 3 * k + 1]
+                        if not nocap and (fl & (IF_BYVAL | IF_SRET)) == 0:
+                            mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
+                        end
                     end
                 else op == OP_PHI:
                     repeat g.i_pn[i] in k2:
@@ -2185,6 +2199,7 @@ func isel_ins(g &: Ng, i: int, b: int):
                 al = 8
             end
             slot := new_slot(g, tsize(g, t) * n, al)
+            g.mc.fs_temp[slot] = v >= 0 and not g.v_esc[v]
             if v >= 0:
                 g.vak[v] = AK_ALLOCA
                 g.var_[v] = slot

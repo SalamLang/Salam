@@ -12,6 +12,7 @@ export type Chat = {
   device_id?: number;
   workspace?: string;
 };
+export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
   name: string;
@@ -543,10 +544,12 @@ export const api = {
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminChat: (id: string) =>
-    call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
-      "GET",
-      `/admin/chats/${id}`,
-    ),
+    call<{
+      chat: Chat;
+      user?: AdminChatOwner;
+      messages: Message[];
+      calls?: MessageCall[];
+    }>("GET", `/admin/chats/${id}`),
   adminTrace: (id: number) =>
     call<{ trace: TraceItem[]; saved: boolean }>(
       "GET",

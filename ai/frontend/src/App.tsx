@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
+import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
 import { Apps } from "./Apps";
 import { Auth } from "./Auth";
@@ -33,7 +34,11 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin";
+type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin" | "admin-chat";
+
+function adminChatIdFromPath(): string {
+  return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
+}
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
@@ -42,6 +47,7 @@ function routeFromPath(): Route {
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
   if (p === "/admin") return "admin";
+  if (adminChatIdFromPath()) return "admin-chat";
   return "chat";
 }
 
@@ -52,6 +58,7 @@ const PAGE_TITLES: Record<Route, string> = {
   keys: "کلیدهای API",
   plans: "اشتراک‌ها",
   admin: "مدیریت",
+  "admin-chat": "گفت‌وگو در مدیریت",
 };
 
 function go(id: string | null, replace = false) {
@@ -431,7 +438,7 @@ export function App() {
         user={user}
         chats={chats}
         activeId={route === "chat" ? activeId : null}
-        page={route}
+        page={route === "admin-chat" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         theme={theme}
@@ -456,7 +463,9 @@ export function App() {
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        {route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
+        {route === "admin-chat" ? (
+          <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
+        ) : route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
             {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>

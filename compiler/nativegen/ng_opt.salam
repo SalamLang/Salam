@@ -368,6 +368,30 @@ func fold_cbr(g &: Ng, i: int): bool:
     ret false
 end
 
+func fdiv_pow2(g &: Ng, i: int): bool:
+    b := g.i_b[i]
+    if b < 0 or g.v_kind[b] != VK_FLT:
+        ret false
+    end
+    bits := g.v_i[b]
+    expo := ((bits >> (52 as i64)) & (2047 as i64)) as int
+    mant := bits & (0xFFFFFFFFFFFFF as i64)
+    if mant != (0 as i64) or expo == 0 or expo == 2047:
+        ret false
+    end
+    rexp := 2046 - expo
+    if rexp <= 0 or rexp >= 2047:
+        ret false
+    end
+    if g.i_ty[i] == T_F32 and (rexp < 1023 - 126 or rexp > 1023 + 127):
+        ret false
+    end
+    nb := (bits & (0 - 9223372036854775807 as i64 - (1 as i64))) | ((rexp as i64) << (52 as i64))
+    g.i_op[i] = OP_FMUL
+    g.i_b[i] = new_val(g, VK_FLT, g.v_ty[b], nb)
+    ret true
+end
+
 func fold_pass(g &: Ng, cfg_changed &: bool): bool:
     mut changed := false
     repl_grow(g)
@@ -390,6 +414,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_addr(g, i)
             else op == OP_EXTV:
                 ch = fold_extv(g, i)
+            else op == OP_FDIV:
+                ch = fdiv_pow2(g, i)
             else op == OP_CBR:
                 if fold_cbr(g, i):
                     ch = true
@@ -699,6 +725,176 @@ func thread_jumps(g &: Ng): bool:
     ret changed
 end
 
+func spec_ok(op: int): bool:
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR:
+        ret true
+    end
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_ICMP or op == OP_ADDR or op == OP_SELECT:
+        ret true
+    end
+    ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_PTRTOINT or op == OP_INTTOPTR
+end
+
+func side_ok(g &: Ng, t: int, b: int, j: int): bool:
+    if g.b_npred[t] != 1 or g.b_pred[g.b_ps[t]] != b:
+        ret false
+    end
+    mut n := 0
+    mut i := g.b_first[t]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_BR:
+            ret g.i_b[i] == j and g.i_next[i] < 0
+        end
+        if not spec_ok(op) or n >= 2:
+            ret false
+        end
+        n += 1
+        i = g.i_next[i]
+    end
+    ret false
+end
+
+func hoist_block(g &: Ng, t: int, before: int):
+    mut i := g.b_first[t]
+    until i >= 0:
+        nx := g.i_next[i]
+        if g.i_op[i] == OP_BR:
+            ins_unlink(g, i)
+        else:
+            op := g.i_op[i]
+            ins_unlink(g, i)
+            g.i_op[i] = op
+            ins_before(g, before, i)
+        end
+        i = nx
+    end
+end
+
+func feeds_address(g &: Ng, v: int, depth: int): bool:
+    if v < 0 or depth > 2:
+        ret false
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_ADDR and (g.i_a[i] == v or g.i_b[i] == v):
+                ret true
+            end
+            if (op == OP_LOAD and g.i_a[i] == v) or (op == OP_STORE and g.i_b[i] == v):
+                ret true
+            end
+            if (op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC) and g.i_a[i] == v and feeds_address(g, g.i_res[i], depth + 1):
+                ret true
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func phis_selectable(g &: Ng, j: int): bool:
+    mut i := g.b_first[j]
+    mut any := false
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        t := g.i_ty[i]
+        if is_agg(g, t) or is_flt(g, t) or feeds_address(g, g.i_res[i], 0):
+            ret false
+        end
+        any = true
+        i = g.i_next[i]
+    end
+    ret any
+end
+
+func if_convert_block(g &: Ng, b: int): bool:
+    term := g.b_last[b]
+    if term < 0 or g.i_op[term] != OP_CBR:
+        ret false
+    end
+    c := g.i_a[term]
+    tb := g.i_b[term]
+    fb := g.i_c[term]
+    mut tside := 0 - 1
+    mut fside := 0 - 1
+    mut j := 0 - 1
+    if side_ok(g, tb, b, fb):
+        tside = tb
+        j = fb
+    else side_ok(g, fb, b, tb):
+        fside = fb
+        j = tb
+    else:
+        tl := g.b_last[tb]
+        if tl >= 0 and g.i_op[tl] == OP_BR:
+            jj := g.i_b[tl]
+            if side_ok(g, tb, b, jj) and side_ok(g, fb, b, jj):
+                tside = tb
+                fside = fb
+                j = jj
+            end
+        end
+    end
+    if j < 0 or j == b or not phis_selectable(g, j):
+        ret false
+    end
+    if tside >= 0:
+        hoist_block(g, tside, term)
+    end
+    if fside >= 0:
+        hoist_block(g, fside, term)
+    end
+    tsrc := tside >= 0 ? tside : b
+    fsrc := fside >= 0 ? fside : b
+    mut i := g.b_first[j]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        tv := phi_val_for(g, i, tsrc)
+        fv := phi_val_for(g, i, fsrc)
+        sel := ins_new(g, OP_SELECT, g.i_ty[i])
+        g.i_a[sel] = c
+        g.i_b[sel] = tv
+        g.i_c[sel] = fv
+        sv := new_res(g, sel)
+        ins_before(g, term, sel)
+        ps := g.i_ps[i]
+        mut w := 0
+        mut added := false
+        repeat g.i_pcount[i] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if pb == tsrc or pb == fsrc:
+                if not added:
+                    g.pool[ps + 2 * w] = sv
+                    g.pool[ps + 2 * w + 1] = b
+                    w += 1
+                    added = true
+                end
+            else:
+                g.pool[ps + 2 * w] = g.pool[ps + 2 * k]
+                g.pool[ps + 2 * w + 1] = pb
+                w += 1
+            end
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+    g.i_op[term] = OP_BR
+    g.i_a[term] = 0 - 1
+    g.i_b[term] = j
+    g.i_c[term] = 0 - 1
+    ret true
+end
+
+func if_convert(g &: Ng): bool:
+    mut changed := false
+    each b in g.b_rpo:
+        if g.b_first[b] >= 0 and if_convert_block(g, b):
+            changed = true
+        end
+    end
+    ret changed
+end
+
 func optimize(g &: Ng):
     mut rounds := 0
     until rounds < 6:
@@ -713,7 +909,11 @@ func optimize(g &: Ng):
             build_cfg(g)
             changed = true
         end
-        if thread_jumps(g):
+        if not g.off_thread and thread_jumps(g):
+            build_cfg(g)
+            changed = true
+        end
+        if not g.off_ifc and if_convert(g):
             build_cfg(g)
             changed = true
         end
@@ -724,6 +924,18 @@ func optimize(g &: Ng):
             break
         end
         rounds += 1
+    end
+    if not g.off_gvn and gvn(g):
+        mut cfg2 := false
+        count_uses(g)
+        if fold_pass(g, cfg2):
+            remap_all(g)
+        end
+        if cfg2:
+            ensure_terms(g)
+            build_cfg(g)
+            simplify_phis(g)
+        end
     end
     dce(g)
 end

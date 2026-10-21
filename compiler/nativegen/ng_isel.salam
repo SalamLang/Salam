@@ -926,6 +926,27 @@ func isel_bin(g &: Ng, i: int):
         set_res(g, i, r2)
         ret
     end
+    if op == OP_ADD or op == OP_SUB:
+        if bimm and not (op == OP_SUB and g.v_i[b] == (0 - 2147483647 as i64) - (1 as i64)):
+            ra0 := use_reg(g, a)
+            rl := gpr(g)
+            mut dd := g.v_i[b]
+            if op == OP_SUB:
+                dd = 0 - dd
+            end
+            _l := e_rm(g, M_LEA, 8, rl, mem_bi(ra0, dd))
+            set_res(g, i, rl)
+            ret
+        end
+        if op == OP_ADD and g.v_kind[b] != VK_INT:
+            ra1 := use_reg(g, a)
+            rb1 := use_reg(g, b)
+            rl2 := gpr(g)
+            _l2 := e_rm(g, M_LEA, 8, rl2, Mem { k = MK_BI, b = ra1, i = rb1, s = 1, d = 0 as i64 })
+            set_res(g, i, rl2)
+            ret
+        end
+    end
     mut sub := ALU_ADD
     if op == OP_SUB: sub = ALU_SUB end
     if op == OP_AND: sub = ALU_AND end
@@ -1331,10 +1352,23 @@ func isel_fbin(g &: Ng, i: int):
     if op == OP_FSUB: sub = FO_SUB end
     if op == OP_FMUL: sub = FO_MUL end
     if op == OP_FDIV: sub = FO_DIV end
-    ra := use_reg(g, g.i_a[i])
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    if (op == OP_FADD or op == OP_FMUL) and g.v_kind[a] == VK_FLT and g.v_kind[b] != VK_FLT:
+        tmp := a
+        a = b
+        b = tmp
+    end
+    ra := use_reg(g, a)
     r := xmm(g)
     _c := e_copy(g, r, ra)
-    rb := use_reg(g, g.i_b[i])
+    if g.v_kind[b] == VK_FLT and g.v_i[b] != (0 as i64):
+        f2 := e_rm(g, M_FOP_RM, sz, r, fp_const(g, g.v_i[b], sz))
+        g.mc.cc[f2] = sub
+        set_res(g, i, r)
+        ret
+    end
+    rb := use_reg(g, b)
     f := e_rr(g, M_FOP_RR, sz, r, rb)
     g.mc.cc[f] = sub
     set_res(g, i, r)

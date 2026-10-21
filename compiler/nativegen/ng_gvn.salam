@@ -1,0 +1,201 @@
+package nativegen
+
+import str
+
+pub struct Gvn:
+    pub slots: Vector<int> = Vector {}
+    pub mask: int = 0
+    pub added: Vector<int> = Vector {}
+    pub marks: Vector<int> = Vector {}
+    pub wb: Vector<int> = Vector {}
+    pub wm: Vector<int> = Vector {}
+end
+
+func gvn_pure(op: int): bool:
+    if op >= OP_ADD and op <= OP_ASHR:
+        ret op != OP_SDIV and op != OP_UDIV and op != OP_SREM and op != OP_UREM
+    end
+    if op >= OP_FADD and op <= OP_FNEG:
+        ret op != OP_FREM
+    end
+    if op == OP_ICMP or op == OP_FCMP or op == OP_ADDR or op == OP_SELECT or op == OP_EXTV:
+        ret true
+    end
+    ret op >= OP_SEXT and op <= OP_FPTRUNC
+end
+
+func gvn_excluded(g &: Ng, op: int): bool:
+    x := g.gvn_x
+    if x.len() == 0:
+        ret false
+    end
+    if op == OP_ADDR: ret str.Contains(x, "addr") end
+    if op == OP_EXTV: ret str.Contains(x, "extv") end
+    if op == OP_ICMP: ret str.Contains(x, "icmp") end
+    if op >= OP_SEXT and op <= OP_FPTRUNC: ret str.Contains(x, "cast") end
+    ret str.Contains(x, "arith")
+end
+
+func gvn_budget(g &: Ng): bool:
+    if g.gvn_max < 0:
+        ret true
+    end
+    g.gvn_count += 1
+    if g.gvn_count == g.gvn_max:
+        printerrln "gvn merge in " + tab_str(g.syms, g.f_sym)
+    end
+    ret g.gvn_count <= g.gvn_max
+end
+
+func vkey(g &: Ng, v: int): i64:
+    if v < 0:
+        ret v
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_FLT:
+        ret g.v_i[v] * (1000003 as i64) + (g.v_ty[v] as i64) * (31 as i64) + (k as i64) + (7777777 as i64)
+    end
+    if k == VK_GLB:
+        ret g.v_i[v] * (7 as i64) + (g.v_def[v] as i64) * (1000033 as i64) + (5555555 as i64)
+    end
+    ret v
+end
+
+func veq(g &: Ng, a: int, b: int): bool:
+    if a == b:
+        ret true
+    end
+    if a < 0 or b < 0:
+        ret false
+    end
+    ka := g.v_kind[a]
+    if ka != g.v_kind[b] or g.v_ty[a] != g.v_ty[b]:
+        ret false
+    end
+    if ka == VK_INT or ka == VK_FLT:
+        ret g.v_i[a] == g.v_i[b]
+    end
+    if ka == VK_GLB:
+        ret g.v_i[a] == g.v_i[b] and g.v_def[a] == g.v_def[b]
+    end
+    ret false
+end
+
+func ins_hash(g &: Ng, i: int): int:
+    mut h := (g.i_op[i] as i64) * (73856093 as i64)
+    h = h ^ ((g.i_ty[i] as i64) * (19349663 as i64))
+    h = h * (31 as i64) + vkey(g, g.i_a[i])
+    h = h * (31 as i64) + vkey(g, g.i_b[i])
+    h = h * (31 as i64) + vkey(g, g.i_c[i])
+    h = h * (31 as i64) + (g.i_x[i] as i64)
+    h = h * (31 as i64) + g.i_d[i]
+    ret ((h ^ (h >> (29 as i64))) & (0x7FFFFFFF as i64)) as int
+end
+
+func ins_same(g &: Ng, i: int, j: int): bool:
+    if g.i_op[i] != g.i_op[j] or g.i_ty[i] != g.i_ty[j] or g.i_x[i] != g.i_x[j] or g.i_d[i] != g.i_d[j]:
+        ret false
+    end
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and not veq(g, g.i_a[i], g.i_a[j]): ret false end
+    if (m & 2) != 0 and not veq(g, g.i_b[i], g.i_b[j]): ret false end
+    if (m & 4) != 0 and not veq(g, g.i_c[i], g.i_c[j]): ret false end
+    if g.i_op[i] == OP_ADDR and (g.i_b[i] < 0) != (g.i_b[j] < 0):
+        ret false
+    end
+    ret true
+end
+
+func canon(g &: Ng, i: int):
+    op := g.i_op[i]
+    comm := op == OP_ADD or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR or op == OP_FADD or op == OP_FMUL
+    if comm and vkey(g, g.i_a[i]) > vkey(g, g.i_b[i]):
+        t := g.i_a[i]
+        g.i_a[i] = g.i_b[i]
+        g.i_b[i] = t
+    end
+end
+
+func gvn_find(g &: Ng, t &: Gvn, i: int): int:
+    mut j := ins_hash(g, i) & t.mask
+    until true:
+        e := t.slots[j]
+        if e == 0 - 1:
+            ret 0 - 1
+        end
+        if e >= 0 and ins_same(g, e, i):
+            ret e
+        end
+        j = (j + 1) & t.mask
+    end
+end
+
+func gvn_insert(g &: Ng, t &: Gvn, i: int):
+    mut j := ins_hash(g, i) & t.mask
+    until t.slots[j] >= 0:
+        j = (j + 1) & t.mask
+    end
+    t.slots[j] = i
+    t.added.push(j)
+end
+
+func gvn(g &: Ng): bool:
+    mut t := Gvn {}
+    mut cap := 64
+    until cap < 4 * g.i_op.len():
+        cap = cap * 2
+    end
+    repeat cap:
+        t.slots.push(0 - 1)
+    end
+    t.mask = cap - 1
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    t.wb.push(0)
+    t.wm.push(0 - 1)
+    until t.wb.len() > 0:
+        b := t.wb.pop()
+        mark := t.wm.pop()
+        if mark >= 0:
+            until t.added.len() > mark:
+                sj := t.added.pop()
+                t.slots[sj] = 0 - 2
+            end
+            continue
+        end
+        h := t.added.len()
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            remap_ins(g, i)
+            if gvn_pure(g.i_op[i]) and g.i_res[i] >= 0 and not gvn_excluded(g, g.i_op[i]):
+                canon(g, i)
+                e := gvn_find(g, t, i)
+                if e >= 0 and gvn_budget(g):
+                    g.v_repl[g.i_res[i]] = g.i_res[e]
+                    ins_unlink(g, i)
+                    changed = true
+                else:
+                    gvn_insert(g, t, i)
+                end
+            end
+            i = nx
+        end
+        t.wb.push(b)
+        t.wm.push(h)
+        repeat g.b_kn[b] in c:
+            t.wb.push(g.b_kids[g.b_ks[b] + c])
+            t.wm.push(0 - 1)
+        end
+    end
+    if changed:
+        remap_all(g)
+    end
+    t.slots.free()
+    t.added.free()
+    t.marks.free()
+    t.wb.free()
+    t.wm.free()
+    ret changed
+end

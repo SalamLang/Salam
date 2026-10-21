@@ -61,7 +61,10 @@ recursive. Each function then goes through:
    known `insertvalue`, address arithmetic, and `x % 2^k == 0` as a mask test.
 4. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches.
-5. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+5. If-conversion of small branches into `cmov`, except where the result feeds
+   an address, since a `cmov` there would serialize the following load.
+6. Global value numbering over the dominator tree.
+7. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 
 Instruction selection folds address arithmetic into memory operands, fuses a
 compare with the branch that follows, divides by constants with shifts or a
@@ -99,6 +102,12 @@ where it is actually live.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
+- `SALAM_NG_OFF=gvn,ifc,thread,inline,sroa` turns optimizer passes off, which
+  is the quickest way to find the pass behind a wrong result.
+- `SALAM_NG_GVN_MAX=n` stops value numbering after `n` merges and prints the
+  function the last one happened in, so a miscompile can be bisected down to
+  a single merge. `SALAM_NG_GVN_SKIP=addr,extv,icmp,cast,arith` leaves whole
+  instruction kinds alone.
 
 A good end-to-end check is the compiler itself: emit its IR with
 `salam llvm compiler/main.salam`, build that IR with the native backend, and

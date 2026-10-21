@@ -1197,24 +1197,75 @@ func umagic(d: u64, mm &: u64, ll &: int):
     ll = l
 end
 
-func umagic_plain(d: u64, nb: int, mm &: u64, ss &: int): bool:
-    mut l := 0
-    until l < 64 and ((1 as u64) << (l as u64)) < d:
-        l += 1
+func bitlen64(x: u64): int:
+    mut n := 0
+    mut y := x
+    until y != (0 as u64):
+        n += 1
+        y = y >> (1 as u64)
     end
-    mut s := 0
-    until s <= l:
+    ret n
+end
+
+func known_lz(g &: Ng, v: int, depth: int): int:
+    t := g.v_ty[v]
+    bits := int_bits(g, t)
+    if is_cint(g, v):
+        ret bits - bitlen64(uval(g, t, g.v_i[v]))
+    end
+    if v < 0 or g.v_kind[v] != VK_INS or depth > 4:
+        ret 0
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    mut r := 0
+    if op == OP_ZEXT:
+        r = bits - int_bits(g, g.i_x[d])
+    else op == OP_UDIV and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + bitlen64(uval(g, t, g.v_i[b])) - 1
+    else op == OP_LSHR and is_cint(g, b):
+        r = known_lz(g, g.i_a[d], depth + 1) + (g.v_i[b] as int)
+    else op == OP_UREM and is_cint(g, b) and uval(g, t, g.v_i[b]) > (0 as u64):
+        r = bits - bitlen64(uval(g, t, g.v_i[b]) - (1 as u64))
+    else op == OP_AND:
+        la := known_lz(g, g.i_a[d], depth + 1)
+        lb := known_lz(g, b, depth + 1)
+        r = la > lb ? la : lb
+    end
+    if r > bits:
+        ret bits
+    end
+    if r < 0:
+        ret 0
+    end
+    ret r
+end
+
+func umagic_find(d: u64, nb: int, use_imul: bool, mm &: u64, pp &: int): bool:
+    mut p := nb
+    if not use_imul and p < 64:
+        p = 64
+    end
+    mut lim := nb + 64
+    if use_imul and lim > 63:
+        lim = 63
+    end
+    if lim > 127:
+        lim = 127
+    end
+    until p <= lim:
         mut rem := 0 as u64
         mut q := 0 as u64
-        mut over := false
-        repeat nb + s + 1 in bi:
+        mut big := false
+        repeat p + 1 in bi:
             carry := rem >> (63 as u64)
             rem = rem << (1 as u64)
             if bi == 0:
                 rem = rem | (1 as u64)
             end
             if (q >> (63 as u64)) != (0 as u64):
-                over = true
+                big = true
             end
             q = q << (1 as u64)
             if carry != (0 as u64) or rem >= d:
@@ -1222,16 +1273,40 @@ func umagic_plain(d: u64, nb: int, mm &: u64, ss &: int): bool:
                 q = q | (1 as u64)
             end
         end
-        e := d - rem
-        fits := nb == 32 ? q < (0xFFFFFFFF as u64) : (not over and q != (0 - 1 as u64))
-        if fits and e <= ((1 as u64) << (s as u64)):
-            mm = q + (1 as u64)
-            ss = s
-            ret true
+        if not big and q != (0 - 1 as u64) and rem != (0 as u64):
+            m := q + (1 as u64)
+            e := d - rem
+            mut exact := p - nb >= 64
+            if not exact:
+                exact = e <= ((1 as u64) << ((p - nb) as u64))
+            end
+            if exact and (not use_imul or bitlen64(m) + nb <= 64):
+                mm = m
+                pp = p
+                ret true
+            end
         end
-        s += 1
+        p += 1
     end
     ret false
+end
+
+func emit_umagic(g &: Ng, n: int, m: u64, p: int, use_imul: bool): int:
+    if use_imul:
+        q := gpr(g)
+        if is_imm32(m as i64) and (m as i64) >= (0 as i64):
+            mi := e_rr(g, M_IMUL_RRI, 8, q, n)
+            g.mc.imm[mi] = m as i64
+        else:
+            _mr := e_movi(g, q, m as i64)
+            _mx := e_rr(g, M_IMUL_RR, 8, q, n)
+        end
+        e_shift(g, SH_SHR, 8, q, p)
+        ret q
+    end
+    q2 := mulhi(g, n, m as i64, false)
+    e_shift(g, SH_SHR, 8, q2, p - 64)
+    ret q2
 end
 
 func smagic(d: i64, mm &: i64, ss &: int):
@@ -1594,25 +1669,46 @@ func div_const(g &: Ng, i: int, d: i64): bool:
         set_res(g, i, r)
         ret true
     end
+    mut nb := bits <= 32 ? 32 : 64
+    lz := known_lz(g, g.i_a[i], 0)
+    if bits - lz < nb:
+        nb = bits - lz
+    end
+    if nb < 1:
+        nb = 1
+    end
     mut pm := 0 as u64
-    mut ps := 0
-    if umagic_plain(du, bits <= 32 ? 32 : 64, pm, ps):
-        np := ext64(g, g.i_a[i], t, false)
-        mut qp := 0
-        if bits <= 32:
-            qp = gpr(g)
-            if is_imm32(pm as i64):
-                mp := e_rr(g, M_IMUL_RRI, 8, qp, np)
-                g.mc.imm[mp] = pm as i64
-            else:
-                _mr := e_ri(g, M_MOV_RI, 4, qp, pm as i64)
-                _mx := e_rr(g, M_IMUL_RR, 8, qp, np)
-            end
-            e_shift(g, SH_SHR, 8, qp, 32 + ps)
-        else:
-            qp = mulhi(g, np, pm as i64, false)
-            e_shift(g, SH_SHR, 8, qp, ps)
+    mut pp := 0
+    mut use_imul := umagic_find(du, nb, true, pm, pp)
+    mut found := use_imul
+    if not found:
+        found = umagic_find(du, nb, false, pm, pp)
+    end
+    mut tz := 0
+    if not found:
+        until ((du >> (tz as u64)) & (1 as u64)) == (0 as u64):
+            tz += 1
         end
+        if tz > 0 and nb - tz >= 1:
+            use_imul = umagic_find(du >> (tz as u64), nb - tz, true, pm, pp)
+            found = use_imul
+            if not found:
+                found = umagic_find(du >> (tz as u64), nb - tz, false, pm, pp)
+            end
+        end
+        if not found:
+            tz = 0
+        end
+    end
+    if found:
+        np := ext64(g, g.i_a[i], t, false)
+        mut src := np
+        if tz > 0:
+            src = gpr(g)
+            _cs := e_copy(g, src, np)
+            e_shift(g, SH_SHR, 8, src, tz)
+        end
+        qp := emit_umagic(g, src, pm, pp, use_imul)
         share_quot(g, i, qp)
         if isrem:
             set_res(g, i, rem_from_quot(g, np, qp, du as i64, bits <= 32 ? 4 : 8))

@@ -1,7 +1,8 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phases 1 to 4 implemented** (`compiler/semantic/sema_own.salam`,
-`sema_strfree.salam`, `sema_summary.salam`). Phases 5 and 6 are planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 to 4 implemented, phase 5 started** (`compiler/semantic/sema_own.salam`,
+`sema_strfree.salam`, `sema_summary.salam`). The rest of phases 5 and 6 is
+planned. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -249,9 +250,11 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    annotations; see above.
 4. **Phase 4 (done).** Automatic drop of owned `Vector`/`HashMap` locals;
    see above.
-5. **Phase 5.** Closures: a non-escaping lambda borrows its captures and gets
-   a stack-allocated environment (faster than today's heap env); an escaping
-   lambda moves its captures.
+5. **Phase 5 (started).** A local bound to a capturing lambda has its heap
+   environment freed at the end of its scope when it is only called or passed
+   to parameters that do not keep it. Still to do: stack-allocated
+   environments for lambdas passed straight to such a parameter, and moving
+   captures into escaping lambdas.
 6. **Phase 6.** Flip `--ownership=error` to the default one release after
    `std/` and `compiler/` are clean under it, and make `b := a` of an owned
    container a move (use of `a` after it becomes an error with a `.copy()`

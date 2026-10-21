@@ -11,7 +11,7 @@ k_sysv_gp := [7, 6, 2, 1, 8, 9]
 k_win_gp := [1, 2, 8, 9]
 
 func vcls_ty(g &: Ng, t: int): int:
-    if is_flt(g, t):
+    if is_flt(g, t) or is_vec(g, t):
         ret 1
     end
     ret 0
@@ -32,14 +32,24 @@ func msz(g &: Ng, t: int): int:
 end
 
 func fsz(t: int): int:
-    if t == T_F32:
+    if t == T_F32 or t == T_V4F32:
         ret 4
     end
     ret 8
 end
 
 func new_reg_ty(g &: Ng, t: int): int:
-    ret vnew(g, vcls_ty(g, t))
+    r := vnew(g, vcls_ty(g, t))
+    if is_vec(g, t):
+        g.mc.vwide[r] = true
+    end
+    ret r
+end
+
+func wide_reg(g &: Ng): int:
+    r := xmm(g)
+    g.mc.vwide[r] = true
+    ret r
 end
 
 func isel_init(g &: Ng):
@@ -199,8 +209,8 @@ func use_reg(g &: Ng, v: int): int:
         end
         ret r6
     end
-    if is_flt(g, g.v_ty[v]):
-        r7 := xmm(g)
+    if vcls_ty(g, g.v_ty[v]) == 1:
+        r7 := new_reg_ty(g, g.v_ty[v])
         _x := e_rr(g, M_XORPS, 8, r7, r7)
         ret r7
     end
@@ -1352,6 +1362,16 @@ func isel_fbin(g &: Ng, i: int):
     if op == OP_FSUB: sub = FO_SUB end
     if op == OP_FMUL: sub = FO_MUL end
     if op == OP_FDIV: sub = FO_DIV end
+    if is_vec(g, t):
+        rva := use_reg(g, g.i_a[i])
+        rv := wide_reg(g)
+        _cv := e_copy(g, rv, rva)
+        rvb := use_reg(g, g.i_b[i])
+        fv := e_rr(g, M_VOP_RR, sz, rv, rvb)
+        g.mc.cc[fv] = sub
+        set_res(g, i, rv)
+        ret
+    end
     mut a := g.i_a[i]
     mut b := g.i_b[i]
     if (op == OP_FADD or op == OP_FMUL) and g.v_kind[a] == VK_FLT and g.v_kind[b] != VK_FLT:
@@ -1758,6 +1778,12 @@ func isel_load(g &: Ng, i: int):
         ret
     end
     m := mem_of(g, a, 0 as i64)
+    if is_vec(g, t):
+        rv := wide_reg(g)
+        _lv := e_rm(g, M_VLD, 16, rv, m)
+        set_res(g, i, rv)
+        ret
+    end
     if is_flt(g, t):
         r2 := xmm(g)
         _l := e_rm(g, M_FLD, fsz(t), r2, m)
@@ -1802,6 +1828,10 @@ func isel_store(g &: Ng, i: int):
     end
     r := use_reg(g, v)
     m3 := mem_of(g, p, 0 as i64)
+    if is_vec(g, t):
+        _sv := e_mr(g, M_VST, 16, m3, r)
+        ret
+    end
     if is_flt(g, t):
         _s := e_mr(g, M_FST, fsz(t), m3, r)
         ret
@@ -2409,6 +2439,19 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_COPY:
             set_res(g, i, use_reg(g, g.i_a[i]))
+            ret
+        end
+        OP_VBCAST:
+            src := use_reg(g, g.i_a[i])
+            rb := wide_reg(g)
+            _cb := e_copy(g, rb, src)
+            if g.i_ty[i] == T_V4F32:
+                sh := e_rr(g, M_SHUFPS, 4, rb, rb)
+                g.mc.imm[sh] = 0 as i64
+            else:
+                _u := e_rr(g, M_UNPCKLPD, 8, rb, rb)
+            end
+            set_res(g, i, rb)
             ret
         end
     end

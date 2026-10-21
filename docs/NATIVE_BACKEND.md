@@ -63,8 +63,12 @@ recursive. Each function then goes through:
    chains into direct branches.
 5. If-conversion of small branches into `cmov`, except where the result feeds
    an address, since a `cmov` there would serialize the following load.
-6. Global value numbering over the dominator tree.
-7. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+6. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
+   traced back through arithmetic, broadcasts, adjacent loads and loop phis,
+   and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
+   multiply kernels rely on this.
+7. Global value numbering over the dominator tree.
+8. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 
 Instruction selection folds address arithmetic into memory operands, fuses a
 compare with the branch that follows, divides by constants with shifts or a
@@ -102,7 +106,7 @@ where it is actually live.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,thread,inline,sroa` turns optimizer passes off, which
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa` turns optimizer passes off, which
   is the quickest way to find the pass behind a wrong result.
 - `SALAM_NG_GVN_MAX=n` stops value numbering after `n` merges and prints the
   function the last one happened in, so a miscompile can be bisected down to
@@ -126,7 +130,8 @@ Not there yet:
 
 - No DWARF line tables (`-g`) and no `.eh_frame` on Linux. Debuggers walk the
   stack through `rbp`, but there is no source-level stepping.
-- No loop unrolling, vectorization or loop-invariant code motion.
+- No loop unrolling, loop vectorization or loop-invariant code motion. Only
+  straight-line (SLP) vectorization exists.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
 - Linking still uses lld or the system linker. A built-in static linker over
   the bundled musl `libc.a` would make Linux builds fully self-contained.

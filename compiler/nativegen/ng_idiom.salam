@@ -4,26 +4,37 @@ pub struct CpLoop:
     pub head: int = 0 - 1
     pub body: int = 0 - 1
     pub pre: int = 0 - 1
-    pub iv: int = 0 - 1
+    pub civ: int = 0 - 1
     pub lim: int = 0 - 1
+    pub incl: bool = false
     pub src: int = 0 - 1
     pub dst: int = 0 - 1
+    pub src_iv: int = 0 - 1
+    pub dst_iv: int = 0 - 1
     pub esz: int = 0
+    pub phis: Vector<int> = Vector {}
+    pub incs: Vector<int> = Vector {}
 end
 
 func cp_inv(g &: Ng, v: int, h: int, b: int): bool:
     ret rv_inv(g, v, h, b)
 end
 
-func cp_idx_ok(g &: Ng, ix: int, ivv: int, body: int): bool:
-    if ix == ivv:
-        ret true
+func cp_idx_iv(g &: Ng, r &: CpLoop, ix: int): int:
+    repeat r.phis.len() in k:
+        p := r.phis[k]
+        pv := g.i_res[p]
+        if ix == pv:
+            ret k
+        end
+        if ix >= 0 and g.v_kind[ix] == VK_INS:
+            d := g.v_def[ix]
+            if g.i_op[d] == OP_SEXT and g.i_a[d] == pv and g.i_blk[d] == r.body:
+                ret k
+            end
+        end
     end
-    if ix < 0 or g.v_kind[ix] != VK_INS:
-        ret false
-    end
-    d := g.v_def[ix]
-    ret g.i_op[d] == OP_SEXT and g.i_a[d] == ivv and g.i_blk[d] == body
+    ret 0 - 1
 end
 
 func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
@@ -47,44 +58,49 @@ func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
     if pt < 0 or g.i_op[pt] != OP_BR or pre == body:
         ret false
     end
-    phi := g.b_first[h]
-    if phi < 0 or g.i_op[phi] != OP_PHI or g.i_pcount[phi] != 2:
-        ret false
+    r.body = body
+    r.phis.clear()
+    r.incs.clear()
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if g.i_pcount[i] != 2 or g.i_ty[i] != T_I32 or r.phis.len() >= 3:
+            ret false
+        end
+        nx := phi_val_for(g, i, body)
+        if nx < 0 or g.v_kind[nx] != VK_INS:
+            ret false
+        end
+        nd := g.v_def[nx]
+        if g.i_op[nd] != OP_ADD or g.i_a[nd] != g.i_res[i] or not is_cint(g, g.i_b[nd]) or g.v_i[g.i_b[nd]] != (1 as i64) or g.i_blk[nd] != body:
+            ret false
+        end
+        r.phis.push(i)
+        r.incs.push(nd)
+        i = g.i_next[i]
     end
-    cmpi := g.i_next[phi]
+    cmpi := i
     if cmpi < 0 or g.i_op[cmpi] != OP_ICMP or g.i_next[cmpi] != t or g.i_a[t] != g.i_res[cmpi]:
         ret false
     end
-    ivv := g.i_res[phi]
-    if g.i_ty[phi] != T_I32 or g.i_a[cmpi] != ivv or not cp_inv(g, g.i_b[cmpi], h, body):
-        ret false
-    end
-    mut limv := g.i_b[cmpi]
-    if g.i_x[cmpi] == CC_SLE:
-        if not is_cint(g, limv) or g.v_i[limv] >= (2147483647 as i64):
-            ret false
+    mut civ := 0 - 1
+    repeat r.phis.len() in k:
+        if g.i_a[cmpi] == g.i_res[r.phis[k]]:
+            civ = k
         end
-        limv = const_int(g, T_I32, g.v_i[limv] + (1 as i64))
-    else g.i_x[cmpi] != CC_SLT:
+    end
+    if civ < 0 or not cp_inv(g, g.i_b[cmpi], h, body):
         ret false
     end
-    nx := phi_val_for(g, phi, body)
-    if nx < 0 or g.v_kind[nx] != VK_INS:
-        ret false
-    end
-    nd := g.v_def[nx]
-    if g.i_op[nd] != OP_ADD or g.i_a[nd] != ivv or not is_cint(g, g.i_b[nd]) or g.v_i[g.i_b[nd]] != (1 as i64):
+    if g.i_x[cmpi] != CC_SLT and g.i_x[cmpi] != CC_SLE:
         ret false
     end
     mut ld := 0 - 1
     mut st := 0 - 1
-    mut a_src := 0 - 1
-    mut a_dst := 0 - 1
-    mut n := 0
+    mut a1 := 0 - 1
+    mut a2 := 0 - 1
     mut j := g.b_first[body]
     until j >= 0:
         op := g.i_op[j]
-        n += 1
         if op == OP_LOAD:
             if ld >= 0:
                 ret false
@@ -96,19 +112,39 @@ func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
             end
             st = j
         else op == OP_ADDR:
-            if a_src < 0:
-                a_src = j
-            else a_dst < 0:
-                a_dst = j
+            if a1 < 0:
+                a1 = j
+            else a2 < 0:
+                a2 = j
             else:
                 ret false
             end
-        else not (j == nd or j == bt or (op == OP_SEXT and g.i_a[j] == ivv)):
+        else op == OP_SEXT:
+            mut ok := false
+            each p0 in r.phis:
+                if g.i_a[j] == g.i_res[p0]:
+                    ok = true
+                end
+            end
+            if not ok:
+                ret false
+            end
+        else op == OP_ADD:
+            mut isinc := false
+            each d0 in r.incs:
+                if d0 == j:
+                    isinc = true
+                end
+            end
+            if not isinc:
+                ret false
+            end
+        else j != bt:
             ret false
         end
         j = g.i_next[j]
     end
-    if ld < 0 or st < 0 or a_src < 0 or a_dst < 0 or n > 7:
+    if ld < 0 or st < 0 or a1 < 0 or a2 < 0:
         ret false
     end
     if (g.i_f[ld] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (g.i_f[st] & (IF_VOLATILE | IF_ATOMIC)) != 0:
@@ -118,12 +154,13 @@ func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
     if lv < 0 or g.i_a[st] != lv:
         ret false
     end
-    if g.i_a[ld] != g.i_res[a_src]:
-        tmp := a_src
-        a_src = a_dst
-        a_dst = tmp
+    mut asrc := a1
+    mut adst := a2
+    if g.i_a[ld] != g.i_res[asrc]:
+        asrc = a2
+        adst = a1
     end
-    if g.i_a[ld] != g.i_res[a_src] or g.i_b[st] != g.i_res[a_dst]:
+    if g.i_a[ld] != g.i_res[asrc] or g.i_b[st] != g.i_res[adst]:
         ret false
     end
     ty := g.i_ty[ld]
@@ -134,8 +171,13 @@ func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
     if esz != 1 and esz != 2 and esz != 4 and esz != 8:
         ret false
     end
-    each a in [a_src, a_dst]:
-        if not cp_inv(g, g.i_a[a], h, body) or not cp_idx_ok(g, g.i_b[a], ivv, body) or (g.i_x[a] as i64) != (esz as i64):
+    si := cp_idx_iv(g, r, g.i_b[asrc])
+    di := cp_idx_iv(g, r, g.i_b[adst])
+    if si < 0 or di < 0:
+        ret false
+    end
+    each a in [asrc, adst]:
+        if not cp_inv(g, g.i_a[a], h, body) or (g.i_x[a] as i64) != (esz as i64):
             ret false
         end
     end
@@ -144,12 +186,14 @@ func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
         ret false
     end
     r.head = h
-    r.body = body
     r.pre = pre
-    r.iv = phi
-    r.lim = limv
-    r.src = a_src
-    r.dst = a_dst
+    r.civ = civ
+    r.lim = g.i_b[cmpi]
+    r.incl = g.i_x[cmpi] == CC_SLE
+    r.src = asrc
+    r.dst = adst
+    r.src_iv = si
+    r.dst_iv = di
     r.esz = esz
     ret true
 end
@@ -178,14 +222,24 @@ func cp_transform(g &: Ng, r &: CpLoop):
     h := r.head
     pre := r.pre
     g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
-    init := phi_val_for(g, r.iv, pre)
+    np := r.phis.len()
+    mut inits := Vector {} as Vector<int>
+    each p in r.phis:
+        inits.push(phi_val_for(g, p, pre))
+    end
     cb := new_blk(g)
     c2 := new_blk(g)
     mb := new_blk(g)
     replace_succ(g, g.b_last[pre], h, cb)
-    i64init := rv_wide(g, cb, init, T_I32)
-    n64 := rv_wide(g, cb, r.lim, T_I32)
-    cnt := cp_ins(g, cb, OP_SUB, T_I64, n64, i64init)
+    mut i64s := Vector {} as Vector<int>
+    each iv0 in inits:
+        i64s.push(rv_wide(g, cb, iv0, T_I32))
+    end
+    mut n64 := rv_wide(g, cb, r.lim, T_I32)
+    if r.incl:
+        n64 = cp_ins(g, cb, OP_ADD, T_I64, n64, const_int(g, T_I64, 1 as i64))
+    end
+    cnt := cp_ins(g, cb, OP_SUB, T_I64, n64, i64s[r.civ])
     c1 := ins_new(g, OP_ICMP, T_I1)
     g.i_a[c1] = cnt
     g.i_b[c1] = const_int(g, T_I64, 0 as i64)
@@ -198,8 +252,8 @@ func cp_transform(g &: Ng, r &: CpLoop):
     g.i_c[t1] = h
     ins_append(g, cb, t1)
     bytes := cp_ins(g, c2, OP_MUL, T_I64, cnt, const_int(g, T_I64, r.esz as i64))
-    srcp := cp_addr(g, c2, g.i_a[r.src], i64init, r.esz, g.i_d[r.src])
-    dstp := cp_addr(g, c2, g.i_a[r.dst], i64init, r.esz, g.i_d[r.dst])
+    srcp := cp_addr(g, c2, g.i_a[r.src], i64s[r.src_iv], r.esz, g.i_d[r.src])
+    dstp := cp_addr(g, c2, g.i_a[r.dst], i64s[r.dst_iv], r.esz, g.i_d[r.dst])
     se := cp_addr(g, c2, srcp, bytes, 1, 0 as i64)
     k1 := ins_new(g, OP_ICMP, T_I1)
     g.i_a[k1] = dstp
@@ -233,27 +287,38 @@ func cp_transform(g &: Ng, r &: CpLoop):
         g.pool.push(0 - 1)
     end
     ins_append(g, mb, call)
+    c32 := cp_ins(g, mb, OP_TRUNC, T_I32, cnt, 0 - 1)
+    g.i_x[g.v_def[c32]] = T_I64
+    mut finals := Vector {} as Vector<int>
+    repeat np in k:
+        finals.push(cp_ins(g, mb, OP_ADD, T_I32, inits[k], c32))
+    end
     bm := ins_new(g, OP_BR, T_VOID)
     g.i_b[bm] = h
     ins_append(g, mb, bm)
-    ph := r.iv
-    ps := g.i_ps[ph]
-    mut body_v := 0 - 1
-    repeat g.i_pcount[ph] in q:
-        if g.pool[ps + 2 * q + 1] == r.body:
-            body_v = g.pool[ps + 2 * q]
+    repeat np in k2:
+        ph := r.phis[k2]
+        ps := g.i_ps[ph]
+        mut body_v := 0 - 1
+        repeat g.i_pcount[ph] in q:
+            if g.pool[ps + 2 * q + 1] == r.body:
+                body_v = g.pool[ps + 2 * q]
+            end
         end
+        g.i_ps[ph] = g.pool.len()
+        g.i_pcount[ph] = 4
+        g.pool.push(inits[k2])
+        g.pool.push(cb)
+        g.pool.push(inits[k2])
+        g.pool.push(c2)
+        g.pool.push(finals[k2])
+        g.pool.push(mb)
+        g.pool.push(body_v)
+        g.pool.push(r.body)
     end
-    g.i_ps[ph] = g.pool.len()
-    g.i_pcount[ph] = 4
-    g.pool.push(init)
-    g.pool.push(cb)
-    g.pool.push(init)
-    g.pool.push(c2)
-    g.pool.push(r.lim)
-    g.pool.push(mb)
-    g.pool.push(body_v)
-    g.pool.push(r.body)
+    inits.free()
+    i64s.free()
+    finals.free()
 end
 
 func copy_idiom(g &: Ng): bool:
@@ -268,13 +333,15 @@ func copy_idiom(g &: Ng): bool:
         heads.push(hh)
     end
     mut changed := false
+    mut r := CpLoop {}
     each h in heads:
-        mut r := CpLoop {}
         if g.b_order[h] >= 0 and cp_match(g, h, r):
             cp_transform(g, r)
             changed = true
         end
     end
+    r.phis.free()
+    r.incs.free()
     heads.free()
     l.head.free()
     l.size.free()

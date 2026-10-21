@@ -62,6 +62,27 @@ const PAGE_TITLES: Record<Route, string> = {
   "admin-chat": "گفت‌وگو در مدیریت",
 };
 
+const DRAFT_KEY = "salam-ai-draft";
+
+function takeDraft(): string {
+  const params = new URLSearchParams(location.search);
+  const q = (params.get("q") ?? "").slice(0, 2000);
+  if (q) {
+    params.delete("q");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+    try {
+      sessionStorage.setItem(DRAFT_KEY, q);
+    } catch {}
+    return q;
+  }
+  try {
+    return sessionStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function go(id: string | null, replace = false) {
   const url = id ? `/c/${id}` : "/";
   if (location.pathname === url) return;
@@ -72,6 +93,13 @@ function go(id: string | null, replace = false) {
 export function App() {
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
+  const [draft, setDraft] = useState(takeDraft);
+  const dropDraft = useCallback(() => {
+    try {
+      sessionStorage.removeItem(DRAFT_KEY);
+    } catch {}
+    setDraft("");
+  }, []);
   const [route, setRoute] = useState<Route>(routeFromPath);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
@@ -539,6 +567,8 @@ export function App() {
               onSend={send}
               onStop={stop}
               autoFocus={!activeId}
+              draft={draft}
+              onDraftUsed={dropDraft}
               placeholder={agentChat ? "بگویید روی این پروژه چه کاری انجام شود…" : undefined}
               note={agentChat ? "دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار را انتخاب کنید." : undefined}
               bar={

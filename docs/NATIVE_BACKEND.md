@@ -83,7 +83,12 @@ recursive. Each function then goes through:
    and multiply loop over a constant exponent unrolls too.
 8. Loop-invariant code motion of pure instructions into loop preheaders.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
-   `paddd` loop followed by the scalar loop for the leftover elements.
+   `paddd` loop followed by the scalar loop for the leftover elements, and a
+   loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
+   runtime check that a forward copy and `memmove` agree.
+   A demanded-bits pass drops masks whose cleared bits no later instruction
+   reads, so `x = (x * a + c) % 2^31` keeps the mask off its loop-carried
+   chain.
 9. Strength reduction: an array address that is affine in a loop counter, such
    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
    Addresses that differ only by a constant share one pointer.
@@ -97,16 +102,20 @@ recursive. Each function then goes through:
     separately), the same guarantee the LLVM backend gets from those tags.
 12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 
-Instruction selection folds address arithmetic into memory operands, folds a
+Loads of internal globals that the module never writes (how llvmgen emits a
+`const`) fold to their initializer. Instruction selection folds address
+arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
 reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two
-multiplies and a few shifts. Register allocation is linear scan over exact live
-ranges with use counts weighted by loop depth. Values used inside a loop get a
-copy at the loop's preheader, so the allocator can spill the long outer range
-and keep the loop copy in a register, and copy-related values that both spill
-share one stack slot. The encoder rotates small loop headers into the latch so
+multiplies and a few shifts. A division by a variable shares one `div` between
+the quotient and the remainder and uses the 32-bit `div` when both 64-bit
+operands fit. Register allocation is linear scan over exact live
+ranges with use counts weighted by loop depth. In a loop with more live values
+than registers, the values it uses get a copy at its preheader, so the
+allocator can spill the long outer range and keep the loop copy in a register.
+Copy-related values that both spill share one stack slot. The encoder rotates small loop headers into the latch so
 loops are bottom-tested, and aligns loop heads to 16 bytes.
 
 ### Conventions worth knowing
@@ -139,7 +148,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,rvec,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,dbits,idiom,rvec,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

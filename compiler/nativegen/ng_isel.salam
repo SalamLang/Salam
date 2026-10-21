@@ -658,7 +658,7 @@ func phi_copies(g &: Ng, b: int):
         mut i := g.b_first[s]
         until i >= 0 and g.i_op[i] == OP_PHI:
             ps := g.i_ps[i]
-            repeat g.i_pn[i] in q:
+            repeat g.i_pcount[i] in q:
                 if g.pool[ps + 2 * q + 1] == b:
                     v := g.pool[ps + 2 * q]
                     t := g.i_ty[i]
@@ -707,10 +707,51 @@ func swap_pred(p: int): int:
     ret p
 end
 
+func and_test_ok(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if r < 0 or g.v_uses[r] != 1 or g.i_op[i] != OP_AND:
+        ret false
+    end
+    m := g.i_b[i]
+    if m < 0 or g.v_kind[m] != VK_INT or not is_imm32(g.v_i[m]):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 8:
+        if j < 0:
+            ret false
+        end
+        if g.i_op[j] == OP_ICMP and g.i_a[j] == r:
+            p := g.i_x[j]
+            z := g.i_b[j]
+            ret (p == CC_EQ or p == CC_NE) and z >= 0 and g.v_kind[z] == VK_INT and g.v_i[z] == (0 as i64)
+        end
+        if uses_val(g, j, r):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
 func emit_icmp(g &: Ng, i: int): int:
     mut a := g.i_a[i]
     mut b := g.i_b[i]
     mut p := g.i_x[i]
+    if (p == CC_EQ or p == CC_NE) and g.v_kind[b] == VK_INT and g.v_i[b] == (0 as i64) and def_op(g, a) == OP_AND:
+        d := g.v_def[a]
+        if g.skipi[d]:
+            sz0 := msz(g, g.v_ty[a])
+            bits0 := int_bits(g, g.v_ty[a])
+            ra0 := use_reg(g, g.i_a[d])
+            mut mimm := g.v_i[g.i_b[d]]
+            if bits0 < 32:
+                mimm = mimm & (((1 as i64) << (bits0 as i64)) - (1 as i64))
+            end
+            _t := e_ri(g, M_TEST_RI, sz0 < 4 ? 4 : sz0, ra0, mimm)
+            ret icmp_cc(p)
+        end
+    end
     if g.v_kind[a] == VK_INT and g.v_kind[b] != VK_INT:
         tmp := a
         a = b
@@ -973,10 +1014,10 @@ func smagic(d: i64, mm &: i64, ss &: int):
         ad = (0 as u64) - (d as u64)
     end
     t := two63 + ((d as u64) >> (63 as u64))
-    anc := t - (1 as u64) - t % ad
+    nc_abs := t - (1 as u64) - t % ad
     mut p := 63
-    mut q1 := two63 / anc
-    mut r1 := two63 - q1 * anc
+    mut q1 := two63 / nc_abs
+    mut r1 := two63 - q1 * nc_abs
     mut q2 := two63 / ad
     mut r2 := two63 - q2 * ad
     mut delta := 0 as u64
@@ -984,9 +1025,9 @@ func smagic(d: i64, mm &: i64, ss &: int):
         p += 1
         q1 = q1 * (2 as u64)
         r1 = r1 * (2 as u64)
-        if r1 >= anc:
+        if r1 >= nc_abs:
             q1 = q1 + (1 as u64)
-            r1 = r1 - anc
+            r1 = r1 - nc_abs
         end
         q2 = q2 * (2 as u64)
         r2 = r2 * (2 as u64)
@@ -1059,6 +1100,33 @@ func rem_from_quot(g &: Ng, n: int, q: int, d: i64, sz: int): int:
     ret out
 end
 
+func div_partner(g &: Ng, i: int): int:
+    want := g.i_op[i] == OP_SREM ? OP_SDIV : OP_UDIV
+    b := g.i_b[i]
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == want and g.i_a[j] == g.i_a[i] and not g.skipi[j]:
+            bj := g.i_b[j]
+            if bj == b or (bj >= 0 and b >= 0 and g.v_kind[bj] == VK_INT and g.v_kind[b] == VK_INT and g.v_i[bj] == g.v_i[b] and g.v_ty[bj] == g.v_ty[b]):
+                ret j
+            end
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
+func share_quot(g &: Ng, i: int, q: int):
+    if g.i_op[i] != OP_SREM and g.i_op[i] != OP_UREM:
+        ret
+    end
+    pj := div_partner(g, i)
+    if pj >= 0 and g.i_res[pj] >= 0:
+        g.vv[g.i_res[pj]] = q
+        g.skipi[pj] = true
+    end
+end
+
 func div_const(g &: Ng, i: int, d: i64): bool:
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -1127,6 +1195,7 @@ func div_const(g &: Ng, i: int, d: i64): bool:
         _c4 := e_copy(g, sg, q)
         e_shift(g, SH_SHR, 8, sg, 63)
         _a3 := e_alu(g, ALU_ADD, 8, q, sg)
+        share_quot(g, i, q)
         if isrem:
             set_res(g, i, rem_from_quot(g, n2, q, dn, 8))
         else:
@@ -1169,6 +1238,7 @@ func div_const(g &: Ng, i: int, d: i64): bool:
     e_shift(g, SH_SHR, 8, q2, 1)
     _a5 := e_alu(g, ALU_ADD, 8, q2, t1)
     e_shift(g, SH_SHR, 8, q2, l - 1)
+    share_quot(g, i, q2)
     if isrem:
         set_res(g, i, rem_from_quot(g, n3, q2, du as i64, 8))
     else:
@@ -1446,13 +1516,13 @@ func uses_val(g &: Ng, i: int, v: int): bool:
     if (m & 4) != 0 and g.i_c[i] == v: ret true end
     op := g.i_op[i]
     if op == OP_CALL:
-        repeat g.i_pn[i] in k:
+        repeat g.i_pcount[i] in k:
             if g.pool[g.i_ps[i] + 3 * k] == v:
                 ret true
             end
         end
     else op == OP_PHI:
-        repeat g.i_pn[i] in k2:
+        repeat g.i_pcount[i] in k2:
             if g.pool[g.i_ps[i] + 2 * k2] == v:
                 ret true
             end
@@ -1550,14 +1620,14 @@ func compute_escape(g &: Ng):
                 if (m & 4) != 0: mark_esc(g, g.i_c[i]) end
                 if op == OP_CALL:
                     nocap := call_is_mem_intrinsic(g, i)
-                    repeat g.i_pn[i] in k:
+                    repeat g.i_pcount[i] in k:
                         fl := g.pool[g.i_ps[i] + 3 * k + 1]
                         if not nocap and (fl & (IF_BYVAL | IF_SRET)) == 0:
                             mark_esc(g, g.pool[g.i_ps[i] + 3 * k])
                         end
                     end
                 else op == OP_PHI:
-                    repeat g.i_pn[i] in k2:
+                    repeat g.i_pcount[i] in k2:
                         mark_esc(g, g.pool[g.i_ps[i] + 2 * k2])
                     end
                 end
@@ -1620,7 +1690,7 @@ func sret_forward(g &: Ng, i: int): int:
     if root < 0:
         ret 0 - 1
     end
-    repeat g.i_pn[i] in k:
+    repeat g.i_pcount[i] in k:
         av := g.pool[g.i_ps[i] + 3 * k]
         if av == q or av == root or local_root(g, av) == root:
             ret 0 - 1
@@ -1916,7 +1986,7 @@ func isel_call(g &: Ng, i: int):
         sym = g.v_def[callee]
     end
     ps := g.i_ps[i]
-    na := g.i_pn[i]
+    na := g.i_pcount[i]
     rt := g.i_ty[i]
     if sym >= 0 and isel_intrinsic(g, i, sym):
         ret
@@ -2210,6 +2280,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_STORE: isel_store(g, i) ret end
         OP_ADDR: isel_addr(g, i) ret end
         OP_ADD, OP_SUB, OP_MUL, OP_AND, OP_OR, OP_XOR:
+            if op == OP_AND and and_test_ok(g, i):
+                g.skipi[i] = true
+                ret
+            end
             if res_used(g, i):
                 isel_bin(g, i)
             end

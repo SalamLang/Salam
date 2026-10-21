@@ -12,7 +12,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 icons="$here/../src-tauri/icons"
 source_svg=$(cd "$here/../.." && pwd)/design/logo/logo-box-macos.svg
 
-command -v rsvg-convert >/dev/null || { echo "rsvg-convert is required" >&2; exit 1; }
+command -v rsvg-convert >/dev/null || {
+    echo "rsvg-convert is required" >&2
+    exit 1
+}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

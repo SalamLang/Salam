@@ -159,12 +159,12 @@ whole call graph:
 
 - **fresh result**: every `ret` returns a newly allocated string, so the
   caller owns it;
-- **keeps** parameter *i*: the argument may be stored, returned or captured;
-- **frees** parameter *i*: some path frees it; **must free** when an
+- **keeps** parameter _i_: the argument may be stored, returned or captured;
+- **frees** parameter _i_: some path frees it; **must free** when an
   unconditional top-level statement does;
-- **grows** parameter *i*: some path pushes into a container reachable from
+- **grows** parameter _i_: some path pushes into a container reachable from
   it, which may move that buffer;
-- **returns an alias** of parameter *i*: for example
+- **returns an alias** of parameter _i_: for example
   `At(a, id): Node* ... ret a.nodes.ref(id)`.
 
 Sema records the resolved target of every call, so overloads, methods, package

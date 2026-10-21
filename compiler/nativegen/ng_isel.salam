@@ -1877,6 +1877,17 @@ func div_const(g &: Ng, i: int, d: i64): bool:
     ret true
 end
 
+func dq_find(g &: Ng, a: int, b: int, sign: bool, want_q: bool): int:
+    mut k := g.dq_a.len() - 1
+    until k >= 0:
+        if g.dq_a[k] == a and g.dq_b[k] == b and g.dq_s[k] == sign and dominates(g, g.dq_blk[k], g.cur_b):
+            ret want_q ? g.dq_q[k] : g.dq_r[k]
+        end
+        k -= 1
+    end
+    ret 0 - 1
+end
+
 func isel_div(g &: Ng, i: int):
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -1886,8 +1897,37 @@ func isel_div(g &: Ng, i: int):
     if g.v_kind[b] == VK_INT and div_const(g, i, g.v_i[b]):
         ret
     end
-    ra2 := ext_to32(g, g.i_a[i], t, sign)
+    want_q := op == OP_SDIV or op == OP_UDIV
+    a := g.i_a[i]
+    if g.opt:
+        prev := dq_find(g, a, b, sign, want_q)
+        if prev >= 0:
+            set_res(g, i, prev)
+            ret
+        end
+    end
+    ra2 := ext_to32(g, a, t, sign)
     rb := ext_to32(g, b, t, sign)
+    rq := gpr(g)
+    rr := gpr(g)
+    mut done := 0 - 1
+    if g.opt and sz == 8:
+        tor := gpr(g)
+        _co := e_copy(g, tor, ra2)
+        _or := e_alu(g, ALU_OR, 8, tor, rb)
+        e_shift(g, SH_SHR, 8, tor, 32)
+        slow := new_label(g)
+        done = new_label(g)
+        _jz := e_jcc(g, X_NE, slow)
+        _c0 := e_copy(g, RAX, ra2)
+        _z0 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+        d0 := e_rr(g, M_DIV, 4, 0 - 1, rb)
+        g.mc.cc[d0] = 0
+        _q0 := e_copy(g, rq, RAX)
+        _r0 := e_copy(g, rr, RDX)
+        _jd := e_jmp(g, done)
+        _ls := e_label(g, slow)
+    end
     _c2 := e_copy(g, RAX, ra2)
     if sign:
         _q := mi_new(g, M_CQO, sz)
@@ -1896,13 +1936,20 @@ func isel_div(g &: Ng, i: int):
     end
     d := e_rr(g, M_DIV, sz, 0 - 1, rb)
     g.mc.cc[d] = sign ? 1 : 0
-    r2 := gpr(g)
-    if op == OP_SDIV or op == OP_UDIV:
-        _c3 := e_copy(g, r2, RAX)
-    else:
-        _c4 := e_copy(g, r2, RDX)
+    _c3 := e_copy(g, rq, RAX)
+    _c4 := e_copy(g, rr, RDX)
+    if done >= 0:
+        _ld := e_label(g, done)
     end
-    set_res(g, i, r2)
+    if g.opt:
+        g.dq_a.push(a)
+        g.dq_b.push(b)
+        g.dq_s.push(sign)
+        g.dq_q.push(rq)
+        g.dq_r.push(rr)
+        g.dq_blk.push(g.cur_b)
+    end
+    set_res(g, i, want_q ? rq : rr)
 end
 
 func isel_shift(g &: Ng, i: int):
@@ -3266,6 +3313,12 @@ func isel_function(g &: Ng):
     end
     setup_phis(g)
     g.cur_b = 0 - 1
+    g.dq_a.clear()
+    g.dq_b.clear()
+    g.dq_s.clear()
+    g.dq_q.clear()
+    g.dq_r.clear()
+    g.dq_blk.clear()
     g.sp_val.clear()
     g.lp_pre.clear()
     g.b_lp.clear()

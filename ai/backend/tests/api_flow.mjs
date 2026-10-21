@@ -241,6 +241,14 @@ for (let i = 0; i < 40; i += 1) {
   await new Promise((r) => setTimeout(r, 300));
 }
 check("a chat answer completes", polled.json.status === "done", polled.json);
+const traced = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
+const steps = traced.json?.trace ?? [];
+const toolStep = steps.find((t) => t.kind === "tool");
+check("the admin trace keeps the prompt, reasoning, tool code and output in order", steps[0]?.kind === "prompt" && steps[0].text.includes("chat usage") && steps.some((t) => t.kind === "think") && toolStep?.input.includes('println \\"trace\\"') && toolStep?.output === "OK: 0 errors" && steps.at(-1)?.kind === "text", steps);
+const tracedAgain = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
+check("a finished trace is saved", tracedAgain.json?.saved === true && tracedAgain.json.trace.length === steps.length, tracedAgain.json);
+const notAdmin = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, fallbackSession);
+check("only admins can read a trace", notAdmin.res.status === 403, notAdmin.res.status);
 const usum = (await api("GET", "/admin/summary", session)).json;
 const today = usum.usage?.find((p) => p.key === "today");
 check("admin usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => usum.usage?.some((p) => p.key === k)), usum.usage?.map((p) => p.key));

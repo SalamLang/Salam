@@ -136,8 +136,8 @@ http.createServer((req, res) => {
       const done = frac >= 1;
       const text = s.waiting || frac === 0 ? "" : full.slice(0, Math.max(1, Math.floor(full.length * frac)));
       return send(200, [
-        { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
-        { info: { role: "assistant", finish: "tool-calls", time: { created: s.start, completed: s.start + 200 }, cost: 0.0004, tokens: { input: 60, output: 8, reasoning: 2, cache: { read: 200, write: 10 } } }, parts: [{ type: "tool", tool: "salam_salam_check", state: { status: "completed" } }] },
+        { info: { role: "user", agent: s.agent, time: { created: s.start } }, parts: [{ type: "text", text: s.prompt }] },
+        { info: { role: "assistant", finish: "tool-calls", time: { created: s.start, completed: s.start + 200 }, cost: 0.0004, tokens: { input: 60, output: 8, reasoning: 2, cache: { read: 200, write: 10 } } }, parts: [{ type: "reasoning", text: "Checking the code first.", time: { start: s.start } }, { type: "tool", tool: "salam_salam_check", state: { status: "completed", input: { source: 'func main:\n    println "trace"\nend' }, output: "OK: 0 errors", time: { start: s.start + 10, end: s.start + 150 } } }] },
         { info: { role: "assistant", finish: done ? "stop" : "", time: done ? { created: s.start + 200, completed: s.start + s.span } : { created: s.start + 200 }, cost: 0.0008, tokens: { input: 40, output: 12, reasoning: 3, cache: { read: 100, write: 0 } } }, parts: [{ type: "text", text }] },
       ]);
     }

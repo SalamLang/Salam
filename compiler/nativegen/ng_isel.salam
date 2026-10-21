@@ -986,6 +986,10 @@ func isel_bin(g &: Ng, i: int):
     bimm := g.v_kind[b] == VK_INT and is_imm32(g.v_i[b])
     if op == OP_MUL:
         r := gpr(g)
+        if bimm and mul_small(g, r, use_reg(g, a), g.v_i[b]):
+            set_res(g, i, r)
+            ret
+        end
         if bimm:
             ra := use_reg(g, a)
             mi := e_rr(g, M_IMUL_RRI, sz, r, ra)
@@ -1106,6 +1110,43 @@ func umagic(d: u64, mm &: u64, ll &: int):
     end
     mm = q + (1 as u64)
     ll = l
+end
+
+func umagic_plain(d: u64, nb: int, mm &: u64, ss &: int): bool:
+    mut l := 0
+    until l < 64 and ((1 as u64) << (l as u64)) < d:
+        l += 1
+    end
+    mut s := 0
+    until s <= l:
+        mut rem := 0 as u64
+        mut q := 0 as u64
+        mut over := false
+        repeat nb + s + 1 in bi:
+            carry := rem >> (63 as u64)
+            rem = rem << (1 as u64)
+            if bi == 0:
+                rem = rem | (1 as u64)
+            end
+            if (q >> (63 as u64)) != (0 as u64):
+                over = true
+            end
+            q = q << (1 as u64)
+            if carry != (0 as u64) or rem >= d:
+                rem = rem - d
+                q = q | (1 as u64)
+            end
+        end
+        e := d - rem
+        fits := nb == 32 ? q < (0xFFFFFFFF as u64) : (not over and q != (0 - 1 as u64))
+        if fits and e <= ((1 as u64) << (s as u64)):
+            mm = q + (1 as u64)
+            ss = s
+            ret true
+        end
+        s += 1
+    end
+    ret false
 end
 
 func smagic(d: i64, mm &: i64, ss &: int):
@@ -1234,8 +1275,35 @@ func mulhi(g &: Ng, n: int, m: i64, signed: bool): int:
     ret t
 end
 
+func mul_small(g &: Ng, r: int, a: int, k: i64): bool:
+    mut base := 0
+    mut post := 0
+    if k == (3 as i64) or k == (5 as i64) or k == (9 as i64):
+        base = (k as int) - 1
+    else k == (6 as i64) or k == (10 as i64) or k == (18 as i64):
+        base = (k as int) / 2 - 1
+        post = 1
+    else k == (12 as i64) or k == (20 as i64) or k == (36 as i64):
+        base = (k as int) / 4 - 1
+        post = 2
+    else:
+        ret false
+    end
+    _l := e_rm(g, M_LEA, 8, r, Mem { k = MK_BI, b = a, i = a, s = base, d = 0 as i64 })
+    if post > 0:
+        e_shift(g, SH_SHL, 8, r, post)
+    end
+    ret true
+end
+
 func rem_from_quot(g &: Ng, n: int, q: int, d: i64, sz: int): int:
     r := gpr(g)
+    if mul_small(g, r, q, d):
+        out0 := gpr(g)
+        _c0 := e_copy(g, out0, n)
+        _s0 := e_alu(g, ALU_SUB, sz, out0, r)
+        ret out0
+    end
     if is_imm32(d):
         mi := e_rr(g, M_IMUL_RRI, sz, r, q)
         g.mc.imm[mi] = d
@@ -1405,6 +1473,33 @@ func div_const(g &: Ng, i: int, d: i64): bool:
             e_shift(g, SH_SHR, sz, r, k2)
         end
         set_res(g, i, r)
+        ret true
+    end
+    mut pm := 0 as u64
+    mut ps := 0
+    if umagic_plain(du, bits <= 32 ? 32 : 64, pm, ps):
+        np := ext64(g, g.i_a[i], t, false)
+        mut qp := 0
+        if bits <= 32:
+            qp = gpr(g)
+            if is_imm32(pm as i64):
+                mp := e_rr(g, M_IMUL_RRI, 8, qp, np)
+                g.mc.imm[mp] = pm as i64
+            else:
+                _mr := e_ri(g, M_MOV_RI, 4, qp, pm as i64)
+                _mx := e_rr(g, M_IMUL_RR, 8, qp, np)
+            end
+            e_shift(g, SH_SHR, 8, qp, 32 + ps)
+        else:
+            qp = mulhi(g, np, pm as i64, false)
+            e_shift(g, SH_SHR, 8, qp, ps)
+        end
+        share_quot(g, i, qp)
+        if isrem:
+            set_res(g, i, rem_from_quot(g, np, qp, du as i64, bits <= 32 ? 4 : 8))
+        else:
+            set_res(g, i, qp)
+        end
         ret true
     end
     mut um := 0 as u64

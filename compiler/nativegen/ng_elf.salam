@@ -86,6 +86,9 @@ func sec_bytes(g &: Ng, sec: int): Vector<u8>:
         SEC_DATA: ret g.s_data end
         SEC_FINI: ret g.s_fini end
         SEC_INIT: ret g.s_init end
+        SEC_PDATA: ret g.s_pdata end
+        SEC_XDATA: ret g.s_xdata end
+        SEC_CONST: ret g.s_cst end
     end
     ret g.s_text
 end
@@ -94,7 +97,67 @@ func emit_sym_for(g &: Ng, s: int): bool:
     ret g.sy_def[s] or g.sy_used[s]
 end
 
+func elf_secs(): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    v.push(SEC_TEXT)
+    v.push(SEC_RODATA)
+    v.push(SEC_CONST)
+    v.push(SEC_DATA)
+    v.push(SEC_BSS)
+    v.push(SEC_INIT)
+    v.push(SEC_FINI)
+    ret v
+end
+
+func elf_name(sec: int): str:
+    switch sec:
+        SEC_TEXT: ret ".text" end
+        SEC_RODATA: ret ".rodata" end
+        SEC_CONST: ret ".rodata.salam" end
+        SEC_DATA: ret ".data" end
+        SEC_BSS: ret ".bss" end
+        SEC_INIT: ret ".init_array" end
+        SEC_FINI: ret ".fini_array" end
+    end
+    ret ".data"
+end
+
+func elf_type(sec: int): int:
+    if sec == SEC_BSS: ret 8 end
+    if sec == SEC_INIT: ret 14 end
+    if sec == SEC_FINI: ret 15 end
+    ret 1
+end
+
+func elf_flags(sec: int): int:
+    if sec == SEC_TEXT: ret 6 end
+    if sec == SEC_RODATA or sec == SEC_CONST: ret 2 end
+    ret 3
+end
+
+func sh_entry(o &: Ob, name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, al: int, ent: int):
+    ob_le(o, name as i64, 4)
+    ob_le(o, typ as i64, 4)
+    ob_le(o, flags as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, off as i64, 8)
+    ob_le(o, size as i64, 8)
+    ob_le(o, link as i64, 4)
+    ob_le(o, info as i64, 4)
+    ob_le(o, al as i64, 8)
+    ob_le(o, ent as i64, 8)
+end
+
 func write_elf(g &: Ng, path: str): bool:
+    secs := elf_secs()
+    nds := secs.len()
+    mut shidx := Vector {} as Vector<int>
+    repeat SEC_COUNT:
+        shidx.push(0)
+    end
+    repeat nds in q0:
+        shidx[secs[q0]] = q0 + 1
+    end
     nsym := g.sy_kind.len()
     mut elf_idx := Vector {} as Vector<int>
     repeat nsym:
@@ -106,21 +169,19 @@ func write_elf(g &: Ng, path: str): bool:
     repeat 24:
         ob_u8(symtab, 0)
     end
-    k_sec_shndx := [1, 2, 3, 4, 6, 5]
     mut nloc := 1
-    repeat 6 in sx:
-        _e := sx
+    repeat nds in sx:
         ob_le(symtab, 0 as i64, 4)
         ob_u8(symtab, 3)
         ob_u8(symtab, 0)
-        ob_le(symtab, k_sec_shndx[sx] as i64, 2)
+        ob_le(symtab, (sx + 1) as i64, 2)
         ob_le(symtab, 0 as i64, 8)
         ob_le(symtab, 0 as i64, 8)
         nloc += 1
     end
     repeat 2 in pass:
         repeat nsym in s:
-            if not emit_sym_for(g, s) or (g.sy_def[s] and g.sy_sec[s] >= SEC_PDATA):
+            if not emit_sym_for(g, s) or (g.sy_def[s] and (g.sy_sec[s] < 0 or shidx[g.sy_sec[s]] == 0)):
                 continue
             end
             local := g.sy_def[s] and g.sy_local[s]
@@ -140,8 +201,8 @@ func write_elf(g &: Ng, path: str): bool:
             ob_u8(symtab, (bind << 4) | typ)
             ob_u8(symtab, 0)
             mut shndx := 0
-            if g.sy_def[s] and g.sy_sec[s] >= 0:
-                shndx = k_sec_shndx[g.sy_sec[s]]
+            if g.sy_def[s]:
+                shndx = shidx[g.sy_sec[s]]
             end
             ob_le(symtab, shndx as i64, 2)
             ob_le(symtab, g.sy_off[s] as i64, 8)
@@ -151,19 +212,18 @@ func write_elf(g &: Ng, path: str): bool:
             end
         end
     end
-    k_rel_sec := [SEC_TEXT, SEC_RODATA, SEC_DATA, SEC_INIT, SEC_FINI]
     mut rbufs := Ob {}
     mut rstart := Vector {} as Vector<int>
     mut rsize := Vector {} as Vector<int>
-    each rs in k_rel_sec:
+    each rs in secs:
         rstart.push(rbufs.b.len())
         repeat g.r_sec.len() in ri:
             if g.r_sec[ri] == rs:
                 s2 := g.r_sym[ri]
                 mut idx := elf_idx[s2]
                 mut addend := g.r_add[ri]
-                if g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0:
-                    idx = 1 + g.sy_sec[s2]
+                if g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0 and shidx[g.sy_sec[s2]] > 0:
+                    idx = shidx[g.sy_sec[s2]]
                     addend = addend + (g.sy_off[s2] as i64)
                 end
                 ob_le(rbufs, g.r_off[ri] as i64, 8)
@@ -175,20 +235,31 @@ func write_elf(g &: Ng, path: str): bool:
     end
     mut shstr := Ob {}
     ob_u8(shstr, 0)
-    k_names := [".text", ".rodata", ".data", ".bss", ".init_array", ".fini_array", ".rela.text", ".rela.rodata", ".rela.data", ".rela.init_array", ".rela.fini_array", ".symtab", ".strtab", ".shstrtab", ".note.GNU-stack"]
-    mut name_off := Vector {} as Vector<int>
-    each nm in k_names:
-        name_off.push(shstr.b.len())
-        ob_str(shstr, nm)
+    mut nm_data := Vector {} as Vector<int>
+    mut nm_rela := Vector {} as Vector<int>
+    each sc in secs:
+        nm_data.push(shstr.b.len())
+        ob_str(shstr, elf_name(sc))
     end
+    each sc2 in secs:
+        nm_rela.push(shstr.b.len())
+        ob_str(shstr, ".rela" + elf_name(sc2))
+    end
+    nm_sym := shstr.b.len()
+    ob_str(shstr, ".symtab")
+    nm_str := shstr.b.len()
+    ob_str(shstr, ".strtab")
+    nm_shs := shstr.b.len()
+    ob_str(shstr, ".shstrtab")
+    nm_gnu := shstr.b.len()
+    ob_str(shstr, ".note.GNU-stack")
     mut o := Ob {}
     repeat 64:
         ob_u8(o, 0)
     end
     mut offs := Vector {} as Vector<int>
     mut sizes := Vector {} as Vector<int>
-    k_data_secs := [SEC_TEXT, SEC_RODATA, SEC_DATA, SEC_BSS, SEC_INIT, SEC_FINI]
-    each ds in k_data_secs:
+    each ds in secs:
         if ds == SEC_BSS:
             offs.push(o.b.len())
             sizes.push(g.bss_size)
@@ -215,83 +286,29 @@ func write_elf(g &: Ng, path: str): bool:
     repeat 64:
         ob_u8(o, 0)
     end
-    k_types := [1, 1, 1, 8, 14, 15]
-    k_flags := [6, 2, 3, 3, 3, 3]
-    repeat 6 in q:
-        ob_le(o, name_off[q] as i64, 4)
-        ob_le(o, k_types[q] as i64, 4)
-        ob_le(o, k_flags[q] as i64, 8)
-        ob_le(o, 0 as i64, 8)
-        ob_le(o, offs[q] as i64, 8)
-        ob_le(o, sizes[q] as i64, 8)
-        ob_le(o, 0 as i64, 4)
-        ob_le(o, 0 as i64, 4)
-        mut al := 16
-        if q == 4 or q == 5:
+    symtab_idx := 1 + 2 * nds
+    repeat nds in q:
+        sc3 := secs[q]
+        mut al := g.sec_align[sc3]
+        if sc3 == SEC_TEXT:
+            al = 16
+        else sc3 == SEC_INIT or sc3 == SEC_FINI:
             al = 8
-        else q > 0:
-            al = g.sec_align[k_data_secs[q]]
-            if al < 1:
-                al = 1
-            end
         end
-        ob_le(o, al as i64, 8)
-        ob_le(o, (q == 4 or q == 5) ? (8 as i64) : (0 as i64), 8)
+        if al < 1:
+            al = 1
+        end
+        ent := (sc3 == SEC_INIT or sc3 == SEC_FINI) ? 8 : 0
+        sh_entry(o, nm_data[q], elf_type(sc3), elf_flags(sc3), offs[q], sizes[q], 0, 0, al, ent)
     end
-    k_rel_target := [1, 2, 3, 5, 6]
-    repeat 5 in q2:
-        ob_le(o, name_off[6 + q2] as i64, 4)
-        ob_le(o, 4 as i64, 4)
-        ob_le(o, 0x40 as i64, 8)
-        ob_le(o, 0 as i64, 8)
-        ob_le(o, (rel_file_off + rstart[q2]) as i64, 8)
-        ob_le(o, rsize[q2] as i64, 8)
-        ob_le(o, 12 as i64, 4)
-        ob_le(o, k_rel_target[q2] as i64, 4)
-        ob_le(o, 8 as i64, 8)
-        ob_le(o, 24 as i64, 8)
+    repeat nds in q2:
+        sh_entry(o, nm_rela[q2], 4, 0x40, rel_file_off + rstart[q2], rsize[q2], symtab_idx, q2 + 1, 8, 24)
     end
-    ob_le(o, name_off[11] as i64, 4)
-    ob_le(o, 2 as i64, 4)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, sym_off as i64, 8)
-    ob_le(o, symtab.b.len() as i64, 8)
-    ob_le(o, 13 as i64, 4)
-    ob_le(o, nloc as i64, 4)
-    ob_le(o, 8 as i64, 8)
-    ob_le(o, 24 as i64, 8)
-    ob_le(o, name_off[12] as i64, 4)
-    ob_le(o, 3 as i64, 4)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, str_off as i64, 8)
-    ob_le(o, strtab.b.len() as i64, 8)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 1 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, name_off[13] as i64, 4)
-    ob_le(o, 3 as i64, 4)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, shstr_off as i64, 8)
-    ob_le(o, shstr.b.len() as i64, 8)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 1 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, name_off[14] as i64, 4)
-    ob_le(o, 1 as i64, 4)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, shstr_off as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 0 as i64, 4)
-    ob_le(o, 1 as i64, 8)
-    ob_le(o, 0 as i64, 8)
-    nsec := 16
+    sh_entry(o, nm_sym, 2, 0, sym_off, symtab.b.len(), symtab_idx + 1, nloc, 8, 24)
+    sh_entry(o, nm_str, 3, 0, str_off, strtab.b.len(), 0, 0, 1, 0)
+    sh_entry(o, nm_shs, 3, 0, shstr_off, shstr.b.len(), 0, 0, 1, 0)
+    sh_entry(o, nm_gnu, 1, 0, shstr_off, 0, 0, 0, 1, 0)
+    nsec := symtab_idx + 4
     o.b[0] = 0x7F as u8
     o.b[1] = 0x45 as u8
     o.b[2] = 0x4C as u8
@@ -306,7 +323,7 @@ func write_elf(g &: Ng, path: str): bool:
     put_le(o, 52, 64 as i64, 2)
     put_le(o, 58, 64 as i64, 2)
     put_le(o, 60, nsec as i64, 2)
-    put_le(o, 62, 14 as i64, 2)
+    put_le(o, 62, (symtab_idx + 2) as i64, 2)
     ok := write_file(path, o)
     o.b.free()
     symtab.b.free()
@@ -314,9 +331,11 @@ func write_elf(g &: Ng, path: str): bool:
     shstr.b.free()
     rbufs.b.free()
     elf_idx.free()
+    shidx.free()
     rstart.free()
     rsize.free()
-    name_off.free()
+    nm_data.free()
+    nm_rela.free()
     offs.free()
     sizes.free()
     ret ok

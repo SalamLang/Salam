@@ -850,27 +850,79 @@ func hoist_block(g &: Ng, t: int, before: int):
     end
 end
 
-func feeds_address(g &: Ng, v: int, depth: int): bool:
-    if v < 0 or depth > 2:
+func taint(g &: Ng, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.addr_taint[v]:
         ret false
+    end
+    g.addr_taint[v] = true
+    ret true
+end
+
+func addr_flow_op(op: int): bool:
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL or op == OP_SDIV or op == OP_UDIV or op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_AND or op == OP_OR:
+        ret true
+    end
+    ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_SELECT or op == OP_PHI
+end
+
+func compute_addr_taint(g &: Ng):
+    g.addr_taint.clear()
+    repeat g.v_kind.len():
+        g.addr_taint.push(false)
     end
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
             op := g.i_op[i]
-            if op == OP_ADDR and (g.i_a[i] == v or g.i_b[i] == v):
-                ret true
-            end
-            if (op == OP_LOAD and g.i_a[i] == v) or (op == OP_STORE and g.i_b[i] == v):
-                ret true
-            end
-            if (op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC) and g.i_a[i] == v and feeds_address(g, g.i_res[i], depth + 1):
-                ret true
+            if op == OP_ADDR:
+                _t1 := taint(g, g.i_a[i])
+                _t2 := taint(g, g.i_b[i])
+            else op == OP_LOAD:
+                _t3 := taint(g, g.i_a[i])
+            else op == OP_STORE:
+                _t4 := taint(g, g.i_b[i])
             end
             i = g.i_next[i]
         end
     end
-    ret false
+    mut changed := true
+    mut rounds := 0
+    until changed and rounds < 8:
+        changed = false
+        rounds += 1
+        each b2 in g.b_rpo:
+            mut j := g.b_last[b2]
+            until j >= 0:
+                op2 := g.i_op[j]
+                r := g.i_res[j]
+                if r >= 0 and g.addr_taint[r] and addr_flow_op(op2):
+                    if op2 == OP_PHI:
+                        ps := g.i_ps[j]
+                        repeat g.i_pcount[j] in k:
+                            if taint(g, g.pool[ps + 2 * k]):
+                                changed = true
+                            end
+                        end
+                    else:
+                        if op2 != OP_SELECT and taint(g, g.i_a[j]):
+                            changed = true
+                        end
+                        if taint(g, g.i_b[j]):
+                            changed = true
+                        end
+                        if op2 == OP_SELECT and taint(g, g.i_c[j]):
+                            changed = true
+                        end
+                    end
+                end
+                j = g.i_prev[j]
+            end
+        end
+    end
+end
+
+func feeds_address(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.addr_taint.len() and g.addr_taint[v]
 end
 
 func phis_selectable(g &: Ng, j: int): bool:
@@ -878,7 +930,7 @@ func phis_selectable(g &: Ng, j: int): bool:
     mut any := false
     until i >= 0 and g.i_op[i] == OP_PHI:
         t := g.i_ty[i]
-        if is_agg(g, t) or is_flt(g, t) or feeds_address(g, g.i_res[i], 0):
+        if is_agg(g, t) or is_flt(g, t) or feeds_address(g, g.i_res[i]):
             ret false
         end
         any = true
@@ -965,6 +1017,7 @@ func if_convert_block(g &: Ng, b: int): bool:
 end
 
 func if_convert(g &: Ng): bool:
+    compute_addr_taint(g)
     mut changed := false
     each b in g.b_rpo:
         if g.b_first[b] >= 0 and if_convert_block(g, b):

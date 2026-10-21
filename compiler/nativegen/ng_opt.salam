@@ -1,0 +1,462 @@
+package nativegen
+
+func is_cint(g &: Ng, v: int): bool:
+    ret v >= 0 and g.v_kind[v] == VK_INT and not is_flt(g, g.v_ty[v])
+end
+
+func norm_int(g &: Ng, t: int, v: i64): i64:
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret v
+    end
+    if bits == 1:
+        ret v & (1 as i64)
+    end
+    sh := (64 - bits) as i64
+    ret (v << sh) >> sh
+end
+
+func uval(g &: Ng, t: int, v: i64): u64:
+    bits := int_bits(g, t)
+    if bits >= 64:
+        ret v as u64
+    end
+    ret (v as u64) & (((1 as u64) << (bits as u64)) - (1 as u64))
+end
+
+func cval(g &: Ng, t: int, v: i64): int:
+    ret new_val(g, VK_INT, t, norm_int(g, t, v))
+end
+
+func replace_res(g &: Ng, i: int, nv: int):
+    r := g.i_res[i]
+    if r >= 0:
+        repl_grow(g)
+        g.v_repl[r] = nv
+    end
+    ins_unlink(g, i)
+end
+
+func fold_bin(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    ca := is_cint(g, a)
+    cb := is_cint(g, b)
+    if ca and cb:
+        x := g.v_i[a]
+        y := g.v_i[b]
+        bits := int_bits(g, t)
+        mut r := 0 as i64
+        switch op:
+            OP_ADD: r = x + y break end
+            OP_SUB: r = x - y break end
+            OP_MUL: r = x * y break end
+            OP_AND: r = x & y break end
+            OP_OR: r = x | y break end
+            OP_XOR: r = x ^ y break end
+            OP_SHL:
+                if y < (0 as i64) or y >= (bits as i64): ret false end
+                r = x << y
+                break
+            end
+            OP_LSHR:
+                if y < (0 as i64) or y >= (bits as i64): ret false end
+                r = (uval(g, t, x) >> (y as u64)) as i64
+                break
+            end
+            OP_ASHR:
+                if y < (0 as i64) or y >= (bits as i64): ret false end
+                r = x >> y
+                break
+            end
+            OP_SDIV, OP_SREM:
+                if y == (0 as i64) or y == (0 - 1 as i64): ret false end
+                if op == OP_SDIV:
+                    r = x / y
+                else:
+                    r = x % y
+                end
+                break
+            end
+            OP_UDIV, OP_UREM:
+                if y == (0 as i64): ret false end
+                ux := uval(g, t, x)
+                uy := uval(g, t, y)
+                if op == OP_UDIV:
+                    r = (ux / uy) as i64
+                else:
+                    r = (ux % uy) as i64
+                end
+                break
+            end
+            else:
+                ret false
+            end
+        end
+        replace_res(g, i, cval(g, t, r))
+        ret true
+    end
+    if cb:
+        y2 := g.v_i[b]
+        if y2 == (0 as i64) and (op == OP_ADD or op == OP_SUB or op == OP_OR or op == OP_XOR or op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+            replace_res(g, i, a)
+            ret true
+        end
+        if y2 == (1 as i64) and (op == OP_MUL or op == OP_SDIV or op == OP_UDIV):
+            replace_res(g, i, a)
+            ret true
+        end
+        if y2 == (0 as i64) and (op == OP_MUL or op == OP_AND):
+            replace_res(g, i, cval(g, t, 0 as i64))
+            ret true
+        end
+        if norm_int(g, t, y2) == norm_int(g, t, 0 - 1 as i64) and op == OP_AND:
+            replace_res(g, i, a)
+            ret true
+        end
+    end
+    if ca:
+        x2 := g.v_i[a]
+        if x2 == (0 as i64) and (op == OP_ADD or op == OP_OR or op == OP_XOR):
+            replace_res(g, i, b)
+            ret true
+        end
+        if x2 == (1 as i64) and op == OP_MUL:
+            replace_res(g, i, b)
+            ret true
+        end
+        if x2 == (0 as i64) and (op == OP_MUL or op == OP_AND or op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+            replace_res(g, i, cval(g, t, 0 as i64))
+            ret true
+        end
+    end
+    if a == b and (op == OP_SUB or op == OP_XOR):
+        replace_res(g, i, cval(g, t, 0 as i64))
+        ret true
+    end
+    if a == b and (op == OP_AND or op == OP_OR):
+        replace_res(g, i, a)
+        ret true
+    end
+    ret false
+end
+
+func fold_icmp(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    p := g.i_x[i]
+    if a == b and g.v_kind[a] != VK_UNDEF:
+        r0 := p == CC_EQ or p == CC_SLE or p == CC_SGE or p == CC_ULE or p == CC_UGE
+        replace_res(g, i, new_val(g, VK_INT, T_I1, r0 ? (1 as i64) : (0 as i64)))
+        ret true
+    end
+    if not (is_cint(g, a) and is_cint(g, b)):
+        ret false
+    end
+    t := g.v_ty[a]
+    x := norm_int(g, t, g.v_i[a])
+    y := norm_int(g, t, g.v_i[b])
+    ux := uval(g, t, x)
+    uy := uval(g, t, y)
+    mut r := false
+    switch p:
+        CC_EQ: r = x == y break end
+        CC_NE: r = x != y break end
+        CC_SLT: r = x < y break end
+        CC_SLE: r = x <= y break end
+        CC_SGT: r = x > y break end
+        CC_SGE: r = x >= y break end
+        CC_ULT: r = ux < uy break end
+        CC_ULE: r = ux <= uy break end
+        CC_UGT: r = ux > uy break end
+        CC_UGE: r = ux >= uy break end
+    end
+    replace_res(g, i, new_val(g, VK_INT, T_I1, r ? (1 as i64) : (0 as i64)))
+    ret true
+end
+
+func fold_cast(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    a := g.i_a[i]
+    dt := g.i_ty[i]
+    st := g.i_x[i]
+    if not is_cint(g, a):
+        ret false
+    end
+    if is_flt(g, dt):
+        ret false
+    end
+    v := g.v_i[a]
+    switch op:
+        OP_SEXT:
+            mut sv := norm_int(g, st, v)
+            if st == T_I1:
+                sv = 0 - (v & (1 as i64))
+            end
+            replace_res(g, i, cval(g, dt, sv))
+            ret true
+        end
+        OP_ZEXT:
+            replace_res(g, i, cval(g, dt, uval(g, st, v) as i64))
+            ret true
+        end
+        OP_TRUNC, OP_PTRTOINT, OP_INTTOPTR, OP_BITCAST:
+            replace_res(g, i, cval(g, dt, v))
+            ret true
+        end
+    end
+    ret false
+end
+
+func fold_select(g &: Ng, i: int): bool:
+    c := g.i_a[i]
+    if is_cint(g, c):
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            replace_res(g, i, g.i_b[i])
+        else:
+            replace_res(g, i, g.i_c[i])
+        end
+        ret true
+    end
+    if g.i_b[i] == g.i_c[i]:
+        replace_res(g, i, g.i_b[i])
+        ret true
+    end
+    ret false
+end
+
+func fold_addr(g &: Ng, i: int): bool:
+    idx := g.i_b[i]
+    mut changed := false
+    if idx >= 0 and is_cint(g, idx):
+        g.i_d[i] = g.i_d[i] + norm_int(g, g.v_ty[idx], g.v_i[idx]) * (g.i_x[i] as i64)
+        g.i_b[i] = 0 - 1
+        g.i_x[i] = 1
+        changed = true
+    end
+    base := g.i_a[i]
+    if base >= 0 and g.v_kind[base] == VK_INS:
+        d := g.v_def[base]
+        if d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[d] < 0:
+            g.i_a[i] = g.i_a[d]
+            g.i_d[i] = g.i_d[i] + g.i_d[d]
+            changed = true
+        else d >= 0 and g.i_op[d] == OP_ADDR and g.i_b[i] < 0 and g.i_d[i] == (0 as i64):
+            replace_res(g, i, base)
+            ret true
+        end
+    end
+    if g.i_b[i] < 0 and g.i_d[i] == (0 as i64):
+        replace_res(g, i, g.i_a[i])
+        ret true
+    end
+    ret changed
+end
+
+func fold_cbr(g &: Ng, i: int): bool:
+    c := g.i_a[i]
+    if g.i_b[i] == g.i_c[i]:
+        g.i_op[i] = OP_BR
+        g.i_a[i] = 0 - 1
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    if is_cint(g, c):
+        mut tgt := g.i_c[i]
+        if (g.v_i[c] & (1 as i64)) != (0 as i64):
+            tgt = g.i_b[i]
+        end
+        g.i_op[i] = OP_BR
+        g.i_a[i] = 0 - 1
+        g.i_b[i] = tgt
+        g.i_c[i] = 0 - 1
+        ret true
+    end
+    ret false
+end
+
+func fold_pass(g &: Ng, cfg_changed &: bool): bool:
+    mut changed := false
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            remap_ins(g, i)
+            op := g.i_op[i]
+            mut ch := false
+            if op >= OP_ADD and op <= OP_ASHR:
+                ch = fold_bin(g, i)
+            else op == OP_ICMP:
+                ch = fold_icmp(g, i)
+            else op >= OP_SEXT and op <= OP_FPTRUNC:
+                ch = fold_cast(g, i)
+            else op == OP_SELECT:
+                ch = fold_select(g, i)
+            else op == OP_ADDR:
+                ch = fold_addr(g, i)
+            else op == OP_CBR:
+                if fold_cbr(g, i):
+                    ch = true
+                    cfg_changed = true
+                end
+            end
+            if ch:
+                changed = true
+            end
+            i = nx
+        end
+    end
+    ret changed
+end
+
+func has_side_effect(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op == OP_CALL or op == OP_STORE or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+        ret true
+    end
+    if is_term(op):
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret true
+    end
+    if op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM:
+        ret not is_cint(g, g.i_b[i]) or g.v_i[g.i_b[i]] == (0 as i64)
+    end
+    ret false
+end
+
+func dce_dec(g &: Ng, v: int):
+    if v < 0:
+        ret
+    end
+    g.v_uses[v] = g.v_uses[v] - 1
+    if g.v_uses[v] == 0 and g.v_kind[v] == VK_INS:
+        d := g.v_def[v]
+        if d >= 0 and g.i_blk[d] >= 0 and not has_side_effect(g, d):
+            g.work.push(d)
+        end
+    end
+end
+
+func dce(g &: Ng):
+    count_uses(g)
+    g.work.clear()
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            r := g.i_res[i]
+            if not has_side_effect(g, i) and g.i_op[i] != OP_NOP and (r < 0 or g.v_uses[r] == 0):
+                g.work.push(i)
+            end
+            i = g.i_next[i]
+        end
+    end
+    until g.work.len() > 0:
+        j := g.work.pop()
+        if g.i_blk[j] < 0:
+            continue
+        end
+        op := g.i_op[j]
+        m := val_mask(op)
+        if (m & 1) != 0: dce_dec(g, g.i_a[j]) end
+        if (m & 2) != 0: dce_dec(g, g.i_b[j]) end
+        if (m & 4) != 0: dce_dec(g, g.i_c[j]) end
+        if op == OP_PHI:
+            repeat g.i_pn[j] in k:
+                dce_dec(g, g.pool[g.i_ps[j] + 2 * k])
+            end
+        end
+        ins_unlink(g, j)
+    end
+end
+
+func merge_blocks(g &: Ng): bool:
+    mut changed := false
+    repl_grow(g)
+    each b in g.b_rpo:
+        if g.b_first[b] < 0:
+            continue
+        end
+        until true:
+            t := g.b_last[b]
+            if t < 0 or g.i_op[t] != OP_BR:
+                break
+            end
+            sb := g.i_b[t]
+            if sb == b or sb == 0 or g.b_pn[sb] != 1 or g.b_first[sb] < 0:
+                break
+            end
+            mut i := g.b_first[sb]
+            until i >= 0 and g.i_op[i] == OP_PHI:
+                nx := g.i_next[i]
+                r := g.i_res[i]
+                if r >= 0 and g.i_pn[i] > 0:
+                    g.v_repl[r] = resolve(g, g.pool[g.i_ps[i]])
+                end
+                ins_unlink(g, i)
+                i = nx
+            end
+            ins_unlink(g, t)
+            sf := g.b_first[sb]
+            if sf >= 0:
+                mut j := sf
+                until j >= 0:
+                    g.i_blk[j] = b
+                    j = g.i_next[j]
+                end
+                lb := g.b_last[b]
+                if lb >= 0:
+                    g.i_next[lb] = sf
+                    g.i_prev[sf] = lb
+                else:
+                    g.b_first[b] = sf
+                end
+                g.b_last[b] = g.b_last[sb]
+            end
+            g.b_first[sb] = 0 - 1
+            g.b_last[sb] = 0 - 1
+            nt := g.b_last[b]
+            if nt >= 0:
+                nop := g.i_op[nt]
+                if nop == OP_BR:
+                    retarget_phis(g, g.i_b[nt], sb, b)
+                else nop == OP_CBR:
+                    retarget_phis(g, g.i_b[nt], sb, b)
+                    if g.i_c[nt] != g.i_b[nt]:
+                        retarget_phis(g, g.i_c[nt], sb, b)
+                    end
+                end
+            end
+            changed = true
+        end
+    end
+    ret changed
+end
+
+func optimize(g &: Ng):
+    mut rounds := 0
+    until rounds < 6:
+        mut cfgc := false
+        mut changed := fold_pass(g, cfgc)
+        if cfgc:
+            ensure_terms(g)
+            build_cfg(g)
+        end
+        if merge_blocks(g):
+            build_cfg(g)
+            changed = true
+        end
+        if changed:
+            remap_all(g)
+            simplify_phis(g)
+        else:
+            break
+        end
+        rounds += 1
+    end
+    dce(g)
+end

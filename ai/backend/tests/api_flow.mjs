@@ -124,6 +124,23 @@ const never = await chat(key, { model: "salam", messages: [{ role: "user", conte
 const neverBody = await never.text();
 check("a turn the engine never starts fails soon after the start limit", Date.now() - t0 < (START + 25) * 1000 && neverBody.includes("engine_failed"), `${Date.now() - t0} ms ${neverBody.slice(-200)}`);
 
+console.log("fallback models");
+const fallbackSession = await account("fallback@test.ir", "Fallback");
+const fallbackKey = (await api("POST", "/keys", fallbackSession, { name: "fallback-bot" })).json.secret;
+const limitedApi = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "rate limited api" }] })).json();
+check("a rate limited turn is answered by the first fallback model", (limitedApi.choices?.[0]?.message?.content ?? "").startsWith("Echo: rate limited api via backup-one"), limitedApi);
+const fallbackChat = await api("POST", "/chats", fallbackSession, {});
+const limitedSent = await api("POST", `/chats/${fallbackChat.json.chat.id}/messages`, fallbackSession, { text: "rate limited chat" });
+let limitedPoll;
+for (let i = 0; i < 60; i += 1) {
+  limitedPoll = await api("GET", `/chats/${fallbackChat.json.chat.id}/messages/${limitedSent.json.assistant.id}`, fallbackSession);
+  if (limitedPoll.json.status !== "pending") break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+check("a rate limited chat answer comes from a fallback model", limitedPoll.json.status === "done" && limitedPoll.json.body.startsWith("Echo: rate limited chat via backup-one"), limitedPoll.json);
+const allLimited = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "always limited" }] })).text();
+check("a turn every model refuses still fails cleanly", allLimited.includes("engine_failed"), allLimited.slice(-200));
+
 console.log("agent clients");
 const agentSession = await account("agent@test.ir", "Agent");
 const agentKey = (await api("POST", "/keys", agentSession, { name: "agent-bot" })).json.secret;

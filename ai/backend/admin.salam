@@ -26,6 +26,7 @@ include aioauth "oauth.salam"
 include aiopenai "openai.salam"
 include aiturn "turn.salam"
 include aiengine "engine.salam"
+include aifiles "files.salam"
 
 const TEHRAN := 12600
 const EPOCH_JDN := 2440588
@@ -405,6 +406,7 @@ func get_admin_chat(ctx: i64):
         ret
     end
     id := http.Param(ctx, "id")
+    attached := aifiles.ForChat(id)
     mut head := ""
     aistore.Lock()
     mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
@@ -430,7 +432,12 @@ func get_admin_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
-        items.push(admin_message_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)))
+        mid := aistore.Text(rows, 0)
+        mut item := admin_message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6))
+        if attached.has(mid):
+            item = item.substr(0, item.len() - 1) + `, "files": ` + attached.get(mid) + "}"
+        end
+        items.push(item)
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
@@ -508,6 +515,18 @@ func get_trace(ctx: i64):
     aiweb.Reply(ctx, 200, `{"trace": ` + trace + `, "saved": false}`)
 end
 
+func get_admin_file(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    found := aifiles.Read(http.Param(ctx, "id"), http.Param(ctx, "fid"))
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این فایل پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, found)
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -522,11 +541,12 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/users/:id/chats", list_user_chats)
     router.Get(r, "/admin/chats/:id", get_admin_chat)
     router.Get(r, "/admin/messages/:id/trace", get_trace)
+    router.Get(r, "/admin/chats/:id/files/:fid", get_admin_file)
     router.Get(r, "/admin/events", list_events)
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

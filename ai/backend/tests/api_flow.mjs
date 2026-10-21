@@ -1,3 +1,4 @@
+import zlib from "node:zlib";
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
 const ADMIN = process.env.ADMIN_EMAIL ?? "admin@test.ir";
@@ -140,6 +141,97 @@ for (let i = 0; i < 60; i += 1) {
 check("a rate limited chat answer comes from a fallback model", limitedPoll.json.status === "done" && limitedPoll.json.body.startsWith("Echo: rate limited chat via backup-one"), limitedPoll.json);
 const allLimited = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "always limited" }] })).text();
 check("a turn every model refuses still fails cleanly", allLimited.includes("engine_failed"), allLimited.slice(-200));
+
+console.log("attachments");
+const b64 = (buf) => Buffer.from(buf).toString("base64");
+const png = (() => {
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type), data])));
+    return Buffer.concat([len, Buffer.from(type), data, crc]);
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(2, 0);
+  head.writeUInt32BE(2, 4);
+  head.set([8, 2, 0, 0, 0], 8);
+  const raw = Buffer.from([0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0]);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", head), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+})();
+const zip = (entries) => {
+  const locals = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const data = Buffer.from(content);
+    const packed = zlib.deflateRawSync(data);
+    const crc = zlib.crc32(data);
+    const nm = Buffer.from(name);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(packed.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nm.length, 26);
+    locals.push(local, nm, packed);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);
+    cen.writeUInt16LE(20, 4);
+    cen.writeUInt16LE(20, 6);
+    cen.writeUInt16LE(8, 10);
+    cen.writeUInt32LE(crc, 16);
+    cen.writeUInt32LE(packed.length, 20);
+    cen.writeUInt32LE(data.length, 24);
+    cen.writeUInt16LE(nm.length, 28);
+    cen.writeUInt32LE(offset, 42);
+    central.push(cen, nm);
+    offset += 30 + nm.length + packed.length;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, end]);
+};
+const caps = await (await fetch(`${API}/capabilities`)).json();
+check("capabilities follow the engine's model: images yes, pdf no", caps.image === true && caps.pdf === false && caps.text.includes("json") && caps.text.includes("salam"), caps);
+const filesSession = await account("files@test.ir", "Files");
+const filesChat = (await api("POST", "/chats", filesSession, {})).json.chat.id;
+async function answerOf(sentMsg) {
+  let r;
+  for (let i = 0; i < 60; i += 1) {
+    r = await api("GET", `/chats/${filesChat}/messages/${sentMsg.json.assistant.id}`, filesSession);
+    if (r.json.status !== "pending") break;
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return r.json;
+}
+const both = await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "look at these", files: [{ name: "config.json", data: b64('{"port": 8080}') }, { name: "dot.png", data: b64(png) }] });
+check("a text file and an image are accepted", both.res.status === 201 && both.json.user.files?.length === 2, both.json);
+const bothAnswer = await answerOf(both);
+check("the image reaches the engine as a file part and the text inline", bothAnswer.body.includes("dot.png image/png") && bothAnswer.body.includes("config.json"), bothAnswer.body);
+const reread = await api("GET", `/chats/${filesChat}`, filesSession);
+const savedFiles = reread.json.messages.find((m) => m.role === "user")?.files ?? [];
+check("the chat lists the attached files", savedFiles.map((f) => `${f.name}:${f.kind}`).join(",") === "config.json:text,dot.png:image", savedFiles);
+const img = await api("GET", `/chats/${filesChat}/files/${savedFiles[1]?.id}`, filesSession);
+check("an attached image can be read back", img.json?.mime === "image/png" && img.json.data === b64(png), img.json?.mime);
+const strangerFile = await api("GET", `/chats/${filesChat}/files/${savedFiles[1]?.id}`, fallbackSession);
+check("another user cannot read the file", strangerFile.res.status === 404, strangerFile.res.status);
+const zipped = await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "", files: [{ name: "project.zip", data: b64(zip([["src/main.salam", "func main:\n    println 1\nend\n"], ["logo.bin", Buffer.from([0, 1, 2, 0, 3])], ["README.md", "# demo"]])) }] });
+const zipAnswer = zipped.res.status === 201 ? await answerOf(zipped) : zipped.json;
+check("a zip is unpacked to its text files only", zipAnswer.body?.includes("project.zip/src/main.salam") && zipAnswer.body.includes("project.zip/README.md") && !zipAnswer.body.includes("logo.bin"), zipAnswer);
+const refused = async (file) => (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: [file] })).res.status;
+check("pdf is refused while the model cannot read it", (await refused({ name: "doc.pdf", data: b64("%PDF-1.4 fake pdf body here") })) === 400);
+check("rar is refused", (await refused({ name: "a.rar", data: b64("Rar!\x1a\x07\x00 not really") })) === 400);
+check("binary data named .txt is refused", (await refused({ name: "notes.txt", data: b64(Buffer.from([104, 105, 0, 104, 105])) })) === 400);
+check("a fake png is refused", (await refused({ name: "fake.png", data: b64("this is not an image at all") })) === 400);
+check("too many files are refused", (await (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: Array.from({ length: 7 }, (_, i) => ({ name: `f${i}.txt`, data: b64("hi") })) })).res.status) === 400);
 
 console.log("agent clients");
 const agentSession = await account("agent@test.ir", "Agent");

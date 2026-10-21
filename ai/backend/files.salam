@@ -1,0 +1,482 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aifiles
+
+import str
+import mem
+import encoding
+import encoding.json
+import encoding.value
+import encoding.encerr
+import archive
+import compress
+
+include aistore "store.salam"
+
+const MAX_FILES := 6
+const MAX_TOTAL := 12582912
+const MAX_IMAGE := 5242880
+const MAX_PDF := 10485760
+const MAX_TEXT := 262144
+const MAX_ARCHIVE := 10485760
+const MAX_ARCHIVE_FILES := 60
+const MAX_PROMPT_TEXT := 600000
+
+TEXT_EXTS := ["txt", "md", "markdown", "rst", "json", "jsonc", "json5", "ndjson", "geojson", "yml", "yaml", "toml", "ini", "cfg", "conf", "config", "properties", "env", "csv", "tsv", "xml", "svg", "html", "htm", "css", "scss", "sass", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte", "py", "pyi", "ipynb", "rb", "php", "go", "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "cs", "java", "kt", "kts", "scala", "groovy", "gradle", "swift", "m", "mm", "dart", "lua", "pl", "pm", "r", "jl", "hs", "ex", "exs", "erl", "clj", "elm", "ml", "fs", "zig", "nim", "v", "sol", "sql", "graphql", "gql", "proto", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "dockerfile", "make", "mk", "cmake", "tf", "hcl", "nix", "log", "diff", "patch", "tex", "bib", "srt", "vtt", "salam", "lock", "editorconfig", "gitignore", "gitattributes", "dockerignore", "npmrc", "nvmrc", "babelrc", "eslintrc", "prettierrc", "htaccess"]
+TEXT_NAMES := ["dockerfile", "makefile", "license", "readme", "changelog", "authors", "contributing", "procfile", "gemfile", "rakefile", "jenkinsfile", "vagrantfile", "cmakelists.txt", "go.mod", "go.sum", "cargo.toml"]
+
+pub struct Upload:
+    pub name: str = ""
+    pub kind: str = ""
+    pub mime: str = ""
+    pub size: int = 0
+    pub data: str = ""
+    pub prompt: str = ""
+end
+
+func base_name(name: str): str:
+    mut at := -1
+    mut i := 0
+    until i < name.len():
+        c := name.substr(i, 1)
+        if c == "/" or c == "\\":
+            at = i
+        end
+        i += 1
+    end
+    ret name.substr(at + 1, name.len() - at - 1)
+end
+
+func ext_of(name: str): str:
+    b := str.Lower(base_name(name))
+    mut dot := -1
+    mut i := 0
+    until i < b.len():
+        if b.substr(i, 1) == ".":
+            dot = i
+        end
+        i += 1
+    end
+    if dot < 0:
+        ret ""
+    end
+    ret b.substr(dot + 1, b.len() - dot - 1)
+end
+
+func is_text_name(name: str): bool:
+    ext := ext_of(name)
+    if ext.len() > 0:
+        each e in TEXT_EXTS:
+            if e == ext:
+                ret true
+            end
+        end
+    end
+    b := str.Lower(base_name(name))
+    each n in TEXT_NAMES:
+        if n == b:
+            ret true
+        end
+    end
+    ret false
+end
+
+func clean_name(name: str): str:
+    mut t := str.Trim(str.Replace(str.Replace(str.Replace(name, "\r", ""), "\n", ""), "\"", "'"))
+    if t.len() > 200:
+        t = str.CharSubstr(t, 0, 120)
+    end
+    ret t
+end
+
+func decoded_len(b64: str): int:
+    n := b64.len()
+    if n == 0 or n % 4 != 0:
+        ret -1
+    end
+    mut pad := 0
+    if b64.substr(n - 1, 1) == "=":
+        pad += 1
+    end
+    if b64.substr(n - 2, 1) == "=":
+        pad += 1
+    end
+    ret n / 4 * 3 - pad
+end
+
+func head_byte(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func sniff(b64: str): str:
+    if b64.len() < 24:
+        ret ""
+    end
+    buf := mem.Allocate(32 as u64)
+    mut ok := false
+    got := encoding.Base64DecodeBytes(b64.substr(0, 24), buf, 32, ok)
+    mut kind := ""
+    if ok and got >= 12:
+        b0 := head_byte(buf, 0)
+        b1 := head_byte(buf, 1)
+        b2 := head_byte(buf, 2)
+        b3 := head_byte(buf, 3)
+        if b0 == 137 and b1 == 80 and b2 == 78 and b3 == 71:
+            kind = "image/png"
+        else b0 == 255 and b1 == 216 and b2 == 255:
+            kind = "image/jpeg"
+        else b0 == 71 and b1 == 73 and b2 == 70 and b3 == 56:
+            kind = "image/gif"
+        else b0 == 82 and b1 == 73 and b2 == 70 and b3 == 70 and head_byte(buf, 8) == 87 and head_byte(buf, 9) == 69 and head_byte(buf, 10) == 66 and head_byte(buf, 11) == 80:
+            kind = "image/webp"
+        else b0 == 37 and b1 == 80 and b2 == 68 and b3 == 70:
+            kind = "application/pdf"
+        else b0 == 80 and b1 == 75 and b2 == 3 and b3 == 4:
+            kind = "application/zip"
+        end
+    end
+    mem.Free(buf)
+    ret kind
+end
+
+func image_ext(ext: str): bool:
+    ret ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "gif" or ext == "webp"
+end
+
+func block(name: str, text: str): str:
+    ret "\n\n<attached_file name=\"" + name + "\">\n" + text + "\n</attached_file>"
+end
+
+func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: str): bool:
+    if size > MAX_ARCHIVE:
+        problem = "فایل فشرده‌ی «" + name + "» بزرگ‌تر از ۱۰ مگابایت است."
+        ret false
+    end
+    buf := mem.Allocate((size + 16) as u64)
+    mut ok := false
+    n := encoding.Base64DecodeBytes(b64, buf, size + 16, ok)
+    if not ok or n <= 0:
+        mem.Free(buf)
+        problem = "فایل «" + name + "» خراب است."
+        ret false
+    end
+    mut entries := archive.ZipList(buf, n)
+    mut listing := Vector {} as Vector<str>
+    mut prompt := str.NewBuilder()
+    defer str.BufFree(prompt)
+    mut kept := 0
+    mut skipped := 0
+    each e in entries:
+        if not e.is_dir:
+            if kept < MAX_ARCHIVE_FILES and is_text_name(e.name) and e.size <= (MAX_TEXT as i64) and used + (e.size as int) <= MAX_PROMPT_TEXT:
+                mut got := false
+                mut data := archive.ZipExtractByName(buf, n, e.name, got)
+                if got:
+                    t := compress.BufToStrUnsafe(data)
+                    if t.len() == compress.BufLen(data):
+                        str.BufAppend(prompt, block(name + "/" + e.name, t))
+                        listing.push(e.name)
+                        used += t.len()
+                        kept += 1
+                    else:
+                        skipped += 1
+                    end
+                else:
+                    skipped += 1
+                end
+                compress.BufFree(data)
+            else:
+                skipped += 1
+            end
+        end
+    end
+    archive.FreeEntries(entries)
+    mem.Free(buf)
+    if kept == 0:
+        problem = "در فایل «" + name + "» هیچ فایل متنی قابل خواندنی پیدا نشد."
+        ret false
+    end
+    mut note := ""
+    if skipped > 0:
+        note = "\n(" + skipped + " other entries in this archive were not text or were too large, so they were left out.)"
+    end
+    u.kind = "archive"
+    u.mime = "application/zip"
+    u.data = str.Join(listing, "\n")
+    u.prompt = str.BufStr(prompt) + note
+    ret true
+end
+
+func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &: int, problem &: str): Upload:
+    mut u := Upload {}
+    name := clean_name(json_text(f, "name"))
+    b64 := json_text(f, "data")
+    size := decoded_len(b64)
+    if name.len() == 0 or size <= 0:
+        problem = "یکی از فایل‌ها خالی یا خراب است."
+        ret u
+    end
+    u.name = name
+    u.size = size
+    total += size
+    if total > MAX_TOTAL:
+        problem = "حجم همه‌ی فایل‌ها با هم بیشتر از ۱۲ مگابایت است."
+        ret u
+    end
+    ext := ext_of(name)
+    kind := sniff(b64)
+    if image_ext(ext):
+        if not image_ok:
+            problem = "مدل فعلی دستیار تصویر نمی‌پذیرد."
+        else not str.StartsWith(kind, "image/"):
+            problem = "فایل «" + name + "» تصویر معتبری نیست."
+        else size > MAX_IMAGE:
+            problem = "تصویر «" + name + "» بزرگ‌تر از ۵ مگابایت است."
+        else:
+            u.kind = "image"
+            u.mime = kind
+            u.data = b64
+        end
+        ret u
+    end
+    if ext == "pdf":
+        if not pdf_ok:
+            problem = "مدل فعلی دستیار فایل PDF نمی‌پذیرد. متن آن را در یک فایل متنی بفرستید."
+        else kind != "application/pdf":
+            problem = "فایل «" + name + "» PDF معتبری نیست."
+        else size > MAX_PDF:
+            problem = "فایل «" + name + "» بزرگ‌تر از ۱۰ مگابایت است."
+        else:
+            u.kind = "pdf"
+            u.mime = kind
+            u.data = b64
+        end
+        ret u
+    end
+    if ext == "zip":
+        if kind != "application/zip":
+            problem = "فایل «" + name + "» ZIP معتبری نیست."
+            ret u
+        end
+        _z := unzip(name, b64, size, u, used, problem)
+        ret u
+    end
+    if is_text_name(name):
+        if size > MAX_TEXT:
+            problem = "فایل «" + name + "» بزرگ‌تر از ۲۵۶ کیلوبایت است."
+            ret u
+        end
+        if used + size > MAX_PROMPT_TEXT:
+            problem = "متن فایل‌ها روی هم خیلی بلند است."
+            ret u
+        end
+        t := encoding.Base64Decode(b64)
+        if t.len() != size:
+            problem = "فایل «" + name + "» متنی نیست."
+            ret u
+        end
+        used += size
+        u.kind = "text"
+        u.mime = "text/plain"
+        u.data = t
+        u.prompt = block(name, t)
+        ret u
+    end
+    problem = "قالب فایل «" + name + "» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود."
+    ret u
+end
+
+func json_text(v: value.Value, key: str): str:
+    if not value.IsObject(v):
+        ret ""
+    end
+    mut ok := false
+    got := value.ObjectGetOk(v, key, ok)
+    if ok and value.IsString(got):
+        ret value.AsString(got)
+    end
+    ret ""
+end
+
+func meta_json(id: str, name: str, kind: str, mime: str, size: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("name", name))
+    m.push(json.Member("kind", kind))
+    m.push(json.Member("mime", mime))
+    m.push(json.MemberRaw("size", size))
+    ret json.Object(m)
+end
+
+pub func Limits(image_ok: bool, pdf_ok: bool): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberBool("image", image_ok))
+    m.push(json.MemberBool("pdf", pdf_ok))
+    m.push(json.MemberInt("max_files", MAX_FILES as i64))
+    m.push(json.MemberInt("max_total", MAX_TOTAL as i64))
+    m.push(json.MemberInt("max_image", MAX_IMAGE as i64))
+    m.push(json.MemberInt("max_pdf", MAX_PDF as i64))
+    m.push(json.MemberInt("max_text", MAX_TEXT as i64))
+    m.push(json.MemberInt("max_archive", MAX_ARCHIVE as i64))
+    mut exts := Vector {} as Vector<str>
+    each e in TEXT_EXTS:
+        exts.push(json.Str(e))
+    end
+    m.push(json.MemberRaw("text", json.Array(exts)))
+    mut names := Vector {} as Vector<str>
+    each e in TEXT_NAMES:
+        names.push(json.Str(e))
+    end
+    m.push(json.MemberRaw("text_names", json.Array(names)))
+    ret json.Object(m)
+end
+
+pub func Parse(body: str, image_ok: bool, pdf_ok: bool, out &: Vector<Upload>, problem &: str): bool:
+    problem = ""
+    if body.find(`"files"`) < 0:
+        ret true
+    end
+    mut err := encerr.EncodingError {}
+    root := json.Decode(body, err)
+    mut ok := false
+    list := value.IsObject(root) ? value.ObjectGetOk(root, "files", ok) : value.ValueNull()
+    if ok and value.IsArray(list):
+        n := value.ArrayLen(list)
+        if n > MAX_FILES:
+            problem = "حداکثر " + str.ToPersianDigits("" + MAX_FILES) + " فایل در هر پیام می‌شود فرستاد."
+        else:
+            mut used := 0
+            mut total := 0
+            mut i := 0
+            until i < n and problem.len() == 0:
+                u := one_file(value.ArrayGet(list, i), image_ok, pdf_ok, used, total, problem)
+                if problem.len() == 0:
+                    out.push(u)
+                end
+                i += 1
+            end
+        end
+    end
+    value.ValueFree(root)
+    ret problem.len() == 0
+end
+
+pub func PromptText(text: str, files: Vector<Upload>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, text)
+    mut images := Vector {} as Vector<str>
+    each u in files:
+        if u.prompt.len() > 0:
+            str.BufAppend(b, u.prompt)
+        else u.kind == "image" or u.kind == "pdf":
+            images.push(u.name)
+        end
+    end
+    if images.len() > 0:
+        str.BufAppend(b, "\n\n(Attached: " + str.Join(images, ", ") + ")")
+    end
+    ret str.BufStr(b)
+end
+
+pub func Parts(files: Vector<Upload>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    each u in files:
+        if u.kind == "image" or u.kind == "pdf":
+            str.BufAppend(b, `, {"type": "file", "mime": `)
+            str.BufAppend(b, json.Str(u.mime))
+            str.BufAppend(b, `, "filename": `)
+            str.BufAppend(b, json.Str(u.name))
+            str.BufAppend(b, `, "url": "data:`)
+            str.BufAppend(b, u.mime)
+            str.BufAppend(b, ";base64,")
+            str.BufAppend(b, u.data)
+            str.BufAppend(b, `"}`)
+        end
+    end
+    ret str.BufStr(b)
+end
+
+pub func Save(chat: str, mid: str, files: Vector<Upload>, now: str):
+    each u in files:
+        mut a := Vector {} as Vector<str>
+        a.push(mid)
+        a.push(chat)
+        a.push(u.name)
+        a.push(u.kind)
+        a.push(u.mime)
+        a.push("" + u.size)
+        a.push(u.data)
+        a.push(now)
+        aistore.Lock()
+        _r := aistore.Run("INSERT INTO message_files (message_id, chat_id, name, kind, mime, size, data, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
+        aistore.Unlock()
+    end
+end
+
+pub func Metas(files: Vector<Upload>): str:
+    mut items := Vector {} as Vector<str>
+    mut i := 0
+    each u in files:
+        i -= 1
+        items.push(meta_json("" + i, u.name, u.kind, u.mime, "" + u.size))
+    end
+    ret json.Array(items)
+end
+
+pub func ForChat(chat: str): HashMap<str, str>:
+    mut grouped := HashMap {} as HashMap<str, Vector<str>>
+    mut a := Vector {} as Vector<str>
+    a.push(chat)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, message_id, name, kind, mime, size FROM message_files WHERE chat_id = ?1 ORDER BY id", a)
+    until aistore.Next(rows):
+        mid := aistore.Text(rows, 1)
+        mut list := grouped.has(mid) ? grouped.get(mid) : Vector {} as Vector<str>
+        list.push(meta_json(aistore.Text(rows, 0), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
+        grouped.put(mid, list)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut out := HashMap {} as HashMap<str, str>
+    mut it := grouped.iter()
+    until it.has_next():
+        out.put(it.key(), json.Array(it.value()))
+        it.next()
+    end
+    ret out
+end
+
+pub func Read(chat: str, fid: str): str:
+    mut a := Vector {} as Vector<str>
+    a.push(fid)
+    a.push(chat)
+    mut out := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT name, kind, mime, data FROM message_files WHERE id = ?1 AND chat_id = ?2", a)
+    if aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("name", aistore.Text(rows, 0)))
+        m.push(json.Member("kind", aistore.Text(rows, 1)))
+        m.push(json.Member("mime", aistore.Text(rows, 2)))
+        m.push(json.Member("data", aistore.Text(rows, 3)))
+        out = json.Object(m)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end

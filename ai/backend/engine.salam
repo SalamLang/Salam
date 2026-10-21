@@ -37,6 +37,10 @@ mut AGENTS := ""
 mut AGENTS_AT := 0 as i64
 mut SESSION_AGENT := HashMap {} as HashMap<str, str>
 mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
+mut SESSION_PARTS := HashMap {} as HashMap<str, str>
+mut CAPS_AT := 0 as i64
+mut CAPS_IMAGE := false
+mut CAPS_PDF := false
 mut SESSION_MODEL := HashMap {} as HashMap<str, str>
 mut SESSION_TRY := HashMap {} as HashMap<str, int>
 mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
@@ -264,11 +268,12 @@ func model_json(model: str): str:
     ret `, "model": {"providerID": ` + json.Str(model.substr(0, slash)) + `, "modelID": ` + json.Str(model.substr(slash + 1, model.len() - slash - 1)) + "}"
 end
 
-func remember(sid: str, agent: str, text: str, model: str, fresh: bool):
+func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: str):
     _l := sync.Lock(LOCK)
     if SESSION_AGENT.size() > 5000:
         SESSION_AGENT = HashMap {} as HashMap<str, str>
         SESSION_PROMPT = HashMap {} as HashMap<str, str>
+        SESSION_PARTS = HashMap {} as HashMap<str, str>
         SESSION_MODEL = HashMap {} as HashMap<str, str>
         SESSION_TRY = HashMap {} as HashMap<str, int>
         SESSION_RETRY_AT = HashMap {} as HashMap<str, i64>
@@ -277,20 +282,77 @@ func remember(sid: str, agent: str, text: str, model: str, fresh: bool):
     SESSION_MODEL.put(sid, model)
     if fresh:
         SESSION_PROMPT.put(sid, text)
+        SESSION_PARTS.put(sid, parts)
         SESSION_TRY.put(sid, 0)
         _r := SESSION_RETRY_AT.remove(sid)
     end
     _u := sync.Unlock(LOCK)
 end
 
-func post_prompt(sid: str, agent: str, text: str, model: str): bool:
-    body := `{"agent": ` + json.Str(agent) + model_json(model) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
-    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", body, SEND_MS))
+func post_prompt(sid: str, agent: str, text: str, model: str, parts: str): bool:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"agent": `)
+    str.BufAppend(b, json.Str(agent))
+    str.BufAppend(b, model_json(model))
+    str.BufAppend(b, `, "parts": [{"type": "text", "text": `)
+    str.BufAppend(b, json.Str(text))
+    str.BufAppend(b, "}")
+    str.BufAppend(b, parts)
+    str.BufAppend(b, "]}")
+    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", str.BufStr(b), SEND_MS))
 end
 
-func send_as(sid: str, agent: str, text: str): bool:
-    remember(sid, agent, text, "", true)
-    ret post_prompt(sid, agent, text, "")
+func send_as(sid: str, agent: str, text: str, parts: str): bool:
+    remember(sid, agent, text, "", true, parts)
+    ret post_prompt(sid, agent, text, "", parts)
+end
+
+func caps_model(config: value.Value, agent: str): str:
+    own := text_of(field(field(config, "agent"), agent), "model")
+    if own.len() > 0:
+        ret own
+    end
+    ret text_of(config, "model")
+end
+
+func load_caps():
+    mut image := false
+    mut pdf := false
+    r := call("GET", "/config", "", CALL_MS)
+    if ok_status(r):
+        mut err := encerr.EncodingError {}
+        config := json.Decode(r.body, err)
+        model := caps_model(config, ENGINE_AGENT)
+        value.ValueFree(config)
+        slash := model.find("/")
+        if slash > 0:
+            pid := model.substr(0, slash)
+            mid := model.substr(slash + 1, model.len() - slash - 1)
+            pr := call("GET", "/config/providers", "", CALL_MS)
+            if ok_status(pr):
+                mut perr := encerr.EncodingError {}
+                all := json.Decode(pr.body, perr)
+                list := field(all, "providers")
+                if value.IsArray(list):
+                    repeat value.ArrayLen(list) in i:
+                        prov := value.ArrayGet(list, i)
+                        if text_of(prov, "id") == pid:
+                            accepts := field(field(field(field(prov, "models"), mid), "capabilities"), "input")
+                            image = flag(accepts, "image")
+                            pdf = flag(accepts, "pdf")
+                        end
+                    end
+                end
+                value.ValueFree(all)
+            end
+        end
+    end
+    _l := sync.Lock(LOCK)
+    CAPS_IMAGE = image
+    CAPS_PDF = pdf
+    CAPS_AT = time.NowMillis()
+    _u := sync.Unlock(LOCK)
 end
 
 func scrub(s: str, mask: str): str:
@@ -390,16 +452,29 @@ pub func NewSession(title: str): str:
     ret json.Get(r.body, "id")
 end
 
-pub func Send(sid: str, text: str): bool:
-    ret send_as(sid, ENGINE_AGENT, text)
+pub func Send(sid: str, text: str, parts: str): bool:
+    ret send_as(sid, ENGINE_AGENT, text, parts)
 end
 
-pub func SendDesktop(sid: str, text: str): bool:
+pub func SendDesktop(sid: str, text: str, parts: str): bool:
     if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
         println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
-        ret send_as(sid, ENGINE_AGENT, text)
+        ret send_as(sid, ENGINE_AGENT, text, parts)
     end
-    ret send_as(sid, DESKTOP_AGENT, text)
+    ret send_as(sid, DESKTOP_AGENT, text, parts)
+end
+
+pub func Accepts(image &: bool, pdf &: bool):
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - CAPS_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_caps()
+    end
+    _a := sync.Lock(LOCK)
+    image = CAPS_IMAGE
+    pdf = CAPS_PDF
+    _b := sync.Unlock(LOCK)
 end
 
 pub func Followup(sid: str, text: str): bool:
@@ -407,8 +482,8 @@ pub func Followup(sid: str, text: str): bool:
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
     model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
     _u := sync.Unlock(LOCK)
-    remember(sid, agent, text, model, false)
-    ret post_prompt(sid, agent, text, model)
+    remember(sid, agent, text, model, false, "")
+    ret post_prompt(sid, agent, text, model, "")
 end
 
 pub func SetFallbacks(list: str):
@@ -442,6 +517,7 @@ pub func Retry(sid: str): bool:
     SESSION_RETRY_AT.put(sid, now)
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
     text := SESSION_PROMPT.get(sid)
+    parts := SESSION_PARTS.has(sid) ? SESSION_PARTS.get(sid) : ""
     model := FALLBACKS.get(tried)
     _u := sync.Unlock(LOCK)
     seen := Poll(sid)
@@ -450,8 +526,8 @@ pub func Retry(sid: str): bool:
     end
     _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
     println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
-    remember(sid, agent, text, model, false)
-    ret post_prompt(sid, agent, text, model)
+    remember(sid, agent, text, model, false, "")
+    ret post_prompt(sid, agent, text, model, parts)
 end
 
 pub func SetRedactions(words: str):
@@ -529,6 +605,7 @@ end
 pub func Abort(sid: str):
     _l := sync.Lock(LOCK)
     _p := SESSION_PROMPT.remove(sid)
+    _q := SESSION_PARTS.remove(sid)
     _u := sync.Unlock(LOCK)
     _r := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
 end

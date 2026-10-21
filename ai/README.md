@@ -47,30 +47,34 @@ kernel mid-stream. A request that was in flight when the process died is marked
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
+Messages can carry up to six attachments (12 MB together). Each file is checked by its content, not only its name: images (PNG, JPEG, GIF, WebP, up to 5 MB) go to the model as image parts and are accepted only while the configured model reports image input; PDF the same way for PDF input. Text and source files (up to 256 KB, no NUL bytes) are read on the server and added to the prompt as `<attached_file>` blocks, so they work with any model. A ZIP (up to 10 MB) is unpacked on the server and only its text files are used. RAR, 7z, tar and other binaries are refused with a message. Attachments are stored in `message_files`, deleted with their chat, and a fallback retry resends them. The `/chats/:id/messages` route needs `client_max_body_size 20m` in nginx.
+
 Every desktop tool call is also recorded in `bridge_calls`: the chat and assistant message it belongs to, the tool, its arguments (with the session token removed), the preview shown in the app, the full output and the final state. `GET /chats/:id` returns them as `calls`, in the order they ran, so reopening a chat shows the same text and command boxes as the live turn. Rows are deleted with their chat.
 
 The API:
 
-| Method and path                                                                                | Purpose                                                                                                     |
-| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                                            |
-| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                                                    |
-| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                                         |
-| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages and recorded agent calls, rename, delete                                                 |
-| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                                         |
-| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                            |
-| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                               |
-| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                       |
-| `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                        |
-| `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                       |
-| `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                      |
-| `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                  |
-| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                              |
-| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                       |
-| `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back |
-| `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                 |
-| `GET /admin/users/:id/chats`, `GET /admin/chats/:id`                                           | a user's chats, and one chat with its owner, messages and desktop calls (the `/admin/chats/<id>` page)      |
-| `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output   |
+| Method and path                                                                                | Purpose                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                                                                          |
+| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                                                                                  |
+| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                                                                       |
+| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages and recorded agent calls, rename, delete                                                                               |
+| `POST /chats/:id/messages`                                                                     | `{text, files?}` starts an answer and returns the pending assistant message; `files` is `[{name, data}]` in base64                        |
+| `GET /capabilities`                                                                            | what can be attached right now: images and PDF follow the engine model's own input capabilities, plus the text extensions and size limits |
+| `GET /chats/:id/files/:fid`                                                                    | one attached file as `{name, kind, mime, data}`                                                                                           |
+| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                                                          |
+| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                                                             |
+| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                                                     |
+| `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                                                      |
+| `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                                                     |
+| `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                                                    |
+| `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                                                |
+| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                                                            |
+| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                                                     |
+| `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back                               |
+| `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                                               |
+| `GET /admin/users/:id/chats`, `GET /admin/chats/:id`                                           | a user's chats, and one chat with its owner, messages and desktop calls (the `/admin/chats/<id>` page)                                    |
+| `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                 |
 
 ### OpenAI-compatible API
 

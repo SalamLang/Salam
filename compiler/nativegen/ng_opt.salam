@@ -496,7 +496,7 @@ func nonneg_rec(g &: Ng, v: int, depth: int, stk &: Vector<int>): bool:
     if is_cint(g, v):
         ret norm_int(g, g.v_ty[v], g.v_i[v]) >= (0 as i64)
     end
-    if v < 0 or g.v_kind[v] != VK_INS or depth > 6:
+    if v < 0 or g.v_kind[v] != VK_INS or depth > 14:
         ret false
     end
     d := g.v_def[v]
@@ -640,6 +640,27 @@ func exact_sdiv(g &: Ng, i: int): bool:
     ret true
 end
 
+func udiv_pow2(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    b := g.i_b[i]
+    if (op != OP_UDIV and op != OP_UREM) or not is_cint(g, b):
+        ret false
+    end
+    t := g.i_ty[i]
+    m := uval(g, t, g.v_i[b])
+    if m < (2 as u64) or (m & (m - (1 as u64))) != (0 as u64):
+        ret false
+    end
+    if op == OP_UREM:
+        g.i_op[i] = OP_AND
+        g.i_b[i] = cval(g, t, (m - (1 as u64)) as i64)
+    else:
+        g.i_op[i] = OP_LSHR
+        g.i_b[i] = cval(g, t, log2_exact(m) as i64)
+    end
+    ret true
+end
+
 func rem_rem(g &: Ng, i: int): bool:
     op := g.i_op[i]
     if op != OP_SREM and op != OP_UREM:
@@ -687,6 +708,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             mut ch := false
             if op == OP_SREM or op == OP_UREM:
                 ch = rem_rem(g, i)
+            end
+            if not ch and (op == OP_UREM or op == OP_UDIV):
+                ch = udiv_pow2(g, i)
             end
             if not ch and (op == OP_SDIV or op == OP_SREM) and g.dom_ok:
                 ch = exact_sdiv(g, i)
@@ -1456,6 +1480,15 @@ func optimize(g &: Ng):
     end
     if not g.off_licm and licm(g):
         remap_all(g)
+        opt_rounds(g)
+    end
+    if not g.off_dbits and demanded_bits(g):
+        simplify_phis(g)
+        opt_rounds(g)
+    end
+    if not g.off_idiom and copy_idiom(g):
+        remap_all(g)
+        simplify_phis(g)
         opt_rounds(g)
     end
     if not g.off_rvec and reduce_vectorize(g):

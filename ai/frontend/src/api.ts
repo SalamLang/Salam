@@ -30,6 +30,23 @@ export type Message = {
   calls?: MessageCall[];
   ms?: number;
 };
+export type TraceItem =
+  | { kind: "prompt"; text: string; at: number }
+  | { kind: "think"; text: string; at: number }
+  | { kind: "text"; text: string; synthetic: boolean; at: number }
+  | {
+      kind: "tool";
+      tool: string;
+      status: string;
+      title: string;
+      input: string;
+      output: string;
+      error: string;
+      at: number;
+      end: number;
+    }
+  | { kind: "file"; text: string }
+  | { kind: "error"; text: string; at: number };
 export type Phase = "thinking" | "searching" | "writing" | "checking" | "done";
 export type ThinkStep = { kind: "think"; text: string };
 export type ToolStep = {
@@ -529,6 +546,11 @@ export const api = {
     call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
       "GET",
       `/admin/chats/${id}`,
+    ),
+  adminTrace: (id: number) =>
+    call<{ trace: TraceItem[]; saved: boolean }>(
+      "GET",
+      `/admin/messages/${id}/trace`,
     ),
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>

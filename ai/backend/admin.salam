@@ -25,6 +25,7 @@ include aiweb "web.salam"
 include aioauth "oauth.salam"
 include aiopenai "openai.salam"
 include aiturn "turn.salam"
+include aiengine "engine.salam"
 
 const TEHRAN := 12600
 const EPOCH_JDN := 2440588
@@ -447,6 +448,56 @@ func get_admin_chat(ctx: i64):
     aiweb.Reply(ctx, 200, `{"chat": ` + head + `, "messages": ` + json.Array(items) + `, "calls": ` + json.Array(calls) + "}")
 end
 
+func get_trace(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mut chat := ""
+    mut status := ""
+    mut created := 0 as i64
+    mut stored := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT chat_id, status, created, COALESCE(trace, '') FROM messages WHERE id = ?1 AND role = 'assistant'", one(id))
+    if aistore.Next(rows):
+        chat = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+        stored = aistore.Text(rows, 3)
+    end
+    aistore.Finish(rows)
+    if chat.len() == 0:
+        aistore.Unlock()
+        aiweb.Fail(ctx, 404, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    if stored.len() > 0:
+        aistore.Unlock()
+        aiweb.Reply(ctx, 200, `{"trace": ` + stored + `, "saved": true}`)
+        ret
+    end
+    sid := aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(chat))
+    token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1", one(chat))
+    next := aistore.OneText("SELECT COALESCE(MIN(created), 0) FROM messages WHERE chat_id = ?1 AND role = 'user' AND id > ?2", two(chat, id))
+    aistore.Unlock()
+    if sid.len() == 0:
+        aiweb.Reply(ctx, 200, `{"trace": [], "saved": false}`)
+        ret
+    end
+    mut ok := false
+    trace := aiengine.Transcript(sid, created * 1000, (next.to_int() as i64) * 1000, token, ok)
+    if not ok:
+        aiweb.Fail(ctx, 502, "engine", "جزئیات این پاسخ از موتور دستیار خوانده نشد.")
+        ret
+    end
+    if status != "pending" and trace != "[]":
+        aistore.Lock()
+        _u := aistore.Run("UPDATE messages SET trace = ?1 WHERE id = ?2", two(trace, id))
+        aistore.Unlock()
+    end
+    aiweb.Reply(ctx, 200, `{"trace": ` + trace + `, "saved": false}`)
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -460,11 +511,12 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/users", list_users)
     router.Get(r, "/admin/users/:id/chats", list_user_chats)
     router.Get(r, "/admin/chats/:id", get_admin_chat)
+    router.Get(r, "/admin/messages/:id/trace", get_trace)
     router.Get(r, "/admin/events", list_events)
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

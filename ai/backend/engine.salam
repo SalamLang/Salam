@@ -24,6 +24,7 @@ import time
 
 const CALL_MS := 20000
 const SEND_MS := 60000
+const TRACE_FIELD_MAX := 200000
 
 mut ENGINE_HOST := "127.0.0.1"
 mut ENGINE_PORT := 4096
@@ -40,6 +41,7 @@ mut SESSION_MODEL := HashMap {} as HashMap<str, str>
 mut SESSION_TRY := HashMap {} as HashMap<str, int>
 mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
 mut FALLBACKS := Vector {} as Vector<str>
+mut REDACT_WORDS := Vector {} as Vector<str>
 
 struct Answer:
     pub status: int = 0
@@ -291,6 +293,74 @@ func send_as(sid: str, agent: str, text: str): bool:
     ret post_prompt(sid, agent, text, "")
 end
 
+func scrub(s: str, mask: str): str:
+    mut t := s
+    if mask.len() > 0:
+        t = str.Replace(t, mask, "…")
+    end
+    each w in REDACT_WORDS:
+        t = str.Replace(t, w, "assistant")
+    end
+    if t.len() > TRACE_FIELD_MAX:
+        t = str.CharSubstr(t, 0, TRACE_FIELD_MAX / 2) + "\n…"
+    end
+    ret t
+end
+
+func millis(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func trace_part(p: value.Value, mask: str): str:
+    kind := text_of(p, "type")
+    mut m := Vector {} as Vector<str>
+    if kind == "text":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "text"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberBool("synthetic", flag(p, "synthetic")))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "reasoning":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "think"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "tool":
+        state := field(p, "state")
+        times := field(state, "time")
+        given := field(state, "input")
+        mut args := "{}"
+        if value.IsObject(given):
+            args = json.Encode(given, json.JSONOptions { indent = "  " })
+        end
+        m.push(json.Member("kind", "tool"))
+        m.push(json.Member("tool", text_of(p, "tool")))
+        m.push(json.Member("status", text_of(state, "status")))
+        m.push(json.Member("title", scrub(text_of(state, "title"), mask)))
+        m.push(json.Member("input", scrub(args, mask)))
+        m.push(json.Member("output", scrub(text_of(state, "output"), mask)))
+        m.push(json.Member("error", scrub(text_of(state, "error"), mask)))
+        m.push(json.MemberInt("at", millis(times, "start")))
+        m.push(json.MemberInt("end", millis(times, "end")))
+    else kind == "file":
+        m.push(json.Member("kind", "file"))
+        m.push(json.Member("text", text_of(p, "filename") + " " + text_of(p, "mime")))
+    else:
+        ret ""
+    end
+    ret json.Object(m)
+end
+
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
     LOCK = sync.NewMutex()
     mut rest := str.TrimPrefix(url, "http://")
@@ -382,6 +452,78 @@ pub func Retry(sid: str): bool:
     println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
     remember(sid, agent, text, model, false)
     ret post_prompt(sid, agent, text, model)
+end
+
+pub func SetRedactions(words: str):
+    mut found := Vector {} as Vector<str>
+    each w in str.Split(words, ","):
+        t := str.Trim(w)
+        if t.len() > 0:
+            found.push(t)
+            found.push(str.Lower(t))
+        end
+    end
+    REDACT_WORDS = found
+end
+
+pub func Transcript(sid: str, from_ms: i64, upto_ms: i64, mask: str, ok &: bool): str:
+    ok = false
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if not ok_status(r):
+        ret "[]"
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(r.body, err)
+    if not value.IsArray(list):
+        value.ValueFree(list)
+        ret "[]"
+    end
+    mut out := Vector {} as Vector<str>
+    repeat value.ArrayLen(list) in i:
+        msg := value.ArrayGet(list, i)
+        info := field(msg, "info")
+        at := millis(field(info, "time"), "created")
+        if at >= from_ms and (upto_ms <= 0 or at < upto_ms):
+            role := text_of(info, "role")
+            parts := field(msg, "parts")
+            if role == "user":
+                mut pieces := Vector {} as Vector<str>
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        pt := value.ArrayGet(parts, j)
+                        if text_of(pt, "type") == "text":
+                            pieces.push(text_of(pt, "text"))
+                        end
+                    end
+                end
+                mut m := Vector {} as Vector<str>
+                m.push(json.Member("kind", "prompt"))
+                m.push(json.Member("text", scrub(str.Join(pieces, "\n\n"), mask)))
+                m.push(json.MemberInt("at", at))
+                out.push(json.Object(m))
+            else role == "assistant":
+                e := field(info, "error")
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        piece := trace_part(value.ArrayGet(parts, j), mask)
+                        if piece.len() > 0:
+                            out.push(piece)
+                        end
+                    end
+                end
+                if not value.IsNull(e):
+                    mut m := Vector {} as Vector<str>
+                    m.push(json.Member("kind", "error"))
+                    m.push(json.Member("text", scrub(text_of(field(e, "data"), "message") + " " + text_of(e, "name"), mask)))
+                    m.push(json.MemberInt("at", at))
+                    out.push(json.Object(m))
+                end
+            end
+        end
+    end
+    value.ValueFree(list)
+    ok = true
+    ret json.Array(out)
 end
 
 pub func Abort(sid: str):

@@ -1,7 +1,7 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phases 1 and 2 implemented** (`compiler/semantic/sema_own.salam`,
-`compiler/semantic/sema_strfree.salam`). Later phases below are planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 to 3 implemented** (`compiler/semantic/sema_own.salam`,
+`sema_strfree.salam`, `sema_summary.salam`). Later phases below are planned. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -148,12 +148,59 @@ The remaining string leaks come from call results (`f() + "x"`, or a
 `str.FromInt` result stored in a local). Whether a function returns a fresh
 string is an interprocedural fact, so they wait for phase 3 summaries.
 
+## Function summaries (phase 3)
+
+Lifetime annotations exist so a compiler can see what a call does to its
+arguments without looking inside the callee. Salam infers that instead.
+After type checking, `sema_summary.salam` computes these facts for every
+function, std and generic instances included, solved to a fixpoint over the
+whole call graph:
+
+- **fresh result**: every `ret` returns a newly allocated string, so the
+  caller owns it;
+- **keeps** parameter *i*: the argument may be stored, returned or captured;
+- **frees** parameter *i*: some path frees it; **must free** when an
+  unconditional top-level statement does;
+- **grows** parameter *i*: some path pushes into a container reachable from
+  it, which may move that buffer;
+- **returns an alias** of parameter *i*: for example
+  `At(a, id): Node* ... ret a.nodes.ref(id)`.
+
+Sema records the resolved target of every call, so overloads, methods, package
+functions and generic instances all map to the right summary. Interface (`dyn`)
+calls and externs are unknown. A short list of libc readers (`memcpy`,
+`strlen`, ...) is known not to keep its arguments.
+
+What the summaries buy:
+
+- **Leaks.** `"x" + f()` frees `f()`'s result when `f` returns fresh, and
+  `x := f()` is auto-freed under the phase 2 rules. A local whose every use
+  passes it to a parameter that is only read counts as non-escaping.
+- **Errors across calls.** A use after a call that must free the argument is
+  E139, even several calls deep (`forget(s)` calls `release(s)`, which frees
+  it).
+- **Warnings across calls** (warn mode): a may-free callee gives W142. A callee
+  that grows a container gives W144 on every copy and `.ref()` pointer taken
+  before the call, including results of alias-returning functions such as
+  `at.At`.
+
+The first sweep found real bugs in std:
+
+- `std/telegram/bot`: `_put_chat_id(params: HashMap<str, str>, ...)` took the
+  map by value. Its `put` resized the callee's copy, so every request built
+  through it silently lost `chat_id`. It now takes `params &:`.
+- `std/net/socketio`: `_resolve_ack` kept scanning after the matching waiter.
+  A second waiter with the same id would reuse `bins` after they were freed or
+  queued. It now stops at the match.
+- `std/archive/rar`: the free and the later use of an entry name tested the
+  same condition twice; it is now computed once.
+
 ## What is not checked yet
 
 Each item below is a phase on the roadmap, or a deliberate limit:
 
-- **Interprocedural effects.** A helper that frees its argument, or pushes into
-  a `&:` Vector while the caller holds a `.ref()`, is invisible (phase 3).
+- **Globals and indirect calls.** Effects through global variables, function
+  values and `dyn` calls are not summarized.
 - **Element ownership.** Freeing a `Vector<str>` frees the buffer only, as
   today.
 - **Raw pointers from `mem.Allocate`/`extern`.** Tracked like any other token,
@@ -167,12 +214,8 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    by `defer`; warnings for may-paths and buffer moves.
 2. **Phase 2 (done).** Fused concatenation chains and auto-free of
    non-escaping fresh string locals; see above.
-3. **Phase 3.** Function summaries, inferred bottom-up over the call graph:
-   which parameters are only read, mutated, freed, stored, or invalidated (for
-   example `a.nodes`), and whether the result is fresh or an alias of a
-   parameter path. This replaces lifetime annotations. Enables the
-   `n := at.At(a, id)` across `check_*(a, ...)` check and overlapping `&:`
-   arguments.
+3. **Phase 3 (done).** Inferred function summaries in place of lifetime
+   annotations; see above.
 4. **Phase 4.** Moves and automatic drop for owned locals: `b := a` of an
    owned `Vector`/`HashMap` moves; using `a` after that is an error with a
    `.copy()` fix-it. Owned locals that are not moved get a synthesized `defer

@@ -91,6 +91,26 @@ func eval_bin(g &: Ng, op: int, t: int, x: i64, y: i64, ok &: bool): i64:
     ret r
 end
 
+func add_reassoc(g &: Ng, i: int): bool:
+    if g.i_op[i] != OP_ADD or not is_cint(g, g.i_b[i]):
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    if g.i_op[d] != OP_ADD or not is_cint(g, g.i_b[d]) or g.i_ty[d] != g.i_ty[i]:
+        ret false
+    end
+    t := g.i_ty[i]
+    nf := g.i_f[i] & g.i_f[d] & IF_NSW
+    g.i_a[i] = g.i_a[d]
+    g.i_b[i] = cval(g, t, g.v_i[g.i_b[d]] + g.v_i[g.i_b[i]])
+    g.i_f[i] = (g.i_f[i] & (0 - 1 - IF_NSW)) | nf
+    ret true
+end
+
 func fold_bin(g &: Ng, i: int): bool:
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -1009,6 +1029,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_bin(g, i)
                 if ch:
                     g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
+                else op == OP_ADD:
+                    ch = add_reassoc(g, i)
                 end
             else op == OP_ICMP:
                 ch = fold_icmp(g, i)
@@ -1834,6 +1856,18 @@ func optimize(g &: Ng):
         remap_all(g)
         simplify_phis(g)
         opt_rounds(g)
+    end
+    if not g.off_runroll:
+        mut nr := 0
+        mut rch := false
+        until nr < 6 and runtime_unroll(g):
+            nr += 1
+            rch = true
+        end
+        if rch:
+            simplify_phis(g)
+            opt_rounds(g)
+        end
     end
     if not g.off_widen and widen_ivs(g):
         opt_rounds(g)

@@ -94,6 +94,9 @@ recursive. Each function then goes through:
    chain. Loop load elimination keeps a value stored in one iteration and
    loaded in the next (`cur[j]` then `cur[j - 1]`) in a register, and 32-bit
    counters that are only sign-extended for indexing become 64-bit counters.
+   Small innermost loops whose trip count is only known at runtime
+   (`until j < i:` with `j += 1`) run two iterations per test, with the
+   original loop finishing the odd one.
 9. Strength reduction: an array address that is affine in a loop counter, such
    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
    Addresses that differ only by a constant share one pointer.
@@ -154,7 +157,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,widen,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,runroll,widen,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

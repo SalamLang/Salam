@@ -81,7 +81,10 @@ recursive. Each function then goes through:
 7. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too.
-8. Loop-invariant code motion of pure instructions into loop preheaders.
+8. Loop-invariant code motion of pure instructions into loop preheaders, and
+   unswitching: an innermost loop that branches on a loop-invariant condition
+   is versioned into one copy per outcome. Compares on a counter are folded
+   when the counter's range inside its loop decides them.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
    `paddd` loop followed by the scalar loop for the leftover elements, and a
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
@@ -151,7 +154,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,lle,dbits,idiom,rvec,widen,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,widen,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -167,20 +170,21 @@ apart from the build timestamp.
 
 ## Where it stands
 
-On the benchmark suite most programs run within 0-20% of `gcc -O3`, and about a
-third are even with it or faster (among them `binary_search_stress`,
-`collatz`, `quicksort`, `sqrt_decomposition`, `monte_carlo_pi`,
-`caesar_cipher`, `sieve_eratosthenes`, `counting_sort` and `lcg_random`). The
-largest remaining gap is `game_of_life`, where gcc unswitches the inner loop on
-the row bounds.
+Measured by CPU time against the LLVM backend at `-O3` on the benchmark suite,
+the native backend comes out at about 1.05x in geometric mean and is faster on
+17 of the 42 programs (among them `fib_recursive`, `lcg_random`, `dot_product`,
+`sum_mod`, `caesar_cipher`, `monte_carlo_pi` and `trapezoidal_integration`).
+Against `gcc -O3` on the C backend it is even or faster on about a third of
+them. The largest remaining gaps are `game_of_life` and
+`longest_increasing_subsequence`, where LLVM also splits the index range of the
+inner loop and unrolls it.
 
 Not there yet:
 
 - No DWARF line tables (`-g`), so there is no source-level stepping, although
   backtraces work through `.eh_frame`.
-- Loop vectorization covers integer sum reductions only, and there is no loop
-  unswitching. Other vector code comes from the straight-line (SLP)
-  vectorizer.
+- Loop vectorization covers integer sum reductions only. Other vector code
+  comes from the straight-line (SLP) vectorizer.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
 - Linking still uses lld or the system linker. A built-in static linker over
   the bundled musl `libc.a` would make Linux builds fully self-contained.

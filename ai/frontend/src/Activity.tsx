@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ThinkStep, ToolStep } from "./api";
+import { BidiText } from "./Bidi";
 import {
   IconAlert,
   IconBook,
@@ -73,9 +74,7 @@ function Thought({ text, live }: { text: string; live: boolean }) {
   const long = text.length > 320;
   return (
     <div className={`thought ${live ? "live" : ""}`}>
-      <p dir="auto" className={long && !more && !live ? "clamped" : undefined}>
-        {text}
-      </p>
+      <BidiText text={text} className={long && !more && !live ? "clamped" : undefined} />
       {long && !live && (
         <button type="button" className="link small-link" onClick={() => setMore((v) => !v)}>
           {more ? "کمتر" : "ادامه"}

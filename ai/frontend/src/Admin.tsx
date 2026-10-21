@@ -5,6 +5,7 @@ import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fm
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
 import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
+import { Trace } from "./Trace";
 import { confirmDialog, Subject } from "./Confirm";
 
 type Picked = { id: number; name: string } | null;
@@ -497,7 +498,17 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td title={u.last_active_api ? fmtDateTime(u.last_active_api) : undefined}>{fmtRelative(u.last_active_api)}</td>
               </tr>
             ))}
-            {data && data.users.length === 0 && (
+            {!data && !error && (
+              <tr>
+                <td colSpan={14} className="empty-cell">
+                  <span className="list-loading inline" role="status">
+                    <span className="spinner" />
+                    <span>در حال بارگذاری کاربران…</span>
+                  </span>
+                </td>
+              </tr>
+            )}
+            {data && data.users.length === 0 && !loading && (
               <tr>
                 <td colSpan={14} className="empty-cell">
                   کاربری پیدا نشد.
@@ -509,7 +520,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
       </div>
       <div className="pager">
         <span className="muted">
-          {fmtNum(from)} تا {fmtNum(to)} از {fmtNum(total)}
+          {data ? `${fmtNum(from)} تا ${fmtNum(to)} از ${fmtNum(total)}` : "در حال بارگذاری…"}
         </span>
         <div>
           <button type="button" className="button ghost small" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
@@ -1062,6 +1073,14 @@ function Payments({ picked }: { picked: Picked }) {
 function ChatMessages({ chatId }: { chatId: string }) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [error, setError] = useState("");
+  const [traced, setTraced] = useState<Set<number>>(new Set());
+  const toggleTrace = (id: number) =>
+    setTraced((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     let live = true;
@@ -1092,6 +1111,12 @@ function ChatMessages({ chatId }: { chatId: string }) {
           <div className="admin-msg-body" dir="auto">
             {m.body ? <Markdown text={m.body} /> : <span className="muted">(بدون متن)</span>}
           </div>
+          {m.role === "assistant" && (
+            <button type="button" className="link small-link" aria-expanded={traced.has(m.id)} onClick={() => toggleTrace(m.id)}>
+              {traced.has(m.id) ? "بستن جزئیات کامل" : "همه‌ی جزئیات: فکرها، کدها، فرمان‌ها و خروجی‌ها"}
+            </button>
+          )}
+          {m.role === "assistant" && traced.has(m.id) && <Trace messageId={m.id} />}
         </div>
       ))}
       {messages.length === 0 && <p className="muted">پیامی در این گفت‌وگو نیست.</p>}

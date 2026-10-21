@@ -195,6 +195,12 @@ func use_reg(g &: Ng, v: int): int:
             ret r3
         end
         r4 := g.vv[v]
+        if r4 >= 0:
+            sr := split_lookup(g, v)
+            if sr >= 0:
+                ret sr
+            end
+        end
         if r4 < 0:
             fail(g, "native backend: value used before its definition in " + tab_str(g.syms, g.f_sym))
             ret gpr(g)
@@ -671,6 +677,30 @@ func setup_phis(g &: Ng):
                 g.vv[r] = new_reg_ty(g, t)
             end
             i = g.i_next[i]
+        end
+    end
+end
+
+func split_copies(g &: Ng, b: int):
+    repeat g.lp_pre.len() in lp:
+        if g.lp_pre[lp] != b:
+            continue
+        end
+        repeat g.lpv_val.len() in k:
+            if g.lpv_loop[k] != lp:
+                continue
+            end
+            v := g.lpv_val[k]
+            if g.vak[v] != AK_NONE or addr_only(g, v) or g.vv[v] < 0:
+                continue
+            end
+            src := use_reg(g, v)
+            nr := vnew(g, g.mc.vcls[src])
+            g.mc.vwide[nr] = g.mc.vwide[src]
+            _c := e_copy(g, nr, src)
+            g.sp_loop.push(lp)
+            g.sp_val.push(v)
+            g.sp_reg.push(nr)
         end
     end
 end
@@ -2044,6 +2074,33 @@ func sret_forward(g &: Ng, i: int): int:
     ret j
 end
 
+func load_ext_user(g &: Ng, i: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if r < 0 or g.v_uses[r] != 1 or t == T_I1:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 1 and sz != 2 and sz != 4:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        op := g.i_op[j]
+        if (op == OP_SEXT or op == OP_ZEXT) and g.i_a[j] == r:
+            if op == OP_SEXT and sz == 4 and asz(g, g.i_ty[j]) != 8:
+                ret 0 - 1
+            end
+            ret j
+        end
+        j = g.i_next[j]
+    end
+    ret 0 - 1
+end
+
 func isel_load(g &: Ng, i: int):
     t := g.i_ty[i]
     a := g.i_a[i]
@@ -2083,6 +2140,22 @@ func isel_load(g &: Ng, i: int):
     end
     r3 := gpr(g)
     sz := msz(g, t)
+    ext := load_ext_user(g, i)
+    if ext >= 0:
+        dsz := asz(g, g.i_ty[ext])
+        if g.i_op[ext] == OP_SEXT:
+            ls := e_rm(g, M_LDSX, dsz, r3, m)
+            g.mc.sz2[ls] = sz
+        else sz == 4:
+            _lz := e_rm(g, M_LD, 4, r3, m)
+        else:
+            lz := e_rm(g, M_LDZX, 4, r3, m)
+            g.mc.sz2[lz] = sz
+        end
+        g.skipi[ext] = true
+        set_res(g, ext, r3)
+        ret
+    end
     if sz >= 4:
         _l2 := e_rm(g, M_LD, sz, r3, m)
     else:
@@ -2110,7 +2183,7 @@ func isel_store(g &: Ng, i: int):
         ret
     end
     atomic := (g.i_f[i] & IF_ATOMIC) != 0
-    if g.v_kind[v] == VK_INT and not is_flt(g, t) and is_imm32(g.v_i[v]) and not atomic:
+    if g.v_kind[v] == VK_INT and not is_flt(g, t) and is_imm32(g.v_i[v]) and (not atomic or (g.i_f[i] & IF_SEQ) == 0):
         m2 := mem_of(g, p, 0 as i64)
         si := mi_new(g, M_STI, msz(g, t))
         set_mem(g, si, m2)
@@ -2127,7 +2200,7 @@ func isel_store(g &: Ng, i: int):
         _s := e_mr(g, M_FST, fsz(t), m3, r)
         ret
     end
-    if atomic:
+    if atomic and (g.i_f[i] & IF_SEQ) != 0:
         t2 := gpr(g)
         _c := e_copy(g, t2, r)
         _x := e_rm(g, M_XCHG, msz(g, t), t2, m3)
@@ -2727,6 +2800,7 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_CALL: isel_call(g, i) ret end
         OP_BR:
+            split_copies(g, b)
             phi_copies(g, b)
             _j := e_jmp(g, g.i_b[i])
             ret
@@ -2816,7 +2890,14 @@ func isel_function(g &: Ng):
         g.mc.lorder.push(b)
     end
     setup_phis(g)
+    g.cur_b = 0 - 1
+    g.sp_val.clear()
+    g.lp_pre.clear()
+    if g.opt and not g.off_split:
+        split_plan(g)
+    end
     each b2 in g.mc.lorder:
+        g.cur_b = b2
         g.mc.bstart[b2] = g.mc.op.len()
         _l := e_label(g, b2)
         if b2 == 0:

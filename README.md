@@ -286,6 +286,26 @@ toolchain, not by the raw triple: `<arch>-w64-mingw32/` for `*-windows-gnu`
 > Host-native builds without `--target` continue to use the fast C backend
 > (tcc/gcc/clang) and the full standard library.
 
+### Native code generator
+
+`--backend=native` compiles straight to x86-64 machine code and writes the
+object file itself, with no assembler, C compiler or LLVM library involved. It
+targets Linux (ELF) and Windows (COFF, with unwind tables), and only needs a
+linker at the end: lld in-process when the compiler embeds LLVM, otherwise the
+system `cc` or `x86_64-w64-mingw32-gcc`.
+
+```sh
+salam build main.salam --backend=native
+salam build main.salam --backend=native --target=x86_64-w64-windows-gnu
+salam build main.salam --backend=native --emit-asm    # also writes main.s
+```
+
+It shares llvmgen's lowering with the LLVM backend, so it covers the whole
+language and standard library, and it has its own optimizer (inlining, SROA,
+mem2reg, constant folding, jump threading, linear-scan register allocation).
+See [docs/NATIVE_BACKEND.md](docs/NATIVE_BACKEND.md) for how it works and how
+to test it.
+
 ## 🐳 [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 
 The compiler ships a multi-stage [`Dockerfile`](compiler/docker/Dockerfile) and a

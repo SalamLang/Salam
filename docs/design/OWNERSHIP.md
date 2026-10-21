@@ -1,7 +1,7 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phases 1 to 3 implemented** (`compiler/semantic/sema_own.salam`,
-`sema_strfree.salam`, `sema_summary.salam`). Later phases below are planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 to 4 implemented** (`compiler/semantic/sema_own.salam`,
+`sema_strfree.salam`, `sema_summary.salam`). Phases 5 and 6 are planned. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -195,6 +195,37 @@ The first sweep found real bugs in std:
 - `std/archive/rar`: the free and the later use of an entry name tested the
   same condition twice; it is now computed once.
 
+## Automatic drop of owned containers (phase 4)
+
+A `Vector` or `HashMap` local is freed at the end of its scope, with nothing
+written by hand, when all of the following hold:
+
+- it starts as an empty literal (`Vector {} as Vector<int>`, `HashMap {}`) or
+  as the result of a call whose summary says it returns a fresh container;
+- it is declared directly in a block, not in a `match` arm;
+- every use only reads it or grows it: method calls, `each`, passing it to a
+  parameter that is only read or grown;
+- it is never reassigned, returned, stored, captured, freed by hand, or passed
+  to something that keeps or frees it.
+
+So the usual shape below needs no `defer v.free()`:
+
+```salam
+mut v := Vector {} as Vector<int>
+fill(v, 10)
+println total(v)
+```
+
+Code that already frees by hand keeps working unchanged: a hand-written
+`free()` or `defer v.free()` disqualifies the variable, so nothing is freed
+twice. The drop frees what `free()` frees (the buffer, not the elements). C
+frees the header fields directly and LLVM loads them through the local's
+address. JS and the interpreter see a bare read.
+
+`b := a` on an owned container is not a move yet. Phase 1 already reports the
+dangerous consequences of the shared buffer (E139, W144). Making it a hard
+move would break existing code, so it waits for phase 6.
+
 ## What is not checked yet
 
 Each item below is a phase on the roadmap, or a deliberate limit:
@@ -216,13 +247,12 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    non-escaping fresh string locals; see above.
 3. **Phase 3 (done).** Inferred function summaries in place of lifetime
    annotations; see above.
-4. **Phase 4.** Moves and automatic drop for owned locals: `b := a` of an
-   owned `Vector`/`HashMap` moves; using `a` after that is an error with a
-   `.copy()` fix-it. Owned locals that are not moved get a synthesized `defer
-x.free()`, lowered in sema so all four backends get it for free. Explicit
-   `defer x.free()` becomes a warning.
+4. **Phase 4 (done).** Automatic drop of owned `Vector`/`HashMap` locals;
+   see above.
 5. **Phase 5.** Closures: a non-escaping lambda borrows its captures and gets
    a stack-allocated environment (faster than today's heap env); an escaping
    lambda moves its captures.
 6. **Phase 6.** Flip `--ownership=error` to the default one release after
-   `std/` and `compiler/` are clean under it.
+   `std/` and `compiler/` are clean under it, and make `b := a` of an owned
+   container a move (use of `a` after it becomes an error with a `.copy()`
+   fix-it).

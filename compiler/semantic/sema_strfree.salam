@@ -1,0 +1,281 @@
+package semantic
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+
+pub const SF_MARK := "__own_free"
+
+pub struct SfCand:
+    pub name: str = ""
+    pub decl: int = 0
+    pub blk: int = 0
+    pub idx: int = 0
+    pub use: int = 0
+    pub ok: bool = true
+end
+
+func sf_is_concat(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    ret n.kind == at.AST_BINARY and n.op == tok.TK_PLUS and str.Equals(n.type_str, "str")
+end
+
+func sf_find(cs &: Vector<SfCand>, name: str): int:
+    repeat cs.len() in i:
+        if str.Equals(cs.get(i).name, name):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func sf_kill(cs &: Vector<SfCand>, name: str):
+    i := sf_find(cs, name)
+    if i >= 0:
+        mut c := cs.get(i)
+        c.ok = false
+        cs.set(i, c)
+    end
+end
+
+func sf_collect(a &: at.Ast, nid: int, cs &: Vector<SfCand>, seen &: Vector<str>, dup &: Vector<str>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL or k == at.AST_PARAM or k == at.AST_REPEAT:
+        nm := at.At(a, nid).name
+        if str.Len(nm) > 0:
+            mut hit := false
+            repeat seen.len() in i:
+                if str.Equals(seen.get(i), nm):
+                    hit = true
+                end
+            end
+            if hit:
+                dup.push(nm)
+            else:
+                seen.push(nm)
+            end
+        end
+    end
+    if k == at.AST_BLOCK:
+        repeat at.ChildCount(a, nid) in j:
+            c := at.Child(a, nid, j)
+            if c != 0 and at.KindOf(a, c) == at.AST_VAR_DECL and not at.At(a, c).is_mut and sf_is_concat(a, at.At(a, c).a):
+                cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j })
+            end
+        end
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    sf_collect(a, na, cs, seen, dup)
+    sf_collect(a, nb, cs, seen, dup)
+    sf_collect(a, nc, cs, seen, dup)
+    sf_collect(a, nd, cs, seen, dup)
+    repeat at.ChildCount(a, nid) in m:
+        sf_collect(a, at.Child(a, nid, m), cs, seen, dup)
+    end
+end
+
+func sf_is_print(a &: at.Ast, callee: int): bool:
+    if callee == 0 or at.KindOf(a, callee) != at.AST_IDENTIFIER:
+        ret false
+    end
+    nm := at.At(a, callee).name
+    ret str.Equals(nm, "print") or str.Equals(nm, "println") or str.Equals(nm, "printerr") or str.Equals(nm, "printerrln")
+end
+
+func sf_plain_result(ts: str): bool:
+    ret str.Len(ts) > 0 and not str.Equals(ts, "str") and not str.EndsWith(ts, "*") and not str.StartsWith(ts, "Vector") and not str.StartsWith(ts, "HashMap") and not str.StartsWith(ts, "dyn ")
+end
+
+func sf_str_pkg(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    pk := scope_lookup(s, s.global, at.At(a, nid).name)
+    if pk == 0:
+        ret false
+    end
+    pv := sym_at(s, pk)
+    ret pv.kind == SYM_PACKAGE and str.Equals(pv.pkgname, "str")
+end
+
+func sf_use_ok(s &: Sema, a &: at.Ast, id: int, par: int, gpar: int): bool:
+    if par == 0:
+        ret false
+    end
+    pk := at.KindOf(a, par)
+    if pk == at.AST_BINARY:
+        op := at.At(a, par).op
+        ret op == tok.TK_PLUS or op == tok.TK_EQ or op == tok.TK_NE or op == tok.TK_LT or op == tok.TK_LE or op == tok.TK_GT or op == tok.TK_GE
+    end
+    if pk == at.AST_INDEX:
+        ret at.At(a, par).a == id
+    end
+    if pk == at.AST_SWITCH or pk == at.AST_MATCH:
+        ret at.At(a, par).a == id
+    end
+    if pk == at.AST_MEMBER:
+        if at.At(a, par).a != id or gpar == 0 or at.KindOf(a, gpar) != at.AST_CALL or at.At(a, gpar).a != par:
+            ret false
+        end
+        mn := at.At(a, par).name
+        ret sf_plain_result(at.At(a, gpar).type_str) or str.Equals(mn, "substr") or str.Equals(mn, "concat")
+    end
+    if pk == at.AST_CALL:
+        callee := at.At(a, par).a
+        if callee == id:
+            ret false
+        end
+        if sf_is_print(a, callee):
+            ret true
+        end
+        if callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER and sf_str_pkg(s, a, at.At(a, callee).a):
+            ret sf_plain_result(at.At(a, par).type_str) and not at.At(a, id).ref_arg
+        end
+    end
+    ret false
+end
+
+func sf_scan_uses(s &: Sema, a &: at.Ast, nid: int, par: int, gpar: int, in_lam: bool, cs &: Vector<SfCand>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_IDENTIFIER:
+        nm := at.At(a, nid).name
+        ci := sf_find(cs, nm)
+        if ci >= 0:
+            mut c := cs.get(ci)
+            if c.use == 0:
+                c.use = nid
+            end
+            if in_lam or not sf_use_ok(s, a, nid, par, gpar):
+                c.ok = false
+            end
+            cs.set(ci, c)
+        end
+        ret
+    end
+    lam := in_lam or k == at.AST_LAMBDA
+    if k == at.AST_LAMBDA:
+        caps := at.At(a, nid).captures
+        repeat caps.len() in q:
+            sf_kill(cs, at.At(a, caps.get(q)).name)
+        end
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    sf_scan_uses(s, a, na, nid, par, lam, cs)
+    sf_scan_uses(s, a, nb, nid, par, lam, cs)
+    sf_scan_uses(s, a, nc, nid, par, lam, cs)
+    sf_scan_uses(s, a, nd, nid, par, lam, cs)
+    repeat at.ChildCount(a, nid) in m:
+        sf_scan_uses(s, a, at.Child(a, nid, m), nid, par, lam, cs)
+    end
+end
+
+func sf_insert(a &: at.Ast, c: SfCand):
+    useid := c.use
+    idn := at.NewNode(a, at.AST_IDENTIFIER)
+    mut iv := at.Get(a, useid)
+    iv.list = Vector {} as Vector<int>
+    iv.dims = Vector {} as Vector<int>
+    iv.typarams = Vector {} as Vector<str>
+    iv.typaram_bounds = Vector {} as Vector<str>
+    iv.aliases = Vector {} as Vector<str>
+    iv.captures = Vector {} as Vector<int>
+    iv.synthetic = true
+    iv.ref_arg = false
+    iv.ref_arg_ptr = false
+    at.Put(a, idn, iv)
+    es := at.NewNode(a, at.AST_EXPR_STMT)
+    mut ev := at.Get(a, c.decl)
+    ev.kind = at.AST_EXPR_STMT
+    ev.name = SF_MARK
+    ev.synthetic = true
+    ev.a = idn
+    ev.b = 0
+    ev.c = 0
+    ev.d = 0
+    ev.ty = 0
+    ev.type_str = ""
+    ev.list = Vector {} as Vector<int>
+    ev.dims = Vector {} as Vector<int>
+    ev.typarams = Vector {} as Vector<str>
+    ev.typaram_bounds = Vector {} as Vector<str>
+    ev.aliases = Vector {} as Vector<str>
+    ev.captures = Vector {} as Vector<int>
+    at.Put(a, es, ev)
+    df := at.NewNode(a, at.AST_DEFER)
+    mut dv := at.Get(a, es)
+    dv.kind = at.AST_DEFER
+    dv.name = ""
+    dv.a = es
+    dv.list = Vector {} as Vector<int>
+    dv.dims = Vector {} as Vector<int>
+    dv.typarams = Vector {} as Vector<str>
+    dv.typaram_bounds = Vector {} as Vector<str>
+    dv.aliases = Vector {} as Vector<str>
+    dv.captures = Vector {} as Vector<int>
+    at.Put(a, df, dv)
+    mut bv := at.Get(a, c.blk)
+    pos := c.idx + 1
+    if pos >= bv.list.len():
+        bv.list.push(df)
+    else:
+        bv.list.insert(pos, df)
+    end
+    at.Put(a, c.blk, bv)
+end
+
+pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
+    if g_sm_ownership == 0 or fnid == 0 or s.in_derive or s.requal:
+        ret
+    end
+    body := at.At(a, fnid).a
+    if body == 0:
+        ret
+    end
+    mut cs := Vector {} as Vector<SfCand>
+    mut seen := Vector {} as Vector<str>
+    mut dup := Vector {} as Vector<str>
+    repeat at.ChildCount(a, fnid) in p:
+        pc := at.Child(a, fnid, p)
+        if pc != 0 and at.KindOf(a, pc) == at.AST_PARAM:
+            seen.push(at.At(a, pc).name)
+        end
+    end
+    sf_collect(a, body, cs, seen, dup)
+    if cs.len() == 0:
+        cs.free()
+        seen.free()
+        dup.free()
+        ret
+    end
+    repeat dup.len() in d:
+        sf_kill(cs, dup.get(d))
+    end
+    sf_scan_uses(s, a, body, 0, 0, false, cs)
+    mut i := cs.len()
+    until i > 0:
+        i -= 1
+        c := cs.get(i)
+        if c.ok and c.use != 0:
+            sf_insert(a, c)
+        end
+    end
+    cs.free()
+    seen.free()
+    dup.free()
+end

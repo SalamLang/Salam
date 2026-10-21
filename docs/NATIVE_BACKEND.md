@@ -88,7 +88,9 @@ recursive. Each function then goes through:
    runtime check that a forward copy and `memmove` agree.
    A demanded-bits pass drops masks whose cleared bits no later instruction
    reads, so `x = (x * a + c) % 2^31` keeps the mask off its loop-carried
-   chain.
+   chain. Loop load elimination keeps a value stored in one iteration and
+   loaded in the next (`cur[j]` then `cur[j - 1]`) in a register, and 32-bit
+   counters that are only sign-extended for indexing become 64-bit counters.
 9. Strength reduction: an array address that is affine in a loop counter, such
    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
    Addresses that differ only by a constant share one pointer.
@@ -116,7 +118,8 @@ ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
 allocator can spill the long outer range and keep the loop copy in a register.
 Copy-related values that both spill share one stack slot. The encoder rotates small loop headers into the latch so
-loops are bottom-tested, and aligns loop heads to 16 bytes.
+loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
+32).
 
 ### Conventions worth knowing
 
@@ -148,7 +151,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,dbits,idiom,rvec,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,lle,dbits,idiom,rvec,widen,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

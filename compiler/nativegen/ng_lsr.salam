@@ -20,6 +20,7 @@ end
 
 pub struct LGrp:
     pub base: Vector<int> = Vector {}
+    pub phi: Vector<int> = Vector {}
     pub scale: Vector<int> = Vector {}
     pub iv: Vector<i64> = Vector {}
     pub c0: Vector<i64> = Vector {}
@@ -176,7 +177,8 @@ func lsr_inv(g &: Ng, l &: Lp, s &: Lsr, v: int): bool:
     ret b >= 0 and l.inl[b] != s.mark
 end
 
-func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef &: i64, cost &: int): bool:
+func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef &: i64, sym &: int, cost &: int): bool:
+    sym = 0 - 1
     if v == s.iv:
         if narrow and not s.iv_nsw:
             ret false
@@ -199,10 +201,12 @@ func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef 
     end
     if op == OP_SEXT:
         mut c0 := 0 as i64
-        if not lsr_aff(g, l, s, g.i_a[d], true, depth + 1, c0, cost):
+        mut s0 := 0 - 1
+        if not lsr_aff(g, l, s, g.i_a[d], true, depth + 1, c0, s0, cost):
             ret false
         end
         coef = c0
+        sym = s0
         cost += 1
         ret true
     end
@@ -213,17 +217,59 @@ func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef 
     if op == OP_ADD or op == OP_SUB:
         mut ca := 0 as i64
         mut cb := 0 as i64
-        if not lsr_aff(g, l, s, g.i_a[d], narrow, depth + 1, ca, cost) or not lsr_aff(g, l, s, g.i_b[d], narrow, depth + 1, cb, cost):
+        mut sa := 0 - 1
+        mut sb := 0 - 1
+        if not lsr_aff(g, l, s, g.i_a[d], narrow, depth + 1, ca, sa, cost) or not lsr_aff(g, l, s, g.i_b[d], narrow, depth + 1, cb, sb, cost):
+            ret false
+        end
+        if ca != (0 as i64) and cb != (0 as i64) and sa != sb:
             ret false
         end
         coef = op == OP_ADD ? ca + cb : ca - cb
+        sym = ca != (0 as i64) ? sa : sb
         cost += 1
         ret true
     end
     if op == OP_MUL or op == OP_SHL:
-        b := g.i_b[d]
+        mut x := g.i_a[d]
+        mut b := g.i_b[d]
+        if op == OP_MUL and is_cint(g, x):
+            x = g.i_b[d]
+            b = g.i_a[d]
+        end
         if not is_cint(g, b):
-            ret false
+            if op != OP_MUL or g.v_ty[b] != T_I32 and g.v_ty[b] != T_I64:
+                ret false
+            end
+            mut cx := 0 as i64
+            mut sx := 0 - 1
+            mut cy := 0 as i64
+            mut sy := 0 - 1
+            if not lsr_aff(g, l, s, x, narrow, depth + 1, cx, sx, cost) or not lsr_aff(g, l, s, b, narrow, depth + 1, cy, sy, cost):
+                ret false
+            end
+            if cx != (0 as i64) and cy != (0 as i64):
+                ret false
+            end
+            if cx == (0 as i64) and cy == (0 as i64):
+                coef = 0 as i64
+                ret true
+            end
+            if cx != (0 as i64):
+                if sx >= 0 or not lsr_inv(g, l, s, b):
+                    ret false
+                end
+                coef = cx
+                sym = b
+            else:
+                if sy >= 0 or not lsr_inv(g, l, s, x):
+                    ret false
+                end
+                coef = cy
+                sym = x
+            end
+            cost += 1
+            ret true
         end
         mut k := g.v_i[b]
         if op == OP_SHL:
@@ -233,10 +279,12 @@ func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef 
             k = (1 as i64) << k
         end
         mut ca2 := 0 as i64
-        if not lsr_aff(g, l, s, g.i_a[d], narrow, depth + 1, ca2, cost):
+        mut sa2 := 0 - 1
+        if not lsr_aff(g, l, s, x, narrow, depth + 1, ca2, sa2, cost):
             ret false
         end
         coef = ca2 * k
+        sym = sa2
         cost += 1
         ret true
     end
@@ -316,12 +364,13 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
                     if g.i_op[i] == OP_ADDR and g.i_b[i] >= 0 and g.i_res[i] >= 0 and lsr_inv(g, l, s, g.i_a[i]):
                         mut coef := 0 as i64
                         mut cost := 0
-                        if lsr_aff(g, l, s, g.i_b[i], false, 0, coef, cost) and coef != (0 as i64) and cost >= 2:
-                            haslin := lsr_lin(g, l, s, g.i_b[i], false, 0, f)
+                        mut sym := 0 - 1
+                        if lsr_aff(g, l, s, g.i_b[i], false, 0, coef, sym, cost) and coef != (0 as i64) and cost >= 2:
+                            haslin := sym < 0 and lsr_lin(g, l, s, g.i_b[i], false, 0, f)
                             mut hit := 0 - 1
                             if haslin:
                                 repeat gr.ptr.len() in q:
-                                    if hit < 0 and gr.base[q] == g.i_a[i] and gr.scale[q] == g.i_x[i] and gr.iv[q] == f.iv and lin_same(gr, q, f):
+                                    if hit < 0 and gr.phi[q] == s.iv and gr.base[q] == g.i_a[i] and gr.scale[q] == g.i_x[i] and gr.iv[q] == f.iv and lin_same(gr, q, f):
                                         hit = q
                                     end
                                 end
@@ -358,6 +407,23 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
                             g.i_b[inc] = 0 - 1
                             g.i_x[inc] = 1
                             g.i_d[inc] = coef * (g.i_x[i] as i64) * s.step
+                            if sym >= 0:
+                                mut sw := sym
+                                if g.v_ty[sym] != T_I64:
+                                    sxi := ins_new(g, OP_SEXT, T_I64)
+                                    g.i_a[sxi] = sym
+                                    g.i_x[sxi] = g.v_ty[sym]
+                                    sw = new_res(g, sxi)
+                                    ins_before(g, pt, sxi)
+                                end
+                                smi := ins_new(g, OP_MUL, T_I64)
+                                g.i_a[smi] = sw
+                                g.i_b[smi] = const_int(g, T_I64, g.i_d[inc])
+                                stv := new_res(g, smi)
+                                ins_before(g, pt, smi)
+                                g.i_b[inc] = stv
+                                g.i_d[inc] = 0 as i64
+                            end
                             pn := new_res(g, inc)
                             ins_before(g, ltm, inc)
                             g.pool.push(p0)
@@ -368,6 +434,7 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
                             g.v_repl[g.i_res[i]] = pv
                             if haslin:
                                 gr.base.push(g.i_a[i])
+                                gr.phi.push(s.iv)
                                 gr.scale.push(g.i_x[i])
                                 gr.iv.push(f.iv)
                                 gr.c0.push(f.c0)
@@ -395,6 +462,7 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
         ph = nph
     end
     gr.base.free()
+    gr.phi.free()
     gr.scale.free()
     gr.iv.free()
     gr.c0.free()

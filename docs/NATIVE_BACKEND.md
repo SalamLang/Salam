@@ -33,7 +33,12 @@ All of it lives in `compiler/nativegen/`:
 | `ng_cfg.salam`                                                     | CFG, reverse postorder, dominators, dominance frontiers, mem2reg                                                                                                            |
 | `ng_sroa.salam`                                                    | Splits struct locals into one scalar per field                                                                                                                              |
 | `ng_inline.salam`                                                  | Inlines small functions from a cache of already optimized bodies                                                                                                            |
-| `ng_opt.salam`                                                     | Constant folding, block merging, jump threading, dead code elimination                                                                                                      |
+| `ng_tailrec.salam`                                                 | Turns self tail calls into loops, with an add or multiply accumulator                                                                                                       |
+| `ng_opt.salam`                                                     | Constant folding, block merging, jump threading, if-conversion, dead code elimination                                                                                       |
+| `ng_unroll.salam`                                                  | Fully unrolls small loops whose trip count is a constant                                                                                                                    |
+| `ng_licm.salam`                                                    | Loop discovery, preheaders, loop-invariant code motion, loop weights and live-range splitting for the allocator                                                             |
+| `ng_lsr.salam`                                                     | Strength-reduces affine array addresses into pointer induction variables                                                                                                    |
+| `ng_gvn.salam`, `ng_slp.salam`                                     | Value numbering with redundant load elimination, and SLP vectorization                                                                                                      |
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
@@ -56,36 +61,59 @@ recursive. Each function then goes through:
 1. SROA on struct locals, then mem2reg.
 2. Inlining, then SROA and mem2reg again for the locals the inlined code used
    to reach only through a pointer.
-3. Folding to a fixed point: arithmetic and compares on constants, algebraic
+3. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
+   the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
+   accumulator, which removes one of the two calls in a recursive Fibonacci.
+4. Folding to a fixed point: arithmetic and compares on constants, algebraic
    identities, casts, selects, constant branch conditions, `extractvalue` of a
-   known `insertvalue`, address arithmetic, and `x % 2^k == 0` as a mask test.
-4. Block merging and jump threading, which turns short-circuit `and`/`or`
+   known `insertvalue`, a struct rebuilt field by field from itself, address
+   arithmetic, and `x % 2^k == 0` as a mask test. Signed division and
+   remainder become unsigned when the dividend is provably non-negative, and
+   `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
+5. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches.
-5. If-conversion of small branches into `cmov`, except where the result feeds
-   an address, since a `cmov` there would serialize the following load.
-6. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
-   traced back through arithmetic, broadcasts, adjacent loads and loop phis,
-   and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
-   multiply kernels rely on this.
-7. Global value numbering over the dominator tree.
-8. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+6. If-conversion of small branches into `cmov`, except where the result flows
+   into a later address, since a `cmov` there would serialize the following
+   load (a binary search keeps its branch for this reason).
+7. Full unrolling of loops with a constant trip count and a small body. The
+   counter may step by adding, multiplying, shifting or dividing, so a square
+   and multiply loop over a constant exponent unrolls too.
+8. Loop-invariant code motion of pure instructions into loop preheaders.
+9. Strength reduction: an array address that is affine in a loop counter, such
+   as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
+   Addresses that differ only by a constant share one pointer.
+10. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
+    traced back through arithmetic, broadcasts, adjacent loads and loop phis,
+    and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
+    multiply kernels rely on this.
+11. Global value numbering over the dominator tree, including redundant load
+    elimination and store-to-load forwarding. A store only invalidates loads
+    of its own TBAA class (llvmgen tags pointer fields and plain data
+    separately), the same guarantee the LLVM backend gets from those tags.
+12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 
-Instruction selection folds address arithmetic into memory operands, fuses a
-compare with the branch that follows, divides by constants with shifts or a
-multiply by the reciprocal, and reads struct values straight from their
-source when nothing writes memory before the last use. Register allocation
-is linear scan over exact live ranges, so a value only competes for a register
-where it is actually live.
+Instruction selection folds address arithmetic into memory operands, folds a
+single-use load into the ALU instruction or compare that consumes it, fuses a
+compare with the branch or select that uses it, and turns `x * k + y` into one
+or two `lea`s. Division by a constant uses a shift or a multiply by the
+reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two
+multiplies and a few shifts. Register allocation is linear scan over exact live
+ranges with use counts weighted by loop depth. Values used inside a loop get a
+copy at the loop's preheader, so the allocator can spill the long outer range
+and keep the loop copy in a register, and copy-related values that both spill
+share one stack slot. The encoder rotates small loop headers into the latch so
+loops are bottom-tested, and aligns loop heads to 16 bytes.
 
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
   work. Struct values, which only Salam code passes, travel by pointer to a
   copy, and struct returns use a hidden result pointer.
-- `rbp` is always the frame pointer. On Linux it is set right after
-  `push rbp`; on Windows the prologue has the shape the Windows unwinder
-  expects (pushes, allocation, `lea rbp, [rsp+N]`) and every function gets an
-  unwind entry.
+- On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
+  register. Each function gets an `.eh_frame` entry, so gdb, perf and other
+  unwinders can walk native frames. On Windows `rbp` is the frame pointer and
+  the prologue has the shape the Windows unwinder expects (pushes,
+  allocation, `lea rbp, [rsp+N]`), with an unwind entry per function.
 - `r10`, `r11`, `xmm14` and `xmm15` are kept free as scratch registers for
   spill code.
 - An `i1` value lives in the low byte of a register as 0 or 1. Narrow
@@ -106,8 +134,10 @@ where it is actually live.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa` turns optimizer passes off, which
-  is the quickest way to find the pass behind a wrong result.
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,unroll,licm,lsr,lcse,split`
+  turns optimizer passes off, which is the quickest way to find the pass
+  behind a wrong result. `lcse` is the load part of value numbering and
+  `split` the loop live-range splitting in the allocator.
 - `SALAM_NG_GVN_MAX=n` stops value numbering after `n` merges and prints the
   function the last one happened in, so a miscompile can be bisected down to
   a single merge. `SALAM_NG_GVN_SKIP=addr,extv,icmp,cast,arith` leaves whole
@@ -120,18 +150,19 @@ apart from the build timestamp.
 
 ## Where it stands
 
-The compiler built by the native backend regenerates its own IR about 1.25x
-slower than the LLVM -O2 build. On the benchmark suite most integer and
-pointer-chasing programs run within 10-30% of `gcc -O3`. Some are even with it
-or faster (`quicksort`, `caesar_cipher`). The biggest gaps are loops that gcc
-and LLVM unroll or vectorize, such as `game_of_life` and `tensor_matmul`.
+On the benchmark suite most programs run within 0-20% of `gcc -O3`, and several
+are even with it or faster (`binary_search_stress`, `collatz`, `quicksort`,
+`monte_carlo_pi`, `caesar_cipher`, `sieve_eratosthenes`, `lcg_random`). The
+largest remaining gaps are `game_of_life`, where gcc unswitches the inner loop
+on the row bounds, and recursive `fib`, where gcc inlines the recursion into
+itself.
 
 Not there yet:
 
-- No DWARF line tables (`-g`) and no `.eh_frame` on Linux. Debuggers walk the
-  stack through `rbp`, but there is no source-level stepping.
-- No loop unrolling, loop vectorization or loop-invariant code motion. Only
-  straight-line (SLP) vectorization exists.
+- No DWARF line tables (`-g`), so there is no source-level stepping, although
+  backtraces work through `.eh_frame`.
+- No loop vectorization or loop unswitching. Only straight-line (SLP)
+  vectorization exists.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
 - Linking still uses lld or the system linker. A built-in static linker over
   the bundled musl `libc.a` would make Linux builds fully self-contained.

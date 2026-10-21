@@ -37,7 +37,7 @@ so most functions cost nothing.
 
 ### Control-flow graph
 
-`sema_own.salam` builds a small CFG over statement node ids. It models what the
+`sema_own.salam` builds a small CFG over statement node IDs. It models what the
 AST walk in `sema_definit.salam` cannot:
 
 - `switch` fallthrough (an arm without `break` runs the next arm);
@@ -54,14 +54,14 @@ locally.
 Every value is reached through an **access path**: `x`, `x.f`, `this.items`,
 `p.*`. Each path maps to a set of **tokens**, abstract heap buffers:
 
-| Token | Made by |
-|---|---|
-| init | a parameter, global or `this` read before any write |
-| fresh | an allocation site: a literal, a call result, a declaration |
-| field | the buffer held in field `f` of a token |
-| element `[]` | what `.ref(i)` points at, inside a container's buffer |
-| old | earlier allocations from a site that ran again (see recency below) |
-| null | a `Vector`/`HashMap` after its own `free()` nulled the header |
+| Token        | Made by                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| init         | a parameter, global or `this` read before any write                |
+| fresh        | an allocation site: a literal, a call result, a declaration        |
+| field        | the buffer held in field `f` of a token                            |
+| element `[]` | what `.ref(i)` points at, inside a container's buffer              |
+| old          | earlier allocations from a site that ran again (see recency below) |
+| null         | a `Vector`/`HashMap` after its own `free()` nulled the header      |
 
 `b := a` makes `b` point at `a`'s tokens. That is how a free through one name
 is seen through every other name.
@@ -71,8 +71,8 @@ is seen through every other name.
 - `mem.Free(p)`, and `free()` on a `dyn`, free `p`'s tokens and leave `p`
   dangling.
 - `free()` on a `Vector`/`HashMap` frees the buffer and nulls that header, so
-  reusing the same variable is fine but any *copy* now dangles.
-- `push`, `insert`, `reserve`, `resize_set`, `zeros`, `alloc` and `put` *may*
+  reusing the same variable is fine but any _copy_ now dangles.
+- `push`, `insert`, `reserve`, `resize_set`, `zeros`, `alloc` and `put` _may_
   move the buffer, which invalidates copies, `.ref()` pointers and iterators.
 - Passing a path to a `&:` parameter, or calling a method on it, may give it
   new contents, so its freed state is forgotten. This keeps phase 1 free of
@@ -99,14 +99,14 @@ positive count at zero on `std/` and `compiler/`:
 
 ## Diagnostics
 
-| Code | When | Mode |
-|---|---|---|
-| E139 | a path is used after its storage was freed on every path | on (default) |
-| E140 | storage is freed twice on every path | on |
-| E141 | a returned value is freed by the function's own `defer` | on |
-| W142 | used after free on some paths | warn |
-| W143 | freed twice on some paths | warn |
-| W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn |
+| Code | When                                                                                  | Mode         |
+| ---- | ------------------------------------------------------------------------------------- | ------------ |
+| E139 | a path is used after its storage was freed on every path                              | on (default) |
+| E140 | storage is freed twice on every path                                                  | on           |
+| E141 | a returned value is freed by the function's own `defer`                               | on           |
+| W142 | used after free on some paths                                                         | warn         |
+| W143 | freed twice on some paths                                                             | warn         |
+| W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn         |
 
 `--ownership=off|on|warn|error` picks the mode. `error` turns the warnings into
 errors. Messages exist in English and Persian (`compiler/i18n.salam`).
@@ -144,7 +144,7 @@ Each item below is a phase on the roadmap, or a deliberate limit:
 4. **Phase 4.** Moves and automatic drop for owned locals: `b := a` of an
    owned `Vector`/`HashMap` moves; using `a` after that is an error with a
    `.copy()` fix-it. Owned locals that are not moved get a synthesized `defer
-   x.free()`, lowered in sema so all four backends get it for free. Explicit
+x.free()`, lowered in sema so all four backends get it for free. Explicit
    `defer x.free()` becomes a warning.
 5. **Phase 5.** Closures: a non-escaping lambda borrows its captures and gets
    a stack-allocated environment (faster than today's heap env); an escaping

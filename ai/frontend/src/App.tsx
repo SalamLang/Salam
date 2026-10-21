@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setClientVersion, setToken, streamMessage, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
@@ -321,6 +321,26 @@ export function App() {
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
+  const agentVersion = tools.info?.version ?? "";
+  useEffect(() => {
+    if (agentVersion) setClientVersion(agentVersion);
+  }, [agentVersion]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const check = () => {
+      if (document.visibilityState === "visible") api.me().catch(() => {});
+    };
+    const t = window.setInterval(check, 60000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [signedIn]);
+
   const loadFile = useMemo(() => fileLoader((fid) => api.chatFile(activeId ?? "", fid)), [activeId]);
   const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
 

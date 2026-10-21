@@ -43,6 +43,24 @@ func two(v: str, w: str): Vector<str>:
     ret a
 end
 
+func version_char(c: str): bool:
+    ret (c >= "0" and c <= "9") or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "." or c == "-" or c == "+"
+end
+
+func touch(ctx: i64, hash: str):
+    now := aistore.Now()
+    mut a := Vector {} as Vector<str>
+    a.push(I64s(now))
+    a.push(ClientIp(ctx))
+    a.push(http.Header(ctx, "X-Salam-Client").len() > 0 ? ClientKind(ctx) : "")
+    a.push(ClientVersion(ctx))
+    a.push(hash)
+    a.push(I64s(now - 60))
+    aistore.Lock()
+    _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4) WHERE token = ?5 AND last_used < ?6", a)
+    aistore.Unlock()
+end
+
 pub func Enter():
     _l := sync.Lock(LIVE_LOCK)
     LIVE += 1
@@ -91,7 +109,7 @@ pub func Cors(ctx: i64):
     origin := http.Header(ctx, "Origin")
     if AllowedOrigin(origin):
         http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
-        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type")
+        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Salam-Client, X-Salam-Version")
         http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
     end
@@ -160,6 +178,25 @@ pub func ClientIp(ctx: i64): str:
     ret fwd
 end
 
+pub func ClientKind(ctx: i64): str:
+    ret http.Header(ctx, "X-Salam-Client") == "agent" ? "agent" : "web"
+end
+
+pub func ClientVersion(ctx: i64): str:
+    v := str.Trim(http.Header(ctx, "X-Salam-Version"))
+    if v.len() == 0 or v.len() > 32:
+        ret ""
+    end
+    mut i := 0
+    until i < v.len():
+        if not version_char(v.substr(i, 1)):
+            ret ""
+        end
+        i += 1
+    end
+    ret v
+end
+
 pub func Bearer(ctx: i64): str:
     h := http.Header(ctx, "Authorization")
     if str.StartsWith(h, "Bearer "):
@@ -182,9 +219,12 @@ pub func UserFromToken(token: str): i64:
 end
 
 pub func NeedUser(ctx: i64): i64:
-    uid := UserFromToken(Bearer(ctx))
+    token := Bearer(ctx)
+    uid := UserFromToken(token)
     if uid == 0:
         Fail(ctx, 401, "unauthorized", "لطفا دوباره وارد شوید.")
+    else:
+        touch(ctx, Hash(token))
     end
     ret uid
 end

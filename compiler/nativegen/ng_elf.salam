@@ -1,0 +1,331 @@
+package nativegen
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fwrite(p: void*, sz: u64, n: u64, f: void*): u64
+    func fclose(f: void*): int
+end
+
+pub struct Ob:
+    pub b: Vector<u8> = Vector {}
+end
+
+func ob_u8(o &: Ob, v: int):
+    o.b.push((v & 255) as u8)
+end
+
+func ob_le(o &: Ob, v: i64, n: int):
+    mut x := v as u64
+    repeat n:
+        o.b.push((x & (255 as u64)) as u8)
+        x = x >> (8 as u64)
+    end
+end
+
+func ob_pad(o &: Ob, a: int):
+    until (o.b.len() % a) != 0:
+        o.b.push(0 as u8)
+    end
+end
+
+func ob_bytes(o &: Ob, src: Vector<u8>):
+    each x in src:
+        o.b.push(x)
+    end
+end
+
+func ob_str(o &: Ob, s: str):
+    p := sp(s)
+    n := str_len_of(s)
+    repeat n in i:
+        o.b.push(p[i])
+    end
+    o.b.push(0 as u8)
+end
+
+func str_len_of(s: str): int:
+    p := sp(s)
+    mut n := 0
+    until p[n] != (0 as u8):
+        n += 1
+    end
+    ret n
+end
+
+func ob_sym_name(g &: Ng, o &: Ob, s: int):
+    off := g.syms.off[s]
+    repeat g.syms.len[s] in i:
+        o.b.push(g.syms.bytes[off + i])
+    end
+    o.b.push(0 as u8)
+end
+
+func write_file(path: str, o &: Ob): bool:
+    f := fopen(path, "wb")
+    if f == null:
+        ret false
+    end
+    n := o.b.len() as u64
+    w := fwrite(o.b.data as void*, 1 as u64, n, f)
+    _c := fclose(f)
+    ret w == n
+end
+
+func elf_rtype(t: int): int:
+    if t == R_ABS64: ret 1 end
+    if t == R_PC32: ret 2 end
+    if t == R_PLT32: ret 4 end
+    if t == R_GOTPCRELX: ret 42 end
+    ret 0
+end
+
+func sec_bytes(g &: Ng, sec: int): Vector<u8>:
+    switch sec:
+        SEC_TEXT: ret g.s_text end
+        SEC_RODATA: ret g.s_ro end
+        SEC_DATA: ret g.s_data end
+        SEC_FINI: ret g.s_fini end
+        SEC_INIT: ret g.s_init end
+    end
+    ret g.s_text
+end
+
+func emit_sym_for(g &: Ng, s: int): bool:
+    ret g.sy_def[s] or g.sy_used[s]
+end
+
+func write_elf(g &: Ng, path: str): bool:
+    nsym := g.sy_kind.len()
+    mut elf_idx := Vector {} as Vector<int>
+    repeat nsym:
+        elf_idx.push(0)
+    end
+    mut strtab := Ob {}
+    ob_u8(strtab, 0)
+    mut symtab := Ob {}
+    repeat 24:
+        ob_u8(symtab, 0)
+    end
+    k_sec_shndx := [1, 2, 3, 4, 6, 5]
+    mut nloc := 1
+    repeat 6 in sx:
+        _e := sx
+        ob_le(symtab, 0 as i64, 4)
+        ob_u8(symtab, 3)
+        ob_u8(symtab, 0)
+        ob_le(symtab, k_sec_shndx[sx] as i64, 2)
+        ob_le(symtab, 0 as i64, 8)
+        ob_le(symtab, 0 as i64, 8)
+        nloc += 1
+    end
+    repeat 2 in pass:
+        repeat nsym in s:
+            if not emit_sym_for(g, s):
+                continue
+            end
+            local := g.sy_def[s] and g.sy_local[s]
+            if (pass == 0) != local:
+                continue
+            end
+            elf_idx[s] = symtab.b.len() / 24
+            ob_le(symtab, strtab.b.len() as i64, 4)
+            ob_sym_name(g, strtab, s)
+            mut typ := 0
+            if g.sy_kind[s] == SY_FUNC:
+                typ = 2
+            else g.sy_kind[s] == SY_DATA and g.sy_def[s]:
+                typ = 1
+            end
+            bind := local ? 0 : 1
+            ob_u8(symtab, (bind << 4) | typ)
+            ob_u8(symtab, 0)
+            mut shndx := 0
+            if g.sy_def[s] and g.sy_sec[s] >= 0:
+                shndx = k_sec_shndx[g.sy_sec[s]]
+            end
+            ob_le(symtab, shndx as i64, 2)
+            ob_le(symtab, g.sy_off[s] as i64, 8)
+            ob_le(symtab, g.sy_size[s] as i64, 8)
+            if pass == 0:
+                nloc += 1
+            end
+        end
+    end
+    k_rel_sec := [SEC_TEXT, SEC_RODATA, SEC_DATA, SEC_INIT, SEC_FINI]
+    mut rbufs := Ob {}
+    mut rstart := Vector {} as Vector<int>
+    mut rsize := Vector {} as Vector<int>
+    each rs in k_rel_sec:
+        rstart.push(rbufs.b.len())
+        repeat g.r_sec.len() in ri:
+            if g.r_sec[ri] == rs:
+                s2 := g.r_sym[ri]
+                mut idx := elf_idx[s2]
+                mut addend := g.r_add[ri]
+                if g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0:
+                    idx = 1 + g.sy_sec[s2]
+                    addend = addend + (g.sy_off[s2] as i64)
+                end
+                ob_le(rbufs, g.r_off[ri] as i64, 8)
+                ob_le(rbufs, ((idx as i64) << (32 as i64)) | (elf_rtype(g.r_type[ri]) as i64), 8)
+                ob_le(rbufs, addend, 8)
+            end
+        end
+        rsize.push(rbufs.b.len() - rstart[rstart.len() - 1])
+    end
+    mut shstr := Ob {}
+    ob_u8(shstr, 0)
+    k_names := [".text", ".rodata", ".data", ".bss", ".init_array", ".fini_array", ".rela.text", ".rela.rodata", ".rela.data", ".rela.init_array", ".rela.fini_array", ".symtab", ".strtab", ".shstrtab", ".note.GNU-stack"]
+    mut name_off := Vector {} as Vector<int>
+    each nm in k_names:
+        name_off.push(shstr.b.len())
+        ob_str(shstr, nm)
+    end
+    mut o := Ob {}
+    repeat 64:
+        ob_u8(o, 0)
+    end
+    mut offs := Vector {} as Vector<int>
+    mut sizes := Vector {} as Vector<int>
+    k_data_secs := [SEC_TEXT, SEC_RODATA, SEC_DATA, SEC_BSS, SEC_INIT, SEC_FINI]
+    each ds in k_data_secs:
+        if ds == SEC_BSS:
+            offs.push(o.b.len())
+            sizes.push(g.bss_size)
+            continue
+        end
+        ob_pad(o, 16)
+        offs.push(o.b.len())
+        b := sec_bytes(g, ds)
+        ob_bytes(o, b)
+        sizes.push(b.len())
+    end
+    ob_pad(o, 8)
+    rel_file_off := o.b.len()
+    ob_bytes(o, rbufs.b)
+    ob_pad(o, 8)
+    sym_off := o.b.len()
+    ob_bytes(o, symtab.b)
+    str_off := o.b.len()
+    ob_bytes(o, strtab.b)
+    shstr_off := o.b.len()
+    ob_bytes(o, shstr.b)
+    ob_pad(o, 8)
+    sh_off := o.b.len()
+    repeat 64:
+        ob_u8(o, 0)
+    end
+    k_types := [1, 1, 1, 8, 14, 15]
+    k_flags := [6, 2, 3, 3, 3, 3]
+    repeat 6 in q:
+        ob_le(o, name_off[q] as i64, 4)
+        ob_le(o, k_types[q] as i64, 4)
+        ob_le(o, k_flags[q] as i64, 8)
+        ob_le(o, 0 as i64, 8)
+        ob_le(o, offs[q] as i64, 8)
+        ob_le(o, sizes[q] as i64, 8)
+        ob_le(o, 0 as i64, 4)
+        ob_le(o, 0 as i64, 4)
+        mut al := 16
+        if q == 4 or q == 5:
+            al = 8
+        else q > 0:
+            al = g.sec_align[k_data_secs[q]]
+            if al < 1:
+                al = 1
+            end
+        end
+        ob_le(o, al as i64, 8)
+        ob_le(o, (q == 4 or q == 5) ? (8 as i64) : (0 as i64), 8)
+    end
+    k_rel_target := [1, 2, 3, 5, 6]
+    repeat 5 in q2:
+        ob_le(o, name_off[6 + q2] as i64, 4)
+        ob_le(o, 4 as i64, 4)
+        ob_le(o, 0x40 as i64, 8)
+        ob_le(o, 0 as i64, 8)
+        ob_le(o, (rel_file_off + rstart[q2]) as i64, 8)
+        ob_le(o, rsize[q2] as i64, 8)
+        ob_le(o, 12 as i64, 4)
+        ob_le(o, k_rel_target[q2] as i64, 4)
+        ob_le(o, 8 as i64, 8)
+        ob_le(o, 24 as i64, 8)
+    end
+    ob_le(o, name_off[11] as i64, 4)
+    ob_le(o, 2 as i64, 4)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, sym_off as i64, 8)
+    ob_le(o, symtab.b.len() as i64, 8)
+    ob_le(o, 13 as i64, 4)
+    ob_le(o, nloc as i64, 4)
+    ob_le(o, 8 as i64, 8)
+    ob_le(o, 24 as i64, 8)
+    ob_le(o, name_off[12] as i64, 4)
+    ob_le(o, 3 as i64, 4)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, str_off as i64, 8)
+    ob_le(o, strtab.b.len() as i64, 8)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 1 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, name_off[13] as i64, 4)
+    ob_le(o, 3 as i64, 4)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, shstr_off as i64, 8)
+    ob_le(o, shstr.b.len() as i64, 8)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 1 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, name_off[14] as i64, 4)
+    ob_le(o, 1 as i64, 4)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, shstr_off as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 0 as i64, 4)
+    ob_le(o, 1 as i64, 8)
+    ob_le(o, 0 as i64, 8)
+    nsec := 16
+    o.b[0] = 0x7F as u8
+    o.b[1] = 0x45 as u8
+    o.b[2] = 0x4C as u8
+    o.b[3] = 0x46 as u8
+    o.b[4] = 2 as u8
+    o.b[5] = 1 as u8
+    o.b[6] = 1 as u8
+    put_le(o, 16, 1 as i64, 2)
+    put_le(o, 18, 62 as i64, 2)
+    put_le(o, 20, 1 as i64, 4)
+    put_le(o, 40, sh_off as i64, 8)
+    put_le(o, 52, 64 as i64, 2)
+    put_le(o, 58, 64 as i64, 2)
+    put_le(o, 60, nsec as i64, 2)
+    put_le(o, 62, 14 as i64, 2)
+    ok := write_file(path, o)
+    o.b.free()
+    symtab.b.free()
+    strtab.b.free()
+    shstr.b.free()
+    rbufs.b.free()
+    elf_idx.free()
+    rstart.free()
+    rsize.free()
+    name_off.free()
+    offs.free()
+    sizes.free()
+    ret ok
+end
+
+func put_le(o &: Ob, pos0: int, v: i64, n: int):
+    mut x := v as u64
+    repeat n in i:
+        o.b[pos0 + i] = (x & (255 as u64)) as u8
+        x = x >> (8 as u64)
+    end
+end

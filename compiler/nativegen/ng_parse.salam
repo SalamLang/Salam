@@ -1,0 +1,514 @@
+package nativegen
+
+import str
+
+const R_ABS64 := 0
+const R_PC32 := 1
+const R_PLT32 := 2
+const R_REL32_NB := 3
+const R_GOTPCRELX := 4
+const R_ADDR32NB := 5
+
+func sym_of(g &: Ng, p: u8*, s: int, l: int): int:
+    id := tab_add(g.syms, p, s, l)
+    until g.sy_kind.len() <= id:
+        g.sy_kind.push(SY_UNKNOWN)
+        g.sy_def.push(false)
+        g.sy_local.push(false)
+        g.sy_sec.push(SEC_NONE)
+        g.sy_off.push(0)
+        g.sy_size.push(0)
+        g.sy_used.push(false)
+    end
+    ret id
+end
+
+func sym_named(g &: Ng, name: str): int:
+    ret sym_of(g, sp(name), 0, str.Len(name))
+end
+
+func syms_init(g &: Ng):
+    tab_init(g.syms, 4096)
+    g.sym_memcpy = sym_named(g, "memcpy")
+    g.sym_memmove = sym_named(g, "memmove")
+    g.sym_memset = sym_named(g, "memset")
+    g.sym_pow = sym_named(g, "pow")
+    g.sym_i_memcpy = sym_named(g, "llvm.memcpy.p0.p0.i64")
+    g.sym_i_memmove = sym_named(g, "llvm.memmove.p0.p0.i64")
+    g.sym_i_memset = sym_named(g, "llvm.memset.p0.i64")
+    g.sym_i_trap = sym_named(g, "llvm.trap")
+    g.sym_i_pow = sym_named(g, "llvm.pow.f64")
+    g.sym_i_dtors = sym_named(g, "llvm.global_dtors")
+    g.sym_i_ctors = sym_named(g, "llvm.global_ctors")
+    g.sym_chkstk = sym_named(g, "___chkstk_ms")
+    g.sym_ro = sym_named(g, ".Lsalam.ro")
+    g.sy_kind[g.sym_ro] = SY_DATA
+    g.sy_def[g.sym_ro] = true
+    g.sy_local[g.sym_ro] = true
+    g.sy_sec[g.sym_ro] = SEC_RODATA
+    g.sy_off[g.sym_ro] = 0
+    g.sy_kind[g.sym_memcpy] = SY_FUNC
+    g.sy_kind[g.sym_memmove] = SY_FUNC
+    g.sy_kind[g.sym_memset] = SY_FUNC
+    g.sy_kind[g.sym_pow] = SY_FUNC
+    g.sy_kind[g.sym_chkstk] = SY_FUNC
+end
+
+func sec_len(g &: Ng, sec: int): int:
+    switch sec:
+        SEC_TEXT: ret g.s_text.len() end
+        SEC_RODATA: ret g.s_ro.len() end
+        SEC_DATA: ret g.s_data.len() end
+        SEC_FINI: ret g.s_fini.len() end
+        SEC_INIT: ret g.s_init.len() end
+        SEC_BSS: ret g.bss_size end
+    end
+    ret 0
+end
+
+func sec_put(g &: Ng, sec: int, b: int):
+    switch sec:
+        SEC_TEXT: g.s_text.push(b as u8) break end
+        SEC_RODATA: g.s_ro.push(b as u8) break end
+        SEC_DATA: g.s_data.push(b as u8) break end
+        SEC_FINI: g.s_fini.push(b as u8) break end
+        SEC_INIT: g.s_init.push(b as u8) break end
+        SEC_BSS: g.bss_size += 1 break end
+    end
+end
+
+func sec_trunc(g &: Ng, sec: int, n: int):
+    switch sec:
+        SEC_RODATA:
+            until g.s_ro.len() > n: _x := g.s_ro.pop() end
+            break
+        end
+        SEC_DATA:
+            until g.s_data.len() > n: _y := g.s_data.pop() end
+            break
+        end
+        SEC_FINI:
+            until g.s_fini.len() > n: _z := g.s_fini.pop() end
+            break
+        end
+        SEC_INIT:
+            until g.s_init.len() > n: _w := g.s_init.pop() end
+            break
+        end
+    end
+end
+
+func sec_byte(g &: Ng, sec: int, off: int): int:
+    switch sec:
+        SEC_RODATA: ret g.s_ro[off] as int end
+        SEC_DATA: ret g.s_data[off] as int end
+        SEC_FINI: ret g.s_fini[off] as int end
+        SEC_INIT: ret g.s_init[off] as int end
+    end
+    ret 0
+end
+
+func sec_pad(g &: Ng, sec: int, n: int):
+    repeat n:
+        sec_put(g, sec, 0)
+    end
+end
+
+func sec_align_to(g &: Ng, sec: int, a: int):
+    if sec == SEC_BSS:
+        g.bss_size = align_up(g.bss_size, a)
+        ret
+    end
+    l := sec_len(g, sec)
+    sec_pad(g, sec, align_up(l, a) - l)
+    if a > g.sec_align[sec]:
+        g.sec_align[sec] = a
+    end
+end
+
+func sec_le(g &: Ng, sec: int, v: i64, n: int):
+    mut x := v as u64
+    repeat n:
+        sec_put(g, sec, (x & (0xFF as u64)) as int)
+        x = x >> (8 as u64)
+    end
+end
+
+func add_reloc(g &: Ng, sec: int, off: int, sym: int, rtype: int, addend: i64):
+    g.r_sec.push(sec)
+    g.r_off.push(off)
+    g.r_sym.push(sym)
+    g.r_type.push(rtype)
+    g.r_add.push(addend)
+    g.sy_used[sym] = true
+end
+
+func is_type_start(g &: Ng): bool:
+    save := g.p
+    skip_ws(g)
+    c := cur(g)
+    mut r := false
+    if c == 37 or c == 123 or c == 91 or c == 60:
+        r = true
+    else c == 105 and is_dig(at_off(g, 1)):
+        r = true
+    else:
+        k := peek_kw(g)
+        r = k == KW_PTR or k == KW_VOID or k == KW_FLOAT or k == KW_DOUBLE or k == KW_LABEL
+    end
+    g.p = save
+    ret r
+end
+
+func skip_attrs_to_type(g &: Ng):
+    until g.ok and not is_type_start(g):
+        if not word(g):
+            fail(g, "native backend: unexpected text near '" + near(g) + "'")
+            ret
+        end
+        skip_sp(g)
+        if cur(g) == 40:
+            skip_balanced(g)
+        end
+    end
+end
+
+func gep_const(g &: Ng, t0: int):
+    mut ty := t0
+    mut first := true
+    until eat(g, 44):
+        it := parse_type(g)
+        _ii := it
+        idx := read_i64(g)
+        if first:
+            g.ce_off += idx * (tsize(g, ty) as i64)
+            first = false
+        else g.t_kind[ty] == TK_STRUCT:
+            g.ce_off += field_off(g, ty, idx as int) as i64
+            ty = field_ty(g, ty, idx as int)
+        else g.t_kind[ty] == TK_ARRAY:
+            el := g.t_elem[ty]
+            g.ce_off += idx * (tsize(g, el) as i64)
+            ty = el
+        end
+    end
+end
+
+func parse_cexpr(g &: Ng, k: int):
+    expect(g, 40)
+    if k == KW_GEP:
+        _ib := eat_kw(g, KW_INBOUNDS)
+        st := parse_type(g)
+        expect(g, 44)
+        _bt := parse_type(g)
+        parse_const_scalar(g, T_PTR)
+        gep_const(g, st)
+        expect(g, 41)
+    else:
+        _ft := parse_type(g)
+        parse_const_scalar(g, T_PTR)
+        if not eat_kw(g, KW_TO):
+            fail(g, "native backend: bad constant cast near '" + near(g) + "'")
+        end
+        _tt := parse_type(g)
+        expect(g, 41)
+    end
+end
+
+func parse_const_scalar(g &: Ng, ty: int):
+    skip_ws(g)
+    c := cur(g)
+    if c == 64:
+        if read_sigil_name(g, 64):
+            s := sym_of(g, g.src, g.ws, g.wl)
+            g.ce_sym = s
+        end
+        ret
+    end
+    if is_dig(c) or c == 45:
+        if is_flt(g, ty):
+            g.ce_off = read_float_bits(g)
+        else:
+            g.ce_off += read_i64(g)
+        end
+        ret
+    end
+    save := g.p
+    k := word_kw(g)
+    if k == KW_TRUE:
+        g.ce_off = 1 as i64
+    else k == KW_FALSE or k == KW_NULL or k == KW_UNDEF or k == KW_POISON or k == KW_ZEROINIT:
+        g.ce_off += 0 as i64
+    else k == KW_GEP or k == KW_PTRTOINT or k == KW_INTTOPTR or k == KW_BITCAST:
+        parse_cexpr(g, k)
+    else:
+        g.p = save
+        fail(g, "native backend: unsupported constant near '" + near(g) + "'")
+    end
+end
+
+func emit_const(g &: Ng, sec: int, ty: int):
+    skip_ws(g)
+    sz := tsize(g, ty)
+    save := g.p
+    k := word_kw(g)
+    if k == KW_ZEROINIT or k == KW_UNDEF or k == KW_POISON:
+        sec_pad(g, sec, sz)
+        ret
+    end
+    if k != KW_C:
+        g.p = save
+    end
+    tk := g.t_kind[ty]
+    if tk == TK_STRUCT:
+        start := sec_len(g, sec)
+        expect(g, 123)
+        repeat g.t_nf[ty] in i:
+            if i > 0:
+                expect(g, 44)
+            end
+            ft := parse_type(g)
+            want := start + field_off(g, ty, i)
+            sec_pad(g, sec, want - sec_len(g, sec))
+            emit_const(g, sec, ft)
+        end
+        expect(g, 125)
+        sec_pad(g, sec, start + sz - sec_len(g, sec))
+        ret
+    end
+    if tk == TK_ARRAY:
+        if k == KW_C:
+            expect(g, 34)
+            mut n := 0
+            until g.p < g.sn and g.src[g.p] != (34 as u8):
+                ch := g.src[g.p] as int
+                if ch == 92:
+                    if at_off(g, 1) == 92:
+                        sec_put(g, sec, 92)
+                        g.p += 2
+                    else:
+                        sec_put(g, sec, hexv(at_off(g, 1)) * 16 + hexv(at_off(g, 2)))
+                        g.p += 3
+                    end
+                else:
+                    sec_put(g, sec, ch)
+                    g.p += 1
+                end
+                n += 1
+            end
+            g.p += 1
+            sec_pad(g, sec, sz - n)
+            ret
+        end
+        expect(g, 91)
+        el := g.t_elem[ty]
+        mut cnt := 0 as i64
+        until g.ok and not eat(g, 93):
+            if cnt > 0:
+                expect(g, 44)
+            end
+            et := parse_type(g)
+            emit_const(g, sec, et)
+            cnt += 1
+        end
+        sec_pad(g, sec, ((g.t_count[ty] - cnt) * (tsize(g, el) as i64)) as int)
+        ret
+    end
+    g.ce_sym = 0 - 1
+    g.ce_off = 0 as i64
+    parse_const_scalar(g, ty)
+    if g.ce_sym >= 0:
+        add_reloc(g, sec, sec_len(g, sec), g.ce_sym, R_ABS64, g.ce_off)
+        sec_pad(g, sec, sz)
+        ret
+    end
+    if ty == T_F32:
+        sec_le(g, sec, f32_bits_of(bits_f64(g.ce_off)), 4)
+        ret
+    end
+    sec_le(g, sec, g.ce_off, sz)
+end
+
+func parse_global(g &: Ng):
+    if not read_sigil_name(g, 64):
+        fail(g, "native backend: bad global")
+        ret
+    end
+    s := sym_of(g, g.src, g.ws, g.wl)
+    expect(g, 61)
+    mut is_const := false
+    mut local := false
+    mut appending := false
+    mut external := false
+    until g.ok:
+        k := word_kw(g)
+        if k == KW_GLOBAL:
+            break
+        end
+        if k == KW_CONSTANT:
+            is_const = true
+            break
+        end
+        if k == KW_INTERNAL or k == KW_PRIVATE:
+            local = true
+        end
+        if k == KW_APPENDING:
+            appending = true
+        end
+        if k == KW_EXTERNAL:
+            external = true
+        end
+        if g.wl == 0:
+            fail(g, "native backend: bad global near '" + near(g) + "'")
+            ret
+        end
+    end
+    ty := parse_type(g)
+    if external:
+        g.sy_kind[s] = SY_DATA
+        skip_line(g)
+        ret
+    end
+    if appending:
+        emit_xtors(g, s, ty)
+        skip_line(g)
+        ret
+    end
+    mut sec := SEC_DATA
+    if is_const:
+        sec = SEC_RODATA
+    end
+    al := talign(g, ty)
+    a2 := al < 1 ? 1 : al
+    sec_align_to(g, sec, a2)
+    mut start := sec_len(g, sec)
+    nrel := g.r_sec.len()
+    emit_const(g, sec, ty)
+    if sec == SEC_RODATA and g.r_sec.len() > nrel:
+        sec_align_to(g, SEC_DATA, a2)
+        dstart := g.s_data.len()
+        mut q := start
+        until q < g.s_ro.len():
+            g.s_data.push(g.s_ro[q])
+            q += 1
+        end
+        sec_trunc(g, SEC_RODATA, start)
+        mut ri := nrel
+        until ri < g.r_sec.len():
+            g.r_sec[ri] = SEC_DATA
+            g.r_off[ri] = g.r_off[ri] - start + dstart
+            ri += 1
+        end
+        sec = SEC_DATA
+        start = dstart
+    end
+    mut sz := sec_len(g, sec) - start
+    if sz == 0:
+        sec_put(g, sec, 0)
+        sz = 1
+    end
+    if sec == SEC_DATA and g.r_sec.len() == nrel:
+        mut allz := true
+        mut j := start
+        until allz and j < start + sz:
+            if sec_byte(g, sec, j) != 0:
+                allz = false
+            end
+            j += 1
+        end
+        if allz:
+            sec_trunc(g, sec, start)
+            sec = SEC_BSS
+            sec_align_to(g, SEC_BSS, a2)
+            g.sy_off[s] = g.bss_size
+            g.bss_size += sz
+        else:
+            g.sy_off[s] = start
+        end
+    else:
+        g.sy_off[s] = start
+    end
+    if a2 > g.sec_align[sec]:
+        g.sec_align[sec] = a2
+    end
+    g.sy_kind[s] = SY_DATA
+    g.sy_def[s] = true
+    g.sy_local[s] = local
+    g.sy_sec[s] = sec
+    g.sy_size[s] = sz
+    skip_line(g)
+end
+
+func emit_xtors(g &: Ng, s: int, ty: int):
+    mut sec := SEC_FINI
+    if s == g.sym_i_ctors:
+        sec = SEC_INIT
+    end
+    if g.t_kind[ty] != TK_ARRAY:
+        ret
+    end
+    et := g.t_elem[ty]
+    expect(g, 91)
+    until g.ok and not eat(g, 93):
+        _c := eat(g, 44)
+        _t := parse_type(g)
+        expect(g, 123)
+        _t1 := parse_type(g)
+        _prio := read_i64(g)
+        expect(g, 44)
+        _t2 := parse_type(g)
+        g.ce_sym = 0 - 1
+        g.ce_off = 0 as i64
+        parse_const_scalar(g, T_PTR)
+        if g.ce_sym >= 0:
+            sec_align_to(g, sec, 8)
+            add_reloc(g, sec, sec_len(g, sec), g.ce_sym, R_ABS64, g.ce_off)
+            sec_pad(g, sec, 8)
+        end
+        expect(g, 44)
+        _t3 := parse_type(g)
+        g.ce_sym = 0 - 1
+        parse_const_scalar(g, T_PTR)
+        expect(g, 125)
+    end
+    _e := et
+end
+
+func parse_declare(g &: Ng):
+    skip_attrs_to_type(g)
+    _rt := parse_type(g)
+    if read_sigil_name(g, 64):
+        s := sym_of(g, g.src, g.ws, g.wl)
+        if g.sy_kind[s] == SY_UNKNOWN:
+            g.sy_kind[s] = SY_FUNC
+        end
+    end
+    skip_line(g)
+end
+
+pub func ParseModule(g &: Ng):
+    prescan_types(g)
+    until g.ok:
+        skip_ws(g)
+        if g.p >= g.sn:
+            break
+        end
+        c := cur(g)
+        if c == 37 or c == 33:
+            skip_line(g)
+            continue
+        end
+        if c == 64:
+            parse_global(g)
+            continue
+        end
+        k := word_kw(g)
+        if k == KW_DEFINE:
+            parse_define(g)
+        else k == KW_DECLARE:
+            parse_declare(g)
+        else:
+            skip_line(g)
+        end
+    end
+end

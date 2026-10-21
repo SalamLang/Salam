@@ -69,6 +69,19 @@ if [ "${1:-}" = "--worker" ]; then
             return
         fi
         got=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/a.exe" </dev/null 2>&1 | tr -d '\r')
+        if [ ! -f "$jobdir/$name/salam.toml" ]; then
+            echo "FAIL $label (generated project has no salam.toml)"
+            rm -rf "$jobdir"
+            return
+        fi
+        mv "$jobdir/$name/main.salam" "$jobdir/$name/other.salam"
+        if (cd "$jobdir/$name" && "$SALAM_ABS" build --output="$jobdir/b.exe" --no-color --log-level=error) >"$buildlog" 2>&1 \
+            || ! grep -q 'main\.salam' "$buildlog"; then
+            echo "FAIL $label (a project without main.salam must not build)"
+            sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+            rm -rf "$jobdir"
+            return
+        fi
         rm -rf "$jobdir"
         wk_check "$expabs" "$got"
     }

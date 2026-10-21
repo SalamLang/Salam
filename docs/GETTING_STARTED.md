@@ -80,17 +80,17 @@ Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLa
 Once Salam is installed, it updates itself:
 
 ```sh
-salam update            # newest release: compiler, std/ and bundled tools together
-salam update --check    # only say whether a newer release is out
-salam update 0.5.4      # install that exact release, older ones included
+salam upgrade           # newest release: compiler, std/ and bundled tools together
+salam upgrade --check   # only say whether a newer release is out
+salam upgrade 0.5.4     # install that exact release, older ones included
 ```
 
-`salam update` asks GitHub for the latest release and runs the same
+`salam upgrade` asks GitHub for the latest release and runs the same
 installer as above against the directory `salam` runs from, so the whole
 bundle is replaced at once and an old `std/` never lingers. It leaves PATH
 alone. A copy that Homebrew, Scoop, Chocolatey, winget, npm, Nix, snap or a
 Linux distribution package installed is left to that package manager, and
-`salam update` prints the command to run instead (`--force` overrides that).
+`salam upgrade` prints the command to run instead (`--force` overrides that).
 A compiler built from a source checkout is updated with `git pull` and a
 rebuild.
 
@@ -189,12 +189,11 @@ flag needed: `SALAM_VERSION`, `SALAM_VERSION_CODE`, `SALAM_GIT_COMMIT`,
 the moment your program was compiled, so a binary can print its own build
 stamp.
 
-### 📁 Project entry file: `salam.salam`
+### 📁 Project entry file: `main.salam`
 
 Passing a single file always compiles exactly that file. When you pass a
-**directory** instead - or nothing at all - the compiler builds "the project
-in that directory", and the fixed filename `salam.salam` is the project's
-entry file:
+**directory** instead, or nothing at all, the compiler builds "the project
+in that directory", and its entry file is always `main.salam`:
 
 ```sh
 salam build                 # build the project in the current directory
@@ -204,31 +203,26 @@ salam run                   # build + run the project here
 salam exec                  # interpret the project here
 ```
 
-- If `<dir>/salam.salam` exists, it must define `main` and is used as the
-  entry file; no scanning or guessing happens.
-- If it does not exist, the directory's top-level `.salam` files are scanned
-  for one defining `main`.
-- If several of them define `main`, the file **named after the entry** wins:
-  `main.salam`, or the langpack's own spelling (`اصلی.salam`, `الرئیسیة.salam`).
-  That is what lets a project keep a second entry point beside its real one -
-  a benchmark harness, a tool, a build for another target - instead of the
-  directory refusing to resolve. Only when none of them is named that way is
-  it an error, and the message says how to settle it.
+- `<dir>/main.salam` must exist and define `main` (`ریشه` in Persian).
+  No other file name is accepted and no scanning or guessing happens; a
+  directory without `main.salam` is an error that names the file to rename.
 - The default executable name for a project is its **directory name**
-  (`myproject.exe`), not `salam.exe`.
-- `salam new <name>` scaffolds the project with a `salam.salam` entry file.
+  (`myproject`, or `myproject.exe` on Windows), not `main`.
+- `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
+  `.gitignore`. `salam init [dir]` does the same in an existing directory
+  and never overwrites a file that is already there.
 
-Frontend (layout DSL) projects have no `main` function; there the same rule
-applies to the `page` block instead:
+Frontend (layout DSL) projects have no `main` function; there `main.salam`
+is the project page:
 
 ```sh
-salam web                   # build the page project here: salam.salam if
-                            # present, else the single .salam page page
-salam page build          # salam.salam if present, else EVERY layout
+salam web                   # build the page project here: main.salam if
+                            # present, else the single .salam page
+salam page build            # main.salam if present, else EVERY layout
                             # page in the directory (multi-page site)
 ```
 
-A `salam.salam` layout page compiles to `index.html` (the web server entry
+A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
 
 More examples live in [`tests/en/`](../tests/en/).

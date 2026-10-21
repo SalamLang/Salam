@@ -2179,10 +2179,11 @@ salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
-salam new name                          # scaffold a project
+salam new name                          # scaffold a project: name/main.salam + salam.toml
+salam init                              # same, in the current directory
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
-salam update [X.Y.Z] [--check]          # upgrade salam and std/ to the newest release (or X.Y.Z)
+salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 

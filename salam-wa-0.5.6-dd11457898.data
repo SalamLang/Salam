@@ -947,6 +947,75 @@ n := name.len()
 if n == 0: ret false end
 ret str.EndsWith(name, "/")
 end
+func _zip_extract_by_name(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
+ok = false
+mut out := compress.NewByteBuf()
+mut eocd_pos := 0
+if not _zip_find_eocd(p, n, eocd_pos):
+ret out
+end
+count := LEGet16(p, eocd_pos + 10)
+cd_offset := LEGet32(p, eocd_pos + 16)
+mut pos := cd_offset
+mut k := 0
+until k < count:
+if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+break
+end
+if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
+break
+end
+flags := LEGet16(p, pos + 8)
+method := LEGet16(p, pos + 10)
+comp_size := LEGet32(p, pos + 20)
+uncomp_size := LEGet32(p, pos + 24)
+name_len := LEGet16(p, pos + 28)
+extra_len := LEGet16(p, pos + 30)
+comment_len := LEGet16(p, pos + 32)
+local_offset := LEGet32(p, pos + 42)
+nm := _zip_read_name(p, pos + 46, name_len)
+hit := nm == name
+_zip_free_name(nm)
+if hit:
+if (flags & 1) != 0 or not _zip_in(local_offset, 30, n):
+ret out
+end
+lname_len := LEGet16(p, local_offset + 26)
+lextra_len := LEGet16(p, local_offset + 28)
+data_start := local_offset + 30 + lname_len + lextra_len
+if not _zip_in(data_start, comp_size, n):
+ret out
+end
+data_ptr := ((p as i64) + (data_start as i64)) as void*
+if max > 0 and uncomp_size > max:
+ret out
+end
+if method == 0:
+if max > 0 and comp_size > max:
+ret out
+end
+compress.BufPushBytes(out, data_ptr, comp_size)
+ok = true
+else:
+if method == 8:
+mut infl_ok := false
+result := compress.RawInflateMax(data_ptr, comp_size, uncomp_size < 0 ? 0 : uncomp_size, max, infl_ok)
+if infl_ok:
+compress.BufFree(out)
+out = result
+ok = true
+else:
+compress.BufFree(result)
+end
+end
+end
+ret out
+end
+pos += 46 + name_len + extra_len + comment_len
+k += 1
+end
+ret out
+end
 @en "MakeZipFileInput"
 @fa "ساخت ورودی پرونده زیپ"
 pub func MakeZipFileInput(name: str, data_ptr: void*, data_len: int, method: int): ZipFileInput:
@@ -1081,67 +1150,12 @@ end
 @en "ZipExtractByName"
 @fa "استخراج با نام از زیپ"
 pub func ZipExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
-ok = false
-mut out := compress.NewByteBuf()
-mut eocd_pos := 0
-if not _zip_find_eocd(p, n, eocd_pos):
-ret out
+ret _zip_extract_by_name(p, n, name, 0, ok)
 end
-count := LEGet16(p, eocd_pos + 10)
-cd_offset := LEGet32(p, eocd_pos + 16)
-mut pos := cd_offset
-mut k := 0
-until k < count:
-if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
-break
-end
-if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
-break
-end
-flags := LEGet16(p, pos + 8)
-method := LEGet16(p, pos + 10)
-comp_size := LEGet32(p, pos + 20)
-uncomp_size := LEGet32(p, pos + 24)
-name_len := LEGet16(p, pos + 28)
-extra_len := LEGet16(p, pos + 30)
-comment_len := LEGet16(p, pos + 32)
-local_offset := LEGet32(p, pos + 42)
-nm := _zip_read_name(p, pos + 46, name_len)
-hit := nm == name
-_zip_free_name(nm)
-if hit:
-if (flags & 1) != 0 or not _zip_in(local_offset, 30, n):
-ret out
-end
-lname_len := LEGet16(p, local_offset + 26)
-lextra_len := LEGet16(p, local_offset + 28)
-data_start := local_offset + 30 + lname_len + lextra_len
-if not _zip_in(data_start, comp_size, n):
-ret out
-end
-data_ptr := ((p as i64) + (data_start as i64)) as void*
-if method == 0:
-compress.BufPushBytes(out, data_ptr, comp_size)
-ok = true
-else:
-if method == 8:
-mut infl_ok := false
-result := compress.RawInflate(data_ptr, comp_size, uncomp_size < 0 ? 0 : uncomp_size, infl_ok)
-if infl_ok:
-compress.BufFree(out)
-out = result
-ok = true
-else:
-compress.BufFree(result)
-end
-end
-end
-ret out
-end
-pos += 46 + name_len + extra_len + comment_len
-k += 1
-end
-ret out
+@en "ZipExtractByNameMax"
+@fa "استخراج با نام از زیپ با سقف"
+pub func ZipExtractByNameMax(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
+ret _zip_extract_by_name(p, n, name, max, ok)
 end
 @en "ZipExtractAll"
 @fa "استخراج همه از زیپ"
@@ -23359,10 +23373,13 @@ mut v := Vector {} as Vector<int>
 repeat 32: v.push(5) end
 ret v
 end
-func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable): bool:
+func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int): bool:
 until true:
 sym := _decode_raw_symbol(r, littable)
 if sym < 0 or r.bad:
+ret false
+end
+if max > 0 and BufLen(out) > max:
 ret false
 end
 if sym < 256:
@@ -23393,7 +23410,7 @@ end
 end
 end
 end
-func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf): bool:
+func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int): bool:
 hlit := BitReadBits(r, 5) + 257
 hdist := BitReadBits(r, 5) + 1
 hclen := BitReadBits(r, 4) + 4
@@ -23473,20 +23490,21 @@ mut littable := _build_raw_huff_table(litlengths)
 mut disttable := _build_raw_huff_table(distlengths)
 defer litlengths.free()
 defer distlengths.free()
-ok := _raw_inflate_block(r, out, littable, disttable)
+ok := _raw_inflate_block(r, out, littable, disttable, max)
 _raw_huff_table_free(littable)
 _raw_huff_table_free(disttable)
 ret ok
 end
-@en "RawInflate"
-@fa "کدگشایی دیفلیت خام"
-pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
+func _raw_inflate(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
 ok = true
 mut r := NewBitReader(p, n)
 mut cap := 0
 if expected_size > 0: cap = expected_size end
 if (cap as i64) > (n as i64) * (1032 as i64) + (1024 as i64):
 cap = n * 1032 + 1024
+end
+if max > 0 and cap > max:
+cap = max
 end
 mut out := NewByteBufCap(cap)
 mut bfinal := 0
@@ -23502,6 +23520,9 @@ until k < len_val and not r.bad:
 b := BitReadBits(r, 8)
 BufPush(out, b)
 k += 1
+if max > 0 and BufLen(out) > max:
+r.bad = true
+end
 end
 else:
 if btype == 1:
@@ -23511,7 +23532,7 @@ mut littable := _build_raw_huff_table(litlengths)
 mut disttable := _build_raw_huff_table(distlengths)
 litlengths.free()
 distlengths.free()
-good := _raw_inflate_block(r, out, littable, disttable)
+good := _raw_inflate_block(r, out, littable, disttable, max)
 _raw_huff_table_free(littable)
 _raw_huff_table_free(disttable)
 if not good:
@@ -23520,7 +23541,7 @@ ret out
 end
 else:
 if btype == 2:
-if not _raw_inflate_dynamic_block(r, out):
+if not _raw_inflate_dynamic_block(r, out, max):
 ok = false
 ret out
 end
@@ -23536,6 +23557,16 @@ ret out
 end
 end
 ret out
+end
+@en "RawInflate"
+@fa "کدگشایی دیفلیت خام"
+pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
+ret _raw_inflate(p, n, expected_size, 0, ok)
+end
+@en "RawInflateMax"
+@fa "کدگشایی دیفلیت خام با سقف"
+pub func RawInflateMax(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
+ret _raw_inflate(p, n, expected_size, max, ok)
 end
 package compress
 const _RLE_MAX_RUN := 128

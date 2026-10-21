@@ -2,7 +2,7 @@ package nativegen
 
 const RA_INF := 2147483647
 
-k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15]
+k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15, 5]
 k_ra_gpr_win := [0, 1, 2, 8, 9, 3, 6, 7, 12, 13, 14, 15]
 k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 
@@ -47,6 +47,9 @@ end
 
 func is_callee_saved(g &: Ng, r: int): bool:
     if r == RBX or r == R12 or r == R13 or r == R14 or r == R15:
+        ret true
+    end
+    if r == RBP and g.os != NG_OS_WINDOWS:
         ret true
     end
     if g.os == NG_OS_WINDOWS:
@@ -521,7 +524,10 @@ func spill_vreg(g &: Ng, v: int):
 end
 
 func reg_ok_for(g &: Ng, r: int, cls: int): bool:
-    if r < 0 or r == RSP or r == RBP or r == R10 or r == R11 or r >= XMM14:
+    if r < 0 or r == RSP or r == R10 or r == R11 or r >= XMM14:
+        ret false
+    end
+    if r == RBP and g.os == NG_OS_WINDOWS:
         ret false
     end
     ret g.mc.vcls[r] == cls
@@ -841,6 +847,20 @@ func rewrite(g &: Ng):
                 _m := e_rr(g, mop, 8, p0, p1)
             end
             continue
+        end
+        if op == M_ALU_RR and o.mk[i] == MK_NONE and r0 >= 0 and r1 >= 0 and r0 != r1:
+            f0 := spilled(g, r0)
+            f1 := spilled(g, r1)
+            if f1 and not f0 and g.mc.vcls[r1] == 0:
+                ia := e_rm(g, M_ALU_RM, o.sz[i], phys(g, r0), frame_mem(g.mc.vslot[r1], 0 as i64))
+                g.mc.cc[ia] = o.cc[i]
+                continue
+            end
+            if f0 and not f1 and g.mc.vcls[r0] == 0:
+                ib := e_mr(g, M_ALU_MR, o.sz[i], frame_mem(g.mc.vslot[r0], 0 as i64), phys(g, r1))
+                g.mc.cc[ib] = o.cc[i]
+                continue
+            end
         end
         mut ngs := 0
         mut nxs := 0
@@ -1248,23 +1268,6 @@ func color_slots(g &: Ng):
     pr_n.free()
 end
 
-func uses_rbp(g &: Ng): bool:
-    n := g.mc.op.len()
-    repeat n in i:
-        k := g.mc.mk[i]
-        if k == MK_FRAME or k == MK_ARG:
-            ret true
-        end
-        if g.mc.r0[i] == RBP or g.mc.r1[i] == RBP:
-            ret true
-        end
-        if k == MK_BI and (g.mc.mb[i] == RBP or g.mc.mi[i] == RBP):
-            ret true
-        end
-    end
-    ret false
-end
-
 func frame_layout(g &: Ng):
     g.mc.callee_used.clear()
     mut used := Vector {} as Vector<bool>
@@ -1324,11 +1327,21 @@ func frame_layout(g &: Ng):
     end
     g.mc.fpo = false
     g.mc.fpo_pad = 0
-    if g.os != NG_OS_WINDOWS and curo == 8 * ngp and g.mc.out_args == 0 and xs.len() == 0 and not uses_rbp(g):
+    if g.os != NG_OS_WINDOWS:
         g.mc.fpo = true
-        if g.mc.has_call and ngp % 2 == 0:
-            g.mc.fpo_pad = 8
+        mut alloc := 8 + curo + g.mc.out_args - 8 * ngp
+        if curo == 8 * ngp and g.mc.out_args == 0:
+            alloc = 0
         end
+        if alloc < 0:
+            alloc = 0
+        end
+        alloc = align_up(alloc, 8)
+        if (8 * ngp + alloc) % 16 != 8 and (g.mc.has_call or alloc > 0):
+            alloc += 8
+        end
+        g.mc.fpo_pad = alloc
+        g.mc.frame_size = alloc
     end
     used.free()
     xs.free()

@@ -78,12 +78,22 @@ func win_adj(g &: Ng): i64:
     ret 8 * ngp_count(g) + g.mc.frame_size - g.mc.win_fp
 end
 
+func fpo_base(g &: Ng): i64:
+    ret 8 * ngp_count(g) + g.mc.fpo_pad - 8
+end
+
 func rm_of(g &: Ng, i: int): RM:
     k := g.mc.mk[i]
     if k == MK_FRAME:
+        if g.mc.fpo:
+            ret RM { mem = true, k = MK_BI, b = RSP, i = g.mc.mi[i], s = g.mc.ms[i], d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + fpo_base(g) }
+        end
         ret RM { mem = true, k = MK_BI, b = RBP, i = g.mc.mi[i], s = g.mc.ms[i], d = g.mc.md[i] - (g.mc.fs_off[g.mc.mb[i]] as i64) + win_adj(g) }
     end
     if k == MK_ARG:
+        if g.mc.fpo:
+            ret RM { mem = true, k = MK_BI, b = RSP, d = g.mc.md[i] + fpo_base(g) }
+        end
         ret RM { mem = true, k = MK_BI, b = RBP, d = g.mc.md[i] + win_adj(g) }
     end
     if k == MK_RIP or k == MK_GOT:
@@ -665,10 +675,7 @@ func enc_prologue(g &: Ng, e &: Enc):
             push_reg(e, g.mc.callee_used[kf])
         end
         if g.mc.fpo_pad > 0:
-            eb(e, 0x48)
-            eb(e, 0x83)
-            eb(e, 0xEC)
-            eb(e, g.mc.fpo_pad)
+            enc_alloc(g, e, g.mc.fpo_pad)
         end
         ret
     end
@@ -695,10 +702,17 @@ func enc_epilogue(g &: Ng, e &: Enc):
     ngp := ngp_count(g)
     if g.mc.fpo:
         if g.mc.fpo_pad > 0:
-            eb(e, 0x48)
-            eb(e, 0x83)
-            eb(e, 0xC4)
-            eb(e, g.mc.fpo_pad)
+            if fits8(g.mc.fpo_pad as i64):
+                eb(e, 0x48)
+                eb(e, 0x83)
+                eb(e, 0xC4)
+                eb(e, g.mc.fpo_pad)
+            else:
+                eb(e, 0x48)
+                eb(e, 0x81)
+                eb(e, 0xC4)
+                e32(e, g.mc.fpo_pad as i64)
+            end
         end
         mut kf := ngp - 1
         until kf >= 0:

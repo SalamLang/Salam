@@ -89,6 +89,7 @@ func sec_bytes(g &: Ng, sec: int): Vector<u8>:
         SEC_PDATA: ret g.s_pdata end
         SEC_XDATA: ret g.s_xdata end
         SEC_CONST: ret g.s_cst end
+        SEC_EHFRAME: ret g.s_eh end
     end
     ret g.s_text
 end
@@ -97,7 +98,7 @@ func emit_sym_for(g &: Ng, s: int): bool:
     ret g.sy_def[s] or g.sy_used[s]
 end
 
-func elf_secs(): Vector<int>:
+func elf_secs(g &: Ng): Vector<int>:
     mut v := Vector {} as Vector<int>
     v.push(SEC_TEXT)
     v.push(SEC_RODATA)
@@ -106,6 +107,9 @@ func elf_secs(): Vector<int>:
     v.push(SEC_BSS)
     v.push(SEC_INIT)
     v.push(SEC_FINI)
+    if g.s_eh.len() > 0:
+        v.push(SEC_EHFRAME)
+    end
     ret v
 end
 
@@ -118,6 +122,7 @@ func elf_name(sec: int): str:
         SEC_BSS: ret ".bss" end
         SEC_INIT: ret ".init_array" end
         SEC_FINI: ret ".fini_array" end
+        SEC_EHFRAME: ret ".eh_frame" end
     end
     ret ".data"
 end
@@ -131,7 +136,7 @@ end
 
 func elf_flags(sec: int): int:
     if sec == SEC_TEXT: ret 6 end
-    if sec == SEC_RODATA or sec == SEC_CONST: ret 2 end
+    if sec == SEC_RODATA or sec == SEC_CONST or sec == SEC_EHFRAME: ret 2 end
     ret 3
 end
 
@@ -149,7 +154,7 @@ func sh_entry(o &: Ob, name: int, typ: int, flags: int, off: int, size: int, lin
 end
 
 func write_elf(g &: Ng, path: str): bool:
-    secs := elf_secs()
+    secs := elf_secs(g)
     nds := secs.len()
     mut shidx := Vector {} as Vector<int>
     repeat SEC_COUNT:
@@ -292,7 +297,7 @@ func write_elf(g &: Ng, path: str): bool:
         mut al := g.sec_align[sc3]
         if sc3 == SEC_TEXT:
             al = 16
-        else sc3 == SEC_INIT or sc3 == SEC_FINI:
+        else sc3 == SEC_INIT or sc3 == SEC_FINI or sc3 == SEC_EHFRAME:
             al = 8
         end
         if al < 1:
@@ -346,5 +351,161 @@ func put_le(o &: Ob, pos0: int, v: i64, n: int):
     repeat n in i:
         o.b[pos0 + i] = (x & (255 as u64)) as u8
         x = x >> (8 as u64)
+    end
+end
+
+func eh_u8(g &: Ng, v: int):
+    g.s_eh.push((v & 255) as u8)
+end
+
+func eh_le(g &: Ng, v: i64, n: int):
+    mut x := v as u64
+    repeat n:
+        g.s_eh.push((x & (255 as u64)) as u8)
+        x = x >> (8 as u64)
+    end
+end
+
+func eh_uleb(g &: Ng, v: int):
+    mut x := v
+    until true:
+        b := x & 127
+        x = x >> 7
+        if x == 0:
+            eh_u8(g, b)
+            ret
+        end
+        eh_u8(g, b | 128)
+    end
+end
+
+func eh_put32(g &: Ng, at: int, v: int):
+    mut x := v
+    repeat 4 in k:
+        g.s_eh[at + k] = (x & 255) as u8
+        x = x >> 8
+    end
+end
+
+func dw_reg(r: int): int:
+    switch r:
+        1: ret 2 end
+        2: ret 1 end
+        4: ret 7 end
+        5: ret 6 end
+        6: ret 4 end
+        7: ret 5 end
+    end
+    ret r
+end
+
+func eh_advance(g &: Ng, loc &: int, dst: int):
+    d := dst - loc
+    if d <= 0:
+        ret
+    end
+    if d < 64:
+        eh_u8(g, 0x40 | d)
+    else d < 256:
+        eh_u8(g, 0x02)
+        eh_u8(g, d)
+    else:
+        eh_u8(g, 0x03)
+        eh_le(g, d as i64, 2)
+    end
+    loc = dst
+end
+
+func eh_cfa(g &: Ng, off: int):
+    eh_u8(g, 0x0E)
+    eh_uleb(g, off)
+end
+
+func push_len(r: int): int:
+    ret r >= 8 ? 2 : 1
+end
+
+func build_eh_frame(g &: Ng):
+    g.s_eh.clear()
+    if g.eh_sym.len() == 0:
+        ret
+    end
+    eh_le(g, 0 as i64, 4)
+    eh_le(g, 0 as i64, 4)
+    eh_u8(g, 1)
+    eh_u8(g, 0x7A)
+    eh_u8(g, 0x52)
+    eh_u8(g, 0)
+    eh_uleb(g, 1)
+    eh_u8(g, 0x78)
+    eh_uleb(g, 16)
+    eh_uleb(g, 1)
+    eh_u8(g, 0x1B)
+    eh_u8(g, 0x0C)
+    eh_uleb(g, 7)
+    eh_uleb(g, 8)
+    eh_u8(g, 0x90)
+    eh_uleb(g, 1)
+    until (g.s_eh.len() % 8) == 0:
+        eh_u8(g, 0)
+    end
+    eh_put32(g, 0, g.s_eh.len() - 4)
+    repeat g.eh_sym.len() in f:
+        fs := g.eh_sym[f]
+        if g.sy_live.len() > 0 and (fs >= g.sy_live.len() or not g.sy_live[fs]):
+            continue
+        end
+        if not g.sy_def[fs] or g.sy_sec[fs] != SEC_TEXT:
+            continue
+        end
+        start := g.s_eh.len()
+        eh_le(g, 0 as i64, 4)
+        eh_le(g, (start + 4) as i64, 4)
+        add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_PC32, 0 as i64)
+        eh_le(g, 0 as i64, 4)
+        eh_le(g, g.sy_size[fs] as i64, 4)
+        eh_uleb(g, 0)
+        mut loc := 0
+        mut at := 0
+        nr := g.eh_rn[f]
+        repeat nr in k:
+            r := g.eh_regs[g.eh_rs[f] + k]
+            at += push_len(r)
+            eh_advance(g, loc, at)
+            eh_cfa(g, 8 + 8 * (k + 1))
+            eh_u8(g, 0x80 | dw_reg(r))
+            eh_uleb(g, k + 2)
+        end
+        al := g.eh_alloc[f]
+        if al > 0:
+            at += fits8(al as i64) ? 4 : 7
+            eh_advance(g, loc, at)
+            eh_cfa(g, 8 + 8 * nr + al)
+        end
+        repeat g.eh_en[f] in q:
+            ep := g.eh_ep[g.eh_es[f] + q]
+            mut p := ep
+            eh_advance(g, loc, p)
+            eh_u8(g, 0x0A)
+            if al > 0:
+                p += fits8(al as i64) ? 4 : 7
+                eh_advance(g, loc, p)
+                eh_cfa(g, 8 + 8 * nr)
+            end
+            mut k2 := nr - 1
+            until k2 >= 0:
+                p += push_len(g.eh_regs[g.eh_rs[f] + k2])
+                eh_advance(g, loc, p)
+                eh_cfa(g, 8 + 8 * k2)
+                k2 -= 1
+            end
+            p += 1
+            eh_advance(g, loc, p)
+            eh_u8(g, 0x0B)
+        end
+        until (g.s_eh.len() % 8) == 0:
+            eh_u8(g, 0)
+        end
+        eh_put32(g, start, g.s_eh.len() - start - 4)
     end
 end

@@ -95,8 +95,76 @@ func dump_ir(g &: Ng, tag: str):
     end
 end
 
+func verify_use(g &: Ng, v: int, ub: int, pos: int, order &: Vector<int>): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret true
+    end
+    d := g.v_def[v]
+    if d < 0:
+        ret false
+    end
+    db := g.i_blk[d]
+    if db == ub:
+        ret order[d] < pos
+    end
+    ret dominates(g, db, ub)
+end
+
+func verify_ssa(g &: Ng):
+    build_cfg(g)
+    build_dom(g)
+    mut order := Vector {} as Vector<int>
+    repeat g.i_op.len():
+        order.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        mut n := 0
+        mut i := g.b_first[b]
+        until i >= 0:
+            order[i] = n
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    mut bad := 0 - 1
+    each b2 in g.b_rpo:
+        mut j := g.b_first[b2]
+        until j >= 0 and bad < 0:
+            op := g.i_op[j]
+            if op == OP_PHI:
+                ps := g.i_ps[j]
+                repeat g.i_pcount[j] in q:
+                    pb := g.pool[ps + 2 * q + 1]
+                    pv := g.pool[ps + 2 * q]
+                    if pb >= 0 and g.b_order[pb] >= 0 and not verify_use(g, pv, pb, 1000000000, order):
+                        bad = j
+                    end
+                end
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0 and not verify_use(g, g.i_a[j], b2, order[j], order): bad = j end
+                if (m & 2) != 0 and not verify_use(g, g.i_b[j], b2, order[j], order): bad = j end
+                if (m & 4) != 0 and not verify_use(g, g.i_c[j], b2, order[j], order): bad = j end
+                if op == OP_CALL:
+                    ps2 := g.i_ps[j]
+                    repeat g.i_pcount[j] in q2:
+                        if not verify_use(g, g.pool[ps2 + 3 * q2], b2, order[j], order): bad = j end
+                    end
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    order.free()
+    if bad >= 0:
+        dump_ir(g, "unverified")
+        fail(g, "native backend: SSA use not dominated by its definition in " + tab_str(g.syms, g.f_sym) + " at b" + str.FromInt(g.i_blk[bad] as i64))
+    end
+end
+
 func read_pass_switches(g &: Ng):
     g.gvn_x = os.Env("SALAM_NG_GVN_SKIP")
+    g.verify = os.Env("SALAM_NG_VERIFY").len() > 0
     mx := os.Env("SALAM_NG_GVN_MAX")
     if mx.len() > 0:
         g.gvn_max = str.ToInt(mx)
@@ -126,4 +194,5 @@ func read_pass_switches(g &: Ng):
     g.off_widen = str.Contains(off, "widen")
     g.off_unswitch = str.Contains(off, "unswitch")
     g.off_runroll = str.Contains(off, "runroll")
+    g.off_iss = str.Contains(off, "iss")
 end

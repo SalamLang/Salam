@@ -2,9 +2,9 @@ package nativegen
 
 const RUN_MAX_SIZE := 48
 
-func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int): bool:
+func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, skip: int, maxsz: int): bool:
     t := g.b_last[h]
-    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & (IF_NOVEC | IF_NORUN)) != 0:
+    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & skip) != 0:
         ret false
     end
     if l.inl[g.i_b[t]] != mark or l.inl[g.i_c[t]] == mark:
@@ -73,7 +73,7 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
             j = g.i_next[j]
         end
     end
-    if size > RUN_MAX_SIZE:
+    if size > maxsz:
         ret false
     end
     iv = ph
@@ -82,7 +82,16 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
     ret true
 end
 
-func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: int):
+func run_ov(ov &: Vector<int>, v: int): int:
+    repeat ov.len() / 2 in q:
+        if ov[2 * q] == v:
+            ret ov[2 * q + 1]
+        end
+    end
+    ret v
+end
+
+func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: int, over &: Vector<int>):
     each b in order:
         u.bmap[b] = new_blk(g)
     end
@@ -121,6 +130,12 @@ func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: in
             j2 = g.i_next[j2]
         end
     end
+    mut ov := Vector {} as Vector<int>
+    repeat over.len() / 2 in q0:
+        ov.push(u.vmap[over[2 * q0]])
+        ov.push(over[2 * q0 + 1])
+        u.vmap[over[2 * q0]] = over[2 * q0 + 1]
+    end
     each b4 in order:
         nb4 := u.bmap[b4]
         mut k := g.b_first[nb4]
@@ -128,16 +143,17 @@ func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: in
             if g.i_op[k] == OP_PHI:
                 ps := g.i_ps[k]
                 repeat g.i_pcount[k] in q:
-                    g.pool[ps + 2 * q] = usw_val(u, g.pool[ps + 2 * q])
+                    g.pool[ps + 2 * q] = run_ov(ov, usw_val(u, g.pool[ps + 2 * q]))
                 end
             end
             m := val_mask(g.i_op[k])
-            if (m & 1) != 0: g.i_a[k] = usw_val(u, g.i_a[k]) end
-            if (m & 2) != 0: g.i_b[k] = usw_val(u, g.i_b[k]) end
-            if (m & 4) != 0: g.i_c[k] = usw_val(u, g.i_c[k]) end
+            if (m & 1) != 0: g.i_a[k] = run_ov(ov, usw_val(u, g.i_a[k])) end
+            if (m & 2) != 0: g.i_b[k] = run_ov(ov, usw_val(u, g.i_b[k])) end
+            if (m & 4) != 0: g.i_c[k] = run_ov(ov, usw_val(u, g.i_c[k])) end
             k = g.i_next[k]
         end
     end
+    ov.free()
 end
 
 func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int):
@@ -211,12 +227,13 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
         u2.vmap[g.i_res[hphis[k3]]] = 0 - 1
     end
     mid := new_blk(g)
-    run_clone_body(g, u1, h, order, mid)
+    mut none := Vector {} as Vector<int>
+    run_clone_body(g, u1, h, order, mid, none)
     repeat np in k4:
         lv := phi_val_for(g, hphis[k4], latch)
         u2.vmap[g.i_res[hphis[k4]]] = usw_val(u1, lv)
     end
-    run_clone_body(g, u2, h, order, hu)
+    run_clone_body(g, u2, h, order, hu, none)
     bm := ins_new(g, OP_BR, T_VOID)
     g.i_b[bm] = u2.bmap[body0]
     ins_append(g, mid, bm)
@@ -247,6 +264,7 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
         end
     end
     order.free()
+    none.free()
     hphis.free()
     uphis.free()
     u1.vmap.free()
@@ -297,7 +315,7 @@ func runtime_unroll(g &: Ng): bool:
         mut iv := 0 - 1
         mut step := 0 as i64
         mut lim := 0 - 1
-        if run_match(g, l, mark, h, latch, iv, step, lim):
+        if run_match(g, l, mark, h, latch, iv, step, lim, IF_NOVEC | IF_NORUN, RUN_MAX_SIZE):
             run_unroll(g, l, mark, h, p, latch, iv, step, lim)
             changed = true
         end

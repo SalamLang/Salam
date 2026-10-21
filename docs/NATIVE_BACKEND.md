@@ -94,6 +94,10 @@ recursive. Each function then goes through:
    chain. Loop load elimination keeps a value stored in one iteration and
    loaded in the next (`cur[j]` then `cur[j - 1]`) in a register, and 32-bit
    counters that are only sign-extended for indexing become 64-bit counters.
+   Range checks on the loop counter (`c - 1 >= 0 and c - 1 < w`) split the
+   loop in two: a copy without the checks runs while the counter is inside
+   the range where they all hold, and the original loop runs the iterations
+   at the edges.
    Small innermost loops whose trip count is only known at runtime
    (`until j < i:` with `j += 1`) run two iterations per test, with the
    original loop finishing the odd one.
@@ -157,10 +161,14 @@ loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,runroll,widen,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
+- `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
+  operands are defined in a block that dominates it, and fails the build
+  naming the function and block when one is not. Run it whenever a pass
+  moves or creates instructions.
 - `SALAM_NG_GVN_MAX=n` stops value numbering after `n` merges and prints the
   function the last one happened in, so a miscompile can be bisected down to
   a single merge. `SALAM_NG_GVN_SKIP=addr,extv,icmp,cast,arith` leaves whole

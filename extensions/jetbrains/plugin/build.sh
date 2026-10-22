@@ -49,7 +49,10 @@ if [ ! -d "$CACHE/lsp4ij-$LSP4IJ_UPDATE" ]; then
     (cd "$CACHE" && unzip -q -o "lsp4ij-$LSP4IJ_UPDATE.zip" -d "lsp4ij-$LSP4IJ_UPDATE")
 fi
 LSP4IJ_JAR=$(find "$CACHE/lsp4ij-$LSP4IJ_UPDATE" -name 'lsp4ij-*.jar' | head -n 1)
-[ -n "$LSP4IJ_JAR" ] || { echo "build.sh: lsp4ij jar not found" >&2; exit 1; }
+[ -n "$LSP4IJ_JAR" ] || {
+    echo "build.sh: lsp4ij jar not found" >&2
+    exit 1
+}
 CP="$CACHE/core-$PLATFORM.jar:$CACHE/extensions-$PLATFORM.jar:$CACHE/util-$PLATFORM.jar:$CACHE/kotlin-stdlib-$KOTLIN.jar:$CACHE/textmate-$TEXTMATE.jar:$LSP4IJ_JAR"
 for j in "$CACHE/lsp4ij-$LSP4IJ_UPDATE"/*/lib/org.eclipse.lsp4j*.jar; do
     CP="$CP:$j"

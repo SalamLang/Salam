@@ -1,12 +1,19 @@
 package driver
 
 import os
+import io
 import str
 
 include pth "../sal_path.salam"
 include lg "../logger.salam"
 include co "../sal_core.salam"
 include i18 "../i18n.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+
+mut g_native_keys := Vector {} as Vector<str>
+mut g_native_vals := Vector {} as Vector<str>
+mut g_native_failed := false
+mut g_native_skip := false
 
 func abort_message(base: str, failed: Vector<str>): str:
     if failed.len() == 0:
@@ -81,6 +88,101 @@ func sanitize_ident(lib: str): str:
     ret r
 end
 
+func native_lookup(spec: str): str:
+    repeat g_native_keys.len() in i:
+        if str.Equals(g_native_keys.get(i), spec):
+            ret g_native_vals.get(i)
+        end
+    end
+    ret ""
+end
+
+func native_prepare(lgr: lg.Logger, dir: str, spec: str, kind: str, cc: str): bool:
+    if str.Equals(kind, "framework") or str.Len(spec) == 0 or byte_at(spec, 0) == 45 or link_spec_is_path(spec):
+        ret true
+    end
+    if g_native_skip or str.Len(native_lookup(spec)) > 0:
+        ret true
+    end
+    mut n := pm.Native {}
+    if not pm.ReadNative(dir, spec, n):
+        ret true
+    end
+    if pm.SystemHas(n, cc):
+        ret true
+    end
+    if n.sources.len() > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("building the native library '%s' from source (only the first build does this)"), co.ArgStr(spec)))
+        mut objs := Vector {} as Vector<str>
+        defer objs.free()
+        mut extra := Vector {} as Vector<str>
+        defer extra.free()
+        mut why := ""
+        if not pm.NativeObjects(n, dir, cc, extra, objs, why):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            ret false
+        end
+        mut joined := ""
+        repeat objs.len() in i:
+            joined = joined + objs.get(i) + "\n"
+        end
+        repeat n.libs.len() in j:
+            joined = joined + "-l" + n.libs.get(j) + "\n"
+        end
+        g_native_keys.push(spec)
+        g_native_vals.push(joined)
+        ret true
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("the native library '%s' is not installed on this system"), co.ArgStr(spec)))
+    hint := pm.NativeHint(n)
+    if str.Len(hint) > 0:
+        io.EPrintln("  install it with: " + hint)
+    end
+    g_native_failed = true
+    ret false
+end
+
+func native_expand(links &: Vector<str>, kinds &: Vector<str>):
+    mut nl := Vector {} as Vector<str>
+    mut nk := Vector {} as Vector<str>
+    defer nl.free()
+    defer nk.free()
+    repeat links.len() in i:
+        mut mapped := Vector {} as Vector<str>
+        defer mapped.free()
+        if native_args(links.get(i), mapped):
+            repeat mapped.len() in j:
+                nl.push(mapped.get(j))
+                nk.push("")
+            end
+        else:
+            nl.push(links.get(i))
+            nk.push(kinds.get(i))
+        end
+    end
+    links.clear()
+    kinds.clear()
+    repeat nl.len() in k:
+        links.push(nl.get(k))
+        kinds.push(nk.get(k))
+    end
+end
+
+func native_args(spec: str, out &: Vector<str>): bool:
+    v := native_lookup(spec)
+    if str.Len(v) == 0:
+        ret false
+    end
+    parts := str.Split(v, "\n")
+    defer parts.free()
+    repeat parts.len() in i:
+        if str.Len(parts.get(i)) > 0:
+            out.push(parts.get(i))
+        end
+    end
+    ret true
+end
+
 func link_define(lib: str): str:
     ret "SALAM_LINK_" + sanitize_ident(lib)
 end
@@ -104,6 +206,15 @@ func emit_link(
     if (str.Len(spec) > 0 and byte_at(spec, 0) == 45) or link_spec_is_path(spec):
         str.BufAppendChar(cmdb, 32)
         str.BufAppend(cmdb, shell_arg(spec))
+        ret
+    end
+    mut mapped := Vector {} as Vector<str>
+    defer mapped.free()
+    if native_args(spec, mapped):
+        repeat mapped.len() in mi:
+            str.BufAppendChar(cmdb, 32)
+            str.BufAppend(cmdb, shell_arg(mapped.get(mi)))
+        end
         ret
     end
     if is_static and not use_tcc:

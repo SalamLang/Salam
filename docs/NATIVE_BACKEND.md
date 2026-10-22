@@ -269,13 +269,16 @@ apart from the build timestamp.
 ## Where it stands
 
 Measured by CPU time against the LLVM backend at `-O3` on the benchmark suite,
-the native backend comes out at about 1.05x in geometric mean and is faster on
-17 of the 42 programs (among them `fib_recursive`, `lcg_random`, `dot_product`,
-`sum_mod`, `caesar_cipher`, `monte_carlo_pi` and `trapezoidal_integration`).
-Against `gcc -O3` on the C backend it is even or faster on about a third of
-them. The largest remaining gaps are `game_of_life` and
-`longest_increasing_subsequence`, where LLVM also splits the index range of the
-inner loop and unrolls it.
+the native backend comes out at about 0.96x in geometric mean and is faster on
+19 of the 42 programs (among them `fib_recursive`, `fib_iterative`,
+`lcg_random`, `dot_product`, `caesar_cipher`, `counting_sort`,
+`game_of_life` and `knapsack_01`). Counted in executed instructions, which is
+steadier than wall time on a loaded machine, the geometric mean is 0.95x. The
+largest remaining gap is `matrix_stdlib_smallops` (about 1.2x), where LLVM
+specializes the generic blocked matrix multiply for 4x4 operands. A compiler
+built with the native backend runs within a few percent of one built with
+LLVM on a full self-compile, while the native build itself is several times
+faster than the LLVM path.
 
 Not there yet:
 

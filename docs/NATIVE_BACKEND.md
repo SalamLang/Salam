@@ -135,6 +135,11 @@ recursive. Each function then goes through:
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
     on the path that stores it.
 
+An integer parameter of an internal function becomes a constant when every
+call passes the same value: a literal, or a local that is only ever assigned
+that literal, and recursive calls pass the parameter through unchanged. The
+`n` of a recursive `solve(row, n, ...)` is the usual case.
+
 Loads of internal globals that the module never writes (how llvmgen emits a
 `const`) fold to their initializer, and so do small copies out of constant
 strings, so `println "hello"` stores the bytes as immediates. Instruction selection folds address
@@ -186,7 +191,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

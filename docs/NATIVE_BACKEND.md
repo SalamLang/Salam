@@ -77,7 +77,9 @@ then goes through:
 4. Folding to a fixed point: arithmetic and compares on constants, algebraic
    identities, casts, selects, constant branch conditions, `extractvalue` of a
    known `insertvalue`, a struct rebuilt field by field from itself, address
-   arithmetic, and `x % 2^k == 0` as a mask test. Signed division and
+   arithmetic, `x % 2^k == 0` as a mask test, `(x & y) ^ (x & z)` as
+   `x & (y ^ z)`, and the bit select `(x & y) ^ (~x & z)` as
+   `((y ^ z) & x) ^ z`. Signed division and
    remainder become unsigned when the dividend is provably non-negative, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
 5. Block merging and jump threading, which turns short-circuit `and`/`or`
@@ -252,7 +254,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

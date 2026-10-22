@@ -1392,6 +1392,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                     g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
                 else op == OP_ADD or op == OP_SUB:
                     ch = add_reassoc(g, i)
+                else (op == OP_XOR or op == OP_OR) and not g.off_bits:
+                    ch = bit_simplify(g, i)
                 end
             else op == OP_ICMP:
                 ch = fold_icmp(g, i)
@@ -2276,6 +2278,63 @@ func lower_pow2_divs(g &: Ng): bool:
         remap_all(g)
     end
     ret changed
+end
+
+func bx_def(g &: Ng, v: int, op: int): int:
+    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] == op ? d : 0 - 1
+end
+
+func bx_not_of(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_XOR:
+        ret 0 - 1
+    end
+    if is_cint(g, g.i_b[d]) and norm_int(g, g.i_ty[d], g.v_i[g.i_b[d]]) == (0 - 1) as i64:
+        ret g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func bit_simplify(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    if (op != OP_XOR and op != OP_OR) or is_vec(g, t):
+        ret false
+    end
+    da := bx_def(g, g.i_a[i], OP_AND)
+    db := bx_def(g, g.i_b[i], OP_AND)
+    if da < 0 or db < 0:
+        ret false
+    end
+    repeat 2 in ka:
+        x := ka == 0 ? g.i_a[da] : g.i_b[da]
+        y := ka == 0 ? g.i_b[da] : g.i_a[da]
+        repeat 2 in kb:
+            w := kb == 0 ? g.i_a[db] : g.i_b[db]
+            z := kb == 0 ? g.i_b[db] : g.i_a[db]
+            if op == OP_XOR and x == w and x >= 0:
+                nx := p2_ins(g, i, OP_XOR, t, y, z)
+                nr := p2_ins(g, i, OP_AND, t, nx, x)
+                replace_res(g, i, nr)
+                ret true
+            end
+            if bx_not_of(g, w) == x and x >= 0:
+                nx2 := p2_ins(g, i, OP_XOR, t, y, z)
+                na := p2_ins(g, i, OP_AND, t, nx2, x)
+                nr2 := p2_ins(g, i, OP_XOR, t, na, z)
+                replace_res(g, i, nr2)
+                ret true
+            end
+        end
+    end
+    ret false
 end
 
 func opt_rounds(g &: Ng):

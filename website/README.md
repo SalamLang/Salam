@@ -52,12 +52,17 @@ syntax highlighted at build time (`python`, `javascript`, `typescript`, `bash`, 
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.
 
-The Agent page links to the desktop builds on the `v<VERSION>` release:
+The Agent page links to the desktop builds on the Salam release itself:
 `agent.release` is the release page and `agent.download` the filename prefix
 the download links append to, for example
 `{{agent.download}}windows-x86_64-setup.exe`. The agent carries the same
 version as `VERSION` (kept in sync by `tools/salam/update-version.salam`), and
-the compiler release workflow builds it and uploads its files to that release.
+the compiler release workflow builds it and publishes its files in the same
+release as the compiler. The deploy workflow looks up the newest published
+release that actually carries the agent files and passes it in as
+`SITE_AGENT_TAG` and `SITE_AGENT_VERSION`; without them the links fall back to
+`v<VERSION>`. Releases up to 0.5.6 kept the agent in a separate `agent-v<VERSION>`
+release, and the lookup still finds those until a newer one ships it.
 
 SEO: each page's `<page>.title` is the full `<title>` (write the whole
 phrase, including the brand), `<page>.description` the meta description and

@@ -55,6 +55,16 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    wk_project() {
+        jobdir="$WORK/projjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        cp -R "$fabs" "$jobdir/app"
+        pkgdir="$(pwd)/tests/fixtures/pkgcache"
+        got=$( (cd "$jobdir/app" && SALAM_PKG="$pkgdir" tmo "${SALAM_TEST_TIMEOUT:-600}" "$SALAM_ABS" run --lang="$lang" --no-color --log-level=error 2>&1) | tr -d '\r')
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_new() {
         name=$(basename "$f" .out)
         jobdir="$WORK/newjob_${jobid}_$$"
@@ -426,6 +436,7 @@ EOF_LAYOUT_NOT
         fmt) wk_fmt ;;
         repl) wk_repl ;;
         new) wk_new ;;
+        project) wk_project ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
@@ -652,6 +663,17 @@ if want repl; then
             exp="tests/$lang/repl/$name.out"
             [ -f "$exp" ] || continue
             add_job repl "repl/$lang/$name" "$f" "$lang" "$exp"
+        done
+    done
+fi
+
+if want project; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/project/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            [ -d "tests/$lang/project/$name" ] || continue
+            add_job project "project/$lang/$name" "tests/$lang/project/$name" "$lang" "$f"
         done
     done
 fi

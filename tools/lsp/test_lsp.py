@@ -14,6 +14,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -967,6 +968,70 @@ def pull_and_colors(t, exe):
     s.proc.wait(10)
 
 
+FIX_IN = """import math
+
+func main:
+    mut count := 1
+    println str.FromInt(count)
+end
+"""
+
+FIX_OUT = """import str
+
+func main:
+    count := 1
+    println str.FromInt(count)
+end
+"""
+
+
+def check_cli(t, exe):
+    env = dict(os.environ, SALAM_STD=STD)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "fixme.salam")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(FIX_IN)
+        p = subprocess.run(
+            [exe, "check", path, "--error-format=json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        rows = [json.loads(x) for x in p.stderr.splitlines() if x.startswith("{")]
+        titles = [fx["title"] for r in rows for fx in r.get("fixes", [])]
+        t.check(
+            "check: JSON diagnostics carry fixes",
+            "Remove 'mut'" in titles and "Add 'import str'" in titles,
+            p.stderr[:400],
+        )
+        p = subprocess.run(
+            [exe, "check", path],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        t.check(
+            "check: human output lists the fix",
+            "= fix: Remove 'mut'" in p.stderr,
+            p.stderr[:400],
+        )
+        p = subprocess.run(
+            [exe, "check", path, "--fix"],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        got = read_text(path)
+        t.check(
+            "check --fix applies the safe fixes and checks again",
+            got == FIX_OUT and "no errors" in p.stdout and p.returncode == 0,
+            repr(got) + p.stdout[:200] + p.stderr[:300],
+        )
+
+
 def main():
     exe = (
         os.path.abspath(sys.argv[1])
@@ -1017,6 +1082,7 @@ def main():
 
     project(t, exe)
     pull_and_colors(t, exe)
+    check_cli(t, exe)
 
     print(f"RESULT: {t.passed} passed, {t.failed} failed")
     sys.exit(1 if t.failed else 0)

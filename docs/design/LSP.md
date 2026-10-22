@@ -624,7 +624,12 @@ Also built since:
   private fields and methods; the parser attaches them for `return`, `while`,
   `elif`, `for ... in`, `let` and `var`. The worker turns them into exact
   ranges and the server serves them as quick fixes; matching words in the
-  message is only the fallback for diagnostics without fixes.
+  message is only the fallback for diagnostics without fixes. Fixes are
+  staged before the diagnostic is logged, so `salam check` prints them
+  (`= fix:` lines, and a `fixes` array with byte offsets under
+  `--error-format=json`). A fix marked safe (imports, a needless `mut`, the
+  foreign keywords) is applied in place by `salam check --fix`, which then
+  checks again; guesses such as did-you-mean are never applied on their own.
 
 Left:
 
@@ -639,5 +644,5 @@ Left:
    command.
 3. A published grammar repository (`tree-sitter-salam` with the generated
    `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
-4. `Node.sym` as a field, and fixes in the human and JSON renderers of
-   `salam check`.
+4. `Node.sym` as a field on the AST. The side table that `note_ref` fills
+   gives the same answers today, so this is a tidy-up, not a feature.

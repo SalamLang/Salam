@@ -16,6 +16,13 @@ pub struct Gvn:
     pub ld_addr: Vector<int> = Vector {}
     pub ld_disp: Vector<i64> = Vector {}
     pub ld_ep2: Vector<int> = Vector {}
+    pub ld_site: Vector<int> = Vector {}
+    pub ld_sep: Vector<int> = Vector {}
+    pub ld_uep: Vector<int> = Vector {}
+    pub site_ep: Vector<int> = Vector {}
+    pub site_memo: Vector<int> = Vector {}
+    pub ep_out_u: Vector<int> = Vector {}
+    pub epu: int = 0
     pub ld_ty: Vector<int> = Vector {}
     pub ld_ep: Vector<int> = Vector {}
     pub ld_val: Vector<int> = Vector {}
@@ -94,11 +101,93 @@ func root_kind(g &: Ng, r0: int): int:
     ret 0
 end
 
-func ld_find(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int): int:
+func alloc_call(g &: Ng, d: int): bool:
+    if g.i_op[d] != OP_CALL:
+        ret false
+    end
+    fv := g.i_a[d]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] < 0:
+        ret false
+    end
+    nm := tab_str(g.syms, g.v_def[fv])
+    ret nm == "malloc" or nm == "calloc" or nm == "realloc"
+end
+
+func site_of(g &: Ng, t &: Gvn, v0: int): int:
+    r0 := addr_base(g, v0)
+    if r0 < 0 or r0 >= t.site_memo.len():
+        ret 0 - 1
+    end
+    if t.site_memo[r0] != 0 - 3:
+        ret t.site_memo[r0]
+    end
+    mut site := 0 - 1
+    mut bad := false
+    mut seen := Vector {} as Vector<int>
+    mut stk := Vector {} as Vector<int>
+    stk.push(r0)
+    until stk.len() > 0 and not bad:
+        v := addr_base(g, stk.pop())
+        if v < 0:
+            bad = true
+            break
+        end
+        k := g.v_kind[v]
+        if k == VK_ZERO or (k == VK_INT and g.v_i[v] == (0 as i64)):
+            continue
+        end
+        if k != VK_INS:
+            bad = true
+            break
+        end
+        mut dup := false
+        each sv in seen:
+            if sv == v:
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        if seen.len() >= 16:
+            bad = true
+            break
+        end
+        seen.push(v)
+        d := g.v_def[v]
+        if alloc_call(g, d):
+            if site >= 0 and site != d:
+                bad = true
+            end
+            site = d
+        else g.i_op[d] == OP_PHI:
+            ps := g.i_ps[d]
+            repeat g.i_pcount[d] in q:
+                stk.push(g.pool[ps + 2 * q])
+            end
+        else g.i_op[d] == OP_SELECT:
+            stk.push(g.i_b[d])
+            stk.push(g.i_c[d])
+        else:
+            bad = true
+        end
+    end
+    seen.free()
+    stk.free()
+    res := bad ? 0 - 1 : site
+    t.site_memo[r0] = res
+    ret res
+end
+
+func site_ok(t &: Gvn, k: int, site: int): bool:
+    ret site >= 0 and t.ld_site[k] == site and t.site_ep[site] == t.ld_sep[k] and t.epu == t.ld_uep[k]
+end
+
+func ld_find(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int): int:
     mut k := t.ld_addr.len() - 1
     mut n := 0
     until k >= 0 and n < 64:
-        if (t.ld_ep[k] == ep or (ep2 >= 0 and t.ld_ep2[k] == ep2)) and t.ld_addr[k] == a and t.ld_disp[k] == disp and t.ld_ty[k] == ty:
+        if (t.ld_ep[k] == ep or (ep2 >= 0 and t.ld_ep2[k] == ep2) or site_ok(t, k, site)) and t.ld_addr[k] == a and t.ld_disp[k] == disp and t.ld_ty[k] == ty:
             ret t.ld_val[k]
         end
         k -= 1
@@ -107,12 +196,12 @@ func ld_find(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int): int:
     ret 0 - 1
 end
 
-func ld_find_agg(g &: Ng, t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, off &: i64): int:
+func ld_find_agg(g &: Ng, t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int, off &: i64): int:
     sz := tsize(g, ty) as i64
     mut k := t.ld_addr.len() - 1
     mut n := 0
     until k >= 0 and n < 64:
-        if (t.ld_ep[k] == ep or (ep2 >= 0 and t.ld_ep2[k] == ep2)) and t.ld_addr[k] == a and is_agg(g, t.ld_ty[k]):
+        if (t.ld_ep[k] == ep or (ep2 >= 0 and t.ld_ep2[k] == ep2) or site_ok(t, k, site)) and t.ld_addr[k] == a and is_agg(g, t.ld_ty[k]):
             d0 := t.ld_disp[k]
             if d0 <= disp and disp + sz <= d0 + (tsize(g, t.ld_ty[k]) as i64):
                 off = disp - d0
@@ -159,8 +248,11 @@ func extv_resolve(g &: Ng, agg: int, off0: i64, t: int): int:
     ret 0 - 1
 end
 
-func ld_add(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, v: int):
+func ld_add(t &: Gvn, a: int, disp: i64, ty: int, ep: int, ep2: int, site: int, v: int):
     t.ld_ep2.push(ep2)
+    t.ld_site.push(site)
+    t.ld_sep.push(site >= 0 ? t.site_ep[site] : 0)
+    t.ld_uep.push(t.epu)
     t.ld_addr.push(a)
     t.ld_disp.push(disp)
     t.ld_ty.push(ty)
@@ -314,6 +406,13 @@ func gvn(g &: Ng): bool:
         t.ep_out_p.push(0 - 1)
         t.ep_out_d.push(0 - 1)
         t.ep_out_s.push(0 - 1)
+        t.ep_out_u.push(0 - 1)
+    end
+    repeat g.i_op.len():
+        t.site_ep.push(0)
+    end
+    repeat g.v_kind.len():
+        t.site_memo.push(0 - 3)
     end
     mut next_ep := 1
     t.wb.push(0)
@@ -332,6 +431,9 @@ func gvn(g &: Ng): bool:
                 _a1 := t.ld_addr.pop()
                 _a5 := t.ld_disp.pop()
                 _a6 := t.ld_ep2.pop()
+                _a7 := t.ld_site.pop()
+                _a8 := t.ld_sep.pop()
+                _a9 := t.ld_uep.pop()
                 _a2 := t.ld_ty.pop()
                 _a3 := t.ld_ep.pop()
                 _a4 := t.ld_val.pop()
@@ -350,12 +452,14 @@ func gvn(g &: Ng): bool:
             epp = t.ep_out_p[idm]
             epd = t.ep_out_d[idm]
             eps = t.ep_out_s[idm]
+            t.epu = t.ep_out_u[idm]
         else:
             ep = next_ep
             epp = next_ep + 1
             epd = next_ep + 2
             eps = next_ep + 3
-            next_ep += 4
+            t.epu = next_ep + 4
+            next_ep += 5
         end
         mut i := g.b_first[b]
         until i >= 0:
@@ -368,7 +472,8 @@ func gvn(g &: Ng): bool:
                 lroot := addr_root(g, g.i_a[i], ldisp)
                 lep := lc == 1 ? epp : (lc == 2 ? epd : ep)
                 lep2 := root_kind(g, lroot) == 1 ? eps : 0 - 1
-                lv := ld_find(t, lroot, ldisp, g.i_ty[i], lep, lep2)
+                lsite := site_of(g, t, lroot)
+                lv := ld_find(t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite)
                 if lv >= 0 and g.v_ty[lv] == g.i_ty[i]:
                     g.v_repl[g.i_res[i]] = lv
                     ins_unlink(g, i)
@@ -377,7 +482,7 @@ func gvn(g &: Ng): bool:
                     continue
                 end
                 mut aoff := 0 as i64
-                av := is_vec(g, g.i_ty[i]) ? 0 - 1 : ld_find_agg(g, t, lroot, ldisp, g.i_ty[i], lep, lep2, aoff)
+                av := is_vec(g, g.i_ty[i]) ? 0 - 1 : ld_find_agg(g, t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, aoff)
                 rv := av >= 0 ? extv_resolve(g, av, aoff, g.i_ty[i]) : 0 - 1
                 if rv >= 0:
                     g.v_repl[g.i_res[i]] = rv
@@ -399,7 +504,7 @@ func gvn(g &: Ng): bool:
                     i = nx
                     continue
                 end
-                ld_add(t, lroot, ldisp, g.i_ty[i], lep, lep2, g.i_res[i])
+                ld_add(t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, g.i_res[i])
                 i = nx
                 continue
             end
@@ -408,8 +513,16 @@ func gvn(g &: Ng): bool:
                 mut sdisp := 0 as i64
                 sroot := iop == OP_STORE ? addr_root(g, g.i_b[i], sdisp) : 0 - 1
                 sk := iop == OP_STORE ? root_kind(g, sroot) : 0
+                ssite := iop == OP_STORE and sroot >= 0 ? site_of(g, t, sroot) : 0 - 1
                 if sk != 2:
                     eps = next_ep
+                    next_ep += 1
+                end
+                if ssite >= 0:
+                    t.site_ep[ssite] = next_ep
+                    next_ep += 1
+                else:
+                    t.epu = next_ep
                     next_ep += 1
                 end
                 ep = next_ep
@@ -425,7 +538,7 @@ func gvn(g &: Ng): bool:
                 if iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_lcse:
                     sv := g.i_a[i]
                     if sv >= 0 and g.v_kind[sv] == VK_INS:
-                        ld_add(t, sroot, sdisp, g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), sk == 1 ? eps : 0 - 1, sv)
+                        ld_add(t, sroot, sdisp, g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), sk == 1 ? eps : 0 - 1, ssite, sv)
                     end
                 end
                 i = nx
@@ -449,6 +562,7 @@ func gvn(g &: Ng): bool:
         t.ep_out_p[b] = epp
         t.ep_out_d[b] = epd
         t.ep_out_s[b] = eps
+        t.ep_out_u[b] = t.epu
         t.wb.push(b)
         t.wm.push(h)
         t.ld_mark.push(hl)
@@ -472,6 +586,12 @@ func gvn(g &: Ng): bool:
     t.ep_out_s.free()
     t.ld_disp.free()
     t.ld_ep2.free()
+    t.ld_site.free()
+    t.ld_sep.free()
+    t.ld_uep.free()
+    t.site_ep.free()
+    t.site_memo.free()
+    t.ep_out_u.free()
     t.ld_addr.free()
     t.ld_ty.free()
     t.ld_ep.free()

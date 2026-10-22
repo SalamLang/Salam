@@ -103,13 +103,17 @@ then goes through:
    register on the paths that do not call (the recursive `solve` in N-queens).
    A floating-point constant compared inside a loop is materialized once in
    the preheader, since `ucomisd` needs it in a register
-   (`until zx * zx + zy * zy <= 4.0` in Mandelbrot).
+   (`until zx * zx + zy * zy <= 4.0` in Mandelbrot), and so is a 64-bit
+   integer constant that does not fit an immediate.
    Then comes
    unswitching: an innermost loop that branches on a loop-invariant condition
    is versioned into one copy per outcome. Compares, remainders and
    divisions are folded when the value range of their operand decides them:
    inside `until i < 4000000:` the remainder `(i + 1) % 1000000007` is just
-   `i + 1`. A counter bounded by a sign-extended 32-bit length is known to fit
+   `i + 1`. Signed division and remainder by a power of two that stay signed
+   become a biased shift and mask (`x < 0 ? x + 2^k - 1 : x`), so the
+   quotient and remainder of the same value share the bias; the SHA-256
+   rotations in `std/crypto` are built from such pairs. A counter bounded by a sign-extended 32-bit length is known to fit
    in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
    `paddd` loop with two accumulators followed by the scalar loop for the
@@ -187,7 +191,9 @@ arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, loads a
 32-bit value with `movslq` when it is also sign-extended (the low half serves
 the 32-bit uses), ties a commutative floating-point add or multiply to the
-operand that dies there (and squares `x * x` in one register), builds an `insertvalue` chain that is returned directly in
+operand that dies there (and squares `x * x` in one register), ties a `cmov`
+to the operand that dies there by inverting the condition, turns
+`x & 0xffffffff` into a 32-bit `mov`, builds an `insertvalue` chain that is returned directly in
 the caller's result buffer, copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
@@ -243,7 +249,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -1298,6 +1298,12 @@ func isel_bin(g &: Ng, i: int):
             ret
         end
     end
+    if op == OP_AND and sz == 8 and g.v_kind[b] == VK_INT and g.v_i[b] == (4294967295 as i64):
+        rz := gpr(g)
+        _z := e_rr(g, M_MOV_RR, 4, rz, use_reg(g, a))
+        set_res(g, i, rz)
+        ret
+    end
     mut sub := ALU_ADD
     if op == OP_SUB: sub = ALU_SUB end
     if op == OP_AND: sub = ALU_AND end
@@ -2895,16 +2901,34 @@ func isel_select(g &: Ng, i: int):
     set_res(g, i, r3)
 end
 
+func dies_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret false
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] != OP_PHI and g.i_blk[d] == g.i_blk[i]
+end
+
 func isel_select_fused(g &: Ng, i: int, d: int):
     t := g.i_ty[i]
-    rt := use_reg(g, g.i_b[i])
-    rf := use_reg(g, g.i_c[i])
+    mut bv := g.i_b[i]
+    mut cv := g.i_c[i]
+    swap := g.i_op[d] != OP_FCMP and dies_here(g, bv, i) and not dies_here(g, cv, i)
+    if swap:
+        bv = g.i_c[i]
+        cv = g.i_b[i]
+    end
+    rt := use_reg(g, bv)
+    rf := use_reg(g, cv)
     r := gpr(g)
     mut cc := 0
     if g.i_op[d] == OP_FCMP:
         cc = fcmp_cc(fcmp_setup(g, d))
     else:
         cc = emit_icmp(g, d)
+        if swap:
+            cc = inv_cc(cc)
+        end
     end
     _c := e_copy(g, r, rf)
     cm := e_rr(g, M_CMOV, asz(g, t), r, rt)

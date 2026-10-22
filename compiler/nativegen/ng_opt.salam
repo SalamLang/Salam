@@ -2218,6 +2218,66 @@ func range_fold(g &: Ng): bool:
     ret changed
 end
 
+func p2_ins(g &: Ng, at: int, op: int, t: int, a: int, b: int): int:
+    i := ins_new(g, op, t)
+    g.i_a[i] = a
+    g.i_b[i] = b
+    ins_before(g, at, i)
+    ret new_res(g, i)
+end
+
+func lower_pow2_divs(g &: Ng): bool:
+    mut changed := false
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if (op == OP_SDIV or op == OP_SREM) and g.i_res[i] >= 0 and is_cint(g, g.i_b[i]):
+                t := g.i_ty[i]
+                bits := int_bits(g, t)
+                dv := norm_int(g, t, g.v_i[g.i_b[i]])
+                if (bits == 32 or bits == 64) and dv > (1 as i64):
+                    k := log2_exact(dv as u64)
+                    if k >= 1 and k < bits - 1:
+                        x := g.i_a[i]
+                        ci := ins_new(g, OP_ICMP, T_I1)
+                        g.i_a[ci] = x
+                        g.i_b[ci] = const_int(g, t, 0 as i64)
+                        g.i_x[ci] = CC_SLT
+                        ins_before(g, i, ci)
+                        cv := new_res(g, ci)
+                        xb := p2_ins(g, i, OP_ADD, t, x, const_int(g, t, dv - (1 as i64)))
+                        si := ins_new(g, OP_SELECT, t)
+                        g.i_a[si] = cv
+                        g.i_b[si] = xb
+                        g.i_c[si] = x
+                        ins_before(g, i, si)
+                        sv := new_res(g, si)
+                        mut r := 0 - 1
+                        if op == OP_SDIV:
+                            r = p2_ins(g, i, OP_ASHR, t, sv, const_int(g, t, k as i64))
+                        else:
+                            m := p2_ins(g, i, OP_AND, t, sv, const_int(g, t, (0 as i64) - dv))
+                            r = p2_ins(g, i, OP_SUB, t, x, m)
+                        end
+                        repl_grow(g)
+                        g.v_repl[g.i_res[i]] = r
+                        ins_unlink(g, i)
+                        changed = true
+                    end
+                end
+            end
+            i = nx
+        end
+    end
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end
+
 func opt_rounds(g &: Ng):
     mut rounds := 0
     until rounds < 6:
@@ -2388,6 +2448,9 @@ func optimize(g &: Ng):
     end
     if not g.off_slp:
         _v := slp(g)
+    end
+    if not g.off_p2div:
+        _p2 := lower_pow2_divs(g)
     end
     mut gch2 := false
     if not g.off_gvn and gvn(g):

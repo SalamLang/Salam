@@ -170,6 +170,156 @@ func sf_assigned(a &: at.Ast, pm &: HashMap<int, int>, r: int): bool:
     end
 end
 
+func sf_calls_in(a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAMBDA or k == at.AST_BLOCK or k == at.AST_MATCH:
+        ret
+    end
+    if k == at.AST_CALL:
+        out.push(nid)
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    sf_calls_in(a, na, out)
+    sf_calls_in(a, nb, out)
+    sf_calls_in(a, nc, out)
+    sf_calls_in(a, nd, out)
+    repeat at.ChildCount(a, nid) in i:
+        sf_calls_in(a, at.Child(a, nid, i), out)
+    end
+end
+
+func sf_writes_any(a &: at.Ast, nid: int, names: Vector<str>): bool:
+    if nid == 0:
+        ret false
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAMBDA:
+        ret false
+    end
+    if k == at.AST_ASSIGN or k == at.AST_INCDEC:
+        r := ow_path_root(a, at.At(a, nid).a)
+        repeat names.len() in i:
+            if str.Equals(r, names.get(i)):
+                ret true
+            end
+        end
+    end
+    if at.At(a, nid).ref_arg:
+        r2 := ow_path_root(a, nid)
+        repeat names.len() in j:
+            if str.Equals(r2, names.get(j)):
+                ret true
+            end
+        end
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    if sf_writes_any(a, na, names) or sf_writes_any(a, nb, names) or sf_writes_any(a, nc, names) or sf_writes_any(a, nd, names):
+        ret true
+    end
+    repeat at.ChildCount(a, nid) in m:
+        if sf_writes_any(a, at.Child(a, nid, m), names):
+            ret true
+        end
+    end
+    ret false
+end
+
+func sf_hoist_stmt(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
+    st := at.Child(a, blk, idx)
+    if st == 0:
+        ret 0
+    end
+    sk := at.KindOf(a, st)
+    if sk != at.AST_EXPR_STMT and sk != at.AST_VAR_DECL and sk != at.AST_ASSIGN and sk != at.AST_RETURN:
+        ret 0
+    end
+    mut calls := Vector {} as Vector<int>
+    sf_calls_in(a, st, calls)
+    mut added := 0
+    repeat calls.len() in ci:
+        call := calls.get(ci)
+        repeat at.ChildCount(a, call) in ai:
+            lam := at.Child(a, call, ai)
+            if lam == 0 or at.KindOf(a, lam) != at.AST_LAMBDA or at.At(a, lam).captures.len() == 0:
+                continue
+            end
+            if su_arg_effect(s, a, call, ai + 1) != SU_READ:
+                continue
+            end
+            mut names := Vector {} as Vector<str>
+            caps := at.At(a, lam).captures
+            repeat caps.len() in q:
+                names.push(at.At(a, caps.get(q)).name)
+            end
+            blocked := sf_writes_any(a, st, names)
+            names.free()
+            if blocked:
+                continue
+            end
+            sp := span_of(a, lam)
+            lts := at.At(a, lam).type_str
+            lst := at.At(a, lam).sema_type
+            nm := "__lam" + str.FromInt(lam as i64)
+            decl := ea_decl(a, nm, lam, false, sp)
+            mut dv := at.Get(a, decl)
+            dv.type_str = lts
+            dv.sema_type = lst
+            at.Put(a, decl, dv)
+            idn := ea_ident(a, nm, sp)
+            mut iv := at.Get(a, idn)
+            iv.type_str = lts
+            iv.sema_type = lst
+            at.Put(a, idn, iv)
+            mut cv := at.Get(a, call)
+            cv.list.set(ai, idn)
+            at.Put(a, call, cv)
+            mut bv := at.Get(a, blk)
+            bv.list.insert(idx, decl)
+            at.Put(a, blk, bv)
+            added += 1
+        end
+    end
+    calls.free()
+    ret added
+end
+
+func sf_hoist(s &: Sema, a &: at.Ast, nid: int, arm: bool):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAMBDA:
+        ret
+    end
+    if k == at.AST_BLOCK and not arm:
+        mut j := at.ChildCount(a, nid)
+        until j > 0:
+            j -= 1
+            _h := sf_hoist_stmt(s, a, nid, j)
+        end
+    end
+    na := at.At(a, nid).a
+    nb := at.At(a, nid).b
+    nc := at.At(a, nid).c
+    nd := at.At(a, nid).d
+    sf_hoist(s, a, na, k == at.AST_MATCH_ARM)
+    sf_hoist(s, a, nb, k == at.AST_MATCH_ARM)
+    sf_hoist(s, a, nc, k == at.AST_MATCH_ARM)
+    sf_hoist(s, a, nd, k == at.AST_MATCH_ARM)
+    repeat at.ChildCount(a, nid) in m:
+        sf_hoist(s, a, at.Child(a, nid, m), false)
+    end
+end
+
 func sf_insert(a &: at.Ast, c: SfCand):
     useid := c.use
     idn := at.NewNode(a, at.AST_IDENTIFIER)
@@ -232,6 +382,7 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     if body == 0:
         ret
     end
+    sf_hoist(s, a, body, false)
     mut cs := Vector {} as Vector<SfCand>
     mut seen := Vector {} as Vector<str>
     mut dup := Vector {} as Vector<str>

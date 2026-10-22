@@ -14,6 +14,9 @@ mut g_native_keys := Vector {} as Vector<str>
 mut g_native_vals := Vector {} as Vector<str>
 mut g_native_failed := false
 mut g_native_skip := false
+mut g_native_target := ""
+mut g_native_cc := ""
+mut g_native_extra := Vector {} as Vector<str>
 
 func abort_message(base: str, failed: Vector<str>): str:
     if failed.len() == 0:
@@ -108,17 +111,49 @@ func native_prepare(lgr: lg.Logger, dir: str, spec: str, kind: str, cc: str): bo
     if not pm.ReadNative(dir, spec, n):
         ret true
     end
-    if pm.SystemHas(n, cc):
+    cross := str.Len(g_native_target) > 0
+    mut use_cc := cc
+    if str.Len(g_native_cc) > 0:
+        use_cc = g_native_cc
+    end
+    if not cross and pm.SystemHas(n, cc):
+        mut sys := Vector {} as Vector<str>
+        defer sys.free()
+        pm.SystemLinkArgs(n, sys)
+        if sys.len() > 0:
+            mut sj := ""
+            repeat sys.len() in si:
+                sj = sj + sys.get(si) + "\n"
+            end
+            g_native_keys.push(spec)
+            g_native_vals.push(sj)
+        end
         ret true
+    end
+    if str.Len(n.pre_url) > 0 and not str.Equals(pm.NativeMode(), "source"):
+        mut pobjs := Vector {} as Vector<str>
+        defer pobjs.free()
+        mut pwhy := ""
+        if pm.NativePrebuilt(n, pobjs, pwhy):
+            mut pj := ""
+            repeat pobjs.len() in pk:
+                pj = pj + pobjs.get(pk) + "\n"
+            end
+            repeat n.libs.len() in pl:
+                pj = pj + "-l" + n.libs.get(pl) + "\n"
+            end
+            g_native_keys.push(spec)
+            g_native_vals.push(pj)
+            ret true
+        end
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_WARN, pwhy)
     end
     if n.sources.len() > 0:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("building the native library '%s' from source (only the first build does this)"), co.ArgStr(spec)))
         mut objs := Vector {} as Vector<str>
         defer objs.free()
-        mut extra := Vector {} as Vector<str>
-        defer extra.free()
         mut why := ""
-        if not pm.NativeObjects(n, dir, cc, extra, objs, why):
+        if not pm.NativeObjects(n, dir, use_cc, g_native_extra, objs, why):
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
             ret false
         end

@@ -6,6 +6,10 @@ import sort
 
 include pth "../sal_path.salam"
 
+mut g_rs_cons_mod := Vector {} as Vector<str>
+mut g_rs_cons_rule := Vector {} as Vector<str>
+mut g_rs_cons_from := Vector {} as Vector<str>
+
 func strip_quotes(s: str): str:
     t := str.Trim(s)
     n := str.Len(t)
@@ -94,6 +98,9 @@ func require_from(dir: str, mods &: Vector<str>, vers &: Vector<str>, todo &: Ve
     if not os.Exists(pth.PathJoin(dir, MANIFEST_FILE)):
         ret true
     end
+    if not CheckSalamVersion(dir, why):
+        ret false
+    end
     mut deps := Vector {} as Vector<Dep>
     defer deps.free()
     if not ReadManifest(dir, deps):
@@ -105,7 +112,14 @@ func require_from(dir: str, mods &: Vector<str>, vers &: Vector<str>, todo &: Ve
         if str.Len(d.local) > 0 or not IsPathImport(d.path) or str.Len(d.version) == 0:
             continue
         end
-        require(mods, vers, todo, ModuleOf(d.path), d.version)
+        mut need := d.version
+        if IsConstraint(need):
+            g_rs_cons_mod.push(ModuleOf(d.path))
+            g_rs_cons_rule.push(need)
+            g_rs_cons_from.push(dir)
+            need = ConstraintMin(need)
+        end
+        require(mods, vers, todo, ModuleOf(d.path), need)
     end
     ret true
 end
@@ -202,12 +216,35 @@ pub func Resolve(root: str, why &: str): bool:
     defer mods.free()
     defer vers.free()
     defer todo.free()
+    g_rs_cons_mod.clear()
+    g_rs_cons_rule.clear()
+    g_rs_cons_from.clear()
     if not require_from(root, mods, vers, todo, why):
         ret false
     end
     mut deps := Vector {} as Vector<Dep>
     defer deps.free()
     _ok := ReadManifest(root, deps)
+    repeat deps.len() in pi:
+        pd := deps.get(pi)
+        if str.Len(pd.local) > 0 or not IsPathImport(pd.path):
+            continue
+        end
+        pmod := ModuleOf(pd.path)
+        pinned := PinnedVersion(pmod)
+        if str.Len(pinned) > 0:
+            require(mods, vers, todo, pmod, pinned)
+            continue
+        end
+        if IsConstraint(pd.version):
+            repeat old.len() in lj:
+                lo := old.get(lj)
+                if str.Equals(lo.path, pmod) and ConstraintAllows(pd.version, lo.version):
+                    require(mods, vers, todo, pmod, lo.version)
+                end
+            end
+        end
+    end
     repeat deps.len() in i:
         d := deps.get(i)
         if str.Len(d.local) > 0:
@@ -259,6 +296,14 @@ pub func Resolve(root: str, why &: str): bool:
             ret false
         end
     end
+    repeat g_rs_cons_mod.len() in ci:
+        cm := g_rs_cons_mod.get(ci)
+        ck := sel_index(mods, cm)
+        if ck >= 0 and not ConstraintAllows(g_rs_cons_rule.get(ci), vers.get(ck)):
+            why = g_rs_cons_from.get(ci) + " needs " + cm + " " + g_rs_cons_rule.get(ci) + ", but " + vers.get(ck) + " is required elsewhere in the build"
+            ret false
+        end
+    end
     mut sums := Vector {} as Vector<str>
     defer sums.free()
     repeat mods.len() in m:
@@ -275,7 +320,11 @@ pub func Resolve(root: str, why &: str): bool:
             commit = KnownCommit(mod, ver)
         end
         commits.push(commit)
-        sums.push(DirSum(VersionDir(mod, ver)))
+        dsum := DirSum(VersionDir(mod, ver))
+        if not CheckAndRecordSum(mod, ver, dsum, why):
+            ret false
+        end
+        sums.push(dsum)
     end
     repeat deps.len() in oi3:
         od3 := deps.get(oi3)
@@ -328,10 +377,16 @@ pub func Sync(root: str, fetched &: int, why &: str): bool:
             end
             fetched += 1
         end
+        if not CheckSalamVersion(dir, why):
+            ret false
+        end
         if str.Len(d.sum) > 0:
             got := DirSum(dir)
             if not str.Equals(got, d.sum):
                 why = "checksum mismatch for " + d.path + " " + d.version + ": salam.lock has " + d.sum + ", the download has " + got
+                ret false
+            end
+            if not CheckAndRecordSum(d.path, d.version, got, why):
                 ret false
             end
         end

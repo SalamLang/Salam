@@ -156,6 +156,97 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
     compress.BufFree(h)
 end
 
+func _tar_pax_path(p: void*, off: int, size: int): str:
+    bp := p as u8*
+    mut pos := 0
+    until pos < size:
+        mut sp := pos
+        until sp < size and (bp[off + sp] as int) != 32:
+            sp += 1
+        end
+        lenstr := _tar_get_str(p, off + pos, sp - pos)
+        rec_len := lenstr.to_int()
+        _tar_free_str(lenstr)
+        if rec_len <= 0 or pos + rec_len > size:
+            ret ""
+        end
+        body_len := rec_len - (sp - pos) - 2
+        if body_len > 5:
+            rec := _tar_get_str(p, off + sp + 1, body_len)
+            if rec.substr(0, 5) == "path=":
+                ret rec.substr(5, rec.len() - 5)
+            end
+            _tar_free_str(rec)
+        end
+        pos += rec_len
+    end
+    ret ""
+end
+
+func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int): bool:
+    mut long_name := ""
+    until pos + 512 <= n:
+        if _tar_is_zero_block(p, pos):
+            ret false
+        end
+        nm := _tar_get_str(p, pos, 100)
+        if nm.len() == 0:
+            ret false
+        end
+        size := _tar_get_octal(p, pos + 124, 12)
+        if size < (0 as i64) or (pos as i64) + (512 as i64) + size > (n as i64):
+            _tar_free_str(nm)
+            ret false
+        end
+        bp := p as u8*
+        typeflag := bp[pos + 156] as int
+        dstart := pos + 512
+        span := (((size as int) + 511) / 512) * 512
+        if typeflag == 103 or typeflag == 120 or typeflag == 76 or typeflag == 75:
+            if typeflag == 120:
+                v := _tar_pax_path(p, dstart, size as int)
+                if v.len() > 0:
+                    long_name = v
+                end
+            else typeflag == 76:
+                long_name = _tar_get_str(p, dstart, size as int)
+            end
+            _tar_free_str(nm)
+            pos = dstart + span
+            continue
+        end
+        mut full := nm
+        if long_name.len() > 0:
+            full = long_name
+        else:
+            magic := _tar_get_str(p, pos + 257, 5)
+            if magic == "ustar":
+                prefix := _tar_get_str(p, pos + 345, 155)
+                if prefix.len() > 0:
+                    full = prefix + "/" + nm
+                end
+            end
+        end
+        is_dir := typeflag == 53
+        e = Entry {
+            name = full
+            size = size
+            compressed_size = size
+            is_dir = is_dir
+            method = 0
+            crc32 = 0 as u32
+            mtime = _tar_get_octal(p, pos + 136, 12)
+        }
+        data = dstart
+        pos = dstart
+        if not is_dir:
+            pos = dstart + span
+        end
+        ret true
+    end
+    ret false
+end
+
 @en "MakeTarFileInput"
 @fa "ساخت ورودی پرونده تار"
 pub func MakeTarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): TarFileInput:
@@ -201,44 +292,10 @@ end
 pub func TarList(p: void*, n: int): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
     mut pos := 0
-    until pos + 512 <= n:
-        if _tar_is_zero_block(p, pos):
-            break
-        end
-        nm := _tar_get_str(p, pos, 100)
-        if nm.len() == 0:
-            break
-        end
-        size := _tar_get_octal(p, pos + 124, 12)
-        if size < (0 as i64) or (pos as i64) + (512 as i64) + size > (n as i64):
-            _tar_free_str(nm)
-            break
-        end
-        mtime := _tar_get_octal(p, pos + 136, 12)
-        bp := p as u8*
-        typeflag := bp[pos + 156] as int
-        is_dir := typeflag == 53
-
-        e := Entry {
-            name = nm
-            size = size
-            compressed_size = size
-            is_dir = is_dir
-            method = 0
-            crc32 = 0 as u32
-            mtime = mtime
-        }
+    mut e := Entry {}
+    mut data := 0
+    until _tar_next(p, n, pos, e, data):
         out.push(e)
-
-        pos += 512
-        if not is_dir:
-            datasize := size as int
-            pos += datasize
-            pad := datasize % 512
-            if pad > 0:
-                pos += 512 - pad
-            end
-        end
     end
     ret out
 end
@@ -249,37 +306,14 @@ pub func TarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     ok = false
     mut out := compress.NewByteBuf()
     mut pos := 0
-    until pos + 512 <= n:
-        if _tar_is_zero_block(p, pos):
-            break
-        end
-        nm := _tar_get_str(p, pos, 100)
-        empty := nm.len() == 0
-        size := _tar_get_octal(p, pos + 124, 12)
-        bp := p as u8*
-        typeflag := bp[pos + 156] as int
-        is_dir := typeflag == 53
-        datasize := size as int
-        hit := not empty and nm == name and not is_dir
-        _tar_free_str(nm)
-        if empty or size < (0 as i64) or (pos as i64) + (512 as i64) + size > (n as i64):
-            break
-        end
-
-        if hit:
-            data_ptr := ((p as i64) + ((pos + 512) as i64)) as void*
-            compress.BufPushBytes(out, data_ptr, datasize)
+    mut e := Entry {}
+    mut data := 0
+    until _tar_next(p, n, pos, e, data):
+        if not e.is_dir and e.name == name:
+            data_ptr := ((p as i64) + (data as i64)) as void*
+            compress.BufPushBytes(out, data_ptr, e.size as int)
             ok = true
             ret out
-        end
-
-        pos += 512
-        if not is_dir:
-            pos += datasize
-            pad := datasize % 512
-            if pad > 0:
-                pos += 512 - pad
-            end
         end
     end
     ret out
@@ -288,14 +322,13 @@ end
 @en "TarExtractAll"
 @fa "استخراج همه از تار"
 pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
-    entries := TarList(p, n)
     mut all_ok := true
-    mut i := 0
-    until i < entries.len():
-        e := entries.get(i)
+    mut pos := 0
+    mut e := Entry {}
+    mut data := 0
+    until _tar_next(p, n, pos, e, data):
         if not _safe_entry_name(e.name):
             all_ok = false
-            i += 1
             continue
         end
         outpath := filepath.Join(destdir, e.name)
@@ -305,20 +338,12 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
             parent := filepath.Dir(outpath)
             EnsureDir(parent)
             mem.Free(parent as void*)
-            mut ok := false
-            data := TarExtractByName(p, n, e.name, ok)
-            if ok:
-                if not WriteBinaryFileBuf(outpath, data):
-                    all_ok = false
-                end
-            else:
+            data_ptr := ((p as i64) + (data as i64)) as void*
+            if not WriteBinaryFile(outpath, data_ptr, e.size as int):
                 all_ok = false
             end
-            compress.BufFree(data)
         end
         mem.Free(outpath as void*)
-        i += 1
     end
-    defer FreeEntries(entries)
     ret all_ok
 end

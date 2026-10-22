@@ -64,6 +64,16 @@ func pkg_prepare_native(dir: str): bool:
             println co.Format1(i18.Tr("  native library '%s': found on this system"), co.ArgStr(n.link))
             continue
         end
+        if str.Len(n.pre_url) > 0 and not str.Equals(pm.NativeMode(), "source"):
+            mut pobjs := Vector {} as Vector<str>
+            defer pobjs.free()
+            mut pwhy := ""
+            if pm.NativePrebuilt(n, pobjs, pwhy):
+                println co.Format2(i18.Tr("  native library '%s': downloaded the prebuilt copy for %s"), co.ArgStr(n.link), co.ArgStr(pm.HostPlatform()))
+                continue
+            end
+            io.EPrintln("salam: " + pwhy)
+        end
         if n.sources.len() > 0:
             mut objs := Vector {} as Vector<str>
             defer objs.free()
@@ -121,7 +131,7 @@ func pkg_add_cmd(opt &: dr.Dr): int:
         pkg_split_version(opt.inputs.get(k), n0, v0)
         chk := pkg_check_name(n0)
         if chk == 0:
-            if str.Len(v0) > 0 and not str.Equals(v0, "latest") and not pm.IsRelease(v0):
+            if str.Len(v0) > 0 and not str.Equals(v0, "latest") and not pm.IsRelease(v0) and not pm.IsConstraint(v0):
                 io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a release version (expected something like v1.2.0)"), co.ArgStr(v0)))
                 ret 2
             end
@@ -159,19 +169,27 @@ func pkg_add_cmd(opt &: dr.Dr): int:
             changed = true
             continue
         end
-        mod := pm.ModuleOf(name)
+        mod := pm.DiscoverModule(name)
         mut why := ""
         mut commit := ""
-        if str.Len(ver) == 0 or str.Equals(ver, "latest"):
+        mut record := ver
+        if pm.IsConstraint(ver):
+            ver = pm.NewestAllowed(mod, record, why)
+            if str.Len(ver) == 0:
+                ret pkg_fail(why)
+            end
+            pm.Pin(mod, ver)
+        else str.Len(ver) == 0 or str.Equals(ver, "latest"):
             ver = pm.LatestVersion(mod, commit, why)
             if str.Len(ver) == 0:
                 ret pkg_fail(why)
             end
+            record = ver
         end
         if not pm.Fetch(mod, ver, commit, why):
             ret pkg_fail(why)
         end
-        if not pm.SetDependency(root, mod, ver):
+        if not pm.SetDependency(root, mod, record):
             io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(root + "/salam.toml")))
             ret 1
         end
@@ -219,7 +237,22 @@ func pkg_wanted(opt &: dr.Dr, mod: str): bool:
         ret true
     end
     repeat opt.inputs.len() in i:
-        if str.Equals(pm.ModuleOf(opt.inputs.get(i)), mod):
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        if str.Equals(pm.ModuleOf(name), mod) or str.Equals(name, mod):
+            ret true
+        end
+    end
+    ret false
+end
+
+func pkg_wants_latest(opt &: dr.Dr, mod: str): bool:
+    repeat opt.inputs.len() in i:
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        if str.Equals(pm.ModuleOf(name), mod) and str.Equals(ver, "latest"):
             ret true
         end
     end
@@ -258,11 +291,37 @@ func pkg_update_cmd(opt &: dr.Dr): int:
         if str.Len(d.local) > 0 or not pm.IsPathImport(d.path) or not pkg_wanted(opt, d.path):
             continue
         end
+        if pm.IsConstraint(d.version) and not pkg_wants_latest(opt, d.path):
+            mut cwhy := ""
+            best := pm.NewestAllowed(d.path, d.version, cwhy)
+            if str.Len(best) == 0:
+                ret pkg_fail(cwhy)
+            end
+            mut ccommit := ""
+            if not pm.Fetch(d.path, best, ccommit, cwhy):
+                ret pkg_fail(cwhy)
+            end
+            pm.Pin(d.path, best)
+            println co.Format2(i18.Tr("%s uses %s"), co.ArgStr(d.path + " " + d.version), co.ArgStr(best))
+            continue
+        end
         mut why := ""
         mut commit := ""
-        latest := pm.LatestVersion(d.path, commit, why)
+        mut latest := ""
+        if pkg_wants_latest(opt, d.path):
+            latest = pm.LatestVersion(d.path, commit, why)
+        else:
+            latest = pm.LatestInMajor(d.path, d.version, commit, why)
+        end
         if str.Len(latest) == 0:
             ret pkg_fail(why)
+        end
+        if not pkg_wants_latest(opt, d.path) and pm.IsRelease(d.version):
+            mut why3 := ""
+            newest := pm.NewestMajor(d.path, why3)
+            if str.Len(newest) > 0 and pm.CompareVersions(newest, latest) > 0:
+                println co.Format3(i18.Tr("  %s %s is out; it may break your code, move with: salam update %s@latest"), co.ArgStr(d.path), co.ArgStr(newest), co.ArgStr(d.path))
+            end
         end
         if pm.CompareVersions(latest, d.version) <= 0:
             println co.Format2(i18.Tr("%s is up to date (%s)"), co.ArgStr(d.path), co.ArgStr(d.version))
@@ -285,6 +344,11 @@ func pkg_update_cmd(opt &: dr.Dr): int:
 end
 
 func pkg_deps_cmd(opt &: dr.Dr): int:
+    if str.Equals(opt.input, "clean"):
+        n := pm.CleanCache()
+        println co.Format2(i18.Tr("removed %d downloaded item(s) from %s"), co.ArgInt(n as i64), co.ArgStr(pm.PkgRoot()))
+        ret 0
+    end
     if str.Len(opt.input) > 0:
         io.EPrintln(co.Format1(i18.Tr("salam: 'deps' takes no arguments ('%s')"), co.ArgStr(opt.input)))
         ret 2
@@ -380,6 +444,7 @@ func pkg_install_here(opt &: dr.Dr): int:
         ret rc
     end
     println co.Format2(i18.Tr("installed %s to %s"), co.ArgStr(name), co.ArgStr(out))
+    pm.RecordInstall(name, root, "local", out)
     ret 0
 end
 
@@ -391,7 +456,7 @@ func pkg_install_one(opt &: dr.Dr, arg: str): int:
         io.EPrintln(co.Format1(i18.Tr("salam: 'install' takes a program by its repository, for example github.com/owner/tool ('%s')"), co.ArgStr(name)))
         ret 2
     end
-    mod := pm.ModuleOf(name)
+    mod := pm.DiscoverModule(name)
     mut why := ""
     mut commit := ""
     if str.Len(ver) == 0 or str.Equals(ver, "latest"):
@@ -439,7 +504,7 @@ func pkg_install_one(opt &: dr.Dr, arg: str): int:
         io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(bin)))
         ret 1
     end
-    out := pth.PathJoin(bin, pkg_exe_name(pth.PathBase(name)))
+    out := pth.PathJoin(bin, pkg_exe_name(pm.PackageNameOf(name)))
     here := os.Cwd()
     _cd := os.Chdir(work)
     rc := pkg_build_release(opt, ".", out)
@@ -449,6 +514,7 @@ func pkg_install_one(opt &: dr.Dr, arg: str): int:
         ret rc
     end
     println co.Format3(i18.Tr("installed %s %s to %s"), co.ArgStr(name), co.ArgStr(ver), co.ArgStr(out))
+    pm.RecordInstall(pm.PackageNameOf(name), name, ver, out)
     path_env := os.Env("PATH")
     if not str.Contains(path_env, bin):
         println co.Format1(i18.Tr("  %s is not on PATH yet; add it to run the program by name"), co.ArgStr(bin))
@@ -514,6 +580,37 @@ func pkg_search_cmd(opt &: dr.Dr): int:
     if found == 0:
         println co.Format1(i18.Tr("no package matches '%s'"), co.ArgStr(q))
         ret 1
+    end
+    ret 0
+end
+
+func pkg_uninstall_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        mut lines := Vector {} as Vector<str>
+        defer lines.free()
+        pm.ListInstalled(lines)
+        if lines.len() == 0:
+            println i18.Tr("nothing has been installed with salam install")
+            ret 0
+        end
+        repeat lines.len() in i:
+            parts := str.Split(lines.get(i), "\t")
+            defer parts.free()
+            if parts.len() >= 4:
+                println parts.get(0) + "  " + parts.get(1) + " " + parts.get(2) + "  " + parts.get(3)
+            end
+        end
+        ret 0
+    end
+    repeat opt.inputs.len() in j:
+        name := pth.PathBase(opt.inputs.get(j))
+        path := pm.ForgetInstall(name)
+        if str.Len(path) == 0:
+            io.EPrintln(co.Format1(i18.Tr("salam: '%s' was not installed with salam install"), co.ArgStr(name)))
+            ret 2
+        end
+        _rm := os.Remove(path)
+        println co.Format2(i18.Tr("removed %s (%s)"), co.ArgStr(name), co.ArgStr(path))
     end
     ret 0
 end

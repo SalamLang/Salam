@@ -263,21 +263,26 @@ download:
 ```sh
 salam add github.com/owner/repo           # newest release, or @v1.2.0
 salam remove github.com/owner/repo
-salam update [github.com/owner/repo]      # move to the newest release
+salam update [github.com/owner/repo]      # newest release with the same major (@latest crosses it)
 salam deps                                # download what salam.lock lists, verify checksums
 salam install github.com/owner/tool       # build a program's main.salam into ~/.salam/bin
 salam install                             # the same for the project you are in
+salam uninstall [name]                    # remove an installed program, or list them
+salam deps clean                          # empty the download cache
 salam search websocket                    # standard library and registry/index.toml
 ```
 
 A local package can stand in for a remote one with
 `"example.com/me/lib" = { path = "../lib" }` in `[dependencies]`.
 Downloads live in `~/.salam/pkg/<module>@<version>` (`$SALAM_PKG` moves it).
-Git is used when it is installed; without it, GitHub packages arrive as a
-tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
+Git is used when it is installed; without it, packages on github.com,
+gitlab.com and codeberg.org arrive as a tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
 Dependencies of dependencies come from each package's own `salam.toml`, and
 when two ask for different versions the newer one wins (minimal version
 selection, as in Go).
+
+The full reference for `salam.toml`, `salam.lock`, the commands and the
+environment variables is [docs/PACKAGES.md](PACKAGES.md).
 
 ### 🔗 Native libraries
 

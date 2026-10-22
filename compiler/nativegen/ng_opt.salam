@@ -552,7 +552,15 @@ func iv_bounds(g &: Ng, v: int, blk: int, lo &: i64, hi &: i64): bool:
         ret false
     end
     cd := g.v_def[c]
-    if g.i_op[cd] != OP_ICMP or g.i_a[cd] != v or not is_cint(g, g.i_b[cd]):
+    if g.i_op[cd] != OP_ICMP or g.i_a[cd] != v:
+        ret false
+    end
+    bv := g.i_b[cd]
+    mut blo := 0 as i64
+    mut bhi := 0 as i64
+    if is_cint(g, bv):
+        bhi = norm_int(g, g.v_ty[v], g.v_i[bv])
+    else not val_range(g, bv, blk, 4, blo, bhi):
         ret false
     end
     p := g.i_x[cd]
@@ -572,7 +580,7 @@ func iv_bounds(g &: Ng, v: int, blk: int, lo &: i64, hi &: i64): bool:
             init = iv
         else iv >= 0 and g.v_kind[iv] == VK_INS:
             d := g.v_def[iv]
-            if g.i_op[d] == OP_ADD and g.i_a[d] == v and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] > (0 as i64) and (g.i_f[d] & IF_NSW) != 0 and dominates(g, h, pb):
+            if g.i_op[d] == OP_ADD and g.i_a[d] == v and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] > (0 as i64) and g.v_i[g.i_b[d]] < (1048576 as i64) and dominates(g, h, pb) and ((g.i_f[d] & IF_NSW) != 0 or dominates(g, body, g.i_blk[d])):
                 step_ok = true
             end
         end
@@ -581,8 +589,7 @@ func iv_bounds(g &: Ng, v: int, blk: int, lo &: i64, hi &: i64): bool:
         ret false
     end
     lo = norm_int(g, g.v_ty[v], g.v_i[init])
-    lim := norm_int(g, g.v_ty[v], g.v_i[g.i_b[cd]])
-    hi = p == CC_SLT ? lim - (1 as i64) : lim
+    hi = p == CC_SLT ? bhi - (1 as i64) : bhi
     ret lo <= hi
 end
 
@@ -687,7 +694,16 @@ func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): boo
         ret phi_range(g, v, depth, lo, hi)
     end
     if op == OP_SEXT:
-        ret val_range(g, g.i_a[d], blk, depth + 1, lo, hi)
+        if val_range(g, g.i_a[d], blk, depth + 1, lo, hi):
+            ret true
+        end
+        sb := int_bits(g, g.i_x[d])
+        if sb < 8 or sb > 32:
+            ret false
+        end
+        lo = (0 as i64) - ((1 as i64) << ((sb - 1) as i64))
+        hi = ((1 as i64) << ((sb - 1) as i64)) - (1 as i64)
+        ret true
     end
     if op == OP_ZEXT:
         ret val_range(g, g.i_a[d], blk, depth + 1, lo, hi) and lo >= (0 as i64)
@@ -755,6 +771,37 @@ func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): boo
         ret true
     end
     ret false
+end
+
+func ext_trunc_range(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    t := g.v_def[a]
+    if g.i_op[t] != OP_TRUNC:
+        ret false
+    end
+    x := g.i_a[t]
+    sb := int_bits(g, g.i_x[i])
+    if x < 0 or g.v_ty[x] != g.i_ty[i] or sb < 8 or sb > 32:
+        ret false
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not val_range(g, x, g.i_blk[i], 0, lo, hi):
+        ret false
+    end
+    top := (1 as i64) << ((sb - 1) as i64)
+    if g.i_op[i] == OP_SEXT:
+        if lo < (0 as i64) - top or hi >= top:
+            ret false
+        end
+    else lo < (0 as i64) or hi >= top:
+        ret false
+    end
+    replace_res(g, i, x)
+    ret true
 end
 
 func fold_rem_range(g &: Ng, i: int): bool:
@@ -1356,6 +1403,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 end
             else op >= OP_SEXT and op <= OP_FPTRUNC:
                 ch = fold_cast(g, i)
+                if not ch and g.dom_ok and not g.off_range and (g.i_op[i] == OP_SEXT or g.i_op[i] == OP_ZEXT):
+                    ch = ext_trunc_range(g, i)
+                end
             else op == OP_SELECT:
                 ch = fold_select(g, i)
                 if not ch and g.i_op[i] == OP_SELECT:
@@ -2141,7 +2191,11 @@ end
 
 func optimize(g &: Ng):
     opt_rounds(g)
-    if not g.off_aload and agg_scalarize(g):
+    mut af := false
+    if not g.off_afwd:
+        af = agg_forward(g)
+    end
+    if (not g.off_aload and agg_scalarize(g)) or af:
         opt_rounds(g)
     end
     if not g.off_unroll:
@@ -2194,9 +2248,10 @@ func optimize(g &: Ng):
         dce(g)
     end
     if not g.off_aload:
+        af1 := not g.off_afwd and agg_forward(g)
         sc1 := agg_scalarize(g)
         da1 := dead_allocas(g)
-        if sc1 or da1:
+        if sc1 or da1 or af1:
             opt_rounds(g)
         end
     end

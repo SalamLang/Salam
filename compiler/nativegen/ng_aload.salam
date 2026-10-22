@@ -203,3 +203,79 @@ func dead_allocas(g &: Ng): bool:
     end
     ret changed
 end
+
+func agg_fwd_one(g &: Ng, al: int, loads &: Vector<int>): bool:
+    r := g.i_res[al]
+    t := g.i_x[al]
+    if r < 0 or not is_agg(g, t) or g.i_d[al] > (1 as i64):
+        ret false
+    end
+    loads.clear()
+    mut st := 0 - 1
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if j != al and uses_val(g, j, r):
+                op := g.i_op[j]
+                if op == OP_STORE and g.i_b[j] == r and g.i_a[j] != r and g.v_ty[g.i_a[j]] == t and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                    if st >= 0:
+                        ret false
+                    end
+                    st = j
+                else op == OP_LOAD and g.i_a[j] == r and g.i_ty[j] == t and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                    loads.push(j)
+                else:
+                    ret false
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    if st < 0 or loads.len() == 0:
+        ret false
+    end
+    sb := g.i_blk[st]
+    each l in loads:
+        lb := g.i_blk[l]
+        if lb == sb:
+            mut k := g.i_next[st]
+            until k >= 0 and k != l:
+                k = g.i_next[k]
+            end
+            if k != l:
+                ret false
+            end
+        else not dominates(g, sb, lb):
+            ret false
+        end
+    end
+    v := g.i_a[st]
+    repl_grow(g)
+    each l2 in loads:
+        g.v_repl[g.i_res[l2]] = v
+        ins_unlink(g, l2)
+    end
+    ret true
+end
+
+func agg_forward(g &: Ng): bool:
+    build_dom(g)
+    mut loads := Vector {} as Vector<int>
+    mut changed := false
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_ALLOCA and agg_fwd_one(g, i, loads):
+                changed = true
+            end
+            i = nx
+        end
+    end
+    loads.free()
+    if changed:
+        remap_all(g)
+        _da := dead_allocas(g)
+    end
+    ret changed
+end

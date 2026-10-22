@@ -56,11 +56,16 @@ produced the IR it builds the object, then links it with in-process lld when
 
 Functions are compiled callees first, so a call can be inlined whenever the
 callee is small (about 40 instructions, more for `alwaysinline`) and not
-recursive. Each function then goes through:
+recursive. A function with exactly one call site whose address is never taken
+may be up to 300 instructions, since inlining it adds no code. Each function
+then goes through:
 
 1. SROA on struct locals, then mem2reg.
 2. Inlining, then SROA and mem2reg again for the locals the inlined code used
-   to reach only through a pointer.
+   to reach only through a pointer. A struct local that is stored whole exactly
+   once and otherwise only loaded whole (a by-value parameter's spill slot, or
+   the copy an inlined setter makes) is replaced by the stored value, so
+   `Put(a, id, node)` copies the node once instead of three times.
 3. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -90,7 +95,8 @@ recursive. Each function then goes through:
    is versioned into one copy per outcome. Compares, remainders and
    divisions are folded when the value range of their operand decides them:
    inside `until i < 4000000:` the remainder `(i + 1) % 1000000007` is just
-   `i + 1`.
+   `i + 1`. A counter bounded by a sign-extended 32-bit length is known to fit
+   in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
    `paddd` loop with two accumulators followed by the scalar loop for the
    leftover elements, and a
@@ -208,7 +214,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

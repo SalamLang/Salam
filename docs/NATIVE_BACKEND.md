@@ -130,7 +130,10 @@ recursive. Each function then goes through:
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
     Pointers that come from different `malloc`/`calloc`/`realloc` calls never
-    alias, so writing one vector's buffer keeps loads from another one. A load
+    alias, so writing one vector's buffer keeps loads from another one.
+    Calls to functions declared `memory(read)` or `memory(argmem: read)`
+    (`strcmp`, `strlen`, the math library) do not invalidate loads, so a
+    vector's data pointer stays in a register across a `strcmp` loop. A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
     register across its flush branch.

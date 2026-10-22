@@ -58,7 +58,9 @@ produced the IR it builds the object, then links it with in-process lld when
 Functions are compiled callees first, so a call can be inlined whenever the
 callee is small (about 40 instructions, more for `alwaysinline`) and not
 recursive. A function with exactly one call site whose address is never taken
-may be up to 300 instructions, since inlining it adds no code. Each function
+may be up to 300 instructions, since inlining it adds no code. Returning a
+small struct, or taking one by value, raises the limit too, since inlining
+removes the copies through memory (`image.GetPixel` returns a `Color`). Each function
 then goes through:
 
 1. SROA on struct locals, then mem2reg.
@@ -249,7 +251,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

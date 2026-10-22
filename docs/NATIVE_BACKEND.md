@@ -143,7 +143,9 @@ single-use load into the ALU instruction or compare that consumes it, fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
 reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two
-multiplies and a few shifts. A division by a variable shares one `div` between
+multiplies and a few shifts. The width comes from value ranges too: a counter
+below five million, or a digit loop `t = t / 10` started from such a counter,
+gets a reciprocal that fits a 32-bit `imul` immediate. A division by a variable shares one `div` between
 the quotient and the remainder and uses the 32-bit `div` when both 64-bit
 operands fit. Register allocation is linear scan over exact live
 ranges with use counts weighted by loop depth. In a loop with more live values

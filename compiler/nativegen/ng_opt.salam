@@ -580,7 +580,86 @@ func iv_bounds(g &: Ng, v: int, blk: int, lo &: i64, hi &: i64): bool:
     ret lo <= hi
 end
 
+func phi_range(g &: Ng, v: int, depth: int, lo &: i64, hi &: i64): bool:
+    if g.vr_phi >= 0 or depth > 3:
+        ret false
+    end
+    ph := g.v_def[v]
+    n := g.i_pcount[ph]
+    if n < 2 or n > 4:
+        ret false
+    end
+    ps := g.i_ps[ph]
+    mut have := false
+    mut rlo := 0 as i64
+    mut rhi := 0 as i64
+    repeat n in q:
+        x := g.pool[ps + 2 * q]
+        if x == v:
+            continue
+        end
+        mut a := 0 as i64
+        mut b := 0 as i64
+        if val_range(g, x, g.pool[ps + 2 * q + 1], depth + 1, a, b):
+            if not have or a < rlo: rlo = a end
+            if not have or b > rhi: rhi = b end
+            have = true
+        end
+    end
+    if not have:
+        ret false
+    end
+    mut ok := false
+    repeat 3:
+        if ok:
+            break
+        end
+        g.vr_phi = v
+        g.vr_lo = rlo
+        g.vr_hi = rhi
+        ok = true
+        repeat n in q2:
+            x2 := g.pool[ps + 2 * q2]
+            pb := g.pool[ps + 2 * q2 + 1]
+            mut a2 := 0 as i64
+            mut b2 := 0 as i64
+            if x2 == v:
+                continue
+            end
+            if not val_range(g, x2, pb, depth + 1, a2, b2):
+                ok = false
+                rlo = 0 as i64
+                rhi = 0 - 1 as i64
+                break
+            end
+            if a2 < rlo:
+                rlo = a2
+                ok = false
+            end
+            if b2 > rhi:
+                rhi = b2
+                ok = false
+            end
+        end
+        g.vr_phi = 0 - 1
+        if rhi < rlo:
+            ret false
+        end
+    end
+    if not ok:
+        ret false
+    end
+    lo = rlo
+    hi = rhi
+    ret true
+end
+
 func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): bool:
+    if v >= 0 and v == g.vr_phi:
+        lo = g.vr_lo
+        hi = g.vr_hi
+        ret true
+    end
     big := (1 as i64) << (40 as i64)
     if v < 0:
         ret false
@@ -596,13 +675,24 @@ func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): boo
     d := g.v_def[v]
     op := g.i_op[d]
     if op == OP_PHI:
-        ret iv_bounds(g, v, blk, lo, hi)
+        if iv_bounds(g, v, blk, lo, hi):
+            ret true
+        end
+        ret phi_range(g, v, depth, lo, hi)
     end
     if op == OP_SEXT:
         ret val_range(g, g.i_a[d], blk, depth + 1, lo, hi)
     end
     if op == OP_ZEXT:
         ret val_range(g, g.i_a[d], blk, depth + 1, lo, hi) and lo >= (0 as i64)
+    end
+    if op == OP_TRUNC:
+        tb := int_bits(g, g.i_ty[d])
+        if tb < 8 or tb > 32 or not val_range(g, g.i_a[d], blk, depth + 1, lo, hi):
+            ret false
+        end
+        lim := (1 as i64) << ((tb - 1) as i64)
+        ret lo >= (0 as i64) - lim and hi < lim
     end
     mut lo_a := 0 as i64
     mut hi_a := 0 as i64
@@ -626,6 +716,23 @@ func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): boo
             hi = hi_a * hi_b
         end
         ret lo > (0 as i64) - big and hi < big
+    end
+    if (op == OP_SDIV or op == OP_UDIV or op == OP_LSHR or op == OP_ASHR) and is_cint(g, g.i_b[d]):
+        k2 := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+        if k2 <= (0 as i64) or not val_range(g, g.i_a[d], blk, depth + 1, lo_a, hi_a) or lo_a < (0 as i64):
+            ret false
+        end
+        if op == OP_SDIV or op == OP_UDIV:
+            lo = lo_a / k2
+            hi = hi_a / k2
+        else:
+            if k2 > (62 as i64):
+                ret false
+            end
+            lo = lo_a >> k2
+            hi = hi_a >> k2
+        end
+        ret true
     end
     if (op == OP_UREM or op == OP_SREM or op == OP_AND) and is_cint(g, g.i_b[d]):
         k := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])

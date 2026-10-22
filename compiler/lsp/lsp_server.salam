@@ -43,6 +43,10 @@ mut g_shutdown := false
 mut g_req_path := ""
 mut g_out_path := ""
 mut g_analyses := 0
+mut g_job_on := false
+mut g_job_uri := ""
+mut g_job_proc := process.Process {}
+mut g_pending := Vector {} as Vector<Pending>
 
 struct Doc:
     pub uri: str = ""
@@ -53,6 +57,13 @@ struct Doc:
     pub open: bool = true
     pub has_snap: bool = false
     pub snap: value.Value = value.Value {}
+end
+
+struct Pending:
+    pub id: str = ""
+    pub method: str = ""
+    pub uri: str = ""
+    pub params: value.Value = value.Value {}
 end
 
 struct Hit:
@@ -293,30 +304,65 @@ func analysis_request(d: Doc): str:
     ret jw_done(j)
 end
 
-func run_worker(d: Doc, out &: value.Value): bool:
+func start_job(i: int):
+    mut d := g_docs.get(i)
+    d.dirty = false
+    g_docs.set(i, d)
     if str.Len(g_req_path) == 0:
         g_req_path = temp.File()
         g_out_path = temp.File()
     end
     if io.WriteFile(g_req_path, analysis_request(d)) < 0:
         log_client(1, "salam lsp: cannot write " + g_req_path)
-        ret false
+        ret
     end
     _w := io.WriteFile(g_out_path, "")
     mut args := Vector {} as Vector<str>
     args.push("lsp")
     args.push("--analyze")
     args.push(g_req_path)
-    mut p := process.StartCaptured(g_exe, args)
+    p := process.StartCaptured(g_exe, args)
     args.free()
     if not process.IsRunning(p):
         log_client(1, "salam lsp: cannot start the analysis worker '" + g_exe + "'")
-        ret false
+        ret
     end
-    rc := process.Wait(p)
-    errtext := process.ReadStderr(p)
-    process.Cleanup(p)
+    g_job_on = true
+    g_job_uri = d.uri
+    g_job_proc = p
+    if SALAM_OS_WINDOWS:
+        rc := process.Wait(g_job_proc)
+        finish_job(rc)
+    end
+end
+
+func cancel_job():
+    if not g_job_on:
+        ret
+    end
+    _k := process.Kill(g_job_proc)
+    mut code := 0
+    _d := child_done(process.Pid(g_job_proc), true, code)
+    process.Cleanup(g_job_proc)
+    g_job_on = false
+    i := doc_index(g_job_uri)
+    if i >= 0:
+        mut d := g_docs.get(i)
+        d.dirty = true
+        g_docs.set(i, d)
+    end
+end
+
+func finish_job(rc: int):
+    g_job_on = false
     g_analyses += 1
+    errtext := process.ReadStderr(g_job_proc)
+    process.Cleanup(g_job_proc)
+    i := doc_index(g_job_uri)
+    if i < 0 or not g_docs.get(i).open:
+        ret
+    end
+    d := g_docs.get(i)
     text := io.ReadFile(g_out_path)
     if rc != 0 or str.Len(text) == 0:
         mut msg := "salam lsp: analysis of " + d.path + " failed (exit " + str.FromInt(rc as i64) + ")"
@@ -324,16 +370,70 @@ func run_worker(d: Doc, out &: value.Value): bool:
             msg = msg + ": " + str.Substr(errtext, 0, str.Len(errtext) > 2000 ? 2000 : str.Len(errtext))
         end
         log_client(1, msg)
-        ret false
+        answer_pending(d.uri)
+        ret
     end
     mut err := encerr.EncodingError {}
     v := json.Decode(text, err)
     if encerr.IsError(err) or not value.IsObject(v):
         log_client(1, "salam lsp: the analysis worker returned bad JSON")
+        answer_pending(d.uri)
+        ret
+    end
+    mut d2 := g_docs.get(i)
+    d2.snap = v
+    d2.has_snap = true
+    g_docs.set(i, d2)
+    publish(d2)
+    if not d2.dirty:
+        answer_pending(d2.uri)
+    end
+end
+
+func poll_job():
+    if not g_job_on:
+        ret
+    end
+    mut code := 0
+    if child_done(process.Pid(g_job_proc), false, code):
+        finish_job(code)
+    end
+end
+
+func needs_wait(i: int): bool:
+    if i < 0:
         ret false
     end
-    out = v
-    ret true
+    d := g_docs.get(i)
+    ret d.dirty or not d.has_snap or (g_job_on and str.Equals(g_job_uri, d.uri))
+end
+
+func defer_request(id: str, method: str, params: value.Value):
+    uri := vstr(obj(params, "textDocument"), "uri")
+    g_pending.push(Pending { id = id, method = method, uri = uri, params = params })
+end
+
+func answer_pending(uri: str):
+    mut keep := Vector {} as Vector<Pending>
+    mut run := Vector {} as Vector<Pending>
+    each pq in g_pending:
+        if str.Equals(pq.uri, uri):
+            run.push(pq)
+        else:
+            keep.push(pq)
+        end
+    end
+    g_pending.free()
+    g_pending = keep
+    each pr in run:
+        i := doc_index(pr.uri)
+        if i >= 0 and g_docs.get(i).has_snap:
+            dispatch_request(pr.id, pr.method, pr.params, true)
+        else:
+            send_result(pr.id, "null")
+        end
+    end
+    run.free()
 end
 
 func publish(d: Doc):
@@ -375,20 +475,6 @@ func publish(d: Doc):
     send_notify("textDocument/publishDiagnostics", jw_done(j))
 end
 
-func analyze_doc(i: int):
-    mut d := g_docs.get(i)
-    d.dirty = false
-    g_docs.set(i, d)
-    mut snap := value.Value {}
-    if run_worker(d, snap):
-        mut d2 := g_docs.get(i)
-        d2.snap = snap
-        d2.has_snap = true
-        g_docs.set(i, d2)
-        publish(d2)
-    end
-end
-
 func has_dirty(): bool:
     each d in g_docs:
         if d.dirty and d.open:
@@ -398,18 +484,13 @@ func has_dirty(): bool:
     ret false
 end
 
-func analyze_dirty():
+func next_dirty(): int:
     repeat g_docs.len() in i:
         if g_docs.get(i).dirty and g_docs.get(i).open:
-            analyze_doc(i)
+            ret i
         end
     end
-end
-
-func ensure_fresh(i: int):
-    if i >= 0 and (g_docs.get(i).dirty or not g_docs.get(i).has_snap):
-        analyze_doc(i)
-    end
+    ret 0 - 1
 end
 
 func apply_change(text: str, ch: value.Value): str:
@@ -790,7 +871,6 @@ func on_snapshot_field(id: str, params: value.Value, field: str, wrap_data: bool
         send_result(id, wrap_data ? "{\"data\":[]}" : "[]")
         ret
     end
-    ensure_fresh(i)
     d := g_docs.get(i)
     if not d.has_snap:
         send_result(id, wrap_data ? "{\"data\":[]}" : "[]")
@@ -1280,58 +1360,19 @@ func mark_all_dirty():
     end
 end
 
-func handle(text: str): int:
-    mut err := encerr.EncodingError {}
-    v := json.Decode(text, err)
-    if encerr.IsError(err) or not value.IsObject(v):
-        send_message("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}")
-        ret 0 - 1
-    end
-    method := vstr(v, "method")
-    mut id := "null"
-    has_id := value.ObjectHas(v, "id") and not value.IsNull(value.ObjectGet(v, "id"))
-    if has_id:
-        id = json.EncodeDefault(value.ObjectGet(v, "id"))
-    end
-    params := obj(v, "params")
-    if str.Len(method) == 0:
-        ret 0 - 1
-    end
-    if g_shutdown and not str.Equals(method, "exit"):
-        if has_id:
-            send_error(id, 0 - 32600, "the server is shutting down")
+func fresh_method(method: str): bool:
+    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full")
+end
+
+func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
+    di := text_doc(params)
+    if not replay and di >= 0:
+        if (fresh_method(method) and needs_wait(di)) or not g_docs.get(di).has_snap:
+            defer_request(id, method, params)
+            ret
         end
-        ret 0 - 1
     end
-    if str.Equals(method, "initialize"):
-        apply_settings(obj(params, "initializationOptions"))
-        loc := vstr(params, "locale")
-        if str.StartsWith(loc, "fa") and not value.ObjectHas(obj(params, "initializationOptions"), "messages"):
-            g_messages = "fa"
-        end
-        send_result(id, caps_json())
-    else str.Equals(method, "initialized"):
-        ret 0 - 1
-    else str.Equals(method, "shutdown"):
-        g_shutdown = true
-        send_result(id, "null")
-    else str.Equals(method, "exit"):
-        ret g_shutdown ? 0 : 1
-    else str.Equals(method, "textDocument/didOpen"):
-        on_did_open(params)
-        analyze_doc(doc_index(vstr(obj(params, "textDocument"), "uri")))
-    else str.Equals(method, "textDocument/didChange"):
-        on_did_change(params)
-    else str.Equals(method, "textDocument/didSave"):
-        mark_all_dirty()
-    else str.Equals(method, "textDocument/didClose"):
-        on_did_close(params)
-    else str.Equals(method, "workspace/didChangeConfiguration"):
-        apply_settings(obj(params, "settings"))
-        mark_all_dirty()
-    else str.Equals(method, "workspace/didChangeWatchedFiles"):
-        mark_all_dirty()
-    else str.Equals(method, "textDocument/hover"):
+    if str.Equals(method, "textDocument/hover"):
         on_hover(id, params)
     else str.Equals(method, "textDocument/definition") or str.Equals(method, "textDocument/declaration") or str.Equals(method, "textDocument/implementation"):
         on_definition(id, params, false)
@@ -1367,29 +1408,116 @@ func handle(text: str): int:
         on_selection_range(id, params)
     else str.Equals(method, "workspace/symbol"):
         on_workspace_symbol(id, params)
+    else:
+        send_error(id, 0 - 32601, "method not supported: " + method)
+    end
+end
+
+func handle(text: str): int:
+    mut err := encerr.EncodingError {}
+    v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        send_message("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}")
+        ret 0 - 1
+    end
+    method := vstr(v, "method")
+    mut id := "null"
+    has_id := value.ObjectHas(v, "id") and not value.IsNull(value.ObjectGet(v, "id"))
+    if has_id:
+        id = json.EncodeDefault(value.ObjectGet(v, "id"))
+    end
+    params := obj(v, "params")
+    if str.Len(method) == 0:
+        ret 0 - 1
+    end
+    if g_shutdown and not str.Equals(method, "exit"):
+        if has_id:
+            send_error(id, 0 - 32600, "the server is shutting down")
+        end
+        ret 0 - 1
+    end
+    if str.Equals(method, "initialize"):
+        apply_settings(obj(params, "initializationOptions"))
+        loc := vstr(params, "locale")
+        if str.StartsWith(loc, "fa") and not value.ObjectHas(obj(params, "initializationOptions"), "messages"):
+            g_messages = "fa"
+        end
+        send_result(id, caps_json())
+    else str.Equals(method, "initialized"):
+        ret 0 - 1
+    else str.Equals(method, "shutdown"):
+        cancel_job()
+        g_shutdown = true
+        send_result(id, "null")
+    else str.Equals(method, "exit"):
+        cancel_job()
+        ret g_shutdown ? 0 : 1
+    else str.Equals(method, "textDocument/didOpen"):
+        on_did_open(params)
+    else str.Equals(method, "textDocument/didChange"):
+        if g_job_on and str.Equals(g_job_uri, vstr(obj(params, "textDocument"), "uri")):
+            cancel_job()
+        end
+        on_did_change(params)
+    else str.Equals(method, "textDocument/didSave"):
+        mark_all_dirty()
+    else str.Equals(method, "textDocument/didClose"):
+        if g_job_on and str.Equals(g_job_uri, vstr(obj(params, "textDocument"), "uri")):
+            cancel_job()
+        end
+        on_did_close(params)
+        answer_pending(vstr(obj(params, "textDocument"), "uri"))
+    else str.Equals(method, "workspace/didChangeConfiguration"):
+        apply_settings(obj(params, "settings"))
+        mark_all_dirty()
+    else str.Equals(method, "workspace/didChangeWatchedFiles"):
+        mark_all_dirty()
     else str.StartsWith(method, "$/"):
         ret 0 - 1
     else has_id:
-        send_error(id, 0 - 32601, "method not supported: " + method)
+        dispatch_request(id, method, params, false)
     end
     ret 0 - 1
+end
+
+func pump(): int:
+    mut ok := false
+    msg := read_message(ok)
+    if not ok:
+        cancel_job()
+        ret g_shutdown ? 0 : 1
+    end
+    ret handle(msg)
 end
 
 func serve(): int:
     io_init()
     until true:
-        if has_dirty() and not input_ready(DEBOUNCE_MS):
-            analyze_dirty()
+        if g_job_on:
+            if input_ready(25):
+                rc := pump()
+                if rc >= 0:
+                    ret rc
+                end
+            else:
+                poll_job()
+            end
             continue
         end
-        mut ok := false
-        msg := read_message(ok)
-        if not ok:
-            ret g_shutdown ? 0 : 1
+        if has_dirty():
+            if input_ready(DEBOUNCE_MS):
+                rc2 := pump()
+                if rc2 >= 0:
+                    ret rc2
+                end
+            else:
+                start_job(next_dirty())
+            end
+            continue
         end
-        rc := handle(msg)
-        if rc >= 0:
-            ret rc
+        rc3 := pump()
+        if rc3 >= 0:
+            ret rc3
         end
     end
 end

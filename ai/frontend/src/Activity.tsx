@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ThinkStep, ToolStep } from "./api";
 import { BidiText } from "./Bidi";
+import { isFa, t } from "./i18n";
 import {
   IconAlert,
   IconBook,
@@ -32,10 +33,10 @@ const ICONS: Record<string, (p: { width?: number; height?: number }) => ReactNod
 
 function seconds(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000));
-  if (s < 60) return `${toPersianDigits(s)} ثانیه`;
+  if (s < 60) return t(`${toPersianDigits(s)} ثانیه`, `${s}s`);
   const m = Math.floor(s / 60);
   const r = s % 60;
-  return r ? `${toPersianDigits(m)} دقیقه و ${toPersianDigits(r)} ثانیه` : `${toPersianDigits(m)} دقیقه`;
+  return r ? t(`${toPersianDigits(m)} دقیقه و ${toPersianDigits(r)} ثانیه`, `${m}m ${r}s`) : t(`${toPersianDigits(m)} دقیقه`, `${m}m`);
 }
 
 function lastLine(text: string): string {
@@ -55,15 +56,15 @@ function useElapsed(active: boolean, createdSec: number): number {
 }
 
 function StepStatus({ s }: { s: ToolStep }) {
-  if (s.status === "running") return <span className="spinner tiny" aria-label="در حال انجام" />;
+  if (s.status === "running") return <span className="spinner tiny" aria-label={t("در حال انجام", "In progress")} />;
   if (s.status === "error")
     return (
-      <span className="step-status error" title="ناموفق">
+      <span className="step-status error" title={t("ناموفق", "Failed")}>
         <IconAlert width={14} height={14} />
       </span>
     );
   return (
-    <span className="step-status ok" title="انجام شد">
+    <span className="step-status ok" title={t("انجام شد", "Done")}>
       <IconCheck width={14} height={14} />
     </span>
   );
@@ -77,7 +78,7 @@ function Thought({ text, live }: { text: string; live: boolean }) {
       <BidiText text={text} className={long && !more && !live ? "clamped" : undefined} />
       {long && !live && (
         <button type="button" className="link small-link" onClick={() => setMore((v) => !v)}>
-          {more ? "کمتر" : "ادامه"}
+          {more ? t("کمتر", "Less") : t("ادامه", "More")}
         </button>
       )}
     </div>
@@ -103,13 +104,13 @@ export function ActivityPanel({
   const last = steps[steps.length - 1];
   let headline: string;
   if (pending) {
-    if (last?.kind === "tool" && last.status === "running") headline = last.title;
-    else if (last?.kind === "tool") headline = "در حال جمع‌بندی";
-    else headline = "در حال فکر کردن";
+    if (last?.kind === "tool" && last.status === "running") headline = isFa ? last.title : last.title_en || last.title;
+    else if (last?.kind === "tool") headline = t("در حال جمع‌بندی", "Wrapping up");
+    else headline = t("در حال فکر کردن", "Thinking");
   } else {
     const took = ms && ms > 0 ? seconds(ms) : "";
-    headline = took ? `${took} فکر کرد` : "فکر کرد";
-    if (sources > 0) headline += `، ${toPersianDigits(sources)} مرحله‌ی بررسی`;
+    headline = took ? t(`${took} فکر کرد`, `Thought for ${took}`) : t("فکر کرد", "Thought");
+    if (sources > 0) headline += t(`، ${toPersianDigits(sources)} مرحله‌ی بررسی`, `, ${sources} ${sources === 1 ? "lookup" : "lookups"}`);
   }
   const liveThought = pending && last?.kind === "think" ? lastLine(last.text) : "";
   return (
@@ -136,7 +137,7 @@ export function ActivityPanel({
                     <IconSpark width={15} height={15} />
                   </span>
                   <div className="step-body">
-                    <span className="step-title">فکر کردن</span>
+                    <span className="step-title">{t("فکر کردن", "Thinking")}</span>
                     <Thought text={s.text} live={pending && isLast} />
                   </div>
                 </li>
@@ -149,18 +150,18 @@ export function ActivityPanel({
                 </span>
                 <div className="step-body">
                   <span className="step-title">
-                    {s.title}
-                    {s.status === "error" && <span className="step-failed"> (ناموفق)</span>}
+                    {isFa ? s.title : s.title_en || s.title}
+                    {s.status === "error" && <span className="step-failed">{t(" (ناموفق)", " (failed)")}</span>}
                   </span>
                   {s.detail && (
                     <span className="step-detail" dir="auto">
-                      {s.detail}
+                      {isFa ? s.detail : s.detail_en || s.detail}
                     </span>
                   )}
                   {s.link && (
                     <a className="step-link" href={s.link} target="_blank" rel="noreferrer noopener">
                       <IconLink width={13} height={13} />
-                      مشاهده‌ی منبع
+                      {t("مشاهده‌ی منبع", "View source")}
                     </a>
                   )}
                 </div>

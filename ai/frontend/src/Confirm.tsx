@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { IconAlert, IconTrash } from "./icons";
+import { t } from "./i18n";
 
 export type ConfirmOptions = {
   title: string;
@@ -183,7 +184,7 @@ function Dialog({ req, closing, onClose }: { req: Request; closing: boolean; onC
         </div>
         <div className="confirm-actions">
           <button ref={cancelBtn} type="button" className="button ghost" onClick={() => onClose(false)}>
-            {req.cancelLabel ?? "انصراف"}
+            {req.cancelLabel ?? t("انصراف", "Cancel")}
           </button>
           <button
             ref={confirmBtn}
@@ -191,11 +192,11 @@ function Dialog({ req, closing, onClose }: { req: Request; closing: boolean; onC
             className={`button ${danger ? "danger-solid" : "primary"}`}
             onClick={() => onClose(true)}
           >
-            {req.confirmLabel ?? (danger ? "حذف" : "تأیید")}
+            {req.confirmLabel ?? (danger ? t("حذف", "Delete") : t("تأیید", "Confirm"))}
           </button>
         </div>
         <p className="confirm-hint" aria-hidden="true">
-          <kbd>Esc</kbd> برای انصراف
+          <kbd>Esc</kbd> {t("برای انصراف", "to cancel")}
         </p>
       </div>
     </div>

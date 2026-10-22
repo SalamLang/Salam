@@ -1,40 +1,42 @@
-const numberFmt = new Intl.NumberFormat("fa-IR");
-const dateFmt = new Intl.DateTimeFormat("fa-IR", {
+import { locale, t } from "./i18n";
+
+const numberFmt = new Intl.NumberFormat(locale);
+const dateFmt = new Intl.DateTimeFormat(locale, {
   year: "numeric",
   month: "long",
   day: "numeric",
 });
-const dateTimeFmt = new Intl.DateTimeFormat("fa-IR", {
+const dateTimeFmt = new Intl.DateTimeFormat(locale, {
   year: "numeric",
   month: "long",
   day: "numeric",
   hour: "2-digit",
   minute: "2-digit",
 });
-const dayFmt = new Intl.DateTimeFormat("fa-IR", {
+const dayFmt = new Intl.DateTimeFormat(locale, {
   month: "short",
   day: "numeric",
 });
-const monthFmt = new Intl.DateTimeFormat("fa-IR", {
+const monthFmt = new Intl.DateTimeFormat(locale, {
   month: "long",
   year: "numeric",
   timeZone: "Asia/Tehran",
 });
-const compactFmt = new Intl.NumberFormat("fa-IR", {
+const compactFmt = new Intl.NumberFormat(locale, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-const costFmt = new Intl.NumberFormat("fa-IR", {
+const costFmt = new Intl.NumberFormat(locale, {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 4,
 });
-const bigCostFmt = new Intl.NumberFormat("fa-IR", {
+const bigCostFmt = new Intl.NumberFormat(locale, {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 2,
 });
-const relFmt = new Intl.RelativeTimeFormat("fa", { numeric: "auto" });
+const relFmt = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
 
 export function fmtNum(n: number): string {
   return numberFmt.format(n);
@@ -90,10 +92,10 @@ const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
 ];
 
 export function fmtRelative(ts: number): string {
-  if (!ts) return "هرگز";
+  if (!ts) return t("هرگز", "never");
   const diff = ts - Date.now() / 1000;
   const abs = Math.abs(diff);
-  if (abs < 45) return "همین الان";
+  if (abs < 45) return t("همین الان", "just now");
   for (const [unit, size] of UNITS) {
     if (abs >= size) return relFmt.format(Math.round(diff / size), unit);
   }
@@ -101,8 +103,15 @@ export function fmtRelative(ts: number): string {
 }
 
 export function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${fmtNum(Math.round(ms))} میلی‌ثانیه`;
-  return `${fmtNum(Math.round(ms / 100) / 10)} ثانیه`;
+  if (ms < 1000)
+    return t(
+      `${fmtNum(Math.round(ms))} میلی‌ثانیه`,
+      `${fmtNum(Math.round(ms))} ms`,
+    );
+  return t(
+    `${fmtNum(Math.round(ms / 100) / 10)} ثانیه`,
+    `${fmtNum(Math.round(ms / 100) / 10)} s`,
+  );
 }
 
 export function prettyArgs(args: string): string {

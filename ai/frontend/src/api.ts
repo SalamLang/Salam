@@ -1,4 +1,5 @@
 import { isDesktop } from "./desktop";
+import { isFa, lang, t } from "./i18n";
 export type User = {
   id: number;
   name: string;
@@ -104,10 +105,25 @@ export type ToolStep = {
   tool?: string;
   icon: string;
   title: string;
+  title_en?: string;
   detail: string;
+  detail_en?: string;
   link: string;
   status: "running" | "done" | "error";
 };
+const UI_TEXT_EN: Record<string, string> = {
+  "گفت‌وگوی تازه": "New chat",
+  "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.":
+    "The assistant could not answer just now. Please ask again in a moment.",
+  "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.":
+    "The assistant is not available. Please try again in a moment.",
+};
+
+export function uiText(s: string): string {
+  if (isFa) return s;
+  return UI_TEXT_EN[s] ?? s;
+}
+
 export type TextStep = { kind: "text"; text: string };
 export type ActivityStep = ThinkStep | ToolStep | TextStep;
 export type CallState = "pending" | "running" | "done" | "error" | "denied";
@@ -405,6 +421,7 @@ async function call<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     "X-Salam-Client": isDesktop ? "agent" : "web",
+    "X-Salam-Lang": lang,
   };
   if (clientVersion) headers["X-Salam-Version"] = clientVersion;
   const token = getToken();
@@ -421,7 +438,10 @@ async function call<T>(
     throw new ApiError(
       0,
       "network",
-      "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+      t(
+        "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+        "Could not reach the server. Check your internet connection.",
+      ),
     );
   }
   let data: { error?: string; message?: string } | null = null;
@@ -433,7 +453,11 @@ async function call<T>(
     throw new ApiError(
       res.status,
       data?.error || "server",
-      data?.message || "خطایی پیش آمد. دوباره تلاش کنید.",
+      data?.message ||
+        t(
+          "خطایی پیش آمد. دوباره تلاش کنید.",
+          "Something went wrong. Please try again.",
+        ),
     );
   }
   return data as unknown as T;
@@ -458,7 +482,10 @@ export async function streamMessage(
   on: StreamHandlers,
   signal: AbortSignal,
 ): Promise<boolean> {
-  const headers: Record<string, string> = { Accept: "text/event-stream" };
+  const headers: Record<string, string> = {
+    Accept: "text/event-stream",
+    "X-Salam-Lang": lang,
+  };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}/chats/${chatId}/messages/${mid}/stream`, {

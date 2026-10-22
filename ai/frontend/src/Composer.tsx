@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type 
 import type { OutgoingFile } from "./api";
 import { acceptList, kindOf, PendingChips, toOutgoing, useCapabilities, type Pending } from "./Attach";
 import { IconPaperclip, IconSend, IconStop } from "./icons";
+import { t } from "./i18n";
 
 type Props = {
   busy: boolean;
@@ -12,14 +13,16 @@ type Props = {
   bar?: ReactNode;
   placeholder?: string;
   note?: string;
+  draft?: string;
+  onDraftUsed?: () => void;
 };
 
 const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 let seq = 0;
 
-export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note }: Props) {
-  const [text, setText] = useState("");
+export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
+  const [text, setText] = useState(draft ?? "");
   const [files, setFiles] = useState<Pending[]>([]);
   const [problem, setProblem] = useState("");
   const [dragging, setDragging] = useState(false);
@@ -27,7 +30,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const caps = useCapabilities();
-  const hint = placeholder || "پرسش خود را درباره‌ی زبان سلام بنویسید…";
+  const hint = placeholder || t("پرسش خود را درباره‌ی زبان سلام بنویسید…", "Ask anything about the Salam language…");
 
   useEffect(() => {
     const el = ref.current;
@@ -40,13 +43,24 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
     if (autoFocus && matchMedia("(pointer: fine)").matches) ref.current?.focus();
   }, [autoFocus]);
 
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft);
+    onDraftUsed?.();
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(draft.length, draft.length);
+    }
+  }, [draft, onDraftUsed]);
+
   const add = (list: FileList | File[]) => {
     if (!caps) return;
     const next = [...files];
     const problems: string[] = [];
     for (const file of Array.from(list)) {
       if (next.length >= caps.max_files) {
-        problems.push(`حداکثر ${caps.max_files.toLocaleString("fa-IR")} فایل در هر پیام می‌شود فرستاد.`);
+        problems.push(t(`حداکثر ${caps.max_files.toLocaleString("fa-IR")} فایل در هر پیام می‌شود فرستاد.`, `You can send at most ${caps.max_files} files per message.`));
         break;
       }
       const { kind, problem: why } = kindOf(file, caps);
@@ -57,7 +71,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
       next.push({ key: `f${++seq}`, file, kind, preview: kind === "image" ? URL.createObjectURL(file) : undefined });
     }
     if (next.reduce((n, f) => n + f.file.size, 0) > caps.max_total) {
-      problems.push("حجم همه‌ی فایل‌ها با هم بیش از اندازه است.");
+      problems.push(t("حجم همه‌ی فایل‌ها با هم بیش از اندازه است.", "The files are too large together."));
       setProblem(problems.join(" "));
       return;
     }
@@ -73,8 +87,8 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
   };
 
   const send = async () => {
-    const t = text.trim();
-    if ((!t && files.length === 0) || busy || disabled || sending) return;
+    const typed = text.trim();
+    if ((!typed && files.length === 0) || busy || disabled || sending) return;
     const keep = { text, files };
     setSending(true);
     try {
@@ -82,13 +96,13 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
       setText("");
       setFiles([]);
       setProblem("");
-      const ok = await onSend(t, payload, keep.files);
+      const ok = await onSend(typed, payload, keep.files);
       if (ok === false) {
         setText(keep.text);
         setFiles(keep.files);
       }
     } catch {
-      setProblem("خواندن فایل ناموفق بود.");
+      setProblem(t("خواندن فایل ناموفق بود.", "Could not read the file."));
     } finally {
       setSending(false);
     }
@@ -146,8 +160,8 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
                 type="button"
                 className="attach-button"
                 onClick={() => picker.current?.click()}
-                aria-label="پیوست فایل"
-                title={caps.image ? "پیوست تصویر، فایل متنی یا کد، یا ZIP" : "پیوست فایل متنی یا کد، یا ZIP"}
+                aria-label={t("پیوست فایل", "Attach file")}
+                title={caps.image ? t("پیوست تصویر، فایل متنی یا کد، یا ZIP", "Attach an image, a text or code file, or a ZIP") : t("پیوست فایل متنی یا کد، یا ZIP", "Attach a text or code file, or a ZIP")}
               >
                 <IconPaperclip />
               </button>
@@ -174,14 +188,14 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}
             onPaste={canAttach ? onPaste : undefined}
-            aria-label="پیام"
+            aria-label={t("پیام", "Message")}
           />
           {busy ? (
-            <button type="button" className="send stop" onClick={onStop} aria-label="توقف پاسخ" title="توقف">
+            <button type="button" className="send stop" onClick={onStop} aria-label={t("توقف پاسخ", "Stop answer")} title={t("توقف", "Stop")}>
               <IconStop />
             </button>
           ) : (
-            <button type="submit" className="send" disabled={!ready} aria-label="فرستادن" title="فرستادن">
+            <button type="submit" className="send" disabled={!ready} aria-label={t("فرستادن", "Send")} title={t("فرستادن", "Send")}>
               {sending ? <span className="spinner tiny" /> : <IconSend />}
             </button>
           )}
@@ -192,8 +206,8 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
           </p>
         )}
       </form>
-      {dragging && <div className="drop-hint">فایل را اینجا رها کنید</div>}
-      <p className="disclaimer">{note || "دستیار سلام ممکن است اشتباه کند. کد مهم را با کامپایلر سلام بررسی کنید."}</p>
+      {dragging && <div className="drop-hint">{t("فایل را اینجا رها کنید", "Drop the file here")}</div>}
+      <p className="disclaimer">{note || t("دستیار سلام ممکن است اشتباه کند. کد مهم را با کامپایلر سلام بررسی کنید.", "Salam AI can make mistakes. Check important code with the Salam compiler.")}</p>
     </div>
   );
 }

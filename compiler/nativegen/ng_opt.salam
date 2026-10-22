@@ -1090,13 +1090,55 @@ func udiv_pow2(g &: Ng, i: int): bool:
     ret true
 end
 
+func ro_clean(g &: Ng, sy: int): bool:
+    until g.sy_clean.len() <= sy:
+        g.sy_clean.push(0)
+    end
+    if g.sy_clean[sy] == 0:
+        mut st := 1
+        if g.sy_sec[sy] != SEC_BSS:
+            lo := g.sy_off[sy]
+            hi := lo + g.sy_size[sy]
+            repeat g.r_sec.len() in k:
+                if g.r_sec[k] == g.sy_sec[sy] and g.r_off[k] + 8 > lo and g.r_off[k] < hi:
+                    st = 2
+                end
+            end
+        end
+        g.sy_clean[sy] = st
+    end
+    ret g.sy_clean[sy] == 1
+end
+
+func ro_global(g &: Ng, a: int, off &: i64): int:
+    if a < 0:
+        ret 0 - 1
+    end
+    if g.v_kind[a] == VK_GLB:
+        off = g.v_i[a]
+        ret g.v_def[a]
+    end
+    if g.v_kind[a] == VK_INS:
+        d := g.v_def[a]
+        if g.i_op[d] == OP_ADDR and g.i_b[d] < 0:
+            b := g.i_a[d]
+            if b >= 0 and g.v_kind[b] == VK_GLB:
+                off = g.v_i[b] + g.i_d[d]
+                ret g.v_def[b]
+            end
+        end
+    end
+    ret 0 - 1
+end
+
 func fold_ro_load(g &: Ng, i: int): bool:
     a := g.i_a[i]
-    if a < 0 or g.v_kind[a] != VK_GLB or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
         ret false
     end
-    sy := g.v_def[a]
-    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy]:
+    mut off := 0 as i64
+    sy := ro_global(g, a, off)
+    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy] or not ro_clean(g, sy):
         ret false
     end
     t := g.i_ty[i]
@@ -1104,7 +1146,6 @@ func fold_ro_load(g &: Ng, i: int): bool:
         ret false
     end
     sz := tsize(g, t)
-    off := g.v_i[a]
     if off < (0 as i64) or off + (sz as i64) > (g.sy_size[sy] as i64):
         ret false
     end
@@ -1544,6 +1585,32 @@ func spec_ok(op: int): bool:
     ret op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or op == OP_PTRTOINT or op == OP_INTTOPTR
 end
 
+func div_twin(g &: Ng, b: int, i: int): bool:
+    op := g.i_op[i]
+    signed := op == OP_SDIV or op == OP_SREM
+    mut x := b
+    repeat 16:
+        if x < 0:
+            ret false
+        end
+        mut k := g.b_first[x]
+        until k >= 0:
+            ko := g.i_op[k]
+            if k != i and ko >= OP_SDIV and ko <= OP_UREM and g.i_a[k] == g.i_a[i] and g.i_b[k] == g.i_b[i]:
+                if not signed or ko == OP_SDIV or ko == OP_SREM:
+                    ret true
+                end
+            end
+            k = g.i_next[k]
+        end
+        if x == 0 or not g.dom_ok:
+            ret false
+        end
+        x = g.b_idom[x]
+    end
+    ret false
+end
+
 func side_ok(g &: Ng, t: int, b: int, j: int): bool:
     if g.b_npred[t] != 1 or g.b_pred[g.b_ps[t]] != b:
         ret false
@@ -1555,7 +1622,11 @@ func side_ok(g &: Ng, t: int, b: int, j: int): bool:
         if op == OP_BR:
             ret g.i_b[i] == j and g.i_next[i] < 0
         end
-        if not spec_ok(op) or n >= 2:
+        if op >= OP_SDIV and op <= OP_UREM and div_twin(g, b, i):
+            i = g.i_next[i]
+            continue
+        end
+        if not spec_ok(op) or n >= 4:
             ret false
         end
         n += 1

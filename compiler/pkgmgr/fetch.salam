@@ -51,8 +51,89 @@ func repo_url(mod: str): str:
     ret "https://" + mod
 end
 
-func github_slug(mod: str): str:
-    ret str.TrimPrefix(mod, "github.com/")
+func host_kind(mod: str): str:
+    if str.StartsWith(mod, "github.com/"):
+        ret "github"
+    end
+    if str.StartsWith(mod, "gitlab.com/"):
+        ret "gitlab"
+    end
+    if str.StartsWith(mod, "codeberg.org/"):
+        ret "gitea"
+    end
+    ret ""
+end
+
+func repo_slug(mod: str): str:
+    slash := str.IndexOf(mod, "/")
+    if slash < 0:
+        ret mod
+    end
+    ret str.Substr(mod, slash + 1, str.Len(mod) - slash - 1)
+end
+
+func gitlab_project(mod: str): str:
+    ret "https://gitlab.com/api/v4/projects/" + str.Replace(repo_slug(mod), "/", "%2F")
+end
+
+func tags_url(mod: str): str:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret "https://api.github.com/repos/" + repo_slug(mod) + "/tags?per_page=100"
+    end
+    if str.Equals(kind, "gitlab"):
+        ret gitlab_project(mod) + "/repository/tags?per_page=100"
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/api/v1/repos/" + repo_slug(mod) + "/tags?limit=50"
+    end
+    ret ""
+end
+
+func head_url(mod: str, key &: str): str:
+    kind := host_kind(mod)
+    key = "sha"
+    if str.Equals(kind, "github"):
+        ret "https://api.github.com/repos/" + repo_slug(mod) + "/commits?per_page=1"
+    end
+    if str.Equals(kind, "gitlab"):
+        key = "id"
+        ret gitlab_project(mod) + "/repository/commits?per_page=1"
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/api/v1/repos/" + repo_slug(mod) + "/commits?limit=1"
+    end
+    ret ""
+end
+
+func archive_url(mod: str, gref: str): str:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret "https://codeload.github.com/" + repo_slug(mod) + "/tar.gz/" + gref
+    end
+    if str.Equals(kind, "gitlab"):
+        ret gitlab_project(mod) + "/repository/archive.tar.gz?sha=" + gref
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/" + repo_slug(mod) + "/archive/" + gref + ".tar.gz"
+    end
+    ret ""
+end
+
+func host_headers(mod: str): HashMap<str, str>:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret api_headers()
+    end
+    h := http.NewHeaders()
+    h.put("User-Agent", PM_AGENT)
+    if str.Equals(kind, "gitlab"):
+        t := os.Env("GITLAB_TOKEN")
+        if str.Len(t) > 0:
+            h.put("PRIVATE-TOKEN", t)
+        end
+    end
+    ret h
 end
 
 func api_headers(): HashMap<str, str>:
@@ -244,19 +325,19 @@ func fetch_git(mod: str, gref: str, tmp: str, commit &: str, why &: str): bool:
 end
 
 func fetch_tarball(mod: str, gref: str, tmp: str, why &: str): bool:
-    if not str.StartsWith(mod, "github.com/"):
-        why = "git is needed to download " + mod + " (only github.com packages download without git)"
+    url := archive_url(mod, gref)
+    if str.Len(url) == 0:
+        why = "git is needed to download " + mod + " (without git only github.com, gitlab.com and codeberg.org work)"
         ret false
     end
-    url := "https://codeload.github.com/" + github_slug(mod) + "/tar.gz/" + gref
-    r := http.GetBytesWith(url, api_headers())
+    r := http.GetBytesWith(url, host_headers(mod))
     mut body := r.body
     if r.status != 200:
         compress.BufFree(body)
         if str.Len(r.err) > 0:
             why = r.err
         else:
-            why = "GitHub answered HTTP " + str.FromInt(r.status as i64) + " for " + url
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " for " + url
         end
         ret false
     end
@@ -370,10 +451,10 @@ pub func ListVersions(mod: str, out &: Vector<str>, why &: str): bool:
                 names.push(str.Trim(str.Substr(l, at + 10, str.Len(l) - at - 10)))
             end
         end
-    else str.StartsWith(mod, "github.com/"):
-        r := http.GetWith("https://api.github.com/repos/" + github_slug(mod) + "/tags?per_page=100", api_headers())
+    else str.Len(tags_url(mod)) > 0:
+        r := http.GetWith(tags_url(mod), host_headers(mod))
         if r.status != 200:
-            why = "GitHub answered HTTP " + str.FromInt(r.status as i64) + " listing the tags of " + mod
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " listing the tags of " + mod
             ret false
         end
         json_strings_after(r.body, "name", names)
@@ -407,15 +488,17 @@ pub func HeadVersion(mod: str, sha &: str, why &: str): str:
                 break
             end
         end
-    else str.StartsWith(mod, "github.com/"):
-        r := http.GetWith("https://api.github.com/repos/" + github_slug(mod) + "/commits?per_page=1", api_headers())
+    else str.Len(tags_url(mod)) > 0:
+        mut key := ""
+        hurl := head_url(mod, key)
+        r := http.GetWith(hurl, host_headers(mod))
         if r.status != 200:
-            why = "GitHub answered HTTP " + str.FromInt(r.status as i64) + " for " + mod
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " for " + mod
             ret ""
         end
         mut shas := Vector {} as Vector<str>
         defer shas.free()
-        json_strings_after(r.body, "sha", shas)
+        json_strings_after(r.body, key, shas)
         if shas.len() > 0:
             sha = shas.get(0)
         end

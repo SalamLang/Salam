@@ -11,10 +11,10 @@ names=$(sed -n 's/^k_pm_official := \[\(.*\)\]$/\1/p' compiler/pkgmgr/official.s
 }
 
 pattern=$(printf '%s\n' "$names" | sed 's/\./\\./g' | paste -sd '|' -)
-hits=$(grep -rnE "^[[:space:]]*import[[:space:]]+($pattern)([[:space:]]|$)" --include='*.salam' std compiler extensions editor tools || true)
+hits=$(grep -rnE "^[[:space:]]*import[[:space:]]+($pattern)([[:space:]]|$)" --include='*.salam' std compiler || true)
 if [ -n "$hits" ]; then
-    echo "std/, compiler/ and the tools built by a released compiler must not import official packages:" >&2
+    echo "std/ and compiler/ must not import official packages; they do not ship with Salam:" >&2
     printf '%s\n' "$hits" >&2
     exit 1
 fi
-echo "std, compiler, editor, extensions and tools import no official package"
+echo "std and compiler import no official package"

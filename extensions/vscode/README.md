@@ -11,6 +11,7 @@ Language support for [Salam](https://github.com/SalamLang/Salam), in English and
   - go to definition (into `std/` as well), go to type definition, find references, highlight, rename
   - outline, workspace symbols, folding, semantic highlighting that understands multi-word Persian names
   - signature help, quick fixes (did-you-mean, remove `mut`), and formatting through the compiler's formatter
+- **Debugging** with `salam dap`: press F5 in a Salam file to build it with debug information and debug it with gdb or lldb, with breakpoints, stepping and locals in the Salam source
 - **Syntax highlighting** for `.salam`, covering both keyword packs (English, Persian)
 - **Snippets** for the constructs you type most
 - **Run and build commands** that shell out to the `salam` compiler

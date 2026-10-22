@@ -24,6 +24,11 @@ Then install LSP4IJ from the Marketplace and
 **Settings | Plugins | Install Plugin from Disk**. The plugin finds `salam` on
 `PATH`, in `~/.salam/bin`, or wherever `SALAM_PATH` points.
 
+To debug, add a **Debug Adapter Protocol** run configuration (LSP4IJ) with
+the server command `salam dap` and launch parameters such as
+`{"program": "$FILE_PATH$"}`; breakpoints in `.salam` files then work through
+gdb or lldb. [`docs/LSP.md`](../../docs/LSP.md) describes `salam dap`.
+
 `build.sh --smoke path/to/salam` also starts that compiler through the
 plugin's own classes and checks the reply, without an IDE.
 

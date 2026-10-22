@@ -5,6 +5,7 @@
 ### Language server
 
 - The extension starts the Salam language server (`salam lsp`) and gets diagnostics, completion, hover, go to definition, references, rename, outline, folding, semantic highlighting, signature help, quick fixes and formatting from it.
+- A `salam` debugger: F5 builds the current file with debug information and debugs it through `salam dap`.
 - Settings `salam.lsp.enable`, `salam.lsp.messages`, `salam.lsp.formatFixOrder` and `salam.trace.server`, and the command `Salam: Restart Language Server`.
 
 ### Packaging

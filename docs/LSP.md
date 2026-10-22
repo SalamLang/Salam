@@ -153,6 +153,31 @@ In **Settings | Configure Kate | LSP Client | User Server Settings**:
 Run `salam lsp` over stdio. The server speaks LSP 3.17 with UTF-16 positions
 and incremental document sync.
 
+## Debugging: `salam dap`
+
+`salam dap` is a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
+server for editors. On a `launch` request whose `program` is a `.salam` file
+(or a project folder), it builds the program with debug information, then
+hands the session to gdb 14 or newer (`gdb -i=dap`) or `lldb-dap`. The
+debug information points back at the Salam source, so breakpoints, the call
+stack, stepping and local variables all work in `.salam` files.
+
+```json
+{ "type": "salam", "request": "launch", "name": "Debug Salam file", "program": "${file}" }
+```
+
+- **Visual Studio Code:** the extension registers the `salam` debugger; press
+  F5 in a Salam file.
+- **JetBrains IDEs:** with LSP4IJ, add a **Debug Adapter Protocol** run
+  configuration whose server command is `salam dap`, and set `program` in its
+  launch parameters.
+- **Neovim (nvim-dap), Emacs (dape), Helix, Zed:** register an executable
+  adapter `salam dap` with the launch configuration above.
+
+`SALAM_DAP_DEBUGGER` picks the debugger explicitly, for example
+`SALAM_DAP_DEBUGGER=lldb-dap`. `salam dap` runs on Linux and macOS; on Windows,
+point the editor at `lldb-dap` and a program built with `salam build -g`.
+
 ## How it works
 
 The server keeps every open document in memory. After an edit settles

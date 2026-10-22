@@ -5,19 +5,20 @@ single file may use either of them. Every integration here highlights both,
 treats Arabic-script letters as identifier characters, and accepts
 numbers written with ASCII, Persian or Arabic-Indic digits.
 
-| Editor             | Directory                         | Highlighting | Indent  | Snippets | Run / build | Format | Diagnostics                     | Language server   |
-| ------------------ | --------------------------------- | ------------ | ------- | -------- | ----------- | ------ | ------------------------------- | ----------------- |
-| Visual Studio Code | [`vscode/`](vscode)               | yes          | yes     | yes      | yes         | yes    | via the compiler                | built-in          |
-| Vim / Neovim       | [`vim/`](vim)                     | yes          | yes     | yes      | yes         | yes    | quickfix, `vim.diagnostic`, ALE | built-in (Neovim) |
-| Sublime Text       | [`sublime/`](sublime)             | yes          | yes     | yes      | yes         | yes    | build panel                     | LSP package       |
-| Emacs              | [`emacs/`](emacs)                 | yes          | yes     | yes      | yes         | yes    | `compile`, flycheck             | eglot, lsp-mode   |
-| Kate / KDevelop    | [`kate/`](kate)                   | yes          | generic | no       | no          | no     | no                              | LSP client        |
-| gedit / GNOME      | [`gtksourceview/`](gtksourceview) | yes          | generic | no       | no          | no     | no                              | no                |
-| JetBrains IDEs     | [`jetbrains/`](jetbrains)         | yes          | generic | no       | no          | yes    | via the language server         | Salam plugin      |
-| Geany              | [`geany/`](geany)                 | yes          | generic | no       | yes         | yes    | build panel                     | no                |
-| Notepad++          | [`notepadpp/`](notepadpp)         | yes          | generic | no       | no          | no     | no                              | no                |
-| GNU nano           | [`nano/`](nano)                   | yes          | no      | no       | no          | `^T`   | linter view                     | no                |
-| micro              | [`micro/`](micro)                 | yes          | no      | no       | no          | no     | no                              | no                |
+| Editor             | Directory                                 | Highlighting | Indent  | Snippets | Run / build | Format | Diagnostics                     | Language server   |
+| ------------------ | ----------------------------------------- | ------------ | ------- | -------- | ----------- | ------ | ------------------------------- | ----------------- |
+| Visual Studio Code | [`vscode/`](vscode)                       | yes          | yes     | yes      | yes         | yes    | via the compiler                | built-in          |
+| Vim / Neovim       | [`vim/`](vim)                             | yes          | yes     | yes      | yes         | yes    | quickfix, `vim.diagnostic`, ALE | built-in (Neovim) |
+| Sublime Text       | [`sublime/`](sublime)                     | yes          | yes     | yes      | yes         | yes    | build panel                     | LSP package       |
+| Emacs              | [`emacs/`](emacs)                         | yes          | yes     | yes      | yes         | yes    | `compile`, flycheck             | eglot, lsp-mode   |
+| Kate / KDevelop    | [`kate/`](kate)                           | yes          | generic | no       | no          | no     | no                              | LSP client        |
+| gedit / GNOME      | [`gtksourceview/`](gtksourceview)         | yes          | generic | no       | no          | no     | no                              | no                |
+| JetBrains IDEs     | [`jetbrains/`](jetbrains)                 | yes          | generic | no       | no          | yes    | via the language server         | Salam plugin      |
+| Geany              | [`geany/`](geany)                         | yes          | generic | no       | yes         | yes    | build panel                     | no                |
+| Notepad++          | [`notepadpp/`](notepadpp)                 | yes          | generic | no       | no          | no     | no                              | no                |
+| GNU nano           | [`nano/`](nano)                           | yes          | no      | no       | no          | `^T`   | linter view                     | no                |
+| micro              | [`micro/`](micro)                         | yes          | no      | no       | no          | no     | no                              | no                |
+| tree-sitter        | [`tree-sitter-salam/`](tree-sitter-salam) | yes          | no      | no       | no          | no     | no                              | no                |
 
 Each directory has its own readme with installation instructions. The
 language server column is `salam lsp`, built into the compiler; it brings

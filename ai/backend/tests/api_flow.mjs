@@ -416,6 +416,8 @@ for (let i = 0; i < 60; i += 1) {
 check("the guest gets the assistant's answer", guestAnswer.status === "done" && guestAnswer.body.startsWith("Echo: guest hello"), guestAnswer);
 const strangerPoll = await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=not-the-right-token-at-all`);
 check("another guest cannot read the answer", strangerPoll.status === 404);
+const guestPreflight = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://www.salamlang.ir", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,x-salam-lang" } });
+check("the guest preflight allows the website", guestPreflight.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && /x-salam-lang/i.test(guestPreflight.headers.get("access-control-allow-headers") ?? ""));
 const evil = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });
 check("other origins get no guest CORS", !evil.headers.get("access-control-allow-origin"));
 for (let i = 1; i < GUEST_LIMIT; i += 1) {

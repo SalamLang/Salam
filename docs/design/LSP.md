@@ -1,10 +1,11 @@
 # Design: `salam lsp`, the Salam language server
 
-Status: **design, not implemented.** Written 2026-10-22. Nothing in the tree
-speaks the Language Server Protocol yet; this document is the plan for a
-server that gives every editor (Visual Studio Code, JetBrains IDEs, Neovim, Emacs,
-Sublime, Helix, Zed, Kate) the same IDE experience, in English and Persian
-Salam alike.
+Status: **phase 1 and most of phase 2 implemented** on the `feat/lsp`
+branch (2026-10-22). `salam lsp` runs today in Visual Studio Code, Neovim,
+Emacs, Sublime Text, Kate, Helix and JetBrains IDEs (through LSP4IJ); the
+user guide is [`docs/LSP.md`](../LSP.md) and the end-to-end tests are
+`tools/lsp/test_lsp.py`. What is built and what is left is listed under
+[Progress](#progress) at the end.
 
 The bar is GoLand: diagnostics as you type, completion that knows types,
 navigation across packages and `std/`, safe rename, quick fixes for every
@@ -558,3 +559,44 @@ Measured on the open-source test files with a warm worker:
 
 Each phase is advertised in `initialize` only when its features pass the
 transcript tests, so a client always sees an honest capability list.
+
+## Progress
+
+Built, with tests in `tools/lsp/test_lsp.py`:
+
+- `salam lsp` and the `--analyze` worker, one short-lived worker process per
+  analysis instead of the long-lived one described above. It sidesteps the
+  global state and the leaks for now; queries never wait on it, and a new edit
+  kills a stale run.
+- Compiler changes 1, 3 (structured capture of every lexer, parser and sema
+  diagnostic with its span; fixes are still help text), 4 (source overlays),
+  and package-aware analysis: a file of a folder package is checked with its
+  siblings through a virtual entry.
+- Diagnostics with codes and help, hover with types, docs and the other
+  language's name, definition, declaration and type definition into `std/`,
+  references, highlight and rename across open files, outline, workspace
+  symbols, folding, semantic tokens, completion (scope, members, packages,
+  keywords and snippets in the file's language), signature help, inlay hints
+  for inferred types, formatting with a minimal edit, on-type indentation,
+  selection ranges, and quick fixes for did-you-mean, unused `mut` and unused
+  variables.
+- Persian: messages follow `messages` or the client locale, multi-word names
+  are one token and one range, positions are UTF-16 throughout.
+- Clients: the VS Code extension (with `vscode-languageclient` bundled),
+  Neovim (`require('salam').setup({ lsp = true })`), Emacs (eglot and
+  lsp-mode), and documented setups for Sublime Text, Kate, Helix and LSP4IJ.
+
+Left, in order:
+
+1. A warm worker that keeps parsed `std/` packages between runs (change 7).
+   A file of the compiler's own size takes about 10 s to analyze cold today.
+2. Scope ranges in sema (change 2), so completion sees block-level scope
+   instead of whole-function scope, and `Node.sym` (change 1) as a field
+   rather than a recorded list.
+3. A workspace index, so references, rename and workspace symbols cover files
+   that are not open.
+4. Code actions from structured fixes in `Diag`, the foreign-syntax rewrites,
+   and the refactorings listed above.
+5. Pull diagnostics, code lens, call and type hierarchy, colours.
+6. A native JetBrains plugin with run configurations, a tree-sitter grammar,
+   and `salam dap`.

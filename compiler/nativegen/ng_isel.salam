@@ -358,6 +358,38 @@ func lea_reg(g &: Ng, m: Mem): int:
     ret r
 end
 
+func ro_copy(g &: Ng, dst: int, src: int, n: int): bool:
+    mut off := 0 as i64
+    sy := ro_global(g, src, off)
+    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy] or g.sy_sec[sy] == SEC_BSS or not ro_clean(g, sy):
+        ret false
+    end
+    if off < (0 as i64) or off + (n as i64) > (g.sy_size[sy] as i64):
+        ret false
+    end
+    base := g.sy_off[sy] + (off as int)
+    dm := mem_of(g, dst, 0 as i64)
+    mut p := 0
+    until p < n:
+        rem := n - p
+        ch := rem >= 4 ? 4 : (rem >= 2 ? 2 : 1)
+        mut v := 0 as i64
+        mut k := ch - 1
+        until k >= 0:
+            v = (v << (8 as i64)) | (sec_byte(g, g.sy_sec[sy], base + p + k) as i64)
+            k -= 1
+        end
+        if ch == 4 and v >= (2147483648 as i64):
+            v = v - (4294967296 as i64)
+        end
+        si := mi_new(g, M_STI, ch)
+        set_mem(g, si, mem_add(dm, p))
+        g.mc.imm[si] = v
+        p += ch
+    end
+    ret true
+end
+
 func emit_copy(g &: Ng, dst: Mem, src: Mem, size: int):
     if size > 256:
         mut args := Vector {} as Vector<int>
@@ -2984,6 +3016,9 @@ func isel_intrinsic(g &: Ng, i: int, sym: int): bool:
                     ret true
                 end
             else sym == g.sym_i_memcpy:
+                if n <= 64 and ro_copy(g, dst, src, n):
+                    ret true
+                end
                 emit_copy(g, mem_of(g, dst, 0 as i64), mem_of(g, src, 0 as i64), n)
                 ret true
             end

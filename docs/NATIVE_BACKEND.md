@@ -75,9 +75,11 @@ recursive. Each function then goes through:
 5. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches. A range check `x >= 0 and x < n` with `n`
    known non-negative becomes one unsigned compare.
-6. If-conversion of small branches into `cmov`, except where the result flows
-   into a later address, since a `cmov` there would serialize the following
-   load (a binary search keeps its branch for this reason).
+6. If-conversion of small branches (up to four instructions per arm) into
+   `cmov`, except where the result flows into a later address, since a `cmov`
+   there would serialize the following load (a binary search keeps its branch
+   for this reason). A division may move ahead of the branch when the same
+   division already ran unconditionally, as in `if n % j == 0: s += n / j`.
 7. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too.
@@ -108,7 +110,8 @@ recursive. Each function then goes through:
    at the edges.
    Small innermost loops whose trip count is only known at runtime
    (`until j < i:` with `j += 1`, or counting down) run two iterations per
-   test, with the original loop finishing the odd one. The test compares the
+   test, four when the body is tiny, with the original loop finishing the
+   rest. The test compares the
    counter with a limit adjusted once before the loop, so it never computes a
    counter value that could overflow.
 9. Strength reduction: an array address that is affine in a loop counter, such
@@ -130,7 +133,8 @@ recursive. Each function then goes through:
     on the path that stores it.
 
 Loads of internal globals that the module never writes (how llvmgen emits a
-`const`) fold to their initializer. Instruction selection folds address
+`const`) fold to their initializer, and so do small copies out of constant
+strings, so `println "hello"` stores the bytes as immediates. Instruction selection folds address
 arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
@@ -143,8 +147,9 @@ ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
 allocator can spill the long outer range and keep the loop copy in a register.
 Copy-related values that both spill share one stack slot. The encoder rotates small loop headers into the latch so
-loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
-32).
+loops are bottom-tested, and aligns loop heads to 16 bytes. An innermost loop
+that fits in 64 bytes is placed so it does not straddle a cache line;
+otherwise it gets 32-byte alignment.
 
 ### Conventions worth knowing
 

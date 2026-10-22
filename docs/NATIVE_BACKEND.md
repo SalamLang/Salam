@@ -86,7 +86,9 @@ then goes through:
    `((y ^ z) & x) ^ z`, and `x < 0 ? ~y : y` as `y ^ (x >> 63)` after
    pulling negations out (`(-x << 1) - 1` is `~(x << 1)`), which turns a
    zigzag decode into four instructions. Signed division and
-   remainder become unsigned when the dividend is provably non-negative, and
+   remainder become unsigned when the dividend is provably non-negative,
+   `sext(x + k)` with a no-overflow add becomes `sext(x) + k` so the constant
+   lands in the address displacement, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
 6. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches. A block that only compares a phi with a
@@ -165,6 +167,10 @@ then goes through:
     elimination and store-to-load forwarding. A store only invalidates loads
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
+    A stack slot whose address never escapes has its own memory version, so
+    a store to one local array keeps loads from another one (in
+    `x25519`'s `_gf_mul`, `a.v[i]` stays in a register while `t[i + j]` is
+    updated).
     Pointers that come from different `malloc`/`calloc`/`realloc` calls never
     alias, so writing one vector's buffer keeps loads from another one. A
     block-local pass then forwards stores to loads at the same constant
@@ -186,8 +192,13 @@ then goes through:
     not, the tree becomes `min(a, min(b, c))`, so the loop-carried chain goes
     through one compare and one `cmov` instead of two. The edit distance
     inner loop is the usual case.
-14. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
-15. Sinking: a pure instruction whose only uses sit in one block it dominates,
+14. Dead store elimination on stack slots whose address never escapes: a
+    store, or a constant-length `memset`, is dropped when later stores in the
+    same block overwrite all of it before anything reads it, or when the
+    block returns before any read. Zeroing a struct and then setting every
+    field leaves only the field stores.
+15. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+16. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
     on the path that stores it.
 
@@ -268,7 +279,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -28,6 +28,9 @@ pub struct Gvn:
     pub ld_ep: Vector<int> = Vector {}
     pub ld_val: Vector<int> = Vector {}
     pub ld_mark: Vector<int> = Vector {}
+    pub pa_ep: Vector<int> = Vector {}
+    pub pb_out: Vector<int> = Vector {}
+    pub pbase: int = 0
 end
 
 func mem_write(g &: Ng, i: int): bool:
@@ -411,6 +414,21 @@ func gvn_insert(g &: Ng, t &: Gvn, i: int):
     t.added.push(j)
 end
 
+func pa_root(g &: Ng, t &: Gvn, r: int): int:
+    if g.off_pae or t.pa_ep.len() == 0:
+        ret 0 - 1
+    end
+    a := local_root(g, r)
+    if a < 0 or a >= t.pa_ep.len():
+        ret 0 - 1
+    end
+    ret a
+end
+
+func pa_cur(t &: Gvn, a: int): int:
+    ret t.pa_ep[a] > t.pbase ? t.pa_ep[a] : t.pbase
+end
+
 func gvn(g &: Ng): bool:
     mut t := Gvn {}
     mut cap := 64
@@ -430,12 +448,19 @@ func gvn(g &: Ng): bool:
         t.ep_out_d.push(0 - 1)
         t.ep_out_s.push(0 - 1)
         t.ep_out_u.push(0 - 1)
+        t.pb_out.push(0)
     end
     repeat g.i_op.len():
         t.site_ep.push(0)
     end
     repeat g.v_kind.len():
         t.site_memo.push(0 - 3)
+    end
+    if not g.off_pae:
+        compute_escape(g)
+        repeat g.v_kind.len():
+            t.pa_ep.push(0)
+        end
     end
     mut next_ep := 1
     t.wb.push(0)
@@ -476,13 +501,15 @@ func gvn(g &: Ng): bool:
             epd = t.ep_out_d[idm]
             eps = t.ep_out_s[idm]
             t.epu = t.ep_out_u[idm]
+            t.pbase = t.pb_out[idm]
         else:
             ep = next_ep
             epp = next_ep + 1
             epd = next_ep + 2
             eps = next_ep + 3
             t.epu = next_ep + 4
-            next_ep += 5
+            t.pbase = next_ep + 5
+            next_ep += 6
         end
         mut i := g.b_first[b]
         until i >= 0:
@@ -494,7 +521,8 @@ func gvn(g &: Ng): bool:
                 mut ldisp := 0 as i64
                 lroot := gvn_root(g, t, g.i_a[i], ldisp)
                 lep := lc == 1 ? epp : (lc == 2 ? epd : ep)
-                lep2 := root_kind(g, lroot) == 1 ? eps : 0 - 1
+                lpa := pa_root(g, t, lroot)
+                lep2 := lpa >= 0 ? pa_cur(t, lpa) : (root_kind(g, lroot) == 1 ? eps : 0 - 1)
                 lsite := site_of(g, t, lroot)
                 lv := ld_find(t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, ep)
                 if lv >= 0 and g.v_ty[lv] == g.i_ty[i]:
@@ -537,11 +565,26 @@ func gvn(g &: Ng): bool:
                 sroot := iop == OP_STORE ? gvn_root(g, t, g.i_b[i], sdisp) : 0 - 1
                 sk := iop == OP_STORE ? root_kind(g, sroot) : 0
                 ssite := iop == OP_STORE and sroot >= 0 ? site_of(g, t, sroot) : 0 - 1
-                if sk != 2:
+                spa := iop == OP_STORE ? pa_root(g, t, sroot) : 0 - 1
+                if iop == OP_CALL and t.pa_ep.len() > 0:
+                    repeat g.i_pcount[i] in q:
+                        ca := pa_root(g, t, g.pool[g.i_ps[i] + 3 * q])
+                        if ca >= 0:
+                            t.pa_ep[ca] = next_ep
+                            next_ep += 1
+                        end
+                    end
+                end
+                if spa >= 0:
+                    t.pa_ep[spa] = next_ep
+                    next_ep += 1
+                else sk != 2:
                     eps = next_ep
                     next_ep += 1
                 end
-                if ssite >= 0:
+                if spa >= 0:
+                    _z := 0
+                else ssite >= 0:
                     t.site_ep[ssite] = next_ep
                     next_ep += 1
                 else:
@@ -561,7 +604,7 @@ func gvn(g &: Ng): bool:
                 if iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_lcse:
                     sv := g.i_a[i]
                     if sv >= 0 and g.v_kind[sv] == VK_INS:
-                        ld_add(t, sroot, sdisp, g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), sk == 1 ? eps : 0 - 1, ssite, sv)
+                        ld_add(t, sroot, sdisp, g.v_ty[sv], sc == 1 ? epp : (sc == 2 ? epd : ep), spa >= 0 ? pa_cur(t, spa) : (sk == 1 ? eps : 0 - 1), ssite, sv)
                     end
                 end
                 i = nx
@@ -586,6 +629,7 @@ func gvn(g &: Ng): bool:
         t.ep_out_d[b] = epd
         t.ep_out_s[b] = eps
         t.ep_out_u[b] = t.epu
+        t.pb_out[b] = t.pbase
         t.wb.push(b)
         t.wm.push(h)
         t.ld_mark.push(hl)
@@ -621,5 +665,7 @@ func gvn(g &: Ng): bool:
     t.ld_ep.free()
     t.ld_val.free()
     t.ld_mark.free()
+    t.pa_ep.free()
+    t.pb_out.free()
     ret changed
 end

@@ -177,6 +177,10 @@ func fold_bin(g &: Ng, i: int): bool:
     ret false
 end
 
+func one_use(g &: Ng, v: int): bool:
+    ret v >= 0 and v < g.v_uses.len() and g.v_uses[v] == 1
+end
+
 func rem_to_mask(g &: Ng, i: int):
     a := g.i_a[i]
     b := g.i_b[i]
@@ -184,7 +188,7 @@ func rem_to_mask(g &: Ng, i: int):
     if (p != CC_EQ and p != CC_NE) or not is_cint(g, b) or g.v_i[b] != (0 as i64):
         ret
     end
-    if a < 0 or g.v_kind[a] != VK_INS or g.v_uses[a] != 1:
+    if a < 0 or g.v_kind[a] != VK_INS or not one_use(g, a):
         ret
     end
     d := g.v_def[a]
@@ -804,6 +808,35 @@ func ext_trunc_range(g &: Ng, i: int): bool:
     ret true
 end
 
+func sext_add(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    if g.i_op[d] != OP_ADD or (g.i_f[d] & IF_NSW) == 0 or not is_cint(g, g.i_b[d]) or g.i_a[d] < 0:
+        ret false
+    end
+    x := g.i_a[d]
+    if g.v_kind[x] != VK_INS:
+        ret false
+    end
+    k := norm_int(g, g.v_ty[g.i_b[d]], g.v_i[g.i_b[d]])
+    s := ins_new(g, OP_SEXT, g.i_ty[i])
+    g.i_a[s] = x
+    g.i_x[s] = g.v_ty[x]
+    sv := new_res(g, s)
+    ins_before(g, i, s)
+    n := ins_new(g, OP_ADD, g.i_ty[i])
+    g.i_a[n] = sv
+    g.i_b[n] = const_int(g, g.i_ty[i], k)
+    g.i_f[n] = IF_NSW
+    nv := new_res(g, n)
+    ins_before(g, i, n)
+    replace_res(g, i, nv)
+    ret true
+end
+
 func fold_rem_range(g &: Ng, i: int): bool:
     op := g.i_op[i]
     b := g.i_b[i]
@@ -1009,7 +1042,7 @@ func fmul_merge(g &: Ng, i: int): bool:
         ret false
     end
     d := g.v_def[a]
-    if g.i_op[d] != OP_FMUL or g.v_uses[a] != 1:
+    if g.i_op[d] != OP_FMUL or not one_use(g, a):
         ret false
     end
     mut b2 := g.i_b[d]
@@ -1416,6 +1449,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 if not ch and g.dom_ok and not g.off_range and (g.i_op[i] == OP_SEXT or g.i_op[i] == OP_ZEXT):
                     ch = ext_trunc_range(g, i)
                 end
+                if not ch and not g.off_sxa and g.i_op[i] == OP_SEXT:
+                    ch = sext_add(g, i)
+                end
             else op == OP_SELECT:
                 ch = fold_select(g, i)
                 if not ch and g.i_op[i] == OP_SELECT:
@@ -1685,7 +1721,7 @@ func thread_cmp(g &: Ng, b: int, ph: int, cm: int, term: int): bool:
     pv := g.i_res[ph]
     cv := g.i_res[cm]
     k := g.i_b[cm]
-    if pv < 0 or cv < 0 or g.i_a[cm] != pv or g.i_a[term] != cv or g.v_uses[cv] != 1 or not is_cint(g, k):
+    if pv < 0 or cv < 0 or g.i_a[cm] != pv or g.i_a[term] != cv or not one_use(g, cv) or not is_cint(g, k):
         ret false
     end
     tb := g.i_b[term]
@@ -1694,7 +1730,7 @@ func thread_cmp(g &: Ng, b: int, ph: int, cm: int, term: int): bool:
         ret false
     end
     mut only := 0 - 1
-    if g.v_uses[pv] != 1:
+    if not one_use(g, pv):
         tside := phi_uses_under(g, b, pv, cm, tb)
         fside := phi_uses_under(g, b, pv, cm, fb)
         if tside:
@@ -1765,7 +1801,7 @@ func thread_block(g &: Ng, b: int): bool:
         ret false
     end
     c := g.i_res[first]
-    if c < 0 or g.i_a[term] != c or g.v_uses[c] != 1:
+    if c < 0 or g.i_a[term] != c or not one_use(g, c):
         ret false
     end
     tb := g.i_b[term]
@@ -2151,7 +2187,7 @@ func range_fold_block(g &: Ng, a: int): bool:
         if tb < 0 or g.i_op[tb] != OP_CBR or f0 < 0:
             continue
         end
-        if not (f0 == tb or (g.i_next[f0] == tb and g.i_op[f0] == OP_ICMP and g.i_res[f0] == g.i_a[tb] and g.v_uses[g.i_res[f0]] == 1)):
+        if not (f0 == tb or (g.i_next[f0] == tb and g.i_op[f0] == OP_ICMP and g.i_res[f0] == g.i_a[tb] and one_use(g, g.i_res[f0]))):
             continue
         end
         mut bt := 0 - 1
@@ -2292,7 +2328,7 @@ func lower_pow2_divs(g &: Ng): bool:
 end
 
 func bx_def(g &: Ng, v: int, op: int): int:
-    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or not one_use(g, v):
         ret 0 - 1
     end
     d := g.v_def[v]
@@ -2314,7 +2350,7 @@ func bx_not_of(g &: Ng, v: int): int:
 end
 
 func neg_of(g &: Ng, v: int): int:
-    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or not one_use(g, v):
         ret 0 - 1
     end
     d := g.v_def[v]
@@ -2665,6 +2701,9 @@ func optimize(g &: Ng):
     end
     if not g.off_mmchain:
         _mm := mm_chain(g)
+    end
+    if not g.off_dse:
+        _ds := dead_stores(g)
     end
     dce(g)
     if not g.off_sink:

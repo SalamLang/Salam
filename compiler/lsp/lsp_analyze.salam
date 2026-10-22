@@ -74,6 +74,7 @@ struct Req:
     pub overlay_texts: Vector<str> = Vector {}
     pub defines: Vector<str> = Vector {}
     pub light: bool = false
+    pub targets: Vector<str> = Vector {}
 end
 
 struct Decl:
@@ -204,6 +205,7 @@ func read_req(path: str, r &: Req): bool:
     req_strs(v, "overlay_texts", r.overlay_texts)
     req_strs(v, "defines", r.defines)
     r.light = vbool(v, "light")
+    req_strs(v, "targets", r.targets)
     ret str.Len(r.path) > 0
 end
 
@@ -228,6 +230,11 @@ func file_text(an &: An, file: str): str:
     mut t := ""
     if os.Exists(key) and not os.IsDir(key):
         t = io.ReadFile(key)
+    else not pth.PathIsAbs(key):
+        alt := pth.PathJoin(sm.GetStdlibRoot(), key)
+        if os.Exists(alt) and not os.IsDir(alt):
+            t = io.ReadFile(alt)
+        end
     end
     an.texts.put(key, t)
     ret t
@@ -293,6 +300,27 @@ func ident_tok_in(an: An, b: int, e: int, name: str, last: bool, out_b &: int, o
             end
         end
         i += 1
+    end
+    if mb < 0 and str.Contains(name, " "):
+        mut k := tok_first_at(an, b)
+        until k < an.toks.len() and (an.toks.get(k).begin_index as int) < e:
+            if an.toks.get(k).kind == tok.TK_IDENT:
+                mut joined := an.toks.get(k).lexeme
+                mut m := k
+                until str.Len(joined) < str.Len(name) and m + 1 < an.toks.len() and an.toks.get(m + 1).kind == tok.TK_IDENT:
+                    m += 1
+                    joined = joined + " " + an.toks.get(m).lexeme
+                end
+                if lp.IdentEqual(joined, name):
+                    mb = an.toks.get(k).begin_index as int
+                    me = an.toks.get(m).end_index as int
+                    if not last:
+                        break
+                    end
+                end
+            end
+            k += 1
+        end
     end
     if mb >= 0:
         out_b = mb
@@ -441,6 +469,9 @@ end
 func doc_above(an &: An, file: str, line0: int): str:
     lidx := file_li(an, file)
     li := an.li_list.get(lidx)
+    if line0 <= 0 or line0 >= li.starts.len():
+        ret ""
+    end
     mut l := line0 - 1
     mut parts := Vector {} as Vector<str>
     defer parts.free()
@@ -513,6 +544,9 @@ end
 func aliases_above(an &: An, file: str, line0: int, name: str): str:
     lidx := file_li(an, file)
     li := an.li_list.get(lidx)
+    if line0 <= 0 or line0 >= li.starts.len():
+        ret ""
+    end
     mut l := line0 - 1
     mut out := ""
     until l >= 0:
@@ -520,15 +554,22 @@ func aliases_above(an &: An, file: str, line0: int, name: str): str:
         le := li_line_end(li, l)
         t := trim(str.Substr(li.text, ls, le - ls))
         if str.StartsWith(t, "@fa ") or str.StartsWith(t, "@en "):
-            mut nm := trim(str.Substr(t, 4, str.Len(t) - 4))
-            if str.StartsWith(nm, "\"") and str.EndsWith(nm, "\"") and str.Len(nm) >= 2:
-                nm = str.Substr(nm, 1, str.Len(nm) - 2)
-            end
-            if str.Len(nm) > 0 and not str.Equals(nm, name):
-                if str.Len(out) > 0:
-                    out = ", " + out
+            rest := str.Substr(t, 4, str.Len(t) - 4)
+            mut q1 := str.IndexOf(rest, "\"")
+            mut line_names := ""
+            until q1 >= 0:
+                q2 := str.IndexFrom(rest, "\"", q1 + 1)
+                if q2 < 0:
+                    break
                 end
-                out = "`" + nm + "`" + out
+                nm := str.Substr(rest, q1 + 1, q2 - q1 - 1)
+                if str.Len(nm) > 0 and not str.Equals(nm, name):
+                    line_names = line_names + (str.Len(line_names) > 0 ? ", " : "") + "`" + nm + "`"
+                end
+                q1 = str.IndexFrom(rest, "\"", q2 + 1)
+            end
+            if str.Len(line_names) > 0:
+                out = line_names + (str.Len(out) > 0 ? ", " + out : "")
             end
         else not str.StartsWith(t, "@"):
             break
@@ -616,7 +657,13 @@ func make_decl(an &: An, sym: int): int:
     end
     if sv.decl != 0 and sv.decl < at.Count(an.a):
         n := at.Get(an.a, sv.decl)
-        file := node_file(an, n)
+        mut file := node_file(an, n)
+        if not pth.PathIsAbs(file) and not os.Exists(file):
+            alt := filepath.Clean(pth.PathJoin(sm.GetStdlibRoot(), file))
+            if os.Exists(alt):
+                file = alt
+            end
+        end
         d.file = file
         d.std = is_std_file(an, file)
         d.is_deprecated = n.is_deprecated
@@ -667,7 +714,14 @@ func make_decl(an &: An, sym: int): int:
             d.detail = pre + sv.name + (str.Len(d.ty) > 0 ? ": " + d.ty : "")
         end
         d.doc = doc_above(an, file, (n.begin_line as int) - 1)
-        al := aliases_above(an, file, (n.begin_line as int) - 1, sv.name)
+        mut al := aliases_above(an, file, (n.begin_line as int) - 1, sv.name)
+        if sv.kind == sm.SYM_METHOD:
+            repeat sm.IntrinsicMethodCount() in ii:
+                if str.Equals(sm.IntrinsicMethodEn(ii), sv.name):
+                    al = al + (str.Len(al) > 0 ? ", " : "") + "`" + sm.IntrinsicMethodFa(ii) + "`"
+                end
+            end
+        end
         if str.Len(al) > 0 and sv.kind != sm.SYM_PACKAGE:
             d.doc = d.doc + (str.Len(d.doc) > 0 ? "\n\n" : "") + "Also named " + al
         end
@@ -684,12 +738,42 @@ func make_decl(an &: An, sym: int): int:
     ret idx
 end
 
+func spelled_ok(an &: An, sv: sm.Symbol, spelled0: str): bool:
+    spelled := str.Replace(spelled0, "\xe2\x80\x8c", " ")
+    if lp.IdentEqual(spelled, sv.name) or str.Equals(spelled, sv.name):
+        ret true
+    end
+    if str.StartsWith(sv.name, spelled + "_") or str.EndsWith(sv.name, "_" + spelled):
+        ret true
+    end
+    if sv.decl > 0 and sv.decl < at.Count(an.a):
+        dn := at.Get(an.a, sv.decl)
+        mut ai := 1
+        until ai < dn.aliases.len():
+            al := dn.aliases.get(ai)
+            if lp.IdentEqual(spelled, al) or str.Equals(spelled, al):
+                ret true
+            end
+            ai += 2
+        end
+        if not str.Equals(dn.name, sv.name) and lp.IdentEqual(spelled, dn.name):
+            ret true
+        end
+    end
+    repeat sm.IntrinsicMethodCount() in i:
+        if str.Equals(sm.IntrinsicMethodEn(i), sv.name) and lp.IdentEqual(spelled, sm.IntrinsicMethodFa(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
 func add_ref(an &: An, nid: int, sym: int):
     if nid <= 0 or nid >= at.Count(an.a) or sym <= 0:
         ret
     end
     n := at.Get(an.a, nid)
-    if not in_target(an, n):
+    if n.synthetic or not in_target(an, n):
         ret
     end
     nb := n.begin_index as int
@@ -701,17 +785,17 @@ func add_ref(an &: An, nid: int, sym: int):
     mut b := nb
     mut e := ne
     if n.kind == at.AST_IDENTIFIER:
-        if ne == nb:
-            ok := ident_tok_in(an, nb, nb + 1, sv.name, false, b, e)
-            if not ok:
-                ret
-            end
+        if not ident_tok_in(an, nb, ne > nb ? ne : nb + 1, sv.name, true, b, e):
+            ret
         end
     else:
         last := n.kind == at.AST_MEMBER or n.kind == at.AST_FUNC_ADDR
         if not ident_tok_in(an, nb, ne > nb ? ne : nb + 1, sv.name, last, b, e):
             ret
         end
+    end
+    if not spelled_ok(an, sv, collapse_ws(str.Substr(an.text, b, e - b))):
+        ret
     end
     d := make_decl(an, sym)
     mut r := Ref {}
@@ -1458,82 +1542,19 @@ func emit_completion_data(an &: An, j &: Json):
     jw_end_obj(j)
 end
 
-func analyze(r: Req): str:
-    i18.SetLang(str.Equals(r.messages, "fa") ? "fa" : "en")
-    sm.SetStdlibRoot(r.stdlib)
-    sm.LayoutSchemaInit(r.stdlib)
-    target := filepath.Clean(r.path)
-    src.SetOverlay(target, r.text)
-    repeat r.overlay_paths.len() in oi:
-        if oi < r.overlay_texts.len():
-            src.SetOverlay(r.overlay_paths.get(oi), r.overlay_texts.get(oi))
-        end
-    end
+func target_an(base: An, lgr: lg.Logger, fallback: int, target: str, text: str): An:
     mut an := An {}
+    an.a = base.a
+    an.s = base.s
     an.target = target
-    an.text = r.text
-    an.messages = r.messages
-    sroot := sm.GetStdlibRoot()
-    if os.IsDir(pth.PathJoin(sroot, "std")) and not os.IsDir(pth.PathJoin(sroot, "core")):
-        an.std_root = filepath.Clean(pth.PathJoin(sroot, "std")) + "/"
-    else str.Len(sroot) > 0:
-        an.std_root = filepath.Clean(sroot) + "/"
-    end
-    an.texts.put(target, r.text)
-    mut entry := target
-    root := package_root_of(target)
-    if str.Len(root) > 0:
-        dir := pth.PathDir(root)
-        base := pth.PathBase(dir)
-        entry = filepath.Clean(pth.PathJoin(pth.PathDir(dir), VIRTUAL_ENTRY))
-        src.SetOverlay(entry, "include " + VIRTUAL_PKG + " \"" + base + "/" + base + ".salam\"\n")
-        an.is_virtual = true
-    end
-    an.entry_path = entry
-    mut fallback := lp.Load(str.Len(r.lang) > 0 ? r.lang : "en")
-    if fallback == lp.LP_NONE:
-        fallback = lp.Load("en")
-    end
-    lgr := lg.New(lg.LOG_WARN, false)
-    lg.SetCapture(true)
-    lg.SetRecord(true)
-    sm.SetRecordRefs(true)
-    mut sf := src.New()
-    _lok := src.Load(entry, sf)
-    modpack := lx.Detect(sf, fallback)
-    mut toks := tok.StreamNew(entry)
-    _lx := lx.Run(lgr, modpack, sf, toks)
-    mut a := at.NewAst()
-    mut prog := 0
-    _pok := ps.Run(lgr, toks, a, prog)
-    tok.StreamFree(toks)
-    table := cc.TableBuild("", r.defines)
-    cc.TableSetPack(table, modpack)
-    _cc := cc.PruneProgram(a, lgr, entry, table, prog)
-    _vw := lo.PrepareViews(lgr, modpack, table, a, prog, entry)
-    mut s := sm.New(lgr, entry, lp.Code(modpack))
-    sm.SetCc(s, table)
-    _sok := sm.Run(s, a, prog)
-    repeat lg.RecordCount() in ri:
-        an.records.push(lg.RecordAt(ri))
-    end
-    mut refn := Vector {} as Vector<int>
-    mut refs := Vector {} as Vector<int>
-    repeat sm.RefCount() in qi:
-        refn.push(sm.RefNode(qi))
-        refs.push(sm.RefSym(qi))
-    end
-    sm.SetRecordRefs(false)
-    lg.SetRecord(false)
-    an.a = a
-    an.s = s
-    an.scope = s.global
-    if an.is_virtual:
-        vb := sm.LookupLocal(s, s.global, VIRTUAL_PKG)
-        if vb != 0:
-            an.scope = sm.SymAt(s, vb).members
-        end
-    end
+    an.text = text
+    an.messages = base.messages
+    an.std_root = base.std_root
+    an.entry_path = base.entry_path
+    an.is_virtual = base.is_virtual
+    an.scope = base.scope
+    an.records = base.records
+    an.texts.put(target, text)
     tpack := lx.Detect(src_of(an), fallback)
     an.lang = lp.Code(tpack)
     mut ttoks := tok.StreamNew(target)
@@ -1541,17 +1562,20 @@ func analyze(r: Req): str:
     each t in ttoks.toks:
         an.toks.push(t)
     end
-    lg.SetCapture(false)
     an.li = line_index(an.text)
+    ret an
+end
+
+func emit_one(an &: An, refn: Vector<int>, refs: Vector<int>, light: bool, with_path: bool): str:
     repeat refn.len() in k:
         add_ref(an, refn.get(k), refs.get(k))
     end
-    total := sm.SymCount(s)
+    total := sm.SymCount(an.s)
     mut si := 1
     until si < total:
-        sv := sm.SymAt(s, si)
-        if sv.decl > 0 and sv.decl < at.Count(a) and sv.kind != sm.SYM_PACKAGE:
-            n := at.Get(a, sv.decl)
+        sv := sm.SymAt(an.s, si)
+        if sv.decl > 0 and sv.decl < at.Count(an.a) and sv.kind != sm.SYM_PACKAGE:
+            n := at.Get(an.a, sv.decl)
             if in_target(an, n) and not n.synthetic:
                 _d := make_decl(an, si)
             end
@@ -1561,11 +1585,14 @@ func analyze(r: Req): str:
     mut j := jw_new()
     jw_obj(j)
     jw_bool(j, "ok", true)
+    if with_path:
+        jw_str(j, "path", an.target)
+    end
     jw_str(j, "std_root", an.std_root)
     emit_diags(an, j)
     emit_outline(an, j)
     emit_links(an, j)
-    if not r.light:
+    if not light:
         emit_folds(an, j)
         emit_completion_data(an, j)
         emit_tokens(an, j)
@@ -1595,6 +1622,106 @@ func analyze(r: Req): str:
     jw_end_arr(j)
     jw_end_obj(j)
     ret jw_done(j)
+end
+
+func analyze(r: Req): str:
+    i18.SetLang(str.Equals(r.messages, "fa") ? "fa" : "en")
+    sm.SetStdlibRoot(r.stdlib)
+    sm.LayoutSchemaInit(r.stdlib)
+    target := filepath.Clean(r.path)
+    src.SetOverlay(target, r.text)
+    repeat r.overlay_paths.len() in oi:
+        if oi < r.overlay_texts.len():
+            src.SetOverlay(r.overlay_paths.get(oi), r.overlay_texts.get(oi))
+        end
+    end
+    mut base := An {}
+    base.target = target
+    base.text = r.text
+    base.messages = r.messages
+    sroot := sm.GetStdlibRoot()
+    if os.IsDir(pth.PathJoin(sroot, "std")) and not os.IsDir(pth.PathJoin(sroot, "core")):
+        base.std_root = filepath.Clean(pth.PathJoin(sroot, "std")) + "/"
+    else str.Len(sroot) > 0:
+        base.std_root = filepath.Clean(sroot) + "/"
+    end
+    mut entry := target
+    root := package_root_of(target)
+    if str.Len(root) > 0:
+        dir := pth.PathDir(root)
+        bname := pth.PathBase(dir)
+        entry = filepath.Clean(pth.PathJoin(pth.PathDir(dir), VIRTUAL_ENTRY))
+        src.SetOverlay(entry, "include " + VIRTUAL_PKG + " \"" + bname + "/" + bname + ".salam\"\n")
+        base.is_virtual = true
+    end
+    base.entry_path = entry
+    mut fallback := lp.Load(str.Len(r.lang) > 0 ? r.lang : "en")
+    if fallback == lp.LP_NONE:
+        fallback = lp.Load("en")
+    end
+    lgr := lg.New(lg.LOG_WARN, false)
+    lg.SetCapture(true)
+    lg.SetRecord(true)
+    sm.SetRecordRefs(true)
+    mut sf := src.New()
+    _lok := src.Load(entry, sf)
+    modpack := lx.Detect(sf, fallback)
+    mut toks := tok.StreamNew(entry)
+    _lx := lx.Run(lgr, modpack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    _pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    table := cc.TableBuild("", r.defines)
+    cc.TableSetPack(table, modpack)
+    _cc := cc.PruneProgram(a, lgr, entry, table, prog)
+    _vw := lo.PrepareViews(lgr, modpack, table, a, prog, entry)
+    mut s := sm.New(lgr, entry, lp.Code(modpack))
+    sm.SetCc(s, table)
+    _sok := sm.Run(s, a, prog)
+    repeat lg.RecordCount() in ri:
+        base.records.push(lg.RecordAt(ri))
+    end
+    mut refn := Vector {} as Vector<int>
+    mut refs := Vector {} as Vector<int>
+    repeat sm.RefCount() in qi:
+        refn.push(sm.RefNode(qi))
+        refs.push(sm.RefSym(qi))
+    end
+    sm.SetRecordRefs(false)
+    lg.SetRecord(false)
+    base.a = a
+    base.s = s
+    base.scope = s.global
+    if base.is_virtual:
+        vb := sm.LookupLocal(s, s.global, VIRTUAL_PKG)
+        if vb != 0:
+            base.scope = sm.SymAt(s, vb).members
+        end
+    end
+    mut an := target_an(base, lgr, fallback, target, r.text)
+    primary := emit_one(an, refn, refs, r.light, false)
+    if r.targets.len() == 0:
+        lg.SetCapture(false)
+        ret primary
+    end
+    mut others := Vector {} as Vector<str>
+    each tgt in r.targets:
+        op := filepath.Clean(tgt)
+        if str.Equals(op, target):
+            continue
+        end
+        otext := io.ReadFile(op)
+        if str.Len(otext) == 0:
+            continue
+        end
+        mut oan := target_an(base, lgr, fallback, op, otext)
+        others.push(emit_one(oan, refn, refs, true, true))
+    end
+    lg.SetCapture(false)
+    out := str.Substr(primary, 0, str.Len(primary) - 1) + ",\"others\":[" + str.Join(others, ",") + "]}"
+    others.free()
+    ret out
 end
 
 pub func AnalyzeMain(req_path: str): int:

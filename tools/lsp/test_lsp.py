@@ -302,7 +302,7 @@ def project(t, exe):
     s.notify("textDocument/didOpen", {"textDocument": {"uri": muri, "languageId": "salam", "version": 1, "text": mtext}})
     s.diagnostics(muri)
     links = s.request("textDocument/documentLink", {"textDocument": {"uri": muri}})["result"]
-    t.check("proj: include paths are links", [l["target"] for l in links] == [uuri], str(links)[:300])
+    t.check("proj: include paths are links", [l["target"] for l in links] == [uuri, uri_of(os.path.join(PROJ, "geo", "geo.salam"))], str(links)[:300])
 
     item = s.request("textDocument/prepareCallHierarchy", at(muri, pos(mtext, "Twice(n)", 1)))["result"]
     t.check("proj: call hierarchy item", item and item[0]["name"] == "Twice" and item[0]["uri"] == uuri, str(item)[:300])
@@ -328,9 +328,28 @@ def project(t, exe):
     titles = [a["title"] for a in acts]
     t.check("proj: quick fix for a foreign keyword", "Replace 'while' with 'until'" in titles, str(titles) + json.dumps(d["diagnostics"])[:200])
 
+    epath = os.path.join(PROJ, "geo", "extra.salam")
+    etext = open(epath, encoding="utf-8").read()
+    euri = uri_of(epath)
+    s.notify("textDocument/didOpen", {"textDocument": {"uri": euri, "languageId": "salam", "version": 1, "text": etext}})
+    s.diagnostics(euri)
+    area = at(euri, pos(etext, "Area", 1))
+    deadline = time.time() + 120
+    while True:
+        r = s.request("textDocument/references", {**area, "context": {"includeDeclaration": True}})["result"]
+        if len(r) >= 3 or time.time() > deadline:
+            break
+        time.sleep(0.3)
+    got = sorted(os.path.relpath(uri_to_path(x["uri"]), PROJ) for x in r)
+    t.check("proj: references across a folder package", got == ["geo/extra.salam", "geo/geo.salam", "main.salam"], str(got))
+
     s.request("shutdown", None)
     s.notify("exit", None)
     s.proc.wait(10)
+
+
+def uri_to_path(u):
+    return u[len("file://"):] if u.startswith("file://") else u
 
 
 def main():

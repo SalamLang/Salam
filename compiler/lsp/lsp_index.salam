@@ -196,12 +196,48 @@ func start_index_job():
     d.uri = uri
     d.path = path
     d.text = text
+    mut targets := Vector {} as Vector<str>
+    dir := pth.PathDir(path)
+    if os.Exists(pth.PathJoin(dir, pth.PathBase(dir) + ".salam")):
+        mut keep := Vector {} as Vector<str>
+        each q in g_index_queue:
+            if str.Equals(pth.PathDir(q), dir):
+                targets.push(q)
+            else:
+                keep.push(q)
+            end
+        end
+        g_index_queue.free()
+        g_index_queue = keep
+    end
     ensure_tmp_paths()
-    if io.WriteFile(g_req_path, analysis_request(d, true)) < 0:
+    req := analysis_request(d, true)
+    mut body := req
+    if targets.len() > 0:
+        mut quoted := Vector {} as Vector<str>
+        each tq in targets:
+            quoted.push(jq(tq))
+        end
+        body = str.Substr(req, 0, str.Len(req) - 1) + ",\"targets\":[" + str.Join(quoted, ",") + "]}"
+        quoted.free()
+    end
+    targets.free()
+    if io.WriteFile(g_req_path, body) < 0:
         ret
     end
     g_job_index = path
     spawn_worker(uri)
+end
+
+func store_index(path: str, v: value.Value):
+    e := IndexEntry { path = path, uri = path_to_uri(path), snap = v }
+    repeat g_index.len() in i:
+        if str.Equals(g_index.get(i).path, path):
+            g_index.set(i, e)
+            ret
+        end
+    end
+    g_index.push(e)
 end
 
 func finish_index_job(rc: int):
@@ -216,14 +252,17 @@ func finish_index_job(rc: int):
     if encerr.IsError(err) or not value.IsObject(v):
         ret
     end
-    e := IndexEntry { path = path, uri = path_to_uri(path), snap = v }
-    repeat g_index.len() in i:
-        if str.Equals(g_index.get(i).path, path):
-            g_index.set(i, e)
-            ret
+    store_index(path, v)
+    others := obj(v, "others")
+    if value.IsArray(others):
+        repeat value.ArrayLen(others) in k:
+            ov := value.ArrayGet(others, k)
+            op := vstr(ov, "path")
+            if str.Len(op) > 0:
+                store_index(op, ov)
+            end
         end
     end
-    g_index.push(e)
 end
 
 func snap_set(uris &: Vector<str>, snaps &: Vector<value.Value>):

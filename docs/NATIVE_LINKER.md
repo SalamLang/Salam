@@ -185,7 +185,13 @@ section resolves to its offset inside that output section, which is what the
 `R_X86_64_32` references from `.debug_info` to `.debug_abbrev` and
 `.debug_line` need. A relocation against code that garbage collection
 removed is written as 0, the usual tombstone. `--strip` drops them along
-with the section headers. PE output does not carry debug sections yet.
+with the section headers.
+
+PE output places each merged `.debug_*` section after `.reloc` as a
+discardable section, names it through a COFF string table that
+`PointerToSymbolTable` points at, resolves `IMAGE_REL_AMD64_SECREL` to the
+offset inside the merged section and `ADDR64` to the virtual address
+without a base relocation.
 
 ## Driver integration
 

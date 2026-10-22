@@ -340,7 +340,7 @@ otherwise it gets 32-byte alignment.
 
 ### Debug information
 
-`salam build app.salam --backend=native -g` (Linux targets) writes DWARF 4
+`salam build app.salam --backend=native -g` writes DWARF 4
 into the object: `.debug_info`, `.debug_abbrev`, `.debug_line`,
 `.debug_ranges` and `.debug_loc`. With it gdb shows file and line for every
 frame, steps through loops, stops on inlined functions by name, and prints
@@ -377,9 +377,17 @@ How the pieces fit:
   memory behind a pointer register, or a constant for values that were
   folded away. A value that does not exist at a point shows as
   `<optimized out>`, never as a stale value.
+- When a function is inlined, its cached body carries its variable events,
+  so the inlined frame shows its own arguments and locals.
+- Module globals get a `DW_TAG_variable` with `DW_OP_addr`, unless global
+  dead code elimination removed them.
+- Windows objects carry the same sections (long names through the COFF
+  string table, `SECREL` relocations), and stack slots are addressed from
+  `rbp` there. Both the built-in PE linker and mingw `ld` keep them, so gdb
+  for mingw reads lines, frames and variables.
 
-Not covered yet: variables of inlined functions (their frames show without
-locals), and Windows targets, which get no debug info.
+Not covered yet: enumerations are described as plain integers, and
+CodeView/PDB for MSVC debuggers is not written.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
@@ -406,8 +414,7 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` covers lines, inlined frames, locals and arguments on ELF targets.
-  Variables of inlined functions and Windows debug info are still missing.
+- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.

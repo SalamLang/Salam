@@ -190,6 +190,81 @@ else:
     end
 end
 
+func _on_path(name: str): bool:
+    mut sep := ":"
+    if SALAM_OS_WINDOWS:
+        sep = ";"
+    end
+    dirs := str.Split(os.Env("PATH"), sep)
+    defer dirs.free()
+    repeat dirs.len() in i:
+        d := dirs.get(i)
+        if str.Len(d) > 0 and os.Exists(d + "/" + name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _cross_linker(opts: Options): str:
+    t := opts.target_triple
+    host := resolve_linker()
+    if str.Len(t) == 0:
+        ret host
+    end
+    win := str.Contains(t, "windows") or str.Contains(t, "mingw") or str.Contains(t, "win32")
+    if SALAM_OS_WINDOWS:
+        if win:
+            ret host
+        end
+    else:
+        if SALAM_OS_LINUX:
+            if str.Contains(t, "linux") and str.Contains(t, "gnu") and str.StartsWith(t, _host_arch()):
+                ret host
+            end
+        else:
+            if str.Contains(t, "apple") or str.Contains(t, "darwin"):
+                ret host
+            end
+        end
+    end
+    if win and (str.Contains(t, "gnu") or str.Contains(t, "mingw")):
+        mut arch := "x86_64"
+        if str.StartsWith(t, "i686") or str.StartsWith(t, "i386"):
+            arch = "i686"
+        else str.StartsWith(t, "aarch64"):
+            arch = "aarch64"
+        end
+        mingw := arch + "-w64-mingw32-gcc"
+        if _on_path(mingw):
+            ret mingw
+        end
+    end
+    if _on_path("clang"):
+        mut c := "clang --target=" + t
+        if _on_path("ld.lld"):
+            c = c + " -fuse-ld=lld"
+        end
+        if str.Len(opts.sysroot) > 0:
+            c = c + ` --sysroot="` + opts.sysroot + `"`
+        end
+        ret c
+    end
+    ret host
+end
+
+func _host_arch(): str:
+    if SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else:
+        if SALAM_ARCH_X86:
+            ret "i686"
+        else:
+            ret "x86_64"
+        end
+    end
+end
+
 func _target_is_darwin(opts: Options): bool:
     t := opts.target_triple
     if str.Len(t) == 0:
@@ -218,8 +293,13 @@ end
 @en "LinkExternal"
 @fa "پیوند خارجی"
 pub func LinkExternal(obj: str, out_path: str, opts: Options): LinkResult:
-    linker := resolve_linker()
-    mut cmd := `"` + linker + `" "` + obj + `"`
+    linker := _cross_linker(opts)
+    mut cmd := ""
+    if str.Contains(linker, " "):
+        cmd = linker + ` "` + obj + `"`
+    else:
+        cmd = `"` + linker + `" "` + obj + `"`
+    end
     repeat opts.extra_objects.len() in xo:
         cmd += ` "` + opts.extra_objects.get(xo) + `"`
     end

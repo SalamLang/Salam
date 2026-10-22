@@ -94,3 +94,112 @@ func agg_scalarize(g &: Ng): bool:
     end
     ret changed
 end
+
+func dead_slot_ok(g &: Ng, i: int, root: Vector<bool>): int:
+    op := g.i_op[i]
+    if op == OP_ADDR:
+        a := g.i_a[i]
+        b := g.i_b[i]
+        if b >= 0 and b < root.len() and root[b]:
+            ret 0
+        end
+        ret a >= 0 and a < root.len() and root[a] ? 2 : 1
+    end
+    if op == OP_STORE:
+        sv := g.i_a[i]
+        if sv >= 0 and sv < root.len() and root[sv]:
+            ret 0
+        end
+        ad := g.i_b[i]
+        ret ad >= 0 and ad < root.len() and root[ad] ? 3 : 1
+    end
+    if op == OP_CALL:
+        fv := g.i_a[i]
+        sym := fv >= 0 and g.v_kind[fv] == VK_GLB ? g.v_def[fv] : 0 - 1
+        mut touches := false
+        repeat g.i_pcount[i] in k:
+            av := g.pool[g.i_ps[i] + 3 * k]
+            if av >= 0 and av < root.len() and root[av]:
+                touches = true
+                if k != 0 or (sym != g.sym_i_memset and sym != g.sym_i_memcpy):
+                    ret 0
+                end
+            end
+        end
+        ret touches ? 3 : 1
+    end
+    m := val_mask(op)
+    if (m & 1) != 0 and g.i_a[i] >= 0 and g.i_a[i] < root.len() and root[g.i_a[i]]: ret 0 end
+    if (m & 2) != 0 and g.i_b[i] >= 0 and g.i_b[i] < root.len() and root[g.i_b[i]]: ret 0 end
+    if (m & 4) != 0 and g.i_c[i] >= 0 and g.i_c[i] < root.len() and root[g.i_c[i]]: ret 0 end
+    if op == OP_PHI:
+        repeat g.i_pcount[i] in k2:
+            pv := g.pool[g.i_ps[i] + 2 * k2]
+            if pv >= 0 and pv < root.len() and root[pv]:
+                ret 0
+            end
+        end
+    end
+    ret 1
+end
+
+func dead_allocas(g &: Ng): bool:
+    mut changed := false
+    mut root := Vector {} as Vector<bool>
+    mut kill := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA and g.i_res[i] >= 0:
+                root.clear()
+                repeat g.v_kind.len():
+                    root.push(false)
+                end
+                root[g.i_res[i]] = true
+                kill.clear()
+                mut ok := true
+                mut grew := true
+                until grew and ok:
+                    grew = false
+                    kill.clear()
+                    each bb in g.b_rpo:
+                        mut j := g.b_first[bb]
+                        until j >= 0 and ok:
+                            if j != i:
+                                st := dead_slot_ok(g, j, root)
+                                if st == 0:
+                                    ok = false
+                                else st == 2:
+                                    r := g.i_res[j]
+                                    if r >= 0 and not root[r]:
+                                        root[r] = true
+                                        grew = true
+                                    end
+                                    kill.push(j)
+                                else st == 3:
+                                    kill.push(j)
+                                end
+                            end
+                            j = g.i_next[j]
+                        end
+                    end
+                end
+                if ok:
+                    each kj in kill:
+                        if g.i_op[kj] != OP_NOP:
+                            ins_unlink(g, kj)
+                        end
+                    end
+                    changed = true
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    root.free()
+    kill.free()
+    if changed:
+        dce(g)
+    end
+    ret changed
+end

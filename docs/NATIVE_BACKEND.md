@@ -97,7 +97,9 @@ recursive. Each function then goes through:
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree.
    A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
-   such loads) becomes a load of just that field.
+   such loads) becomes a load of just that field, and a stack copy of a
+   struct that is only ever written is dropped, so `n := at.Get(a, i)` then
+   `n.kind` no longer copies the whole node.
    A demanded-bits pass drops masks whose cleared bits no later instruction
    reads, so `x = (x * a + c) % 2^31` keeps the mask off its loop-carried
    chain. Loop load elimination keeps a value stored in one iteration and

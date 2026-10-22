@@ -110,21 +110,63 @@
       chips.classList.add("is-in");
     };
 
+    const phone = () =>
+      window.matchMedia && window.matchMedia("(max-width: 640px)").matches;
+    const lockPage = (on) => {
+      document.documentElement.classList.toggle("salamat-lock", on && phone());
+    };
+    const fit = () => {
+      const vv = window.visualViewport;
+      if (vv && phone() && salamat.classList.contains("is-open")) {
+        panel.style.height = `${vv.height}px`;
+        panel.style.top = `${vv.offsetTop}px`;
+        body.scrollTop = body.scrollHeight;
+      } else {
+        panel.style.height = "";
+        panel.style.top = "";
+      }
+    };
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", fit);
+      window.visualViewport.addEventListener("scroll", fit);
+    }
+    let pushed = false;
+    window.addEventListener("popstate", () => {
+      if (pushed && salamat.classList.contains("is-open")) {
+        pushed = false;
+        close();
+      }
+    });
+
     const open = (focus) => {
+      lockPage(true);
+      if (phone() && !pushed) {
+        history.pushState({ salamat: true }, "");
+        pushed = true;
+      }
       panel.hidden = false;
       teaser.hidden = true;
       salamat.classList.add("is-open");
       launcher.setAttribute("aria-expanded", "true");
       launcher.classList.add("is-seen");
-      requestAnimationFrame(() => panel.classList.add("is-shown"));
+      requestAnimationFrame(() => {
+        panel.classList.add("is-shown");
+        fit();
+      });
       play();
-      if (focus) {
+      if (focus && !phone()) {
         setTimeout(() => input.focus(), still ? 0 : 350);
       }
     };
     const close = () => {
+      lockPage(false);
+      if (pushed) {
+        pushed = false;
+        history.back();
+      }
       panel.classList.remove("is-shown");
       salamat.classList.remove("is-open");
+      fit();
       launcher.setAttribute("aria-expanded", "false");
       setTimeout(
         () => {
@@ -215,19 +257,47 @@
       escapeHtml(text)
         .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    const SHELLS =
+      /^(sh|bash|zsh|fish|shell|console|terminal|powershell|pwsh|ps1|cmd|bat|batch|dos)$/i;
+    const strongDir = (line) => {
+      for (const ch of line) {
+        if (RTL.test(ch)) {
+          return "rtl";
+        }
+        if (LTR.test(ch)) {
+          return "ltr";
+        }
+      }
+      return "";
+    };
+    const codeBlock = (lang, code) => {
+      const shell = SHELLS.test(lang.trim());
+      const lines = code.replace(/\n$/, "").split("\n");
+      let blockDir = "ltr";
+      if (!shell) {
+        for (const line of lines) {
+          const d = strongDir(line);
+          if (d) {
+            blockDir = d;
+            break;
+          }
+        }
+      }
+      let last = blockDir;
+      const rows = lines.map((line) => {
+        const d = shell ? "ltr" : strongDir(line) || last;
+        last = d;
+        return `<span class="salamat-line" dir="${d}">${escapeHtml(line) || " "}</span>`;
+      });
+      return `<pre dir="${blockDir}"><code>${rows.join("")}</code></pre>`;
+    };
     const render = (text) => {
       const out = [];
-      const parts = text.split(/```[^\n]*\n?/);
-      parts.forEach((part, i) => {
-        if (i % 2 === 1) {
-          out.push(
-            '<pre dir="ltr"><code>' +
-              escapeHtml(part.replace(/\n$/, "")) +
-              "</code></pre>",
-          );
-          return;
-        }
-        part
+      const fence = /```([^\n`]*)\n([\s\S]*?)(?:```|$)/g;
+      let at = 0;
+      let m = fence.exec(text);
+      const prose = (chunk) => {
+        chunk
           .split(/\n{2,}/)
           .map((block) => block.trim())
           .filter(Boolean)
@@ -236,7 +306,17 @@
               `<p dir="auto">${inline(block).replace(/\n/g, "<br>")}</p>`,
             );
           });
-      });
+      };
+      while (m) {
+        prose(text.slice(at, m.index));
+        out.push(codeBlock(m[1], m[2]));
+        at = fence.lastIndex;
+        if (m[0].length === 0) {
+          break;
+        }
+        m = fence.exec(text);
+      }
+      prose(text.slice(at));
       return out.join("");
     };
 

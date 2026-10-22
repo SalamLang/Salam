@@ -601,7 +601,7 @@ Also built since:
 
 - `salam dap`, a Debug Adapter Protocol server that builds the program with
   debug information and hands the session to gdb (14+) or lldb-dap;
-  breakpoints, stepping and locals work in `.salam` files. The VS Code
+  breakpoints, stepping and locals work in `.salam` files. The Visual Studio Code
   extension registers it; `tools/lsp/test_dap.py` drives a real gdb session in
   CI.
 - Pull diagnostics (`textDocument/diagnostic`, `workspace/diagnostic` from the

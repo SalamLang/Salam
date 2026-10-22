@@ -180,7 +180,8 @@ arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, loads a
 32-bit value with `movslq` when it is also sign-extended (the low half serves
 the 32-bit uses), builds an `insertvalue` chain that is returned directly in
-the caller's result buffer, fuses a
+the caller's result buffer, copies and clears structs of up to 256 bytes
+with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
 reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two

@@ -1181,18 +1181,35 @@ func ow_is_pkg_obj(s &: Sema, a &: at.Ast, nid: int): bool:
     ret pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE
 end
 
-func ow_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
+func ow_effect(s &: Sema, call: int, slot: int): int:
     if not s.sum_ready:
         ret SU_READ
     end
-    e := su_arg_effect(s, a, call, slot)
-    if e == SU_FREE and SuArgMustFree(s, call, slot):
-        ret SU_FREE + 100
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret SU_READ
     end
-    if e == SU_FREE or e == SU_GROW:
-        ret e
+    if su_flag(s.sp_free, s, fi, slot):
+        if SuArgMustFree(s, call, slot):
+            ret SU_FREE + 100
+        end
+        ret SU_FREE
+    end
+    if su_flag(s.sp_grow, s, fi, slot):
+        ret SU_GROW
     end
     ret SU_READ
+end
+
+func ow_arg_kept(s &: Sema, call: int, slot: int): bool:
+    if not s.sum_ready:
+        ret true
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0 or slot < 0 or slot >= su_np(s, fi):
+        ret true
+    end
+    ret su_flag(s.sp_keep, s, fi, slot)
 end
 
 func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, eff: int, byval: bool, slot: int):
@@ -1267,31 +1284,42 @@ func ow_alias_result(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, rke
 end
 
 func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
-    repeat at.ChildCount(a, nid) in i:
+    n := at.ChildCount(a, nid)
+    repeat n in i:
         arg := at.Child(a, nid, i)
         if arg == 0:
             continue
         end
-        eff := ow_effect(s, a, nid, i + 1)
         if at.At(a, arg).ref_arg:
             key := ow_path(o, a, arg)
             if key >= 0:
                 ow_use_prefix(s, o, a, st, arg, key)
-                ow_apply(s, o, a, st, nid, key, eff, false, i + 1)
-                ow_write_fresh(o, st, key, arg)
                 continue
             end
         end
         mut t := ow_expr(s, o, a, st, arg)
         t.free()
-        if eff != SU_READ:
-            ow_apply(s, o, a, st, nid, ow_path(o, a, arg), eff, ow_is_container(at.At(a, arg).type_str), i + 1)
+    end
+    repeat n in j:
+        arg2 := at.Child(a, nid, j)
+        if arg2 == 0:
+            continue
         end
-        if str.EndsWith(at.At(a, arg).type_str, "*"):
-            pk := ow_path(o, a, arg)
-            if pk >= 0:
-                ow_unfree_under(o, st, pk)
+        eff := ow_effect(s, nid, j + 1)
+        key2 := ow_path(o, a, arg2)
+        if at.At(a, arg2).ref_arg and key2 >= 0:
+            ow_apply(s, o, a, st, nid, key2, eff, false, j + 1)
+            freed := eff == SU_FREE or eff == SU_FREE + 100
+            if not freed or ow_arg_kept(s, nid, j + 1):
+                ow_write_fresh(o, st, key2, arg2)
             end
+            continue
+        end
+        if eff != SU_READ:
+            ow_apply(s, o, a, st, nid, key2, eff, ow_is_container(at.At(a, arg2).type_str), j + 1)
+        end
+        if str.EndsWith(at.At(a, arg2).type_str, "*") and key2 >= 0:
+            ow_unfree_under(o, st, key2)
         end
     end
 end
@@ -1362,7 +1390,7 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
         end
     else:
         ow_unfree_under(o, st, rkey)
-        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, a, nid, 0), false, 0)
+        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, nid, 0), false, 0)
         ow_alias_result(s, o, a, st, nid, rkey, out)
     end
     ret out

@@ -35,6 +35,11 @@ salam lsp --version
 Messages follow the editor's language: a Persian (`fa`) locale gets Persian
 diagnostics and hover text. The error codes (`E012`) stay the same in both.
 
+The same fixes are available outside the editor. `salam check` prints each
+one under its error (`= fix: Remove 'mut'`), `--error-format=json` gives them
+as edits with byte offsets, and `salam check --fix` applies the safe ones
+(imports, a needless `mut`, foreign keywords) and checks again.
+
 ## Options
 
 Send them as `initializationOptions`, or later in

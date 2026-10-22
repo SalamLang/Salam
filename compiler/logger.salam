@@ -51,6 +51,7 @@ mut g_record_on := false
 
 mut g_records := Vector {} as Vector<Record>
 mut g_fixes := Vector {} as Vector<Fix>
+mut g_staged := Vector {} as Vector<Fix>
 
 pub struct Record:
     pub level: int = 0
@@ -70,11 +71,10 @@ pub struct Fix:
     pub index: int = 0
     pub length: int = 0
     pub find: str = ""
-    pub tok_kind: int = 0 - 1
-    pub kw: int = 0 - 1
     pub text: str = ""
     pub mode: int = 0
     pub preferred: bool = false
+    pub safe: bool = false
 end
 
 pub struct DiagSourceEntry:
@@ -175,7 +175,140 @@ func record(level: int, file: str, line: int, col: int, index: int, length: int,
     r.length = length
     r.help = help
     r.msg = msg
+    rec := g_records.len()
     g_records.push(r)
+    each f in g_staged:
+        mut x := f
+        x.rec = rec
+        if str.Len(x.file) == 0:
+            x.file = file
+        end
+        g_fixes.push(x)
+    end
+end
+
+func ident_byte(b: int): bool:
+    ret (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95 or b >= 128
+end
+
+func find_word(text: str, word: str, b: int, lim: int): int:
+    wn := str.Len(word)
+    mut i := str.IndexFrom(text, word, b)
+    until i >= 0 and i + wn <= lim:
+        before_ok := i == 0 or not ident_byte(byte_at(text, i - 1))
+        after_ok := i + wn >= str.Len(text) or not ident_byte(byte_at(text, i + wn))
+        if before_ok and after_ok:
+            ret i
+        end
+        i = str.IndexFrom(text, word, i + 1)
+    end
+    ret 0 - 1
+end
+
+func line_start_of(text: str, i: int): int:
+    mut k := i
+    until k > 0 and byte_at(text, k - 1) != 10:
+        k -= 1
+    end
+    ret k
+end
+
+func line_end_of(text: str, i: int): int:
+    n := str.Len(text)
+    mut k := i
+    until k < n and byte_at(text, k) != 10:
+        k += 1
+    end
+    if k > i and byte_at(text, k - 1) == 13:
+        k -= 1
+    end
+    ret k
+end
+
+func line_no_col(text: str, off: int, line &: int, col &: int):
+    mut l := 1
+    mut s := 0
+    repeat off in i:
+        if byte_at(text, i) == 10:
+            l += 1
+            s = i + 1
+        end
+    end
+    line = l
+    col = off - s + 1
+end
+
+func fixes_json(lgr: Logger, file: str): str:
+    mut parts := Vector {} as Vector<str>
+    mut k := 0
+    until k < g_staged.len():
+        f0 := g_staged.get(k)
+        mut k2 := k + 1
+        until k2 < g_staged.len() and str.Equals(g_staged.get(k2).title, f0.title):
+            k2 += 1
+        end
+        mut edits := Vector {} as Vector<str>
+        mut ok := true
+        mut q := k
+        until q < k2:
+            fq := g_staged.get(q)
+            ffile := str.Len(fq.file) > 0 ? fq.file : file
+            text := find_src(lgr, ffile)
+            mut b := 0
+            mut e := 0
+            mut nt := ""
+            if ResolveFix(text, fq, b, e, nt):
+                mut ln := 0
+                mut col := 0
+                line_no_col(text, b, ln, col)
+                edits.push(`{"file":"` + dr.JsonEscape(ffile) + `","offset":` + b + `,"length":` + (e - b) + `,"line":` + ln + `,"column":` + col + `,"text":"` + dr.JsonEscape(nt) + `"}`)
+            else:
+                ok = false
+            end
+            q += 1
+        end
+        if ok and edits.len() > 0:
+            parts.push(`{"title":"` + dr.JsonEscape(f0.title) + `","preferred":` + (f0.preferred ? "true" : "false") + `,"safe":` + (f0.safe ? "true" : "false") + `,"edits":[` + str.Join(edits, ",") + "]}")
+        end
+        edits.free()
+        k = k2
+    end
+    out := str.Join(parts, ",")
+    parts.free()
+    ret out
+end
+
+func with_fixes(lgr: Logger, file: str, text: str): str:
+    if g_staged.len() == 0:
+        ret text
+    end
+    if lgr.diag_format == 1:
+        fj := fixes_json(lgr, file)
+        n := str.Len(text)
+        if str.Len(fj) == 0 or n < 2 or byte_at(text, n - 1) != 10 or byte_at(text, n - 2) != 125:
+            ret text
+        end
+        ret str.Substr(text, 0, n - 2) + `,"fixes":[` + fj + "]}\n"
+    end
+    if lgr.diag_format != 0 or lgr.diag_style != 0:
+        ret text
+    end
+    n := str.Len(text)
+    mut ls := n > 0 ? n - 1 : 0
+    until ls > 0 and byte_at(text, ls - 1) != 10:
+        ls -= 1
+    end
+    bar := str.IndexFrom(text, "|", ls)
+    pad := " ".repeat(bar > ls ? bar - ls : 2)
+    mut out := text
+    mut last := ""
+    each f in g_staged:
+        if not str.Equals(f.title, last):
+            out = out + pad + "= " + i18.Tr("fix") + ": " + f.title + "\n"
+            last = f.title
+        end
+    end
+    ret out
 end
 
 func emit_at(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
@@ -184,7 +317,7 @@ func emit_at(lgr: Logger, phase: int, level: int, file: str, line: int, col: int
     end
     if g_capture_on:
         if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
-            g_capture_buf += render_rich(lgr, level, file, line, col, help, msg)
+            g_capture_buf += with_fixes(lgr, file, render_rich(lgr, level, file, line, col, help, msg))
         else:
             g_capture_buf += FormatPlain(lgr, phase, level, file, line, col, msg) + "\n"
             if str.Len(help) > 0:
@@ -194,7 +327,7 @@ func emit_at(lgr: Logger, phase: int, level: int, file: str, line: int, col: int
         ret
     end
     if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
-        io.EPrint(render_rich(lgr, level, file, line, col, help, msg))
+        io.EPrint(with_fixes(lgr, file, render_rich(lgr, level, file, line, col, help, msg)))
         ret
     end
     io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))
@@ -362,13 +495,61 @@ pub func Recording(): bool:
     ret g_record_on
 end
 
-pub func AddFix(rec: int, f: Fix):
-    if not g_record_on or rec < 0 or rec >= g_records.len():
-        ret
+pub func StageFix(f: Fix):
+    g_staged.push(f)
+end
+
+pub func ResolveFix(text: str, f: Fix, b &: int, e &: int, new_text &: str): bool:
+    n := str.Len(text)
+    if f.index < 0 or f.index > n:
+        ret false
     end
-    mut x := f
-    x.rec = rec
-    g_fixes.push(x)
+    b = f.index
+    e = f.index + f.length
+    if e > n:
+        e = n
+    end
+    new_text = f.text
+    lend := line_end_of(text, b)
+    if str.Len(f.find) > 0:
+        lim := e > b ? e : lend
+        w := find_word(text, f.find, b, lim)
+        if w < 0:
+            ret false
+        end
+        b = w
+        e = w + str.Len(f.find)
+        if str.Len(new_text) == 0:
+            until e < lend and (byte_at(text, e) == 32 or byte_at(text, e) == 9):
+                e += 1
+            end
+        end
+    end
+    if f.mode == FIX_LINES:
+        b = line_start_of(text, b)
+        last := e > b ? e - 1 : b
+        mut k := last
+        until k < n and byte_at(text, k) != 10:
+            k += 1
+        end
+        e = k < n ? k + 1 : n
+    else f.mode == FIX_LINE_AFTER:
+        mut k := b
+        until k < n and byte_at(text, k) != 10:
+            k += 1
+        end
+        if k < n:
+            b = k + 1
+        else:
+            b = n
+            new_text = "\n" + new_text
+        end
+        e = b
+    else f.mode == FIX_LINE_BEFORE:
+        b = line_start_of(text, b)
+        e = b
+    end
+    ret true
 end
 
 pub func FixCount(): int:
@@ -389,6 +570,7 @@ end
 
 pub func Log(lgr: Logger, phase: int, level: int, msg: str):
     record(level, "", 0, 0, 0 - 1, 0, "", msg)
+    g_staged.clear()
     if not Enabled(lgr, level):
         ret
     end
@@ -422,6 +604,7 @@ end
 pub func LogAtHelp(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
     record(level, file, line, col, 0 - 1, 0, help, msg)
     emit_at(lgr, phase, level, file, line, col, help, msg)
+    g_staged.clear()
 end
 
 pub func LogSpanHelp(
@@ -429,4 +612,5 @@ pub func LogSpanHelp(
 ):
     record(level, file, line, col, index, length, help, msg)
     emit_at(lgr, phase, level, file, line, col, help, msg)
+    g_staged.clear()
 end

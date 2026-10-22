@@ -712,7 +712,7 @@ if want project; then
     done
 fi
 
-if want lib && command -v cc >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+if want lib && command -v cc >/dev/null 2>&1 && { [ "$(uname -s 2>/dev/null)" = Linux ] || [ "$(uname -s 2>/dev/null)" = Darwin ]; }; then
     for lang in $LANGS; do
         for f in tests/"$lang"/lib/*.out; do
             [ -e "$f" ] || continue

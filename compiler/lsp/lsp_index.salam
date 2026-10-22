@@ -569,3 +569,140 @@ func on_document_link(id: str, params: value.Value):
     send_result(id, "[" + str.Join(out, ",") + "]")
     out.free()
 end
+
+func impl_locations(key: str, method: bool, out &: Vector<str>):
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    mut seen := HashMap {} as HashMap<str, bool>
+    each snap in snaps:
+        impls := obj(snap, "impls")
+        if not value.IsArray(impls):
+            continue
+        end
+        repeat value.ArrayLen(impls) in k:
+            iv := value.ArrayGet(impls, k)
+            mut target := 0 - 1
+            if method:
+                ms := obj(iv, "m")
+                mut q := 0
+                until q + 1 < value.ArrayLen(ms):
+                    if str.Equals(decl_key(decl_at(snap, value.AsInt(value.ArrayGet(ms, q)) as int)), key):
+                        target = value.AsInt(value.ArrayGet(ms, q + 1)) as int
+                    end
+                    q += 2
+                end
+            else str.Equals(decl_key(decl_at(snap, vint(iv, "i", 0 - 1))), key):
+                target = vint(iv, "s", 0 - 1)
+            end
+            if target >= 0:
+                dv := decl_at(snap, target)
+                dk := decl_key(dv)
+                loc := location_of_decl(dv)
+                if str.Len(loc) > 0 and not seen.has(dk):
+                    seen.put(dk, true)
+                    out.push(loc)
+                end
+            end
+        end
+    end
+    seen.free()
+    uris.free()
+    snaps.free()
+end
+
+func on_implementation(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    k := vint(dv, "kind", 0)
+    mut out := Vector {} as Vector<str>
+    if k == 11:
+        impl_locations(decl_key(dv), false, out)
+    else k == 4 or k == 5:
+        impl_locations(decl_key(dv), true, out)
+    end
+    if out.len() == 0:
+        out.free()
+        on_definition(id, params, false)
+        ret
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func type_item(dv: value.Value): str:
+    loc := obj(dv, "loc")
+    rg := range_json(arr_int(loc, 0), arr_int(loc, 1), arr_int(loc, 2), arr_int(loc, 3))
+    k := vint(dv, "kind", 6) == 11 ? 11 : 23
+    ret item_json(vstr(dv, "name"), k, path_to_uri(vstr(dv, "file")), rg, rg, decl_key(dv))
+end
+
+func on_prepare_type_hierarchy(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "null")
+        ret
+    end
+    mut line := 0
+    mut ch := 0
+    pos_of(params, line, ch)
+    d := g_docs.get(i)
+    h := find_hit(d, line, ch)
+    if not h.ok:
+        send_result(id, "null")
+        ret
+    end
+    dv := decl_at(d.snap, h.decl)
+    k := vint(dv, "kind", 0)
+    if (k != 6 and k != 11) or not value.ObjectHas(dv, "loc"):
+        send_result(id, "null")
+        ret
+    end
+    send_result(id, "[" + type_item(dv) + "]")
+end
+
+func on_type_relatives(id: str, params: value.Value, supers: bool):
+    key := vstr(obj(obj(params, "item"), "data"), "key")
+    mut uris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(uris, snaps)
+    mut seen := HashMap {} as HashMap<str, bool>
+    mut out := Vector {} as Vector<str>
+    each snap in snaps:
+        impls := obj(snap, "impls")
+        if not value.IsArray(impls):
+            continue
+        end
+        repeat value.ArrayLen(impls) in k:
+            iv := value.ArrayGet(impls, k)
+            src_i := supers ? vint(iv, "s", 0 - 1) : vint(iv, "i", 0 - 1)
+            dst_i := supers ? vint(iv, "i", 0 - 1) : vint(iv, "s", 0 - 1)
+            if str.Equals(decl_key(decl_at(snap, src_i)), key):
+                tv := decl_at(snap, dst_i)
+                tk := decl_key(tv)
+                if value.ObjectHas(tv, "loc") and not seen.has(tk):
+                    seen.put(tk, true)
+                    out.push(type_item(tv))
+                end
+            end
+        end
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+    seen.free()
+    uris.free()
+    snaps.free()
+end

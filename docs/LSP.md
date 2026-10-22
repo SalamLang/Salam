@@ -19,6 +19,7 @@ salam lsp --version
 | Find references and highlight them, across the whole workspace | `references`, `documentHighlight` |
 | Rename a symbol in every file that uses it | `prepareRename`, `rename` |
 | Who calls this function, and what it calls | `callHierarchy` |
+| Which structs satisfy an interface, which interfaces a struct satisfies, and the methods that implement an interface method | `implementation`, `typeHierarchy` |
 | Reference counts above declarations, and `Run` above `main` in Visual Studio Code | `codeLens` |
 | `include` and `import` paths open the file they name | `documentLink` |
 | Inferred types after `name := value` | `inlayHint` |

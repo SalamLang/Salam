@@ -581,7 +581,8 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   symbols, folding, semantic tokens, completion (scope, members, packages,
   keywords and snippets in the file's language), signature help, inlay hints
   for inferred types, formatting with a minimal edit, on-type indentation,
-  selection ranges, call hierarchy, code lens, document links for
+  selection ranges, call hierarchy, implementations and type hierarchy for
+  structural interfaces, code lens, document links for
   `include`/`import`, completion scoped block by block, and quick fixes for
   did-you-mean (English and Persian), unused `mut`, unused variables and the
   foreign keywords the parser recognises.
@@ -589,7 +590,12 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   are one token and one range, positions are UTF-16 throughout.
 - Clients: the Visual Studio Code extension (with `vscode-languageclient` bundled),
   Neovim (`require('salam').setup({ lsp = true })`), Emacs (eglot and
-  lsp-mode), and documented setups for Sublime Text, Kate, Helix and LSP4IJ.
+  lsp-mode), a JetBrains plugin on LSP4IJ (`extensions/jetbrains/plugin`,
+  built with javac alone and smoke-tested in CI without an IDE), and
+  documented setups for Sublime Text, Kate and Helix.
+- `tools/lsp/sweep.py` runs the worker on all 6,300 files under `tests/` and
+  `std/` and checks that every reference spells the symbol it points at;
+  it is clean.
 
 Left, in order:
 
@@ -599,6 +605,6 @@ Left, in order:
    and `Node.sym` (change 1) as a field rather than a recorded list.
 3. Code actions from structured fixes in `Diag`, the foreign-syntax rewrites,
    and the refactorings listed above.
-4. Pull diagnostics, type hierarchy, colours.
-5. A native JetBrains plugin with run configurations, a tree-sitter grammar,
+4. Pull diagnostics and colours.
+5. Run configurations and a test runner in the JetBrains plugin, a tree-sitter grammar,
    and `salam dap`.

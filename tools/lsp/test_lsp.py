@@ -21,6 +21,7 @@ EN = os.path.join(ROOT, "tests", "lsp", "en", "shapes.salam")
 FA = os.path.join(ROOT, "tests", "lsp", "fa", "binary.salam")
 PKG = os.path.join(ROOT, "std", "str", "basic.salam")
 PROJ = os.path.join(ROOT, "tests", "lsp", "proj")
+IFACE = os.path.join(ROOT, "tests", "lsp", "en", "iface.salam")
 
 
 class Server:
@@ -261,6 +262,27 @@ def persian(t, s):
     t.check("fa: Persian diagnostics", any("دودوی" in m and "تابع" in m for m in msgs), json.dumps(msgs, ensure_ascii=False)[:300])
 
 
+def interfaces(t, s):
+    text = open(IFACE, encoding="utf-8").read()
+    uri = uri_of(IFACE)
+    s.notify("textDocument/didOpen", {"textDocument": {"uri": uri, "languageId": "salam", "version": 1, "text": text}})
+    s.diagnostics(uri)
+    impl = s.request("textDocument/implementation", at(uri, pos(text, "interface Shape", 11)))["result"] or []
+    lines = sorted(x["range"]["start"]["line"] for x in impl)
+    want = sorted([pos(text, "struct Sq")["line"], pos(text, "struct Rect")["line"]])
+    t.check("iface: implementations of an interface", lines == want, str(impl)[:300])
+    impl = s.request("textDocument/implementation", at(uri, pos(text, "func Area", 6)))["result"] or []
+    lines = sorted(x["range"]["start"]["line"] for x in impl)
+    want = sorted([pos(text, "func Area", 0, 1)["line"], pos(text, "func Area", 0, 2)["line"]])
+    t.check("iface: implementations of an interface method", lines == want, str(impl)[:300])
+    item = s.request("textDocument/prepareTypeHierarchy", at(uri, pos(text, "interface Shape", 11)))["result"]
+    subs = s.request("typeHierarchy/subtypes", {"item": item[0]})["result"] if item else []
+    t.check("iface: subtypes", sorted(x["name"] for x in subs) == ["Rect", "Sq"], str(subs)[:300])
+    item = s.request("textDocument/prepareTypeHierarchy", at(uri, pos(text, "struct Sq", 8)))["result"]
+    sups = s.request("typeHierarchy/supertypes", {"item": item[0]})["result"] if item else []
+    t.check("iface: supertypes", [x["name"] for x in sups] == ["Shape"], str(sups)[:300])
+
+
 def package(t, s):
     text = open(PKG, encoding="utf-8").read()
     uri = uri_of(PKG)
@@ -364,6 +386,7 @@ def main():
     t.check("initialize advertises the features", all(k in caps for k in want), str(sorted(caps)))
     s.notify("initialized", {})
     english(t, s)
+    interfaces(t, s)
     package(t, s)
     s.request("shutdown", None)
     s.notify("exit", None)

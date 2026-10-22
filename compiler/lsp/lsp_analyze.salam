@@ -1234,6 +1234,91 @@ func emit_links(an &: An, j &: Json):
     jw_end_arr(j)
 end
 
+func method_names(an &: An, sc: int, names &: Vector<str>, ids &: Vector<int>):
+    mut all := Vector {} as Vector<int>
+    scope_syms(an, sc, all)
+    each id in all:
+        sv := sm.SymAt(an.s, id)
+        if sv.kind == sm.SYM_METHOD or sv.kind == sm.SYM_FUNC:
+            names.push(sv.name)
+            ids.push(id)
+        end
+    end
+    all.free()
+end
+
+func project_sym(an &: An, sv: sm.Symbol): bool:
+    if sv.decl <= 0 or sv.decl >= at.Count(an.a):
+        ret false
+    end
+    n := at.Get(an.a, sv.decl)
+    if n.synthetic or str.Len(sv.generic_base) > 0:
+        ret false
+    end
+    ret not is_std_file(an, node_file(an, n))
+end
+
+func emit_impls(an &: An, j &: Json):
+    mut ifaces := Vector {} as Vector<int>
+    mut structs := Vector {} as Vector<int>
+    total := sm.SymCount(an.s)
+    mut si := 1
+    until si < total:
+        sv := sm.SymAt(an.s, si)
+        if sv.kind == sm.SYM_INTERFACE and sv.members > 0 and sv.decl > 0:
+            ifaces.push(si)
+        else sv.kind == sm.SYM_STRUCT and sv.members > 0 and project_sym(an, sv):
+            structs.push(si)
+        end
+        si += 1
+    end
+    jw_karr(j, "impls")
+    each fi in ifaces:
+        fv := sm.SymAt(an.s, fi)
+        mut wn := Vector {} as Vector<str>
+        mut wi := Vector {} as Vector<int>
+        method_names(an, fv.members, wn, wi)
+        if wn.len() > 0:
+            each st in structs:
+                sv2 := sm.SymAt(an.s, st)
+                mut hn := Vector {} as Vector<str>
+                mut hi := Vector {} as Vector<int>
+                method_names(an, sv2.members, hn, hi)
+                mut have := HashMap {} as HashMap<str, int>
+                repeat hn.len() in k:
+                    have.put(hn.get(k), hi.get(k))
+                end
+                mut ok := true
+                each w in wn:
+                    if not have.has(w):
+                        ok = false
+                    end
+                end
+                if ok and (project_sym(an, fv) or project_sym(an, sv2)):
+                    jw_obj(j)
+                    jw_int(j, "i", make_decl(an, fi))
+                    jw_int(j, "s", make_decl(an, st))
+                    jw_karr(j, "m")
+                    repeat wn.len() in k2:
+                        jw_vint(j, make_decl(an, wi.get(k2)))
+                        jw_vint(j, make_decl(an, have.get(wn.get(k2))))
+                    end
+                    jw_end_arr(j)
+                    jw_end_obj(j)
+                end
+                have.free()
+                hn.free()
+                hi.free()
+            end
+        end
+        wn.free()
+        wi.free()
+    end
+    jw_end_arr(j)
+    ifaces.free()
+    structs.free()
+end
+
 func split_code(msg: str, code &: str): str:
     if str.Len(msg) >= 6 and (byte_at(msg, 0) == 69 or byte_at(msg, 0) == 87) and byte_at(msg, 4) == 58 and byte_at(msg, 5) == 32:
         code = str.Substr(msg, 0, 4)
@@ -1592,6 +1677,7 @@ func emit_one(an &: An, refn: Vector<int>, refs: Vector<int>, light: bool, with_
     emit_diags(an, j)
     emit_outline(an, j)
     emit_links(an, j)
+    emit_impls(an, j)
     if not light:
         emit_folds(an, j)
         emit_completion_data(an, j)

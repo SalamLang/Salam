@@ -334,8 +334,8 @@ func pe_place(l &: Nl, t &: Pe):
             used += 1
         end
     end
-    t.nsec = used
-    t.hdr_size = align_to((0x80 + 4 + 20 + 240 + 40 * used) as i64, 0x200 as i64)
+    t.nsec = used + l.dg_name.len()
+    t.hdr_size = align_to((0x80 + 4 + 20 + 240 + 40 * t.nsec) as i64, 0x200 as i64)
     mut va := 0x1000 as i64
     repeat nps in k:
         if k == PS_RELOC:
@@ -547,6 +547,9 @@ func pe_link(l &: Nl, out: str):
     if not l.ok:
         ret
     end
+    if not l.strip:
+        dbg_collect_pe(l)
+    end
     pe_sort(t)
     pe_place(l, t)
     ent := glob_find(l, "mainCRTStartup")
@@ -596,12 +599,18 @@ func pe_link(l &: Nl, out: str):
     if not l.ok:
         ret
     end
+    if l.dg_name.len() > 0:
+        dbg_build_pe(l)
+    end
     mut rel := Vector {} as Vector<u8>
     pe_breloc_build(t, rel)
     t.ps_vsize[PS_RELOC] = rel.len() as i64
     t.ps_raw[PS_RELOC] = fp
     t.ps_rawsize[PS_RELOC] = align_to(rel.len() as i64, 0x200 as i64)
     t.image_size = align_to(t.ps_va[PS_RELOC] + (rel.len() as i64), 0x1000 as i64)
+    if l.dg_name.len() > 0:
+        t.image_size = dbg_layout_pe(l, t.image_size, fp + t.ps_rawsize[PS_RELOC])
+    end
     pe_write(l, t, buf, total, rel, out)
     rel.free()
     fpos_of.free()
@@ -633,7 +642,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w16(h, 0x8664 as i64)
     w16(h, t.nsec as i64)
     w32(h, 0 as i64)
-    w32(h, 0 as i64)
+    w32(h, l.dg_name.len() > 0 ? l.pe_strpos : (0 as i64))
     w32(h, 0 as i64)
     w16(h, 240 as i64)
     w16(h, 0x22 as i64)
@@ -735,6 +744,25 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
         w16(h, 0 as i64)
         w32(h, ps_flags(k2))
     end
+    repeat l.dg_name.len() in dk:
+        mut dn := name_of(l, l.dg_name[dk])
+        if l.pe_stroff[dk] >= 0:
+            dn = "/" + str.FromInt(l.pe_stroff[dk] as i64)
+        end
+        dp := (dn as void*) as u8*
+        repeat 8 in c2:
+            h.push(c2 < str.Len(dn) ? dp[c2] : (0 as u8))
+        end
+        w32(h, l.dg_size[dk])
+        w32(h, l.dg_va[dk])
+        w32(h, align_to(l.dg_size[dk], 0x200 as i64))
+        w32(h, l.dg_raw[dk])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, 0x42100040 as i64)
+    end
     repeat h.len() in b:
         buf[b] = h[b]
     end
@@ -752,6 +780,24 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
             rel.push(0 as u8)
         end
         w2 = fwrite(rel.data as void*, 1 as u64, rel.len() as u64, f)
+    end
+    if l.dg_name.len() > 0:
+        mut tail := Vector {} as Vector<u8>
+        repeat l.dg_name.len() in dk2:
+            repeat l.dg_size[dk2] in q:
+                tail.push(l.dg_bytes[(l.dg_base[dk2] + q) as int])
+            end
+            until (tail.len() % 0x200) != 0:
+                tail.push(0 as u8)
+            end
+        end
+        tb_le(tail, (l.pe_str.len() + 4) as i64, 4)
+        each sb in l.pe_str:
+            tail.push(sb)
+        end
+        w3 := fwrite(tail.data as void*, 1 as u64, tail.len() as u64, f)
+        w2 = w2 + w3
+        tail.free()
     end
     _c := fclose(f)
     l.file_size = total + (w2 as i64)

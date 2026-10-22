@@ -797,7 +797,7 @@ def pull_and_colors(t, exe):
     ok = len(cols) == 1 and abs(cols[0]["color"]["red"] - 1.0) < 0.01
     t.check("colors: a hex colour is found", ok, str(cols)[:300])
     if cols:
-        pres = s.request(
+        presentation = s.request(
             "textDocument/colorPresentation",
             {
                 "textDocument": {"uri": uri},
@@ -806,7 +806,9 @@ def pull_and_colors(t, exe):
             },
         )["result"]
         t.check(
-            "colors: presentation", pres and pres[0]["label"] == "#ff8800", str(pres)
+            "colors: presentation",
+            presentation and presentation[0]["label"] == "#ff8800",
+            str(presentation),
         )
     s.request("shutdown", None)
     s.notify("exit", None)

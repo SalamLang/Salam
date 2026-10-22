@@ -2003,6 +2003,7 @@ jobs:
 
   create-release:
     if: |
+      !cancelled() && !failure() &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
@@ -2020,6 +2021,7 @@ jobs:
         build-linux-aarch64,
         build-linux-musl,
         android-gate,
+        build-agent,
       ]
     permissions:
       contents: write
@@ -2441,6 +2443,13 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
           echo "pushed a signed annotated tag $TAG"
 
+      - name: Download the Salam Agent release set
+        if: needs.build-agent.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
       - name: Create GitHub Release with auto-generated notes
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -2482,6 +2491,19 @@ jobs:
 
           ( cd release && sha256sum -c SHA256SUMS ) \
             || { echo "::error::SHA256SUMS does not verify against the staged assets"; exit 1; }
+
+          agent=()
+          if [ -d agent-release ]; then
+            mv agent-release/SHA256SUMS "agent-release/salam-agent-${VERSION}-SHA256SUMS"
+            mv agent-release/SHA512SUMS "agent-release/salam-agent-${VERSION}-SHA512SUMS"
+            ( cd agent-release && sha256sum -c "salam-agent-${VERSION}-SHA256SUMS" ) \
+              || { echo "::error::the Salam Agent checksums do not verify"; exit 1; }
+            agent=(agent-release/salam-agent-"${VERSION}"-*)
+            [ "${#agent[@]}" -gt 0 ] || { echo "::error::no salam-agent-${VERSION} files were built"; exit 1; }
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::the Salam Agent release set is missing"
+            exit 1
+          fi
 
           {
             echo "### Verifying your download"
@@ -2536,7 +2558,7 @@ jobs:
             --notes-file release-notes-preamble.md \
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
-            "${assets[@]}" "${sums[@]}"
+            "${assets[@]}" "${sums[@]}" ${agent[@]+"${agent[@]}"}
 
   build-agent:
     if: |
@@ -2549,52 +2571,6 @@ jobs:
     uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
     with:
       attach: true
-
-  attach-agent:
-    if: |
-      github.ref == 'refs/heads/main' &&
-      github.repository == 'SalamLang/Salam' &&
-      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
-    name: Attach Salam Agent to the release
-    needs: [create-release, build-agent]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: VERSION
-          sparse-checkout-cone-mode: false
-      - name: Download the agent release set
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: salam-agent-*
-          path: agent-release
-          merge-multiple: true
-      - name: Upload the agent files to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          VERSION=$(tr -d '[:space:]' < VERSION)
-          TAG="v$VERSION"
-          cd agent-release
-          shopt -s nullglob
-          files=(salam-agent-"$VERSION"-*)
-          [ "${#files[@]}" -gt 0 ] || { echo "::error::no salam-agent-$VERSION files were built; agent/src-tauri must carry VERSION"; exit 1; }
-          mv SHA256SUMS "salam-agent-$VERSION-SHA256SUMS"
-          mv SHA512SUMS "salam-agent-$VERSION-SHA512SUMS"
-          sha256sum -c "salam-agent-$VERSION-SHA256SUMS"
-          gh release upload "$TAG" --clobber salam-agent-*
-          {
-            echo "### Salam Agent attached to $TAG"
-            echo ""
-            printf -- '- %s\n' salam-agent-*
-          } >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

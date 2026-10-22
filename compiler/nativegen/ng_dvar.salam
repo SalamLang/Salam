@@ -59,6 +59,22 @@ func dv_md_line(g &: Ng, id: int, p: int, e: int):
         g.md_t[id] = dv_ref_after(g, p, e, " type: ")
         ret
     end
+    if find_in_line(g, p, e, "!DIGlobalVariableExpression(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 10
+        g.md_t[id] = dv_ref_after(g, p, e, "var: ")
+        ret
+    end
+    if find_in_line(g, p, e, "!DIGlobalVariable(") >= 0:
+        md_grow(g, id)
+        g.md_kind[id] = 11
+        nmg := find_in_line(g, p, e, "name: \"")
+        g.md_s1[id] = nmg >= 0 ? qstr_at(g, nmg) : ""
+        g.md_file[id] = dv_ref_after(g, p, e, "file: ")
+        g.md_line[id] = dv_num_after(g, p, e, "line: ", 0)
+        g.md_t[id] = dv_ref_after(g, p, e, " type: ")
+        ret
+    end
     if find_in_line(g, p, e, "!DIBasicType(") >= 0:
         md_grow(g, id)
         g.md_kind[id] = 5
@@ -139,6 +155,7 @@ func dv_reset(g &: Ng):
     g.fv_ind.clear()
     g.fv_bad.clear()
     g.fv_foff.clear()
+    g.fv_ctx.clear()
     g.fv_fsz.clear()
     g.fv_of = HashMap {} as HashMap<int, int>
     g.av_fv.clear()
@@ -187,6 +204,7 @@ func dv_bind(g &: Ng, fstart: int, fend: int):
                 g.fv_ind.push(g.v_kind[v] == VK_ARG)
                 g.fv_bad.push(false)
                 g.fv_foff.push(0 - 1)
+                g.fv_ctx.push(0 - 1)
                 g.fv_fsz.push(0)
                 g.fv_of.put(v, f)
             end
@@ -622,6 +640,24 @@ func dv_dwreg(r: int): int:
     ret k_map[r]
 end
 
+func dv_slot_off(g &: Ng, s: int): i64:
+    if g.mc.fpo:
+        ret fpo_base(g) - (g.mc.fs_off[s] as i64)
+    end
+    ret win_adj(g) - (g.mc.fs_off[s] as i64)
+end
+
+func dv_slot_kind(g &: Ng, deref: bool): int:
+    if g.mc.fpo:
+        ret deref ? 7 : 3
+    end
+    ret deref ? 9 : 8
+end
+
+func dv_frame_ok(g &: Ng): bool:
+    ret g.mc.fpo or g.os == NG_OS_WINDOWS
+end
+
 func dv_slot_shared(g &: Ng, s: int): bool:
     if s < 0 or s >= g.mc.fs_alias.len():
         ret true
@@ -657,11 +693,11 @@ func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i
         ret
     end
     if k == 5:
-        if dv_slot_shared(g, p) or not g.mc.fpo:
+        if dv_slot_shared(g, p) or not dv_frame_ok(g):
             ret
         end
-        ok = 3
-        op = fpo_base(g) - (g.mc.fs_off[p] as i64) + (xx as i64)
+        ok = dv_slot_kind(g, false)
+        op = dv_slot_off(g, p) + (xx as i64)
         ret
     end
     if (k != 1 and k != 4) or p >= g.mc.vloc.len():
@@ -674,10 +710,10 @@ func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i
         ox = xx
         ret
     end
-    if p < g.mc.vslot.len() and g.mc.vslot[p] >= 0 and g.mc.fpo:
+    if p < g.mc.vslot.len() and g.mc.vslot[p] >= 0 and dv_frame_ok(g):
         sl := slot_loc(g, g.mc.vslot[p])
-        ok = k == 1 ? 3 : 7
-        op = fpo_base(g) - (g.mc.fs_off[sl] as i64)
+        ok = dv_slot_kind(g, k != 1)
+        op = dv_slot_off(g, sl)
         ox = xx
     end
 end
@@ -702,12 +738,14 @@ func dv_enc_begin(g &: Ng):
         v := g.fv_val[f]
         mut mem := false
         mut moff := 0 as i64
-        if not g.fv_ind[f] and v < g.vak.len() and g.vak[v] == AK_ALLOCA and g.var_[v] >= 0 and g.mc.fpo and not dv_slot_shared(g, g.var_[v]):
+        if not g.fv_ind[f] and v >= 0 and v < g.vak.len() and g.vak[v] == AK_ALLOCA and g.var_[v] >= 0 and dv_frame_ok(g) and not dv_slot_shared(g, g.var_[v]):
             mem = true
-            moff = fpo_base(g) - (g.mc.fs_off[slot_loc(g, g.var_[v])] as i64)
+            moff = dv_slot_off(g, slot_loc(g, g.var_[v]))
         end
+        g.gv_mk.push(dv_slot_kind(g, false))
         g.gv_mem.push(mem)
         g.gv_foff.push(g.fv_foff[f])
+        g.gv_ctx.push(g.fv_ctx[f])
         g.gv_fsz.push(g.fv_fsz[f])
         g.gv_moff.push(moff)
         g.gv_l0.push(g.le_s.len())
@@ -913,14 +951,17 @@ func dv_expr(k: int, p: i64, x: int): Vector<u8>:
             vb_uleb(e, r as i64)
             vb_sleb(e, x as i64)
         end
-    else k == 7:
-        e.push(0x77 as u8)
+    else k == 7 or k == 9:
+        e.push((k == 7 ? 0x77 : 0x76) as u8)
         vb_sleb(e, p)
         e.push(0x06 as u8)
         if x != 0:
             e.push(0x23 as u8)
             vb_uleb(e, x as i64)
         end
+    else k == 8:
+        e.push(0x76 as u8)
+        vb_sleb(e, p)
     end
     ret e
 end
@@ -963,7 +1004,7 @@ func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
     vb_uleb(di, g.md_line[md] as i64)
     dv_ref(g, t, di, g.md_t[md])
     if ab == 14:
-        mut x := dv_expr(3, g.gv_moff[gv], 0)
+        mut x := dv_expr(g.gv_mk[gv], g.gv_moff[gv], 0)
         vb_uleb(di, x.len() as i64)
         each b in x:
             di.push(b)
@@ -1016,6 +1057,7 @@ func dv_sroa_leaf(g &: Ng, old: int, leaf: int, off: int, size: int):
     g.fv_ind.push(false)
     g.fv_bad.push(g.fv_bad[f0])
     g.fv_foff.push(g.fv_foff[f0] >= 0 ? g.fv_foff[f0] + off : off)
+    g.fv_ctx.push(g.fv_ctx[f0])
     g.fv_fsz.push(size)
     g.fv_of.put(leaf, f)
 end
@@ -1191,4 +1233,159 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
     fr.free()
     bnd.free()
     uq.free()
+end
+
+func dv_cache_ok(g &: Ng, v: int, imap &: Vector<int>): bool:
+    if v < 0 or v >= g.v_kind.len():
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_ARG:
+        ret true
+    end
+    if k != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    ret d >= 0 and d < imap.len() and imap[d] >= 0 and g.i_blk[d] >= 0
+end
+
+func dv_cache_one(g &: Ng, anc: int, e: int, imap &: Vector<int>, v0: int):
+    f := g.ev_fv[e]
+    if g.fv_bad[f]:
+        ret
+    end
+    g.ic.ev_anc.push(anc)
+    g.ic.ev_var.push(g.fv_var[f])
+    g.ic.ev_foff.push(g.fv_foff[f])
+    g.ic.ev_fsz.push(g.fv_fsz[f])
+    g.ic.ev_ind.push(g.fv_ind[f])
+    g.ic.ev_ctx.push(g.fv_ctx[f])
+    v := g.ev_val[e]
+    g.ic.ev_val.push(dv_cache_ok(g, v, imap) ? cache_val(g, v, v0) : 0 - 1)
+end
+
+func dv_cache_events(g &: Ng, imap &: Vector<int>, v0: int):
+    if g.v_repl.len() > 0:
+        dv_resolve_all(g)
+    end
+    repeat g.b_rpo.len() in ri:
+        b := g.b_rpo[ri]
+        if g.ev_head.has(0 - 1 - b):
+            mut e := g.ev_head.get(0 - 1 - b)
+            until e >= 0:
+                dv_cache_one(g, 0 - 1 - ri, e, imap, v0)
+                e = g.ev_next[e]
+            end
+        end
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.ev_head.has(j):
+                mut e2 := g.ev_head.get(j)
+                until e2 >= 0:
+                    dv_cache_one(g, imap[j], e2, imap, v0)
+                    e2 = g.ev_next[e2]
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+end
+
+func dv_inline_events(g &: Ng, e: int, newi &: Vector<int>, v0: int, c: int, cl: int):
+    q0 := g.ic.e_ev0[e]
+    mut kv := Vector {} as Vector<int>
+    mut ko := Vector {} as Vector<int>
+    mut kc := Vector {} as Vector<int>
+    mut kf := Vector {} as Vector<int>
+    repeat g.ic.e_evn[e] in k:
+        q := q0 + k
+        cx := g.ic.ev_ctx[q] >= 0 ? dbg_rebase(g, g.ic.ev_ctx[q], cl) : cl
+        var := g.ic.ev_var[q]
+        fo := g.ic.ev_foff[q]
+        mut f := 0 - 1
+        repeat kv.len() in z:
+            if f < 0 and kv[z] == var and ko[z] == fo and kc[z] == cx:
+                f = kf[z]
+            end
+        end
+        if f < 0:
+            f = g.fv_val.len()
+            g.fv_val.push(0 - 1)
+            g.fv_var.push(var)
+            g.fv_ind.push(g.ic.ev_ind[q])
+            g.fv_bad.push(false)
+            g.fv_foff.push(fo)
+            g.fv_ctx.push(cx)
+            g.fv_fsz.push(g.ic.ev_fsz[q])
+            kv.push(var)
+            ko.push(fo)
+            kc.push(cx)
+            kf.push(f)
+        end
+        a := g.ic.ev_anc[q]
+        mut anchor := 0 - 1
+        if a >= 0:
+            if a >= newi.len():
+                continue
+            end
+            anchor = newi[a]
+        else:
+            rb := 0 - 1 - a
+            if rb >= g.ic.bmap.len():
+                continue
+            end
+            anchor = 0 - 1 - g.ic.bmap[rb]
+        end
+        cv := g.ic.ev_val[q]
+        dv_ev_add(g, anchor, f, cv >= 0 ? map_cval(g, cv, v0, c) : 0 - 1)
+    end
+    kv.free()
+    ko.free()
+    kc.free()
+    kf.free()
+end
+
+func dv_global_line(g &: Ng, p: int, e: int, ge: int):
+    mut q := p + 1
+    until q < e and g.src[q] != (32 as u8):
+        q += 1
+    end
+    mut b := str.NewBuilder()
+    mut k := p + 1
+    until k < q:
+        str.BufAppendChar(b, g.src[k] as int)
+        k += 1
+    end
+    g.dg_gname.push(str.BufStr(b))
+    str.BufFree(b)
+    g.dg_gmd.push(ge)
+end
+
+func dv_write_globals(g &: Ng, t &: DvTypes, di &: Vector<u8>):
+    repeat g.dg_gname.len() in i:
+        ge := g.dg_gmd[i]
+        if ge < 0 or ge >= g.md_kind.len() or g.md_kind[ge] != 10:
+            continue
+        end
+        var := g.md_t[ge]
+        if var < 0 or var >= g.md_kind.len() or g.md_kind[var] != 11:
+            continue
+        end
+        nm := g.dg_gname.get(i)
+        s := tab_get(g.syms, sp(nm), 0, str.Len(nm))
+        if s < 0 or not g.sy_def[s] or g.sy_sec[s] < 0:
+            continue
+        end
+        vb_uleb(di, 22 as i64)
+        vb_str(di, g.md_s1[var])
+        fm := g.md_file[var]
+        vb_uleb(di, (fm >= 0 and fm < g.md_kind.len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64)
+        vb_uleb(di, g.md_line[var] as i64)
+        dv_ref(g, t, di, g.md_t[var])
+        vb_uleb(di, 9 as i64)
+        di.push(0x03 as u8)
+        add_reloc(g, SEC_DBGINFO, di.len(), s, R_ABS64, 0 as i64)
+        vb_le(di, 0 as i64, 8)
+    end
 end

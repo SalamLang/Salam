@@ -109,8 +109,11 @@ func prescan_dbg(g &: Ng):
             p = e + 1
             continue
         end
-        if g.src[p] == (32 as u8) or g.src[p] == (100 as u8):
+        if g.src[p] == (32 as u8) or g.src[p] == (100 as u8) or g.src[p] == (64 as u8):
             at := dbg_tail(g, p, e)
+            if at >= 0 and g.src[p] == (64 as u8):
+                dv_global_line(g, p, e, num_at(g, at))
+            end
             if at >= 0:
                 g.dbg_eol.put(e, num_at(g, at))
                 mut z := at - 7
@@ -160,7 +163,7 @@ func prescan_dbg(g &: Ng):
         end
         p = e + 1
     end
-    g.dbg_on = any and g.os != NG_OS_WINDOWS
+    g.dbg_on = any
 end
 
 func line_dbg(g &: Ng): int:
@@ -568,18 +571,24 @@ func dt_writes(t &: DbgTree, nd: int, abs: HashMap<int, int>): bool:
     ret false
 end
 
-func dt_write(g &: Ng, t &: DbgTree, di &: Vector<u8>, nd: int, abs: HashMap<int, int>, ts: int, rs: int):
+func dt_write(g &: Ng, t &: DbgTree, di &: Vector<u8>, nd: int, abs: HashMap<int, int>, ts: int, rs: int, tys &: DvTypes, fgv &: Vector<int>, lsym: int):
     if t.iv0[nd] < 0 or not abs.has(t.sp[nd]):
         mut c0 := t.kid[nd]
         until c0 >= 0:
-            dt_write(g, t, di, c0, abs, ts, rs)
+            dt_write(g, t, di, c0, abs, ts, rs, tys, fgv, lsym)
             c0 = t.sib[c0]
         end
         ret
     end
     f := t.iv0[nd]
     single := t.ivn[f] < 0
-    mut kids := false
+    mut nvars := Vector {} as Vector<int>
+    each gq in fgv:
+        if g.gv_ctx[gq] == t.loc[nd]:
+            nvars.push(gq)
+        end
+    end
+    mut kids := nvars.len() > 0
     mut c1 := t.kid[nd]
     until c1 >= 0:
         if dt_writes(t, c1, abs):
@@ -609,9 +618,11 @@ func dt_write(g &: Ng, t &: DbgTree, di &: Vector<u8>, nd: int, abs: HashMap<int
     cf := dbg_file_of(g, cmd)
     vb_uleb(di, (cf >= 0 ? dbg_file_index(g, cf) : 1) as i64)
     vb_uleb(di, g.md_line[cmd] as i64)
+    dv_write_fn_vars(g, tys, di, nvars, lsym)
+    nvars.free()
     mut c := t.kid[nd]
     until c >= 0:
-        dt_write(g, t, di, c, abs, ts, rs)
+        dt_write(g, t, di, c, abs, ts, rs, tys, fgv, lsym)
         c = t.sib[c]
     end
     if kids:
@@ -673,6 +684,9 @@ func dbg_emit(g &: Ng):
     each z5 in [21, 0x2e, 0, 0x03, 0x08, 0x3a, 0x0f, 0x3b, 0x0f, 0x11, 0x01, 0x12, 0x07, 0x3f, 0x19, 0, 0]:
         ab.push(z5 as u8)
     end
+    each z6 in [22, 0x34, 0, 0x03, 0x08, 0x3a, 0x0f, 0x3b, 0x0f, 0x49, 0x13, 0x02, 0x18, 0, 0]:
+        ab.push(z6 as u8)
+    end
     ab.push(0 as u8)
     g.s_dabbrev = ab
     text_size := g.s_text.len()
@@ -726,7 +740,13 @@ func dbg_emit(g &: Ng):
         end
         mut t := DbgTree {}
         dt_build(g, t, g.df_base[k], g.df_base[k] + g.df_size[k])
-        mut kids := fgv.len() > 0
+        mut topv := Vector {} as Vector<int>
+        each gq0 in fgv:
+            if g.gv_ctx[gq0] < 0:
+                topv.push(gq0)
+            end
+        end
+        mut kids := topv.len() > 0
         repeat t.loc.len() in nd0:
             if t.par[nd0] < 0 and dt_writes(t, nd0, abs):
                 kids = true
@@ -744,17 +764,19 @@ func dbg_emit(g &: Ng):
         add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, g.df_base[k] as i64)
         vb_le(di, 0 as i64, 8)
         vb_le(di, g.df_size[k] as i64, 8)
-        dv_write_fn_vars(g, tys, di, fgv, lsym)
-        fgv.free()
+        dv_write_fn_vars(g, tys, di, topv, lsym)
+        topv.free()
         repeat t.loc.len() in nd:
             if t.par[nd] < 0:
-                dt_write(g, t, di, nd, abs, ts, rs)
+                dt_write(g, t, di, nd, abs, ts, rs, tys, fgv, lsym)
             end
         end
+        fgv.free()
         if kids:
             di.push(0 as u8)
         end
     end
+    dv_write_globals(g, tys, di)
     dv_types_flush(g, tys, di)
     di.push(0 as u8)
     if g.s_dloc.len() == 0:

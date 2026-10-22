@@ -3,10 +3,11 @@ package nativegen
 func coff_rtype(t: int): int:
     if t == R_ABS64: ret 1 end
     if t == R_ADDR32NB: ret 3 end
+    if t == R_ABS32: ret 11 end
     ret 4
 end
 
-func coff_secs(): Vector<int>:
+func coff_secs(g &: Ng): Vector<int>:
     mut v := Vector {} as Vector<int>
     v.push(SEC_TEXT)
     v.push(SEC_RODATA)
@@ -17,6 +18,13 @@ func coff_secs(): Vector<int>:
     v.push(SEC_FINI)
     v.push(SEC_PDATA)
     v.push(SEC_XDATA)
+    if g.s_dinfo.len() > 0:
+        v.push(SEC_DBGINFO)
+        v.push(SEC_DBGABBREV)
+        v.push(SEC_DBGLINE)
+        v.push(SEC_DBGRANGES)
+        v.push(SEC_DBGLOC)
+    end
     ret v
 end
 
@@ -31,6 +39,11 @@ func coff_name(sec: int): str:
         SEC_FINI: ret ".dtors" end
         SEC_PDATA: ret ".pdata" end
         SEC_XDATA: ret ".xdata" end
+        SEC_DBGINFO: ret ".debug_info" end
+        SEC_DBGABBREV: ret ".debug_abbrev" end
+        SEC_DBGLINE: ret ".debug_line" end
+        SEC_DBGRANGES: ret ".debug_ranges" end
+        SEC_DBGLOC: ret ".debug_loc" end
     end
     ret ".data"
 end
@@ -53,6 +66,7 @@ func coff_flags(g &: Ng, sec: int): i64:
         SEC_BSS: ret (0xC0000080 as i64) | al end
         SEC_PDATA, SEC_XDATA: ret (0x40000040 as i64) | (coff_align_flag(4) as i64) end
         SEC_INIT, SEC_FINI: ret (0xC0000040 as i64) | (coff_align_flag(8) as i64) end
+        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC: ret (0x42000040 as i64) | (coff_align_flag(1) as i64) end
     end
     ret (0xC0000040 as i64) | al
 end
@@ -70,6 +84,10 @@ func put_addend(g &: Ng, sec: int, off: int, v: i64, n: int):
             SEC_PDATA: g.s_pdata[off + i] = b break end
             SEC_XDATA: g.s_xdata[off + i] = b break end
             SEC_CONST: g.s_cst[off + i] = b break end
+            SEC_DBGINFO: g.s_dinfo[off + i] = b break end
+            SEC_DBGLINE: g.s_dline[off + i] = b break end
+            SEC_DBGRANGES: g.s_dranges[off + i] = b break end
+            SEC_DBGLOC: g.s_dloc[off + i] = b break end
         end
         x = x >> (8 as u64)
     end
@@ -96,7 +114,7 @@ func coff_sym_name(g &: Ng, o &: Ob, strtab &: Ob, s: int):
 end
 
 func write_coff(g &: Ng, path: str): bool:
-    secs := coff_secs()
+    secs := coff_secs(g)
     nsec := secs.len()
     nsym := g.sy_kind.len()
     mut idx := Vector {} as Vector<int>
@@ -135,7 +153,7 @@ func write_coff(g &: Ng, path: str): bool:
         t := g.r_type[r]
         if t == R_ABS64:
             put_addend(g, sec, g.r_off[r], g.r_add[r], 8)
-        else t == R_ADDR32NB:
+        else t == R_ADDR32NB or t == R_ABS32:
             put_addend(g, sec, g.r_off[r], g.r_add[r], 4)
         else:
             put_addend(g, sec, g.r_off[r], g.r_add[r] + (4 as i64), 4)
@@ -185,6 +203,20 @@ func write_coff(g &: Ng, path: str): bool:
             end
         end
     end
+    mut long_at := Vector {} as Vector<int>
+    each scn in secs:
+        nmn := coff_name(scn)
+        if str_len_of(nmn) > 8:
+            long_at.push(strtab.b.len() + 4)
+            np0 := sp(nmn)
+            repeat str_len_of(nmn) in c0:
+                strtab.b.push(np0[c0])
+            end
+            strtab.b.push(0 as u8)
+        else:
+            long_at.push(0 - 1)
+        end
+    end
     ob_pad(o, 4)
     sym_off := o.b.len()
     ob_bytes(o, symtab.b)
@@ -196,7 +228,10 @@ func write_coff(g &: Ng, path: str): bool:
     put_le(o, 12, count as i64, 4)
     repeat nsec in q2:
         h := 20 + 40 * q2
-        nm := coff_name(secs[q2])
+        mut nm := coff_name(secs[q2])
+        if long_at[q2] >= 0:
+            nm = "/" + str.FromInt(long_at[q2] as i64)
+        end
         np := sp(nm)
         repeat str_len_of(nm) in c:
             o.b[h + c] = np[c]
@@ -228,6 +263,7 @@ func write_coff(g &: Ng, path: str): bool:
     raw_sz.free()
     rel_off.free()
     rel_n.free()
+    long_at.free()
     ret ok
 end
 

@@ -29,8 +29,8 @@
 
 (defcustom salam-lang "auto"
   "Keyword pack passed to the compiler as --lang.
-\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to detecting the
-script the buffer is written in."
+\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to
+detecting the script the buffer is written in."
   :type '(choice (const "auto") (const "en") (const "fa"))
   :group 'salam)
 

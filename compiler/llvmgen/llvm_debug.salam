@@ -94,9 +94,7 @@ func debug_init(v &: Lv, src_path: str):
     )
     v.di_paths.push(src_path)
     v.di_ids.push(v.di_file)
-    v.di_cu = meta_add(
-        v, "distinct !DICompileUnit(language: DW_LANG_C99, " + "file: " + v.di_file + `, producer: "salam", ` + "isOptimized: false, runtimeVersion: 0, " + "emissionKind: FullDebug)"
-    )
+    v.di_cu = di_reserve(v)
     types := meta_add(v, "!{null}")
     v.di_subty = meta_add(v, "!DISubroutineType(types: " + types + ")")
     v.di_flag_dwarf = meta_add(v, `!{i32 7, !"Dwarf Version", i32 5}`)
@@ -271,6 +269,21 @@ func di_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
     ret id
 end
 
+func debug_global(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, ts: str, line: int, path: str): str:
+    if not v.debug:
+        ret ""
+    end
+    ty := di_type(v, s, a, ts)
+    if str.Len(ty) == 0:
+        ret ""
+    end
+    df := debug_file_for(v, path)
+    gv := meta_add(v, `distinct !DIGlobalVariable(name: "` + di_escape(name) + `", scope: ` + v.di_cu + ", file: " + df + ", line: " + co.I64Toa(line as i64) + ", type: " + ty + ", isLocal: true, isDefinition: true)")
+    ge := meta_add(v, "!DIGlobalVariableExpression(var: " + gv + ", expr: !DIExpression())")
+    v.di_globals.push(ge)
+    ret ", !dbg " + ge
+end
+
 func debug_declare(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, slot: str, ts: str, line: int, argno: int):
     if not v.debug or str.Len(v.cur_sp) == 0 or str.Len(name) == 0:
         ret
@@ -300,6 +313,16 @@ func debug_finalize(v &: Lv):
     end
     out_g(v, "\n")
     if v.debug:
+        mut gl := co.SbNew()
+        repeat v.di_globals.len() in i:
+            if i > 0:
+                co.SbPuts(gl, ", ")
+            end
+            co.SbPuts(gl, v.di_globals.get(i))
+        end
+        gls := meta_add(v, "!{" + co.SbCstr(gl) + "}")
+        co.SbFree(gl)
+        out_meta(v, v.di_cu + " = distinct !DICompileUnit(language: DW_LANG_C99, file: " + v.di_file + `, producer: "salam", ` + "isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, globals: " + gls + ")\n")
         out_g(
             v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
         )

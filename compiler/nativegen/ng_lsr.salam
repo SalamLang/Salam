@@ -227,7 +227,9 @@ func lsr_aff(g &: Ng, l &: Lp, s &: Lsr, v: int, narrow: bool, depth: int, coef 
         end
         coef = op == OP_ADD ? ca + cb : ca - cb
         sym = ca != (0 as i64) ? sa : sb
-        cost += 1
+        if not is_cint(g, g.i_b[d]) and not (op == OP_ADD and is_cint(g, g.i_a[d])):
+            cost += 1
+        end
         ret true
     end
     if op == OP_MUL or op == OP_SHL:
@@ -725,8 +727,7 @@ func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int,
     mut ts := Vector {} as Vector<i64>
     mut c := 0 as i64
     wide_flat(g, g.i_blk[pt], pv, nx, v, 1 as i64, tv, ts, c)
-    mut inv := const_int(g, T_I64, c)
-    mut has_inv := c != (0 as i64)
+    mut inv := 0 - 1
     repeat tv.len() in k:
         t := tv[k]
         if t == pv or t == nx or ts[k] == (0 as i64):
@@ -738,34 +739,40 @@ func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int,
         sv0 := new_res(g, si)
         ins_before(g, pt, si)
         sv := wide_scale(g, pt, sv0, ts[k])
-        if has_inv:
+        if inv >= 0:
             inv = wide_add(g, pt, true, inv, sv, ts[k])
         else ts[k] > (0 as i64):
             inv = sv
         else:
             inv = wide_add(g, pt, true, const_int(g, T_I64, 0 as i64), sv, ts[k])
         end
-        has_inv = true
     end
-    mut r := inv
-    mut have := has_inv
+    mut r := 0 - 1
     repeat tv.len() in k2:
         t2 := tv[k2]
         if (t2 != pv and t2 != nx) or ts[k2] == (0 as i64):
             continue
         end
         w := wide_scale(g, at, t2 == pv ? wpv : wnv, ts[k2])
-        if have:
+        if r >= 0:
             r = wide_add(g, at, true, r, w, ts[k2])
         else ts[k2] > (0 as i64):
             r = w
+        else inv >= 0:
+            r = wide_add(g, at, true, inv, w, ts[k2])
+            inv = 0 - 1
         else:
             r = wide_add(g, at, true, const_int(g, T_I64, 0 as i64), w, ts[k2])
         end
-        have = true
     end
-    if not have:
+    if r < 0:
         r = const_int(g, T_I64, 0 as i64)
+    end
+    if inv >= 0:
+        r = wide_add(g, at, true, r, inv, 1 as i64)
+    end
+    if c != (0 as i64):
+        r = wide_add(g, at, true, r, const_int(g, T_I64, c), 1 as i64)
     end
     tv.free()
     ts.free()

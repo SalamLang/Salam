@@ -3,8 +3,10 @@
 #
 # For each program it builds an executable with and without -g and requires
 # that the two .text sections are byte-identical, that the line table names
-# the source file, and that main has a DW_TAG_subprogram. It runs once per
-# linker, so the built-in linker's .debug_* handling is covered as well.
+# the source file, and that main has a DW_TAG_subprogram. When
+# llvm-dwarfdump is installed it also runs --verify on every executable. It
+# runs once per linker, so the built-in linker's .debug_* handling is
+# covered as well.
 #
 # Usage: tools/bash/native-debug-check.sh <salam> <file.salam>...
 
@@ -15,6 +17,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fail=0
 pass=0
+dwarfdump=$(command -v llvm-dwarfdump || true)
 for f in "$@"; do
     b=$(basename "$f" .salam)
     for lk in builtin system; do
@@ -44,6 +47,12 @@ for f in "$@"; do
         fi
         if ! readelf --debug-dump=info "$d/dbg" 2>/dev/null | grep -qE 'DW_AT_name +: main$'; then
             echo "FAIL $b $lk (no subprogram for main)"
+            fail=$((fail + 1))
+            continue
+        fi
+        if [ -n "$dwarfdump" ] && ! "$dwarfdump" --verify "$d/dbg" >"$d/verify" 2>&1; then
+            echo "FAIL $b $lk (llvm-dwarfdump --verify)"
+            grep -m5 'error' "$d/verify"
             fail=$((fail + 1))
             continue
         fi

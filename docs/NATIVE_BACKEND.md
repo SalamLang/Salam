@@ -341,19 +341,49 @@ otherwise it gets 32-byte alignment.
 ### Debug information
 
 `salam build app.salam --backend=native -g` (Linux targets) writes DWARF 4
-`.debug_info`, `.debug_abbrev` and `.debug_line` into the object. The front
-end already emits `!dbg` locations in its IR for `-g`; nativegen reads them
-in a prescan (`ng_dbg.salam`), carries each instruction's location through
-inlining, unrolling, instruction selection, register allocation and block
-layout, and records a line row whenever the source line changes in the
-encoded code. Every function gets a `DW_TAG_subprogram` with its range, and
-functions are attributed to their own source file, so backtraces through std
-code name the right file. Debug info never changes the generated code: the
-`.text` of a `-g` build is byte-identical to one without it.
+into the object: `.debug_info`, `.debug_abbrev`, `.debug_line`,
+`.debug_ranges` and `.debug_loc`. With it gdb shows file and line for every
+frame, steps through loops, stops on inlined functions by name, and prints
+locals and arguments. Debug info never changes the generated code: the
+`.text` of a `-g` build is byte-identical to one without it, which
+`tools/bash/native-debug-check.sh` checks on every program.
 
-Not covered yet: inlined frames (`DW_TAG_inlined_subroutine`), variable
-locations, and CodeView for Windows. A frame for inlined std code shows the
-std line inside the caller's name.
+How the pieces fit:
+
+- The front end emits `!dbg` locations, a `DIFile` per source file,
+  `DILocalVariable` plus `llvm.dbg.declare` for every local and parameter,
+  and DWARF types (basic types, pointers, `str` as a `char` pointer, structs
+  with their members, fixed arrays).
+- `ng_dbg.salam` prescans that metadata. A location is an interned pair of
+  `DILocation` and inlined-at location, so the inliner rebases callee
+  locations onto the call site. The encoder records a line row whenever the
+  line changes and a range whenever the inline context changes; those
+  become `DW_TAG_inlined_subroutine` entries with `DW_AT_ranges` when an
+  inlined body is split.
+- Variables (`ng_dvar.salam`) never enter the IR as instructions, so no pass
+  can treat them as real code. mem2reg turns every promoted store and phi
+  into an event `(variable, value)` anchored to an instruction or a block
+  start. Events follow their anchor when an instruction is deleted, follow
+  value replacements, and are copied with the value map when unroll,
+  unswitch or runtime unrolling clone code; other cloning passes mark the
+  variable unreliable instead. SROA leaves become fragments of the
+  original variable and are written with `DW_OP_piece`.
+- At instruction selection a reaching-definitions pass gives every block
+  its incoming values. Before register rewriting the events become location
+  markers on machine instructions, checked against each virtual register's
+  live segments; a register location stays valid after the last use until
+  something overwrites that register or a call clobbers it. The encoder
+  turns the markers into `.debug_loc` lists: a register, a stack slot,
+  memory behind a pointer register, or a constant for values that were
+  folded away. A value that does not exist at a point shows as
+  `<optimized out>`, never as a stale value.
+
+Not covered yet: variables of inlined functions (their frames show without
+locals), and Windows targets, which get no debug info.
+
+`tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
+and checks the printed locals, a struct split into pieces, folded
+constants and an inlined frame.
 
 A good end-to-end check is the compiler itself: emit its IR with
 `salam llvm compiler/main.salam`, build that IR with the native backend, and
@@ -376,8 +406,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` gives line tables and function ranges only, with no variable
-  locations or inlined-frame records, and only on ELF targets.
+- `-g` covers lines, inlined frames, locals and arguments on ELF targets.
+  Variables of inlined functions and Windows debug info are still missing.
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.

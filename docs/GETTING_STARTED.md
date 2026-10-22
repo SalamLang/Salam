@@ -228,7 +228,7 @@ name), so `salam serve` picks it up directly.
 ### 🧩 Official packages
 
 Many packages are maintained with Salam but do not ship with it, so a fresh
-install stays small: the database clients (`db.sqlite`, `db.postgres`,
+install stays small: the database clients (`db.sqlite`, `db.postgres`, `db.mysql`,
 `db.redis`, `db.opensearch`, ...), machine learning (`tensor`, `nn`, `llm`, ...), audio,
 the network services (`grpc`, `ftp`, `ssh`, `net.websocket`,
 `net.http.swagger`, ...), `webview`, `opencv` and `excel`.

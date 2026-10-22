@@ -303,7 +303,9 @@ use them:
 pub func Trim(s: str): str: ret s.trim() end
 ```
 
-Compile non-English source with `--lang=fa`.
+Compile non-English source with `--lang=fa`, or start a Persian file with
+`// زبان: فارسی` (English files: `// lang: en`). Mixed forms such as
+`// lang: fa` are rejected.
 
 ## 11. `switch` vs `match`
 

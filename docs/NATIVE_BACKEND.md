@@ -78,7 +78,9 @@ then goes through:
    remainder become unsigned when the dividend is provably non-negative, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
 5. Block merging and jump threading, which turns short-circuit `and`/`or`
-   chains into direct branches. A range check `x >= 0 and x < n` with `n`
+   chains into direct branches. A block that only compares a phi with a
+   constant and branches is bypassed by every predecessor that feeds the phi
+   a constant. A range check `x >= 0 and x < n` with `n`
    known non-negative becomes one unsigned compare.
 6. If-conversion of small branches (up to four instructions per arm) into
    `cmov`, except where the result flows into a later address, since a `cmov`
@@ -162,7 +164,10 @@ Loads of internal globals that the module never writes (how llvmgen emits a
 `const`) fold to their initializer, and so do small copies out of constant
 strings, so `println "hello"` stores the bytes as immediates. Instruction selection folds address
 arithmetic into memory operands, folds a
-single-use load into the ALU instruction or compare that consumes it, fuses a
+single-use load into the ALU instruction or compare that consumes it, loads a
+32-bit value with `movslq` when it is also sign-extended (the low half serves
+the 32-bit uses), builds an `insertvalue` chain that is returned directly in
+the caller's result buffer, fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
 reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two

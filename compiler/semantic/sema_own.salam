@@ -930,7 +930,7 @@ func ow_use_prefix(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: i
     end
 end
 
-func ow_free(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int, reset: bool):
+func ow_free(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int, reset: bool, weak: bool):
     ow_materialize(o, st, key)
     mut dt := 0 - 1
     dv := ow_key_verdict(o, st, key, dt)
@@ -978,7 +978,7 @@ func ow_free(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int, re
             end
         end
     end
-    strong := must_ok and live_n == 1 and not summary
+    strong := must_ok and live_n == 1 and not summary and not weak
     mut flag := OW_WEAK
     if strong:
         flag = OW_FREED
@@ -1115,22 +1115,178 @@ func ow_is_mem_pkg(s &: Sema, a &: at.Ast, nid: int): bool:
     ret pv.kind == SYM_PACKAGE and str.Equals(pv.pkgname, "mem")
 end
 
+func ow_move_deep(o &: Ow, st &: OwSt, nid: int, key: int, self_too: bool):
+    ow_materialize(o, st, key)
+    mut base := Vector {} as Vector<int>
+    ow_toks(o, st, key, base)
+    mut hit := Vector {} as Vector<int>
+    mut weak := Vector {} as Vector<bool>
+    repeat st.pt.len() in i:
+        t := st.pt.get(i)
+        pk := st.pk.get(i)
+        if o.tkind.get(t) == OW_TK_NULL or ow_has(hit, t):
+            continue
+        end
+        if not self_too and (pk == key or ow_under(o, pk, key)):
+            continue
+        end
+        repeat base.len() in j:
+            b := base.get(j)
+            if t == b or ow_tok_under(o, t, b):
+                hit.push(t)
+                weak.push(ow_tok_summary(o, b) or base.len() > 1)
+                break
+            end
+        end
+    end
+    repeat hit.len() in k:
+        t2 := hit.get(k)
+        f2 := weak.get(k) ? OW_WEAK : OW_MOVED
+        repeat st.pk.len() in m:
+            mk := st.pk.get(m)
+            if st.pt.get(m) == t2 and (self_too or (mk != key and not ow_under(o, mk, key))):
+                cur := st.pf.get(m)
+                if cur == 0 or cur == OW_WEAK:
+                    st.pf.set(m, f2)
+                end
+            end
+        end
+        if f2 == OW_MOVED:
+            ow_site_set(o, st, t2, nid, OW_MOVED)
+        end
+    end
+    if not self_too:
+        mut q := 0
+        until q < st.pk.len():
+            qk := st.pk.get(q)
+            if ow_under(o, qk, key):
+                _a := st.pk.remove_at(q)
+                _b := st.pt.remove_at(q)
+                _c := st.pf.remove_at(q)
+            else:
+                q += 1
+            end
+        end
+    end
+    hit.free()
+    weak.free()
+    base.free()
+end
+
+func ow_is_pkg_obj(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    pk := scope_lookup(s, s.global, at.At(a, nid).name)
+    ret pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE
+end
+
+func ow_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
+    if not s.sum_ready:
+        ret SU_READ
+    end
+    e := su_arg_effect(s, a, call, slot)
+    if e == SU_FREE and SuArgMustFree(s, call, slot):
+        ret SU_FREE + 100
+    end
+    if e == SU_FREE or e == SU_GROW:
+        ret e
+    end
+    ret SU_READ
+end
+
+func ow_apply(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, key: int, eff: int, byval: bool, slot: int):
+    if key < 0 or not ow_rel(o, key):
+        ret
+    end
+    if eff == SU_FREE:
+        ow_free(s, o, a, st, call, key, false, true)
+    else eff == SU_FREE + 100:
+        ow_free(s, o, a, st, call, key, false, false)
+    else eff == SU_GROW:
+        gf := SuGrowFields(s, call, slot)
+        if byval or str.Equals(gf, "*"):
+            ow_move_deep(o, st, call, key, byval)
+        else:
+            mut parts := str.Split(gf, ",")
+            repeat parts.len() in i:
+                if str.Len(parts.get(i)) > 0:
+                    ow_move_deep(o, st, call, ow_key(o, key, parts.get(i)), false)
+                end
+            end
+            parts.free()
+        end
+    end
+end
+
+func ow_alias_result(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, rkey: int, out &: Vector<int>):
+    if not s.sum_ready:
+        ret
+    end
+    fi := su_fn_idx(s, su_call_decl(s, call))
+    if fi < 0:
+        ret
+    end
+    slot := s.sum_ralias.get(fi)
+    if slot < 0:
+        ret
+    end
+    mut key := 0 - 1
+    if slot == 0:
+        key = rkey
+    else slot - 1 < at.ChildCount(a, call):
+        key = ow_path(o, a, at.Child(a, call, slot - 1))
+    end
+    if key < 0 or not ow_rel(o, key):
+        ret
+    end
+    mut cur := Vector {} as Vector<int>
+    ow_toks(o, st, key, cur)
+    chain := s.sum_rchain.get(fi)
+    if str.Len(chain) > 0:
+        mut names := str.Split(chain, ".")
+        repeat names.len() in i:
+            mut nx := Vector {} as Vector<int>
+            repeat cur.len() in j:
+                _f := ow_add(nx, ow_field_tok(o, cur.get(j), names.get(i)))
+            end
+            cur.free()
+            cur = nx
+        end
+        names.free()
+    end
+    repeat cur.len() in k:
+        mut t := cur.get(k)
+        if s.sum_rref.get(fi):
+            t = ow_field_tok(o, t, "[]")
+            o.tsumm.set(t, true)
+        end
+        _a := ow_add(out, t)
+    end
+    cur.free()
+end
+
 func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     repeat at.ChildCount(a, nid) in i:
         arg := at.Child(a, nid, i)
         if arg == 0:
             continue
         end
+        eff := ow_effect(s, a, nid, i + 1)
         if at.At(a, arg).ref_arg:
             key := ow_path(o, a, arg)
             if key >= 0:
                 ow_use_prefix(s, o, a, st, arg, key)
+                ow_apply(s, o, a, st, nid, key, eff, false, i + 1)
                 ow_write_fresh(o, st, key, arg)
                 continue
             end
         end
         mut t := ow_expr(s, o, a, st, arg)
         t.free()
+        if eff != SU_READ:
+            ow_apply(s, o, a, st, nid, ow_path(o, a, arg), eff, ow_is_container(at.At(a, arg).type_str), i + 1)
+        end
         if str.EndsWith(at.At(a, arg).type_str, "*"):
             pk := ow_path(o, a, arg)
             if pk >= 0:
@@ -1143,8 +1299,18 @@ end
 func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>:
     mut out := Vector {} as Vector<int>
     callee := at.At(a, nid).a
-    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER:
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER or ow_is_pkg_obj(s, a, at.At(a, callee).a):
+        if callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER and str.Equals(at.At(a, callee).name, "Free") and at.ChildCount(a, nid) == 1 and ow_is_mem_pkg(s, a, at.At(a, callee).a):
+            farg := ow_strip_cast(a, at.Child(a, nid, 0))
+            fk := ow_path(o, a, farg)
+            if fk >= 0:
+                ow_use_prefix(s, o, a, st, nid, fk)
+                ow_free(s, o, a, st, nid, fk, false, false)
+                ret out
+            end
+        end
         ow_args(s, o, a, st, nid)
+        ow_alias_result(s, o, a, st, nid, 0 - 1, out)
         ret out
     end
     mname := at.At(a, callee).name
@@ -1155,7 +1321,7 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
         fkey := ow_path(o, a, arg)
         if fkey >= 0:
             ow_use_prefix(s, o, a, st, nid, fkey)
-            ow_free(s, o, a, st, nid, fkey, false)
+            ow_free(s, o, a, st, nid, fkey, false, false)
             ret out
         end
     end
@@ -1174,7 +1340,7 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
     cont := ow_is_container(rts)
     if str.Equals(mname, "free") and argc == 0 and (cont or str.StartsWith(rts, "dyn ")):
         ow_use_prefix(s, o, a, st, nid, eff)
-        ow_free(s, o, a, st, nid, eff, cont)
+        ow_free(s, o, a, st, nid, eff, cont, false)
         ret out
     end
     ow_use(s, o, a, st, obj, rkey)
@@ -1196,6 +1362,8 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
         end
     else:
         ow_unfree_under(o, st, rkey)
+        ow_apply(s, o, a, st, nid, rkey, ow_effect(s, a, nid, 0), false, 0)
+        ow_alias_result(s, o, a, st, nid, rkey, out)
     end
     ret out
 end
@@ -1340,6 +1508,10 @@ func ow_expr(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
     ret out
 end
 
+func ow_scalar_ts(ts: str): bool:
+    ret str.Equals(ts, "int") or str.Equals(ts, "i64") or str.Equals(ts, "i32") or str.Equals(ts, "bool") or str.Equals(ts, "u8") or str.Equals(ts, "u64") or str.Equals(ts, "u32") or str.Equals(ts, "f64") or str.Equals(ts, "f32") or str.Equals(ts, "char") or str.Equals(ts, "i8") or str.Equals(ts, "i16") or str.Equals(ts, "u16") or str.Equals(ts, "usize")
+end
+
 func ow_decl(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     name := at.At(a, nid).name
     init := at.At(a, nid).a
@@ -1352,7 +1524,10 @@ func ow_decl(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     key := ow_key(o, 0 - 1, name)
     mut ts := ow_expr(s, o, a, st, init)
     src := ow_path(o, a, init)
-    if src >= 0 and src != key and ts.len() > 0:
+    if init != 0 and ow_scalar_ts(at.At(a, init).type_str):
+        ts.clear()
+    end
+    if src >= 0 and src != key and ts.len() > 0 and not ow_scalar_ts(at.At(a, init).type_str):
         ow_write_from(o, st, key, src)
     else:
         if ts.len() == 0:
@@ -1382,7 +1557,10 @@ func ow_assign(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
         ts.clear()
     end
     src := ow_path(o, a, rhs)
-    if op == tok.TK_ASSIGN and src >= 0 and src != key and ts.len() > 0:
+    if rhs != 0 and ow_scalar_ts(at.At(a, rhs).type_str):
+        ts.clear()
+    end
+    if op == tok.TK_ASSIGN and src >= 0 and src != key and ts.len() > 0 and not ow_scalar_ts(at.At(a, rhs).type_str):
         ow_write_from(o, st, key, src)
     else:
         if ts.len() == 0:
@@ -1817,7 +1995,7 @@ func ow_region(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, body: int):
     st = out
 end
 
-func ow_scan(a &: at.Ast, nid: int, in_defer: bool, warn: bool, flags &: Vector<int>):
+func ow_scan(s &: Sema, a &: at.Ast, nid: int, in_defer: bool, warn: bool, flags &: Vector<int>):
     if nid == 0:
         ret
     end
@@ -1836,6 +2014,16 @@ func ow_scan(a &: at.Ast, nid: int, in_defer: bool, warn: bool, flags &: Vector<
             flags.set(2, 1)
         end
     end
+    if k == at.AST_CALL and not dfr:
+        repeat at.ChildCount(a, nid) in mi:
+            if SuArgMustFree(s, nid, mi + 1):
+                flags.set(0, 1)
+            end
+        end
+        if SuArgMustFree(s, nid, 0):
+            flags.set(0, 1)
+        end
+    end
     if k == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER:
         mn := at.At(a, n.a).name
         if str.Equals(mn, "free") or str.Equals(mn, "Free"):
@@ -1852,21 +2040,21 @@ func ow_scan(a &: at.Ast, nid: int, in_defer: bool, warn: bool, flags &: Vector<
     nb := n.b
     nc := n.c
     nd := n.d
-    ow_scan(a, na, dfr, warn, flags)
-    ow_scan(a, nb, dfr, warn, flags)
-    ow_scan(a, nc, dfr, warn, flags)
-    ow_scan(a, nd, dfr, warn, flags)
+    ow_scan(s, a, na, dfr, warn, flags)
+    ow_scan(s, a, nb, dfr, warn, flags)
+    ow_scan(s, a, nc, dfr, warn, flags)
+    ow_scan(s, a, nd, dfr, warn, flags)
     repeat at.ChildCount(a, nid) in i:
-        ow_scan(a, at.Child(a, nid, i), dfr, warn, flags)
+        ow_scan(s, a, at.Child(a, nid, i), dfr, warn, flags)
     end
 end
 
-func ow_worth(a &: at.Ast, body: int, warn: bool): bool:
+func ow_worth(s &: Sema, a &: at.Ast, body: int, warn: bool): bool:
     mut flags := Vector {} as Vector<int>
     flags.push(0)
     flags.push(0)
     flags.push(0)
-    ow_scan(a, body, false, warn, flags)
+    ow_scan(s, a, body, false, warn, flags)
     hit := flags.get(0) != 0 or (flags.get(1) != 0 and flags.get(2) != 0)
     flags.free()
     ret hit
@@ -1890,7 +2078,7 @@ func ow_path_root(a &: at.Ast, nid: int): str:
     ret ""
 end
 
-func ow_rhs_roots(a &: at.Ast, nid: int, out &: Vector<str>):
+func ow_rhs_roots(s &: Sema, a &: at.Ast, nid: int, out &: Vector<str>):
     if nid == 0:
         ret
     end
@@ -1911,24 +2099,40 @@ func ow_rhs_roots(a &: at.Ast, nid: int, out &: Vector<str>):
                 end
             end
         end
+        if s.sum_ready:
+            fi := su_fn_idx(s, su_call_decl(s, nid))
+            if fi >= 0 and s.sum_ralias.get(fi) >= 0:
+                sl := s.sum_ralias.get(fi)
+                mut src := 0
+                if sl == 0 and cal != 0 and at.KindOf(a, cal) == at.AST_MEMBER:
+                    src = at.At(a, cal).a
+                else sl > 0 and sl - 1 < at.ChildCount(a, nid):
+                    src = at.Child(a, nid, sl - 1)
+                end
+                ar := ow_path_root(a, src)
+                if src != 0 and str.Len(ar) > 0:
+                    out.push(ar)
+                end
+            end
+        end
         ret
     end
     if k == at.AST_TERNARY:
-        ow_rhs_roots(a, at.At(a, nid).b, out)
-        ow_rhs_roots(a, at.At(a, nid).c, out)
+        ow_rhs_roots(s, a, at.At(a, nid).b, out)
+        ow_rhs_roots(s, a, at.At(a, nid).c, out)
         ret
     end
     if k == at.AST_STRUCT_LIT:
         repeat at.ChildCount(a, nid) in i:
             fi := at.Child(a, nid, i)
             if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
-                ow_rhs_roots(a, at.At(a, fi).a, out)
+                ow_rhs_roots(s, a, at.At(a, fi).a, out)
             end
         end
     end
 end
 
-func ow_rel_walk(o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, er &: Vector<str>):
+func ow_rel_walk(s &: Sema, o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, er &: Vector<str>):
     if nid == 0:
         ret
     end
@@ -1953,6 +2157,26 @@ func ow_rel_walk(o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, 
             end
         end
     end
+    if k == at.AST_CALL and s.sum_ready:
+        repeat at.ChildCount(a, nid) in ci:
+            ce := su_arg_effect(s, a, nid, ci + 1)
+            if (warn and (ce == SU_GROW or ce == SU_FREE)) or SuArgMustFree(s, nid, ci + 1):
+                cr := ow_path_root(a, at.Child(a, nid, ci))
+                if str.Len(cr) > 0 and not ow_str_in(o.rel, cr):
+                    o.rel.push(cr)
+                end
+            end
+        end
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and not ow_is_pkg_obj(s, a, at.At(a, n.a).a):
+            te := su_arg_effect(s, a, nid, 0)
+            if (warn and (te == SU_GROW or te == SU_FREE)) or SuArgMustFree(s, nid, 0):
+                tr := ow_path_root(a, at.At(a, n.a).a)
+                if str.Len(tr) > 0 and not ow_str_in(o.rel, tr):
+                    o.rel.push(tr)
+                end
+            end
+        end
+    end
     if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL or k == at.AST_ASSIGN:
         mut lroot := n.name
         mut rhs := n.a
@@ -1962,7 +2186,7 @@ func ow_rel_walk(o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, 
         end
         if str.Len(lroot) > 0 and rhs != 0:
             mut rs := Vector {} as Vector<str>
-            ow_rhs_roots(a, rhs, rs)
+            ow_rhs_roots(s, a, rhs, rs)
             repeat rs.len() in i:
                 el.push(lroot)
                 er.push(rs.get(i))
@@ -1981,19 +2205,19 @@ func ow_rel_walk(o &: Ow, a &: at.Ast, nid: int, warn: bool, el &: Vector<str>, 
     nb := n.b
     nc := n.c
     nd := n.d
-    ow_rel_walk(o, a, na, warn, el, er)
-    ow_rel_walk(o, a, nb, warn, el, er)
-    ow_rel_walk(o, a, nc, warn, el, er)
-    ow_rel_walk(o, a, nd, warn, el, er)
+    ow_rel_walk(s, o, a, na, warn, el, er)
+    ow_rel_walk(s, o, a, nb, warn, el, er)
+    ow_rel_walk(s, o, a, nc, warn, el, er)
+    ow_rel_walk(s, o, a, nd, warn, el, er)
     repeat at.ChildCount(a, nid) in j:
-        ow_rel_walk(o, a, at.Child(a, nid, j), warn, el, er)
+        ow_rel_walk(s, o, a, at.Child(a, nid, j), warn, el, er)
     end
 end
 
-func ow_relevance(o &: Ow, a &: at.Ast, body: int, warn: bool):
+func ow_relevance(s &: Sema, o &: Ow, a &: at.Ast, body: int, warn: bool):
     mut el := Vector {} as Vector<str>
     mut er := Vector {} as Vector<str>
-    ow_rel_walk(o, a, body, warn, el, er)
+    ow_rel_walk(s, o, a, body, warn, el, er)
     mut grew := true
     until grew:
         grew = false
@@ -2039,13 +2263,13 @@ pub func SemaCheckOwnership(s &: Sema, a &: at.Ast, fnid: int):
     if body == 0:
         ret
     end
-    if not ow_worth(a, body, g_sm_ownership >= 2):
+    if g_sm_ownership < 2 and not ow_worth(s, a, body, false):
         ret
     end
     mut o := Ow {}
     o.mode = g_sm_ownership
     o.report = true
-    ow_relevance(o, a, body, g_sm_ownership >= 2)
+    ow_relevance(s, o, a, body, g_sm_ownership >= 2)
     repeat at.ChildCount(a, fnid) in i:
         c := at.Child(a, fnid, i)
         if c != 0 and at.KindOf(a, c) == at.AST_PARAM:

@@ -31,10 +31,13 @@ time**, with:
 
 ## How it works
 
-The check is a flow-sensitive dataflow pass that runs once per function, right
-after definite initialization (`sema_check_fn.salam`). It only runs on
-functions that free something, take a `.ref()` or `.iter()`, or use `defer`,
-so most functions cost nothing.
+The check is a flow-sensitive dataflow pass that runs once per function. Each
+function is registered right after definite initialization
+(`sema_check_fn.salam`) and checked once the summaries are ready
+(`SemaOwnPost`). It only runs on functions that free something, call a
+function whose summary says it always frees an argument (see "Function
+summaries"), free in a `defer` and return a value, or (in warn mode) take a
+`.ref()` or `.iter()`, so most functions cost nothing.
 
 ### Control-flow graph
 

@@ -13,6 +13,7 @@ include lp "../langpack.salam"
 include src "../source.salam"
 include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
+include pth "../sal_path.salam"
 
 func scratch_import_node(a &: at.Ast): int:
     id := at.NewNode(a, at.AST_IMPORT)
@@ -358,6 +359,76 @@ func load_imports(s &: Sema, a &: at.Ast, program: int):
     s.file = save_file
 end
 
+func std_package_path(name: str): str:
+    root := get_stdlib_root()
+    if str.Len(root) == 0 or str.Len(name) == 0 or str.IndexOf(name, " ") >= 0 or str.IndexOf(name, ".") >= 0:
+        ret ""
+    end
+    base := pth.PathJoin(root, "std")
+    if os.Exists(pth.PathJoin(pth.PathJoin(base, name), name + ".salam")):
+        ret name
+    end
+    mut dirs := os.ListDir(base)
+    defer dirs.free()
+    each d in dirs:
+        if os.Exists(pth.PathJoin(pth.PathJoin(pth.PathJoin(base, d), name), name + ".salam")):
+            ret d + "." + name
+        end
+    end
+    ret ""
+end
+
+func queue_import_fix(s &: Sema, a &: at.Ast, name: str):
+    if not lg.Recording() or s.program == 0:
+        ret
+    end
+    path := std_package_path(name)
+    if str.Len(path) == 0:
+        ret
+    end
+    pl := at.Get(a, s.program).list
+    mut last := 0
+    mut first := 0
+    repeat 2 in pass:
+        repeat pl.len() in i:
+            nid := pl.get(i)
+            n := at.Get(a, nid)
+            same := pass == 0 ? str.Equals(n.src_file, s.file) : str.Len(n.src_file) == 0
+            if not same or n.synthetic:
+                continue
+            end
+            if first == 0:
+                first = nid
+            end
+            if n.kind == at.AST_IMPORT:
+                last = nid
+            end
+        end
+        if first != 0:
+            break
+        end
+    end
+    if first == 0:
+        ret
+    end
+    mut f := lg.Fix {}
+    f.title = co.Format1(i18.Tr("Add '%s'"), co.ArgStr("%s " + path))
+    f.kw = tok.TK_KW_IMPORT
+    f.preferred = true
+    if last != 0:
+        sp := span_of(a, last)
+        f.index = sp.begin.index as int
+        f.mode = lg.FIX_LINE_AFTER
+        f.text = "%s " + path + "\n"
+    else:
+        sp := span_of(a, first)
+        f.index = sp.begin.index as int
+        f.mode = lg.FIX_LINE_BEFORE
+        f.text = "%s " + path + "\n\n"
+    end
+    queue_fix(f)
+end
+
 func sema_check_unused_imports(s &: Sema, a &: at.Ast):
     entry := lp.EntryFor(s.lang)
     gsc := scope_at(s, s.global)
@@ -397,6 +468,11 @@ func sema_check_unused_imports(s &: Sema, a &: at.Ast):
         if bv.kind != SYM_PACKAGE or bv.used:
             continue
         end
+        mut rf := fix_at(span_of(a, iid))
+        rf.title = i18.Tr("Remove the import")
+        rf.mode = lg.FIX_LINES
+        rf.preferred = true
+        queue_fix(rf)
         serr(
             s, 82, span_of(a, iid), co.Format1(
                 i18.Tr("unused import '%s': none of its members are used; remove the import, or use the member you imported it for; starting the name with '_' hides this error but is not advised"), co.ArgStr(local)

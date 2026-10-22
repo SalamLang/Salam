@@ -19,6 +19,8 @@ import str
 include co "../sal_core.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
+include lg "../logger.salam"
+include tok "../token.salam"
 
 pub const SUGGEST_ANY := 0
 pub const SUGGEST_FUNC := 1
@@ -27,6 +29,11 @@ pub const SUGGEST_TYPE := 3
 pub const SUGGEST_FIELD := 4
 
 const SUGGEST_MAX := 3
+
+mut g_sug_names := Vector {} as Vector<str>
+mut g_sug_query := ""
+mut g_sug_tail := ""
+mut g_fix_queue := Vector {} as Vector<lg.Fix>
 
 func sug_units(name: str): Vector<int>:
     mut out := Vector {} as Vector<int>
@@ -155,6 +162,96 @@ func sug_display_name(s &: Sema, a &: at.Ast, m: Symbol): str:
     ret m.name
 end
 
+func sug_remember(name: str, names: Vector<str>, n: int, tail: str):
+    if not lg.Recording():
+        ret
+    end
+    g_sug_names.clear()
+    repeat n in i:
+        g_sug_names.push(names.get(i))
+    end
+    g_sug_query = name
+    g_sug_tail = tail
+end
+
+func fix_at(sp: co.SrcSpan): lg.Fix:
+    mut f := lg.Fix {}
+    f.index = sp.begin.index as int
+    mut length := sp.length as int
+    if length == 0 and sp.finish.index > sp.begin.index:
+        length = (sp.finish.index - sp.begin.index) as int
+    end
+    f.length = length
+    ret f
+end
+
+func queue_fix(f: lg.Fix):
+    if lg.Recording():
+        g_fix_queue.push(f)
+    end
+end
+
+func attach_fixes(n0: int, sp: co.SrcSpan, msg: str):
+    if lg.Recording() and lg.RecordCount() > n0:
+        if g_sug_names.len() > 0 and str.Len(g_sug_tail) > 0 and str.Contains(msg, g_sug_tail):
+            repeat g_sug_names.len() in i:
+                mut f := fix_at(sp)
+                f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(g_sug_names.get(i)))
+                f.find = g_sug_query
+                f.text = g_sug_names.get(i)
+                f.preferred = i == 0
+                lg.AddFix(n0, f)
+            end
+            g_sug_names.clear()
+        end
+        each f in g_fix_queue:
+            lg.AddFix(n0, f)
+        end
+    end
+    g_fix_queue.clear()
+end
+
+func queue_pub_fix(s &: Sema, a &: at.Ast, sym: int):
+    if not lg.Recording() or sym == 0:
+        ret
+    end
+    did := sym_at(s, sym).decl
+    if did == 0 or at.Get(a, did).synthetic:
+        ret
+    end
+    mut f := fix_at(span_of(a, did))
+    f.length = 0
+    f.file = at.Get(a, did).src_file
+    f.title = i18.Tr("Add '%s'")
+    f.kw = tok.TK_KW_PUB
+    f.text = "%s "
+    f.preferred = true
+    queue_fix(f)
+end
+
+func sema_suggest_scope(s &: Sema, a &: at.Ast, sc: int, name: str): str:
+    mut cands := Vector {} as Vector<str>
+    defer cands.free()
+    mut cur := sc
+    mut guard := 0
+    until cur != 0 and guard < 4096:
+        scv := scope_at(s, cur)
+        repeat scv.symbols.len() in i:
+            m := sym_at(s, scv.symbols.get(i))
+            if m.kind == SYM_TYPEIMPL or m.kind == SYM_FIELD or m.kind == SYM_METHOD or str.Len(m.name) == 0 or byte_at(m.name, 0) == 95 or str.IndexOf(m.name, "__") >= 0 or str.IndexOf(m.name, "<") >= 0 or m.generic_args.len() > 0:
+                continue
+            end
+            if m.decl != 0 and at.Get(a, m.decl).synthetic:
+                continue
+            end
+            cands.push(sug_display_name(s, a, m))
+        end
+        cur = scv.parent
+        guard += 1
+    end
+    ret sema_suggest_list(name, cands)
+end
+
 func sema_suggest(s &: Sema, a &: at.Ast, members: int, name: str, want: int, need_pub: bool): str:
     if members == 0 or str.Len(name) == 0:
         ret ""
@@ -232,7 +329,9 @@ func sema_suggest(s &: Sema, a &: at.Ast, members: int, name: str, want: int, ne
         end
         k += 1
     end
-    ret co.Format1(i18.Tr("; did you mean %s?"), co.ArgStr(list))
+    tail := co.Format1(i18.Tr("; did you mean %s?"), co.ArgStr(list))
+    sug_remember(name, names, n, tail)
+    ret tail
 end
 
 func sema_suggest_list(name: str, cands: Vector<str>): str:
@@ -301,5 +400,7 @@ func sema_suggest_list(name: str, cands: Vector<str>): str:
         end
         k += 1
     end
-    ret co.Format1(i18.Tr("; did you mean %s?"), co.ArgStr(list))
+    tail := co.Format1(i18.Tr("; did you mean %s?"), co.ArgStr(list))
+    sug_remember(name, names, n, tail)
+    ret tail
 end

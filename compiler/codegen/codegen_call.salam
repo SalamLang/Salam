@@ -1083,7 +1083,109 @@ func call_member(
     ret call_method(g, s, a, n, obj, callee, objts)
 end
 
+func arg_has_effect(a &: at.Ast, n: int, depth: int): bool:
+    if n == 0 or depth > 64:
+        ret false
+    end
+    nn := at.Get(a, n)
+    k := nn.kind
+    if k == at.AST_LAMBDA:
+        ret false
+    end
+    if k == at.AST_CALL or k == at.AST_ASSIGN or k == at.AST_INCDEC:
+        ret true
+    end
+    if arg_has_effect(a, nn.a, depth + 1) or arg_has_effect(a, nn.b, depth + 1) or arg_has_effect(a, nn.c, depth + 1) or arg_has_effect(a, nn.d, depth + 1):
+        ret true
+    end
+    each c in nn.list:
+        if arg_has_effect(a, c, depth + 1):
+            ret true
+        end
+    end
+    ret false
+end
+
+func arg_reads_state(a &: at.Ast, n: int, depth: int): bool:
+    if n == 0 or depth > 64:
+        ret false
+    end
+    nn := at.Get(a, n)
+    k := nn.kind
+    if k == at.AST_IDENTIFIER or k == at.AST_LAMBDA or k == at.AST_CALL or k == at.AST_MEMBER or k == at.AST_INDEX:
+        ret true
+    end
+    if arg_reads_state(a, nn.a, depth + 1) or arg_reads_state(a, nn.b, depth + 1) or arg_reads_state(a, nn.c, depth + 1) or arg_reads_state(a, nn.d, depth + 1):
+        ret true
+    end
+    each c in nn.list:
+        if arg_reads_state(a, c, depth + 1):
+            ret true
+        end
+    end
+    ret false
+end
+
+func call_order_upto(a &: at.Ast, n: int): int:
+    args := at.Get(a, n).list
+    if args.len() < 2:
+        ret 0 - 1
+    end
+    mut last_effect := 0 - 1
+    repeat args.len() in i:
+        if arg_has_effect(a, args.get(i), 0):
+            last_effect = i
+        end
+    end
+    if last_effect < 0:
+        ret 0 - 1
+    end
+    repeat args.len() in j:
+        if j != last_effect and arg_reads_state(a, args.get(j), 0):
+            ret last_effect
+        end
+    end
+    ret 0 - 1
+end
+
+func cg_call_ordered(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, upto: int): str:
+    args := at.Get(a, n).list
+    repeat upto + 1 in i:
+        an := at.Get(a, args.get(i))
+        if an.ref_arg or an.ref_arg_ptr or str.Len(an.type_str) == 0 or str.Len(cg_array_ctype(an.type_str)) > 0 or str.Equals(an.type_str, "void"):
+            ret ""
+        end
+    end
+    mut pre := ""
+    mut mine := Vector {} as Vector<int>
+    defer mine.free()
+    repeat upto + 1 in i2:
+        argid := args.get(i2)
+        g.tmpn += 1
+        tmp := "__o" + g.tmpn
+        pre = pre + cg_decl_cn(at.Get(a, argid).type_str, tmp) + " = " + cg_expr_value(g, s, a, argid) + "; "
+        g.arg_ovr.put(argid, tmp)
+        mine.push(argid)
+    end
+    body := cg_call_dispatch(g, s, a, n)
+    each m in mine:
+        g.arg_ovr.remove(m)
+    end
+    ret "({ " + pre + body + "; })"
+end
+
 func cg_call(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    upto := call_order_upto(a, n)
+    if upto >= 0:
+        ordered := cg_call_ordered(g, s, a, n, upto)
+        if str.Len(ordered) > 0:
+            ret ordered
+        end
+    end
+    ret cg_call_dispatch(g, s, a, n)
+end
+
+func cg_call_dispatch(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     calleeid := at.Get(a, n).a
     if calleeid != 0:
         callee := at.Get(a, calleeid)

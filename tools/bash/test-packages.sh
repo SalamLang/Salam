@@ -97,6 +97,13 @@ pub func Hello(n: str): str:
     ret "hey " + n
 end
 EOF
+cat >"$g/greet2.salam" <<'EOF'
+package greet2
+
+pub func Hello(n: str): str:
+    ret "hey " + n
+end
+EOF
 printf '[package]\nname = "greet"\n' >"$g/salam.toml"
 commit_tag github.com/fixture/greet v2.0.0
 
@@ -163,8 +170,83 @@ printf '[[package]]\nname = "github.com/fixture/greet"\ndescription = "Says hell
 SALAM_REGISTRY="$work/registry.toml" run "$salam" search greeting
 check "search reads the registry" "$(has 'github.com/fixture/greet  Says hello' "$work/last.log" && echo 0 || echo 1)"
 
+mkdir -p "$work/app2"
+cd "$work/app2" || exit 1
+printf '[package]\nname = "app2"\n' >salam.toml
+run "$salam" add 'github.com/fixture/greet@^1.0'
+check "add records a version range" "$(has '"github.com/fixture/greet" = "^1.0"' salam.toml && echo 0 || echo 1)"
+check "the lock takes the newest release in the range" "$(has 'version = "v1.1.0"' salam.lock && echo 0 || echo 1)"
+run "$salam" add github.com/fixture/greet/v2
+check "a /v2 path picks major 2" "$(has '"github.com/fixture/greet/v2" = "v2.0.0"' salam.toml && echo 0 || echo 1)"
+cat >main.salam <<'EOF'
+import "github.com/fixture/greet"
+import g2 "github.com/fixture/greet/v2"
+
+func main:
+    println greet.Hello("one")
+    println g2.Hello("two")
+end
+EOF
+run "$salam" run --log-level=error
+check "major 1 and major 2 build side by side" "$(has '^hi one!$' "$work/last.log" && has '^hey two$' "$work/last.log" && echo 0 || echo 1)"
+
+mkdir -p "$work/app3"
+cd "$work/app3" || exit 1
+printf '[package]\nname = "app3"\n' >salam.toml
+run "$salam" add github.com/fixture/greet@v1.0.0
+(cd "$g" && git tag -d v1.0.0 >/dev/null && echo '// moved' >>greet.salam && git commit -qam moved && git tag v1.0.0)
+rm -rf "$SALAM_PKG/github.com/fixture/greet@v1.0.0" salam.lock
+run "$salam" add github.com/fixture/greet@v1.0.0
+check "a moved tag does not match the first download" "$(has 'does not match the copy this machine downloaded first' "$work/last.log" && echo 0 || echo 1)"
+cd "$work" || exit 1
+
 run "$salam" deps clean
 check "deps clean empties the cache" "$([ ! -d "$SALAM_PKG/github.com" ] && echo 0 || echo 1)"
+
+platform=""
+case "$(uname -s 2>/dev/null)-$(uname -m 2>/dev/null)" in
+Linux-x86_64) platform=linux-x86_64 ;;
+Linux-aarch64) platform=linux-aarch64 ;;
+Darwin-arm64) platform=macos-aarch64 ;;
+Darwin-x86_64) platform=macos-x86_64 ;;
+esac
+if [ -n "$platform" ] && command -v python3 >/dev/null 2>&1 && command -v cc >/dev/null 2>&1 && command -v ar >/dev/null 2>&1; then
+    mkdir -p "$work/nat/lib" "$work/natsrv"
+    printf 'int fastc_twice(int x) { return 2 * x; }\n' >"$work/nat/fastc.c"
+    cc -c -fPIC "$work/nat/fastc.c" -o "$work/nat/fastc.o" && ar rcs "$work/nat/lib/libfastc.a" "$work/nat/fastc.o"
+    (cd "$work/nat" && tar -czf "$work/natsrv/libfastc.tar.gz" lib)
+    nsum=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$work/natsrv/libfastc.tar.gz")
+    nport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    (cd "$work/natsrv" && exec python3 -m http.server "$nport" --bind 127.0.0.1 >/dev/null 2>&1) &
+    nserver=$!
+    sleep 1
+    repo github.com/fixture/fast
+    f="$work/remote/github.com/fixture/fast"
+    printf '[package]\nname = "fast"\n\n[native.fastc.prebuilt.%s]\nurl = "http://127.0.0.1:%s/libfastc.tar.gz"\nsha256 = "%s"\nlib = "lib/libfastc.a"\n' "$platform" "$nport" "$nsum" >"$f/salam.toml"
+    cat >"$f/fast.salam" <<'EOF'
+package fast
+
+link static "fastc"
+
+extern:
+    func fastc_twice(x: int): int
+end
+
+pub func Twice(x: int): int:
+    ret fastc_twice(x)
+end
+EOF
+    commit_tag github.com/fixture/fast v1.0.0
+    mkdir -p "$work/natapp"
+    cd "$work/natapp" || exit 1
+    printf '[package]\nname = "natapp"\n' >salam.toml
+    printf 'import "github.com/fixture/fast"\n\nfunc main:\n    println fast.Twice(21)\nend\n' >main.salam
+    run "$salam" add github.com/fixture/fast
+    run "$salam" run --backend=c --log-level=error
+    check "a prebuilt native library is downloaded and linked" "$(has '^42$' "$work/last.log" && echo 0 || echo 1)"
+    kill "$nserver" 2>/dev/null
+    cd "$work" || exit 1
+fi
 
 version=$(tr -d ' \t\r\n' <"$root/VERSION")
 if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then

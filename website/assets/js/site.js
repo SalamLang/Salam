@@ -400,6 +400,85 @@
       return { status: res.status, data };
     };
 
+    const phaseLabel = salamat.querySelector(".salamat-phase");
+    const setPhase = (phase) => {
+      const label = phase ? salamat.getAttribute(`data-phase-${phase}`) : "";
+      phaseLabel.textContent = label || "";
+      if (label && phase !== "writing") {
+        typing.hidden = false;
+        body.scrollTop = body.scrollHeight;
+      }
+    };
+    const follow = async (id, show) => {
+      if (!window.ReadableStream || !window.TextDecoder) {
+        return false;
+      }
+      let res;
+      try {
+        res = await fetch(
+          `${apiUrl}/guest/messages/${id}/stream?guest=${encodeURIComponent(state.guest)}&lang=${lang}`,
+        );
+      } catch (e) {
+        return false;
+      }
+      if (!res.ok || !res.body) {
+        return false;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let text1 = "";
+      let finished = false;
+      try {
+        while (!finished) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          let cut = buffer.indexOf("\n\n");
+          while (cut >= 0) {
+            const chunk = buffer.slice(0, cut);
+            buffer = buffer.slice(cut + 2);
+            cut = buffer.indexOf("\n\n");
+            let name = "message";
+            let data = "";
+            for (const line of chunk.split("\n")) {
+              if (line.startsWith("event: ")) {
+                name = line.slice(7);
+              } else if (line.startsWith("data: ")) {
+                data += line.slice(6);
+              }
+            }
+            if (!data) {
+              continue;
+            }
+            let ev = {};
+            try {
+              ev = JSON.parse(data);
+            } catch (e) {
+              continue;
+            }
+            if (name === "delta") {
+              text1 += ev.t || "";
+              show(text1);
+            } else if (name === "reset") {
+              text1 = ev.t || "";
+              show(text1);
+            } else if (name === "phase") {
+              setPhase(ev.phase);
+            } else if (name === "done") {
+              show(ev.body || "");
+              finished = true;
+            }
+          }
+        }
+      } catch (e) {
+        return finished;
+      }
+      return finished;
+    };
+
     const ask = async (text, from) => {
       const q = text.trim();
       if (!q || busy) {
@@ -447,34 +526,43 @@
         state.limit = sent.data.limit || state.limit;
         showCount();
         persist();
-        const started = Date.now();
-        while (Date.now() - started < 10 * 60 * 1000) {
-          await wait1(1200);
-          const got = await call(
-            "GET",
-            "/guest/messages/" +
-              sent.data.id +
-              "?guest=" +
-              encodeURIComponent(state.guest),
-          );
-          if (got.status !== 200) {
-            continue;
+        const show = (text1) => {
+          if (!text1 || text1 === shown) {
+            return;
           }
-          const text1 = got.data.body || "";
-          if (text1 && text1 !== shown) {
-            typing.hidden = true;
-            if (!answer) {
-              answer = bubble("assistant", text1);
-            } else {
-              answer.innerHTML = render(text1);
-              body.scrollTop = body.scrollHeight;
+          typing.hidden = true;
+          if (!answer) {
+            answer = bubble("assistant", text1);
+            answer.classList.add("is-live");
+          } else {
+            answer.innerHTML = render(text1);
+            body.scrollTop = body.scrollHeight;
+          }
+          shown = text1;
+        };
+        const streamed = await follow(sent.data.id, show);
+        if (!streamed) {
+          const started = Date.now();
+          while (Date.now() - started < 10 * 60 * 1000) {
+            await wait1(1200);
+            const got = await call(
+              "GET",
+              `/guest/messages/${sent.data.id}?guest=${encodeURIComponent(state.guest)}`,
+            );
+            if (got.status !== 200) {
+              continue;
             }
-            shown = text1;
-          }
-          if (got.data.status !== "pending") {
-            break;
+            setPhase(got.data.phase);
+            show(got.data.body || "");
+            if (got.data.status !== "pending") {
+              break;
+            }
           }
         }
+        if (answer) {
+          answer.classList.remove("is-live");
+        }
+        setPhase("");
         typing.hidden = true;
         if (!shown) {
           shown = salamat.getAttribute("data-error");

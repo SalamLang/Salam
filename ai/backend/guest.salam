@@ -180,45 +180,56 @@ func guest_send(ctx: i64):
     guest_reply(ctx, 201, json.Object(m))
 end
 
+func guest_find(mid: str, token: str, gid &: str, sid &: str, status &: str, body &: str, created &: i64): bool:
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT g.id, g.engine_sid, m.status, m.body, m.created FROM guest_messages m JOIN guest_sessions g ON g.id = m.guest_id WHERE m.id = ?1 AND m.role = 'assistant' AND g.token = ?2", gtwo(mid, aiweb.Hash(token)))
+    mut found := false
+    if aistore.Next(rows):
+        found = true
+        gid = aistore.Text(rows, 0)
+        sid = aistore.Text(rows, 1)
+        status = aistore.Text(rows, 2)
+        body = aistore.Text(rows, 3)
+        created = aistore.Int64(rows, 4)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret found
+end
+
+func guest_step(mid: str, sid: str, created: i64, en: bool, status &: str, body &: str): str:
+    r := aiturn.Progress(sid, created, ANSWER_SECONDS as i64)
+    body = r.text
+    if not r.done:
+        ret r.phase
+    end
+    status = r.failed and body.len() == 0 ? "error" : "done"
+    if status == "error":
+        body = en ? "The assistant could not answer just now. Please ask again in a moment." : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+    end
+    aistore.Lock()
+    _u := aistore.Run("UPDATE guest_messages SET body = ?1, status = ?2 WHERE id = ?3 AND status = 'pending'", gthree(body, status, mid))
+    aistore.Unlock()
+    ailive.End(sid)
+    aiturn.Forget(sid)
+    aiengine.Forget(sid)
+    ret "done"
+end
+
 func guest_poll(ctx: i64):
-    token := http.Query(ctx, "guest")
-    mid := http.Param(ctx, "mid")
+    mut gid := ""
     mut sid := ""
     mut status := ""
     mut body := ""
     mut created := 0 as i64
-    aistore.Lock()
-    mut rows := aistore.Stmt("SELECT g.engine_sid, m.status, m.body, m.created FROM guest_messages m JOIN guest_sessions g ON g.id = m.guest_id WHERE m.id = ?1 AND m.role = 'assistant' AND g.token = ?2", gtwo(mid, aiweb.Hash(token)))
-    if aistore.Next(rows):
-        sid = aistore.Text(rows, 0)
-        status = aistore.Text(rows, 1)
-        body = aistore.Text(rows, 2)
-        created = aistore.Int64(rows, 3)
-    end
-    aistore.Finish(rows)
-    aistore.Unlock()
-    if status.len() == 0:
+    mid := http.Param(ctx, "mid")
+    if not guest_find(mid, http.Query(ctx, "guest"), gid, sid, status, body, created):
         guest_fail(ctx, 404, "not_found", "این پیام پیدا نشد.", "This message was not found.")
         ret
     end
     mut phase := "done"
     if status == "pending":
-        r := aiturn.Progress(sid, created, ANSWER_SECONDS as i64)
-        body = r.text
-        phase = r.phase
-        if r.done:
-            status = r.failed and body.len() == 0 ? "error" : "done"
-            if status == "error":
-                body = aiweb.Pick(ctx, "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", "The assistant could not answer just now. Please ask again in a moment.")
-            end
-            aistore.Lock()
-            _u := aistore.Run("UPDATE guest_messages SET body = ?1, status = ?2 WHERE id = ?3 AND status = 'pending'", gthree(body, status, mid))
-            aistore.Unlock()
-            ailive.End(sid)
-            aiturn.Forget(sid)
-            aiengine.Forget(sid)
-            phase = "done"
-        end
+        phase = guest_step(mid, sid, created, aiweb.English(ctx), status, body)
     end
     mut m := Vector {} as Vector<str>
     m.push(json.Member("status", status))
@@ -238,6 +249,21 @@ pub func Configure(origins: str, limit: int, guests_per_ip: int, messages_per_ip
     if messages_per_ip > 0:
         MESSAGES_PER_IP = messages_per_ip
     end
+end
+
+pub func CorsLines(origin: str): str:
+    if origin.len() == 0 or ORIGINS.find("," + origin + ",") < 0:
+        ret ""
+    end
+    ret "Access-Control-Allow-Origin: " + origin + "\r\nVary: Origin\r\n"
+end
+
+pub func Find(mid: str, token: str, gid &: str, sid &: str, status &: str, body &: str, created &: i64): bool:
+    ret guest_find(mid, token, gid, sid, status, body, created)
+end
+
+pub func Step(mid: str, sid: str, created: i64, en: bool, status &: str, body &: str): str:
+    ret guest_step(mid, sid, created, en, status, body)
 end
 
 pub func Routes(r &: router.Router):

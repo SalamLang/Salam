@@ -49,6 +49,7 @@ mut g_job_proc := process.Process {}
 mut g_pending := Vector {} as Vector<Pending>
 mut g_job_index := ""
 mut g_client_name := ""
+mut g_pull_diags := false
 
 struct Doc:
     pub uri: str = ""
@@ -259,6 +260,12 @@ func caps_json(): str:
     jw_bool(j, "inlayHintProvider", true)
     jw_bool(j, "callHierarchyProvider", true)
     jw_bool(j, "implementationProvider", true)
+    jw_bool(j, "colorProvider", true)
+    jw_kobj(j, "diagnosticProvider")
+    jw_str(j, "identifier", "salam")
+    jw_bool(j, "interFileDependencies", true)
+    jw_bool(j, "workspaceDiagnostics", true)
+    jw_end_obj(j)
     jw_bool(j, "typeHierarchyProvider", true)
     jw_kobj(j, "codeLensProvider")
     jw_bool(j, "resolveProvider", false)
@@ -479,43 +486,176 @@ func answer_pending(uri: str):
     run.free()
 end
 
-func publish(d: Doc):
+func diag_items(snap: value.Value): str:
     mut j := jw_new()
-    jw_obj(j)
-    jw_str(j, "uri", d.uri)
-    jw_int(j, "version", d.version)
-    jw_karr(j, "diagnostics")
-    if d.has_snap and d.open:
-        diags := obj(d.snap, "diags")
-        if value.IsArray(diags):
-            repeat value.ArrayLen(diags) in i:
-                dv := value.ArrayGet(diags, i)
-                jw_obj(j)
-                jw_raw(j, "range", json.EncodeDefault(obj(dv, "range")))
-                jw_int(j, "severity", vint(dv, "severity", 1))
-                code := vstr(dv, "code")
-                if str.Len(code) > 0:
-                    jw_str(j, "code", code)
-                end
-                jw_str(j, "source", "salam")
-                mut msg := vstr(dv, "message")
-                help := vstr(dv, "help")
-                if str.Len(help) > 0:
-                    msg = msg + "\nhelp: " + help
-                end
-                jw_str(j, "message", msg)
-                if str.Contains(msg, "unused ") or str.Contains(msg, "never used"):
-                    jw_karr(j, "tags")
-                    jw_vint(j, 1)
-                    jw_end_arr(j)
-                end
-                jw_end_obj(j)
+    jw_arr(j)
+    diags := obj(snap, "diags")
+    if value.IsArray(diags):
+        repeat value.ArrayLen(diags) in i:
+            dv := value.ArrayGet(diags, i)
+            jw_obj(j)
+            jw_raw(j, "range", json.EncodeDefault(obj(dv, "range")))
+            jw_int(j, "severity", vint(dv, "severity", 1))
+            code := vstr(dv, "code")
+            if str.Len(code) > 0:
+                jw_str(j, "code", code)
             end
+            jw_str(j, "source", "salam")
+            mut msg := vstr(dv, "message")
+            help := vstr(dv, "help")
+            if str.Len(help) > 0:
+                msg = msg + "\nhelp: " + help
+            end
+            jw_str(j, "message", msg)
+            if str.Contains(msg, "unused ") or str.Contains(msg, "never used"):
+                jw_karr(j, "tags")
+                jw_vint(j, 1)
+                jw_end_arr(j)
+            end
+            jw_end_obj(j)
         end
     end
     jw_end_arr(j)
-    jw_end_obj(j)
-    send_notify("textDocument/publishDiagnostics", jw_done(j))
+    ret jw_done(j)
+end
+
+func publish(d: Doc):
+    if g_pull_diags and d.open:
+        ret
+    end
+    mut items := "[]"
+    if d.has_snap and d.open:
+        items = diag_items(d.snap)
+    end
+    send_notify("textDocument/publishDiagnostics", "{\"uri\":" + jq(d.uri) + ",\"version\":" + str.FromInt(d.version as i64) + ",\"diagnostics\":" + items + "}")
+end
+
+func on_pull_diagnostics(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0 or not g_docs.get(i).has_snap:
+        send_result(id, "{\"kind\":\"full\",\"items\":[]}")
+        ret
+    end
+    send_result(id, "{\"kind\":\"full\",\"items\":" + diag_items(g_docs.get(i).snap) + "}")
+end
+
+func on_workspace_diagnostics(id: str):
+    mut parts := Vector {} as Vector<str>
+    mut open := HashMap {} as HashMap<str, bool>
+    each d in g_docs:
+        if d.open:
+            open.put(d.uri, true)
+        end
+    end
+    each e in g_index:
+        if not open.has(e.uri):
+            parts.push("{\"kind\":\"full\",\"uri\":" + jq(e.uri) + ",\"version\":null,\"items\":" + diag_items(e.snap) + "}")
+        end
+    end
+    send_result(id, "{\"items\":[" + str.Join(parts, ",") + "]}")
+    parts.free()
+    open.free()
+end
+
+func hex_at(s: str, i: int): int:
+    if i >= str.Len(s):
+        ret 0 - 1
+    end
+    ret hexval(byte_at(s, i))
+end
+
+func color_json(text: str, at0: int, n: int): str:
+    mut r := 0
+    mut g := 0
+    mut b := 0
+    mut a := 255
+    if n == 3:
+        r = hex_at(text, at0) * 17
+        g = hex_at(text, at0 + 1) * 17
+        b = hex_at(text, at0 + 2) * 17
+    else:
+        r = hex_at(text, at0) * 16 + hex_at(text, at0 + 1)
+        g = hex_at(text, at0 + 2) * 16 + hex_at(text, at0 + 3)
+        b = hex_at(text, at0 + 4) * 16 + hex_at(text, at0 + 5)
+        if n == 8:
+            a = hex_at(text, at0 + 6) * 16 + hex_at(text, at0 + 7)
+        end
+    end
+    ret "{\"red\":" + str.FromFloat((r as f64) / 255.0) + ",\"green\":" + str.FromFloat((g as f64) / 255.0) + ",\"blue\":" + str.FromFloat((b as f64) / 255.0) + ",\"alpha\":" + str.FromFloat((a as f64) / 255.0) + "}"
+end
+
+func on_document_color(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    text := g_docs.get(i).text
+    li := line_index(text)
+    mut out := Vector {} as Vector<str>
+    n := str.Len(text)
+    mut k := 0
+    until k < n:
+        if byte_at(text, k) == 35 and k > 0:
+            pc := byte_at(text, k - 1)
+            if pc == 34 or pc == 32 or pc == 58 or pc == 39 or pc == 40:
+                mut m := k + 1
+                until m < n and hexval(byte_at(text, m)) >= 0:
+                    m += 1
+                end
+                cnt := m - k - 1
+                endc := m < n ? byte_at(text, m) : 0
+                if (cnt == 3 or cnt == 6 or cnt == 8) and not is_ident_byte(endc):
+                    p1 := li_pos(li, k)
+                    p2 := li_pos(li, m)
+                    out.push("{\"range\":" + range_json(p1.line, p1.ch, p2.line, p2.ch) + ",\"color\":" + color_json(text, k + 1, cnt) + "}")
+                end
+                k = m
+                continue
+            end
+        end
+        k += 1
+    end
+    mut l2 := li
+    li_free(l2)
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+end
+
+func hex2(v: f64): str:
+    mut n := (v * 255.0 + 0.5) as int
+    if n < 0:
+        n = 0
+    end
+    if n > 255:
+        n = 255
+    end
+    mut sb := str.NewBuilder()
+    str.BufAppendChar(sb, hexdig(n / 16))
+    str.BufAppendChar(sb, hexdig(n % 16))
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func vfloat(v: value.Value, key: str): f64:
+    if value.IsObject(v) and value.ObjectHas(v, key):
+        x := value.ObjectGet(v, key)
+        if value.IsNumber(x):
+            ret value.AsFloat(x)
+        end
+    end
+    ret 0.0
+end
+
+func on_color_presentation(id: str, params: value.Value):
+    c := obj(params, "color")
+    mut label := "#" + hex2(vfloat(c, "red")) + hex2(vfloat(c, "green")) + hex2(vfloat(c, "blue"))
+    al := vfloat(c, "alpha")
+    if al < 0.999:
+        label = label + hex2(al)
+    end
+    send_result(id, "[{\"label\":" + jq(label) + "}]")
 end
 
 func has_dirty(): bool:
@@ -1553,7 +1693,7 @@ func mark_all_dirty():
 end
 
 func fresh_method(method: str): bool:
-    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint") or str.Equals(method, "textDocument/codeLens") or str.Equals(method, "textDocument/documentLink")
+    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint") or str.Equals(method, "textDocument/codeLens") or str.Equals(method, "textDocument/documentLink") or str.Equals(method, "textDocument/diagnostic")
 end
 
 func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
@@ -1614,6 +1754,14 @@ func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
         on_incoming_calls(id, params)
     else str.Equals(method, "callHierarchy/outgoingCalls"):
         on_outgoing_calls(id, params)
+    else str.Equals(method, "textDocument/diagnostic"):
+        on_pull_diagnostics(id, params)
+    else str.Equals(method, "workspace/diagnostic"):
+        on_workspace_diagnostics(id)
+    else str.Equals(method, "textDocument/documentColor"):
+        on_document_color(id, params)
+    else str.Equals(method, "textDocument/colorPresentation"):
+        on_color_presentation(id, params)
     else str.Equals(method, "textDocument/codeLens"):
         on_code_lens(id, params)
     else str.Equals(method, "textDocument/documentLink"):
@@ -1651,6 +1799,7 @@ func handle(text: str): int:
     if str.Equals(method, "initialize"):
         apply_settings(obj(params, "initializationOptions"))
         g_client_name = vstr(obj(params, "clientInfo"), "name")
+        g_pull_diags = value.ObjectHas(obj(obj(params, "capabilities"), "textDocument"), "diagnostic")
         note_roots(params)
         loc := vstr(params, "locale")
         if str.StartsWith(loc, "fa") and not value.ObjectHas(obj(params, "initializationOptions"), "messages"):

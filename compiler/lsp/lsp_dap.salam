@@ -1,0 +1,332 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package lsp
+
+import str
+import io
+import os
+import mem
+import encoding.json
+import encoding.value
+import encoding.encerr
+import os.process
+import os.temp
+
+include pth "../sal_path.salam"
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _getpid(): int
+    end
+else:
+    extern:
+        func pipe(fds: void*): int
+        func fork(): int
+        func dup2(a: int, b: int): int
+        func close(fd: int): int
+        func execvp(file: str, argv: void*): int
+        func _exit(code: int)
+    end
+end
+
+mut g_dbg_in := ""
+mut g_dbg_eof := false
+mut g_dbg_rfd := 0 - 1
+mut g_dbg_wfd := 0 - 1
+mut g_dbg_pid := 0
+mut g_dap_exe := "salam"
+mut g_dap_seq := 900000
+mut g_dap_lldb := false
+
+func dbg_fill(): bool:
+    if g_dbg_eof:
+        ret false
+    end
+    buf := mem.Allocate(IO_CHUNK as u64)
+    mut n := 0
+    if not SALAM_OS_WINDOWS:
+        n = read(g_dbg_rfd, buf, IO_CHUNK as u64) as int
+    end
+    if n <= 0:
+        mem.Free(buf)
+        g_dbg_eof = true
+        ret false
+    end
+    g_dbg_in = g_dbg_in + bytes_to_str(buf, n)
+    mem.Free(buf)
+    ret true
+end
+
+func dbg_frame_ready(): bool:
+    sep := str.IndexOf(g_dbg_in, "\r\n\r\n")
+    if sep < 0:
+        ret false
+    end
+    n := header_length(str.Substr(g_dbg_in, 0, sep))
+    ret n >= 0 and str.Len(g_dbg_in) >= sep + 4 + n
+end
+
+func dbg_take(ok &: bool): str:
+    sep := str.IndexOf(g_dbg_in, "\r\n\r\n")
+    if sep >= 0:
+        n := header_length(str.Substr(g_dbg_in, 0, sep))
+        if n >= 0 and str.Len(g_dbg_in) >= sep + 4 + n:
+            body := str.Substr(g_dbg_in, sep + 4, n)
+            rest := str.Len(g_dbg_in) - sep - 4 - n
+            g_dbg_in = rest > 0 ? str.Substr(g_dbg_in, sep + 4 + n, rest) : ""
+            ok = true
+            ret body
+        end
+    end
+    ok = false
+    ret ""
+end
+
+func dbg_send(body: str):
+    msg := "Content-Length: " + str.FromInt(str.Len(body) as i64) + "\r\n\r\n" + body
+    mut rest := msg
+    mut left := str.Len(msg)
+    until left > 0:
+        mut w := 0
+        if not SALAM_OS_WINDOWS:
+            w = write(g_dbg_wfd, rest as void*, left as u64) as int
+        end
+        if w <= 0:
+            ret
+        end
+        left -= w
+        if left > 0:
+            rest = str.Substr(rest, w, left)
+        end
+    end
+end
+
+func find_tool(name: str): str:
+    path := os.Env("PATH")
+    each dir in str.Split(path, ":"):
+        full := pth.PathJoin(dir, name)
+        if str.Len(dir) > 0 and os.Exists(full) and not os.IsDir(full):
+            ret full
+        end
+    end
+    ret ""
+end
+
+func debugger_command(out &: Vector<str>): bool:
+    want := os.Env("SALAM_DAP_DEBUGGER")
+    if str.Len(want) > 0:
+        g_dap_lldb = str.Contains(want, "lldb")
+        each part in str.Split(want, " "):
+            if str.Len(part) > 0:
+                out.push(part)
+            end
+        end
+        ret out.len() > 0
+    end
+    gdb := find_tool("gdb")
+    if str.Len(gdb) > 0:
+        out.push(gdb)
+        out.push("-i=dap")
+        out.push("-q")
+        ret true
+    end
+    each name in ["lldb-dap", "lldb-vscode"]:
+        p := find_tool(name)
+        if str.Len(p) > 0:
+            out.push(p)
+            g_dap_lldb = true
+            ret true
+        end
+    end
+    ret false
+end
+
+func spawn_debugger(cmd: Vector<str>): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        to_child := mem.AllocateZeroed(8 as u64)
+        from_child := mem.AllocateZeroed(8 as u64)
+        if pipe(to_child) != 0 or pipe(from_child) != 0:
+            ret false
+        end
+        tc := to_child as i32*
+        fc := from_child as i32*
+        argv := mem.AllocateZeroed(((cmd.len() + 1) * 8) as u64)
+        ap := argv as i64*
+        repeat cmd.len() in i:
+            ap[i] = (cmd.get(i) as void*) as i64
+        end
+        pid := fork()
+        if pid == 0:
+            _a := dup2(tc[0], 0)
+            _b := dup2(fc[1], 1)
+            _c := close(tc[1])
+            _d := close(fc[0])
+            _e := execvp(cmd.get(0), argv)
+            _exit(127)
+        end
+        _f := close(tc[0])
+        _g := close(fc[1])
+        g_dbg_wfd = tc[1]
+        g_dbg_rfd = fc[0]
+        g_dbg_pid = pid
+        mem.Free(to_child)
+        mem.Free(from_child)
+        ret pid > 0
+    end
+end
+
+func dap_event_output(text: str, category: str):
+    send_message("{\"seq\":" + str.FromInt(g_dap_seq as i64) + ",\"type\":\"event\",\"event\":\"output\",\"body\":{\"category\":" + jq(category) + ",\"output\":" + jq(text) + "}}")
+    g_dap_seq += 1
+end
+
+func dap_fail(req_seq: int, command: str, msg: str):
+    send_message("{\"seq\":" + str.FromInt(g_dap_seq as i64) + ",\"type\":\"response\",\"request_seq\":" + str.FromInt(req_seq as i64) + ",\"success\":false,\"command\":" + jq(command) + ",\"message\":" + jq(msg) + ",\"body\":{\"error\":{\"id\":1,\"format\":" + jq(msg) + "}}}")
+    g_dap_seq += 1
+end
+
+func build_for_debug(program: str, exe &: str, log &: str): bool:
+    exe = temp.File()
+    mut args := Vector {} as Vector<str>
+    args.push("build")
+    args.push(program)
+    args.push("-g")
+    args.push("--output=" + exe)
+    args.push("--no-color")
+    args.push("--log-level=error")
+    p := process.StartCaptured(g_dap_exe, args)
+    args.free()
+    if not process.IsRunning(p):
+        log = "cannot run '" + g_dap_exe + "'"
+        ret false
+    end
+    mut pp := p
+    rc := process.Wait(pp)
+    log = process.ReadStdout(pp) + process.ReadStderr(pp)
+    process.Cleanup(pp)
+    ret rc == 0 and os.Exists(exe)
+end
+
+func rewrite_launch(v &: value.Value, seq: int): bool:
+    margs := obj(v, "arguments")
+    program := vstr(margs, "program")
+    if not str.EndsWith(program, ".salam") and not os.IsDir(program):
+        ret true
+    end
+    mut exe := ""
+    mut log := ""
+    dap_event_output("salam: building " + program + " with debug information\n", "console")
+    if not build_for_debug(program, exe, log):
+        if str.Len(log) > 0:
+            dap_event_output(log, "stderr")
+        end
+        dap_fail(seq, "launch", "salam build failed for " + program)
+        ret false
+    end
+    mut a2 := margs
+    value.ObjectSet(a2, "program", value.ValueString(exe))
+    if not value.ObjectHas(a2, "cwd"):
+        dir := pth.PathDir(program)
+        value.ObjectSet(a2, "cwd", value.ValueString(str.Len(dir) > 0 ? dir : os.Cwd()))
+    end
+    if g_dap_lldb and not value.ObjectHas(a2, "disableASLR"):
+        value.ObjectSet(a2, "disableASLR", value.ValueBool(false))
+    end
+    value.ObjectSet(v, "arguments", a2)
+    ret true
+end
+
+func from_client(text: str): bool:
+    mut err := encerr.EncodingError {}
+    mut v := json.Decode(text, err)
+    if encerr.IsError(err) or not value.IsObject(v):
+        dbg_send(text)
+        ret true
+    end
+    if str.Equals(vstr(v, "type"), "request") and str.Equals(vstr(v, "command"), "launch"):
+        if not rewrite_launch(v, vint(v, "seq", 0)):
+            ret true
+        end
+        dbg_send(json.EncodeDefault(v))
+        ret true
+    end
+    dbg_send(text)
+    ret true
+end
+
+func two_ready(timeout: int, client &: bool, dbg &: bool):
+    client = frame_ready()
+    dbg = dbg_frame_ready()
+    if client or dbg:
+        ret
+    end
+    if not SALAM_OS_WINDOWS:
+        fds := mem.AllocateZeroed(16 as u64)
+        ip := fds as i32*
+        sp := fds as i16*
+        ip[0] = 0 as i32
+        sp[2] = 1 as i16
+        ip[2] = g_dbg_rfd
+        sp[6] = 1 as i16
+        rc := poll(fds, 2 as u64, timeout)
+        if rc > 0:
+            client = sp[3] != (0 as i16)
+            dbg = sp[7] != (0 as i16)
+        end
+        mem.Free(fds)
+    end
+end
+
+pub func DapMain(args: Vector<str>): int:
+    if SALAM_OS_WINDOWS:
+        io.EPrintln("salam dap: not available on Windows yet; use lldb-dap or gdb with a program built by 'salam build -g'")
+        ret 2
+    end
+    g_dap_exe = resolve_exe(args.get(0))
+    mut cmd := Vector {} as Vector<str>
+    if not debugger_command(cmd):
+        io.EPrintln("salam dap: no debugger found; install gdb (14 or newer) or lldb-dap, or set SALAM_DAP_DEBUGGER")
+        ret 2
+    end
+    if not spawn_debugger(cmd):
+        io.EPrintln("salam dap: cannot start " + cmd.get(0))
+        ret 2
+    end
+    io_init()
+    until true:
+        mut client := false
+        mut dbg := false
+        two_ready(1000, client, dbg)
+        if client:
+            mut ok := false
+            msg := read_message(ok)
+            if not ok:
+                ret 0
+            end
+            _f := from_client(msg)
+        end
+        if dbg:
+            mut got := false
+            m := dbg_take(got)
+            if got:
+                _s := send_message(m)
+            else not dbg_fill():
+                ret 0
+            end
+        end
+    end
+end

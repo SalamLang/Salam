@@ -149,6 +149,9 @@ func summary(ctx: i64):
     m.push(json.MemberRaw("uploads", count("SELECT COUNT(*) FROM message_files", none)))
     m.push(json.MemberRaw("uploads_images", count("SELECT COUNT(*) FROM message_files WHERE kind = 'image'", none)))
     m.push(json.MemberRaw("uploads_bytes", count("SELECT COALESCE(SUM(size), 0) FROM message_files", none)))
+    m.push(json.MemberRaw("guests", count("SELECT COUNT(*) FROM guest_sessions", none)))
+    m.push(json.MemberRaw("guest_messages", count("SELECT COUNT(*) FROM guest_messages WHERE role = 'user'", none)))
+    m.push(json.MemberRaw("guests_at_limit", count("SELECT COUNT(*) FROM guest_sessions WHERE messages >= 15", none)))
     m.push(json.MemberRaw("apps", count("SELECT COUNT(*) FROM oauth_grants WHERE revoked = 0", none)))
     m.push(json.MemberRaw("mcp_calls", count("SELECT COUNT(*) FROM mcp_events", none)))
     m.push(json.MemberRaw("mcp_calls_24h", count("SELECT COUNT(*) FROM mcp_events WHERE created > ?1", one(day))))
@@ -643,6 +646,57 @@ func revoke_user_sessions(ctx: i64):
     aiweb.Reply(ctx, 200, `{"revoked": ` + before + "}")
 end
 
+func list_guests(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut offset := http.Query(ctx, "offset").to_int()
+    if offset < 0:
+        offset = 0
+    end
+    empty := Vector {} as Vector<str>
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    total := count("SELECT COUNT(*) FROM guest_sessions", empty)
+    mut rows := aistore.Stmt("SELECT g.id, g.ip, g.lang, g.messages, g.created, g.updated, COALESCE((SELECT m.body FROM guest_messages m WHERE m.guest_id = g.id AND m.role = 'user' ORDER BY m.id LIMIT 1), '') FROM guest_sessions g ORDER BY g.updated DESC LIMIT 50 OFFSET " + n(offset as i64), empty)
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("ip", aistore.Text(rows, 1)))
+        m.push(json.Member("lang", aistore.Text(rows, 2)))
+        m.push(json.MemberRaw("messages", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 4)))
+        m.push(json.MemberRaw("updated", aistore.Text(rows, 5)))
+        m.push(json.Member("first", aistore.Text(rows, 6)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"guests": ` + json.Array(items) + `, "total": ` + total + "}")
+end
+
+func get_guest(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    gid := http.Param(ctx, "id")
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created FROM guest_messages WHERE guest_id = ?1 ORDER BY id", one(gid))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("role", aistore.Text(rows, 1)))
+        m.push(json.Member("body", aistore.Text(rows, 2)))
+        m.push(json.Member("status", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 4)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"messages": ` + json.Array(items) + "}")
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -658,6 +712,8 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/chats/:id", get_admin_chat)
     router.Get(r, "/admin/messages/:id/trace", get_trace)
     router.Get(r, "/admin/chats/:id/files/:fid", get_admin_file)
+    router.Get(r, "/admin/guests", list_guests)
+    router.Get(r, "/admin/guests/:id", get_guest)
     router.Get(r, "/admin/sessions", list_sessions)
     router.Delete(r, "/admin/sessions/:id", revoke_session)
     router.Delete(r, "/admin/users/:id/sessions", revoke_user_sessions)
@@ -667,7 +723,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

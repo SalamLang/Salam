@@ -59,6 +59,19 @@ mkdir -p "$STD_MIN"
 "$SALAM" format --minify -r "$STD_MIN" >/dev/null
 echo "staged minified stdlib preload image at $STD_MIN"
 
+PKG_MIN="$(pwd)/.wasm-build/packages-min"
+rm -rf "$PKG_MIN"
+mkdir -p "$PKG_MIN"
+(
+    cd packages
+    find . -name '*.salam' | while IFS= read -r f; do
+        mkdir -p "$PKG_MIN/$(dirname "$f")"
+        cp "$f" "$PKG_MIN/$f"
+    done
+)
+"$SALAM" format --minify -r "$PKG_MIN" >/dev/null
+echo "staged minified official packages preload image at $PKG_MIN"
+
 rm -rf .salam-build
 "$SALAM" build --backend=c --emit-c --target=wasm32-unknown-emscripten \
     compiler/main.salam --output=.wasm-build/host-salam --log-level=warn
@@ -90,6 +103,10 @@ HASH=$(
             printf '%s\n' "${f#"$STD_MIN"}"
             cat "$f"
         done
+        find "$PKG_MIN" -name '*.salam' | sort | while IFS= read -r f; do
+            printf 'packages%s\n' "${f#"$PKG_MIN"}"
+            cat "$f"
+        done
         cat "$0"
     } | $HASHER | cut -c1-10
 )
@@ -115,6 +132,7 @@ BUNDLE="$OUT_DIR/salam-wa-$BUILD_ID"
 "$EMCC" -O2 -I.salam-build $SRCS \
     -o "$BUNDLE.js" \
     --preload-file "$STD_MIN"@/std \
+    --preload-file "$PKG_MIN"@/packages \
     -s MODULARIZE=0 \
     -s ENVIRONMENT=web,worker,node \
     -s ALLOW_MEMORY_GROWTH=1 \

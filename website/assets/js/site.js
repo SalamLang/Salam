@@ -138,6 +138,16 @@
       }
     });
 
+    const settle = () => {
+      const chatted = state.msgs.some((m) => m.role === "user");
+      const place = () => {
+        body.scrollTop = chatted ? body.scrollHeight : 0;
+      };
+      place();
+      setTimeout(place, still ? 0 : 120);
+      setTimeout(place, still ? 0 : 520);
+    };
+
     const open = (focus) => {
       lockPage(true);
       if (phone() && !pushed) {
@@ -152,6 +162,7 @@
       requestAnimationFrame(() => {
         panel.classList.add("is-shown");
         fit();
+        settle();
       });
       play();
       if (focus && !phone()) {

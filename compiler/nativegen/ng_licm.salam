@@ -317,6 +317,65 @@ func licm_reassoc(g &: Ng, l &: Lp, mark: int, i: int): bool:
     ret false
 end
 
+func licm_addr_split(g &: Ng, l &: Lp, mark: int, i: int): bool:
+    if g.i_op[i] != OP_ADDR or g.i_res[i] < 0 or not lp_inv(g, l, g.i_a[i], mark):
+        ret false
+    end
+    x := g.i_b[i]
+    if x < 0 or g.v_kind[x] != VK_INS or lp_inv(g, l, x, mark):
+        ret false
+    end
+    mut d := g.v_def[x]
+    mut wide := false
+    if g.i_op[d] == OP_SEXT:
+        y0 := g.i_a[d]
+        if y0 < 0 or g.v_kind[y0] != VK_INS:
+            ret false
+        end
+        d = g.v_def[y0]
+        if g.i_op[d] != OP_ADD or (g.i_f[d] & IF_NSW) == 0:
+            ret false
+        end
+        wide = true
+    end
+    if g.i_op[d] != OP_ADD:
+        ret false
+    end
+    repeat 2 in k:
+        c := k == 0 ? g.i_a[d] : g.i_b[d]
+        y := k == 0 ? g.i_b[d] : g.i_a[d]
+        if not is_cint(g, c) and lp_inv(g, l, c, mark) and not lp_inv(g, l, y, mark):
+            mut cw := c
+            mut yw := y
+            if wide:
+                sc := ins_new(g, OP_SEXT, T_I64)
+                g.i_a[sc] = c
+                g.i_x[sc] = g.v_ty[c]
+                cw = new_res(g, sc)
+                ins_before(g, i, sc)
+                sy := ins_new(g, OP_SEXT, T_I64)
+                g.i_a[sy] = y
+                g.i_x[sy] = g.v_ty[y]
+                yw = new_res(g, sy)
+                ins_before(g, i, sy)
+            else g.v_ty[c] != T_I64 or g.v_ty[y] != T_I64:
+                ret false
+            end
+            nb := ins_new(g, OP_ADDR, T_PTR)
+            g.i_a[nb] = g.i_a[i]
+            g.i_b[nb] = cw
+            g.i_x[nb] = g.i_x[i]
+            g.i_d[nb] = 0 as i64
+            nbv := new_res(g, nb)
+            ins_before(g, i, nb)
+            g.i_a[i] = nbv
+            g.i_b[i] = yw
+            ret true
+        end
+    end
+    ret false
+end
+
 func licm(g &: Ng): bool:
     build_dom(g)
     count_uses(g)
@@ -385,6 +444,9 @@ func licm(g &: Ng): bool:
             mut i := g.b_first[b]
             until i >= 0:
                 nx0 := g.i_next[i]
+                if not g.off_asplit and licm_addr_split(g, l, mk, i):
+                    moved = true
+                end
                 if not g.off_lreas and licm_reassoc(g, l, mk, i):
                     moved = true
                     ni := g.i_prev[i]

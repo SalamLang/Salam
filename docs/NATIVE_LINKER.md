@@ -220,12 +220,98 @@ the in-memory object hand-off:
 - **Speed**: link time reported by `--log-level=info`, tracked for hello world
   and for the self-hosted compiler.
 
+## Phase 2: dynamic executables against glibc
+
+This is the phase that removes `cc` from ordinary Linux builds, including
+programs that link system shared libraries (sqlite, database clients).
+
+### What `cc` does today
+
+For one of our objects, `cc -v` shows the link it delegates to `collect2`:
+
+- output: a position-independent executable (`-pie`), with `-z now`,
+  `-z relro`, `--hash-style=gnu`, `--eh-frame-hdr`, `--build-id`, and the
+  interpreter `/lib64/ld-linux-x86-64.so.2`
+- objects: `Scrt1.o`, `crti.o`, `crtbeginS.o`, our object, `crtendS.o`,
+  `crtn.o`
+- libraries: `-lm -lgcc --as-needed -lgcc_s -lc -lgcc`, where `libc.so` and
+  `libm.so` are linker scripts:
+  `GROUP ( libc.so.6 libc_nonshared.a AS_NEEDED ( ld-linux-x86-64.so.2 ) )`
+  and `GROUP ( libm.so.6 AS_NEEDED ( libmvec.so.1 ) )`
+
+### Output shape
+
+A PIE (`ET_DYN`, linked at address 0), matching what the system produces, so
+security tooling and ASLR see nothing unusual:
+
+| Segment | Contents |
+|---|---|
+| `PT_PHDR`, `PT_INTERP` | program headers, interpreter path |
+| R | headers, `.interp`, `.gnu.hash`, `.dynsym`, `.dynstr`, `.gnu.version`, `.gnu.version_r`, `.rela.dyn`, `.rela.plt`, `.rodata*`, `.eh_frame_hdr`, `.eh_frame` |
+| R X | `.init`, `.plt`, `.text*`, `.fini` |
+| R W (RELRO) | `.init_array`, `.fini_array`, `.dynamic`, `.got` |
+| R W | `.got.plt`, `.data*`, `.bss*` |
+| `PT_DYNAMIC`, `PT_GNU_RELRO`, `PT_GNU_EH_FRAME`, `PT_GNU_STACK` | |
+
+### New pieces
+
+- **Linker scripts**: a small parser for `GROUP(...)`, `INPUT(...)` and
+  `AS_NEEDED(...)`, enough for glibc's `libc.so`/`libm.so`. Anything else is
+  an error naming the script.
+- **Shared library reader**: from each `.so`, the `DT_SONAME`, the dynamic
+  symbol table (`.dynsym`, `.dynstr`) and the version tables
+  (`.gnu.version`, `.gnu.version_d`). A symbol defined there resolves an
+  undefined reference and records which library and version it came from.
+  `AS_NEEDED` libraries get a `DT_NEEDED` only if a symbol was taken from
+  them.
+- **Symbol versions**: glibc exports several versions of some symbols
+  (`memcpy@GLIBC_2.2.5` and `memcpy@@GLIBC_2.14`). An unversioned reference
+  binds to the default (`@@`) version, which is recorded in
+  `.gnu.version_r` as a requirement of `libc.so.6`, exactly as `ld` does.
+- **PLT**: each function called through `R_X86_64_PLT32` and defined in a
+  shared library gets a 16-byte stub `jmp *[rip + GOT(sym)]`. Because the
+  output is linked with `-z now` semantics (`DF_BIND_NOW`), the stubs do
+  not need lazy-binding trampolines and `.got.plt` is filled by
+  `R_X86_64_JUMP_SLOT` at load time.
+- **GOT**: `GOTPCRELX` loads of symbols defined in the executable are
+  relaxed to `lea` as in phase 1; loads of shared-library data get a GOT slot
+  with `R_X86_64_GLOB_DAT`. Our code never takes the address of library data
+  directly, so copy relocations are never needed; an input that would need
+  one is reported as unsupported.
+- **Position independence**: every absolute 64-bit address in the output
+  (`R_X86_64_64` in `.init_array`, `.fini_array`, `.eh_frame` and data)
+  becomes an `R_X86_64_RELATIVE` dynamic relocation. `R_X86_64_32` against a
+  local address cannot be made position independent and is an error, which
+  matches `ld -pie`.
+- **`.dynamic`**: `DT_NEEDED` (in command-line order), `DT_GNU_HASH`,
+  `DT_SYMTAB`, `DT_STRTAB`, `DT_STRSZ`, `DT_SYMENT`, `DT_RELA`, `DT_RELASZ`,
+  `DT_RELAENT`, `DT_JMPREL`, `DT_PLTRELSZ`, `DT_PLTREL`, `DT_PLTGOT`,
+  `DT_INIT_ARRAY(SZ)`, `DT_FINI_ARRAY(SZ)`, `DT_VERSYM`, `DT_VERNEED(NUM)`,
+  `DT_FLAGS` (`DF_BIND_NOW`), `DT_FLAGS_1` (`DF_1_NOW | DF_1_PIE`), and
+  `DT_DEBUG` for debuggers.
+- **`.gnu.hash`**: built over the exported symbols. A PIE exports nothing by
+  default, so the table is minimal unless a program asks to export symbols
+  for `dlopen` plugins.
+- **`.eh_frame_hdr`**: a sorted table of FDE start addresses, needed by the
+  unwinder in a dynamic process; the same code serves phase 1.
+- **Startup files**: `Scrt1.o`, `crti.o`, `crtn.o` from the C library
+  directory. `crtbeginS.o`/`crtendS.o` only register transactional memory
+  clones and the `.ctors` list, which our objects never use; the first
+  version leaves them out and the differential test proves it.
+  `libgcc.a`/`libgcc_s` supply compiler helpers (`__udivti3` and similar)
+  that our code generator never calls; they are searched only when a symbol
+  is still undefined.
+
+### Testing the dynamic linker
+
+The same differential method as phase 1: every test linked by `cc` and by
+the built-in linker, outputs compared, plus `readelf --dyn-syms -V -d` and
+`LD_DEBUG=bindings` checks on a few binaries to confirm each symbol binds to
+the same library and version as with `cc`.
+
 ## Later phases
 
-1. **Dynamic ELF against glibc**: `PT_INTERP`, `.dynamic`, `.dynsym`,
-   `.dynstr`, `.hash`/`.gnu.hash`, PLT and GOT, `DT_NEEDED` for each shared
-   library. This is what removes `cc` from glibc builds and builds that link
-   system `.so` files.
+1. **Dynamic ELF against glibc**: see phase 2 above.
 2. **PE/COFF for Windows**: reading mingw import libraries (short import
    members), `.idata` import tables, base relocations, `.pdata`/`.xdata`
    kept as produced, subsystem and stack reserve in the optional header.

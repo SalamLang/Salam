@@ -123,7 +123,8 @@ then goes through:
    see loops that start right after an `if`. Loop-invariant code motion of
    pure instructions into loop preheaders (an
    add of a loop value, a constant and an invariant is regrouped so the
-   invariant part moves out), and
+   invariant part moves out, and an address `p[c + i]` with `c` invariant
+   becomes `(p + c)[i]` so the base pointer is computed once), and
    of loads that no store in the loop can reach (by TBAA class) and that are
    safe to run early: a field of a `&:` parameter or of a stack slot. When
    the only writers in the loop are calls, such a load is still hoisted and
@@ -153,7 +154,10 @@ then goes through:
    SSE2: 32-bit integer and `f32` code four lanes at a time, 64-bit and `f64`
    two at a time. Loads and stores must be contiguous in the counter; bytes
    are widened to 32-bit lanes on load (`movd` and two unpacks) and narrowed
-   with `packssdw`/`packuswb` on store. Adds, subtracts, bitwise operations,
+   with `packssdw`/`packuswb` on store. A compare that only feeds selects is
+   emitted in its cheaper sense with the select arms swapped, and a
+   commutative vector operation writes into an operand that dies there
+   (but not into a reduction's accumulator). Adds, subtracts, bitwise operations,
    constant shifts, the four float operations, signed or equality compares
    and selects (on a per-lane or loop-invariant condition) are supported,
    and any number of integer add reductions. A loop that stores gets a
@@ -272,7 +276,10 @@ a loop that contains a call and is still used after the loop's single exit is
 copied at that exit, so its loop range is short enough to stay in a register
 (a vector's data pointer during a `push` loop). After rewriting, a reload of a spill slot into the scratch register that
 already holds it (with no write to the slot or the register in between) is
-dropped.
+dropped. Inside an innermost loop without calls, a stack slot that is only
+read gets loaded once before the loop into a register the loop does not
+touch and that is not live on entry, and the reloads become uses of that
+register.
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
@@ -313,7 +320,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -354,8 +361,11 @@ Not there yet:
 
 - No DWARF line tables (`-g`), so there is no source-level stepping, although
   backtraces work through `.eh_frame`.
-- Loop vectorization covers integer sum reductions only. Other vector code
-  comes from the straight-line (SLP) vectorizer.
+- The loop vectorizer needs a single-block loop body with unit-stride
+  accesses, and SSE2 limits it: no 64-bit integer compares, no integer
+  multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
+  There is no AVX code path.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
-- Linking still uses lld or the system linker. A built-in static linker over
-  the bundled musl `libc.a` would make Linux builds fully self-contained.
+- The built-in linker (see `NATIVE_LINKER.md`) covers static
+  `x86_64-linux-musl` executables. Dynamic glibc executables and Windows
+  still use the system linker or lld.

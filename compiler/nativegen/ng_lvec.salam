@@ -32,6 +32,7 @@ pub struct Lv:
     pub checks: Vector<int> = Vector {}
     pub bc_s: Vector<int> = Vector {}
     pub bc_v: Vector<int> = Vector {}
+    pub inv: Vector<bool> = Vector {}
 end
 
 func lv_in(g &: Ng, r &: Lv, v: int): bool:
@@ -618,6 +619,22 @@ func lv_uses_ok(g &: Ng, r &: Lv): bool:
     ret true
 end
 
+func lv_sel_only(g &: Ng, r &: Lv, v: int): bool:
+    mut n := 0
+    each i in r.body:
+        m := val_mask(g.i_op[i])
+        if (m & 2) != 0 and g.i_b[i] == v: ret false end
+        if (m & 4) != 0 and g.i_c[i] == v: ret false end
+        if (m & 1) != 0 and g.i_a[i] == v:
+            if g.i_op[i] != OP_SELECT:
+                ret false
+            end
+            n += 1
+        end
+    end
+    ret n > 0
+end
+
 func lv_emit(g &: Ng, b: int, op: int, ty: int, a: int, bb: int): int:
     i := ins_new(g, op, ty)
     g.i_a[i] = a
@@ -838,8 +855,10 @@ func lv_transform(g &: Ng, r &: Lv):
     g.i_c[ckt] = h
     g.i_f[ckt] = IF_NOVEC
     r.vmap.clear()
+    r.inv.clear()
     repeat g.v_kind.len():
         r.vmap.push(0 - 1)
+        r.inv.push(false)
     end
     viv_phi := ins_new(g, OP_PHI, ivt)
     g.i_ps[viv_phi] = g.pool.len()
@@ -961,6 +980,10 @@ func lv_transform(g &: Ng, r &: Lv):
             ins_append(g, vb, nw)
             continue
         end
+        mut swapsel := false
+        if op == OP_SELECT and not lv_inv(g, r, g.i_a[i]) and g.i_a[i] < r.inv.len() and r.inv[g.i_a[i]]:
+            swapsel = true
+        end
         vt4 := lv_vty(g.i_ty[i], r.lane)
         opty := op == OP_ICMP ? lv_vty(g.v_ty[g.i_a[i]], r.lane) : vt4
         ni2 := ins_new(g, op, vt4)
@@ -972,8 +995,8 @@ func lv_transform(g &: Ng, r &: Lv):
             else:
                 g.i_a[ni2] = r.vmap[cnd]
             end
-            g.i_b[ni2] = lv_vget(g, r, ck, g.i_b[i], vt4)
-            g.i_c[ni2] = lv_vget(g, r, ck, g.i_c[i], vt4)
+            g.i_b[ni2] = lv_vget(g, r, ck, swapsel ? g.i_c[i] : g.i_b[i], vt4)
+            g.i_c[ni2] = lv_vget(g, r, ck, swapsel ? g.i_b[i] : g.i_c[i], vt4)
         else op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
             g.i_a[ni2] = lv_vget(g, r, ck, g.i_a[i], vt4)
             g.i_b[ni2] = g.i_b[i]
@@ -988,6 +1011,13 @@ func lv_transform(g &: Ng, r &: Lv):
         else:
             g.i_a[ni2] = lv_vget(g, r, ck, g.i_a[i], opty)
             g.i_b[ni2] = lv_vget(g, r, ck, g.i_b[i], opty)
+        end
+        if op == OP_ICMP and lv_sel_only(g, r, res):
+            px := g.i_x[ni2]
+            if px == CC_NE or px == CC_SGE or px == CC_SLE:
+                g.i_x[ni2] = neg_cc(px)
+                r.inv[res] = true
+            end
         end
         r.vmap[res] = new_res(g, ni2)
         ins_append(g, vb, ni2)
@@ -1132,6 +1162,7 @@ func loop_vectorize(g &: Ng): bool:
         r.checks.free()
         r.bc_s.free()
         r.bc_v.free()
+        r.inv.free()
     end
     heads.free()
     l.head.free()

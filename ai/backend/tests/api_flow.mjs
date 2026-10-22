@@ -447,6 +447,31 @@ check("only admins list guests", (await api("GET", "/admin/guests", filesSession
 const guestSummary = (await api("GET", "/admin/summary", session)).json;
 check("the summary counts guests", guestSummary.guests >= 1 && guestSummary.guest_messages >= GUEST_LIMIT && guestSummary.guests_at_limit >= 0, { guests: guestSummary.guests, guest_messages: guestSummary.guest_messages });
 
+console.log("interface language");
+const uiSession = await account("ui-lang@test.ir", "Ui Lang");
+async function askUi(headers) {
+  const c = await api("POST", "/chats", uiSession, {});
+  const r = await fetch(`${API}/chats/${c.json.chat.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uiSession}`, ...headers }, body: JSON.stringify({ text: "which interface am I on" }) });
+  const sentUi = await r.json();
+  let p;
+  for (let i = 0; i < 60; i += 1) {
+    p = await api("GET", `/chats/${c.json.chat.id}/messages/${sentUi.assistant.id}`, uiSession);
+    if (p.json.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  return p.json.body;
+}
+check("the engine is told the user is on the Persian interface by default", (await askUi({})) === "Interface: fa");
+check("the engine is told the user is on the English interface", (await askUi({ "X-Salam-Lang": "en" })) === "Interface: en");
+const uiGuest = await (await fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://salamlang.github.io", "X-Salam-Lang": "en" }, body: JSON.stringify({ text: "which interface is this" }) })).json();
+let uiGuestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  uiGuestAnswer = await (await fetch(`${API}/guest/messages/${uiGuest.id}?guest=${uiGuest.guest}`)).json();
+  if (uiGuestAnswer.status !== "pending") break;
+  await new Promise((res) => setTimeout(res, 500));
+}
+check("a guest on the English site gets the English interface note", uiGuestAnswer.body === "Interface: en", uiGuestAnswer);
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

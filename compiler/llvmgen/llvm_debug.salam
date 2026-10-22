@@ -3,6 +3,7 @@ package llvmgen
 import str
 
 include co "../sal_core.salam"
+include at "../ast.salam"
 include sm "../semantic/semantic.salam"
 
 func meta_add(v &: Lv, text: str): str:
@@ -131,11 +132,157 @@ end
 
 func debug_subprogram(v &: Lv, name: str, line: int, path: str): str:
     df := debug_file_for(v, path)
+    v.di_cur_file = df
     sp := meta_add(
         v, `distinct !DISubprogram(name: "` + name + `", scope: ` + df + ", file: " + df + ", line: " + co.I64Toa(line as i64) + ", type: " + v.di_subty + ", scopeLine: " + co.I64Toa(line as i64) + ", spFlags: DISPFlagDefinition, unit: " + v.di_cu + ")"
     )
     v.cur_sp = sp
     ret sp
+end
+
+func di_reserve(v &: Lv): str:
+    id := "!" + co.I64Toa(v.meta_n as i64)
+    v.meta_n += 1
+    ret id
+end
+
+func di_find(v &: Lv, ts: str): str:
+    repeat v.di_tnames.len() in i:
+        if str.Equals(v.di_tnames.get(i), ts):
+            ret v.di_tids.get(i)
+        end
+    end
+    ret ""
+end
+
+func di_remember(v &: Lv, ts: str, id: str): str:
+    v.di_tnames.push(ts)
+    v.di_tids.push(id)
+    ret id
+end
+
+func di_basic(v &: Lv, ts: str, bits: int, enc: str): str:
+    ret di_remember(v, ts, meta_add(v, `!DIBasicType(name: "` + di_escape(ts) + `", size: ` + co.I64Toa(bits as i64) + ", encoding: " + enc + ")"))
+end
+
+func di_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
+    if str.Len(ts) == 0 or str.Equals(ts, "void"):
+        ret ""
+    end
+    hit := di_find(v, ts)
+    if str.Len(hit) > 0:
+        ret hit
+    end
+    pbits := co.I64Toa(v.ptr_bits as i64)
+    if is_str(s, ts):
+        ch := di_find(v, "char")
+        cid := str.Len(ch) > 0 ? ch : di_basic(v, "char", 8, "DW_ATE_signed_char")
+        ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"str\", baseType: " + cid + ", size: " + pbits + ")"))
+    end
+    if is_ptr_ts(ts):
+        el := str.Substr(ts, 0, str.Len(ts) - 1)
+        mut bt := "null"
+        if not str.Equals(str.Trim(el), "void"):
+            d := di_type(v, s, a, str.Trim(el))
+            if str.Len(d) > 0:
+                bt = d
+            end
+        end
+        ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + bt + ", size: " + pbits + ")"))
+    end
+    if is_slice(ts) or str.StartsWith(ts, "dyn ") or is_variant_value_ts(ts) or fn_prefix(ts) != 0:
+        ret ""
+    end
+    if idx_byte(ts, 91) >= 0:
+        dim := array_dim(ts)
+        et := di_type(v, s, a, array_elem(ts))
+        if str.Len(et) == 0 or dim <= (0 as i64):
+            ret ""
+        end
+        mut sz := 0 as i64
+        mut al := 0 as i64
+        type_layout(v, s, a, ts, sz, al)
+        sr := meta_add(v, "!DISubrange(count: " + co.I64Toa(dim) + ")")
+        el2 := meta_add(v, "!{" + sr + "}")
+        ret di_remember(v, ts, meta_add(v, "!DICompositeType(tag: DW_TAG_array_type, baseType: " + et + ", size: " + co.I64Toa(sz * (8 as i64)) + ", elements: " + el2 + ")"))
+    end
+    if str.Equals(ts, "f32"):
+        ret di_basic(v, ts, 32, "DW_ATE_float")
+    end
+    if str.Equals(ts, "f64"):
+        ret di_basic(v, ts, 64, "DW_ATE_float")
+    end
+    if str.Equals(ts, "bool"):
+        ret di_basic(v, ts, 8, "DW_ATE_boolean")
+    end
+    if str.Equals(ts, "char"):
+        ret di_basic(v, ts, 8, "DW_ATE_signed_char")
+    end
+    if is_int_ts(ts):
+        ret di_basic(v, ts, int_bits(v, ts), is_signed_ts(ts) ? "DW_ATE_signed" : "DW_ATE_unsigned")
+    end
+    if enum_sym(v, s, a, ts) != 0:
+        ret di_basic(v, ts, 32, "DW_ATE_signed")
+    end
+    ssym := struct_sym(v, s, a, ts)
+    if ssym == 0:
+        ret ""
+    end
+    id := di_reserve(v)
+    _r := di_remember(v, ts, id)
+    mut ssz := 0 as i64
+    mut sal := 0 as i64
+    struct_layout(v, s, a, ts, ssz, sal)
+    mut mems := Vector {} as Vector<str>
+    members := sm.SymAt(s, ssym).members
+    syms := sm.ScopeAt(s, members).symbols
+    mut off := 0 as i64
+    repeat syms.len() in j:
+        f := sm.SymAt(s, syms.get(j))
+        if f.kind == sm.SYM_FIELD:
+            fts := sm.ToString(s, f.ty)
+            mut fsz := 0 as i64
+            mut fal := 0 as i64
+            type_layout(v, s, a, fts, fsz, fal)
+            if fal < (1 as i64):
+                fal = 1 as i64
+            end
+            off = (off + fal - (1 as i64)) / fal * fal
+            ft := di_type(v, s, a, fts)
+            if str.Len(ft) > 0:
+                mems.push(meta_add(v, `!DIDerivedType(tag: DW_TAG_member, name: "` + di_escape(f.name) + `", scope: ` + id + ", baseType: " + ft + ", size: " + co.I64Toa(fsz * (8 as i64)) + ", offset: " + co.I64Toa(off * (8 as i64)) + ")"))
+            end
+            off += fsz
+        end
+    end
+    mut eb := co.SbNew()
+    co.SbPuts(eb, "!{")
+    repeat mems.len() in k:
+        if k > 0:
+            co.SbPuts(eb, ", ")
+        end
+        co.SbPuts(eb, mems.get(k))
+    end
+    co.SbPuts(eb, "}")
+    els := meta_add(v, co.SbCstr(eb))
+    co.SbFree(eb)
+    mems.free()
+    out_meta(v, id + ` = distinct !DICompositeType(tag: DW_TAG_structure_type, name: "` + di_escape(ts) + `", size: ` + co.I64Toa(ssz * (8 as i64)) + ", elements: " + els + ")\n")
+    ret id
+end
+
+func debug_declare(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, slot: str, ts: str, line: int, argno: int):
+    if not v.debug or str.Len(v.cur_sp) == 0 or str.Len(name) == 0:
+        ret
+    end
+    ty := di_type(v, s, a, ts)
+    if str.Len(ty) == 0:
+        ret
+    end
+    argp := argno > 0 ? "arg: " + co.I64Toa(argno as i64) + ", " : ""
+    var := meta_add(v, `!DILocalVariable(name: "` + di_escape(name) + `", ` + argp + "scope: " + v.cur_sp + ", file: " + v.di_cur_file + ", line: " + co.I64Toa(line as i64) + ", type: " + ty + ")")
+    loc := meta_add(v, "!DILocation(line: " + co.I64Toa(line as i64) + ", column: 1, scope: " + v.cur_sp + ")")
+    out_al(v, "  call void @llvm.dbg.declare(metadata ptr " + slot + ", metadata " + var + ", metadata !DIExpression()), !dbg " + loc + "\n")
 end
 
 func debug_location(v &: Lv, line: int, col: int): str:
@@ -157,6 +304,7 @@ func debug_finalize(v &: Lv):
             v, "!llvm.module.flags = !{" + v.di_flag_dwarf + ", " + v.di_flag_debug + "}\n"
         )
         out_g(v, "!llvm.dbg.cu = !{" + v.di_cu + "}\n")
+        out_g(v, "declare void @llvm.dbg.declare(metadata, metadata, metadata) nounwind\n")
     end
     out_g(v, co.SbCstr(v.bmeta))
 end

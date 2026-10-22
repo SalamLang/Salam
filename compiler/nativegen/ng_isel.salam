@@ -1183,6 +1183,15 @@ func isel_bin(g &: Ng, i: int):
     mut a := g.i_a[i]
     mut b := g.i_b[i]
     sz := asz(g, t)
+    mut rx := 0 - 1
+    mut rc := 0
+    if not g.off_rot and rot_parts(g, i, rx, rc) and g.skipi[g.v_def[g.i_a[i]]] and g.skipi[g.v_def[g.i_b[i]]]:
+        rr := gpr(g)
+        move_into(g, rr, rx)
+        e_shift(g, SH_ROR, sz, rr, rc)
+        set_res(g, i, rr)
+        ret
+    end
     comm := op == OP_ADD or op == OP_MUL or op == OP_AND or op == OP_OR or op == OP_XOR
     if comm and g.v_kind[a] == VK_INT and g.v_kind[b] != VK_INT:
         tmp := a
@@ -1346,6 +1355,55 @@ func e_shift(g &: Ng, sub: int, sz: int, r: int, n: int):
     end
     s := e_ri(g, M_SHIFT_RI, sz, r, n as i64)
     g.mc.cc[s] = sub
+end
+
+func rot_parts(g &: Ng, i: int, x &: int, c &: int): bool:
+    op := g.i_op[i]
+    if op != OP_OR and op != OP_XOR and op != OP_ADD:
+        ret false
+    end
+    bits := int_bits(g, g.i_ty[i])
+    if bits != 32 and bits != 64:
+        ret false
+    end
+    repeat 2 in k:
+        p := k == 0 ? g.i_a[i] : g.i_b[i]
+        q := k == 0 ? g.i_b[i] : g.i_a[i]
+        if p >= 0 and q >= 0 and g.v_kind[p] == VK_INS and g.v_kind[q] == VK_INS and g.v_uses[p] == 1 and g.v_uses[q] == 1:
+            dp := g.v_def[p]
+            dq := g.v_def[q]
+            if g.i_op[dp] == OP_LSHR and g.i_op[dq] == OP_SHL and g.i_a[dp] == g.i_a[dq] and is_cint(g, g.i_b[dp]) and is_cint(g, g.i_b[dq]):
+                c1 := g.v_i[g.i_b[dp]]
+                c2 := g.v_i[g.i_b[dq]]
+                if c1 > (0 as i64) and c2 > (0 as i64) and c1 + c2 == (bits as i64):
+                    x = g.i_a[dp]
+                    c = c1 as int
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func rot_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if g.off_rot or r < 0 or g.v_uses[r] != 1 or not is_cint(g, g.i_b[i]):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret false
+        end
+        if uses_val(g, j, r):
+            mut x := 0 - 1
+            mut c := 0
+            ret rot_parts(g, j, x, c)
+        end
+        j = g.i_next[j]
+    end
+    ret false
 end
 
 func log2_exact(v: u64): int:
@@ -3460,6 +3518,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_SHL, OP_LSHR, OP_ASHR:
             if op == OP_SHL and mul_add_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
+            if (op == OP_SHL or op == OP_LSHR) and rot_user(g, i):
                 g.skipi[i] = true
                 ret
             end

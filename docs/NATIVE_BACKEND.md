@@ -195,7 +195,8 @@ single-use load into the ALU instruction or compare that consumes it, loads a
 the 32-bit uses), ties a commutative floating-point add or multiply to the
 operand that dies there (and squares `x * x` in one register), ties a `cmov`
 to the operand that dies there by inverting the condition, turns
-`x & 0xffffffff` into a 32-bit `mov`, builds an `insertvalue` chain that is returned directly in
+`x & 0xffffffff` into a 32-bit `mov`, emits `ror` for
+`(x >> n) | (x << (bits - n))` (also with `^` or `+`), builds an `insertvalue` chain that is returned directly in
 the caller's result buffer, copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
@@ -251,7 +252,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

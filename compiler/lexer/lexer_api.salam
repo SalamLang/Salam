@@ -31,6 +31,17 @@ pub func RunSplit(
     L.keep_comments = keep_comments
     L.lgr = lgr
     L.pack = pack
+    mut marker_at := co.SrcPos {}
+    marker_bad := MarkerProblem(sf.text, sf.len, marker_at)
+    if marker_bad == MARKER_WANT_FA:
+        error_at(
+            L, marker_at, "a Persian file declares its language with '// زبان: فارسی'; mixed forms such as '// lang: fa' are not accepted"
+        )
+    else marker_bad == MARKER_WANT_EN:
+        error_at(
+            L, marker_at, "an English file declares its language with '// lang: en'; a directive that mixes English and Persian words is not accepted"
+        )
+    end
     lg.Log(
         lgr, lg.PH_LEXER, lg.LOG_DEBUG, "lexing " + sf.path + " (" + sf.len + " bytes, lang=" + lp.Code(pack) + ")"
     )
@@ -66,86 +77,15 @@ pub func RunSplit(
 end
 
 pub func MarkerCode(text: str, length: int): str:
-    mut i := 0
-    mut line := 0
-    until i < length and line < 8:
-        mut ls := i
-        until ls < length and (byte_at(text, ls) == 32 or byte_at(text, ls) == 9):
-            ls += 1
-        end
-        mut le := ls
-        until le < length and byte_at(text, le) != 10:
-            le += 1
-        end
-        if ls + 1 < length and byte_at(text, ls) == 47 and byte_at(text, ls + 1) == 47:
-            mut p := ls + 2
-            until p < le:
-                mut fa_tagged := false
-                mut tlen := det_match_bytes(text, p, le, k_lx_fa_tag, 8)
-                if tlen != 0:
-                    fa_tagged = true
-                end
-                if tlen == 0:
-                    tlen = det_match_ci(text, p, le, "language", 8)
-                end
-                if tlen == 0:
-                    tlen = det_match_ci(text, p, le, "lang", 4)
-                end
-                if tlen == 0:
-                    p += 1
-                    continue
-                end
-                mut q := p + tlen
-                until q < le and (byte_at(text, q) == 32 or byte_at(text, q) == 9):
-                    q += 1
-                end
-                if q >= le or byte_at(text, q) != 58:
-                    p += 1
-                    continue
-                end
-                q += 1
-                until q < le and (byte_at(text, q) == 32 or byte_at(text, q) == 9):
-                    q += 1
-                end
-                if fa_tagged:
-                    if det_match_bytes(text, q, le, k_lx_fa_val, 10) != 0:
-                        ret "fa"
-                    end
-                    if det_match_bytes(text, q, le, k_lx_en_val, 14) != 0:
-                        ret "en"
-                    end
-                    ret ""
-                end
-                if det_match_ci(text, q, le, "english", 7) != 0:
-                    ret "en"
-                end
-                if det_match_ci(text, q, le, "persian", 7) != 0:
-                    ret "fa"
-                end
-                if det_match_ci(text, q, le, "farsi", 5) != 0:
-                    ret "fa"
-                end
-                cs := q
-                until q < le and (
-                    (byte_at(text, q) >= 97 and byte_at(text, q) <= 122) or (byte_at(text, q) >= 65 and byte_at(text, q) <= 90)
-                ):
-                    q += 1
-                end
-                if q - cs == 2:
-                    if (byte_at(text, cs) == 101 or byte_at(text, cs) == 69) and (byte_at(text, cs + 1) == 110 or byte_at(text, cs + 1) == 78):
-                        ret "en"
-                    end
-                    if (byte_at(text, cs) == 102 or byte_at(text, cs) == 70) and (byte_at(text, cs + 1) == 97 or byte_at(text, cs + 1) == 65):
-                        ret "fa"
-                    end
-                end
-                ret ""
-            end
-        end
-        i = le < length ? le + 1 : le
-        line += 1
-    end
-    ret ""
+    mut bad := 0
+    mut bad_pos := co.SrcPos {}
+    ret marker_scan(text, length, bad, bad_pos)
+end
+
+pub func MarkerProblem(text: str, length: int, at &: co.SrcPos): int:
+    mut bad := 0
+    _code := marker_scan(text, length, bad, at)
+    ret bad
 end
 
 pub func Detect(sf: src.SourceFile, fallback: int): int:

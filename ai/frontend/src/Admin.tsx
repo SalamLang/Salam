@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminSession, type AdminSummary, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
 import { fmtSize } from "./Attach";
+import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
@@ -1308,6 +1309,149 @@ function shortAgent(ua: string): string {
   return [browser.replace("Version/", "Safari ").replace(" Safari", ""), os].filter(Boolean).join(t("، ", ", ")) || ua.slice(0, 60);
 }
 
+function GuestThread({ id }: { id: number }) {
+  const [msgs, setMsgs] = useState<GuestMessage[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    api
+      .adminGuest(id)
+      .then((r) => live && setMsgs(r.messages))
+      .catch((e) => live && setError(errText(e, t("بارگذاری گفت‌وگو ناموفق بود.", "Loading the chat failed."))));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  if (error)
+    return (
+      <div className="form-error" role="alert">
+        {error}
+      </div>
+    );
+  if (!msgs)
+    return (
+      <div className="list-loading" role="status">
+        <span className="spinner" />
+      </div>
+    );
+  return (
+    <div className="guest-thread">
+      {msgs.map((m) => (
+        <div key={m.id} className={`guest-msg ${m.role}`}>
+          <span className="guest-who">
+            {m.role === "user" ? t("مهمان", "Guest") : t("سِلامِت", "Salamat")} · <span title={fmtDateTime(m.created)}>{fmtRelative(m.created)}</span>
+            {m.status !== "done" && <span className="muted"> ({m.status})</span>}
+          </span>
+          <div dir="auto">{m.role === "user" ? <p className="guest-text">{m.body}</p> : <Markdown text={m.body} />}</div>
+        </div>
+      ))}
+      {msgs.length === 0 && <p className="muted">{t("پیامی نیست.", "No messages.")}</p>}
+    </div>
+  );
+}
+
+function Guests() {
+  const [rows, setRows] = useState<AdminGuest[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [open, setOpen] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    api
+      .adminGuests(offset)
+      .then((r) => {
+        if (!live) return;
+        setRows(r.guests);
+        setTotal(r.total);
+      })
+      .catch((e) => live && setError(errText(e, t("بارگذاری مهمان‌ها ناموفق بود.", "Loading guests failed."))));
+    return () => {
+      live = false;
+    };
+  }, [offset]);
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("گفت‌وگوهای مهمان سایت", "Website guest chats")}</h3>
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : rows === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+        </div>
+      ) : (
+        <>
+          <div className="table-wrap scroll-y">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t("اولین پرسش", "First question")}</th>
+                  <th scope="col">{t("پیام", "Messages")}</th>
+                  <th scope="col">{t("زبان", "Language")}</th>
+                  <th scope="col">IP</th>
+                  <th scope="col">{t("شروع", "Started")}</th>
+                  <th scope="col">{t("آخرین پیام", "Last message")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((g) => (
+                  <Fragment key={g.id}>
+                    <tr className={open === g.id ? "selected" : ""}>
+                      <td className="cell-clip">
+                        <button type="button" className="link" onClick={() => setOpen((o) => (o === g.id ? null : g.id))} aria-expanded={open === g.id} title={g.first}>
+                          <bdi>{g.first || t("(بدون پیام)", "(no message)")}</bdi>
+                        </button>
+                      </td>
+                      <td>{fmtNum(g.messages)}</td>
+                      <td>{g.lang === "en" ? "English" : "فارسی"}</td>
+                      <td dir="ltr" className="cell-ltr">
+                        {g.ip || "-"}
+                      </td>
+                      <td title={fmtDateTime(g.created)}>{fmtRelative(g.created)}</td>
+                      <td title={fmtDateTime(g.updated)}>{fmtRelative(g.updated)}</td>
+                    </tr>
+                    {open === g.id && (
+                      <tr>
+                        <td colSpan={6}>
+                          <GuestThread id={g.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="empty-cell">
+                      {t("هنوز مهمانی از سایت نپرسیده است.", "No website guest has asked anything yet.")}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="pager">
+            <span className="muted">
+              {fmtNum(total === 0 ? 0 : offset + 1)} {t("تا", "to")} {fmtNum(Math.min(total, offset + rows.length))} {t("از", "of")} {fmtNum(total)}
+            </span>
+            <div>
+              <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                {t("قبلی", "Previous")}
+              </button>
+              <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+                {t("بعدی", "Next")}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -1738,6 +1882,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <div className="tiles">
             <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
             <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
+            <Tile label={t("مهمان‌های سایت", "Website guests")} value={s.guests ?? 0} sub={t(`${fmtNum(s.guest_messages ?? 0)} پیام، ${fmtNum(s.guests_at_limit ?? 0)} به سقف رسیدند`, `${fmtNum(s.guest_messages ?? 0)} messages, ${fmtNum(s.guests_at_limit ?? 0)} hit the limit`)} />
             <Tile label={t("فایل‌های بارگذاری‌شده", "Uploaded files")} value={s.uploads ?? 0} sub={t(`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`, `${fmtNum(s.uploads_images ?? 0)} images, ${fmtSize(s.uploads_bytes ?? 0)}`)} />
             <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
             <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
@@ -1772,6 +1917,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
             </div>
           )}
           <Sessions picked={picked} notify={notify} />
+          {!picked && <Guests />}
           <Conversations picked={picked} />
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />

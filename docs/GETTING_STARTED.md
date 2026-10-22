@@ -227,11 +227,13 @@ name), so `salam serve` picks it up directly.
 
 ### 🧩 Official packages
 
-Some packages are maintained with Salam but do not ship with it, so a fresh
-install stays small: `db.redis`, `db.meilisearch`, `db.elasticsearch`,
-`db.typesense` and `db.opensearch` so far. Their source lives in
-[`packages/`](../packages/). Import them as usual (`import db.redis`) after
-adding them to the project:
+Many packages are maintained with Salam but do not ship with it, so a fresh
+install stays small: the search and cache clients (`db.redis`,
+`db.opensearch`, ...), machine learning (`tensor`, `nn`, `llm`, ...), audio,
+the network services (`grpc`, `ftp`, `ssh`, `net.websocket`,
+`net.http.swagger`, ...), `webview`, `opencv` and `excel`.
+[`packages/`](../packages/) holds them all and `salam search` finds them.
+Import them as usual (`import db.redis`) after adding them to the project:
 
 ```sh
 salam add db.redis

@@ -433,6 +433,15 @@ const over = await guestPost({ guest: firstGuestBody.guest, text: "one too many"
 const overBody = await over.json();
 check("after the guest limit the guest is sent to sign up", over.status === 403 && overBody.error === "guest_limit" && overBody.message.includes("Sign up"), overBody);
 
+const guestList = await api("GET", "/admin/guests", session);
+const listedGuest = guestList.json?.guests?.find((g) => g.first === "guest hello");
+check("admins see website guest chats", listedGuest?.messages === GUEST_LIMIT, guestList.json?.guests?.[0]);
+const guestThread = await api("GET", `/admin/guests/${listedGuest?.id}`, session);
+check("an admin can read a guest chat", guestThread.json?.messages?.[0]?.body === "guest hello" && guestThread.json.messages[1]?.body.startsWith("Echo: guest hello"), guestThread.json?.messages?.slice(0, 2));
+check("only admins list guests", (await api("GET", "/admin/guests", filesSession)).res.status === 403);
+const guestSummary = (await api("GET", "/admin/summary", session)).json;
+check("the summary counts guests", guestSummary.guests >= 1 && guestSummary.guest_messages >= GUEST_LIMIT && guestSummary.guests_at_limit >= 0, { guests: guestSummary.guests, guest_messages: guestSummary.guest_messages });
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

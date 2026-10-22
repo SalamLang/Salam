@@ -126,7 +126,10 @@ recursive. Each function then goes through:
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
     Pointers that come from different `malloc`/`calloc`/`realloc` calls never
-    alias, so writing one vector's buffer keeps loads from another one.
+    alias, so writing one vector's buffer keeps loads from another one. A load
+    after a merge whose value every predecessor already has (stored or
+    loaded) becomes a phi, which keeps the print buffer's length in a
+    register across its flush branch.
 12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 13. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
@@ -181,7 +184,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

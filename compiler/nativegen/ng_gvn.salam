@@ -22,6 +22,7 @@ pub struct Gvn:
     pub site_ep: Vector<int> = Vector {}
     pub site_memo: Vector<int> = Vector {}
     pub ep_out_u: Vector<int> = Vector {}
+    pub glb_first: Vector<int> = Vector {}
     pub epu: int = 0
     pub ld_ty: Vector<int> = Vector {}
     pub ld_ep: Vector<int> = Vector {}
@@ -177,6 +178,25 @@ func site_of(g &: Ng, t &: Gvn, v0: int): int:
     res := bad ? 0 - 1 : site
     t.site_memo[r0] = res
     ret res
+end
+
+func gvn_root(g &: Ng, t &: Gvn, a: int, disp &: i64): int:
+    r := addr_root(g, a, disp)
+    if r < 0 or g.v_kind[r] != VK_GLB:
+        ret r
+    end
+    sy := g.v_def[r]
+    if sy < 0:
+        ret r
+    end
+    disp = disp + g.v_i[r]
+    until t.glb_first.len() <= sy:
+        t.glb_first.push(0 - 1)
+    end
+    if t.glb_first[sy] < 0:
+        t.glb_first[sy] = r
+    end
+    ret t.glb_first[sy]
 end
 
 func site_ok(t &: Gvn, k: int, site: int): bool:
@@ -469,7 +489,7 @@ func gvn(g &: Ng): bool:
             if iop == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not g.off_lcse:
                 lc := mem_cls(g, i)
                 mut ldisp := 0 as i64
-                lroot := addr_root(g, g.i_a[i], ldisp)
+                lroot := gvn_root(g, t, g.i_a[i], ldisp)
                 lep := lc == 1 ? epp : (lc == 2 ? epd : ep)
                 lep2 := root_kind(g, lroot) == 1 ? eps : 0 - 1
                 lsite := site_of(g, t, lroot)
@@ -511,7 +531,7 @@ func gvn(g &: Ng): bool:
             if mem_write(g, i):
                 sc := iop == OP_STORE ? mem_cls(g, i) : 0
                 mut sdisp := 0 as i64
-                sroot := iop == OP_STORE ? addr_root(g, g.i_b[i], sdisp) : 0 - 1
+                sroot := iop == OP_STORE ? gvn_root(g, t, g.i_b[i], sdisp) : 0 - 1
                 sk := iop == OP_STORE ? root_kind(g, sroot) : 0
                 ssite := iop == OP_STORE and sroot >= 0 ? site_of(g, t, sroot) : 0 - 1
                 if sk != 2:
@@ -592,6 +612,7 @@ func gvn(g &: Ng): bool:
     t.site_ep.free()
     t.site_memo.free()
     t.ep_out_u.free()
+    t.glb_first.free()
     t.ld_addr.free()
     t.ld_ty.free()
     t.ld_ep.free()

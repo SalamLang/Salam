@@ -92,6 +92,11 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    wk_script() {
+        got=$(tmo "${SALAM_TEST_TIMEOUT:-900}" sh "$fabs" "$SALAM_ABS" 2>&1 | tr -d '\r')
+        wk_check "$expabs" "$got"
+    }
+
     wk_new() {
         name=$(basename "$f" .out)
         jobdir="$WORK/newjob_${jobid}_$$"
@@ -465,6 +470,7 @@ EOF_LAYOUT_NOT
         new) wk_new ;;
         project) wk_project ;;
         lib) wk_lib ;;
+        script) wk_script ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
@@ -715,6 +721,10 @@ if want lib && command -v cc >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null)" = Li
             add_job lib "lib/$lang/$name" "tests/$lang/lib/$name" "$lang" "$f"
         done
     done
+fi
+
+if want packages && command -v git >/dev/null 2>&1; then
+    add_job script "packages/en/flow" "tools/bash/test-packages.sh" "en" "tests/en/packages/flow.out"
 fi
 
 if want new; then

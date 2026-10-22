@@ -2184,6 +2184,7 @@ salam new name                          # scaffold a project: name/main.salam + 
 salam init                              # same, in the current directory
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
+salam update / salam update pkg@latest  # same-major updates by default; uninstall, deps clean too (docs/PACKAGES.md)
 salam build --lib[=static]              # .so/.dylib/.dll (or .a) + NAME.h from the entry file's export: block
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)

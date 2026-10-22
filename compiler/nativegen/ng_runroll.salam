@@ -1,6 +1,7 @@
 package nativegen
 
 const RUN_MAX_SIZE := 48
+const RUN_SMALL := 16
 
 func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, cc &: int, skip: int, maxsz: int): bool:
     t := g.b_last[h]
@@ -203,11 +204,20 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
     g.i_f[t] = g.i_f[t] | IF_NORUN
     body0 := g.i_b[t]
     mut order := Vector {} as Vector<int>
+    mut size := 0
     each b in g.b_rpo:
         if l.inl[b] == mark and b != h:
             order.push(b)
+            mut j := g.b_first[b]
+            until j >= 0:
+                if g.i_op[j] != OP_PHI and g.i_op[j] != OP_BR:
+                    size += 1
+                end
+                j = g.i_next[j]
+            end
         end
     end
+    nf := size <= RUN_SMALL ? 4 : 2
     mut hphis := Vector {} as Vector<int>
     mut i := g.b_first[h]
     until i >= 0 and g.i_op[i] == OP_PHI:
@@ -236,55 +246,60 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
             ivu = g.i_res[uphis[k]]
         end
     end
-    limu := run_limit(g, pre, lim, step, cc, g.i_ty[ph])
+    limu := run_limit(g, pre, lim, step * ((nf - 1) as i64), cc, g.i_ty[ph])
     ic := ins_new(g, OP_ICMP, T_I1)
     g.i_a[ic] = ivu
     g.i_b[ic] = limu
     g.i_x[ic] = step > (0 as i64) ? CC_SLT : CC_SGT
     icv := new_res(g, ic)
     ins_append(g, hu, ic)
-    mut u1 := Usw {}
-    repeat g.v_kind.len():
-        u1.vmap.push(0 - 1)
+    mut mids := Vector {} as Vector<int>
+    repeat nf - 1:
+        mids.push(new_blk(g))
     end
-    repeat g.b_first.len():
-        u1.bmap.push(0 - 1)
-    end
-    repeat np in k2:
-        u1.vmap[g.i_res[hphis[k2]]] = g.i_res[uphis[k2]]
-    end
-    mut u2 := Usw {}
-    repeat g.v_kind.len():
-        u2.vmap.push(0 - 1)
-    end
-    repeat g.b_first.len():
-        u2.bmap.push(0 - 1)
-    end
-    repeat np in k3:
-        u2.vmap[g.i_res[hphis[k3]]] = 0 - 1
-    end
-    mid := new_blk(g)
     mut none := Vector {} as Vector<int>
-    run_clone_body(g, u1, h, order, mid, none)
-    repeat np in k4:
-        lv := phi_val_for(g, hphis[k4], latch)
-        u2.vmap[g.i_res[hphis[k4]]] = usw_val(u1, lv)
+    mut prev := Usw {}
+    mut first := 0 - 1
+    repeat nf in c:
+        mut u := Usw {}
+        repeat g.v_kind.len():
+            u.vmap.push(0 - 1)
+        end
+        repeat g.b_first.len():
+            u.bmap.push(0 - 1)
+        end
+        repeat np in k2:
+            if c == 0:
+                u.vmap[g.i_res[hphis[k2]]] = g.i_res[uphis[k2]]
+            else:
+                u.vmap[g.i_res[hphis[k2]]] = usw_val(prev, phi_val_for(g, hphis[k2], latch))
+            end
+        end
+        back := c < nf - 1 ? mids[c] : hu
+        run_clone_body(g, u, h, order, back, none)
+        if c == 0:
+            first = u.bmap[body0]
+        else:
+            bm := ins_new(g, OP_BR, T_VOID)
+            g.i_b[bm] = u.bmap[body0]
+            ins_append(g, mids[c - 1], bm)
+        end
+        prev.vmap.free()
+        prev.bmap.free()
+        prev.blocks.free()
+        prev = u
     end
-    run_clone_body(g, u2, h, order, hu, none)
-    bm := ins_new(g, OP_BR, T_VOID)
-    g.i_b[bm] = u2.bmap[body0]
-    ins_append(g, mid, bm)
     cb := ins_new(g, OP_CBR, T_VOID)
     g.i_a[cb] = icv
-    g.i_b[cb] = u1.bmap[body0]
+    g.i_b[cb] = first
     g.i_c[cb] = rb
     g.i_f[cb] = IF_NORUN | IF_NOVEC
     ins_append(g, hu, cb)
     repeat np in k5:
         up2 := uphis[k5]
         lv2 := phi_val_for(g, hphis[k5], latch)
-        g.pool[g.i_ps[up2] + 2] = usw_val(u2, lv2)
-        g.pool[g.i_ps[up2] + 3] = u2.bmap[latch]
+        g.pool[g.i_ps[up2] + 2] = usw_val(prev, lv2)
+        g.pool[g.i_ps[up2] + 3] = prev.bmap[latch]
     end
     br := ins_new(g, OP_BR, T_VOID)
     g.i_b[br] = h
@@ -302,14 +317,12 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
     end
     order.free()
     none.free()
+    mids.free()
     hphis.free()
     uphis.free()
-    u1.vmap.free()
-    u1.bmap.free()
-    u1.blocks.free()
-    u2.vmap.free()
-    u2.bmap.free()
-    u2.blocks.free()
+    prev.vmap.free()
+    prev.bmap.free()
+    prev.blocks.free()
 end
 
 func runtime_unroll(g &: Ng): bool:

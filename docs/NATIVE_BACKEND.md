@@ -103,7 +103,13 @@ then goes through:
 8. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too. A loop of any depth
-   that provably runs exactly once loses its back edge, and unrolling runs
+   that provably runs exactly once loses its back edge. The size limit is
+   checked per iteration: a branch on the counter (`if i < 15:` inside a
+   16-step loop) is resolved for each iteration and only the arm that runs
+   is counted, so a carry loop whose last step differs still unrolls. The
+   growth from full unrolling does not count against the callee's inline
+   limit (up to 320 instructions), so a small carry loop is still inlined
+   into its caller after it was unrolled, as LLVM does. Unrolling runs
    again after each value numbering pass that found new constants, so the
    blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
    code once the sizes are forwarded from the struct.
@@ -282,7 +288,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -11,6 +11,10 @@ pub struct Unr:
     pub bmap: Vector<int> = Vector {}
     pub heads: Vector<int> = Vector {}
     pub wl: Vector<int> = Vector {}
+    pub ivals: Vector<i64> = Vector {}
+    pub iv: int = 0 - 1
+    pub body: int = 0
+    pub total: int = 0
 end
 
 func unr_val(u &: Unr, v: int): int:
@@ -138,7 +142,10 @@ func trip_count(g &: Ng, u &: Unr, h: int, latch: int, pre: int): int:
         ret 0 - 1
     end
     mut v := g.v_i[init]
+    u.ivals.clear()
+    u.iv = iv
     repeat UNR_MAX_TRIP + 1 in k:
+        u.ivals.push(v)
         cnd := eval_icmp(g, g.v_ty[lim], p, v, g.v_i[lim])
         if cnd != stay_on_true:
             ret k
@@ -153,9 +160,91 @@ func trip_count(g &: Ng, u &: Unr, h: int, latch: int, pre: int): int:
     ret 0 - 1
 end
 
+func iv_branch(g &: Ng, u &: Unr, t: int, v: i64, taken &: int): bool:
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    mut x := g.i_a[d]
+    mut k := g.i_b[d]
+    mut p := g.i_x[d]
+    if is_cint(g, x):
+        tmp := x
+        x = k
+        k = tmp
+        p = swap_pred(p)
+    end
+    if not is_cint(g, k) or x < 0 or g.v_kind[x] != VK_INS:
+        ret false
+    end
+    if x != u.iv:
+        xd := g.v_def[x]
+        if g.i_op[xd] != OP_TRUNC or g.i_a[xd] != u.iv:
+            ret false
+        end
+    end
+    tx := g.v_ty[x]
+    taken = eval_icmp(g, tx, p, norm_int(g, tx, v), g.v_i[k]) ? g.i_b[t] : g.i_c[t]
+    ret true
+end
+
+func unroll_sim_size(g &: Ng, u &: Unr, h: int, trips: int, bsz &: Vector<int>): int:
+    if g.off_usim or u.iv < 0 or u.ivals.len() < trips:
+        ret 0 - 1
+    end
+    mut stamp := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        stamp.push(0)
+    end
+    mut stk := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    mut tot := 0
+    repeat trips in k:
+        stk.clear()
+        stk.push(h)
+        until stk.len() > 0:
+            b := stk.pop()
+            if stamp[b] == k + 1:
+                continue
+            end
+            stamp[b] = k + 1
+            if b != h:
+                tot += bsz[b]
+            end
+            t := g.b_last[b]
+            mut tk := 0 - 1
+            if b != h and t >= 0 and g.i_op[t] == OP_CBR and iv_branch(g, u, t, u.ivals[k], tk):
+                tot -= 2
+                if u.inl[tk] and tk != h:
+                    stk.push(tk)
+                end
+            else:
+                blk_succs(g, b, succ)
+                each s in succ:
+                    if u.inl[s] and s != h:
+                        stk.push(s)
+                    end
+                end
+            end
+        end
+    end
+    stamp.free()
+    stk.free()
+    succ.free()
+    ret tot
+end
+
 func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
     mut n := 0
     mut succ := Vector {} as Vector<int>
+    mut bsz := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        bsz.push(0)
+    end
     each b in u.blocks:
         if b != h and g.b_order[b] < g.b_order[h]:
             succ.free()
@@ -190,11 +279,21 @@ func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
                 end
             end
             n += 1
+            bsz[b] = bsz[b] + 1
             i = g.i_next[i]
         end
     end
     succ.free()
-    ret n * trips <= UNR_MAX_SIZE
+    u.body = n
+    u.total = n * trips
+    if n * trips <= UNR_MAX_SIZE:
+        bsz.free()
+        ret true
+    end
+    sim := unroll_sim_size(g, u, h, trips, bsz)
+    bsz.free()
+    u.total = sim
+    ret sim >= 0 and sim <= UNR_MAX_SIZE
 end
 
 func clone_into(g &: Ng, u &: Unr, i: int, nb: int, h: int, hnext: int, hcur: int): int:
@@ -383,6 +482,9 @@ func unroll_loops(g &: Ng): bool:
                 continue
             end
             unroll_one(g, u, h, b, pre, trips)
+            if u.total > u.body:
+                g.unr_grow += u.total - u.body
+            end
             done = true
         end
     end
@@ -394,6 +496,7 @@ func unroll_loops(g &: Ng): bool:
     u.bmap.free()
     u.heads.free()
     u.wl.free()
+    u.ivals.free()
     if done:
         ensure_terms(g)
         build_cfg(g)

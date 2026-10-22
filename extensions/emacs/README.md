@@ -59,7 +59,7 @@ walks the errors.
       salam-stdlib-path "")
 ```
 
-`salam-lang` of `"auto"` reads a `//! lang:` directive, then falls back to
+`salam-lang` of `"auto"` reads a `// زبان: فارسی` or `// lang: en` directive, then falls back to
 detecting the script the buffer is written in.
 
 ## Language server

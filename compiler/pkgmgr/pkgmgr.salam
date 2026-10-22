@@ -177,6 +177,28 @@ func ensure_project(importer_dir: str): int:
     ret RES_OK
 end
 
+func is_major_seg(seg: str): int:
+    n := str.Len(seg)
+    if n < 2 or not str.StartsWith(seg, "v"):
+        ret 0
+    end
+    mut v := 0
+    mut i := 1
+    until i < n:
+        c := str.Substr(seg, i, 1)
+        d := str.IndexOf("0123456789", c)
+        if d < 0:
+            ret 0
+        end
+        v = v * 10 + d
+        i += 1
+    end
+    if v < 2:
+        ret 0
+    end
+    ret v
+end
+
 pub func PkgRoot(): str:
     e := os.Env("SALAM_PKG")
     if str.Len(e) > 0:
@@ -237,12 +259,44 @@ pub func IsPathImport(spec: str): bool:
     ret str.Contains(head, ".") and not str.StartsWith(head, ".")
 end
 
+pub func MajorSuffix(mod: str): int:
+    mut segs := segments(mod)
+    defer segs.free()
+    if segs.len() < 4:
+        ret 0
+    end
+    ret is_major_seg(segs.get(segs.len() - 1))
+end
+
+pub func RepoOf(mod: str): str:
+    if MajorSuffix(mod) == 0:
+        ret mod
+    end
+    ret str.Substr(mod, 0, str.LastIndex(mod, "/"))
+end
+
+pub func PackageNameOf(spec: str): str:
+    mut segs := segments(spec)
+    defer segs.free()
+    n := segs.len()
+    if n == 0:
+        ret ""
+    end
+    if n >= 4 and is_major_seg(segs.get(n - 1)) > 0:
+        ret segs.get(n - 2)
+    end
+    ret segs.get(n - 1)
+end
+
 pub func ModuleOf(spec: str): str:
     mut segs := segments(spec)
     defer segs.free()
     n := segs.len()
     if n <= 3:
         ret join_segments(segs, 0, n)
+    end
+    if is_major_seg(segs.get(3)) > 0:
+        ret join_segments(segs, 0, 4)
     end
     ret join_segments(segs, 0, 3)
 end
@@ -348,11 +402,25 @@ pub func ResolveImport(importer_dir: str, spec: str, code &: int): str:
     mut modsegs := segments(g_pm_mods.get(best))
     defer modsegs.free()
     sub := join_segments(segs, modsegs.len(), segs.len())
+    modname := g_pm_mods.get(best)
+    major := MajorSuffix(modname)
+    if major > 0:
+        majdir := pth.PathJoin(base, "v" + str.FromInt(major as i64))
+        if os.IsDir(majdir):
+            base = majdir
+        end
+    end
     mut dir := base
     if str.Len(sub) > 0:
         dir = pth.PathJoin(base, sub)
     end
-    entry := pth.PathNormalize(pth.PathJoin(dir, segs.get(segs.len() - 1) + ".salam"))
+    mut entry := pth.PathNormalize(pth.PathJoin(dir, PackageNameOf(spec) + ".salam"))
+    if major > 0 and str.Len(sub) == 0:
+        numbered := pth.PathNormalize(pth.PathJoin(dir, PackageNameOf(spec) + str.FromInt(major as i64) + ".salam"))
+        if os.Exists(numbered):
+            entry = numbered
+        end
+    end
     if not os.Exists(entry):
         code = RES_NO_ENTRY
         ret entry

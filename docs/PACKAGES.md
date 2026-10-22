@@ -48,9 +48,23 @@ winget = "SQLite.SQLite"
   library, as if `--lib` was given. `--lib=static` still overrides it.
 - **`[package].name`** names the executable or library that `salam build`
   writes for the project.
-- **Dependency versions** are exact tags (`v1.2.0`) or pseudo versions
-  (`v0.0.0-<12 hex>`) for repositories without a release tag. `salam.lock`
-  records what was actually chosen.
+- **Dependency versions** are exact tags (`v1.2.0`), pseudo versions
+  (`v0.0.0-<12 hex>`) for repositories without a release tag, or ranges:
+  `^1.2` (any 1.x from 1.2.0; for 0.x, the same minor), `~1.2` (1.2.x) and
+  `>=1.2`. `salam add pkg@^1.2` writes the range and locks the newest
+  release inside it; `salam update` moves within it. A range a dependency
+  sets is checked against the version the build ends up with.
+- **`[lib] export_pub = true`** exports every `pub` function of the entry
+  file as `<name>_<Function>` in a `--lib` build, so a library needs no
+  `export:` block.
+- **`[native.<lib>.prebuilt.<platform>]`** lists a ready-built library for
+  one platform (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
+  `macos-x86_64`, `windows-x86_64`, ...): `url`, `sha256`, and `lib`, the
+  path of the `.a` inside the archive (the `url` itself when it is the
+  library). A build uses the system library, then the prebuilt one, then
+  the C sources. A `--target` build picks the prebuilt entry of the target's
+  platform and compiles sources with `clang --target=<triple>` and the
+  bundled sysroot.
 
 ## salam.lock
 
@@ -71,6 +85,12 @@ covers every file of the package except `.git` and `.salam-commit`, so a
 download by Git and a download of GitHub's tar.gz give the same sum.
 `salam deps` re-checks it.
 
+Every sum is also kept in `~/.salam/pkg/sums.txt` the first time this
+machine downloads a version. If a later download of the same version comes
+out different (a tag that was moved after release), the command stops; if
+the new copy is the right one, delete its line from that file. `salam deps
+clean` keeps this file.
+
 ## Importing
 
 ```salam
@@ -83,6 +103,22 @@ import tools "github.com/owner/repo/sub" // the package in the repo's sub/ folde
 A path import resolves to `<repo>/<last segment>.salam` (or
 `<repo>/<sub>/<sub>.salam`). It only works inside a project whose
 `salam.toml` lists the module.
+
+**Major versions.** `import "github.com/owner/repo"` may use any release.
+`import "github.com/owner/repo/v2"` is its own module that only takes v2.x
+tags, so v1 and v2 can be in one program. A repository can keep v2 in a `v2/`
+folder or at its root. To be usable beside v1, the v2 entry is named
+`<repo>2.salam` and declares its own package name (`package repo2`); import
+it with an alias:
+
+```salam
+import "github.com/owner/greet"
+import g2 "github.com/owner/greet/v2"
+```
+
+**GitLab subgroups.** `salam add gitlab.com/group/subgroup/project` finds
+the real project path by asking GitLab (or Git) for the longest path that
+exists, so a subgroup is not mistaken for a folder.
 
 ## Commands
 

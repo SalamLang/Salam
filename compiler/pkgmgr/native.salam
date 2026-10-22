@@ -13,6 +13,8 @@ import encoding.value
 
 include pth "../sal_path.salam"
 
+mut g_pm_native_platform := ""
+
 pub struct Native:
     pub name: str = ""
     pub link: str = ""
@@ -27,6 +29,9 @@ pub struct Native:
     pub pacman: str = ""
     pub brew: str = ""
     pub winget: str = ""
+    pub pre_url: str = ""
+    pub pre_sha256: str = ""
+    pub pre_lib: str = ""
 end
 
 func toml_str(v: value.Value, key: str): str:
@@ -90,6 +95,22 @@ func shared_ext(): str:
         ret ".dylib"
     end
     ret ".so"
+end
+
+func host_arch(): str:
+    if SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else:
+        if SALAM_ARCH_X86:
+            ret "i686"
+        else:
+            if SALAM_ARCH_ARM:
+                ret "armv7"
+            else:
+                ret "x86_64"
+            end
+        end
+    end
 end
 
 func probe_cc(cc: str): str:
@@ -160,6 +181,58 @@ func fill_native(e: value.Value, k: str, l: str, out &: Native):
     out.pacman = toml_str(e, "pacman")
     out.brew = toml_str(e, "brew")
     out.winget = toml_str(e, "winget")
+    mut ok := false
+    pre := value.ObjectGetOk(e, "prebuilt", ok)
+    if ok and value.IsObject(pre):
+        mine := value.ObjectGetOk(pre, NativePlatform(), ok)
+        if ok and value.IsObject(mine):
+            out.pre_url = toml_str(mine, "url")
+            out.pre_sha256 = toml_str(mine, "sha256")
+            out.pre_lib = toml_str(mine, "lib")
+        end
+    end
+end
+
+pub func SetNativePlatform(p: str):
+    g_pm_native_platform = p
+end
+
+pub func NativePlatform(): str:
+    if str.Len(g_pm_native_platform) > 0:
+        ret g_pm_native_platform
+    end
+    ret HostPlatform()
+end
+
+pub func PlatformOfTriple(triple: str): str:
+    t := str.Lower(triple)
+    mut arch := "x86_64"
+    if str.StartsWith(t, "aarch64") or str.StartsWith(t, "arm64"):
+        arch = "aarch64"
+    else str.StartsWith(t, "i686") or str.StartsWith(t, "i386") or str.StartsWith(t, "i586"):
+        arch = "i686"
+    else str.StartsWith(t, "arm"):
+        arch = "armv7"
+    else str.StartsWith(t, "wasm"):
+        arch = "wasm32"
+    end
+    mut os_name := "linux"
+    if str.Contains(t, "windows") or str.Contains(t, "mingw"):
+        os_name = "windows"
+    else str.Contains(t, "apple") or str.Contains(t, "darwin") or str.Contains(t, "macos"):
+        os_name = "macos"
+    else str.Contains(t, "wasi") or str.Contains(t, "emscripten"):
+        os_name = "wasm"
+    end
+    ret os_name + "-" + arch
+end
+
+pub func HostPlatform(): str:
+    os_name := host_os()
+    if str.Equals(os_name, "mac"):
+        ret "macos-" + host_arch()
+    end
+    ret os_name + "-" + host_arch()
 end
 
 pub func ReadNativeAll(dir: str, out &: Vector<Native>): bool:
@@ -355,4 +428,65 @@ pub func NativeHint(n: Native): str:
         end
     end
     ret ""
+end
+
+pub func NativePrebuilt(n: Native, objs &: Vector<str>, why &: str): bool:
+    if str.Len(n.pre_url) == 0:
+        why = "no prebuilt " + n.link + " for " + HostPlatform()
+        ret false
+    end
+    if str.Len(n.pre_sha256) == 0:
+        why = "the prebuilt " + n.link + " for " + HostPlatform() + " has no sha256"
+        ret false
+    end
+    tag := str.Substr(str.Lower(n.pre_sha256), 0, 16)
+    outdir := pth.PathJoin(pth.PathJoin(PkgRoot(), "native"), n.link + "-" + HostPlatform() + "-" + tag)
+    mut lib := n.pre_lib
+    if str.Len(lib) == 0:
+        lib = pth.PathBase(n.pre_url)
+    end
+    libpath := pth.PathJoin(outdir, lib)
+    if os.Exists(libpath):
+        objs.push(libpath)
+        ret true
+    end
+    r := http.GetBytesWith(n.pre_url, api_headers())
+    mut body := r.body
+    if r.status != 200:
+        compress.BufFree(body)
+        why = "cannot download " + n.pre_url + " (HTTP " + str.FromInt(r.status as i64) + ")"
+        ret false
+    end
+    got := sha256_buf(body)
+    if not str.Equals(str.Lower(n.pre_sha256), got):
+        compress.BufFree(body)
+        why = "checksum mismatch for " + n.pre_url + ": expected " + n.pre_sha256 + ", got " + got
+        ret false
+    end
+    if os.MkdirAll(outdir) != 0:
+        compress.BufFree(body)
+        why = "cannot create " + outdir
+        ret false
+    end
+    url := str.Lower(n.pre_url)
+    mut ok := false
+    if str.EndsWith(url, ".zip"):
+        ok = archive.ZipExtractAll(body.data, body.len, outdir)
+    else str.EndsWith(url, ".tar.gz") or str.EndsWith(url, ".tgz"):
+        mut gz := false
+        mut tar := compress.GzipDecompressBuf(body, gz)
+        if gz:
+            ok = archive.TarExtractAll(tar.data, tar.len, outdir)
+        end
+        compress.BufFree(tar)
+    else:
+        ok = archive.WriteBinaryFile(pth.PathJoin(outdir, pth.PathBase(n.pre_url)), body.data, body.len)
+    end
+    compress.BufFree(body)
+    if not ok or not os.Exists(libpath):
+        why = "the prebuilt archive " + n.pre_url + " has no " + lib
+        ret false
+    end
+    objs.push(libpath)
+    ret true
 end

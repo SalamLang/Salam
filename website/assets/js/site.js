@@ -173,7 +173,9 @@
       const url =
         salamat.getAttribute("data-ai").replace(/\/$/, "") +
         "/?q=" +
-        encodeURIComponent(q);
+        encodeURIComponent(q) +
+        "&lang=" +
+        (document.documentElement.lang === "fa" ? "fa" : "en");
       window.open(url, "_blank", "noopener");
       input.value = "";
     };

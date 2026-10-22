@@ -159,6 +159,10 @@ func sniff(b64: str): str:
     ret kind
 end
 
+func say(en: bool, fa: str, english: str): str:
+    ret en ? english : fa
+end
+
 func valid_utf8(p: void*, n: int): bool:
     bp := p as u8*
     mut i := 0
@@ -224,9 +228,9 @@ func block(name: str, text: str): str:
     ret "\n\n<attached_file name=\"" + name + "\">\n" + text + "\n</attached_file>"
 end
 
-func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: str): bool:
+func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: str, en: bool): bool:
     if size > MAX_ARCHIVE:
-        problem = "فایل فشرده‌ی «" + name + "» بزرگ‌تر از ۱۰ مگابایت است."
+        problem = say(en, "فایل فشرده‌ی «" + name + "» بزرگ‌تر از ۱۰ مگابایت است.", "The archive " + name + " is larger than 10 MB.")
         ret false
     end
     buf := mem.Allocate((size + 16) as u64)
@@ -234,7 +238,7 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
     n := encoding.Base64DecodeBytes(b64, buf, size + 16, ok)
     if not ok or n <= 0:
         mem.Free(buf)
-        problem = "فایل «" + name + "» خراب است."
+        problem = say(en, "فایل «" + name + "» خراب است.", "The file " + name + " is damaged.")
         ret false
     end
     mut entries := archive.ZipList(buf, n)
@@ -271,7 +275,7 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
     archive.FreeEntries(entries)
     mem.Free(buf)
     if kept == 0:
-        problem = "در فایل «" + name + "» هیچ فایل متنی قابل خواندنی پیدا نشد."
+        problem = say(en, "در فایل «" + name + "» هیچ فایل متنی قابل خواندنی پیدا نشد.", "No readable text file was found in " + name + ".")
         ret false
     end
     mut note := ""
@@ -285,13 +289,13 @@ func unzip(name: str, b64: str, size: int, u &: Upload, used &: int, problem &: 
     ret true
 end
 
-func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &: int, problem &: str): Upload:
+func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &: int, problem &: str, en: bool): Upload:
     mut u := Upload {}
     name := clean_name(json_text(f, "name"))
     b64 := json_text(f, "data")
     size := decoded_len(b64)
     if name.len() == 0 or size <= 0:
-        problem = "یکی از فایل‌ها خالی یا خراب است."
+        problem = say(en, "یکی از فایل‌ها خالی یا خراب است.", "One of the files is empty or damaged.")
         ret u
     end
     u.name = name
@@ -299,18 +303,18 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     u.raw = b64
     total += size
     if total > MAX_TOTAL:
-        problem = "حجم همه‌ی فایل‌ها با هم بیشتر از ۱۲ مگابایت است."
+        problem = say(en, "حجم همه‌ی فایل‌ها با هم بیشتر از ۱۲ مگابایت است.", "All files together are larger than 12 MB.")
         ret u
     end
     ext := ext_of(name)
     kind := sniff(b64)
     if image_ext(ext):
         if not image_ok:
-            problem = "مدل فعلی دستیار تصویر نمی‌پذیرد."
+            problem = say(en, "مدل فعلی دستیار تصویر نمی‌پذیرد.", "The current assistant model does not accept images.")
         else not str.StartsWith(kind, "image/") or not decodes(b64, size):
-            problem = "فایل «" + name + "» تصویر معتبری نیست."
+            problem = say(en, "فایل «" + name + "» تصویر معتبری نیست.", "The file " + name + " is not a valid image.")
         else size > MAX_IMAGE:
-            problem = "تصویر «" + name + "» بزرگ‌تر از ۵ مگابایت است."
+            problem = say(en, "تصویر «" + name + "» بزرگ‌تر از ۵ مگابایت است.", "The image " + name + " is larger than 5 MB.")
         else:
             u.kind = "image"
             u.mime = kind
@@ -320,11 +324,11 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     end
     if ext == "pdf":
         if not pdf_ok:
-            problem = "مدل فعلی دستیار فایل PDF نمی‌پذیرد. متن آن را در یک فایل متنی بفرستید."
+            problem = say(en, "مدل فعلی دستیار فایل PDF نمی‌پذیرد. متن آن را در یک فایل متنی بفرستید.", "The current assistant model does not accept PDF files. Send its text in a text file instead.")
         else kind != "application/pdf" or not decodes(b64, size):
-            problem = "فایل «" + name + "» PDF معتبری نیست."
+            problem = say(en, "فایل «" + name + "» PDF معتبری نیست.", "The file " + name + " is not a valid PDF.")
         else size > MAX_PDF:
-            problem = "فایل «" + name + "» بزرگ‌تر از ۱۰ مگابایت است."
+            problem = say(en, "فایل «" + name + "» بزرگ‌تر از ۱۰ مگابایت است.", "The file " + name + " is larger than 10 MB.")
         else:
             u.kind = "pdf"
             u.mime = kind
@@ -334,24 +338,24 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
     end
     if ext == "zip":
         if kind != "application/zip":
-            problem = "فایل «" + name + "» ZIP معتبری نیست."
+            problem = say(en, "فایل «" + name + "» ZIP معتبری نیست.", "The file " + name + " is not a valid ZIP.")
             ret u
         end
-        _z := unzip(name, b64, size, u, used, problem)
+        _z := unzip(name, b64, size, u, used, problem, en)
         ret u
     end
     if is_text_name(name):
         if size > MAX_TEXT:
-            problem = "فایل «" + name + "» بزرگ‌تر از ۲۵۶ کیلوبایت است."
+            problem = say(en, "فایل «" + name + "» بزرگ‌تر از ۲۵۶ کیلوبایت است.", "The file " + name + " is larger than 256 KB.")
             ret u
         end
         if used + size > MAX_PROMPT_TEXT:
-            problem = "متن فایل‌ها روی هم خیلی بلند است."
+            problem = say(en, "متن فایل‌ها روی هم خیلی بلند است.", "The files contain too much text together.")
             ret u
         end
         t := encoding.Base64Decode(b64)
         if t.len() != size or not valid_utf8(t as void*, size):
-            problem = "فایل «" + name + "» متن UTF-8 نیست."
+            problem = say(en, "فایل «" + name + "» متن UTF-8 نیست.", "The file " + name + " is not UTF-8 text.")
             ret u
         end
         used += size
@@ -361,7 +365,7 @@ func one_file(f: value.Value, image_ok: bool, pdf_ok: bool, used &: int, total &
         u.prompt = block(name, t)
         ret u
     end
-    problem = "قالب فایل «" + name + "» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود."
+    problem = say(en, "قالب فایل «" + name + "» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود.", "The format of " + name + " is not supported. Images, text or code files, and ZIP are accepted.")
     ret u
 end
 
@@ -485,7 +489,7 @@ pub func Limits(image_ok: bool, pdf_ok: bool): str:
     ret json.Object(m)
 end
 
-pub func Parse(body: str, image_ok: bool, pdf_ok: bool, out &: Vector<Upload>, problem &: str): bool:
+pub func Parse(body: str, image_ok: bool, pdf_ok: bool, out &: Vector<Upload>, problem &: str, en: bool): bool:
     problem = ""
     if body.find(`"files"`) < 0:
         ret true
@@ -497,13 +501,13 @@ pub func Parse(body: str, image_ok: bool, pdf_ok: bool, out &: Vector<Upload>, p
     if ok and value.IsArray(list):
         n := value.ArrayLen(list)
         if n > MAX_FILES:
-            problem = "حداکثر " + str.ToPersianDigits("" + MAX_FILES) + " فایل در هر پیام می‌شود فرستاد."
+            problem = say(en, "حداکثر " + str.ToPersianDigits("" + MAX_FILES) + " فایل در هر پیام می‌شود فرستاد.", "You can send at most " + MAX_FILES + " files in one message.")
         else:
             mut used := 0
             mut total := 0
             mut i := 0
             until i < n and problem.len() == 0:
-                u := one_file(value.ArrayGet(list, i), image_ok, pdf_ok, used, total, problem)
+                u := one_file(value.ArrayGet(list, i), image_ok, pdf_ok, used, total, problem, en)
                 if problem.len() == 0:
                     out.push(u)
                 end

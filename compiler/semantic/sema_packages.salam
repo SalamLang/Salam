@@ -207,6 +207,22 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     ret pk
 end
 
+func report_package_import(s &: Sema, sp: co.SrcSpan, spec: str, path: str, code: int):
+    mut msg := ""
+    if code == pm.RES_NO_PROJECT:
+        msg = co.Format2(i18.Tr("package '%s' can only be imported inside a project; run 'salam init', then: salam add %s"), co.ArgStr(spec), co.ArgStr(spec))
+    else code == pm.RES_NOT_DEPENDENCY:
+        msg = co.Format2(i18.Tr("package '%s' is not a dependency of this project; run: salam add %s"), co.ArgStr(spec), co.ArgStr(spec))
+    else code == pm.RES_NOT_FETCHED:
+        msg = co.Format1(i18.Tr("package '%s' is not downloaded yet; run: salam deps"), co.ArgStr(spec))
+    else code == pm.RES_NO_ENTRY:
+        msg = co.Format2(i18.Tr("package '%s' has no entry file (looked for '%s')"), co.ArgStr(spec), co.ArgStr(path))
+    else:
+        msg = co.Format1(i18.Tr("cannot read salam.toml in '%s'"), co.ArgStr(pm.ProjectRoot()))
+    end
+    serr(s, 8, sp, msg)
+end
+
 func load_import_file(s &: Sema, a &: at.Ast, imp: int):
     n := at.Get(a, imp)
     mut spec := n.name
@@ -217,7 +233,7 @@ func load_import_file(s &: Sema, a &: at.Ast, imp: int):
         ret
     end
     sp := span_of(a, imp)
-    is_file := n.value_kind == tok.TV_STRING
+    is_file := n.value_kind == tok.TV_STRING and not n.is_extern
     if is_file and str.StartsWith(spec, "./"):
         rest := str.Substr(spec, 2, str.Len(spec) - 2)
         serr(
@@ -227,7 +243,17 @@ func load_import_file(s &: Sema, a &: at.Ast, imp: int):
         )
         ret
     end
-    path := resolve_import_node(a, s.dir, imp, s.lang)
+    mut path := ""
+    if n.is_extern:
+        mut code := 0
+        path = pm.ResolveImport(s.dir, spec, code)
+        if code != pm.RES_OK:
+            report_package_import(s, sp, spec, path, code)
+            ret
+        end
+    else:
+        path = resolve_import_node(a, s.dir, imp, s.lang)
+    end
     if is_file and not src.HasOverlay(path) and not os.Exists(path):
         serr(
             s, 8, sp, co.Format2(
@@ -239,6 +265,18 @@ func load_import_file(s &: Sema, a &: at.Ast, imp: int):
     if is_file and not src.HasOverlay(path) and os.IsDir(path):
         serr(
             s, 8, sp, co.Format1(i18.Tr("'%s' is a directory, not a file to include"), co.ArgStr(spec))
+        )
+        ret
+    end
+    if str.Len(path) == 0 and pm.OfficialListed(s.dir, spec):
+        serr(s, 8, sp, co.Format1(i18.Tr("package '%s' is not downloaded yet; run: salam deps"), co.ArgStr(spec)))
+        ret
+    end
+    if str.Len(path) == 0 and pm.IsOfficial(spec):
+        serr(
+            s, 8, sp, co.Format2(
+                i18.Tr("'%s' is an official package that does not ship with Salam; add it to the project with: salam add %s"), co.ArgStr(spec), co.ArgStr(spec)
+            )
         )
         ret
     end

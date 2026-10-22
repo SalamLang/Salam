@@ -1,0 +1,104 @@
+package nativelink
+
+func fits32s(v: i64): bool:
+    ret v >= (0 - 2147483648 as i64) and v <= (2147483647 as i64)
+end
+
+func fits32u(v: i64): bool:
+    ret v >= (0 as i64) and v <= (4294967295 as i64)
+end
+
+func reloc_where(l &: Nl, s: int, r: int): str:
+    os := l.r_sym[r]
+    g := l.os_glob[os]
+    nm := g >= 0 ? name_of(l, l.g_name[g]) : "a local symbol"
+    ret l.o_label[l.s_obj[s]] + " section " + name_of(l, l.s_name[s]) + " offset " + str.FromInt(l.r_off[r]) + " against " + nm
+end
+
+func apply_relocs(l &: Nl):
+    buf := malloc(l.file_size as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat l.file_size in z:
+        buf[z] = 0 as u8
+    end
+    rx0 := l.seg_fpos[1]
+    repeat l.seg_fsz[1] in zz:
+        buf[rx0 + zz] = 0x90 as u8
+    end
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_fpos[s] < (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        src := l.s_off[s]
+        dst := l.s_fpos[s]
+        repeat l.s_size[s] in k:
+            buf[dst + k] = p[src + k]
+        end
+    end
+    repeat l.got_sym.len() in q:
+        wr64(buf, l.oc_fpos[OC_GOT] + ((8 * q) as i64), sym_addr_g(l, l.got_sym[q]))
+    end
+    repeat l.s_obj.len() in s2:
+        if not l.s_live[s2] or l.s_fpos[s2] < (0 as i64):
+            continue
+        end
+        r0 := l.s_rel0[s2]
+        repeat l.s_nrel[s2] in k2:
+            r := r0 + k2
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            place := l.s_fpos[s2] + l.r_off[r]
+            pc := l.s_addr[s2] + l.r_off[r]
+            a := l.r_add[r]
+            sv := sym_addr(l, os)
+            if ty == 0:
+                continue
+            end
+            if ty == 1:
+                wr64(buf, place, sv + a)
+            else ty == 2 or ty == 4:
+                v := sv + a - pc
+                if not fits32s(v):
+                    nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+                    ret
+                end
+                wr32(buf, place, v)
+            else ty == 10:
+                v2 := sv + a
+                if not fits32u(v2):
+                    nl_fail(l, "32-bit relocation out of range at " + reloc_where(l, s2, r))
+                    ret
+                end
+                wr32(buf, place, v2)
+            else ty == 11:
+                v3 := sv + a
+                if not fits32s(v3):
+                    nl_fail(l, "32-bit signed relocation out of range at " + reloc_where(l, s2, r))
+                    ret
+                end
+                wr32(buf, place, v3)
+            else ty == 24:
+                wr64(buf, place, sv + a - pc)
+            else ty == 9 or ty == 41 or ty == 42:
+                g := l.os_glob[os]
+                if g >= 0 and l.g_got[g] >= 0:
+                    ga := l.oc_addr[OC_GOT] + ((8 * l.g_got[g]) as i64)
+                    wr32(buf, place, ga + a - pc)
+                else:
+                    buf[place - (2 as i64)] = 0x8d as u8
+                    v4 := sv + a - pc
+                    if not fits32s(v4):
+                        nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+                        ret
+                    end
+                    wr32(buf, place, v4)
+                    l.stat_relax += 1
+                end
+            else:
+                nl_fail(l, "unsupported relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+                ret
+            end
+        end
+    end
+end

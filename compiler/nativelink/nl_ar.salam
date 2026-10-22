@@ -1,0 +1,88 @@
+package nativelink
+
+func ar_size_field(p: u8*, h: i64): i64:
+    mut v := 0 as i64
+    repeat 10 in k:
+        c := p[h + (48 + k) as i64] as int
+        if c >= 48 and c <= 57:
+            v = v * (10 as i64) + ((c - 48) as i64)
+        end
+    end
+    ret v
+end
+
+func ar_first_set(l &: Nl, name: int, e: int):
+    until l.ar_first.len() <= name:
+        l.ar_first.push(0 - 1)
+    end
+    if l.ar_first[name] < 0:
+        l.ar_first[name] = e
+    end
+end
+
+func ar_first_of(l &: Nl, name: int): int:
+    if name < 0 or name >= l.ar_first.len():
+        ret 0 - 1
+    end
+    ret l.ar_first[name]
+end
+
+func ar_index(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    mut h := 8 as i64
+    mut found := false
+    until h + (60 as i64) <= n and not found:
+        sz := ar_size_field(p, h)
+        if p[h] == (47 as u8) and p[h + (1 as i64)] == (32 as u8):
+            d := h + (60 as i64)
+            cnt := rd32be(p, d) as int
+            mut np := d + (4 as i64) + ((4 * cnt) as i64)
+            repeat cnt in k:
+                moff := rd32be(p, d + (4 as i64) + ((4 * k) as i64))
+                ln := cstr_len(p, np, d + sz)
+                nm := nt_find(l.names, p, np, ln, true)
+                e := l.ar_name.len()
+                l.ar_name.push(nm)
+                l.ar_file.push(f)
+                l.ar_moff.push(moff)
+                l.ar_loaded.push(false)
+                ar_first_set(l, nm, e)
+                np = np + ((ln + 1) as i64)
+            end
+            found = true
+        end
+        h = h + (60 as i64) + sz + (sz & (1 as i64))
+    end
+    if not found:
+        nl_fail(l, "archive " + l.f_name[f] + " has no symbol index; rebuild it with 'ar s'")
+    end
+end
+
+func ar_member_label(l &: Nl, f: int, h: i64): str:
+    p := fptr(l, f)
+    mut b := str.NewBuilder()
+    repeat 16 in k:
+        c := p[h + (k as i64)] as int
+        if c == 47 or c == 32:
+            break
+        end
+        str.BufAppendChar(b, c)
+    end
+    nm := str.BufStr(b)
+    str.BufFree(b)
+    ret l.f_name[f] + "(" + nm + ")"
+end
+
+func ar_load(l &: Nl, e: int):
+    f := l.ar_file[e]
+    moff := l.ar_moff[e]
+    repeat l.ar_name.len() in k:
+        if l.ar_file[k] == f and l.ar_moff[k] == moff:
+            l.ar_loaded[k] = true
+        end
+    end
+    p := fptr(l, f)
+    sz := ar_size_field(p, moff)
+    add_object(l, f, moff + (60 as i64), sz, ar_member_label(l, f, moff))
+end

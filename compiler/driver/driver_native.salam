@@ -11,6 +11,7 @@ include pf "../prof_self.salam"
 include lv "../llvmgen/llvmgen.salam"
 include lb "../llvm_bridge.salam"
 include ng "../nativegen/nativegen.salam"
+include nl "../nativelink/nativelink.salam"
 
 func native_target_os(triple: str, err &: str): int:
     if str.Len(triple) == 0:
@@ -75,6 +76,108 @@ func native_link_cmd(obj: str, exe: str, triple: str, o: lv.Options): str:
         cmd += " -l" + spec
     end
     ret cmd + " -lm"
+end
+
+func musl_libdir(root: str): str:
+    each sub in ["", "/lib", "/usr/lib"]:
+        if os.Exists(root + sub + "/crt1.o") and os.Exists(root + sub + "/libc.a"):
+            ret root + sub
+        end
+    end
+    ret ""
+end
+
+func musl_root(o: lv.Options): str:
+    if str.Len(o.sysroot) > 0 and str.Len(musl_libdir(o.sysroot)) > 0:
+        ret o.sysroot
+    end
+    env := os.Env("SALAM_MUSL_SYSROOT")
+    if str.Len(env) > 0 and str.Len(musl_libdir(env)) > 0:
+        ret env
+    end
+    base := cache_root() + "/salam/sysroots"
+    names := os.ListDir(base)
+    mut found := ""
+    each nm in names:
+        if str.StartsWith(nm, "x86_64-linux-musl_") and str.Len(musl_libdir(base + "/" + nm)) > 0:
+            found = base + "/" + nm
+        end
+    end
+    names.free()
+    ret found
+end
+
+func static_lib_path(spec: str, kind: str, o: lv.Options): str:
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-") or str.Equals(kind, "framework"):
+        ret ""
+    end
+    each lp in o.lib_paths:
+        cand := lp + "/lib" + spec + ".a"
+        if os.Exists(cand):
+            ret cand
+        end
+    end
+    ret ""
+end
+
+func builtin_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    if not str.Contains(triple, "linux-musl") or not str.Contains(triple, "x86_64"):
+        why = co.Format1(i18.Tr("the built-in linker handles x86_64-linux-musl only, not '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    if str.Len(musl_libdir(musl_root(o))) == 0:
+        why = i18.Tr("the built-in linker needs the musl sysroot (crt1.o, libc.a), and none was found")
+        ret false
+    end
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(static_lib_path(spec, kind, o)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker links statically, and no static archive was found for library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
+    dir := musl_libdir(musl_root(o))
+    mut l := nl.New()
+    nl.AddInput(l, dir + "/crt1.o")
+    nl.AddInput(l, dir + "/crti.o")
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        nl.AddInput(l, static_lib_path(spec, kind, o))
+    end
+    nl.AddInput(l, dir + "/libc.a")
+    rt := dir + "/libclang_rt.builtins-x86_64.a"
+    if os.Exists(rt):
+        nl.AddInput(l, rt)
+    end
+    nl.AddInput(l, dir + "/crtn.o")
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
 end
 
 func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
@@ -152,7 +255,23 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
     end
     exe = exe_name_for(exe, triple)
     _pl := pf.Begin(pf.TP_LINK, exe)
-    rc := native_link(lgr, obj, exe, triple, o)
+    mut rc := 0
+    mode := opt.linker
+    if not str.Equals(mode, "auto") and not str.Equals(mode, "builtin") and not str.Equals(mode, "system"):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown --linker value '%s'; use auto, builtin or system"), co.ArgStr(mode)))
+        rc = 2
+    else:
+        mut why := ""
+        can := builtin_link_ok(triple, o, why)
+        if str.Equals(mode, "builtin") and not can:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            rc = 1
+        else can and not str.Equals(mode, "system"):
+            rc = native_link_builtin(lgr, obj, exe, o)
+        else:
+            rc = native_link(lgr, obj, exe, triple, o)
+        end
+    end
     pf.End(pf.TP_LINK, _pl)
     if opt.keep_temp:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept native object: " + obj)

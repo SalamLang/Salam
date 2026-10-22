@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The extension starts the Salam language server (`salam lsp`) and gets diagnostics, completion, hover, go to definition, references, rename, outline, folding, semantic highlighting, signature help, quick fixes and formatting from it.
+- Settings `salam.lsp.enable`, `salam.lsp.messages`, `salam.lsp.formatFixOrder` and `salam.trace.server`, and the command `Salam: Restart Language Server`.
+
+### Changed
+
+- `vscode-languageclient` is bundled into `out/extension.js` (`bun run bundle`), so the package still has no `node_modules`.
+- With a compiler that has no `salam lsp`, formatting still goes through `salam format` as before.
+
 ## 0.3.9
 
 Grammar corrected against the compiler's own keyword and type tables. Each item below was checked by compiling a program that uses the construct, not by reading the source.

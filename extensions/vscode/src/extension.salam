@@ -16,6 +16,8 @@ const OUTPUT_NAME := "Salam"
 
 mut g_output := 0 as i64
 mut g_terminal := 0 as i64
+mut g_client := 0 as i64
+mut g_context := 0 as i64
 
 struct LangItem:
     pub label: str
@@ -332,6 +334,48 @@ func cmd_new_project():
     )
 end
 
+func server_options(): i64:
+    cfg := vscode.GetConfiguration("salam")
+    opts := node.NewObject()
+    stdlib := vscode.ConfigGetStr(cfg, "stdlibPath", "")
+    if stdlib != "":
+        node.SetStr(opts, "stdlibPath", stdlib)
+    end
+    messages := vscode.ConfigGetStr(cfg, "lsp.messages", "auto")
+    if messages == "en" or messages == "fa":
+        node.SetStr(opts, "messages", messages)
+    end
+    node.SetBool(opts, "formatFixOrder", vscode.ConfigGetBool(cfg, "lsp.formatFixOrder", false))
+    ret opts
+end
+
+func use_cli_formatter():
+    vscode.ContextSubscriptionsPush(g_context, vscode.RegisterDocumentFormattingEditProvider(LANG_ID, (d: i64): ret provide_formatting_edits(d) end))
+end
+
+func probe_server():
+    args := node.NewArray()
+    node.PushStr(args, "lsp")
+    node.PushStr(args, "--version")
+    exec_capture(
+        args, "", (code: i64, _out: str, _err: str): if code == 0: start_server() ret end use_cli_formatter() if code == (0 - 1): report_compiler_missing() else: vscode.AppendLine(g_output, "[lsp] '" + compiler_path() + " lsp' is not available in this Salam version; update Salam to get diagnostics, completion and navigation in the editor.") end end
+    )
+end
+
+func start_server():
+    args := node.NewArray()
+    node.PushStr(args, "lsp")
+    g_client = vscode.StartLanguageClient(compiler_path(), args, server_options())
+end
+
+func restart_server():
+    if g_client != 0:
+        vscode.Then1(vscode.StopLanguageClient(g_client), (_r: i64): start_server() end)
+        ret
+    end
+    start_server()
+end
+
 func activate(context: i64):
     g_output = vscode.CreateOutputChannel(OUTPUT_NAME)
     vscode.ContextSubscriptionsPush(context, g_output)
@@ -347,7 +391,13 @@ func activate(context: i64):
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.emitTokens", (): cmd_emit_xml("--emit-tokens", "tokens") end))
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.emitAst", (): cmd_emit_xml("--emit-ast", "ast") end))
     vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.newProject", (): cmd_new_project() end))
-    vscode.ContextSubscriptionsPush(context, vscode.RegisterDocumentFormattingEditProvider(LANG_ID, (d: i64): ret provide_formatting_edits(d) end))
+    g_context = context
+    if vscode.ConfigGetBool(vscode.GetConfiguration("salam"), "lsp.enable", true):
+        probe_server()
+    else:
+        use_cli_formatter()
+    end
+    vscode.ContextSubscriptionsPush(context, vscode.RegisterCommand("salam.restartServer", (): restart_server() end))
     vscode.ContextSubscriptionsPush(
         context, vscode.OnDidCloseTerminal(
             (t: i64): if t == g_terminal: g_terminal = 0 end end
@@ -358,6 +408,10 @@ end
 func deactivate():
     if g_terminal != 0:
         vscode.Dispose(g_terminal)
+    end
+    if g_client != 0:
+        _s := vscode.StopLanguageClient(g_client)
+        g_client = 0
     end
 end
 

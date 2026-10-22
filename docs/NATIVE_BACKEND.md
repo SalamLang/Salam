@@ -82,6 +82,8 @@ recursive. Each function then goes through:
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too.
 8. Loop-invariant code motion of pure instructions into loop preheaders, and
+   of loads that no store in the loop can reach (by TBAA class) and that are
+   safe to run early: a field of a `&:` parameter or of a stack slot, and
    unswitching: an innermost loop that branches on a loop-invariant condition
    is versioned into one copy per outcome. Compares, remainders and
    divisions are folded when the value range of their operand decides them:
@@ -120,6 +122,8 @@ recursive. Each function then goes through:
     elimination and store-to-load forwarding. A store only invalidates loads
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
+    Pointers that come from different `malloc`/`calloc`/`realloc` calls never
+    alias, so writing one vector's buffer keeps loads from another one.
 12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
 13. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
@@ -172,7 +176,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

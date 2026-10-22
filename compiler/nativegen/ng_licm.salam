@@ -136,6 +136,57 @@ func hoistable(g &: Ng, l &: Lp, i: int, mark: int): bool:
     ret true
 end
 
+func loop_writes(g &: Ng, b: int): int:
+    mut w := 0
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_STORE:
+            c := mem_cls(g, i)
+            if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or c == 0:
+                w = w | 4
+            else:
+                w = w | c
+            end
+        else op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+            w = w | 4
+        else op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+            w = w | 4
+        end
+        i = g.i_next[i]
+    end
+    ret w
+end
+
+func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int): bool:
+    if g.i_op[i] != OP_LOAD or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (wr & 4) != 0:
+        ret false
+    end
+    c := mem_cls(g, i)
+    if c == 0 or (wr & c) != 0:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or (g.v_kind[a] == VK_INS and l.inl[g.i_blk[g.v_def[a]]] == mark):
+        ret false
+    end
+    mut disp := 0 as i64
+    r := addr_root(g, a, disp)
+    if r < 0 or disp < (0 as i64) or disp >= (4096 as i64):
+        ret false
+    end
+    if g.v_kind[r] == VK_ARG:
+        k := g.v_i[r] as int
+        ret k >= 0 and k < g.f_argf.len() and (g.f_argf[k] & IF_NONNULL) != 0
+    end
+    if g.v_kind[r] == VK_INS and g.i_op[g.v_def[r]] == OP_ALLOCA:
+        d := g.v_def[r]
+        n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
+        ret disp + (tsize(g, g.i_ty[i]) as i64) <= (tsize(g, g.i_x[d]) as i64) * n
+    end
+    ret false
+end
+
 func licm(g &: Ng): bool:
     build_dom(g)
     mut l := Lp {}
@@ -190,6 +241,12 @@ func licm(g &: Ng): bool:
         if pt < 0 or g.i_op[pt] != OP_BR:
             continue
         end
+        mut wr := 0
+        each b0 in g.b_rpo:
+            if l.inl[b0] == mk:
+                wr = wr | loop_writes(g, b0)
+            end
+        end
         each b in g.b_rpo:
             if l.inl[b] != mk:
                 continue
@@ -197,7 +254,7 @@ func licm(g &: Ng): bool:
             mut i := g.b_first[b]
             until i >= 0:
                 nx := g.i_next[i]
-                if hoistable(g, l, i, mk):
+                if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)):
                     op := g.i_op[i]
                     ins_unlink(g, i)
                     g.i_op[i] = op

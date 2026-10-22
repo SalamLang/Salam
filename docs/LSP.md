@@ -174,7 +174,7 @@ stack, stepping and local variables all work in `.salam` files.
 - **Neovim (nvim-dap), Emacs (dape), Helix, Zed:** register an executable
   adapter `salam dap` with the launch configuration above.
 
-`SALAM_DAP_DEBUGGER` picks the debugger explicitly, for example
+The program is built through the C backend with gcc, clang or `cc`, whichever is found first (`SALAM_DAP_CC` picks one), because that build carries the local variables a debugger shows. `SALAM_DAP_DEBUGGER` picks the debugger explicitly, for example
 `SALAM_DAP_DEBUGGER=lldb-dap`. `salam dap` runs on Linux and macOS; on Windows,
 point the editor at `lldb-dap` and a program built with `salam build -g`.
 

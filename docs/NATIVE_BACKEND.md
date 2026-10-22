@@ -202,7 +202,9 @@ the 32-bit uses), ties a commutative floating-point add or multiply to the
 operand that dies there (and squares `x * x` in one register), ties a `cmov`
 to the operand that dies there by inverting the condition, turns
 `x & 0xffffffff` into a 32-bit `mov`, emits `ror` for
-`(x >> n) | (x << (bits - n))` (also with `^` or `+`), builds an `insertvalue` chain that is returned directly in
+`(x >> n) | (x << (bits - n))` (also with `^` or `+`) and `rol %cl` for the
+variable form `(x << r) | (x >> (32 - r))` even when the counts are masked
+with `& 31`, builds an `insertvalue` chain that is returned directly in
 the caller's result buffer, copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one

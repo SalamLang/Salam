@@ -1185,10 +1185,18 @@ func isel_bin(g &: Ng, i: int):
     sz := asz(g, t)
     mut rx := 0 - 1
     mut rc := 0
-    if not g.off_rot and rot_parts(g, i, rx, rc) and g.skipi[g.v_def[g.i_a[i]]] and g.skipi[g.v_def[g.i_b[i]]]:
+    mut rcv := 0 - 1
+    mut rleft := false
+    if not g.off_rot and rot_parts(g, i, rx, rc, rcv, rleft) and g.skipi[g.v_def[g.i_a[i]]] and g.skipi[g.v_def[g.i_b[i]]]:
         rr := gpr(g)
         move_into(g, rr, rx)
-        e_shift(g, SH_ROR, sz, rr, rc)
+        if rcv < 0:
+            e_shift(g, SH_ROR, sz, rr, rc)
+        else:
+            _rcc := e_copy(g, RCX, use_reg(g, rcv))
+            rs := e_rr(g, M_SHIFT_RC, sz, rr, 0 - 1)
+            g.mc.cc[rs] = rleft ? 0 : SH_ROR
+        end
         set_res(g, i, rr)
         ret
     end
@@ -1357,7 +1365,30 @@ func e_shift(g &: Ng, sub: int, sz: int, r: int, n: int):
     g.mc.cc[s] = sub
 end
 
-func rot_parts(g &: Ng, i: int, x &: int, c &: int): bool:
+func rot_unmask(g &: Ng, s: int, bits: int): int:
+    if s < 0 or g.v_kind[s] != VK_INS:
+        ret s
+    end
+    d := g.v_def[s]
+    if g.i_op[d] == OP_AND and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] == ((bits - 1) as i64):
+        ret g.i_a[d]
+    end
+    ret s
+end
+
+func rot_sub_of(g &: Ng, s0: int, bits: int): int:
+    s := rot_unmask(g, s0, bits)
+    if s < 0 or g.v_kind[s] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[s]
+    if g.i_op[d] == OP_SUB and is_cint(g, g.i_a[d]) and g.v_i[g.i_a[d]] == (bits as i64):
+        ret g.i_b[d]
+    end
+    ret 0 - 1
+end
+
+func rot_parts(g &: Ng, i: int, x &: int, c &: int, cv &: int, left &: bool): bool:
     op := g.i_op[i]
     if op != OP_OR and op != OP_XOR and op != OP_ADD:
         ret false
@@ -1372,12 +1403,29 @@ func rot_parts(g &: Ng, i: int, x &: int, c &: int): bool:
         if p >= 0 and q >= 0 and g.v_kind[p] == VK_INS and g.v_kind[q] == VK_INS and g.v_uses[p] == 1 and g.v_uses[q] == 1:
             dp := g.v_def[p]
             dq := g.v_def[q]
-            if g.i_op[dp] == OP_LSHR and g.i_op[dq] == OP_SHL and g.i_a[dp] == g.i_a[dq] and is_cint(g, g.i_b[dp]) and is_cint(g, g.i_b[dq]):
-                c1 := g.v_i[g.i_b[dp]]
-                c2 := g.v_i[g.i_b[dq]]
-                if c1 > (0 as i64) and c2 > (0 as i64) and c1 + c2 == (bits as i64):
+            if g.i_op[dp] == OP_LSHR and g.i_op[dq] == OP_SHL and g.i_a[dp] == g.i_a[dq]:
+                s1 := g.i_b[dp]
+                s2 := g.i_b[dq]
+                if is_cint(g, s1) and is_cint(g, s2):
+                    c1 := g.v_i[s1]
+                    c2 := g.v_i[s2]
+                    if c1 > (0 as i64) and c2 > (0 as i64) and c1 + c2 == (bits as i64):
+                        x = g.i_a[dp]
+                        c = c1 as int
+                        cv = 0 - 1
+                        ret true
+                    end
+                else op == OP_OR and rot_sub_of(g, s2, bits) >= 0 and rot_sub_of(g, s2, bits) == rot_unmask(g, s1, bits):
                     x = g.i_a[dp]
-                    c = c1 as int
+                    c = 0 - 1
+                    cv = rot_unmask(g, s1, bits)
+                    left = false
+                    ret true
+                else op == OP_OR and rot_sub_of(g, s1, bits) >= 0 and rot_sub_of(g, s1, bits) == rot_unmask(g, s2, bits):
+                    x = g.i_a[dp]
+                    c = 0 - 1
+                    cv = rot_unmask(g, s2, bits)
+                    left = true
                     ret true
                 end
             end
@@ -1388,7 +1436,7 @@ end
 
 func rot_user(g &: Ng, i: int): bool:
     r := g.i_res[i]
-    if g.off_rot or r < 0 or g.v_uses[r] != 1 or not is_cint(g, g.i_b[i]):
+    if g.off_rot or r < 0 or g.v_uses[r] != 1:
         ret false
     end
     mut j := g.i_next[i]
@@ -1399,7 +1447,38 @@ func rot_user(g &: Ng, i: int): bool:
         if uses_val(g, j, r):
             mut x := 0 - 1
             mut c := 0
-            ret rot_parts(g, j, x, c)
+            mut cv := 0 - 1
+            mut left := false
+            ret rot_parts(g, j, x, c, cv, left)
+        end
+        j = g.i_next[j]
+    end
+    ret false
+end
+
+func rot_cnt_user(g &: Ng, i: int): bool:
+    r := g.i_res[i]
+    if g.off_rot or r < 0 or g.v_uses[r] != 1:
+        ret false
+    end
+    op := g.i_op[i]
+    if not (op == OP_SUB and is_cint(g, g.i_a[i])) and not (op == OP_AND and is_cint(g, g.i_b[i])):
+        ret false
+    end
+    mut j := g.i_next[i]
+    repeat 16:
+        if j < 0:
+            ret false
+        end
+        if uses_val(g, j, r):
+            jop := g.i_op[j]
+            if (jop == OP_SHL or jop == OP_LSHR) and g.i_b[j] == r:
+                ret rot_user(g, j)
+            end
+            if jop == OP_AND and g.i_a[j] == r:
+                ret rot_cnt_user(g, j)
+            end
+            ret false
         end
         j = g.i_next[j]
     end
@@ -3504,6 +3583,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_STORE: isel_store(g, i) ret end
         OP_ADDR: isel_addr(g, i) ret end
         OP_ADD, OP_SUB, OP_MUL, OP_AND, OP_OR, OP_XOR:
+            if (op == OP_SUB or op == OP_AND) and rot_cnt_user(g, i):
+                g.skipi[i] = true
+                ret
+            end
             if op == OP_AND and and_test_ok(g, i):
                 g.skipi[i] = true
                 ret

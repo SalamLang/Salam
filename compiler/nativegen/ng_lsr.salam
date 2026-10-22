@@ -354,6 +354,48 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
     until ph >= 0 and g.i_op[ph] == OP_PHI:
         nph := g.i_next[ph]
         if lsr_iv(g, s, ph):
+            mut pc := LGrp {}
+            mut pcn := Vector {} as Vector<int>
+            each b0 in g.b_rpo:
+                if l.inl[b0] != s.mark:
+                    continue
+                end
+                mut i0 := g.b_first[b0]
+                until i0 >= 0:
+                    if g.i_op[i0] == OP_ADDR and g.i_b[i0] >= 0 and g.i_res[i0] >= 0 and lsr_inv(g, l, s, g.i_a[i0]):
+                        mut coef0 := 0 as i64
+                        mut cost0 := 0
+                        mut sym0 := 0 - 1
+                        if lsr_aff(g, l, s, g.i_b[i0], false, 0, coef0, sym0, cost0) and coef0 != (0 as i64) and cost0 == 1 and sym0 < 0 and lsr_lin(g, l, s, g.i_b[i0], false, 0, f):
+                            mut hit0 := 0 - 1
+                            repeat pc.base.len() in q0:
+                                if hit0 < 0 and pc.base[q0] == g.i_a[i0] and pc.scale[q0] == g.i_x[i0] and pc.iv[q0] == f.iv and lin_same(pc, q0, f):
+                                    hit0 = q0
+                                end
+                            end
+                            if hit0 >= 0:
+                                pcn[hit0] = pcn[hit0] + 1
+                            else:
+                                pc.base.push(g.i_a[i0])
+                                pc.scale.push(g.i_x[i0])
+                                pc.iv.push(f.iv)
+                                pc.ls.push(pc.lv.len())
+                                mut nn0 := 0
+                                repeat f.lv.len() in k0:
+                                    if f.lc[k0] != (0 as i64):
+                                        pc.lv.push(f.lv[k0])
+                                        pc.lc.push(f.lc[k0])
+                                        nn0 += 1
+                                    end
+                                end
+                                pc.ln.push(nn0)
+                                pcn.push(1)
+                            end
+                        end
+                    end
+                    i0 = g.i_next[i0]
+                end
+            end
             each b in g.b_rpo:
                 if l.inl[b] != s.mark:
                     continue
@@ -365,7 +407,18 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
                         mut coef := 0 as i64
                         mut cost := 0
                         mut sym := 0 - 1
-                        if lsr_aff(g, l, s, g.i_b[i], false, 0, coef, sym, cost) and coef != (0 as i64) and cost >= 2:
+                        mut cheap_ok := false
+                        mut c1 := 0 as i64
+                        mut k1 := 0
+                        mut s1 := 0 - 1
+                        if lsr_aff(g, l, s, g.i_b[i], false, 0, c1, s1, k1) and k1 == 1 and s1 < 0 and lsr_lin(g, l, s, g.i_b[i], false, 0, f):
+                            repeat pc.base.len() in q1:
+                                if pc.base[q1] == g.i_a[i] and pc.scale[q1] == g.i_x[i] and pc.iv[q1] == f.iv and lin_same(pc, q1, f) and pcn[q1] >= 2:
+                                    cheap_ok = true
+                                end
+                            end
+                        end
+                        if lsr_aff(g, l, s, g.i_b[i], false, 0, coef, sym, cost) and coef != (0 as i64) and (cost >= 2 or cheap_ok):
                             haslin := sym < 0 and lsr_lin(g, l, s, g.i_b[i], false, 0, f)
                             mut hit := 0 - 1
                             if haslin:
@@ -458,6 +511,18 @@ func lsr_loop(g &: Ng, l &: Lp, s &: Lsr): bool:
                     i = nx
                 end
             end
+            pc.base.free()
+            pc.phi.free()
+            pc.scale.free()
+            pc.iv.free()
+            pc.c0.free()
+            pc.disp.free()
+            pc.ptr.free()
+            pc.ls.free()
+            pc.ln.free()
+            pc.lv.free()
+            pc.lc.free()
+            pcn.free()
         end
         ph = nph
     end
@@ -563,7 +628,16 @@ func wide_ok(g &: Ng, l &: Lp, mark: int, pre: int, pv: int, nx: int, nd: int, u
         ret 1
     end
     op := g.i_op[d]
-    if depth > 4 or (op != OP_ADD and op != OP_SUB) or (g.i_f[d] & IF_NSW) == 0:
+    if depth > 4 or (g.i_f[d] & IF_NSW) == 0:
+        ret 0
+    end
+    if (op == OP_MUL or op == OP_SHL) and is_cint(g, g.i_b[d]):
+        if op == OP_SHL and (g.v_i[g.i_b[d]] < (0 as i64) or g.v_i[g.i_b[d]] > (16 as i64)):
+            ret 0
+        end
+        ret wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_a[d], depth + 1)
+    end
+    if op != OP_ADD and op != OP_SUB:
         ret 0
     end
     ka := wide_ok(g, l, mark, pre, pv, nx, nd, ub, g.i_a[d], depth + 1)
@@ -591,6 +665,11 @@ func wide_flat(g &: Ng, pre: int, pv: int, nx: int, v: int, sign: i64, tv &: Vec
                 wide_flat(g, pre, pv, nx, g.i_b[d], op == OP_ADD ? sign : 0 - sign, tv, ts, c)
                 ret
             end
+            if (op == OP_MUL or op == OP_SHL) and (g.i_f[d] & IF_NSW) != 0 and is_cint(g, g.i_b[d]) and (wide_has_iv(g, pv, nx, v, 0) or not dominates(g, g.i_blk[d], pre)):
+                k := g.v_i[g.i_b[d]]
+                wide_flat(g, pre, pv, nx, g.i_a[d], op == OP_MUL ? sign * k : sign * ((1 as i64) << k), tv, ts, c)
+                ret
+            end
         end
     end
     tv.push(v)
@@ -606,6 +685,9 @@ func wide_has_iv(g &: Ng, pv: int, nx: int, v: int, depth: int): bool:
     end
     d := g.v_def[v]
     op := g.i_op[d]
+    if (op == OP_MUL or op == OP_SHL) and is_cint(g, g.i_b[d]):
+        ret wide_has_iv(g, pv, nx, g.i_a[d], depth + 1)
+    end
     if op != OP_ADD and op != OP_SUB:
         ret false
     end
@@ -624,6 +706,20 @@ func wide_add(g &: Ng, at: int, before: bool, a: int, b: int, sign: i64): int:
     ret nv
 end
 
+func wide_scale(g &: Ng, at: int, v: int, k: i64): int:
+    if k == (1 as i64) or k == (0 - 1 as i64):
+        ret v
+    end
+    mag := k < (0 as i64) ? 0 - k : k
+    ni := ins_new(g, OP_MUL, T_I64)
+    g.i_a[ni] = v
+    g.i_b[ni] = const_int(g, T_I64, mag)
+    g.i_f[ni] = IF_NSW
+    nv := new_res(g, ni)
+    ins_before(g, at, ni)
+    ret nv
+end
+
 func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int, v: int): int:
     mut tv := Vector {} as Vector<int>
     mut ts := Vector {} as Vector<i64>
@@ -633,14 +729,15 @@ func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int,
     mut has_inv := c != (0 as i64)
     repeat tv.len() in k:
         t := tv[k]
-        if t == pv or t == nx:
+        if t == pv or t == nx or ts[k] == (0 as i64):
             continue
         end
         si := ins_new(g, OP_SEXT, T_I64)
         g.i_a[si] = t
         g.i_x[si] = T_I32
-        sv := new_res(g, si)
+        sv0 := new_res(g, si)
         ins_before(g, pt, si)
+        sv := wide_scale(g, pt, sv0, ts[k])
         if has_inv:
             inv = wide_add(g, pt, true, inv, sv, ts[k])
         else ts[k] > (0 as i64):
@@ -654,10 +751,10 @@ func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int,
     mut have := has_inv
     repeat tv.len() in k2:
         t2 := tv[k2]
-        if t2 != pv and t2 != nx:
+        if (t2 != pv and t2 != nx) or ts[k2] == (0 as i64):
             continue
         end
-        w := t2 == pv ? wpv : wnv
+        w := wide_scale(g, at, t2 == pv ? wpv : wnv, ts[k2])
         if have:
             r = wide_add(g, at, true, r, w, ts[k2])
         else ts[k2] > (0 as i64):
@@ -666,6 +763,9 @@ func wide_build(g &: Ng, pt: int, at: int, pv: int, nx: int, wpv: int, wnv: int,
             r = wide_add(g, at, true, const_int(g, T_I64, 0 as i64), w, ts[k2])
         end
         have = true
+    end
+    if not have:
+        r = const_int(g, T_I64, 0 as i64)
     end
     tv.free()
     ts.free()
@@ -695,8 +795,12 @@ func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
-            if g.i_op[i] == OP_SEXT and g.i_ty[i] == T_I64 and (g.i_a[i] == pv or g.i_a[i] == nx) and dominates(g, h, b):
-                nsext += 1
+            if g.i_op[i] == OP_SEXT and g.i_ty[i] == T_I64 and dominates(g, h, b):
+                if g.i_a[i] == pv or g.i_a[i] == nx:
+                    nsext += 1
+                else g.i_x[i] == T_I32 and l.inl[b] == mark and wide_ok(g, l, mark, pre, pv, nx, nd, b, g.i_a[i], 0) == 2:
+                    nsext += 1
+                end
             end
             i = g.i_next[i]
         end
@@ -786,6 +890,23 @@ func widen_iv(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int
             j = nxj
         end
     end
+    mut fp := g.b_first[h]
+    until fp >= 0 and g.i_op[fp] == OP_PHI:
+        fp = g.i_next[fp]
+    end
+    tp := ins_new(g, OP_TRUNC, T_I32)
+    g.i_a[tp] = wpv
+    g.i_x[tp] = T_I64
+    tpv := new_res(g, tp)
+    ins_before(g, fp, tp)
+    tn := ins_new(g, OP_TRUNC, T_I32)
+    g.i_a[tn] = wnv
+    g.i_x[tn] = T_I64
+    tnv := new_res(g, tn)
+    ins_before(g, g.i_next[wn], tn)
+    repl_grow(g)
+    g.v_repl[pv] = tpv
+    g.v_repl[nx] = tnv
     ret true
 end
 

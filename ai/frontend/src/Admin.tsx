@@ -6,28 +6,29 @@ import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } fr
 import { fmtSize } from "./Attach";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
+import { t } from "./i18n";
 
 type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
 type ChartMode = "calls" | "tokens";
 
 const USAGE_MODES: { id: UsageMode; label: string }[] = [
-  { id: "all", label: "همه" },
-  { id: "chat", label: "گفت‌وگو" },
+  { id: "all", label: t("همه", "All") },
+  { id: "chat", label: t("گفت‌وگو", "Chat") },
   { id: "api", label: "API" },
 ];
 
 const CHART_MODES: { id: ChartMode; label: string }[] = [
-  { id: "calls", label: "فراخوانی‌ها" },
-  { id: "tokens", label: "توکن‌ها" },
+  { id: "calls", label: t("فراخوانی‌ها", "Calls") },
+  { id: "tokens", label: t("توکن‌ها", "Tokens") },
 ];
 
 const PERIOD_LABELS: Record<UsagePeriodKey, string> = {
-  today: "امروز",
-  week: "این هفته",
-  month: "این ماه",
-  last_month: "ماه قبل",
-  all: "کل",
+  today: t("امروز", "Today"),
+  week: t("این هفته", "This week"),
+  month: t("این ماه", "This month"),
+  last_month: t("ماه قبل", "Last month"),
+  all: t("کل", "All time"),
 };
 
 function errText(e: unknown, fallback: string): string {
@@ -92,16 +93,16 @@ function UsageTiles({ usage }: { usage: UsagePeriod[] }) {
   const all = find("all");
   const tile = (label: string, p: UsagePeriod | undefined) => {
     if (!p) return null;
-    const t = tokenSplit(pickUsage(p, "all"));
-    return <Tile key={p.key} label={label} value={t.total} compact sub={`${fmtCompact(t.input)} ورودی، ${fmtCompact(t.output)} خروجی`} />;
+    const tk = tokenSplit(pickUsage(p, "all"));
+    return <Tile key={p.key} label={label} value={tk.total} compact sub={t(`${fmtCompact(tk.input)} ورودی، ${fmtCompact(tk.output)} خروجی`, `${fmtCompact(tk.input)} in, ${fmtCompact(tk.output)} out`)} />;
   };
   const monthCost = month ? pickUsage(month, "all").cost : 0;
   return (
     <div className="tiles">
-      {tile("توکن‌های امروز", today)}
-      {tile(month ? `توکن‌های ${fmtMonth(month.from)}` : "توکن‌های این ماه", month)}
-      {tile("توکن‌های کل", all)}
-      {month && monthCost > 0 && <Tile label="هزینه‌ی این ماه" value={monthCost} display={fmtCost(monthCost)} sub={fmtMonth(month.from)} />}
+      {tile(t("توکن‌های امروز", "Tokens today"), today)}
+      {tile(month ? t(`توکن‌های ${fmtMonth(month.from)}`, `Tokens in ${fmtMonth(month.from)}`) : t("توکن‌های این ماه", "Tokens this month"), month)}
+      {tile(t("توکن‌های کل", "Tokens all time"), all)}
+      {month && monthCost > 0 && <Tile label={t("هزینه‌ی این ماه", "Cost this month")} value={monthCost} display={fmtCost(monthCost)} sub={fmtMonth(month.from)} />}
     </div>
   );
 }
@@ -110,44 +111,44 @@ function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
   const [mode, setMode] = useState<UsageMode>("all");
   const rows = usage.map((p) => ({ p, t: pickUsage(p, mode) }));
   const showCost = rows.some((r) => r.t.cost > 0);
-  const countLabel = mode === "chat" ? "پاسخ" : mode === "api" ? "درخواست" : "پاسخ و درخواست";
+  const countLabel = mode === "chat" ? t("پاسخ", "Replies") : mode === "api" ? t("درخواست", "Requests") : t("پاسخ و درخواست", "Replies and requests");
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>مصرف توکن</h3>
-        <Segmented label="منبع مصرف" options={USAGE_MODES} value={mode} onChange={setMode} />
+        <h3>{t("مصرف توکن", "Token usage")}</h3>
+        <Segmented label={t("منبع مصرف", "Usage source")} options={USAGE_MODES} value={mode} onChange={setMode} />
       </div>
       <div className="table-wrap">
         <table className="data-table">
           <thead>
             <tr>
-              <th scope="col">دوره</th>
+              <th scope="col">{t("دوره", "Period")}</th>
               <th scope="col">{countLabel}</th>
-              <th scope="col">ورودی</th>
-              <th scope="col">خروجی</th>
-              <th scope="col">کش</th>
-              <th scope="col">جمع</th>
-              {showCost && <th scope="col">هزینه</th>}
+              <th scope="col">{t("ورودی", "Input")}</th>
+              <th scope="col">{t("خروجی", "Output")}</th>
+              <th scope="col">{t("کش", "Cache")}</th>
+              <th scope="col">{t("جمع", "Total")}</th>
+              {showCost && <th scope="col">{t("هزینه", "Cost")}</th>}
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ p, t }) => {
-              const sp = tokenSplit(t);
+            {rows.map(({ p, t: tot }) => {
+              const sp = tokenSplit(tot);
               const sub = periodSub(p);
               return (
                 <tr key={p.key}>
-                  <td title={p.key === "all" ? undefined : `${fmtDateTime(p.from)} تا ${fmtDateTime(p.to)}`}>
+                  <td title={p.key === "all" ? undefined : t(`${fmtDateTime(p.from)} تا ${fmtDateTime(p.to)}`, `${fmtDateTime(p.from)} to ${fmtDateTime(p.to)}`)}>
                     <span className="strong">{PERIOD_LABELS[p.key] || p.key}</span>
                     {sub && <span className="cell-sub">{sub}</span>}
                   </td>
-                  <td>{fmtNum(t.count)}</td>
+                  <td>{fmtNum(tot.count)}</td>
                   <CompactCell n={sp.input} />
                   <CompactCell n={sp.output} />
                   <CompactCell n={sp.cache} />
                   <td className="strong" title={exactTitle(sp.total)}>
                     {fmtCompact(sp.total)}
                   </td>
-                  {showCost && <td>{t.cost > 0 ? fmtCost(t.cost) : <span className="muted">-</span>}</td>}
+                  {showCost && <td>{tot.cost > 0 ? fmtCost(tot.cost) : <span className="muted">-</span>}</td>}
                 </tr>
               );
             })}
@@ -155,7 +156,7 @@ function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
         </table>
       </div>
       <p className="muted small usage-note">
-        ورودی شامل توکن‌های کش هم هست و ستون کش همان بخش را جدا نشان می‌دهد. خروجی شامل توکن‌های استدلال است. «همه» جمع گفت‌وگوهای سایت و درخواست‌های API است.
+        {t("ورودی شامل توکن‌های کش هم هست و ستون کش همان بخش را جدا نشان می‌دهد. خروجی شامل توکن‌های استدلال است. «همه» جمع گفت‌وگوهای سایت و درخواست‌های API است.", "Input includes cached tokens, and the cache column shows that part on its own. Output includes reasoning tokens. 'All' is site chats plus API requests.")}
       </p>
     </section>
   );
@@ -166,8 +167,8 @@ function DailyPanel({ daily }: { daily: AdminSummary["daily"] }) {
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>{mode === "tokens" ? "مصرف توکن در ۱۴ روز گذشته" : "فراخوانی‌های MCP و درخواست‌های API در ۱۴ روز گذشته"}</h3>
-        <Segmented label="داده‌ی نمودار" options={CHART_MODES} value={mode} onChange={setMode} />
+        <h3>{mode === "tokens" ? t("مصرف توکن در ۱۴ روز گذشته", "Token usage in the last 14 days") : t("فراخوانی‌های MCP و درخواست‌های API در ۱۴ روز گذشته", "MCP calls and API requests in the last 14 days")}</h3>
+        <Segmented label={t("داده‌ی نمودار", "Chart data")} options={CHART_MODES} value={mode} onChange={setMode} />
       </div>
       <DailyChart daily={daily} mode={mode} />
     </section>
@@ -235,8 +236,8 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
         role="img"
         aria-label={
           tokens
-            ? `نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} توکن ورودی و ${fmtNum(totalB)} توکن خروجی`
-            : `نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} فراخوانی MCP و ${fmtNum(totalB)} درخواست API`
+            ? t(`نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} توکن ورودی و ${fmtNum(totalB)} توکن خروجی`, `Chart of the last ${fmtNum(daily.length)} days: ${fmtNum(totalA)} input tokens and ${fmtNum(totalB)} output tokens in total`)
+            : t(`نمودار ${fmtNum(daily.length)} روز گذشته: روی هم ${fmtNum(totalA)} فراخوانی MCP و ${fmtNum(totalB)} درخواست API`, `Chart of the last ${fmtNum(daily.length)} days: ${fmtNum(totalA)} MCP calls and ${fmtNum(totalB)} API requests in total`)
         }
         onMouseLeave={() => setHover(null)}
       >
@@ -252,8 +253,8 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
           const x0 = gx(i);
           const mcpX = x0 + barW + gap;
           const label = tokens
-            ? `${fmtDay(d.day)}: ${fmtNum(va(d))} توکن ورودی، ${fmtNum(vb(d))} توکن خروجی`
-            : `${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی MCP، ${fmtNum(d.api)} درخواست API، ${fmtNum(d.users)} کاربر`;
+            ? t(`${fmtDay(d.day)}: ${fmtNum(va(d))} توکن ورودی، ${fmtNum(vb(d))} توکن خروجی`, `${fmtDay(d.day)}: ${fmtNum(va(d))} input tokens, ${fmtNum(vb(d))} output tokens`)
+            : t(`${fmtDay(d.day)}: ${fmtNum(d.calls)} فراخوانی MCP، ${fmtNum(d.api)} درخواست API، ${fmtNum(d.users)} کاربر`, `${fmtDay(d.day)}: ${fmtNum(d.calls)} MCP calls, ${fmtNum(d.api)} API requests, ${fmtNum(d.users)} users`);
           return (
             <g key={d.day}>
               <path className={`chart-bar ${ca} ${hover === i ? "active" : ""}`} d={bar(mcpX, y(va(d)), barW, top + plotH - y(va(d)))} />
@@ -292,24 +293,24 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
             <>
               <span>
                 <i className={`swatch ${ca}`} />
-                {fmtNum(va(hovered))} توکن ورودی
+                {fmtNum(va(hovered))} {t("توکن ورودی", "input tokens")}
               </span>
               <span>
                 <i className={`swatch ${cb}`} />
-                {fmtNum(vb(hovered))} توکن خروجی
+                {fmtNum(vb(hovered))} {t("توکن خروجی", "output tokens")}
               </span>
             </>
           ) : (
             <>
               <span>
                 <i className="swatch mcp" />
-                {fmtNum(hovered.calls)} فراخوانی MCP
+                {fmtNum(hovered.calls)} {t("فراخوانی MCP", "MCP calls")}
               </span>
               <span>
                 <i className="swatch api" />
-                {fmtNum(hovered.api)} درخواست API
+                {fmtNum(hovered.api)} {t("درخواست API", "API requests")}
               </span>
-              <span>{fmtNum(hovered.users)} کاربر</span>
+              <span>{fmtNum(hovered.users)} {t("کاربر", "users")}</span>
             </>
           )}
         </div>
@@ -317,31 +318,31 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
       <ul className="chart-legend">
         <li>
           <span className={`swatch ${ca}`} aria-hidden="true" />
-          {tokens ? "توکن‌های ورودی" : "فراخوانی‌های MCP"}
+          {tokens ? t("توکن‌های ورودی", "Input tokens") : t("فراخوانی‌های MCP", "MCP calls")}
         </li>
         <li>
           <span className={`swatch ${cb}`} aria-hidden="true" />
-          {tokens ? "توکن‌های خروجی" : "درخواست‌های API"}
+          {tokens ? t("توکن‌های خروجی", "Output tokens") : t("درخواست‌های API", "API requests")}
         </li>
       </ul>
       <details className="chart-table">
-        <summary>نمایش جدول داده‌ها</summary>
+        <summary>{t("نمایش جدول داده‌ها", "Show data table")}</summary>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
               {tokens ? (
                 <tr>
-                  <th scope="col">روز</th>
-                  <th scope="col">توکن ورودی</th>
-                  <th scope="col">توکن خروجی</th>
-                  <th scope="col">جمع</th>
+                  <th scope="col">{t("روز", "Day")}</th>
+                  <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
+                  <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
+                  <th scope="col">{t("جمع", "Total")}</th>
                 </tr>
               ) : (
                 <tr>
-                  <th scope="col">روز</th>
-                  <th scope="col">فراخوانی MCP</th>
-                  <th scope="col">درخواست API</th>
-                  <th scope="col">کاربر</th>
+                  <th scope="col">{t("روز", "Day")}</th>
+                  <th scope="col">{t("فراخوانی MCP", "MCP calls")}</th>
+                  <th scope="col">{t("درخواست API", "API requests")}</th>
+                  <th scope="col">{t("کاربر", "User")}</th>
                 </tr>
               )}
             </thead>
@@ -377,7 +378,7 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
     <section className="card panel">
       <h3>{title}</h3>
       {items.length === 0 ? (
-        <p className="empty-list">هنوز داده‌ای نیست.</p>
+        <p className="empty-list">{t("هنوز داده‌ای نیست.", "No data yet.")}</p>
       ) : (
         <ol className="top-list">
           {items.map((it) => (
@@ -426,7 +427,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
     api
       .adminUsers(query, offset)
       .then((r) => live && setData(r))
-      .catch((e) => live && setError(errText(e, "بارگذاری کاربران ناموفق بود.")))
+      .catch((e) => live && setError(errText(e, t("بارگذاری کاربران ناموفق بود.", "Could not load users."))))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
@@ -440,11 +441,11 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>کاربران</h3>
+        <h3>{t("کاربران", "Users")}</h3>
         <label className="search">
           <IconSearch width={16} height={16} />
-          <span className="sr-only">جست‌وجوی کاربر</span>
-          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="جست‌وجوی نام یا ایمیل" />
+          <span className="sr-only">{t("جست‌وجوی کاربر", "Search users")}</span>
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("جست‌وجوی نام یا ایمیل", "Search name or email")} />
         </label>
       </div>
       {error && (
@@ -456,30 +457,30 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
         <table className="data-table">
           <thead>
             <tr>
-              <th scope="col">نام</th>
-              <th scope="col">ایمیل</th>
-              <th scope="col">عضویت</th>
-              <th scope="col">گفت‌وگو</th>
-              <th scope="col">پیام</th>
-              <th scope="col">تصویر</th>
-              <th scope="col">نشست</th>
-              <th scope="col">نسخه‌ی ایجنت</th>
-              <th scope="col">برنامه</th>
-              <th scope="col">فراخوانی MCP</th>
+              <th scope="col">{t("نام", "Name")}</th>
+              <th scope="col">{t("ایمیل", "Email")}</th>
+              <th scope="col">{t("عضویت", "Joined")}</th>
+              <th scope="col">{t("گفت‌وگو", "Chats")}</th>
+              <th scope="col">{t("پیام", "Messages")}</th>
+              <th scope="col">{t("تصویر", "Images")}</th>
+              <th scope="col">{t("نشست", "Sessions")}</th>
+              <th scope="col">{t("نسخه‌ی ایجنت", "Agent version")}</th>
+              <th scope="col">{t("برنامه", "Apps")}</th>
+              <th scope="col">{t("فراخوانی MCP", "MCP calls")}</th>
               <th scope="col">API</th>
-              <th scope="col">توکن ورودی</th>
-              <th scope="col">توکن خروجی</th>
-              <th scope="col">آخرین ورود</th>
-              <th scope="col">آخرین چت</th>
-              <th scope="col">آخرین ایجنت</th>
-              <th scope="col">آخرین API</th>
+              <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
+              <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
+              <th scope="col">{t("آخرین ورود", "Last login")}</th>
+              <th scope="col">{t("آخرین چت", "Last chat")}</th>
+              <th scope="col">{t("آخرین ایجنت", "Last agent")}</th>
+              <th scope="col">{t("آخرین API", "Last API")}</th>
             </tr>
           </thead>
           <tbody>
             {data?.users.map((u) => (
               <tr key={u.id} className={picked?.id === u.id ? "selected" : ""}>
                 <td>
-                  <button type="button" className="link" onClick={() => onPick(picked?.id === u.id ? null : { id: u.id, name: u.name })} aria-pressed={picked?.id === u.id} title="نمایش فعالیت، درخواست‌ها و برنامه‌های این کاربر">
+                  <button type="button" className="link" onClick={() => onPick(picked?.id === u.id ? null : { id: u.id, name: u.name })} aria-pressed={picked?.id === u.id} title={t("نمایش فعالیت، درخواست‌ها و برنامه‌های این کاربر", "Show this user's activity, requests and apps")}>
                     <bdi>{u.name}</bdi>
                   </button>
                 </td>
@@ -489,7 +490,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td title={fmtDateTime(u.created)}>{fmtDate(u.created)}</td>
                 <td>{fmtNum(u.chats)}</td>
                 <td>{fmtNum(u.messages)}</td>
-                <td title={u.files ? `${fmtNum(u.files)} فایل روی هم` : undefined}>{fmtNum(u.images ?? 0)}</td>
+                <td title={u.files ? t(`${fmtNum(u.files)} فایل روی هم`, `${fmtNum(u.files)} files in total`) : undefined}>{fmtNum(u.images ?? 0)}</td>
                 <td>{fmtNum(u.sessions ?? 0)}</td>
                 <td dir="ltr" className="cell-ltr">{u.agent_version || "-"}</td>
                 <td>{fmtNum(u.apps)}</td>
@@ -497,7 +498,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.api_requests)}</td>
                 <td title={exactTitle(u.tokens_in || 0)}>{fmtCompact(u.tokens_in || 0)}</td>
                 <td title={exactTitle(u.tokens_out || 0)}>{fmtCompact(u.tokens_out || 0)}</td>
-                <td title={u.last_login ? `${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود` : undefined}>{fmtRelative(u.last_login || 0)}</td>
+                <td title={u.last_login ? t(`${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود`, `${fmtDateTime(u.last_login)}, ${fmtNum(u.logins || 0)} logins in total`) : undefined}>{fmtRelative(u.last_login || 0)}</td>
                 <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
                 <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
                 <td title={u.last_active_api ? fmtDateTime(u.last_active_api) : undefined}>{fmtRelative(u.last_active_api)}</td>
@@ -508,7 +509,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td colSpan={17} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
-                    <span>در حال بارگذاری کاربران…</span>
+                    <span>{t("در حال بارگذاری کاربران…", "Loading users…")}</span>
                   </span>
                 </td>
               </tr>
@@ -516,7 +517,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             {data && data.users.length === 0 && !loading && (
               <tr>
                 <td colSpan={14} className="empty-cell">
-                  کاربری پیدا نشد.
+                  {t("کاربری پیدا نشد.", "No users found.")}
                 </td>
               </tr>
             )}
@@ -525,14 +526,14 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
       </div>
       <div className="pager">
         <span className="muted">
-          {data ? `${fmtNum(from)} تا ${fmtNum(to)} از ${fmtNum(total)}` : "در حال بارگذاری…"}
+          {data ? t(`${fmtNum(from)} تا ${fmtNum(to)} از ${fmtNum(total)}`, `${fmtNum(from)} to ${fmtNum(to)} of ${fmtNum(total)}`) : t("در حال بارگذاری…", "Loading…")}
         </span>
         <div>
           <button type="button" className="button ghost small" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-            قبلی
+            {t("قبلی", "Previous")}
           </button>
           <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total || loading} onClick={() => setOffset(offset + PAGE_SIZE)}>
-            بعدی
+            {t("بعدی", "Next")}
           </button>
         </div>
       </div>
@@ -562,7 +563,7 @@ function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => voi
         setEvents((cur) => (before ? [...cur, ...r.events] : r.events));
         setHasMore(r.events.length >= PAGE_SIZE);
       } catch (e) {
-        if (id === seq.current) setError(errText(e, "بارگذاری رویدادها ناموفق بود."));
+        if (id === seq.current) setError(errText(e, t("بارگذاری رویدادها ناموفق بود.", "Could not load events.")));
       } finally {
         if (id === seq.current) setLoading(false);
       }
@@ -589,31 +590,31 @@ function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => voi
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>رویدادها</h3>
+        <h3>{t("رویدادها", "Events")}</h3>
       </div>
       <form className="filters" onSubmit={submit}>
         {picked && (
           <span className="chip">
-            کاربر: <bdi>{picked.name}</bdi>
-            <button type="button" className="icon-button tiny" onClick={() => onPick(null)} aria-label="برداشتن فیلتر کاربر">
+            {t("کاربر:", "User:")} <bdi>{picked.name}</bdi>
+            <button type="button" className="icon-button tiny" onClick={() => onPick(null)} aria-label={t("برداشتن فیلتر کاربر", "Remove user filter")}>
               <IconClose width={14} height={14} />
             </button>
           </span>
         )}
         <label className="filter-field">
-          <span className="sr-only">نام ابزار</span>
+          <span className="sr-only">{t("نام ابزار", "Tool name")}</span>
           <input dir="ltr" value={tool} onChange={(e) => setTool(e.target.value)} placeholder="tool" />
         </label>
         <label className="filter-field">
-          <span className="sr-only">نام برنامه</span>
-          <input dir="auto" value={client} onChange={(e) => setClient(e.target.value)} placeholder="نام برنامه" />
+          <span className="sr-only">{t("نام برنامه", "App name")}</span>
+          <input dir="auto" value={client} onChange={(e) => setClient(e.target.value)} placeholder={t("نام برنامه", "App name")} />
         </label>
         <button type="submit" className="button ghost small">
-          اعمال فیلتر
+          {t("اعمال فیلتر", "Apply filter")}
         </button>
         {(applied.tool || applied.client) && (
           <button type="button" className="link" onClick={clear}>
-            پاک کردن
+            {t("پاک کردن", "Clear")}
           </button>
         )}
       </form>
@@ -630,7 +631,7 @@ function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => voi
         showUser
         showClient
         onUser={(id, name) => onPick({ id, name })}
-        empty="رویدادی با این فیلترها پیدا نشد."
+        empty={t("رویدادی با این فیلترها پیدا نشد.", "No events match these filters.")}
       />
     </section>
   );
@@ -658,7 +659,7 @@ function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) 
         setRequests((cur) => (before ? [...cur, ...r.requests] : r.requests));
         setHasMore(r.requests.length >= PAGE_SIZE);
       } catch (e) {
-        if (id === seq.current) setError(errText(e, "بارگذاری درخواست‌ها ناموفق بود."));
+        if (id === seq.current) setError(errText(e, t("بارگذاری درخواست‌ها ناموفق بود.", "Could not load requests.")));
       } finally {
         if (id === seq.current) setLoading(false);
       }
@@ -696,31 +697,31 @@ function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) 
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>درخواست‌های API</h3>
+        <h3>{t("درخواست‌های API", "API requests")}</h3>
       </div>
       <form className="filters" onSubmit={submit}>
         {picked && (
           <span className="chip">
-            کاربر: <bdi>{picked.name}</bdi>
-            <button type="button" className="icon-button tiny" onClick={() => onPick(null)} aria-label="برداشتن فیلتر کاربر">
+            {t("کاربر:", "User:")} <bdi>{picked.name}</bdi>
+            <button type="button" className="icon-button tiny" onClick={() => onPick(null)} aria-label={t("برداشتن فیلتر کاربر", "Remove user filter")}>
               <IconClose width={14} height={14} />
             </button>
           </span>
         )}
         <label className="filter-field">
-          <span className="sr-only">نام پروژه</span>
-          <input dir="auto" value={project} onChange={(e) => setProject(e.target.value)} placeholder="نام پروژه" />
+          <span className="sr-only">{t("نام پروژه", "Project name")}</span>
+          <input dir="auto" value={project} onChange={(e) => setProject(e.target.value)} placeholder={t("نام پروژه", "Project name")} />
         </label>
         <label className="filter-field">
-          <span className="sr-only">شناسه‌ی کلید</span>
-          <input dir="ltr" inputMode="numeric" value={keyId} onChange={(e) => setKeyId(e.target.value.replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).replace(/[^0-9]/g, ""))} placeholder="شناسه‌ی کلید" />
+          <span className="sr-only">{t("شناسه‌ی کلید", "Key ID")}</span>
+          <input dir="ltr" inputMode="numeric" value={keyId} onChange={(e) => setKeyId(e.target.value.replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).replace(/[^0-9]/g, ""))} placeholder={t("شناسه‌ی کلید", "Key ID")} />
         </label>
         <button type="submit" className="button ghost small">
-          اعمال فیلتر
+          {t("اعمال فیلتر", "Apply filter")}
         </button>
         {(applied.project || applied.key) && (
           <button type="button" className="link" onClick={clear}>
-            پاک کردن
+            {t("پاک کردن", "Clear")}
           </button>
         )}
       </form>
@@ -738,31 +739,31 @@ function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) 
         onUser={(id, name) => onPick({ id, name })}
         onKey={byKey}
         onProject={byProject}
-        empty="درخواستی با این فیلترها پیدا نشد."
+        empty={t("درخواستی با این فیلترها پیدا نشد.", "No requests match these filters.")}
       />
     </section>
   );
 }
 
 const PLAN_LABELS: { id: PlanId; label: string }[] = [
-  { id: "free", label: "رایگان" },
-  { id: "plus", label: "پلاس" },
-  { id: "pro", label: "حرفه‌ای" },
-  { id: "unlimited", label: "نامحدود" },
+  { id: "free", label: t("رایگان", "Free") },
+  { id: "plus", label: t("پلاس", "Plus") },
+  { id: "pro", label: t("حرفه‌ای", "Pro") },
+  { id: "unlimited", label: t("نامحدود", "Unlimited") },
 ];
 
 const PAY_WORDS: Record<Payment["status"], string> = {
-  pending: "در انتظار",
-  verifying: "در حال تایید",
-  paid: "پرداخت شده",
-  failed: "ناموفق",
-  canceled: "لغو شده",
+  pending: t("در انتظار", "Pending"),
+  verifying: t("در حال تایید", "Verifying"),
+  paid: t("پرداخت شده", "Paid"),
+  failed: t("ناموفق", "Failed"),
+  canceled: t("لغو شده", "Canceled"),
 };
 
-const GATEWAY_WORDS: Record<string, string> = { zarinpal: "زرین‌پال", zibal: "زیبال" };
+const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال", "Zarinpal"), zibal: t("زیبال", "Zibal") };
 
 function toman(n: number): string {
-  return `${fmtNum(n)} تومان`;
+  return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
 function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
@@ -787,7 +788,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
       setActive(r.active);
       setIncome(r.income);
     } catch (e) {
-      setError(errText(e, "بارگذاری اشتراک‌ها ناموفق بود."));
+      setError(errText(e, t("بارگذاری اشتراک‌ها ناموفق بود.", "Could not load subscriptions.")));
     }
   }, [latest, picked]);
 
@@ -802,13 +803,13 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
     setGranting(true);
     try {
       await api.adminGrant({ email: who, plan, days: days.trim() ? Number(days) : undefined, note: note.trim() || undefined });
-      notify("اشتراک داده شد.");
+      notify(t("اشتراک داده شد.", "Subscription granted."));
       setEmail("");
       setNote("");
       setDays("");
       await load();
     } catch (err) {
-      notify(errText(err, "دادن اشتراک ناموفق بود."));
+      notify(errText(err, t("دادن اشتراک ناموفق بود.", "Could not grant the subscription.")));
     } finally {
       setGranting(false);
     }
@@ -816,24 +817,24 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
 
   const cancel = async (row: AdminSubscription) => {
     const ok = await confirmDialog({
-      title: "لغو اشتراک",
+      title: t("لغو اشتراک", "Cancel subscription"),
       subject: row.user?.email ?? row.plan_name,
       message: (
         <>
-          اشتراک <Subject>{row.plan_name}</Subject> این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.
+          {t("اشتراک", "This user's")} <Subject>{row.plan_name}</Subject> {t("این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.", "subscription will be canceled and they go back to the free plan.")}
         </>
       ),
-      confirmLabel: "لغو اشتراک",
+      confirmLabel: t("لغو اشتراک", "Cancel subscription"),
       icon: "alert",
     });
     if (!ok) return;
     setBusy(row.id);
     try {
       await api.adminCancelSubscription(row.id);
-      notify("اشتراک لغو شد.");
+      notify(t("اشتراک لغو شد.", "Subscription canceled."));
       await load();
     } catch (e) {
-      notify(errText(e, "لغو اشتراک ناموفق بود."));
+      notify(errText(e, t("لغو اشتراک ناموفق بود.", "Could not cancel the subscription.")));
     } finally {
       setBusy(null);
     }
@@ -843,14 +844,14 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
     <section className="card panel">
       <div className="panel-head">
         <div className="panel-title">
-          <h3>اشتراک‌ها{picked ? " این کاربر" : ""}</h3>
-          {!picked && active > 0 && <span className="badge ok">{fmtNum(active)} اشتراک فعال</span>}
+          <h3>{t("اشتراک‌ها", "Subscriptions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
+          {!picked && active > 0 && <span className="badge ok">{fmtNum(active)} {t("اشتراک فعال", "active")}</span>}
         </div>
         <Segmented
-          label="نما"
+          label={t("نما", "View")}
           options={[
-            { id: "active", label: "فعال" },
-            { id: "latest", label: "آخرین اشتراک هر کاربر" },
+            { id: "active", label: t("فعال", "Active") },
+            { id: "latest", label: t("آخرین اشتراک هر کاربر", "Latest per user") },
           ]}
           value={latest ? "latest" : "active"}
           onChange={(v) => setLatest(v === "latest")}
@@ -858,16 +859,16 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
       </div>
       <form className="grant" onSubmit={grant}>
         <div className="grant-head">
-          <h4>دادن اشتراک رایگان</h4>
-          <p className="muted">اشتراک فعال کاربر جایگزین می‌شود و اگر همین پلن را داشته باشد، به مدت باقی‌مانده‌اش اضافه می‌شود.</p>
+          <h4>{t("دادن اشتراک رایگان", "Grant a free subscription")}</h4>
+          <p className="muted">{t("اشتراک فعال کاربر جایگزین می‌شود و اگر همین پلن را داشته باشد، به مدت باقی‌مانده‌اش اضافه می‌شود.", "Replaces the user's active subscription. If they already have this plan, the days are added to what is left.")}</p>
         </div>
         <div className="grant-grid">
           <label className="grant-field">
-            <span>ایمیل کاربر</span>
+            <span>{t("ایمیل کاربر", "User email")}</span>
             <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" required />
           </label>
           <label className="grant-field">
-            <span>پلن</span>
+            <span>{t("پلن", "Plan")}</span>
             <div className="select">
               <select value={plan} onChange={(e) => setPlan(e.target.value as PlanId)}>
                 {PLAN_LABELS.map((o) => (
@@ -881,21 +882,21 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
           </label>
           <label className="grant-field">
             <span>
-              تعداد روز <span className="opt">اختیاری</span>
+              {t("تعداد روز", "Days")} <span className="opt">{t("اختیاری", "optional")}</span>
             </span>
-            <input type="number" inputMode="numeric" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder="پیش‌فرض پلن" />
+            <input type="number" inputMode="numeric" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder={t("پیش‌فرض پلن", "Plan default")} />
           </label>
           <label className="grant-field">
             <span>
-              یادداشت <span className="opt">اختیاری</span>
+              {t("یادداشت", "Note")} <span className="opt">{t("اختیاری", "optional")}</span>
             </span>
-            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="چرا رایگان داده شد" />
+            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("چرا رایگان داده شد", "Why it was given for free")} />
           </label>
         </div>
         <div className="grant-actions">
           <button type="submit" className="button primary grant-go" disabled={granting}>
             {granting ? <span className="spinner" /> : <IconBadgeCheck width={18} height={18} />}
-            دادن اشتراک
+            {t("دادن اشتراک", "Grant subscription")}
           </button>
         </div>
       </form>
@@ -907,23 +908,23 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
       {rows === null && !error ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <div className="table-wrap scroll-y">
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">کاربر</th>
-                <th scope="col">پلن</th>
-                <th scope="col">از</th>
-                <th scope="col">تا</th>
-                <th scope="col">راه</th>
-                <th scope="col">مبلغ</th>
-                <th scope="col">وضعیت</th>
-                <th scope="col">یادداشت</th>
+                <th scope="col">{t("کاربر", "User")}</th>
+                <th scope="col">{t("پلن", "Plan")}</th>
+                <th scope="col">{t("از", "From")}</th>
+                <th scope="col">{t("تا", "To")}</th>
+                <th scope="col">{t("راه", "Source")}</th>
+                <th scope="col">{t("مبلغ", "Amount")}</th>
+                <th scope="col">{t("وضعیت", "Status")}</th>
+                <th scope="col">{t("یادداشت", "Note")}</th>
                 <th scope="col">
-                  <span className="sr-only">کارها</span>
+                  <span className="sr-only">{t("کارها", "Actions")}</span>
                 </th>
               </tr>
             </thead>
@@ -938,11 +939,11 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
                   </td>
                   <td>{r.plan_name}</td>
                   <td>{fmtDate(r.started)}</td>
-                  <td>{r.expires === 0 ? "بدون پایان" : fmtDate(r.expires)}</td>
-                  <td>{r.source === "admin" ? "هدیه‌ی مدیر" : "پرداخت"}</td>
+                  <td>{r.expires === 0 ? t("بدون پایان", "No end") : fmtDate(r.expires)}</td>
+                  <td>{r.source === "admin" ? t("هدیه‌ی مدیر", "Admin gift") : t("پرداخت", "Payment")}</td>
                   <td>{r.price === 0 ? "-" : toman(r.price)}</td>
                   <td>
-                    <span className={`badge ${r.status === "active" ? "ok" : ""}`}>{r.status === "active" ? "فعال" : r.status === "canceled" ? "لغو شده" : "جایگزین شده"}</span>
+                    <span className={`badge ${r.status === "active" ? "ok" : ""}`}>{r.status === "active" ? t("فعال", "Active") : r.status === "canceled" ? t("لغو شده", "Canceled") : t("جایگزین شده", "Replaced")}</span>
                   </td>
                   <td>
                     <bdi>{r.note}</bdi>
@@ -950,7 +951,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
                   <td>
                     {r.status === "active" && (
                       <button type="button" className="link danger" disabled={busy === r.id} onClick={() => void cancel(r)}>
-                        لغو
+                        {t("لغو", "Cancel")}
                       </button>
                     )}
                   </td>
@@ -959,7 +960,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
               {rows?.length === 0 && (
                 <tr>
                   <td colSpan={9} className="muted">
-                    هنوز اشتراکی ثبت نشده است.
+                    {t("هنوز اشتراکی ثبت نشده است.", "No subscriptions yet.")}
                   </td>
                 </tr>
               )}
@@ -967,7 +968,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
           </table>
         </div>
       )}
-      <div className="panel-foot muted">مجموع پرداخت‌های موفق: {toman(income)}</div>
+      <div className="panel-foot muted">{t("مجموع پرداخت‌های موفق:", "Total successful payments:")} {toman(income)}</div>
     </section>
   );
 }
@@ -989,7 +990,7 @@ function Payments({ picked }: { picked: Picked }) {
         setRows(r.payments);
         setIncome(r.income);
       })
-      .catch((e) => live && setError(errText(e, "بارگذاری پرداخت‌ها ناموفق بود.")));
+      .catch((e) => live && setError(errText(e, t("بارگذاری پرداخت‌ها ناموفق بود.", "Could not load payments."))));
     return () => {
       live = false;
     };
@@ -998,15 +999,15 @@ function Payments({ picked }: { picked: Picked }) {
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>پرداخت‌ها{picked ? " این کاربر" : ""}</h3>
+        <h3>{t("پرداخت‌ها", "Payments")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
         <Segmented
-          label="وضعیت"
+          label={t("وضعیت", "Status")}
           options={[
-            { id: "", label: "همه" },
-            { id: "paid", label: "پرداخت شده" },
-            { id: "pending", label: "در انتظار" },
-            { id: "failed", label: "ناموفق" },
-            { id: "canceled", label: "لغو شده" },
+            { id: "", label: t("همه", "All") },
+            { id: "paid", label: t("پرداخت شده", "Paid") },
+            { id: "pending", label: t("در انتظار", "Pending") },
+            { id: "failed", label: t("ناموفق", "Failed") },
+            { id: "canceled", label: t("لغو شده", "Canceled") },
           ]}
           value={status}
           onChange={setStatus}
@@ -1020,21 +1021,21 @@ function Payments({ picked }: { picked: Picked }) {
       {rows === null && !error ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <div className="table-wrap scroll-y">
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">کاربر</th>
-                <th scope="col">پلن</th>
-                <th scope="col">مبلغ</th>
-                <th scope="col">درگاه</th>
-                <th scope="col">وضعیت</th>
-                <th scope="col">کد پیگیری</th>
-                <th scope="col">کارت</th>
-                <th scope="col">زمان</th>
+                <th scope="col">{t("کاربر", "User")}</th>
+                <th scope="col">{t("پلن", "Plan")}</th>
+                <th scope="col">{t("مبلغ", "Amount")}</th>
+                <th scope="col">{t("درگاه", "Gateway")}</th>
+                <th scope="col">{t("وضعیت", "Status")}</th>
+                <th scope="col">{t("کد پیگیری", "Reference")}</th>
+                <th scope="col">{t("کارت", "Card")}</th>
+                <th scope="col">{t("زمان", "Time")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1062,7 +1063,7 @@ function Payments({ picked }: { picked: Picked }) {
               {rows?.length === 0 && (
                 <tr>
                   <td colSpan={8} className="muted">
-                    پرداختی با این فیلتر نیست.
+                    {t("پرداختی با این فیلتر نیست.", "No payments match this filter.")}
                   </td>
                 </tr>
               )}
@@ -1070,7 +1071,7 @@ function Payments({ picked }: { picked: Picked }) {
           </table>
         </div>
       )}
-      <div className="panel-foot muted">مجموع پرداخت‌های موفق: {toman(income)}</div>
+      <div className="panel-foot muted">{t("مجموع پرداخت‌های موفق:", "Total successful payments:")} {toman(income)}</div>
     </section>
   );
 }
@@ -1087,7 +1088,7 @@ function Conversations({ picked }: { picked: Picked }) {
     api
       .adminUserChats(picked.id)
       .then((r) => live && setChats(r.chats))
-      .catch((e) => live && setError(errText(e, "بارگذاری گفت‌وگوها ناموفق بود.")));
+      .catch((e) => live && setError(errText(e, t("بارگذاری گفت‌وگوها ناموفق بود.", "Could not load chats."))));
     return () => {
       live = false;
     };
@@ -1096,10 +1097,10 @@ function Conversations({ picked }: { picked: Picked }) {
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>گفت‌وگوها{picked ? ` این کاربر` : ""}</h3>
+        <h3>{t("گفت‌وگوها", "Chats")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
       </div>
       {!picked ? (
-        <p className="muted">برای دیدن گفت‌وگوها یک کاربر را از جدول کاربران انتخاب کنید.</p>
+        <p className="muted">{t("برای دیدن گفت‌وگوها یک کاربر را از جدول کاربران انتخاب کنید.", "Pick a user from the users table to see their chats.")}</p>
       ) : error ? (
         <div className="form-error" role="alert">
           {error}
@@ -1107,34 +1108,34 @@ function Conversations({ picked }: { picked: Picked }) {
       ) : chats === null ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <div className="table-wrap scroll-y">
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">عنوان</th>
-                <th scope="col">نوع</th>
-                <th scope="col">آخرین بروزرسانی</th>
+                <th scope="col">{t("عنوان", "Title")}</th>
+                <th scope="col">{t("نوع", "Type")}</th>
+                <th scope="col">{t("آخرین بروزرسانی", "Last updated")}</th>
               </tr>
             </thead>
             <tbody>
               {chats.map((c) => (
                 <tr key={c.id}>
                   <td className="cell-clip">
-                    <a className="link" href={`/admin/chats/${c.id}`} target="_blank" rel="noopener" title="باز کردن کامل این گفت‌وگو در زبانه‌ی تازه">
+                    <a className="link" href={`/admin/chats/${c.id}`} target="_blank" rel="noopener" title={t("باز کردن کامل این گفت‌وگو در زبانه‌ی تازه", "Open the full chat in a new tab")}>
                       <bdi>{c.title}</bdi>
                     </a>
                   </td>
-                  <td>{c.agent ? "ایجنت" : "وب"}</td>
+                  <td>{c.agent ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
                   <td title={fmtDateTime(c.updated)}>{fmtRelative(c.updated)}</td>
                 </tr>
               ))}
               {chats.length === 0 && (
                 <tr>
                   <td colSpan={3} className="empty-cell">
-                    گفت‌وگویی نیست.
+                    {t("گفت‌وگویی نیست.", "No chats.")}
                   </td>
                 </tr>
               )}
@@ -1165,7 +1166,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
         setApps(r.apps);
         setMore(r.apps.length >= 50);
       })
-      .catch((e) => live && setError(errText(e, "بارگذاری برنامه‌ها ناموفق بود.")));
+      .catch((e) => live && setError(errText(e, t("بارگذاری برنامه‌ها ناموفق بود.", "Could not load apps."))));
     return () => {
       live = false;
     };
@@ -1179,7 +1180,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
       setApps((cur) => [...(cur ?? []), ...r.apps]);
       setMore(r.apps.length >= 50);
     } catch (e) {
-      notify(errText(e, "بارگذاری برنامه‌ها ناموفق بود."));
+      notify(errText(e, t("بارگذاری برنامه‌ها ناموفق بود.", "Could not load apps.")));
     } finally {
       setLoadingMore(false);
     }
@@ -1187,14 +1188,14 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
 
   const revoke = async (a: AdminApp) => {
     const ok = await confirmDialog({
-      title: "قطع اتصال برنامه",
+      title: t("قطع اتصال برنامه", "Disconnect app"),
       subject: a.client.name,
       message: (
         <>
-          اتصال این برنامه برای <Subject>{a.user.name}</Subject> قطع می‌شود.
+          {t("اتصال این برنامه برای", "This app will be disconnected for")} <Subject>{a.user.name}</Subject>{t(" قطع می‌شود.", ".")}
         </>
       ),
-      confirmLabel: "قطع اتصال",
+      confirmLabel: t("قطع اتصال", "Disconnect"),
       icon: "alert",
     });
     if (!ok) return;
@@ -1202,9 +1203,9 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
     try {
       await api.adminRevokeApp(a.id);
       setApps((cur) => (cur ? cur.map((x) => (x.id === a.id ? { ...x, revoked: true } : x)) : cur));
-      notify("اتصال قطع شد.");
+      notify(t("اتصال قطع شد.", "App disconnected."));
     } catch (e) {
-      notify(errText(e, "قطع اتصال ناموفق بود."));
+      notify(errText(e, t("قطع اتصال ناموفق بود.", "Could not disconnect the app.")));
     } finally {
       setBusy(null);
     }
@@ -1213,7 +1214,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>برنامه‌های متصل{picked ? " این کاربر" : ""}</h3>
+        <h3>{t("برنامه‌های متصل", "Connected apps")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
       </div>
       {error && (
         <div className="form-error" role="alert">
@@ -1223,23 +1224,23 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
       {apps === null && !error ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <div className="table-wrap scroll-y">
           <table className="data-table">
             <thead>
               <tr>
-                <th scope="col">کاربر</th>
-                <th scope="col">برنامه</th>
-                <th scope="col">میزبان</th>
-                <th scope="col">دسترسی</th>
-                <th scope="col">اتصال</th>
-                <th scope="col">آخرین استفاده</th>
-                <th scope="col">فراخوانی</th>
-                <th scope="col">وضعیت</th>
+                <th scope="col">{t("کاربر", "User")}</th>
+                <th scope="col">{t("برنامه", "App")}</th>
+                <th scope="col">{t("میزبان", "Host")}</th>
+                <th scope="col">{t("دسترسی", "Access")}</th>
+                <th scope="col">{t("اتصال", "Connected")}</th>
+                <th scope="col">{t("آخرین استفاده", "Last used")}</th>
+                <th scope="col">{t("فراخوانی", "Calls")}</th>
+                <th scope="col">{t("وضعیت", "Status")}</th>
                 <th scope="col">
-                  <span className="sr-only">کارها</span>
+                  <span className="sr-only">{t("کارها", "Actions")}</span>
                 </th>
               </tr>
             </thead>
@@ -1254,7 +1255,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
                   </td>
                   <td>
                     <bdi>{a.client.name}</bdi>
-                    <span className="cell-sub">{a.client.kind === "cimd" ? "تأییدشده" : "تأییدنشده"}</span>
+                    <span className="cell-sub">{a.client.kind === "cimd" ? t("تأییدشده", "Verified") : t("تأییدنشده", "Unverified")}</span>
                   </td>
                   <td dir="ltr" className="cell-ltr">
                     {a.client.host}
@@ -1265,11 +1266,11 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
                   <td title={fmtDateTime(a.created)}>{fmtDate(a.created)}</td>
                   <td title={a.last_used ? fmtDateTime(a.last_used) : undefined}>{fmtRelative(a.last_used)}</td>
                   <td>{fmtNum(a.calls)}</td>
-                  <td>{a.revoked ? <span className="badge">قطع‌شده</span> : <span className="badge ok">فعال</span>}</td>
+                  <td>{a.revoked ? <span className="badge">{t("قطع‌شده", "Disconnected")}</span> : <span className="badge ok">{t("فعال", "Active")}</span>}</td>
                   <td>
                     {!a.revoked && (
-                      <button type="button" className="button danger small" disabled={busy === a.id} onClick={() => revoke(a)} aria-label={`قطع اتصال ${a.client.name} برای ${a.user.name}`}>
-                        {busy === a.id ? <span className="spinner" /> : "قطع اتصال"}
+                      <button type="button" className="button danger small" disabled={busy === a.id} onClick={() => revoke(a)} aria-label={t(`قطع اتصال ${a.client.name} برای ${a.user.name}`, `Disconnect ${a.client.name} for ${a.user.name}`)}>
+                        {busy === a.id ? <span className="spinner" /> : t("قطع اتصال", "Disconnect")}
                       </button>
                     )}
                   </td>
@@ -1278,7 +1279,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
               {apps && apps.length === 0 && (
                 <tr>
                   <td colSpan={9} className="empty-cell">
-                    برنامه‌ی متصلی نیست.
+                    {t("برنامه‌ی متصلی نیست.", "No connected apps.")}
                   </td>
                 </tr>
               )}
@@ -1289,12 +1290,12 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
       {loadingMore && (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       )}
       {more && !loadingMore && (
         <button type="button" className="button ghost more" onClick={loadMore}>
-          نمایش موارد بیشتر
+          {t("نمایش موارد بیشتر", "Show more")}
         </button>
       )}
     </section>
@@ -1304,7 +1305,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
 function shortAgent(ua: string): string {
   const browser = /Edg\/[\d.]+|OPR\/[\d.]+|Firefox\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ Safari|Safari\/[\d.]+/.exec(ua)?.[0] ?? "";
   const os = /Windows NT [\d.]+|Mac OS X [\d_]+|Android [\d.]+|iPhone OS [\d_]+|Linux/.exec(ua)?.[0]?.replace(/_/g, ".") ?? "";
-  return [browser.replace("Version/", "Safari ").replace(" Safari", ""), os].filter(Boolean).join("، ") || ua.slice(0, 60);
+  return [browser.replace("Version/", "Safari ").replace(" Safari", ""), os].filter(Boolean).join(t("، ", ", ")) || ua.slice(0, 60);
 }
 
 function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
@@ -1330,7 +1331,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
         setRows(r.sessions);
         setTotal(r.total);
       })
-      .catch((e) => live && setError(errText(e, "بارگذاری نشست‌ها ناموفق بود.")));
+      .catch((e) => live && setError(errText(e, t("بارگذاری نشست‌ها ناموفق بود.", "Could not load sessions."))));
     return () => {
       live = false;
     };
@@ -1338,24 +1339,24 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
 
   const revoke = async (s: AdminSession) => {
     const ok = await confirmDialog({
-      title: "بستن نشست",
+      title: t("بستن نشست", "End session"),
       subject: s.user.email,
       message: (
         <>
-          نشست <Subject>{s.client === "agent" ? "ایجنت" : "وب"}</Subject> این کاربر بسته می‌شود و در اولین درخواست بعدی، حداکثر تا یک دقیقه، از حساب خارج می‌شود.
+          {t("نشست", "This user's")} <Subject>{s.client === "agent" ? t("ایجنت", "Agent") : t("وب", "Web")}</Subject> {t("این کاربر بسته می‌شود و در اولین درخواست بعدی، حداکثر تا یک دقیقه، از حساب خارج می‌شود.", "session will be ended. They are signed out on their next request, within a minute at most.")}
         </>
       ),
-      confirmLabel: "بستن نشست",
+      confirmLabel: t("بستن نشست", "End session"),
       icon: "alert",
     });
     if (!ok) return;
     setBusy(s.id);
     try {
       await api.revokeSession(s.id);
-      notify("نشست بسته شد.");
+      notify(t("نشست بسته شد.", "Session ended."));
       setReload((n) => n + 1);
     } catch (e) {
-      notify(errText(e, "بستن نشست ناموفق بود."));
+      notify(errText(e, t("بستن نشست ناموفق بود.", "Could not end the session.")));
     } finally {
       setBusy(null);
     }
@@ -1364,40 +1365,40 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
   const revokeAll = async () => {
     if (!picked) return;
     const ok = await confirmDialog({
-      title: "خروج از همه‌ی نشست‌ها",
+      title: t("خروج از همه‌ی نشست‌ها", "Sign out everywhere"),
       subject: picked.name,
-      message: <>همه‌ی نشست‌های وب و ایجنت این کاربر بسته می‌شود. او باید دوباره وارد شود.</>,
-      confirmLabel: "بستن همه",
+      message: <>{t("همه‌ی نشست‌های وب و ایجنت این کاربر بسته می‌شود. او باید دوباره وارد شود.", "All of this user's web and agent sessions will be ended. They will have to sign in again.")}</>,
+      confirmLabel: t("بستن همه", "End all"),
       icon: "alert",
     });
     if (!ok) return;
     try {
       const r = await api.revokeUserSessions(picked.id);
-      notify(`${fmtNum(r.revoked)} نشست بسته شد.`);
+      notify(t(`${fmtNum(r.revoked)} نشست بسته شد.`, `${fmtNum(r.revoked)} sessions ended.`));
       setReload((n) => n + 1);
     } catch (e) {
-      notify(errText(e, "بستن نشست‌ها ناموفق بود."));
+      notify(errText(e, t("بستن نشست‌ها ناموفق بود.", "Could not end the sessions.")));
     }
   };
 
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>نشست‌ها{picked ? " این کاربر" : ""}</h3>
+        <h3>{t("نشست‌ها", "Sessions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
         <div className="row-actions">
           <Segmented
-            label="نوع"
+            label={t("نوع", "Type")}
             options={[
-              { id: "", label: "همه" },
-              { id: "web", label: "وب" },
-              { id: "agent", label: "ایجنت" },
+              { id: "", label: t("همه", "All") },
+              { id: "web", label: t("وب", "Web") },
+              { id: "agent", label: t("ایجنت", "Agent") },
             ]}
             value={client}
             onChange={setClient}
           />
           {picked && (
             <button type="button" className="button ghost small danger" onClick={revokeAll}>
-              خروج از همه‌ی نشست‌ها
+              {t("خروج از همه‌ی نشست‌ها", "Sign out everywhere")}
             </button>
           )}
         </div>
@@ -1409,7 +1410,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
       ) : rows === null ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <>
@@ -1417,15 +1418,15 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col">کاربر</th>
-                  <th scope="col">از</th>
-                  <th scope="col">نسخه</th>
-                  <th scope="col">مرورگر یا سیستم</th>
+                  <th scope="col">{t("کاربر", "User")}</th>
+                  <th scope="col">{t("از", "Client")}</th>
+                  <th scope="col">{t("نسخه", "Version")}</th>
+                  <th scope="col">{t("مرورگر یا سیستم", "Browser or system")}</th>
                   <th scope="col">IP</th>
-                  <th scope="col">ورود</th>
-                  <th scope="col">آخرین استفاده</th>
+                  <th scope="col">{t("ورود", "Signed in")}</th>
+                  <th scope="col">{t("آخرین استفاده", "Last used")}</th>
                   <th scope="col">
-                    <span className="sr-only">کارها</span>
+                    <span className="sr-only">{t("کارها", "Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -1435,7 +1436,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                     <td title={s.user.email}>
                       <bdi>{s.user.name}</bdi>
                     </td>
-                    <td>{s.client === "agent" ? "ایجنت" : "وب"}</td>
+                    <td>{s.client === "agent" ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
                     <td dir="ltr" className="cell-ltr">
                       {s.client_version || "-"}
                     </td>
@@ -1449,10 +1450,10 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                     <td title={s.last_used ? fmtDateTime(s.last_used) : undefined}>{s.last_used ? fmtRelative(s.last_used) : "-"}</td>
                     <td className="cell-actions">
                       {s.current ? (
-                        <span className="muted">نشست فعلی شما</span>
+                        <span className="muted">{t("نشست فعلی شما", "Your current session")}</span>
                       ) : (
                         <button type="button" className="button ghost small danger" disabled={busy === s.id} onClick={() => revoke(s)}>
-                          بستن نشست
+                          {t("بستن نشست", "End session")}
                         </button>
                       )}
                     </td>
@@ -1461,7 +1462,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                 {rows.length === 0 && (
                   <tr>
                     <td colSpan={8} className="empty-cell">
-                      نشست فعالی نیست.
+                      {t("نشست فعالی نیست.", "No active sessions.")}
                     </td>
                   </tr>
                 )}
@@ -1470,14 +1471,14 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
           </div>
           <div className="pager">
             <span className="muted">
-              {fmtNum(total === 0 ? 0 : offset + 1)} تا {fmtNum(Math.min(total, offset + rows.length))} از {fmtNum(total)}
+              {fmtNum(total === 0 ? 0 : offset + 1)} {t("تا", "to")} {fmtNum(Math.min(total, offset + rows.length))} {t("از", "of")} {fmtNum(total)}
             </span>
             <div>
               <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-                قبلی
+                {t("قبلی", "Previous")}
               </button>
               <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
-                بعدی
+                {t("بعدی", "Next")}
               </button>
             </div>
           </div>
@@ -1487,7 +1488,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
   );
 }
 
-const KIND_LABEL: Record<string, string> = { image: "تصویر", text: "متن یا کد", archive: "ZIP", pdf: "PDF" };
+const KIND_LABEL: Record<string, string> = { image: t("تصویر", "Image"), text: t("متن یا کد", "Text or code"), archive: "ZIP", pdf: "PDF" };
 
 async function saveUpload(f: AdminUpload, notify: (msg: string) => void) {
   try {
@@ -1500,7 +1501,7 @@ async function saveUpload(f: AdminUpload, notify: (msg: string) => void) {
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 10000);
   } catch (e) {
-    notify(errText(e, "دریافت فایل ناموفق بود."));
+    notify(errText(e, t("دریافت فایل ناموفق بود.", "Could not download the file.")));
   }
 }
 
@@ -1543,7 +1544,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
         setRows(r.files);
         setTotal(r.total);
       })
-      .catch((e) => live && setError(errText(e, "بارگذاری فایل‌ها ناموفق بود.")));
+      .catch((e) => live && setError(errText(e, t("بارگذاری فایل‌ها ناموفق بود.", "Could not load files."))));
     return () => {
       live = false;
     };
@@ -1552,13 +1553,13 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>فایل‌های بارگذاری‌شده{picked ? " این کاربر" : ""}</h3>
+        <h3>{t("فایل‌های بارگذاری‌شده", "Uploaded files")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
         <Segmented
-          label="نوع"
+          label={t("نوع", "Type")}
           options={[
-            { id: "", label: "همه" },
-            { id: "image", label: "تصویر" },
-            { id: "text", label: "متن و کد" },
+            { id: "", label: t("همه", "All") },
+            { id: "image", label: t("تصویر", "Image") },
+            { id: "text", label: t("متن و کد", "Text and code") },
             { id: "archive", label: "ZIP" },
           ]}
           value={kind}
@@ -1572,7 +1573,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
       ) : rows === null ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <>
@@ -1580,15 +1581,15 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col">فایل</th>
-                  <th scope="col">نوع</th>
-                  <th scope="col">حجم</th>
-                  <th scope="col">کاربر</th>
-                  <th scope="col">از</th>
-                  <th scope="col">زمان</th>
-                  <th scope="col">مسیر روی سرور</th>
+                  <th scope="col">{t("فایل", "File")}</th>
+                  <th scope="col">{t("نوع", "Type")}</th>
+                  <th scope="col">{t("حجم", "Size")}</th>
+                  <th scope="col">{t("کاربر", "User")}</th>
+                  <th scope="col">{t("از", "Client")}</th>
+                  <th scope="col">{t("زمان", "Time")}</th>
+                  <th scope="col">{t("مسیر روی سرور", "Server path")}</th>
                   <th scope="col">
-                    <span className="sr-only">کارها</span>
+                    <span className="sr-only">{t("کارها", "Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -1606,7 +1607,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
                       <td title={f.user.email}>
                         <bdi>{f.user.name}</bdi>
                       </td>
-                      <td>{f.agent ? "ایجنت" : "وب"}</td>
+                      <td>{f.agent ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
                       <td title={fmtDateTime(f.created)}>{fmtRelative(f.created)}</td>
                       <td dir="ltr" className="cell-ltr cell-clip" title={f.path}>
                         {f.path}
@@ -1614,10 +1615,10 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
                       <td className="cell-actions">
                         <div className="row-actions">
                           <button type="button" className="button ghost small" onClick={() => saveUpload(f, tell)}>
-                            دریافت
+                            {t("دریافت", "Download")}
                           </button>
                           <a className="button ghost small" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener">
-                            گفت‌وگو
+                            {t("گفت‌وگو", "Chat")}
                           </a>
                         </div>
                       </td>
@@ -1629,10 +1630,10 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
                             <UploadPreview f={f} />
                           ) : f.kind === "archive" ? (
                             <pre dir="ltr" className="upload-listing">
-                              {f.listing || "(بدون فایل متنی)"}
+                              {f.listing || t("(بدون فایل متنی)", "(no text files)")}
                             </pre>
                           ) : (
-                            <p className="muted">برای دیدن محتوا فایل را دریافت کنید.</p>
+                            <p className="muted">{t("برای دیدن محتوا فایل را دریافت کنید.", "Download the file to see its contents.")}</p>
                           )}
                         </td>
                       </tr>
@@ -1642,7 +1643,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
                 {rows.length === 0 && (
                   <tr>
                     <td colSpan={8} className="empty-cell">
-                      فایلی بارگذاری نشده است.
+                      {t("فایلی بارگذاری نشده است.", "No files uploaded yet.")}
                     </td>
                   </tr>
                 )}
@@ -1651,14 +1652,14 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) =>
           </div>
           <div className="pager">
             <span className="muted">
-              {fmtNum(total === 0 ? 0 : offset + 1)} تا {fmtNum(Math.min(total, offset + rows.length))} از {fmtNum(total)}
+              {fmtNum(total === 0 ? 0 : offset + 1)} {t("تا", "to")} {fmtNum(Math.min(total, offset + rows.length))} {t("از", "of")} {fmtNum(total)}
             </span>
             <div>
               <button type="button" className="button ghost small" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-                قبلی
+                {t("قبلی", "Previous")}
               </button>
               <button type="button" className="button ghost small" disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
-                بعدی
+                {t("بعدی", "Next")}
               </button>
             </div>
           </div>
@@ -1675,10 +1676,10 @@ export function NoAccess() {
         <div className="notice-icon info">
           <IconShield />
         </div>
-        <h3>دسترسی به این بخش ندارید</h3>
-        <p className="muted">این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.</p>
+        <h3>{t("دسترسی به این بخش ندارید", "You do not have access to this section")}</h3>
+        <p className="muted">{t("این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.", "This page is only for Salam assistant admins. If you think you should have access, contact the site admin.")}</p>
         <a className="button ghost" href="/">
-          بازگشت به گفت‌وگوها
+          {t("بازگشت به گفت‌وگوها", "Back to chats")}
         </a>
       </section>
     </div>
@@ -1698,7 +1699,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
       .then(setSummary)
       .catch((e) => {
         if (e instanceof ApiError && e.status === 403) setForbidden(true);
-        else setError(errText(e, "بارگذاری آمار ناموفق بود."));
+        else setError(errText(e, t("بارگذاری آمار ناموفق بود.", "Could not load stats.")));
       });
   }, []);
 
@@ -1715,35 +1716,35 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
   return (
     <div className="page">
       <header className="page-head">
-        <h2>مدیریت</h2>
-        <p className="muted">نمای کلی استفاده از دستیار و سرور MCP سلام.</p>
+        <h2>{t("مدیریت", "Admin")}</h2>
+        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how the Salam assistant and MCP server are used.")}</p>
       </header>
       {error && (
         <div className="form-error" role="alert">
           {error}{" "}
           <button type="button" className="link" onClick={load}>
-            تلاش دوباره
+            {t("تلاش دوباره", "Try again")}
           </button>
         </div>
       )}
       {!s && !error && (
         <div className="loading-chat" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       )}
       {s && (
         <>
           <div className="tiles">
-            <Tile label="کاربران" value={s.users} sub={`${fmtNum(s.users_7d)} در ۷ روز اخیر`} />
-            <Tile label="گفت‌وگوها" value={s.chats} sub={`${fmtNum(s.messages)} پیام`} />
-            <Tile label="فایل‌های بارگذاری‌شده" value={s.uploads ?? 0} sub={`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`} />
-            <Tile label="برنامه‌های متصل" value={s.apps} />
-            <Tile label="فراخوانی‌های MCP" value={s.mcp_calls} sub={`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`} />
-            <Tile label="خطاهای MCP در ۲۴ ساعت" value={s.mcp_errors_24h} sub={`${fmtNum(errRate)}٪ از فراخوانی‌ها`} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
-            <Tile label="درخواست‌های API" value={s.api_requests} />
-            <Tile label="درخواست‌های API در ۲۴ ساعت" value={s.api_requests_24h} />
-            <Tile label="خطاهای API در ۲۴ ساعت" value={s.api_errors_24h} sub={`${fmtNum(apiErrRate)}٪ از درخواست‌ها`} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
+            <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
+            <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
+            <Tile label={t("فایل‌های بارگذاری‌شده", "Uploaded files")} value={s.uploads ?? 0} sub={t(`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`, `${fmtNum(s.uploads_images ?? 0)} images, ${fmtSize(s.uploads_bytes ?? 0)}`)} />
+            <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
+            <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
+            <Tile label={t("خطاهای MCP در ۲۴ ساعت", "MCP errors in 24 hours")} value={s.mcp_errors_24h} sub={t(`${fmtNum(errRate)}٪ از فراخوانی‌ها`, `${fmtNum(errRate)}% of calls`)} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
+            <Tile label={t("درخواست‌های API", "API requests")} value={s.api_requests} />
+            <Tile label={t("درخواست‌های API در ۲۴ ساعت", "API requests in 24 hours")} value={s.api_requests_24h} />
+            <Tile label={t("خطاهای API در ۲۴ ساعت", "API errors in 24 hours")} value={s.api_errors_24h} sub={t(`${fmtNum(apiErrRate)}٪ از درخواست‌ها`, `${fmtNum(apiErrRate)}% of requests`)} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
           </div>
           {s.usage && s.usage.length > 0 && (
             <>
@@ -1753,9 +1754,9 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           )}
           <DailyPanel daily={s.daily} />
           <div className="split three">
-            <TopList title="ابزارهای پرکاربرد" items={s.top_tools.map((t) => ({ name: t.tool, count: t.count }))} ltr />
-            <TopList title="برنامه‌های پرکاربرد" items={s.top_clients} />
-            <TopList title="پروژه‌های پرکاربرد API" items={s.top_projects} />
+            <TopList title={t("ابزارهای پرکاربرد", "Top tools")} items={s.top_tools.map((t) => ({ name: t.tool, count: t.count }))} ltr />
+            <TopList title={t("برنامه‌های پرکاربرد", "Top apps")} items={s.top_clients} />
+            <TopList title={t("پروژه‌های پرکاربرد API", "Top API projects")} items={s.top_projects} />
           </div>
         </>
       )}
@@ -1764,9 +1765,9 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <Users picked={picked} onPick={setPicked} />
           {picked && (
             <div className="picked-bar" role="status">
-              نمایش رویدادها، درخواست‌های API و برنامه‌های <bdi className="strong">{picked.name}</bdi>
+              {t("نمایش رویدادها، درخواست‌های API و برنامه‌های", "Showing events, API requests and apps for")} <bdi className="strong">{picked.name}</bdi>
               <button type="button" className="link" onClick={() => setPicked(null)}>
-                نمایش همه
+                {t("نمایش همه", "Show all")}
               </button>
             </div>
           )}

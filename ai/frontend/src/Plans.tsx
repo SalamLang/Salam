@@ -2,25 +2,26 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
+import { t } from "./i18n";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
-  zarinpal: "زرین‌پال",
-  zibal: "زیبال",
+  zarinpal: t("زرین‌پال", "Zarinpal"),
+  zibal: t("زیبال", "Zibal"),
 };
 
 const PAYMENT_WORDS: Record<Payment["status"], string> = {
-  pending: "در انتظار پرداخت",
-  verifying: "در حال تایید",
-  paid: "پرداخت شده",
-  failed: "ناموفق",
-  canceled: "لغو شده",
+  pending: t("در انتظار پرداخت", "Awaiting payment"),
+  verifying: t("در حال تایید", "Verifying"),
+  paid: t("پرداخت شده", "Paid"),
+  failed: t("ناموفق", "Failed"),
+  canceled: t("لغو شده", "Canceled"),
 };
 
 const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {
-  ok: { tone: "ok", text: "پرداخت انجام شد و اشتراک شما فعال است." },
-  canceled: { tone: "warn", text: "پرداخت لغو شد و چیزی از حساب شما کم نشده است." },
-  failed: { tone: "warn", text: "پرداخت تایید نشد. اگر مبلغی کم شده تا ۷۲ ساعت برمی‌گردد." },
-  pending: { tone: "warn", text: "پرداخت شما در حال بررسی است. چند لحظه بعد این صفحه را تازه کنید." },
+  ok: { tone: "ok", text: t("پرداخت انجام شد و اشتراک شما فعال است.", "Payment done. Your subscription is active.") },
+  canceled: { tone: "warn", text: t("پرداخت لغو شد و چیزی از حساب شما کم نشده است.", "Payment canceled. Nothing was charged to your account.") },
+  failed: { tone: "warn", text: t("پرداخت تایید نشد. اگر مبلغی کم شده تا ۷۲ ساعت برمی‌گردد.", "Payment was not verified. If you were charged, the amount is refunded within 72 hours.") },
+  pending: { tone: "warn", text: t("پرداخت شما در حال بررسی است. چند لحظه بعد این صفحه را تازه کنید.", "Your payment is being checked. Refresh this page in a moment.") },
 };
 
 function errText(e: unknown, fallback: string) {
@@ -28,20 +29,20 @@ function errText(e: unknown, fallback: string) {
 }
 
 function toman(n: number): string {
-  if (n >= 1000000 && n % 1000000 === 0) return `${fmtNum(n / 1000000)} میلیون تومان`;
-  return `${fmtNum(n)} تومان`;
+  if (n >= 1000000 && n % 1000000 === 0) return t(`${fmtNum(n / 1000000)} میلیون تومان`, `${fmtNum(n / 1000000)} million toman`);
+  return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
 function limit(n: number, unit: string): string {
-  return n === 0 ? "نامحدود" : `${fmtNum(n)} ${unit}`;
+  return n === 0 ? t("نامحدود", "Unlimited") : `${fmtNum(n)} ${unit}`;
 }
 
 function features(p: Plan): string[] {
   return [
-    `گفت‌وگو: ${limit(p.chat_hourly, "پیام در ساعت")}`,
-    `کلید API: ${limit(p.api_hourly, "درخواست در ساعت")}`,
-    `درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`,
-    p.days === 0 ? "بدون انقضا" : `${fmtNum(p.days)} روزه`,
+    t(`گفت‌وگو: ${limit(p.chat_hourly, "پیام در ساعت")}`, `Chat: ${limit(p.chat_hourly, "messages per hour")}`),
+    t(`کلید API: ${limit(p.api_hourly, "درخواست در ساعت")}`, `API key: ${limit(p.api_hourly, "requests per hour")}`),
+    t(`درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`, `Parallel requests: ${limit(p.parallel, "at a time")}`),
+    p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
   ];
 }
 
@@ -65,7 +66,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
       setCurrent(mine.subscription);
       setPayments(paid.payments);
     } catch (e) {
-      setError(errText(e, "بارگذاری پلن‌ها ناموفق بود."));
+      setError(errText(e, t("بارگذاری پلن‌ها ناموفق بود.", "Could not load plans.")));
     }
   }, [gateway]);
 
@@ -86,7 +87,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
       const r = await api.checkout(plan.id, gateway);
       location.href = r.url;
     } catch (e) {
-      notify(errText(e, "شروع پرداخت ناموفق بود."));
+      notify(errText(e, t("شروع پرداخت ناموفق بود.", "Could not start the payment.")));
       setBusy(null);
     }
   };
@@ -96,8 +97,8 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
   return (
     <div className="page plans-page">
       <header className="page-head">
-        <h2>اشتراک‌ها</h2>
-        <p className="muted">با یک اشتراک، سقف ساعتی گفت‌وگو و کلید API شما بالا می‌رود. پرداخت از راه درگاه‌های داخلی انجام می‌شود.</p>
+        <h2>{t("اشتراک‌ها", "Subscriptions")}</h2>
+        <p className="muted">{t("با یک اشتراک، سقف ساعتی گفت‌وگو و کلید API شما بالا می‌رود. پرداخت از راه درگاه‌های داخلی انجام می‌شود.", "A subscription raises your hourly limits for chat and API keys. Payment goes through Iranian payment gateways.")}</p>
       </header>
 
       {result && (
@@ -110,7 +111,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
         <div className="form-error" role="alert">
           {error}{" "}
           <button type="button" className="link" onClick={() => void load()}>
-            تلاش دوباره
+            {t("تلاش دوباره", "Try again")}
           </button>
         </div>
       )}
@@ -118,27 +119,27 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
       {current && (
         <section className="card panel current-plan">
           <div className="panel-head">
-            <h3>اشتراک فعلی شما</h3>
+            <h3>{t("اشتراک فعلی شما", "Your current subscription")}</h3>
           </div>
           <div className="plan-now">
             <strong className="plan-now-name">
               <IconSpark width={18} height={18} /> {current.plan.name}
             </strong>
             <span className="muted">
-              {current.expires === 0 ? "بدون تاریخ پایان" : `تا ${fmtDate(current.expires)}`}
-              {current.source === "admin" ? " (هدیه‌ی مدیر)" : ""}
+              {current.expires === 0 ? t("بدون تاریخ پایان", "No end date") : t(`تا ${fmtDate(current.expires)}`, `Until ${fmtDate(current.expires)}`)}
+              {current.source === "admin" ? t(" (هدیه‌ی مدیر)", " (gift from an admin)") : ""}
             </span>
             <span className="muted">
-              در این ساعت: {fmtNum(current.chat_used)} پیام
-              {current.plan.chat_hourly > 0 ? ` از ${fmtNum(current.plan.chat_hourly)}` : ""} و {fmtNum(current.api_used)} درخواست API
-              {current.plan.api_hourly > 0 ? ` از ${fmtNum(current.plan.api_hourly)}` : ""}
+              {t("در این ساعت:", "This hour:")} {fmtNum(current.chat_used)} {t("پیام", "messages")}
+              {current.plan.chat_hourly > 0 ? t(` از ${fmtNum(current.plan.chat_hourly)}`, ` of ${fmtNum(current.plan.chat_hourly)}`) : ""} {t("و", "and")} {fmtNum(current.api_used)} {t("درخواست API", "API requests")}
+              {current.plan.api_hourly > 0 ? t(` از ${fmtNum(current.plan.api_hourly)}`, ` of ${fmtNum(current.plan.api_hourly)}`) : ""}
             </span>
           </div>
         </section>
       )}
 
       {gateways.length > 1 && (
-        <div className="tabs seg-tabs" role="group" aria-label="درگاه پرداخت">
+        <div className="tabs seg-tabs" role="group" aria-label={t("درگاه پرداخت", "Payment gateway")}>
           {gateways.map((g) => (
             <button key={g} type="button" className={g === gateway ? "active" : ""} aria-pressed={g === gateway} onClick={() => setGateway(g)}>
               {GATEWAY_NAMES[g]}
@@ -150,7 +151,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
       {plans === null && !error ? (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
         <div className="plan-grid">
@@ -159,7 +160,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
             return (
               <section key={p.id} className={`card plan-card ${p.id === "unlimited" ? "featured" : ""} ${mine ? "mine" : ""}`}>
                 <h3>{p.name}</h3>
-                <p className="plan-price">{p.price === 0 ? "رایگان" : toman(p.price)}</p>
+                <p className="plan-price">{p.price === 0 ? t("رایگان", "Free") : toman(p.price)}</p>
                 <p className="muted plan-note">{p.note}</p>
                 <ul className="plan-features">
                   {features(p).map((f) => (
@@ -169,12 +170,12 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                   ))}
                 </ul>
                 {mine ? (
-                  <span className="badge ok plan-badge">اشتراک فعلی شما</span>
+                  <span className="badge ok plan-badge">{t("اشتراک فعلی شما", "Your current plan")}</span>
                 ) : p.id === "free" ? (
-                  <span className="badge plan-badge">برای همه فعال است</span>
+                  <span className="badge plan-badge">{t("برای همه فعال است", "Active for everyone")}</span>
                 ) : (
                   <button type="button" className="primary" disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
-                    {busy === p.id ? "در حال رفتن به درگاه..." : gateways.length === 0 ? "درگاه پرداخت فعال نیست" : `خرید با ${GATEWAY_NAMES[gateway]}`}
+                    {busy === p.id ? t("در حال رفتن به درگاه...", "Going to the gateway...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
                   </button>
                 )}
               </section>
@@ -186,18 +187,18 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
       {payments.length > 0 && (
         <section className="card panel">
           <div className="panel-head">
-            <h3>پرداخت‌های شما</h3>
+            <h3>{t("پرداخت‌های شما", "Your payments")}</h3>
           </div>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col">تاریخ</th>
-                  <th scope="col">پلن</th>
-                  <th scope="col">مبلغ</th>
-                  <th scope="col">درگاه</th>
-                  <th scope="col">وضعیت</th>
-                  <th scope="col">کد پیگیری</th>
+                  <th scope="col">{t("تاریخ", "Date")}</th>
+                  <th scope="col">{t("پلن", "Plan")}</th>
+                  <th scope="col">{t("مبلغ", "Amount")}</th>
+                  <th scope="col">{t("درگاه", "Gateway")}</th>
+                  <th scope="col">{t("وضعیت", "Status")}</th>
+                  <th scope="col">{t("کد پیگیری", "Reference")}</th>
                 </tr>
               </thead>
               <tbody>

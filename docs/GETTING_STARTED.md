@@ -255,6 +255,43 @@ Dependencies of dependencies come from each package's own `salam.toml`, and
 when two ask for different versions the newer one wins (minimal version
 selection, as in Go).
 
+### 🔗 Native libraries
+
+A package that wraps a C library says so with `link dynamic "sqlite3"` and
+can describe that library in a `salam.toml` beside its source:
+
+```toml
+[native.sqlite3]
+pkg-config = "sqlite3"
+source-url = "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+source-sha256 = "77823cb1..."
+sources = ["sqlite-amalgamation-3460100/sqlite3.c"]
+cflags = ["-O2", "-DSQLITE_THREADSAFE=1"]
+apt = "libsqlite3-dev"
+brew = "sqlite"
+```
+
+When a build meets that `link` line it uses the system library if
+pkg-config or the C compiler can find it. Otherwise it downloads the listed
+sources, checks the sha256, compiles them once per compiler and caches the
+objects under `~/.salam/pkg/native/`. With no sources it stops and prints the
+install command for this OS. `salam add db.sqlite` does the same work up front.
+`SALAM_NATIVE=source` or `SALAM_NATIVE=system` forces one way.
+
+### 📚 Building a library
+
+```sh
+salam build --lib            # libNAME.so, libNAME.dylib, or NAME.dll + libNAME.dll.a
+salam build --lib=static     # libNAME.a
+```
+
+The functions in the entry file's `export:` block become the library's C API,
+under their own names, and `NAME.h` is written next to the library with their
+prototypes. No `main` is needed: the runtime and the package's globals are
+set up when the library is loaded. A Windows DLL can be built from Linux with
+`--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`. Library builds go
+through a C compiler, whichever backend is the default.
+
 More examples live in [`tests/en/`](../tests/en/).
 
 ## 🎨 Formatting with `salam format`

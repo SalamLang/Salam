@@ -65,6 +65,33 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    wk_lib() {
+        name=$(basename "$fabs")
+        jobdir="$WORK/libjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        cp -R "$fabs" "$jobdir/$name"
+        buildlog="$jobdir/build.log"
+        got=""
+        for kind in shared static; do
+            (cd "$jobdir/$name" && "$SALAM_ABS" build --lib="$kind" --no-color --log-level=error) >"$buildlog" 2>&1
+            if [ "$kind" = shared ]; then
+                cc "${fabs}.c" -I"$jobdir/$name" -L"$jobdir/$name" -l"$name" -Wl,-rpath,"$jobdir/$name" -o "$jobdir/host_$kind" >>"$buildlog" 2>&1
+            else
+                cc "${fabs}.c" -I"$jobdir/$name" "$jobdir/$name/lib$name.a" -lm -o "$jobdir/host_$kind" >>"$buildlog" 2>&1
+            fi
+            if [ ! -x "$jobdir/host_$kind" ]; then
+                echo "FAIL $label ($kind library does not build or link)"
+                sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
+                rm -rf "$jobdir"
+                return
+            fi
+            out=$(tmo "${SALAM_TEST_TIMEOUT:-20}" "$jobdir/host_$kind" </dev/null 2>&1 | tr -d '\r')
+            if [ "$kind" = shared ]; then got=$out; elif [ "$out" != "$got" ]; then got="static differs: $out"; fi
+        done
+        rm -rf "$jobdir"
+        wk_check "$expabs" "$got"
+    }
+
     wk_new() {
         name=$(basename "$f" .out)
         jobdir="$WORK/newjob_${jobid}_$$"
@@ -437,6 +464,7 @@ EOF_LAYOUT_NOT
         repl) wk_repl ;;
         new) wk_new ;;
         project) wk_project ;;
+        lib) wk_lib ;;
         expect) wk_expect ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
@@ -674,6 +702,17 @@ if want project; then
             name=$(basename "$f" .out)
             [ -d "tests/$lang/project/$name" ] || continue
             add_job project "project/$lang/$name" "tests/$lang/project/$name" "$lang" "$f"
+        done
+    done
+fi
+
+if want lib && command -v cc >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/lib/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            [ -d "tests/$lang/lib/$name" ] || continue
+            add_job lib "lib/$lang/$name" "tests/$lang/lib/$name" "$lang" "$f"
         done
     done
 fi

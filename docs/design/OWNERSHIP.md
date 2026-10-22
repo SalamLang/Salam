@@ -1,8 +1,7 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phases 1 to 4 implemented, phase 5 started** (`compiler/semantic/sema_own.salam`,
-`sema_strfree.salam`, `sema_summary.salam`). The rest of phases 5 and 6 is
-planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 to 5 implemented** (`compiler/semantic/sema_own.salam`,
+`sema_strfree.salam`, `sema_summary.salam`). Phase 6 waits for a release. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -253,12 +252,20 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    annotations; see above.
 4. **Phase 4 (done).** Automatic drop of owned `Vector`/`HashMap` locals;
    see above.
-5. **Phase 5 (started).** A local bound to a capturing lambda has its heap
-   environment freed at the end of its scope when it is only called or passed
-   to parameters that do not keep it. Still to do: stack-allocated
-   environments for lambdas passed straight to such a parameter, and moving
-   captures into escaping lambdas.
-6. **Phase 6.** Flip `--ownership=error` to the default one release after
-   `std/` and `compiler/` are clean under it, and make `b := a` of an owned
-   container a move (use of `a` after it becomes an error with a `.copy()`
-   fix-it).
+5. **Phase 5 (done).** A capturing lambda that never escapes its scope costs
+   no heap allocation: its environment lives on the stack (C backend) or is
+   freed at scope exit (LLVM). This covers a local bound to the lambda and a
+   lambda written straight into a call whose parameter does not keep it;
+   sema hoists the latter into a synthetic local first, unless something in
+   that statement writes a captured variable. Escaping lambdas keep a heap
+   environment, as before.
+6. **Phase 6 (needs a release first).** Each step is gated on the seed, the
+   previous release that std/ and compiler/ must keep building with:
+   - Release N ships with phases 1 to 5 (`--ownership=on` by default).
+   - After N is the seed: report `b := a` of an owned `Vector`/`HashMap`
+     followed by a use of `a` as a warn-mode move warning, and migrate std/
+     and compiler/ (`.copy()` or reorder) until `--ownership=warn` is clean.
+   - Release N+1 makes `--ownership=error` the default and turns the move
+     warning into an error with a `.copy()` fix-it.
+   - Each flip lands with the `tests/*/errors/own_*` expectations updated in
+     both languages.

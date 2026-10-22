@@ -275,8 +275,8 @@ salam search websocket                    # standard library and registry/index.
 A local package can stand in for a remote one with
 `"example.com/me/lib" = { path = "../lib" }` in `[dependencies]`.
 Downloads live in `~/.salam/pkg/<module>@<version>` (`$SALAM_PKG` moves it).
-Git is used when it is installed; without it, GitHub packages arrive as a
-tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
+Git is used when it is installed; without it, packages on github.com,
+gitlab.com and codeberg.org arrive as a tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
 Dependencies of dependencies come from each package's own `salam.toml`, and
 when two ask for different versions the newer one wins (minimal version
 selection, as in Go).

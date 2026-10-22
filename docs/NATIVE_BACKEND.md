@@ -78,8 +78,10 @@ then goes through:
    identities, casts, selects, constant branch conditions, `extractvalue` of a
    known `insertvalue`, a struct rebuilt field by field from itself, address
    arithmetic, `x % 2^k == 0` as a mask test, `(x & y) ^ (x & z)` as
-   `x & (y ^ z)`, and the bit select `(x & y) ^ (~x & z)` as
-   `((y ^ z) & x) ^ z`. Signed division and
+   `x & (y ^ z)`, the bit select `(x & y) ^ (~x & z)` as
+   `((y ^ z) & x) ^ z`, and `x < 0 ? ~y : y` as `y ^ (x >> 63)` after
+   pulling negations out (`(-x << 1) - 1` is `~(x << 1)`), which turns a
+   zigzag decode into four instructions. Signed division and
    remainder become unsigned when the dividend is provably non-negative, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
 5. Block merging and jump threading, which turns short-circuit `and`/`or`
@@ -99,7 +101,9 @@ then goes through:
    again after each value numbering pass that found new constants, so the
    blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
    code once the sizes are forwarded from the struct.
-8. Loop-invariant code motion of pure instructions into loop preheaders, and
+8. Loop-invariant code motion of pure instructions into loop preheaders (an
+   add of a loop value, a constant and an invariant is regrouped so the
+   invariant part moves out), and
    of loads that no store in the loop can reach (by TBAA class) and that are
    safe to run early: a field of a `&:` parameter or of a stack slot. When
    the only writers in the loop are calls, such a load is still hoisted and
@@ -258,7 +262,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

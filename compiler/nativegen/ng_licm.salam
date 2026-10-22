@@ -189,8 +189,45 @@ func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int): bool:
     ret false
 end
 
+func lr_add_inv(g &: Ng, l &: Lp, mark: int, v: int): bool:
+    ret v >= 0 and (is_cint(g, v) or lp_inv(g, l, v, mark))
+end
+
+func licm_reassoc(g &: Ng, l &: Lp, mark: int, i: int): bool:
+    if g.i_op[i] != OP_ADD or g.i_res[i] < 0 or is_vec(g, g.i_ty[i]) or not lp_inv(g, l, g.i_a[i], mark) and not lp_inv(g, l, g.i_b[i], mark):
+        ret false
+    end
+    t := g.i_ty[i]
+    repeat 2 in k:
+        a := k == 0 ? g.i_a[i] : g.i_b[i]
+        b := k == 0 ? g.i_b[i] : g.i_a[i]
+        if not is_cint(g, b) and lp_inv(g, l, b, mark) and a >= 0 and a < g.v_uses.len() and g.v_kind[a] == VK_INS and g.v_uses[a] == 1:
+            d := g.v_def[a]
+            if g.i_op[d] == OP_ADD and l.inl[g.i_blk[d]] == mark:
+                repeat 2 in q:
+                    x := q == 0 ? g.i_a[d] : g.i_b[d]
+                    c := q == 0 ? g.i_b[d] : g.i_a[d]
+                    if lr_add_inv(g, l, mark, c) and not lr_add_inv(g, l, mark, x):
+                        n := ins_new(g, OP_ADD, t)
+                        g.i_a[n] = b
+                        g.i_b[n] = c
+                        nv := new_res(g, n)
+                        ins_before(g, i, n)
+                        g.i_a[i] = x
+                        g.i_b[i] = nv
+                        g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
+                        ret true
+                    end
+                end
+            end
+        end
+    end
+    ret false
+end
+
 func licm(g &: Ng): bool:
     build_dom(g)
+    count_uses(g)
     mut l := Lp {}
     repeat g.b_first.len():
         l.inl.push(0)
@@ -255,7 +292,18 @@ func licm(g &: Ng): bool:
             end
             mut i := g.b_first[b]
             until i >= 0:
-                nx := g.i_next[i]
+                nx0 := g.i_next[i]
+                if not g.off_lreas and licm_reassoc(g, l, mk, i):
+                    moved = true
+                    ni := g.i_prev[i]
+                    if ni >= 0 and hoistable(g, l, ni, mk):
+                        nop2 := g.i_op[ni]
+                        ins_unlink(g, ni)
+                        g.i_op[ni] = nop2
+                        ins_before(g, pt, ni)
+                    end
+                end
+                nx := nx0
                 if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)):
                     op := g.i_op[i]
                     ins_unlink(g, i)

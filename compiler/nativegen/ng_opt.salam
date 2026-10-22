@@ -1395,6 +1395,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 else (op == OP_XOR or op == OP_OR) and not g.off_bits:
                     ch = bit_simplify(g, i)
                 end
+                if not ch and (op == OP_SHL or op == OP_SUB) and not g.off_bits and g.i_op[i] == op:
+                    ch = neg_fold(g, i)
+                end
             else op == OP_ICMP:
                 ch = fold_icmp(g, i)
                 if not ch and g.dom_ok and g.i_op[i] == OP_ICMP:
@@ -1412,6 +1415,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_select(g, i)
                 if not ch and g.i_op[i] == OP_SELECT:
                     ch = select_bool(g, i)
+                end
+                if not ch and g.i_op[i] == OP_SELECT and not g.off_bits:
+                    ch = sign_select(g, i)
                 end
             else op == OP_ADDR:
                 ch = fold_addr(g, i)
@@ -2300,6 +2306,94 @@ func bx_not_of(g &: Ng, v: int): int:
         ret g.i_a[d]
     end
     ret 0 - 1
+end
+
+func neg_of(g &: Ng, v: int): int:
+    if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] == OP_SUB and is_cint(g, g.i_a[d]) and g.v_i[g.i_a[d]] == (0 as i64):
+        ret g.i_b[d]
+    end
+    ret 0 - 1
+end
+
+func not_of(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] == OP_XOR and is_cint(g, g.i_b[d]) and norm_int(g, g.i_ty[d], g.v_i[g.i_b[d]]) == (0 - 1) as i64:
+        ret g.i_a[d]
+    end
+    ret 0 - 1
+end
+
+func neg_fold(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    if is_vec(g, t) or is_flt(g, t):
+        ret false
+    end
+    if op == OP_SHL and is_cint(g, g.i_b[i]):
+        x := neg_of(g, g.i_a[i])
+        if x >= 0:
+            sh := p2_ins(g, i, OP_SHL, t, x, g.i_b[i])
+            ng := p2_ins(g, i, OP_SUB, t, const_int(g, t, 0 as i64), sh)
+            replace_res(g, i, ng)
+            ret true
+        end
+    end
+    if op == OP_SUB and is_cint(g, g.i_b[i]) and g.v_i[g.i_b[i]] == (1 as i64):
+        z := neg_of(g, g.i_a[i])
+        if z >= 0:
+            nt := p2_ins(g, i, OP_XOR, t, z, const_int(g, t, 0 - 1 as i64))
+            replace_res(g, i, nt)
+            ret true
+        end
+    end
+    ret false
+end
+
+func sign_select(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    c := g.i_a[i]
+    if is_vec(g, t) or is_flt(g, t) or c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    bits := int_bits(g, t)
+    if bits != 32 and bits != 64:
+        ret false
+    end
+    cd := g.v_def[c]
+    if g.i_op[cd] != OP_ICMP or not is_cint(g, g.i_b[cd]):
+        ret false
+    end
+    x := g.i_a[cd]
+    kc := norm_int(g, g.v_ty[x], g.v_i[g.i_b[cd]])
+    mut neg_first := false
+    if g.i_x[cd] == CC_SLT and kc == (0 as i64):
+        neg_first = true
+    else g.i_x[cd] == CC_SGT and kc == (0 - 1) as i64:
+        neg_first = false
+    else:
+        ret false
+    end
+    if g.v_ty[x] != t:
+        ret false
+    end
+    tv := g.i_b[i]
+    fv := g.i_c[i]
+    nv := neg_first ? tv : fv
+    pv := neg_first ? fv : tv
+    if not_of(g, nv) != pv or pv < 0:
+        ret false
+    end
+    sg := p2_ins(g, i, OP_ASHR, t, x, const_int(g, t, (bits - 1) as i64))
+    r := p2_ins(g, i, OP_XOR, t, pv, sg)
+    replace_res(g, i, r)
+    ret true
 end
 
 func bit_simplify(g &: Ng, i: int): bool:

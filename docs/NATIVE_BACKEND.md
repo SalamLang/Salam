@@ -350,7 +350,7 @@ locals and arguments. Debug info never changes the generated code: the
 
 How the pieces fit:
 
-- The front end emits `!dbg` locations, a `DIFile` per source file,
+- The frontend emits `!dbg` locations, a `DIFile` per source file,
   `DILocalVariable` plus `llvm.dbg.declare` for every local and parameter,
   and DWARF types (basic types, pointers, `str` as a `char` pointer, structs
   with their members, fixed arrays).

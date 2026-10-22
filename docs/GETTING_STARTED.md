@@ -80,17 +80,17 @@ Or download a pre-built binary from [GitHub Releases](https://github.com/SalamLa
 Once Salam is installed, it updates itself:
 
 ```sh
-salam update            # newest release: compiler, std/ and bundled tools together
-salam update --check    # only say whether a newer release is out
-salam update 0.5.4      # install that exact release, older ones included
+salam upgrade           # newest release: compiler, std/ and bundled tools together
+salam upgrade --check   # only say whether a newer release is out
+salam upgrade 0.5.4     # install that exact release, older ones included
 ```
 
-`salam update` asks GitHub for the latest release and runs the same
+`salam upgrade` asks GitHub for the latest release and runs the same
 installer as above against the directory `salam` runs from, so the whole
 bundle is replaced at once and an old `std/` never lingers. It leaves PATH
 alone. A copy that Homebrew, Scoop, Chocolatey, winget, npm, Nix, snap or a
 Linux distribution package installed is left to that package manager, and
-`salam update` prints the command to run instead (`--force` overrides that).
+`salam upgrade` prints the command to run instead (`--force` overrides that).
 A compiler built from a source checkout is updated with `git pull` and a
 rebuild.
 
@@ -189,12 +189,11 @@ flag needed: `SALAM_VERSION`, `SALAM_VERSION_CODE`, `SALAM_GIT_COMMIT`,
 the moment your program was compiled, so a binary can print its own build
 stamp.
 
-### 📁 Project entry file: `salam.salam`
+### 📁 Project entry file: `main.salam`
 
 Passing a single file always compiles exactly that file. When you pass a
-**directory** instead - or nothing at all - the compiler builds "the project
-in that directory", and the fixed filename `salam.salam` is the project's
-entry file:
+**directory** instead, or nothing at all, the compiler builds "the project
+in that directory", and its entry file is always `main.salam`:
 
 ```sh
 salam build                 # build the project in the current directory
@@ -204,32 +203,97 @@ salam run                   # build + run the project here
 salam exec                  # interpret the project here
 ```
 
-- If `<dir>/salam.salam` exists, it must define `main` and is used as the
-  entry file; no scanning or guessing happens.
-- If it does not exist, the directory's top-level `.salam` files are scanned
-  for one defining `main`.
-- If several of them define `main`, the file **named after the entry** wins:
-  `main.salam`, or the langpack's own spelling (`اصلی.salam`, `الرئیسیة.salam`).
-  That is what lets a project keep a second entry point beside its real one -
-  a benchmark harness, a tool, a build for another target - instead of the
-  directory refusing to resolve. Only when none of them is named that way is
-  it an error, and the message says how to settle it.
+- `<dir>/main.salam` must exist and define `main` (`ریشه` in Persian).
+  No other filename is accepted and no scanning or guessing happens; a
+  directory without `main.salam` is an error that names the file to rename.
 - The default executable name for a project is its **directory name**
-  (`myproject.exe`), not `salam.exe`.
-- `salam new <name>` scaffolds the project with a `salam.salam` entry file.
+  (`myproject`, or `myproject.exe` on Windows), not `main`.
+- `salam new <name>` creates `<name>/` with `main.salam`, `salam.toml` and a
+  `.gitignore`. `salam init [dir]` does the same in an existing directory
+  and never overwrites a file that is already there.
 
-Frontend (layout DSL) projects have no `main` function; there the same rule
-applies to the `page` block instead:
+Frontend (layout DSL) projects have no `main` function; there `main.salam`
+is the project page:
 
 ```sh
-salam web                   # build the page project here: salam.salam if
-                            # present, else the single .salam page page
-salam page build          # salam.salam if present, else EVERY layout
+salam web                   # build the page project here: main.salam if
+                            # present, else the single .salam page
+salam page build            # main.salam if present, else EVERY layout
                             # page in the directory (multi-page site)
 ```
 
-A `salam.salam` layout page compiles to `index.html` (the web server entry
+A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
+
+### 📦 Packages from GitHub
+
+A package outside the standard library is named by its repository and
+imported with a string:
+
+```salam
+import "github.com/owner/repo"        // binds repo
+import t "github.com/owner/repo/sub"  // the package in the repo's sub/ folder
+```
+
+These imports work inside a project only. `salam.toml` lists what the project
+needs and `salam.lock` records the exact version, commit and checksum of each
+download:
+
+```sh
+salam add github.com/owner/repo           # newest release, or @v1.2.0
+salam remove github.com/owner/repo
+salam update [github.com/owner/repo]      # move to the newest release
+salam deps                                # download what salam.lock lists, verify checksums
+salam install github.com/owner/tool       # build a program's main.salam into ~/.salam/bin
+salam install                             # the same for the project you are in
+salam search websocket                    # standard library and registry/index.toml
+```
+
+A local package can stand in for a remote one with
+`"example.com/me/lib" = { path = "../lib" }` in `[dependencies]`.
+Downloads live in `~/.salam/pkg/<module>@<version>` (`$SALAM_PKG` moves it).
+Git is used when it is installed; without it, GitHub packages arrive as a
+tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
+Dependencies of dependencies come from each package's own `salam.toml`, and
+when two ask for different versions the newer one wins (minimal version
+selection, as in Go).
+
+### 🔗 Native libraries
+
+A package that wraps a C library says so with `link dynamic "sqlite3"` and
+can describe that library in a `salam.toml` beside its source:
+
+```toml
+[native.sqlite3]
+pkg-config = "sqlite3"
+source-url = "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+source-sha256 = "77823cb1..."
+sources = ["sqlite-amalgamation-3460100/sqlite3.c"]
+cflags = ["-O2", "-DSQLITE_THREADSAFE=1"]
+apt = "libsqlite3-dev"
+brew = "sqlite"
+```
+
+When a build meets that `link` line it uses the system library if
+pkg-config or the C compiler can find it. Otherwise it downloads the listed
+sources, checks the sha256, compiles them once per compiler and caches the
+objects under `~/.salam/pkg/native/`. With no sources it stops and prints the
+install command for this OS. `salam add db.sqlite` does the same work up front.
+`SALAM_NATIVE=source` or `SALAM_NATIVE=system` forces one way.
+
+### 📚 Building a library
+
+```sh
+salam build --lib            # libNAME.so, libNAME.dylib, or NAME.dll + libNAME.dll.a
+salam build --lib=static     # libNAME.a
+```
+
+The functions in the entry file's `export:` block become the library's C API,
+under their own names, and `NAME.h` is written next to the library with their
+prototypes. No `main` is needed: the runtime and the package's globals are
+set up when the library is loaded. A Windows DLL can be built from Linux with
+`--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`. Library builds go
+through a C compiler, whichever backend is the default.
 
 More examples live in [`tests/en/`](../tests/en/).
 

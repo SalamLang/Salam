@@ -8,12 +8,15 @@ RubyMine and Android Studio.
 `plugin/` is a small plugin that brings everything `salam lsp` does into the
 IDE: errors as you type, completion, hover, go to definition, find usages,
 rename, call hierarchy, inlay hints and formatting, plus TextMate
-highlighting for English and Persian Salam. It runs the server through the
+highlighting for English and Persian Salam, and **Salam** run configurations
+with a run button beside every `func main` (`تابع ریشه`). It runs the server through the
 free [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugin, so it
 works in every IntelliJ-based IDE from 2024.2 on, the free editions and
 Android Studio included.
 
-Build it with a JDK 17 or newer; no Gradle or IDE download is needed:
+Build it with a JDK 17 or newer; no Gradle is needed. The first build
+downloads IntelliJ IDEA Community 2024.2 (about 1 GB, kept in
+`~/.cache/salam-jetbrains`) to compile against:
 
 ```sh
 extensions/jetbrains/plugin/build.sh
@@ -29,8 +32,14 @@ the server command `salam dap` and launch parameters such as
 `{"program": "$FILE_PATH$"}`; breakpoints in `.salam` files then work through
 gdb or lldb. [`docs/LSP.md`](../../docs/LSP.md) describes `salam dap`.
 
+A Salam run configuration runs a file with `salam run` (compiled) or
+`salam exec` (the interpreter), with program arguments and a working
+directory. Right-click a `.salam` file and choose **Run**, or click the green
+arrow beside `func main`.
+
 `build.sh --smoke path/to/salam` also starts that compiler through the
-plugin's own classes and checks the reply, without an IDE.
+plugin's own classes and checks the reply, without an IDE. `build.sh --verify`
+runs JetBrains' Plugin Verifier against the IDE build.
 
 The options below need no plugin of ours.
 

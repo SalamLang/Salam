@@ -610,6 +610,10 @@ Also built since:
   compiler's keyword tables, with a scanner that reads multi-word names the
   way the compiler does. It parses 97.8% of the 4,230 valid Salam files in the
   repository with no error node; Neovim gets its queries from the Vim plugin.
+- Salam run configurations in the JetBrains plugin (`salam run` or
+  `salam exec`, arguments, working directory) with a run marker beside
+  `func main`. The plugin now compiles against IntelliJ IDEA Community 2024.2
+  and CI runs the Plugin Verifier on it.
 
 Left:
 
@@ -619,11 +623,9 @@ Left:
    carrying the compiler's leaks and global state across runs. It is not worth
    it until the compiler resets its state (change 5) and frees its
    temporaries (docs/design/OWNERSHIP.md).
-2. Run configurations and a test runner in the JetBrains plugin. They need the
-   IntelliJ execution and settings APIs, so they are built and tested against
-   the full IntelliJ SDK, not the handful of jars the plugin compiles against
-   today. Until then, LSP4IJ's Debug Adapter Protocol run configuration with
-   `salam dap` runs and debugs Salam files.
+2. A test runner in the JetBrains plugin. Salam has no `salam test` command
+   yet; the run configurations are there, and a test runner follows the
+   command.
 3. A published grammar repository (`tree-sitter-salam` with the generated
    `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
 4. Structured fixes in `Diag` (change 3), so every quick fix comes from the

@@ -66,7 +66,7 @@ Errors are reported in the gcc one-line style, so `F4` walks them.
 | Setting           | Default   | Meaning                                                                                                     |
 | ----------------- | --------- | ----------------------------------------------------------------------------------------------------------- |
 | `compiler_path`   | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                             |
-| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` reads a `//! lang:` directive, then falls back to script detection. |
+| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` reads a `// زبان: فارسی` or `// lang: en` directive, then falls back to script detection. |
 | `format_indent`   | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                        |
 | `format_on_save`  | `false`   | Reformat on every save.                                                                                     |
 | `stdlib_path`     | `""`      | `--stdlib-path` for `std/...` imports.                                                                      |

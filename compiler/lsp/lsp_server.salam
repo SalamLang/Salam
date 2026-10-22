@@ -248,6 +248,7 @@ func caps_json(): str:
     jw_end_arr(j)
     jw_end_obj(j)
     jw_bool(j, "selectionRangeProvider", true)
+    jw_bool(j, "inlayHintProvider", true)
     jw_kobj(j, "semanticTokensProvider")
     jw_kobj(j, "legend")
     jw_karr(j, "tokenTypes")
@@ -1114,8 +1115,8 @@ func minimal_edit(old: str, neu: str): str:
     mut oe := lo_.n
     mut ne := ln.n
     if suf > 0:
-        oe = lo_.starts.get(no - suf)
-        ne = ln.starts.get(nn - suf)
+        oe = lo_.starts.get(no - 1 - suf)
+        ne = ln.starts.get(nn - 1 - suf)
     end
     p1 := li_pos(lo_, ob)
     p2 := li_pos(lo_, oe)
@@ -1265,6 +1266,67 @@ func on_code_action(id: str, params: value.Value):
     acts.free()
 end
 
+func hint_for(d: Doc, dv: value.Value, l1: int, l2: int, seen &: HashMap<str, bool>, out &: Vector<str>):
+    k := vint(dv, "kind", 0)
+    ty := vstr(dv, "ty")
+    if (k != 0 and k != 1) or str.Len(ty) == 0 or not str.Equals(vstr(dv, "file"), d.path) or not value.ObjectHas(dv, "loc"):
+        ret
+    end
+    loc := obj(dv, "loc")
+    el := arr_int(loc, 2)
+    ec := arr_int(loc, 3)
+    if el < l1 or el > l2 or (el == arr_int(loc, 0) and ec == arr_int(loc, 1)):
+        ret
+    end
+    key := str.FromInt(el as i64) + ":" + str.FromInt(ec as i64)
+    if seen.has(key):
+        ret
+    end
+    lntext := line_text(d.text, el)
+    lli := line_index(lntext)
+    off := li_offset(lli, 0, ec)
+    mut l2i := lli
+    li_free(l2i)
+    mut k2 := off
+    until k2 < str.Len(lntext) and byte_at(lntext, k2) == 32:
+        k2 += 1
+    end
+    if k2 >= str.Len(lntext) or byte_at(lntext, k2) != 58 or k2 + 1 >= str.Len(lntext) or byte_at(lntext, k2 + 1) != 61:
+        ret
+    end
+    seen.put(key, true)
+    out.push("{\"position\":{\"line\":" + str.FromInt(el as i64) + ",\"character\":" + str.FromInt(ec as i64) + "},\"label\":" + jq(": " + ty) + ",\"kind\":1,\"paddingLeft\":false}")
+end
+
+func on_inlay_hint(id: str, params: value.Value):
+    i := text_doc(params)
+    if i < 0:
+        send_result(id, "[]")
+        ret
+    end
+    d := g_docs.get(i)
+    rg := obj(params, "range")
+    l1 := vint(obj(rg, "start"), "line", 0)
+    l2 := vint(obj(rg, "end"), "line", 1000000)
+    mut out := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    locs := obj(d.snap, "locals")
+    if value.IsArray(locs):
+        repeat value.ArrayLen(locs) in k:
+            hint_for(d, decl_at(d.snap, vint(value.ArrayGet(locs, k), "d", 0 - 1)), l1, l2, seen, out)
+        end
+    end
+    gs := obj(d.snap, "globals")
+    if value.IsArray(gs):
+        repeat value.ArrayLen(gs) in k2:
+            hint_for(d, decl_at(d.snap, value.AsInt(value.ArrayGet(gs, k2)) as int), l1, l2, seen, out)
+        end
+    end
+    send_result(id, "[" + str.Join(out, ",") + "]")
+    out.free()
+    seen.free()
+end
+
 func on_selection_range(id: str, params: value.Value):
     i := text_doc(params)
     ps := obj(params, "positions")
@@ -1361,7 +1423,7 @@ func mark_all_dirty():
 end
 
 func fresh_method(method: str): bool:
-    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full")
+    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint")
 end
 
 func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
@@ -1406,6 +1468,8 @@ func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
         on_code_action(id, params)
     else str.Equals(method, "textDocument/selectionRange"):
         on_selection_range(id, params)
+    else str.Equals(method, "textDocument/inlayHint"):
+        on_inlay_hint(id, params)
     else str.Equals(method, "workspace/symbol"):
         on_workspace_symbol(id, params)
     else:

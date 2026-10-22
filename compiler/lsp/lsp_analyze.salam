@@ -136,6 +136,7 @@ struct An:
     pub messages: str = "en"
     pub std_root: str = ""
     pub records: Vector<lg.Record> = Vector {}
+    pub fixes: Vector<lg.Fix> = Vector {}
     pub lang: str = "en"
 end
 
@@ -1342,11 +1343,161 @@ func word_end(text: str, b: int): int:
     ret e
 end
 
+func fix_spell(pk: int, kw: int, s: str, prefix: bool): str:
+    if kw < 0:
+        ret s
+    end
+    sp := lp.Spelling(pk, kw)
+    if str.Len(sp) == 0:
+        ret s
+    end
+    if str.Contains(s, "%s"):
+        ret str.Replace(s, "%s", sp)
+    end
+    ret prefix ? sp + s : s
+end
+
+func find_word(text: str, word: str, b: int, lim: int): int:
+    wn := str.Len(word)
+    mut i := str.IndexFrom(text, word, b)
+    until i >= 0 and i + wn <= lim:
+        before_ok := i == 0 or not is_ident_byte(byte_at(text, i - 1))
+        after_ok := i + wn >= str.Len(text) or not is_ident_byte(byte_at(text, i + wn))
+        if before_ok and after_ok:
+            ret i
+        end
+        i = str.IndexFrom(text, word, i + 1)
+    end
+    ret 0 - 1
+end
+
+func fix_edit(an &: An, f: lg.Fix, pk: int, file: str, j &: Json): bool:
+    other := not str.Equals(file, an.target)
+    if other and (str.Len(an.std_root) > 0 and str.StartsWith(file, an.std_root)):
+        ret false
+    end
+    text := other ? file_text(an, file) : an.text
+    n := str.Len(text)
+    if f.index < 0 or f.index > n or (other and n == 0):
+        ret false
+    end
+    mut li := an.li
+    if other:
+        li = an.li_list.get(file_li(an, file))
+    end
+    mut b := f.index
+    mut e := f.index + f.length
+    if e > n:
+        e = n
+    end
+    mut new_text := fix_spell(pk, f.kw, f.text, true)
+    lend := li_line_end(li, li_line_of(li, b))
+    if f.tok_kind >= 0:
+        if other:
+            ret false
+        end
+        mut ti := tok_first_at(an, b)
+        until ti < an.toks.len() and (an.toks.get(ti).begin_index as int) < lend and an.toks.get(ti).kind != f.tok_kind:
+            ti += 1
+        end
+        if ti >= an.toks.len() or an.toks.get(ti).kind != f.tok_kind or (an.toks.get(ti).begin_index as int) >= lend:
+            ret false
+        end
+        b = an.toks.get(ti).begin_index as int
+        e = an.toks.get(ti).end_index as int
+        if str.Len(new_text) == 0:
+            until e < lend and (byte_at(text, e) == 32 or byte_at(text, e) == 9):
+                e += 1
+            end
+        end
+    else str.Len(f.find) > 0:
+        lim := e > b ? e : lend
+        w := find_word(text, f.find, b, lim)
+        if w < 0:
+            ret false
+        end
+        b = w
+        e = w + str.Len(f.find)
+    end
+    if f.mode == lg.FIX_LINES:
+        b = li.starts.get(li_line_of(li, b))
+        last := li_line_of(li, e > b ? e - 1 : b)
+        e = last + 1 < li.starts.len() ? li.starts.get(last + 1) : n
+    else f.mode == lg.FIX_LINE_AFTER:
+        ln := li_line_of(li, b)
+        if ln + 1 < li.starts.len():
+            b = li.starts.get(ln + 1)
+        else:
+            b = n
+            new_text = "\n" + new_text
+        end
+        e = b
+    else f.mode == lg.FIX_LINE_BEFORE:
+        b = li.starts.get(li_line_of(li, b))
+        e = b
+    end
+    jw_obj(j)
+    if other:
+        jw_str(j, "path", file)
+    end
+    jw_range(j, "range", li, b, e)
+    jw_str(j, "newText", new_text)
+    jw_end_obj(j)
+    ret true
+end
+
+func emit_fixes(an &: An, j &: Json, ri: int, rfile: str):
+    mut idx := Vector {} as Vector<int>
+    defer idx.free()
+    repeat an.fixes.len() in fi:
+        if an.fixes.get(fi).rec == ri:
+            idx.push(fi)
+        end
+    end
+    if idx.len() == 0:
+        ret
+    end
+    pk := lp.Load(an.lang)
+    jw_karr(j, "fixes")
+    mut k := 0
+    until k < idx.len():
+        f0 := an.fixes.get(idx.get(k))
+        mut k2 := k + 1
+        until k2 < idx.len() and str.Equals(an.fixes.get(idx.get(k2)).title, f0.title):
+            k2 += 1
+        end
+        mut sub := jw_new()
+        jw_arr(sub)
+        mut ok := true
+        mut q := k
+        until q < k2:
+            fq := an.fixes.get(idx.get(q))
+            ffile := str.Len(fq.file) > 0 ? filepath.Clean(fq.file) : rfile
+            if not fix_edit(an, fq, pk, ffile, sub):
+                ok = false
+            end
+            q += 1
+        end
+        jw_end_arr(sub)
+        edits := jw_done(sub)
+        if ok:
+            spell_kw := f0.kw >= 0 ? f0.kw : f0.tok_kind
+            jw_obj(j)
+            jw_str(j, "title", fix_spell(pk, spell_kw, f0.title, false))
+            jw_bool(j, "preferred", f0.preferred)
+            jw_raw(j, "edits", edits)
+            jw_end_obj(j)
+        end
+        k = k2
+    end
+    jw_end_arr(j)
+end
+
 func emit_diags(an &: An, j &: Json):
     jw_karr(j, "diags")
     mut seen := HashMap {} as HashMap<str, bool>
     defer seen.free()
-    each r in an.records:
+    each ri, r in an.records:
         mut file := an.target
         if str.Len(r.file) > 0:
             file = filepath.Clean(r.file)
@@ -1401,6 +1552,7 @@ func emit_diags(an &: An, j &: Json):
         if str.Len(r.help) > 0:
             jw_str(j, "help", r.help)
         end
+        emit_fixes(an, j, ri, file)
         jw_end_obj(j)
     end
     jw_end_arr(j)
@@ -1639,6 +1791,7 @@ func target_an(base: An, lgr: lg.Logger, fallback: int, target: str, text: str):
     an.is_virtual = base.is_virtual
     an.scope = base.scope
     an.records = base.records
+    an.fixes = base.fixes
     an.texts.put(target, text)
     tpack := lx.Detect(src_of(an), fallback)
     an.lang = lp.Code(tpack)
@@ -1767,6 +1920,9 @@ func analyze(r: Req): str:
     _sok := sm.Run(s, a, prog)
     repeat lg.RecordCount() in ri:
         base.records.push(lg.RecordAt(ri))
+    end
+    repeat lg.FixCount() in fi:
+        base.fixes.push(lg.FixAt(fi))
     end
     mut refn := Vector {} as Vector<int>
     mut refs := Vector {} as Vector<int>

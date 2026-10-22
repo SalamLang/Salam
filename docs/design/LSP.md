@@ -614,6 +614,17 @@ Also built since:
   `salam exec`, arguments, working directory) with a run marker beside
   `func main`. The plugin now compiles against IntelliJ IDEA Community 2024.2
   and CI runs the Plugin Verifier on it.
+- Structured fixes (change 3). The logger records `lg.Fix` entries next to
+  each diagnostic: a title, a byte range, and either the text to put there or
+  a word or token to find inside the range. A fix can name a keyword, which
+  the worker spells in the file's language, and a placement mode (the range,
+  whole lines, or a new line before or after). Sema attaches them for
+  did-you-mean (unknown identifiers now get suggestions too), missing and
+  unused imports, unused variables, a `mut` that is never reassigned and
+  private fields and methods; the parser attaches them for `return`, `while`,
+  `elif`, `for ... in`, `let` and `var`. The worker turns them into exact
+  ranges and the server serves them as quick fixes; matching words in the
+  message is only the fallback for diagnostics without fixes.
 
 Left:
 
@@ -628,5 +639,5 @@ Left:
    command.
 3. A published grammar repository (`tree-sitter-salam` with the generated
    `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
-4. Structured fixes in `Diag` (change 3), so every quick fix comes from the
-   compiler rather than from matching words, and `Node.sym` as a field.
+4. `Node.sym` as a field, and fixes in the human and JSON renderers of
+   `salam check`.

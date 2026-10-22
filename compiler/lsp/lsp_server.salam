@@ -507,6 +507,12 @@ func diag_items(snap: value.Value): str:
                 msg = msg + "\nhelp: " + help
             end
             jw_str(j, "message", msg)
+            fixes := obj(dv, "fixes")
+            if value.IsArray(fixes) and value.ArrayLen(fixes) > 0:
+                jw_kobj(j, "data")
+                jw_raw(j, "fixes", json.EncodeDefault(fixes))
+                jw_end_obj(j)
+            end
             if str.Contains(msg, "unused ") or str.Contains(msg, "never used"):
                 jw_karr(j, "tags")
                 jw_vint(j, 1)
@@ -1471,6 +1477,67 @@ func word_fix(d: Doc, dv: value.Value, rg: value.Value, dj: str, acts &: Vector<
     end
 end
 
+func snap_fixes(d: Doc, dv: value.Value): value.Value:
+    data := obj(dv, "data")
+    direct := obj(data, "fixes")
+    if value.IsArray(direct):
+        ret direct
+    end
+    if not d.has_snap:
+        ret value.ValueNull()
+    end
+    want := json.EncodeDefault(obj(dv, "range"))
+    msg := vstr(dv, "message")
+    diags := obj(d.snap, "diags")
+    if value.IsArray(diags):
+        repeat value.ArrayLen(diags) in i:
+            sv := value.ArrayGet(diags, i)
+            if str.Equals(json.EncodeDefault(obj(sv, "range")), want) and str.StartsWith(msg, vstr(sv, "message")):
+                ret obj(sv, "fixes")
+            end
+        end
+    end
+    ret value.ValueNull()
+end
+
+func compiler_fixes(d: Doc, dv: value.Value, dj: str, acts &: Vector<str>): bool:
+    fixes := snap_fixes(d, dv)
+    if not value.IsArray(fixes) or value.ArrayLen(fixes) == 0:
+        ret false
+    end
+    repeat value.ArrayLen(fixes) in i:
+        fv := value.ArrayGet(fixes, i)
+        edits := obj(fv, "edits")
+        if not value.IsArray(edits):
+            continue
+        end
+        mut by_uri := HashMap {} as HashMap<str, str>
+        mut order := Vector {} as Vector<str>
+        repeat value.ArrayLen(edits) in k:
+            ev := value.ArrayGet(edits, k)
+            pth0 := vstr(ev, "path")
+            uri := str.Len(pth0) > 0 ? path_to_uri(pth0) : d.uri
+            one := "{\"range\":" + json.EncodeDefault(obj(ev, "range")) + ",\"newText\":" + jq(vstr(ev, "newText")) + "}"
+            if by_uri.has(uri):
+                by_uri.put(uri, by_uri.get(uri) + "," + one)
+            else:
+                by_uri.put(uri, one)
+                order.push(uri)
+            end
+        end
+        mut parts := Vector {} as Vector<str>
+        each u in order:
+            parts.push(jq(u) + ":[" + by_uri.get(u) + "]")
+        end
+        pref := vbool(fv, "preferred")
+        acts.push("{\"title\":" + jq(vstr(fv, "title")) + ",\"kind\":\"quickfix\",\"isPreferred\":" + (pref ? "true" : "false") + ",\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + str.Join(parts, ",") + "}}}")
+        parts.free()
+        order.free()
+        by_uri.free()
+    end
+    ret true
+end
+
 func on_code_action(id: str, params: value.Value):
     i := text_doc(params)
     if i < 0:
@@ -1487,6 +1554,9 @@ func on_code_action(id: str, params: value.Value):
             rg := obj(dv, "range")
             rjson := json.EncodeDefault(rg)
             dj := json.EncodeDefault(dv)
+            if compiler_fixes(d, dv, dj, acts):
+                continue
+            end
             mut dm := str.IndexOf(msg, "did you mean ")
             mut skip := 13
             mut qmark := "?"

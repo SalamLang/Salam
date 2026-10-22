@@ -7,7 +7,7 @@ import { isFa, setLang, t } from "./i18n";
 type Mode = "login" | "register";
 
 export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User) => void; compact?: boolean; intro?: string }) {
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(location.search).get("signup") ? "register" : "login"));
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

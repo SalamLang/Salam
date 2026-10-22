@@ -9,6 +9,7 @@ include at "../ast.salam"
 include i18 "../i18n.salam"
 include src "../source.salam"
 include pth "../sal_path.salam"
+include pm "../pkgmgr/pkgmgr.salam"
 
 func norm_ident(s0: str): str:
     n := str.Len(s0)
@@ -169,19 +170,50 @@ func scan_std_dir(base: str, depth: int):
     end
 end
 
-func build_seg_index(root: str):
+func package_bases(root: str): Vector<str>:
+    if str.Len(root) > 0:
+        pm.SetDevPackages(pth.PathJoin(root, "packages"))
+    else file_exists("std/core/core.salam"):
+        pm.SetDevPackages("packages")
+    end
+    mut dir := g_sm_project_root
+    if str.Len(dir) == 0:
+        dir = "."
+    end
+    ret pm.PackageBases(dir)
+end
+
+func seg_index_key(root: str): str:
+    mut key := root
+    mut bases := package_bases(root)
+    defer bases.free()
+    repeat bases.len() in i:
+        key = key + "|" + bases.get(i)
+    end
+    ret key
+end
+
+func build_seg_index(root: str, key: str):
     g_sm_seg_lang.clear()
     g_sm_seg_alias.clear()
     g_sm_seg_canon.clear()
     g_sm_seg_n = 0
     base := pth.PathJoin(root, "std")
     scan_std_dir(base, 2)
-    g_sm_seg_root = root
+    mut bases := package_bases(root)
+    defer bases.free()
+    repeat bases.len() in i:
+        scan_std_dir(bases.get(i), 2)
+    end
+    g_sm_seg_root = key
 end
 
 func seg_to_canon(root: str, seg: str, lang: str): str:
     if g_sm_seg_n < 0 or not str.Equals(g_sm_seg_root, root):
-        build_seg_index(root)
+        key := seg_index_key(root)
+        if g_sm_seg_n < 0 or not str.Equals(g_sm_seg_root, key):
+            build_seg_index(root, key)
+        end
     end
     ns := norm_ident(seg)
     repeat g_sm_seg_n in i:
@@ -221,10 +253,26 @@ func resolve_ident_import(root: str, dotted: str, lang: str): str:
     if str.Len(last) == 0:
         ret ""
     end
+    ret in_std_or_packages(root, spec + "/" + last + ".salam")
+end
+
+func in_std_or_packages(root: str, rel: str): str:
+    mut std_path := "std/" + rel
     if str.Len(root) > 0:
-        ret root + "/std/" + spec + "/" + last + ".salam"
+        std_path = root + "/std/" + rel
     end
-    ret "std/" + spec + "/" + last + ".salam"
+    if file_exists(std_path):
+        ret std_path
+    end
+    mut bases := package_bases(root)
+    defer bases.free()
+    repeat bases.len() in i:
+        cand := pth.PathJoin(bases.get(i), rel)
+        if file_exists(cand):
+            ret cand
+        end
+    end
+    ret std_path
 end
 
 func resolve_ident_direct(root: str, dotted: str): str:
@@ -252,10 +300,7 @@ func resolve_ident_direct(root: str, dotted: str): str:
     if str.Len(last) == 0:
         ret ""
     end
-    mut out := "std/" + spec + "/" + last + ".salam"
-    if str.Len(root) > 0:
-        out = root + "/std/" + spec + "/" + last + ".salam"
-    end
+    out := in_std_or_packages(root, spec + "/" + last + ".salam")
     if file_exists(out):
         ret out
     end
@@ -300,6 +345,14 @@ end
 
 func resolve_import_node(a &: at.Ast, dir: str, imp: int, lang: str): str:
     n := at.Get(a, imp)
+    if n.is_extern and n.value_kind == tok.TV_STRING:
+        mut code := 0
+        entry := pm.ResolveImport(dir, n.value_str, code)
+        if code != pm.RES_OK:
+            ret ""
+        end
+        ret entry
+    end
     if n.value_kind == tok.TV_STRING:
         ret resolve_user_string(dir, n.value_str)
     end
@@ -339,6 +392,9 @@ func import_local_name(a &: at.Ast, imp: int, spec: str): str:
     end
     if str.Len(n.name) > 0:
         ret n.name
+    end
+    if n.is_extern:
+        ret pm.PackageNameOf(spec)
     end
     seg := pth.PathBase(spec)
     dot2 := str.IndexOf(seg, ".salam")

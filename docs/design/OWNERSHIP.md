@@ -1,7 +1,7 @@
 # Compile-time memory safety without lifetime annotations
 
-Status: **phases 1 and 2 implemented** (`compiler/semantic/sema_own.salam`,
-`compiler/semantic/sema_strfree.salam`). Later phases below are planned. This document supersedes `DROP.md`, which stalled on
+Status: **phases 1 to 5 implemented** (`compiler/semantic/sema_own.salam`,
+`sema_strfree.salam`, `sema_summary.salam`). Phase 6 waits for a release. This document supersedes `DROP.md`, which stalled on
 exactly the question this design answers.
 
 ## The problem
@@ -30,10 +30,13 @@ time**, with:
 
 ## How it works
 
-The check is a flow-sensitive dataflow pass that runs once per function, right
-after definite initialization (`sema_check_fn.salam`). It only runs on
-functions that free something, take a `.ref()` or `.iter()`, or use `defer`,
-so most functions cost nothing.
+The check is a flow-sensitive dataflow pass that runs once per function. Each
+function is registered right after definite initialization
+(`sema_check_fn.salam`) and checked once the summaries are ready
+(`SemaOwnPost`). It only runs on functions that free something, call a
+function whose summary says it always frees an argument (see "Function
+summaries"), free in a `defer` and return a value, or (in warn mode) take a
+`.ref()` or `.iter()`, so most functions cost nothing.
 
 ### Control-flow graph
 
@@ -148,12 +151,90 @@ The remaining string leaks come from call results (`f() + "x"`, or a
 `str.FromInt` result stored in a local). Whether a function returns a fresh
 string is an interprocedural fact, so they wait for phase 3 summaries.
 
+## Function summaries (phase 3)
+
+Lifetime annotations exist so a compiler can see what a call does to its
+arguments without looking inside the callee. Salam infers that instead.
+After type checking, `sema_summary.salam` computes these facts for every
+function, std and generic instances included, solved to a fixpoint over the
+whole call graph:
+
+- **fresh result**: every `ret` returns a newly allocated string, so the
+  caller owns it;
+- **keeps** parameter _i_: the argument may be stored, returned or captured;
+- **frees** parameter _i_: some path frees it; **must free** when an
+  unconditional top-level statement does;
+- **grows** parameter _i_: some path pushes into a container reachable from
+  it, which may move that buffer;
+- **returns an alias** of parameter _i_: for example
+  `At(a, id): Node* ... ret a.nodes.ref(id)`.
+
+Sema records the resolved target of every call, so overloads, methods, package
+functions and generic instances all map to the right summary. Interface (`dyn`)
+calls and externs are unknown. A short list of libc readers (`memcpy`,
+`strlen`, ...) is known not to keep its arguments.
+
+What the summaries buy:
+
+- **Leaks.** `"x" + f()` frees `f()`'s result when `f` returns fresh, and
+  `x := f()` is auto-freed under the phase 2 rules. A local whose every use
+  passes it to a parameter that is only read counts as non-escaping.
+- **Errors across calls.** A use after a call that must free the argument is
+  E139, even several calls deep (`forget(s)` calls `release(s)`, which frees
+  it).
+- **Warnings across calls** (warn mode): a may-free callee gives W142. A callee
+  that grows a container gives W144 on every copy and `.ref()` pointer taken
+  before the call, including results of alias-returning functions such as
+  `at.At`.
+
+The first sweep found real bugs in std:
+
+- `packages/telegram/bot`: `_put_chat_id(params: HashMap<str, str>, ...)` took the
+  map by value. Its `put` resized the callee's copy, so every request built
+  through it silently lost `chat_id`. It now takes `params &:`.
+- `packages/net/socketio`: `_resolve_ack` kept scanning after the matching waiter.
+  A second waiter with the same id would reuse `bins` after they were freed or
+  queued. It now stops at the match.
+- `std/archive/rar`: the free and the later use of an entry name tested the
+  same condition twice; it is now computed once.
+
+## Automatic drop of owned containers (phase 4)
+
+A `Vector` or `HashMap` local is freed at the end of its scope, with nothing
+written by hand, when all of the following hold:
+
+- it starts as an empty literal (`Vector {} as Vector<int>`, `HashMap {}`) or
+  as the result of a call whose summary says it returns a fresh container;
+- it is declared directly in a block, not in a `match` arm;
+- every use only reads it or grows it: method calls, `each`, passing it to a
+  parameter that is only read or grown;
+- it is never reassigned, returned, stored, captured, freed by hand, or passed
+  to something that keeps or frees it.
+
+So the usual shape below needs no `defer v.free()`:
+
+```salam
+mut v := Vector {} as Vector<int>
+fill(v, 10)
+println total(v)
+```
+
+Code that already frees by hand keeps working unchanged: a hand-written
+`free()` or `defer v.free()` disqualifies the variable, so nothing is freed
+twice. The drop frees what `free()` frees (the buffer, not the elements). C
+frees the header fields directly and LLVM loads them through the local's
+address. JS and the interpreter see a bare read.
+
+`b := a` on an owned container is not a move yet. Phase 1 already reports the
+dangerous consequences of the shared buffer (E139, W144). Making it a hard
+move would break existing code, so it waits for phase 6.
+
 ## What is not checked yet
 
 Each item below is a phase on the roadmap, or a deliberate limit:
 
-- **Interprocedural effects.** A helper that frees its argument, or pushes into
-  a `&:` Vector while the caller holds a `.ref()`, is invisible (phase 3).
+- **Globals and indirect calls.** Effects through global variables, function
+  values and `dyn` calls are not summarized.
 - **Element ownership.** Freeing a `Vector<str>` frees the buffer only, as
   today.
 - **Raw pointers from `mem.Allocate`/`extern`.** Tracked like any other token,
@@ -167,19 +248,24 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    by `defer`; warnings for may-paths and buffer moves.
 2. **Phase 2 (done).** Fused concatenation chains and auto-free of
    non-escaping fresh string locals; see above.
-3. **Phase 3.** Function summaries, inferred bottom-up over the call graph:
-   which parameters are only read, mutated, freed, stored, or invalidated (for
-   example `a.nodes`), and whether the result is fresh or an alias of a
-   parameter path. This replaces lifetime annotations. Enables the
-   `n := at.At(a, id)` across `check_*(a, ...)` check and overlapping `&:`
-   arguments.
-4. **Phase 4.** Moves and automatic drop for owned locals: `b := a` of an
-   owned `Vector`/`HashMap` moves; using `a` after that is an error with a
-   `.copy()` fix-it. Owned locals that are not moved get a synthesized `defer
-x.free()`, lowered in sema so all four backends get it for free. Explicit
-   `defer x.free()` becomes a warning.
-5. **Phase 5.** Closures: a non-escaping lambda borrows its captures and gets
-   a stack-allocated environment (faster than today's heap env); an escaping
-   lambda moves its captures.
-6. **Phase 6.** Flip `--ownership=error` to the default one release after
-   `std/` and `compiler/` are clean under it.
+3. **Phase 3 (done).** Inferred function summaries in place of lifetime
+   annotations; see above.
+4. **Phase 4 (done).** Automatic drop of owned `Vector`/`HashMap` locals;
+   see above.
+5. **Phase 5 (done).** A capturing lambda that never escapes its scope costs
+   no heap allocation: its environment lives on the stack (C backend) or is
+   freed at scope exit (LLVM). This covers a local bound to the lambda and a
+   lambda written straight into a call whose parameter does not keep it;
+   sema hoists the latter into a synthetic local first, unless something in
+   that statement writes a captured variable. Escaping lambdas keep a heap
+   environment, as before.
+6. **Phase 6 (needs a release first).** Each step is gated on the seed, the
+   previous release that std/ and compiler/ must keep building with:
+   - Release N ships with phases 1 to 5 (`--ownership=on` by default).
+   - After N is the seed: report `b := a` of an owned `Vector`/`HashMap`
+     followed by a use of `a` as a warn-mode move warning, and migrate std/
+     and compiler/ (`.copy()` or reorder) until `--ownership=warn` is clean.
+   - Release N+1 makes `--ownership=error` the default and turns the move
+     warning into an error with a `.copy()` fix-it.
+   - Each flip lands with the `tests/*/errors/own_*` expectations updated in
+     both languages.

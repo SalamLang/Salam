@@ -400,6 +400,78 @@ const again = await signIn("sessions@test.ir", { "X-Salam-Client": "agent" });
 const all = await api("DELETE", `/admin/users/${sessionsUser.id}/sessions`, session);
 check("closing all of a user's sessions signs every device out", all.json?.revoked === 2 && (await api("GET", "/me", webToken)).res.status === 401 && (await api("GET", "/me", again)).res.status === 401, all.json);
 
+console.log("guest chat");
+const GUEST_LIMIT = Number(process.env.GUEST_LIMIT ?? 3);
+const guestPost = (body, headers = {}) => fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://www.salamlang.ir", ...headers }, body: JSON.stringify(body) });
+const firstGuest = await guestPost({ text: "guest hello" });
+const firstGuestBody = await firstGuest.json();
+check("a guest can ask without an account", firstGuest.status === 201 && firstGuestBody.guest?.length >= 40 && firstGuestBody.used === 1 && firstGuestBody.limit === GUEST_LIMIT, firstGuestBody);
+check("the website origin is allowed for guests", firstGuest.headers.get("access-control-allow-origin") === "https://www.salamlang.ir");
+let guestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  guestAnswer = await (await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=${firstGuestBody.guest}`, { headers: { Origin: "https://www.salamlang.ir" } })).json();
+  if (guestAnswer.status !== "pending") break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+check("the guest gets the assistant's answer", guestAnswer.status === "done" && guestAnswer.body.startsWith("Echo: guest hello"), guestAnswer);
+const guestStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=${firstGuestBody.guest}&lang=en`, { headers: { Origin: "https://www.salamlang.ir" } });
+const guestStreamText = await guestStream.text();
+check("a guest answer streams as server-sent events", guestStream.status === 200 && guestStream.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && guestStreamText.includes("event: done") && guestStreamText.includes("Echo: guest hello"), guestStreamText.slice(0, 300));
+const strangerStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=not-the-right-token-at-all`);
+check("another guest cannot stream the answer", strangerStream.status === 404);
+const strangerPoll = await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=not-the-right-token-at-all`);
+check("another guest cannot read the answer", strangerPoll.status === 404);
+const guestPreflight = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://www.salamlang.ir", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,x-salam-lang" } });
+check("the guest preflight allows the website", guestPreflight.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && /x-salam-lang/i.test(guestPreflight.headers.get("access-control-allow-headers") ?? ""));
+const evil = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });
+check("other origins get no guest CORS", !evil.headers.get("access-control-allow-origin"));
+for (let i = 1; i < GUEST_LIMIT; i += 1) {
+  const r = await guestPost({ guest: firstGuestBody.guest, text: `guest more ${i}` });
+  const j = await r.json();
+  for (let k = 0; k < 60; k += 1) {
+    const p = await (await fetch(`${API}/guest/messages/${j.id}?guest=${firstGuestBody.guest}`)).json();
+    if (p.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+const over = await guestPost({ guest: firstGuestBody.guest, text: "one too many" }, { "X-Salam-Lang": "en" });
+const overBody = await over.json();
+check("after the guest limit the guest is sent to sign up", over.status === 403 && overBody.error === "guest_limit" && overBody.message.includes("Sign up"), overBody);
+
+const guestList = await api("GET", "/admin/guests", session);
+const listedGuest = guestList.json?.guests?.find((g) => g.first === "guest hello");
+check("admins see website guest chats", listedGuest?.messages === GUEST_LIMIT, guestList.json?.guests?.[0]);
+const guestThread = await api("GET", `/admin/guests/${listedGuest?.id}`, session);
+check("an admin can read a guest chat", guestThread.json?.messages?.[0]?.body === "guest hello" && guestThread.json.messages[1]?.body.startsWith("Echo: guest hello"), guestThread.json?.messages?.slice(0, 2));
+check("only admins list guests", (await api("GET", "/admin/guests", filesSession)).res.status === 403);
+const guestSummary = (await api("GET", "/admin/summary", session)).json;
+check("the summary counts guests", guestSummary.guests >= 1 && guestSummary.guest_messages >= GUEST_LIMIT && guestSummary.guests_at_limit >= 0, { guests: guestSummary.guests, guest_messages: guestSummary.guest_messages });
+
+console.log("interface language");
+const uiSession = await account("ui-lang@test.ir", "Ui Lang");
+async function askUi(headers) {
+  const c = await api("POST", "/chats", uiSession, {});
+  const r = await fetch(`${API}/chats/${c.json.chat.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uiSession}`, ...headers }, body: JSON.stringify({ text: "which interface am I on" }) });
+  const sentUi = await r.json();
+  let p;
+  for (let i = 0; i < 60; i += 1) {
+    p = await api("GET", `/chats/${c.json.chat.id}/messages/${sentUi.assistant.id}`, uiSession);
+    if (p.json.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  return p.json.body;
+}
+check("the engine is told the user is on the Persian interface by default", (await askUi({})) === "Interface: fa");
+check("the engine is told the user is on the English interface", (await askUi({ "X-Salam-Lang": "en" })) === "Interface: en");
+const uiGuest = await (await fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://salamlang.github.io", "X-Salam-Lang": "en" }, body: JSON.stringify({ text: "which interface is this" }) })).json();
+let uiGuestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  uiGuestAnswer = await (await fetch(`${API}/guest/messages/${uiGuest.id}?guest=${uiGuest.guest}`)).json();
+  if (uiGuestAnswer.status !== "pending") break;
+  await new Promise((res) => setTimeout(res, 500));
+}
+check("a guest on the English site gets the English interface note", uiGuestAnswer.body === "Interface: en", uiGuestAnswer);
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

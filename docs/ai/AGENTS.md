@@ -303,7 +303,9 @@ use them:
 pub func Trim(s: str): str: ret s.trim() end
 ```
 
-Compile non-English source with `--lang=fa`.
+Compile non-English source with `--lang=fa`, or start a Persian file with
+`// زبان: فارسی` (English files: `// lang: en`). Mixed forms such as
+`// lang: fa` are rejected.
 
 ## 11. `switch` vs `match`
 
@@ -416,6 +418,8 @@ end
 
 ```sh
 salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
+salam check  hello.salam --fix                  # apply the safe compiler fixes in place
+salam check  hello.salam --error-format=json    # diagnostics with machine-readable fixes
 salam run    hello.salam     # build and execute
 salam format hello.salam --check
 ```

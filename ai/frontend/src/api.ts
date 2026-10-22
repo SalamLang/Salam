@@ -49,6 +49,22 @@ export type AdminUpload = {
   user: { id: number; name: string; email: string };
   agent: boolean;
 };
+export type AdminGuest = {
+  id: number;
+  ip: string;
+  lang: string;
+  messages: number;
+  created: number;
+  updated: number;
+  first: string;
+};
+export type GuestMessage = {
+  id: number;
+  role: "user" | "assistant";
+  body: string;
+  status: string;
+  created: number;
+};
 export type AdminSession = {
   id: number;
   created: number;
@@ -267,6 +283,9 @@ export type AdminSummary = {
   chats: number;
   messages: number;
   uploads?: number;
+  guests?: number;
+  guest_messages?: number;
+  guests_at_limit?: number;
   uploads_images?: number;
   uploads_bytes?: number;
   apps: number;
@@ -592,6 +611,13 @@ export const api = {
       "GET",
       `/admin/sessions?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.client ? { client: q.client } : {}), offset: String(q.offset ?? 0) })}`,
     ),
+  adminGuests: (offset: number) =>
+    call<{ guests: AdminGuest[]; total: number }>(
+      "GET",
+      `/admin/guests?offset=${offset}`,
+    ),
+  adminGuest: (id: number) =>
+    call<{ messages: GuestMessage[] }>("GET", `/admin/guests/${id}`),
   revokeSession: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/sessions/${id}`),
   revokeUserSessions: (id: number) =>

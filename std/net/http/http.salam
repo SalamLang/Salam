@@ -57,6 +57,15 @@ pub struct Response:
     pub err: str = ""
 end
 
+@en "BytesResponse"
+@fa "پاسخ بایتی"
+pub struct BytesResponse:
+    pub status: int = 0
+    pub head: str = ""
+    pub body: compress.ByteBuf = compress.ByteBuf {}
+    pub err: str = ""
+end
+
 @en "Client"
 @fa "کارخواه"
 pub struct Client:
@@ -230,7 +239,7 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         ret _make_str(buf, n - 1)
     end
 
-    func _fetch_https(method: str, url: str, raw_headers: str, body: str): str:
+    func _fetch_bytes(method: str, url: str, raw_headers: str, body: str, head &: str): compress.ByteBuf:
         headers := _drop_transport_headers(raw_headers)
         mut p := url
         mut secure := 1
@@ -260,13 +269,13 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         wagent := _str_to_wide(_header_value(headers, "User-Agent", "Salam/1.0"))
         sess := WinHttpOpen(wagent, 0, null, null, 0)
         mem.Free(wagent)
-        if sess == null: ret "" end
+        if sess == null: ret compress.NewByteBuf() end
         defer WinHttpCloseHandle(sess)
         whost := _str_to_wide(host_only)
         conn := WinHttpConnect(sess, whost, wport, 0)
         mem.Free(whost)
         if conn == null:
-            ret ""
+            ret compress.NewByteBuf()
         end
         defer WinHttpCloseHandle(conn)
         mut req_flags := 0
@@ -277,7 +286,7 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         mem.Free(wverb)
         mem.Free(wpath)
         if req == null:
-            ret ""
+            ret compress.NewByteBuf()
         end
         defer WinHttpCloseHandle(req)
         if headers.len() > 0:
@@ -288,11 +297,11 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         blen := body.len()
         sent := WinHttpSendRequest(req, null, 0, body, blen, blen, 0 as usize)
         if sent == 0:
-            ret ""
+            ret compress.NewByteBuf()
         end
         recv_ok := WinHttpReceiveResponse(req, null)
         if recv_ok == 0:
-            ret ""
+            ret compress.NewByteBuf()
         end
         mut hlen := mem.Allocate(8 as u64) as i64*
         defer mem.Free(hlen as void*)
@@ -316,7 +325,7 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         defer mem.Free(buf)
         mut got := mem.Allocate(8 as u64) as i64*
         defer mem.Free(got as void*)
-        mut body_str := ""
+        mut out := compress.NewByteBuf()
         mut reading := true
         until reading:
             got[0] = 0
@@ -324,12 +333,11 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
             if rd_ok == 0 or got[0] == 0:
                 reading = false
             else:
-                chunk := _make_str(buf, got[0] as int)
-                body_str = body_str.concat(chunk)
+                compress.BufPushBytes(out, buf, got[0] as int)
             end
         end
-        result := hdr_str.concat(body_str)
-        ret result
+        head = hdr_str
+        ret out
     end
 else:
 
@@ -505,7 +513,7 @@ else:
         ret req
     end
 
-    func _fetch_https(method: str, url_str: str, headers: str, body: str): str:
+    func _fetch_bytes(method: str, url_str: str, headers: str, body: str, head_out &: str): compress.ByteBuf:
         u := url.Parse(url_str)
         secure := u.scheme != "http"
         mut port := u.port
@@ -518,7 +526,7 @@ else:
         end
         if u.host.len() == 0:
             _g_http_error = "no host in URL '" + url_str + "'"
-            ret ""
+            ret compress.NewByteBuf()
         end
         req := _build_request(method, u, headers, body)
 
@@ -529,7 +537,7 @@ else:
             if not tls.ConnOk(c):
                 _g_http_error = "TLS: " + tls.ConnError(c)
                 tls.Close(c)
-                ret ""
+                ret compress.NewByteBuf()
             end
             tls.Write(c, req)
             raw = _read_all_tls(c)
@@ -538,7 +546,7 @@ else:
             s := rawsock.Connect(u.host, port)
             if not rawsock.Ok(s):
                 _g_http_error = "could not connect to " + u.host + ":" + port
-                ret ""
+                ret compress.NewByteBuf()
             end
             rawsock.Send(s, req)
             raw = _read_all_plain(s)
@@ -547,7 +555,7 @@ else:
 
         sep := _buf_find_crlf_crlf(raw)
         if sep < 0:
-            ret _buf_slice_str(raw, 0, raw.len)
+            ret raw
         end
         head := _buf_slice_str(raw, 0, sep + 4)
         mut rest := _buf_slice_buf(raw, sep + 4, raw.len - sep - 4)
@@ -555,20 +563,22 @@ else:
         if str.Find(lhead, "transfer-encoding: chunked") >= 0:
             rest = _dechunk_buf(rest)
         end
-        mut rest_str := ""
+        head_out = head
         if str.Find(lhead, "content-encoding: gzip") >= 0:
             mut ok := false
             decompressed := compress.GzipDecompressBuf(rest, ok)
             if ok:
-                rest_str = compress.BufToStrUnsafe(decompressed)
-            else:
-                rest_str = compress.BufToStrUnsafe(rest)
+                ret decompressed
             end
-        else:
-            rest_str = compress.BufToStrUnsafe(rest)
         end
-        ret head.concat(rest_str)
+        ret rest
     end
+end
+
+func _fetch_https(method: str, url_str: str, headers: str, body: str): str:
+    mut head := ""
+    buf := _fetch_bytes(method, url_str, headers, body, head)
+    ret head.concat(compress.BufToStrUnsafe(buf))
 end
 
 func _parse_response(req: str): Response:
@@ -651,6 +661,20 @@ end
 @fa "درخواست خام"
 pub func RequestRaw(method: str, url: str, header_block: str, body: str): Response:
     ret send(method, url, header_block, body)
+end
+
+@en "GetBytesWith"
+@fa "دریافت بایت ها با"
+pub func GetBytesWith(url: str, headers: HashMap<str, str>): BytesResponse:
+    _g_http_error = ""
+    mut head := ""
+    buf := _fetch_bytes("GET", url, serialize(headers), "", head)
+    mut status := 0
+    sp := head.find(" ")
+    if sp >= 0:
+        status = head.substr(sp + 1, 3).to_int()
+    end
+    ret BytesResponse { status = status, head = head, body = buf, err = _g_http_error }
 end
 
 @en "Ok"

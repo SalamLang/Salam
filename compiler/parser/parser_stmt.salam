@@ -4,6 +4,7 @@ import str
 
 include tok "../token.salam"
 include at "../ast.salam"
+include lg "../logger.salam"
 
 func parse_cond_expr(p &: Ps, a &: at.Ast): int:
     saved := p.no_struct_lit
@@ -73,7 +74,23 @@ func parse_foreign_statement(p &: Ps, a &: at.Ast, handled &: bool): int:
     if str.Equals(w, "let") or str.Equals(w, "var"):
         after := p_peekn(p, run).kind
         if run >= 2 and (after == tok.TK_COLON_ASSIGN or after == tok.TK_ASSIGN or after == tok.TK_COLON):
+            n0 := lg.RecordCount()
+            ft := p_peek(p)
+            nt := p_peekn(p, 1)
+            eqt := p_peekn(p, run)
             p_foreign_error(p, "write 'name := value', or 'mut name := value' if it is reassigned later", "Salam has no 'let' or 'var'")
+            if after == tok.TK_ASSIGN or after == tok.TK_COLON_ASSIGN:
+                mut title := "Write 'name := value'"
+                if str.Equals(w, "var"):
+                    title = "Write '%s name := value'"
+                    p_token_fix(n0, ft, (ft.end_index - ft.begin_index) as int, title, tok.TK_KW_MUT, "")
+                else:
+                    p_token_fix(n0, ft, (nt.begin_index - ft.begin_index) as int, title, 0 - 1, "")
+                end
+                if after == tok.TK_ASSIGN:
+                    p_token_fix(n0, eqt, (eqt.end_index - eqt.begin_index) as int, title, 0 - 1, ":=")
+                end
+            end
             p_advance(p)
             n := parse_bare_var_decl(p, a)
             p_term(p)
@@ -83,7 +100,7 @@ func parse_foreign_statement(p &: Ps, a &: at.Ast, handled &: bool): int:
     if str.Equals(w, "for"):
         next_kind := p_peekn(p, run).kind
         if run >= 2 and (next_kind == tok.TK_KW_IN or next_kind == tok.TK_COMMA) and p_line_has(p, tok.TK_COLON):
-            p_foreign_error(p, "write 'each item in items:' (or 'each i, item in items:'), or count with 'repeat n in i:'", "Salam has no 'for' loop")
+            p_foreign_swap(p, "write 'each item in items:' (or 'each i, item in items:'), or count with 'repeat n in i:'", "Salam has no 'for' loop", tok.TK_KW_EACH)
             ret parse_each(p, a)
         end
         if p_peekn(p, 1).kind == tok.TK_LPAREN or (run >= 2 and next_kind == tok.TK_COLON_ASSIGN and p_line_has_semicolon(p)):
@@ -93,15 +110,15 @@ func parse_foreign_statement(p &: Ps, a &: at.Ast, handled &: bool): int:
         end
     end
     if str.Equals(w, "while") and not p_assign_after(p, run) and p_line_has(p, tok.TK_COLON):
-        p_foreign_error(p, "write 'until cond:', which runs its body while cond is true; keep the condition as it is", "'while' does not exist in Salam")
+        p_foreign_swap(p, "write 'until cond:', which runs its body while cond is true; keep the condition as it is", "'while' does not exist in Salam", tok.TK_KW_UNTIL)
         ret parse_until(p, a)
     end
     if str.Equals(w, "return") and not p_assign_after(p, run):
-        p_foreign_error(p, "write 'ret value', or a bare 'ret' when the function returns nothing", "Salam spells 'return' as 'ret'")
+        p_foreign_swap(p, "write 'ret value', or a bare 'ret' when the function returns nothing", "Salam spells 'return' as 'ret'", tok.TK_KW_RET)
         ret parse_return(p, a)
     end
     if p_at_elif(p):
-        p_foreign_error(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'")
+        p_foreign_swap(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'", tok.TK_KW_ELSE)
         p.panic = true
         ret 0
     end
@@ -319,7 +336,7 @@ func parse_if_tail(p &: Ps, a &: at.Ast): int:
     p_fin(p, a, b)
     p_skip_terminators(p)
     if p_at_elif(p):
-        p_foreign_error(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'")
+        p_foreign_swap(p, "write 'else cond:'; the whole if chain ends with one 'end'", "Salam spells 'elif' as 'else'", tok.TK_KW_ELSE)
         p_advance(p)
         ps_set_c(a, n, parse_if_tail(p, a))
     else p_match(p, tok.TK_KW_ELSE):

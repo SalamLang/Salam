@@ -43,11 +43,38 @@ jobs:
       - name: Set up pinned tcc
         uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
 
+      - name: Find the release that ships the Salam Agent
+        id: agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          name=$(gh api "repos/$GH_REPO/releases?per_page=50" --jq '
+            [.[] | select(.draft == false and .prerelease == false)
+                 | {tag: .tag_name, file: ([.assets[].name | select(test("^salam-agent-.+-windows-x86_64-setup[.]exe$"))][0])}
+                 | select(.file != null)][0] | "\(.tag) \(.file)"' 2>/dev/null || true)
+          tag=${name%% *}
+          file=${name#* }
+          version=${file#salam-agent-}
+          version=${version%-windows-x86_64-setup.exe}
+          if [ -z "$tag" ] || [ "$tag" = null ] || [ -z "$version" ]; then
+            echo "no published release carries the agent yet; the site links to v<VERSION>"
+            exit 0
+          fi
+          echo "the agent downloads come from $tag (version $version)"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build the compiler and generate both sites
         run: sh website/build.sh
         env:
           WEBSITE_EXAMPLES: skip
           SITE_RELEASE_VERSION: ${{ steps.seed.outputs.version }}
+          SITE_AGENT_TAG: ${{ steps.agent.outputs.tag }}
+          SITE_AGENT_VERSION: ${{ steps.agent.outputs.version }}
 
       - name: Upload the Persian site
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

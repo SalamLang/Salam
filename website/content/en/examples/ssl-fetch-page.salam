@@ -1,0 +1,41 @@
+import ssl
+import net.tcp
+import str
+
+func fetch(ctx: ssl.Context, host: str, path: str): str:
+    sock := tcp.Dial(host, 443)
+    if not tcp.ConnOk(sock):
+        ret "could not reach " + host
+    end
+    conn := ssl.Wrap(ctx, sock.fd)
+    _ := ssl.SetHostname(conn, host)
+    if not ssl.Connect(conn):
+        msg := ssl.ConnErrorString(conn)
+        ssl.Close(conn)
+        tcp.Close(sock)
+        ret "handshake failed: " + msg
+    end
+    _ := ssl.Write(conn, "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")
+    mut response := ""
+    until true:
+        chunk := ssl.Read(conn, 16384)
+        if chunk.len() == 0:
+            break
+        end
+        response += chunk
+    end
+    ssl.Shutdown(conn)
+    ssl.Close(conn)
+    tcp.Close(sock)
+    ret str.Split(response, "\r\n").get(0)
+end
+
+func main:
+    ctx := ssl.NewClientContext()
+    _ := ssl.SetDefaultVerifyPaths(ctx)
+    _ := ssl.SetMinVersion(ctx, ssl.TLS1_2)
+    ssl.SetVerify(ctx, ssl.VERIFY_PEER)
+    println fetch(ctx, "example.com", "/")
+    println fetch(ctx, "expired.badssl.com", "/")
+    ssl.CloseContext(ctx)
+end

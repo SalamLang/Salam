@@ -1,0 +1,33 @@
+import net.http2
+import tls
+
+func main:
+    host := "www.cloudflare.com"
+    mut cfg := tls.NewConfig(host)
+    cfg.alpn = "h2"
+    secure := tls.Dial(host, 443, cfg)
+    if not tls.ConnOk(secure):
+        println "TLS failed:", tls.ConnError(secure)
+        ret 1
+    end
+    mut c := http2.NewConn(http2.TLSTransport(secure), false)
+    if not http2.ClientHandshake(c):
+        println "the server did not agree to HTTP/2"
+        ret 1
+    end
+    id := http2.NextStreamId(c)
+    mut h := http2.HeaderList {}
+    http2.HeadersAdd(h, ":method", "HEAD")
+    http2.HeadersAdd(h, ":scheme", "https")
+    http2.HeadersAdd(h, ":path", "/")
+    http2.HeadersAdd(h, ":authority", host)
+    _ := http2.SendHeaders(c, id, h, true)
+    if http2.AwaitStreamEnd(c, id, 100):
+        s := http2.StreamAt(c, id)
+        println "status:", http2.HeadersGet(s.headers, ":status")
+        println "server:", http2.HeadersGet(s.headers, "server")
+        println "body bytes:", s.data.len
+    end
+    http2.CloseConn(c)
+    ret 0
+end

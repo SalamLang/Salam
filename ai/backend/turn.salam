@@ -29,6 +29,8 @@ const START_SECONDS := 45
 const EM := 8212
 const EN := 8211
 
+mut EM_S := ""
+mut EN_S := ""
 mut CHECK_LOCK := sync.Mutex {}
 mut CHECKED := HashMap {} as HashMap<str, str>
 mut ROUNDS := HashMap {} as HashMap<str, int>
@@ -78,6 +80,12 @@ func asked_at(sid: str, created: i64): i64:
     t := ASKED.has(sid) ? ASKED.get(sid) : created
     _u := sync.Unlock(CHECK_LOCK)
     ret t
+end
+
+func retried(sid: str):
+    _l := sync.Lock(CHECK_LOCK)
+    ASKED.put(sid, aistore.Now())
+    _u := sync.Unlock(CHECK_LOCK)
 end
 
 func verify(sid: str, text: str): bool:
@@ -135,6 +143,13 @@ end
 
 pub func Init():
     CHECK_LOCK = sync.NewMutex()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppendCp(b, EM)
+    EM_S = str.BufStr(b)
+    str.BufReset(b)
+    str.BufAppendCp(b, EN)
+    EN_S = str.BufStr(b)
 end
 
 pub func Forget(sid: str):
@@ -146,6 +161,9 @@ pub func Forget(sid: str):
 end
 
 pub func Plain(text: str): str:
+    if text.find(EM_S) < 0 and text.find(EN_S) < 0:
+        ret text
+    end
     cps := str.CodePoints(text)
     n := cps.len()
     mut has := false
@@ -202,6 +220,10 @@ pub func Plain(text: str): str:
 end
 
 pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
+    ret Advance(sid, created, limit, START_SECONDS as i64, true, true)
+end
+
+pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bool, want_steps: bool): aiengine.Reply:
     mut r := aiengine.Reply {}
     if sid.len() == 0:
         r.failed = true
@@ -213,8 +235,9 @@ pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
     mut idle := false
     mut failed := false
     tracked := ailive.Snapshot(sid, text, phase, idle, failed)
+    mut stop := false
     if tracked and failed and not idle:
-        aiengine.Abort(sid)
+        stop = true
         r.text = text
         r.done = true
         r.failed = true
@@ -228,12 +251,20 @@ pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
             r.phase = phase
         end
     end
-    if not r.done and r.idle and not r.started and aistore.Now() - asked_at(sid, created) > START_SECONDS:
+    if not r.done and r.idle and not r.started and aistore.Now() - asked_at(sid, created) > start_limit:
         aiengine.Abort(sid)
         r.done = true
         r.failed = true
+    else r.done and r.failed and r.text.len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
+        ailive.Begin(sid)
+        retried(sid)
+        r = aiengine.Reply {}
+        stop = false
     end
-    if r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
+    if stop:
+        aiengine.Abort(sid)
+    end
+    if check and r.done and not r.failed and r.text.len() > 0 and verify(sid, r.text):
         r.done = false
         r.text = ""
         r.phase = "checking"
@@ -243,7 +274,7 @@ pub func Progress(sid: str, created: i64, limit: i64): aiengine.Reply:
         r.done = true
         r.failed = r.text.len() == 0
     end
-    if tracked:
+    if tracked and want_steps:
         r.activity = ailive.Activity(sid)
     end
     r.text = Plain(r.text)

@@ -37,9 +37,10 @@ Add custom connector.
 
 The first connection opens a browser window to sign in with a Salam account
 from [ai.salamlang.ir](https://ai.salamlang.ir) and allow the app. The client
-then keeps an access token and refreshes it on its own. Each tool call is
-recorded against the account and the app, with its arguments, so people can
-review what their apps did under
+then keeps an access token and refreshes it on its own. Any account works,
+including the free plan; nothing about the hosted server needs a paid plan or
+a manually created token. Each tool call is recorded against the account and
+the app, with its arguments, so people can review what their apps did under
 [Connected apps](https://ai.salamlang.ir/apps) and disconnect them there.
 
 The hosted server cannot see your files, so its compiler tools take the
@@ -158,18 +159,20 @@ workspace and looks for `std/` next to the compiler, so point
 
 With `--http` the server also reads:
 
-| Variable                  | Default                        | Purpose                                                                                                                                    |
-| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SALAM_MCP_HOST`          | `0.0.0.0`                      | Address to listen on                                                                                                                       |
-| `SALAM_MCP_PORT`          | `8080`                         | Port to listen on                                                                                                                          |
-| `SALAM_MCP_JOBS`          | `4`                            | Compiler processes allowed at once; extra calls wait                                                                                       |
-| `SALAM_MCP_TIMEOUT`       | `30`                           | Seconds before a compiler process is killed                                                                                                |
-| `SALAM_MCP_ORIGINS`       | empty                          | Comma separated browser origins to allow; empty allows all                                                                                 |
-| `SALAM_MCP_AUTH_URL`      | empty                          | Base URL of the authorization server's API; setting it turns sign-in on                                                                    |
-| `SALAM_MCP_AUTH_SECRET`   | empty                          | Shared secret for token introspection and activity reports                                                                                 |
-| `SALAM_MCP_ISSUER`        | `https://ai-api.salamlang.ir`  | Issuer listed in the protected resource metadata                                                                                           |
-| `SALAM_MCP_RESOURCES`     | `https://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them                                                                         |
-| `SALAM_MCP_SERVICE_TOKEN` | empty                          | A bearer token (32 characters or more) for a trusted internal caller such as the Salam AI assistant; its calls are reported as the service |
+| Variable                   | Default                        | Purpose                                                                                                                                    |
+| -------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SALAM_MCP_HOST`           | `0.0.0.0`                      | Address to listen on                                                                                                                       |
+| `SALAM_MCP_PORT`           | `8080`                         | Port to listen on                                                                                                                          |
+| `SALAM_MCP_JOBS`           | `4`                            | Compiler processes allowed at once; extra calls wait                                                                                       |
+| `SALAM_MCP_TIMEOUT`        | `600`                          | Seconds before a compiler process is killed                                                                                                |
+| `SALAM_MCP_MEMORY_SOFT_MB` | `1500`                         | Restart to give memory back above this, once no call is in flight                                                                          |
+| `SALAM_MCP_MEMORY_HARD_MB` | `3200`                         | Restart above this even with calls in flight                                                                                               |
+| `SALAM_MCP_ORIGINS`        | empty                          | Comma separated browser origins to allow; empty allows all                                                                                 |
+| `SALAM_MCP_AUTH_URL`       | empty                          | Base URL of the authorization server's API; setting it turns sign-in on                                                                    |
+| `SALAM_MCP_AUTH_SECRET`    | empty                          | Shared secret for token introspection and activity reports                                                                                 |
+| `SALAM_MCP_ISSUER`         | `https://ai-api.salamlang.ir`  | Issuer listed in the protected resource metadata                                                                                           |
+| `SALAM_MCP_RESOURCES`      | `https://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them                                                                         |
+| `SALAM_MCP_SERVICE_TOKEN`  | empty                          | A bearer token (32 characters or more) for a trusted internal caller such as the Salam AI assistant; its calls are reported as the service |
 
 ### 🔑 Sign-in
 
@@ -315,7 +318,7 @@ endless loop is reported as a timeout instead of hanging the server.
 In HTTP mode each call writes its `source` and `files` to a fresh temporary directory,
 compiles it there and deletes the directory afterwards, so concurrent callers
 never share files. Compiler processes are capped at `SALAM_MCP_JOBS` and
-killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 1 MB
+killed after `SALAM_MCP_TIMEOUT` seconds, request bodies are limited to 4 MB
 and sources to 256 KB, and the tools that execute a program are not offered.
 Run the container read-only with a size-limited `/tmp`, as above.
 

@@ -5,9 +5,53 @@ pkg.summary = An FTP and FTPS client: listing a directory, uploading and downloa
 pkg.title = The ftp package in Salam | FTP and FTPS
 pkg.description = The ftp package in Salam: connecting to an FTP and FTPS server, logging in, listing a directory, reading and writing, and uploading and downloading files and directories, with an example.
 pkg.import = ftp
+pkg.add = ftp
 pkg.intro <<
-<p>This package connects to FTP servers, for uploading a site to shared hosting or pulling files off old equipment. Plain FTP sends the password and the data unencrypted; wherever the server supports it, use <code>DialTLS</code>, which encrypts both the commands and the data with AUTH TLS.</p>
-<p>Transfers go in passive mode (PASV or EPSV), which works from behind a firewall. The parsing functions, such as <code>ParseListLine</code>, are available for writing tools of your own too.</p>
+<p>This package connects to FTP servers, for uploading a site to shared hosting or pulling files off old equipment and suppliers' servers. Plain FTP sends the password and the data unencrypted; wherever the server supports it, use <code>DialTLS</code>, which encrypts both the commands and the data with AUTH TLS. When the server also speaks SSH, SFTP through <a href="/packages/ssh/">ssh</a> is the better choice: one encrypted connection, no separate data channel.</p>
+<p>Transfers go in passive mode (EPSV, or PASV when the server lacks it), which works from behind a firewall; active mode (<code>PORT</code>) is not offered. The parsing functions, such as <code>ParseListLine</code>, are available for writing tools of your own too.</p>
+<p>Things to know:</p>
+<ul>
+<li><strong>Call <code>Binary</code> before transfers</strong>, or a server in ASCII mode may change line endings inside images and archives.</li>
+<li><strong><code>Upload</code> and <code>Download</code> hold the whole file in memory</strong>, and an interrupted transfer starts again from the beginning; there is no resume. Fine for site files and reports, not for multi-gigabyte backups.</li>
+<li><strong><code>Read</code>, <code>Write</code> and <code>Append</code> carry a <code>str</code></strong>, so they are for text: binary content stops at the first zero byte. Use <code>Upload</code> and <code>Download</code> for anything else.</li>
+<li>Servers that require TLS session reuse on the data connection refuse every transfer; see the last section.</li>
+</ul>
+
+<h2 id="guide-publish">Publish a site to shared hosting</h2>
+<p>The usual job: connect with <code>DialTLS</code>, refuse to go on unless both the commands and the data are encrypted, log in, and upload a build directory with <code>UploadDir</code>. Switch to binary mode with <code>Binary</code> before any transfer, or some servers will change the line endings inside images and archives. Keeping the old <code>index.html</code> under another name with <code>Rename</code> gives you something to go back to.</p>
+{{example.ftp-publish-site}}
+<p>This needs a real server, so it is only checked here. Every function that talks to the server leaves the reply in <code>LastCode</code> and <code>LastReply</code>, so after a <code>false</code> you can always print what the server said.</p>
+
+<h2 id="guide-sync">Fetch only the new files</h2>
+<p><code>List</code> returns one <code>FileInfo</code> per entry with the name, the size and whether it is a directory or a link. Comparing that with what is already on disk turns a full download into a cheap sync, which suits a nightly job that collects reports from a supplier.</p>
+{{example.ftp-sync-down}}
+<p>For a stricter check than "the file exists", compare <code>f.size</code> with the local size, or <code>ModTime</code> with the time you stored after the last run.</p>
+
+<h2 id="guide-listing">Read a directory listing yourself</h2>
+<p>FTP has no fixed format for listings; most servers send the same columns as <code>ls -l</code>. <code>ParseListLine</code> reads such a line into a <code>FileInfo</code>, which is useful when you get listings from somewhere else, such as a log or a <code>ListRaw</code> call, and want to work with them without a connection.</p>
+{{example.ftp-listing-report}}
+
+<h2 id="guide-tls-reuse">Servers that require TLS session reuse</h2>
+<p>Some FTPS servers insist that the data connection resumes the TLS session of the command connection. vsftpd does this with its default <code>require_ssl_reuse=YES</code>, and so do FileZilla Server and the Rebex test server. This package does not resume sessions yet, so on those servers logging in works but every listing and transfer is refused with reply 425:</p>
+{{example.ftp-public-demo}}
+<p>Run against <code>test.rebex.net</code>, it printed:</p>
+<pre class="code" dir="ltr"><code>encrypted: true true
+system: 215 UNIX Type: L8
+listing refused: 425 Cannot secure data connection - TLS session resumption required.</code></pre>
+<p>If you run the server, set <code>require_ssl_reuse=NO</code> in vsftpd. If you do not, and the server offers SFTP, use <a href="/packages/ssh/">ssh</a> instead; fall back to plain <code>Dial</code> only on a network you trust, since it sends the password in the clear.</p>
+
+<h2 id="guide-which">Which function for which job</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Job</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>Connect securely</td><td><code>DialTLS</code>, or <code>DialTLSWith</code> for a private CA; <code>Dial</code> then <code>AuthTLS</code> does the same in two steps</td></tr>
+<tr><td>Check that encryption is on</td><td><code>Secure</code> for the commands, <code>SecureData</code> for the files</td></tr>
+<tr><td>Small text files</td><td><code>Read</code>, <code>Write</code>, <code>Append</code></td></tr>
+<tr><td>Files on disk</td><td><code>Upload</code>, <code>Download</code>, <code>UploadDir</code>, <code>DownloadDir</code></td></tr>
+<tr><td>Look before you act</td><td><code>Exists</code>, <code>IsDir</code>, <code>Size</code>, <code>ModTime</code>, <code>List</code></td></tr>
+<tr><td>A command with no function of its own</td><td><code>Command</code>, which returns the reply code</td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.FileInfo = The information about one file from the server listing.
@@ -62,11 +106,11 @@ doc.ModTime = The modification time in <code>YYYYMMDDHHMMSS</code> form.
 doc.IsDir = It is a directory.
 doc.IsLink = It is a link.
 doc.Exists = The file or directory is there.
-doc.Read = Reads a file.
+doc.Read = Reads a remote file as text; binary content stops at the first zero byte, so use <code>Download</code> for it.
 doc.Write = Writes text to a file on the server.
 doc.Append = Adds text to the end of a file.
-doc.Download = Downloads a file into a local file.
-doc.Upload = Sends a local file.
+doc.Download = Downloads a remote file into a local file, byte for byte; the whole file is held in memory first.
+doc.Upload = Sends a local file, byte for byte; it is read into memory in full before the transfer.
 doc.Delete = Deletes a file.
 doc.Rename = Renames it.
 doc.Move = Moves it; the target directory is made when it is not there.

@@ -3,12 +3,14 @@ import type { ApiRequest, RequestStatus } from "./api";
 import { fmtCompact, fmtCost, fmtDateTime, fmtDuration, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconChevronDown } from "./icons";
 import { CopyButton } from "./Markdown";
+import { t } from "./i18n";
 
 const STATUS: Record<RequestStatus, { label: string; badge: string; dot: string }> = {
-  done: { label: "موفق", badge: "ok", dot: "ok" },
-  error: { label: "خطا", badge: "danger", dot: "error" },
-  aborted: { label: "نیمه‌کاره", badge: "", dot: "idle" },
-  pending: { label: "در حال پاسخ", badge: "pending", dot: "pending" },
+  done: { label: t("موفق", "Done"), badge: "ok", dot: "ok" },
+  error: { label: t("خطا", "Error"), badge: "danger", dot: "error" },
+  aborted: { label: t("نیمه‌کاره", "Aborted"), badge: "", dot: "idle" },
+  pending: { label: t("در حال پاسخ", "Answering"), badge: "pending", dot: "pending" },
+  lost: { label: t("قطع سرویس", "Service lost"), badge: "danger", dot: "error" },
 };
 
 export function preview(text: string, size = 140): string {
@@ -23,7 +25,7 @@ function TextBlock({ title, text }: { title: string; text: string }) {
         <span className="code-lang">{title}</span>
         {text && <CopyButton text={text} />}
       </div>
-      <pre dir="auto">{text || <span className="muted">خالی</span>}</pre>
+      <pre dir="auto">{text || <span className="muted">{t("خالی", "Empty")}</span>}</pre>
     </div>
   );
 }
@@ -31,19 +33,20 @@ function TextBlock({ title, text }: { title: string; text: string }) {
 function usageSummary(r: ApiRequest): { text: string; title: string } | null {
   const u = r.usage;
   if (!u) return null;
-  const t = tokenSplit(u);
-  if (t.total === 0 && !u.tools) return null;
-  const parts = [`${fmtCompact(t.input)} ورودی`, `${fmtCompact(t.output)} خروجی`];
-  const exact = [`${fmtNum(t.input)} توکن ورودی`, `${fmtNum(t.output)} توکن خروجی`];
-  if (t.cache > 0) {
-    parts.push(`${fmtCompact(t.cache)} کش`);
-    exact.push(`${fmtNum(t.cache)} توکن کش`);
+  const split = tokenSplit(u);
+  if (split.total === 0 && !u.tools) return null;
+  const parts = [t(`${fmtCompact(split.input)} ورودی`, `${fmtCompact(split.input)} in`), t(`${fmtCompact(split.output)} خروجی`, `${fmtCompact(split.output)} out`)];
+  const exact = [t(`${fmtNum(split.input)} توکن ورودی`, `${fmtNum(split.input)} input tokens`), t(`${fmtNum(split.output)} توکن خروجی`, `${fmtNum(split.output)} output tokens`)];
+  if (split.cache > 0) {
+    parts.push(t(`${fmtCompact(split.cache)} کش`, `${fmtCompact(split.cache)} cached`));
+    exact.push(t(`${fmtNum(split.cache)} توکن کش`, `${fmtNum(split.cache)} cached tokens`));
   }
   if (u.tools > 0) {
-    parts.push(`${fmtNum(u.tools)} ابزار`);
-    exact.push(`${fmtNum(u.tools)} فراخوانی ابزار`);
+    parts.push(t(`${fmtNum(u.tools)} ابزار`, `${fmtNum(u.tools)} tools`));
+    exact.push(t(`${fmtNum(u.tools)} فراخوانی ابزار`, `${fmtNum(u.tools)} tool calls`));
   }
-  return { text: `توکن: ${parts.join("، ")}`, title: exact.join("، ") };
+  const sep = t("، ", ", ");
+  return { text: t(`توکن: ${parts.join(sep)}`, `Tokens: ${parts.join(sep)}`), title: exact.join(sep) };
 }
 
 type ItemProps = {
@@ -65,7 +68,7 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
       <div className="event-row">
         <span className={`status-dot ${st.dot}`} aria-hidden="true" />
         {onKey ? (
-          <button type="button" className="link request-key" onClick={() => onKey(r.key.id, r.key.name)} title="نمایش درخواست‌های این کلید">
+          <button type="button" className="link request-key" onClick={() => onKey(r.key.id, r.key.name)} title={t("نمایش درخواست‌های این کلید", "Show this key's requests")}>
             <bdi>{r.key.name}</bdi>
           </button>
         ) : (
@@ -75,12 +78,12 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
         )}
         {r.project &&
           (onProject ? (
-            <button type="button" className="badge project-badge" onClick={() => onProject(r.project)} title="نمایش درخواست‌های این پروژه">
-              پروژه: <bdi>{r.project}</bdi>
+            <button type="button" className="badge project-badge" onClick={() => onProject(r.project)} title={t("نمایش درخواست‌های این پروژه", "Show this project's requests")}>
+              {t("پروژه:", "Project:")} <bdi>{r.project}</bdi>
             </button>
           ) : (
             <span className="badge project-badge">
-              پروژه: <bdi>{r.project}</bdi>
+              {t("پروژه:", "Project:")} <bdi>{r.project}</bdi>
             </span>
           ))}
         <span className={`badge ${st.badge}`}>{st.label}</span>
@@ -114,10 +117,10 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
       )}
       <div className="request-line">
         <p className="request-preview" dir="auto">
-          {preview(r.prompt) || <span className="muted">پرسش خالی</span>}
+          {preview(r.prompt) || <span className="muted">{t("پرسش خالی", "Empty prompt")}</span>}
         </p>
         <button type="button" className="button ghost small" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen(!open)}>
-          {open ? "بستن" : "جزئیات"}
+          {open ? t("بستن", "Close") : t("جزئیات", "Details")}
           <IconChevronDown width={16} height={16} className={`chevron ${open ? "up" : ""}`} />
         </button>
       </div>
@@ -125,46 +128,46 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
         <div id={detailId} className="request-detail">
           <dl className="request-facts">
             <div>
-              <dt>مدل</dt>
+              <dt>{t("مدل", "Model")}</dt>
               <dd dir="ltr">{r.model}</dd>
             </div>
             <div>
-              <dt>پاسخ جریانی</dt>
-              <dd>{r.stream ? "بله" : "خیر"}</dd>
+              <dt>{t("پاسخ جریانی", "Streaming")}</dt>
+              <dd>{r.stream ? t("بله", "Yes") : t("خیر", "No")}</dd>
             </div>
             <div>
-              <dt>نویسه‌ها</dt>
+              <dt>{t("نویسه‌ها", "Characters")}</dt>
               <dd>
-                {fmtNum(r.prompt_chars)} پرسش، {fmtNum(r.completion_chars)} پاسخ
+                {t(`${fmtNum(r.prompt_chars)} پرسش، ${fmtNum(r.completion_chars)} پاسخ`, `${fmtNum(r.prompt_chars)} prompt, ${fmtNum(r.completion_chars)} response`)}
               </dd>
             </div>
             {r.usage && tk && (
               <>
                 <div>
-                  <dt>توکن ورودی</dt>
+                  <dt>{t("توکن ورودی", "Input tokens")}</dt>
                   <dd>
                     {fmtNum(tk.input)}
-                    {tk.cache > 0 && ` (${fmtNum(r.usage.input)} تازه، ${fmtNum(r.usage.cache_read)} خوانده از کش، ${fmtNum(r.usage.cache_write)} نوشته در کش)`}
+                    {tk.cache > 0 && t(` (${fmtNum(r.usage.input)} تازه، ${fmtNum(r.usage.cache_read)} خوانده از کش، ${fmtNum(r.usage.cache_write)} نوشته در کش)`, ` (${fmtNum(r.usage.input)} fresh, ${fmtNum(r.usage.cache_read)} read from cache, ${fmtNum(r.usage.cache_write)} written to cache)`)}
                   </dd>
                 </div>
                 <div>
-                  <dt>توکن خروجی</dt>
+                  <dt>{t("توکن خروجی", "Output tokens")}</dt>
                   <dd>
                     {fmtNum(tk.output)}
-                    {r.usage.reasoning > 0 && ` (${fmtNum(r.usage.reasoning)} توکن استدلال)`}
+                    {r.usage.reasoning > 0 && t(` (${fmtNum(r.usage.reasoning)} توکن استدلال)`, ` (${fmtNum(r.usage.reasoning)} reasoning tokens)`)}
                   </dd>
                 </div>
                 <div>
-                  <dt>جمع توکن‌ها</dt>
+                  <dt>{t("جمع توکن‌ها", "Total tokens")}</dt>
                   <dd>{fmtNum(tk.total)}</dd>
                 </div>
                 <div>
-                  <dt>فراخوانی ابزار</dt>
+                  <dt>{t("فراخوانی ابزار", "Tool calls")}</dt>
                   <dd>{fmtNum(r.usage.tools || 0)}</dd>
                 </div>
                 {r.usage.cost > 0 && (
                   <div>
-                    <dt>هزینه</dt>
+                    <dt>{t("هزینه", "Cost")}</dt>
                     <dd>{fmtCost(r.usage.cost)}</dd>
                   </div>
                 )}
@@ -172,12 +175,12 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
             )}
             {r.end_user && (
               <div>
-                <dt>کاربر نهایی</dt>
+                <dt>{t("کاربر نهایی", "End user")}</dt>
                 <dd dir="ltr">{r.end_user}</dd>
               </div>
             )}
             <div>
-              <dt>زمان</dt>
+              <dt>{t("زمان", "Time")}</dt>
               <dd>{fmtDateTime(r.created)}</dd>
             </div>
             {r.ip && (
@@ -188,17 +191,17 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
             )}
             {r.agent && (
               <div>
-                <dt>کلاینت</dt>
+                <dt>{t("کلاینت", "Client")}</dt>
                 <dd dir="ltr">{r.agent}</dd>
               </div>
             )}
             <div>
-              <dt>شناسه</dt>
+              <dt>{t("شناسه", "ID")}</dt>
               <dd dir="ltr">{r.id}</dd>
             </div>
           </dl>
-          <TextBlock title="پرسش" text={r.prompt} />
-          <TextBlock title="پاسخ" text={r.response} />
+          <TextBlock title={t("پرسش", "Prompt")} text={r.prompt} />
+          <TextBlock title={t("پاسخ", "Response")} text={r.response} />
         </div>
       )}
     </li>
@@ -218,7 +221,7 @@ type Props = {
 };
 
 export function RequestList({ requests, loading, hasMore, onMore, empty, ...rest }: Props) {
-  if (requests.length === 0 && !loading) return <p className="empty-list">{empty || "هنوز درخواستی ثبت نشده است."}</p>;
+  if (requests.length === 0 && !loading) return <p className="empty-list">{empty || t("هنوز درخواستی ثبت نشده است.", "No requests yet.")}</p>;
   return (
     <div className="events">
       <ul className="event-list">
@@ -229,12 +232,12 @@ export function RequestList({ requests, loading, hasMore, onMore, empty, ...rest
       {loading && (
         <div className="list-loading" role="status">
           <span className="spinner" />
-          <span className="sr-only">در حال بارگذاری</span>
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       )}
       {hasMore && !loading && (
         <button type="button" className="button ghost more" onClick={onMore}>
-          نمایش موارد بیشتر
+          {t("نمایش موارد بیشتر", "Show more")}
         </button>
       )}
     </div>

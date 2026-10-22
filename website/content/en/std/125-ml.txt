@@ -5,9 +5,51 @@ pkg.summary = Classic machine learning: preprocessing, regression, classificatio
 pkg.title = The ml package in Salam | Like scikit-learn
 pkg.description = The ml package in Salam: scaling and encoding, linear and logistic regression, k nearest neighbours, naive Bayes, SVM, decision trees and random forests, gradient boosting, k-means and DBSCAN, evaluation metrics and cross-validation, with examples.
 pkg.import = ml
+pkg.add = ml
 pkg.intro <<
-<p>This package gives you the classic machine learning algorithms behind an interface much like scikit-learn. The data is a <a href="../matrix/">matrix</a> where each row is a sample and each column a feature, and the labels are a one-column matrix. Every model is a struct: build it with its parameters, train it with <code>fit</code> and use it with <code>predict</code>.</p>
-<p>Before training, prepare the data with <code>StandardScaler</code> and <code>SimpleImputer</code> and split it with <code>TrainTestSplit</code>; after that, measure the model with metrics such as <code>Accuracy</code>, <code>F1</code> and <code>R2Score</code>, and pick the parameters with <code>GridSearch</code>. For neural networks see <a href="../nn/">nn</a>.</p>
+<p>This package gives you the classic machine learning algorithms behind an interface much like scikit-learn. The data is a <a href="/std/matrix/">matrix</a> where each row is a sample and each column a feature, and the labels are a one-column matrix. Every model is a struct: build it with its parameters, train it with <code>fit</code> and use it with <code>predict</code>.</p>
+<p>Before training, prepare the data with <code>StandardScaler</code> and <code>SimpleImputer</code> and split it with <code>TrainTestSplit</code>; after that, measure the model with metrics such as <code>Accuracy</code>, <code>F1</code> and <code>R2Score</code>, and pick the parameters with <code>GridSearch</code>. For neural networks see <a href="/packages/nn/">nn</a>; for a trained model from Python, <a href="/packages/onnx/">onnx</a>.</p>
+<h3>Things that trip people up</h3>
+<ul>
+<li>Labels are a one-column <code>matrix</code> of numbers. For classes, use 0, 1, 2 and so on; map class names to numbers yourself and keep the mapping.</li>
+<li>Nothing stops the program on bad input. <code>fit</code> returns false (and the model's <code>ok</code> stays false) when the shapes do not match, and <code>TrainTestSplit</code> returns empty matrices when <code>x</code> and <code>y</code> have different row counts. Check before you go on.</li>
+<li>Fit scalers, imputers and encoders on the training rows only, then use the same fitted object on the test rows and on new data.</li>
+<li>Models and results own matrices. Call <code>free</code> on models and results you are done with in long-running programs.</li>
+<li>Random parts (splits, forests, k-means starts) take a <code>seed</code>, so a run can be repeated exactly. Change the seed to see how much a result depends on luck.</li>
+</ul>
+
+<h2 id="guide-workflow">The usual workflow: split, scale, fit, measure</h2>
+<p>Every supervised model follows the same steps. Keep part of the data aside with <code>TrainTestSplit</code>, so that the model is judged on samples it never saw. Fit the scaler on the training part only and apply the same scaler to the test part and to any new sample; fitting it on all the data would leak information from the test set. Then <code>fit</code>, <code>predict</code> and measure. <code>ConfusionMatrix</code> shows which classes are mixed up, and <code>predict_proba</code> gives a probability instead of a hard answer.</p>
+{{example.ml-guide-workflow}}
+<p>The fourth argument of <code>TrainTestSplit</code> is a seed, so the split is the same on every run. With twelve samples the test set has three, which is far too few to trust the accuracy; the next sections show better ways to judge a model.</p>
+
+<h2 id="guide-regression">Predict a number: linear regression</h2>
+<p>When the target is a quantity, such as a price, use a regressor. After <code>fit</code>, <code>coef</code> holds one weight per feature and <code>intercept</code> the base value, so the model can be read directly: here each square meter adds about 2 and each year of age takes away about 1.4. <code>R2Score</code> and <code>RMSE</code> measure the fit; RMSE is in the same unit as the target.</p>
+{{example.ml-guide-prices}}
+
+<h2 id="guide-compare">Compare models with cross-validation</h2>
+<p>One split can be lucky or unlucky. <code>StratifiedKFold</code> cuts the data into folds that each keep the share of every class, and <code>CrossValScore</code> trains on all folds but one and tests on the remaining one, for every fold in turn. It takes the model as a function that trains and predicts, so any model fits, and the metric as another function. <code>MeanScore</code> gives the average over the folds.</p>
+{{example.ml-guide-compare}}
+
+<h2 id="guide-clusters">Find groups without labels: KMeans</h2>
+<p>Clustering needs no labels: <code>KMeans</code> puts the samples into <code>k</code> groups of similar values. Scale first, otherwise the feature with the biggest numbers (here spending) decides everything. <code>SilhouetteScore</code> near 1 means well separated groups. The centers are in scaled units, so <code>inverse_transform</code> turns them back into visits and spending that you can describe.</p>
+{{example.ml-guide-segments}}
+
+<h2 id="guide-text">Classify text: a small spam filter</h2>
+<p>Text has to become numbers first. The simplest way is a count matrix: one row per message, one column per word of a vocabulary, holding how often the word appears. <code>MultinomialNB</code> is made for counts like these and trains in one pass. <code>alpha</code> smooths the counts so a word never seen in one class does not rule that class out.</p>
+{{example.ml-guide-spam}}
+<div class="table-wrap"><table>
+<thead><tr><th>Task</th><th>Start with</th><th>Measure with</th></tr></thead>
+<tbody>
+<tr><td>Predict a number</td><td><code>LinearReg</code></td><td><code>R2Score</code>, <code>RMSE</code></td></tr>
+<tr><td>Yes or no, with a probability</td><td><code>LogisticRegression</code></td><td><code>Accuracy</code>, <code>F1</code>, <code>ConfusionMatrix</code></td></tr>
+<tr><td>Several classes, small data</td><td><code>KNNClassifier</code>, <code>DecisionTree</code>, <code>GaussianNB</code></td><td><code>CrossValScore</code></td></tr>
+<tr><td>Tabular data, best accuracy</td><td><code>RandomForest</code>, <code>GradientBoosting</code></td><td><code>CrossValScore</code>, <code>GridSearch</code></td></tr>
+<tr><td>Fewer columns, or a picture of the data</td><td><code>PCA</code>, <code>TSNE</code></td><td>Explained variance</td></tr>
+<tr><td>Word counts</td><td><code>MultinomialNB</code></td><td><code>Accuracy</code></td></tr>
+<tr><td>Groups without labels</td><td><code>KMeans</code></td><td><code>SilhouetteScore</code></td></tr>
+</tbody>
+</table></div>
 >>
 
 doc.LDA.ridge = Covariance regularisation, for stability.

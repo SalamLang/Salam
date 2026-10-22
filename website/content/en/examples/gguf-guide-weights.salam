@@ -1,0 +1,47 @@
+import gguf
+import compress
+import encoding.binary
+import conv
+
+func write_name(b &: compress.ByteBuf, text: str):
+    binary.WriteU64LE(b, text.len() as i64)
+    compress.BufPushBytes(b, text as void*, text.len())
+end
+
+func main:
+    mut b := compress.NewByteBuf()
+    compress.BufPushBytes(b, "GGUF" as void*, 4)
+    binary.WriteU32LE(b, 3)
+    binary.WriteU64LE(b, 1)
+    binary.WriteU64LE(b, 0)
+    write_name(b, "token_embd.weight")
+    binary.WriteU32LE(b, 2)
+    binary.WriteU64LE(b, 32)
+    binary.WriteU64LE(b, 2)
+    binary.WriteU32LE(b, gguf.GGML_Q8_0)
+    binary.WriteU64LE(b, 0)
+    until compress.BufLen(b) % 32 != 0:
+        binary.WriteU8(b, 0)
+    end
+    repeat 2 in row:
+        binary.WriteU16LE(b, 0x2E66)
+        repeat 32 in j:
+            q := (row * 32 + j) * 3 - 60
+            binary.WriteU8(b, q & 255)
+        end
+    end
+    mut ok := false
+    mut model := gguf.ParseGguf(b, ok)
+    index := model.tensor_index("token_embd.weight")
+    info := model.tensors.get(index)
+    println info.name, "dims", info.dims.get(0), "x", info.dims.get(1), "stored in", gguf.TensorBytes(model, index), "bytes"
+    mut weights := gguf.LoadTensorF32(model, index, ok)
+    println "loaded:", ok, "shape", weights.shape.get(0), "x", weights.shape.get(1)
+    mut row := ""
+    repeat 4 in j:
+        row = row + " " + conv.FormatFloatPrec(weights.at2(1, j), 3)
+    end
+    println "embedding of token 1 starts with" + row
+    weights.free()
+    model.free()
+end

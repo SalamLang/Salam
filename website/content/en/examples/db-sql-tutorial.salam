@@ -1,0 +1,103 @@
+import db.sql
+import str
+
+mut g_schema := sql.Catalog {}
+
+func str_of(n: int): str:
+    ret str.FromInt(n as i64)
+end
+
+func step(n: int, title: str):
+    println ""
+    println "step " + str_of(n) + ": " + title
+end
+
+func try_query(q: str):
+    mut r := sql.Check(q, g_schema)
+    if r.ok and r.warnings == 0:
+        println "  ok   " + q
+    else:
+        println "  bad  " + q
+        mut i := 0
+        until i < r.items.len():
+            d := r.items.get(i)
+            println "       " + d.code + " " + d.message
+            if not str.IsEmpty(d.help):
+                println "       " + d.help
+            end
+            i = i + 1
+        end
+    end
+    sql.FreeReport(r)
+end
+
+func main:
+    step(1, "the schema you already have")
+    g_schema = sql.NewCatalog(sql.DialectOf(sql.SQLITE))
+    defer sql.FreeCatalog(g_schema)
+    mut ddl := sql.Apply(g_schema, """
+        CREATE TABLE authors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            country TEXT
+        );
+        CREATE TABLE books (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            author_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            year INTEGER,
+            price REAL
+        );
+    """)
+    println "  loaded " + str_of(sql.TableCount(g_schema)) + " tables, " + str_of(sql.ColumnCount(g_schema, "books")) + " columns on books"
+    sql.FreeReport(ddl)
+
+    step(2, "the queries you already have")
+    try_query("SELECT id, titles FROM books WHERE author_id = ?")
+    try_query("SELECT b.title, a.nationality FROM books b JOIN authors a ON a.id = b.author_id")
+    try_query("INSERT INTO books (title) VALUES (?)")
+    try_query("SELECT id FROM books WHERE year = 'recent'")
+    try_query("DELETE FROM books")
+
+    step(3, "the same five, put right")
+    try_query("SELECT id, title FROM books WHERE author_id = ?")
+    try_query("SELECT b.title, a.country FROM books b JOIN authors a ON a.id = b.author_id")
+    try_query("INSERT INTO books (author_id, title) VALUES (?, ?)")
+    try_query("SELECT id FROM books WHERE year = 2024")
+    try_query("DELETE FROM books WHERE id = ?")
+
+    step(4, "what a query takes and gives back")
+    mut a := sql.Analyze("SELECT books.title, books.price, authors.country FROM books JOIN authors ON authors.id = books.author_id WHERE books.year > ?", g_schema)
+    println "  it is a " + sql.StmtKindName(a.kind) + " on " + a.table
+    p := a.params.get(0)
+    println "  takes " + p.column + " as " + sql.SalamType(p.kind, p.not_null)
+    mut i := 0
+    until i < a.results.len():
+        c := a.results.get(i)
+        println "  gives " + c.name + " as " + sql.SalamType(c.kind, not c.nullable)
+        i = i + 1
+    end
+    sql.FreeAnalysis(a)
+
+    step(5, "the values go in safely")
+    mut args := sql.NewArgs()
+    sql.AddText(args, "O'Brien")
+    sql.AddInt(args, 1988 as i64)
+    mut rep := sql.Report {}
+    filled := sql.Fill("INSERT INTO books (title, year) VALUES (?, ?)", args, sql.DialectOf(sql.SQLITE), rep)
+    println "  " + filled
+    sql.FreeReport(rep)
+    sql.FreeArgs(args)
+
+    step(6, "or let it write the code for you")
+    mut gen := sql.Report {}
+    mut queries := sql.ParseQueries("""
+-- name: BooksByAuthor :many
+SELECT id, title, year FROM books WHERE author_id = ?;
+""", gen)
+    code := sql.Generate("store", queries, g_schema, gen)
+    println code
+    sql.FreeQueries(queries)
+    sql.FreeReport(gen)
+    ret 0
+end

@@ -1,0 +1,61 @@
+import encoding.json
+import jwt
+import net.http
+import net.router
+
+mut guard := jwt.NewGuard("k8R2pX7wQ4mZ9vL1cT6yB3nH5sD0fG2a")
+
+func login(ctx: i64):
+    mut c := jwt.NewClaims()
+    c.sub = http.Form(ctx, "user")
+    jwt.SetStr(c, "scope", "orders:read")
+    mut err := 0
+    token := jwt.Issue(guard, c, 900, err)
+    http.Json(ctx, "{\"token\":\"" + token + "\"}")
+end
+
+func orders(ctx: i64):
+    mut t := jwt.Token {}
+    if not jwt.RequireScope(ctx, guard, "orders:read", t): ret end
+    http.Json(ctx, "{\"orders_for\":\"" + t.claims.sub + "\"}")
+end
+
+func admin(ctx: i64):
+    mut t := jwt.Token {}
+    if not jwt.RequireScope(ctx, guard, "admin", t): ret end
+    http.Text(ctx, "welcome, admin")
+end
+
+func call(path: str, token: str):
+    mut headers := http.NewHeaders()
+    if token.len() > 0: headers.insert("Authorization", "Bearer " + token) end
+    r := http.GetWith("http://127.0.0.1:18661" + path, headers)
+    println path, http.Status(r), http.Body(r)
+end
+
+func main:
+    guard.opts.require_exp = true
+    mut r := router.NewRouter()
+    router.Post(r, "/login", login)
+    router.Get(r, "/orders", orders)
+    router.Get(r, "/admin", admin)
+    mut s := http.NewServer(18661)
+    http.SetHost(s, "127.0.0.1")
+    http.Use(s, r)
+    if not http.RunBackground(s):
+        println "port 18661 is busy"
+        ret 1
+    end
+    answer := http.Post("http://127.0.0.1:18661/login", "user=sara")
+    token := json.Get(http.Body(answer), "token")
+    call("/orders", "")
+    call("/orders", token)
+    call("/admin", token)
+
+    mut forever := jwt.NewClaims()
+    forever.sub = "sara"
+    jwt.SetStr(forever, "scope", "orders:read")
+    mut err := 0
+    call("/orders", jwt.SignHS256(forever, guard.secret, err))
+    ret 0
+end

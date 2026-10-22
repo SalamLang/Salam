@@ -5,9 +5,45 @@ pkg.summary = A GraphQL server: schemas, resolvers, query execution and HTTP han
 pkg.title = The graphql package in Salam | GraphQL
 pkg.description = The graphql package in Salam: building a schema from SDL or from code, field resolvers, running queries with variables, validation, errors, and a GraphQL server and client over HTTP, with examples.
 pkg.import = graphql
+pkg.add = graphql
 pkg.intro <<
 <p>GraphQL is a language for asking an API for data: the client asks for exactly the fields it needs and the server sends back just those. This package is a complete server side implementation of the specification. Write the schema as SDL text and pass it to <code>ParseSchema</code>, or build it with the <code>Add...</code> functions, register resolvers for the fields and run a query with <code>ExecuteSource</code>.</p>
-<p>A resolver is a function that takes a slot number; it reads the arguments and the parent object with <code>ArgStr</code>, <code>ParentField</code> and their siblings, and answers with one of the <code>Resolve...</code> functions or with <code>Fail</code>. A field without a resolver takes the value of the same name from the parent object. For a web server, call <code>HandleHttpSimple</code> inside a <a href="../net-http/">net/http</a> handler.</p>
+<p>A resolver is a function that takes a slot number; it reads the arguments and the parent object with <code>ArgStr</code>, <code>ParentField</code> and their siblings, and answers with one of the <code>Resolve...</code> functions or with <code>Fail</code>. A field without a resolver takes the value of the same name from the parent object. For a web server, call <code>HandleHttpSimple</code> inside a <a href="/std/net-http/">net/http</a> handler.</p>
+<p>For calling someone else's GraphQL API, the client helpers <code>BuildRequestBody</code> and <code>ParseResponse</code> build the JSON body and read the answer; send it with <a href="/std/net-httpx/">net/httpx</a>. When you control both sides and do not need clients choosing their own fields, a plain JSON route or <a href="/packages/rpc/">rpc</a> is less work.</p>
+<div class="note"><p>Things that catch people out:</p>
+<ul>
+<li>A subscription runs once and returns one result, like a query. There is no event stream and no WebSocket transport; push updates yourself with <a href="/std/net-websocket/">net/websocket</a>.</li>
+<li>A field that fails becomes <code>null</code> and the rest of the answer still arrives, so check <code>ResultOk</code> even when <code>data</code> is there.</li>
+<li>Resolvers run one field at a time. A list of 100 posts whose <code>author</code> resolver queries a database makes 100 queries; load what the list needs once, as the first guide shows.</li>
+</ul></div>
+<h2 id="guide-relations">Related types and field resolvers</h2>
+<p>Most schemas link types together: a post has an author, an author has posts. Give the root field a resolver that returns the list, and give the linking field its own resolver on the child type. Inside it, <code>ParentField</code> reads the object being resolved, here the post, so the resolver can look up the author by <code>authorId</code>. Fields without a resolver, such as <code>title</code> and <code>name</code>, are copied from the object by name.</p>
+{{example.graphql-guide-blog}}
+<p>The second query shows the main promise of GraphQL: it asks for ids only, so the <code>author</code> resolver never runs. A resolver that is expensive, like a database lookup, only costs something when a client asks for its field. When many posts share authors, load the authors once into a lookup table, such as a <code>HashMap</code> keyed by id, instead of searching or querying once per post.</p>
+
+<h2 id="guide-mutations">Mutations with input types</h2>
+<p>Changes go through the <code>Mutation</code> type. An <code>input</code> type groups the arguments, and the client sends the values as variables so the query text stays fixed. The resolver receives the input object with <code>Arg</code> and reads its fields with <a href="/std/encoding-value/">encoding/value</a>.</p>
+{{example.graphql-guide-mutation}}
+<p>Two kinds of error show up here. When the resolver calls <code>Fail</code>, the request ran but that field failed: the message carries the field path and position. When the input does not match the schema, as in the last query where the required <code>title</code> is missing, the request is rejected before any resolver runs. Either way <code>ResultOk</code> is false and <code>ResultErrorMessage</code> gives the first message.</p>
+
+<h2 id="guide-context">Per request context and authorization</h2>
+<p>Who is asking is not an argument of the query; it comes from the HTTP request, a cookie or a token. Pass it in as the context value of <code>ExecuteSource</code> and read it in any resolver with <code>Context</code>. A resolver that refuses calls <code>Fail</code>, and the other fields of the same query still get their data.</p>
+{{example.graphql-guide-context}}
+<p>Note that a failed field becomes <code>null</code>, with an entry in <code>errors</code> naming its path, instead of failing the whole response. This is why fields that may be refused should be nullable in the schema: <code>payroll: Int</code>, not <code>payroll: Int!</code>. A non-null field that fails makes its parent <code>null</code> too.</p>
+
+<h2 id="guide-server">A GraphQL endpoint over HTTP</h2>
+<p><code>HandleHttp</code> turns an HTTP request into a GraphQL answer: it accepts <code>POST</code> with a JSON body and <code>GET</code> with the query in the URL, runs it, and returns the status, content type and body for the response. Its last argument is the context, so the handler below reads a bearer token and hands the user name to the resolvers. <code>HandleHttpSimple</code> is the same without a root value and context.</p>
+{{example.graphql-guide-server}}
+<p>Run the program, then query it from another terminal:</p>
+<pre class="code" dir="ltr"><code>curl -X POST http://127.0.0.1:8090/graphql -H 'Content-Type: application/json' \
+  -d '{"query":"{ me echo(text: \"salam\") }"}'
+curl -X POST http://127.0.0.1:8090/graphql -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sara' -d '{"query":"{ me }"}'
+curl 'http://127.0.0.1:8090/graphql?query=%7B%20me%20%7D'</code></pre>
+<pre class="code" dir="ltr"><code>{"data": {"me": null, "echo": "salam"}}
+{"data": {"me": "sara"}}
+{"data": {"me": null}}</code></pre>
+<p>A real service checks the token, for example with <a href="/std/jwt/">jwt</a>, before trusting the name in it. <code>GET</code> only runs queries; mutations must come by <code>POST</code>, so a link or an image tag cannot change data.</p>
 >>
 
 doc.Schema = A schema: every type, directive and root type.

@@ -167,10 +167,13 @@ func _fixed_raw_dist_lengths(): Vector<int>:
     ret v
 end
 
-func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable): bool:
+func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int): bool:
     until true:
         sym := _decode_raw_symbol(r, littable)
         if sym < 0 or r.bad:
+            ret false
+        end
+        if max > 0 and BufLen(out) > max:
             ret false
         end
         if sym < 256:
@@ -202,7 +205,7 @@ func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable,
     end
 end
 
-func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf): bool:
+func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int): bool:
     hlit := BitReadBits(r, 5) + 257
     hdist := BitReadBits(r, 5) + 1
     hclen := BitReadBits(r, 4) + 4
@@ -287,21 +290,22 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf): bool:
     defer litlengths.free()
     defer distlengths.free()
 
-    ok := _raw_inflate_block(r, out, littable, disttable)
+    ok := _raw_inflate_block(r, out, littable, disttable, max)
     _raw_huff_table_free(littable)
     _raw_huff_table_free(disttable)
     ret ok
 end
 
-@en "RawInflate"
-@fa "کدگشایی دیفلیت خام"
-pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
+func _raw_inflate(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
     ok = true
     mut r := NewBitReader(p, n)
     mut cap := 0
     if expected_size > 0: cap = expected_size end
     if (cap as i64) > (n as i64) * (1032 as i64) + (1024 as i64):
         cap = n * 1032 + 1024
+    end
+    if max > 0 and cap > max:
+        cap = max
     end
     mut out := NewByteBufCap(cap)
 
@@ -318,6 +322,9 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
                 b := BitReadBits(r, 8)
                 BufPush(out, b)
                 k += 1
+                if max > 0 and BufLen(out) > max:
+                    r.bad = true
+                end
             end
         else:
             if btype == 1:
@@ -327,7 +334,7 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
                 mut disttable := _build_raw_huff_table(distlengths)
                 litlengths.free()
                 distlengths.free()
-                good := _raw_inflate_block(r, out, littable, disttable)
+                good := _raw_inflate_block(r, out, littable, disttable, max)
                 _raw_huff_table_free(littable)
                 _raw_huff_table_free(disttable)
                 if not good:
@@ -336,7 +343,7 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
                 end
             else:
                 if btype == 2:
-                    if not _raw_inflate_dynamic_block(r, out):
+                    if not _raw_inflate_dynamic_block(r, out, max):
                         ok = false
                         ret out
                     end
@@ -352,4 +359,16 @@ pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
         end
     end
     ret out
+end
+
+@en "RawInflate"
+@fa "کدگشایی دیفلیت خام"
+pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
+    ret _raw_inflate(p, n, expected_size, 0, ok)
+end
+
+@en "RawInflateMax"
+@fa "کدگشایی دیفلیت خام با سقف"
+pub func RawInflateMax(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
+    ret _raw_inflate(p, n, expected_size, max, ok)
 end

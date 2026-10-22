@@ -1,0 +1,366 @@
+package driver
+
+import os
+import str
+import os.shell
+
+include pth "../sal_path.salam"
+include sm "../semantic/semantic.salam"
+include at "../ast.salam"
+include lg "../logger.salam"
+include co "../sal_core.salam"
+include i18 "../i18n.salam"
+
+func lib_targets_windows(opt &: Dr): bool:
+    ret triple_is_windows(opt.llvm_target) or str.Contains(opt.cc, "mingw")
+end
+
+func lib_targets_mac(opt &: Dr): bool:
+    if str.Len(opt.llvm_target) > 0:
+        ret str.Contains(opt.llvm_target, "apple") or str.Contains(opt.llvm_target, "darwin")
+    end
+    if SALAM_OS_MAC:
+        ret true
+    else:
+        ret false
+    end
+end
+
+func lib_output_name(opt &: Dr, stem: str): str:
+    if str.Len(opt.output) > 0:
+        ret opt.output
+    end
+    if str.Equals(opt.lib_kind, "static"):
+        ret "lib" + stem + ".a"
+    end
+    if lib_targets_windows(opt):
+        ret stem + ".dll"
+    end
+    if lib_targets_mac(opt):
+        ret "lib" + stem + ".dylib"
+    end
+    ret "lib" + stem + ".so"
+end
+
+func lib_init_source(entry_header: str): str:
+    base := pth.PathBase(entry_header)
+    init := str.Substr(base, 0, str.Len(base) - 2) + "_init"
+    mut s := "#include \"" + base + "\"\n"
+    s = s + "#if defined(__TINYC__)\n"
+    s = s + "static void salam_lib_fini(void) __attribute__((destructor));\n"
+    s = s + "static void salam_lib_fini(void) { salam_out_flush(); }\n"
+    s = s + "#endif\n"
+    s = s + "static void salam_lib_init(void) __attribute__((constructor));\n"
+    s = s + "static void salam_lib_init(void) { " + init + "(); }\n"
+    ret s
+end
+
+func lib_proto_of(line: str, name: str): str:
+    t := str.TrimRight(line)
+    if not str.EndsWith(t, "{"):
+        ret ""
+    end
+    at_pos := str.IndexOf(t, " " + name + "(")
+    if at_pos <= 0:
+        ret ""
+    end
+    if str.StartsWith(t, " ") or str.StartsWith(t, "\t") or str.StartsWith(t, "static"):
+        ret ""
+    end
+    ret str.TrimRight(str.Substr(t, 0, str.Len(t) - 1)) + ";"
+end
+
+func write_lib_header(path: str, guard: str, cfiles &: Vector<str>, names &: Vector<str>): bool:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "#ifndef " + guard + "\n#define " + guard + "\n\n")
+    str.BufAppend(sb, "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n")
+    str.BufAppend(sb, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n")
+    repeat names.len() in ni:
+        name := names.get(ni)
+        mut found := ""
+        repeat cfiles.len() in ci:
+            if str.Len(found) > 0:
+                break
+            end
+            lines := str.Split(os.ReadFile(cfiles.get(ci)), "\n")
+            defer lines.free()
+            repeat lines.len() in li:
+                p := lib_proto_of(lines.get(li), name)
+                if str.Len(p) > 0:
+                    found = p
+                    break
+                end
+            end
+        end
+        if str.Len(found) > 0:
+            str.BufAppend(sb, found + "\n")
+        end
+    end
+    str.BufAppend(sb, "\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n")
+    text := str.BufStr(sb)
+    str.BufFree(sb)
+    ret os.WriteFile(path, text) >= 0
+end
+
+func lib_header_guard(stem: str): str:
+    mut sb := str.NewBuilder()
+    repeat str.Len(stem) in i:
+        c := byte_at(stem, i)
+        if c >= 97 and c <= 122:
+            str.BufAppendChar(sb, c - 32)
+        else (c >= 65 and c <= 90) or (c >= 48 and c <= 57):
+            str.BufAppendChar(sb, c)
+        else:
+            str.BufAppendChar(sb, 95)
+        end
+    end
+    str.BufAppend(sb, "_H")
+    g := str.BufStr(sb)
+    str.BufFree(sb)
+    ret g
+end
+
+func lib_archiver(opt &: Dr, use_tcc: bool): str:
+    if use_tcc:
+        ret opt.cc + " -ar rcs"
+    end
+    if str.Contains(opt.cc, "mingw"):
+        dash := str.LastIndex(opt.cc, "-")
+        if dash > 0:
+            ret str.Substr(opt.cc, 0, dash) + "-ar rcs"
+        end
+    end
+    if str.Contains(opt.cc, "clang") and sm_has_tool("llvm-ar"):
+        ret "llvm-ar rcs"
+    end
+    ret "ar rcs"
+end
+
+func sm_has_tool(name: str): bool:
+    mut resolved := ""
+    ret sm.FindPathTool(name, resolved)
+end
+
+func lib_link_flags(opt &: Dr, output: str, stem: str): str:
+    base := pth.PathBase(output)
+    if lib_targets_windows(opt):
+        implib := pth.PathJoin(pth.PathDir(output), "lib" + stem + ".dll.a")
+        ret " -shared -Wl,--out-implib," + shell_arg(implib)
+    end
+    if lib_targets_mac(opt):
+        ret " -dynamiclib -install_name @rpath/" + shell_arg(base)
+    end
+    if str.Contains(lib_linker(opt), "tcc"):
+        ret " -shared"
+    end
+    mut flags := " -shared -Wl,-soname," + shell_arg(base)
+    if str.Contains(opt.cc, "tcc"):
+        flags = flags + " -Wl,-z,noexecstack"
+    end
+    ret flags
+end
+
+func lib_linker(opt &: Dr): str:
+    if str.Equals(opt.lib_kind, "shared") and str.Contains(opt.cc, "tcc") and not lib_targets_windows(opt) and not lib_targets_mac(opt) and sm_has_tool("cc"):
+        ret "cc"
+    end
+    ret opt.cc
+end
+
+func lib_archive_cmd(opt &: Dr, use_tcc: bool, output: str, objs &: Vector<str>, links &: Vector<str>): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, lib_archiver(opt, use_tcc))
+    str.BufAppendChar(sb, 32)
+    str.BufAppend(sb, shell_arg(output))
+    repeat objs.len() in i:
+        str.BufAppendChar(sb, 32)
+        str.BufAppend(sb, shell_arg(objs.get(i)))
+    end
+    repeat links.len() in j:
+        mut mapped := Vector {} as Vector<str>
+        defer mapped.free()
+        if native_args(links.get(j), mapped):
+            repeat mapped.len() in k:
+                m := mapped.get(k)
+                if str.Len(m) > 0 and byte_at(m, 0) != 45:
+                    str.BufAppendChar(sb, 32)
+                    str.BufAppend(sb, shell_arg(m))
+                end
+            end
+        end
+    end
+    cmd := str.BufStr(sb)
+    str.BufFree(sb)
+    ret cmd
+end
+
+func lib_c_prefix(stem: str): str:
+    mut sb := str.NewBuilder()
+    repeat str.Len(stem) in i:
+        c := byte_at(stem, i)
+        if (c >= 97 and c <= 122) or (c >= 48 and c <= 57):
+            str.BufAppendChar(sb, c)
+        else c >= 65 and c <= 90:
+            str.BufAppendChar(sb, c + 32)
+        else:
+            str.BufAppendChar(sb, 95)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func lib_dlltool_machine(opt &: Dr): str:
+    t := str.Lower(opt.llvm_target)
+    if str.StartsWith(t, "i686") or str.StartsWith(t, "i386") or str.Contains(opt.cc, "i686"):
+        ret "i386"
+    end
+    if str.StartsWith(t, "aarch64") or str.StartsWith(t, "arm64"):
+        ret "arm64"
+    end
+    ret "i386:x86-64"
+end
+
+func lib_write_msvc_import(opt &: Dr, output: str, stem: str, exports &: Vector<str>): str:
+    dir := pth.PathDir(output)
+    def_path := pth.PathJoin(dir, stem + ".def")
+    mut text := "LIBRARY " + pth.PathBase(output) + "\nEXPORTS\n"
+    repeat exports.len() in i:
+        text = text + "    " + exports.get(i) + "\n"
+    end
+    if os.WriteFile(def_path, text) < 0:
+        ret ""
+    end
+    mut tool := ""
+    if sm_has_tool("llvm-dlltool"):
+        tool = "llvm-dlltool"
+    else sm_has_tool("x86_64-w64-mingw32-dlltool"):
+        tool = "x86_64-w64-mingw32-dlltool"
+    else:
+        ret def_path
+    end
+    lib_path := pth.PathJoin(dir, stem + ".lib")
+    cmd := tool + " -m " + lib_dlltool_machine(opt) + " -d " + shell_arg(def_path) + " -l " + shell_arg(lib_path) + " -D " + shell_arg(pth.PathBase(output))
+    if shell.System(cmd) != 0:
+        ret def_path
+    end
+    ret lib_path
+end
+
+func lib_c_type(a &: at.Ast, tnode: int): str:
+    if tnode == 0:
+        ret "void"
+    end
+    t := at.Get(a, tnode).type_str
+    if str.Equals(t, "i8"): ret "int8_t" end
+    if str.Equals(t, "i16"): ret "int16_t" end
+    if str.Equals(t, "i32"): ret "int32_t" end
+    if str.Equals(t, "i64"): ret "int64_t" end
+    if str.Equals(t, "u8"): ret "uint8_t" end
+    if str.Equals(t, "u16"): ret "uint16_t" end
+    if str.Equals(t, "u32"): ret "uint32_t" end
+    if str.Equals(t, "u64"): ret "uint64_t" end
+    if str.Equals(t, "usize") or str.Equals(t, "size"): ret "size_t" end
+    if str.Equals(t, "bool"): ret "bool" end
+    if str.Equals(t, "f32"): ret "float" end
+    if str.Equals(t, "f64"): ret "double" end
+    if str.Equals(t, "char"): ret "char" end
+    if str.Equals(t, "str"): ret "const char*" end
+    if str.Equals(t, "void"): ret "void" end
+    ret "void*"
+end
+
+func lib_ast_exports(a &: at.Ast, prog: int, names &: Vector<str>, protos &: Vector<str>):
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind != at.AST_FUNC_DEF or not d.is_extern or d.a == 0:
+            continue
+        end
+        mut ps := ""
+        repeat d.list.len() in pi:
+            p := at.Get(a, d.list.get(pi))
+            if pi > 0:
+                ps = ps + ", "
+            end
+            ps = ps + lib_c_type(a, p.ty) + " " + p.name
+        end
+        if str.Len(ps) == 0:
+            ps = "void"
+        end
+        names.push(d.name)
+        protos.push(lib_c_type(a, d.ty) + " " + d.name + "(" + ps + ");")
+    end
+end
+
+func llvm_lib_finish(lgr: lg.Logger, opt &: Dr, objpath: str, links: Vector<str>, a &: at.Ast, prog: int, final: str, stem: str): int:
+    mut sb := str.NewBuilder()
+    if str.Equals(opt.lib_kind, "static"):
+        _rm := os.Remove(final)
+        if sm_has_tool("llvm-ar"):
+            str.BufAppend(sb, "llvm-ar rcs ")
+        else:
+            str.BufAppend(sb, "ar rcs ")
+        end
+        str.BufAppend(sb, shell_arg(final) + " " + shell_arg(objpath))
+        repeat links.len() in i:
+            l := links.get(i)
+            if str.Len(l) > 0 and byte_at(l, 0) != 45 and link_spec_is_path(l):
+                str.BufAppend(sb, " " + shell_arg(l))
+            end
+        end
+    else:
+        if str.Len(opt.llvm_target) > 0:
+            str.BufAppend(sb, "clang --target=" + opt.llvm_target)
+            mut sr := ""
+            if sm.FindSysroot(opt.llvm_target, sr):
+                str.BufAppend(sb, " --sysroot=" + shell_arg(sr))
+            end
+        else:
+            str.BufAppend(sb, resolve_host_cc())
+        end
+        str.BufAppend(sb, lib_link_flags(opt, final, stem))
+        str.BufAppend(sb, " -o " + shell_arg(final) + " " + shell_arg(objpath))
+        repeat links.len() in j:
+            l := links.get(j)
+            if str.Len(l) == 0:
+                continue
+            end
+            if byte_at(l, 0) == 45 or link_spec_is_path(l):
+                str.BufAppend(sb, " " + shell_arg(l))
+            else:
+                str.BufAppend(sb, " -l" + shell_arg(l))
+            end
+        end
+        if not lib_targets_windows(opt):
+            str.BufAppend(sb, " -lm")
+        end
+    end
+    cmd := str.BufStr(sb)
+    str.BufFree(sb)
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "linking: " + cmd)
+    rc := shell.System(cmd)
+    _ro := os.Remove(objpath)
+    if rc != 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format2(i18.Tr("C compiler '%s' failed (exit %d)"), co.ArgStr(cmd), co.ArgInt(rc as i64)))
+        ret 3
+    end
+    mut names := Vector {} as Vector<str>
+    mut protos := Vector {} as Vector<str>
+    defer names.free()
+    defer protos.free()
+    lib_ast_exports(a, prog, names, protos)
+    guard := lib_header_guard(stem)
+    mut h := "#ifndef " + guard + "\n#define " + guard + "\n\n#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
+    repeat protos.len() in k:
+        h = h + protos.get(k) + "\n"
+    end
+    h = h + "\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n"
+    hdr := pth.PathJoin(pth.PathDir(final), stem + ".h")
+    _wh := os.WriteFile(hdr, h)
+    if str.Equals(opt.lib_kind, "shared") and lib_targets_windows(opt):
+        _imp := lib_write_msvc_import(opt, final, stem, names)
+    end
+    println co.Format2(i18.Tr("built %s and %s"), co.ArgStr(final), co.ArgStr(hdr))
+    ret 0
+end

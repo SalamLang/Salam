@@ -238,6 +238,62 @@ func cg_dv_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
     ret cn.kind == at.AST_IDENTIFIER and str.StartsWith(cn.name, "_strof_")
 end
 
+func cg_concat_parts(s &: sm.Sema, a &: at.Ast, n: int, acc &: Vector<int>):
+    nn := at.Get(a, n)
+    if nn.kind == at.AST_BINARY and nn.op == tok.TK_PLUS and nn.a != 0 and nn.b != 0:
+        if cg_is_str_ts(s, at.Get(a, nn.a).type_str) or cg_is_str_ts(s, at.Get(a, nn.b).type_str):
+            cg_concat_parts(s, a, nn.a, acc)
+            cg_concat_parts(s, a, nn.b, acc)
+            ret
+        end
+    end
+    acc.push(n)
+end
+
+func cg_part_owned(s &: sm.Sema, a &: at.Ast, n: int): bool:
+    if not cg_is_str_ts(s, at.Get(a, n).type_str):
+        ret true
+    end
+    ret sm.SuCallFresh(s, a, n)
+end
+
+func cg_concat_chain(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    mut parts := Vector {} as Vector<int>
+    cg_concat_parts(s, a, nn.a, parts)
+    cg_concat_parts(s, a, nn.b, parts)
+    mut any_own := false
+    repeat parts.len() in i:
+        if cg_part_owned(s, a, parts.get(i)):
+            any_own = true
+        end
+    end
+    if parts.len() == 2 and not any_own:
+        oa := cg_str_operand(g, s, a, parts.get(0))
+        ob := cg_str_operand(g, s, a, parts.get(1))
+        parts.free()
+        ret "salam_strcat(" + oa + ", " + ob + ")"
+    end
+    mut es := co.SbNew()
+    mut os := co.SbNew()
+    repeat parts.len() in j:
+        pid := parts.get(j)
+        if j > 0:
+            co.SbPuts(es, ", ")
+            co.SbPuts(os, ", ")
+        end
+        co.SbPuts(es, cg_str_operand(g, s, a, pid))
+        co.SbPuts(os, cg_part_owned(s, a, pid) ? "1" : "0")
+    end
+    cnt := parts.len()
+    parts.free()
+    ev := co.SbCstr(es)
+    ov := co.SbCstr(os)
+    co.SbFree(es)
+    co.SbFree(os)
+    ret "salam_strcat_v(" + str.FromInt(cnt as i64) + ", (const char*[]){" + ev + "}, (uint8_t[]){" + ov + "})"
+end
+
 func cg_str_operand(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
     nn := at.Get(a, n)
     if cg_is_str_ts(s, nn.type_str):
@@ -696,18 +752,30 @@ func cg_struct_lit(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
 end
 
 func cg_global_ref(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
-    mut gsym := sm.Lookup(s, s.global, name)
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_lit_home)
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    mut gsym := 0
+    repeat homes.len() in i:
+        h := homes.get(i)
+        if gsym == 0 and h != 0 and h != s.global:
+            hs := sm.LookupLocal(s, h, name)
+            if hs != 0 and (sm.SymAt(s, hs).kind == sm.SYM_VAR or sm.SymAt(s, hs).kind == sm.SYM_CONST):
+                gsym = hs
+            end
+        end
+    end
+    if gsym == 0:
+        gsym = sm.Lookup(s, s.global, name)
+    end
     if gsym != 0:
         gk := sm.SymAt(s, gsym).kind
         if gk != sm.SYM_VAR and gk != sm.SYM_CONST:
             gsym = 0
         end
     end
-    mut homes := Vector {} as Vector<int>
-    defer homes.free()
-    homes.push(g.cur_lit_home)
-    homes.push(g.cur_fn_home)
-    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
     repeat homes.len() in i:
         if gsym == 0 and homes.get(i) != 0:
             hs := sm.Lookup(s, homes.get(i), name)
@@ -729,7 +797,10 @@ end
 func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str): str:
     if pkgid != 0 and at.KindOf(a, pkgid) == at.AST_IDENTIFIER:
         pname := at.Get(a, pkgid).name
-        mut pk := sm.Lookup(s, s.global, pname)
+        mut pk := cg_home_sym(g, s, pname, sm.SYM_PACKAGE)
+        if pk == 0:
+            pk = sm.Lookup(s, s.global, pname)
+        end
         if pk == 0 and g.cur_fn_home != 0:
             pk = sm.Lookup(s, g.cur_fn_home, pname)
         end
@@ -758,9 +829,29 @@ func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str)
     ret cg_func_addr(g, s, a, name)
 end
 
+func cg_home_sym(g &: Cg, s &: sm.Sema, name: str, kind: int): int:
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    repeat homes.len() in i:
+        h := homes.get(i)
+        if h != 0 and h != s.global:
+            hs := sm.LookupLocal(s, h, name)
+            if hs != 0 and sm.SymAt(s, hs).kind == kind:
+                ret hs
+            end
+        end
+    end
+    ret 0
+end
+
 func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
-    mut fsym := sm.Lookup(s, s.global, name)
-    mut home_pkg := ""
+    mut fsym := cg_home_sym(g, s, name, sm.SYM_FUNC)
+    mut home_pkg := fsym != 0 ? sm.SymAt(s, fsym).pkgname : ""
+    if fsym == 0:
+        fsym = sm.Lookup(s, s.global, name)
+    end
     if fsym == 0 and g.cur_fn_home != 0:
         hs := sm.Lookup(s, g.cur_fn_home, name)
         if hs != 0 and sm.SymAt(s, hs).kind == sm.SYM_FUNC:
@@ -950,14 +1041,14 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             ret "pow(SALAM_FPARG_D((double)(" + ea + ")), (double)(" + eb + "))"
         end
         if nn.op == tok.TK_PLUS and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
-            oa := cg_str_operand(g, s, a, nn.a)
-            ob := cg_str_operand(g, s, a, nn.b)
             if g.in_derive:
+                oa := cg_str_operand(g, s, a, nn.a)
+                ob := cg_str_operand(g, s, a, nn.b)
                 fa := cg_dv_owned(s, a, nn.a) ? "1" : "0"
                 fb := cg_dv_owned(s, a, nn.b) ? "1" : "0"
                 ret "salam_strcat_own(" + oa + ", " + fa + ", " + ob + ", " + fb + ")"
             end
-            ret "salam_strcat(" + oa + ", " + ob + ")"
+            ret cg_concat_chain(g, s, a, n)
         end
         if nn.op == tok.TK_STAR and (cg_is_str_ts(s, an.type_str) or cg_is_str_ts(s, bn.type_str)):
             a_str := cg_is_str_ts(s, an.type_str)
@@ -1110,12 +1201,15 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         an2 := at.Get(a, nn.a)
         if nn.a != 0 and an2.kind == at.AST_IDENTIFIER and not local_known(g, an2.name):
-            mut e := sm.Lookup(s, s.global, an2.name)
+            mut e := cg_home_sym(g, s, an2.name, sm.SYM_ENUM)
+            if e == 0:
+                e = sm.Lookup(s, s.global, an2.name)
+            end
             if (e == 0 or sm.SymAt(s, e).kind != sm.SYM_ENUM) and g.cur_fn_home != 0:
                 e = sm.Lookup(s, g.cur_fn_home, an2.name)
             end
             if e != 0 and sm.SymAt(s, e).kind == sm.SYM_ENUM:
-                ret cg_cident(sm.SymAt(s, e).name) + "_" + cg_cident(nn.name)
+                ret cg_cident(cg_enum_tname(s, e, sm.SymAt(s, e).name)) + "_" + cg_cident(nn.name)
             end
             if e != 0 and sm.SymAt(s, e).kind == sm.SYM_PACKAGE:
                 m := sm.LookupLocal(s, sm.SymAt(s, e).members, nn.name)
@@ -1138,14 +1232,17 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         end
         if nn.a != 0 and an2.kind == at.AST_MEMBER and an2.a != 0 and at.KindOf(a, an2.a) == at.AST_IDENTIFIER and not local_known(g, at.Get(a, an2.a).name):
             pkname := at.Get(a, an2.a).name
-            mut pk := sm.Lookup(s, s.global, pkname)
+            mut pk := cg_home_sym(g, s, pkname, sm.SYM_PACKAGE)
+            if pk == 0:
+                pk = sm.Lookup(s, s.global, pkname)
+            end
             if pk == 0 and g.cur_fn_home != 0:
                 pk = sm.Lookup(s, g.cur_fn_home, pkname)
             end
             if pk != 0 and sm.SymAt(s, pk).kind == sm.SYM_PACKAGE:
                 e2 := sm.LookupLocal(s, sm.SymAt(s, pk).members, an2.name)
                 if e2 != 0 and sm.SymAt(s, e2).kind == sm.SYM_ENUM:
-                    ret cg_cident(sm.SymAt(s, e2).name) + "_" + cg_cident(nn.name)
+                    ret cg_cident(cg_enum_tname(s, e2, sm.SymAt(s, e2).name)) + "_" + cg_cident(nn.name)
                 end
             end
         end

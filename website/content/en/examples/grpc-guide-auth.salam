@@ -1,0 +1,53 @@
+import grpc
+import sync
+import compress
+
+mut server := grpc.NewServer(0)
+mut ready := sync.NewWaitGroup()
+
+func balance(c: i64):
+    mut ok := false
+    account := grpc.RecvStr(c, ok)
+    token := grpc.MDGet(grpc.CallMetadata(c), "authorization")
+    if token == "":
+        grpc.Fail(c, grpc.GRPC_UNAUTHENTICATED, "missing token")
+        ret
+    end
+    if token != "Bearer good-token":
+        grpc.Fail(c, grpc.GRPC_PERMISSION_DENIED, "this token cannot read " + account)
+        ret
+    end
+    _ := grpc.SendStr(c, account + ": 1250")
+    grpc.SetStatus(c, grpc.GRPC_OK, "")
+end
+
+func run_server():
+    _ := grpc.Listen(server)
+    sync.Done(ready)
+    _ := grpc.ServeCount(server, 1)
+end
+
+func main:
+    grpc.RegisterMethod("/bank.Accounts/Balance", balance)
+    sync.Add(ready, 1)
+    t := spawn(run_server)
+    sync.Wait(ready)
+    mut ch := grpc.Dial("127.0.0.1", grpc.Port(server))
+    grpc.SetTimeout(ch, 5000)
+    each token in ["", "Bearer old-token", "Bearer good-token"]:
+        mut md := grpc.NewMetadata()
+        if token != "":
+            _ := grpc.MDAdd(md, "authorization", token)
+        end
+        mut st := grpc.Status {}
+        answer := grpc.UnaryCall(ch, "/bank.Accounts/Balance", compress.BufFromStr("acc-42"), md, st)
+        if grpc.StatusOk(st):
+            println "ok:", compress.BufToStrUnsafe(answer)
+        else:
+            println grpc.StatusName(st.code), "(" + st.code + "):", st.message
+        end
+    end
+    grpc.CloseChannel(ch)
+    join(t)
+    grpc.StopServer(server)
+end

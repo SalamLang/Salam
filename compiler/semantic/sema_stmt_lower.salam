@@ -406,6 +406,7 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     mut vec_like := itv.kind == TY_VEC
     mut map_like := itv.kind == TY_MAP
 
+    mut shape := IterShape {}
     if itv.kind == TY_STRUCT and itv.decl != 0:
         isym := sym_at(s, itv.decl)
         if str.Equals(isym.generic_base, "Vector"):
@@ -414,10 +415,21 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         if str.Equals(isym.generic_base, "HashMap"):
             map_like = true
         end
+        if not vec_like and not map_like:
+            shape = iter_shape_of(s, a, itv.decl)
+        end
     end
 
     is_str := itv.kind == TY_STR
-    if not vec_like and not map_like and not is_str and itv.kind != TY_ARRAY and itv.kind != TY_SLICE:
+    if not vec_like and not map_like and not is_str and shape.kind == ITS_NONE and itv.kind != TY_ARRAY and itv.kind != TY_SLICE:
+        if itv.kind == TY_STRUCT:
+            serr(
+                s, 65, span_of(a, n0.a), co.Format1(
+                    i18.Tr("each cannot iterate a value of type '%s': it needs 'len()' and 'get(i: int)', or 'iter()' returning a cursor with 'has_next()', 'value()' and 'next()'"), co.ArgStr(type_disp(s, it))
+                )
+            )
+            ret
+        end
         serr(
             s, 65, span_of(a, n0.a), co.Format1(
                 i18.Tr("each cannot iterate a value of type '%s'"), co.ArgStr(type_disp(s, it))
@@ -428,6 +440,14 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     if map_like and not have_key:
         serr(
             s, 65, sp, i18.Tr("iterating a HashMap needs two bindings: each key, value in map")
+        )
+        ret
+    end
+    if shape.kind == ITS_CURSOR and have_key and str.Len(shape.key) == 0:
+        serr(
+            s, 65, sp, co.Format1(
+                i18.Tr("'%s' iterates one value per step, so 'each' over it takes one binding"), co.ArgStr(type_disp(s, it))
+            )
         )
         ret
     end
@@ -452,26 +472,33 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         ret
     end
 
-    if map_like:
+    if map_like or shape.kind == ITS_CURSOR:
+        m_iter := each_mname(s, "iter")
+        m_has := each_mname(s, "has_next")
+        m_next := each_mname(s, "next")
+        m_key := each_mname(s, "key")
+        m_val := each_mname(s, "value")
         itn := "__ei" + id
         fr := ea_node(a, at.AST_FOR, sp)
         mut fv := at.Get(a, fr)
-        fv.a = ea_decl(a, itn, ea_mcall(a, seq, each_mname(s, "iter"), 0, sp), true, sp)
-        fv.b = ea_mcall(a, itn, each_mname(s, "has_next"), 0, sp)
+        fv.a = ea_decl(a, itn, ea_mcall(a, seq, m_iter, 0, sp), true, sp)
+        fv.b = ea_mcall(a, itn, m_has, 0, sp)
         post := ea_node(a, at.AST_EXPR_STMT, sp)
         mut pv := at.Get(a, post)
-        pv.a = ea_mcall(a, itn, each_mname(s, "next"), 0, sp)
+        pv.a = ea_mcall(a, itn, m_next, 0, sp)
         at.Put(a, post, pv)
         fv.c = post
         blk := ea_node(a, at.AST_BLOCK, sp)
-        at.AddChild(
-            a, blk, ea_bind(
-                a, keyname, ea_mcall(a, itn, each_mname(s, "key"), 0, sp), have_key ? span_of(a, n0.c) : sp
+        if have_key:
+            at.AddChild(
+                a, blk, ea_bind(
+                    a, keyname, ea_mcall(a, itn, m_key, 0, sp), span_of(a, n0.c)
+                )
             )
-        )
+        end
         at.AddChild(
             a, blk, ea_bind(
-                a, valname, ea_mcall(a, itn, each_mname(s, "value"), 0, sp), sp
+                a, valname, ea_mcall(a, itn, m_val, 0, sp), sp
             )
         )
         repeat at.ChildCount(a, body) in bi:
@@ -488,7 +515,9 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
     mut fv2 := at.Get(a, fr2)
     fv2.a = ea_decl(a, idx, ea_int(a, 0 as u64, sp), true, sp)
     mut lenx := 0
-    if vec_like:
+    if shape.kind == ITS_SEQ:
+        lenx = ea_mcall(a, seq, each_mname(s, shape.count), 0, sp)
+    else vec_like:
         lenx = ea_mcall(a, seq, each_mname(s, "len"), 0, sp)
     else:
         lenx = ea_node(a, at.AST_CALL, sp)
@@ -516,7 +545,9 @@ func check_each(s &: Sema, a &: at.Ast, nid: int):
         )
     end
     mut elem := 0
-    if vec_like:
+    if shape.kind == ITS_SEQ:
+        elem = ea_mcall(a, seq, each_mname(s, shape.elem), ea_ident(a, idx, sp), sp)
+    else vec_like:
         elem = ea_mcall(a, seq, each_mname(s, "get"), ea_ident(a, idx, sp), sp)
     else:
         elem = ea_index(a, ea_ident(a, seq, sp), ea_ident(a, idx, sp), sp)
@@ -1272,12 +1303,24 @@ func sema_check_block(s &: Sema, a &: at.Ast, block: int):
         else check_unused_loop_bind(s, a, v):
             _skip2 := 0
         else v.kind == SYM_VAR and not v.used and v.decl != 0 and str.Len(v.name) > 0 and byte_at(v.name, 0) != 95 and not at.WasPruned(a, s.file, v.name):
+            mut uf := fix_at(span_of(a, v.decl))
+            uf.title = i18.Tr("Prefix the name with '_'")
+            uf.find = v.name
+            uf.text = "_" + v.name
+            queue_fix(uf)
             serr(
                 s, 59, span_of(a, v.decl), co.Format1(
                     i18.Tr("unused variable '%s': nothing uses it after it is declared; remove the declaration, or use the value where it was meant to be used; starting the name with '_' hides this error but is not advised, since the dead code stays in the program"), co.ArgStr(v.name)
                 )
             )
         else v.kind == SYM_VAR and v.is_mut and not v.mutated and v.decl != 0 and not at.Get(a, v.decl).synthetic and str.Len(v.name) > 0 and byte_at(v.name, 0) != 95 and not at.WasPrunedWrite(a, s.file, v.name):
+            mut_kw := kw_spell(s, "", tok.TK_KW_MUT)
+            mut mf := fix_at(span_of(a, v.decl))
+            mf.title = co.Format1(i18.Tr("Remove '%s'"), co.ArgStr(mut_kw))
+            mf.find = mut_kw
+            mf.preferred = true
+            mf.safe = true
+            queue_fix(mf)
             serr(
                 s, 69, span_of(a, v.decl), co.Format1(
                     i18.Tr("variable '%s' is declared 'mut' but never mutated; remove 'mut' or declare it 'const'"), co.ArgStr(v.name)

@@ -498,6 +498,34 @@ func jsg_print(
     ret r
 end
 
+func jsg_home_kind(g &: Jg, s &: sm.Sema, name: str, kind: int): int:
+    mut homes := Vector {} as Vector<int>
+    defer homes.free()
+    homes.push(g.cur_fn_home)
+    homes.push(g.cur_struct != 0 ? sm.SymAt(s, g.cur_struct).home : 0)
+    repeat homes.len() in i:
+        h := homes.get(i)
+        if h != 0 and h != s.global:
+            hs := sm.LookupLocal(s, h, name)
+            if hs != 0 and sm.SymAt(s, hs).kind == kind:
+                ret hs
+            end
+        end
+    end
+    ret 0
+end
+
+func jsg_home_sym(g &: Jg, s &: sm.Sema, name: str): int:
+    mut hs := jsg_home_kind(g, s, name, sm.SYM_FUNC)
+    if hs == 0:
+        hs = jsg_home_kind(g, s, name, sm.SYM_VAR)
+    end
+    if hs == 0:
+        hs = jsg_home_kind(g, s, name, sm.SYM_CONST)
+    end
+    ret hs
+end
+
 func jsg_call_ident(
     g &: Jg, s &: sm.Sema, a &: at.Ast, n: int, callee: int
 ): str:
@@ -585,9 +613,16 @@ func jsg_call_ident(
     if bidx >= 0 and fsym0 == 0:
         ret sm.BuiltinAt(bidx).runtime + "(" + jsg_call_args(g, s, a, n, 0) + ")"
     end
-    mut fsym := sm.Lookup(s, s.global, nm)
+    mut fsym := jsg_home_sym(g, s, nm)
     mut home_pkg := ""
     mut home := s.global
+    if fsym != 0:
+        hv0 := sm.SymAt(s, fsym)
+        home_pkg = hv0.pkgname
+        home = hv0.home != 0 ? hv0.home : home
+    else:
+        fsym = sm.Lookup(s, s.global, nm)
+    end
     if fsym == 0 and g.cur_fn_home != 0:
         hs := sm.Lookup(s, g.cur_fn_home, nm)
         if hs != 0:
@@ -1182,7 +1217,10 @@ func jsg_call_member(
     obj := calleev.a
     objv := at.Get(a, obj)
     if obj != 0 and objv.kind == at.AST_IDENTIFIER and not local_known(g, objv.name):
-        mut pk := sm.Lookup(s, s.global, objv.name)
+        mut pk := jsg_home_kind(g, s, objv.name, sm.SYM_PACKAGE)
+        if pk == 0:
+            pk = sm.Lookup(s, s.global, objv.name)
+        end
         if (pk == 0 or sm.SymAt(s, pk).kind != sm.SYM_PACKAGE) and g.cur_struct != 0:
             cs := sm.SymAt(s, g.cur_struct)
             if cs.home != 0:

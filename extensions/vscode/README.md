@@ -1,9 +1,17 @@
 # Salam for Visual Studio Code
 
-Language support for [Salam](https://github.com/SalamLang/Salam): syntax highlighting, snippets, and commands for building and running `.salam` files.
+Language support for [Salam](https://github.com/SalamLang/Salam), in English and Persian: diagnostics as you type, completion, hover, navigation, rename and formatting through the Salam language server, plus syntax highlighting, snippets, and commands for building and running `.salam` files.
 
 ## Features
 
+- **Language server** (`salam lsp`, started automatically):
+  - errors and warnings as you type, with the compiler's own codes and help text, in English or Persian
+  - completion for locals, globals, struct members, package members, keywords of the file's language, and block snippets that already end in `end`
+  - hover with the declaration, its type and its doc comment, including the standard library
+  - go to definition (into `std/` as well), go to type definition, find references, highlight, rename
+  - outline, workspace symbols, folding, semantic highlighting that understands multi-word Persian names
+  - signature help, quick fixes (did-you-mean, remove `mut`), and formatting through the compiler's formatter
+- **Debugging** with `salam dap`: press F5 in a Salam file to build it with debug information and debug it with gdb or lldb, with breakpoints, stepping and locals in the Salam source
 - **Syntax highlighting** for `.salam`, covering both keyword packs (English, Persian)
 - **Snippets** for the constructs you type most
 - **Run and build commands** that shell out to the `salam` compiler
@@ -32,6 +40,11 @@ Getting `Could not create SSL/TLS secure channel` from the PowerShell command (c
 | `salam.compilerPath` | `salam` | Path to the `salam` executable                             |
 | `salam.languagePack` | `auto`  | Keyword pack passed as `--lang` (`auto`, `en`, `fa`, `ar`) |
 | `salam.run.command`  | `run`   | Subcommand used by the run command                         |
+| `salam.lsp.enable`   | `true`  | Run the language server                                    |
+| `salam.lsp.messages` | `auto`  | Language of server messages: `auto`, `en`, `fa`            |
+| `salam.trace.server` | `off`   | Log the protocol traffic to the output panel               |
+
+The language server needs a Salam release that has `salam lsp`. With an older compiler the extension falls back to formatting through `salam format` and says so in the Salam output panel. `Salam: Restart Language Server` restarts it after you update the compiler.
 
 ## The grammar is generated
 

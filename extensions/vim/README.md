@@ -81,12 +81,25 @@ require('salam').setup({
   indent = '4',
   format_on_save = false,
   diagnostics = true,
+  lsp = true,
+  messages = 'auto',
 })
 ```
 
-`diagnostics = true` type-checks the file after every write and on read, and
-publishes the results through `vim.diagnostic`, so they show up in whatever
-diagnostic UI you already use. `:checkhealth salam` reports what was found.
+`lsp = true` (the default) starts the Salam language server, `salam lsp`, for
+every Salam buffer through Neovim's built-in client: diagnostics as you type,
+completion, hover (`K`), go to definition, references, rename, outline,
+semantic highlighting and formatting (`vim.lsp.buf.format()`). `messages` picks
+the language of its messages, `'en'` or `'fa'`. With a compiler that has no
+`salam lsp`, the plugin falls back to the behaviour below.
+
+`diagnostics = true` without the language server type-checks the file after
+every write and on read, and publishes the results through `vim.diagnostic`,
+so they show up in whatever diagnostic UI you already use. `:checkhealth salam`
+reports what was found.
+
+Other editors and the server's options are covered in
+[`docs/LSP.md`](../../docs/LSP.md).
 
 ## Snippets
 
@@ -94,7 +107,7 @@ diagnostic UI you already use. `:checkhealth salam` reports what was found.
 [UltiSnips](https://github.com/SirVer/ultisnips). Triggers: `main`, `func`,
 `funcv`, `if`, `ifelse`, `until`, `each`, `eachi`, `eachkv`, `repeat`,
 `repeati`, `repeatrange`, `var`, `mut`, `const`, `struct`, `enum`,
-`interface`, `impl`, `import`, `extern`, `export`, `layout`, `component`, `println`.
+`interface`, `impl`, `import`, `extern`, `export`, `page`, `component`, `println`.
 
 ## ALE
 

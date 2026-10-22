@@ -8,6 +8,8 @@ M.config = {
   stdlib_path = '',
   format_on_save = false,
   diagnostics = true,
+  lsp = true,
+  messages = 'auto',
 }
 
 local namespace = vim.api.nvim_create_namespace('salam')
@@ -160,6 +162,39 @@ function M.format(bufnr)
   end
 end
 
+local function lsp_root(bufnr)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  local start = path ~= '' and vim.fs.dirname(path) or vim.fn.getcwd()
+  local found = vim.fs.find({ 'salam.salam', 'salam.cfg', '.git' }, { path = start, upward = true })[1]
+  return found and vim.fs.dirname(found) or start
+end
+
+function M.lsp_start(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local init = { formatFixOrder = false }
+  if M.config.stdlib_path ~= '' then
+    init.stdlibPath = M.config.stdlib_path
+  end
+  if M.config.messages == 'en' or M.config.messages == 'fa' then
+    init.messages = M.config.messages
+  end
+  return vim.lsp.start({
+    name = 'salam',
+    cmd = { M.config.compiler, 'lsp' },
+    root_dir = lsp_root(bufnr),
+    init_options = init,
+  }, { bufnr = bufnr })
+end
+
+local function has_lsp_server()
+  if M._has_lsp ~= nil then
+    return M._has_lsp
+  end
+  vim.fn.system({ M.config.compiler, 'lsp', '--version' })
+  M._has_lsp = vim.v.shell_error == 0
+  return M._has_lsp
+end
+
 function M.setup(opts)
   M.config = vim.tbl_extend('force', M.config, opts or {})
 
@@ -171,15 +206,36 @@ function M.setup(opts)
 
   vim.api.nvim_clear_autocmds({ group = group })
 
+  local use_lsp = M.config.lsp and vim.lsp and vim.lsp.start and has_lsp_server()
+
+  if use_lsp then
+    vim.api.nvim_create_autocmd('FileType', {
+      group = group,
+      pattern = 'salam',
+      callback = function(args) M.lsp_start(args.buf) end,
+    })
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == 'salam' then
+        M.lsp_start(buf)
+      end
+    end
+  end
+
   if M.config.format_on_save then
     vim.api.nvim_create_autocmd('BufWritePre', {
       group = group,
       pattern = '*.salam',
-      callback = function(args) M.format(args.buf) end,
+      callback = function(args)
+        if use_lsp then
+          vim.lsp.buf.format({ bufnr = args.buf, name = 'salam' })
+        else
+          M.format(args.buf)
+        end
+      end,
     })
   end
 
-  if M.config.diagnostics then
+  if M.config.diagnostics and not use_lsp then
     vim.api.nvim_create_autocmd({ 'BufWritePost', 'BufReadPost' }, {
       group = group,
       pattern = '*.salam',

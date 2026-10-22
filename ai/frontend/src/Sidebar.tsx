@@ -1,18 +1,19 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconKey, IconLogout, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
+import { isFa, setLang, t } from "./i18n";
 
 function groupOf(updated: number): string {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
-  if (updated >= start) return "امروز";
-  if (updated >= start - 86400) return "دیروز";
-  if (updated >= start - 7 * 86400) return "۷ روز گذشته";
-  if (updated >= start - 30 * 86400) return "۳۰ روز گذشته";
-  return "قدیمی‌تر";
+  if (updated >= start) return t("امروز", "Today");
+  if (updated >= start - 86400) return t("دیروز", "Yesterday");
+  if (updated >= start - 7 * 86400) return t("۷ روز گذشته", "Previous 7 days");
+  if (updated >= start - 30 * 86400) return t("۳۰ روز گذشته", "Previous 30 days");
+  return t("قدیمی‌تر", "Older");
 }
 
 type Props = {
@@ -43,32 +44,32 @@ export function Sidebar(p: Props) {
     else groups.push({ name: g, items: [c] });
   }
   const commit = (id: string) => {
-    const t = draft.trim();
-    if (t) p.onRename(id, t);
+    const title = draft.trim();
+    if (title) p.onRename(id, title);
     setEditing(null);
   };
   return (
     <>
       <div className={`scrim ${p.open ? "show" : ""}`} onClick={p.onClose} aria-hidden="true" />
-      <aside className={`sidebar ${p.open ? "open" : ""}`} aria-label="فهرست گفت‌وگوها">
+      <aside className={`sidebar ${p.open ? "open" : ""}`} aria-label={t("فهرست گفت‌وگوها", "Chat list")}>
         <div className="sidebar-head">
           <a className="brand" href="/" onClick={(e) => (e.preventDefault(), p.onNew())}>
             <img src="/logo.svg" alt="" width={30} height={30} />
             <span>
-              دستیار سلام
-              <small>زبان برنامه‌نویسی ایرانی</small>
+              {t("دستیار سلام", "Salam AI")}
+              <small>{t("زبان برنامه‌نویسی ایرانی", "The Iranian programming language")}</small>
             </span>
           </a>
-          <button type="button" className="icon-button only-mobile" onClick={p.onClose} aria-label="بستن فهرست">
+          <button type="button" className="icon-button only-mobile" onClick={p.onClose} aria-label={t("بستن فهرست", "Close menu")}>
             <IconClose />
           </button>
         </div>
         <button type="button" className="button primary new-chat" onClick={p.onNew}>
           <IconPlus width={18} height={18} />
-          گفت‌وگوی تازه
+          {t("گفت‌وگوی تازه", "New chat")}
         </button>
         <nav className="chat-list">
-          {p.chats.length === 0 && <p className="empty-list">هنوز گفت‌وگویی ندارید. اولین پرسش خود را بنویسید.</p>}
+          {p.chats.length === 0 && <p className="empty-list">{t("هنوز گفت‌وگویی ندارید. اولین پرسش خود را بنویسید.", "No chats yet. Ask your first question.")}</p>}
           {groups.map((g) => (
             <div key={g.name} className="chat-group">
               <h3>{g.name}</h3>
@@ -97,7 +98,7 @@ export function Sidebar(p: Props) {
                     <button
                       type="button"
                       className="icon-button tiny"
-                      aria-label="تغییر نام"
+                      aria-label={t("تغییر نام", "Rename")}
                       onClick={() => {
                         setDraft(c.title);
                         setEditing(c.id);
@@ -108,13 +109,13 @@ export function Sidebar(p: Props) {
                     <button
                       type="button"
                       className="icon-button tiny danger"
-                      aria-label="حذف گفت‌وگو"
+                      aria-label={t("حذف گفت‌وگو", "Delete chat")}
                       onClick={async () => {
                         const ok = await confirmDialog({
-                          title: "حذف گفت‌وگو",
+                          title: t("حذف گفت‌وگو", "Delete chat"),
                           subject: c.title,
-                          message: "این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.",
-                          confirmLabel: "حذف",
+                          message: t("این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.", "This chat and all its messages will be deleted for good. This cannot be undone."),
+                          confirmLabel: t("حذف", "Delete"),
                         });
                         if (ok) p.onDelete(c.id);
                       }}
@@ -127,7 +128,7 @@ export function Sidebar(p: Props) {
             </div>
           ))}
         </nav>
-        <nav className="sidebar-links" aria-label="بخش‌های حساب">
+        <nav className="sidebar-links" aria-label={t("بخش‌های حساب", "Account sections")}>
           <a
             href="/apps"
             className={`chat-link ${p.page === "apps" ? "active" : ""}`}
@@ -135,7 +136,16 @@ export function Sidebar(p: Props) {
             onClick={(e) => (e.preventDefault(), p.onNavigate("/apps"))}
           >
             <IconPlug width={16} height={16} />
-            <span>برنامه‌های متصل</span>
+            <span>{t("برنامه‌های متصل", "Connected apps")}</span>
+          </a>
+          <a
+            href="/plans"
+            className={`chat-link ${p.page === "plans" ? "active" : ""}`}
+            aria-current={p.page === "plans" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/plans"))}
+          >
+            <IconSpark width={16} height={16} />
+            <span>{t("اشتراک‌ها", "Plans")}</span>
           </a>
           <a
             href="/keys"
@@ -144,12 +154,12 @@ export function Sidebar(p: Props) {
             onClick={(e) => (e.preventDefault(), p.onNavigate("/keys"))}
           >
             <IconKey width={16} height={16} />
-            <span>کلیدهای API</span>
+            <span>{t("کلیدهای API", "API keys")}</span>
           </a>
           {!isDesktop && (
             <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer">
               <IconMonitor width={16} height={16} />
-              <span>دریافت ایجنت سلام</span>
+              <span>{t("دریافت ایجنت سلام", "Get Salam Agent")}</span>
             </a>
           )}
           {p.user.admin && (
@@ -160,7 +170,7 @@ export function Sidebar(p: Props) {
               onClick={(e) => (e.preventDefault(), p.onNavigate("/admin"))}
             >
               <IconShield width={16} height={16} />
-              <span>مدیریت</span>
+              <span>{t("مدیریت", "Admin")}</span>
             </a>
           )}
         </nav>
@@ -172,10 +182,19 @@ export function Sidebar(p: Props) {
             <strong dir="auto">{p.user.name}</strong>
             <span dir="ltr">{p.user.email}</span>
           </div>
-          <button type="button" className="icon-button" onClick={p.onToggleTheme} aria-label="تغییر پوسته" title={p.theme === "dark" ? "پوسته‌ی روشن" : "پوسته‌ی تیره"}>
+          <button type="button" className="icon-button" onClick={p.onToggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")} title={p.theme === "dark" ? t("پوسته‌ی روشن", "Light theme") : t("پوسته‌ی تیره", "Dark theme")}>
             {p.theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
-          <button type="button" className="icon-button" onClick={p.onLogout} aria-label="خروج" title="خروج">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setLang(isFa ? "en" : "fa")}
+            aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}
+            title={isFa ? "English" : "فارسی"}
+          >
+            <IconGlobe />
+          </button>
+          <button type="button" className="icon-button" onClick={p.onLogout} aria-label={t("خروج", "Sign out")} title={t("خروج", "Sign out")}>
             <IconLogout />
           </button>
         </div>

@@ -1,0 +1,47 @@
+import net.socketio
+import net.websocket
+
+mut server := websocket.Server {}
+
+func fake_server():
+    mut conn := websocket.Accept(server)
+    _ := websocket.SendText(conn, `0{"sid":"s1","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
+    m := websocket.Poll(conn, 3000)
+    if m.kind == websocket.TEXT and m.text == "40":
+        _ := websocket.SendText(conn, `40{"sid":"a1"}`)
+        _ := websocket.SendText(conn, `42["price","BTC",61250]`)
+        _ := websocket.SendText(conn, `42["price","ETH",2410]`)
+        _ := websocket.SendText(conn, `42["halt","maintenance"]`)
+        _ := websocket.SendText(conn, "41")
+    end
+    _ := websocket.Poll(conn, 1000)
+    websocket.Close(conn)
+end
+
+func main:
+    server = websocket.Listen(0)
+    t := spawn(fake_server)
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.reconnection = false
+    c := socketio.DialWith("http://127.0.0.1:" + websocket.Port(server), o)
+
+    mut going := true
+    until going:
+        e := socketio.Next(c, 3000)
+        if e.kind == socketio.EV_EVENT and e.name == "price":
+            println "price", socketio.ArgStr(e, 0), socketio.ArgInt(e, 1)
+        else e.kind == socketio.EV_EVENT:
+            println "event", e.name, socketio.ArgStr(e, 0)
+        else e.kind == socketio.EV_DISCONNECT:
+            println "disconnected:", e.message, e.message == socketio.REASON_SERVER_DISCONNECT
+            going = false
+        else e.kind == socketio.EV_TIMEOUT:
+            println "nothing arrived in time"
+            going = false
+        end
+    end
+    socketio.Close(c)
+    join(t)
+    websocket.CloseServer(server)
+end

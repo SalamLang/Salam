@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llm
+
+import math
+import tensor
+
+extern:
+    func expf(x: f32): f32
+    func sqrtf(x: f32): f32
+end
+
+func _rmsnorm(x &: tensor.Tensor, w &: tensor.Tensor, eps: f64): tensor.Tensor:
+    n := x.dim(0)
+    d := x.dim(1)
+    out := tensor.Zeros2(n, d)
+    px := x.data.data
+    pw := w.data.data
+    po := out.data.data
+    repeat n in r:
+        base := r * d
+        mut ss := 0.0 as f32
+        repeat d in k:
+            v := px[base + k]
+            ss += v * v
+        end
+        inv := (1.0 as f32) / sqrtf(ss / (d as f32) + (eps as f32))
+        repeat d in k: po[base + k] = px[base + k] * inv * pw[k] end
+    end
+    ret out
+end
+
+func _rope(x &: tensor.Tensor, heads: int, hd: int, pos0: int, theta: f64, kind: int):
+    n := x.dim(0)
+    width := heads * hd
+    half := hd / 2
+    p := x.data.data
+    repeat n in i:
+        pos := (pos0 + i) as f64
+        repeat half in j:
+            freq := math.Pow(theta, 0.0 - (2.0 * (j as f64)) / (hd as f64))
+            ang := pos * freq
+            c := math.Cos(ang) as f32
+            s := math.Sin(ang) as f32
+            mut ia := 2 * j
+            mut ib := 2 * j + 1
+            if kind == ROPE_NEOX:
+                ia = j
+                ib = j + half
+            end
+            repeat heads in h:
+                base := i * width + h * hd
+                a := p[base + ia]
+                b := p[base + ib]
+                p[base + ia] = a * c - b * s
+                p[base + ib] = a * s + b * c
+            end
+        end
+    end
+end
+
+func _attention(q &: tensor.Tensor, kc &: tensor.Tensor, vc &: tensor.Tensor, pos0: int, heads: int, kv_heads: int, hd: int): tensor.Tensor:
+    n := q.dim(0)
+    width := heads * hd
+    kw := kv_heads * hd
+    out := tensor.Zeros2(n, width)
+    mut sc := tensor.Zeros1(pos0 + n)
+    pq := q.data.data
+    pk := kc.data.data
+    pv := vc.data.data
+    po := out.data.data
+    ps := sc.data.data
+    scale := (1.0 / math.Sqrt(hd as f64)) as f32
+    group := heads / kv_heads
+    repeat heads in h:
+        kh := h / group
+        repeat n in i:
+            last := pos0 + i
+            qb := i * width + h * hd
+            mut mx := 0.0 as f32
+            repeat last + 1 in j:
+                kb := j * kw + kh * hd
+                mut s := 0.0 as f32
+                repeat hd in d: s += pq[qb + d] * pk[kb + d] end
+                s = s * scale
+                ps[j] = s
+                if j == 0 or s > mx: mx = s end
+            end
+            mut sum := 0.0 as f32
+            repeat last + 1 in j:
+                e := expf(ps[j] - mx)
+                ps[j] = e
+                sum += e
+            end
+            inv := (1.0 as f32) / sum
+            ob := i * width + h * hd
+            repeat last + 1 in j:
+                pj := ps[j] * inv
+                vb := j * kw + kh * hd
+                repeat hd in d: po[ob + d] += pj * pv[vb + d] end
+            end
+        end
+    end
+    sc.free()
+    ret out
+end
+
+func _cache_put(dst &: tensor.Tensor, x &: tensor.Tensor, pos0: int):
+    n := x.dim(0)
+    w := x.dim(1)
+    pd := dst.data.data
+    px := x.data.data
+    repeat n * w in k: pd[pos0 * w + k] = px[k] end
+end
+
+func _gather_rows(table &: tensor.Tensor, ids &: Vector<int>): tensor.Tensor:
+    n := ids.len()
+    d := table.dim(1)
+    vocab := table.dim(0)
+    out := tensor.Zeros2(n, d)
+    pt := table.data.data
+    po := out.data.data
+    repeat n in i:
+        mut id := ids.get(i)
+        if id < 0 or id >= vocab: id = 0 end
+        repeat d in k: po[i * d + k] = pt[id * d + k] end
+    end
+    ret out
+end
+
+func _add_bias(x &: tensor.Tensor, b &: tensor.Tensor):
+    if b.is_empty(): ret end
+    w := b.numel()
+    if x.numel() % w != 0: ret end
+    rows := x.numel() / w
+    px := x.data.data
+    pb := b.data.data
+    repeat rows in i:
+        repeat w in k: px[i * w + k] = px[i * w + k] + pb[k] end
+    end
+end
+
+func _layer_forward(m &: Model, li: int, cache &: KVCache, x &: tensor.Tensor, pos0: int):
+    cfg := m.cfg
+    l := m.layers.get(li)
+    hd := cfg.head_dim()
+    mut h := _rmsnorm(x, l.attn_norm, cfg.eps)
+    mut q := tensor.MulTranspose(h, l.wq)
+    mut k := tensor.MulTranspose(h, l.wk)
+    mut v := tensor.MulTranspose(h, l.wv)
+    _add_bias(q, l.bq)
+    _add_bias(k, l.bk)
+    _add_bias(v, l.bv)
+    h.free()
+    _rope(q, cfg.heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
+    _rope(k, cfg.kv_heads, hd, pos0, cfg.rope_theta, cfg.rope_kind)
+    mut kc := cache.k.get(li)
+    mut vc := cache.v.get(li)
+    _cache_put(kc, k, pos0)
+    _cache_put(vc, v, pos0)
+    k.free()
+    v.free()
+    mut ctx := _attention(q, kc, vc, pos0, cfg.heads, cfg.kv_heads, hd)
+    q.free()
+    mut o := tensor.MulTranspose(ctx, l.wo)
+    ctx.free()
+    tensor.AddInPlace(x, o)
+    o.free()
+    mut h2 := _rmsnorm(x, l.ffn_norm, cfg.eps)
+    mut gate := tensor.MulTranspose(h2, l.w_gate)
+    mut up := tensor.MulTranspose(h2, l.w_up)
+    h2.free()
+    mut act := tensor.Silu(gate)
+    gate.free()
+    tensor.MulInPlace(act, up)
+    up.free()
+    mut down := tensor.MulTranspose(act, l.w_down)
+    act.free()
+    tensor.AddInPlace(x, down)
+    down.free()
+end
+
+@en "Forward"
+@fa "پیشرو"
+pub func Forward(m &: Model, cache &: KVCache, tokens &: Vector<int>): tensor.Tensor:
+    n := tokens.len()
+    pos0 := cache.len
+    if not m.ok or n == 0 or pos0 + n > cache.ctx: ret tensor.Empty() end
+    mut x := _gather_rows(m.tok_embed, tokens)
+    repeat m.cfg.layers in li:
+        _layer_forward(m, li, cache, x, pos0)
+    end
+    cache.len = pos0 + n
+    mut xn := _rmsnorm(x, m.out_norm, m.cfg.eps)
+    x.free()
+    mut logits := tensor.Empty()
+    if m.out_head.is_empty():
+        logits = tensor.MulTranspose(xn, m.tok_embed)
+    else:
+        logits = tensor.MulTranspose(xn, m.out_head)
+    end
+    xn.free()
+    ret logits
+end
+
+@en "LogitsRow"
+@fa "ردیف لاجیت"
+pub func LogitsRow(logits &: tensor.Tensor, row: int): tensor.Tensor:
+    ret tensor.SliceAxis0(logits, row, 1)
+end

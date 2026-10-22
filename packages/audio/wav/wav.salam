@@ -1,0 +1,304 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "wav"
+@fa "ویو"
+package wav
+
+import audio
+import compress
+import archive
+import str
+
+@en "CodecPCM"
+@fa "کدک پی‌سی‌ام"
+pub const CodecPCM := 1
+
+@en "CodecFloat"
+@fa "کدک اعشاری"
+pub const CodecFloat := 3
+
+@en "CodecALaw"
+@fa "کدک ای‌لا"
+pub const CodecALaw := 6
+
+@en "CodecMuLaw"
+@fa "کدک میولا"
+pub const CodecMuLaw := 7
+
+@en "CodecExtensible"
+@fa "کدک گسترش‌پذیر"
+pub const CodecExtensible := 65534
+
+@en "Format"
+@fa "قالب"
+pub struct Format:
+    @en "codec"
+    @fa "کدک"
+    pub codec: int = 0
+    @en "channels"
+    @fa "کانال ها"
+    pub channels: int = 0
+    @en "rate"
+    @fa "نرخ"
+    pub rate: int = 0
+    @en "bits"
+    @fa "بیت ها"
+    pub bits: int = 0
+    @en "block_align"
+    @fa "همترازی بلوک"
+    pub block_align: int = 0
+    @en "byte_rate"
+    @fa "نرخ بایت"
+    pub byte_rate: int = 0
+end
+
+@en "Chunk"
+@fa "تکه"
+pub struct Chunk:
+    @en "tag"
+    @fa "برچسب"
+    pub tag: int = 0
+    @en "offset"
+    @fa "جابجایی"
+    pub offset: int = 0
+    @en "size"
+    @fa "اندازه"
+    pub size: int = 0
+end
+
+func _tag(a: int, b: int, c: int, d: int): int:
+    ret (a << 24) | (b << 16) | (c << 8) | d
+end
+
+func _tag_at(p: void*, off: int): int:
+    bp := p as u8*
+    ret _tag(bp[off] as int, bp[off + 1] as int, bp[off + 2] as int, bp[off + 3] as int)
+end
+
+func _u16(p: void*, off: int): int:
+    bp := p as u8*
+    ret (bp[off] as int) | ((bp[off + 1] as int) << 8)
+end
+
+func _u32(p: void*, off: int): i64:
+    bp := p as u8*
+    ret (bp[off] as i64) | ((bp[off + 1] as i64) << 8) | ((bp[off + 2] as i64) << 16) | ((bp[off + 3] as i64) << 24)
+end
+
+func _riff(): int:
+    ret _tag(82, 73, 70, 70)
+end
+
+func _wave(): int:
+    ret _tag(87, 65, 86, 69)
+end
+
+func _fmt(): int:
+    ret _tag(102, 109, 116, 32)
+end
+
+func _data(): int:
+    ret _tag(100, 97, 116, 97)
+end
+
+@en "Tag"
+@fa "برچسب"
+pub func Tag(s: str): int:
+    mut cps := str.CodePoints(s)
+    mut out := 0
+    if cps.len() >= 4:
+        out = _tag(cps.get(0), cps.get(1), cps.get(2), cps.get(3))
+    end
+    cps.free()
+    ret out
+end
+
+@en "IsWAV"
+@fa "ویو است"
+pub func IsWAV(p: void*, n: int): bool:
+    if n < 12:
+        ret false
+    end
+    ret _tag_at(p, 0) == _riff() and _tag_at(p, 8) == _wave()
+end
+
+@en "Chunks"
+@fa "تکه‌ها"
+pub func Chunks(p: void*, n: int): Vector<Chunk>:
+    mut out := Vector {} as Vector<Chunk>
+    if not IsWAV(p, n):
+        ret out
+    end
+    mut at := 12
+    until at + 8 <= n:
+        tag := _tag_at(p, at)
+        size := _u32(p, at + 4)
+        body := at + 8
+        mut avail := n - body
+        if size < (avail as i64):
+            avail = size as int
+        end
+        out.push(Chunk { tag = tag, offset = body, size = avail })
+        mut step := avail
+        if (step % 2) == 1:
+            step += 1
+        end
+        at = body + step
+    end
+    ret out
+end
+
+@en "FindChunk"
+@fa "یافتن تکه"
+pub func FindChunk(p: void*, n: int, tag: int, out &: Chunk): bool:
+    if not IsWAV(p, n):
+        ret false
+    end
+    mut at := 12
+    until at + 8 <= n:
+        t := _tag_at(p, at)
+        size := _u32(p, at + 4)
+        body := at + 8
+        mut avail := n - body
+        if size < (avail as i64):
+            avail = size as int
+        end
+        if t == tag:
+            out = Chunk { tag = t, offset = body, size = avail }
+            ret true
+        end
+        mut step := avail
+        if (step % 2) == 1:
+            step += 1
+        end
+        at = body + step
+    end
+    ret false
+end
+
+@en "ReadFormat"
+@fa "خواندن قالب"
+pub func ReadFormat(p: void*, n: int, out &: Format): bool:
+    mut ck := Chunk {}
+    if not FindChunk(p, n, _fmt(), ck):
+        ret false
+    end
+    if ck.size < 16:
+        ret false
+    end
+    o := ck.offset
+    mut f := Format {}
+    f.codec = _u16(p, o)
+    f.channels = _u16(p, o + 2)
+    f.rate = _u32(p, o + 4) as int
+    f.byte_rate = _u32(p, o + 8) as int
+    f.block_align = _u16(p, o + 12)
+    f.bits = _u16(p, o + 14)
+    if f.codec == CodecExtensible and ck.size >= 40:
+        f.codec = _u16(p, o + 24)
+    end
+    out = f
+    ret f.channels > 0 and f.rate > 0
+end
+
+@en "ProbeWAV"
+@fa "بررسی ویو"
+pub func ProbeWAV(p: void*, n: int, ok &: bool): audio.Info:
+    ok = false
+    mut info := audio.Info {}
+    mut f := Format {}
+    if not ReadFormat(p, n, f):
+        ret info
+    end
+    mut ck := Chunk {}
+    if not FindChunk(p, n, _data(), ck):
+        ret info
+    end
+    bytes_per := f.bits / 8
+    if bytes_per <= 0 or f.channels <= 0:
+        ret info
+    end
+    info.format = audio.FormatWAV
+    info.rate = f.rate
+    info.channels = f.channels
+    info.bits = f.bits
+    info.frames = ck.size / (bytes_per * f.channels)
+    info.lossless = f.codec == CodecPCM or f.codec == CodecFloat
+    info.bitrate = f.rate * f.channels * f.bits
+    info.duration = f.rate > 0 ? (info.frames as f64) / (f.rate as f64) : 0.0
+    ok = true
+    ret info
+end
+
+@en "DecodeWAV"
+@fa "کدگشایی ویو"
+pub func DecodeWAV(p: void*, n: int, ok &: bool): audio.Clip:
+    ok = false
+    mut f := Format {}
+    if not ReadFormat(p, n, f):
+        ret audio.Clip {}
+    end
+    mut ck := Chunk {}
+    if not FindChunk(p, n, _data(), ck):
+        ret audio.Clip {}
+    end
+    bytes_per := f.bits / 8
+    if bytes_per <= 0 or f.channels <= 0 or f.rate <= 0:
+        ret audio.Clip {}
+    end
+    frames := ck.size / (bytes_per * f.channels)
+    if frames <= 0:
+        ret audio.Clip {}
+    end
+    mut out := audio.New(f.rate, f.channels, frames)
+    if out.samples == null:
+        ret out
+    end
+    out.bits = f.bits
+    if not _read_samples(p, n, ck.offset, f, out):
+        audio.Free(out)
+        ret audio.Clip {}
+    end
+    ok = true
+    ret out
+end
+
+@en "OpenWAV"
+@fa "بازکردن ویو"
+pub func OpenWAV(path: str, ok &: bool): audio.Clip:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Clip {}
+    end
+    out := DecodeWAV(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end
+
+@en "ProbeFileWAV"
+@fa "بررسی پرونده ویو"
+pub func ProbeFileWAV(path: str, ok &: bool): audio.Info:
+    mut read_ok := false
+    buf := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        ok = false
+        ret audio.Info {}
+    end
+    out := ProbeWAV(buf.data, buf.len, ok)
+    compress.BufFree(buf)
+    ret out
+end

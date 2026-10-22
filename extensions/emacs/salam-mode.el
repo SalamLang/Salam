@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.5.6
+;; Version: 0.5.7
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -29,7 +29,7 @@
 
 (defcustom salam-lang "auto"
   "Keyword pack passed to the compiler as --lang.
-\"auto\" reads a //! lang: directive, then falls back to detecting the
+\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to detecting the
 script the buffer is written in."
   :type '(choice (const "auto") (const "en") (const "fa"))
   :group 'salam)
@@ -55,6 +55,11 @@ An empty string lets the compiler find it."
   :type 'string
   :group 'salam)
 
+(defcustom salam-lsp-messages "auto"
+  "Language of messages from the Salam language server: \"auto\", \"en\" or \"fa\"."
+  :type '(choice (const "auto") (const "en") (const "fa"))
+  :group 'salam)
+
 (defcustom salam-run-command "exec"
   "Subcommand ‘salam-run’ uses.
 \"exec\" is the tree-walking interpreter and needs no C toolchain."
@@ -65,7 +70,7 @@ An empty string lets the compiler find it."
 (defconst salam-loop-keywords '("until" "repeat" "each" "تا" "تکرار" "هر"))
 (defconst salam-statement-keywords '("ret" "end" "break" "continue" "defer" "to" "by" "in" "برگشت" "پایان" "بشکن" "گذر" "دیرکن" "تا" "هر" "در"))
 (defconst salam-storage-keywords '("mut" "const" "extern" "pub" "inline" "noinline" "pure" "noret" "deprecated" "export" "ناپایا" "پایا" "درون‌داد" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "برون‌داد"))
-(defconst salam-other-keywords '("on" "as" "layout" "impl" "بر" "برگردان" "صفحه" "کاربست" "چیدمان"))
+(defconst salam-other-keywords '("on" "as" "page" "impl" "بر" "برگردان" "صفحه" "کاربست"))
 (defconst salam-function-keywords '("func" "تابع"))
 (defconst salam-structure-keywords '("type" "struct" "enum" "interface" "component" "گونه" "ساختار" "جداشمار" "میانجی" "بخش"))
 (defconst salam-include-keywords '("import" "package" "include" "واردسازی" "بسته" "فراخوانی"))
@@ -79,10 +84,10 @@ An empty string lets the compiler find it."
 (defconst salam-word-operators '("and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
 (defconst salam-contextual-keywords '("link" "static" "dynamic" "framework" "پیوند" "ایستا" "پویا" "چارچوب" "dyn"))
 (defconst salam-directive-keywords '("mode" "title" "lang" "dir" "name" "version"))
-(defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float" "شمارنویسه" "char_count" "نویسه شماره" "char_at" "زیررشته نویسه" "char_substr" "بیاب نویسه" "char_find" "شروع با" "starts_with" "ختم با" "ends_with" "دربردارد" "includes" "رونوشت" "copy" "رونوشت عمیق" "deep_copy"))
+(defconst salam-builtin-methods '("بیفزا" "push" "دربیاور" "pop" "بگیر" "get" "ارجاع" "ref" "بنشان" "set" "طول" "len" "ظرفیت" "cap" "آزادکن" "free" "درج" "put" "دارد" "has" "حذف" "remove" "اندازه" "size" "پیمایش" "iter" "داردبعدی" "has_next" "کلید" "key" "مقدار" "value" "بعدی" "next" "خواندن" "read" "خواندن خط" "readline" "نوشتن" "write" "جابجایی" "seek" "ببند" "close" "پیوست" "concat" "زیررشته" "substr" "بیاب" "find" "بشکاف" "split" "پیراست" "trim" "به صحیح" "to_int" "به اعشار" "to_float" "شمارنویسه" "char_count" "نویسه شماره" "char_at" "زیررشته نویسه" "char_substr" "بیاب نویسه" "char_find" "شروع با" "starts_with" "ختم با" "ends_with" "دربردارد" "includes" "رونوشت" "copy" "رونوشت عمیق" "deep_copy" "بایت ها" "bytes"))
 (defconst salam-end-keywords '("end" "پایان"))
 (defconst salam-else-keywords '("else" "وگرنه"))
-(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "match" "switch" "برگشت" "اگر" "وگرنه" "تا" "پایان" "بشکن" "گذر" "دیرکن" "تکرار" "هر" "در" "همخوان" "ترابرد" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "layout" "package" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "include" "export" "بر" "ناپایا" "پایا" "گونه" "ساختار" "جداشمار" "واردسازی" "برگردان" "صفحه" "بسته" "درون‌داد" "میانجی" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "بخش" "کاربست" "فراخوانی" "برون‌داد" "تابع" "چیدمان" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی" "and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
+(defconst salam-all-keywords '("ret" "if" "else" "until" "end" "break" "continue" "defer" "repeat" "to" "by" "each" "in" "match" "switch" "برگشت" "اگر" "وگرنه" "تا" "پایان" "بشکن" "گذر" "دیرکن" "تکرار" "هر" "در" "همخوان" "ترابرد" "func" "on" "mut" "const" "type" "struct" "enum" "import" "as" "page" "package" "extern" "interface" "pub" "inline" "noinline" "pure" "noret" "deprecated" "component" "impl" "include" "export" "بر" "ناپایا" "پایا" "گونه" "ساختار" "جداشمار" "واردسازی" "برگردان" "صفحه" "بسته" "درون‌داد" "میانجی" "همگانی" "درخط" "نادرخط" "ناب" "نابرگشت" "بی‌کاره" "بخش" "کاربست" "فراخوانی" "برون‌داد" "تابع" "true" "false" "null" "درست" "نادرست" "پوچ" "this" "این" "print" "println" "printerr" "printerrln" "input" "چاپ" "سرچاپ" "نادرست‌چاپ" "نادرست‌سرچاپ" "ورودی" "and" "or" "not" "eq" "neq" "lt" "gt" "lte" "gte" "و" "یا" "برابر" "نابرابر" "وارونه" "کوچکتر" "بزرگتر" "کوچکتربرابر" "بزرگتربرابر"))
 
 (defconst salam--ident-chars "[[:alnum:]_؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍]"
   "Character class matching one identifier character, Arabic script included.")
@@ -428,6 +433,39 @@ command line containing nil."
                '(salam "^\\(.+?\\):\\([0-9]+\\):\\([0-9]+\\): \\(?:\\(error\\)\\|\\(warning\\)\\|note\\): "
                        1 2 3 (5 . 4)))
   (add-to-list 'compilation-error-regexp-alist 'salam))
+
+(defvar eglot-server-programs)
+(defvar lsp-language-id-configuration)
+(declare-function make-lsp-client "lsp-mode")
+(declare-function lsp-stdio-connection "lsp-mode")
+(declare-function lsp-activate-on "lsp-mode")
+(declare-function lsp-register-client "lsp-mode")
+
+(defun salam--lsp-init-options ()
+  "Initialization options sent to `salam lsp'."
+  (append
+   (unless (string-empty-p salam-stdlib-path)
+     (list :stdlibPath salam-stdlib-path))
+   (when (member salam-lsp-messages '("en" "fa"))
+     (list :messages salam-lsp-messages))
+   (list :formatFixOrder :json-false)))
+
+(defun salam--eglot-contact (_interactive)
+  "Command and options eglot uses to start the Salam language server."
+  (list salam-compiler "lsp" :initializationOptions (salam--lsp-init-options)))
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs '(salam-mode . salam--eglot-contact)))
+
+(with-eval-after-load 'lsp-mode
+  (when (fboundp 'lsp-register-client)
+    (add-to-list 'lsp-language-id-configuration '(salam-mode . "salam"))
+    (lsp-register-client
+     (make-lsp-client
+      :new-connection (lsp-stdio-connection (lambda () (list salam-compiler "lsp")))
+      :activation-fn (lsp-activate-on "salam")
+      :initialization-options #'salam--lsp-init-options
+      :server-id 'salam-lsp))))
 
 (with-eval-after-load 'yasnippet
   (let ((directory (expand-file-name

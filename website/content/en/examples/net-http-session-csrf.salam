@@ -1,0 +1,44 @@
+import net.http
+import net.http.session
+import net.router
+
+func form(ctx: i64):
+    mut s := session.Start(ctx)
+    token := session.CSRFToken(s)
+    session.Save(s)
+    http.Html(ctx, `<form method="post" action="/email"><input type="hidden" name="csrf" value="` + token + `"><input name="email"></form>`)
+end
+
+func change_email(ctx: i64):
+    s := session.Start(ctx)
+    if not session.CSRFVerify(s, http.Form(ctx, "csrf")):
+        http.SetStatus(ctx, 403)
+        http.Text(ctx, "the form has expired, reload the page")
+        ret
+    end
+    http.Text(ctx, "email changed to " + http.Form(ctx, "email"))
+end
+
+func token_in(html: str): str:
+    start := html.find(`value="`) + 7
+    rest := html.substr(start, html.len() - start)
+    ret rest.substr(0, rest.find(`"`))
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Get(r, "/email", form)
+    router.Post(r, "/email", change_email)
+    mut srv := http.NewServer(19771)
+    http.Use(srv, r)
+    _ := http.RunBackground(srv)
+    url := "http://127.0.0.1:19771/email"
+    mut browser := http.NewClient()
+    browser.SetHeader("Content-Type", "application/x-www-form-urlencoded")
+    token := token_in(http.Body(browser.Get(url)))
+    println "token length:", token.len()
+    forged := browser.Post(url, "email=evil%40example.com")
+    println http.Status(forged), http.Body(forged)
+    real := browser.Post(url, "csrf=" + token + "&email=sara%40example.com")
+    println http.Status(real), http.Body(real)
+end

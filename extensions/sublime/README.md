@@ -58,19 +58,39 @@ chooses a variant:
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 
+## Language server
+
+With the [LSP](https://packagecontrol.io/packages/LSP) package installed, add
+this to **Preferences | Package Settings | LSP | Settings** for diagnostics as
+you type, completion, hover, go to definition, references and rename:
+
+```json
+{
+  "clients": {
+    "salam": {
+      "enabled": true,
+      "command": ["salam", "lsp"],
+      "selector": "source.salam"
+    }
+  }
+}
+```
+
+See [`docs/LSP.md`](../../docs/LSP.md) for the server's options.
+
 ## Settings
 
 `Preferences > Package Settings > Salam > Settings`, or
 `Preferences: Salam Settings` in the command palette.
 
-| Setting           | Default   | Meaning                                                                                                     |
-| ----------------- | --------- | ----------------------------------------------------------------------------------------------------------- |
-| `compiler_path`   | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                             |
-| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` reads a `//! lang:` directive, then falls back to script detection. |
-| `format_indent`   | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                        |
-| `format_on_save`  | `false`   | Reformat on every save.                                                                                     |
-| `stdlib_path`     | `""`      | `--stdlib-path` for `std/...` imports.                                                                      |
-| `timeout_seconds` | `60`      | Seconds a compiler run may take before it is killed.                                                        |
+| Setting           | Default   | Meaning                                                                                                                           |
+| ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `compiler_path`   | `"salam"` | Compiler executable; an absolute path when it is not on `PATH`.                                                                   |
+| `language_pack`   | `"auto"`  | `--lang` passed to the compiler. `auto` reads a `// زبان: فارسی` or `// lang: en` directive, then falls back to script detection. |
+| `format_indent`   | `"4"`     | `--indent` for the formatter: `tab`, or 1-16 spaces.                                                                              |
+| `format_on_save`  | `false`   | Reformat on every save.                                                                                                           |
+| `stdlib_path`     | `""`      | `--stdlib-path` for `std/...` imports.                                                                                            |
+| `timeout_seconds` | `60`      | Seconds a compiler run may take before it is killed.                                                                              |
 
 The build commands call `salam` directly and do not read `compiler_path`. If the
 compiler is not on your `PATH`, copy `Salam.sublime-build` into
@@ -80,7 +100,7 @@ compiler is not on your `PATH`, copy `Salam.sublime-build` into
 
 `main`, `func`, `funcv`, `if`, `ifelse`, `until`, `each`, `eachi`, `eachkv`,
 `repeat`, `repeati`, `repeatrange`, `var`, `mut`, `const`, `struct`, `enum`,
-`interface`, `impl`, `import`, `extern`, `export`, `layout`, `component`, `println`.
+`interface`, `impl`, `import`, `extern`, `export`, `page`, `component`, `println`.
 
 ## Maintenance
 

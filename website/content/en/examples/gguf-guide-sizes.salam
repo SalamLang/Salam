@@ -1,0 +1,45 @@
+import gguf
+import compress
+import encoding.binary
+import conv
+
+func name(b &: compress.ByteBuf, text: str):
+    binary.WriteU64LE(b, text.len() as i64)
+    compress.BufPushBytes(b, text as void*, text.len())
+end
+
+func tensor_header(b &: compress.ByteBuf, label: str, kind: int, offset: int):
+    name(b, label)
+    binary.WriteU32LE(b, 1)
+    binary.WriteU64LE(b, 64)
+    binary.WriteU32LE(b, kind)
+    binary.WriteU64LE(b, offset as i64)
+end
+
+func main:
+    mut b := compress.NewByteBuf()
+    compress.BufPushBytes(b, "GGUF" as void*, 4)
+    binary.WriteU32LE(b, 3)
+    binary.WriteU64LE(b, 4)
+    binary.WriteU64LE(b, 0)
+    tensor_header(b, "full", gguf.GGML_F32, 0)
+    tensor_header(b, "half", gguf.GGML_F16, 256)
+    tensor_header(b, "q8", gguf.GGML_Q8_0, 384)
+    tensor_header(b, "q4", gguf.GGML_Q4_0, 480)
+    until compress.BufLen(b) % 32 != 0:
+        binary.WriteU8(b, 0)
+    end
+    repeat 544:
+        binary.WriteU8(b, 0)
+    end
+    mut ok := false
+    mut g := gguf.ParseGguf(b, ok)
+    println "parsed:", ok
+    repeat g.tensors.len() in i:
+        info := g.tensors.get(i)
+        bytes := gguf.TensorBytes(g, i)
+        bits := (bytes * 8) as f64 / (info.count() as f64)
+        println info.name, info.count(), "weights in", bytes, "bytes,", conv.FormatFloatPrec(bits, 1), "bits each"
+    end
+    g.free()
+end

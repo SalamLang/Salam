@@ -1,0 +1,58 @@
+import net.websocket
+import str
+import sync
+
+mut server := websocket.Server {}
+mut hub := websocket.NewHub()
+mut lock := sync.NewMutex()
+
+func announce(text: str):
+    sync.Lock(lock)
+    _ := websocket.Broadcast(hub, "lobby", text)
+    sync.Unlock(lock)
+end
+
+func member():
+    mut conn := websocket.Accept(server)
+    if not websocket.IsOpen(conn): ret end
+    name := str.Replace(conn.path, "/chat/", "")
+    entry := conn
+    sync.Lock(lock)
+    websocket.Register(hub, "lobby", entry)
+    sync.Unlock(lock)
+    _ := websocket.SendText(conn, "welcome, " + name)
+    until websocket.IsOpen(conn):
+        m := websocket.Receive(conn)
+        if not websocket.IsText(m): break end
+        announce(name + ": " + m.text)
+    end
+    sync.Lock(lock)
+    websocket.Unregister(hub, "lobby", entry)
+    sync.Unlock(lock)
+    announce(name + " left")
+    websocket.Close(conn)
+end
+
+func main:
+    server = websocket.Listen(0)
+    port := websocket.Port(server)
+    a := spawn(member)
+    b := spawn(member)
+    mut sara := websocket.Dial("127.0.0.1", port, "/chat/sara")
+    println "sara got:", websocket.ReceiveText(sara)
+    mut reza := websocket.Dial("127.0.0.1", port, "/chat/reza")
+    println "reza got:", websocket.ReceiveText(reza)
+
+    _ := websocket.SendText(sara, "lunch at one?")
+    println "sara got:", websocket.ReceiveText(sara)
+    println "reza got:", websocket.ReceiveText(reza)
+
+    websocket.Close(reza)
+    println "sara got:", websocket.ReceiveText(sara)
+    websocket.Close(sara)
+    join(a)
+    join(b)
+    println "left in the lobby:", websocket.RoomSize(hub, "lobby")
+    websocket.CloseServer(server)
+    sync.Destroy(lock)
+end

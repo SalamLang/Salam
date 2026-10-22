@@ -11,6 +11,7 @@ include lg "../logger.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lp "../langpack.salam"
+include pm "../pkgmgr/pkgmgr.salam"
 include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
 include cc "../condcomp.salam"
@@ -116,6 +117,10 @@ pub func Llvm(opt &: Dr): int:
         ret 1
     end
 
+    is_lib := str.Len(opt.lib_kind) > 0
+    if is_lib:
+        opt.llvm_emit = lv.LV_OUT_OBJ
+    end
     wants_entry := opt.llvm_emit == lv.LV_OUT_EXEC or opt.llvm_emit == lv.LV_OUT_JIT
     if wants_entry and not target_is_freestanding(opt.llvm_target) and not program_has_func(a, prog, entry):
         lg.Log(
@@ -149,13 +154,32 @@ pub func Llvm(opt &: Dr): int:
     end
     o.native_cpu = opt.llvm_native_cpu and str.Len(opt.llvm_target) == 0
     o.fp_contract = opt.llvm_fp_contract
+    o.lib_mode = is_lib
 
-    if o.output_mode == lv.LV_OUT_EXEC:
+    if o.output_mode == lv.LV_OUT_EXEC or is_lib:
         mut links := Vector {} as Vector<str>
         mut kinds := Vector {} as Vector<str>
+        g_native_skip = false
+        g_native_failed = false
+        g_native_target = opt.llvm_target
+        g_native_cc = ""
+        g_native_extra.clear()
+        if str.Len(opt.llvm_target) > 0:
+            pm.SetNativePlatform(pm.PlatformOfTriple(opt.llvm_target))
+            g_native_cc = "clang"
+            g_native_extra.push("--target=" + opt.llvm_target)
+            mut nsr := ""
+            if sm.FindSysroot(opt.llvm_target, nsr):
+                g_native_extra.push("--sysroot=" + nsr)
+            end
+        end
         ll_gather_links(
             lgr, pack, opt.input, a, prog, lp.Code(modpack), table, links, kinds
         )
+        if g_native_failed:
+            ret 2
+        end
+        native_expand(links, kinds)
         o.link_libs = links
         o.link_kinds = kinds
         o.nlink = links.len()
@@ -240,7 +264,15 @@ pub func Llvm(opt &: Dr): int:
             _rm := os.Remove(llpath)
         end
     else:
-        if str.Len(opt.output) > 0:
+        mut lib_final := ""
+        mut lib_stem := opt.lib_name
+        if str.Len(lib_stem) == 0:
+            lib_stem = output_stem_of(opt.input)
+        end
+        if is_lib:
+            lib_final = lib_output_name(opt, lib_stem)
+            o.output_file = lib_final + ".o"
+        else str.Len(opt.output) > 0:
             if o.output_mode == lv.LV_OUT_EXEC:
                 o.output_file = exe_name_for(opt.output, opt.llvm_target)
             else:
@@ -256,6 +288,12 @@ pub func Llvm(opt &: Dr): int:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept LLVM IR: " + llpath)
         else:
             _rm2 := os.Remove(llpath)
+        end
+        if rc == 0 and is_lib:
+            rc = llvm_lib_finish(lgr, opt, o.output_file, o.link_libs, a, prog, lib_final, lib_stem)
+            sm.Free(s)
+            at.FreeAst(a)
+            ret rc
         end
         if rc == 0:
             lg.Log(

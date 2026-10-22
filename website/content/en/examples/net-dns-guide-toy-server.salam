@@ -1,0 +1,50 @@
+import net.dns
+import net.udp
+import mem
+
+mut server := udp.Socket {}
+
+func answer_nxdomain():
+    udp.SetTimeout(server, 2000)
+    buf := mem.AllocateZeroed(512 as u64)
+    mut host := ""
+    mut port := 0
+    n := udp.ReceiveBytes(server, buf, 512, host, port)
+    question := dns.Decode(buf, n)
+    println "server: question", question.id, "for", question.questions.items[0].name
+    b := buf as u8*
+    b[2] = b[2] | (128 as u8)
+    b[3] = 131 as u8
+    _ := udp.SendBytes(server, host, port, buf, n)
+    mem.Free(buf)
+end
+
+func rcode_name(code: int): str:
+    switch code:
+        0: ret "NOERROR" end
+        2: ret "SERVFAIL" end
+        3: ret "NXDOMAIN" end
+        5: ret "REFUSED" end
+    end
+    ret "other"
+end
+
+func main:
+    server = udp.BindOn("127.0.0.1", 0)
+    t := spawn(answer_nxdomain)
+    query := dns.EncodeQuery("shop.example", dns.TypeA, 7)
+    client := udp.Open()
+    udp.SetTimeout(client, 2000)
+    _ := udp.SendBytes(client, "127.0.0.1", udp.Port(server), query.data, query.len)
+    reply := mem.AllocateZeroed(512 as u64)
+    mut host := ""
+    mut port := 0
+    n := udp.ReceiveBytes(client, reply, 512, host, port)
+    join(t)
+    m := dns.Decode(reply, n)
+    println "client: answer", m.id, "qr", m.qr, "ra", m.ra
+    println "client: rcode", m.rcode, rcode_name(m.rcode), "answers", m.answers.items.len()
+    mem.Free(reply)
+    udp.Close(client)
+    udp.Close(server)
+end

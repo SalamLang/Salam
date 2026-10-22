@@ -24,6 +24,9 @@ include aistore "store.salam"
 include aiweb "web.salam"
 include aioauth "oauth.salam"
 include aiopenai "openai.salam"
+include aiturn "turn.salam"
+include aiengine "engine.salam"
+include aifiles "files.salam"
 
 const TEHRAN := 12600
 const EPOCH_JDN := 2440588
@@ -143,6 +146,12 @@ func summary(ctx: i64):
     m.push(json.MemberRaw("users_7d", count("SELECT COUNT(DISTINCT user_id) FROM (SELECT user_id FROM sessions WHERE expires > ?1 UNION SELECT user_id FROM mcp_events WHERE created > ?2 UNION SELECT c.user_id FROM chats c WHERE c.updated > ?2) a", two(n(t + 23 * 86400), week))))
     m.push(json.MemberRaw("chats", count("SELECT COUNT(*) FROM chats", none)))
     m.push(json.MemberRaw("messages", count("SELECT COUNT(*) FROM messages WHERE role = 'user'", none)))
+    m.push(json.MemberRaw("uploads", count("SELECT COUNT(*) FROM message_files", none)))
+    m.push(json.MemberRaw("uploads_images", count("SELECT COUNT(*) FROM message_files WHERE kind = 'image'", none)))
+    m.push(json.MemberRaw("uploads_bytes", count("SELECT COALESCE(SUM(size), 0) FROM message_files", none)))
+    m.push(json.MemberRaw("guests", count("SELECT COUNT(*) FROM guest_sessions", none)))
+    m.push(json.MemberRaw("guest_messages", count("SELECT COUNT(*) FROM guest_messages WHERE role = 'user'", none)))
+    m.push(json.MemberRaw("guests_at_limit", count("SELECT COUNT(*) FROM guest_sessions WHERE messages >= 15", none)))
     m.push(json.MemberRaw("apps", count("SELECT COUNT(*) FROM oauth_grants WHERE revoked = 0", none)))
     m.push(json.MemberRaw("mcp_calls", count("SELECT COUNT(*) FROM mcp_events", none)))
     m.push(json.MemberRaw("mcp_calls_24h", count("SELECT COUNT(*) FROM mcp_events WHERE created > ?1", one(day))))
@@ -219,8 +228,8 @@ func list_users(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
     end
-    q := str.Trim(http.Ctx_query(ctx, "q"))
-    mut offset := http.Ctx_query(ctx, "offset").to_int()
+    q := str.Trim(http.Query(ctx, "q"))
+    mut offset := http.Query(ctx, "offset").to_int()
     if offset < 0:
         offset = 0
     end
@@ -228,7 +237,7 @@ func list_users(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM users WHERE name LIKE ?1 OR email LIKE ?1", one(like))
-    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0)), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in + m.tokens_out + m.tokens_reasoning + m.cache_read + m.cache_write), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in + r.tokens_out + r.tokens_reasoning + r.cache_read + r.cache_write), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
+    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins, (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id AND f.kind = 'image'), (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id), (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > UNIX_TIMESTAMP()), COALESCE((SELECT s.client_version FROM sessions s WHERE s.user_id = u.id AND s.client = 'agent' AND s.client_version != '' ORDER BY s.last_used DESC LIMIT 1), '') FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -239,11 +248,18 @@ func list_users(ctx: i64):
         m.push(json.MemberRaw("messages", aistore.Text(rows, 5)))
         m.push(json.MemberRaw("apps", aistore.Text(rows, 6)))
         m.push(json.MemberRaw("mcp_calls", aistore.Text(rows, 7)))
-        m.push(json.MemberRaw("last_active", aistore.Text(rows, 8)))
-        m.push(json.MemberRaw("api_requests", aistore.Text(rows, 9)))
-        m.push(json.MemberRaw("tokens", aistore.Text(rows, 10)))
-        m.push(json.MemberRaw("last_login", aistore.Text(rows, 11)))
-        m.push(json.MemberRaw("logins", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("last_active_chat", aistore.Text(rows, 8)))
+        m.push(json.MemberRaw("last_active_agent", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("last_active_api", aistore.Text(rows, 10)))
+        m.push(json.MemberRaw("api_requests", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("tokens_in", aistore.Text(rows, 12)))
+        m.push(json.MemberRaw("tokens_out", aistore.Text(rows, 13)))
+        m.push(json.MemberRaw("last_login", aistore.Text(rows, 14)))
+        m.push(json.MemberRaw("logins", aistore.Text(rows, 15)))
+        m.push(json.MemberRaw("images", aistore.Text(rows, 16)))
+        m.push(json.MemberRaw("files", aistore.Text(rows, 17)))
+        m.push(json.MemberRaw("sessions", aistore.Text(rows, 18)))
+        m.push(json.Member("agent_version", aistore.Text(rows, 19)))
         items.push(json.Object(m))
     end
     aistore.Finish(rows)
@@ -256,22 +272,22 @@ func list_events(ctx: i64):
         ret
     end
     mut where := "e.id < ?1"
-    mut before := http.Ctx_query(ctx, "before").to_int() as i64
+    mut before := http.Query(ctx, "before").to_int() as i64
     if before <= 0:
         before = 9223372036854775807
     end
     mut args := one(n(before))
-    user := http.Ctx_query(ctx, "user")
+    user := http.Query(ctx, "user")
     if user.len() > 0:
         args.push(user)
         where = where + " AND e.user_id = ?" + args.len()
     end
-    tool := http.Ctx_query(ctx, "tool")
+    tool := http.Query(ctx, "tool")
     if tool.len() > 0:
         args.push(tool)
         where = where + " AND e.tool = ?" + args.len()
     end
-    client := http.Ctx_query(ctx, "client")
+    client := http.Query(ctx, "client")
     if client.len() > 0:
         args.push(client)
         where = where + " AND COALESCE(c.name, e.client_id) = ?" + args.len()
@@ -283,13 +299,13 @@ func admin_list_apps(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
     end
-    mut before := http.Ctx_query(ctx, "before").to_int() as i64
+    mut before := http.Query(ctx, "before").to_int() as i64
     if before <= 0:
         before = 9223372036854775807
     end
     mut where := "g.id < ?1"
     mut args := one(n(before))
-    user := http.Ctx_query(ctx, "user")
+    user := http.Query(ctx, "user")
     if user.len() > 0:
         args.push(user)
         where = where + " AND g.user_id = ?2"
@@ -322,23 +338,23 @@ func list_requests(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
     end
-    mut before := http.Ctx_query(ctx, "before").to_int() as i64
+    mut before := http.Query(ctx, "before").to_int() as i64
     if before <= 0:
         before = 9223372036854775807
     end
     mut where := "r.id < ?1"
     mut args := one(n(before))
-    user := http.Ctx_query(ctx, "user")
+    user := http.Query(ctx, "user")
     if user.len() > 0:
         args.push(user)
         where = where + " AND r.user_id = ?" + args.len()
     end
-    project := http.Ctx_query(ctx, "project")
+    project := http.Query(ctx, "project")
     if project.len() > 0:
         args.push(project)
         where = where + " AND r.project = ?" + args.len()
     end
-    key := http.Ctx_query(ctx, "key")
+    key := http.Query(ctx, "key")
     if key.len() > 0:
         args.push(key)
         where = where + " AND r.key_id = ?" + args.len()
@@ -346,22 +362,368 @@ func list_requests(ctx: i64):
     aiweb.Reply(ctx, 200, `{"requests": ` + aiopenai.Requests(where, args, true) + "}")
 end
 
+func admin_chat_json(id: str, title: str, updated: str, device: str, workspace: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.Member("title", title))
+    m.push(json.MemberRaw("updated", updated))
+    if device != "0" and device.len() > 0:
+        m.push(json.MemberBool("agent", true))
+        m.push(json.MemberRaw("device_id", device))
+        m.push(json.Member("workspace", workspace))
+    end
+    ret json.Object(m)
+end
+
+func admin_activity_raw(s: str): str:
+    t := str.Trim(s)
+    if str.StartsWith(t, "[") and str.EndsWith(t, "]"):
+        ret t
+    end
+    ret "[]"
+end
+
+func admin_message_json(id: str, role: str, body: str, status: str, created: str, activity: str, ms: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.Member("role", role))
+    m.push(json.Member("body", role == "assistant" ? aiturn.Plain(body) : body))
+    m.push(json.Member("status", status))
+    m.push(json.MemberRaw("created", created))
+    m.push(json.MemberRaw("activity", admin_activity_raw(activity)))
+    m.push(json.MemberRaw("ms", ms.len() > 0 ? ms : "0"))
+    ret json.Object(m)
+end
+
+func list_user_chats(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    uid := http.Param(ctx, "id")
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(uid))
+    until aistore.Next(rows):
+        items.push(admin_chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"chats": ` + json.Array(items) + "}")
+end
+
+func get_admin_chat(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    attached := aifiles.ForChat(id)
+    mut head := ""
+    aistore.Lock()
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
+    if aistore.Next(crow):
+        head = admin_chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
+    end
+    aistore.Finish(crow)
+    if head.len() == 0:
+        aistore.Unlock()
+        aiweb.Fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    mut owner := "null"
+    mut orow := aistore.Stmt("SELECT u.id, u.name, u.email FROM chats c JOIN users u ON u.id = c.user_id WHERE c.id = ?1", one(id))
+    if aistore.Next(orow):
+        mut om := Vector {} as Vector<str>
+        om.push(json.MemberRaw("id", aistore.Text(orow, 0)))
+        om.push(json.Member("name", aistore.Text(orow, 1)))
+        om.push(json.Member("email", aistore.Text(orow, 2)))
+        owner = json.Object(om)
+    end
+    aistore.Finish(orow)
+    mut items := Vector {} as Vector<str>
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    until aistore.Next(rows):
+        mid := aistore.Text(rows, 0)
+        mut item := admin_message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6))
+        if attached.has(mid):
+            item = item.substr(0, item.len() - 1) + `, "files": ` + attached.get(mid) + "}"
+        end
+        items.push(item)
+    end
+    aistore.Finish(rows)
+    mut calls := Vector {} as Vector<str>
+    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
+    until aistore.Next(crows):
+        mut cm := Vector {} as Vector<str>
+        cm.push(json.Member("call_id", aistore.Text(crows, 0)))
+        cm.push(json.Member("chat", id))
+        cm.push(json.MemberRaw("mid", aistore.Text(crows, 1)))
+        cm.push(json.Member("tool", aistore.Text(crows, 2)))
+        cm.push(json.Member("kind", aistore.Text(crows, 3)))
+        cm.push(json.Member("summary", aistore.Text(crows, 4)))
+        cm.push(json.Member("detail", aistore.Text(crows, 5)))
+        cm.push(json.Member("lang", aistore.Text(crows, 6)))
+        cm.push(json.MemberBool("outside", aistore.Text(crows, 7) == "1"))
+        cm.push(json.Member("cwd", aistore.Text(crows, 8)))
+        cm.push(json.Member("output", aistore.Text(crows, 9)))
+        cm.push(json.Member("state", aistore.Text(crows, 10)))
+        cm.push(json.MemberRaw("created", aistore.Text(crows, 11)))
+        cm.push(json.MemberRaw("finished", aistore.Text(crows, 12)))
+        calls.push(json.Object(cm))
+    end
+    aistore.Finish(crows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"chat": ` + head + `, "user": ` + owner + `, "messages": ` + json.Array(items) + `, "calls": ` + json.Array(calls) + "}")
+end
+
+func get_trace(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mut chat := ""
+    mut status := ""
+    mut created := 0 as i64
+    mut stored := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT chat_id, status, created, COALESCE(trace, '') FROM messages WHERE id = ?1 AND role = 'assistant'", one(id))
+    if aistore.Next(rows):
+        chat = aistore.Text(rows, 0)
+        status = aistore.Text(rows, 1)
+        created = aistore.Int64(rows, 2)
+        stored = aistore.Text(rows, 3)
+    end
+    aistore.Finish(rows)
+    if chat.len() == 0:
+        aistore.Unlock()
+        aiweb.Fail(ctx, 404, "not_found", "این پیام پیدا نشد.")
+        ret
+    end
+    if stored.len() > 0:
+        aistore.Unlock()
+        aiweb.Reply(ctx, 200, `{"trace": ` + stored + `, "saved": true}`)
+        ret
+    end
+    sid := aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(chat))
+    token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1", one(chat))
+    next := aistore.OneText("SELECT COALESCE(MIN(created), 0) FROM messages WHERE chat_id = ?1 AND role = 'user' AND id > ?2", two(chat, id))
+    aistore.Unlock()
+    if sid.len() == 0:
+        aiweb.Reply(ctx, 200, `{"trace": [], "saved": false}`)
+        ret
+    end
+    mut ok := false
+    trace := aiengine.Transcript(sid, created * 1000, (next.to_int() as i64) * 1000, token, ok)
+    if not ok:
+        aiweb.Fail(ctx, 502, "engine", "جزئیات این پاسخ از موتور دستیار خوانده نشد.")
+        ret
+    end
+    if status != "pending" and trace != "[]":
+        aistore.Lock()
+        _u := aistore.Run("UPDATE messages SET trace = ?1 WHERE id = ?2", two(trace, id))
+        aistore.Unlock()
+    end
+    aiweb.Reply(ctx, 200, `{"trace": ` + trace + `, "saved": false}`)
+end
+
+func get_admin_file(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    found := aifiles.Read(http.Param(ctx, "id"), http.Param(ctx, "fid"))
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این فایل پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, found)
+end
+
+func list_files(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut offset := http.Query(ctx, "offset").to_int()
+    if offset < 0:
+        offset = 0
+    end
+    kind := http.Query(ctx, "kind")
+    if kind.len() > 0 and kind != "image" and kind != "text" and kind != "archive" and kind != "pdf":
+        aiweb.Fail(ctx, 400, "kind", "نوع فایل نامعتبر است.")
+        ret
+    end
+    user := http.Query(ctx, "user")
+    aiweb.Reply(ctx, 200, aifiles.List(user.to_int() > 0 ? "" + user.to_int() : "", kind, offset))
+end
+
+func download_file(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    found := aifiles.ReadAny(http.Param(ctx, "id"))
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این فایل پیدا نشد.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, found)
+end
+
+func list_sessions(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut offset := http.Query(ctx, "offset").to_int()
+    if offset < 0:
+        offset = 0
+    end
+    user := http.Query(ctx, "user").to_int()
+    client := http.Query(ctx, "client")
+    mine := aiweb.Hash(aiweb.Bearer(ctx))
+    mut where := "s.expires > ?1"
+    if user > 0:
+        where = where + " AND s.user_id = ?2"
+    end
+    if client == "web" or client == "agent":
+        where = where + " AND s.client = ?3"
+    end
+    mut a := Vector {} as Vector<str>
+    a.push(n(aistore.Now()))
+    a.push(n(user as i64))
+    a.push(client)
+    a.push(mine)
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    total := count("SELECT COUNT(*) FROM sessions s WHERE " + where, a)
+    mut rows := aistore.Stmt("SELECT s.id, s.created, s.last_used, s.expires, s.ip, s.agent, s.client, s.client_version, s.token = ?4, u.id, u.name, u.email FROM sessions s JOIN users u ON u.id = s.user_id WHERE " + where + " ORDER BY GREATEST(s.last_used, s.created) DESC LIMIT 50 OFFSET " + n(offset as i64), a)
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 1)))
+        m.push(json.MemberRaw("last_used", aistore.Text(rows, 2)))
+        m.push(json.MemberRaw("expires", aistore.Text(rows, 3)))
+        m.push(json.Member("ip", aistore.Text(rows, 4)))
+        m.push(json.Member("agent", aistore.Text(rows, 5)))
+        m.push(json.Member("client", aistore.Text(rows, 6)))
+        m.push(json.Member("client_version", aistore.Text(rows, 7)))
+        m.push(json.MemberBool("current", aistore.Text(rows, 8) == "1"))
+        mut um := Vector {} as Vector<str>
+        um.push(json.MemberRaw("id", aistore.Text(rows, 9)))
+        um.push(json.Member("name", aistore.Text(rows, 10)))
+        um.push(json.Member("email", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("user", json.Object(um)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"sessions": ` + json.Array(items) + `, "total": ` + total + "}")
+end
+
+func revoke_session(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    mine := aiweb.Hash(aiweb.Bearer(ctx))
+    aistore.Lock()
+    own := count("SELECT COUNT(*) FROM sessions WHERE id = ?1 AND token = ?2", two(id, mine))
+    gone := own == "0" and aistore.Run("DELETE FROM sessions WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if own != "0":
+        aiweb.Fail(ctx, 400, "self", "نشست فعلی خودتان را از اینجا نمی‌توانید ببندید؛ از حساب خارج شوید.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"ok": ` + (gone ? "true" : "false") + "}")
+end
+
+func revoke_user_sessions(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    uid := http.Param(ctx, "id")
+    mine := aiweb.Hash(aiweb.Bearer(ctx))
+    aistore.Lock()
+    before := count("SELECT COUNT(*) FROM sessions WHERE user_id = ?1 AND token != ?2", two(uid, mine))
+    _d := aistore.Run("DELETE FROM sessions WHERE user_id = ?1 AND token != ?2", two(uid, mine))
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"revoked": ` + before + "}")
+end
+
+func list_guests(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut offset := http.Query(ctx, "offset").to_int()
+    if offset < 0:
+        offset = 0
+    end
+    empty := Vector {} as Vector<str>
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    total := count("SELECT COUNT(*) FROM guest_sessions", empty)
+    mut rows := aistore.Stmt("SELECT g.id, g.ip, g.lang, g.messages, g.created, g.updated, COALESCE((SELECT m.body FROM guest_messages m WHERE m.guest_id = g.id AND m.role = 'user' ORDER BY m.id LIMIT 1), '') FROM guest_sessions g ORDER BY g.updated DESC LIMIT 50 OFFSET " + n(offset as i64), empty)
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("ip", aistore.Text(rows, 1)))
+        m.push(json.Member("lang", aistore.Text(rows, 2)))
+        m.push(json.MemberRaw("messages", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 4)))
+        m.push(json.MemberRaw("updated", aistore.Text(rows, 5)))
+        m.push(json.Member("first", aistore.Text(rows, 6)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"guests": ` + json.Array(items) + `, "total": ` + total + "}")
+end
+
+func get_guest(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    gid := http.Param(ctx, "id")
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created FROM guest_messages WHERE guest_id = ?1 ORDER BY id", one(gid))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("role", aistore.Text(rows, 1)))
+        m.push(json.Member("body", aistore.Text(rows, 2)))
+        m.push(json.Member("status", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 4)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"messages": ` + json.Array(items) + "}")
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
     end
-    aioauth.RevokeGrant(http.Ctx_param(ctx, "id"))
+    aioauth.RevokeGrant(http.Param(ctx, "id"))
     aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
 pub func Routes(r &: router.Router):
     router.Get(r, "/admin/summary", summary)
     router.Get(r, "/admin/users", list_users)
+    router.Get(r, "/admin/users/:id/chats", list_user_chats)
+    router.Get(r, "/admin/chats/:id", get_admin_chat)
+    router.Get(r, "/admin/messages/:id/trace", get_trace)
+    router.Get(r, "/admin/chats/:id/files/:fid", get_admin_file)
+    router.Get(r, "/admin/guests", list_guests)
+    router.Get(r, "/admin/guests/:id", get_guest)
+    router.Get(r, "/admin/sessions", list_sessions)
+    router.Delete(r, "/admin/sessions/:id", revoke_session)
+    router.Delete(r, "/admin/users/:id/sessions", revoke_user_sessions)
+    router.Get(r, "/admin/files", list_files)
+    router.Get(r, "/admin/files/:id", download_file)
     router.Get(r, "/admin/events", list_events)
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

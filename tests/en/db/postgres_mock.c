@@ -13,7 +13,7 @@
  */
 
 /*
- * Enough of libpq to exercise std/db/postgres without a Postgres server,
+ * Enough of libpq to exercise packages/db/postgres without a Postgres server,
  * implemented over sqlite3 - the same trick tests/en/db/mysql_mock.c plays for
  * libmysqlclient, and for the same reason: CI has no server, and the driver's
  * own logic (result walking, type mapping, transactions, quoting) is worth
@@ -274,6 +274,12 @@ const char *PQcmdTuples(void *res)
 {
     PgResult *r = (PgResult *)res;
     return r ? r->cmdtuples : "";
+}
+
+const char *PQcmdStatus(void *res)
+{
+    (void)res;
+    return "";
 }
 
 void PQclear(void *res)

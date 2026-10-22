@@ -137,8 +137,13 @@ recursive. Each function then goes through:
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
     register across its flush branch.
-12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
-13. Sinking: a pure instruction whose only uses sit in one block it dominates,
+12. Min/max reassociation: in `min(min(a, b), c)` where `a` comes from the
+    previous iteration (a phi, or a phi plus a constant) and `b` and `c` do
+    not, the tree becomes `min(a, min(b, c))`, so the loop-carried chain goes
+    through one compare and one `cmov` instead of two. The edit distance
+    inner loop is the usual case.
+13. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+14. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
     on the path that stores it.
 
@@ -203,7 +208,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

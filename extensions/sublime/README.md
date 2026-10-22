@@ -58,6 +58,26 @@ chooses a variant:
 
 Errors are reported in the gcc one-line style, so `F4` walks them.
 
+## Language server
+
+With the [LSP](https://packagecontrol.io/packages/LSP) package installed, add
+this to **Preferences | Package Settings | LSP | Settings** for diagnostics as
+you type, completion, hover, go to definition, references and rename:
+
+```json
+{
+  "clients": {
+    "salam": {
+      "enabled": true,
+      "command": ["salam", "lsp"],
+      "selector": "source.salam"
+    }
+  }
+}
+```
+
+See [`docs/LSP.md`](../../docs/LSP.md) for the server's options.
+
 ## Settings
 
 `Preferences > Package Settings > Salam > Settings`, or

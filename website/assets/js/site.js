@@ -257,6 +257,80 @@
       escapeHtml(text)
         .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    const words = new Map();
+    for (const [attr, cls] of [
+      ["data-kw", "k"],
+      ["data-types", "t"],
+      ["data-builtins", "b"],
+    ]) {
+      for (const w of (salamat.getAttribute(attr) || "").split(/\s+/)) {
+        if (w) {
+          words.set(w, cls);
+        }
+      }
+    }
+    const DIGIT = /[0-9\u06f0-\u06f9\u0660-\u0669]/;
+    const identCp = (ch) =>
+      ch === "_" ||
+      /[A-Za-z0-9]/.test(ch) ||
+      (ch.codePointAt(0) >= 128 &&
+        !"\u060c\u061b\u061f\u00ab\u00bb\u00a0".includes(ch));
+    const span = (cls, text) =>
+      `<span class="tok-${cls}">${escapeHtml(text)}</span>`;
+    const highlightLine = (line) => {
+      const cps = [...line];
+      const n = cps.length;
+      let out = "";
+      let i = 0;
+      while (i < n) {
+        const ch = cps[i];
+        let j = i + 1;
+        if (ch === "/" && cps[i + 1] === "/") {
+          out += span("c", cps.slice(i).join(""));
+          break;
+        }
+        if (ch === '"' || ch === "`" || ch === "\u00ab") {
+          const close = ch === "\u00ab" ? "\u00bb" : ch;
+          while (j < n && cps[j] !== close) {
+            if (cps[j] === "\\") {
+              j += 1;
+            }
+            j += 1;
+          }
+          j = Math.min(n, j + 1);
+          out += span("s", cps.slice(i, j).join(""));
+        } else if (DIGIT.test(ch)) {
+          while (
+            j < n &&
+            (DIGIT.test(cps[j]) || cps[j] === "." || cps[j] === "_")
+          ) {
+            j += 1;
+          }
+          out += span("n", cps.slice(i, j).join(""));
+        } else if (identCp(ch)) {
+          while (j < n && identCp(cps[j])) {
+            j += 1;
+          }
+          const word = cps.slice(i, j).join("");
+          let k = j;
+          while (k < n && (cps[k] === " " || cps[k] === "\t")) {
+            k += 1;
+          }
+          if (words.has(word)) {
+            out += span(words.get(word), word);
+          } else if (cps[k] === "(") {
+            out += span("f", word);
+          } else {
+            out += escapeHtml(word);
+          }
+        } else {
+          out += escapeHtml(ch);
+        }
+        i = j;
+      }
+      return out;
+    };
+    const SALAM = /^(salam|\u0633\u0644\u0627\u0645|slm)$/i;
     const SHELLS =
       /^(sh|bash|zsh|fish|shell|console|terminal|powershell|pwsh|ps1|cmd|bat|batch|dos)$/i;
     const strongDir = (line) => {
@@ -272,6 +346,10 @@
     };
     const codeBlock = (lang, code) => {
       const shell = SHELLS.test(lang.trim());
+      const colored =
+        SALAM.test(lang.trim()) ||
+        (!lang.trim() &&
+          code.split(/[^\p{L}\p{N}_]+/u).some((w) => words.get(w) === "k"));
       const lines = code.replace(/\n$/, "").split("\n");
       let blockDir = "ltr";
       if (!shell) {
@@ -287,7 +365,8 @@
       const rows = lines.map((line) => {
         const d = shell ? "ltr" : strongDir(line) || last;
         last = d;
-        return `<span class="salamat-line" dir="${d}">${escapeHtml(line) || " "}</span>`;
+        const html = colored ? highlightLine(line) : escapeHtml(line);
+        return `<span class="salamat-line" dir="${d}">${html || " "}</span>`;
       });
       return `<pre dir="${blockDir}"><code>${rows.join("")}</code></pre>`;
     };
@@ -400,6 +479,85 @@
       return { status: res.status, data };
     };
 
+    const phaseLabel = salamat.querySelector(".salamat-phase");
+    const setPhase = (phase) => {
+      const label = phase ? salamat.getAttribute(`data-phase-${phase}`) : "";
+      phaseLabel.textContent = label || "";
+      if (label && phase !== "writing") {
+        typing.hidden = false;
+        body.scrollTop = body.scrollHeight;
+      }
+    };
+    const follow = async (id, show) => {
+      if (!window.ReadableStream || !window.TextDecoder) {
+        return false;
+      }
+      let res;
+      try {
+        res = await fetch(
+          `${apiUrl}/guest/messages/${id}/stream?guest=${encodeURIComponent(state.guest)}&lang=${lang}`,
+        );
+      } catch (e) {
+        return false;
+      }
+      if (!res.ok || !res.body) {
+        return false;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let text1 = "";
+      let finished = false;
+      try {
+        while (!finished) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          let cut = buffer.indexOf("\n\n");
+          while (cut >= 0) {
+            const chunk = buffer.slice(0, cut);
+            buffer = buffer.slice(cut + 2);
+            cut = buffer.indexOf("\n\n");
+            let name = "message";
+            let data = "";
+            for (const line of chunk.split("\n")) {
+              if (line.startsWith("event: ")) {
+                name = line.slice(7);
+              } else if (line.startsWith("data: ")) {
+                data += line.slice(6);
+              }
+            }
+            if (!data) {
+              continue;
+            }
+            let ev = {};
+            try {
+              ev = JSON.parse(data);
+            } catch (e) {
+              continue;
+            }
+            if (name === "delta") {
+              text1 += ev.t || "";
+              show(text1);
+            } else if (name === "reset") {
+              text1 = ev.t || "";
+              show(text1);
+            } else if (name === "phase") {
+              setPhase(ev.phase);
+            } else if (name === "done") {
+              show(ev.body || "");
+              finished = true;
+            }
+          }
+        }
+      } catch (e) {
+        return finished;
+      }
+      return finished;
+    };
+
     const ask = async (text, from) => {
       const q = text.trim();
       if (!q || busy) {
@@ -447,34 +605,43 @@
         state.limit = sent.data.limit || state.limit;
         showCount();
         persist();
-        const started = Date.now();
-        while (Date.now() - started < 10 * 60 * 1000) {
-          await wait1(1200);
-          const got = await call(
-            "GET",
-            "/guest/messages/" +
-              sent.data.id +
-              "?guest=" +
-              encodeURIComponent(state.guest),
-          );
-          if (got.status !== 200) {
-            continue;
+        const show = (text1) => {
+          if (!text1 || text1 === shown) {
+            return;
           }
-          const text1 = got.data.body || "";
-          if (text1 && text1 !== shown) {
-            typing.hidden = true;
-            if (!answer) {
-              answer = bubble("assistant", text1);
-            } else {
-              answer.innerHTML = render(text1);
-              body.scrollTop = body.scrollHeight;
+          typing.hidden = true;
+          if (!answer) {
+            answer = bubble("assistant", text1);
+            answer.classList.add("is-live");
+          } else {
+            answer.innerHTML = render(text1);
+            body.scrollTop = body.scrollHeight;
+          }
+          shown = text1;
+        };
+        const streamed = await follow(sent.data.id, show);
+        if (!streamed) {
+          const started = Date.now();
+          while (Date.now() - started < 10 * 60 * 1000) {
+            await wait1(1200);
+            const got = await call(
+              "GET",
+              `/guest/messages/${sent.data.id}?guest=${encodeURIComponent(state.guest)}`,
+            );
+            if (got.status !== 200) {
+              continue;
             }
-            shown = text1;
-          }
-          if (got.data.status !== "pending") {
-            break;
+            setPhase(got.data.phase);
+            show(got.data.body || "");
+            if (got.data.status !== "pending") {
+              break;
+            }
           }
         }
+        if (answer) {
+          answer.classList.remove("is-live");
+        }
+        setPhase("");
         typing.hidden = true;
         if (!shown) {
           shown = salamat.getAttribute("data-error");

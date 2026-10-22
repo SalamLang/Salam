@@ -1051,10 +1051,18 @@ func serve_stream(c: tcp.Conn):
         ret
     end
     q := path.find("?")
+    mut query := ""
     if q >= 0:
+        query = path.substr(q + 1, path.len() - q - 1)
         path = path.substr(0, q)
     end
     seg := path.split("/")
+    if method == "GET" and seg.len() == 5 and seg.get(1) == "guest" and seg.get(2) == "messages" and seg.get(4) == "stream":
+        aiweb.Enter()
+        guest_stream(c, origin, seg.get(3), query_value(query, "guest"), query_value(query, "lang") == "en")
+        aiweb.Leave()
+        ret
+    end
     if method != "GET" or seg.len() != 6 or seg.get(1) != "chats" or seg.get(3) != "messages" or seg.get(5) != "stream":
         stream_error(c, "404 Not Found", origin, "not_found", "این مسیر وجود ندارد.")
         ret
@@ -1186,6 +1194,87 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
             sync.SleepMs(700)
         end
     end
+end
+
+func query_value(query: str, key: str): str:
+    each pair in query.split("&"):
+        at := pair.find("=")
+        if at > 0 and pair.substr(0, at) == key:
+            ret pair.substr(at + 1, pair.len() - at - 1)
+        end
+    end
+    ret ""
+end
+
+func guest_stream(c: tcp.Conn, origin: str, mid: str, token: str, en: bool):
+    cors := aiguest.CorsLines(origin)
+    mut gid := ""
+    mut sid := ""
+    mut status := ""
+    mut body := ""
+    mut created := 0 as i64
+    if token.len() < 20 or not aiguest.Find(mid, token, gid, sid, status, body, created):
+        _n := wr_all(c, "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n" + cors + "\r\n{\"error\": \"not_found\"}")
+        ret
+    end
+    slot := 0 - (gid.to_int() as i64)
+    if not stream_slot(slot, 1):
+        _b := wr_all(c, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n" + cors + "\r\n{\"error\": \"busy\"}")
+        ret
+    end
+    tcp.SetReadDeadline(c, 0)
+    tcp.SetWriteDeadline(c, 30000)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-transform\r\nX-Accel-Buffering: no\r\nConnection: close\r\n" + cors + "\r\n"
+    if wr_all(c, head + ": stream\n\n"):
+        mut sent := ""
+        mut phase_sent := ""
+        mut beat := time.NowMillis()
+        mut gen := ailive.Gen()
+        start := aistore.Now()
+        mut going := true
+        until going:
+            mut phase := "done"
+            if status == "pending":
+                phase = aiguest.Step(mid, sid, created, en, status, body)
+            end
+            if status != "pending":
+                _d := send_event(c, "done", "{" + json.Member("body", body) + ", " + json.Member("status", status) + "}")
+                going = false
+            else:
+                changed := body != sent or phase != phase_sent
+                if body != sent:
+                    if str.StartsWith(body, sent):
+                        going = send_event(c, "delta", text_event(body.substr(sent.len(), body.len() - sent.len())))
+                    else:
+                        going = send_event(c, "reset", text_event(body))
+                    end
+                    sent = body
+                end
+                if going and phase != phase_sent:
+                    going = send_event(c, "phase", "{" + json.Member("phase", phase) + "}")
+                    phase_sent = phase
+                end
+                if changed:
+                    beat = time.NowMillis()
+                else going and time.NowMillis() - beat >= BEAT_MS:
+                    going = wr_all(c, ": ping\n\n")
+                    beat = time.NowMillis()
+                end
+                if going and aistore.Now() - start > STREAM_SECONDS:
+                    going = false
+                end
+                if going:
+                    if ailive.Connected():
+                        gen = ailive.Wait(gen, BEAT_MS / 2)
+                        sync.SleepMs(TICK_MS)
+                    else:
+                        sync.SleepMs(700)
+                    end
+                end
+            end
+        end
+    end
+    _s := stream_slot(slot, 0 - 1)
 end
 
 func stream_worker():

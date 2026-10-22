@@ -582,7 +582,7 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   variables.
 - Persian: messages follow `messages` or the client locale, multi-word names
   are one token and one range, positions are UTF-16 throughout.
-- Clients: the VS Code extension (with `vscode-languageclient` bundled),
+- Clients: the Visual Studio Code extension (with `vscode-languageclient` bundled),
   Neovim (`require('salam').setup({ lsp = true })`), Emacs (eglot and
   lsp-mode), and documented setups for Sublime Text, Kate, Helix and LSP4IJ.
 

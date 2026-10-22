@@ -1415,6 +1415,9 @@ func regalloc(g &: Ng):
     coalesce_spills(g, ra)
     rewrite(g)
     color_slots(g)
+    if g.opt and not g.off_scse:
+        scratch_cse(g)
+    end
     frame_layout(g)
     ra.fr_s.free()
     ra.fr_e.free()
@@ -1452,4 +1455,71 @@ func regalloc(g &: Ng):
     ra.defs.free()
     ra.wl.free()
     ra.nuse.free()
+end
+
+func slot_loc(g &: Ng, s: int): int:
+    if s >= 0 and s < g.mc.fs_alias.len() and g.mc.fs_alias[s] >= 0:
+        ret g.mc.fs_alias[s]
+    end
+    ret s
+end
+
+func frame_read_only(op: int, cc: int): bool:
+    if op == M_LD or op == M_LDZX or op == M_LDSX or op == M_FLD or op == M_VLD or op == M_ALU_RM or op == M_FOP_RM:
+        ret true
+    end
+    ret op == M_ALU_MI and cc == ALU_CMP
+end
+
+func scratch_cse(g &: Ng):
+    n := g.mc.op.len()
+    mut h10 := 0 - 1
+    mut h11 := 0 - 1
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_NOP or op == M_COPY:
+            continue
+        end
+        if op == M_LABEL or op == M_JMP or op == M_JCC or op == M_CALL or op == M_CALLR or op == M_RET or op == M_UD2:
+            h10 = 0 - 1
+            h11 = 0 - 1
+            continue
+        end
+        r0 := g.mc.r0[i]
+        if op == M_LD and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_FRAME and g.mc.mi[i] < 0 and g.mc.md[i] == (0 as i64) and (r0 == R10 or r0 == R11):
+            s := slot_loc(g, g.mc.mb[i])
+            if (r0 == R11 and h11 == s) or (r0 == R10 and h10 == s):
+                g.mc.op[i] = M_NOP
+                continue
+            end
+            if r0 == R11:
+                h11 = s
+            else:
+                h10 = s
+            end
+            continue
+        end
+        if g.mc.mk[i] == MK_FRAME and not frame_read_only(op, g.mc.cc[i]):
+            s2 := slot_loc(g, g.mc.mb[i])
+            if h10 == s2:
+                h10 = 0 - 1
+            end
+            if h11 == s2:
+                h11 = 0 - 1
+            end
+        end
+        mi_regs(g, i, uses, defs)
+        each d in defs:
+            if d == R10:
+                h10 = 0 - 1
+            end
+            if d == R11:
+                h11 = 0 - 1
+            end
+        end
+    end
+    uses.free()
+    defs.free()
 end

@@ -259,7 +259,13 @@ Each item below is a phase on the roadmap, or a deliberate limit:
    sema hoists the latter into a synthetic local first, unless something in
    that statement writes a captured variable. Escaping lambdas keep a heap
    environment, as before.
-6. **Phase 6.** Flip `--ownership=error` to the default one release after
-   `std/` and `compiler/` are clean under it, and make `b := a` of an owned
-   container a move (use of `a` after it becomes an error with a `.copy()`
-   fix-it).
+6. **Phase 6 (needs a release first).** Each step is gated on the seed, the
+   previous release that std/ and compiler/ must keep building with:
+   - Release N ships with phases 1 to 5 (`--ownership=on` by default).
+   - After N is the seed: report `b := a` of an owned `Vector`/`HashMap`
+     followed by a use of `a` as a warn-mode move warning, and migrate std/
+     and compiler/ (`.copy()` or reorder) until `--ownership=warn` is clean.
+   - Release N+1 makes `--ownership=error` the default and turns the move
+     warning into an error with a `.copy()` fix-it.
+   - Each flip lands with the `tests/*/errors/own_*` expectations updated in
+     both languages.

@@ -157,7 +157,11 @@ then goes through:
     vector's data pointer stays in a register across a `strcmp` loop. A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
-    register across its flush branch.
+    register across its flush branch. When exactly one predecessor lacks the
+    value, the load moves into that predecessor instead (it must lead only to
+    the merge, or the address must be a global, a stack slot or a non-null
+    parameter), so the common path keeps the value in a register and only the
+    rare path reloads it.
 12. Min/max reassociation: in `min(min(a, b), c)` where `a` comes from the
     previous iteration (a phi, or a phi plus a constant) and `b` and `c` do
     not, the tree becomes `min(a, min(b, c))`, so the loop-carried chain goes
@@ -201,7 +205,7 @@ farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
 loops are bottom-tested, copies a short loop test into a branch arm that
 would otherwise jump to it, shares one epilogue between a function's returns
-on Linux, zeroes registers with `xor` where the flags are dead, and aligns loop heads to 16 bytes. An innermost loop
+on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump, and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
 otherwise it gets 32-byte alignment.
 
@@ -235,7 +239,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -93,6 +93,17 @@ func mlp_avail(g &: Ng, b: int, a: int, ty: int, depth: int): int:
     ret 0 - 1
 end
 
+func mlp_deref(g &: Ng, a: int, t: int): bool:
+    mut d := 0 as i64
+    r := addr_root(g, a, d)
+    if r >= 0 and g.v_kind[r] == VK_GLB:
+        sy := g.v_def[r]
+        off := d + g.v_i[r]
+        ret sy >= 0 and g.sy_def[sy] and off >= (0 as i64) and off + (tsize(g, t) as i64) <= (g.sy_size[sy] as i64)
+    end
+    ret lpro_safe(g, a, t)
+end
+
 func merge_load_phis(g &: Ng): bool:
     build_dom(g)
     repl_grow(g)
@@ -120,16 +131,30 @@ func merge_load_phis(g &: Ng): bool:
                 a := g.i_a[i]
                 mut ok := a >= 0 and (g.v_kind[a] != VK_INS or dominates(g, g.i_blk[g.v_def[a]], b) and g.i_blk[g.v_def[a]] != b)
                 vals.clear()
+                mut miss := 0 - 1
                 if ok:
                     repeat np in q:
                         pb := g.b_pred[g.b_ps[b] + q]
                         v := mlp_avail(g, pb, a, g.i_ty[i], 0)
                         if v < 0:
-                            ok = false
-                            break
+                            if miss >= 0 or g.off_lpre or g.b_last[pb] < 0 or (g.b_sn[pb] != 1 and not mlp_deref(g, a, g.i_ty[i])):
+                                ok = false
+                                break
+                            end
+                            miss = q
                         end
                         vals.push(v)
                     end
+                end
+                if ok and miss >= 0:
+                    mb := g.b_pred[g.b_ps[b] + miss]
+                    nl := ins_new(g, OP_LOAD, g.i_ty[i])
+                    g.i_a[nl] = a
+                    g.i_c[nl] = g.i_c[i]
+                    g.i_f[nl] = g.i_f[i]
+                    nv := new_res(g, nl)
+                    ins_before(g, g.b_last[mb], nl)
+                    vals[miss] = nv
                 end
                 if ok:
                     ph := ins_new(g, OP_PHI, g.i_ty[i])

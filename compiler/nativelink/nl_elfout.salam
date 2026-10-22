@@ -11,6 +11,170 @@ func phdr(buf: u8*, at: i64, ty: int, flags: int, off: i64, vaddr: i64, fsz: i64
     wr64(buf, at + (48 as i64), al)
 end
 
+func tb_le(t &: Vector<u8>, v: i64, n: int):
+    mut x := v
+    repeat n:
+        t.push((x & (255 as i64)) as u8)
+        x = x >> (8 as i64)
+    end
+end
+
+func tb_pad(t &: Vector<u8>, base: i64, a: int):
+    until ((base + (t.len() as i64)) % (a as i64)) != (0 as i64):
+        t.push(0 as u8)
+    end
+end
+
+func tb_name(l &: Nl, t &: Vector<u8>, id: int): i64:
+    at := t.len() as i64
+    o := l.names.off[id]
+    repeat l.names.len[id] in i:
+        t.push(l.names.bytes[o + i])
+    end
+    t.push(0 as u8)
+    ret at
+end
+
+func tb_cstr(t &: Vector<u8>, s: str): i64:
+    at := t.len() as i64
+    p := (s as void*) as u8*
+    repeat str.Len(s) in i:
+        t.push(p[i])
+    end
+    t.push(0 as u8)
+    ret at
+end
+
+func oc_label(c: int): str:
+    switch c:
+        OC_RODATA: ret ".rodata" end
+        OC_EHFRAME: ret ".eh_frame" end
+        OC_INIT: ret ".init" end
+        OC_TEXT: ret ".text" end
+        OC_FINI: ret ".fini" end
+        OC_INITARR: ret ".init_array" end
+        OC_FINIARR: ret ".fini_array" end
+        OC_DATA: ret ".data" end
+        OC_GOT: ret ".got" end
+        OC_BSS: ret ".bss" end
+    end
+    ret ".unknown"
+end
+
+func shdr(t &: Vector<u8>, name: i64, ty: int, flags: int, addr: i64, off: i64, size: i64, link: int, info: int, al: i64, ent: i64):
+    tb_le(t, name, 4)
+    tb_le(t, ty as i64, 4)
+    tb_le(t, flags as i64, 8)
+    tb_le(t, addr, 8)
+    tb_le(t, off, 8)
+    tb_le(t, size, 8)
+    tb_le(t, link as i64, 4)
+    tb_le(t, info as i64, 4)
+    tb_le(t, al, 8)
+    tb_le(t, ent, 8)
+end
+
+func sym_entry(l &: Nl, os: int): bool:
+    if l.os_name[os] < 0:
+        ret false
+    end
+    s := l.os_sec[os]
+    if s < 0 or not l.s_live[s] or l.s_oc[s] == OC_NONE:
+        ret false
+    end
+    g := l.os_glob[os]
+    if g >= 0:
+        ret l.g_state[g] == SY_DEF and l.g_sec[g] == s
+    end
+    ret true
+end
+
+func build_tail(l &: Nl, tail &: Vector<u8>, shoff &: i64, shnum &: int, shstr &: int):
+    mut idx := Vector {} as Vector<int>
+    repeat OC_COUNT:
+        idx.push(0)
+    end
+    mut sh := Vector {} as Vector<u8>
+    mut sh_names := Vector {} as Vector<u8>
+    sh_names.push(0 as u8)
+    shdr(sh, 0 as i64, 0, 0, 0 as i64, 0 as i64, 0 as i64, 0, 0, 0 as i64, 0 as i64)
+    mut n := 1
+    repeat OC_COUNT in c:
+        if l.oc_size[c] <= (0 as i64):
+            continue
+        end
+        mut ty := 1
+        mut fl := 2
+        if c == OC_BSS: ty = 8 end
+        if c == OC_INITARR: ty = 14 end
+        if c == OC_FINIARR: ty = 15 end
+        if c == OC_INIT or c == OC_TEXT or c == OC_FINI: fl = 6 end
+        if c >= OC_INITARR: fl = 3 end
+        nm := tb_cstr(sh_names, oc_label(c))
+        shdr(sh, nm, ty, fl, l.oc_addr[c], c == OC_BSS ? l.file_size : l.oc_fpos[c], l.oc_size[c], 0, 0, l.oc_align[c], (c == OC_INITARR or c == OC_FINIARR or c == OC_GOT) ? (8 as i64) : (0 as i64))
+        idx[c] = n
+        n += 1
+    end
+    mut syms := Vector {} as Vector<u8>
+    mut strs := Vector {} as Vector<u8>
+    strs.push(0 as u8)
+    repeat 24:
+        syms.push(0 as u8)
+    end
+    mut nlocal := 1
+    repeat 2 in pass:
+        repeat l.os_sec.len() in os:
+            if not sym_entry(l, os):
+                continue
+            end
+            bind := l.os_type[os] >> 4
+            if (pass == 0) != (bind == 0):
+                continue
+            end
+            s := l.os_sec[os]
+            tb_le(syms, tb_name(l, strs, l.os_name[os]), 4)
+            syms.push(l.os_type[os] as u8)
+            syms.push(0 as u8)
+            tb_le(syms, idx[l.s_oc[s]] as i64, 2)
+            tb_le(syms, sym_addr(l, os), 8)
+            tb_le(syms, l.os_size[os], 8)
+            if pass == 0:
+                nlocal += 1
+            end
+        end
+    end
+    base := l.file_size
+    tb_pad(tail, base, 8)
+    symoff := base + (tail.len() as i64)
+    each b in syms:
+        tail.push(b)
+    end
+    stroff := base + (tail.len() as i64)
+    each b2 in strs:
+        tail.push(b2)
+    end
+    shdr(sh, tb_cstr(sh_names, ".symtab"), 2, 0, 0 as i64, symoff, syms.len() as i64, n + 1, nlocal, 8 as i64, 24 as i64)
+    shdr(sh, tb_cstr(sh_names, ".strtab"), 3, 0, 0 as i64, stroff, strs.len() as i64, 0, 0, 1 as i64, 0 as i64)
+    shstr_nm := tb_cstr(sh_names, ".shstrtab")
+    shsoff := base + (tail.len() as i64)
+    each b3 in sh_names:
+        tail.push(b3)
+    end
+    shdr(sh, shstr_nm, 3, 0, 0 as i64, shsoff, sh_names.len() as i64, 0, 0, 1 as i64, 0 as i64)
+    tb_pad(tail, base, 8)
+    shoff = base + (tail.len() as i64)
+    each b4 in sh:
+        tail.push(b4)
+    end
+    shnum = n + 3
+    shstr = n + 2
+    idx.free()
+    sh.free()
+    sh_names.free()
+    syms.free()
+    strs.free()
+end
+
 func write_exe(l &: Nl, out: str):
     buf := l.out_ptr as void* as u8*
     buf[0] = 0x7f as u8
@@ -24,11 +188,18 @@ func write_exe(l &: Nl, out: str):
     wr32(buf, 20 as i64, 1 as i64)
     wr64(buf, 24 as i64, l.entry)
     wr64(buf, 32 as i64, 64 as i64)
-    wr64(buf, 40 as i64, 0 as i64)
+    mut tail := Vector {} as Vector<u8>
+    mut shoff := 0 as i64
+    mut shnum := 0
+    mut shstr := 0
+    if not l.strip:
+        build_tail(l, tail, shoff, shnum, shstr)
+    end
+    wr64(buf, 40 as i64, shoff)
     wr32(buf, 48 as i64, 0 as i64)
     wr32(buf, 52 as i64, (64 | (56 << 16)) as i64)
     wr32(buf, 56 as i64, (4 | (64 << 16)) as i64)
-    wr32(buf, 60 as i64, 0 as i64)
+    wr32(buf, 60 as i64, (shnum | (shstr << 16)) as i64)
     ph := 64 as i64
     phdr(buf, ph, 1, 4, l.seg_fpos[0], l.seg_vaddr[0], l.seg_fsz[0], l.seg_msz[0], NL_PAGE as i64)
     phdr(buf, ph + (56 as i64), 1, 5, l.seg_fpos[1], l.seg_vaddr[1], l.seg_fsz[1], l.seg_msz[1], NL_PAGE as i64)
@@ -40,8 +211,14 @@ func write_exe(l &: Nl, out: str):
         ret
     end
     w := fwrite(buf as void*, 1 as u64, l.file_size as u64, f)
+    mut w2 := 0 as u64
+    if tail.len() > 0:
+        w2 = fwrite(tail.data as void*, 1 as u64, tail.len() as u64, f)
+    end
     _c := fclose(f)
-    if (w as i64) != l.file_size:
+    l.file_size = l.file_size + (tail.len() as i64)
+    tail.free()
+    if (w as i64) + (w2 as i64) != l.file_size:
         nl_fail(l, "cannot write " + out)
         ret
     end

@@ -319,6 +319,59 @@ func select_bool(g &: Ng, i: int): bool:
     ret false
 end
 
+func select_add_hoist(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    bv := g.i_b[i]
+    cv := g.i_c[i]
+    if is_vec(g, t) or is_flt(g, t) or is_agg(g, t) or bv < 0 or cv < 0 or g.v_kind[bv] != VK_INS or g.v_kind[cv] != VK_INS:
+        ret false
+    end
+    if not one_use(g, bv) or not one_use(g, cv):
+        ret false
+    end
+    bd := g.v_def[bv]
+    cd := g.v_def[cv]
+    if g.i_op[bd] != OP_ADD or g.i_op[cd] != OP_ADD or g.i_ty[bd] != t or g.i_ty[cd] != t:
+        ret false
+    end
+    mut p := 0 - 1
+    mut x := 0 - 1
+    mut y := 0 - 1
+    if g.i_a[bd] == g.i_a[cd]:
+        p = g.i_a[bd]
+        x = g.i_b[bd]
+        y = g.i_b[cd]
+    else g.i_a[bd] == g.i_b[cd]:
+        p = g.i_a[bd]
+        x = g.i_b[bd]
+        y = g.i_a[cd]
+    else g.i_b[bd] == g.i_a[cd]:
+        p = g.i_b[bd]
+        x = g.i_a[bd]
+        y = g.i_b[cd]
+    else g.i_b[bd] == g.i_b[cd]:
+        p = g.i_b[bd]
+        x = g.i_a[bd]
+        y = g.i_a[cd]
+    end
+    if p < 0 or x < 0 or y < 0:
+        ret false
+    end
+    s := ins_new(g, OP_SELECT, t)
+    g.i_a[s] = g.i_a[i]
+    g.i_b[s] = x
+    g.i_c[s] = y
+    sv := new_res(g, s)
+    ins_before(g, i, s)
+    n := ins_new(g, OP_ADD, t)
+    g.i_a[n] = p
+    g.i_b[n] = sv
+    nv := new_res(g, n)
+    ins_before(g, i, n)
+    replace_res(g, i, nv)
+    ret true
+end
+
 func fold_select(g &: Ng, i: int): bool:
     c := g.i_a[i]
     if is_cint(g, c):
@@ -1460,6 +1513,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 if not ch and g.i_op[i] == OP_SELECT and not g.off_bits:
                     ch = sign_select(g, i)
                 end
+                if not ch and g.i_op[i] == OP_SELECT and not g.off_selhoist:
+                    ch = select_add_hoist(g, i)
+                end
             else op == OP_ADDR:
                 ch = fold_addr(g, i)
             else op == OP_EXTV:
@@ -2096,11 +2152,145 @@ func if_convert_block(g &: Ng, b: int): bool:
     ret true
 end
 
+func pure_small(g &: Ng, t: int, lim: int): bool:
+    mut n := 0
+    mut i := g.b_first[t]
+    until i >= 0 and i != g.b_last[t]:
+        if not spec_ok(g.i_op[i]) or n >= lim:
+            ret false
+        end
+        n += 1
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func arm_to(g &: Ng, x: int, j: int): bool:
+    l := g.b_last[x]
+    if l < 0 or g.i_op[l] != OP_BR or g.i_b[l] != j:
+        ret false
+    end
+    ret pure_small(g, x, 4)
+end
+
+func phis_same(g &: Ng, f: int, p1: int, p2: int): bool:
+    mut i := g.b_first[f]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if phi_val_for(g, i, p1) != phi_val_for(g, i, p2):
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    ret true
+end
+
+func phi_repred(g &: Ng, f: int, from: int, into: int, drop: bool):
+    mut i := g.b_first[f]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        ps := g.i_ps[i]
+        mut w := 0
+        repeat g.i_pcount[i] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if pb == from and drop:
+                continue
+            end
+            g.pool[ps + 2 * w] = g.pool[ps + 2 * k]
+            g.pool[ps + 2 * w + 1] = pb == from ? into : pb
+            w += 1
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+end
+
+func chain_fold(g &: Ng, b: int): bool:
+    term := g.b_last[b]
+    if g.off_chain or term < 0 or g.i_op[term] != OP_CBR or g.i_b[term] == g.i_c[term]:
+        ret false
+    end
+    repeat 2 in side:
+        t := side == 0 ? g.i_b[term] : g.i_c[term]
+        f := side == 0 ? g.i_c[term] : g.i_b[term]
+        tl := g.b_last[t]
+        if t == b or f == b or g.b_npred[t] != 1 or tl < 0 or g.i_op[tl] != OP_CBR or not pure_small(g, t, 3):
+            continue
+        end
+        mut neg := false
+        mut x := 0 - 1
+        if g.i_c[tl] == f and g.i_b[tl] != f:
+            x = g.i_b[tl]
+        else g.i_b[tl] == f and g.i_c[tl] != f:
+            x = g.i_c[tl]
+            neg = true
+        end
+        if side == 1:
+            neg = not neg
+        end
+        if x < 0 or x == b or x == t or g.b_npred[f] != 2 or not phis_same(g, f, b, t):
+            continue
+        end
+        fl := g.b_last[f]
+        if fl < 0 or g.i_op[fl] != OP_BR:
+            continue
+        end
+        j := g.i_b[fl]
+        mut ok := false
+        if x == j:
+            ok = pure_small(g, f, 4)
+        else g.b_npred[x] == 1 and arm_to(g, x, j):
+            ok = pure_small(g, f, 4)
+        end
+        if not ok or j == b or not phis_selectable(g, j):
+            continue
+        end
+        mut i := g.b_first[t]
+        until i >= 0 and i != tl:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            ins_unlink(g, i)
+            g.i_op[i] = op
+            ins_before(g, term, i)
+            i = nx
+        end
+        mut c2 := g.i_a[tl]
+        if neg:
+            nt := ins_new(g, OP_XOR, T_I1)
+            g.i_a[nt] = c2
+            g.i_b[nt] = const_int(g, T_I1, 1 as i64)
+            c2 = new_res(g, nt)
+            ins_before(g, term, nt)
+        end
+        ci := ins_new(g, side == 0 ? OP_AND : OP_OR, T_I1)
+        g.i_a[ci] = g.i_a[term]
+        g.i_b[ci] = c2
+        cv := new_res(g, ci)
+        ins_before(g, term, ci)
+        g.i_a[term] = cv
+        if side == 0:
+            g.i_b[term] = x
+            g.i_c[term] = f
+        else:
+            g.i_b[term] = f
+            g.i_c[term] = x
+        end
+        phi_repred(g, x, t, b, false)
+        phi_repred(g, f, t, b, true)
+        g.i_op[tl] = OP_BR
+        g.i_a[tl] = 0 - 1
+        g.i_b[tl] = x
+        g.i_c[tl] = 0 - 1
+        ret true
+    end
+    ret false
+end
+
 func if_convert(g &: Ng): bool:
     compute_addr_taint(g)
     mut changed := false
     each b in g.b_rpo:
-        if g.b_first[b] >= 0 and if_convert_block(g, b):
+        if g.b_first[b] >= 0 and chain_fold(g, b):
+            changed = true
+        else g.b_first[b] >= 0 and if_convert_block(g, b):
             changed = true
         end
     end
@@ -2623,6 +2813,19 @@ func optimize(g &: Ng):
         simplify_phis(g)
         opt_rounds(g)
     end
+    if not g.off_lvec:
+        mut nlv := 0
+        mut lvch := false
+        until nlv < 8 and loop_vectorize(g):
+            nlv += 1
+            lvch = true
+        end
+        if lvch:
+            remap_all(g)
+            simplify_phis(g)
+            opt_rounds(g)
+        end
+    end
     if not g.off_runroll:
         mut nr := 0
         mut rch := false
@@ -2706,6 +2909,14 @@ func optimize(g &: Ng):
         _ds := dead_stores(g)
     end
     dce(g)
+    if not g.off_dloop:
+        mut ndl := 0
+        until ndl < 8 and dead_loops(g):
+            simplify_phis(g)
+            dce(g)
+            ndl += 1
+        end
+    end
     if not g.off_sink:
         _sk := sink_pass(g)
     end

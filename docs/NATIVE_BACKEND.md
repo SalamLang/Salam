@@ -100,6 +100,11 @@ then goes through:
    there would serialize the following load (a binary search keeps its branch
    for this reason). A division may move ahead of the branch when the same
    division already ran unconditionally, as in `if n % j == 0: s += n / j`.
+   A branch whose arm only tests a second condition before reaching the same
+   join (`if pa <= pb and pa <= pc`) first becomes one branch on the `and`
+   (or `or`) of both conditions, so the PNG Paeth predictor turns into two
+   selects. A select between two adds that share an operand becomes one add
+   of a select (`c ? s + a : s + b` is `s + (c ? a : b)`).
 8. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too. A loop of any depth
@@ -113,7 +118,10 @@ then goes through:
    again after each value numbering pass that found new constants, so the
    blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
    code once the sizes are forwarded from the struct.
-9. Loop-invariant code motion of pure instructions into loop preheaders (an
+9. A loop entered from several blocks first gets a single preheader (the
+   incoming values meet in new phis there), so the loop passes below also
+   see loops that start right after an `if`. Loop-invariant code motion of
+   pure instructions into loop preheaders (an
    add of a loop value, a constant and an invariant is regrouped so the
    invariant part moves out), and
    of loads that no store in the loop can reach (by TBAA class) and that are
@@ -139,7 +147,21 @@ then goes through:
    `paddd` loop with two accumulators followed by the scalar loop for the
    leftover elements, and a
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
-   runtime check that a forward copy and `memmove` agree.
+   runtime check that a forward copy and `memmove` agree (only from 16
+   elements up; shorter copies stay a loop).
+   Innermost loops whose body is one branch-free block are vectorized with
+   SSE2: 32-bit integer and `f32` code four lanes at a time, 64-bit and `f64`
+   two at a time. Loads and stores must be contiguous in the counter; bytes
+   are widened to 32-bit lanes on load (`movd` and two unpacks) and narrowed
+   with `packssdw`/`packuswb` on store. Adds, subtracts, bitwise operations,
+   constant shifts, the four float operations, signed or equality compares
+   and selects (on a per-lane or loop-invariant condition) are supported,
+   and any number of integer add reductions. A loop that stores gets a
+   runtime check that each stored range is disjoint from every range it
+   loads from another base. The vector loop runs while a full vector fits
+   and the scalar loop finishes the rest, so the PNG filter scoring and
+   filter application and the tensor element-wise kernels run four values
+   per instruction.
    A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
    such loads) becomes a load of just that field, and a stack copy of a
    struct that is only ever written is dropped, so `n := at.Get(a, i)` then
@@ -204,6 +226,9 @@ then goes through:
     block returns before any read. Zeroing a struct and then setting every
     field leaves only the field stores.
 15. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+    A loop with no side effects whose values nobody reads after it, and whose
+    counter provably reaches its bound, is removed (a sum whose result was
+    dropped leaves an empty counting loop behind).
 16. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
     on the path that stores it.
@@ -288,7 +313,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

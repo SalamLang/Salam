@@ -68,6 +68,94 @@ func lp_outside_pred(g &: Ng, l &: Lp, h: int, mark: int): int:
     ret out
 end
 
+func merge_preheader(g &: Ng, l &: Lp, h: int, mark: int): bool:
+    mut outs := Vector {} as Vector<int>
+    repeat g.b_npred[h] in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if l.inl[p] != mark:
+            pt := g.b_last[p]
+            if pt < 0 or (g.i_op[pt] != OP_BR and g.i_op[pt] != OP_CBR) or (g.i_op[pt] == OP_CBR and g.i_b[pt] == g.i_c[pt]):
+                outs.free()
+                ret false
+            end
+            mut dup := false
+            each o in outs:
+                if o == p:
+                    dup = true
+                end
+            end
+            if not dup:
+                outs.push(p)
+            end
+        end
+    end
+    if outs.len() < 2 or outs.len() > 8:
+        outs.free()
+        ret false
+    end
+    nb := new_blk(g)
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        ps := g.i_ps[i]
+        mut first := 0 - 1
+        mut same := true
+        repeat g.i_pcount[i] in k:
+            if l.inl[g.pool[ps + 2 * k + 1]] != mark:
+                v := g.pool[ps + 2 * k]
+                if first < 0:
+                    first = v
+                else v != first:
+                    same = false
+                end
+            end
+        end
+        mut inv := first
+        if not same:
+            np := ins_new(g, OP_PHI, g.i_ty[i])
+            g.i_ps[np] = g.pool.len()
+            mut c := 0
+            repeat g.i_pcount[i] in k2:
+                pb := g.pool[ps + 2 * k2 + 1]
+                if l.inl[pb] != mark:
+                    g.pool.push(g.pool[ps + 2 * k2])
+                    g.pool.push(pb)
+                    c += 1
+                end
+            end
+            g.i_pcount[np] = c
+            inv = new_res(g, np)
+            ins_append(g, nb, np)
+        end
+        mut w := 0
+        mut put := false
+        repeat g.i_pcount[i] in k3:
+            pb2 := g.pool[ps + 2 * k3 + 1]
+            if l.inl[pb2] != mark:
+                if not put:
+                    g.pool[ps + 2 * w] = inv
+                    g.pool[ps + 2 * w + 1] = nb
+                    w += 1
+                    put = true
+                end
+            else:
+                g.pool[ps + 2 * w] = g.pool[ps + 2 * k3]
+                g.pool[ps + 2 * w + 1] = pb2
+                w += 1
+            end
+        end
+        g.i_pcount[i] = w
+        i = g.i_next[i]
+    end
+    br := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br] = h
+    ins_append(g, nb, br)
+    each o2 in outs:
+        replace_succ(g, g.b_last[o2], h, nb)
+    end
+    outs.free()
+    ret true
+end
+
 func make_preheaders(g &: Ng, l &: Lp): bool:
     mut changed := false
     mut mark := 0
@@ -75,6 +163,10 @@ func make_preheaders(g &: Ng, l &: Lp): bool:
         mark += 1
         _n := lp_body(g, l, h, mark)
         p := lp_outside_pred(g, l, h, mark)
+        if p == 0 - 2 and not g.off_mph and merge_preheader(g, l, h, mark):
+            changed = true
+            continue
+        end
         if p < 0:
             continue
         end

@@ -24,6 +24,8 @@ export GIT_CONFIG_VALUE_0="https://"
 export GIT_AUTHOR_NAME=salam GIT_AUTHOR_EMAIL=salam@example.com
 export GIT_COMMITTER_NAME=salam GIT_COMMITTER_EMAIL=salam@example.com
 unset SALAM_NO_GIT SALAM_RELEASES_URL SALAM_PACKAGES SALAM_REGISTRY
+: >"$work/sums.txt"
+export SALAM_SUMDB="$work/sums.txt"
 
 fails=0
 check() {
@@ -200,6 +202,18 @@ run "$salam" add github.com/fixture/greet@v1.0.0
 check "a moved tag does not match the first download" "$(has 'does not match the copy this machine downloaded first' "$work/last.log" && echo 0 || echo 1)"
 cd "$work" || exit 1
 
+mkdir -p "$work/app4"
+cd "$work/app4" || exit 1
+printf '[package]\nname = "app4"\n' >salam.toml
+printf 'github.com/fixture/dep@v1.0.0 sha256:%s\n' "0000000000000000000000000000000000000000000000000000000000000000" >"$work/sums.txt"
+run "$salam" add github.com/fixture/dep@v1.0.0
+check "a sum that differs from the published one is refused" "$(has 'published in the Salam registry' "$work/last.log" && echo 0 || echo 1)"
+: >"$work/sums.txt"
+run "$salam" add github.com/fixture/dep@v1.0.0
+run "$salam" deps sums
+check "deps sums prints the lines to publish" "$(grep -q '^github.com/fixture/dep@v1.0.0 sha256:[0-9a-f]\{64\}$' "$work/last.log" && echo 0 || echo 1)"
+cd "$work" || exit 1
+
 run "$salam" deps clean
 check "deps clean empties the cache" "$([ ! -d "$SALAM_PKG/github.com" ] && echo 0 || echo 1)"
 
@@ -253,6 +267,8 @@ if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
     mkdir -p "$work/rel" "$work/srv/v$version"
     ln -s "$root/std" "$work/rel/std"
     (cd "$root" && tar -czf "$work/srv/v$version/salam-packages-$version.tar.gz" packages/db/redis)
+    mkdir -p "$work/srv/v0.0.1"
+    cp "$work/srv/v$version/salam-packages-$version.tar.gz" "$work/srv/v0.0.1/salam-packages-0.0.1.tar.gz"
     port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
     (cd "$work/srv" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
     server=$!
@@ -270,6 +286,8 @@ if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
     rm -rf "$SALAM_PKG/salam-packages@v$version"
     SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" deps
     check "deps downloads the official packages again" "$([ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
+    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis@v0.0.1
+    check "an official package can be pinned to another release" "$(has '"db.redis" = "v0.0.1"' salam.toml && [ -d "$SALAM_PKG/salam-packages@v0.0.1/db/redis" ] && echo 0 || echo 1)"
     kill "$server" 2>/dev/null
     cd "$work" || exit 1
 fi

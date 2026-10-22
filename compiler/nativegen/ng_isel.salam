@@ -1942,6 +1942,23 @@ func dq_find(g &: Ng, a: int, b: int, sign: bool, want_q: bool): int:
     ret 0 - 1
 end
 
+func div_has_twin(g &: Ng, i: int): bool:
+    a := g.i_a[i]
+    b := g.i_b[i]
+    signed := g.i_op[i] == OP_SDIV or g.i_op[i] == OP_SREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            op := g.i_op[j]
+            if j != i and op >= OP_SDIV and op <= OP_UREM and g.i_a[j] == a and g.i_b[j] == b and (op == OP_SDIV or op == OP_SREM) == signed:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
 func isel_div(g &: Ng, i: int):
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -1962,6 +1979,9 @@ func isel_div(g &: Ng, i: int):
     end
     ra2 := ext_to32(g, a, t, sign)
     rb := ext_to32(g, b, t, sign)
+    twin := g.opt and div_has_twin(g, i)
+    need_q := want_q or twin
+    need_r := not want_q or twin
     rq := gpr(g)
     rr := gpr(g)
     mut done := 0 - 1
@@ -1977,8 +1997,12 @@ func isel_div(g &: Ng, i: int):
         _z0 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
         d0 := e_rr(g, M_DIV, 4, 0 - 1, rb)
         g.mc.cc[d0] = 0
-        _q0 := e_copy(g, rq, RAX)
-        _r0 := e_copy(g, rr, RDX)
+        if need_q:
+            _q0 := e_copy(g, rq, RAX)
+        end
+        if need_r:
+            _r0 := e_copy(g, rr, RDX)
+        end
         _jd := e_jmp(g, done)
         _ls := e_label(g, slow)
     end
@@ -1990,12 +2014,16 @@ func isel_div(g &: Ng, i: int):
     end
     d := e_rr(g, M_DIV, sz, 0 - 1, rb)
     g.mc.cc[d] = sign ? 1 : 0
-    _c3 := e_copy(g, rq, RAX)
-    _c4 := e_copy(g, rr, RDX)
+    if need_q:
+        _c3 := e_copy(g, rq, RAX)
+    end
+    if need_r:
+        _c4 := e_copy(g, rr, RDX)
+    end
     if done >= 0:
         _ld := e_label(g, done)
     end
-    if g.opt:
+    if g.opt and twin:
         g.dq_a.push(a)
         g.dq_b.push(b)
         g.dq_s.push(sign)
@@ -2094,6 +2122,26 @@ func isel_fbin(g &: Ng, i: int):
     set_res(g, i, r)
 end
 
+func zx32_def(g &: Ng, a: int): bool:
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    b := g.i_b[d]
+    if op == OP_LSHR and is_cint(g, b):
+        k := g.v_i[b]
+        ret k >= (1 as i64) and k < (32 as i64)
+    end
+    if op == OP_AND and is_cint(g, b):
+        ret g.v_i[b] >= (0 as i64) and g.v_i[b] < (2147483648 as i64)
+    end
+    if op == OP_ZEXT:
+        ret int_bits(g, g.i_x[d]) <= 16
+    end
+    ret false
+end
+
 func isel_cast(g &: Ng, i: int):
     op := g.i_op[i]
     st := g.i_x[i]
@@ -2126,6 +2174,10 @@ func isel_cast(g &: Ng, i: int):
         else:
             set_res(g, i, ra2)
         end
+        ret
+    end
+    if (op == OP_ZEXT or op == OP_SEXT) and int_bits(g, st) == 32 and int_bits(g, dt) == 64 and zx32_def(g, a):
+        set_res(g, i, use_reg(g, a))
         ret
     end
     if op == OP_ZEXT or op == OP_SEXT:

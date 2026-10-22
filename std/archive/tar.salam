@@ -173,8 +173,13 @@ func _tar_pax_path(p: void*, off: int, size: int): str:
         body_len := rec_len - (sp - pos) - 2
         if body_len > 5:
             rec := _tar_get_str(p, off + sp + 1, body_len)
-            if rec.substr(0, 5) == "path=":
-                ret rec.substr(5, rec.len() - 5)
+            head := rec.substr(0, 5)
+            is_path := head == "path="
+            _tar_free_str(head)
+            if is_path:
+                path := rec.substr(5, rec.len() - 5)
+                _tar_free_str(rec)
+                ret path
             end
             _tar_free_str(rec)
         end
@@ -206,9 +211,11 @@ func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int): bool:
             if typeflag == 120:
                 v := _tar_pax_path(p, dstart, size as int)
                 if v.len() > 0:
+                    _tar_free_str(long_name)
                     long_name = v
                 end
             else typeflag == 76:
+                _tar_free_str(long_name)
                 long_name = _tar_get_str(p, dstart, size as int)
             end
             _tar_free_str(nm)
@@ -218,13 +225,18 @@ func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int): bool:
         mut full := nm
         if long_name.len() > 0:
             full = long_name
+            _tar_free_str(nm)
         else:
             magic := _tar_get_str(p, pos + 257, 5)
-            if magic == "ustar":
+            is_ustar := magic == "ustar"
+            _tar_free_str(magic)
+            if is_ustar:
                 prefix := _tar_get_str(p, pos + 345, 155)
                 if prefix.len() > 0:
                     full = prefix + "/" + nm
+                    _tar_free_str(nm)
                 end
+                _tar_free_str(prefix)
             end
         end
         is_dir := typeflag == 53
@@ -309,7 +321,9 @@ pub func TarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     mut e := Entry {}
     mut data := 0
     until _tar_next(p, n, pos, e, data):
-        if not e.is_dir and e.name == name:
+        hit := not e.is_dir and e.name == name
+        _tar_free_str(e.name)
+        if hit:
             data_ptr := ((p as i64) + (data as i64)) as void*
             compress.BufPushBytes(out, data_ptr, e.size as int)
             ok = true
@@ -329,6 +343,7 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
     until _tar_next(p, n, pos, e, data):
         if not _safe_entry_name(e.name):
             all_ok = false
+            _tar_free_str(e.name)
             continue
         end
         outpath := filepath.Join(destdir, e.name)
@@ -344,6 +359,7 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
             end
         end
         mem.Free(outpath as void*)
+        _tar_free_str(e.name)
     end
     ret all_ok
 end

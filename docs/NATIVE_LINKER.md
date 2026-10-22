@@ -27,8 +27,8 @@ so that a native build needs no tool beyond `salam` itself.
   client, a GUI toolkit) keeps using the system linker. The driver decides per
   build (see "Driver integration").
 - Linker scripts, versioned symbols, symbol interposition, `--wrap`.
-- Debug information. Line tables arrive with DWARF support in the backend;
-  the linker will then merge and relocate `.debug_*` sections like any other.
+- Debug information was left out of the first phase. It is supported now:
+  see "Debug sections" under Writing.
 
 ## What the inputs contain
 
@@ -174,6 +174,18 @@ segment contents with file padding. A minimal section header table
 (`.text`, `.rodata`, `.data`, `.bss`, `.symtab`, `.strtab`, `.shstrtab`) is
 written so that `objdump`, `gdb` and `perf` can name functions. It can be
 stripped with `--strip`.
+
+### Debug sections
+
+Non-allocated `.debug_*` sections are kept from every object that
+contributes at least one live section. Input sections with the same name are
+concatenated in input order into one output section, written after the
+loaded image and before `.symtab`, with no address. A symbol in a debug
+section resolves to its offset inside that output section, which is what the
+`R_X86_64_32` references from `.debug_info` to `.debug_abbrev` and
+`.debug_line` need. A relocation against code that garbage collection
+removed is written as 0, the usual tombstone. `--strip` drops them along
+with the section headers. PE output does not carry debug sections yet.
 
 ## Driver integration
 

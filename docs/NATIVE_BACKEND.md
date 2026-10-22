@@ -338,6 +338,23 @@ otherwise it gets 32-byte alignment.
   a single merge. `SALAM_NG_GVN_SKIP=addr,extv,icmp,cast,arith` leaves whole
   instruction kinds alone.
 
+### Debug information
+
+`salam build app.salam --backend=native -g` (Linux targets) writes DWARF 4
+`.debug_info`, `.debug_abbrev` and `.debug_line` into the object. The front
+end already emits `!dbg` locations in its IR for `-g`; nativegen reads them
+in a prescan (`ng_dbg.salam`), carries each instruction's location through
+inlining, unrolling, instruction selection, register allocation and block
+layout, and records a line row whenever the source line changes in the
+encoded code. Every function gets a `DW_TAG_subprogram` with its range, and
+functions are attributed to their own source file, so backtraces through std
+code name the right file. Debug info never changes the generated code: the
+`.text` of a `-g` build is byte-identical to one without it.
+
+Not covered yet: inlined frames (`DW_TAG_inlined_subroutine`), variable
+locations, and CodeView for Windows. A frame for inlined std code shows the
+std line inside the caller's name.
+
 A good end-to-end check is the compiler itself: emit its IR with
 `salam llvm compiler/main.salam`, build that IR with the native backend, and
 have the result emit the same IR again. The two files must be identical
@@ -359,8 +376,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- No DWARF line tables (`-g`), so there is no source-level stepping, although
-  backtraces work through `.eh_frame`.
+- `-g` gives line tables and function ranges only, with no variable
+  locations or inlined-frame records, and only on ELF targets.
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
@@ -368,5 +385,5 @@ Not there yet:
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
-  no outside tool beyond the C runtime files. It does not write DWARF line
-  tables or `.eh_frame_hdr` yet.
+  no outside tool beyond the C runtime files. It keeps `.debug_*` sections
+  but does not write `.eh_frame_hdr` yet.

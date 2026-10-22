@@ -1,0 +1,467 @@
+package nativegen
+
+import str
+
+func md_grow(g &: Ng, n: int):
+    until g.md_kind.len() <= n:
+        g.md_kind.push(0)
+        g.md_line.push(0)
+        g.md_scope.push(0 - 1)
+        g.md_file.push(0 - 1)
+        g.md_s1.push("")
+        g.md_s2.push("")
+    end
+end
+
+func find_in_line(g &: Ng, from: int, upto: int, w: str): int:
+    n := str.Len(w)
+    wp := sp(w)
+    mut i := from
+    until i + n <= upto:
+        mut ok := true
+        mut k := 0
+        until k < n and ok:
+            if g.src[i + k] != wp[k]:
+                ok = false
+            end
+            k += 1
+        end
+        if ok:
+            ret i + n
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func num_at(g &: Ng, at: int): int:
+    mut v := 0
+    mut i := at
+    until i < g.sn and g.src[i] >= (48 as u8) and g.src[i] <= (57 as u8):
+        v = v * 10 + ((g.src[i] as int) - 48)
+        i += 1
+    end
+    ret v
+end
+
+func qstr_at(g &: Ng, at: int): str:
+    mut b := str.NewBuilder()
+    mut i := at
+    until i < g.sn and g.src[i] != (34 as u8):
+        str.BufAppendChar(b, g.src[i] as int)
+        i += 1
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func dbg_tail(g &: Ng, p: int, e: int): int:
+    mut q := e
+    until q > p and (g.src[q - 1] == (32 as u8) or g.src[q - 1] == (123 as u8) or g.src[q - 1] == (13 as u8)):
+        q -= 1
+    end
+    mut d := q
+    until d > p and g.src[d - 1] >= (48 as u8) and g.src[d - 1] <= (57 as u8):
+        d -= 1
+    end
+    if d == q or d - 7 < p:
+        ret 0 - 1
+    end
+    if find_in_line(g, d - 7, d, " !dbg !") != d:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func prescan_dbg(g &: Ng):
+    mut p := 0
+    mut any := false
+    until p < g.sn:
+        mut e := p
+        until e < g.sn and g.src[e] != (10 as u8):
+            e += 1
+        end
+        if g.src[p] == (32 as u8) or g.src[p] == (100 as u8):
+            at := dbg_tail(g, p, e)
+            if at >= 0:
+                g.dbg_eol.put(e, num_at(g, at))
+                mut z := at - 7
+                if z > p and g.src[z - 1] == (44 as u8):
+                    z -= 1
+                end
+                until z < e and ((g.src[z] >= (48 as u8) and g.src[z] <= (57 as u8)) or z < at):
+                    g.src[z] = 32 as u8
+                    z += 1
+                end
+            end
+        end
+        if g.src[p] == (33 as u8) and p + 1 < e and g.src[p + 1] >= (48 as u8) and g.src[p + 1] <= (57 as u8):
+            id := num_at(g, p + 1)
+            loc := find_in_line(g, p, e, "!DILocation(")
+            sub := find_in_line(g, p, e, "!DISubprogram(")
+            fil := find_in_line(g, p, e, "!DIFile(")
+            if find_in_line(g, p, e, "!DICompileUnit(") >= 0:
+                any = true
+            end
+            if loc >= 0 or sub >= 0 or fil >= 0:
+                md_grow(g, id)
+            end
+            if loc >= 0:
+                g.md_kind[id] = 1
+                ln := find_in_line(g, p, e, "line: ")
+                g.md_line[id] = ln >= 0 ? num_at(g, ln) : 0
+                sc := find_in_line(g, p, e, "scope: !")
+                g.md_scope[id] = sc >= 0 ? num_at(g, sc) : 0 - 1
+            else sub >= 0:
+                g.md_kind[id] = 2
+                ln2 := find_in_line(g, p, e, " line: ")
+                g.md_line[id] = ln2 >= 0 ? num_at(g, ln2) : 0
+                fl := find_in_line(g, p, e, "file: !")
+                g.md_file[id] = fl >= 0 ? num_at(g, fl) : 0 - 1
+                nm := find_in_line(g, p, e, "name: \"")
+                g.md_s1[id] = nm >= 0 ? qstr_at(g, nm) : ""
+            else fil >= 0:
+                g.md_kind[id] = 3
+                fn := find_in_line(g, p, e, "filename: \"")
+                g.md_s1[id] = fn >= 0 ? qstr_at(g, fn) : ""
+                dr := find_in_line(g, p, e, "directory: \"")
+                g.md_s2[id] = dr >= 0 ? qstr_at(g, dr) : ""
+            end
+        end
+        p = e + 1
+    end
+    g.dbg_on = any and g.os != NG_OS_WINDOWS
+end
+
+func line_dbg(g &: Ng): int:
+    if not g.dbg_on:
+        ret 0 - 1
+    end
+    mut e := g.p
+    until e < g.sn and g.src[e] != (10 as u8):
+        e += 1
+    end
+    if g.dbg_eol.has(e):
+        ret g.dbg_eol.get(e)
+    end
+    ret 0 - 1
+end
+
+func dbg_file_of(g &: Ng, loc: int): int:
+    if loc < 0 or loc >= g.md_kind.len():
+        ret 0 - 1
+    end
+    mut sc := loc
+    if g.md_kind[loc] == 1:
+        sc = g.md_scope[loc]
+    end
+    if sc < 0 or sc >= g.md_kind.len() or g.md_kind[sc] != 2:
+        ret 0 - 1
+    end
+    ret g.md_file[sc]
+end
+
+func dbg_file_index(g &: Ng, md: int): int:
+    repeat g.dfiles.len() in k:
+        if g.dfiles[k] == md:
+            ret k + 1
+        end
+    end
+    g.dfiles.push(md)
+    ret g.dfiles.len()
+end
+
+func dbg_row(g &: Ng, off: int, loc: int):
+    if loc < 0 or loc >= g.md_kind.len() or g.md_kind[loc] == 0 or g.md_kind[loc] == 3:
+        ret
+    end
+    fmd := dbg_file_of(g, loc)
+    if fmd < 0:
+        ret
+    end
+    fi := dbg_file_index(g, fmd)
+    ln := g.md_line[loc]
+    n := g.dl_off.len()
+    if n > 0 and g.dl_line[n - 1] == ln and g.dl_file[n - 1] == fi:
+        ret
+    end
+    if n > 0 and g.dl_off[n - 1] == off:
+        g.dl_line[n - 1] = ln
+        g.dl_file[n - 1] = fi
+        ret
+    end
+    g.dl_off.push(off)
+    g.dl_line.push(ln)
+    g.dl_file.push(fi)
+end
+
+func dbg_func(g &: Ng, base: int, size: int):
+    sp0 := g.f_sp
+    if not g.dbg_on or sp0 < 0 or sp0 >= g.md_kind.len() or g.md_kind[sp0] != 2:
+        ret
+    end
+    g.df_sym.push(g.f_sym)
+    g.df_sp.push(sp0)
+    g.df_size.push(size)
+    g.df_base.push(base)
+end
+
+func dbg_cut(v &: Vector<int>, n: int):
+    until v.len() > n:
+        v.pop()
+    end
+end
+
+func dbg_new_off(starts: Vector<int>, ends: Vector<int>, syms: Vector<int>, newoff: Vector<int>, off: int): int:
+    mut lo := 0
+    mut hi := starts.len() - 1
+    mut best := 0 - 1
+    until lo <= hi:
+        mid := (lo + hi) / 2
+        if starts[mid] <= off:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+        end
+    end
+    if best < 0:
+        ret 0 - 1
+    end
+    st := starts[best]
+    if off >= ends[best] and off != st:
+        ret 0 - 1
+    end
+    mut k := best
+    until k >= 0 and starts[k] == st:
+        if newoff[syms[k]] >= 0:
+            ret newoff[syms[k]] + off - st
+        end
+        k -= 1
+    end
+    ret 0 - 1
+end
+
+func dbg_remap(g &: Ng, starts: Vector<int>, ends: Vector<int>, syms: Vector<int>, newoff: Vector<int>):
+    mut w := 0
+    repeat g.dl_off.len() in i:
+        no := dbg_new_off(starts, ends, syms, newoff, g.dl_off[i])
+        if no >= 0 and (w == 0 or no > g.dl_off[w - 1]):
+            g.dl_off[w] = no
+            g.dl_line[w] = g.dl_line[i]
+            g.dl_file[w] = g.dl_file[i]
+            w += 1
+        end
+    end
+    dbg_cut(g.dl_off, w)
+    dbg_cut(g.dl_line, w)
+    dbg_cut(g.dl_file, w)
+    mut w2 := 0
+    repeat g.df_base.len() in j:
+        nb := dbg_new_off(starts, ends, syms, newoff, g.df_base[j])
+        if nb >= 0:
+            g.df_base[w2] = nb
+            g.df_sym[w2] = g.df_sym[j]
+            g.df_sp[w2] = g.df_sp[j]
+            g.df_size[w2] = g.df_size[j]
+            w2 += 1
+        end
+    end
+    dbg_cut(g.df_base, w2)
+    dbg_cut(g.df_sym, w2)
+    dbg_cut(g.df_sp, w2)
+    dbg_cut(g.df_size, w2)
+end
+
+func vb_uleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        mut b := (x & (127 as i64)) as int
+        x = x >> (7 as i64)
+        if x != (0 as i64):
+            b = b | 128
+        end
+        v.push(b as u8)
+        if x == (0 as i64):
+            break
+        end
+    end
+end
+
+func vb_sleb(v &: Vector<u8>, x0: i64):
+    mut x := x0
+    until true:
+        b := (x & (127 as i64)) as int
+        x = x >> (7 as i64)
+        done := (x == (0 as i64) and (b & 64) == 0) or (x == (0 - 1 as i64) and (b & 64) != 0)
+        v.push((done ? b : (b | 128)) as u8)
+        if done:
+            break
+        end
+    end
+end
+
+func vb_le(v &: Vector<u8>, x: i64, n: int):
+    mut y := x
+    repeat n:
+        v.push((y & (255 as i64)) as u8)
+        y = y >> (8 as i64)
+    end
+end
+
+func vb_str(v &: Vector<u8>, s: str):
+    p := sp(s)
+    repeat str.Len(s) in i:
+        v.push(p[i])
+    end
+    v.push(0 as u8)
+end
+
+func vb_put32(v &: Vector<u8>, at: int, x: i64):
+    repeat 4 in k:
+        v[at + k] = ((x >> ((8 * k) as i64)) & (255 as i64)) as u8
+    end
+end
+
+func dbg_local_sym(g &: Ng, name: str, sec: int): int:
+    s := sym_named(g, name)
+    g.sy_kind[s] = SY_DATA
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_sec[s] = sec
+    g.sy_off[s] = 0
+    ret s
+end
+
+func dbg_emit(g &: Ng):
+    if not g.dbg_on or g.dl_off.len() == 0 and g.df_sym.len() == 0:
+        ret
+    end
+    ts := dbg_local_sym(g, ".Lsalam.text0", SEC_TEXT)
+    ls := dbg_local_sym(g, ".Lsalam.dline0", SEC_DBGLINE)
+    as0 := dbg_local_sym(g, ".Lsalam.dabbrev0", SEC_DBGABBREV)
+    mut cu_file := 0 - 1
+    repeat g.md_kind.len() in m:
+        if cu_file < 0 and g.md_kind[m] == 3:
+            cu_file = m
+        end
+    end
+    ab := g.s_dabbrev
+    each x in [1, 0x11, 1, 0x25, 0x08, 0x13, 0x05, 0x03, 0x08, 0x1b, 0x08, 0x10, 0x17, 0x11, 0x01, 0x12, 0x07, 0, 0]:
+        ab.push(x as u8)
+    end
+    each y in [2, 0x2e, 0, 0x03, 0x08, 0x3a, 0x0f, 0x3b, 0x0f, 0x11, 0x01, 0x12, 0x07, 0x3f, 0x19, 0, 0, 0]:
+        ab.push(y as u8)
+    end
+    g.s_dabbrev = ab
+    text_size := g.s_text.len()
+    mut di := Vector {} as Vector<u8>
+    vb_le(di, 0 as i64, 4)
+    vb_le(di, 4 as i64, 2)
+    add_reloc(g, SEC_DBGINFO, di.len(), as0, R_ABS32, 0 as i64)
+    vb_le(di, 0 as i64, 4)
+    di.push(8 as u8)
+    vb_uleb(di, 1 as i64)
+    vb_str(di, "salam")
+    vb_le(di, 0x0c as i64, 2)
+    vb_str(di, cu_file >= 0 ? g.md_s1[cu_file] : "")
+    vb_str(di, cu_file >= 0 ? g.md_s2[cu_file] : "")
+    add_reloc(g, SEC_DBGINFO, di.len(), ls, R_ABS32, 0 as i64)
+    vb_le(di, 0 as i64, 4)
+    add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, 0 as i64)
+    vb_le(di, 0 as i64, 8)
+    vb_le(di, text_size as i64, 8)
+    repeat g.df_sym.len() in k:
+        spm := g.df_sp[k]
+        vb_uleb(di, 2 as i64)
+        mut nm := g.md_s1[spm]
+        if str.Len(nm) == 0:
+            nm = tab_str(g.syms, g.df_sym[k])
+        end
+        vb_str(di, nm)
+        fm := g.md_file[spm]
+        vb_uleb(di, (fm >= 0 ? dbg_file_index(g, fm) : 1) as i64)
+        vb_uleb(di, g.md_line[spm] as i64)
+        add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, g.df_base[k] as i64)
+        vb_le(di, 0 as i64, 8)
+        vb_le(di, g.df_size[k] as i64, 8)
+    end
+    di.push(0 as u8)
+    vb_put32(di, 0, (di.len() - 4) as i64)
+    g.s_dinfo = di
+    mut dl := Vector {} as Vector<u8>
+    vb_le(dl, 0 as i64, 4)
+    vb_le(dl, 4 as i64, 2)
+    hl_at := dl.len()
+    vb_le(dl, 0 as i64, 4)
+    hs := dl.len()
+    each z in [1, 1, 1, 0xfb, 14, 13, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]:
+        dl.push(z as u8)
+    end
+    mut dirs := Vector {} as Vector<str>
+    mut dix := Vector {} as Vector<int>
+    each fmd in g.dfiles:
+        d := g.md_s2[fmd]
+        mut found := 0 - 1
+        repeat dirs.len() in q:
+            if str.Equals(dirs.get(q), d):
+                found = q
+            end
+        end
+        if found < 0:
+            dirs.push(d)
+            found = dirs.len() - 1
+        end
+        dix.push(found + 1)
+    end
+    each dd in dirs:
+        vb_str(dl, dd)
+    end
+    dl.push(0 as u8)
+    repeat g.dfiles.len() in fi:
+        vb_str(dl, g.md_s1[g.dfiles[fi]])
+        vb_uleb(dl, dix[fi] as i64)
+        vb_uleb(dl, 0 as i64)
+        vb_uleb(dl, 0 as i64)
+    end
+    dl.push(0 as u8)
+    vb_put32(dl, hl_at, (dl.len() - hs) as i64)
+    dl.push(0 as u8)
+    vb_uleb(dl, 9 as i64)
+    dl.push(2 as u8)
+    add_reloc(g, SEC_DBGLINE, dl.len(), ts, R_ABS64, 0 as i64)
+    vb_le(dl, 0 as i64, 8)
+    mut cur_off := 0
+    mut cur_line := 1
+    mut cur_file := 1
+    repeat g.dl_off.len() in r:
+        if g.dl_file[r] != cur_file:
+            dl.push(4 as u8)
+            vb_uleb(dl, g.dl_file[r] as i64)
+            cur_file = g.dl_file[r]
+        end
+        if g.dl_off[r] != cur_off:
+            dl.push(2 as u8)
+            vb_uleb(dl, (g.dl_off[r] - cur_off) as i64)
+            cur_off = g.dl_off[r]
+        end
+        if g.dl_line[r] != cur_line:
+            dl.push(3 as u8)
+            vb_sleb(dl, (g.dl_line[r] - cur_line) as i64)
+            cur_line = g.dl_line[r]
+        end
+        dl.push(1 as u8)
+    end
+    if text_size > cur_off:
+        dl.push(2 as u8)
+        vb_uleb(dl, (text_size - cur_off) as i64)
+    end
+    dl.push(0 as u8)
+    vb_uleb(dl, 1 as i64)
+    dl.push(1 as u8)
+    vb_put32(dl, 0, (dl.len() - 4) as i64)
+    g.s_dline = dl
+    dirs.free()
+    dix.free()
+end

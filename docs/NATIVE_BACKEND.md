@@ -101,6 +101,9 @@ then goes through:
    the only writers in the loop are calls, such a load is still hoisted and
    reloaded right after each call, so a vector's data pointer stays in a
    register on the paths that do not call (the recursive `solve` in N-queens).
+   A floating-point constant compared inside a loop is materialized once in
+   the preheader, since `ucomisd` needs it in a register
+   (`until zx * zx + zy * zy <= 4.0` in Mandelbrot).
    Then comes
    unswitching: an innermost loop that branches on a loop-invariant condition
    is versioned into one copy per outcome. Compares, remainders and
@@ -183,7 +186,8 @@ strings, so `println "hello"` stores the bytes as immediates. Instruction select
 arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, loads a
 32-bit value with `movslq` when it is also sign-extended (the low half serves
-the 32-bit uses), builds an `insertvalue` chain that is returned directly in
+the 32-bit uses), ties a commutative floating-point add or multiply to the
+operand that dies there (and squares `x * x` in one register), builds an `insertvalue` chain that is returned directly in
 the caller's result buffer, copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
@@ -239,7 +243,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

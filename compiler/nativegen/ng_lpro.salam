@@ -163,3 +163,90 @@ func lpro(g &: Ng): bool:
     end
     ret changed
 end
+
+func fch_loop(g &: Ng, l &: Lp, mk: int, pt: int, keys &: Vector<i64>, vals &: Vector<int>): bool:
+    keys.clear()
+    vals.clear()
+    mut changed := false
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_FCMP:
+                repeat 2 in k:
+                    c := k == 0 ? g.i_a[i] : g.i_b[i]
+                    if c >= 0 and g.v_kind[c] == VK_FLT:
+                        t := g.v_ty[c]
+                        key := g.v_i[c] ^ ((t as i64) << (56 as i64))
+                        mut nv := 0 - 1
+                        repeat keys.len() in q:
+                            if keys[q] == key:
+                                nv = vals[q]
+                            end
+                        end
+                        if nv < 0:
+                            it := t == T_F32 ? T_I32 : T_I64
+                            mut bits := g.v_i[c]
+                            if t == T_F32:
+                                bits = f32_bits_of(bits_f64(bits)) as i64
+                            end
+                            bc := ins_new(g, OP_BITCAST, t)
+                            g.i_a[bc] = const_int(g, it, bits)
+                            g.i_x[bc] = it
+                            nv = new_res(g, bc)
+                            ins_before(g, pt, bc)
+                            keys.push(key)
+                            vals.push(nv)
+                        end
+                        if k == 0:
+                            g.i_a[i] = nv
+                        else:
+                            g.i_b[i] = nv
+                        end
+                        changed = true
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret changed
+end
+
+func fcmp_const_hoist(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut keys := Vector {} as Vector<i64>
+    mut vals := Vector {} as Vector<int>
+    mut changed := false
+    mut mk := 4000000
+    each h in l.head:
+        mk += 1
+        _s := lp_body(g, l, h, mk)
+        p := lp_outside_pred(g, l, h, mk)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        if fch_loop(g, l, mk, pt, keys, vals):
+            changed = true
+        end
+    end
+    keys.free()
+    vals.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    ret changed
+end

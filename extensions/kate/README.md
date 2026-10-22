@@ -22,6 +22,24 @@ highlighting; `//!` directive headers; `"..."`, `"""..."""`, `` `...` `` and
 `'c'` literals with escape checking; and integers and floats written with
 ASCII, Persian or Arabic-Indic digits.
 
+## Language server
+
+Kate's LSP client can run `salam lsp`. In **Settings | Configure Kate | LSP
+Client | User Server Settings**:
+
+```json
+{
+  "servers": {
+    "salam": {
+      "command": ["salam", "lsp"],
+      "highlightingModeRegex": "^Salam$"
+    }
+  }
+}
+```
+
+See [`docs/LSP.md`](../../docs/LSP.md) for what the server does.
+
 ## Generated
 
 `salam.xml` is generated. Edit the generator and rerun it from the repository

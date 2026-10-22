@@ -166,4 +166,30 @@ check "search reads the registry" "$(has 'github.com/fixture/greet  Says hello' 
 run "$salam" deps clean
 check "deps clean empties the cache" "$([ ! -d "$SALAM_PKG/github.com" ] && echo 0 || echo 1)"
 
+version=$(tr -d ' \t\r\n' <"$root/VERSION")
+if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
+    mkdir -p "$work/rel" "$work/srv/v$version"
+    ln -s "$root/std" "$work/rel/std"
+    (cd "$root" && tar -czf "$work/srv/v$version/salam-packages-$version.tar.gz" packages/db/redis)
+    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    (cd "$work/srv" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+    server=$!
+    sleep 1
+    mkdir -p "$work/off"
+    cd "$work/off" || exit 1
+    printf '[package]\nname = "off"\n' >salam.toml
+    printf 'import db.redis\n\nfunc main:\n    println redis.Ok(redis.Client {})\nend\n' >main.salam
+    SALAM_STD="$work/rel/std" run "$salam" check main.salam
+    check "an official package needs salam add" "$(has 'official package that does not ship with Salam' "$work/last.log" && echo 0 || echo 1)"
+    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis
+    check "add downloads the official packages archive" "$(has '"db.redis" = "v' salam.toml && [ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
+    SALAM_STD="$work/rel/std" run "$salam" run --log-level=error
+    check "a program imports the downloaded official package" "$(has '^false$' "$work/last.log" && echo 0 || echo 1)"
+    rm -rf "$SALAM_PKG/salam-packages@v$version"
+    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" deps
+    check "deps downloads the official packages again" "$([ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
+    kill "$server" 2>/dev/null
+    cd "$work" || exit 1
+fi
+
 [ "$fails" -eq 0 ]

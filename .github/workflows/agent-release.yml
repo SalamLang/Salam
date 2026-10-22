@@ -17,7 +17,7 @@ on:
   workflow_call:
     inputs:
       attach:
-        description: Build the release set for another release to attach, without publishing an agent-v tag
+        description: Build the release set for another release to attach, without checking for a matching Salam release itself
         type: boolean
         default: false
 
@@ -40,8 +40,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
-      tag: ${{ steps.v.outputs.tag }}
-      publish: ${{ steps.v.outputs.publish }}
       salam_release: ${{ steps.v.outputs.salam_release }}
     steps:
       - name: Checkout code
@@ -63,26 +61,19 @@ jobs:
             echo "::error::tauri.conf.json says $conf but Cargo.toml says $cargo"
             exit 1
           fi
-          tag="agent-v$conf"
-          publish=false
           salam_release=
           if [ "$EVENT" != pull_request ] && [ "$ATTACH" != true ] && [ "$REPO" = SalamLang/Salam ]; then
-            if gh api "repos/$REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
-              echo "::notice::$tag already exists; building without publishing. Bump the version to release."
-            else
-              publish=true
-            fi
             if gh release view "v$conf" --repo "$REPO" >/dev/null 2>&1; then
               salam_release="v$conf"
+            else
+              echo "::notice::no v$conf release yet; building without publishing anywhere"
             fi
           fi
           {
             echo "version=$conf"
-            echo "tag=$tag"
-            echo "publish=$publish"
             echo "salam_release=$salam_release"
           } >> "$GITHUB_OUTPUT"
-          echo "version=$conf tag=$tag publish=$publish salam_release=${salam_release:-none}"
+          echo "version=$conf salam_release=${salam_release:-none}"
 
   check:
     name: Check (${{ matrix.os }})
@@ -321,8 +312,6 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      TAG: ${{ needs.version.outputs.tag }}
-      PUBLISH: ${{ needs.version.outputs.publish }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -398,49 +387,3 @@ jobs:
             echo ""
             printf -- '- %s\n' attach/*
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish the GitHub release
-        if: needs.version.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-        run: |
-          set -euo pipefail
-          p="salam-agent-$VERSION"
-          {
-            echo "Salam Agent lets Salam AI work on your own computer: files, shell, Docker and WSL, each action after your approval."
-            echo ""
-            echo "### Downloads"
-            echo ""
-            echo "| System | Installer | Portable |"
-            echo "| --- | --- | --- |"
-            echo "| Windows 64-bit | \`$p-windows-x86_64-setup.exe\` or \`.msi\` | \`$p-windows-x86_64.exe\` or \`.zip\` |"
-            echo "| Windows 32-bit | \`$p-windows-i686-setup.exe\` or \`.msi\` | \`$p-windows-i686.exe\` or \`.zip\` |"
-            echo "| Windows ARM64 | \`$p-windows-aarch64-setup.exe\` | \`$p-windows-aarch64.exe\` or \`.zip\` |"
-            echo "| macOS Apple silicon | \`$p-macos-arm64.dmg\` | \`$p-macos-arm64.zip\` |"
-            echo "| macOS Intel | \`$p-macos-x86_64.dmg\` | \`$p-macos-x86_64.zip\` |"
-            echo "| macOS (either) | \`$p-macos-universal.dmg\` | \`$p-macos-universal.zip\` |"
-            echo "| Linux x86_64 | \`.deb\`, \`.rpm\`, \`.AppImage\` | \`$p-linux-x86_64.tar.gz\` |"
-            echo "| Linux ARM64 | \`.deb\`, \`.rpm\`, \`.AppImage\` | \`$p-linux-aarch64.tar.gz\` |"
-            echo "| Linux 32-bit | \`.deb\`, \`.rpm\` | \`$p-linux-i686.tar.gz\` |"
-            echo ""
-            echo "Every portable build comes as both \`.tar.gz\` and \`.zip\`."
-            echo ""
-            echo "The macOS builds are not notarized yet. After copying the app to Applications, run"
-            echo "\`xattr -dr com.apple.quarantine \"/Applications/Salam Agent.app\"\` once, or right-click it and choose Open."
-            echo "Windows SmartScreen may ask for confirmation for the same reason."
-            echo ""
-            echo "### Verifying your download"
-            echo ""
-            echo "Every file has a \`.sha256\` beside it. \`SHA256SUMS\` and \`SHA512SUMS\` cover them all."
-            echo ""
-            echo '```'
-            echo "sha256sum --ignore-missing -c SHA256SUMS"
-            echo '```'
-            echo ""
-            echo "On macOS use \`shasum -a 256 -c\`. On Windows, \`certutil -hashfile <file> SHA256\` prints the hash to compare."
-          } > notes.md
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "Salam Agent $VERSION" \
-            --notes-file notes.md \
-            --latest=false \
-            release/*

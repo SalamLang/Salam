@@ -36,13 +36,108 @@ mut PHASE := HashMap {} as HashMap<str, str>
 mut IDLE := HashMap {} as HashMap<str, str>
 mut FAILED := HashMap {} as HashMap<str, str>
 mut PART_KIND := HashMap {} as HashMap<str, str>
-mut PART_TEXT := HashMap {} as HashMap<str, str>
+mut PART_TEXT := HashMap {} as HashMap<str, str.StringBuilder>
 mut PART_SID := HashMap {} as HashMap<str, str>
 mut MSG_ROLE := HashMap {} as HashMap<str, str>
 mut PENDING := HashMap {} as HashMap<str, str>
-mut STEPS := HashMap {} as HashMap<str, str>
-mut REASON := HashMap {} as HashMap<str, str>
+mut REASON := HashMap {} as HashMap<str, str.StringBuilder>
 mut TOOLSTEP := HashMap {} as HashMap<str, str>
+
+func text_add(pid: str, piece: str):
+    if piece.len() == 0:
+        ret
+    end
+    if PART_TEXT.has(pid):
+        mut b := PART_TEXT.get(pid)
+        str.BufAppend(b, piece)
+        PART_TEXT.put(pid, b)
+        ret
+    end
+    mut fresh := str.NewBuilder()
+    str.BufAppend(fresh, piece)
+    PART_TEXT.put(pid, fresh)
+end
+
+func text_len(pid: str): int:
+    if not PART_TEXT.has(pid):
+        ret 0
+    end
+    ret str.BufLen(PART_TEXT.get(pid)) as int
+end
+
+func text_part(pid: str): str:
+    if not PART_TEXT.has(pid):
+        ret ""
+    end
+    ret str.BufStr(PART_TEXT.get(pid))
+end
+
+func text_set(pid: str, full: str):
+    if PART_TEXT.has(pid):
+        mut b := PART_TEXT.get(pid)
+        str.BufReset(b)
+        str.BufAppend(b, full)
+        PART_TEXT.put(pid, b)
+        ret
+    end
+    text_add(pid, full)
+end
+
+func text_drop(pid: str):
+    if PART_TEXT.has(pid):
+        mut b := PART_TEXT.get(pid)
+        str.BufFree(b)
+        _r := PART_TEXT.remove(pid)
+    end
+end
+
+func reason_add(pid: str, piece: str):
+    if piece.len() == 0:
+        ret
+    end
+    if REASON.has(pid):
+        mut b := REASON.get(pid)
+        str.BufAppend(b, piece)
+        REASON.put(pid, b)
+        ret
+    end
+    mut fresh := str.NewBuilder()
+    str.BufAppend(fresh, piece)
+    REASON.put(pid, fresh)
+end
+
+func reason_len(pid: str): int:
+    if not REASON.has(pid):
+        ret 0
+    end
+    ret str.BufLen(REASON.get(pid)) as int
+end
+
+func reason_text(pid: str): str:
+    if not REASON.has(pid):
+        ret ""
+    end
+    ret str.BufStr(REASON.get(pid))
+end
+
+func reason_set(pid: str, full: str):
+    if REASON.has(pid):
+        mut b := REASON.get(pid)
+        str.BufReset(b)
+        str.BufAppend(b, full)
+        REASON.put(pid, b)
+        ret
+    end
+    reason_add(pid, full)
+end
+
+func reason_drop(pid: str):
+    if REASON.has(pid):
+        mut b := REASON.get(pid)
+        str.BufFree(b)
+        _r := REASON.remove(pid)
+    end
+end
 
 func field(v: value.Value, key: str): value.Value:
     mut ok := false
@@ -101,18 +196,6 @@ func add_part(sid: str, pid: str):
     end
 end
 
-func add_step(sid: str, pid: str):
-    order := STEPS.has(sid) ? STEPS.get(sid) : ""
-    if ("\n" + order + "\n").find("\n" + pid + "\n") >= 0:
-        ret
-    end
-    if order.len() == 0:
-        STEPS.put(sid, pid)
-    else:
-        STEPS.put(sid, order + "\n" + pid)
-    end
-end
-
 func on_part(p: value.Value):
     pid := text_of(p, "id")
     sid := text_of(p, "sessionID")
@@ -131,25 +214,17 @@ func on_part(p: value.Value):
     if kind == "text":
         add_part(sid, pid)
         full := text_of(p, "text")
-        mut old := PART_TEXT.has(pid) ? PART_TEXT.get(pid) : ""
-        if waiting.len() > 0:
-            old = old + waiting
-            PART_TEXT.put(pid, old)
-        end
-        if full.len() >= old.len():
-            PART_TEXT.put(pid, full)
+        text_add(pid, waiting)
+        if full.len() >= text_len(pid):
+            text_set(pid, full)
         end
         PHASE.put(sid, "writing")
     else kind == "reasoning":
-        add_step(sid, pid)
+        add_part(sid, pid)
         full := text_of(p, "text")
-        mut old := REASON.has(pid) ? REASON.get(pid) : ""
-        if waiting.len() > 0:
-            old = old + waiting
-            REASON.put(pid, old)
-        end
-        if full.len() >= old.len():
-            REASON.put(pid, full)
+        reason_add(pid, waiting)
+        if full.len() >= reason_len(pid):
+            reason_set(pid, full)
         end
         if PHASE.has(sid) and PHASE.get(sid) != "writing":
             PHASE.put(sid, "thinking")
@@ -157,7 +232,7 @@ func on_part(p: value.Value):
     else kind == "tool":
         state := field(p, "state")
         status := text_of(state, "status")
-        add_step(sid, pid)
+        add_part(sid, pid)
         mut tool_out := text_of(state, "output")
         if tool_out.len() == 0:
             tool_out = text_of(state, "error")
@@ -188,8 +263,7 @@ func on_delta(props: value.Value):
         ret
     end
     if PART_KIND.get(pid) == "reasoning":
-        old_r := REASON.has(pid) ? REASON.get(pid) : ""
-        REASON.put(pid, old_r + text_of(props, "delta"))
+        reason_add(pid, text_of(props, "delta"))
         bump()
         ret
     end
@@ -197,8 +271,7 @@ func on_delta(props: value.Value):
         ret
     end
     add_part(sid, pid)
-    old := PART_TEXT.has(pid) ? PART_TEXT.get(pid) : ""
-    PART_TEXT.put(pid, old + text_of(props, "delta"))
+    text_add(pid, text_of(props, "delta"))
     PART_SID.put(pid, sid)
     PHASE.put(sid, "writing")
     bump()
@@ -355,21 +428,17 @@ func forget(sid: str):
     order := ORDER.has(sid) ? ORDER.get(sid) : ""
     if order.len() > 0:
         each pid in order.split("\n"):
-            _a := PART_TEXT.remove(pid)
+            kind := PART_KIND.has(pid) ? PART_KIND.get(pid) : ""
+            if kind == "text":
+                text_drop(pid)
+            else:
+                reason_drop(pid)
+                _t := TOOLSTEP.remove(pid)
+            end
             _b := PART_KIND.remove(pid)
             _c := PART_SID.remove(pid)
         end
     end
-    steps := STEPS.has(sid) ? STEPS.get(sid) : ""
-    if steps.len() > 0:
-        each pid in steps.split("\n"):
-            _r := REASON.remove(pid)
-            _t := TOOLSTEP.remove(pid)
-            _k := PART_KIND.remove(pid)
-            _s := PART_SID.remove(pid)
-        end
-    end
-    _st := STEPS.remove(sid)
     _d := ORDER.remove(sid)
     _e := PHASE.remove(sid)
     _f := IDLE.remove(sid)
@@ -442,7 +511,7 @@ pub func Snapshot(sid: str, text &: str, phase &: str, idle &: bool, failed &: b
     mut pieces := Vector {} as Vector<str>
     if tracked and ORDER.has(sid):
         each pid in ORDER.get(sid).split("\n"):
-            t := PART_TEXT.has(pid) ? PART_TEXT.get(pid) : ""
+            t := text_part(pid)
             if str.Trim(t).len() > 0:
                 pieces.push(t)
             end
@@ -463,12 +532,18 @@ end
 pub func Activity(sid: str): str:
     _l := sync.Lock(LOCK)
     mut items := Vector {} as Vector<str>
-    if STEPS.has(sid):
-        each pid in STEPS.get(sid).split("\n"):
+    if ORDER.has(sid):
+        each pid in ORDER.get(sid).split("\n"):
+            kind := PART_KIND.has(pid) ? PART_KIND.get(pid) : ""
             if TOOLSTEP.has(pid):
                 items.push(TOOLSTEP.get(pid))
-            else REASON.has(pid) and str.Trim(REASON.get(pid)).len() > 0:
-                items.push(aiact.ThoughtStep(REASON.get(pid)))
+            else kind == "reasoning" and reason_len(pid) > 0 and str.Trim(reason_text(pid)).len() > 0:
+                items.push(aiact.ThoughtStep(reason_text(pid)))
+            else kind == "text":
+                t := text_part(pid)
+                if str.Trim(t).len() > 0:
+                    items.push(aiact.TextStep(t))
+                end
             end
         end
     end

@@ -116,7 +116,7 @@ salam build hello.salam --output=hello
 **Layout DSL** - compile a `.salam` layout page to HTML/CSS/JS:
 
 ```bash
-salam layout build page.salam --inline
+salam page build page.salam --inline
 ```
 
 For a full list of commands and flags, see the [Usage section in the readme](README.md#usage) or run:

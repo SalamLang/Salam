@@ -24,6 +24,7 @@ import time
 
 const CALL_MS := 20000
 const SEND_MS := 60000
+const TRACE_FIELD_MAX := 200000
 
 mut ENGINE_HOST := "127.0.0.1"
 mut ENGINE_PORT := 4096
@@ -35,6 +36,16 @@ mut LOCK := sync.Mutex {}
 mut AGENTS := ""
 mut AGENTS_AT := 0 as i64
 mut SESSION_AGENT := HashMap {} as HashMap<str, str>
+mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
+mut SESSION_PARTS := HashMap {} as HashMap<str, str>
+mut CAPS_AT := 0 as i64
+mut CAPS_IMAGE := false
+mut CAPS_PDF := false
+mut SESSION_MODEL := HashMap {} as HashMap<str, str>
+mut SESSION_TRY := HashMap {} as HashMap<str, int>
+mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
+mut FALLBACKS := Vector {} as Vector<str>
+mut REDACT_WORDS := Vector {} as Vector<str>
 
 struct Answer:
     pub status: int = 0
@@ -49,6 +60,7 @@ pub struct Reply:
     pub activity: str = "[]"
     pub started: bool = false
     pub idle: bool = false
+    pub acted: bool = false
 end
 
 pub struct Usage:
@@ -248,16 +260,173 @@ func agent_exists(name: str): bool:
     ret names.find("\n" + name + "\n") >= 0
 end
 
-func send_as(sid: str, agent: str, text: str): bool:
+func model_json(model: str): str:
+    slash := model.find("/")
+    if slash <= 0 or slash >= model.len() - 1:
+        ret ""
+    end
+    ret `, "model": {"providerID": ` + json.Str(model.substr(0, slash)) + `, "modelID": ` + json.Str(model.substr(slash + 1, model.len() - slash - 1)) + "}"
+end
+
+func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: str):
     _l := sync.Lock(LOCK)
-    SESSION_AGENT.put(sid, agent)
     if SESSION_AGENT.size() > 5000:
         SESSION_AGENT = HashMap {} as HashMap<str, str>
-        SESSION_AGENT.put(sid, agent)
+        SESSION_PROMPT = HashMap {} as HashMap<str, str>
+        SESSION_PARTS = HashMap {} as HashMap<str, str>
+        SESSION_MODEL = HashMap {} as HashMap<str, str>
+        SESSION_TRY = HashMap {} as HashMap<str, int>
+        SESSION_RETRY_AT = HashMap {} as HashMap<str, i64>
+    end
+    SESSION_AGENT.put(sid, agent)
+    SESSION_MODEL.put(sid, model)
+    if fresh:
+        SESSION_PROMPT.put(sid, text)
+        SESSION_PARTS.put(sid, parts)
+        SESSION_TRY.put(sid, 0)
+        _r := SESSION_RETRY_AT.remove(sid)
     end
     _u := sync.Unlock(LOCK)
-    body := `{"agent": ` + json.Str(agent) + `, "parts": [{"type": "text", "text": ` + json.Str(text) + "}]}"
-    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", body, SEND_MS))
+end
+
+func post_prompt(sid: str, agent: str, text: str, model: str, parts: str): bool:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, `{"agent": `)
+    str.BufAppend(b, json.Str(agent))
+    str.BufAppend(b, model_json(model))
+    str.BufAppend(b, `, "parts": [{"type": "text", "text": `)
+    str.BufAppend(b, json.Str(text))
+    str.BufAppend(b, "}")
+    str.BufAppend(b, parts)
+    str.BufAppend(b, "]}")
+    ret ok_status(call("POST", "/session/" + sid + "/prompt_async", str.BufStr(b), SEND_MS))
+end
+
+func send_as(sid: str, agent: str, text: str, parts: str): bool:
+    remember(sid, agent, text, "", true, parts)
+    ret post_prompt(sid, agent, text, "", parts)
+end
+
+func caps_model(config: value.Value, agent: str): str:
+    own := text_of(field(field(config, "agent"), agent), "model")
+    if own.len() > 0:
+        ret own
+    end
+    ret text_of(config, "model")
+end
+
+func load_caps():
+    mut image := false
+    mut pdf := false
+    mut loaded := false
+    r := call("GET", "/config", "", CALL_MS)
+    if ok_status(r):
+        mut err := encerr.EncodingError {}
+        config := json.Decode(r.body, err)
+        model := caps_model(config, ENGINE_AGENT)
+        value.ValueFree(config)
+        slash := model.find("/")
+        if slash > 0:
+            pid := model.substr(0, slash)
+            mid := model.substr(slash + 1, model.len() - slash - 1)
+            pr := call("GET", "/config/providers", "", CALL_MS)
+            if ok_status(pr):
+                mut perr := encerr.EncodingError {}
+                all := json.Decode(pr.body, perr)
+                list := field(all, "providers")
+                if value.IsArray(list):
+                    repeat value.ArrayLen(list) in i:
+                        prov := value.ArrayGet(list, i)
+                        if text_of(prov, "id") == pid:
+                            accepts := field(field(field(field(prov, "models"), mid), "capabilities"), "input")
+                            image = flag(accepts, "image")
+                            pdf = flag(accepts, "pdf")
+                            loaded = value.IsObject(accepts)
+                        end
+                    end
+                end
+                value.ValueFree(all)
+            end
+        end
+    end
+    _l := sync.Lock(LOCK)
+    if loaded:
+        CAPS_IMAGE = image
+        CAPS_PDF = pdf
+        CAPS_AT = time.NowMillis()
+    else:
+        CAPS_AT = time.NowMillis() - 540000
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func scrub(s: str, mask: str): str:
+    mut t := s
+    if mask.len() > 0:
+        t = str.Replace(t, mask, "…")
+    end
+    each w in REDACT_WORDS:
+        t = str.Replace(t, w, "assistant")
+    end
+    if t.len() > TRACE_FIELD_MAX:
+        t = str.CharSubstr(t, 0, TRACE_FIELD_MAX / 2) + "\n…"
+    end
+    ret t
+end
+
+func millis(v: value.Value, key: str): i64:
+    f := field(v, key)
+    if value.IsNumber(f):
+        ret value.AsInt(f)
+    end
+    ret 0
+end
+
+func trace_part(p: value.Value, mask: str): str:
+    kind := text_of(p, "type")
+    mut m := Vector {} as Vector<str>
+    if kind == "text":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "text"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberBool("synthetic", flag(p, "synthetic")))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "reasoning":
+        t := text_of(p, "text")
+        if str.Trim(t).len() == 0:
+            ret ""
+        end
+        m.push(json.Member("kind", "think"))
+        m.push(json.Member("text", scrub(t, mask)))
+        m.push(json.MemberInt("at", millis(field(p, "time"), "start")))
+    else kind == "tool":
+        state := field(p, "state")
+        times := field(state, "time")
+        given := field(state, "input")
+        mut args := "{}"
+        if value.IsObject(given):
+            args = json.Encode(given, json.JSONOptions { indent = "  " })
+        end
+        m.push(json.Member("kind", "tool"))
+        m.push(json.Member("tool", text_of(p, "tool")))
+        m.push(json.Member("status", text_of(state, "status")))
+        m.push(json.Member("title", scrub(text_of(state, "title"), mask)))
+        m.push(json.Member("input", scrub(args, mask)))
+        m.push(json.Member("output", scrub(text_of(state, "output"), mask)))
+        m.push(json.Member("error", scrub(text_of(state, "error"), mask)))
+        m.push(json.MemberInt("at", millis(times, "start")))
+        m.push(json.MemberInt("end", millis(times, "end")))
+    else kind == "file":
+        m.push(json.Member("kind", "file"))
+        m.push(json.Member("text", text_of(p, "filename") + " " + text_of(p, "mime")))
+    else:
+        ret ""
+    end
+    ret json.Object(m)
 end
 
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
@@ -289,30 +458,170 @@ pub func NewSession(title: str): str:
     ret json.Get(r.body, "id")
 end
 
-pub func Send(sid: str, text: str): bool:
-    ret send_as(sid, ENGINE_AGENT, text)
+pub func Send(sid: str, text: str, parts: str): bool:
+    ret send_as(sid, ENGINE_AGENT, text, parts)
 end
 
-pub func SendDesktop(sid: str, text: str): bool:
+pub func SendDesktop(sid: str, text: str, parts: str): bool:
     if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
         println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
-        ret send_as(sid, ENGINE_AGENT, text)
+        ret send_as(sid, ENGINE_AGENT, text, parts)
     end
-    ret send_as(sid, DESKTOP_AGENT, text)
+    ret send_as(sid, DESKTOP_AGENT, text, parts)
+end
+
+pub func Accepts(image &: bool, pdf &: bool):
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - CAPS_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_caps()
+    end
+    _a := sync.Lock(LOCK)
+    image = CAPS_IMAGE
+    pdf = CAPS_PDF
+    _b := sync.Unlock(LOCK)
 end
 
 pub func Followup(sid: str, text: str): bool:
     _l := sync.Lock(LOCK)
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
     _u := sync.Unlock(LOCK)
-    ret send_as(sid, agent, text)
+    remember(sid, agent, text, model, false, "")
+    ret post_prompt(sid, agent, text, model, "")
+end
+
+pub func SetFallbacks(list: str):
+    mut found := Vector {} as Vector<str>
+    each part in str.Split(list, ","):
+        m := str.Trim(part)
+        if model_json(m).len() > 0:
+            found.push(m)
+        end
+    end
+    FALLBACKS = found
+end
+
+pub func Fallbacks(): int:
+    ret FALLBACKS.len()
+end
+
+pub func Retry(sid: str): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    if SESSION_RETRY_AT.has(sid) and now - SESSION_RETRY_AT.get(sid) < 4000:
+        _e := sync.Unlock(LOCK)
+        ret true
+    end
+    tried := SESSION_TRY.has(sid) ? SESSION_TRY.get(sid) : FALLBACKS.len()
+    if tried >= FALLBACKS.len() or not SESSION_PROMPT.has(sid):
+        _f := sync.Unlock(LOCK)
+        ret false
+    end
+    SESSION_TRY.put(sid, tried + 1)
+    SESSION_RETRY_AT.put(sid, now)
+    agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
+    text := SESSION_PROMPT.get(sid)
+    parts := SESSION_PARTS.has(sid) ? SESSION_PARTS.get(sid) : ""
+    model := FALLBACKS.get(tried)
+    _u := sync.Unlock(LOCK)
+    seen := Poll(sid)
+    if seen.acted or seen.text.len() > 0:
+        ret false
+    end
+    _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
+    println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
+    remember(sid, agent, text, model, false, "")
+    ret post_prompt(sid, agent, text, model, parts)
+end
+
+pub func SetRedactions(words: str):
+    mut found := Vector {} as Vector<str>
+    each w in str.Split(words, ","):
+        t := str.Trim(w)
+        if t.len() > 0:
+            found.push(t)
+            found.push(str.Lower(t))
+        end
+    end
+    REDACT_WORDS = found
+end
+
+pub func Transcript(sid: str, from_ms: i64, upto_ms: i64, mask: str, ok &: bool): str:
+    ok = false
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if not ok_status(r):
+        ret "[]"
+    end
+    mut err := encerr.EncodingError {}
+    list := json.Decode(r.body, err)
+    if not value.IsArray(list):
+        value.ValueFree(list)
+        ret "[]"
+    end
+    mut out := Vector {} as Vector<str>
+    repeat value.ArrayLen(list) in i:
+        msg := value.ArrayGet(list, i)
+        info := field(msg, "info")
+        at := millis(field(info, "time"), "created")
+        if at >= from_ms and (upto_ms <= 0 or at < upto_ms):
+            role := text_of(info, "role")
+            parts := field(msg, "parts")
+            if role == "user":
+                mut pieces := Vector {} as Vector<str>
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        pt := value.ArrayGet(parts, j)
+                        if text_of(pt, "type") == "text":
+                            pieces.push(text_of(pt, "text"))
+                        end
+                    end
+                end
+                mut m := Vector {} as Vector<str>
+                m.push(json.Member("kind", "prompt"))
+                m.push(json.Member("text", scrub(str.Join(pieces, "\n\n"), mask)))
+                m.push(json.MemberInt("at", at))
+                out.push(json.Object(m))
+            else role == "assistant":
+                e := field(info, "error")
+                if value.IsArray(parts):
+                    repeat value.ArrayLen(parts) in j:
+                        piece := trace_part(value.ArrayGet(parts, j), mask)
+                        if piece.len() > 0:
+                            out.push(piece)
+                        end
+                    end
+                end
+                if not value.IsNull(e):
+                    mut m := Vector {} as Vector<str>
+                    m.push(json.Member("kind", "error"))
+                    m.push(json.Member("text", scrub(text_of(field(e, "data"), "message") + " " + text_of(e, "name"), mask)))
+                    m.push(json.MemberInt("at", at))
+                    out.push(json.Object(m))
+                end
+            end
+        end
+    end
+    value.ValueFree(list)
+    ok = true
+    ret json.Array(out)
+end
+
+pub func Forget(sid: str):
+    _l := sync.Lock(LOCK)
+    _p := SESSION_PROMPT.remove(sid)
+    _q := SESSION_PARTS.remove(sid)
+    _u := sync.Unlock(LOCK)
 end
 
 pub func Abort(sid: str):
+    Forget(sid)
     _r := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
 end
 
 pub func Delete(sid: str):
+    Forget(sid)
     _r := call("DELETE", "/session/" + sid, "", CALL_MS)
 end
 
@@ -437,6 +746,7 @@ pub func Poll(sid: str): Reply:
                             pieces.push(t)
                         end
                     else kind == "tool":
+                        out.acted = true
                         status := text_of(field(p, "state"), "status")
                         if status == "running" or status == "pending":
                             searching = true

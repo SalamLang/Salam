@@ -5,13 +5,15 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://github.com/SalamLang/Salam/releases/download/v${SALAM_VERSION}/salam-${SALAM_VERSION}-linux-x86_64.tar.gz" | tar -xz -C /opt
 WORKDIR /src
+COPY std /srv/salam/std
 COPY tools/mcp/*.salam ./
+ENV SALAM_STD=/srv/salam/std
 RUN mkdir -p /out && /opt/salam-linux-x86_64/salam build main.salam --output=/out/salam-mcp --log-level=error
 
 FROM debian:trixie-slim
 RUN useradd --system --uid 10001 --no-create-home salam
 COPY --from=build /opt/salam-linux-x86_64/salam /srv/salam/salam
-COPY --from=build /opt/salam-linux-x86_64/std /srv/salam/std
+COPY --from=build /srv/salam/std /srv/salam/std
 COPY --from=build /out/salam-mcp /usr/local/bin/salam-mcp
 COPY docs/ai /srv/salam/docs/ai
 COPY SKILL.md /srv/salam/SKILL.md

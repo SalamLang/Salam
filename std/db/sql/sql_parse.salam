@@ -1,0 +1,2274 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package sql
+
+const F_REPLACE := 16384
+const F_IGNORE := 32768
+
+k_sql_type_words := [
+    "BINARY", "CHARACTER", "PRECISION", "SET", "ENUM", "UNSIGNED", "ZEROFILL", "VARYING",
+    "NATIONAL", "TIME", "ZONE", "WITH", "WITHOUT", "KEY"
+]
+
+struct Parser:
+    pub src: str = ""
+    pub toks: Vector<Token> = Vector {}
+    pub i: int = 0
+    pub d: Dialect = Dialect {}
+    pub ast: Ast = Ast {}
+    pub rep: Report = Report {}
+    pub failed: bool = false
+end
+
+func p_tok(p: Parser): Token:
+    ret p.toks.get(p.i)
+end
+
+func p_kind(p: Parser): int:
+    ret p.toks.get(p.i).kind
+end
+
+func p_next(p &: Parser):
+    if p.toks.get(p.i).kind != TK_EOF:
+        p.i = p.i + 1
+    end
+end
+
+func p_is_kw(p: Parser, w: str): bool:
+    ret tok_is_kw(p.src, p.toks.get(p.i), w)
+end
+
+func p_is_sym(p: Parser, w: str): bool:
+    ret tok_is_sym(p.src, p.toks.get(p.i), w)
+end
+
+func p_kw_at(p: Parser, k: int, w: str): bool:
+    j := p.i + k
+    if j >= p.toks.len():
+        ret false
+    end
+    ret tok_is_kw(p.src, p.toks.get(j), w)
+end
+
+func p_sym_at(p: Parser, k: int, w: str): bool:
+    j := p.i + k
+    if j >= p.toks.len():
+        ret false
+    end
+    ret tok_is_sym(p.src, p.toks.get(j), w)
+end
+
+func p_eat_kw(p &: Parser, w: str): bool:
+    if p_is_kw(p, w):
+        p_next(p)
+        ret true
+    end
+    ret false
+end
+
+func p_eat_sym(p &: Parser, w: str): bool:
+    if p_is_sym(p, w):
+        p_next(p)
+        ret true
+    end
+    ret false
+end
+
+func p_skip_kw(p &: Parser, w: str):
+    if p_is_kw(p, w):
+        p_next(p)
+    end
+end
+
+func p_skip_sym(p &: Parser, w: str):
+    if p_is_sym(p, w):
+        p_next(p)
+    end
+end
+
+func tok_desc(src: str, t: Token): str:
+    if t.kind == TK_EOF:
+        ret "the end of the statement"
+    end
+    ret "'" + src.substr(t.off, t.len) + "'"
+end
+
+func p_err(p &: Parser, code: str, message: str, help: str):
+    if p.failed:
+        ret
+    end
+    t := p.toks.get(p.i)
+    mut n := t.len
+    if n < 1:
+        n = 1
+    end
+    add_diag(p.rep, ERROR, code, message, help, t.line, t.col, t.off, n)
+    p.failed = true
+end
+
+func p_err_at(p &: Parser, idx: int, code: str, message: str, help: str):
+    t := p.toks.get(idx)
+    mut n := t.len
+    if n < 1:
+        n = 1
+    end
+    add_diag(p.rep, ERROR, code, message, help, t.line, t.col, t.off, n)
+end
+
+func p_expect_sym(p &: Parser, w: str, ctx: str):
+    if p_eat_sym(p, w):
+        ret
+    end
+    p_err(p, "SQL101", "expected '" + w + "' " + ctx + ", found " + tok_desc(p.src, p_tok(p)), "")
+end
+
+func p_expect_kw(p &: Parser, w: str, ctx: str):
+    if p_eat_kw(p, w):
+        ret
+    end
+    p_err(p, "SQL101", "expected " + w + " " + ctx + ", found " + tok_desc(p.src, p_tok(p)), "")
+end
+
+func p_name_here(p: Parser): bool:
+    t := p.toks.get(p.i)
+    if t.kind == TK_IDENT:
+        ret true
+    end
+    if t.kind != TK_KEYWORD:
+        ret false
+    end
+    ret not tok_is_hard_kw(p.src, t)
+end
+
+func p_take_name(p &: Parser): int:
+    if p_name_here(p):
+        idx := p.i
+        p_next(p)
+        ret idx
+    end
+    p_err(
+        p, "SQL102", "expected a name, found " + tok_desc(p.src, p_tok(p)),
+        "a reserved word has to be quoted to be used as a name"
+    )
+    ret 0 - 1
+end
+
+func type_word_here(p: Parser): bool:
+    t := p.toks.get(p.i)
+    if t.kind == TK_IDENT:
+        ret true
+    end
+    if t.kind != TK_KEYWORD:
+        ret false
+    end
+    mut i := 0
+    until i < len(k_sql_type_words):
+        if tok_is_kw(p.src, t, k_sql_type_words[i]):
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func num_is_float(src: str, t: Token): bool:
+    mut i := 0
+    until i < t.len:
+        c := src[t.off + i]
+        if c == '.' or c == 'e' or c == 'E':
+            ret true
+        end
+        i = i + 1
+    end
+    ret false
+end
+
+func mk_bin(p &: Parser, op: int, left: int, right: int, tk: int): int:
+    id := nd_new(p.ast, N_BINARY, tk)
+    nd_set_op(p.ast, id, op)
+    nd_set_a(p.ast, id, left)
+    nd_set_b(p.ast, id, right)
+    ret id
+end
+
+func parse_type_name(p &: Parser, id: int):
+    if not type_word_here(p):
+        ret
+    end
+    first := p.i
+    mut last := p.i
+    p_next(p)
+    until type_word_here(p):
+        last = p.i
+        p_next(p)
+    end
+    if p_is_sym(p, "("):
+        mut depth := 0
+        until p_kind(p) != TK_EOF:
+            if p_is_sym(p, "("):
+                depth = depth + 1
+            else p_is_sym(p, ")"):
+                depth = depth - 1
+            end
+            last = p.i
+            p_next(p)
+            if depth == 0:
+                break
+            end
+        end
+    end
+    until type_word_here(p):
+        last = p.i
+        p_next(p)
+    end
+    until p_is_sym(p, "["):
+        last = p.i
+        p_next(p)
+        if p_kind(p) == TK_NUMBER:
+            last = p.i
+            p_next(p)
+        end
+        if not p_is_sym(p, "]"):
+            p_err(p, "SQL116", "expected ']' after the array type, found " + tok_desc(p.src, p_tok(p)), "")
+            break
+        end
+        last = p.i
+        p_next(p)
+    end
+    nd_set_t1(p.ast, id, first)
+    nd_set_t2(p.ast, id, last)
+end
+
+func skip_balanced(p &: Parser):
+    if not p_is_sym(p, "("):
+        ret
+    end
+    mut depth := 0
+    until p_kind(p) != TK_EOF:
+        if p_is_sym(p, "("):
+            depth = depth + 1
+        else p_is_sym(p, ")"):
+            depth = depth - 1
+        end
+        p_next(p)
+        if depth == 0:
+            break
+        end
+    end
+end
+
+func skip_window(p &: Parser):
+    if p_eat_kw(p, "FILTER"):
+        skip_balanced(p)
+    end
+    if p_eat_kw(p, "WITHIN"):
+        p_skip_kw(p, "GROUP")
+        skip_balanced(p)
+    end
+    if p_eat_kw(p, "OVER"):
+        if p_is_sym(p, "("):
+            skip_balanced(p)
+        else:
+            _wn := p_take_name(p)
+        end
+    end
+end
+
+func parse_expr_items(p &: Parser, items &: Vector<int>):
+    until true:
+        if p.failed:
+            break
+        end
+        e := parse_expr(p)
+        if e >= 0:
+            items.push(e)
+        end
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+end
+
+func parse_name_items(p &: Parser, items &: Vector<int>):
+    until true:
+        if p.failed:
+            break
+        end
+        nm := p_take_name(p)
+        if nm < 0:
+            break
+        end
+        items.push(nd_new(p.ast, N_NAME, nm))
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+end
+
+func parse_func(p &: Parser, name_tok: int): int:
+    id := nd_new(p.ast, N_FUNC, name_tok)
+    p_next(p)
+    if p_eat_kw(p, "DISTINCT"):
+        nd_add_flag(p.ast, id, F_DISTINCT)
+    else:
+        p_skip_kw(p, "ALL")
+    end
+    mut args := Vector {} as Vector<int>
+    if not p_is_sym(p, ")"):
+        until true:
+            if p.failed:
+                break
+            end
+            if p_is_sym(p, "*"):
+                tk := p.i
+                p_next(p)
+                args.push(nd_new(p.ast, N_STAR, tk))
+                nd_add_flag(p.ast, id, F_STAR)
+            else:
+                e := parse_expr(p)
+                if e >= 0:
+                    args.push(e)
+                end
+            end
+            if p_eat_kw(p, "ORDER"):
+                p_skip_kw(p, "BY")
+                mut extra := Vector {} as Vector<int>
+                parse_expr_items(p, extra)
+                extra.free()
+                p_skip_kw(p, "SEPARATOR")
+                if p_kind(p) == TK_STRING:
+                    p_next(p)
+                end
+            end
+            if not p_eat_sym(p, ","):
+                break
+            end
+        end
+    end
+    nd_set_list(p.ast, id, args)
+    p_expect_sym(p, ")", "after the function arguments")
+    skip_window(p)
+    ret id
+end
+
+func parse_case(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    id := nd_new(p.ast, N_CASE, tk)
+    if not p_is_kw(p, "WHEN"):
+        nd_set_a(p.ast, id, parse_expr(p))
+    end
+    mut arms := Vector {} as Vector<int>
+    until p.failed == false and p_is_kw(p, "WHEN"):
+        wtk := p.i
+        p_next(p)
+        cond := parse_expr(p)
+        p_expect_kw(p, "THEN", "after the WHEN condition")
+        val := parse_expr(p)
+        arm := nd_new(p.ast, N_WHEN, wtk)
+        nd_set_a(p.ast, arm, cond)
+        nd_set_b(p.ast, arm, val)
+        arms.push(arm)
+    end
+    nd_set_list(p.ast, id, arms)
+    if arms.len() == 0 and not p.failed:
+        p_err(p, "SQL106", "CASE needs at least one WHEN branch", "")
+    end
+    if p_eat_kw(p, "ELSE"):
+        nd_set_b(p.ast, id, parse_expr(p))
+    end
+    p_expect_kw(p, "END", "to close CASE")
+    ret id
+end
+
+func parse_cast(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    id := nd_new(p.ast, N_CAST, tk)
+    p_expect_sym(p, "(", "after CAST")
+    nd_set_a(p.ast, id, parse_expr(p))
+    p_expect_kw(p, "AS", "in CAST")
+    parse_type_name(p, id)
+    p_expect_sym(p, ")", "to close CAST")
+    ret id
+end
+
+func parse_primary(p &: Parser): int:
+    t := p_tok(p)
+    tk := p.i
+    if t.kind == TK_NUMBER:
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, num_is_float(p.src, t) ? LIT_FLOAT : LIT_INT)
+        ret id
+    end
+    if t.kind == TK_STRING:
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, LIT_STRING)
+        ret id
+    end
+    if t.kind == TK_BLOB:
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, LIT_BLOB)
+        ret id
+    end
+    if t.kind == TK_PARAM:
+        p_next(p)
+        ret nd_new(p.ast, N_PARAM, tk)
+    end
+    if p_is_kw(p, "NULL"):
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, LIT_NULL)
+        ret id
+    end
+    if p_is_kw(p, "TRUE") or p_is_kw(p, "FALSE"):
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, LIT_BOOL)
+        ret id
+    end
+    if p_is_kw(p, "CURRENT_DATE") or p_is_kw(p, "CURRENT_TIME") or p_is_kw(p, "CURRENT_TIMESTAMP"):
+        p_next(p)
+        id := nd_new(p.ast, N_LITERAL, tk)
+        nd_set_op(p.ast, id, LIT_CURRENT)
+        ret id
+    end
+    if p_is_kw(p, "CASE"):
+        ret parse_case(p)
+    end
+    if p_is_kw(p, "CAST"):
+        ret parse_cast(p)
+    end
+    if p_is_kw(p, "EXISTS"):
+        p_next(p)
+        id := nd_new(p.ast, N_EXISTS, tk)
+        p_expect_sym(p, "(", "after EXISTS")
+        nd_set_a(p.ast, id, parse_select_stmt(p))
+        p_expect_sym(p, ")", "after the EXISTS subquery")
+        ret id
+    end
+    if p_is_sym(p, "("):
+        p_next(p)
+        if p_is_kw(p, "SELECT") or p_is_kw(p, "WITH") or p_is_kw(p, "VALUES"):
+            id := nd_new(p.ast, N_SUBQUERY, tk)
+            nd_set_a(p.ast, id, parse_select_stmt(p))
+            p_expect_sym(p, ")", "after the subquery")
+            ret id
+        end
+        mut items := Vector {} as Vector<int>
+        parse_expr_items(p, items)
+        p_expect_sym(p, ")", "to close the group")
+        if items.len() == 1:
+            only := items.get(0)
+            items.free()
+            ret only
+        end
+        id := nd_new(p.ast, N_ROW, tk)
+        nd_set_list(p.ast, id, items)
+        ret id
+    end
+    if p_is_kw(p, "DEFAULT"):
+        p_next(p)
+        ret nd_new(p.ast, N_DEFAULT, tk)
+    end
+    if p_is_kw(p, "VALUES") and p_sym_at(p, 1, "("):
+        p_next(p)
+        ret parse_func(p, tk)
+    end
+    if p_name_here(p):
+        n1 := p.i
+        p_next(p)
+        if p_is_sym(p, "("):
+            ret parse_func(p, n1)
+        end
+        if p_kind(p) == TK_STRING:
+            p_next(p)
+            id := nd_new(p.ast, N_LITERAL, tk)
+            nd_set_op(p.ast, id, LIT_STRING)
+            ret id
+        end
+        mut col := n1
+        mut tbl := 0 - 1
+        mut sch := 0 - 1
+        if p_is_sym(p, "."):
+            p_next(p)
+            if p_is_sym(p, "*"):
+                p_next(p)
+                id := nd_new(p.ast, N_STAR, n1)
+                nd_set_t1(p.ast, id, n1)
+                ret id
+            end
+            n2 := p_take_name(p)
+            if n2 < 0:
+                ret 0 - 1
+            end
+            tbl = n1
+            col = n2
+            if p_is_sym(p, "."):
+                p_next(p)
+                n3 := p_take_name(p)
+                if n3 < 0:
+                    ret 0 - 1
+                end
+                sch = n1
+                tbl = n2
+                col = n3
+            end
+        end
+        id := nd_new(p.ast, N_COLUMN_REF, col)
+        nd_set_t1(p.ast, id, tbl)
+        nd_set_t2(p.ast, id, sch)
+        ret id
+    end
+    if p_is_sym(p, "?"):
+        p_err(
+            p, "SQL201", "'?' is not a placeholder in " + p.d.name,
+            "postgres numbers its placeholders: $1, $2"
+        )
+        ret 0 - 1
+    end
+    p_err(
+        p, "SQL105", "expected a value, found " + tok_desc(p.src, t),
+        "a column name, a literal, a function call or a placeholder goes here"
+    )
+    ret 0 - 1
+end
+
+func parse_postfix(p &: Parser): int:
+    mut e := parse_primary(p)
+    until p.failed == false:
+        if p_is_sym(p, "::"):
+            tk := p.i
+            if not p.d.colon_cast:
+                p_err(
+                    p, "SQL206", "'::' casts are postgres only", "write CAST(x AS type) instead"
+                )
+                break
+            end
+            p_next(p)
+            id := nd_new(p.ast, N_CAST, tk)
+            nd_set_a(p.ast, id, e)
+            parse_type_name(p, id)
+            e = id
+            continue
+        end
+        if p_is_kw(p, "COLLATE"):
+            p_next(p)
+            _cn := p_take_name(p)
+            continue
+        end
+        break
+    end
+    ret e
+end
+
+func parse_unary(p &: Parser): int:
+    tk := p.i
+    if p_is_sym(p, "-") or p_is_sym(p, "+") or p_is_sym(p, "~"):
+        neg := p_is_sym(p, "-")
+        bnot := p_is_sym(p, "~")
+        p_next(p)
+        inner := parse_unary(p)
+        if not neg and not bnot:
+            ret inner
+        end
+        id := nd_new(p.ast, N_UNARY, tk)
+        nd_set_op(p.ast, id, neg ? OP_NEG : OP_BITNOT)
+        nd_set_a(p.ast, id, inner)
+        ret id
+    end
+    ret parse_postfix(p)
+end
+
+func parse_concat(p &: Parser): int:
+    mut left := parse_unary(p)
+    until p.failed == false:
+        mut op := 0
+        mut pg_only := false
+        if p_is_sym(p, "||"):
+            op = OP_CONCAT
+        else p_is_sym(p, "->") or p_is_sym(p, "->>"):
+            op = OP_JSON
+        else p_is_sym(p, "#>") or p_is_sym(p, "#>>"):
+            op = OP_JSON_PATH
+            pg_only = true
+        end
+        if op == 0:
+            break
+        end
+        tk := p.i
+        if pg_only and p.d.id != POSTGRES:
+            p_err(
+                p, "SQL214", "this json operator is postgres only",
+                "sqlite and mysql reach into json with the json_extract family"
+            )
+            break
+        end
+        p_next(p)
+        right := parse_unary(p)
+        left = mk_bin(p, op, left, right, tk)
+    end
+    ret left
+end
+
+func parse_mul(p &: Parser): int:
+    mut left := parse_concat(p)
+    until p.failed == false:
+        mut op := 0
+        if p_is_sym(p, "*"):
+            op = OP_MUL
+        else p_is_sym(p, "/"):
+            op = OP_DIV
+        else p_is_sym(p, "%"):
+            op = OP_MOD
+        end
+        if op == 0:
+            break
+        end
+        tk := p.i
+        p_next(p)
+        right := parse_concat(p)
+        left = mk_bin(p, op, left, right, tk)
+    end
+    ret left
+end
+
+func parse_add(p &: Parser): int:
+    mut left := parse_mul(p)
+    until p.failed == false:
+        mut op := 0
+        if p_is_sym(p, "+"):
+            op = OP_ADD
+        else p_is_sym(p, "-"):
+            op = OP_SUB
+        end
+        if op == 0:
+            break
+        end
+        tk := p.i
+        p_next(p)
+        right := parse_mul(p)
+        left = mk_bin(p, op, left, right, tk)
+    end
+    ret left
+end
+
+func parse_shift(p &: Parser): int:
+    mut left := parse_add(p)
+    until p.failed == false:
+        mut op := 0
+        if p_is_sym(p, "<<"):
+            op = OP_SHL
+        else p_is_sym(p, ">>"):
+            op = OP_SHR
+        end
+        if op == 0:
+            break
+        end
+        tk := p.i
+        p_next(p)
+        right := parse_add(p)
+        left = mk_bin(p, op, left, right, tk)
+    end
+    ret left
+end
+
+func parse_bit(p &: Parser): int:
+    mut left := parse_shift(p)
+    until p.failed == false:
+        mut op := 0
+        if p_is_sym(p, "&"):
+            op = OP_BITAND
+        else p_is_sym(p, "|"):
+            op = OP_BITOR
+        else p_is_sym(p, "^"):
+            op = OP_BITXOR
+        end
+        if op == 0:
+            break
+        end
+        tk := p.i
+        p_next(p)
+        right := parse_shift(p)
+        left = mk_bin(p, op, left, right, tk)
+    end
+    ret left
+end
+
+func pg_sym_op(p: Parser): bool:
+    if p_is_sym(p, "@>") or p_is_sym(p, "<@") or p_is_sym(p, "@@"):
+        ret true
+    end
+    if p_is_sym(p, "~") or p_is_sym(p, "~*") or p_is_sym(p, "!~") or p_is_sym(p, "!~*"):
+        ret true
+    end
+    if p_is_sym(p, "?") or p_is_sym(p, "?|") or p_is_sym(p, "?&"):
+        ret true
+    end
+    ret p_is_sym(p, "^@") or p_is_sym(p, "<->")
+end
+
+func cmp_sym_op(p: Parser): int:
+    if pg_sym_op(p):
+        ret OP_CONTAINS
+    end
+    if p_is_sym(p, "=") or p_is_sym(p, "=="):
+        ret OP_EQ
+    end
+    if p_is_sym(p, "<>") or p_is_sym(p, "!="):
+        ret OP_NE
+    end
+    if p_is_sym(p, "<="):
+        ret OP_LE
+    end
+    if p_is_sym(p, ">="):
+        ret OP_GE
+    end
+    if p_is_sym(p, "<"):
+        ret OP_LT
+    end
+    if p_is_sym(p, ">"):
+        ret OP_GT
+    end
+    ret 0
+end
+
+func match_op_here(p: Parser): int:
+    if p_is_kw(p, "LIKE"):
+        ret OP_LIKE
+    end
+    if p_is_kw(p, "ILIKE"):
+        ret OP_ILIKE
+    end
+    if p_is_kw(p, "GLOB"):
+        ret OP_GLOB
+    end
+    if p_is_kw(p, "REGEXP"):
+        ret OP_REGEXP
+    end
+    if p_is_kw(p, "MATCH"):
+        ret OP_MATCH
+    end
+    ret 0
+end
+
+func parse_cmp(p &: Parser): int:
+    mut left := parse_bit(p)
+    until p.failed == false:
+        op := cmp_sym_op(p)
+        if op != 0:
+            tk := p.i
+            if op == OP_CONTAINS and p.d.id != POSTGRES:
+                p_err(
+                    p, "SQL214", "this operator is postgres only",
+                    "sqlite and mysql have no operator spelled like this"
+                )
+                break
+            end
+            p_next(p)
+            p_skip_kw(p, "ANY")
+            p_skip_kw(p, "SOME")
+            p_skip_kw(p, "ALL")
+            right := parse_bit(p)
+            left = mk_bin(p, op, left, right, tk)
+            continue
+        end
+        mut neg := false
+        if p_is_kw(p, "NOT"):
+            nxt_ok := p_kw_at(p, 1, "LIKE") or p_kw_at(p, 1, "ILIKE") or p_kw_at(p, 1, "IN")
+            nxt_ok2 := p_kw_at(p, 1, "BETWEEN") or p_kw_at(p, 1, "GLOB") or p_kw_at(p, 1, "REGEXP")
+            if nxt_ok or nxt_ok2 or p_kw_at(p, 1, "MATCH"):
+                neg = true
+                p_next(p)
+            else:
+                break
+            end
+        end
+        if p_is_kw(p, "IS"):
+            tk := p.i
+            p_next(p)
+            isneg := p_eat_kw(p, "NOT")
+            if p_eat_kw(p, "DISTINCT"):
+                p_expect_kw(p, "FROM", "after IS DISTINCT")
+            end
+            right := parse_bit(p)
+            id := mk_bin(p, OP_IS, left, right, tk)
+            if isneg:
+                nd_add_flag(p.ast, id, F_NOT)
+            end
+            left = id
+            continue
+        end
+        if p_is_kw(p, "IN"):
+            tk := p.i
+            p_next(p)
+            id := nd_new(p.ast, N_IN, tk)
+            nd_set_a(p.ast, id, left)
+            if neg:
+                nd_add_flag(p.ast, id, F_NOT)
+            end
+            if p_eat_sym(p, "("):
+                if p_is_kw(p, "SELECT") or p_is_kw(p, "WITH") or p_is_kw(p, "VALUES"):
+                    nd_set_b(p.ast, id, parse_select_stmt(p))
+                else:
+                    mut items := Vector {} as Vector<int>
+                    if not p_is_sym(p, ")"):
+                        parse_expr_items(p, items)
+                    end
+                    nd_set_list(p.ast, id, items)
+                end
+                p_expect_sym(p, ")", "after the IN list")
+            else:
+                nd_set_b(p.ast, id, parse_bit(p))
+            end
+            left = id
+            continue
+        end
+        if p_is_kw(p, "BETWEEN"):
+            tk := p.i
+            p_next(p)
+            lo := parse_bit(p)
+            p_expect_kw(p, "AND", "between the two bounds of BETWEEN")
+            hi := parse_bit(p)
+            id := nd_new(p.ast, N_BETWEEN, tk)
+            nd_set_a(p.ast, id, left)
+            nd_set_b(p.ast, id, lo)
+            nd_set_c(p.ast, id, hi)
+            if neg:
+                nd_add_flag(p.ast, id, F_NOT)
+            end
+            left = id
+            continue
+        end
+        mop := match_op_here(p)
+        if mop != 0:
+            tk := p.i
+            if mop == OP_ILIKE and not p.d.ilike:
+                p_err(
+                    p, "SQL205", "ILIKE is postgres only",
+                    "use LOWER(x) LIKE LOWER(y), or LIKE on a case-insensitive column"
+                )
+                break
+            end
+            p_next(p)
+            right := parse_bit(p)
+            id := mk_bin(p, mop, left, right, tk)
+            if neg:
+                nd_add_flag(p.ast, id, F_NOT)
+            end
+            if p_eat_kw(p, "ESCAPE"):
+                nd_set_c(p.ast, id, parse_bit(p))
+            end
+            left = id
+            continue
+        end
+        if neg:
+            p_err(p, "SQL107", "expected LIKE, IN, BETWEEN or MATCH after NOT", "")
+        end
+        break
+    end
+    ret left
+end
+
+func parse_not(p &: Parser): int:
+    if p_is_kw(p, "NOT"):
+        tk := p.i
+        p_next(p)
+        inner := parse_not(p)
+        id := nd_new(p.ast, N_UNARY, tk)
+        nd_set_op(p.ast, id, OP_NOT)
+        nd_set_a(p.ast, id, inner)
+        ret id
+    end
+    ret parse_cmp(p)
+end
+
+func parse_and(p &: Parser): int:
+    mut left := parse_not(p)
+    until p.failed == false and p_is_kw(p, "AND"):
+        tk := p.i
+        p_next(p)
+        right := parse_not(p)
+        left = mk_bin(p, OP_AND, left, right, tk)
+    end
+    ret left
+end
+
+func parse_expr(p &: Parser): int:
+    mut left := parse_and(p)
+    until p.failed == false and p_is_kw(p, "OR"):
+        tk := p.i
+        p_next(p)
+        right := parse_and(p)
+        left = mk_bin(p, OP_OR, left, right, tk)
+    end
+    ret left
+end
+
+func parse_values(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    id := nd_new(p.ast, N_VALUES, tk)
+    mut rows := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        rtk := p.i
+        p_expect_sym(p, "(", "before a VALUES row")
+        row := nd_new(p.ast, N_ROW, rtk)
+        mut items := Vector {} as Vector<int>
+        if not p_is_sym(p, ")"):
+            parse_expr_items(p, items)
+        end
+        nd_set_list(p.ast, row, items)
+        p_expect_sym(p, ")", "after a VALUES row")
+        rows.push(row)
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, id, rows)
+    ret id
+end
+
+func parse_alias(p &: Parser, id: int):
+    if p_eat_kw(p, "AS"):
+        al := p_take_name(p)
+        nd_set_t2(p.ast, id, al)
+        ret
+    end
+    if p_name_here(p):
+        nd_set_t2(p.ast, id, p.i)
+        p_next(p)
+    end
+end
+
+func parse_join_op(p &: Parser): int:
+    mut kind := 0 - 1
+    natural := p_eat_kw(p, "NATURAL")
+    if p_is_kw(p, "LEFT"):
+        kind = J_LEFT
+        p_next(p)
+        p_skip_kw(p, "OUTER")
+    else p_is_kw(p, "RIGHT"):
+        kind = J_RIGHT
+        p_next(p)
+        p_skip_kw(p, "OUTER")
+    else p_is_kw(p, "FULL"):
+        kind = J_FULL
+        p_next(p)
+        p_skip_kw(p, "OUTER")
+    else p_is_kw(p, "INNER"):
+        kind = J_INNER
+        p_next(p)
+    else p_is_kw(p, "CROSS"):
+        kind = J_CROSS
+        p_next(p)
+    end
+    if p_is_kw(p, "JOIN"):
+        p_next(p)
+        if kind < 0:
+            ret J_INNER
+        end
+        ret kind
+    end
+    if natural or kind >= 0:
+        p_err(p, "SQL103", "expected JOIN, found " + tok_desc(p.src, p_tok(p)), "")
+    end
+    ret 0 - 1
+end
+
+func parse_table_or_sub(p &: Parser): int:
+    tk := p.i
+    if p_is_sym(p, "("):
+        p_next(p)
+        if p_is_kw(p, "SELECT") or p_is_kw(p, "WITH") or p_is_kw(p, "VALUES"):
+            id := nd_new(p.ast, N_TABLE_REF, tk)
+            nd_set_a(p.ast, id, parse_select_stmt(p))
+            p_expect_sym(p, ")", "after the subquery")
+            parse_alias(p, id)
+            ret id
+        end
+        inner := parse_from(p)
+        p_expect_sym(p, ")", "after the joined tables")
+        ret inner
+    end
+    p_skip_kw(p, "LATERAL")
+    nm := p_take_name(p)
+    if nm < 0:
+        ret 0 - 1
+    end
+    id := nd_new(p.ast, N_TABLE_REF, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        n2 := p_take_name(p)
+        if n2 < 0:
+            ret id
+        end
+        nd_set_t1(p.ast, id, nm)
+        nd_set_tok(p.ast, id, n2)
+    end
+    if p_is_sym(p, "("):
+        nd_add_flag(p.ast, id, F_STAR)
+        skip_balanced(p)
+    end
+    parse_alias(p, id)
+    if p_eat_kw(p, "INDEXED"):
+        p_expect_kw(p, "BY", "after INDEXED")
+        _ix := p_take_name(p)
+    end
+    if p_is_kw(p, "NOT") and p_kw_at(p, 1, "INDEXED"):
+        p_next(p)
+        p_next(p)
+    end
+    ret id
+end
+
+func parse_from(p &: Parser): int:
+    mut left := parse_table_or_sub(p)
+    until p.failed == false:
+        if p_is_sym(p, ","):
+            tk := p.i
+            p_next(p)
+            right := parse_table_or_sub(p)
+            j := nd_new(p.ast, N_JOIN, tk)
+            nd_set_op(p.ast, j, J_CROSS)
+            nd_set_a(p.ast, j, left)
+            nd_set_b(p.ast, j, right)
+            left = j
+            continue
+        end
+        tk := p.i
+        kind := parse_join_op(p)
+        if kind < 0:
+            break
+        end
+        right := parse_table_or_sub(p)
+        j := nd_new(p.ast, N_JOIN, tk)
+        nd_set_op(p.ast, j, kind)
+        nd_set_a(p.ast, j, left)
+        nd_set_b(p.ast, j, right)
+        if p_eat_kw(p, "ON"):
+            nd_set_c(p.ast, j, parse_expr(p))
+        else p_eat_kw(p, "USING"):
+            p_expect_sym(p, "(", "after USING")
+            mut cols := Vector {} as Vector<int>
+            parse_name_items(p, cols)
+            nd_set_list(p.ast, j, cols)
+            p_expect_sym(p, ")", "after the USING columns")
+        end
+        left = j
+    end
+    ret left
+end
+
+func parse_result_col(p &: Parser): int:
+    tk := p.i
+    if p_is_sym(p, "*"):
+        p_next(p)
+        id := nd_new(p.ast, N_RESULT_COL, tk)
+        nd_add_flag(p.ast, id, F_STAR)
+        ret id
+    end
+    if p_name_here(p) and p_sym_at(p, 1, ".") and p_sym_at(p, 2, "*"):
+        q := p.i
+        p_next(p)
+        p_next(p)
+        p_next(p)
+        id := nd_new(p.ast, N_RESULT_COL, tk)
+        nd_add_flag(p.ast, id, F_STAR)
+        nd_set_t1(p.ast, id, q)
+        ret id
+    end
+    e := parse_expr(p)
+    id := nd_new(p.ast, N_RESULT_COL, tk)
+    nd_set_a(p.ast, id, e)
+    if p_eat_kw(p, "AS"):
+        nd_set_t2(p.ast, id, p_take_name(p))
+    else p_name_here(p):
+        nd_set_t2(p.ast, id, p.i)
+        p_next(p)
+    end
+    ret id
+end
+
+func parse_result_cols(p &: Parser, owner: int):
+    mut items := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        c := parse_result_col(p)
+        if c >= 0:
+            items.push(c)
+        end
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, owner, items)
+end
+
+func parse_order_items(p &: Parser, owner: int):
+    mut items := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        tk := p.i
+        e := parse_expr(p)
+        it := nd_new(p.ast, N_ORDER_ITEM, tk)
+        nd_set_a(p.ast, it, e)
+        if p_eat_kw(p, "DESC"):
+            nd_add_flag(p.ast, it, F_DESC)
+        else:
+            p_skip_kw(p, "ASC")
+        end
+        if p_eat_kw(p, "NULLS"):
+            p_skip_kw(p, "FIRST")
+            p_skip_kw(p, "LAST")
+        end
+        items.push(it)
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, owner, items)
+end
+
+func parse_limit(p &: Parser, target: int):
+    if p_eat_kw(p, "LIMIT"):
+        tk := p.i
+        first := parse_expr(p)
+        if p_eat_sym(p, ","):
+            if not p.d.limit_comma:
+                p_err_at(
+                    p, tk, "SQL207", "LIMIT a, b is not supported by " + p.d.name,
+                    "write LIMIT count OFFSET start instead"
+                )
+            end
+            nd_set_g(p.ast, target, first)
+            nd_set_f(p.ast, target, parse_expr(p))
+        else:
+            nd_set_f(p.ast, target, first)
+            if p_eat_kw(p, "OFFSET"):
+                nd_set_g(p.ast, target, parse_expr(p))
+            end
+        end
+        ret
+    end
+    if p_eat_kw(p, "OFFSET"):
+        nd_set_g(p.ast, target, parse_expr(p))
+        if p_eat_kw(p, "FETCH"):
+            p_skip_kw(p, "FIRST")
+            p_skip_kw(p, "NEXT")
+            nd_set_f(p.ast, target, parse_expr(p))
+            p_skip_kw(p, "ROW")
+            p_skip_kw(p, "ROWS")
+            p_skip_kw(p, "ONLY")
+        end
+    end
+end
+
+func parse_select_core(p &: Parser): int:
+    tk := p.i
+    if p_is_kw(p, "VALUES"):
+        ret parse_values(p)
+    end
+    if not p_eat_kw(p, "SELECT"):
+        p_err(p, "SQL104", "expected SELECT, found " + tok_desc(p.src, p_tok(p)), "")
+        ret 0 - 1
+    end
+    id := nd_new(p.ast, N_SELECT, tk)
+    p_skip_kw(p, "STRAIGHT_JOIN")
+    if p_eat_kw(p, "DISTINCT"):
+        nd_add_flag(p.ast, id, F_DISTINCT)
+        if p_eat_kw(p, "ON"):
+            skip_balanced(p)
+        end
+    else:
+        p_skip_kw(p, "ALL")
+    end
+    parse_result_cols(p, id)
+    if p_eat_kw(p, "FROM"):
+        nd_set_a(p.ast, id, parse_from(p))
+    end
+    if p_eat_kw(p, "WHERE"):
+        nd_set_b(p.ast, id, parse_expr(p))
+    end
+    if p_eat_kw(p, "GROUP"):
+        p_expect_kw(p, "BY", "after GROUP")
+        g := nd_new(p.ast, N_LIST, p.i)
+        mut items := Vector {} as Vector<int>
+        parse_expr_items(p, items)
+        nd_set_list(p.ast, g, items)
+        nd_set_c(p.ast, id, g)
+        if p_eat_kw(p, "HAVING"):
+            nd_set_d(p.ast, id, parse_expr(p))
+        end
+    end
+    if p_eat_kw(p, "WINDOW"):
+        until p.failed == false and p_name_here(p):
+            p_next(p)
+            p_expect_kw(p, "AS", "after the window name")
+            skip_balanced(p)
+            if not p_eat_sym(p, ","):
+                break
+            end
+        end
+    end
+    ret id
+end
+
+func set_op_here(p &: Parser): int:
+    if p_is_kw(p, "UNION"):
+        p_next(p)
+        if p_eat_kw(p, "ALL"):
+            ret OP_UNION_ALL
+        end
+        p_skip_kw(p, "DISTINCT")
+        ret OP_UNION
+    end
+    if p_is_kw(p, "INTERSECT"):
+        p_next(p)
+        p_skip_kw(p, "ALL")
+        ret OP_INTERSECT
+    end
+    if p_is_kw(p, "EXCEPT"):
+        p_next(p)
+        p_skip_kw(p, "ALL")
+        ret OP_EXCEPT
+    end
+    ret 0
+end
+
+func parse_select_tail(p &: Parser): int:
+    mut left := parse_select_core(p)
+    until p.failed == false:
+        tk := p.i
+        op := set_op_here(p)
+        if op == 0:
+            break
+        end
+        right := parse_select_core(p)
+        s := nd_new(p.ast, N_SET_OP, tk)
+        nd_set_op(p.ast, s, op)
+        nd_set_a(p.ast, s, left)
+        nd_set_b(p.ast, s, right)
+        left = s
+    end
+    if p_eat_kw(p, "ORDER"):
+        p_expect_kw(p, "BY", "after ORDER")
+        o := nd_new(p.ast, N_LIST, p.i)
+        parse_order_items(p, o)
+        nd_set_e(p.ast, left, o)
+    end
+    parse_limit(p, left)
+    if p_eat_kw(p, "FOR"):
+        p_skip_kw(p, "UPDATE")
+        p_skip_kw(p, "SHARE")
+        p_skip_kw(p, "NO")
+        p_skip_kw(p, "KEY")
+    end
+    ret left
+end
+
+func parse_with_prefix(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    id := nd_new(p.ast, N_WITH, tk)
+    p_skip_kw(p, "RECURSIVE")
+    mut ctes := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        nm := p_take_name(p)
+        if nm < 0:
+            break
+        end
+        c := nd_new(p.ast, N_CTE, nm)
+        if p_eat_sym(p, "("):
+            mut cols := Vector {} as Vector<int>
+            parse_name_items(p, cols)
+            nd_set_list(p.ast, c, cols)
+            p_expect_sym(p, ")", "after the CTE columns")
+        end
+        p_expect_kw(p, "AS", "before the body of the CTE")
+        if p_eat_kw(p, "NOT"):
+            p_expect_kw(p, "MATERIALIZED", "after NOT")
+        else:
+            p_skip_kw(p, "MATERIALIZED")
+        end
+        p_expect_sym(p, "(", "before the body of the CTE")
+        nd_set_a(p.ast, c, parse_select_stmt(p))
+        p_expect_sym(p, ")", "after the body of the CTE")
+        ctes.push(c)
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, id, ctes)
+    ret id
+end
+
+func parse_select_stmt(p &: Parser): int:
+    mut w := 0 - 1
+    if p_is_kw(p, "WITH"):
+        w = parse_with_prefix(p)
+    end
+    body := parse_select_tail(p)
+    if w < 0:
+        ret body
+    end
+    nd_set_a(p.ast, w, body)
+    ret w
+end
+
+func parse_returning(p &: Parser, owner: int):
+    tk := p.i
+    if not p_eat_kw(p, "RETURNING"):
+        ret
+    end
+    if not p.d.returning:
+        p_err_at(
+            p, tk, "SQL208", "RETURNING is not supported by " + p.d.name,
+            "read the row back with a second query, or use LAST_INSERT_ID()"
+        )
+    end
+    r := nd_new(p.ast, N_LIST, tk)
+    parse_result_cols(p, r)
+    nd_set_e(p.ast, owner, r)
+end
+
+func parse_set_items(p &: Parser, owner: int):
+    mut items := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        if p_eat_sym(p, "("):
+            mut names := Vector {} as Vector<int>
+            parse_name_items(p, names)
+            p_expect_sym(p, ")", "after the column list")
+            p_expect_sym(p, "=", "after the column list")
+            mut j := 0
+            until j < names.len():
+                it := nd_new(p.ast, N_SET_ITEM, p.ast.nodes.get(names.get(j)).tok)
+                items.push(it)
+                j = j + 1
+            end
+            names.free()
+            _rhs := parse_expr(p)
+        else:
+            nm := p_take_name(p)
+            if nm < 0:
+                break
+            end
+            it := nd_new(p.ast, N_SET_ITEM, nm)
+            p_expect_sym(p, "=", "after the column name")
+            nd_set_a(p.ast, it, parse_expr(p))
+            items.push(it)
+        end
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, owner, items)
+end
+
+func parse_conflict(p &: Parser, owner: int):
+    tk := p.i
+    if not p_eat_kw(p, "ON"):
+        ret
+    end
+    if p_eat_kw(p, "CONFLICT"):
+        if not p.d.on_conflict:
+            p_err_at(
+                p, tk, "SQL209", "ON CONFLICT is not supported by " + p.d.name,
+                "mysql writes ON DUPLICATE KEY UPDATE"
+            )
+        end
+        id := nd_new(p.ast, N_CONFLICT, tk)
+        if p_eat_sym(p, "("):
+            target := nd_new(p.ast, N_LIST, p.i)
+            mut cols := Vector {} as Vector<int>
+            parse_name_items(p, cols)
+            nd_set_list(p.ast, target, cols)
+            nd_set_a(p.ast, id, target)
+            p_expect_sym(p, ")", "after the conflict target")
+            if p_eat_kw(p, "WHERE"):
+                nd_set_b(p.ast, id, parse_expr(p))
+            end
+        end
+        if p_eat_kw(p, "ON"):
+            p_expect_kw(p, "CONSTRAINT", "after ON")
+            _cn := p_take_name(p)
+        end
+        p_expect_kw(p, "DO", "after the conflict target")
+        if p_eat_kw(p, "NOTHING"):
+            nd_set_c(p.ast, owner, id)
+            ret
+        end
+        p_expect_kw(p, "UPDATE", "after DO")
+        p_expect_kw(p, "SET", "after DO UPDATE")
+        parse_set_items(p, id)
+        if p_eat_kw(p, "WHERE"):
+            nd_set_b(p.ast, id, parse_expr(p))
+        end
+        nd_set_c(p.ast, owner, id)
+        ret
+    end
+    if p_eat_kw(p, "DUPLICATE"):
+        if not p.d.on_duplicate:
+            p_err_at(
+                p, tk, "SQL210", "ON DUPLICATE KEY UPDATE is mysql only",
+                "sqlite and postgres write ON CONFLICT (col) DO UPDATE SET ..."
+            )
+        end
+        p_expect_kw(p, "KEY", "after ON DUPLICATE")
+        p_expect_kw(p, "UPDATE", "after ON DUPLICATE KEY")
+        id := nd_new(p.ast, N_CONFLICT, tk)
+        parse_set_items(p, id)
+        nd_set_c(p.ast, owner, id)
+        ret
+    end
+    p_err(p, "SQL108", "expected CONFLICT or DUPLICATE after ON", "")
+end
+
+func parse_insert(p &: Parser): int:
+    tk := p.i
+    id := nd_new(p.ast, N_INSERT, tk)
+    if p_is_kw(p, "REPLACE"):
+        nd_add_flag(p.ast, id, F_REPLACE)
+        p_next(p)
+    else:
+        p_next(p)
+        if p_eat_kw(p, "OR"):
+            if p_is_kw(p, "REPLACE"):
+                nd_add_flag(p.ast, id, F_REPLACE)
+            end
+            if p_is_kw(p, "IGNORE"):
+                nd_add_flag(p.ast, id, F_IGNORE)
+            end
+            p_next(p)
+        end
+        if p_eat_kw(p, "IGNORE"):
+            nd_add_flag(p.ast, id, F_IGNORE)
+        end
+        p_skip_kw(p, "LOW_PRIORITY")
+        p_skip_kw(p, "HIGH_PRIORITY")
+        p_skip_kw(p, "DELAYED")
+    end
+    p_expect_kw(p, "INTO", "after INSERT")
+    nm := p_take_name(p)
+    if nm < 0:
+        ret id
+    end
+    tr := nd_new(p.ast, N_TABLE_REF, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        n2 := p_take_name(p)
+        nd_set_t1(p.ast, tr, nm)
+        nd_set_tok(p.ast, tr, n2)
+    end
+    if p_eat_kw(p, "AS"):
+        nd_set_t2(p.ast, tr, p_take_name(p))
+    end
+    nd_set_a(p.ast, id, tr)
+    if p_is_sym(p, "(") and not p_kw_at(p, 1, "SELECT"):
+        p_next(p)
+        cols := nd_new(p.ast, N_LIST, p.i)
+        mut names := Vector {} as Vector<int>
+        parse_name_items(p, names)
+        nd_set_list(p.ast, cols, names)
+        p_expect_sym(p, ")", "after the column list")
+        nd_set_d(p.ast, id, cols)
+    end
+    if p_eat_kw(p, "DEFAULT"):
+        p_expect_kw(p, "VALUES", "after DEFAULT")
+    else p_is_kw(p, "VALUES"):
+        nd_set_b(p.ast, id, parse_values(p))
+    else p_is_kw(p, "SET"):
+        p_next(p)
+        s := nd_new(p.ast, N_LIST, p.i)
+        parse_set_items(p, s)
+        nd_set_f(p.ast, id, s)
+    else p_is_kw(p, "SELECT") or p_is_kw(p, "WITH") or p_is_sym(p, "("):
+        nd_set_b(p.ast, id, parse_select_stmt(p))
+    else:
+        p_err(p, "SQL109", "expected VALUES, SELECT or DEFAULT VALUES, found " + tok_desc(p.src, p_tok(p)), "")
+        ret id
+    end
+    parse_conflict(p, id)
+    parse_returning(p, id)
+    ret id
+end
+
+func parse_update(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    if p_eat_kw(p, "OR"):
+        p_next(p)
+    end
+    p_skip_kw(p, "IGNORE")
+    id := nd_new(p.ast, N_UPDATE, tk)
+    nd_set_a(p.ast, id, parse_from(p))
+    p_expect_kw(p, "SET", "after the table name")
+    s := nd_new(p.ast, N_LIST, p.i)
+    parse_set_items(p, s)
+    nd_set_c(p.ast, id, s)
+    if p_eat_kw(p, "FROM"):
+        nd_set_d(p.ast, id, parse_from(p))
+    end
+    if p_eat_kw(p, "WHERE"):
+        nd_set_b(p.ast, id, parse_expr(p))
+    end
+    if p_eat_kw(p, "ORDER"):
+        p_expect_kw(p, "BY", "after ORDER")
+        o := nd_new(p.ast, N_LIST, p.i)
+        parse_order_items(p, o)
+        nd_set_g(p.ast, id, o)
+    end
+    parse_limit(p, id)
+    parse_returning(p, id)
+    ret id
+end
+
+func parse_delete(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    id := nd_new(p.ast, N_DELETE, tk)
+    p_expect_kw(p, "FROM", "after DELETE")
+    nd_set_a(p.ast, id, parse_from(p))
+    if p_eat_kw(p, "USING"):
+        nd_set_d(p.ast, id, parse_from(p))
+    end
+    if p_eat_kw(p, "WHERE"):
+        nd_set_b(p.ast, id, parse_expr(p))
+    end
+    parse_limit(p, id)
+    parse_returning(p, id)
+    ret id
+end
+
+func autoinc_help(d: Dialect): str:
+    if d.id == POSTGRES:
+        ret "postgres has no auto-increment keyword: use GENERATED ALWAYS AS IDENTITY, or the SERIAL types"
+    end
+    ret d.name + " spells it " + d.autoincrement_word
+end
+
+func check_autoinc(p &: Parser, id: int):
+    tk := p.i
+    if p_is_kw(p, "AUTOINCREMENT"):
+        if p.d.id != SQLITE:
+            p_err_at(p, tk, "SQL211", "AUTOINCREMENT is sqlite only", autoinc_help(p.d))
+        end
+        p_next(p)
+        nd_add_flag(p.ast, id, F_AUTOINC)
+        ret
+    end
+    if p_is_kw(p, "AUTO_INCREMENT"):
+        if p.d.id != MYSQL and p.d.id != MARIADB:
+            p_err_at(p, tk, "SQL211", "AUTO_INCREMENT is a mysql keyword", autoinc_help(p.d))
+        end
+        p_next(p)
+        nd_add_flag(p.ast, id, F_AUTOINC)
+    end
+end
+
+func parse_fk_actions(p &: Parser):
+    until p.failed == false and (p_is_kw(p, "ON") or p_is_kw(p, "MATCH")):
+        if p_eat_kw(p, "MATCH"):
+            _mn := p_take_name(p)
+            continue
+        end
+        p_next(p)
+        if not p_eat_kw(p, "DELETE"):
+            p_expect_kw(p, "UPDATE", "after ON")
+        end
+        if p_eat_kw(p, "SET"):
+            if not p_eat_kw(p, "NULL"):
+                p_expect_kw(p, "DEFAULT", "after SET")
+            end
+            continue
+        end
+        if p_eat_kw(p, "NO"):
+            p_expect_kw(p, "ACTION", "after NO")
+            continue
+        end
+        if p_eat_kw(p, "CASCADE") or p_eat_kw(p, "RESTRICT"):
+            continue
+        end
+        p_err(
+            p, "SQL110", "expected a foreign key action, found " + tok_desc(p.src, p_tok(p)),
+            "one of CASCADE, RESTRICT, SET NULL, SET DEFAULT or NO ACTION"
+        )
+    end
+    if p_eat_kw(p, "NOT"):
+        p_expect_kw(p, "DEFERRABLE", "after NOT")
+    else:
+        p_skip_kw(p, "DEFERRABLE")
+    end
+    if p_eat_kw(p, "INITIALLY"):
+        if not p_eat_kw(p, "DEFERRED"):
+            p_expect_kw(p, "IMMEDIATE", "after INITIALLY")
+        end
+    end
+end
+
+func parse_references(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    nm := p_take_name(p)
+    id := nd_new(p.ast, N_REFERENCES, nm)
+    if nm < 0:
+        ret id
+    end
+    nd_set_t1(p.ast, id, tk)
+    if p_is_sym(p, "."):
+        p_next(p)
+        n2 := p_take_name(p)
+        nd_set_tok(p.ast, id, n2)
+    end
+    if p_eat_sym(p, "("):
+        mut cols := Vector {} as Vector<int>
+        parse_name_items(p, cols)
+        nd_set_list(p.ast, id, cols)
+        p_expect_sym(p, ")", "after the referenced columns")
+    end
+    parse_fk_actions(p)
+    ret id
+end
+
+func parse_column_def(p &: Parser): int:
+    nm := p_take_name(p)
+    if nm < 0:
+        ret 0 - 1
+    end
+    id := nd_new(p.ast, N_COLUMN_DEF, nm)
+    parse_type_name(p, id)
+    until p.failed == false:
+        if p_eat_kw(p, "CONSTRAINT"):
+            _cn := p_take_name(p)
+            continue
+        end
+        if p_is_kw(p, "NOT") and p_kw_at(p, 1, "NULL"):
+            p_next(p)
+            p_next(p)
+            nd_add_flag(p.ast, id, F_NOT_NULL)
+            continue
+        end
+        if p_eat_kw(p, "NULL"):
+            nd_add_flag(p.ast, id, F_NULLABLE)
+            continue
+        end
+        if p_eat_kw(p, "PRIMARY"):
+            p_expect_kw(p, "KEY", "after PRIMARY")
+            nd_add_flag(p.ast, id, F_PRIMARY)
+            p_skip_kw(p, "ASC")
+            p_skip_kw(p, "DESC")
+            check_autoinc(p, id)
+            continue
+        end
+        if p_eat_kw(p, "UNIQUE"):
+            p_skip_kw(p, "KEY")
+            nd_add_flag(p.ast, id, F_UNIQUE)
+            continue
+        end
+        if p_eat_kw(p, "CHECK"):
+            p_expect_sym(p, "(", "after CHECK")
+            nd_set_b(p.ast, id, parse_expr(p))
+            p_expect_sym(p, ")", "after the CHECK expression")
+            continue
+        end
+        if p_eat_kw(p, "DEFAULT"):
+            nd_add_flag(p.ast, id, F_HAS_DEFAULT)
+            if p_is_sym(p, "("):
+                skip_balanced(p)
+            else:
+                nd_set_a(p.ast, id, parse_expr(p))
+            end
+            continue
+        end
+        if p_eat_kw(p, "COLLATE"):
+            _coll := p_take_name(p)
+            continue
+        end
+        if p_is_kw(p, "REFERENCES"):
+            nd_set_c(p.ast, id, parse_references(p))
+            continue
+        end
+        if p_eat_kw(p, "GENERATED"):
+            if p_eat_kw(p, "ALWAYS"):
+                if p_eat_kw(p, "AS"):
+                    if p_eat_kw(p, "IDENTITY"):
+                        nd_add_flag(p.ast, id, F_AUTOINC)
+                        if p_is_sym(p, "("):
+                            skip_balanced(p)
+                        end
+                        continue
+                    end
+                    skip_balanced(p)
+                    nd_add_flag(p.ast, id, F_GENERATED)
+                    p_skip_kw(p, "STORED")
+                    p_skip_kw(p, "VIRTUAL")
+                    continue
+                end
+            end
+            if p_eat_kw(p, "BY"):
+                p_expect_kw(p, "DEFAULT", "after GENERATED BY")
+                p_expect_kw(p, "AS", "after GENERATED BY DEFAULT")
+                p_expect_kw(p, "IDENTITY", "after AS")
+                nd_add_flag(p.ast, id, F_AUTOINC)
+                if p_is_sym(p, "("):
+                    skip_balanced(p)
+                end
+                continue
+            end
+            p_err(p, "SQL111", "expected ALWAYS or BY DEFAULT after GENERATED", "")
+            continue
+        end
+        if p_eat_kw(p, "AS"):
+            skip_balanced(p)
+            nd_add_flag(p.ast, id, F_GENERATED)
+            p_skip_kw(p, "STORED")
+            p_skip_kw(p, "VIRTUAL")
+            continue
+        end
+        if p_is_kw(p, "AUTOINCREMENT") or p_is_kw(p, "AUTO_INCREMENT"):
+            check_autoinc(p, id)
+            continue
+        end
+        if p_eat_kw(p, "UNSIGNED"):
+            nd_add_flag(p.ast, id, F_UNSIGNED)
+            continue
+        end
+        if p_eat_kw(p, "COMMENT"):
+            if p_kind(p) == TK_STRING:
+                p_next(p)
+            end
+            continue
+        end
+        if p_eat_kw(p, "ZEROFILL") or p_eat_kw(p, "KEY"):
+            continue
+        end
+        if p_eat_kw(p, "ON"):
+            p_expect_kw(p, "UPDATE", "after ON")
+            _ou := parse_expr(p)
+            continue
+        end
+        break
+    end
+    ret id
+end
+
+func constraint_here(p: Parser): bool:
+    if p_is_kw(p, "CONSTRAINT") or p_is_kw(p, "PRIMARY") or p_is_kw(p, "UNIQUE"):
+        ret true
+    end
+    if p_is_kw(p, "CHECK") or p_is_kw(p, "FOREIGN") or p_is_kw(p, "EXCLUDE"):
+        ret true
+    end
+    if p_is_kw(p, "KEY") or p_is_kw(p, "INDEX"):
+        ret true
+    end
+    ret false
+end
+
+func parse_table_constraint(p &: Parser): int:
+    tk := p.i
+    if p_eat_kw(p, "CONSTRAINT"):
+        if p_name_here(p):
+            p_next(p)
+        end
+    end
+    id := nd_new(p.ast, N_CONSTRAINT, tk)
+    if p_eat_kw(p, "PRIMARY"):
+        p_expect_kw(p, "KEY", "after PRIMARY")
+        nd_set_op(p.ast, id, CON_PRIMARY)
+    else p_eat_kw(p, "UNIQUE"):
+        p_skip_kw(p, "KEY")
+        p_skip_kw(p, "INDEX")
+        nd_set_op(p.ast, id, CON_UNIQUE)
+        if p_name_here(p):
+            p_next(p)
+        end
+    else p_eat_kw(p, "CHECK"):
+        nd_set_op(p.ast, id, CON_CHECK)
+        p_expect_sym(p, "(", "after CHECK")
+        nd_set_a(p.ast, id, parse_expr(p))
+        p_expect_sym(p, ")", "after the CHECK expression")
+        ret id
+    else p_eat_kw(p, "FOREIGN"):
+        p_expect_kw(p, "KEY", "after FOREIGN")
+        nd_set_op(p.ast, id, CON_FOREIGN)
+    else:
+        p_skip_kw(p, "KEY")
+        p_skip_kw(p, "INDEX")
+        nd_set_op(p.ast, id, CON_UNIQUE)
+        if p_name_here(p):
+            p_next(p)
+        end
+    end
+    p_expect_sym(p, "(", "before the constrained columns")
+    mut cols := Vector {} as Vector<int>
+    parse_name_items(p, cols)
+    nd_set_list(p.ast, id, cols)
+    p_expect_sym(p, ")", "after the constrained columns")
+    if p.ast.nodes.get(id).op == CON_FOREIGN:
+        if p_is_kw(p, "REFERENCES"):
+            nd_set_c(p.ast, id, parse_references(p))
+        else:
+            p_err(p, "SQL112", "expected REFERENCES after the FOREIGN KEY columns", "")
+        end
+    end
+    ret id
+end
+
+func parse_table_options(p &: Parser):
+    until p.failed == false and p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
+        if p_is_sym(p, "("):
+            skip_balanced(p)
+            continue
+        end
+        p_next(p)
+    end
+end
+
+func parse_create_table(p &: Parser, tk: int, temp: bool): int:
+    id := nd_new(p.ast, N_CREATE_TABLE, tk)
+    if temp:
+        nd_add_flag(p.ast, id, F_TEMP)
+    end
+    if p_eat_kw(p, "IF"):
+        p_expect_kw(p, "NOT", "after IF")
+        p_expect_kw(p, "EXISTS", "after IF NOT")
+        nd_add_flag(p.ast, id, F_IF_EXISTS)
+    end
+    nm := p_take_name(p)
+    if nm < 0:
+        ret id
+    end
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        n2 := p_take_name(p)
+        nd_set_t1(p.ast, id, nm)
+        nd_set_tok(p.ast, id, n2)
+    end
+    if p_eat_kw(p, "AS"):
+        nd_set_c(p.ast, id, parse_select_stmt(p))
+        ret id
+    end
+    p_expect_sym(p, "(", "before the column definitions")
+    cols := nd_new(p.ast, N_LIST, p.i)
+    cons := nd_new(p.ast, N_LIST, p.i)
+    mut col_items := Vector {} as Vector<int>
+    mut con_items := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        if constraint_here(p):
+            c := parse_table_constraint(p)
+            if c >= 0:
+                con_items.push(c)
+            end
+        else:
+            c := parse_column_def(p)
+            if c >= 0:
+                col_items.push(c)
+            end
+        end
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, cols, col_items)
+    nd_set_list(p.ast, cons, con_items)
+    nd_set_a(p.ast, id, cols)
+    nd_set_b(p.ast, id, cons)
+    p_expect_sym(p, ")", "after the column definitions")
+    parse_table_options(p)
+    ret id
+end
+
+func parse_create_index(p &: Parser, tk: int, unique: bool): int:
+    id := nd_new(p.ast, N_CREATE_INDEX, tk)
+    if unique:
+        nd_add_flag(p.ast, id, F_UNIQUE)
+    end
+    if p_eat_kw(p, "IF"):
+        p_expect_kw(p, "NOT", "after IF")
+        p_expect_kw(p, "EXISTS", "after IF NOT")
+        nd_add_flag(p.ast, id, F_IF_EXISTS)
+    end
+    nm := p_take_name(p)
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        nd_set_tok(p.ast, id, p_take_name(p))
+    end
+    p_expect_kw(p, "ON", "after the index name")
+    tbl := p_take_name(p)
+    nd_set_t1(p.ast, id, tbl)
+    if p_eat_kw(p, "USING"):
+        _um := p_take_name(p)
+    end
+    p_expect_sym(p, "(", "before the indexed columns")
+    mut items := Vector {} as Vector<int>
+    parse_expr_items(p, items)
+    nd_set_list(p.ast, id, items)
+    p_expect_sym(p, ")", "after the indexed columns")
+    if p_eat_kw(p, "WHERE"):
+        nd_set_b(p.ast, id, parse_expr(p))
+    end
+    ret id
+end
+
+func parse_create_view(p &: Parser, tk: int, temp: bool): int:
+    id := nd_new(p.ast, N_CREATE_VIEW, tk)
+    if temp:
+        nd_add_flag(p.ast, id, F_TEMP)
+    end
+    if p_eat_kw(p, "IF"):
+        p_expect_kw(p, "NOT", "after IF")
+        p_expect_kw(p, "EXISTS", "after IF NOT")
+        nd_add_flag(p.ast, id, F_IF_EXISTS)
+    end
+    nm := p_take_name(p)
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        nd_set_tok(p.ast, id, p_take_name(p))
+    end
+    if p_eat_sym(p, "("):
+        mut cols := Vector {} as Vector<int>
+        parse_name_items(p, cols)
+        nd_set_list(p.ast, id, cols)
+        p_expect_sym(p, ")", "after the view columns")
+    end
+    p_expect_kw(p, "AS", "before the body of the view")
+    nd_set_a(p.ast, id, parse_select_stmt(p))
+    ret id
+end
+
+func parse_other(p &: Parser): int:
+    tk := p.i
+    id := nd_new(p.ast, N_OTHER, tk)
+    until p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
+        if p_is_sym(p, "("):
+            skip_balanced(p)
+            continue
+        end
+        p_next(p)
+    end
+    ret id
+end
+
+func parse_create(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    if p_eat_kw(p, "OR"):
+        p_expect_kw(p, "REPLACE", "after OR")
+    end
+    unique := p_eat_kw(p, "UNIQUE")
+    mut temp := false
+    if p_eat_kw(p, "TEMP"):
+        temp = true
+    else p_eat_kw(p, "TEMPORARY"):
+        temp = true
+    end
+    if p_eat_kw(p, "TABLE"):
+        ret parse_create_table(p, tk, temp)
+    end
+    if p_eat_kw(p, "INDEX"):
+        ret parse_create_index(p, tk, unique)
+    end
+    if p_eat_kw(p, "VIEW"):
+        ret parse_create_view(p, tk, temp)
+    end
+    if unique:
+        p_err(p, "SQL113", "expected INDEX after CREATE UNIQUE", "")
+    end
+    ret parse_other(p)
+end
+
+func parse_alter_action(p &: Parser): int:
+    tk := p.i
+    id := nd_new(p.ast, N_ALTER_ACTION, tk)
+    if p_eat_kw(p, "ADD"):
+        p_skip_kw(p, "COLUMN")
+        if p_eat_kw(p, "IF"):
+            p_expect_kw(p, "NOT", "after IF")
+            p_expect_kw(p, "EXISTS", "after IF NOT")
+            nd_add_flag(p.ast, id, F_IF_EXISTS)
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_ADD)
+        if constraint_here(p):
+            nd_set_b(p.ast, id, parse_table_constraint(p))
+        else:
+            nd_set_a(p.ast, id, parse_column_def(p))
+        end
+        ret id
+    end
+    if p_eat_kw(p, "DROP"):
+        p_skip_kw(p, "COLUMN")
+        if p_eat_kw(p, "IF"):
+            p_expect_kw(p, "EXISTS", "after IF")
+            nd_add_flag(p.ast, id, F_IF_EXISTS)
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_DROP)
+        nd_set_t1(p.ast, id, p_take_name(p))
+        p_skip_kw(p, "CASCADE")
+        p_skip_kw(p, "RESTRICT")
+        ret id
+    end
+    if p_eat_kw(p, "RENAME"):
+        if p_eat_kw(p, "TO"):
+            nd_set_op(p.ast, id, ALT_RENAME_TABLE)
+            nd_set_t2(p.ast, id, p_take_name(p))
+            ret id
+        end
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_RENAME_COL)
+        nd_set_t1(p.ast, id, p_take_name(p))
+        p_expect_kw(p, "TO", "after the old column name")
+        nd_set_t2(p.ast, id, p_take_name(p))
+        ret id
+    end
+    if p_is_kw(p, "MODIFY") or p_is_kw(p, "CHANGE"):
+        renames := p_is_kw(p, "CHANGE")
+        p_next(p)
+        p_skip_kw(p, "COLUMN")
+        nd_set_op(p.ast, id, ALT_MODIFY)
+        if renames and p_name_here(p):
+            nd_set_t1(p.ast, id, p.i)
+            p_next(p)
+        end
+        nd_set_a(p.ast, id, parse_column_def(p))
+        ret id
+    end
+    nd_set_op(p.ast, id, ALT_OTHER)
+    until p_kind(p) != TK_EOF and not p_is_sym(p, ";") and not p_is_sym(p, ","):
+        if p_is_sym(p, "("):
+            skip_balanced(p)
+            continue
+        end
+        p_next(p)
+    end
+    ret id
+end
+
+func parse_alter(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    if not p_eat_kw(p, "TABLE"):
+        ret parse_other(p)
+    end
+    id := nd_new(p.ast, N_ALTER_TABLE, tk)
+    if p_eat_kw(p, "IF"):
+        p_expect_kw(p, "EXISTS", "after IF")
+        nd_add_flag(p.ast, id, F_IF_EXISTS)
+    end
+    nm := p_take_name(p)
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        nd_set_tok(p.ast, id, p_take_name(p))
+    end
+    mut actions := Vector {} as Vector<int>
+    until true:
+        if p.failed:
+            break
+        end
+        a := parse_alter_action(p)
+        if a >= 0:
+            actions.push(a)
+        end
+        if not p_eat_sym(p, ","):
+            break
+        end
+    end
+    nd_set_list(p.ast, id, actions)
+    ret id
+end
+
+func parse_drop(p &: Parser): int:
+    tk := p.i
+    p_next(p)
+    mut kind := 0
+    if p_eat_kw(p, "TABLE"):
+        kind = N_CREATE_TABLE
+    else p_eat_kw(p, "INDEX"):
+        kind = N_CREATE_INDEX
+    else p_eat_kw(p, "VIEW"):
+        kind = N_CREATE_VIEW
+    else:
+        ret parse_other(p)
+    end
+    id := nd_new(p.ast, N_DROP, tk)
+    nd_set_op(p.ast, id, kind)
+    if p_eat_kw(p, "IF"):
+        p_expect_kw(p, "EXISTS", "after IF")
+        nd_add_flag(p.ast, id, F_IF_EXISTS)
+    end
+    nm := p_take_name(p)
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        nd_set_tok(p.ast, id, p_take_name(p))
+    end
+    p_skip_kw(p, "CASCADE")
+    p_skip_kw(p, "RESTRICT")
+    ret id
+end
+
+func parse_truncate(p &: Parser): int:
+    tk := p.i
+    if p.d.id == SQLITE:
+        p_err_at(
+            p, tk, "SQL212", "sqlite has no TRUNCATE statement",
+            "write DELETE FROM the_table instead"
+        )
+    end
+    p_next(p)
+    p_skip_kw(p, "TABLE")
+    id := nd_new(p.ast, N_TRUNCATE, tk)
+    nm := p_take_name(p)
+    nd_set_tok(p.ast, id, nm)
+    if p_is_sym(p, "."):
+        p_next(p)
+        nd_set_tok(p.ast, id, p_take_name(p))
+    end
+    p_skip_kw(p, "CASCADE")
+    p_skip_kw(p, "RESTART")
+    p_skip_kw(p, "IDENTITY")
+    ret id
+end
+
+func parse_txn(p &: Parser): int:
+    tk := p.i
+    id := nd_new(p.ast, N_TXN, tk)
+    p_next(p)
+    until p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
+        p_next(p)
+    end
+    ret id
+end
+
+func parse_stmt(p &: Parser): int:
+    if p_is_kw(p, "EXPLAIN"):
+        p_next(p)
+        p_skip_kw(p, "QUERY")
+        p_skip_kw(p, "PLAN")
+        p_skip_kw(p, "ANALYZE")
+        p_skip_kw(p, "VERBOSE")
+        ret parse_stmt(p)
+    end
+    if p_is_kw(p, "PRAGMA"):
+        tk := p.i
+        if p.d.id != SQLITE:
+            p_err_at(
+                p, tk, "SQL213", "PRAGMA is sqlite only", p.d.name + " configures the session with SET"
+            )
+        end
+        ret parse_other(p)
+    end
+    mut w := 0 - 1
+    if p_is_kw(p, "WITH"):
+        w = parse_with_prefix(p)
+    end
+    mut body := 0 - 1
+    if p_is_kw(p, "SELECT") or p_is_kw(p, "VALUES"):
+        body = parse_select_tail(p)
+    else p_is_kw(p, "INSERT") or p_is_kw(p, "REPLACE"):
+        body = parse_insert(p)
+    else p_is_kw(p, "UPDATE"):
+        body = parse_update(p)
+    else p_is_kw(p, "DELETE"):
+        body = parse_delete(p)
+    else w >= 0:
+        p_err(p, "SQL114", "expected SELECT, INSERT, UPDATE or DELETE after the WITH clause, found " + tok_desc(p.src, p_tok(p)), "")
+    else p_is_kw(p, "CREATE"):
+        body = parse_create(p)
+    else p_is_kw(p, "ALTER"):
+        body = parse_alter(p)
+    else p_is_kw(p, "DROP"):
+        body = parse_drop(p)
+    else p_is_kw(p, "TRUNCATE"):
+        body = parse_truncate(p)
+    else p_is_kw(p, "BEGIN") or p_is_kw(p, "COMMIT") or p_is_kw(p, "ROLLBACK"):
+        body = parse_txn(p)
+    else p_is_kw(p, "SAVEPOINT") or p_is_kw(p, "RELEASE"):
+        body = parse_txn(p)
+    else:
+        body = parse_other(p)
+    end
+    if w < 0:
+        ret body
+    end
+    nd_set_a(p.ast, w, body)
+    ret w
+end
+
+func parse_script(p &: Parser):
+    until p_kind(p) != TK_EOF:
+        p.failed = false
+        start := p.i
+        s := parse_stmt(p)
+        if s >= 0 and not p.failed:
+            p.ast.roots.push(s)
+        end
+        if not p.failed and p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
+            p_err(
+                p, "SQL115", "unexpected " + tok_desc(p.src, p_tok(p)) + " after the statement",
+                "a statement ends at a ';'"
+            )
+        end
+        if p.failed:
+            until p_kind(p) != TK_EOF and not p_is_sym(p, ";"):
+                p_next(p)
+            end
+        end
+        if p.i == start and p_kind(p) != TK_EOF:
+            p_next(p)
+        end
+        p_skip_sym(p, ";")
+    end
+end
+
+func parse_into(p &: Parser, src: str, d: Dialect):
+    mut l := Lexer { src = src, n = src.len(), d = d }
+    lex_into(l, p.rep)
+    p.src = src
+    p.d = d
+    p.toks = l.toks
+    parse_script(p)
+    p.rep.statements = p.ast.roots.len()
+end
+
+func free_parser(p &: Parser):
+    p.toks.free()
+    free_ast(p.ast)
+end

@@ -22,6 +22,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`       | basic auth for the engine, when set                                                                                                     | `salam`, empty                                  |
 | `AI_ENGINE_AGENT`                            | the engine profile to answer with                                                                                                       | `salam`                                         |
 | `AI_ENGINE_AGENT_DESKTOP`                    | the engine profile for desktop agent chats; it needs the bridge MCP server (see below)                                                  | `salam-agent`                                   |
+| `AI_ENGINE_FALLBACK_MODELS`                  | comma separated `provider/model` list tried in order when a turn fails before writing anything                                          | empty                                           |
+| `AI_UPLOAD_DIR`                              | where attachments are written; mount a volume here                                                                                      | `/data/uploads`                                 |
 | `AI_BRIDGE_SECRET`                           | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                  | empty (the bridge refuses every call)           |
 | `AI_ALLOWED_ORIGINS`                         | comma separated origins allowed by CORS                                                                                                 | `https://ai.salamlang.ir,http://localhost:3000` |
 | `AI_ADMIN_IDS`                               | comma separated account IDs that may open `/admin`; preferred over emails                                                               | empty                                           |
@@ -30,24 +32,55 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_APP_URL`                                 | the web app, where people sign in and approve apps                                                                                      | `https://ai.salamlang.ir`                       |
 | `AI_OAUTH_RESOURCES`                         | comma separated MCP server URIs tokens may be issued for                                                                                | `https://mcp.salamlang.ir/mcp`                  |
 | `AI_RESOURCE_SECRET`                         | shared with the MCP server for introspection and activity reports; at least 16 characters                                               | empty (both endpoints refuse every call)        |
-| `AI_API_HOURLY`                              | requests per hour each account may send to the API                                                                                      | `100`                                           |
+| `AI_API_HOURLY`                              | API requests per hour on the free plan                                                                                                  | `100`                                           |
+| `AI_CHAT_HOURLY`                             | chat messages per hour on the free plan                                                                                                 | `60`                                            |
+| `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`  | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                           | empty                                           |
+| `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`          | where those gateways live, for a sandbox or the test mock                                                                               | the real gateways                               |
+| `AI_BILLING_CALLBACK`                        | the public URL of this API, where the gateway sends the browser back                                                                    | `AI_OAUTH_ISSUER`                               |
+| `AI_BILLING_SWEEP_SECONDS`                   | how often to settle payments the gateway never returned from, and how long a payment may sit first                                      | `600`                                           |
+| `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`     | restart to give memory back once past the first with nothing in flight, or past the second regardless                                   | `1200`, `2600`                                  |
+| `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                   | `3600`                                          |
+| `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                 | `180`                                           |
+
+The API keeps a stream open for as long as an answer takes, so give the
+container room: it ran into a 512 MB limit in production and was killed by the
+kernel mid-stream. A request that was in flight when the process died is marked
+`lost` in the request log, and the service says so in its log on the next start.
 
 The tables are created on start. Passwords are stored as PBKDF2-SHA256 hashes, and sign-in returns a random bearer token whose SHA-256 is kept in `sessions` for 30 days.
 
+Messages can carry up to six attachments (12 MB together). Each file is checked by its content, not only its name: images (PNG, JPEG, GIF, WebP, up to 5 MB) go to the model as image parts and are accepted only while the configured model reports image input; PDF the same way for PDF input. Text and source files (up to 256 KB, no NUL bytes) are read on the server and added to the prompt as `<attached_file>` blocks, so they work with any model. A ZIP (up to 10 MB) is unpacked on the server and only its text files are used. RAR, 7z, tar and other binaries are refused with a message. Every request from the app carries `X-Salam-Client: web` or `agent` and, from the desktop app, `X-Salam-Version`. Sessions keep both, plus the IP and the last time they were used (updated at most once a minute), so the admin can tell web from agent sign-ins and see which agent version each user runs. A session has a numeric `id` for the admin; its token is never shown.
+
+Every upload is written to disk under `AI_UPLOAD_DIR` (default `/data/uploads`, a host volume on the server) as `yyyy/mm/yyyymmdd-hhmmss-<uuid>.<ext>`, a name the server makes up, so a filename from the browser never becomes a path. `message_files` keeps only the path and the details (owner, chat, kind, size, and for a ZIP the files it used). Rows go with their chat; the files stay on disk. A fallback retry resends the attachments. Admins see every upload at `GET /admin/files` (`?user=`, `?kind=`, `?offset=`), download one with `GET /admin/files/:id`, and the users list counts each account's images and files. The `/chats/:id/messages` route needs `client_max_body_size 20m` in nginx.
+
+Every desktop tool call is also recorded in `bridge_calls`: the chat and assistant message it belongs to, the tool, its arguments (with the session token removed), the preview shown in the app, the full output and the final state. `GET /chats/:id` returns them as `calls`, in the order they ran, so reopening a chat shows the same text and command boxes as the live turn. Rows are deleted with their chat.
+
 The API:
 
-| Method and path                                                                                | Purpose                                                                               |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                      |
-| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                              |
-| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                   |
-| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages, rename, delete                                                    |
-| `POST /chats/:id/messages`                                                                     | `{text}` starts an answer and returns the pending assistant message                   |
-| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`      |
-| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                         |
-| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs |
-| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls        |
-| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                 |
+| Method and path                                                                                | Purpose                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`, `POST /auth/login`                                                      | `{name?, email, password}` gives `{token, user}`                                                                                                                                                                                       |
+| `POST /auth/logout`, `GET /me`                                                                 | end the session, read the signed-in user                                                                                                                                                                                               |
+| `GET /chats`, `POST /chats`                                                                    | list or start chats                                                                                                                                                                                                                    |
+| `GET /chats/:id`, `PATCH /chats/:id`, `DELETE /chats/:id`                                      | read with messages and recorded agent calls, rename, delete                                                                                                                                                                            |
+| `POST /chats/:id/messages`                                                                     | `{text, files?}` starts an answer and returns the pending assistant message; `files` is `[{name, data}]` in base64                                                                                                                     |
+| `GET /capabilities`                                                                            | what can be attached right now: images and PDF follow the engine model's own input capabilities, plus the text extensions and size limits                                                                                              |
+| `GET /chats/:id/files/:fid`                                                                    | one attached file as `{name, kind, mime, data}`                                                                                                                                                                                        |
+| `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                                                                                                                                                       |
+| `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                                                                                                                                                          |
+| `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                                                                                                                                                  |
+| `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                                                                                                                                                   |
+| `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                                                                                                                                                  |
+| `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                                                                                                                                                 |
+| `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                                                                                                                                             |
+| `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                                                                                                                                                         |
+| `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                                                                                                                                                  |
+| `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back                                                                                                                            |
+| `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                                                                                                                                            |
+| `GET /admin/users/:id/chats`, `GET /admin/chats/:id`                                           | a user's chats, and one chat with its owner, messages and desktop calls (the `/admin/chats/<id>` page)                                                                                                                                 |
+| `GET /admin/sessions`, `DELETE /admin/sessions/:id`, `DELETE /admin/users/:id/sessions`        | signed-in sessions (`?user=`, `?client=web\|agent`) with IP, browser, web or agent and the agent's version; closing one or all of a user's sessions signs them out on their next request (the app re-checks every minute and on focus) |
+| `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                            |
+| `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                              |
 
 ### OpenAI-compatible API
 
@@ -79,19 +112,92 @@ reply = client.chat.completions.create(
   key's name.
 - The whole conversation, system messages included, is sent to the assistant
   as one turn in a fresh engine session that is deleted afterwards. Token
-  counts in `usage` are estimates (4 characters per token). Tool calling and
-  images are not supported.
+  counts in `usage` are estimates (4 characters per token). Images are not
+  supported.
+- `tools` works, so agent clients such as Cline and opencode can use native
+  function calling. The tools a request offers go to the assistant with their
+  descriptions and schemas, and when it decides to use one the answer comes
+  back as `tool_calls` with `finish_reason: tool_calls` and `content: null`,
+  the way the OpenAI API does it. A streamed answer holds the text back while
+  tools are on the table, so a call always arrives whole, in one delta. An
+  answer that puts a sentence in front of the call keeps the sentence as
+  `content`, and several calls in one answer all come back. Past `tool_calls`
+  from the assistant and `role: tool` results are fed back into the next turn,
+  so the loop continues. `tool_choice` is not read. Names starting with
+  `salam_` belong to the assistant's own tools: a caller tool by such a name
+  is ignored, and such a call never reaches the client.
+- The flattened conversation may be up to 1 MB. Past that the oldest turns
+  are dropped, the prompt says so in one line, and the system block and the
+  newest turns are kept; only a single message larger than 1 MB is refused.
+  The request body itself may be up to 8 MB.
+- A streaming answer always ends: a chunk carrying `finish_reason` (`stop`,
+  or `length` when the turn was cut off) and then `data: [DONE]`. When the
+  assistant fails before writing anything, an `error` frame goes out first,
+  so clients report the reason instead of a stream that stopped for no
+  reason. Frames are always written whole, even when the socket takes them
+  in pieces.
+- Answers to streaming requests are not checked with the compiler, because
+  text that is already with the client cannot be taken back. Non-streaming
+  answers still go through the check below.
 - `/models` and `/chat/completions` are served by the streaming listener
   (`AI_STREAM_PORT`), so the proxy must send those two paths there with
-  buffering off, like the chat stream route.
+  buffering off, like the chat stream route. The same two paths behind a
+  `/v1`, `/openai` or `/openai/v1` prefix are served as well, for clients
+  whose base URL already carries the version, and the proxy has to forward
+  those prefixes to the streaming listener too.
 
-`HOURLY=<AI_API_HOURLY> node ai/backend/tests/api_flow.mjs` tests it against a running API, with
-`ai/backend/tests/engine_mock.mjs` standing in for the assistant engine.
+`HOURLY=<AI_API_HOURLY> START_SECONDS=<AI_API_START_SECONDS> node ai/backend/tests/api_flow.mjs`
+tests it against a running API, with `ai/backend/tests/engine_mock.mjs` standing in for the
+assistant engine. The two idle cases wait for the backend to give up, so `START_SECONDS` has to
+be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is behaving.
+
+### Plans and payments
+
+Four plans, defined in one table in `billing.salam`:
+
+| Plan    | Price            | Lasts   | Chat                     | API                     | In flight |
+| ------- | ---------------- | ------- | ------------------------ | ----------------------- | --------- |
+| رایگان  | free             | forever | `AI_CHAT_HOURLY` an hour | `AI_API_HOURLY` an hour | 4         |
+| پلاس    | 1,000,000 toman  | 30 days | 300 an hour              | 500 an hour             | 8         |
+| حرفه‌ای | 2,000,000 toman  | 30 days | 1000 an hour             | 2000 an hour            | 16        |
+| نامحدود | 10,000,000 toman | forever | no limit                 | no limit                | no limit  |
+
+- The free plan keeps the limits the service had before plans existed, so nothing
+  an account could do yesterday is refused today. The paid plans only add room,
+  and the unlimited plan removes every limit, including the expiry date.
+- An account with no row in `subscriptions` is on the free plan, so nothing has
+  to be created when someone signs up.
+- Buying the same plan again adds its days to what is left instead of throwing
+  them away. An account that already has the unlimited plan is not asked to buy
+  anything.
+- `subscriptions` keeps every plan an account ever had (`active`, `replaced`,
+  `canceled`), with where it came from (`payment` or `admin`), who gave it and
+  why. `payments` keeps every attempt, paid or not, with the gateway's reference
+  and the masked card.
+- Prices are in toman and sent to the gateways in rial. Zarinpal is called at
+  `/pg/v4/payment/request.json` and `/pg/v4/payment/verify.json`, zibal at
+  `/v1/request` and `/v1/verify`. Both are verified server-side before the plan
+  is activated, the paid amount is checked against the plan's price, and coming
+  back to the callback twice never buys twice.
+- An admin can give any plan away for free from the admin page, with an optional
+  number of days and a note, and can take it back.
+- A payment the browser never came back from is not lost. Every
+  `AI_BILLING_SWEEP_SECONDS` the server settles any payment left `pending` or
+  `verifying` for longer than that with the gateway itself, and activates the
+  plan when the gateway says it was paid. The sweep takes a payment over with
+  the same claim the callback uses, so the two never both activate, and both
+  gateways verify the same payment twice without complaint.
+
+`node ai/backend/tests/billing_flow.mjs` tests the whole thing against a running
+API with `ai/backend/tests/gateway_mock.mjs` standing in for both gateways
+(`AI_ZARINPAL_BASE` and `AI_ZIBAL_BASE` point at it).
 
 ### Sign in with Salam (OAuth 2.1)
 
 The API is also the authorization server for the hosted MCP server at
-`mcp.salamlang.ir`, so MCP clients sign in with the same accounts. It follows
+`mcp.salamlang.ir`, so MCP clients sign in with the same accounts. Approving a
+client only needs a signed-in account; nothing here checks the account's
+plan, so the free plan gets the same MCP access as a paid one. It follows
 the MCP authorization spec:
 
 | Method and path                                                                                | Purpose                                                                          |

@@ -1,0 +1,121 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import db.sql
+
+include h "_harness.salam"
+
+const SCHEMA := """
+    CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL,
+        name TEXT,
+        age INTEGER,
+        boss_id INTEGER
+    );
+    CREATE TABLE orders (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        total REAL NOT NULL,
+        note TEXT
+    );
+    CREATE TABLE "odd name" ("a b" TEXT NOT NULL);
+"""
+
+func main:
+    lite := sql.DialectOf(sql.SQLITE)
+    pg := sql.DialectOf(sql.POSTGRES)
+    mut c := h.Schema(SCHEMA, lite)
+    defer sql.FreeCatalog(c)
+
+    println "-- names that resolve"
+    h.Check("SELECT id, email, name FROM users", c)
+    h.Check("SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id", c)
+    h.Check("SELECT * FROM users", c)
+    h.Check("SELECT u.* FROM users u", c)
+    h.Check("SELECT \"a b\" FROM \"odd name\"", c)
+    h.Check("SELECT main.users.id FROM main.users", c)
+    h.Check("SELECT u.email, b.email FROM users u JOIN users b ON b.id = u.boss_id", c)
+    h.Check("SELECT a FROM (SELECT id AS a FROM users) sub WHERE sub.a = 1", c)
+    h.Check("WITH recent AS (SELECT id, total FROM orders) SELECT id FROM recent WHERE total > 1", c)
+    h.Check("WITH a AS (SELECT id FROM users), b AS (SELECT id FROM a) SELECT id FROM b", c)
+    h.Check("SELECT (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) FROM users u", c)
+    h.Check("SELECT id FROM users u WHERE EXISTS (SELECT 1 FROM orders WHERE user_id = u.id)", c)
+    h.Check("SELECT id FROM users WHERE id IN (SELECT user_id FROM orders)", c)
+    h.Check("SELECT id, total FROM users JOIN orders USING (id)", c)
+    h.Check("UPDATE users SET name = ? WHERE id = ?", c)
+    h.Check("INSERT INTO users (email, name) VALUES (?, ?)", c)
+    h.Check("DELETE FROM orders WHERE user_id = ?", c)
+    h.Check("CREATE INDEX ix ON users (email)", c)
+
+    println ""
+    println "-- names that do not"
+    h.Check("SELECT id FROM user", c)
+    h.Check("SELECT id, mail FROM users", c)
+    h.Check("SELECT o.missing FROM orders o", c)
+    h.Check("SELECT x.id FROM users u", c)
+    h.Check("SELECT nope FROM users", c)
+    h.Check("SELECT id FROM users u JOIN orders o ON o.user_id = u.id", c)
+    h.Check("SELECT u.id FROM users u JOIN users u ON 1 = 1", c)
+    h.Check("UPDATE users SET names = ? WHERE id = ?", c)
+    h.Check("UPDATE nope SET a = 1 WHERE b = 2", c)
+    h.Check("DELETE FROM nope WHERE id = 1", c)
+    h.Check("INSERT INTO nope (a) VALUES (1)", c)
+    h.Check("CREATE INDEX ix ON users (mail)", c)
+    h.Check("CREATE INDEX ix ON nope (a)", c)
+    h.Check("DROP TABLE nope", c)
+    h.Check("TRUNCATE TABLE nope", c)
+    h.Check("ALTER TABLE nope ADD COLUMN x INT", c)
+    h.Check("SELECT u.id FROM users u JOIN orders o USING (email)", c)
+    h.Check("SELECT u.id FROM users u JOIN orders o USING (nope)", c)
+    h.Check("SELECT a.* FROM users u", c)
+
+    println ""
+    println "-- what an insert must supply"
+    h.Check("INSERT INTO users (email, name) VALUES (?)", c)
+    h.Check("INSERT INTO users (email) VALUES (?, ?)", c)
+    h.Check("INSERT INTO users VALUES (1, 'a')", c)
+    h.Check("INSERT INTO users (name) VALUES (?)", c)
+    h.Check("INSERT INTO users (email, email) VALUES (?, ?)", c)
+    h.Check("INSERT INTO users (email, nope) VALUES (?, ?)", c)
+    h.Check("INSERT INTO orders (id, user_id, total) SELECT 1, 2 FROM users", c)
+    h.Check("INSERT INTO users (email) VALUES (?) ON CONFLICT (nope) DO NOTHING", c)
+    h.Check("INSERT INTO users (email) VALUES (?) ON CONFLICT (email) DO UPDATE SET names = ?", c)
+    h.Check("INSERT INTO users (email) VALUES (?), (?), (?)", c)
+
+    println ""
+    println "-- writes with nothing to narrow them"
+    h.Check("DELETE FROM users", c)
+    h.Check("UPDATE users SET name = ?", c)
+    h.Check("DELETE FROM users WHERE 1 = 1", c)
+
+    println ""
+    println "-- a generated column cannot be written"
+    mut g := h.Schema("CREATE TABLE t (a TEXT NOT NULL, up TEXT GENERATED ALWAYS AS (upper(a)) STORED)", lite)
+    h.Check("INSERT INTO t (a) VALUES (?)", g)
+    h.Check("INSERT INTO t (a, up) VALUES (?, ?)", g)
+    h.Check("UPDATE t SET up = ? WHERE a = ?", g)
+    sql.FreeCatalog(g)
+
+    println ""
+    println "-- set operations have to line up"
+    h.Check("SELECT id FROM users UNION SELECT id FROM orders", c)
+    h.Check("SELECT id FROM users UNION SELECT id, total FROM orders", c)
+
+    println ""
+    println "-- with no schema nothing is resolved"
+    h.Lint("SELECT whatever FROM wherever WHERE nothing = 1", lite)
+    h.Lint("SELECT whatever FROM wherever", pg)
+    ret 0
+end

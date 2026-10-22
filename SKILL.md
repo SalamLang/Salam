@@ -206,7 +206,7 @@ repeat 1 to 5:  ...  end              // 1..5 inclusive
 repeat 1 to 5 in i:  ...  end         // ...binding the loop variable
 repeat 10 to 1 in i:  ...  end        // descending: the *bounds* pick the direction
 repeat 0 to 20 by 2:  ...  end        // step with "by"; must be POSITIVE even descending
-each x in xs:  println x  end         // iterate a collection/array
+each x in xs:  println x  end         // iterate a collection/array/your own type
 each i, x in xs:  println i, x  end   // index + value (or key, value for a map)
 each ch in s:  println ch  end         // a str: one UTF-8 character (code point) per step, ch is a str
 each i, b in s.bytes():  println b  end // the bytes of a str: b is a char, i the byte index
@@ -476,6 +476,22 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+**`Self`** is the enclosing type, usable anywhere inside a `struct`, an
+`impl ... on T` block or a distinct type's body: as a return type, a parameter
+type, a field type, in a cast and as a struct literal. On a generic struct it
+means the struct with its own type parameters, so `Self` stands for
+`Pair<A, B>` without respelling it. It works in a `static func` too, which is
+where constructors live. Persian spells it `خود`. There is no `Self` in an
+`interface` (that would be an associated type, which Salam does not have).
+
+```salam
+struct Node:
+    pub v: int = 0
+    pub func With(n: int): Self:          ret Self { v = n }      end
+    pub static func Make(n: int): Self:   ret Self { v = n * 2 }  end
+end
+```
+
 **Static members:** `static func` and `const` inside a struct belong to the type,
 not to a value. Call them through the type name, also across packages
 (`pkg.Color.Hex(...)`). A static func has no `this`, but it can read and set the
@@ -511,6 +527,41 @@ end
 mut c := Counter {}
 c.Tick()
 ```
+
+**Iterating your own type with `each`:** `each` works on any struct that has
+one of two shapes, so you do not write an index loop by hand. No interface and
+no registration: the compiler checks the method shape.
+
+- **Sequence** - `len()` (or `size()`) returning an integer, plus
+  `get(i: int)`. `each x in it` walks `0 .. len()-1`, and `each i, x in it`
+  also binds the index.
+- **Cursor** - `iter()` returning a struct with `has_next(): bool`, `value()`
+  and `next()`. Add `key()` to that cursor and `each k, v in it` binds both;
+  without a `key()`, `each` over it takes a single binding.
+
+```salam
+struct RangeIter:
+    pub cur: int = 0
+    pub stop: int = 0
+    pub func has_next(): bool:  ret this.cur < this.stop  end
+    pub func value(): int:      ret this.cur              end
+    pub func next():            this.cur = this.cur + 1   end
+end
+struct Range:
+    pub lo: int = 0
+    pub hi: int = 0
+    pub func iter(): RangeIter:  ret RangeIter { cur = this.lo, stop = this.hi }  end
+end
+each v in Range { lo = 2, hi = 5 }:  println v  end      // 2 3 4
+```
+
+The method names are the usual built-ins, so a Persian file spells them
+`طول`, `بگیر`, `پیمایش`, `داردبعدی`, `مقدار`, `کلید` and `بعدی`. Every std
+container now has one of the two shapes, so `each x in set`,
+`each x in stack`, `each x in queue`, `each x in deque`, `each x in list` and
+`each k, v in ordered_map` all work. `PriorityQueue` is the exception: its
+heap order is not its sorted order, so it has no `iter()` - pop from it
+instead.
 
 **Embedding (`use`):** composition instead of inheritance. `use Animal` inside a
 struct adds a field named `Animal` and promotes its fields and `pub` methods,
@@ -741,6 +792,7 @@ struct Circle:
 end
 
 func describe<T: Shape>(s: T):  println s.name(), s.area()  end   // static bound (monomorphized)
+func show<T: Shape + Named>(s: T):  println s.name()  end        // several bounds with '+'
 func draw(s: dyn Shape):  println s.area()  end                  // dynamic dispatch
 shapes := [ Circle { r = 1.0 }, Rect { w = 2.0, h = 3.0 } ] as dyn Shape[3]
 reg := Vector {} as Vector<dyn Shape>                            // heterogeneous collection
@@ -758,6 +810,22 @@ pointer itself is shared).
 That works for interfaces declared in your program; for an interface from
 another package `deep_copy()` refuses, so give the struct its own
 `deep_copy()`.
+
+**One interface can `use` another** - the same keyword structs embed with
+(Persian `شامل`). The base's methods, defaults included, become part of the
+using interface, so `<T: Solid>`, `dyn Solid` and `impl Solid on T` all see the
+full set. Two bases that provide the same method name is E107, and a cycle is
+E107 too.
+
+```salam
+interface Shape:  func Area(): f64  end
+interface Named:  func Name(): str  end
+interface Solid:
+    use Shape
+    use Named
+    func Volume(): f64
+end
+```
 
 **Default methods:** an interface method may carry a body. A struct that
 provides all of the interface's methods without bodies gets a copy of every
@@ -779,6 +847,20 @@ end
 interface Ranked:  func rank(): int  end
 impl Ranked on int:  func rank(): int:  ret this  end  end
 impl Ranked on str:  func rank(): int:  ret len(this)  end  end
+```
+
+**An `impl` block is checked against its interface.** Whatever the block
+supplies, the type must end up with every method the interface declares, with
+matching signatures, or the `impl` line itself is E002. So an **empty** block
+is the way to say "this struct implements this interface" and be told at the
+declaration site instead of at some distant `dyn` cast:
+
+```salam
+struct Circle:
+    pub r: f64 = 1.0
+    pub func Area(): f64:  ret 3.14159 * this.r * this.r  end
+end
+impl Shape on Circle:  end      // asserts conformance; E002 here if it drifts
 ```
 
 ---
@@ -1299,13 +1381,17 @@ end
   `RunTLS(s, cert, key)` or `RunBackground(s)` (returns once bound, serves on
   its own thread, so one process can run several servers). Limits
   `SetMaxBodyBytes SetMaxHeaderBytes SetKeepAliveIdle EnableAccessLog`. A
-  handler is `func h(ctx: i64)` passed by bare name, using `Ctx_text`, `Ctx_html`, `Ctx_json`, `Ctx_status`, `Ctx_set_header`, `Ctx_redirect`, `Ctx_param`, `Ctx_query`, `Ctx_form`, `Ctx_body`, `Ctx_header`, `Ctx_method`, `Ctx_path`, `Ctx_cookie` and `Ctx_set_cookie`, or `c := http.Ctx(ctx)` with the methods `Text`, `Json`, `Html`, `Param`,
-  `Query`, `Form`, `Body`, `Header`, `SetStatus`, `SetHeader` and `Redirect`. Pitfalls: **register every
+  handler is `func h(ctx: i64)` passed by bare name, using `Text`, `Html`,
+  `Json`, `SetStatus`, `SetHeader`, `Redirect`, `Param`, `Query`, `Form`,
+  `Body`, `Header`, `Method`, `Path`, `Cookies`, `CookieValue`, `HasCookie`,
+  `SetCookie`, `ClearCookie` and `Own`. Each of these also takes a
+  `Context`, so `c := http.Ctx(ctx)` lets you pass `c` to the same names
+  instead of the raw id. Pitfalls: **register every
   route before `Use`** (the server copies the router; a later route is a
   404); **strings read from a request are freed when the handler returns**,
-  so `str.Clone` what you keep in a global or session (`Ctx_own` hands a
+  so `str.Clone` what you keep in a global or session (`Own` hands a
   string you built to the request); router params are not URL-decoded; no
-  automatic 405; `Ctx_body` is a `str` (binary uploads are cut).
+  automatic 405; `Body` is a `str` (binary uploads are cut).
 - **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
   HSTS), **`net.http.validate`** `Required Length IsEmail Matches Assert`
   (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored,
@@ -1397,6 +1483,29 @@ end
   `SetHTML`; the page cannot call back into Salam, `Eval` right after
   `SetHTML` usually hits the old page, and a failed `Create` returns a window
   that `IsClosed()` already.
+- Native audio: **`audio`** holds a `Clip` of interleaved **f32** samples with `rate`, `channels`, `frames` and `bits`.
+  Core: `New Sample SetSample Duration Peak RMS GainToDb DbToGain`.
+  Editing: `Slice Trim Concat Mix MixAt Gain Scale Normalize Clamp FadeIn FadeOut Reverse Pad Repeat Split TrimSilence`.
+  Converting: `ToMono ToStereo ToChannels ToRate ToBits Channel Deinterleave Interleave`.
+  Sniffing: `DetectFormat FormatFromExt FormatName FormatIsLossless`.
+  `MsbReader` and `MsbWriter` are the **MSB-first** bitstream pair every codec needs; `compress`'s `BitReader` is LSB-first and will not do.
+  **`audio.wav`**: `OpenWAV SaveWAV SaveWAVBits EncodeWAV EncodeWAVFloat EncodeMuLaw EncodeALaw DecodeWAV ProbeWAV ReadFormat Chunks FindChunk`, covering PCM 8/16/24/32, IEEE float, A-law and mu-law.
+  **`audio.dsp`**: `FFT IFFT FFTVec Magnitude PowerSpectrum` (radix-2, power-of-two lengths only), `MakeWindow ApplyWindow BesselI0`, `LowPass HighPass BandPass Notch Peaking LowShelf HighShelf BiquadStep BiquadProcessAll BiquadResponse`, `ResampleSinc ResampleCubic ResampleTo Correlation DCRemove`.
+  Effects and dynamics: `Delay Echo Reverb Chorus Flanger Tremolo CompressorProcess LimiterProcess GateProcess TimeStretch PitchShift`.
+  Analysis: `STFT SpectrumAt SpectralCentroid SpectralRolloff SpectralFlatness SpectralFlux FreeSpectrum ZeroCrossingRate DetectPitch DetectOnsets DetectBPM LoudnessLUFS NormalizeLUFS TruePeakDb`.
+  Shared sample conversion lives in the core so every codec uses one copy: `DecodePcm EncodePcm DecodeFloatPcm EncodeFloatPcm DecodeLawPcm EncodeLawPcm PcmDepthValid MuLawToPcm PcmToMuLaw ALawToPcm PcmToALaw`.
+  **`audio.wav`**: `OpenWAV SaveWAV SaveWAVBits EncodeWAV EncodeWAVFloat EncodeMuLaw EncodeALaw DecodeWAV ProbeWAV ReadFormat Chunks FindChunk`, covering PCM 8/16/24/32, IEEE float, A-law and mu-law.
+  **`audio.aiff`**: `OpenAIFF SaveAIFF SaveAIFFBits EncodeAIFF DecodeAIFF ProbeAIFF ReadCommon`. Big-endian, the `sowt` little-endian variant, and the 80-bit extended float sample rate. 8-bit AIFF is **signed**, unlike WAVE.
+  **`audio.au`**: `OpenAU SaveAU EncodeAU EncodeAUEncoding DecodeAU ProbeAU ReadHeader`. A 24-byte big-endian header; 8-bit is signed here too.
+  **`audio.flac`**: `OpenFLAC SaveFLAC SaveFLACLevel EncodeFLAC EncodeFLACLevel DecodeFLAC ProbeFLAC ReadStreamInfo ReadFrameHeader Blocks VerifyFLAC CRC8 CRC16`. Real lossless compression both ways; the decoder handles constant, verbatim, fixed and LPC subframes and all four channel assignments. `FreeStreamInfo` releases the MD5.
+  **`audio.mp3`**: `ParseHeader FindSync CountFrames Headers FrameAt SeekToSecond ReadVbrInfo ProbeMP3 AudioStart IsMP3`. Frame and VBR-header parsing only; **mp3 audio decoding is not implemented**, and `codec.CanDecode(FormatMP3)` says so.
+  **`audio.tag`**: `ReadTags ReadTagsFile FreeTags WriteID3v1 WriteID3v2 ReadID3v1 ReadID3v2 ReadVorbisComment WriteVorbisComment ReadFlacTags StripTags AudioStart AudioEnd`. ID3v1, ID3v2.2-2.4 in all four encodings, Vorbis comments and cover art; text always comes back UTF-8. Every string is owned, so call `FreeTags`.
+  **`audio.music`**: `NoteToFreq FreqToNote NoteName ParseNote Scale ScaleNotes Chord ChordNotes Transpose Interval Cents JustRatio PythagoreanRatio BeatSeconds`. Persian modes are in **cents**, not semitones: `Dastgah DastgahFreqs NoteToFreqCents KoronCents SoriCents`, because a dastgah does not fall on the twelve-tone grid.
+  **`audio.synth`**: `Tone ToneEnvelope Chord NewOsc OscNext WaveValue ADSRAt ADSRTotal NoiseWhite NoisePink NoiseBrown FMTone Additive KarplusStrong NoteAt RenderNotes`.
+  **`audio.midi`**: `NewSong NewTrack AddTrack AddNote AddTempo AddProgram AddControl EncodeMIDI DecodeMIDI OpenMIDI SaveMIDI TicksToSeconds Bpm TotalTicks Notes Render FreeSong`. `Render` plays a song through `audio.synth`.
+  **`audio.codec`**: `Open Save Decode Encode Probe ProbeFile CanDecode CanEncode`, the format-agnostic entry points. They live in their own package because a parent cannot import its own children; it carries WAV, AIFF, au and FLAC.
+  8-, 16- and 24-bit PCM round-trip a `Clip` bit for bit; a true 32-bit integer source loses its low 8 bits to the f32 significand.
+  Free every `Clip` with `audio.Free` and every `ByteBuf` with `compress.BufFree`; `Blocks`, `Headers`, `Notes`, `Scale` and friends return vectors the caller frees.
 - Native media: **`image`** (`Open Save SaveQuality New Resize Crop DrawText ...`, RGBA; GIF reads frame one; JPEG drops alpha), **`opencv`** (needs the
   `salam_opencv_shim` library and OpenCV 4; `Color` is RGB while a `Mat` is
   BGR; free every `Mat`), **`graph`** (`Dijkstra ShortestPath PageRank Components ...`; unreachable is `GRAPH_INF`, and `Dijkstra` returns false
@@ -1438,7 +1547,7 @@ end
 func me(ctx: i64):
     mut t := jwt.Token { }
     if not jwt.Require(ctx, guard(), t): ret end     // 401 already written
-    http.Ctx_json(ctx, `{"sub":"` + t.claims.sub + `"}`)
+    http.Json(ctx, `{"sub":"` + t.claims.sub + `"}`)
 end
 ```
 
@@ -1480,6 +1589,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `LibraryInit()` once from `main` before any thread starts, and `ThreadInit()`
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
+- **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -1618,8 +1728,8 @@ General mapping that applies to all source languages:
 - `class`/`interface`/`trait` → `struct`/`interface`/`impl`. Visibility
   `public`→`pub`; everything else is private by default.
 - String interpolation `"$a-$b"` → `a + "-" + b` or `fmt.Sprintf`.
-- `echo` → `print`/`println`. Superglobals (`$_GET`, `$_POST`) → the `web`
-  package's `Ctx_query`/`Ctx_form`/`Ctx_body`.
+- `echo` → `print`/`println`. Superglobals (`$_GET`, `$_POST`) → the
+  `net.http` package's `Query`/`Form`/`Body`.
 - Exceptions → return `bool`/`Option`; dynamic typing → pick concrete types or
   `Variant`.
 
@@ -1859,14 +1969,14 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam layout build`,
+A `layout:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
 
 ```salam
 //! mode: layout | title: Web page        // optional editor directive
-layout:
+page:
     title = "My Page"
     lang = "english"                       // or "en"
     dir = "left to right"                  // or "ltr"
@@ -1969,7 +2079,7 @@ layout Home(user: str, lucky: int, items: Vector<str>, admin: bool):
 end
 
 func home_h(ctx: i64):
-    http.Ctx_html(ctx, Home(http.Ctx_query(ctx, "name"), rand.IntN(100) as int, items(), false))
+    http.Html(ctx, Home(http.Query(ctx, "name"), rand.IntN(100) as int, items(), false))
 end
 ```
 
@@ -1994,7 +2104,7 @@ Rules, all checked at compile time:
   own `<style>` plus HTML, with class names prefixed by the component name.
 
 **Fonts.** `font`/`قلم` declares a web font and emits only a CSS `@font-face`
-rule, never an element. It sits directly under `layout`; `name` and `url`
+rule, never an element. It sits directly under `page`; `name` and `url`
 (`source`, `منبع`, `نشانی`) are required. `type` (`ttf`, `otf`, `woff`,
 `woff2`, `ttc`) is optional: without it the compiler reads the extension from
 the URL, then the magic bytes of a local file next to the source. A remote URL with
@@ -2004,7 +2114,7 @@ E127. The compiler never fetches over the network. Optional: `weight`
 (`"U+0600-06FF"`). Several space-separated URLs become a fallback chain.
 
 ```salam
-layout:
+page:
     font: name = "Estedad" url = "fonts/Estedad.woff2" display = swap end
     box: content = "hi" font family = "Estedad, sans-serif" end
 end
@@ -2039,7 +2149,7 @@ end
 | E136        | one `class` given different styles on two elements                            |
 | W124        | the schema in `std/layout` itself has a problem (a std bug, not yours)        |
 
-Void elements print `<img ...>` (never `/>`). `layout build` exits non-zero
+Void elements print `<img ...>` (never `/>`). `page build` exits non-zero
 and writes no files on any of these errors.
 
 **Generators.** Most elements use the data-driven default generator. A
@@ -2050,7 +2160,7 @@ a `layoutgen.Output { html, css, js, head, shared_css, shared_js }`. Example:
 the JS that validates and normalises Jalali dates. The schema format is
 documented in `docs/LAYOUT_SCHEMA.md`.
 
-Build: `salam layout build page.salam` → `page.html` + `page.css` + `page.js`;
+Build: `salam page build page.salam` → `page.html` + `page.css` + `page.js`;
 `--inline` → one self-contained HTML file; multiple files → per-page HTML with
 merged `style.css`/`script.js`.
 
@@ -2065,8 +2175,10 @@ salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
 salam obj app.salam                     # object file only
 salam build app.salam --target=<triple> # cross-compile via LLVM
-salam layout build page.salam [--inline]# layout DSL → HTML/CSS/JS
+salam page build page.salam [--inline]# layout DSL → HTML/CSS/JS
 salam format app.salam                  # reformat in place (--check to verify; --lang=fa for Persian)
+salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
+salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
 salam new name                          # scaffold a project
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
@@ -2309,7 +2421,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `this`              | `این`               | `defer`                   | `دیرکن`                       |
 | `print` / `println` | `چاپ` / `سرچاپ`     | `printerr` / `printerrln` | `نادرست‌چاپ` / `نادرست‌سرچاپ` |
 | `input`             | `ورودی`             | `extern`                  | `درون‌داد`                    |
-| `export`            | `برون‌داد`          | `layout`                  | `صفحه`                        |
+| `export`            | `برون‌داد`          | `page`                    | `صفحه`                        |
 | `component`         | `بخش`               | `inline` / `noinline`     | `درخط` / `نادرخط`             |
 | `pure`              | `ناب`               | `noret`                   | `نابرگشت`                     |
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
@@ -2320,9 +2432,8 @@ Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`
 (`پیوند پویا`), `dyn` `پویا` (before a type: `پویا شکل`), `link` `پیوند`,
 `framework` `چارچوب`, `use` (struct embedding) `شامل`.
-`layout` `صفحه` is a keyword only at the start of a line that ends with `:`
-(`صفحه:`, `صفحه خوشامد(نام: رشته):`); elsewhere `صفحه` is a normal name.
-The older spelling `چیدمان` is still accepted.
+`page` `صفحه` is a keyword only at the start of a line that ends with `:`
+(`page:`, `صفحه خوشامد(نام: رشته):`); elsewhere the word is a normal name.
 `mut func` is `ناپایا تابع`.
 
 **The built-in functions have Persian names, and a Persian file must use
@@ -2443,7 +2554,12 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `db/typesense` `تایپسنس` (imported as `دیتابیس.تایپسنس`),
 `db/meilisearch` `میلیسرچ` (imported as `دیتابیس.میلیسرچ`),
 `db/opensearch` `اپن سرچ` (imported as `دیتابیس.اپن سرچ`), `dom` `دام`,
-`term` `پایانه`, `cli` `خط فرمان`.
+`term` `پایانه`, `cli` `خط فرمان`, `audio` `صدا`, `audio/wav` `ویو`
+(imported as `صدا.ویو`), `audio/dsp` `پردازش سیگنال` (imported as
+`صدا.پردازش سیگنال`), `audio/codec` `کدک` (imported as `صدا.کدک`),
+`audio/flac` `فلاک`, `audio/mp3` `ام‌پی‌تری`, `audio/aiff` `ایف`,
+`audio/au` `ای‌یو`, `audio/tag` `برچسب صدا`, `audio/music` `موسیقی`,
+`audio/synth` `صداساز`, `audio/midi` `میدی` (each imported under `صدا.`).
 
 A few function names, to show the style: `str.Len` `طول`, `str.Split`
 `تفکیک کردن`, `str.Join` `بپیوند`, `str.Trim` `پیرایش`, `str.Replace`

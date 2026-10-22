@@ -1,0 +1,131 @@
+-- comparing a column with a value of the wrong shape
+ok   SELECT id FROM users WHERE age = 30
+ok   SELECT id FROM users WHERE age = '30'
+ok   SELECT id FROM users WHERE age = '-3'
+ok   SELECT id FROM orders WHERE total = '1.5'
+bad  SELECT id FROM users WHERE age = 'thirty'
+     SQL330 1:34 "age" is int and this compares it with text
+       help: a number goes here without quotes
+bad  SELECT id FROM orders WHERE total = 'free'
+     SQL330 1:37 "total" is float and this compares it with text
+       help: a number goes here without quotes
+bad  SELECT id FROM users WHERE age = 'thirty'
+     SQL330 1:34 "age" is int and this compares it with text
+       help: a number goes here without quotes
+bad  SELECT id FROM users WHERE age = 'thirty'
+     SQL330 1:34 "age" is int and this compares it with text
+       help: postgres refuses this value for a numeric column
+ok   SELECT id FROM users WHERE email = 'ann'
+ok   SELECT id FROM users WHERE email = 5
+bad  SELECT id FROM users WHERE email = 5
+     SQL330 1:36 "email" is text and postgres has no text = number operator
+       help: quote the value
+ok   SELECT id FROM users WHERE age = ?
+ok   SELECT id FROM users WHERE age IS NULL
+
+-- group by, what is allowed
+ok   SELECT age, COUNT(*) FROM users GROUP BY age
+ok   SELECT COUNT(*) FROM users GROUP BY age
+ok   SELECT email, COUNT(*) FROM users GROUP BY id
+ok   SELECT * FROM users GROUP BY id
+ok   SELECT UPPER(email) FROM users GROUP BY email
+ok   SELECT UPPER(email) FROM users GROUP BY UPPER(email)
+bad  SELECT email FROM users GROUP BY 2
+     SQL326 1:34 GROUP BY names column 2 but the statement returns 1 columns
+       help: count the result columns from 1, or name the column instead
+ok   SELECT MAX(email) FROM users GROUP BY age
+ok   SELECT age + 1 FROM users GROUP BY age
+ok   SELECT (SELECT COUNT(*) FROM orders) FROM users GROUP BY id
+ok   SELECT u.email, COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id GROUP BY u.id
+
+-- group by, what is not
+bad  SELECT email, COUNT(*) FROM users GROUP BY age
+     SQL332 1:8 "email" is neither grouped nor aggregated
+       help: add it to GROUP BY, or wrap it in an aggregate such as MAX()
+bad  SELECT email, COUNT(*) FROM users GROUP BY age
+     SQL332 1:8 "email" is neither grouped nor aggregated
+       help: add it to GROUP BY, or wrap it in an aggregate such as MAX()
+bad  SELECT o.total, COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id GROUP BY u.id
+     SQL332 1:10 "total" is neither grouped nor aggregated
+       help: add it to GROUP BY, or wrap it in an aggregate such as MAX()
+bad  SELECT id, email FROM users GROUP BY age
+     SQL332 1:8 "id" is neither grouped nor aggregated
+       help: add it to GROUP BY, or wrap it in an aggregate such as MAX()
+     SQL332 1:12 "email" is neither grouped nor aggregated
+       help: add it to GROUP BY, or wrap it in an aggregate such as MAX()
+
+-- aggregates belong in HAVING
+ok   SELECT age FROM users GROUP BY age HAVING COUNT(*) > 1
+bad  SELECT age FROM users WHERE COUNT(*) > 1
+     SQL328 1:1 an aggregate cannot be used in WHERE
+       help: move the condition to HAVING, which runs after the grouping
+ok   SELECT age FROM users WHERE id > (SELECT COUNT(*) FROM orders)
+
+-- the types a query gives back
+query SELECT id, email, name, age, paid, joined FROM users WHERE id = ?
+  select on users
+  param 1 ? users.id i64
+  out 0 id i64
+  out 1 email str
+  out 2 name option.Option<str>
+  out 3 age option.Option<i64>
+  out 4 paid bool
+  out 5 joined option.Option<str>
+query SELECT COUNT(*), SUM(total), AVG(total), MIN(id), MAX(note), TOTAL(total) FROM orders
+  select on orders
+  out 0 COUNT i64
+  out 1 SUM option.Option<f64>
+  out 2 AVG option.Option<f64>
+  out 3 MIN option.Option<i64>
+  out 4 MAX option.Option<str>
+  out 5 TOTAL f64
+query SELECT id, total FROM orders WHERE total > ? AND note = ?
+  select on orders
+  param 1 ? orders.total f64
+  param 2 ? orders.note option.Option<str>
+  out 0 id i64
+  out 1 total f64
+query SELECT u.id, o.total FROM users u LEFT JOIN orders o ON o.user_id = u.id
+  select on u
+  out 0 id i64
+  out 1 total option.Option<f64>
+query SELECT o.total, u.id FROM orders o RIGHT JOIN users u ON o.user_id = u.id
+  select on o
+  out 0 total option.Option<f64>
+  out 1 id i64
+query SELECT COALESCE(name, 'none') AS who, IFNULL(age, 0) AS years FROM users
+  select on users
+  out 0 who str
+  out 1 years i64
+query SELECT CAST(age AS TEXT) AS txt, id * 2 AS doubled, total / 2 FROM orders, users
+  select on orders
+  out 0 txt option.Option<str>
+  out 1 doubled i64
+  out 2 (expr) option.Option<f64>
+  SQL312 1:34 column "id" is in more than one table here
+query SELECT email || '!' AS shout, age > 1 AS big FROM users
+  select on users
+  out 0 shout option.Option<str>
+  out 1 big bool
+query SELECT CASE WHEN age > 1 THEN 'old' ELSE 'new' END AS band FROM users
+  select on users
+  out 0 band str
+query SELECT * FROM users u JOIN orders o ON o.user_id = u.id
+  select on u
+  out 0 id i64
+  out 1 email str
+  out 2 name option.Option<str>
+  out 3 age option.Option<i64>
+  out 4 paid bool
+  out 5 joined option.Option<str>
+  out 6 id i64
+  out 7 user_id i64
+  out 8 total f64
+  out 9 note option.Option<str>
+query SELECT 1, 'text', 2.5, NULL, TRUE
+  select on -
+  out 0 (expr) i64
+  out 1 (expr) str
+  out 2 (expr) f64
+  out 3 (expr) option.Option<str>
+  out 4 (expr) bool

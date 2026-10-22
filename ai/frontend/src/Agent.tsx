@@ -3,36 +3,37 @@ import { api, getToken } from "./api";
 import { agent, folderName, onAgent, type AgentAnswer, type AgentCall, type AgentInfo, type AgentMode } from "./desktop";
 import { IconAlert, IconChevronDown, IconClose, IconFile, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { useHighlighted } from "./Markdown";
+import { t } from "./i18n";
 
 export type CallView = AgentCall & { mid?: number };
 
 const MAX_OUTPUT = 40000;
 
 const TOOL_LABEL: Record<string, string> = {
-  shell: "اجرای فرمان",
-  run_tests: "اجرای تست‌ها",
-  docker: "داکر",
+  shell: t("اجرای فرمان", "Run command"),
+  run_tests: t("اجرای تست‌ها", "Run tests"),
+  docker: t("داکر", "Docker"),
   wsl: "WSL",
-  read_file: "خواندن فایل",
-  write_file: "نوشتن فایل",
-  edit_file: "ویرایش فایل",
-  list_dir: "فهرست پوشه",
-  glob: "یافتن فایل‌ها",
-  grep: "جست‌وجو در فایل‌ها",
+  read_file: t("خواندن فایل", "Read file"),
+  write_file: t("نوشتن فایل", "Write file"),
+  edit_file: t("ویرایش فایل", "Edit file"),
+  list_dir: t("فهرست پوشه", "List folder"),
+  glob: t("یافتن فایل‌ها", "Find files"),
+  grep: t("جست‌وجو در فایل‌ها", "Search files"),
 };
 
 const STATE_LABEL: Record<AgentCall["state"], string> = {
-  pending: "منتظر اجازه‌ی شما",
-  running: "در حال اجرا",
-  done: "انجام شد",
-  error: "خطا",
-  denied: "رد شد",
+  pending: t("منتظر اجازه‌ی شما", "Waiting for your approval"),
+  running: t("در حال اجرا", "Running"),
+  done: t("انجام شد", "Done"),
+  error: t("خطا", "Error"),
+  denied: t("رد شد", "Denied"),
 };
 
 export const MODE_LABEL: Record<AgentMode, string> = {
-  ask: "پیش از هر تغییر بپرس",
-  auto: "خودکار در پوشه‌ی کاری",
-  readonly: "فقط خواندنی",
+  ask: t("پیش از هر تغییر بپرس", "Ask before every change"),
+  auto: t("خودکار در پوشه‌ی کاری", "Automatic in workspace folder"),
+  readonly: t("فقط خواندنی", "Read only"),
 };
 
 function clipOutput(s: string): string {
@@ -67,7 +68,7 @@ export function useAgent(enabled: boolean, midFor: (chat: string) => number | un
         if (!known) current = await agent.link(getToken());
         if (alive) setInfo(current);
       } catch {
-        if (alive) errRef.current("وصل کردن این رایانه به دستیار ناموفق بود. برنامه را دوباره باز کنید.");
+        if (alive) errRef.current(t("وصل کردن این رایانه به دستیار ناموفق بود. برنامه را دوباره باز کنید.", "Could not connect this computer to Salam AI. Reopen the app."));
       }
     };
     ensure();
@@ -176,12 +177,12 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
           {c.outside && (
             <p className="tool-warn">
               <IconAlert width={16} height={16} />
-              این کار بیرون از پوشه‌ی کاری انجام می‌شود.
+              {t("این کار بیرون از پوشه‌ی کاری انجام می‌شود.", "This runs outside the workspace folder.")}
             </p>
           )}
           {c.kind === "exec" && c.cwd && (
             <p className="tool-cwd">
-              پوشه: <bdi dir="ltr">{c.cwd}</bdi>
+              {t("پوشه: ", "Folder: ")}<bdi dir="ltr">{c.cwd}</bdi>
             </p>
           )}
           {showDetail && (c.lang === "diff" ? <DiffView text={c.detail} /> : <CodeView text={c.detail} lang={c.lang} />)}
@@ -191,22 +192,22 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
       {c.state === "pending" && (
         <div className="tool-actions">
           <button type="button" className="button small primary" onClick={() => onDecide(c.call_id, "allow")}>
-            اجازه بده
+            {t("اجازه بده", "Allow")}
           </button>
           {!c.outside && (
             <button type="button" className="button small ghost" onClick={() => onDecide(c.call_id, "always")}>
-              همیشه در این گفت‌وگو
+              {t("همیشه در این گفت‌وگو", "Always in this chat")}
             </button>
           )}
           <button type="button" className="button small danger" onClick={() => onDecide(c.call_id, "deny")}>
-            رد کن
+            {t("رد کن", "Deny")}
           </button>
         </div>
       )}
       {live && c.kind === "exec" && (
         <div className="tool-actions">
           <button type="button" className="button small ghost" onClick={() => onStop(c.call_id)}>
-            توقف
+            {t("توقف", "Stop")}
           </button>
         </div>
       )}
@@ -229,13 +230,13 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
   const online = info?.connected ?? false;
   return (
     <div className="agent-bar">
-      <span className={`agent-dot${online ? " on" : ""}`} title={online ? `وصل به ${info?.device?.name ?? "این رایانه"}` : "در حال اتصال"} />
+      <span className={`agent-dot${online ? " on" : ""}`} title={online ? t(`وصل به ${info?.device?.name ?? "این رایانه"}`, `Connected to ${info?.device?.name ?? "this computer"}`) : t("در حال اتصال", "Connecting")} />
       {workspace ? (
         <span className="agent-ws" title={workspace}>
           <IconFolder width={15} height={15} />
           <bdi dir="ltr">{folderName(workspace)}</bdi>
           {!locked && (
-            <button type="button" className="agent-ws-clear" onClick={onClear} aria-label="برداشتن پوشه">
+            <button type="button" className="agent-ws-clear" onClick={onClear} aria-label={t("برداشتن پوشه", "Remove folder")}>
               <IconClose width={14} height={14} />
             </button>
           )}
@@ -243,11 +244,11 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
       ) : (
         <button type="button" className="agent-ws pick" onClick={onPick}>
           <IconFolder width={15} height={15} />
-          انتخاب پوشه‌ی کاری
+          {t("انتخاب پوشه‌ی کاری", "Choose workspace folder")}
         </button>
       )}
       {workspace && (
-        <select className="agent-mode" value={mode} onChange={(e) => onMode(e.target.value as AgentMode)} aria-label="سطح دسترسی">
+        <select className="agent-mode" value={mode} onChange={(e) => onMode(e.target.value as AgentMode)} aria-label={t("سطح دسترسی", "Access level")}>
           {(Object.keys(MODE_LABEL) as AgentMode[]).map((m) => (
             <option key={m} value={m}>
               {MODE_LABEL[m]}
@@ -255,7 +256,7 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
           ))}
         </select>
       )}
-      {elsewhere && <span className="agent-note">این گفت‌وگو به رایانه‌ی دیگری وصل است.</span>}
+      {elsewhere && <span className="agent-note">{t("این گفت‌وگو به رایانه‌ی دیگری وصل است.", "This chat is linked to another computer.")}</span>}
     </div>
   );
 }

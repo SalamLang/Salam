@@ -1,0 +1,152 @@
+package semantic
+
+import str
+
+include at "../ast.salam"
+
+pub const ITS_NONE := 0
+pub const ITS_SEQ := 1
+pub const ITS_CURSOR := 2
+
+pub struct IterMember:
+    pub name: str = ""
+    pub sig: int = 0
+end
+
+pub struct IterShape:
+    pub kind: int = ITS_NONE
+    pub count: str = ""
+    pub elem: str = ""
+    pub iter: str = ""
+    pub has_next: str = ""
+    pub value: str = ""
+    pub key: str = ""
+    pub step: str = ""
+    pub cursor: int = 0
+    pub elem_type: int = TYPE_NONE
+    pub key_type: int = TYPE_NONE
+end
+
+func iter_sig_arity(s &: Sema, m: int, nparams: int): int:
+    ov := sym_at(s, m).overloads
+    repeat ov.len() in i:
+        sid := ov.get(i)
+        if sig_at(s, sid).params.len() == nparams:
+            ret sid
+        end
+    end
+    ret 0
+end
+
+func iter_resolve(s &: Sema, a &: at.Ast, sid: int):
+    if sid == 0:
+        ret
+    end
+    sg := sig_at(s, sid)
+    if sg.infer_ret and not sg.in_check:
+        sema_check_function_now(s, a, sid)
+    end
+end
+
+func iter_member(s &: Sema, a &: at.Ast, sym: int, en_name: str, nparams: int): IterMember:
+    mut out := IterMember {}
+    if sym == 0:
+        ret out
+    end
+    members := sym_at(s, sym).members
+    if members == 0:
+        ret out
+    end
+    direct := scope_lookup_local(s, members, en_name)
+    if direct != 0 and sym_at(s, direct).kind == SYM_METHOD:
+        sid := iter_sig_arity(s, direct, nparams)
+        if sid != 0:
+            iter_resolve(s, a, sid)
+            out.name = en_name
+            out.sig = sid
+            ret out
+        end
+    end
+    msc := scope_at(s, members)
+    repeat msc.symbols.len() in i:
+        mid := msc.symbols.get(i)
+        m := sym_at(s, mid)
+        if m.kind != SYM_METHOD:
+            continue
+        end
+        if not str.Equals(intrinsic_method_canon(m.name), en_name):
+            continue
+        end
+        sid2 := iter_sig_arity(s, mid, nparams)
+        if sid2 != 0:
+            iter_resolve(s, a, sid2)
+            out.name = en_name
+            out.sig = sid2
+            ret out
+        end
+    end
+    ret out
+end
+
+func iter_count_member(s &: Sema, a &: at.Ast, sym: int): IterMember:
+    names := ["len", "size"]
+    repeat 2 in i:
+        c := iter_member(s, a, sym, names[i], 0)
+        if c.sig != 0:
+            rt := sig_at(s, c.sig).ret_type
+            if rt >= 0 and type_is_integer(s, rt):
+                ret c
+            end
+        end
+    end
+    ret IterMember {}
+end
+
+pub func iter_shape_of(s &: Sema, a &: at.Ast, sym: int): IterShape:
+    mut sh := IterShape {}
+    if sym == 0:
+        ret sh
+    end
+    it := iter_member(s, a, sym, "iter", 0)
+    if it.sig != 0:
+        cur := struct_sym_of(s, sig_at(s, it.sig).ret_type)
+        if cur != 0:
+            hn := iter_member(s, a, cur, "has_next", 0)
+            vl := iter_member(s, a, cur, "value", 0)
+            st := iter_member(s, a, cur, "next", 0)
+            ok := hn.sig != 0 and vl.sig != 0 and st.sig != 0
+            if ok and ty_at(s, sig_at(s, hn.sig).ret_type).kind == TY_BOOL:
+                ky := iter_member(s, a, cur, "key", 0)
+                sh.kind = ITS_CURSOR
+                sh.cursor = cur
+                sh.iter = it.name
+                sh.has_next = hn.name
+                sh.value = vl.name
+                sh.step = st.name
+                sh.elem_type = sig_at(s, vl.sig).ret_type
+                if ky.sig != 0:
+                    sh.key = ky.name
+                    sh.key_type = sig_at(s, ky.sig).ret_type
+                end
+                ret sh
+            end
+        end
+    end
+    cn := iter_count_member(s, a, sym)
+    if cn.sig == 0:
+        ret sh
+    end
+    gm := iter_member(s, a, sym, "get", 1)
+    if gm.sig == 0:
+        ret sh
+    end
+    g := sig_at(s, gm.sig)
+    if not type_is_integer(s, g.params.get(0)):
+        ret sh
+    end
+    sh.kind = ITS_SEQ
+    sh.count = cn.name
+    sh.elem = gm.name
+    sh.elem_type = g.ret_type
+    ret sh
+end

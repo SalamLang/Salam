@@ -1,0 +1,214 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import audio
+import audio.dsp
+import audio.music
+import audio.synth
+import math
+import testing
+
+func tone(rate: int, freq: f64, seconds: f64): audio.Clip:
+    ret synth.Tone(freq, seconds, rate, synth.WaveSine)
+end
+
+func main:
+    println "echo lengthens the clip and repeats it"
+    mut src := tone(22050, 440.0, 0.1)
+    mut e := dsp.Echo(src, 0.05, 2, 0.5)
+    testing.AssertEqInt(e.rate, 22050)
+    testing.AssertEqInt(e.frames, src.frames + 2 * 1102)
+    testing.AssertMsg(audio.Peak(e) > audio.Peak(src) * 0.9, "the echo keeps the level up")
+    lag := 1102
+    testing.AssertMsg(math.Abs(audio.Sample(e, lag + 10, 0) - (audio.Sample(src, lag + 10, 0) + audio.Sample(src, 10, 0) * 0.5)) < 0.001, "the first repeat lands a lag later at half gain")
+
+    println "reverb stays bounded and mixes"
+    mut rv := dsp.Reverb(src, 0.5, 0.3)
+    testing.AssertEqInt(rv.frames, src.frames)
+    testing.AssertMsg(audio.Peak(rv) <= 1.0, "reverb should not run away")
+    mut dry := dsp.Reverb(src, 0.5, 0.0)
+    testing.AssertMsg(math.Abs(audio.Sample(dry, 50, 0) - audio.Sample(src, 50, 0)) < 0.0001, "a zero mix leaves the signal alone")
+
+    println "chorus and flanger keep the length and move the sound"
+    mut ch := dsp.Chorus(src, 0.5, 2.0, 0.5)
+    testing.AssertEqInt(ch.frames, src.frames)
+    testing.AssertMsg(dsp.Correlation(src, ch) < 0.999, "chorus should change the signal")
+    mut fl := dsp.Flanger(src, 0.5, 1.0, 0.5)
+    testing.AssertEqInt(fl.frames, src.frames)
+    testing.AssertMsg(dsp.Correlation(src, fl) < 0.9999, "flanger should change the signal")
+
+    println "tremolo moves the level without moving the pitch"
+    mut tr := audio.Clone(src)
+    dsp.Tremolo(tr, 10.0, 1.0)
+    testing.AssertMsg(audio.RMS(tr) < audio.RMS(src), "tremolo dips the level")
+    testing.AssertMsg(audio.Peak(tr) <= audio.Peak(src) + 0.0001, "tremolo never lifts the peak")
+
+    println "a compressor pulls a loud signal down"
+    mut loud := tone(22050, 440.0, 0.1)
+    k := dsp.Compressor { threshold = -20.0, ratio = 8.0, attack = 0.001, release = 0.05 }
+    mut squashed := audio.Clone(loud)
+    dsp.CompressorProcess(k, squashed)
+    testing.AssertMsg(audio.RMSDb(squashed) < audio.RMSDb(loud) - 6.0, "a loud signal should come down hard")
+    mut quiet := audio.Clone(loud)
+    audio.Gain(quiet, -40.0)
+    before := audio.RMSDb(quiet)
+    dsp.CompressorProcess(k, quiet)
+    testing.AssertMsg(math.Abs(audio.RMSDb(quiet) - before) < 1.0, "a quiet signal passes untouched")
+
+    println "a limiter holds a ceiling"
+    mut hot := audio.Clone(loud)
+    audio.Scale(hot, 4.0)
+    dsp.LimiterProcess(hot, -1.0)
+    testing.AssertMsg(audio.Peak(hot) <= 1.0, "nothing past full scale")
+    testing.AssertMsg(audio.PeakDb(hot) < 0.0, "and under the ceiling")
+
+    println "a gate silences what sits below it"
+    mut mixed := audio.New(22050, 1, 4410)
+    mut i := 0
+    until i < 2205:
+        audio.SetSample(mixed, i, 0, 0.5 * math.Sin(2.0 * math.PI * 440.0 * (i as f64) / 22050.0))
+        i += 1
+    end
+    mut j := 2205
+    until j < 4410:
+        audio.SetSample(mixed, j, 0, 0.001)
+        j += 1
+    end
+    dsp.GateProcess(mixed, -40.0, 0.001)
+    mut head := audio.Slice(mixed, 0, 2000)
+    testing.AssertMsg(audio.Peak(head) > 0.4, "the loud half survives")
+    audio.Free(head)
+    tail := audio.Slice(mixed, 3000, 1000)
+    testing.AssertMsg(audio.Peak(tail) < 0.0005, "the quiet half is gated out")
+
+    println "zero crossing rate rises with pitch"
+    mut lowp := tone(22050, 110.0, 0.1)
+    mut highp := tone(22050, 1760.0, 0.1)
+    testing.AssertMsg(dsp.ZeroCrossingRate(highp) > dsp.ZeroCrossingRate(lowp) * 4.0, "a higher tone crosses zero more often")
+    testing.AssertEqFloat(dsp.ZeroCrossingRate(audio.Clip {}), 0.0, 0.0)
+
+    println "pitch detection finds the note"
+    each f in [220.0, 440.0]:
+        mut t := tone(22050, f, 0.1)
+        got := dsp.DetectPitch(t, 0, 2048)
+        testing.AssertMsg(math.Abs(got - f) / f < 0.05, "the detected pitch should be within five percent")
+        audio.Free(t)
+    end
+    testing.AssertEqFloat(dsp.DetectPitch(audio.Clip {}, 0, 2048), 0.0, 0.0)
+    mut silence := audio.New(22050, 1, 4096)
+    testing.AssertEqFloat(dsp.DetectPitch(silence, 0, 2048), 0.0, 0.0)
+
+    println "a detected pitch maps back to a note name"
+    mut a4 := tone(44100, 440.0, 0.1)
+    hz := dsp.DetectPitch(a4, 0, 4096)
+    testing.AssertEqInt(music.FreqToNote(hz), 69)
+
+    println "spectra and their shape"
+    mut rich := synth.Additive(220.0, 8, 0.7, 0.12, 22050)
+    mut s := dsp.STFT(rich, 1024, 256, dsp.WindowHann)
+    testing.AssertMsg(s.frames > 1, "the spectrogram should have frames")
+    testing.AssertEqInt(s.bins, 512)
+    testing.AssertEqInt(s.rate, 22050)
+    testing.AssertMsg(dsp.SpectrumAt(s, 0, 0) >= 0.0, "bins are magnitudes")
+    testing.AssertEqFloat(dsp.SpectrumAt(s, 0, 9999), 0.0, 0.0)
+    cen := dsp.SpectralCentroid(s, 1)
+    testing.AssertMsg(cen > 100.0 and cen < 5000.0, "the centroid should sit in the band")
+    roll := dsp.SpectralRolloff(s, 1, 0.85)
+    testing.AssertMsg(roll >= cen * 0.5, "rolloff sits above the centroid region")
+    flat := dsp.SpectralFlatness(s, 1)
+    testing.AssertMsg(flat >= 0.0 and flat <= 1.0, "flatness is a ratio")
+    mut noise := synth.NoiseWhite(0.12, 22050)
+    mut ns := dsp.STFT(noise, 1024, 256, dsp.WindowHann)
+    testing.AssertMsg(dsp.SpectralFlatness(ns, 1) > flat, "noise is flatter than a harmonic tone")
+    testing.AssertEqFloat(dsp.SpectralFlux(s, 0), 0.0, 0.0)
+    dsp.FreeSpectrum(ns)
+
+    println "onsets and tempo"
+    mut beat := audio.New(22050, 1, 22050)
+    mut b := 0
+    until b < 8:
+        at := b * 2756
+        mut k2 := 0
+        until k2 < 1000:
+            if at + k2 < beat.frames:
+                env := 1.0 - (k2 as f64) / 1000.0
+                audio.SetSample(beat, at + k2, 0, 0.8 * env * math.Sin(2.0 * math.PI * 600.0 * (k2 as f64) / 22050.0))
+            end
+            k2 += 1
+        end
+        b += 1
+    end
+    mut onsets := dsp.DetectOnsets(beat, 1024, 256)
+    testing.AssertMsg(onsets.len() >= 4, "the clicks should be found")
+    bpm := dsp.DetectBPM(beat)
+    testing.AssertMsg(bpm > 60.0 and bpm < 200.0, "the tempo should be in range")
+    onsets.free()
+    testing.AssertEqFloat(dsp.DetectBPM(audio.Clip {}), 0.0, 0.0)
+
+    println "loudness in lufs"
+    lu := dsp.LoudnessLUFS(loud)
+    testing.AssertMsg(lu < 0.0 and lu > -40.0, "a full scale tone sits near the top")
+    mut soft := audio.Clone(loud)
+    audio.Gain(soft, -20.0)
+    testing.AssertMsg(math.Abs((dsp.LoudnessLUFS(soft) - lu) + 20.0) < 1.0, "twenty decibels down reads twenty lower")
+    mut norm := audio.Clone(loud)
+    dsp.NormalizeLUFS(norm, -16.0)
+    testing.AssertMsg(math.Abs(dsp.LoudnessLUFS(norm) + 16.0) < 1.0, "normalising lands on the target")
+    testing.AssertEqFloat(dsp.LoudnessLUFS(audio.Clip {}), audio.SilenceFloorDb, 0.0)
+    tp := dsp.TruePeakDb(loud)
+    testing.AssertMsg(tp >= audio.PeakDb(loud) - 0.01, "the true peak is never under the sample peak")
+
+    println "time stretching and pitch shifting"
+    mut longer := dsp.TimeStretch(src, 2.0)
+    testing.AssertEqInt(longer.frames, src.frames * 2)
+    testing.AssertEqInt(longer.rate, src.rate)
+    testing.AssertMsg(audio.Peak(longer) > 0.5, "stretching keeps the level")
+    mut shorter := dsp.TimeStretch(src, 0.5)
+    testing.AssertEqInt(shorter.frames, src.frames / 2)
+    testing.AssertTrue(audio.IsEmpty(dsp.TimeStretch(src, 0.0)))
+    mut up := dsp.PitchShift(a4, 12.0)
+    testing.AssertEqInt(up.rate, a4.rate)
+    shifted := dsp.DetectPitch(up, 0, 4096)
+    testing.AssertMsg(math.Abs(shifted - 880.0) / 880.0 < 0.1, "an octave up should land near 880")
+
+    audio.Free(src)
+    audio.Free(e)
+    audio.Free(rv)
+    audio.Free(dry)
+    audio.Free(ch)
+    audio.Free(fl)
+    audio.Free(tr)
+    audio.Free(loud)
+    audio.Free(squashed)
+    audio.Free(quiet)
+    audio.Free(hot)
+    audio.Free(mixed)
+    audio.Free(tail)
+    audio.Free(lowp)
+    audio.Free(highp)
+    audio.Free(silence)
+    audio.Free(a4)
+    audio.Free(rich)
+    audio.Free(noise)
+    audio.Free(beat)
+    audio.Free(soft)
+    audio.Free(norm)
+    audio.Free(longer)
+    audio.Free(shorter)
+    audio.Free(up)
+    dsp.FreeSpectrum(s)
+    ret testing.Summary()
+end

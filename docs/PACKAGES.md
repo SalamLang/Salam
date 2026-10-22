@@ -86,44 +86,44 @@ A path import resolves to `<repo>/<last segment>.salam` (or
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `salam init [dir]` / `salam new <name>` | create `main.salam`, `salam.toml`, `.gitignore` |
-| `salam add <pkg>[@vX.Y.Z]` | add the newest release (or that tag), download it, update both files |
-| `salam remove <pkg>` | take it out of both files; the download stays cached |
-| `salam update [pkg...]` | move to the newest release **with the same major version**; it says when a new major is out |
-| `salam update <pkg>@latest` | move across a major version |
-| `salam deps` | download everything `salam.lock` lists and verify each sum; run it after a clone |
-| `salam deps clean` | empty the download cache |
-| `salam install <pkg>[/cmd][@v]` | build that program's `main.salam` into `~/.salam/bin` |
-| `salam install` | the same for the project you are in |
-| `salam uninstall [name]` | remove an installed program; with no name, list them |
-| `salam search <words>` | search the standard library, the official packages and `registry/index.toml` |
-| `salam build --lib[=static]` | build a library and a C header from the entry file's `export:` block |
+| Command                                 | What it does                                                                                |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `salam init [dir]` / `salam new <name>` | create `main.salam`, `salam.toml`, `.gitignore`                                             |
+| `salam add <pkg>[@vX.Y.Z]`              | add the newest release (or that tag), download it, update both files                        |
+| `salam remove <pkg>`                    | take it out of both files; the download stays cached                                        |
+| `salam update [pkg...]`                 | move to the newest release **with the same major version**; it says when a new major is out |
+| `salam update <pkg>@latest`             | move across a major version                                                                 |
+| `salam deps`                            | download everything `salam.lock` lists and verify each sum; run it after a clone            |
+| `salam deps clean`                      | empty the download cache                                                                    |
+| `salam install <pkg>[/cmd][@v]`         | build that program's `main.salam` into `~/.salam/bin`                                       |
+| `salam install`                         | the same for the project you are in                                                         |
+| `salam uninstall [name]`                | remove an installed program; with no name, list them                                        |
+| `salam search <words>`                  | search the standard library, the official packages and `registry/index.toml`                |
+| `salam build --lib[=static]`            | build a library and a C header from the entry file's `export:` block                        |
 
 ## Where things live
 
-| Path | What |
-|---|---|
-| `~/.salam/pkg/<module>@<version>/` | downloaded packages (`$SALAM_PKG` moves the root) |
-| `~/.salam/pkg/salam-packages@v<version>/` | the official packages for one compiler version |
-| `~/.salam/pkg/native/` | C libraries built from source |
-| `~/.salam/pkg/installed.txt` | what `salam install` put where |
-| `~/.salam/bin/` | installed programs (`$SALAM_BIN` moves it) |
+| Path                                      | What                                              |
+| ----------------------------------------- | ------------------------------------------------- |
+| `~/.salam/pkg/<module>@<version>/`        | downloaded packages (`$SALAM_PKG` moves the root) |
+| `~/.salam/pkg/salam-packages@v<version>/` | the official packages for one compiler version    |
+| `~/.salam/pkg/native/`                    | C libraries built from source                     |
+| `~/.salam/pkg/installed.txt`              | what `salam install` put where                    |
+| `~/.salam/bin/`                           | installed programs (`$SALAM_BIN` moves it)        |
 
 ## Environment
 
-| Variable | Effect |
-|---|---|
-| `SALAM_PKG` | the package cache root |
-| `SALAM_BIN` | where `salam install` puts programs |
-| `SALAM_NO_GIT=1` | download GitHub packages as tar.gz even when Git is installed |
-| `SALAM_PACKAGES` | a folder of official packages to use instead of downloading them |
-| `SALAM_RELEASES_URL` | the base URL official package archives are downloaded from |
-| `SALAM_REGISTRY` | a registry file or URL for `salam search` |
-| `SALAM_NATIVE=source\|system` | build C libraries from source, or always use the system copy |
-| `GITHUB_TOKEN` / `GH_TOKEN` | raises GitHub's API rate limit for tag listing |
-| `GITLAB_TOKEN` | sent to gitlab.com without Git, for private projects and the rate limit |
+| Variable                      | Effect                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `SALAM_PKG`                   | the package cache root                                                  |
+| `SALAM_BIN`                   | where `salam install` puts programs                                     |
+| `SALAM_NO_GIT=1`              | download GitHub packages as tar.gz even when Git is installed           |
+| `SALAM_PACKAGES`              | a folder of official packages to use instead of downloading them        |
+| `SALAM_RELEASES_URL`          | the base URL official package archives are downloaded from              |
+| `SALAM_REGISTRY`              | a registry file or URL for `salam search`                               |
+| `SALAM_NATIVE=source\|system` | build C libraries from source, or always use the system copy            |
+| `GITHUB_TOKEN` / `GH_TOKEN`   | raises GitHub's API rate limit for tag listing                          |
+| `GITLAB_TOKEN`                | sent to gitlab.com without Git, for private projects and the rate limit |
 
 ## Fetching
 

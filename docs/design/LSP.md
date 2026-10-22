@@ -597,14 +597,34 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   `std/` and checks that every reference spells the symbol it points at;
   it is clean.
 
-Left, in order:
+Also built since:
 
-1. A warm worker that keeps parsed `std/` packages between runs (change 7).
-   A file of the compiler's own size takes about 10 s to analyze cold today.
-2. One analysis per folder package instead of one per file when indexing,
-   and `Node.sym` (change 1) as a field rather than a recorded list.
-3. Code actions from structured fixes in `Diag`, the foreign-syntax rewrites,
-   and the refactorings listed above.
-4. Pull diagnostics and colours.
-5. Run configurations and a test runner in the JetBrains plugin, a tree-sitter grammar,
-   and `salam dap`.
+- `salam dap`, a Debug Adapter Protocol server that builds the program with
+  debug information and hands the session to gdb (14+) or lldb-dap;
+  breakpoints, stepping and locals work in `.salam` files. The VS Code
+  extension registers it; `tools/lsp/test_dap.py` drives a real gdb session in
+  CI.
+- Pull diagnostics (`textDocument/diagnostic`, `workspace/diagnostic` from the
+  index) and colour swatches for hex colours.
+- `extensions/tree-sitter-salam`, a tree-sitter grammar generated from the
+  compiler's keyword tables, with a scanner that reads multi-word names the
+  way the compiler does. It parses 97.8% of the 4,230 valid Salam files in the
+  repository with no error node; Neovim gets its queries from the Vim plugin.
+
+Left:
+
+1. A warm worker. Measured, a small file costs about 0.2 s of CPU per analysis
+   and every query is answered from the snapshot without waiting, so a
+   long-lived worker would save about 0.15 s per analysis in exchange for
+   carrying the compiler's leaks and global state across runs. It is not worth
+   it until the compiler resets its state (change 5) and frees its
+   temporaries (docs/design/OWNERSHIP.md).
+2. Run configurations and a test runner in the JetBrains plugin. They need the
+   IntelliJ execution and settings APIs, so they are built and tested against
+   the full IntelliJ SDK, not the handful of jars the plugin compiles against
+   today. Until then, LSP4IJ's Debug Adapter Protocol run configuration with
+   `salam dap` runs and debugs Salam files.
+3. A published grammar repository (`tree-sitter-salam` with the generated
+   `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
+4. Structured fixes in `Diag` (change 3), so every quick fix comes from the
+   compiler rather than from matching words, and `Node.sym` as a field.

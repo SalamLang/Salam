@@ -196,6 +196,11 @@ otherwise it gets 32-byte alignment.
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
+- `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
+  in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
+  passes to turn off everywhere. Halving the range finds the one function a
+  pass miscompiles; turning `inline` off in the base keeps a callee's
+  optimized body from hiding inside its callers.
 - `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
   operands are defined in a block that dominates it, and fails the build
   naming the function and block when one is not. Run it whenever a pass

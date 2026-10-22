@@ -2181,6 +2181,7 @@ salam sql check src --schema=db/      # check every SQL query in .salam/.sql fil
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
 salam new name                          # scaffold a project: name/main.salam + salam.toml
 salam init                              # same, in the current directory
+salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam memcheck app.salam                # build with AddressSanitizer and run
 salam version                           # print the compiler version (NOT --version)
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)

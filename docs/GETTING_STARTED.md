@@ -225,6 +225,36 @@ salam page build            # main.salam if present, else EVERY layout
 A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
 
+### 📦 Packages from GitHub
+
+A package outside the standard library is named by its repository and
+imported with a string:
+
+```salam
+import "github.com/owner/repo"        // binds repo
+import t "github.com/owner/repo/sub"  // the package in the repo's sub/ folder
+```
+
+These imports work inside a project only. `salam.toml` lists what the project
+needs and `salam.lock` records the exact version, commit and checksum of each
+download:
+
+```sh
+salam add github.com/owner/repo           # newest release, or @v1.2.0
+salam remove github.com/owner/repo
+salam update [github.com/owner/repo]      # move to the newest release
+salam deps                                # download what salam.lock lists, verify checksums
+```
+
+A local package can stand in for a remote one with
+`"example.com/me/lib" = { path = "../lib" }` in `[dependencies]`.
+Downloads live in `~/.salam/pkg/<module>@<version>` (`$SALAM_PKG` moves it).
+git is used when it is installed; without it, GitHub packages arrive as a
+tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
+Dependencies of dependencies come from each package's own `salam.toml`, and
+when two ask for different versions the newer one wins (minimal version
+selection, as in Go).
+
 More examples live in [`tests/en/`](../tests/en/).
 
 ## 🎨 Formatting with `salam format`

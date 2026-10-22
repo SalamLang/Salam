@@ -1,0 +1,232 @@
+package cli
+
+import os
+import io
+import str
+
+include dr "../driver/driver.salam"
+include i18 "../i18n.salam"
+include co "../sal_core.salam"
+include sm "../semantic/semantic.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+
+func pkg_project_root(): str:
+    root := pm.FindProjectRoot(".")
+    if str.Len(root) == 0:
+        io.EPrintln(i18.Tr("salam: no salam.toml here or in a parent folder; run 'salam init' first"))
+    end
+    ret root
+end
+
+func pkg_fail(why: str): int:
+    io.EPrintln("salam: " + why)
+    ret 1
+end
+
+func pkg_split_version(arg: str, mod &: str, ver &: str):
+    at_pos := str.LastIndex(arg, "@")
+    if at_pos > 0:
+        mod = str.Substr(arg, 0, at_pos)
+        ver = str.Substr(arg, at_pos + 1, str.Len(arg) - at_pos - 1)
+    else:
+        mod = arg
+        ver = ""
+    end
+end
+
+func pkg_in_std(name: str): bool:
+    p := sm.ResolveImport("", str.Replace(name, ".", "/"))
+    ret str.Len(p) > 0 and os.Exists(p)
+end
+
+func pkg_check_name(name: str): int:
+    if pm.IsPathImport(name):
+        ret 0
+    end
+    if pkg_in_std(name):
+        println co.Format2(i18.Tr("'%s' is part of the standard library; use it with: import %s"), co.ArgStr(name), co.ArgStr(name))
+        ret 1
+    end
+    io.EPrintln(co.Format1(i18.Tr("salam: unknown package '%s'; a package outside the standard library is named by its repository, for example github.com/owner/repo"), co.ArgStr(name)))
+    ret 2
+end
+
+func pkg_add_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'add' needs a package, for example: salam add github.com/owner/repo"))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut names := Vector {} as Vector<str>
+    mut vers := Vector {} as Vector<str>
+    defer names.free()
+    defer vers.free()
+    repeat opt.inputs.len() in k:
+        mut n0 := ""
+        mut v0 := ""
+        pkg_split_version(opt.inputs.get(k), n0, v0)
+        chk := pkg_check_name(n0)
+        if chk == 0:
+            if str.Len(v0) > 0 and not str.Equals(v0, "latest") and not pm.IsRelease(v0):
+                io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a release version (expected something like v1.2.0)"), co.ArgStr(v0)))
+                ret 2
+            end
+            names.push(n0)
+            vers.push(v0)
+        else chk != 1:
+            ret chk
+        end
+    end
+    mut changed := false
+    repeat names.len() in i:
+        name := names.get(i)
+        mut ver := vers.get(i)
+        mod := pm.ModuleOf(name)
+        mut why := ""
+        mut commit := ""
+        if str.Len(ver) == 0 or str.Equals(ver, "latest"):
+            ver = pm.LatestVersion(mod, commit, why)
+            if str.Len(ver) == 0:
+                ret pkg_fail(why)
+            end
+        end
+        if not pm.Fetch(mod, ver, commit, why):
+            ret pkg_fail(why)
+        end
+        if not pm.SetDependency(root, mod, ver):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(root + "/salam.toml")))
+            ret 1
+        end
+        println co.Format2(i18.Tr("added %s %s"), co.ArgStr(mod), co.ArgStr(ver))
+        changed = true
+    end
+    if changed:
+        mut why2 := ""
+        if not pm.Resolve(root, why2):
+            ret pkg_fail(why2)
+        end
+    end
+    ret 0
+end
+
+func pkg_remove_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'remove' needs a package, for example: salam remove github.com/owner/repo"))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    repeat opt.inputs.len() in i:
+        mut name := ""
+        mut ver := ""
+        pkg_split_version(opt.inputs.get(i), name, ver)
+        mod := pm.ModuleOf(name)
+        if not pm.RemoveDependency(root, mod):
+            io.EPrintln(co.Format1(i18.Tr("salam: '%s' is not a dependency in salam.toml"), co.ArgStr(mod)))
+            ret 2
+        end
+        println co.Format1(i18.Tr("removed %s"), co.ArgStr(mod))
+    end
+    mut why := ""
+    if not pm.Resolve(root, why):
+        ret pkg_fail(why)
+    end
+    ret 0
+end
+
+func pkg_wanted(opt &: dr.Dr, mod: str): bool:
+    if opt.inputs.len() == 0:
+        ret true
+    end
+    repeat opt.inputs.len() in i:
+        if str.Equals(pm.ModuleOf(opt.inputs.get(i)), mod):
+            ret true
+        end
+    end
+    ret false
+end
+
+func pkg_update_cmd(opt &: dr.Dr): int:
+    root := pm.FindProjectRoot(".")
+    if str.Len(root) == 0:
+        io.EPrintln(i18.Tr("salam: no salam.toml here or in a parent folder; run 'salam init' first"))
+        io.EPrintln(i18.Tr("  to update Salam itself, run: salam upgrade"))
+        ret 2
+    end
+    mut deps := Vector {} as Vector<pm.Dep>
+    defer deps.free()
+    if not pm.ReadManifest(root, deps):
+        io.EPrintln(co.Format1(i18.Tr("cannot read salam.toml in '%s'"), co.ArgStr(root)))
+        ret 1
+    end
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0 or not pm.IsPathImport(d.path) or not pkg_wanted(opt, d.path):
+            continue
+        end
+        mut why := ""
+        mut commit := ""
+        latest := pm.LatestVersion(d.path, commit, why)
+        if str.Len(latest) == 0:
+            ret pkg_fail(why)
+        end
+        if pm.CompareVersions(latest, d.version) <= 0:
+            println co.Format2(i18.Tr("%s is up to date (%s)"), co.ArgStr(d.path), co.ArgStr(d.version))
+            continue
+        end
+        if not pm.Fetch(d.path, latest, commit, why):
+            ret pkg_fail(why)
+        end
+        if not pm.SetDependency(root, d.path, latest):
+            io.EPrintln(co.Format1(i18.Tr("salam: cannot write '%s'"), co.ArgStr(root + "/salam.toml")))
+            ret 1
+        end
+        println co.Format3(i18.Tr("updated %s %s -> %s"), co.ArgStr(d.path), co.ArgStr(d.version), co.ArgStr(latest))
+    end
+    mut why2 := ""
+    if not pm.Resolve(root, why2):
+        ret pkg_fail(why2)
+    end
+    ret 0
+end
+
+func pkg_deps_cmd(opt &: dr.Dr): int:
+    if str.Len(opt.input) > 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: 'deps' takes no arguments ('%s')"), co.ArgStr(opt.input)))
+        ret 2
+    end
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut fetched := 0
+    mut why := ""
+    if not pm.Sync(root, fetched, why):
+        ret pkg_fail(why)
+    end
+    mut deps := Vector {} as Vector<pm.Dep>
+    defer deps.free()
+    _ok := pm.ReadManifest(root, deps)
+    repeat deps.len() in i:
+        d := deps.get(i)
+        if str.Len(d.local) > 0:
+            println d.path + " => " + d.local
+        end
+    end
+    mut locked := Vector {} as Vector<pm.Dep>
+    defer locked.free()
+    _have := pm.ReadLock(root, locked)
+    repeat locked.len() in j:
+        l := locked.get(j)
+        println l.path + " " + l.version
+    end
+    if fetched > 0:
+        println co.Format1(i18.Tr("downloaded %d package(s)"), co.ArgInt(fetched as i64))
+    end
+    ret 0
+end

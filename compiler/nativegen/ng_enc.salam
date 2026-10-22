@@ -848,27 +848,111 @@ func label_between(g &: Ng, from: int, upto: int, lbl: int): bool:
     ret false
 end
 
-func peephole_jumps(g &: Ng):
+func live_label_between(g &: Ng, refs &: Vector<int>, from: int, upto: int): bool:
+    mut j := from + 1
+    until j < upto:
+        if g.mc.op[j] == M_LABEL and refs[g.mc.tgt[j]] > 0:
+            ret true
+        end
+        j += 1
+    end
+    ret false
+end
+
+func jump_refs(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>):
+    refs.clear()
+    lpos.clear()
+    repeat g.mc.nlabels:
+        refs.push(0)
+        lpos.push(0 - 1)
+    end
+    repeat g.mc.op.len() in i:
+        op := g.mc.op[i]
+        if op == M_LABEL:
+            lpos[g.mc.tgt[i]] = i
+        else op == M_JMP or op == M_JCC:
+            refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] + 1
+        end
+    end
+end
+
+func peephole_round(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>): bool:
     n := g.mc.op.len()
+    mut changed := false
+    jump_refs(g, refs, lpos)
+    repeat n in i0:
+        op0 := g.mc.op[i0]
+        if op0 == M_JMP or op0 == M_JCC:
+            repeat 8:
+                t := g.mc.tgt[i0]
+                pl := lpos[t]
+                if pl < 0:
+                    break
+                end
+                q := next_real(g, pl)
+                if q >= n or q == i0 or g.mc.op[q] != M_JMP or g.mc.tgt[q] == t:
+                    break
+                end
+                g.mc.tgt[i0] = g.mc.tgt[q]
+                changed = true
+            end
+        end
+    end
+    jump_refs(g, refs, lpos)
+    mut dead := false
+    repeat n in i1:
+        op1 := g.mc.op[i1]
+        if op1 == M_LABEL:
+            if refs[g.mc.tgt[i1]] > 0:
+                dead = false
+            end
+        else dead and op1 != M_NOP:
+            if op1 == M_JMP or op1 == M_JCC:
+                refs[g.mc.tgt[i1]] = refs[g.mc.tgt[i1]] - 1
+            end
+            g.mc.op[i1] = M_NOP
+            changed = true
+        else op1 == M_JMP:
+            dead = true
+        end
+    end
+    jump_refs(g, refs, lpos)
     repeat n in i:
         op := g.mc.op[i]
         if op == M_JMP:
             nx := next_real(g, i)
             if label_between(g, i, nx, g.mc.tgt[i]):
+                refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] - 1
                 g.mc.op[i] = M_NOP
+                changed = true
             end
         else op == M_JCC:
             j := next_real(g, i)
-            if j < n and g.mc.op[j] == M_JMP:
+            if j < n and g.mc.op[j] == M_JMP and not live_label_between(g, refs, i, j):
                 k := next_real(g, j)
                 if label_between(g, j, k, g.mc.tgt[i]):
+                    refs[g.mc.tgt[i]] = refs[g.mc.tgt[i]] - 1
                     g.mc.cc[i] = inv_cc(g.mc.cc[i])
                     g.mc.tgt[i] = g.mc.tgt[j]
                     g.mc.op[j] = M_NOP
+                    changed = true
                 end
             end
         end
     end
+    ret changed
+end
+
+func peephole_jumps(g &: Ng):
+    mut refs := Vector {} as Vector<int>
+    mut lpos := Vector {} as Vector<int>
+    repeat 4:
+        if not peephole_round(g, refs, lpos):
+            break
+        end
+    end
+    refs.free()
+    lpos.free()
 end
 
 func mi_dup(g &: Ng, src: int): int:

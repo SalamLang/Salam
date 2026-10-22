@@ -112,8 +112,8 @@ if [ "${1:-}" = "--worker" ]; then
             return
         fi
         mv "$jobdir/$name/main.salam" "$jobdir/$name/other.salam"
-        if (cd "$jobdir/$name" && "$SALAM_ABS" build --output="$jobdir/b.exe" --no-color --log-level=error) >"$buildlog" 2>&1 \
-            || ! grep -q 'main\.salam' "$buildlog"; then
+        if (cd "$jobdir/$name" && "$SALAM_ABS" build --output="$jobdir/b.exe" --no-color --log-level=error) >"$buildlog" 2>&1 ||
+            ! grep -q 'main\.salam' "$buildlog"; then
             echo "FAIL $label (a project without main.salam must not build)"
             sed 's/^/  /' "$buildlog" 2>/dev/null | head -20
             rm -rf "$jobdir"

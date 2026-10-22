@@ -400,6 +400,37 @@ const again = await signIn("sessions@test.ir", { "X-Salam-Client": "agent" });
 const all = await api("DELETE", `/admin/users/${sessionsUser.id}/sessions`, session);
 check("closing all of a user's sessions signs every device out", all.json?.revoked === 2 && (await api("GET", "/me", webToken)).res.status === 401 && (await api("GET", "/me", again)).res.status === 401, all.json);
 
+console.log("guest chat");
+const GUEST_LIMIT = Number(process.env.GUEST_LIMIT ?? 3);
+const guestPost = (body, headers = {}) => fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://www.salamlang.ir", ...headers }, body: JSON.stringify(body) });
+const firstGuest = await guestPost({ text: "guest hello" });
+const firstGuestBody = await firstGuest.json();
+check("a guest can ask without an account", firstGuest.status === 201 && firstGuestBody.guest?.length >= 40 && firstGuestBody.used === 1 && firstGuestBody.limit === GUEST_LIMIT, firstGuestBody);
+check("the website origin is allowed for guests", firstGuest.headers.get("access-control-allow-origin") === "https://www.salamlang.ir");
+let guestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  guestAnswer = await (await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=${firstGuestBody.guest}`, { headers: { Origin: "https://www.salamlang.ir" } })).json();
+  if (guestAnswer.status !== "pending") break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+check("the guest gets the assistant's answer", guestAnswer.status === "done" && guestAnswer.body.startsWith("Echo: guest hello"), guestAnswer);
+const strangerPoll = await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=not-the-right-token-at-all`);
+check("another guest cannot read the answer", strangerPoll.status === 404);
+const evil = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });
+check("other origins get no guest CORS", !evil.headers.get("access-control-allow-origin"));
+for (let i = 1; i < GUEST_LIMIT; i += 1) {
+  const r = await guestPost({ guest: firstGuestBody.guest, text: `guest more ${i}` });
+  const j = await r.json();
+  for (let k = 0; k < 60; k += 1) {
+    const p = await (await fetch(`${API}/guest/messages/${j.id}?guest=${firstGuestBody.guest}`)).json();
+    if (p.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+const over = await guestPost({ guest: firstGuestBody.guest, text: "one too many" }, { "X-Salam-Lang": "en" });
+const overBody = await over.json();
+check("after the guest limit the guest is sent to sign up", over.status === 403 && overBody.error === "guest_limit" && overBody.message.includes("Sign up"), overBody);
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

@@ -495,8 +495,10 @@ QF_PARSE = [
     ),
     (
         "elif",
-        "func main:\n    n := 3\n    if n > 5:\n        println 1\n"
-        "    elif n > 2:\n        println 2\n    end\nend\n",
+        (
+            "func main:\n    n := 3\n    if n > 5:\n        println 1\n"
+            "    elif n > 2:\n        println 2\n    end\nend\n"
+        ),
         "Write 'else'",
         "    else n > 2:\n",
     ),

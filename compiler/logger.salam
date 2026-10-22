@@ -42,6 +42,20 @@ pub const LOGGER_MAX_DIAG_SOURCES := 512
 
 mut g_capture_on := false
 mut g_capture_buf := ""
+mut g_record_on := false
+
+mut g_records := Vector {} as Vector<Record>
+
+pub struct Record:
+    pub level: int = 0
+    pub file: str = ""
+    pub line: int = 0
+    pub col: int = 0
+    pub index: int = 0 - 1
+    pub length: int = 0
+    pub help: str = ""
+    pub msg: str = ""
+end
 
 pub struct DiagSourceEntry:
     pub file: str = ""
@@ -126,6 +140,47 @@ func render_rich(lgr: Logger, level: int, file: str, line: int, col: int, help: 
     ret dr.RenderAt(
         lvl, code, is_error, file, line, col, 0, src, str.Len(src), body, help, lgr.diag_style, lgr.diag_format, lgr.color
     )
+end
+
+func record(level: int, file: str, line: int, col: int, index: int, length: int, help: str, msg: str):
+    if not g_record_on or level < LOG_WARN or level > LOG_ERROR:
+        ret
+    end
+    mut r := Record {}
+    r.level = level
+    r.file = file
+    r.line = line
+    r.col = col
+    r.index = index
+    r.length = length
+    r.help = help
+    r.msg = msg
+    g_records.push(r)
+end
+
+func emit_at(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
+    if not Enabled(lgr, level):
+        ret
+    end
+    if g_capture_on:
+        if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
+            g_capture_buf += render_rich(lgr, level, file, line, col, help, msg)
+        else:
+            g_capture_buf += FormatPlain(lgr, phase, level, file, line, col, msg) + "\n"
+            if str.Len(help) > 0:
+                g_capture_buf += FormatPlainHelp(help) + "\n"
+            end
+        end
+        ret
+    end
+    if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
+        io.EPrint(render_rich(lgr, level, file, line, col, help, msg))
+        ret
+    end
+    io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))
+    if str.Len(help) > 0:
+        io.EPrintln(FormatPlainHelp(help))
+    end
 end
 
 pub func New(min_level: int, color: bool): Logger:
@@ -277,7 +332,21 @@ pub func FormatPlainHelp(help: str): str:
     ret "  " + i18.Tr("help") + ": " + help
 end
 
+pub func SetRecord(enabled: bool):
+    g_record_on = enabled
+    g_records.clear()
+end
+
+pub func RecordCount(): int:
+    ret g_records.len()
+end
+
+pub func RecordAt(i: int): Record:
+    ret g_records.get(i)
+end
+
 pub func Log(lgr: Logger, phase: int, level: int, msg: str):
+    record(level, "", 0, 0, 0 - 1, 0, "", msg)
     if not Enabled(lgr, level):
         ret
     end
@@ -309,26 +378,14 @@ pub func LogAt(lgr: Logger, phase: int, level: int, file: str, line: int, col: i
 end
 
 pub func LogAtHelp(lgr: Logger, phase: int, level: int, file: str, line: int, col: int, help: str, msg: str):
-    if not Enabled(lgr, level):
-        ret
-    end
-    if g_capture_on:
-        if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
-            g_capture_buf += render_rich(lgr, level, file, line, col, help, msg)
-        else:
-            g_capture_buf += FormatPlain(lgr, phase, level, file, line, col, msg) + "\n"
-            if str.Len(help) > 0:
-                g_capture_buf += FormatPlainHelp(help) + "\n"
-            end
-        end
-        ret
-    end
-    if lgr.diag_rich and str.Len(file) > 0 and line > 0 and (level == LOG_ERROR or level == LOG_WARN):
-        io.EPrint(render_rich(lgr, level, file, line, col, help, msg))
-        ret
-    end
-    io.EPrintln(FormatPlain(lgr, phase, level, file, line, col, msg))
-    if str.Len(help) > 0:
-        io.EPrintln(FormatPlainHelp(help))
-    end
+    record(level, file, line, col, 0 - 1, 0, help, msg)
+    emit_at(lgr, phase, level, file, line, col, help, msg)
 end
+
+pub func LogSpanHelp(
+    lgr: Logger, phase: int, level: int, file: str, line: int, col: int, index: int, length: int, help: str, msg: str
+):
+    record(level, file, line, col, index, length, help, msg)
+    emit_at(lgr, phase, level, file, line, col, help, msg)
+end
+

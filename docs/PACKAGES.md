@@ -164,7 +164,7 @@ exists, so a subgroup is not mistaken for a folder.
 | `SALAM_NO_GIT=1`              | download GitHub packages as tar.gz even when Git is installed           |
 | `SALAM_PACKAGES`              | a folder of official packages to use instead of downloading them        |
 | `SALAM_RELEASES_URL`          | the base URL official package archives are downloaded from              |
-| `SALAM_SUMDB` | the published checksum list (a file or URL; `off` to skip) |
+| `SALAM_SUMDB`                 | the published checksum list (a file or URL; `off` to skip)              |
 | `SALAM_REGISTRY`              | a registry file or URL for `salam search`                               |
 | `SALAM_NATIVE=source\|system` | build C libraries from source, or always use the system copy            |
 | `GITHUB_TOKEN` / `GH_TOKEN`   | raises GitHub's API rate limit for tag listing                          |

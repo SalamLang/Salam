@@ -86,6 +86,10 @@ func su_extern_reader(name: str): bool:
     ret str.Equals(name, "memcpy") or str.Equals(name, "memmove") or str.Equals(name, "memset") or str.Equals(name, "memcmp") or str.Equals(name, "strlen") or str.Equals(name, "strcmp") or str.Equals(name, "strncmp") or str.Equals(name, "strchr") or str.Equals(name, "strstr")
 end
 
+func su_extern_ret_alias(name: str): bool:
+    ret str.Equals(name, "memcpy") or str.Equals(name, "memmove") or str.Equals(name, "memset") or str.Equals(name, "strchr") or str.Equals(name, "strstr")
+end
+
 func su_arg_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
     d := su_call_decl(s, call)
     if d == 0:
@@ -104,11 +108,11 @@ func su_arg_effect(s &: Sema, a &: at.Ast, call: int, slot: int): int:
     if su_flag(s.sp_free, s, fi, slot):
         ret SU_FREE
     end
-    if su_flag(s.sp_grow, s, fi, slot):
-        ret SU_GROW
-    end
     if su_flag(s.sp_keep, s, fi, slot):
         ret SU_KEEP
+    end
+    if su_flag(s.sp_grow, s, fi, slot):
+        ret SU_GROW
     end
     ret SU_READ
 end
@@ -213,6 +217,13 @@ func su_classify0(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, decl
                 end
                 ret me
             end
+            if ow_is_container(at.At(a, cur).type_str):
+                q3 := su_parent(pm, top)
+                if not (q3 != 0 and at.KindOf(a, q3) == at.AST_ASSIGN and at.At(a, q3).a == top):
+                    cur = top
+                    continue
+                end
+            end
             ret SU_READ
         end
         if k == at.AST_CALL:
@@ -233,6 +244,14 @@ func su_classify0(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, id: int, decl
             end
             if su_is_mem_call(s, a, p, "Free"):
                 ret SU_FREE
+            end
+            xd := su_call_decl(s, p)
+            if ai == 0 and xd != 0 and at.At(a, xd).a == 0 and su_extern_ret_alias(at.At(a, xd).name):
+                gp := su_parent(pm, p)
+                if gp != 0 and at.KindOf(a, gp) != at.AST_EXPR_STMT:
+                    cur = p
+                    continue
+                end
             end
             ret su_arg_effect(s, a, p, ai + 1)
         end
@@ -462,7 +481,7 @@ func su_set(v &: Vector<bool>, s &: Sema, fi: int, slot: int): bool:
     ret true
 end
 
-func su_stmt_frees(s &: Sema, a &: at.Ast, st: int, name: str, is_this: bool): bool:
+func su_stmt_frees(s &: Sema, a &: at.Ast, st: int, name: str, is_this: bool, by_value: bool): bool:
     mut e := st
     if e != 0 and at.KindOf(a, e) == at.AST_EXPR_STMT:
         e = at.At(a, e).a
@@ -481,7 +500,7 @@ func su_stmt_frees(s &: Sema, a &: at.Ast, st: int, name: str, is_this: bool): b
     if at.KindOf(a, callee) == at.AST_MEMBER and str.Equals(at.At(a, callee).name, "free") and at.ChildCount(a, e) == 0:
         r2 := at.At(a, callee).a
         rts := at.At(a, r2).type_str
-        if not str.StartsWith(rts, "dyn "):
+        if not str.StartsWith(rts, "dyn ") and not (by_value and ow_is_container(rts)):
             ret false
         end
         if is_this:
@@ -505,14 +524,14 @@ func su_stmt_frees(s &: Sema, a &: at.Ast, st: int, name: str, is_this: bool): b
     ret false
 end
 
-func su_must_free(s &: Sema, a &: at.Ast, fnid: int, name: str, is_this: bool): bool:
+func su_must_free(s &: Sema, a &: at.Ast, fnid: int, name: str, is_this: bool, by_value: bool): bool:
     body := at.At(a, fnid).a
     if body == 0 or at.KindOf(a, body) != at.AST_BLOCK:
         ret false
     end
     repeat at.ChildCount(a, body) in i:
         st := at.Child(a, body, i)
-        if su_stmt_frees(s, a, st, name, is_this):
+        if su_stmt_frees(s, a, st, name, is_this, by_value):
             ret true
         end
         mut rets := Vector {} as Vector<int>
@@ -613,7 +632,8 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
                 if su_set(s.sp_free, s, fi, slot):
                     changed = true
                 end
-                if su_must_free(s, a, fnid, name, slot == 0) and su_set(s.sp_mfree, s, fi, slot):
+                byv := slot > 0 and not at.At(a, at.Child(a, fnid, slot - 1)).is_ref
+                if su_must_free(s, a, fnid, name, slot == 0, byv) and su_set(s.sp_mfree, s, fi, slot):
                     changed = true
                 end
             else c == SU_GROW:
@@ -796,13 +816,24 @@ func su_infer(s &: Sema, a &: at.Ast):
     s.sum_ready = true
     mut rounds := 0
     mut changed := true
-    until changed and rounds < 30:
+    limit := s.own_fns.len() + 30
+    until changed and rounds < limit:
         changed = false
         rounds += 1
         repeat s.own_fns.len() in f:
             if su_analyze(s, a, f):
                 changed = true
             end
+        end
+    end
+    if changed:
+        repeat s.sum_fresh.len() in z:
+            s.sum_fresh.set(z, false)
+        end
+        repeat s.sp_keep.len() in z2:
+            s.sp_keep.set(z2, true)
+            s.sp_mfree.set(z2, false)
+            s.sp_gf.set(z2, "*")
         end
     end
 end

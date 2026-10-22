@@ -341,6 +341,17 @@ func fold_addr(g &: Ng, i: int): bool:
         g.i_x[i] = 1
         changed = true
     end
+    ix := g.i_b[i]
+    if ix >= 0 and g.v_kind[ix] == VK_INS and g.v_ty[ix] == T_I64:
+        xd := g.v_def[ix]
+        xo := g.i_op[xd]
+        if (xo == OP_ADD or xo == OP_SUB) and is_cint(g, g.i_b[xd]) and g.i_a[xd] >= 0:
+            kc := g.v_i[g.i_b[xd]]
+            g.i_b[i] = g.i_a[xd]
+            g.i_d[i] = g.i_d[i] + (xo == OP_ADD ? kc : 0 - kc) * (g.i_x[i] as i64)
+            changed = true
+        end
+    end
     base := g.i_a[i]
     if base >= 0 and g.i_b[i] < 0 and is_cint(g, base):
         replace_res(g, i, new_val(g, VK_INT, T_PTR, g.v_i[base] + g.i_d[i]))
@@ -649,6 +660,40 @@ func fold_rem_range(g &: Ng, i: int): bool:
     else:
         replace_res(g, i, const_int(g, g.i_ty[i], 0 as i64))
     end
+    ret true
+end
+
+func icmp_add_one(g &: Ng, i: int): bool:
+    p := g.i_x[i]
+    if p != CC_SLT and p != CC_SLE and p != CC_SGT and p != CC_SGE:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS or is_cint(g, g.i_b[i]):
+        ret false
+    end
+    d := g.v_def[a]
+    op := g.i_op[d]
+    if (op != OP_ADD and op != OP_SUB) or (g.i_f[d] & IF_NSW) == 0 or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    mut k := g.v_i[g.i_b[d]]
+    if op == OP_SUB:
+        k = 0 - k
+    end
+    mut np := 0 - 1
+    if k == (1 as i64):
+        if p == CC_SGT: np = CC_SGE end
+        if p == CC_SLE: np = CC_SLT end
+    else k == (0 - 1 as i64):
+        if p == CC_SLT: np = CC_SLE end
+        if p == CC_SGE: np = CC_SGT end
+    end
+    if np < 0:
+        ret false
+    end
+    g.i_a[i] = g.i_a[d]
+    g.i_x[i] = np
     ret true
 end
 
@@ -1147,6 +1192,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 ch = fold_icmp(g, i)
                 if not ch and g.dom_ok and g.i_op[i] == OP_ICMP:
                     ch = fold_icmp_range(g, i)
+                end
+                if not ch and g.i_op[i] == OP_ICMP:
+                    ch = icmp_add_one(g, i)
                 end
             else op >= OP_SEXT and op <= OP_FPTRUNC:
                 ch = fold_cast(g, i)
@@ -2019,4 +2067,7 @@ func optimize(g &: Ng):
         end
     end
     dce(g)
+    if not g.off_sink:
+        _sk := sink_pass(g)
+    end
 end

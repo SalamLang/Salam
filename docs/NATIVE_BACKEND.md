@@ -121,6 +121,9 @@ recursive. Each function then goes through:
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
 12. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+13. Sinking: a pure instruction whose only uses sit in one block it dominates,
+    in the same loop, moves into that block, so `dp[j] + 1` is computed only
+    on the path that stores it.
 
 Loads of internal globals that the module never writes (how llvmgen emits a
 `const`) fold to their initializer. Instruction selection folds address
@@ -169,7 +172,7 @@ loops are bottom-tested, and aligns loop heads to 16 bytes (innermost loops to
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

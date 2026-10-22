@@ -204,7 +204,7 @@ salam exec                  # interpret the project here
 ```
 
 - `<dir>/main.salam` must exist and define `main` (`ریشه` in Persian).
-  No other file name is accepted and no scanning or guessing happens; a
+  No other filename is accepted and no scanning or guessing happens; a
   directory without `main.salam` is an error that names the file to rename.
 - The default executable name for a project is its **directory name**
   (`myproject`, or `myproject.exe` on Windows), not `main`.
@@ -252,7 +252,7 @@ salam search websocket                    # standard library and registry/index.
 A local package can stand in for a remote one with
 `"example.com/me/lib" = { path = "../lib" }` in `[dependencies]`.
 Downloads live in `~/.salam/pkg/<module>@<version>` (`$SALAM_PKG` moves it).
-git is used when it is installed; without it, GitHub packages arrive as a
+Git is used when it is installed; without it, GitHub packages arrive as a
 tar.gz that Salam unpacks itself (`SALAM_NO_GIT=1` forces that path).
 Dependencies of dependencies come from each package's own `salam.toml`, and
 when two ask for different versions the newer one wins (minimal version

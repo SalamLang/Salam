@@ -28,3 +28,13 @@ function finish() {
 { fail("unknown key: " $0) }
 END { finish(); if (bad) exit 1; print "registry: " count + 0 " package(s), all valid" }
 ' "$file"
+
+sums=${2:-$root/registry/sums.txt}
+[ -f "$sums" ] || exit 0
+awk '
+/^[ \t]*#/ || /^[ \t]*$/ { next }
+$0 !~ /^[^ ]+@v[0-9][^ ]* sha256:[0-9a-f]+$/ || length($2) != 71 { print FILENAME ":" NR ": expected \"module@version sha256:<64 hex>\"" > "/dev/stderr"; bad = 1; next }
+$1 in seen && seen[$1] != $2 { print FILENAME ":" NR ": " $1 " has two different sums" > "/dev/stderr"; bad = 1 }
+{ seen[$1] = $2; count++ }
+END { if (bad) exit 1; print "sums: " count + 0 " line(s), all valid" }
+' "$sums"

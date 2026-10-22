@@ -85,6 +85,13 @@ covers every file of the package except `.git` and `.salam-commit`, so a
 download by Git and a download of GitHub's tar.gz give the same sum.
 `salam deps` re-checks it.
 
+Sums are also checked against `registry/sums.txt` in the Salam repository,
+a reviewed list of `module@version sum` lines (fetched once a day;
+`SALAM_SUMDB` points at another file or URL, `SALAM_SUMDB=off` skips it). A
+download that differs from a published line is refused. `salam deps sums`
+prints the lines for the packages a project uses, ready for a pull request
+to that file.
+
 Every sum is also kept in `~/.salam/pkg/sums.txt` the first time this
 machine downloads a version. If a later download of the same version comes
 out different (a tag that was moved after release), the command stops; if
@@ -131,6 +138,7 @@ exists, so a subgroup is not mistaken for a folder.
 | `salam update <pkg>@latest`             | move across a major version                                                                 |
 | `salam deps`                            | download everything `salam.lock` lists and verify each sum; run it after a clone            |
 | `salam deps clean`                      | empty the download cache                                                                    |
+| `salam deps sums`                       | print `module@version sum` lines for `registry/sums.txt`                                    |
 | `salam install <pkg>[/cmd][@v]`         | build that program's `main.salam` into `~/.salam/bin`                                       |
 | `salam install`                         | the same for the project you are in                                                         |
 | `salam uninstall [name]`                | remove an installed program; with no name, list them                                        |
@@ -156,6 +164,7 @@ exists, so a subgroup is not mistaken for a folder.
 | `SALAM_NO_GIT=1`              | download GitHub packages as tar.gz even when Git is installed           |
 | `SALAM_PACKAGES`              | a folder of official packages to use instead of downloading them        |
 | `SALAM_RELEASES_URL`          | the base URL official package archives are downloaded from              |
+| `SALAM_SUMDB`                 | the published checksum list (a file or URL; `off` to skip)              |
 | `SALAM_REGISTRY`              | a registry file or URL for `salam search`                               |
 | `SALAM_NATIVE=source\|system` | build C libraries from source, or always use the system copy            |
 | `GITHUB_TOKEN` / `GH_TOKEN`   | raises GitHub's API rate limit for tag listing                          |

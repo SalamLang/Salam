@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isFa } from "./i18n";
 
 export type Theme = "light" | "dark";
 const KEY = "salam-ai-theme";
@@ -29,5 +30,6 @@ export function useTheme(): [Theme, () => void] {
 }
 
 export function toPersianDigits(s: string | number): string {
+  if (!isFa) return String(s);
   return String(s).replace(/[0-9]/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
 }

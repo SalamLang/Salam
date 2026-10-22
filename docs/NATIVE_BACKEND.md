@@ -64,17 +64,21 @@ removes the copies through memory (`image.GetPixel` returns a `Color`). Each fun
 then goes through:
 
 1. SROA on struct locals, then mem2reg.
-2. Inlining, then SROA and mem2reg again for the locals the inlined code used
+2. A chain of `if x == K: ret C` tests over dense keys (at least five, with
+   holes allowed when the fallback returns a constant) becomes one range
+   check and a load from a read-only table, bytes when the results fit
+   (`image.jpeg`'s 64-way `_zigzag`).
+3. Inlining, then SROA and mem2reg again for the locals the inlined code used
    to reach only through a pointer. A struct local that is stored whole exactly
    once and otherwise only loaded whole (a by-value parameter's spill slot, or
    the copy an inlined setter makes) is replaced by the stored value, so
    `Put(a, id, node)` copies the node once instead of three times.
-3. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
+4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
    A small recursive function is then inlined into itself once, which halves
    the calls that are left.
-4. Folding to a fixed point: arithmetic and compares on constants, algebraic
+5. Folding to a fixed point: arithmetic and compares on constants, algebraic
    identities, casts, selects, constant branch conditions, `extractvalue` of a
    known `insertvalue`, a struct rebuilt field by field from itself, address
    arithmetic, `x % 2^k == 0` as a mask test, `(x & y) ^ (x & z)` as
@@ -84,24 +88,24 @@ then goes through:
    zigzag decode into four instructions. Signed division and
    remainder become unsigned when the dividend is provably non-negative, and
    `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
-5. Block merging and jump threading, which turns short-circuit `and`/`or`
+6. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches. A block that only compares a phi with a
    constant and branches is bypassed by every predecessor that feeds the phi
    a constant. A range check `x >= 0 and x < n` with `n`
    known non-negative becomes one unsigned compare.
-6. If-conversion of small branches (up to four instructions per arm) into
+7. If-conversion of small branches (up to four instructions per arm) into
    `cmov`, except where the result flows into a later address, since a `cmov`
    there would serialize the following load (a binary search keeps its branch
    for this reason). A division may move ahead of the branch when the same
    division already ran unconditionally, as in `if n % j == 0: s += n / j`.
-7. Full unrolling of loops with a constant trip count and a small body. The
+8. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too. A loop of any depth
    that provably runs exactly once loses its back edge, and unrolling runs
    again after each value numbering pass that found new constants, so the
    blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
    code once the sizes are forwarded from the struct.
-8. Loop-invariant code motion of pure instructions into loop preheaders (an
+9. Loop-invariant code motion of pure instructions into loop preheaders (an
    add of a loop value, a constant and an invariant is regrouped so the
    invariant part moves out), and
    of loads that no store in the loop can reach (by TBAA class) and that are
@@ -150,14 +154,14 @@ then goes through:
    rest. The test compares the
    counter with a limit adjusted once before the loop, so it never computes a
    counter value that could overflow.
-9. Strength reduction: an array address that is affine in a loop counter, such
-   as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
-   Addresses that differ only by a constant share one pointer.
-10. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
+10. Strength reduction: an array address that is affine in a loop counter, such
+    as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
+    Addresses that differ only by a constant share one pointer.
+11. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
     traced back through arithmetic, broadcasts, adjacent loads and loop phis,
     and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
     multiply kernels rely on this.
-11. Global value numbering over the dominator tree, including redundant load
+12. Global value numbering over the dominator tree, including redundant load
     elimination and store-to-load forwarding. A store only invalidates loads
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
@@ -177,13 +181,13 @@ then goes through:
     the merge, or the address must be a global, a stack slot or a non-null
     parameter), so the common path keeps the value in a register and only the
     rare path reloads it.
-12. Min/max reassociation: in `min(min(a, b), c)` where `a` comes from the
+13. Min/max reassociation: in `min(min(a, b), c)` where `a` comes from the
     previous iteration (a phi, or a phi plus a constant) and `b` and `c` do
     not, the tree becomes `min(a, min(b, c))`, so the loop-carried chain goes
     through one compare and one `cmov` instead of two. The edit distance
     inner loop is the usual case.
-13. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
-14. Sinking: a pure instruction whose only uses sit in one block it dominates,
+14. Mark-and-sweep dead code elimination, which also removes dead phi cycles.
+15. Sinking: a pure instruction whose only uses sit in one block it dominates,
     in the same loop, moves into that block, so `dp[j] + 1` is computed only
     on the path that stores it.
 
@@ -264,7 +268,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

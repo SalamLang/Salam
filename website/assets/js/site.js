@@ -4,7 +4,7 @@
   function saveTheme(value) {
     try {
       localStorage.setItem("theme", value);
-    } catch (e) {}
+    } catch (_e) {}
   }
 
   function currentTheme() {
@@ -12,8 +12,7 @@
     if (explicit) {
       return explicit;
     }
-    return window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches
       ? "dark"
       : "light";
   }
@@ -68,9 +67,9 @@
     const lines = salamat.querySelectorAll(".salamat-msg");
     const typing = salamat.querySelector(".salamat-typing");
     const chips = salamat.querySelector(".salamat-chips");
-    const still =
-      window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const still = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
     let played = false;
     const KEY = "salamat-closed";
 
@@ -81,13 +80,13 @@
         } else {
           localStorage.removeItem(KEY);
         }
-      } catch (e) {}
+      } catch (_e) {}
     };
     const recentlyClosed = () => {
       try {
         const at = Number(localStorage.getItem(KEY) || 0);
         return at > 0 && Date.now() - at < 7 * 24 * 3600 * 1000;
-      } catch (e) {
+      } catch (_e) {
         return false;
       }
     };
@@ -149,35 +148,272 @@
         bit.textContent = marks[i % marks.length];
         const angle = (Math.PI * 2 * i) / 18 + Math.random() * 0.4;
         const dist = 70 + Math.random() * 90;
-        bit.style.left = x + "px";
-        bit.style.top = y + "px";
-        bit.style.setProperty("--dx", Math.cos(angle) * dist + "px");
-        bit.style.setProperty("--dy", Math.sin(angle) * dist - 40 + "px");
+        bit.style.left = `${x}px`;
+        bit.style.top = `${y}px`;
+        bit.style.setProperty("--dx", `${Math.cos(angle) * dist}px`);
+        bit.style.setProperty("--dy", `${Math.sin(angle) * dist - 40}px`);
         bit.style.setProperty(
           "--spin",
-          Math.round(Math.random() * 360 - 180) + "deg",
+          `${Math.round(Math.random() * 360 - 180)}deg`,
         );
         document.body.appendChild(bit);
         setTimeout(() => bit.remove(), 1100);
       }
     };
 
-    const ask = (text, from) => {
+    const lang = document.documentElement.lang === "fa" ? "fa" : "en";
+    const aiUrl = salamat.getAttribute("data-ai").replace(/\/$/, "");
+    const apiUrl = (salamat.getAttribute("data-api") || "").replace(/\/$/, "");
+    const cta = salamat.querySelector(".salamat-cta");
+    const count = salamat.querySelector(".salamat-count");
+    const note = salamat.querySelector(".salamat-note");
+    const send = form.querySelector("button");
+    const thread = salamat.querySelector(".salamat-thread");
+    const body = salamat.querySelector(".salamat-body");
+    const STORE = "salamat-chat";
+    const RTL = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/;
+    const LTR = /[A-Za-z]/;
+    let state = { guest: "", msgs: [], used: 0, limit: 15, blocked: false };
+    let busy = false;
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+      if (saved && Array.isArray(saved.msgs)) {
+        state = Object.assign(state, saved);
+      }
+    } catch (_e) {}
+    const persist = () => {
+      try {
+        localStorage.setItem(
+          STORE,
+          JSON.stringify(
+            Object.assign({}, state, { msgs: state.msgs.slice(-40) }),
+          ),
+        );
+      } catch (_e) {}
+    };
+
+    const dirOf = (text) => {
+      for (const ch of text) {
+        if (RTL.test(ch)) {
+          return "rtl";
+        }
+        if (LTR.test(ch)) {
+          return "ltr";
+        }
+      }
+      return document.documentElement.dir || "ltr";
+    };
+    input.addEventListener("input", () => {
+      input.dir = input.value
+        ? dirOf(input.value)
+        : document.documentElement.dir || "ltr";
+    });
+
+    const escapeHtml = (text) =>
+      text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = (text) =>
+      escapeHtml(text)
+        .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
+        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    const render = (text) => {
+      const out = [];
+      const parts = text.split(/```[^\n]*\n?/);
+      parts.forEach((part, i) => {
+        if (i % 2 === 1) {
+          out.push(
+            '<pre dir="ltr"><code>' +
+              escapeHtml(part.replace(/\n$/, "")) +
+              "</code></pre>",
+          );
+          return;
+        }
+        part
+          .split(/\n{2,}/)
+          .map((block) => block.trim())
+          .filter(Boolean)
+          .forEach((block) => {
+            out.push(
+              `<p dir="auto">${inline(block).replace(/\n/g, "<br>")}</p>`,
+            );
+          });
+      });
+      return out.join("");
+    };
+
+    const bubble = (role, text) => {
+      const li = document.createElement("li");
+      li.className = `salamat-msg is-in${role === "user" ? " is-user" : ""}`;
+      if (role === "user") {
+        li.textContent = text;
+        li.dir = dirOf(text);
+      } else {
+        li.innerHTML = render(text);
+      }
+      thread.insertBefore(li, typing);
+      body.scrollTop = body.scrollHeight;
+      return li;
+    };
+
+    const showCount = () => {
+      if (state.used > 0) {
+        const fmt = (v) => v.toLocaleString(lang === "fa" ? "fa-IR" : "en-US");
+        count.textContent =
+          fmt(state.used) +
+          " / " +
+          fmt(state.limit) +
+          " " +
+          count.getAttribute("data-label");
+        count.hidden = false;
+        note.hidden = true;
+      }
+    };
+    const showCta = (question) => {
+      const q = question ? `&q=${encodeURIComponent(question)}` : "";
+      cta.querySelector(".salamat-cta-main").href =
+        `${aiUrl}/?lang=${lang}&signup=1${q}`;
+      cta.querySelector(".salamat-cta-alt").href = `${aiUrl}/?lang=${lang}${q}`;
+      cta.hidden = false;
+      cta.classList.add("is-in");
+      chips.hidden = true;
+      body.scrollTop = body.scrollHeight;
+    };
+    const lock = (on) => {
+      busy = on;
+      input.disabled = on || state.blocked;
+      send.disabled = on || state.blocked;
+    };
+
+    const restore = () => {
+      if (state.msgs.length === 0) {
+        return;
+      }
+      played = true;
+      lines.forEach((line) => {
+        line.hidden = false;
+      });
+      state.msgs.forEach((m) => {
+        bubble(m.role, m.text);
+      });
+      showCount();
+      if (state.blocked) {
+        showCta("");
+        lock(false);
+      } else {
+        chips.hidden = true;
+      }
+    };
+
+    const wait1 = (ms) => new Promise((done) => setTimeout(done, ms));
+    const call = async (method, path, payload) => {
+      const res = await fetch(apiUrl + path, {
+        method,
+        headers: Object.assign(
+          { "X-Salam-Lang": lang },
+          payload ? { "Content-Type": "application/json" } : {},
+        ),
+        body: payload ? JSON.stringify(payload) : undefined,
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (_e) {}
+      return { status: res.status, data };
+    };
+
+    const ask = async (text, from) => {
       const q = text.trim();
-      if (!q) {
+      if (!q || busy) {
         input.focus();
+        return;
+      }
+      if (state.blocked) {
+        showCta(q);
         return;
       }
       const box = (from || form).getBoundingClientRect();
       burst(box.left + box.width / 2, box.top + box.height / 2);
-      const url =
-        salamat.getAttribute("data-ai").replace(/\/$/, "") +
-        "/?q=" +
-        encodeURIComponent(q) +
-        "&lang=" +
-        (document.documentElement.lang === "fa" ? "fa" : "en");
-      window.open(url, "_blank", "noopener");
       input.value = "";
+      input.dir = document.documentElement.dir || "ltr";
+      chips.hidden = true;
+      bubble("user", q);
+      state.msgs.push({ role: "user", text: q });
+      persist();
+      lock(true);
+      typing.hidden = false;
+      let answer = null;
+      let shown = "";
+      try {
+        const sent = await call("POST", "/guest/messages", {
+          guest: state.guest,
+          text: q,
+        });
+        if (sent.data.error === "guest_limit") {
+          typing.hidden = true;
+          state.blocked = true;
+          state.msgs.pop();
+          persist();
+          bubble("assistant", sent.data.message || "");
+          showCta(q);
+          lock(false);
+          return;
+        }
+        if (sent.status !== 201) {
+          throw new Error(sent.data.message || "");
+        }
+        if (sent.data.guest) {
+          state.guest = sent.data.guest;
+        }
+        state.used = sent.data.used || state.used + 1;
+        state.limit = sent.data.limit || state.limit;
+        showCount();
+        persist();
+        const started = Date.now();
+        while (Date.now() - started < 10 * 60 * 1000) {
+          await wait1(1200);
+          const got = await call(
+            "GET",
+            "/guest/messages/" +
+              sent.data.id +
+              "?guest=" +
+              encodeURIComponent(state.guest),
+          );
+          if (got.status !== 200) {
+            continue;
+          }
+          const text1 = got.data.body || "";
+          if (text1 && text1 !== shown) {
+            typing.hidden = true;
+            if (!answer) {
+              answer = bubble("assistant", text1);
+            } else {
+              answer.innerHTML = render(text1);
+              body.scrollTop = body.scrollHeight;
+            }
+            shown = text1;
+          }
+          if (got.data.status !== "pending") {
+            break;
+          }
+        }
+        typing.hidden = true;
+        if (!shown) {
+          shown = salamat.getAttribute("data-error");
+          bubble("assistant", shown);
+        }
+        state.msgs.push({ role: "assistant", text: shown });
+        if (state.used >= state.limit) {
+          state.blocked = true;
+          showCta("");
+        }
+        persist();
+      } catch (e) {
+        typing.hidden = true;
+        bubble("assistant", e?.message || salamat.getAttribute("data-error"));
+      }
+      lock(false);
+      if (!state.blocked) {
+        input.focus();
+      }
     };
 
     launcher.addEventListener("click", () => {
@@ -204,16 +440,15 @@
       chip.addEventListener("click", () => ask(chip.textContent, chip));
     });
 
+    restore();
+
     setTimeout(
       () => {
         salamat.classList.add("is-ready");
         if (recentlyClosed()) {
           return;
         }
-        if (
-          window.matchMedia &&
-          window.matchMedia("(max-width: 640px)").matches
-        ) {
+        if (window.matchMedia?.("(max-width: 640px)").matches) {
           teaser.hidden = false;
           requestAnimationFrame(() => teaser.classList.add("is-in"));
         } else {

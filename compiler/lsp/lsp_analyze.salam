@@ -73,6 +73,7 @@ struct Req:
     pub overlay_paths: Vector<str> = Vector {}
     pub overlay_texts: Vector<str> = Vector {}
     pub defines: Vector<str> = Vector {}
+    pub light: bool = false
 end
 
 struct Decl:
@@ -202,6 +203,7 @@ func read_req(path: str, r &: Req): bool:
     req_strs(v, "overlay_paths", r.overlay_paths)
     req_strs(v, "overlay_texts", r.overlay_texts)
     req_strs(v, "defines", r.defines)
+    r.light = vbool(v, "light")
     ret str.Len(r.path) > 0
 end
 
@@ -1128,6 +1130,26 @@ func emit_folds(an &: An, j &: Json):
     jw_end_arr(j)
 end
 
+func emit_links(an &: An, j &: Json):
+    jw_karr(j, "links")
+    total := at.Count(an.a)
+    mut i := 1
+    until i < total:
+        n := at.Get(an.a, i)
+        if n.kind == at.AST_IMPORT and in_target(an, n) and str.Len(n.type_str) > 0 and (n.end_index as int) > (n.begin_index as int):
+            target := filepath.Clean(n.type_str)
+            if os.Exists(target) or src.HasOverlay(target):
+                jw_obj(j)
+                jw_range(j, "range", an.li, n.begin_index as int, n.end_index as int)
+                jw_str(j, "target", target)
+                jw_end_obj(j)
+            end
+        end
+        i += 1
+    end
+    jw_end_arr(j)
+end
+
 func split_code(msg: str, code &: str): str:
     if str.Len(msg) >= 6 and (byte_at(msg, 0) == 69 or byte_at(msg, 0) == 87) and byte_at(msg, 4) == 58 and byte_at(msg, 5) == 32:
         code = str.Substr(msg, 0, 4)
@@ -1296,7 +1318,8 @@ func fn_nodes(an &: An, out &: Vector<OutNode>):
     mut i := 1
     until i < total:
         n := at.Get(an.a, i)
-        if (n.kind == at.AST_FUNC_DEF or n.kind == at.AST_LAMBDA) and in_target(an, n) and (n.end_index as int) > (n.begin_index as int):
+        k := n.kind
+        if (k == at.AST_FUNC_DEF or k == at.AST_LAMBDA or k == at.AST_BLOCK or k == at.AST_EACH or k == at.AST_REPEAT or k == at.AST_FOR) and in_target(an, n) and (n.end_index as int) > (n.begin_index as int):
             out.push(OutNode { node = i, kind = n.kind, b = n.begin_index as int, e = n.end_index as int })
         end
         i += 1
@@ -1341,7 +1364,7 @@ func emit_completion_data(an &: An, j &: Json):
                 mut best_b := 0 - 1
                 mut best_e := 0 - 1
                 each f in fns:
-                    if f.b <= db and db < f.e and (best_b < 0 or f.b >= best_b):
+                    if f.b <= db and db < f.e and (best_b < 0 or f.b > best_b or (f.b == best_b and f.e < best_e)):
                         best_b = f.b
                         best_e = f.e
                     end
@@ -1541,9 +1564,12 @@ func analyze(r: Req): str:
     jw_str(j, "std_root", an.std_root)
     emit_diags(an, j)
     emit_outline(an, j)
-    emit_folds(an, j)
-    emit_completion_data(an, j)
-    emit_tokens(an, j)
+    emit_links(an, j)
+    if not r.light:
+        emit_folds(an, j)
+        emit_completion_data(an, j)
+        emit_tokens(an, j)
+    end
     jw_karr(j, "refs")
     each rf in an.refs:
         p1 := li_pos(an.li, rf.b)

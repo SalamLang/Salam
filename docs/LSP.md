@@ -16,15 +16,19 @@ salam lsp --version
 | Errors and warnings as you type, with the compiler's codes and help text | `publishDiagnostics` |
 | Hover: declaration, type and doc comment, also for the standard library | `hover` |
 | Go to definition, declaration and type definition, into `std/` as well | `definition`, `declaration`, `typeDefinition` |
-| Find references and highlight them across open files | `references`, `documentHighlight` |
-| Rename a symbol across open files | `prepareRename`, `rename` |
-| Completion: locals, globals, struct members, package members, keywords, block snippets | `completion` |
+| Find references and highlight them, across the whole workspace | `references`, `documentHighlight` |
+| Rename a symbol in every file that uses it | `prepareRename`, `rename` |
+| Who calls this function, and what it calls | `callHierarchy` |
+| Reference counts above declarations, and `Run` above `main` in Visual Studio Code | `codeLens` |
+| `include` and `import` paths open the file they name | `documentLink` |
+| Inferred types after `name := value` | `inlayHint` |
+| Completion: names in scope (block by block), struct members, package members, keywords, block snippets | `completion` |
 | Parameter hints while typing a call | `signatureHelp` |
 | Outline, breadcrumbs and workspace symbols | `documentSymbol`, `workspace/symbol` |
 | Semantic highlighting, including multi-word Persian names | `semanticTokens/full` |
 | Folding for blocks, comments and imports | `foldingRange` |
 | Formatting through the compiler's formatter, and indent after `:` | `formatting`, `rangeFormatting`, `onTypeFormatting` |
-| Quick fixes: did-you-mean, remove a `mut` that is never reassigned, prefix an unused name with `_` | `codeAction` |
+| Quick fixes: did-you-mean, remove a `mut` that is never reassigned, prefix an unused name with `_`, and rewrite `while`, `return`, `elif`, `def`, `class`, `let` and `var` into Salam | `codeAction` |
 | Smart selection | `selectionRange` |
 
 Messages follow the editor's language: a Persian (`fa`) locale gets Persian
@@ -41,6 +45,8 @@ Send them as `initializationOptions`, or later in
 | `messages` | from the client's `locale` | `en` or `fa` |
 | `defines` | `[]` | conditional compilation flags, as `-D` takes them |
 | `formatFixOrder` | `false` | let formatting reorder top-level declarations, like `salam format` |
+| `index` | `true` | analyze every Salam file in the workspace in the background, for references, rename, call hierarchy and code lens |
+| `indexMaxFiles` | `400` | skip the background index when a workspace has more Salam files than this |
 
 The same can be set on the command line: `salam lsp --stdlib-path=DIR --messages=fa`.
 
@@ -155,6 +161,13 @@ Queries are answered from the latest snapshot without waiting, so hover stays
 instant while a large file is being analyzed. A new edit cancels an analysis
 that is still running. Requests whose answer depends on exact positions
 (outline, folding, semantic tokens) wait for the analysis of the current text.
+
+When nothing else is pending, the server also walks the workspace folders
+(skipping hidden directories, `node_modules`, `build`, `out`, `dist`, `target`
+and a bundled `std/`) and analyzes each Salam file in the background with a
+lighter worker. Those snapshots answer references, rename, call hierarchy,
+code lens and workspace symbols for files that are not open. Saving a file
+queues the index again.
 
 A file inside a folder package (`pkg/pkg.salam` plus siblings) is analyzed
 together with its whole package, the way the compiler sees it on import.

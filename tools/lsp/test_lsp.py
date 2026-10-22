@@ -20,6 +20,7 @@ STD = os.path.join(ROOT, "std")
 EN = os.path.join(ROOT, "tests", "lsp", "en", "shapes.salam")
 FA = os.path.join(ROOT, "tests", "lsp", "fa", "binary.salam")
 PKG = os.path.join(ROOT, "std", "str", "basic.salam")
+PROJ = os.path.join(ROOT, "tests", "lsp", "proj")
 
 
 class Server:
@@ -270,6 +271,68 @@ def package(t, s):
     t.check("pkg: outline", "Len" in [x["name"] for x in sy], str(sy)[:200])
 
 
+def project(t, exe):
+    s = Server(exe, ["--stdlib-path=" + STD])
+    s.request("initialize", {"processId": None, "rootUri": uri_of(PROJ), "capabilities": {}, "clientInfo": {"name": "test"}})
+    s.notify("initialized", {})
+    upath = os.path.join(PROJ, "util.salam")
+    mpath = os.path.join(PROJ, "main.salam")
+    utext = open(upath, encoding="utf-8").read()
+    mtext = open(mpath, encoding="utf-8").read()
+    uuri, muri = uri_of(upath), uri_of(mpath)
+    s.notify("textDocument/didOpen", {"textDocument": {"uri": uuri, "languageId": "salam", "version": 1, "text": utext}})
+    s.diagnostics(uuri)
+    twice = at(uuri, pos(utext, "Twice", 1))
+    refs = []
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        refs = s.request("textDocument/references", {**twice, "context": {"includeDeclaration": True}})["result"]
+        if len(refs) >= 3:
+            break
+        time.sleep(0.3)
+    t.check("proj: references reach a file that is not open", len(refs) == 3 and muri in [r["uri"] for r in refs], str(refs)[:300])
+
+    r = s.request("textDocument/rename", {**twice, "newName": "Double"})["result"]
+    ch = r["changes"] if r else {}
+    t.check("proj: rename edits every file", len(ch.get(uuri, [])) == 1 and len(ch.get(muri, [])) == 2, str(ch)[:300])
+
+    lens = s.request("textDocument/codeLens", {"textDocument": {"uri": uuri}})["result"]
+    t.check("proj: code lens counts references", [l["command"]["title"] for l in lens] == ["2 references"], str(lens)[:300])
+
+    s.notify("textDocument/didOpen", {"textDocument": {"uri": muri, "languageId": "salam", "version": 1, "text": mtext}})
+    s.diagnostics(muri)
+    links = s.request("textDocument/documentLink", {"textDocument": {"uri": muri}})["result"]
+    t.check("proj: include paths are links", [l["target"] for l in links] == [uuri], str(links)[:300])
+
+    item = s.request("textDocument/prepareCallHierarchy", at(muri, pos(mtext, "Twice(n)", 1)))["result"]
+    t.check("proj: call hierarchy item", item and item[0]["name"] == "Twice" and item[0]["uri"] == uuri, str(item)[:300])
+    if item:
+        inc = s.request("callHierarchy/incomingCalls", {"item": item[0]})["result"]
+        t.check("proj: incoming calls", [(c["from"]["name"], len(c["fromRanges"])) for c in inc] == [("run", 2)], str(inc)[:300])
+    run_item = s.request("textDocument/prepareCallHierarchy", at(muri, pos(mtext, "run(2)", 1)))["result"]
+    if run_item:
+        out = s.request("callHierarchy/outgoingCalls", {"item": run_item[0]})["result"]
+        t.check("proj: outgoing calls", [(c["to"]["name"], len(c["fromRanges"])) for c in out] == [("Twice", 2)], str(out)[:300])
+    else:
+        t.check("proj: outgoing calls", False, "no item for run")
+
+    inside = set(labels(s.request("textDocument/completion", at(muri, pos(mtext, "println inner", 0)))["result"]))
+    after = set(labels(s.request("textDocument/completion", at(muri, pos(mtext, "println x", 0)))["result"]))
+    t.check("proj: completion sees block scope", "inner" in inside and "x" in after and "inner" not in after, str(sorted(after))[:200])
+
+    bad = mtext.replace("    if x > 0:", "    while x > 0:")
+    s.notify("textDocument/didChange", {"textDocument": {"uri": muri, "version": 2}, "contentChanges": [{"text": bad}]})
+    d = s.diagnostics(muri)
+    rng = {"start": pos(bad, "while"), "end": pos(bad, "while", 5)}
+    acts = s.request("textDocument/codeAction", {"textDocument": {"uri": muri}, "range": rng, "context": {"diagnostics": d["diagnostics"]}})["result"]
+    titles = [a["title"] for a in acts]
+    t.check("proj: quick fix for a foreign keyword", "Replace 'while' with 'until'" in titles, str(titles) + json.dumps(d["diagnostics"])[:200])
+
+    s.request("shutdown", None)
+    s.notify("exit", None)
+    s.proc.wait(10)
+
+
 def main():
     exe = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(ROOT, "salam")
     t = Run()
@@ -294,6 +357,8 @@ def main():
     f.request("shutdown", None)
     f.notify("exit", None)
     f.proc.wait(10)
+
+    project(t, exe)
 
     print("RESULT: %d passed, %d failed" % (t.passed, t.failed))
     sys.exit(1 if t.failed else 0)

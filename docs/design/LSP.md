@@ -572,14 +572,19 @@ Built, with tests in `tools/lsp/test_lsp.py`:
   diagnostic with its span; fixes are still help text), 4 (source overlays),
   and package-aware analysis: a file of a folder package is checked with its
   siblings through a virtual entry.
+- A background workspace index (light worker runs over every workspace
+  file), so references, rename, call hierarchy, code lens and workspace
+  symbols reach files that are not open.
 - Diagnostics with codes and help, hover with types, docs and the other
   language's name, definition, declaration and type definition into `std/`,
   references, highlight and rename across open files, outline, workspace
   symbols, folding, semantic tokens, completion (scope, members, packages,
   keywords and snippets in the file's language), signature help, inlay hints
   for inferred types, formatting with a minimal edit, on-type indentation,
-  selection ranges, and quick fixes for did-you-mean, unused `mut` and unused
-  variables.
+  selection ranges, call hierarchy, code lens, document links for
+  `include`/`import`, completion scoped block by block, and quick fixes for
+  did-you-mean (English and Persian), unused `mut`, unused variables and the
+  foreign keywords the parser recognises.
 - Persian: messages follow `messages` or the client locale, multi-word names
   are one token and one range, positions are UTF-16 throughout.
 - Clients: the Visual Studio Code extension (with `vscode-languageclient` bundled),
@@ -590,13 +595,10 @@ Left, in order:
 
 1. A warm worker that keeps parsed `std/` packages between runs (change 7).
    A file of the compiler's own size takes about 10 s to analyze cold today.
-2. Scope ranges in sema (change 2), so completion sees block-level scope
-   instead of whole-function scope, and `Node.sym` (change 1) as a field
-   rather than a recorded list.
-3. A workspace index, so references, rename and workspace symbols cover files
-   that are not open.
-4. Code actions from structured fixes in `Diag`, the foreign-syntax rewrites,
+2. One analysis per folder package instead of one per file when indexing,
+   and `Node.sym` (change 1) as a field rather than a recorded list.
+3. Code actions from structured fixes in `Diag`, the foreign-syntax rewrites,
    and the refactorings listed above.
-5. Pull diagnostics, code lens, call and type hierarchy, colours.
-6. A native JetBrains plugin with run configurations, a tree-sitter grammar,
+4. Pull diagnostics, type hierarchy, colours.
+5. A native JetBrains plugin with run configurations, a tree-sitter grammar,
    and `salam dap`.

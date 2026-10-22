@@ -47,6 +47,8 @@ mut g_job_on := false
 mut g_job_uri := ""
 mut g_job_proc := process.Process {}
 mut g_pending := Vector {} as Vector<Pending>
+mut g_job_index := ""
+mut g_client_name := ""
 
 struct Doc:
     pub uri: str = ""
@@ -199,6 +201,12 @@ func apply_settings(v: value.Value):
     if value.ObjectHas(s, "formatFixOrder"):
         g_fix_order = vbool(s, "formatFixOrder")
     end
+    if value.ObjectHas(s, "index"):
+        g_index_on = vbool(s, "index")
+    end
+    if value.ObjectHas(s, "indexMaxFiles"):
+        g_index_max = vint(s, "indexMaxFiles", g_index_max)
+    end
 end
 
 func caps_json(): str:
@@ -249,6 +257,19 @@ func caps_json(): str:
     jw_end_obj(j)
     jw_bool(j, "selectionRangeProvider", true)
     jw_bool(j, "inlayHintProvider", true)
+    jw_bool(j, "callHierarchyProvider", true)
+    jw_kobj(j, "codeLensProvider")
+    jw_bool(j, "resolveProvider", false)
+    jw_end_obj(j)
+    jw_kobj(j, "documentLinkProvider")
+    jw_bool(j, "resolveProvider", false)
+    jw_end_obj(j)
+    jw_kobj(j, "workspace")
+    jw_kobj(j, "workspaceFolders")
+    jw_bool(j, "supported", true)
+    jw_bool(j, "changeNotifications", true)
+    jw_end_obj(j)
+    jw_end_obj(j)
     jw_kobj(j, "semanticTokensProvider")
     jw_kobj(j, "legend")
     jw_karr(j, "tokenTypes")
@@ -274,9 +295,10 @@ func caps_json(): str:
     ret jw_done(j)
 end
 
-func analysis_request(d: Doc): str:
+func analysis_request(d: Doc, light: bool): str:
     mut j := jw_new()
     jw_obj(j)
+    jw_bool(j, "light", light)
     jw_str(j, "path", d.path)
     jw_str(j, "text", d.text)
     jw_str(j, "messages", g_messages)
@@ -309,14 +331,22 @@ func start_job(i: int):
     mut d := g_docs.get(i)
     d.dirty = false
     g_docs.set(i, d)
+    ensure_tmp_paths()
+    if io.WriteFile(g_req_path, analysis_request(d, false)) < 0:
+        log_client(1, "salam lsp: cannot write " + g_req_path)
+        ret
+    end
+    spawn_worker(d.uri)
+end
+
+func ensure_tmp_paths():
     if str.Len(g_req_path) == 0:
         g_req_path = temp.File()
         g_out_path = temp.File()
     end
-    if io.WriteFile(g_req_path, analysis_request(d)) < 0:
-        log_client(1, "salam lsp: cannot write " + g_req_path)
-        ret
-    end
+end
+
+func spawn_worker(uri: str):
     _w := io.WriteFile(g_out_path, "")
     mut args := Vector {} as Vector<str>
     args.push("lsp")
@@ -326,10 +356,11 @@ func start_job(i: int):
     args.free()
     if not process.IsRunning(p):
         log_client(1, "salam lsp: cannot start the analysis worker '" + g_exe + "'")
+        g_job_index = ""
         ret
     end
     g_job_on = true
-    g_job_uri = d.uri
+    g_job_uri = uri
     g_job_proc = p
     if SALAM_OS_WINDOWS:
         rc := process.Wait(g_job_proc)
@@ -346,6 +377,11 @@ func cancel_job():
     _d := child_done(process.Pid(g_job_proc), true, code)
     process.Cleanup(g_job_proc)
     g_job_on = false
+    if str.Len(g_job_index) > 0:
+        g_index_queue.push(g_job_index)
+        g_job_index = ""
+        ret
+    end
     i := doc_index(g_job_uri)
     if i >= 0:
         mut d := g_docs.get(i)
@@ -359,6 +395,10 @@ func finish_job(rc: int):
     g_analyses += 1
     errtext := process.ReadStderr(g_job_proc)
     process.Cleanup(g_job_proc)
+    if str.Len(g_job_index) > 0:
+        finish_index_job(rc)
+        ret
+    end
     i := doc_index(g_job_uri)
     if i < 0 or not g_docs.get(i).open:
         ret
@@ -741,12 +781,14 @@ end
 
 func collect_refs(key: str, include_decl: bool, out &: Vector<str>, out_uris &: Vector<str>):
     mut decl_done := false
-    each od in g_docs:
-        if not od.has_snap or not od.open:
-            continue
-        end
-        ds := obj(od.snap, "decls")
-        refs := obj(od.snap, "refs")
+    mut suris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(suris, snaps)
+    repeat snaps.len() in si:
+        ouri := suris.get(si)
+        osnap := snaps.get(si)
+        ds := obj(osnap, "decls")
+        refs := obj(osnap, "refs")
         if not value.IsArray(ds) or not value.IsArray(refs):
             continue
         end
@@ -769,13 +811,15 @@ func collect_refs(key: str, include_decl: bool, out &: Vector<str>, out_uris &: 
                 rv := value.ArrayGet(refs, r)
                 if ids.has(vint(rv, "d", 0 - 1)):
                     rr := obj(rv, "r")
-                    out.push("{\"uri\":" + jq(od.uri) + ",\"range\":" + range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)) + "}")
-                    out_uris.push(od.uri)
+                    out.push("{\"uri\":" + jq(ouri) + ",\"range\":" + range_json(arr_int(rr, 0), arr_int(rr, 1), arr_int(rr, 2), arr_int(rr, 3)) + "}")
+                    out_uris.push(ouri)
                 end
             end
         end
         ids.free()
     end
+    suris.free()
+    snaps.free()
 end
 
 func hit_key(d: Doc, h: Hit): str:
@@ -993,11 +1037,11 @@ func on_workspace_symbol(id: str, params: value.Value):
     q := str.Lower(vstr(params, "query"))
     mut items := Vector {} as Vector<str>
     mut seen := HashMap {} as HashMap<str, bool>
-    each d in g_docs:
-        if not d.has_snap:
-            continue
-        end
-        ds := obj(d.snap, "decls")
+    mut suris := Vector {} as Vector<str>
+    mut snaps := Vector {} as Vector<value.Value>
+    snap_set(suris, snaps)
+    each snap in snaps:
+        ds := obj(snap, "decls")
         if not value.IsArray(ds):
             continue
         end
@@ -1025,6 +1069,8 @@ func on_workspace_symbol(id: str, params: value.Value):
     send_result(id, "[" + str.Join(items, ",") + "]")
     items.free()
     seen.free()
+    suris.free()
+    snaps.free()
 end
 
 func sym_kind_lsp(k: int): int:
@@ -1209,6 +1255,80 @@ func on_range_formatting(id: str, params: value.Value):
     on_formatting(id, params)
 end
 
+func swap_for(word: str): str:
+    if str.Equals(word, "while"):
+        ret "until"
+    else str.Equals(word, "return"):
+        ret "ret"
+    else str.Equals(word, "elif"):
+        ret "else"
+    else str.Equals(word, "def") or str.Equals(word, "fn") or str.Equals(word, "function"):
+        ret "func"
+    else str.Equals(word, "class"):
+        ret "struct"
+    end
+    ret ""
+end
+
+func fix_action(title: str, uri: str, dj: str, rg: str, text: str): str:
+    ret "{\"title\":" + jq(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(uri) + ":[{\"range\":" + rg + ",\"newText\":" + jq(text) + "}]}}}"
+end
+
+func word_fix(d: Doc, dv: value.Value, rg: value.Value, dj: str, acts &: Vector<str>):
+    if str.Len(vstr(dv, "code")) > 0:
+        ret
+    end
+    st := obj(rg, "start")
+    ln := vint(st, "line", 0)
+    lntext := line_text(d.text, ln)
+    lli := line_index(lntext)
+    off := li_offset(lli, 0, vint(st, "character", 0))
+    mut l2 := lli
+    li_free(l2)
+    mut b := off
+    until b > 0 and is_ident_byte(byte_at(lntext, b - 1)):
+        b -= 1
+    end
+    mut e := off
+    until e < str.Len(lntext) and is_ident_byte(byte_at(lntext, e)):
+        e += 1
+    end
+    if e <= b:
+        ret
+    end
+    word := str.Substr(lntext, b, e - b)
+    c1 := utf16_units(lntext, 0, b)
+    c2 := utf16_units(lntext, 0, e)
+    sw := swap_for(word)
+    if str.Len(sw) > 0:
+        acts.push(fix_action("Replace '" + word + "' with '" + sw + "'", d.uri, dj, range_json(ln, c1, ln, c2), sw))
+        ret
+    end
+    if str.Equals(word, "let") or str.Equals(word, "var"):
+        mut k := e
+        until k < str.Len(lntext) and byte_at(lntext, k) == 32:
+            k += 1
+        end
+        mut ne := k
+        until ne < str.Len(lntext) and is_ident_byte(byte_at(lntext, ne)):
+            ne += 1
+        end
+        name := str.Substr(lntext, k, ne - k)
+        mut q := ne
+        until q < str.Len(lntext) and byte_at(lntext, q) == 32:
+            q += 1
+        end
+        prefix := str.Equals(word, "var") ? "mut " : ""
+        if str.Len(name) > 0 and q < str.Len(lntext) and byte_at(lntext, q) == 61 and (q + 1 >= str.Len(lntext) or byte_at(lntext, q + 1) != 61):
+            mut v := q + 1
+            until v < str.Len(lntext) and byte_at(lntext, v) == 32:
+                v += 1
+            end
+            acts.push(fix_action("Write '" + prefix + name + " := ...'", d.uri, dj, range_json(ln, c1, ln, utf16_units(lntext, 0, v)), prefix + name + " := "))
+        end
+    end
+end
+
 func on_code_action(id: str, params: value.Value):
     i := text_doc(params)
     if i < 0:
@@ -1225,11 +1345,18 @@ func on_code_action(id: str, params: value.Value):
             rg := obj(dv, "range")
             rjson := json.EncodeDefault(rg)
             dj := json.EncodeDefault(dv)
-            dm := str.IndexOf(msg, "did you mean ")
+            mut dm := str.IndexOf(msg, "did you mean ")
+            mut skip := 13
+            mut qmark := "?"
+            if dm < 0:
+                dm = str.IndexOf(msg, "منظورتان ")
+                skip = str.Len("منظورتان ")
+                qmark = "؟"
+            end
             if dm >= 0:
-                qe := str.IndexFrom(msg, "?", dm)
+                qe := str.IndexFrom(msg, qmark, dm)
                 lim := qe > dm ? qe : str.Len(msg)
-                mut p := dm + 13
+                mut p := dm + skip
                 mut first := true
                 until p < lim:
                     q1 := str.IndexFrom(msg, "'", p)
@@ -1256,6 +1383,7 @@ func on_code_action(id: str, params: value.Value):
                     acts.push("{\"title\":\"Remove 'mut'\",\"kind\":\"quickfix\",\"isPreferred\":true,\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(d.uri) + ":[{\"range\":" + range_json(ln, c1, ln, c1 + 4) + ",\"newText\":\"\"}]}}}")
                 end
             end
+            word_fix(d, dv, rg, dj, acts)
             if str.Contains(msg, "unused variable '"):
                 st2 := obj(rg, "start")
                 acts.push("{\"title\":\"Prefix the name with '_'\",\"kind\":\"quickfix\",\"diagnostics\":[" + dj + "],\"edit\":{\"changes\":{" + jq(d.uri) + ":[{\"range\":" + range_json(vint(st2, "line", 0), vint(st2, "character", 0), vint(st2, "line", 0), vint(st2, "character", 0)) + ",\"newText\":\"_\"}]}}}")
@@ -1423,7 +1551,7 @@ func mark_all_dirty():
 end
 
 func fresh_method(method: str): bool:
-    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint")
+    ret str.Equals(method, "textDocument/documentSymbol") or str.Equals(method, "textDocument/foldingRange") or str.Equals(method, "textDocument/semanticTokens/full") or str.Equals(method, "textDocument/inlayHint") or str.Equals(method, "textDocument/codeLens") or str.Equals(method, "textDocument/documentLink")
 end
 
 func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
@@ -1470,6 +1598,16 @@ func dispatch_request(id: str, method: str, params: value.Value, replay: bool):
         on_selection_range(id, params)
     else str.Equals(method, "textDocument/inlayHint"):
         on_inlay_hint(id, params)
+    else str.Equals(method, "textDocument/prepareCallHierarchy"):
+        on_prepare_call_hierarchy(id, params)
+    else str.Equals(method, "callHierarchy/incomingCalls"):
+        on_incoming_calls(id, params)
+    else str.Equals(method, "callHierarchy/outgoingCalls"):
+        on_outgoing_calls(id, params)
+    else str.Equals(method, "textDocument/codeLens"):
+        on_code_lens(id, params)
+    else str.Equals(method, "textDocument/documentLink"):
+        on_document_link(id, params)
     else str.Equals(method, "workspace/symbol"):
         on_workspace_symbol(id, params)
     else:
@@ -1502,12 +1640,15 @@ func handle(text: str): int:
     end
     if str.Equals(method, "initialize"):
         apply_settings(obj(params, "initializationOptions"))
+        g_client_name = vstr(obj(params, "clientInfo"), "name")
+        note_roots(params)
         loc := vstr(params, "locale")
         if str.StartsWith(loc, "fa") and not value.ObjectHas(obj(params, "initializationOptions"), "messages"):
             g_messages = "fa"
         end
         send_result(id, caps_json())
     else str.Equals(method, "initialized"):
+        g_index_wanted = true
         ret 0 - 1
     else str.Equals(method, "shutdown"):
         cancel_job()
@@ -1525,6 +1666,7 @@ func handle(text: str): int:
         on_did_change(params)
     else str.Equals(method, "textDocument/didSave"):
         mark_all_dirty()
+        reindex_all()
     else str.Equals(method, "textDocument/didClose"):
         if g_job_on and str.Equals(g_job_uri, vstr(obj(params, "textDocument"), "uri")):
             cancel_job()
@@ -1536,6 +1678,9 @@ func handle(text: str): int:
         mark_all_dirty()
     else str.Equals(method, "workspace/didChangeWatchedFiles"):
         mark_all_dirty()
+        reindex_all()
+    else str.Equals(method, "workspace/didChangeWorkspaceFolders"):
+        change_roots(params)
     else str.StartsWith(method, "$/"):
         ret 0 - 1
     else has_id:
@@ -1576,6 +1721,17 @@ func serve(): int:
                 end
             else:
                 start_job(next_dirty())
+            end
+            continue
+        end
+        if index_pending():
+            if input_ready(20):
+                rc4 := pump()
+                if rc4 >= 0:
+                    ret rc4
+                end
+            else:
+                start_index_job()
             end
             continue
         end

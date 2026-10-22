@@ -2851,27 +2851,120 @@ func isel_select_fused(g &: Ng, i: int, d: int):
     set_res(g, i, r)
 end
 
+func insv_covers_all(g &: Ng, i: int): bool:
+    t := g.i_ty[i]
+    if g.t_kind[t] != TK_STRUCT:
+        ret false
+    end
+    nf := g.t_nf[t]
+    if nf <= 0 or nf > 64:
+        ret false
+    end
+    mut seen := Vector {} as Vector<i64>
+    mut j := i
+    repeat 2 * nf + 2:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        seen.push(g.i_d[j])
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    mut all := true
+    repeat nf in f:
+        fo := g.t_offs[g.t_fs[t] + f] as i64
+        mut hit := false
+        each sv in seen:
+            if sv == fo:
+                hit = true
+            end
+        end
+        if not hit:
+            all = false
+        end
+    end
+    seen.free()
+    ret all
+end
+
+func insv_to_ret(g &: Ng, i: int): bool:
+    if g.retp < 0:
+        ret false
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret false
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_RET and g.i_a[k] == r:
+                ret true
+            end
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if g.i_op[k] == OP_CALL or g.i_op[k] == OP_STORE or g.i_op[k] == OP_LOAD:
+                ret false
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret false
+        end
+        j = k
+    end
+    ret false
+end
+
 func isel_insv(g &: Ng, i: int):
     t := g.i_ty[i]
     a := g.i_a[i]
     r := g.i_res[i]
     sz := tsize(g, t)
-    mut slot := 0 - 1
     k := g.v_kind[a]
-    if k == VK_INS and g.vak[a] == AK_FRAME and g.vao[a] == 0 and g.v_uses[a] == 1 and g.vown[a]:
-        slot = g.var_[a]
+    mut m := frame_mem(0, 0 as i64)
+    mut ak := AK_FRAME
+    mut base := 0 - 1
+    if k == VK_INS and (g.vak[a] == AK_FRAME or g.vak[a] == AK_PTR) and g.vao[a] == 0 and g.v_uses[a] == 1 and g.vown[a]:
+        ak = g.vak[a]
+        base = g.var_[a]
+        m = agg_mem(g, a)
     else:
-        slot = new_slot(g, sz, talign(g, t))
+        if insv_to_ret(g, i):
+            ak = AK_PTR
+            base = g.retp
+            m = mem_bi(base, 0 as i64)
+        else:
+            base = new_slot(g, sz, talign(g, t))
+            m = frame_mem(base, 0 as i64)
+        end
         if k == VK_ZERO:
-            zero_fill(g, frame_mem(slot, 0 as i64), sz)
+            if not insv_covers_all(g, i):
+                zero_fill(g, m, sz)
+            end
         else k != VK_UNDEF:
-            emit_copy(g, frame_mem(slot, 0 as i64), agg_mem(g, a), sz)
+            emit_copy(g, m, agg_mem(g, a), sz)
         end
     end
-    store_field(g, frame_mem(slot, g.i_d[i]), g.i_b[i], g.i_x[i])
+    store_field(g, mem_add(m, g.i_d[i] as int), g.i_b[i], g.i_x[i])
     if r >= 0:
-        g.vak[r] = AK_FRAME
-        g.var_[r] = slot
+        g.vak[r] = ak
+        g.var_[r] = base
         g.vao[r] = 0
         g.vown[r] = true
     end
@@ -3199,9 +3292,10 @@ func isel_ret(g &: Ng, i: int):
     if a >= 0:
         t := g.v_ty[a]
         if is_agg(g, t):
+            in_place := g.v_kind[a] == VK_INS and g.vak[a] == AK_PTR and g.var_[a] == g.retp and g.vao[a] == 0
             if g.v_kind[a] == VK_ZERO:
                 zero_fill(g, mem_bi(g.retp, 0 as i64), tsize(g, t))
-            else g.v_kind[a] != VK_UNDEF:
+            else g.v_kind[a] != VK_UNDEF and not in_place:
                 emit_copy(g, mem_bi(g.retp, 0 as i64), agg_mem(g, a), tsize(g, t))
             end
             _c := e_copy(g, RAX, g.retp)

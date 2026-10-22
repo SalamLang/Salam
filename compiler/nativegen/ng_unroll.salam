@@ -373,6 +373,9 @@ func unroll_loops(g &: Ng): bool:
                 end
             end
             if inner:
+                if trip_count(g, u, h, b, pre) == 1 and once_loop(g, u, h, b):
+                    done = true
+                end
                 continue
             end
             trips := trip_count(g, u, h, b, pre)
@@ -398,4 +401,124 @@ func unroll_loops(g &: Ng): bool:
         simplify_phis(g)
     end
     ret done
+end
+
+func once_out_use(g &: Ng, u &: Unr, v: int): bool:
+    each b in g.b_rpo:
+        if u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if uses_val(g, i, v):
+                ret true
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func once_rewrite(g &: Ng, u &: Unr, old_v: int, new_v: int):
+    each b in g.b_rpo:
+        if u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            if (m & 1) != 0 and g.i_a[i] == old_v: g.i_a[i] = new_v end
+            if (m & 2) != 0 and g.i_b[i] == old_v: g.i_b[i] = new_v end
+            if (m & 4) != 0 and g.i_c[i] == old_v: g.i_c[i] = new_v end
+            if g.i_op[i] == OP_CALL:
+                repeat g.i_pcount[i] in k:
+                    if g.pool[g.i_ps[i] + 3 * k] == old_v:
+                        g.pool[g.i_ps[i] + 3 * k] = new_v
+                    end
+                end
+            else g.i_op[i] == OP_PHI:
+                repeat g.i_pcount[i] in k2:
+                    if g.pool[g.i_ps[i] + 2 * k2] == old_v:
+                        g.pool[g.i_ps[i] + 2 * k2] = new_v
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func once_loop(g &: Ng, u &: Unr, h: int, latch: int): bool:
+    t := g.b_last[h]
+    lterm := g.b_last[latch]
+    if latch == h or t < 0 or g.i_op[t] != OP_CBR or lterm < 0:
+        ret false
+    end
+    lop := g.i_op[lterm]
+    if not (lop == OP_BR and g.i_b[lterm] == h) and not (lop == OP_CBR and (g.i_b[lterm] == h) != (g.i_c[lterm] == h)):
+        ret false
+    end
+    body := u.inl[g.i_b[t]] ? g.i_b[t] : g.i_c[t]
+    ex := u.inl[g.i_b[t]] ? g.i_c[t] : g.i_b[t]
+    if u.inl[ex] or not u.inl[body] or g.b_npred[ex] != 1:
+        ret false
+    end
+    mut succ := Vector {} as Vector<int>
+    each b in u.blocks:
+        blk_succs(g, b, succ)
+        each s in succ:
+            if not u.inl[s] and not (b == h and s == ex):
+                succ.free()
+                ret false
+            end
+        end
+    end
+    succ.free()
+    mut i := g.b_first[h]
+    until i >= 0:
+        r := g.i_res[i]
+        if g.i_op[i] != OP_PHI and r >= 0 and once_out_use(g, u, r):
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    mut p := g.b_first[h]
+    until p >= 0 and g.i_op[p] == OP_PHI:
+        lv := phi_val_for(g, p, latch)
+        r2 := g.i_res[p]
+        if lv < 0 or r2 < 0:
+            ret false
+        end
+        p = g.i_next[p]
+    end
+    mut q := g.b_first[ex]
+    until q >= 0 and g.i_op[q] == OP_PHI:
+        ps := g.i_ps[q]
+        repeat g.i_pcount[q] in k:
+            if g.pool[ps + 2 * k + 1] == h:
+                g.pool[ps + 2 * k + 1] = latch
+            end
+        end
+        q = g.i_next[q]
+    end
+    mut p2 := g.b_first[h]
+    until p2 >= 0 and g.i_op[p2] == OP_PHI:
+        lv2 := phi_val_for(g, p2, latch)
+        once_rewrite(g, u, g.i_res[p2], lv2)
+        ps2 := g.i_ps[p2]
+        repeat g.i_pcount[p2] in k2:
+            if g.pool[ps2 + 2 * k2 + 1] == latch:
+                g.pool[ps2 + 2 * k2 + 1] = 0 - 1
+            end
+        end
+        p2 = g.i_next[p2]
+    end
+    g.i_op[t] = OP_BR
+    g.i_b[t] = body
+    if g.i_b[lterm] == h:
+        g.i_b[lterm] = ex
+    else:
+        g.i_c[lterm] = ex
+    end
+    ret true
 end

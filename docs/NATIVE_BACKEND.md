@@ -90,7 +90,11 @@ then goes through:
    division already ran unconditionally, as in `if n % j == 0: s += n / j`.
 7. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
-   and multiply loop over a constant exponent unrolls too.
+   and multiply loop over a constant exponent unrolls too. A loop of any depth
+   that provably runs exactly once loses its back edge, and unrolling runs
+   again after each value numbering pass that found new constants, so the
+   blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
+   code once the sizes are forwarded from the struct.
 8. Loop-invariant code motion of pure instructions into loop preheaders, and
    of loads that no store in the loop can reach (by TBAA class) and that are
    safe to run early: a field of a `&:` parameter or of a stack slot. When
@@ -143,9 +147,13 @@ then goes through:
     of its own TBAA class (llvmgen tags pointer fields and plain data
     separately), the same guarantee the LLVM backend gets from those tags.
     Pointers that come from different `malloc`/`calloc`/`realloc` calls never
-    alias, so writing one vector's buffer keeps loads from another one.
-    Calls to functions declared `memory(read)` or `memory(argmem: read)`
-    (`strcmp`, `strlen`, the math library) do not invalidate loads, so a
+    alias, so writing one vector's buffer keeps loads from another one. A
+    block-local pass then forwards stores to loads at the same constant
+    offset, dropping only the entries a store can overlap, so filling a fresh
+    buffer field by field and reading it back costs no loads.
+    A field load also sees an earlier whole-struct store. Calls to functions
+    declared `memory(read)` or `memory(argmem: read)` (`strcmp`, `strlen`, the
+    math library), and `malloc`/`calloc`, do not invalidate loads, so a
     vector's data pointer stays in a register across a `strcmp` loop. A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
@@ -224,7 +232,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -1652,17 +1652,45 @@ func replace_succ(g &: Ng, term: int, old: int, nw: int):
     end
 end
 
+func phi_uses_under(g &: Ng, b: int, pv: int, cm: int, s: int): bool:
+    if g.b_npred[s] != 1:
+        ret false
+    end
+    each x in g.b_rpo:
+        mut i := g.b_first[x]
+        until i >= 0:
+            if i != cm and uses_val(g, i, pv) and (x == b or not dominates(g, s, x)):
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
 func thread_cmp(g &: Ng, b: int, ph: int, cm: int, term: int): bool:
     pv := g.i_res[ph]
     cv := g.i_res[cm]
     k := g.i_b[cm]
-    if pv < 0 or cv < 0 or g.i_a[cm] != pv or g.i_a[term] != cv or g.v_uses[pv] != 1 or g.v_uses[cv] != 1 or not is_cint(g, k):
+    if pv < 0 or cv < 0 or g.i_a[cm] != pv or g.i_a[term] != cv or g.v_uses[cv] != 1 or not is_cint(g, k):
         ret false
     end
     tb := g.i_b[term]
     fb := g.i_c[term]
     if tb == b or fb == b or tb == fb:
         ret false
+    end
+    mut only := 0 - 1
+    if g.v_uses[pv] != 1:
+        tside := phi_uses_under(g, b, pv, cm, tb)
+        fside := phi_uses_under(g, b, pv, cm, fb)
+        if tside:
+            only = fb
+        else fside:
+            only = tb
+        else:
+            ret false
+        end
     end
     t := g.v_ty[pv]
     mut changed := false
@@ -1674,7 +1702,7 @@ func thread_cmp(g &: Ng, b: int, ph: int, cm: int, term: int): bool:
             pt2 := g.b_last[p2]
             if pt2 >= 0:
                 tgt := eval_icmp(g, t, g.i_x[cm], g.v_i[v], g.v_i[k]) ? tb : fb
-                if can_add_edge(g, tgt, b, p2, pv, v):
+                if (only < 0 or tgt == only) and can_add_edge(g, tgt, b, p2, pv, v):
                     add_edge_phis(g, tgt, b, p2, pv, v)
                     replace_succ(g, pt2, b, tgt)
                     g.pool[ps + 2 * q + 1] = 0 - 1
@@ -1766,6 +1794,7 @@ end
 
 func thread_jumps(g &: Ng): bool:
     count_uses(g)
+    build_dom(g)
     repl_grow(g)
     mut changed := false
     each b in g.b_rpo:
@@ -2275,7 +2304,9 @@ func optimize(g &: Ng):
             opt_rounds(g)
         end
     end
+    mut gch := false
     if not g.off_gvn and gvn(g):
+        gch = true
         mut cfg0 := false
         count_uses(g)
         if fold_pass(g, cfg0):
@@ -2294,6 +2325,16 @@ func optimize(g &: Ng):
         da1 := dead_allocas(g)
         if sc1 or da1 or af1:
             opt_rounds(g)
+        end
+    end
+    if not g.off_lsf and local_store_fwd(g):
+        opt_rounds(g)
+    end
+    if gch and not g.off_unroll:
+        mut nu3 := 0
+        until nu3 < 8 and unroll_loops(g):
+            opt_rounds(g)
+            nu3 += 1
         end
     end
     if not g.off_lle:
@@ -2348,7 +2389,9 @@ func optimize(g &: Ng):
     if not g.off_slp:
         _v := slp(g)
     end
+    mut gch2 := false
     if not g.off_gvn and gvn(g):
+        gch2 = true
         mut cfg2 := false
         count_uses(g)
         if fold_pass(g, cfg2):
@@ -2363,6 +2406,28 @@ func optimize(g &: Ng):
     if not g.off_aload:
         _sc2 := agg_scalarize(g)
         _da2 := dead_allocas(g)
+    end
+    if gch2 and not g.off_unroll:
+        mut nu4 := 0
+        until nu4 < 8 and unroll_loops(g):
+            opt_rounds(g)
+            nu4 += 1
+        end
+        if nu4 > 0 and not g.off_lsf and local_store_fwd(g):
+            opt_rounds(g)
+        end
+        if nu4 > 0 and gvn(g):
+            mut cfg4 := false
+            count_uses(g)
+            if fold_pass(g, cfg4):
+                remap_all(g)
+            end
+            if cfg4:
+                ensure_terms(g)
+                build_cfg(g)
+                simplify_phis(g)
+            end
+        end
     end
     if not g.off_mlp and merge_load_phis(g):
         mut cfg3 := false

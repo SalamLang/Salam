@@ -186,9 +186,9 @@ A new option `--linker=auto|builtin|system`:
   `x86_64-linux-musl`, every `link` directive names a static archive or
   object, and no framework is requested; otherwise it picks `system`.
 
-`auto` now picks `builtin` for both x86-64 Linux flavours whenever every
-input is found (static for musl, a PIE for glibc), and `system` otherwise,
-for example for Windows targets. `SALAM_LINKER` sets the default mode, which
+`auto` now picks `builtin` whenever every input is found: static for
+x86-64 musl, a PIE for x86-64 glibc, and a PE for x86-64 Windows. It falls
+back to `system` otherwise. `SALAM_LINKER` sets the default mode, which
 is how the test runner forces one or the other.
 
 ## Code layout
@@ -317,6 +317,75 @@ The same differential method as phase 1: every test linked by `cc` and by
 the built-in linker, outputs compared, plus `readelf --dyn-syms -V -d` and
 `LD_DEBUG=bindings` checks on a few binaries to confirm each symbol binds to
 the same library and version as with `cc`.
+
+## Phase 3: PE executables for Windows
+
+Status: implemented in `nl_coff.salam` (COFF objects, COMDAT, weak
+externals, commons) and `nl_pe.salam` (grouped section layout, linker
+symbols, base relocations, PE32+ writer). With the built-in linker,
+`tools/bash/native-windows-check.sh` passes all 111 programs under wine and
+the 42 benchmarks built with `--release` produce the same output as on
+Linux, so `--linker=auto` uses it for `x86_64-w64-windows-gnu`. The mingw
+files come from the user's library paths, the compiler's sysroot (embedded
+in release builds, or the download cache), then `/usr/x86_64-w64-mingw32`.
+
+The goal is the same as on Linux: `--target=x86_64-w64-windows-gnu` builds
+need no mingw `gcc`, only the mingw-w64 runtime libraries.
+
+### What mingw `gcc` links
+
+For one of our objects the link is `crt2.o crtbegin.o <object> -lmingw32
+-lgcc -lgcc_eh -lmoldname -lmingwex -lmsvcrt -lkernel32 -ladvapi32 -lshell32
+-luser32 ... crtend.o`, laid out by the default script `i386pep.x`.
+
+### PE inputs
+
+- **COFF objects** (`machine 0x8664`): section table with long names in the
+  string table (`/123`), 18-byte symbols with auxiliary records, 10-byte
+  relocations whose addend is stored in the section bytes.
+- **Archives** use the same GNU `ar` format as on Linux.
+- **Import libraries** in the mingw-w64 tree are long-form `dlltool`
+  objects: a head object with the `.idata$2` descriptor, one object per
+  symbol (`.idata$4` lookup entry, `.idata$5` IAT slot, `.idata$6`
+  hint/name, `.idata$7` name pointer, and a `jmp` thunk in `.text`), and a
+  tail with the DLL name. The linker needs no import synthesis; sorting the
+  grouped `.idata$N` sections produces a valid import table. Short import
+  members (as written by LLVM tools) are a later addition.
+- **COMDAT** sections (`IMAGE_SCN_LNK_COMDAT`) keep the first definition
+  of their leader symbol; associative COMDATs follow their leader.
+- **Weak externals** (storage class 105) fall back to their default symbol.
+- **Common symbols** are allocated in `.bss` with the largest size seen,
+  unless the linker defines the name itself (`__CTOR_LIST__`).
+- `.drectve`, `.debug$*` and other `IMAGE_SCN_LNK_REMOVE` sections are
+  dropped.
+
+### PE layout
+
+Following `i386pep.x`, image base `0x140000000`, section alignment `0x1000`,
+file alignment `0x200`:
+
+| Section | Contents |
+|---|---|
+| `.text` | `.text`, sorted `.text$*`, `.text.*` |
+| `.data` | `.data`, sorted `.data$*` |
+| `.rdata` | `.rdata`, sorted `.rdata$*`, the pseudo-relocation list, the `-1`/`0` framed `.ctors` and `.dtors` lists, then `.CRT$XC*`, `$XI*`, `$XL*`, `$XP*`, `$XT*`, `$XD*` with their `___crt_x*_start__`/`_end__` symbols |
+| `.pdata`, `.xdata` | unwind data, data directory 3 |
+| `.bss` | `.bss` and commons |
+| `.idata` | `$2`, five zero words, `$4`, `$5` (the IAT, data directory 12), `$6`, `$7` |
+| `.tls` | `.tls$AAA` ... `.tls$ZZZ`; `_tls_used` becomes data directory 9 |
+| `.reloc` | base relocations for every `ADDR64` (dynamic base) |
+
+Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
+`REL32_1` to `REL32_5`, `SECTION`, `SECREL` (for TLS). Entry point
+`mainCRTStartup`; console subsystem; `DYNAMIC_BASE`, `NX_COMPAT`,
+`HIGH_ENTROPY_VA`; stack reserve as the backend requests (Windows reserves
+only 1 MB by default, see `NATIVE_BACKEND.md`).
+
+### Testing the PE linker
+
+`tools/bash/native-windows-check.sh` already cross-builds 111 programs and
+runs them under wine. It runs once with each linker; outputs must match, and
+`x86_64-w64-mingw32-objdump -p` must show the same imports.
 
 ## Later phases
 

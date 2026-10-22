@@ -278,6 +278,107 @@ func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
     ret 0
 end
 
+func mingw_dirs(o: lv.Options): Vector<str>:
+    mut d := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        d.push(lp)
+    end
+    if str.Len(o.sysroot) > 0:
+        d.push(o.sysroot + "/lib")
+        d.push(o.sysroot + "/x86_64-w64-mingw32/lib")
+    end
+    base := cache_root() + "/salam/sysroots"
+    names := os.ListDir(base)
+    each nm in names:
+        if str.StartsWith(nm, "x86_64-w64-mingw32_") and os.Exists(base + "/" + nm + "/lib/crt2.o"):
+            d.push(base + "/" + nm + "/lib")
+        end
+    end
+    names.free()
+    d.push("/usr/x86_64-w64-mingw32/lib")
+    gcc := "/usr/lib/gcc/x86_64-w64-mingw32"
+    vers := os.ListDir(gcc)
+    mut best := ""
+    each v in vers:
+        if os.Exists(gcc + "/" + v + "/crtbegin.o") and str.Compare(v, best) > 0:
+            best = v
+        end
+    end
+    vers.free()
+    if str.Len(best) > 0:
+        d.push(gcc + "/" + best)
+    end
+    ret d
+end
+
+func mingw_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    if not str.Contains(triple, "x86_64") or not (str.Contains(triple, "windows") or str.Contains(triple, "mingw")):
+        why = co.Format1(i18.Tr("the built-in linker handles x86_64-linux-musl only, not '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    dirs := mingw_dirs(o)
+    each need in ["crt2.o", "crtbegin.o", "crtend.o", "libmingw32.a", "libgcc.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a"]:
+        if str.Len(find_in(dirs, need)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
+            ret false
+        end
+    end
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        if str.Len(mingw_lib(dirs, spec)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func mingw_lib(dirs: Vector<str>, spec: str): str:
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o") or str.EndsWith(spec, ".obj") or str.EndsWith(spec, ".lib"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-"):
+        ret ""
+    end
+    mut r := find_in(dirs, "lib" + spec + ".a")
+    if str.Len(r) == 0:
+        r = find_in(dirs, "lib" + spec + ".dll.a")
+    end
+    ret r
+end
+
+func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
+    dirs := mingw_dirs(o)
+    mut l := nl.New()
+    nl.SetWindows(l)
+    nl.AddInput(l, find_in(dirs, "crt2.o"))
+    nl.AddInput(l, find_in(dirs, "crtbegin.o"))
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        nl.AddInput(l, mingw_lib(dirs, spec))
+    end
+    each lib in ["libmingw32.a", "libgcc.a", "libgcc_eh.a", "libmoldname.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a", "libuser32.a"]:
+        path := find_in(dirs, lib)
+        if str.Len(path) > 0:
+            nl.AddInput(l, path)
+        end
+    end
+    nl.AddInput(l, find_in(dirs, "crtend.o"))
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
 func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
     mut lerr := ""
     lrc := lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
@@ -364,11 +465,14 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
     else:
         mut why := ""
         musl := str.Contains(triple, "linux-musl")
+        winx := str.Contains(triple, "windows") or str.Contains(triple, "mingw")
         mut can := false
         if str.Equals(mode, "system"):
             can = false
         else musl:
             can = builtin_link_ok(triple, o, why)
+        else winx:
+            can = mingw_link_ok(triple, o, why)
         else:
             can = glibc_link_ok(triple, o, why)
         end
@@ -377,6 +481,8 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
             rc = 1
         else can and musl:
             rc = native_link_builtin(lgr, obj, exe, o)
+        else can and winx:
+            rc = native_link_mingw(lgr, obj, exe, o)
         else can:
             rc = native_link_glibc(lgr, obj, exe, o)
         else:

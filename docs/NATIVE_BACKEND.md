@@ -366,6 +366,7 @@ Not there yet:
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
   There is no AVX code path.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
-- The built-in linker (see `NATIVE_LINKER.md`) covers x86-64 Linux: static
-  musl executables and glibc PIEs. Windows builds still use mingw `gcc` or
-  lld.
+- The built-in linker (see `NATIVE_LINKER.md`) links every supported
+  target itself (static musl, glibc PIE, Windows PE), so a native build needs
+  no outside tool beyond the C runtime files. It does not write DWARF line
+  tables or `.eh_frame_hdr` yet.

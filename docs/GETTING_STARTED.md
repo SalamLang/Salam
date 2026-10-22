@@ -239,7 +239,8 @@ Import them as usual (`import db.redis`) after adding them to the project:
 salam add db.redis
 ```
 
-`salam add` downloads the official packages that match your compiler's
+`salam add db.redis@v0.5.6` pins another release's copy instead. `salam
+add` downloads the official packages that match your compiler's
 version (`salam-packages-<version>.tar.gz` from its release) into
 `~/.salam/pkg/salam-packages@v<version>/` and records the package in
 `salam.toml` and `salam.lock`. `salam update` moves them to the compiler you
@@ -314,12 +315,17 @@ salam build --lib            # libNAME.so, libNAME.dylib, or NAME.dll + libNAME.
 salam build --lib=static     # libNAME.a
 ```
 
+Both backends build libraries. The C backend is the default; `--backend=llvm`
+(or a `--target` build with no cross `--cc`) produces the object with LLVM and
+links it with `cc -shared` (or archives it for `--lib=static`). A Windows DLL
+also gets `NAME.def` and, when `llvm-dlltool` is installed, an MSVC import
+library `NAME.lib`, next to the mingw `libNAME.dll.a`.
+
 The functions in the entry file's `export:` block become the library's C API,
 under their own names, and `NAME.h` is written next to the library with their
 prototypes. No `main` is needed: the runtime and the package's globals are
 set up when the library is loaded. A Windows DLL can be built from Linux with
-`--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`. Library builds go
-through a C compiler, whichever backend is the default.
+`--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`.
 
 More examples live in [`tests/en/`](../tests/en/).
 

@@ -9,6 +9,7 @@ const SYN_BSS := 0 - 15
 const SYN_END := 0 - 16
 const SYN_EHDR := 0 - 17
 const SYN_ZERO := 0 - 18
+const SYN_DYNAMIC := 0 - 19
 
 func synth(l &: Nl, s: str, kind: int):
     g := glob_find(l, s)
@@ -25,11 +26,19 @@ func resolve(l &: Nl):
         changed = false
         mut g := 0
         until g < l.g_name.len() and l.ok:
-            if l.g_state[g] == SY_UNDEF and l.g_strongref[g]:
-                e := ar_first_of(l, l.g_name[g])
-                if e >= 0 and not l.ar_loaded[e]:
+            if l.g_state[g] == SY_UNDEF:
+                nm := l.g_name[g]
+                e := l.g_strongref[g] ? ar_first_of(l, nm) : 0 - 1
+                sl := l.dynamic ? sd_of(l, nm) : 0 - 1
+                if e >= 0 and not l.ar_loaded[e] and (sl < 0 or l.ar_file[e] < l.sl_file[sl]):
                     ar_load(l, e)
                     changed = true
+                else sl >= 0:
+                    l.g_state[g] = SY_SHARED
+                    l.g_lib[g] = sl
+                    l.g_ver[g] = l.sd_ver[nm]
+                    l.g_stype[g] = l.sd_type[nm]
+                    l.sl_used[sl] = true
                 end
             end
             g += 1
@@ -46,7 +55,12 @@ func resolve(l &: Nl):
     synth(l, "__bss_start", SYN_BSS)
     synth(l, "_end", SYN_END)
     synth(l, "__ehdr_start", SYN_EHDR)
-    synth(l, "_DYNAMIC", SYN_ZERO)
+    if l.dynamic:
+        synth(l, "_DYNAMIC", SYN_DYNAMIC)
+        synth(l, "__dso_handle", SYN_EHDR)
+    else:
+        synth(l, "_DYNAMIC", SYN_ZERO)
+    end
     mut missing := ""
     mut nmiss := 0
     repeat l.g_name.len() in k:

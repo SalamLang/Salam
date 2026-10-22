@@ -180,6 +180,104 @@ func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int
     ret 0
 end
 
+func glibc_dirs(o: lv.Options): Vector<str>:
+    mut d := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        d.push(lp)
+    end
+    each s in ["/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64", "/lib64", "/usr/local/lib", "/usr/lib", "/lib"]:
+        d.push(s)
+    end
+    ret d
+end
+
+func find_in(dirs: Vector<str>, name: str): str:
+    each dd in dirs:
+        if os.Exists(dd + "/" + name):
+            ret dd + "/" + name
+        end
+    end
+    ret ""
+end
+
+func glibc_lib(dirs: Vector<str>, spec: str, kind: str): str:
+    if str.EndsWith(spec, ".a") or str.EndsWith(spec, ".o") or str.Contains(spec, ".so"):
+        ret spec
+    end
+    if str.StartsWith(spec, "-") or str.Equals(kind, "framework"):
+        ret ""
+    end
+    if not str.Equals(kind, "static"):
+        so := find_in(dirs, "lib" + spec + ".so")
+        if str.Len(so) > 0:
+            ret so
+        end
+    end
+    ret find_in(dirs, "lib" + spec + ".a")
+end
+
+func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
+    if str.Len(triple) > 0 and not (str.Contains(triple, "x86_64") and str.Contains(triple, "linux-gnu")):
+        why = co.Format1(i18.Tr("the built-in linker handles x86_64-linux-musl only, not '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC:
+        why = co.Format1(i18.Tr("the built-in linker handles x86_64-linux-musl only, not '%s'"), co.ArgStr(triple))
+        ret false
+    end
+    dirs := glibc_dirs(o)
+    each need in ["Scrt1.o", "crti.o", "crtn.o", "libc.so"]:
+        if str.Len(find_in(dirs, need)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
+            ret false
+        end
+    end
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "c"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(glibc_lib(dirs, spec, kind)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
+    end
+    ret true
+end
+
+func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
+    dirs := glibc_dirs(o)
+    mut l := nl.New()
+    nl.SetDynamic(l, "")
+    nl.AddInput(l, find_in(dirs, "Scrt1.o"))
+    nl.AddInput(l, find_in(dirs, "crti.o"))
+    nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := o.link_libs.get(i)
+        if str.Len(spec) == 0 or str.Equals(spec, "c") or str.Equals(spec, "m") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        nl.AddInput(l, glibc_lib(dirs, spec, kind))
+    end
+    nl.AddInput(l, find_in(dirs, "libm.so"))
+    nl.AddInput(l, find_in(dirs, "libc.so"))
+    nl.AddInput(l, find_in(dirs, "crtn.o"))
+    if not nl.Link(l, exe):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
 func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
     mut lerr := ""
     lrc := lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
@@ -256,18 +354,31 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
     exe = exe_name_for(exe, triple)
     _pl := pf.Begin(pf.TP_LINK, exe)
     mut rc := 0
-    mode := opt.linker
+    mut mode := opt.linker
+    if str.Equals(mode, "auto") and str.Len(os.Env("SALAM_LINKER")) > 0:
+        mode = os.Env("SALAM_LINKER")
+    end
     if not str.Equals(mode, "auto") and not str.Equals(mode, "builtin") and not str.Equals(mode, "system"):
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown --linker value '%s'; use auto, builtin or system"), co.ArgStr(mode)))
         rc = 2
     else:
         mut why := ""
-        can := builtin_link_ok(triple, o, why)
+        musl := str.Contains(triple, "linux-musl")
+        mut can := false
+        if str.Equals(mode, "system"):
+            can = false
+        else musl:
+            can = builtin_link_ok(triple, o, why)
+        else:
+            can = glibc_link_ok(triple, o, why)
+        end
         if str.Equals(mode, "builtin") and not can:
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
             rc = 1
-        else can and not str.Equals(mode, "system"):
+        else can and musl:
             rc = native_link_builtin(lgr, obj, exe, o)
+        else can:
+            rc = native_link_glibc(lgr, obj, exe, o)
         else:
             rc = native_link(lgr, obj, exe, triple, o)
         end

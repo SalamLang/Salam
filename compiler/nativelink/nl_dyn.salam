@@ -1,0 +1,217 @@
+package nativelink
+
+func sd_of(l &: Nl, name: int): int:
+    if name < 0 or name >= l.sd_lib.len():
+        ret 0 - 1
+    end
+    ret l.sd_lib[name]
+end
+
+func sd_set(l &: Nl, name: int, lib: int, ver: int, ty: int):
+    until l.sd_lib.len() <= name:
+        l.sd_lib.push(0 - 1)
+        l.sd_ver.push(0 - 1)
+        l.sd_type.push(0)
+    end
+    if l.sd_lib[name] < 0:
+        l.sd_lib[name] = lib
+        l.sd_ver[name] = ver
+        l.sd_type[name] = ty
+    end
+end
+
+func base_name(path: str): str:
+    n := str.Len(path)
+    p := (path as void*) as u8*
+    mut i := n - 1
+    until i >= 0 and p[i] != (47 as u8):
+        i -= 1
+    end
+    ret str.Substr(path, i + 1, n - i - 1)
+end
+
+func add_shlib(l &: Nl, f: int, asneeded: bool):
+    p := fptr(l, f)
+    if rd16(p, 18 as i64) != 62 or p[4] != (2 as u8):
+        nl_fail(l, l.f_name[f] + ": not an x86-64 shared library")
+        ret
+    end
+    shoff := rd64(p, 0x28 as i64)
+    shnum := rd16(p, 0x3C as i64)
+    mut dsym := 0 - 1
+    mut vsym := 0 - 1
+    mut vdef := 0 - 1
+    mut dyns := 0 - 1
+    repeat shnum in i:
+        ty := rd32(p, shoff + ((i * 64) as i64) + (4 as i64))
+        if ty == (11 as i64): dsym = i end
+        if ty == (0x6fffffff as i64): vsym = i end
+        if ty == (0x6ffffffd as i64): vdef = i end
+        if ty == (6 as i64): dyns = i end
+    end
+    if dsym < 0:
+        nl_fail(l, l.f_name[f] + ": shared library has no dynamic symbol table")
+        ret
+    end
+    sh := shoff + ((dsym * 64) as i64)
+    ds_off := rd64(p, sh + (24 as i64))
+    ds_n := (rd64(p, sh + (32 as i64)) / (24 as i64)) as int
+    strsec := rd32(p, sh + (40 as i64)) as int
+    str_off := rd64(p, shoff + ((strsec * 64) as i64) + (24 as i64))
+    lim := l.f_size[f]
+    mut vnames := Vector {} as Vector<int>
+    if vdef >= 0:
+        mut off := rd64(p, shoff + ((vdef * 64) as i64) + (24 as i64))
+        mut guard := 0
+        until guard < 4096:
+            guard += 1
+            ndx := rd16(p, off + (4 as i64))
+            aux := rd32(p, off + (12 as i64))
+            nxt := rd32(p, off + (16 as i64))
+            no := str_off + rd32(p, off + aux)
+            nm := nt_find(l.names, p, no, cstr_len(p, no, lim), true)
+            until vnames.len() <= ndx:
+                vnames.push(0 - 1)
+            end
+            vnames[ndx] = nm
+            if nxt == (0 as i64):
+                break
+            end
+            off = off + nxt
+        end
+    end
+    lib := l.sl_file.len()
+    mut soname := base_name(l.f_name[f])
+    if dyns >= 0:
+        doff := rd64(p, shoff + ((dyns * 64) as i64) + (24 as i64))
+        dn := (rd64(p, shoff + ((dyns * 64) as i64) + (32 as i64)) / (16 as i64)) as int
+        repeat dn in k:
+            tag := rd64(p, doff + ((16 * k) as i64))
+            if tag == (14 as i64):
+                so := str_off + rd64(p, doff + ((16 * k) as i64) + (8 as i64))
+                sid := nt_find(l.names, p, so, cstr_len(p, so, lim), true)
+                soname = name_of(l, sid)
+            end
+        end
+    end
+    l.sl_file.push(f)
+    l.sl_soname.push(soname)
+    l.sl_asneeded.push(asneeded)
+    l.sl_used.push(false)
+    vs_off := vsym >= 0 ? rd64(p, shoff + ((vsym * 64) as i64) + (24 as i64)) : (0 - 1 as i64)
+    mut i2 := 1
+    until i2 < ds_n:
+        e := ds_off + ((i2 * 24) as i64)
+        info := rd8(p, e + (4 as i64))
+        bind := info >> 4
+        shndx := rd16(p, e + (6 as i64))
+        no2 := str_off + rd32(p, e)
+        ln := cstr_len(p, no2, lim)
+        if bind != 0 and ln > 0:
+            nm2 := nt_find(l.names, p, no2, ln, true)
+            if shndx != 0:
+                mut ver := 1
+                if vs_off >= (0 as i64):
+                    ver = rd16(p, vs_off + ((2 * i2) as i64))
+                end
+                if (ver & 0x8000) == 0:
+                    vi := ver & 0x7fff
+                    mut vn := 0 - 1
+                    if vi >= 2 and vi < vnames.len():
+                        vn = vnames[vi]
+                    end
+                    sd_set(l, nm2, lib, vn, info & 15)
+                end
+            else:
+                l.sl_undef.push(nm2)
+            end
+        end
+        i2 += 1
+    end
+    vnames.free()
+end
+
+func add_input_as(l &: Nl, path: str, asneeded: bool):
+    if not l.ok:
+        ret
+    end
+    f := read_file(l, path)
+    if f < 0:
+        ret
+    end
+    p := fptr(l, f)
+    if l.f_size[f] >= (8 as i64) and p[0] == (33 as u8) and p[1] == (60 as u8) and p[2] == (97 as u8):
+        l.f_arch[f] = true
+        ar_index(l, f)
+        ret
+    end
+    if l.f_size[f] >= (20 as i64) and p[0] == (127 as u8) and rd16(p, 16 as i64) == 3:
+        add_shlib(l, f, asneeded)
+        ret
+    end
+    if l.f_size[f] >= (4 as i64) and p[0] != (127 as u8):
+        add_script(l, f)
+        ret
+    end
+    add_object(l, f, 0 as i64, l.f_size[f], path)
+end
+
+func add_script(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    mut i := 0 as i64
+    mut asn := 0
+    mut depth := 0
+    mut asn_depth := 0 - 1
+    mut paths := Vector {} as Vector<str>
+    mut flags := Vector {} as Vector<bool>
+    until i < n and l.ok:
+        c := p[i] as int
+        if c == 47 and i + (1 as i64) < n and p[i + (1 as i64)] == (42 as u8):
+            i = i + (2 as i64)
+            until i + (1 as i64) < n and not (p[i] == (42 as u8) and p[i + (1 as i64)] == (47 as u8)):
+                i = i + (1 as i64)
+            end
+            i = i + (2 as i64)
+            continue
+        end
+        if c == 40:
+            depth += 1
+            i = i + (1 as i64)
+            continue
+        end
+        if c == 41:
+            if depth == asn_depth:
+                asn -= 1
+                asn_depth = 0 - 1
+            end
+            depth -= 1
+            i = i + (1 as i64)
+            continue
+        end
+        if c == 32 or c == 9 or c == 10 or c == 13 or c == 44:
+            i = i + (1 as i64)
+            continue
+        end
+        start := i
+        until i < n and p[i] != (32 as u8) and p[i] != (9 as u8) and p[i] != (10 as u8) and p[i] != (13 as u8) and p[i] != (40 as u8) and p[i] != (41 as u8) and p[i] != (44 as u8):
+            i = i + (1 as i64)
+        end
+        ln := (i - start) as int
+        tok := nt_find(l.names, p, start, ln, true)
+        if name_is(l, tok, "AS_NEEDED"):
+            asn += 1
+            asn_depth = depth + 1
+        else p[start] == (47 as u8):
+            paths.push(name_of(l, tok))
+            flags.push(asn > 0)
+        else name_starts(l, tok, "-l"):
+            nl_fail(l, l.f_name[f] + ": linker script option '" + name_of(l, tok) + "' is not supported")
+        end
+    end
+    repeat paths.len() in k:
+        add_input_as(l, paths.get(k), flags.get(k))
+    end
+    paths.free()
+    flags.free()
+end

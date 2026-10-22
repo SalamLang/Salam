@@ -186,8 +186,10 @@ A new option `--linker=auto|builtin|system`:
   `x86_64-linux-musl`, every `link` directive names a static archive or
   object, and no framework is requested; otherwise it picks `system`.
 
-`auto` starts out meaning `system` until the gates below are green, then
-flips in a separate commit.
+`auto` now picks `builtin` for both x86-64 Linux flavours whenever every
+input is found (static for musl, a PIE for glibc), and `system` otherwise,
+for example for Windows targets. `SALAM_LINKER` sets the default mode, which
+is how the test runner forces one or the other.
 
 ## Code layout
 
@@ -221,6 +223,13 @@ the in-memory object hand-off:
   and for the self-hosted compiler.
 
 ## Phase 2: dynamic executables against glibc
+
+Status: implemented in `nl_dyn.salam` (shared libraries, linker scripts,
+versions) and `nl_dynout.salam` (PLT, GOT, dynamic relocations, `.dynamic`,
+`.gnu.hash`, version tables). With `--backend=native` the whole suite passes
+when every program is linked this way (1309 of 1309, including the sqlite
+tests that load a system `.so`), so `--linker=auto` uses it on x86-64 Linux.
+`.eh_frame_hdr` is not written yet; nothing in the runtime unwinds.
 
 This is the phase that removes `cc` from ordinary Linux builds, including
 programs that link system shared libraries (sqlite, database clients).

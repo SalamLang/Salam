@@ -366,6 +366,6 @@ Not there yet:
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
   There is no AVX code path.
 - x86-64 only. aarch64 would reuse everything up to instruction selection.
-- The built-in linker (see `NATIVE_LINKER.md`) covers static
-  `x86_64-linux-musl` executables. Dynamic glibc executables and Windows
-  still use the system linker or lld.
+- The built-in linker (see `NATIVE_LINKER.md`) covers x86-64 Linux: static
+  musl executables and glibc PIEs. Windows builds still use mingw `gcc` or
+  lld.

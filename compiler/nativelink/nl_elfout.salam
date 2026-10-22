@@ -57,6 +57,7 @@ func oc_label(c: int): str:
         OC_DATA: ret ".data" end
         OC_GOT: ret ".got" end
         OC_BSS: ret ".bss" end
+        OC_DATAREL: ret ".data.rel.ro" end
     end
     ret ".unknown"
 end
@@ -89,6 +90,21 @@ func sym_entry(l &: Nl, os: int): bool:
     ret true
 end
 
+func dyn_shdrs(l &: Nl, sh &: Vector<u8>, sh_names &: Vector<u8>, n &: int):
+    ix_dynsym := n + 2
+    ix_dynstr := n + 3
+    shdr(sh, tb_cstr(sh_names, ".interp"), 1, 2, l.ds_addr[DS_INTERP], l.ds_off[DS_INTERP], l.ds_size[DS_INTERP], 0, 0, 1 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.hash"), 0x6ffffff6, 2, l.ds_addr[DS_GHASH], l.ds_off[DS_GHASH], l.ds_size[DS_GHASH], ix_dynsym, 0, 8 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynsym"), 11, 2, l.ds_addr[DS_DYNSYM], l.ds_off[DS_DYNSYM], l.ds_size[DS_DYNSYM], ix_dynstr, 1, 8 as i64, 24 as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynstr"), 3, 2, l.ds_addr[DS_DYNSTR], l.ds_off[DS_DYNSTR], l.ds_size[DS_DYNSTR], 0, 0, 1 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.version"), 0x6fffffff, 2, l.ds_addr[DS_VERSYM], l.ds_off[DS_VERSYM], l.ds_size[DS_VERSYM], ix_dynsym, 0, 2 as i64, 2 as i64)
+    shdr(sh, tb_cstr(sh_names, ".gnu.version_r"), 0x6ffffffe, 2, l.ds_addr[DS_VERNEED], l.ds_off[DS_VERNEED], l.ds_size[DS_VERNEED], ix_dynstr, l.vn_count, 8 as i64, 0 as i64)
+    shdr(sh, tb_cstr(sh_names, ".rela.dyn"), 4, 2, l.ds_addr[DS_RELA], l.ds_off[DS_RELA], l.ds_size[DS_RELA], ix_dynsym, 0, 8 as i64, 24 as i64)
+    shdr(sh, tb_cstr(sh_names, ".plt"), 1, 6, l.ds_addr[DS_PLT], l.ds_off[DS_PLT], l.ds_size[DS_PLT], 0, 0, 16 as i64, 16 as i64)
+    shdr(sh, tb_cstr(sh_names, ".dynamic"), 6, 3, l.ds_addr[DS_DYNAMIC], l.ds_off[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], ix_dynstr, 0, 8 as i64, 16 as i64)
+    n = n + 9
+end
+
 func build_tail(l &: Nl, tail &: Vector<u8>, shoff &: i64, shnum &: int, shstr &: int):
     mut idx := Vector {} as Vector<int>
     repeat OC_COUNT:
@@ -109,11 +125,14 @@ func build_tail(l &: Nl, tail &: Vector<u8>, shoff &: i64, shnum &: int, shstr &
         if c == OC_INITARR: ty = 14 end
         if c == OC_FINIARR: ty = 15 end
         if c == OC_INIT or c == OC_TEXT or c == OC_FINI: fl = 6 end
-        if c >= OC_INITARR: fl = 3 end
+        if c >= OC_INITARR and c != OC_PLT: fl = 3 end
         nm := tb_cstr(sh_names, oc_label(c))
         shdr(sh, nm, ty, fl, l.oc_addr[c], c == OC_BSS ? l.file_size : l.oc_fpos[c], l.oc_size[c], 0, 0, l.oc_align[c], (c == OC_INITARR or c == OC_FINIARR or c == OC_GOT) ? (8 as i64) : (0 as i64))
         idx[c] = n
         n += 1
+    end
+    if l.dynamic:
+        dyn_shdrs(l, sh, sh_names, n)
     end
     mut syms := Vector {} as Vector<u8>
     mut strs := Vector {} as Vector<u8>
@@ -184,7 +203,7 @@ func write_exe(l &: Nl, out: str):
     buf[4] = 2 as u8
     buf[5] = 1 as u8
     buf[6] = 1 as u8
-    wr32(buf, 16 as i64, (2 | (62 << 16)) as i64)
+    wr32(buf, 16 as i64, ((l.dynamic ? 3 : 2) | (62 << 16)) as i64)
     wr32(buf, 20 as i64, 1 as i64)
     wr64(buf, 24 as i64, l.entry)
     wr64(buf, 32 as i64, 64 as i64)
@@ -198,13 +217,26 @@ func write_exe(l &: Nl, out: str):
     wr64(buf, 40 as i64, shoff)
     wr32(buf, 48 as i64, 0 as i64)
     wr32(buf, 52 as i64, (64 | (56 << 16)) as i64)
-    wr32(buf, 56 as i64, (4 | (64 << 16)) as i64)
+    wr32(buf, 56 as i64, (l.nphdr | (64 << 16)) as i64)
     wr32(buf, 60 as i64, (shnum | (shstr << 16)) as i64)
-    ph := 64 as i64
+    mut ph := 64 as i64
+    if l.dynamic:
+        phdr(buf, ph, 6, 4, 64 as i64, l.base + (64 as i64), (56 * l.nphdr) as i64, (56 * l.nphdr) as i64, 8 as i64)
+        ph = ph + (56 as i64)
+        phdr(buf, ph, 3, 4, l.ds_off[DS_INTERP], l.ds_addr[DS_INTERP], l.ds_size[DS_INTERP], l.ds_size[DS_INTERP], 1 as i64)
+        ph = ph + (56 as i64)
+    end
     phdr(buf, ph, 1, 4, l.seg_fpos[0], l.seg_vaddr[0], l.seg_fsz[0], l.seg_msz[0], NL_PAGE as i64)
     phdr(buf, ph + (56 as i64), 1, 5, l.seg_fpos[1], l.seg_vaddr[1], l.seg_fsz[1], l.seg_msz[1], NL_PAGE as i64)
     phdr(buf, ph + (112 as i64), 1, 6, l.seg_fpos[2], l.seg_vaddr[2], l.seg_fsz[2], l.seg_msz[2], NL_PAGE as i64)
-    phdr(buf, ph + (168 as i64), 0x6474e551, 6, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 16 as i64)
+    ph = ph + (168 as i64)
+    if l.dynamic:
+        phdr(buf, ph, 2, 6, l.ds_off[DS_DYNAMIC], l.ds_addr[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], l.ds_size[DS_DYNAMIC], 8 as i64)
+        ph = ph + (56 as i64)
+        phdr(buf, ph, 0x6474e552, 4, l.relro_lo - l.base, l.relro_lo, l.relro_hi - l.relro_lo, l.relro_hi - l.relro_lo, 1 as i64)
+        ph = ph + (56 as i64)
+    end
+    phdr(buf, ph, 0x6474e551, 6, 0 as i64, 0 as i64, 0 as i64, 0 as i64, 16 as i64)
     f := fopen(out, "wb")
     if f == null:
         nl_fail(l, "cannot write " + out)

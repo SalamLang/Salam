@@ -28,11 +28,14 @@ const OC_FINIARR := 6
 const OC_DATA := 7
 const OC_GOT := 8
 const OC_BSS := 9
-const OC_COUNT := 10
+const OC_PLT := 10
+const OC_DATAREL := 11
+const OC_COUNT := 12
 
 const SY_UNDEF := 0
 const SY_DEF := 1
 const SY_ABS := 2
+const SY_SHARED := 3
 
 pub struct NlTab:
     pub slots: Vector<int> = Vector {}
@@ -88,6 +91,39 @@ pub struct Nl:
     pub os_type: Vector<int> = Vector {}
     pub os_size: Vector<i64> = Vector {}
     pub strip: bool = false
+    pub dynamic: bool = false
+    pub interp: str = "/lib64/ld-linux-x86-64.so.2"
+    pub sl_file: Vector<int> = Vector {}
+    pub sl_soname: Vector<str> = Vector {}
+    pub sl_asneeded: Vector<bool> = Vector {}
+    pub sl_used: Vector<bool> = Vector {}
+    pub sd_lib: Vector<int> = Vector {}
+    pub sd_ver: Vector<int> = Vector {}
+    pub sd_type: Vector<int> = Vector {}
+    pub sl_undef: Vector<int> = Vector {}
+    pub g_lib: Vector<int> = Vector {}
+    pub g_ver: Vector<int> = Vector {}
+    pub g_stype: Vector<int> = Vector {}
+    pub g_plt: Vector<int> = Vector {}
+    pub g_dyn: Vector<int> = Vector {}
+    pub plt_sym: Vector<int> = Vector {}
+    pub dyn_sym: Vector<int> = Vector {}
+    pub dyn_nimport: int = 0
+    pub rd_off: Vector<i64> = Vector {}
+    pub rd_type: Vector<int> = Vector {}
+    pub rd_sym: Vector<int> = Vector {}
+    pub rd_add: Vector<i64> = Vector {}
+    pub dsec: Vector<u8> = Vector {}
+    pub ds_off: Vector<i64> = Vector {}
+    pub ds_size: Vector<i64> = Vector {}
+    pub ds_addr: Vector<i64> = Vector {}
+    pub relro_lo: i64 = 0
+    pub relro_hi: i64 = 0
+    pub nphdr: int = 4
+    pub base: i64 = 0x400000
+    pub stat_dynrel: int = 0
+    pub vn_count: int = 0
+    pub dstr_keep: Dyn = Dyn {}
     pub g_name: Vector<int> = Vector {}
     pub g_state: Vector<int> = Vector {}
     pub g_weak: Vector<bool> = Vector {}
@@ -341,20 +377,18 @@ pub func Error(l &: Nl): str:
 end
 
 pub func AddInput(l &: Nl, path: str):
-    if not l.ok:
-        ret
+    add_input_as(l, path, false)
+end
+
+pub func AddInputAsNeeded(l &: Nl, path: str):
+    add_input_as(l, path, true)
+end
+
+pub func SetDynamic(l &: Nl, interp: str):
+    l.dynamic = true
+    if str.Len(interp) > 0:
+        l.interp = interp
     end
-    f := read_file(l, path)
-    if f < 0:
-        ret
-    end
-    p := fptr(l, f)
-    if l.f_size[f] >= (8 as i64) and p[0] == (33 as u8) and p[1] == (60 as u8) and p[2] == (97 as u8):
-        l.f_arch[f] = true
-        ar_index(l, f)
-        ret
-    end
-    add_object(l, f, 0 as i64, l.f_size[f], path)
 end
 
 pub func Link(l &: Nl, out: str): bool:
@@ -366,11 +400,23 @@ pub func Link(l &: Nl, out: str): bool:
         ret false
     end
     mark_live(l)
-    place_all(l)
+    if l.dynamic:
+        dyn_prepare(l)
+        if not l.ok:
+            ret false
+        end
+        place_dyn(l)
+    else:
+        place_all(l)
+    end
     if not l.ok:
         ret false
     end
-    apply_relocs(l)
+    if l.dynamic:
+        apply_dyn(l)
+    else:
+        apply_relocs(l)
+    end
     if not l.ok:
         ret false
     end

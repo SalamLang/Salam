@@ -37,6 +37,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_opt.salam`                                                     | Constant folding, block merging, jump threading, if-conversion, dead code elimination                                                                                       |
 | `ng_unroll.salam`                                                  | Fully unrolls small loops whose trip count is a constant                                                                                                                    |
 | `ng_licm.salam`                                                    | Loop discovery, preheaders, loop-invariant code motion, loop weights and live-range splitting for the allocator                                                             |
+| `ng_lpro.salam`                                                    | Promotes loop-invariant loads to registers, reloading after calls                                                                                                           |
 | `ng_lsr.salam`                                                     | Strength-reduces affine array addresses into pointer induction variables                                                                                                    |
 | `ng_gvn.salam`, `ng_slp.salam`                                     | Value numbering with redundant load elimination, and SLP vectorization                                                                                                      |
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
@@ -92,7 +93,11 @@ then goes through:
    and multiply loop over a constant exponent unrolls too.
 8. Loop-invariant code motion of pure instructions into loop preheaders, and
    of loads that no store in the loop can reach (by TBAA class) and that are
-   safe to run early: a field of a `&:` parameter or of a stack slot, and
+   safe to run early: a field of a `&:` parameter or of a stack slot. When
+   the only writers in the loop are calls, such a load is still hoisted and
+   reloaded right after each call, so a vector's data pointer stays in a
+   register on the paths that do not call (the recursive `solve` in N-queens).
+   Then comes
    unswitching: an innermost loop that branches on a loop-invariant condition
    is versioned into one copy per outcome. Compares, remainders and
    divisions are folded when the value range of their operand decides them:
@@ -219,7 +224,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

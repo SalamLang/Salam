@@ -20,6 +20,12 @@ import tempfile
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
+def read_text(path):
+    """Read a UTF-8 file."""
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 def files_under(dirs, limit):
     out = []
     for d in dirs:
@@ -42,30 +48,54 @@ def run_one(exe, path, timeout):
         req = os.path.join(tmp, "req.json")
         snap = os.path.join(tmp, "snap.json")
         try:
-            text = open(path, encoding="utf-8").read()
+            text = read_text(path)
         except (OSError, UnicodeDecodeError) as e:
-            return path, "unreadable: %s" % e
+            return path, f"unreadable: {e}"
         with open(req, "w", encoding="utf-8") as f:
-            json.dump({"path": path, "text": text, "stdlib": os.path.join(ROOT, "std"), "out": snap}, f)
+            json.dump(
+                {
+                    "path": path,
+                    "text": text,
+                    "stdlib": os.path.join(ROOT, "std"),
+                    "out": snap,
+                },
+                f,
+            )
         try:
-            p = subprocess.run([exe, "lsp", "--analyze", req], capture_output=True, timeout=timeout)
+            p = subprocess.run(
+                [exe, "lsp", "--analyze", req],
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
         except subprocess.TimeoutExpired:
-            return path, "timeout after %ds" % timeout
+            return path, f"timeout after {timeout}s"
         if p.returncode != 0:
             err = (p.stderr.decode("utf-8", "replace").strip().splitlines() or [""])[-1]
-            return path, "exit %d: %s" % (p.returncode, err[:200])
+            return path, f"exit {p.returncode}: {err[:200]}"
         try:
-            data = json.load(open(snap, encoding="utf-8"))
+            data = json.loads(read_text(snap))
         except (OSError, ValueError) as e:
-            return path, "bad snapshot: %s" % e
+            return path, f"bad snapshot: {e}"
         wrong = mismatched_refs(text, data)
         if wrong:
-            return path, "%d reference(s) point at a name they do not spell, first: %s" % (len(wrong), wrong[0])
+            return (
+                path,
+                (
+                    f"{len(wrong)} reference(s) point at a name they do not spell, "
+                    f"first: {wrong[0]}"
+                ),
+            )
         return path, ""
 
 
 def squash(s):
-    return s.replace("\u200c", "").replace(" ", "").replace("\u064a", "\u06cc").replace("\u0643", "\u06a9")
+    return (
+        s.replace("\u200c", "")
+        .replace(" ", "")
+        .replace("\u064a", "\u06cc")
+        .replace("\u0643", "\u06a9")
+    )
 
 
 def mismatched_refs(text, data):
@@ -77,15 +107,17 @@ def mismatched_refs(text, data):
         if l1 != l2 or l1 >= len(lines):
             continue
         units = lines[l1].encode("utf-16-le")
-        spelled = units[c1 * 2:c2 * 2].decode("utf-16-le", "replace")
+        spelled = units[c1 * 2 : c2 * 2].decode("utf-16-le", "replace")
         d = decls[r["d"]] if r["d"] < len(decls) else {}
         name = d.get("name", "")
         doc = d.get("doc", "")
-        if squash(spelled) == squash(name) or ("`" + squash(spelled) + "`") in squash(doc):
+        if squash(spelled) == squash(name) or ("`" + squash(spelled) + "`") in squash(
+            doc
+        ):
             continue
         if name.startswith(spelled + "_") or name.endswith("_" + spelled):
             continue
-        out.append("%d:%d '%s' -> %s" % (l1 + 1, c1 + 1, spelled, name))
+        out.append(f"{l1 + 1}:{c1 + 1} '{spelled}' -> {name}")
     return out
 
 
@@ -105,8 +137,8 @@ def main():
         for path, problem in pool.map(lambda f: run_one(exe, f, a.timeout), files):
             if problem:
                 bad.append((path, problem))
-                print("FAIL %s: %s" % (os.path.relpath(path, ROOT), problem), flush=True)
-    print("RESULT: %d files, %d failed" % (len(files), len(bad)))
+                print(f"FAIL {os.path.relpath(path, ROOT)}: {problem}", flush=True)
+    print(f"RESULT: {len(files)} files, {len(bad)} failed")
     sys.exit(1 if bad else 0)
 
 

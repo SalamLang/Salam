@@ -110,63 +110,21 @@
       chips.classList.add("is-in");
     };
 
-    const phone = () =>
-      window.matchMedia && window.matchMedia("(max-width: 640px)").matches;
-    const lockPage = (on) => {
-      document.documentElement.classList.toggle("salamat-lock", on && phone());
-    };
-    const fit = () => {
-      const vv = window.visualViewport;
-      if (vv && phone() && salamat.classList.contains("is-open")) {
-        panel.style.height = `${vv.height}px`;
-        panel.style.top = `${vv.offsetTop}px`;
-        body.scrollTop = body.scrollHeight;
-      } else {
-        panel.style.height = "";
-        panel.style.top = "";
-      }
-    };
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", fit);
-      window.visualViewport.addEventListener("scroll", fit);
-    }
-    let pushed = false;
-    window.addEventListener("popstate", () => {
-      if (pushed && salamat.classList.contains("is-open")) {
-        pushed = false;
-        close();
-      }
-    });
-
     const open = (focus) => {
-      lockPage(true);
-      if (phone() && !pushed) {
-        history.pushState({ salamat: true }, "");
-        pushed = true;
-      }
       panel.hidden = false;
       teaser.hidden = true;
       salamat.classList.add("is-open");
       launcher.setAttribute("aria-expanded", "true");
       launcher.classList.add("is-seen");
-      requestAnimationFrame(() => {
-        panel.classList.add("is-shown");
-        fit();
-      });
+      requestAnimationFrame(() => panel.classList.add("is-shown"));
       play();
-      if (focus && !phone()) {
+      if (focus) {
         setTimeout(() => input.focus(), still ? 0 : 350);
       }
     };
     const close = () => {
-      lockPage(false);
-      if (pushed) {
-        pushed = false;
-        history.back();
-      }
       panel.classList.remove("is-shown");
       salamat.classList.remove("is-open");
-      fit();
       launcher.setAttribute("aria-expanded", "false");
       setTimeout(
         () => {

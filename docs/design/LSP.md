@@ -442,8 +442,8 @@ Kept small and optional; a client that ignores them loses nothing else.
 
 Every feature above works the same in a Persian file. Specifically:
 
-- **Language per file.** Detection follows `lx.Detect`: a `// lang: fa` /
-  `// زبان: فارسی` marker in the first 8 lines wins, then keyword counts.
+- **Language per file.** Detection follows `lx.Detect`: a `// زبان: فارسی`
+  or `// lang: en` marker in the first 8 lines wins, then keyword counts.
   Imported packages are detected on their own, as the compiler does.
 - **Messages in the user's language.** `initialize.locale` (or
   `salam.messages`) picks `en` or `fa` for diagnostic messages, hover text

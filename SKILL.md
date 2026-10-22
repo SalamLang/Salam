@@ -2378,6 +2378,9 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - **Language detection is automatic** from the keywords in the file; pass
   `--lang=fa` to force it (`salam build app.salam --lang=fa`). Diagnostics are
   printed in Persian for Persian files.
+- **Language directive:** a Persian file may state its language with
+  `// زبان: فارسی` in its first 8 lines; an English file uses `// lang: en`.
+  Mixed forms such as `// lang: fa` or `// زبان: en` are a compile error.
 - **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`.
   Its return value is the exit code, as in English (`برگشت ۱` to fail).
 - **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in

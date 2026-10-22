@@ -1,0 +1,119 @@
+package nativegen
+
+const IF_W8 := 16384
+
+func vop(g &: Ng, opc: int, dst: int, src: int):
+    m := e_rr(g, M_VOP_RR, 8, dst, src)
+    g.mc.cc[m] = opc
+end
+
+func vcopy(g &: Ng, v: int): int:
+    r := wide_reg(g)
+    _c := e_copy(g, r, use_reg(g, v))
+    ret r
+end
+
+func vint_opc(op: int, q: bool): int:
+    switch op:
+        OP_ADD: ret q ? 0xD4 : 0xFE end
+        OP_SUB: ret q ? 0xFB : 0xFA end
+        OP_AND: ret 0xDB end
+        OP_OR: ret 0xEB end
+        OP_XOR: ret 0xEF end
+    end
+    ret 0 - 1
+end
+
+func isel_vint_bin(g &: Ng, i: int):
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    q := g.t_elem[t] == T_I64
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
+        r := vcopy(g, g.i_a[i])
+        s := mi_new(g, M_VSHI, 16)
+        g.mc.r0[s] = r
+        g.mc.cc[s] = q ? 0x73 : 0x72
+        g.mc.sz2[s] = op == OP_SHL ? 6 : (op == OP_LSHR ? 2 : 4)
+        g.mc.imm[s] = g.v_i[g.i_b[i]]
+        set_res(g, i, r)
+        ret
+    end
+    r2 := vcopy(g, g.i_a[i])
+    vop(g, vint_opc(op, q), r2, use_reg(g, g.i_b[i]))
+    set_res(g, i, r2)
+end
+
+func vnot(g &: Ng, r: int):
+    ones := wide_reg(g)
+    _c := e_copy(g, ones, r)
+    vop(g, 0x76, ones, ones)
+    vop(g, 0xEF, r, ones)
+end
+
+func isel_vcmp(g &: Ng, i: int):
+    p := g.i_x[i]
+    mut a := g.i_a[i]
+    mut b := g.i_b[i]
+    if p == CC_SLT or p == CC_SGE:
+        tmp := a
+        a = b
+        b = tmp
+    end
+    r := vcopy(g, a)
+    if p == CC_EQ or p == CC_NE:
+        vop(g, 0x76, r, use_reg(g, b))
+    else:
+        vop(g, 0x66, r, use_reg(g, b))
+    end
+    if p == CC_NE or p == CC_SGE or p == CC_SLE:
+        vnot(g, r)
+    end
+    set_res(g, i, r)
+end
+
+func isel_vsel(g &: Ng, i: int):
+    m := g.i_a[i]
+    r := vcopy(g, m)
+    vop(g, 0xDB, r, use_reg(g, g.i_b[i]))
+    t := vcopy(g, m)
+    vop(g, 0xDF, t, use_reg(g, g.i_c[i]))
+    vop(g, 0xEB, r, t)
+    set_res(g, i, r)
+end
+
+func isel_vbcast_int(g &: Ng, i: int):
+    q := g.i_ty[i] == T_V2I64
+    rb := wide_reg(g)
+    _m := e_rr(g, M_MOVQ_XG, q ? 8 : 4, rb, use_reg(g, g.i_a[i]))
+    if q:
+        vop(g, 0x6C, rb, rb)
+    else:
+        s := e_rr(g, M_PSHUFD, 16, rb, rb)
+        g.mc.imm[s] = 0 as i64
+    end
+    set_res(g, i, rb)
+end
+
+func isel_vstore_w8(g &: Ng, i: int):
+    r := vcopy(g, g.i_a[i])
+    k := gpr(g)
+    _m := e_movi(g, k, 255 as i64)
+    mk := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, mk, k)
+    s := e_rr(g, M_PSHUFD, 16, mk, mk)
+    g.mc.imm[s] = 0 as i64
+    vop(g, 0xDB, r, mk)
+    vop(g, 0x6B, r, r)
+    vop(g, 0x67, r, r)
+    _st := e_mr(g, M_VST32, 4, mem_of(g, g.i_b[i], 0 as i64), r)
+end
+
+func isel_vload_w8(g &: Ng, i: int, m: Mem):
+    r := wide_reg(g)
+    _l := e_rm(g, M_VLD32, 4, r, m)
+    z := wide_reg(g)
+    _x := e_rr(g, M_XORPS, 8, z, z)
+    vop(g, 0x60, r, z)
+    vop(g, 0x61, r, z)
+    set_res(g, i, r)
+end

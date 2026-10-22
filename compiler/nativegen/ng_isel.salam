@@ -1140,6 +1140,36 @@ func res_used(g &: Ng, i: int): bool:
     ret v >= 0 and g.v_uses[v] > 0
 end
 
+func isel_vec_ins(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    t := g.i_ty[i]
+    vint := g.t_elem[t] == T_I32 or g.t_elem[t] == T_I64
+    if not res_used(g, i):
+        ret op != OP_LOAD and op != OP_PHI and op != OP_STORE
+    end
+    if vint and (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR or op == OP_SHL or op == OP_LSHR or op == OP_ASHR):
+        isel_vint_bin(g, i)
+        ret true
+    end
+    if op == OP_ICMP:
+        isel_vcmp(g, i)
+        ret true
+    end
+    if op == OP_SELECT and is_vec(g, g.v_ty[g.i_a[i]]):
+        isel_vsel(g, i)
+        ret true
+    end
+    if op == OP_VBCAST and vint:
+        isel_vbcast_int(g, i)
+        ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & IF_W8) != 0:
+        isel_vload_w8(g, i, mem_of(g, g.i_a[i], 0 as i64))
+        ret true
+    end
+    ret false
+end
+
 func isel_vint_add(g &: Ng, i: int):
     t := g.i_ty[i]
     ra := use_reg(g, g.i_a[i])
@@ -3054,6 +3084,10 @@ func isel_store(g &: Ng, i: int):
         end
         ret
     end
+    if is_vec(g, t) and (g.i_f[i] & IF_W8) != 0:
+        isel_vstore_w8(g, i)
+        ret
+    end
     atomic := (g.i_f[i] & IF_ATOMIC) != 0
     if g.v_kind[v] == VK_INT and not is_flt(g, t) and is_imm32(g.v_i[v]) and (not atomic or (g.i_f[i] & IF_SEQ) == 0):
         m2 := mem_of(g, p, 0 as i64)
@@ -3684,6 +3718,9 @@ end
 
 func isel_ins(g &: Ng, i: int, b: int):
     op := g.i_op[i]
+    if is_vec(g, g.i_ty[i]) and not g.skipi[i] and isel_vec_ins(g, i):
+        ret
+    end
     if g.skipi[i]:
         if op == OP_RET:
             _c := e_copy(g, RAX, g.retp)

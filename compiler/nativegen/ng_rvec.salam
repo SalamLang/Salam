@@ -211,7 +211,7 @@ func rv_transform(g &: Ng, r &: RvLoop):
             ins_before(g, pt, nn)
         end
     end
-    adj := r.pred == CC_SLT ? 1 - r.vf : 2 - r.vf
+    adj := r.pred == CC_SLT ? 1 - 2 * r.vf : 2 - 2 * r.vf
     li := ins_new(g, OP_ADD, T_I64)
     g.i_a[li] = lim64
     g.i_b[li] = const_int(g, T_I64, adj as i64)
@@ -228,6 +228,11 @@ func rv_transform(g &: Ng, r &: RvLoop):
     g.i_pcount[pa] = 2
     vacc := new_res(g, pa)
     ins_append(g, vh, pa)
+    pb := ins_new(g, OP_PHI, r.vty)
+    g.i_ps[pb] = g.pool.len() + 8
+    g.i_pcount[pb] = 2
+    vacc2 := new_res(g, pb)
+    ins_append(g, vh, pb)
     w := rv_wide(g, vh, viv, ivt)
     c := ins_new(g, OP_ICMP, T_I1)
     g.i_a[c] = w
@@ -259,7 +264,20 @@ func rv_transform(g &: Ng, r &: RvLoop):
     vlv := new_res(g, vl)
     ins_append(g, vb, vl)
     vsum := rv_emit(g, vb, OP_ADD, r.vty, vacc, vlv)
-    vnext := rv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, r.vf as i64))
+    na2 := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[na2] = g.i_a[oa]
+    g.i_b[na2] = idx
+    g.i_x[na2] = g.i_x[oa]
+    g.i_d[na2] = g.i_d[oa] + ((r.vf * g.i_x[oa]) as i64)
+    nav2 := new_res(g, na2)
+    ins_append(g, vb, na2)
+    vl2 := ins_new(g, OP_LOAD, r.vty)
+    g.i_a[vl2] = nav2
+    g.i_c[vl2] = g.i_c[r.load_i]
+    vlv2 := new_res(g, vl2)
+    ins_append(g, vb, vl2)
+    vsum2 := rv_emit(g, vb, OP_ADD, r.vty, vacc2, vlv2)
+    vnext := rv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, (2 * r.vf) as i64))
     g.i_f[g.v_def[vnext]] = IF_NSW
     bj := ins_new(g, OP_BR, T_VOID)
     g.i_b[bj] = vh
@@ -272,8 +290,13 @@ func rv_transform(g &: Ng, r &: RvLoop):
     g.pool.push(pre)
     g.pool.push(vsum)
     g.pool.push(vb)
+    g.pool.push(new_val(g, VK_ZERO, r.vty, 0 as i64))
+    g.pool.push(pre)
+    g.pool.push(vsum2)
+    g.pool.push(vb)
+    vboth := rv_emit(g, rb, OP_ADD, r.vty, vacc, vacc2)
     hs := ins_new(g, OP_VREDADD, acct)
-    g.i_a[hs] = vacc
+    g.i_a[hs] = vboth
     hv := new_res(g, hs)
     ins_append(g, rb, hs)
     acc0 := rv_emit(g, rb, OP_ADD, acct, init_acc, hv)

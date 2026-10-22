@@ -83,10 +83,13 @@ recursive. Each function then goes through:
    and multiply loop over a constant exponent unrolls too.
 8. Loop-invariant code motion of pure instructions into loop preheaders, and
    unswitching: an innermost loop that branches on a loop-invariant condition
-   is versioned into one copy per outcome. Compares on a counter are folded
-   when the counter's range inside its loop decides them.
+   is versioned into one copy per outcome. Compares, remainders and
+   divisions are folded when the value range of their operand decides them:
+   inside `until i < 4000000:` the remainder `(i + 1) % 1000000007` is just
+   `i + 1`.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
-   `paddd` loop followed by the scalar loop for the leftover elements, and a
+   `paddd` loop with two accumulators followed by the scalar loop for the
+   leftover elements, and a
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree.
    A demanded-bits pass drops masks whose cleared bits no later instruction

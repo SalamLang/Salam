@@ -389,6 +389,150 @@ def english(t, s):
     t.check("en: workspace symbols", [x["name"] for x in w] == ["label"], str(w)[:200])
 
 
+def apply_edits(text, edits):
+    """Apply LSP text edits (UTF-16 positions) to text."""
+    starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            starts.append(i + 1)
+
+    def offset(p):
+        line = p["line"]
+        if line >= len(starts):
+            return len(text)
+        i = starts[line]
+        units = 0
+        while units < p["character"] and i < len(text) and text[i] != "\n":
+            units += utf16_len(text[i])
+            i += 1
+        return i
+
+    spans = sorted(
+        (
+            (offset(e["range"]["start"]), offset(e["range"]["end"]), e["newText"])
+            for e in edits
+        ),
+        reverse=True,
+    )
+    for b, e, new in spans:
+        text = text[:b] + new + text[e:]
+    return text
+
+
+def fixes_for(s, uri, text):
+    """Open text as uri and return {title: edited text} for every quick fix."""
+    s.notify(
+        "textDocument/didOpen",
+        {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "salam",
+                "version": 1,
+                "text": text,
+            }
+        },
+    )
+    d = s.diagnostics(uri)
+    out = {}
+    for diag in d["diagnostics"]:
+        acts = s.request(
+            "textDocument/codeAction",
+            {
+                "textDocument": {"uri": uri},
+                "range": diag["range"],
+                "context": {"diagnostics": [diag]},
+            },
+        )["result"]
+        for a in acts:
+            edits = a.get("edit", {}).get("changes", {}).get(uri, [])
+            out[a["title"]] = apply_edits(text, edits)
+    s.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+    return out, d["diagnostics"]
+
+
+QF_SEMA = """import math
+
+struct P:
+    x: int = 0
+end
+
+func main:
+    mut count := 1
+    println count
+    unused := 2
+    println cuont
+    p := P { }
+    println p.x
+    println json.Encode(1)
+end
+"""
+
+QF_PARSE = [
+    (
+        "let",
+        "func main:\n    let total = 5\n    println total\nend\n",
+        "Write 'name := value'",
+        "    total := 5\n",
+    ),
+    (
+        "var",
+        "func main:\n    var total = 5\n    total = 6\n    println total\nend\n",
+        "Write 'mut name := value'",
+        "    mut total := 5\n",
+    ),
+    (
+        "return",
+        "func two(): int:\n    return 2\nend\n\nfunc main:\n    println two()\nend\n",
+        "Write 'ret'",
+        "    ret 2\n",
+    ),
+    (
+        "while",
+        "func main:\n    mut n := 3\n    while n > 0:\n        n -= 1\n    end\nend\n",
+        "Write 'until'",
+        "    until n > 0:\n",
+    ),
+    (
+        "elif",
+        "func main:\n    n := 3\n    if n > 5:\n        println 1\n    elif n > 2:\n        println 2\n    end\nend\n",
+        "Write 'else'",
+        "    else n > 2:\n",
+    ),
+    (
+        "for",
+        "func main:\n    v := [1, 2]\n    for x in v:\n        println x\n    end\nend\n",
+        "Write 'each'",
+        "    each x in v:\n",
+    ),
+]
+
+
+def quick_fixes(t, s):
+    base = os.path.join(ROOT, "tests", "lsp", "qf")
+    got, diags = fixes_for(s, uri_of(os.path.join(base, "sema.salam")), QF_SEMA)
+    seen = str(sorted(got)) + json.dumps(diags)[:300]
+    want = [
+        ("unused mut", "Remove 'mut'", "    count := 1\n"),
+        ("unused variable", "Prefix the name with '_'", "    _unused := 2\n"),
+        ("did you mean", "Change to 'count'", "    unused := 2\n    println count\n"),
+        ("private field", "Add 'pub'", "    pub x: int = 0\n"),
+        (
+            "missing import",
+            "Add 'import encoding.json'",
+            "import math\nimport encoding.json\n",
+        ),
+    ]
+    for name, title, sub in want:
+        t.check("fix: " + name, title in got and sub in got[title], seen)
+    for name, text, title, sub in QF_PARSE:
+        got, diags = fixes_for(s, uri_of(os.path.join(base, name + ".salam")), text)
+        t.check(
+            "fix: foreign '" + name + "'",
+            title in got and sub in got[title],
+            str(sorted(got)) + json.dumps(diags)[:300],
+        )
+
+
 def persian(t, s):
     text = read_text(FA)
     uri = uri_of(FA)
@@ -467,6 +611,14 @@ def persian(t, s):
         "fa: Persian diagnostics",
         any("دودوی" in m and "تابع" in m for m in msgs),
         json.dumps(msgs, ensure_ascii=False)[:300],
+    )
+    fa_text = "تابع ریشه:\n    ناپایا شمارنده := 1\n    سرچاپ شمارنده\nپایان\n"
+    got, diags = fixes_for(s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "fa.salam")), fa_text)
+    title = "حذف 'ناپایا'"
+    t.check(
+        "fa: the fix is titled and spelled in Persian",
+        title in got and "    شمارنده := 1\n" in got[title],
+        str(sorted(got)) + json.dumps(diags, ensure_ascii=False)[:300],
     )
 
 
@@ -709,7 +861,7 @@ def project(t, exe):
     titles = [a["title"] for a in acts]
     t.check(
         "proj: quick fix for a foreign keyword",
-        "Replace 'while' with 'until'" in titles,
+        "Write 'until'" in titles,
         str(titles) + json.dumps(d["diagnostics"])[:200],
     )
 
@@ -846,6 +998,7 @@ def main():
     )
     s.notify("initialized", {})
     english(t, s)
+    quick_fixes(t, s)
     interfaces(t, s)
     package(t, s)
     s.request("shutdown", None)

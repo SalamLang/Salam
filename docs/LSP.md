@@ -29,7 +29,7 @@ salam lsp --version
 | Semantic highlighting, including multi-word Persian names | `semanticTokens/full` |
 | Folding for blocks, comments and imports | `foldingRange` |
 | Formatting through the compiler's formatter, and indent after `:` | `formatting`, `rangeFormatting`, `onTypeFormatting` |
-| Quick fixes: did-you-mean, remove a `mut` that is never reassigned, prefix an unused name with `_`, and rewrite `while`, `return`, `elif`, `def`, `class`, `let` and `var` into Salam | `codeAction` |
+| Quick fixes from the compiler itself: did-you-mean for names, fields and methods, add the missing `import`, remove an unused import, remove a `mut` that is never reassigned, prefix an unused name with `_`, add `pub` to a private field or method (in its own file), and rewrite `while`, `return`, `elif`, `for ... in`, `def`, `class`, `let` and `var` into Salam, spelled in the file's language | `codeAction` |
 | Smart selection | `selectionRange` |
 
 Messages follow the editor's language: a Persian (`fa`) locale gets Persian

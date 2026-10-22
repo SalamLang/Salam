@@ -943,6 +943,91 @@ func peephole_round(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>): bool:
     ret changed
 end
 
+func flags_dead_after(g &: Ng, i: int): bool:
+    n := g.mc.op.len()
+    mut j := i + 1
+    until j < n and j < i + 64:
+        op := g.mc.op[j]
+        if op == M_JCC or op == M_CMOV or op == M_SETCC:
+            ret false
+        end
+        if op == M_ALU_RR or op == M_ALU_RI or op == M_ALU_RM or op == M_ALU_MR or op == M_ALU_MI or op == M_TEST_RR or op == M_TEST_RI or op == M_UCOMI:
+            ret true
+        end
+        if op == M_CALL or op == M_CALLR or op == M_RET or op == M_JMP or op == M_LABEL:
+            ret true
+        end
+        if not (op == M_NOP or op == M_COPY or op == M_MOV_RR or op == M_MOV_RI or op == M_LD or op == M_LDZX or op == M_LDSX or op == M_ST or op == M_STI or op == M_LEA or op == M_FMOV_RR or op == M_FLD or op == M_FST or op == M_VLD or op == M_VST or op == M_MOVZX_RR or op == M_MOVSX_RR):
+            ret false
+        end
+        j += 1
+    end
+    ret false
+end
+
+func xor_zero(g &: Ng):
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] == M_MOV_RI and g.mc.imm[i] == (0 as i64) and (g.mc.sz[i] == 4 or g.mc.sz[i] == 8) and g.mc.r0[i] >= 0 and g.mc.r0[i] < 16 and flags_dead_after(g, i):
+            g.mc.op[i] = M_ALU_RR
+            g.mc.cc[i] = ALU_XOR
+            g.mc.sz[i] = 4
+            g.mc.r1[i] = g.mc.r0[i]
+            g.mc.mk[i] = MK_NONE
+        end
+    end
+end
+
+func share_epilogue(g &: Ng):
+    if g.os == NG_OS_WINDOWS:
+        ret
+    end
+    if g.mc.fpo and ngp_count(g) == 0 and g.mc.fpo_pad == 0:
+        ret
+    end
+    n := g.mc.op.len()
+    mut last := 0 - 1
+    mut cnt := 0
+    repeat n in i:
+        if g.mc.op[i] == M_RET:
+            last = i
+            cnt += 1
+        end
+    end
+    if cnt < 2:
+        ret
+    end
+    lbl := new_label(g)
+    li := e_label(g, lbl)
+    repeat n in i2:
+        if g.mc.op[i2] == M_RET and i2 != last:
+            g.mc.op[i2] = M_JMP
+            g.mc.tgt[i2] = lbl
+        end
+    end
+    mut ord := Vector {} as Vector<int>
+    repeat n in i3:
+        if i3 == last:
+            ord.push(li)
+        end
+        ord.push(i3)
+    end
+    perm_int(g.mc.op, ord)
+    perm_int(g.mc.sz, ord)
+    perm_int(g.mc.sz2, ord)
+    perm_int(g.mc.r0, ord)
+    perm_int(g.mc.r1, ord)
+    perm_i64(g.mc.imm, ord)
+    perm_int(g.mc.mk, ord)
+    perm_int(g.mc.mb, ord)
+    perm_int(g.mc.mi, ord)
+    perm_int(g.mc.ms, ord)
+    perm_i64(g.mc.md, ord)
+    perm_int(g.mc.msym, ord)
+    perm_int(g.mc.cc, ord)
+    perm_int(g.mc.tgt, ord)
+    ord.free()
+end
+
 func peephole_jumps(g &: Ng):
     mut refs := Vector {} as Vector<int>
     mut lpos := Vector {} as Vector<int>
@@ -1231,12 +1316,14 @@ end
 
 func encode_function(g &: Ng):
     if g.opt:
+        share_epilogue(g)
         rotate_loops(g)
     end
     peephole_jumps(g)
     if g.opt:
         rotate_loops(g)
         peephole_jumps(g)
+        xor_zero(g)
     end
     mut e := Enc {}
     n := g.mc.op.len()

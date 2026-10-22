@@ -244,6 +244,9 @@ salam add github.com/owner/repo           # newest release, or @v1.2.0
 salam remove github.com/owner/repo
 salam update [github.com/owner/repo]      # move to the newest release
 salam deps                                # download what salam.lock lists, verify checksums
+salam install github.com/owner/tool       # build a program's main.salam into ~/.salam/bin
+salam install                             # the same for the project you are in
+salam search websocket                    # standard library and registry/index.toml
 ```
 
 A local package can stand in for a remote one with

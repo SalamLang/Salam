@@ -275,3 +275,192 @@ func pkg_deps_cmd(opt &: dr.Dr): int:
     end
     ret 0
 end
+
+func pkg_bin_dir(): str:
+    e := os.Env("SALAM_BIN")
+    if str.Len(e) > 0:
+        ret e
+    end
+    mut h := os.Env("HOME")
+    if str.Len(h) == 0 and SALAM_OS_WINDOWS:
+        h = os.Env("USERPROFILE")
+    end
+    ret pth.PathJoin(pth.PathJoin(h, ".salam"), "bin")
+end
+
+func pkg_exe_name(name: str): str:
+    if SALAM_OS_WINDOWS:
+        ret name + ".exe"
+    else:
+        ret name
+    end
+end
+
+func pkg_build_release(opt &: dr.Dr, dir: str, out: str): int:
+    mut b := dr.NewOptions()
+    b.command = dr.CMD_BUILD
+    b.inputs.push(dir)
+    b.input = dir
+    b.output = out
+    b.safe = false
+    b.stdlib_path = opt.stdlib_path
+    b.log_level = opt.log_level
+    b.color = opt.color
+    if opt.cc_explicit:
+        b.cc = opt.cc
+        b.cc_explicit = true
+        b.backend = opt.backend
+    end
+    ret dr.Build(b)
+end
+
+func pkg_install_here(opt &: dr.Dr): int:
+    root := pkg_project_root()
+    if str.Len(root) == 0:
+        ret 2
+    end
+    mut fetched := 0
+    mut why := ""
+    if not pm.Sync(root, fetched, why):
+        ret pkg_fail(why)
+    end
+    bin := pkg_bin_dir()
+    if os.MkdirAll(bin) != 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(bin)))
+        ret 1
+    end
+    name := pth.PathBase(pth.PathTrimSep(root))
+    out := pth.PathJoin(bin, pkg_exe_name(name))
+    rc := pkg_build_release(opt, root, out)
+    if rc != 0:
+        ret rc
+    end
+    println co.Format2(i18.Tr("installed %s to %s"), co.ArgStr(name), co.ArgStr(out))
+    ret 0
+end
+
+func pkg_install_one(opt &: dr.Dr, arg: str): int:
+    mut name := ""
+    mut ver := ""
+    pkg_split_version(arg, name, ver)
+    if not pm.IsPathImport(name):
+        io.EPrintln(co.Format1(i18.Tr("salam: 'install' takes a program by its repository, for example github.com/owner/tool ('%s')"), co.ArgStr(name)))
+        ret 2
+    end
+    mod := pm.ModuleOf(name)
+    mut why := ""
+    mut commit := ""
+    if str.Len(ver) == 0 or str.Equals(ver, "latest"):
+        ver = pm.LatestVersion(mod, commit, why)
+        if str.Len(ver) == 0:
+            ret pkg_fail(why)
+        end
+    end
+    if not pm.Fetch(mod, ver, commit, why):
+        ret pkg_fail(why)
+    end
+    sub := str.TrimPrefix(str.TrimPrefix(name, mod), "/")
+    tmp := pth.PathJoin(os.TempDir(), "salam-install-" + str.FromInt(os.Pid() as i64))
+    _rm0 := os.RemoveAll(tmp)
+    if os.CopyTree(pm.VersionDir(mod, ver), tmp) != 0:
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(tmp)))
+        ret 1
+    end
+    mut work := tmp
+    if str.Len(sub) > 0:
+        work = pth.PathJoin(tmp, sub)
+    end
+    if not os.Exists(pth.PathJoin(work, "main.salam")):
+        _rm1 := os.RemoveAll(tmp)
+        io.EPrintln(co.Format1(i18.Tr("salam: '%s' has no main.salam, so there is no program to install; use it from a project with salam add"), co.ArgStr(name)))
+        ret 2
+    end
+    if os.Exists(pth.PathJoin(tmp, "salam.toml")):
+        mut ok := false
+        if os.Exists(pth.PathJoin(tmp, "salam.lock")):
+            mut fetched := 0
+            ok = pm.Sync(tmp, fetched, why)
+        else:
+            ok = pm.Resolve(tmp, why)
+        end
+        if not ok:
+            _rm2 := os.RemoveAll(tmp)
+            ret pkg_fail(why)
+        end
+        pm.SetProjectRoot(tmp)
+    end
+    bin := pkg_bin_dir()
+    if os.MkdirAll(bin) != 0:
+        _rm3 := os.RemoveAll(tmp)
+        io.EPrintln(co.Format1(i18.Tr("salam: cannot create directory '%s'"), co.ArgStr(bin)))
+        ret 1
+    end
+    out := pth.PathJoin(bin, pkg_exe_name(pth.PathBase(name)))
+    here := os.Cwd()
+    _cd := os.Chdir(work)
+    rc := pkg_build_release(opt, ".", out)
+    _back := os.Chdir(here)
+    _rm4 := os.RemoveAll(tmp)
+    if rc != 0:
+        ret rc
+    end
+    println co.Format3(i18.Tr("installed %s %s to %s"), co.ArgStr(name), co.ArgStr(ver), co.ArgStr(out))
+    path_env := os.Env("PATH")
+    if not str.Contains(path_env, bin):
+        println co.Format1(i18.Tr("  %s is not on PATH yet; add it to run the program by name"), co.ArgStr(bin))
+    end
+    ret 0
+end
+
+func pkg_install_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        ret pkg_install_here(opt)
+    end
+    repeat opt.inputs.len() in i:
+        rc := pkg_install_one(opt, opt.inputs.get(i))
+        if rc != 0:
+            ret rc
+        end
+    end
+    ret 0
+end
+
+func pkg_search_cmd(opt &: dr.Dr): int:
+    if opt.inputs.len() == 0:
+        io.EPrintln(i18.Tr("salam: 'search' needs a word, for example: salam search websocket"))
+        ret 2
+    end
+    mut q := ""
+    repeat opt.inputs.len() in i:
+        if i > 0:
+            q = q + " "
+        end
+        q = q + opt.inputs.get(i)
+    end
+    mut found := 0
+    mut stdhits := Vector {} as Vector<str>
+    defer stdhits.free()
+    pm.SearchStd(sm.GetStdlibRoot(), q, stdhits)
+    repeat stdhits.len() in s:
+        println co.Format1(i18.Tr("%s  (standard library, import it directly)"), co.ArgStr(stdhits.get(s)))
+        found += 1
+    end
+    mut reg := Vector {} as Vector<pm.RegEntry>
+    defer reg.free()
+    mut why := ""
+    if not pm.LoadRegistry(reg, why):
+        io.EPrintln("salam: " + why)
+    end
+    repeat reg.len() in r:
+        e := reg.get(r)
+        if pm.Matches(e, q):
+            println e.name + "  " + e.description
+            found += 1
+        end
+    end
+    if found == 0:
+        println co.Format1(i18.Tr("no package matches '%s'"), co.ArgStr(q))
+        ret 1
+    end
+    ret 0
+end

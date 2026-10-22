@@ -1039,6 +1039,32 @@ func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): b
     ret false
 end
 
+func fwd_head(g &: Ng, li: int, body &: Vector<int>, jc &: int): bool:
+    n := g.mc.op.len()
+    body.clear()
+    mut j := li + 1
+    until j < n:
+        op := g.mc.op[j]
+        if op == M_NOP or op == M_COPY:
+            j += 1
+            continue
+        end
+        if op == M_JCC:
+            break
+        end
+        if not dup_ok(op) or body.len() >= 4:
+            ret false
+        end
+        body.push(j)
+        j += 1
+    end
+    if j >= n or g.mc.op[j] != M_JCC:
+        ret false
+    end
+    jc = j
+    ret true
+end
+
 func in_loop_of(g &: Ng, t: int, h: int): bool:
     if t < 0 or t >= g.b_lp.len():
         ret false
@@ -1066,13 +1092,47 @@ func rotate_loops(g &: Ng):
     end
     mut ord := Vector {} as Vector<int>
     mut body := Vector {} as Vector<int>
+    mut pend_at := Vector {} as Vector<int>
+    mut pend_ins := Vector {} as Vector<int>
     mut any := false
     repeat n in i2:
+        repeat pend_at.len() in pq:
+            if pend_at[pq] == i2:
+                ord.push(pend_ins[pq])
+                pend_at[pq] = 0 - 1
+            end
+        end
         op := g.mc.op[i2]
         if op == M_JMP and g.mc.tgt[i2] < lpos.len():
             li := lpos[g.mc.tgt[i2]]
             mut jc := 0 - 1
             mut fy := 0 - 1
+            if li > i2 and fwd_head(g, li, body, jc) and body.len() <= 3 and g.mc.tgt[jc] != g.mc.tgt[i2]:
+                k := next_real(g, jc)
+                mut fl := 0 - 1
+                mut q := jc + 1
+                until q < k:
+                    if g.mc.op[q] == M_LABEL:
+                        fl = g.mc.tgt[q]
+                    end
+                    q += 1
+                end
+                if fl < 0 and k < n:
+                    fl = new_label(g)
+                    pend_at.push(k)
+                    pend_ins.push(e_label(g, fl))
+                end
+                if fl >= 0 and fl != g.mc.tgt[i2]:
+                    each bf in body:
+                        ord.push(bf)
+                    end
+                    ord.push(jc)
+                    ord.push(mi_dup(g, i2))
+                    g.mc.tgt[ord[ord.len() - 1]] = fl
+                    any = true
+                    continue
+                end
+            end
             if li >= 0 and li < i2 and rotate_head(g, li, body, jc, fy) and g.mc.tgt[jc] != g.mc.tgt[i2] and fy != g.mc.tgt[i2]:
                 each b in body:
                     ord.push(b)
@@ -1118,6 +1178,8 @@ func rotate_loops(g &: Ng):
     lpos.free()
     ord.free()
     body.free()
+    pend_at.free()
+    pend_ins.free()
 end
 
 func emit_nops(g &: Ng, n: int):
@@ -1172,6 +1234,10 @@ func encode_function(g &: Ng):
         rotate_loops(g)
     end
     peephole_jumps(g)
+    if g.opt:
+        rotate_loops(g)
+        peephole_jumps(g)
+    end
     mut e := Enc {}
     n := g.mc.op.len()
     repeat g.mc.nlabels:

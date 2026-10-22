@@ -157,7 +157,8 @@ ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
 allocator can spill the long outer range and keep the loop copy in a register.
 Copy-related values that both spill share one stack slot. The encoder rotates small loop headers into the latch so
-loops are bottom-tested, and aligns loop heads to 16 bytes. An innermost loop
+loops are bottom-tested, copies a short loop test into a branch arm that
+would otherwise jump to it, and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
 otherwise it gets 32-byte alignment.
 

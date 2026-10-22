@@ -211,7 +211,11 @@ the quotient and the remainder and uses the 32-bit `div` when both 64-bit
 operands fit. Register allocation is linear scan over exact live
 ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
-allocator can spill the long outer range and keep the loop copy in a register. After rewriting, a reload of a spill slot into the scratch register that
+allocator can spill the long outer range and keep the loop copy in a register.
+The reverse case is handled before instruction selection: a value computed in
+a loop that contains a call and is still used after the loop's single exit is
+copied at that exit, so its loop range is short enough to stay in a register
+(a vector's data pointer during a `push` loop). After rewriting, a reload of a spill slot into the scratch register that
 already holds it (with no write to the slot or the register in between) is
 dropped.
 Copy-related values that both spill share one stack slot. When vector
@@ -254,7 +258,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -225,6 +225,25 @@ salam page build            # main.salam if present, else EVERY layout
 A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
 
+### 🧩 Official packages
+
+Some packages are maintained with Salam but do not ship with it, so a fresh
+install stays small: `db.redis`, `db.meilisearch`, `db.elasticsearch`,
+`db.typesense` and `db.opensearch` so far. Their source lives in
+[`packages/`](../packages/). Import them as usual (`import db.redis`) after
+adding them to the project:
+
+```sh
+salam add db.redis
+```
+
+`salam add` downloads the official packages that match your compiler's
+version (`salam-packages-<version>.tar.gz` from its release) into
+`~/.salam/pkg/salam-packages@v<version>/` and records the package in
+`salam.toml` and `salam.lock`. `salam update` moves them to the compiler you
+are running now. In a source checkout, `packages/` next to `std/` is used
+directly, and `$SALAM_PACKAGES` points at another copy.
+
 ### 📦 Packages from GitHub
 
 A package outside the standard library is named by its repository and

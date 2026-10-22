@@ -414,6 +414,11 @@ for (let i = 0; i < 60; i += 1) {
   await new Promise((r) => setTimeout(r, 500));
 }
 check("the guest gets the assistant's answer", guestAnswer.status === "done" && guestAnswer.body.startsWith("Echo: guest hello"), guestAnswer);
+const guestStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=${firstGuestBody.guest}&lang=en`, { headers: { Origin: "https://www.salamlang.ir" } });
+const guestStreamText = await guestStream.text();
+check("a guest answer streams as server-sent events", guestStream.status === 200 && guestStream.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && guestStreamText.includes("event: done") && guestStreamText.includes("Echo: guest hello"), guestStreamText.slice(0, 300));
+const strangerStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=not-the-right-token-at-all`);
+check("another guest cannot stream the answer", strangerStream.status === 404);
 const strangerPoll = await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=not-the-right-token-at-all`);
 check("another guest cannot read the answer", strangerPoll.status === 404);
 const guestPreflight = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://www.salamlang.ir", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,x-salam-lang" } });

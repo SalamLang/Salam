@@ -9,6 +9,7 @@ include i18 "../i18n.salam"
 include co "../sal_core.salam"
 include sm "../semantic/semantic.salam"
 include pm "../pkgmgr/pkgmgr.salam"
+include pth "../sal_path.salam"
 
 func pkg_project_root(): str:
     root := pm.FindProjectRoot(".")
@@ -39,12 +40,54 @@ func pkg_in_std(name: str): bool:
     ret str.Len(p) > 0 and os.Exists(p)
 end
 
+func pkg_prepare_native(dir: str): bool:
+    mut natives := Vector {} as Vector<pm.Native>
+    defer natives.free()
+    if not pm.ReadNativeAll(dir, natives):
+        ret true
+    end
+    mut cc := "cc"
+    if SALAM_OS_WINDOWS:
+        cc = "gcc"
+    end
+    repeat natives.len() in i:
+        n := natives.get(i)
+        if pm.SystemHas(n, cc):
+            println co.Format1(i18.Tr("  native library '%s': found on this system"), co.ArgStr(n.link))
+            continue
+        end
+        if n.sources.len() > 0:
+            mut objs := Vector {} as Vector<str>
+            defer objs.free()
+            mut extra := Vector {} as Vector<str>
+            defer extra.free()
+            mut why := ""
+            if not pm.NativeObjects(n, dir, cc, extra, objs, why):
+                io.EPrintln("salam: " + why)
+                ret false
+            end
+            println co.Format1(i18.Tr("  native library '%s': not installed, built from source and cached"), co.ArgStr(n.link))
+            continue
+        end
+        io.EPrintln(co.Format1(i18.Tr("the native library '%s' is not installed on this system"), co.ArgStr(n.link)))
+        hint := pm.NativeHint(n)
+        if str.Len(hint) > 0:
+            io.EPrintln("  install it with: " + hint)
+        end
+        ret false
+    end
+    ret true
+end
+
 func pkg_check_name(name: str): int:
     if pm.IsPathImport(name):
         ret 0
     end
     if pkg_in_std(name):
         println co.Format2(i18.Tr("'%s' is part of the standard library; use it with: import %s"), co.ArgStr(name), co.ArgStr(name))
+        if not pkg_prepare_native(pth.PathDir(sm.ResolveImport("", str.Replace(name, ".", "/")))):
+            ret 3
+        end
         ret 1
     end
     io.EPrintln(co.Format1(i18.Tr("salam: unknown package '%s'; a package outside the standard library is named by its repository, for example github.com/owner/repo"), co.ArgStr(name)))
@@ -76,6 +119,8 @@ func pkg_add_cmd(opt &: dr.Dr): int:
             end
             names.push(n0)
             vers.push(v0)
+        else chk == 3:
+            ret 1
         else chk != 1:
             ret chk
         end

@@ -211,10 +211,13 @@ Loads of internal globals that the module never writes (how llvmgen emits a
 `const`) fold to their initializer, and so do small copies out of constant
 strings, so `println "hello"` stores the bytes as immediates. Instruction selection folds address
 arithmetic into memory operands, folds a
-single-use load into the ALU instruction or compare that consumes it, loads a
+single-use load into the ALU instruction or compare that consumes it, turns a
+load, an add/sub/and/or/xor and a store back to the same address into one
+`add [mem], reg` (or immediate), loads a
 32-bit value with `movslq` when it is also sign-extended (the low half serves
 the 32-bit uses), ties a commutative floating-point add or multiply to the
-operand that dies there (and squares `x * x` in one register), ties a `cmov`
+operand that dies there (and squares `x * x` in one register), ties an
+integer multiply to a freshly loaded operand that dies there, ties a `cmov`
 to the operand that dies there by inverting the condition, turns
 `x & 0xffffffff` into a 32-bit `mov`, emits `ror` for
 `(x >> n) | (x << (bits - n))` (also with `^` or `+`) and `rol %cl` for the
@@ -279,7 +282,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

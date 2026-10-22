@@ -79,9 +79,13 @@ func isel_init(g &: Ng):
     g.phit.clear()
     g.skipi.clear()
     g.sret_to.clear()
+    g.rmw_of.clear()
+    g.rmw_v.clear()
     repeat g.i_op.len():
+        g.rmw_v.push(0 - 1)
         g.phit.push(0 - 1)
         g.skipi.push(false)
+        g.rmw_of.push(0 - 1)
         g.sret_to.push(0 - 1)
     end
     count_uses(g)
@@ -1279,8 +1283,14 @@ func isel_bin(g &: Ng, i: int):
             mi := e_rr(g, M_IMUL_RRI, sz, r, ra)
             g.mc.imm[mi] = g.v_i[b]
         else:
-            move_into(g, r, a)
-            rb := use_reg(g, b)
+            mut ma := a
+            mut mb := b
+            if not g.off_mtie and dies_here(g, b, i) and not dies_here(g, a, i) and g.i_op[g.v_def[b]] == OP_LOAD:
+                ma = b
+                mb = a
+            end
+            move_into(g, r, ma)
+            rb := use_reg(g, mb)
             _m := e_rr(g, M_IMUL_RR, sz, r, rb)
         end
         set_res(g, i, r)
@@ -2717,6 +2727,97 @@ func lf_other_ok(g &: Ng, v: int): bool:
     ret v >= 0 and (g.v_kind[v] == VK_INS or g.v_kind[v] == VK_ARG)
 end
 
+func rmw_other_ok(g &: Ng, o: int): bool:
+    if o < 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INT:
+        ret is_imm32(g.v_i[o])
+    end
+    if not lf_other_ok(g, o) or lf_mem(g, o) >= 0:
+        ret false
+    end
+    if g.v_kind[o] == VK_INS:
+        d := g.v_def[o]
+        if g.skipi[d]:
+            ret false
+        end
+        if (g.i_op[d] == OP_MUL or g.i_op[d] == OP_SHL) and lea_mul_k(g, d) >= 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func rmw_store(g &: Ng, i: int, opi &: int, ov &: int): int:
+    r := g.i_res[i]
+    t := g.i_ty[i]
+    if g.off_rmw or r < 0 or g.v_uses[r] != 1 or is_agg(g, t) or is_flt(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    sz := msz(g, t)
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    mut j := g.i_next[i]
+    mut o := 0 - 1
+    repeat 16:
+        if j < 0:
+            ret 0 - 1
+        end
+        if g.i_a[j] == r or g.i_b[j] == r:
+            break
+        end
+        if writes_mem(g.i_op[j]):
+            ret 0 - 1
+        end
+        j = g.i_next[j]
+    end
+    if j < 0 or g.i_a[j] == g.i_b[j]:
+        ret 0 - 1
+    end
+    op := g.i_op[j]
+    jr := g.i_res[j]
+    if g.i_ty[j] != t or jr < 0 or g.v_uses[jr] != 1:
+        ret 0 - 1
+    end
+    if op == OP_SUB:
+        if g.i_a[j] != r:
+            ret 0 - 1
+        end
+        o = g.i_b[j]
+    else op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR:
+        o = g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
+    else:
+        ret 0 - 1
+    end
+    if not rmw_other_ok(g, o):
+        ret 0 - 1
+    end
+    mut k := g.i_next[j]
+    repeat 16:
+        if k < 0:
+            ret 0 - 1
+        end
+        if g.i_op[k] == OP_STORE and g.i_a[k] == jr:
+            if g.i_b[k] != g.i_a[i] or (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                ret 0 - 1
+            end
+            opi = j
+            ov = o
+            ret k
+        end
+        if writes_mem(g.i_op[k]):
+            ret 0 - 1
+        end
+        k = g.i_next[k]
+    end
+    ret 0 - 1
+end
+
 func load_fold_user(g &: Ng, i: int): int:
     r := g.i_res[i]
     t := g.i_ty[i]
@@ -2737,6 +2838,9 @@ func load_fold_user(g &: Ng, i: int): int:
         end
         op := g.i_op[j]
         if g.i_a[j] == r or g.i_b[j] == r:
+            if g.skipi[j]:
+                ret 0 - 1
+            end
             if g.i_ty[j] == t and (op == OP_ADD or op == OP_AND or op == OP_OR or op == OP_XOR):
                 o := g.i_a[j] == r ? g.i_b[j] : g.i_a[j]
                 if o != r and lf_other_ok(g, o) and g.i_res[j] >= 0:
@@ -2850,6 +2954,15 @@ func isel_load(g &: Ng, i: int):
     if not res_used(g, i) and (g.i_f[i] & IF_VOLATILE) == 0:
         ret
     end
+    mut rop := 0 - 1
+    mut rov := 0 - 1
+    rst := rmw_store(g, i, rop, rov)
+    if rst >= 0:
+        g.skipi[rop] = true
+        g.rmw_of[rst] = rop
+        g.rmw_v[rst] = rov
+        ret
+    end
     if not is_vec(g, t) and not is_flt(g, t) and load_fold_user(g, i) >= 0:
         g.lfold[g.i_res[i]] = i
         ret
@@ -2918,6 +3031,27 @@ func isel_store(g &: Ng, i: int):
             ret
         end
         emit_copy(g, m, agg_mem(g, v), tsize(g, t))
+        ret
+    end
+    if g.rmw_of[i] >= 0:
+        j := g.rmw_of[i]
+        o := g.rmw_v[i]
+        mut cc := ALU_ADD
+        if g.i_op[j] == OP_SUB: cc = ALU_SUB end
+        if g.i_op[j] == OP_AND: cc = ALU_AND end
+        if g.i_op[j] == OP_OR: cc = ALU_OR end
+        if g.i_op[j] == OP_XOR: cc = ALU_XOR end
+        mm := mem_of(g, p, 0 as i64)
+        if g.v_kind[o] == VK_INT:
+            ai := mi_new(g, M_ALU_MI, msz(g, t))
+            set_mem(g, ai, mm)
+            g.mc.imm[ai] = g.v_i[o]
+            g.mc.cc[ai] = cc
+        else:
+            ro := use_reg(g, o)
+            ar := e_mr(g, M_ALU_MR, msz(g, t), mm, ro)
+            g.mc.cc[ar] = cc
+        end
         ret
     end
     atomic := (g.i_f[i] & IF_ATOMIC) != 0

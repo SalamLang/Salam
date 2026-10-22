@@ -1,0 +1,96 @@
+package nativegen
+
+func agg_load_of(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_LOAD or not is_agg(g, g.i_ty[d]) or (g.i_f[d] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func field_load_after(g &: Ng, ld: int, off: i64, ty: int): int:
+    ad := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[ad] = g.i_a[ld]
+    g.i_b[ad] = 0 - 1
+    g.i_x[ad] = 1
+    g.i_d[ad] = off
+    av := new_res(g, ad)
+    nl := ins_new(g, OP_LOAD, ty)
+    g.i_a[nl] = av
+    g.i_c[nl] = 0
+    nv := new_res(g, nl)
+    nx := g.i_next[ld]
+    ins_before(g, nx, ad)
+    ins_before(g, nx, nl)
+    ret nv
+end
+
+func scalarize_extv(g &: Ng, e: int): int:
+    t := g.i_ty[e]
+    if is_agg(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    a := g.i_a[e]
+    off := g.i_d[e]
+    ld := agg_load_of(g, a)
+    if ld >= 0:
+        ret field_load_after(g, ld, off, t)
+    end
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret 0 - 1
+    end
+    ph := g.v_def[a]
+    if g.i_op[ph] != OP_PHI or g.i_pcount[ph] > 4:
+        ret 0 - 1
+    end
+    ps := g.i_ps[ph]
+    repeat g.i_pcount[ph] in k:
+        x := g.pool[ps + 2 * k]
+        lx := agg_load_of(g, x)
+        if lx < 0 or g.v_uses[x] != 1:
+            ret 0 - 1
+        end
+    end
+    np := ins_new(g, OP_PHI, t)
+    g.i_ps[np] = g.pool.len()
+    g.i_pcount[np] = g.i_pcount[ph]
+    repeat g.i_pcount[ph] in k2:
+        x2 := g.pool[ps + 2 * k2]
+        fv := field_load_after(g, g.v_def[x2], off, t)
+        g.pool.push(fv)
+        g.pool.push(g.pool[ps + 2 * k2 + 1])
+    end
+    pv := new_res(g, np)
+    ins_before(g, ph, np)
+    ret pv
+end
+
+func agg_scalarize(g &: Ng): bool:
+    count_uses(g)
+    repl_grow(g)
+    mut changed := false
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_EXTV and g.i_res[i] >= 0:
+                r := scalarize_extv(g, i)
+                if r >= 0:
+                    repl_grow(g)
+                    g.v_repl[g.i_res[i]] = r
+                    ins_unlink(g, i)
+                    changed = true
+                end
+            end
+            i = nx
+        end
+    end
+    if changed:
+        remap_all(g)
+        dce(g)
+    end
+    ret changed
+end

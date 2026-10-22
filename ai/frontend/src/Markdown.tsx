@@ -4,18 +4,19 @@ import remarkGfm from "remark-gfm";
 import { codeDirection, highlight } from "./highlight";
 import { IconCheck, IconCopy } from "./icons";
 import { highlightRich, preloadHighlighter } from "./shiki";
+import { t } from "./i18n";
 
 const LANG_NAMES: Record<string, string> = {
-  salam: "سلام",
-  text: "متن",
-  plain: "متن",
-  txt: "متن",
-  output: "خروجی",
-  sh: "ترمینال",
-  bash: "ترمینال",
-  shell: "ترمینال",
-  console: "ترمینال",
-  zsh: "ترمینال",
+  salam: t("سلام", "Salam"),
+  text: t("متن", "Text"),
+  plain: t("متن", "Text"),
+  txt: t("متن", "Text"),
+  output: t("خروجی", "Output"),
+  sh: t("ترمینال", "Terminal"),
+  bash: t("ترمینال", "Terminal"),
+  shell: t("ترمینال", "Terminal"),
+  console: t("ترمینال", "Terminal"),
+  zsh: t("ترمینال", "Terminal"),
   powershell: "PowerShell",
   json: "JSON",
   yaml: "YAML",
@@ -85,7 +86,7 @@ function textOf(node: ReactNode): string {
   return "";
 }
 
-export function CopyButton({ text, label = "رونوشت" }: { text: string; label?: string }) {
+export function CopyButton({ text, label = t("رونوشت", "Copy") }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -101,7 +102,7 @@ export function CopyButton({ text, label = "رونوشت" }: { text: string; lab
       }}
     >
       {done ? <IconCheck width={16} height={16} /> : <IconCopy width={16} height={16} />}
-      <span>{done ? "رونوشت شد" : label}</span>
+      <span>{done ? t("رونوشت شد", "Copied") : label}</span>
     </button>
   );
 }
@@ -109,7 +110,7 @@ export function CopyButton({ text, label = "رونوشت" }: { text: string; lab
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const dir = codeDirection(code, lang);
   const html = useHighlighted(code, lang);
-  const name = LANG_NAMES[lang] || lang || "کد";
+  const name = LANG_NAMES[lang] || lang || t("کد", "Code");
   return (
     <div className="code-block">
       <div className="code-head">

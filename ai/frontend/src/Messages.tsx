@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { ToolCard, type CallView } from "./Agent";
-import type { ActivityStep, Message, ThinkStep, ToolStep } from "./api";
+import { uiText, type ActivityStep, type Message, type ThinkStep, type ToolStep } from "./api";
 import type { AgentAnswer } from "./desktop";
 import { ActivityPanel } from "./Activity";
 import { MessageFiles } from "./Attach";
 import { CopyButton, Markdown } from "./Markdown";
+import { t } from "./i18n";
 
 const PHASE_TEXT: Record<string, string> = {
-  thinking: "در حال فکر کردن",
-  searching: "در حال بررسی مستندات سلام",
-  working: "در حال کار روی رایانه‌ی شما",
-  writing: "در حال نوشتن",
-  checking: "در حال اصلاح کد با کامپایلر سلام",
+  thinking: t("در حال فکر کردن", "Thinking"),
+  searching: t("در حال بررسی مستندات سلام", "Checking the Salam docs"),
+  working: t("در حال کار روی رایانه‌ی شما", "Working on your computer"),
+  writing: t("در حال نوشتن", "Writing"),
+  checking: t("در حال اصلاح کد با کامپایلر سلام", "Fixing the code with the Salam compiler"),
 };
 
 const FRAME_MS = 33;
@@ -146,7 +147,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
   const all = withCalls(m, calls);
   const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
-  const items = timeline(steps, m.body, all);
+  const items = timeline(steps, uiText(m.body), all);
   const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
   return (
     <div className={`msg assistant ${m.status}`}>
@@ -183,7 +184,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
         )}
         {!pending && m.body && (
           <div className="msg-tools">
-            <CopyButton text={m.body} label="رونوشت پاسخ" />
+            <CopyButton text={uiText(m.body)} label={t("رونوشت پاسخ", "Copy answer")} />
           </div>
         )}
       </div>

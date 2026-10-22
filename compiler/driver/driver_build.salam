@@ -52,6 +52,7 @@ end
 
 func build_impl(opt &: Dr): int:
     mut lib_stem := ""
+    mut lib_export_pub := false
     if opt.inputs.len() == 0 or (opt.inputs.len() == 1 and os.IsDir(opt.inputs.get(0))):
         rlgr := lg.New(opt.log_level, resolve_color(opt.color))
         rpack := lp.Load(opt.lang)
@@ -89,6 +90,7 @@ func build_impl(opt &: Dr): int:
         if str.Len(pname) == 0 or str.Contains(pname, "/") or str.Contains(pname, "\\"):
             pname = project_output_name(rdir)
         end
+        lib_export_pub = pinfo.export_pub
         if str.Len(opt.lib_kind) > 0:
             lib_stem = pname
         else str.Len(opt.output) == 0 and opt.command != CMD_OBJ:
@@ -240,6 +242,9 @@ func build_impl(opt &: Dr): int:
     defer link_kinds.free()
     mut lib_exports := Vector {} as Vector<str>
     defer lib_exports.free()
+    if str.Len(opt.llvm_target) > 0:
+        pm.SetNativePlatform(pm.PlatformOfTriple(opt.llvm_target))
+    end
 
     mut hostlibs := ""
     if EmbeddedExtralibs("", hostlibs):
@@ -413,6 +418,21 @@ func build_impl(opt &: Dr): int:
                 break
             end
         end
+        if wi == 0 and str.Len(opt.lib_kind) > 0 and lib_export_pub:
+            mut cprefix := lib_c_prefix(lib_stem)
+            if str.Len(cprefix) == 0:
+                cprefix = lib_c_prefix(output_stem_of(path))
+            end
+            repeat prog_n.list.len() in dpx:
+                d6 := at.Get(a, prog_n.list.get(dpx))
+                if d6.kind == at.AST_FUNC_DEF and d6.is_pub and not d6.is_extern and d6.a != 0:
+                    cname := cprefix + "_" + d6.name
+                    sm.DceMarkRoot(modpkg, d6.name)
+                    cg.AddExportOverride(modpkg, d6.name, cname)
+                    lib_exports.push(cname)
+                end
+            end
+        end
         if wi == 0 and str.Len(opt.lib_kind) > 0:
             repeat prog_n.list.len() in dlx:
                 d5 := at.Get(a, prog_n.list.get(dlx))
@@ -515,6 +535,9 @@ func build_impl(opt &: Dr): int:
                         ), co.ArgStr(same_pkg ? w_pkg.get(ci) : w_module.get(ci)), co.ArgStr(w_path.get(ci)), co.ArgStr(w_path.get(cj))
                     )
                 )
+                if str.Contains(w_path.get(ci), "@v") and str.Contains(w_path.get(cj), "@v"):
+                    io.EPrintln(i18.Tr("  two major versions of one package are in this build; to be used beside the older one, the newer major needs its own entry file and package name (for example greet2.salam with 'package greet2')"))
+                end
                 all_ok = false
             end
             cj += 1

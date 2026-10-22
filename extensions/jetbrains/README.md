@@ -3,6 +3,32 @@
 Works in IntelliJ IDEA, PyCharm, WebStorm, CLion, GoLand, Rider, PhpStorm,
 RubyMine and Android Studio.
 
+## The Salam plugin (recommended)
+
+`plugin/` is a small plugin that brings everything `salam lsp` does into the
+IDE: errors as you type, completion, hover, go to definition, find usages,
+rename, call hierarchy, inlay hints and formatting, plus TextMate
+highlighting for English and Persian Salam. It runs the server through the
+free [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij) plugin, so it
+works in every IntelliJ-based IDE from 2024.2 on, the free editions and
+Android Studio included.
+
+Build it with a JDK 17 or newer; no Gradle or IDE download is needed:
+
+```sh
+extensions/jetbrains/plugin/build.sh
+```
+
+Then install LSP4IJ from the Marketplace and
+`extensions/jetbrains/plugin/build/salam-jetbrains-<version>.zip` through
+**Settings | Plugins | Install Plugin from Disk**. The plugin finds `salam` on
+`PATH`, in `~/.salam/bin`, or wherever `SALAM_PATH` points.
+
+`build.sh --smoke path/to/salam` also starts that compiler through the
+plugin's own classes and checks the reply, without an IDE.
+
+The options below need no plugin of ours.
+
 ## Option 1: the custom file type (no plugin)
 
 `Settings > Editor > File Types > Import...` and pick `Salam.xml`.

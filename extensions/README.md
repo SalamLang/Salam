@@ -13,7 +13,7 @@ numbers written with ASCII, Persian or Arabic-Indic digits.
 | Emacs              | [`emacs/`](emacs)                 | yes          | yes     | yes      | yes         | yes    | `compile`, flycheck             | eglot, lsp-mode   |
 | Kate / KDevelop    | [`kate/`](kate)                   | yes          | generic | no       | no          | no     | no                              | LSP client        |
 | gedit / GNOME      | [`gtksourceview/`](gtksourceview) | yes          | generic | no       | no          | no     | no                              | no                |
-| JetBrains IDEs     | [`jetbrains/`](jetbrains)         | yes          | generic | no       | no          | no     | no                              | LSP4IJ            |
+| JetBrains IDEs     | [`jetbrains/`](jetbrains)         | yes          | generic | no       | no          | yes    | via the language server         | Salam plugin      |
 | Geany              | [`geany/`](geany)                 | yes          | generic | no       | yes         | yes    | build panel                     | no                |
 | Notepad++          | [`notepadpp/`](notepadpp)         | yes          | generic | no       | no          | no     | no                              | no                |
 | GNU nano           | [`nano/`](nano)                   | yes          | no      | no       | no          | `^T`   | linter view                     | no                |

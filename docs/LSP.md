@@ -81,8 +81,13 @@ vim.lsp.enable('salam')
 ### JetBrains IDEs (IntelliJ IDEA, GoLand, PyCharm, WebStorm, CLion, Rider, Android Studio)
 
 Install the free [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)
-plugin, then in **Settings | Languages & Frameworks | Language Servers** add a
-server:
+plugin, then the Salam plugin built by `extensions/jetbrains/plugin/build.sh`
+(**Settings | Plugins | Install Plugin from Disk**). It starts `salam lsp` for
+`.salam` files and adds TextMate highlighting; see
+[`extensions/jetbrains/README.md`](../extensions/jetbrains/README.md).
+
+Without the Salam plugin, LSP4IJ alone works too. In **Settings | Languages &
+Frameworks | Language Servers** add a server:
 
 - **Name:** `Salam`
 - **Command:** `salam lsp`

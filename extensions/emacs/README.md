@@ -62,6 +62,21 @@ walks the errors.
 `salam-lang` of `"auto"` reads a `//! lang:` directive, then falls back to
 detecting the script the buffer is written in.
 
+## Language server
+
+`salam-mode` registers `salam lsp` with both
+[eglot](https://www.gnu.org/software/emacs/manual/html_node/eglot/) (built into
+Emacs 29) and [lsp-mode](https://emacs-lsp.github.io/lsp-mode/). Run
+`M-x eglot` or `M-x lsp` in a Salam buffer, or start it for every buffer:
+
+```elisp
+(add-hook 'salam-mode-hook #'eglot-ensure)
+```
+
+`salam-lsp-messages` picks the language of the server's messages (`"en"` or
+`"fa"`); `salam-stdlib-path` is passed on too. See
+[`docs/LSP.md`](../../docs/LSP.md) for what the server does.
+
 ## Flycheck
 
 Optional, and separate so `salam-mode` does not depend on it:

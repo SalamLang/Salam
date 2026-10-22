@@ -30,6 +30,22 @@ sequences are highlighted too.
 The two options can be used together: keep the TextMate bundle for colouring
 and the file type for comment toggling.
 
+## Option 3: the language server (diagnostics, completion, navigation)
+
+Every IntelliJ-based IDE, the free editions and Android Studio included, can
+run `salam lsp` through the [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)
+plugin:
+
+1. Install LSP4IJ from **Settings | Plugins | Marketplace**.
+2. In **Settings | Languages & Frameworks | Language Servers**, click **+**.
+3. Name it `Salam` and set the command to `salam lsp` (use the full path if
+   `salam` is not on the IDE's `PATH`).
+4. Under **Mappings | Filename patterns**, add `*.salam` with language id
+   `salam`.
+
+Combine it with option 2 for highlighting. The server's features and options
+are in [`docs/LSP.md`](../../docs/LSP.md).
+
 ## Generated
 
 `Salam.xml` is generated. Edit the generator and rerun it from the repository

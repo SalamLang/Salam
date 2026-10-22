@@ -156,7 +156,10 @@ operands fit. Register allocation is linear scan over exact live
 ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
 allocator can spill the long outer range and keep the loop copy in a register.
-Copy-related values that both spill share one stack slot. The encoder rotates small loop headers into the latch so
+Copy-related values that both spill share one stack slot. When vector
+registers run out, the allocator evicts the value whose next use is
+farthest away, so a kernel with sixteen accumulators keeps most of them in
+registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
 loops are bottom-tested, copies a short loop test into a branch arm that
 would otherwise jump to it, and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
@@ -192,7 +195,7 @@ otherwise it gets 32-byte alignment.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,lsr,lcse,range,split`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,lsr,lcse,range,split`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

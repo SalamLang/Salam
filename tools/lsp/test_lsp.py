@@ -7,7 +7,7 @@ answers against the fixtures in tests/lsp. Uses only the standard library.
     python3 tools/lsp/test_lsp.py [path/to/salam]
 """
 
-# pylint: disable=too-many-locals,too-many-statements,too-few-public-methods,consider-using-with
+# pylint: disable=too-many-lines,too-many-locals,too-many-statements,too-few-public-methods,consider-using-with
 
 import json
 import os
@@ -495,7 +495,10 @@ QF_PARSE = [
     ),
     (
         "elif",
-        "func main:\n    n := 3\n    if n > 5:\n        println 1\n    elif n > 2:\n        println 2\n    end\nend\n",
+        (
+            "func main:\n    n := 3\n    if n > 5:\n        println 1\n"
+            "    elif n > 2:\n        println 2\n    end\nend\n"
+        ),
         "Write 'else'",
         "    else n > 2:\n",
     ),
@@ -614,7 +617,9 @@ def persian(t, s):
         json.dumps(msgs, ensure_ascii=False)[:300],
     )
     fa_text = "تابع ریشه:\n    ناپایا شمارنده := 1\n    سرچاپ شمارنده\nپایان\n"
-    got, diags = fixes_for(s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "fa.salam")), fa_text)
+    got, diags = fixes_for(
+        s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "fa.salam")), fa_text
+    )
     title = "حذف 'ناپایا'"
     t.check(
         "fa: the fix is titled and spelled in Persian",

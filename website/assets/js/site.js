@@ -257,6 +257,80 @@
       escapeHtml(text)
         .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    const words = new Map();
+    for (const [attr, cls] of [
+      ["data-kw", "k"],
+      ["data-types", "t"],
+      ["data-builtins", "b"],
+    ]) {
+      for (const w of (salamat.getAttribute(attr) || "").split(/\s+/)) {
+        if (w) {
+          words.set(w, cls);
+        }
+      }
+    }
+    const DIGIT = /[0-9\u06f0-\u06f9\u0660-\u0669]/;
+    const identCp = (ch) =>
+      ch === "_" ||
+      /[A-Za-z0-9]/.test(ch) ||
+      (ch.codePointAt(0) >= 128 &&
+        !"\u060c\u061b\u061f\u00ab\u00bb\u00a0".includes(ch));
+    const span = (cls, text) =>
+      `<span class="tok-${cls}">${escapeHtml(text)}</span>`;
+    const highlightLine = (line) => {
+      const cps = [...line];
+      const n = cps.length;
+      let out = "";
+      let i = 0;
+      while (i < n) {
+        const ch = cps[i];
+        let j = i + 1;
+        if (ch === "/" && cps[i + 1] === "/") {
+          out += span("c", cps.slice(i).join(""));
+          break;
+        }
+        if (ch === '"' || ch === "`" || ch === "\u00ab") {
+          const close = ch === "\u00ab" ? "\u00bb" : ch;
+          while (j < n && cps[j] !== close) {
+            if (cps[j] === "\\") {
+              j += 1;
+            }
+            j += 1;
+          }
+          j = Math.min(n, j + 1);
+          out += span("s", cps.slice(i, j).join(""));
+        } else if (DIGIT.test(ch)) {
+          while (
+            j < n &&
+            (DIGIT.test(cps[j]) || cps[j] === "." || cps[j] === "_")
+          ) {
+            j += 1;
+          }
+          out += span("n", cps.slice(i, j).join(""));
+        } else if (identCp(ch)) {
+          while (j < n && identCp(cps[j])) {
+            j += 1;
+          }
+          const word = cps.slice(i, j).join("");
+          let k = j;
+          while (k < n && (cps[k] === " " || cps[k] === "\t")) {
+            k += 1;
+          }
+          if (words.has(word)) {
+            out += span(words.get(word), word);
+          } else if (cps[k] === "(") {
+            out += span("f", word);
+          } else {
+            out += escapeHtml(word);
+          }
+        } else {
+          out += escapeHtml(ch);
+        }
+        i = j;
+      }
+      return out;
+    };
+    const SALAM = /^(salam|\u0633\u0644\u0627\u0645|slm)$/i;
     const SHELLS =
       /^(sh|bash|zsh|fish|shell|console|terminal|powershell|pwsh|ps1|cmd|bat|batch|dos)$/i;
     const strongDir = (line) => {
@@ -272,6 +346,10 @@
     };
     const codeBlock = (lang, code) => {
       const shell = SHELLS.test(lang.trim());
+      const colored =
+        SALAM.test(lang.trim()) ||
+        (!lang.trim() &&
+          code.split(/[^\p{L}\p{N}_]+/u).some((w) => words.get(w) === "k"));
       const lines = code.replace(/\n$/, "").split("\n");
       let blockDir = "ltr";
       if (!shell) {
@@ -287,7 +365,8 @@
       const rows = lines.map((line) => {
         const d = shell ? "ltr" : strongDir(line) || last;
         last = d;
-        return `<span class="salamat-line" dir="${d}">${escapeHtml(line) || " "}</span>`;
+        const html = colored ? highlightLine(line) : escapeHtml(line);
+        return `<span class="salamat-line" dir="${d}">${html || " "}</span>`;
       });
       return `<pre dir="${blockDir}"><code>${rows.join("")}</code></pre>`;
     };

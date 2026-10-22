@@ -21,6 +21,7 @@ include at "../ast.salam"
 include i18 "../i18n.salam"
 include lg "../logger.salam"
 include tok "../token.salam"
+include lp "../langpack.salam"
 
 pub const SUGGEST_ANY := 0
 pub const SUGGEST_FUNC := 1
@@ -163,9 +164,6 @@ func sug_display_name(s &: Sema, a &: at.Ast, m: Symbol): str:
 end
 
 func sug_remember(name: str, names: Vector<str>, n: int, tail: str):
-    if not lg.Recording():
-        ret
-    end
     g_sug_names.clear()
     repeat n in i:
         g_sug_names.push(names.get(i))
@@ -185,46 +183,51 @@ func fix_at(sp: co.SrcSpan): lg.Fix:
     ret f
 end
 
-func queue_fix(f: lg.Fix):
-    if lg.Recording():
-        g_fix_queue.push(f)
+func kw_spell(s &: Sema, file: str, kind: int): str:
+    sp := lp.Spelling(FilePack(s, str.Len(file) > 0 ? file : s.file), kind)
+    if str.Len(sp) > 0:
+        ret sp
     end
+    ret lp.Spelling(lp.LP_EN, kind)
 end
 
-func attach_fixes(n0: int, sp: co.SrcSpan, msg: str):
-    if lg.Recording() and lg.RecordCount() > n0:
-        if g_sug_names.len() > 0 and str.Len(g_sug_tail) > 0 and str.Contains(msg, g_sug_tail):
-            repeat g_sug_names.len() in i:
-                mut f := fix_at(sp)
-                f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(g_sug_names.get(i)))
-                f.find = g_sug_query
-                f.text = g_sug_names.get(i)
-                f.preferred = i == 0
-                lg.AddFix(n0, f)
-            end
-            g_sug_names.clear()
+func queue_fix(f: lg.Fix):
+    g_fix_queue.push(f)
+end
+
+func stage_fixes(sp: co.SrcSpan, msg: str):
+    if g_sug_names.len() > 0 and str.Len(g_sug_tail) > 0 and str.Contains(msg, g_sug_tail):
+        repeat g_sug_names.len() in i:
+            mut f := fix_at(sp)
+            f.title = co.Format1(i18.Tr("Change to '%s'"), co.ArgStr(g_sug_names.get(i)))
+            f.find = g_sug_query
+            f.text = g_sug_names.get(i)
+            f.preferred = i == 0
+            lg.StageFix(f)
         end
-        each f in g_fix_queue:
-            lg.AddFix(n0, f)
-        end
+        g_sug_names.clear()
+    end
+    each f in g_fix_queue:
+        lg.StageFix(f)
     end
     g_fix_queue.clear()
 end
 
 func queue_pub_fix(s &: Sema, a &: at.Ast, sym: int):
-    if not lg.Recording() or sym == 0:
+    if sym == 0:
         ret
     end
     did := sym_at(s, sym).decl
     if did == 0 or at.Get(a, did).synthetic:
         ret
     end
+    file := at.Get(a, did).src_file
+    pub_kw := kw_spell(s, file, tok.TK_KW_PUB)
     mut f := fix_at(span_of(a, did))
     f.length = 0
-    f.file = at.Get(a, did).src_file
-    f.title = i18.Tr("Add '%s'")
-    f.kw = tok.TK_KW_PUB
-    f.text = "%s "
+    f.file = file
+    f.title = co.Format1(i18.Tr("Add '%s'"), co.ArgStr(pub_kw))
+    f.text = pub_kw + " "
     f.preferred = true
     queue_fix(f)
 end

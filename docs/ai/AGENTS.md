@@ -418,6 +418,8 @@ end
 
 ```sh
 salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
+salam check  hello.salam --fix                  # apply the safe compiler fixes in place
+salam check  hello.salam --error-format=json    # diagnostics with machine-readable fixes
 salam run    hello.salam     # build and execute
 salam format hello.salam --check
 ```

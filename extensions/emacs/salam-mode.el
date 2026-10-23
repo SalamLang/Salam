@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.5.8
+;; Version: 0.5.9
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -29,8 +29,8 @@
 
 (defcustom salam-lang "auto"
   "Keyword pack passed to the compiler as --lang.
-\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to
-detecting the script the buffer is written in."
+\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to detecting the
+script the buffer is written in."
   :type '(choice (const "auto") (const "en") (const "fa"))
   :group 'salam)
 

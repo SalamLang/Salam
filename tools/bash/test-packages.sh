@@ -277,10 +277,10 @@ import sys
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        if "Authorization" in self.headers:
+            self.send_error(400)
+            return
         if self.path.startswith("/store/"):
-            if "Authorization" in self.headers and self.headers.get("Host", "").startswith("localhost"):
-                self.send_error(400)
-                return
             return super().do_GET()
         self.send_response(302)
         if self.path.startswith("/v0.0.1/"):

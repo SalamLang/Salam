@@ -723,6 +723,10 @@ if want lib && command -v cc >/dev/null 2>&1 && { [ "$(uname -s 2>/dev/null)" = 
     done
 fi
 
+if want testcmd; then
+    add_job script "testcmd/en/flow" "tools/bash/test-salam-test.sh" "en" "tests/en/testcmd/flow.out"
+fi
+
 if want packages && command -v git >/dev/null 2>&1; then
     add_job script "packages/en/flow" "tools/bash/test-packages.sh" "en" "tests/en/packages/flow.out"
 fi

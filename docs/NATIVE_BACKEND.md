@@ -381,6 +381,10 @@ How the pieces fit:
   so the inlined frame shows its own arguments and locals.
 - Module globals get a `DW_TAG_variable` with `DW_OP_addr`, unless global
   dead code elimination removed them.
+- Blocks that declare variables become `DILexicalBlock`s, written as
+  `DW_TAG_lexical_block` with their own ranges, so gdb only shows the
+  variables in scope and two `a`s in sibling branches stay apart. Lambdas
+  get their own subprogram. Both backends emit DWARF 4.
 - Windows objects carry the same sections (long names through the COFF
   string table, `SECREL` relocations), and stack slots are addressed from
   `rbp` there. Both the built-in PE linker and mingw `ld` keep them, so gdb

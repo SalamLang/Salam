@@ -12,14 +12,18 @@ import javax.swing.JPanel;
 /** The form for a Salam run configuration. */
 final class SalamSettingsEditor extends SettingsEditor<SalamRunConfiguration> {
   private final TextFieldWithBrowseButton file = new TextFieldWithBrowseButton();
-  private final ComboBox<String> command = new ComboBox<>(new String[] {"run", "exec"});
+  private final ComboBox<String> command = new ComboBox<>(new String[] {"run", "exec", "test"});
   private final JBTextField arguments = new JBTextField();
+  private final JBTextField testName = new JBTextField();
   private final TextFieldWithBrowseButton workingDirectory = new TextFieldWithBrowseButton();
   private final JPanel panel;
 
   SalamSettingsEditor() {
     file.addBrowseFolderListener(
-        "Salam File", null, null, FileChooserDescriptorFactory.createSingleFileDescriptor("salam"));
+        "Salam File or Test Directory",
+        null,
+        null,
+        FileChooserDescriptorFactory.createSingleFileOrFolderDescriptor());
     workingDirectory.addBrowseFolderListener(
         "Working Directory",
         null,
@@ -27,8 +31,9 @@ final class SalamSettingsEditor extends SettingsEditor<SalamRunConfiguration> {
         FileChooserDescriptorFactory.createSingleFolderDescriptor());
     panel =
         FormBuilder.createFormBuilder()
-            .addLabeledComponent("Salam file:", file)
+            .addLabeledComponent("Salam file or directory:", file)
             .addLabeledComponent("Command:", command)
+            .addLabeledComponent("Test name contains:", testName)
             .addLabeledComponent("Program arguments:", arguments)
             .addLabeledComponent("Working directory:", workingDirectory)
             .getPanel();
@@ -37,7 +42,8 @@ final class SalamSettingsEditor extends SettingsEditor<SalamRunConfiguration> {
   @Override
   protected void resetEditorFrom(SalamRunConfiguration configuration) {
     file.setText(configuration.getFile());
-    command.setSelectedItem("exec".equals(configuration.getCommand()) ? "exec" : "run");
+    command.setSelectedItem(SalamRunConfiguration.normalCommand(configuration.getCommand()));
+    testName.setText(configuration.getTestName());
     arguments.setText(configuration.getArguments());
     workingDirectory.setText(configuration.getWorkingDirectory());
   }
@@ -48,6 +54,7 @@ final class SalamSettingsEditor extends SettingsEditor<SalamRunConfiguration> {
     Object selected = command.getSelectedItem();
     configuration.setCommand(selected == null ? "run" : selected.toString());
     configuration.setArguments(arguments.getText());
+    configuration.setTestName(testName.getText());
     configuration.setWorkingDirectory(workingDirectory.getText());
   }
 

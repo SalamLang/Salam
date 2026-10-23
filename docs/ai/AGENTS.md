@@ -421,5 +421,6 @@ salam check  hello.salam     # type-check only, no codegen (salam_check via MCP)
 salam check  hello.salam --fix                  # apply the safe compiler fixes in place
 salam check  hello.salam --error-format=json    # diagnostics with machine-readable fixes
 salam run    hello.salam     # build and execute
+salam test                   # run the test_ functions in every *_test.salam file
 salam format hello.salam --check
 ```

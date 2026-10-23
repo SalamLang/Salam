@@ -264,13 +264,38 @@ fi
 
 version=$(tr -d ' \t\r\n' <"$root/VERSION")
 if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
-    mkdir -p "$work/rel" "$work/srv/v$version"
+    mkdir -p "$work/rel" "$work/srv/store/v$version"
     ln -s "$root/std" "$work/rel/std"
-    (cd "$root" && tar -czf "$work/srv/v$version/salam-packages-$version.tar.gz" packages/db/redis)
-    mkdir -p "$work/srv/v0.0.1"
-    cp "$work/srv/v$version/salam-packages-$version.tar.gz" "$work/srv/v0.0.1/salam-packages-0.0.1.tar.gz"
+    (cd "$root" && tar -czf "$work/srv/store/v$version/salam-packages-$version.tar.gz" packages/db/redis)
+    mkdir -p "$work/srv/store/v0.0.1"
+    cp "$work/srv/store/v$version/salam-packages-$version.tar.gz" "$work/srv/store/v0.0.1/salam-packages-0.0.1.tar.gz"
     port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-    (cd "$work/srv" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
+    cat >"$work/redirect_server.py" <<'PY'
+import http.server
+import sys
+
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if "Authorization" in self.headers:
+            self.send_error(400)
+            return
+        if self.path.startswith("/store/"):
+            return super().do_GET()
+        self.send_response(302)
+        if self.path.startswith("/v0.0.1/"):
+            self.send_header("Location", "/store" + self.path)
+        else:
+            self.send_header("Location", "http://localhost:" + sys.argv[1] + "/store" + self.path)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+PY
+    (cd "$work/srv" && exec python3 "$work/redirect_server.py" "$port" >/dev/null 2>&1) &
     server=$!
     sleep 1
     mkdir -p "$work/off"
@@ -279,8 +304,8 @@ if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
     printf 'import db.redis\n\nfunc main:\n    println redis.Ok(redis.Client {})\nend\n' >main.salam
     SALAM_STD="$work/rel/std" run "$salam" check main.salam
     check "an official package needs salam add" "$(has 'official package that does not ship with Salam' "$work/last.log" && echo 0 || echo 1)"
-    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis
-    check "add downloads the official packages archive" "$(has '"db.redis" = "v' salam.toml && [ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
+    GITHUB_TOKEN=test-token SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis
+    check "add follows redirects to the official packages archive" "$(has '"db.redis" = "v' salam.toml && [ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
     SALAM_STD="$work/rel/std" run "$salam" run --log-level=error
     check "a program imports the downloaded official package" "$(has '^false$' "$work/last.log" && echo 0 || echo 1)"
     rm -rf "$SALAM_PKG/salam-packages@v$version"

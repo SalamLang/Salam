@@ -174,6 +174,77 @@ func api_headers(): HashMap<str, str>:
     ret h
 end
 
+func url_origin(u: str): str:
+    mut rest := u
+    mut scheme := ""
+    at := str.IndexOf(u, "://")
+    if at >= 0:
+        scheme = str.Substr(u, 0, at + 3)
+        rest = str.Substr(u, at + 3, str.Len(u) - at - 3)
+    end
+    slash := str.IndexOf(rest, "/")
+    if slash >= 0:
+        rest = str.Substr(rest, 0, slash)
+    end
+    ret scheme + str.Lower(rest)
+end
+
+func header_value(head: str, name: str): str:
+    want := str.Lower(name) + ":"
+    lines := str.Split(head, "\n")
+    defer lines.free()
+    each line in lines:
+        l := str.Trim(line)
+        if str.StartsWith(str.Lower(l), want):
+            ret str.Trim(str.Substr(l, str.Len(want), str.Len(l) - str.Len(want)))
+        end
+    end
+    ret ""
+end
+
+func is_redirect(status: int): bool:
+    ret status == 301 or status == 302 or status == 303 or status == 307 or status == 308
+end
+
+func token_host(u: str): bool:
+    o := url_origin(u)
+    ret str.Equals(o, "https://github.com") or str.Equals(o, "https://api.github.com") or str.Equals(o, "https://codeload.github.com") or str.Equals(o, "https://raw.githubusercontent.com") or str.Equals(o, "https://gitlab.com")
+end
+
+func plain_headers(): HashMap<str, str>:
+    h := http.NewHeaders()
+    h.put("User-Agent", PM_AGENT)
+    ret h
+end
+
+func get_bytes(url: str, headers: HashMap<str, str>): http.BytesResponse:
+    mut cur := url
+    mut h := headers
+    if not token_host(cur):
+        h = plain_headers()
+    end
+    mut r := http.GetBytesWith(cur, h)
+    mut hops := 0
+    until hops < 8 and is_redirect(r.status):
+        loc := header_value(r.head, "location")
+        if str.Len(loc) == 0:
+            break
+        end
+        mut next := loc
+        if str.StartsWith(loc, "/"):
+            next = url_origin(cur) + loc
+        end
+        if not str.Equals(url_origin(next), url_origin(cur)) or not token_host(next):
+            h = plain_headers()
+        end
+        compress.BufFree(r.body)
+        cur = next
+        r = http.GetBytesWith(cur, h)
+        hops += 1
+    end
+    ret r
+end
+
 func version_core(v: str): str:
     mut s := str.TrimPrefix(v, "v")
     dash := str.IndexOf(s, "-")
@@ -355,7 +426,7 @@ func fetch_tarball(mod: str, gref: str, tmp: str, why &: str): bool:
         why = "git is needed to download " + mod + " (without git only github.com, gitlab.com and codeberg.org work)"
         ret false
     end
-    r := http.GetBytesWith(url, host_headers(mod))
+    r := get_bytes(url, host_headers(mod))
     mut body := r.body
     if r.status != 200:
         compress.BufFree(body)

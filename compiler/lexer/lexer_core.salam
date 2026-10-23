@@ -1,5 +1,7 @@
 package lexer
 
+import str
+
 include src "../source.salam"
 include tok "../token.salam"
 include lg "../logger.salam"
@@ -98,6 +100,105 @@ func det_match_bytes(text: str, p: int, le: int, tag: str, n: int): int:
         end
     end
     ret n
+end
+
+func marker_ascii_value(text: str, q0: int, le: int): str:
+    mut q := q0
+    if det_match_ci(text, q, le, "english", 7) != 0:
+        ret "en"
+    end
+    if det_match_ci(text, q, le, "persian", 7) != 0:
+        ret "fa"
+    end
+    if det_match_ci(text, q, le, "farsi", 5) != 0:
+        ret "fa"
+    end
+    cs := q
+    until q < le and (
+        (byte_at(text, q) >= 97 and byte_at(text, q) <= 122) or (byte_at(text, q) >= 65 and byte_at(text, q) <= 90)
+    ):
+        q += 1
+    end
+    if q - cs == 2:
+        if (byte_at(text, cs) == 101 or byte_at(text, cs) == 69) and (byte_at(text, cs + 1) == 110 or byte_at(text, cs + 1) == 78):
+            ret "en"
+        end
+        if (byte_at(text, cs) == 102 or byte_at(text, cs) == 70) and (byte_at(text, cs + 1) == 97 or byte_at(text, cs + 1) == 65):
+            ret "fa"
+        end
+    end
+    ret ""
+end
+
+func marker_scan(text: str, length: int, bad &: int, at &: co.SrcPos): str:
+    bad = MARKER_OK
+    mut i := 0
+    mut line := 0
+    until i < length and line < 8:
+        mut ls := i
+        until ls < length and (byte_at(text, ls) == 32 or byte_at(text, ls) == 9):
+            ls += 1
+        end
+        mut le := ls
+        until le < length and byte_at(text, le) != 10:
+            le += 1
+        end
+        if ls + 1 < length and byte_at(text, ls) == 47 and byte_at(text, ls + 1) == 47:
+            mut p := ls + 2
+            until p < le:
+                mut fa_tagged := false
+                mut tlen := det_match_bytes(text, p, le, k_lx_fa_tag, 8)
+                if tlen != 0:
+                    fa_tagged = true
+                end
+                if tlen == 0:
+                    tlen = det_match_ci(text, p, le, "language", 8)
+                end
+                if tlen == 0:
+                    tlen = det_match_ci(text, p, le, "lang", 4)
+                end
+                if tlen == 0:
+                    p += 1
+                    continue
+                end
+                mut q := p + tlen
+                until q < le and (byte_at(text, q) == 32 or byte_at(text, q) == 9):
+                    q += 1
+                end
+                if q >= le or byte_at(text, q) != 58:
+                    p += 1
+                    continue
+                end
+                q += 1
+                until q < le and (byte_at(text, q) == 32 or byte_at(text, q) == 9):
+                    q += 1
+                end
+                at.line = (line + 1) as u32
+                at.col = (ls - i + 1) as u32
+                at.index = ls as u32
+                if det_match_bytes(text, q, le, k_lx_fa_val, 10) != 0:
+                    if not fa_tagged:
+                        bad = MARKER_WANT_FA
+                    end
+                    ret "fa"
+                end
+                if det_match_bytes(text, q, le, k_lx_en_val, 14) != 0:
+                    bad = MARKER_WANT_EN
+                    ret "en"
+                end
+                code := marker_ascii_value(text, q, le)
+                if str.Equals(code, "fa"):
+                    bad = MARKER_WANT_FA
+                else fa_tagged and str.Equals(code, "en"):
+                    bad = MARKER_WANT_EN
+                end
+                ret code
+            end
+        end
+        i = le < length ? le + 1 : le
+        line += 1
+    end
+    ret ""
 end
 
 func det_count_keywords(quiet: lg.Logger, pack: int, sf: src.SourceFile): int:

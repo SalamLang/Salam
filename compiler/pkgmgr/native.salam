@@ -1,0 +1,492 @@
+package pkgmgr
+
+import os
+import str
+import mem
+import compress
+import archive
+import crypto
+import net.http
+import os.shell
+import encoding.toml
+import encoding.value
+
+include pth "../sal_path.salam"
+
+mut g_pm_native_platform := ""
+
+pub struct Native:
+    pub name: str = ""
+    pub link: str = ""
+    pub pkg_config: str = ""
+    pub source_url: str = ""
+    pub source_sha256: str = ""
+    pub sources: Vector<str> = Vector {}
+    pub cflags: Vector<str> = Vector {}
+    pub libs: Vector<str> = Vector {}
+    pub apt: str = ""
+    pub dnf: str = ""
+    pub pacman: str = ""
+    pub brew: str = ""
+    pub winget: str = ""
+    pub pre_url: str = ""
+    pub pre_sha256: str = ""
+    pub pre_lib: str = ""
+end
+
+func toml_str(v: value.Value, key: str): str:
+    mut ok := false
+    x := value.ObjectGetOk(v, key, ok)
+    if ok and value.IsString(x):
+        ret value.AsString(x)
+    end
+    ret ""
+end
+
+func toml_strs(v: value.Value, key: str, out &: Vector<str>):
+    mut ok := false
+    x := value.ObjectGetOk(v, key, ok)
+    if not ok or not value.IsArray(x):
+        ret
+    end
+    repeat value.ArrayLen(x) in i:
+        e := value.ArrayGet(x, i)
+        if value.IsString(e):
+            out.push(value.AsString(e))
+        end
+    end
+end
+
+func probe_ok(cmd: str, args &: Vector<str>): bool:
+    r := shell.Run(cmd, args)
+    ret r.code == 0
+end
+
+func lib_on_search_path(cc: str, file: str): bool:
+    mut a := Vector {} as Vector<str>
+    defer a.free()
+    a.push("-print-file-name=" + file)
+    r := shell.Run(cc, a)
+    if r.code != 0:
+        ret false
+    end
+    found := str.Trim(r.out)
+    ret not str.Equals(found, file) and (str.Contains(found, "/") or str.Contains(found, "\\")) and os.Exists(found)
+end
+
+func host_os(): str:
+    if SALAM_OS_WINDOWS:
+        ret "windows"
+    else:
+        if SALAM_OS_MAC:
+            ret "mac"
+        else:
+            ret "linux"
+        end
+    end
+end
+
+func shared_ext(): str:
+    os_name := host_os()
+    if str.Equals(os_name, "windows"):
+        ret ".dll.a"
+    end
+    if str.Equals(os_name, "mac"):
+        ret ".dylib"
+    end
+    ret ".so"
+end
+
+func host_arch(): str:
+    if SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else:
+        if SALAM_ARCH_X86:
+            ret "i686"
+        else:
+            if SALAM_ARCH_ARM:
+                ret "armv7"
+            else:
+                ret "x86_64"
+            end
+        end
+    end
+end
+
+func probe_cc(cc: str): str:
+    if str.Contains(cc, "tcc") or str.Len(cc) == 0:
+        ret "cc"
+    end
+    ret cc
+end
+
+func sha256_buf(b: compress.ByteBuf): str:
+    digest := mem.Allocate(32 as u64)
+    defer mem.Free(digest)
+    crypto.Sha256Bytes(b.data, b.len, digest)
+    ret hex_bytes(digest, 32)
+end
+
+func unpack_source(n: Native, srcdir: str, why &: str): bool:
+    r := get_bytes(n.source_url, api_headers())
+    mut body := r.body
+    if r.status != 200:
+        compress.BufFree(body)
+        why = "cannot download " + n.source_url + " (HTTP " + str.FromInt(r.status as i64) + ")"
+        ret false
+    end
+    if str.Len(n.source_sha256) > 0:
+        got := sha256_buf(body)
+        if not str.Equals(str.Lower(n.source_sha256), got):
+            compress.BufFree(body)
+            why = "checksum mismatch for " + n.source_url + ": expected " + n.source_sha256 + ", got " + got
+            ret false
+        end
+    end
+    if os.MkdirAll(srcdir) != 0:
+        compress.BufFree(body)
+        why = "cannot create " + srcdir
+        ret false
+    end
+    mut ok := false
+    if str.EndsWith(n.source_url, ".zip"):
+        ok = archive.ZipExtractAll(body.data, body.len, srcdir)
+        compress.BufFree(body)
+    else:
+        mut gz := false
+        mut tar := compress.GzipDecompressBuf(body, gz)
+        compress.BufFree(body)
+        if gz:
+            ok = archive.TarExtractAll(tar.data, tar.len, srcdir)
+        end
+        compress.BufFree(tar)
+    end
+    if not ok:
+        why = "cannot unpack " + n.source_url
+    end
+    ret ok
+end
+
+func fill_native(e: value.Value, k: str, l: str, out &: Native):
+    out.name = k
+    out.link = l
+    out.pkg_config = toml_str(e, "pkg-config")
+    out.source_url = toml_str(e, "source-url")
+    out.source_sha256 = toml_str(e, "source-sha256")
+    toml_strs(e, "sources", out.sources)
+    toml_strs(e, "cflags", out.cflags)
+    toml_strs(e, "libs", out.libs)
+    out.apt = toml_str(e, "apt")
+    out.dnf = toml_str(e, "dnf")
+    out.pacman = toml_str(e, "pacman")
+    out.brew = toml_str(e, "brew")
+    out.winget = toml_str(e, "winget")
+    mut ok := false
+    pre := value.ObjectGetOk(e, "prebuilt", ok)
+    if ok and value.IsObject(pre):
+        mine := value.ObjectGetOk(pre, NativePlatform(), ok)
+        if ok and value.IsObject(mine):
+            out.pre_url = toml_str(mine, "url")
+            out.pre_sha256 = toml_str(mine, "sha256")
+            out.pre_lib = toml_str(mine, "lib")
+        end
+    end
+end
+
+pub func SetNativePlatform(p: str):
+    g_pm_native_platform = p
+end
+
+pub func NativePlatform(): str:
+    if str.Len(g_pm_native_platform) > 0:
+        ret g_pm_native_platform
+    end
+    ret HostPlatform()
+end
+
+pub func PlatformOfTriple(triple: str): str:
+    t := str.Lower(triple)
+    mut arch := "x86_64"
+    if str.StartsWith(t, "aarch64") or str.StartsWith(t, "arm64"):
+        arch = "aarch64"
+    else str.StartsWith(t, "i686") or str.StartsWith(t, "i386") or str.StartsWith(t, "i586"):
+        arch = "i686"
+    else str.StartsWith(t, "arm"):
+        arch = "armv7"
+    else str.StartsWith(t, "wasm"):
+        arch = "wasm32"
+    end
+    mut os_name := "linux"
+    if str.Contains(t, "windows") or str.Contains(t, "mingw"):
+        os_name = "windows"
+    else str.Contains(t, "apple") or str.Contains(t, "darwin") or str.Contains(t, "macos"):
+        os_name = "macos"
+    else str.Contains(t, "wasi") or str.Contains(t, "emscripten"):
+        os_name = "wasm"
+    end
+    ret os_name + "-" + arch
+end
+
+pub func HostPlatform(): str:
+    os_name := host_os()
+    if str.Equals(os_name, "mac"):
+        ret "macos-" + host_arch()
+    end
+    ret os_name + "-" + host_arch()
+end
+
+pub func ReadNativeAll(dir: str, out &: Vector<Native>): bool:
+    path := pth.PathJoin(dir, MANIFEST_FILE)
+    if not os.Exists(path):
+        ret false
+    end
+    mut ok := false
+    doc := toml.DecodeStrict(os.ReadFile(path), ok)
+    if not ok:
+        ret false
+    end
+    nat := value.ObjectGetOk(doc, "native", ok)
+    if not ok or not value.IsObject(nat):
+        ret false
+    end
+    keys := value.ObjectKeys(nat)
+    defer keys.free()
+    repeat keys.len() in i:
+        k := keys.get(i)
+        e := value.ObjectGet(nat, k)
+        if not value.IsObject(e):
+            continue
+        end
+        mut l := toml_str(e, "link")
+        if str.Len(l) == 0:
+            l = k
+        end
+        mut n := Native {}
+        fill_native(e, k, l, n)
+        out.push(n)
+    end
+    ret out.len() > 0
+end
+
+pub func ReadNative(dir: str, link: str, out &: Native): bool:
+    path := pth.PathJoin(dir, MANIFEST_FILE)
+    if not os.Exists(path):
+        ret false
+    end
+    mut ok := false
+    doc := toml.DecodeStrict(os.ReadFile(path), ok)
+    if not ok:
+        ret false
+    end
+    nat := value.ObjectGetOk(doc, "native", ok)
+    if not ok or not value.IsObject(nat):
+        ret false
+    end
+    keys := value.ObjectKeys(nat)
+    defer keys.free()
+    repeat keys.len() in i:
+        k := keys.get(i)
+        e := value.ObjectGet(nat, k)
+        if not value.IsObject(e):
+            continue
+        end
+        mut l := toml_str(e, "link")
+        if str.Len(l) == 0:
+            l = k
+        end
+        if not str.Equals(l, link):
+            continue
+        end
+        fill_native(e, k, l, out)
+        ret true
+    end
+    ret false
+end
+
+pub func NativeMode(): str:
+    ret os.Env("SALAM_NATIVE")
+end
+
+pub func SystemHas(n: Native, cc: str): bool:
+    mode := NativeMode()
+    if str.Equals(mode, "source"):
+        ret false
+    end
+    if str.Equals(mode, "system"):
+        ret true
+    end
+    if str.Len(n.pkg_config) > 0:
+        mut a := Vector {} as Vector<str>
+        defer a.free()
+        a.push("--exists")
+        a.push(n.pkg_config)
+        if probe_ok("pkg-config", a):
+            ret true
+        end
+    end
+    ret lib_on_search_path(probe_cc(cc), "lib" + n.link + shared_ext()) or lib_on_search_path(probe_cc(cc), "lib" + n.link + ".a")
+end
+
+pub func NativeObjects(n: Native, dir: str, cc: str, extra_flags: Vector<str>, objs &: Vector<str>, why &: str): bool:
+    if n.sources.len() == 0:
+        why = "no C sources are listed for " + n.link
+        ret false
+    end
+    mut key := n.link + "|" + n.source_url + "|" + n.source_sha256 + "|" + cc
+    repeat n.sources.len() in i: key = key + "|" + n.sources.get(i) end
+    repeat n.cflags.len() in j: key = key + "|" + n.cflags.get(j) end
+    repeat extra_flags.len() in x: key = key + "|" + extra_flags.get(x) end
+    if str.Len(n.source_url) == 0:
+        repeat n.sources.len() in s0:
+            key = key + "|" + file_sum(pth.PathJoin(dir, n.sources.get(s0)))
+        end
+    end
+    tag := str.Substr(crypto.Sha256Hex(key), 0, 16)
+    outdir := pth.PathJoin(pth.PathJoin(PkgRoot(), "native"), n.link + "-" + tag)
+    stamp := pth.PathJoin(outdir, ".objects")
+    if os.Exists(stamp):
+        lines := str.Split(os.ReadFile(stamp), "\n")
+        defer lines.free()
+        repeat lines.len() in li:
+            l := str.Trim(lines.get(li))
+            if str.Len(l) > 0:
+                objs.push(l)
+            end
+        end
+        ret objs.len() > 0
+    end
+    if os.MkdirAll(outdir) != 0:
+        why = "cannot create " + outdir
+        ret false
+    end
+    mut srcroot := dir
+    if str.Len(n.source_url) > 0:
+        srcroot = pth.PathJoin(outdir, "src")
+        if not os.IsDir(srcroot):
+            if not unpack_source(n, srcroot, why):
+                _rm := os.RemoveAll(srcroot)
+                ret false
+            end
+        end
+    end
+    mut made := ""
+    mut c := cc
+    if str.StartsWith(c, "\"") and str.EndsWith(c, "\"") and str.Len(c) >= 2:
+        c = str.Substr(c, 1, str.Len(c) - 2)
+    end
+    repeat n.sources.len() in si:
+        src := pth.PathJoin(srcroot, n.sources.get(si))
+        obj := pth.PathJoin(outdir, pth.PathStem(src) + "-" + str.FromInt(si as i64) + ".o")
+        mut a := Vector {} as Vector<str>
+        defer a.free()
+        repeat n.cflags.len() in fi:
+            a.push(n.cflags.get(fi))
+        end
+        repeat extra_flags.len() in ei:
+            a.push(extra_flags.get(ei))
+        end
+        a.push("-c")
+        a.push(src)
+        a.push("-o")
+        a.push(obj)
+        r := shell.Run(c, a)
+        if r.code != 0 or not os.Exists(obj):
+            mut detail := str.Trim(r.err)
+            if str.Len(detail) > 600:
+                detail = str.Substr(detail, 0, 600)
+            end
+            why = "cannot compile " + src + " with " + c + ": " + detail
+            ret false
+        end
+        objs.push(obj)
+        made = made + obj + "\n"
+    end
+    _w := os.WriteFile(stamp, made)
+    ret true
+end
+
+pub func NativeHint(n: Native): str:
+    os_name := host_os()
+    if str.Equals(os_name, "mac"):
+        if str.Len(n.brew) > 0:
+            ret "brew install " + n.brew
+        end
+    else str.Equals(os_name, "windows"):
+        if str.Len(n.winget) > 0:
+            ret "winget install " + n.winget
+        end
+    else:
+        if str.Len(n.apt) > 0:
+            mut h := "sudo apt install " + n.apt
+            if str.Len(n.dnf) > 0:
+                h = h + "  (Fedora: sudo dnf install " + n.dnf + ")"
+            end
+            if str.Len(n.pacman) > 0:
+                h = h + "  (Arch: sudo pacman -S " + n.pacman + ")"
+            end
+            ret h
+        end
+    end
+    ret ""
+end
+
+pub func NativePrebuilt(n: Native, objs &: Vector<str>, why &: str): bool:
+    if str.Len(n.pre_url) == 0:
+        why = "no prebuilt " + n.link + " for " + HostPlatform()
+        ret false
+    end
+    if str.Len(n.pre_sha256) == 0:
+        why = "the prebuilt " + n.link + " for " + HostPlatform() + " has no sha256"
+        ret false
+    end
+    tag := str.Substr(str.Lower(n.pre_sha256), 0, 16)
+    outdir := pth.PathJoin(pth.PathJoin(PkgRoot(), "native"), n.link + "-" + HostPlatform() + "-" + tag)
+    mut lib := n.pre_lib
+    if str.Len(lib) == 0:
+        lib = pth.PathBase(n.pre_url)
+    end
+    libpath := pth.PathJoin(outdir, lib)
+    if os.Exists(libpath):
+        objs.push(libpath)
+        ret true
+    end
+    r := get_bytes(n.pre_url, api_headers())
+    mut body := r.body
+    if r.status != 200:
+        compress.BufFree(body)
+        why = "cannot download " + n.pre_url + " (HTTP " + str.FromInt(r.status as i64) + ")"
+        ret false
+    end
+    got := sha256_buf(body)
+    if not str.Equals(str.Lower(n.pre_sha256), got):
+        compress.BufFree(body)
+        why = "checksum mismatch for " + n.pre_url + ": expected " + n.pre_sha256 + ", got " + got
+        ret false
+    end
+    if os.MkdirAll(outdir) != 0:
+        compress.BufFree(body)
+        why = "cannot create " + outdir
+        ret false
+    end
+    url := str.Lower(n.pre_url)
+    mut ok := false
+    if str.EndsWith(url, ".zip"):
+        ok = archive.ZipExtractAll(body.data, body.len, outdir)
+    else str.EndsWith(url, ".tar.gz") or str.EndsWith(url, ".tgz"):
+        mut gz := false
+        mut tar := compress.GzipDecompressBuf(body, gz)
+        if gz:
+            ok = archive.TarExtractAll(tar.data, tar.len, outdir)
+        end
+        compress.BufFree(tar)
+    else:
+        ok = archive.WriteBinaryFile(pth.PathJoin(outdir, pth.PathBase(n.pre_url)), body.data, body.len)
+    end
+    compress.BufFree(body)
+    if not ok or not os.Exists(libpath):
+        why = "the prebuilt archive " + n.pre_url + " has no " + lib
+        ret false
+    end
+    objs.push(libpath)
+    ret true
+end

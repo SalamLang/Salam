@@ -1,3 +1,5 @@
+import { isDesktop } from "./desktop";
+import { isFa, lang, t } from "./i18n";
 export type User = {
   id: number;
   name: string;
@@ -12,6 +14,70 @@ export type Chat = {
   device_id?: number;
   workspace?: string;
 };
+export type FileMeta = {
+  id: number;
+  name: string;
+  kind: "image" | "text" | "pdf" | "archive";
+  mime: string;
+  size: number;
+  url?: string;
+};
+export type OutgoingFile = { name: string; data: string };
+export type Capabilities = {
+  image: boolean;
+  pdf: boolean;
+  max_files: number;
+  max_total: number;
+  max_image: number;
+  max_pdf: number;
+  max_text: number;
+  max_archive: number;
+  text: string[];
+  text_names: string[];
+};
+export type AdminUpload = {
+  id: number;
+  chat_id: string;
+  message_id: number;
+  name: string;
+  kind: FileMeta["kind"];
+  mime: string;
+  size: number;
+  path: string;
+  listing: string;
+  created: number;
+  user: { id: number; name: string; email: string };
+  agent: boolean;
+};
+export type AdminGuest = {
+  id: number;
+  ip: string;
+  lang: string;
+  messages: number;
+  created: number;
+  updated: number;
+  first: string;
+};
+export type GuestMessage = {
+  id: number;
+  role: "user" | "assistant";
+  body: string;
+  status: string;
+  created: number;
+};
+export type AdminSession = {
+  id: number;
+  created: number;
+  last_used: number;
+  expires: number;
+  ip: string;
+  agent: string;
+  client: "web" | "agent";
+  client_version: string;
+  current: boolean;
+  user: { id: number; name: string; email: string };
+};
+export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
   name: string;
@@ -29,7 +95,25 @@ export type Message = {
   activity?: ActivityStep[];
   calls?: MessageCall[];
   ms?: number;
+  files?: FileMeta[];
 };
+export type TraceItem =
+  | { kind: "prompt"; text: string; at: number }
+  | { kind: "think"; text: string; at: number }
+  | { kind: "text"; text: string; synthetic: boolean; at: number }
+  | {
+      kind: "tool";
+      tool: string;
+      status: string;
+      title: string;
+      input: string;
+      output: string;
+      error: string;
+      at: number;
+      end: number;
+    }
+  | { kind: "file"; text: string }
+  | { kind: "error"; text: string; at: number };
 export type Phase = "thinking" | "searching" | "writing" | "checking" | "done";
 export type ThinkStep = { kind: "think"; text: string };
 export type ToolStep = {
@@ -37,10 +121,25 @@ export type ToolStep = {
   tool?: string;
   icon: string;
   title: string;
+  title_en?: string;
   detail: string;
+  detail_en?: string;
   link: string;
   status: "running" | "done" | "error";
 };
+const UI_TEXT_EN: Record<string, string> = {
+  "گفت‌وگوی تازه": "New chat",
+  "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.":
+    "The assistant could not answer just now. Please ask again in a moment.",
+  "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.":
+    "The assistant is not available. Please try again in a moment.",
+};
+
+export function uiText(s: string): string {
+  if (isFa) return s;
+  return UI_TEXT_EN[s] ?? s;
+}
+
 export type TextStep = { kind: "text"; text: string };
 export type ActivityStep = ThinkStep | ToolStep | TextStep;
 export type CallState = "pending" | "running" | "done" | "error" | "denied";
@@ -183,6 +282,12 @@ export type AdminSummary = {
   users_7d: number;
   chats: number;
   messages: number;
+  uploads?: number;
+  guests?: number;
+  guest_messages?: number;
+  guests_at_limit?: number;
+  uploads_images?: number;
+  uploads_bytes?: number;
   apps: number;
   mcp_calls: number;
   mcp_calls_24h: number;
@@ -217,6 +322,10 @@ export type AdminUser = {
   tokens_out: number;
   last_login: number;
   logins: number;
+  images?: number;
+  files?: number;
+  sessions?: number;
+  agent_version?: string;
   last_active_chat: number;
   last_active_agent: number;
   last_active_api: number;
@@ -315,6 +424,11 @@ function query(params: Record<string, string | number | undefined>): string {
 }
 
 let onUnauthorized: () => void = () => {};
+let clientVersion = "";
+export function setClientVersion(v: string) {
+  clientVersion = /^[0-9A-Za-z.+-]{1,32}$/.test(v) ? v : "";
+}
+
 export function handleUnauthorized(fn: () => void) {
   onUnauthorized = fn;
 }
@@ -324,7 +438,11 @@ async function call<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    "X-Salam-Client": isDesktop ? "agent" : "web",
+    "X-Salam-Lang": lang,
+  };
+  if (clientVersion) headers["X-Salam-Version"] = clientVersion;
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -339,7 +457,10 @@ async function call<T>(
     throw new ApiError(
       0,
       "network",
-      "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+      t(
+        "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+        "Could not reach the server. Check your internet connection.",
+      ),
     );
   }
   let data: { error?: string; message?: string } | null = null;
@@ -351,7 +472,11 @@ async function call<T>(
     throw new ApiError(
       res.status,
       data?.error || "server",
-      data?.message || "خطایی پیش آمد. دوباره تلاش کنید.",
+      data?.message ||
+        t(
+          "خطایی پیش آمد. دوباره تلاش کنید.",
+          "Something went wrong. Please try again.",
+        ),
     );
   }
   return data as unknown as T;
@@ -376,7 +501,10 @@ export async function streamMessage(
   on: StreamHandlers,
   signal: AbortSignal,
 ): Promise<boolean> {
-  const headers: Record<string, string> = { Accept: "text/event-stream" };
+  const headers: Record<string, string> = {
+    Accept: "text/event-stream",
+    "X-Salam-Lang": lang,
+  };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}/chats/${chatId}/messages/${mid}/stream`, {
@@ -466,11 +594,48 @@ export const api = {
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
-  send: (id: string, text: string) =>
+  send: (id: string, text: string, files?: OutgoingFile[]) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
       `/chats/${id}/messages`,
-      { text },
+      files && files.length > 0 ? { text, files } : { text },
+    ),
+  capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  adminFiles: (q: { user?: number; kind?: string; offset?: number }) =>
+    call<{ files: AdminUpload[]; total: number }>(
+      "GET",
+      `/admin/files?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.kind ? { kind: q.kind } : {}), offset: String(q.offset ?? 0) })}`,
+    ),
+  adminSessions: (q: { user?: number; client?: string; offset?: number }) =>
+    call<{ sessions: AdminSession[]; total: number }>(
+      "GET",
+      `/admin/sessions?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.client ? { client: q.client } : {}), offset: String(q.offset ?? 0) })}`,
+    ),
+  adminGuests: (offset: number) =>
+    call<{ guests: AdminGuest[]; total: number }>(
+      "GET",
+      `/admin/guests?offset=${offset}`,
+    ),
+  adminGuest: (id: number) =>
+    call<{ messages: GuestMessage[] }>("GET", `/admin/guests/${id}`),
+  revokeSession: (id: number) =>
+    call<{ ok: boolean }>("DELETE", `/admin/sessions/${id}`),
+  revokeUserSessions: (id: number) =>
+    call<{ revoked: number }>("DELETE", `/admin/users/${id}/sessions`),
+  adminFile: (id: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/files/${id}`,
+    ),
+  chatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/chats/${id}/files/${fid}`,
+    ),
+  adminChatFile: (id: string, fid: number) =>
+    call<{ name: string; kind: string; mime: string; data: string }>(
+      "GET",
+      `/admin/chats/${id}/files/${fid}`,
     ),
   poll: (id: string, mid: number) =>
     call<{
@@ -526,9 +691,16 @@ export const api = {
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminChat: (id: string) =>
-    call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
+    call<{
+      chat: Chat;
+      user?: AdminChatOwner;
+      messages: Message[];
+      calls?: MessageCall[];
+    }>("GET", `/admin/chats/${id}`),
+  adminTrace: (id: number) =>
+    call<{ trace: TraceItem[]; saved: boolean }>(
       "GET",
-      `/admin/chats/${id}`,
+      `/admin/messages/${id}/trace`,
     ),
   plans: () => call<{ plans: Plan[]; gateways: Gateway[] }>("GET", "/plans"),
   subscription: () =>

@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { api, ApiError, setToken, type User } from "./api";
-import { IconCode, IconEye, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
+import { IconCode, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
+import { isFa, setLang, t } from "./i18n";
 
 type Mode = "login" | "register";
 
 export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User) => void; compact?: boolean; intro?: string }) {
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(location.search).get("signup") ? "register" : "login"));
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,16 +18,16 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
-    if (mode === "register" && name.trim().length < 2) return setError("نام خود را بنویسید.");
-    if (!email.includes("@")) return setError("نشانی ایمیل درست نیست.");
-    if (password.length < 8) return setError("گذرواژه باید دست‌کم ۸ نویسه باشد.");
+    if (mode === "register" && name.trim().length < 2) return setError(t("نام خود را بنویسید.", "Enter your name."));
+    if (!email.includes("@")) return setError(t("نشانی ایمیل درست نیست.", "That email address is not valid."));
+    if (password.length < 8) return setError(t("گذرواژه باید دست‌کم ۸ نویسه باشد.", "Password must be at least 8 characters."));
     setBusy(true);
     try {
       const res = mode === "login" ? await api.login(email, password) : await api.register(name.trim(), email, password);
       setToken(res.token);
       onAuth(res.user);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "خطایی پیش آمد.");
+      setError(err instanceof ApiError ? err.message : t("خطایی پیش آمد.", "Something went wrong."));
     } finally {
       setBusy(false);
     }
@@ -40,28 +41,28 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
   return (
     <form className={`auth-card${compact ? " compact" : ""}`} onSubmit={submit} noValidate>
       <img src="/logo.svg" alt="" className="auth-card-logo" width={44} height={44} />
-      <h2>{mode === "login" ? "ورود به حساب" : "ساخت حساب تازه"}</h2>
-      <p className="muted">{intro ?? (mode === "login" ? "خوش برگشتید! برای ادامه وارد شوید." : "برای گفت‌وگو با دستیار سلام یک حساب بسازید.")}</p>
+      <h2>{mode === "login" ? t("ورود به حساب", "Sign in") : t("ساخت حساب تازه", "Create an account")}</h2>
+      <p className="muted">{intro ?? (mode === "login" ? t("خوش برگشتید! برای ادامه وارد شوید.", "Welcome back! Sign in to continue.") : t("برای گفت‌وگو با دستیار سلام یک حساب بسازید.", "Create an account to chat with Salam AI."))}</p>
       <div className="tabs" role="tablist">
         <button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => switchMode("login")}>
-          ورود
+          {t("ورود", "Sign in")}
         </button>
         <button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "active" : ""} onClick={() => switchMode("register")}>
-          ثبت‌نام
+          {t("ثبت‌نام", "Sign up")}
         </button>
       </div>
       {mode === "register" && (
         <label className="field">
-          <span>نام</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder="مثلا سارا احمدی" maxLength={80} />
+          <span>{t("نام", "Name")}</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder={t("مثلا سارا احمدی", "e.g. Sara Ahmadi")} maxLength={80} />
         </label>
       )}
       <label className="field">
-        <span>ایمیل</span>
+        <span>{t("ایمیل", "Email")}</span>
         <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" />
       </label>
       <label className="field">
-        <span>گذرواژه</span>
+        <span>{t("گذرواژه", "Password")}</span>
         <div className="password">
           <input
             type={show ? "text" : "password"}
@@ -69,9 +70,9 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
-            placeholder="دست‌کم ۸ نویسه"
+            placeholder={t("دست‌کم ۸ نویسه", "At least 8 characters")}
           />
-          <button type="button" className="icon-button" onClick={() => setShow((s) => !s)} aria-label={show ? "پنهان کردن گذرواژه" : "نمایش گذرواژه"}>
+          <button type="button" className="icon-button" onClick={() => setShow((s) => !s)} aria-label={show ? t("پنهان کردن گذرواژه", "Hide password") : t("نمایش گذرواژه", "Show password")}>
             {show ? <IconEyeOff width={18} height={18} /> : <IconEye width={18} height={18} />}
           </button>
         </div>
@@ -82,12 +83,12 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
         </div>
       )}
       <button type="submit" className="button primary wide" disabled={busy}>
-        {busy ? <span className="spinner" /> : mode === "login" ? "ورود" : "ساخت حساب"}
+        {busy ? <span className="spinner" /> : mode === "login" ? t("ورود", "Sign in") : t("ساخت حساب", "Create account")}
       </button>
       <p className="switch">
-        {mode === "login" ? "حساب ندارید؟ " : "حساب دارید؟ "}
+        {mode === "login" ? t("حساب ندارید؟ ", "No account? ") : t("حساب دارید؟ ", "Have an account? ")}
         <button type="button" className="link" onClick={() => switchMode(mode === "login" ? "register" : "login")}>
-          {mode === "login" ? "ثبت‌نام کنید" : "وارد شوید"}
+          {mode === "login" ? t("ثبت‌نام کنید", "Sign up") : t("وارد شوید", "Sign in")}
         </button>
       </p>
     </form>
@@ -97,34 +98,34 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
 export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void; theme: Theme; toggleTheme: () => void }) {
   return (
     <div className="auth">
-      <button type="button" className="icon-button theme-corner" onClick={toggleTheme} aria-label="تغییر پوسته">
+      <button type="button" className="icon-button theme-corner" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
         {theme === "dark" ? <IconSun /> : <IconMoon />}
       </button>
       <section className="auth-brand">
         <div className="auth-brand-inner">
           <img src="/logo.svg" alt="" className="auth-logo" width={72} height={72} />
-          <h1>دستیار هوشمند سلام</h1>
-          <p className="lead">همراه شما برای یادگیری و نوشتن برنامه با سلام، نخستین زبان برنامه‌نویسی ایرانی.</p>
+          <h1>{t("دستیار هوشمند سلام", "Salam AI")}</h1>
+          <p className="lead">{t("همراه شما برای یادگیری و نوشتن برنامه با سلام، نخستین زبان برنامه‌نویسی ایرانی.", "Your companion for learning and writing programs in Salam, the first Iranian programming language.")}</p>
           <ul className="features">
             <li>
               <span className="feature-icon"><IconCode /></span>
               <div>
-                <strong>کد سلام بنویسید</strong>
-                <span>از یک ایده تا برنامه‌ی کامل، به فارسی یا انگلیسی</span>
+                <strong>{t("کد سلام بنویسید", "Write Salam code")}</strong>
+                <span>{t("از یک ایده تا برنامه‌ی کامل، به فارسی یا انگلیسی", "From an idea to a full program, in Persian or English")}</span>
               </div>
             </li>
             <li>
               <span className="feature-icon"><IconBook /></span>
               <div>
-                <strong>کتابخانه‌ی استاندارد را بشناسید</strong>
-                <span>پاسخ‌ها بر پایه‌ی مستندات واقعی سلام</span>
+                <strong>{t("کتابخانه‌ی استاندارد را بشناسید", "Explore the standard library")}</strong>
+                <span>{t("پاسخ‌ها بر پایه‌ی مستندات واقعی سلام", "Answers grounded in the real Salam docs")}</span>
               </div>
             </li>
             <li>
               <span className="feature-icon"><IconSwap /></span>
               <div>
-                <strong>کد خود را به سلام ببرید</strong>
-                <span>تبدیل از پایتون، جاوااسکریپت، C و زبان‌های دیگر</span>
+                <strong>{t("کد خود را به سلام ببرید", "Bring your code to Salam")}</strong>
+                <span>{t("تبدیل از پایتون، جاوااسکریپت، C و زبان‌های دیگر", "Convert from Python, JavaScript, C and other languages")}</span>
               </div>
             </li>
           </ul>
@@ -135,9 +136,13 @@ export function Auth({ onAuth, theme, toggleTheme }: { onAuth: (u: User) => void
         <p className="auth-foot">
           <a href="https://www.salamlang.ir" target="_blank" rel="noreferrer">salamlang.ir</a>
           <span>·</span>
-          <a href="https://editor.salamlang.ir" target="_blank" rel="noreferrer">ویرایشگر آنلاین</a>
+          <a href="https://editor.salamlang.ir" target="_blank" rel="noreferrer">{t("ویرایشگر آنلاین", "Online editor")}</a>
           <span>·</span>
-          <a href="https://www.salamlang.ir/learn/" target="_blank" rel="noreferrer">آموزش سلام</a>
+          <a href="https://www.salamlang.ir/learn/" target="_blank" rel="noreferrer">{t("آموزش سلام", "Learn Salam")}</a>
+          <span>·</span>
+          <button type="button" className="link" onClick={() => setLang(isFa ? "en" : "fa")} aria-label={t("تغییر زبان به انگلیسی", "Switch to Persian")}>
+            <IconGlobe width={14} height={14} /> {isFa ? "English" : "فارسی"}
+          </button>
         </p>
       </section>
     </div>

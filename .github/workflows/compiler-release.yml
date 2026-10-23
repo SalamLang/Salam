@@ -26,8 +26,36 @@ env:
 
 permissions:
   contents: read
+concurrency:
+  group: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')) && 'compiler-release-stable' || format('compiler-release-{0}', github.run_id) }}
+  cancel-in-progress: true
 jobs:
+  release-guard:
+    name: Release version is not taken
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout VERSION
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Refuse to reuse a released version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          tag="v$(tr -d ' \t\r\n' < VERSION)"
+          if gh release view "$tag" -R "$REPO" --json isPrerelease --jq '.isPrerelease' 2>/dev/null | grep -qx false; then
+            echo "::error::$tag is already released, and immutable releases keep a used tag name forever. Bump VERSION in the release commit: salam run tools/salam/update-version.salam <next version>"
+            exit 1
+          fi
+          echo "$tag has no published release yet"
   changes:
+    needs: release-guard
     uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
     with:
       paths: |
@@ -360,7 +388,7 @@ jobs:
           fi
           rm -f smoke.salam smoke_exe smoke_musl smoke.exe smoke_a64 smoke_i686 smoke_armhf smoke.o salam_mod_*.c salam_mod_*.h
       - name: Set up pinned tcc
-        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
         uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
       - name: Validate full test suite (release gate)
         if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
@@ -400,7 +428,7 @@ jobs:
             || { echo "::error::Linux test suite failed - blocking release"; exit 1; }
 
       - name: Generated C compiles clean under tcc, gcc and clang
-        if: startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly)
+        if: env.RELEASE_TESTS == 'true' && (startsWith(github.event.head_commit.message, 'release:') || (github.event_name == 'workflow_dispatch' && inputs.nightly))
         run: |
           set -eu
           CLANG=""
@@ -2003,6 +2031,7 @@ jobs:
 
   create-release:
     if: |
+      !cancelled() && !failure() &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
@@ -2020,6 +2049,7 @@ jobs:
         build-linux-aarch64,
         build-linux-musl,
         android-gate,
+        build-agent,
       ]
     permissions:
       contents: write
@@ -2055,6 +2085,12 @@ jobs:
               echo "PRERELEASE_FLAG="
             } >> "$GITHUB_ENV"
           fi
+      - name: Pack the official packages
+        run: |
+          sh tools/bash/check-official-packages.sh
+          mkdir -p release
+          tar -czf "release/salam-packages-${VERSION}.tar.gz" --exclude="packages/opencv/native/build" packages
+          zip -qr "release/salam-packages-${VERSION}.zip" packages -x "packages/opencv/native/build/*"
       - name: Download Linux artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -2208,7 +2244,7 @@ jobs:
             git ls-files -z -- std | tar --null --files-from=- -cf - | tar -xf - -C "$STAGE"
           else
             echo "::warning::git ls-files returned nothing for std/; falling back to a filesystem copy"
-            tar -cf - --exclude='std/opencv/native/build' std | tar -xf - -C "$STAGE"
+            tar -cf - std | tar -xf - -C "$STAGE"
           fi
 
           cp VERSION LICENSE "$STAGE/"
@@ -2371,6 +2407,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          pre=$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || true)
+          if [ "$pre" = "false" ]; then
+            echo "::error::$TAG is already published as a stable release; refusing to delete it. Bump VERSION and push a new release: commit."
+            exit 1
+          fi
           if gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null; then
             echo "Deleted existing release $TAG (and its tag)."
           else
@@ -2435,6 +2476,13 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
           echo "pushed a signed annotated tag $TAG"
 
+      - name: Download the Salam Agent release set
+        if: needs.build-agent.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: salam-agent-*
+          path: agent-release
+          merge-multiple: true
       - name: Create GitHub Release with auto-generated notes
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
@@ -2476,6 +2524,19 @@ jobs:
 
           ( cd release && sha256sum -c SHA256SUMS ) \
             || { echo "::error::SHA256SUMS does not verify against the staged assets"; exit 1; }
+
+          agent=()
+          if [ -d agent-release ]; then
+            mv agent-release/SHA256SUMS "agent-release/salam-agent-${VERSION}-SHA256SUMS"
+            mv agent-release/SHA512SUMS "agent-release/salam-agent-${VERSION}-SHA512SUMS"
+            ( cd agent-release && sha256sum -c "salam-agent-${VERSION}-SHA256SUMS" ) \
+              || { echo "::error::the Salam Agent checksums do not verify"; exit 1; }
+            agent=(agent-release/salam-agent-"${VERSION}"-*)
+            [ "${#agent[@]}" -gt 0 ] || { echo "::error::no salam-agent-${VERSION} files were built"; exit 1; }
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::the Salam Agent release set is missing"
+            exit 1
+          fi
 
           {
             echo "### Verifying your download"
@@ -2530,7 +2591,7 @@ jobs:
             --notes-file release-notes-preamble.md \
             --generate-notes \
             ${PRERELEASE_FLAG:+"$PRERELEASE_FLAG"} \
-            "${assets[@]}" "${sums[@]}"
+            "${assets[@]}" "${sums[@]}" ${agent[@]+"${agent[@]}"}
 
   build-agent:
     if: |
@@ -2539,56 +2600,8 @@ jobs:
       github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
     name: Build Salam Agent
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
-    with:
-      attach: true
-
-  attach-agent:
-    if: |
-      github.ref == 'refs/heads/main' &&
-      github.repository == 'SalamLang/Salam' &&
-      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
-    name: Attach Salam Agent to the release
-    needs: [create-release, build-agent]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: VERSION
-          sparse-checkout-cone-mode: false
-      - name: Download the agent release set
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: salam-agent-*
-          path: agent-release
-          merge-multiple: true
-      - name: Upload the agent files to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          VERSION=$(tr -d '[:space:]' < VERSION)
-          TAG="v$VERSION"
-          cd agent-release
-          shopt -s nullglob
-          files=(salam-agent-"$VERSION"-*)
-          [ "${#files[@]}" -gt 0 ] || { echo "::error::no salam-agent-$VERSION files were built; agent/src-tauri must carry VERSION"; exit 1; }
-          mv SHA256SUMS "salam-agent-$VERSION-SHA256SUMS"
-          mv SHA512SUMS "salam-agent-$VERSION-SHA512SUMS"
-          sha256sum -c "salam-agent-$VERSION-SHA256SUMS"
-          gh release upload "$TAG" --clobber salam-agent-*
-          {
-            echo "### Salam Agent attached to $TAG"
-            echo ""
-            printf -- '- %s\n' salam-agent-*
-          } >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

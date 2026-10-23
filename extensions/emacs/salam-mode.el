@@ -2,7 +2,7 @@
 
 ;; Author: The Salam Team
 ;; URL: https://github.com/SalamLang/Salam
-;; Version: 0.5.6
+;; Version: 0.5.9
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages salam
 ;; SPDX-License-Identifier: MIT
@@ -29,7 +29,7 @@
 
 (defcustom salam-lang "auto"
   "Keyword pack passed to the compiler as --lang.
-\"auto\" reads a //! lang: directive, then falls back to detecting the
+\"auto\" reads a // زبان: فارسی or // lang: en directive, then falls back to detecting the
 script the buffer is written in."
   :type '(choice (const "auto") (const "en") (const "fa"))
   :group 'salam)
@@ -53,6 +53,11 @@ script the buffer is written in."
   "Root directory for std/... imports, passed as --stdlib-path.
 An empty string lets the compiler find it."
   :type 'string
+  :group 'salam)
+
+(defcustom salam-lsp-messages "auto"
+  "Language of messages from the Salam language server: \"auto\", \"en\" or \"fa\"."
+  :type '(choice (const "auto") (const "en") (const "fa"))
   :group 'salam)
 
 (defcustom salam-run-command "exec"
@@ -428,6 +433,39 @@ command line containing nil."
                '(salam "^\\(.+?\\):\\([0-9]+\\):\\([0-9]+\\): \\(?:\\(error\\)\\|\\(warning\\)\\|note\\): "
                        1 2 3 (5 . 4)))
   (add-to-list 'compilation-error-regexp-alist 'salam))
+
+(defvar eglot-server-programs)
+(defvar lsp-language-id-configuration)
+(declare-function make-lsp-client "lsp-mode")
+(declare-function lsp-stdio-connection "lsp-mode")
+(declare-function lsp-activate-on "lsp-mode")
+(declare-function lsp-register-client "lsp-mode")
+
+(defun salam--lsp-init-options ()
+  "Initialization options sent to `salam lsp'."
+  (append
+   (unless (string-empty-p salam-stdlib-path)
+     (list :stdlibPath salam-stdlib-path))
+   (when (member salam-lsp-messages '("en" "fa"))
+     (list :messages salam-lsp-messages))
+   (list :formatFixOrder :json-false)))
+
+(defun salam--eglot-contact (_interactive)
+  "Command and options eglot uses to start the Salam language server."
+  (list salam-compiler "lsp" :initializationOptions (salam--lsp-init-options)))
+
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs '(salam-mode . salam--eglot-contact)))
+
+(with-eval-after-load 'lsp-mode
+  (when (fboundp 'lsp-register-client)
+    (add-to-list 'lsp-language-id-configuration '(salam-mode . "salam"))
+    (lsp-register-client
+     (make-lsp-client
+      :new-connection (lsp-stdio-connection (lambda () (list salam-compiler "lsp")))
+      :activation-fn (lsp-activate-on "salam")
+      :initialization-options #'salam--lsp-init-options
+      :server-id 'salam-lsp))))
 
 (with-eval-after-load 'yasnippet
   (let ((directory (expand-file-name

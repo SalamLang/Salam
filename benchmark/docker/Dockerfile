@@ -82,6 +82,7 @@ ARG SALAM_SEED_SLUG=linux-x86_64
 COPY tools /repo/tools
 COPY compiler /repo/compiler
 COPY std /repo/std
+COPY packages /repo/packages
 COPY VERSION /repo/VERSION
 WORKDIR /repo
 RUN sh tools/bash/fetch-seed.sh --slug "${SALAM_SEED_SLUG}" --out /repo/seed \
@@ -92,6 +93,7 @@ RUN /repo/salam version
 FROM toolchain AS bench
 COPY --from=salam-builder /repo/salam /repo/salam
 COPY std /repo/std
+COPY packages /repo/packages
 COPY benchmark /repo/benchmark
 
 ENV SALAM_BIN=/repo/salam \

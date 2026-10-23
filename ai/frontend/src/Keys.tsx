@@ -5,13 +5,15 @@ import { IconAlert, IconKey } from "./icons";
 import { CopyButton, useHighlighted } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog } from "./Confirm";
+import { t } from "./i18n";
 
 export const API_BASE_URL = "https://ai-api.salamlang.ir";
 export const API_MODEL = "salam";
 const PLACEHOLDER = "sk-salam-...";
 const HOURLY_LIMIT = 100;
-const SAMPLE_PROMPT = "یک برنامه‌ی سلام بنویس که «سلام دنیا» را چاپ کند.";
+const SAMPLE_PROMPT = t("یک برنامه‌ی سلام بنویس که «سلام دنیا» را چاپ کند.", "Write a Salam program that prints hello world.");
 const SALAM_KEY = "sk-salam-KEY";
+const SHORT_PROMPT = t("یک برنامه‌ی کوتاه سلام بنویس.", "Write a short Salam program.");
 
 const SALAM_CHAT = `import net.http
 import encoding.json
@@ -22,7 +24,7 @@ func main:
     mut headers := http.NewHeaders()
     headers.put("Authorization", "Bearer sk-salam-KEY")
     headers.put("Content-Type", "application/json")
-    body := \`{"model": "salam", "messages": [{"role": "user", "content": "یک برنامه‌ی کوتاه سلام بنویس."}]}\`
+    body := \`{"model": "salam", "messages": [{"role": "user", "content": "${SHORT_PROMPT}"}]}\`
     r := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
     if http.Status(r) != 200:
         println "error", http.Status(r), http.Body(r)
@@ -44,7 +46,7 @@ func main:
     mut headers := http.NewHeaders()
     headers.put("Authorization", "Bearer sk-salam-KEY")
     headers.put("Content-Type", "application/json")
-    body := \`{"model": "salam", "stream": true, "messages": [{"role": "user", "content": "یک برنامه‌ی کوتاه سلام بنویس."}]}\`
+    body := \`{"model": "salam", "stream": true, "messages": [{"role": "user", "content": "${SHORT_PROMPT}"}]}\`
     r := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
     if http.Status(r) != 200:
         println "error", http.Status(r), http.Body(r)
@@ -91,7 +93,7 @@ const client = new OpenAI({
       label: "curl",
       examples: [
         {
-          title: "ترمینال",
+          title: t("ترمینال", "Terminal"),
           lang: "bash",
           code: `curl ${API_BASE_URL}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
@@ -105,7 +107,7 @@ const client = new OpenAI({
   }'`,
         },
         {
-          title: "پاسخ جریانی",
+          title: t("پاسخ جریانی", "Streaming"),
           lang: "bash",
           code: `curl -N ${API_BASE_URL}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
@@ -128,10 +130,10 @@ const client = new OpenAI({
       examples: [
         { title: "Salam", lang: "salam", code: SALAM_CHAT.replace(SALAM_KEY, key) },
         {
-          title: "پاسخ جریانی",
+          title: t("پاسخ جریانی", "Streaming"),
           lang: "salam",
           code: SALAM_STREAM.replace(SALAM_KEY, key),
-          note: "کلاینت HTTP کتابخانه‌ی استاندارد سلام وقتی برمی‌گردد که جریان پاسخ تمام شده باشد. پس این برنامه همه‌ی تکه‌های جریانی را بعد از پایان پاسخ یکجا چاپ می‌کند، نه هم‌زمان با رسیدنشان.",
+          note: t("کلاینت HTTP کتابخانه‌ی استاندارد سلام وقتی برمی‌گردد که جریان پاسخ تمام شده باشد. پس این برنامه همه‌ی تکه‌های جریانی را بعد از پایان پاسخ یکجا چاپ می‌کند، نه هم‌زمان با رسیدنشان.", "The HTTP client in Salam's standard library returns only once the response stream has finished. So this program prints all the streamed chunks together at the end, not as they arrive."),
         },
       ],
     },
@@ -155,7 +157,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)`,
         },
         {
-          title: "پاسخ جریانی",
+          title: t("پاسخ جریانی", "Streaming"),
           lang: "python",
           code: `${pyClient}
 
@@ -190,7 +192,7 @@ const response = await client.chat.completions.create({
 console.log(response.choices[0].message.content);`,
         },
         {
-          title: "پاسخ جریانی",
+          title: t("پاسخ جریانی", "Streaming"),
           lang: "javascript",
           code: `${jsClient}
 
@@ -230,8 +232,8 @@ function Examples({ secret }: { secret: string }) {
   const current = tabs.find((t) => t.id === tab) || tabs[0];
   return (
     <section className="card panel">
-      <h3>نمونه‌ی استفاده</h3>
-      <div className="tabs examples-tabs" role="tablist" aria-label="زبان نمونه">
+      <h3>{t("نمونه‌ی استفاده", "Usage examples")}</h3>
+      <div className="tabs examples-tabs" role="tablist" aria-label={t("زبان نمونه", "Example language")}>
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -251,12 +253,12 @@ function Examples({ secret }: { secret: string }) {
       <div role="tabpanel" id={`panel-${current.id}`} aria-labelledby={`tab-${current.id}`}>
         {current.install && (
           <p className="muted small example-install">
-            ابتدا کتابخانه‌ی رسمی OpenAI را نصب کنید: <code className="inline-code" dir="ltr">{current.install}</code>
+            {t("ابتدا کتابخانه‌ی رسمی OpenAI را نصب کنید:", "First install the official OpenAI library:")} <code className="inline-code" dir="ltr">{current.install}</code>
           </p>
         )}
         {current.file && current.run && (
           <p className="muted small example-install">
-            هر نمونه کامل است. آن را در پرونده‌ی <code className="inline-code" dir="ltr">{current.file}</code> بگذارید و با <code className="inline-code" dir="ltr">{current.run}</code> اجرا کنید.
+            {t("هر نمونه کامل است. آن را در پرونده‌ی", "Each example is complete. Save it as")} <code className="inline-code" dir="ltr">{current.file}</code> {t("بگذارید و با", "and run it with")} <code className="inline-code" dir="ltr">{current.run}</code>{t(" اجرا کنید.", ".")}
           </p>
         )}
         {current.examples.map((ex) => (
@@ -268,19 +270,18 @@ function Examples({ secret }: { secret: string }) {
       </div>
       <ul className="example-notes">
         <li>
-          {secret ? "کلیدی که همین الان ساختید در نمونه‌ها گذاشته شده است." : (
+          {secret ? t("کلیدی که همین الان ساختید در نمونه‌ها گذاشته شده است.", "The key you just created is already filled in.") : (
             <>
-              به جای <code className="inline-code" dir="ltr">{PLACEHOLDER}</code> کلید خودتان را بگذارید.
+              {t("به جای", "Replace")} <code className="inline-code" dir="ltr">{PLACEHOLDER}</code> {t("کلید خودتان را بگذارید.", "with your own key.")}
             </>
           )}{" "}
-          بهتر است کلید را در متغیر محیطی نگه دارید و آن را در کد سمت مرورگر یا مخزن عمومی قرار ندهید.
+          {t("بهتر است کلید را در متغیر محیطی نگه دارید و آن را در کد سمت مرورگر یا مخزن عمومی قرار ندهید.", "Keep the key in an environment variable, and never put it in browser code or a public repository.")}
         </li>
         <li>
-          سرآیند اختیاری <code className="inline-code" dir="ltr">X-Salam-Project</code> نام پروژه را روی درخواست می‌گذارد تا در فهرست درخواست‌ها جدا دیده شود. اگر آن را نفرستید، نام کلید به جای نام پروژه ثبت
-          می‌شود.
+          {t("سرآیند اختیاری", "The optional")} <code className="inline-code" dir="ltr">X-Salam-Project</code> {t("نام پروژه را روی درخواست می‌گذارد تا در فهرست درخواست‌ها جدا دیده شود. اگر آن را نفرستید، نام کلید به جای نام پروژه ثبت می‌شود.", "header tags the request with a project name, so it shows up separately in the request list. If you leave it out, the key name is recorded as the project.")}
         </li>
         <li>
-          هر حساب در هر ساعت حداکثر {fmtNum(HOURLY_LIMIT)} درخواست می‌تواند بفرستد. پس از آن، پاسخ با کد <code className="inline-code" dir="ltr">429</code> برمی‌گردد.
+          {t(`هر حساب در هر ساعت حداکثر ${fmtNum(HOURLY_LIMIT)} درخواست می‌تواند بفرستد. پس از آن، پاسخ با کد`, `Each account can send up to ${fmtNum(HOURLY_LIMIT)} requests per hour. After that, requests get a`)} <code className="inline-code" dir="ltr">429</code>{t(" برمی‌گردد.", " response.")}
         </li>
       </ul>
     </section>
@@ -301,7 +302,7 @@ function MyRequests() {
       setRequests((cur) => (before ? [...cur, ...r.requests] : r.requests));
       setHasMore(r.requests.length >= PAGE_SIZE);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "بارگذاری درخواست‌ها ناموفق بود.");
+      setError(e instanceof ApiError ? e.message : t("بارگذاری درخواست‌ها ناموفق بود.", "Could not load requests."));
     } finally {
       setLoading(false);
     }
@@ -314,9 +315,9 @@ function MyRequests() {
   return (
     <section className="card panel">
       <div className="panel-head">
-        <h3>درخواست‌های من</h3>
+        <h3>{t("درخواست‌های من", "My requests")}</h3>
         <button type="button" className="button ghost small" disabled={loading} onClick={() => load()}>
-          تازه‌سازی
+          {t("تازه‌سازی", "Refresh")}
         </button>
       </div>
       {error && (
@@ -329,7 +330,7 @@ function MyRequests() {
         loading={loading}
         hasMore={hasMore}
         onMore={() => load(requests[requests.length - 1]?.id)}
-        empty="هنوز با کلیدهای شما درخواستی فرستاده نشده است."
+        empty={t("هنوز با کلیدهای شما درخواستی فرستاده نشده است.", "No requests have been sent with your keys yet.")}
       />
     </section>
   );
@@ -350,7 +351,7 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
       const r = await api.keys();
       setKeys(r.keys);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "بارگذاری کلیدها ناموفق بود.");
+      setError(e instanceof ApiError ? e.message : t("بارگذاری کلیدها ناموفق بود.", "Could not load keys."));
     }
   }, []);
 
@@ -362,7 +363,7 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
     e.preventDefault();
     const n = name.trim();
     if (!n) {
-      setFormError("یک نام برای کلید بنویسید.");
+      setFormError(t("یک نام برای کلید بنویسید.", "Enter a name for the key."));
       return;
     }
     setCreating(true);
@@ -373,7 +374,7 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
       setKeys((cur) => [r.key, ...(cur || [])]);
       setName("");
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "ساخت کلید ناموفق بود.");
+      setFormError(err instanceof ApiError ? err.message : t("ساخت کلید ناموفق بود.", "Could not create the key."));
     } finally {
       setCreating(false);
     }
@@ -381,10 +382,10 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
 
   const revoke = async (k: ApiKey) => {
     const ok = await confirmDialog({
-      title: "باطل کردن کلید",
+      title: t("باطل کردن کلید", "Revoke key"),
       subject: k.name,
-      message: "برنامه‌هایی که از این کلید استفاده می‌کنند بلافاصله دیگر کار نخواهند کرد.",
-      confirmLabel: "باطل کن",
+      message: t("برنامه‌هایی که از این کلید استفاده می‌کنند بلافاصله دیگر کار نخواهند کرد.", "Apps that use this key will stop working right away."),
+      confirmLabel: t("باطل کن", "Revoke"),
       icon: "alert",
     });
     if (!ok) return;
@@ -393,9 +394,9 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
       await api.revokeKey(k.id);
       setKeys((cur) => (cur ? cur.filter((x) => x.id !== k.id) : cur));
       if (created?.key.id === k.id) setCreated(null);
-      notify(`کلید «${k.name}» باطل شد.`);
+      notify(t(`کلید «${k.name}» باطل شد.`, `Key "${k.name}" was revoked.`));
     } catch (e) {
-      notify(e instanceof ApiError ? e.message : "باطل کردن کلید ناموفق بود.");
+      notify(e instanceof ApiError ? e.message : t("باطل کردن کلید ناموفق بود.", "Could not revoke the key."));
     } finally {
       setRemoving(null);
     }
@@ -404,24 +405,24 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
   return (
     <div className="page">
       <header className="page-head">
-        <h2>کلیدهای API</h2>
+        <h2>{t("کلیدهای API", "API keys")}</h2>
         <p className="muted">
-          دستیار سلام را در برنامه‌های خودتان به کار ببرید. این API با کلاینت‌های OpenAI سازگار است، پس کافی است نشانی پایه و مدل را عوض کنید و یک کلید شخصی بسازید.
+          {t("دستیار سلام را در برنامه‌های خودتان به کار ببرید. این API با کلاینت‌های OpenAI سازگار است، پس کافی است نشانی پایه و مدل را عوض کنید و یک کلید شخصی بسازید.", "Use Salam AI in your own apps. The API is compatible with OpenAI clients, so just change the base URL and model and create a personal key.")}
         </p>
       </header>
 
       <section className="card panel">
-        <h3>نشانی و مدل</h3>
+        <h3>{t("نشانی و مدل", "Base URL and model")}</h3>
         <dl className="api-facts">
           <div>
-            <dt>نشانی پایه</dt>
+            <dt>{t("نشانی پایه", "Base URL")}</dt>
             <dd>
               <code dir="ltr">{API_BASE_URL}</code>
               <CopyButton text={API_BASE_URL} />
             </dd>
           </div>
           <div>
-            <dt>مدل</dt>
+            <dt>{t("مدل", "Model")}</dt>
             <dd>
               <code dir="ltr">{API_MODEL}</code>
               <CopyButton text={API_MODEL} />
@@ -431,15 +432,15 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
       </section>
 
       <section className="card panel">
-        <h3>ساخت کلید تازه</h3>
+        <h3>{t("ساخت کلید تازه", "Create a new key")}</h3>
         <form className="key-form" onSubmit={create}>
           <label className="field">
-            <span>نام کلید</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} dir="auto" placeholder="مثلاً ربات تلگرام" autoComplete="off" />
+            <span>{t("نام کلید", "Key name")}</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} dir="auto" placeholder={t("مثلاً ربات تلگرام", "e.g. Telegram bot")} autoComplete="off" />
           </label>
           <button type="submit" className="button primary" disabled={creating}>
             {creating ? <span className="spinner" /> : <IconKey width={18} height={18} />}
-            ساخت کلید
+            {t("ساخت کلید", "Create key")}
           </button>
         </form>
         {formError && (
@@ -452,15 +453,15 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
             <div className="secret-head">
               <IconAlert width={18} height={18} />
               <p>
-                کلید «<bdi>{created.key.name}</bdi>» ساخته شد. همین حالا آن را رونوشت کنید و در جای امنی نگه دارید، چون دیگر نمایش داده نمی‌شود.
+                {t("کلید «", "Key \"")}<bdi>{created.key.name}</bdi>{t("» ساخته شد. همین حالا آن را رونوشت کنید و در جای امنی نگه دارید، چون دیگر نمایش داده نمی‌شود.", "\" was created. Copy it now and keep it somewhere safe, because it will not be shown again.")}
               </p>
             </div>
             <div className="secret-value">
               <code dir="ltr">{created.secret}</code>
-              <CopyButton text={created.secret} label="رونوشت کلید" />
+              <CopyButton text={created.secret} label={t("رونوشت کلید", "Copy key")} />
             </div>
             <button type="button" className="button ghost small" onClick={() => setCreated(null)}>
-              کلید را ذخیره کردم، پنهانش کن
+              {t("کلید را ذخیره کردم، پنهانش کن", "I saved the key, hide it")}
             </button>
           </div>
         )}
@@ -468,35 +469,35 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
 
       <section className="card panel">
         <div className="panel-head">
-          <h3>کلیدهای فعال</h3>
+          <h3>{t("کلیدهای فعال", "Active keys")}</h3>
         </div>
         {error && (
           <div className="form-error" role="alert">
             {error}{" "}
             <button type="button" className="link" onClick={load}>
-              تلاش دوباره
+              {t("تلاش دوباره", "Try again")}
             </button>
           </div>
         )}
         {keys === null && !error && (
           <div className="list-loading" role="status">
             <span className="spinner" />
-            <span className="sr-only">در حال بارگذاری</span>
+            <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
           </div>
         )}
-        {keys && keys.length === 0 && <p className="empty-list">هنوز کلیدی نساخته‌اید. با فرم بالا اولین کلید را بسازید.</p>}
+        {keys && keys.length === 0 && <p className="empty-list">{t("هنوز کلیدی نساخته‌اید. با فرم بالا اولین کلید را بسازید.", "You have no keys yet. Create your first one with the form above.")}</p>}
         {keys && keys.length > 0 && (
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col">نام</th>
-                  <th scope="col">پیشوند</th>
-                  <th scope="col">ساخته‌شده</th>
-                  <th scope="col">آخرین استفاده</th>
-                  <th scope="col">درخواست</th>
+                  <th scope="col">{t("نام", "Name")}</th>
+                  <th scope="col">{t("پیشوند", "Prefix")}</th>
+                  <th scope="col">{t("ساخته‌شده", "Created")}</th>
+                  <th scope="col">{t("آخرین استفاده", "Last used")}</th>
+                  <th scope="col">{t("درخواست", "Requests")}</th>
                   <th scope="col">
-                    <span className="sr-only">کارها</span>
+                    <span className="sr-only">{t("کارها", "Actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -513,8 +514,8 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
                     <td title={k.last_used ? fmtDateTime(k.last_used) : undefined}>{fmtRelative(k.last_used)}</td>
                     <td>{fmtNum(k.requests)}</td>
                     <td>
-                      <button type="button" className="button danger small" disabled={removing === k.id} onClick={() => revoke(k)} aria-label={`باطل کردن کلید ${k.name}`}>
-                        {removing === k.id ? <span className="spinner" /> : "باطل کردن"}
+                      <button type="button" className="button danger small" disabled={removing === k.id} onClick={() => revoke(k)} aria-label={t(`باطل کردن کلید ${k.name}`, `Revoke key ${k.name}`)}>
+                        {removing === k.id ? <span className="spinner" /> : t("باطل کردن", "Revoke")}
                       </button>
                     </td>
                   </tr>

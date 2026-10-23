@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setToken, streamMessage, type Chat, type Message, type User } from "./api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api, ApiError, getToken, handleUnauthorized, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
+import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
 import { Apps } from "./Apps";
+import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
@@ -13,19 +15,20 @@ import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, I
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
+import { t } from "./i18n";
 
 const SUGGESTIONS = [
-  { icon: IconCode, title: "اولین برنامه", text: "یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید." },
-  { icon: IconBook, title: "کتابخانه‌ی استاندارد", text: "چطور در سلام یک فایل متنی را خط به خط بخوانم؟ با مثال کامل." },
-  { icon: IconSwap, title: "تبدیل کد", text: "این تابع پایتون را به سلام فارسی تبدیل کن:\n\ndef fib(n):\n    return n if n < 2 else fib(n-1) + fib(n-2)" },
-  { icon: IconGlobe, title: "یک وب‌سرور", text: "با سلام یک وب‌سرور ساده بساز که در مسیر /hello متن «سلام دنیا» برگرداند." },
+  { icon: IconCode, title: t("اولین برنامه", "First program"), text: t("یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید.", "Write a Salam program that asks for the user's name and greets them.") },
+  { icon: IconBook, title: t("کتابخانه‌ی استاندارد", "Standard library"), text: t("چطور در سلام یک فایل متنی را خط به خط بخوانم؟ با مثال کامل.", "How do I read a text file line by line in Salam? Show a complete example.") },
+  { icon: IconSwap, title: t("تبدیل کد", "Convert code"), text: t("این تابع پایتون را به سلام فارسی تبدیل کن:\n\ndef fib(n):\n    return n if n < 2 else fib(n-1) + fib(n-2)", "Convert this Python function to Salam:\n\ndef fib(n):\n    return n if n < 2 else fib(n-1) + fib(n-2)") },
+  { icon: IconGlobe, title: t("یک وب‌سرور", "A web server"), text: t("با سلام یک وب‌سرور ساده بساز که در مسیر /hello متن «سلام دنیا» برگرداند.", "Build a simple web server in Salam that returns \"Hello, world\" at /hello.") },
 ];
 
 const AGENT_SUGGESTIONS = [
-  { icon: IconSearch, title: "آشنایی با پروژه", text: "این پروژه را بررسی کن و کوتاه توضیح بده چه کار می‌کند و ساختارش چیست." },
-  { icon: IconBug, title: "رفع خطا", text: "تست‌های این پروژه را اجرا کن و اگر خطایی بود علتش را پیدا و درست کن." },
-  { icon: IconTerminal, title: "داکر", text: "کانتینرهای داکر در حال اجرا را نشان بده و بگو کدام‌ها مشکل دارند." },
-  { icon: IconFolder, title: "مستندسازی", text: "برای این پروژه یک README کوتاه و کاربردی بنویس." },
+  { icon: IconSearch, title: t("آشنایی با پروژه", "Explore the project"), text: t("این پروژه را بررسی کن و کوتاه توضیح بده چه کار می‌کند و ساختارش چیست.", "Look through this project and briefly explain what it does and how it is structured.") },
+  { icon: IconBug, title: t("رفع خطا", "Fix errors"), text: t("تست‌های این پروژه را اجرا کن و اگر خطایی بود علتش را پیدا و درست کن.", "Run this project's tests, and if anything fails, find the cause and fix it.") },
+  { icon: IconTerminal, title: t("داکر", "Docker"), text: t("کانتینرهای داکر در حال اجرا را نشان بده و بگو کدام‌ها مشکل دارند.", "Show the running Docker containers and tell me which ones have problems.") },
+  { icon: IconFolder, title: t("مستندسازی", "Documentation"), text: t("برای این پروژه یک README کوتاه و کاربردی بنویس.", "Write a short, practical README for this project.") },
 ];
 
 function chatIdFromPath(): string | null {
@@ -33,7 +36,11 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin";
+type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin" | "admin-chat";
+
+function adminChatIdFromPath(): string {
+  return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
+}
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
@@ -42,17 +49,40 @@ function routeFromPath(): Route {
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
   if (p === "/admin") return "admin";
+  if (adminChatIdFromPath()) return "admin-chat";
   return "chat";
 }
 
 const PAGE_TITLES: Record<Route, string> = {
-  chat: "دستیار سلام",
-  connect: "اتصال برنامه",
-  apps: "برنامه‌های متصل",
-  keys: "کلیدهای API",
-  plans: "اشتراک‌ها",
-  admin: "مدیریت",
+  chat: t("دستیار سلام", "Salam AI"),
+  connect: t("اتصال برنامه", "Connect an app"),
+  apps: t("برنامه‌های متصل", "Connected apps"),
+  keys: t("کلیدهای API", "API keys"),
+  plans: t("اشتراک‌ها", "Plans"),
+  admin: t("مدیریت", "Admin"),
+  "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
 };
+
+const DRAFT_KEY = "salam-ai-draft";
+
+function takeDraft(): string {
+  const params = new URLSearchParams(location.search);
+  const q = (params.get("q") ?? "").slice(0, 2000);
+  if (q) {
+    params.delete("q");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+    try {
+      sessionStorage.setItem(DRAFT_KEY, q);
+    } catch {}
+    return q;
+  }
+  try {
+    return sessionStorage.getItem(DRAFT_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 function go(id: string | null, replace = false) {
   const url = id ? `/c/${id}` : "/";
@@ -64,6 +94,13 @@ function go(id: string | null, replace = false) {
 export function App() {
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
+  const [draft, setDraft] = useState(takeDraft);
+  const dropDraft = useCallback(() => {
+    try {
+      sessionStorage.removeItem(DRAFT_KEY);
+    } catch {}
+    setDraft("");
+  }, []);
   const [route, setRoute] = useState<Route>(routeFromPath);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
@@ -243,7 +280,7 @@ export function App() {
         if (pending) follow(id, pending.id);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
-          notify("این گفت‌وگو پیدا نشد.");
+          notify(t("این گفت‌وگو پیدا نشد.", "This chat was not found."));
           setActiveId(null);
           go(null, true);
           setMessages([]);
@@ -292,9 +329,15 @@ export function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, [signedIn]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (messages.length === 0) {
+      el.scrollTop = 0;
+      stick.current = true;
+    } else if (stick.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages, tools.calls]);
 
   useLayoutEffect(() => {
@@ -313,6 +356,27 @@ export function App() {
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
+  const agentVersion = tools.info?.version ?? "";
+  useEffect(() => {
+    if (agentVersion) setClientVersion(agentVersion);
+  }, [agentVersion]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    const check = () => {
+      if (document.visibilityState === "visible") api.me().catch(() => {});
+    };
+    const t = window.setInterval(check, 60000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [signedIn]);
+
+  const loadFile = useMemo(() => fileLoader((fid) => api.chatFile(activeId ?? "", fid)), [activeId]);
   const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
 
   const pickWorkspace = async () => {
@@ -323,7 +387,7 @@ export function App() {
         saveWorkspace(path);
       }
     } catch {
-      notify("انتخاب پوشه ناموفق بود.");
+      notify(t("انتخاب پوشه ناموفق بود.", "Could not choose the folder."));
     }
   };
 
@@ -335,14 +399,14 @@ export function App() {
     }
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, files: OutgoingFile[] = [], previews: Pending[] = []): Promise<boolean> => {
     let id = activeId;
     try {
       if (!id) {
         const device = tools.info?.device;
         if (isDesktop && workspace && !device) {
-          notify("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.");
-          return;
+          notify(t("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.", "This computer is not connected to the assistant yet. Please try again in a moment."));
+          return false;
         }
         const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : undefined);
         id = r.chat.id;
@@ -356,20 +420,24 @@ export function App() {
         go(id);
       }
       const now = Math.floor(Date.now() / 1000);
-      const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now };
+      const local: FileMeta[] = previews.map((p, i) => ({ id: -(i + 1), name: p.file.name, kind: p.kind, mime: p.file.type, size: p.file.size, url: p.preview }));
+      const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now, files: local.length > 0 ? local : undefined };
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
-      const r = await api.send(id, text);
-      setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), r.user, { ...r.assistant, phase: "thinking" }]);
+      const r = await api.send(id, text, files);
+      const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
+      setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), user, { ...r.assistant, phase: "thinking" }]);
       setChats((cs) => {
         const cur = cs.find((c) => c.id === id);
         const rest = cs.filter((c) => c.id !== id);
         return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
       });
       follow(id, r.assistant.id);
+      return true;
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));
-      notify(e instanceof ApiError ? e.message : "فرستادن پیام ناموفق بود.");
+      notify(e instanceof ApiError ? e.message : t("فرستادن پیام ناموفق بود.", "Could not send the message."));
+      return false;
     }
   };
 
@@ -422,7 +490,7 @@ export function App() {
 
   if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
 
-  const title = route === "chat" ? chats.find((c) => c.id === activeId)?.title || "دستیار سلام" : PAGE_TITLES[route];
+  const title = route === "chat" ? chats.find((c) => c.id === activeId)?.title || t("دستیار سلام", "Salam AI") : PAGE_TITLES[route];
   const firstName = user.name.trim().split(/\s+/)[0];
 
   return (
@@ -431,7 +499,7 @@ export function App() {
         user={user}
         chats={chats}
         activeId={route === "chat" ? activeId : null}
-        page={route}
+        page={route === "admin-chat" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         theme={theme}
@@ -445,18 +513,20 @@ export function App() {
       />
       <main className="main">
         <header className="topbar">
-          <button type="button" className="icon-button only-mobile" onClick={() => setSidebar(true)} aria-label="باز کردن فهرست">
+          <button type="button" className="icon-button only-mobile" onClick={() => setSidebar(true)} aria-label={t("باز کردن فهرست", "Open menu")}>
             <IconMenu />
           </button>
-          <h1 dir="auto">{title}</h1>
-          <button type="button" className="icon-button only-mobile" onClick={() => openChat(null)} aria-label="گفت‌وگوی تازه">
+          <h1 dir="auto">{uiText(title)}</h1>
+          <button type="button" className="icon-button only-mobile" onClick={() => openChat(null)} aria-label={t("گفت‌وگوی تازه", "New chat")}>
             <IconPlus />
           </button>
-          <button type="button" className="icon-button only-desktop" onClick={toggleTheme} aria-label="تغییر پوسته">
+          <button type="button" className="icon-button only-desktop" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        {route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
+        {route === "admin-chat" ? (
+          <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
+        ) : route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
             {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
@@ -466,11 +536,17 @@ export function App() {
               {messages.length === 0 && !loadingChat ? (
                 <div className="welcome">
                   <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
-                  <h2>سلام {firstName}! چطور کمکتان کنم؟</h2>
+                  <h2>{t(`سلام ${firstName}! چطور کمکتان کنم؟`, `Hi ${firstName}! How can I help?`)}</h2>
                   <p className="muted">
                     {agentChat
-                      ? "دستیار روی پوشه‌ی کاری شما کار می‌کند: فایل‌ها را می‌خواند، تغییر می‌دهد، فرمان اجرا می‌کند و تست‌ها را می‌گیرد. پیش از هر تغییر از شما اجازه می‌گیرد."
-                      : "هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر."}
+                      ? t(
+                          "دستیار روی پوشه‌ی کاری شما کار می‌کند: فایل‌ها را می‌خواند، تغییر می‌دهد، فرمان اجرا می‌کند و تست‌ها را می‌گیرد. پیش از هر تغییر از شما اجازه می‌گیرد.",
+                          "The assistant works in your project folder: it reads and edits files, runs commands and runs tests. It asks for your permission before every change.",
+                        )
+                      : t(
+                          "هر پرسشی درباره‌ی زبان برنامه‌نویسی سلام دارید بپرسید: نوشتن کد، کتابخانه‌ی استاندارد، رفع خطا یا تبدیل کد از زبان‌های دیگر.",
+                          "Ask anything about the Salam programming language: writing code, the standard library, fixing errors, or converting code from other languages.",
+                        )}
                   </p>
                   <div className="suggestions">
                     {(agentChat ? AGENT_SUGGESTIONS : SUGGESTIONS).map((s) => (
@@ -488,14 +564,14 @@ export function App() {
                 <div className="thread">
                   {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
                   {messages.map((m) => (
-                    <MessageView key={m.id} m={m} name={user.name} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
+                    <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
                   ))}
                 </div>
               )}
             </div>
             {waitingElsewhere && (
               <button type="button" className="agent-waiting" onClick={() => openChat(waitingElsewhere.chat)}>
-                یک کار در گفت‌وگوی دیگری منتظر اجازه‌ی شماست. نمایش
+                {t("یک کار در گفت‌وگوی دیگری منتظر اجازه‌ی شماست. نمایش", "A task in another chat is waiting for your permission. Show")}
               </button>
             )}
             <Composer
@@ -504,8 +580,10 @@ export function App() {
               onSend={send}
               onStop={stop}
               autoFocus={!activeId}
-              placeholder={agentChat ? "بگویید روی این پروژه چه کاری انجام شود…" : undefined}
-              note={agentChat ? "دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار را انتخاب کنید." : undefined}
+              draft={draft}
+              onDraftUsed={dropDraft}
+              placeholder={agentChat ? t("بگویید روی این پروژه چه کاری انجام شود…", "Tell me what to do in this project…") : undefined}
+              note={agentChat ? t("دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار را انتخاب کنید.", "The assistant asks before changing files or running commands, unless you choose auto mode.") : undefined}
               bar={
                 isDesktop && (!activeChat || activeChat.agent) ? (
                   <AgentBar

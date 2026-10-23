@@ -8,6 +8,7 @@ include i18 "../i18n.salam"
 
 func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
     sp := span_of(a, nid)
+    note_ref(nid, ssym)
     ssv := sym_at(s, ssym)
     embed_lit_rewrite(s, a, nid, ssym)
 
@@ -27,6 +28,7 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
             end
         end
         f := scope_lookup_local(s, ssv.members, fnm)
+        note_ref(fid, f)
         mut fty := TYPE_NONE
         mut is_field := false
         if f != 0:
@@ -49,6 +51,7 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
                 ) + sema_suggest(s, a, ssv.members, fnm, SUGGEST_FIELD, false)
             )
         else not sym_at(s, f).is_pub and not s.in_derive and not sema_in_struct(s, ssym) and scope_lookup_local(s, s.global, ssv.name) != ssym:
+            queue_pub_fix(s, a, f)
             serr(
                 s, 17, fsp, co.Format2(
                     i18.Tr("field '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(fnm), co.ArgStr(ssv.name)
@@ -126,6 +129,7 @@ func resolve_pkg_struct_lit(s &: Sema, a &: at.Ast, nid: int, name: str, dot: in
         end
     end
     if not pk_ok:
+        queue_import_fix(s, a, pname)
         serr(
             s, 1, sp, co.Format2(
                 i18.Tr("unknown package '%s' in struct literal '%s'"), co.ArgStr(pname), co.ArgStr(name)
@@ -203,9 +207,15 @@ func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
         serr(s, 1, sp, i18.Tr("cannot infer the struct type of this literal"))
         ret sema_decorate(s, a, nid, sema_err_ty(s))
     end
-    mut ssym := scope_lookup(s, s.global, name)
-    if ssym == 0 and s.gen_pkg != 0:
-        ssym = scope_lookup(s, s.gen_pkg, name)
+    mut ssym := 0
+    if s.gen_pkg != 0 and s.gen_pkg != s.global:
+        ssym = scope_lookup_local(s, s.gen_pkg, name)
+        if ssym != 0 and sym_at(s, ssym).kind != SYM_STRUCT:
+            ssym = 0
+        end
+    end
+    if ssym == 0:
+        ssym = scope_lookup(s, s.global, name)
     end
     if ssym == 0 and exp_sym != 0 and sym_at(s, exp_sym).kind == SYM_STRUCT:
         ssym = exp_sym

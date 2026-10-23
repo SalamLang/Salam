@@ -67,6 +67,7 @@ struct StdPkg:
     pub name: str = ""
     pub group: str = ""
     pub summary: str = ""
+    pub add: str = ""
 end
 
 func report(errs &: Vector<str>, msg: str):
@@ -1146,7 +1147,7 @@ func load_std(lang_dir: str, errs &: Vector<str>): Vector<StdPkg>:
         end
         en := ctx_or(m, "pkg.en", "")
         slug := str.Replace(en, "/", "-")
-        out.push(StdPkg { path = path, slug = slug, url = "/std/" + slug + "/", en = en, name = ctx_or(m, "pkg.name", ""), group = ctx_or(m, "pkg.group", ""), summary = ctx_or(m, "pkg.summary", "") })
+        out.push(StdPkg { path = path, slug = slug, url = "/std/" + slug + "/", en = en, name = ctx_or(m, "pkg.name", ""), group = ctx_or(m, "pkg.group", ""), summary = ctx_or(m, "pkg.summary", ""), add = ctx_or(m, "pkg.add", "") })
     end
     ret out
 end
@@ -1440,7 +1441,7 @@ func pkg_label(p: StdPkg): str:
     ret p.name + " (" + p.en + ")"
 end
 
-func std_index_html(pkgs: Vector<StdPkg>): str:
+func std_index_html(pkgs: Vector<StdPkg>, badge: str): str:
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     mut group := ""
@@ -1453,7 +1454,11 @@ func std_index_html(pkgs: Vector<StdPkg>): str:
             str.BufAppend(b, `<section class="course-part"><h2>` + group + `</h2><ul class="course-list std-list">`)
         end
         title := p.name == p.en ? `<code dir="ltr">` + p.en + "</code>" : p.name + ` <code dir="ltr">` + p.en + "</code>"
-        str.BufAppend(b, `<li><a href="` + p.url + `"><span class="course-text"><strong>` + title + "</strong><small>" + p.summary + "</small></span></a></li>")
+        mut tag := ""
+        if p.add.len() > 0 and badge.len() > 0:
+            tag = ` <span class="std-badge" title="salam add ` + p.add + `">` + badge + "</span>"
+        end
+        str.BufAppend(b, `<li><a href="` + p.url + `"><span class="course-text"><strong>` + title + tag + "</strong><small>" + p.summary + "</small></span></a></li>")
     end
     if group != "":
         str.BufAppend(b, "</ul></section>\n")
@@ -1587,15 +1592,22 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     ctx.put("alt.name", ctx_or(alt_ctx, "site.lang_name", ""))
     ctx.put("site.base", ctx_or(ctx, "site.base", ""))
     ctx.put("site.moved_from", ctx_or(ctx, "site.moved_from", ""))
-    raw_version := str.Trim(io.ReadFile("VERSION"))
+    released := str.TrimPrefix(str.Trim(os.Env("SITE_RELEASE_VERSION")), "v")
+    raw_version := released.len() > 0 ? released : str.Trim(io.ReadFile("VERSION"))
     mut version := raw_version
     if ctx.has("site.digits") and ctx.get("site.digits") == "fa":
         version = str.ToPersianDigits(version)
     end
     ctx.put("site.version", version)
     ctx.put("site.version_raw", raw_version)
-    ctx.put("agent.release", ctx_or(ctx, "link.github", "") + "/releases/tag/v" + raw_version)
-    ctx.put("agent.download", ctx_or(ctx, "link.github", "") + "/releases/download/v" + raw_version + "/salam-agent-" + raw_version + "-")
+    mut agent_version := str.Trim(os.Env("SITE_AGENT_VERSION"))
+    mut agent_tag := str.Trim(os.Env("SITE_AGENT_TAG"))
+    if agent_version.len() == 0 or agent_tag.len() == 0:
+        agent_version = raw_version
+        agent_tag = "v" + raw_version
+    end
+    ctx.put("agent.release", ctx_or(ctx, "link.github", "") + "/releases/tag/" + agent_tag)
+    ctx.put("agent.download", ctx_or(ctx, "link.github", "") + "/releases/download/" + agent_tag + "/salam-agent-" + agent_version + "-")
     ctx.put("asset.css", "/assets/css/site.css?v=" + short_hash(ROOT + "/assets/css/site.css"))
     ctx.put("asset.js", "/assets/js/site.js?v=" + short_hash(ROOT + "/assets/js/site.js"))
     ctx.put("asset.logo", "/assets/img/logo.svg?v=" + short_hash(ROOT + "/assets/img/logo.svg"))
@@ -1605,7 +1617,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     ctx.put("learn.itemlist", course_itemlist(ctx, lessons))
     ctx.put("learn.count", digits(ctx, lessons.len()))
     pkgs := load_std(lang_dir, errs)
-    ctx.put("std.cards", std_index_html(pkgs))
+    ctx.put("std.cards", std_index_html(pkgs, ctx_or(ctx, "stdref.add_badge", "")))
     ctx.put("std.count", digits(ctx, pkgs.len()))
     ctx.put("std.itemlist", std_itemlist(ctx, pkgs))
 
@@ -1703,7 +1715,11 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         load_strings(p.path, pc, errs)
         api := load_api(p, errs)
         examples := load_std_examples(lang_dir, p, pc, errs)
-        intro := render(p.path, pc.get("pkg.intro"), pc, errs)
+        mut intro := render(p.path, pc.get("pkg.intro"), pc, errs)
+        add_name := ctx_or(pc, "pkg.add", "")
+        if add_name.len() > 0:
+            intro = `<div class="note"><p>` + ctx_or(pc, "stdref.add_note", "") + ` <code>salam add ` + add_name + `</code></p></div>` + "\n" + intro
+        end
         body := intro + "\n" + std_api_html(pc, p, api, examples, errs)
         pc.put("active.std", "true")
         pc.put("pkg.body_html", body)

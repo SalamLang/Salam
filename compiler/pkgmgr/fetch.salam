@@ -1,0 +1,774 @@
+package pkgmgr
+
+import os
+import str
+import mem
+import compress
+import archive
+import crypto
+import net.http
+import os.shell
+import sort
+
+include pth "../sal_path.salam"
+include co "../sal_core.salam"
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _putenv_s(name: str, value: str): int
+    end
+else:
+    extern:
+        func setenv(name: str, value: str, overwrite: int): int
+    end
+end
+
+const PM_AGENT := "salam-pkg/1.0"
+
+const COMMIT_FILE := ".salam-commit"
+
+mut g_pm_commit_keys := Vector {} as Vector<str>
+mut g_pm_commit_vals := Vector {} as Vector<str>
+mut g_pm_git_env := false
+
+func git_disabled(): bool:
+    ret str.Len(os.Env("SALAM_NO_GIT")) > 0
+end
+
+func quiet_git_env():
+    if g_pm_git_env:
+        ret
+    end
+    g_pm_git_env = true
+    if SALAM_OS_WINDOWS:
+        _q := _putenv_s("GIT_TERMINAL_PROMPT", "0")
+    else:
+        _q := setenv("GIT_TERMINAL_PROMPT", "0", 0)
+    end
+end
+
+func run_git(args &: Vector<str>, dir: str, out &: str): bool:
+    quiet_git_env()
+    mut full := Vector {} as Vector<str>
+    defer full.free()
+    if str.Len(dir) > 0:
+        full.push("-C")
+        full.push(dir)
+    end
+    repeat args.len() in i:
+        full.push(args.get(i))
+    end
+    r := shell.Run("git", full)
+    out = r.out
+    ret r.code == 0
+end
+
+func git2(dir: str, a: str, b: str, out &: str): bool:
+    mut v := Vector {} as Vector<str>
+    defer v.free()
+    v.push(a)
+    v.push(b)
+    ret run_git(v, dir, out)
+end
+
+func repo_url(mod: str): str:
+    ret "https://" + RepoOf(mod)
+end
+
+func host_kind(mod: str): str:
+    if str.StartsWith(mod, "github.com/"):
+        ret "github"
+    end
+    if str.StartsWith(mod, "gitlab.com/"):
+        ret "gitlab"
+    end
+    if str.StartsWith(mod, "codeberg.org/"):
+        ret "gitea"
+    end
+    ret ""
+end
+
+func repo_slug(mod0: str): str:
+    mod := RepoOf(mod0)
+    slash := str.IndexOf(mod, "/")
+    if slash < 0:
+        ret mod
+    end
+    ret str.Substr(mod, slash + 1, str.Len(mod) - slash - 1)
+end
+
+func gitlab_project(mod: str): str:
+    ret "https://gitlab.com/api/v4/projects/" + str.Replace(repo_slug(mod), "/", "%2F")
+end
+
+func tags_url(mod: str): str:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret "https://api.github.com/repos/" + repo_slug(mod) + "/tags?per_page=100"
+    end
+    if str.Equals(kind, "gitlab"):
+        ret gitlab_project(mod) + "/repository/tags?per_page=100"
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/api/v1/repos/" + repo_slug(mod) + "/tags?limit=50"
+    end
+    ret ""
+end
+
+func head_url(mod: str, key &: str): str:
+    kind := host_kind(mod)
+    key = "sha"
+    if str.Equals(kind, "github"):
+        ret "https://api.github.com/repos/" + repo_slug(mod) + "/commits?per_page=1"
+    end
+    if str.Equals(kind, "gitlab"):
+        key = "id"
+        ret gitlab_project(mod) + "/repository/commits?per_page=1"
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/api/v1/repos/" + repo_slug(mod) + "/commits?limit=1"
+    end
+    ret ""
+end
+
+func archive_url(mod: str, gref: str): str:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret "https://codeload.github.com/" + repo_slug(mod) + "/tar.gz/" + gref
+    end
+    if str.Equals(kind, "gitlab"):
+        ret gitlab_project(mod) + "/repository/archive.tar.gz?sha=" + gref
+    end
+    if str.Equals(kind, "gitea"):
+        ret "https://codeberg.org/" + repo_slug(mod) + "/archive/" + gref + ".tar.gz"
+    end
+    ret ""
+end
+
+func host_headers(mod: str): HashMap<str, str>:
+    kind := host_kind(mod)
+    if str.Equals(kind, "github"):
+        ret api_headers()
+    end
+    h := http.NewHeaders()
+    h.put("User-Agent", PM_AGENT)
+    if str.Equals(kind, "gitlab"):
+        t := os.Env("GITLAB_TOKEN")
+        if str.Len(t) > 0:
+            h.put("PRIVATE-TOKEN", t)
+        end
+    end
+    ret h
+end
+
+func api_headers(): HashMap<str, str>:
+    h := http.NewHeaders()
+    h.put("User-Agent", PM_AGENT)
+    mut t := os.Env("GITHUB_TOKEN")
+    if str.Len(t) == 0:
+        t = os.Env("GH_TOKEN")
+    end
+    if str.Len(t) > 0:
+        h.put("Authorization", "Bearer " + t)
+    end
+    ret h
+end
+
+func url_origin(u: str): str:
+    mut rest := u
+    mut scheme := ""
+    at := str.IndexOf(u, "://")
+    if at >= 0:
+        scheme = str.Substr(u, 0, at + 3)
+        rest = str.Substr(u, at + 3, str.Len(u) - at - 3)
+    end
+    slash := str.IndexOf(rest, "/")
+    if slash >= 0:
+        rest = str.Substr(rest, 0, slash)
+    end
+    ret scheme + str.Lower(rest)
+end
+
+func header_value(head: str, name: str): str:
+    want := str.Lower(name) + ":"
+    lines := str.Split(head, "\n")
+    defer lines.free()
+    each line in lines:
+        l := str.Trim(line)
+        if str.StartsWith(str.Lower(l), want):
+            ret str.Trim(str.Substr(l, str.Len(want), str.Len(l) - str.Len(want)))
+        end
+    end
+    ret ""
+end
+
+func is_redirect(status: int): bool:
+    ret status == 301 or status == 302 or status == 303 or status == 307 or status == 308
+end
+
+func token_host(u: str): bool:
+    o := url_origin(u)
+    ret str.Equals(o, "https://github.com") or str.Equals(o, "https://api.github.com") or str.Equals(o, "https://codeload.github.com") or str.Equals(o, "https://raw.githubusercontent.com") or str.Equals(o, "https://gitlab.com")
+end
+
+func plain_headers(): HashMap<str, str>:
+    h := http.NewHeaders()
+    h.put("User-Agent", PM_AGENT)
+    ret h
+end
+
+func resolve_location(cur: str, loc: str): str:
+    if str.Contains(loc, "://"):
+        ret loc
+    end
+    if str.StartsWith(loc, "//"):
+        at := str.IndexOf(cur, "://")
+        ret at >= 0 ? str.Substr(cur, 0, at + 1) + loc : "https:" + loc
+    end
+    if str.StartsWith(loc, "/"):
+        ret url_origin(cur) + loc
+    end
+    mut base := cur
+    q := str.IndexOf(base, "?")
+    if q >= 0:
+        base = str.Substr(base, 0, q)
+    end
+    origin := url_origin(base)
+    path := str.Substr(base, str.Len(origin), str.Len(base) - str.Len(origin))
+    slash := str.LastIndex(path, "/")
+    if slash < 0:
+        ret origin + "/" + loc
+    end
+    ret origin + str.Substr(path, 0, slash + 1) + loc
+end
+
+func get_bytes(url: str, headers: HashMap<str, str>): http.BytesResponse:
+    mut cur := url
+    mut h := headers
+    if not token_host(cur):
+        h = plain_headers()
+    end
+    mut r := http.GetBytesWith(cur, h)
+    mut hops := 0
+    until hops < 8 and is_redirect(r.status):
+        loc := header_value(r.head, "location")
+        if str.Len(loc) == 0:
+            break
+        end
+        next := resolve_location(cur, loc)
+        if not str.Equals(url_origin(next), url_origin(cur)) or not token_host(next):
+            h = plain_headers()
+        end
+        compress.BufFree(r.body)
+        cur = next
+        r = http.GetBytesWith(cur, h)
+        hops += 1
+    end
+    ret r
+end
+
+func version_core(v: str): str:
+    mut s := str.TrimPrefix(v, "v")
+    dash := str.IndexOf(s, "-")
+    if dash >= 0:
+        s = str.Substr(s, 0, dash)
+    end
+    ret s
+end
+
+func version_part(v: str, idx: int): int:
+    parts := str.Split(version_core(v), ".")
+    defer parts.free()
+    if idx >= parts.len():
+        ret 0
+    end
+    ret parts.get(idx).to_int()
+end
+
+func json_strings_after(body: str, key: str, out &: Vector<str>):
+    needle := "\"" + key + "\""
+    mut pos := str.IndexFrom(body, needle, 0)
+    until pos >= 0:
+        mut i := pos + str.Len(needle)
+        q1 := str.IndexFrom(body, "\"", i)
+        colon := str.IndexFrom(body, ":", i)
+        if colon >= 0 and q1 > colon:
+            q2 := str.IndexFrom(body, "\"", q1 + 1)
+            if q2 > q1:
+                out.push(str.Substr(body, q1 + 1, q2 - q1 - 1))
+                i = q2
+            end
+        end
+        pos = str.IndexFrom(body, needle, i)
+    end
+end
+
+func compare_bytes(a: str, b: str): int:
+    la := str.Len(a)
+    lb := str.Len(b)
+    mut i := 0
+    until i < la and i < lb:
+        x := co.ByteAt(a, i)
+        y := co.ByteAt(b, i)
+        if x != y:
+            ret x < y ? 0 - 1 : 1
+        end
+        i += 1
+    end
+    if la == lb:
+        ret 0
+    end
+    ret la < lb ? 0 - 1 : 1
+end
+
+func hex_bytes(p: void*, n: int): str:
+    digits := "0123456789abcdef"
+    mut sb := str.NewBuilder()
+    bp := p as u8*
+    repeat n in i:
+        b := bp[i] as int
+        str.BufAppendChar(sb, co.ByteAt(digits, b / 16))
+        str.BufAppendChar(sb, co.ByteAt(digits, b % 16))
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func file_sum(path: str): str:
+    mut ok := false
+    mut buf := archive.ReadBinaryFile(path, ok)
+    digest := mem.Allocate(32 as u64)
+    defer mem.Free(digest)
+    crypto.Sha256Bytes(buf.data, buf.len, digest)
+    compress.BufFree(buf)
+    ret hex_bytes(digest, 32)
+end
+
+func collect_files(root: str, rel: str, out &: Vector<str>):
+    mut dir := root
+    if str.Len(rel) > 0:
+        dir = pth.PathJoin(root, rel)
+    end
+    entries := os.ListDir(dir)
+    defer entries.free()
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.Equals(name, ".") or str.Equals(name, "..") or str.Equals(name, ".git") or str.Equals(name, COMMIT_FILE):
+            continue
+        end
+        mut r := name
+        if str.Len(rel) > 0:
+            r = rel + "/" + name
+        end
+        if os.IsDir(pth.PathJoin(root, r)):
+            collect_files(root, r, out)
+        else:
+            out.push(r)
+        end
+    end
+end
+
+func single_subdir(dir: str): str:
+    entries := os.ListDir(dir)
+    defer entries.free()
+    mut found := ""
+    repeat entries.len() in i:
+        name := entries.get(i)
+        if str.Equals(name, ".") or str.Equals(name, ".."):
+            continue
+        end
+        if os.IsDir(pth.PathJoin(dir, name)):
+            if str.Len(found) > 0:
+                ret ""
+            end
+            found = name
+        end
+    end
+    ret found
+end
+
+func fetch_git(mod: str, gref: str, tmp: str, commit &: str, why &: str): bool:
+    mut out := ""
+    if os.MkdirAll(tmp) != 0:
+        why = "cannot create " + tmp
+        ret false
+    end
+    if not git2(tmp, "init", "-q", out):
+        why = "git init failed"
+        ret false
+    end
+    mut f := Vector {} as Vector<str>
+    defer f.free()
+    f.push("fetch")
+    f.push("-q")
+    f.push("--depth")
+    f.push("1")
+    f.push(repo_url(mod))
+    f.push(gref)
+    mut target := "FETCH_HEAD"
+    if not run_git(f, tmp, out):
+        if str.Len(gref) >= 40 or str.StartsWith(gref, "v"):
+            why = "git could not fetch " + gref + " from " + repo_url(mod)
+            ret false
+        end
+        mut full := Vector {} as Vector<str>
+        defer full.free()
+        full.push("fetch")
+        full.push("-q")
+        full.push(repo_url(mod))
+        full.push("+refs/heads/*:refs/remotes/origin/*")
+        if not run_git(full, tmp, out):
+            why = "git could not fetch " + repo_url(mod)
+            ret false
+        end
+        target = gref
+    end
+    mut c := Vector {} as Vector<str>
+    defer c.free()
+    c.push("-c")
+    c.push("advice.detachedHead=false")
+    c.push("checkout")
+    c.push("-q")
+    c.push(target)
+    if not run_git(c, tmp, out):
+        why = "git checkout failed for " + gref
+        ret false
+    end
+    if git2(tmp, "rev-parse", "HEAD", out):
+        commit = str.Trim(out)
+    end
+    _rm := os.RemoveAll(pth.PathJoin(tmp, ".git"))
+    ret true
+end
+
+func fetch_tarball(mod: str, gref: str, tmp: str, why &: str): bool:
+    url := archive_url(mod, gref)
+    if str.Len(url) == 0:
+        why = "git is needed to download " + mod + " (without git only github.com, gitlab.com and codeberg.org work)"
+        ret false
+    end
+    r := get_bytes(url, host_headers(mod))
+    mut body := r.body
+    if r.status != 200:
+        compress.BufFree(body)
+        if str.Len(r.err) > 0:
+            why = r.err
+        else:
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " for " + url
+        end
+        ret false
+    end
+    mut ok := false
+    mut tar := compress.GzipDecompressBuf(body, ok)
+    compress.BufFree(body)
+    if not ok:
+        compress.BufFree(tar)
+        why = "the download from " + url + " is not a gzip archive"
+        ret false
+    end
+    if os.MkdirAll(tmp) != 0:
+        compress.BufFree(tar)
+        why = "cannot create " + tmp
+        ret false
+    end
+    extracted := archive.TarExtractAll(tar.data, tar.len, tmp)
+    compress.BufFree(tar)
+    if not extracted:
+        why = "cannot unpack the archive from " + url
+        ret false
+    end
+    ret true
+end
+
+pub func HaveGit(): bool:
+    if git_disabled():
+        ret false
+    end
+    mut v := Vector {} as Vector<str>
+    defer v.free()
+    v.push("--version")
+    mut out := ""
+    ret run_git(v, "", out)
+end
+
+pub func IsPseudoVersion(v: str): bool:
+    ret str.StartsWith(v, "v0.0.0-")
+end
+
+pub func IsRelease(v: str): bool:
+    if not str.StartsWith(v, "v") or str.Contains(v, "-"):
+        ret false
+    end
+    parts := str.Split(str.TrimPrefix(v, "v"), ".")
+    defer parts.free()
+    if parts.len() < 1 or parts.len() > 3:
+        ret false
+    end
+    repeat parts.len() in i:
+        p := parts.get(i)
+        if str.Len(p) == 0:
+            ret false
+        end
+        repeat str.Len(p) in j:
+            c := co.ByteAt(p, j)
+            if c < 48 or c > 57:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+pub func CompareVersions(a: str, b: str): int:
+    repeat 3 in i:
+        x := version_part(a, i)
+        y := version_part(b, i)
+        if x != y:
+            ret x < y ? 0 - 1 : 1
+        end
+    end
+    pa := IsPseudoVersion(a)
+    pb := IsPseudoVersion(b)
+    if pa and not pb:
+        ret 0 - 1
+    end
+    if pb and not pa:
+        ret 1
+    end
+    ret compare_bytes(a, b)
+end
+
+pub func RefOf(version: str): str:
+    if IsPseudoVersion(version):
+        ret str.Substr(version, 7, str.Len(version) - 7)
+    end
+    ret version
+end
+
+pub func ListVersions(mod: str, out &: Vector<str>, why &: str): bool:
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    if HaveGit():
+        mut v := Vector {} as Vector<str>
+        defer v.free()
+        v.push("ls-remote")
+        v.push("--tags")
+        v.push(repo_url(mod))
+        mut text := ""
+        if not run_git(v, "", text):
+            why = "cannot list the versions of " + repo_url(mod)
+            ret false
+        end
+        lines := str.Split(text, "\n")
+        defer lines.free()
+        repeat lines.len() in i:
+            l := lines.get(i)
+            at := str.IndexOf(l, "refs/tags/")
+            if at >= 0 and not str.EndsWith(l, "^{}"):
+                names.push(str.Trim(str.Substr(l, at + 10, str.Len(l) - at - 10)))
+            end
+        end
+    else str.Len(tags_url(mod)) > 0:
+        r := http.GetWith(tags_url(mod), host_headers(mod))
+        if r.status != 200:
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " listing the tags of " + mod
+            ret false
+        end
+        json_strings_after(r.body, "name", names)
+    else:
+        why = "git is needed to list the versions of " + mod
+        ret false
+    end
+    major := MajorSuffix(mod)
+    repeat names.len() in k:
+        n := names.get(k)
+        if IsRelease(n) and (major == 0 or version_part(n, 0) == major):
+            out.push(n)
+        end
+    end
+    ret true
+end
+
+pub func RepoExists(mod: str): bool:
+    if HaveGit():
+        mut v := Vector {} as Vector<str>
+        defer v.free()
+        v.push("ls-remote")
+        v.push("--heads")
+        v.push(repo_url(mod))
+        mut out := ""
+        ret run_git(v, "", out)
+    end
+    kind := host_kind(mod)
+    if str.Equals(kind, "gitlab"):
+        r := http.GetWith(gitlab_project(mod), host_headers(mod))
+        ret r.status == 200
+    end
+    ret str.Len(kind) > 0
+end
+
+pub func DiscoverModule(spec: str): str:
+    if not str.Equals(host_kind(spec), "gitlab"):
+        ret ModuleOf(spec)
+    end
+    mut segs := segments(spec)
+    defer segs.free()
+    mut k := segs.len()
+    until k > 3:
+        cand := join_segments(segs, 0, k)
+        if RepoExists(cand):
+            ret cand
+        end
+        k -= 1
+    end
+    ret ModuleOf(spec)
+end
+
+pub func HeadVersion(mod: str, sha &: str, why &: str): str:
+    sha = ""
+    if HaveGit():
+        mut text := ""
+        if not git2("", "ls-remote", repo_url(mod), text):
+            why = "cannot reach " + repo_url(mod)
+            ret ""
+        end
+        lines := str.Split(text, "\n")
+        defer lines.free()
+        repeat lines.len() in i:
+            l := lines.get(i)
+            if str.EndsWith(l, "\tHEAD"):
+                sha = str.Substr(l, 0, str.IndexOf(l, "\t"))
+                break
+            end
+        end
+    else str.Len(tags_url(mod)) > 0:
+        mut key := ""
+        hurl := head_url(mod, key)
+        r := http.GetWith(hurl, host_headers(mod))
+        if r.status != 200:
+            why = "the server answered HTTP " + str.FromInt(r.status as i64) + " for " + mod
+            ret ""
+        end
+        mut shas := Vector {} as Vector<str>
+        defer shas.free()
+        json_strings_after(r.body, key, shas)
+        if shas.len() > 0:
+            sha = shas.get(0)
+        end
+    else:
+        why = "git is needed to reach " + mod
+        ret ""
+    end
+    if str.Len(sha) < 12:
+        why = "cannot find the latest commit of " + mod
+        ret ""
+    end
+    ret "v0.0.0-" + str.Substr(sha, 0, 12)
+end
+
+pub func LatestVersion(mod: str, commit &: str, why &: str): str:
+    mut tags := Vector {} as Vector<str>
+    defer tags.free()
+    if not ListVersions(mod, tags, why):
+        ret ""
+    end
+    mut best := ""
+    repeat tags.len() in i:
+        t := tags.get(i)
+        if str.Len(best) == 0 or CompareVersions(t, best) > 0:
+            best = t
+        end
+    end
+    if str.Len(best) > 0:
+        ret best
+    end
+    ret HeadVersion(mod, commit, why)
+end
+
+pub func DirSum(dir: str): str:
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    collect_files(dir, "", files)
+    sort.Sort(files)
+    mut lines := ""
+    repeat files.len() in i:
+        f := files.get(i)
+        lines = lines + f + " " + file_sum(pth.PathJoin(dir, f)) + "\n"
+    end
+    ret "sha256:" + crypto.Sha256Hex(lines)
+end
+
+pub func KnownCommit(mod: str, version: str): str:
+    key := mod + "@" + version
+    repeat g_pm_commit_keys.len() in i:
+        if str.Equals(g_pm_commit_keys.get(i), key):
+            ret g_pm_commit_vals.get(i)
+        end
+    end
+    marker := pth.PathJoin(VersionDir(mod, version), COMMIT_FILE)
+    if os.Exists(marker):
+        ret str.Trim(os.ReadFile(marker))
+    end
+    ret ""
+end
+
+pub func RememberCommit(mod: str, version: str, commit: str):
+    if str.Len(commit) == 0 or str.Len(KnownCommit(mod, version)) > 0:
+        ret
+    end
+    g_pm_commit_keys.push(mod + "@" + version)
+    g_pm_commit_vals.push(commit)
+end
+
+pub func Fetch(mod: str, version: str, commit &: str, why &: str): bool:
+    if str.Len(commit) == 0:
+        commit = KnownCommit(mod, version)
+    end
+    dest := VersionDir(mod, version)
+    if os.IsDir(dest):
+        RememberCommit(mod, version, commit)
+        ret true
+    end
+    parent := pth.PathDir(dest)
+    if os.MkdirAll(parent) != 0:
+        why = "cannot create " + parent
+        ret false
+    end
+    tmp := dest + ".tmp" + str.FromInt(os.Pid() as i64)
+    _clean := os.RemoveAll(tmp)
+    mut gref := RefOf(version)
+    if str.Len(commit) > 0:
+        gref = commit
+    end
+    mut root := tmp
+    if HaveGit():
+        if not fetch_git(mod, gref, tmp, commit, why):
+            _r1 := os.RemoveAll(tmp)
+            ret false
+        end
+    else:
+        if not fetch_tarball(mod, gref, tmp, why):
+            _r2 := os.RemoveAll(tmp)
+            ret false
+        end
+        sub := single_subdir(tmp)
+        if str.Len(sub) == 0:
+            _r3 := os.RemoveAll(tmp)
+            why = "the archive of " + mod + " does not have one top folder"
+            ret false
+        end
+        root = pth.PathJoin(tmp, sub)
+    end
+    if os.Move(root, dest) != 0:
+        _r4 := os.RemoveAll(tmp)
+        why = "cannot move the package into " + dest
+        ret false
+    end
+    _r5 := os.RemoveAll(tmp)
+    if str.Len(commit) > 0:
+        _w := os.WriteFile(pth.PathJoin(dest, COMMIT_FILE), commit + "\n")
+    end
+    RememberCommit(mod, version, commit)
+    ret true
+end

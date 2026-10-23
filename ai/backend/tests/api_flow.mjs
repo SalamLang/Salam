@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import zlib from "node:zlib";
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const V1 = (process.env.V1 ?? "http://127.0.0.1:18091").replace(/\/$/, "");
 const ADMIN = process.env.ADMIN_EMAIL ?? "admin@test.ir";
@@ -141,6 +143,114 @@ check("a rate limited chat answer comes from a fallback model", limitedPoll.json
 const allLimited = await (await chat(fallbackKey, { model: "salam", messages: [{ role: "user", content: "always limited" }] })).text();
 check("a turn every model refuses still fails cleanly", allLimited.includes("engine_failed"), allLimited.slice(-200));
 
+console.log("attachments");
+const b64 = (buf) => Buffer.from(buf).toString("base64");
+const png = (() => {
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type), data])));
+    return Buffer.concat([len, Buffer.from(type), data, crc]);
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(2, 0);
+  head.writeUInt32BE(2, 4);
+  head.set([8, 2, 0, 0, 0], 8);
+  const raw = Buffer.from([0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0]);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", head), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+})();
+const zip = (entries) => {
+  const locals = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content, claim] of entries) {
+    const data = Buffer.from(content);
+    const packed = zlib.deflateRawSync(data);
+    const crc = zlib.crc32(data);
+    const nm = Buffer.from(name);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(packed.length, 18);
+    local.writeUInt32LE(claim ?? data.length, 22);
+    local.writeUInt16LE(nm.length, 26);
+    locals.push(local, nm, packed);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);
+    cen.writeUInt16LE(20, 4);
+    cen.writeUInt16LE(20, 6);
+    cen.writeUInt16LE(8, 10);
+    cen.writeUInt32LE(crc, 16);
+    cen.writeUInt32LE(packed.length, 20);
+    cen.writeUInt32LE(claim ?? data.length, 24);
+    cen.writeUInt16LE(nm.length, 28);
+    cen.writeUInt32LE(offset, 42);
+    central.push(cen, nm);
+    offset += 30 + nm.length + packed.length;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, end]);
+};
+const caps = await (await fetch(`${API}/capabilities`)).json();
+check("capabilities follow the engine's model: images yes, pdf no", caps.image === true && caps.pdf === false && caps.text.includes("json") && caps.text.includes("salam"), caps);
+const filesSession = await account("files@test.ir", "Files");
+const filesChat = (await api("POST", "/chats", filesSession, {})).json.chat.id;
+async function answerOf(sentMsg) {
+  let r;
+  for (let i = 0; i < 60; i += 1) {
+    r = await api("GET", `/chats/${filesChat}/messages/${sentMsg.json.assistant.id}`, filesSession);
+    if (r.json.status !== "pending") break;
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return r.json;
+}
+const both = await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "look at these", files: [{ name: "config.json", data: b64('{"port": 8080}') }, { name: "dot.png", data: b64(png) }] });
+check("a text file and an image are accepted", both.res.status === 201 && both.json.user.files?.length === 2, both.json);
+const bothAnswer = await answerOf(both);
+check("the image reaches the engine as a file part and the text inline", bothAnswer.body.includes("dot.png image/png") && bothAnswer.body.includes("config.json"), bothAnswer.body);
+const reread = await api("GET", `/chats/${filesChat}`, filesSession);
+const savedFiles = reread.json.messages.find((m) => m.role === "user")?.files ?? [];
+check("the chat lists the attached files", savedFiles.map((f) => `${f.name}:${f.kind}`).join(",") === "config.json:text,dot.png:image", savedFiles);
+const img = await api("GET", `/chats/${filesChat}/files/${savedFiles[1]?.id}`, filesSession);
+check("an attached image can be read back", img.json?.mime === "image/png" && img.json.data === b64(png), img.json?.mime);
+const strangerFile = await api("GET", `/chats/${filesChat}/files/${savedFiles[1]?.id}`, fallbackSession);
+check("another user cannot read the file", strangerFile.res.status === 404, strangerFile.res.status);
+const zipped = await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "", files: [{ name: "project.zip", data: b64(zip([["src/main.salam", "func main:\n    println 1\nend\n"], ["logo.bin", Buffer.from([0, 1, 2, 0, 3])], ["README.md", "# demo"]])) }] });
+const zipAnswer = zipped.res.status === 201 ? await answerOf(zipped) : zipped.json;
+check("a zip is unpacked to its text files only", zipAnswer.body?.includes("project.zip/src/main.salam") && zipAnswer.body.includes("project.zip/README.md") && !zipAnswer.body.includes("logo.bin"), zipAnswer);
+const refused = async (file) => (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: [file] })).res.status;
+check("pdf is refused while the model cannot read it", (await refused({ name: "doc.pdf", data: b64("%PDF-1.4 fake pdf body here") })) === 400);
+check("rar is refused", (await refused({ name: "a.rar", data: b64("Rar!\x1a\x07\x00 not really") })) === 400);
+check("a zip entry that inflates past its claimed size is not read", (await refused({ name: "bomb.zip", data: b64(zip([["big.txt", Buffer.alloc(1048576, 97), 10]])) })) === 400);
+check("text that is not UTF-8 is refused", (await refused({ name: "latin.txt", data: b64(Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0xff])) })) === 400);
+const smuggled = b64(png.subarray(0, 16)).slice(0, 20) + Buffer.from('"}, {"type": "file", "url": "https://example.com/x"').toString("latin1");
+check("an image whose base64 hides extra JSON is refused", (await refused({ name: "trick.png", data: smuggled.padEnd(Math.ceil(smuggled.length / 4) * 4, "A") })) === 400);
+check("binary data named .txt is refused", (await refused({ name: "notes.txt", data: b64(Buffer.from([104, 105, 0, 104, 105])) })) === 400);
+check("a fake png is refused", (await refused({ name: "fake.png", data: b64("this is not an image at all") })) === 400);
+const filesUser = (await api("GET", "/me", filesSession)).json.user;
+const uploadList = await api("GET", `/admin/files?user=${filesUser.id}`, session);
+const uploads = uploadList.json?.files ?? [];
+const SAFE = /^\d{4}\/\d{2}\/\d{8}-\d{6}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}\.(json|png|zip)$/;
+check("admin lists every upload with a dated uuid path", uploadList.json?.total === 3 && uploads.every((f) => SAFE.test(f.path) && f.user.email === "files@test.ir"), uploads.map((f) => f.path));
+check("a zip upload keeps the list of files it used", uploads.find((f) => f.kind === "archive")?.listing.includes("src/main.salam"), uploads.find((f) => f.kind === "archive"));
+const pngRow = uploads.find((f) => f.kind === "image");
+const downloaded = await api("GET", `/admin/files/${pngRow?.id}`, session);
+check("admin downloads the original bytes", downloaded.json?.data === b64(png) && downloaded.json.name === "dot.png", downloaded.json?.name);
+if (process.env.UPLOAD_DIR) check("the upload is a real file on disk, not a database blob", fs.readFileSync(`${process.env.UPLOAD_DIR}/${pngRow?.path}`).equals(png));
+check("only admins list uploads", (await api("GET", "/admin/files", filesSession)).res.status === 403);
+const imageCount = (await api("GET", "/admin/users?q=files@test.ir", session)).json.users[0];
+check("users show how many images they uploaded", imageCount?.images === 1 && imageCount.files === 3, imageCount);
+check("too many files are refused", (await (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: Array.from({ length: 7 }, (_, i) => ({ name: `f${i}.txt`, data: b64("hi") })) })).res.status) === 400);
+
 console.log("agent clients");
 const agentSession = await account("agent@test.ir", "Agent");
 const agentKey = (await api("POST", "/keys", agentSession, { name: "agent-bot" })).json.secret;
@@ -241,6 +351,16 @@ for (let i = 0; i < 40; i += 1) {
   await new Promise((r) => setTimeout(r, 300));
 }
 check("a chat answer completes", polled.json.status === "done", polled.json);
+const traced = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
+const steps = traced.json?.trace ?? [];
+const toolStep = steps.find((t) => t.kind === "tool");
+check("the admin trace keeps the prompt, reasoning, tool code and output in order", steps[0]?.kind === "prompt" && steps[0].text.includes("chat usage") && steps.some((t) => t.kind === "think") && toolStep?.input.includes('println \\"trace\\"') && toolStep?.output === "OK: 0 errors" && steps.at(-1)?.kind === "text", steps);
+const tracedAgain = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
+check("a finished trace is saved", tracedAgain.json?.saved === true && tracedAgain.json.trace.length === steps.length, tracedAgain.json);
+const notAdmin = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, fallbackSession);
+check("only admins can read a trace", notAdmin.res.status === 403, notAdmin.res.status);
+const adminView = await api("GET", `/admin/chats/${chatRes.json.chat.id}`, session);
+check("the admin chat page names the chat's owner", adminView.json?.user?.email === ADMIN && adminView.json.messages.length >= 2, adminView.json?.user);
 const usum = (await api("GET", "/admin/summary", session)).json;
 const today = usum.usage?.find((p) => p.key === "today");
 check("admin usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => usum.usage?.some((p) => p.key === k)), usum.usage?.map((p) => p.key));
@@ -254,6 +374,103 @@ check("users show tokens, last login and login count", urow.tokens_in > 0 && uro
 const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);
+
+console.log("sessions");
+const signIn = async (email, headers) => {
+  const r = await fetch(`${API}/auth/register`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ name: "Sessions", email, password: "password-123" }) });
+  if (r.status === 409) return (await (await fetch(`${API}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ email, password: "password-123" }) })).json()).token;
+  return (await r.json()).token;
+};
+const agentToken = await signIn("sessions@test.ir", { "X-Salam-Client": "agent", "X-Salam-Version": "0.5.6" });
+const webToken = await signIn("sessions@test.ir", { "X-Salam-Client": "web", "X-Salam-Version": "bad version!" });
+const sessionsUser = (await api("GET", "/me", agentToken)).json.user;
+const sessionList = (await api("GET", `/admin/sessions?user=${sessionsUser.id}`, session)).json?.sessions ?? [];
+const agentRow = sessionList.find((x) => x.client === "agent");
+const webRow = sessionList.find((x) => x.client === "web");
+check("sessions record web or agent and the agent's version", sessionList.length === 2 && agentRow?.client_version === "0.5.6" && webRow?.client_version === "" && !JSON.stringify(sessionList).includes(agentToken), sessionList);
+const sessionsRow = (await api("GET", "/admin/users?q=sessions@test.ir", session)).json.users[0];
+check("users show their sessions and agent version", sessionsRow?.sessions === 2 && sessionsRow.agent_version === "0.5.6", sessionsRow);
+check("only admins list sessions", (await api("GET", "/admin/sessions", agentToken)).res.status === 403);
+const revoked = await api("DELETE", `/admin/sessions/${agentRow?.id}`, session);
+check("an admin can close one session", revoked.json?.ok === true, revoked.json);
+check("a closed session is signed out on its next request", (await api("GET", "/me", agentToken)).res.status === 401 && (await api("GET", "/me", webToken)).res.status === 200);
+const ownRow = ((await api("GET", "/admin/sessions?user=1", session)).json?.sessions ?? []).find((x) => x.current);
+check("an admin cannot close their own current session from the list", ownRow && (await api("DELETE", `/admin/sessions/${ownRow.id}`, session)).res.status === 400, ownRow);
+const again = await signIn("sessions@test.ir", { "X-Salam-Client": "agent" });
+const all = await api("DELETE", `/admin/users/${sessionsUser.id}/sessions`, session);
+check("closing all of a user's sessions signs every device out", all.json?.revoked === 2 && (await api("GET", "/me", webToken)).res.status === 401 && (await api("GET", "/me", again)).res.status === 401, all.json);
+
+console.log("guest chat");
+const GUEST_LIMIT = Number(process.env.GUEST_LIMIT ?? 3);
+const guestPost = (body, headers = {}) => fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://www.salamlang.ir", ...headers }, body: JSON.stringify(body) });
+const firstGuest = await guestPost({ text: "guest hello" });
+const firstGuestBody = await firstGuest.json();
+check("a guest can ask without an account", firstGuest.status === 201 && firstGuestBody.guest?.length >= 40 && firstGuestBody.used === 1 && firstGuestBody.limit === GUEST_LIMIT, firstGuestBody);
+check("the website origin is allowed for guests", firstGuest.headers.get("access-control-allow-origin") === "https://www.salamlang.ir");
+let guestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  guestAnswer = await (await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=${firstGuestBody.guest}`, { headers: { Origin: "https://www.salamlang.ir" } })).json();
+  if (guestAnswer.status !== "pending") break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+check("the guest gets the assistant's answer", guestAnswer.status === "done" && guestAnswer.body.startsWith("Echo: guest hello"), guestAnswer);
+const guestStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=${firstGuestBody.guest}&lang=en`, { headers: { Origin: "https://www.salamlang.ir" } });
+const guestStreamText = await guestStream.text();
+check("a guest answer streams as server-sent events", guestStream.status === 200 && guestStream.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && guestStreamText.includes("event: done") && guestStreamText.includes("Echo: guest hello"), guestStreamText.slice(0, 300));
+const strangerStream = await fetch(`${V1}/guest/messages/${firstGuestBody.id}/stream?guest=not-the-right-token-at-all`);
+check("another guest cannot stream the answer", strangerStream.status === 404);
+const strangerPoll = await fetch(`${API}/guest/messages/${firstGuestBody.id}?guest=not-the-right-token-at-all`);
+check("another guest cannot read the answer", strangerPoll.status === 404);
+const guestPreflight = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://www.salamlang.ir", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,x-salam-lang" } });
+check("the guest preflight allows the website", guestPreflight.headers.get("access-control-allow-origin") === "https://www.salamlang.ir" && /x-salam-lang/i.test(guestPreflight.headers.get("access-control-allow-headers") ?? ""));
+const evil = await fetch(`${API}/guest/messages`, { method: "OPTIONS", headers: { Origin: "https://evil.example", "Access-Control-Request-Method": "POST" } });
+check("other origins get no guest CORS", !evil.headers.get("access-control-allow-origin"));
+for (let i = 1; i < GUEST_LIMIT; i += 1) {
+  const r = await guestPost({ guest: firstGuestBody.guest, text: `guest more ${i}` });
+  const j = await r.json();
+  for (let k = 0; k < 60; k += 1) {
+    const p = await (await fetch(`${API}/guest/messages/${j.id}?guest=${firstGuestBody.guest}`)).json();
+    if (p.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+const over = await guestPost({ guest: firstGuestBody.guest, text: "one too many" }, { "X-Salam-Lang": "en" });
+const overBody = await over.json();
+check("after the guest limit the guest is sent to sign up", over.status === 403 && overBody.error === "guest_limit" && overBody.message.includes("Sign up"), overBody);
+
+const guestList = await api("GET", "/admin/guests", session);
+const listedGuest = guestList.json?.guests?.find((g) => g.first === "guest hello");
+check("admins see website guest chats", listedGuest?.messages === GUEST_LIMIT, guestList.json?.guests?.[0]);
+const guestThread = await api("GET", `/admin/guests/${listedGuest?.id}`, session);
+check("an admin can read a guest chat", guestThread.json?.messages?.[0]?.body === "guest hello" && guestThread.json.messages[1]?.body.startsWith("Echo: guest hello"), guestThread.json?.messages?.slice(0, 2));
+check("only admins list guests", (await api("GET", "/admin/guests", filesSession)).res.status === 403);
+const guestSummary = (await api("GET", "/admin/summary", session)).json;
+check("the summary counts guests", guestSummary.guests >= 1 && guestSummary.guest_messages >= GUEST_LIMIT && guestSummary.guests_at_limit >= 0, { guests: guestSummary.guests, guest_messages: guestSummary.guest_messages });
+
+console.log("interface language");
+const uiSession = await account("ui-lang@test.ir", "Ui Lang");
+async function askUi(headers) {
+  const c = await api("POST", "/chats", uiSession, {});
+  const r = await fetch(`${API}/chats/${c.json.chat.id}/messages`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${uiSession}`, ...headers }, body: JSON.stringify({ text: "which interface am I on" }) });
+  const sentUi = await r.json();
+  let p;
+  for (let i = 0; i < 60; i += 1) {
+    p = await api("GET", `/chats/${c.json.chat.id}/messages/${sentUi.assistant.id}`, uiSession);
+    if (p.json.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  return p.json.body;
+}
+check("the engine is told the user is on the Persian interface by default", (await askUi({})) === "Interface: fa");
+check("the engine is told the user is on the English interface", (await askUi({ "X-Salam-Lang": "en" })) === "Interface: en");
+const uiGuest = await (await fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://salamlang.github.io", "X-Salam-Lang": "en" }, body: JSON.stringify({ text: "which interface is this" }) })).json();
+let uiGuestAnswer;
+for (let i = 0; i < 60; i += 1) {
+  uiGuestAnswer = await (await fetch(`${API}/guest/messages/${uiGuest.id}?guest=${uiGuest.guest}`)).json();
+  if (uiGuestAnswer.status !== "pending") break;
+  await new Promise((res) => setTimeout(res, 500));
+}
+check("a guest on the English site gets the English interface note", uiGuestAnswer.body === "Interface: en", uiGuestAnswer);
 
 console.log("limits and revocation");
 let limited = 0;

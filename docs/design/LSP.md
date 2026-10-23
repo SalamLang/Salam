@@ -638,12 +638,15 @@ Also built since:
 
 Left:
 
-1. A warm worker. Measured, a small file costs about 0.2 s of CPU per analysis
-   and every query is answered from the snapshot without waiting, so a
-   long-lived worker would save about 0.15 s per analysis in exchange for
-   carrying the compiler's leaks and global state across runs. It is not worth
-   it until the compiler resets its state (change 5) and frees its
-   temporaries (docs/design/OWNERSHIP.md).
+1. Faster analysis of big programs. Measured on 2026-10-23: starting the
+   worker process costs about 2 ms, while one analysis of a small file takes
+   about 0.6 s and one of a file inside the compiler's own folder package
+   (which pulls in the whole compiler) about 17 s. A warm worker would only
+   save the 2 ms, so it is not worth carrying the compiler's leaks and global
+   state across runs. The time is in parsing and checking the program and the
+   packages it imports; the next step is to cache the checked `std/` packages
+   between analyses, which needs sema to take a prepared package instead of
+   merging every import into one AST.
 2. A published grammar repository (`tree-sitter-salam` with the generated
    `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
 3. `Node.sym` as a field on the AST. The side table that `note_ref` fills

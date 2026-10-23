@@ -27,7 +27,32 @@ env:
 permissions:
   contents: read
 jobs:
+  release-guard:
+    name: Release version is not taken
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout VERSION
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - name: Refuse to reuse a released version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          tag="v$(tr -d ' \t\r\n' < VERSION)"
+          if gh release view "$tag" -R "$REPO" --json isPrerelease --jq '.isPrerelease' 2>/dev/null | grep -qx false; then
+            echo "::error::$tag is already released, and immutable releases keep a used tag name forever. Bump VERSION in the release commit: salam run tools/salam/update-version.salam <next version>"
+            exit 1
+          fi
+          echo "$tag has no published release yet"
   changes:
+    needs: release-guard
     uses: ./.github/workflows/_changes.yml # zizmor: ignore[self-repository]
     with:
       paths: |

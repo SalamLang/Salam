@@ -116,8 +116,8 @@ segments so that no page is both writable and executable:
 | 2 | R X | `.init`, `.text*`, `.fini` |
 | 3 | R W | `.init_array`, `.fini_array`, `.data*`, `.got`, `.bss*` |
 
-Plus `PT_GNU_STACK` (non-executable stack) and `PT_GNU_EH_FRAME` once
-`.eh_frame_hdr` exists. Segments are aligned to the page size and file
+Plus `PT_GNU_STACK` (non-executable stack) and `PT_GNU_EH_FRAME` for
+`.eh_frame_hdr`. Segments are aligned to the page size and file
 offsets are congruent to addresses modulo the page size. Input sections keep
 their alignment, are placed in input order, and same-named `.rodata.cst*`
 constants may be merged later as an optimisation.
@@ -247,7 +247,8 @@ versions) and `nl_dynout.salam` (PLT, GOT, dynamic relocations, `.dynamic`,
 `.gnu.hash`, version tables). With `--backend=native` the whole suite passes
 when every program is linked this way (1309 of 1309, including the sqlite
 tests that load a system `.so`), so `--linker=auto` uses it on x86-64 Linux.
-`.eh_frame_hdr` is not written yet; nothing in the runtime unwinds.
+`.eh_frame_hdr` is written for both static and dynamic output (see
+"`.eh_frame_hdr`" below).
 
 This is the phase that removes `cc` from ordinary Linux builds, including
 programs that link system shared libraries (sqlite, database clients).
@@ -412,5 +413,11 @@ runs them under wine. It runs once with each linker; outputs must match, and
    members), `.idata` import tables, base relocations, `.pdata`/`.xdata`
    kept as produced, subsystem and stack reserve in the optional header.
 3. **Mach-O** together with the aarch64 backend, for macOS.
-4. **`.eh_frame_hdr`** and a search table, so unwinders and profilers find
-   frames in large static binaries quickly.
+4. **`.eh_frame_hdr`** is done: before layout the linker counts the FDEs in
+   the live `.eh_frame` inputs and reserves the header and one program
+   header; after relocation it walks the output `.eh_frame`, reads each
+   FDE's start through its CIE's `R` augmentation, and writes the sorted
+   search table (`pcrel|sdata4` frame pointer, `udata4` count,
+   `datarel|sdata4` pairs). An encoding it cannot read makes it write the
+   header with an omitted table, which unwinders search linearly. glibc's
+   `backtrace()` walks native frames through it.

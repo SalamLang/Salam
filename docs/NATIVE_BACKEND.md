@@ -427,4 +427,4 @@ Not there yet:
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections
-  but does not write `.eh_frame_hdr` yet.
+  and writes `.eh_frame_hdr`.

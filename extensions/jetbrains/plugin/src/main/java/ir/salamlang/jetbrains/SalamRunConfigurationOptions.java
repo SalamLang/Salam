@@ -10,6 +10,7 @@ public final class SalamRunConfigurationOptions extends RunConfigurationOptions 
   private final StoredProperty<String> arguments = string("").provideDelegate(this, "arguments");
   private final StoredProperty<String> workingDirectory =
       string("").provideDelegate(this, "workingDirectory");
+  private final StoredProperty<String> testName = string("").provideDelegate(this, "testName");
 
   String getFile() {
     return file.getValue(this);
@@ -41,5 +42,13 @@ public final class SalamRunConfigurationOptions extends RunConfigurationOptions 
 
   void setWorkingDirectory(String value) {
     workingDirectory.setValue(this, value);
+  }
+
+  String getTestName() {
+    return testName.getValue(this);
+  }
+
+  void setTestName(String value) {
+    testName.setValue(this, value);
   }
 }

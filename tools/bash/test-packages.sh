@@ -285,8 +285,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(302)
         if self.path.startswith("/v0.0.1/"):
             self.send_header("Location", "/store" + self.path)
+        elif self.path.startswith("/hop/"):
+            self.send_header("Location", "//127.0.0.1:" + sys.argv[1] + "/rel/" + self.path[len("/hop/"):])
+        elif self.path.startswith("/rel/") and "/stage/" not in self.path:
+            self.send_header("Location", "stage/" + self.path.rsplit("/", 1)[1])
+        elif self.path.startswith("/rel/"):
+            version_dir = self.path[len("/rel/"):].split("/", 1)[0]
+            self.send_header("Location", "/store/" + version_dir + "/" + self.path.rsplit("/", 1)[1])
         else:
-            self.send_header("Location", "http://localhost:" + sys.argv[1] + "/store" + self.path)
+            self.send_header("Location", "http://localhost:" + sys.argv[1] + "/hop" + self.path)
         self.end_headers()
 
     def log_message(self, *args):

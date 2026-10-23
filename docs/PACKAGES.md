@@ -17,12 +17,12 @@ myapp/
 [package]
 name = "myapp"            # the program or library name (defaults to the folder)
 version = "0.1.0"
-salam = ">=0.5.7"         # oldest compiler this project builds with
+salam = ">=0.5.8"         # oldest compiler this project builds with
 kind = "bin"              # "bin" (default) or "lib"
 
 [dependencies]
 "github.com/owner/repo" = "v1.2.0"           # a GitHub package, pinned to a tag
-"db.redis" = "v0.5.7"                         # an official package (follows the compiler)
+"db.redis" = "v0.5.8"                         # an official package (follows the compiler)
 "example.com/me/lib" = { path = "../lib" }    # a local folder standing in for a package
 
 [native.sqlite3]          # only in packages that wrap a C library

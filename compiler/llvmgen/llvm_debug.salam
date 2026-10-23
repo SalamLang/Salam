@@ -219,8 +219,36 @@ func di_type(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): str:
     if is_int_ts(ts):
         ret di_basic(v, ts, int_bits(v, ts), is_signed_ts(ts) ? "DW_ATE_signed" : "DW_ATE_unsigned")
     end
-    if enum_sym(v, s, a, ts) != 0:
-        ret di_basic(v, ts, 32, "DW_ATE_signed")
+    esym := enum_sym(v, s, a, ts)
+    if esym != 0:
+        if enum_backed_float(v, s, a, ts):
+            ret di_basic(v, ts, 64, "DW_ATE_float")
+        end
+        if not enum_backed_int(v, s, a, ts):
+            ch2 := di_find(v, "char")
+            cid2 := str.Len(ch2) > 0 ? ch2 : di_basic(v, "char", 8, "DW_ATE_signed_char")
+            ret di_remember(v, ts, meta_add(v, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: " + cid2 + ", size: " + pbits + ")"))
+        end
+        mut eb2 := co.SbNew()
+        co.SbPuts(eb2, "!{")
+        emembers := sm.SymAt(s, esym).members
+        esyms := sm.ScopeAt(s, emembers).symbols
+        mut first := true
+        repeat esyms.len() in q:
+            m := sm.SymAt(s, esyms.get(q))
+            if m.kind == sm.SYM_ENUM_MEMBER:
+                en := meta_add(v, `!DIEnumerator(name: "` + di_escape(m.name) + `", value: ` + co.I64Toa(m.enum_value) + ")")
+                if not first:
+                    co.SbPuts(eb2, ", ")
+                end
+                co.SbPuts(eb2, en)
+                first = false
+            end
+        end
+        co.SbPuts(eb2, "}")
+        els2 := meta_add(v, co.SbCstr(eb2))
+        co.SbFree(eb2)
+        ret di_remember(v, ts, meta_add(v, `!DICompositeType(tag: DW_TAG_enumeration_type, name: "` + di_escape(ts) + `", size: 32, elements: ` + els2 + ")"))
     end
     ssym := struct_sym(v, s, a, ts)
     if ssym == 0:

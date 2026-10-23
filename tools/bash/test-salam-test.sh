@@ -18,7 +18,7 @@ step() {
     echo "== $*"
     "$salam" "$@" >"$work/out.txt" 2>&1
     rc=$?
-    sed -e "s|$real/||g" -e "s|$work/||g" "$work/out.txt"
+    sed -e "s|$real/||g" -e "s|$work/||g" -e 's/^\[[0-9: -]*\]//' "$work/out.txt"
     echo "exit $rc"
 }
 
@@ -27,6 +27,11 @@ step test
 step test math_test.salam --run=negative
 step test lib --format=teamcity
 step test lib/strings_test.salam --interp
+step test math_test.salam '--run=^test_add$'
+step test --run=no_such_test
+mkdir broken
+printf 'func test_bad():\n    testing.AssertTrue(\nend\n' >broken/bad_test.salam
+step test broken
 cd "$work/fa" || exit 1
 step test
 cd "$work" || exit 1

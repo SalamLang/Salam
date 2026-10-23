@@ -16,6 +16,8 @@ include ps "../parser/parser.salam"
 include sm "../semantic/semantic.salam"
 include pth "../sal_path.salam"
 
+const TEST_NO_MATCH := 3
+
 struct TestFn:
     pub name: str = ""
     pub line: int = 0
@@ -30,6 +32,7 @@ struct TestFile:
     pub has_testing: bool = false
     pub insert_at: int = 0
     pub insert_after_import: bool = false
+    pub parsed: bool = true
 end
 
 func is_test_name(name: str): bool:
@@ -86,11 +89,12 @@ func discover_tests(path: str, tf &: TestFile): bool:
     lgr := lg.New(lg.LOG_OFF, false)
     tf.pack = lx.Detect(sf, lp.LP_EN)
     mut toks := tok.StreamNew(path)
-    _lok := lx.Run(lgr, tf.pack, sf, toks)
+    lexed := lx.Run(lgr, tf.pack, sf, toks)
     mut a := at.NewAst()
     mut prog := 0
-    _pok := ps.Run(lgr, toks, a, prog)
+    parsed := ps.Run(lgr, toks, a, prog)
     tok.StreamFree(toks)
+    tf.parsed = lexed and parsed
     entry := lp.Entry(tf.pack)
     mut first := 0 - 1
     mut last_import := 0 - 1
@@ -200,9 +204,38 @@ func tc_value(s: str): str:
     ret str.Replace(out, "]", "|]")
 end
 
+func test_selected(name: str, filter: str): bool:
+    if str.Len(filter) == 0:
+        ret true
+    end
+    mut f := filter
+    at_start := str.StartsWith(f, "^")
+    if at_start:
+        f = str.Substr(f, 1, str.Len(f) - 1)
+    end
+    at_end := str.EndsWith(f, "$")
+    if at_end:
+        f = str.Substr(f, 0, str.Len(f) - 1)
+    end
+    if at_start and at_end:
+        ret str.Equals(name, f)
+    else at_start:
+        ret str.StartsWith(name, f)
+    else at_end:
+        ret str.EndsWith(name, f)
+    end
+    ret str.Contains(name, f)
+end
+
 func run_whole_file(opt &: Dr, path: str): int:
     teamcity := str.Equals(opt.test_format, "teamcity")
     name := pth.PathBase(path)
+    if not test_selected(name, opt.test_run):
+        if not teamcity:
+            println co.Format1(i18.Tr("?    %s: no test matches"), co.ArgStr(path))
+        end
+        ret TEST_NO_MATCH
+    end
     if teamcity:
         println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
         println "##teamcity[testStarted name='" + tc_value(name) + "' locationHint='salam://" + tc_value(path) + ":1']"
@@ -236,12 +269,21 @@ pub func TestOne(opt &: Dr): int:
         io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
         ret 2
     end
+    if not tf.parsed:
+        mut broken := opt
+        broken.input = path
+        broken.inputs = Vector {} as Vector<str>
+        broken.inputs.push(path)
+        broken.command = CMD_RUN
+        brc := opt.interp ? Exec(broken) : Run(broken)
+        ret brc != 0 and brc != TEST_NO_MATCH ? brc : 1
+    end
     if tf.fns.len() == 0:
         if tf.has_main:
             ret run_whole_file(opt, path)
         end
         println co.Format1(i18.Tr("?    %s: no test functions"), co.ArgStr(path))
-        ret 0
+        ret str.Len(opt.test_run) > 0 ? TEST_NO_MATCH : 0
     end
     if tf.has_main:
         io.EPrintln(
@@ -297,6 +339,7 @@ pub func Test(opt &: Dr): int:
         exe = "salam"
     end
     mut failed := 0
+    mut unmatched := 0
     each f in files:
         mut cmd := salam_quote(exe) + " test --one " + salam_quote(f)
         if str.Len(opt.test_format) > 0:
@@ -315,15 +358,22 @@ pub func Test(opt &: Dr): int:
             cmd = "\"" + cmd + "\""
         end
         rc := proc_status(system(cmd))
-        if rc != 0:
+        if rc == TEST_NO_MATCH:
+            unmatched += 1
+        else rc != 0:
             failed += 1
         end
     end
+    ran := files.len() - unmatched
+    if str.Len(opt.test_run) > 0 and ran == 0:
+        io.EPrintln(co.Format1(i18.Tr("salam test: no test matches --run=%s"), co.ArgStr(opt.test_run)))
+        ret 1
+    end
     if not str.Equals(opt.test_format, "teamcity"):
         if failed > 0:
-            println co.Format2(i18.Tr("FAIL: %d of %d test files failed"), co.ArgInt(failed as i64), co.ArgInt(files.len() as i64))
+            println co.Format2(i18.Tr("FAIL: %d of %d test files failed"), co.ArgInt(failed as i64), co.ArgInt(ran as i64))
         else:
-            println co.Format1(i18.Tr("PASS: %d test files"), co.ArgInt(files.len() as i64))
+            println co.Format1(i18.Tr("PASS: %d test files"), co.ArgInt(ran as i64))
         end
     end
     ret failed > 0 ? 1 : 0

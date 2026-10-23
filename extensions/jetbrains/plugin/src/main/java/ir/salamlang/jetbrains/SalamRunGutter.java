@@ -45,7 +45,8 @@ public final class SalamRunGutter implements EditorFactoryListener {
           Pattern.UNICODE_CHARACTER_CLASS);
   private static final Pattern TEST =
       Pattern.compile(
-          "^\\s*(?:pub\\s+)?(?:func|تابع)\\s+(test_\\w*|آزمون[^(:]*)\\s*[(:]",
+          "^\\s*(?:pub\\s+)?(?:func|تابع)\\s+(test_\\w*|آزمون[^(:]*?)"
+              + "\\s*(?:\\(\\s*\\))?\\s*:\\s*(?://.*)?$",
           Pattern.UNICODE_CHARACTER_CLASS);
   private static final Key<Disposable> LIFETIME = Key.create("salam.run.gutter");
   private static final Key<List<RangeHighlighter>> MARKS = Key.create("salam.run.gutter.marks");
@@ -120,7 +121,7 @@ public final class SalamRunGutter implements EditorFactoryListener {
 
   static void run(Project project, VirtualFile file, String test) {
     FileDocumentManager.getInstance().saveAllDocuments();
-    String testName = test == null ? "" : test;
+    String testName = test == null ? "" : "^" + test + "$";
     RunManager runs = RunManager.getInstance(project);
     RunnerAndConfigurationSettings settings = null;
     for (RunnerAndConfigurationSettings s :

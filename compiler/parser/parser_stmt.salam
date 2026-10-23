@@ -493,6 +493,35 @@ func parse_match_arm(p &: Ps, a &: at.Ast): int:
     ret arm
 end
 
+func brace_balance(p &: Ps, lo: int, hi: int): int:
+    mut open := 0
+    mut i := lo
+    until i < hi and i < p.count:
+        k := p.toks.toks.get(i).kind
+        if k == tok.TK_LBRACE:
+            open += 1
+        else k == tok.TK_RBRACE:
+            open -= 1
+        end
+        i += 1
+    end
+    ret open
+end
+
+func match_recovery_may_skip(p &: Ps, match_start: int, arm_start: int): bool:
+    k := p_peek(p).kind
+    if k == tok.TK_KW_FUNC or k == tok.TK_KW_STRUCT or k == tok.TK_KW_ENUM or k == tok.TK_KW_TYPE or k == tok.TK_KW_CONST or k == tok.TK_KW_IMPORT or k == tok.TK_KW_INCLUDE or k == tok.TK_KW_EXTERN or k == tok.TK_KW_EXPORT or k == tok.TK_KW_LAYOUT:
+        ret false
+    end
+    if k != tok.TK_RBRACE:
+        ret true
+    end
+    if brace_balance(p, arm_start, p.pos) > 0:
+        ret true
+    end
+    ret brace_balance(p, 0, match_start) <= 0
+end
+
 func parse_match(p &: Ps, a &: at.Ast): int:
     p_rule(p, "match_expr")
     head := p_peek(p)
@@ -500,16 +529,29 @@ func parse_match(p &: Ps, a &: at.Ast): int:
         ret p_mk(p, a, at.AST_MATCH)
     end
     n := p_mk(p, a, at.AST_MATCH)
+    match_start := p.pos
     p_advance(p)
     ps_set_a(a, n, parse_cond_expr(p, a))
     p_expect(p, tok.TK_COLON, "':' after match subject")
     p_skip_terminators(p)
+    mut last_pos := p.pos
     until not p_at(p, tok.TK_KW_END) and not p_at_eof(p):
+        arm_start := p.pos
         at.AddChild(a, n, parse_match_arm(p, a))
         p_skip_terminators(p)
         if p.panic:
             p_sync(p)
         end
+        if p.pos <= last_pos:
+            if not match_recovery_may_skip(p, match_start, arm_start):
+                break
+            end
+            p_advance(p)
+            if p.pos <= last_pos:
+                break
+            end
+        end
+        last_pos = p.pos
     end
     p_expect_end(p, head, "'end' to close match")
     p_fin(p, a, n)

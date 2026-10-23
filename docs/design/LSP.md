@@ -630,6 +630,11 @@ Also built since:
   `--error-format=json`). A fix marked safe (imports, a needless `mut`, the
   foreign keywords) is applied in place by `salam check --fix`, which then
   checks again; guesses such as did-you-mean are never applied on their own.
+- `salam test`: every `test_` function (`آزمون` in Persian) in each
+  `*_test.salam` file runs, one process per file, through a `main` the
+  driver writes into a source overlay, in the file's language.
+  `--format=teamcity` feeds the JetBrains plugin's test tree, with
+  `salam://file:line` locations and a run button beside each test.
 
 Left:
 
@@ -639,10 +644,7 @@ Left:
    carrying the compiler's leaks and global state across runs. It is not worth
    it until the compiler resets its state (change 5) and frees its
    temporaries (docs/design/OWNERSHIP.md).
-2. A test runner in the JetBrains plugin. Salam has no `salam test` command
-   yet; the run configurations are there, and a test runner follows the
-   command.
-3. A published grammar repository (`tree-sitter-salam` with the generated
+2. A published grammar repository (`tree-sitter-salam` with the generated
    `src/parser.c`), which Zed and Helix need to fetch the grammar by URL.
-4. `Node.sym` as a field on the AST. The side table that `note_ref` fills
+3. `Node.sym` as a field on the AST. The side table that `note_ref` fills
    gives the same answers today, so this is a tidy-up, not a feature.

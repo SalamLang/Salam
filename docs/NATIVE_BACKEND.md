@@ -386,7 +386,7 @@ How the pieces fit:
   `rbp` there. Both the built-in PE linker and mingw `ld` keep them, so gdb
   for mingw reads lines, frames and variables.
 
-Not covered yet: enumerations are described as plain integers, and
+Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
 CodeView/PDB for MSVC debuggers is not written.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb

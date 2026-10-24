@@ -1,0 +1,271 @@
+import net.http
+import net.tcp
+import net.router
+import compress
+import sync
+import str
+
+mut lone := tcp.Server {}
+mut other := tcp.Server {}
+mut replies := Vector {} as Vector<str>
+mut holds := Vector {} as Vector<int>
+mut gzip_at := -1
+mut seen := Vector {} as Vector<str>
+mut other_seen := Vector {} as Vector<str>
+mut gate := sync.Mutex {}
+mut ticket := 0
+mut mismatches := 0
+mut done_requests := 0
+mut shared := http.Client {}
+
+func scripted():
+    repeat replies.len() in i:
+        conn := tcp.Accept(lone)
+        request := tcp.Read(conn, 8192)
+        seen.push(request)
+        if i == gzip_at:
+            plain := compress.NewByteBuf()
+            repeat 1000:
+                compress.BufPushBytes(plain, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" as void*, 100)
+            end
+            packed := compress.GzipCompress(plain.data, plain.len)
+            head := "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + packed.len + "\r\nConnection: close\r\n\r\n"
+            _ := tcp.Write(conn, head)
+            _ := tcp.WriteBytes(conn, packed.data, packed.len)
+        else:
+            _ := tcp.Write(conn, replies.get(i))
+        end
+        if holds.get(i) > 0: sync.SleepMs(holds.get(i)) end
+        tcp.Close(conn)
+    end
+end
+
+func other_side():
+    conn := tcp.Accept(other)
+    request := tcp.Read(conn, 8192)
+    other_seen.push(request)
+    tcp.WriteHTTP(conn, "200 OK", "text/plain", "landed")
+    tcp.Close(conn)
+end
+
+func script(reply: str, hold_ms: int):
+    replies.push(reply)
+    holds.push(hold_ms)
+end
+
+func reset():
+    replies = Vector {} as Vector<str>
+    holds = Vector {} as Vector<int>
+    seen = Vector {} as Vector<str>
+    gzip_at = -1
+end
+
+func echo(h: i64):
+    http.Text(h, http.Query(h, "n"))
+end
+
+func cookie_set(h: i64):
+    http.SetHeader(h, "Set-Cookie", "sid=abc; Path=/")
+    http.Text(h, "set")
+end
+
+func cookie_get(h: i64):
+    http.Text(h, http.Header(h, "Cookie"))
+end
+
+func hammer():
+    sync.Lock(gate)
+    me := ticket
+    ticket += 1
+    sync.Unlock(gate)
+    base := "http://127.0.0.1:19781"
+    repeat 15 in j:
+        want := "" + (me * 100 + j)
+        r := http.Get(base + "/echo?n=" + want)
+        if http.Status(r) != 200 or http.Body(r) != want:
+            sync.Lock(gate)
+            mismatches += 1
+            sync.Unlock(gate)
+        end
+        sync.Lock(gate)
+        done_requests += 1
+        sync.Unlock(gate)
+    end
+end
+
+func share():
+    repeat 10:
+        r := shared.Get("http://127.0.0.1:19781/who")
+        if http.Status(r) != 200:
+            sync.Lock(gate)
+            mismatches += 1
+            sync.Unlock(gate)
+        end
+    end
+end
+
+func rx(raw: str): http.Response:
+    ret http.RequestRaw("GET", raw, "", "")
+end
+
+func main:
+    gate = sync.NewMutex()
+    mut routes := router.NewRouter()
+    router.Get(routes, "/echo", echo)
+    router.Get(routes, "/set", cookie_set)
+    router.Get(routes, "/who", cookie_get)
+    mut app := http.NewServer(19781)
+    http.Use(app, routes)
+    _ := http.RunBackground(app)
+
+    mut threads := Vector {} as Vector<i64>
+    repeat 6:
+        threads.push(spawn(hammer))
+    end
+    each t in threads: join(t) end
+    println "concurrent requests:", done_requests, "mismatches:", mismatches
+
+    shared = http.NewClient()
+    _ := shared.Get("http://127.0.0.1:19781/set")
+    mismatches = 0
+    mut sharers := Vector {} as Vector<i64>
+    repeat 4:
+        sharers.push(spawn(share))
+    end
+    each t in sharers: join(t) end
+    println "shared client mismatches:", mismatches
+    who := shared.Get("http://127.0.0.1:19781/who")
+    println "cookie sent back:", http.Body(who)
+    shared.Free()
+
+    lone = tcp.Bind(0)
+    other = tcp.Bind(0)
+    base := "http://127.0.0.1:" + tcp.Port(lone)
+
+    bad_header := http.NewHeaders()
+    bad_header.put("X-Test", "ok\r\nInjected: yes")
+    r1 := http.GetWith(base + "/", bad_header)
+    println "header injection:", r1.err
+    bad_name := http.NewHeaders()
+    bad_name.put("Bad Name", "v")
+    println "header name:", http.GetWith(base + "/", bad_name).err
+    println "url with space:", rx(base + "/a b").err
+    println "url with newline:", rx(base + "/a\r\nHost: evil").err
+    println "method:", http.RequestRaw("GE T", base + "/", "", "").err
+    println "scheme:", rx("ftp://example.com/").err
+    println "raw block:", http.RequestRaw("GET", base + "/", "X-A: 1\r\nno colon here\r\n", "").err
+
+    reset()
+    script("HTTP/1.1 200 OK\r\nContent-Length: 5000\r\nConnection: close\r\n\r\n" + str.Repeat("x", 5000), 0)
+    t1 := spawn(scripted)
+    mut small := http.RequestOptions {}
+    small.max_body = 1000
+    r2 := http.Do("GET", base + "/", http.NewHeaders(), "", small)
+    join(t1)
+    println "body over limit:", r2.err
+
+    reset()
+    script("HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort", 0)
+    t2 := spawn(scripted)
+    r3 := http.Get(base + "/")
+    join(t2)
+    println "cut short:", r3.status, r3.err
+
+    reset()
+    script("x", 0)
+    gzip_at = 0
+    t3 := spawn(scripted)
+    mut tight := http.RequestOptions {}
+    tight.max_body = 10000
+    r4 := http.Do("GET", base + "/", http.NewHeaders(), "", tight)
+    join(t3)
+    println "gzip bomb:", r4.err
+
+    reset()
+    script("x", 0)
+    gzip_at = 0
+    t4 := spawn(scripted)
+    r5 := http.Get(base + "/")
+    join(t4)
+    println "gzip body:", r5.status, http.Body(r5).len(), r5.err
+
+    reset()
+    script("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", 1500)
+    t5 := spawn(scripted)
+    began := sync.NowMs()
+    r6 := http.Get(base + "/")
+    quick := sync.NowMs() - began < 1200
+    join(t5)
+    println "complete answer on an open connection:", http.Body(r6), "returned early:", quick
+
+    reset()
+    script("", 1500)
+    t6 := spawn(scripted)
+    mut impatient := http.RequestOptions {}
+    impatient.timeout_ms = 300
+    r7 := http.Do("GET", base + "/never", http.NewHeaders(), "", impatient)
+    println "silent server:", r7.status, r7.err
+    join(t6)
+
+    reset()
+    script("HTTP/1.1 302 Found\r\nLocation: /b\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)
+    script("HTTP/1.1 302 Found\r\nLocation: /b\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)
+    script("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone", 0)
+    t7 := spawn(scripted)
+    r8 := http.Get(base + "/a")
+    println "redirect not followed:", r8.status, http.GetHeader(r8, "location")
+    mut follow := http.RequestOptions {}
+    follow.max_redirects = 5
+    r9 := http.Do("GET", base + "/a", http.NewHeaders(), "", follow)
+    println "redirect followed:", r9.status, http.Body(r9), r9.url.find("/b") > 0
+    join(t7)
+
+    reset()
+    repeat 4:
+        script("HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)
+    end
+    t8 := spawn(scripted)
+    mut few := http.RequestOptions {}
+    few.max_redirects = 3
+    r10 := http.Do("GET", base + "/loop", http.NewHeaders(), "", few)
+    join(t8)
+    println "redirect loop:", r10.status, r10.err
+
+    reset()
+    script("HTTP/1.1 303 See Other\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)
+    script("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok", 0)
+    t9 := spawn(scripted)
+    r11 := http.Do("POST", base + "/form", http.NewHeaders(), "a=1", follow)
+    join(t9)
+    println "303 turns POST into GET:", r11.status, seen.get(1).find("GET /next ") == 0, seen.get(1).find("a=1") < 0
+
+    reset()
+    script("HTTP/1.1 302 Found\r\nLocation: http://localhost:" + tcp.Port(other) + "/landing\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", 0)
+    t10 := spawn(scripted)
+    t11 := spawn(other_side)
+    secret := http.NewHeaders()
+    secret.put("Authorization", "Bearer s3cret")
+    r12 := http.Do("GET", base + "/start", secret, "", follow)
+    join(t10)
+    join(t11)
+    println "cross host redirect:", r12.status, http.Body(r12)
+    println "first hop sent the token:", seen.get(0).find("Bearer s3cret") >= 0
+    println "second hop sent the token:", other_seen.get(0).find("Bearer s3cret") >= 0
+
+    reset()
+    script("HTTP/1.1 200 OK\r\nSet-Cookie: sid=one\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok", 0)
+    t12 := spawn(scripted)
+    jar := http.NewClient()
+    _ := jar.Get(base + "/login")
+    join(t12)
+    other = tcp.Bind(0)
+    t13 := spawn(other_side)
+    _ := jar.Get("http://localhost:" + tcp.Port(other) + "/")
+    join(t13)
+    println "cookie kept for its host:", jar.cookies.get("sid")
+    println "cookie sent to another host:", other_seen.get(other_seen.len() - 1).find("sid=one") >= 0
+    jar.Free()
+
+    tcp.CloseServer(lone)
+    tcp.CloseServer(other)
+end

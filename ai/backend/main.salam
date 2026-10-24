@@ -47,6 +47,7 @@ const PASS_ROUNDS := 120000
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const PENDING_SECONDS := 600
+const TIMED_OUT := "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const STREAM_WORKERS := 128
 const BRIDGE_SLOTS := 48
 const STREAM_SECONDS := 900
@@ -64,6 +65,7 @@ mut STREAM_LOCK := sync.Mutex {}
 mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 mut MEM_SOFT_MB := 1200
 mut MEM_HARD_MB := 2600
+mut AGENT_TURN_SECONDS := 3600 as i64
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -102,6 +104,7 @@ func main:
         println "salam-ai has", aiengine.Fallbacks(), "fallback models for failed turns"
     end
     aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS, env_or("AI_BRIDGE_HOLD_SECONDS", "40").to_int())
+    AGENT_TURN_SECONDS = env_or("AI_AGENT_TURN_SECONDS", "3600").to_int() as i64
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
@@ -507,17 +510,27 @@ func sync_pending(id: str, sid: str):
     if mid.len() == 0:
         ret
     end
-    _r := settle(mid, sid, created)
+    _r := settle(mid, sid, created, turn_seconds(id))
 end
 
-func settle(mid: str, sid: str, created: i64): aiengine.Reply:
-    mut r := aiturn.Progress(sid, created, PENDING_SECONDS)
+func turn_seconds(id: str): i64:
+    aistore.Lock()
+    device := aistore.OneText("SELECT device_id FROM chats WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if device.len() > 0 and device != "0":
+        ret AGENT_TURN_SECONDS
+    end
+    ret PENDING_SECONDS
+end
+
+func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
+    mut r := aiturn.Progress(sid, created, limit)
     if r.done:
         mut status := "done"
         mut body := r.text
         if r.failed and body.len() == 0:
             status = "error"
-            body = "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+            body = r.timed_out ? TIMED_OUT : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
         end
         aistore.Lock()
         _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))
@@ -815,7 +828,7 @@ func poll_message(ctx: i64):
     mut activity := "[]"
     body = aiturn.Plain(body)
     if status == "pending":
-        r := settle(mid, str.TrimSuffix(owned, "|"), created)
+        r := settle(mid, str.TrimSuffix(owned, "|"), created, turn_seconds(id))
         body = r.text
         activity = activity_raw(r.activity)
         if r.done:
@@ -1126,6 +1139,7 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
         _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + ", " + json.MemberRaw("activity", activity_raw(stored_activity)) + ", " + json.MemberRaw("ms", stored_ms.len() > 0 ? stored_ms : "0") + "}")
         ret
     end
+    limit := turn_seconds(id)
     mut sent := ""
     mut phase_sent := ""
     mut activity_sent := "[]"
@@ -1136,7 +1150,7 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
     start := aistore.Now()
     tcp.SetWriteDeadline(c, 30000)
     until true:
-        r := settle(mid, sid, created)
+        r := settle(mid, sid, created, limit)
         if r.done:
             final := r.failed ? "error" : "done"
             took := time.NowMillis() - created * 1000

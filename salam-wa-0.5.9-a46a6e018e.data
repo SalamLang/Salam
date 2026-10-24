@@ -21796,6 +21796,9 @@ end
 func _my_fetch_field_direct(result: void*, fieldnr: u32): void*:
 ret mysql_fetch_field_direct(result, fieldnr)
 end
+func _my_field_type(_result: void*, _fieldnr: u32): i64:
+ret 253
+end
 func _my_affected_rows(conn: void*): u64:
 ret mysql_affected_rows(conn)
 end
@@ -21891,6 +21894,7 @@ pub nfields: int = 0
 pub nrows: i64 = 0
 pub pos: i64 = 0
 pub names: void* = null
+pub types: void* = null
 pub rows: Vector<i64> = Vector {} as Vector<i64>
 end
 struct _MyOut:
@@ -22412,6 +22416,7 @@ r := mem.AllocateZeroed(sizeof(_MyRes) as u64) as _MyRes*
 r[0] = _MyRes {}
 r[0].nfields = nfields
 r[0].names = mem.AllocateZeroed((nfields * 8 + 8) as u64)
+r[0].types = mem.AllocateZeroed((nfields * 8 + 8) as u64)
 ret r
 end
 func _my_free_result(res: void*):
@@ -22426,6 +22431,7 @@ mem.Free(names[i] as void*)
 end
 end
 mem.Free(r[0].names)
+mem.Free(r[0].types)
 each row in r[0].rows:
 cells := row as i64*
 repeat r[0].nfields in j:
@@ -22473,6 +22479,7 @@ mut at0 := 0 as i64
 nf := _rd_lenenc(p, at0) as int
 r := _my_res_new(nf)
 names := r[0].names as i64*
+types := r[0].types as i64*
 repeat nf in i:
 if not _my_read(c, pkt):
 _my_free_result(r as void*)
@@ -22485,6 +22492,16 @@ at = at + l
 end
 nl := _rd_lenenc(pkt.p, at)
 names[i] = _copy_bytes(pkt.p, at, nl) as i64
+at = at + nl
+ol := _rd_lenenc(pkt.p, at)
+at = at + ol
+_rd_lenenc(pkt.p, at)
+at = at + 6
+if at + 3 <= pkt.len:
+types[i] = (_rd(pkt.p, at) as i64) | (_rd_le(pkt.p, at + 1, 2) << 8)
+else:
+types[i] = 253
+end
 end
 if not _my_read(c, pkt):
 _my_free_result(r as void*)
@@ -22637,6 +22654,14 @@ if (fieldnr as int) >= r[0].nfields:
 ret null
 end
 ret (r[0].names as i64 + (fieldnr as i64) * 8) as void*
+end
+func _my_field_type(res: void*, fieldnr: u32): i64:
+r := res as _MyRes*
+if (fieldnr as int) >= r[0].nfields:
+ret 253
+end
+types := r[0].types as i64*
+ret types[fieldnr as int]
 end
 func _my_affected_rows(conn: void*): u64:
 c := conn as _MyConn*
@@ -22869,7 +22894,7 @@ pub func ColumnType(col: int): int:
 if this.IsNull(col):
 ret db.TYPE_NULL
 end
-ret db.TYPE_TEXT
+ret _kind_of(_my_field_type(this.handle, col as u32))
 end
 @en "IsNull"
 @fa "خالی است"
@@ -22962,6 +22987,16 @@ ret 0
 end
 ptrs := res.row as i64*
 ret ptrs[col]
+end
+func _kind_of(field: i64): int:
+t := (field & (255 as i64)) as int
+if t == 1 or t == 2 or t == 3 or t == 8 or t == 9 or t == 13 or t == 16:
+ret db.TYPE_INT
+end
+if t == 4 or t == 5:
+ret db.TYPE_FLOAT
+end
+ret db.TYPE_TEXT
 end
 @en "Available"
 @fa "در دسترس"
@@ -23196,6 +23231,25 @@ if namep == 0:
 ret ""
 end
 ret str.Clone(namep as void* as str)
+end
+@en "FieldType"
+@fa "نوع فیلد"
+pub func FieldType(res: Result, col: int): int:
+if res.handle == null: ret 0 end
+ret (_my_field_type(res.handle, col as u32) & (255 as i64)) as int
+end
+@en "FieldKind"
+@fa "نوع داده فیلد"
+pub func FieldKind(res: Result, col: int): int:
+if res.handle == null: ret db.TYPE_TEXT end
+ret _kind_of(_my_field_type(res.handle, col as u32))
+end
+@en "ColumnKind"
+@fa "نوع ستون"
+pub func ColumnKind(res: Result, col: int): int:
+if res.handle == null: ret db.TYPE_NULL end
+if IsNull(res, col): ret db.TYPE_NULL end
+ret _kind_of(_my_field_type(res.handle, col as u32))
 end
 @en "Text"
 @fa "متن"
@@ -33927,6 +33981,7 @@ ret archive.ZipCreateFile(files, path)
 end
 package excel
 import conv
+import str
 import time
 @en "MergeRange"
 @fa "بازه ادغام"
@@ -33944,6 +33999,10 @@ pub cells: HashMap<str, Cell> = HashMap {} as HashMap<str, Cell>
 pub max_row: int = -1
 pub max_col: int = -1
 pub merges: Vector<MergeRange> = Vector {} as Vector<MergeRange>
+pub rtl: bool = false
+pub freeze_rows: int = 0
+pub freeze_cols: int = 0
+pub col_widths: Vector<f64> = Vector {} as Vector<f64>
 func _touch(row: int, col: int):
 if row > this.max_row: this.max_row = row end
 if col > this.max_col: this.max_col = col end
@@ -34191,11 +34250,47 @@ end
 found = false
 ret MergeRange {}
 end
+@en "set_column_width"
+@fa "تنظیم پهنای ستون"
+pub func set_column_width(col: int, width: f64):
+until this.col_widths.len() <= col:
+this.col_widths.push(0.0)
+end
+this.col_widths.set(col, width)
+end
+@en "auto_fit"
+@fa "پهنای خودکار"
+pub func auto_fit():
+mut c := 0
+until c <= this.max_col:
+mut longest := 0
+mut r := 0
+until r <= this.max_row:
+if this.has_cell(r, c) and not this.is_merged(r, c):
+n := str.CharCount(_cell_display(this.get_cell(r, c)))
+if n > longest: longest = n end
+end
+r += 1
+end
+mut w := (longest as f64) * 1.2 + 2.0
+if w < 6.0: w = 6.0 end
+if w > 80.0: w = 80.0 end
+this.set_column_width(c, w)
+c += 1
+end
+end
+@en "freeze"
+@fa "ثابت کردن"
+pub func freeze(rows: int, cols: int):
+this.freeze_rows = rows
+this.freeze_cols = cols
+end
 @en "free"
 @fa "آزادسازی"
 pub func free():
 this.cells.free()
 this.merges.free()
+this.col_widths.free()
 end
 end
 func _cell_key(row: int, col: int): str:
@@ -34252,6 +34347,7 @@ pub bg_color: str = ""
 pub align_h: int = 0
 pub align_v: int = 0
 pub num_format: str = ""
+pub border: bool = false
 @en "equals"
 @fa "یکسان است"
 pub func equals(other: Style): bool:
@@ -34265,6 +34361,7 @@ if this.bg_color != other.bg_color: ret false end
 if this.align_h != other.align_h: ret false end
 if this.align_v != other.align_v: ret false end
 if this.num_format != other.num_format: ret false end
+if this.border != other.border: ret false end
 ret true
 end
 end
@@ -34963,6 +35060,7 @@ ret out
 end
 func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
 mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+out = out.concat(_xlsx_sheet_views(sheet)).concat(_xlsx_cols(sheet))
 out = out.concat("<sheetData>").concat(_xlsx_sheet_body(sheet, date_style_id)).concat("</sheetData>")
 if sheet.merges.len() > 0:
 out = out.concat(`<mergeCells count="`).concat(conv.FormatInt(sheet.merges.len() as i64)).concat(`">`)
@@ -34977,6 +35075,42 @@ out = out.concat("</mergeCells>")
 end
 out = out.concat("</worksheet>")
 ret out
+end
+func _xlsx_border_id(st: Style): str:
+if st.border: ret "1" end
+ret "0"
+end
+func _xlsx_sheet_views(sheet: Sheet): str:
+if not sheet.rtl and sheet.freeze_rows <= 0 and sheet.freeze_cols <= 0: ret "" end
+mut out := `<sheetViews><sheetView workbookViewId="0"`
+if sheet.rtl: out = out.concat(` rightToLeft="1"`) end
+out = out.concat(">")
+if sheet.freeze_rows > 0 or sheet.freeze_cols > 0:
+out = out.concat("<pane")
+if sheet.freeze_cols > 0: out = out.concat(` xSplit="`).concat(conv.FormatInt(sheet.freeze_cols as i64)).concat(`"`) end
+if sheet.freeze_rows > 0: out = out.concat(` ySplit="`).concat(conv.FormatInt(sheet.freeze_rows as i64)).concat(`"`) end
+mut pane := "bottomLeft"
+if sheet.freeze_rows > 0 and sheet.freeze_cols > 0: pane = "bottomRight"
+else sheet.freeze_cols > 0: pane = "topRight" end
+out = out.concat(` topLeftCell="`).concat(CellRef(sheet.freeze_rows, sheet.freeze_cols)).concat(`" activePane="`).concat(pane).concat(`" state="frozen"/>`)
+end
+ret out.concat("</sheetView></sheetViews>")
+end
+func _xlsx_cols(sheet: Sheet): str:
+mut any := false
+mut out := "<cols>"
+mut i := 0
+until i < sheet.col_widths.len():
+wd := sheet.col_widths.get(i)
+if wd > 0.0:
+any = true
+n := conv.FormatInt((i + 1) as i64)
+out = out.concat(`<col min="`).concat(n).concat(`" max="`).concat(n).concat(`" width="`).concat(conv.FormatFloat(wd)).concat(`" customWidth="1"/>`)
+end
+i += 1
+end
+if not any: ret "" end
+ret out.concat("</cols>")
 end
 func _xlsx_styles_xml(styles: StyleSheet): str:
 n := styles.count()
@@ -35018,7 +35152,7 @@ end
 align_attrs := _xlsx_align_attrs(st.align_h, st.align_v)
 fill_id := i + 2
 font_id := i
-str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"`))
+str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="`).concat(_xlsx_border_id(st)).concat(`" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1" applyBorder="1"`))
 if align_attrs.len() > 0:
 str.BufAppend(xfs, ` applyAlignment="1">`)
 str.BufAppend(xfs, align_attrs)
@@ -35041,7 +35175,7 @@ out = out.concat(`<fills count="`).concat(conv.FormatInt((n + 2) as i64)).concat
 out = out.concat(`<fill><patternFill patternType="none"/></fill>`)
 out = out.concat(`<fill><patternFill patternType="gray125"/></fill>`)
 out = out.concat(fills_str).concat("</fills>")
-out = out.concat(`<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>`)
+out = out.concat(`<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color indexed="64"/></left><right style="thin"><color indexed="64"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color indexed="64"/></bottom><diagonal/></border></borders>`)
 out = out.concat(`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>`)
 out = out.concat(`<cellXfs count="`).concat(conv.FormatInt(n as i64)).concat(`">`).concat(xfs_str).concat("</cellXfs>")
 out = out.concat(`<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>`)
@@ -84050,6 +84184,836 @@ end
 @en "Panic"
 @fa "خطای مرگبار"
 pub noret func Panic(msg: str): salam_panic(msg) end
+package cron
+import str
+import conv
+import mem
+import time
+import calendar
+if SALAM_OS_WINDOWS:
+extern:
+func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
+func CloseHandle(h: void *): int
+end
+else:
+extern:
+func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
+func pthread_detach(thread: u64): int
+end
+end
+const CRON_KIND_PLAIN := 0
+const CRON_KIND_MONTH := 1
+const CRON_KIND_DOW := 2
+const CRON_MAX_SCAN := 2000000
+mut _jobs := Vector {} as Vector<_Job>
+mut _zone_name := "UTC"
+mut _zone_fallback := 0
+mut _stop := null as i64*
+mut _last_minute := 0 as i64
+struct _Job:
+pub name: str = ""
+pub expr: Expr = Expr {}
+pub fn: i64 = 0
+pub busy: i64 = 0
+end
+@en "Expr"
+@fa "عبارت زمان‌بندی"
+pub struct Expr:
+pub minutes: i64 = 0
+pub hours: i64 = 0
+pub days: i64 = 0
+pub months: i64 = 0
+pub weekdays: i64 = 0
+pub dom_star: bool = true
+pub dow_star: bool = true
+pub ok: bool = false
+end
+if SALAM_OS_WINDOWS:
+export:
+func salam_cron_spawn(fn: i64, arg: i64):
+h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
+if h != (0 as u64): CloseHandle(h as void *) end
+end
+end
+else:
+export:
+func salam_cron_spawn(fn: i64, arg: i64):
+t := mem.Allocate(8 as u64)
+if pthread_create(t, null, fn as void *, arg as void *) == 0:
+tp := t as i64 *
+pthread_detach(tp[0] as u64)
+end
+mem.Free(t)
+end
+end
+end
+func _bit(v: int): i64: ret (1 as i64) << (v as i64) end
+func _has(mask: i64, v: int): bool:
+ret ((mask >> (v as i64)) & (1 as i64)) == (1 as i64)
+end
+func _name_value(s: str, kind: int): int:
+if kind == CRON_KIND_MONTH:
+names := "janfebmaraprmayjunjulaugsepoctnovdec"
+repeat 12 in i:
+if str.EqualFold(s, names.substr(i * 3, 3)): ret i + 1 end
+end
+end
+if kind == CRON_KIND_DOW:
+names := "sunmontuewedthufrisat"
+repeat 7 in i:
+if str.EqualFold(s, names.substr(i * 3, 3)): ret i end
+end
+end
+ret 0 - 1
+end
+func _num(s: str, kind: int): int:
+n := s.len()
+if n == 0: ret 0 - 1 end
+mut digits := true
+repeat n in i:
+c := s[i]
+if c < '0' or c > '9': digits = false end
+end
+if digits:
+if n > 4: ret 0 - 1 end
+ret conv.ParseInt(s) as int
+end
+ret _name_value(s, kind)
+end
+func _parse_item(item: str, lo: int, hi: int, kind: int, mask &: i64, star &: bool): bool:
+mut base := item
+mut step := 1
+slash := item.find("/")
+if slash >= 0:
+base = item.substr(0, slash)
+step = _num(item.substr(slash + 1, item.len() - slash - 1), CRON_KIND_PLAIN)
+if step <= 0: ret false end
+end
+mut a := lo
+mut b := hi
+if base == "*":
+star = true
+else:
+dash := base.find("-")
+if dash > 0:
+a = _num(base.substr(0, dash), kind)
+b = _num(base.substr(dash + 1, base.len() - dash - 1), kind)
+else:
+a = _num(base, kind)
+if slash >= 0:
+b = hi
+else:
+b = a
+end
+end
+end
+if a < lo or b > hi or a > b: ret false end
+mut v := a
+until v <= b:
+mask = mask | _bit(v)
+v += step
+end
+ret true
+end
+func _parse_field(text: str, lo: int, hi: int, kind: int, mask &: i64, star &: bool): bool:
+items := str.Split(text, ",")
+defer items.free()
+if items.len() == 0: ret false end
+star = false
+mut i := 0
+until i < items.len():
+if not _parse_item(items.get(i), lo, hi, kind, mask, star): ret false end
+i += 1
+end
+ret true
+end
+func _expand_macro(spec: str): str:
+if spec == "@yearly" or spec == "@annually": ret "0 0 1 1 *" end
+if spec == "@monthly": ret "0 0 1 * *" end
+if spec == "@weekly": ret "0 0 * * 0" end
+if spec == "@daily" or spec == "@midnight": ret "0 0 * * *" end
+if spec == "@hourly": ret "0 * * * *" end
+ret spec
+end
+func _offset(z: calendar.Zone, fallback_minutes: int, epoch: i64): i64:
+if z.ok: ret calendar.ZoneOffsetSeconds(z, epoch) end
+ret fallback_minutes * 60
+end
+func _cron_entry(id: i64):
+j := _jobs.get(id as int)
+callhandler(j.fn, id)
+atomic_store(j.busy as i64*, 0 as i64)
+end
+func _cron_loop(arg: i64):
+Run()
+end
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(spec: str): Expr:
+mut e := Expr {}
+fields := str.Fields(_expand_macro(spec))
+defer fields.free()
+if fields.len() != 5: ret e end
+mut star := false
+if not _parse_field(fields.get(0), 0, 59, CRON_KIND_PLAIN, e.minutes, star): ret e end
+if not _parse_field(fields.get(1), 0, 23, CRON_KIND_PLAIN, e.hours, star): ret e end
+if not _parse_field(fields.get(2), 1, 31, CRON_KIND_PLAIN, e.days, star): ret e end
+e.dom_star = star
+if not _parse_field(fields.get(3), 1, 12, CRON_KIND_MONTH, e.months, star): ret e end
+if not _parse_field(fields.get(4), 0, 7, CRON_KIND_DOW, e.weekdays, star): ret e end
+e.dow_star = star
+if _has(e.weekdays, 7):
+e.weekdays = e.weekdays | _bit(0)
+end
+e.ok = true
+ret e
+end
+@en "MatchFields"
+@fa "تطبیق فیلدها"
+pub func MatchFields(e: Expr, minute: int, hour: int, day: int, month: int, weekday: int): bool:
+if not e.ok: ret false end
+if not _has(e.minutes, minute) or not _has(e.hours, hour) or not _has(e.months, month):
+ret false
+end
+dom := _has(e.days, day)
+dow := _has(e.weekdays, weekday)
+if e.dom_star or e.dow_star:
+ret dom and dow
+end
+ret dom or dow
+end
+@en "MatchesLocal"
+@fa "تطبیق محلی"
+pub func MatchesLocal(e: Expr, local: i64): bool:
+days := local / (86400 as i64)
+weekday := ((days + (4 as i64)) % (7 as i64)) as int
+ret MatchFields(e, time.MinuteUTC(local), time.HourUTC(local), time.DayUTC(local), time.MonthUTC(local), weekday)
+end
+@en "OffsetSeconds"
+@fa "اختلاف ثانیه منطقه"
+pub func OffsetSeconds(zone: str, fallback_minutes: int, epoch: i64): i64:
+mut z := calendar.LoadZone(zone)
+off := _offset(z, fallback_minutes, epoch)
+if z.ok: calendar.FreeZone(z) end
+ret off
+end
+@en "Next"
+@fa "بعدی"
+pub func Next(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
+if not e.ok: ret 0 end
+mut z := calendar.LoadZone(zone)
+mut found := 0 as i64
+mut t := (after / (60 as i64) + (1 as i64)) * (60 as i64)
+mut steps := 0
+until steps < CRON_MAX_SCAN and found == (0 as i64):
+local := t + _offset(z, fallback_minutes, t)
+sod := local % (86400 as i64)
+if not _has(e.months, time.MonthUTC(local)):
+t += (86400 as i64) - sod
+else not _has(e.hours, time.HourUTC(local)):
+t += (3600 as i64) - (local % (3600 as i64))
+else MatchesLocal(e, local):
+found = t
+else:
+t += 60 as i64
+end
+steps += 1
+end
+if z.ok: calendar.FreeZone(z) end
+ret found
+end
+@en "SetZone"
+@fa "تنظیم منطقه"
+pub func SetZone(name: str, fallback_minutes: int):
+_zone_name = str.Clone(name)
+_zone_fallback = fallback_minutes
+end
+@en "Add"
+@fa "افزودن"
+pub func Add(name: str, spec: str, fn: i64): int:
+e := Parse(spec)
+if not e.ok: ret 0 - 1 end
+cell := mem.AllocateZeroed(8 as u64) as i64*
+_jobs.push(_Job { name = str.Clone(name), expr = e, fn = fn, busy = cell as i64 })
+ret _jobs.len() - 1
+end
+@en "Count"
+@fa "تعداد"
+pub func Count(): int: ret _jobs.len() end
+@en "Name"
+@fa "نام"
+pub func Name(id: int): str: ret _jobs.get(id).name end
+@en "IsBusy"
+@fa "مشغول است"
+pub func IsBusy(id: int): bool:
+ret atomic_load(_jobs.get(id).busy as i64*) != (0 as i64)
+end
+@en "RunDue"
+@fa "اجرای موعد"
+pub func RunDue(now: i64): int:
+local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
+mut started := 0
+n := _jobs.len()
+repeat n in i:
+j := _jobs.get(i)
+if MatchesLocal(j.expr, local):
+if atomic_swap(j.busy as i64*, 1 as i64) == (0 as i64):
+salam_cron_spawn(_cron_entry, i as i64)
+started += 1
+end
+end
+end
+ret started
+end
+@en "Run"
+@fa "اجرا"
+pub func Run():
+if _stop == null:
+_stop = mem.AllocateZeroed(8 as u64) as i64*
+end
+until atomic_load(_stop) == (0 as i64):
+now := time.Now()
+minute := now / (60 as i64)
+if minute != _last_minute:
+_last_minute = minute
+RunDue(now)
+end
+wait := (60 as i64) - (now % (60 as i64))
+if wait > (1 as i64):
+time.Sleep(((wait - (1 as i64)) * (1000 as i64)) as int)
+else:
+time.Sleep(200)
+end
+end
+end
+@en "RunBackground"
+@fa "اجرا در پس‌زمینه"
+pub func RunBackground():
+if _stop == null:
+_stop = mem.AllocateZeroed(8 as u64) as i64*
+end
+salam_cron_spawn(_cron_loop, 0 as i64)
+end
+@en "Stop"
+@fa "توقف"
+pub func Stop():
+if _stop != null:
+atomic_store(_stop, 1 as i64)
+end
+end
+package crypto
+const BCRYPT_STATE_WORDS := 1042
+const BCRYPT_SALT_LEN := 16
+const BCRYPT_HASH_LEN := 23
+const BCRYPT_MIN_COST := 4
+const BCRYPT_MAX_COST := 31
+const BCRYPT_DEFAULT_COST := 10
+const BCRYPT_P_INIT := [
+0x243f6a88 as u32, 0x85a308d3 as u32, 0x13198a2e as u32, 0x03707344 as u32
+0xa4093822 as u32, 0x299f31d0 as u32, 0x082efa98 as u32, 0xec4e6c89 as u32
+0x452821e6 as u32, 0x38d01377 as u32, 0xbe5466cf as u32, 0x34e90c6c as u32
+0xc0ac29b7 as u32, 0xc97c50dd as u32, 0x3f84d5b5 as u32, 0xb5470917 as u32
+0x9216d5d9 as u32, 0x8979fb1b as u32
+]
+const BCRYPT_S_INIT := [
+0xd1310ba6 as u32, 0x98dfb5ac as u32, 0x2ffd72db as u32, 0xd01adfb7 as u32
+0xb8e1afed as u32, 0x6a267e96 as u32, 0xba7c9045 as u32, 0xf12c7f99 as u32
+0x24a19947 as u32, 0xb3916cf7 as u32, 0x0801f2e2 as u32, 0x858efc16 as u32
+0x636920d8 as u32, 0x71574e69 as u32, 0xa458fea3 as u32, 0xf4933d7e as u32
+0x0d95748f as u32, 0x728eb658 as u32, 0x718bcd58 as u32, 0x82154aee as u32
+0x7b54a41d as u32, 0xc25a59b5 as u32, 0x9c30d539 as u32, 0x2af26013 as u32
+0xc5d1b023 as u32, 0x286085f0 as u32, 0xca417918 as u32, 0xb8db38ef as u32
+0x8e79dcb0 as u32, 0x603a180e as u32, 0x6c9e0e8b as u32, 0xb01e8a3e as u32
+0xd71577c1 as u32, 0xbd314b27 as u32, 0x78af2fda as u32, 0x55605c60 as u32
+0xe65525f3 as u32, 0xaa55ab94 as u32, 0x57489862 as u32, 0x63e81440 as u32
+0x55ca396a as u32, 0x2aab10b6 as u32, 0xb4cc5c34 as u32, 0x1141e8ce as u32
+0xa15486af as u32, 0x7c72e993 as u32, 0xb3ee1411 as u32, 0x636fbc2a as u32
+0x2ba9c55d as u32, 0x741831f6 as u32, 0xce5c3e16 as u32, 0x9b87931e as u32
+0xafd6ba33 as u32, 0x6c24cf5c as u32, 0x7a325381 as u32, 0x28958677 as u32
+0x3b8f4898 as u32, 0x6b4bb9af as u32, 0xc4bfe81b as u32, 0x66282193 as u32
+0x61d809cc as u32, 0xfb21a991 as u32, 0x487cac60 as u32, 0x5dec8032 as u32
+0xef845d5d as u32, 0xe98575b1 as u32, 0xdc262302 as u32, 0xeb651b88 as u32
+0x23893e81 as u32, 0xd396acc5 as u32, 0x0f6d6ff3 as u32, 0x83f44239 as u32
+0x2e0b4482 as u32, 0xa4842004 as u32, 0x69c8f04a as u32, 0x9e1f9b5e as u32
+0x21c66842 as u32, 0xf6e96c9a as u32, 0x670c9c61 as u32, 0xabd388f0 as u32
+0x6a51a0d2 as u32, 0xd8542f68 as u32, 0x960fa728 as u32, 0xab5133a3 as u32
+0x6eef0b6c as u32, 0x137a3be4 as u32, 0xba3bf050 as u32, 0x7efb2a98 as u32
+0xa1f1651d as u32, 0x39af0176 as u32, 0x66ca593e as u32, 0x82430e88 as u32
+0x8cee8619 as u32, 0x456f9fb4 as u32, 0x7d84a5c3 as u32, 0x3b8b5ebe as u32
+0xe06f75d8 as u32, 0x85c12073 as u32, 0x401a449f as u32, 0x56c16aa6 as u32
+0x4ed3aa62 as u32, 0x363f7706 as u32, 0x1bfedf72 as u32, 0x429b023d as u32
+0x37d0d724 as u32, 0xd00a1248 as u32, 0xdb0fead3 as u32, 0x49f1c09b as u32
+0x075372c9 as u32, 0x80991b7b as u32, 0x25d479d8 as u32, 0xf6e8def7 as u32
+0xe3fe501a as u32, 0xb6794c3b as u32, 0x976ce0bd as u32, 0x04c006ba as u32
+0xc1a94fb6 as u32, 0x409f60c4 as u32, 0x5e5c9ec2 as u32, 0x196a2463 as u32
+0x68fb6faf as u32, 0x3e6c53b5 as u32, 0x1339b2eb as u32, 0x3b52ec6f as u32
+0x6dfc511f as u32, 0x9b30952c as u32, 0xcc814544 as u32, 0xaf5ebd09 as u32
+0xbee3d004 as u32, 0xde334afd as u32, 0x660f2807 as u32, 0x192e4bb3 as u32
+0xc0cba857 as u32, 0x45c8740f as u32, 0xd20b5f39 as u32, 0xb9d3fbdb as u32
+0x5579c0bd as u32, 0x1a60320a as u32, 0xd6a100c6 as u32, 0x402c7279 as u32
+0x679f25fe as u32, 0xfb1fa3cc as u32, 0x8ea5e9f8 as u32, 0xdb3222f8 as u32
+0x3c7516df as u32, 0xfd616b15 as u32, 0x2f501ec8 as u32, 0xad0552ab as u32
+0x323db5fa as u32, 0xfd238760 as u32, 0x53317b48 as u32, 0x3e00df82 as u32
+0x9e5c57bb as u32, 0xca6f8ca0 as u32, 0x1a87562e as u32, 0xdf1769db as u32
+0xd542a8f6 as u32, 0x287effc3 as u32, 0xac6732c6 as u32, 0x8c4f5573 as u32
+0x695b27b0 as u32, 0xbbca58c8 as u32, 0xe1ffa35d as u32, 0xb8f011a0 as u32
+0x10fa3d98 as u32, 0xfd2183b8 as u32, 0x4afcb56c as u32, 0x2dd1d35b as u32
+0x9a53e479 as u32, 0xb6f84565 as u32, 0xd28e49bc as u32, 0x4bfb9790 as u32
+0xe1ddf2da as u32, 0xa4cb7e33 as u32, 0x62fb1341 as u32, 0xcee4c6e8 as u32
+0xef20cada as u32, 0x36774c01 as u32, 0xd07e9efe as u32, 0x2bf11fb4 as u32
+0x95dbda4d as u32, 0xae909198 as u32, 0xeaad8e71 as u32, 0x6b93d5a0 as u32
+0xd08ed1d0 as u32, 0xafc725e0 as u32, 0x8e3c5b2f as u32, 0x8e7594b7 as u32
+0x8ff6e2fb as u32, 0xf2122b64 as u32, 0x8888b812 as u32, 0x900df01c as u32
+0x4fad5ea0 as u32, 0x688fc31c as u32, 0xd1cff191 as u32, 0xb3a8c1ad as u32
+0x2f2f2218 as u32, 0xbe0e1777 as u32, 0xea752dfe as u32, 0x8b021fa1 as u32
+0xe5a0cc0f as u32, 0xb56f74e8 as u32, 0x18acf3d6 as u32, 0xce89e299 as u32
+0xb4a84fe0 as u32, 0xfd13e0b7 as u32, 0x7cc43b81 as u32, 0xd2ada8d9 as u32
+0x165fa266 as u32, 0x80957705 as u32, 0x93cc7314 as u32, 0x211a1477 as u32
+0xe6ad2065 as u32, 0x77b5fa86 as u32, 0xc75442f5 as u32, 0xfb9d35cf as u32
+0xebcdaf0c as u32, 0x7b3e89a0 as u32, 0xd6411bd3 as u32, 0xae1e7e49 as u32
+0x00250e2d as u32, 0x2071b35e as u32, 0x226800bb as u32, 0x57b8e0af as u32
+0x2464369b as u32, 0xf009b91e as u32, 0x5563911d as u32, 0x59dfa6aa as u32
+0x78c14389 as u32, 0xd95a537f as u32, 0x207d5ba2 as u32, 0x02e5b9c5 as u32
+0x83260376 as u32, 0x6295cfa9 as u32, 0x11c81968 as u32, 0x4e734a41 as u32
+0xb3472dca as u32, 0x7b14a94a as u32, 0x1b510052 as u32, 0x9a532915 as u32
+0xd60f573f as u32, 0xbc9bc6e4 as u32, 0x2b60a476 as u32, 0x81e67400 as u32
+0x08ba6fb5 as u32, 0x571be91f as u32, 0xf296ec6b as u32, 0x2a0dd915 as u32
+0xb6636521 as u32, 0xe7b9f9b6 as u32, 0xff34052e as u32, 0xc5855664 as u32
+0x53b02d5d as u32, 0xa99f8fa1 as u32, 0x08ba4799 as u32, 0x6e85076a as u32
+0x4b7a70e9 as u32, 0xb5b32944 as u32, 0xdb75092e as u32, 0xc4192623 as u32
+0xad6ea6b0 as u32, 0x49a7df7d as u32, 0x9cee60b8 as u32, 0x8fedb266 as u32
+0xecaa8c71 as u32, 0x699a17ff as u32, 0x5664526c as u32, 0xc2b19ee1 as u32
+0x193602a5 as u32, 0x75094c29 as u32, 0xa0591340 as u32, 0xe4183a3e as u32
+0x3f54989a as u32, 0x5b429d65 as u32, 0x6b8fe4d6 as u32, 0x99f73fd6 as u32
+0xa1d29c07 as u32, 0xefe830f5 as u32, 0x4d2d38e6 as u32, 0xf0255dc1 as u32
+0x4cdd2086 as u32, 0x8470eb26 as u32, 0x6382e9c6 as u32, 0x021ecc5e as u32
+0x09686b3f as u32, 0x3ebaefc9 as u32, 0x3c971814 as u32, 0x6b6a70a1 as u32
+0x687f3584 as u32, 0x52a0e286 as u32, 0xb79c5305 as u32, 0xaa500737 as u32
+0x3e07841c as u32, 0x7fdeae5c as u32, 0x8e7d44ec as u32, 0x5716f2b8 as u32
+0xb03ada37 as u32, 0xf0500c0d as u32, 0xf01c1f04 as u32, 0x0200b3ff as u32
+0xae0cf51a as u32, 0x3cb574b2 as u32, 0x25837a58 as u32, 0xdc0921bd as u32
+0xd19113f9 as u32, 0x7ca92ff6 as u32, 0x94324773 as u32, 0x22f54701 as u32
+0x3ae5e581 as u32, 0x37c2dadc as u32, 0xc8b57634 as u32, 0x9af3dda7 as u32
+0xa9446146 as u32, 0x0fd0030e as u32, 0xecc8c73e as u32, 0xa4751e41 as u32
+0xe238cd99 as u32, 0x3bea0e2f as u32, 0x3280bba1 as u32, 0x183eb331 as u32
+0x4e548b38 as u32, 0x4f6db908 as u32, 0x6f420d03 as u32, 0xf60a04bf as u32
+0x2cb81290 as u32, 0x24977c79 as u32, 0x5679b072 as u32, 0xbcaf89af as u32
+0xde9a771f as u32, 0xd9930810 as u32, 0xb38bae12 as u32, 0xdccf3f2e as u32
+0x5512721f as u32, 0x2e6b7124 as u32, 0x501adde6 as u32, 0x9f84cd87 as u32
+0x7a584718 as u32, 0x7408da17 as u32, 0xbc9f9abc as u32, 0xe94b7d8c as u32
+0xec7aec3a as u32, 0xdb851dfa as u32, 0x63094366 as u32, 0xc464c3d2 as u32
+0xef1c1847 as u32, 0x3215d908 as u32, 0xdd433b37 as u32, 0x24c2ba16 as u32
+0x12a14d43 as u32, 0x2a65c451 as u32, 0x50940002 as u32, 0x133ae4dd as u32
+0x71dff89e as u32, 0x10314e55 as u32, 0x81ac77d6 as u32, 0x5f11199b as u32
+0x043556f1 as u32, 0xd7a3c76b as u32, 0x3c11183b as u32, 0x5924a509 as u32
+0xf28fe6ed as u32, 0x97f1fbfa as u32, 0x9ebabf2c as u32, 0x1e153c6e as u32
+0x86e34570 as u32, 0xeae96fb1 as u32, 0x860e5e0a as u32, 0x5a3e2ab3 as u32
+0x771fe71c as u32, 0x4e3d06fa as u32, 0x2965dcb9 as u32, 0x99e71d0f as u32
+0x803e89d6 as u32, 0x5266c825 as u32, 0x2e4cc978 as u32, 0x9c10b36a as u32
+0xc6150eba as u32, 0x94e2ea78 as u32, 0xa5fc3c53 as u32, 0x1e0a2df4 as u32
+0xf2f74ea7 as u32, 0x361d2b3d as u32, 0x1939260f as u32, 0x19c27960 as u32
+0x5223a708 as u32, 0xf71312b6 as u32, 0xebadfe6e as u32, 0xeac31f66 as u32
+0xe3bc4595 as u32, 0xa67bc883 as u32, 0xb17f37d1 as u32, 0x018cff28 as u32
+0xc332ddef as u32, 0xbe6c5aa5 as u32, 0x65582185 as u32, 0x68ab9802 as u32
+0xeecea50f as u32, 0xdb2f953b as u32, 0x2aef7dad as u32, 0x5b6e2f84 as u32
+0x1521b628 as u32, 0x29076170 as u32, 0xecdd4775 as u32, 0x619f1510 as u32
+0x13cca830 as u32, 0xeb61bd96 as u32, 0x0334fe1e as u32, 0xaa0363cf as u32
+0xb5735c90 as u32, 0x4c70a239 as u32, 0xd59e9e0b as u32, 0xcbaade14 as u32
+0xeecc86bc as u32, 0x60622ca7 as u32, 0x9cab5cab as u32, 0xb2f3846e as u32
+0x648b1eaf as u32, 0x19bdf0ca as u32, 0xa02369b9 as u32, 0x655abb50 as u32
+0x40685a32 as u32, 0x3c2ab4b3 as u32, 0x319ee9d5 as u32, 0xc021b8f7 as u32
+0x9b540b19 as u32, 0x875fa099 as u32, 0x95f7997e as u32, 0x623d7da8 as u32
+0xf837889a as u32, 0x97e32d77 as u32, 0x11ed935f as u32, 0x16681281 as u32
+0x0e358829 as u32, 0xc7e61fd6 as u32, 0x96dedfa1 as u32, 0x7858ba99 as u32
+0x57f584a5 as u32, 0x1b227263 as u32, 0x9b83c3ff as u32, 0x1ac24696 as u32
+0xcdb30aeb as u32, 0x532e3054 as u32, 0x8fd948e4 as u32, 0x6dbc3128 as u32
+0x58ebf2ef as u32, 0x34c6ffea as u32, 0xfe28ed61 as u32, 0xee7c3c73 as u32
+0x5d4a14d9 as u32, 0xe864b7e3 as u32, 0x42105d14 as u32, 0x203e13e0 as u32
+0x45eee2b6 as u32, 0xa3aaabea as u32, 0xdb6c4f15 as u32, 0xfacb4fd0 as u32
+0xc742f442 as u32, 0xef6abbb5 as u32, 0x654f3b1d as u32, 0x41cd2105 as u32
+0xd81e799e as u32, 0x86854dc7 as u32, 0xe44b476a as u32, 0x3d816250 as u32
+0xcf62a1f2 as u32, 0x5b8d2646 as u32, 0xfc8883a0 as u32, 0xc1c7b6a3 as u32
+0x7f1524c3 as u32, 0x69cb7492 as u32, 0x47848a0b as u32, 0x5692b285 as u32
+0x095bbf00 as u32, 0xad19489d as u32, 0x1462b174 as u32, 0x23820e00 as u32
+0x58428d2a as u32, 0x0c55f5ea as u32, 0x1dadf43e as u32, 0x233f7061 as u32
+0x3372f092 as u32, 0x8d937e41 as u32, 0xd65fecf1 as u32, 0x6c223bdb as u32
+0x7cde3759 as u32, 0xcbee7460 as u32, 0x4085f2a7 as u32, 0xce77326e as u32
+0xa6078084 as u32, 0x19f8509e as u32, 0xe8efd855 as u32, 0x61d99735 as u32
+0xa969a7aa as u32, 0xc50c06c2 as u32, 0x5a04abfc as u32, 0x800bcadc as u32
+0x9e447a2e as u32, 0xc3453484 as u32, 0xfdd56705 as u32, 0x0e1e9ec9 as u32
+0xdb73dbd3 as u32, 0x105588cd as u32, 0x675fda79 as u32, 0xe3674340 as u32
+0xc5c43465 as u32, 0x713e38d8 as u32, 0x3d28f89e as u32, 0xf16dff20 as u32
+0x153e21e7 as u32, 0x8fb03d4a as u32, 0xe6e39f2b as u32, 0xdb83adf7 as u32
+0xe93d5a68 as u32, 0x948140f7 as u32, 0xf64c261c as u32, 0x94692934 as u32
+0x411520f7 as u32, 0x7602d4f7 as u32, 0xbcf46b2e as u32, 0xd4a20068 as u32
+0xd4082471 as u32, 0x3320f46a as u32, 0x43b7d4b7 as u32, 0x500061af as u32
+0x1e39f62e as u32, 0x97244546 as u32, 0x14214f74 as u32, 0xbf8b8840 as u32
+0x4d95fc1d as u32, 0x96b591af as u32, 0x70f4ddd3 as u32, 0x66a02f45 as u32
+0xbfbc09ec as u32, 0x03bd9785 as u32, 0x7fac6dd0 as u32, 0x31cb8504 as u32
+0x96eb27b3 as u32, 0x55fd3941 as u32, 0xda2547e6 as u32, 0xabca0a9a as u32
+0x28507825 as u32, 0x530429f4 as u32, 0x0a2c86da as u32, 0xe9b66dfb as u32
+0x68dc1462 as u32, 0xd7486900 as u32, 0x680ec0a4 as u32, 0x27a18dee as u32
+0x4f3ffea2 as u32, 0xe887ad8c as u32, 0xb58ce006 as u32, 0x7af4d6b6 as u32
+0xaace1e7c as u32, 0xd3375fec as u32, 0xce78a399 as u32, 0x406b2a42 as u32
+0x20fe9e35 as u32, 0xd9f385b9 as u32, 0xee39d7ab as u32, 0x3b124e8b as u32
+0x1dc9faf7 as u32, 0x4b6d1856 as u32, 0x26a36631 as u32, 0xeae397b2 as u32
+0x3a6efa74 as u32, 0xdd5b4332 as u32, 0x6841e7f7 as u32, 0xca7820fb as u32
+0xfb0af54e as u32, 0xd8feb397 as u32, 0x454056ac as u32, 0xba489527 as u32
+0x55533a3a as u32, 0x20838d87 as u32, 0xfe6ba9b7 as u32, 0xd096954b as u32
+0x55a867bc as u32, 0xa1159a58 as u32, 0xcca92963 as u32, 0x99e1db33 as u32
+0xa62a4a56 as u32, 0x3f3125f9 as u32, 0x5ef47e1c as u32, 0x9029317c as u32
+0xfdf8e802 as u32, 0x04272f70 as u32, 0x80bb155c as u32, 0x05282ce3 as u32
+0x95c11548 as u32, 0xe4c66d22 as u32, 0x48c1133f as u32, 0xc70f86dc as u32
+0x07f9c9ee as u32, 0x41041f0f as u32, 0x404779a4 as u32, 0x5d886e17 as u32
+0x325f51eb as u32, 0xd59bc0d1 as u32, 0xf2bcc18f as u32, 0x41113564 as u32
+0x257b7834 as u32, 0x602a9c60 as u32, 0xdff8e8a3 as u32, 0x1f636c1b as u32
+0x0e12b4c2 as u32, 0x02e1329e as u32, 0xaf664fd1 as u32, 0xcad18115 as u32
+0x6b2395e0 as u32, 0x333e92e1 as u32, 0x3b240b62 as u32, 0xeebeb922 as u32
+0x85b2a20e as u32, 0xe6ba0d99 as u32, 0xde720c8c as u32, 0x2da2f728 as u32
+0xd0127845 as u32, 0x95b794fd as u32, 0x647d0862 as u32, 0xe7ccf5f0 as u32
+0x5449a36f as u32, 0x877d48fa as u32, 0xc39dfd27 as u32, 0xf33e8d1e as u32
+0x0a476341 as u32, 0x992eff74 as u32, 0x3a6f6eab as u32, 0xf4f8fd37 as u32
+0xa812dc60 as u32, 0xa1ebddf8 as u32, 0x991be14c as u32, 0xdb6e6b0d as u32
+0xc67b5510 as u32, 0x6d672c37 as u32, 0x2765d43b as u32, 0xdcd0e804 as u32
+0xf1290dc7 as u32, 0xcc00ffa3 as u32, 0xb5390f92 as u32, 0x690fed0b as u32
+0x667b9ffb as u32, 0xcedb7d9c as u32, 0xa091cf0b as u32, 0xd9155ea3 as u32
+0xbb132f88 as u32, 0x515bad24 as u32, 0x7b9479bf as u32, 0x763bd6eb as u32
+0x37392eb3 as u32, 0xcc115979 as u32, 0x8026e297 as u32, 0xf42e312d as u32
+0x6842ada7 as u32, 0xc66a2b3b as u32, 0x12754ccc as u32, 0x782ef11c as u32
+0x6a124237 as u32, 0xb79251e7 as u32, 0x06a1bbe6 as u32, 0x4bfb6350 as u32
+0x1a6b1018 as u32, 0x11caedfa as u32, 0x3d25bdd8 as u32, 0xe2e1c3c9 as u32
+0x44421659 as u32, 0x0a121386 as u32, 0xd90cec6e as u32, 0xd5abea2a as u32
+0x64af674e as u32, 0xda86a85f as u32, 0xbebfe988 as u32, 0x64e4c3fe as u32
+0x9dbc8057 as u32, 0xf0f7c086 as u32, 0x60787bf8 as u32, 0x6003604d as u32
+0xd1fd8346 as u32, 0xf6381fb0 as u32, 0x7745ae04 as u32, 0xd736fccc as u32
+0x83426b33 as u32, 0xf01eab71 as u32, 0xb0804187 as u32, 0x3c005e5f as u32
+0x77a057be as u32, 0xbde8ae24 as u32, 0x55464299 as u32, 0xbf582e61 as u32
+0x4e58f48f as u32, 0xf2ddfda2 as u32, 0xf474ef38 as u32, 0x8789bdc2 as u32
+0x5366f9c3 as u32, 0xc8b38e74 as u32, 0xb475f255 as u32, 0x46fcd9b9 as u32
+0x7aeb2661 as u32, 0x8b1ddf84 as u32, 0x846a0e79 as u32, 0x915f95e2 as u32
+0x466e598e as u32, 0x20b45770 as u32, 0x8cd55591 as u32, 0xc902de4c as u32
+0xb90bace1 as u32, 0xbb8205d0 as u32, 0x11a86248 as u32, 0x7574a99e as u32
+0xb77f19b6 as u32, 0xe0a9dc09 as u32, 0x662d09a1 as u32, 0xc4324633 as u32
+0xe85a1f02 as u32, 0x09f0be8c as u32, 0x4a99a025 as u32, 0x1d6efe10 as u32
+0x1ab93d1d as u32, 0x0ba5a4df as u32, 0xa186f20f as u32, 0x2868f169 as u32
+0xdcb7da83 as u32, 0x573906fe as u32, 0xa1e2ce9b as u32, 0x4fcd7f52 as u32
+0x50115e01 as u32, 0xa70683fa as u32, 0xa002b5c4 as u32, 0x0de6d027 as u32
+0x9af88c27 as u32, 0x773f8641 as u32, 0xc3604c06 as u32, 0x61a806b5 as u32
+0xf0177a28 as u32, 0xc0f586e0 as u32, 0x006058aa as u32, 0x30dc7d62 as u32
+0x11e69ed7 as u32, 0x2338ea63 as u32, 0x53c2dd94 as u32, 0xc2c21634 as u32
+0xbbcbee56 as u32, 0x90bcb6de as u32, 0xebfc7da1 as u32, 0xce591d76 as u32
+0x6f05e409 as u32, 0x4b7c0188 as u32, 0x39720a3d as u32, 0x7c927c24 as u32
+0x86e3725f as u32, 0x724d9db9 as u32, 0x1ac15bb4 as u32, 0xd39eb8fc as u32
+0xed545578 as u32, 0x08fca5b5 as u32, 0xd83d7cd3 as u32, 0x4dad0fc4 as u32
+0x1e50ef5e as u32, 0xb161e6f8 as u32, 0xa28514d9 as u32, 0x6c51133c as u32
+0x6fd5c7e7 as u32, 0x56e14ec4 as u32, 0x362abfce as u32, 0xddc6c837 as u32
+0xd79a3234 as u32, 0x92638212 as u32, 0x670efa8e as u32, 0x406000e0 as u32
+0x3a39ce37 as u32, 0xd3faf5cf as u32, 0xabc27737 as u32, 0x5ac52d1b as u32
+0x5cb0679e as u32, 0x4fa33742 as u32, 0xd3822740 as u32, 0x99bc9bbe as u32
+0xd5118e9d as u32, 0xbf0f7315 as u32, 0xd62d1c7e as u32, 0xc700c47b as u32
+0xb78c1b6b as u32, 0x21a19045 as u32, 0xb26eb1be as u32, 0x6a366eb4 as u32
+0x5748ab2f as u32, 0xbc946e79 as u32, 0xc6a376d2 as u32, 0x6549c2c8 as u32
+0x530ff8ee as u32, 0x468dde7d as u32, 0xd5730a1d as u32, 0x4cd04dc6 as u32
+0x2939bbdb as u32, 0xa9ba4650 as u32, 0xac9526e8 as u32, 0xbe5ee304 as u32
+0xa1fad5f0 as u32, 0x6a2d519a as u32, 0x63ef8ce2 as u32, 0x9a86ee22 as u32
+0xc089c2b8 as u32, 0x43242ef6 as u32, 0xa51e03aa as u32, 0x9cf2d0a4 as u32
+0x83c061ba as u32, 0x9be96a4d as u32, 0x8fe51550 as u32, 0xba645bd6 as u32
+0x2826a2f9 as u32, 0xa73a3ae1 as u32, 0x4ba99586 as u32, 0xef5562e9 as u32
+0xc72fefd3 as u32, 0xf752f7da as u32, 0x3f046f69 as u32, 0x77fa0a59 as u32
+0x80e4a915 as u32, 0x87b08601 as u32, 0x9b09e6ad as u32, 0x3b3ee593 as u32
+0xe990fd5a as u32, 0x9e34d797 as u32, 0x2cf0b7d9 as u32, 0x022b8b51 as u32
+0x96d5ac3a as u32, 0x017da67d as u32, 0xd1cf3ed6 as u32, 0x7c7d2d28 as u32
+0x1f9f25cf as u32, 0xadf2b89b as u32, 0x5ad6b472 as u32, 0x5a88f54c as u32
+0xe029ac71 as u32, 0xe019a5e6 as u32, 0x47b0acfd as u32, 0xed93fa9b as u32
+0xe8d3c48d as u32, 0x283b57cc as u32, 0xf8d56629 as u32, 0x79132e28 as u32
+0x785f0191 as u32, 0xed756055 as u32, 0xf7960e44 as u32, 0xe3d35e8c as u32
+0x15056dd4 as u32, 0x88f46dba as u32, 0x03a16125 as u32, 0x0564f0bd as u32
+0xc3eb9e15 as u32, 0x3c9057a2 as u32, 0x97271aec as u32, 0xa93a072a as u32
+0x1b3f6d9b as u32, 0x1e6321f5 as u32, 0xf59c66fb as u32, 0x26dcf319 as u32
+0x7533d928 as u32, 0xb155fdf5 as u32, 0x03563482 as u32, 0x8aba3cbb as u32
+0x28517711 as u32, 0xc20ad9f8 as u32, 0xabcc5167 as u32, 0xccad925f as u32
+0x4de81751 as u32, 0x3830dc8e as u32, 0x379d5862 as u32, 0x9320f991 as u32
+0xea7a90c2 as u32, 0xfb3e7bce as u32, 0x5121ce64 as u32, 0x774fbe32 as u32
+0xa8b6e37e as u32, 0xc3293d46 as u32, 0x48de5369 as u32, 0x6413e680 as u32
+0xa2ae0810 as u32, 0xdd6db224 as u32, 0x69852dfd as u32, 0x09072166 as u32
+0xb39a460a as u32, 0x6445c0dd as u32, 0x586cdecf as u32, 0x1c20c8ae as u32
+0x5bbef7dd as u32, 0x1b588d40 as u32, 0xccd2017f as u32, 0x6bb4e3bb as u32
+0xdda26a7e as u32, 0x3a59ff45 as u32, 0x3e350a44 as u32, 0xbcb4cdd5 as u32
+0x72eacea8 as u32, 0xfa6484bb as u32, 0x8d6612ae as u32, 0xbf3c6f47 as u32
+0xd29be463 as u32, 0x542f5d9e as u32, 0xaec2771b as u32, 0xf64e6370 as u32
+0x740e0d8d as u32, 0xe75b1357 as u32, 0xf8721671 as u32, 0xaf537d5d as u32
+0x4040cb08 as u32, 0x4eb4e2cc as u32, 0x34d2466a as u32, 0x0115af84 as u32
+0xe1b00428 as u32, 0x95983a1d as u32, 0x06b89fb4 as u32, 0xce6ea048 as u32
+0x6f3f3b82 as u32, 0x3520ab82 as u32, 0x011a1d4b as u32, 0x277227f8 as u32
+0x611560b1 as u32, 0xe7933fdc as u32, 0xbb3a792b as u32, 0x344525bd as u32
+0xa08839e1 as u32, 0x51ce794b as u32, 0x2f32c9b7 as u32, 0xa01fbac9 as u32
+0xe01cc87e as u32, 0xbcc7d1f6 as u32, 0xcf0111c3 as u32, 0xa1e8aac7 as u32
+0x1a908749 as u32, 0xd44fbd9a as u32, 0xd0dadecb as u32, 0xd50ada38 as u32
+0x0339c32a as u32, 0xc6913667 as u32, 0x8df9317c as u32, 0xe0b12b4f as u32
+0xf79e59b7 as u32, 0x43f5bb3a as u32, 0xf2d519ff as u32, 0x27d9459c as u32
+0xbf97222c as u32, 0x15e6fc2a as u32, 0x0f91fc71 as u32, 0x9b941525 as u32
+0xfae59361 as u32, 0xceb69ceb as u32, 0xc2a86459 as u32, 0x12baa8d1 as u32
+0xb6c1075e as u32, 0xe3056a0c as u32, 0x10d25065 as u32, 0xcb03a442 as u32
+0xe0ec6e0e as u32, 0x1698db3b as u32, 0x4c98a0be as u32, 0x3278e964 as u32
+0x9f1f9532 as u32, 0xe0d392df as u32, 0xd3a0342b as u32, 0x8971f21e as u32
+0x1b0a7441 as u32, 0x4ba3348c as u32, 0xc5be7120 as u32, 0xc37632d8 as u32
+0xdf359f8d as u32, 0x9b992f2e as u32, 0xe60b6f47 as u32, 0x0fe3f11d as u32
+0xe54cda54 as u32, 0x1edad891 as u32, 0xce6279cf as u32, 0xcd3e7e6f as u32
+0x1618b166 as u32, 0xfd2c1d05 as u32, 0x848fd2c5 as u32, 0xf6fb2299 as u32
+0xf523f357 as u32, 0xa6327623 as u32, 0x93a83531 as u32, 0x56cccd02 as u32
+0xacf08162 as u32, 0x5a75ebb5 as u32, 0x6e163697 as u32, 0x88d273cc as u32
+0xde966292 as u32, 0x81b949d0 as u32, 0x4c50901b as u32, 0x71c65614 as u32
+0xe6c6c7bd as u32, 0x327a140a as u32, 0x45e1d006 as u32, 0xc3f27b9a as u32
+0xc9aa53fd as u32, 0x62a80f00 as u32, 0xbb25bfe2 as u32, 0x35bdd2f6 as u32
+0x71126905 as u32, 0xb2040222 as u32, 0xb6cbcf7c as u32, 0xcd769c2b as u32
+0x53113ec0 as u32, 0x1640e3d3 as u32, 0x38abbd60 as u32, 0x2547adf0 as u32
+0xba38209c as u32, 0xf746ce76 as u32, 0x77afa1c5 as u32, 0x20756060 as u32
+0x85cbfe4e as u32, 0x8ae88dd8 as u32, 0x7aaaf9b0 as u32, 0x4cf9aa7e as u32
+0x1948c25c as u32, 0x02fb8a8c as u32, 0x01c36ae4 as u32, 0xd6ebe1f9 as u32
+0x90d4f869 as u32, 0xa65cdea0 as u32, 0x3f09252d as u32, 0xc208e69f as u32
+0xb74e6132 as u32, 0xce77e25b as u32, 0x578fdfe3 as u32, 0x3ac372e6 as u32
+]
+func _bf_init(): u32*:
+st := mem.Allocate((BCRYPT_STATE_WORDS * 4) as u64) as u32*
+repeat 18 in i:
+st[i] = BCRYPT_P_INIT[i]
+end
+repeat 1024 in i:
+st[18 + i] = BCRYPT_S_INIT[i]
+end
+ret st
+end
+func _bf_f(st: u32*, x: u32): u32:
+a := ((x >> (24 as u32)) & (255 as u32)) as int
+b := ((x >> (16 as u32)) & (255 as u32)) as int
+c := ((x >> (8 as u32)) & (255 as u32)) as int
+d := (x & (255 as u32)) as int
+ret ((st[18 + a] + st[274 + b]) ^ st[530 + c]) + st[786 + d]
+end
+func _bf_encipher(st: u32*, lr: u32*):
+mut l := lr[0] ^ st[0]
+mut r := lr[1]
+mut i := 1
+until i <= 16:
+r = r ^ _bf_f(st, l) ^ st[i]
+l = l ^ _bf_f(st, r) ^ st[i + 1]
+i += 2
+end
+lr[0] = r ^ st[17]
+lr[1] = l
+end
+func _bf_stream2word(data: void*, n: int, j &: int): u32:
+mut w := 0 as u32
+repeat 4:
+w = (w << (8 as u32)) | (_bget(data, j) as u32)
+j = (j + 1) % n
+end
+ret w
+end
+func _bf_fill(st: u32*, salt: void*, slen: int):
+lr := mem.Allocate(8 as u64) as u32*
+defer mem.Free(lr as void*)
+lr[0] = 0 as u32
+lr[1] = 0 as u32
+mut j := 0
+mut i := 0
+until i < BCRYPT_STATE_WORDS:
+if salt != null:
+lr[0] = lr[0] ^ _bf_stream2word(salt, slen, j)
+lr[1] = lr[1] ^ _bf_stream2word(salt, slen, j)
+end
+_bf_encipher(st, lr)
+st[i] = lr[0]
+st[i + 1] = lr[1]
+i += 2
+end
+end
+func _bf_mix_key(st: u32*, key: void*, klen: int):
+mut j := 0
+repeat 18 in i:
+st[i] = st[i] ^ _bf_stream2word(key, klen, j)
+end
+end
+func _bcrypt_alpha(): str:
+ret "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+end
+func _bcrypt_index(c: int): int:
+if c == 46: ret 0 end
+if c == 47: ret 1 end
+if c >= 65 and c <= 90: ret c - 63 end
+if c >= 97 and c <= 122: ret c - 69 end
+if c >= 48 and c <= 57: ret c + 6 end
+ret -1
+end
+func _bcrypt_encode(data: void*, n: int): str:
+alpha := _bcrypt_alpha() as void*
+mut sb := str.NewBuilder()
+defer str.BufFree(sb)
+mut p := 0
+until p < n:
+mut c1 := _bget(data, p)
+p += 1
+str.BufAppendChar(sb, _bget(alpha, c1 / 4))
+c1 = (c1 % 4) * 16
+if p >= n:
+str.BufAppendChar(sb, _bget(alpha, c1))
+break
+end
+mut c2 := _bget(data, p)
+p += 1
+c1 = c1 + c2 / 16
+str.BufAppendChar(sb, _bget(alpha, c1))
+c1 = (c2 % 16) * 4
+if p >= n:
+str.BufAppendChar(sb, _bget(alpha, c1))
+break
+end
+c2 = _bget(data, p)
+p += 1
+c1 = c1 + c2 / 64
+str.BufAppendChar(sb, _bget(alpha, c1))
+str.BufAppendChar(sb, _bget(alpha, c2 % 64))
+end
+out := str.BufStr(sb)
+ret out
+end
+func _bcrypt_decode_salt(s: str, out: void*): bool:
+if s.len() < 22:
+ret false
+end
+sp := s as void*
+mut bp := 0
+mut i := 0
+until bp < BCRYPT_SALT_LEN:
+c1 := _bcrypt_index(_bget(sp, i))
+c2 := _bcrypt_index(_bget(sp, i + 1))
+if c1 < 0 or c2 < 0: ret false end
+_bput(out, bp, c1 * 4 + (c2 / 16) % 4)
+bp += 1
+if bp >= BCRYPT_SALT_LEN: break end
+c3 := _bcrypt_index(_bget(sp, i + 2))
+if c3 < 0: ret false end
+_bput(out, bp, (c2 % 16) * 16 + (c3 / 4) % 16)
+bp += 1
+if bp >= BCRYPT_SALT_LEN: break end
+c4 := _bcrypt_index(_bget(sp, i + 3))
+if c4 < 0: ret false end
+_bput(out, bp, (c3 % 4) * 64 + c4)
+bp += 1
+i += 4
+end
+ret true
+end
+func _bcrypt_core(password: str, salt: void*, cost: int): str:
+plen := password.len()
+mut klen := plen
+if klen > 72:
+klen = 72
+end
+key := mem.Allocate((klen + 1) as u64)
+defer mem.Free(key)
+pp := password as void*
+repeat klen in i:
+_bput(key, i, _bget(pp, i))
+end
+_bput(key, klen, 0)
+klen += 1
+st := _bf_init()
+defer mem.Free(st as void*)
+_bf_mix_key(st, key, klen)
+_bf_fill(st, salt, BCRYPT_SALT_LEN)
+rounds := (1 as i64) << (cost as i64)
+mut r := 0 as i64
+until r < rounds:
+_bf_mix_key(st, key, klen)
+_bf_fill(st, null, 0)
+_bf_mix_key(st, salt, BCRYPT_SALT_LEN)
+_bf_fill(st, null, 0)
+r += 1
+end
+magic := "OrpheanBeholderScryDoubt"
+cdata := mem.Allocate(24 as u64) as u32*
+defer mem.Free(cdata as void*)
+mut j := 0
+repeat 6 in i:
+cdata[i] = _bf_stream2word(magic as void*, 24, j)
+end
+repeat 64:
+repeat 3 in i:
+_bf_encipher(st, (cdata as u64 + ((i * 8) as u64)) as u32*)
+end
+end
+raw := mem.Allocate(24 as u64)
+defer mem.Free(raw)
+repeat 6 in i:
+w := cdata[i]
+_bput(raw, i * 4, ((w >> (24 as u32)) & (255 as u32)) as int)
+_bput(raw, i * 4 + 1, ((w >> (16 as u32)) & (255 as u32)) as int)
+_bput(raw, i * 4 + 2, ((w >> (8 as u32)) & (255 as u32)) as int)
+_bput(raw, i * 4 + 3, (w & (255 as u32)) as int)
+end
+ret _bcrypt_encode(raw, BCRYPT_HASH_LEN)
+end
+func _bcrypt_cost_str(cost: int): str:
+if cost < 10:
+ret "0".concat(conv.FormatInt(cost as i64))
+end
+ret conv.FormatInt(cost as i64)
+end
+@en "BcryptHashWithSalt"
+@fa "درهم بی کریپت با نمک"
+pub func BcryptHashWithSalt(password: str, cost: int, salt: void*): str:
+mut c := cost
+if c < BCRYPT_MIN_COST: c = BCRYPT_MIN_COST end
+if c > BCRYPT_MAX_COST: c = BCRYPT_MAX_COST end
+ret "$2y$".concat(_bcrypt_cost_str(c)).concat("$").concat(_bcrypt_encode(salt, BCRYPT_SALT_LEN)).concat(_bcrypt_core(password, salt, c))
+end
+@en "BcryptHash"
+@fa "درهم بی کریپت"
+pub func BcryptHash(password: str, cost: int): str:
+salt := mem.Allocate(BCRYPT_SALT_LEN as u64)
+defer mem.Free(salt)
+RandomBytes(salt, BCRYPT_SALT_LEN)
+ret BcryptHashWithSalt(password, cost, salt)
+end
+@en "IsBcryptHash"
+@fa "درهم بی کریپت است"
+pub func IsBcryptHash(encoded: str): bool:
+if encoded.len() != 60:
+ret false
+end
+prefix := encoded.substr(0, 4)
+ret prefix == "$2y$" or prefix == "$2b$" or prefix == "$2a$"
+end
+@en "BcryptCost"
+@fa "هزینه بی کریپت"
+pub func BcryptCost(encoded: str): int:
+if not IsBcryptHash(encoded):
+ret -1
+end
+ret conv.ParseInt(encoded.substr(4, 2)) as int
+end
+@en "BcryptVerify"
+@fa "تایید بی کریپت"
+pub func BcryptVerify(password: str, encoded: str): bool:
+if not IsBcryptHash(encoded):
+ret false
+end
+if encoded.substr(6, 1) != "$":
+ret false
+end
+cost := BcryptCost(encoded)
+if cost < BCRYPT_MIN_COST or cost > BCRYPT_MAX_COST:
+ret false
+end
+salt := mem.Allocate(BCRYPT_SALT_LEN as u64)
+defer mem.Free(salt)
+if not _bcrypt_decode_salt(encoded.substr(7, 22), salt):
+ret false
+end
+computed := _bcrypt_core(password, salt, cost)
+ret _consttime_eq(computed, encoded.substr(29, 31))
+end
 @en "crypto"
 @fa "رمزنگاری"
 package crypto
@@ -119338,6 +120302,570 @@ ok = true
 ret img
 end
 package image
+import mem
+import compress
+import archive
+@en "JPEGOptions"
+@fa "گزینه‌های جی‌پگ"
+pub struct JPEGOptions:
+pub quality: int = 90
+pub subsample: bool = true
+pub density_unit: int = 0
+pub x_density: int = 1
+pub y_density: int = 1
+pub comment: str = ""
+end
+@en "JPEGStream"
+@fa "جریان جی‌پگ"
+pub struct JPEGStream:
+pub width: int = 0
+pub height: int = 0
+pub rows_written: int = 0
+pub ok: bool = false
+pub out: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+pub hs: int = 2
+pub vs: int = 2
+pub mcu_w: int = 16
+pub mcu_h: int = 16
+pub mcus_x: int = 0
+pub full_w: int = 0
+pub y_wib: int = 0
+pub y_hib: int = 0
+pub c_w: int = 0
+pub mcu_row: int = 0
+pub mcu_rows: int = 0
+pub buffered: int = 0
+pub yb: void* = null
+pub cbb: void* = null
+pub crb: void* = null
+pub cbd: void* = null
+pub crd: void* = null
+pub lq: void* = null
+pub cq: void* = null
+pub hc: void* = null
+pub hl: void* = null
+pub work: void* = null
+pub acc: i64 = 0
+pub nbits: int = 0
+pub dc_y: int = 0
+pub dc_cb: int = 0
+pub dc_cr: int = 0
+end
+func _js_push_marker_len(out &: compress.ByteBuf, marker: int, len: int):
+compress.BufPush(out, 0xFF)
+compress.BufPush(out, marker)
+compress.BufPush(out, (len >> 8) & 255)
+compress.BufPush(out, len & 255)
+end
+func _js_bits(s &: JPEGStream, code: int, size: int):
+if size <= 0:
+ret
+end
+s.acc = (s.acc << (size as i64)) | ((code as i64) & (((1 as i64) << (size as i64)) - 1))
+s.nbits += size
+until s.nbits >= 8:
+b := ((s.acc >> ((s.nbits - 8) as i64)) & 255) as int
+compress.BufPush(s.out, b)
+if b == 255:
+compress.BufPush(s.out, 0)
+end
+s.nbits -= 8
+end
+s.acc = s.acc & (((1 as i64) << (s.nbits as i64)) - 1)
+end
+func _js_huff(s &: JPEGStream, table: int, symbol: int):
+cp := s.hc as i32*
+lp := s.hl as i32*
+_js_bits(s, cp[table * 256 + symbol], lp[table * 256 + symbol])
+end
+func _js_nbits(v: int): int:
+mut a := v
+mut n := 0
+until a != 0:
+a = a >> 1
+n += 1
+end
+ret n
+end
+func _js_encode_block(s &: JPEGStream, zz: i32*, dc_prev &: int, dc_table: int, ac_table: int):
+dc := zz[0]
+mut t := dc - dc_prev
+dc_prev = dc
+mut t2 := t
+if t < 0:
+t = 0 - t
+t2 -= 1
+end
+nb := _js_nbits(t)
+_js_huff(s, dc_table, nb)
+if nb > 0:
+_js_bits(s, t2, nb)
+end
+mut run := 0
+mut k := 1
+until k < 64:
+v := zz[_zigzag(k)]
+if v == 0:
+run += 1
+else:
+until run > 15:
+_js_huff(s, ac_table, 0xF0)
+run -= 16
+end
+mut a := v
+mut a2 := v
+if a < 0:
+a = 0 - a
+a2 -= 1
+end
+n := _js_nbits(a)
+_js_huff(s, ac_table, (run << 4) + n)
+_js_bits(s, a2, n)
+run = 0
+end
+k += 1
+end
+if run > 0:
+_js_huff(s, ac_table, 0)
+end
+end
+func _js_fdct_quant(d: i32*, quant: i32*):
+mut row := 0
+until row < 8:
+o := row * 8
+d0 := d[o] as i64
+d1 := d[o + 1] as i64
+d2 := d[o + 2] as i64
+d3 := d[o + 3] as i64
+d4 := d[o + 4] as i64
+d5 := d[o + 5] as i64
+d6 := d[o + 6] as i64
+d7 := d[o + 7] as i64
+tmp0 := d0 + d7
+mut tmp7 := d0 - d7
+tmp1 := d1 + d6
+mut tmp6 := d1 - d6
+tmp2 := d2 + d5
+mut tmp5 := d2 - d5
+tmp3 := d3 + d4
+mut tmp4 := d3 - d4
+tmp10 := tmp0 + tmp3
+tmp13 := tmp0 - tmp3
+tmp11 := tmp1 + tmp2
+tmp12 := tmp1 - tmp2
+d[o] = ((tmp10 + tmp11) << 2) as int
+d[o + 4] = ((tmp10 - tmp11) << 2) as int
+mut z1 := (tmp12 + tmp13) * 4433
+d[o + 2] = ((z1 + tmp13 * 6270 + 1024) >> 11) as int
+d[o + 6] = ((z1 - tmp12 * 15137 + 1024) >> 11) as int
+z1 = tmp4 + tmp7
+mut z2 := tmp5 + tmp6
+mut z3 := tmp4 + tmp6
+mut z4 := tmp5 + tmp7
+z5 := (z3 + z4) * 9633
+tmp4 = tmp4 * 2446
+tmp5 = tmp5 * 16819
+tmp6 = tmp6 * 25172
+tmp7 = tmp7 * 12299
+z1 = z1 * (0 - 7373)
+z2 = z2 * (0 - 20995)
+z3 = z3 * (0 - 16069)
+z4 = z4 * (0 - 3196)
+z3 += z5
+z4 += z5
+d[o + 7] = ((tmp4 + z1 + z3 + 1024) >> 11) as int
+d[o + 5] = ((tmp5 + z2 + z4 + 1024) >> 11) as int
+d[o + 3] = ((tmp6 + z2 + z3 + 1024) >> 11) as int
+d[o + 1] = ((tmp7 + z1 + z4 + 1024) >> 11) as int
+row += 1
+end
+mut col := 0
+until col < 8:
+d0 := d[col] as i64
+d1 := d[8 + col] as i64
+d2 := d[16 + col] as i64
+d3 := d[24 + col] as i64
+d4 := d[32 + col] as i64
+d5 := d[40 + col] as i64
+d6 := d[48 + col] as i64
+d7 := d[56 + col] as i64
+tmp0 := d0 + d7
+mut tmp7 := d0 - d7
+tmp1 := d1 + d6
+mut tmp6 := d1 - d6
+tmp2 := d2 + d5
+mut tmp5 := d2 - d5
+tmp3 := d3 + d4
+mut tmp4 := d3 - d4
+tmp10 := tmp0 + tmp3
+tmp13 := tmp0 - tmp3
+tmp11 := tmp1 + tmp2
+tmp12 := tmp1 - tmp2
+d[col] = ((tmp10 + tmp11 + 2) >> 2) as int
+d[32 + col] = ((tmp10 - tmp11 + 2) >> 2) as int
+mut z1 := (tmp12 + tmp13) * 4433
+d[16 + col] = ((z1 + tmp13 * 6270 + 16384) >> 15) as int
+d[48 + col] = ((z1 - tmp12 * 15137 + 16384) >> 15) as int
+z1 = tmp4 + tmp7
+mut z2 := tmp5 + tmp6
+mut z3 := tmp4 + tmp6
+mut z4 := tmp5 + tmp7
+z5 := (z3 + z4) * 9633
+tmp4 = tmp4 * 2446
+tmp5 = tmp5 * 16819
+tmp6 = tmp6 * 25172
+tmp7 = tmp7 * 12299
+z1 = z1 * (0 - 7373)
+z2 = z2 * (0 - 20995)
+z3 = z3 * (0 - 16069)
+z4 = z4 * (0 - 3196)
+z3 += z5
+z4 += z5
+d[56 + col] = ((tmp4 + z1 + z3 + 16384) >> 15) as int
+d[40 + col] = ((tmp5 + z2 + z4 + 16384) >> 15) as int
+d[24 + col] = ((tmp6 + z2 + z3 + 16384) >> 15) as int
+d[8 + col] = ((tmp7 + z1 + z4 + 16384) >> 15) as int
+col += 1
+end
+mut i := 0
+until i < 64:
+q := quant[i] * 8
+mut t := d[i]
+if t < 0:
+t = 0 - ((0 - t + (q >> 1)) / q)
+else:
+t = (t + (q >> 1)) / q
+end
+d[i] = t
+i += 1
+end
+end
+func _js_load(work: i32*, plane: u8*, stride: int, bx: int, blk_y: int):
+mut r := 0
+until r < 8:
+base := ((blk_y + r) as i64) * (stride as i64) + (bx as i64)
+mut c := 0
+until c < 8:
+work[r * 8 + c] = ((plane[base + (c as i64)] as int) - 128)
+c += 1
+end
+r += 1
+end
+end
+func _js_flush_mcu_row(s &: JPEGStream, real_rows: int):
+yp := s.yb as u8*
+w := s.work as i32*
+fw := s.full_w
+cbf := s.cbb as u8*
+crf := s.crb as u8*
+cbo := s.cbd as u8*
+cro := s.crd as u8*
+cw := s.c_w
+if s.hs == 2:
+real_c := (real_rows + 1) / 2
+mut r := 0
+until r < 8:
+src := r < real_c ? r : real_c - 1
+r0 := ((src * 2) as i64) * (fw as i64)
+r1 := ((src * 2 + 1) as i64) * (fw as i64)
+ob := (r as i64) * (cw as i64)
+mut bias := 1
+mut j := 0
+until j < cw:
+x0 := (j * 2) as i64
+cbo[ob + (j as i64)] = (((cbf[r0 + x0] as int) + (cbf[r0 + x0 + 1] as int) + (cbf[r1 + x0] as int) + (cbf[r1 + x0 + 1] as int) + bias) >> 2) as u8
+cro[ob + (j as i64)] = (((crf[r0 + x0] as int) + (crf[r0 + x0 + 1] as int) + (crf[r1 + x0] as int) + (crf[r1 + x0 + 1] as int) + bias) >> 2) as u8
+bias = bias ^ 3
+j += 1
+end
+r += 1
+end
+else:
+mut r := 0
+until r < 8:
+src := r < real_rows ? r : real_rows - 1
+mut j := 0
+until j < cw:
+cbo[(r as i64) * (cw as i64) + (j as i64)] = cbf[(src as i64) * (fw as i64) + (j as i64)]
+cro[(r as i64) * (cw as i64) + (j as i64)] = crf[(src as i64) * (fw as i64) + (j as i64)]
+j += 1
+end
+r += 1
+end
+end
+last_row := s.mcu_row == s.mcu_rows - 1
+mut m := 0
+until m < s.mcus_x:
+mut yi := 0
+until yi < s.vs:
+blk_y := s.mcu_row * s.vs + yi
+mut xi := 0
+until xi < s.hs:
+bx := m * s.hs + xi
+if last_row and blk_y >= s.y_hib:
+_js_dummy(s, w)
+else bx >= s.y_wib:
+_js_dummy(s, w)
+else:
+_js_load(w, yp, fw, bx * 8, yi * 8)
+_js_fdct_quant(w, s.lq as i32*)
+_js_encode_block(s, w, s.dc_y, 0, 1)
+end
+xi += 1
+end
+yi += 1
+end
+_js_load(w, cbo, cw, m * 8, 0)
+_js_fdct_quant(w, s.cq as i32*)
+_js_encode_block(s, w, s.dc_cb, 2, 3)
+_js_load(w, cro, cw, m * 8, 0)
+_js_fdct_quant(w, s.cq as i32*)
+_js_encode_block(s, w, s.dc_cr, 2, 3)
+m += 1
+end
+s.mcu_row += 1
+s.buffered = 0
+end
+func _js_dummy(s &: JPEGStream, w: i32*):
+mut i := 0
+until i < 64:
+w[i] = 0
+i += 1
+end
+w[0] = s.dc_y
+_js_encode_block(s, w, s.dc_y, 0, 1)
+end
+func _js_tables(s &: JPEGStream):
+_build_huff_encode((i: int): ret _dc_luma_bits(i) end, (i: int): ret _dc_luma_values(i) end, s.hc, s.hl)
+_build_huff_encode((i: int): ret _ac_luma_bits(i) end, (i: int): ret _ac_luma_values(i) end, ((s.hc as i64) + 1024) as void*, ((s.hl as i64) + 1024) as void*)
+_build_huff_encode((i: int): ret _dc_chroma_bits(i) end, (i: int): ret _dc_chroma_values(i) end, ((s.hc as i64) + 2048) as void*, ((s.hl as i64) + 2048) as void*)
+_build_huff_encode((i: int): ret _ac_chroma_bits(i) end, (i: int): ret _ac_chroma_values(i) end, ((s.hc as i64) + 3072) as void*, ((s.hl as i64) + 3072) as void*)
+end
+func _js_headers(s &: JPEGStream, opts: JPEGOptions):
+compress.BufPush(s.out, 0xFF)
+compress.BufPush(s.out, 0xD8)
+_js_push_marker_len(s.out, 0xE0, 16)
+compress.BufPush(s.out, 74)
+compress.BufPush(s.out, 70)
+compress.BufPush(s.out, 73)
+compress.BufPush(s.out, 70)
+compress.BufPush(s.out, 0)
+compress.BufPush(s.out, 1)
+compress.BufPush(s.out, 1)
+compress.BufPush(s.out, opts.density_unit & 255)
+compress.BufPush(s.out, (opts.x_density >> 8) & 255)
+compress.BufPush(s.out, opts.x_density & 255)
+compress.BufPush(s.out, (opts.y_density >> 8) & 255)
+compress.BufPush(s.out, opts.y_density & 255)
+compress.BufPush(s.out, 0)
+compress.BufPush(s.out, 0)
+comment_len := opts.comment.len()
+if comment_len > 0 and comment_len < 65000:
+_js_push_marker_len(s.out, 0xFE, comment_len + 2)
+repeat comment_len in i:
+compress.BufPush(s.out, (opts.comment[i] as int) & 255)
+end
+end
+lqp := s.lq as i32*
+cqp := s.cq as i32*
+_js_push_marker_len(s.out, 0xDB, 67)
+compress.BufPush(s.out, 0)
+repeat 64 in i:
+compress.BufPush(s.out, lqp[_zigzag(i)])
+end
+_js_push_marker_len(s.out, 0xDB, 67)
+compress.BufPush(s.out, 1)
+repeat 64 in i:
+compress.BufPush(s.out, cqp[_zigzag(i)])
+end
+_js_push_marker_len(s.out, 0xC0, 17)
+compress.BufPush(s.out, 8)
+compress.BufPush(s.out, (s.height >> 8) & 255)
+compress.BufPush(s.out, s.height & 255)
+compress.BufPush(s.out, (s.width >> 8) & 255)
+compress.BufPush(s.out, s.width & 255)
+compress.BufPush(s.out, 3)
+compress.BufPush(s.out, 1)
+compress.BufPush(s.out, (s.hs << 4) | s.vs)
+compress.BufPush(s.out, 0)
+compress.BufPush(s.out, 2)
+compress.BufPush(s.out, 0x11)
+compress.BufPush(s.out, 1)
+compress.BufPush(s.out, 3)
+compress.BufPush(s.out, 0x11)
+compress.BufPush(s.out, 1)
+_write_dht(s.out, 0x00, (i: int): ret _dc_luma_bits(i) end, (i: int): ret _dc_luma_values(i) end)
+_write_dht(s.out, 0x10, (i: int): ret _ac_luma_bits(i) end, (i: int): ret _ac_luma_values(i) end)
+_write_dht(s.out, 0x01, (i: int): ret _dc_chroma_bits(i) end, (i: int): ret _dc_chroma_values(i) end)
+_write_dht(s.out, 0x11, (i: int): ret _ac_chroma_bits(i) end, (i: int): ret _ac_chroma_values(i) end)
+_js_push_marker_len(s.out, 0xDA, 12)
+compress.BufPush(s.out, 3)
+compress.BufPush(s.out, 1)
+compress.BufPush(s.out, 0x00)
+compress.BufPush(s.out, 2)
+compress.BufPush(s.out, 0x11)
+compress.BufPush(s.out, 3)
+compress.BufPush(s.out, 0x11)
+compress.BufPush(s.out, 0)
+compress.BufPush(s.out, 63)
+compress.BufPush(s.out, 0)
+end
+@en "NewJPEGStream"
+@fa "جریان جی‌پگ جدید"
+pub func NewJPEGStream(width: int, height: int, opts: JPEGOptions): JPEGStream:
+mut s := JPEGStream { width = width, height = height }
+if width <= 0 or height <= 0 or width > 65535 or height > 65535:
+ret s
+end
+if not opts.subsample:
+s.hs = 1
+s.vs = 1
+end
+s.mcu_w = 8 * s.hs
+s.mcu_h = 8 * s.vs
+s.mcus_x = (width + s.mcu_w - 1) / s.mcu_w
+s.mcu_rows = (height + s.mcu_h - 1) / s.mcu_h
+s.full_w = s.mcus_x * s.mcu_w
+s.y_wib = (width + 7) / 8
+s.y_hib = (height + 7) / 8
+s.c_w = s.mcus_x * 8
+plane := ((s.full_w * s.mcu_h) as i64) as u64
+s.yb = mem.AllocateZeroed(plane)
+s.cbb = mem.AllocateZeroed(plane)
+s.crb = mem.AllocateZeroed(plane)
+s.cbd = mem.AllocateZeroed(((s.c_w * 8) as i64) as u64)
+s.crd = mem.AllocateZeroed(((s.c_w * 8) as i64) as u64)
+s.lq = mem.Allocate((64 * 4) as u64)
+s.cq = mem.Allocate((64 * 4) as u64)
+s.hc = mem.AllocateZeroed((4 * 256 * 4) as u64)
+s.hl = mem.AllocateZeroed((4 * 256 * 4) as u64)
+s.work = mem.Allocate((64 * 4) as u64)
+if s.yb == null or s.cbb == null or s.crb == null or s.cbd == null or s.crd == null:
+ret s
+end
+_scale_quant(opts.quality, s.lq, s.cq)
+_js_tables(s)
+s.out = compress.NewByteBufCap(65536)
+_js_headers(s, opts)
+s.ok = true
+ret s
+end
+@en "JPEGStreamWriteRow"
+@fa "نوشتن سطر جی‌پگ"
+pub func JPEGStreamWriteRow(s &: JPEGStream, p: u8*, step: int):
+if not s.ok or s.rows_written >= s.height:
+ret
+end
+fw := s.full_w
+base := (s.buffered as i64) * (fw as i64)
+yp := s.yb as u8*
+cbp := s.cbb as u8*
+crp := s.crb as u8*
+mut x := 0
+until x < s.width:
+o := (x * step) as i64
+r := p[o] as int
+g := p[o + 1] as int
+b := p[o + 2] as int
+at := base + (x as i64)
+yp[at] = ((19595 * r + 38470 * g + 7471 * b + 32768) >> 16) as u8
+cbp[at] = ((0 - 11059 * r - 21709 * g + 32768 * b + 8421375) >> 16) as u8
+crp[at] = ((32768 * r - 27439 * g - 5329 * b + 8421375) >> 16) as u8
+x += 1
+end
+last := base + ((s.width - 1) as i64)
+until x < fw:
+at := base + (x as i64)
+yp[at] = yp[last]
+cbp[at] = cbp[last]
+crp[at] = crp[last]
+x += 1
+end
+s.buffered += 1
+s.rows_written += 1
+if s.buffered == s.mcu_h:
+_js_flush_mcu_row(s, s.mcu_h)
+end
+end
+@en "JPEGStreamWrite"
+@fa "نوشتن نوار جی‌پگ"
+pub func JPEGStreamWrite(s &: JPEGStream, strip: Image):
+if strip.pixels == null or strip.width != s.width:
+ret
+end
+bp := strip.pixels as u8*
+mut y := 0
+until y < strip.height:
+JPEGStreamWriteRow(s, ((bp as i64) + (y as i64) * (strip.width as i64) * 4) as u8*, 4)
+y += 1
+end
+end
+@en "JPEGStreamFinish"
+@fa "پایان جریان جی‌پگ"
+pub func JPEGStreamFinish(s &: JPEGStream): bool:
+if not s.ok:
+ret false
+end
+complete := s.rows_written == s.height
+if complete and s.buffered > 0:
+fw := s.full_w
+real := s.buffered
+mut r := real
+until r < s.mcu_h:
+dst := (r as i64) * (fw as i64)
+src := ((real - 1) as i64) * (fw as i64)
+mem.Copy(((s.yb as i64) + dst) as void*, ((s.yb as i64) + src) as void*, fw as u64)
+mem.Copy(((s.cbb as i64) + dst) as void*, ((s.cbb as i64) + src) as void*, fw as u64)
+mem.Copy(((s.crb as i64) + dst) as void*, ((s.crb as i64) + src) as void*, fw as u64)
+r += 1
+end
+_js_flush_mcu_row(s, real)
+end
+if s.nbits > 0:
+_js_bits(s, 0x7F, 7)
+end
+compress.BufPush(s.out, 0xFF)
+compress.BufPush(s.out, 0xD9)
+mem.Free(s.yb)
+mem.Free(s.cbb)
+mem.Free(s.crb)
+mem.Free(s.cbd)
+mem.Free(s.crd)
+mem.Free(s.lq)
+mem.Free(s.cq)
+mem.Free(s.hc)
+mem.Free(s.hl)
+mem.Free(s.work)
+s.yb = null
+s.ok = false
+ret complete
+end
+@en "EncodeJPEGOptions"
+@fa "کدگذاری جی‌پگ با گزینه"
+pub func EncodeJPEGOptions(img: Image, opts: JPEGOptions): compress.ByteBuf:
+mut s := NewJPEGStream(img.width, img.height, opts)
+if not s.ok:
+ret compress.NewByteBuf()
+end
+JPEGStreamWrite(s, img)
+if not JPEGStreamFinish(s):
+compress.BufFree(s.out)
+ret compress.NewByteBuf()
+end
+ret s.out
+end
+@en "SaveJPEGOptions"
+@fa "ذخیره جی‌پگ با گزینه"
+pub func SaveJPEGOptions(img: Image, path: str, opts: JPEGOptions): bool:
+mut buf := EncodeJPEGOptions(img, opts)
+if buf.len == 0:
+ret false
+end
+ok := archive.WriteBinaryFileBuf(path, buf)
+compress.BufFree(buf)
+ret ok
+end
+package image
 import str
 func _byte_at(s: str, i: int): int:
 bp := s as u8*
@@ -119922,6 +121450,292 @@ end
 out := DecodePNG(buf.data, buf.len, ok)
 compress.BufFree(buf)
 ret out
+end
+package image
+import mem
+import math
+@en "AreaResampler"
+@fa "نمونه‌بردار ناحیه‌ای"
+pub struct AreaResampler:
+pub src_w: int = 0
+pub src_h: int = 0
+pub dst_w: int = 0
+pub dst_h: int = 0
+pub out: Image = Image {}
+pub ok: bool = false
+pub next_row: int = 0
+pub x_start: void* = null
+pub x_count: void* = null
+pub x_src: void* = null
+pub x_part: void* = null
+pub y_first: void* = null
+pub y_last: void* = null
+pub ring: int = 0
+pub acc: void* = null
+end
+func _rs_floor(v: f32): f32:
+ret math.Floor(v as f64) as f32
+end
+func _rs_spans(d: int, src_n: int, dst_n: int, idx: i32*, part: f32*, at: int): int:
+s1 := ((d as f32) * (src_n as f32)) / (dst_n as f32)
+s2 := (((d + 1) as f32) * (src_n as f32)) / (dst_n as f32)
+mut s := s1
+mut n := 0
+until true:
+mut portion := 1.0 as f32
+if _rs_floor(s) == _rs_floor(s1):
+portion = (1.0 - ((s - _rs_floor(s)) as f64)) as f32
+if portion > s2 - s1:
+portion = s2 - s1
+end
+s = _rs_floor(s)
+else s == _rs_floor(s2):
+portion = s2 - _rs_floor(s2)
+end
+if idx != null:
+idx[at + n] = s as int
+part[at + n] = portion
+end
+n += 1
+s = s + (1.0 as f32)
+if not (s < s2):
+break
+end
+end
+ret n
+end
+func _rs_finish_row(r &: AreaResampler, y: int):
+slot := y % r.ring
+a := ((r.acc as i64) + (slot as i64) * (r.dst_w as i64) * 28) as f32*
+op := r.out.pixels as u8*
+repeat r.dst_w in x:
+k := x * 7
+mut red := a[k]
+mut green := a[k + 1]
+mut blue := a[k + 2]
+mut alpha := a[k + 3]
+spixels := a[k + 4]
+mut alpha_sum := a[k + 5]
+contrib_sum := a[k + 6]
+if spixels != (0.0 as f32):
+red = red / spixels
+green = green / spixels
+blue = blue / spixels
+alpha = alpha / spixels
+end
+if alpha_sum != (0.0 as f32):
+if contrib_sum != (0.0 as f32):
+alpha_sum = alpha_sum / contrib_sum
+end
+red = red / alpha_sum
+green = green / alpha_sum
+blue = blue / alpha_sum
+end
+red = (red as f64) >= 255.5 ? (255.0 as f32) : (((red as f64) + 0.5) as f32)
+green = (green as f64) >= 255.5 ? (255.0 as f32) : (((green as f64) + 0.5) as f32)
+blue = (blue as f64) >= 255.5 ? (255.0 as f32) : (((blue as f64) + 0.5) as f32)
+alpha = (alpha as f64) >= 127.5 ? (127.0 as f32) : (((alpha as f64) + 0.5) as f32)
+o := ((y as i64) * (r.dst_w as i64) + (x as i64)) * 4
+op[o] = (red as int) as u8
+op[o + 1] = (green as int) as u8
+op[o + 2] = (blue as int) as u8
+a7 := alpha as int
+op[o + 3] = (a7 == 0 ? 255 : ((127 - a7) * 255 + 63) / 127) as u8
+repeat 7 in j:
+a[k + j] = 0.0 as f32
+end
+end
+end
+@en "NewAreaResampler"
+@fa "نمونه‌بردار ناحیه‌ای جدید"
+pub func NewAreaResampler(src_w: int, src_h: int, dst_w: int, dst_h: int): AreaResampler:
+mut r := AreaResampler { src_w = src_w, src_h = src_h, dst_w = dst_w, dst_h = dst_h }
+if src_w <= 0 or src_h <= 0 or dst_w <= 0 or dst_h <= 0:
+ret r
+end
+r.out = New(dst_w, dst_h)
+if IsEmpty(r.out):
+ret r
+end
+mut total := 0
+repeat dst_w in x:
+total += _rs_spans(x, src_w, dst_w, null, null, 0)
+end
+r.x_start = mem.Allocate((dst_w * 4) as u64)
+r.x_count = mem.Allocate((dst_w * 4) as u64)
+r.x_src = mem.Allocate((total * 4 + 4) as u64)
+r.x_part = mem.Allocate((total * 4 + 4) as u64)
+xs := r.x_start as i32*
+xc := r.x_count as i32*
+mut at := 0
+repeat dst_w in x:
+n := _rs_spans(x, src_w, dst_w, r.x_src as i32*, r.x_part as f32*, at)
+xs[x] = at
+xc[x] = n
+at += n
+end
+r.y_first = mem.Allocate(((dst_h as i64) * 4) as u64)
+r.y_last = mem.Allocate(((dst_h as i64) * 4) as u64)
+yf := r.y_first as i32*
+yl := r.y_last as i32*
+idx := mem.Allocate(((src_h + 4) * 4) as u64)
+part := mem.Allocate(((src_h + 4) * 4) as u64)
+repeat dst_h in y:
+n := _rs_spans(y, src_h, dst_h, idx as i32*, part as f32*, 0)
+ip := idx as i32*
+yf[y] = ip[0]
+yl[y] = ip[n - 1]
+end
+mem.Free(idx)
+mem.Free(part)
+mut most := 1
+mut lo := 0
+repeat dst_h in y:
+until lo < y and yl[lo] < yf[y]:
+lo += 1
+end
+if y - lo + 1 > most:
+most = y - lo + 1
+end
+end
+r.ring = most + 1
+r.acc = mem.AllocateZeroed(((r.ring as i64) * (dst_w as i64) * 28) as u64)
+r.ok = true
+ret r
+end
+@en "AreaResamplerPushRow"
+@fa "افزودن سطر به نمونه‌بردار"
+pub func AreaResamplerPushRow(r &: AreaResampler, p: u8*, step: int):
+if not r.ok or r.next_row >= r.src_h:
+ret
+end
+s := r.next_row
+yf := r.y_first as i32*
+yl := r.y_last as i32*
+xs := r.x_start as i32*
+xc := r.x_count as i32*
+xsrc := r.x_src as i32*
+xpart := r.x_part as f32*
+mut y := 0
+mut lo := 0
+mut hi := r.dst_h
+until lo < hi:
+mid := (lo + hi) / 2
+if yl[mid] < s:
+lo = mid + 1
+else:
+hi = mid
+end
+end
+y = lo
+until y < r.dst_h and yf[y] <= s:
+s1 := ((y as f32) * (r.src_h as f32)) / (r.dst_h as f32)
+s2 := (((y + 1) as f32) * (r.src_h as f32)) / (r.dst_h as f32)
+mut sy := s1
+mut yportion := 0.0 as f32
+mut found := false
+until true:
+mut portion := 1.0 as f32
+if _rs_floor(sy) == _rs_floor(s1):
+portion = (1.0 - ((sy - _rs_floor(sy)) as f64)) as f32
+if portion > s2 - s1:
+portion = s2 - s1
+end
+sy = _rs_floor(sy)
+else sy == _rs_floor(s2):
+portion = s2 - _rs_floor(s2)
+end
+if (sy as int) == s:
+yportion = portion
+found = true
+break
+end
+sy = sy + (1.0 as f32)
+if not (sy < s2):
+break
+end
+end
+if found:
+slot := y % r.ring
+a := ((r.acc as i64) + (slot as i64) * (r.dst_w as i64) * 28) as f32*
+repeat r.dst_w in x:
+k := x * 7
+mut red := a[k]
+mut green := a[k + 1]
+mut blue := a[k + 2]
+mut alpha := a[k + 3]
+mut spixels := a[k + 4]
+mut alpha_sum := a[k + 5]
+mut contrib_sum := a[k + 6]
+start := xs[x]
+count := xc[x]
+repeat count in j:
+sx := xsrc[start + j]
+xportion := xpart[start + j]
+pcontribution := xportion * yportion
+o := (sx * step) as i64
+mut a7 := 0
+if step >= 4:
+a7 = 127 - ((p[o + 3] as int) >> 1)
+end
+alpha_factor := ((127 - a7) as f32) * pcontribution
+red = red + ((p[o] as int) as f32) * alpha_factor
+green = green + ((p[o + 1] as int) as f32) * alpha_factor
+blue = blue + ((p[o + 2] as int) as f32) * alpha_factor
+alpha = alpha + (a7 as f32) * pcontribution
+alpha_sum = alpha_sum + alpha_factor
+contrib_sum = contrib_sum + pcontribution
+spixels = spixels + xportion * yportion
+end
+a[k] = red
+a[k + 1] = green
+a[k + 2] = blue
+a[k + 3] = alpha
+a[k + 4] = spixels
+a[k + 5] = alpha_sum
+a[k + 6] = contrib_sum
+end
+end
+if yl[y] == s:
+_rs_finish_row(r, y)
+end
+y += 1
+end
+r.next_row += 1
+end
+@en "AreaResamplerFree"
+@fa "آزادسازی نمونه‌بردار"
+pub func AreaResamplerFree(r &: AreaResampler):
+if r.x_start != null: mem.Free(r.x_start) end
+if r.x_count != null: mem.Free(r.x_count) end
+if r.x_src != null: mem.Free(r.x_src) end
+if r.x_part != null: mem.Free(r.x_part) end
+if r.y_first != null: mem.Free(r.y_first) end
+if r.y_last != null: mem.Free(r.y_last) end
+if r.acc != null: mem.Free(r.acc) end
+r.x_start = null
+r.x_count = null
+r.x_src = null
+r.x_part = null
+r.y_first = null
+r.y_last = null
+r.acc = null
+r.ok = false
+end
+@en "ResizeArea"
+@fa "تغییر اندازه ناحیه‌ای"
+pub func ResizeArea(img: Image, new_width: int, new_height: int): Image:
+mut r := NewAreaResampler(img.width, img.height, new_width, new_height)
+if not r.ok or IsEmpty(img):
+AreaResamplerFree(r)
+ret r.out
+end
+bp := img.pixels as u8*
+repeat img.height in y:
+AreaResamplerPushRow(r, ((bp as i64) + (y as i64) * (img.width as i64) * 4) as u8*, 4)
+end
+AreaResamplerFree(r)
+ret r.out
 end
 package image
 @en "TextDirAuto"
@@ -145675,6 +147489,18 @@ pub func Path(ctx: Context): str: ret salam_ctx_get(ctx.h, 1) end
 @en "Body"
 @fa "بدنه"
 pub func Body(ctx: Context): str: ret salam_ctx_get(ctx.h, 3) end
+@en "BodyLen"
+@fa "طول بدنه"
+pub func BodyLen(ctx: Context): int: ret _rc(ctx.h).body_len end
+@en "BodyBytes"
+@fa "بایت‌های بدنه"
+pub func BodyBytes(ctx: Context): void *: ret salam_ctx_get(ctx.h, 3) as void * end
+@en "Multipart"
+@fa "چندبخشی"
+pub func Multipart(ctx: Context): mime.MultipartParts: ret Multipart(ctx.h) end
+@en "Bytes"
+@fa "بایت‌ها"
+pub func Bytes(ctx: Context, content_type: str, p: void *, n: int): Bytes(ctx.h, content_type, p, n) end
 @en "RawQuery"
 @fa "پرسمان خام"
 pub func RawQuery(ctx: Context): str: ret salam_ctx_get(ctx.h, 2) end
@@ -145893,6 +147719,25 @@ pub func Path(h: i64): str: ret salam_ctx_get(h, 1) end
 @en "Body"
 @fa "بدنه"
 pub func Body(h: i64): str: ret salam_ctx_get(h, 3) end
+@en "BodyLen"
+@fa "طول بدنه"
+pub func BodyLen(h: i64): int: ret _rc(h).body_len end
+@en "BodyBytes"
+@fa "بایت‌های بدنه"
+pub func BodyBytes(h: i64): void *: ret salam_ctx_get(h, 3) as void * end
+@en "Multipart"
+@fa "چندبخشی"
+pub func Multipart(h: i64): mime.MultipartParts:
+ct := mime.ParseContentType(salam_ctx_kv_get(h, 0, "Content-Type"))
+if not str.EqualFold(ct.media_type, "multipart/form-data"):
+ret mime.MultipartParts {}
+end
+boundary := mime.ParamGet(ct, "boundary")
+if boundary.len() == 0:
+ret mime.MultipartParts {}
+end
+ret mime.ParseMultipart(BodyBytes(h), BodyLen(h), boundary)
+end
 @en "Query"
 @fa "پرسمان"
 pub func Query(h: i64, key: str): str:
@@ -145935,6 +147780,14 @@ end
 pub func Text(h: i64, text: str):
 salam_ctx_set(h, 4, "text/plain; charset=utf-8")
 salam_ctx_set(h, 5, text)
+end
+@en "Bytes"
+@fa "بایت‌ها"
+pub func Bytes(h: i64, content_type: str, p: void *, n: int):
+c := _rc(h)
+c.resp_ct = _ctx_own(h, str.Clone(content_type))
+c.resp_body = _ctx_own(h, _str_of(p, n))
+c.resp_len = n
 end
 @en "Own"
 @fa "مالکیت"
@@ -145996,8 +147849,10 @@ pub method: str = ""
 pub path: str = ""
 pub query: str = ""
 pub body: str = ""
+pub body_len: int = 0
 pub resp_ct: str = ""
 pub resp_body: str = ""
+pub resp_len: int = -1
 pub req_hdrs: Vector<_KV> = Vector {}
 pub path_params: Vector<_KV> = Vector {}
 pub resp_hdrs: Vector<_KV> = Vector {}
@@ -146156,8 +148011,10 @@ c.method = ""
 c.path = ""
 c.query = ""
 c.body = ""
+c.body_len = 0
 c.resp_ct = ""
 c.resp_body = ""
+c.resp_len = -1
 end
 func salam_ctx_free(h: i64):
 c := _rc(h)
@@ -146358,9 +148215,9 @@ pos = amp + 1
 end
 ret str.Clone("")
 end
-func _parse_http(ctx: i64, req: str):
+func _parse_http(ctx: i64, req: str, req_len: int):
 c := _rc(ctx)
-n := req.len()
+n := req_len
 sp1 := req.find(" ")
 if sp1 < 0: ret end
 c.method = _ctx_own(ctx, req.substr(0, sp1))
@@ -146407,7 +148264,8 @@ pos = line_end + 2
 end
 c.hdr_end = pos
 if body_start >= 0 and body_start < n:
-c.body = _ctx_own(ctx, req.substr(body_start, n - body_start))
+c.body = _ctx_own(ctx, _str_of(((req as void *) as i64 + body_start) as void *, n - body_start))
+c.body_len = n - body_start
 end
 end
 func _server_header(hide: bool): str:
@@ -146443,10 +148301,13 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
 status := salam_ctx_get_status(ctx)
 ct := salam_ctx_get(ctx, 4)
 body := salam_ctx_get(ctx, 5)
+binary := _rc(ctx).resp_len
+mut blen := body.len()
+if binary >= 0: blen = binary end
 str.BufAppend(b, "HTTP/1.1 ")
 _append_status(b, status)
 str.BufAppend(b, "\r\nContent-Length: ")
-str.BufAppendInt(b, body.len() as i64)
+str.BufAppendInt(b, blen as i64)
 if keep:
 str.BufAppend(b, "\r\nConnection: keep-alive")
 else:
@@ -146484,9 +148345,18 @@ end
 str.BufAppend(b, "\r\n")
 end
 str.BufAppend(b, "\r\n")
-if salam_ctx_get(ctx, 0) != "HEAD":
+if salam_ctx_get(ctx, 0) != "HEAD" and binary < 0:
 str.BufAppend(b, body)
 end
+end
+func _binary_body(ctx: i64, n &: int): void *:
+c := _rc(ctx)
+n = c.resp_len
+if c.resp_len < 0 or salam_ctx_get(ctx, 0) == "HEAD":
+n = 0
+ret null
+end
+ret c.resp_body as void *
 end
 func _build_response(ctx: i64, shdr: str): str:
 mut b := str.NewBuilder()
@@ -146623,10 +148493,22 @@ if vend == 4 and _eq_at(s, 0, "HEAD"): ret false end
 if vend == 7 and _eq_at(s, 0, "OPTIONS"): ret false end
 ret true
 end
-func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, oversize &: int): str:
+func _bytes_join(a: str, alen: int, b: void *, blen: int): str:
+r := mem.Allocate((alen + blen + 1) as u64)
+if alen > 0: mem.Copy(r, a as void *, alen as u64) end
+if blen > 0: mem.Copy((r as i64 + alen) as void *, b, blen as u64) end
+p := r as i8 *
+p[alen + blen] = 0 as i8
+ret r as str
+end
+func _bytes_slice(s: str, off: int, n: int): str:
+ret _str_of(((s as void *) as i64 + off) as void *, n)
+end
+func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
 sock := rawsock.FromFd(fd)
 owned = false
-if pending.len() == 0:
+req_len = 0
+if pending_len == 0:
 got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
 if got <= 0: ret "" end
 sp0 := scratch as i8 *
@@ -146640,21 +148522,29 @@ vend := one.find(" ")
 if vend > 0 and _has_body_at(one, vend):
 need = head_len + _content_length(one, head_len)
 end
-if need == got: ret one end
+if need == got:
+req_len = got
+ret one
+end
 if need < got:
-pending = one.substr(need, got - need)
+pending = _bytes_slice(one, need, got - need)
+pending_len = got - need
 owned = true
-ret one.substr(0, need)
+req_len = need
+ret _bytes_slice(one, 0, need)
 end
 end
 pending = _str_of(scratch, got)
+pending_len = got
 end
 mut buf := pending
+mut blen := pending_len
 pending = ""
+pending_len = 0
 mut scan := 0
 mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
 until head_end < 0:
-if buf.len() >= _max_header_bytes:
+if blen >= _max_header_bytes:
 mem.Free(buf as void *)
 oversize = 431
 ret ""
@@ -146664,13 +148554,12 @@ if got <= 0:
 mem.Free(buf as void *)
 ret ""
 end
-chunk := _str_of(scratch, got)
-grown := buf.concat(chunk)
-mem.Free(chunk as void *)
-scan = buf.len() - 3
+grown := _bytes_join(buf, blen, scratch, got)
+scan = blen - 3
 if scan < 0: scan = 0 end
 mem.Free(buf as void *)
 buf = grown
+blen += got
 head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
 end
 head_len := head_end + 4
@@ -146683,26 +148572,29 @@ mem.Free(buf as void *)
 oversize = 413
 ret ""
 end
-if buf.len() < need:
-mut acc := str.NewBuilder()
-str.BufAppend(acc, buf)
+if blen < need:
+full := mem.Allocate((need + 1) as u64)
+mem.Copy(full, buf as void *, blen as u64)
 mem.Free(buf as void *)
-until (str.BufLen(acc) as int) < need:
-got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+until blen < need:
+mut want := need - blen
+if want > _RD_CHUNK: want = _RD_CHUNK end
+got := rawsock.RecvBytes(sock, (full as i64 + blen) as void *, want)
 if got <= 0: break end
-chunk := _str_of(scratch, got)
-str.BufAppend(acc, chunk)
-mem.Free(chunk as void *)
+blen += got
 end
-buf = str.BufStr(acc)
-str.BufFree(acc)
+fp := full as i8 *
+fp[blen] = 0 as i8
+buf = full as str
 end
-if buf.len() < need: need = buf.len() end
+if blen < need: need = blen end
 end
 owned = true
-if need == buf.len(): ret buf end
-pending = buf.substr(need, buf.len() - need)
-out := buf.substr(0, need)
+req_len = need
+if need == blen: ret buf end
+pending = _bytes_slice(buf, need, blen - need)
+pending_len = blen - need
+out := _bytes_slice(buf, 0, need)
 mem.Free(buf as void *)
 ret out
 end
@@ -146876,13 +148768,13 @@ func _log_access(slot: int, method: str, path: str, status: int):
 if _srv_log.get(slot) == false: ret end
 println method, path, "->", status
 end
-func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
-if req.len() == 0:
+func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+if req_len == 0:
 keep = false
 ret false
 end
 salam_ctx_reset(ctx)
-_parse_http(ctx, req)
+_parse_http(ctx, req, req_len)
 keep = _rc(ctx).keep_alive
 r := _srv_routers.get(slot)
 shdr := _srv_shdr.get(slot)
@@ -146935,15 +148827,19 @@ end
 _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
 ret true
 end
-func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
-if not _route_request(slot, fd, ctx, req, keep):
+func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+if not _route_request(slot, fd, ctx, req, req_len, keep):
 ret false
 end
 if salam_ctx_is_sent(ctx) == 0:
 mut b := str.NewBuilder()
 _fill_response(b, ctx, _srv_shdr.get(slot), keep)
-tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b.len as int)
+conn := tcp.ConnFromFd(fd)
+tcp.WriteBytes(conn, b.data, b.len as int)
 str.BufFree(b)
+mut n := 0
+p := _binary_body(ctx, n)
+if n > 0: tcp.WriteBytes(conn, p, n) end
 end
 ret true
 end
@@ -146956,11 +148852,13 @@ rawsock.SetTimeout(sock, _keepalive_idle_ms)
 scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
 ctx := salam_ctx_new(fd)
 mut pending := ""
+mut pending_len := 0
 mut served := 0
 until 1 == 1:
 mut owned := false
 mut oversize := 0
-req := _read_request(fd, scratch, pending, owned, oversize)
+mut req_len := 0
+req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
 if oversize == 431:
 _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 break
@@ -146969,7 +148867,7 @@ if oversize != 0:
 _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 break
 end
-if req.len() == 0: break end
+if req_len == 0: break end
 te_end := str.IndexFrom(req, "\r\n\r\n", 0)
 if te_end >= 0 and (_has_transfer_encoding(req, te_end + 4) or _bad_content_length(req, te_end + 4)):
 _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -146977,13 +148875,13 @@ if owned: mem.Free(req as void *) end
 break
 end
 mut keep := true
-ok := _serve_request(slot, fd, ctx, req, keep)
+ok := _serve_request(slot, fd, ctx, req, req_len, keep)
 if owned: mem.Free(req as void *) end
 if ok == false: break end
 served += 1
 if keep == false or served >= _keepalive_max_reqs: break end
 end
-if pending.len() > 0: mem.Free(pending as void *) end
+if pending_len > 0: mem.Free(pending as void *) end
 salam_ctx_free(ctx)
 mem.Free(scratch)
 _net_close(fd)
@@ -147005,7 +148903,7 @@ end
 ctx := salam_ctx_new(fd)
 defer salam_ctx_free(ctx)
 defer mem.Free(req as void *)
-_parse_http(ctx, req)
+_parse_http(ctx, req, req.len())
 r := _srv_routers.get(slot)
 shdr := _srv_shdr.get(slot)
 mut static_handled := false
@@ -147057,6 +148955,9 @@ if salam_ctx_is_sent(ctx) == 0:
 resp := _build_response(ctx, shdr)
 tls.Write(c, resp)
 mem.Free(resp as void *)
+mut n := 0
+p := _binary_body(ctx, n)
+if n > 0: tls.WriteBytes(c, p, n) end
 end
 tls.Close(c)
 end
@@ -147164,12 +149065,15 @@ slot := _srv_claim(r, hide, log)
 req := _edge_read_request()
 ctx := salam_ctx_new(0 - 1)
 mut keep := false
-if _route_request(slot, 0 - 1, ctx, req, keep):
+if _route_request(slot, 0 - 1, ctx, req, req.len(), keep):
 if salam_ctx_is_sent(ctx) == 0:
 mut b := str.NewBuilder()
 _fill_response(b, ctx, _srv_shdr.get(slot), false)
 _edge_write(b.data, b.len as int)
 str.BufFree(b)
+mut n := 0
+p := _binary_body(ctx, n)
+if n > 0: _edge_write(p, n) end
 end
 else:
 bad := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -150351,6 +152255,38 @@ out.items.push(part)
 pos = next_boundary + dlen
 end
 ret out
+end
+@en "PartIndex"
+@fa "اندیس بخش"
+pub func PartIndex(parts: MultipartParts, name: str): int:
+n := parts.items.len()
+mut i := 0
+until i < n:
+if parts.items.get(i).name == name: ret i end
+i += 1
+end
+ret 0 - 1
+end
+@en "PartValue"
+@fa "مقدار بخش"
+pub func PartValue(parts: MultipartParts, name: str): str:
+i := PartIndex(parts, name)
+if i < 0: ret "" end
+b := parts.items.get(i).body
+if b.len == 0: ret "" end
+ret _bytes_to_str(b.data, b.len)
+end
+@en "FreeMultipart"
+@fa "آزادسازی چندبخشی"
+pub func FreeMultipart(parts &: MultipartParts):
+n := parts.items.len()
+mut i := 0
+until i < n:
+mut part := parts.items.get(i)
+compress.BufFree(part.body)
+i += 1
+end
+parts.items.free()
 end
 @en "NewMultipartWriter"
 @fa "نویسنده چندبخشی جدید"

@@ -235,28 +235,7 @@ func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
 end
 
 func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis: int): Socket:
-    if SALAM_OS_WINDOWS:
-        w := _fd_of(socket(fam, socktype, 0))
-        if w == (0 - 1 as i64):
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        wsock := Socket { fd = w, family = fam }
-        SetNonBlocking(wsock, true)
-        mut linked := connect(_sk(w), sa, alen) == 0
-        if not linked:
-            if _wait_writable(w, millis):
-                probe := mem.AllocateZeroed(8 as u64)
-                linked = send(_sk(w), probe, 0, 0) == 0
-                mem.Free(probe)
-            end
-        end
-        if not linked:
-            closesocket(_sk(w))
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        SetNonBlocking(wsock, false)
-        ret wsock
-    else:
+    if SALAM_OS_LINUX:
         s := socket(fam, socktype, 0)
         if s == 0 - 1:
             ret Socket { fd = 0 - 1, family = fam }
@@ -264,7 +243,7 @@ func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis:
         sock := Socket { fd = s as i64, family = fam }
         SetNonBlocking(sock, true)
         if connect(s, sa, alen) != 0:
-            if not _wait_writable(s as i64, millis):
+            if not _wait_writable(s, millis):
                 close(s)
                 ret Socket { fd = 0 - 1, family = fam }
             end
@@ -282,23 +261,17 @@ func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis:
         SetNonBlocking(sock, false)
         _no_sigpipe(s as i64)
         ret sock
+    else:
+        ret _try_connect(sa, alen, fam, socktype)
     end
 end
 
-func _wait_writable(fd: i64, millis: int): bool:
-    if SALAM_OS_WINDOWS:
-        p := mem.AllocateZeroed(16 as u64)
-        defer mem.Free(p)
-        fdp := p as i64*
-        fdp[0] = fd
-        evp := ((p as i64) + 8) as i16*
-        evp[0] = 16 as i16
-        ret WSAPoll(p, 1 as u32, millis) > 0
-    else:
+if SALAM_OS_LINUX:
+    func _wait_writable(fd: int, millis: int): bool:
         p := mem.AllocateZeroed(8 as u64)
         defer mem.Free(p)
         fdp := p as i32*
-        fdp[0] = fd as i32
+        fdp[0] = fd
         evp := ((p as i64) + 4) as i16*
         evp[0] = 4 as i16
         ret poll(p, 1 as usize, millis) > 0
@@ -388,11 +361,8 @@ end
 @en "ConnectTimeout"
 @fa "اتصال با مهلت"
 pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
-    if millis <= 0:
+    if millis <= 0 or not SALAM_OS_LINUX:
         ret Connect(host, port)
-    end
-    if SALAM_OS_WINDOWS:
-        _net_init()
     end
     mut addrs := Vector {} as Vector<i64>
     mut lens := Vector {} as Vector<int>

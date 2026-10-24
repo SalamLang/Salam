@@ -18,7 +18,7 @@ import archive
 import conv
 import str
 
-func _xlsx_align_attrs(align_h: int, align_v: int): str:
+func _xlsx_align_attrs(align_h: int, align_v: int, wrap: bool): str:
     mut h := ""
     if align_h == AlignLeft: h = "left"
     else align_h == AlignCenter: h = "center"
@@ -29,10 +29,11 @@ func _xlsx_align_attrs(align_h: int, align_v: int): str:
     else align_v == AlignMiddle: v = "center"
     else align_v == AlignBottom: v = "bottom"
     end
-    if h.len() == 0 and v.len() == 0: ret "" end
+    if h.len() == 0 and v.len() == 0 and not wrap: ret "" end
     mut out := "<alignment"
     if h.len() > 0: out = out.concat(` horizontal="`).concat(h).concat(`"`) end
     if v.len() > 0: out = out.concat(` vertical="`).concat(v).concat(`"`) end
+    if wrap: out = out.concat(` wrapText="1"`) end
     out = out.concat("/>")
     ret out
 end
@@ -44,7 +45,7 @@ func _xlsx_cell_xml(c: Cell, date_style_id: int): str:
     mut s_attr := ""
     if sid >= 0: s_attr = ` s="`.concat(conv.FormatInt(sid as i64)).concat(`"`) end
     if c.kind == CellString:
-        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="inlineStr"><is><t>`).concat(XmlEscape(c.text)).concat("</t></is></c>")
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="inlineStr"><is><t xml:space="preserve">`).concat(XmlEscape(c.text)).concat("</t></is></c>")
     else c.kind == CellBool:
         mut v := "0"
         if c.flag: v = "1" end
@@ -55,6 +56,9 @@ func _xlsx_cell_xml(c: Cell, date_style_id: int): str:
         ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="e"><v>`).concat(XmlEscape(c.text)).concat("</v></c>")
     else c.kind == CellNumber or c.kind == CellDate:
         ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("><v>").concat(conv.FormatFloat(c.num)).concat("</v></c>")
+    else sid >= 0:
+        // an empty cell that has a style still shows it (a border, a fill)
+        ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("/>")
     else:
         ret ""
     end
@@ -97,6 +101,7 @@ func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
     mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
     out = out.concat(_xlsx_sheet_views(sheet)).concat(_xlsx_cols(sheet))
     out = out.concat("<sheetData>").concat(_xlsx_sheet_body(sheet, date_style_id)).concat("</sheetData>")
+    if sheet.auto_filter.len() > 0: out = out.concat(`<autoFilter ref="`).concat(sheet.auto_filter).concat(`"/>`) end
     if sheet.merges.len() > 0:
         out = out.concat(`<mergeCells count="`).concat(conv.FormatInt(sheet.merges.len() as i64)).concat(`">`)
         mut i := 0
@@ -195,7 +200,7 @@ func _xlsx_styles_xml(styles: StyleSheet): str:
             numfmt_count += 1
         end
 
-        align_attrs := _xlsx_align_attrs(st.align_h, st.align_v)
+        align_attrs := _xlsx_align_attrs(st.align_h, st.align_v, st.wrap)
         fill_id := i + 2
         font_id := i
         str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="`).concat(_xlsx_border_id(st)).concat(`" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1" applyBorder="1"`))
@@ -251,14 +256,49 @@ func _xlsx_root_rels(): str:
     ret `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
 end
 
-func _xlsx_workbook_xml(names: Vector<str>): str:
+// "A1:C9" -> "$A$1:$C$9".
+func _xlsx_absolute_range(ref: str): str:
+    mut out := ""
+    mut at_start := true
+    mut in_row := false
+    repeat ref.len() in i:
+        ch := ref.substr(i, 1)
+        if ch == ":":
+            at_start = true
+            in_row = false
+        else at_start:
+            out = out.concat("$")
+            at_start = false
+        else not in_row and ch >= "0" and ch <= "9":
+            out = out.concat("$")
+            in_row = true
+        end
+        out = out.concat(ch)
+    end
+    ret out
+end
+
+// <definedNames>: Excel names each sheet's filter range _xlnm._FilterDatabase.
+func _xlsx_defined_names(sheets: Vector<Sheet>): str:
+    mut out := ""
+    repeat sheets.len() in i:
+        sh := sheets.get(i)
+        if sh.auto_filter.len() == 0: continue end
+        quoted := "'".concat(str.Replace(sh.name, "'", "''")).concat("'!").concat(_xlsx_absolute_range(sh.auto_filter))
+        out = out.concat(`<definedName name="_xlnm._FilterDatabase" localSheetId="`).concat(conv.FormatInt(i as i64)).concat(`" hidden="1">`).concat(XmlEscape(quoted)).concat("</definedName>")
+    end
+    if out.len() == 0: ret "" end
+    ret "<definedNames>".concat(out).concat("</definedNames>")
+end
+
+func _xlsx_workbook_xml(names: Vector<str>, defined: str): str:
     mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>`
     mut i := 0
     until i < names.len():
         out = out.concat(`<sheet name="`).concat(XmlEscape(names.get(i))).concat(`" sheetId="`).concat(conv.FormatInt((i + 1) as i64)).concat(`" r:id="rId`).concat(conv.FormatInt((i + 1) as i64)).concat(`"/>`)
         i += 1
     end
-    out = out.concat("</sheets></workbook>")
+    out = out.concat("</sheets>").concat(defined).concat("</workbook>")
     ret out
 end
 
@@ -291,7 +331,7 @@ pub func WriteXLSX(book &: Workbook, path: str): bool:
     files.push(archive.MakeZipFileInput("_rels/.rels", rr as void*, rr.len(), 8))
 
     names := book.sheet_names()
-    wbxml := _xlsx_workbook_xml(names)
+    wbxml := _xlsx_workbook_xml(names, _xlsx_defined_names(book.sheets))
     defer names.free()
     files.push(archive.MakeZipFileInput("xl/workbook.xml", wbxml as void*, wbxml.len(), 8))
 

@@ -412,7 +412,7 @@ runs them under wine. It runs once with each linker; outputs must match, and
 2. **PE/COFF for Windows**: reading mingw import libraries (short import
    members), `.idata` import tables, base relocations, `.pdata`/`.xdata`
    kept as produced, subsystem and stack reserve in the optional header.
-3. **Mach-O** together with the aarch64 backend, for macOS.
+3. **Mach-O** for macOS: done, see phase 4 below.
 4. **`.eh_frame_hdr`** is done: before layout the linker counts the FDEs in
    the live `.eh_frame` inputs and reserves the header and one program
    header; after relocation it walks the output `.eh_frame`, reads each
@@ -421,3 +421,113 @@ runs them under wine. It runs once with each linker; outputs must match, and
    `datarel|sdata4` pairs). An encoding it cannot read makes it write the
    header with an omitted table, which unwinders search linearly. glibc's
    `backtrace()` walks native frames through it.
+
+## Phase 4: every target the compiler builds for
+
+The linker is no longer tied to the native backend's x86-64 objects. It
+reads whatever the LLVM backend produces, so `--linker=builtin` works with
+`--backend=llvm` for these targets:
+
+| Target | Output | C runtime |
+|---|---|---|
+| `x86_64-linux-musl` | static ELF64 | bundled musl |
+| `x86_64-linux-gnu` | dynamic ELF64 PIE | system glibc |
+| `i686-linux-musl` | static ELF32 | bundled musl |
+| `aarch64-linux-musl` | static ELF64 | bundled musl |
+| `arm-linux-musleabihf` | static ELF32 | bundled musl |
+| `x86_64-w64-windows-gnu` | PE32+ | mingw-w64 |
+| `i686-w64-windows-gnu` | PE32 | mingw-w64 |
+| `x86_64-apple-macos`, `arm64-apple-macos` | Mach-O PIE, ad-hoc signed | `libSystem` |
+
+With the LLVM backend the driver asks LLVM for an object instead of an
+executable and hands it to the same dispatcher the native backend uses.
+`--linker=auto` keeps the LLVM backend's own linking for now.
+
+### ELF32 and other machines
+
+Objects carry their class and machine (`EM_X86_64`, `EM_386`,
+`EM_AARCH64`, `EM_ARM`); the first object decides the link and a mismatch
+is an error. The reader handles both section header and symbol layouts and
+both `RELA` and `REL`; for `REL` the addend is read out of the section,
+decoding ARM's branch, `MOVW`/`MOVT` and Thumb encodings. Relocation
+application is one function per machine:
+
+- **i386**: absolute, PC-relative, PLT, `GOTOFF`, `GOTPC`, `GOT32`/`GOT32X`
+  (always through a GOT entry) and the 16- and 8-bit forms.
+- **AArch64**: data, `ADRP` pages, `ADD` and load/store low 12 bits scaled
+  by access size, branches, conditional and test branches, `MOVW` groups,
+  GOT page and offset pairs.
+- **ARM**: `ABS32`, `REL32`, `TARGET1`/`TARGET2`, `BL`/`B` (a `BL` to a
+  Thumb function becomes `BLX`; a `B` to one is an error, since no veneers
+  are generated), `MOVW`/`MOVT` in ARM and Thumb, Thumb branches, `PREL31`
+  and the GOT forms.
+
+TLS relocations are rejected rather than guessed, because no `PT_TLS`
+segment is written. The ELF writer emits 32- or 64-bit headers, program
+headers, section headers and symbols, keeps the first object's `e_flags`
+(the ARM EABI and float ABI), uses 64 KiB pages on AArch64 and the classic
+`0x08048000` base on i386. ELF common symbols are allocated in `.bss`.
+
+### PE32
+
+i386 COFF uses its own relocation numbers (`DIR32`, `DIR32NB`, `REL32`,
+`SECREL`, `SECTION`), which are mapped onto the x64 handling. Linker
+symbols get the extra leading underscore of the i386 C ABI, the entry
+point is `_mainCRTStartup`, the image base is `0x400000`, absolute
+addresses get `HIGHLOW` base relocations, constructor lists use 4-byte
+entries, and the optional header is the 224-byte PE32 form with a
+`BaseOfData` field and a 24-byte TLS directory.
+
+### Mach-O
+
+The reader takes `MH_OBJECT` files for x86_64 and arm64: sections become
+input sections (with their object addresses kept, since Mach-O symbols and
+section-relative relocations are absolute in the object), `nlist_64`
+symbols become section-relative, and section-relative relocations get a
+synthetic symbol per section. It pairs `SUBTRACTOR` with the following
+`UNSIGNED`, applies arm64 `ADDEND` to the next relocation, and reads
+x86_64's embedded addends including the `SIGNED_1/2/4` bias.
+`__compact_unwind` and `__DWARF` are dropped.
+
+The output is a PIE `MH_EXECUTE`:
+
+- `__PAGEZERO`, `__TEXT` (`__text`, `__stubs`, `__cstring`, `__const`,
+  `__eh_frame`), `__DATA_CONST` (`__got`, `__mod_init_func`, `__const`),
+  `__DATA` (`__data`, `__bss`) and `__LINKEDIT`.
+- Calls to imported functions go through a stub that jumps through a
+  non-lazy `__got` slot; there is no lazy binding. GOT loads of local
+  symbols point at a rebased slot.
+- `LC_DYLD_INFO_ONLY` carries the rebase and bind opcodes; every import is
+  bound against `/usr/lib/libSystem.B.dylib` (ordinal 1), which is where
+  everything a Salam program imports lives. Other dylibs are not supported
+  yet, so a program that links one falls back to the system linker.
+- `LC_SYMTAB`, `LC_DYSYMTAB` with the indirect symbol table for the stubs
+  and GOT, `LC_LOAD_DYLINKER`, `LC_UUID`, `LC_BUILD_VERSION` (macOS 11),
+  `LC_MAIN`, `LC_LOAD_DYLIB`, `LC_DATA_IN_CODE` (jump tables inside
+  `__text`) and `LC_CODE_SIGNATURE`.
+- An ad-hoc, linker-signed code signature: a SuperBlob with one
+  CodeDirectory (version `0x20400`, SHA-256 of every 4 KiB page up to the
+  signature, the executable segment marked as the main binary), which
+  arm64 macOS requires before it runs anything.
+
+### Testing phase 4
+
+There is no macOS, AArch64 or ARM hardware here, so each target is checked
+differently:
+
+- i686 Linux runs natively and AArch64 and ARM run under `qemu-user`; each
+  test is built once as an object and linked by both the built-in linker
+  and `ld.lld`, and both outputs must agree.
+- i686 Windows runs under wine against a mingw `ld` reference.
+- Mach-O is compared structurally: the disassembly of every test linked by
+  the built-in linker and by `ld64.lld` must match once addresses, page
+  numbers, local label names and lld's GOT relaxations are taken out, and
+  every page hash of the signature must verify.
+
+On the test sections, 2429 programs for i686 Linux, AArch64, ARM and i686
+Windows behaved the same with the built-in linker as with the reference
+linker. The few that differed (network servers and thread timing) changed
+from run to run with either linker. All 1238 Mach-O links matched
+`ld64.lld`. `tools/linker/cross-check.sh` runs the same comparison for one
+target at a time, and `tools/linker/macho_check.py` holds the Mach-O
+signature and disassembly checks.

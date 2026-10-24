@@ -348,6 +348,92 @@ func sink_loads(g &: Ng): bool:
             changed = true
             count_uses(g)
         end
+        if g.b_first[b] >= 0 and phi_addr_select(g, b):
+            changed = true
+            count_uses(g)
+        end
+    end
+    ret changed
+end
+
+func arm_addr(g &: Ng, p: int, m: int, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ADDR or g.i_blk[d] != p or g.b_first[p] != d or g.b_npred[p] != 1:
+        ret 0 - 1
+    end
+    t := g.i_next[d]
+    if t < 0 or g.i_op[t] != OP_BR or g.i_b[t] != m:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func phi_addr_select(g &: Ng, m: int): bool:
+    if g.off_paddr or g.b_npred[m] != 2:
+        ret false
+    end
+    p1 := g.b_pred[g.b_ps[m]]
+    p2 := g.b_pred[g.b_ps[m] + 1]
+    if p1 == p2 or g.b_npred[p1] != 1 or g.b_npred[p2] != 1:
+        ret false
+    end
+    top := g.b_pred[g.b_ps[p1]]
+    if top != g.b_pred[g.b_ps[p2]]:
+        ret false
+    end
+    tt := g.b_last[top]
+    if tt < 0 or g.i_op[tt] != OP_CBR:
+        ret false
+    end
+    mut changed := false
+    mut ph := g.b_first[m]
+    until ph >= 0 and g.i_op[ph] == OP_PHI:
+        nx := g.i_next[ph]
+        if g.i_pcount[ph] == 2 and g.i_res[ph] >= 0 and g.i_ty[ph] == T_PTR:
+            ps := g.i_ps[ph]
+            mut v1 := g.pool[ps]
+            mut v2 := g.pool[ps + 2]
+            if g.pool[ps + 1] == p2:
+                v1 = g.pool[ps + 2]
+                v2 = g.pool[ps]
+            end
+            a1 := arm_addr(g, p1, m, v1)
+            a2 := arm_addr(g, p2, m, v2)
+            if a1 >= 0 and a2 >= 0 and g.i_b[a1] == g.i_b[a2] and g.i_x[a1] == g.i_x[a2] and g.i_d[a1] == g.i_d[a2] and g.i_a[a1] >= 0 and g.i_a[a2] >= 0:
+                mut bt := g.i_a[a1]
+                mut bf := g.i_a[a2]
+                if g.i_b[tt] == p2:
+                    bt = g.i_a[a2]
+                    bf = g.i_a[a1]
+                end
+                mut at := g.b_first[m]
+                until at >= 0 and g.i_op[at] == OP_PHI:
+                    at = g.i_next[at]
+                end
+                sl := ins_new(g, OP_SELECT, T_PTR)
+                g.i_a[sl] = g.i_a[tt]
+                g.i_b[sl] = bt
+                g.i_c[sl] = bf
+                slv := new_res(g, sl)
+                ins_before(g, at, sl)
+                na := ins_new(g, OP_ADDR, T_PTR)
+                g.i_a[na] = slv
+                g.i_b[na] = g.i_b[a1]
+                g.i_x[na] = g.i_x[a1]
+                g.i_d[na] = g.i_d[a1]
+                nav := new_res(g, na)
+                ins_before(g, at, na)
+                replace_res(g, ph, nav)
+                ins_unlink(g, a1)
+                ins_unlink(g, a2)
+                g.want_licm = true
+                changed = true
+            end
+        end
+        ph = nx
     end
     ret changed
 end

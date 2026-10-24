@@ -983,6 +983,87 @@ func flags_dead_after(g &: Ng, i: int): bool:
     ret false
 end
 
+func cc_eval(cc: int, zf: bool, sf: bool): bool:
+    switch cc:
+        X_E: ret zf end
+        X_NE: ret not zf end
+        X_S, X_L: ret sf end
+        X_NS, X_GE: ret not sf end
+        X_LE: ret zf or sf end
+        X_G: ret not zf and not sf end
+        X_B, X_O: ret false end
+        X_AE, X_NO: ret true end
+        X_BE: ret zf end
+        X_A: ret not zf end
+    end
+    ret false
+end
+
+func kb_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    if j >= g.mc.op.len():
+        ret 0 - 1
+    end
+    ret j
+end
+
+func kb_test_of(g &: Ng, j: int, r: int): bool:
+    ret j >= 0 and g.mc.op[j] == M_TEST_RR and g.mc.mk[j] == MK_NONE and g.mc.r0[j] == r and g.mc.r1[j] == r
+end
+
+func const_branches(g &: Ng): bool:
+    mut changed := false
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] != M_MOV_RI or g.mc.mk[i] != MK_NONE:
+            continue
+        end
+        r := g.mc.r0[i]
+        if r < 0 or r >= 16:
+            continue
+        end
+        t := kb_next(g, i)
+        if not kb_test_of(g, t, r):
+            continue
+        end
+        sz := g.mc.sz[t]
+        bits := (sz * 8) as i64
+        mut k := g.mc.imm[i]
+        if bits < (64 as i64):
+            k = k & (((1 as i64) << bits) - (1 as i64))
+        end
+        mut zf := k == (0 as i64)
+        mut sf := ((k >> (bits - (1 as i64))) & (1 as i64)) != (0 as i64)
+        mut j := kb_next(g, t)
+        if j >= 0 and (g.mc.op[j] == M_SETCC or g.mc.op[j] == M_JCC) and (g.mc.cc[j] == X_P or g.mc.cc[j] == X_NP):
+            continue
+        end
+        if j >= 0 and g.mc.op[j] == M_SETCC and g.mc.mk[j] == MK_NONE:
+            v := cc_eval(g.mc.cc[j], zf, sf)
+            r2 := g.mc.r0[j]
+            j2 := kb_next(g, j)
+            if not kb_test_of(g, j2, r2) or g.mc.sz[j2] != 1:
+                continue
+            end
+            zf = not v
+            sf = false
+            j = kb_next(g, j2)
+        end
+        if j < 0 or g.mc.op[j] != M_JCC or g.mc.cc[j] == X_P or g.mc.cc[j] == X_NP:
+            continue
+        end
+        if cc_eval(g.mc.cc[j], zf, sf):
+            g.mc.op[j] = M_JMP
+        else:
+            g.mc.op[j] = M_NOP
+        end
+        changed = true
+    end
+    ret changed
+end
+
 func xor_zero(g &: Ng):
     repeat g.mc.op.len() in i:
         if g.mc.op[i] == M_MOV_RI and g.mc.imm[i] == (0 as i64) and (g.mc.sz[i] == 4 or g.mc.sz[i] == 8) and g.mc.r0[i] >= 0 and g.mc.r0[i] < 16 and flags_dead_after(g, i):
@@ -1379,6 +1460,9 @@ func encode_function(g &: Ng):
     if g.opt:
         rotate_loops(g)
         peephole_jumps(g)
+        if not g.off_kbr and const_branches(g):
+            peephole_jumps(g)
+        end
         xor_zero(g)
         if not g.off_dtest:
             dup_test(g)

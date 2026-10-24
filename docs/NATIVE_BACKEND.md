@@ -86,7 +86,9 @@ then goes through:
    argument earns a bonus (not for recursive callees, where inlining the
    first call only grows the caller), since inlining turns the first into a register
    and folds the second. `prim_fold(s, i)` in a scanning loop is the usual
-   case.
+   case. A struct result that the caller only reads field by field earns a
+   bonus too (`p_peekn` returns a whole `Token`), and a callee of at most ten
+   instructions is inlined even after the caller used up its growth budget.
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -109,7 +111,12 @@ then goes through:
    the same value (`c >= 97 and c <= 122`, as a branch pair or an `and`)
    become one unsigned compare of `c - 97`, and a sign-extended byte that is
    corrected with `+ 256` when negative (`ByteAt`) becomes a zero-extending
-   load.
+   load. `(x + c1) * c2` becomes `x * c2 + c1 * c2` when that continues a
+   constant chain (an FNV hash of an int folds to one multiply), but not on
+   loop indices, where it would hide the pattern strength reduction needs.
+   Inserting a zero into a struct that is still zero at that offset is
+   dropped, so a struct literal stores only its nonzero fields after one
+   wide clear.
 6. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches. A block that only compares a phi with a
    constant and branches is bypassed by every predecessor that feeds the phi
@@ -127,7 +134,9 @@ then goes through:
    of a select (`c ? s + a : s + b` is `s + (c ? a : b)`). When both arms
    of a branch end in a load that only feeds the join, the load moves below
    the join on a phi of the two addresses (picking the English or Persian
-   keyword table, then one load).
+   keyword table, then one load). Two arms that only compute `addr(G1, i)`
+   and `addr(G2, i)` become `addr(select(c, G1, G2), i)`; LICM then moves the
+   select out of the loop, so the loop loses the branch on `c`.
 8. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too. A loop of any depth
@@ -250,7 +259,9 @@ then goes through:
     call, so `strlen(s)` computed twice runs once. Known values survive a
     join when no block between it and its dominator writes memory and that
     region has no loop (or when the function writes no memory at all), so
-    `L.pos` read before an `if` is not read again after it. A load
+    `L.pos` read before an `if` is not read again after it. A division or
+    remainder equal to one that dominates it is reused (`hash % cap` in `has`
+    then `get`). A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
     register across its flush branch. When exactly one predecessor lacks the
@@ -354,6 +365,13 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   entry starts its pushes after this short exit path.
 - `r10`, `r11`, `xmm14` and `xmm15` are kept free as scratch registers for
   spill code.
+- Stack temporaries share space when their live ranges do not overlap. A
+  slot whose address is taken with `lea` stays live until the next call in
+  its block (or the block's end), since the call reads it through the
+  register.
+- After block layout, a `jcc` whose flags come from a constant just moved
+  into a register (`mov r, K; test r, r`, optionally through `setcc` and a
+  second `test`) becomes a `jmp` or disappears.
 - An `i1` value lives in the low byte of a register as 0 or 1. Narrow
   integers are extended where an operation needs the full width.
 
@@ -372,7 +390,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -381,6 +399,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   passes to turn off everywhere. Halving the range finds the one function a
   pass miscompiles; turning `inline` off in the base keeps a callee's
   optimized body from hiding inside its callers.
+- `SALAM_NG_OFF_FNS=f1,f2` limits `SALAM_NG_OFF` to the named functions
+  instead. When a pass only breaks a program in combination (a callee and the
+  callers it was inlined into), drop names from the full list one at a time;
+  `SALAM_NG_LIST=1` prints every function with its compile index.
+- `SALAM_NG_INLTRACE=1` prints why the inliner kept a call: callee too big
+  (`skip`, with its cost and limit), not cached yet, caller over its growth
+  budget (`grown`), or a call-site bonus too small (`need`).
+  `SALAM_NG_INL_MAX=n` overrides the base inline limit for experiments.
 - `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
   operands are defined in a block that dominates it, and fails the build
   naming the function and block when one is not. Run it whenever a pass

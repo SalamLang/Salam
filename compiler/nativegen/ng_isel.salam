@@ -81,7 +81,9 @@ func isel_init(g &: Ng):
     g.sret_to.clear()
     g.rmw_of.clear()
     g.rmw_v.clear()
+    g.izero.clear()
     repeat g.i_op.len():
+        g.izero.push(false)
         g.rmw_v.push(0 - 1)
         g.phit.push(0 - 1)
         g.skipi.push(false)
@@ -3332,6 +3334,53 @@ func insv_to_ret(g &: Ng, i: int): bool:
     ret false
 end
 
+func zero_const(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    ret k == VK_ZERO or (k == VK_INT and g.v_i[v] == (0 as i64))
+end
+
+func insv_zero_chain(g &: Ng, head: int, need: bool): bool:
+    t := g.i_ty[head]
+    mut zs := Vector {} as Vector<int>
+    mut j := head
+    repeat 256:
+        if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
+            break
+        end
+        if zero_const(g, g.i_b[j]) and not is_flt(g, g.i_x[j]):
+            zs.push(j)
+        end
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            break
+        end
+        mut nj := 0 - 1
+        mut k := g.i_next[j]
+        until k >= 0:
+            if g.i_op[k] == OP_INSV and g.i_a[k] == r:
+                nj = k
+                break
+            end
+            if uses_val(g, k, r):
+                break
+            end
+            k = g.i_next[k]
+        end
+        j = nj
+    end
+    ok := not need or zs.len() >= 4
+    if ok:
+        each z in zs:
+            g.izero[z] = true
+        end
+    end
+    zs.free()
+    ret ok
+end
+
 func isel_insv(g &: Ng, i: int):
     t := g.i_ty[i]
     a := g.i_a[i]
@@ -3357,12 +3406,19 @@ func isel_insv(g &: Ng, i: int):
         if k == VK_ZERO:
             if not insv_covers_all(g, i):
                 zero_fill(g, m, sz)
+                if not g.off_izero:
+                    _zc := insv_zero_chain(g, i, false)
+                end
             end
         else k != VK_UNDEF:
             emit_copy(g, m, agg_mem(g, a), sz)
+        else not g.off_izero and insv_zero_chain(g, i, true):
+            zero_fill(g, m, sz)
         end
     end
-    store_field(g, mem_add(m, g.i_d[i] as int), g.i_b[i], g.i_x[i])
+    if not g.izero[i]:
+        store_field(g, mem_add(m, g.i_d[i] as int), g.i_b[i], g.i_x[i])
+    end
     if r >= 0:
         g.vak[r] = ak
         g.var_[r] = base

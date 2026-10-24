@@ -7,6 +7,7 @@ const INL_FRAME_MAX := 512
 const INL_ONE_MAX := 300
 const INL_UNR_MAX := 320
 const INL_SITE_MAX := 48
+const INL_TINY := 10
 const INL_SLOT_BONUS := 16
 const INL_MEMOP_BONUS := 6
 const INL_CONST_BONUS := 6
@@ -91,9 +92,12 @@ end
 
 func inline_ok_fn(g &: Ng, cost: int): int:
     if g.f_noinline or g.f_noret:
+        if g.inl_trace:
+            printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " noinline"
+        end
         ret 0 - 1
     end
-    mut lim := INL_MAX
+    mut lim := g.inl_max > 0 ? g.inl_max : INL_MAX
     if g.f_always:
         lim = INL_ALWAYS_MAX
     end
@@ -113,12 +117,18 @@ func inline_ok_fn(g &: Ng, cost: int): int:
     mut need := 0
     if cost > lim:
         if g.off_isite or cost > lim + INL_SITE_MAX:
+            if g.inl_trace:
+                printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " cost " + cost + " limit " + lim
+            end
             ret 0 - 1
         end
         need = cost - lim
     end
     each fl in g.f_argf:
         if (fl & IF_BYVAL) != 0:
+            if g.inl_trace:
+                printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " byval"
+            end
             ret 0 - 1
         end
     end
@@ -129,6 +139,9 @@ func inline_ok_fn(g &: Ng, cost: int): int:
             if g.i_op[i] == OP_ALLOCA:
                 frame += tsize(g, g.i_x[i]) * (g.i_d[i] < (1 as i64) ? 1 : g.i_d[i] as int)
                 if frame > INL_FRAME_MAX:
+                    if g.inl_trace:
+                        printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " frame"
+                    end
                     ret 0 - 1
                 end
             end
@@ -502,12 +515,18 @@ func call_inlinable(g &: Ng, i: int, grown: int): int:
     end
     e := ic_lookup(g, s)
     if e < 0:
+        if g.inl_trace:
+            printerrln "inline: uncached " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym)
+        end
         ret 0 - 1
     end
     if g.ic.e_rec[e] and s != g.f_sym:
         ret 0 - 1
     end
-    if grown + g.ic.e_cost[e] > INL_GROW:
+    if grown + g.ic.e_cost[e] > INL_GROW and (g.off_tiny or g.ic.e_cost[e] > INL_TINY):
+        if g.inl_trace:
+            printerrln "inline: grown " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym)
+        end
         ret 0 - 1
     end
     if (g.i_f[i] & IF_VARARG) != 0 or g.i_pcount[i] != g.ic.e_na[e]:
@@ -519,6 +538,9 @@ func call_inlinable(g &: Ng, i: int, grown: int): int:
         end
     end
     if g.ic.e_need[e] > 0 and (g.ic.e_rec[e] or site_bonus(g, i, e) < g.ic.e_need[e]):
+        if g.inl_trace:
+            printerrln "inline: need " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym) + " need " + g.ic.e_need[e] + " bonus " + site_bonus(g, i, e)
+        end
         ret 0 - 1
     end
     ret e
@@ -542,8 +564,32 @@ func arg_memops(g &: Ng, av: int): int:
     ret n
 end
 
+func agg_res_fields_only(g &: Ng, c: int): bool:
+    r := g.i_res[c]
+    if r < 0 or not is_agg(g, g.v_ty[r]) or tsize(g, g.v_ty[r]) <= 16:
+        ret false
+    end
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if i != c and uses_val(g, i, r):
+                if g.i_op[i] != OP_EXTV or g.i_a[i] != r:
+                    ret false
+                end
+                n += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n > 0
+end
+
 func site_bonus(g &: Ng, c: int, e: int): int:
     mut bonus := 0
+    if not g.off_aggres and agg_res_fields_only(g, c):
+        bonus += 16 + tsize(g, g.v_ty[g.i_res[c]]) / 8
+    end
     repeat g.i_pcount[c] in k:
         v := g.pool[g.i_ps[c] + 3 * k]
         if v >= 0 and v < g.v_kind.len():

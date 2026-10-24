@@ -116,6 +116,63 @@ func add_reassoc(g &: Ng, i: int): bool:
     ret true
 end
 
+func chain_user(g &: Ng, r: int): bool:
+    if r < 0 or not one_use(g, r):
+        ret false
+    end
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if g.i_a[j] == r and (g.i_op[j] == OP_ADD or g.i_op[j] == OP_MUL) and is_cint(g, g.i_b[j]):
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func mul_reassoc(g &: Ng, i: int): bool:
+    if g.off_mreas or g.i_op[i] != OP_MUL or not is_cint(g, g.i_b[i]) or is_vec(g, g.i_ty[i]) or g.t_kind[g.i_ty[i]] != TK_INT:
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS or not one_use(g, a):
+        ret false
+    end
+    d := g.v_def[a]
+    t := g.i_ty[i]
+    if g.i_ty[d] != t or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    c2 := g.v_i[g.i_b[i]]
+    if g.i_op[d] == OP_MUL:
+        g.i_a[i] = g.i_a[d]
+        g.i_b[i] = cval(g, t, g.v_i[g.i_b[d]] * c2)
+        g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
+        ret true
+    end
+    if g.i_op[d] != OP_ADD and g.i_op[d] != OP_SUB:
+        ret false
+    end
+    x := g.i_a[d]
+    inner_mul := x >= 0 and g.v_kind[x] == VK_INS and g.i_op[g.v_def[x]] == OP_MUL and is_cint(g, g.i_b[g.v_def[x]])
+    if not inner_mul and not chain_user(g, g.i_res[i]):
+        ret false
+    end
+    c1 := g.i_op[d] == OP_ADD ? g.v_i[g.i_b[d]] : 0 - g.v_i[g.i_b[d]]
+    m := ins_new(g, OP_MUL, t)
+    g.i_a[m] = g.i_a[d]
+    g.i_b[m] = cval(g, t, c2)
+    mv := new_res(g, m)
+    ins_before(g, i, m)
+    g.i_op[i] = OP_ADD
+    g.i_a[i] = mv
+    g.i_b[i] = cval(g, t, c1 * c2)
+    g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
+    ret true
+end
+
 func fold_bin(g &: Ng, i: int): bool:
     op := g.i_op[i]
     t := g.i_ty[i]
@@ -524,6 +581,42 @@ func agg_leaves(g &: Ng, t: int, base: i64, offs &: Vector<i64>, tys &: Vector<i
     offs.push(base)
     tys.push(t)
     ret true
+end
+
+func fold_insv_zero(g &: Ng, i: int): bool:
+    if g.off_zins or g.i_op[i] != OP_INSV or g.i_res[i] < 0:
+        ret false
+    end
+    v := g.i_b[i]
+    if v < 0 or not (g.v_kind[v] == VK_ZERO or (g.v_kind[v] == VK_INT and g.v_i[v] == (0 as i64))) or is_flt(g, g.i_x[i]):
+        ret false
+    end
+    lo := g.i_d[i]
+    hi := lo + (tsize(g, g.i_x[i]) as i64)
+    mut x := g.i_a[i]
+    repeat 512:
+        if x < 0:
+            ret false
+        end
+        if g.v_kind[x] == VK_ZERO:
+            if g.inl_trace:
+                printerrln "zins " + tab_str(g.syms, g.f_sym)
+            end
+            replace_res(g, i, g.i_a[i])
+            ret true
+        end
+        if g.v_kind[x] != VK_INS or g.i_op[g.v_def[x]] != OP_INSV:
+            ret false
+        end
+        d := g.v_def[x]
+        l2 := g.i_d[d]
+        h2 := l2 + (tsize(g, g.i_x[d]) as i64)
+        if l2 < hi and lo < h2:
+            ret false
+        end
+        x = g.i_a[d]
+    end
+    ret false
 end
 
 func fold_insv_rebuild(g &: Ng, i: int): bool:
@@ -1577,6 +1670,8 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                     g.i_f[i] = g.i_f[i] & (0 - 1 - IF_NSW)
                 else op == OP_ADD or op == OP_SUB:
                     ch = add_reassoc(g, i)
+                else op == OP_MUL:
+                    ch = mul_reassoc(g, i)
                 else (op == OP_XOR or op == OP_OR) and not g.off_bits:
                     ch = bit_simplify(g, i)
                 end
@@ -1615,7 +1710,7 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             else op == OP_EXTV:
                 ch = fold_extv(g, i)
             else op == OP_INSV:
-                ch = fold_insv_rebuild(g, i)
+                ch = fold_insv_zero(g, i) or fold_insv_rebuild(g, i)
             else op == OP_FDIV:
                 ch = fdiv_pow2(g, i)
             else op == OP_FMUL:
@@ -2802,6 +2897,7 @@ func opt_rounds(g &: Ng):
 end
 
 func optimize(g &: Ng):
+    g.want_licm = false
     if not g.off_swt:
         mut ns := 0
         until ns < 8 and switch_tables(g):
@@ -2995,6 +3091,13 @@ func optimize(g &: Ng):
                 build_cfg(g)
                 simplify_phis(g)
             end
+        end
+    end
+    if g.want_licm and not g.off_licm:
+        g.want_licm = false
+        if licm(g):
+            remap_all(g)
+            opt_rounds(g)
         end
     end
     if not g.off_mlp and merge_load_phis(g):

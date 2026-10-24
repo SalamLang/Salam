@@ -68,6 +68,7 @@ else:
         func shutdown(s: int, how: int): int
         func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
         func getsockname(s: int, addr: void*, addrlen: void*): int
+        func getpeername(s: int, addr: void*, addrlen: void*): int
         func fcntl(s: int, cmd: int, ...): int
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
@@ -233,6 +234,52 @@ func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
     end
 end
 
+func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis: int): Socket:
+    if SALAM_OS_WINDOWS:
+        ret _try_connect(sa, alen, fam, socktype)
+    else:
+        s := socket(fam, socktype, 0)
+        if s == 0 - 1:
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        sock := Socket { fd = s as i64, family = fam }
+        SetNonBlocking(sock, true)
+        if connect(s, sa, alen) != 0:
+            if not _wait_writable(s, millis):
+                close(s)
+                ret Socket { fd = 0 - 1, family = fam }
+            end
+            slot := mem.AllocateZeroed(136 as u64)
+            lenp := mem.AllocateZeroed(8 as u64)
+            (lenp as int*)[0] = 128
+            peer := getpeername(s, slot, lenp)
+            mem.Free(slot)
+            mem.Free(lenp)
+            if peer != 0:
+                close(s)
+                ret Socket { fd = 0 - 1, family = fam }
+            end
+        end
+        SetNonBlocking(sock, false)
+        _no_sigpipe(s as i64)
+        ret sock
+    end
+end
+
+func _wait_writable(fd: int, millis: int): bool:
+    if SALAM_OS_WINDOWS:
+        ret true
+    else:
+        p := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(p)
+        fdp := p as i32*
+        fdp[0] = fd
+        evp := ((p as i64) + 4) as i16*
+        evp[0] = 4 as i16
+        ret poll(p, 1 as usize, millis) > 0
+    end
+end
+
 func _resolve_all(host: str, port: int, addrs &: Vector<i64>, lens &: Vector<int>, fams &: Vector<int>):
     hints := mem.Allocate(48 as u64)
     defer mem.Free(hints)
@@ -311,6 +358,29 @@ end
 @fa "اتصال"
 pub func Connect(host: str, port: int): Socket:
     ret ConnectProto(host, port, SOCK_STREAM)
+end
+
+@en "ConnectTimeout"
+@fa "اتصال با مهلت"
+pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
+    if millis <= 0 or SALAM_OS_WINDOWS:
+        ret Connect(host, port)
+    end
+    mut addrs := Vector {} as Vector<i64>
+    mut lens := Vector {} as Vector<int>
+    mut fams := Vector {} as Vector<int>
+    _resolve_all(host, port, addrs, lens, fams)
+    mut out := Socket { fd = 0 - 1, family = AF_INET }
+    repeat addrs.len() in i:
+        if out.fd < 0:
+            out = _try_connect_timeout(addrs.get(i) as void*, lens.get(i), fams.get(i), SOCK_STREAM, millis)
+        end
+        mem.Free(addrs.get(i) as void*)
+    end
+    addrs.free()
+    lens.free()
+    fams.free()
+    ret out
 end
 
 @en "ConnectProto"

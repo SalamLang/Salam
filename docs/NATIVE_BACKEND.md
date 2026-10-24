@@ -81,7 +81,8 @@ then goes through:
    copied straight back to where it came from, with no other memory access in
    between, becomes stores into the original. Below the size limit, a call
    may still be inlined when its arguments make it cheaper: each pointer to
-   a scalar local of the caller (an `i &: int` parameter) and each constant
+   a scalar local of the caller (an `i &: int` parameter), more for every
+   load and store the callee makes through it, and each constant
    argument earns a bonus (not for recursive callees, where inlining the
    first call only grows the caller), since inlining turns the first into a register
    and folds the second. `prim_fold(s, i)` in a scanning loop is the usual
@@ -102,7 +103,11 @@ then goes through:
    remainder become unsigned when the dividend is provably non-negative,
    `sext(x + k)` with a no-overflow add becomes `sext(x) + k` so the constant
    lands in the address displacement, and
-   `x / 2^k` becomes a shift under an `x % 2^k == 0` guard.
+   `x / 2^k` becomes a shift under an `x % 2^k == 0` guard. Two bounds on
+   the same value (`c >= 97 and c <= 122`, as a branch pair or an `and`)
+   become one unsigned compare of `c - 97`, and a sign-extended byte that is
+   corrected with `+ 256` when negative (`ByteAt`) becomes a zero-extending
+   load.
 6. Block merging and jump threading, which turns short-circuit `and`/`or`
    chains into direct branches. A block that only compares a phi with a
    constant and branches is bypassed by every predecessor that feeds the phi
@@ -117,7 +122,10 @@ then goes through:
    join (`if pa <= pb and pa <= pc`) first becomes one branch on the `and`
    (or `or`) of both conditions, so the PNG Paeth predictor turns into two
    selects. A select between two adds that share an operand becomes one add
-   of a select (`c ? s + a : s + b` is `s + (c ? a : b)`).
+   of a select (`c ? s + a : s + b` is `s + (c ? a : b)`). When both arms
+   of a branch end in a load that only feeds the join, the load moves below
+   the join on a phi of the two addresses (picking the English or Persian
+   keyword table, then one load).
 8. Full unrolling of loops with a constant trip count and a small body. The
    counter may step by adding, multiplying, shifting or dividing, so a square
    and multiply loop over a constant exponent unrolls too. A loop of any depth
@@ -233,7 +241,10 @@ then goes through:
     math library), and `malloc`/`calloc`, do not invalidate loads, so a
     vector's data pointer stays in a register across a `strcmp` loop. Two
     such calls with the same arguments and no write between them are one
-    call, so `strlen(s)` computed twice runs once. A load
+    call, so `strlen(s)` computed twice runs once. Known values survive a
+    join when no block between it and its dominator writes memory and that
+    region has no loop (or when the function writes no memory at all), so
+    `L.pos` read before an `if` is not read again after it. A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
     register across its flush branch. When exactly one predecessor lacks the
@@ -352,7 +363,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

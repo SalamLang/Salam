@@ -7,7 +7,8 @@ const INL_FRAME_MAX := 512
 const INL_ONE_MAX := 300
 const INL_UNR_MAX := 320
 const INL_SITE_MAX := 48
-const INL_SLOT_BONUS := 24
+const INL_SLOT_BONUS := 16
+const INL_MEMOP_BONUS := 6
 const INL_CONST_BONUS := 6
 
 pub struct Ic:
@@ -21,6 +22,8 @@ pub struct Ic:
     pub e_cost: Vector<int> = Vector {}
     pub e_need: Vector<int> = Vector {}
     pub e_na: Vector<int> = Vector {}
+    pub e_am0: Vector<int> = Vector {}
+    pub am: Vector<int> = Vector {}
     pub e_rec: Vector<bool> = Vector {}
     pub vk: Vector<int> = Vector {}
     pub vt: Vector<int> = Vector {}
@@ -273,6 +276,10 @@ func cache_function(g &: Ng):
     g.ic.e_cost.push(cost)
     g.ic.e_need.push(need)
     g.ic.e_na.push(g.f_args.len())
+    g.ic.e_am0.push(g.ic.am.len())
+    each av in g.f_args:
+        g.ic.am.push(arg_memops(g, av))
+    end
     g.ic.e_rec.push(calls_self(g))
 end
 
@@ -511,13 +518,31 @@ func call_inlinable(g &: Ng, i: int, grown: int): int:
             ret 0 - 1
         end
     end
-    if g.ic.e_need[e] > 0 and (g.ic.e_rec[e] or site_bonus(g, i) < g.ic.e_need[e]):
+    if g.ic.e_need[e] > 0 and (g.ic.e_rec[e] or site_bonus(g, i, e) < g.ic.e_need[e]):
         ret 0 - 1
     end
     ret e
 end
 
-func site_bonus(g &: Ng, c: int): int:
+func arg_memops(g &: Ng, av: int): int:
+    if av < 0 or g.v_ty[av] != T_PTR:
+        ret 0
+    end
+    mut n := 0
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if (op == OP_LOAD and g.i_a[i] == av) or (op == OP_STORE and g.i_b[i] == av and g.i_a[i] != av):
+                n += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n
+end
+
+func site_bonus(g &: Ng, c: int, e: int): int:
     mut bonus := 0
     repeat g.i_pcount[c] in k:
         v := g.pool[g.i_ps[c] + 3 * k]
@@ -526,7 +551,7 @@ func site_bonus(g &: Ng, c: int): int:
             if kd == VK_INS:
                 d := g.v_def[v]
                 if d >= 0 and g.i_op[d] == OP_ALLOCA and not is_agg(g, g.i_x[d]) and g.i_d[d] <= (1 as i64):
-                    bonus += INL_SLOT_BONUS
+                    bonus += INL_SLOT_BONUS + INL_MEMOP_BONUS * g.ic.am[g.ic.e_am0[e] + k]
                 end
             else kd == VK_INT or kd == VK_ZERO:
                 bonus += INL_CONST_BONUS

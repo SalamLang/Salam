@@ -450,6 +450,41 @@ func call_key(g &: Ng, t &: Gvn, i: int, key &: i64): int:
     ret 0 - 10 - 2 * g.v_def[fv] - (n - 1)
 end
 
+func clean_join(g &: Ng, b: int, d: int, bwr: Vector<bool>, seen &: Vector<int>, stk &: Vector<int>): bool:
+    seen.clear()
+    stk.clear()
+    repeat g.b_npred[b] in k:
+        stk.push(g.b_pred[g.b_ps[b] + k])
+    end
+    until stk.len() > 0:
+        x := stk.pop()
+        if x == d:
+            continue
+        end
+        mut dup := false
+        each s0 in seen:
+            if s0 == x:
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        if seen.len() >= 32 or bwr[x]:
+            ret false
+        end
+        seen.push(x)
+        repeat g.b_npred[x] in k2:
+            px := g.b_pred[g.b_ps[x] + k2]
+            if g.b_order[px] >= g.b_order[x]:
+                ret false
+            end
+            stk.push(px)
+        end
+    end
+    ret true
+end
+
 func gvn(g &: Ng): bool:
     mut t := Gvn {}
     mut cap := 64
@@ -483,6 +518,23 @@ func gvn(g &: Ng): bool:
             t.pa_ep.push(0)
         end
     end
+    mut nowr := not g.off_nowr
+    mut bwr := Vector {} as Vector<bool>
+    repeat g.b_first.len():
+        bwr.push(false)
+    end
+    each b9 in g.b_rpo:
+        mut i9 := g.b_first[b9]
+        until i9 >= 0:
+            if mem_write(g, i9):
+                nowr = false
+                bwr[b9] = true
+            end
+            i9 = g.i_next[i9]
+        end
+    end
+    mut seenb := Vector {} as Vector<int>
+    mut stkb := Vector {} as Vector<int>
     mut next_ep := 1
     t.wb.push(0)
     t.wm.push(0 - 1)
@@ -516,7 +568,7 @@ func gvn(g &: Ng): bool:
         mut epd := 0
         mut eps := 0
         idm := b > 0 ? g.b_idom[b] : 0 - 1
-        if idm >= 0 and g.b_npred[b] == 1 and g.b_pred[g.b_ps[b]] == idm and t.ep_out[idm] >= 0:
+        if idm >= 0 and t.ep_out[idm] >= 0 and (nowr or (g.b_npred[b] == 1 and g.b_pred[g.b_ps[b]] == idm) or (not g.off_nowr and clean_join(g, b, idm, bwr, seenb, stkb))):
             ep = t.ep_out[idm]
             epp = t.ep_out_p[idm]
             epd = t.ep_out_d[idm]
@@ -718,5 +770,8 @@ func gvn(g &: Ng): bool:
     t.ld_mark.free()
     t.pa_ep.free()
     t.pb_out.free()
+    bwr.free()
+    seenb.free()
+    stkb.free()
     ret changed
 end

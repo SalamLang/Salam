@@ -431,10 +431,176 @@ func mo_place_class(l &: Nl, t &: Mo, k: int, pos &: i64):
 end
 
 func mo_ncmds_size(l &: Nl, t &: Mo, nsect: int): i64:
-    _l := l.mach
     _t := t.base
-    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16
+    mut dl := 0
+    each dn in l.dy_name:
+        dl += 24 + ((str.Len(dn) + 8) / 8) * 8
+    end
+    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl
 end
+
+func mo_dylib_list(l &: Nl): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push("/usr/lib/libSystem.B.dylib")
+    each dn in l.dy_name:
+        mut seen := false
+        each e in v:
+            if str.Equals(e, dn):
+                seen = true
+            end
+        end
+        if not seen:
+            v.push(dn)
+        end
+    end
+    ret v
+end
+
+func mo_ordinal(l &: Nl, g: int, dl: Vector<str>): int:
+    if not l.dy_sym.has(l.g_name[g]):
+        ret 1
+    end
+    nm := l.dy_name.get(l.dy_sym.get(l.g_name[g]))
+    repeat dl.len() in i:
+        if str.Equals(dl.get(i), nm):
+            ret i + 1
+        end
+    end
+    ret 1
+end
+
+func is_tbd(p: u8*, n: i64): bool:
+    ret n >= (12 as i64) and p[0] == (45 as u8) and p[1] == (45 as u8) and p[2] == (45 as u8) and p[4] == (33 as u8) and p[5] == (116 as u8)
+end
+
+func tbd_word(p: u8*, at &: i64, n: i64): str:
+    until at < n and (p[at] == (32 as u8) or p[at] == (39 as u8) or p[at] == (34 as u8) or p[at] == (44 as u8) or p[at] == (10 as u8) or p[at] == (13 as u8)):
+        at = at + (1 as i64)
+    end
+    mut b := str.NewBuilder()
+    until at < n and p[at] != (39 as u8) and p[at] != (34 as u8) and p[at] != (44 as u8) and p[at] != (93 as u8) and p[at] != (10 as u8) and p[at] != (32 as u8):
+        str.BufAppendChar(b, p[at] as int)
+        at = at + (1 as i64)
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func tbd_starts(p: u8*, at: i64, n: i64, w: str): bool:
+    wp := (w as void*) as u8*
+    k := str.Len(w)
+    if at + (k as i64) > n:
+        ret false
+    end
+    repeat k in i:
+        if p[at + (i as i64)] != wp[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func add_tbd(l &: Nl, f: int):
+    p := fptr(l, f)
+    n := l.f_size[f]
+    l.macho = true
+    mut idx := 0 - 1
+    mut in_exp := false
+    mut at := 0 as i64
+    until at < n:
+        mut ls := at
+        until ls < n and (p[ls] == (32 as u8)):
+            ls = ls + (1 as i64)
+        end
+        if tbd_starts(p, ls, n, "install-name:") and idx < 0:
+            mut q := ls + (13 as i64)
+            nm := tbd_word(p, q, n)
+            idx = l.dy_name.len()
+            l.dy_name.push(nm)
+        else tbd_starts(p, ls, n, "exports:") or tbd_starts(p, ls, n, "reexports:"):
+            in_exp = true
+        else tbd_starts(p, ls, n, "undefineds:"):
+            in_exp = false
+        else in_exp and idx >= 0 and (tbd_starts(p, ls, n, "symbols:") or tbd_starts(p, ls, n, "weak-symbols:") or tbd_starts(p, ls, n, "- symbols:")):
+            mut q2 := ls
+            until q2 < n and p[q2] != (91 as u8):
+                q2 = q2 + (1 as i64)
+            end
+            q2 = q2 + (1 as i64)
+            until q2 < n and p[q2] != (93 as u8):
+                w := tbd_word(p, q2, n)
+                if str.Len(w) > 0:
+                    l.dy_sym.put(name_id(l, w), idx)
+                end
+                until q2 < n and (p[q2] == (44 as u8) or p[q2] == (32 as u8) or p[q2] == (10 as u8) or p[q2] == (13 as u8) or p[q2] == (39 as u8)):
+                    q2 = q2 + (1 as i64)
+                end
+            end
+            at = q2
+        end
+        until at < n and p[at] != (10 as u8):
+            at = at + (1 as i64)
+        end
+        at = at + (1 as i64)
+    end
+end
+
+func trie_walk(l &: Nl, p: u8*, start: i64, node: i64, prefix: str, idx: int, depth: int):
+    if depth > 128:
+        ret
+    end
+    mut at := start + node
+    tsz := ehh_uleb(p, at)
+    if tsz > (0 as i64):
+        l.dy_sym.put(name_id(l, prefix), idx)
+    end
+    at = at + tsz
+    nkids := p[at] as int
+    at = at + (1 as i64)
+    repeat nkids:
+        mut b := str.NewBuilder()
+        str.BufAppend(b, prefix)
+        until p[at] != (0 as u8):
+            str.BufAppendChar(b, p[at] as int)
+            at = at + (1 as i64)
+        end
+        at = at + (1 as i64)
+        child := ehh_uleb(p, at)
+        edge := str.BufStr(b)
+        str.BufFree(b)
+        trie_walk(l, p, start, child, edge, idx, depth + 1)
+    end
+end
+
+func add_dylib(l &: Nl, f: int, base: i64):
+    p := fptr(l, f)
+    l.macho = true
+    ncmds := rd32(p, base + (16 as i64)) as int
+    mut lc := base + (32 as i64)
+    mut idx := 0 - 1
+    mut eoff := 0 as i64
+    mut esz := 0 as i64
+    repeat ncmds:
+        cmd := rd32(p, lc)
+        csz := rd32(p, lc + (4 as i64))
+        if cmd == (0xD as i64):
+            idx = l.dy_name.len()
+            l.dy_name.push(mstr(p, lc + rd32(p, lc + (8 as i64)), (csz - rd32(p, lc + (8 as i64))) as int))
+        else cmd == (0x80000022 as i64) or cmd == (0x22 as i64):
+            eoff = rd32(p, lc + (40 as i64))
+            esz = rd32(p, lc + (44 as i64))
+        else cmd == (0x80000033 as i64):
+            eoff = rd32(p, lc + (8 as i64))
+            esz = rd32(p, lc + (12 as i64))
+        end
+        lc = lc + csz
+    end
+    if idx >= 0 and esz > (0 as i64):
+        trie_walk(l, p, base + eoff, 0 as i64, "", idx, 0)
+    end
+end
+
 
 func macho_link(l &: Nl, out: str):
     mut t := Mo {}
@@ -816,12 +982,19 @@ func mo_rebase_ops(t &: Mo): Vector<u8>:
 end
 
 func mo_bind_ops(l &: Nl, t &: Mo): Vector<u8>:
+    dl := mo_dylib_list(l)
     mut o := Vector {} as Vector<u8>
     repeat t.bind_at.len() in i:
         mut sg := 0
         mut off := 0 as i64
         mo_seg_of(t, t.bind_at[i], sg, off)
-        o.push(0x11 as u8)
+        ordn := mo_ordinal(l, t.bind_g[i], dl)
+        if ordn < 16:
+            o.push((0x10 | ordn) as u8)
+        else:
+            o.push(0x20 as u8)
+            uleb(o, ordn as i64)
+        end
         o.push(0x40 as u8)
         nm := name_of(l, l.g_name[t.bind_g[i]])
         np := (nm as void*) as u8*
@@ -901,6 +1074,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     mut strs := Vector {} as Vector<u8>
     strs.push(32 as u8)
     strs.push(0 as u8)
+    dyl := mo_dylib_list(l)
     mut syms := Vector {} as Vector<u8>
     mut nsym := 0
     mut nimp := 0
@@ -928,7 +1102,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
             tb_le(syms, tb_name(l, strs, l.g_name[g]), 4)
             syms.push((def ? 0x0f : 0x01) as u8)
             syms.push((def ? mo_secno(l, t, l.g_sec[g]) : 0) as u8)
-            tb_le(syms, (def ? 0 : 0x100) as i64, 2)
+            tb_le(syms, (def ? 0 : (mo_ordinal(l, g, dyl) << 8)) as i64, 2)
             tb_le(syms, def ? mo_sym_g(l, g) : (0 as i64), 8)
             nsym += 1
             if imp:
@@ -1114,17 +1288,20 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, mo_sym_g(l, ent) - t.base, 8)
     tb_le(h, 0 as i64, 8)
     ncmd += 1
-    tb_le(h, 0x0C as i64, 4)
-    tb_le(h, 56 as i64, 4)
-    tb_le(h, 24 as i64, 4)
-    tb_le(h, 2 as i64, 4)
-    tb_le(h, 0x05270000 as i64, 4)
-    tb_le(h, 0x00010000 as i64, 4)
-    tb_cstr(h, "/usr/lib/libSystem.B.dylib")
-    until (h.len() % 8) != 0:
-        h.push(0 as u8)
+    each dname in dyl:
+        dsz := 24 + ((str.Len(dname) + 8) / 8) * 8
+        tb_le(h, 0x0C as i64, 4)
+        tb_le(h, dsz as i64, 4)
+        tb_le(h, 24 as i64, 4)
+        tb_le(h, 2 as i64, 4)
+        tb_le(h, (str.Equals(dname, "/usr/lib/libSystem.B.dylib") ? 0x05270000 : 0x00010000) as i64, 4)
+        tb_le(h, 0x00010000 as i64, 4)
+        tb_cstr(h, dname)
+        until (h.len() % 8) != 0:
+            h.push(0 as u8)
+        end
+        ncmd += 1
     end
-    ncmd += 1
     tb_le(h, 0x29 as i64, 4)
     tb_le(h, 16 as i64, 4)
     tb_le(h, dic_off, 4)

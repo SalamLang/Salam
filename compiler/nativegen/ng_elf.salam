@@ -85,6 +85,12 @@ func elf_rtype(g &: Ng, t: int): int:
         end
         ret 0
     end
+    if g.arch == NG_ARCH_X86:
+        if t == R_ABS32: ret 1 end
+        if t == R_PC32: ret 2 end
+        if t == R_PLT32: ret 4 end
+        ret 0
+    end
     if t == R_ABS64: ret 1 end
     if t == R_PC32: ret 2 end
     if t == R_PLT32: ret 4 end
@@ -117,6 +123,12 @@ func emit_sym_for(g &: Ng, s: int): bool:
     ret g.sy_def[s] or g.sy_used[s]
 end
 
+func elf_machine(g &: Ng): int:
+    if g.arch == NG_ARCH_A64: ret 183 end
+    if g.arch == NG_ARCH_X86: ret 3 end
+    ret 62
+end
+
 func elf_secs(g &: Ng): Vector<int>:
     mut v := Vector {} as Vector<int>
     v.push(SEC_TEXT)
@@ -126,10 +138,10 @@ func elf_secs(g &: Ng): Vector<int>:
     v.push(SEC_BSS)
     v.push(SEC_INIT)
     v.push(SEC_FINI)
-    if g.s_eh.len() > 0:
+    if g.s_eh.len() > 0 and g.wsz == 8:
         v.push(SEC_EHFRAME)
     end
-    if g.s_dinfo.len() > 0:
+    if g.s_dinfo.len() > 0 and g.wsz == 8:
         v.push(SEC_DBGINFO)
         v.push(SEC_DBGABBREV)
         v.push(SEC_DBGLINE)
@@ -172,7 +184,20 @@ func elf_flags(sec: int): int:
     ret 3
 end
 
-func sh_entry(o &: Ob, name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, al: int, ent: int):
+func sh_entry(o &: Ob, x32: bool, name: int, typ: int, flags: int, off: int, size: int, link: int, info: int, al: int, ent: int):
+    if x32:
+        ob_le(o, name as i64, 4)
+        ob_le(o, typ as i64, 4)
+        ob_le(o, flags as i64, 4)
+        ob_le(o, 0 as i64, 4)
+        ob_le(o, off as i64, 4)
+        ob_le(o, size as i64, 4)
+        ob_le(o, link as i64, 4)
+        ob_le(o, info as i64, 4)
+        ob_le(o, al as i64, 4)
+        ob_le(o, ent as i64, 4)
+        ret
+    end
     ob_le(o, name as i64, 4)
     ob_le(o, typ as i64, 4)
     ob_le(o, flags as i64, 8)
@@ -185,7 +210,40 @@ func sh_entry(o &: Ob, name: int, typ: int, flags: int, off: int, size: int, lin
     ob_le(o, ent as i64, 8)
 end
 
+func elf_sym(o &: Ob, x32: bool, name: int, info: int, shndx: int, value: i64, size: i64):
+    ob_le(o, name as i64, 4)
+    if x32:
+        ob_le(o, value, 4)
+        ob_le(o, size, 4)
+        ob_u8(o, info)
+        ob_u8(o, 0)
+        ob_le(o, shndx as i64, 2)
+        ret
+    end
+    ob_u8(o, info)
+    ob_u8(o, 0)
+    ob_le(o, shndx as i64, 2)
+    ob_le(o, value, 8)
+    ob_le(o, size, 8)
+end
+
+func patch_add32(b &: Vector<u8>, at: int, v: i64):
+    mut acc := 0 as i64
+    repeat 4 in k:
+        acc = acc | ((b[at + k] as i64) << ((8 * k) as i64))
+    end
+    mut x := ((acc + v) as u64) & (0xFFFFFFFF as u64)
+    repeat 4 in k2:
+        b[at + k2] = (x & (255 as u64)) as u8
+        x = x >> (8 as u64)
+    end
+end
+
 func write_elf(g &: Ng, path: str): bool:
+    x32 := g.wsz == 4
+    se := x32 ? 16 : 24
+    re := x32 ? 8 : 24
+    pw := x32 ? 4 : 8
     secs := elf_secs(g)
     nds := secs.len()
     mut shidx := Vector {} as Vector<int>
@@ -203,17 +261,12 @@ func write_elf(g &: Ng, path: str): bool:
     mut strtab := Ob {}
     ob_u8(strtab, 0)
     mut symtab := Ob {}
-    repeat 24:
+    repeat se:
         ob_u8(symtab, 0)
     end
     mut nloc := 1
     repeat nds in sx:
-        ob_le(symtab, 0 as i64, 4)
-        ob_u8(symtab, 3)
-        ob_u8(symtab, 0)
-        ob_le(symtab, (sx + 1) as i64, 2)
-        ob_le(symtab, 0 as i64, 8)
-        ob_le(symtab, 0 as i64, 8)
+        elf_sym(symtab, x32, 0, 3, sx + 1, 0 as i64, 0 as i64)
         nloc += 1
     end
     repeat 2 in pass:
@@ -225,8 +278,8 @@ func write_elf(g &: Ng, path: str): bool:
             if (pass == 0) != local:
                 continue
             end
-            elf_idx[s] = symtab.b.len() / 24
-            ob_le(symtab, strtab.b.len() as i64, 4)
+            elf_idx[s] = symtab.b.len() / se
+            sname := strtab.b.len()
             ob_sym_name(g, strtab, s)
             mut typ := 0
             if g.sy_kind[s] == SY_FUNC:
@@ -235,15 +288,11 @@ func write_elf(g &: Ng, path: str): bool:
                 typ = 1
             end
             bind := local ? 0 : 1
-            ob_u8(symtab, (bind << 4) | typ)
-            ob_u8(symtab, 0)
             mut shndx := 0
             if g.sy_def[s]:
                 shndx = shidx[g.sy_sec[s]]
             end
-            ob_le(symtab, shndx as i64, 2)
-            ob_le(symtab, g.sy_off[s] as i64, 8)
-            ob_le(symtab, g.sy_size[s] as i64, 8)
+            elf_sym(symtab, x32, sname, (bind << 4) | typ, shndx, g.sy_off[s] as i64, g.sy_size[s] as i64)
             if pass == 0:
                 nloc += 1
             end
@@ -263,9 +312,16 @@ func write_elf(g &: Ng, path: str): bool:
                     idx = shidx[g.sy_sec[s2]]
                     addend = addend + (g.sy_off[s2] as i64)
                 end
-                ob_le(rbufs, g.r_off[ri] as i64, 8)
-                ob_le(rbufs, ((idx as i64) << (32 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 8)
-                ob_le(rbufs, addend, 8)
+                if x32:
+                    mut sb := sec_bytes(g, rs)
+                    patch_add32(sb, g.r_off[ri], addend)
+                    ob_le(rbufs, g.r_off[ri] as i64, 4)
+                    ob_le(rbufs, ((idx as i64) << (8 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 4)
+                else:
+                    ob_le(rbufs, g.r_off[ri] as i64, 8)
+                    ob_le(rbufs, ((idx as i64) << (32 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 8)
+                    ob_le(rbufs, addend, 8)
+                end
             end
         end
         rsize.push(rbufs.b.len() - rstart[rstart.len() - 1])
@@ -280,7 +336,7 @@ func write_elf(g &: Ng, path: str): bool:
     end
     each sc2 in secs:
         nm_relsec.push(shstr.b.len())
-        ob_str(shstr, ".rela" + elf_name(sc2))
+        ob_str(shstr, (x32 ? ".rel" : ".rela") + elf_name(sc2))
     end
     nm_sym := shstr.b.len()
     ob_str(shstr, ".symtab")
@@ -290,8 +346,10 @@ func write_elf(g &: Ng, path: str): bool:
     ob_str(shstr, ".shstrtab")
     nm_gnu := shstr.b.len()
     ob_str(shstr, ".note.GNU-stack")
+    eh := x32 ? 52 : 64
+    sh := x32 ? 40 : 64
     mut o := Ob {}
-    repeat 64:
+    repeat eh:
         ob_u8(o, 0)
     end
     mut offs := Vector {} as Vector<int>
@@ -320,7 +378,7 @@ func write_elf(g &: Ng, path: str): bool:
     ob_bytes(o, shstr.b)
     ob_pad(o, 8)
     sh_off := o.b.len()
-    repeat 64:
+    repeat sh:
         ob_u8(o, 0)
     end
     symtab_idx := 1 + 2 * nds
@@ -330,37 +388,46 @@ func write_elf(g &: Ng, path: str): bool:
         if sc3 == SEC_TEXT:
             al = al < 16 ? 16 : al
         else sc3 == SEC_INIT or sc3 == SEC_FINI or sc3 == SEC_EHFRAME:
-            al = 8
+            al = pw
         end
         if al < 1:
             al = 1
         end
-        ent := (sc3 == SEC_INIT or sc3 == SEC_FINI) ? 8 : 0
-        sh_entry(o, nm_data[q], elf_type(sc3), elf_flags(sc3), offs[q], sizes[q], 0, 0, al, ent)
+        ent := (sc3 == SEC_INIT or sc3 == SEC_FINI) ? pw : 0
+        sh_entry(o, x32, nm_data[q], elf_type(sc3), elf_flags(sc3), offs[q], sizes[q], 0, 0, al, ent)
     end
     repeat nds in q2:
-        sh_entry(o, nm_relsec[q2], 4, 0x40, rel_file_off + rstart[q2], rsize[q2], symtab_idx, q2 + 1, 8, 24)
+        sh_entry(o, x32, nm_relsec[q2], x32 ? 9 : 4, 0x40, rel_file_off + rstart[q2], rsize[q2], symtab_idx, q2 + 1, pw, re)
     end
-    sh_entry(o, nm_sym, 2, 0, sym_off, symtab.b.len(), symtab_idx + 1, nloc, 8, 24)
-    sh_entry(o, nm_str, 3, 0, str_off, strtab.b.len(), 0, 0, 1, 0)
-    sh_entry(o, nm_shstrtab, 3, 0, shstr_off, shstr.b.len(), 0, 0, 1, 0)
-    sh_entry(o, nm_gnu, 1, 0, shstr_off, 0, 0, 0, 1, 0)
+    sh_entry(o, x32, nm_sym, 2, 0, sym_off, symtab.b.len(), symtab_idx + 1, nloc, pw, se)
+    sh_entry(o, x32, nm_str, 3, 0, str_off, strtab.b.len(), 0, 0, 1, 0)
+    sh_entry(o, x32, nm_shstrtab, 3, 0, shstr_off, shstr.b.len(), 0, 0, 1, 0)
+    sh_entry(o, x32, nm_gnu, 1, 0, shstr_off, 0, 0, 0, 1, 0)
     nsec := symtab_idx + 4
     o.b[0] = 0x7F as u8
     o.b[1] = 0x45 as u8
     o.b[2] = 0x4C as u8
     o.b[3] = 0x46 as u8
-    o.b[4] = 2 as u8
+    o.b[4] = (x32 ? 1 : 2) as u8
     o.b[5] = 1 as u8
     o.b[6] = 1 as u8
     put_le(o, 16, 1 as i64, 2)
-    put_le(o, 18, (g.arch == NG_ARCH_A64 ? 183 : 62) as i64, 2)
+    put_le(o, 18, elf_machine(g) as i64, 2)
     put_le(o, 20, 1 as i64, 4)
-    put_le(o, 40, sh_off as i64, 8)
-    put_le(o, 52, 64 as i64, 2)
-    put_le(o, 58, 64 as i64, 2)
-    put_le(o, 60, nsec as i64, 2)
-    put_le(o, 62, (symtab_idx + 2) as i64, 2)
+    if x32:
+        put_le(o, 32, sh_off as i64, 4)
+        put_le(o, 36, g.elf_flags as i64, 4)
+        put_le(o, 40, 52 as i64, 2)
+        put_le(o, 46, 40 as i64, 2)
+        put_le(o, 48, nsec as i64, 2)
+        put_le(o, 50, (symtab_idx + 2) as i64, 2)
+    else:
+        put_le(o, 40, sh_off as i64, 8)
+        put_le(o, 52, 64 as i64, 2)
+        put_le(o, 58, 64 as i64, 2)
+        put_le(o, 60, nsec as i64, 2)
+        put_le(o, 62, (symtab_idx + 2) as i64, 2)
+    end
     ok := write_file(path, o)
     o.b.free()
     symtab.b.free()

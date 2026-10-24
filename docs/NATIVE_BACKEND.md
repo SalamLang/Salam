@@ -1,6 +1,6 @@
 # The native backend
 
-`--backend=native` turns a Salam program into x86-64 or AArch64 machine code without
+`--backend=native` turns a Salam program into x86-64, 32-bit x86 or AArch64 machine code without
 going through LLVM or a C compiler. It writes the object file itself (ELF on
 Linux, COFF on Windows, Mach-O on macOS), so the only outside tool left is the linker, and when
 the compiler has LLVM embedded even that runs in-process through lld.
@@ -11,6 +11,7 @@ salam run app.salam --backend=native
 salam build app.salam --backend=native --target=x86_64-w64-windows-gnu
 salam build app.salam --backend=native --target=x86_64-apple-macos
 salam build app.salam --backend=native --target=aarch64-linux-musl
+salam build app.salam --backend=native --target=i686-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
@@ -18,8 +19,9 @@ salam obj app.salam --backend=native                  # object file only
 
 Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
-Mach-O), AArch64 Linux (AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64
-variant, Mach-O). Any other `--target` is rejected
+Mach-O), 32-bit x86 Linux (i386 System V ABI, ELF32), AArch64 Linux
+(AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64 variant, Mach-O). Any other
+`--target` is rejected
 with a message that points at `--backend=llvm`.
 
 On macOS the code is the same as on Linux; only the object differs. Symbols
@@ -72,6 +74,38 @@ there are no unwind tables or DWARF, and in release builds an integer
 division by zero returns 0 instead of trapping, as ARM hardware does (debug
 builds check explicitly, as on every target).
 
+## 32-bit x86
+
+The `i686` targets reuse the x86-64 pipeline with three additions.
+
+- Before instruction selection, `ng_legal.salam` splits every 64-bit integer
+  into a pair of 32-bit halves: adds and subtracts carry through a compare,
+  shifts by a constant become two shifts and an `or`, compares test the high
+  halves first, loads and stores touch both words, and multiply, divide,
+  remainder, variable shifts and conversions between `i64` and floats call
+  the libgcc helpers (`__muldi3`, `__divdi3`, `__floatdidf`, ...). A call that
+  returns an `i64` gets its high half from `edx`. 64-bit atomics call small
+  `lock cmpxchg8b` routines the backend writes into the object itself.
+- Calls follow cdecl: every argument goes on the stack, floats come back in
+  `st0` and are moved to an SSE register right away, so everything after the
+  call uses SSE2 as on x86-64. SSE2 is therefore required (any x86 CPU since
+  2001).
+- The register allocator gets `eax`, `ecx`, `edx`, `ebx` and `ebp`, with
+  `esi`/`edi` as its spill scratch and `xmm0`-`xmm5` for floats. The encoder
+  drops REX prefixes, addresses globals with absolute 32-bit relocations, and
+  wraps a byte instruction whose operand sits in `ebp`, `esi` or `edi` (no
+  8-bit form on i386) in a pair of `xchg`s with a free low register.
+  Divisions by a constant use a 32-bit `mul` for the magic number.
+
+The object is ELF32 with `REL` relocations (addends stored in the code).
+Unwind tables, DWARF and the vectorizers are off on this target for now.
+Built for `i686-linux-musl` and run natively, the `basics`, `features`,
+`types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
+`interop` and `webframework` tests match their expected output except those
+that need `-D` flags, a database library or a trapping release-mode
+division, `types/size_type` (whose output assumes a 64-bit `usize`) and a UDP
+test that also fails when clang compiles the same IR.
+
 ## How it works
 
 The frontend is shared with the LLVM backend. `llvmgen` lowers the checked
@@ -99,6 +133,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
+| `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit x86 target                                                                                                          |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
 | `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |
@@ -572,7 +607,7 @@ Not there yet:
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
   There is no AVX code path.
-- x86-64 only. aarch64 would reuse everything up to instruction selection.
+- 32-bit ARM is not supported yet.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

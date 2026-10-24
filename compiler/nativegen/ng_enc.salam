@@ -75,11 +75,12 @@ func win_adj(g &: Ng): i64:
     if g.os != NG_OS_WINDOWS:
         ret 0
     end
-    ret 8 * ngp_count(g) + g.mc.frame_size - g.mc.win_fp
+    ret (g.arch == NG_ARCH_X86 ? 4 : 8) * ngp_count(g) + g.mc.frame_size - g.mc.win_fp
 end
 
 func fpo_base(g &: Ng): i64:
-    ret 8 * ngp_count(g) + g.mc.fpo_pad - 8
+    ws := g.arch == NG_ARCH_X86 ? 4 : 8
+    ret ws * ngp_count(g) + g.mc.fpo_pad - ws
 end
 
 func rm_of(g &: Ng, i: int): RM:
@@ -117,8 +118,9 @@ func enc(g &: Ng, e &: Enc, pfx: int, w: bool, opc: int, nopc: int, regf: int, r
         eb(e, 0x66)
     end
     rf := hw(regf)
+    x32 := g.arch == NG_ARCH_X86
     mut rex := 0
-    if w:
+    if w and not x32:
         rex = rex | 8
     end
     if rf >= 8:
@@ -144,7 +146,7 @@ func enc(g &: Ng, e &: Enc, pfx: int, w: bool, opc: int, nopc: int, regf: int, r
     if (byteop & 2) != 0 and regf >= 4 and regf <= 7:
         rex = rex | 64
     end
-    if rex != 0:
+    if rex != 0 and not x32:
         eb(e, 0x40 | (rex & 15))
     end
     if nopc >= 3:
@@ -157,6 +159,12 @@ func enc(g &: Ng, e &: Enc, pfx: int, w: bool, opc: int, nopc: int, regf: int, r
     r3 := rf & 7
     if not rm.mem:
         eb(e, 0xC0 | (r3 << 3) | (hw(rm.reg) & 7))
+        ret
+    end
+    if (rm.k == MK_RIP or rm.k == MK_GOT) and x32:
+        eb(e, (r3 << 3) | 5)
+        erel(e, rm.sym, R_ABS32, rm.d)
+        e32(e, 0 as i64)
         ret
     end
     if rm.k == MK_RIP or rm.k == MK_GOT:
@@ -216,6 +224,138 @@ func sse_pfx(sz: int): int:
     ret 0xF2
 end
 
+func x86_map(r: int): int:
+    if r == 10: ret 6 end
+    if r == 11: ret 7 end
+    if r == 30: ret 22 end
+    if r == 31: ret 23 end
+    ret r
+end
+
+func x86_prepass(g &: Ng):
+    n := g.mc.op.len()
+    repeat n in i:
+        g.mc.r0[i] = x86_map(g.mc.r0[i])
+        g.mc.r1[i] = x86_map(g.mc.r1[i])
+        if g.mc.mk[i] == MK_BI:
+            g.mc.mb[i] = x86_map(g.mc.mb[i])
+        end
+        g.mc.mi[i] = x86_map(g.mc.mi[i])
+        op := g.mc.op[i]
+        gp := op <= M_CMOV or (op >= M_XCHG and op <= M_LCMPXCHG) or op == M_ALU_MI or op == M_ALU_MR or op == M_LDGOT or op == M_MULHI or op == M_MOVQ_XG or op == M_MOVQ_GX
+        if g.mc.sz[i] == 8 and gp:
+            g.mc.sz[i] = 4
+        end
+        if (op == M_CVTSI2F or op == M_CVTF2SI) and g.mc.sz2[i] == 8:
+            g.mc.sz2[i] = 4
+        end
+        if op == M_MOVSX_RR and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_MOV_RR
+        else op == M_LDSX and g.mc.sz2[i] == 4:
+            g.mc.op[i] = M_LD
+        end
+    end
+    mut k := 0
+    until k < g.mc.callee_used.len():
+        g.mc.callee_used[k] = x86_map(g.mc.callee_used[k])
+        k += 1
+    end
+end
+
+func x86_byte_regs(g &: Ng, i: int, bad &: Vector<int>):
+    bad.clear()
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    mut rr := Vector {} as Vector<int>
+    defer rr.free()
+    if op == M_SETCC:
+        rr.push(r0)
+    else (op == M_MOVZX_RR or op == M_MOVSX_RR) and g.mc.sz2[i] == 1:
+        rr.push(r1)
+    else sz == 1 and (op == M_MOV_RR or op == M_ALU_RR or op == M_TEST_RR or op == M_XCHG or op == M_LXADD or op == M_LCMPXCHG):
+        rr.push(r0)
+        rr.push(r1)
+    else sz == 1 and (op == M_ALU_RI or op == M_TEST_RI or op == M_ALU_RM or op == M_LD):
+        rr.push(r0)
+    else sz == 1 and (op == M_ST or op == M_ALU_MR):
+        rr.push(r1)
+    end
+    each r in rr:
+        if r >= 4 and r <= 7 and (bad.len() == 0 or bad[0] != r):
+            bad.push(r)
+        end
+    end
+end
+
+func x86_swap(r: int, a: int, b: int): int:
+    if r == a: ret b end
+    if r == b: ret a end
+    ret r
+end
+
+func x86_free_tmp(g &: Ng, i: int, bad: Vector<int>, taken: Vector<int>): int:
+    mut t := g.mc.op[i] == M_LCMPXCHG ? 1 : 0
+    until t < 4:
+        mut used := t == g.mc.r0[i] or t == g.mc.r1[i] or t == g.mc.mb[i] or t == g.mc.mi[i]
+        each b in bad:
+            if b == t:
+                used = true
+            end
+        end
+        each k in taken:
+            if k == t:
+                used = true
+            end
+        end
+        if not used:
+            ret t
+        end
+        t += 1
+    end
+    ret 0 - 1
+end
+
+func enc_ins_x86(g &: Ng, e &: Enc, i: int):
+    mut bad := Vector {} as Vector<int>
+    defer bad.free()
+    x86_byte_regs(g, i, bad)
+    if bad.len() == 0:
+        enc_ins(g, e, i)
+        ret
+    end
+    mut tmp := Vector {} as Vector<int>
+    defer tmp.free()
+    repeat bad.len():
+        tmp.push(x86_free_tmp(g, i, bad, tmp))
+    end
+    o0 := g.mc.r0[i]
+    o1 := g.mc.r1[i]
+    ob := g.mc.mb[i]
+    oi := g.mc.mi[i]
+    bi := g.mc.mk[i] == MK_BI
+    repeat bad.len() in k:
+        enc(g, e, 0, false, 0x87, 1, tmp[k], rm_reg(bad[k]), 0, 0)
+        g.mc.r0[i] = x86_swap(g.mc.r0[i], tmp[k], bad[k])
+        g.mc.r1[i] = x86_swap(g.mc.r1[i], tmp[k], bad[k])
+        if bi:
+            g.mc.mb[i] = x86_swap(g.mc.mb[i], tmp[k], bad[k])
+            g.mc.mi[i] = x86_swap(g.mc.mi[i], tmp[k], bad[k])
+        end
+    end
+    enc_ins(g, e, i)
+    g.mc.r0[i] = o0
+    g.mc.r1[i] = o1
+    g.mc.mb[i] = ob
+    g.mc.mi[i] = oi
+    mut k2 := bad.len() - 1
+    until k2 >= 0:
+        enc(g, e, 0, false, 0x87, 1, tmp[k2], rm_reg(bad[k2]), 0, 0)
+        k2 -= 1
+    end
+end
+
 func enc_ins(g &: Ng, e &: Enc, i: int):
     op := g.mc.op[i]
     sz := g.mc.sz[i]
@@ -259,7 +399,17 @@ func enc_ins(g &: Ng, e &: Enc, i: int):
             ret
         end
         M_LDGOT:
+            if g.arch == NG_ARCH_X86:
+                eb(e, 0xB8 + (hw(r0) & 7))
+                erel(e, g.mc.msym[i], R_ABS32, g.mc.md[i])
+                e32(e, 0 as i64)
+                ret
+            end
             enc(g, e, 0, true, 0x8B, 1, r0, rm_of(g, i), 0, 0)
+            ret
+        end
+        M_X87:
+            enc(g, e, 0, false, sz == 8 ? 0xDD : 0xD9, 1, g.mc.cc[i] == 1 ? 3 : 0, rm_of(g, i), 0, 0)
             ret
         end
         M_LDZX:
@@ -638,16 +788,22 @@ func enc_alloc(g &: Ng, e &: Enc, fsize: int):
         erel(e, g.sym_chkstk, R_PLT32, 0 - 4 as i64)
         g.sy_used[g.sym_chkstk] = true
         e32(e, 0 as i64)
-        eb(e, 0x48)
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
         eb(e, 0x29)
         eb(e, 0xC4)
     else fits8(fsize as i64):
-        eb(e, 0x48)
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
         eb(e, 0x83)
         eb(e, 0xEC)
         eb(e, fsize)
     else:
-        eb(e, 0x48)
+        if g.arch != NG_ARCH_X86:
+            eb(e, 0x48)
+        end
         eb(e, 0x81)
         eb(e, 0xEC)
         e32(e, fsize as i64)
@@ -659,7 +815,7 @@ func enc_prologue(g &: Ng, e &: Enc):
     fsize := g.mc.frame_size
     g.mc.pro_push.clear()
     g.mc.pro_xmm.clear()
-    if g.os == NG_OS_WINDOWS:
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
         mut fp := fsize - (fsize % 16)
         if fp > 240:
             fp = 240
@@ -698,7 +854,9 @@ func enc_prologue(g &: Ng, e &: Enc):
         ret
     end
     eb(e, 0x55)
-    eb(e, 0x48)
+    if g.arch != NG_ARCH_X86:
+        eb(e, 0x48)
+    end
     eb(e, 0x89)
     eb(e, 0xE5)
     repeat ngp in k:
@@ -720,13 +878,14 @@ func enc_epilogue(g &: Ng, e &: Enc):
     ngp := ngp_count(g)
     if g.mc.fpo:
         if g.mc.fpo_pad > 0:
-            if fits8(g.mc.fpo_pad as i64):
+            if g.arch != NG_ARCH_X86:
                 eb(e, 0x48)
+            end
+            if fits8(g.mc.fpo_pad as i64):
                 eb(e, 0x83)
                 eb(e, 0xC4)
                 eb(e, g.mc.fpo_pad)
             else:
-                eb(e, 0x48)
                 eb(e, 0x81)
                 eb(e, 0xC4)
                 e32(e, g.mc.fpo_pad as i64)
@@ -1109,7 +1268,7 @@ func dup_test(g &: Ng):
 end
 
 func share_epilogue(g &: Ng):
-    if g.os == NG_OS_WINDOWS:
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
         ret
     end
     if g.mc.fpo and ngp_count(g) == 0 and g.mc.fpo_pad == 0:
@@ -1468,6 +1627,9 @@ func encode_function(g &: Ng):
             dup_test(g)
         end
     end
+    if g.arch == NG_ARCH_X86:
+        x86_prepass(g)
+    end
     mut e := Enc {}
     n := g.mc.op.len()
     repeat g.mc.nlabels:
@@ -1489,6 +1651,8 @@ func encode_function(g &: Ng):
         else op == M_JMP or op == M_JCC:
             e.br_ins.push(i)
             e.br_long.push(false)
+        else g.arch == NG_ARCH_X86:
+            enc_ins_x86(g, e, i)
         else:
             enc_ins(g, e, i)
         end
@@ -1705,7 +1869,7 @@ func encode_function(g &: Ng):
     if g.dbg_on and g.fv_val.len() > 0:
         dv_enc_end(g, g.s_text.len(), g.df_sym.len() > ndf)
     end
-    if g.os == NG_OS_WINDOWS:
+    if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
         emit_unwind(g, g.f_sym, g.sy_size[g.f_sym])
     end
     e.code.free()

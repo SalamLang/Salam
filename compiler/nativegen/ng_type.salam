@@ -251,7 +251,89 @@ func int_bits(g &: Ng, t: int): int:
     ret g.t_bits[t]
 end
 
+func dl_num(g &: Ng, q &: int, end_at: int): int:
+    mut v := 0
+    until q < end_at and g.src[q] >= (48 as u8) and g.src[q] <= (57 as u8):
+        v = v * 10 + ((g.src[q] as int) - 48)
+        q += 1
+    end
+    ret v
+end
+
+func apply_datalayout(g &: Ng):
+    key := "target datalayout = \""
+    kn := str.Len(key)
+    mut p := 0
+    mut found := 0 - 1
+    until p + kn < g.sn and found < 0:
+        if (p == 0 or g.src[p - 1] == (10 as u8)) and src_at(g, p, key):
+            found = p + kn
+        end
+        p += 1
+    end
+    if found < 0:
+        ret
+    end
+    mut e := found
+    until e < g.sn and g.src[e] != (34 as u8) and g.src[e] != (10 as u8):
+        e += 1
+    end
+    mut q := found
+    until q < e:
+        c := g.src[q] as int
+        if c == 112 and q + 1 < e and g.src[q + 1] == (58 as u8):
+            q += 2
+            sz := dl_num(g, q, e)
+            mut al := sz
+            if q < e and g.src[q] == (58 as u8):
+                q += 1
+                al = dl_num(g, q, e)
+            end
+            if sz > 0:
+                g.t_bits[T_PTR] = sz
+                g.t_size[T_PTR] = sz / 8
+                g.t_align[T_PTR] = al / 8
+                g.wsz = sz / 8
+            end
+        else (c == 105 or c == 102) and (q == found or g.src[q - 1] == (45 as u8)):
+            q += 1
+            bits := dl_num(g, q, e)
+            if q < e and g.src[q] == (58 as u8):
+                q += 1
+                al2 := dl_num(g, q, e)
+                if c == 105 and bits == 64 and al2 > 0:
+                    g.t_align[T_I64] = al2 / 8
+                else c == 105 and bits == 128 and al2 > 0:
+                    g.t_align[T_I128] = al2 / 8
+                else c == 102 and bits == 64 and al2 > 0:
+                    g.t_align[T_F64] = al2 / 8
+                end
+            end
+        end
+        until q < e and g.src[q] != (45 as u8):
+            q += 1
+        end
+        q += 1
+    end
+    if g.wsz == 4 and not dl_has(g, found, e, "-i64:"):
+        g.t_align[T_I64] = 4
+    end
+end
+
+func dl_has(g &: Ng, from: int, upto: int, pat: str): bool:
+    mut q := from
+    n := str.Len(pat)
+    until q + n <= upto:
+        if src_at(g, q, pat):
+            ret true
+        end
+        q += 1
+    end
+    ret false
+end
+
 func prescan_types(g &: Ng):
+    apply_datalayout(g)
     mut line_start := true
     g.p = 0
     until g.p < g.sn:

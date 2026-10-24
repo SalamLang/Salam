@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM debian:bookworm-slim AS fetch
+FROM debian:trixie-slim AS fetch
 ARG SALAM_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
@@ -29,7 +29,7 @@ RUN set -eu; \
     && chmod +x /opt/salam/salam \
     && printf '%s' "${VERSION}" > /opt/salam/VERSION
 
-FROM golang:1.23-bookworm AS build
+FROM golang:1.27-trixie AS build
 WORKDIR /src
 COPY server/go.mod ./
 COPY server/*.go ./
@@ -37,7 +37,7 @@ COPY --from=fetch /opt/salam/VERSION /tmp/salam-version
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.salamVersion=$(cat /tmp/salam-version)" \
       -o /out/sandbox-server .
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libtinfo6 \
     && rm -rf /var/lib/apt/lists/* \

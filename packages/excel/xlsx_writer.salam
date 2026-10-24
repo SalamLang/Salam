@@ -95,6 +95,7 @@ end
 
 func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
     mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+    out = out.concat(_xlsx_sheet_views(sheet)).concat(_xlsx_cols(sheet))
     out = out.concat("<sheetData>").concat(_xlsx_sheet_body(sheet, date_style_id)).concat("</sheetData>")
     if sheet.merges.len() > 0:
         out = out.concat(`<mergeCells count="`).concat(conv.FormatInt(sheet.merges.len() as i64)).concat(`">`)
@@ -109,6 +110,47 @@ func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
     end
     out = out.concat("</worksheet>")
     ret out
+end
+
+func _xlsx_border_id(st: Style): str:
+    if st.border: ret "1" end
+    ret "0"
+end
+
+// <sheetViews>: right-to-left and frozen rows / columns, when set.
+func _xlsx_sheet_views(sheet: Sheet): str:
+    if not sheet.rtl and sheet.freeze_rows <= 0 and sheet.freeze_cols <= 0: ret "" end
+    mut out := `<sheetViews><sheetView workbookViewId="0"`
+    if sheet.rtl: out = out.concat(` rightToLeft="1"`) end
+    out = out.concat(">")
+    if sheet.freeze_rows > 0 or sheet.freeze_cols > 0:
+        out = out.concat("<pane")
+        if sheet.freeze_cols > 0: out = out.concat(` xSplit="`).concat(conv.FormatInt(sheet.freeze_cols as i64)).concat(`"`) end
+        if sheet.freeze_rows > 0: out = out.concat(` ySplit="`).concat(conv.FormatInt(sheet.freeze_rows as i64)).concat(`"`) end
+        mut pane := "bottomLeft"
+        if sheet.freeze_rows > 0 and sheet.freeze_cols > 0: pane = "bottomRight"
+        else sheet.freeze_cols > 0: pane = "topRight" end
+        out = out.concat(` topLeftCell="`).concat(CellRef(sheet.freeze_rows, sheet.freeze_cols)).concat(`" activePane="`).concat(pane).concat(`" state="frozen"/>`)
+    end
+    ret out.concat("</sheetView></sheetViews>")
+end
+
+// <cols>: the widths that were set.
+func _xlsx_cols(sheet: Sheet): str:
+    mut any := false
+    mut out := "<cols>"
+    mut i := 0
+    until i < sheet.col_widths.len():
+        wd := sheet.col_widths.get(i)
+        if wd > 0.0:
+            any = true
+            n := conv.FormatInt((i + 1) as i64)
+            out = out.concat(`<col min="`).concat(n).concat(`" max="`).concat(n).concat(`" width="`).concat(conv.FormatFloat(wd)).concat(`" customWidth="1"/>`)
+        end
+        i += 1
+    end
+    if not any: ret "" end
+    ret out.concat("</cols>")
 end
 
 func _xlsx_styles_xml(styles: StyleSheet): str:
@@ -156,7 +198,7 @@ func _xlsx_styles_xml(styles: StyleSheet): str:
         align_attrs := _xlsx_align_attrs(st.align_h, st.align_v)
         fill_id := i + 2
         font_id := i
-        str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"`))
+        str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="`).concat(_xlsx_border_id(st)).concat(`" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1" applyBorder="1"`))
         if align_attrs.len() > 0:
             str.BufAppend(xfs, ` applyAlignment="1">`)
             str.BufAppend(xfs, align_attrs)
@@ -182,7 +224,7 @@ func _xlsx_styles_xml(styles: StyleSheet): str:
     out = out.concat(`<fill><patternFill patternType="none"/></fill>`)
     out = out.concat(`<fill><patternFill patternType="gray125"/></fill>`)
     out = out.concat(fills_str).concat("</fills>")
-    out = out.concat(`<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>`)
+    out = out.concat(`<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color indexed="64"/></left><right style="thin"><color indexed="64"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color indexed="64"/></bottom><diagonal/></border></borders>`)
     out = out.concat(`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>`)
     out = out.concat(`<cellXfs count="`).concat(conv.FormatInt(n as i64)).concat(`">`).concat(xfs_str).concat("</cellXfs>")
     out = out.concat(`<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>`)

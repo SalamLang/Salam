@@ -5,6 +5,11 @@ k_x86_rmw8_hi := [0x8B, 0x13, 0x1B, 0x23, 0x0B, 0x33]
 k_x86_rmw8_nm := ["xchg", "add", "sub", "and", "or", "xor"]
 k_x86_rmw8_pre := [0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x8B, 0x06, 0x8B, 0x56, 0x04, 0x89, 0xC3, 0x89, 0xD1]
 k_x86_rmw8_post := [0xF0, 0x0F, 0xC7, 0x0E, 0x75, 0xEE, 0x5E, 0x5B, 0xC3]
+k_arm_rmw8_lo := [0xE1A06001, 0xE0946001, 0xE0546001, 0xE0046001, 0xE1846001, 0xE0246001]
+k_arm_rmw8_hi := [0xE1A07002, 0xE0A57002, 0xE0C57002, 0xE0057002, 0xE1857002, 0xE0257002]
+k_arm_rmw8_pre := [0xE92D40F0, 0xF57FF05B, 0xE1B04F9F]
+k_arm_rmw8_post := [0xE1A03F96, 0xE3530000, 0x1AFFFFF9, 0xF57FF05B, 0xE1A00004, 0xE1A01005, 0xE8BD80F0]
+k_arm_cas8 := [0xE92D40F0, 0xE59D7014, 0xE1A06003, 0xF57FF05B, 0xE1B04F9F, 0xE1540001, 0x01550002, 0x1A000002, 0xE1A03F96, 0xE3530000, 0x1AFFFFF8, 0xF57FF05B, 0xE1A00004, 0xE1A01005, 0xE8BD80F0]
 k_x86_cas8 := [0x53, 0x56, 0x8B, 0x74, 0x24, 0x0C, 0x8B, 0x44, 0x24, 0x10, 0x8B, 0x54, 0x24, 0x14, 0x8B, 0x5C, 0x24, 0x18, 0x8B, 0x4C, 0x24, 0x1C, 0xF0, 0x0F, 0xC7, 0x0E, 0x5E, 0x5B, 0xC3]
 
 pub struct Lg:
@@ -278,7 +283,7 @@ func lg_split_args(g &: Ng, l &: Lg):
             lg_set(g, l, v, lo, hi)
             na.push(lo)
             na.push(hi)
-            nf.push(0)
+            nf.push(IF_PAIR)
             nf.push(0)
             pos += 2
         else:
@@ -324,7 +329,7 @@ func lg_fix_call(g &: Ng, l &: Lg, i: int):
                 lg_pair(g, l, v2, lo, hi)
                 vals.push(lo)
                 vals.push(hi)
-                fls.push(0)
+                fls.push(IF_PAIR)
                 fls.push(0)
                 aux.push(0 - 1)
                 aux.push(0 - 1)
@@ -481,6 +486,110 @@ func lg_atomic(g &: Ng, l &: Lg, i: int): bool:
     ret false
 end
 
+func arm_helper(g &: Ng, name: str, words: Vector<i64>):
+    s := sym_named(g, name)
+    if not g.sy_used[s] or g.sy_def[s]:
+        ret
+    end
+    sec_align_to(g, SEC_TEXT, 16)
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_kind[s] = SY_FUNC
+    g.sy_sec[s] = SEC_TEXT
+    g.sy_off[s] = g.s_text.len()
+    each v in words:
+        repeat 4 in k:
+            g.s_text.push(((v >> ((8 * k) as i64)) & (255 as i64)) as u8)
+        end
+    end
+    g.sy_size[s] = 4 * words.len()
+end
+
+func emit_arm_helpers(g &: Ng):
+    repeat 6 in k:
+        mut code := Vector {} as Vector<i64>
+        each p in k_arm_rmw8_pre:
+            code.push(p)
+        end
+        code.push(k_arm_rmw8_lo[k])
+        code.push(k_arm_rmw8_hi[k])
+        each q in k_arm_rmw8_post:
+            code.push(q)
+        end
+        arm_helper(g, "__salam_rmw8_" + k_x86_rmw8_nm[k], code)
+        code.free()
+    end
+    mut cas := Vector {} as Vector<i64>
+    each c in k_arm_cas8:
+        cas.push(c)
+    end
+    arm_helper(g, "__salam_cas8", cas)
+    cas.free()
+end
+
+func lg_soft_ret(g &: Ng, l &: Lg, at: int, ty: int, lo: int, hi: int): int:
+    if ty == T_F32:
+        ret lg_cast(g, at, OP_BITCAST, T_F32, lo, T_I32)
+    end
+    sl := lg_entry_slot(g, l)
+    lg_store(g, at, lo, sl, at)
+    lg_store(g, at, hi, lg_addr4(g, at, sl), at)
+    ret lg_load(g, at, sl, T_F64, at)
+end
+
+func lg_soft_arg(g &: Ng, l &: Lg, at: int, v: int, args &: Vector<int>):
+    if g.v_ty[v] == T_F32:
+        args.push(lg_cast(g, at, OP_BITCAST, T_I32, v, T_F32))
+        ret
+    end
+    sl := lg_entry_slot(g, l)
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = v
+    g.i_b[st] = sl
+    g.i_x[st] = T_F64
+    g.i_dbg[st] = g.i_dbg[at]
+    ins_before(g, at, st)
+    args.push(lg_load(g, at, sl, T_I32, at))
+    args.push(lg_load(g, at, lg_addr4(g, at, sl), T_I32, at))
+end
+
+func lg_divcall(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    if g.arch != NG_ARCH_ARM or r < 0 or is_w64(ty):
+        ret false
+    end
+    if not (op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM):
+        ret false
+    end
+    b := g.i_b[i]
+    if b >= 0 and g.v_kind[b] == VK_INT:
+        d := g.v_i[b]
+        if d >= (2 as i64) or d <= (0 - 2 as i64):
+            ret false
+        end
+    end
+    signed := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    mut args := Vector {} as Vector<int>
+    args.push(lg_ext_to32(g, i, g.i_a[i], signed))
+    args.push(lg_ext_to32(g, i, b, signed))
+    mut nm := signed ? "__aeabi_idiv" : "__aeabi_uidiv"
+    if rem:
+        nm = nm + "mod"
+    end
+    mut h := 0
+    q := lg_call(g, i, nm, args, rem ? T_I64 : T_I32, h)
+    args.free()
+    mut v := rem ? h : q
+    if ty != T_I32:
+        v = lg_cast(g, i, OP_TRUNC, ty, v, T_I32)
+    end
+    replace_res(g, i, v)
+    ret true
+end
+
 func x86_helper(g &: Ng, name: str, code: Vector<int>):
     s := sym_named(g, name)
     if not g.sy_used[s] or g.sy_def[s]:
@@ -534,6 +643,9 @@ func lg_one(g &: Ng, l &: Lg, i: int):
     b := g.i_b[i]
     w := is_w64(ty)
     if lg_atomic(g, l, i):
+        ret
+    end
+    if lg_divcall(g, i):
         ret
     end
     if op == OP_CALL:
@@ -627,6 +739,12 @@ func lg_one(g &: Ng, l &: Lg, i: int):
             nm = op == OP_SITOFP ? "__floatdidf" : "__floatundidf"
         end
         mut hz := 0
+        if g.arch == NG_ARCH_ARM:
+            rlo := lg_call(g, i, nm, args, dbl ? T_I64 : T_I32, hz)
+            args.free()
+            replace_res(g, i, lg_soft_ret(g, l, i, ty, rlo, hz))
+            ret
+        end
         res := lg_call(g, i, nm, args, ty, hz)
         args.free()
         replace_res(g, i, res)
@@ -778,8 +896,12 @@ func lg_one(g &: Ng, l &: Lg, i: int):
         end
         OP_FPTOSI, OP_FPTOUI:
             mut args3 := Vector {} as Vector<int>
-            args3.push(a)
             src := g.v_ty[a]
+            if g.arch == NG_ARCH_ARM:
+                lg_soft_arg(g, l, i, a, args3)
+            else:
+                args3.push(a)
+            end
             mut nm3 := op == OP_FPTOSI ? "__fixsfdi" : "__fixunssfdi"
             if src == T_F64:
                 nm3 = op == OP_FPTOSI ? "__fixdfdi" : "__fixunsdfdi"

@@ -85,6 +85,17 @@ func elf_rtype(g &: Ng, t: int): int:
         end
         ret 0
     end
+    if g.arch == NG_ARCH_ARM:
+        switch t:
+            R_ABS32: ret 2 end
+            R_PC32: ret 3 end
+            R_ARM_CALL: ret 28 end
+            R_ARM_JUMP24: ret 29 end
+            R_ARM_MOVW: ret 43 end
+            R_ARM_MOVT: ret 44 end
+        end
+        ret 0
+    end
     if g.arch == NG_ARCH_X86:
         if t == R_ABS32: ret 1 end
         if t == R_PC32: ret 2 end
@@ -126,6 +137,7 @@ end
 func elf_machine(g &: Ng): int:
     if g.arch == NG_ARCH_A64: ret 183 end
     if g.arch == NG_ARCH_X86: ret 3 end
+    if g.arch == NG_ARCH_ARM: ret 40 end
     ret 62
 end
 
@@ -239,6 +251,22 @@ func patch_add32(b &: Vector<u8>, at: int, v: i64):
     end
 end
 
+func arm_embed(b &: Vector<u8>, at: int, rt: int, add: i64):
+    mut w := 0 as i64
+    repeat 4 in k:
+        w = w | ((b[at + k] as i64) << ((8 * k) as i64))
+    end
+    if rt == R_ARM_CALL or rt == R_ARM_JUMP24:
+        w = (w & (0xFF000000 as i64)) | (((add - (8 as i64)) >> (2 as i64)) & (0xFFFFFF as i64))
+    else:
+        v := add & (0xFFFF as i64)
+        w = (w & (0xFFF0F000 as i64)) | ((v >> (12 as i64)) << (16 as i64)) | (v & (0xFFF as i64))
+    end
+    repeat 4 in k2:
+        b[at + k2] = ((w >> ((8 * k2) as i64)) & (255 as i64)) as u8
+    end
+end
+
 func write_elf(g &: Ng, path: str): bool:
     x32 := g.wsz == 4
     se := x32 ? 16 : 24
@@ -308,13 +336,19 @@ func write_elf(g &: Ng, path: str): bool:
                 s2 := g.r_sym[ri]
                 mut idx := elf_idx[s2]
                 mut addend := g.r_add[ri]
-                if g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0 and shidx[g.sy_sec[s2]] > 0:
+                rt := g.r_type[ri]
+                armc := rt == R_ARM_CALL or rt == R_ARM_JUMP24 or rt == R_ARM_MOVW or rt == R_ARM_MOVT
+                if not armc and g.sy_def[s2] and g.sy_local[s2] and g.sy_sec[s2] >= 0 and shidx[g.sy_sec[s2]] > 0:
                     idx = shidx[g.sy_sec[s2]]
                     addend = addend + (g.sy_off[s2] as i64)
                 end
                 if x32:
                     mut sb := sec_bytes(g, rs)
-                    patch_add32(sb, g.r_off[ri], addend)
+                    if armc:
+                        arm_embed(sb, g.r_off[ri], rt, addend)
+                    else:
+                        patch_add32(sb, g.r_off[ri], addend)
+                    end
                     ob_le(rbufs, g.r_off[ri] as i64, 4)
                     ob_le(rbufs, ((idx as i64) << (8 as i64)) | (elf_rtype(g, g.r_type[ri]) as i64), 4)
                 else:
@@ -416,7 +450,7 @@ func write_elf(g &: Ng, path: str): bool:
     put_le(o, 20, 1 as i64, 4)
     if x32:
         put_le(o, 32, sh_off as i64, 4)
-        put_le(o, 36, g.elf_flags as i64, 4)
+        put_le(o, 36, (g.arch == NG_ARCH_ARM ? 0x05000400 : g.elf_flags) as i64, 4)
         put_le(o, 40, 52 as i64, 2)
         put_le(o, 46, 40 as i64, 2)
         put_le(o, 48, nsec as i64, 2)

@@ -8,6 +8,8 @@ k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 k_ra_gpr_a64 := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15]
 k_ra_gpr_x86 := [0, 1, 2, 3, 5]
 k_ra_xmm_x86 := [16, 17, 18, 19, 20, 21]
+k_ra_gpr_arm := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12]
+k_ra_xmm_arm := [16, 17, 18, 19, 20, 21, 22, 23]
 
 pub struct Ra:
     pub fr_s: Vector<int> = Vector {}
@@ -49,6 +51,9 @@ pub struct Ra:
 end
 
 func is_callee_saved(g &: Ng, r: int): bool:
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 5 and r <= 12
+    end
     if g.arch == NG_ARCH_A64:
         ret r >= 12 and r <= 15
     end
@@ -556,6 +561,9 @@ func reg_ok_for(g &: Ng, r: int, cls: int): bool:
     if g.arch == NG_ARCH_X86 and ((r > RBP and r < 16) or r > 21):
         ret false
     end
+    if g.arch == NG_ARCH_ARM and (r == R10 or r == R11 or (r > 12 and r < 16) or r > 23):
+        ret false
+    end
     ret g.mc.vcls[r] == cls
 end
 
@@ -575,6 +583,22 @@ func choose_reg(g &: Ng, ra &: Ra, v: int): int:
     ph := g.mc.vphint[v]
     if ph >= 0 and reg_ok_for(g, ph, cls) and ra.free_until[ph] > e:
         ret ph
+    end
+    if cls == 1 and g.arch == NG_ARCH_ARM:
+        each xa in k_ra_xmm_arm:
+            if ra.free_until[xa] > e:
+                ret xa
+            end
+        end
+        ret 0 - 1
+    end
+    if g.arch == NG_ARCH_ARM and cls != 1:
+        each ra32 in k_ra_gpr_arm:
+            if ra.free_until[ra32] > e:
+                ret ra32
+            end
+        end
+        ret 0 - 1
     end
     if cls == 1 and g.arch == NG_ARCH_X86:
         each x8 in k_ra_xmm_x86:
@@ -895,8 +919,18 @@ func is_def_slot(op: int, cc: int): bool:
         M_ALU_RR, M_ALU_RI:
             ret cc != ALU_CMP
         end
+        M_ARM_SODD:
+            ret cc == 1
+        end
     end
     ret false
+end
+
+func is_use_r0_cc(op: int, cc: int): bool:
+    if op == M_ARM_SODD:
+        ret cc == 0
+    end
+    ret is_use_r0(op)
 end
 
 func is_use_r0(op: int): bool:
@@ -1045,7 +1079,7 @@ func rewrite(g &: Ng):
         if sr1 >= 0 and sr1 != smb and sr1 != smi:
             reload(g, r1, sr1)
         end
-        if sr0 >= 0 and sr0 != sr1 and sr0 != smb and sr0 != smi and is_use_r0(op):
+        if sr0 >= 0 and sr0 != sr1 and sr0 != smb and sr0 != smi and is_use_r0_cc(op, o.cc[i]):
             reload(g, r0, sr0)
         end
         j := mi_clone(g, o, i)
@@ -1393,10 +1427,14 @@ func frame_layout(g &: Ng):
         used.push(false)
     end
     n := g.mc.op.len()
+    mut anyf := false
     repeat n in i:
         r0 := g.mc.r0[i]
         if r0 >= 0 and r0 < 32:
             used[r0] = true
+        end
+        if r0 >= 16 or g.mc.r1[i] >= 16:
+            anyf = true
         end
     end
     mut ngp := 0
@@ -1406,8 +1444,9 @@ func frame_layout(g &: Ng):
             ngp += 1
         end
     end
-    ws := g.arch == NG_ARCH_X86 ? 4 : 8
-    mut curo := ws * ngp
+    ws := g.wsz == 4 ? 4 : 8
+    g.mc.fsave = g.arch == NG_ARCH_ARM and anyf ? 24 : 0
+    mut curo := ws * ngp + g.mc.fsave
     mut xs := Vector {} as Vector<int>
     repeat 16 in x:
         if used[16 + x] and is_callee_saved(g, 16 + x):
@@ -1446,7 +1485,7 @@ func frame_layout(g &: Ng):
     end
     g.mc.fpo = false
     g.mc.fpo_pad = 0
-    if (g.os != NG_OS_WINDOWS and g.arch == NG_ARCH_X64) or g.arch == NG_ARCH_X86:
+    if (g.os != NG_OS_WINDOWS and g.arch == NG_ARCH_X64) or g.wsz == 4:
         g.mc.fpo = true
         mut alloc := ws + curo + g.mc.out_args - ws * ngp
         if curo == ws * ngp and g.mc.out_args == 0:

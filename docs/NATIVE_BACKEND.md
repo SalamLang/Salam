@@ -1,6 +1,6 @@
 # The native backend
 
-`--backend=native` turns a Salam program into x86-64, 32-bit x86 or AArch64 machine code without
+`--backend=native` turns a Salam program into x86-64, 32-bit x86, AArch64 or 32-bit ARM machine code without
 going through LLVM or a C compiler. It writes the object file itself (ELF on
 Linux, COFF on Windows, Mach-O on macOS), so the only outside tool left is the linker, and when
 the compiler has LLVM embedded even that runs in-process through lld.
@@ -13,6 +13,7 @@ salam build app.salam --backend=native --target=x86_64-apple-macos
 salam build app.salam --backend=native --target=aarch64-linux-musl
 salam build app.salam --backend=native --target=i686-linux-musl
 salam build app.salam --backend=native --target=i686-w64-windows-gnu
+salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
@@ -21,7 +22,8 @@ salam obj app.salam --backend=native                  # object file only
 Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
 Mach-O), 32-bit x86 Linux (i386 System V ABI, ELF32) and Windows (cdecl and
-stdcall, COFF), AArch64 Linux
+stdcall, COFF), 32-bit ARM Linux (armhf: ARMv7-A, VFPv3-D16, AAPCS-VFP,
+ELF32), AArch64 Linux
 (AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64 variant, Mach-O). Any other
 `--target` is rejected
 with a message that points at `--backend=llvm`.
@@ -116,6 +118,38 @@ that start threads: std passes a cdecl function to `_beginthreadex`, which
 expects `__stdcall`, and the LLVM backend's build of the same IR crashes the
 same way.
 
+## 32-bit ARM
+
+The `arm-linux-musleabihf` target (also `armv7`) produces ARM-mode ARMv7-A
+code for the hard-float ABI with VFPv3-D16 and no NEON, the Debian armhf
+baseline. Like AArch64 it shares the pipeline up to register allocation and
+lowers each machine instruction in `ng_arm.salam`, and like i686 it splits
+64-bit integers into pairs first.
+
+- Integer IDs map to `r0`-`r3` (arguments) and `r4`-`r11` (callee-saved);
+  `r12` and `lr` are the lowering's scratch registers (`lr` is always saved).
+  Floats live in `d0`-`d7`; `d13`-`d15` are scratch and saved with `vpush`
+  only in functions that touch floats. Globals are addressed with
+  `movw`/`movt` pairs, and an offset that does not fit their 16-bit addend
+  is added separately.
+- Calls follow AAPCS-VFP: a 64-bit value starts in an even register or an
+  8-byte aligned stack slot (the legalizer tags the low half), doubles take
+  `d` registers, a `float` may back-fill an odd `s` register, and variadic
+  doubles travel in core registers. libgcc's 64-bit integer and float
+  conversion helpers use the soft-float convention even in a hard-float
+  build, so their float arguments and results go through core registers.
+- There is no divide instruction in the baseline: division by a value calls
+  `__aeabi_idiv`/`__aeabi_uidiv` (and the `mod` forms, whose remainder comes
+  back in `r1`); division by a constant still uses a multiply.
+- Atomics are `ldrex`/`strex` loops between `dmb` barriers, borrowing a
+  register with `push`/`pop` for the status word; 64-bit atomics call
+  `ldrexd` routines the backend writes into the object.
+
+Built with the built-in linker against a musl sysroot and run under
+qemu-arm, the test groups listed for i686 match their expected output with
+the same exceptions. No unwind tables or DWARF yet, and the generated code
+is still noticeably slower than clang's on float-heavy loops.
+
 ## How it works
 
 The frontend is shared with the LLVM backend. `llvmgen` lowers the checked
@@ -143,7 +177,8 @@ All of it lives in `compiler/nativegen/`:
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
-| `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit x86 target                                                                                                          |
+| `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
+| `ng_arm.salam`                                                     | 32-bit ARM encoder: machine instructions to A32/VFP words, frame, atomics, relocations                                                                                      |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
 | `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |
@@ -617,7 +652,6 @@ Not there yet:
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
   There is no AVX code path.
-- 32-bit ARM is not supported yet.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

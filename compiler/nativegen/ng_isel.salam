@@ -412,7 +412,7 @@ func emit_copy(g &: Ng, dst: Mem, src: Mem, size: int):
         ret
     end
     mut off := 0
-    if size >= 32:
+    if size >= 32 and g.arch != NG_ARCH_ARM:
         until size - off >= 16:
             x := wide_reg(g)
             _vl := e_rm(g, M_VLD, 16, x, mem_add(src, off))
@@ -459,7 +459,7 @@ func zero_fill(g &: Ng, dst: Mem, size: int):
         ret
     end
     mut off := 0
-    if size >= 48:
+    if size >= 48 and g.arch != NG_ARCH_ARM:
         z := wide_reg(g)
         _zx := e_rr(g, M_XORPS, 16, z, z)
         until size - off >= 16:
@@ -565,6 +565,9 @@ func call_lib(g &: Ng, sym: int, args: Vector<int>, ret_cls: int): int:
 end
 
 func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    if g.arch == NG_ARCH_ARM:
+        ret place_args_arm(g, args, cls, vararg, nfixed)
+    end
     mut mask := 0 as i64
     n := args.len()
     if g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
@@ -733,7 +736,190 @@ func entry_args_x86(g &: Ng):
     end
 end
 
+func hi_reg(g &: Ng): int:
+    ret g.arch == NG_ARCH_ARM ? RCX : RDX
+end
+
+func arm_vfp_slot(used &: Vector<bool>, dbl: bool): int:
+    if dbl:
+        repeat 8 in k:
+            if not used[2 * k] and not used[2 * k + 1]:
+                used[2 * k] = true
+                used[2 * k + 1] = true
+                ret 2 * k
+            end
+        end
+        ret 0 - 1
+    end
+    repeat 16 in s:
+        if not used[s]:
+            used[s] = true
+            ret s
+        end
+    end
+    ret 0 - 1
+end
+
+func arm_gp_arg(g &: Ng, r: int, ncrn &: int, nsaa &: int, mask &: i64):
+    if ncrn < 4:
+        _c := e_copy(g, ncrn, r)
+        mask = mask | ((1 as i64) << (ncrn as i64))
+        ncrn += 1
+        ret
+    end
+    _s := e_mr(g, M_ST, 4, mem_bi(RSP, nsaa as i64), r)
+    nsaa += 4
+end
+
+func arm_pair_align(ncrn &: int, nsaa &: int):
+    if (ncrn & 1) == 1:
+        ncrn += 1
+    end
+    if ncrn > 2:
+        ncrn = 4
+        nsaa = align_up(nsaa, 8)
+    end
+end
+
+func place_args_arm(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
+    mut mask := 0 as i64
+    n := args.len()
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat 16:
+        used.push(false)
+    end
+    mut odd_r := Vector {} as Vector<int>
+    defer odd_r.free()
+    mut odd_k := Vector {} as Vector<int>
+    defer odd_k.free()
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    mut p := 0
+    until p < n:
+        r := args[p]
+        c := cls[p]
+        va := vararg and nfixed >= 0 and p >= nfixed
+        if (c == 1 or c == 3) and va:
+            lo := gpr(g)
+            m0 := e_rr(g, M_MOVQ_GX, 4, lo, r)
+            g.mc.sz2[m0] = 0
+            hi := gpr(g)
+            m1 := e_rr(g, M_MOVQ_GX, 4, hi, r)
+            g.mc.sz2[m1] = 1
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, lo, ncrn, nsaa, mask)
+            arm_gp_arg(g, hi, ncrn, nsaa, mask)
+        else c == 1 or c == 3:
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, c == 1)
+            end
+            if sl < 0:
+                vstk = true
+                if c == 1:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _sf := e_mr(g, M_FST, c == 1 ? 8 : 4, mem_bi(RSP, nsaa as i64), r)
+                nsaa += c == 1 ? 8 : 4
+            else (sl & 1) == 1:
+                odd_r.push(r)
+                odd_k.push(sl >> 1)
+            else:
+                _cf := e_copy(g, XMM0 + (sl >> 1), r)
+                mask = mask | ((1 as i64) << ((XMM0 + (sl >> 1)) as i64))
+            end
+        else c == 4 and p + 1 < n:
+            arm_pair_align(ncrn, nsaa)
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+            arm_gp_arg(g, args[p + 1], ncrn, nsaa, mask)
+            p += 1
+        else:
+            arm_gp_arg(g, r, ncrn, nsaa, mask)
+        end
+        p += 1
+    end
+    repeat odd_r.len() in q:
+        so := e_rr(g, M_ARM_SODD, 4, XMM0 + odd_k[q], odd_r[q])
+        g.mc.cc[so] = 0
+        mask = mask | ((1 as i64) << ((XMM0 + odd_k[q]) as i64))
+    end
+    g.last_argsz = nsaa
+    al := align_up(nsaa, 16)
+    if al > g.mc.out_args:
+        g.mc.out_args = al
+    end
+    ret mask
+end
+
+func entry_args_arm(g &: Ng):
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat 16:
+        used.push(false)
+    end
+    mut vstk := false
+    mut ncrn := 0
+    mut nsaa := 0
+    if is_agg(g, g.f_ret):
+        g.retp = gpr(g)
+        _c := e_copy(g, g.retp, RAX)
+        ncrn = 1
+    end
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        t := g.v_ty[v]
+        fl := k < g.f_argf.len() ? g.f_argf[k] : 0
+        agg := is_agg(g, t)
+        if is_flt(g, t) and not agg:
+            dbl := fsz(t) == 8
+            r := vnew(g, 1)
+            mut sl := 0 - 1
+            if not vstk:
+                sl = arm_vfp_slot(used, dbl)
+            end
+            if sl < 0:
+                vstk = true
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                _lf := e_rm(g, M_FLD, fsz(t), r, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += dbl ? 8 : 4
+            else (sl & 1) == 1:
+                so := e_rr(g, M_ARM_SODD, 4, r, XMM0 + (sl >> 1))
+                g.mc.cc[so] = 1
+            else:
+                _cf := e_copy(g, r, XMM0 + (sl >> 1))
+            end
+            g.vv[v] = r
+        else:
+            if (fl & IF_PAIR) != 0:
+                arm_pair_align(ncrn, nsaa)
+            end
+            r2 := vnew(g, 0)
+            if ncrn < 4:
+                _cg := e_copy(g, r2, ncrn)
+                ncrn += 1
+            else:
+                _lg := e_rm(g, M_LD, 4, r2, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += 4
+            end
+            if agg:
+                g.vak[v] = AK_PTR
+                g.var_[v] = r2
+                g.vao[v] = 0
+            end
+            g.vv[v] = r2
+        end
+    end
+end
+
 func entry_args(g &: Ng):
+    if g.arch == NG_ARCH_ARM:
+        entry_args_arm(g)
+        ret
+    end
     if g.arch == NG_ARCH_X86:
         entry_args_x86(g)
         win_main_init(g)
@@ -2105,7 +2291,7 @@ func div_const(g &: Ng, i: int, d: i64): bool:
             set_res(g, i, u)
             ret true
         end
-        if g.arch == NG_ARCH_X86:
+        if g.wsz == 4:
             mut mx := 0 as i64
             mut shx := 0
             smagic32(dn, mx, shx)
@@ -2207,7 +2393,7 @@ func div_const(g &: Ng, i: int, d: i64): bool:
         set_res(g, i, r)
         ret true
     end
-    if g.arch == NG_ARCH_X86:
+    if g.wsz == 4:
         mut lx := 0
         until ((1 as u64) << (lx as u64)) < du:
             lx += 1
@@ -2585,6 +2771,23 @@ func isel_cast(g &: Ng, i: int):
             end
         end
         set_res(g, i, r4)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_SITOFP or op == OP_UITOFP):
+        ra8 := ext_to32(g, a, st, op == OP_SITOFP)
+        r8 := xmm(g)
+        cv8 := e_rr(g, M_CVTSI2F, fsz(dt), r8, ra8)
+        g.mc.sz2[cv8] = 4
+        g.mc.cc[cv8] = op == OP_UITOFP ? 1 : 0
+        set_res(g, i, r8)
+        ret
+    end
+    if g.arch == NG_ARCH_ARM and (op == OP_FPTOSI or op == OP_FPTOUI):
+        r9 := gpr(g)
+        cv9 := e_rr(g, M_CVTF2SI, fsz(st), r9, use_reg(g, a))
+        g.mc.sz2[cv9] = 4
+        g.mc.cc[cv9] = op == OP_FPTOUI ? 1 : 0
+        set_res(g, i, r9)
         ret
     end
     if op == OP_UITOFP and g.arch == NG_ARCH_X86:
@@ -3727,7 +3930,7 @@ func isel_call(g &: Ng, i: int):
             cls.push(0)
         else is_flt(g, t):
             regs.push(use_reg(g, v))
-            cls.push(g.arch == NG_ARCH_X86 and fsz(t) == 4 ? 3 : 1)
+            cls.push(g.wsz == 4 and fsz(t) == 4 ? 3 : 1)
         else:
             r := use_reg(g, v)
             if int_bits(g, t) < 32:
@@ -3735,7 +3938,7 @@ func isel_call(g &: Ng, i: int):
             else:
                 regs.push(r)
             end
-            cls.push(0)
+            cls.push(g.arch == NG_ARCH_ARM and (fl & IF_PAIR) != 0 ? 4 : 0)
         end
     end
     mut cr := 0 - 1
@@ -3952,8 +4155,8 @@ func isel_ret(g &: Ng, i: int):
             mask = (1 as i64) << (XMM0 as i64)
         else:
             if g.i_b[i] >= 0 and g.wsz == 4:
-                move_into(g, RDX, g.i_b[i])
-                mask = mask | ((1 as i64) << (RDX as i64))
+                move_into(g, hi_reg(g), g.i_b[i])
+                mask = mask | ((1 as i64) << (hi_reg(g) as i64))
             end
             if t == T_I1:
                 r2 := use_reg(g, a)
@@ -4107,7 +4310,7 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_RET: isel_ret(g, i) ret end
         OP_RETHI:
             rh := gpr(g)
-            _ch := e_copy(g, rh, RDX)
+            _ch := e_copy(g, rh, hi_reg(g))
             set_res(g, i, rh)
             ret
         end

@@ -40,7 +40,9 @@ for dir in $DIRS; do
         id=$dir/$(basename "$f" .salam)
         w=$W/${id//\//_}
         mkdir -p "$w"
-        if ! (cd "$w" && "$SALAM" obj "$f" --backend=llvm --release --target="$TARGET" --output=p.o --log-level=error >obj.err 2>&1); then
+        common="--backend=llvm --release --target=$TARGET --log-level=error"
+        # shellcheck disable=SC2086
+        if ! (cd "$w" && "$SALAM" obj "$f" $common --output=p.o >obj.err 2>&1); then
             skip=$((skip + 1))
             continue
         fi
@@ -52,24 +54,48 @@ for dir in $DIRS; do
             rt=$S/libgcc.a
             [ -f "$S/libclang_rt.builtins-x86_64.a" ] && rt=$S/libclang_rt.builtins-x86_64.a
             ld.lld -m $em -static -o "$w/ref" "$S/crt1.o" "$S/crti.o" "$w/p.o" "$S/libc.a" "$rt" "$S/crtn.o" >/dev/null 2>&1 || { skip=$((skip + 1)); continue; }
-            (cd "$w" && SALAM_MUSL_SYSROOT=$S "$SALAM" build "$f" --backend=llvm --release --target="$TARGET" --linker=builtin --output=out --log-level=error >nl.err 2>&1) || { echo "FAIL $id (link)"; fail=$((fail + 1)); continue; }
+            # shellcheck disable=SC2086
+            if ! (cd "$w" && SALAM_MUSL_SYSROOT=$S "$SALAM" build "$f" $common --linker=builtin --output=out >nl.err 2>&1); then
+                echo "FAIL $id (link)"
+                fail=$((fail + 1))
+                continue
+            fi
             r=$(timeout 30 $RUN "$w/ref" </dev/null 2>&1)
             n=$(timeout 30 $RUN "$w/out" </dev/null 2>&1)
             ;;
         *windows*)
             cc=${TARGET%%-*}-w64-mingw32-gcc
             $cc -o "$w/ref.exe" "$w/p.o" -lws2_32 >/dev/null 2>&1 || { skip=$((skip + 1)); continue; }
-            (cd "$w" && "$SALAM" build "$f" --backend=llvm --release --target="$TARGET" --linker=builtin --output=out.exe --log-level=error >nl.err 2>&1) || { echo "FAIL $id (link)"; fail=$((fail + 1)); continue; }
+            # shellcheck disable=SC2086
+            if ! (cd "$w" && "$SALAM" build "$f" $common --linker=builtin --output=out.exe >nl.err 2>&1); then
+                echo "FAIL $id (link)"
+                fail=$((fail + 1))
+                continue
+            fi
             r=$(timeout 30 wine "$w/ref.exe" </dev/null 2>/dev/null | tr -d '\r')
             n=$(timeout 30 wine "$w/out.exe" </dev/null 2>/dev/null | tr -d '\r')
             ;;
         *apple*)
             arch=${TARGET%%-*}
             syms=$(llvm-nm -u "$w/p.o" | awk '{print $NF}' | grep -v '^___dso_handle$' | sed "s/.*/'&'/" | paste -sd, -)
-            printf -- "--- !tapi-tbd\ntbd-version: 4\ntargets: [ %s-macos ]\ninstall-name: '/usr/lib/libSystem.B.dylib'\nexports:\n  - targets: [ %s-macos ]\n    symbols: [ %s, 'dyld_stub_binder' ]\n...\n" "$arch" "$arch" "$syms" >"$w/libSystem.tbd"
-            ld64.lld -arch "$arch" -platform_version macos 11.0 11.0 -ignore_optimization_hints -o "$w/ref" "$w/p.o" -L"$w" -lSystem >/dev/null 2>&1 || { skip=$((skip + 1)); continue; }
-            (cd "$w" && "$SALAM" build "$f" --backend=llvm --release --target="$TARGET" --linker=builtin --output=out --log-level=error >nl.err 2>&1) || { echo "FAIL $id (link)"; fail=$((fail + 1)); continue; }
-            if ! python3 "$R/tools/linker/macho_check.py" sig "$w/out" >/dev/null || ! python3 "$R/tools/linker/macho_check.py" cmp "$w/out" "$w/ref" >"$w/cmp"; then
+            {
+                printf -- "--- !tapi-tbd\ntbd-version: 4\ntargets: [ %s-macos ]\n" "$arch"
+                printf -- "install-name: '/usr/lib/libSystem.B.dylib'\nexports:\n"
+                printf -- "  - targets: [ %s-macos ]\n    symbols: [ %s, 'dyld_stub_binder' ]\n...\n" "$arch" "$syms"
+            } >"$w/libSystem.tbd"
+            if ! ld64.lld -arch "$arch" -platform_version macos 11.0 11.0 -ignore_optimization_hints \
+                -o "$w/ref" "$w/p.o" -L"$w" -lSystem >/dev/null 2>&1; then
+                skip=$((skip + 1))
+                continue
+            fi
+            # shellcheck disable=SC2086
+            if ! (cd "$w" && "$SALAM" build "$f" $common --linker=builtin --output=out >nl.err 2>&1); then
+                echo "FAIL $id (link)"
+                fail=$((fail + 1))
+                continue
+            fi
+            chk=$R/tools/linker/macho_check.py
+            if ! python3 "$chk" sig "$w/out" >/dev/null || ! python3 "$chk" cmp "$w/out" "$w/ref" >"$w/cmp"; then
                 echo "FAIL $id (Mach-O check)"
                 head -3 "$w/cmp"
                 fail=$((fail + 1))

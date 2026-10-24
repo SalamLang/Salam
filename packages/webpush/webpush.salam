@@ -23,7 +23,7 @@ import conv
 import crypto
 import encoding
 import tls
-import net.httpx
+import net.http
 
 @en "DEFAULT_TTL"
 @fa "ماندگاری پیش‌فرض"
@@ -170,7 +170,7 @@ func _body(salt: void*, as_point: void*, ciphertext_b64: str): str:
 end
 
 func _origin(endpoint: str): str:
-    ep := httpx.ParseEndpoint(endpoint)
+    ep := http.ParseEndpoint(endpoint)
     if not ep.ok: ret "" end
     mut out := "https://"
     if not ep.secure: out = "http://" end
@@ -200,7 +200,7 @@ func _path_of(endpoint: str): str:
 end
 
 func _host_header(endpoint: str): str:
-    ep := httpx.ParseEndpoint(endpoint)
+    ep := http.ParseEndpoint(endpoint)
     if not ep.ok: ret "" end
     if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
         ret ep.host + ":" + ep.port
@@ -248,10 +248,12 @@ end
 func _post(
     sub: Subscription, authorization: str, opts: Options, encoding_name: str, n: int, body: void*
 ): Result:
-    ep := httpx.ParseEndpoint(sub.endpoint)
+    ep := http.ParseEndpoint(sub.endpoint)
     if not ep.ok: ret Result { error = "the endpoint could not be parsed" } end
     head := _request_head(sub, authorization, opts, encoding_name, n)
-    ret _result(httpx.Send(ep, head, body, n))
+    mut r := http.SendRaw(ep, head, body, n)
+    defer http.FreeRaw(r)
+    ret _result(r)
 end
 
 func _request_head(
@@ -276,7 +278,7 @@ func _ttl_of(opts: Options): str:
     ret "" + opts.ttl
 end
 
-func _result(r: httpx.Response): Result:
+func _result(r: http.RawResponse): Result:
     if r.error.len() > 0: ret Result { status = r.status, error = r.error } end
     if r.status == 404 or r.status == 410:
         ret Result { status = r.status, gone = true, error = "the subscription is gone" }
@@ -285,8 +287,9 @@ func _result(r: httpx.Response): Result:
     ret Result { status = r.status, error = _reason(r) }
 end
 
-func _reason(r: httpx.Response): str:
-    if r.body.len() > 0 and r.body.len() < 400: ret str.Trim(r.body) end
+func _reason(r: http.RawResponse): str:
+    text := http.RawText(r)
+    if text.len() > 0 and text.len() < 400: ret str.Trim(text) end
     ret "the push service answered " + r.status
 end
 

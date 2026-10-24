@@ -131,6 +131,8 @@ const UI_TEXT_EN: Record<string, string> = {
   "گفت‌وگوی تازه": "New chat",
   "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.":
     "The assistant could not answer just now. Please ask again in a moment.",
+  "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد.":
+    'This turn ran too long and was stopped. Say "continue" to pick up where it left off.',
   "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.":
     "The assistant is not available. Please try again in a moment.",
 };

@@ -82,7 +82,8 @@ then goes through:
    between, becomes stores into the original. Below the size limit, a call
    may still be inlined when its arguments make it cheaper: each pointer to
    a scalar local of the caller (an `i &: int` parameter) and each constant
-   argument earns a bonus, since inlining turns the first into a register
+   argument earns a bonus (not for recursive callees, where inlining the
+   first call only grows the caller), since inlining turns the first into a register
    and folds the second. `prim_fold(s, i)` in a scanning loop is the usual
    case.
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of

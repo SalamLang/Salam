@@ -23,6 +23,7 @@ import compress
 import net.internal.rawsock
 import encoding.url
 import tls
+import sync
 
 if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
     link dynamic "winhttp"
@@ -45,9 +46,15 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
     end
 end
 
-mut _g_http_status := 0
-mut _g_http_headers := ""
-mut _g_http_error := ""
+const MAX_COOKIES := 256
+
+struct _Reply:
+    pub status: int = 0
+    pub head: str = ""
+    pub body: compress.ByteBuf = compress.ByteBuf {}
+    pub err: str = ""
+    pub url: str = ""
+end
 
 @en "Response"
 @fa "پاسخ"
@@ -56,6 +63,7 @@ pub struct Response:
     pub body: str = ""
     pub head: str = ""
     pub err: str = ""
+    pub url: str = ""
 end
 
 @en "BytesResponse"
@@ -65,6 +73,16 @@ pub struct BytesResponse:
     pub head: str = ""
     pub body: compress.ByteBuf = compress.ByteBuf {}
     pub err: str = ""
+    pub url: str = ""
+end
+
+@en "RequestOptions"
+@fa "گزینه های درخواست"
+pub struct RequestOptions:
+    pub idle_ms: int = 30000
+    pub timeout_ms: int = 0
+    pub max_body: int = 268435456
+    pub max_redirects: int = 0
 end
 
 @en "Client"
@@ -72,60 +90,259 @@ end
 pub struct Client:
     pub cookies: HashMap<str, str> = HashMap {} as HashMap<str, str>
     pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    pub cookie_hosts: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    pub options: RequestOptions = RequestOptions {}
+    pub mu: sync.Mutex = sync.Mutex {}
+
+    func _lock():
+        if this.mu.handle != null: sync.Lock(this.mu) end
+    end
+
+    func _unlock():
+        if this.mu.handle != null: sync.Unlock(this.mu) end
+    end
 
     @en "SetHeader"
     @fa "تنظیم سرصفحه"
     pub func SetHeader(name: str, value: str):
+        this._lock()
         this.headers.put(name, value)
+        this._unlock()
     end
 
     @en "SetCookie"
     @fa "تنظیم کوکی"
     pub func SetCookie(name: str, value: str):
+        this._lock()
         this.cookies.put(name, value)
+        this.cookie_hosts.remove(name)
+        this._unlock()
     end
 
     @en "ClearCookies"
     @fa "پاک کردن کوکی ها"
     pub func ClearCookies():
+        this._lock()
         this.cookies = HashMap {} as HashMap<str, str>
+        this.cookie_hosts = HashMap {} as HashMap<str, str>
+        this._unlock()
     end
 
-    func _merged_headers(extra: str): str:
-        mut out := serialize(this.headers)
-        ck := CookieHeader(this.cookies)
-        if ck.len() > 0:
-            out = out.concat("Cookie: ").concat(ck).concat("\r\n")
-        end
-        if extra.len() > 0:
-            out = out.concat(extra)
+    @en "SetTimeout"
+    @fa "تنظیم مهلت"
+    pub func SetTimeout(total_ms: int):
+        this._lock()
+        this.options.timeout_ms = total_ms
+        this._unlock()
+    end
+
+    @en "SetIdleTimeout"
+    @fa "تنظیم مهلت بیکاری"
+    pub func SetIdleTimeout(idle_ms: int):
+        this._lock()
+        this.options.idle_ms = idle_ms
+        this._unlock()
+    end
+
+    @en "SetMaxRedirects"
+    @fa "تنظیم سقف تغییر مسیر"
+    pub func SetMaxRedirects(n: int):
+        this._lock()
+        this.options.max_redirects = n
+        this._unlock()
+    end
+
+    @en "SetMaxBody"
+    @fa "تنظیم سقف بدنه"
+    pub func SetMaxBody(bytes: int):
+        this._lock()
+        if bytes > 0: this.options.max_body = bytes end
+        this._unlock()
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        if this.mu.handle != null: sync.Destroy(this.mu) end
+        this.mu = sync.Mutex {}
+        this.cookies.free()
+        this.headers.free()
+        this.cookie_hosts.free()
+    end
+
+    func _opts(): RequestOptions:
+        this._lock()
+        o := this.options
+        this._unlock()
+        ret o
+    end
+
+    func _host_cookies(host: str, orig_host: str): str:
+        if this.cookies.size() == 0: ret "" end
+        mut out := ""
+        it := this.cookies.iter()
+        until it.has_next():
+            name := it.key()
+            value := it.value()
+            mut owner := ""
+            if this.cookie_hosts.has(name): owner = this.cookie_hosts.get(name) end
+            mut allow := owner == host
+            if owner.len() == 0: allow = host == orig_host end
+            if allow and _token_ok(name) and not _has_control(value) and value.find(";") < 0:
+                if out.len() > 0: out = out.concat("; ") end
+                out = out.concat(name).concat("=").concat(value)
+            end
+            it.next()
         end
         ret out
     end
 
-    func _absorb(r: Response):
-        cs := CookieMap(r)
-        it := cs.iter()
-        until it.has_next():
-            this.cookies.put(it.key(), it.value())
-            it.next()
+    func _jar_block(host: str, orig_host: str, user_block: str, bad &: str): str:
+        cross := host != orig_host
+        if this.mu.handle != null: sync.Lock(this.mu) end
+        base := _block_of(this.headers, bad)
+        ck := this._host_cookies(host, orig_host)
+        if this.mu.handle != null: sync.Unlock(this.mu) end
+        if bad.len() > 0: ret "" end
+        mut out := base
+        if cross: out = _strip_sensitive(out) end
+        if ck.len() > 0:
+            out = out.concat("Cookie: ").concat(ck).concat("\r\n")
+        end
+        if user_block.len() > 0:
+            if cross:
+                out = out.concat(_strip_sensitive(user_block))
+            else:
+                out = out.concat(user_block)
+            end
+        end
+        ret out
+    end
+
+    func _jar_absorb(host: str, head: str):
+        r := Response { head = head }
+        lines := HeaderValues(r, "Set-Cookie")
+        defer lines.free()
+        if lines.len() > 0:
+            if this.mu.handle != null: sync.Lock(this.mu) end
+            each line in lines:
+                semi := line.find(";")
+                mut pair := line
+                mut attrs := ""
+                if semi >= 0:
+                    pair = line.substr(0, semi)
+                    attrs = str.Replace(str.Lower(line.substr(semi, line.len() - semi)), " ", "")
+                end
+                eqp := pair.find("=")
+                if eqp > 0:
+                    name := pair.substr(0, eqp).trim()
+                    value := pair.substr(eqp + 1, pair.len() - eqp - 1).trim()
+                    gone := str.Contains(attrs, ";max-age=0") or str.Contains(attrs, ";max-age=-")
+                    if gone:
+                        this.cookies.remove(name)
+                        this.cookie_hosts.remove(name)
+                    else _token_ok(name) and not _has_control(value):
+                        if this.cookies.has(name) or this.cookies.size() < MAX_COOKIES:
+                            this.cookies.put(name, value)
+                            this.cookie_hosts.put(name, host)
+                        end
+                    end
+                end
+            end
+            if this.mu.handle != null: sync.Unlock(this.mu) end
+        end
+    end
+
+    func _run(method_in: str, url_str: str, block: str, body: str, o: RequestOptions): _Reply:
+        method := str.Upper(method_in)
+        e := _check_request(method, url_str, block)
+        if e.len() > 0: ret _Reply { err = e, url = url_str } end
+        mut deadline := 0 as i64
+        if o.timeout_ms > 0: deadline = sync.NowMs() + (o.timeout_ms as i64) end
+        mut cur_url := url_str
+        mut cur_method := method
+        mut cur_body := body
+        mut cur_block := block
+        first := url.Parse(url_str)
+        orig_host := str.Lower(first.host)
+        mut hops := 0
+        until true:
+            u := url.Parse(cur_url)
+            se := _scheme_ok(u)
+            if se.len() > 0: ret _Reply { err = se, url = cur_url } end
+            mut total_ms := 0
+            if deadline > 0:
+                left := deadline - sync.NowMs()
+                if left <= 0: ret _Reply { err = "the request timed out", url = cur_url } end
+                total_ms = left as int
+            end
+            mut bad := ""
+            mut hop_block := this._jar_block(str.Lower(u.host), orig_host, cur_block, bad)
+            if bad.len() > 0: ret _Reply { err = bad, url = cur_url } end
+            if cur_body.len() == 0 and (cur_method == "GET" or cur_method == "HEAD"):
+                hop_block = _strip_body_headers(hop_block)
+            else cur_body.len() > 0 and _header_at(hop_block, "Content-Type") < 0:
+                hop_block = hop_block.concat("Content-Type: application/x-www-form-urlencoded\r\n")
+            end
+            mut rep := _hop(cur_method, u, hop_block, cur_body, total_ms, o)
+            if rep.err.len() == 0: this._jar_absorb(str.Lower(u.host), rep.head) end
+            loc := _redirect_target(rep)
+            if rep.err.len() > 0 or loc.len() == 0 or o.max_redirects <= 0:
+                ret _finish(rep, o, cur_url)
+            end
+            compress.BufFree(rep.body)
+            if hops >= o.max_redirects:
+                ret _Reply { status = rep.status, head = rep.head, err = "stopped after " + hops + " redirects", url = cur_url }
+            end
+            if _has_space_or_control(loc):
+                ret _Reply { status = rep.status, head = rep.head, err = "the redirect target is not a valid URL", url = cur_url }
+            end
+            next := url.Join(u, loc)
+            ne := _scheme_ok(next)
+            if ne.len() > 0:
+                ret _Reply { status = rep.status, head = rep.head, err = "redirect: " + ne, url = cur_url }
+            end
+            if str.Lower(u.scheme) == "https" and str.Lower(next.scheme) == "http":
+                ret _Reply { status = rep.status, head = rep.head, err = "refusing to follow a redirect from https to http", url = cur_url }
+            end
+            if _origin_of(u) != _origin_of(next): cur_block = _strip_sensitive(cur_block) end
+            s := rep.status
+            if s == 303 or ((s == 301 or s == 302) and cur_method == "POST"):
+                if cur_method != "HEAD": cur_method = "GET" end
+                cur_body = ""
+                cur_block = _strip_body_headers(cur_block)
+            end
+            cur_url = url.String(next)
+            hops += 1
         end
     end
 
     @en "Request"
     @fa "درخواست"
     pub func Request(method: str, url: str, body: str): Response:
-        r := send(method, url, this._merged_headers(""), body)
-        this._absorb(r)
-        ret r
+        ret _as_response(this._run(method, url, "", body, this._opts()))
+    end
+
+    @en "RequestRaw"
+    @fa "درخواست خام"
+    pub func RequestRaw(method: str, url: str, header_block: str, body: str): Response:
+        ret _as_response(this._run(method, url, header_block, body, this._opts()))
+    end
+
+    @en "RequestBytes"
+    @fa "درخواست بایتی"
+    pub func RequestBytes(method: str, url: str, header_block: str, body: str): BytesResponse:
+        rep := this._run(method, url, header_block, body, this._opts())
+        ret BytesResponse { status = rep.status, head = rep.head, body = rep.body, err = rep.err, url = rep.url }
     end
 
     @en "RequestWith"
     @fa "درخواست با"
     pub func RequestWith(method: str, url: str, body: str, extra: HashMap<str, str>): Response:
-        r := send(method, url, this._merged_headers(serialize(extra)), body)
-        this._absorb(r)
-        ret r
+        mut bad := ""
+        block := _block_of(extra, bad)
+        if bad.len() > 0: ret Response { err = bad, url = url } end
+        ret _as_response(this._run(method, url, block, body, this._opts()))
     end
 
     @en "Get"
@@ -155,6 +372,10 @@ pub struct Client:
     @en "Head"
     @fa "درخواست هد"
     pub func Head(url: str): Response: ret this.Request("HEAD", url, "") end
+end
+
+func _hdr_lower(s: str): str:
+    ret str.Lower(s)
 end
 
 func _header_at(headers: str, name: str): int:
@@ -190,6 +411,72 @@ func _header_value(headers: str, name: str, fallback: str): str:
     ret value
 end
 
+func _has_control(s: str): bool:
+    bp := s as u8*
+    repeat s.len() in i:
+        c := bp[i] as int
+        if c < 32 or c == 127: ret true end
+    end
+    ret false
+end
+
+func _has_space_or_control(s: str): bool:
+    bp := s as u8*
+    repeat s.len() in i:
+        c := bp[i] as int
+        if c <= 32 or c == 127: ret true end
+    end
+    ret false
+end
+
+func _token_ok(s: str): bool:
+    if s.len() == 0: ret false end
+    bp := s as u8*
+    repeat s.len() in i:
+        c := bp[i] as int
+        if c <= 32 or c >= 127: ret false end
+        if c == 58 or c == 34 or c == 40 or c == 41 or c == 44 or c == 47 or c == 59 or c == 60 or c == 61 or c == 62 or c == 63 or c == 64 or c == 91 or c == 92 or c == 93 or c == 123 or c == 125:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _check_block(block: str): str:
+    if block.len() == 0: ret "" end
+    lines := str.Split(block, "\r\n")
+    defer lines.free()
+    each line in lines:
+        if line.len() > 0:
+            if _has_control(line): ret "a header contains a control character" end
+            colon := line.find(":")
+            if colon <= 0: ret "a header line has no name: " + line end
+            if not _token_ok(line.substr(0, colon)):
+                ret "invalid header name: " + line.substr(0, colon)
+            end
+        end
+    end
+    ret ""
+end
+
+func _block_of(headers: HashMap<str, str>, bad &: str): str:
+    mut out := ""
+    it := headers.iter()
+    until it.has_next():
+        if not _token_ok(it.key()):
+            bad = "invalid header name: " + it.key()
+            ret ""
+        end
+        if _has_control(it.value()):
+            bad = "the value of header " + it.key() + " contains a control character"
+            ret ""
+        end
+        out = out.concat(it.key()).concat(": ").concat(it.value()).concat("\r\n")
+        it.next()
+    end
+    ret out
+end
+
 func _drop_transport_headers(headers: str): str:
     if headers.len() == 0:
         ret ""
@@ -200,7 +487,7 @@ func _drop_transport_headers(headers: str): str:
     each line in lines:
         low := str.Lower(line)
         mut keep := line.len() > 0
-        if str.StartsWith(low, "accept-encoding:") or str.StartsWith(low, "connection:"):
+        if str.StartsWith(low, "accept-encoding:") or str.StartsWith(low, "connection:") or str.StartsWith(low, "content-length:") or str.StartsWith(low, "transfer-encoding:") or str.StartsWith(low, "host:"):
             keep = false
         end
         if keep:
@@ -208,6 +495,157 @@ func _drop_transport_headers(headers: str): str:
         end
     end
     ret out
+end
+
+func _is_sensitive(low: str): bool:
+    ret str.StartsWith(low, "authorization:") or str.StartsWith(low, "cookie:") or str.StartsWith(low, "proxy-authorization:") or str.StartsWith(low, "private-token:")
+end
+
+func _strip_sensitive(headers: str): str:
+    if headers.len() == 0: ret "" end
+    lines := str.Split(headers, "\r\n")
+    defer lines.free()
+    mut out := ""
+    each line in lines:
+        if line.len() > 0 and not _is_sensitive(str.Lower(line)):
+            out = out.concat(line).concat("\r\n")
+        end
+    end
+    ret out
+end
+
+func _strip_body_headers(headers: str): str:
+    if headers.len() == 0: ret "" end
+    lines := str.Split(headers, "\r\n")
+    defer lines.free()
+    mut out := ""
+    each line in lines:
+        low := str.Lower(line)
+        if line.len() > 0 and not str.StartsWith(low, "content-type:") and not str.StartsWith(low, "content-length:"):
+            out = out.concat(line).concat("\r\n")
+        end
+    end
+    ret out
+end
+
+func _request_target(u: url.URL): str:
+    mut path := u.path
+    if path.len() == 0:
+        path = "/"
+    end
+    if u.raw_query.len() > 0:
+        ret path + "?" + u.raw_query
+    end
+    ret path
+end
+
+func _host_header(u: url.URL): str:
+    mut h := u.host
+    if h.find(":") >= 0:
+        h = "[" + h + "]"
+    end
+    if u.port == 0:
+        ret h
+    end
+    if u.port == 80 and str.Equals(str.Lower(u.scheme), "http"):
+        ret h
+    end
+    if u.port == 443 and str.Equals(str.Lower(u.scheme), "https"):
+        ret h
+    end
+    ret h.concat(":").concat(str.FromInt(u.port as i64))
+end
+
+func _build_head(method: str, u: url.URL, raw_headers: str, body_len: int): str:
+    target := _request_target(u)
+    headers := _drop_transport_headers(raw_headers)
+    mut host := _header_value(raw_headers, "Host", "")
+    if host.len() == 0:
+        host = _host_header(u)
+    end
+    mut req := method.concat(" ").concat(target).concat(" HTTP/1.1\r\nHost: ")
+    req = req.concat(host).concat("\r\n")
+    if _header_at(headers, "User-Agent") < 0:
+        req = req.concat("User-Agent: Salam/1.0\r\n")
+    end
+    if _header_at(headers, "Accept") < 0:
+        req = req.concat("Accept: */*\r\n")
+    end
+    req = req.concat("Accept-Encoding: gzip\r\nConnection: close\r\n")
+    if headers.len() > 0:
+        req = req.concat(headers)
+    end
+    if body_len > 0 or method == "POST" or method == "PUT" or method == "PATCH":
+        req = req.concat("Content-Length: ").concat(str.FromInt(body_len as i64)).concat("\r\n")
+    end
+    ret req.concat("\r\n")
+end
+
+func _port_of(u: url.URL): int:
+    if u.port != 0: ret u.port end
+    if str.Equals(str.Lower(u.scheme), "http"): ret 80 end
+    ret 443
+end
+
+func _origin_of(u: url.URL): str:
+    ret str.Lower(u.scheme) + "://" + str.Lower(u.host) + ":" + _port_of(u)
+end
+
+func _check_request(method: str, url_str: str, block: str): str:
+    if not _token_ok(method): ret "invalid request method" end
+    if url_str.len() == 0: ret "no URL" end
+    if _has_space_or_control(url_str): ret "the URL contains a space or a control character" end
+    ret _check_block(block)
+end
+
+func _scheme_ok(u: url.URL): str:
+    low := str.Lower(u.scheme)
+    if low != "http" and low != "https":
+        if u.scheme.len() == 0: ret "the URL has no scheme" end
+        ret "unsupported URL scheme '" + u.scheme + "'"
+    end
+    if u.host.len() == 0: ret "no host in URL" end
+    ret ""
+end
+
+func _redirect_target(rep: _Reply): str:
+    s := rep.status
+    if s != 301 and s != 302 and s != 303 and s != 307 and s != 308: ret "" end
+    ret HeaderValue(rep.head, "Location")
+end
+
+func _finish(rep: _Reply, o: RequestOptions, url_str: str): _Reply:
+    mut out := rep
+    out.url = url_str
+    if out.err.len() > 0: ret out end
+    enc := HeaderValue(out.head, "Content-Encoding").lower()
+    if out.body.len > 0 and str.Contains(enc, "gzip"):
+        mut ok := false
+        plain := compress.GzipDecompressMax(out.body.data, out.body.len, o.max_body, ok)
+        compress.BufFree(out.body)
+        if not ok:
+            mut dead := plain
+            compress.BufFree(dead)
+            out.err = "the gzip body could not be decoded or is larger than the " + o.max_body + "-byte limit"
+            out.body = compress.NewByteBuf()
+            ret out
+        end
+        out.body = plain
+    end
+    if out.body.len > o.max_body:
+        compress.BufFree(out.body)
+        out.body = compress.NewByteBuf()
+        out.err = "the response body is larger than the " + o.max_body + "-byte limit"
+    end
+    ret out
+end
+
+func _as_response(rep: _Reply): Response:
+    mut r := Response { status = rep.status, head = rep.head, err = rep.err, url = rep.url }
+    mut buf := rep.body
+    r.body = compress.BufToStrUnsafe(buf)
+    compress.BufFree(buf)
+    ret r
 end
 
 if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
@@ -240,64 +678,37 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         ret _make_str(buf, n - 1)
     end
 
-    func _fetch_bytes(method: str, url: str, raw_headers: str, body: str, head &: str): compress.ByteBuf:
+    func _hop(method: str, u: url.URL, raw_headers: str, body: str, total_ms: int, o: RequestOptions): _Reply:
         headers := _drop_transport_headers(raw_headers)
-        mut p := url
-        mut secure := 1
-        mut wport := 443
-        if url.substr(0, 8) == "https://":
-            p = url.substr(8, url.len() - 8)
-        else:
-            if url.substr(0, 7) == "http://":
-                secure = 0
-                wport = 80
-                p = url.substr(7, url.len() - 7)
-            end
-        end
-        slash_pos := p.find("/")
-        mut host_part := p
-        mut path_part := "/"
-        if slash_pos >= 0:
-            host_part = p.substr(0, slash_pos)
-            path_part = p.substr(slash_pos, p.len() - slash_pos)
-        end
-        colon_pos := host_part.find(":")
-        mut host_only := host_part
-        if colon_pos >= 0:
-            host_only = host_part.substr(0, colon_pos)
-            wport = host_part.substr(colon_pos + 1, host_part.len() - colon_pos - 1).to_int()
-        end
+        secure := str.Lower(u.scheme) == "https"
         wagent := _str_to_wide(_header_value(headers, "User-Agent", "Salam/1.0"))
         sess := WinHttpOpen(wagent, 0, null, null, 0)
         mem.Free(wagent)
-        if sess == null: ret compress.NewByteBuf() end
+        if sess == null: ret _Reply { err = "could not open an HTTP session" } end
         defer WinHttpCloseHandle(sess)
-        whost := _str_to_wide(host_only)
-        conn := WinHttpConnect(sess, whost, wport, 0)
+        whost := _str_to_wide(u.host)
+        conn := WinHttpConnect(sess, whost, _port_of(u), 0)
         mem.Free(whost)
         if conn == null:
-            ret compress.NewByteBuf()
+            ret _Reply { err = "could not connect to " + u.host }
         end
         defer WinHttpCloseHandle(conn)
         mut req_flags := 0
-        if secure == 1: req_flags = 8388608 end
+        if secure: req_flags = 8388608 end
         wverb := _str_to_wide(method)
-        wpath := _str_to_wide(path_part)
+        wpath := _str_to_wide(_request_target(u))
         req := WinHttpOpenRequest(conn, wverb, wpath, null, null, null, req_flags)
         mem.Free(wverb)
         mem.Free(wpath)
         if req == null:
-            ret compress.NewByteBuf()
+            ret _Reply { err = "could not open the request" }
         end
         defer WinHttpCloseHandle(req)
-        low := str.Lower(headers)
-        if str.Contains(low, "authorization:") or str.Contains(low, "private-token:"):
-            off := mem.Allocate(4 as u64)
-            o32 := off as int*
-            o32[0] = 2
-            WinHttpSetOption(req, 63, off, 4)
-            mem.Free(off)
-        end
+        off := mem.Allocate(4 as u64)
+        o32 := off as int*
+        o32[0] = 2
+        WinHttpSetOption(req, 63, off, 4)
+        mem.Free(off)
         if headers.len() > 0:
             wh := _str_to_wide(headers)
             WinHttpAddRequestHeaders(req, wh, 0 - 1, 805306368)
@@ -306,11 +717,11 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         blen := body.len()
         sent := WinHttpSendRequest(req, null, 0, body, blen, blen, 0 as usize)
         if sent == 0:
-            ret compress.NewByteBuf()
+            ret _Reply { err = "could not send the request" }
         end
         recv_ok := WinHttpReceiveResponse(req, null)
         if recv_ok == 0:
-            ret compress.NewByteBuf()
+            ret _Reply { err = "the server did not answer" }
         end
         mut hlen := mem.Allocate(8 as u64) as i64*
         defer mem.Free(hlen as void*)
@@ -334,7 +745,7 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         defer mem.Free(buf)
         mut got := mem.Allocate(8 as u64) as i64*
         defer mem.Free(got as void*)
-        mut out := compress.NewByteBuf()
+        mut out := _Reply { status = _status_of(hdr_str), head = hdr_str, body = compress.NewByteBuf() }
         mut reading := true
         until reading:
             got[0] = 0
@@ -342,296 +753,51 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
             if rd_ok == 0 or got[0] == 0:
                 reading = false
             else:
-                compress.BufPushBytes(out, buf, got[0] as int)
+                compress.BufPushBytes(out.body, buf, got[0] as int)
+                if out.body.len > o.max_body + 65536:
+                    compress.BufFree(out.body)
+                    out.err = "the response body is larger than the " + o.max_body + "-byte limit"
+                    reading = false
+                end
             end
         end
-        head = hdr_str
         ret out
     end
 else:
-
-    func _read_all_plain(s: rawsock.Socket): compress.ByteBuf:
-        buf := compress.NewByteBuf()
-        tmp := mem.Allocate(16384 as u64)
-        defer mem.Free(tmp)
-        mut going := true
-        until going:
-            n := rawsock.RecvBytes(s, tmp, 16384)
-            if n <= 0:
-                going = false
-            else:
-                compress.BufPushBytes(buf, tmp, n)
-            end
-        end
-        ret buf
-    end
-
-    func _read_all_tls(c &: tls.Conn): compress.ByteBuf:
-        buf := compress.NewByteBuf()
-        tmp := mem.Allocate(16384 as u64)
-        defer mem.Free(tmp)
-        mut going := true
-        until going:
-            n := tls.ReadBytes(c, tmp, 16384)
-            if n <= 0:
-                going = false
-            else:
-                compress.BufPushBytes(buf, tmp, n)
-            end
-        end
-        ret buf
-    end
-
-    func _buf_find_crlf(b: compress.ByteBuf, from: int): int:
-        p := b.data as i8*
-        n := b.len
-        mut i := from
-        until i + 1 < n:
-            if p[i] == 13 and p[i + 1] == 10:
-                ret i
-            end
-            i += 1
-        end
-        ret 0 - 1
-    end
-
-    func _buf_find_crlf_crlf(b: compress.ByteBuf): int:
-        p := b.data as i8*
-        n := b.len
-        mut i := 0
-        until i + 3 < n:
-            if p[i] == 13 and p[i + 1] == 10 and p[i + 2] == 13 and p[i + 3] == 10:
-                ret i
-            end
-            i += 1
-        end
-        ret 0 - 1
-    end
-
-    func _buf_slice_str(b: compress.ByteBuf, start: int, length: int): str:
-        tmp := compress.NewByteBuf()
-        if length > 0:
-            compress.BufPushBytes(tmp, ((b.data as i64) + start) as void*, length)
-        end
-        ret compress.BufToStrUnsafe(tmp)
-    end
-
-    func _buf_slice_buf(b: compress.ByteBuf, start: int, length: int): compress.ByteBuf:
-        out := compress.NewByteBuf()
-        if length > 0:
-            compress.BufPushBytes(out, ((b.data as i64) + start) as void*, length)
-        end
-        ret out
-    end
-
-    func _hexval(s: str): int:
-        mut v := 0
-        n := s.len()
-        repeat n in i:
-            c := char_code(s.substr(i, 1))
-            mut d := 0 - 1
-            if c >= 48 and c <= 57: d = c - 48 end
-            if c >= 97 and c <= 102: d = c - 87 end
-            if c >= 65 and c <= 70: d = c - 55 end
-            if d < 0:
-                ret v
-            end
-            v = v * 16 + d
-        end
-        ret v
-    end
-
-    func _dechunk_buf(body: compress.ByteBuf): compress.ByteBuf:
-        out := compress.NewByteBuf()
-        mut pos := 0
-        mut going := true
-        until going:
-            nl := _buf_find_crlf(body, pos)
-            if nl < 0:
-                going = false
-            else:
-                line := _buf_slice_str(body, pos, nl - pos)
-                semi := line.find(";")
-                mut sizestr := line
-                if semi >= 0:
-                    sizestr = line.substr(0, semi)
-                end
-                sz := _hexval(str.Trim(sizestr))
-                pos = nl + 2
-                if sz <= 0:
-                    going = false
-                else:
-                    if pos + sz > body.len:
-                        going = false
-                    else:
-                        compress.BufPushBytes(out, ((body.data as i64) + pos) as void*, sz)
-                        pos = pos + sz + 2
-                    end
-                end
-            end
-        end
-        ret out
-    end
-
-    func _request_target(u: url.URL): str:
-        mut path := u.path
-        if path.len() == 0:
-            path = "/"
-        end
-        if u.raw_query.len() > 0:
-            ret path + "?" + u.raw_query
-        end
-        ret path
-    end
-
-    func _host_header(u: url.URL): str:
-        if u.port == 0:
-            ret u.host
-        end
-        if u.port == 80 and str.Equals(u.scheme, "http"):
-            ret u.host
-        end
-        if u.port == 443 and str.Equals(u.scheme, "https"):
-            ret u.host
-        end
-        ret u.host.concat(":").concat(str.FromInt(u.port as i64))
-    end
-
-    func _build_request(method: str, u: url.URL, raw_headers: str, body: str): str:
-        target := _request_target(u)
-        headers := _drop_transport_headers(raw_headers)
-        mut req := method.concat(" ").concat(target).concat(" HTTP/1.1\r\nHost: ")
-        req = req.concat(_host_header(u)).concat("\r\n")
-        if _header_at(headers, "User-Agent") < 0:
-            req = req.concat("User-Agent: Salam/1.0\r\n")
-        end
-        if _header_at(headers, "Accept") < 0:
-            req = req.concat("Accept: */*\r\n")
-        end
-        req = req.concat("Accept-Encoding: gzip\r\nConnection: close\r\n")
-        if headers.len() > 0:
-            req = req.concat(headers)
-        end
-        if body.len() > 0:
-            req = req.concat("Content-Length: ").concat(str.FromInt(body.len() as i64)).concat("\r\n")
-        end
-        req = req.concat("\r\n")
-        if body.len() > 0:
-            req = req.concat(body)
-        end
-        ret req
-    end
-
-    func _fetch_bytes(method: str, url_str: str, headers: str, body: str, head_out &: str): compress.ByteBuf:
-        u := url.Parse(url_str)
-        secure := u.scheme != "http"
-        mut port := u.port
-        if port == 0:
-            if secure:
-                port = 443
-            else:
-                port = 80
-            end
-        end
-        if u.host.len() == 0:
-            _g_http_error = "no host in URL '" + url_str + "'"
-            ret compress.NewByteBuf()
-        end
-        req := _build_request(method, u, headers, body)
-
-        mut raw := compress.NewByteBuf()
-        if secure:
-            cfg := tls.NewConfig(u.host)
-            mut c := tls.Dial(u.host, port, cfg)
-            if not tls.ConnOk(c):
-                _g_http_error = "TLS: " + tls.ConnError(c)
-                tls.Close(c)
-                ret compress.NewByteBuf()
-            end
-            tls.Write(c, req)
-            raw = _read_all_tls(c)
-            tls.Close(c)
+    func _hop(method: str, u: url.URL, raw_headers: str, body: str, total_ms: int, o: RequestOptions): _Reply:
+        ep := Endpoint { host = u.host, port = _port_of(u), secure = str.Lower(u.scheme) == "https", ok = u.host.len() > 0 }
+        head := _build_head(method, u, raw_headers, body.len())
+        mut r := RawResponse {}
+        if body.len() == 0:
+            r = _raw_send(ep, head, null, 0, o.idle_ms, total_ms, o.max_body + RAW_HEAD_LIMIT, tls.NewConfig(u.host))
         else:
-            s := rawsock.Connect(u.host, port)
-            if not rawsock.Ok(s):
-                _g_http_error = "could not connect to " + u.host + ":" + port
-                ret compress.NewByteBuf()
-            end
-            rawsock.Send(s, req)
-            raw = _read_all_plain(s)
-            rawsock.Close(s)
+            r = _raw_send(ep, head, body as void*, body.len(), o.idle_ms, total_ms, o.max_body + RAW_HEAD_LIMIT, tls.NewConfig(u.host))
         end
-
-        sep := _buf_find_crlf_crlf(raw)
-        if sep < 0:
-            ret raw
-        end
-        head := _buf_slice_str(raw, 0, sep + 4)
-        mut rest := _buf_slice_buf(raw, sep + 4, raw.len - sep - 4)
-        lhead := str.Lower(head)
-        if str.Find(lhead, "transfer-encoding: chunked") >= 0:
-            rest = _dechunk_buf(rest)
-        end
-        head_out = head
-        if str.Find(lhead, "content-encoding: gzip") >= 0:
-            mut ok := false
-            decompressed := compress.GzipDecompressBuf(rest, ok)
-            if ok:
-                ret decompressed
-            end
-        end
-        ret rest
+        if r.error.len() > 0: ret _Reply { err = r.error } end
+        mut out := _Reply { status = r.status, head = r.head, body = compress.NewByteBuf() }
+        compress.BufPushBytes(out.body, r.data, r.len)
+        FreeRaw(r)
+        ret out
     end
 end
 
-func _fetch_https(method: str, url_str: str, headers: str, body: str): str:
-    mut head := ""
-    buf := _fetch_bytes(method, url_str, headers, body, head)
-    ret head.concat(compress.BufToStrUnsafe(buf))
+func _status_of(head: str): int:
+    sp := head.find(" ")
+    if sp < 0: ret 0 end
+    ret head.substr(sp + 1, 3).to_int()
 end
 
-func _parse_response(req: str): Response:
-    sp := req.find(" ")
-    if sp >= 0:
-        _g_http_status = req.substr(sp + 1, 3).to_int()
-    else:
-        _g_http_status = 0
-    end
-    sep_pos := req.find("\r\n\r\n")
-    if sep_pos >= 0:
-        _g_http_headers = req.substr(0, sep_pos + 4)
-        ret Response { status = _g_http_status, body = req.substr(sep_pos + 4, req.len() - sep_pos - 4), head = _g_http_headers, err = _g_http_error }
-    end
-    _g_http_headers = ""
-    ret Response { status = _g_http_status, body = req, head = "", err = _g_http_error }
+func _simple(method: str, url_str: str, block: str, body: str): Response:
+    mut c := Client {}
+    defer c.Free()
+    ret c.RequestRaw(method, url_str, block, body)
 end
 
-func serialize(headers: HashMap<str, str>): str:
-    mut out := ""
-    it := headers.iter()
-    until it.has_next():
-        out = out.concat(it.key()).concat(": ").concat(it.value()).concat("\r\n")
-        it.next()
-    end
-    ret out
-end
-
-func send(method: str, url_str: str, header_block: str, body: str): Response:
-    _g_http_status = 0
-    _g_http_headers = ""
-    _g_http_error = ""
-    mut effective_headers := header_block
-    if body.len() > 0:
-        if header_block.find("Content-Type") < 0:
-            effective_headers = header_block.concat("Content-Type: application/x-www-form-urlencoded\r\n")
-        end
-    end
-    req := _fetch_https(method, url_str, effective_headers, body)
-    ret _parse_response(req)
-end
-
-func _hdr_lower(s: str): str:
-    ret str.Lower(s)
+func _simple_with(method: str, url_str: str, headers: HashMap<str, str>, body: str): Response:
+    mut bad := ""
+    block := _block_of(headers, bad)
+    if bad.len() > 0: ret Response { err = bad, url = url_str } end
+    ret _simple(method, url_str, block, body)
 end
 
 @en "NewHeaders"
@@ -642,48 +808,56 @@ end
 
 @en "Get"
 @fa "دریافت"
-pub func Get(url: str): Response: ret send("GET", url, "", "") end
+pub func Get(url: str): Response: ret _simple("GET", url, "", "") end
 
 @en "Post"
 @fa "ارسال"
-pub func Post(url: str, body: str): Response: ret send("POST", url, "", body) end
+pub func Post(url: str, body: str): Response: ret _simple("POST", url, "", body) end
 
 @en "GetWith"
 @fa "دریافت با"
 pub func GetWith(url: str, headers: HashMap<str, str>): Response:
-    ret send("GET", url, serialize(headers), "")
+    ret _simple_with("GET", url, headers, "")
 end
 
 @en "PostWith"
 @fa "ارسال با"
 pub func PostWith(url: str, body: str, headers: HashMap<str, str>): Response:
-    ret send("POST", url, serialize(headers), body)
+    ret _simple_with("POST", url, headers, body)
 end
 
 @en "Request"
 @fa "درخواست"
 pub func Request(method: str, url: str, headers: HashMap<str, str>, body: str): Response:
-    ret send(method, url, serialize(headers), body)
+    ret _simple_with(method, url, headers, body)
 end
 
 @en "RequestRaw"
 @fa "درخواست خام"
 pub func RequestRaw(method: str, url: str, header_block: str, body: str): Response:
-    ret send(method, url, header_block, body)
+    ret _simple(method, url, header_block, body)
 end
 
 @en "GetBytesWith"
 @fa "دریافت بایت ها با"
 pub func GetBytesWith(url: str, headers: HashMap<str, str>): BytesResponse:
-    _g_http_error = ""
-    mut head := ""
-    buf := _fetch_bytes("GET", url, serialize(headers), "", head)
-    mut status := 0
-    sp := head.find(" ")
-    if sp >= 0:
-        status = head.substr(sp + 1, 3).to_int()
-    end
-    ret BytesResponse { status = status, head = head, body = buf, err = _g_http_error }
+    mut bad := ""
+    block := _block_of(headers, bad)
+    if bad.len() > 0: ret BytesResponse { err = bad, url = url } end
+    mut c := Client {}
+    defer c.Free()
+    ret c.RequestBytes("GET", url, block, "")
+end
+
+@en "Do"
+@fa "انجام درخواست"
+pub func Do(method: str, url: str, headers: HashMap<str, str>, body: str, opts: RequestOptions): Response:
+    mut bad := ""
+    block := _block_of(headers, bad)
+    if bad.len() > 0: ret Response { err = bad, url = url } end
+    mut c := Client { options = opts }
+    defer c.Free()
+    ret c.RequestRaw(method, url, block, body)
 end
 
 @en "Ok"
@@ -783,52 +957,52 @@ end
 
 @en "Put"
 @fa "قرار دادن"
-pub func Put(url: str, body: str): Response: ret send("PUT", url, "", body) end
+pub func Put(url: str, body: str): Response: ret _simple("PUT", url, "", body) end
 
 @en "PutWith"
 @fa "قرار دادن با"
 pub func PutWith(url: str, body: str, headers: HashMap<str, str>): Response:
-    ret send("PUT", url, serialize(headers), body)
+    ret _simple_with("PUT", url, headers, body)
 end
 
 @en "Delete"
 @fa "حذف"
-pub func Delete(url: str): Response: ret send("DELETE", url, "", "") end
+pub func Delete(url: str): Response: ret _simple("DELETE", url, "", "") end
 
 @en "DeleteWith"
 @fa "حذف با"
 pub func DeleteWith(url: str, headers: HashMap<str, str>): Response:
-    ret send("DELETE", url, serialize(headers), "")
+    ret _simple_with("DELETE", url, headers, "")
 end
 
 @en "Patch"
 @fa "وصله"
-pub func Patch(url: str, body: str): Response: ret send("PATCH", url, "", body) end
+pub func Patch(url: str, body: str): Response: ret _simple("PATCH", url, "", body) end
 
 @en "PatchWith"
 @fa "وصله با"
 pub func PatchWith(url: str, body: str, headers: HashMap<str, str>): Response:
-    ret send("PATCH", url, serialize(headers), body)
+    ret _simple_with("PATCH", url, headers, body)
 end
 
 @en "Options"
 @fa "گزینه ها"
-pub func Options(url: str): Response: ret send("OPTIONS", url, "", "") end
+pub func Options(url: str): Response: ret _simple("OPTIONS", url, "", "") end
 
 @en "OptionsWith"
 @fa "گزینه ها با"
 pub func OptionsWith(url: str, headers: HashMap<str, str>): Response:
-    ret send("OPTIONS", url, serialize(headers), "")
+    ret _simple_with("OPTIONS", url, headers, "")
 end
 
 @en "Head"
 @fa "درخواست هد"
-pub func Head(url: str): Response: ret send("HEAD", url, "", "") end
+pub func Head(url: str): Response: ret _simple("HEAD", url, "", "") end
 
 @en "HeadWith"
 @fa "سرصفحه با"
 pub func HeadWith(url: str, headers: HashMap<str, str>): Response:
-    ret send("HEAD", url, serialize(headers), "")
+    ret _simple_with("HEAD", url, headers, "")
 end
 
 @en "EncodeForm"
@@ -906,5 +1080,5 @@ end
 @en "NewClient"
 @fa "کارخواه جدید"
 pub func NewClient(): Client:
-    ret Client {}
+    ret Client { mu = sync.NewMutex() }
 end

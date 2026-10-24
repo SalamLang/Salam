@@ -17,11 +17,14 @@ package http
 import mem
 import str
 import tls
+import sync
 import net.tcp
 
 const RAW_CHUNK := 65536
 
 const RAW_LIMIT_DEFAULT := 268435456
+
+const RAW_HEAD_LIMIT := 65536
 
 mut _raw_limit := RAW_LIMIT_DEFAULT
 
@@ -30,6 +33,12 @@ struct RawAcc:
     pub len: int = 0
     pub cap: int = 0
     pub bad: bool = false
+    pub scanned: int = 0
+    pub head_end: int = -1
+    pub mode: int = 0
+    pub need: int = 0
+    pub done: bool = false
+    pub head_only: bool = false
 end
 
 @en "RawResponse"
@@ -68,31 +77,168 @@ func _raw_at(a &: RawAcc, off: int): void*:
     ret ((a.data as i64) + (off as i64)) as void*
 end
 
-func _raw_read_plain(c: tcp.Conn, a &: RawAcc): str:
+func _next_wait(idle_ms: int, deadline: i64): int:
+    mut w := idle_ms
+    if deadline > 0:
+        left := deadline - sync.NowMs()
+        if left <= 0: ret -1 end
+        if w <= 0 or left < w: w = left as int end
+    end
+    ret w
+end
+
+func _timed_out(started: i64, waited: int): bool:
+    if waited <= 0: ret false end
+    ret sync.NowMs() - started >= (waited as i64) - 5
+end
+
+func _raw_note(a &: RawAcc): str:
+    if a.head_end >= 0: ret "" end
+    mut i := a.scanned
+    if i > 3:
+        i -= 3
+    else:
+        i = 0
+    end
+    until i + 3 < a.len:
+        if _raw_byte(a.data, i) == 13 and _raw_byte(a.data, i + 1) == 10 and _raw_byte(a.data, i + 2) == 13 and _raw_byte(a.data, i + 3) == 10:
+            a.head_end = i + 4
+            ret ""
+        end
+        i += 1
+    end
+    a.scanned = a.len
+    if a.len > RAW_HEAD_LIMIT: ret "the response head is larger than " + RAW_HEAD_LIMIT + " bytes" end
+    ret ""
+end
+
+func _all_digits(s: str): bool:
+    if s.len() == 0: ret false end
+    bp := s as u8*
+    repeat s.len() in i:
+        c := bp[i] as int
+        if c < 48 or c > 57: ret false end
+    end
+    ret true
+end
+
+func _raw_chunks_done(a &: RawAcc): bool:
+    mut src := a.head_end
     until true:
-        if not _raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
-        n := tcp.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
-        if n <= 0: ret "" end
-        a.len += n
-        if a.len > _raw_limit:
-            ret "the response is larger than the " + _raw_limit + "-byte limit"
+        mut size := 0
+        mut digits := 0
+        until src < a.len:
+            d := _raw_hexval(_raw_byte(a.data, src))
+            if d < 0: break end
+            size = size * 16 + d
+            digits += 1
+            src += 1
+            if digits > 12: ret false end
+        end
+        if digits == 0: ret false end
+        until src < a.len and _raw_byte(a.data, src) != 10: src += 1 end
+        if src >= a.len: ret false end
+        src += 1
+        if size == 0:
+            if a.len - src == 2 and _raw_byte(a.data, src) == 13 and _raw_byte(a.data, src + 1) == 10: ret true end
+            mut i := src
+            until i + 3 < a.len:
+                if _raw_byte(a.data, i) == 13 and _raw_byte(a.data, i + 1) == 10 and _raw_byte(a.data, i + 2) == 13 and _raw_byte(a.data, i + 3) == 10: ret true end
+                i += 1
+            end
+            ret false
+        end
+        if size > a.len - src: ret false end
+        src += size
+        if src < a.len and _raw_byte(a.data, src) == 13: src += 2
+        else src < a.len and _raw_byte(a.data, src) == 10: src += 1
         end
     end
 end
 
-func _raw_read_tls(c &: tls.Conn, a &: RawAcc): str:
-    until true:
-        if not _raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
-        n := tls.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
-        if n <= 0: ret "" end
-        a.len += n
-        if a.len > _raw_limit:
-            ret "the response is larger than the " + _raw_limit + "-byte limit"
+func _raw_frame(a &: RawAcc):
+    head := _raw_head_str(a, a.head_end)
+    status := _raw_status(head)
+    a.mode = 1
+    if a.head_only or status < 200 or status == 204 or status == 304:
+        a.mode = 4
+        a.done = true
+        ret
+    end
+    if str.Contains(HeaderValue(head, "Transfer-Encoding").lower(), "chunked"):
+        a.mode = 3
+        ret
+    end
+    cl := HeaderValue(head, "Content-Length")
+    if cl.len() > 0 and cl.len() < 16 and _all_digits(cl):
+        a.mode = 2
+        a.need = cl.to_int()
+    end
+end
+
+func _raw_check_done(a &: RawAcc):
+    if a.head_end < 0 or a.done: ret end
+    if a.mode == 0: _raw_frame(a) end
+    if a.mode == 2 and a.len - a.head_end >= a.need:
+        a.done = true
+    else a.mode == 3 and a.len - a.head_end >= 5:
+        n := a.len
+        if _raw_byte(a.data, n - 1) == 10 and _raw_byte(a.data, n - 2) == 13 and _raw_byte(a.data, n - 3) == 10 and _raw_byte(a.data, n - 4) == 13:
+            if _raw_chunks_done(a): a.done = true end
         end
+    end
+end
+
+func _raw_after_read(a &: RawAcc, limit: int): str:
+    if a.len > limit:
+        ret "the response is larger than the " + limit + "-byte limit"
+    end
+    e := _raw_note(a)
+    if e.len() > 0: ret e end
+    _raw_check_done(a)
+    ret ""
+end
+
+func _raw_read_plain(c: tcp.Conn, a &: RawAcc, idle_ms: int, deadline: i64, limit: int): str:
+    until true:
+        w := _next_wait(idle_ms, deadline)
+        if w < 0: ret "the request timed out" end
+        if w > 0: tcp.SetDeadline(c, w) end
+        if not _raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
+        started := sync.NowMs()
+        n := tcp.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
+        if n <= 0:
+            if _timed_out(started, w): ret "the request timed out" end
+            ret ""
+        end
+        a.len += n
+        e := _raw_after_read(a, limit)
+        if e.len() > 0: ret e end
+        if a.done: ret "" end
+    end
+end
+
+func _raw_read_tls(t: tcp.Conn, c &: tls.Conn, a &: RawAcc, idle_ms: int, deadline: i64, limit: int): str:
+    until true:
+        w := _next_wait(idle_ms, deadline)
+        if w < 0: ret "the request timed out" end
+        if w > 0: tcp.SetDeadline(t, w) end
+        if not _raw_grow(a, RAW_CHUNK): ret "out of memory reading the response" end
+        started := sync.NowMs()
+        n := tls.ReadBytes(c, _raw_at(a, a.len), RAW_CHUNK)
+        if n <= 0:
+            if _timed_out(started, w): ret "the request timed out" end
+            ret ""
+        end
+        a.len += n
+        e := _raw_after_read(a, limit)
+        if e.len() > 0: ret e end
+        if a.done: ret "" end
     end
 end
 
 func _raw_head_end(a &: RawAcc): int:
+    if a.head_end >= 0: ret a.head_end end
     mut i := 0
     until i + 3 < a.len:
         if _raw_byte(a.data, i) == 13 and _raw_byte(a.data, i + 1) == 10 and _raw_byte(a.data, i + 2) == 13 and _raw_byte(a.data, i + 3) == 10:
@@ -169,6 +315,10 @@ func _raw_finish(a &: RawAcc, err: str): RawResponse:
         mem.Free(a.data)
         ret RawResponse { error = "the response head never ended" }
     end
+    if a.mode == 2 and a.len - head_end < a.need:
+        mem.Free(a.data)
+        ret RawResponse { error = "the response body was cut short" }
+    end
     head := _raw_head_str(a, head_end)
     mut body_len := a.len - head_end
     if body_len > 0 and str.Contains(HeaderValue(head, "Transfer-Encoding").lower(), "chunked"):
@@ -198,47 +348,77 @@ func _raw_status(head: str): int:
     ret head.substr(sp + 1, 3).to_int()
 end
 
-func _dial_tls(ep: Endpoint, timeout_ms: int, cfg: tls.Config): tls.Conn:
-    if timeout_ms <= 0: ret tls.Dial(ep.host, ep.port, cfg) end
-    t := tcp.Dial(ep.host, ep.port)
-    if not tcp.ConnOk(t): ret tls.Conn { err = "could not connect to " + ep.host } end
-    tcp.SetDeadline(t, timeout_ms)
-    ret tls.WrapClient(t.fd, cfg)
+func _send_error(deadline: i64, what: str): RawResponse:
+    if deadline > 0 and sync.NowMs() >= deadline:
+        ret RawResponse { error = "the request timed out" }
+    end
+    ret RawResponse { error = what }
 end
 
 func _raw_send_plain(
-    ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int
+    ep: Endpoint, head: str, body: void*, n: int, idle_ms: int, total_ms: int, limit: int
 ): RawResponse:
-    c := tcp.Dial(ep.host, ep.port)
+    mut deadline := 0 as i64
+    if total_ms > 0: deadline = sync.NowMs() + (total_ms as i64) end
+    mut dial_ms := total_ms
+    if dial_ms <= 0: dial_ms = idle_ms end
+    c := tcp.DialTimeout(ep.host, ep.port, dial_ms)
     if not tcp.ConnOk(c):
-        ret RawResponse { error = "could not connect to " + ep.host + ":" + ep.port }
+        ret _send_error(deadline, "could not connect to " + ep.host + ":" + ep.port)
     end
     defer tcp.Close(c)
-    if timeout_ms > 0: tcp.SetDeadline(c, timeout_ms) end
-    mut a := RawAcc {}
+    mut a := RawAcc { head_only = str.StartsWith(head, "HEAD ") }
+    w := _next_wait(idle_ms, deadline)
+    if w < 0: ret _raw_finish(a, "the request timed out") end
+    if w > 0: tcp.SetDeadline(c, w) end
     if tcp.Write(c, head) < 0: ret _raw_finish(a, "could not send the request") end
     if n > 0 and tcp.WriteBytes(c, body, n) < 0:
         ret _raw_finish(a, "could not send the body")
     end
-    ret _raw_finish(a, _raw_read_plain(c, a))
+    ret _raw_finish(a, _raw_read_plain(c, a, idle_ms, deadline, limit))
 end
 
 func _raw_send_tls(
-    ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int, cfg: tls.Config
+    ep: Endpoint, head: str, body: void*, n: int, idle_ms: int, total_ms: int, limit: int, cfg: tls.Config
 ): RawResponse:
-    mut c := _dial_tls(ep, timeout_ms, cfg)
+    mut deadline := 0 as i64
+    if total_ms > 0: deadline = sync.NowMs() + (total_ms as i64) end
+    mut dial_ms := total_ms
+    if dial_ms <= 0: dial_ms = idle_ms end
+    t := tcp.DialTimeout(ep.host, ep.port, dial_ms)
+    if not tcp.ConnOk(t): ret _send_error(deadline, "could not connect to " + ep.host) end
+    mut conf := cfg
+    if conf.server_name.len() == 0: conf.server_name = ep.host end
+    w0 := _next_wait(idle_ms, deadline)
+    if w0 < 0:
+        tcp.Close(t)
+        ret RawResponse { error = "the request timed out" }
+    end
+    if w0 > 0: tcp.SetDeadline(t, w0) end
+    mut c := tls.WrapClient(t.fd, conf)
     if not tls.ConnOk(c):
         e := tls.ConnError(c)
         tls.Close(c)
         ret RawResponse { error = "TLS: " + e }
     end
     defer tls.Close(c)
-    mut a := RawAcc {}
+    mut a := RawAcc { head_only = str.StartsWith(head, "HEAD ") }
+    w := _next_wait(idle_ms, deadline)
+    if w < 0: ret _raw_finish(a, "the request timed out") end
+    if w > 0: tcp.SetDeadline(t, w) end
     if tls.Write(c, head) < 0: ret _raw_finish(a, "could not send the request") end
     if n > 0 and tls.WriteBytes(c, body, n) < 0:
         ret _raw_finish(a, "could not send the body")
     end
-    ret _raw_finish(a, _raw_read_tls(c, a))
+    ret _raw_finish(a, _raw_read_tls(t, c, a, idle_ms, deadline, limit))
+end
+
+func _raw_send(
+    ep: Endpoint, head: str, body: void*, n: int, idle_ms: int, total_ms: int, limit: int, cfg: tls.Config
+): RawResponse:
+    if not ep.ok: ret RawResponse { error = "the endpoint could not be parsed" } end
+    if ep.secure: ret _raw_send_tls(ep, head, body, n, idle_ms, total_ms, limit, cfg) end
+    ret _raw_send_plain(ep, head, body, n, idle_ms, total_ms, limit)
 end
 
 @en "SendRaw"
@@ -252,9 +432,7 @@ end
 pub func SendRawTimeout(
     ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int
 ): RawResponse:
-    if not ep.ok: ret RawResponse { error = "the endpoint could not be parsed" } end
-    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms, tls.NewConfig(ep.host)) end
-    ret _raw_send_plain(ep, head, body, n, timeout_ms)
+    ret _raw_send(ep, head, body, n, timeout_ms, 0, _raw_limit, tls.NewConfig(ep.host))
 end
 
 @en "SendRawTLS"
@@ -262,9 +440,7 @@ end
 pub func SendRawTLS(
     ep: Endpoint, head: str, body: void*, n: int, timeout_ms: int, cfg: tls.Config
 ): RawResponse:
-    if not ep.ok: ret RawResponse { error = "the endpoint could not be parsed" } end
-    if ep.secure: ret _raw_send_tls(ep, head, body, n, timeout_ms, cfg) end
-    ret _raw_send_plain(ep, head, body, n, timeout_ms)
+    ret _raw_send(ep, head, body, n, timeout_ms, 0, _raw_limit, cfg)
 end
 
 @en "FreeRaw"

@@ -1371,11 +1371,11 @@ end
 - **`net.http`** (`import net.http`, called `http.`), client: `Get Post Put Patch Delete Head Options` (+ `*With(..., headers)` taking a
   `HashMap<str,str>` from `NewHeaders`), `Request(method, url, headers, body)`, then `Status Body Error Ok GetHeader Headers SetCookieLines` (or the
   fields `.status .body .err`); `NewClient()` keeps cookies (`c.Get`,
-  `c.Post`, `c.SetHeader`). No redirects are followed and the one-line calls have **no
-  timeout** (use `SendRawTimeout` for one); `Post`/`Put`/`Patch` label the body as
+  `c.Post`, `c.SetHeader`). Redirects are off unless `RequestOptions.max_redirects` (or `c.SetMaxRedirects`) is set; every call has a 30 s idle timeout and a 256 MB body cap, and
+  `Do(method, url, headers, body, opts)` or `c.SetTimeout(ms)` bounds the whole request (errors read `the request timed out`); `Post`/`Put`/`Patch` label the body as
   a form unless you pass `Content-Type`; `Status` 0 means unreachable;
-  `Ok` is 2xx; the one-shot calls share package state, so not from several
-  threads at once.
+  `Ok` is 2xx; the one-line calls keep no state, so threads may call them freely, and a `NewClient()` client is safe to share between threads
+  (`Free` it at the end; a `Client {}` literal has no lock). Cookies go back only to the host that set them.
 - **Server** (`net.http` + `net.router`): `mut r := router.NewRouter()`,
   `router.Get/Post/Put/Patch/Delete(r, "/books/:id", handler)`, `Group Static`; `mut s := http.NewServer(port)`, `http.Use(s, r)`, then `Run(s)`,
   `RunTLS(s, cert, key)` or `RunBackground(s)` (returns once bound, serves on

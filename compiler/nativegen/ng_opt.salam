@@ -1392,6 +1392,59 @@ func ro_global(g &: Ng, a: int, off &: i64): int:
     ret 0 - 1
 end
 
+func fold_strlen(g &: Ng, i: int): bool:
+    fv := g.i_a[i]
+    if g.off_kstr or fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] != g.sym_strlen or g.i_pcount[i] != 1 or g.i_res[i] < 0:
+        ret false
+    end
+    mut off := 0 as i64
+    sy := ro_global(g, g.pool[g.i_ps[i]], off)
+    if sy < 0 or sy >= g.sy_ro.len() or not g.sy_ro[sy] or g.sy_sec[sy] == SEC_BSS or off < (0 as i64) or not ro_clean(g, sy):
+        ret false
+    end
+    lim := g.sy_size[sy]
+    base := g.sy_off[sy]
+    mut k := off as int
+    until k < lim and sec_byte(g, g.sy_sec[sy], base + k) != 0:
+        k += 1
+    end
+    if k >= lim:
+        ret false
+    end
+    replace_res(g, i, cval(g, g.i_ty[i], (k - (off as int)) as i64))
+    ret true
+end
+
+func fold_memcpy(g &: Ng, i: int): bool:
+    fv := g.i_a[i]
+    if g.off_kstr or fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] != g.sym_memcpy or g.i_pcount[i] != 3 or (g.i_f[i] & IF_VARARG) != 0:
+        ret false
+    end
+    ps := g.i_ps[i]
+    d := g.pool[ps]
+    sv := g.pool[ps + 3]
+    n := g.pool[ps + 6]
+    if d < 0 or sv < 0 or n < 0 or g.v_kind[n] != VK_INT or g.v_i[n] < (0 as i64) or g.v_i[n] > (64 as i64):
+        ret false
+    end
+    nf := new_val(g, VK_GLB, T_PTR, 0 as i64)
+    g.v_def[nf] = g.sym_i_memcpy
+    g.sy_used[g.sym_i_memcpy] = true
+    c := ins_new(g, OP_CALL, T_VOID)
+    g.i_a[c] = nf
+    g.i_x[c] = 0 - 1
+    g.i_ps[c] = g.pool.len()
+    g.i_pcount[c] = 4
+    each av in [d, sv, const_int(g, T_I64, g.v_i[n]), const_int(g, T_I1, 0 as i64)]:
+        g.pool.push(av)
+        g.pool.push(0)
+        g.pool.push(0 - 1)
+    end
+    ins_before(g, i, c)
+    replace_res(g, i, d)
+    ret true
+end
+
 func fold_ro_load(g &: Ng, i: int): bool:
     a := g.i_a[i]
     if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
@@ -1470,6 +1523,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
             mut ch := false
             if op == OP_LOAD:
                 ch = fold_ro_load(g, i)
+            end
+            if op == OP_CALL:
+                ch = fold_strlen(g, i) or fold_memcpy(g, i)
             end
             if op == OP_SREM or op == OP_UREM:
                 ch = rem_rem(g, i)

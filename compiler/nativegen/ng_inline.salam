@@ -6,6 +6,9 @@ const INL_GROW := 2000
 const INL_FRAME_MAX := 512
 const INL_ONE_MAX := 300
 const INL_UNR_MAX := 320
+const INL_SITE_MAX := 48
+const INL_SLOT_BONUS := 24
+const INL_CONST_BONUS := 6
 
 pub struct Ic:
     pub ent: Vector<int> = Vector {}
@@ -16,6 +19,7 @@ pub struct Ic:
     pub e_p0: Vector<int> = Vector {}
     pub e_nb: Vector<int> = Vector {}
     pub e_cost: Vector<int> = Vector {}
+    pub e_need: Vector<int> = Vector {}
     pub e_na: Vector<int> = Vector {}
     pub e_rec: Vector<bool> = Vector {}
     pub vk: Vector<int> = Vector {}
@@ -82,9 +86,9 @@ func one_caller(g &: Ng): bool:
     ret g.ip_ncall[s] == 1 and not g.ip_taken[s]
 end
 
-func inline_ok_fn(g &: Ng, cost: int): bool:
+func inline_ok_fn(g &: Ng, cost: int): int:
     if g.f_noinline or g.f_noret:
-        ret false
+        ret 0 - 1
     end
     mut lim := INL_MAX
     if g.f_always:
@@ -103,12 +107,16 @@ func inline_ok_fn(g &: Ng, cost: int): bool:
             end
         end
     end
+    mut need := 0
     if cost > lim:
-        ret false
+        if g.off_isite or cost > lim + INL_SITE_MAX:
+            ret 0 - 1
+        end
+        need = cost - lim
     end
     each fl in g.f_argf:
         if (fl & IF_BYVAL) != 0:
-            ret false
+            ret 0 - 1
         end
     end
     mut frame := 0
@@ -118,13 +126,13 @@ func inline_ok_fn(g &: Ng, cost: int): bool:
             if g.i_op[i] == OP_ALLOCA:
                 frame += tsize(g, g.i_x[i]) * (g.i_d[i] < (1 as i64) ? 1 : g.i_d[i] as int)
                 if frame > INL_FRAME_MAX:
-                    ret false
+                    ret 0 - 1
                 end
             end
             i = g.i_next[i]
         end
     end
-    ret true
+    ret need
 end
 
 func cache_val(g &: Ng, v: int, base: int): int:
@@ -152,7 +160,8 @@ func cache_function(g &: Ng):
             eff = 1
         end
     end
-    if not inline_ok_fn(g, eff):
+    need := inline_ok_fn(g, eff)
+    if need < 0:
         ret
     end
     s := g.f_sym
@@ -262,6 +271,7 @@ func cache_function(g &: Ng):
     g.ic.e_p0.push(p0)
     g.ic.e_nb.push(g.b_rpo.len())
     g.ic.e_cost.push(cost)
+    g.ic.e_need.push(need)
     g.ic.e_na.push(g.f_args.len())
     g.ic.e_rec.push(calls_self(g))
 end
@@ -501,7 +511,29 @@ func call_inlinable(g &: Ng, i: int, grown: int): int:
             ret 0 - 1
         end
     end
+    if g.ic.e_need[e] > 0 and site_bonus(g, i) < g.ic.e_need[e]:
+        ret 0 - 1
+    end
     ret e
+end
+
+func site_bonus(g &: Ng, c: int): int:
+    mut bonus := 0
+    repeat g.i_pcount[c] in k:
+        v := g.pool[g.i_ps[c] + 3 * k]
+        if v >= 0 and v < g.v_kind.len():
+            kd := g.v_kind[v]
+            if kd == VK_INS:
+                d := g.v_def[v]
+                if d >= 0 and g.i_op[d] == OP_ALLOCA and not is_agg(g, g.i_x[d]) and g.i_d[d] <= (1 as i64):
+                    bonus += INL_SLOT_BONUS
+                end
+            else kd == VK_INT or kd == VK_ZERO:
+                bonus += INL_CONST_BONUS
+            end
+        end
+    end
+    ret bonus
 end
 
 func inline_calls(g &: Ng): bool:

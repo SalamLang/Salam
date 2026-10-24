@@ -45,6 +45,8 @@ All of it lives in `compiler/nativegen/`:
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_elf.salam`, `ng_coff.salam`                                    | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
+| `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |
+| `ng_scale.salam`                                                   | Shares one multiply between addresses that scale the same index by a size x86 cannot encode                                                                                 |
 | `ng_asm.salam`                                                     | The `--emit-asm` listing                                                                                                                                                    |
 | `ng_dump.salam`                                                    | `SALAM_NG_DUMP=<function>` prints a function's optimized IR to stderr                                                                                                       |
 
@@ -72,7 +74,17 @@ then goes through:
    to reach only through a pointer. A struct local that is stored whole exactly
    once and otherwise only loaded whole (a by-value parameter's spill slot, or
    the copy an inlined setter makes) is replaced by the stored value, so
-   `Put(a, id, node)` copies the node once instead of three times.
+   `Put(a, id, node)` copies the node once instead of three times. A local
+   filled by one whole-struct copy and afterwards only read field by field
+   (`n := at.Get(a, id)` followed by `n.a`, `n.b`) loads just those fields
+   from the source at the copy, and a copy that is patched field by field and
+   copied straight back to where it came from, with no other memory access in
+   between, becomes stores into the original. Below the size limit, a call
+   may still be inlined when its arguments make it cheaper: each pointer to
+   a scalar local of the caller (an `i &: int` parameter) and each constant
+   argument earns a bonus, since inlining turns the first into a register
+   and folds the second. `prim_fold(s, i)` in a scanning loop is the usual
+   case.
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -133,7 +145,12 @@ then goes through:
    A floating-point constant compared inside a loop is materialized once in
    the preheader, since `ucomisd` needs it in a register
    (`until zx * zx + zy * zy <= 4.0` in Mandelbrot), and so is a 64-bit
-   integer constant that does not fit an immediate.
+   integer constant that does not fit an immediate. A call to a read-only
+   function with invariant arguments moves out of a loop that writes no
+   memory when it surely runs in the first iteration: every path from the
+   header reaches it without leaving the loop, following the header's
+   branch with the values the loop starts with. A `strlen(s)` in the
+   condition of a character loop then runs once.
    Then comes
    unswitching: an innermost loop that branches on a loop-invariant condition
    is versioned into one copy per outcome. Compares, remainders and
@@ -202,7 +219,9 @@ then goes through:
     A stack slot whose address never escapes has its own memory version, so
     a store to one local array keeps loads from another one (in
     `x25519`'s `_gf_mul`, `a.v[i]` stays in a register while `t[i + j]` is
-    updated).
+    updated). A store to such a slot also leaves loads from every other
+    place alone, so a struct copied into a local and patched field by field
+    keeps the AST's base pointer in a register.
     Pointers that come from different `malloc`/`calloc`/`realloc` calls never
     alias, so writing one vector's buffer keeps loads from another one. A
     block-local pass then forwards stores to loads at the same constant
@@ -211,7 +230,9 @@ then goes through:
     A field load also sees an earlier whole-struct store. Calls to functions
     declared `memory(read)` or `memory(argmem: read)` (`strcmp`, `strlen`, the
     math library), and `malloc`/`calloc`, do not invalidate loads, so a
-    vector's data pointer stays in a register across a `strcmp` loop. A load
+    vector's data pointer stays in a register across a `strcmp` loop. Two
+    such calls with the same arguments and no write between them are one
+    call, so `strlen(s)` computed twice runs once. A load
     after a merge whose value every predecessor already has (stored or
     loaded) becomes a phi, which keeps the print buffer's length in a
     register across its flush branch. When exactly one predecessor lacks the
@@ -244,7 +265,12 @@ that literal, and recursive calls pass the parameter through unchanged. The
 
 Loads of internal globals that the module never writes (how llvmgen emits a
 `const`) fold to their initializer, and so do small copies out of constant
-strings, so `println "hello"` stores the bytes as immediates. Instruction selection folds address
+strings, so `println "hello"` stores the bytes as immediates. `strlen` of a
+constant string folds to its length, and a `memcpy` whose length is then a
+small constant becomes inline moves, so `name + "_"` no longer measures or
+calls anything for the `"_"`. When a function uses several addresses
+`base + i * s` with the same `i` and a scale `s` that x86 cannot encode
+(a 280-byte AST node), `i * s` is computed once. Instruction selection folds address
 arithmetic into memory operands, folds a
 single-use load into the ALU instruction or compare that consumes it, turns a
 load, an add/sub/and/or/xor and a store back to the same address into one
@@ -300,6 +326,11 @@ otherwise it gets 32-byte alignment.
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and
   the prologue has the shape the Windows unwinder expects (pushes,
   allocation, `lea rbp, [rsp+N]`), with an unwind entry per function.
+- On Linux, a function whose entry only compares a parameter with a constant
+  and branches to a block returning a constant or a parameter (`if nid == 0:
+ret end` at the top of a recursive AST walk) tests that parameter before
+  the prologue and returns without saving any register. The `.eh_frame`
+  entry starts its pushes after this short exit path.
 - `r10`, `r11`, `xmm14` and `xmm15` are kept free as scratch registers for
   spill code.
 - An `i1` value lives in the low byte of a register as 0 or 1. Narrow
@@ -319,8 +350,8 @@ otherwise it gets 32-byte alignment.
   build tests through the native backend.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
-  listing.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit`
+  listing, and a comma-separated list dumps several functions.
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -429,6 +429,27 @@ func pa_cur(t &: Gvn, a: int): int:
     ret t.pa_ep[a] > t.pbase ? t.pa_ep[a] : t.pbase
 end
 
+func call_key(g &: Ng, t &: Gvn, i: int, key &: i64): int:
+    fv := g.i_a[i]
+    n := g.i_pcount[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or g.v_def[fv] < 0 or n < 1 or n > 2 or (g.i_f[i] & IF_VARARG) != 0:
+        ret 0 - 1
+    end
+    if not call_no_write(g, i) or alloc_call(g, i) or is_agg(g, g.i_ty[i]):
+        ret 0 - 1
+    end
+    mut k := 0 as i64
+    repeat n in q:
+        av := g.pool[g.i_ps[i] + 3 * q]
+        if av < 0 or av >= (1 << 30) or (g.pool[g.i_ps[i] + 3 * q + 1] & (IF_BYVAL | IF_SRET)) != 0 or pa_root(g, t, av) >= 0:
+            ret 0 - 1
+        end
+        k = (k << (31 as i64)) | (av as i64)
+    end
+    key = k
+    ret 0 - 10 - 2 * g.v_def[fv] - (n - 1)
+end
+
 func gvn(g &: Ng): bool:
     mut t := Gvn {}
     mut cap := 64
@@ -524,7 +545,8 @@ func gvn(g &: Ng): bool:
                 lpa := pa_root(g, t, lroot)
                 lep2 := lpa >= 0 ? pa_cur(t, lpa) : (root_kind(g, lroot) == 1 ? eps : 0 - 1)
                 lsite := site_of(g, t, lroot)
-                lv := ld_find(t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, ep)
+                lg := lpa >= 0 ? 0 - 7 : ep
+                lv := ld_find(t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? lg : lep, lep2, lsite, lg)
                 if lv >= 0 and g.v_ty[lv] == g.i_ty[i]:
                     g.v_repl[g.i_res[i]] = lv
                     ins_unlink(g, i)
@@ -533,7 +555,7 @@ func gvn(g &: Ng): bool:
                     continue
                 end
                 mut aoff := 0 as i64
-                av := is_vec(g, g.i_ty[i]) ? 0 - 1 : ld_find_agg(g, t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, ep, aoff)
+                av := is_vec(g, g.i_ty[i]) ? 0 - 1 : ld_find_agg(g, t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? lg : lep, lep2, lsite, lg, aoff)
                 rv := av >= 0 ? extv_resolve(g, av, aoff, g.i_ty[i]) : 0 - 1
                 if rv >= 0:
                     g.v_repl[g.i_res[i]] = rv
@@ -555,9 +577,26 @@ func gvn(g &: Ng): bool:
                     i = nx
                     continue
                 end
-                ld_add(t, lroot, ldisp, g.i_ty[i], lep, lep2, lsite, g.i_res[i])
+                ld_add(t, lroot, ldisp, g.i_ty[i], lpa >= 0 ? 0 - 9 : lep, lep2, lsite, g.i_res[i])
                 i = nx
                 continue
+            end
+            if iop == OP_CALL and not g.off_ccse and g.i_res[i] >= 0:
+                mut ck := 0 as i64
+                ca := call_key(g, t, i, ck)
+                if ca < 0 - 1:
+                    cv := ld_find(t, ca, ck, g.i_ty[i], ep, 0 - 1, 0 - 1, ep)
+                    if cv >= 0 and g.v_ty[cv] == g.i_ty[i]:
+                        g.v_repl[g.i_res[i]] = cv
+                        ins_unlink(g, i)
+                        changed = true
+                        i = nx
+                        continue
+                    end
+                    ld_add(t, ca, ck, g.i_ty[i], ep, 0 - 1, 0 - 1, g.i_res[i])
+                    i = nx
+                    continue
+                end
             end
             if mem_write(g, i):
                 sc := iop == OP_STORE ? mem_cls(g, i) : 0
@@ -574,6 +613,18 @@ func gvn(g &: Ng): bool:
                             next_ep += 1
                         end
                     end
+                end
+                if spa >= 0 and iop == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not g.off_pst:
+                    t.pa_ep[spa] = next_ep
+                    next_ep += 1
+                    if not g.off_lcse:
+                        pv := g.i_a[i]
+                        if pv >= 0 and g.v_kind[pv] == VK_INS:
+                            ld_add(t, sroot, sdisp, g.v_ty[pv], 0 - 9, pa_cur(t, spa), ssite, pv)
+                        end
+                    end
+                    i = nx
+                    continue
                 end
                 if spa >= 0:
                     t.pa_ep[spa] = next_ep

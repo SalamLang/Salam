@@ -376,6 +376,105 @@ func licm_addr_split(g &: Ng, l &: Lp, mark: int, i: int): bool:
     ret false
 end
 
+func entry_const(g &: Ng, h: int, p: int, v: int, out &: i64): bool:
+    if v < 0:
+        ret false
+    end
+    mut x := v
+    if g.v_kind[x] == VK_INS:
+        d := g.v_def[x]
+        if g.i_op[d] != OP_PHI or g.i_blk[d] != h:
+            ret false
+        end
+        x = 0 - 1
+        repeat g.i_pcount[d] in k:
+            if g.pool[g.i_ps[d] + 2 * k + 1] == p:
+                x = g.pool[g.i_ps[d] + 2 * k]
+            end
+        end
+        if x < 0:
+            ret false
+        end
+    end
+    if g.v_kind[x] == VK_INT:
+        out = g.v_i[x]
+        ret true
+    end
+    if g.v_kind[x] == VK_ZERO:
+        out = 0 as i64
+        ret true
+    end
+    ret false
+end
+
+func fi_walk(g &: Ng, l &: Lp, mark: int, h: int, p: int, b: int, at_b: int, done &: Vector<int>, stk &: Vector<int>): bool:
+    if at_b == b:
+        ret true
+    end
+    if at_b < 0 or (at_b == h and stk.len() > 0) or l.inl[at_b] != mark:
+        ret false
+    end
+    each s0 in stk:
+        if s0 == at_b:
+            ret false
+        end
+    end
+    each d0 in done:
+        if d0 == at_b:
+            ret true
+        end
+    end
+    if stk.len() + done.len() >= 32:
+        ret false
+    end
+    t := g.b_last[at_b]
+    if t < 0:
+        ret false
+    end
+    stk.push(at_b)
+    mut ok := false
+    if g.i_op[t] == OP_BR:
+        ok = fi_walk(g, l, mark, h, p, b, g.i_b[t], done, stk)
+    else g.i_op[t] == OP_CBR:
+        mut c := 0 as i64
+        if entry_const(g, h, p, g.i_a[t], c):
+            ok = fi_walk(g, l, mark, h, p, b, c != (0 as i64) ? g.i_b[t] : g.i_c[t], done, stk)
+        else:
+            ok = fi_walk(g, l, mark, h, p, b, g.i_b[t], done, stk) and fi_walk(g, l, mark, h, p, b, g.i_c[t], done, stk)
+        end
+    end
+    _x := stk.pop()
+    if ok:
+        done.push(at_b)
+    end
+    ret ok
+end
+
+func first_iter_reaches(g &: Ng, l &: Lp, mark: int, h: int, p: int, b: int): bool:
+    mut done := Vector {} as Vector<int>
+    mut stk := Vector {} as Vector<int>
+    ok := fi_walk(g, l, mark, h, p, b, h, done, stk)
+    done.free()
+    stk.free()
+    ret ok
+end
+
+func call_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int, h: int, p: int): bool:
+    if g.i_op[i] != OP_CALL or g.i_res[i] < 0 or wr != 0 or (g.i_f[i] & IF_VARARG) != 0:
+        ret false
+    end
+    fv := g.i_a[i]
+    if fv < 0 or g.v_kind[fv] != VK_GLB or not call_no_write(g, i) or alloc_call(g, i):
+        ret false
+    end
+    repeat g.i_pcount[i] in k:
+        if not lp_inv(g, l, g.pool[g.i_ps[i] + 3 * k], mark):
+            ret false
+        end
+    end
+    ret first_iter_reaches(g, l, mark, h, p, g.i_blk[i])
+end
+
 func licm(g &: Ng): bool:
     build_dom(g)
     count_uses(g)
@@ -458,7 +557,7 @@ func licm(g &: Ng): bool:
                     end
                 end
                 nx := nx0
-                if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)):
+                if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)) or (not g.off_chst and call_hoistable(g, l, i, mk, wr, h, p)):
                     op := g.i_op[i]
                     ins_unlink(g, i)
                     g.i_op[i] = op

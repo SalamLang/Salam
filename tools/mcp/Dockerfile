@@ -1,5 +1,5 @@
 FROM debian:trixie-slim AS build
-ARG SALAM_VERSION=0.5.4
+ARG SALAM_VERSION=0.5.9
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*

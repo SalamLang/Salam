@@ -147845,6 +147845,7 @@ mut _srv_log := Vector {} as Vector<bool>
 mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
 mut _srv_shdr := Vector {} as Vector<str>
 mut _srv_count := 0
+mut _srv_mu := sync.NewMutex()
 struct _KV:
 pub k: str = ""
 pub v: str = ""
@@ -147897,8 +147898,10 @@ _srv_shdr.push("Salam")
 end
 end
 func _srv_claim(r: router.Router, hide: bool, log: bool): int:
+sync.Lock(_srv_mu)
 _srv_init()
 if _srv_count >= _SRV_MAX:
+sync.Unlock(_srv_mu)
 ret 0 - 1
 end
 slot := _srv_count
@@ -147907,6 +147910,7 @@ _srv_routers.set(slot, r)
 _srv_hide.set(slot, hide)
 _srv_log.set(slot, log)
 _srv_shdr.set(slot, _server_header(hide))
+sync.Unlock(_srv_mu)
 ret slot
 end
 func _srv_pack(slot: int, fd: i64): i64:
@@ -149178,9 +149182,12 @@ func WinHttpReadData(req: void*, buf: void*, toread: int, read: void*): int
 func WinHttpAddRequestHeaders(req: void*, headers: void*, hlen: int, modifiers: int): int
 func WinHttpCloseHandle(handle: void*): int
 func WinHttpSetOption(handle: void*, option: int, buf: void*, buflen: int): int
+func WinHttpSetTimeouts(handle: void*, resolve: int, connect: int, send: int, receive: int): int
 end
 end
 const MAX_COOKIES := 256
+const DEFAULT_MAX_BODY := 268435456
+const MAX_BODY_CAP := 1073741824
 struct _Reply:
 pub status: int = 0
 pub head: str = ""
@@ -149220,6 +149227,7 @@ pub struct Client:
 pub cookies: HashMap<str, str> = HashMap {} as HashMap<str, str>
 pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
 pub cookie_hosts: HashMap<str, str> = HashMap {} as HashMap<str, str>
+pub cookie_secure: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
 pub options: RequestOptions = RequestOptions {}
 pub mu: sync.Mutex = sync.Mutex {}
 func _lock():
@@ -149241,6 +149249,7 @@ pub func SetCookie(name: str, value: str):
 this._lock()
 this.cookies.put(name, value)
 this.cookie_hosts.remove(name)
+this.cookie_secure.remove(name)
 this._unlock()
 end
 @en "ClearCookies"
@@ -149249,6 +149258,7 @@ pub func ClearCookies():
 this._lock()
 this.cookies = HashMap {} as HashMap<str, str>
 this.cookie_hosts = HashMap {} as HashMap<str, str>
+this.cookie_secure = HashMap {} as HashMap<str, bool>
 this._unlock()
 end
 @en "SetTimeout"
@@ -149287,14 +149297,17 @@ this.mu = sync.Mutex {}
 this.cookies.free()
 this.headers.free()
 this.cookie_hosts.free()
+this.cookie_secure.free()
 end
 func _opts(): RequestOptions:
 this._lock()
-o := this.options
+mut o := this.options
 this._unlock()
+if o.max_body <= 0: o.max_body = DEFAULT_MAX_BODY end
+if o.max_body > MAX_BODY_CAP: o.max_body = MAX_BODY_CAP end
 ret o
 end
-func _host_cookies(host: str, orig_host: str): str:
+func _host_cookies(host: str, orig_host: str, secure: bool): str:
 if this.cookies.size() == 0: ret "" end
 mut out := ""
 it := this.cookies.iter()
@@ -149305,6 +149318,7 @@ mut owner := ""
 if this.cookie_hosts.has(name): owner = this.cookie_hosts.get(name) end
 mut allow := owner == host
 if owner.len() == 0: allow = host == orig_host end
+if not secure and this.cookie_secure.has(name): allow = false end
 if allow and _token_ok(name) and not _has_control(value) and value.find(";") < 0:
 if out.len() > 0: out = out.concat("; ") end
 out = out.concat(name).concat("=").concat(value)
@@ -149313,11 +149327,11 @@ it.next()
 end
 ret out
 end
-func _jar_block(host: str, orig_host: str, user_block: str, bad &: str): str:
+func _jar_block(host: str, orig_host: str, secure: bool, user_block: str, bad &: str): str:
 cross := host != orig_host
 if this.mu.handle != null: sync.Lock(this.mu) end
 base := _block_of(this.headers, bad)
-ck := this._host_cookies(host, orig_host)
+ck := this._host_cookies(host, orig_host, secure)
 if this.mu.handle != null: sync.Unlock(this.mu) end
 if bad.len() > 0: ret "" end
 mut out := base
@@ -149356,10 +149370,16 @@ gone := str.Contains(attrs, ";max-age=0") or str.Contains(attrs, ";max-age=-")
 if gone:
 this.cookies.remove(name)
 this.cookie_hosts.remove(name)
+this.cookie_secure.remove(name)
 else _token_ok(name) and not _has_control(value):
 if this.cookies.has(name) or this.cookies.size() < MAX_COOKIES:
 this.cookies.put(name, value)
 this.cookie_hosts.put(name, host)
+if str.Contains(attrs + ";", ";secure;"):
+this.cookie_secure.put(name, true)
+else:
+this.cookie_secure.remove(name)
+end
 end
 end
 end
@@ -149391,7 +149411,7 @@ if left <= 0: ret _Reply { err = "the request timed out", url = cur_url } end
 total_ms = left as int
 end
 mut bad := ""
-mut hop_block := this._jar_block(str.Lower(u.host), orig_host, cur_block, bad)
+mut hop_block := this._jar_block(str.Lower(u.host), orig_host, str.Lower(u.scheme) == "https", cur_block, bad)
 if bad.len() > 0: ret _Reply { err = bad, url = cur_url } end
 if cur_body.len() == 0 and (cur_method == "GET" or cur_method == "HEAD"):
 hop_block = _strip_body_headers(hop_block)
@@ -149763,6 +149783,13 @@ sess := WinHttpOpen(wagent, 0, null, null, 0)
 mem.Free(wagent)
 if sess == null: ret _Reply { err = "could not open an HTTP session" } end
 defer WinHttpCloseHandle(sess)
+mut idle := o.idle_ms
+if idle <= 0: idle = 0 end
+mut dial := idle
+if total_ms > 0 and (dial == 0 or total_ms < dial): dial = total_ms end
+mut io := idle
+if total_ms > 0 and (io == 0 or total_ms < io): io = total_ms end
+WinHttpSetTimeouts(sess, dial, dial, io, io)
 whost := _str_to_wide(u.host)
 conn := WinHttpConnect(sess, whost, _port_of(u), 0)
 mem.Free(whost)
@@ -149781,6 +149808,7 @@ if req == null:
 ret _Reply { err = "could not open the request" }
 end
 defer WinHttpCloseHandle(req)
+WinHttpSetTimeouts(req, dial, dial, io, io)
 off := mem.Allocate(4 as u64)
 o32 := off as int*
 o32[0] = 2
@@ -151401,6 +151429,7 @@ end
 package rawsock
 import mem
 import str
+import sync
 if SALAM_OS_WINDOWS:
 link dynamic "ws2_32"
 end
@@ -151754,10 +151783,14 @@ mut addrs := Vector {} as Vector<i64>
 mut lens := Vector {} as Vector<int>
 mut fams := Vector {} as Vector<int>
 _resolve_all(host, port, addrs, lens, fams)
+deadline := sync.NowMs() + (millis as i64)
 mut out := Socket { fd = 0 - 1, family = AF_INET }
 repeat addrs.len() in i:
 if out.fd < 0:
-out = _try_connect_timeout(addrs.get(i) as void*, lens.get(i), fams.get(i), SOCK_STREAM, millis)
+left := deadline - sync.NowMs()
+if left > 0:
+out = _try_connect_timeout(addrs.get(i) as void*, lens.get(i), fams.get(i), SOCK_STREAM, left as int)
+end
 end
 mem.Free(addrs.get(i) as void*)
 end

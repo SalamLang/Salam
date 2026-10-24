@@ -32,6 +32,9 @@ step test --run=no_such_test
 mkdir broken
 printf 'func test_bad():\n    testing.AssertTrue(\nend\n' >broken/bad_test.salam
 step test broken
+mkdir exits
+printf 'func main:\n    ret 3\nend\n' >exits/three_test.salam
+step test exits lib/strings_test.salam
 cd "$work/fa" || exit 1
 step test
 cd "$work" || exit 1

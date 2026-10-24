@@ -500,11 +500,11 @@ The output is a PIE `MH_EXECUTE`:
 - `LC_DYLD_INFO_ONLY` carries the rebase and bind opcodes. `libSystem` is
   always ordinal 1; every other library the program links becomes its own
   `LC_LOAD_DYLIB`, read from a text stub (`.tbd`, including multi-document
-  stubs with re-exported libraries) or a real dylib (its install name from
+  stubs with reexported libraries) or a real dylib (its install name from
   `LC_ID_DYLIB` and its exports from the exports trie). Each import binds
   to the library that exports it, and anything no input lists binds to
   `libSystem`. The driver finds `lib<name>.tbd` or `.dylib` on the library
-  paths and in the SDK (`SDKROOT`, or the Command Line Tools and Xcode
+  paths and in the SDK (`SDKROOT`, or the Xcode command-line tools and Xcode
   locations), and frameworks as `<name>.framework/<name>.tbd` there.
 - `LC_SYMTAB`, `LC_DYSYMTAB` with the indirect symbol table for the stubs
   and GOT, `LC_LOAD_DYLINKER`, `LC_UUID`, `LC_BUILD_VERSION` (macOS 11),

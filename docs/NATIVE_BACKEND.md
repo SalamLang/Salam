@@ -11,13 +11,15 @@ salam run app.salam --backend=native
 salam build app.salam --backend=native --target=x86_64-w64-windows-gnu
 salam build app.salam --backend=native --target=x86_64-apple-macos
 salam build app.salam --backend=native --target=aarch64-linux-musl
+salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
 ```
 
 Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
-Mach-O) and AArch64 Linux (AAPCS64, ELF). Any other `--target` is rejected
+Mach-O), AArch64 Linux (AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64
+variant, Mach-O). Any other `--target` is rejected
 with a message that points at `--backend=llvm`.
 
 On macOS the code is the same as on Linux; only the object differs. Symbols
@@ -56,6 +58,14 @@ both operands to the top of a 32-bit register first, which keeps signed and
 unsigned order. Division emulates x86's `rdx:rax` pair with `sdiv`/`udiv`
 plus `msub`; a 32-bit move to the same register still emits `mov wN, wN`,
 since that is what zero-extends. Atomics are `ldaxr`/`stlxr` loops.
+
+On macOS the same code goes into a Mach-O object with
+`ARM64_RELOC_BRANCH26`, `PAGE21`/`PAGEOFF12` and their GOT forms, and an
+`ARM64_RELOC_ADDEND` entry in front of any reference with an offset. Apple's
+ABI passes every variadic argument on the stack in 8-byte slots (Linux uses
+registers), so a call to `printf` places its arguments after the fixed ones
+in memory. Every test, compiled for `arm64-apple-macos` and linked by both
+the built-in linker and `ld64.lld`, disassembles to the same instructions.
 
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables or DWARF, and in release builds an integer

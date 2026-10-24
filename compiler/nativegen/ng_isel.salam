@@ -524,7 +524,7 @@ func call_lib(g &: Ng, sym: int, args: Vector<int>, ret_cls: int): int:
     each r in args:
         cls.push(g.mc.vcls[r])
     end
-    mask := place_args(g, args, cls, false)
+    mask := place_args(g, args, cls, false, 0 - 1)
     i := mi_new(g, M_CALL, 8)
     g.mc.msym[i] = sym
     g.mc.imm[i] = mask
@@ -543,7 +543,7 @@ func call_lib(g &: Ng, sym: int, args: Vector<int>, ret_cls: int): int:
     ret r2
 end
 
-func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool): i64:
+func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfixed: int): i64:
     mut mask := 0 as i64
     n := args.len()
     if g.os == NG_OS_WINDOWS:
@@ -586,10 +586,18 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool): i64
     mut fi := 0
     mut stk2 := 0
     a64 := g.arch == NG_ARCH_A64
+    apple_va := a64 and vararg and g.os == NG_OS_MACOS and nfixed >= 0
     ngp_args := a64 ? 8 : 6
+    mut ord := 0
     mut where := Vector {} as Vector<int>
     repeat n in p3:
-        if cls[p3] == 1:
+        if cls[p3] != 2:
+            ord += 1
+        end
+        if apple_va and cls[p3] != 2 and ord > nfixed:
+            where.push(0 - 1 - stk2)
+            stk2 += 8
+        else cls[p3] == 1:
             if fi < 8:
                 where.push(XMM0 + fi)
                 fi += 1
@@ -3574,7 +3582,7 @@ func isel_call(g &: Ng, i: int):
         cr = use_reg(g, callee)
     end
     vararg := (g.i_f[i] & IF_VARARG) != 0
-    mask := place_args(g, regs, cls, vararg)
+    mask := place_args(g, regs, cls, vararg, g.i_x[i])
     mut ci := 0 - 1
     if sym >= 0:
         ci = mi_new(g, M_CALL, 8)

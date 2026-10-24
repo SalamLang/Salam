@@ -37,7 +37,14 @@ func apply_relocs(l &: Nl):
         end
     end
     repeat l.got_sym.len() in q:
-        wr64(buf, l.oc_fpos[OC_GOT] + ((8 * q) as i64), sym_addr_g(l, l.got_sym[q]))
+        gat := l.oc_fpos[OC_GOT] + ((got_esz(l) * q) as i64)
+        gs := l.got_sym[q]
+        gv := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+        if l.elf32:
+            wr32(buf, gat, gv)
+        else:
+            wr64(buf, gat, gv)
+        end
     end
     repeat l.s_obj.len() in s2:
         if not l.s_live[s2] or l.s_fpos[s2] < (0 as i64):
@@ -55,50 +62,117 @@ func apply_relocs(l &: Nl):
             if ty == 0:
                 continue
             end
-            if ty == 1:
-                wr64(buf, place, sv + a)
-            else ty == 2 or ty == 4:
-                v := sv + a - pc
-                if not fits32s(v):
-                    nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
-                    ret
-                end
-                wr32(buf, place, v)
-            else ty == 10:
-                v2 := sv + a
-                if not fits32u(v2):
-                    nl_fail(l, "32-bit relocation out of range at " + reloc_where(l, s2, r))
-                    ret
-                end
-                wr32(buf, place, v2)
-            else ty == 11:
-                v3 := sv + a
-                if not fits32s(v3):
-                    nl_fail(l, "32-bit signed relocation out of range at " + reloc_where(l, s2, r))
-                    ret
-                end
-                wr32(buf, place, v3)
-            else ty == 24:
-                wr64(buf, place, sv + a - pc)
-            else ty == 9 or ty == 41 or ty == 42:
-                g := l.os_glob[os]
-                if g >= 0 and l.g_got[g] >= 0:
-                    ga := l.oc_addr[OC_GOT] + ((8 * l.g_got[g]) as i64)
-                    wr32(buf, place, ga + a - pc)
-                else:
-                    buf[place - (2 as i64)] = 0x8d as u8
-                    v4 := sv + a - pc
-                    if not fits32s(v4):
-                        nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
-                        ret
-                    end
-                    wr32(buf, place, v4)
-                    l.stat_relax += 1
-                end
+            mut ok := true
+            if l.mach == EM_386:
+                ok = reloc_i386(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else l.mach == EM_AARCH64:
+                ok = reloc_a64(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else l.mach == EM_ARM:
+                ok = reloc_arm(l, buf, s2, r, ty, place, pc, a, sv, os)
             else:
-                nl_fail(l, "unsupported relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+                ok = reloc_x64(l, buf, s2, r, ty, place, pc, a, sv, os)
+            end
+            if not ok:
                 ret
             end
         end
     end
+end
+
+func got_entry(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0 and l.g_got[g] >= 0:
+        ret l.oc_addr[OC_GOT] + ((got_esz(l) * l.g_got[g]) as i64)
+    end
+    if g < 0 and l.got_loc.has(os):
+        ret l.oc_addr[OC_GOT] + ((got_esz(l) * l.got_loc.get(os)) as i64)
+    end
+    ret 0 - 1 as i64
+end
+
+func got_esz(l &: Nl): int:
+    ret l.elf32 ? 4 : 8
+end
+
+func reloc_x64(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    if ty == 1:
+        wr64(buf, place, sv + a)
+    else ty == 2 or ty == 4:
+        v := sv + a - pc
+        if not fits32s(v):
+            nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v)
+    else ty == 10:
+        v2 := sv + a
+        if not fits32u(v2):
+            nl_fail(l, "32-bit relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v2)
+    else ty == 11:
+        v3 := sv + a
+        if not fits32s(v3):
+            nl_fail(l, "32-bit signed relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v3)
+    else ty == 24:
+        wr64(buf, place, sv + a - pc)
+    else ty == 9 or ty == 41 or ty == 42:
+        ga := got_entry(l, os)
+        if ga >= (0 as i64):
+            wr32(buf, place, ga + a - pc)
+        else:
+            buf[place - (2 as i64)] = 0x8d as u8
+            v4 := sv + a - pc
+            if not fits32s(v4):
+                nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+                ret false
+            end
+            wr32(buf, place, v4)
+            l.stat_relax += 1
+        end
+    else:
+        nl_fail(l, "unsupported relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
+end
+
+func reloc_i386(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    got := l.oc_addr[OC_GOT]
+    if ty == 1:
+        wr32(buf, place, sv + a)
+    else ty == 2 or ty == 4:
+        wr32(buf, place, sv + a - pc)
+    else ty == 9:
+        wr32(buf, place, sv + a - got)
+    else ty == 10:
+        wr32(buf, place, got + a - pc)
+    else ty == 3 or ty == 43:
+        ga := got_entry(l, os)
+        if ga < (0 as i64):
+            nl_fail(l, "GOT entry missing at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, ga + a - got)
+    else ty == 20:
+        v := sv + a
+        buf[place] = (v & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((v >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 21:
+        v2 := sv + a - pc
+        buf[place] = (v2 & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((v2 >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 22:
+        buf[place] = ((sv + a) & (255 as i64)) as u8
+    else ty == 23:
+        buf[place] = ((sv + a - pc) & (255 as i64)) as u8
+    else:
+        nl_fail(l, "unsupported i386 relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
 end

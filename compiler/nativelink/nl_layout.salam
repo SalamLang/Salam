@@ -95,6 +95,21 @@ func mark_live(l &: Nl):
     wl.free()
 end
 
+func got_add(l &: Nl, os: int):
+    g := l.os_glob[os]
+    if g >= 0:
+        if l.g_got[g] < 0:
+            l.g_got[g] = l.got_sym.len()
+            l.got_sym.push(g)
+        end
+        ret
+    end
+    if not l.got_loc.has(os):
+        l.got_loc.put(os, l.got_sym.len())
+        l.got_sym.push(0 - 1 - os)
+    end
+end
+
 func got_needed(l &: Nl):
     repeat l.s_obj.len() in s:
         if not l.s_live[s]:
@@ -104,6 +119,24 @@ func got_needed(l &: Nl):
         r0 := l.s_rel0[s]
         repeat l.s_nrel[s] in k:
             ty := l.r_type[r0 + k]
+            if l.mach == EM_386:
+                if ty == 3 or ty == 43:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if l.mach == EM_AARCH64:
+                if ty == 311 or ty == 312:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
+            if l.mach == EM_ARM:
+                if ty == 26 or ty == 96 or ty == 41:
+                    got_add(l, l.r_sym[r0 + k])
+                end
+                continue
+            end
             if ty == 9 or ty == 41 or ty == 42:
                 os := l.r_sym[r0 + k]
                 off := l.s_off[s] + l.r_off[r0 + k]
@@ -166,7 +199,7 @@ func place_all(l &: Nl):
     end
     l.nphdr = 4
     ehh_reserve(l)
-    mut fpos := (64 + l.nphdr * 56) as i64
+    mut fpos := ehdr_size(l)
     place_class(l, OC_RODATA, fpos, false)
     place_class(l, OC_EHFRAME, fpos, false)
     ehh_place(l, fpos)
@@ -174,7 +207,7 @@ func place_all(l &: Nl):
     l.seg_fpos[0] = 0 as i64
     l.seg_fsz[0] = fpos
     l.seg_msz[0] = fpos
-    fpos = align_to(fpos, NL_PAGE as i64)
+    fpos = align_to(fpos, nl_page(l) as i64)
     rx := fpos
     place_class(l, OC_INIT, fpos, false)
     place_class(l, OC_TEXT, fpos, false)
@@ -183,7 +216,7 @@ func place_all(l &: Nl):
     l.seg_fpos[1] = rx
     l.seg_fsz[1] = fpos - rx
     l.seg_msz[1] = fpos - rx
-    fpos = align_to(fpos, NL_PAGE as i64)
+    fpos = align_to(fpos, nl_page(l) as i64)
     rw := fpos
     place_class(l, OC_INITARR, fpos, false)
     place_class(l, OC_FINIARR, fpos, false)
@@ -191,11 +224,12 @@ func place_all(l &: Nl):
     fpos = align_to(fpos, 8 as i64)
     l.oc_addr[OC_GOT] = l.base + fpos
     l.oc_fpos[OC_GOT] = fpos
-    l.oc_size[OC_GOT] = (8 * l.got_sym.len()) as i64
+    l.oc_size[OC_GOT] = (got_esz(l) * l.got_sym.len()) as i64
     fpos = fpos + l.oc_size[OC_GOT]
     file_end := fpos
     mut mem := fpos
     place_class(l, OC_BSS, mem, true)
+    place_commons(l, mem)
     l.seg_vaddr[2] = l.base + rw
     l.seg_fpos[2] = rw
     l.seg_fsz[2] = file_end - rw
@@ -235,4 +269,34 @@ func sym_addr(l &: Nl, os: int): i64:
         ret l.s_addr[s] + l.os_val[os]
     end
     ret l.os_val[os]
+end
+
+func ehdr_size(l &: Nl): i64:
+    if l.elf32:
+        ret 52 + l.nphdr * 32
+    end
+    ret 64 + l.nphdr * 56
+end
+
+func place_commons(l &: Nl, mem &: i64):
+    repeat l.g_name.len() in g:
+        sz := l.g_common[g]
+        if l.g_state[g] != SY_UNDEF or sz <= (0 as i64):
+            continue
+        end
+        mut al := 1 as i64
+        until al < sz and al < (16 as i64):
+            al = al * (2 as i64)
+        end
+        mem = align_to(mem, al)
+        l.g_state[g] = SY_ABS
+        l.g_sec[g] = SYN_COMMON
+        l.g_val[g] = l.base + mem
+        mem = mem + sz
+        if l.oc_size[OC_BSS] == (0 as i64):
+            l.oc_addr[OC_BSS] = l.base + mem - sz
+            l.oc_fpos[OC_BSS] = mem - sz
+        end
+        l.oc_size[OC_BSS] = l.base + mem - l.oc_addr[OC_BSS]
+    end
 end

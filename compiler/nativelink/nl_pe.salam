@@ -1,6 +1,5 @@
 package nativelink
 
-const PE_BASE := 0x140000000
 const PS_TEXT := 0
 const PS_DATA := 1
 const PS_RDATA := 2
@@ -37,6 +36,7 @@ pub struct Pe:
     pub hdr_size: i64 = 0
     pub image_size: i64 = 0
     pub entry: i64 = 0
+    pub btype: int = 10
     pub imp_va: i64 = 0
     pub imp_size: i64 = 0
 end
@@ -91,6 +91,17 @@ func pe_bytes(t &: Pe, ps: int, key: str, n: int, fill: int):
 end
 
 func pe_mark(l &: Nl, t &: Pe, ps: int, key: str, sym: str):
+    pe_mark1(l, t, ps, key, sym)
+    if l.mach == EM_386:
+        pe_mark1(l, t, ps, key, "_" + sym)
+    end
+end
+
+func pe_psz(l &: Nl): int:
+    ret l.mach == EM_386 ? 4 : 8
+end
+
+func pe_mark1(l &: Nl, t &: Pe, ps: int, key: str, sym: str):
     g := glob_find(l, sym)
     if g < 0:
         ret
@@ -223,12 +234,12 @@ func pe_frame(l &: Nl, t &: Pe):
     pe_item(t, PS_RDATA, IT_ALIGN, "29", 0, 8 as i64)
     pe_mark(l, t, PS_RDATA, "300", "___CTOR_LIST__")
     pe_mark(l, t, PS_RDATA, "300", "__CTOR_LIST__")
-    pe_bytes(t, PS_RDATA, "301", 8, 255)
-    pe_bytes(t, PS_RDATA, "39", 8, 0)
+    pe_bytes(t, PS_RDATA, "301", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "39", pe_psz(l), 0)
     pe_mark(l, t, PS_RDATA, "400", "___DTOR_LIST__")
     pe_mark(l, t, PS_RDATA, "400", "__DTOR_LIST__")
-    pe_bytes(t, PS_RDATA, "401", 8, 255)
-    pe_bytes(t, PS_RDATA, "49", 8, 0)
+    pe_bytes(t, PS_RDATA, "401", pe_psz(l), 255)
+    pe_bytes(t, PS_RDATA, "49", pe_psz(l), 0)
     each pr in ["C51", "I53", "L55", "P57", "T59", "D61"]:
         c := str.Substr(pr, 0, 1)
         k := str.Substr(pr, 1, 2)
@@ -335,7 +346,7 @@ func pe_place(l &: Nl, t &: Pe):
         end
     end
     t.nsec = used + l.dg_name.len()
-    t.hdr_size = align_to((0x80 + 4 + 20 + 240 + 40 * t.nsec) as i64, 0x200 as i64)
+    t.hdr_size = align_to((0x80 + 4 + 20 + (l.mach == EM_386 ? 224 : 240) + 40 * t.nsec) as i64, 0x200 as i64)
     mut va := 0x1000 as i64
     repeat nps in k:
         if k == PS_RELOC:
@@ -351,7 +362,7 @@ func pe_place(l &: Nl, t &: Pe):
             if kind == IT_SEC:
                 s := t.it_ord[i]
                 pos = align_to(pos, l.s_align[s])
-                l.s_addr[s] = PE_BASE + pos
+                l.s_addr[s] = l.pe_base + pos
                 t.it_addr[i] = pos
                 pos = pos + l.s_size[s]
             else kind == IT_BYTES:
@@ -362,7 +373,7 @@ func pe_place(l &: Nl, t &: Pe):
                 t.it_addr[i] = pos
             else:
                 t.it_addr[i] = pos
-                l.g_val[t.it_val[i] as int] = PE_BASE + pos
+                l.g_val[t.it_val[i] as int] = l.pe_base + pos
             end
         end
         t.ps_vsize[k] = pos - va
@@ -395,7 +406,7 @@ func pe_sym(l &: Nl, os: int): i64:
             ret l.g_val[g]
         end
         if st == SY_ABS and l.g_sec[g] == SYN_EHDR:
-            ret PE_BASE
+            ret l.pe_base
         end
         if st == SY_ABS and l.g_sec[g] == SYN_ZERO:
             ret 0
@@ -434,16 +445,16 @@ func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
         r0 := l.s_rel0[s]
         repeat l.s_nrel[s] in q:
             r := r0 + q
-            ty := l.r_type[r] - CR_BASE
+            ty := pe_rtype(l, l.r_type[r] - CR_BASE)
             os := l.r_sym[r]
             place := place0 + l.r_off[r]
-            pva := PE_BASE + t.it_addr[i] + l.r_off[r]
+            pva := l.pe_base + t.it_addr[i] + l.r_off[r]
             sv := pe_sym(l, os)
             if ty == 1:
                 wr64(buf, place, sv + rd64(buf, place))
-                t.breloc.push(pva - PE_BASE)
+                t.breloc.push(pva - l.pe_base)
             else ty == 3:
-                wr32(buf, place, sv + rd32s(buf, place) - PE_BASE)
+                wr32(buf, place, sv + rd32s(buf, place) - l.pe_base)
             else ty >= 4 and ty <= 9:
                 v := sv + rd32s(buf, place) - (pva + ((4 + ty - 4) as i64))
                 if not fits32s(v):
@@ -451,6 +462,9 @@ func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
                     ret
                 end
                 wr32(buf, place, v)
+            else ty == 102:
+                wr32(buf, place, sv + rd32s(buf, place))
+                t.breloc.push(pva - l.pe_base)
             else ty == 2:
                 v2 := sv + rd32s(buf, place)
                 if not fits32u(v2):
@@ -462,7 +476,7 @@ func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
                 ts := sym_sec_of(l, os)
                 mut base := 0 as i64
                 if ts >= 0:
-                    base = PE_BASE + t.ps_va[l.s_oc[ts]]
+                    base = l.pe_base + t.ps_va[l.s_oc[ts]]
                 end
                 wr32(buf, place, sv + rd32s(buf, place) - base)
             else ty == 10:
@@ -522,7 +536,7 @@ func pe_breloc_build(t &: Pe, out &: Vector<u8>):
         tb_le(out, page, 4)
         tb_le(out, bsz as i64, 4)
         repeat cnt in q:
-            tb_le(out, ((10 << 12) as i64) | (t.breloc[k + q] & (4095 as i64)), 2)
+            tb_le(out, ((t.btype << 12) as i64) | (t.breloc[k + q] & (4095 as i64)), 2)
         end
         if (cnt % 2) == 1:
             tb_le(out, 0 as i64, 2)
@@ -538,8 +552,13 @@ func pe_link(l &: Nl, out: str):
             pe_classify(l, t, s)
         end
     end
+    if l.mach == EM_386:
+        l.pe_base = 0x400000 as i64
+    end
     synth(l, "__ImageBase", SYN_EHDR)
     synth(l, "__image_base__", SYN_EHDR)
+    synth(l, "___ImageBase", SYN_EHDR)
+    synth(l, "___image_base__", SYN_EHDR)
     pe_frame(l, t)
     pe_commons(l, t)
     pe_aliases(l)
@@ -552,12 +571,15 @@ func pe_link(l &: Nl, out: str):
     end
     pe_sort(t)
     pe_place(l, t)
-    ent := glob_find(l, "mainCRTStartup")
+    mut ent := glob_find(l, "mainCRTStartup")
+    if l.mach == EM_386:
+        ent = glob_find(l, "_mainCRTStartup")
+    end
     if ent < 0 or l.g_state[ent] != SY_DEF:
         nl_fail(l, "cannot link: no entry point 'mainCRTStartup' (is crt2.o missing?)")
         ret
     end
-    t.entry = l.s_addr[l.g_sec[ent]] + l.g_val[ent] - PE_BASE
+    t.entry = l.s_addr[l.g_sec[ent]] + l.g_val[ent] - l.pe_base
     mut fpos_of := Vector {} as Vector<i64>
     mut fp := t.hdr_size
     repeat PS_COUNT in k:
@@ -603,6 +625,9 @@ func pe_link(l &: Nl, out: str):
         dbg_build_pe(l)
     end
     mut rel := Vector {} as Vector<u8>
+    if l.mach == EM_386:
+        t.btype = 3
+    end
     pe_breloc_build(t, rel)
     t.ps_vsize[PS_RELOC] = rel.len() as i64
     t.ps_raw[PS_RELOC] = fp
@@ -638,15 +663,16 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     until h.len() < 0x80:
         h.push(0 as u8)
     end
+    p32 := l.mach == EM_386
     w32(h, 0x4550 as i64)
-    w16(h, 0x8664 as i64)
+    w16(h, (p32 ? 0x14c : 0x8664) as i64)
     w16(h, t.nsec as i64)
     w32(h, 0 as i64)
     w32(h, l.dg_name.len() > 0 ? l.pe_strpos : (0 as i64))
     w32(h, 0 as i64)
-    w16(h, 240 as i64)
-    w16(h, 0x22 as i64)
-    w16(h, 0x20b as i64)
+    w16(h, (p32 ? 224 : 240) as i64)
+    w16(h, (p32 ? 0x0122 : 0x22) as i64)
+    w16(h, (p32 ? 0x10b : 0x20b) as i64)
     h.push(2 as u8)
     h.push(41 as u8)
     w32(h, t.ps_rawsize[PS_TEXT])
@@ -660,7 +686,12 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w32(h, align_to(t.ps_vsize[PS_BSS], 0x200 as i64))
     w32(h, t.entry)
     w32(h, t.ps_va[PS_TEXT])
-    w64(h, PE_BASE)
+    if p32:
+        w32(h, t.ps_va[PS_DATA] > (0 as i64) ? t.ps_va[PS_DATA] : t.ps_va[PS_RDATA])
+        w32(h, l.pe_base)
+    else:
+        w64(h, l.pe_base)
+    end
     w32(h, 0x1000 as i64)
     w32(h, 0x200 as i64)
     w16(h, 4 as i64)
@@ -674,11 +705,18 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w32(h, t.hdr_size)
     w32(h, 0 as i64)
     w16(h, 3 as i64)
-    w16(h, 0x160 as i64)
-    w64(h, 0x200000 as i64)
-    w64(h, 0x1000 as i64)
-    w64(h, 0x100000 as i64)
-    w64(h, 0x1000 as i64)
+    w16(h, (p32 ? 0x140 : 0x160) as i64)
+    if p32:
+        w32(h, 0x200000 as i64)
+        w32(h, 0x1000 as i64)
+        w32(h, 0x100000 as i64)
+        w32(h, 0x1000 as i64)
+    else:
+        w64(h, 0x200000 as i64)
+        w64(h, 0x1000 as i64)
+        w64(h, 0x100000 as i64)
+        w64(h, 0x1000 as i64)
+    end
     w32(h, 0 as i64)
     w32(h, 16 as i64)
     mut iat0 := 0 as i64
@@ -686,11 +724,15 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     mut imp0 := 0 as i64
     mut imp1 := 0 as i64
     mut tls := 0 as i64
-    gi0 := glob_find(l, "__IAT_start__")
-    gi1 := glob_find(l, "__IAT_end__")
+    mut gi0 := glob_find(l, "__IAT_start__")
+    mut gi1 := glob_find(l, "__IAT_end__")
+    if p32 and gi0 < 0:
+        gi0 = glob_find(l, "___IAT_start__")
+        gi1 = glob_find(l, "___IAT_end__")
+    end
     if gi0 >= 0 and gi1 >= 0:
-        iat0 = l.g_val[gi0] - PE_BASE
-        iat1 = l.g_val[gi1] - PE_BASE
+        iat0 = l.g_val[gi0] - l.pe_base
+        iat1 = l.g_val[gi1] - l.pe_base
     end
     repeat t.it_ps.len() in i:
         if t.it_ps[i] == PS_IDATA and t.it_kind[i] == IT_SEC and str.StartsWith(t.it_key[i], "12"):
@@ -700,9 +742,9 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
             imp1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
         end
     end
-    tg := glob_find(l, "_tls_used")
+    tg := glob_find(l, l.mach == EM_386 ? "__tls_used" : "_tls_used")
     if tg >= 0 and l.g_state[tg] == SY_DEF:
-        tls = l.s_addr[l.g_sec[tg]] + l.g_val[tg] - PE_BASE
+        tls = l.s_addr[l.g_sec[tg]] + l.g_val[tg] - l.pe_base
     end
     repeat 16 in d:
         if d == 1 and imp0 > (0 as i64):
@@ -716,7 +758,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
             w32(h, rel.len() as i64)
         else d == 9 and tls > (0 as i64):
             w32(h, tls)
-            w32(h, 40 as i64)
+            w32(h, (p32 ? 24 : 40) as i64)
         else d == 12 and iat1 > iat0:
             w32(h, iat0)
             w32(h, iat1 - iat0)
@@ -804,4 +846,17 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     if (w as i64) != total:
         nl_fail(l, "cannot write " + out)
     end
+end
+
+func pe_rtype(l &: Nl, ty: int): int:
+    if l.mach != EM_386:
+        ret ty
+    end
+    if ty == 6: ret 102 end
+    if ty == 7: ret 3 end
+    if ty == 0x14: ret 4 end
+    if ty == 0xB: ret 11 end
+    if ty == 0xA: ret 10 end
+    if ty == 0: ret 0 end
+    ret 1000 + ty
 end

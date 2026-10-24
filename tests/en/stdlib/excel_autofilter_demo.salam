@@ -64,5 +64,49 @@ func main:
     println "text kept: ", cell.text == " two\nlines"
     println "wrap: ", back.styles.get(cell.style_id).wrap
     back.free()
+
+    entries := archive.ZipList(data.data, data.len)
+    mut inputs := Vector {} as Vector<archive.ZipFileInput>
+    mut parts := Vector {} as Vector<compress.ByteBuf>
+    each e in entries:
+        mut eok := false
+        mut part := archive.ZipExtractByName(data.data, data.len, e.name, eok)
+        if e.name == "xl/styles.xml":
+            compress.BufPush(part, 0)
+            text := str.Replace(part.data as str, `wrapText="1"`, `wrapText="true"`)
+            compress.BufFree(part)
+            part = compress.NewByteBuf()
+            compress.BufPushBytes(part, text as void*, text.len())
+        end
+        inputs.push(archive.ZipFileInput { name = e.name, data_ptr = part.data, data_len = part.len })
+        parts.push(part)
+    end
+    path2 := os.TempDir().concat("/salam_excel_autofilter_true.xlsx")
+    println "rewritten: ", archive.ZipCreateFile(inputs, path2)
+    each part in parts: compress.BufFree(part) end
+    mut tok := false
+    mut terr := ""
+    mut again := excel.Open(path2, tok, terr)
+    tcell := again.sheet_at(0)[0].get_cell(2, 0)
+    println "wrapText true: ", again.styles.get(tcell.style_id).wrap
+    again.free()
+    os.Remove(path2)
+
+    mut book2 := excel.NewWorkbook()
+    s2 := book2.add_sheet("S")
+    s2[0].set_string(0, 0, "x")
+    s2[0].auto_filter = "$A$1:$B$2"
+    path3 := os.TempDir().concat("/salam_excel_autofilter_abs.xlsx")
+    println "saved absolute: ", excel.WriteXLSX(book2, path3)
+    book2.free()
+    mut aok := false
+    mut adata := archive.ReadBinaryFile(path3, aok)
+    defer compress.BufFree(adata)
+    mut wb2 := archive.ZipExtractByName(adata.data, adata.len, "xl/workbook.xml", aok)
+    defer compress.BufFree(wb2)
+    compress.BufPush(wb2, 0)
+    workbook2 := wb2.data as str
+    println "absolute range kept: ", str.Contains(workbook2, "!$A$1:$B$2</definedName>"), not str.Contains(workbook2, "$$")
+    os.Remove(path3)
     os.Remove(path)
 end

@@ -223,6 +223,56 @@ func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, trip
     ret 0
 end
 
+func mac_sdk(): str:
+    env := os.Env("SDKROOT")
+    if str.Len(env) > 0 and os.Exists(env):
+        ret env
+    end
+    each c in ["/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"]:
+        if os.Exists(c):
+            ret c
+        end
+    end
+    ret ""
+end
+
+func mac_lib(o: lv.Options, spec0: str, kind: str): str:
+    spec := lib_spec(spec0)
+    if str.EndsWith(spec, ".tbd") or str.EndsWith(spec, ".dylib"):
+        ret spec
+    end
+    sdk := mac_sdk()
+    if str.Equals(kind, "framework"):
+        if str.Len(sdk) > 0:
+            fw := sdk + "/System/Library/Frameworks/" + spec + ".framework/" + spec + ".tbd"
+            if os.Exists(fw):
+                ret fw
+            end
+        end
+        ret ""
+    end
+    mut dirs := Vector {} as Vector<str>
+    each lp in o.lib_paths:
+        dirs.push(lp)
+    end
+    if str.Len(sdk) > 0:
+        dirs.push(sdk + "/usr/lib")
+    end
+    each d in dirs:
+        each ext in [".tbd", ".dylib"]:
+            cand := d + "/lib" + spec + ext
+            if os.Exists(cand):
+                ret cand
+            end
+        end
+    end
+    ret ""
+end
+
+func mac_system_lib(spec: str): bool:
+    ret str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread") or str.Equals(spec, "System") or str.Equals(spec, "dl")
+end
+
 func macho_link_ok(triple: str, o: lv.Options, why &: str): bool:
     arch := tri_arch(triple)
     if not is_apple(triple) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
@@ -231,18 +281,35 @@ func macho_link_ok(triple: str, o: lv.Options, why &: str): bool:
     end
     repeat o.link_libs.len() in i:
         spec := lib_spec(o.link_libs.get(i))
-        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread") or str.Equals(spec, "System"):
+        if mac_system_lib(spec):
             continue
         end
-        why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
-        ret false
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(mac_lib(o, spec, kind)) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find library '%s'"), co.ArgStr(spec))
+            ret false
+        end
     end
     ret true
 end
 
-func native_link_macho(lgr: lg.Logger, obj: str, exe: str): int:
+func native_link_macho(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
     mut l := nl.New()
     nl.AddInput(l, obj)
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if mac_system_lib(spec):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        nl.AddInput(l, mac_lib(o, spec, kind))
+    end
     if not nl.Link(l, exe):
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
         ret 1
@@ -498,7 +565,7 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
         ret native_link_mingw(lgr, obj, exe, o, triple)
     end
     if kind == 4:
-        ret native_link_macho(lgr, obj, exe)
+        ret native_link_macho(lgr, obj, exe, o)
     end
     ret native_link_glibc(lgr, obj, exe, o)
 end

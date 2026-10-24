@@ -1399,8 +1399,9 @@ end
   `Configure Start Save Regenerate Destroy Value SetValue CSRFToken CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
   live in process memory).
 - **`net.http` raw calls**: requests with your own header text and any bytes: `ParseEndpoint SendRaw SendRawTimeout SendRawTLS FreeRaw RawText HeaderValue`
-  (result type `RawResponse`, body in `.data`/`.len`, chunked bodies decoded). Send
-  `Connection: close` (it reads until the server closes); `Endpoint` and the raw
+  (result type `RawResponse`, body in `.data`/`.len`, chunked bodies decoded). A call
+  ends when a `Content-Length` or chunked answer is complete; an answer with neither is read
+  until the server closes, so send `Connection: close` for those; `Endpoint` and the raw
   calls are in the same package as `Get`/`Post`.
 - **`net.http.swagger`** (OpenAPI + a documentation page): `New(title, version) Describe Server BearerAuth ApiKeyAuth`; `Scan(doc, router)` adds
   every registered route, `Route` creates one and `At(doc, method, pattern)`

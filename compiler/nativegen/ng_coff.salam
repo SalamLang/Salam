@@ -1,6 +1,11 @@
 package nativegen
 
-func coff_rtype(t: int): int:
+func coff_rtype(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_X86:
+        if t == R_ABS32: ret 6 end
+        if t == R_ADDR32NB: ret 7 end
+        ret 20
+    end
     if t == R_ABS64: ret 1 end
     if t == R_ADDR32NB: ret 3 end
     if t == R_ABS32: ret 11 end
@@ -93,12 +98,33 @@ func put_addend(g &: Ng, sec: int, off: int, v: i64, n: int):
     end
 end
 
-func coff_sym_name(g &: Ng, o &: Ob, strtab &: Ob, s: int):
-    n := g.syms.len[s]
+func coff_sym_bytes(g &: Ng, s: int): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    if g.arch == NG_ARCH_X86:
+        v.push(95 as u8)
+    end
     off := g.syms.off[s]
+    repeat g.syms.len[s] in i:
+        v.push(g.syms.bytes[off + i])
+    end
+    sc := stdcall_bytes(g, s)
+    if g.arch == NG_ARCH_X86 and sc >= 0:
+        v.push(64 as u8)
+        dp := sp(str.FromInt(sc as i64))
+        repeat str_len_of(str.FromInt(sc as i64)) in d:
+            v.push(dp[d])
+        end
+    end
+    ret v
+end
+
+func coff_sym_name(g &: Ng, o &: Ob, strtab &: Ob, s: int):
+    mut nb := coff_sym_bytes(g, s)
+    defer nb.free()
+    n := nb.len()
     if n <= 8:
-        repeat n in i:
-            o.b.push(g.syms.bytes[off + i])
+        each c in nb:
+            o.b.push(c)
         end
         repeat 8 - n:
             o.b.push(0 as u8)
@@ -107,8 +133,8 @@ func coff_sym_name(g &: Ng, o &: Ob, strtab &: Ob, s: int):
     end
     ob_le(o, 0 as i64, 4)
     ob_le(o, (strtab.b.len() + 4) as i64, 4)
-    repeat n in j:
-        strtab.b.push(g.syms.bytes[off + j])
+    each c2 in nb:
+        strtab.b.push(c2)
     end
     strtab.b.push(0 as u8)
 end
@@ -199,7 +225,7 @@ func write_coff(g &: Ng, path: str): bool:
             if g.r_sec[r3] == sc:
                 ob_le(o, g.r_off[r3] as i64, 4)
                 ob_le(o, idx[g.r_sym[r3]] as i64, 4)
-                ob_le(o, coff_rtype(g.r_type[r3]) as i64, 2)
+                ob_le(o, coff_rtype(g, g.r_type[r3]) as i64, 2)
             end
         end
     end
@@ -222,7 +248,7 @@ func write_coff(g &: Ng, path: str): bool:
     ob_bytes(o, symtab.b)
     ob_le(o, (strtab.b.len() + 4) as i64, 4)
     ob_bytes(o, strtab.b)
-    put_le(o, 0, 0x8664 as i64, 2)
+    put_le(o, 0, (g.arch == NG_ARCH_X86 ? 0x14C : 0x8664) as i64, 2)
     put_le(o, 2, nsec as i64, 2)
     put_le(o, 8, sym_off as i64, 4)
     put_le(o, 12, count as i64, 4)

@@ -12,6 +12,7 @@ salam build app.salam --backend=native --target=x86_64-w64-windows-gnu
 salam build app.salam --backend=native --target=x86_64-apple-macos
 salam build app.salam --backend=native --target=aarch64-linux-musl
 salam build app.salam --backend=native --target=i686-linux-musl
+salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
@@ -19,7 +20,8 @@ salam obj app.salam --backend=native                  # object file only
 
 Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
-Mach-O), 32-bit x86 Linux (i386 System V ABI, ELF32), AArch64 Linux
+Mach-O), 32-bit x86 Linux (i386 System V ABI, ELF32) and Windows (cdecl and
+stdcall, COFF), AArch64 Linux
 (AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64 variant, Mach-O). Any other
 `--target` is rejected
 with a message that points at `--backend=llvm`.
@@ -97,14 +99,22 @@ The `i686` targets reuse the x86-64 pipeline with three additions.
   8-bit form on i386) in a pair of `xchg`s with a free low register.
   Divisions by a constant use a 32-bit `mul` for the magic number.
 
-The object is ELF32 with `REL` relocations (addends stored in the code).
-Unwind tables, DWARF and the vectorizers are off on this target for now.
+On Linux the object is ELF32 with `REL` relocations (addends stored in the
+code). On Windows it is an i386 COFF object: every symbol gets the `_`
+prefix, and a Win32 function the frontend marks `x86_stdcallcc` is named
+`_Name@N`; it pops its own arguments, so the caller subtracts `N` from
+`esp` right after the call to keep its fixed argument area in place.
+Unwind tables, DWARF and the vectorizers are off on these targets for now.
 Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 `types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
 `interop` and `webframework` tests match their expected output except those
 that need `-D` flags, a database library or a trapping release-mode
 division, `types/size_type` (whose output assumes a 64-bit `usize`) and a UDP
-test that also fails when clang compiles the same IR.
+test that also fails when clang compiles the same IR. The same groups built
+for `i686-w64-windows-gnu` and run under wine match too, apart from programs
+that start threads: std passes a cdecl function to `_beginthreadex`, which
+expects `__stdcall`, and the LLVM backend's build of the same IR crashes the
+same way.
 
 ## How it works
 

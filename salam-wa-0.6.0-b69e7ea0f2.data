@@ -34003,6 +34003,7 @@ pub rtl: bool = false
 pub freeze_rows: int = 0
 pub freeze_cols: int = 0
 pub col_widths: Vector<f64> = Vector {} as Vector<f64>
+pub auto_filter: str = ""
 func _touch(row: int, col: int):
 if row > this.max_row: this.max_row = row end
 if col > this.max_col: this.max_col = col end
@@ -34285,6 +34286,11 @@ pub func freeze(rows: int, cols: int):
 this.freeze_rows = rows
 this.freeze_cols = cols
 end
+@en "set_auto_filter"
+@fa "تنظیم فیلتر خودکار"
+pub func set_auto_filter(row1: int, col1: int, row2: int, col2: int):
+this.auto_filter = CellRef(row1, col1).concat(":").concat(CellRef(row2, col2))
+end
 @en "free"
 @fa "آزادسازی"
 pub func free():
@@ -34348,6 +34354,7 @@ pub align_h: int = 0
 pub align_v: int = 0
 pub num_format: str = ""
 pub border: bool = false
+pub wrap: bool = false
 @en "equals"
 @fa "یکسان است"
 pub func equals(other: Style): bool:
@@ -34362,6 +34369,7 @@ if this.align_h != other.align_h: ret false end
 if this.align_v != other.align_v: ret false end
 if this.num_format != other.num_format: ret false end
 if this.border != other.border: ret false end
+if this.wrap != other.wrap: ret false end
 ret true
 end
 end
@@ -34802,6 +34810,7 @@ aidx := XmlFind(xml, "alignment", xcs)
 if aidx >= 0 and aidx < xce:
 st.align_h = _xlsx_align_from_str(XmlAttr(xml, aidx, "horizontal"))
 st.align_v = _xlsx_valign_from_str(XmlAttr(xml, aidx, "vertical"))
+st.wrap = XmlAttr(xml, aidx, "wrapText") == "1"
 end
 pos = XmlTagEnd(xml, xce)
 end
@@ -34884,6 +34893,8 @@ _xlsx_parse_row_into(xml, rcs, rce, sheet, date_flags, shared)
 pos = XmlTagEnd(xml, rce)
 end
 end
+fidx := XmlFind(xml, "autoFilter", 0)
+if fidx >= 0: sheet.auto_filter = XmlAttr(xml, fidx, "ref") end
 mut mpos := 0
 until true:
 midx := XmlFind(xml, "mergeCell", mpos)
@@ -34986,7 +34997,7 @@ package excel
 import archive
 import conv
 import str
-func _xlsx_align_attrs(align_h: int, align_v: int): str:
+func _xlsx_align_attrs(align_h: int, align_v: int, wrap: bool): str:
 mut h := ""
 if align_h == AlignLeft: h = "left"
 else align_h == AlignCenter: h = "center"
@@ -34997,10 +35008,11 @@ if align_v == AlignTop: v = "top"
 else align_v == AlignMiddle: v = "center"
 else align_v == AlignBottom: v = "bottom"
 end
-if h.len() == 0 and v.len() == 0: ret "" end
+if h.len() == 0 and v.len() == 0 and not wrap: ret "" end
 mut out := "<alignment"
 if h.len() > 0: out = out.concat(` horizontal="`).concat(h).concat(`"`) end
 if v.len() > 0: out = out.concat(` vertical="`).concat(v).concat(`"`) end
+if wrap: out = out.concat(` wrapText="1"`) end
 out = out.concat("/>")
 ret out
 end
@@ -35011,7 +35023,7 @@ if c.kind == CellDate and sid < 0: sid = date_style_id end
 mut s_attr := ""
 if sid >= 0: s_attr = ` s="`.concat(conv.FormatInt(sid as i64)).concat(`"`) end
 if c.kind == CellString:
-ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="inlineStr"><is><t>`).concat(XmlEscape(c.text)).concat("</t></is></c>")
+ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="inlineStr"><is><t xml:space="preserve">`).concat(XmlEscape(c.text)).concat("</t></is></c>")
 else c.kind == CellBool:
 mut v := "0"
 if c.flag: v = "1" end
@@ -35022,6 +35034,8 @@ else c.kind == CellError:
 ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat(` t="e"><v>`).concat(XmlEscape(c.text)).concat("</v></c>")
 else c.kind == CellNumber or c.kind == CellDate:
 ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("><v>").concat(conv.FormatFloat(c.num)).concat("</v></c>")
+else sid >= 0:
+ret `<c r="`.concat(ref).concat(`"`).concat(s_attr).concat("/>")
 else:
 ret ""
 end
@@ -35062,6 +35076,7 @@ func _xlsx_sheet_xml(sheet: Sheet, date_style_id: int): str:
 mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
 out = out.concat(_xlsx_sheet_views(sheet)).concat(_xlsx_cols(sheet))
 out = out.concat("<sheetData>").concat(_xlsx_sheet_body(sheet, date_style_id)).concat("</sheetData>")
+if sheet.auto_filter.len() > 0: out = out.concat(`<autoFilter ref="`).concat(sheet.auto_filter).concat(`"/>`) end
 if sheet.merges.len() > 0:
 out = out.concat(`<mergeCells count="`).concat(conv.FormatInt(sheet.merges.len() as i64)).concat(`">`)
 mut i := 0
@@ -35149,7 +35164,7 @@ numfmt_id = 164 + numfmt_count
 str.BufAppend(numfmts, `<numFmt numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" formatCode="`).concat(XmlEscape(st.num_format)).concat(`"/>`))
 numfmt_count += 1
 end
-align_attrs := _xlsx_align_attrs(st.align_h, st.align_v)
+align_attrs := _xlsx_align_attrs(st.align_h, st.align_v, st.wrap)
 fill_id := i + 2
 font_id := i
 str.BufAppend(xfs, `<xf numFmtId="`.concat(conv.FormatInt(numfmt_id as i64)).concat(`" fontId="`).concat(conv.FormatInt(font_id as i64)).concat(`" fillId="`).concat(conv.FormatInt(fill_id as i64)).concat(`" borderId="`).concat(_xlsx_border_id(st)).concat(`" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1" applyBorder="1"`))
@@ -35199,14 +35214,45 @@ end
 func _xlsx_root_rels(): str:
 ret `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
 end
-func _xlsx_workbook_xml(names: Vector<str>): str:
+func _xlsx_absolute_range(ref: str): str:
+mut out := ""
+mut at_start := true
+mut in_row := false
+repeat ref.len() in i:
+ch := ref.substr(i, 1)
+if ch == ":":
+at_start = true
+in_row = false
+else at_start:
+out = out.concat("$")
+at_start = false
+else not in_row and ch >= "0" and ch <= "9":
+out = out.concat("$")
+in_row = true
+end
+out = out.concat(ch)
+end
+ret out
+end
+func _xlsx_defined_names(sheets: Vector<Sheet>): str:
+mut out := ""
+repeat sheets.len() in i:
+sh := sheets.get(i)
+if sh.auto_filter.len() == 0: continue end
+quoted := "'".concat(str.Replace(sh.name, "'", "''")).concat("'!").concat(_xlsx_absolute_range(sh.auto_filter))
+out = out.concat(`<definedName name="_xlnm._FilterDatabase" localSheetId="`).concat(conv.FormatInt(i as i64)).concat(`" hidden="1">`).concat(XmlEscape(quoted)).concat("</definedName>")
+end
+if out.len() == 0: ret "" end
+ret "<definedNames>".concat(out).concat("</definedNames>")
+end
+func _xlsx_workbook_xml(names: Vector<str>, defined: str): str:
 mut out := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>`
 mut i := 0
 until i < names.len():
 out = out.concat(`<sheet name="`).concat(XmlEscape(names.get(i))).concat(`" sheetId="`).concat(conv.FormatInt((i + 1) as i64)).concat(`" r:id="rId`).concat(conv.FormatInt((i + 1) as i64)).concat(`"/>`)
 i += 1
 end
-out = out.concat("</sheets></workbook>")
+out = out.concat("</sheets>").concat(defined).concat("</workbook>")
 ret out
 end
 func _xlsx_workbook_rels(sheet_count: int): str:
@@ -35233,7 +35279,7 @@ files.push(archive.MakeZipFileInput("[Content_Types].xml", ct as void*, ct.len()
 rr := _xlsx_root_rels()
 files.push(archive.MakeZipFileInput("_rels/.rels", rr as void*, rr.len(), 8))
 names := book.sheet_names()
-wbxml := _xlsx_workbook_xml(names)
+wbxml := _xlsx_workbook_xml(names, _xlsx_defined_names(book.sheets))
 defer names.free()
 files.push(archive.MakeZipFileInput("xl/workbook.xml", wbxml as void*, wbxml.len(), 8))
 wbrels := _xlsx_workbook_rels(n)
@@ -151628,28 +151674,7 @@ ret Socket { fd = s as i64, family = fam }
 end
 end
 func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis: int): Socket:
-if SALAM_OS_WINDOWS:
-w := _fd_of(socket(fam, socktype, 0))
-if w == (0 - 1 as i64):
-ret Socket { fd = 0 - 1, family = fam }
-end
-wsock := Socket { fd = w, family = fam }
-SetNonBlocking(wsock, true)
-mut linked := connect(_sk(w), sa, alen) == 0
-if not linked:
-if _wait_writable(w, millis):
-probe := mem.AllocateZeroed(8 as u64)
-linked = send(_sk(w), probe, 0, 0) == 0
-mem.Free(probe)
-end
-end
-if not linked:
-closesocket(_sk(w))
-ret Socket { fd = 0 - 1, family = fam }
-end
-SetNonBlocking(wsock, false)
-ret wsock
-else:
+if SALAM_OS_LINUX:
 s := socket(fam, socktype, 0)
 if s == 0 - 1:
 ret Socket { fd = 0 - 1, family = fam }
@@ -151657,7 +151682,7 @@ end
 sock := Socket { fd = s as i64, family = fam }
 SetNonBlocking(sock, true)
 if connect(s, sa, alen) != 0:
-if not _wait_writable(s as i64, millis):
+if not _wait_writable(s, millis):
 close(s)
 ret Socket { fd = 0 - 1, family = fam }
 end
@@ -151675,22 +151700,16 @@ end
 SetNonBlocking(sock, false)
 _no_sigpipe(s as i64)
 ret sock
-end
-end
-func _wait_writable(fd: i64, millis: int): bool:
-if SALAM_OS_WINDOWS:
-p := mem.AllocateZeroed(16 as u64)
-defer mem.Free(p)
-fdp := p as i64*
-fdp[0] = fd
-evp := ((p as i64) + 8) as i16*
-evp[0] = 16 as i16
-ret WSAPoll(p, 1 as u32, millis) > 0
 else:
+ret _try_connect(sa, alen, fam, socktype)
+end
+end
+if SALAM_OS_LINUX:
+func _wait_writable(fd: int, millis: int): bool:
 p := mem.AllocateZeroed(8 as u64)
 defer mem.Free(p)
 fdp := p as i32*
-fdp[0] = fd as i32
+fdp[0] = fd
 evp := ((p as i64) + 4) as i16*
 evp[0] = 4 as i16
 ret poll(p, 1 as usize, millis) > 0
@@ -151773,11 +151792,8 @@ end
 @en "ConnectTimeout"
 @fa "اتصال با مهلت"
 pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
-if millis <= 0:
+if millis <= 0 or not SALAM_OS_LINUX:
 ret Connect(host, port)
-end
-if SALAM_OS_WINDOWS:
-_net_init()
 end
 mut addrs := Vector {} as Vector<i64>
 mut lens := Vector {} as Vector<int>

@@ -2,20 +2,32 @@
 
 `--backend=native` turns a Salam program into x86-64 machine code without
 going through LLVM or a C compiler. It writes the object file itself (ELF on
-Linux, COFF on Windows), so the only outside tool left is the linker, and when
+Linux, COFF on Windows, Mach-O on macOS), so the only outside tool left is the linker, and when
 the compiler has LLVM embedded even that runs in-process through lld.
 
 ```sh
 salam build app.salam --backend=native
 salam run app.salam --backend=native
 salam build app.salam --backend=native --target=x86_64-w64-windows-gnu
+salam build app.salam --backend=native --target=x86_64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
 ```
 
-Targets: x86-64 Linux (System V ABI, ELF) and x86-64 Windows (Win64 ABI,
-COFF with `.pdata`/`.xdata` unwind tables). Any other `--target` is rejected
-with a message that points at `--backend=llvm`.
+Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
+COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
+Mach-O). Any other `--target` is rejected with a message that points at
+`--backend=llvm`.
+
+On macOS the code is the same as on Linux; only the object differs. Symbols
+get the Darwin `_` prefix, calls use `X86_64_RELOC_BRANCH` (the linker adds
+stubs), data that lives in another image is loaded through
+`X86_64_RELOC_GOT_LOAD`, other RIP-relative references are
+`X86_64_RELOC_SIGNED` with the addend stored in the instruction, and every
+relocation names its symbol (local ones included), as x86-64 Mach-O expects.
+Read-only data that holds pointers goes to `__DATA,__const`, constructors to
+`__mod_init_func`. The object carries no unwind tables or DWARF yet, so `-g`
+adds nothing on macOS.
 
 ## How it works
 
@@ -43,7 +55,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
-| `ng_elf.salam`, `ng_coff.salam`                                    | Object file writers                                                                                                                                                         |
+| `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
 | `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |
 | `ng_scale.salam`                                                   | Shares one multiply between addresses that scale the same index by a size x86 cannot encode                                                                                 |
@@ -382,6 +394,15 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+- `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
+  executable on x86-64 Linux: it maps the segments into this process, applies
+  the rebase and bind opcodes against glibc (Darwin names such as `___error`
+  and `___stdoutp` map to their glibc counterparts) and calls `_main`.
+  Programs that only compute and print run unchanged; anything that passes a
+  Darwin struct to libc (sockets, `stat`, signals) does not. Compiling the
+  `basics`, `features`, `types`, `data`, `games`, `match`, `switch`, `llvm`
+  and `general` tests for `x86_64-apple-macos` and running them this way
+  matches the expected output for every test outside that set.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.

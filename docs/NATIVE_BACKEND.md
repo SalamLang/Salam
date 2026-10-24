@@ -1,6 +1,6 @@
 # The native backend
 
-`--backend=native` turns a Salam program into x86-64 machine code without
+`--backend=native` turns a Salam program into x86-64 or AArch64 machine code without
 going through LLVM or a C compiler. It writes the object file itself (ELF on
 Linux, COFF on Windows, Mach-O on macOS), so the only outside tool left is the linker, and when
 the compiler has LLVM embedded even that runs in-process through lld.
@@ -10,14 +10,15 @@ salam build app.salam --backend=native
 salam run app.salam --backend=native
 salam build app.salam --backend=native --target=x86_64-w64-windows-gnu
 salam build app.salam --backend=native --target=x86_64-apple-macos
+salam build app.salam --backend=native --target=aarch64-linux-musl
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
 ```
 
 Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
-Mach-O). Any other `--target` is rejected with a message that points at
-`--backend=llvm`.
+Mach-O) and AArch64 Linux (AAPCS64, ELF). Any other `--target` is rejected
+with a message that points at `--backend=llvm`.
 
 On macOS the code is the same as on Linux; only the object differs. Symbols
 get the Darwin `_` prefix, calls use `X86_64_RELOC_BRANCH` (the linker adds
@@ -28,6 +29,38 @@ relocation names its symbol (local ones included), as x86-64 Mach-O expects.
 Read-only data that holds pointers goes to `__DATA,__const`, constructors to
 `__mod_init_func`. The object carries no unwind tables or DWARF yet, so `-g`
 adds nothing on macOS.
+
+## AArch64
+
+The AArch64 backend shares everything up to and including register
+allocation with x86-64; only the last step differs. `ng_a64.salam` turns each
+machine instruction into A64 words, using `x16`/`x17` (the ABI's
+intra-procedure scratch registers, which the allocator never sees) for
+addresses, large immediates and memory operands. The allocator's sixteen
+integer IDs map onto `x0`-`x7` (arguments), `x8` (the indirect-result
+register, which carries a struct return), `x9`/`x10` (its spill scratch) and
+`x19`-`x22` (callee-saved); its float IDs map onto `v0`-`v7` and `v16`-`v23`,
+all caller-saved, so `d8`-`d15` are never touched. Every function keeps a
+frame record (`x29`/`x30`), slots are addressed from `sp`, incoming stack
+arguments from `x29`.
+
+Flags need care because the machine instructions follow x86 semantics. A
+condition is translated by looking at what set the flags: after `cmp`/`sub`
+the carry is inverted (ARM's carry means no borrow), after `add` it is not,
+after a logical op it is known to be clear, and after a float compare the
+x86 unsigned conditions become ARM's ordered/unordered ones. ALU ops only use
+the flag-setting form (`adds`, the flag-setting `and`, or a trailing `tst`
+for `orr`/`eor`)
+when a later instruction reads the flags. Narrow (8/16-bit) compares shift
+both operands to the top of a 32-bit register first, which keeps signed and
+unsigned order. Division emulates x86's `rdx:rax` pair with `sdiv`/`udiv`
+plus `msub`; a 32-bit move to the same register still emits `mov wN, wN`,
+since that is what zero-extends. Atomics are `ldaxr`/`stlxr` loops.
+
+What is not there yet: the loop and SLP vectorizers are off on AArch64,
+there are no unwind tables or DWARF, and in release builds an integer
+division by zero returns 0 instead of trapping, as ARM hardware does (debug
+builds check explicitly, as on every target).
 
 ## How it works
 
@@ -55,6 +88,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
+| `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
 | `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |
@@ -403,6 +437,12 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `basics`, `features`, `types`, `data`, `games`, `match`, `switch`, `llvm`
   and `general` tests for `x86_64-apple-macos` and running them this way
   matches the expected output for every test outside that set.
+- `tools/bash/native-cross-check.sh <salam> aarch64-linux-musl qemu-aarch64`
+  builds the tests for AArch64, links them against a musl sysroot and runs
+  them under qemu. Every test passes except those needing `-D` flags, a
+  database library or a trapping release-mode division, and the
+  native-built compiler for AArch64 reproduces the x86-64 compiler's IR for
+  the whole compiler.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.

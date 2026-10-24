@@ -11,6 +11,7 @@ const AK_ALLOCA := 3
 
 k_sysv_gp := [7, 6, 2, 1, 8, 9]
 k_win_gp := [1, 2, 8, 9]
+k_a64_gp := [0, 1, 2, 3, 5, 6, 7, 8]
 
 func vcls_ty(g &: Ng, t: int): int:
     if is_flt(g, t) or is_vec(g, t):
@@ -584,6 +585,8 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool): i64
     mut gi := 0
     mut fi := 0
     mut stk2 := 0
+    a64 := g.arch == NG_ARCH_A64
+    ngp_args := a64 ? 8 : 6
     mut where := Vector {} as Vector<int>
     repeat n in p3:
         if cls[p3] == 1:
@@ -594,9 +597,11 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool): i64
                 where.push(0 - 1 - stk2)
                 stk2 += 8
             end
+        else cls[p3] == 2 and a64:
+            where.push(A64_SRET)
         else:
-            if gi < 6:
-                where.push(k_sysv_gp[gi])
+            if gi < ngp_args:
+                where.push(a64 ? k_a64_gp[gi] : k_sysv_gp[gi])
                 gi += 1
             else:
                 where.push(0 - 1 - stk2)
@@ -625,7 +630,7 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool): i64
             mask = mask | ((1 as i64) << (w2 as i64))
         end
     end
-    if vararg:
+    if vararg and not a64:
         _m := e_movi(g, RAX, fi as i64)
         mask = mask | (1 as i64)
     end
@@ -657,6 +662,8 @@ func entry_args(g &: Ng):
         if g.os == NG_OS_WINDOWS:
             _c := e_copy(g, g.retp, RCX)
             pos = 1
+        else g.arch == NG_ARCH_A64:
+            _c2a := e_copy(g, g.retp, A64_SRET)
         else:
             _c2 := e_copy(g, g.retp, RDI)
             gi = 1
@@ -695,8 +702,8 @@ func entry_args(g &: Ng):
             if cls == 1 and fi < 8:
                 _c5 := e_copy(g, r, XMM0 + fi)
                 fi += 1
-            else cls == 0 and gi < 6:
-                _c6 := e_copy(g, r, k_sysv_gp[gi])
+            else cls == 0 and gi < (g.arch == NG_ARCH_A64 ? 8 : 6):
+                _c6 := e_copy(g, r, g.arch == NG_ARCH_A64 ? k_a64_gp[gi] : k_sysv_gp[gi])
                 gi += 1
             else:
                 if cls == 1:
@@ -3534,7 +3541,7 @@ func isel_call(g &: Ng, i: int):
             rslot = new_slot(g, tsize(g, rt), talign(g, rt))
             regs.push(lea_reg(g, frame_mem(rslot, 0 as i64)))
         end
-        cls.push(0)
+        cls.push(g.arch == NG_ARCH_A64 ? 2 : 0)
     end
     repeat na in k:
         v := g.pool[ps + 3 * k]

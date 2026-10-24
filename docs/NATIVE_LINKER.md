@@ -506,6 +506,10 @@ The output is a PIE `MH_EXECUTE`:
   `libSystem`. The driver finds `lib<name>.tbd` or `.dylib` on the library
   paths and in the SDK (`SDKROOT`, or the Xcode command-line tools and Xcode
   locations), and frameworks as `<name>.framework/<name>.tbd` there.
+- Static archives may use the BSD format macOS tools write (`#1/N` member
+  names stored after the header and a `__.SYMDEF`, `__.SYMDEF SORTED` or
+  `__.SYMDEF_64` index) as well as the GNU one; only the members that
+  resolve a symbol are loaded.
 - `LC_SYMTAB`, `LC_DYSYMTAB` with the indirect symbol table for the stubs
   and GOT, `LC_LOAD_DYLINKER`, `LC_UUID`, `LC_BUILD_VERSION` (macOS 11),
   `LC_MAIN`, `LC_LOAD_DYLIB`, `LC_DATA_IN_CODE` (jump tables inside

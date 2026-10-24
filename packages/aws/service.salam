@@ -16,7 +16,7 @@ package aws
 
 import str
 import time
-import net.httpx
+import net.http
 
 const _AWS_GLOBAL := "iam cloudfront route53 organizations waf globalaccelerator"
 
@@ -84,7 +84,7 @@ func _call_endpoint(cfg: Config, c: Call): str:
     ret ServiceEndpoint(c.service, _call_region(cfg, c))
 end
 
-func _call_host(ep: httpx.Endpoint): str:
+func _call_host(ep: http.Endpoint): str:
     mut host := ep.host
     if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
         host = host + ":" + ep.port
@@ -99,11 +99,11 @@ func _call_headers(c: Call, content_type: str): Headers:
     ret h
 end
 
-func _invoke_once(cfg: Config, c: Call, at: i64): httpx.Raw:
+func _invoke_once(cfg: Config, c: Call, at: i64): http.RawResponse:
     endpoint := _call_endpoint(cfg, c)
-    ep := httpx.ParseEndpoint(endpoint)
+    ep := http.ParseEndpoint(endpoint)
     if not ep.ok:
-        ret httpx.Raw { error = "the endpoint could not be parsed: " + endpoint }
+        ret http.RawResponse { error = "the endpoint could not be parsed: " + endpoint }
     end
     mut svc := cfg
     svc.service = c.service
@@ -122,7 +122,7 @@ func _invoke_once(cfg: Config, c: Call, at: i64): httpx.Raw:
     )
 end
 
-func _invoke_raw(cfg: Config, c: Call): httpx.Raw:
+func _invoke_raw(cfg: Config, c: Call): http.RawResponse:
     mut attempts := cfg.retry
     if attempts < 1: attempts = 1 end
     if attempts > 10: attempts = 10 end
@@ -130,11 +130,11 @@ func _invoke_raw(cfg: Config, c: Call): httpx.Raw:
     until n < attempts:
         mut raw := _invoke_once(cfg, c, time.Now())
         if not _retryable(raw.status) or n == attempts - 1: ret raw end
-        httpx.FreeRaw(raw)
+        http.FreeRaw(raw)
         time.Sleep(_backoff_ms(cfg, n))
         n += 1
     end
-    ret httpx.Raw { error = "the request was never attempted" }
+    ret http.RawResponse { error = "the request was never attempted" }
 end
 
 func _service_ready(cfg: Config, c: Call): str:
@@ -274,12 +274,12 @@ pub func Invoke(cfg: Config, c: Call): Result:
     why := _service_ready(cfg, c)
     if why.len() > 0: ret Failure(why) end
     mut raw := _invoke_raw(cfg, c)
-    defer httpx.FreeRaw(raw)
-    body := httpx.RawText(raw)
+    defer http.FreeRaw(raw)
+    body := http.RawText(raw)
     mut out := Result { status = raw.status, body = body, head = raw.head }
-    out.request_id = httpx.HeaderValue(raw.head, "x-amzn-requestid")
+    out.request_id = http.HeaderValue(raw.head, "x-amzn-requestid")
     if out.request_id.len() == 0:
-        out.request_id = httpx.HeaderValue(raw.head, "x-amz-request-id")
+        out.request_id = http.HeaderValue(raw.head, "x-amz-request-id")
     end
     if raw.error.len() > 0:
         out.code = "Transport"
@@ -332,7 +332,7 @@ end
 @fa "فراخوان آماده"
 pub func PreparedCall(cfg: Config, c: Call, at: i64): str:
     endpoint := _call_endpoint(cfg, c)
-    ep := httpx.ParseEndpoint(endpoint)
+    ep := http.ParseEndpoint(endpoint)
     if not ep.ok: ret "" end
     mut svc := cfg
     svc.service = c.service

@@ -18,7 +18,7 @@ import mem
 import str
 import time
 import conv
-import net.httpx
+import net.http
 
 const _S3_HDR_MAX := 128
 
@@ -169,7 +169,7 @@ func _bucket_of(cfg: Config, r: Request): str:
     ret cfg.bucket
 end
 
-func _wire_host(cfg: Config, ep: httpx.Endpoint, bucket: str): str:
+func _wire_host(cfg: Config, ep: http.Endpoint, bucket: str): str:
     mut host := ep.host
     if bucket.len() > 0 and not cfg.path_style: host = bucket + "." + ep.host end
     if (ep.secure and ep.port != 443) or (not ep.secure and ep.port != 80):
@@ -283,12 +283,12 @@ func _payload_hash(r: Request): str:
 end
 
 func _dispatch(
-    cfg: Config, ep: httpx.Endpoint, method: str, host: str, path: str, query: str, extra: Headers, body: void*, body_len: int, payload_hash: str, at: i64
-): httpx.Raw:
+    cfg: Config, ep: http.Endpoint, method: str, host: str, path: str, query: str, extra: Headers, body: void*, body_len: int, payload_hash: str, at: i64
+): http.RawResponse:
     amz_date := AmzDate(at)
     signed_set := _signing_set(cfg, extra, host, amz_date, payload_hash)
     if cfg.anonymous:
-        ret httpx.SendRawTimeout(
+        ret http.SendRawTimeout(
             ep, _head_block(method, path, query, "", signed_set, body_len), body, body_len, cfg.timeout_ms
         )
     end
@@ -297,17 +297,17 @@ func _dispatch(
     s := SignRequest(
         cfg, method, path, query, canonical, signed_names, payload_hash, at
     )
-    if not s.ok: ret httpx.Raw { error = "the request could not be signed" } end
+    if not s.ok: ret http.RawResponse { error = "the request could not be signed" } end
     head := _head_block(
         method, path, query, s.authorization, signed_set, body_len
     )
-    ret httpx.SendRawTimeout(ep, head, body, body_len, cfg.timeout_ms)
+    ret http.SendRawTimeout(ep, head, body, body_len, cfg.timeout_ms)
 end
 
-func _send_once(cfg: Config, r: Request, at: i64): httpx.Raw:
-    ep := httpx.ParseEndpoint(cfg.endpoint)
+func _send_once(cfg: Config, r: Request, at: i64): http.RawResponse:
+    ep := http.ParseEndpoint(cfg.endpoint)
     if not ep.ok:
-        ret httpx.Raw { error = "the endpoint could not be parsed: " + cfg.endpoint }
+        ret http.RawResponse { error = "the endpoint could not be parsed: " + cfg.endpoint }
     end
     bucket := _bucket_of(cfg, r)
     ret _dispatch(
@@ -315,7 +315,7 @@ func _send_once(cfg: Config, r: Request, at: i64): httpx.Raw:
     )
 end
 
-func _do_raw(cfg: Config, r: Request): httpx.Raw:
+func _do_raw(cfg: Config, r: Request): http.RawResponse:
     mut attempts := cfg.retry
     if attempts < 1: attempts = 1 end
     if attempts > 10: attempts = 10 end
@@ -323,18 +323,18 @@ func _do_raw(cfg: Config, r: Request): httpx.Raw:
     until n < attempts:
         mut raw := _send_once(cfg, r, time.Now())
         if not _retryable(raw.status) or n == attempts - 1: ret raw end
-        httpx.FreeRaw(raw)
+        http.FreeRaw(raw)
         time.Sleep(_backoff_ms(cfg, n))
         n += 1
     end
-    ret httpx.Raw { error = "the request was never attempted" }
+    ret http.RawResponse { error = "the request was never attempted" }
 end
 
 func _fill_common(
-    raw: httpx.Raw, status: int, ok &: bool, etag &: str, code &: str, error &: str, body: str
+    raw: http.RawResponse, status: int, ok &: bool, etag &: str, code &: str, error &: str, body: str
 ):
     ok = raw.ok
-    etag = Unquote(httpx.HeaderValue(raw.head, "ETag"))
+    etag = Unquote(http.HeaderValue(raw.head, "ETag"))
     if raw.error.len() > 0:
         error = raw.error
         code = "Transport"
@@ -480,13 +480,13 @@ end
 pub func Do(cfg: Config, r: Request): Result:
     if not Configured(cfg): ret Failure("the object store is not configured") end
     mut raw := _do_raw(cfg, r)
-    defer httpx.FreeRaw(raw)
-    body := httpx.RawText(raw)
+    defer http.FreeRaw(raw)
+    body := http.RawText(raw)
     mut out := Result { status = raw.status, body = body, head = raw.head }
     _fill_common(raw, raw.status, out.ok, out.etag, out.code, out.error, body)
-    out.request_id = httpx.HeaderValue(raw.head, "x-amz-request-id")
-    out.version_id = httpx.HeaderValue(raw.head, "x-amz-version-id")
-    length := httpx.HeaderValue(raw.head, "Content-Length")
+    out.request_id = http.HeaderValue(raw.head, "x-amz-request-id")
+    out.version_id = http.HeaderValue(raw.head, "x-amz-version-id")
+    length := http.HeaderValue(raw.head, "Content-Length")
     if length.len() > 0: out.length = conv.ParseInt(length) end
     ret out
 end
@@ -500,20 +500,20 @@ pub func DoBytes(cfg: Config, r: Request): Bytes:
     mut raw := _do_raw(cfg, r)
     mut out := Bytes { status = raw.status, head = raw.head }
     if raw.error.len() > 0:
-        httpx.FreeRaw(raw)
+        http.FreeRaw(raw)
         out.error = raw.error
         out.code = "Transport"
         ret out
     end
     if not raw.ok:
-        body := httpx.RawText(raw)
-        httpx.FreeRaw(raw)
+        body := http.RawText(raw)
+        http.FreeRaw(raw)
         out.code = _tag_text(body, "Code")
         out.error = _describe(raw.status, body)
         ret out
     end
     out.ok = true
-    out.etag = Unquote(httpx.HeaderValue(raw.head, "ETag"))
+    out.etag = Unquote(http.HeaderValue(raw.head, "ETag"))
     out.data = raw.data
     out.len = raw.len
     ret out
@@ -532,13 +532,13 @@ end
 @en "ResultHeader"
 @fa "سرآیند نتیجه"
 pub func ResultHeader(r: Result, name: str): str:
-    ret httpx.HeaderValue(r.head, name)
+    ret http.HeaderValue(r.head, name)
 end
 
 @en "BytesHeader"
 @fa "سرآیند بایت‌ها"
 pub func BytesHeader(b: Bytes, name: str): str:
-    ret httpx.HeaderValue(b.head, name)
+    ret http.HeaderValue(b.head, name)
 end
 
 @en "ResultErrorCode"
@@ -571,7 +571,7 @@ end
 @en "CanonicalRequest"
 @fa "درخواست متعارف"
 pub func CanonicalRequest(cfg: Config, r: Request, at: i64): str:
-    ep := httpx.ParseEndpoint(cfg.endpoint)
+    ep := http.ParseEndpoint(cfg.endpoint)
     bucket := _bucket_of(cfg, r)
     host := _wire_host(cfg, ep, bucket)
     payload_hash := _payload_hash(r)
@@ -584,7 +584,7 @@ end
 @en "PreparedHead"
 @fa "سرآیندهای آماده"
 pub func PreparedHead(cfg: Config, r: Request, at: i64): str:
-    ep := httpx.ParseEndpoint(cfg.endpoint)
+    ep := http.ParseEndpoint(cfg.endpoint)
     bucket := _bucket_of(cfg, r)
     host := _wire_host(cfg, ep, bucket)
     path := _wire_path(cfg, bucket, r.key)

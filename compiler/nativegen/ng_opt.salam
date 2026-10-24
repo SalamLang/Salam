@@ -508,18 +508,35 @@ func fold_extv(g &: Ng, i: int): bool:
     ret false
 end
 
+func agg_leaves(g &: Ng, t: int, base: i64, offs &: Vector<i64>, tys &: Vector<int>): bool:
+    if g.t_kind[t] == TK_STRUCT:
+        repeat g.t_nf[t] in k:
+            ft := g.t_pool[g.t_fs[t] + k]
+            if not agg_leaves(g, ft, base + (g.t_offs[g.t_fs[t] + k] as i64), offs, tys):
+                ret false
+            end
+        end
+        ret true
+    end
+    if is_agg(g, t) or offs.len() > 256:
+        ret false
+    end
+    offs.push(base)
+    tys.push(t)
+    ret true
+end
+
 func fold_insv_rebuild(g &: Ng, i: int): bool:
     t := g.i_ty[i]
     if g.t_kind[t] != TK_STRUCT:
         ret false
     end
-    nf := g.t_nf[t]
     mut src := 0 - 1
-    mut cnt := 0
     mut a := i
-    mut offs := Vector {} as Vector<i64>
+    mut po := Vector {} as Vector<i64>
+    mut pt := Vector {} as Vector<int>
     mut ok := true
-    repeat nf + 1:
+    repeat 512:
         if g.i_op[a] != OP_INSV:
             break
         end
@@ -534,8 +551,10 @@ func fold_insv_rebuild(g &: Ng, i: int): bool:
             break
         end
         src = g.i_a[e]
-        offs.push(g.i_d[a])
-        cnt += 1
+        if not agg_leaves(g, g.v_ty[b], g.i_d[a], po, pt):
+            ok = false
+            break
+        end
         nx := g.i_a[a]
         if nx < 0 or g.v_kind[nx] != VK_INS:
             a = 0 - 1
@@ -546,24 +565,30 @@ func fold_insv_rebuild(g &: Ng, i: int): bool:
         end
         a = g.v_def[nx]
     end
-    if not ok or a >= 0 or src < 0 or cnt != nf or g.v_ty[src] != t:
-        offs.free()
-        ret false
-    end
-    repeat nf in k:
-        fo := g.t_offs[g.t_fs[t] + k] as i64
-        mut found := false
-        each o in offs:
-            if o == fo:
-                found = true
+    mut loffs := Vector {} as Vector<i64>
+    mut ltys := Vector {} as Vector<int>
+    if ok and a < 0 and src >= 0 and g.v_ty[src] == t and agg_leaves(g, t, 0 as i64, loffs, ltys) and loffs.len() == po.len():
+        repeat loffs.len() in k:
+            mut found := false
+            repeat po.len() in q:
+                if po[q] == loffs[k] and pt[q] == ltys[k]:
+                    found = true
+                end
+            end
+            if not found:
+                ok = false
             end
         end
-        if not found:
-            offs.free()
-            ret false
-        end
+    else:
+        ok = false
     end
-    offs.free()
+    po.free()
+    pt.free()
+    loffs.free()
+    ltys.free()
+    if not ok:
+        ret false
+    end
     replace_res(g, i, src)
     ret true
 end

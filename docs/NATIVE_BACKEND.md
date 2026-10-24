@@ -94,7 +94,9 @@ then goes through:
    the calls that are left.
 5. Folding to a fixed point: arithmetic and compares on constants, algebraic
    identities, casts, selects, constant branch conditions, `extractvalue` of a
-   known `insertvalue`, a struct rebuilt field by field from itself, address
+   known `insertvalue`, a struct rebuilt field by field from itself (also
+   when a nested struct field is rebuilt leaf by leaf, as a by-value `Token`
+   is when it is pushed), address
    arithmetic, `x % 2^k == 0` as a mask test, `(x & y) ^ (x & z)` as
    `x & (y ^ z)`, the bit select `(x & y) ^ (~x & z)` as
    `((y ^ z) & x) ^ z`, and `x < 0 ? ~y : y` as `y ^ (x >> 63)` after
@@ -138,7 +140,11 @@ then goes through:
    into its caller after it was unrolled, as LLVM does. Unrolling runs
    again after each value numbering pass that found new constants, so the
    blocked stdlib loops over a `matrix.Zeros(4, 4)` collapse into straight
-   code once the sizes are forwarded from the struct.
+   code once the sizes are forwarded from the struct. A loop may also leave
+   early (`ret i` or `break` inside the body): each copy of the exiting block
+   becomes one more incoming edge of the exit block's phis, and a value the
+   exit uses directly first gets such a phi. Matching a constant needle in
+   `str.IndexFrom` then becomes one `cmp byte [p + k], imm` per needle byte.
 9. A loop entered from several blocks first gets a single preheader (the
    incoming values meet in new phis there), so the loop passes below also
    see loops that start right after an `if`. Loop-invariant code motion of
@@ -284,7 +290,10 @@ calls anything for the `"_"`. When a function uses several addresses
 `base + i * s` with the same `i` and a scale `s` that x86 cannot encode
 (a 280-byte AST node), `i * s` is computed once. Instruction selection folds address
 arithmetic into memory operands, folds a
-single-use load into the ALU instruction or compare that consumes it, turns a
+single-use load into the ALU instruction or compare that consumes it (a
+byte load only into a compare with a constant), gives a global that a loop
+reads by index one base register set up at function entry (x86 cannot add an index
+to a `rip`-relative address), turns a
 load, an add/sub/and/or/xor and a store back to the same address into one
 `add [mem], reg` (or immediate), loads a
 32-bit value with `movslq` when it is also sign-extended (the low half serves
@@ -363,7 +372,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -13,6 +13,10 @@ pub struct Unr:
     pub wl: Vector<int> = Vector {}
     pub ivals: Vector<i64> = Vector {}
     pub iv: int = 0 - 1
+    pub side: int = 0
+    pub xphi: Vector<int> = Vector {}
+    pub xval: Vector<int> = Vector {}
+    pub xblk: Vector<int> = Vector {}
     pub body: int = 0
     pub total: int = 0
 end
@@ -253,8 +257,11 @@ func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
         blk_succs(g, b, succ)
         each s in succ:
             if not u.inl[s] and b != h:
-                succ.free()
-                ret false
+                if g.off_mxun:
+                    succ.free()
+                    ret false
+                end
+                u.side += 1
             end
             if s == h and b != latch:
                 succ.free()
@@ -284,6 +291,10 @@ func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
         end
     end
     succ.free()
+    if u.side > 0 and not side_uses_ok(g, u):
+        bsz.free()
+        ret false
+    end
     u.body = n
     u.total = n * trips
     if n * trips <= UNR_MAX_SIZE:
@@ -294,6 +305,185 @@ func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
     bsz.free()
     u.total = sim
     ret sim >= 0 and sim <= UNR_MAX_SIZE
+end
+
+func loop_def(g &: Ng, u &: Unr, v: int): bool:
+    if v < 0 or v >= g.v_kind.len() or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b >= 0 and b < u.inl.len() and u.inl[b]
+end
+
+func all_preds_in(g &: Ng, u &: Unr, x: int): bool:
+    if g.b_npred[x] == 0:
+        ret false
+    end
+    repeat g.b_npred[x] in k:
+        p := g.b_pred[g.b_ps[x] + k]
+        if p < 0 or p >= u.inl.len() or not u.inl[p]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lcssa_use(g &: Ng, u &: Unr, i: int, v: int, fi &: Vector<int>, fv &: Vector<int>): bool:
+    if not loop_def(g, u, v):
+        ret true
+    end
+    x := g.i_blk[i]
+    if x < 0 or not all_preds_in(g, u, x):
+        ret false
+    end
+    fi.push(i)
+    fv.push(v)
+    ret true
+end
+
+func side_uses_ok(g &: Ng, u &: Unr): bool:
+    mut fi := Vector {} as Vector<int>
+    mut fv := Vector {} as Vector<int>
+    mut ok := true
+    each b in g.b_rpo:
+        if not ok:
+            break
+        end
+        if b < u.inl.len() and u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0 and ok:
+            op := g.i_op[i]
+            if op == OP_PHI:
+                ps := g.i_ps[i]
+                repeat g.i_pcount[i] in k:
+                    pv := g.pool[ps + 2 * k]
+                    pb := g.pool[ps + 2 * k + 1]
+                    if loop_def(g, u, pv) and not (pb >= 0 and pb < u.inl.len() and u.inl[pb]):
+                        ok = false
+                    end
+                end
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0 and not lcssa_use(g, u, i, g.i_a[i], fi, fv): ok = false end
+                if (m & 2) != 0 and not lcssa_use(g, u, i, g.i_b[i], fi, fv): ok = false end
+                if (m & 4) != 0 and not lcssa_use(g, u, i, g.i_c[i], fi, fv): ok = false end
+                if op == OP_CALL:
+                    repeat g.i_pcount[i] in k2:
+                        if not lcssa_use(g, u, i, g.pool[g.i_ps[i] + 3 * k2], fi, fv): ok = false end
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if ok and fi.len() > 0:
+        mut done_b := Vector {} as Vector<int>
+        mut done_v := Vector {} as Vector<int>
+        mut done_p := Vector {} as Vector<int>
+        repeat fi.len() in q:
+            i2 := fi[q]
+            v := fv[q]
+            x := g.i_blk[i2]
+            mut pv := 0 - 1
+            repeat done_b.len() in z:
+                if done_b[z] == x and done_v[z] == v:
+                    pv = done_p[z]
+                end
+            end
+            if pv < 0:
+                ph := ins_new(g, OP_PHI, g.v_ty[v])
+                g.i_ps[ph] = g.pool.len()
+                g.i_pcount[ph] = g.b_npred[x]
+                repeat g.b_npred[x] in k3:
+                    g.pool.push(v)
+                    g.pool.push(g.b_pred[g.b_ps[x] + k3])
+                end
+                pv = new_res(g, ph)
+                ins_before(g, g.b_first[x], ph)
+                done_b.push(x)
+                done_v.push(v)
+                done_p.push(pv)
+            end
+            op2 := g.i_op[i2]
+            m2 := val_mask(op2)
+            if (m2 & 1) != 0 and g.i_a[i2] == v: g.i_a[i2] = pv end
+            if (m2 & 2) != 0 and g.i_b[i2] == v: g.i_b[i2] = pv end
+            if (m2 & 4) != 0 and g.i_c[i2] == v: g.i_c[i2] = pv end
+            if op2 == OP_CALL:
+                repeat g.i_pcount[i2] in k4:
+                    if g.pool[g.i_ps[i2] + 3 * k4] == v:
+                        g.pool[g.i_ps[i2] + 3 * k4] = pv
+                    end
+                end
+            end
+        end
+        done_b.free()
+        done_v.free()
+        done_p.free()
+    end
+    fi.free()
+    fv.free()
+    ret ok
+end
+
+func side_note(g &: Ng, u &: Unr, h: int, nb0: int):
+    each b in g.b_rpo:
+        if b >= nb0 or (b < u.inl.len() and u.inl[b]):
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in k:
+                pb := g.pool[ps + 2 * k + 1]
+                if pb >= 0 and pb < nb0 and pb != h and u.inl[pb] and u.bmap[pb] >= 0:
+                    u.xphi.push(i)
+                    u.xval.push(unr_val(u, g.pool[ps + 2 * k]))
+                    u.xblk.push(u.bmap[pb])
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func side_fix(g &: Ng, u &: Unr, h: int, nb0: int):
+    mut done := Vector {} as Vector<int>
+    each ph in u.xphi:
+        mut seen := false
+        each d in done:
+            if d == ph:
+                seen = true
+            end
+        end
+        if seen:
+            continue
+        end
+        done.push(ph)
+        ps := g.i_ps[ph]
+        np := g.pool.len()
+        mut cnt := 0
+        repeat g.i_pcount[ph] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if not (pb >= 0 and pb < nb0 and pb != h and u.inl[pb]):
+                g.pool.push(g.pool[ps + 2 * k])
+                g.pool.push(pb)
+                cnt += 1
+            end
+        end
+        repeat u.xphi.len() in q:
+            if u.xphi[q] == ph:
+                g.pool.push(u.xval[q])
+                g.pool.push(u.xblk[q])
+                cnt += 1
+            end
+        end
+        g.i_ps[ph] = np
+        g.i_pcount[ph] = cnt
+    end
+    done.free()
 end
 
 func clone_into(g &: Ng, u &: Unr, i: int, nb: int, h: int, hnext: int, hcur: int): int:
@@ -409,6 +599,9 @@ func unroll_one(g &: Ng, u &: Unr, h: int, latch: int, pre: int, trips: int):
                     j = g.i_next[j]
                 end
             end
+            if u.side > 0:
+                side_note(g, u, h, nb0)
+            end
         end
         repeat g.dq_ni.len() in dq:
             dv_ev_add(g, g.dq_ni[dq], g.dq_fv[dq], unr_val(u, g.dq_v[dq]))
@@ -427,6 +620,9 @@ func unroll_one(g &: Ng, u &: Unr, h: int, latch: int, pre: int, trips: int):
             end
         end
         e = g.i_next[e]
+    end
+    if u.side > 0:
+        side_fix(g, u, h, nb0)
     end
     repl_grow(g)
     mut hi := g.b_first[h]
@@ -468,6 +664,10 @@ func unroll_loops(g &: Ng): bool:
             if not loop_blocks(g, u, h, b):
                 continue
             end
+            u.side = 0
+            u.xphi.clear()
+            u.xval.clear()
+            u.xblk.clear()
             mut inner := false
             each lb in u.blocks:
                 if lb != h:
@@ -505,6 +705,9 @@ func unroll_loops(g &: Ng): bool:
     u.heads.free()
     u.wl.free()
     u.ivals.free()
+    u.xphi.free()
+    u.xval.free()
+    u.xblk.free()
     if done:
         ensure_terms(g)
         build_cfg(g)

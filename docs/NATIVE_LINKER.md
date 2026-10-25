@@ -446,7 +446,7 @@ executable and hands it to the same dispatcher the native backend uses.
 ### ELF32 and other machines
 
 Objects carry their class and machine (`EM_X86_64`, `EM_386`,
-`EM_AARCH64`, `EM_ARM`); the first object decides the link and a mismatch
+`EM_AARCH64`, `EM_ARM`, `EM_RISCV`); the first object decides the link and a mismatch
 is an error. The reader handles both section header and symbol layouts and
 both `RELA` and `REL`; for `REL` the addend is read out of the section,
 decoding ARM's branch, `MOVW`/`MOVT` and Thumb encodings. Relocation
@@ -461,6 +461,14 @@ application is one function per machine:
   Thumb function becomes `BLX`; a `B` to one is an error, since no veneers
   are generated), `MOVW`/`MOVT` in ARM and Thumb, Thumb branches, `PREL31`
   and the GOT forms.
+- **RISC-V (RV64)**: data words, `HI20`/`LO12` absolute pairs, PC-relative
+  `PCREL_HI20` with its `PCREL_LO12_I`/`_S` partner (found by the address of
+  the `auipc` the low half names), `CALL`/`CALL_PLT` pairs, `JAL`, branches,
+  the compressed `RVC_BRANCH`/`RVC_JUMP` forms, `GOT_HI20`, and the
+  `ADD`/`SUB`/`SET` and ULEB128 arithmetic of `.eh_frame`. The linker does
+  not relax, so `RELAX` and `ALIGN` are left as they are, and
+  `__global_pointer$` is defined so musl's start code can load `gp`.
+  `.debug_*` sections are dropped on this machine for now.
 
 TLS relocations are rejected rather than guessed, because no `PT_TLS`
 segment is written. The ELF writer emits 32- or 64-bit headers, program

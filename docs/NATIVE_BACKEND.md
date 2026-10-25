@@ -1,6 +1,6 @@
 # The native backend
 
-`--backend=native` turns a Salam program into x86-64, 32-bit x86, AArch64 or 32-bit ARM machine code without
+`--backend=native` turns a Salam program into x86-64, 32-bit x86, AArch64, 32-bit ARM or RISC-V machine code without
 going through LLVM or a C compiler. It writes the object file itself (ELF on
 Linux, COFF on Windows, Mach-O on macOS), so the only outside tool left is the linker, and when
 the compiler has LLVM embedded even that runs in-process through lld.
@@ -14,6 +14,7 @@ salam build app.salam --backend=native --target=aarch64-linux-musl
 salam build app.salam --backend=native --target=i686-linux-musl
 salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm-linux-musleabihf
+salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam obj app.salam --backend=native                  # object file only
@@ -23,7 +24,7 @@ Targets: x86-64 Linux (System V ABI, ELF), x86-64 Windows (Win64 ABI,
 COFF with `.pdata`/`.xdata` unwind tables) and x86-64 macOS (System V ABI,
 Mach-O), 32-bit x86 Linux (i386 System V ABI, ELF32) and Windows (cdecl and
 stdcall, COFF), 32-bit ARM Linux (armhf: ARMv7-A, VFPv3-D16, AAPCS-VFP,
-ELF32), AArch64 Linux
+ELF32), RISC-V 64 Linux (RV64GC, LP64D, ELF), AArch64 Linux
 (AAPCS64, ELF) and arm64 macOS (Apple's AAPCS64 variant, Mach-O). Any other
 `--target` is rejected
 with a message that points at `--backend=llvm`.
@@ -113,10 +114,10 @@ Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 that need `-D` flags, a database library or a trapping release-mode
 division, `types/size_type` (whose output assumes a 64-bit `usize`) and a UDP
 test that also fails when clang compiles the same IR. The same groups built
-for `i686-w64-windows-gnu` and run under wine match too, apart from programs
-that start threads: std passes a cdecl function to `_beginthreadex`, which
-expects `__stdcall`, and the LLVM backend's build of the same IR crashes the
-same way.
+for `i686-w64-windows-gnu` and run under wine match too. Thread start
+routines on 32-bit Windows must be `__stdcall`, so the frontend wraps every
+`spawn`ed function in a small `x86_stdcallcc` thunk there, and the backend
+pops a stdcall definition's arguments with `ret N`.
 
 ## 32-bit ARM
 
@@ -150,6 +151,35 @@ qemu-arm, the test groups listed for i686 match their expected output with
 the same exceptions. No unwind tables or DWARF yet, and the generated code
 is still noticeably slower than clang's on float-heavy loops.
 
+## RISC-V
+
+`riscv64-linux-musl` produces RV64GC code for the LP64D ABI, lowered from the
+shared machine instructions in `ng_rv64.salam` with the same register
+assignment and frame layout as AArch64 (`a0`-`a7` for arguments, `s0`/`ra`
+frame record, slots addressed from `sp`).
+
+RISC-V has no flags register, so a flag-setting instruction leaves its
+operands in `t5`/`t6` in "compare form": a compare stores both sides, a
+`test` or logic result stores the result and zero, a negate stores zero and
+the operand, and narrower sizes are shifted to the top of the register so
+both signed and unsigned order survive. Every condition then becomes a
+`slt`/`sltu`/`xor` sequence on that pair; the carry of an `add` keeps its
+first operand in `t4`, and a float compare keeps both operands in
+`ft10`/`ft11` for the float compare instructions. A conditional jump is a short branch
+over a `jal`, so distance is never a problem.
+
+The machine instructions follow x86, where a 32-bit operation clears the
+upper half of the register, so 32-bit results are zero-extended after the
+`w` forms. At calls into C, 32-bit arguments are sign-extended as the psABI
+requires, and so are 32-bit return values. Single-precision values must stay
+NaN-boxed, so a float zero is made at the value's own width. Globals are
+addressed with absolute `lui`/`addi` pairs (static executables) and calls with
+`auipc`/`jalr`. Byte and halfword atomics are not supported yet.
+
+Built with the built-in linker against a musl sysroot and run under
+qemu-riscv64, the test groups listed for i686 match their expected output
+with the same exceptions.
+
 ## How it works
 
 The frontend is shared with the LLVM backend. `llvmgen` lowers the checked
@@ -179,6 +209,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
 | `ng_arm.salam`                                                     | 32-bit ARM encoder: machine instructions to A32/VFP words, frame, atomics, relocations                                                                                      |
+| `ng_rv64.salam`                                                    | RISC-V 64 encoder: machine instructions to RV64GC words, flag emulation, frame, atomics, relocations                                                                        |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
 | `ng_gdce.salam`                                                    | Removes functions and data nothing references                                                                                                                               |
 | `ng_fastx.salam`                                                   | The early-return path tested before the prologue                                                                                                                            |

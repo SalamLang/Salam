@@ -252,7 +252,7 @@ func use_reg(g &: Ng, v: int): int:
     end
     if vcls_ty(g, g.v_ty[v]) == 1:
         r7 := new_reg_ty(g, g.v_ty[v])
-        _x := e_rr(g, M_XORPS, 8, r7, r7)
+        _x := e_rr(g, M_XORPS, zero_sz(g, g.v_ty[v]), r7, r7)
         ret r7
     end
     r8 := gpr(g)
@@ -260,10 +260,17 @@ func use_reg(g &: Ng, v: int): int:
     ret r8
 end
 
+func zero_sz(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_RV64 and is_flt(g, t):
+        ret fsz(t)
+    end
+    ret 8
+end
+
 func float_reg(g &: Ng, bits: i64, t: int): int:
     r := xmm(g)
     if bits == (0 as i64):
-        _x := e_rr(g, M_XORPS, 8, r, r)
+        _x := e_rr(g, M_XORPS, zero_sz(g, t), r, r)
         ret r
     end
     sz := fsz(t)
@@ -412,7 +419,7 @@ func emit_copy(g &: Ng, dst: Mem, src: Mem, size: int):
         ret
     end
     mut off := 0
-    if size >= 32 and g.arch != NG_ARCH_ARM:
+    if size >= 32 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
         until size - off >= 16:
             x := wide_reg(g)
             _vl := e_rm(g, M_VLD, 16, x, mem_add(src, off))
@@ -459,7 +466,7 @@ func zero_fill(g &: Ng, dst: Mem, size: int):
         ret
     end
     mut off := 0
-    if size >= 48 and g.arch != NG_ARCH_ARM:
+    if size >= 48 and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64):
         z := wide_reg(g)
         _zx := e_rr(g, M_XORPS, 16, z, z)
         until size - off >= 16:
@@ -629,8 +636,8 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfix
     mut gi := 0
     mut fi := 0
     mut stk2 := 0
-    a64 := g.arch == NG_ARCH_A64
-    apple_va := a64 and vararg and g.os == NG_OS_MACOS and nfixed >= 0
+    a64 := g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64
+    apple_va := g.arch == NG_ARCH_A64 and vararg and g.os == NG_OS_MACOS and nfixed >= 0
     ngp_args := a64 ? 8 : 6
     mut ord := 0
     mut where := Vector {} as Vector<int>
@@ -649,7 +656,7 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfix
                 where.push(0 - 1 - stk2)
                 stk2 += 8
             end
-        else cls[p3] == 2 and a64:
+        else cls[p3] == 2 and g.arch == NG_ARCH_A64:
             where.push(A64_SRET)
         else:
             if gi < ngp_args:
@@ -682,7 +689,7 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfix
             mask = mask | ((1 as i64) << (w2 as i64))
         end
     end
-    if vararg and not a64:
+    if vararg and g.arch == NG_ARCH_X64:
         _m := e_movi(g, RAX, fi as i64)
         mask = mask | (1 as i64)
     end
@@ -935,6 +942,9 @@ func entry_args(g &: Ng):
             pos = 1
         else g.arch == NG_ARCH_A64:
             _c2a := e_copy(g, g.retp, A64_SRET)
+        else g.arch == NG_ARCH_RV64:
+            _c2r := e_copy(g, g.retp, k_a64_gp[0])
+            gi = 1
         else:
             _c2 := e_copy(g, g.retp, RDI)
             gi = 1
@@ -973,8 +983,8 @@ func entry_args(g &: Ng):
             if cls == 1 and fi < 8:
                 _c5 := e_copy(g, r, XMM0 + fi)
                 fi += 1
-            else cls == 0 and gi < (g.arch == NG_ARCH_A64 ? 8 : 6):
-                _c6 := e_copy(g, r, g.arch == NG_ARCH_A64 ? k_a64_gp[gi] : k_sysv_gp[gi])
+            else cls == 0 and gi < (g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? 8 : 6):
+                _c6 := e_copy(g, r, g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 ? k_a64_gp[gi] : k_sysv_gp[gi])
                 gi += 1
             else:
                 if cls == 1:
@@ -3858,7 +3868,7 @@ func isel_extv(g &: Ng, i: int):
     if k == VK_ZERO or k == VK_UNDEF:
         if is_flt(g, t):
             r1 := xmm(g)
-            _x := e_rr(g, M_XORPS, 8, r1, r1)
+            _x := e_rr(g, M_XORPS, zero_sz(g, t), r1, r1)
             set_res(g, i, r1)
         else:
             r2 := gpr(g)
@@ -3928,16 +3938,27 @@ func isel_call(g &: Ng, i: int):
         else is_agg(g, t):
             regs.push(lea_reg(g, agg_mem(g, v)))
             cls.push(0)
+        else is_flt(g, t) and g.arch == NG_ARCH_RV64 and (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and k >= g.i_x[i]:
+            gf := gpr(g)
+            _mq := e_rr(g, M_MOVQ_GX, 8, gf, use_reg(g, v))
+            regs.push(gf)
+            cls.push(0)
         else is_flt(g, t):
             regs.push(use_reg(g, v))
             cls.push(g.wsz == 4 and fsz(t) == 4 ? 3 : 1)
         else:
             r := use_reg(g, v)
+            mut ra := r
             if int_bits(g, t) < 32:
-                regs.push(ext_arg(g, r, t, (fl & IF_SEXT) != 0))
-            else:
-                regs.push(r)
+                ra = ext_arg(g, r, t, (fl & IF_SEXT) != 0)
             end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rs := gpr(g)
+                sx := e_rr(g, M_MOVSX_RR, 8, rs, ra)
+                g.mc.sz2[sx] = 4
+                ra = rs
+            end
+            regs.push(ra)
             cls.push(g.arch == NG_ARCH_ARM and (fl & IF_PAIR) != 0 ? 4 : 0)
         end
     end
@@ -4164,6 +4185,10 @@ func isel_ret(g &: Ng, i: int):
                 g.mc.sz2[z] = 1
             else:
                 move_into(g, RAX, a)
+            end
+            if g.arch == NG_ARCH_RV64 and int_bits(g, t) <= 32:
+                rsx := e_rr(g, M_MOVSX_RR, 8, RAX, RAX)
+                g.mc.sz2[rsx] = 4
             end
             mask = mask | (1 as i64)
         end

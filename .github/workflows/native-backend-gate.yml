@@ -179,3 +179,55 @@ jobs:
           TRIPLE: ${{ matrix.triple }}
           RUNNER: ${{ matrix.runner }}
         run: SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-gdb-check.sh ./salam "$TRIPLE" "$RUNNER"
+  windows-arm64-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+      LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch llvm-mingw
+        run: |
+          curl -fsSL --retry 3 -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/${LLVM_MINGW}.tar.xz"
+          echo "55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335  /tmp/llvm-mingw.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/llvm-mingw.tar.xz -C /tmp
+          echo "/tmp/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+      - name: Build the test programs for Windows on Arm
+        run: |
+          find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
+            NATIVE_WIN_TRIPLE=aarch64-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage \
+              xargs -0 sh tools/bash/native-windows-check.sh ./salam
+      - name: Upload the programs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: winarm-stage
+          path: winarm-stage
+          retention-days: 3
+  windows-arm64-run:
+    needs: windows-arm64-build
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the programs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: winarm-stage
+          path: winarm-stage
+      - name: Programs built by the native backend run on Windows on Arm
+        shell: bash
+        run: sh tools/bash/native-stage-run.sh winarm-stage

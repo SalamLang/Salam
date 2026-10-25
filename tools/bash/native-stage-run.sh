@@ -17,11 +17,13 @@ for exe in "$DIR"/*.exe; do
     exp="$DIR/$b.out"
     [ -f "$exp" ] || continue
     # shellcheck disable=SC2086
-    (cd "$DIR" && timeout 120 $RUNNER "./$b.exe" </dev/null >"$b.got" 2>/dev/null)
+    (cd "$DIR" && timeout 120 $RUNNER "./$b.exe" </dev/null >"$b.got" 2>"$b.err")
+    rc=$?
     if [ "$(tr -d '\r' <"$DIR/$b.got")" = "$(tr -d '\r' <"$exp")" ]; then
         pass=$((pass + 1))
     else
-        echo "FAIL $b"
+        echo "FAIL $b (exit $rc)"
+        head -3 "$DIR/$b.err"
         diff "$exp" "$DIR/$b.got" | head -6
         fail=$((fail + 1))
     fi

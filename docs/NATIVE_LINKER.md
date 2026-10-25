@@ -527,6 +527,18 @@ GNU `dlltool` members keeps each DLL's tables contiguous. Linking x64 and
 i686 programs against llvm-mingw's UCRT libraries this way and running them
 under wine passes the whole `llvm` test group.
 
+### ARM unwind tables
+
+`.ARM.exidx` input sections (`SHT_ARM_EXIDX`) form their own output section
+in the read-only segment. One is kept exactly when the code section its
+`sh_link` names is live, together with what it references (`.ARM.extab`).
+After relocation the 8-byte entries are sorted by function address and
+their 31-bit offsets rebased, which is what `SHF_LINK_ORDER` asks for. The
+linker defines `__exidx_start`/`__exidx_end` and adds a `PT_ARM_EXIDX`
+program header, which libgcc finds through `dl_iterate_phdr`. musl links
+add `libgcc_eh.a` when the sysroot has it, so programs that call the
+unwinder link too.
+
 ### Mach-O
 
 The reader takes `MH_OBJECT` files for x86_64 and arm64: sections become

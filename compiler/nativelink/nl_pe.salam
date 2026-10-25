@@ -486,12 +486,77 @@ func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
                 buf[place + (1 as i64)] = ((ix >> 8) & 255) as u8
             else ty == 0:
                 _z := 0
+            else ty >= 203 and ty <= 216:
+                if not pe_a64_reloc(buf, place, ty, sv, pva):
+                    nl_fail(l, "ARM64 relocation out of range at " + reloc_where(l, s, r))
+                    ret
+                end
             else:
                 nl_fail(l, "unsupported COFF relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s, r))
                 ret
             end
         end
     end
+end
+
+func a64_adr_imm(w: i64): i64:
+    ret sext(((w >> (29 as i64)) & (3 as i64)) | (((w >> (5 as i64)) & (0x7FFFF as i64)) << (2 as i64)), 21)
+end
+
+func a64_put_adr(w: i64, imm: i64): i64:
+    ret (w & (0x9F00001F as i64)) | ((imm & (3 as i64)) << (29 as i64)) | (((imm >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+end
+
+func pe_a64_reloc(buf: u8*, place: i64, ty: int, sv: i64, pva: i64): bool:
+    w := rd32(buf, place)
+    mut nw := w
+    if ty == 203:
+        v := sv + (sext(w & (0x3FFFFFF as i64), 26) << (2 as i64)) - pva
+        if v < (0 - 0x8000000 as i64) or v >= (0x8000000 as i64):
+            ret false
+        end
+        nw = (w & (0xFC000000 as i64)) | ((v >> (2 as i64)) & (0x3FFFFFF as i64))
+    else ty == 204:
+        tgt := sv + a64_adr_imm(w)
+        d := (tgt >> (12 as i64)) - (pva >> (12 as i64))
+        if d < (0 - 0x100000 as i64) or d >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d)
+    else ty == 205:
+        d2 := sv + a64_adr_imm(w) - pva
+        if d2 < (0 - 0x100000 as i64) or d2 >= (0x100000 as i64):
+            ret false
+        end
+        nw = a64_put_adr(w, d2)
+    else ty == 206:
+        v6 := (sv + ((w >> (10 as i64)) & (0xFFF as i64))) & (0xFFF as i64)
+        nw = (w & (0xFFC003FF as i64)) | (v6 << (10 as i64))
+    else ty == 207:
+        mut size := (w >> (30 as i64)) & (3 as i64)
+        if (w & (0x04800000 as i64)) == (0x04800000 as i64):
+            size = size + (4 as i64)
+        end
+        v7 := (sv + (((w >> (10 as i64)) & (0xFFF as i64)) << size)) & (0xFFF as i64)
+        if (v7 & (((1 as i64) << size) - (1 as i64))) != (0 as i64):
+            ret false
+        end
+        nw = (w & (0xFFC003FF as i64)) | ((v7 >> size) << (10 as i64))
+    else ty == 215:
+        v9 := sv + (sext((w >> (5 as i64)) & (0x7FFFF as i64), 19) << (2 as i64)) - pva
+        if v9 < (0 - 0x100000 as i64) or v9 >= (0x100000 as i64):
+            ret false
+        end
+        nw = (w & (0xFF00001F as i64)) | (((v9 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    else ty == 216:
+        v4 := sv + (sext((w >> (5 as i64)) & (0x3FFF as i64), 14) << (2 as i64)) - pva
+        if v4 < (0 - 0x8000 as i64) or v4 >= (0x8000 as i64):
+            ret false
+        end
+        nw = (w & (0xFFF8001F as i64)) | (((v4 >> (2 as i64)) & (0x3FFF as i64)) << (5 as i64))
+    end
+    wr32(buf, place, nw)
+    ret true
 end
 
 func sym_sec_of(l &: Nl, os: int): int:
@@ -665,7 +730,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     end
     p32 := l.mach == EM_386
     w32(h, 0x4550 as i64)
-    w16(h, (p32 ? 0x14c : 0x8664) as i64)
+    w16(h, (p32 ? 0x14c : (l.mach == EM_AARCH64 ? 0xAA64 : 0x8664)) as i64)
     w16(h, t.nsec as i64)
     w32(h, 0 as i64)
     w32(h, l.dg_name.len() > 0 ? l.pe_strpos : (0 as i64))
@@ -692,20 +757,21 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     else:
         w64(h, l.pe_base)
     end
+    a64 := l.mach == EM_AARCH64
     w32(h, 0x1000 as i64)
     w32(h, 0x200 as i64)
-    w16(h, 4 as i64)
+    w16(h, (a64 ? 6 : 4) as i64)
     w16(h, 0 as i64)
     w16(h, 0 as i64)
     w16(h, 0 as i64)
-    w16(h, 5 as i64)
-    w16(h, 2 as i64)
+    w16(h, (a64 ? 6 : 5) as i64)
+    w16(h, (a64 ? 0 : 2) as i64)
     w32(h, 0 as i64)
     w32(h, t.image_size)
     w32(h, t.hdr_size)
     w32(h, 0 as i64)
     w16(h, 3 as i64)
-    w16(h, (p32 ? 0x140 : 0x160) as i64)
+    w16(h, (p32 ? 0x140 : (a64 ? 0x8160 : 0x160)) as i64)
     if p32:
         w32(h, 0x200000 as i64)
         w32(h, 0x1000 as i64)
@@ -849,6 +915,19 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
 end
 
 func pe_rtype(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        switch ty:
+            0: ret 0 end
+            0xE: ret 1 end
+            1: ret 2 end
+            2: ret 3 end
+            0x11: ret 4 end
+            8: ret 11 end
+            0xD: ret 10 end
+            3, 4, 5, 6, 7, 0xF, 0x10: ret 200 + ty end
+        end
+        ret 1000 + ty
+    end
     if l.mach != EM_386:
         ret ty
     end

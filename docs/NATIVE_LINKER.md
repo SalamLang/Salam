@@ -177,13 +177,17 @@ stripped with `--strip`.
 
 ### Debug sections
 
-Non-allocated `.debug_*` sections are kept from every object that
-contributes at least one live section. Input sections with the same name are
+Non-allocated `.debug_*` sections are kept from every object given on the
+command line that contributes at least one live section; archive members'
+debug sections are dropped (library debug info is not needed to debug the
+program, and toolchain libraries ship DWARF 5 forms the linker does not
+rewrite). Input sections with the same name are
 concatenated in input order into one output section, written after the
 loaded image and before `.symtab`, with no address. A symbol in a debug
 section resolves to its offset inside that output section, which is what the
 `R_X86_64_32` references from `.debug_info` to `.debug_abbrev` and
-`.debug_line` need. A relocation against code that garbage collection
+`.debug_line` need (the `ABS32`/`ABS64` types of i386, ARM, AArch64 and
+RISC-V are applied the same way). A relocation against code that garbage collection
 removed is written as 0, the usual tombstone. `--strip` drops them along
 with the section headers.
 
@@ -468,7 +472,7 @@ application is one function per machine:
   `ADD`/`SUB`/`SET` and ULEB128 arithmetic of `.eh_frame`. The linker does
   not relax, so `RELAX` and `ALIGN` are left as they are, and
   `__global_pointer$` is defined so musl's start code can load `gp`.
-  `.debug_*` sections are dropped on this machine for now.
+  Relocations inside `.debug_*` sections go through the same code.
 
 TLS relocations are rejected rather than guessed, because no `PT_TLS`
 segment is written. The ELF writer emits 32- or 64-bit headers, program

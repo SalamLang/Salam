@@ -167,7 +167,7 @@ func prescan_dbg(g &: Ng):
         end
         p = e + 1
     end
-    g.dbg_on = any and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_A64)
+    g.dbg_on = any and (g.os != NG_OS_WINDOWS or g.arch == NG_ARCH_X64)
 end
 
 func line_dbg(g &: Ng): int:
@@ -291,6 +291,30 @@ func dbg_row_md(g &: Ng, off: int, loc: int):
     g.dl_off.push(off)
     g.dl_line.push(ln)
     g.dl_file.push(fi)
+end
+
+func dbg_aw(g &: Ng): int:
+    ret g.wsz == 4 ? 4 : 8
+end
+
+func dbg_addr(g &: Ng, sec: int, buf &: Vector<u8>, sym: int, add: i64):
+    add_reloc(g, sec, buf.len(), sym, dbg_aw(g) == 4 ? R_ABS32 : R_ABS64, add)
+    vb_le(buf, 0 as i64, dbg_aw(g))
+end
+
+func dbg_words(g &: Ng, base: int, pos: Vector<int>):
+    if not g.dbg_on:
+        ret
+    end
+    if g.f_sp >= 0:
+        dbg_row_md(g, base, g.f_sp)
+        dbg_range(g, base, 0 - 1)
+    end
+    repeat pos.len() in i:
+        if g.mc.op[i] != M_LABEL and g.mc.op[i] != M_NOP:
+            dbg_row(g, base + 4 * pos[i], g.mc.loc[i])
+        end
+    end
 end
 
 func dbg_func(g &: Ng, base: int, size: int):
@@ -690,20 +714,19 @@ func dt_write(g &: Ng, t &: DbgTree, di &: Vector<u8>, nd: int, abs: HashMap<int
         vb_le(di, abs.get(t.sp[nd]) as i64, 4)
     end
     if single:
-        add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, t.ivs[f] as i64)
-        vb_le(di, 0 as i64, 8)
+        dbg_addr(g, SEC_DBGINFO, di, ts, t.ivs[f] as i64)
         vb_le(di, (t.ive[f] - t.ivs[f]) as i64, 8)
     else:
         add_reloc(g, SEC_DBGINFO, di.len(), rs, R_ABS32, g.s_dranges.len() as i64)
         vb_le(di, 0 as i64, 4)
         mut r := f
         until r >= 0:
-            vb_le(g.s_dranges, t.ivs[r] as i64, 8)
-            vb_le(g.s_dranges, t.ive[r] as i64, 8)
+            vb_le(g.s_dranges, t.ivs[r] as i64, dbg_aw(g))
+            vb_le(g.s_dranges, t.ive[r] as i64, dbg_aw(g))
             r = t.ivn[r]
         end
-        vb_le(g.s_dranges, 0 as i64, 8)
-        vb_le(g.s_dranges, 0 as i64, 8)
+        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
     end
     if not lex:
         cmd := g.lt_md[t.loc[nd]]
@@ -794,7 +817,7 @@ func dbg_emit(g &: Ng):
     vb_le(di, 4 as i64, 2)
     add_reloc(g, SEC_DBGINFO, di.len(), as0, R_ABS32, 0 as i64)
     vb_le(di, 0 as i64, 4)
-    di.push(8 as u8)
+    di.push(dbg_aw(g) as u8)
     vb_uleb(di, 1 as i64)
     vb_str(di, "salam")
     vb_le(di, 0x0c as i64, 2)
@@ -802,8 +825,7 @@ func dbg_emit(g &: Ng):
     vb_str(di, cu_file >= 0 ? g.md_s2[cu_file] : "")
     add_reloc(g, SEC_DBGINFO, di.len(), ls, R_ABS32, 0 as i64)
     vb_le(di, 0 as i64, 4)
-    add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, 0 as i64)
-    vb_le(di, 0 as i64, 8)
+    dbg_addr(g, SEC_DBGINFO, di, ts, 0 as i64)
     vb_le(di, text_size as i64, 8)
     rs := dbg_local_sym(g, ".Lsalam.dranges0", SEC_DBGRANGES)
     lsym := dbg_local_sym(g, ".Lsalam.dloc0", SEC_DBGLOC)
@@ -863,8 +885,7 @@ func dbg_emit(g &: Ng):
         fm := g.md_file[spm]
         vb_uleb(di, (fm >= 0 ? dbg_file_index(g, fm) : 1) as i64)
         vb_uleb(di, g.md_line[spm] as i64)
-        add_reloc(g, SEC_DBGINFO, di.len(), ts, R_ABS64, g.df_base[k] as i64)
-        vb_le(di, 0 as i64, 8)
+        dbg_addr(g, SEC_DBGINFO, di, ts, g.df_base[k] as i64)
         vb_le(di, g.df_size[k] as i64, 8)
         dv_write_fn_vars(g, tys, di, topv, lsym)
         topv.free()
@@ -883,12 +904,12 @@ func dbg_emit(g &: Ng):
     dv_types_flush(g, tys, di)
     di.push(0 as u8)
     if g.s_dloc.len() == 0:
-        vb_le(g.s_dloc, 0 as i64, 8)
-        vb_le(g.s_dloc, 0 as i64, 8)
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
     end
     if g.s_dranges.len() == 0:
-        vb_le(g.s_dranges, 0 as i64, 8)
-        vb_le(g.s_dranges, 0 as i64, 8)
+        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
     end
     vb_put32(di, 0, (di.len() - 4) as i64)
     g.s_dinfo = di
@@ -930,10 +951,9 @@ func dbg_emit(g &: Ng):
     dl.push(0 as u8)
     vb_put32(dl, hl_at, (dl.len() - hs) as i64)
     dl.push(0 as u8)
-    vb_uleb(dl, 9 as i64)
+    vb_uleb(dl, (dbg_aw(g) + 1) as i64)
     dl.push(2 as u8)
-    add_reloc(g, SEC_DBGLINE, dl.len(), ts, R_ABS64, 0 as i64)
-    vb_le(dl, 0 as i64, 8)
+    dbg_addr(g, SEC_DBGLINE, dl, ts, 0 as i64)
     mut cur_off := 0
     mut cur_line := 1
     mut cur_file := 1

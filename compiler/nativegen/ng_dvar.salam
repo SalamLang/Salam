@@ -654,7 +654,23 @@ func dv_markers(g &: Ng, ra &: Ra):
     defs.free()
 end
 
-func dv_dwreg(r: int): int:
+func dv_dwreg(g &: Ng, r: int): int:
+    if g.arch == NG_ARCH_X86:
+        ret r >= 16 ? 21 + (r - 16) : r
+    end
+    if g.arch == NG_ARCH_A64:
+        if r >= 16:
+            ret 64 + avr(r)
+        end
+        x := axr(r)
+        ret x == 32 ? 31 : x
+    end
+    if g.arch == NG_ARCH_RV64:
+        ret r >= 16 ? 32 + rv_f(r) : rv_x(r)
+    end
+    if g.arch == NG_ARCH_ARM:
+        ret r >= 16 ? 256 + arm_d(r) : arm_r(r)
+    end
     if r >= 16:
         ret 17 + (r - 16)
     end
@@ -662,7 +678,51 @@ func dv_dwreg(r: int): int:
     ret k_map[r]
 end
 
+func dv_spreg(g &: Ng): int:
+    switch g.arch:
+        NG_ARCH_X86: ret 4 end
+        NG_ARCH_A64: ret 31 end
+        NG_ARCH_RV64: ret 2 end
+        NG_ARCH_ARM: ret 13 end
+    end
+    ret 7
+end
+
+func dv_sp_frame(g &: Ng): bool:
+    ret g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_RV64 or g.arch == NG_ARCH_ARM
+end
+
+func dv_breg(e &: Vector<u8>, r: int, off: i64):
+    if r < 32:
+        e.push((0x70 + r) as u8)
+    else:
+        e.push(0x92 as u8)
+        vb_uleb(e, r as i64)
+    end
+    vb_sleb(e, off)
+end
+
+func dv_words(g &: Ng, base: int, pos: Vector<int>, endpc: int):
+    ndf := g.df_sym.len()
+    vt := g.dbg_on and g.fv_val.len() > 0
+    if vt:
+        dv_enc_begin(g)
+        repeat pos.len() in i:
+            if g.mc.dv[i] >= 0:
+                dv_enc_at(g, base + 4 * pos[i], g.mc.dv[i])
+            end
+        end
+    end
+    dbg_func(g, base, endpc - base)
+    if vt:
+        dv_enc_end(g, endpc, g.df_sym.len() > ndf)
+    end
+end
+
 func dv_slot_off(g &: Ng, s: int): i64:
+    if dv_sp_frame(g):
+        ret g.mc.dv_spb - (g.mc.fs_off[s] as i64)
+    end
     if g.mc.fpo:
         ret fpo_base(g) - (g.mc.fs_off[s] as i64)
     end
@@ -670,14 +730,14 @@ func dv_slot_off(g &: Ng, s: int): i64:
 end
 
 func dv_slot_kind(g &: Ng, deref: bool): int:
-    if g.mc.fpo:
+    if g.mc.fpo or dv_sp_frame(g):
         ret deref ? 7 : 3
     end
     ret deref ? 9 : 8
 end
 
 func dv_frame_ok(g &: Ng): bool:
-    ret g.mc.fpo or g.os == NG_OS_WINDOWS
+    ret g.mc.fpo or g.os == NG_OS_WINDOWS or dv_sp_frame(g)
 end
 
 func dv_slot_shared(g &: Ng, s: int): bool:
@@ -728,7 +788,7 @@ func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i
     ph := g.mc.vloc[p]
     if ph >= 0 and ph < 32:
         ok = k == 1 ? 1 : 6
-        op = dv_dwreg(ph) as i64
+        op = dv_dwreg(g, ph) as i64
         ox = xx
         ret
     end
@@ -965,7 +1025,7 @@ func dv_types_flush(g &: Ng, t &: DvTypes, di &: Vector<u8>):
     end
 end
 
-func dv_expr(k: int, p: i64, x: int): Vector<u8>:
+func dv_expr(g &: Ng, k: int, p: i64, x: int): Vector<u8>:
     mut e := Vector {} as Vector<u8>
     r := p as int
     if k == 1:
@@ -980,8 +1040,7 @@ func dv_expr(k: int, p: i64, x: int): Vector<u8>:
         vb_sleb(e, p)
         e.push(0x9f as u8)
     else k == 3:
-        e.push(0x77 as u8)
-        vb_sleb(e, p)
+        dv_breg(e, dv_spreg(g), p)
     else k == 6:
         if r < 32:
             e.push((0x70 + r) as u8)
@@ -992,8 +1051,7 @@ func dv_expr(k: int, p: i64, x: int): Vector<u8>:
             vb_sleb(e, x as i64)
         end
     else k == 7 or k == 9:
-        e.push((k == 7 ? 0x77 : 0x76) as u8)
-        vb_sleb(e, p)
+        dv_breg(e, k == 7 ? dv_spreg(g) : 6, p)
         e.push(0x06 as u8)
         if x != 0:
             e.push(0x23 as u8)
@@ -1044,7 +1102,7 @@ func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
     vb_uleb(di, g.md_line[md] as i64)
     dv_ref(g, t, di, g.md_t[md])
     if ab == 14:
-        mut x := dv_expr(g.gv_mk[gv], g.gv_moff[gv], 0)
+        mut x := dv_expr(g, g.gv_mk[gv], g.gv_moff[gv], 0)
         vb_uleb(di, x.len() as i64)
         each b in x:
             di.push(b)
@@ -1055,9 +1113,9 @@ func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
         vb_le(di, 0 as i64, 4)
         mut e := h
         until e >= 0:
-            mut y := dv_expr(g.le_k[e], g.le_p[e], g.le_x[e])
-            vb_le(g.s_dloc, g.le_s[e] as i64, 8)
-            vb_le(g.s_dloc, g.le_e[e] as i64, 8)
+            mut y := dv_expr(g, g.le_k[e], g.le_p[e], g.le_x[e])
+            vb_le(g.s_dloc, g.le_s[e] as i64, dbg_aw(g))
+            vb_le(g.s_dloc, g.le_e[e] as i64, dbg_aw(g))
             vb_le(g.s_dloc, y.len() as i64, 2)
             each b2 in y:
                 g.s_dloc.push(b2)
@@ -1065,8 +1123,8 @@ func dv_write_var(g &: Ng, t &: DvTypes, di &: Vector<u8>, gv: int, lsym: int):
             y.free()
             e = t.le_next[e]
         end
-        vb_le(g.s_dloc, 0 as i64, 8)
-        vb_le(g.s_dloc, 0 as i64, 8)
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
     end
 end
 
@@ -1228,7 +1286,7 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
                 e2 = t.le_next[e2]
             end
             if hit >= 0:
-                mut y := dv_expr(g.le_k[hit], g.le_p[hit], g.le_x[hit])
+                mut y := dv_expr(g, g.le_k[hit], g.le_p[hit], g.le_x[hit])
                 each yb in y:
                     ex.push(yb)
                 end
@@ -1244,8 +1302,8 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
             vb_uleb(ex, (total - fcur) as i64)
         end
         if any:
-            vb_le(body, lo as i64, 8)
-            vb_le(body, hi as i64, 8)
+            vb_le(body, lo as i64, dbg_aw(g))
+            vb_le(body, hi as i64, dbg_aw(g))
             vb_le(body, ex.len() as i64, 2)
             each exb in ex:
                 body.push(exb)
@@ -1266,8 +1324,8 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
         each bb in body:
             g.s_dloc.push(bb)
         end
-        vb_le(g.s_dloc, 0 as i64, 8)
-        vb_le(g.s_dloc, 0 as i64, 8)
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
+        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
     end
     body.free()
     fr.free()
@@ -1423,9 +1481,8 @@ func dv_write_globals(g &: Ng, t &: DvTypes, di &: Vector<u8>):
         vb_uleb(di, (fm >= 0 and fm < g.md_kind.len() and g.md_kind[fm] == 3 ? dbg_file_index(g, fm) : 1) as i64)
         vb_uleb(di, g.md_line[var] as i64)
         dv_ref(g, t, di, g.md_t[var])
-        vb_uleb(di, 9 as i64)
+        vb_uleb(di, (dbg_aw(g) + 1) as i64)
         di.push(0x03 as u8)
-        add_reloc(g, SEC_DBGINFO, di.len(), s, R_ABS64, 0 as i64)
-        vb_le(di, 0 as i64, 8)
+        dbg_addr(g, SEC_DBGINFO, di, s, 0 as i64)
     end
 end

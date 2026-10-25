@@ -73,7 +73,8 @@ end
 func native_linker(triple: str): str:
     mut cc := "cc"
     if str.Contains(triple, "windows") or str.Contains(triple, "mingw"):
-        cc = "x86_64-w64-mingw32-gcc"
+        ta := tri_arch(triple)
+        cc = str.Equals(ta, "aarch64") ? "aarch64-w64-mingw32-clang" : (str.Equals(ta, "i686") ? "i686-w64-mingw32-gcc" : "x86_64-w64-mingw32-gcc")
     end
     if SALAM_OS_WINDOWS:
         cc = "gcc"
@@ -457,6 +458,47 @@ func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
     ret 0
 end
 
+func llvm_mingw_root(arch: str): str:
+    tri := arch + "-w64-mingw32"
+    env := os.Env("SALAM_LLVM_MINGW")
+    if str.Len(env) > 0 and os.Exists(env + "/" + tri + "/lib/crt2.o"):
+        ret env
+    end
+    mut sep := ":"
+    if SALAM_OS_WINDOWS:
+        sep = ";"
+    end
+    mut root := ""
+    dirs := str.Split(os.Env("PATH"), sep)
+    repeat dirs.len() in i:
+        d := dirs.get(i)
+        if str.Len(root) == 0 and str.Len(d) > 0 and (os.Exists(d + "/" + tri + "-clang") or os.Exists(d + "/" + tri + "-clang.exe")):
+            up := d + "/.."
+            if os.Exists(up + "/" + tri + "/lib/crt2.o"):
+                root = up
+            end
+        end
+    end
+    dirs.free()
+    ret root
+end
+
+func clang_rt_dir(root: str, arch: str): str:
+    base := root + "/lib/clang"
+    mut best := ""
+    vers := os.ListDir(base)
+    each v in vers:
+        if os.Exists(base + "/" + v + "/lib/windows/libclang_rt.builtins-" + arch + ".a") and str.Compare(v, best) > 0:
+            best = v
+        end
+    end
+    vers.free()
+    if str.Len(best) == 0:
+        ret ""
+    end
+    ret base + "/" + best + "/lib/windows"
+end
+
 func mingw_dirs(o: lv.Options, arch: str): Vector<str>:
     mut d := Vector {} as Vector<str>
     each lp in o.lib_paths:
@@ -487,21 +529,41 @@ func mingw_dirs(o: lv.Options, arch: str): Vector<str>:
     if str.Len(best) > 0:
         d.push(gcc + "/" + best)
     end
+    lm := llvm_mingw_root(arch)
+    if str.Len(lm) > 0:
+        d.push(lm + "/" + arch + "-w64-mingw32/lib")
+        rt := clang_rt_dir(lm, arch)
+        if str.Len(rt) > 0:
+            d.push(rt)
+        end
+    end
     ret d
+end
+
+func mingw_rtlib(dirs: Vector<str>, arch: str): str:
+    g := find_in(dirs, "libgcc.a")
+    if str.Len(g) > 0:
+        ret g
+    end
+    ret find_in(dirs, "libclang_rt.builtins-" + arch + ".a")
 end
 
 func mingw_link_ok(triple: str, o: lv.Options, why &: str): bool:
     marc := tri_arch(triple)
-    if not (str.Equals(marc, "x86_64") or str.Equals(marc, "i686")) or not (str.Contains(triple, "windows") or str.Contains(triple, "mingw")):
+    if not (str.Equals(marc, "x86_64") or str.Equals(marc, "i686") or str.Equals(marc, "aarch64")) or not (str.Contains(triple, "windows") or str.Contains(triple, "mingw")):
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
         ret false
     end
     dirs := mingw_dirs(o, marc)
-    each need in ["crt2.o", "crtbegin.o", "crtend.o", "libmingw32.a", "libgcc.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a"]:
+    each need in ["crt2.o", "crtbegin.o", "crtend.o", "libmingw32.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a"]:
         if str.Len(find_in(dirs, need)) == 0:
             why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
             ret false
         end
+    end
+    if str.Len(mingw_rtlib(dirs, marc)) == 0:
+        why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr("libgcc.a"))
+        ret false
     end
     repeat o.link_libs.len() in i:
         spec := lib_spec(o.link_libs.get(i))
@@ -532,7 +594,9 @@ func mingw_lib(dirs: Vector<str>, spec0: str): str:
 end
 
 func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
-    dirs := mingw_dirs(o, tri_arch(triple))
+    arch := tri_arch(triple)
+    dirs := mingw_dirs(o, arch)
+    rtlib := mingw_rtlib(dirs, arch)
     mut l := nl.New()
     nl.SetWindows(l)
     nl.AddInput(l, find_in(dirs, "crt2.o"))
@@ -545,7 +609,9 @@ func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple
         end
         nl.AddInput(l, mingw_lib(dirs, spec))
     end
-    each lib in ["libmingw32.a", "libgcc.a", "libgcc_eh.a", "libmoldname.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a", "libuser32.a"]:
+    nl.AddInput(l, find_in(dirs, "libmingw32.a"))
+    nl.AddInput(l, rtlib)
+    each lib in ["libgcc_eh.a", "libmoldname.a", "libmingwex.a", "libmsvcrt.a", "libkernel32.a", "libadvapi32.a", "libshell32.a", "libuser32.a"]:
         path := find_in(dirs, lib)
         if str.Len(path) > 0:
             nl.AddInput(l, path)

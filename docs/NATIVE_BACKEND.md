@@ -74,6 +74,27 @@ registers), so a call to `printf` places its arguments after the fixed ones
 in memory. Every test, compiled for `arm64-apple-macos` and linked by both
 the built-in linker and `ld64.lld`, disassembles to the same instructions.
 
+Windows on Arm (`aarch64-w64-windows-gnu`) writes the same code into an
+ARM64 COFF object. COFF relocations carry no addend, so an offset is written
+into the instruction itself (the `adrp` immediate, the `add` immediate, the
+branch field), and a global with an offset is addressed as `adrp`/`add` of
+the symbol plus the offset in the load or store. Windows has no GOT: the
+address of an external comes from `adrp`/`add` as well, which yields the
+import thunk for a function from a DLL. A frame of 4 KiB or more is probed
+first (`mov x15, #size/16; bl __chkstk; sub sp, sp, x15, uxtx #4`), and a
+call to a variadic function passes floating-point arguments in integer
+registers, as the Windows ARM64 ABI requires. `x18` belongs to the OS and
+the allocator never uses it. The runtime is llvm-mingw (UCRT): the built-in
+linker finds it through `aarch64-w64-mingw32-clang` on `PATH` or
+`SALAM_LLVM_MINGW`, and `--linker=system` links with that clang instead.
+Every function gets a `.pdata` entry whose `.xdata` codes follow the
+prologue instruction by instruction (`save_fplr_x`, `set_fp`, the
+allocation, `save_reg` for each callee-saved register within 504 bytes of
+`sp`, `nop` for anything else), so debuggers and the OS unwinder can walk
+the frames. The native backend gate builds the `llvm` tests with the
+built-in linker and with lld and runs both sets on a `windows-11-arm`
+runner; all of them pass on that hardware.
+
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables (gdb walks the frames from the prologues), and
 in release builds an integer
@@ -695,8 +716,9 @@ How the pieces fit:
   targets write 4-byte DWARF addresses. gdb (natively, or `gdb-multiarch`
   against `qemu -g`) stops on a source line, prints arguments and locals,
   and walks the frames; `tools/bash/native-gdb-check.sh <salam> <triple>
-<runner>` checks that on each target. 32-bit Windows objects get no debug
-  sections.
+<runner>` checks that on each target. Windows x64 and Windows on Arm images
+  carry the same DWARF in PE sections (offsets as `SECREL`); 32-bit Windows
+  objects get no debug sections.
 - Each function's first line row after its opening line carries
   `DW_LNS_set_prologue_end`, so `break func` stops after the arguments have
   been loaded into registers. gdb only trusts its own prologue analysis for

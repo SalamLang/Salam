@@ -27,7 +27,7 @@ for f in "$@"; do
     fi
     (cd "$work" && timeout 120 "./$b.exe" </dev/null >"$b.got" 2>"$b.err")
     rc=$?
-    if [ "$(tr -d '\r' <"$work/$b.got")" = "$(tr -d '\r' <"$exp")" ]; then
+    if [ "$rc" -ne 124 ] && [ "$(tr -d '\r' <"$work/$b.got")" = "$(tr -d '\r' <"$exp")" ]; then
         pass=$((pass + 1))
     else
         echo "FAIL $b (exit $rc)"

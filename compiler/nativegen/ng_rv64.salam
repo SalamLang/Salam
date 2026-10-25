@@ -564,9 +564,92 @@ func rv_jal_to(a &: Rv, lbl: int):
     rv_w(a, 0 as i64)
 end
 
+func rv_lowmask(a &: Rv, rd: int, rs: int, sz: int):
+    if sz == 1:
+        rv_i(a, 255 as i64, rs, 7, rd, 0x13)
+    else:
+        rv_slli(a, rd, rs, 48)
+        rv_srli(a, rd, rd, 48)
+    end
+end
+
+func rv_merge(a &: Rv, bits: int):
+    rv_op(a, 0, 4, RV_T6, RV_T4, bits, false)
+    rv_op(a, 0, 7, RV_T6, RV_T6, 23, false)
+    rv_op(a, 0, 4, RV_T6, RV_T4, RV_T6, false)
+end
+
+func rv_atomic_sub(g &: Ng, a &: Rv, i: int, op: int, sz: int):
+    rv_addr_reg(g, a, i, RV_T3)
+    rv_addi(a, RV_SP, RV_SP, 0 - 32 as i64)
+    repeat 4 in k:
+        rv_s(a, (8 * k) as i64, 21 + k, RV_SP, 3, 0x23)
+    end
+    rv_i(a, 3 as i64, RV_T3, 7, 22, 0x13)
+    rv_slli(a, 22, 22, 3)
+    rv_i(a, 0 - 4 as i64, RV_T3, 7, 21, 0x13)
+    rv_li(a, 23, (sz == 1 ? 0xFF : 0xFFFF) as i64)
+    rv_op(a, 0, 1, 23, 23, 22, false)
+    rax := rv_x(RAX)
+    mut dst := 0
+    if op == M_LCMPXCHG:
+        dst = rax
+        rv_op(a, 0, 1, RV_T5, rax, 22, false)
+        rv_op(a, 0, 7, RV_T5, RV_T5, 23, false)
+        rv_op(a, 0, 1, 24, rv_x(g.mc.r1[i]), 22, false)
+    else:
+        dst = rv_x(g.mc.r0[i])
+        rv_op(a, 0, 1, RV_T5, dst, 22, false)
+        if op == M_XCHG:
+            rv_op(a, 0, 7, RV_T5, RV_T5, 23, false)
+        end
+        rv_mv(a, 24, dst)
+    end
+    top := a.w.len()
+    rv_r(a, 0x0B, 0, 21, 2, RV_T4, 0x2F)
+    mut fail_at := 0 - 1
+    if op == M_LCMPXCHG:
+        rv_op(a, 0, 7, RV_T6, RV_T4, 23, false)
+        fail_at = a.w.len()
+        rv_w(a, 0 as i64)
+        rv_merge(a, 24)
+    else op == M_LXADD:
+        rv_add(a, RV_T6, RV_T4, RV_T5)
+        rv_merge(a, RV_T6)
+    else:
+        rv_merge(a, RV_T5)
+    end
+    rv_r(a, 0x0D, RV_T6, 21, 2, RV_T6, 0x2F)
+    rv_w(a, rv_benc(((top - a.w.len()) * 4) as i64, RV_ZERO, RV_T6, 1))
+    if fail_at >= 0:
+        a.w[fail_at] = (rv_benc(((a.w.len() - fail_at) * 4) as i64, RV_T5, RV_T6, 1) & (0xFFFFFFFF as i64)) as int
+    end
+    rv_op(a, 0, 5, RV_T4, RV_T4, 22, false)
+    rv_lowmask(a, RV_T4, RV_T4, sz)
+    if op == M_LCMPXCHG:
+        rv_norm(a, sz, RV_T5, RV_T4)
+        rv_norm(a, sz, RV_T6, rax)
+    else op == M_LXADD and flags_needed(g, i):
+        rv_add(a, RV_T5, RV_T4, 24)
+        rv_norm(a, sz, RV_T5, RV_T5)
+        rv_norm(a, sz, RV_T6, RV_ZERO)
+    end
+    if op == M_LXADD and flags_needed(g, i):
+        rv_norm(a, sz, 24, RV_T4)
+    end
+    rv_mv(a, dst, RV_T4)
+    if op == M_LXADD and flags_needed(g, i):
+        rv_mv(a, RV_T4, 24)
+    end
+    repeat 4 in k2:
+        rv_i(a, (8 * k2) as i64, RV_SP, 3, 21 + k2, 0x03)
+    end
+    rv_addi(a, RV_SP, RV_SP, 32 as i64)
+end
+
 func rv_atomic(g &: Ng, a &: Rv, i: int, op: int, sz: int):
     if sz < 4:
-        fail(g, "native backend: riscv64 has no byte or halfword atomics yet in " + tab_str(g.syms, g.f_sym))
+        rv_atomic_sub(g, a, i, op, sz)
         ret
     end
     rv_addr_reg(g, a, i, RV_T3)
@@ -880,7 +963,8 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             w := sz < 8
             signed := g.mc.cc[i] == 1
             rv_op(a, 1, signed ? 4 : 5, RV_T3, rv_x(RAX), rv2, w)
-            rv_op(a, 1, signed ? 6 : 7, rv_x(RDX), rv_x(RAX), rv2, w)
+            rv_op(a, 1, 0, RV_T4, RV_T3, rv2, w)
+            rv_op(a, 0x20, 0, rv_x(RDX), rv_x(RAX), RV_T4, w)
             rv_mv(a, rv_x(RAX), RV_T3)
             if w:
                 rv_zx32(a, rv_x(RAX))

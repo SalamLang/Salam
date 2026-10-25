@@ -63,7 +63,7 @@ for `orr`/`eor`)
 when a later instruction reads the flags. Narrow (8/16-bit) compares shift
 both operands to the top of a 32-bit register first, which keeps signed and
 unsigned order. Division emulates x86's `rdx:rax` pair with `sdiv`/`udiv`
-plus `msub`; a 32-bit move to the same register still emits `mov wN, wN`,
+plus an `msub` only when the remainder is used; a 32-bit move to the same register still emits `mov wN, wN`,
 since that is what zero-extends. Atomics are `ldaxr`/`stlxr` loops.
 
 On macOS the same code goes into a Mach-O object with
@@ -181,7 +181,12 @@ both signed and unsigned order survive. Every condition then becomes a
 `slt`/`sltu`/`xor` sequence on that pair; the carry of an `add` keeps its
 first operand in `t4`, and a float compare keeps both operands in
 `ft10`/`ft11` for the float compare instructions. A conditional jump is a short branch
-over a `jal`, so distance is never a problem.
+over a `jal`, so distance is never a problem. When an integer compare or
+`test` feeds only the jump, `setcc` or `cmov` right after it, and no path from
+there reads the flags again before they are redefined, the pair skips the
+compare form: the jump becomes one `blt`/`bgeu`/`beq`... on the original
+registers (`zero` for a compare with 0, `addiw` sign extensions for 32-bit
+operands), and a `setcc` becomes one `slt`/`sltu`.
 
 The machine instructions follow x86, where a 32-bit operation clears the
 upper half of the register, so 32-bit results are zero-extended after the
@@ -189,7 +194,10 @@ upper half of the register, so 32-bit results are zero-extended after the
 requires, and so are 32-bit return values. Single-precision values must stay
 NaN-boxed, so a float zero is made at the value's own width. Globals are
 addressed with absolute `lui`/`addi` pairs (static executables) and calls with
-`auipc`/`jalr`. Byte and halfword atomics are not supported yet.
+`auipc`/`jalr`. A division whose quotient is unused is a single `rem`, and a
+remainder next to its quotient is a `mul` and `sub` instead of a second
+divide. Byte and halfword atomics run `lr.w`/`sc.w` on the containing word
+with a mask.
 
 Built with the built-in linker against a musl sysroot and run under
 qemu-riscv64, the test groups listed for i686 match their expected output
@@ -506,8 +514,8 @@ reciprocal, sized to the dividend's known width, so `(i / 50) % 7` costs two
 multiplies and a few shifts. The width comes from value ranges too: a counter
 below five million, or a digit loop `t = t / 10` started from such a counter,
 gets a reciprocal that fits a 32-bit `imul` immediate. A division by a variable shares one `div` between
-the quotient and the remainder and uses the 32-bit `div` when both 64-bit
-operands fit. Register allocation is linear scan over exact live
+the quotient and the remainder and, on x86-64 only, uses the 32-bit `div`
+when both 64-bit operands fit. Register allocation is linear scan over exact live
 ranges with use counts weighted by loop depth. In a loop with more live values
 than registers, the values it uses get a copy at its preheader, so the
 allocator can spill the long outer range and keep the loop copy in a register.

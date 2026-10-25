@@ -18,6 +18,7 @@ k_rv_fmap := [10, 11, 12, 13, 14, 15, 16, 17, 0, 1, 2, 3, 4, 5, 6, 7]
 pub struct Rv:
     pub w: Vector<int> = Vector {}
     pub lbl_pos: Vector<int> = Vector {}
+    pub lbl_mi: Vector<int> = Vector {}
     pub fx_at: Vector<int> = Vector {}
     pub fx_lbl: Vector<int> = Vector {}
     pub rl_at: Vector<int> = Vector {}
@@ -182,9 +183,17 @@ func rv_addr(g &: Ng, a &: Rv, i: int, base &: int, off &: i64):
     b := g.mc.mb[i]
     off = g.mc.md[i]
     if g.mc.mi[i] >= 0:
-        rv_slli(a, RV_T3, rv_x(g.mc.mi[i]), sh)
-        if b >= 0:
-            rv_add(a, RV_T3, rv_x(b), RV_T3)
+        if sh == 0:
+            if b < 0:
+                base = rv_x(g.mc.mi[i])
+                ret
+            end
+            rv_add(a, RV_T3, rv_x(b), rv_x(g.mc.mi[i]))
+        else:
+            rv_slli(a, RV_T3, rv_x(g.mc.mi[i]), sh)
+            if b >= 0:
+                rv_add(a, RV_T3, rv_x(b), RV_T3)
+            end
         end
         base = RV_T3
         ret
@@ -212,6 +221,25 @@ func rv_addr_fit(g &: Ng, a &: Rv, i: int, base &: int, off &: i64):
 end
 
 func rv_addr_reg(g &: Ng, a &: Rv, i: int, rd: int):
+    k := g.mc.mk[i]
+    b := g.mc.mb[i]
+    x := g.mc.mi[i]
+    if k != MK_FRAME and k != MK_ARG and k != MK_RIP and k != MK_GOT and b >= 0 and x >= 0 and g.mc.md[i] >= (0 - 2048 as i64) and g.mc.md[i] < (2048 as i64):
+        sh := a_lsz(g.mc.ms[i])
+        if sh == 0:
+            rv_add(a, rd, rv_x(b), rv_x(x))
+        else rd != rv_x(b):
+            rv_slli(a, rd, rv_x(x), sh)
+            rv_add(a, rd, rv_x(b), rd)
+        else:
+            rv_slli(a, RV_T3, rv_x(x), sh)
+            rv_add(a, rd, rv_x(b), RV_T3)
+        end
+        if g.mc.md[i] != (0 as i64):
+            rv_addi(a, rd, rd, g.mc.md[i])
+        end
+        ret
+    end
     mut base := 0
     mut off := 0 as i64
     rv_addr(g, a, i, base, off)
@@ -308,6 +336,9 @@ func rv_alu(g &: Ng, a &: Rv, i: int, op: int, rd: int, rm0: int, sz: int):
         rm = RV_T6
     end
     if op == ALU_CMP:
+        if rv_fusable(g, a, i) >= 0:
+            ret
+        end
         rv_flags_cmp(a, sz, rd, rm)
         ret
     end
@@ -334,6 +365,9 @@ func rv_alu_imm(g &: Ng, a &: Rv, i: int, op: int, rd: int, imm0: i64, sz: int):
         imm = norm32(imm)
     end
     if op == ALU_CMP:
+        if rv_fusable(g, a, i) >= 0:
+            ret
+        end
         rv_norm(a, sz, RV_T5, rd)
         rv_li(a, RV_T6, imm)
         if sz < 8:
@@ -451,6 +485,171 @@ func rv_uno(a &: Rv, dbl: bool):
     rv_feq(a, RV_T4, RV_FB, RV_FB, 2, dbl)
     rv_op(a, 0, 7, RV_T3, RV_T3, RV_T4, false)
     rv_xori1(a, RV_T3)
+end
+
+func rv_jinv(cc: int, f3 &: int, swap &: bool): bool:
+    swap = cc == X_G or cc == X_LE or cc == X_A or cc == X_BE
+    switch cc:
+        X_E: f3 = 1 ret true end
+        X_NE: f3 = 0 ret true end
+        X_L, X_G: f3 = 5 ret true end
+        X_GE, X_LE: f3 = 4 ret true end
+        X_B, X_A: f3 = 7 ret true end
+        X_AE, X_BE: f3 = 6 ret true end
+    end
+    ret false
+end
+
+func rv_next_real(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    ret j
+end
+
+func rv_flags_dead(g &: Ng, a &: Rv, j0: int, depth: int): bool:
+    n := g.mc.op.len()
+    mut j := j0
+    repeat 64:
+        if j < 0 or j >= n:
+            ret true
+        end
+        op := g.mc.op[j]
+        if is_flag_use(op):
+            ret false
+        end
+        if flag_kind(g, j) >= 0 or op == M_CALL or op == M_CALLR or op == M_RET:
+            ret true
+        end
+        if op == M_JMP:
+            t := g.mc.tgt[j]
+            if depth >= 2 or t < 0 or t >= a.lbl_mi.len() or a.lbl_mi[t] < 0:
+                ret false
+            end
+            ret rv_flags_dead(g, a, a.lbl_mi[t] + 1, depth + 1)
+        end
+        j += 1
+    end
+    ret false
+end
+
+func rv_fusable(g &: Ng, a &: Rv, p: int): int:
+    op := g.mc.op[p]
+    c := g.mc.cc[p]
+    sz := g.mc.sz[p]
+    if sz != 4 and sz != 8:
+        ret 0 - 1
+    end
+    if not ((op == M_ALU_RR or op == M_ALU_RI) and c == ALU_CMP) and not (op == M_TEST_RR and g.mc.r0[p] == g.mc.r1[p]):
+        ret 0 - 1
+    end
+    j := rv_next_real(g, p)
+    if j >= g.mc.op.len():
+        ret 0 - 1
+    end
+    jo := g.mc.op[j]
+    if jo != M_JCC and jo != M_SETCC and jo != M_CMOV:
+        ret 0 - 1
+    end
+    mut f3 := 0
+    mut sw := false
+    if not rv_jinv(g.mc.cc[j], f3, sw) or not rv_flags_dead(g, a, j + 1, 0):
+        ret 0 - 1
+    end
+    if jo == M_JCC:
+        t := g.mc.tgt[j]
+        if t < 0 or t >= a.lbl_mi.len() or a.lbl_mi[t] < 0 or not rv_flags_dead(g, a, a.lbl_mi[t] + 1, 1):
+            ret 0 - 1
+        end
+    end
+    ret j
+end
+
+func rv_fuse_ops(g &: Ng, a &: Rv, p: int, x &: int, y &: int):
+    op := g.mc.op[p]
+    sz := g.mc.sz[p]
+    x = rv_x(g.mc.r0[p])
+    y = RV_ZERO
+    if op == M_ALU_RR:
+        y = rv_x(g.mc.r1[p])
+    else op == M_ALU_RI:
+        mut imm := g.mc.imm[p]
+        if sz == 4:
+            imm = norm32(imm)
+        end
+        if imm != (0 as i64):
+            rv_li(a, RV_T6, imm)
+            y = RV_T6
+        end
+    end
+    if sz == 4:
+        rv_i(a, 0 as i64, x, 0, RV_T5, 0x1B)
+        x = RV_T5
+        if op == M_ALU_RR:
+            rv_i(a, 0 as i64, y, 0, RV_T6, 0x1B)
+            y = RV_T6
+        end
+    end
+end
+
+func rv_fused_branch(a &: Rv, cc: int, x: int, y: int, off: i64):
+    mut f3 := 0
+    mut sw := false
+    _ok := rv_jinv(cc, f3, sw)
+    rv_w(a, rv_benc(off, sw ? x : y, sw ? y : x, f3))
+end
+
+func rv_fused(g &: Ng, a &: Rv, p: int, i: int):
+    mut x := 0
+    mut y := 0
+    rv_fuse_ops(g, a, p, x, y)
+    cc := g.mc.cc[i]
+    op := g.mc.op[i]
+    if op == M_JCC:
+        rv_fused_branch(a, cc, x, y, 8 as i64)
+        rv_jal_to(a, g.mc.tgt[i])
+        ret
+    end
+    rd := rv_x(g.mc.r0[i])
+    if op == M_CMOV:
+        rv_fused_branch(a, cc, x, y, 8 as i64)
+        rv_mv(a, rd, rv_x(g.mc.r1[i]))
+        if g.mc.sz[i] == 4:
+            rv_zx32(a, rd)
+        end
+        ret
+    end
+    switch cc:
+        X_E, X_NE:
+            rv_op(a, 0, 4, RV_T3, x, y, false)
+            if cc == X_E:
+                rv_i(a, 1 as i64, RV_T3, 3, rd, 0x13)
+            else:
+                rv_op(a, 0, 3, rd, RV_ZERO, RV_T3, false)
+            end
+            ret
+        end
+        X_L, X_GE:
+            rv_op(a, 0, 2, rd, x, y, false)
+            break
+        end
+        X_G, X_LE:
+            rv_op(a, 0, 2, rd, y, x, false)
+            break
+        end
+        X_B, X_AE:
+            rv_op(a, 0, 3, rd, x, y, false)
+            break
+        end
+        X_A, X_BE:
+            rv_op(a, 0, 3, rd, y, x, false)
+            break
+        end
+    end
+    if cc == X_GE or cc == X_LE or cc == X_AE or cc == X_BE:
+        rv_xori1(a, rd)
+    end
 end
 
 func rv_cond_bool(g &: Ng, a &: Rv, i: int, cc: int):
@@ -894,6 +1093,9 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             ret
         end
         M_TEST_RR:
+            if rv_fusable(g, a, i) >= 0:
+                ret
+            end
             rv_op(a, 0, 7, RV_T5, rv_x(r0), rv_x(r1), false)
             rv_flags_res(a, sz, RV_T5)
             ret
@@ -950,36 +1152,46 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             ret
         end
         M_CQO:
-            if sz >= 8:
-                rv_srai(a, rv_x(RDX), rv_x(RAX), 63)
-            else:
-                rv_i(a, (31 as i64) | (0x400 as i64), rv_x(RAX), 5, rv_x(RDX), 0x1B)
-                rv_zx32(a, rv_x(RDX))
-            end
             ret
         end
         M_DIV:
             rv2 := rv_x(r1)
             w := sz < 8
-            signed := g.mc.cc[i] == 1
-            rv_op(a, 1, signed ? 4 : 5, RV_T3, rv_x(RAX), rv2, w)
-            rv_op(a, 1, 0, RV_T4, RV_T3, rv2, w)
-            rv_op(a, 0x20, 0, rv_x(RDX), rv_x(RAX), RV_T4, w)
-            rv_mv(a, rv_x(RAX), RV_T3)
+            dc := g.mc.cc[i]
+            signed := (dc & 1) == 1
+            nq := (dc & 2) != 0
+            nr := (dc & 4) != 0
+            if nq and not nr:
+                rv_op(a, 1, signed ? 6 : 7, rv_x(RDX), rv_x(RAX), rv2, w)
+            else:
+                rv_op(a, 1, signed ? 4 : 5, RV_T3, rv_x(RAX), rv2, w)
+                if not nr:
+                    rv_op(a, 1, 0, RV_T4, RV_T3, rv2, w)
+                    rv_op(a, 0x20, 0, rv_x(RDX), rv_x(RAX), RV_T4, w)
+                end
+                rv_mv(a, rv_x(RAX), RV_T3)
+            end
             if w:
-                rv_zx32(a, rv_x(RAX))
-                rv_zx32(a, rv_x(RDX))
+                if not nq or nr:
+                    rv_zx32(a, rv_x(RAX))
+                end
+                if not nr:
+                    rv_zx32(a, rv_x(RDX))
+                end
             end
             ret
         end
         M_MULHI:
             rv3 := rv_x(r1)
-            rv_op(a, 1, g.mc.cc[i] == 1 ? 1 : 3, RV_T3, rv_x(RAX), rv3, false)
-            rv_op(a, 1, 0, rv_x(RAX), rv_x(RAX), rv3, false)
-            rv_mv(a, rv_x(RDX), RV_T3)
+            rv_op(a, 1, g.mc.cc[i] == 1 ? 1 : 3, rv_x(RDX), rv_x(RAX), rv3, false)
             ret
         end
         M_SETCC:
+            sq := rv_prod(g, i)
+            if sq >= 0 and rv_fusable(g, a, sq) == i:
+                rv_fused(g, a, sq, i)
+                ret
+            end
             rv_cond_bool(g, a, i, g.mc.cc[i])
             rv_mv(a, rv_x(r0), RV_T3)
             ret
@@ -1013,6 +1225,11 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             ret
         end
         M_CMOV:
+            cp := rv_prod(g, i)
+            if cp >= 0 and rv_fusable(g, a, cp) == i:
+                rv_fused(g, a, cp, i)
+                ret
+            end
             rv_cond_bool(g, a, i, g.mc.cc[i])
             at := a.w.len()
             rv_w(a, 0 as i64)
@@ -1028,7 +1245,21 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             ret
         end
         M_JCC:
-            rv_cond_bool(g, a, i, g.mc.cc[i])
+            jc := g.mc.cc[i]
+            jp := rv_prod(g, i)
+            if jp >= 0 and rv_fusable(g, a, jp) == i:
+                rv_fused(g, a, jp, i)
+                ret
+            end
+            jk := jp >= 0 ? flag_kind(g, jp) : FK_SUB
+            mut jf := 0
+            mut jsw := false
+            if jk != FK_FLOAT and not (jk == FK_ADD and (jc == X_B or jc == X_AE or jc == X_BE or jc == X_A)) and rv_jinv(jc, jf, jsw):
+                rv_w(a, rv_benc(8 as i64, jsw ? RV_T5 : RV_T6, jsw ? RV_T6 : RV_T5, jf))
+                rv_jal_to(a, g.mc.tgt[i])
+                ret
+            end
+            rv_cond_bool(g, a, i, jc)
             rv_w(a, rv_benc(8 as i64, RV_ZERO, RV_T3, 0))
             rv_jal_to(a, g.mc.tgt[i])
             ret
@@ -1151,9 +1382,15 @@ func encode_function_rv64(g &: Ng):
     a.total = align_up(g.mc.frame_size + 8 * a.ngp, 16)
     repeat g.mc.nlabels:
         a.lbl_pos.push(0 - 1)
+        a.lbl_mi.push(0 - 1)
+    end
+    n := g.mc.op.len()
+    repeat n in li:
+        if g.mc.op[li] == M_LABEL and g.mc.tgt[li] >= 0 and g.mc.tgt[li] < a.lbl_mi.len():
+            a.lbl_mi[g.mc.tgt[li]] = li
+        end
     end
     rv_prologue(g, a)
-    n := g.mc.op.len()
     repeat n in i:
         if g.mc.op[i] == M_LABEL:
             a.lbl_pos[g.mc.tgt[i]] = a.w.len()

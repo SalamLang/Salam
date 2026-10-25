@@ -31,6 +31,8 @@ pub struct A64:
     pub rl_add: Vector<i64> = Vector {}
     pub total: int = 0
     pub ngp: int = 0
+    pub pk: Vector<int> = Vector {}
+    pub pv: Vector<int> = Vector {}
 end
 
 func axr(r: int): int:
@@ -693,9 +695,20 @@ func a_sym_addr(a &: A64, sym: int, rd: int):
     aw(a, (0x91000000 as i64) | rd_rn_rm(rd, rd, 0))
 end
 
+func a_pro_mark(a &: A64, from: int, kind: int, val: int):
+    n := a.w.len() - from
+    repeat n in i:
+        a.pk.push(i == n - 1 ? kind : 0)
+        a.pv.push(i == n - 1 ? val : 0)
+    end
+end
+
 func a_prologue(g &: Ng, a &: A64):
     aw(a, 0xA9BF7BFD as i64)
+    a_pro_mark(a, a.w.len() - 1, 1, 0)
     aw(a, 0x910003FD as i64)
+    a_pro_mark(a, a.w.len() - 1, 2, 0)
+    w0 := a.w.len()
     if a.total >= 4096 and g.os == NG_OS_WINDOWS:
         a_mov_imm(a, AX15, (a.total / 16) as i64, true)
         arel(a, g.sym_chkstk, R_A64_CALL26, 0 as i64)
@@ -705,10 +718,77 @@ func a_prologue(g &: Ng, a &: A64):
     else a.total > 0:
         a_addsub_imm(a, ASP, ASP, a.total as i64, true, false, true)
     end
+    a_pro_mark(a, w0, 3, a.total)
     repeat a.ngp in k:
+        w1 := a.w.len()
         r := axr(g.mc.callee_used[k])
         a_ldst(a, 0xF9000000 as i64, r, 29, (0 - 8 * (k + 1)) as i64, 8)
+        a_pro_mark(a, w1, 4, k)
     end
+end
+
+func a64_unwind_code(g &: Ng, a &: A64, codes &: Vector<int>, k: int, v: int):
+    if k == 1:
+        codes.push(0x81)
+    else k == 2:
+        codes.push(0xE1)
+    else k == 3:
+        q := v / 16
+        if q < 32:
+            codes.push(q)
+        else q < 2048:
+            codes.push(0xC0 | (q >> 8))
+            codes.push(q & 255)
+        else:
+            codes.push(0xE0)
+            codes.push((q >> 16) & 255)
+            codes.push((q >> 8) & 255)
+            codes.push(q & 255)
+        end
+    else k == 4:
+        x := axr(g.mc.callee_used[v]) - 19
+        off := a.total - 8 * (v + 1)
+        if x >= 0 and x < 16 and off >= 0 and off <= 504 and (off % 8) == 0:
+            codes.push(0xD0 | (x >> 2))
+            codes.push(((x & 3) << 6) | (off / 8))
+        else:
+            codes.push(0xE3)
+        end
+    else:
+        codes.push(0xE3)
+    end
+end
+
+func a64_unwind(g &: Ng, a &: A64, fsize: int):
+    nins := fsize / 4
+    if nins >= 262144:
+        ret
+    end
+    mut codes := Vector {} as Vector<int>
+    mut i := a.pk.len() - 1
+    until i >= 0:
+        a64_unwind_code(g, a, codes, a.pk[i], a.pv[i])
+        i -= 1
+    end
+    codes.push(0xE4)
+    until (codes.len() % 4) != 0:
+        codes.push(0xE4)
+    end
+    sec_align_to(g, SEC_XDATA, 4)
+    xoff := g.s_xdata.len()
+    hdr := nins | ((codes.len() / 4) << 27)
+    repeat 4 in b:
+        sec_put(g, SEC_XDATA, (hdr >> (8 * b)) & 255)
+    end
+    each c in codes:
+        sec_put(g, SEC_XDATA, c)
+    end
+    codes.free()
+    sec_align_to(g, SEC_PDATA, 4)
+    po := g.s_pdata.len()
+    add_reloc(g, SEC_PDATA, po, g.f_sym, R_ADDR32NB, 0 as i64)
+    add_reloc(g, SEC_PDATA, po + 4, g.sym_xdata, R_ADDR32NB, xoff as i64)
+    sec_pad(g, SEC_PDATA, 8)
 end
 
 func a_epilogue(g &: Ng, a &: A64):
@@ -1110,6 +1190,9 @@ func encode_function_a64(g &: Ng):
     end
     g.sy_size[g.f_sym] = g.s_text.len() - base
     g.sy_align[g.f_sym] = 16
+    if g.os == NG_OS_WINDOWS:
+        a64_unwind(g, a, g.s_text.len() - base)
+    end
     g.mc.dv_spb = a.total as i64
     dbg_words(g, base, a.mi_pos)
     dv_words(g, base, a.mi_pos, g.s_text.len())
@@ -1123,4 +1206,6 @@ func encode_function_a64(g &: Ng):
     a.rl_sym.free()
     a.rl_type.free()
     a.rl_add.free()
+    a.pk.free()
+    a.pv.free()
 end

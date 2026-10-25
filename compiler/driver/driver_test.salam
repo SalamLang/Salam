@@ -3,6 +3,7 @@ package driver
 import io
 import os
 import str
+import time
 
 include lg "../logger.salam"
 include i18 "../i18n.salam"
@@ -15,8 +16,6 @@ include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
 include sm "../semantic/semantic.salam"
 include pth "../sal_path.salam"
-
-const TEST_NO_MATCH := 3
 
 struct TestFn:
     pub name: str = ""
@@ -227,14 +226,21 @@ func test_selected(name: str, filter: str): bool:
     ret str.Contains(name, f)
 end
 
+func report_no_match(opt &: Dr, path: str): int:
+    if not str.Equals(opt.test_format, "teamcity"):
+        println co.Format1(i18.Tr("?    %s: no test matches"), co.ArgStr(path))
+    end
+    if str.Len(opt.test_report) > 0:
+        _w := io.WriteFile(opt.test_report, "nomatch\n")
+    end
+    ret 0
+end
+
 func run_whole_file(opt &: Dr, path: str): int:
     teamcity := str.Equals(opt.test_format, "teamcity")
     name := pth.PathBase(path)
     if not test_selected(name, opt.test_run):
-        if not teamcity:
-            println co.Format1(i18.Tr("?    %s: no test matches"), co.ArgStr(path))
-        end
-        ret TEST_NO_MATCH
+        ret report_no_match(opt, path)
     end
     if teamcity:
         println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
@@ -276,20 +282,32 @@ pub func TestOne(opt &: Dr): int:
         broken.inputs.push(path)
         broken.command = CMD_RUN
         brc := opt.interp ? Exec(broken) : Run(broken)
-        ret brc != 0 and brc != TEST_NO_MATCH ? brc : 1
+        ret brc != 0 ? brc : 1
     end
     if tf.fns.len() == 0:
         if tf.has_main:
             ret run_whole_file(opt, path)
         end
+        if str.Len(opt.test_run) > 0:
+            ret report_no_match(opt, path)
+        end
         println co.Format1(i18.Tr("?    %s: no test functions"), co.ArgStr(path))
-        ret str.Len(opt.test_run) > 0 ? TEST_NO_MATCH : 0
+        ret 0
     end
     if tf.has_main:
         io.EPrintln(
             co.Format1(i18.Tr("salam test: %s has test functions and a main function; remove main, salam test writes its own"), co.ArgStr(path))
         )
         ret 2
+    end
+    mut any := false
+    each f in tf.fns:
+        if test_selected(f.name, opt.test_run):
+            any = true
+        end
+    end
+    if not any:
+        ret report_no_match(opt, path)
     end
     dir := pth.PathDir(path)
     stem := pth.PathBase(path)
@@ -340,8 +358,10 @@ pub func Test(opt &: Dr): int:
     end
     mut failed := 0
     mut unmatched := 0
+    report := pth.PathJoin(os.TempDir(), "salam-test-" + driver_pid() + "-" + time.NowMicros() + ".report")
     each f in files:
-        mut cmd := salam_quote(exe) + " test --one " + salam_quote(f)
+        _rm0 := os.Remove(report)
+        mut cmd := salam_quote(exe) + " test --one " + salam_quote(f) + " --report=" + salam_quote(report)
         if str.Len(opt.test_format) > 0:
             cmd = cmd + " --format=" + opt.test_format
         end
@@ -358,8 +378,9 @@ pub func Test(opt &: Dr): int:
             cmd = "\"" + cmd + "\""
         end
         rc := proc_status(system(cmd))
-        if rc == TEST_NO_MATCH:
+        if os.Exists(report):
             unmatched += 1
+            _rm1 := os.Remove(report)
         else rc != 0:
             failed += 1
         end

@@ -1,0 +1,85 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import time
+import cron
+
+// A zone that does not exist, so the fixed +03:30 fallback applies and the
+// expected instants do not depend on the machine's tz database.
+const ZONE := "Invalid/Nowhere"
+const OFF := 210
+const AFTER := 1792800300
+
+mut hits := null as i64*
+
+func next(spec: str): i64:
+    ret cron.Next(cron.Parse(spec), AFTER as i64, ZONE, OFF)
+end
+
+func show(spec: str, want: i64):
+    got := next(spec)
+    if got == want:
+        println spec, " -> ok"
+    else:
+        println spec, " -> FAIL got ", got, " want ", want
+    end
+end
+
+func valid(spec: str): bool:
+    ret cron.Parse(spec).ok
+end
+
+func tick(_id: i64):
+    atomic_add(hits, 1 as i64)
+end
+
+func main:
+    show("*/20 * * * *", 1792800600 as i64)
+    show("0 3 * * *", 1792884600 as i64)
+    show("30 1 * * mon", 1792965600 as i64)
+    show("0 0 29 feb *", 1835382600 as i64)
+    show("0 12 13 * fri", 1793349000 as i64)
+    show("0 9 * * 5-7", 1792819800 as i64)
+    show("@daily", 1792873800 as i64)
+
+    println "valid list: ", valid("1,15,30-35/2 0-23/6 * jan-jun,dec *")
+    println "bad minute: ", valid("60 * * * *")
+    println "bad count: ", valid("* * *")
+    println "bad step: ", valid("*/0 * * * *")
+    println "bad range: ", valid("5-1 * * * *")
+    println "bad name: ", valid("* * * foo *")
+
+    e := cron.Parse("*/5 * * * *")
+    println "match 10:15: ", cron.MatchFields(e, 15, 10, 1, 1, 0)
+    println "match 10:16: ", cron.MatchFields(e, 16, 10, 1, 1, 0)
+
+    hits = mem.AllocateZeroed(8 as u64) as i64*
+    cron.SetZone(ZONE, OFF)
+    id := cron.Add("every minute", "* * * * *", tick)
+    println "bad add: ", cron.Add("broken", "nope", tick)
+    started := cron.RunDue(AFTER as i64)
+    mut waited := 0
+    until atomic_load(hits) == (0 as i64) and waited < 200:
+        time.Sleep(10)
+        waited += 1
+    end
+    until cron.IsBusy(id) and waited < 400:
+        time.Sleep(10)
+        waited += 1
+    end
+    println "started: ", started, " hits: ", atomic_load(hits), " busy: ", cron.IsBusy(id), " name: ", cron.Name(id)
+end

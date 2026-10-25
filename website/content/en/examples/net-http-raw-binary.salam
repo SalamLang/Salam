@@ -1,0 +1,43 @@
+import net.http
+import net.tcp
+import mem
+import conv
+
+mut server := tcp.Server {}
+
+func files():
+    conn := tcp.Accept(server)
+    _ := tcp.Read(conn, 4096)
+    image := [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]
+    buf := mem.Allocate(12 as u64) as u8*
+    repeat 12 in i:
+        buf[i] = image[i] as u8
+    end
+    _ := tcp.Write(conn, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 12\r\nConnection: close\r\n\r\n")
+    _ := tcp.WriteBytes(conn, buf as void*, 12)
+    mem.Free(buf as void*)
+    tcp.Close(conn)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(files)
+    ep := http.ParseEndpoint("http://127.0.0.1:" + tcp.Port(server))
+    head := "GET /logo.png HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    mut r := http.SendRawTimeout(ep, head, null, 0, 5000)
+    join(t)
+    tcp.CloseServer(server)
+    println r.ok, r.status, http.HeaderValue(r.head, "content-type")
+    println "bytes received:", r.len
+    bytes := r.data as u8*
+    mut hex := ""
+    repeat r.len in i:
+        if i > 0: hex += " " end
+        if bytes[i] < 16: hex += "0" end
+        hex += conv.FormatHex(bytes[i] as u64)
+    end
+    println hex
+    println "is a PNG:", r.len >= 4 and bytes[1] as int == 80 and bytes[2] as int == 78 and bytes[3] as int == 71
+    println "RawText keeps", http.RawText(r).len(), "bytes"
+    http.FreeRaw(r)
+end

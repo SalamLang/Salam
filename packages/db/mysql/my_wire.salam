@@ -69,6 +69,7 @@ if not SALAM_DB_MOCK:
         pub nrows: i64 = 0
         pub pos: i64 = 0
         pub names: void* = null
+        pub types: void* = null
         pub rows: Vector<i64> = Vector {} as Vector<i64>
     end
 
@@ -620,6 +621,7 @@ if not SALAM_DB_MOCK:
         r[0] = _MyRes {}
         r[0].nfields = nfields
         r[0].names = mem.AllocateZeroed((nfields * 8 + 8) as u64)
+        r[0].types = mem.AllocateZeroed((nfields * 8 + 8) as u64)
         ret r
     end
 
@@ -635,6 +637,7 @@ if not SALAM_DB_MOCK:
             end
         end
         mem.Free(r[0].names)
+        mem.Free(r[0].types)
         each row in r[0].rows:
             cells := row as i64*
             repeat r[0].nfields in j:
@@ -683,6 +686,7 @@ if not SALAM_DB_MOCK:
         nf := _rd_lenenc(p, at0) as int
         r := _my_res_new(nf)
         names := r[0].names as i64*
+        types := r[0].types as i64*
         repeat nf in i:
             if not _my_read(c, pkt):
                 _my_free_result(r as void*)
@@ -695,6 +699,17 @@ if not SALAM_DB_MOCK:
             end
             nl := _rd_lenenc(pkt.p, at)
             names[i] = _copy_bytes(pkt.p, at, nl) as i64
+            // org_name, the 0x0c length marker, charset (2) and column length (4), then type and flags
+            at = at + nl
+            ol := _rd_lenenc(pkt.p, at)
+            at = at + ol
+            _rd_lenenc(pkt.p, at)
+            at = at + 6
+            if at + 3 <= pkt.len:
+                types[i] = (_rd(pkt.p, at) as i64) | (_rd_le(pkt.p, at + 1, 2) << 8)
+            else:
+                types[i] = 253
+            end
         end
         if not _my_read(c, pkt):
             _my_free_result(r as void*)
@@ -860,6 +875,16 @@ if not SALAM_DB_MOCK:
             ret null
         end
         ret (r[0].names as i64 + (fieldnr as i64) * 8) as void*
+    end
+
+    // MySQL column type (low byte) and column flags (bits 8 and up).
+    func _my_field_type(res: void*, fieldnr: u32): i64:
+        r := res as _MyRes*
+        if (fieldnr as int) >= r[0].nfields:
+            ret 253
+        end
+        types := r[0].types as i64*
+        ret types[fieldnr as int]
     end
 
     func _my_affected_rows(conn: void*): u64:

@@ -56,6 +56,7 @@ module.exports = grammar({
   extras: ($) => [/\s/, $.line_comment, $.block_comment],
 
   conflicts: ($) => [
+    [$.type_alias],
     [$.conditional_block, $.else_clause],
     [$._top_level, $.if_statement],
     [$.conditional_block, $.if_statement],
@@ -352,16 +353,14 @@ module.exports = grammar({
       ),
 
     type_alias: ($) =>
-      prec.right(
-        seq(
-          repeat($.modifier),
-          kw("type"),
-          field("name", $.name),
-          choice("=", ":"),
-          field("type", $._type),
-          optional(
-            seq(repeat1(choice($.function_definition, $.meta)), kw("end")),
-          ),
+      seq(
+        repeat($.modifier),
+        kw("type"),
+        field("name", $.name),
+        choice("=", ":"),
+        field("type", $._type),
+        optional(
+          seq(repeat1(choice($.function_definition, $.meta)), kw("end")),
         ),
       ),
 

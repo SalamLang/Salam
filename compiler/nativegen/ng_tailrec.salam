@@ -1,0 +1,284 @@
+package nativegen
+
+pub struct TailSite:
+    pub blk: int = 0
+    pub call: int = 0
+    pub ret_i: int = 0
+    pub acc: int = 0 - 1
+end
+
+func tailrec_self(g &: Ng, i: int): bool:
+    if g.i_op[i] != OP_CALL:
+        ret false
+    end
+    cv := g.i_a[i]
+    if cv < 0 or g.v_kind[cv] != VK_GLB or g.v_i[cv] != (0 as i64) or g.v_def[cv] != g.f_sym:
+        ret false
+    end
+    if (g.i_f[i] & IF_VARARG) != 0 or g.i_pcount[i] != g.f_args.len():
+        ret false
+    end
+    repeat g.i_pcount[i] in k:
+        if (g.pool[g.i_ps[i] + 3 * k + 1] & (IF_BYVAL | IF_SRET)) != 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func tailrec_fn_ok(g &: Ng): bool:
+    if g.f_sret:
+        ret false
+    end
+    each f in g.f_argf:
+        if (f & IF_BYVAL) != 0:
+            ret false
+        end
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA:
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
+func tailrec_acc_ok(g &: Ng, d: int): bool:
+    op := g.i_op[d]
+    if op != OP_ADD and op != OP_MUL:
+        ret false
+    end
+    t := g.i_ty[d]
+    ret not is_agg(g, t) and not is_flt(g, t) and not is_vec(g, t) and int_bits(g, t) >= 8
+end
+
+func ret_void_blk(g &: Ng, x: int): bool:
+    f := g.b_first[x]
+    ret f >= 0 and f == g.b_last[x] and g.i_op[f] == OP_RET and g.i_a[f] < 0
+end
+
+func tailrec_site(g &: Ng, b: int, s &: TailSite, accop &: int): bool:
+    t := g.b_last[b]
+    if t < 0:
+        ret false
+    end
+    if g.i_op[t] == OP_BR and ret_void_blk(g, g.i_b[t]):
+        mut c0 := g.i_prev[t]
+        until c0 >= 0 and not tailrec_self(g, c0):
+            if not gvn_pure(g.i_op[c0]):
+                ret false
+            end
+            c0 = g.i_prev[c0]
+        end
+        if c0 < 0:
+            ret false
+        end
+        cr0 := g.i_res[c0]
+        s.blk = b
+        s.call = c0
+        s.ret_i = t
+        s.acc = 0 - 1
+        ret cr0 < 0 or g.v_uses[cr0] == 0
+    end
+    if g.i_op[t] != OP_RET:
+        ret false
+    end
+    mut c := g.i_prev[t]
+    until c >= 0:
+        if tailrec_self(g, c):
+            break
+        end
+        if not gvn_pure(g.i_op[c]):
+            ret false
+        end
+        c = g.i_prev[c]
+    end
+    if c < 0:
+        ret false
+    end
+    cr := g.i_res[c]
+    rv := g.i_a[t]
+    s.blk = b
+    s.call = c
+    s.ret_i = t
+    s.acc = 0 - 1
+    if rv < 0:
+        ret cr < 0 or g.v_uses[cr] == 0
+    end
+    if cr < 0 or g.v_uses[cr] != 1:
+        ret false
+    end
+    if rv == cr:
+        ret true
+    end
+    if g.v_kind[rv] != VK_INS:
+        ret false
+    end
+    d := g.v_def[rv]
+    if g.i_blk[d] != b or not tailrec_acc_ok(g, d) or g.v_uses[rv] != 1:
+        ret false
+    end
+    if g.i_a[d] != cr and g.i_b[d] != cr:
+        ret false
+    end
+    if g.i_a[d] == cr and g.i_b[d] == cr:
+        ret false
+    end
+    if accop >= 0 and accop != g.i_op[d]:
+        ret false
+    end
+    accop = g.i_op[d]
+    s.acc = d
+    ret true
+end
+
+func tailrec_phi(g &: Ng, h: int, ty: int, n: int): int:
+    i := ins_new(g, OP_PHI, ty)
+    g.i_ps[i] = g.pool.len()
+    g.i_pcount[i] = n
+    repeat n:
+        g.pool.push(0 - 1)
+        g.pool.push(0 - 1)
+    end
+    _r := new_res(g, i)
+    first := g.b_first[h]
+    if first >= 0:
+        ins_before(g, first, i)
+    else:
+        ins_append(g, h, i)
+    end
+    ret i
+end
+
+func tail_recursion(g &: Ng): bool:
+    count_uses(g)
+    mut sites := Vector {} as Vector<TailSite>
+    mut accop := 0 - 1
+    each b in g.b_rpo:
+        mut s := TailSite {}
+        if tailrec_site(g, b, s, accop):
+            sites.push(s)
+        end
+    end
+    if sites.len() == 0 or not tailrec_fn_ok(g):
+        sites.free()
+        ret false
+    end
+    nb0 := g.b_first.len()
+    h := new_blk(g)
+    mut i := g.b_first[0]
+    until i >= 0:
+        g.i_blk[i] = h
+        i = g.i_next[i]
+    end
+    g.b_first[h] = g.b_first[0]
+    g.b_last[h] = g.b_last[0]
+    g.b_first[0] = 0 - 1
+    g.b_last[0] = 0 - 1
+    repeat nb0 in b2:
+        mut j := g.b_first[b2]
+        until j >= 0 and g.i_op[j] == OP_PHI:
+            ps := g.i_ps[j]
+            repeat g.i_pcount[j] in q:
+                if g.pool[ps + 2 * q + 1] == 0:
+                    g.pool[ps + 2 * q + 1] = h
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    br := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br] = h
+    ins_append(g, 0, br)
+    ns := sites.len()
+    mut acc_phi := 0 - 1
+    mut acc_v := 0 - 1
+    if accop >= 0:
+        mut aty2 := 0 - 1
+        each s0 in sites:
+            if s0.acc >= 0 and aty2 < 0:
+                aty2 = g.i_ty[s0.acc]
+            end
+        end
+        acc_phi = tailrec_phi(g, h, aty2, ns + 1)
+        acc_v = g.i_res[acc_phi]
+        aps := g.i_ps[acc_phi]
+        g.pool[aps] = const_int(g, aty2, accop == OP_MUL ? (1 as i64) : (0 as i64))
+        g.pool[aps + 1] = 0
+        repeat ns in k:
+            st := sites[k]
+            g.pool[aps + 2 + 2 * k + 1] = st.blk
+            if st.acc >= 0:
+                d := st.acc
+                cr := g.i_res[st.call]
+                other := g.i_a[d] == cr ? g.i_b[d] : g.i_a[d]
+                g.i_a[d] = acc_v
+                g.i_b[d] = other
+                g.pool[aps + 2 + 2 * k] = g.i_res[d]
+            else:
+                g.pool[aps + 2 + 2 * k] = acc_v
+            end
+        end
+    end
+    repl_grow(g)
+    mut aphis := Vector {} as Vector<int>
+    na := g.f_args.len()
+    repeat na in ai:
+        av := g.f_args[ai]
+        p := tailrec_phi(g, h, g.v_ty[av], ns + 1)
+        aphis.push(p)
+        pps := g.i_ps[p]
+        g.pool[pps] = av
+        g.pool[pps + 1] = 0
+        repeat ns in k2:
+            st2 := sites[k2]
+            g.pool[pps + 2 + 2 * k2] = g.pool[g.i_ps[st2.call] + 3 * ai]
+            g.pool[pps + 2 + 2 * k2 + 1] = st2.blk
+        end
+    end
+    if acc_v >= 0:
+        each b3 in g.b_rpo:
+            t := g.b_last[b3]
+            if t >= 0 and g.i_op[t] == OP_RET and g.i_a[t] >= 0:
+                mut is_site := false
+                each s3 in sites:
+                    if s3.ret_i == t:
+                        is_site = true
+                    end
+                end
+                if not is_site:
+                    n := ins_new(g, accop, g.i_ty[acc_phi])
+                    g.i_a[n] = acc_v
+                    g.i_b[n] = g.i_a[t]
+                    nv := new_res(g, n)
+                    ins_before(g, t, n)
+                    g.i_a[t] = nv
+                end
+            end
+        end
+    end
+    each s4 in sites:
+        ins_unlink(g, s4.call)
+        ins_unlink(g, s4.ret_i)
+        bj := ins_new(g, OP_BR, T_VOID)
+        g.i_b[bj] = h
+        ins_append(g, s4.blk, bj)
+    end
+    build_cfg(g)
+    repl_grow(g)
+    repeat na in ai2:
+        g.v_repl[g.f_args[ai2]] = g.i_res[aphis[ai2]]
+    end
+    remap_all(g)
+    repeat na in ai3:
+        g.pool[g.i_ps[aphis[ai3]]] = g.f_args[ai3]
+        g.v_repl[g.f_args[ai3]] = 0 - 1
+    end
+    aphis.free()
+    sites.free()
+    ret true
+end

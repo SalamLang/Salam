@@ -1,0 +1,521 @@
+package nativegen
+
+func agg_load_of(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_LOAD or not is_agg(g, g.i_ty[d]) or (g.i_f[d] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func field_load_after(g &: Ng, ld: int, off: i64, ty: int): int:
+    ad := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[ad] = g.i_a[ld]
+    g.i_b[ad] = 0 - 1
+    g.i_x[ad] = 1
+    g.i_d[ad] = off
+    av := new_res(g, ad)
+    nl := ins_new(g, OP_LOAD, ty)
+    g.i_a[nl] = av
+    g.i_c[nl] = 0
+    nv := new_res(g, nl)
+    nx := g.i_next[ld]
+    ins_before(g, nx, ad)
+    ins_before(g, nx, nl)
+    ret nv
+end
+
+func scalarize_extv(g &: Ng, e: int): int:
+    t := g.i_ty[e]
+    if is_agg(g, t) or is_vec(g, t):
+        ret 0 - 1
+    end
+    a := g.i_a[e]
+    off := g.i_d[e]
+    ld := agg_load_of(g, a)
+    if ld >= 0:
+        ret field_load_after(g, ld, off, t)
+    end
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret 0 - 1
+    end
+    ph := g.v_def[a]
+    if g.i_op[ph] != OP_PHI or g.i_pcount[ph] > 4:
+        ret 0 - 1
+    end
+    ps := g.i_ps[ph]
+    repeat g.i_pcount[ph] in k:
+        x := g.pool[ps + 2 * k]
+        lx := agg_load_of(g, x)
+        if lx < 0 or g.v_uses[x] != 1:
+            ret 0 - 1
+        end
+    end
+    np := ins_new(g, OP_PHI, t)
+    g.i_ps[np] = g.pool.len()
+    g.i_pcount[np] = g.i_pcount[ph]
+    repeat g.i_pcount[ph] in k2:
+        x2 := g.pool[ps + 2 * k2]
+        fv := field_load_after(g, g.v_def[x2], off, t)
+        g.pool.push(fv)
+        g.pool.push(g.pool[ps + 2 * k2 + 1])
+    end
+    pv := new_res(g, np)
+    ins_before(g, ph, np)
+    ret pv
+end
+
+func agg_scalarize(g &: Ng): bool:
+    count_uses(g)
+    repl_grow(g)
+    mut changed := false
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_EXTV and g.i_res[i] >= 0:
+                r := scalarize_extv(g, i)
+                if r >= 0:
+                    repl_grow(g)
+                    g.v_repl[g.i_res[i]] = r
+                    ins_unlink(g, i)
+                    changed = true
+                end
+            end
+            i = nx
+        end
+    end
+    if changed:
+        remap_all(g)
+        dce(g)
+    end
+    ret changed
+end
+
+func dead_slot_ok(g &: Ng, i: int, root: Vector<bool>): int:
+    op := g.i_op[i]
+    if op == OP_ADDR:
+        a := g.i_a[i]
+        b := g.i_b[i]
+        if b >= 0 and b < root.len() and root[b]:
+            ret 0
+        end
+        ret a >= 0 and a < root.len() and root[a] ? 2 : 1
+    end
+    if op == OP_STORE:
+        sv := g.i_a[i]
+        if sv >= 0 and sv < root.len() and root[sv]:
+            ret 0
+        end
+        ad := g.i_b[i]
+        ret ad >= 0 and ad < root.len() and root[ad] ? 3 : 1
+    end
+    if op == OP_CALL:
+        fv := g.i_a[i]
+        sym := fv >= 0 and g.v_kind[fv] == VK_GLB ? g.v_def[fv] : 0 - 1
+        mut touches := false
+        repeat g.i_pcount[i] in k:
+            av := g.pool[g.i_ps[i] + 3 * k]
+            if av >= 0 and av < root.len() and root[av]:
+                touches = true
+                if k != 0 or (sym != g.sym_i_memset and sym != g.sym_i_memcpy):
+                    ret 0
+                end
+            end
+        end
+        ret touches ? 3 : 1
+    end
+    m := val_mask(op)
+    if (m & 1) != 0 and g.i_a[i] >= 0 and g.i_a[i] < root.len() and root[g.i_a[i]]: ret 0 end
+    if (m & 2) != 0 and g.i_b[i] >= 0 and g.i_b[i] < root.len() and root[g.i_b[i]]: ret 0 end
+    if (m & 4) != 0 and g.i_c[i] >= 0 and g.i_c[i] < root.len() and root[g.i_c[i]]: ret 0 end
+    if op == OP_PHI:
+        repeat g.i_pcount[i] in k2:
+            pv := g.pool[g.i_ps[i] + 2 * k2]
+            if pv >= 0 and pv < root.len() and root[pv]:
+                ret 0
+            end
+        end
+    end
+    ret 1
+end
+
+func dead_allocas(g &: Ng): bool:
+    mut changed := false
+    mut root := Vector {} as Vector<bool>
+    mut kill := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_ALLOCA and g.i_res[i] >= 0:
+                root.clear()
+                repeat g.v_kind.len():
+                    root.push(false)
+                end
+                root[g.i_res[i]] = true
+                kill.clear()
+                mut ok := true
+                mut grew := true
+                until grew and ok:
+                    grew = false
+                    kill.clear()
+                    each bb in g.b_rpo:
+                        mut j := g.b_first[bb]
+                        until j >= 0 and ok:
+                            if j != i:
+                                st := dead_slot_ok(g, j, root)
+                                if st == 0:
+                                    ok = false
+                                else st == 2:
+                                    r := g.i_res[j]
+                                    if r >= 0 and not root[r]:
+                                        root[r] = true
+                                        grew = true
+                                    end
+                                    kill.push(j)
+                                else st == 3:
+                                    kill.push(j)
+                                end
+                            end
+                            j = g.i_next[j]
+                        end
+                    end
+                end
+                if ok:
+                    each kj in kill:
+                        if g.i_op[kj] != OP_NOP:
+                            ins_unlink(g, kj)
+                        end
+                    end
+                    changed = true
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    root.free()
+    kill.free()
+    if changed:
+        dce(g)
+    end
+    ret changed
+end
+
+func agg_fwd_one(g &: Ng, al: int, loads &: Vector<int>): bool:
+    r := g.i_res[al]
+    t := g.i_x[al]
+    if r < 0 or not is_agg(g, t) or g.i_d[al] > (1 as i64):
+        ret false
+    end
+    loads.clear()
+    mut st := 0 - 1
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if j != al and uses_val(g, j, r):
+                op := g.i_op[j]
+                if op == OP_STORE and g.i_b[j] == r and g.i_a[j] != r and g.v_ty[g.i_a[j]] == t and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                    if st >= 0:
+                        ret false
+                    end
+                    st = j
+                else op == OP_LOAD and g.i_a[j] == r and g.i_ty[j] == t and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                    loads.push(j)
+                else:
+                    ret false
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    if st < 0 or loads.len() == 0:
+        ret false
+    end
+    sb := g.i_blk[st]
+    each l in loads:
+        lb := g.i_blk[l]
+        if lb == sb:
+            mut k := g.i_next[st]
+            until k >= 0 and k != l:
+                k = g.i_next[k]
+            end
+            if k != l:
+                ret false
+            end
+        else not dominates(g, sb, lb):
+            ret false
+        end
+    end
+    v := g.i_a[st]
+    repl_grow(g)
+    each l2 in loads:
+        g.v_repl[g.i_res[l2]] = v
+        ins_unlink(g, l2)
+    end
+    ret true
+end
+
+func slot_use_load(g &: Ng, j: int, a: int, t: int, off: i64): bool:
+    if g.i_op[j] != OP_LOAD or g.i_a[j] != a or (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    ret off >= (0 as i64) and off + (tsize(g, g.i_ty[j]) as i64) <= (tsize(g, t) as i64)
+end
+
+func slot_fields_one(g &: Ng, al: int, ads &: Vector<int>, aoffs &: Vector<i64>, loads &: Vector<int>, offs &: Vector<i64>): bool:
+    r := g.i_res[al]
+    t := g.i_x[al]
+    if r < 0 or not is_agg(g, t) or g.i_d[al] > (1 as i64):
+        ret false
+    end
+    ads.clear()
+    aoffs.clear()
+    loads.clear()
+    offs.clear()
+    mut st := 0 - 1
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if j != al:
+                op := g.i_op[j]
+                if uses_val(g, j, r):
+                    if op == OP_STORE and g.i_b[j] == r and g.i_a[j] != r and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0 and agg_load_of(g, g.i_a[j]) >= 0 and g.v_ty[g.i_a[j]] == t:
+                        if st >= 0:
+                            ret false
+                        end
+                        st = j
+                    else slot_use_load(g, j, r, t, 0 as i64):
+                        loads.push(j)
+                        offs.push(0 as i64)
+                    else op == OP_ADDR and g.i_a[j] == r and g.i_b[j] < 0 and g.i_res[j] >= 0 and ads.len() < 32:
+                        ads.push(g.i_res[j])
+                        aoffs.push(g.i_d[j])
+                    else:
+                        ret false
+                    end
+                else:
+                    repeat ads.len() in k:
+                        if uses_val(g, j, ads[k]):
+                            if not slot_use_load(g, j, ads[k], t, aoffs[k]):
+                                ret false
+                            end
+                            loads.push(j)
+                            offs.push(aoffs[k])
+                        end
+                    end
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    if st < 0 or loads.len() == 0 or loads.len() > 24:
+        ret false
+    end
+    sb := g.i_blk[st]
+    each l in loads:
+        lb := g.i_blk[l]
+        if lb == sb:
+            mut k2 := g.i_next[st]
+            until k2 >= 0 and k2 != l:
+                k2 = g.i_next[k2]
+            end
+            if k2 != l:
+                ret false
+            end
+        else not dominates(g, sb, lb):
+            ret false
+        end
+    end
+    ld := agg_load_of(g, g.i_a[st])
+    mut ko := Vector {} as Vector<i64>
+    mut kt := Vector {} as Vector<int>
+    mut kv := Vector {} as Vector<int>
+    repeat loads.len() in q:
+        l2 := loads[q]
+        ty := g.i_ty[l2]
+        mut v := 0 - 1
+        repeat ko.len() in e:
+            if ko[e] == offs[q] and kt[e] == ty:
+                v = kv[e]
+            end
+        end
+        if v < 0:
+            v = field_load_after(g, ld, offs[q], ty)
+            ko.push(offs[q])
+            kt.push(ty)
+            kv.push(v)
+        end
+        repl_grow(g)
+        if g.i_res[l2] >= 0:
+            g.v_repl[g.i_res[l2]] = v
+        end
+        ins_unlink(g, l2)
+    end
+    ko.free()
+    kt.free()
+    kv.free()
+    ret true
+end
+
+func slot_rmw_one(g &: Ng, al: int, ads &: Vector<int>, aoffs &: Vector<i64>, loads &: Vector<int>, offs &: Vector<i64>): bool:
+    r := g.i_res[al]
+    t := g.i_x[al]
+    if r < 0 or not is_agg(g, t) or g.i_d[al] > (1 as i64):
+        ret false
+    end
+    ads.clear()
+    aoffs.clear()
+    loads.clear()
+    offs.clear()
+    mut st_in := 0 - 1
+    mut ld_out := 0 - 1
+    each b in g.b_rpo:
+        mut j := g.b_first[b]
+        until j >= 0:
+            if j != al:
+                op := g.i_op[j]
+                plain := (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0
+                if uses_val(g, j, r):
+                    if op == OP_STORE and g.i_b[j] == r and g.i_a[j] != r and plain and agg_load_of(g, g.i_a[j]) >= 0 and g.v_ty[g.i_a[j]] == t:
+                        if st_in >= 0:
+                            ret false
+                        end
+                        st_in = j
+                    else op == OP_LOAD and g.i_a[j] == r and plain and g.i_ty[j] == t and g.i_res[j] >= 0:
+                        if ld_out >= 0:
+                            ret false
+                        end
+                        ld_out = j
+                    else op == OP_ADDR and g.i_a[j] == r and g.i_b[j] < 0 and g.i_res[j] >= 0 and ads.len() < 32:
+                        ads.push(g.i_res[j])
+                        aoffs.push(g.i_d[j])
+                    else:
+                        ret false
+                    end
+                else:
+                    repeat ads.len() in k:
+                        if uses_val(g, j, ads[k]):
+                            ok_st := op == OP_STORE and g.i_b[j] == ads[k] and g.i_a[j] != ads[k] and plain
+                            if not ok_st and not slot_use_load(g, j, ads[k], t, aoffs[k]):
+                                ret false
+                            end
+                            loads.push(j)
+                            offs.push(aoffs[k])
+                        end
+                    end
+                end
+            end
+            j = g.i_next[j]
+        end
+    end
+    if st_in < 0 or ld_out < 0 or loads.len() == 0:
+        ret false
+    end
+    blk := g.i_blk[st_in]
+    if g.i_blk[ld_out] != blk:
+        ret false
+    end
+    ldp := agg_load_of(g, g.i_a[st_in])
+    if g.i_blk[ldp] != blk:
+        ret false
+    end
+    lo := g.i_res[ld_out]
+    if lo >= g.v_uses.len() or g.v_uses[lo] != 1:
+        ret false
+    end
+    st_out := g.i_next[ld_out]
+    if st_out < 0 or g.i_op[st_out] != OP_STORE or g.i_a[st_out] != lo or g.i_b[st_out] != g.i_a[ldp] or (g.i_f[st_out] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    mut seen_in := false
+    mut j2 := g.i_next[ldp]
+    until j2 >= 0 and j2 != ld_out:
+        if j2 == st_in:
+            seen_in = true
+        else:
+            mut mine := false
+            each l in loads:
+                if l == j2:
+                    mine = true
+                end
+            end
+            if mine:
+                if not seen_in:
+                    ret false
+                end
+            else:
+                op2 := g.i_op[j2]
+                if op2 == OP_LOAD or mem_write(g, j2) or op2 == OP_ALLOCA:
+                    ret false
+                end
+            end
+        end
+        j2 = g.i_next[j2]
+    end
+    if j2 != ld_out or not seen_in:
+        ret false
+    end
+    each l2 in loads:
+        if g.i_blk[l2] != blk:
+            ret false
+        end
+    end
+    base := g.i_a[ldp]
+    repeat loads.len() in q:
+        f := loads[q]
+        ad := ins_new(g, OP_ADDR, T_PTR)
+        g.i_a[ad] = base
+        g.i_b[ad] = 0 - 1
+        g.i_x[ad] = 1
+        g.i_d[ad] = offs[q]
+        av := new_res(g, ad)
+        ins_before(g, f, ad)
+        if g.i_op[f] == OP_STORE:
+            g.i_b[f] = av
+        else:
+            g.i_a[f] = av
+        end
+    end
+    ins_unlink(g, st_out)
+    ins_unlink(g, ld_out)
+    ins_unlink(g, st_in)
+    ret true
+end
+
+func agg_forward(g &: Ng): bool:
+    build_dom(g)
+    count_uses(g)
+    mut loads := Vector {} as Vector<int>
+    mut ads := Vector {} as Vector<int>
+    mut aoffs := Vector {} as Vector<i64>
+    mut offs := Vector {} as Vector<i64>
+    mut changed := false
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if g.i_op[i] == OP_ALLOCA:
+                if agg_fwd_one(g, i, loads):
+                    changed = true
+                else not g.off_sfld and slot_fields_one(g, i, ads, aoffs, loads, offs):
+                    changed = true
+                else not g.off_sfld and slot_rmw_one(g, i, ads, aoffs, loads, offs):
+                    changed = true
+                end
+            end
+            i = nx
+        end
+    end
+    loads.free()
+    ads.free()
+    aoffs.free()
+    offs.free()
+    if changed:
+        remap_all(g)
+        _da := dead_allocas(g)
+    end
+    ret changed
+end

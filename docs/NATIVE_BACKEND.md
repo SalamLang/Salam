@@ -89,10 +89,15 @@ The `i686` targets reuse the x86-64 pipeline with three additions.
   multiplies (one when both operands are sign-extended 32-bit values). A
   division or remainder by a constant uses a 64-bit magic multiply built from
   32-bit pieces; a division whose operands range analysis proves fit in 32
-  bits becomes a 32-bit one. Other divisions, variable shifts and conversions
-  between `i64` and floats call the libgcc helpers (`__divdi3`,
-  `__floatdidf`, ...). A call that returns an `i64` gets its high half from
-  `edx`. 64-bit atomics call small `lock cmpxchg8b` routines the backend
+  bits becomes a 32-bit one, and one whose operands are provably
+  non-negative becomes unsigned. Other divisions call the libgcc helpers once
+  per operand pair: the quotient comes from `__divdi3` (or `__udivdi3`) and a
+  remainder of the same operands is the dividend minus quotient times divisor,
+  so `n % j` next to `n / j` costs one call. An `i64` converted to a float is
+  stored and loaded with x87 `fild`, which is exact and needs no call, unless
+  range analysis shows it fits in 32 bits (then `cvtsi2sd` takes the low
+  half). Variable shifts and the other conversions call libgcc. A call that
+  returns an `i64` gets its high half from `edx`. 64-bit atomics call small `lock cmpxchg8b` routines the backend
   writes into the object itself.
 - After the optimizer runs on the split code, an add or subtract whose carry
   the legalizer spelled as a compare becomes `add`/`adc` (or `sub`/`sbb`),
@@ -117,7 +122,7 @@ code). On Windows it is an i386 COFF object: every symbol gets the `_`
 prefix, and a Win32 function the frontend marks `x86_stdcallcc` is named
 `_Name@N`; it pops its own arguments, so the caller subtracts `N` from
 `esp` right after the call to keep its fixed argument area in place.
-Unwind tables, DWARF and the vectorizers are off on these targets for now.
+Unwind tables, DWARF and the loop vectorizers are off on these targets for now; the straight-line (SLP) vectorizer runs on i686, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads.
 Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 `types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
 `interop` and `webframework` tests match their expected output except those

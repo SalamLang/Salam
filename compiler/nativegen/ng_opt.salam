@@ -916,7 +916,7 @@ func val_range(g &: Ng, v: int, blk: int, depth: int, lo &: i64, hi &: i64): boo
             lo = lo_a - hi_b
             hi = hi_a - lo_b
         else:
-            if lo_a < (0 as i64) or lo_b < (0 as i64) or hi_a >= (1 as i64) << (20 as i64) or hi_b >= (1 as i64) << (20 as i64):
+            if lo_a < (0 as i64) or lo_b < (0 as i64) or hi_a >= (1 as i64) << (31 as i64) or hi_b >= (1 as i64) << (31 as i64):
                 ret false
             end
             lo = lo_a * lo_b
@@ -2729,6 +2729,7 @@ func narrow_div64(g &: Ng): bool:
     count_uses(g)
     build_dom(g)
     mut changed := false
+    mut stk := Vector {} as Vector<int>
     repl_grow(g)
     each b in g.b_rpo:
         mut i := g.b_first[b]
@@ -2749,14 +2750,86 @@ func narrow_div64(g &: Ng): bool:
                 g.v_repl[g.i_res[i]] = r
                 ins_unlink(g, i)
                 changed = true
+            else (op == OP_SDIV or op == OP_SREM) and g.i_ty[i] == T_I64 and g.i_res[i] >= 0 and nd_nonneg(g, g.i_a[i], b, 0, stk) and nd_nonneg(g, g.i_b[i], b, 0, stk):
+                g.i_op[i] = op == OP_SDIV ? OP_UDIV : OP_UREM
+                changed = true
+            else (op == OP_SITOFP or op == OP_UITOFP) and g.i_res[i] >= 0 and g.v_ty[g.i_a[i]] == T_I64 and nd_fits32(g, resolve(g, g.i_a[i]), b, op == OP_SITOFP):
+                t32 := nd_to32(g, i, resolve(g, g.i_a[i]))
+                f := p2_ins(g, i, OP_SITOFP, g.i_ty[i], t32, 0 - 1)
+                g.i_x[g.v_def[f]] = T_I32
+                repl_grow(g)
+                g.v_repl[g.i_res[i]] = f
+                ins_unlink(g, i)
+                changed = true
             end
             i = nx
         end
     end
+    stk.free()
     if changed:
         remap_all(g)
     end
     ret changed
+end
+
+func nd_nonneg(g &: Ng, v: int, blk: int, depth: int, stk &: Vector<int>): bool:
+    if v < 0:
+        ret false
+    end
+    if is_cint(g, v):
+        ret norm_int(g, g.v_ty[v], g.v_i[v]) >= (0 as i64)
+    end
+    if g.v_kind[v] != VK_INS or depth > 8:
+        ret false
+    end
+    each s in stk:
+        if s == v:
+            ret true
+        end
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if val_range(g, v, blk, 0, lo, hi) and lo >= (0 as i64):
+        ret true
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    if op == OP_ZEXT or op == OP_UREM:
+        ret true
+    end
+    if op == OP_LSHR:
+        ret is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] > (0 as i64)
+    end
+    if op == OP_AND:
+        ret nd_nonneg(g, g.i_a[d], blk, depth + 1, stk) or nd_nonneg(g, g.i_b[d], blk, depth + 1, stk)
+    end
+    if op == OP_SEXT:
+        ret nd_nonneg(g, g.i_a[d], blk, depth + 1, stk)
+    end
+    if op == OP_SREM or op == OP_SDIV or op == OP_UDIV or ((op == OP_ADD or op == OP_MUL) and (g.i_f[d] & IF_NSW) != 0):
+        ret nd_nonneg(g, g.i_a[d], blk, depth + 1, stk) and nd_nonneg(g, g.i_b[d], blk, depth + 1, stk)
+    end
+    if op == OP_PHI:
+        stk.push(v)
+        mut all := true
+        repeat g.i_pcount[d] in q:
+            if all and not nd_nonneg(g, g.pool[g.i_ps[d] + 2 * q], blk, depth + 1, stk):
+                all = false
+            end
+        end
+        _p := stk.pop()
+        ret all
+    end
+    ret false
+end
+
+func nd_fits32(g &: Ng, v: int, blk: int, signed: bool): bool:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not val_range(g, v, blk, 0, lo, hi):
+        ret false
+    end
+    ret hi <= (2147483647 as i64) and lo >= (signed ? (0 - 2147483648 as i64) : (0 as i64))
 end
 
 func bx_def(g &: Ng, v: int, op: int): int:

@@ -200,6 +200,81 @@ func lg_divmod_arm(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int
     hi = rem ? l.dm_rh[k] : l.dm_qh[k]
 end
 
+func lg_div_twin(g &: Ng, at: int, op: int, a: int, b: int): bool:
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    each bb in g.b_rpo:
+        mut j := g.b_first[bb]
+        until j >= 0:
+            o := g.i_op[j]
+            if j != at and o >= OP_SDIV and o <= OP_UREM and (o == OP_SDIV or o == OP_SREM) == sg and (o == OP_SREM or o == OP_UREM) != rem and resolve(g, g.i_a[j]) == a and resolve(g, g.i_b[j]) == b:
+                ret true
+            end
+            j = g.i_next[j]
+        end
+    end
+    ret false
+end
+
+func lg_divmod(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    if g.arch == NG_ARCH_ARM:
+        lg_divmod_arm(g, l, at, op, a, b, lo, hi)
+        ret
+    end
+    sg := op == OP_SDIV or op == OP_SREM
+    rem := op == OP_SREM or op == OP_UREM
+    blk := g.i_blk[at]
+    mut k := 0 - 1
+    repeat l.dm_a.len() in q:
+        if l.dm_a[q] == a and l.dm_b[q] == b and l.dm_sg[q] == sg and dominates(g, l.dm_blk[q], blk) and (l.dm_ql[q] >= 0 or rem):
+            k = q
+            break
+        end
+    end
+    if k < 0:
+        mut cl := 0
+        mut ch := 0
+        mod_only := rem and not lg_div_twin(g, at, op, a, b)
+        mut nm := sg ? "__divdi3" : "__udivdi3"
+        if mod_only:
+            nm = sg ? "__moddi3" : "__umoddi3"
+        end
+        lg_libcall2(g, l, at, nm, a, b, cl, ch)
+        l.dm_a.push(a)
+        l.dm_b.push(b)
+        l.dm_sg.push(sg)
+        l.dm_blk.push(blk)
+        l.dm_ql.push(mod_only ? 0 - 1 : cl)
+        l.dm_qh.push(mod_only ? 0 - 1 : ch)
+        l.dm_rl.push(mod_only ? cl : 0 - 1)
+        l.dm_rh.push(mod_only ? ch : 0 - 1)
+        k = l.dm_a.len() - 1
+    end
+    if rem and l.dm_rl[k] < 0:
+        mut al := 0
+        mut ah := 0
+        mut bl := 0
+        mut bh := 0
+        lg_pair(g, l, a, al, ah)
+        lg_pair(g, l, b, bl, bh)
+        mut ml := 0
+        mut mh := 0
+        lg_mul64(g, at, l.dm_ql[k], l.dm_qh[k], bl, bh, ml, mh)
+        mut rl := 0
+        mut rh := 0
+        lg_add64(g, at, al, ah, ml, mh, true, rl, rh)
+        if dominates(g, l.dm_blk[k], blk) and l.dm_blk[k] == blk:
+            l.dm_rl[k] = rl
+            l.dm_rh[k] = rh
+        end
+        lo = rl
+        hi = rh
+        ret
+    end
+    lo = rem ? l.dm_rl[k] : l.dm_ql[k]
+    hi = rem ? l.dm_rh[k] : l.dm_qh[k]
+end
+
 func lg_shift_const(g &: Ng, at: int, op: int, al: int, ah: int, c: int, lo &: int, hi &: int):
     n := c & 63
     if n == 0:
@@ -1008,6 +1083,11 @@ func lg_one(g &: Ng, l &: Lg, i: int):
             nm = op == OP_SITOFP ? "__floatdidf" : "__floatundidf"
         end
         mut hz := 0
+        if g.arch == NG_ARCH_X86 and op == OP_SITOFP:
+            args.free()
+            replace_res(g, i, lg_ins(g, i, OP_I64TOF, ty, fl, fh))
+            ret
+        end
         if g.arch == NG_ARCH_ARM:
             rlo := lg_call(g, i, nm, args, dbl ? T_I64 : T_I32, hz)
             args.free()
@@ -1112,19 +1192,7 @@ func lg_one(g &: Ng, l &: Lg, i: int):
             if lg_divconst(g, l, i, op, a, b, lo, hi):
                 break
             end
-            if g.arch == NG_ARCH_ARM:
-                lg_divmod_arm(g, l, i, op, a, b, lo, hi)
-                break
-            end
-            mut dn := "__divdi3"
-            if op == OP_UDIV:
-                dn = "__udivdi3"
-            else op == OP_SREM:
-                dn = "__moddi3"
-            else op == OP_UREM:
-                dn = "__umoddi3"
-            end
-            lg_libcall2(g, l, i, dn, a, b, lo, hi)
+            lg_divmod(g, l, i, op, a, b, lo, hi)
             break
         end
         OP_SEXT, OP_ZEXT:
@@ -1237,9 +1305,7 @@ func legalize64(g &: Ng):
     end
     mut l := Lg {}
     lg_grow(g, l)
-    if g.arch == NG_ARCH_ARM:
-        build_dom(g)
-    end
+    build_dom(g)
     lg_split_args(g, l)
     mut order := Vector {} as Vector<int>
     each b in g.b_rpo:

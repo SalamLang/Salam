@@ -162,7 +162,7 @@ func elf_secs(g &: Ng): Vector<int>:
     v.push(SEC_BSS)
     v.push(SEC_INIT)
     v.push(SEC_FINI)
-    if g.s_eh.len() > 0 and g.wsz == 8:
+    if g.s_eh.len() > 0:
         v.push(SEC_EHFRAME)
     end
     if g.s_dinfo.len() > 0:
@@ -584,15 +584,17 @@ func build_eh_frame(g &: Ng):
     eh_u8(g, 0x7A)
     eh_u8(g, 0x52)
     eh_u8(g, 0)
+    x32 := g.arch == NG_ARCH_X86
+    ws := x32 ? 4 : 8
     eh_uleb(g, 1)
-    eh_u8(g, 0x78)
-    eh_uleb(g, 16)
+    eh_u8(g, x32 ? 0x7C : 0x78)
+    eh_uleb(g, x32 ? 8 : 16)
     eh_uleb(g, 1)
     eh_u8(g, 0x1B)
     eh_u8(g, 0x0C)
-    eh_uleb(g, 7)
-    eh_uleb(g, 8)
-    eh_u8(g, 0x90)
+    eh_uleb(g, x32 ? 4 : 7)
+    eh_uleb(g, ws)
+    eh_u8(g, x32 ? 0x88 : 0x90)
     eh_uleb(g, 1)
     until (g.s_eh.len() % 8) == 0:
         eh_u8(g, 0)
@@ -620,15 +622,16 @@ func build_eh_frame(g &: Ng):
             r := g.eh_regs[g.eh_rs[f] + k]
             at += push_len(r)
             eh_advance(g, loc, at)
-            eh_cfa(g, 8 + 8 * (k + 1))
-            eh_u8(g, 0x80 | dw_reg(r))
+            eh_cfa(g, ws + ws * (k + 1))
+            eh_u8(g, 0x80 | (x32 ? r : dw_reg(r)))
             eh_uleb(g, k + 2)
         end
         al := g.eh_alloc[f]
+        alen := x32 ? (fits8(al as i64) ? 3 : 6) : (fits8(al as i64) ? 4 : 7)
         if al > 0:
-            at += fits8(al as i64) ? 4 : 7
+            at += alen
             eh_advance(g, loc, at)
-            eh_cfa(g, 8 + 8 * nr + al)
+            eh_cfa(g, ws + ws * nr + al)
         end
         repeat g.eh_en[f] in q:
             ep := g.eh_ep[g.eh_es[f] + q]
@@ -636,15 +639,15 @@ func build_eh_frame(g &: Ng):
             eh_advance(g, loc, p)
             eh_u8(g, 0x0A)
             if al > 0:
-                p += fits8(al as i64) ? 4 : 7
+                p += alen
                 eh_advance(g, loc, p)
-                eh_cfa(g, 8 + 8 * nr)
+                eh_cfa(g, ws + ws * nr)
             end
             mut k2 := nr - 1
             until k2 >= 0:
                 p += push_len(g.eh_regs[g.eh_rs[f] + k2])
                 eh_advance(g, loc, p)
-                eh_cfa(g, 8 + 8 * k2)
+                eh_cfa(g, ws + ws * k2)
                 k2 -= 1
             end
             p += 1

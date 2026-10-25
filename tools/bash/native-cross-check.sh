@@ -20,6 +20,7 @@
 
 set -u
 SALAM=$1
+case "$SALAM" in /*) ;; *) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=$2
 RUNNER=$3
 shift 3

@@ -105,3 +105,58 @@ jobs:
         run: |
           find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
             xargs -0 sh tools/bash/native-windows-check.sh ./salam
+
+  linux-cross:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i686
+            triple: i686-linux-musl
+            runner: env
+          - arch: arm
+            triple: arm-linux-musleabihf
+            runner: qemu-arm-static
+          - arch: aarch64
+            triple: aarch64-linux-musl
+            runner: qemu-aarch64-static
+          - arch: riscv64
+            triple: riscv64-linux-musl
+            runner: qemu-riscv64-static
+    name: linux-cross (${{ matrix.arch }})
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install qemu user emulation
+        if: matrix.runner != 'env'
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Fetch the musl sysroot
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches "$ARCH"
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Programs built by the native backend run under emulation
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+          RUNNER: ${{ matrix.runner }}
+        run: |
+          SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-$ARCH sh tools/bash/native-cross-check.sh ./salam "$TRIPLE" "$RUNNER" \
+            basics features types data games match switch llvm general stdlib

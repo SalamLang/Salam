@@ -44,9 +44,12 @@ for f in "$@"; do
         continue
     fi
     if [ -n "$STAGE" ]; then
-        cp "$d/t.exe" "$STAGE/$b.exe"
-        cp "$exp" "$STAGE/$b.out"
-        staged=$((staged + 1))
+        if cp "$d/t.exe" "$STAGE/$b.exe" && cp "$exp" "$STAGE/$b.out"; then
+            staged=$((staged + 1))
+        else
+            echo "FAIL $b (staging)"
+            fail=$((fail + 1))
+        fi
         continue
     fi
     (cd "$d" && timeout 120 wine "$d/t.exe" </dev/null >"$d/run.out" 2>/dev/null)

@@ -259,7 +259,30 @@ func arm_fit(a &: Arm, base &: int, off &: i64, lim: i64, al: i64):
     off = 0 as i64
 end
 
+func arm_ri_form(g &: Ng, i: int): bool:
+    k := g.mc.mk[i]
+    ret k != MK_FRAME and k != MK_ARG and k != MK_RIP and k != MK_GOT and g.mc.mb[i] >= 0 and g.mc.mi[i] >= 0
+end
+
+func ldst_reg(a &: Arm, load: bool, byte: bool, rt: int, base: int, idx: int, sh: int):
+    mut v := 0xE7800000 as i64
+    if load:
+        v = v | (0x00100000 as i64)
+    end
+    if byte:
+        v = v | (0x00400000 as i64)
+    end
+    arm_w(a, v | ((base as i64) << (16 as i64)) | ((rt as i64) << (12 as i64)) | ((sh as i64) << (7 as i64)) | (idx as i64))
+end
+
 func arm_addr_reg(g &: Ng, a &: Arm, i: int, rd: int):
+    if arm_ri_form(g, i):
+        arm_dps(a, 4, false, rd, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), 0, a_lsz(g.mc.ms[i]))
+        if g.mc.md[i] != (0 as i64):
+            x_add_imm(a, rd, rd, g.mc.md[i], rd == ALR ? AIP : ALR)
+        end
+        ret
+    end
     mut base := 0
     mut off := 0 as i64
     arm_addr(g, a, i, base, off)
@@ -302,6 +325,10 @@ func ldst_half(a &: Arm, load: bool, kind: int, rt: int, base: int, off: i64):
 end
 
 func arm_gp_load(g &: Ng, a &: Arm, i: int, rt: int, sz: int, signed: bool):
+    if (sz >= 4 or (sz == 1 and not signed)) and arm_ri_form(g, i) and g.mc.md[i] == (0 as i64):
+        ldst_reg(a, true, sz == 1, rt, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), a_lsz(g.mc.ms[i]))
+        ret
+    end
     mut base := 0
     mut off := 0 as i64
     arm_addr(g, a, i, base, off)
@@ -331,6 +358,10 @@ func arm_gp_store_at(a &: Arm, rt: int, sz: int, base0: int, off0: i64):
 end
 
 func arm_gp_store(g &: Ng, a &: Arm, i: int, rt: int, sz: int):
+    if (sz >= 4 or sz == 1) and arm_ri_form(g, i) and g.mc.md[i] == (0 as i64):
+        ldst_reg(a, false, sz == 1, rt, arm_r(g.mc.mb[i]), arm_r(g.mc.mi[i]), a_lsz(g.mc.ms[i]))
+        ret
+    end
     mut base := 0
     mut off := 0 as i64
     arm_addr(g, a, i, base, off)
@@ -433,6 +464,10 @@ end
 func arm_narrow(a &: Arm, sz: int, ra: int, rb: int, imm: i64, use_imm: bool, test: bool):
     sh := 32 - 8 * sz
     arm_dps(a, 13, false, AIP, 0, ra, 0, sh)
+    if (test and not use_imm and ra == rb) or (use_imm and not test and ((imm << (sh as i64)) & (0xFFFFFFFF as i64)) == (0 as i64)):
+        x_cmp0(a, AIP)
+        ret
+    end
     if use_imm:
         x_mov_imm(a, ALR, imm << (sh as i64))
     else:
@@ -452,6 +487,14 @@ func arm_narrow_test(a &: Arm, sz: int, r: int):
 end
 
 func arm_alu(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, rm: int, sz: int):
+    if op == ALU_SBBCMP:
+        arm_dpr(a, 6, true, AIP, rn, rm)
+        ret
+    end
+    if op == ALU_ADDCMP:
+        arm_dpr(a, 11, true, 0, rn, rm)
+        ret
+    end
     fl := flags_needed(g, i)
     aop := k_arm_alu[op]
     if op == ALU_CMP:
@@ -460,6 +503,10 @@ func arm_alu(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, rm: int, sz: 
             ret
         end
         arm_dpr(a, 10, true, 0, rn, rm)
+        ret
+    end
+    if op == ALU_SBB or op == ALU_ADC:
+        arm_dpr(a, aop, true, rd, rn, rm)
         ret
     end
     if op == ALU_ADD or op == ALU_SUB:
@@ -481,7 +528,18 @@ end
 
 func arm_alu_imm(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, imm0: i64, sz: int, scratch: int):
     imm := norm32(imm0)
+    if op == ALU_ADDCMP:
+        ec := arm_imm(imm)
+        if ec >= 0:
+            arm_dp(a, ARM_AL, 11, true, rn, 0, ec as i64, true)
+        else:
+            x_mov_imm(a, scratch, imm)
+            arm_dpr(a, 11, true, 0, rn, scratch)
+        end
+        ret
+    end
     fl := flags_needed(g, i)
+    arith := op == ALU_ADD or op == ALU_SUB or op == ALU_ADC or op == ALU_SBB
     if op == ALU_CMP:
         if sz < 4:
             arm_narrow(a, sz, rn, 0, imm, true, false)
@@ -499,19 +557,19 @@ func arm_alu_imm(g &: Ng, a &: Arm, i: int, op: int, rd: int, rn: int, imm0: i64
     aop := k_arm_alu[op]
     e2 := arm_imm(imm)
     if e2 >= 0 and op != ALU_CMP:
-        arm_dp(a, ARM_AL, aop, fl and sz >= 4 and (op == ALU_ADD or op == ALU_SUB), rn, rd, e2 as i64, true)
+        arm_dp(a, ARM_AL, aop, fl and sz >= 4 and arith, rn, rd, e2 as i64, true)
     else (op == ALU_ADD or op == ALU_SUB) and not fl and arm_imm(0 - imm) >= 0:
         arm_dp(a, ARM_AL, op == ALU_ADD ? 2 : 4, false, rn, rd, arm_imm(0 - imm) as i64, true)
     else op == ALU_AND and arm_imm(~imm) >= 0:
         arm_dp(a, ARM_AL, 14, false, rn, rd, arm_imm(~imm) as i64, true)
     else:
         x_mov_imm(a, scratch, imm)
-        arm_dpr(a, aop, fl and sz >= 4 and (op == ALU_ADD or op == ALU_SUB), rd, rn, scratch)
+        arm_dpr(a, aop, fl and sz >= 4 and arith, rd, rn, scratch)
     end
     if fl:
         if sz < 4:
             arm_narrow_test(a, sz, rd)
-        else op != ALU_ADD and op != ALU_SUB:
+        else not arith:
             x_cmp0(a, rd)
         end
     end
@@ -771,13 +829,20 @@ func arm_ins(g &: Ng, a &: Arm, i: int):
         end
         M_ALU_MR, M_ALU_MI:
             c := g.mc.cc[i]
-            arm_addr_reg(g, a, i, AIP)
-            if sz >= 4 or sz == 1:
-                ldst_word(a, true, sz == 1, ALR, AIP, 0 as i64)
+            mut mbase := AIP
+            mut moff := 0 as i64
+            if c != ALU_CMP and c != ALU_SBBCMP and c != ALU_ADDCMP and op == M_ALU_MI and arm_imm(norm32(imm)) < 0:
+                arm_addr_reg(g, a, i, AIP)
             else:
-                ldst_half(a, true, 11, ALR, AIP, 0 as i64)
+                arm_addr(g, a, i, mbase, moff)
+                arm_fit(a, mbase, moff, (sz >= 4 or sz == 1) ? (4095 as i64) : (255 as i64), 1 as i64)
             end
-            if c == ALU_CMP:
+            if sz >= 4 or sz == 1:
+                ldst_word(a, true, sz == 1, ALR, mbase, moff)
+            else:
+                ldst_half(a, true, 11, ALR, mbase, moff)
+            end
+            if c == ALU_CMP or c == ALU_SBBCMP or c == ALU_ADDCMP:
                 if op == M_ALU_MR:
                     arm_alu(g, a, i, c, ALR, ALR, arm_r(r1), sz)
                 else:
@@ -785,11 +850,12 @@ func arm_ins(g &: Ng, a &: Arm, i: int):
                         arm_narrow(a, sz, ALR, 0, imm, true, false)
                     else:
                         e := arm_imm(norm32(imm))
+                        cmpop := c == ALU_ADDCMP ? 11 : 10
                         if e >= 0:
-                            arm_dp(a, ARM_AL, 10, true, ALR, 0, e as i64, true)
+                            arm_dp(a, ARM_AL, cmpop, true, ALR, 0, e as i64, true)
                         else:
                             x_mov_imm(a, AIP, imm)
-                            arm_dpr(a, 10, true, 0, ALR, AIP)
+                            arm_dpr(a, cmpop, true, 0, ALR, AIP)
                         end
                     end
                 end
@@ -812,9 +878,9 @@ func arm_ins(g &: Ng, a &: Arm, i: int):
                 end
             end
             if sz >= 4 or sz == 1:
-                ldst_word(a, false, sz == 1, ALR, AIP, 0 as i64)
+                ldst_word(a, false, sz == 1, ALR, mbase, moff)
             else:
-                ldst_half(a, false, 11, ALR, AIP, 0 as i64)
+                ldst_half(a, false, 11, ALR, mbase, moff)
             end
             if fl and not setf:
                 if sz < 4:

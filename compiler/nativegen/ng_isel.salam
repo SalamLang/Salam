@@ -125,7 +125,7 @@ func sel_scalar(g &: Ng, t: int): bool:
 end
 
 func cond_only(g &: Ng, v: int): bool:
-    ret v >= 0 and v < g.v_cu.len() and g.v_kind[v] == VK_INS and g.v_cu[v] == g.v_uses[v] and g.i_op[g.v_def[v]] == OP_ICMP
+    ret v >= 0 and v < g.v_cu.len() and g.v_kind[v] == VK_INS and g.v_cu[v] == g.v_uses[v] and (g.i_op[g.v_def[v]] == OP_ICMP or g.i_op[g.v_def[v]] == OP_CMP64)
 end
 
 func def_op(g &: Ng, v: int): int:
@@ -1218,7 +1218,68 @@ func and_test_ok(g &: Ng, i: int): bool:
     ret false
 end
 
+func emit_cmp64(g &: Ng, i: int): int:
+    rl := use_reg(g, g.i_a[i])
+    rl2 := use_reg(g, g.i_b[i])
+    rh2 := use_reg(g, g.i_d[i] as int)
+    if g.arch == NG_ARCH_ARM:
+        rh := use_reg(g, g.i_c[i])
+        _p2 := e_alu(g, ALU_CMP, 4, rl, rl2)
+        _s2 := e_alu(g, ALU_SBBCMP, 4, rh, rh2)
+        ret icmp_cc(g.i_x[i])
+    end
+    t := gpr(g)
+    _c := e_copy(g, t, use_reg(g, g.i_c[i]))
+    _p := e_alu(g, ALU_CMP, 4, rl, rl2)
+    _s := e_alu(g, ALU_SBB, 4, t, rh2)
+    ret icmp_cc(g.i_x[i])
+end
+
+func isel_adc64(g &: Ng, i: int):
+    y := g.i_b[i]
+    yimm := g.v_kind[y] == VK_INT and is_imm32(g.v_i[y])
+    rx := use_reg(g, g.i_a[i])
+    mut ry := 0 - 1
+    if not yimm:
+        ry = use_reg(g, y)
+    end
+    ra := use_reg(g, g.i_c[i])
+    dv := g.i_d[i] as int
+    dimm := g.v_kind[dv] == VK_INT and is_imm32(g.v_i[dv])
+    mut rb := 0 - 1
+    if not dimm:
+        rb = use_reg(g, dv)
+    end
+    r := gpr(g)
+    _c := e_copy(g, r, rx)
+    sb := g.i_x[i] != 0
+    mut cop := ALU_ADD
+    mut cr := ra
+    if sb:
+        cop = ALU_CMP
+    else g.arch == NG_ARCH_ARM:
+        cop = ALU_ADDCMP
+    else:
+        cr = gpr(g)
+        _c2 := e_copy(g, cr, ra)
+    end
+    if dimm:
+        _p := e_alui(g, cop, 4, cr, g.v_i[dv])
+    else:
+        _p2 := e_alu(g, cop, 4, cr, rb)
+    end
+    if yimm:
+        _s := e_alui(g, sb ? ALU_SBB : ALU_ADC, 4, r, g.v_i[y])
+    else:
+        _s2 := e_alu(g, sb ? ALU_SBB : ALU_ADC, 4, r, ry)
+    end
+    set_res(g, i, r)
+end
+
 func emit_icmp(g &: Ng, i: int): int:
+    if g.i_op[i] == OP_CMP64:
+        ret emit_cmp64(g, i)
+    end
     mut a := g.i_a[i]
     mut b := g.i_b[i]
     mut p := g.i_x[i]
@@ -1355,7 +1416,7 @@ func fused_cond(g &: Ng, br: int): int:
     op := g.i_op[d]
     if g.i_op[br] == OP_SELECT:
         t := g.i_ty[br]
-        if op == OP_ICMP and sel_scalar(g, t):
+        if (op == OP_ICMP or op == OP_CMP64) and sel_scalar(g, t):
             ret d
         end
         if op == OP_FCMP and sel_scalar(g, t):
@@ -1366,7 +1427,7 @@ func fused_cond(g &: Ng, br: int): int:
         end
         ret 0 - 1
     end
-    if op == OP_ICMP:
+    if op == OP_ICMP or op == OP_CMP64:
         ret d
     end
     if op == OP_FCMP:
@@ -1392,7 +1453,7 @@ func isel_cbr(g &: Ng, i: int, b: int):
         ret
     end
     d := fused_cond(g, i)
-    if d >= 0 and g.i_op[d] == OP_ICMP:
+    if d >= 0 and (g.i_op[d] == OP_ICMP or g.i_op[d] == OP_CMP64):
         cc := emit_icmp(g, d)
         _j3 := e_jcc(g, cc, tb)
         _j4 := e_jmp(g, fb)
@@ -2404,6 +2465,32 @@ func div_const(g &: Ng, i: int, d: i64): bool:
         ret true
     end
     if g.wsz == 4:
+        mut nb4 := bits - known_lz(g, g.i_a[i], 0)
+        if nb4 > 32:
+            nb4 = 32
+        end
+        if nb4 < 1:
+            nb4 = 1
+        end
+        mut p4 := 32
+        until p4 <= 32 + nb4 and p4 < 64:
+            m4 := (((1 as u64) << (p4 as u64)) + du - (1 as u64)) / du
+            if m4 < ((1 as u64) << (32 as u64)) and m4 * du - ((1 as u64) << (p4 as u64)) <= ((1 as u64) << ((p4 - nb4) as u64)):
+                nu4 := ext64(g, g.i_a[i], t, false)
+                q4 := mulhi(g, nu4, m4 as i64, false)
+                if p4 > 32:
+                    e_shift(g, SH_SHR, 4, q4, p4 - 32)
+                end
+                share_quot(g, i, q4)
+                if isrem:
+                    set_res(g, i, rem_from_quot(g, nu4, q4, du as i64, 4))
+                else:
+                    set_res(g, i, q4)
+                end
+                ret true
+            end
+            p4 += 1
+        end
         mut lx := 0
         until ((1 as u64) << (lx as u64)) < du:
             lx += 1
@@ -2949,6 +3036,9 @@ func uses_val(g &: Ng, i: int, v: int): bool:
     if (m & 2) != 0 and g.i_b[i] == v: ret true end
     if (m & 4) != 0 and g.i_c[i] == v: ret true end
     op := g.i_op[i]
+    if (op == OP_CMP64 or op == OP_ADC64) and g.i_d[i] == v as i64:
+        ret true
+    end
     if op == OP_CALL:
         repeat g.i_pcount[i] in k:
             if g.pool[g.i_ps[i] + 3 * k] == v:
@@ -3653,12 +3743,14 @@ func insv_covers_all(g &: Ng, i: int): bool:
         ret false
     end
     mut seen := Vector {} as Vector<i64>
+    mut ssz := Vector {} as Vector<i64>
     mut j := i
-    repeat 2 * nf + 2:
+    repeat 4 * nf + 2:
         if j < 0 or g.i_op[j] != OP_INSV or g.i_ty[j] != t:
             break
         end
         seen.push(g.i_d[j])
+        ssz.push(tsize(g, g.i_x[j]) as i64)
         r := g.i_res[j]
         if r < 0 or g.v_uses[r] != 1:
             break
@@ -3677,17 +3769,25 @@ func insv_covers_all(g &: Ng, i: int): bool:
     mut all := true
     repeat nf in f:
         fo := g.t_offs[g.t_fs[t] + f] as i64
-        mut hit := false
-        each sv in seen:
-            if sv == fo:
-                hit = true
+        fe := fo + (tsize(g, g.t_pool[g.t_fs[t] + f]) as i64)
+        mut pos := fo
+        mut hit := true
+        until hit and pos < fe:
+            hit = false
+            repeat seen.len() in q:
+                if seen[q] == pos and ssz[q] > (0 as i64):
+                    pos = pos + ssz[q]
+                    hit = true
+                    break
+                end
             end
         end
-        if not hit:
+        if pos < fe:
             all = false
         end
     end
     seen.free()
+    ssz.free()
     ret all
 end
 
@@ -4297,7 +4397,7 @@ func isel_ins(g &: Ng, i: int, b: int):
             end
             ret
         end
-        OP_ICMP:
+        OP_ICMP, OP_CMP64:
             if res_used(g, i) and not is_fused(g, i):
                 cc := emit_icmp(g, i)
                 r2 := gpr(g)
@@ -4333,9 +4433,27 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_CBR: isel_cbr(g, i, b) ret end
         OP_RET: isel_ret(g, i) ret end
+        OP_ADC64:
+            if res_used(g, i):
+                isel_adc64(g, i)
+            end
+            ret
+        end
+        OP_MULHU:
+            mra := use_reg(g, g.i_a[i])
+            mrb := use_reg(g, g.i_b[i])
+            _mc := e_copy(g, RAX, mra)
+            mh := e_rr(g, M_MULHI, 8, 0 - 1, mrb)
+            g.mc.cc[mh] = g.i_x[i] == 1 ? 1 : 0
+            mres := gpr(g)
+            _mr := e_copy(g, mres, RDX)
+            set_res(g, i, mres)
+            ret
+        end
         OP_RETHI:
             rh := gpr(g)
-            _ch := e_copy(g, rh, hi_reg(g))
+            xr := g.i_x[i]
+            _ch := e_copy(g, rh, xr == 1 ? RDX : (xr == 2 ? RBX : hi_reg(g)))
             set_res(g, i, rh)
             ret
         end

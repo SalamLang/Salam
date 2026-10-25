@@ -2710,6 +2710,55 @@ func lower_pow2_divs(g &: Ng): bool:
     ret changed
 end
 
+func nd_u32(g &: Ng, v: int, blk: int, min: i64): bool:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    ret val_range(g, v, blk, 0, lo, hi) and lo >= min and hi <= (0xFFFFFFFF as i64)
+end
+
+func nd_to32(g &: Ng, at: int, v: int): int:
+    if is_cint(g, v):
+        ret const_int(g, T_I32, norm_int(g, T_I64, g.v_i[v]))
+    end
+    r := p2_ins(g, at, OP_TRUNC, T_I32, v, 0 - 1)
+    g.i_x[g.v_def[r]] = T_I64
+    ret r
+end
+
+func narrow_div64(g &: Ng): bool:
+    count_uses(g)
+    build_dom(g)
+    mut changed := false
+    repl_grow(g)
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            op := g.i_op[i]
+            if (op == OP_UDIV or op == OP_UREM or op == OP_SDIV or op == OP_SREM) and g.i_ty[i] == T_I64 and g.i_res[i] >= 0:
+                g.i_a[i] = resolve(g, g.i_a[i])
+                g.i_b[i] = resolve(g, g.i_b[i])
+            end
+            if (op == OP_UDIV or op == OP_UREM or op == OP_SDIV or op == OP_SREM) and g.i_ty[i] == T_I64 and g.i_res[i] >= 0 and nd_u32(g, g.i_a[i], b, 0 as i64) and nd_u32(g, g.i_b[i], b, 1 as i64):
+                a32 := nd_to32(g, i, g.i_a[i])
+                b32 := nd_to32(g, i, g.i_b[i])
+                q := p2_ins(g, i, (op == OP_UDIV or op == OP_SDIV) ? OP_UDIV : OP_UREM, T_I32, a32, b32)
+                r := p2_ins(g, i, OP_ZEXT, T_I64, q, 0 - 1)
+                g.i_x[g.v_def[r]] = T_I32
+                repl_grow(g)
+                g.v_repl[g.i_res[i]] = r
+                ins_unlink(g, i)
+                changed = true
+            end
+            i = nx
+        end
+    end
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end
+
 func bx_def(g &: Ng, v: int, op: int): int:
     if v < 0 or v >= g.v_uses.len() or g.v_kind[v] != VK_INS or not one_use(g, v):
         ret 0 - 1
@@ -3036,7 +3085,7 @@ func optimize(g &: Ng):
             opt_rounds(g)
         end
     end
-    if not g.off_widen and widen_ivs(g):
+    if not g.off_widen and g.wsz == 8 and widen_ivs(g):
         opt_rounds(g)
     end
     if not g.off_lsr and lsr(g):

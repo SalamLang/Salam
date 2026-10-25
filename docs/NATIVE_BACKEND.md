@@ -84,13 +84,23 @@ builds check explicitly, as on every target).
 The `i686` targets reuse the x86-64 pipeline with three additions.
 
 - Before instruction selection, `ng_legal.salam` splits every 64-bit integer
-  into a pair of 32-bit halves: adds and subtracts carry through a compare,
-  shifts by a constant become two shifts and an `or`, compares test the high
-  halves first, loads and stores touch both words, and multiply, divide,
-  remainder, variable shifts and conversions between `i64` and floats call
-  the libgcc helpers (`__muldi3`, `__divdi3`, `__floatdidf`, ...). A call that
-  returns an `i64` gets its high half from `edx`. 64-bit atomics call small
-  `lock cmpxchg8b` routines the backend writes into the object itself.
+  into a pair of 32-bit halves: shifts by a constant become two shifts and an
+  `or`, loads and stores touch both words, and a multiply becomes three 32-bit
+  multiplies (one when both operands are sign-extended 32-bit values). A
+  division or remainder by a constant uses a 64-bit magic multiply built from
+  32-bit pieces; a division whose operands range analysis proves fit in 32
+  bits becomes a 32-bit one. Other divisions, variable shifts and conversions
+  between `i64` and floats call the libgcc helpers (`__divdi3`,
+  `__floatdidf`, ...). A call that returns an `i64` gets its high half from
+  `edx`. 64-bit atomics call small `lock cmpxchg8b` routines the backend
+  writes into the object itself.
+- After the optimizer runs on the split code, an add or subtract whose carry
+  the legalizer spelled as a compare becomes `add`/`adc` (or `sub`/`sbb`),
+  and a 64-bit `<` or `>=` becomes `cmp` on the low halves plus `sbb` on the
+  high halves feeding one branch. Loop counters keep their 32-bit type here:
+  the pass that widens them to 64 bits for address arithmetic runs only on
+  the 64-bit targets, where it saves a sign extension instead of costing a
+  register pair.
 - Calls follow cdecl: every argument goes on the stack, floats come back in
   `st0` and are moved to an SSE register right away, so everything after the
   call uses SSE2 as on x86-64. SSE2 is therefore required (any x86 CPU since
@@ -141,7 +151,12 @@ lowers each machine instruction in `ng_arm.salam`, and like i686 it splits
   build, so their float arguments and results go through core registers.
 - There is no divide instruction in the baseline: division by a value calls
   `__aeabi_idiv`/`__aeabi_uidiv` (and the `mod` forms, whose remainder comes
-  back in `r1`); division by a constant still uses a multiply.
+  back in `r1`); division by a constant still uses a multiply. A 64-bit
+  division and remainder of the same operands share one `__aeabi_ldivmod`
+  call (quotient in `r0:r1`, remainder in `r2:r3`).
+- The 64-bit carry and compare chains use `cmn`/`adc` and `cmp`/`sbcs`, and
+  a word load or store with an index and no offset uses the scaled register
+  form (`ldr r0, [r1, r2, lsl #3]`).
 - Atomics are `ldrex`/`strex` loops between `dmb` barriers, borrowing a
   register with `push`/`pop` for the status word; 64-bit atomics call
   `ldrexd` routines the backend writes into the object.
@@ -559,11 +574,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   and `general` tests for `x86_64-apple-macos` and running them this way
   matches the expected output for every test outside that set.
 - `tools/bash/native-cross-check.sh <salam> aarch64-linux-musl qemu-aarch64`
-  builds the tests for AArch64, links them against a musl sysroot and runs
-  them under qemu. Every test passes except those needing `-D` flags, a
-  database library or a trapping release-mode division, and the
-  native-built compiler for AArch64 reproduces the x86-64 compiler's IR for
-  the whole compiler.
+  builds the tests for another target (also `i686-linux-musl` with `env` as
+  the runner, `arm-linux-musleabihf` and `riscv64-linux-musl`), links them
+  against a musl sysroot and runs them under qemu. It skips the tests that
+  need `-D` flags, a database library or a trapping release-mode division,
+  plus on 32-bit targets the two that assume a 64-bit `usize` or an `i64`
+  `abs()`; everything else must pass, and the native backend gate runs it for
+  all four targets on every change. The native-built compiler for AArch64
+  reproduces the x86-64 compiler's IR for the whole compiler.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.
@@ -572,7 +590,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

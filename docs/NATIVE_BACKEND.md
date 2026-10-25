@@ -103,7 +103,9 @@ llvm-mingw's aarch64 runtime the built-in linker needs under
 itself. On a Windows on Arm host with no `--backend`, the compiler uses the
 native backend, since neither LLVM nor tcc ship for that host. The gate unpacks
 the package on the runner and builds and runs the `llvm` tests with it
-(`tools/bash/native-host-check.sh`), with nothing else installed.
+(`tools/bash/native-host-check.sh`), with nothing else installed. Releases
+ship it as `salam-<version>-windows-arm64.zip` (and `.tar.gz`), smoke-tested
+on a `windows-11-arm` runner before publishing.
 
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables (gdb walks the frames from the prologues), and

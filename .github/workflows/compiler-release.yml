@@ -1556,6 +1556,77 @@ jobs:
           name: salam-windows-i686
           path: salam.exe
 
+  build-windows-arm64:
+    if: needs.changes.outputs.run == 'true'
+    name: Build Salam for Windows on Arm (native backend, built-in linker)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    needs: [changes, build-linux]
+    env:
+      LLVM_MINGW: llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use this run's Linux salam as the cross-compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-linux
+          path: /tmp/host-salam
+      - name: Fetch llvm-mingw
+        run: |
+          set -eu
+          chmod +x /tmp/host-salam/salam
+          curl -fsSL --retry 3 -o /tmp/llvm-mingw-arm64.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/${LLVM_MINGW}.tar.xz"
+          echo "55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335  /tmp/llvm-mingw-arm64.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/llvm-mingw-arm64.tar.xz -C /tmp
+      - name: Package salam.exe, std and the aarch64 runtime
+        run: |
+          set -eu
+          SALAM_STD="$PWD/std" sh tools/bash/package-winarm.sh /tmp/host-salam/salam "/tmp/${LLVM_MINGW}" salam-windows-arm64
+          cp VERSION salam-windows-arm64/
+          file salam-windows-arm64/salam.exe
+      - name: Zip the Windows on Arm bundle
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          zip -qr "salam-${VERSION}-windows-arm64.zip" salam-windows-arm64
+          tar -czf "salam-${VERSION}-windows-arm64.tar.gz" salam-windows-arm64
+          ls -la "salam-${VERSION}-windows-arm64.zip" "salam-${VERSION}-windows-arm64.tar.gz"
+      - name: Upload the Windows on Arm bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-windows-arm64-bundle
+          path: |
+            salam-*-windows-arm64.zip
+            salam-*-windows-arm64.tar.gz
+
+  smoke-windows-arm64:
+    if: needs.changes.outputs.run == 'true'
+    name: Smoke-test the Windows on Arm bundle on Windows on Arm
+    runs-on: windows-11-arm
+    continue-on-error: true
+    needs: [changes, build-windows-arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-arm64-bundle
+          path: bundle
+      - name: Build and run programs with nothing else installed
+        shell: bash
+        run: |
+          set -eu
+          cd bundle
+          tar -xzf salam-*-windows-arm64.tar.gz
+          ./salam-windows-arm64/salam.exe version
+          sh ../tools/bash/native-host-check.sh salam-windows-arm64/salam.exe ../tests/en/llvm/ll_fib.salam ../tests/en/llvm/ll_hashmap.salam ../tests/en/llvm/ll_float.salam
+
   build-linux-i686:
     needs: changes
     if: needs.changes.outputs.run == 'true'
@@ -2044,6 +2115,7 @@ jobs:
         build-macos,
         build-windows,
         build-windows-i686,
+        build-windows-arm64,
         build-linux-i686,
         build-linux-armhf,
         build-linux-aarch64,
@@ -2141,6 +2213,12 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: salam-windows-i686-bundle
+          path: ./release
+      - name: Download Windows on Arm bundle
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: salam-windows-arm64-bundle
           path: ./release
       - name: Download Linux i686 binary
         continue-on-error: true
@@ -2615,6 +2693,7 @@ jobs:
         build-macos,
         build-windows,
         build-windows-i686,
+        build-windows-arm64,
         build-linux-i686,
         build-linux-armhf,
         build-linux-aarch64,

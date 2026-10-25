@@ -1,6 +1,19 @@
 package nativegen
 
 func coff_rtype(g &: Ng, t: int): int:
+    if g.arch == NG_ARCH_A64:
+        switch t:
+            R_ABS64: ret 14 end
+            R_ABS32: ret 1 end
+            R_ADDR32NB: ret 2 end
+            R_PC32: ret 17 end
+            R_A64_CALL26: ret 3 end
+            R_A64_ADRP: ret 4 end
+            R_A64_ADDLO: ret 6 end
+        end
+        fail(g, "native backend: relocation " + str.FromInt(t as i64) + " has no ARM64 COFF form")
+        ret 0
+    end
     if g.arch == NG_ARCH_X86:
         if t == R_ABS32: ret 6 end
         if t == R_ADDR32NB: ret 7 end
@@ -98,6 +111,21 @@ func put_addend(g &: Ng, sec: int, off: int, v: i64, n: int):
     end
 end
 
+func coff_a64_addend(g &: Ng, off: int, t: int, v: i64):
+    if v == (0 as i64):
+        ret
+    end
+    mut w := (g.s_text[off] as i64) | ((g.s_text[off + 1] as i64) << (8 as i64)) | ((g.s_text[off + 2] as i64) << (16 as i64)) | ((g.s_text[off + 3] as i64) << (24 as i64))
+    if t == R_A64_CALL26:
+        w = (w & (0xFC000000 as i64)) | ((v >> (2 as i64)) & (0x3FFFFFF as i64))
+    else t == R_A64_ADRP:
+        w = (w & (0x9F00001F as i64)) | ((v & (3 as i64)) << (29 as i64)) | (((v >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+    else:
+        w = (w & (0xFFC003FF as i64)) | ((v & (0xFFF as i64)) << (10 as i64))
+    end
+    put_addend(g, SEC_TEXT, off, w, 4)
+end
+
 func coff_sym_bytes(g &: Ng, s: int): Vector<u8>:
     mut v := Vector {} as Vector<u8>
     if g.arch == NG_ARCH_X86:
@@ -179,6 +207,8 @@ func write_coff(g &: Ng, path: str): bool:
         t := g.r_type[r]
         if t == R_ABS64:
             put_addend(g, sec, g.r_off[r], g.r_add[r], 8)
+        else t == R_A64_CALL26 or t == R_A64_ADRP or t == R_A64_ADDLO:
+            coff_a64_addend(g, g.r_off[r], t, g.r_add[r])
         else t == R_ADDR32NB or t == R_ABS32:
             put_addend(g, sec, g.r_off[r], g.r_add[r], 4)
         else:
@@ -248,7 +278,7 @@ func write_coff(g &: Ng, path: str): bool:
     ob_bytes(o, symtab.b)
     ob_le(o, (strtab.b.len() + 4) as i64, 4)
     ob_bytes(o, strtab.b)
-    put_le(o, 0, (g.arch == NG_ARCH_X86 ? 0x14C : 0x8664) as i64, 2)
+    put_le(o, 0, (g.arch == NG_ARCH_X86 ? 0x14C : (g.arch == NG_ARCH_A64 ? 0xAA64 : 0x8664)) as i64, 2)
     put_le(o, 2, nsec as i64, 2)
     put_le(o, 8, sym_off as i64, 4)
     put_le(o, 12, count as i64, 4)

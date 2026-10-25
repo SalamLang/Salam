@@ -398,6 +398,12 @@ func a_addr(g &: Ng, a &: A64, i: int, base &: int, off &: i64):
         off = g.mc.md[i]
         ret
     end
+    if k == MK_RIP and g.os == NG_OS_WINDOWS or k == MK_GOT and g.os == NG_OS_WINDOWS:
+        a_sym_addr(a, g.mc.msym[i], AX16)
+        base = AX16
+        off = g.mc.md[i]
+        ret
+    end
     if k == MK_RIP:
         arel(a, g.mc.msym[i], R_A64_ADRP, g.mc.md[i])
         aw(a, (0x90000000 as i64) | (AX16 as i64))
@@ -680,10 +686,23 @@ func a_fop(cc: int, sz: int): i64:
     ret b
 end
 
+func a_sym_addr(a &: A64, sym: int, rd: int):
+    arel(a, sym, R_A64_ADRP, 0 as i64)
+    aw(a, (0x90000000 as i64) | (rd as i64))
+    arel(a, sym, R_A64_ADDLO, 0 as i64)
+    aw(a, (0x91000000 as i64) | rd_rn_rm(rd, rd, 0))
+end
+
 func a_prologue(g &: Ng, a &: A64):
     aw(a, 0xA9BF7BFD as i64)
     aw(a, 0x910003FD as i64)
-    if a.total > 0:
+    if a.total >= 4096 and g.os == NG_OS_WINDOWS:
+        a_mov_imm(a, AX15, (a.total / 16) as i64, true)
+        arel(a, g.sym_chkstk, R_A64_CALL26, 0 as i64)
+        g.sy_used[g.sym_chkstk] = true
+        aw(a, 0x94000000 as i64)
+        aw(a, 0xCB2F73FF as i64)
+    else a.total > 0:
         a_addsub_imm(a, ASP, ASP, a.total as i64, true, false, true)
     end
     repeat a.ngp in k:
@@ -736,6 +755,10 @@ func a64_ins(g &: Ng, a &: A64, i: int):
             ret
         end
         M_LDGOT:
+            if g.os == NG_OS_WINDOWS:
+                a_sym_addr(a, g.mc.msym[i], axr(r0))
+                ret
+            end
             arel(a, g.mc.msym[i], R_A64_GOTPAGE, 0 as i64)
             aw(a, (0x90000000 as i64) | (axr(r0) as i64))
             arel(a, g.mc.msym[i], R_A64_GOTLO, 0 as i64)

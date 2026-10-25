@@ -413,9 +413,8 @@ runs them under wine. It runs once with each linker; outputs must match, and
 ## Later phases
 
 1. **Dynamic ELF against glibc**: see phase 2 above.
-2. **PE/COFF for Windows**: reading mingw import libraries (short import
-   members), `.idata` import tables, base relocations, `.pdata`/`.xdata`
-   kept as produced, subsystem and stack reserve in the optional header.
+2. **PE/COFF for Windows**: done, including short import members and ARM64
+   (see "ARM64 PE and short import members" below).
 3. **Mach-O** for macOS: done, see phase 4 below.
 4. **`.eh_frame_hdr`** is done: before layout the linker counts the FDEs in
    the live `.eh_frame` inputs and reserves the header and one program
@@ -489,6 +488,41 @@ point is `_mainCRTStartup`, the image base is `0x400000`, absolute
 addresses get `HIGHLOW` base relocations, constructor lists use 4-byte
 entries, and the optional header is the 224-byte PE32 form with a
 `BaseOfData` field and a 24-byte TLS directory.
+
+### ARM64 PE and short import members
+
+ARM64 COFF objects (machine `0xAA64`) use their own relocations. `ADDR64`,
+`ADDR32`, `ADDR32NB`, `REL32`, `SECREL` and `SECTION` map onto the x64
+handling; `BRANCH26`, `BRANCH19`, `BRANCH14`, `PAGEBASE_REL21`, `REL21`,
+`PAGEOFFSET_12A` and `PAGEOFFSET_12L` patch the instruction fields, reading
+the addend from the same fields first, as `lld-link` does. A branch that does
+not reach is an error; there are no range-extension thunks. The optional
+header says Windows 6.0 for ARM64, the oldest version `lld-link` writes.
+
+llvm-mingw's import libraries hold short import members (the 20-byte
+`0x0000 0xFFFF` header, then the symbol and DLL names) instead of the
+complete `.idata` objects GNU `dlltool` writes. Their archives are also
+ARM64X hybrids: the regular symbol index lists the native ARM64 members and
+the ARM64EC ones sit behind `/<ECSYMBOLS>/`, so reading only the regular
+index picks the right ones. For every short import that resolves a symbol
+the reader builds a small COFF object in memory and reads it like any other:
+
+- `.idata$5` and `.idata$4` hold the IAT and lookup-table entries, an
+  `ADDR32NB` to the hint/name entry or the ordinal with the top bit set,
+- `.idata$6` holds the hint and the import name, derived from the name type
+  (as is, without the `?`/`@`/`_` prefix, undecorated, or the explicit
+  export name),
+- `__imp_<symbol>` names the IAT entry and, for code, `<symbol>` names a
+  thunk: `adrp x16`/`ldr x16`/`br x16` on ARM64 and `jmp [__imp_<symbol>]`
+  on x64 and i386.
+
+The first import from each DLL also adds a head object (the `.idata$2`
+descriptor, empty `.idata$4`/`.idata$5` sections that mark where its tables
+start, and the DLL name in `.idata$7`) and a tail of null entries. Their
+labels end in `#0`, `#1<symbol>` and `#2`, so the same label sort that orders
+GNU `dlltool` members keeps each DLL's tables contiguous. Linking x64 and
+i686 programs against llvm-mingw's UCRT libraries this way and running them
+under wine passes the whole `llvm` test group.
 
 ### Mach-O
 

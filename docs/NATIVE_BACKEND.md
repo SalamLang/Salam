@@ -74,6 +74,23 @@ registers), so a call to `printf` places its arguments after the fixed ones
 in memory. Every test, compiled for `arm64-apple-macos` and linked by both
 the built-in linker and `ld64.lld`, disassembles to the same instructions.
 
+Windows on Arm (`aarch64-w64-windows-gnu`) writes the same code into an
+ARM64 COFF object. COFF relocations carry no addend, so an offset is written
+into the instruction itself (the `adrp` immediate, the `add` immediate, the
+branch field), and a global with an offset is addressed as `adrp`/`add` of
+the symbol plus the offset in the load or store. Windows has no GOT: the
+address of an external comes from `adrp`/`add` as well, which yields the
+import thunk for a function from a DLL. A frame of 4 KiB or more is probed
+first (`mov x15, #size/16; bl __chkstk; sub sp, sp, x15, uxtx #4`), and a
+call to a variadic function passes floating-point arguments in integer
+registers, as the Windows ARM64 ABI requires. `x18` belongs to the OS and
+the allocator never uses it. The runtime is llvm-mingw (UCRT): the built-in
+linker finds it through `aarch64-w64-mingw32-clang` on `PATH` or
+`SALAM_LLVM_MINGW`, and `--linker=system` links with that clang instead.
+The native backend gate builds the `llvm` tests both ways and runs them on a
+`windows-11-arm` runner. There is no `.pdata` for ARM64 yet, so Windows can
+run the programs but cannot unwind through their frames.
+
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables (gdb walks the frames from the prologues), and
 in release builds an integer

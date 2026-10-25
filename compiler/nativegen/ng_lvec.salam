@@ -1,0 +1,1179 @@
+package nativegen
+
+const LV_NONE := 0
+const LV_IDX := 1
+const LV_ADDR := 2
+const LV_VEC := 3
+const LV_RED := 4
+const LV_SKIP := 5
+const LV_NARROW := 6
+
+pub struct Lv:
+    pub h: int = 0 - 1
+    pub w: int = 0 - 1
+    pub latch: int = 0 - 1
+    pub pre: int = 0 - 1
+    pub exitb: int = 0 - 1
+    pub shape: int = 0
+    pub ivp: int = 0 - 1
+    pub ivn: int = 0 - 1
+    pub cmp: int = 0 - 1
+    pub lim: int = 0 - 1
+    pub sle: bool = false
+    pub lane: int = 0
+    pub vf: int = 0
+    pub cls: Vector<int> = Vector {}
+    pub vmap: Vector<int> = Vector {}
+    pub reds: Vector<int> = Vector {}
+    pub rnext: Vector<int> = Vector {}
+    pub body: Vector<int> = Vector {}
+    pub stores: Vector<int> = Vector {}
+    pub loads: Vector<int> = Vector {}
+    pub checks: Vector<int> = Vector {}
+    pub bc_s: Vector<int> = Vector {}
+    pub bc_v: Vector<int> = Vector {}
+    pub inv: Vector<bool> = Vector {}
+end
+
+func lv_in(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b == r.h or b == r.w or b == r.latch
+end
+
+func lv_inv(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_FLT or k == VK_ZERO or k == VK_ARG or k == VK_GLB:
+        ret true
+    end
+    ret k == VK_INS and not lv_in(g, r, v)
+end
+
+func lv_lane_of(t: int): int:
+    if t == T_I32 or t == T_F32:
+        ret 4
+    end
+    if t == T_I64 or t == T_F64:
+        ret 8
+    end
+    ret 0
+end
+
+func lv_vty(t: int, lane: int): int:
+    if t == T_I32: ret T_V4I32 end
+    if t == T_I64: ret T_V2I64 end
+    if t == T_F32: ret T_V4F32 end
+    if t == T_F64: ret T_V2F64 end
+    if t == T_I1:
+        ret lane == 4 ? T_V4I32 : T_V2I64
+    end
+    ret 0 - 1
+end
+
+func lv_set_lane(r &: Lv, l: int): bool:
+    if l == 0:
+        ret false
+    end
+    if r.lane == 0:
+        r.lane = l
+        ret true
+    end
+    ret r.lane == l
+end
+
+func lv_cls(r &: Lv, v: int): int:
+    if v < 0 or v >= r.cls.len():
+        ret LV_NONE
+    end
+    ret r.cls[v]
+end
+
+func lv_data_ok(g &: Ng, r &: Lv, v: int): bool:
+    if lv_inv(g, r, v):
+        ret not is_agg(g, g.v_ty[v]) and not is_vec(g, g.v_ty[v])
+    end
+    ret lv_cls(r, v) == LV_VEC
+end
+
+func lv_idx_val(g &: Ng, r &: Lv, v: int): bool:
+    if v == g.i_res[r.ivp]:
+        ret true
+    end
+    ret lv_cls(r, v) == LV_IDX
+end
+
+func lv_classify(g &: Ng, r &: Lv, i: int): bool:
+    op := g.i_op[i]
+    res := g.i_res[i]
+    t := g.i_ty[i]
+    if i == r.ivn:
+        r.cls[res] = LV_IDX
+        ret true
+    end
+    if op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC:
+        if lv_idx_val(g, r, g.i_a[i]):
+            r.cls[res] = LV_IDX
+            ret true
+        end
+        if op == OP_ZEXT and t == T_I32 and lv_cls(r, g.i_a[i]) == LV_VEC and g.v_ty[g.i_a[i]] == T_I1:
+            ret false
+        end
+        if op == OP_TRUNC and t == T_I8 and lv_cls(r, g.i_a[i]) == LV_VEC and g.v_ty[g.i_a[i]] == T_I32:
+            r.cls[res] = LV_NARROW
+            ret lv_set_lane(r, 4)
+        end
+        if op == OP_ZEXT and t == T_I32 and g.v_kind[g.i_a[i]] == VK_INS and g.i_op[g.v_def[g.i_a[i]]] == OP_LOAD and g.v_ty[g.i_a[i]] == T_I8 and lv_cls(r, g.i_a[i]) == LV_SKIP:
+            r.cls[res] = LV_VEC
+            ret lv_set_lane(r, 4)
+        end
+        ret false
+    end
+    if (op == OP_ADD or op == OP_SUB) and (g.i_a[i] == g.i_res[r.ivp] or lv_cls(r, g.i_a[i]) == LV_IDX) and is_cint(g, g.i_b[i]):
+        r.cls[res] = LV_IDX
+        ret true
+    end
+    if op == OP_ADDR:
+        if not lv_inv(g, r, g.i_a[i]) or g.i_b[i] < 0 or not lv_idx_val(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_ADDR
+        ret true
+    end
+    if op == OP_LOAD:
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_a[i]) != LV_ADDR:
+            ret false
+        end
+        ad := g.v_def[g.i_a[i]]
+        if t == T_I8:
+            if g.i_x[ad] != 1:
+                ret false
+            end
+            r.cls[res] = LV_SKIP
+            r.loads.push(i)
+            ret true
+        end
+        if (g.i_x[ad] as i64) != (tsize(g, t) as i64) or not lv_set_lane(r, lv_lane_of(t)):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        r.loads.push(i)
+        ret true
+    end
+    if op == OP_STORE:
+        sc := lv_cls(r, g.i_a[i])
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_b[i]) != LV_ADDR or (sc != LV_VEC and sc != LV_NARROW):
+            ret false
+        end
+        st := g.v_ty[g.i_a[i]]
+        ad2 := g.v_def[g.i_b[i]]
+        if sc == LV_NARROW:
+            if g.i_x[ad2] != 1:
+                ret false
+            end
+            r.stores.push(i)
+            ret lv_set_lane(r, 4)
+        end
+        if (g.i_x[ad2] as i64) != (tsize(g, st) as i64) or not lv_set_lane(r, lv_lane_of(st)):
+            ret false
+        end
+        r.stores.push(i)
+        ret true
+    end
+    if res < 0:
+        ret false
+    end
+    if op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR:
+        if t == T_I1:
+            if op == OP_ADD or op == OP_SUB or lv_cls(r, g.i_a[i]) != LV_VEC:
+                ret false
+            end
+            if not (lv_cls(r, g.i_b[i]) == LV_VEC or (is_cint(g, g.i_b[i]) and op == OP_XOR)):
+                ret false
+            end
+            r.cls[res] = LV_VEC
+            ret true
+        end
+        if (t != T_I32 and t != T_I64) or not lv_data_ok(g, r, g.i_a[i]) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
+        if (t != T_I32 and t != T_I64) or not lv_data_ok(g, r, g.i_a[i]) or not is_cint(g, g.i_b[i]):
+            ret false
+        end
+        if op == OP_ASHR and t == T_I64:
+            ret false
+        end
+        k := g.v_i[g.i_b[i]]
+        if k < (0 as i64) or k >= (int_bits(g, t) as i64):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_FADD or op == OP_FSUB or op == OP_FMUL or op == OP_FDIV:
+        if (t != T_F32 and t != T_F64) or not lv_data_ok(g, r, g.i_a[i]) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    if op == OP_ICMP:
+        opty := g.v_ty[g.i_a[i]]
+        p := g.i_x[i]
+        if opty != T_I32 or p > CC_SGE or not lv_data_ok(g, r, g.i_a[i]) or not lv_data_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        if lv_inv(g, r, g.i_a[i]) and lv_inv(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 4)
+    end
+    if op == OP_SELECT:
+        if g.v_ty[g.i_a[i]] != T_I1 or (lv_cls(r, g.i_a[i]) != LV_VEC and not lv_inv(g, r, g.i_a[i])):
+            ret false
+        end
+        if (t != T_I32 and t != T_I64) or not lv_data_ok(g, r, g.i_b[i]) or not lv_data_ok(g, r, g.i_c[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, lv_lane_of(t))
+    end
+    ret false
+end
+
+func lv_add_red(g &: Ng, r &: Lv, p: int, w: int): bool:
+    pv := g.i_res[p]
+    t := g.i_ty[p]
+    if t != T_I32 and t != T_I64:
+        ret false
+    end
+    nx := phi_val_for(g, p, w)
+    if nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    d := g.v_def[nx]
+    if g.i_op[d] != OP_ADD or (g.i_blk[d] != r.w and g.i_blk[d] != r.h):
+        ret false
+    end
+    if g.i_a[d] != pv and g.i_b[d] != pv:
+        ret false
+    end
+    if g.i_a[d] == pv and g.i_b[d] == pv:
+        ret false
+    end
+    if r.shape == 0 and g.v_uses[pv] != 1:
+        ret false
+    end
+    r.reds.push(p)
+    r.rnext.push(d)
+    ret true
+end
+
+func lv_shape(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & IF_NOVEC) != 0:
+        ret false
+    end
+    mut nb := 0
+    each b in g.b_rpo:
+        if l.inl[b] == mark:
+            nb += 1
+        end
+    end
+    tin := l.inl[g.i_b[t]] == mark
+    fin := l.inl[g.i_c[t]] == mark
+    if tin == fin:
+        ret false
+    end
+    inb := tin ? g.i_b[t] : g.i_c[t]
+    r.exitb = tin ? g.i_c[t] : g.i_b[t]
+    r.h = h
+    if inb == h and nb == 1:
+        r.shape = 0
+        r.w = h
+        r.latch = 0 - 1
+    else nb == 2 and g.b_npred[inb] == 1 and g.b_first[inb] == g.b_last[inb] and g.i_op[g.b_last[inb]] == OP_BR and g.i_b[g.b_last[inb]] == h:
+        r.shape = 0
+        r.w = h
+        r.latch = inb
+    else nb == 2 and g.b_npred[inb] == 1 and g.b_last[inb] >= 0 and g.i_op[g.b_last[inb]] == OP_BR and g.i_b[g.b_last[inb]] == h:
+        r.shape = 1
+        r.w = inb
+        r.latch = 0 - 1
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            i = g.i_next[i]
+        end
+        until i >= 0 and i != t and g.i_op[i] != OP_ICMP:
+            oi := g.i_op[i]
+            if oi != OP_TRUNC and oi != OP_SEXT and oi != OP_ZEXT:
+                ret false
+            end
+            i = g.i_next[i]
+        end
+        if i < 0 or g.i_op[i] != OP_ICMP or g.i_next[i] != t:
+            ret false
+        end
+    else:
+        ret false
+    end
+    p := lp_outside_pred(g, l, h, mark)
+    if p < 0 or g.b_last[p] < 0 or g.i_op[g.b_last[p]] != OP_BR:
+        ret false
+    end
+    r.pre = p
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS or g.i_op[g.v_def[c]] != OP_ICMP or g.i_blk[g.v_def[c]] != h:
+        ret false
+    end
+    r.cmp = g.v_def[c]
+    ret true
+end
+
+func lv_iv(g &: Ng, r &: Lv): bool:
+    latchb := r.shape == 1 ? r.w : (r.latch >= 0 ? r.latch : r.h)
+    mut i := g.b_first[r.h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if g.i_pcount[i] != 2:
+            ret false
+        end
+        nx := phi_val_for(g, i, latchb)
+        if nx >= 0 and g.v_kind[nx] == VK_INS and r.ivp < 0:
+            d := g.v_def[nx]
+            if g.i_op[d] == OP_ADD and g.i_a[d] == g.i_res[i] and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] == (1 as i64) and (g.i_ty[i] == T_I32 or g.i_ty[i] == T_I64):
+                r.ivp = i
+                r.ivn = d
+            end
+        end
+        i = g.i_next[i]
+    end
+    if r.ivp < 0:
+        ret false
+    end
+    mut j := g.b_first[r.h]
+    until j >= 0 and g.i_op[j] == OP_PHI:
+        if j != r.ivp and g.v_uses[g.i_res[j]] > 0 and not lv_add_red(g, r, j, latchb):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    cm := r.cmp
+    mut a := g.i_a[cm]
+    mut b := g.i_b[cm]
+    mut p := g.i_x[cm]
+    t := g.b_last[r.h]
+    stay_true := g.i_b[t] != r.exitb
+    if not stay_true:
+        p = neg_cc(p)
+    end
+    want := r.shape == 1 ? g.i_res[r.ivp] : g.i_res[r.ivn]
+    if a != want:
+        if b != want:
+            ret false
+        end
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    if (p != CC_SLT and p != CC_SLE) or not lv_inv(g, r, b):
+        ret false
+    end
+    if r.shape == 0 and p != CC_SLT:
+        ret false
+    end
+    r.lim = b
+    r.sle = p == CC_SLE
+    ret true
+end
+
+func lv_outside_ok(g &: Ng, r &: Lv): bool:
+    each b in g.b_rpo:
+        if b == r.h or b == r.w or b == r.latch:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            mut k := 0
+            until k < 3:
+                mut v := 0 - 1
+                if k == 0 and (m & 1) != 0: v = g.i_a[i] end
+                if k == 1 and (m & 2) != 0: v = g.i_b[i] end
+                if k == 2 and (m & 4) != 0: v = g.i_c[i] end
+                if v >= 0 and lv_in(g, r, v) and not lv_out_val_ok(g, r, v):
+                    ret false
+                end
+                k += 1
+            end
+            if g.i_op[i] == OP_CALL:
+                repeat g.i_pcount[i] in q:
+                    v2 := g.pool[g.i_ps[i] + 3 * q]
+                    if lv_in(g, r, v2) and not lv_out_val_ok(g, r, v2):
+                        ret false
+                    end
+                end
+            else g.i_op[i] == OP_PHI:
+                repeat g.i_pcount[i] in q2:
+                    v3 := g.pool[g.i_ps[i] + 2 * q2]
+                    if lv_in(g, r, v3) and not lv_out_val_ok(g, r, v3):
+                        ret false
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
+func lv_out_val_ok(g &: Ng, r &: Lv, v: int): bool:
+    d := g.v_def[v]
+    if r.shape == 1:
+        ret g.i_blk[d] == r.h and g.i_op[d] == OP_PHI
+    end
+    if d == r.ivn:
+        ret true
+    end
+    each rn in r.rnext:
+        if rn == d:
+            ret true
+        end
+    end
+    if (g.i_op[d] == OP_TRUNC or g.i_op[d] == OP_SEXT or g.i_op[d] == OP_ZEXT) and g.i_a[d] == g.i_res[r.ivn]:
+        ret true
+    end
+    ret false
+end
+
+func lv_mem_ok(g &: Ng, r &: Lv): bool:
+    r.checks.clear()
+    each s in r.stores:
+        sa := g.v_def[g.i_b[s]]
+        each ld in r.loads:
+            la := g.v_def[g.i_a[ld]]
+            if g.i_a[sa] == g.i_a[la]:
+                if g.i_b[sa] != g.i_b[la] or g.i_d[sa] != g.i_d[la] or g.i_x[sa] != g.i_x[la]:
+                    ret false
+                end
+            else:
+                r.checks.push(sa)
+                r.checks.push(la)
+            end
+        end
+        each s2 in r.stores:
+            if s2 != s:
+                sb := g.v_def[g.i_b[s2]]
+                if g.i_a[sa] != g.i_a[sb]:
+                    r.checks.push(sa)
+                    r.checks.push(sb)
+                else g.i_b[sa] != g.i_b[sb] or g.i_x[sa] != g.i_x[sb]:
+                    ret false
+                end
+            end
+        end
+    end
+    ret r.checks.len() <= 16
+end
+
+func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
+    if not lv_shape(g, l, mark, h, r) or not lv_iv(g, r):
+        ret false
+    end
+    r.cls.clear()
+    repeat g.v_kind.len():
+        r.cls.push(LV_NONE)
+    end
+    each rp in r.reds:
+        r.cls[g.i_res[rp]] = LV_RED
+    end
+    r.body.clear()
+    if r.shape == 1:
+        mut hi := g.b_first[r.h]
+        until hi >= 0:
+            ho := g.i_op[hi]
+            if ho != OP_PHI and hi != r.cmp and ho != OP_CBR:
+                if not lv_classify(g, r, hi) or lv_cls(r, g.i_res[hi]) != LV_IDX:
+                    ret false
+                end
+                r.body.push(hi)
+            end
+            hi = g.i_next[hi]
+        end
+    end
+    mut i := g.b_first[r.w]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_PHI or i == r.cmp or op == OP_BR or op == OP_CBR:
+            i = g.i_next[i]
+            continue
+        end
+        mut isred := false
+        each rn in r.rnext:
+            if rn == i:
+                isred = true
+            end
+        end
+        if isred:
+            mut xv := 0 - 1
+            each rp2 in r.reds:
+                if g.i_a[i] == g.i_res[rp2]:
+                    xv = g.i_b[i]
+                else g.i_b[i] == g.i_res[rp2]:
+                    xv = g.i_a[i]
+                end
+            end
+            if xv < 0 or not lv_data_ok(g, r, xv) or g.v_ty[xv] != g.i_ty[i] or not lv_set_lane(r, lv_lane_of(g.i_ty[i])):
+                ret false
+            end
+            r.cls[g.i_res[i]] = LV_RED
+            r.body.push(i)
+            i = g.i_next[i]
+            continue
+        end
+        if not lv_classify(g, r, i):
+            ret false
+        end
+        r.body.push(i)
+        i = g.i_next[i]
+    end
+    if r.lane == 0:
+        ret false
+    end
+    r.vf = 16 / r.lane
+    each ld in r.loads:
+        if g.i_ty[ld] == T_I8:
+            lr := g.i_res[ld]
+            if r.lane != 4 or g.v_uses[lr] < 1:
+                ret false
+            end
+        end
+    end
+    each b0 in r.body:
+        res := g.i_res[b0]
+        if res >= 0 and r.cls[res] == LV_IDX and g.v_ty[res] == T_I1:
+            ret false
+        end
+    end
+    if not lv_uses_ok(g, r):
+        ret false
+    end
+    ret lv_outside_ok(g, r) and lv_mem_ok(g, r)
+end
+
+func lv_uses_ok(g &: Ng, r &: Lv): bool:
+    each i in r.body:
+        op := g.i_op[i]
+        m := val_mask(op)
+        mut k := 0
+        until k < 3:
+            mut v := 0 - 1
+            if k == 0 and (m & 1) != 0: v = g.i_a[i] end
+            if k == 1 and (m & 2) != 0: v = g.i_b[i] end
+            if k == 2 and (m & 4) != 0: v = g.i_c[i] end
+            if v >= 0 and lv_in(g, r, v):
+                c := lv_cls(r, v)
+                if c == LV_SKIP:
+                    if op != OP_ZEXT:
+                        ret false
+                    end
+                else c == LV_IDX or v == g.i_res[r.ivp] or v == g.i_res[r.ivn]:
+                    idx_use := (op == OP_ADDR and k == 1) or op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or ((op == OP_ADD or op == OP_SUB) and lv_cls(r, g.i_res[i]) == LV_IDX)
+                    if not idx_use or lv_cls(r, g.i_res[i]) == LV_VEC:
+                        ret false
+                    end
+                else c == LV_NARROW:
+                    if not (op == OP_STORE and k == 0):
+                        ret false
+                    end
+                else c == LV_ADDR:
+                    if not ((op == OP_LOAD and k == 0) or (op == OP_STORE and k == 1)):
+                        ret false
+                    end
+                else c == LV_RED:
+                    mut own := false
+                    each rn in r.rnext:
+                        if rn == i:
+                            own = true
+                        end
+                    end
+                    if not own:
+                        ret false
+                    end
+                else c != LV_VEC:
+                    ret false
+                end
+            end
+            k += 1
+        end
+    end
+    ret true
+end
+
+func lv_sel_only(g &: Ng, r &: Lv, v: int): bool:
+    mut n := 0
+    each i in r.body:
+        m := val_mask(g.i_op[i])
+        if (m & 2) != 0 and g.i_b[i] == v: ret false end
+        if (m & 4) != 0 and g.i_c[i] == v: ret false end
+        if (m & 1) != 0 and g.i_a[i] == v:
+            if g.i_op[i] != OP_SELECT:
+                ret false
+            end
+            n += 1
+        end
+    end
+    ret n > 0
+end
+
+func lv_emit(g &: Ng, b: int, op: int, ty: int, a: int, bb: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = bb
+    v := new_res(g, i)
+    ins_append(g, b, i)
+    ret v
+end
+
+func lv_emit_before(g &: Ng, at: int, op: int, ty: int, a: int, bb: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = bb
+    v := new_res(g, i)
+    ins_before(g, at, i)
+    ret v
+end
+
+func lv_bcast(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
+    repeat r.bc_s.len() in k:
+        if r.bc_s[k] == v and g.v_ty[r.bc_v[k]] == vt:
+            ret r.bc_v[k]
+        end
+    end
+    if g.v_kind[v] == VK_ZERO or (g.v_kind[v] == VK_INT and g.v_i[v] == (0 as i64) and not is_flt(g, g.v_ty[v])):
+        z := new_val(g, VK_ZERO, vt, 0 as i64)
+        r.bc_s.push(v)
+        r.bc_v.push(z)
+        ret z
+    end
+    i := ins_new(g, OP_VBCAST, vt)
+    g.i_a[i] = v
+    nv := new_res(g, i)
+    ins_before(g, g.b_last[ck], i)
+    r.bc_s.push(v)
+    r.bc_v.push(nv)
+    ret nv
+end
+
+func lv_bmask(g &: Ng, r &: Lv, ck: int, c: int, vt: int): int:
+    repeat r.bc_s.len() in k:
+        if r.bc_s[k] == c and g.v_ty[r.bc_v[k]] == vt:
+            ret r.bc_v[k]
+        end
+    end
+    et := vt == T_V2I64 ? T_I64 : T_I32
+    sl := ins_new(g, OP_SELECT, et)
+    g.i_a[sl] = c
+    g.i_b[sl] = const_int(g, et, 0 - 1 as i64)
+    g.i_c[sl] = const_int(g, et, 0 as i64)
+    sv := new_res(g, sl)
+    ins_before(g, g.b_last[ck], sl)
+    b := ins_new(g, OP_VBCAST, vt)
+    g.i_a[b] = sv
+    bv := new_res(g, b)
+    ins_before(g, g.b_last[ck], b)
+    r.bc_s.push(c)
+    r.bc_v.push(bv)
+    ret bv
+end
+
+func lv_vget(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
+    if v >= 0 and v < r.vmap.len() and r.vmap[v] >= 0:
+        ret r.vmap[v]
+    end
+    ret lv_bcast(g, r, ck, v, vt)
+end
+
+func lv_sext(g &: Ng, b: int, v: int): int:
+    if g.v_ty[v] == T_I64:
+        ret v
+    end
+    if is_cint(g, v):
+        ret const_int(g, T_I64, norm_int(g, g.v_ty[v], g.v_i[v]))
+    end
+    i := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[i] = v
+    g.i_x[i] = g.v_ty[v]
+    nv := new_res(g, i)
+    ins_before(g, g.b_last[b], i)
+    ret nv
+end
+
+func lv_sext_app(g &: Ng, b: int, v: int): int:
+    if g.v_ty[v] == T_I64:
+        ret v
+    end
+    i := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[i] = v
+    g.i_x[i] = g.v_ty[v]
+    nv := new_res(g, i)
+    ins_append(g, b, i)
+    ret nv
+end
+
+func lv_addr_range(g &: Ng, ck: int, ad: int, s64: int, end64: int, lo &: int, hi &: int):
+    base := lv_emit_before(g, g.b_last[ck], OP_PTRTOINT, T_I64, g.i_a[ad], 0 - 1)
+    sc := const_int(g, T_I64, g.i_x[ad] as i64)
+    d := const_int(g, T_I64, g.i_d[ad])
+    a1 := lv_emit_before(g, g.b_last[ck], OP_MUL, T_I64, s64, sc)
+    a2 := lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, base, a1)
+    lo = lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, a2, d)
+    b1 := lv_emit_before(g, g.b_last[ck], OP_MUL, T_I64, end64, sc)
+    b2 := lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, base, b1)
+    b3 := lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, b2, d)
+    hi = lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, b3, const_int(g, T_I64, 16 as i64))
+end
+
+func lv_phi(g &: Ng, b: int, ty: int, v0: int, b0: int, v1: int, b1: int): int:
+    p := ins_new(g, OP_PHI, ty)
+    g.i_ps[p] = g.pool.len()
+    g.i_pcount[p] = 2
+    g.pool.push(v0)
+    g.pool.push(b0)
+    g.pool.push(v1)
+    g.pool.push(b1)
+    pv := new_res(g, p)
+    ins_append(g, b, p)
+    ret pv
+end
+
+func lv_phi_add(g &: Ng, p: int, v: int, b: int):
+    ps := g.i_ps[p]
+    n := g.i_pcount[p]
+    np := g.pool.len()
+    repeat n in k:
+        g.pool.push(g.pool[ps + 2 * k])
+        g.pool.push(g.pool[ps + 2 * k + 1])
+    end
+    g.pool.push(v)
+    g.pool.push(b)
+    g.i_ps[p] = np
+    g.i_pcount[p] = n + 1
+end
+
+func lv_phi_repred(g &: Ng, p: int, from: int, into: int):
+    ps := g.i_ps[p]
+    repeat g.i_pcount[p] in k:
+        if g.pool[ps + 2 * k + 1] == from:
+            g.pool[ps + 2 * k + 1] = into
+        end
+    end
+end
+
+func lv_replace_uses(g &: Ng, r &: Lv, old: int, nv: int, skip: int):
+    each b in g.b_rpo:
+        if b == r.h or b == r.w or b == r.latch:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if i != skip:
+                m := val_mask(g.i_op[i])
+                if (m & 1) != 0 and g.i_a[i] == old: g.i_a[i] = nv end
+                if (m & 2) != 0 and g.i_b[i] == old: g.i_b[i] = nv end
+                if (m & 4) != 0 and g.i_c[i] == old: g.i_c[i] = nv end
+                if g.i_op[i] == OP_CALL:
+                    repeat g.i_pcount[i] in q:
+                        if g.pool[g.i_ps[i] + 3 * q] == old:
+                            g.pool[g.i_ps[i] + 3 * q] = nv
+                        end
+                    end
+                else g.i_op[i] == OP_PHI:
+                    repeat g.i_pcount[i] in q2:
+                        if g.pool[g.i_ps[i] + 2 * q2] == old:
+                            g.pool[g.i_ps[i] + 2 * q2] = nv
+                        end
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func lv_transform(g &: Ng, r &: Lv):
+    h := r.h
+    pre := r.pre
+    g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
+    ivv := g.i_res[r.ivp]
+    ivt := g.i_ty[r.ivp]
+    start := phi_val_for(g, r.ivp, pre)
+    ck := new_blk(g)
+    vh := new_blk(g)
+    vb := new_blk(g)
+    rb := new_blk(g)
+    ckt := ins_new(g, OP_CBR, T_VOID)
+    ins_append(g, ck, ckt)
+    replace_succ(g, g.b_last[pre], h, ck)
+    lim64 := lv_sext(g, ck, r.lim)
+    s64 := lv_sext(g, ck, start)
+    vfm := r.sle ? r.vf - 2 : r.vf - 1
+    vlim := lv_emit_before(g, ckt, OP_SUB, T_I64, lim64, const_int(g, T_I64, vfm as i64))
+    mut cond := lv_emit_before(g, ckt, OP_ICMP, T_I1, s64, vlim)
+    g.i_x[g.v_def[cond]] = CC_SLT
+    mut ce := lim64
+    if r.sle:
+        ce = lv_emit_before(g, ckt, OP_ADD, T_I64, lim64, const_int(g, T_I64, 1 as i64))
+    end
+    mut q := 0
+    until q < r.checks.len():
+        mut a_lo := 0 - 1
+        mut a_hi := 0 - 1
+        mut b_lo := 0 - 1
+        mut b_hi := 0 - 1
+        lv_addr_range(g, ck, r.checks[q], s64, ce, a_lo, a_hi)
+        lv_addr_range(g, ck, r.checks[q + 1], s64, ce, b_lo, b_hi)
+        c1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, a_hi, b_lo)
+        g.i_x[g.v_def[c1]] = CC_ULE
+        c2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, b_hi, a_lo)
+        g.i_x[g.v_def[c2]] = CC_ULE
+        c3 := lv_emit_before(g, ckt, OP_OR, T_I1, c1, c2)
+        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, c3)
+        q += 2
+    end
+    g.i_a[ckt] = cond
+    g.i_b[ckt] = vh
+    g.i_c[ckt] = h
+    g.i_f[ckt] = IF_NOVEC
+    r.vmap.clear()
+    r.inv.clear()
+    repeat g.v_kind.len():
+        r.vmap.push(0 - 1)
+        r.inv.push(false)
+    end
+    viv_phi := ins_new(g, OP_PHI, ivt)
+    g.i_ps[viv_phi] = g.pool.len()
+    g.i_pcount[viv_phi] = 2
+    g.pool.push(start)
+    g.pool.push(ck)
+    g.pool.push(0 - 1)
+    g.pool.push(vb)
+    vpool := g.pool.len() - 2
+    viv := new_res(g, viv_phi)
+    ins_append(g, vh, viv_phi)
+    mut vaccs := Vector {} as Vector<int>
+    mut vpools := Vector {} as Vector<int>
+    each rp in r.reds:
+        vt := lv_vty(g.i_ty[rp], r.lane)
+        ap := ins_new(g, OP_PHI, vt)
+        g.i_ps[ap] = g.pool.len()
+        g.i_pcount[ap] = 2
+        g.pool.push(new_val(g, VK_ZERO, vt, 0 as i64))
+        g.pool.push(ck)
+        g.pool.push(0 - 1)
+        g.pool.push(vb)
+        vpools.push(g.pool.len() - 2)
+        av := new_res(g, ap)
+        ins_append(g, vh, ap)
+        vaccs.push(av)
+        r.vmap[g.i_res[rp]] = av
+    end
+    viv64 := lv_sext_app(g, vh, viv)
+    vc := lv_emit(g, vh, OP_ICMP, T_I1, viv64, vlim)
+    g.i_x[g.v_def[vc]] = CC_SLT
+    vct := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[vct] = vc
+    g.i_b[vct] = vb
+    g.i_c[vct] = rb
+    g.i_f[vct] = IF_NOVEC
+    ins_append(g, vh, vct)
+    r.vmap[ivv] = viv
+    if r.shape == 0:
+        ne := new_blk(g)
+        nej := ins_new(g, OP_BR, T_VOID)
+        g.i_b[nej] = r.exitb
+        ins_append(g, ne, nej)
+        replace_succ(g, g.b_last[h], r.exitb, ne)
+        mut ep := g.b_first[r.exitb]
+        until ep >= 0 and g.i_op[ep] == OP_PHI:
+            lv_phi_repred(g, ep, h, ne)
+            ep = g.i_next[ep]
+        end
+        r.exitb = ne
+    end
+    each i in r.body:
+        op := g.i_op[i]
+        res := g.i_res[i]
+        c := res >= 0 ? r.cls[res] : LV_NONE
+        if op == OP_STORE:
+            nst := ins_new(g, OP_STORE, T_VOID)
+            sv := g.i_a[i]
+            if lv_cls(r, sv) == LV_NARROW:
+                g.i_a[nst] = r.vmap[g.i_a[g.v_def[sv]]]
+                g.i_f[nst] = IF_W8
+            else:
+                g.i_a[nst] = r.vmap[sv]
+            end
+            g.i_b[nst] = r.vmap[g.i_b[i]]
+            g.i_c[nst] = g.i_c[i]
+            ins_append(g, vb, nst)
+            continue
+        end
+        if c == LV_SKIP or c == LV_NARROW:
+            continue
+        end
+        if c == LV_IDX or c == LV_ADDR:
+            ni := ins_new(g, op, g.i_ty[i])
+            g.i_a[ni] = g.i_a[i]
+            g.i_b[ni] = g.i_b[i]
+            g.i_c[ni] = g.i_c[i]
+            g.i_x[ni] = g.i_x[i]
+            g.i_d[ni] = g.i_d[i]
+            g.i_f[ni] = 0
+            if g.i_a[ni] >= 0 and lv_in(g, r, g.i_a[ni]) and r.vmap[g.i_a[ni]] >= 0: g.i_a[ni] = r.vmap[g.i_a[ni]] end
+            if g.i_b[ni] >= 0 and lv_in(g, r, g.i_b[ni]) and r.vmap[g.i_b[ni]] >= 0: g.i_b[ni] = r.vmap[g.i_b[ni]] end
+            r.vmap[res] = new_res(g, ni)
+            ins_append(g, vb, ni)
+            continue
+        end
+        if c == LV_RED:
+            mut red_i := 0 - 1
+            repeat r.rnext.len() in k:
+                if r.rnext[k] == i:
+                    red_i = k
+                end
+            end
+            pv := g.i_res[r.reds[red_i]]
+            x := g.i_a[i] == pv ? g.i_b[i] : g.i_a[i]
+            vt2 := g.v_ty[vaccs[red_i]]
+            r.vmap[res] = lv_emit(g, vb, OP_ADD, vt2, vaccs[red_i], lv_vget(g, r, ck, x, vt2))
+            continue
+        end
+        if op == OP_LOAD:
+            if g.i_ty[i] == T_I8:
+                continue
+            end
+            vt3 := lv_vty(g.i_ty[i], r.lane)
+            nl := ins_new(g, OP_LOAD, vt3)
+            g.i_a[nl] = r.vmap[g.i_a[i]]
+            g.i_c[nl] = g.i_c[i]
+            r.vmap[res] = new_res(g, nl)
+            ins_append(g, vb, nl)
+            continue
+        end
+        if op == OP_ZEXT:
+            ld := g.v_def[g.i_a[i]]
+            nw := ins_new(g, OP_LOAD, T_V4I32)
+            g.i_a[nw] = r.vmap[g.i_a[ld]]
+            g.i_c[nw] = g.i_c[ld]
+            g.i_f[nw] = IF_W8
+            r.vmap[res] = new_res(g, nw)
+            ins_append(g, vb, nw)
+            continue
+        end
+        mut swapsel := false
+        if op == OP_SELECT and not lv_inv(g, r, g.i_a[i]) and g.i_a[i] < r.inv.len() and r.inv[g.i_a[i]]:
+            swapsel = true
+        end
+        vt4 := lv_vty(g.i_ty[i], r.lane)
+        opty := op == OP_ICMP ? lv_vty(g.v_ty[g.i_a[i]], r.lane) : vt4
+        ni2 := ins_new(g, op, vt4)
+        g.i_x[ni2] = g.i_x[i]
+        if op == OP_SELECT:
+            cnd := g.i_a[i]
+            if lv_inv(g, r, cnd):
+                g.i_a[ni2] = lv_bmask(g, r, ck, cnd, vt4)
+            else:
+                g.i_a[ni2] = r.vmap[cnd]
+            end
+            g.i_b[ni2] = lv_vget(g, r, ck, swapsel ? g.i_c[i] : g.i_b[i], vt4)
+            g.i_c[ni2] = lv_vget(g, r, ck, swapsel ? g.i_b[i] : g.i_c[i], vt4)
+        else op == OP_SHL or op == OP_LSHR or op == OP_ASHR:
+            g.i_a[ni2] = lv_vget(g, r, ck, g.i_a[i], vt4)
+            g.i_b[ni2] = g.i_b[i]
+        else g.i_ty[i] == T_I1 and op != OP_ICMP:
+            g.i_a[ni2] = r.vmap[g.i_a[i]]
+            if is_cint(g, g.i_b[i]):
+                ones := new_val(g, VK_INT, T_I32, 0 - 1 as i64)
+                g.i_b[ni2] = lv_bcast(g, r, ck, ones, vt4)
+            else:
+                g.i_b[ni2] = r.vmap[g.i_b[i]]
+            end
+        else:
+            g.i_a[ni2] = lv_vget(g, r, ck, g.i_a[i], opty)
+            g.i_b[ni2] = lv_vget(g, r, ck, g.i_b[i], opty)
+        end
+        if op == OP_ICMP and lv_sel_only(g, r, res):
+            px := g.i_x[ni2]
+            if px == CC_NE or px == CC_SGE or px == CC_SLE:
+                g.i_x[ni2] = neg_cc(px)
+                r.inv[res] = true
+            end
+        end
+        r.vmap[res] = new_res(g, ni2)
+        ins_append(g, vb, ni2)
+    end
+    vnext := lv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, r.vf as i64))
+    g.i_f[g.v_def[vnext]] = IF_NSW
+    g.pool[vpool] = vnext
+    repeat r.reds.len() in k2:
+        g.pool[vpools[k2]] = r.vmap[g.i_res[r.rnext[k2]]]
+    end
+    bj := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bj] = vh
+    ins_append(g, vb, bj)
+    mut acc0 := Vector {} as Vector<int>
+    repeat r.reds.len() in k3:
+        rp3 := r.reds[k3]
+        hs := ins_new(g, OP_VREDADD, g.i_ty[rp3])
+        g.i_a[hs] = vaccs[k3]
+        hv := new_res(g, hs)
+        ins_append(g, rb, hs)
+        init := phi_val_for(g, rp3, pre)
+        acc0.push(lv_emit(g, rb, OP_ADD, g.i_ty[rp3], init, hv))
+    end
+    mut skip := 0 - 1
+    if r.shape == 1:
+        rbj := ins_new(g, OP_BR, T_VOID)
+        g.i_b[rbj] = h
+        ins_append(g, rb, rbj)
+    else:
+        skip = new_blk(g)
+        viv64b := lv_sext_app(g, rb, viv)
+        lim64b := r.lim
+        mut lw := lim64b
+        if g.v_ty[lim64b] != T_I64:
+            lw = lv_sext_app(g, rb, lim64b)
+        end
+        rc := lv_emit(g, rb, OP_ICMP, T_I1, viv64b, lw)
+        g.i_x[g.v_def[rc]] = CC_SLT
+        rct := ins_new(g, OP_CBR, T_VOID)
+        g.i_a[rct] = rc
+        g.i_b[rct] = h
+        g.i_c[rct] = skip
+        g.i_f[rct] = IF_NOVEC
+        ins_append(g, rb, rct)
+        sj := ins_new(g, OP_BR, T_VOID)
+        g.i_b[sj] = r.exitb
+        ins_append(g, skip, sj)
+    end
+    mut j := g.b_first[h]
+    until j >= 0 and g.i_op[j] == OP_PHI:
+        lv_phi_repred(g, j, pre, ck)
+        mut nv := j == r.ivp ? viv : phi_val_for(g, j, ck)
+        repeat r.reds.len() in k4:
+            if r.reds[k4] == j:
+                nv = acc0[k4]
+            end
+        end
+        lv_phi_add(g, j, nv, rb)
+        j = g.i_next[j]
+    end
+    if r.shape == 0:
+        mut outs := Vector {} as Vector<int>
+        mut repl := Vector {} as Vector<int>
+        if g.i_res[r.ivn] >= 0:
+            outs.push(g.i_res[r.ivn])
+            repl.push(viv)
+        end
+        repeat r.rnext.len() in k5:
+            outs.push(g.i_res[r.rnext[k5]])
+            repl.push(acc0[k5])
+        end
+        each bi in r.body:
+            if g.i_res[bi] >= 0 and (g.i_op[bi] == OP_TRUNC or g.i_op[bi] == OP_SEXT or g.i_op[bi] == OP_ZEXT) and g.i_a[bi] == g.i_res[r.ivn]:
+                cv := ins_new(g, g.i_op[bi], g.i_ty[bi])
+                dv_taint(g, bi)
+                g.i_a[cv] = viv
+                g.i_x[cv] = g.i_x[bi]
+                cvv := new_res(g, cv)
+                ins_before(g, g.b_last[skip], cv)
+                outs.push(g.i_res[bi])
+                repl.push(cvv)
+            end
+        end
+        repeat outs.len() in k6:
+            ov := outs[k6]
+            np := ins_new(g, OP_PHI, g.v_ty[ov])
+            g.i_ps[np] = g.pool.len()
+            g.i_pcount[np] = 2
+            g.pool.push(ov)
+            g.pool.push(h)
+            g.pool.push(repl[k6])
+            g.pool.push(skip)
+            npv := new_res(g, np)
+            first := g.b_first[r.exitb]
+            if first >= 0:
+                ins_before(g, first, np)
+            else:
+                ins_append(g, r.exitb, np)
+            end
+            lv_replace_uses(g, r, ov, npv, np)
+        end
+        outs.free()
+        repl.free()
+    end
+    vaccs.free()
+    vpools.free()
+    acc0.free()
+end
+
+func loop_vectorize(g &: Ng): bool:
+    ensure_preheaders(g)
+    count_uses(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut mark := 8000000
+    each h in heads:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        mut r := Lv {}
+        if lv_match(g, l, mark, h, r):
+            lv_transform(g, r)
+            changed = true
+        end
+        r.cls.free()
+        r.vmap.free()
+        r.reds.free()
+        r.rnext.free()
+        r.body.free()
+        r.stores.free()
+        r.loads.free()
+        r.checks.free()
+        r.bc_s.free()
+        r.bc_v.free()
+        r.inv.free()
+    end
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

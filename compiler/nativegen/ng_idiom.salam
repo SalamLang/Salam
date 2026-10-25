@@ -1,0 +1,359 @@
+package nativegen
+
+const IDIOM_MIN := 16
+
+pub struct CpLoop:
+    pub head: int = 0 - 1
+    pub body: int = 0 - 1
+    pub pre: int = 0 - 1
+    pub civ: int = 0 - 1
+    pub lim: int = 0 - 1
+    pub incl: bool = false
+    pub src: int = 0 - 1
+    pub dst: int = 0 - 1
+    pub src_iv: int = 0 - 1
+    pub dst_iv: int = 0 - 1
+    pub esz: int = 0
+    pub phis: Vector<int> = Vector {}
+    pub incs: Vector<int> = Vector {}
+end
+
+func cp_inv(g &: Ng, v: int, h: int, b: int): bool:
+    ret rv_inv(g, v, h, b)
+end
+
+func cp_idx_iv(g &: Ng, r &: CpLoop, ix: int): int:
+    repeat r.phis.len() in k:
+        p := r.phis[k]
+        pv := g.i_res[p]
+        if ix == pv:
+            ret k
+        end
+        if ix >= 0 and g.v_kind[ix] == VK_INS:
+            d := g.v_def[ix]
+            if g.i_op[d] == OP_SEXT and g.i_a[d] == pv and g.i_blk[d] == r.body:
+                ret k
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func cp_match(g &: Ng, h: int, r &: CpLoop): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & IF_NOVEC) != 0:
+        ret false
+    end
+    body := g.i_b[t]
+    if body == h or g.b_npred[body] != 1 or g.b_npred[h] != 2:
+        ret false
+    end
+    bt := g.b_last[body]
+    if bt < 0 or g.i_op[bt] != OP_BR or g.i_b[bt] != h:
+        ret false
+    end
+    mut pre := g.b_pred[g.b_ps[h]]
+    if pre == body:
+        pre = g.b_pred[g.b_ps[h] + 1]
+    end
+    pt := g.b_last[pre]
+    if pt < 0 or g.i_op[pt] != OP_BR or pre == body:
+        ret false
+    end
+    r.body = body
+    r.phis.clear()
+    r.incs.clear()
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if g.i_pcount[i] != 2 or g.i_ty[i] != T_I32 or r.phis.len() >= 3:
+            ret false
+        end
+        nx := phi_val_for(g, i, body)
+        if nx < 0 or g.v_kind[nx] != VK_INS:
+            ret false
+        end
+        nd := g.v_def[nx]
+        if g.i_op[nd] != OP_ADD or g.i_a[nd] != g.i_res[i] or not is_cint(g, g.i_b[nd]) or g.v_i[g.i_b[nd]] != (1 as i64) or g.i_blk[nd] != body:
+            ret false
+        end
+        r.phis.push(i)
+        r.incs.push(nd)
+        i = g.i_next[i]
+    end
+    cmpi := i
+    if cmpi < 0 or g.i_op[cmpi] != OP_ICMP or g.i_next[cmpi] != t or g.i_a[t] != g.i_res[cmpi]:
+        ret false
+    end
+    mut civ := 0 - 1
+    repeat r.phis.len() in k:
+        if g.i_a[cmpi] == g.i_res[r.phis[k]]:
+            civ = k
+        end
+    end
+    if civ < 0 or not cp_inv(g, g.i_b[cmpi], h, body):
+        ret false
+    end
+    if g.i_x[cmpi] != CC_SLT and g.i_x[cmpi] != CC_SLE:
+        ret false
+    end
+    mut ld := 0 - 1
+    mut st := 0 - 1
+    mut a1 := 0 - 1
+    mut a2 := 0 - 1
+    mut j := g.b_first[body]
+    until j >= 0:
+        op := g.i_op[j]
+        if op == OP_LOAD:
+            if ld >= 0:
+                ret false
+            end
+            ld = j
+        else op == OP_STORE:
+            if st >= 0:
+                ret false
+            end
+            st = j
+        else op == OP_ADDR:
+            if a1 < 0:
+                a1 = j
+            else a2 < 0:
+                a2 = j
+            else:
+                ret false
+            end
+        else op == OP_SEXT:
+            mut ok := false
+            each p0 in r.phis:
+                if g.i_a[j] == g.i_res[p0]:
+                    ok = true
+                end
+            end
+            if not ok:
+                ret false
+            end
+        else op == OP_ADD:
+            mut isinc := false
+            each d0 in r.incs:
+                if d0 == j:
+                    isinc = true
+                end
+            end
+            if not isinc:
+                ret false
+            end
+        else j != bt:
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    if ld < 0 or st < 0 or a1 < 0 or a2 < 0:
+        ret false
+    end
+    if (g.i_f[ld] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (g.i_f[st] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    lv := g.i_res[ld]
+    if lv < 0 or g.i_a[st] != lv:
+        ret false
+    end
+    mut asrc := a1
+    mut adst := a2
+    if g.i_a[ld] != g.i_res[asrc]:
+        asrc = a2
+        adst = a1
+    end
+    if g.i_a[ld] != g.i_res[asrc] or g.i_b[st] != g.i_res[adst]:
+        ret false
+    end
+    ty := g.i_ty[ld]
+    if is_agg(g, ty) or is_vec(g, ty):
+        ret false
+    end
+    esz := tsize(g, ty)
+    if esz != 1 and esz != 2 and esz != 4 and esz != 8:
+        ret false
+    end
+    si := cp_idx_iv(g, r, g.i_b[asrc])
+    di := cp_idx_iv(g, r, g.i_b[adst])
+    if si < 0 or di < 0:
+        ret false
+    end
+    each a in [asrc, adst]:
+        if not cp_inv(g, g.i_a[a], h, body) or (g.i_x[a] as i64) != (esz as i64):
+            ret false
+        end
+    end
+    count_uses(g)
+    if g.v_uses[lv] != 1:
+        ret false
+    end
+    r.head = h
+    r.pre = pre
+    r.civ = civ
+    r.lim = g.i_b[cmpi]
+    r.incl = g.i_x[cmpi] == CC_SLE
+    r.src = asrc
+    r.dst = adst
+    r.src_iv = si
+    r.dst_iv = di
+    r.esz = esz
+    ret true
+end
+
+func cp_ins(g &: Ng, b: int, op: int, ty: int, a: int, bb: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = bb
+    v := new_res(g, i)
+    ins_append(g, b, i)
+    ret v
+end
+
+func cp_addr(g &: Ng, b: int, base: int, idx: int, sc: int, disp: i64): int:
+    i := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[i] = base
+    g.i_b[i] = idx
+    g.i_x[i] = sc
+    g.i_d[i] = disp
+    v := new_res(g, i)
+    ins_append(g, b, i)
+    ret v
+end
+
+func cp_transform(g &: Ng, r &: CpLoop):
+    h := r.head
+    pre := r.pre
+    g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
+    np := r.phis.len()
+    mut inits := Vector {} as Vector<int>
+    each p in r.phis:
+        inits.push(phi_val_for(g, p, pre))
+    end
+    cb := new_blk(g)
+    c2 := new_blk(g)
+    mb := new_blk(g)
+    replace_succ(g, g.b_last[pre], h, cb)
+    mut i64s := Vector {} as Vector<int>
+    each iv0 in inits:
+        i64s.push(rv_wide(g, cb, iv0, T_I32))
+    end
+    mut n64 := rv_wide(g, cb, r.lim, T_I32)
+    if r.incl:
+        n64 = cp_ins(g, cb, OP_ADD, T_I64, n64, const_int(g, T_I64, 1 as i64))
+    end
+    cnt := cp_ins(g, cb, OP_SUB, T_I64, n64, i64s[r.civ])
+    c1 := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[c1] = cnt
+    g.i_b[c1] = const_int(g, T_I64, IDIOM_MIN as i64)
+    g.i_x[c1] = CC_SGT
+    c1v := new_res(g, c1)
+    ins_append(g, cb, c1)
+    t1 := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[t1] = c1v
+    g.i_b[t1] = c2
+    g.i_c[t1] = h
+    ins_append(g, cb, t1)
+    bytes := cp_ins(g, c2, OP_MUL, T_I64, cnt, const_int(g, T_I64, r.esz as i64))
+    srcp := cp_addr(g, c2, g.i_a[r.src], i64s[r.src_iv], r.esz, g.i_d[r.src])
+    dstp := cp_addr(g, c2, g.i_a[r.dst], i64s[r.dst_iv], r.esz, g.i_d[r.dst])
+    se := cp_addr(g, c2, srcp, bytes, 1, 0 as i64)
+    k1 := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[k1] = dstp
+    g.i_b[k1] = srcp
+    g.i_x[k1] = CC_ULE
+    k1v := new_res(g, k1)
+    ins_append(g, c2, k1)
+    k2 := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[k2] = dstp
+    g.i_b[k2] = se
+    g.i_x[k2] = CC_UGE
+    k2v := new_res(g, k2)
+    ins_append(g, c2, k2)
+    okv := cp_ins(g, c2, OP_OR, T_I1, k1v, k2v)
+    t2 := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[t2] = okv
+    g.i_b[t2] = mb
+    g.i_c[t2] = h
+    ins_append(g, c2, t2)
+    fv := new_val(g, VK_GLB, T_PTR, 0 as i64)
+    g.v_def[fv] = g.sym_i_memmove
+    g.sy_used[g.sym_i_memmove] = true
+    call := ins_new(g, OP_CALL, T_VOID)
+    g.i_a[call] = fv
+    g.i_x[call] = 0 - 1
+    g.i_ps[call] = g.pool.len()
+    g.i_pcount[call] = 4
+    each av in [dstp, srcp, bytes, const_int(g, T_I1, 0 as i64)]:
+        g.pool.push(av)
+        g.pool.push(0)
+        g.pool.push(0 - 1)
+    end
+    ins_append(g, mb, call)
+    c32 := cp_ins(g, mb, OP_TRUNC, T_I32, cnt, 0 - 1)
+    g.i_x[g.v_def[c32]] = T_I64
+    mut finals := Vector {} as Vector<int>
+    repeat np in k:
+        finals.push(cp_ins(g, mb, OP_ADD, T_I32, inits[k], c32))
+    end
+    bm := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bm] = h
+    ins_append(g, mb, bm)
+    repeat np in k2:
+        ph := r.phis[k2]
+        ps := g.i_ps[ph]
+        mut body_v := 0 - 1
+        repeat g.i_pcount[ph] in q:
+            if g.pool[ps + 2 * q + 1] == r.body:
+                body_v = g.pool[ps + 2 * q]
+            end
+        end
+        g.i_ps[ph] = g.pool.len()
+        g.i_pcount[ph] = 4
+        g.pool.push(inits[k2])
+        g.pool.push(cb)
+        g.pool.push(inits[k2])
+        g.pool.push(c2)
+        g.pool.push(finals[k2])
+        g.pool.push(mb)
+        g.pool.push(body_v)
+        g.pool.push(r.body)
+    end
+    inits.free()
+    i64s.free()
+    finals.free()
+end
+
+func copy_idiom(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut r := CpLoop {}
+    each h in heads:
+        if g.b_order[h] >= 0 and cp_match(g, h, r):
+            cp_transform(g, r)
+            changed = true
+        end
+    end
+    r.phis.free()
+    r.incs.free()
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

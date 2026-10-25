@@ -1,0 +1,392 @@
+package nativegen
+
+const RUN_MAX_SIZE := 48
+const RUN_SMALL := 16
+
+func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, cc &: int, skip: int, maxsz: int): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & skip) != 0:
+        ret false
+    end
+    if l.inl[g.i_b[t]] != mark or l.inl[g.i_c[t]] == mark:
+        ret false
+    end
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        i = g.i_next[i]
+    end
+    if i < 0 or g.i_op[i] != OP_ICMP or g.i_next[i] != t or g.i_a[t] != g.i_res[i]:
+        ret false
+    end
+    pr := g.i_x[i]
+    if (pr != CC_SLT and pr != CC_SLE and pr != CC_SGT and pr != CC_SGE) or not lsr_inv_m(g, l, mark, g.i_b[i]) or g.v_uses[g.i_res[i]] != 1:
+        ret false
+    end
+    if blk_has_phi(g, g.i_b[t]):
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    ph := g.v_def[a]
+    if g.i_op[ph] != OP_PHI or g.i_blk[ph] != h:
+        ret false
+    end
+    nx := phi_val_for(g, ph, latch)
+    if nx < 0 or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    nd := g.v_def[nx]
+    if (g.i_op[nd] != OP_ADD and g.i_op[nd] != OP_SUB) or g.i_a[nd] != a or not is_cint(g, g.i_b[nd]) or (g.i_f[nd] & IF_NSW) == 0:
+        ret false
+    end
+    mut s := g.v_i[g.i_b[nd]]
+    if g.i_op[nd] == OP_SUB:
+        s = 0 - s
+    end
+    up := pr == CC_SLT or pr == CC_SLE
+    if s == (0 as i64) or s > (64 as i64) or s < (0 - 64 as i64) or (s > (0 as i64)) != up:
+        ret false
+    end
+    mut size := 0
+    each b in g.b_rpo:
+        if l.inl[b] != mark:
+            continue
+        end
+        if b != h:
+            mut sc := Vector {} as Vector<int>
+            blk_succs(g, b, sc)
+            each sx in sc:
+                if l.inl[sx] != mark:
+                    sc.free()
+                    ret false
+                end
+                if sx != h and g.b_order[sx] <= g.b_order[b]:
+                    sc.free()
+                    ret false
+                end
+            end
+            sc.free()
+        end
+        mut j := g.b_first[b]
+        until j >= 0:
+            op := g.i_op[j]
+            if op == OP_CALL or op == OP_ALLOCA:
+                ret false
+            end
+            size += 1
+            j = g.i_next[j]
+        end
+    end
+    if size > maxsz:
+        ret false
+    end
+    iv = ph
+    step = s
+    lim = g.i_b[i]
+    cc = pr
+    ret true
+end
+
+func run_ov(ov &: Vector<int>, v: int): int:
+    repeat ov.len() / 2 in q:
+        if ov[2 * q] == v:
+            ret ov[2 * q + 1]
+        end
+    end
+    ret v
+end
+
+func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: int, over &: Vector<int>):
+    each b in order:
+        u.bmap[b] = new_blk(g)
+    end
+    each b2 in order:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            if g.i_op[j] == OP_PHI and g.i_res[j] >= 0:
+                u.vmap[g.i_res[j]] = new_val(g, VK_INS, g.i_ty[j], 0 as i64)
+            end
+            j = g.i_next[j]
+        end
+    end
+    each b3 in order:
+        nb := u.bmap[b3]
+        mut j2 := g.b_first[b3]
+        until j2 >= 0:
+            op := g.i_op[j2]
+            if op == OP_PHI and g.i_res[j2] >= 0:
+                pv := u.vmap[g.i_res[j2]]
+                usw_clone_ins(g, u, j2, nb)
+                nphi := g.v_def[u.vmap[g.i_res[j2]]]
+                g.v_kind[pv] = VK_INS
+                g.v_def[pv] = nphi
+                g.i_res[nphi] = pv
+                u.vmap[g.i_res[j2]] = pv
+            else:
+                usw_clone_ins(g, u, j2, nb)
+                last := g.b_last[nb]
+                if g.i_op[last] == OP_BR and g.i_b[last] == h:
+                    g.i_b[last] = back_to
+                else g.i_op[last] == OP_CBR:
+                    if g.i_b[last] == h: g.i_b[last] = back_to end
+                    if g.i_c[last] == h: g.i_c[last] = back_to end
+                end
+            end
+            j2 = g.i_next[j2]
+        end
+        if g.ev_fv.len() > 0:
+            dv_queue(g, 0 - 1 - b3, 0 - 1 - nb)
+        end
+    end
+    repeat g.dq_ni.len() in dq:
+        dv_ev_add(g, g.dq_ni[dq], g.dq_fv[dq], usw_val(u, g.dq_v[dq]))
+    end
+    dv_queue_clear(g)
+    mut ov := Vector {} as Vector<int>
+    repeat over.len() / 2 in q0:
+        ov.push(u.vmap[over[2 * q0]])
+        ov.push(over[2 * q0 + 1])
+        u.vmap[over[2 * q0]] = over[2 * q0 + 1]
+    end
+    each b4 in order:
+        nb4 := u.bmap[b4]
+        mut k := g.b_first[nb4]
+        until k >= 0:
+            if g.i_op[k] == OP_PHI:
+                ps := g.i_ps[k]
+                repeat g.i_pcount[k] in q:
+                    g.pool[ps + 2 * q] = run_ov(ov, usw_val(u, g.pool[ps + 2 * q]))
+                end
+            end
+            m := val_mask(g.i_op[k])
+            if (m & 1) != 0: g.i_a[k] = run_ov(ov, usw_val(u, g.i_a[k])) end
+            if (m & 2) != 0: g.i_b[k] = run_ov(ov, usw_val(u, g.i_b[k])) end
+            if (m & 4) != 0: g.i_c[k] = run_ov(ov, usw_val(u, g.i_c[k])) end
+            k = g.i_next[k]
+        end
+    end
+    ov.free()
+end
+
+func run_limit(g &: Ng, pre: int, lim: int, step: i64, cc: int, ty: int): int:
+    mut adj := 0 - step
+    if cc == CC_SLE or cc == CC_SGE:
+        adj = step > (0 as i64) ? adj + 1 : adj - 1
+    end
+    lo := ty == T_I64 ? (0 as i64) - (9223372036854775807 as i64) - (1 as i64) : (0 - 2147483647 - 1) as i64
+    hi := ty == T_I64 ? 9223372036854775807 as i64 : 2147483647 as i64
+    sat := step > (0 as i64) ? lo : hi
+    pt := g.b_last[pre]
+    if is_cint(g, lim):
+        lv := norm_int(g, ty, g.v_i[lim])
+        if (adj < (0 as i64) and lv < lo - adj) or (adj > (0 as i64) and lv > hi - adj):
+            ret const_int(g, ty, sat)
+        end
+        ret const_int(g, ty, lv + adj)
+    end
+    ok := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[ok] = lim
+    g.i_b[ok] = const_int(g, ty, adj < (0 as i64) ? lo - adj : hi - adj)
+    g.i_x[ok] = adj < (0 as i64) ? CC_SGE : CC_SLE
+    okv := new_res(g, ok)
+    ins_before(g, pt, ok)
+    sm := ins_new(g, OP_ADD, ty)
+    g.i_a[sm] = lim
+    g.i_b[sm] = const_int(g, ty, adj)
+    smv := new_res(g, sm)
+    ins_before(g, pt, sm)
+    se := ins_new(g, OP_SELECT, ty)
+    g.i_a[se] = okv
+    g.i_b[se] = smv
+    g.i_c[se] = const_int(g, ty, sat)
+    sev := new_res(g, se)
+    ins_before(g, pt, se)
+    ret sev
+end
+
+func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int, cc: int):
+    t := g.b_last[h]
+    g.i_f[t] = g.i_f[t] | IF_NORUN
+    body0 := g.i_b[t]
+    mut order := Vector {} as Vector<int>
+    mut size := 0
+    each b in g.b_rpo:
+        if l.inl[b] == mark and b != h:
+            order.push(b)
+            mut j := g.b_first[b]
+            until j >= 0:
+                if g.i_op[j] != OP_PHI and g.i_op[j] != OP_BR:
+                    size += 1
+                end
+                j = g.i_next[j]
+            end
+        end
+    end
+    nf := size <= RUN_SMALL ? 4 : 2
+    mut hphis := Vector {} as Vector<int>
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        hphis.push(i)
+        i = g.i_next[i]
+    end
+    np := hphis.len()
+    hu := new_blk(g)
+    rb := new_blk(g)
+    mut uphis := Vector {} as Vector<int>
+    each hp in hphis:
+        up := ins_new(g, OP_PHI, g.i_ty[hp])
+        g.i_ps[up] = g.pool.len()
+        g.i_pcount[up] = 2
+        g.pool.push(phi_val_for(g, hp, pre))
+        g.pool.push(pre)
+        g.pool.push(0 - 1)
+        g.pool.push(0 - 1)
+        _r := new_res(g, up)
+        ins_append(g, hu, up)
+        uphis.push(up)
+    end
+    mut ivu := 0 - 1
+    repeat np in k:
+        if hphis[k] == ph:
+            ivu = g.i_res[uphis[k]]
+        end
+    end
+    limu := run_limit(g, pre, lim, step * ((nf - 1) as i64), cc, g.i_ty[ph])
+    ic := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[ic] = ivu
+    g.i_b[ic] = limu
+    g.i_x[ic] = step > (0 as i64) ? CC_SLT : CC_SGT
+    icv := new_res(g, ic)
+    ins_append(g, hu, ic)
+    mut mids := Vector {} as Vector<int>
+    repeat nf - 1:
+        mids.push(new_blk(g))
+    end
+    mut none := Vector {} as Vector<int>
+    mut prev := Usw {}
+    mut first := 0 - 1
+    repeat nf in c:
+        mut u := Usw {}
+        repeat g.v_kind.len():
+            u.vmap.push(0 - 1)
+        end
+        repeat g.b_first.len():
+            u.bmap.push(0 - 1)
+        end
+        repeat np in k2:
+            if c == 0:
+                u.vmap[g.i_res[hphis[k2]]] = g.i_res[uphis[k2]]
+            else:
+                u.vmap[g.i_res[hphis[k2]]] = usw_val(prev, phi_val_for(g, hphis[k2], latch))
+            end
+        end
+        back := c < nf - 1 ? mids[c] : hu
+        run_clone_body(g, u, h, order, back, none)
+        if c == 0:
+            first = u.bmap[body0]
+        else:
+            bm := ins_new(g, OP_BR, T_VOID)
+            g.i_b[bm] = u.bmap[body0]
+            ins_append(g, mids[c - 1], bm)
+        end
+        prev.vmap.free()
+        prev.bmap.free()
+        prev.blocks.free()
+        prev = u
+    end
+    cb := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[cb] = icv
+    g.i_b[cb] = first
+    g.i_c[cb] = rb
+    g.i_f[cb] = IF_NORUN | IF_NOVEC
+    ins_append(g, hu, cb)
+    repeat np in k5:
+        up2 := uphis[k5]
+        lv2 := phi_val_for(g, hphis[k5], latch)
+        g.pool[g.i_ps[up2] + 2] = usw_val(prev, lv2)
+        g.pool[g.i_ps[up2] + 3] = prev.bmap[latch]
+    end
+    br := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br] = h
+    ins_append(g, rb, br)
+    replace_succ(g, g.b_last[pre], h, hu)
+    repeat np in k6:
+        hp2 := hphis[k6]
+        ps := g.i_ps[hp2]
+        repeat g.i_pcount[hp2] in q:
+            if g.pool[ps + 2 * q + 1] == pre:
+                g.pool[ps + 2 * q + 1] = rb
+                g.pool[ps + 2 * q] = g.i_res[uphis[k6]]
+            end
+        end
+    end
+    order.free()
+    none.free()
+    mids.free()
+    hphis.free()
+    uphis.free()
+    prev.vmap.free()
+    prev.bmap.free()
+    prev.blocks.free()
+end
+
+func runtime_unroll(g &: Ng): bool:
+    ensure_preheaders(g)
+    count_uses(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut mark := 8000000
+    each h in heads:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0 or g.b_last[p] < 0 or g.i_op[g.b_last[p]] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        mut iv := 0 - 1
+        mut step := 0 as i64
+        mut lim := 0 - 1
+        mut cc := 0
+        if run_match(g, l, mark, h, latch, iv, step, lim, cc, IF_NOVEC | IF_NORUN, RUN_MAX_SIZE):
+            run_unroll(g, l, mark, h, p, latch, iv, step, lim, cc)
+            changed = true
+        end
+    end
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

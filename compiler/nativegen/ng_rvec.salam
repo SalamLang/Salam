@@ -1,0 +1,348 @@
+package nativegen
+
+pub struct RvLoop:
+    pub head: int = 0 - 1
+    pub body: int = 0 - 1
+    pub pre: int = 0 - 1
+    pub exitb: int = 0 - 1
+    pub iv: int = 0 - 1
+    pub acc: int = 0 - 1
+    pub acc_next: int = 0 - 1
+    pub iv_next: int = 0 - 1
+    pub addr_i: int = 0 - 1
+    pub load_i: int = 0 - 1
+    pub lim: int = 0 - 1
+    pub pred: int = 0
+    pub vty: int = 0
+    pub vf: int = 0
+end
+
+func rv_inv(g &: Ng, v: int, h: int, b: int): bool:
+    if v < 0:
+        ret false
+    end
+    if g.v_kind[v] != VK_INS:
+        ret g.v_kind[v] == VK_INT or g.v_kind[v] == VK_ARG or g.v_kind[v] == VK_GLB
+    end
+    blk := g.i_blk[g.v_def[v]]
+    ret blk >= 0 and blk != h and blk != b
+end
+
+func rv_match(g &: Ng, h: int, r &: RvLoop): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & IF_NOVEC) != 0:
+        ret false
+    end
+    body := g.i_b[t]
+    ex := g.i_c[t]
+    if g.b_npred[body] != 1:
+        ret false
+    end
+    bt := g.b_last[body]
+    if bt < 0 or g.i_op[bt] != OP_BR or g.i_b[bt] != h:
+        ret false
+    end
+    if g.b_npred[h] != 2:
+        ret false
+    end
+    mut pre := g.b_pred[g.b_ps[h]]
+    if pre == body:
+        pre = g.b_pred[g.b_ps[h] + 1]
+    end
+    pt := g.b_last[pre]
+    if pt < 0 or g.i_op[pt] != OP_BR or pre == body:
+        ret false
+    end
+    mut nphi := 0
+    mut i := g.b_first[h]
+    mut phis := Vector {} as Vector<int>
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        phis.push(i)
+        nphi += 1
+        i = g.i_next[i]
+    end
+    if nphi != 2 or i < 0 or g.i_op[i] != OP_ICMP or g.i_next[i] != t or g.i_a[t] != g.i_res[i]:
+        phis.free()
+        ret false
+    end
+    cmpi := i
+    mut ivp := 0 - 1
+    mut accp := 0 - 1
+    each p in phis:
+        nx := phi_val_for(g, p, body)
+        if nx >= 0 and g.v_kind[nx] == VK_INS:
+            d := g.v_def[nx]
+            if g.i_op[d] == OP_ADD and g.i_a[d] == g.i_res[p] and is_cint(g, g.i_b[d]) and g.v_i[g.i_b[d]] == (1 as i64) and g.i_blk[d] == body:
+                ivp = p
+            else g.i_op[d] == OP_ADD and g.i_blk[d] == body and (g.i_a[d] == g.i_res[p] or g.i_b[d] == g.i_res[p]):
+                accp = p
+            end
+        end
+    end
+    phis.free()
+    if ivp < 0 or accp < 0:
+        ret false
+    end
+    ivv := g.i_res[ivp]
+    accv := g.i_res[accp]
+    ivt := g.i_ty[ivp]
+    acct := g.i_ty[accp]
+    if ivt != T_I32 or (acct != T_I32 and acct != T_I64):
+        ret false
+    end
+    if g.i_a[cmpi] != ivv:
+        ret false
+    end
+    cp := g.i_x[cmpi]
+    if cp != CC_SLT and cp != CC_SLE:
+        ret false
+    end
+    if not rv_inv(g, g.i_b[cmpi], h, body):
+        ret false
+    end
+    an := phi_val_for(g, accp, body)
+    ad := g.v_def[an]
+    ld := g.i_a[ad] == accv ? g.i_b[ad] : g.i_a[ad]
+    if ld < 0 or g.v_kind[ld] != VK_INS:
+        ret false
+    end
+    li := g.v_def[ld]
+    if g.i_op[li] != OP_LOAD or g.i_blk[li] != body or g.i_ty[li] != acct or (g.i_f[li] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    av := g.i_a[li]
+    if av < 0 or g.v_kind[av] != VK_INS:
+        ret false
+    end
+    ai := g.v_def[av]
+    if g.i_op[ai] != OP_ADDR or g.i_blk[ai] != body or not rv_inv(g, g.i_a[ai], h, body):
+        ret false
+    end
+    esz := acct == T_I64 ? 8 : 4
+    if (g.i_x[ai] as i64) != (esz as i64):
+        ret false
+    end
+    ix := g.i_b[ai]
+    if ix != ivv:
+        if ix < 0 or g.v_kind[ix] != VK_INS:
+            ret false
+        end
+        xd := g.v_def[ix]
+        if g.i_op[xd] != OP_SEXT or g.i_a[xd] != ivv or g.i_blk[xd] != body:
+            ret false
+        end
+    end
+    mut j := g.b_first[body]
+    until j >= 0:
+        op := g.i_op[j]
+        if j != bt and j != ai and j != li and j != ad and j != g.v_def[phi_val_for(g, ivp, body)]:
+            if not (op == OP_SEXT and g.i_a[j] == ivv):
+                ret false
+            end
+        end
+        j = g.i_next[j]
+    end
+    count_uses(g)
+    if g.v_uses[ld] != 1 or g.v_uses[av] != 1 or g.v_uses[an] != 1:
+        ret false
+    end
+    r.head = h
+    r.body = body
+    r.pre = pre
+    r.exitb = ex
+    r.iv = ivp
+    r.acc = accp
+    r.acc_next = ad
+    r.iv_next = g.v_def[phi_val_for(g, ivp, body)]
+    r.addr_i = ai
+    r.load_i = li
+    r.lim = g.i_b[cmpi]
+    r.pred = cp
+    r.vty = acct == T_I64 ? T_V2I64 : T_V4I32
+    r.vf = acct == T_I64 ? 2 : 4
+    ret true
+end
+
+func rv_emit(g &: Ng, b: int, op: int, ty: int, a: int, bb: int): int:
+    i := ins_new(g, op, ty)
+    g.i_a[i] = a
+    g.i_b[i] = bb
+    v := new_res(g, i)
+    ins_append(g, b, i)
+    ret v
+end
+
+func rv_wide(g &: Ng, b: int, v: int, ty: int): int:
+    if g.v_ty[v] == T_I64:
+        ret v
+    end
+    if is_cint(g, v):
+        ret const_int(g, T_I64, norm_int(g, g.v_ty[v], g.v_i[v]))
+    end
+    i := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[i] = v
+    g.i_x[i] = ty
+    nv := new_res(g, i)
+    ins_append(g, b, i)
+    ret nv
+end
+
+func rv_transform(g &: Ng, r &: RvLoop):
+    h := r.head
+    pre := r.pre
+    g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
+    ivt := g.i_ty[r.iv]
+    acct := g.i_ty[r.acc]
+    init_iv := phi_val_for(g, r.iv, pre)
+    init_acc := phi_val_for(g, r.acc, pre)
+    vh := new_blk(g)
+    vb := new_blk(g)
+    rb := new_blk(g)
+    pt := g.b_last[pre]
+    mut lim64 := r.lim
+    if g.v_ty[r.lim] != T_I64:
+        if is_cint(g, r.lim):
+            lim64 = const_int(g, T_I64, norm_int(g, g.v_ty[r.lim], g.v_i[r.lim]))
+        else:
+            nn := ins_new(g, OP_SEXT, T_I64)
+            g.i_a[nn] = r.lim
+            g.i_x[nn] = g.v_ty[r.lim]
+            lim64 = new_res(g, nn)
+            ins_before(g, pt, nn)
+        end
+    end
+    adj := r.pred == CC_SLT ? 1 - 2 * r.vf : 2 - 2 * r.vf
+    li := ins_new(g, OP_ADD, T_I64)
+    g.i_a[li] = lim64
+    g.i_b[li] = const_int(g, T_I64, adj as i64)
+    vlim := new_res(g, li)
+    ins_before(g, pt, li)
+    replace_succ(g, pt, h, vh)
+    pv := ins_new(g, OP_PHI, ivt)
+    g.i_ps[pv] = g.pool.len()
+    g.i_pcount[pv] = 2
+    viv := new_res(g, pv)
+    ins_append(g, vh, pv)
+    pa := ins_new(g, OP_PHI, r.vty)
+    g.i_ps[pa] = g.pool.len() + 4
+    g.i_pcount[pa] = 2
+    vacc := new_res(g, pa)
+    ins_append(g, vh, pa)
+    pb := ins_new(g, OP_PHI, r.vty)
+    g.i_ps[pb] = g.pool.len() + 8
+    g.i_pcount[pb] = 2
+    vacc2 := new_res(g, pb)
+    ins_append(g, vh, pb)
+    w := rv_wide(g, vh, viv, ivt)
+    c := ins_new(g, OP_ICMP, T_I1)
+    g.i_a[c] = w
+    g.i_b[c] = vlim
+    g.i_x[c] = CC_SLT
+    cv := new_res(g, c)
+    ins_append(g, vh, c)
+    cb := ins_new(g, OP_CBR, T_VOID)
+    g.i_f[cb] = IF_NOVEC
+    g.i_a[cb] = cv
+    g.i_b[cb] = vb
+    g.i_c[cb] = rb
+    ins_append(g, vh, cb)
+    oa := r.addr_i
+    mut idx := viv
+    if g.i_b[oa] != g.i_res[r.iv]:
+        idx = rv_wide(g, vb, viv, ivt)
+    end
+    na := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[na] = g.i_a[oa]
+    g.i_b[na] = idx
+    g.i_x[na] = g.i_x[oa]
+    g.i_d[na] = g.i_d[oa]
+    nav := new_res(g, na)
+    ins_append(g, vb, na)
+    vl := ins_new(g, OP_LOAD, r.vty)
+    g.i_a[vl] = nav
+    g.i_c[vl] = g.i_c[r.load_i]
+    vlv := new_res(g, vl)
+    ins_append(g, vb, vl)
+    vsum := rv_emit(g, vb, OP_ADD, r.vty, vacc, vlv)
+    na2 := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[na2] = g.i_a[oa]
+    g.i_b[na2] = idx
+    g.i_x[na2] = g.i_x[oa]
+    g.i_d[na2] = g.i_d[oa] + ((r.vf * g.i_x[oa]) as i64)
+    nav2 := new_res(g, na2)
+    ins_append(g, vb, na2)
+    vl2 := ins_new(g, OP_LOAD, r.vty)
+    g.i_a[vl2] = nav2
+    g.i_c[vl2] = g.i_c[r.load_i]
+    vlv2 := new_res(g, vl2)
+    ins_append(g, vb, vl2)
+    vsum2 := rv_emit(g, vb, OP_ADD, r.vty, vacc2, vlv2)
+    vnext := rv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, (2 * r.vf) as i64))
+    g.i_f[g.v_def[vnext]] = IF_NSW
+    bj := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bj] = vh
+    ins_append(g, vb, bj)
+    g.pool.push(init_iv)
+    g.pool.push(pre)
+    g.pool.push(vnext)
+    g.pool.push(vb)
+    g.pool.push(new_val(g, VK_ZERO, r.vty, 0 as i64))
+    g.pool.push(pre)
+    g.pool.push(vsum)
+    g.pool.push(vb)
+    g.pool.push(new_val(g, VK_ZERO, r.vty, 0 as i64))
+    g.pool.push(pre)
+    g.pool.push(vsum2)
+    g.pool.push(vb)
+    vboth := rv_emit(g, rb, OP_ADD, r.vty, vacc, vacc2)
+    hs := ins_new(g, OP_VREDADD, acct)
+    g.i_a[hs] = vboth
+    hv := new_res(g, hs)
+    ins_append(g, rb, hs)
+    acc0 := rv_emit(g, rb, OP_ADD, acct, init_acc, hv)
+    br2 := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br2] = h
+    ins_append(g, rb, br2)
+    each p in [r.iv, r.acc]:
+        ps := g.i_ps[p]
+        repeat g.i_pcount[p] in q:
+            if g.pool[ps + 2 * q + 1] == pre:
+                g.pool[ps + 2 * q + 1] = rb
+                g.pool[ps + 2 * q] = p == r.iv ? viv : acc0
+            end
+        end
+    end
+end
+
+func reduce_vectorize(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    each h in heads:
+        mut r := RvLoop {}
+        if g.b_order[h] >= 0 and rv_match(g, h, r):
+            rv_transform(g, r)
+            changed = true
+        end
+    end
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

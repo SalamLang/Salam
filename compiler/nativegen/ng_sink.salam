@@ -1,0 +1,125 @@
+package nativegen
+
+func sink_ok(op: int): bool:
+    if op >= OP_ADD and op <= OP_ASHR:
+        ret op != OP_SDIV and op != OP_UDIV and op != OP_SREM and op != OP_UREM
+    end
+    if op == OP_ADDR or op == OP_SELECT or op == OP_ICMP or op == OP_FCMP:
+        ret true
+    end
+    ret op >= OP_SEXT and op <= OP_FPTRUNC
+end
+
+func sink_note(ub &: Vector<int>, v: int, b: int):
+    if v < 0 or v >= ub.len():
+        ret
+    end
+    if ub[v] == 0 - 1:
+        ub[v] = b
+    else ub[v] != b:
+        ub[v] = 0 - 2
+    end
+end
+
+func sink_round(g &: Ng, inner &: Vector<int>): bool:
+    mut ub := Vector {} as Vector<int>
+    repeat g.v_kind.len():
+        ub.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_PHI:
+                ps := g.i_ps[i]
+                repeat g.i_pcount[i] in q:
+                    sink_note(ub, g.pool[ps + 2 * q], g.pool[ps + 2 * q + 1])
+                end
+            else op == OP_CALL:
+                sink_note(ub, g.i_a[i], b)
+                ps2 := g.i_ps[i]
+                repeat g.i_pcount[i] in q2:
+                    sink_note(ub, g.pool[ps2 + 3 * q2], b)
+                end
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0: sink_note(ub, g.i_a[i], b) end
+                if (m & 2) != 0: sink_note(ub, g.i_b[i], b) end
+                if (m & 4) != 0: sink_note(ub, g.i_c[i], b) end
+            end
+            i = g.i_next[i]
+        end
+    end
+    mut changed := false
+    mut k := g.b_rpo.len() - 1
+    until k >= 0:
+        b2 := g.b_rpo[k]
+        mut j := g.b_last[b2]
+        until j >= 0:
+            pv := g.i_prev[j]
+            r := g.i_res[j]
+            if r >= 0 and sink_ok(g.i_op[j]) and ub[r] >= 0 and ub[r] != b2:
+                u := ub[r]
+                if dominates(g, b2, u) and inner[u] == inner[b2] and g.b_order[u] >= 0:
+                    mut at := g.b_first[u]
+                    until at >= 0 and g.i_op[at] == OP_PHI:
+                        at = g.i_next[at]
+                    end
+                    if at >= 0:
+                        keep := g.i_op[j]
+                        ins_unlink(g, j)
+                        g.i_op[j] = keep
+                        ins_before(g, at, j)
+                        changed = true
+                    end
+                end
+            end
+            j = pv
+        end
+        k -= 1
+    end
+    ub.free()
+    ret changed
+end
+
+func sink_pass(g &: Ng): bool:
+    build_dom(g)
+    nb := g.b_first.len()
+    mut inner := Vector {} as Vector<int>
+    mut isz := Vector {} as Vector<int>
+    repeat nb:
+        inner.push(0 - 1)
+        isz.push(2147483647)
+    end
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 7000000
+    each h in l.head:
+        mark += 1
+        n := lp_body(g, l, h, mark)
+        repeat nb in b:
+            if l.inl[b] == mark and n < isz[b]:
+                isz[b] = n
+                inner[b] = h
+            end
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    mut changed := false
+    repeat 4:
+        if not sink_round(g, inner):
+            break
+        end
+        changed = true
+    end
+    inner.free()
+    isz.free()
+    ret changed
+end

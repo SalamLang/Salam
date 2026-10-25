@@ -55,6 +55,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     saved_self := v.self_ts
     saved_this := v.this_ref
     saved_sp := v.cur_sp
+    saved_scope := v.cur_scope
     saved_dbg := v.cur_dbg
     saved_lam := v.cur_lambda
     saved_env := v.env_ref
@@ -99,7 +100,13 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
             )
         end
     end
-    co.SbPuts(hdr, ") nounwind {\n")
+    if v.debug:
+        lsp := debug_subprogram(v, name, node.begin_line as int, node.src_file)
+        v.cur_dbg = debug_location(v, node.begin_line as int, node.begin_col as int)
+        co.SbPuts(hdr, ") nounwind !dbg " + lsp + " {\n")
+    else:
+        co.SbPuts(hdr, ") nounwind {\n")
+    end
     header := co.SbCstr(hdr)
     co.SbFree(hdr)
 
@@ -107,6 +114,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
         p2 := at.Get(a, node.list.get(i2))
         if p2.is_ref:
             local_add(v, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str)
+            debug_declare(v, s, a, p2.name, "%arg" + co.I64Toa(i2 as i64), p2.type_str, p2.begin_line as int, i2 + 1)
         else:
             ptr2 := "%p." + safe_name(p2.name)
             emit_alloca(v, ptr2 + " = alloca " + ty_of(v, s, a, p2.type_str))
@@ -114,6 +122,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
                 v, "store " + ty_of(v, s, a, p2.type_str) + " %arg" + co.I64Toa(i2 as i64) + ", ptr " + ptr2
             )
             local_add(v, p2.name, ptr2, p2.type_str)
+            debug_declare(v, s, a, p2.name, ptr2, p2.type_str, p2.begin_line as int, i2 + 1)
         end
     end
     if node.a != 0:
@@ -151,6 +160,7 @@ func emit_lambda(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     v.self_ts = saved_self
     v.this_ref = saved_this
     v.cur_sp = saved_sp
+    v.cur_scope = saved_scope
     v.cur_dbg = saved_dbg
     v.cur_lambda = saved_lam
     v.env_ref = saved_env
@@ -396,7 +406,7 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
                     v.gdefer.push(v.globals.len())
                 end
             end
-            out_g(v, gref + " = internal global " + lty + " " + init + "\n")
+            out_g(v, gref + " = internal global " + lty + " " + init + debug_global(v, s, a, dn.name, ts, dn.begin_line as int, dn.src_file) + "\n")
             v.globals.push(gv)
             any = true
         end

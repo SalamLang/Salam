@@ -6,7 +6,7 @@ k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15, 5]
 k_ra_gpr_win := [0, 1, 2, 8, 9, 3, 6, 7, 12, 13, 14, 15]
 k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
 k_ra_gpr_a64 := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15]
-k_ra_gpr_x86 := [0, 1, 2, 3, 5]
+k_ra_gpr_x86 := [0, 1, 2, 3, 5, 6]
 k_ra_xmm_x86 := [16, 17, 18, 19, 20, 21]
 k_ra_gpr_arm := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12]
 k_ra_xmm_arm := [16, 17, 18, 19, 20, 21, 22, 23]
@@ -58,7 +58,7 @@ func is_callee_saved(g &: Ng, r: int): bool:
         ret r >= 12 and r <= 15
     end
     if g.arch == NG_ARCH_X86:
-        ret r == RBX or r == RBP or r == R10 or r == R11
+        ret r == RBX or r == RBP or r == RSI or r == R10 or r == R11
     end
     if r == RBX or r == R12 or r == R13 or r == R14 or r == R15:
         ret true
@@ -558,7 +558,7 @@ func reg_ok_for(g &: Ng, r: int, cls: int): bool:
     if r == RBP and g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
         ret false
     end
-    if g.arch == NG_ARCH_X86 and ((r > RBP and r < 16) or r > 21):
+    if g.arch == NG_ARCH_X86 and ((r > RBP and r < 16 and (r != RSI or g.off_x86si)) or r > 21):
         ret false
     end
     if g.arch == NG_ARCH_ARM and (r == R10 or r == R11 or (r > 12 and r < 16) or r > 23):
@@ -618,7 +618,7 @@ func choose_reg(g &: Ng, ra &: Ra, v: int): int:
     end
     if g.arch == NG_ARCH_X86:
         each r86 in k_ra_gpr_x86:
-            if ra.free_until[r86] > e:
+            if ra.free_until[r86] > e and (r86 != RSI or not g.off_x86si):
                 ret r86
             end
         end
@@ -942,9 +942,45 @@ func is_use_r0(op: int): bool:
     ret true
 end
 
+func x86_live(g &: Ng, c: int, i: int): bool:
+    mut v := VBASE
+    n := g.mc.vloc.len()
+    until v < n:
+        if g.mc.vloc[v] == c and g.mc.vstart[v] <= 2 * i + 1 and g.mc.vend[v] >= 2 * i:
+            ret true
+        end
+        v += 1
+    end
+    ret false
+end
+
+func x86_borrow(g &: Ng, i: int, r0: int, r1: int, mb: int, mi: int, save &: bool): int:
+    mut pick := 0 - 1
+    each c in [RSI, RBX, RBP]:
+        mut busy := false
+        each x in [r0, r1, mb, mi]:
+            if x >= 0 and not spilled(g, x) and phys(g, x) == c:
+                busy = true
+            end
+        end
+        if not busy:
+            if not x86_live(g, c, i):
+                save = false
+                ret c
+            end
+            if pick < 0:
+                pick = c
+            end
+        end
+    end
+    save = true
+    ret pick
+end
+
 func rewrite(g &: Ng):
     mut o := mc_take(g)
     n := o.op.len()
+    mut bslot := 0 - 1
     mut dv_prev := 0 - 1
     mut dv_n0 := 0
     repeat n in i:
@@ -1044,6 +1080,27 @@ func rewrite(g &: Ng):
                 ngs += 1
             end
         end
+        mut s10 := R10
+        mut bw := 0 - 1
+        if g.arch == NG_ARCH_X86 and (smb == R10 or smi == R10 or sr0 == R10 or sr1 == R10 or sr0 == 0 - 2 or sr1 == 0 - 2):
+            mut bsave := true
+            s10 = x86_borrow(g, i, r0, r1, mb, mi, bsave)
+            if s10 < 0:
+                fail(g, "native backend: register allocator ran out of scratch registers")
+                s10 = RSI
+            end
+            if bsave:
+                bw = s10
+                if bslot < 0:
+                    bslot = new_slot(g, 4, 4)
+                end
+                _bs := e_mr(g, M_ST, 4, frame_mem(bslot, 0 as i64), bw)
+            end
+            if smb == R10: smb = s10 end
+            if smi == R10: smi = s10 end
+            if sr0 == R10: sr0 = s10 end
+            if sr1 == R10: sr1 = s10 end
+        end
         mut nmb := phys(g, mb)
         mut nmi := phys(g, mi)
         mut nms := o.ms[i]
@@ -1067,10 +1124,10 @@ func rewrite(g &: Ng):
                 nmd = 0 as i64
                 smi = 0 - 1
                 if sr1 == 0 - 2:
-                    sr1 = R10
+                    sr1 = s10
                 end
                 if sr0 == 0 - 2:
-                    sr0 = R10
+                    sr0 = s10
                 end
             else:
                 fail(g, "native backend: register allocator ran out of scratch registers")
@@ -1099,6 +1156,9 @@ func rewrite(g &: Ng):
         end
         if sr0 >= 0 and is_def_slot(op, o.cc[i]):
             spill_store(g, r0, sr0)
+        end
+        if bw >= 0:
+            _br := e_rm(g, M_LD, 4, bw, frame_mem(bslot, 0 as i64))
         end
     end
     mc_free_arrays(o)

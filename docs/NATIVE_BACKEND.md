@@ -115,8 +115,11 @@ The `i686` targets reuse the x86-64 pipeline with three additions.
   `st0` and are moved to an SSE register right away, so everything after the
   call uses SSE2 as on x86-64. SSE2 is therefore required (any x86 CPU since
   2001).
-- The register allocator gets `eax`, `ecx`, `edx`, `ebx` and `ebp`, with
-  `esi`/`edi` as its spill scratch and `xmm0`-`xmm5` for floats. The encoder
+- The register allocator gets `eax`, `ecx`, `edx`, `ebx`, `ebp` and `esi`,
+  with `edi` as its spill scratch and `xmm0`-`xmm5` for floats. An
+  instruction whose spilled operands need a second scratch register borrows
+  `esi`, `ebx` or `ebp`: one that holds no live value at that point is used
+  as is, otherwise it is saved to a frame slot around the instruction. The encoder
   drops REX prefixes, addresses globals with absolute 32-bit relocations, and
   wraps a byte instruction whose operand sits in `ebp`, `esi` or `edi` (no
   8-bit form on i386) in a pair of `xchg`s with a free low register.
@@ -127,7 +130,7 @@ code). On Windows it is an i386 COFF object: every symbol gets the `_`
 prefix, and a Win32 function the frontend marks `x86_stdcallcc` is named
 `_Name@N`; it pops its own arguments, so the caller subtracts `N` from
 `esp` right after the call to keep its fixed argument area in place.
-Unwind tables, DWARF and the loop vectorizers are off on these targets for now; the straight-line (SLP) vectorizer runs on i686, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads.
+Unwind tables, DWARF and the loop vectorizer are off on these targets for now. On i686 the straight-line (SLP) vectorizer runs, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads, and so does the sum-reduction vectorizer: an `i64` total comes out of `paddq` lanes as two `movd` halves.
 Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 `types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
 `interop` and `webframework` tests match their expected output except those

@@ -75,8 +75,8 @@ in memory. Every test, compiled for `arm64-apple-macos` and linked by both
 the built-in linker and `ld64.lld`, disassembles to the same instructions.
 
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
-there are no unwind tables, `-g` gives line tables and frames but not yet
-variable locations, and in release builds an integer
+there are no unwind tables (gdb walks the frames from the prologues), and
+in release builds an integer
 division by zero returns 0 instead of trapping, as ARM hardware does (debug
 builds check explicitly, as on every target).
 
@@ -131,7 +131,7 @@ code). On Windows it is an i386 COFF object: every symbol gets the `_`
 prefix, and a Win32 function the frontend marks `x86_stdcallcc` is named
 `_Name@N`; it pops its own arguments, so the caller subtracts `N` from
 `esp` right after the call to keep its fixed argument area in place.
-Unwind tables and the loop vectorizer are off on these targets for now, and `-g` gives line tables and frames but no variable locations. On i686 the straight-line (SLP) vectorizer runs, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads, and so does the sum-reduction vectorizer: an `i64` total comes out of `paddq` lanes as two `movd` halves.
+The loop vectorizer is off on these targets for now. i686 Linux objects carry `.eh_frame` (frames are `esp`-based, so a debugger cannot walk them otherwise); armhf has none yet and gdb walks its frames from the prologues. On i686 the straight-line (SLP) vectorizer runs, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads, and so does the sum-reduction vectorizer: an `i64` total comes out of `paddq` lanes as two `movd` halves.
 Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 `types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
 `interop` and `webframework` tests match their expected output except those
@@ -177,8 +177,8 @@ lowers each machine instruction in `ng_arm.salam`, and like i686 it splits
 
 Built with the built-in linker against a musl sysroot and run under
 qemu-arm, the test groups listed for i686 match their expected output with
-the same exceptions. There are no unwind tables yet; `-g` gives line tables
-and frames (see "Debug information").
+the same exceptions. There are no unwind tables yet; `-g` gives line tables,
+frames and variables (see "Debug information").
 
 ## RISC-V
 
@@ -690,11 +690,18 @@ How the pieces fit:
   `rbp` there. Both the built-in PE linker and mingw `ld` keep them, so gdb
   for mingw reads lines, frames and variables.
 - On Linux i686, armhf, AArch64 and RISC-V the encoders record the same line
-  rows and function ranges, and the 32-bit targets write 4-byte DWARF
-  addresses, so gdb (natively, or `gdb-multiarch` against `qemu -g`) stops
-  on a source line and walks the frames. Variable locations still need the
-  per-architecture DWARF register numbers and are only written for x86-64.
-  32-bit Windows objects get no debug sections.
+  rows, function ranges and variable locations, with each target's DWARF
+  register numbers and its stack pointer as the frame base; the 32-bit
+  targets write 4-byte DWARF addresses. gdb (natively, or `gdb-multiarch`
+  against `qemu -g`) stops on a source line, prints arguments and locals,
+  and walks the frames; `tools/bash/native-gdb-check.sh <salam> <triple>
+<runner>` checks that on each target. 32-bit Windows objects get no debug
+  sections.
+- Each function's first line row after its opening line carries
+  `DW_LNS_set_prologue_end`, so `break func` stops after the arguments have
+  been loaded into registers. gdb only trusts its own prologue analysis for
+  compilers it knows, and on i686, where every argument arrives on the
+  stack, that would stop before any of them has a location.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
 CodeView/PDB for MSVC debuggers is not written.

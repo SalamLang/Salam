@@ -280,17 +280,23 @@ func dbg_row_md(g &: Ng, off: int, loc: int):
     fi := dbg_file_index(g, fmd)
     ln := g.md_line[loc]
     n := g.dl_off.len()
-    if n > 0 and g.dl_line[n - 1] == ln and g.dl_file[n - 1] == fi:
+    mut pe := false
+    if g.dbg_pe >= 0 and off > g.dbg_pe:
+        pe = true
+        g.dbg_pe = 0 - 1
+    end
+    lastf := n > 0 ? (g.dl_file[n - 1] < 0 ? 0 - g.dl_file[n - 1] : g.dl_file[n - 1]) : 0 - 1
+    if n > 0 and g.dl_line[n - 1] == ln and lastf == fi:
         ret
     end
     if n > 0 and g.dl_off[n - 1] == off:
         g.dl_line[n - 1] = ln
-        g.dl_file[n - 1] = fi
+        g.dl_file[n - 1] = g.dl_file[n - 1] < 0 ? 0 - fi : fi
         ret
     end
     g.dl_off.push(off)
     g.dl_line.push(ln)
-    g.dl_file.push(fi)
+    g.dl_file.push(pe ? 0 - fi : fi)
 end
 
 func dbg_aw(g &: Ng): int:
@@ -309,6 +315,7 @@ func dbg_words(g &: Ng, base: int, pos: Vector<int>):
     if g.f_sp >= 0:
         dbg_row_md(g, base, g.f_sp)
         dbg_range(g, base, 0 - 1)
+        g.dbg_pe = base
     end
     repeat pos.len() in i:
         if g.mc.op[i] != M_LABEL and g.mc.op[i] != M_NOP:
@@ -319,6 +326,7 @@ end
 
 func dbg_func(g &: Ng, base: int, size: int):
     sp0 := g.f_sp
+    g.dbg_pe = 0 - 1
     if not g.dbg_on or sp0 < 0 or sp0 >= g.md_kind.len() or g.md_kind[sp0] != 2:
         ret
     end
@@ -958,10 +966,11 @@ func dbg_emit(g &: Ng):
     mut cur_line := 1
     mut cur_file := 1
     repeat g.dl_off.len() in r:
-        if g.dl_file[r] != cur_file:
+        rf := g.dl_file[r] < 0 ? 0 - g.dl_file[r] : g.dl_file[r]
+        if rf != cur_file:
             dl.push(4 as u8)
-            vb_uleb(dl, g.dl_file[r] as i64)
-            cur_file = g.dl_file[r]
+            vb_uleb(dl, rf as i64)
+            cur_file = rf
         end
         if g.dl_off[r] != cur_off:
             dl.push(2 as u8)
@@ -972,6 +981,9 @@ func dbg_emit(g &: Ng):
             dl.push(3 as u8)
             vb_sleb(dl, (g.dl_line[r] - cur_line) as i64)
             cur_line = g.dl_line[r]
+        end
+        if g.dl_file[r] < 0:
+            dl.push(10 as u8)
         end
         dl.push(1 as u8)
     end

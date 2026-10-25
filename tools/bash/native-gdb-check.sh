@@ -4,12 +4,24 @@
 # pieces, constants left after folding a loop, and a backtrace through an
 # inlined std function. It runs once per linker.
 #
-# Usage: tools/bash/native-gdb-check.sh <salam>
+# With a target triple and a runner it cross-builds instead (built-in linker
+# only, against SALAM_MUSL_SYSROOT) and debugs through gdb-multiarch and the
+# runner's gdb stub, e.g. qemu-aarch64-static -g. Use `env` as the runner for
+# a target the host runs directly (i686).
+#
+# Usage: tools/bash/native-gdb-check.sh <salam> [<triple> <runner>]
 
 set -u
 SALAM=$1
-if ! command -v gdb >/dev/null 2>&1; then
-    echo "native gdb check: gdb not found, skipped"
+case "$SALAM" in /*) ;; *) SALAM="$(pwd)/$SALAM" ;; esac
+TRIPLE=${2:-}
+RUNNER=${3:-}
+GDB=gdb
+if [ -n "$TRIPLE" ] && [ "$RUNNER" != env ]; then
+    GDB=gdb-multiarch
+fi
+if ! command -v "$GDB" >/dev/null 2>&1; then
+    echo "native gdb check: $GDB not found, skipped"
     exit 0
 fi
 work=$(mktemp -d)
@@ -58,18 +70,35 @@ check() {
         fail=$((fail + 1))
     fi
 }
-for lk in builtin system; do
-    if ! (cd "$work" && SALAM_LINKER=$lk "$SALAM" build dg.salam --backend=native -g --output="dg_$lk" --log-level=error >"$work/build_$lk.log" 2>&1); then
+linkers="builtin system"
+tgt=
+if [ -n "$TRIPLE" ]; then
+    linkers=builtin
+    tgt=--target=$TRIPLE
+fi
+for lk in $linkers; do
+    # shellcheck disable=SC2086
+    if ! (cd "$work" && SALAM_LINKER=$lk "$SALAM" build dg.salam --backend=native -g $tgt --output="dg_$lk" --log-level=error >"$work/build_$lk.log" 2>&1); then
         echo "FAIL $lk: build failed"
         sed -n 1,5p "$work/build_$lk.log"
         fail=$((fail + 1))
         continue
     fi
     out="$work/gdb_$lk.txt"
-    (cd "$work" && gdb -batch -nx \
-        -ex "break *salam_area_Pt_f64+5" -ex "break dg.salam:9" -ex "break dg.salam:21" \
-        -ex run -ex "info args" -ex continue -ex "info locals" -ex continue -ex "info locals" \
-        -ex "delete" -ex continue -ex bt "./dg_$lk" >"$out" 2>&1)
+    if [ -z "$TRIPLE" ] || [ "$RUNNER" = env ]; then
+        set -- -ex run
+    else
+        port=$((20000 + $$ % 20000))
+        # shellcheck disable=SC2086
+        (cd "$work" && exec $RUNNER -g "$port" "./dg_$lk" >/dev/null 2>&1) &
+        sleep 1
+        set -- -ex "target remote :$port" -ex continue
+    fi
+    (cd "$work" && timeout 120 "$GDB" -batch -nx \
+        -ex "break salam_area_Pt_f64" -ex "break dg.salam:9" -ex "break dg.salam:21" -ex "break salam_panic" \
+        "$@" -ex "info args" -ex continue -ex "info locals" -ex continue -ex "info locals" \
+        -ex continue -ex bt -ex kill "./dg_$lk" >"$out" 2>&1)
+    wait
     check "$out" "p = {x = 3, y = 4}" "$lk struct pieces"
     check "$out" "scale = 1.5" "$lk float argument"
     check "$out" "w = 6" "$lk register local"

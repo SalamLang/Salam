@@ -87,9 +87,13 @@ registers, as the Windows ARM64 ABI requires. `x18` belongs to the OS and
 the allocator never uses it. The runtime is llvm-mingw (UCRT): the built-in
 linker finds it through `aarch64-w64-mingw32-clang` on `PATH` or
 `SALAM_LLVM_MINGW`, and `--linker=system` links with that clang instead.
-The native backend gate builds the `llvm` tests both ways and runs them on a
-`windows-11-arm` runner. There is no `.pdata` for ARM64 yet, so Windows can
-run the programs but cannot unwind through their frames.
+Every function gets a `.pdata` entry whose `.xdata` codes follow the
+prologue instruction by instruction (`save_fplr_x`, `set_fp`, the
+allocation, `save_reg` for each callee-saved register within 504 bytes of
+`sp`, `nop` for anything else), so debuggers and the OS unwinder can walk
+the frames. The native backend gate builds the `llvm` tests with the
+built-in linker and with lld and runs both sets on a `windows-11-arm`
+runner; all of them pass on that hardware.
 
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables (gdb walks the frames from the prologues), and

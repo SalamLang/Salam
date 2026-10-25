@@ -716,8 +716,9 @@ How the pieces fit:
   targets write 4-byte DWARF addresses. gdb (natively, or `gdb-multiarch`
   against `qemu -g`) stops on a source line, prints arguments and locals,
   and walks the frames; `tools/bash/native-gdb-check.sh <salam> <triple>
-<runner>` checks that on each target. 32-bit Windows objects get no debug
-  sections.
+<runner>` checks that on each target. Windows x64 and Windows on Arm images
+  carry the same DWARF in PE sections (offsets as `SECREL`); 32-bit Windows
+  objects get no debug sections.
 - Each function's first line row after its opening line carries
   `DW_LNS_set_prologue_end`, so `break func` stops after the arguments have
   been loaded into registers. gdb only trusts its own prologue analysis for

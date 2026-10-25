@@ -213,6 +213,13 @@ jobs:
           find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
             SALAM_LINKER=system NATIVE_WIN_TRIPLE=aarch64-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage/lld \
               xargs -0 sh tools/bash/native-windows-check.sh ./salam
+      - name: Build the compiler itself for Windows on Arm
+        run: |
+          mkdir -p winarm-stage/selfhost
+          ./salam build compiler/main.salam --backend=native --release --target=aarch64-w64-windows-gnu \
+            --output=winarm-stage/selfhost/salam.exe --log-level=error
+          ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o winarm-stage/selfhost/ref.ll --log-level=error
+          tar -cf winarm-stage/selfhost/src.tar compiler std
       - name: Upload the programs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -240,3 +247,18 @@ jobs:
         if: always()
         shell: bash
         run: sh tools/bash/native-stage-run.sh winarm-stage/lld
+      - name: The compiler built for Windows on Arm reproduces the reference IR
+        if: always()
+        shell: bash
+        run: |
+          cd winarm-stage/selfhost
+          mkdir src
+          tar -xf src.tar -C src
+          SALAM_STD="$(pwd -W)/src/std" ./salam.exe llvm src/compiler/main.salam --target=x86_64-linux-gnu -o out.ll --log-level=error
+          grep -v ' UTC\\00"$' ref.ll >ref.trim
+          grep -v ' UTC\\00"$' out.ll | tr -d '\r' >out.trim
+          if ! cmp -s ref.trim out.trim; then
+            diff ref.trim out.trim | head -20
+            exit 1
+          fi
+          echo "salam.exe on Windows on Arm reproduces the reference IR"

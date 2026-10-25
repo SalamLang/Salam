@@ -363,7 +363,8 @@ For one of our objects the link is `crt2.o crtbegin.o <object> -lmingw32
 
 ### PE inputs
 
-- **COFF objects** (`machine 0x8664`): section table with long names in the
+- **COFF objects** (`machine 0x8664`, and `0x14c` and `0xAA64` since phase
+  4): section table with long names in the
   string table (`/123`), 18-byte symbols with auxiliary records, 10-byte
   relocations whose addend is stored in the section bytes.
 - **Archives** use the same GNU `ar` format as on Linux.
@@ -371,9 +372,10 @@ For one of our objects the link is `crt2.o crtbegin.o <object> -lmingw32
   objects: a head object with the `.idata$2` descriptor, one object per
   symbol (`.idata$4` lookup entry, `.idata$5` IAT slot, `.idata$6`
   hint/name, `.idata$7` name pointer, and a `jmp` thunk in `.text`), and a
-  tail with the DLL name. The linker needs no import synthesis; sorting the
-  grouped `.idata$N` sections produces a valid import table. Short import
-  members (as written by LLVM tools) are a later addition.
+  tail with the DLL name. Sorting the grouped `.idata$N` sections produces a
+  valid import table. Short import members (as written by LLVM tools, and
+  used by llvm-mingw) are turned into objects of the same shape; see "ARM64
+  PE and short import members" below.
 - **COMDAT** sections (`IMAGE_SCN_LNK_COMDAT`) keep the first definition
   of their leader symbol; associative COMDATs follow their leader.
 - **Weak externals** (storage class 105) fall back to their default symbol.
@@ -440,6 +442,7 @@ reads whatever the LLVM backend produces, so `--linker=builtin` works with
 | `arm-linux-musleabihf` | static ELF32 | bundled musl |
 | `x86_64-w64-windows-gnu` | PE32+ | mingw-w64 |
 | `i686-w64-windows-gnu` | PE32 | mingw-w64 |
+| `aarch64-w64-windows-gnu` | PE32+ (ARM64) | llvm-mingw (UCRT) |
 | `x86_64-apple-macos`, `arm64-apple-macos` | Mach-O PIE, ad-hoc signed | `libSystem` |
 
 With the LLVM backend the driver asks LLVM for an object instead of an

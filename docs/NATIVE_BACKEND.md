@@ -87,8 +87,13 @@ The `i686` targets reuse the x86-64 pipeline with three additions.
   into a pair of 32-bit halves: shifts by a constant become two shifts and an
   `or`, loads and stores touch both words, and a multiply becomes three 32-bit
   multiplies (one when both operands are sign-extended 32-bit values). A
-  division or remainder by a constant uses a 64-bit magic multiply built from
-  32-bit pieces; a division whose operands range analysis proves fit in 32
+  division or remainder by a constant below 2^32 uses the hardware `div`
+  the way libgcc does, without the call: when the high word is already below
+  the divisor one `div` of `edx:eax` gives the quotient's low word and the
+  remainder, otherwise the high word is divided first. A signed one divides
+  the absolute value and fixes the signs with `xor`/`sub`. (32-bit ARM has no
+  divide instruction and uses a 64-bit magic multiply built from 32-bit
+  pieces instead.) A division whose operands range analysis proves fit in 32
   bits becomes a 32-bit one, and one whose operands are provably
   non-negative becomes unsigned. Other divisions call the libgcc helpers once
   per operand pair: the quotient comes from `__divdi3` (or `__udivdi3`) and a

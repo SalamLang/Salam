@@ -755,6 +755,24 @@ func lg_k64(g &: Ng, v: i64, lo &: int, hi &: int):
     hi = lg_c32(g, v >> (32 as i64))
 end
 
+func lg_d6432(g &: Ng, at: int, xl: int, xh: int, k: int, part: int): int:
+    r := lg_ins(g, at, OP_DIV6432, T_I32, xl, xh)
+    g.i_c[g.v_def[r]] = k
+    g.i_x[g.v_def[r]] = part
+    ret r
+end
+
+func lg_udiv32k(g &: Ng, at: int, xl: int, xh: int, d: i64, rem: bool, lo &: int, hi &: int):
+    k := lg_c32(g, d)
+    if rem:
+        lo = lg_d6432(g, at, xl, xh, k, 1)
+        hi = lg_c32(g, 0 as i64)
+        ret
+    end
+    lo = lg_d6432(g, at, xl, xh, k, 0)
+    hi = lg_d6432(g, at, xl, xh, k, 2)
+end
+
 func lg_divconst(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, hi &: int): bool:
     if b < 0 or g.v_kind[b] != VK_INT:
         ret false
@@ -783,6 +801,10 @@ func lg_divconst(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, 
                 ret true
             end
             lg_shift_const(g, at, OP_LSHR, xl, xh, k, lo, hi)
+            ret true
+        end
+        if g.arch == NG_ARCH_X86 and du < (1 as u64) << (32 as u64):
+            lg_udiv32k(g, at, xl, xh, d, rem, lo, hi)
             ret true
         end
         mut pm := 0 as u64
@@ -839,6 +861,20 @@ func lg_divconst(g &: Ng, l &: Lg, at: int, op: int, a: int, b: int, lo &: int, 
                 ql = gl
                 qh = gh
             end
+        else g.arch == NG_ARCH_X86 and ad < (1 as i64) << (32 as i64):
+            sx0 := lg_ins(g, at, OP_ASHR, T_I32, xh, lg_c32(g, 31 as i64))
+            mut ul := 0
+            mut uh := 0
+            lg_add64(g, at, lg_ins(g, at, OP_XOR, T_I32, xl, sx0), lg_ins(g, at, OP_XOR, T_I32, xh, sx0), sx0, sx0, true, ul, uh)
+            mut rl0 := 0
+            mut rh0 := 0
+            lg_udiv32k(g, at, ul, uh, ad, rem, rl0, rh0)
+            mut sq := sx0
+            if not rem and d < (0 as i64):
+                sq = lg_ins(g, at, OP_XOR, T_I32, sx0, lg_c32(g, 0 - 1 as i64))
+            end
+            lg_add64(g, at, lg_ins(g, at, OP_XOR, T_I32, rl0, sq), lg_ins(g, at, OP_XOR, T_I32, rh0, sq), sq, sq, true, lo, hi)
+            ret true
         else:
             mut m := 0 as i64
             mut sh2 := 0

@@ -1235,6 +1235,65 @@ func emit_cmp64(g &: Ng, i: int): int:
     ret icmp_cc(g.i_x[i])
 end
 
+func isel_div6432(g &: Ng, i: int):
+    ra := use_reg(g, g.i_a[i])
+    rb := use_reg(g, g.i_b[i])
+    rc := use_reg(g, g.i_c[i])
+    mut tw := Vector {} as Vector<int>
+    mut j := g.i_next[i]
+    until j >= 0:
+        if g.i_op[j] == OP_DIV6432 and g.i_a[j] == g.i_a[i] and g.i_b[j] == g.i_b[i] and g.i_c[j] == g.i_c[i] and g.i_res[j] >= 0:
+            tw.push(j)
+        end
+        j = g.i_next[j]
+    end
+    mut needh := g.i_x[i] == 2
+    each t in tw:
+        if g.i_x[t] == 2:
+            needh = true
+        end
+    end
+    rq := gpr(g)
+    rr := gpr(g)
+    rh := gpr(g)
+    slow := new_label(g)
+    done := new_label(g)
+    _cm := e_alu(g, ALU_CMP, 4, rb, rc)
+    _js := e_jcc(g, X_AE, slow)
+    _f1 := e_copy(g, RAX, ra)
+    _f2 := e_copy(g, RDX, rb)
+    d0 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d0] = 0
+    _f3 := e_copy(g, rq, RAX)
+    _f4 := e_copy(g, rr, RDX)
+    if needh:
+        _f5 := e_movi(g, rh, 0 as i64)
+    end
+    _jd := e_jmp(g, done)
+    _ls := e_label(g, slow)
+    _s1 := e_copy(g, RAX, rb)
+    _s2 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
+    d1 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d1] = 0
+    if needh:
+        _s3 := e_copy(g, rh, RAX)
+    end
+    _s4 := e_copy(g, RAX, ra)
+    d2 := e_rr(g, M_DIV, 4, 0 - 1, rc)
+    g.mc.cc[d2] = 0
+    _s5 := e_copy(g, rq, RAX)
+    _s6 := e_copy(g, rr, RDX)
+    _ld := e_label(g, done)
+    x := g.i_x[i]
+    set_res(g, i, x == 1 ? rr : (x == 2 ? rh : rq))
+    each t2 in tw:
+        xt := g.i_x[t2]
+        g.vv[g.i_res[t2]] = xt == 1 ? rr : (xt == 2 ? rh : rq)
+        g.skipi[t2] = true
+    end
+    tw.free()
+end
+
 func isel_adc64(g &: Ng, i: int):
     y := g.i_b[i]
     yimm := g.v_kind[y] == VK_INT and is_imm32(g.v_i[y])
@@ -4436,6 +4495,12 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_ADC64:
             if res_used(g, i):
                 isel_adc64(g, i)
+            end
+            ret
+        end
+        OP_DIV6432:
+            if res_used(g, i):
+                isel_div6432(g, i)
             end
             ret
         end

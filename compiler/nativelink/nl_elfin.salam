@@ -129,6 +129,7 @@ func add_object(l &: Nl, f: int, base: i64, size: i64, label: str):
             symtab = i
         end
     end
+    elf_groups(l, p, f, base, shoff, shnum, sec0, is32)
     sym0 := l.os_sec.len()
     l.o_sym0.push(sym0)
     if symtab < 0:
@@ -184,6 +185,8 @@ func add_object(l &: Nl, f: int, base: i64, size: i64, label: str):
                         if l.g_firstref[gi] < 0:
                             l.g_firstref[gi] = o
                         end
+                    else sec >= 0 and l.s_drop[sec]:
+                        sym_merge(l, gi, o, 0 - 1, val, bind == 2)
                     else:
                         sym_merge(l, gi, o, sec, val, bind == 2)
                     end
@@ -227,6 +230,48 @@ func add_object(l &: Nl, f: int, base: i64, size: i64, label: str):
             else:
                 l.r_add.push(rel_implicit(l, p, l.s_off[tgt] + roff, rtype))
             end
+        end
+    end
+end
+
+func elf_groups(l &: Nl, p: u8*, f: int, base: i64, shoff: i64, shnum: int, sec0: int, is32: bool):
+    shsz := is32 ? 40 : 64
+    repeat shnum in i:
+        s := sec0 + i
+        if l.s_type[s] != 17 or l.s_size[s] < (8 as i64) or (rd32(p, l.s_off[s]) & (1 as i64)) == (0 as i64):
+            continue
+        end
+        sh := shoff + ((i * shsz) as i64)
+        stab := rd32(p, sh + (is32 ? 24 : 40) as i64) as int
+        sidx := rd32(p, sh + (is32 ? 28 : 44) as i64)
+        if stab <= 0 or stab >= shnum:
+            continue
+        end
+        sh2 := shoff + ((stab * shsz) as i64)
+        st_off := base + ew(p, sh2 + (is32 ? 16 : 24) as i64, is32)
+        strl := rd32(p, sh2 + (is32 ? 24 : 40) as i64) as int
+        str_off := base + ew(p, shoff + ((strl * shsz) as i64) + (is32 ? 16 : 24) as i64, is32)
+        no := str_off + rd32(p, st_off + sidx * ((is32 ? 16 : 24) as i64))
+        ln := cstr_len(p, no, l.f_size[f])
+        if ln <= 0:
+            continue
+        end
+        nm := nt_find(l.names, p, no, ln, true)
+        until l.grp_seen.len() <= nm:
+            l.grp_seen.push(false)
+        end
+        if not l.grp_seen[nm]:
+            l.grp_seen[nm] = true
+            continue
+        end
+        n := (l.s_size[s] / (4 as i64)) as int
+        mut k := 1
+        until k < n:
+            m := rd32(p, l.s_off[s] + ((k * 4) as i64)) as int
+            if m > 0 and m < shnum:
+                l.s_drop[sec0 + m] = true
+            end
+            k += 1
         end
     end
 end

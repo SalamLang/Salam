@@ -13,7 +13,7 @@
 
 set -u
 SALAM=$1
-case "$SALAM" in /*) ;; *) SALAM="$(pwd)/$SALAM" ;; esac
+case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=${2:-}
 RUNNER=${3:-}
 GDB=gdb
@@ -85,12 +85,14 @@ for lk in $linkers; do
         continue
     fi
     out="$work/gdb_$lk.txt"
+    rpid=
     if [ -z "$TRIPLE" ] || [ "$RUNNER" = env ]; then
         set -- -ex run
     else
         port=$((20000 + $$ % 20000))
         # shellcheck disable=SC2086
         (cd "$work" && exec $RUNNER -g "$port" "./dg_$lk" >/dev/null 2>&1) &
+        rpid=$!
         sleep 1
         set -- -ex "target remote :$port" -ex continue
     fi
@@ -98,7 +100,10 @@ for lk in $linkers; do
         -ex "break salam_area_Pt_f64" -ex "break dg.salam:9" -ex "break dg.salam:21" -ex "break salam_panic" \
         "$@" -ex "info args" -ex continue -ex "info locals" -ex continue -ex "info locals" \
         -ex continue -ex bt -ex kill "./dg_$lk" >"$out" 2>&1)
-    wait
+    if [ -n "$rpid" ]; then
+        kill "$rpid" 2>/dev/null
+        wait "$rpid" 2>/dev/null
+    fi
     check "$out" "p = {x = 3, y = 4}" "$lk struct pieces"
     check "$out" "scale = 1.5" "$lk float argument"
     check "$out" "w = 6" "$lk register local"

@@ -53,7 +53,10 @@ for dir in $DIRS; do
             case "$TARGET" in i686*) em=elf_i386 ;; aarch64*) em=aarch64linux ;; arm*) em=armelf_linux_eabi ;; esac
             rt=$S/libgcc.a
             [ -f "$S/libclang_rt.builtins-x86_64.a" ] && rt=$S/libclang_rt.builtins-x86_64.a
-            ld.lld -m $em -static -o "$w/ref" "$S/crt1.o" "$S/crti.o" "$w/p.o" "$S/libc.a" "$rt" "$S/crtn.o" >/dev/null 2>&1 || { skip=$((skip + 1)); continue; }
+            ld.lld -m $em -static -o "$w/ref" "$S/crt1.o" "$S/crti.o" "$w/p.o" "$S/libc.a" "$rt" "$S/crtn.o" >/dev/null 2>&1 || {
+                skip=$((skip + 1))
+                continue
+            }
             # shellcheck disable=SC2086
             if ! (cd "$w" && SALAM_MUSL_SYSROOT=$S "$SALAM" build "$f" $common --linker=builtin --output=out >nl.err 2>&1); then
                 echo "FAIL $id (link)"
@@ -65,7 +68,10 @@ for dir in $DIRS; do
             ;;
         *windows*)
             cc=${TARGET%%-*}-w64-mingw32-gcc
-            $cc -o "$w/ref.exe" "$w/p.o" -lws2_32 >/dev/null 2>&1 || { skip=$((skip + 1)); continue; }
+            $cc -o "$w/ref.exe" "$w/p.o" -lws2_32 >/dev/null 2>&1 || {
+                skip=$((skip + 1))
+                continue
+            }
             # shellcheck disable=SC2086
             if ! (cd "$w" && "$SALAM" build "$f" $common --linker=builtin --output=out.exe >nl.err 2>&1); then
                 echo "FAIL $id (link)"

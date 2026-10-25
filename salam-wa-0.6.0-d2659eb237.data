@@ -82784,7 +82784,7 @@ if SALAM_OS_WINDOWS:
 extern:
 func _write(fd: int, buf: void*, n: u32): int
 end
-else SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+else not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 extern:
 func write(fd: int, buf: void*, n: u64): i64
 end
@@ -82818,7 +82818,7 @@ end
 if SALAM_OS_WINDOWS:
 func _err_raw(s: str): _write(2, s as void*, s.len() as u32) end
 func _out_raw(s: str): _write(1, s as void*, s.len() as u32) end
-else SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+else not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 func _err_raw(s: str): write(2, s as void*, s.len() as u64) end
 func _out_raw(s: str): write(1, s as void*, s.len() as u64) end
 else:
@@ -109427,7 +109427,7 @@ if SALAM_OS_LINUX or SALAM_OS_ANDROID:
 extern:
 func dirfd(d: void*): int
 end
-if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 extern:
 func syscall(nr: i64, a: i64, b: i64, c: i64): i64
 end
@@ -109617,12 +109617,12 @@ else:
 if SALAM_OS_LINUX or SALAM_OS_ANDROID:
 if SALAM_ARCH_X86:
 func _gd_nr(): i64: ret 220 end
-else SALAM_ARCH_ARM64:
-func _gd_nr(): i64: ret 61 end
-else:
+else SALAM_ARCH_X64 or SALAM_ARCH_ARM:
 func _gd_nr(): i64: ret 217 end
+else:
+func _gd_nr(): i64: ret 61 end
 end
-if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 func _getdents(fd: int, buf: void*, cap: int): i64:
 ret syscall(_gd_nr(), fd as i64, buf as i64, cap as i64)
 end
@@ -147962,12 +147962,21 @@ sync.Unlock(_srv_mu)
 ret slot
 end
 func _srv_pack(slot: int, fd: i64): i64:
+if sizeof(void*) == 4:
+ret (slot as i64 << (28 as i64)) | (fd & (0x0FFFFFFF as i64))
+end
 ret (slot as i64 << _SRV_SHIFT) | fd
 end
 func _srv_slot_of(packed: i64): int:
+if sizeof(void*) == 4:
+ret ((packed >> (28 as i64)) & (15 as i64)) as int
+end
 ret (packed >> _SRV_SHIFT) as int
 end
 func _srv_fd_of(packed: i64): i64:
+if sizeof(void*) == 4:
+ret packed & (0x0FFFFFFF as i64)
+end
 ret packed & _SRV_MASK
 end
 func _warm_up_split():
@@ -150638,8 +150647,7 @@ import mem
 import tls
 if SALAM_OS_WINDOWS:
 extern:
-func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
-func CloseHandle(h: void *): int
+func _beginthread(start: void *, stack: u32, arg: void *): usize
 end
 else:
 extern:
@@ -150660,8 +150668,7 @@ end
 if SALAM_OS_WINDOWS:
 export:
 func salam_spawn_fn_i64(fn: i64, arg: i64):
-h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
-if h != (0 as u64): CloseHandle(h as void *) end
+_h := _beginthread(fn as void *, 0 as u32, arg as void *)
 end
 end
 else:
@@ -151157,17 +151164,17 @@ end
 ret 0 - 1
 end
 func _epoll_evsize(): int:
-if SALAM_ARCH_ARM64 or SALAM_ARCH_ARM:
-ret 16
-else:
+if SALAM_ARCH_X64 or SALAM_ARCH_X86:
 ret 12
+else:
+ret 16
 end
 end
 func _epoll_dataoff(): int:
-if SALAM_ARCH_ARM64 or SALAM_ARCH_ARM:
-ret 8
-else:
+if SALAM_ARCH_X64 or SALAM_ARCH_X86:
 ret 4
+else:
+ret 8
 end
 end
 func _epoll_register(_p &: Poller, _fd: i64, _interest: int): bool:
@@ -151311,31 +151318,33 @@ out := Events {}
 if SALAM_OS_WINDOWS:
 n := _p.regs.items.len()
 if n == 0: ret out end
-buf := mem.Allocate((16 * n) as u64)
+pw := sizeof(void*) as i64
+esz := 2 * pw
+buf := mem.Allocate((esz * (n as i64)) as u64)
 defer mem.Free(buf)
-memset(buf, 0, (16 * n) as u64)
+memset(buf, 0, (esz * (n as i64)) as u64)
 mut i := 0
 until i < n:
 r := _p.regs.items.get(i)
-base := buf as i64 + (i * 16)
-fdp := base as i64*
-fdp[0] = r.fd
+base := buf as i64 + (i as i64) * esz
+fdp := base as usize*
+fdp[0] = r.fd as usize
 mut evbits := 0
 if (r.interest & Readable) != 0: evbits = evbits | 768 end
 if (r.interest & Writable) != 0: evbits = evbits | 16 end
-evp := (base + 8) as int*
-evp[0] = evbits & 65535
+evp := (base + pw) as i16*
+evp[0] = evbits as i16
 i += 1
 end
 rc := WSAPoll(buf, n as u32, _timeout_ms)
 if rc > 0:
 i = 0
 until i < n:
-base := buf as i64 + (i * 16)
-fdp := base as i64*
-fd := fdp[0]
-revp := (base + 10) as int*
-revbits := revp[0] & 65535
+base := buf as i64 + (i as i64) * esz
+fdp := base as usize*
+fd := fdp[0] as i64
+revp := (base + pw + 2) as u16*
+revbits := revp[0] as int
 if revbits != 0:
 e := Event { fd = fd, readable = (revbits & 768) != 0, writable = (revbits & 16) != 0, err = (revbits & 7) != 0 }
 out.items.push(e)
@@ -151611,12 +151620,17 @@ if s == (0 - 1) as usize: ret 0 - 1 end
 ret s as i64
 end
 func _hostent_addr4(he: void*): int:
-listp := (he as i64 + 24) as i64*
+pw := sizeof(void*) as i64
+mut lo := 2 * pw + 8
+if SALAM_OS_WINDOWS:
+lo = (2 * pw + 4 + pw - 1) / pw * pw
+end
+listp := (he as i64 + lo) as usize*
 list := listp[0]
-if list == 0: ret 0 end
-addrp := list as i64*
+if list == (0 as usize): ret 0 end
+addrp := list as usize*
 addr := addrp[0]
-if addr == 0: ret 0 end
+if addr == (0 as usize): ret 0 end
 bytes := addr as int*
 ret bytes[0]
 end
@@ -151637,20 +151651,24 @@ ret sa
 end
 func _ai_family(ai: void*): int: ret ((ai as i64 + 4) as int*)[0] end
 func _ai_addrlen(ai: void*): i64:
-if SALAM_OS_WINDOWS:
+if SALAM_OS_WINDOWS and sizeof(void*) == 8:
 ret ((ai as i64 + 16) as i64*)[0]
 else:
 ret ((ai as i64 + 16) as int*)[0]
 end
 end
+func _ai_ptr(ai: void*, slot: int): void*:
+pw := sizeof(void*) as i64
+ret ((ai as i64 + 16 + pw * (slot as i64)) as usize*)[0] as void*
+end
 func _ai_addr(ai: void*): void*:
 if SALAM_OS_LINUX:
-ret ((ai as i64 + 24) as i64*)[0] as void*
+ret _ai_ptr(ai, 1)
 else:
-ret ((ai as i64 + 32) as i64*)[0] as void*
+ret _ai_ptr(ai, 2)
 end
 end
-func _ai_next(ai: void*): void*: ret ((ai as i64 + 40) as i64*)[0] as void* end
+func _ai_next(ai: void*): void*: ret _ai_ptr(ai, 3) end
 func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
 if SALAM_OS_WINDOWS:
 s := _fd_of(socket(fam, socktype, 0))
@@ -152118,11 +152136,12 @@ if sock.fd < 0:
 ret false
 end
 if SALAM_OS_WINDOWS:
+pw := sizeof(void*) as i64
 p := mem.AllocateZeroed(16 as u64)
 defer mem.Free(p)
-fdp := p as i64*
-fdp[0] = sock.fd
-evp := ((p as i64) + 8) as i16*
+fdp := p as usize*
+fdp[0] = sock.fd as usize
+evp := ((p as i64) + pw) as i16*
 evp[0] = 256 as i16
 ret WSAPoll(p, 1 as u32, timeout_ms) > 0
 else:
@@ -154167,7 +154186,7 @@ import io
 import conv
 if SALAM_OS_LINUX:
 extern:
-func sysconf(name: int): i64
+func sysconf(name: int): size
 end
 const _SC_NPROCESSORS_ONLN := 84
 end
@@ -154971,7 +154990,7 @@ func GetSystemInfo(info: void*)
 end
 else:
 extern:
-func sysconf(name: int): i64
+func sysconf(name: int): size
 end
 end
 struct Range:
@@ -154998,7 +155017,7 @@ if SALAM_OS_WINDOWS:
 func cpu_count_os(): i64:
 buf := mem.AllocateZeroed(96 as u64)
 GetSystemInfo(buf)
-p := ((buf as i64) + 32) as i32*
+p := ((buf as i64) + 8 + 3 * (sizeof(usize) as i64)) as i32*
 n := p[0] as i64
 mem.Free(buf)
 ret n
@@ -159280,6 +159299,11 @@ func GetModuleHandleA(name: str): void*
 func GetProcAddress(mod: void*, name: str): void*
 func GetTickCount(): u32
 func Sleep(ms: int)
+func InitializeConditionVariable(cv: void*)
+func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
+func WakeConditionVariable(cv: void*)
+func WakeAllConditionVariable(cv: void*)
+func GetTickCount64(): u64
 end
 else:
 extern:
@@ -159362,6 +159386,28 @@ func mutex_free(h: void*):
 DeleteCriticalSection(h)
 mem.Free(h)
 end
+if SALAM_ARCH_X86:
+func cond_new(): void*:
+c := mem.Allocate(COND_BYTES as u64)
+InitializeConditionVariable(c)
+ret c
+end
+func cond_wait(c: void*, m: void*):
+SleepConditionVariableCS(c, m, 0 - 1)
+end
+func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+ret SleepConditionVariableCS(c, m, ms as int) != 0
+end
+func now_ms_os(): i64:
+ret GetTickCount64() as i64
+end
+func cond_signal(c: void*):
+WakeConditionVariable(c)
+end
+func cond_broadcast(c: void*):
+WakeAllConditionVariable(c)
+end
+else:
 func cond_new(): void*:
 c := mem.Allocate(COND_BYTES as u64)
 if _cv_init_fn != null:
@@ -159407,6 +159453,7 @@ func cond_broadcast(c: void*):
 if _cv_wake_all_fn == null: ret end
 f := _cv_wake_all_fn as extern func (void*) void
 f(c)
+end
 end
 func cond_free(c: void*): mem.Free(c) end
 func _sync_sleep_ms(ms: int): Sleep(ms) end
@@ -162364,8 +162411,26 @@ end
 package time
 import mem
 import conv
+if SALAM_OS_WINDOWS:
+extern:
+func _mktime64(tp: void*): i64
+end
+else:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 extern:
 func mktime(tp: void*): i64
+end
+else:
+if SALAM_OS_LINUX:
+extern:
+func __mktime64(tp: void*): i64
+end
+else:
+extern:
+func mktime(tp: void*): i64
+end
+end
+end
 end
 struct _Parts:
 pub year: int = 1970
@@ -162472,6 +162537,19 @@ if idx == 5: ret (y - 1900) as int end
 if idx == 7: ret (days - _daysFromCivil(y as int, 1, 1)) as int end
 ret 0
 end
+if SALAM_OS_WINDOWS:
+func _c_mktime(tp: void*): i64: ret _mktime64(tp) end
+else:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+func _c_mktime(tp: void*): i64: ret mktime(tp) end
+else:
+if SALAM_OS_LINUX:
+func _c_mktime(tp: void*): i64: ret __mktime64(tp) end
+else:
+func _c_mktime(tp: void*): i64: ret mktime(tp) end
+end
+end
+end
 func _localEpoch(y: int, mo: int, d: int, h: int, mi: int, s: int): i64:
 buf := mem.AllocateZeroed(128 as u64)
 if buf == null: ret _utcEpoch(y, mo, d, h, mi, s) end
@@ -162483,7 +162561,7 @@ p[3] = d
 p[4] = mo - 1
 p[5] = y - 1900
 p[8] = 0 - 1
-out := mktime(buf)
+out := _c_mktime(buf)
 mem.Free(buf)
 if out == (0 - 1) as i64: ret _utcEpoch(y, mo, d, h, mi, s) end
 ret out
@@ -162858,12 +162936,10 @@ end
 package time
 import mem
 import conv
-extern:
-func time(tp: void*): i64
-func localtime(tp: void*): void*
-end
 if SALAM_OS_WINDOWS:
 extern:
+func _time64(tp: void*): i64
+func _localtime64(tp: void*): void*
 func SleepEx(ms: u32, alertable: int): u32
 func GetSystemTimeAsFileTime(ft: void*)
 func QueryPerformanceCounter(counter: void*): int
@@ -162873,9 +162949,24 @@ else:
 extern:
 func usleep(usec: u32): int
 end
-if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 extern:
+func time(tp: void*): i64
+func localtime(tp: void*): void*
 func clock_gettime(clock_id: int, ts: void*): int
+end
+else:
+if SALAM_OS_LINUX:
+extern:
+func __time64(tp: void*): i64
+func __localtime64(tp: void*): void*
+func __clock_gettime64(clock_id: int, ts: void*): int
+end
+else:
+extern:
+func time(tp: void*): i64
+func localtime(tp: void*): void*
+end
 end
 end
 end
@@ -162908,14 +162999,28 @@ usleep((ms * 1000) as u32)
 end
 end
 end
-func time_now(): i64:
-ret time(null)
+if SALAM_OS_WINDOWS:
+func time_now(): i64: ret _time64(null) end
+func _c_localtime(tp: void*): void*: ret _localtime64(tp) end
+else:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
+func time_now(): i64: ret time(null) end
+func _c_localtime(tp: void*): void*: ret localtime(tp) end
+else:
+if SALAM_OS_LINUX:
+func time_now(): i64: ret __time64(null) end
+func _c_localtime(tp: void*): void*: ret __localtime64(tp) end
+else:
+func time_now(): i64: ret time(null) end
+func _c_localtime(tp: void*): void*: ret localtime(tp) end
+end
+end
 end
 func _localtime(epoch: i64): void*:
 tp := mem.Allocate(8 as u64)
 tp64 := tp as i64*
 tp64[0] = epoch
-tm := localtime(tp)
+tm := _c_localtime(tp)
 mem.Free(tp)
 ret tm
 end
@@ -162976,7 +163081,7 @@ mem.Free(buf)
 ret (ft - 116444736000000000) * 100
 end
 else:
-if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 func _now_ns(): i64:
 buf := mem.AllocateZeroed(16 as u64)
 mut out := 0 as i64
@@ -162988,8 +163093,22 @@ mem.Free(buf)
 ret out
 end
 else:
+if SALAM_OS_LINUX:
+func _now_ns(): i64:
+buf := mem.AllocateZeroed(16 as u64)
+mut out := 0 as i64
+if __clock_gettime64(0, buf) == 0:
+p := buf as i64*
+q := buf as i32*
+out = p[0] * 1000000000 + (q[2] as i64)
+end
+mem.Free(buf)
+ret out
+end
+else:
 func _now_ns(): i64:
 ret time_now() * 1000000000
+end
 end
 end
 end
@@ -163016,7 +163135,7 @@ mem.Free(buf)
 ret out
 end
 else:
-if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+if not (SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM):
 func _mono_clock_id(): int:
 if SALAM_OS_MAC:
 ret 8
@@ -163039,8 +163158,22 @@ mem.Free(buf)
 ret out
 end
 else:
+if SALAM_OS_LINUX:
+func _mono_ns(): i64:
+buf := mem.AllocateZeroed(16 as u64)
+mut out := 0 as i64
+if __clock_gettime64(1, buf) == 0:
+p := buf as i64*
+q := buf as i32*
+out = p[0] * 1000000000 + (q[2] as i64)
+end
+mem.Free(buf)
+ret out
+end
+else:
 func _mono_ns(): i64:
 ret time_now() * 1000000000
+end
 end
 end
 end

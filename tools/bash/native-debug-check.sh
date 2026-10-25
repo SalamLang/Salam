@@ -12,7 +12,7 @@
 
 set -u
 SALAM=$1
-case "$SALAM" in /*) ;; *) SALAM="$(pwd)/$SALAM" ;; esac
+case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 shift
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

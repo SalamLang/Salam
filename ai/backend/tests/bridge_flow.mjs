@@ -83,6 +83,11 @@ const offline = await api("POST", `/chats/${chat.json.chat.id}/messages`, sessio
 const offlineDone = await settle(session, chat.json.chat.id, offline.json.assistant.id);
 check("a call to a device that never connected fails fast", offlineDone.status === "done" && offlineDone.body.includes("error") && offlineDone.body.includes("not connected"), offlineDone);
 
+console.log("salam only");
+const scaffold = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: cd shop && composer create-project laravel/laravel ." });
+const scaffoldDone = await settle(session, chat.json.chat.id, scaffold.json.assistant.id);
+check("starting a project in another language is refused before it reaches the device", scaffoldDone.body.includes("error Refused by the Salam service") && scaffoldDone.body.includes("composer create-project"), scaffoldDone);
+
 console.log("tool call round trip");
 const first = poll(secret);
 await new Promise((r) => setTimeout(r, 300));

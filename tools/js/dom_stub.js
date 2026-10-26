@@ -127,6 +127,8 @@ function matches(el, sel) {
 const documentElement = new Element("html");
 documentElement.clientWidth = 1024;
 documentElement.clientHeight = 768;
+documentElement.scrollWidth = 1024;
+documentElement.scrollHeight = 768;
 const body = new Element("body");
 documentElement.appendChild(body);
 

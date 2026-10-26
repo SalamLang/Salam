@@ -37,7 +37,10 @@ pub enum Decision {
     Deny(String),
 }
 
-pub fn policy(mode: Mode, kind: Kind, outside: bool, always: bool) -> Policy {
+pub fn policy(mode: Mode, kind: Kind, outside: bool, always: bool, memory: bool) -> Policy {
+    if memory && !outside {
+        return if mode == Mode::Readonly { Policy::Ask } else { Policy::Allow };
+    }
     match mode {
         Mode::Readonly => match (kind, outside) {
             (Kind::Read, false) => Policy::Allow,
@@ -79,7 +82,7 @@ impl Approvals {
     pub fn needs(&self, p: &Preview) -> Policy {
         let mode = self.modes.lock().unwrap().get(&p.chat).copied().unwrap_or_default();
         let always = self.always.lock().unwrap().contains(&(p.chat.clone(), p.tool.clone()));
-        policy(mode, p.kind, p.outside, always)
+        policy(mode, p.kind, p.outside, always, p.memory)
     }
 
     pub async fn ask(&self, app: &AppHandle, p: &Preview) -> Decision {
@@ -142,25 +145,33 @@ mod tests {
 
     #[test]
     fn ask_mode_runs_reads_and_asks_for_the_rest() {
-        assert_eq!(policy(Mode::Ask, Kind::Read, false, false), Policy::Allow);
-        assert_eq!(policy(Mode::Ask, Kind::Read, true, false), Policy::Ask);
-        assert_eq!(policy(Mode::Ask, Kind::Write, false, false), Policy::Ask);
-        assert_eq!(policy(Mode::Ask, Kind::Exec, false, false), Policy::Ask);
-        assert_eq!(policy(Mode::Ask, Kind::Exec, false, true), Policy::Allow);
-        assert_eq!(policy(Mode::Ask, Kind::Exec, true, true), Policy::Ask);
+        assert_eq!(policy(Mode::Ask, Kind::Read, false, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Ask, Kind::Read, true, false, false), Policy::Ask);
+        assert_eq!(policy(Mode::Ask, Kind::Write, false, false, false), Policy::Ask);
+        assert_eq!(policy(Mode::Ask, Kind::Exec, false, false, false), Policy::Ask);
+        assert_eq!(policy(Mode::Ask, Kind::Exec, false, true, false), Policy::Allow);
+        assert_eq!(policy(Mode::Ask, Kind::Exec, true, true, false), Policy::Ask);
     }
 
     #[test]
     fn auto_mode_still_asks_outside_the_workspace() {
-        assert_eq!(policy(Mode::Auto, Kind::Exec, false, false), Policy::Allow);
-        assert_eq!(policy(Mode::Auto, Kind::Write, true, false), Policy::Ask);
+        assert_eq!(policy(Mode::Auto, Kind::Exec, false, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Auto, Kind::Write, true, false, false), Policy::Ask);
     }
 
     #[test]
     fn read_only_refuses_changes() {
-        assert_eq!(policy(Mode::Readonly, Kind::Read, false, false), Policy::Allow);
-        assert!(matches!(policy(Mode::Readonly, Kind::Write, false, true), Policy::Deny(_)));
-        assert!(matches!(policy(Mode::Readonly, Kind::Exec, false, false), Policy::Deny(_)));
+        assert_eq!(policy(Mode::Readonly, Kind::Read, false, false, false), Policy::Allow);
+        assert!(matches!(policy(Mode::Readonly, Kind::Write, false, true, false), Policy::Deny(_)));
+        assert!(matches!(policy(Mode::Readonly, Kind::Exec, false, false, false), Policy::Deny(_)));
+    }
+
+    #[test]
+    fn memory_runs_unasked_except_in_read_only() {
+        assert_eq!(policy(Mode::Ask, Kind::Write, false, false, true), Policy::Allow);
+        assert_eq!(policy(Mode::Auto, Kind::Write, false, false, true), Policy::Allow);
+        assert_eq!(policy(Mode::Readonly, Kind::Write, false, false, true), Policy::Ask);
+        assert_eq!(policy(Mode::Ask, Kind::Write, true, false, true), Policy::Ask);
     }
 
     #[tokio::test]
@@ -177,6 +188,7 @@ mod tests {
             lang: String::new(),
             outside: false,
             cwd: String::new(),
+            memory: false,
         };
         a.pending.lock().unwrap().insert("c".into(), (p, tx));
         assert_eq!(a.pending().len(), 1);

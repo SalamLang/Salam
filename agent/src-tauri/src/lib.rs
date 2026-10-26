@@ -3,6 +3,7 @@ mod bridge;
 mod commands;
 mod config;
 mod device;
+mod memory;
 mod tools;
 mod workspace;
 
@@ -22,6 +23,7 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-decide",
     "allow-agent-stop",
     "allow-agent-pending",
+    "allow-agent-project-context",
 ];
 
 #[cfg(target_os = "macos")]
@@ -140,6 +142,7 @@ pub fn run() {
             commands::agent_decide,
             commands::agent_stop,
             commands::agent_pending,
+            commands::agent_project_context,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

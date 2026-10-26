@@ -3,6 +3,7 @@ pub mod exec;
 pub mod fs;
 pub mod search;
 
+use crate::memory;
 use crate::workspace::{Workspace, in_git_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,6 +45,8 @@ pub struct Preview {
     pub lang: String,
     pub outside: bool,
     pub cwd: String,
+    #[serde(default)]
+    pub memory: bool,
 }
 
 pub enum Action {
@@ -82,6 +85,15 @@ pub enum Action {
         pattern: String,
         glob: String,
         ignore_case: bool,
+    },
+    SaveMemory {
+        slug: String,
+        title: String,
+        description: String,
+        content: String,
+    },
+    ForgetMemory {
+        slug: String,
     },
 }
 
@@ -181,6 +193,14 @@ fn shell_parts(shell: &str, command: &str) -> (String, Vec<String>, Option<Strin
     }
 }
 
+fn memory_inside(ws: &Workspace, slug: &str) -> Result<String, String> {
+    let shown = memory::rel(slug);
+    if !ws.resolve(&shown).inside {
+        return Err(format!("{shown} points outside the workspace, so Salam Agent will not touch it."));
+    }
+    Ok(shown)
+}
+
 pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
     let a = &call.args;
     let mut preview = Preview {
@@ -193,6 +213,7 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
         lang: String::new(),
         outside: false,
         cwd: ws.display(ws.root()),
+        memory: false,
     };
     let cwd_of = |preview: &mut Preview| {
         let r = ws.resolve(&text(a, "cwd"));
@@ -356,6 +377,39 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
                 }
             }
         }
+        "save_memory" => {
+            let title = text(a, "title");
+            let description = text(a, "description");
+            let content = text(a, "content");
+            let slug = text(a, "slug");
+            let draft = memory::draft(ws.root(), Some(slug.as_str()), &title, &description, &content)?;
+            let shown = memory_inside(ws, &draft.slug)?;
+            preview.kind = Kind::Write;
+            preview.memory = true;
+            preview.summary = shown.clone();
+            preview.detail = diff(&shown, &draft.before, &draft.after);
+            preview.lang = "diff".into();
+            Action::SaveMemory {
+                slug: draft.slug,
+                title,
+                description,
+                content,
+            }
+        }
+        "forget_memory" => {
+            let slug = memory::check_slug(&text(a, "slug"))?;
+            let shown = memory_inside(ws, &slug)?;
+            let path = memory::path_of(ws.root(), &slug);
+            if !path.is_file() {
+                return Err(format!("{shown} does not exist."));
+            }
+            preview.kind = Kind::Write;
+            preview.memory = true;
+            preview.summary = format!("forget {shown}");
+            preview.detail = fs::old_content(&path);
+            preview.lang = "markdown".into();
+            Action::ForgetMemory { slug }
+        }
         other => {
             return Err(format!(
                 "This version of Salam Agent does not know the tool {other}. Ask the user to update Salam Agent."
@@ -436,6 +490,13 @@ pub async fn execute(action: Action, ws_root: PathBuf, sink: exec::Sink, cancel:
                         glob,
                         ignore_case,
                     } => search::grep(&ws, &base, &pattern, &glob, ignore_case),
+                    Action::SaveMemory {
+                        slug,
+                        title,
+                        description,
+                        content,
+                    } => memory::save(ws.root(), Some(&slug), &title, &description, &content),
+                    Action::ForgetMemory { slug } => memory::forget(ws.root(), &slug),
                     Action::Run { .. } => unreachable!(),
                 }
             });
@@ -543,6 +604,52 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("hello world"));
+    }
+
+    #[test]
+    fn memory_tools_stay_in_the_workspace() {
+        let (d, w) = ws();
+        let save = |args: Value| plan(&call("save_memory", args), &w);
+        let p = save(json!({"title": "Build steps", "description": "d", "content": "cargo build"})).unwrap();
+        assert!(p.preview.memory);
+        assert_eq!(p.preview.kind, Kind::Write);
+        assert_eq!(p.preview.summary, ".salam-agent/memory/build-steps.md");
+        assert!(p.preview.detail.contains("+title: Build steps") && p.preview.lang == "diff");
+        assert!(matches!(&p.action, Action::SaveMemory { slug, .. } if slug == "build-steps"));
+        assert!(save(json!({"title": "t", "content": "c", "slug": "../x"})).is_err());
+        assert!(save(json!({"title": "t", "content": "c", "slug": "a/../../x"})).is_err());
+        assert!(save(json!({"title": "", "content": "c"})).is_err());
+        assert!(
+            !plan(&call("write_file", json!({"path": "x", "content": ""})), &w)
+                .unwrap()
+                .preview
+                .memory
+        );
+        assert!(plan(&call("forget_memory", json!({"slug": "../a"})), &w).is_err());
+        assert!(plan(&call("forget_memory", json!({"slug": "missing"})), &w).is_err());
+        memory::save(w.root(), Some("keep"), "Keep", "", "kept text").unwrap();
+        let f = plan(&call("forget_memory", json!({"slug": "keep"})), &w).unwrap();
+        assert!(f.preview.memory);
+        assert_eq!(f.preview.summary, "forget .salam-agent/memory/keep.md");
+        assert!(f.preview.detail.contains("kept text"));
+        assert!(d.path().join(".salam-agent/memory/keep.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn memory_tools_save_and_forget() {
+        let (d, w) = ws();
+        let run = |p: Plan| execute(p.action, w.root().to_path_buf(), Arc::new(|_| {}), Arc::new(Notify::new()));
+        let p = plan(&call("save_memory", json!({"title": "Notes", "content": "n"})), &w).unwrap();
+        assert!(run(p).await.unwrap().starts_with("Saved .salam-agent/memory/notes.md (1 memory"));
+        let p = plan(&call("forget_memory", json!({"slug": "notes"})), &w).unwrap();
+        assert!(run(p).await.unwrap().starts_with("Forgot"));
+        assert!(!d.path().join(".salam-agent/memory/notes.md").exists());
+        assert!(
+            std::fs::read_to_string(d.path().join(".salam-agent/index.md"))
+                .unwrap()
+                .contains("No memories yet.")
+        );
     }
 
     #[test]

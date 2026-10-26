@@ -95,6 +95,21 @@ the frames. The native backend gate builds the `llvm` tests with the
 built-in linker and with lld and runs both sets on a `windows-11-arm`
 runner; all of them pass on that hardware.
 
+The compiler builds for Windows on Arm too, and that build reproduces the
+reference IR on the runner. `tools/bash/package-winarm.sh` turns it into a
+self-contained package (about 30 MB): `salam.exe`, `std`, and the part of
+llvm-mingw's aarch64 runtime the built-in linker needs under
+`sysroots/aarch64-w64-mingw32/lib`, which the compiler finds next to
+itself. On a Windows on Arm host with no `--backend`, the compiler uses the
+native backend, since neither LLVM nor tcc ship for that host. The gate unpacks
+the package on the runner and builds and runs the `llvm` tests with it
+(`tools/bash/native-host-check.sh`), with nothing else installed. Releases
+ship it as `salam-<version>-windows-arm64.zip` (and `.tar.gz`), smoke-tested
+on a `windows-11-arm` runner before publishing.
+
+What is not there yet: the loop and SLP vectorizers are off on AArch64,
+there are no unwind tables (gdb walks the frames from the prologues), and
+
 On Linux, AArch64 and RISC-V objects carry `.eh_frame` (`ng_cfi.salam`).
 The encoders record CFI events as they write each prologue and epilogue: the
 CFA moves to the frame pointer plus 16 once the frame record is saved, every

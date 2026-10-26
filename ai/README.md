@@ -176,6 +176,26 @@ at once) and `/sandbox` do the same. `node ai/backend/tests/cloud_flow.mjs` test
 of it with `sandbox_mock.mjs` and `provider_mock.mjs`; set `REAL_SANDBOX=1` and point
 `AI_SANDBOX_URL` at a real manager to also test `glob` and `grep`.
 
+### Admin: policy per account, cost split, Telegram sessions
+
+- `PATCH /admin/users/:id/policy` with `{policy_free, policy_system?}` lifts the
+  Salam-only rule for one account (and puts it back). A lifted account is answered by
+  the plain engine profile with only the operator text, on the site, in Telegram, in
+  the desktop agent and cloud chats, and through its API keys; the foreign-language
+  checks and the agent's foreign-code limits are skipped. Everyone else, including
+  other keys, keeps the policy. Per API key switches already existed (`/admin/keys`).
+  The Users table in the admin page has a toggle for it.
+- Every answer stores its dollar cost split into input (cached tokens included) and
+  output (reasoning included), `messages.cost_in/cost_out` and `api_requests.cost_in/cost_out`.
+  The split uses the model's price table from the engine; without prices it weighs a
+  token of output as five of input. Rows from before the split were backfilled with
+  that weighted estimate. The usage periods and the Users table show input, output and
+  total cost.
+- `GET /admin/telegram` lists linked Telegram accounts and guests with their last
+  activity (`last_seen`), whether an answer is being written, chats and message counts;
+  accounts seen in the last five minutes count as online. The admin page shows it as
+  Telegram sessions, refreshed every 15 seconds.
+
 ### Memory
 
 Salam AI remembers chats. A background worker picks a chat once it has new

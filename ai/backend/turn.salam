@@ -37,6 +37,7 @@ mut CHECKED := HashMap {} as HashMap<str, str>
 mut ROUNDS := HashMap {} as HashMap<str, int>
 mut VERIFYING := HashMap {} as HashMap<str, str>
 mut ASKED := HashMap {} as HashMap<str, i64>
+mut RELAXED := HashMap {} as HashMap<str, str>
 
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
@@ -89,6 +90,13 @@ func retried(sid: str):
     _u := sync.Unlock(CHECK_LOCK)
 end
 
+func relaxed(sid: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    v := RELAXED.has(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+    ret v
+end
+
 func verify(sid: str, text: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
@@ -100,7 +108,7 @@ func verify(sid: str, text: str): bool:
     VERIFYING.put(sid, "1")
     _u := sync.Unlock(CHECK_LOCK)
     mut ask := ""
-    foreign := aipolicy.Foreign(text)
+    foreign := relaxed(sid) ? "" : aipolicy.Foreign(text)
     if foreign.len() > 0:
         ask = aipolicy.LanguagePrompt(foreign)
     else:
@@ -137,6 +145,8 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
     a.push(conv.FormatInt(u.cache_read))
     a.push(conv.FormatInt(u.cache_write))
     a.push(conv.FormatFloatPrec(u.cost, 8))
+    a.push(conv.FormatFloatPrec(u.cost_in, 8))
+    a.push(conv.FormatFloatPrec(u.cost_out, 8))
     a.push(conv.FormatInt(u.tools as i64))
     a.push(conv.FormatInt(u.steps as i64))
     a.push(id)
@@ -144,10 +154,10 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
     if table == "messages":
         a.push(conv.FormatInt(u.ms))
         a.push(conv.FormatInt(aistore.Now()))
-        extra = ", ms = ?10, finished = ?11"
+        extra = ", ms = ?12, finished = ?13"
     end
     aistore.Lock()
-    _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, tools = ?7, steps = ?8" + extra + " WHERE id = ?9", a)
+    _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, cost_in = ?7, cost_out = ?8, tools = ?9, steps = ?10" + extra + " WHERE id = ?11", a)
     aistore.Unlock()
 end
 
@@ -167,6 +177,17 @@ pub func Forget(sid: str):
     _r := CHECKED.remove(sid)
     _o := ROUNDS.remove(sid)
     _a := ASKED.remove(sid)
+    _x := RELAXED.remove(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
+pub func Relax(sid: str, on_flag: bool):
+    _l := sync.Lock(CHECK_LOCK)
+    if on_flag:
+        RELAXED.put(sid, "1")
+    else:
+        _r := RELAXED.remove(sid)
+    end
     _u := sync.Unlock(CHECK_LOCK)
 end
 

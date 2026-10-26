@@ -41,6 +41,10 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_BILLING_SWEEP_SECONDS`                   | how often to settle payments the gateway never returned from, and how long a payment may sit first                                                    | `600`                                           |
 | `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`     | restart to give memory back once past the first with nothing in flight, or past the second regardless                                                 | `1200`, `2600`                                  |
 | `AI_API_ANSWER_SECONDS`                      | how long one API answer may take before it is cut off                                                                                                 | `3600`                                          |
+| `AI_CHAT_MEMORY`                             | `off` stops remembering chats and recalling them                                                                                                      | `on`                                            |
+| `AI_CHAT_MEMORY_IDLE_SECONDS`                | how long a chat stays quiet before its new turns are summarized, so a quick back and forth costs one pass                                             | `60`                                            |
+| `AI_CHAT_MEMORY_DAYS`                        | how far back chats are picked up, which also bounds the first pass over old chats after an upgrade                                                    | `30`                                            |
+| `AI_CHAT_MEMORY_PAUSE_SECONDS`               | the pause between memory passes; they run one at a time                                                                                               | `10`                                            |
 | `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                               | `180`                                           |
 
 The API keeps a stream open for as long as an answer takes, so give the
@@ -83,6 +87,36 @@ The API:
 | `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                                  |
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
+
+### Memory
+
+Salam AI remembers chats. A background worker picks a chat once it has new
+finished answers and has been quiet for `AI_CHAT_MEMORY_IDLE_SECONDS`, sends
+the new turns (up to 40 messages, 32 KB) with the chat's current summary and
+memory list to the engine as a separate one-step turn with every tool off, and
+stores what comes back: a one or two sentence summary of the chat and up to five
+memories (slug, title, one-line description, full Markdown content). A memory
+with an existing slug is updated, and the model can drop memories that turned
+out wrong. A failed pass is retried after 30 minutes.
+
+When a chat gets a new engine session, its first message carries a
+`<user_memory>` block with the summaries of the user's other recent chats and
+their memories (full text up to 8 KB, titles after that, 14 KB in all).
+
+Everything lives in MariaDB (`memories`, plus `chats.summary`) and is served as
+Markdown files:
+
+| Method and path                                                   | Purpose                                                                                      |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `GET /memory`, `PATCH /memory`, `DELETE /memory`                  | the overview with its `index.md`, turning memory on or off (`{enabled}`), clearing all of it |
+| `GET /memory/:id`, `DELETE /memory/:id`                           | one memory with its Markdown file, forgetting it                                             |
+| `GET /chats/:id/memory`                                           | a chat's `index.md` and memory files                                                         |
+| `GET /memory/files/index.md`, `GET /memory/files/chats/:id/:file` | the same as raw Markdown; the links inside `index.md` resolve against these paths            |
+| `GET /admin/users/:id/memory`                                     | a user's memory, for admins                                                                  |
+
+Turning memory off stops new passes and recall; turning it back on or clearing
+it starts from the chats' current ends, so old turns are not picked up again.
+Users see and manage all of it on the Memory page.
 
 ### Salam only
 

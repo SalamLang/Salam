@@ -519,6 +519,48 @@ for (let i = 0; i < 60; i += 1) {
 }
 check("web chats carry the Salam policy and the reminder", policyAnswer.body?.includes("agent=salam system=salam operator=false tools=null reminder=true"), policyAnswer);
 
+console.log("chat memory");
+const memSession = await account("memory@test.ir", "Memory");
+const memOther = await account("memory-other@test.ir", "Memory Other");
+async function memChat(text) {
+  const c = (await api("POST", "/chats", memSession, {})).json.chat.id;
+  const sentMem = await api("POST", `/chats/${c}/messages`, memSession, { text });
+  let r;
+  for (let i = 0; i < 60; i += 1) {
+    r = (await api("GET", `/chats/${c}/messages/${sentMem.json.assistant.id}`, memSession)).json;
+    if (r.status !== "pending") break;
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  return { id: c, answer: r };
+}
+const told = await memChat("remember that my favorite color is teal");
+let overview;
+for (let i = 0; i < 60; i += 1) {
+  overview = (await api("GET", "/memory", memSession)).json;
+  if (overview.chats?.some((c) => c.id === told.id && c.memories.length > 0)) break;
+  await new Promise((ok) => setTimeout(ok, 1000));
+}
+const toldChat = overview.chats?.find((c) => c.id === told.id);
+check("a finished chat gets a summary and its memories", toldChat?.summary === "Talked about: remember that my favorite color is teal" && toldChat.memories[0]?.slug === "favorite-color" && overview.enabled === true, overview);
+check("the overview index.md links every chat and memory", overview.index?.startsWith("# Salam AI memory") && overview.index.includes(`](chats/${told.id}/index.md)`) && overview.index.includes(`- [Favorite color](chats/${told.id}/favorite-color.md) - What color the user likes`), overview.index);
+const chatMem = (await api("GET", `/chats/${told.id}/memory`, memSession)).json;
+check("each chat has an index.md and one Markdown file per memory", chatMem.index?.includes("[Favorite color](favorite-color.md)") && chatMem.memories?.[0]?.markdown?.startsWith("---\ntitle: Favorite color\ndescription: What color the user likes\n") && /created: \d{4}-\d\d-\d\dT/.test(chatMem.memories[0].markdown) && chatMem.memories[0].markdown.includes("The user likes **teal**."), chatMem);
+const rawFile = await fetch(`${API}/memory/files/chats/${told.id}/favorite-color.md`, { headers: { Authorization: `Bearer ${memSession}` } });
+const rawIndex = await fetch(`${API}/memory/files/index.md`, { headers: { Authorization: `Bearer ${memSession}` } });
+check("memory files are served as Markdown", rawFile.status === 200 && (await rawFile.text()).includes("title: Favorite color") && rawIndex.status === 200 && (await rawIndex.text()).startsWith("# Salam AI memory"));
+check("another user cannot read a chat's memory", (await api("GET", `/chats/${told.id}/memory`, memOther)).res.status === 404 && (await fetch(`${API}/memory/files/chats/${told.id}/favorite-color.md`, { headers: { Authorization: `Bearer ${memOther}` } })).status === 404);
+const recalled = await memChat("what do you remember");
+check("a new chat starts with what earlier chats left behind", recalled.answer.body === "Memory: true chats=1", recalled.answer);
+const memAdmin = await api("GET", `/admin/users/${(await api("GET", "/me", memSession)).json.user.id}/memory`, session);
+check("admins can read a user's memory", memAdmin.json?.chats?.some((c) => c.id === told.id));
+check("only admins read other users' memory", (await api("GET", `/admin/users/1/memory`, memSession)).res.status === 403);
+const memId = toldChat?.memories[0]?.id;
+check("a memory can be forgotten", (await api("DELETE", `/memory/${memId}`, memSession)).res.status === 200 && (await api("GET", `/memory/${memId}`, memSession)).res.status === 404);
+check("memory can be turned off", (await api("PATCH", "/memory", memSession, { enabled: false })).json?.enabled === false);
+const off = await memChat("what do you remember");
+check("with memory off nothing is recalled", off.answer.body === "Memory: false chats=0", off.answer);
+check("clearing memory removes every summary", (await api("DELETE", "/memory", memSession)).res.status === 200 && (await api("GET", "/memory", memSession)).json.chats.length === 0);
+
 console.log("limits and revocation");
 let limited = 0;
 const tries = Number(process.env.HOURLY ?? 8) + 1;

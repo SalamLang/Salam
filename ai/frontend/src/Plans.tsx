@@ -157,24 +157,44 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
         <div className="plan-grid">
           {plans?.map((p) => {
             const mine = active?.id === p.id;
+            const featured = p.id === "unlimited";
+            const price = p.price === 0 ? t("رایگان", "Free") : p.price >= 1000000 && p.price % 1000000 === 0 ? `${fmtNum(p.price / 1000000)}` : fmtNum(p.price);
+            const unit = p.price === 0 ? "" : p.price >= 1000000 && p.price % 1000000 === 0 ? t("میلیون تومان", "million toman") : t("تومان", "toman");
+            const period = p.price === 0 ? t("برای همیشه", "forever") : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز`, `for ${fmtNum(p.days)} days`);
             return (
-              <section key={p.id} className={`card plan-card ${p.id === "unlimited" ? "featured" : ""} ${mine ? "mine" : ""}`}>
-                <h3>{p.name}</h3>
-                <p className="plan-price">{p.price === 0 ? t("رایگان", "Free") : toman(p.price)}</p>
-                <p className="muted plan-note">{p.note}</p>
+              <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
+                {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}
+                <header className="plan-head">
+                  <span className="plan-icon" aria-hidden="true">
+                    <IconSpark width={20} height={20} />
+                  </span>
+                  <h3>{p.name}</h3>
+                </header>
+                <div className="plan-priceblock">
+                  <span className="plan-price">{price}</span>
+                  {unit && <span className="plan-unit">{unit}</span>}
+                </div>
+                <p className="plan-period">{period}</p>
+                {p.note && <p className="plan-note">{p.note}</p>}
                 <ul className="plan-features">
                   {features(p).map((f) => (
                     <li key={f}>
-                      <IconCheck width={15} height={15} /> {f}
+                      <span className="plan-tick" aria-hidden="true">
+                        <IconCheck width={13} height={13} />
+                      </span>
+                      {f}
                     </li>
                   ))}
                 </ul>
                 {mine ? (
-                  <span className="badge ok plan-badge">{t("اشتراک فعلی شما", "Your current plan")}</span>
+                  <span className="plan-state ok">
+                    <IconBadgeCheck width={16} height={16} /> {t("اشتراک فعلی شما", "Your current plan")}
+                  </span>
                 ) : p.id === "free" ? (
-                  <span className="badge plan-badge">{t("برای همه فعال است", "Active for everyone")}</span>
+                  <span className="plan-state">{t("برای همه فعال است", "Active for everyone")}</span>
                 ) : (
-                  <button type="button" className="primary" disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
+                  <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
+                    {busy === p.id ? <span className="spinner" /> : null}
                     {busy === p.id ? t("در حال رفتن به درگاه...", "Going to the gateway...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
                   </button>
                 )}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { api, ApiError, type Integration, type Integrations, type TelegramLinkInfo, type TelegramStatus, type User } from "./api";
 import { AuthForm } from "./Auth";
 import { Notice, Shell } from "./Connect";
+import { AppsPanel } from "./Apps";
 import { confirmDialog } from "./Confirm";
 import { fmtDate, fmtNum, initial } from "./format";
 import { IconFigma, IconGithub, IconKey, IconTelegram, IconTerminal } from "./icons";
@@ -439,8 +440,8 @@ export function Connections({ notify }: { notify: (msg: string) => void }) {
   return (
     <div className="page">
       <header className="page-head">
-        <h2>{t("اتصال‌ها", "Connections")}</h2>
-        <p className="muted">{t("برنامه‌ها و سرویس‌هایی که به حساب سلام شما وصل‌اند.", "Apps and services connected to your Salam account.")}</p>
+        <h2>{t("اتصال‌ها و برنامه‌ها", "Connections and apps")}</h2>
+        <p className="muted">{t("تلگرام، GitHub، Figma و برنامه‌هایی مانند Claude Code که به حساب سلام شما وصل‌اند.", "Telegram, GitHub, Figma and apps such as Claude Code connected to your Salam account.")}</p>
       </header>
       {error && (
         <div className="form-error" role="alert">
@@ -491,6 +492,7 @@ export function Connections({ notify }: { notify: (msg: string) => void }) {
           </ConnCard>
         )}
       </div>
+      <AppsPanel notify={notify} />
     </div>
   );
 }

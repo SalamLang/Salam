@@ -292,8 +292,8 @@ export function Connect({ user, onAuth, onSwitchAccount, theme, toggleTheme }: P
       </ul>
       <p className="connect-note">
         {t(
-          "استفاده‌ی این برنامه از ابزارهای سلام در حساب شما ثبت می‌شود و هر زمان بخواهید می‌توانید از بخش «برنامه‌های متصل» اتصال آن را قطع کنید.",
-          "This app's use of Salam tools is logged in your account, and you can disconnect it at any time from Connected apps.",
+          "استفاده‌ی این برنامه از ابزارهای سلام در حساب شما ثبت می‌شود و هر زمان بخواهید می‌توانید از صفحه‌ی «اتصال‌ها و برنامه‌ها» اتصال آن را قطع کنید.",
+          "This app's use of Salam tools is logged in your account, and you can disconnect it at any time from Connections and apps.",
         )}
       </p>
       {request.redirect_host && (

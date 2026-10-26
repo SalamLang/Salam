@@ -3,7 +3,6 @@ import { api, ApiError, getToken, handleUnauthorized, setClientVersion, setToken
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
-import { Apps } from "./Apps";
 import { Memory } from "./Memory";
 import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
@@ -38,7 +37,7 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "telegram" | "connections" | "apps" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
+type Route = "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -49,7 +48,7 @@ function routeFromPath(): Route {
   if (p === "/connect") return "connect";
   if (p === "/telegram") return "telegram";
   if (p === "/connections") return "connections";
-  if (p === "/apps") return "apps";
+  if (p === "/apps") return "connections";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
   if (p === "/memory") return "memory";
@@ -62,8 +61,7 @@ const PAGE_TITLES: Record<Route, string> = {
   chat: t("دستیار سلام", "Salam AI"),
   connect: t("اتصال برنامه", "Connect an app"),
   telegram: t("اتصال تلگرام", "Connect Telegram"),
-  connections: t("اتصال‌ها", "Connections"),
-  apps: t("برنامه‌های متصل", "Connected apps"),
+  connections: t("اتصال‌ها و برنامه‌ها", "Connections and apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
   memory: t("حافظه", "Memory"),
@@ -571,9 +569,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "apps" || route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
+        ) : route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "apps" ? <Apps notify={notify} /> : route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>

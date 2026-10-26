@@ -86,6 +86,20 @@ check("a call to a device that never connected fails fast", offlineDone.status =
 console.log("salam only");
 const scaffold = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: cd shop && composer create-project laravel/laravel ." });
 const scaffoldDone = await settle(session, chat.json.chat.id, scaffold.json.assistant.id);
+const project = { instructions_file: "AGENTS.md", instructions: "Use tabs.", memory_index: "# Salam Agent memory\n\n- [Build](memory/build.md) - how to build", memories: 1 };
+const withProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo context", project });
+const withProjectDone = await settle(session, chat.json.chat.id, withProject.json.assistant.id);
+check("the app's AGENTS.md and memory index reach the engine", withProjectDone.body.includes("[project]"), withProjectDone.body);
+const sameProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo again", project });
+const sameProjectDone = await settle(session, chat.json.chat.id, sameProject.json.assistant.id);
+check("an unchanged project context is not sent twice", sameProjectDone.status === "done" && !sameProjectDone.body.includes("[project]"), sameProjectDone.body);
+const heredoc = (name) => `run: cat > ${name} <<'EOF'\n${Array.from({ length: 70 }, (_, i) => `echo ${i};`).join("\n")}\nEOF`;
+const budget = [];
+for (const name of ["a.php", "b.php", "c.php"]) {
+  const r = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: heredoc(name) });
+  budget.push((await settle(session, chat.json.chat.id, r.json.assistant.id)).body);
+}
+check("non-Salam code written through the shell adds up per chat", !budget[0].includes("Refused") && !budget[1].includes("Refused") && budget[2].includes("Refused by the Salam service: this conversation already wrote 144 lines"), budget);
 check("starting a project in another language is refused before it reaches the device", scaffoldDone.body.includes("error Refused by the Salam service") && scaffoldDone.body.includes("composer create-project"), scaffoldDone);
 
 console.log("tool call round trip");

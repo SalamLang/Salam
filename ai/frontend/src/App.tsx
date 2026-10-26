@@ -4,6 +4,7 @@ import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
 import { Apps } from "./Apps";
+import { Memory } from "./Memory";
 import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
@@ -36,7 +37,7 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin" | "admin-chat";
+type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -48,6 +49,7 @@ function routeFromPath(): Route {
   if (p === "/apps") return "apps";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
+  if (p === "/memory") return "memory";
   if (p === "/admin") return "admin";
   if (adminChatIdFromPath()) return "admin-chat";
   return "chat";
@@ -59,6 +61,7 @@ const PAGE_TITLES: Record<Route, string> = {
   apps: t("برنامه‌های متصل", "Connected apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
+  memory: t("حافظه", "Memory"),
   admin: t("مدیریت", "Admin"),
   "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
 };
@@ -424,7 +427,10 @@ export function App() {
       const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now, files: local.length > 0 ? local : undefined };
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
-      const r = await api.send(id, text, files);
+      const chat = chats.find((c) => c.id === id);
+      const folder = chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+      const project = isDesktop && folder ? await agent.projectContext(folder).catch(() => undefined) : undefined;
+      const r = await api.send(id, text, files, project);
       const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
       setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), user, { ...r.assistant, phase: "thinking" }]);
       setChats((cs) => {
@@ -526,9 +532,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
+        ) : route === "apps" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>

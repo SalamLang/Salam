@@ -20,7 +20,7 @@ description: >-
 
 Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
-**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with an
+**`page:`** blocks compile to HTML/CSS/JS. It can also be run with an
 interpreter (`salam exec`, pure compute only) that compiles each function to
 register bytecode on first call (`SALAM_VM=0` falls back to the plain
 tree-walker), and cross-compiled via LLVM. Source can be written in English or Persian, with the same grammar and
@@ -1972,7 +1972,7 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam page build`,
+A `page:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
@@ -2050,7 +2050,7 @@ variable or call a Salam function (E129); a bad fold (division by zero,
 overflow, `true + 1`) is E130. A constant named like a value word
 (`const red := ...` then `color = red`) wins, with W131.
 
-**Runtime layouts.** `layout:` is a static page built at compile time. A
+**Runtime layouts.** `page:` is a static page built at compile time. A
 _named_ layout with typed parameters is a runtime page: the compiler builds
 the whole document and its CSS at compile time and turns the layout into a
 `pure func Name(params): str` that only fills in escaped values. There is no
@@ -2912,3 +2912,10 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
 | Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |
+
+The web page lessons that follow the layout lesson (all under `https://www.salamlang.ir/learn/`, and in English under
+`https://salamlang.github.io/Salam/learn/`) teach every element, attribute, CSS property and event of the page language with a
+checked example for each: `page-text`, `page-structure`, `page-media`, `page-tables`, `page-forms`, `page-head` for HTML;
+`css-basics`, `css-text`, `css-backgrounds`, `css-borders`, `css-layout`, `css-responsive`, `css-motion`, `css-more` for CSS;
+`events-mouse`, `events-keys-forms`, `events-drag-touch`, `events-media-more`, `events-dom` for JavaScript behaviour, and
+`web-projects` for whole pages.

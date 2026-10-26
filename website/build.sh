@@ -31,6 +31,10 @@ if [ "$examples" != skip ]; then
         echo "website: example output does not match its .out file" >&2
         exit 1
     }
+    python3 website/check-snippets.py || {
+        echo "website: a lesson snippet does not compile" >&2
+        exit 1
+    }
 fi
 [ "$examples" = only ] && exit 0
 

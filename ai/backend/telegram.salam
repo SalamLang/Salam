@@ -45,7 +45,9 @@ const MAX_GUEST_TEXT := 2000
 const MAX_TEXT := 12000
 const CALL_MS := 20000
 const POLL_SECONDS := 25
-const EDIT_MS := 2500
+const EDIT_MS := 1100
+const STATUS_MS := 2500
+const GROW_BYTES := 24
 const CHUNK := 3800
 const CODE_SECONDS := 900
 const FLOOD_PER_MINUTE := 20
@@ -76,6 +78,7 @@ struct Who:
     pub en: bool = false
     pub uid: str = ""
     pub cur: str = ""
+    pub known: bool = false
 end
 
 func one(v: str): Vector<str>:
@@ -527,14 +530,48 @@ func who_of(tg: str, chat: str, name: str, username: str, code: str): Who:
     end
     aistore.Unlock()
     if lang.len() == 0:
+        lang = state_get("lang:" + tg)
+    end
+    w.known = lang.len() > 0
+    if lang.len() == 0:
         lang = (code.len() == 0 or str.StartsWith(code, "fa")) ? "fa" : "en"
     end
     w.en = lang == "en"
     ret w
 end
 
+func apply_menu(w: Who):
+    body := "{" + json.MemberRaw("commands", commands_json(w.en)) + `, "scope": {"type": "chat", "chat_id": ` + w.chat + "}}"
+    _r := call("setMyCommands", body, 8000)
+end
+
+func ask_language(w: Who, payload: str):
+    state_set("start:" + w.tg, payload)
+    mut rows := Vector {} as Vector<str>
+    rows.push(cb_button("فارسی", "l:fa") + ", " + cb_button("English", "l:en"))
+    _m := send_plain(w.chat, "زبان خود را انتخاب کنید\nChoose your language", keyboard(rows))
+end
+
+func choose_language(w: Who, en: bool):
+    lang := en ? "en" : "fa"
+    state_set("lang:" + w.tg, lang)
+    mut chosen := w
+    chosen.en = en
+    chosen.known = true
+    set_lang(chosen, en)
+    apply_menu(chosen)
+    payload := state_get("start:" + w.tg)
+    state_set("start:" + w.tg, "")
+    if payload.len() > 0:
+        start_payload(chosen, payload)
+    else:
+        welcome(chosen)
+    end
+end
+
 func set_lang(w: Who, en: bool):
     lang := en ? "en" : "fa"
+    state_set("lang:" + w.tg, lang)
     aistore.Lock()
     _a := aistore.Run("UPDATE telegram_links SET lang = ?1 WHERE tg_id = ?2", two(lang, w.tg))
     _b := aistore.Run("UPDATE telegram_guests SET lang = ?1 WHERE tg_id = ?2", two(lang, w.tg))
@@ -576,6 +613,7 @@ func help_text(w: Who): str:
 end
 
 func welcome(w: Who):
+    apply_menu(w)
     if w.uid.len() > 0:
         _m := send_md(w.chat, tr(w.en, "سلام دوباره! به حساب سلام وصل هستید و گفت‌وگوهایتان همین‌جا و در سایت یکی است. سؤالتان را بنویسید یا با /chats گفت‌وگوهای قبلی را باز کنید.", "Welcome back! You are connected to your Salam account, and your chats are the same here and on the website. Ask a question or open an earlier chat with /chats."), "")
         ret
@@ -859,6 +897,77 @@ func steps_text(mid: str): str:
     ret str.Join(ordered, "\n")
 end
 
+func phase_label(phase: str, en: bool): str:
+    if phase == "searching":
+        ret tr(en, "در حال جست‌وجو در مستندات", "Searching the docs")
+    end
+    if phase == "writing":
+        ret tr(en, "در حال نوشتن پاسخ", "Writing the answer")
+    end
+    if phase == "checking":
+        ret tr(en, "در حال بررسی کد با کامپایلر سلام", "Checking the code with the Salam compiler")
+    end
+    ret tr(en, "در حال فکر کردن", "Thinking")
+end
+
+func first_line(s: str, max: int): str:
+    t := str.Trim(s)
+    nl := t.find("\n")
+    mut line := nl >= 0 ? t.substr(0, nl) : t
+    if line.len() > max:
+        line = line.substr(0, aitgmd_cut(line, max)) + "…"
+    end
+    ret line
+end
+
+func activity_text(sid: str, en: bool): str:
+    items := json.Items(ailive.Activity(sid))
+    mut tools := Vector {} as Vector<str>
+    mut thought := ""
+    mut i := items.len() - 1
+    until i >= 0 and tools.len() < 4:
+        it := items.get(i)
+        kind := json.Get(it, "kind")
+        if kind == "tool":
+            mut title := json.Get(it, en ? "title_en" : "title")
+            if title.len() == 0:
+                title = json.Get(it, "title")
+            end
+            if title.len() > 0:
+                tools.push((json.Get(it, "status") == "running" ? "… " : "✓ ") + first_line(title, 80))
+            end
+        else kind == "think" and thought.len() == 0:
+            thought = first_line(json.Get(it, "text"), 110)
+        end
+        i -= 1
+    end
+    mut ordered := Vector {} as Vector<str>
+    mut k := tools.len() - 1
+    until k >= 0:
+        ordered.push(tools.get(k))
+        k -= 1
+    end
+    if ordered.len() == 0 and thought.len() > 0:
+        ordered.push("💭 " + thought)
+    end
+    ret str.Join(ordered, "\n")
+end
+
+func status_text(sid: str, mid: str, kind: str, phase: str, secs: i64, en: bool): str:
+    mut head := phase_label(phase, en) + "..."
+    if secs >= 5:
+        head = head + " (" + digits(en, (secs / 5 * 5) as int) + tr(en, " ثانیه", "s") + ")"
+    end
+    mut lines := activity_text(sid, en)
+    if lines.len() == 0 and kind == "c":
+        lines = steps_text(mid)
+    end
+    if lines.len() == 0:
+        ret head
+    end
+    ret head + "\n\n" + lines
+end
+
 func watch(job: str):
     p := job.split("|")
     if p.len() < 7:
@@ -872,32 +981,37 @@ func watch(job: str):
     owner := p.get(5)
     en := p.get(6) == "1"
     w := Who { chat = chat, en = en }
+    began := time.NowMillis()
     mut ids := Vector {} as Vector<str>
     mut texts := Vector {} as Vector<str>
-    holder := send_md(chat, tr(en, "در حال فکر کردن...", "Thinking..."), "")
+    holder := send_md(chat, phase_label("thinking", en) + "...", "")
     if holder.len() > 0:
         ids.push(holder)
         texts.push("")
     end
     mut shown := ""
-    mut shown_steps := ""
-    mut last_edit := time.NowMillis()
+    mut shown_len := 0
+    mut shown_status := phase_label("thinking", en) + "..."
+    mut last_edit := time.NowMillis() - EDIT_MS
+    mut last_status := time.NowMillis()
     mut last_typing := 0 as i64
     mut gen := ailive.Gen()
     until true:
         mut done := false
         mut failed := false
         mut text := ""
+        mut phase := "thinking"
         if kind == "g":
             mut status := "pending"
             mut body := ""
-            _ph := aiguest.Step(mid, sid, created, en, status, body)
+            phase = aiguest.Step(mid, sid, created, en, status, body)
             text = body
             done = status != "pending"
             failed = status == "error"
         else:
             r := settle_user(mid, sid, created, en, kind == "c" ? CLOUD_SECONDS as i64 : PENDING_SECONDS as i64)
             text = r.text
+            phase = r.phase
             done = r.done
             failed = r.failed
         end
@@ -925,28 +1039,34 @@ func watch(job: str):
             end
             break
         end
-        if kind == "c" and text.len() == 0 and now - last_edit >= EDIT_MS:
-            steps := steps_text(mid)
-            if steps.len() > 0 and steps != shown_steps:
-                show(chat, tr(en, "در حال کار روی درخواست شما...", "Working on it...") + "\n\n" + steps, ids, texts, "")
-                shown_steps = steps
-                last_edit = time.NowMillis()
-            end
-        end
-        if text.len() > 0 and text != shown and now - last_edit >= EDIT_MS:
+        if text.len() > 0 and text != shown and text.len() - shown_len >= GROW_BYTES and now - last_edit >= EDIT_MS:
             show(chat, text, ids, texts, "")
             shown = text
+            shown_len = text.len()
+            shown_status = ""
             last_edit = time.NowMillis()
+        else text.len() == 0 and now - last_status >= STATUS_MS:
+            status := status_text(sid, mid, kind, phase, (now - began) / 1000, en)
+            if status != shown_status:
+                if shown.len() > 0:
+                    show(chat, shown + "\n\n" + status, ids, texts, "")
+                else:
+                    show(chat, status, ids, texts, "")
+                end
+                shown_status = status
+                last_edit = time.NowMillis()
+            end
+            last_status = time.NowMillis()
         end
-        if now - last_typing >= 4500 and now - last_edit >= 1500:
+        if now - last_typing >= 4500:
             typing(chat)
             last_typing = now
         end
         if ailive.Connected():
-            gen = ailive.Wait(gen, 1500)
-            sync.SleepMs(300)
+            gen = ailive.Wait(gen, 1000)
+            sync.SleepMs(120)
         else:
-            sync.SleepMs(900)
+            sync.SleepMs(500)
         end
     end
 end
@@ -1175,9 +1295,9 @@ func integration_command(w: Who, provider: str, arg: str, message_id: str):
     page := APP_URL + "/connections?connect=" + provider
     mut how := ""
     if provider == "github":
-        how = tr(w.en, "با دکمه‌ی زیر از سایت وصل کنید (برای مخازن خصوصی هم کار می‌کند)، یا یک توکن شخصی بسازید و اینجا بفرستید:\n/github ghp_...\nتوکن را با دسترسی repo بسازید؛ پیام شما بلافاصله پاک می‌شود.", "Connect from the site with the button below (private repositories work too), or create a personal access token and send it here:\n/github ghp_...\nGive the token the repo scope; your message is deleted right away.")
+        how = tr(w.en, "برنامه‌ای لازم نیست بسازید؛ فقط یک توکن شخصی بسازید:\n\n۱. این نشانی را باز کنید (دسترسی‌ها از قبل انتخاب شده): https://github.com/settings/tokens/new?scopes=repo,read:org,workflow&description=Salam%20AI\n۲. مدت اعتبار را انتخاب کنید و پایین صفحه Generate token را بزنید.\n۳. توکن (با ghp_ شروع می‌شود) فقط یک بار نشان داده می‌شود؛ آن را کپی کنید.\n۴. اینجا بفرستید: /github ghp_xxxxxxxx (پیام شما بلافاصله پاک می‌شود).\n\nدسترسی repo یعنی مخزن‌های خصوصی هم خوانده و نوشته می‌شوند. هر زمان خواستید: /github disconnect، و برای باطل کردن کامل توکن را در GitHub حذف کنید. اگر ترجیح می‌دهید با دکمه‌ی زیر از سایت وصل کنید.", "You do not need to build an app; just create a personal access token:\n\n1. Open this link (the permissions are preselected): https://github.com/settings/tokens/new?scopes=repo,read:org,workflow&description=Salam%20AI\n2. Pick an expiry and press Generate token at the bottom.\n3. The token (it starts with ghp_) is shown only once; copy it.\n4. Send it here: /github ghp_xxxxxxxx (your message is deleted right away).\n\nThe repo scope covers private repositories too. To disconnect at any time: /github disconnect, and delete the token on GitHub to revoke it completely. Or use the button below to connect from the site.")
     else:
-        how = tr(w.en, "با دکمه‌ی زیر از سایت وصل کنید، یا در Figma یک توکن شخصی بسازید (Settings، Security) و اینجا بفرستید:\n/figma figd_...\nپیام شما بلافاصله پاک می‌شود.", "Connect from the site with the button below, or create a personal access token in Figma (Settings, Security) and send it here:\n/figma figd_...\nYour message is deleted right away.")
+        how = tr(w.en, "برنامه‌ای لازم نیست بسازید؛ فقط یک توکن شخصی بسازید:\n\n۱. در Figma روی عکس پروفایل بالا سمت چپ بزنید، Settings و بعد زبانه‌ی Security.\n۲. بخش Personal access tokens، گزینه‌ی Generate new token.\n۳. نام را «Salam AI» بگذارید و دسترسی‌ها را این‌طور بدهید: File content و File metadata و Library content روی Read only، Comments روی Read and write، Current user روی Read only.\n۴. توکن (با figd_ شروع می‌شود) فقط یک بار نشان داده می‌شود؛ کپی کنید.\n۵. اینجا بفرستید: /figma figd_xxxxxxxx (پیام شما بلافاصله پاک می‌شود).\n\nهر زمان خواستید: /figma disconnect.", "You do not need to build an app; just create a personal access token:\n\n1. In Figma click your profile picture (top left), then Settings and the Security tab.\n2. Under Personal access tokens press Generate new token.\n3. Name it Salam AI and give: File content, File metadata and Library content as Read only, Comments as Read and write, Current user as Read only.\n4. The token (it starts with figd_) is shown only once; copy it.\n5. Send it here: /figma figd_xxxxxxxx (your message is deleted right away).\n\nTo disconnect at any time: /figma disconnect.")
     end
     status := login.len() > 0 ? tr(w.en, name + " وصل است: " + login + ". برای جدا کردن: /" + provider + " disconnect", name + " is connected: " + login + ". To disconnect: /" + provider + " disconnect") : tr(w.en, name + " هنوز وصل نیست.", name + " is not connected yet.")
     _m := send_plain(w.chat, status + "\n\n" + how, url_button(tr(w.en, "باز کردن اتصال‌ها", "Open Connections"), page))
@@ -1270,6 +1390,9 @@ func command(w: Who, cmd: str, arg: str, message_id: str):
         end
         "lang", "language":
             set_lang(w, not w.en)
+            mut switched := w
+            switched.en = not w.en
+            apply_menu(switched)
             _m := send_plain(w.chat, w.en ? "زبان فارسی شد." : "Language set to English.", "")
             break
         end
@@ -1290,6 +1413,10 @@ func on_callback(cb: str):
     end
     w := who_of(tg, chat, json.GetPath(cb, "from.first_name"), json.GetPath(cb, "from.username"), json.GetPath(cb, "from.language_code"))
     answer_callback(id, "")
+    if data == "l:fa" or data == "l:en":
+        choose_language(w, data == "l:en")
+        ret
+    end
     if str.StartsWith(data, "c:"):
         if w.uid.len() > 0:
             _ok := switch_chat(w, data.substr(2, data.len() - 2))
@@ -1319,6 +1446,19 @@ func on_message(msg: str):
     mut text := str.Trim(json.Get(msg, "text"))
     if text.len() == 0:
         text = str.Trim(json.Get(msg, "caption"))
+    end
+    if not w.known:
+        mut payload := ""
+        if str.StartsWith(text, "/start"):
+            payload = str.Trim(text.substr(6, text.len() - 6))
+            at := payload.find("@")
+            if at == 0:
+                cut := payload.find(" ")
+                payload = cut > 0 ? str.Trim(payload.substr(cut, payload.len() - cut)) : ""
+            end
+        end
+        ask_language(w, payload)
+        ret
     end
     if text.len() == 0:
         _m := send_plain(w.chat, tr(w.en, "فعلا فقط پیام متنی پشتیبانی می‌شود. کد یا متن را داخل پیام بفرستید.", "Only text messages are supported for now. Paste your code or text into the message."), "")

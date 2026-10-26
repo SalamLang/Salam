@@ -13,9 +13,11 @@ RUN mkdir -p /out && /opt/salam-linux-x86_64/salam build main.salam --output=/ou
 
 FROM debian:trixie-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates docker.io coreutils \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends ca-certificates docker-cli coreutils \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --no-create-home salam
 COPY --from=build /out/salam-sandbox /usr/local/bin/salam-sandbox
+USER salam
 ENV SANDBOX_PORT=8090
 EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/salam-sandbox", "--health"]

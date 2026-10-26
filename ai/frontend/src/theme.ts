@@ -15,7 +15,7 @@ export function useTheme(): [Theme, () => void] {
     document.documentElement.dataset.theme = theme;
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", theme === "dark" ? "#16171b" : "#ffffff");
+      ?.setAttribute("content", "#ff5c00");
   }, [theme]);
   const toggle = () => {
     setTheme((t) => {

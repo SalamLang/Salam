@@ -34,6 +34,7 @@ http
       boxes.add(data.session);
       const cwd = data.cwd.startsWith("/work") ? path.join(work, data.cwd.slice(5)) : work;
       fs.mkdirSync(cwd, { recursive: true });
+      // codeql[js/command-line-injection] a test double that runs the command it is given on purpose, bound to 127.0.0.1 and used only by the flow tests
       const child = spawn("bash", ["-c", data.cmd], { cwd, env: { ...process.env, ...(data.env ?? {}), HOME: path.join(ROOT, data.session) } });
       let out = "";
       let timedOut = false;

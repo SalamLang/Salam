@@ -6,9 +6,12 @@ env_file="${2:?usage: deploy.sh API_CONTAINER API_ENV_FILE}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 manager="salam-sandbox-manager"
 
-network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$api_container" | awk '{print $1}')"
+network="${SANDBOX_API_NETWORK:-}"
+if [ -z "$network" ]; then
+    network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$api_container" | tr ' ' '\n' | grep -E '^salam' | head -n 1 || true)"
+fi
 [ -n "$network" ] || {
-    echo "cannot find the network of $api_container" >&2
+    echo "cannot find the network of $api_container; set SANDBOX_API_NETWORK" >&2
     exit 1
 }
 

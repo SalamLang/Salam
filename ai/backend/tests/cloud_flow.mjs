@@ -42,6 +42,7 @@ async function until(fn, ms = 30000) {
 const tglog = async () => (await fetch(`${TG}/_log`)).json();
 const inject = (update) => fetch(`${TG}/_inject`, { method: "POST", body: JSON.stringify(update) });
 const user = (id) => ({ id, is_bot: false, first_name: `Dev${id}`, username: `d${id}`, language_code: "en" });
+const press = (id, data) => inject({ callback_query: { id: `cb${Math.random()}`, from: user(id), data, message: { message_id: 1, chat: { id, type: "private" } } } });
 const say = (id, text, message_id = 1) => inject({ message: { message_id, from: user(id), chat: { id, type: "private" }, text } });
 const textsTo = (calls, chat) => calls.filter((c) => ["sendMessage", "editMessageText"].includes(c.method) && String(c.args.chat_id) === String(chat)).map((c) => c.args.text);
 
@@ -136,7 +137,7 @@ async function main() {
 
   const oauth = await api("POST", "/integrations/github/oauth", token);
   const state = /state=([0-9a-f]+)/.exec(oauth.json?.url ?? "")?.[1];
-  check("GitHub sign in link is made", oauth.res.status === 200 && /client_id=gh-client/.test(oauth.json.url) && !!state, oauth.json);
+  check("GitHub sign in link is made", oauth.res.status === 200 && /client_id=gh-client/.test(oauth.json.url) && !!state, oauth.res.status);
   await api("DELETE", "/integrations/github", token);
   const back = await fetch(`${API}/integrations/github/callback?code=abc&state=${state}`, { redirect: "manual" });
   check("the callback sends the browser back", back.status === 302 && /connected=github&result=ok/.test(back.headers.get("location") ?? ""), back.headers.get("location"));
@@ -150,8 +151,9 @@ async function main() {
 
   const tgBoot = await until(async () => (await tglog()).some((c) => c.method === "getMe"));
   check("telegram bot is up", !!tgBoot);
+  await press(tgid, "l:en");
   await say(tgid, "/login");
-  const loginMsg = await until(async () => (await tglog()).find((c) => String(c.args.chat_id) === String(tgid) && c.args.reply_markup?.inline_keyboard));
+  const loginMsg = await until(async () => (await tglog()).filter((c) => String(c.args.chat_id) === String(tgid) && c.args.reply_markup?.inline_keyboard && /Tap the button/.test(c.args.text ?? "")).at(-1));
   const code = /code=([0-9a-f]{32})/.exec(loginMsg?.args.reply_markup.inline_keyboard[0][0].url ?? "")?.[1];
   const linked = await api("POST", "/telegram/link", token, { code });
   check("telegram linked for the cloud test", linked.res.status === 200, linked.json);

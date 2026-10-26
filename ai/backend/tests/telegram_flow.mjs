@@ -60,7 +60,15 @@ async function main() {
   check("commands registered", calls0.some((c) => c.method === "setMyCommands"));
 
   await say(1001, "/start");
+  check("a new user is asked for a language first", !!(await lastText(1001, /Choose your language/)));
+  const menu = sentTo(await log(), 1001).find((c) => /Choose your language/.test(c.args.text));
+  check("both languages are offered", menu?.args.reply_markup?.inline_keyboard?.[0]?.length === 2, menu?.args.reply_markup);
+  await say(1001, "hello before choosing");
+  await sleep(600);
+  check("nothing is answered before a language is chosen", !textsTo(await log(), 1001).some((t) => /Echo:|Tool said/.test(t)));
+  await press(1001, "l:en");
   const welcome = await lastText(1001, /Salam AI assistant/);
+  check("the chosen language gets its own command menu", (await log()).some((c) => c.method === "setMyCommands" && c.args.scope?.chat_id === 1001));
   check("guest welcome", !!welcome);
   const welcomeCall = sentTo(await log(), 1001).find((c) => /Salam AI assistant/.test(c.args.text));
   const loginUrl = welcomeCall?.args.reply_markup?.inline_keyboard?.[0]?.[0]?.url ?? "";
@@ -125,6 +133,14 @@ async function main() {
     return r.json?.chats?.length === 2 ? r.json.chats : null;
   });
   check("/new starts a second chat", !!two);
+  await say(1001, "/new");
+  await say(1001, "این یک پیام فارسی بسیار بلند برای آزمایش عنوان گفت‌وگو در فهرست است");
+  await until(async () => (await api("GET", "/chats", token)).json?.chats?.some((c) => c.title.startsWith("این یک پیام")));
+  await sleep(1500);
+  const before = (await log()).length;
+  await say(1001, "/chats");
+  const persian = await until(async () => (await log()).slice(before).find((c) => c.args.reply_markup?.inline_keyboard?.some((r) => /این یک پیام/.test(r[0]?.text ?? ""))));
+  check("a long Persian title is cut on a character boundary", !!persian && !JSON.stringify(persian.args.reply_markup).includes("\ufffd"), persian?.args.reply_markup);
   await press(1001, `c:${chats[0].id}`);
   check("switching reopens an old chat", !!(await lastText(1001, /Chat opened: remember my history/)));
 
@@ -132,6 +148,8 @@ async function main() {
   const start = /start=link_([0-9a-f]{32})$/.exec(code2.json?.url ?? "")?.[1];
   check("site makes a Telegram link", code2.res.status === 201 && !!start, code2.json);
   await say(2002, `/start link_${start}`);
+  check("a link from the site still asks the language", !!(await lastText(2002, /Choose your language/)));
+  await press(2002, "l:en");
   const ask = await until(async () => sentTo(await log(), 2002).find((c) => c.args.reply_markup?.inline_keyboard?.some((r) => r[0]?.callback_data === `y:${start}`)));
   check("bot asks before linking from the site", !!ask && /Tele User/.test(ask.args.text), ask?.args.text);
   await press(2002, `y:${start}`);
@@ -149,10 +167,16 @@ async function main() {
   const status3 = await api("GET", "/telegram", token);
   check("logout removes the link", status3.json?.links?.length === 0);
 
+  await press(3003, "l:en");
   await say(3003, "/stop");
   check("stop with nothing running", !!(await lastText(3003, /No answer is being written/)));
   await say(3003, "/lang");
   check("language toggles", !!(await lastText(3003, /زبان فارسی شد/)));
+  await press(5005, "l:en");
+  await say(5005, "slow: 8 explain");
+  check("a slow answer shows a live status", !!(await until(async () => textsTo(await log(), 5005).find((t) => /^Thinking\.\.\. \(5s\)/.test(t)), 30000)), textsTo(await log(), 5005));
+  check("the final answer replaces the status", !!(await lastText(5005, /Echo: slow: 8/)));
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {
     console.log(failures.join("\n"));

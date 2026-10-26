@@ -356,7 +356,18 @@ export type ApiKey = {
   created: number;
   last_used: number;
   requests: number;
+  custom?: boolean;
 };
+export type AdminKey = ApiKey & {
+  revoked: boolean;
+  salam_prompt: boolean;
+  salam_tools: boolean;
+  system_prompt: string;
+  policy_at: number;
+  policy_by: number;
+  user: PersonRef;
+};
+export type KeyPolicy = { salam_prompt?: boolean; salam_tools?: boolean; system_prompt?: string };
 export type RequestStatus = "pending" | "done" | "error" | "aborted" | "lost";
 export type ApiRequest = {
   id: number;
@@ -690,6 +701,10 @@ export const api = {
     call<{ apps: AdminApp[] }>("GET", `/admin/apps${query({ user, before })}`),
   adminRevokeApp: (id: number) =>
     call<{ ok: boolean }>("DELETE", `/admin/apps/${id}`),
+  adminKeys: (q: { user?: number; before?: number; custom?: boolean }) =>
+    call<{ keys: AdminKey[]; plain_ready: boolean }>("GET", `/admin/keys${query({ user: q.user, before: q.before, custom: q.custom ? 1 : undefined })}`),
+  adminUpdateKey: (id: number, policy: KeyPolicy) =>
+    call<{ key: AdminKey }>("PATCH", `/admin/keys/${id}`, policy),
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminChat: (id: string) =>

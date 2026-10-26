@@ -206,8 +206,13 @@ lowers each machine instruction in `ng_arm.salam`, and like i686 it splits
 
 Built with the built-in linker against a musl sysroot and run under
 qemu-arm, the test groups listed for i686 match their expected output with
-the same exceptions. There are no unwind tables yet; `-g` gives line tables,
-frames and variables (see "Debug information").
+the same exceptions. Every function gets an ARM EHABI unwind entry
+(`ng_exidx.salam`): the opcodes undo the prologue (the stack adjustment,
+`vpop d8-d10` when the function saved them, then a pop under mask of the
+pushed registers and `lr`), inline in `.ARM.exidx` when they fit in three
+bytes and in `.ARM.extab` with personality routine 1 otherwise. libgcc's
+unwinder walks the frames with them. `-g` gives line tables, frames and
+variables (see "Debug information").
 
 ## RISC-V
 

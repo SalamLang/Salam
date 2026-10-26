@@ -46,6 +46,9 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_CHAT_MEMORY_DAYS`                        | how far back chats are picked up, which also bounds the first pass over old chats after an upgrade                                                    | `30`                                            |
 | `AI_CHAT_MEMORY_PAUSE_SECONDS`               | the pause between memory passes; they run one at a time                                                                                               | `10`                                            |
 | `AI_API_START_SECONDS`                       | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                               | `180`                                           |
+| `AI_TELEGRAM_TOKEN`                          | the Telegram bot token from BotFather; empty switches the bot off. Keep it in the server's env file, never in the repository                          | empty                                           |
+| `AI_TELEGRAM_GUEST_LIMIT`                    | messages a Telegram guest may send before being asked to sign in                                                                                      | `15`                                            |
+| `AI_TELEGRAM_API`                            | where the Bot API lives, for the test mock                                                                                                            | `https://api.telegram.org`                      |
 
 The API keeps a stream open for as long as an answer takes, so give the
 container room: it ran into a 512 MB limit in production and was killed by the
@@ -87,6 +90,43 @@ The API:
 | `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                                  |
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
+
+### Telegram bot
+
+The API runs the Telegram bot itself (`telegram.salam`): it long-polls `getUpdates`,
+so no webhook or public route is needed, only an outgoing HTTPS connection. Set
+`AI_TELEGRAM_TOKEN` and restart; the bot clears any webhook, registers its commands
+in Persian and English and starts answering.
+
+- **Guest mode.** Anyone who writes to the bot is a guest, like the chat on the
+  site: up to `AI_TELEGRAM_GUEST_LIMIT` messages, stored in `guest_sessions`.
+  `/login` (or the button under the welcome and limit messages) sends a one-time
+  link to `https://ai.salamlang.ir/telegram?code=...`, valid for 15 minutes.
+- **Signing in.** The page shows which Telegram account asked, asks the person to
+  sign in or sign up, and then to confirm. Only then is `telegram_links` written and
+  the bot tells the person in Telegram. From then on the bot talks as that account:
+  chats are normal `chats` rows (`source = 'telegram'`), so the site history and
+  the Telegram history are the same, plan limits apply, and memory sees them.
+  `/chats` lists the account's recent chats with buttons to continue any of them,
+  `/new` starts another, `/logout` disconnects.
+- **From the site.** Connections shows the linked Telegram accounts and makes a
+  `t.me/<bot>?start=link_<code>` link; the bot asks for a tap before linking.
+- Answers stream into the chat by editing one message; Markdown becomes Telegram
+  HTML (`tgmd.salam`), long answers are split on line boundaries and code fences
+  are kept balanced. Private chats only. At most 5 Telegram accounts per Salam
+  account.
+
+| Method and path            | Purpose                                                |
+| -------------------------- | ------------------------------------------------------ |
+| `GET /telegram/link/:code` | who asked to connect (public, so the page can show it) |
+| `POST /telegram/link`      | `{code}` with a bearer token confirms the link         |
+| `GET /telegram`            | the linked accounts and whether the bot is on          |
+| `POST /telegram/code`      | a `t.me` link that starts a link from the site         |
+| `DELETE /telegram/:id`     | disconnect one Telegram account                        |
+
+`node ai/backend/tests/telegram_flow.mjs` tests it against a running API with
+`ai/backend/tests/telegram_mock.mjs` standing in for Telegram (`AI_TELEGRAM_API`);
+`salam exec ai/backend/tests/tgmd_test.salam` tests the Markdown converter.
 
 ### Memory
 

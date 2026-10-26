@@ -9,6 +9,7 @@ import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
+import { Connections, TelegramLink } from "./Telegram";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
 import { Plans } from "./Plans";
@@ -37,7 +38,7 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
+type Route = "chat" | "connect" | "telegram" | "connections" | "apps" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -46,6 +47,8 @@ function adminChatIdFromPath(): string {
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
   if (p === "/connect") return "connect";
+  if (p === "/telegram") return "telegram";
+  if (p === "/connections") return "connections";
   if (p === "/apps") return "apps";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
@@ -58,6 +61,8 @@ function routeFromPath(): Route {
 const PAGE_TITLES: Record<Route, string> = {
   chat: t("دستیار سلام", "Salam AI"),
   connect: t("اتصال برنامه", "Connect an app"),
+  telegram: t("اتصال تلگرام", "Connect Telegram"),
+  connections: t("اتصال‌ها", "Connections"),
   apps: t("برنامه‌های متصل", "Connected apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
@@ -124,7 +129,7 @@ export function App() {
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
   const signedIn = user !== null;
-  const onConnect = route === "connect";
+  const onConnect = route === "connect" || route === "telegram";
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -492,6 +497,8 @@ export function App() {
     );
   }
 
+  if (route === "telegram") return <TelegramLink user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
+
   if (route === "connect") return <Connect user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
 
   if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
@@ -532,9 +539,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "apps" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
+        ) : route === "apps" || route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "apps" ? <Apps notify={notify} /> : route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>

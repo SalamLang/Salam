@@ -143,7 +143,7 @@ async function main() {
 
   const oauth = await api("POST", "/integrations/github/oauth", token);
   const state = oauth.json?.state;
-  check("GitHub connect link is made", oauth.res.status === 200 && /client_id=gh-client/.test(oauth.json.url) && /auth%2Fcallback%2Fgithub/.test(oauth.json.url) && /scope=repo%20workflow%20admin%3Aorg/.test(oauth.json.url) && !/delete_repo|delete%3Apackages/.test(oauth.json.url) && !!state, oauth.res.status);
+  check("GitHub connect link is made", oauth.res.status === 200 && /client_id=gh-client/.test(oauth.json.url) && /auth%2Fcallback%2Fgithub/.test(oauth.json.url) && (process.env.AI_GITHUB_SCOPES ? /scope=/.test(oauth.json.url) : /scope=repo%20workflow%20admin%3Aorg/.test(oauth.json.url)) && !/delete_repo|delete%3Apackages/.test(oauth.json.url) && !!state, oauth.res.status);
   await api("DELETE", "/integrations/github", token);
   const back = await api("POST", "/auth/provider/github/complete", undefined, { code: "abc", state });
   check("the app completes the connection", back.res.status === 200 && back.json.purpose === "connect" && back.json.ok === true, back.json);

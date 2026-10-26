@@ -192,7 +192,7 @@ const PROVIDERS = {
     help: "https://github.com/settings/tokens/new?scopes=repo,workflow,admin:org,admin:repo_hook,admin:public_key,gist,notifications,user,project,write:discussion,read:packages,write:packages,codespace&description=Salam%20AI",
     helpText: t("ساخت توکن شخصی (دسترسی‌ها از قبل انتخاب شده)", "Create a personal access token (permissions preselected)"),
     placeholder: "ghp_... / github_pat_...",
-    access: t("دسترسی خواسته‌شده: مخزن‌ها (عمومی و خصوصی)، سازمان‌ها، workflowها، gist، اعلان‌ها، پروژه‌ها و بسته‌ها. حذف مخزن هرگز.", "Access asked for: repositories (public and private), organizations, workflows, gists, notifications, projects and packages. Never repository deletion."),
+    access: t("دسترسی خواسته‌شده: مخزن‌ها (عمومی و خصوصی)، سازمان‌ها (مدیریت کامل، از جمله تیم‌ها و عضویت‌ها)، workflowها، gist، اعلان‌ها، پروژه‌ها و بسته‌ها. حذف مخزن هرگز.", "Access asked for: repositories (public and private), organizations (full management, including teams and memberships), workflows, gists, notifications, projects and packages. Never repository deletion."),
   },
   figma: {
     name: "Figma",
@@ -201,7 +201,7 @@ const PROVIDERS = {
     help: "https://www.figma.com/settings",
     helpText: t("ساخت توکن شخصی (Settings، Security)", "Create a personal access token (Settings, Security)"),
     placeholder: "figd_...",
-    access: t("دسترسی خواسته‌شده: خواندن فایل‌ها، نسخه‌ها، کتابخانه‌ها و پوشه‌ها، کامنت‌ها و منابع توسعه‌دهنده (خواندن و نوشتن) و وب‌هوک‌ها.", "Access asked for: files, versions, libraries and folders (read), comments and dev resources (read and write) and webhooks."),
+    access: t("دسترسی پیش‌فرض OAuth: خواندن فایل‌ها، نسخه‌ها، کتابخانه‌ها و پوشه‌ها، کامنت‌ها و منابع توسعه‌دهنده (خواندن و نوشتن) و وب‌هوک‌ها.", "Default OAuth access: files, versions, libraries and folders (read), comments and dev resources (read and write) and webhooks."),
   },
 } as const;
 

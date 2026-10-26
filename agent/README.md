@@ -27,6 +27,39 @@ engine -> ai-api /bridge/mcp -> long poll -> this app -> runs the tool after app
   against that folder (`src/workspace.rs`), and symlinks and `..` cannot
   escape it unnoticed.
 
+## Project instructions and memory
+
+Before each message in an agent chat the web app asks the app for the
+workspace's context (`agent_project_context`): the project's `AGENTS.md`, or
+`AGENT.md` when there is no `AGENTS.md` (up to 32 KB), and the memory index
+(up to 16 KB). The backend passes them to the model when they change, so an
+unchanged file is not resent on every turn.
+
+The model keeps notes about the project with two tools, `save_memory` and
+`forget_memory` (`src/memory.rs`). They write plain Markdown that is meant to
+be read, edited and committed like any other file:
+
+```text
+.salam-agent/
+  index.md                one line per memory, newest first, linking to its file
+  memory/build-steps.md   one memory
+```
+
+```markdown
+---
+title: Build steps
+description: How to build and test this project
+created: 2026-10-26T02:30:00Z
+updated: 2026-10-26T02:41:12Z
+---
+
+Run `salam build main.salam`, then `salam test`.
+```
+
+Saving with an existing slug updates that file and keeps its `created` time.
+Memory calls run without asking in the two writing levels and ask in the
+read-only one, and they never leave the workspace.
+
 ## Access levels
 
 You pick one per chat in the composer.

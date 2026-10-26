@@ -7,6 +7,7 @@ const COMMANDS: &[&str] = &[
     "agent_decide",
     "agent_stop",
     "agent_pending",
+    "agent_project_context",
 ];
 
 fn main() {

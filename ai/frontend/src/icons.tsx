@@ -62,6 +62,11 @@ export const IconClose = (p: P) => (
     <path d="M6 6l12 12M18 6L6 18" />
   </Base>
 );
+export const IconMemory = (p: P) => (
+  <Base {...p}>
+    <path d="M6 3h9l3 3v15H6zM15 3v3h3M9 10h6M9 14h6M9 18h3" />
+  </Base>
+);
 export const IconTrash = (p: P) => (
   <Base {...p}>
     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />

@@ -9,7 +9,14 @@ const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
 const foreign = (lang, n) => `${FENCE}${lang}\n${Array.from({ length: n }, (_, i) => `line ${i}`).join("\n")}\n${FENCE}`;
 const AGENTS = () => (process.env.MOCK_AGENTS ?? "salam,salam-agent,raw").split(",");
+const memoryAnswer = (s) => {
+  const first = /\n\nUser: ([^\n]*)/.exec(s.prompt)?.[1] ?? "";
+  const memories = s.prompt.includes("remember that my favorite color is teal") ? [{ slug: "Favorite Color", title: "Favorite color", description: "What color the user likes", content: "The user likes **teal**." }] : [];
+  return `Sure:\n${JSON.stringify({ summary: `Talked about: ${first.slice(0, 60)}`, memories, forget: [] })}`;
+};
 const answerFor = (s) => {
+  if (s.prompt.includes("<memory_task>")) return memoryAnswer(s);
+  if (s.prompt.includes("what do you remember")) return `Memory: ${s.memory.includes("### Favorite color") && s.memory.includes("teal")} chats=${(s.memory.match(/^- /gm) ?? []).length}`;
   if (s.prompt.includes("which interface")) return `Interface: ${s.ui || "none"}`;
   if (s.prompt.includes("show policy")) return `Policy: agent=${s.agent} system=${s.system.includes("<salam_policy>") ? "salam" : JSON.stringify(s.system)} operator=${s.system.includes("<operator_instructions>")} tools=${JSON.stringify(s.tools ?? null)} reminder=${s.reminder} defanged=${s.prompt.includes("&lt;/caller_instructions>")}`;
   if (s.prompt.includes("<language_check>")) return `Rewritten in Salam (${s.prompt.includes("php") ? "saw php" : "no language"}):\n${code('func main:\n    println "hi"\nend')}`;
@@ -19,7 +26,7 @@ const answerFor = (s) => {
     const blocks = [...s.prompt.matchAll(/<attached_file name="([^"]+)">/g)].map((m) => m[1]);
     return `Saw images [${(s.files ?? []).join(", ")}] and text [${blocks.join(", ")}]`;
   }
-  if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}`;
+  if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}${s.project ? " [project]" : ""}`;
   if (s.prompt.includes("<caller_tools>") && s.prompt.includes("write it to a file")) {
     return JSON.stringify({ tool: "write_to_file", arguments: { path: "factorial.salam", content: "func main:\n    println 1\n    ret 0\nend\n" } });
   }
@@ -43,7 +50,7 @@ const answerFor = (s) => {
 };
 async function callDesktop(s) {
   const session = /session: ([0-9a-f]{32})/.exec(s.prompt)?.[1] ?? "";
-  const command = /run: (.*)$/m.exec(s.prompt)?.[1] ?? "echo hi";
+  const command = /run: ([\s\S]*)$/.exec(s.prompt)?.[1] ?? "echo hi";
   const call = async (name, args) => {
     const res = await fetch(BRIDGE, {
       method: "POST",
@@ -119,7 +126,7 @@ http.createServer((req, res) => {
       for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, ""); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.memory = /<user_memory>([\s\S]*?)<\/user_memory>/.exec(b.parts[0].text)?.[1] ?? ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, "").replace(/\n\n<user_memory>[\s\S]*?<\/user_memory>/, ""); s.project = /<project_instructions file="AGENTS.md">\nUse tabs/.test(s.prompt) && s.prompt.includes("<project_memory>\n# Salam Agent memory"); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});

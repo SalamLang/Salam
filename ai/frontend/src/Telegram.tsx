@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, ApiError, type Integration, type Integrations, type TelegramLinkInfo, type TelegramStatus, type User } from "./api";
+import { api, ApiError, rememberOAuth, type Integration, type Integrations, type TelegramLinkInfo, type TelegramStatus, type User } from "./api";
 import { AuthForm } from "./Auth";
 import { Notice, Shell } from "./Connect";
 import { AppsPanel } from "./Apps";
@@ -275,6 +275,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
     setBusy("oauth");
     try {
       const r = await api.integrationOauth(item.provider);
+      rememberOAuth({ provider: item.provider, state: r.state, purpose: "connect", next: "" });
       location.assign(r.url);
     } catch (err) {
       notify(err instanceof ApiError ? err.message : t("وصل کردن ناموفق بود.", "Could not connect."));

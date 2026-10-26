@@ -199,11 +199,18 @@ of it with `sandbox_mock.mjs` and `provider_mock.mjs`; set `REAL_SANDBOX=1` and 
 ### Sign in with GitHub or Figma
 
 When a provider's OAuth app is configured, the sign in page offers "Continue with
-GitHub" and "Continue with Figma" (`GET /auth/providers` says which). The flow is
-`GET /auth/provider/:provider/start?next=/path` (a one-time state row in
-`integration_states`), the provider, then `GET /auth/provider/:provider/callback`,
-which redirects the browser to `AI_APP_URL/auth/done?next=...#token=...`; the app
-keeps the token and goes on to `next` (only same-site paths are kept).
+GitHub" and "Continue with Figma" (`GET /auth/providers` says which). The provider
+sends the browser back to the web app, not to the API, and the app talks to the API:
+
+1. The app calls `POST /auth/provider/:provider/start` with `{next}`; the API stores a
+   one-time state (`integration_states`, 15 minutes) and returns the provider's link and
+   the state. The app remembers the state in the browser and goes to the link.
+2. The provider returns to `AI_APP_URL/auth/callback/:provider?code=...&state=...`.
+3. That page checks the state against the one it remembered (so a link someone else
+   started cannot sign this browser in), then calls
+   `POST /auth/provider/:provider/complete`, keeps the returned token and goes on to
+   `next` (only same-site paths are kept). The same page finishes the Connections page's
+   "Connect with GitHub/Figma" flow, where the answer is `{ok}`.
 
 - The OAuth app asks only for the profile: GitHub `read:user user:email`, Figma
   `current_user:read`. Repository and design access is a separate step on the
@@ -213,12 +220,12 @@ keeps the token and goes on to `next` (only same-site paths are kept).
   email) with a password nobody can use.
 - A GitHub identity whose verified email already belongs to a password account joins
   that account. Figma's email is not treated as verified, an admin account is never
-  joined by email, and an email with no match is refused only when the provider
-  gives none or the address is reserved; the page shows the reason.
+  joined by email, and an account is refused when the provider gives no email or the
+  address is reserved; the page shows the reason.
 - Create the apps at `https://github.com/settings/developers` (OAuth Apps) with the
-  callback `https://ai-api.salamlang.ir/auth/provider/github/callback` and at the
-  Figma developer settings with `https://ai-api.salamlang.ir/auth/provider/figma/callback`,
-  enable the Figma scopes `current_user:read`, `file_content:read`, `file_metadata:read`,
+  callback `https://ai.salamlang.ir/auth/callback/github` and at the Figma developer
+  settings with `https://ai.salamlang.ir/auth/callback/figma`, enable the Figma scopes
+  `current_user:read`, `file_content:read`, `file_metadata:read`,
   `file_comments:write` and `library_content:read`, and put the IDs and secrets in the
   server's env file, never in the repository. A GitHub OAuth app allows one callback
   URL, which is why connecting and signing in share this path.

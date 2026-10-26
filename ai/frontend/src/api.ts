@@ -22,6 +22,18 @@ export type FileMeta = {
   size: number;
   url?: string;
 };
+export type TelegramLinkInfo = { name: string; username: string; bot: string };
+export type TelegramAccount = {
+  id: string;
+  name: string;
+  username: string;
+  created: number;
+};
+export type TelegramStatus = {
+  enabled: boolean;
+  bot: string;
+  links: TelegramAccount[];
+};
 export type OutgoingFile = { name: string; data: string };
 export type Capabilities = {
   image: boolean;
@@ -726,6 +738,17 @@ export const api = {
       "POST",
       `/oauth/requests/${encodeURIComponent(id)}/deny`,
     ),
+  telegramInfo: (code: string) =>
+    call<TelegramLinkInfo>("GET", `/telegram/link/${encodeURIComponent(code)}`),
+  telegramLink: (code: string) =>
+    call<TelegramLinkInfo & { ok: boolean }>("POST", "/telegram/link", {
+      code,
+    }),
+  telegramStatus: () => call<TelegramStatus>("GET", "/telegram"),
+  telegramCode: () =>
+    call<{ url: string; bot: string }>("POST", "/telegram/code"),
+  telegramUnlink: (id: string) =>
+    call<{ ok: boolean }>("DELETE", `/telegram/${encodeURIComponent(id)}`),
   apps: () => call<{ apps: ConnectedApp[] }>("GET", "/apps"),
   revokeApp: (id: number) => call<{ ok: boolean }>("DELETE", `/apps/${id}`),
   appEvents: (id: number, before?: number) =>

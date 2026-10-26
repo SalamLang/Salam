@@ -139,12 +139,12 @@ async function main() {
   const state = /state=([0-9a-f]+)/.exec(oauth.json?.url ?? "")?.[1];
   check("GitHub sign in link is made", oauth.res.status === 200 && /client_id=gh-client/.test(oauth.json.url) && !!state, oauth.res.status);
   await api("DELETE", "/integrations/github", token);
-  const back = await fetch(`${API}/integrations/github/callback?code=abc&state=${state}`, { redirect: "manual" });
+  const back = await fetch(`${API}/auth/provider/github/callback?code=abc&state=${state}`, { redirect: "manual" });
   check("the callback sends the browser back", back.status === 302 && /connected=github&result=ok/.test(back.headers.get("location") ?? ""), back.headers.get("location"));
   const after = await api("GET", "/integrations", token);
   check("OAuth connected GitHub", after.json.integrations.find((i) => i.provider === "github").connected === true, after.json);
-  const replay = await fetch(`${API}/integrations/github/callback?code=abc&state=${state}`, { redirect: "manual" });
-  check("a state works once", /result=expired/.test(replay.headers.get("location") ?? ""));
+  const replay = await fetch(`${API}/auth/provider/github/callback?code=abc&state=${state}`, { redirect: "manual" });
+  check("a state works once", /login_error=expired/.test(replay.headers.get("location") ?? ""));
   await api("DELETE", "/integrations/figma", token);
   r = await ask(token, chat, 'tool: figma_api {"path": "/v1/me"}');
   check("a disconnected service says so", /has not connected Figma/.test(r.body ?? ""), r);

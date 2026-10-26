@@ -1,10 +1,70 @@
 import { useState, type FormEvent } from "react";
-import { api, ApiError, setToken, type User } from "./api";
-import { IconCode, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
+import { useEffect } from "react";
+import { api, ApiError, providerLoginUrl, setToken, type User } from "./api";
+import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
 
 type Mode = "login" | "register";
+
+const LOGIN_ERRORS: Record<string, string> = {
+  unavailable: t("ورود با این سرویس فعال نیست.", "Signing in with this service is not available."),
+  denied: t("ورود لغو شد.", "Sign in was canceled."),
+  expired: t("نشست ورود منقضی شد. دوباره تلاش کنید.", "The sign in expired. Try again."),
+  failed: t("سرویس ورود پاسخ درستی نداد. دوباره تلاش کنید.", "The sign in service did not answer correctly. Try again."),
+  server: t("خطایی در سرور پیش آمد. دوباره تلاش کنید.", "Something went wrong on the server. Try again."),
+  email_exists: t("با این ایمیل قبلا حساب ساخته شده است. با ایمیل و گذرواژه وارد شوید.", "An account with this email already exists. Sign in with your email and password."),
+  no_email: t("این حساب ایمیل تأییدشده‌ای ندارد. در آن سرویس یک ایمیل تأییدشده اضافه کنید یا با ایمیل ثبت‌نام کنید.", "This account has no verified email. Add a verified email there, or sign up with email."),
+};
+
+function nextPath(): string {
+  const p = new URLSearchParams(location.search).get("next");
+  if (p && p.startsWith("/") && !p.startsWith("//")) return p;
+  if (location.pathname !== "/" && location.pathname !== "/auth/done") return location.pathname + location.search;
+  return "";
+}
+
+function ProviderButtons({ setError }: { setError: (m: string) => void }) {
+  const [on, setOn] = useState<{ github: boolean; figma: boolean } | null>(null);
+  useEffect(() => {
+    api
+      .authProviders()
+      .then(setOn)
+      .catch(() => {});
+    const code = new URLSearchParams(location.search).get("login_error");
+    if (code) {
+      setError(LOGIN_ERRORS[code] ?? t("ورود انجام نشد.", "Sign in failed."));
+      const p = new URLSearchParams(location.search);
+      p.delete("login_error");
+      p.delete("next");
+      const rest = p.toString();
+      history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : ""));
+    }
+  }, [setError]);
+  if (!on || (!on.github && !on.figma)) return null;
+  const next = nextPath();
+  return (
+    <>
+      <div className="auth-or" role="separator">
+        <span>{t("یا", "or")}</span>
+      </div>
+      <div className="auth-providers">
+        {on.github && (
+          <a className="button ghost wide" href={providerLoginUrl("github", next)}>
+            <IconGithub width={18} height={18} />
+            {t("ادامه با GitHub", "Continue with GitHub")}
+          </a>
+        )}
+        {on.figma && (
+          <a className="button ghost wide" href={providerLoginUrl("figma", next)}>
+            <IconFigma width={18} height={18} />
+            {t("ادامه با Figma", "Continue with Figma")}
+          </a>
+        )}
+      </div>
+    </>
+  );
+}
 
 export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User) => void; compact?: boolean; intro?: string }) {
   const [mode, setMode] = useState<Mode>(() => (new URLSearchParams(location.search).get("signup") ? "register" : "login"));
@@ -85,6 +145,7 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
       <button type="submit" className="button primary wide" disabled={busy}>
         {busy ? <span className="spinner" /> : mode === "login" ? t("ورود", "Sign in") : t("ساخت حساب", "Create account")}
       </button>
+      <ProviderButtons setError={setError} />
       <p className="switch">
         {mode === "login" ? t("حساب ندارید؟ ", "No account? ") : t("حساب دارید؟ ", "Have an account? ")}
         <button type="button" className="link" onClick={() => switchMode(mode === "login" ? "register" : "login")}>

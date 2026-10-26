@@ -62,7 +62,7 @@ export function ConnectHelp() {
   );
 }
 
-export function Apps({ notify }: { notify: (msg: string) => void }) {
+export function AppsPanel({ notify }: { notify: (msg: string) => void }) {
   const [apps, setApps] = useState<ConnectedApp[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
@@ -104,9 +104,9 @@ export function Apps({ notify }: { notify: (msg: string) => void }) {
   };
 
   return (
-    <div className="page">
-      <header className="page-head">
-        <h2>{t("برنامه‌های متصل", "Connected apps")}</h2>
+    <section className="apps-panel" id="apps">
+      <header className="section-head">
+        <h3>{t("برنامه‌های متصل (MCP)", "Connected apps (MCP)")}</h3>
         <p className="muted">
           {t(
             "برنامه‌هایی مانند Claude Code، Codex یا Cursor که با حساب سلام شما به ابزارهای سلام وصل شده‌اند. هر زمان بخواهید می‌توانید اتصالشان را قطع کنید.",
@@ -210,6 +210,6 @@ export function Apps({ notify }: { notify: (msg: string) => void }) {
           })}
         </ul>
       )}
-    </div>
+    </section>
   );
 }

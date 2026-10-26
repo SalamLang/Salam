@@ -95,8 +95,16 @@ the frames. The native backend gate builds the `llvm` tests with the
 built-in linker and with lld and runs both sets on a `windows-11-arm`
 runner; all of them pass on that hardware.
 
-What is not there yet: the loop and SLP vectorizers are off on AArch64,
-there are no unwind tables (gdb walks the frames from the prologues), and
+On Linux, AArch64 and RISC-V objects carry `.eh_frame` (`ng_cfi.salam`).
+The encoders record CFI events as they write each prologue and epilogue: the
+CFA moves to the frame pointer plus 16 once the frame record is saved, every
+callee-saved register gets its slot, and each epilogue is wrapped in
+`remember_state`/`restore_state` with the CFA back on `sp` after the frame
+record is reloaded. libgcc's `_Unwind_Backtrace` walks the same number of
+frames there as on x86, and gdb uses the tables instead of guessing from the
+prologues.
+
+What is not there yet: the loop and SLP vectorizers are off on AArch64, and
 in release builds an integer
 division by zero returns 0 instead of trapping, as ARM hardware does (debug
 builds check explicitly, as on every target).

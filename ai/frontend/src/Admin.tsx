@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminKey, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -1148,6 +1148,228 @@ function Conversations({ picked }: { picked: Picked }) {
   );
 }
 
+function policyBadges(k: AdminKey) {
+  return (
+    <span className="badge-row">
+      {k.salam_prompt ? <span className="badge ok">{t("فقط سلام", "Salam only")}</span> : <span className="badge danger">{t("پرامپت سفارشی", "Custom prompt")}</span>}
+      {!k.salam_tools && <span className="badge">{t("بدون MCP", "No MCP")}</span>}
+      {k.salam_prompt && k.system_prompt && <span className="badge">{t("دستور اپراتور", "Operator note")}</span>}
+    </span>
+  );
+}
+
+function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved: (k: AdminKey) => void; onClose: () => void; notify: (msg: string) => void }) {
+  const [salam, setSalam] = useState(k.salam_prompt);
+  const [tools, setTools] = useState(k.salam_tools);
+  const [prompt, setPrompt] = useState(k.system_prompt);
+  const [saving, setSaving] = useState(false);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const r = await api.adminUpdateKey(k.id, { salam_prompt: salam, salam_tools: tools, system_prompt: prompt });
+      onSaved(r.key);
+      notify(t("تنظیم کلید ذخیره شد.", "Key settings saved."));
+    } catch (err) {
+      notify(errText(err, t("ذخیره‌ی تنظیم کلید ناموفق بود.", "Could not save the key settings.")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="grant key-policy" onSubmit={save}>
+      <div className="grant-head">
+        <h4>
+          {t("تنظیم کلید", "Settings for key")} <bdi className="strong">{k.name}</bdi>
+        </h4>
+        <p className="muted">{t("پیش‌فرض هر کلید: دستیار فقط با سلام کار می‌کند و ابزارهای MCP سلام روشن است. این تنظیم فقط با این کلید عوض می‌شود.", "By default a key answers in Salam only, with the Salam MCP tools on. These switches only change this key.")}</p>
+      </div>
+      <label className="check-row">
+        <input type="checkbox" checked={salam} onChange={(e) => setSalam(e.target.checked)} />
+        <span>
+          <strong>{t("پرامپت سیستمی سلام", "Salam system prompt")}</strong>
+          <span className="muted">{t("خاموش: پرامپت و سیاست سلام برداشته می‌شود و فقط پرامپت زیر به کار می‌رود، با پروفایل ساده‌ی موتور.", "Off: the Salam prompt and policy are removed and only the prompt below is used, on the engine's plain profile.")}</span>
+        </span>
+      </label>
+      <label className="check-row">
+        <input type="checkbox" checked={tools} onChange={(e) => setTools(e.target.checked)} />
+        <span>
+          <strong>{t("ابزارهای MCP", "MCP tools")}</strong>
+          <span className="muted">{t("خاموش: دستیار هیچ ابزاری صدا نمی‌زند (نه salam_check و نه جست‌وجو).", "Off: the assistant calls no tools at all (no salam_check, no search).")}</span>
+        </span>
+      </label>
+      <label className="grant-field">
+        <span>
+          {salam ? t("دستور اپراتور", "Operator instructions") : t("پرامپت سیستمی کامل", "Full system prompt")} <span className="opt">{t("اختیاری", "optional")}</span>
+        </span>
+        <textarea dir="auto" rows={6} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={salam ? t("بعد از سیاست سلام اضافه می‌شود و نمی‌تواند آن را بردارد.", "Added after the Salam policy; it cannot lift it.") : t("همه‌ی پرامپت سیستمی این کلید.", "The whole system prompt for this key.")} />
+      </label>
+      <div className="grant-actions key-policy-actions">
+        <button type="submit" className="button primary" disabled={saving}>
+          {saving ? <span className="spinner" /> : null}
+          {t("ذخیره", "Save")}
+        </button>
+        <button type="button" className="button ghost" onClick={onClose}>
+          {t("بستن", "Close")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+  const [keys, setKeys] = useState<AdminKey[] | null>(null);
+  const [ready, setReady] = useState(true);
+  const [error, setError] = useState("");
+  const [custom, setCustom] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  const [more, setMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setKeys(null);
+    setError("");
+    setMore(false);
+    api
+      .adminKeys({ user: picked?.id, custom })
+      .then((r) => {
+        if (!live) return;
+        setKeys(r.keys);
+        setReady(r.plain_ready);
+        setMore(r.keys.length >= 50);
+      })
+      .catch((e) => live && setError(errText(e, t("بارگذاری کلیدها ناموفق بود.", "Could not load keys."))));
+    return () => {
+      live = false;
+    };
+  }, [picked, custom]);
+
+  const loadMore = async () => {
+    if (!keys || keys.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.adminKeys({ user: picked?.id, custom, before: keys[keys.length - 1].id });
+      setKeys((cur) => [...(cur ?? []), ...r.keys]);
+      setMore(r.keys.length >= 50);
+    } catch (e) {
+      notify(errText(e, t("بارگذاری کلیدها ناموفق بود.", "Could not load keys.")));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("کلیدهای API", "API keys")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
+        <Segmented
+          label={t("نما", "View")}
+          options={[
+            { id: "all", label: t("همه", "All") },
+            { id: "custom", label: t("تنظیم‌شده", "Customized") },
+          ]}
+          value={custom ? "custom" : "all"}
+          onChange={(v) => setCustom(v === "custom")}
+        />
+      </div>
+      {!ready && (
+        <p className="policy-warn" role="status">
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس کلیدهایی که پرامپت سلامشان خاموش است هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so keys with the Salam prompt off are still answered by the Salam profile.")}
+        </p>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {keys === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : (
+        <div className="table-wrap scroll-y">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">{t("کاربر", "User")}</th>
+                <th scope="col">{t("کلید", "Key")}</th>
+                <th scope="col">{t("آخرین استفاده", "Last used")}</th>
+                <th scope="col">{t("درخواست", "Requests")}</th>
+                <th scope="col">{t("رفتار", "Behavior")}</th>
+                <th scope="col">
+                  <span className="sr-only">{t("کارها", "Actions")}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys?.map((k) => (
+                <Fragment key={k.id}>
+                  <tr className={k.revoked ? "revoked" : ""}>
+                    <td>
+                      <bdi>{k.user.name}</bdi>
+                      <span className="cell-sub" dir="ltr">
+                        {k.user.email}
+                      </span>
+                    </td>
+                    <td>
+                      <bdi>{k.name}</bdi>
+                      <span className="cell-sub cell-mono" dir="ltr">
+                        {k.prefix}…{k.revoked ? ` ${t("(باطل)", "(revoked)")}` : ""}
+                      </span>
+                    </td>
+                    <td title={k.last_used ? fmtDateTime(k.last_used) : undefined}>{fmtRelative(k.last_used)}</td>
+                    <td>{fmtNum(k.requests)}</td>
+                    <td title={k.policy_at ? fmtDateTime(k.policy_at) : undefined}>{policyBadges(k)}</td>
+                    <td>
+                      <button type="button" className="button ghost small" aria-expanded={open === k.id} onClick={() => setOpen(open === k.id ? null : k.id)} aria-label={t(`تنظیم کلید ${k.name}`, `Settings for key ${k.name}`)}>
+                        {t("تنظیم", "Settings")}
+                      </button>
+                    </td>
+                  </tr>
+                  {open === k.id && (
+                    <tr className="key-policy-row">
+                      <td colSpan={6}>
+                        <KeyPolicyEditor
+                          k={k}
+                          notify={notify}
+                          onClose={() => setOpen(null)}
+                          onSaved={(saved) => setKeys((cur) => (cur ? cur.map((x) => (x.id === saved.id ? saved : x)) : cur))}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+              {keys && keys.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-cell">
+                    {custom ? t("کلید تنظیم‌شده‌ای نیست.", "No customized keys.") : t("کلیدی ساخته نشده است.", "No keys yet.")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {loadingMore && (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      )}
+      {more && !loadingMore && (
+        <button type="button" className="button ghost more" onClick={loadMore}>
+          {t("نمایش موارد بیشتر", "Show more")}
+        </button>
+      )}
+    </section>
+  );
+}
+
 function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
@@ -1924,6 +2146,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <Uploads picked={picked} notify={notify} />
           <Events picked={picked} onPick={setPicked} />
           <RequestsFeed picked={picked} onPick={setPicked} />
+          <KeyPolicies picked={picked} notify={notify} />
           <AppsTable picked={picked} notify={notify} />
         </>
       )}

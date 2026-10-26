@@ -27,6 +27,7 @@ import str
 
 include aistore "store.salam"
 include aiweb "web.salam"
+include aipolicy "policy.salam"
 
 const POLL_MS := 25000
 const CALL_MS := 600000
@@ -60,6 +61,7 @@ mut OWNER := HashMap {} as HashMap<str, str>
 mut TAKEN := HashMap {} as HashMap<str, str>
 mut RESULTS := HashMap {} as HashMap<str, str>
 mut STARTED := HashMap {} as HashMap<str, i64>
+mut BUDGET := HashMap {} as HashMap<str, int>
 
 func one(v: str): Vector<str>:
     mut a := Vector {} as Vector<str>
@@ -468,6 +470,56 @@ func wait_call(args: str): str:
     ret await_call(id, dev)
 end
 
+func foreign_budget(chat: str, lines: int): int:
+    _l := sync.Lock(LOCK)
+    if BUDGET.size() > 5000:
+        BUDGET = HashMap {} as HashMap<str, int>
+    end
+    used := BUDGET.has(chat) ? BUDGET.get(chat) : 0
+    if used + lines <= aipolicy.ChatMax():
+        BUDGET.put(chat, used + lines)
+        _u := sync.Unlock(LOCK)
+        ret -1
+    end
+    _v := sync.Unlock(LOCK)
+    ret used
+end
+
+func guard(name: str, args: str, chat: str): str:
+    mut lines := 0
+    if name == "write_file" or name == "edit_file":
+        target := json.Get(args, "path")
+        if not aipolicy.ForeignPath(target):
+            ret ""
+        end
+        lines = aipolicy.FileLines(json.Get(args, name == "write_file" ? "content" : "new_text"))
+        if lines > aipolicy.FileMax():
+            ret "Refused by the Salam service: this would put " + lines + " lines of code in another language into " + target + ". Salam Agent builds software in Salam: write this part as .salam files instead. Small glue files in other languages (up to " + aipolicy.FileMax() + " lines) are fine."
+        end
+    else name == "shell" or name == "wsl" or name == "run_tests":
+        command := json.Get(args, "command")
+        tool := aipolicy.Scaffold(command)
+        if tool.len() > 0:
+            ret "Refused by the Salam service: " + tool + " starts a project in another language. Salam Agent builds projects in Salam: start one with salam new or salam init, or write the .salam files directly."
+        end
+        size := aipolicy.FileLines(command)
+        if size > aipolicy.CommandMax():
+            ret "Refused by the Salam service: this command is " + size + " lines long. Keep shell commands and scripts short and put the program itself in Salam."
+        end
+        if not aipolicy.WritesForeign(command):
+            ret ""
+        end
+        lines = size
+    else:
+        ret ""
+    end
+    used := foreign_budget(chat, lines)
+    if used >= 0:
+        ret "Refused by the Salam service: this conversation already wrote " + used + " lines of code in other languages, and the limit is " + aipolicy.ChatMax() + ". Salam Agent builds software in Salam: write the rest in Salam."
+    end
+    ret ""
+end
+
 func call_tool(params: str): str:
     name := json.Get(params, "name")
     mut args := json.Get(params, "arguments")
@@ -490,6 +542,10 @@ func call_tool(params: str): str:
     session_device(session, chat, dev, workspace)
     if chat.len() == 0:
         ret tool_text("This session is not linked to Salam Agent. Tell the user to open the conversation in Salam Agent.", true)
+    end
+    refused := guard(name, args, chat)
+    if refused.len() > 0:
+        ret tool_text(refused, true)
     end
     if not online(dev):
         ret tool_text("Salam Agent is not connected right now. Ask the user to open it and try again.", true)

@@ -7,8 +7,14 @@ const BRIDGE = process.env.BRIDGE_MCP ?? "http://127.0.0.1:18091/bridge/mcp";
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? "";
 const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
+const foreign = (lang, n) => `${FENCE}${lang}\n${Array.from({ length: n }, (_, i) => `line ${i}`).join("\n")}\n${FENCE}`;
+const AGENTS = () => (process.env.MOCK_AGENTS ?? "salam,salam-agent,raw").split(",");
 const answerFor = (s) => {
   if (s.prompt.includes("which interface")) return `Interface: ${s.ui || "none"}`;
+  if (s.prompt.includes("show policy")) return `Policy: agent=${s.agent} system=${s.system.includes("<salam_policy>") ? "salam" : JSON.stringify(s.system)} operator=${s.system.includes("<operator_instructions>")} tools=${JSON.stringify(s.tools ?? null)} reminder=${s.reminder} defanged=${s.prompt.includes("&lt;/caller_instructions>")}`;
+  if (s.prompt.includes("<language_check>")) return `Rewritten in Salam (${s.prompt.includes("php") ? "saw php" : "no language"}):\n${code('func main:\n    println "hi"\nend')}`;
+  if (s.prompt.includes("write php please")) return `Here is the plugin:\n${foreign("php", 50)}`;
+  if (s.prompt.includes("short php please")) return `A tiny helper:\n${foreign("php", 5)}`;
   if (s.files?.length || s.prompt.includes("<attached_file")) {
     const blocks = [...s.prompt.matchAll(/<attached_file name="([^"]+)">/g)].map((m) => m[1]);
     return `Saw images [${(s.files ?? []).join(", ")}] and text [${blocks.join(", ")}]`;
@@ -106,14 +112,14 @@ http.createServer((req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/config") return send(200, { model: "mock/vision", agent: { salam: {} } });
     if (req.method === "GET" && url.pathname === "/config/providers") return send(200, { providers: [{ id: "mock", models: { vision: { capabilities: { input: { text: true, image: true, pdf: false } } } } }] });
-    if (req.method === "GET" && url.pathname === "/agent") return send(200, (process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").map((name) => ({ name })));
-    if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", start: 0 }); return send(200, { id }); }
+    if (req.method === "GET" && url.pathname === "/agent") return send(200, AGENTS().map((name) => ({ name })));
+    if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", system: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
       const busy = {};
       for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, ""); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, ""); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});

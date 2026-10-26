@@ -367,6 +367,30 @@ export type AdminKey = ApiKey & {
   policy_by: number;
   user: PersonRef;
 };
+export type MemoryItem = {
+  id: number;
+  chat: string;
+  slug: string;
+  title: string;
+  description: string;
+  created: number;
+  updated: number;
+  body?: string;
+  markdown?: string;
+};
+export type MemoryChat = {
+  id: string;
+  title: string;
+  summary: string;
+  updated: number;
+  memories: MemoryItem[];
+};
+export type MemoryOverview = {
+  enabled: boolean;
+  service: boolean;
+  index: string;
+  chats: MemoryChat[];
+};
 export type KeyPolicy = {
   salam_prompt?: boolean;
   salam_tools?: boolean;
@@ -611,13 +635,37 @@ export const api = {
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
-  send: (id: string, text: string, files?: OutgoingFile[], project?: ProjectContext) =>
+  send: (
+    id: string,
+    text: string,
+    files?: OutgoingFile[],
+    project?: ProjectContext,
+  ) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
       `/chats/${id}/messages`,
-      { text, ...(files && files.length > 0 ? { files } : {}), ...(project ? { project } : {}) },
+      {
+        text,
+        ...(files && files.length > 0 ? { files } : {}),
+        ...(project ? { project } : {}),
+      },
     ),
   capabilities: () => call<Capabilities>("GET", "/capabilities"),
+  memory: () => call<MemoryOverview>("GET", "/memory"),
+  setMemory: (enabled: boolean) =>
+    call<{ enabled: boolean }>("PATCH", "/memory", { enabled }),
+  clearMemory: () => call<{ ok: boolean }>("DELETE", "/memory"),
+  memoryItem: (id: number) =>
+    call<{ memory: MemoryItem }>("GET", `/memory/${id}`),
+  forgetMemory: (id: number) =>
+    call<{ ok: boolean }>("DELETE", `/memory/${id}`),
+  chatMemory: (id: string) =>
+    call<{
+      title: string;
+      summary: string;
+      index: string;
+      memories: MemoryItem[];
+    }>("GET", `/chats/${id}/memory`),
   adminFiles: (q: { user?: number; kind?: string; offset?: number }) =>
     call<{ files: AdminUpload[]; total: number }>(
       "GET",

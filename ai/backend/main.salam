@@ -44,6 +44,7 @@ include aiguest "guest.salam"
 include aipolicy "policy.salam"
 include aimemory "memory.salam"
 include aitelegram "telegram.salam"
+include aicloud "cloud.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -124,6 +125,13 @@ func main:
     CONTEXT_LOCK = sync.NewMutex()
     aimemory.Configure(env_or("AI_CHAT_MEMORY", "on") != "off", env_or("AI_CHAT_MEMORY_IDLE_SECONDS", "60").to_int(), env_or("AI_CHAT_MEMORY_DAYS", "30").to_int(), env_or("AI_CHAT_MEMORY_PAUSE_SECONDS", "10").to_int())
     aimemory.Start()
+    mut secret_key := os.Env("AI_SECRET_KEY")
+    if secret_key.len() < 16:
+        secret_key = os.Env("AI_BRIDGE_SECRET")
+    end
+    aicloud.Configure(os.Env("AI_SANDBOX_URL"), os.Env("AI_SANDBOX_SECRET"), secret_key, env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), os.Env("AI_GITHUB_CLIENT_ID"), os.Env("AI_GITHUB_CLIENT_SECRET"), os.Env("AI_FIGMA_CLIENT_ID"), os.Env("AI_FIGMA_CLIENT_SECRET"), os.Env("AI_FIGMA_SCOPES"))
+    aicloud.SetApis(os.Env("AI_GITHUB_API"), os.Env("AI_GITHUB_WEB"), os.Env("AI_FIGMA_API"), os.Env("AI_FIGMA_WEB"))
+    aicloud.Start()
     aitelegram.Configure(os.Env("AI_TELEGRAM_TOKEN"), os.Env("AI_TELEGRAM_API"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_TELEGRAM_GUEST_LIMIT", "15").to_int())
     aitelegram.Start()
     aiopenai.Configure(env_or("AI_API_ANSWER_SECONDS", "3600").to_int(), env_or("AI_API_START_SECONDS", "180").to_int())
@@ -180,6 +188,7 @@ func main:
     aiguest.Routes(r)
     aimemory.Routes(r)
     aitelegram.Routes(r)
+    aicloud.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/capabilities", "/chats/:id/files/:fid"]:
         router.Options(r, path, preflight)
     end
@@ -391,11 +400,14 @@ func me(ctx: i64):
     reply(ctx, 200, `{"user": ` + out + "}")
 end
 
-func chat_json(id: str, title: str, updated: str, device: str, workspace: str): str:
+func chat_json(id: str, title: str, updated: str, device: str, workspace: str, cloud: str): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("id", id))
     m.push(json.Member("title", title))
     m.push(json.MemberRaw("updated", updated))
+    if cloud == "1":
+        m.push(json.MemberBool("cloud", true))
+    end
     if device != "0" and device.len() > 0:
         m.push(json.MemberBool("agent", true))
         m.push(json.MemberRaw("device_id", device))
@@ -462,9 +474,9 @@ func list_chats(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
     until aistore.Next(rows):
-        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -493,20 +505,30 @@ func create_chat(ctx: i64):
     else:
         device = "0"
     end
+    mut cloud := "0"
+    if device == "0" and json.Get(body, "cloud") == "true":
+        if not aicloud.Enabled():
+            fail(ctx, 503, "cloud", "محیط اجرای ابری روی این سرور فعال نیست.")
+            ret
+        end
+        cloud = "1"
+        token = crypto.RandomHex(16)
+    end
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
     mut a := four(id, i64s(uid), DEFAULT_TITLE, t)
     a.push(device)
     a.push(device == "0" ? "" : workspace)
     a.push(token)
+    a.push(cloud)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7)", a)
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
         ret
     end
-    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace) + "}")
+    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace, cloud) + "}")
 end
 
 func sync_pending(id: str, sid: str):
@@ -584,9 +606,9 @@ func get_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
-    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE id = ?1", one(id))
     if aistore.Next(crow):
-        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
+        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
     end
     aistore.Finish(crow)
     mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
@@ -645,6 +667,7 @@ func delete_chat(ctx: i64):
         ret
     end
     aistore.Lock()
+    cloud_token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND cloud = 1", one(id))
     _m := aistore.Run("DELETE FROM messages WHERE chat_id = ?1", one(id))
     _c := aistore.Run("DELETE FROM chats WHERE id = ?1", one(id))
     aistore.Unlock()
@@ -652,6 +675,9 @@ func delete_chat(ctx: i64):
     if sid.len() > 0:
         aiengine.Abort(sid)
         aiengine.Delete(sid)
+    end
+    if cloud_token.len() > 0:
+        aicloud.Destroy(cloud_token)
     end
     reply(ctx, 200, `{"ok": true}`)
 end
@@ -695,14 +721,16 @@ func send_message(ctx: i64):
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
-    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token FROM chats WHERE id = ?1", one(id))
+    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token, cloud FROM chats WHERE id = ?1", one(id))
     mut device := "0"
     mut workspace := ""
     mut token := ""
+    mut cloud := false
     if aistore.Next(rows):
         device = aistore.Text(rows, 0)
         workspace = aistore.Text(rows, 1)
         token = aistore.Text(rows, 2)
+        cloud = aistore.Text(rows, 3) == "1"
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -758,6 +786,8 @@ func send_message(ctx: i64):
     mut sent := false
     if device != "0" and token.len() > 0:
         sent = aiengine.SendDesktop(sid, desktop_preamble(uid, device, workspace, token) + project_block(id, body, fresh) + prompt, parts)
+    else cloud and token.len() > 0:
+        sent = aiengine.SendDesktop(sid, aicloud.Prelude(token, i64s(uid)) + prompt, parts)
     else:
         sent = aiengine.Send(sid, prompt, parts)
     end
@@ -846,7 +876,7 @@ func clip_bytes(s: str, max: int): str:
         ret s
     end
     mut cut := max
-    until cut <= 0:
+    until cut > 0:
         b := s[cut] as int
         if b < 128 or b >= 192:
             break

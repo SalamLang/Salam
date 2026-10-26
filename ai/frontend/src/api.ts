@@ -11,6 +11,7 @@ export type Chat = {
   title: string;
   updated: number;
   agent?: boolean;
+  cloud?: boolean;
   device_id?: number;
   workspace?: string;
 };
@@ -21,6 +22,19 @@ export type FileMeta = {
   mime: string;
   size: number;
   url?: string;
+};
+export type Integration = {
+  provider: "github" | "figma";
+  connected: boolean;
+  login: string;
+  scope: string;
+  created: number;
+  oauth: boolean;
+};
+export type Integrations = {
+  sandbox: boolean;
+  storage: boolean;
+  integrations: Integration[];
 };
 export type TelegramLinkInfo = { name: string; username: string; bot: string };
 export type TelegramAccount = {
@@ -636,8 +650,16 @@ export const api = {
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => call<{ user: User }>("GET", "/me"),
   chats: () => call<{ chats: Chat[] }>("GET", "/chats"),
-  createChat: (agent?: { device_id: string; workspace: string }) =>
-    call<{ chat: Chat }>("POST", "/chats", agent),
+  createChat: (
+    options?: { device_id: string; workspace: string } | { cloud: true },
+  ) => call<{ chat: Chat }>("POST", "/chats", options),
+  integrations: () => call<Integrations>("GET", "/integrations"),
+  saveIntegration: (provider: string, token: string) =>
+    call<Integration>("POST", `/integrations/${provider}/token`, { token }),
+  removeIntegration: (provider: string) =>
+    call<{ ok: boolean }>("DELETE", `/integrations/${provider}`),
+  integrationOauth: (provider: string) =>
+    call<{ url: string }>("POST", `/integrations/${provider}/oauth`),
   devices: () => call<{ devices: Device[] }>("GET", "/bridge/devices"),
   chat: (id: string) =>
     call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(

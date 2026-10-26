@@ -504,6 +504,14 @@ export class ApiError extends Error {
   }
 }
 
+export function providerLoginUrl(
+  provider: "github" | "figma",
+  next: string,
+): string {
+  const q = next ? `?next=${encodeURIComponent(next)}` : "";
+  return `${BASE}/auth/provider/${provider}/start${q}`;
+}
+
 export function getToken(): string {
   try {
     return localStorage.getItem(TOKEN_KEY) || "";
@@ -691,6 +699,8 @@ export const api = {
   createChat: (
     options?: { device_id: string; workspace: string } | { cloud: true },
   ) => call<{ chat: Chat }>("POST", "/chats", options),
+  authProviders: () =>
+    call<{ github: boolean; figma: boolean }>("GET", "/auth/providers"),
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>
     call<Integration>("POST", `/integrations/${provider}/token`, { token }),

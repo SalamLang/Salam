@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconSend, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 import { isFa, setLang, t } from "./i18n";
@@ -130,22 +130,13 @@ export function Sidebar(p: Props) {
         </nav>
         <nav className="sidebar-links" aria-label={t("بخش‌های حساب", "Account sections")}>
           <a
-            href="/apps"
-            className={`chat-link ${p.page === "apps" ? "active" : ""}`}
-            aria-current={p.page === "apps" ? "page" : undefined}
-            onClick={(e) => (e.preventDefault(), p.onNavigate("/apps"))}
-          >
-            <IconPlug width={16} height={16} />
-            <span>{t("برنامه‌های متصل", "Connected apps")}</span>
-          </a>
-          <a
             href="/connections"
             className={`chat-link ${p.page === "connections" ? "active" : ""}`}
             aria-current={p.page === "connections" ? "page" : undefined}
             onClick={(e) => (e.preventDefault(), p.onNavigate("/connections"))}
           >
-            <IconSend width={16} height={16} />
-            <span>{t("اتصال‌ها", "Connections")}</span>
+            <IconPlug width={16} height={16} />
+            <span>{t("اتصال‌ها و برنامه‌ها", "Connections and apps")}</span>
           </a>
           <a
             href="/plans"

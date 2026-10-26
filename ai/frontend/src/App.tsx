@@ -18,6 +18,7 @@ import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
+import { Checkbox } from "./Checkbox";
 
 const SUGGESTIONS = [
   { icon: IconCode, title: t("اولین برنامه", "First program"), text: t("یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید.", "Write a Salam program that asks for the user's name and greets them.") },
@@ -584,10 +585,12 @@ export function App() {
                         )}
                   </p>
                   {cloudOk && !agentChat && !activeId && (
-                    <label className="cloud-toggle">
-                      <input type="checkbox" checked={cloud} onChange={(e) => toggleCloud(e.target.checked)} />
-                      <span>{t("اجرای دستورها در محیط ابری خصوصی (git، node، python، کامپایلر سلام، GitHub و Figma)", "Run commands in a private cloud sandbox (git, node, python, the Salam compiler, GitHub and Figma)")}</span>
-                    </label>
+                    <Checkbox
+                      className="cloud-toggle"
+                      checked={cloud}
+                      onChange={toggleCloud}
+                      label={t("اجرای دستورها در محیط ابری خصوصی (git، node، python، کامپایلر سلام، GitHub و Figma)", "Run commands in a private cloud sandbox (git, node, python, the Salam compiler, GitHub and Figma)")}
+                    />
                   )}
                   <div className="suggestions">
                     {(agentChat ? AGENT_SUGGESTIONS : SUGGESTIONS).map((s) => (

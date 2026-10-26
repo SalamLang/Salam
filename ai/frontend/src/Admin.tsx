@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { Checkbox } from "./Checkbox";
 
 type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
@@ -1232,20 +1233,18 @@ function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved
         </h4>
         <p className="muted">{t("پیش‌فرض هر کلید: دستیار فقط با سلام کار می‌کند و ابزارهای MCP سلام روشن است. این تنظیم فقط با این کلید عوض می‌شود.", "By default a key answers in Salam only, with the Salam MCP tools on. These switches only change this key.")}</p>
       </div>
-      <label className="check-row">
-        <input type="checkbox" checked={salam} onChange={(e) => setSalam(e.target.checked)} />
-        <span>
-          <strong>{t("پرامپت سیستمی سلام", "Salam system prompt")}</strong>
-          <span className="muted">{t("خاموش: پرامپت و سیاست سلام برداشته می‌شود و فقط پرامپت زیر به کار می‌رود، با پروفایل ساده‌ی موتور.", "Off: the Salam prompt and policy are removed and only the prompt below is used, on the engine's plain profile.")}</span>
-        </span>
-      </label>
-      <label className="check-row">
-        <input type="checkbox" checked={tools} onChange={(e) => setTools(e.target.checked)} />
-        <span>
-          <strong>{t("ابزارهای MCP", "MCP tools")}</strong>
-          <span className="muted">{t("خاموش: دستیار هیچ ابزاری صدا نمی‌زند (نه salam_check و نه جست‌وجو).", "Off: the assistant calls no tools at all (no salam_check, no search).")}</span>
-        </span>
-      </label>
+      <Checkbox
+        checked={salam}
+        onChange={setSalam}
+        label={t("پرامپت سیستمی سلام", "Salam system prompt")}
+        hint={t("خاموش: پرامپت و سیاست سلام برداشته می‌شود و فقط پرامپت زیر به کار می‌رود، با پروفایل ساده‌ی موتور.", "Off: the Salam prompt and policy are removed and only the prompt below is used, on the engine's plain profile.")}
+      />
+      <Checkbox
+        checked={tools}
+        onChange={setTools}
+        label={t("ابزارهای MCP", "MCP tools")}
+        hint={t("خاموش: دستیار هیچ ابزاری صدا نمی‌زند (نه salam_check و نه جست‌وجو).", "Off: the assistant calls no tools at all (no salam_check, no search).")}
+      />
       <label className="grant-field">
         <span>
           {salam ? t("دستور اپراتور", "Operator instructions") : t("پرامپت سیستمی کامل", "Full system prompt")} <span className="opt">{t("اختیاری", "optional")}</span>

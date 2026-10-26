@@ -1,4 +1,4 @@
-import { isDesktop } from "./desktop";
+import { isDesktop, type ProjectContext } from "./desktop";
 import { isFa, lang, t } from "./i18n";
 export type User = {
   id: number;
@@ -611,11 +611,11 @@ export const api = {
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
-  send: (id: string, text: string, files?: OutgoingFile[]) =>
+  send: (id: string, text: string, files?: OutgoingFile[], project?: ProjectContext) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
       `/chats/${id}/messages`,
-      files && files.length > 0 ? { text, files } : { text },
+      { text, ...(files && files.length > 0 ? { files } : {}), ...(project ? { project } : {}) },
     ),
   capabilities: () => call<Capabilities>("GET", "/capabilities"),
   adminFiles: (q: { user?: number; kind?: string; offset?: number }) =>

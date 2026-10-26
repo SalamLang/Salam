@@ -424,7 +424,10 @@ export function App() {
       const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now, files: local.length > 0 ? local : undefined };
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
-      const r = await api.send(id, text, files);
+      const chat = chats.find((c) => c.id === id);
+      const folder = chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+      const project = isDesktop && folder ? await agent.projectContext(folder).catch(() => undefined) : undefined;
+      const r = await api.send(id, text, files, project);
       const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
       setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), user, { ...r.assistant, phase: "thinking" }]);
       setChats((cs) => {

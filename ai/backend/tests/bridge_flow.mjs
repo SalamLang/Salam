@@ -86,6 +86,13 @@ check("a call to a device that never connected fails fast", offlineDone.status =
 console.log("salam only");
 const scaffold = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: cd shop && composer create-project laravel/laravel ." });
 const scaffoldDone = await settle(session, chat.json.chat.id, scaffold.json.assistant.id);
+const project = { instructions_file: "AGENTS.md", instructions: "Use tabs.", memory_index: "# Salam Agent memory\n\n- [Build](memory/build.md) - how to build", memories: 1 };
+const withProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo context", project });
+const withProjectDone = await settle(session, chat.json.chat.id, withProject.json.assistant.id);
+check("the app's AGENTS.md and memory index reach the engine", withProjectDone.body.includes("[project]"), withProjectDone.body);
+const sameProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo again", project });
+const sameProjectDone = await settle(session, chat.json.chat.id, sameProject.json.assistant.id);
+check("an unchanged project context is not sent twice", sameProjectDone.status === "done" && !sameProjectDone.body.includes("[project]"), sameProjectDone.body);
 check("starting a project in another language is refused before it reaches the device", scaffoldDone.body.includes("error Refused by the Salam service") && scaffoldDone.body.includes("composer create-project"), scaffoldDone);
 
 console.log("tool call round trip");

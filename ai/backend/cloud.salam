@@ -632,7 +632,7 @@ func oauth_ready(provider: str): bool:
 end
 
 func redirect_uri(provider: str): str:
-    ret ISSUER + "/integrations/" + provider + "/callback"
+    ret ISSUER + "/auth/provider/" + provider + "/callback"
 end
 
 func store_token(uid: str, provider: str, token: str, login &: str): int:
@@ -1243,6 +1243,67 @@ func worker():
     end
 end
 
+func authorize_url(provider: str, state: str, sign_in: bool): str:
+    mut q := Vector {} as Vector<str>
+    if provider == "github":
+        q.push("client_id")
+        q.push(GH_ID)
+        q.push("redirect_uri")
+        q.push(redirect_uri(provider))
+        q.push("scope")
+        q.push(sign_in ? "read:user user:email" : "repo read:org workflow")
+        q.push("state")
+        q.push(state)
+        if sign_in:
+            q.push("allow_signup")
+            q.push("true")
+        end
+        ret GITHUB_WEB + "/login/oauth/authorize?" + form_encode(q)
+    end
+    q.push("client_id")
+    q.push(FG_ID)
+    q.push("redirect_uri")
+    q.push(redirect_uri(provider))
+    q.push("scope")
+    q.push(sign_in ? "current_user:read" : FG_SCOPES)
+    q.push("state")
+    q.push(state)
+    q.push("response_type")
+    q.push("code")
+    ret FIGMA_WEB + "/oauth?" + form_encode(q)
+end
+
+func exchange_code(provider: str, code: str, token &: str, refresh &: str, expires &: i64):
+    if provider == "github":
+        mut h := Vector {} as Vector<str>
+        h.push("Accept: application/json")
+        h.push("Content-Type: application/json")
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("client_id", GH_ID))
+        m.push(json.Member("client_secret", GH_SECRET))
+        m.push(json.Member("code", code))
+        m.push(json.Member("redirect_uri", redirect_uri(provider)))
+        r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
+        token = json.Get(r.body, "access_token")
+        ret
+    end
+    mut h := Vector {} as Vector<str>
+    h.push("Authorization: Basic " + encoding.Base64Encode(FG_ID + ":" + FG_SECRET))
+    h.push("Content-Type: application/x-www-form-urlencoded")
+    h.push("Accept: application/json")
+    mut pairs := Vector {} as Vector<str>
+    pairs.push("redirect_uri")
+    pairs.push(redirect_uri(provider))
+    pairs.push("code")
+    pairs.push(code)
+    pairs.push("grant_type")
+    pairs.push("authorization_code")
+    r := fetch("POST", FIGMA_API + "/v1/oauth/token", h, form_encode(pairs), CALL_MS)
+    token = json.Get(r.body, "access_token")
+    refresh = json.Get(r.body, "refresh_token")
+    expires = aistore.Now() + json.Get(r.body, "expires_in").to_int()
+end
+
 func oauth_start(ctx: i64):
     uid := aiweb.NeedUser(ctx)
     if uid == 0:
@@ -1257,111 +1318,50 @@ func oauth_start(ctx: i64):
     now := aistore.Now()
     aistore.Lock()
     _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now)))
-    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires) VALUES (?1, ?2, ?3, ?4)", four(aiweb.Hash(state), i64s(uid), provider, i64s(now + STATE_SECONDS)))
+    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires, purpose) VALUES (?1, ?2, ?3, ?4, 'connect')", four(aiweb.Hash(state), i64s(uid), provider, i64s(now + STATE_SECONDS)))
     aistore.Unlock()
     if not ok:
         aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
         ret
     end
-    mut q := Vector {} as Vector<str>
-    mut url := ""
-    if provider == "github":
-        q.push("client_id")
-        q.push(GH_ID)
-        q.push("redirect_uri")
-        q.push(redirect_uri(provider))
-        q.push("scope")
-        q.push("repo read:org workflow")
-        q.push("state")
-        q.push(state)
-        url = GITHUB_WEB + "/login/oauth/authorize?" + form_encode(q)
-    else:
-        q.push("client_id")
-        q.push(FG_ID)
-        q.push("redirect_uri")
-        q.push(redirect_uri(provider))
-        q.push("scope")
-        q.push(FG_SCOPES)
-        q.push("state")
-        q.push(state)
-        q.push("response_type")
-        q.push("code")
-        url = FIGMA_WEB + "/oauth?" + form_encode(q)
-    end
-    aiweb.Reply(ctx, 200, `{"url": ` + json.Str(url) + "}")
+    aiweb.Reply(ctx, 200, `{"url": ` + json.Str(authorize_url(provider, state, false)) + "}")
 end
 
-func back(ctx: i64, provider: str, result: str):
-    http.SetStatus(ctx, 302)
-    http.SetHeader(ctx, "Location", APP_URL + "/connections?connected=" + provider + "&result=" + result)
-    http.Text(ctx, "")
+func github_profile(token: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
+    if r.status != 200:
+        ret false
+    end
+    subject = json.Get(r.body, "id")
+    login = json.Get(r.body, "login")
+    name = json.Get(r.body, "name")
+    email = ""
+    verified = false
+    mails := fetch("GET", GITHUB_API + "/user/emails", github_headers(token), "", CALL_MS)
+    if mails.status == 200:
+        each it in json.Items(mails.body):
+            if json.Get(it, "verified") == "true":
+                if email.len() == 0 or json.Get(it, "primary") == "true":
+                    email = json.Get(it, "email")
+                    verified = true
+                end
+            end
+        end
+    end
+    ret subject.len() > 0 and login.len() > 0
 end
 
-func oauth_callback(ctx: i64):
-    provider := http.Param(ctx, "provider")
-    code := http.Query(ctx, "code")
-    state := http.Query(ctx, "state")
-    if not provider_ok(provider) or code.len() == 0 or state.len() == 0:
-        back(ctx, provider, "denied")
-        ret
+func figma_profile(token: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+    if r.status != 200:
+        ret false
     end
-    aistore.Lock()
-    uid := aistore.OneText("SELECT user_id FROM integration_states WHERE state = ?1 AND provider = ?2 AND expires > ?3", three(aiweb.Hash(state), provider, i64s(aistore.Now())))
-    _d := aistore.Run("DELETE FROM integration_states WHERE state = ?1", one(aiweb.Hash(state)))
-    aistore.Unlock()
-    if uid.len() == 0:
-        back(ctx, provider, "expired")
-        ret
-    end
-    mut token := ""
-    mut refresh := ""
-    mut expires := 0 as i64
-    if provider == "github":
-        mut h := Vector {} as Vector<str>
-        h.push("Accept: application/json")
-        h.push("Content-Type: application/json")
-        mut m := Vector {} as Vector<str>
-        m.push(json.Member("client_id", GH_ID))
-        m.push(json.Member("client_secret", GH_SECRET))
-        m.push(json.Member("code", code))
-        m.push(json.Member("redirect_uri", redirect_uri(provider)))
-        r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
-        token = json.Get(r.body, "access_token")
-    else:
-        mut h := Vector {} as Vector<str>
-        h.push("Authorization: Basic " + encoding.Base64Encode(FG_ID + ":" + FG_SECRET))
-        h.push("Content-Type: application/x-www-form-urlencoded")
-        h.push("Accept: application/json")
-        mut pairs := Vector {} as Vector<str>
-        pairs.push("redirect_uri")
-        pairs.push(redirect_uri(provider))
-        pairs.push("code")
-        pairs.push(code)
-        pairs.push("grant_type")
-        pairs.push("authorization_code")
-        r := fetch("POST", FIGMA_API + "/v1/oauth/token", h, form_encode(pairs), CALL_MS)
-        token = json.Get(r.body, "access_token")
-        refresh = json.Get(r.body, "refresh_token")
-        expires = aistore.Now() + json.Get(r.body, "expires_in").to_int()
-    end
-    if token.len() == 0:
-        back(ctx, provider, "failed")
-        ret
-    end
-    mut login := ""
-    mut scope := ""
-    mut valid := false
-    if provider == "github":
-        valid = verify_github(token, login, scope)
-    else:
-        valid = verify_figma(token, login)
-        scope = FG_SCOPES
-    end
-    if not valid or not save_integration(uid, provider, token, refresh, expires, login, scope):
-        back(ctx, provider, "failed")
-        ret
-    end
-    back(ctx, provider, "ok")
+    subject = json.Get(r.body, "id")
+    login = json.Get(r.body, "handle")
+    name = json.Get(r.body, "handle")
+    email = json.Get(r.body, "email")
+    verified = false
+    ret subject.len() > 0
 end
 
 func list_integrations(ctx: i64):
@@ -1565,12 +1565,55 @@ pub func Prelude(session: str, uid: str): str:
     ret text
 end
 
+pub func AuthorizeUrl(provider: str, state: str, sign_in: bool): str:
+    ret authorize_url(provider, state, sign_in)
+end
+
+pub func FinishConnect(uid: str, provider: str, code: str): bool:
+    if not provider_ok(provider):
+        ret false
+    end
+    mut token := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    exchange_code(provider, code, token, refresh, expires)
+    if token.len() == 0:
+        ret false
+    end
+    mut login := ""
+    mut scope := ""
+    mut valid := false
+    if provider == "github":
+        valid = verify_github(token, login, scope)
+    else:
+        valid = verify_figma(token, login)
+        scope = FG_SCOPES
+    end
+    ret valid and save_integration(uid, provider, token, refresh, expires, login, scope)
+end
+
+pub func Identity(provider: str, code: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
+    if not provider_ok(provider):
+        ret false
+    end
+    mut token := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    exchange_code(provider, code, token, refresh, expires)
+    if token.len() == 0:
+        ret false
+    end
+    if provider == "github":
+        ret github_profile(token, subject, login, name, email, verified)
+    end
+    ret figma_profile(token, subject, login, name, email, verified)
+end
+
 pub func Routes(r &: router.Router):
     router.Get(r, "/integrations", list_integrations)
     router.Post(r, "/integrations/:provider/token", save_token)
     router.Delete(r, "/integrations/:provider", remove_integration)
     router.Post(r, "/integrations/:provider/oauth", oauth_start)
-    router.Get(r, "/integrations/:provider/callback", oauth_callback)
     each path in ["/integrations", "/integrations/:provider", "/integrations/:provider/token", "/integrations/:provider/oauth"]:
         router.Options(r, path, aiweb.Preflight)
     end

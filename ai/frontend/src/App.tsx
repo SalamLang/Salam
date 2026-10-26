@@ -99,7 +99,18 @@ function go(id: string | null, replace = false) {
   else history.pushState(null, "", url);
 }
 
+function takeLogin(): boolean {
+  if (location.pathname.replace(/\/+$/, "") !== "/auth/done") return false;
+  const m = /token=([A-Za-z0-9_-]+)/.exec(location.hash);
+  if (m) setToken(m[1]);
+  const next = new URLSearchParams(location.search).get("next") ?? "";
+  const target = next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  history.replaceState(null, "", target);
+  return !!m;
+}
+
 export function App() {
+  useState(takeLogin);
   const [theme, toggleTheme] = useTheme();
   const [user, setUser] = useState<User | null>(null);
   const [draft, setDraft] = useState(takeDraft);

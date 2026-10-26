@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconSend, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconLink, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 import { isFa, setLang, t } from "./i18n";
@@ -144,7 +144,7 @@ export function Sidebar(p: Props) {
             aria-current={p.page === "connections" ? "page" : undefined}
             onClick={(e) => (e.preventDefault(), p.onNavigate("/connections"))}
           >
-            <IconSend width={16} height={16} />
+            <IconLink width={16} height={16} />
             <span>{t("اتصال‌ها", "Connections")}</span>
           </a>
           <a

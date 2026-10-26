@@ -29,6 +29,7 @@ include aiengine "engine.salam"
 include aifiles "files.salam"
 
 const TEHRAN := 12600
+const MAX_SYSTEM_PROMPT := 262144
 const EPOCH_JDN := 2440588
 
 func n(v: i64): str:
@@ -697,6 +698,120 @@ func get_guest(ctx: i64):
     aiweb.Reply(ctx, 200, `{"messages": ` + json.Array(items) + "}")
 end
 
+func admin_keys_json(where: str, args: Vector<str>): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT k.id, k.name, k.prefix, k.created, k.last_used, k.revoked, (SELECT COUNT(*) FROM api_requests r WHERE r.key_id = k.id), k.salam_prompt, k.salam_tools, COALESCE(k.system_prompt, ''), k.policy_at, k.policy_by, u.id, u.name, u.email FROM api_keys k JOIN users u ON u.id = k.user_id WHERE " + where + " ORDER BY k.id DESC LIMIT 50", args)
+    until aistore.Next(rows):
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", aistore.Text(rows, 12)))
+        u.push(json.Member("name", aistore.Text(rows, 13)))
+        u.push(json.Member("email", aistore.Text(rows, 14)))
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("name", aistore.Text(rows, 1)))
+        m.push(json.Member("prefix", aistore.Text(rows, 2)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("last_used", aistore.Text(rows, 4)))
+        m.push(json.MemberBool("revoked", aistore.Text(rows, 5) != "0"))
+        m.push(json.MemberRaw("requests", aistore.Text(rows, 6)))
+        m.push(json.MemberBool("salam_prompt", aistore.Text(rows, 7) != "0"))
+        m.push(json.MemberBool("salam_tools", aistore.Text(rows, 8) != "0"))
+        m.push(json.Member("system_prompt", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("policy_at", aistore.Text(rows, 10)))
+        m.push(json.MemberRaw("policy_by", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("user", json.Object(u)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+func admin_list_keys(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut before := http.Query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    mut where := "k.id < ?1"
+    mut args := one(n(before))
+    user := http.Query(ctx, "user")
+    if user.len() > 0:
+        args.push(user)
+        where = where + " AND k.user_id = ?" + args.len()
+    end
+    if http.Query(ctx, "custom") == "1":
+        where = where + " AND (k.salam_prompt = 0 OR k.salam_tools = 0 OR COALESCE(k.system_prompt, '') <> '')"
+    end
+    if http.Query(ctx, "active") == "1":
+        where = where + " AND k.revoked = 0"
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("keys", admin_keys_json(where, args)))
+    m.push(json.MemberBool("plain_ready", aiengine.PlainReady()))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func admin_update_key(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    body := http.Body(ctx)
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM api_keys WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این کلید پیدا نشد.")
+        ret
+    end
+    mut sets := Vector {} as Vector<str>
+    mut args := one(id)
+    each name in ["salam_prompt", "salam_tools"]:
+        v := json.Get(body, name)
+        if v == "true" or v == "false":
+            args.push(v == "true" ? "1" : "0")
+            sets.push(name + " = ?" + args.len())
+        else v.len() > 0:
+            aiweb.Fail(ctx, 400, "invalid", name + " باید true یا false باشد.")
+            ret
+        end
+    end
+    if body.find(`"system_prompt"`) >= 0:
+        mut text := json.Get(body, "system_prompt")
+        if text == "null":
+            text = ""
+        end
+        text = str.Trim(text)
+        if text.len() > MAX_SYSTEM_PROMPT:
+            aiweb.Fail(ctx, 400, "too_long", "پرامپت سیستمی حداکثر ۲۵۶ کیلوبایت است.")
+            ret
+        end
+        args.push(text)
+        sets.push("system_prompt = ?" + args.len())
+    end
+    if sets.len() == 0:
+        aiweb.Fail(ctx, 400, "empty", "چیزی برای تغییر فرستاده نشد.")
+        ret
+    end
+    args.push(n(admin))
+    sets.push("policy_by = ?" + args.len())
+    args.push(n(aistore.Now()))
+    sets.push("policy_at = ?" + args.len())
+    aistore.Lock()
+    ok := aistore.Run("UPDATE api_keys SET " + str.Join(sets, ", ") + " WHERE id = ?1", args)
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ذخیره ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"key": ` + str.TrimSuffix(str.TrimPrefix(admin_keys_json("k.id = ?1", one(id)), "["), "]") + "}")
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -723,7 +838,9 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    router.Get(r, "/admin/keys", admin_list_keys)
+    router.Patch(r, "/admin/keys/:id", admin_update_key)
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

@@ -35,7 +35,8 @@ const MAX_OUTPUT := 120000
 const MAX_API := 80000
 const WORKERS := 24
 const STATE_SECONDS := 900
-const DEFAULT_FIGMA_SCOPES := "current_user:read file_content:read file_metadata:read"
+const DEFAULT_FIGMA_SCOPES := "current_user:read file_comments:read file_comments:write file_content:read file_dev_resources:read file_dev_resources:write file_metadata:read file_versions:read folder_metadata:read folders:read library_assets:read library_content:read selections:read team_library_content:read webhooks:read webhooks:write"
+const DEFAULT_GITHUB_SCOPES := "repo workflow admin:org admin:public_key admin:repo_hook admin:org_hook admin:gpg_key admin:ssh_signing_key admin:enterprise read:audit_log codespace copilot gist notifications project read:packages write:packages user write:discussion write:network_configurations"
 const READ_SCRIPT := "f=\"$SBX_PATH\"; if [ -d \"$f\" ]; then echo \"$f is a directory; use list_dir\"; exit 2; fi; if [ ! -e \"$f\" ]; then echo \"no such file: $f\"; exit 2; fi; awk -v o=\"$SBX_OFFSET\" -v l=\"$SBX_LIMIT\" 'NR >= o && NR < o + l { printf \"%d\\t%s\\n\", NR, $0 }' \"$f\""
 const EDIT_SCRIPT := "import json, os, sys\np = os.environ['SBX_PATH']\nd = json.load(sys.stdin)\ntry:\n    s = open(p, encoding='utf-8').read()\nexcept FileNotFoundError:\n    print('no such file: ' + p)\n    sys.exit(2)\nn = s.count(d['old'])\nif n == 0:\n    print('old_text was not found in ' + p)\n    sys.exit(2)\nif n > 1 and not d['all']:\n    print('old_text appears ' + str(n) + ' times in ' + p + '; add more context or set replace_all')\n    sys.exit(2)\nopen(p, 'w', encoding='utf-8').write(s.replace(d['old'], d['new']))\nprint('edited ' + p + ' (' + str(n) + ' replacement' + ('s' if n > 1 else '') + ')')\n"
 
@@ -54,6 +55,7 @@ mut GH_SECRET := ""
 mut FG_ID := ""
 mut FG_SECRET := ""
 mut FG_SCOPES := DEFAULT_FIGMA_SCOPES
+mut GH_SCOPES := DEFAULT_GITHUB_SCOPES
 mut LOCK := sync.Mutex {}
 mut JOBS := chan.Chan {} as chan.Chan<str>
 mut JOB_DATA := HashMap {} as HashMap<str, str>
@@ -684,10 +686,39 @@ func provider_json(uid: str, provider: str): str:
     ret json.Object(m)
 end
 
+func collapse_slashes(path: str): str:
+    q := path.find("?")
+    mut p := q >= 0 ? path.substr(0, q) : path
+    until p.find("//") >= 0:
+        p = str.Replace(p, "//", "/")
+    end
+    if q >= 0:
+        ret p + path.substr(q, path.len() - q)
+    end
+    ret p
+end
+
 func github_blocked(method: str, path: str): str:
-    p := str.Lower(path)
-    if method == "DELETE" and (p.find("/repos/") == 0 and p.substr(7, p.len() - 7).split("/").len() <= 2):
-        ret "Deleting a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+    mut p := str.Lower(path)
+    q := p.find("?")
+    if q >= 0:
+        p = p.substr(0, q)
+    end
+    p = str.TrimSuffix(collapse_slashes(p), "/")
+    segs := p.split("/")
+    if method == "DELETE":
+        if segs.len() == 4 and segs.get(1) == "repos":
+            ret "Deleting a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+        if segs.len() == 3 and segs.get(1) == "repositories":
+            ret "Deleting a repository is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+        if segs.len() == 3 and segs.get(1) == "orgs":
+            ret "Deleting an organization is not allowed from the assistant. Ask the user to do it on GitHub."
+        end
+    end
+    if segs.len() == 5 and segs.get(1) == "repos" and segs.get(4) == "transfer":
+        ret "Transferring a repository is not allowed from the assistant. Ask the user to do it on GitHub."
     end
     if str.StartsWith(p, "/user/keys") or str.StartsWith(p, "/user/gpg_keys") or str.StartsWith(p, "/user/ssh_signing_keys") or str.StartsWith(p, "/user/emails") or str.StartsWith(p, "/applications") or str.StartsWith(p, "/authorizations") or str.StartsWith(p, "/user/blocks"):
         ret "This GitHub endpoint manages account credentials and is not available to the assistant."
@@ -702,7 +733,7 @@ func tool_github_api(uid: str, args: str): Outcome:
     if method.len() == 0:
         method = "GET"
     end
-    path := json.Get(args, "path")
+    mut path := json.Get(args, "path")
     o.summary = "GitHub " + method + " " + clip(path, 120)
     o.detail = o.summary
     if not str.StartsWith(path, "/") or path.find("..") >= 0 or path.find(" ") >= 0:
@@ -718,6 +749,7 @@ func tool_github_api(uid: str, args: str): Outcome:
     if method != "GET":
         o.kind = "write"
     end
+    path = collapse_slashes(path)
     blocked := github_blocked(method, path)
     if blocked.len() > 0:
         o.ok = false
@@ -1251,7 +1283,7 @@ func authorize_url(provider: str, state: str, sign_in: bool): str:
         q.push("redirect_uri")
         q.push(redirect_uri(provider))
         q.push("scope")
-        q.push(sign_in ? "read:user user:email" : "repo read:org workflow")
+        q.push(sign_in ? "read:user user:email" : GH_SCOPES)
         q.push("state")
         q.push(state)
         if sign_in:
@@ -1439,6 +1471,12 @@ pub func Configure(sandbox_url: str, sandbox_secret: str, secret_key: str, app_u
         split_url(sandbox_url, host, port, secure, path)
         SANDBOX_HOST = host
         SANDBOX_PORT = port
+    end
+end
+
+pub func SetGithubScopes(scopes: str):
+    if str.Trim(scopes).len() > 0:
+        GH_SCOPES = str.Trim(scopes)
     end
 end
 

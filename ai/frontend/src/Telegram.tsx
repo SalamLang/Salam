@@ -189,9 +189,10 @@ const PROVIDERS = {
     name: "GitHub",
     icon: <IconGithub width={22} height={22} />,
     about: t("مخازن عمومی و خصوصی را بخواند، کلون کند، شاخه و درخواست ادغام بسازد و push کند.", "Read and clone public and private repositories, create branches and pull requests, and push."),
-    help: "https://github.com/settings/tokens/new?scopes=repo,read:org,workflow&description=Salam%20AI",
-    helpText: t("ساخت توکن شخصی (دسترسی repo)", "Create a personal access token (repo scope)"),
+    help: "https://github.com/settings/tokens/new?scopes=repo,workflow,admin:org,admin:repo_hook,admin:public_key,gist,notifications,user,project,write:discussion,read:packages,write:packages,codespace&description=Salam%20AI",
+    helpText: t("ساخت توکن شخصی (دسترسی‌ها از قبل انتخاب شده)", "Create a personal access token (permissions preselected)"),
     placeholder: "ghp_... / github_pat_...",
+    access: t("دسترسی خواسته‌شده: مخزن‌ها (عمومی و خصوصی)، سازمان‌ها، workflowها، gist، اعلان‌ها، پروژه‌ها و بسته‌ها. حذف مخزن هرگز.", "Access asked for: repositories (public and private), organizations, workflows, gists, notifications, projects and packages. Never repository deletion."),
   },
   figma: {
     name: "Figma",
@@ -200,6 +201,7 @@ const PROVIDERS = {
     help: "https://www.figma.com/settings",
     helpText: t("ساخت توکن شخصی (Settings، Security)", "Create a personal access token (Settings, Security)"),
     placeholder: "figd_...",
+    access: t("دسترسی خواسته‌شده: خواندن فایل‌ها، نسخه‌ها، کتابخانه‌ها و پوشه‌ها، کامنت‌ها و منابع توسعه‌دهنده (خواندن و نوشتن) و وب‌هوک‌ها.", "Access asked for: files, versions, libraries and folders (read), comments and dev resources (read and write) and webhooks."),
   },
 } as const;
 
@@ -311,6 +313,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
           {busy === "oauth" ? <span className="spinner" /> : t(`اتصال با ${info.name}`, `Connect with ${info.name}`)}
         </button>
       )}
+      {item.oauth && <p className="conn-note">{info.access}</p>}
       <form className="conn-form" onSubmit={save}>
         <label className="field">
           <span>{item.oauth ? t("یا با توکن شخصی", "Or with a personal access token") : t("توکن شخصی", "Personal access token")}</span>

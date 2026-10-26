@@ -53,6 +53,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_SECRET_KEY`                                                   | key that encrypts GitHub and Figma tokens at rest; at least 16 characters, falls back to `AI_BRIDGE_SECRET`                                           | `AI_BRIDGE_SECRET`                              |
 | `AI_GITHUB_CLIENT_ID`, `AI_GITHUB_CLIENT_SECRET`                  | a GitHub OAuth app (callback `AI_OAUTH_ISSUER/integrations/github/callback`) for "Sign in with GitHub"; tokens can be pasted without it               | empty                                           |
 | `AI_FIGMA_CLIENT_ID`, `AI_FIGMA_CLIENT_SECRET`, `AI_FIGMA_SCOPES` | the same for Figma (callback `.../integrations/figma/callback`)                                                                                       | empty                                           |
+| `AI_GITHUB_SCOPES`                           | the classic OAuth scopes the "Connect with GitHub" flow asks for (space separated); the default is everything except `delete_repo` and `delete:packages` | see `cloud.salam`                               |
 | `AI_GITHUB_API`, `AI_GITHUB_WEB`, `AI_FIGMA_API`, `AI_FIGMA_WEB`  | where those services live, for the test mock                                                                                                          | the real services                               |
 
 The API keeps a stream open for as long as an answer takes, so give the
@@ -154,7 +155,7 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
 `AI_SECRET_KEY`, and never returned by any route or shown to the model.
 
 - `github_api` calls the GitHub REST API as the user, private repositories included.
-  Deleting a repository and the endpoints that manage keys, email addresses and
+  Deleting or transferring a repository, deleting an organization, and the endpoints that manage keys, email addresses and
   authorizations are refused.
 - `github_git` runs `clone`, `fetch`, `pull`, `push` and `ls-remote` in the sandbox
   against `https://github.com/` only; the token reaches Git for that one command
@@ -224,11 +225,11 @@ sends the browser back to the web app, not to the API, and the app talks to the 
   address is reserved; the page shows the reason.
 - Create the apps at `https://github.com/settings/developers` (OAuth Apps) with the
   callback `https://ai.salamlang.ir/auth/callback/github` and at the Figma developer
-  settings with `https://ai.salamlang.ir/auth/callback/figma`, enable at least the Figma
-  scopes `current_user:read`, `file_content:read` and `file_metadata:read` (Figma answers
-  "Invalid scopes for app" for a scope the app does not have; `AI_FIGMA_SCOPES` lists what
-  the connection asks for, and `file_comments:write` there lets the assistant leave comments),
-  and put the IDs and secrets in the
+  settings with `https://ai.salamlang.ir/auth/callback/figma`, enable the Figma scopes the
+  connection asks for (Figma answers "Invalid scopes for app" for any the app lacks): by
+  default `current_user:read file_comments:read file_comments:write file_content:read file_dev_resources:read file_dev_resources:write file_metadata:read file_versions:read folder_metadata:read folders:read library_assets:read library_content:read selections:read team_library_content:read webhooks:read webhooks:write` (`AI_FIGMA_SCOPES` changes the list; the
+  Enterprise-only `file_variables:read` and `file_variables:write` can be added to it), and put
+  the IDs and secrets in the
   server's env file, never in the repository. A GitHub OAuth app allows one callback
   URL, which is why connecting and signing in share this path.
 

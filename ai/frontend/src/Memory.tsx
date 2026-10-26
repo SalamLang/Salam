@@ -5,6 +5,7 @@ import { IconChevronDown, IconMemory, IconTrash } from "./icons";
 import { Markdown } from "./Markdown";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { Checkbox } from "./Checkbox";
 
 function errText(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback;
@@ -210,13 +211,13 @@ export function Memory({ notify }: { notify: (msg: string) => void }) {
       {data && (
         <>
           <section className="card panel memory-controls">
-            <label className="check-row">
-              <input type="checkbox" checked={data.enabled} disabled={saving} onChange={(e) => toggle(e.target.checked)} />
-              <span>
-                <strong>{t("گفت‌وگوهایم را به خاطر بسپار", "Remember my chats")}</strong>
-                <span className="muted">{t("خاموش که باشد، چیز تازه‌ای نگه داشته نمی‌شود و حافظه در گفت‌وگوها به کار نمی‌رود.", "When off, nothing new is kept and memory is not used in chats.")}</span>
-              </span>
-            </label>
+            <Checkbox
+              checked={data.enabled}
+              disabled={saving}
+              onChange={toggle}
+              label={t("گفت‌وگوهایم را به خاطر بسپار", "Remember my chats")}
+              hint={t("خاموش که باشد، چیز تازه‌ای نگه داشته نمی‌شود و حافظه در گفت‌وگوها به کار نمی‌رود.", "When off, nothing new is kept and memory is not used in chats.")}
+            />
             {!data.service && <p className="policy-warn">{t("حافظه فعلاً روی سرور خاموش است.", "Memory is turned off on the server for now.")}</p>}
             <div className="memory-actions">
               <button type="button" className="button ghost small" onClick={() => download("index.md", data.index)}>

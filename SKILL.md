@@ -2531,7 +2531,8 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `char_find` | `بیاب نویسه`  | `starts_with` | `شروع با`       |
 | `ends_with` | `ختم با`      | `includes`    | `دربردارد`      |
 | `copy`      | `رونوشت`      | `deep_copy`   | `رونوشت عمیق`   |
-| `bytes`     | `بایت ها`     |               |                 |
+| `bytes`     | `بایت ها`     | `lower`       | `کوچک`          |
+| `upper`     | `بزرگ`        | `repeat`      | `تکرار`         |
 
 The free built-in `len(x)` (arrays, slices and `str` only) is spelled
 `طول(x)` in a Persian file: `len(x)` there is error E001 ("identifier must

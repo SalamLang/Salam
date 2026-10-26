@@ -50,7 +50,7 @@ const answerFor = (s) => {
 };
 async function callDesktop(s) {
   const session = /session: ([0-9a-f]{32})/.exec(s.prompt)?.[1] ?? "";
-  const command = /run: (.*)$/m.exec(s.prompt)?.[1] ?? "echo hi";
+  const command = /run: ([\s\S]*)$/.exec(s.prompt)?.[1] ?? "echo hi";
   const call = async (name, args) => {
     const res = await fetch(BRIDGE, {
       method: "POST",

@@ -19,6 +19,7 @@ import encoding.json
 import encoding.value
 import encoding.encerr
 import str
+import conv
 import sync
 import time
 
@@ -41,6 +42,8 @@ mut SESSION_AGENT := HashMap {} as HashMap<str, str>
 mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
 mut SESSION_PARTS := HashMap {} as HashMap<str, str>
 mut CAPS_AT := 0 as i64
+mut PRICES := HashMap {} as HashMap<str, str>
+mut PRICES_AT := 0 as i64
 mut CAPS_IMAGE := false
 mut CAPS_PDF := false
 mut SESSION_MODEL := HashMap {} as HashMap<str, str>
@@ -76,6 +79,8 @@ pub struct Usage:
     pub cache_read: i64 = 0
     pub cache_write: i64 = 0
     pub cost: f64 = 0.0
+    pub cost_in: f64 = 0.0
+    pub cost_out: f64 = 0.0
     pub tools: int = 0
     pub steps: int = 0
     pub ms: i64 = 0
@@ -446,6 +451,98 @@ func trace_part(p: value.Value, mask: str): str:
     ret json.Object(m)
 end
 
+func load_prices():
+    pr := call("GET", "/config/providers", "", CALL_MS)
+    if not ok_status(pr):
+        _l := sync.Lock(LOCK)
+        PRICES_AT = time.NowMillis() - 540000
+        _u := sync.Unlock(LOCK)
+        ret
+    end
+    mut perr := encerr.EncodingError {}
+    all := json.Decode(pr.body, perr)
+    list := field(all, "providers")
+    mut table := HashMap {} as HashMap<str, str>
+    if value.IsArray(list):
+        repeat value.ArrayLen(list) in i:
+            prov := value.ArrayGet(list, i)
+            pid := text_of(prov, "id")
+            models := field(prov, "models")
+            if value.IsObject(models):
+                each mid in value.ObjectKeys(models):
+                    c := field(field(models, mid), "cost")
+                    if value.IsObject(c):
+                        table.put(pid + "/" + mid, price_of(c, "input") + "|" + price_of(c, "output") + "|" + price_of(c, "cache_read") + "|" + price_of(c, "cache_write"))
+                    end
+                end
+            end
+        end
+    end
+    value.ValueFree(all)
+    _a := sync.Lock(LOCK)
+    PRICES = table
+    PRICES_AT = time.NowMillis()
+    _b := sync.Unlock(LOCK)
+end
+
+func price_of(c: value.Value, key: str): str:
+    f := field(c, key)
+    if value.IsNumber(f):
+        ret conv.FormatFloatPrec(value.AsFloat(f), 8)
+    end
+    ret "0"
+end
+
+func prices_for(model_key: str, pin &: f64, pout &: f64, pcr &: f64, pcw &: f64): bool:
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - PRICES_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_prices()
+    end
+    _a := sync.Lock(LOCK)
+    have := PRICES.has(model_key)
+    row := have ? PRICES.get(model_key) : ""
+    _b := sync.Unlock(LOCK)
+    if not have:
+        ret false
+    end
+    p := row.split("|")
+    if p.len() != 4:
+        ret false
+    end
+    pin = p.get(0).to_float()
+    pout = p.get(1).to_float()
+    pcr = p.get(2).to_float()
+    pcw = p.get(3).to_float()
+    ret pin > 0.0 or pout > 0.0
+end
+
+func split_cost(model_key: str, total: f64, in_tokens: i64, out_tokens: i64, cache_read: i64, cache_write: i64, cost_in &: f64, cost_out &: f64):
+    if total <= 0.0:
+        ret
+    end
+    mut pin := 0.0
+    mut pout := 0.0
+    mut pcr := 0.0
+    mut pcw := 0.0
+    if not prices_for(model_key, pin, pout, pcr, pcw):
+        pin = 1.0
+        pout = 5.0
+        pcr = 0.1
+        pcw = 1.25
+    end
+    ci := (in_tokens as f64) * pin + (cache_read as f64) * pcr + (cache_write as f64) * pcw
+    co := (out_tokens as f64) * pout
+    sum := ci + co
+    if sum <= 0.0:
+        cost_in += total
+        ret
+    end
+    cost_in += total * ci / sum
+    cost_out += total * co / sum
+end
+
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
     LOCK = sync.NewMutex()
     mut rest := str.TrimPrefix(url, "http://")
@@ -498,6 +595,18 @@ pub func SendWith(sid: str, text: str, parts: str, plain: bool, system: str, too
         end
     end
     ret send_as(sid, agent, text, parts, system, tools ? "" : `{"*": false}`)
+end
+
+pub func SendFree(sid: str, text: str, parts: str, system: str): bool:
+    ret SendWith(sid, text, parts, true, system, true)
+end
+
+pub func SendDesktopFree(sid: str, text: str, parts: str, system: str): bool:
+    mut agent := DESKTOP_AGENT
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        agent = ENGINE_AGENT
+    end
+    ret send_as(sid, agent, text, parts, system, "")
 end
 
 pub func SendDesktop(sid: str, text: str, parts: str): bool:
@@ -706,6 +815,7 @@ pub func UsageOf(sid: str): Usage:
             c := field(info, "cost")
             if value.IsNumber(c):
                 u.cost += value.AsFloat(c)
+                split_cost(text_of(info, "providerID") + "/" + text_of(info, "modelID"), value.AsFloat(c), num(t, "input"), num(t, "output") + num(t, "reasoning"), num(field(t, "cache"), "read"), num(field(t, "cache"), "write"), u.cost_in, u.cost_out)
             end
             tm := field(info, "time")
             created := num(tm, "created")

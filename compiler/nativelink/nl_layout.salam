@@ -32,6 +32,9 @@ func classify(l &: Nl, s: int): int:
     if name_is(l, nm, ".eh_frame"):
         ret OC_EHFRAME
     end
+    if ty == 0x70000001:
+        ret OC_EXIDX
+    end
     if (fl & (4 as i64)) != (0 as i64):
         ret OC_TEXT
     end
@@ -75,6 +78,22 @@ func mark_live(l &: Nl):
             wl.push(s2)
         end
     end
+    mut more := true
+    until more:
+        live_drain(l, wl)
+        more = false
+        repeat l.s_obj.len() in s4:
+            k4 := l.s_link[s4]
+            if l.s_oc[s4] == OC_EXIDX and not l.s_live[s4] and not l.s_drop[s4] and k4 >= 0 and l.s_live[k4]:
+                wl.push(s4)
+                more = true
+            end
+        end
+    end
+    wl.free()
+end
+
+func live_drain(l &: Nl, wl &: Vector<int>):
     until wl.len() > 0:
         s3 := wl.pop()
         if s3 < 0 or l.s_live[s3]:
@@ -87,7 +106,7 @@ func mark_live(l &: Nl):
         r0 := l.s_rel0[s3]
         repeat l.s_nrel[s3] in k:
             t := sym_sec(l, l.r_sym[r0 + k])
-            if t >= 0 and l.s_drop[t] and l.s_oc[s3] != OC_EHFRAME and not l.o_coff[l.s_obj[s3]]:
+            if t >= 0 and l.s_drop[t] and l.s_oc[s3] != OC_EHFRAME and l.s_oc[s3] != OC_EXIDX and not l.o_coff[l.s_obj[s3]]:
                 nl_fail(l, l.o_label[l.s_obj[s3]] + ": refers to a section of a COMDAT group that another object already provides")
                 ret
             end
@@ -96,7 +115,6 @@ func mark_live(l &: Nl):
             end
         end
     end
-    wl.free()
 end
 
 func got_add(l &: Nl, os: int):
@@ -167,6 +185,66 @@ func got_needed(l &: Nl):
     end
 end
 
+func has_exidx(l &: Nl): bool:
+    repeat l.s_obj.len() in s:
+        if l.s_live[s] and l.s_oc[s] == OC_EXIDX:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sort_exidx(l &: Nl, buf: u8*):
+    n := (l.oc_size[OC_EXIDX] / (8 as i64)) as int
+    if n < 2:
+        ret
+    end
+    base := l.oc_fpos[OC_EXIDX]
+    va := l.oc_addr[OC_EXIDX]
+    mut fn := Vector {} as Vector<i64>
+    mut w1 := Vector {} as Vector<i64>
+    mut ext := Vector {} as Vector<bool>
+    repeat n in i:
+        at := base + ((8 * i) as i64)
+        a := va + ((8 * i) as i64)
+        fn.push(a + sext(rd32(buf, at) & (0x7FFFFFFF as i64), 31))
+        v := rd32(buf, at + (4 as i64))
+        pr := (v & (0x80000000 as i64)) == (0 as i64) and v != (1 as i64)
+        ext.push(pr)
+        w1.push(pr ? a + (4 as i64) + sext(v & (0x7FFFFFFF as i64), 31) : v)
+    end
+    mut i2 := 1
+    until i2 < n:
+        mut j := i2
+        until j > 0 and fn[j] < fn[j - 1]:
+            t0 := fn[j]
+            fn[j] = fn[j - 1]
+            fn[j - 1] = t0
+            t1 := w1[j]
+            w1[j] = w1[j - 1]
+            w1[j - 1] = t1
+            t2 := ext[j]
+            ext[j] = ext[j - 1]
+            ext[j - 1] = t2
+            j -= 1
+        end
+        i2 += 1
+    end
+    repeat n in k:
+        at2 := base + ((8 * k) as i64)
+        a2 := va + ((8 * k) as i64)
+        wr32(buf, at2, (fn[k] - a2) & (0x7FFFFFFF as i64))
+        if ext[k]:
+            wr32(buf, at2 + (4 as i64), (w1[k] - a2 - (4 as i64)) & (0x7FFFFFFF as i64))
+        else:
+            wr32(buf, at2 + (4 as i64), w1[k])
+        end
+    end
+    fn.free()
+    w1.free()
+    ext.free()
+end
+
 func place_class(l &: Nl, c: int, fpos &: i64, bss: bool):
     mut start := fpos
     mut first := true
@@ -209,10 +287,14 @@ func place_all(l &: Nl):
     end
     l.nphdr = 4
     ehh_reserve(l)
+    if has_exidx(l):
+        l.nphdr += 1
+    end
     mut fpos := ehdr_size(l)
     place_class(l, OC_RODATA, fpos, false)
     place_class(l, OC_EHFRAME, fpos, false)
     ehh_place(l, fpos)
+    place_class(l, OC_EXIDX, fpos, false)
     l.seg_vaddr[0] = l.base
     l.seg_fpos[0] = 0 as i64
     l.seg_fsz[0] = fpos
@@ -267,6 +349,8 @@ func sym_addr_g(l &: Nl, g: int): i64:
     if k == SYN_ZERO: ret 0 end
     if k == SYN_DYNAMIC: ret l.ds_addr[DS_DYNAMIC] end
     if k == SYN_GP: ret l.oc_addr[OC_DATA] + (0x800 as i64) end
+    if k == SYN_EXIDX_START: ret l.oc_addr[OC_EXIDX] end
+    if k == SYN_EXIDX_END: ret l.oc_addr[OC_EXIDX] + l.oc_size[OC_EXIDX] end
     ret l.g_val[g]
 end
 

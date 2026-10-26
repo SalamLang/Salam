@@ -9,6 +9,7 @@ case "$SALAM" in
 /*) ;;
 */*) SALAM="$root/$SALAM" ;;
 esac
+export SALAM
 
 examples=${WEBSITE_EXAMPLES:-check}
 case "$examples" in
@@ -22,7 +23,6 @@ esac
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 
 if [ "$examples" != skip ]; then
-    export SALAM
     jobs=$(nproc 2>/dev/null || echo 4)
     fail=0
     printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |

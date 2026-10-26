@@ -17,6 +17,17 @@
       : "light";
   }
 
+  window.addEventListener("message", (e) => {
+    var d = e.data;
+    if (!d || d.salamPreview !== 1 || typeof d.n !== "string") {
+      return;
+    }
+    var frame = document.getElementById("pv-" + d.n);
+    if (frame && e.source === frame.contentWindow) {
+      frame.style.height = Math.min(Math.max(d.h, 56), 576) + "px";
+    }
+  });
+
   var themeButton = document.querySelector(".theme-toggle");
   if (themeButton) {
     themeButton.addEventListener("click", () => {

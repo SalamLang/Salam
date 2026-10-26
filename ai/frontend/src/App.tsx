@@ -119,6 +119,14 @@ export function App() {
   const [toast, setToast] = useState("");
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
+  const [cloudOk, setCloudOk] = useState(false);
+  const [cloud, setCloud] = useState(() => {
+    try {
+      return localStorage.getItem("salam-ai-cloud") === "1";
+    } catch {
+      return false;
+    }
+  });
   const scroller = useRef<HTMLDivElement>(null);
   const pageScroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -129,6 +137,19 @@ export function App() {
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
   const signedIn = user !== null;
+  useEffect(() => {
+    if (!signedIn || isDesktop) return;
+    api
+      .integrations()
+      .then((r) => setCloudOk(r.sandbox))
+      .catch(() => {});
+  }, [signedIn]);
+  const toggleCloud = (on: boolean) => {
+    setCloud(on);
+    try {
+      localStorage.setItem("salam-ai-cloud", on ? "1" : "0");
+    } catch {}
+  };
   const onConnect = route === "connect" || route === "telegram";
 
   const notify = useCallback((msg: string) => {
@@ -416,7 +437,7 @@ export function App() {
           notify(t("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.", "This computer is not connected to the assistant yet. Please try again in a moment."));
           return false;
         }
-        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : undefined);
+        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : !isDesktop && cloudOk && cloud ? { cloud: true } : undefined);
         id = r.chat.id;
         if (r.chat.agent) {
           saveMode(id, mode);
@@ -561,6 +582,12 @@ export function App() {
                           "Ask anything about the Salam programming language: writing code, the standard library, fixing errors, or converting code from other languages.",
                         )}
                   </p>
+                  {cloudOk && !agentChat && !activeId && (
+                    <label className="cloud-toggle">
+                      <input type="checkbox" checked={cloud} onChange={(e) => toggleCloud(e.target.checked)} />
+                      <span>{t("اجرای دستورها در محیط ابری خصوصی (git، node، python، کامپایلر سلام، GitHub و Figma)", "Run commands in a private cloud sandbox (git, node, python, the Salam compiler, GitHub and Figma)")}</span>
+                    </label>
+                  )}
                   <div className="suggestions">
                     {(agentChat ? AGENT_SUGGESTIONS : SUGGESTIONS).map((s) => (
                       <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>

@@ -100,18 +100,18 @@ async function main() {
   check("telegram told about the link", !!(await lastText(1001, /Connected\. Your Salam account: Tele User/)));
 
   await say(1001, "remember my history");
-  const afterLink = await lastText(1001, /Echo:/);
+  const afterLink = await lastText(1001, /Echo:|Tool said/);
   check("linked user gets an answer", !!afterLink);
   const chats = await until(async () => {
     const r = await api("GET", "/chats", token);
-    return r.json?.chats?.length ? r.json.chats : null;
+    return r.json?.chats?.length && r.json.chats[0].title === "remember my history" ? r.json.chats : null;
   });
   check("telegram chat is in the account history", chats?.length === 1 && chats[0].title === "remember my history", chats);
   const detail = await until(async () => {
     const r = await api("GET", `/chats/${chats?.[0]?.id}`, token);
     return r.json?.messages?.length === 2 && r.json.messages[1].status === "done" ? r.json : null;
   });
-  check("history holds question and answer", !!detail && /Echo:/.test(detail.messages[1].body), detail);
+  check("history holds question and answer", !!detail && /Echo:|Tool said/.test(detail.messages[1].body), detail);
 
   await say(1001, "/chats");
   const listed = await until(async () => sentTo(await log(), 1001).find((c) => c.args.reply_markup?.inline_keyboard?.some((r) => r[0]?.callback_data === `c:${chats[0].id}`)));
@@ -119,7 +119,7 @@ async function main() {
   await say(1001, "/new");
   await lastText(1001, /fresh chat/);
   await say(1001, "a brand new topic");
-  await lastText(1001, /Echo:/);
+  await lastText(1001, /Echo:|Tool said/);
   const two = await until(async () => {
     const r = await api("GET", "/chats", token);
     return r.json?.chats?.length === 2 ? r.json.chats : null;

@@ -109,6 +109,17 @@ on a `windows-11-arm` runner before publishing.
 
 What is not there yet: the loop and SLP vectorizers are off on AArch64,
 there are no unwind tables (gdb walks the frames from the prologues), and
+
+On Linux, AArch64 and RISC-V objects carry `.eh_frame` (`ng_cfi.salam`).
+The encoders record CFI events as they write each prologue and epilogue: the
+CFA moves to the frame pointer plus 16 once the frame record is saved, every
+callee-saved register gets its slot, and each epilogue is wrapped in
+`remember_state`/`restore_state` with the CFA back on `sp` after the frame
+record is reloaded. libgcc's `_Unwind_Backtrace` walks the same number of
+frames there as on x86, and gdb uses the tables instead of guessing from the
+prologues.
+
+What is not there yet: the loop and SLP vectorizers are off on AArch64, and
 in release builds an integer
 division by zero returns 0 instead of trapping, as ARM hardware does (debug
 builds check explicitly, as on every target).
@@ -210,8 +221,13 @@ lowers each machine instruction in `ng_arm.salam`, and like i686 it splits
 
 Built with the built-in linker against a musl sysroot and run under
 qemu-arm, the test groups listed for i686 match their expected output with
-the same exceptions. There are no unwind tables yet; `-g` gives line tables,
-frames and variables (see "Debug information").
+the same exceptions. Every function gets an ARM EHABI unwind entry
+(`ng_exidx.salam`): the opcodes undo the prologue (the stack adjustment,
+`vpop d8-d10` when the function saved them, then a pop under mask of the
+pushed registers and `lr`), inline in `.ARM.exidx` when they fit in three
+bytes and in `.ARM.extab` with personality routine 1 otherwise. libgcc's
+unwinder walks the frames with them. `-g` gives line tables, frames and
+variables (see "Debug information").
 
 ## RISC-V
 

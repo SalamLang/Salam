@@ -26,20 +26,21 @@ async function api(method, path, token, body) {
   return { res, json };
 }
 
-const hop = (path) => fetch(API + path, { redirect: "manual" });
-const where = (res) => res.headers.get("location") ?? "";
+const APP = (process.env.APP ?? "http://localhost:3000").replace(/\/$/, "");
 
 async function begin(provider, next = "") {
-  const res = await hop(`/auth/provider/${provider}/start${next ? `?next=${encodeURIComponent(next)}` : ""}`);
-  const loc = where(res);
-  return { res, loc, state: /state=([0-9a-f]+)/.exec(loc)?.[1] ?? "" };
+  const r = await api("POST", `/auth/provider/${provider}/start`, undefined, { next });
+  return { res: r.res, loc: r.json?.url ?? "", state: r.json?.state ?? "", error: r.json?.error ?? "" };
+}
+
+async function finish(provider, code, state, error = "") {
+  const r = await api("POST", `/auth/provider/${provider}/complete`, undefined, { code, state, error });
+  return { status: r.res.status, token: r.json?.token ?? "", next: r.json?.next ?? "", error: r.json?.error ?? "", json: r.json };
 }
 
 async function signIn(provider, code, next = "") {
   const { state } = await begin(provider, next);
-  const back = await hop(`/auth/provider/${provider}/callback?code=${encodeURIComponent(code)}&state=${state}`);
-  const loc = where(back);
-  return { loc, token: /#token=([A-Za-z0-9_-]+)/.exec(loc)?.[1] ?? "", error: /login_error=([a-z_]+)/.exec(loc)?.[1] ?? "" };
+  return finish(provider, code, state);
 }
 
 async function main() {
@@ -48,25 +49,27 @@ async function main() {
   check("both providers are offered", on.json?.github === true && on.json?.figma === true, on.json);
 
   const g = await begin("github", "/telegram?code=abc123");
-  check("github start redirects to GitHub with the sign in scopes", g.res.status === 302 && g.loc.startsWith(PROVIDERS) && /client_id=gh-client/.test(g.loc) && /scope=read%3Auser%20user%3Aemail|scope=read%3Auser\+user%3Aemail/.test(g.loc) && g.state.length === 48, g.loc);
-  check("the redirect target is this API's callback", g.loc.includes(encodeURIComponent(`${API}/auth/provider/github/callback`)), g.loc);
+  check("github start returns the GitHub link with the sign in scopes", g.res.status === 200 && g.loc.startsWith(PROVIDERS) && /client_id=gh-client/.test(g.loc) && /scope=read%3Auser%20user%3Aemail|scope=read%3Auser\+user%3Aemail/.test(g.loc) && g.state.length === 48, g.loc);
+  check("the return address is the app, not the API", g.loc.includes(encodeURIComponent(`${APP}/auth/callback/github`)), g.loc);
   const f = await begin("figma");
-  check("figma start redirects to Figma", f.res.status === 302 && /client_id=fg-client/.test(f.loc) && /scope=current_user%3Aread/.test(f.loc), f.loc);
+  check("figma start returns the Figma link", f.res.status === 200 && /client_id=fg-client/.test(f.loc) && /scope=current_user%3Aread/.test(f.loc) && f.loc.includes(encodeURIComponent(`${APP}/auth/callback/figma`)), f.loc);
+  const unknown = await begin("gitlab");
+  check("an unknown provider is refused", unknown.res.status === 400 && unknown.error === "unavailable");
 
-  const stale = await hop(`/auth/provider/github/callback?code=x&state=${"0".repeat(48)}`);
-  check("an unknown state is refused", /login_error=expired/.test(where(stale)), where(stale));
+  const stale = await finish("github", "x", "0".repeat(48));
+  check("an unknown state is refused", stale.status === 400 && stale.error === "expired", stale.json);
   const refused = await begin("github");
-  const denied = await hop(`/auth/provider/github/callback?error=access_denied&state=${refused.state}`);
-  check("a refusal at the provider is explained", /login_error=denied/.test(where(denied)), where(denied));
+  const denied = await finish("github", "", refused.state, "access_denied");
+  check("a refusal at the provider is explained", denied.status === 400 && denied.error === "denied", denied.json);
 
   const email = `octo${tag}@dev.test`;
   const first = await signIn("github", `gh|${tag}|octo${tag}|${email}|1`, "/telegram?code=abc123");
-  check("a new GitHub user gets a session", first.token.length >= 32 && first.loc.includes("/auth/done?next=/telegram%3Fcode%3Dabc123#token="), first.loc);
+  check("a new GitHub user gets a session", first.token.length >= 32 && first.next === "/telegram?code=abc123", first.json);
   const me = await api("GET", "/me", first.token);
   check("the account is made from the GitHub profile", me.json?.user?.email === email && me.json.user.name === `octo${tag}`, me.json);
   const again = await signIn("github", `gh|${tag}|octo${tag}|${email}|1`);
   const me2 = await api("GET", "/me", again.token);
-  check("signing in again reaches the same account", me2.json?.user?.id === me.json?.user?.id && !again.loc.includes("next="), again.loc);
+  check("signing in again reaches the same account", me2.json?.user?.id === me.json?.user?.id && again.next === "", again.json);
   const guess = await api("POST", "/auth/login", undefined, { email, password: "password-123" });
   check("a provider account has no guessable password", guess.res.status === 401);
 
@@ -76,14 +79,14 @@ async function main() {
   const meLinked = await api("GET", "/me", linked.token);
   check("a verified GitHub email joins the existing account", linked.token !== "" && meLinked.json?.user?.id === (await api("GET", "/me", pw.json.token)).json?.user?.id, meLinked.json);
   const unverified = await signIn("github", `gh|${tag + 2}|sneaky|${mine}|0`);
-  check("an unverified email never joins an account", unverified.error === "no_email" || unverified.error === "email_exists", unverified.loc);
+  check("an unverified email never joins an account", unverified.error === "no_email" || unverified.error === "email_exists", unverified.json);
 
   await api("POST", "/auth/register", undefined, { name: "Admin", email: ADMIN, password: "password-123" });
   const admin = await signIn("github", `gh|${tag + 3}|root|${ADMIN}|1`);
-  check("an admin account is never taken over by email", admin.error === "email_exists" && admin.token === "", admin.loc);
+  check("an admin account is never taken over by email", admin.error === "email_exists" && admin.token === "", admin.json);
 
   const clash = await signIn("figma", `fg|fig${tag}|designer${tag}|${mine}`);
-  check("Figma does not join an account by email", clash.error === "email_exists", clash.loc);
+  check("Figma does not join an account by email", clash.error === "email_exists", clash.json);
   const fresh = await signIn("figma", `fg|fig${tag}|designer${tag}|figma${tag}@dev.test`);
   const meFig = await api("GET", "/me", fresh.token);
   check("a new Figma user gets an account", meFig.json?.user?.email === `figma${tag}@dev.test` && meFig.json.user.name === `designer${tag}`, meFig.json);
@@ -91,16 +94,20 @@ async function main() {
   check("and signs in to it again", (await api("GET", "/me", figAgain.token)).json?.user?.id === meFig.json?.user?.id);
 
   const none = await signIn("github", `gh|${tag + 4}|ghost${tag}||1`);
-  check("no verified email means no account", none.error === "no_email", none.loc);
+  check("no verified email means no account", none.error === "no_email", none.json);
 
   const evil = await signIn("github", `gh|${tag}|octo${tag}|${email}|1`, "//evil.example/x");
-  check("an off-site next path is dropped", evil.token !== "" && !evil.loc.includes("evil"), evil.loc);
+  check("an off-site next path is dropped", evil.token !== "" && evil.next === "", evil.json);
 
   const once = await begin("github");
-  const code = encodeURIComponent(`gh|${tag}|octo${tag}|${email}|1`);
-  await hop(`/auth/provider/github/callback?code=${code}&state=${once.state}`);
-  const replay = await hop(`/auth/provider/github/callback?code=${code}&state=${once.state}`);
-  check("a state works once", /login_error=expired/.test(where(replay)), where(replay));
+  const code = `gh|${tag}|octo${tag}|${email}|1`;
+  await finish("github", code, once.state);
+  const replay = await finish("github", code, once.state);
+  check("a state works once", replay.status === 400 && replay.error === "expired", replay.json);
+
+  const wrong = await begin("figma");
+  const crossed = await finish("github", `gh|${tag}|octo${tag}|${email}|1`, wrong.state);
+  check("a state made for one provider is useless for the other", crossed.error === "expired", crossed.json);
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {

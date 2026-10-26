@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useEffect } from "react";
-import { api, ApiError, providerLoginUrl, setToken, type User } from "./api";
+import { api, ApiError, rememberOAuth, setToken, type User } from "./api";
 import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
 
 type Mode = "login" | "register";
 
-const LOGIN_ERRORS: Record<string, string> = {
+export const LOGIN_ERRORS: Record<string, string> = {
   unavailable: t("ورود با این سرویس فعال نیست.", "Signing in with this service is not available."),
   denied: t("ورود لغو شد.", "Sign in was canceled."),
   expired: t("نشست ورود منقضی شد. دوباره تلاش کنید.", "The sign in expired. Try again."),
@@ -26,6 +26,7 @@ function nextPath(): string {
 
 function ProviderButtons({ setError }: { setError: (m: string) => void }) {
   const [on, setOn] = useState<{ github: boolean; figma: boolean } | null>(null);
+  const [busy, setBusy] = useState("");
   useEffect(() => {
     api
       .authProviders()
@@ -42,7 +43,19 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
     }
   }, [setError]);
   if (!on || (!on.github && !on.figma)) return null;
-  const next = nextPath();
+  const begin = async (provider: "github" | "figma") => {
+    setBusy(provider);
+    setError("");
+    try {
+      const next = nextPath();
+      const r = await api.startProvider(provider, next);
+      rememberOAuth({ provider, state: r.state, purpose: "login", next });
+      location.assign(r.url);
+    } catch (e) {
+      setBusy("");
+      setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? e.message) : t("ورود انجام نشد.", "Sign in failed."));
+    }
+  };
   return (
     <>
       <div className="auth-or" role="separator">
@@ -50,16 +63,16 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
       </div>
       <div className="auth-providers">
         {on.github && (
-          <a className="button ghost wide" href={providerLoginUrl("github", next)}>
-            <IconGithub width={18} height={18} />
+          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("github")}>
+            {busy === "github" ? <span className="spinner" /> : <IconGithub width={18} height={18} />}
             {t("ادامه با GitHub", "Continue with GitHub")}
-          </a>
+          </button>
         )}
         {on.figma && (
-          <a className="button ghost wide" href={providerLoginUrl("figma", next)}>
-            <IconFigma width={18} height={18} />
+          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("figma")}>
+            {busy === "figma" ? <span className="spinner" /> : <IconFigma width={18} height={18} />}
             {t("ادامه با Figma", "Continue with Figma")}
-          </a>
+          </button>
         )}
       </div>
     </>

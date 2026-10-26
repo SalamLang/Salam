@@ -15,7 +15,7 @@ fi
     exit 1
 }
 
-subnet="${SANDBOX_SUBNET:-172.29.250.0/24}"
+subnet="${SANDBOX_SUBNET:-172.27.250.0/24}"
 docker network inspect salam-sandbox >/dev/null 2>&1 || docker network create --subnet "$subnet" salam-sandbox >/dev/null
 subnet="$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' salam-sandbox)"
 install -m 755 "$root/sandbox/firewall.sh" /usr/local/sbin/salam-sandbox-firewall.sh

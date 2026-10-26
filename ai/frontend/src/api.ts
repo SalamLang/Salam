@@ -287,6 +287,8 @@ export type UsageTotals = {
   cache_read: number;
   cache_write: number;
   cost: number;
+  cost_in: number;
+  cost_out: number;
 };
 export type UsagePeriodKey = "today" | "week" | "month" | "last_month" | "all";
 export type UsagePeriod = {
@@ -357,6 +359,42 @@ export type AdminUser = {
   last_active_chat: number;
   last_active_agent: number;
   last_active_api: number;
+  cost_in?: number;
+  cost_out?: number;
+  policy_free?: boolean;
+  policy_system?: string;
+  telegram?: number;
+};
+export type AdminTelegramLink = {
+  tg_id: string;
+  name: string;
+  username: string;
+  lang: string;
+  created: number;
+  last_seen: number;
+  user: PersonRef;
+  chats: number;
+  messages: number;
+  answering: boolean;
+  chat_id: string;
+};
+export type AdminTelegramGuest = {
+  tg_id: string;
+  name: string;
+  username: string;
+  lang: string;
+  created: number;
+  last_seen: number;
+  guest_id: number;
+  messages: number;
+  answering: boolean;
+};
+export type AdminTelegram = {
+  links: AdminTelegramLink[];
+  guests: AdminTelegramGuest[];
+  online_links: number;
+  online_guests: number;
+  now: number;
 };
 export type AdminApp = {
   id: number;
@@ -783,6 +821,16 @@ export const api = {
     call<{ users: AdminUser[]; total: number }>(
       "GET",
       `/admin/users${query({ q, offset: offset || undefined })}`,
+    ),
+  adminTelegram: () => call<AdminTelegram>("GET", "/admin/telegram"),
+  adminUserPolicy: (
+    id: number,
+    body: { policy_free?: boolean; policy_system?: string },
+  ) =>
+    call<{ user: { id: number; policy_free: boolean; policy_system: string } }>(
+      "PATCH",
+      `/admin/users/${id}/policy`,
+      body,
     ),
   adminEvents: (f: EventFilters) =>
     call<{ events: AppEvent[] }>(

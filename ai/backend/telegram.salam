@@ -543,6 +543,7 @@ end
 func apply_menu(w: Who):
     body := "{" + json.MemberRaw("commands", commands_json(w.en)) + `, "scope": {"type": "chat", "chat_id": ` + w.chat + "}}"
     _r := call("setMyCommands", body, 8000)
+    state_set("menu:" + w.tg, w.en ? "en" : "fa")
 end
 
 func ask_language(w: Who, payload: str):
@@ -567,6 +568,33 @@ func choose_language(w: Who, en: bool):
     else:
         welcome(chosen)
     end
+end
+
+func touch_seen(w: Who):
+    now := i64s(aistore.Now())
+    aistore.Lock()
+    if w.uid.len() > 0:
+        _a := aistore.Run("UPDATE telegram_links SET last_seen = ?1, tg_chat = ?2, name = ?3, username = ?4 WHERE tg_id = ?5", five(now, w.chat, w.name, w.username, w.tg))
+    else:
+        _b := aistore.Run("UPDATE telegram_guests SET last_seen = ?1, tg_chat = ?2, name = ?3, username = ?4 WHERE tg_id = ?5", five(now, w.chat, w.name, w.username, w.tg))
+    end
+    aistore.Unlock()
+    sync_menu(w)
+end
+
+func sync_menu(w: Who):
+    if not w.known:
+        ret
+    end
+    if state_get("menu:" + w.tg) != (w.en ? "en" : "fa"):
+        apply_menu(w)
+    end
+end
+
+func five(v: str, w: str, x: str, y: str, z: str): Vector<str>:
+    mut a := four(v, w, x, y)
+    a.push(z)
+    ret a
 end
 
 func set_lang(w: Who, en: bool):
@@ -808,14 +836,18 @@ func user_turn(w: Who, text: str):
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(title == DEFAULT_TITLE ? short_title(text) : title, t, id))
     aistore.Unlock()
     recall := fresh ? aimemory.Recall(w.uid, id) : ""
-    prompt := aiweb.LangNote(w.en) + aipolicy.Defang(text) + recall + aipolicy.Reminder()
+    mut free_system := ""
+    free := aiweb.PolicyOf(w.uid, free_system)
+    prompt := aiweb.LangNote(w.en) + aipolicy.Defang(text) + recall + (free ? "" : aipolicy.Reminder())
     ailive.Begin(sid)
     aiturn.Forget(sid)
+    aiturn.Relax(sid, free)
     mut sent := false
     if token.len() > 0:
-        sent = aiengine.SendDesktop(sid, aicloud.Prelude(token, w.uid) + prompt, "")
+        preamble := aicloud.Prelude(token, w.uid) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, "", free_system) : aiengine.SendDesktop(sid, preamble, "")
     else:
-        sent = aiengine.Send(sid, prompt, "")
+        sent = free ? aiengine.SendFree(sid, prompt, "", free_system) : aiengine.Send(sid, prompt, "")
     end
     if not sent:
         ailive.End(sid)
@@ -920,15 +952,27 @@ func first_line(s: str, max: int): str:
     ret line
 end
 
+func tail_text(s: str, max: int): str:
+    t := str.Trim(s)
+    if t.len() <= max:
+        ret t
+    end
+    mut cut := t.len() - max
+    until cut < t.len() and ((t[cut] as int) < 128 or (t[cut] as int) >= 192):
+        cut += 1
+    end
+    ret "…" + t.substr(cut, t.len() - cut)
+end
+
 func activity_text(sid: str, en: bool): str:
     items := json.Items(ailive.Activity(sid))
     mut tools := Vector {} as Vector<str>
     mut thought := ""
     mut i := items.len() - 1
-    until i >= 0 and tools.len() < 4:
+    until i >= 0 and (tools.len() < 3 or thought.len() == 0):
         it := items.get(i)
         kind := json.Get(it, "kind")
-        if kind == "tool":
+        if kind == "tool" and tools.len() < 3:
             mut title := json.Get(it, en ? "title_en" : "title")
             if title.len() == 0:
                 title = json.Get(it, "title")
@@ -937,7 +981,7 @@ func activity_text(sid: str, en: bool): str:
                 tools.push((json.Get(it, "status") == "running" ? "… " : "✓ ") + first_line(title, 80))
             end
         else kind == "think" and thought.len() == 0:
-            thought = first_line(json.Get(it, "text"), 110)
+            thought = tail_text(json.Get(it, "text"), 280)
         end
         i -= 1
     end
@@ -947,7 +991,7 @@ func activity_text(sid: str, en: bool): str:
         ordered.push(tools.get(k))
         k -= 1
     end
-    if ordered.len() == 0 and thought.len() > 0:
+    if thought.len() > 0:
         ordered.push("💭 " + thought)
     end
     ret str.Join(ordered, "\n")
@@ -1443,6 +1487,7 @@ func on_message(msg: str):
         ret
     end
     w := who_of(tg, chat, json.GetPath(msg, "from.first_name"), json.GetPath(msg, "from.username"), json.GetPath(msg, "from.language_code"))
+    touch_seen(w)
     mut text := str.Trim(json.Get(msg, "text"))
     if text.len() == 0:
         text = str.Trim(json.Get(msg, "caption"))
@@ -1591,10 +1636,11 @@ func setup_bot():
         println "salam-ai telegram: getMe failed:", json.Get(me, "description")
     end
     _w := api("deleteWebhook", `{"drop_pending_updates": false}`)
-    _d := api("setMyCommands", `{"commands": ` + commands_json(true) + "}")
+    _d := api("setMyCommands", `{"commands": ` + commands_json(false) + "}")
     _f := api("setMyCommands", `{"commands": ` + commands_json(false) + `, "language_code": "fa"}`)
-    _i := api("setMyDescription", "{" + json.Member("description", "Salam AI assistant for the Salam programming language. Ask a question as a guest, or sign in to keep your chat history.") + "}")
-    _p := api("setMyDescription", "{" + json.Member("description", "دستیار هوش مصنوعی سلام برای زبان برنامه‌نویسی سلام. مهمان بپرسید یا برای ذخیره‌ی تاریخچه وارد شوید.") + `, "language_code": "fa"}`)
+    _e := api("setMyCommands", `{"commands": ` + commands_json(true) + `, "language_code": "en"}`)
+    _i := api("setMyDescription", "{" + json.Member("description", "دستیار هوش مصنوعی سلام برای زبان برنامه‌نویسی سلام. مهمان بپرسید یا برای ذخیره‌ی تاریخچه وارد شوید.") + "}")
+    _p := api("setMyDescription", "{" + json.Member("description", "Salam AI assistant for the Salam programming language. Ask a question as a guest, or sign in to keep your chat history.") + `, "language_code": "en"}`)
 end
 
 func recover_pending():

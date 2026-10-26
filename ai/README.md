@@ -224,9 +224,11 @@ sends the browser back to the web app, not to the API, and the app talks to the 
   address is reserved; the page shows the reason.
 - Create the apps at `https://github.com/settings/developers` (OAuth Apps) with the
   callback `https://ai.salamlang.ir/auth/callback/github` and at the Figma developer
-  settings with `https://ai.salamlang.ir/auth/callback/figma`, enable the Figma scopes
-  `current_user:read`, `file_content:read`, `file_metadata:read`,
-  `file_comments:write` and `library_content:read`, and put the IDs and secrets in the
+  settings with `https://ai.salamlang.ir/auth/callback/figma`, enable at least the Figma
+  scopes `current_user:read`, `file_content:read` and `file_metadata:read` (Figma answers
+  "Invalid scopes for app" for a scope the app does not have; `AI_FIGMA_SCOPES` lists what
+  the connection asks for, and `file_comments:write` there lets the assistant leave comments),
+  and put the IDs and secrets in the
   server's env file, never in the repository. A GitHub OAuth app allows one callback
   URL, which is why connecting and signing in share this path.
 

@@ -504,12 +504,29 @@ export class ApiError extends Error {
   }
 }
 
-export function providerLoginUrl(
-  provider: "github" | "figma",
-  next: string,
-): string {
-  const q = next ? `?next=${encodeURIComponent(next)}` : "";
-  return `${BASE}/auth/provider/${provider}/start${q}`;
+const STATE_KEY = "salam-oauth-state";
+
+export type PendingOAuth = {
+  provider: string;
+  state: string;
+  purpose: "login" | "connect";
+  next: string;
+};
+
+export function rememberOAuth(p: PendingOAuth) {
+  try {
+    localStorage.setItem(STATE_KEY, JSON.stringify(p));
+  } catch {}
+}
+
+export function takeOAuth(): PendingOAuth | null {
+  try {
+    const raw = localStorage.getItem(STATE_KEY);
+    localStorage.removeItem(STATE_KEY);
+    return raw ? (JSON.parse(raw) as PendingOAuth) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function getToken(): string {
@@ -701,13 +718,34 @@ export const api = {
   ) => call<{ chat: Chat }>("POST", "/chats", options),
   authProviders: () =>
     call<{ github: boolean; figma: boolean }>("GET", "/auth/providers"),
+  startProvider: (provider: string, next: string) =>
+    call<{ url: string; state: string }>(
+      "POST",
+      `/auth/provider/${provider}/start`,
+      { next },
+    ),
+  completeProvider: (
+    provider: string,
+    code: string,
+    state: string,
+    error: string,
+  ) =>
+    call<{
+      purpose: "login" | "connect";
+      token?: string;
+      next?: string;
+      ok?: boolean;
+    }>("POST", `/auth/provider/${provider}/complete`, { code, state, error }),
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>
     call<Integration>("POST", `/integrations/${provider}/token`, { token }),
   removeIntegration: (provider: string) =>
     call<{ ok: boolean }>("DELETE", `/integrations/${provider}`),
   integrationOauth: (provider: string) =>
-    call<{ url: string }>("POST", `/integrations/${provider}/oauth`),
+    call<{ url: string; state: string }>(
+      "POST",
+      `/integrations/${provider}/oauth`,
+    ),
   devices: () => call<{ devices: Device[] }>("GET", "/bridge/devices"),
   chat: (id: string) =>
     call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(

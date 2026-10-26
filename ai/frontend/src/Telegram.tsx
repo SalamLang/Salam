@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type TelegramLinkInfo, type TelegramStatus, type User } from "./api";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { api, ApiError, type Integration, type Integrations, type TelegramLinkInfo, type TelegramStatus, type User } from "./api";
 import { AuthForm } from "./Auth";
 import { Notice, Shell } from "./Connect";
 import { confirmDialog } from "./Confirm";
 import { fmtDate } from "./format";
-import { IconCheck, IconSend } from "./icons";
+import { IconCheck, IconKey, IconSend } from "./icons";
 import type { Theme } from "./theme";
 import { t } from "./i18n";
 
@@ -183,7 +183,154 @@ export function TelegramLink({ user, onAuth, onSwitchAccount, theme, toggleTheme
   );
 }
 
+const PROVIDERS = {
+  github: {
+    name: "GitHub",
+    about: t("مخازن عمومی و خصوصی را بخواند، کلون کند، شاخه و درخواست ادغام بسازد و push کند.", "Read and clone public and private repositories, create branches and pull requests, and push."),
+    help: "https://github.com/settings/tokens/new?scopes=repo,read:org,workflow&description=Salam%20AI",
+    helpText: t("ساخت توکن شخصی (دسترسی repo)", "Create a personal access token (repo scope)"),
+    placeholder: "ghp_... / github_pat_...",
+  },
+  figma: {
+    name: "Figma",
+    about: t("فایل‌ها و گره‌های طراحی را بخواند، تصویرها را صادر کند و کامنت بگذارد تا از طراحی کد بسازد.", "Read design files and nodes, export images and leave comments so it can build code from a design."),
+    help: "https://www.figma.com/settings",
+    helpText: t("ساخت توکن شخصی (Settings، Security)", "Create a personal access token (Settings, Security)"),
+    placeholder: "figd_...",
+  },
+} as const;
+
+function IntegrationCard({ item, storage, highlight, notify, onChange }: { item: Integration; storage: boolean; highlight: boolean; notify: (msg: string) => void; onChange: () => void }) {
+  const info = PROVIDERS[item.provider];
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState("");
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (highlight) ref.current?.scrollIntoView({ block: "center" });
+  }, [highlight]);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy("save");
+    try {
+      const r = await api.saveIntegration(item.provider, token.trim());
+      setToken("");
+      notify(t(`${info.name} وصل شد: ${r.login}`, `${info.name} connected: ${r.login}`));
+      onChange();
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : t("وصل کردن ناموفق بود.", "Could not connect."));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const oauth = async () => {
+    setBusy("oauth");
+    try {
+      const r = await api.integrationOauth(item.provider);
+      location.assign(r.url);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : t("وصل کردن ناموفق بود.", "Could not connect."));
+      setBusy("");
+    }
+  };
+
+  const remove = async () => {
+    const ok = await confirmDialog({
+      title: t(`جدا کردن ${info.name}`, `Disconnect ${info.name}`),
+      subject: item.login,
+      message: t("دستیار دیگر به این حساب دسترسی ندارد. توکن از سرور سلام پاک می‌شود.", "The assistant will no longer have access to this account. The token is deleted from the Salam server."),
+      confirmLabel: t("جدا کردن", "Disconnect"),
+      icon: "alert",
+    });
+    if (!ok) return;
+    setBusy("remove");
+    try {
+      await api.removeIntegration(item.provider);
+      notify(t(`${info.name} جدا شد.`, `${info.name} disconnected.`));
+      onChange();
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : t("جدا کردن ناموفق بود.", "Could not disconnect."));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <section ref={ref} className={`card integration-card ${highlight ? "highlight" : ""}`} id={`connect-${item.provider}`}>
+      <div className="app-title">
+        <strong>{info.name}</strong>
+        <span className={`badge ${item.connected ? "ok" : ""}`}>{item.connected ? t("وصل است", "Connected") : t("وصل نیست", "Not connected")}</span>
+      </div>
+      <p className="muted">{info.about}</p>
+      {item.connected ? (
+        <>
+          <p>
+            {t("حساب: ", "Account: ")}
+            <bdi className="strong" dir="ltr">
+              {item.login}
+            </bdi>
+          </p>
+          <div className="integration-actions">
+            <button type="button" className="button danger small" disabled={busy !== ""} onClick={remove}>
+              {busy === "remove" ? <span className="spinner" /> : t("جدا کردن", "Disconnect")}
+            </button>
+          </div>
+        </>
+      ) : !storage ? (
+        <p className="muted small">{t("ذخیره‌ی امن توکن‌ها روی این سرور فعال نیست.", "Secure token storage is not available on this server.")}</p>
+      ) : (
+        <>
+          {item.oauth && (
+            <div className="integration-actions">
+              <button type="button" className="button primary" disabled={busy !== ""} onClick={oauth}>
+                {busy === "oauth" ? <span className="spinner" /> : t(`ورود با ${info.name}`, `Sign in with ${info.name}`)}
+              </button>
+            </div>
+          )}
+          <form className="integration-form" onSubmit={save}>
+            <label className="field">
+              <span>{t("یا توکن شخصی", "Or a personal access token")}</span>
+              <input type="password" value={token} onChange={(e) => setToken(e.target.value)} dir="ltr" placeholder={info.placeholder} autoComplete="off" spellCheck={false} />
+            </label>
+            <button type="submit" className="button primary" disabled={busy !== "" || token.trim().length < 20}>
+              {busy === "save" ? <span className="spinner" /> : <IconKey width={18} height={18} />}
+              {t("وصل کن", "Connect")}
+            </button>
+          </form>
+          <p className="muted small">
+            <a href={info.help} target="_blank" rel="noreferrer">
+              {info.helpText}
+            </a>
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Connections({ notify }: { notify: (msg: string) => void }) {
+  const [integrations, setIntegrations] = useState<Integrations | null>(null);
+  const focus = new URLSearchParams(location.search).get("connect") ?? "";
+
+  const loadIntegrations = useCallback(async () => {
+    try {
+      setIntegrations(await api.integrations());
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    loadIntegrations();
+    const p = new URLSearchParams(location.search);
+    const done = p.get("connected");
+    if (done) {
+      const result = p.get("result");
+      notify(result === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again."));
+      history.replaceState(null, "", "/connections");
+    }
+  }, [loadIntegrations, notify]);
+
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -275,6 +422,22 @@ export function Connections({ notify }: { notify: (msg: string) => void }) {
           </p>
         )}
       </section>
+      {integrations && (
+        <div className="integration-grid">
+          {integrations.integrations.map((item) => (
+            <IntegrationCard key={item.provider} item={item} storage={integrations.storage} highlight={focus === item.provider} notify={notify} onChange={loadIntegrations} />
+          ))}
+          {integrations.sandbox && (
+            <section className="card">
+              <div className="app-title">
+                <strong>{t("محیط اجرای ابری", "Cloud sandbox")}</strong>
+                <span className="badge ok">{t("فعال", "On")}</span>
+              </div>
+              <p className="muted">{t("هر گفت‌وگو یک محیط لینوکسی خصوصی دارد که دستورها در آن اجرا می‌شوند. در تلگرام همه‌ی گفت‌وگوها و در سایت گفت‌وگوهایی که گزینه‌اش را روشن کنید از آن استفاده می‌کنند.", "Every chat has its own private Linux sandbox where commands run. In Telegram every chat uses it; on the site, chats where you turn the option on do.")}</p>
+            </section>
+          )}
+        </div>
+      )}
       {status && status.links.length > 0 && (
         <ul className="app-list">
           {status.links.map((l) => (

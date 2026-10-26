@@ -28,6 +28,7 @@ import str
 include aistore "store.salam"
 include aiweb "web.salam"
 include aipolicy "policy.salam"
+include aicloud "cloud.salam"
 
 const POLL_MS := 25000
 const CALL_MS := 600000
@@ -49,8 +50,13 @@ const TOOLS := `[
 {"name": "save_memory", "description": "Save or update one memory about this project in .salam-agent/memory/<slug>.md and refresh .salam-agent/index.md. Use it for what will help in a later session: how to build and test, the layout, decisions, the user's preferences, traps. Reuse a slug to update that memory.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "title": {"type": "string", "description": "A few words."}, "description": {"type": "string", "description": "One line that says when this memory is useful."}, "content": {"type": "string", "description": "The full memory in Markdown."}, "slug": {"type": "string", "description": "Optional file name without .md, lowercase words joined by dashes; reuse one to update it."}}, "required": ["session", "title", "description", "content"]}},
 {"name": "forget_memory", "description": "Delete one memory from .salam-agent/memory/ and refresh .salam-agent/index.md.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "slug": {"type": "string"}}, "required": ["session", "slug"]}},
 {"name": "wait", "description": "Wait for a call that is still running on the user's computer and return its result. Use the call_id from the earlier result that said the call is still running. Do not repeat the original call.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "call_id": {"type": "string"}}, "required": ["session", "call_id"]}}
+,
+{"name": "github_api", "description": "Cloud sessions only: call the GitHub REST API as the user (private repositories included). path starts with /, for example /user/repos?per_page=100, /repos/OWNER/REPO/contents/PATH, /repos/OWNER/REPO/issues, /repos/OWNER/REPO/pulls. body is a JSON string for POST, PUT and PATCH.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
+{"name": "github_git", "description": "Cloud sessions only: run clone, fetch, pull, push or ls-remote in the sandbox with the user's GitHub login. args is the git argument list, for example [\"clone\", \"https://github.com/OWNER/REPO.git\"]. Use shell for every other git command.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}}, "required": ["session", "args"]}},
+{"name": "figma_api", "description": "Cloud sessions only: read Figma as the user. path starts with /v1/, for example /v1/files/FILE_KEY?depth=2, /v1/files/FILE_KEY/nodes?ids=1:2, /v1/files/FILE_KEY/comments, /v1/me. POST is allowed only for comments.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
+{"name": "figma_export", "description": "Cloud sessions only: render Figma nodes as png, jpg, svg or pdf and save them into the sandbox folder dir (default assets).", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "file_key": {"type": "string"}, "ids": {"type": "string", "description": "Comma separated node ids such as 1:2,3:4."}, "format": {"type": "string", "enum": ["png", "jpg", "svg", "pdf"]}, "scale": {"type": "integer"}, "dir": {"type": "string"}}, "required": ["session", "file_key", "ids"]}}
 ]`
-const INSTRUCTIONS := "These tools act on the user's own computer through Salam Agent, the desktop app on the user's computer. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call. A call that takes long, or waits for the user's approval, returns a call_id; then call wait with it until the result arrives instead of repeating the call."
+const INSTRUCTIONS := "These tools act either on the user's own computer through Salam Agent, the desktop app on the user's computer, or, in a cloud session, inside a private sandbox container on the Salam servers. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call. A call that takes long, or waits for the user's approval, returns a call_id; then call wait with it until the result arrives instead of repeating the call."
 
 mut SECRET := ""
 mut SLOTS := 32
@@ -86,7 +92,7 @@ func clip(s: str, max: int): str:
         ret s
     end
     mut cut := max
-    until cut <= 0:
+    until cut > 0:
         b := s[cut] as int
         if b < 128 or b >= 192:
             break
@@ -345,7 +351,7 @@ end
 
 func known_tool(name: str): bool:
     switch name:
-        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory":
+        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "github_api", "github_git", "figma_api", "figma_export":
             ret true
         end
     end
@@ -454,6 +460,40 @@ func await_call(id: str, dev: str): str:
     ret tool_text(output, status != "ok")
 end
 
+func await_cloud(id: str): str:
+    if not slot(1):
+        ret tool_text("Too many tool calls are running. Call wait again with call_id \"" + id + "\" in a moment.", false)
+    end
+    held := time.NowMillis()
+    mut got := ""
+    until got.len() == 0:
+        got = aicloud.Take(id)
+        if got.len() == 0:
+            if time.NowMillis() - held > HOLD_MS:
+                break
+            end
+            sync.SleepMs(100)
+        end
+    end
+    _s := slot(0 - 1)
+    if got.len() == 0:
+        ret tool_text("The call is still running in the sandbox. Call wait with call_id \"" + id + "\" and the same session to get its result. Do not repeat the original call.", false)
+    end
+    ret tool_text(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok")
+end
+
+func cloud_call(name: str, args: str, session: str, chat: str, uid: str): str:
+    refused := guard(name, args, chat)
+    if refused.len() > 0:
+        ret tool_text(refused, true)
+    end
+    aicloud.Sweep(CALL_MS + 60000)
+    id := crypto.RandomHex(12)
+    start_call(id, chat, "0", name, args)
+    aicloud.Submit(id, session, uid, name, args)
+    ret await_cloud(id)
+end
+
 func wait_call(args: str): str:
     session := json.Get(args, "session")
     id := json.Get(args, "call_id")
@@ -462,6 +502,13 @@ func wait_call(args: str): str:
     mut workspace := ""
     if session.len() == 32:
         session_device(session, chat, dev, workspace)
+    end
+    if chat.len() == 0 and session.len() == 32:
+        mut cchat := ""
+        mut cuid := ""
+        if aicloud.Owner(session, cchat, cuid) and aicloud.Known(id):
+            ret await_cloud(id)
+        end
     end
     _l := sync.Lock(LOCK)
     mine := dev.len() > 0 and OWNER.has(id) and OWNER.get(id) == dev and CALLS.has(id) and json.Get(CALLS.get(id), "chat") == chat
@@ -543,7 +590,15 @@ func call_tool(params: str): str:
     mut workspace := ""
     session_device(session, chat, dev, workspace)
     if chat.len() == 0:
+        mut cchat := ""
+        mut cuid := ""
+        if aicloud.Owner(session, cchat, cuid):
+            ret cloud_call(name, args, session, cchat, cuid)
+        end
         ret tool_text("This session is not linked to Salam Agent. Tell the user to open the conversation in Salam Agent.", true)
+    end
+    if name == "github_api" or name == "github_git" or name == "figma_api" or name == "figma_export":
+        ret tool_text("This tool only works in cloud sessions, not in Salam Agent on the user's computer.", true)
     end
     refused := guard(name, args, chat)
     if refused.len() > 0:

@@ -36,6 +36,7 @@ include aiguest "guest.salam"
 include aibilling "billing.salam"
 include aimemory "memory.salam"
 include aitgmd "tgmd.salam"
+include aicloud "cloud.salam"
 
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const WORKERS := 12
@@ -50,6 +51,7 @@ const CODE_SECONDS := 900
 const FLOOD_PER_MINUTE := 20
 const PENDING_SECONDS := 600
 const MAX_LINKS := 5
+const CLOUD_SECONDS := 3600
 
 mut TOKEN := ""
 mut HOST := "api.telegram.org"
@@ -371,6 +373,13 @@ func typing(chat: str):
     _r := call("sendChatAction", json.Object(m), 8000)
 end
 
+func delete_message(chat: str, mid: str):
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.MemberRaw("message_id", mid))
+    _r := call("deleteMessage", json.Object(m), 8000)
+end
+
 func answer_callback(id: str, text: str):
     mut m := Vector {} as Vector<str>
     m.push(json.Member("callback_query_id", id))
@@ -561,9 +570,9 @@ end
 
 func help_text(w: Who): str:
     if w.en:
-        ret "**Salam AI on Telegram**\n\nJust write your question. Commands:\n\n/new start a fresh chat\n/chats your chats (signed in)\n/stop stop the answer being written\n/login sign in or sign up\n/logout disconnect this Telegram from your account\n/account your account and plan\n/lang switch between Persian and English\n/help this message"
+        ret "**Salam AI on Telegram**\n\nJust write your question. Commands:\n\n/new start a fresh chat\n/chats your chats (signed in)\n/stop stop the answer being written\n/login sign in or sign up\n/logout disconnect this Telegram from your account\n/account your account and plan\n/github connect GitHub (private repositories)\n/figma connect Figma\n/sandbox your command sandbox\n/lang switch between Persian and English\n/help this message"
     end
-    ret "**دستیار سلام در تلگرام**\n\nکافی است سؤالتان را بنویسید. دستورها:\n\n/new شروع گفت‌وگوی تازه\n/chats گفت‌وگوهای شما (بعد از ورود)\n/stop متوقف کردن پاسخ در حال نوشته شدن\n/login ورود یا ثبت‌نام\n/logout جدا کردن این تلگرام از حساب\n/account حساب و پلن شما\n/lang تغییر زبان بین فارسی و انگلیسی\n/help همین راهنما"
+    ret "**دستیار سلام در تلگرام**\n\nکافی است سؤالتان را بنویسید. دستورها:\n\n/new شروع گفت‌وگوی تازه\n/chats گفت‌وگوهای شما (بعد از ورود)\n/stop متوقف کردن پاسخ در حال نوشته شدن\n/login ورود یا ثبت‌نام\n/logout جدا کردن این تلگرام از حساب\n/account حساب و پلن شما\n/github وصل کردن GitHub (مخازن خصوصی)\n/figma وصل کردن Figma\n/sandbox محیط اجرای دستورها\n/lang تغییر زبان بین فارسی و انگلیسی\n/help همین راهنما"
 end
 
 func welcome(w: Who):
@@ -661,8 +670,12 @@ end
 func new_chat(w: Who): str:
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
+    cloud := aicloud.Enabled() ? "1" : "0"
+    mut a := four(id, w.uid, DEFAULT_TITLE, t)
+    a.push(cloud)
+    a.push(cloud == "1" ? crypto.RandomHex(16) : "")
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, source) VALUES (?1, ?2, ?3, ?4, ?4, 'telegram')", four(id, w.uid, DEFAULT_TITLE, t))
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, source, cloud, bridge_token) VALUES (?1, ?2, ?3, ?4, ?4, 'telegram', ?5, ?6)", a)
     if ok:
         _l := aistore.Run("UPDATE telegram_links SET chat_id = ?1 WHERE tg_id = ?2", two(id, w.tg))
     end
@@ -682,8 +695,8 @@ func current_chat(w: Who): str:
     ret new_chat(w)
 end
 
-func settle_user(mid: str, sid: str, created: i64, en: bool): aiengine.Reply:
-    mut r := aiturn.Progress(sid, created, PENDING_SECONDS as i64)
+func settle_user(mid: str, sid: str, created: i64, en: bool, limit: i64): aiengine.Reply:
+    mut r := aiturn.Progress(sid, created, limit)
     if r.done:
         mut status := "done"
         mut body := r.text
@@ -726,6 +739,7 @@ func user_turn(w: Who, text: str):
     recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(w.uid, i64s(now - 3600))).to_int()
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
     mut sid := aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(id))
+    token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND cloud = 1", one(id))
     aistore.Unlock()
     if pending > 0:
         _m := send_plain(w.chat, tr(w.en, "هنوز پاسخ پیام قبلی کامل نشده است. برای متوقف کردن آن /stop را بفرستید.", "The answer to the previous message is not finished yet. Send /stop to cancel it."), "")
@@ -759,7 +773,13 @@ func user_turn(w: Who, text: str):
     prompt := aiweb.LangNote(w.en) + aipolicy.Defang(text) + recall + aipolicy.Reminder()
     ailive.Begin(sid)
     aiturn.Forget(sid)
-    if not aiengine.Send(sid, prompt, ""):
+    mut sent := false
+    if token.len() > 0:
+        sent = aiengine.SendDesktop(sid, aicloud.Prelude(token, w.uid) + prompt, "")
+    else:
+        sent = aiengine.Send(sid, prompt, "")
+    end
+    if not sent:
         ailive.End(sid)
         aistore.Lock()
         _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", mid))
@@ -767,7 +787,7 @@ func user_turn(w: Who, text: str):
         _m := send_plain(w.chat, tr(w.en, "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", "The assistant is not available. Please try again in a moment."), "")
         ret
     end
-    queue_watch("u", w, mid, sid, now, w.uid)
+    queue_watch(token.len() > 0 ? "c" : "u", w, mid, sid, now, w.uid)
 end
 
 func show(chat: str, text: str, ids &: Vector<str>, texts &: Vector<str>, markup: str):
@@ -812,6 +832,33 @@ func footer(w: Who, kind: str, owner: str): str:
     ret "\n\n" + tr(w.en, "پیام‌های مهمان باقی‌مانده: " + digits(false, left), "Guest messages left: " + digits(true, left))
 end
 
+func steps_text(mid: str): str:
+    mut lines := Vector {} as Vector<str>
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT summary, state, tool FROM bridge_calls WHERE message_id = ?1 ORDER BY seq DESC LIMIT 6", one(mid))
+    until aistore.Next(q):
+        mut label := aistore.Text(q, 0)
+        if label.len() == 0:
+            label = aistore.Text(q, 2)
+        end
+        if label.len() > 90:
+            label = label.substr(0, aitgmd_cut(label, 90)) + "…"
+        end
+        state := aistore.Text(q, 1)
+        mark := state == "done" ? "✓ " : (state == "running" ? "… " : "✗ ")
+        lines.push(mark + label)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    mut ordered := Vector {} as Vector<str>
+    mut i := lines.len() - 1
+    until i < 0:
+        ordered.push(lines.get(i))
+        i -= 1
+    end
+    ret str.Join(ordered, "\n")
+end
+
 func watch(job: str):
     p := job.split("|")
     if p.len() < 7:
@@ -833,6 +880,7 @@ func watch(job: str):
         texts.push("")
     end
     mut shown := ""
+    mut shown_steps := ""
     mut last_edit := time.NowMillis()
     mut last_typing := 0 as i64
     mut gen := ailive.Gen()
@@ -848,7 +896,7 @@ func watch(job: str):
             done = status != "pending"
             failed = status == "error"
         else:
-            r := settle_user(mid, sid, created, en)
+            r := settle_user(mid, sid, created, en, kind == "c" ? CLOUD_SECONDS as i64 : PENDING_SECONDS as i64)
             text = r.text
             done = r.done
             failed = r.failed
@@ -876,6 +924,14 @@ func watch(job: str):
                 mark_stopped(sid, false)
             end
             break
+        end
+        if kind == "c" and text.len() == 0 and now - last_edit >= EDIT_MS:
+            steps := steps_text(mid)
+            if steps.len() > 0 and steps != shown_steps:
+                show(chat, tr(en, "در حال کار روی درخواست شما...", "Working on it...") + "\n\n" + steps, ids, texts, "")
+                shown_steps = steps
+                last_edit = time.NowMillis()
+            end
         end
         if text.len() > 0 and text != shown and now - last_edit >= EDIT_MS:
             show(chat, text, ids, texts, "")
@@ -959,7 +1015,7 @@ end
 
 func aitgmd_cut(s: str, max: int): int:
     mut cut := max
-    until cut <= 0:
+    until cut > 0:
         b := s[cut] as int
         if b < 128 or b >= 192:
             break
@@ -1089,7 +1145,68 @@ func confirm_site_link(w: Who, code: str):
     finish_link(w, uid, uname)
 end
 
-func command(w: Who, cmd: str, arg: str):
+func integration_command(w: Who, provider: str, arg: str, message_id: str):
+    name := provider == "github" ? "GitHub" : "Figma"
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "برای وصل کردن " + name + " اول وارد حساب سلام شوید.", "Sign in to your Salam account first to connect " + name + "."))
+        ret
+    end
+    if arg == "disconnect" or arg == "remove":
+        aicloud.Forget(w.uid, provider)
+        _m := send_plain(w.chat, tr(w.en, name + " از حساب شما جدا شد.", name + " was disconnected from your account."), "")
+        ret
+    end
+    if arg.len() > 0:
+        if message_id.len() > 0:
+            delete_message(w.chat, message_id)
+        end
+        mut login := ""
+        code := aicloud.StoreToken(w.uid, provider, arg, login)
+        if code == 0:
+            _m := send_plain(w.chat, tr(w.en, name + " وصل شد: " + login + ". پیام حاوی توکن پاک شد. حالا می‌توانید مثلا بگویید «مخازن خصوصی من را فهرست کن».", name + " connected: " + login + ". The message with your token was deleted. Now you can ask, for example, \"list my private repositories\"."), "")
+        else code == 3:
+            _m := send_plain(w.chat, tr(w.en, "ذخیره‌ی امن توکن‌ها روی این سرور فعال نیست.", "Secure token storage is not available on this server."), "")
+        else:
+            _m := send_plain(w.chat, tr(w.en, "این توکن از طرف " + name + " پذیرفته نشد. توکن و دسترسی‌هایش را بررسی کنید و دوباره بفرستید.", name + " did not accept this token. Check the token and its permissions, then send it again."), "")
+        end
+        ret
+    end
+    login := aicloud.Connected(w.uid, provider)
+    page := APP_URL + "/connections?connect=" + provider
+    mut how := ""
+    if provider == "github":
+        how = tr(w.en, "با دکمه‌ی زیر از سایت وصل کنید (برای مخازن خصوصی هم کار می‌کند)، یا یک توکن شخصی بسازید و اینجا بفرستید:\n/github ghp_...\nتوکن را با دسترسی repo بسازید؛ پیام شما بلافاصله پاک می‌شود.", "Connect from the site with the button below (private repositories work too), or create a personal access token and send it here:\n/github ghp_...\nGive the token the repo scope; your message is deleted right away.")
+    else:
+        how = tr(w.en, "با دکمه‌ی زیر از سایت وصل کنید، یا در Figma یک توکن شخصی بسازید (Settings، Security) و اینجا بفرستید:\n/figma figd_...\nپیام شما بلافاصله پاک می‌شود.", "Connect from the site with the button below, or create a personal access token in Figma (Settings, Security) and send it here:\n/figma figd_...\nYour message is deleted right away.")
+    end
+    status := login.len() > 0 ? tr(w.en, name + " وصل است: " + login + ". برای جدا کردن: /" + provider + " disconnect", name + " is connected: " + login + ". To disconnect: /" + provider + " disconnect") : tr(w.en, name + " هنوز وصل نیست.", name + " is not connected yet.")
+    _m := send_plain(w.chat, status + "\n\n" + how, url_button(tr(w.en, "باز کردن اتصال‌ها", "Open Connections"), page))
+end
+
+func sandbox_command(w: Who, arg: str):
+    if w.uid.len() == 0:
+        login_prompt(w, tr(w.en, "محیط اجرای دستورها بعد از ورود فعال می‌شود.", "The command sandbox is available after you sign in."))
+        ret
+    end
+    if not aicloud.Enabled():
+        _m := send_plain(w.chat, tr(w.en, "محیط اجرای ابری روی این سرور فعال نیست.", "The cloud sandbox is not available on this server."), "")
+        ret
+    end
+    id := w.cur
+    aistore.Lock()
+    token := id.len() > 0 ? aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND user_id = ?2 AND cloud = 1", two(id, w.uid)) : ""
+    aistore.Unlock()
+    if arg == "reset":
+        if token.len() > 0:
+            aicloud.Destroy(token)
+        end
+        _m := send_plain(w.chat, tr(w.en, "محیط این گفت‌وگو پاک شد و دفعه‌ی بعد تازه ساخته می‌شود.", "This chat's sandbox was wiped; a fresh one is created next time."), "")
+        ret
+    end
+    _m := send_plain(w.chat, tr(w.en, "هر گفت‌وگو یک محیط لینوکسی خصوصی خودش را دارد (git، node، python، کامپایلر سلام) و دستورها همان‌جا اجرا می‌شوند. از دستیار بخواهید مخزن را کلون کند، تست بگیرد یا کد بنویسد. برای پاک کردن محیط: /sandbox reset", "Every chat has its own private Linux sandbox (git, node, python, the Salam compiler) where commands run. Ask the assistant to clone a repository, run tests or write code. To wipe it: /sandbox reset"), "")
+end
+
+func command(w: Who, cmd: str, arg: str, message_id: str):
     switch cmd:
         "start":
             start_payload(w, arg)
@@ -1141,6 +1258,14 @@ func command(w: Who, cmd: str, arg: str):
         end
         "account", "me":
             account_info(w)
+            break
+        end
+        "github", "figma":
+            integration_command(w, cmd, arg, message_id)
+            break
+        end
+        "sandbox", "cloud":
+            sandbox_command(w, arg)
             break
         end
         "lang", "language":
@@ -1220,7 +1345,7 @@ func on_message(msg: str):
             end
             cmd = cmd.substr(0, at)
         end
-        command(w, cmd, arg)
+        command(w, cmd, arg, json.Get(msg, "message_id"))
         ret
     end
     if w.uid.len() > 0:
@@ -1268,11 +1393,13 @@ func worker():
         end
         chat := chat_of(raw)
         mut tries := 0
-        until claim(chat) or tries >= 400:
+        mut got := claim(chat)
+        until not got and tries < 400:
             sync.SleepMs(40)
             tries += 1
+            got = claim(chat)
         end
-        if tries < 400:
+        if got:
             handle_update(raw)
             release(chat)
         end
@@ -1297,13 +1424,13 @@ func commands_json(en: bool): str:
     names := Vector {} as Vector<str>
     fa := Vector {} as Vector<str>
     english := Vector {} as Vector<str>
-    each n in ["new", "chats", "stop", "login", "logout", "account", "lang", "help"]:
+    each n in ["new", "chats", "stop", "login", "logout", "account", "github", "figma", "sandbox", "lang", "help"]:
         names.push(n)
     end
-    each n in ["شروع گفت‌وگوی تازه", "گفت‌وگوهای من", "متوقف کردن پاسخ", "ورود یا ثبت‌نام", "جدا شدن از حساب", "حساب و پلن", "تغییر زبان", "راهنما"]:
+    each n in ["شروع گفت‌وگوی تازه", "گفت‌وگوهای من", "متوقف کردن پاسخ", "ورود یا ثبت‌نام", "جدا شدن از حساب", "حساب و پلن", "وصل کردن GitHub", "وصل کردن Figma", "محیط اجرای دستورها", "تغییر زبان", "راهنما"]:
         fa.push(n)
     end
-    each n in ["Start a fresh chat", "My chats", "Stop the answer", "Sign in or sign up", "Disconnect from account", "Account and plan", "Switch language", "Help"]:
+    each n in ["Start a fresh chat", "My chats", "Stop the answer", "Sign in or sign up", "Disconnect from account", "Account and plan", "Connect GitHub", "Connect Figma", "Command sandbox", "Switch language", "Help"]:
         english.push(n)
     end
     each i, name in names:

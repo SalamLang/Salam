@@ -743,8 +743,11 @@ How the pieces fit:
   against `qemu -g`) stops on a source line, prints arguments and locals,
   and walks the frames; `tools/bash/native-gdb-check.sh <salam> <triple>
 <runner>` checks that on each target. Windows x64 and Windows on Arm images
-  carry the same DWARF in PE sections (offsets as `SECREL`); 32-bit Windows
-  objects get no debug sections.
+  carry the same DWARF in PE sections (offsets as `SECREL`). 32-bit Windows
+  objects carry it too, with code addresses as `DIR32`, plus a `.debug_frame`
+  built from the same CFI as i686 Linux's `.eh_frame`, since those frames
+  are `esp`-based and Windows has no `.pdata` on x86;
+  `tools/bash/native-windows-debug-check.sh` checks both Windows targets.
 - Mach-O objects carry the same DWARF under `__DWARF`. Offsets between
   debug sections are written into the object resolved, since Mach-O linkers
   do not relocate them, and code addresses are section-relative `UNSIGNED`
@@ -787,14 +790,7 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools, 32-bit
-  Windows objects get no debug sections, and macOS objects get neither
-  DWARF nor unwind tables.
-- The built-in linker has no range-extension thunks: an ARM to Thumb `B`
-  needs a veneer and fails, and an AArch64 or ARM64 PE branch beyond
-  ±128 MB fails.
-- The 64-bit atomic helpers the armhf backend writes into the object have no
-  `.ARM.exidx` entry, so an unwind that starts inside one stops there.
+- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
 - On AArch64, an integer division by zero in a release build returns 0
   instead of trapping. Debug builds check.
 - The loop and SLP vectorizers run on x86 only (SLP also on i686).

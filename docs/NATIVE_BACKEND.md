@@ -753,7 +753,11 @@ How the pieces fit:
   do not relocate them, and code addresses are section-relative `UNSIGNED`
   relocations. The built-in linker keeps the sections in a `__DWARF` segment
   of the executable, where lldb reads them directly, the way Go programs
-  carry theirs; with `--linker=system` they stay in the object as usual.
+  carry theirs. With `--linker=system` they stay in the object and the
+  executable's debug map points at it, so the driver runs `dsymutil` (or
+  `llvm-dsymutil`) before it deletes the object, as clang does, and lldb
+  finds the result in `<program>.dSYM`. Without either tool it keeps the
+  object and says where it is.
   `tools/bash/native-lldb-check.sh` builds a program on any host and debugs
   it under lldb on a Mac.
 - Each function's first line row after its opening line carries

@@ -464,8 +464,8 @@ application is one function per machine:
   by access size, branches, conditional and test branches, `MOVW` groups,
   GOT page and offset pairs.
 - **ARM**: `ABS32`, `REL32`, `TARGET1`/`TARGET2`, `BL`/`B` (a `BL` to a
-  Thumb function becomes `BLX`; a `B` to one is an error, since no veneers
-  are generated), `MOVW`/`MOVT` in ARM and Thumb, Thumb branches, `PREL31`
+  Thumb function becomes `BLX`; a `B` to one goes through a thunk, see
+  "Branch thunks"), `MOVW`/`MOVT` in ARM and Thumb, Thumb branches, `PREL31`
   and the GOT forms.
 - **RISC-V (RV64)**: data words, `HI20`/`LO12` absolute pairs, PC-relative
   `PCREL_HI20` with its `PCREL_LO12_I`/`_S` partner (found by the address of
@@ -498,8 +498,9 @@ ARM64 COFF objects (machine `0xAA64`) use their own relocations. `ADDR64`,
 `ADDR32`, `ADDR32NB`, `REL32`, `SECREL` and `SECTION` map onto the x64
 handling; `BRANCH26`, `BRANCH19`, `BRANCH14`, `PAGEBASE_REL21`, `REL21`,
 `PAGEOFFSET_12A` and `PAGEOFFSET_12L` patch the instruction fields, reading
-the addend from the same fields first, as `lld-link` does. A branch that does
-not reach is an error; there are no range-extension thunks. The optional
+the addend from the same fields first, as `lld-link` does. A `BRANCH26`
+that does not reach gets a thunk (see "Branch thunks"); a conditional or
+test branch that does not reach is an error. The optional
 header says Windows 6.0 for ARM64, the oldest version `lld-link` writes.
 
 llvm-mingw's import libraries hold short import members (the 20-byte
@@ -526,6 +527,31 @@ labels end in `#0`, `#1<symbol>` and `#2`, so the same label sort that orders
 GNU `dlltool` members keeps each DLL's tables contiguous. Linking x64 and
 i686 programs against llvm-mingw's UCRT libraries this way and running them
 under wine passes the whole `llvm` test group.
+
+### Branch thunks
+
+A direct branch reaches ±128 MB on AArch64, ±32 MB in ARM mode and ±16 MB
+in Thumb mode, and an ARM `B` cannot switch to Thumb (or a Thumb `B.W` to
+ARM). After layout the linker checks every `CALL26`/`JUMP26` (AArch64 ELF),
+`BRANCH26` (ARM64 PE), `CALL`/`JUMP24`/`PC24`/`PLT32` (ARM) and
+Thumb `CALL`/`JUMP24` relocation. One that misses its target gets
+a 16-byte thunk at the end of the input section that holds the branch, and
+the branch goes to the thunk instead. The section grows, so layout runs
+again until no new thunk is needed; a link that needs none is laid out
+once, as before. Thunks are shared by every branch in a section to the same
+target.
+
+- AArch64 ELF: `ldr x16, #8; br x16` and the absolute target.
+- ARM64 PE: `adrp x16; add x16; br x16`, PC-relative, so the image stays
+  relocatable without a base relocation.
+- ARM: `ldr pc, [pc, #-4]` and the target, Thumb bit included, so the load
+  switches mode when it has to.
+- Thumb: `ldr.w pc, [pc]` and the target.
+
+`x16` is the AAPCS64 register reserved for this, and an ARM thunk clobbers
+nothing. A conditional or test branch on AArch64 that does not reach is
+reported as an error rather than patched with a wrong offset. Mach-O links
+have no thunks yet, so a `BRANCH26` there that does not reach is an error.
 
 ### ARM unwind tables
 

@@ -26,6 +26,7 @@ export type FileMeta = {
 export type Integration = {
   provider: "github" | "figma";
   connected: boolean;
+  expired?: boolean;
   login: string;
   scope: string;
   created: number;

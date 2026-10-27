@@ -35,6 +35,7 @@ const MAX_OUTPUT := 120000
 const MAX_API := 80000
 const WORKERS := 24
 const STATE_SECONDS := 900
+const REVOKED_NOTE := "The provider rejected the saved login: the token was revoked or has expired. Tell the user to reconnect it (send /github or /figma in Telegram, or open Connections on the Salam AI site) and stop using it until then."
 const DEFAULT_FIGMA_SCOPES := "current_user:read file_comments:read file_comments:write file_content:read file_dev_resources:read file_dev_resources:write file_metadata:read file_versions:read folder_metadata:read folders:read library_assets:read library_content:read selections:read team_library_content:read webhooks:read webhooks:write"
 const DEFAULT_GITHUB_SCOPES := "repo workflow admin:org admin:public_key admin:repo_hook admin:org_hook admin:gpg_key admin:ssh_signing_key admin:enterprise read:audit_log codespace copilot gist notifications project read:packages write:packages user write:discussion write:network_configurations"
 const READ_SCRIPT := "f=\"$SBX_PATH\"; if [ -d \"$f\" ]; then echo \"$f is a directory; use list_dir\"; exit 2; fi; if [ ! -e \"$f\" ]; then echo \"no such file: $f\"; exit 2; fi; awk -v o=\"$SBX_OFFSET\" -v l=\"$SBX_LIMIT\" 'NR >= o && NR < o + l { printf \"%d\\t%s\\n\", NR, $0 }' \"$f\""
@@ -61,6 +62,7 @@ mut JOBS := chan.Chan {} as chan.Chan<str>
 mut JOB_DATA := HashMap {} as HashMap<str, str>
 mut RESULTS := HashMap {} as HashMap<str, str>
 mut STARTED := HashMap {} as HashMap<str, i64>
+mut CHECKED := HashMap {} as HashMap<str, str>
 
 struct Outcome:
     pub ok: bool = true
@@ -661,6 +663,16 @@ func store_token(uid: str, provider: str, token: str, login &: str): int:
     ret 0
 end
 
+func login_valid(uid: str, provider: str): bool:
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, provider, token, login, scope):
+        ret true
+    end
+    ret token_ok(uid, provider, token)
+end
+
 func provider_json(uid: str, provider: str): str:
     mut login := ""
     mut scope := ""
@@ -679,6 +691,7 @@ func provider_json(uid: str, provider: str): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("provider", provider))
     m.push(json.MemberBool("connected", connected))
+    m.push(json.MemberBool("expired", connected and not login_valid(uid, provider)))
     m.push(json.Member("login", login))
     m.push(json.Member("scope", scope))
     m.push(json.MemberRaw("created", created))
@@ -726,6 +739,80 @@ func github_blocked(method: str, path: str): str:
     ret ""
 end
 
+func token_ok(uid: str, provider: str, token: str): bool:
+    key := uid + "|" + provider
+    tag := crypto.HmacSha256Hex(MASTER, token).substr(0, 12)
+    _l := sync.Lock(LOCK)
+    cached := CHECKED.has(key) ? CHECKED.get(key) : ""
+    _u := sync.Unlock(LOCK)
+    if cached.len() > 0:
+        parts := cached.split("|")
+        if parts.len() == 3 and parts.get(2) == tag and aistore.Now() - (parts.get(0).to_int() as i64) < 300:
+            ret parts.get(1) == "1"
+        end
+    end
+    mut ok := true
+    if provider == "github":
+        r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
+        ok = r.status != 401
+    else:
+        r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
+        ok = r.status != 401 and r.status != 403
+    end
+    _a := sync.Lock(LOCK)
+    CHECKED.put(key, aistore.Now() + "|" + (ok ? "1" : "0") + "|" + tag)
+    _b := sync.Unlock(LOCK)
+    ret ok
+end
+
+func login_state(uid: str, provider: str): str:
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, provider, token, login, scope):
+        ret "not connected"
+    end
+    if not token_ok(uid, provider, token):
+        ret "connected as " + login + ", but the provider rejected the saved login (revoked); ask the user to reconnect it before using it"
+    end
+    ret "connected as " + login
+end
+
+func sandbox_login(uid: str, env &: Vector<str>, secrets &: Vector<str>): str:
+    mut setup := ""
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if integration_row(uid, "github", token, login, scope) and token_ok(uid, "github", token):
+        env.push("GH_TOKEN")
+        env.push(token)
+        env.push("GITHUB_TOKEN")
+        env.push(token)
+        secrets.push(token)
+        helper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+        setup = setup + "git config --global credential.https://github.com.helper " + sh_quote(helper) + " >/dev/null 2>&1; git config --global user.name >/dev/null 2>&1 || git config --global user.name " + sh_quote(login) + "; git config --global user.email >/dev/null 2>&1 || git config --global user.email " + sh_quote(login + "@users.noreply.github.com") + "; "
+    end
+    mut ftoken := ""
+    if integration_row(uid, "figma", ftoken, login, scope) and token_ok(uid, "figma", ftoken):
+        env.push("FIGMA_TOKEN")
+        env.push(ftoken)
+        env.push("FIGMA_AUTH_HEADER")
+        env.push(is_oauth_token(ftoken) ? "Authorization: Bearer " + ftoken : "X-Figma-Token: " + ftoken)
+        secrets.push(ftoken)
+    end
+    ret setup
+end
+
+func scrub(text: str, secrets: Vector<str>): str:
+    mut out := text
+    each secret in secrets:
+        if secret.len() > 8:
+            out = str.Replace(out, secret, "***")
+        end
+    end
+    ret out
+end
+
 func tool_github_api(uid: str, args: str): Outcome:
     mut o := Outcome {}
     o.kind = "read"
@@ -762,6 +849,11 @@ func tool_github_api(uid: str, args: str): Outcome:
     if not integration_row(uid, "github", token, login, scope):
         o.ok = false
         o.text = "The user has not connected GitHub. Tell them to send /github in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    if not token_ok(uid, "github", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
         ret o
     end
     body := json.Get(args, "body")
@@ -833,6 +925,11 @@ func tool_github_git(session: str, uid: str, args: str): Outcome:
         o.text = "The user has not connected GitHub. Tell them to send /github in Telegram or open Connections on the Salam AI site."
         ret o
     end
+    if not token_ok(uid, "github", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
+        ret o
+    end
     mut quoted := Vector {} as Vector<str>
     each w in words:
         quoted.push(sh_quote(w))
@@ -880,6 +977,11 @@ func tool_figma_api(uid: str, args: str): Outcome:
     if not integration_row(uid, "figma", token, login, scope):
         o.ok = false
         o.text = "The user has not connected Figma. Tell them to send /figma in Telegram or open Connections on the Salam AI site."
+        ret o
+    end
+    if not token_ok(uid, "figma", token):
+        o.ok = false
+        o.text = REVOKED_NOTE
         ret o
     end
     mut headers := figma_headers(token, is_oauth_token(token))
@@ -980,7 +1082,7 @@ func summarize_cmd(cmd: str): str:
     ret clip(first, 140)
 end
 
-func tool_shell(session: str, args: str, tool: str): Outcome:
+func tool_shell(session: str, uid: str, args: str, tool: str): Outcome:
     mut o := Outcome {}
     mut cmd := json.Get(args, "command")
     if tool == "run_tests" and cmd.len() == 0:
@@ -1002,9 +1104,12 @@ func tool_shell(session: str, args: str, tool: str): Outcome:
         o.text = "command is required."
         ret o
     end
-    res := sbx_exec(session, cmd, o.cwd, timeout, "", Vector {} as Vector<str>)
+    mut env := Vector {} as Vector<str>
+    mut secrets := Vector {} as Vector<str>
+    setup := sandbox_login(uid, env, secrets)
+    res := sbx_exec(session, setup + cmd, o.cwd, timeout, "", env)
     o.ok = res.ok and res.code == 0 and not res.timed_out
-    o.text = finish_exec(res, true)
+    o.text = scrub(finish_exec(res, true), secrets)
     ret o
 end
 
@@ -1189,7 +1294,7 @@ func run_tool(session: str, uid: str, tool: str, args: str): Outcome:
     end
     switch tool:
         "shell", "run_tests":
-            ret tool_shell(session, args, tool)
+            ret tool_shell(session, uid, args, tool)
         end
         "read_file":
             ret tool_read(session, args)
@@ -1596,10 +1701,14 @@ pub func Connected(uid: str, provider: str): str:
     ret login
 end
 
+pub func Revoked(uid: str, provider: str): bool:
+    ret not login_valid(uid, provider)
+end
+
 pub func Prelude(session: str, uid: str): str:
-    gh := Connected(uid, "github")
-    fg := Connected(uid, "figma")
-    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests) and pass the session value above in every call. Paths are relative to /work. For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
+    gh := login_state(uid, "github")
+    fg := login_state(uid, "figma")
+    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests) and pass the session value above in every call. Paths are relative to /work. For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
     ret text
 end
 

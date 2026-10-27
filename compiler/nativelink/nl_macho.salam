@@ -40,6 +40,9 @@ pub struct Mo:
     pub d_fend: i64 = 0
     pub d_end: i64 = 0
     pub le_off: i64 = 0
+    pub dw_off: i64 = 0
+    pub dw_size: i64 = 0
+    pub dw_vm: i64 = 0
 end
 
 func is_macho(p: u8*, base: i64): bool:
@@ -437,7 +440,8 @@ func mo_ncmds_size(l &: Nl, t &: Mo, nsect: int): i64:
     each dn in l.dy_name:
         dl += 24 + ((str.Len(dn) + 8) / 8) * 8
     end
-    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl
+    dw := l.dg_name.len() > 0 ? 72 + 80 * l.dg_name.len() : 0
+    ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl + dw
 end
 
 func mo_dylib_list(l &: Nl): Vector<str>:
@@ -629,6 +633,9 @@ func macho_link(l &: Nl, out: str):
     if not l.ok:
         ret
     end
+    if not l.strip:
+        dbg_collect_mo(l)
+    end
     mut nsect := 0
     repeat MO_COUNT in k0:
         if mo_has(l, t, k0):
@@ -686,6 +693,14 @@ func macho_link(l &: Nl, out: str):
         t.d_end = t.d_start + t.page
     end
     t.le_off = align_to(t.d_fend, t.page)
+    if l.dg_name.len() > 0:
+        t.dw_off = t.le_off
+        repeat l.dg_name.len() in dk:
+            t.dw_size = t.dw_size + l.dg_size[dk]
+        end
+        t.dw_vm = align_to(t.dw_size, t.page)
+        t.le_off = align_to(t.dw_off + t.dw_size, t.page)
+    end
     total := t.le_off
     buf := malloc(total as u64) as u8*
     l.out_ptr = buf as i64
@@ -708,6 +723,12 @@ func macho_link(l &: Nl, out: str):
         ret
     end
     mo_got_fill(l, t, buf)
+    if l.dg_name.len() > 0:
+        dbg_build_mo(l)
+        repeat l.dg_bytes.len() in dq:
+            buf[t.dw_off + (dq as i64)] = l.dg_bytes[dq]
+        end
+    end
     ent := glob_find(l, "_main")
     if ent < 0 or l.g_state[ent] != SY_DEF:
         nl_fail(l, "cannot link: no '_main' function")
@@ -1224,7 +1245,15 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     if mo_has(l, t, MO_BSS):
         mo_sect(h, "__bss", "__DATA", t.addr[MO_BSS], t.size[MO_BSS], 0 as i64, t.align[MO_BSS], 1 as i64, 0, 0)
     end
-    mo_seg(h, "__LINKEDIT", t.base + t.d_end, align_to(le_size, t.page), t.le_off, le_size, 1, 0, 0)
+    if l.dg_name.len() > 0:
+        mo_seg(h, "__DWARF", t.base + t.d_end, t.dw_vm, t.dw_off, t.dw_size, 1, l.dg_name.len(), 0)
+        ncmd += 1
+        repeat l.dg_name.len() in dk2:
+            nm := name_of(l, l.dg_name[dk2])
+            mo_sect(h, str.Substr(nm, 8, str.Len(nm) - 8), "__DWARF", t.base + t.d_end + l.dg_base[dk2], l.dg_size[dk2], t.dw_off + l.dg_base[dk2], 1 as i64, 0x02000000 as i64, 0, 0)
+        end
+    end
+    mo_seg(h, "__LINKEDIT", t.base + t.d_end + t.dw_vm, align_to(le_size, t.page), t.le_off, le_size, 1, 0, 0)
     ncmd += 1
     tb_le(h, 0x80000022 as i64, 4)
     tb_le(h, 48 as i64, 4)

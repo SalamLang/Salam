@@ -120,6 +120,12 @@ check("code that does not compile is sent back and fixed", fixedText.startsWith(
 const snippet = await (await chat(key, { model: "salam", messages: [{ role: "user", content: "snippet code please" }] })).json();
 check("a fragment with only unknown names is not sent back", (snippet.choices?.[0]?.message?.content ?? "").startsWith("Use:"), snippet);
 
+console.log("engine restarted mid answer");
+const tr0 = Date.now();
+const restarted = await chat(key, { model: "salam", messages: [{ role: "user", content: "restarted mid answer" }] });
+const restartedJson = await restarted.json();
+check("a turn the engine lost mid answer ends soon with what was written", Date.now() - tr0 < 75000 && (restartedJson.choices?.[0]?.message?.content ?? "").includes("partial words before the restart"), `${Date.now() - tr0} ms ${JSON.stringify(restartedJson).slice(0, 200)}`);
+
 console.log("engine never starts");
 const t0 = Date.now();
 const never = await chat(key, { model: "salam", messages: [{ role: "user", content: "never start" }] });

@@ -124,7 +124,7 @@ http.createServer((req, res) => {
     if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", system: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
       const busy = {};
-      for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
+      for (const [id, s] of sessions) if (!s.dead && !s.prompt?.includes("restarted mid answer") && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
     if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.memory = /<user_memory>([\s\S]*?)<\/user_memory>/.exec(b.parts[0].text)?.[1] ?? ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, "").replace(/\n\n<user_memory>[\s\S]*?<\/user_memory>/, ""); s.project = /<project_instructions file="AGENTS.md">\nUse tabs/.test(s.prompt) && s.prompt.includes("<project_memory>\n# Salam Agent memory"); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>") || s.prompt.includes("<cloud_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
@@ -140,6 +140,12 @@ http.createServer((req, res) => {
         ]);
       }
       const full = answerFor(s);
+      if (s.prompt.includes("restarted mid answer")) {
+        return send(200, [
+          { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
+          { info: { role: "assistant", time: { created: s.start }, cost: 0, tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [{ type: "text", text: "partial words before the restart" }] },
+        ]);
+      }
       if (s.prompt.includes("goes quiet")) {
         return send(200, [
           { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },

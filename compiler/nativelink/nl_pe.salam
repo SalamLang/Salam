@@ -364,7 +364,7 @@ func pe_place(l &: Nl, t &: Pe):
                 pos = align_to(pos, l.s_align[s])
                 l.s_addr[s] = l.pe_base + pos
                 t.it_addr[i] = pos
-                pos = pos + l.s_size[s]
+                pos = pos + l.s_size[s] + th_pad(l, s)
             else kind == IT_BYTES:
                 t.it_addr[i] = pos
                 pos = pos + (t.it_val[i] & (0xFFFFFFFF as i64))
@@ -449,7 +449,11 @@ func pe_relocs(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
             os := l.r_sym[r]
             place := place0 + l.r_off[r]
             pva := l.pe_base + t.it_addr[i] + l.r_off[r]
-            sv := pe_sym(l, os)
+            mut sv := pe_sym(l, os)
+            if l.th_sec.len() > 0 and l.th_of_rel.has(r):
+                sv = th_addr(l, l.th_of_rel.get(r))
+                wr32(buf, place, rd32(buf, place) & (0xFC000000 as i64))
+            end
             if ty == 1:
                 wr64(buf, place, sv + rd64(buf, place))
                 t.breloc.push(pva - l.pe_base)
@@ -636,6 +640,13 @@ func pe_link(l &: Nl, out: str):
     end
     pe_sort(t)
     pe_place(l, t)
+    until l.ok and pe_th_plan(l, t):
+        t.ps_va.clear()
+        t.ps_vsize.clear()
+        t.ps_raw.clear()
+        t.ps_rawsize.clear()
+        pe_place(l, t)
+    end
     mut ent := glob_find(l, "mainCRTStartup")
     if l.mach == EM_386:
         ent = glob_find(l, "_mainCRTStartup")
@@ -673,6 +684,9 @@ func pe_link(l &: Nl, out: str):
                 repeat l.s_size[s2] in b:
                     buf[dst + b] = p[l.s_off[s2] + b]
                 end
+            end
+            if l.th_count.has(s2):
+                pe_th_write(l, buf, s2, dst)
             end
         else t.it_kind[i] == IT_BYTES:
             at := t.it_val[i] >> (32 as i64)

@@ -597,28 +597,38 @@ func build_eh_frame(g &: Ng):
     if g.eh_sym.len() == 0:
         ret
     end
+    df := g.os == NG_OS_WINDOWS
+    al8 := df ? 4 : 8
     eh_le(g, 0 as i64, 4)
-    eh_le(g, 0 as i64, 4)
+    eh_le(g, df ? (0xFFFFFFFF as i64) : (0 as i64), 4)
     eh_u8(g, 1)
-    eh_u8(g, 0x7A)
-    eh_u8(g, 0x52)
+    if not df:
+        eh_u8(g, 0x7A)
+        eh_u8(g, 0x52)
+    end
     eh_u8(g, 0)
     x32 := g.arch == NG_ARCH_X86
     ws := x32 ? 4 : 8
     eh_uleb(g, 1)
     eh_u8(g, x32 ? 0x7C : 0x78)
     eh_uleb(g, x32 ? 8 : 16)
-    eh_uleb(g, 1)
-    eh_u8(g, 0x1B)
+    if not df:
+        eh_uleb(g, 1)
+        eh_u8(g, 0x1B)
+    end
     eh_u8(g, 0x0C)
     eh_uleb(g, x32 ? 4 : 7)
     eh_uleb(g, ws)
     eh_u8(g, x32 ? 0x88 : 0x90)
     eh_uleb(g, 1)
-    until (g.s_eh.len() % 8) != 0:
+    until (g.s_eh.len() % al8) != 0:
         eh_u8(g, 0)
     end
     eh_put32(g, 0, g.s_eh.len() - 4)
+    mut cie := 0 - 1
+    if df:
+        cie = dbg_local_sym(g, ".Lsalam.dframe0", SEC_EHFRAME)
+    end
     repeat g.eh_sym.len() in f:
         fs := g.eh_sym[f]
         if g.sy_live.len() > 0 and (fs >= g.sy_live.len() or not g.sy_live[fs]):
@@ -629,11 +639,19 @@ func build_eh_frame(g &: Ng):
         end
         start := g.s_eh.len()
         eh_le(g, 0 as i64, 4)
-        eh_le(g, (start + 4) as i64, 4)
-        add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_PC32, 0 as i64)
-        eh_le(g, 0 as i64, 4)
-        eh_le(g, g.sy_size[fs] as i64, 4)
-        eh_uleb(g, 0)
+        if df:
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), cie, R_ABS32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_ABS32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            eh_le(g, g.sy_size[fs] as i64, 4)
+        else:
+            eh_le(g, (start + 4) as i64, 4)
+            add_reloc(g, SEC_EHFRAME, g.s_eh.len(), fs, R_PC32, 0 as i64)
+            eh_le(g, 0 as i64, 4)
+            eh_le(g, g.sy_size[fs] as i64, 4)
+            eh_uleb(g, 0)
+        end
         mut loc := 0
         mut at := g.eh_pre[f]
         nr := g.eh_rn[f]
@@ -673,7 +691,7 @@ func build_eh_frame(g &: Ng):
             eh_advance(g, loc, p)
             eh_u8(g, 0x0B)
         end
-        until (g.s_eh.len() % 8) != 0:
+        until (g.s_eh.len() % al8) != 0:
             eh_u8(g, 0)
         end
         eh_put32(g, start, g.s_eh.len() - start - 4)

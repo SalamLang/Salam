@@ -270,8 +270,9 @@ The assistant and the desktop agent build software in Salam. The rule lives in
 assistant out of it:
 
 - Every turn (web chat, site guest, desktop agent, API) sends the Salam policy
-  to the engine as the turn's `system` text, separate from the user's message,
-  and the user's message ends with a short reminder of it.
+  to the engine as the turn's `system` text, separate from the user's message.
+  Nothing is appended to the user's message, so the API request log never shows
+  the policy.
 - Text from users and from API callers cannot open or close the service's own
   blocks (`<caller_instructions>`, `<desktop_session>`, `<salam_policy>` and the
   rest): their `<` is escaped before the prompt is built. An API caller's system

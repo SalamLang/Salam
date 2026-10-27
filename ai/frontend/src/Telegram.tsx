@@ -333,6 +333,9 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
   return (
     <ConnCard id={`connect-${item.provider}`} icon={info.icon} title={info.name} on={item.connected} label={item.connected ? t("وصل است", "Connected") : t("وصل نیست", "Not connected")} highlight={highlight}>
       <p className="conn-about">{info.about}</p>
+      {item.connected && item.expired && (
+        <p className="policy-warn">{t(`${info.name} این اتصال را رد می‌کند، یعنی توکن لغو یا منقضی شده است. دوباره وصلش کنید تا دستیار به حساب شما دسترسی داشته باشد.`, `${info.name} rejects this connection: the token was revoked or has expired. Connect it again so the assistant can use your account.`)}</p>
+      )}
       {item.connected && (
         <ul className="conn-accounts">
           <Account name={item.login} note={item.scope && item.scope !== "token" ? item.scope : undefined} since={item.created} busy={busy === "remove"} onRemove={remove} />

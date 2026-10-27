@@ -12,7 +12,7 @@ DURATION="${DURATION:-10}"
 WARMUP="${WARMUP:-3}"
 CONNS="${CONNS:-64}"
 THREADS="${THREADS:-2}"
-SERVERS="${SERVERS:-salam nginx apache node php go}"
+SERVERS="${SERVERS:-salam nginx apache node php go fiber gin echo}"
 ROUTES="${ROUTES:-plaintext json cached file users search compute headers static home echo}"
 
 SALAM_PORT=8099
@@ -21,6 +21,9 @@ PHP_PORT=8101
 NODE_PORT=8102
 APACHE_PORT=8103
 GO_PORT=8104
+FIBER_PORT=8105
+GIN_PORT=8106
+ECHO_PORT=8107
 
 NPROC="$(nproc)"
 SERVER_CORES="$((NPROC > 2 ? NPROC - THREADS : 1))"
@@ -62,6 +65,15 @@ build_go() {
     if [ ! -x "$RUNDIR/httpbench-go" ] || [ "$HERE/go/main.go" -nt "$RUNDIR/httpbench-go" ]; then
         say "building httpbench-go"
         (cd "$HERE/go" && go build -o "$RUNDIR/httpbench-go" .) || exit 1
+    fi
+}
+
+build_go_framework() {
+    name="$1" # fiber, gin or echo
+    bin="$RUNDIR/httpbench-$name"
+    if [ ! -x "$bin" ] || [ "$HERE/$name/main.go" -nt "$bin" ]; then
+        say "building httpbench-$name"
+        (cd "$HERE/$name" && go build -o "$bin" .) || exit 1
     fi
 }
 
@@ -148,6 +160,9 @@ stop_server() {
     pkill -f "bench/node/server.js" 2>/dev/null
     pkill -f "php -S 127.0.0.1:$PHP_PORT" 2>/dev/null
     pkill -f "$RUNDIR/httpbench-go" 2>/dev/null
+    pkill -f "$RUNDIR/httpbench-fiber" 2>/dev/null
+    pkill -f "$RUNDIR/httpbench-gin" 2>/dev/null
+    pkill -f "$RUNDIR/httpbench-echo" 2>/dev/null
     SERVER_PID=""
     sleep 0.4
 }
@@ -234,6 +249,18 @@ start_go() {
     wait_up "$GO_PORT"
 }
 
+start_go_framework() {
+    name="$1" port="$2"
+    HTTPBENCH_ASSETS="$ASSETS" PORT="$port" \
+        taskset -c "$SERVER_CPUS" "$RUNDIR/httpbench-$name" >"$RUNDIR/$name.log" 2>&1 &
+    SERVER_PID=$!
+    wait_up "$port"
+}
+
+start_fiber() { start_go_framework fiber "$FIBER_PORT"; }
+start_gin() { start_go_framework gin "$GIN_PORT"; }
+start_echo() { start_go_framework echo "$ECHO_PORT"; }
+
 start_server() {
     case "$1" in
     salam) start_salam ;;
@@ -242,6 +269,9 @@ start_server() {
     node) start_node ;;
     php) start_php ;;
     go) start_go ;;
+    fiber) start_fiber ;;
+    gin) start_gin ;;
+    echo) start_echo ;;
     *) return 1 ;;
     esac
 }
@@ -265,6 +295,9 @@ port_of() {
     php) echo "$PHP_PORT" ;;
     node) echo "$NODE_PORT" ;;
     go) echo "$GO_PORT" ;;
+    fiber) echo "$FIBER_PORT" ;;
+    gin) echo "$GIN_PORT" ;;
+    echo) echo "$ECHO_PORT" ;;
     esac
 }
 
@@ -350,6 +383,9 @@ measure() {
 build_loadgen
 build_salam
 build_go
+build_go_framework fiber
+build_go_framework gin
+build_go_framework echo
 ensure_assets
 
 say "machine: $NPROC cores; servers on cpu $SERVER_CPUS, generator on cpu $GEN_CPUS ($THREADS threads)"

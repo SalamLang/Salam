@@ -58,7 +58,8 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
         d="$work/$triple.$lk"
         mkdir -p "$d"
         if ! (cd "$d" && SALAM_LINKER=$lk "$SALAM" build ../wd.salam --backend=native --target="$triple" --output=plain.exe --log-level=error >log 2>&1); then
-            echo "SKIP $tag (native build failed)"
+            bad "$tag (native build failed)"
+            sed -n 1,5p "$d/log"
             continue
         fi
         if ! (cd "$d" && SALAM_LINKER=$lk "$SALAM" build ../wd.salam --backend=native -g --target="$triple" --output=dbg.exe --log-level=error >>log 2>&1); then
@@ -110,4 +111,4 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
     done
 done
 echo "native windows debug check: $pass ok, $fail failed"
-[ "$fail" -eq 0 ]
+[ "$fail" -eq 0 ] && [ "$pass" -eq 4 ]

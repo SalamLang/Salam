@@ -164,7 +164,7 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
   `figma_export` renders nodes and saves them into the sandbox. Figma OAuth tokens
   are refreshed on use.
 - The sandbox shell is signed in for the user: when GitHub is connected, `GH_TOKEN`,
-  `GITHUB_TOKEN` and a git credential helper for github.com are set, and for Figma
+  `GITHUB_TOKEN` and a Git credential helper for github.com are set, and for Figma
   `FIGMA_TOKEN` and `FIGMA_AUTH_HEADER`. Tokens are scrubbed from command output.
 - Saved tokens are checked against the provider (cached for five minutes). A revoked
   one is reported as `expired` by `GET /integrations`, shown on the Connections page and

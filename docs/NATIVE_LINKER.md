@@ -574,7 +574,13 @@ symbols become section-relative, and section-relative relocations get a
 synthetic symbol per section. It pairs `SUBTRACTOR` with the following
 `UNSIGNED`, applies arm64 `ADDEND` to the next relocation, and reads
 x86_64's embedded addends including the `SIGNED_1/2/4` bias.
-`__compact_unwind` and `__DWARF` are dropped.
+`__compact_unwind` is dropped; `__eh_frame` is kept and relocated. The
+`__DWARF` sections of the first object that has `__debug_info` go into a
+`__DWARF` segment between `__DATA` and `__LINKEDIT`, with their address
+relocations applied. Only one object's DWARF is kept, because Mach-O objects
+carry no relocations for the offsets between their debug sections, so two
+objects' sections cannot be concatenated. The executable has no
+`__unwind_info`; unwinders fall back to `__eh_frame`.
 
 The output is a PIE `MH_EXECUTE`:
 

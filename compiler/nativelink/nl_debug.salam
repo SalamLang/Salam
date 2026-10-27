@@ -169,3 +169,71 @@ func dbg_layout_pe(l &: Nl, va0: i64, raw0: i64): i64:
     l.pe_strpos = raw
     ret va
 end
+
+func dbg_collect_mo(l &: Nl):
+    mut obj := 0 - 1
+    repeat l.s_obj.len() in s:
+        l.s_dbg.push(0 - 1)
+        if obj < 0 and l.s_off[s] > (0 as i64) and name_is(l, l.s_name[s], "__DWARF,__debug_info"):
+            obj = l.s_obj[s]
+        end
+    end
+    if obj < 0:
+        ret
+    end
+    repeat l.s_obj.len() in s2:
+        if l.s_obj[s2] != obj or l.s_off[s2] <= (0 as i64) or not name_starts(l, l.s_name[s2], "__DWARF,__debug_"):
+            continue
+        end
+        k := dbg_out_index(l, l.s_name[s2])
+        off := align_to(l.dg_size[k], l.s_align[s2])
+        l.s_addr[s2] = off
+        l.s_dbg[s2] = k
+        l.dg_size[k] = off + l.s_size[s2]
+    end
+end
+
+func dbg_build_mo(l &: Nl):
+    mut total := 0 as i64
+    repeat l.dg_name.len() in k:
+        l.dg_base[k] = total
+        total = total + l.dg_size[k]
+    end
+    repeat total:
+        l.dg_bytes.push(0 as u8)
+    end
+    buf := l.dg_bytes.data
+    repeat l.s_obj.len() in s:
+        k2 := l.s_dbg[s]
+        if k2 < 0:
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        dst := l.dg_base[k2] + l.s_addr[s]
+        repeat l.s_size[s] in q:
+            buf[dst + q] = p[l.s_off[s] + q]
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in j:
+            r := r0 + j
+            if mo_rtype(l.r_type[r]) != 0:
+                continue
+            end
+            os := l.r_sym[r]
+            t := sym_sec(l, os)
+            if t >= 0 and not l.s_live[t]:
+                continue
+            end
+            mut v := mo_sym(l, os) + l.r_add[r]
+            if l.r_sub[r] >= 0:
+                v = v - mo_sym(l, l.r_sub[r])
+            end
+            place := dst + l.r_off[r]
+            if mo_rlen(l.r_type[r]) == 3:
+                wr64(buf, place, v)
+            else:
+                wr32(buf, place, v)
+            end
+        end
+    end
+end

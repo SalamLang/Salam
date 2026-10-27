@@ -36,8 +36,9 @@ stubs), data that lives in another image is loaded through
 `X86_64_RELOC_SIGNED` with the addend stored in the instruction, and every
 relocation names its symbol (local ones included), as x86-64 Mach-O expects.
 Read-only data that holds pointers goes to `__DATA,__const`, constructors to
-`__mod_init_func`. The object carries no unwind tables or DWARF yet, so `-g`
-adds nothing on macOS.
+`__mod_init_func`. Functions get `__eh_frame` entries, as on Linux, with
+each FDE's start written as a `SUBTRACTOR`/`UNSIGNED` pair, and `-g` adds the
+DWARF sections under `__DWARF` (see "Debug information").
 
 ## AArch64
 
@@ -744,6 +745,14 @@ How the pieces fit:
 <runner>` checks that on each target. Windows x64 and Windows on Arm images
   carry the same DWARF in PE sections (offsets as `SECREL`); 32-bit Windows
   objects get no debug sections.
+- Mach-O objects carry the same DWARF under `__DWARF`. Offsets between
+  debug sections are written into the object resolved, since Mach-O linkers
+  do not relocate them, and code addresses are section-relative `UNSIGNED`
+  relocations. The built-in linker keeps the sections in a `__DWARF` segment
+  of the executable, where lldb reads them directly, the way Go programs
+  carry theirs; with `--linker=system` they stay in the object as usual.
+  `tools/bash/native-lldb-check.sh` builds a program on any host and debugs
+  it under lldb on a Mac.
 - Each function's first line row after its opening line carries
   `DW_LNS_set_prologue_end`, so `break func` stops after the arguments have
   been loaded into registers. gdb only trusts its own prologue analysis for

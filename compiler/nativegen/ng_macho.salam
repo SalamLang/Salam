@@ -13,6 +13,16 @@ func mo_secs(g &: Ng): Vector<int>:
             v.push(s)
         end
     end
+    if g.s_eh.len() > 0:
+        v.push(SEC_EHFRAME)
+    end
+    if g.s_dinfo.len() > 0:
+        each d in [SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC]:
+            if sec_bytes(g, d).len() > 0:
+                v.push(d)
+            end
+        end
+    end
     if g.bss_size > 0:
         v.push(SEC_BSS)
     end
@@ -28,8 +38,15 @@ func mo_has_relocs(g &: Ng, sec: int): bool:
     ret false
 end
 
+func mo_is_dbg(sec: int): bool:
+    ret sec == SEC_DBGINFO or sec == SEC_DBGABBREV or sec == SEC_DBGLINE or sec == SEC_DBGRANGES or sec == SEC_DBGLOC
+end
+
 func mo_seg_name(g &: Ng, sec: int): str:
-    if sec == SEC_TEXT or sec == SEC_CONST:
+    if mo_is_dbg(sec):
+        ret "__DWARF"
+    end
+    if sec == SEC_TEXT or sec == SEC_CONST or sec == SEC_EHFRAME:
         ret "__TEXT"
     end
     if sec == SEC_RODATA:
@@ -47,6 +64,12 @@ func mo_sec_name(sec: int): str:
         SEC_BSS: ret "__bss" end
         SEC_INIT: ret "__mod_init_func" end
         SEC_FINI: ret "__mod_term_func" end
+        SEC_EHFRAME: ret "__eh_frame" end
+        SEC_DBGINFO: ret "__debug_info" end
+        SEC_DBGABBREV: ret "__debug_abbrev" end
+        SEC_DBGLINE: ret "__debug_line" end
+        SEC_DBGRANGES: ret "__debug_ranges" end
+        SEC_DBGLOC: ret "__debug_loc" end
     end
     ret "__data"
 end
@@ -57,6 +80,8 @@ func mo_sec_flags(sec: int): i64:
         SEC_BSS: ret 1 end
         SEC_INIT: ret 9 end
         SEC_FINI: ret 10 end
+        SEC_EHFRAME: ret 0x6800000B end
+        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC: ret 0x02000000 end
     end
     ret 0
 end
@@ -103,7 +128,21 @@ func mo_rtype(t: int): int:
     ret MO_RELOC_UNSIGNED
 end
 
+func mo_eh_sym(g &: Ng): int:
+    if g.s_eh.len() == 0:
+        ret 0 - 1
+    end
+    s := sym_named(g, "salam_eh_frame")
+    g.sy_kind[s] = SY_DATA
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    g.sy_sec[s] = SEC_EHFRAME
+    g.sy_off[s] = 0
+    ret s
+end
+
 func write_macho(g &: Ng, path: str): bool:
+    eh0 := mo_eh_sym(g)
     secs := mo_secs(g)
     ns := secs.len()
     mut ord := Vector {} as Vector<int>
@@ -121,7 +160,7 @@ func write_macho(g &: Ng, path: str): bool:
         mut al := g.sec_align[s]
         if s == SEC_TEXT:
             al = al < 16 ? 16 : al
-        else s == SEC_INIT or s == SEC_FINI:
+        else s == SEC_INIT or s == SEC_FINI or s == SEC_EHFRAME:
             al = 8
         end
         if al < 1:
@@ -154,7 +193,7 @@ func write_macho(g &: Ng, path: str): bool:
                 continue
             end
             def := g.sy_def[s]
-            if def and (g.sy_sec[s] < 0 or g.sy_sec[s] >= SEC_COUNT or ord[g.sy_sec[s]] == 0):
+            if def and (g.sy_sec[s] < 0 or g.sy_sec[s] >= SEC_COUNT or ord[g.sy_sec[s]] == 0 or mo_is_dbg(g.sy_sec[s])):
                 continue
             end
             mut cls := 2
@@ -200,11 +239,40 @@ func write_macho(g &: Ng, path: str): bool:
                 continue
             end
             sy := g.r_sym[ri]
+            rt := g.r_type[ri]
+            off := g.r_off[ri]
+            if mo_is_dbg(s2) and rt == R_ABS32 and sy >= 0 and sy < nsym and g.sy_def[sy] and mo_is_dbg(g.sy_sec[sy]):
+                v1 := (g.sy_off[sy] as i64) + g.r_add[ri]
+                repeat 4 in k1:
+                    b[off + k1] = ((v1 >> ((8 * k1) as i64)) & (255 as i64)) as u8
+                end
+                continue
+            end
+            if mo_is_dbg(s2) and rt == R_ABS64 and sy >= 0 and sy < nsym and g.sy_def[sy] and g.sy_sec[sy] >= 0 and g.sy_sec[sy] < SEC_COUNT and ord[g.sy_sec[sy]] > 0:
+                o3 := ord[g.sy_sec[sy]]
+                v5 := ((addr[o3 - 1] + g.sy_off[sy]) as i64) + g.r_add[ri]
+                repeat 8 in k5:
+                    b[off + k5] = ((v5 >> ((8 * k5) as i64)) & (255 as i64)) as u8
+                end
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (o3 as i64) | ((3 as i64) << (25 as i64)), 4)
+                continue
+            end
             if sy < 0 or sy >= nsym or mo_idx[sy] < 0:
                 continue
             end
-            rt := g.r_type[ri]
-            off := g.r_off[ri]
+            if s2 == SEC_EHFRAME:
+                v0 := g.r_add[ri] - (off as i64)
+                repeat 4 in k0:
+                    b[off + k0] = ((v0 >> ((8 * k0) as i64)) & (255 as i64)) as u8
+                end
+                sub_t := g.arch == NG_ARCH_A64 ? 1 : 5
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (mo_idx[eh0] as i64) | ((2 as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)) | ((sub_t as i64) << (28 as i64)), 4)
+                ob_le(ro, off as i64, 4)
+                ob_le(ro, (mo_idx[sy] as i64) | ((2 as i64) << (25 as i64)) | ((1 as i64) << (27 as i64)), 4)
+                continue
+            end
             mut len := 2
             mut pcrel := 1
             if g.arch == NG_ARCH_A64 and rt != R_ABS64 and rt != R_ABS32:

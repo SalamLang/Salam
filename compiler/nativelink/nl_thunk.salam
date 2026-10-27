@@ -196,3 +196,48 @@ func pe_th_write(l &: Nl, buf: u8*, s: int, dst: i64):
         wr32(buf, at + (12 as i64), 0)
     end
 end
+
+func mo_branch_target(l &: Nl, t &: Mo, os: int): i64:
+    g := mo_imported(l, os)
+    if g >= 0 and t.stub_of.has(g):
+        ret t.addr[MO_STUBS] + mo_stub_size(l) * (t.stub_of.get(g) as i64)
+    end
+    ret mo_sym(l, os)
+end
+
+func mo_th_plan(l &: Nl, t &: Mo): bool:
+    if l.mach != EM_AARCH64:
+        ret false
+    end
+    before := l.th_sec.len()
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] != MO_TEXT or l.s_type[s] == 8:
+            continue
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            r := r0 + k
+            if mo_rtype(l.r_type[r]) != 2 or l.th_of_rel.has(r):
+                continue
+            end
+            pc := l.s_addr[s] + l.r_off[r]
+            if not th_in_range(mo_branch_target(l, t, l.r_sym[r]) + l.r_add[r] - pc, 28):
+                th_add(l, s, r, TH_A64, l.r_add[r])
+            end
+        end
+    end
+    ret l.th_sec.len() > before
+end
+
+func mo_th_write(l &: Nl, t &: Mo, buf: u8*):
+    repeat l.th_sec.len() in id:
+        pc := l.s_addr[l.th_sec[id]] + l.th_at[id]
+        at := pc - t.base
+        tg := mo_branch_target(l, t, l.th_os[id]) + l.th_add[id]
+        pg := (page4k(tg) - page4k(pc)) >> (12 as i64)
+        wr32(buf, at, (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+        wr32(buf, at + (4 as i64), (0x91000210 as i64) | ((tg & (0xFFF as i64)) << (10 as i64)))
+        wr32(buf, at + (8 as i64), 0xD61F0200 as i64)
+        wr32(buf, at + (12 as i64), 0)
+    end
+end

@@ -3,9 +3,12 @@
 # Thumb B.W to an ARM function, and ARM, Thumb and AArch64 branches past their
 # reach. Each case is a small assembly file, linked by compiler/nativelink and
 # run under the emulator; it exits with a known status only if every branch
-# landed. An ARM64 PE branch past 128 MB is linked too (it cannot run here).
+# landed. An ARM64 PE branch past 128 MB is linked too (it cannot run here),
+# and so is an arm64 Mach-O image with a far call and a far stub; for that
+# one each bl is followed through its thunk and must reach its target.
 #
-# Needs clang for the assembly. The far cases write images of 20 to 130 MB.
+# Needs clang for the assembly and python3 for the Mach-O case. The far cases
+# write images of 20 to 130 MB.
 #
 # Usage: tools/bash/native-thunk-check.sh <salam> <arm|aarch64> <runner>
 #   e.g. tools/bash/native-thunk-check.sh ./salam arm qemu-arm-static
@@ -139,6 +142,70 @@ mainCRTStartup:
 far:
     ret
 EOF
+cat >macfar.s <<'EOF'
+.text
+.globl _main
+_main:
+    stp x29, x30, [sp, #-16]!
+    bl _far
+    bl _puts
+    ldp x29, x30, [sp], #16
+    ret
+.section __TEXT,__far,regular,pure_instructions
+    .space 130*1024*1024
+.globl _far
+_far:
+    mov x0, #47
+    ret
+EOF
+cat >macfar.py <<'EOF'
+import struct
+import sys
+
+b = open(sys.argv[1], "rb").read()
+base = 0x100000000
+ncmds = struct.unpack_from("<I", b, 16)[0]
+at = 32
+syms = {}
+stubs = None
+for _ in range(ncmds):
+    cmd, size = struct.unpack_from("<II", b, at)
+    if cmd == 0x19:
+        nsect = struct.unpack_from("<I", b, at + 64)[0]
+        for k in range(nsect):
+            sh = at + 72 + 80 * k
+            if b[sh : sh + 7] == b"__stubs":
+                stubs = struct.unpack_from("<Q", b, sh + 32)[0]
+    if cmd == 0x2:
+        symoff, nsyms, stroff = struct.unpack_from("<III", b, at + 8)
+        for k in range(nsyms):
+            strx, _t, _s, _d, val = struct.unpack_from("<IBBHQ", b, symoff + 16 * k)
+            name = b[stroff + strx : b.index(b"\0", stroff + strx)].decode()
+            syms[name] = val
+    at += size
+
+
+def word(a):
+    return struct.unpack_from("<I", b, a - base)[0]
+
+
+def sx(v, n):
+    return v - (1 << n) if (v >> (n - 1)) & 1 else v
+
+
+def follow(a):
+    i = word(a)
+    assert i >> 26 == 0x25, hex(i)
+    t = a + sx(i & 0x3FFFFFF, 26) * 4
+    i1, i2, i3 = word(t), word(t + 4), word(t + 8)
+    assert i1 & 0x9F00001F == 0x90000010 and i2 & 0xFFC003FF == 0x91000210 and i3 == 0xD61F0200
+    pg = ((i1 >> 29) & 3) | (((i1 >> 5) & 0x7FFFF) << 2)
+    return (t & ~0xFFF) + sx(pg, 21) * 4096 + ((i2 >> 10) & 0xFFF)
+
+
+m = syms["_main"]
+sys.exit(0 if follow(m + 4) == syms["_far"] and follow(m + 8) == stubs else 1)
+EOF
 
 ok=0
 bad=0
@@ -180,6 +247,12 @@ aarch64)
         ok=$((ok + 1))
     else
         echo "FAIL pefar"
+        bad=$((bad + 1))
+    fi
+    if clang --target=arm64-apple-macos11 -c macfar.s -o macfar.o && ./link elf macfar.out macfar.o && python3 macfar.py macfar.out; then
+        ok=$((ok + 1))
+    else
+        echo "FAIL macfar"
         bad=$((bad + 1))
     fi
     ;;

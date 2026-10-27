@@ -5,7 +5,10 @@
 # lldb stops on a function and on source lines, prints arguments and locals
 # (a struct split into pieces, a float argument, register locals, constants
 # left after folding a loop), and walks the stack from the panic handler back
-# through an inlined std function to main.
+# through an inlined std function to main. The x86-64 program is checked
+# without running it, since lldb hangs on it under Rosetta: its breakpoints
+# must resolve to the right lines, the loop's folded locals must have
+# constant locations there, and the image must carry __eh_frame.
 #
 # Usage: tools/bash/native-lldb-check.sh build <salam> <dir>
 #        tools/bash/native-lldb-check.sh run <dir>
@@ -77,31 +80,49 @@ check() {
         fail=$((fail + 1))
     fi
 }
-arches=arm64
-if arch -x86_64 /usr/bin/true 2>/dev/null; then
-    arches="arm64 x86_64"
+lim() {
+    perl -e 'alarm shift; exec @ARGV' "$@"
+}
+out="$DIR/lldb_arm64.txt"
+chmod +x "$DIR/dg_arm64"
+(cd "$DIR" && lim 300 lldb --batch --no-lldbinit \
+    -o "breakpoint set -n salam_area_Pt_f64" -o "breakpoint set -f dg.salam -l 9" \
+    -o "breakpoint set -f dg.salam -l 21" -o "breakpoint set -n salam_panic" \
+    -o run -o "frame variable" -o continue -o "frame variable" -o continue -o "frame variable" \
+    -o continue -o "thread backtrace" -o kill -- "$DIR/dg_arm64" >"$out" 2>&1)
+check "$out" "x = 3" "arm64 struct pieces"
+check "$out" "y = 4" "arm64 struct pieces"
+check "$out" "scale = 1.5" "arm64 float argument"
+check "$out" "w = 6" "arm64 register local"
+check "$out" "h = 5" "arm64 register local"
+check "$out" "s = 60" "arm64 folded loop"
+check "$out" "k = 8" "arm64 folded loop"
+check "$out" "\`boom(v=" "arm64 backtrace through the inlined frame"
+check "$out" "\`main at dg.salam" "arm64 backtrace reaches main"
+if [ "$fail" -gt 0 ]; then
+    cat "$out"
 fi
-for a in $arches; do
-    exe="$DIR/dg_$a"
-    chmod +x "$exe"
-    out="$DIR/lldb_$a.txt"
-    (cd "$DIR" && lldb --batch --no-lldbinit \
-        -o "breakpoint set -n salam_area_Pt_f64" -o "breakpoint set -f dg.salam -l 9" \
-        -o "breakpoint set -f dg.salam -l 21" -o "breakpoint set -n salam_panic" \
-        -o run -o "frame variable" -o continue -o "frame variable" -o continue -o "frame variable" \
-        -o continue -o "thread backtrace" -o kill -- "$exe" >"$out" 2>&1)
-    check "$out" "x = 3" "$a struct pieces"
-    check "$out" "y = 4" "$a struct pieces"
-    check "$out" "scale = 1.5" "$a float argument"
-    check "$out" "w = 6" "$a register local"
-    check "$out" "h = 5" "$a register local"
-    check "$out" "s = 60" "$a folded loop"
-    check "$out" "k = 8" "$a folded loop"
-    check "$out" "salam_boom" "$a backtrace through the inlined frame"
-    check "$out" "main" "$a backtrace reaches main"
-    if [ "$fail" -gt 0 ]; then
-        cat "$out"
+f0=$fail
+xo="$DIR/lldb_x86_64.txt"
+(cd "$DIR" && lim 120 lldb --batch --no-lldbinit \
+    -o "breakpoint set -n salam_area_Pt_f64" -o "breakpoint set -f dg.salam -l 21" \
+    -o "image dump sections dg_x86_64" -- "$DIR/dg_x86_64" >"$xo" 2>&1)
+check "$xo" "\`area + " "x86_64 function breakpoint"
+check "$xo" "__TEXT.__eh_frame" "x86_64 unwind table"
+at=$(sed -n 's/.*`walk + [0-9]* at dg.salam:21, address = \(0x[0-9a-f]*\).*/\1/p' "$xo")
+if [ -z "$at" ]; then
+    echo "FAIL x86_64 line breakpoint: dg.salam:21 does not resolve into walk"
+    fail=$((fail + 1))
+else
+    (cd "$DIR" && lim 120 lldb --batch --no-lldbinit -o "image lookup -v -a $at" -- "$DIR/dg_x86_64" >>"$xo" 2>&1)
+    check "$xo" 'name = "s", type = "i32"' "x86_64 folded loop"
+    if ! grep -q 'name = "s".*DW_OP_consts +60' "$xo" || ! grep -q 'name = "k".*DW_OP_consts +8' "$xo"; then
+        echo "FAIL x86_64 folded loop: s and k are not 60 and 8 at dg.salam:21"
+        fail=$((fail + 1))
     fi
-done
-echo "native lldb check ($arches): $fail failed"
+fi
+if [ "$fail" -gt "$f0" ]; then
+    cat "$xo"
+fi
+echo "native lldb check: $fail failed"
 [ "$fail" -eq 0 ]

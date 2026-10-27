@@ -43,6 +43,7 @@ pub struct Mo:
     pub dw_off: i64 = 0
     pub dw_size: i64 = 0
     pub dw_vm: i64 = 0
+    pub com_g: Vector<int> = Vector {}
 end
 
 func is_macho(p: u8*, base: i64): bool:
@@ -424,7 +425,7 @@ func mo_place_class(l &: Nl, t &: Mo, k: int, pos &: i64):
         end
         l.s_addr[s] = t.base + pos
         l.s_live[s] = true
-        pos = pos + l.s_size[s]
+        pos = pos + l.s_size[s] + th_pad(l, s)
     end
     if start < (0 as i64):
         start = pos
@@ -643,6 +644,57 @@ func macho_link(l &: Nl, out: str):
         end
     end
     t.hdr = (32 as i64) + mo_ncmds_size(l, t, nsect)
+    mo_layout(l, t)
+    until l.ok and mo_th_plan(l, t):
+        mo_layout(l, t)
+    end
+    t.le_off = align_to(t.d_fend, t.page)
+    if l.dg_name.len() > 0:
+        t.dw_off = t.le_off
+        repeat l.dg_name.len() in dk:
+            t.dw_size = t.dw_size + l.dg_size[dk]
+        end
+        t.dw_vm = align_to(t.dw_size, t.page)
+        t.le_off = align_to(t.dw_off + t.dw_size, t.page)
+    end
+    total := t.le_off
+    buf := malloc(total as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat total in z:
+        buf[z] = 0 as u8
+    end
+    repeat l.s_obj.len() in s2:
+        if not l.s_live[s2] or l.s_type[s2] == 8 or l.s_off[s2] <= (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s2]])
+        dst := l.s_addr[s2] - t.base
+        repeat l.s_size[s2] in b:
+            buf[dst + b] = p[l.s_off[s2] + b]
+        end
+    end
+    mo_write_stubs(l, t, buf)
+    mo_th_write(l, t, buf)
+    mo_relocs(l, t, buf)
+    if not l.ok:
+        ret
+    end
+    mo_got_fill(l, t, buf)
+    if l.dg_name.len() > 0:
+        dbg_build_mo(l)
+        repeat l.dg_bytes.len() in dq:
+            buf[t.dw_off + (dq as i64)] = l.dg_bytes[dq]
+        end
+    end
+    ent := glob_find(l, "_main")
+    if ent < 0 or l.g_state[ent] != SY_DEF:
+        nl_fail(l, "cannot link: no '_main' function")
+        ret
+    end
+    mo_write(l, t, buf, out)
+end
+
+func mo_layout(l &: Nl, t &: Mo):
     mut pos := t.hdr
     mo_place_class(l, t, MO_TEXT, pos)
     pos = align_to(pos, 4 as i64)
@@ -677,64 +729,25 @@ func macho_link(l &: Nl, out: str):
         end
     end
     mo_place_class(l, t, MO_BSS, mem)
-    repeat l.g_name.len() in gc:
-        csz := l.g_common[gc]
-        if l.g_state[gc] == SY_UNDEF and csz > (0 as i64):
-            mem = align_to(mem, 16 as i64)
-            l.g_state[gc] = SY_ABS
-            l.g_sec[gc] = SYN_COMMON
-            l.g_val[gc] = t.base + mem
-            mem = mem + csz
+    if t.com_g.len() == 0:
+        repeat l.g_name.len() in gc:
+            if l.g_state[gc] == SY_UNDEF and l.g_common[gc] > (0 as i64):
+                l.g_state[gc] = SY_ABS
+                l.g_sec[gc] = SYN_COMMON
+                t.com_g.push(gc)
+            end
         end
+    end
+    each gc2 in t.com_g:
+        mem = align_to(mem, 16 as i64)
+        l.g_val[gc2] = t.base + mem
+        mem = mem + l.g_common[gc2]
     end
     t.size[MO_BSS] = t.base + mem - t.addr[MO_BSS]
     t.d_end = align_to(mem, t.page)
     if t.d_end == t.d_start:
         t.d_end = t.d_start + t.page
     end
-    t.le_off = align_to(t.d_fend, t.page)
-    if l.dg_name.len() > 0:
-        t.dw_off = t.le_off
-        repeat l.dg_name.len() in dk:
-            t.dw_size = t.dw_size + l.dg_size[dk]
-        end
-        t.dw_vm = align_to(t.dw_size, t.page)
-        t.le_off = align_to(t.dw_off + t.dw_size, t.page)
-    end
-    total := t.le_off
-    buf := malloc(total as u64) as u8*
-    l.out_ptr = buf as i64
-    repeat total in z:
-        buf[z] = 0 as u8
-    end
-    repeat l.s_obj.len() in s2:
-        if not l.s_live[s2] or l.s_type[s2] == 8 or l.s_off[s2] <= (0 as i64):
-            continue
-        end
-        p := fptr(l, l.o_file[l.s_obj[s2]])
-        dst := l.s_addr[s2] - t.base
-        repeat l.s_size[s2] in b:
-            buf[dst + b] = p[l.s_off[s2] + b]
-        end
-    end
-    mo_write_stubs(l, t, buf)
-    mo_relocs(l, t, buf)
-    if not l.ok:
-        ret
-    end
-    mo_got_fill(l, t, buf)
-    if l.dg_name.len() > 0:
-        dbg_build_mo(l)
-        repeat l.dg_bytes.len() in dq:
-            buf[t.dw_off + (dq as i64)] = l.dg_bytes[dq]
-        end
-    end
-    ent := glob_find(l, "_main")
-    if ent < 0 or l.g_state[ent] != SY_DEF:
-        nl_fail(l, "cannot link: no '_main' function")
-        ret
-    end
-    mo_write(l, t, buf, out)
 end
 
 func mo_has(l &: Nl, t &: Mo, k: int): bool:
@@ -878,7 +891,11 @@ func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
                 continue
             end
             mut tgt := 0 as i64
-            if mo_is_got_reloc(l, rt):
+            mut a2 := a
+            if rt == 2 and l.th_of_rel.has(r):
+                tgt = th_addr(l, l.th_of_rel.get(r))
+                a2 = 0
+            else mo_is_got_reloc(l, rt):
                 tgt = mo_got_addr(t, mo_got_key(l, os))
             else gimp >= 0:
                 if not t.stub_of.has(gimp):
@@ -894,11 +911,11 @@ func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
                 wr32(buf, f, tgt + a - (pc + ((4 + bias) as i64)))
                 continue
             end
-            x := tgt + a
+            x := tgt + a2
             if rt == 2:
                 d := x - pc
                 if not th_in_range(d, 28):
-                    nl_fail(l, "branch out of range in " + l.o_label[l.s_obj[s]] + "; Mach-O links have no branch thunks")
+                    nl_fail(l, "branch out of range in " + l.o_label[l.s_obj[s]])
                     ret
                 end
                 ins_set(buf, f, (0x3FFFFFF as i64), d >> (2 as i64))

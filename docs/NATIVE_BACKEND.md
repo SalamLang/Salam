@@ -107,9 +107,6 @@ the package on the runner and builds and runs the `llvm` tests with it
 ship it as `salam-<version>-windows-arm64.zip` (and `.tar.gz`), smoke-tested
 on a `windows-11-arm` runner before publishing.
 
-What is not there yet: the loop and SLP vectorizers are off on AArch64,
-there are no unwind tables (gdb walks the frames from the prologues), and
-
 On Linux, AArch64 and RISC-V objects carry `.eh_frame` (`ng_cfi.salam`).
 The encoders record CFI events as they write each prologue and epilogue: the
 CFA moves to the frame pointer plus 16 once the frame record is saved, every
@@ -175,7 +172,7 @@ code). On Windows it is an i386 COFF object: every symbol gets the `_`
 prefix, and a Win32 function the frontend marks `x86_stdcallcc` is named
 `_Name@N`; it pops its own arguments, so the caller subtracts `N` from
 `esp` right after the call to keep its fixed argument area in place.
-The loop vectorizer is off on these targets for now. i686 Linux objects carry `.eh_frame` (frames are `esp`-based, so a debugger cannot walk them otherwise); armhf has none yet and gdb walks its frames from the prologues. On i686 the straight-line (SLP) vectorizer runs, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads, and so does the sum-reduction vectorizer: an `i64` total comes out of `paddq` lanes as two `movd` halves.
+The loop vectorizer is off on these targets for now. i686 Linux objects carry `.eh_frame` (frames are `esp`-based, so a debugger cannot walk them otherwise); armhf objects carry ARM EHABI tables instead (see "32-bit ARM"). On i686 the straight-line (SLP) vectorizer runs, so unrolled `f32`/`f64` kernels use SSE2 pairs and quads, and so does the sum-reduction vectorizer: an `i64` total comes out of `paddq` lanes as two `movd` halves.
 Built for `i686-linux-musl` and run natively, the `basics`, `features`,
 `types`, `data`, `general`, `match`, `switch`, `llvm`, `stdlib`, `apps`,
 `interop` and `webframework` tests match their expected output except those
@@ -781,7 +778,17 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
+- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools, 32-bit
+  Windows objects get no debug sections, and macOS objects get neither
+  DWARF nor unwind tables.
+- The built-in linker has no range-extension thunks: an ARM to Thumb `B`
+  needs a veneer and fails, and an AArch64 or ARM64 PE branch beyond
+  ±128 MB fails.
+- The 64-bit atomic helpers the armhf backend writes into the object have no
+  `.ARM.exidx` entry, so an unwind that starts inside one stops there.
+- On AArch64, an integer division by zero in a release build returns 0
+  instead of trapping. Debug builds check.
+- The loop and SLP vectorizers run on x86 only (SLP also on i686).
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.

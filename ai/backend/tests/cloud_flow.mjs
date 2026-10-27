@@ -104,6 +104,10 @@ async function main() {
   r = await ask(token, chat, 'tool: shell {"command": "sleep 3", "timeout": 1}');
   check("a slow command is stopped", /timed out/.test(r.body ?? ""), r);
 
+  r = await ask(token, chat, 'tool: shell {"command": "echo login=${GH_TOKEN:+set} ${FIGMA_TOKEN:+set}; git config --global --get credential.https://github.com.helper"}');
+  check("the shell is already signed in to the connected accounts", /login=set set/.test(r.body ?? "") && /GH_TOKEN/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: shell {"command": "echo $GH_TOKEN $FIGMA_AUTH_HEADER"}');
+  check("a token printed by a command is hidden in the result", /\*\*\*/.test(r.body ?? "") && !/ghp_validtoken|figd_validtoken/.test(r.body ?? ""), r);
   r = await ask(token, chat, 'tool: github_api {"path": "/user/repos"}');
   check("github_api reads private repositories", /octo-dev\/secret-app/.test(r.body ?? ""), r);
   r = await ask(token, chat, 'tool: github_api {"method": "DELETE", "path": "/repos/octo-dev/secret-app"}');

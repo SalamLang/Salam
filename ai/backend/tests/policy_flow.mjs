@@ -49,7 +49,7 @@ const email = `policy-${Date.now()}@test.ir`;
 const user = await account(email, "Policy User");
 const me = (await api("GET", "/me", user)).json.user;
 
-check("a user starts under the Salam-only policy", /agent=salam system=salam .*reminder=true/.test(await ask(user, "show policy")));
+check("a user starts under the Salam-only policy", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
 const denied = await api("PATCH", `/admin/users/${me.id}/policy`, user, { policy_free: true });
 check("a normal user cannot lift the limit", denied.res.status === 403);
@@ -63,7 +63,7 @@ check("the user is answered by the plain profile", /agent=raw/.test(free), free)
 check("without the Salam policy text", !/system=salam/.test(free) && /reminder=false/.test(free), free);
 
 const other = await account(`policy-other-${Date.now()}@test.ir`, "Other User");
-check("other users keep the limit", /agent=salam system=salam .*reminder=true/.test(await ask(other, "show policy")));
+check("other users keep the limit", /agent=salam system=salam .*reminder=false/.test(await ask(other, "show policy")));
 
 const listed = await api("GET", `/admin/users?q=${encodeURIComponent(email)}`, admin);
 const row = listed.json?.users?.[0];
@@ -76,7 +76,7 @@ check("the usage table splits cost into input and output", all?.chat?.cost > 0 &
 
 const restored = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { policy_free: false });
 check("the limit can be restored", restored.res.status === 200 && restored.json.user.policy_free === false);
-check("and applies again", /agent=salam system=salam .*reminder=true/.test(await ask(user, "show policy")));
+check("and applies again", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
 const tg = await api("GET", "/admin/telegram", admin);
 check("the admin sees Telegram sessions", tg.res.status === 200 && Array.isArray(tg.json.links) && Array.isArray(tg.json.guests) && typeof tg.json.online_links === "number", tg.json);

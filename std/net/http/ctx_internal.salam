@@ -1098,6 +1098,14 @@ func _log_access(slot: int, method: str, path: str, status: int):
     println method, path, "->", status
 end
 
+func _send_static(slot: int, fd: i64, url: str, file: str, shdr: str, keep: bool): int:
+    ct := mime.MimeType(file)
+    if keep and _sc_send_new(slot, fd, url, file, ct, shdr):
+        ret 1
+    end
+    ret _send_file(fd, file, ct, shdr, keep)
+end
+
 func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
     if req_len == 0:
         keep = false
@@ -1112,7 +1120,10 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
     if r.has_static:
         prefix := r.static_prefix
         path := salam_ctx_get(ctx, 1)
-        if _eq_at(path, 0, prefix):
+        if keep and _eq_at(path, 0, prefix) and _sc_serve(slot, fd, path):
+            _ctx_mark_sent(ctx)
+            static_handled = true
+        else _eq_at(path, 0, prefix):
             relraw := path.substr(prefix.len(), path.len() - prefix.len())
             rel := UrlDecode(relraw)
             mem.Free(relraw as void *)
@@ -1125,7 +1136,7 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
                 else os.IsDir(target):
                     idx := filepath.Join(target, "index.html")
                     if os.Exists(idx) and os.IsDir(idx) == false:
-                        if _send_file(fd, idx, mime.MimeType(idx), shdr, keep) == 1:
+                        if _send_static(slot, fd, path, idx, shdr, keep) == 1:
                             _ctx_mark_sent(ctx)
                             static_handled = true
                         end
@@ -1137,7 +1148,7 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
                     end
                     mem.Free(idx as void *)
                 else os.Exists(target):
-                    if _send_file(fd, target, mime.MimeType(target), shdr, keep) == 1:
+                    if _send_static(slot, fd, path, target, shdr, keep) == 1:
                         _ctx_mark_sent(ctx)
                         static_handled = true
                     end

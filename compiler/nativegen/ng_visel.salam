@@ -2,6 +2,10 @@ package nativegen
 
 const IF_W8 := 16384
 const VOP_MUL32 := 0x1F4
+const VOP_CMPEQ64 := 0x1E0
+const VOP_CMPGT64 := 0x1E1
+const VOP_CMPHI64 := 0x1E2
+const VOP_CMPHI32 := 0x1E3
 
 func vop(g &: Ng, opc: int, dst: int, src: int):
     m := e_rr(g, M_VOP_RR, 8, dst, src)
@@ -12,6 +16,103 @@ func vcopy(g &: Ng, v: int): int:
     r := wide_reg(g)
     _c := e_copy(g, r, use_reg(g, v))
     ret r
+end
+
+func rcopy(g &: Ng, src: int): int:
+    r := wide_reg(g)
+    _c := e_copy(g, r, src)
+    ret r
+end
+
+func vbyte_opc(op: int): int:
+    switch op:
+        OP_ADD: ret 0xFC end
+        OP_SUB: ret 0xF8 end
+        OP_AND: ret 0xDB end
+        OP_OR: ret 0xEB end
+        OP_XOR: ret 0xEF end
+    end
+    ret 0 - 1
+end
+
+func isel_vbyte_bin(g &: Ng, i: int):
+    r := vcopy(g, g.i_a[i])
+    vop(g, vbyte_opc(g.i_op[i]), r, use_reg(g, g.i_b[i]))
+    set_res(g, i, r)
+end
+
+func vbyte_ge(g &: Ng, x: int, y: int): int:
+    r := vcopy(g, x)
+    vop(g, 0xDE, r, use_reg(g, y))
+    vop(g, 0x74, r, use_reg(g, x))
+    ret r
+end
+
+func isel_vbyte_cmp(g &: Ng, i: int):
+    p := g.i_x[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    mut r := 0 - 1
+    mut neg := false
+    switch p:
+        CC_EQ, CC_NE:
+            r = vcopy(g, a)
+            vop(g, 0x74, r, use_reg(g, b))
+            neg = p == CC_NE
+            break
+        end
+        CC_SGT, CC_SLE:
+            r = vcopy(g, a)
+            vop(g, 0x64, r, use_reg(g, b))
+            neg = p == CC_SLE
+            break
+        end
+        CC_SLT, CC_SGE:
+            r = vcopy(g, b)
+            vop(g, 0x64, r, use_reg(g, a))
+            neg = p == CC_SGE
+            break
+        end
+        CC_UGE, CC_ULT:
+            r = vbyte_ge(g, a, b)
+            neg = p == CC_ULT
+            break
+        end
+        CC_ULE, CC_UGT:
+            r = vbyte_ge(g, b, a)
+            neg = p == CC_UGT
+            break
+        end
+    end
+    if neg:
+        vnot(g, r)
+    end
+    set_res(g, i, r)
+end
+
+func isel_vbcast_byte(g &: Ng, i: int):
+    w := g.t_elem[g.i_ty[i]] == T_I16
+    k := gpr(g)
+    zx := e_rr(g, M_MOVZX_RR, 4, k, use_reg(g, g.i_a[i]))
+    g.mc.sz2[zx] = w ? 2 : 1
+    m := e_rr(g, M_IMUL_RRI, 4, k, k)
+    g.mc.imm[m] = (w ? 0x00010001 : 0x01010101) as i64
+    rb := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, rb, k)
+    s := e_rr(g, M_PSHUFD, 16, rb, rb)
+    g.mc.imm[s] = 0 as i64
+    set_res(g, i, rb)
+end
+
+func vint_opc_e(op: int, e: int): int:
+    if e == T_I16:
+        switch op:
+            OP_ADD: ret 0xFD end
+            OP_SUB: ret 0xF9 end
+            OP_MUL: ret 0xD5 end
+        end
+    end
+    ret vint_opc(op, e == T_I64)
 end
 
 func vint_opc(op: int, q: bool): int:
@@ -33,7 +134,7 @@ func isel_vint_bin(g &: Ng, i: int):
         r := vcopy(g, g.i_a[i])
         s := mi_new(g, M_VSHI, 16)
         g.mc.r0[s] = r
-        g.mc.cc[s] = q ? 0x73 : 0x72
+        g.mc.cc[s] = q ? 0x73 : (g.t_elem[t] == T_I16 ? 0x71 : 0x72)
         g.mc.sz2[s] = op == OP_SHL ? 6 : (op == OP_LSHR ? 2 : 4)
         g.mc.imm[s] = g.v_i[g.i_b[i]]
         set_res(g, i, r)
@@ -47,7 +148,7 @@ func isel_vint_bin(g &: Ng, i: int):
         b = tmp
     end
     r2 := vcopy(g, a)
-    vop(g, vint_opc(op, q), r2, use_reg(g, b))
+    vop(g, vint_opc_e(op, g.t_elem[t]), r2, use_reg(g, b))
     set_res(g, i, r2)
 end
 
@@ -89,22 +190,101 @@ func vnot(g &: Ng, r: int):
     vop(g, 0xEF, r, ones)
 end
 
+func vsplat32(g &: Ng, v: i64): int:
+    k := gpr(g)
+    _m := e_movi(g, k, v)
+    r := wide_reg(g)
+    _x := e_rr(g, M_MOVQ_XG, 4, r, k)
+    s := e_rr(g, M_PSHUFD, 16, r, r)
+    g.mc.imm[s] = 0 as i64
+    ret r
+end
+
+func vxor_bias(g &: Ng, src: int): int:
+    r := rcopy(g, src)
+    vop(g, 0xEF, r, vsplat32(g, 0x80000000 as i64))
+    ret r
+end
+
+func vcmp_eq(g &: Ng, e: int, a: int, b: int): int:
+    r := vcopy(g, a)
+    if e == T_I16:
+        vop(g, 0x75, r, use_reg(g, b))
+        ret r
+    end
+    if e == T_I64 and g.arch == NG_ARCH_A64:
+        vop(g, VOP_CMPEQ64, r, use_reg(g, b))
+        ret r
+    end
+    vop(g, 0x76, r, use_reg(g, b))
+    if e == T_I64:
+        t := wide_reg(g)
+        s := e_rr(g, M_PSHUFD, 16, t, r)
+        g.mc.imm[s] = 0xB1 as i64
+        vop(g, 0xDB, r, t)
+    end
+    ret r
+end
+
+func vcmp_gt(g &: Ng, e: int, a: int, b: int, uns: bool): int:
+    if e == T_I16:
+        if not uns:
+            r := vcopy(g, a)
+            vop(g, 0x65, r, use_reg(g, b))
+            ret r
+        end
+        t := vcopy(g, a)
+        vop(g, 0xD9, t, use_reg(g, b))
+        z := wide_reg(g)
+        _z := e_rr(g, M_XORPS, 16, z, z)
+        vop(g, 0x75, t, z)
+        vnot(g, t)
+        ret t
+    end
+    if g.arch == NG_ARCH_A64 and (e == T_I64 or uns):
+        r2 := vcopy(g, a)
+        vop(g, e == T_I64 ? (uns ? VOP_CMPHI64 : VOP_CMPGT64) : VOP_CMPHI32, r2, use_reg(g, b))
+        ret r2
+    end
+    if not uns:
+        r3 := vcopy(g, a)
+        vop(g, 0x66, r3, use_reg(g, b))
+        ret r3
+    end
+    ba := vxor_bias(g, use_reg(g, a))
+    vop(g, 0x66, ba, vxor_bias(g, use_reg(g, b)))
+    ret ba
+end
+
 func isel_vcmp(g &: Ng, i: int):
     p := g.i_x[i]
-    mut a := g.i_a[i]
-    mut b := g.i_b[i]
-    if p == CC_SLT or p == CC_SGE:
-        tmp := a
-        a = b
-        b = tmp
+    a := g.i_a[i]
+    b := g.i_b[i]
+    e := g.t_elem[g.v_ty[a]]
+    mut r := 0 - 1
+    switch p:
+        CC_EQ, CC_NE:
+            r = vcmp_eq(g, e, a, b)
+            break
+        end
+        CC_SGT, CC_SLE:
+            r = vcmp_gt(g, e, a, b, false)
+            break
+        end
+        CC_SLT, CC_SGE:
+            r = vcmp_gt(g, e, b, a, false)
+            break
+        end
+        CC_UGT, CC_ULE:
+            r = vcmp_gt(g, e, a, b, true)
+            break
+        end
+        CC_ULT, CC_UGE:
+            r = vcmp_gt(g, e, b, a, true)
+            break
+        end
     end
-    r := vcopy(g, a)
-    if p == CC_EQ or p == CC_NE:
-        vop(g, 0x76, r, use_reg(g, b))
-    else:
-        vop(g, 0x66, r, use_reg(g, b))
-    end
-    if p == CC_NE or p == CC_SGE or p == CC_SLE:
+    if p == CC_NE or p == CC_SLE or p == CC_SGE or p == CC_ULE or p == CC_UGE:
         vnot(g, r)
     end
     set_res(g, i, r)

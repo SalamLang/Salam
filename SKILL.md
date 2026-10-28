@@ -481,8 +481,10 @@ receiver.
 type, a field type, in a cast and as a struct literal. On a generic struct it
 means the struct with its own type parameters, so `Self` stands for
 `Pair<A, B>` without respelling it. It works in a `static func` too, which is
-where constructors live. Persian spells it `خود`. There is no `Self` in an
-`interface` (that would be an associated type, which Salam does not have).
+where constructors live. Persian spells it `خود`, and each file accepts only its
+own spelling: `Self` and `this` are errors in a Persian file (the message names
+`خود` and `این`), and `خود` and `این` are errors in an English file. There is no
+`Self` in an `interface` (that would be an associated type, which Salam does not have).
 
 ```salam
 struct Node:

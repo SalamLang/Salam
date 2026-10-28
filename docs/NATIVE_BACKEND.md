@@ -674,7 +674,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
 - `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
-  that are well defined by construction (values are kept small with a prime
+  (integer code with loops and vectors, vector kernels over `int`, `u8`,
+  `i16` and `i64`, clamped `f64` code, and calls with eight arguments and a
+  struct passed by reference) that are well defined by construction (values are kept small with a prime
   modulus, divisors and shift counts are offset or masked, indices are
   wrapped into range), builds each with the reference backend and the native
   backend, and compares their output. `--count`, `--seed`, `--target` with

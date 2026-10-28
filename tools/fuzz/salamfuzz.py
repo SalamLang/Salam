@@ -120,14 +120,116 @@ class Gen:
                   "end"]
         return "\n".join(lines)
 
+    def kernel(self, idx):
+        """A loop over vectors in the shapes the loop vectorizer handles."""
+        ty, lim = self.r.choice([("int", 1000), ("u8", 256), ("i16", 1000), ("i64", 100000)])
+
+        def to(e):
+            return e if ty == "i64" else f"(({e}) as {ty})"
+
+        def wide(e):
+            return e if ty == "i64" else f"({e} as i64)"
+
+        def lit(v):
+            return f"({v} as {ty})"
+
+        n = self.r.choice([0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 33, 64])
+        lines = [f"noinline func k{idx}(a: i64, b: i64): i64:",
+                 f"    n := {n} + ((a - a) as int)",
+                 f"    mut x := Vector {{}} as Vector<{ty}>",
+                 f"    mut y := Vector {{}} as Vector<{ty}>",
+                 f"    mut o := Vector {{}} as Vector<{ty}>",
+                 "    repeat n in i:",
+                 f"        x.push({to(f'((a + (i as i64) * 7919) % {lim} + {lim}) % {lim}')})",
+                 f"        y.push({to(f'((b + (i as i64) * 104729) % {lim} + {lim}) % {lim}')})",
+                 f"        o.push({lit(0)})",
+                 "    end"]
+        k = self.r.randrange(7)
+        if k == 0:
+            op = self.r.choice(["+", "-", "&", "|", "^"])
+            lines += ["    repeat n in j:", f"        o.set(j, x.get(j) {op} y.get(j))", "    end"]
+        elif k == 1 and ty != "u8":
+            lines += ["    repeat n in j:", f"        o.set(j, x.get(j) * {lit(3)} - y.get(j))", "    end"]
+        elif k == 2:
+            cmp = self.r.choice(["<", "<=", ">", ">=", "==", "!="])
+            lines += ["    repeat n in j:", f"        o.set(j, x.get(j) {cmp} y.get(j) ? x.get(j) : y.get(j))", "    end"]
+        elif k == 3:
+            lines += ["    mut m := 0 as i64", "    repeat n in j:",
+                      f"        if {wide('x.get(j)')} > m:", f"            m = {wide('x.get(j)')}", "        end", "    end",
+                      f"    o.push({to('m')})"]
+        elif k == 4:
+            lines += ["    mut t := 0 as i64", "    repeat n in j:",
+                      f"        t = t + {wide('x.get(j)')} + {wide('y.get(j)')}", "    end",
+                      f"    o.push({to(f'(t % {lim})')})"]
+        elif k == 5 and ty in ("int", "i64"):
+            sh = self.r.randint(1, 3)
+            lines += ["    repeat n in j:", f"        o.set(j, (x.get(j) >> {lit(sh)}) + (y.get(j) << {lit(sh)}))", "    end"]
+        else:
+            lines += ["    mut jj := 0", "    until jj <= n - 1:", "        o.set(jj, x.get(jj) & y.get(jj))", "        jj = jj + 1", "    end"]
+        lines += ["    mut s := 0 as i64",
+                  "    each v in o:",
+                  f"        s = (s * 31 + {wide('v')}) % {M}",
+                  "    end",
+                  "    x.free()", "    y.free()", "    o.free()",
+                  "    ret s",
+                  "end"]
+        return "\n".join(lines)
+
+    def floats(self, idx):
+        """f64 arithmetic, clamped before the conversion back to an integer."""
+        lines = [f"noinline func d{idx}(a: i64, b: i64): i64:",
+                 "    mut p := ((a % 1000) as f64) * 0.5 + 1.25",
+                 "    mut q := ((b % 1000) as f64) * 0.25 - 3.5"]
+        for _ in range(self.r.randint(2, 6)):
+            t = self.r.choice(["p", "q"])
+            o = self.r.choice(["p + q", "p - q", "p * 0.75 + q", "q / (p * p + 1.0)", "p > q ? p - 1.5 : q + 2.25", "(p + q) * 0.5"])
+            lines.append(f"    {t} = {o}")
+            lines.append(f"    {t} = {t} > 100000.0 ? 100000.0 : ({t} < 0.0 - 100000.0 ? 0.0 - 100000.0 : {t})")
+        lines += ["    p = p + 0.5", "    q = q - 0.25",
+                  "    ret ((p * 1000.0) as i64) + ((q * 1000.0) as i64)", "end"]
+        return "\n".join(lines)
+
+    def calls(self, idx):
+        """Eight arguments (some on the stack on every ABI) and a struct by reference."""
+        e = " + ".join(f"{self.r.choice([1, 3, 5, 7])} * v{i}" for i in range(8))
+        return "\n".join([
+            f"noinline func h{idx}(acc &: Acc, v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64, v6: i64, v7: i64): i64:",
+            f"    acc.x = (acc.x + {e}) % {M}",
+            "    acc.y = acc.y + 1",
+            "    ret acc.x * 3 + acc.y",
+            "end",
+            "",
+            f"noinline func c{idx}(a: i64, b: i64): i64:",
+            "    mut acc := Acc {}",
+            "    mut r := 0 as i64",
+            "    repeat 3 in i:",
+            "        r = r + h" + str(idx) + "(acc, a, b, a + (i as i64), b - 1, a * 2, b * 3, a ^ b, (i as i64))",
+            "    end",
+            f"    ret (r + acc.x + acc.y) % {M}",
+            "end"])
+
     def program(self, nf):
-        parts = [self.func(k) for k in range(nf)]
-        main = ["func main:"]
+        parts = ["struct Acc:\n    pub x: i64 = 0\n    pub y: i64 = 0\nend"]
+        names = []
         for k in range(nf):
+            parts.append(self.func(k))
+            names.append(f"f{k}")
+            kind = self.r.randrange(3)
+            if kind == 0:
+                parts.append(self.kernel(k))
+                names.append(f"k{k}")
+            elif kind == 1:
+                parts.append(self.floats(k))
+                names.append(f"d{k}")
+            else:
+                parts.append(self.calls(k))
+                names.append(f"c{k}")
+        main = ["func main:"]
+        for nm in names:
             for (a, b) in [(0, 0), (1, 2), (-5, 7), (123456, -987), (65535, 3)]:
                 ea = f"({a} as i64)" if a >= 0 else f"(0 - {-a} as i64)"
                 eb = f"({b} as i64)" if b >= 0 else f"(0 - {-b} as i64)"
-                main.append(f"    println f{k}({ea}, {eb})")
+                main.append(f"    println {nm}({ea}, {eb})")
         main.append("end")
         return "\n\n".join(parts) + "\n\n" + "\n".join(main) + "\n"
 

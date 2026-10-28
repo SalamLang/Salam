@@ -164,6 +164,12 @@ export const IconAlert = (p: P) => (
     <path d="M12 10v4M12 17v.5" />
   </Base>
 );
+export const IconBell = (p: P) => (
+  <Base {...p}>
+    <path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16z" />
+    <path d="M10 20.5a2 2 0 004 0" />
+  </Base>
+);
 export const IconChevronDown = (p: P) => (
   <Base {...p}>
     <path d="M6 9l6 6 6-6" />

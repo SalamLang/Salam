@@ -560,8 +560,11 @@ reported as an error rather than patched with a wrong offset.
 in the read-only segment. One is kept exactly when the code section its
 `sh_link` names is live, together with what it references (`.ARM.extab`).
 After relocation the 8-byte entries are sorted by function address and
-their 31-bit offsets rebased, which is what `SHF_LINK_ORDER` asks for. The
-linker defines `__exidx_start`/`__exidx_end` and adds a `PT_ARM_EXIDX`
+their 31-bit offsets rebased, which is what `SHF_LINK_ORDER` asks for. Each
+thunk area (see "Branch thunks") gets an entry of its own, `0x80B0B0B0`
+("finish"): a thunk changes neither `sp` nor `lr`, so an unwind that starts
+in one returns through `lr` instead of using the previous function's
+entry. The linker defines `__exidx_start`/`__exidx_end` and adds a `PT_ARM_EXIDX`
 program header, which libgcc finds through `dl_iterate_phdr`. musl links
 add `libgcc_eh.a` when the sysroot has it, so programs that call the
 unwinder link too.

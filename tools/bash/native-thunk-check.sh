@@ -3,7 +3,8 @@
 # Thumb B.W to an ARM function, and ARM, Thumb and AArch64 branches past their
 # reach. Each case is a small assembly file, linked by compiler/nativelink and
 # run under the emulator; it exits with a known status only if every branch
-# landed. An ARM64 PE branch past 128 MB is linked too (it cannot run here),
+# landed; on ARM the thunk area must also get its own .ARM.exidx entry. An
+# ARM64 PE branch past 128 MB is linked too (it cannot run here),
 # and so is an arm64 Mach-O image with a far call and a far stub; for that
 # one each bl is followed through its thunk and must reach its target.
 #
@@ -99,6 +100,49 @@ _start:
     bx lr
 far:
     b .Lfar
+EOF
+cat >exfar.s <<'EOF'
+.syntax unified
+.arm
+.text
+.global _start
+.fnstart
+_start:
+    bl far
+    mov r7, #1
+    svc #0
+.fnend
+.global __aeabi_unwind_cpp_pr0
+__aeabi_unwind_cpp_pr0:
+    bx lr
+.section .text.far,"ax"
+    .space 40*1024*1024
+.global far
+.fnstart
+far:
+    mov r0, #48
+    bx lr
+.fnend
+EOF
+cat >exidx.py <<'EOF'
+import struct
+import sys
+
+b = open(sys.argv[1], "rb").read()
+shoff, = struct.unpack_from("<I", b, 32)
+shentsize, shnum = struct.unpack_from("<HH", b, 46)
+ents = []
+for k in range(shnum):
+    sh = shoff + k * shentsize
+    stype, = struct.unpack_from("<I", b, sh + 4)
+    if stype == 0x70000001:
+        addr, off, size = struct.unpack_from("<III", b, sh + 12)
+        for e in range(0, size, 8):
+            w0, w1 = struct.unpack_from("<II", b, off + e)
+            fn = (addr + e + (w0 - (w0 >> 30 << 31))) & 0xFFFFFFFF
+            ents.append((fn, w1))
+ok = len(ents) == 3 and ents[0][0] < ents[1][0] < ents[2][0] and ents[1][1] == 0x80B0B0B0
+sys.exit(0 if ok else 1)
 EOF
 cat >thfar.s <<'EOF'
 .syntax unified
@@ -240,6 +284,17 @@ arm)
     run_case t2a armv7a-linux-gnueabihf 43
     run_case armfar armv7a-linux-gnueabihf 44
     run_case thfar armv7a-linux-gnueabihf 46
+    got=none
+    if clang --target=armv7a-linux-gnueabihf -c exfar.s -o exfar.o && ./link elf exfar.out exfar.o; then
+        "$RUNNER" ./exfar.out
+        got=$?
+    fi
+    if [ "$got" = 48 ] && python3 exidx.py exfar.out; then
+        ok=$((ok + 1))
+    else
+        echo "FAIL exfar: the thunk area has no .ARM.exidx entry of its own"
+        bad=$((bad + 1))
+    fi
     ;;
 aarch64)
     run_case a64far aarch64-linux-gnu 45

@@ -916,13 +916,21 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                     s, 60, span_of(a, n3.c), i18.Tr("the 'else' branch is empty: add a statement to it, or remove the 'else'")
                 )
             end
+            saved_ok3 := s.pre_ok
+            if at.KindOf(a, n3.c) == at.AST_IF:
+                s.pre_ok = false
+            end
             check_stmt(s, a, n3.c)
+            s.pre_ok = saved_ok3
         end
         ret
     end
     if k == at.AST_UNTIL:
         n4 := at.Get(a, nid)
+        saved_ok4 := s.pre_ok
+        s.pre_ok = false
         c4 := sema_check_expr(s, a, n4.a)
+        s.pre_ok = saved_ok4
         if ty_at(s, c4).kind != TY_BOOL and not type_is_error(s, c4):
             serr(
                 s, 21, span_of(a, n4.a), co.Format1(
@@ -1098,7 +1106,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
         ret
     end
     if k == at.AST_RETURN:
-        n7 := at.Get(a, nid)
+        mut n7 := at.Get(a, nid)
         escp := (s.match_arm_depth > 0 and s.match_yield_active) ? "" : ret_slice_local(s, a, n7.a)
         if str.Len(escp) > 0:
             serr(
@@ -1132,6 +1140,10 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                     )
                 end
             end
+        end
+        if (not n7.synthetic or n7.a == 0) and th_fn_throws(s, a):
+            th_wrap_return(s, a, nid)
+            n7 = at.Get(a, nid)
         end
         if s.cur_func != 0 and sig_at(s, s.cur_func).infer_ret:
             mut ivt := 0
@@ -1235,11 +1247,25 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
     if k == at.AST_DEFER:
         da := at.Get(a, nid).a
         if da != 0:
+            saved_okd := s.pre_ok
+            s.pre_ok = false
             check_stmt(s, a, da)
+            s.pre_ok = saved_okd
         end
         ret
     end
+    if k == at.AST_THROW:
+        th_check_throw(s, a, nid)
+        ret
+    end
+    if k == at.AST_TRY_BLOCK:
+        th_check_try_block(s, a, nid)
+        ret
+    end
     if k == at.AST_BREAK:
+        if th_adjust_break(s, a, nid):
+            ret
+        end
         if s.loop_depth == 0 and s.switch_depth == 0:
             serr(
                 s, 37, sp, co.Format1(i18.Tr("'%s' outside of a loop or switch"), co.ArgStr("break"))
@@ -1257,6 +1283,9 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
         ret
     end
     if k == at.AST_CONTINUE:
+        if th_continue_blocked(s, a, nid):
+            ret
+        end
         if s.loop_depth == 0:
             serr(
                 s, 37, sp, co.Format1(i18.Tr("'%s' outside of a loop"), co.ArgStr("continue"))
@@ -1270,10 +1299,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
             check_stmt(s, a, ea)
             ret
         end
-        _et := sema_check_expr(s, a, ea)
-        if s.match_arm_depth == 0:
-            check_no_effect(s, a, ea)
-        end
+        th_check_try_stmt(s, a, nid, ea)
         ret
     end
     if k == at.AST_INCDEC:
@@ -1290,15 +1316,33 @@ func sema_check_block(s &: Sema, a &: at.Ast, block: int):
     lg.Log(
         s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "enter block scope (" + at.ChildCount(a, block) + " stmts)"
     )
-    repeat at.ChildCount(a, block) in i:
+    mut i := 0
+    until i < at.ChildCount(a, block):
         g_sm_after_print_line = i > 0 ? print_stmt_line(a, at.Child(a, block, i - 1)) : 0
+        saved_pre := s.pre_stmts
+        saved_ok := s.pre_ok
+        s.pre_stmts = Vector {} as Vector<int>
+        s.pre_ok = true
         check_stmt(s, a, at.Child(a, block, i))
+        mut pre := s.pre_stmts
+        s.pre_stmts = saved_pre
+        s.pre_ok = saved_ok
+        if pre.len() > 0:
+            mut bv := at.Get(a, block)
+            repeat pre.len() in j:
+                bv.list.insert(i + j, pre.get(j))
+            end
+            at.Put(a, block, bv)
+            i += pre.len()
+        end
+        pre.free()
+        i += 1
     end
     g_sm_after_print_line = 0
     if not s.requal:
         mut j := 0
         until j + 1 < at.ChildCount(a, block):
-            if sema_stmt_terminates(s, a, at.Child(a, block, j)):
+            if sema_stmt_terminates(s, a, at.Child(a, block, j)) and not at.Get(a, at.Child(a, block, j + 1)).synthetic:
                 serr(
                     s, 70, span_of(a, at.Child(a, block, j + 1)), i18.Tr("unreachable code: the previous statement always exits this block")
                 )

@@ -25,7 +25,7 @@ compiler salam
 
 if exists('loaded_matchit') && !exists('b:match_words')
   let b:match_ignorecase = 0
-  let b:match_words = '\<\%(interface\|component\|درون‌داد\|جداشمار\|struct\|extern\|repeat\|switch\|ساختار\|میانجی\|کاربست\|همخوان\|ترابرد\|until\|match\|تکرار\|func\|type\|enum\|page\|impl\|each\|گونه\|صفحه\|تابع\|اگر\|بخش\|if\|on\|تا\|بر\|هر\)\>:\<\%(وگرنه\|else\)\>:\<\%(پایان\|end\)\>'
+  let b:match_words = '\<\%(interface\|component\|درون‌داد\|جداشمار\|struct\|extern\|repeat\|switch\|ساختار\|میانجی\|کاربست\|همخوان\|ترابرد\|until\|match\|تکرار\|func\|type\|enum\|page\|impl\|each\|گونه\|صفحه\|تابع\|تلاش\|try\|اگر\|بخش\|if\|on\|تا\|بر\|هر\)\>:\<\%(گرفتن خطا\|catch\|وگرنه\|else\)\>:\<\%(پایان\|end\)\>'
 endif
 
 let b:undo_ftplugin = 'setlocal commentstring< comments< suffixesadd<'

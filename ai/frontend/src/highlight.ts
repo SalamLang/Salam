@@ -1,10 +1,10 @@
 const EN_KEYWORDS = new Set(
-  "func ret if else until on mut const type struct enum end import as true false null this break continue page package printerr printerrln input defer extern interface pub inline noinline pure noret deprecated component repeat impl to by each in match switch include export and or not eq neq lt gt lte gte main spawn join case default dyn link".split(
+  "func ret if else until on mut const type struct enum end import as true false null this break continue page package printerr printerrln input defer extern interface pub inline noinline pure noret deprecated component repeat impl to by each in match switch include export and or not eq neq lt gt lte gte main spawn join case default dyn link try catch throw throws".split(
     " ",
   ),
 );
 const FA_KEYWORDS = new Set(
-  "برگشت اگر وگرنه تا بر ناپایا پایا گونه ساختار جداشمار پایان واردسازی برگردان درست نادرست پوچ این بشکن گذر صفحه بسته نادرست‌چاپ نادرست‌سرچاپ ورودی دیرکن درون‌داد میانجی همگانی درخط نادرخط ناب نابرگشت بی‌کاره بخش تکرار کاربست هر در همخوان و یا برابر نابرابر ترابرد فراخوانی برون‌داد وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر تابع ریشه نه ثابت تهی".split(
+  "برگشت اگر وگرنه تا بر ناپایا پایا گونه ساختار جداشمار پایان واردسازی برگردان درست نادرست پوچ این بشکن گذر صفحه بسته نادرست‌چاپ نادرست‌سرچاپ ورودی دیرکن درون‌داد میانجی همگانی درخط نادرخط ناب نابرگشت بی‌کاره بخش تکرار کاربست هر در همخوان و یا برابر نابرابر ترابرد فراخوانی برون‌داد وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر تابع ریشه نه ثابت تهی تلاش خطادار".split(
     " ",
   ),
 );

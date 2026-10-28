@@ -1120,6 +1120,67 @@ func a64_ins(g &: Ng, a &: A64, i: int):
             aw(a, (0x4E201C00 as i64) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
             ret
         end
+        M_VOP_RR:
+            vo := g.mc.cc[i]
+            d0 := avr(r0)
+            d1 := avr(r1)
+            if vo == 0xDF:
+                aw(a, (0x4E601C00 as i64) | rd_rn_rm(d0, d1, d0))
+                ret
+            end
+            if vo == 0x6B or vo == 0x67:
+                lo := vo == 0x6B ? (0x0E614800 as i64) : (0x2E212800 as i64)
+                aw(a, lo | rd_rn_rm(AV25, d0, 0))
+                aw(a, (lo | (0x40000000 as i64)) | rd_rn_rm(AV25, d1, 0))
+                a_vmov(a, d0, AV25)
+                ret
+            end
+            vb := a_vop3(vo, sz)
+            if vb < (0 as i64):
+                fail(g, "native backend: aarch64 has no form for vector op " + str_of_int(vo))
+                ret
+            end
+            aw(a, vb | rd_rn_rm(d0, d0, d1))
+            ret
+        end
+        M_UNPCKLPD:
+            aw(a, (0x4EC03800 as i64) | rd_rn_rm(avr(r0), avr(r0), avr(r1)))
+            ret
+        end
+        M_SHUFPS:
+            a_shuf(a, avr(r0), avr(r0), avr(r1), (imm & (255 as i64)) as int)
+            ret
+        end
+        M_PSHUFD:
+            a_shuf(a, avr(r0), avr(r1), avr(r1), (imm & (255 as i64)) as int)
+            ret
+        end
+        M_VSHI:
+            vs := avr(r0)
+            es := g.mc.cc[i] == 0x73 ? 64 : 32
+            k := g.mc.sz2[i]
+            mut cnt := (imm & (255 as i64)) as int
+            if k != 6 and k != 2 and k != 4:
+                fail(g, "native backend: aarch64 has no form for vector shift /" + str_of_int(k))
+                ret
+            end
+            if cnt == 0:
+                ret
+            end
+            if cnt >= es:
+                if k != 4:
+                    aw(a, (0x6F00E400 as i64) | (vs as i64))
+                    ret
+                end
+                cnt = es - 1
+            end
+            if k == 6:
+                aw(a, (0x4F005400 as i64) | (((es + cnt) as i64) << (16 as i64)) | rd_rn_rm(vs, vs, 0))
+            else:
+                aw(a, (k == 2 ? (0x6F000400 as i64) : (0x4F000400 as i64)) | (((2 * es - cnt) as i64) << (16 as i64)) | rd_rn_rm(vs, vs, 0))
+            end
+            ret
+        end
         M_VLD:
             a_load(g, a, i, avr(r0), ld_op(16, true), 16)
             ret
@@ -1138,6 +1199,66 @@ func a64_ins(g &: Ng, a &: A64, i: int):
         end
     end
     fail(g, "native backend: aarch64 cannot encode machine op " + str_of_int(op) + " in " + tab_str(g.syms, g.f_sym))
+end
+
+func a_vop3(op: int, sz: int): i64:
+    switch op:
+        0xFE: ret 0x4EA08400 end
+        0xD4: ret 0x4EE08400 end
+        0xFA: ret 0x6EA08400 end
+        0xFB: ret 0x6EE08400 end
+        0xDB: ret 0x4E201C00 end
+        0xEB: ret 0x4EA01C00 end
+        0xEF: ret 0x6E201C00 end
+        0x76: ret 0x6EA08C00 end
+        0x66: ret 0x4EA03400 end
+        0x6C: ret 0x4EC03800 end
+        0x60: ret 0x4E003800 end
+        0x61: ret 0x4E403800 end
+        FO_ADD: ret sz == 4 ? (0x4E20D400 as i64) : (0x4E60D400 as i64) end
+        FO_SUB: ret sz == 4 ? (0x4EA0D400 as i64) : (0x4EE0D400 as i64) end
+        FO_MUL: ret sz == 4 ? (0x6E20DC00 as i64) : (0x6E60DC00 as i64) end
+        FO_DIV: ret sz == 4 ? (0x6E20FC00 as i64) : (0x6E60FC00 as i64) end
+    end
+    ret 0 - 1
+end
+
+func a_vmov(a &: A64, d: int, n: int):
+    if d != n:
+        aw(a, (0x4EA01C00 as i64) | rd_rn_rm(d, n, n))
+    end
+end
+
+func a_ins_s(a &: A64, d: int, k: int, n: int, j: int):
+    aw(a, (0x6E000400 as i64) | ((((k << 3) | 4) as i64) << (16 as i64)) | (((j << 2) as i64) << (11 as i64)) | rd_rn_rm(d, n, 0))
+end
+
+func a_dup_s(a &: A64, d: int, n: int, k: int):
+    aw(a, (0x4E000400 as i64) | ((((k << 3) | 4) as i64) << (16 as i64)) | rd_rn_rm(d, n, 0))
+end
+
+func a_shuf(a &: A64, d: int, lo: int, hi: int, imm: int):
+    s0 := imm & 3
+    s1 := (imm >> 2) & 3
+    s2 := (imm >> 4) & 3
+    s3 := (imm >> 6) & 3
+    if lo == hi and s0 == s1 and s1 == s2 and s2 == s3:
+        a_dup_s(a, d, lo, s0)
+        ret
+    end
+    if lo == hi and s0 == 2 and s1 == 3 and s2 == 2 and s3 == 3:
+        aw(a, (0x4E180400 as i64) | rd_rn_rm(d, lo, 0))
+        ret
+    end
+    a_vmov(a, AV25, lo)
+    mut h := hi
+    if hi == d:
+        h = AV25
+    end
+    a_ins_s(a, d, 0, AV25, s0)
+    a_ins_s(a, d, 1, AV25, s1)
+    a_ins_s(a, d, 2, h, s2)
+    a_ins_s(a, d, 3, h, s3)
 end
 
 func encode_function_a64(g &: Ng):

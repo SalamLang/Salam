@@ -1,0 +1,288 @@
+package nativelink
+
+const DWB_STR := 0
+const DWB_LSTR := 1
+const DWB_LINE := 2
+const DWB_LOC := 3
+const DWB_RNG := 4
+const DWB_LOCL := 5
+const DWB_RNGL := 6
+const DWB_STROFF := 7
+const DWB_ADDR := 8
+const DWB_INFO := 9
+const DWB_MACRO := 10
+const DWB_MACINFO := 11
+const DWB_ABBREV := 12
+const DWB_COUNT := 13
+
+func dw_base_name(k: int): str:
+    switch k:
+        DWB_STR: ret "__DWARF,__debug_str" end
+        DWB_LSTR: ret "__DWARF,__debug_line_str" end
+        DWB_LINE: ret "__DWARF,__debug_line" end
+        DWB_LOC: ret "__DWARF,__debug_loc" end
+        DWB_RNG: ret "__DWARF,__debug_ranges" end
+        DWB_LOCL: ret "__DWARF,__debug_loclists" end
+        DWB_RNGL: ret "__DWARF,__debug_rnglists" end
+        DWB_STROFF: ret "__DWARF,__debug_str_offs" end
+        DWB_ADDR: ret "__DWARF,__debug_addr" end
+        DWB_INFO: ret "__DWARF,__debug_info" end
+        DWB_MACRO: ret "__DWARF,__debug_macro" end
+        DWB_MACINFO: ret "__DWARF,__debug_macinfo" end
+    end
+    ret "__DWARF,__debug_abbrev"
+end
+
+func mo_dsec(l &: Nl, obj: int, nm: str): int:
+    repeat l.s_obj.len() in s:
+        if l.s_obj[s] == obj and l.s_off[s] > (0 as i64) and name_is(l, l.s_name[s], nm):
+            ret s
+        end
+    end
+    ret 0 - 1
+end
+
+func dw_uleb(p: u8*, at &: i64): i64:
+    mut v := 0 as i64
+    mut sh := 0 as i64
+    until true:
+        b := p[at] as i64
+        at = at + (1 as i64)
+        v = v | ((b & (127 as i64)) << sh)
+        sh = sh + (7 as i64)
+        if (b & (128 as i64)) == (0 as i64):
+            ret v
+        end
+    end
+end
+
+func dw_bump(p: u8*, at: i64, base: Vector<i64>, k: int, patch: bool):
+    if patch:
+        wr32(p, at, rd32(p, at) + base[k])
+    end
+end
+
+func dw_secoff_base(attr: int, ver: int): int:
+    switch attr:
+        0x10: ret DWB_LINE end
+        0x55: ret ver >= 5 ? DWB_RNGL : DWB_RNG end
+        0x02, 0x19, 0x2A, 0x38, 0x40, 0x46, 0x48, 0x4A, 0x4D: ret ver >= 5 ? DWB_LOCL : DWB_LOC end
+        0x72: ret DWB_STROFF end
+        0x73: ret DWB_ADDR end
+        0x74: ret DWB_RNGL end
+        0x8C: ret DWB_LOCL end
+        0x79: ret DWB_MACRO end
+        0x43: ret DWB_MACINFO end
+    end
+    ret 0 - 1
+end
+
+func dw_form(p: u8*, at &: i64, form0: int, attr: int, ver: int, asz: int, base: Vector<i64>, patch: bool): bool:
+    mut form := form0
+    if form == 0x16:
+        form = dw_uleb(p, at) as int
+    end
+    switch form:
+        0x01: at = at + (asz as i64) ret true end
+        0x03: n2 := rd16(p, at) as i64 at = at + (2 as i64) + n2 ret true end
+        0x04: n4 := rd32(p, at) at = at + (4 as i64) + n4 ret true end
+        0x05, 0x12: at = at + (2 as i64) ret true end
+        0x06, 0x13, 0x1C, 0x1D, 0x1F20: at = at + (4 as i64) ret true end
+        0x07, 0x14, 0x20, 0x24: at = at + (8 as i64) ret true end
+        0x08:
+            until p[at] != (0 as u8):
+                at = at + (1 as i64)
+            end
+            at = at + (1 as i64)
+            ret true
+        end
+        0x09, 0x18: nb := dw_uleb(p, at) at = at + nb ret true end
+        0x0A: n1 := p[at] as i64 at = at + (1 as i64) + n1 ret true end
+        0x0B, 0x0C, 0x11, 0x25, 0x29: at = at + (1 as i64) ret true end
+        0x0D, 0x0F, 0x15, 0x1A, 0x1B, 0x22, 0x23, 0x1F01, 0x1F02: _u := dw_uleb(p, at) ret true end
+        0x0E, 0x1F21:
+            dw_bump(p, at, base, DWB_STR, patch)
+            at = at + (4 as i64)
+            ret true
+        end
+        0x1F:
+            dw_bump(p, at, base, DWB_LSTR, patch)
+            at = at + (4 as i64)
+            ret true
+        end
+        0x10:
+            dw_bump(p, at, base, DWB_INFO, patch)
+            at = at + (4 as i64)
+            ret true
+        end
+        0x17:
+            k := dw_secoff_base(attr, ver)
+            if k >= 0:
+                dw_bump(p, at, base, k, patch)
+            end
+            at = at + (4 as i64)
+            ret true
+        end
+        0x19, 0x21: ret true end
+        0x1E: at = at + (16 as i64) ret true end
+        0x26, 0x2A: at = at + (2 as i64) ret true end
+        0x27, 0x2B: at = at + (3 as i64) ret true end
+        0x28, 0x2C: at = at + (4 as i64) ret true end
+    end
+    ret false
+end
+
+func dw_info(p: u8*, start: i64, size: i64, abp: i64, base: Vector<i64>, patch: bool): bool:
+    mut cu := start
+    stop := start + size
+    until cu < stop:
+        len := rd32(p, cu)
+        if len >= (0xFFFFFFF0 as i64):
+            ret false
+        end
+        next := cu + (4 as i64) + len
+        ver := rd16(p, cu + (4 as i64))
+        if ver < 2 or ver > 5:
+            ret false
+        end
+        mut at := cu + (6 as i64)
+        mut asz := 8
+        mut aoff_at := at
+        if ver >= 5:
+            ut := rd8(p, at)
+            asz = rd8(p, at + (1 as i64))
+            aoff_at = at + (2 as i64)
+            at = at + (6 as i64)
+            if ut == 2 or ut == 6:
+                at = at + (12 as i64)
+            else ut == 4 or ut == 5:
+                at = at + (8 as i64)
+            end
+        else:
+            asz = rd8(p, at + (4 as i64))
+            at = at + (5 as i64)
+        end
+        mut ab := abp + rd32(p, aoff_at)
+        mut codes := HashMap {} as HashMap<int, int>
+        mut a_attr := Vector {} as Vector<int>
+        mut a_form := Vector {} as Vector<int>
+        mut a_first := Vector {} as Vector<int>
+        until true:
+            code := dw_uleb(p, ab) as int
+            if code == 0:
+                break
+            end
+            _tag := dw_uleb(p, ab)
+            ab = ab + (1 as i64)
+            codes.put(code, a_first.len())
+            a_first.push(a_attr.len())
+            until true:
+                an := dw_uleb(p, ab) as int
+                fm := dw_uleb(p, ab) as int
+                if fm == 0x21:
+                    _ic := dw_uleb(p, ab)
+                end
+                if an == 0 and fm == 0:
+                    break
+                end
+                a_attr.push(an)
+                a_form.push(fm)
+            end
+        end
+        a_first.push(a_attr.len())
+        mut ok := true
+        until ok and at < next:
+            code2 := dw_uleb(p, at) as int
+            if code2 == 0:
+                continue
+            end
+            if not codes.has(code2):
+                ok = false
+                break
+            end
+            ix := codes.get(code2)
+            mut q := a_first[ix]
+            until ok and q < a_first[ix + 1]:
+                ok = dw_form(p, at, a_form[q], a_attr[q], ver, asz, base, patch)
+                q += 1
+            end
+        end
+        codes.free()
+        a_attr.free()
+        a_form.free()
+        a_first.free()
+        if not ok:
+            ret false
+        end
+        dw_bump(p, aoff_at, base, DWB_ABBREV, patch)
+        cu = next
+    end
+    ret true
+end
+
+func dw_stroff(p: u8*, start: i64, size: i64, base: Vector<i64>):
+    mut at := start
+    stop := start + size
+    until at + (8 as i64) <= stop:
+        len := rd32(p, at)
+        if len >= (0xFFFFFFF0 as i64):
+            ret
+        end
+        next := at + (4 as i64) + len
+        mut e := at + (8 as i64)
+        until e + (4 as i64) <= next:
+            dw_bump(p, e, base, DWB_STR, true)
+            e = e + (4 as i64)
+        end
+        at = next
+    end
+end
+
+func dw_line(p: u8*, start: i64, size: i64, base: Vector<i64>):
+    mut at := start
+    stop := start + size
+    until at + (4 as i64) < stop:
+        len := rd32(p, at)
+        if len >= (0xFFFFFFF0 as i64):
+            ret
+        end
+        next := at + (4 as i64) + len
+        ver := rd16(p, at + (4 as i64))
+        if ver >= 5:
+            mut h := at + (12 as i64)
+            h = h + (4 as i64)
+            opb := rd8(p, h)
+            h = h + (opb as i64)
+            repeat 2:
+                nf := rd8(p, h)
+                h = h + (1 as i64)
+                mut fmt := Vector {} as Vector<int>
+                repeat nf:
+                    _ct := dw_uleb(p, h)
+                    fmt.push(dw_uleb(p, h) as int)
+                end
+                cnt := dw_uleb(p, h)
+                repeat cnt as int:
+                    each fm in fmt:
+                        _ok := dw_form(p, h, fm, 0, ver, 8, base, true)
+                    end
+                end
+                fmt.free()
+            end
+        end
+        at = next
+    end
+end
+
+func dw_aranges(p: u8*, start: i64, size: i64, base: Vector<i64>):
+    mut at := start
+    stop := start + size
+    until at + (10 as i64) <= stop:
+        len := rd32(p, at)
+        if len >= (0xFFFFFFF0 as i64):
+            ret
+        end
+        dw_bump(p, at + (6 as i64), base, DWB_INFO, true)
+        at = at + (4 as i64) + len
+    end
+end

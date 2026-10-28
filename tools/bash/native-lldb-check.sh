@@ -10,6 +10,11 @@
 # must resolve to the right lines, the loop's folded locals must have
 # constant locations there, and the image must carry __eh_frame.
 #
+# When clang and llvm-ar are there at build time it also links mix_arm64, a
+# program that calls into a static archive of two C objects, one with DWARF 4
+# and one with DWARF 5: lldb must stop in both C functions, read their locals
+# and walk back into the Salam caller, so the DWARF of every object is kept.
+#
 # Usage: tools/bash/native-lldb-check.sh build <salam> <dir>
 #        tools/bash/native-lldb-check.sh run <dir>
 
@@ -66,6 +71,50 @@ SRC
         fi
     done
     echo "native lldb check: built $DIR/dg_arm64 and $DIR/dg_x86_64"
+    AR=$(command -v llvm-ar || find /usr/bin -name 'llvm-ar-[0-9]*' 2>/dev/null | sort -V | tail -1)
+    if ! command -v clang >/dev/null 2>&1 || [ -z "$AR" ]; then
+        echo "native lldb check: no clang or llvm-ar, mix_arm64 not built"
+        exit 0
+    fi
+    mkdir -p "$DIR/mix"
+    cat >"$DIR/mix/mixc.c" <<'SRC'
+int cadd(int a, int b) {
+    int s = a + b;
+    return s * 2;
+}
+SRC
+    cat >"$DIR/mix/mixd.c" <<'SRC'
+int cmul(int a, int b) {
+    int p = a * b;
+    return p + 1;
+}
+SRC
+    cat >"$DIR/mix/mix.salam" <<'SRC'
+link static "libmix.a"
+
+extern:
+    func cadd(a: int, b: int): int
+    func cmul(a: int, b: int): int
+end
+
+noinline func walk(n: int): int:
+    ret cmul(n, 7) + cadd(n, 1)
+end
+
+func main:
+    println walk(5)
+end
+SRC
+    if ! (cd "$DIR/mix" && clang --target=arm64-apple-macos14 -gdwarf-4 -O0 -c mixc.c -o mixc.o &&
+        clang --target=arm64-apple-macos14 -gdwarf-5 -O0 -c mixd.c -o mixd.o &&
+        "$AR" rcs libmix.a mixc.o mixd.o &&
+        SALAM_LINKER=builtin "$SALAM" build mix.salam --backend=native -g --target=arm64-apple-macos \
+            --output="$DIR/mix_arm64" --log-level=error >build.log 2>&1); then
+        echo "native lldb check: building mix_arm64 failed"
+        sed -n 1,5p "$DIR/mix/build.log"
+        exit 1
+    fi
+    echo "native lldb check: built $DIR/mix_arm64"
     exit 0
 fi
 if [ "$MODE" != run ]; then
@@ -123,6 +172,23 @@ else
 fi
 if [ "$fail" -gt "$f0" ]; then
     cat "$xo"
+fi
+if [ -f "$DIR/mix_arm64" ]; then
+    f1=$fail
+    mo="$DIR/lldb_mix.txt"
+    chmod +x "$DIR/mix_arm64"
+    (cd "$DIR" && lim 300 lldb --batch --no-lldbinit \
+        -o "breakpoint set -f mixd.c -l 3" -o "breakpoint set -f mixc.c -l 3" \
+        -o run -o "frame variable" -o "thread backtrace" -o continue -o "frame variable" -o kill \
+        -- "$DIR/mix_arm64" >"$mo" 2>&1)
+    check "$mo" "p = 35" "mix DWARF 5 C local"
+    check "$mo" "s = 6" "mix DWARF 4 C local"
+    check "$mo" "\`walk(" "mix backtrace into the Salam caller"
+    if [ "$fail" -gt "$f1" ]; then
+        cat "$mo"
+    fi
+else
+    echo "native lldb check: no mix_arm64, the C archive case was skipped"
 fi
 echo "native lldb check: $fail failed"
 [ "$fail" -eq 0 ]

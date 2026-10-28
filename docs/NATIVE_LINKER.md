@@ -454,12 +454,17 @@ slot), `R_AARCH64_GLOB_DAT` and `R_AARCH64_RELATIVE` for GOT slots,
 `R_AARCH64_ABS64` or `RELATIVE` for 64-bit data words, and
 `/lib/ld-linux-aarch64.so.1` as the interpreter. Like x86-64 it binds
 eagerly through the GOT and makes no copy relocations, so a direct
-reference to data in a shared library is an error. The driver looks for
+reference to data in a shared library is an error. An address built with
+`MOVZ`/`MOVK` (`R_AARCH64_MOVW_UABS_G*`, which `-mcmodel=large` without
+`-fPIC` produces) cannot be fixed up at load time, so the linker refuses it in
+a PIE instead of writing the link-time address into the instruction. The driver looks for
 `Scrt1.o` and `libc.so` in a bundled sysroot or `SALAM_GLIBC_SYSROOT` first, then
 in the target's own directories (`/usr/lib/aarch64-linux-gnu` on an AArch64
 host, `/usr/aarch64-linux-gnu/lib` where Debian's cross packages put it).
 `tools/bash/native-glibc-check.sh` runs test programs and a call into a C
-shared library under qemu.
+shared library under qemu; it passes its sysroot argument to the linker as
+`SALAM_GLIBC_SYSROOT` as well as to the emulator, and fails when the program
+exits with an error.
 
 With the LLVM backend the driver asks LLVM for an object instead of an
 executable and hands it to the same dispatcher the native backend uses.

@@ -107,10 +107,27 @@ func call_emit_arg(
 end
 
 func cg_fill_defaults(
-    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, call: int, sig: int, emitted0: int
+    g &: Cg, s &: sm.Sema, a &: at.Ast, b &: str.StringBuilder, call: int, sig: int, emitted0: int, home: int
 ):
     if sig == 0 or sm.SigAt(s, sig).decl == 0:
         ret
+    end
+    mut dhome := home
+    if dhome == 0 and sm.SigAt(s, sig).owner != 0:
+        dhome = sm.SymAt(s, sm.SigAt(s, sig).owner).home
+    end
+    saved_lit_home := g.cur_lit_home
+    saved_lambda := g.cur_lambda
+    saved_struct := g.cur_struct
+    mut held := Vector {} as Vector<str>
+    repeat g.locals.len() in li:
+        held.push(g.locals.get(li))
+    end
+    g.locals.clear()
+    g.cur_lambda = 0
+    g.cur_struct = 0
+    if dhome != 0:
+        g.cur_lit_home = dhome
     end
     dn := at.Get(a, sm.SigAt(s, sig).decl)
     np := dn.list.len()
@@ -131,9 +148,21 @@ func cg_fill_defaults(
         end
         i += 1
     end
+    g.cur_lit_home = saved_lit_home
+    g.cur_lambda = saved_lambda
+    g.cur_struct = saved_struct
+    g.locals.clear()
+    repeat held.len() in hi:
+        g.locals.push(held.get(hi))
+    end
+    held.free()
 end
 
 func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
+    ret call_args_in(g, s, a, call, sig, 0)
+end
+
+func call_args_in(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int, home: int): str:
     mut b := co.SbNew()
     cn := at.Get(a, call)
     repeat cn.list.len() in i:
@@ -147,7 +176,7 @@ func call_args(g &: Cg, s &: sm.Sema, a &: at.Ast, call: int, sig: int): str:
         end
         call_emit_arg(g, s, a, b, argid, sig, i, nextid)
     end
-    cg_fill_defaults(g, s, a, b, call, sig, cn.list.len())
+    cg_fill_defaults(g, s, a, b, call, sig, cn.list.len(), home)
     r := co.SbCstr(b)
     co.SbFree(b)
     ret r
@@ -166,7 +195,7 @@ func call_args_lead(
         co.SbPuts(b, ", ")
         call_emit_arg(g, s, a, b, cn.list.get(i), sig, i, nextid)
     end
-    cg_fill_defaults(g, s, a, b, call, sig, 1)
+    cg_fill_defaults(g, s, a, b, call, sig, 1, 0)
     r := co.SbCstr(b)
     co.SbFree(b)
     ret r
@@ -754,7 +783,7 @@ func call_pkg(
         mangled = cg_mangle_in(s, sm.SymAt(s, pk).pkgname, "", nm, empty)
         empty.free()
     end
-    args := call_args(g, s, a, n, sig)
+    args := call_args_in(g, s, a, n, sig, sm.SymAt(s, pk).members)
     if sig != 0 and type_is_byval_agg(s, sm.SigAt(s, sig).ret_type) and not is_extern_call:
         ret call_sret(g, s, sm.SigAt(s, sig).ret_type, mangled, args)
     end

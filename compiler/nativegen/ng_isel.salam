@@ -3822,11 +3822,101 @@ func isel_select(g &: Ng, i: int):
         ret
     end
     r3 := gpr(g)
+    tie := tie_true_arm(g, i)
     _t3 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
-    _c4 := e_copy(g, r3, rf)
-    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, rt)
-    g.mc.cc[cm2] = X_NE
+    _c4 := e_copy(g, r3, tie ? rt : rf)
+    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, tie ? rf : rt)
+    g.mc.cc[cm2] = tie ? X_E : X_NE
     set_res(g, i, r3)
+end
+
+func phi_dead_after(g &: Ng, v: int, b: int): bool:
+    dblk := g.i_blk[g.v_def[v]]
+    mut seen := HashMap {} as HashMap<int, int>
+    mut work := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    work.push(b)
+    mut ok := true
+    mut steps := 0
+    until ok and work.len() > 0:
+        x := work.pop()
+        blk_succs(g, x, succ)
+        each y in succ:
+            if y == dblk or seen.has(y):
+                continue
+            end
+            seen.put(y, 1)
+            steps += 1
+            if steps > 64:
+                ok = false
+                break
+            end
+            mut j := g.b_first[y]
+            until j >= 0:
+                if uses_val(g, j, v):
+                    ok = false
+                    break
+                end
+                j = g.i_next[j]
+            end
+            work.push(y)
+        end
+    end
+    seen.free()
+    work.free()
+    succ.free()
+    ret ok
+end
+
+func last_use_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or (g.v_kind[v] != VK_INS and g.v_kind[v] != VK_ARG):
+        ret false
+    end
+    b := g.i_blk[i]
+    mut n := 0
+    mut after := false
+    mut j := g.b_first[b]
+    until j >= 0:
+        if j == i:
+            after = true
+            n += 1
+        else uses_val(g, j, v):
+            if after:
+                ret false
+            end
+            n += 1
+        end
+        j = g.i_next[j]
+    end
+    if n == g.v_uses[v]:
+        ret true
+    end
+    ret g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_PHI and g.i_blk[g.v_def[v]] != b and phi_dead_after(g, v, b)
+end
+
+func feeds_own_phi(g &: Ng, v: int, i: int): bool:
+    if g.off_seltie or v < 0 or g.v_kind[v] != VK_INS or g.i_op[g.v_def[v]] != OP_PHI or g.i_res[i] < 0:
+        ret false
+    end
+    p := g.v_def[v]
+    mut hit := false
+    repeat g.i_pcount[p] in k:
+        if g.pool[g.i_ps[p] + 2 * k] == g.i_res[i]:
+            hit = true
+        end
+    end
+    ret hit and last_use_here(g, v, i)
+end
+
+func tie_true_arm(g &: Ng, i: int): bool:
+    b := g.i_b[i]
+    c := g.i_c[i]
+    pb := feeds_own_phi(g, b, i)
+    pc := feeds_own_phi(g, c, i)
+    if pb != pc:
+        ret pb
+    end
+    ret dies_here(g, b, i) and not dies_here(g, c, i)
 end
 
 func dies_here(g &: Ng, v: int, i: int): bool:
@@ -3841,7 +3931,7 @@ func isel_select_fused(g &: Ng, i: int, d: int):
     t := g.i_ty[i]
     mut bv := g.i_b[i]
     mut cv := g.i_c[i]
-    swap := g.i_op[d] != OP_FCMP and dies_here(g, bv, i) and not dies_here(g, cv, i)
+    swap := g.i_op[d] != OP_FCMP and tie_true_arm(g, i)
     if swap:
         bv = g.i_c[i]
         cv = g.i_b[i]

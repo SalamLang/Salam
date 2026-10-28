@@ -19,6 +19,60 @@ import tempfile
 
 M = 1000003
 
+PRELUDE = {
+    "types": """interface Sh:
+    func val(): i64
+end
+
+struct Acc:
+    pub x: i64 = 0
+    pub y: i64 = 0
+end
+
+struct Pr<T>:
+    pub a: T
+    pub b: T
+    pub func sum(): T:
+        ret this.a + this.b
+    end
+end
+
+struct Sq:
+    pub k: i64 = 0
+    pub func val(): i64:
+        ret this.k * this.k % 1000003
+    end
+end
+
+struct Ln:
+    pub k: i64 = 0
+    pub func val(): i64:
+        ret this.k * 3 + 1
+    end
+end""",
+    "gens": """func gmax<T>(a: T, b: T): T:
+    if a > b:
+        ret a
+    end
+    ret b
+end
+
+func gfold<T>(v: Vector<T>, z: T): T:
+    mut s := z
+    each e in v:
+        s = s + e
+    end
+    ret s
+end
+
+func gcount<T>(v: Vector<T>): int:
+    ret v.len()
+end""",
+    "lambdas": """noinline func app(f: func (i64) i64, n: i64): i64:
+    ret f(n)
+end""",
+}
+
 
 class Gen:
     def __init__(self, rng):
@@ -208,22 +262,133 @@ class Gen:
             f"    ret (r + acc.x + acc.y) % {M}",
             "end"])
 
+    def strs(self, idx):
+        """String building, slicing, searching and UTF-8 walks."""
+        lines = [f"noinline func s{idx}(a: i64, b: i64): i64:",
+                 "    mut t := str.FromInt(a % 1000)",
+                 f"    mut u := {self.r.choice(['\"q\"', '\"سلام\"', '\" Ab \"'])} + str.FromInt(b % 100)",
+                 "    mut h := 0 as i64"]
+        for _ in range(self.r.randint(3, 8)):
+            k = self.r.randrange(12)
+            if k == 0:
+                lines.append("    t = t + u")
+            elif k == 1:
+                lines.append(f"    u = u + str.FromInt(h % {self.r.choice([10, 1000, 65536])})")
+            elif k == 2:
+                lines.append(f"    t = t.{self.r.choice(['upper', 'lower', 'trim'])}()")
+            elif k == 3:
+                st = self.r.randint(0, 3)
+                lines += [f"    if t.len() > {st * 2 + 2}:", f"        u = t.substr({st}, t.len() - {st * 2})", "    end"]
+            elif k == 4:
+                lines += ["    if u.len() < 40:", f"        u = u.repeat({self.r.randint(1, 3)})", "    end"]
+            elif k == 5:
+                lines.append(f"    h = h + (t.find({self.r.choice(['u', '\"q\"', '\"1\"', '\"ل\"'])}) as i64)")
+            elif k == 6:
+                m = self.r.choice(["starts_with", "ends_with", "includes"])
+                lines += [f"    if t.{m}({self.r.choice(['u', '\"1\"', '\"Q\"', '\"م\"'])}):", f"        h = h + {self.r.randint(1, 9)}", "    end"]
+            elif k == 7:
+                op = self.r.choice(["==", "!="])
+                lines += [f"    if t {op} u:", "        h = h + 11", "    end"]
+            elif k == 8:
+                lines += ["    each c in t.bytes():", f"        h = (h * 31 + (c as i64)) % {M}", "    end"]
+            elif k == 9:
+                lines += ["    each ch in u:", f"        h = (h * 7 + (ch.len() as i64)) % {M}", "    end"]
+            elif k == 10:
+                lines.append("    h = h + (t.char_count() as i64) * 3 + (u.len() as i64)")
+            else:
+                lines.append("    t = \" \" + t + u.substr(0, u.len() / 2) + \" \"")
+            lines += ["    if t.len() > 64:", "        t = t.substr(0, 32)", "    end"]
+        lines += ["    h = h + (t.len() as i64) * 5 + (u.len() as i64)",
+                  "    each c in t.bytes():", f"        h = (h * 31 + (c as i64)) % {M}", "    end",
+                  "    each c in u.bytes():", f"        h = (h * 37 + (c as i64)) % {M}", "    end",
+                  "    ret h", "end"]
+        return "\n".join(lines)
+
+    def gens(self, idx):
+        """Generic functions and a generic struct, instantiated per element type."""
+        ty, lim = self.r.choice([("i64", 100000), ("int", 10000), ("i16", 100), ("u8", 100), ("f64", 1000)])
+
+        def to(e):
+            return e if ty == "i64" else f"(({e}) as {ty})"
+
+        def wide(e):
+            return e if ty == "i64" else f"({e} as i64)"
+
+        zero = "0" if ty == "int" else f"(0 as {ty})"
+        lines = [f"noinline func g{idx}(a: i64, b: i64): i64:",
+                 f"    mut v := Vector {{}} as Vector<{ty}>",
+                 f"    repeat {self.r.randint(1, 9)} in i:",
+                 f"        v.push({to(f'((a + (i as i64) * 7919) % {lim} + {lim}) % {lim}')})",
+                 "    end",
+                 f"    p := Pr {{ a = {to(f'((a % {lim}) + {lim}) % {lim}')}, b = {to(f'((b % {lim}) + {lim}) % {lim}')} }} as Pr<{ty}>",
+                 f"    mut r := {wide(f'(gfold(v, {zero}) + p.sum())')} % {M} + (gcount(v) as i64) + {wide('gmax(p.a, p.b)')}"]
+        for n in range(self.r.randint(1, 4)):
+            k = self.r.randrange(4)
+            if k == 0:
+                lines.append(f"    r = (r + {wide('gmax(p.a, p.b)')}) % {M}")
+            elif k == 1:
+                lines += ["    each e in v:", f"        r = (r * 3 + {wide('gmax(e, p.b)')}) % {M}", "    end"]
+            elif k == 2:
+                lines.append(f"    r = (r + gmax(r, (gcount(v) as i64))) % {M}")
+            else:
+                lines += [f"    q{n} := Pr {{ a = r % 1000, b = (gcount(v) as i64) }} as Pr<i64>",
+                          f"    r = (r + q{n}.sum() * 7) % {M}"]
+        lines += ["    v.free()", "    ret r", "end"]
+        return "\n".join(lines)
+
+    def lambdas(self, idx):
+        """Lambdas with captures, through a parameter, a Vector and dyn dispatch."""
+        k1 = self.r.choice(["b % 97", "a ^ b", "(a + b) % 1000", "b & 255"])
+        lines = [f"noinline func l{idx}(a: i64, b: i64): i64:",
+                 f"    k := {k1}",
+                 f"    f := (x: i64): ret (x * {self.r.choice([1, 3, 7])} + k) % {M} end",
+                 "    mut s := app(f, a)",
+                 "    mut fs := Vector {} as Vector<func (i64) i64>",
+                 "    fs.push(f)"]
+        for _ in range(self.r.randint(0, 3)):
+            body = self.r.choice(["x ^ k", "(x + a) % 65536", "x > k ? x - k : k - x", f"(x * x) % {M}"])
+            lines.append(f"    fs.push((x: i64): ret {body} end)")
+        lines += ["    each g in fs:", f"        s = (s + g(s % 46337)) % {M}", "    end",
+                  "    mut ds := Vector {} as Vector<dyn Sh>"]
+        for _ in range(self.r.randint(1, 4)):
+            lines.append(f"    ds.push({self.r.choice(['Sq', 'Ln'])} {{ k = {self.r.choice(['a', 'b', 's'])} % 1000 }})")
+        lines += ["    each d in ds:", f"        s = (s * 5 + d.val()) % {M}", "    end",
+                  "    fs.free()", "    ds.free()", "    ret s", "end"]
+        return "\n".join(lines)
+
     def program(self, nf):
-        parts = ["struct Acc:\n    pub x: i64 = 0\n    pub y: i64 = 0\nend"]
+        parts = []
         names = []
+        used = set()
         for k in range(nf):
             parts.append(self.func(k))
             names.append(f"f{k}")
-            kind = self.r.randrange(3)
+            kind = self.r.randrange(6)
             if kind == 0:
                 parts.append(self.kernel(k))
                 names.append(f"k{k}")
             elif kind == 1:
                 parts.append(self.floats(k))
                 names.append(f"d{k}")
-            else:
+            elif kind == 2:
                 parts.append(self.calls(k))
                 names.append(f"c{k}")
+            elif kind == 3:
+                parts.append(self.strs(k))
+                used.add("strs")
+                names.append(f"s{k}")
+            elif kind == 4:
+                parts.append(self.gens(k))
+                used.add("gens")
+                names.append(f"g{k}")
+            else:
+                parts.append(self.lambdas(k))
+                used.add("lambdas")
+                names.append(f"l{k}")
+        head = ["import str"] if "strs" in used else []
+        head.append(PRELUDE["types"])
+        head += [PRELUDE[u] for u in ("gens", "lambdas") if u in used]
+        parts = head + parts
         main = ["func main:"]
         for nm in names:
             for (a, b) in [(0, 0), (1, 2), (-5, 7), (123456, -987), (65535, 3)]:

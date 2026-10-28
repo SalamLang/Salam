@@ -154,7 +154,6 @@ def main():
     salam = os.path.abspath(a.salam)
     work = tempfile.mkdtemp(prefix="salamfuzz.")
     bad = 0
-    skipped = 0
     for n in range(a.count):
         seed = a.seed + n
         src = Gen(random.Random(seed)).program(a.funcs)
@@ -164,8 +163,8 @@ def main():
             f.write(src)
         rc, _, err = run([salam, "build", "p.salam", f"--backend={a.ref}", "--release", "--output=ref", "--log-level=error"], d)
         if rc != 0:
-            skipped += 1
-            print(f"SKIP seed {seed}: reference build failed: {err.strip().splitlines()[:1]}")
+            bad += 1
+            print(f"FAIL seed {seed}: reference build failed: {err.strip()[:300]}")
             continue
         tgt = [f"--target={a.target}"] if a.target else []
         rc, _, err = run([salam, "build", "p.salam", "--backend=native", "--release", "--output=nat", "--log-level=error"] + tgt, d)
@@ -173,18 +172,21 @@ def main():
             bad += 1
             print(f"FAIL seed {seed}: native build failed: {err.strip()[:300]}")
             continue
-        rc1, out1, _ = run(["./ref"], d)
+        rc1, out1, err1 = run(["./ref"], d)
         runner = a.runner.split() if a.runner else []
         rc2, out2, err2 = run(runner + ["./nat"], d)
-        if (rc1, out1) != (rc2, out2):
+        if rc1 != 0 or rc2 != 0:
             bad += 1
-            print(f"DIFF seed {seed}: exit {rc1} vs {rc2}")
-            if a.keep:
-                os.makedirs(a.keep, exist_ok=True)
-                shutil.copy(os.path.join(d, "p.salam"), os.path.join(a.keep, f"diff_{seed}.salam"))
+            print(f"FAIL seed {seed}: run failed, exit {rc1} vs {rc2}: {(err1 if rc1 else err2).strip()[:200]}")
+        elif out1 != out2:
+            bad += 1
+            print(f"DIFF seed {seed}: output differs")
+        if (rc1 != 0 or rc2 != 0 or out1 != out2) and a.keep:
+            os.makedirs(a.keep, exist_ok=True)
+            shutil.copy(os.path.join(d, "p.salam"), os.path.join(a.keep, f"diff_{seed}.salam"))
         shutil.rmtree(d, ignore_errors=True)
     shutil.rmtree(work, ignore_errors=True)
-    print(f"salamfuzz: {a.count - bad - skipped} agree, {bad} differ, {skipped} skipped")
+    print(f"salamfuzz: {a.count - bad} agree, {bad} failed")
     return 1 if bad else 0
 
 

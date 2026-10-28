@@ -203,6 +203,7 @@ next to the executable (`nl_pdb.salam`) and points a debug directory entry
 with an `RSDS` record at it, so WinDbg, Visual Studio and
 `llvm-symbolizer` find functions and lines without the DWARF. The PDB is an
 MSF file with 4 KiB blocks holding:
+
 - the info stream (GUID, age and a `/names` entry);
 - empty TPI and IPI streams;
 - DBI, with module info, section contributions, a section map, file info

@@ -11,6 +11,8 @@ const INL_TINY := 10
 const INL_SLOT_BONUS := 16
 const INL_MEMOP_BONUS := 6
 const INL_CONST_BONUS := 6
+const INL_LOOP_SITE := 120
+const INL_LOOP_BLOCKS := 40
 
 pub struct Ic:
     pub ent: Vector<int> = Vector {}
@@ -116,7 +118,7 @@ func inline_ok_fn(g &: Ng, cost: int): int:
     end
     mut need := 0
     if cost > lim:
-        if g.off_isite or cost > lim + INL_SITE_MAX:
+        if g.off_isite or cost > lim + (g.off_loopinl ? INL_SITE_MAX : INL_LOOP_SITE):
             if g.inl_trace:
                 printerrln "inline: skip " + tab_str(g.syms, g.f_sym) + " cost " + cost + " limit " + lim
             end
@@ -585,8 +587,54 @@ func agg_res_fields_only(g &: Ng, c: int): bool:
     ret n > 0
 end
 
+func inl_mark_loops(g &: Ng):
+    nb := g.b_first.len()
+    g.inl_loopb.clear()
+    repeat nb:
+        g.inl_loopb.push(false)
+    end
+    if g.off_loopinl or g.b_rpo.len() > INL_LOOP_BLOCKS:
+        ret
+    end
+    build_dom(g)
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 9000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+    end
+    repeat nb in b:
+        if l.inl[b] != 0:
+            g.inl_loopb[b] = true
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func ic_leaf(g &: Ng, e: int): bool:
+    i0 := g.ic.e_i0[e]
+    repeat g.ic.e_ni[e] in k:
+        if g.ic.op[i0 + k] == OP_CALL:
+            ret false
+        end
+    end
+    ret true
+end
+
 func site_bonus(g &: Ng, c: int, e: int): int:
     mut bonus := 0
+    cb := g.i_blk[c]
+    if cb >= 0 and cb < g.inl_loopb.len() and g.inl_loopb[cb] and ic_leaf(g, e):
+        bonus += INL_LOOP_SITE
+    end
     if not g.off_aggres and agg_res_fields_only(g, c):
         bonus += 16 + tsize(g, g.v_ty[g.i_res[c]]) / 8
     end
@@ -610,6 +658,7 @@ end
 func inline_calls(g &: Ng): bool:
     mut grown := 0
     mut changed := false
+    inl_mark_loops(g)
     mut work := Vector {} as Vector<int>
     each b in g.b_rpo:
         mut i := g.b_first[b]

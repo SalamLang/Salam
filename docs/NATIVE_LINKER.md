@@ -533,7 +533,7 @@ under wine passes the whole `llvm` test group.
 A direct branch reaches ±128 MB on AArch64, ±32 MB in ARM mode and ±16 MB
 in Thumb mode, and an ARM `B` cannot switch to Thumb (or a Thumb `B.W` to
 ARM). After layout the linker checks every `CALL26`/`JUMP26` (AArch64 ELF),
-`BRANCH26` (ARM64 PE), `CALL`/`JUMP24`/`PC24`/`PLT32` (ARM) and
+`BRANCH26` (ARM64 PE and arm64 Mach-O), `CALL`/`JUMP24`/`PC24`/`PLT32` (ARM) and
 Thumb `CALL`/`JUMP24` relocation. One that misses its target gets
 a 16-byte thunk at the end of the input section that holds the branch, and
 the branch goes to the thunk instead. The section grows, so layout runs
@@ -542,16 +542,17 @@ once, as before. Thunks are shared by every branch in a section to the same
 target.
 
 - AArch64 ELF: `ldr x16, #8; br x16` and the absolute target.
-- ARM64 PE: `adrp x16; add x16; br x16`, PC-relative, so the image stays
-  relocatable without a base relocation.
+- ARM64 PE and arm64 Mach-O: `adrp x16; add x16; br x16`, PC-relative, so
+  the image stays relocatable without a base relocation or a rebase entry.
+  On Mach-O a call to an imported function goes to its `__stubs` entry, so
+  a thunk for one targets the stub.
 - ARM: `ldr pc, [pc, #-4]` and the target, Thumb bit included, so the load
   switches mode when it has to.
 - Thumb: `ldr.w pc, [pc]` and the target.
 
 `x16` is the AAPCS64 register reserved for this, and an ARM thunk clobbers
 nothing. A conditional or test branch on AArch64 that does not reach is
-reported as an error rather than patched with a wrong offset. Mach-O links
-have no thunks yet, so a `BRANCH26` there that does not reach is an error.
+reported as an error rather than patched with a wrong offset.
 
 ### ARM unwind tables
 

@@ -197,15 +197,19 @@ discardable section, names it through a COFF string table that
 offset inside the merged section and `ADDR64` to the virtual address
 without a base relocation.
 
-When objects carry CodeView (`.debug$S` without `.debug$T`, which is what
-`-g` gives on Windows targets), the PE linker also writes `<name>.pdb`
+When objects carry CodeView (`.debug$S`, and `.debug$T` holding only the
+pointer, struct, field list, array and enum records the native backend
+writes, which is what `-g` gives on Windows targets), the PE linker also writes `<name>.pdb`
 next to the executable (`nl_pdb.salam`) and points a debug directory entry
 with an `RSDS` record at it, so WinDbg, Visual Studio and
 `llvm-symbolizer` find functions and lines without the DWARF. The PDB is an
 MSF file with 4 KiB blocks holding:
 
 - the info stream (GUID, age and a `/names` entry);
-- empty TPI and IPI streams;
+- the TPI stream, with every object's `.debug$T` records appended and their
+  type indices shifted (in the records and in the module's symbols), plus
+  its hash stream (names for structs and enums, JamCRC for the rest), which
+  debuggers use to resolve forward references; an empty IPI stream;
 - DBI, with module info, section contributions, a section map, file info
   and a section header stream;
 - `/names`;

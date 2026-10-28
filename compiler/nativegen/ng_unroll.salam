@@ -1,0 +1,838 @@
+package nativegen
+
+const UNR_MAX_TRIP := 32
+const UNR_MAX_SIZE := 320
+
+pub struct Unr:
+    pub inl: Vector<bool> = Vector {}
+    pub blocks: Vector<int> = Vector {}
+    pub vmap: Vector<int> = Vector {}
+    pub pmap: Vector<int> = Vector {}
+    pub bmap: Vector<int> = Vector {}
+    pub heads: Vector<int> = Vector {}
+    pub wl: Vector<int> = Vector {}
+    pub ivals: Vector<i64> = Vector {}
+    pub iv: int = 0 - 1
+    pub side: int = 0
+    pub xphi: Vector<int> = Vector {}
+    pub xval: Vector<int> = Vector {}
+    pub xblk: Vector<int> = Vector {}
+    pub body: int = 0
+    pub total: int = 0
+end
+
+func unr_val(u &: Unr, v: int): int:
+    if v >= 0 and v < u.vmap.len() and u.vmap[v] >= 0:
+        ret u.vmap[v]
+    end
+    ret v
+end
+
+func unr_prev(u &: Unr, v: int): int:
+    if v >= 0 and v < u.pmap.len() and u.pmap[v] >= 0:
+        ret u.pmap[v]
+    end
+    ret v
+end
+
+func unr_blk(u &: Unr, b: int, h: int, hnext: int): int:
+    if b == h:
+        ret hnext
+    end
+    if b >= 0 and b < u.bmap.len() and u.bmap[b] >= 0:
+        ret u.bmap[b]
+    end
+    ret b
+end
+
+func loop_blocks(g &: Ng, u &: Unr, h: int, latch: int): bool:
+    u.blocks.clear()
+    u.inl.clear()
+    repeat g.b_first.len():
+        u.inl.push(false)
+    end
+    u.inl[h] = true
+    u.blocks.push(h)
+    u.wl.clear()
+    if latch != h:
+        u.inl[latch] = true
+        u.blocks.push(latch)
+        u.wl.push(latch)
+    end
+    until u.wl.len() > 0:
+        b := u.wl.pop()
+        repeat g.b_npred[b] in q:
+            p := g.b_pred[g.b_ps[b] + q]
+            if not u.inl[p]:
+                if g.b_order[p] < 0:
+                    ret false
+                end
+                u.inl[p] = true
+                u.blocks.push(p)
+                u.wl.push(p)
+            end
+        end
+    end
+    ret true
+end
+
+func eval_icmp(g &: Ng, t: int, p: int, a: i64, b: i64): bool:
+    ua := uval(g, t, a)
+    ub := uval(g, t, b)
+    sa := norm_int(g, t, a)
+    sb := norm_int(g, t, b)
+    switch p:
+        CC_EQ: ret sa == sb end
+        CC_NE: ret sa != sb end
+        CC_SLT: ret sa < sb end
+        CC_SLE: ret sa <= sb end
+        CC_SGT: ret sa > sb end
+        CC_SGE: ret sa >= sb end
+        CC_ULT: ret ua < ub end
+        CC_ULE: ret ua <= ub end
+        CC_UGT: ret ua > ub end
+        CC_UGE: ret ua >= ub end
+    end
+    ret false
+end
+
+func trip_count(g &: Ng, u &: Unr, h: int, latch: int, pre: int): int:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR:
+        ret 0 - 1
+    end
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP or g.i_blk[d] != h:
+        ret 0 - 1
+    end
+    mut iv := g.i_a[d]
+    mut lim := g.i_b[d]
+    mut p := g.i_x[d]
+    if is_cint(g, iv):
+        tmp := iv
+        iv = lim
+        lim = tmp
+        p = swap_pred(p)
+    end
+    if not is_cint(g, lim) or iv < 0 or g.v_kind[iv] != VK_INS:
+        ret 0 - 1
+    end
+    phi := g.v_def[iv]
+    if g.i_op[phi] != OP_PHI or g.i_blk[phi] != h:
+        ret 0 - 1
+    end
+    init := phi_val_for(g, phi, pre)
+    nx := phi_val_for(g, phi, latch)
+    if not is_cint(g, init) or nx < 0 or g.v_kind[nx] != VK_INS:
+        ret 0 - 1
+    end
+    sd := g.v_def[nx]
+    sop := g.i_op[sd]
+    stepop := sop == OP_ADD or sop == OP_SUB or sop == OP_MUL or sop == OP_SHL or sop == OP_LSHR or sop == OP_ASHR or sop == OP_SDIV or sop == OP_UDIV
+    if not stepop or g.i_a[sd] != iv or not is_cint(g, g.i_b[sd]):
+        ret 0 - 1
+    end
+    step := g.v_i[g.i_b[sd]]
+    ty := g.v_ty[iv]
+    if is_agg(g, ty) or is_flt(g, ty) or int_bits(g, ty) < 8:
+        ret 0 - 1
+    end
+    stay_on_true := u.inl[g.i_b[t]]
+    if stay_on_true == u.inl[g.i_c[t]]:
+        ret 0 - 1
+    end
+    mut v := g.v_i[init]
+    u.ivals.clear()
+    u.iv = iv
+    repeat UNR_MAX_TRIP + 1 in k:
+        u.ivals.push(v)
+        cnd := eval_icmp(g, g.v_ty[lim], p, v, g.v_i[lim])
+        if cnd != stay_on_true:
+            ret k
+        end
+        mut ok := false
+        nv := eval_bin(g, sop, ty, v, step, ok)
+        if not ok:
+            ret 0 - 1
+        end
+        v = norm_int(g, ty, nv)
+    end
+    ret 0 - 1
+end
+
+func iv_branch(g &: Ng, u &: Unr, t: int, v: i64, taken &: int): bool:
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    mut x := g.i_a[d]
+    mut k := g.i_b[d]
+    mut p := g.i_x[d]
+    if is_cint(g, x):
+        tmp := x
+        x = k
+        k = tmp
+        p = swap_pred(p)
+    end
+    if not is_cint(g, k) or x < 0 or g.v_kind[x] != VK_INS:
+        ret false
+    end
+    if x != u.iv:
+        xd := g.v_def[x]
+        if g.i_op[xd] != OP_TRUNC or g.i_a[xd] != u.iv:
+            ret false
+        end
+    end
+    tx := g.v_ty[x]
+    taken = eval_icmp(g, tx, p, norm_int(g, tx, v), g.v_i[k]) ? g.i_b[t] : g.i_c[t]
+    ret true
+end
+
+func unroll_sim_size(g &: Ng, u &: Unr, h: int, trips: int, bsz &: Vector<int>): int:
+    if g.off_usim or u.iv < 0 or u.ivals.len() < trips:
+        ret 0 - 1
+    end
+    mut stamp := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        stamp.push(0)
+    end
+    mut stk := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    mut tot := 0
+    repeat trips in k:
+        stk.clear()
+        stk.push(h)
+        until stk.len() > 0:
+            b := stk.pop()
+            if stamp[b] == k + 1:
+                continue
+            end
+            stamp[b] = k + 1
+            if b != h:
+                tot += bsz[b]
+            end
+            t := g.b_last[b]
+            mut tk := 0 - 1
+            if b != h and t >= 0 and g.i_op[t] == OP_CBR and iv_branch(g, u, t, u.ivals[k], tk):
+                tot -= 2
+                if u.inl[tk] and tk != h:
+                    stk.push(tk)
+                end
+            else:
+                blk_succs(g, b, succ)
+                each s in succ:
+                    if u.inl[s] and s != h:
+                        stk.push(s)
+                    end
+                end
+            end
+        end
+    end
+    stamp.free()
+    stk.free()
+    succ.free()
+    ret tot
+end
+
+func unroll_ok(g &: Ng, u &: Unr, h: int, latch: int, trips: int): bool:
+    mut n := 0
+    mut succ := Vector {} as Vector<int>
+    mut bsz := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        bsz.push(0)
+    end
+    each b in u.blocks:
+        if b != h and g.b_order[b] < g.b_order[h]:
+            succ.free()
+            ret false
+        end
+        blk_succs(g, b, succ)
+        each s in succ:
+            if not u.inl[s] and b != h:
+                if g.off_mxun:
+                    succ.free()
+                    ret false
+                end
+                u.side += 1
+            end
+            if s == h and b != latch:
+                succ.free()
+                ret false
+            end
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_ALLOCA:
+                succ.free()
+                ret false
+            end
+            if b != h and op == OP_PHI:
+                pc := g.i_pcount[i]
+                ps := g.i_ps[i]
+                repeat pc in q:
+                    if g.pool[ps + 2 * q + 1] == h:
+                        succ.free()
+                        ret false
+                    end
+                end
+            end
+            n += 1
+            bsz[b] = bsz[b] + 1
+            i = g.i_next[i]
+        end
+    end
+    succ.free()
+    if u.side > 0 and not side_uses_ok(g, u):
+        bsz.free()
+        ret false
+    end
+    u.body = n
+    u.total = n * trips
+    if n * trips <= UNR_MAX_SIZE:
+        bsz.free()
+        ret true
+    end
+    sim := unroll_sim_size(g, u, h, trips, bsz)
+    bsz.free()
+    u.total = sim
+    ret sim >= 0 and sim <= UNR_MAX_SIZE
+end
+
+func loop_def(g &: Ng, u &: Unr, v: int): bool:
+    if v < 0 or v >= g.v_kind.len() or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b >= 0 and b < u.inl.len() and u.inl[b]
+end
+
+func all_preds_in(g &: Ng, u &: Unr, x: int): bool:
+    if g.b_npred[x] == 0:
+        ret false
+    end
+    repeat g.b_npred[x] in k:
+        p := g.b_pred[g.b_ps[x] + k]
+        if p < 0 or p >= u.inl.len() or not u.inl[p]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lcssa_use(g &: Ng, u &: Unr, i: int, v: int, fi &: Vector<int>, fv &: Vector<int>): bool:
+    if not loop_def(g, u, v):
+        ret true
+    end
+    x := g.i_blk[i]
+    if x < 0 or not all_preds_in(g, u, x):
+        ret false
+    end
+    fi.push(i)
+    fv.push(v)
+    ret true
+end
+
+func side_uses_ok(g &: Ng, u &: Unr): bool:
+    mut fi := Vector {} as Vector<int>
+    mut fv := Vector {} as Vector<int>
+    mut ok := true
+    each b in g.b_rpo:
+        if not ok:
+            break
+        end
+        if b < u.inl.len() and u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0 and ok:
+            op := g.i_op[i]
+            if op == OP_PHI:
+                ps := g.i_ps[i]
+                repeat g.i_pcount[i] in k:
+                    pv := g.pool[ps + 2 * k]
+                    pb := g.pool[ps + 2 * k + 1]
+                    if loop_def(g, u, pv) and not (pb >= 0 and pb < u.inl.len() and u.inl[pb]):
+                        ok = false
+                    end
+                end
+            else:
+                m := val_mask(op)
+                if (m & 1) != 0 and not lcssa_use(g, u, i, g.i_a[i], fi, fv): ok = false end
+                if (m & 2) != 0 and not lcssa_use(g, u, i, g.i_b[i], fi, fv): ok = false end
+                if (m & 4) != 0 and not lcssa_use(g, u, i, g.i_c[i], fi, fv): ok = false end
+                if op == OP_CALL:
+                    repeat g.i_pcount[i] in k2:
+                        if not lcssa_use(g, u, i, g.pool[g.i_ps[i] + 3 * k2], fi, fv): ok = false end
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if ok and fi.len() > 0:
+        mut done_b := Vector {} as Vector<int>
+        mut done_v := Vector {} as Vector<int>
+        mut done_p := Vector {} as Vector<int>
+        repeat fi.len() in q:
+            i2 := fi[q]
+            v := fv[q]
+            x := g.i_blk[i2]
+            mut pv := 0 - 1
+            repeat done_b.len() in z:
+                if done_b[z] == x and done_v[z] == v:
+                    pv = done_p[z]
+                end
+            end
+            if pv < 0:
+                ph := ins_new(g, OP_PHI, g.v_ty[v])
+                g.i_ps[ph] = g.pool.len()
+                g.i_pcount[ph] = g.b_npred[x]
+                repeat g.b_npred[x] in k3:
+                    g.pool.push(v)
+                    g.pool.push(g.b_pred[g.b_ps[x] + k3])
+                end
+                pv = new_res(g, ph)
+                ins_before(g, g.b_first[x], ph)
+                done_b.push(x)
+                done_v.push(v)
+                done_p.push(pv)
+            end
+            op2 := g.i_op[i2]
+            m2 := val_mask(op2)
+            if (m2 & 1) != 0 and g.i_a[i2] == v: g.i_a[i2] = pv end
+            if (m2 & 2) != 0 and g.i_b[i2] == v: g.i_b[i2] = pv end
+            if (m2 & 4) != 0 and g.i_c[i2] == v: g.i_c[i2] = pv end
+            if op2 == OP_CALL:
+                repeat g.i_pcount[i2] in k4:
+                    if g.pool[g.i_ps[i2] + 3 * k4] == v:
+                        g.pool[g.i_ps[i2] + 3 * k4] = pv
+                    end
+                end
+            end
+        end
+        done_b.free()
+        done_v.free()
+        done_p.free()
+    end
+    fi.free()
+    fv.free()
+    ret ok
+end
+
+func side_note(g &: Ng, u &: Unr, h: int, nb0: int):
+    each b in g.b_rpo:
+        if b >= nb0 or (b < u.inl.len() and u.inl[b]):
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            ps := g.i_ps[i]
+            repeat g.i_pcount[i] in k:
+                pb := g.pool[ps + 2 * k + 1]
+                if pb >= 0 and pb < nb0 and pb != h and u.inl[pb] and u.bmap[pb] >= 0:
+                    u.xphi.push(i)
+                    u.xval.push(unr_val(u, g.pool[ps + 2 * k]))
+                    u.xblk.push(u.bmap[pb])
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func side_fix(g &: Ng, u &: Unr, h: int, nb0: int):
+    mut done := Vector {} as Vector<int>
+    each ph in u.xphi:
+        mut seen := false
+        each d in done:
+            if d == ph:
+                seen = true
+            end
+        end
+        if seen:
+            continue
+        end
+        done.push(ph)
+        ps := g.i_ps[ph]
+        np := g.pool.len()
+        mut cnt := 0
+        repeat g.i_pcount[ph] in k:
+            pb := g.pool[ps + 2 * k + 1]
+            if not (pb >= 0 and pb < nb0 and pb != h and u.inl[pb]):
+                g.pool.push(g.pool[ps + 2 * k])
+                g.pool.push(pb)
+                cnt += 1
+            end
+        end
+        repeat u.xphi.len() in q:
+            if u.xphi[q] == ph:
+                g.pool.push(u.xval[q])
+                g.pool.push(u.xblk[q])
+                cnt += 1
+            end
+        end
+        g.i_ps[ph] = np
+        g.i_pcount[ph] = cnt
+    end
+    done.free()
+end
+
+func clone_into(g &: Ng, u &: Unr, i: int, nb: int, h: int, hnext: int, hcur: int): int:
+    ni := ins_new(g, g.i_op[i], g.i_ty[i])
+    g.i_dbg[ni] = g.i_dbg[i]
+    if g.ev_fv.len() > 0:
+        dv_queue(g, i, ni)
+    end
+    op := g.i_op[i]
+    m := val_mask(op)
+    g.i_a[ni] = (m & 1) != 0 ? unr_val(u, g.i_a[i]) : g.i_a[i]
+    g.i_b[ni] = (m & 2) != 0 ? unr_val(u, g.i_b[i]) : g.i_b[i]
+    g.i_c[ni] = (m & 4) != 0 ? unr_val(u, g.i_c[i]) : g.i_c[i]
+    if op == OP_BR:
+        g.i_b[ni] = unr_blk(u, g.i_b[i], h, hnext)
+    else op == OP_CBR:
+        g.i_b[ni] = unr_blk(u, g.i_b[i], h, hnext)
+        g.i_c[ni] = unr_blk(u, g.i_c[i], h, hnext)
+    end
+    g.i_x[ni] = g.i_x[i]
+    g.i_d[ni] = g.i_d[i]
+    g.i_f[ni] = g.i_f[i]
+    g.i_pcount[ni] = g.i_pcount[i]
+    if op == OP_CALL:
+        ps := g.i_ps[i]
+        g.i_ps[ni] = g.pool.len()
+        repeat g.i_pcount[i] in k:
+            g.pool.push(unr_val(u, g.pool[ps + 3 * k]))
+            g.pool.push(g.pool[ps + 3 * k + 1])
+            g.pool.push(g.pool[ps + 3 * k + 2])
+        end
+    else op == OP_PHI:
+        ps2 := g.i_ps[i]
+        g.i_ps[ni] = g.pool.len()
+        repeat g.i_pcount[i] in k2:
+            g.pool.push(unr_val(u, g.pool[ps2 + 2 * k2]))
+            pb := g.pool[ps2 + 2 * k2 + 1]
+            g.pool.push(pb == h ? hcur : unr_blk(u, pb, h, hnext))
+        end
+    else:
+        g.i_ps[ni] = g.i_ps[i]
+    end
+    if g.i_res[i] >= 0:
+        nv := new_res(g, ni)
+        u.vmap[g.i_res[i]] = nv
+    end
+    ins_append(g, nb, ni)
+    ret ni
+end
+
+func unroll_one(g &: Ng, u &: Unr, h: int, latch: int, pre: int, trips: int):
+    t := g.b_last[h]
+    in_succ := u.inl[g.i_b[t]] ? g.i_b[t] : g.i_c[t]
+    exit_b := u.inl[g.i_b[t]] ? g.i_c[t] : g.i_b[t]
+    n0 := g.v_kind.len()
+    nb0 := g.b_first.len()
+    u.vmap.clear()
+    u.pmap.clear()
+    repeat n0:
+        u.vmap.push(0 - 1)
+        u.pmap.push(0 - 1)
+    end
+    u.heads.clear()
+    repeat trips + 1:
+        u.heads.push(new_blk(g))
+    end
+    mut order := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        if b != h and b < nb0 and u.inl[b]:
+            order.push(b)
+        end
+    end
+    repeat trips + 1 in k:
+        hk := u.heads[k]
+        repeat n0 in z:
+            u.pmap[z] = u.vmap[z]
+        end
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            mut iv := 0 - 1
+            if k == 0:
+                iv = phi_val_for(g, i, pre)
+            else:
+                iv = unr_prev(u, phi_val_for(g, i, latch))
+            end
+            u.vmap[g.i_res[i]] = iv
+            i = g.i_next[i]
+        end
+        u.bmap.clear()
+        repeat g.b_first.len():
+            u.bmap.push(0 - 1)
+        end
+        if k < trips:
+            each b2 in order:
+                u.bmap[b2] = new_blk(g)
+            end
+        end
+        until i >= 0:
+            if i == t:
+                br := ins_new(g, OP_BR, T_VOID)
+                g.i_b[br] = k < trips ? u.bmap[in_succ] : exit_b
+                ins_append(g, hk, br)
+            else:
+                _c := clone_into(g, u, i, hk, h, k < trips ? u.heads[k + 1] : 0 - 1, hk)
+            end
+            i = g.i_next[i]
+        end
+        if k < trips:
+            each b3 in order:
+                mut j := g.b_first[b3]
+                until j >= 0:
+                    _c2 := clone_into(g, u, j, u.bmap[b3], h, u.heads[k + 1], hk)
+                    j = g.i_next[j]
+                end
+            end
+            if u.side > 0:
+                side_note(g, u, h, nb0)
+            end
+        end
+        repeat g.dq_ni.len() in dq:
+            dv_ev_add(g, g.dq_ni[dq], g.dq_fv[dq], unr_val(u, g.dq_v[dq]))
+        end
+        dv_queue_clear(g)
+    end
+    replace_succ(g, g.b_last[pre], h, u.heads[0])
+    last_h := u.heads[trips]
+    mut e := g.b_first[exit_b]
+    until e >= 0 and g.i_op[e] == OP_PHI:
+        ps := g.i_ps[e]
+        repeat g.i_pcount[e] in q:
+            if g.pool[ps + 2 * q + 1] == h:
+                g.pool[ps + 2 * q] = unr_val(u, g.pool[ps + 2 * q])
+                g.pool[ps + 2 * q + 1] = last_h
+            end
+        end
+        e = g.i_next[e]
+    end
+    if u.side > 0:
+        side_fix(g, u, h, nb0)
+    end
+    repl_grow(g)
+    mut hi := g.b_first[h]
+    until hi >= 0:
+        r := g.i_res[hi]
+        if r >= 0 and u.vmap[r] >= 0 and u.vmap[r] != r:
+            g.v_repl[r] = u.vmap[r]
+        end
+        hi = g.i_next[hi]
+    end
+    order.free()
+end
+
+func unroll_loops(g &: Ng): bool:
+    build_dom(g)
+    mut u := Unr {}
+    mut succ := Vector {} as Vector<int>
+    mut done := false
+    each b in g.b_rpo:
+        if done:
+            break
+        end
+        blk_succs(g, b, succ)
+        each h in succ:
+            if done or not dominates(g, h, b):
+                continue
+            end
+            if g.b_npred[h] != 2:
+                continue
+            end
+            mut pre := g.b_pred[g.b_ps[h]]
+            if pre == b:
+                pre = g.b_pred[g.b_ps[h] + 1]
+            end
+            pt := g.b_last[pre]
+            if pre == b or pt < 0 or (g.i_op[pt] == OP_CBR and g.i_b[pt] == g.i_c[pt]):
+                continue
+            end
+            if not loop_blocks(g, u, h, b):
+                continue
+            end
+            u.side = 0
+            u.xphi.clear()
+            u.xval.clear()
+            u.xblk.clear()
+            mut inner := false
+            each lb in u.blocks:
+                if lb != h:
+                    blk_succs(g, lb, u.wl)
+                    each s in u.wl:
+                        if s != h and u.inl[s] and g.b_order[s] <= g.b_order[lb]:
+                            inner = true
+                        end
+                    end
+                end
+            end
+            if inner:
+                if trip_count(g, u, h, b, pre) == 1 and once_loop(g, u, h, b):
+                    done = true
+                end
+                continue
+            end
+            trips := trip_count(g, u, h, b, pre)
+            if trips < 1 or not unroll_ok(g, u, h, b, trips):
+                continue
+            end
+            unroll_one(g, u, h, b, pre, trips)
+            if u.total > u.body:
+                g.unr_grow += u.total - u.body
+            end
+            done = true
+        end
+    end
+    succ.free()
+    u.inl.free()
+    u.blocks.free()
+    u.vmap.free()
+    u.pmap.free()
+    u.bmap.free()
+    u.heads.free()
+    u.wl.free()
+    u.ivals.free()
+    u.xphi.free()
+    u.xval.free()
+    u.xblk.free()
+    if done:
+        ensure_terms(g)
+        build_cfg(g)
+        remap_all(g)
+        simplify_phis(g)
+    end
+    ret done
+end
+
+func once_out_use(g &: Ng, u &: Unr, v: int): bool:
+    each b in g.b_rpo:
+        if u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if uses_val(g, i, v):
+                ret true
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func once_rewrite(g &: Ng, u &: Unr, old_v: int, new_v: int):
+    each b in g.b_rpo:
+        if u.inl[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            if (m & 1) != 0 and g.i_a[i] == old_v: g.i_a[i] = new_v end
+            if (m & 2) != 0 and g.i_b[i] == old_v: g.i_b[i] = new_v end
+            if (m & 4) != 0 and g.i_c[i] == old_v: g.i_c[i] = new_v end
+            if g.i_op[i] == OP_CALL:
+                repeat g.i_pcount[i] in k:
+                    if g.pool[g.i_ps[i] + 3 * k] == old_v:
+                        g.pool[g.i_ps[i] + 3 * k] = new_v
+                    end
+                end
+            else g.i_op[i] == OP_PHI:
+                repeat g.i_pcount[i] in k2:
+                    if g.pool[g.i_ps[i] + 2 * k2] == old_v:
+                        g.pool[g.i_ps[i] + 2 * k2] = new_v
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+end
+
+func once_loop(g &: Ng, u &: Unr, h: int, latch: int): bool:
+    t := g.b_last[h]
+    lterm := g.b_last[latch]
+    if latch == h or t < 0 or g.i_op[t] != OP_CBR or lterm < 0:
+        ret false
+    end
+    lop := g.i_op[lterm]
+    if not (lop == OP_BR and g.i_b[lterm] == h) and not (lop == OP_CBR and (g.i_b[lterm] == h) != (g.i_c[lterm] == h)):
+        ret false
+    end
+    body := u.inl[g.i_b[t]] ? g.i_b[t] : g.i_c[t]
+    ex := u.inl[g.i_b[t]] ? g.i_c[t] : g.i_b[t]
+    if u.inl[ex] or not u.inl[body] or g.b_npred[ex] != 1:
+        ret false
+    end
+    mut succ := Vector {} as Vector<int>
+    each b in u.blocks:
+        blk_succs(g, b, succ)
+        each s in succ:
+            if not u.inl[s] and not (b == h and s == ex):
+                succ.free()
+                ret false
+            end
+        end
+    end
+    succ.free()
+    mut i := g.b_first[h]
+    until i >= 0:
+        r := g.i_res[i]
+        if g.i_op[i] != OP_PHI and r >= 0 and once_out_use(g, u, r):
+            ret false
+        end
+        i = g.i_next[i]
+    end
+    mut p := g.b_first[h]
+    until p >= 0 and g.i_op[p] == OP_PHI:
+        lv := phi_val_for(g, p, latch)
+        r2 := g.i_res[p]
+        if lv < 0 or r2 < 0:
+            ret false
+        end
+        p = g.i_next[p]
+    end
+    mut q := g.b_first[ex]
+    until q >= 0 and g.i_op[q] == OP_PHI:
+        ps := g.i_ps[q]
+        repeat g.i_pcount[q] in k:
+            if g.pool[ps + 2 * k + 1] == h:
+                g.pool[ps + 2 * k + 1] = latch
+            end
+        end
+        q = g.i_next[q]
+    end
+    mut p2 := g.b_first[h]
+    until p2 >= 0 and g.i_op[p2] == OP_PHI:
+        lv2 := phi_val_for(g, p2, latch)
+        once_rewrite(g, u, g.i_res[p2], lv2)
+        ps2 := g.i_ps[p2]
+        repeat g.i_pcount[p2] in k2:
+            if g.pool[ps2 + 2 * k2 + 1] == latch:
+                g.pool[ps2 + 2 * k2 + 1] = 0 - 1
+            end
+        end
+        p2 = g.i_next[p2]
+    end
+    g.i_op[t] = OP_BR
+    g.i_b[t] = body
+    if g.i_b[lterm] == h:
+        g.i_b[lterm] = ex
+    else:
+        g.i_c[lterm] = ex
+    end
+    ret true
+end

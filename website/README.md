@@ -52,12 +52,17 @@ syntax highlighted at build time (`python`, `javascript`, `typescript`, `bash`, 
 page direction and language, and `site.digits = fa` prints the version in
 Persian digits.
 
-The Agent page links to the desktop builds on the `v<VERSION>` release:
+The Agent page links to the desktop builds on the Salam release itself:
 `agent.release` is the release page and `agent.download` the filename prefix
 the download links append to, for example
 `{{agent.download}}windows-x86_64-setup.exe`. The agent carries the same
 version as `VERSION` (kept in sync by `tools/salam/update-version.salam`), and
-the compiler release workflow builds it and uploads its files to that release.
+the compiler release workflow builds it and publishes its files in the same
+release as the compiler. The deploy workflow looks up the newest published
+release that actually carries the agent files and passes it in as
+`SITE_AGENT_TAG` and `SITE_AGENT_VERSION`; without them the links fall back to
+`v<VERSION>`. Releases up to 0.5.6 kept the agent in a separate `agent-v<VERSION>`
+release, and the lookup still finds those until a newer one ships it.
 
 SEO: each page's `<page>.title` is the full `<title>` (write the whole
 phrase, including the brand), `<page>.description` the meta description and
@@ -93,8 +98,30 @@ in the lesson's contents list, and `{{example.name}}` inserts a checked
 example. The generator builds the `/learn/` overview, the sidebar and the
 previous/next links from the lesson files, grouped by `lesson.part`.
 
-An example without a `.out` file is not run: a `layout:` page is built with
+An example without a `.out` file is not run: a `page:` program is built with
 `salam page build`, anything else is type-checked with `salam inspect`.
+
+A `page:` example (one whose source has a line that is exactly `page:` or
+`صفحه:`) also gets a live preview: the generator builds it with `$SALAM page build
+--inline` and puts the result in a sandboxed `<iframe srcdoc>` under the code,
+sized to its content. Scripts run in the preview, but links and form submits
+are blocked, so a click can never load the site into the frame. The compiler
+is taken from `SALAM`, which `build.sh` always exports.
+
+### Reference snippets
+
+The web lessons (`page-*`, `css-*`, `events-*`) end with a reference of every
+element, attribute, CSS property and event. Each row has a short example in an
+element with `class="snip"` (`<code class="snip">` in a table cell,
+`<pre class="code snip">` for a block). `check-snippets.py` compiles all of
+them in both languages, so a renamed attribute or a changed Persian name fails
+the build instead of shipping a wrong example. A snippet is an element
+expression such as `link: url = "/" content = "Home" end`; the checker wraps it
+in `page: ... end` and adds `import dom` when it calls `dom.`. A snippet that
+contains its own `page:` line is built as it stands.
+
+`SALAM=./salam python3 website/check-snippets.py [lesson.txt ...]` runs the
+check by hand.
 
 ## Adding English (salamlang.org)
 

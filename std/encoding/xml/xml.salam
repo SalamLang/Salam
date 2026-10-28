@@ -32,33 +32,59 @@ pub const XMLTokError := 7
 @en "XMLNode"
 @fa "گره ساده"
 pub struct XMLNode:
+    @en "tag"
+    @fa "نام عنصر"
     pub tag: str = ""
+    @en "attrs"
+    @fa "ویژگی‌ها"
     pub attrs: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "children"
+    @fa "فرزندان"
     pub children: Vector<XMLNode> = Vector {}
+    @en "text"
+    @fa "متن"
     pub text: str = ""
 end
 
 @en "XMLNodeList"
 @fa "فهرست گره ساده"
 pub struct XMLNodeList:
+    @en "items"
+    @fa "گره‌ها"
     pub items: Vector<XMLNode> = Vector {}
 end
 
 @en "XMLToken"
 @fa "نشانه اکس‌ام‌ال"
 pub struct XMLToken:
+    @en "kind"
+    @fa "نوع"
     pub kind: int = 0
+    @en "tag"
+    @fa "نام عنصر"
     pub tag: str = ""
+    @en "attrs"
+    @fa "ویژگی‌ها"
     pub attrs: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "text"
+    @fa "متن"
     pub text: str = ""
 end
 
 @en "XMLTokenizer"
 @fa "نشانه‌خوان اکس‌ام‌ال"
 pub struct XMLTokenizer:
+    @en "text"
+    @fa "متن"
     pub text: str = ""
+    @en "pos"
+    @fa "جایگاه"
     pub pos: int = 0
+    @en "bad"
+    @fa "خراب"
     pub bad: bool = false
+    @en "pendingEnd"
+    @fa "انتهای معلق"
     pub pendingEnd: str = ""
 end
 
@@ -76,8 +102,30 @@ func _is_name_char(c: int): bool:
     ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45 or c == 95 or c == 46 or c == 58
 end
 
-func _skip_ws(s: str, i: int): int:
-    n := s.len()
+func _xsub(s: str, start: int, cnt: int): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < cnt:
+        str.BufAppendChar(sb, bp[start + k] as int)
+        k += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _xat(bp: i8*, at: int, lit: str): bool:
+    lp := _bp(lit)
+    mut k := 0
+    until lp[k] != (0 as i8):
+        if bp[at + k] != lp[k]: ret false end
+        k += 1
+    end
+    ret true
+end
+
+func _skip_ws(s: str, n: int, i: int): int:
     bp := _bp(s)
     mut p := i
     until p < n and _is_ws(_ub(bp, p)):
@@ -86,15 +134,14 @@ func _skip_ws(s: str, i: int): int:
     ret p
 end
 
-func _scan_name(s: str, i: int, endpos &: int): str:
-    n := s.len()
+func _scan_name(s: str, n: int, i: int, endpos &: int): str:
     bp := _bp(s)
     mut p := i
     until p < n and _is_name_char(_ub(bp, p)):
         p += 1
     end
     endpos = p
-    ret s.substr(i, p - i)
+    ret _xsub(s, i, p - i)
 end
 
 func _hex_digit(c: int): int:
@@ -160,13 +207,12 @@ func _unescape(s: str): str:
     ret out
 end
 
-func _parse_attrs(s: str, i: int, endpos &: int, attrs &: HashMap<str, str>, selfClose &: bool):
-    n := s.len()
+func _parse_attrs(s: str, n: int, i: int, endpos &: int, attrs &: HashMap<str, str>, selfClose &: bool):
     bp := _bp(s)
     mut p := i
     selfClose = false
     until true:
-        p = _skip_ws(s, p)
+        p = _skip_ws(s, n, p)
         if p >= n:
             endpos = p
             ret
@@ -175,7 +221,7 @@ func _parse_attrs(s: str, i: int, endpos &: int, attrs &: HashMap<str, str>, sel
         if c == 47:
             selfClose = true
             p += 1
-            p = _skip_ws(s, p)
+            p = _skip_ws(s, n, p)
             if p < n and _ub(bp, p) == 62:
                 endpos = p + 1
                 ret
@@ -188,15 +234,15 @@ func _parse_attrs(s: str, i: int, endpos &: int, attrs &: HashMap<str, str>, sel
             ret
         end
         mut nend := p
-        name := _scan_name(s, p, nend)
+        name := _scan_name(s, n, p, nend)
         if name.len() == 0:
             endpos = p
             ret
         end
-        p = _skip_ws(s, nend)
+        p = _skip_ws(s, n, nend)
         mut avalue := ""
         if p < n and _ub(bp, p) == 61:
-            p = _skip_ws(s, p + 1)
+            p = _skip_ws(s, n, p + 1)
             if p < n and (_ub(bp, p) == 34 or _ub(bp, p) == 39):
                 q := _ub(bp, p)
                 vstart := p + 1
@@ -204,12 +250,96 @@ func _parse_attrs(s: str, i: int, endpos &: int, attrs &: HashMap<str, str>, sel
                 until vend < n and _ub(bp, vend) != q:
                     vend += 1
                 end
-                avalue = _unescape(s.substr(vstart, vend - vstart))
+                rawv := _xsub(s, vstart, vend - vstart)
+                avalue = _unescape(rawv)
+                mem.Free(rawv as void *)
                 p = vend + 1
             end
         end
         attrs.put(name, avalue)
     end
+end
+
+func _next_token(tz &: XMLTokenizer, n: int): XMLToken:
+    if tz.pendingEnd.len() > 0:
+        mut tok := XMLToken { kind = XMLTokEndElement }
+        tok.tag = tz.pendingEnd
+        tz.pendingEnd = ""
+        ret tok
+    end
+    s := tz.text
+    bp := _bp(s)
+    p := tz.pos
+    if p >= n:
+        ret XMLToken { kind = XMLTokEOF }
+    end
+    c := _ub(bp, p)
+    if c == 60:
+        c1 := _ub(bp, p + 1)
+        if c1 == 33 and p + 3 < n and _ub(bp, p + 2) == 45 and _ub(bp, p + 3) == 45:
+            mut e := p + 4
+            until e + 2 < n and not (_ub(bp, e) == 45 and _ub(bp, e + 1) == 45 and _ub(bp, e + 2) == 62):
+                e += 1
+            end
+            mut tok := XMLToken { kind = XMLTokComment }
+            tok.text = _xsub(s, p + 4, e - (p + 4))
+            tz.pos = e + 3
+            ret tok
+        end
+        if c1 == 33 and p + 8 < n and _xat(bp, p + 2, "[CDATA["):
+            start := p + 9
+            mut e := start
+            until e + 2 < n and not (_ub(bp, e) == 93 and _ub(bp, e + 1) == 93 and _ub(bp, e + 2) == 62):
+                e += 1
+            end
+            mut tok := XMLToken { kind = XMLTokCData }
+            tok.text = _xsub(s, start, e - start)
+            tz.pos = e + 3
+            ret tok
+        end
+        if c1 == 33 or c1 == 63:
+            mut e := p + 2
+            until e < n and _ub(bp, e) != 62:
+                e += 1
+            end
+            tz.pos = e + 1
+            ret _next_token(tz, n)
+        end
+        if c1 == 47:
+            mut nend := p + 2
+            name := _scan_name(s, n, p + 2, nend)
+            mut e := nend
+            until e < n and _ub(bp, e) != 62:
+                e += 1
+            end
+            tz.pos = e + 1
+            mut tok := XMLToken { kind = XMLTokEndElement }
+            tok.tag = name
+            ret tok
+        end
+        mut nend := p + 1
+        name := _scan_name(s, n, p + 1, nend)
+        mut attrs := HashMap {} as HashMap<str, str>
+        mut ep := nend
+        mut selfClose := false
+        _parse_attrs(s, n, nend, ep, attrs, selfClose)
+        tz.pos = ep
+        mut tok := XMLToken { kind = XMLTokStartElement }
+        tok.tag = name
+        tok.attrs = attrs
+        if selfClose: tz.pendingEnd = name end
+        ret tok
+    end
+    mut e := p
+    until e < n and _ub(bp, e) != 60:
+        e += 1
+    end
+    raw := _xsub(s, p, e - p)
+    tz.pos = e
+    mut tok := XMLToken { kind = XMLTokText }
+    tok.text = _unescape(raw)
+    mem.Free(raw as void *)
+    ret tok
 end
 
 func _encode_node(sb &: str.StringBuilder, node: XMLNode, unit: str, depth: int):
@@ -331,85 +461,7 @@ end
 @en "NextToken"
 @fa "نشانه بعدی"
 pub func NextToken(tz &: XMLTokenizer): XMLToken:
-    if tz.pendingEnd.len() > 0:
-        mut tok := XMLToken { kind = XMLTokEndElement }
-        tok.tag = tz.pendingEnd
-        tz.pendingEnd = ""
-        ret tok
-    end
-    s := tz.text
-    n := s.len()
-    bp := _bp(s)
-    p := tz.pos
-    if p >= n:
-        ret XMLToken { kind = XMLTokEOF }
-    end
-    c := _ub(bp, p)
-    if c == 60:
-        c1 := _ub(bp, p + 1)
-        if c1 == 33 and p + 3 < n and _ub(bp, p + 2) == 45 and _ub(bp, p + 3) == 45:
-            mut e := p + 4
-            until e + 2 < n and not (_ub(bp, e) == 45 and _ub(bp, e + 1) == 45 and _ub(bp, e + 2) == 62):
-                e += 1
-            end
-            mut tok := XMLToken { kind = XMLTokComment }
-            tok.text = s.substr(p + 4, e - (p + 4))
-            tz.pos = e + 3
-            ret tok
-        end
-        if c1 == 33 and p + 8 < n and s.substr(p + 2, 7) == "[CDATA[":
-            start := p + 9
-            mut e := start
-            until e + 2 < n and not (_ub(bp, e) == 93 and _ub(bp, e + 1) == 93 and _ub(bp, e + 2) == 62):
-                e += 1
-            end
-            mut tok := XMLToken { kind = XMLTokCData }
-            tok.text = s.substr(start, e - start)
-            tz.pos = e + 3
-            ret tok
-        end
-        if c1 == 33 or c1 == 63:
-            mut e := p + 2
-            until e < n and _ub(bp, e) != 62:
-                e += 1
-            end
-            tz.pos = e + 1
-            ret NextToken(tz)
-        end
-        if c1 == 47:
-            mut nend := p + 2
-            name := _scan_name(s, p + 2, nend)
-            mut e := nend
-            until e < n and _ub(bp, e) != 62:
-                e += 1
-            end
-            tz.pos = e + 1
-            mut tok := XMLToken { kind = XMLTokEndElement }
-            tok.tag = name
-            ret tok
-        end
-        mut nend := p + 1
-        name := _scan_name(s, p + 1, nend)
-        mut attrs := HashMap {} as HashMap<str, str>
-        mut ep := nend
-        mut selfClose := false
-        _parse_attrs(s, nend, ep, attrs, selfClose)
-        tz.pos = ep
-        mut tok := XMLToken { kind = XMLTokStartElement }
-        tok.tag = name
-        tok.attrs = attrs
-        if selfClose: tz.pendingEnd = name end
-        ret tok
-    end
-    mut e := p
-    until e < n and _ub(bp, e) != 60:
-        e += 1
-    end
-    raw := s.substr(p, e - p)
-    tz.pos = e
-    mut tok := XMLToken { kind = XMLTokText }
-    tok.text = _unescape(raw)
-    ret tok
+    ret _next_token(tz, tz.text.len())
 end
 
 @en "NewXMLNode"
@@ -474,11 +526,12 @@ end
 @fa "کدگشایی سخت گیرانه"
 pub func DecodeStrict(text: str, ok &: bool): XMLNode:
     mut tz := NewXMLTokenizer(text)
+    tn := text.len()
     mut stack := Vector {} as Vector<XMLNode>
     mut root := XMLNode {}
     ok = true
     until true:
-        tok := NextToken(tz)
+        tok := _next_token(tz, tn)
         if tok.kind == XMLTokEOF:
             if stack.len() > 0: ok = false end
             ret root

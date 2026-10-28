@@ -1,0 +1,377 @@
+package nativegen
+
+const IP_MAXP := 8
+
+func ip_slot(g &: Ng, sy: int): int:
+    until g.ip_state.len() < (sy + 1) * IP_MAXP:
+        g.ip_state.push(0)
+        g.ip_val.push(0 as i64)
+    end
+    until g.ip_taken.len() <= sy:
+        g.ip_taken.push(false)
+        g.ip_ncall.push(0)
+    end
+    ret sy * IP_MAXP
+end
+
+func ip_int(g &: Ng, s: int, e: int, v &: i64): bool:
+    if e - s == 4 and src_at(g, s, "true"):
+        v = 1 as i64
+        ret true
+    end
+    if e - s == 5 and src_at(g, s, "false"):
+        v = 0 as i64
+        ret true
+    end
+    mut q := s
+    neg := q < e and g.src[q] == (45 as u8)
+    if neg:
+        q += 1
+    end
+    if q >= e:
+        ret false
+    end
+    mut x := 0 as i64
+    until q < e:
+        c := g.src[q] as int
+        if c < 48 or c > 57 or x > (100000000000000 as i64):
+            ret false
+        end
+        x = x * (10 as i64) + ((c - 48) as i64)
+        q += 1
+    end
+    v = neg ? 0 - x : x
+    ret true
+end
+
+func ip_hash(g &: Ng, s: int, e: int): i64:
+    mut h := 1469598103934665603 as i64
+    mut q := s
+    until q < e:
+        h = (h ^ (g.src[q] as i64)) * (1099511628211 as i64)
+        q += 1
+    end
+    ret h
+end
+
+func ip_tok_end(g &: Ng, s: int): int:
+    mut q := s
+    until q < g.sn and id_char(g.src[q] as int) or q < g.sn and g.src[q] == (37 as u8) and q == s:
+        q += 1
+    end
+    ret q
+end
+
+func ip_locals(g &: Ng, fs: int, fe: int):
+    g.ip_sh.clear()
+    g.ip_sv.clear()
+    g.ip_ss.clear()
+    g.ip_th.clear()
+    g.ip_ah.clear()
+    g.ip_eh.clear()
+    if fe - fs > 200000:
+        ret
+    end
+    mut q := fs
+    until q < fe:
+        mut ls := q
+        until ls < fe and (g.src[ls] == (32 as u8) or g.src[ls] == (9 as u8)):
+            ls += 1
+        end
+        mut le := ls
+        until le < fe and g.src[le] != (10 as u8):
+            le += 1
+        end
+        mut safe_s := 0 - 1
+        mut safe_e := 0 - 1
+        if src_at(g, ls, "store ") or (ls < le and g.src[ls] == (37 as u8) and (src_at(g, ip_tok_end(g, ls), " = load ") or src_at(g, ip_tok_end(g, ls), " = alloca "))):
+            if src_at(g, ls, "store ") or src_at(g, ip_tok_end(g, ls), " = load "):
+                mut cs := ls
+                until cs < le and not src_at(g, cs, "ptr %"):
+                    cs += 1
+                end
+                if cs < le:
+                    safe_s = cs + 4
+                    safe_e = ip_tok_end(g, cs + 4)
+                end
+            else:
+                safe_s = ls
+                safe_e = ip_tok_end(g, ls)
+            end
+        end
+        mut tq := ls
+        until tq < le:
+            if g.src[tq] == (37 as u8):
+                tend := ip_tok_end(g, tq)
+                if tq != safe_s and not (src_at(g, ls, "store ") == false and tq == ls and src_at(g, tend, " = load ")):
+                    g.ip_eh.push(ip_hash(g, tq, tend))
+                end
+                tq = tend
+            else:
+                tq += 1
+            end
+        end
+        if src_at(g, ls, "store "):
+            mut a := ls + 6
+            until a < le and g.src[a] != (32 as u8):
+                a += 1
+            end
+            a += 1
+            mut b := a
+            until b < le and g.src[b] != (44 as u8):
+                b += 1
+            end
+            mut c := b
+            until c < le and not src_at(g, c, "ptr %"):
+                c += 1
+            end
+            if c < le:
+                ns := c + 4
+                ne := ip_tok_end(g, ns)
+                h := ip_hash(g, ns, ne)
+                mut v := 0 as i64
+                lit := ip_int(g, a, b, v)
+                mut hit := 0 - 1
+                repeat g.ip_sh.len() in k:
+                    if g.ip_sh[k] == h:
+                        hit = k
+                    end
+                end
+                if hit < 0:
+                    g.ip_sh.push(h)
+                    g.ip_sv.push(v)
+                    g.ip_ss.push(lit ? 1 : 2)
+                else not lit or g.ip_sv[hit] != v:
+                    g.ip_ss[hit] = 2
+                end
+            end
+        else ls < le and g.src[ls] == (37 as u8):
+            te := ip_tok_end(g, ls)
+            if src_at(g, te, " = load "):
+                mut c2 := te
+                until c2 < le and not src_at(g, c2, "ptr %"):
+                    c2 += 1
+                end
+                if c2 < le:
+                    ns2 := c2 + 4
+                    ne2 := ip_tok_end(g, ns2)
+                    g.ip_th.push(ip_hash(g, ls, te))
+                    g.ip_ah.push(ip_hash(g, ns2, ne2))
+                end
+            end
+        end
+        q = le + 1
+    end
+end
+
+func ip_local_const(g &: Ng, s: int, e: int, v &: i64): bool:
+    h := ip_hash(g, s, e)
+    mut ah := 0 as i64
+    mut found := false
+    repeat g.ip_th.len() in k:
+        if g.ip_th[k] == h:
+            if found and g.ip_ah[k] != ah:
+                ret false
+            end
+            ah = g.ip_ah[k]
+            found = true
+        end
+    end
+    if not found:
+        ret false
+    end
+    each eh in g.ip_eh:
+        if eh == ah:
+            ret false
+        end
+    end
+    repeat g.ip_sh.len() in k2:
+        if g.ip_sh[k2] == ah:
+            if g.ip_ss[k2] != 1:
+                ret false
+            end
+            v = g.ip_sv[k2]
+            ret true
+        end
+    end
+    ret false
+end
+
+func ip_arg(g &: Ng, base: int, k: int, s: int, e: int):
+    mut a := s
+    until a < e and (g.src[a] == (32 as u8) or g.src[a] == (9 as u8)):
+        a += 1
+    end
+    mut b := e
+    until b > a and (g.src[b - 1] == (32 as u8) or g.src[b - 1] == (9 as u8)):
+        b -= 1
+    end
+    mut t := b
+    until t > a and g.src[t - 1] != (32 as u8):
+        t -= 1
+    end
+    is_int := src_at(g, a, "i8 ") or src_at(g, a, "i16 ") or src_at(g, a, "i32 ") or src_at(g, a, "i64 ") or src_at(g, a, "i1 ")
+    mut v := 0 as i64
+    if is_int and t > a and (ip_int(g, t, b, v) or g.src[t] == (37 as u8) and ip_local_const(g, t, b, v)):
+        st := g.ip_state[base + k]
+        if st == 0:
+            g.ip_state[base + k] = 1
+            g.ip_val[base + k] = v
+        else st == 1 and g.ip_val[base + k] != v:
+            g.ip_state[base + k] = 2
+        end
+    else:
+        g.ip_state[base + k] = 2
+    end
+end
+
+func ip_call(g &: Ng, sy: int, open: int, self: bool): int:
+    base := ip_slot(g, sy)
+    g.ip_ncall[sy] = g.ip_ncall[sy] + 1
+    mut q := open + 1
+    mut depth := 0
+    mut s := q
+    mut k := 0
+    until q < g.sn:
+        c := g.src[q] as int
+        if c == 10:
+            break
+        end
+        if c == 40 or c == 91 or c == 123 or c == 60:
+            depth += 1
+        else c == 41 or c == 93 or c == 125 or c == 62:
+            if depth == 0:
+                if not self and q > s and k < IP_MAXP:
+                    ip_arg(g, base, k, s, q)
+                end
+                ret q
+            end
+            depth -= 1
+        else c == 44 and depth == 0:
+            if not self and k < IP_MAXP:
+                ip_arg(g, base, k, s, q)
+            end
+            k += 1
+            s = q + 1
+        end
+        q += 1
+    end
+    ret q
+end
+
+func ip_prescan(g &: Ng, starts: Vector<int>, ends: Vector<int>, fsyms: Vector<int>):
+    g.ip_state.clear()
+    g.ip_val.clear()
+    g.ip_taken.clear()
+    g.ip_ncall.clear()
+    mut q := 0
+    mut line_start := 0
+    mut cur_f := 0 - 1
+    mut fi := 0
+    mut loc_f := 0 - 1
+    until q < g.sn:
+        until fi < starts.len() and q >= ends[fi]:
+            fi += 1
+        end
+        cur_f = fi < starts.len() and q >= starts[fi] ? fsyms[fi] : 0 - 1
+        if cur_f >= 0 and loc_f != fi:
+            ip_locals(g, starts[fi], ends[fi])
+            loc_f = fi
+        end
+        c := g.src[q] as int
+        if c == 10:
+            line_start = q + 1
+            q += 1
+            continue
+        end
+        if c == 64:
+            if q + 1 < g.sn and g.src[q + 1] == (34 as u8):
+                g.ip_off = true
+                ret
+            end
+            mut z := q + 1
+            until z < g.sn and id_char(g.src[z] as int):
+                z += 1
+            end
+            if z > q + 1:
+                sy := sym_of(g, g.src, q + 1, z - q - 1)
+                _b := ip_slot(g, sy)
+                if src_at(g, line_start, "define"):
+                    q = z
+                    continue
+                end
+                mut is_call := false
+                if z < g.sn and g.src[z] == (40 as u8):
+                    mut w := line_start
+                    until w < q:
+                        if src_at(g, w, "call "):
+                            is_call = true
+                        end
+                        w += 1
+                    end
+                end
+                if is_call:
+                    _e := ip_call(g, sy, z, sy == cur_f)
+                    q = z + 1
+                    continue
+                end
+                g.ip_taken[sy] = true
+                q = z
+                continue
+            end
+        end
+        q += 1
+    end
+end
+
+func ip_apply(g &: Ng): bool:
+    sy := g.f_sym
+    if g.ip_off or sy < 0 or sy >= g.ip_taken.len() or g.ip_taken[sy] or not g.sy_local[sy]:
+        ret false
+    end
+    base := sy * IP_MAXP
+    if base + IP_MAXP > g.ip_state.len():
+        ret false
+    end
+    mut changed := false
+    repeat g.f_args.len() in k:
+        if k >= IP_MAXP or g.ip_state[base + k] != 1:
+            continue
+        end
+        pv := g.f_args[k]
+        t := g.v_ty[pv]
+        if g.t_kind[t] != TK_INT:
+            continue
+        end
+        c := g.ip_val[base + k]
+        mut ok := true
+        each b in g.b_rpo:
+            mut i := g.b_first[b]
+            until i >= 0 and ok:
+                if g.i_op[i] == OP_CALL:
+                    fv := g.i_a[i]
+                    if fv >= 0 and g.v_kind[fv] == VK_GLB and g.v_def[fv] == sy:
+                        if k >= g.i_pcount[i]:
+                            ok = false
+                        else:
+                            av := resolve(g, g.pool[g.i_ps[i] + 3 * k])
+                            if av != pv and not (is_cint(g, av) and norm_int(g, t, g.v_i[av]) == norm_int(g, t, c)):
+                                ok = false
+                            end
+                        end
+                    end
+                end
+                i = g.i_next[i]
+            end
+        end
+        if ok:
+            repl_grow(g)
+            g.v_repl[pv] = const_int(g, t, norm_int(g, t, c))
+            changed = true
+        end
+    end
+    if changed:
+        remap_all(g)
+    end
+    ret changed
+end

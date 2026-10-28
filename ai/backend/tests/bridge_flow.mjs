@@ -83,6 +83,38 @@ const offline = await api("POST", `/chats/${chat.json.chat.id}/messages`, sessio
 const offlineDone = await settle(session, chat.json.chat.id, offline.json.assistant.id);
 check("a call to a device that never connected fails fast", offlineDone.status === "done" && offlineDone.body.includes("error") && offlineDone.body.includes("not connected"), offlineDone);
 
+console.log("salam only");
+const scaffold = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: cd shop && composer create-project laravel/laravel ." });
+const scaffoldDone = await settle(session, chat.json.chat.id, scaffold.json.assistant.id);
+const project = { instructions_file: "AGENTS.md", instructions: "Use tabs.", memory_index: "# Salam Agent memory\n\n- [Build](memory/build.md) - how to build", memories: 1 };
+const withProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo context", project });
+const withProjectDone = await settle(session, chat.json.chat.id, withProject.json.assistant.id);
+check("the app's AGENTS.md and memory index reach the engine", withProjectDone.body.includes("[project]"), withProjectDone.body);
+const sameProject = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: "run: echo again", project });
+const sameProjectDone = await settle(session, chat.json.chat.id, sameProject.json.assistant.id);
+check("an unchanged project context is not sent twice", sameProjectDone.status === "done" && !sameProjectDone.body.includes("[project]"), sameProjectDone.body);
+const heredoc = (name) => `run: cat > ${name} <<'EOF'\n${Array.from({ length: 50 }, (_, i) => `echo ${i};`).join("\n")}\nEOF`;
+const budget = [];
+for (const name of ["a.php", "b.php", "c.php"]) {
+  const r = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: heredoc(name) });
+  budget.push((await settle(session, chat.json.chat.id, r.json.assistant.id)).body);
+}
+check("non-Salam code written through the shell adds up per chat", !budget[0].includes("Refused") && !budget[1].includes("Refused") && budget[2].includes("Refused by the Salam service: this conversation already wrote 104 lines"), budget);
+check("starting a project in another language is refused before it reaches the device", scaffoldDone.body.includes("error Refused by the Salam service") && scaffoldDone.body.includes("composer create-project"), scaffoldDone);
+const lines = (n) => Array.from({ length: n }, (_, i) => `print(${i})`);
+const refusals = [];
+for (const text of [
+  `run: python3 - <<'PY'\n${lines(12).join("\n")}\nPY`,
+  `tool: docker ${JSON.stringify({ args: ["run", "--rm", "python:3", "python", "-c", lines(12).join("\n")] })}`,
+  `tool: write_file ${JSON.stringify({ path: "tool", content: `#!/usr/bin/env python3\n${lines(50).join("\n")}\n` })}`,
+]) {
+  const r = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text });
+  refusals.push((await settle(session, chat.json.chat.id, r.json.assistant.id)).body);
+}
+check("a program in another language run from the command line is refused", refusals[0].includes("Refused by the Salam service: this command runs a program in another language"), refusals[0]);
+check("the same through the docker tool is refused", refusals[1].includes("Refused by the Salam service: this command runs a program in another language"), refusals[1]);
+check("a foreign script hidden behind a plain filename is refused", refusals[2].includes("Refused by the Salam service: this would put 51 lines of code in another language into tool"), refusals[2]);
+
 console.log("tool call round trip");
 const first = poll(secret);
 await new Promise((r) => setTimeout(r, 300));

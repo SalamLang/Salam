@@ -62,6 +62,11 @@ export const IconClose = (p: P) => (
     <path d="M6 6l12 12M18 6L6 18" />
   </Base>
 );
+export const IconMemory = (p: P) => (
+  <Base {...p}>
+    <path d="M6 3h9l3 3v15H6zM15 3v3h3M9 10h6M9 14h6M9 18h3" />
+  </Base>
+);
 export const IconTrash = (p: P) => (
   <Base {...p}>
     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
@@ -159,6 +164,12 @@ export const IconAlert = (p: P) => (
     <path d="M12 10v4M12 17v.5" />
   </Base>
 );
+export const IconBell = (p: P) => (
+  <Base {...p}>
+    <path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16z" />
+    <path d="M10 20.5a2 2 0 004 0" />
+  </Base>
+);
 export const IconChevronDown = (p: P) => (
   <Base {...p}>
     <path d="M6 9l6 6 6-6" />
@@ -223,4 +234,20 @@ export const IconTag = (p: P) => (
     <path d="M3 12V4h8l10 10-8 8L3 12z" />
     <circle cx="7.5" cy="8.5" r="1.3" />
   </Base>
+);
+
+export const IconGithub = (p: P) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...p}>
+    <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3" />
+  </svg>
+);
+export const IconFigma = (p: P) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...p}>
+    <path d="M8 24a4 4 0 0 0 4-4v-4H8a4 4 0 0 0 0 8zM4 12a4 4 0 0 1 4-4h4v8H8a4 4 0 0 1-4-4zM4 4a4 4 0 0 1 4-4h4v8H8a4 4 0 0 1-4-4zM12 0h4a4 4 0 0 1 0 8h-4V0zM20 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" />
+  </svg>
+);
+export const IconTelegram = (p: P) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...p}>
+    <path d="M21.9 3.4 2.7 10.8c-1 .4-1 1.2-.2 1.4l4.9 1.5 1.9 5.8c.2.6.4.8.8.8.4 0 .6-.2.8-.4l2.3-2.2 4.8 3.5c.9.5 1.5.2 1.7-.8L23 4.8c.3-1.3-.5-1.9-1.1-1.4zM9.2 13.2l9.4-5.9c.4-.3.8-.1.5.2l-7.8 7-.3 3.5z" />
+  </svg>
 );

@@ -37,6 +37,13 @@ A Salam run configuration runs a file with `salam run` (compiled) or
 directory. Right-click a `.salam` file and choose **Run**, or click the green
 arrow beside `func main`.
 
+Tests run the same way. In a `_test.salam` file there is a green arrow beside
+every `test_` function, and right-clicking the file or a directory runs all of
+its tests with `salam test`; the results fill the IDE's test tree, failures
+show the assertion that failed, and clicking a test jumps to its line. The
+**Test** command of a Salam run configuration takes a file or directory and an
+optional test name filter.
+
 `build.sh --smoke path/to/salam` also starts that compiler through the
 plugin's own classes and checks the reply, without an IDE. `build.sh --verify`
 runs JetBrains' Plugin Verifier against the IDE build.

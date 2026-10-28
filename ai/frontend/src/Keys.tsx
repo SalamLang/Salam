@@ -506,6 +506,11 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
                   <tr key={k.id}>
                     <td>
                       <bdi>{k.name}</bdi>
+                      {k.custom && (
+                        <span className="cell-sub" title={t("مدیر رفتار این کلید را تنظیم کرده است.", "An admin has customized how this key behaves.")}>
+                          {t("تنظیم ویژه", "Custom setup")}
+                        </span>
+                      )}
                     </td>
                     <td dir="ltr" className="cell-ltr cell-mono">
                       {k.prefix}…

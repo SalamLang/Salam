@@ -97,7 +97,7 @@ pub func NearestCommand(word: str): str:
         end
         ret ""
     end
-    names := ["build", "check", "run", "exec", "obj", "llvm", "js", "web", "serve", "new", "init", "add", "remove", "update", "deps", "install", "uninstall", "search", "format", "doc", "translate", "sql", "page", "debug", "memcheck", "inspect", "cli", "upgrade", "help", "version"]
+    names := ["build", "check", "test", "run", "exec", "obj", "llvm", "js", "web", "serve", "new", "init", "add", "remove", "update", "deps", "install", "uninstall", "search", "format", "doc", "translate", "sql", "page", "debug", "memcheck", "inspect", "cli", "upgrade", "help", "version"]
     mut best := ""
     mut best_d := 3
     repeat names.len() in i:
@@ -110,7 +110,7 @@ pub func NearestCommand(word: str): str:
     if str.Equals(word, "compile") or str.Equals(word, "make"):
         ret "build"
     end
-    if str.Equals(word, "test") or str.Equals(word, "lint") or str.Equals(word, "typecheck") or str.Equals(word, "verify"):
+    if str.Equals(word, "lint") or str.Equals(word, "typecheck") or str.Equals(word, "verify"):
         ret "check"
     end
     if str.Equals(word, "fmt"):
@@ -159,6 +159,9 @@ Commands:
   check    [file.salam|dir] [--fix]             Lex, parse and type-check without building; the fast way
                                                 to find errors (exit 1 when there are any); --fix applies
                                                 the safe fixes in place and checks again
+  test     [files|dirs] [--run=NAME] [--format=teamcity] [--interp]  Run the test_ functions in every
+                                                *_test.salam file (default: this directory, recursively);
+                                                --run matches part of a name, ^name$ exactly
   obj      <files...> [build options]           Compile to an object file (cross-compile with --target)
   llvm     <file.salam> [--output=FILE]         Emit LLVM IR (.ll) for the LLVM/wasm backend
   js       <files...> [--output=FILE]           Compile to browser-ready JavaScript (.js, or a
@@ -220,9 +223,11 @@ Commands:
 Build options:
   --output=FILE            Output executable (default: <module>, plus
                            .exe when the target is Windows)
-  --backend=llvm|c         Code generator (default: llvm when this build
+  --backend=llvm|c|native  Code generator (default: llvm when this build
                            has it, else c). llvm optimizes and links
-                           in-process; c goes through a C compiler.
+                           in-process; c goes through a C compiler;
+                           native writes x86-64 machine code and the
+                           object file itself, for Linux and Windows.
                            A build optimizes at -O2 either way (-O3 with
                            --release, none with --debug-info or --asan);
                            -O<n> overrides it for the llvm backend
@@ -238,6 +243,15 @@ Build options:
                            instead of deleting them once the build/run
                            finishes; also applies to 'run' and 'jit'
   --emit-c                 Emit the generated C and stop (implies --keep-temp)
+  --emit-asm               With --backend=native, also write the machine
+                           code as assembly to <module>.s (GNU as syntax)
+  --linker=MODE            With --backend=native: 'builtin' links inside
+                           the compiler (x86-64 Linux: static for musl, a
+                           PIE against glibc; Windows: a PE against the
+                           mingw-w64 runtime), 'system' calls cc or mingw
+                           gcc, 'auto' (default) uses builtin whenever it
+                           can find every input ($SALAM_LINKER sets the
+                           default)
   -dNAME=VALUE             Define a compile-time constant the program can
     (--const=NAME=VALUE)   read by name, as if the source said
                            'const NAME := VALUE' (repeatable). NAME must be
@@ -281,6 +295,11 @@ Build options:
                            returned value its own defer frees), warn (also
                            warn on paths that may do so), error (warnings
                            become errors), off. Costs nothing at run time
+  --switch-lint=MODE       Style check W145 for a run of 'if x == K' tests that
+                           could be one 'switch': off (default), warn, error,
+                           fix (warn, and 'check --fix' rewrites them)
+  --switch-lint-min=N      Shortest run --switch-lint reports (default 4,
+                           at least 2)
   --target=TRIPLE         Cross-compile via LLVM to this target triple,
                            e.g. x86_64-w64-windows-gnu (needs clang/llc + lld
                            and a sysroot); honors link/OS macros; a bundled
@@ -458,6 +477,7 @@ pub func RunCommand(args: Vector<str>): int:
     i18.SetLang(opt.lang)
     sm.SetConsts(opt.consts)
     sm.SetOwnership(opt.ownership)
+    sm.SetSwitchLint(opt.switch_lint, opt.switch_lint_min)
     sm.SetStdlibRoot(opt.stdlib_path)
     sm.LayoutSchemaInit(opt.stdlib_path)
 
@@ -530,6 +550,10 @@ pub func RunCommand(args: Vector<str>): int:
     if opt.command == dr.CMD_RUN:
         r_run := opt.interp ? dr.Exec(opt) : dr.Run(opt)
         ret r_run
+    end
+    if opt.command == dr.CMD_TEST:
+        r_test := opt.test_one ? dr.TestOne(opt) : dr.Test(opt)
+        ret r_test
     end
     if opt.command == dr.CMD_REPL or opt.command == dr.CMD_REPL_LAYOUT:
         r_repl := rp.Run(opt)

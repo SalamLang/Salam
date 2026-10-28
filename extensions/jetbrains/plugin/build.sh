@@ -107,6 +107,15 @@ if [ -n "$SMOKE" ]; then
         echo "build.sh: smoke test failed" >&2
         exit 1
     fi
+    mkdir -p "$RUN/tests"
+    printf 'func test_good():\n    testing.AssertEqInt(1 + 1, 2)\nend\n\nfunc test_bad():\n    testing.AssertEqStr("a", "b")\nend\n' >"$RUN/tests/smoke_test.salam"
+    javac -nowarn -proc:none -d "$RUN" -cp "$RCP" "$HERE/smoke/TeamCitySmoke.java" 2>/dev/null
+    (cd "$RUN/tests" && SALAM_STD="${SALAM_STD:-$ROOT/std}" "$SMOKE" test --format=teamcity 2>/dev/null) |
+        java -cp "$RCP:$RUN" TeamCitySmoke | tee "$RUN/teamcity.txt"
+    if ! grep -q "2 started, 2 finished, 1 failed: strings differ" "$RUN/teamcity.txt"; then
+        echo "build.sh: salam test output does not read as a test tree" >&2
+        exit 1
+    fi
     echo "smoke test passed"
 fi
 

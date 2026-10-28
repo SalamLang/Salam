@@ -29,6 +29,22 @@ export type AgentInfo = {
   connected: boolean;
 };
 
+export type ProjectContext = {
+  instructions_file: string;
+  instructions: string;
+  memory_index: string;
+  memories: number;
+};
+
+export type NotifyKind = "done" | "failed" | "network" | "test";
+
+export type NotifyPrefs = {
+  enabled: boolean;
+  sound: boolean;
+  preview: boolean;
+  lang: "fa" | "en";
+};
+
 export const agent = {
   info: () => invoke<AgentInfo>("agent_info"),
   link: (token: string) => invoke<AgentInfo>("agent_link", { token }),
@@ -40,6 +56,13 @@ export const agent = {
     invoke<boolean>("agent_decide", { callId, answer }),
   stop: (callId: string) => invoke<boolean>("agent_stop", { callId }),
   pending: () => invoke<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
+  projectContext: (workspace: string) =>
+    invoke<ProjectContext>("agent_project_context", { workspace }),
+  notify: (kind: NotifyKind, chat?: string, text?: string) =>
+    invoke<"shown" | "skipped">("agent_notify", { kind, chat, text }),
+  notifyPrefs: () => invoke<NotifyPrefs>("agent_notify_prefs"),
+  setNotifyPrefs: (prefs: NotifyPrefs) =>
+    invoke<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
 };
 
 export function onAgent(handlers: {

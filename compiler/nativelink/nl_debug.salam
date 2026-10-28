@@ -1,0 +1,312 @@
+package nativelink
+
+func dbg_out_index(l &: Nl, nm: int): int:
+    repeat l.dg_name.len() in i:
+        if l.dg_name[i] == nm:
+            ret i
+        end
+    end
+    l.dg_name.push(nm)
+    l.dg_size.push(0 as i64)
+    l.dg_base.push(0 as i64)
+    ret l.dg_name.len() - 1
+end
+
+func dbg_collect(l &: Nl):
+    mut olive := Vector {} as Vector<bool>
+    repeat l.o_file.len():
+        olive.push(false)
+    end
+    repeat l.s_obj.len() in s:
+        l.s_dbg.push(0 - 1)
+        if l.s_live[s]:
+            olive[l.s_obj[s]] = true
+        end
+    end
+    repeat l.s_obj.len() in s2:
+        if not olive[l.s_obj[s2]] or l.s_type[s2] != 1 or (l.s_flags[s2] & (2 as i64)) != (0 as i64):
+            continue
+        end
+        if not name_starts(l, l.s_name[s2], ".debug_") or l.o_base[l.s_obj[s2]] > (0 as i64):
+            continue
+        end
+        k := dbg_out_index(l, l.s_name[s2])
+        off := align_to(l.dg_size[k], l.s_align[s2])
+        l.s_addr[s2] = off
+        l.s_dbg[s2] = k
+        l.dg_size[k] = off + l.s_size[s2]
+    end
+    olive.free()
+end
+
+func dbg_build(l &: Nl):
+    mut total := 0 as i64
+    repeat l.dg_name.len() in k:
+        l.dg_base[k] = total
+        total = total + l.dg_size[k]
+    end
+    repeat total:
+        l.dg_bytes.push(0 as u8)
+    end
+    buf := l.dg_bytes.data
+    repeat l.s_obj.len() in s:
+        k2 := l.s_dbg[s]
+        if k2 < 0:
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        dst := l.dg_base[k2] + l.s_addr[s]
+        src := l.s_off[s]
+        repeat l.s_size[s] in q:
+            buf[dst + q] = p[src + q]
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in j:
+            r := r0 + j
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            t := sym_sec(l, os)
+            dead := t >= 0 and not l.s_live[t] and l.s_dbg[t] < 0
+            v := dead ? (0 as i64) : sym_addr(l, os) + l.r_add[r]
+            place := dst + l.r_off[r]
+            if l.mach == EM_RISCV:
+                if ty != 1 and ty != 2 and (ty < 33 or ty > 40) and (ty < 52 or ty > 56) and ty != 60 and ty != 61:
+                    continue
+                end
+                _rv := reloc_riscv(l, buf, s, r, ty, place, place, dead ? (0 as i64) : l.r_add[r], dead ? (0 as i64) : sym_addr(l, os), os)
+            else l.mach == EM_AARCH64:
+                if ty == 257:
+                    wr64(buf, place, v)
+                else ty == 258:
+                    wr32(buf, place, v)
+                end
+            else l.mach == EM_386 or l.mach == EM_ARM:
+                if ty == (l.mach == EM_386 ? 1 : 2):
+                    wr32(buf, place, v)
+                end
+            else ty == 1:
+                wr64(buf, place, v)
+            else ty == 10 or ty == 11:
+                wr32(buf, place, v)
+            end
+        end
+    end
+end
+
+func dbg_collect_pe(l &: Nl):
+    repeat l.s_obj.len() in s:
+        l.s_dbg.push(0 - 1)
+        if not l.o_coff[l.s_obj[s]] or l.s_drop[s] or l.s_off[s] <= (0 as i64):
+            continue
+        end
+        if not name_starts(l, l.s_name[s], ".debug_"):
+            continue
+        end
+        k := dbg_out_index(l, l.s_name[s])
+        off := align_to(l.dg_size[k], l.s_align[s])
+        l.s_addr[s] = off
+        l.s_dbg[s] = k
+        l.dg_size[k] = off + l.s_size[s]
+    end
+end
+
+func dbg_build_pe(l &: Nl):
+    mut total := 0 as i64
+    repeat l.dg_name.len() in k:
+        l.dg_base[k] = total
+        total = total + l.dg_size[k]
+    end
+    repeat total:
+        l.dg_bytes.push(0 as u8)
+    end
+    buf := l.dg_bytes.data
+    repeat l.s_obj.len() in s:
+        k2 := l.s_dbg[s]
+        if k2 < 0:
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        dst := l.dg_base[k2] + l.s_addr[s]
+        repeat l.s_size[s] in q:
+            buf[dst + q] = p[l.s_off[s] + q]
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in j:
+            r := r0 + j
+            ty := pe_rtype(l, l.r_type[r] - CR_BASE)
+            os := l.r_sym[r]
+            place := dst + l.r_off[r]
+            sv := pe_sym(l, os)
+            if ty == 102:
+                wr32(buf, place, sv + rd32s(buf, place))
+            else ty == 1:
+                wr64(buf, place, sv + rd64(buf, place))
+            else ty == 11:
+                wr32(buf, place, sv + rd32s(buf, place))
+            else ty == 3:
+                wr32(buf, place, sv + rd32s(buf, place) - l.pe_base)
+            end
+        end
+    end
+end
+
+func dbg_layout_pe(l &: Nl, va0: i64, raw0: i64): i64:
+    mut va := va0
+    mut raw := raw0
+    repeat l.dg_name.len() in k:
+        l.dg_va.push(va)
+        l.dg_raw.push(raw)
+        va = align_to(va + l.dg_size[k], 0x1000 as i64)
+        raw = raw + align_to(l.dg_size[k], 0x200 as i64)
+        nm := name_of(l, l.dg_name[k])
+        if str.Len(nm) > 8:
+            l.pe_stroff.push(l.pe_str.len() + 4)
+            tb_cstr(l.pe_str, nm)
+        else:
+            l.pe_stroff.push(0 - 1)
+        end
+    end
+    l.pe_strpos = raw
+    ret va
+end
+
+func dw_mo_pos(l &: Nl, obj: int, at: bool): Vector<i64>:
+    mut v := Vector {} as Vector<i64>
+    repeat DWB_COUNT in k:
+        s := mo_dsec(l, obj, dw_base_name(k))
+        if s < 0 or l.s_dbg[s] < 0:
+            v.push(0 as i64)
+        else at:
+            v.push(l.dg_base[l.s_dbg[s]] + l.s_addr[s])
+        else:
+            v.push(l.s_addr[s])
+        end
+    end
+    ret v
+end
+
+func has_int(v: Vector<int>, x: int): bool:
+    each y in v:
+        if y == x:
+            ret true
+        end
+    end
+    ret false
+end
+
+func dbg_collect_mo(l &: Nl):
+    mut objs := Vector {} as Vector<int>
+    repeat l.s_obj.len() in s:
+        l.s_dbg.push(0 - 1)
+        o := l.s_obj[s]
+        if l.s_off[s] > (0 as i64) and name_is(l, l.s_name[s], "__DWARF,__debug_info") and not has_int(objs, o):
+            objs.push(o)
+        end
+    end
+    if objs.len() == 0:
+        ret
+    end
+    mut zero := Vector {} as Vector<i64>
+    repeat DWB_COUNT:
+        zero.push(0 as i64)
+    end
+    l.dg_mobj.clear()
+    each o2 in objs:
+        si := mo_dsec(l, o2, "__DWARF,__debug_info")
+        ab := mo_dsec(l, o2, "__DWARF,__debug_abbrev")
+        if ab >= 0 and dw_info(fptr(l, l.o_file[o2]), l.s_off[si], l.s_size[si], l.s_off[ab], zero, false):
+            l.dg_mobj.push(o2)
+        end
+    end
+    if l.dg_mobj.len() == 0:
+        l.dg_mobj.push(objs[0])
+    end
+    multi := l.dg_mobj.len() > 1
+    each o3 in l.dg_mobj:
+        repeat l.s_obj.len() in s2:
+            if l.s_obj[s2] != o3 or l.s_off[s2] <= (0 as i64) or not name_starts(l, l.s_name[s2], "__DWARF,__debug_"):
+                continue
+            end
+            if multi and name_is(l, l.s_name[s2], "__DWARF,__debug_names"):
+                continue
+            end
+            k := dbg_out_index(l, l.s_name[s2])
+            off := align_to(l.dg_size[k], l.s_align[s2])
+            l.s_addr[s2] = off
+            l.s_dbg[s2] = k
+            l.dg_size[k] = off + l.s_size[s2]
+        end
+    end
+    objs.free()
+    zero.free()
+end
+
+func dbg_build_mo(l &: Nl):
+    mut total := 0 as i64
+    repeat l.dg_name.len() in k:
+        l.dg_base[k] = total
+        total = total + l.dg_size[k]
+    end
+    repeat total:
+        l.dg_bytes.push(0 as u8)
+    end
+    buf := l.dg_bytes.data
+    repeat l.s_obj.len() in s:
+        k2 := l.s_dbg[s]
+        if k2 < 0:
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        dst := l.dg_base[k2] + l.s_addr[s]
+        repeat l.s_size[s] in q:
+            buf[dst + q] = p[l.s_off[s] + q]
+        end
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in j:
+            r := r0 + j
+            if mo_rtype(l.r_type[r]) != 0:
+                continue
+            end
+            os := l.r_sym[r]
+            t := sym_sec(l, os)
+            if t >= 0 and not l.s_live[t]:
+                continue
+            end
+            mut v := mo_sym(l, os) + l.r_add[r]
+            if l.r_sub[r] >= 0:
+                v = v - mo_sym(l, l.r_sub[r])
+            end
+            place := dst + l.r_off[r]
+            if mo_rlen(l.r_type[r]) == 3:
+                wr64(buf, place, v)
+            else:
+                wr32(buf, place, v)
+            end
+        end
+    end
+    if l.dg_mobj.len() < 2:
+        ret
+    end
+    each o in l.dg_mobj:
+        base := dw_mo_pos(l, o, false)
+        pos := dw_mo_pos(l, o, true)
+        si := mo_dsec(l, o, "__DWARF,__debug_info")
+        _ok := dw_info(buf, pos[DWB_INFO], l.s_size[si], pos[DWB_ABBREV], base, true)
+        so := mo_dsec(l, o, "__DWARF,__debug_str_offs")
+        if so >= 0:
+            dw_stroff(buf, pos[DWB_STROFF], l.s_size[so], base)
+        end
+        sl := mo_dsec(l, o, "__DWARF,__debug_line")
+        if sl >= 0:
+            dw_line(buf, pos[DWB_LINE], l.s_size[sl], base)
+        end
+        sa := mo_dsec(l, o, "__DWARF,__debug_aranges")
+        if sa >= 0:
+            if l.s_dbg[sa] >= 0:
+                dw_aranges(buf, l.dg_base[l.s_dbg[sa]] + l.s_addr[sa], l.s_size[sa], base)
+            end
+        end
+        base.free()
+        pos.free()
+    end
+end

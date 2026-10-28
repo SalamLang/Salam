@@ -1,0 +1,339 @@
+package nativegen
+
+func owner_of(starts: Vector<int>, ends: Vector<int>, syms: Vector<int>, off: int): int:
+    mut lo := 0
+    mut hi := starts.len() - 1
+    mut best := 0 - 1
+    until lo <= hi:
+        mid := (lo + hi) / 2
+        if starts[mid] <= off:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+        end
+    end
+    if best >= 0 and off < ends[best]:
+        ret syms[best]
+    end
+    if best >= 0 and starts[best] == off:
+        ret syms[best]
+    end
+    ret 0 - 1
+end
+
+func sec_index(g &: Ng, sec: int, starts &: Vector<int>, ends &: Vector<int>, syms &: Vector<int>):
+    starts.clear()
+    ends.clear()
+    syms.clear()
+    repeat g.sy_kind.len() in s:
+        if g.sy_def[s] and g.sy_sec[s] == sec:
+            starts.push(g.sy_off[s])
+            ends.push(g.sy_off[s] + g.sy_size[s])
+            syms.push(s)
+        end
+    end
+    n := starts.len()
+    mut tk := Vector {} as Vector<int>
+    mut te := Vector {} as Vector<int>
+    mut tsy := Vector {} as Vector<int>
+    repeat n:
+        tk.push(0)
+        te.push(0)
+        tsy.push(0)
+    end
+    mut w := 1
+    until w < n:
+        mut lo := 0
+        until lo < n:
+            mid := lo + w < n ? lo + w : n
+            hi := lo + 2 * w < n ? lo + 2 * w : n
+            mut a := lo
+            mut b := mid
+            mut k := lo
+            until k < hi:
+                if a < mid and (b >= hi or starts[a] <= starts[b]):
+                    tk[k] = starts[a]
+                    te[k] = ends[a]
+                    tsy[k] = syms[a]
+                    a += 1
+                else:
+                    tk[k] = starts[b]
+                    te[k] = ends[b]
+                    tsy[k] = syms[b]
+                    b += 1
+                end
+                k += 1
+            end
+            lo += 2 * w
+        end
+        repeat n in j:
+            starts[j] = tk[j]
+            ends[j] = te[j]
+            syms[j] = tsy[j]
+        end
+        w = w * 2
+    end
+    tk.free()
+    te.free()
+    tsy.free()
+end
+
+func compact_sec(g &: Ng, sec: int, live: Vector<bool>, owner: Vector<int>):
+    mut starts := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    mut syms := Vector {} as Vector<int>
+    sec_index(g, sec, starts, ends, syms)
+    mut newoff := Vector {} as Vector<int>
+    repeat g.sy_kind.len():
+        newoff.push(0 - 1)
+    end
+    mut out := Vector {} as Vector<u8>
+    mut pos := 0
+    mut last_start := 0 - 1
+    mut last_new := 0 - 1
+    repeat syms.len() in k:
+        s := syms[k]
+        if not live[s]:
+            continue
+        end
+        al := g.sy_align[s] < 1 ? 1 : g.sy_align[s]
+        mut np := align_up(pos, al)
+        if starts[k] == last_start:
+            np = last_new
+        else:
+            until pos < np:
+                if sec == SEC_TEXT:
+                    out.push(0xCC as u8)
+                else:
+                    out.push(0 as u8)
+                end
+                pos += 1
+            end
+            if sec != SEC_BSS:
+                repeat ends[k] - starts[k] in q:
+                    out.push(sec_byte_raw(g, sec, starts[k] + q) as u8)
+                end
+            end
+            pos = np + ends[k] - starts[k]
+            last_start = starts[k]
+            last_new = np
+        end
+        newoff[s] = np
+    end
+    if sec == SEC_TEXT and g.dbg_on:
+        dbg_remap(g, starts, ends, syms, newoff)
+    end
+    repeat g.r_sec.len() in r:
+        if g.r_sec[r] == sec:
+            o := owner[r]
+            if o >= 0 and live[o] and newoff[o] >= 0:
+                g.r_off[r] = g.r_off[r] - g.sy_off[o] + newoff[o]
+            else:
+                g.r_sec[r] = 0 - 1
+            end
+        end
+    end
+    repeat syms.len() in k2:
+        s2 := syms[k2]
+        if live[s2]:
+            g.sy_off[s2] = newoff[s2]
+        else:
+            g.sy_def[s2] = false
+            g.sy_used[s2] = false
+        end
+    end
+    switch sec:
+        SEC_TEXT:
+            g.s_text.free()
+            g.s_text = out
+            break
+        end
+        SEC_RODATA:
+            g.s_ro.free()
+            g.s_ro = out
+            break
+        end
+        SEC_DATA:
+            g.s_data.free()
+            g.s_data = out
+            break
+        end
+        SEC_BSS:
+            g.bss_size = pos
+            out.free()
+            break
+        end
+    end
+    starts.free()
+    ends.free()
+    syms.free()
+    newoff.free()
+end
+
+func sec_byte_raw(g &: Ng, sec: int, off: int): int:
+    if sec == SEC_TEXT:
+        ret g.s_text[off] as int
+    end
+    ret sec_byte(g, sec, off)
+end
+
+func gdce(g &: Ng):
+    nsym := g.sy_kind.len()
+    mut live := Vector {} as Vector<bool>
+    repeat nsym:
+        live.push(false)
+    end
+    mut owner := Vector {} as Vector<int>
+    repeat g.r_sec.len():
+        owner.push(0 - 1)
+    end
+    k_dce_secs := [SEC_TEXT, SEC_RODATA, SEC_DATA, SEC_BSS, SEC_CONST]
+    mut starts := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    mut syms := Vector {} as Vector<int>
+    each sec in k_dce_secs:
+        sec_index(g, sec, starts, ends, syms)
+        repeat g.r_sec.len() in r:
+            if g.r_sec[r] == sec:
+                owner[r] = owner_of(starts, ends, syms, g.r_off[r])
+            end
+        end
+    end
+    mut adj_head := Vector {} as Vector<int>
+    mut adj_next := Vector {} as Vector<int>
+    mut adj_to := Vector {} as Vector<int>
+    repeat nsym:
+        adj_head.push(0 - 1)
+    end
+    mut wl := Vector {} as Vector<int>
+    repeat g.r_sec.len() in r2:
+        sec2 := g.r_sec[r2]
+        t := g.r_sym[r2]
+        if sec2 == SEC_INIT or sec2 == SEC_FINI:
+            if not live[t]:
+                live[t] = true
+                wl.push(t)
+            end
+            continue
+        end
+        o := owner[r2]
+        if o >= 0:
+            adj_to.push(t)
+            adj_next.push(adj_head[o])
+            adj_head[o] = adj_to.len() - 1
+        end
+    end
+    repeat nsym in s:
+        if g.sy_def[s] and not g.sy_local[s] and not live[s]:
+            live[s] = true
+            wl.push(s)
+        end
+    end
+    each fixed in [g.sym_ro, g.sym_xdata]:
+        if not live[fixed]:
+            live[fixed] = true
+            wl.push(fixed)
+        end
+    end
+    until wl.len() > 0:
+        x := wl.pop()
+        mut h := adj_head[x]
+        until h >= 0:
+            y := adj_to[h]
+            if not live[y]:
+                live[y] = true
+                wl.push(y)
+            end
+            h = adj_next[h]
+        end
+    end
+    g.sy_live.clear()
+    each lv in live:
+        g.sy_live.push(lv)
+    end
+    compact_sec(g, SEC_TEXT, live, owner)
+    compact_sec(g, SEC_RODATA, live, owner)
+    compact_sec(g, SEC_DATA, live, owner)
+    compact_sec(g, SEC_BSS, live, owner)
+    if g.os == NG_OS_WINDOWS or g.arch == NG_ARCH_ARM:
+        prune_pdata(g, live)
+    end
+    mut w := 0
+    repeat g.r_sec.len() in r3:
+        if g.r_sec[r3] >= 0:
+            g.r_sec[w] = g.r_sec[r3]
+            g.r_off[w] = g.r_off[r3]
+            g.r_sym[w] = g.r_sym[r3]
+            g.r_type[w] = g.r_type[r3]
+            g.r_add[w] = g.r_add[r3]
+            w += 1
+        end
+    end
+    until g.r_sec.len() > w:
+        _a := g.r_sec.pop()
+        _b := g.r_off.pop()
+        _c := g.r_sym.pop()
+        _d := g.r_type.pop()
+        _e := g.r_add.pop()
+    end
+    repeat nsym in s3:
+        if not g.sy_def[s3]:
+            g.sy_used[s3] = false
+        end
+    end
+    each rs in g.r_sym:
+        g.sy_used[rs] = true
+    end
+    live.free()
+    owner.free()
+    starts.free()
+    ends.free()
+    syms.free()
+    adj_head.free()
+    adj_next.free()
+    adj_to.free()
+    wl.free()
+end
+
+func prune_pdata(g &: Ng, live: Vector<bool>):
+    mut keep := Vector {} as Vector<bool>
+    es := g.arch == NG_ARCH_A64 or g.arch == NG_ARCH_ARM ? 8 : 12
+    n := g.s_pdata.len() / es
+    repeat n:
+        keep.push(true)
+    end
+    repeat g.r_sec.len() in r:
+        if g.r_sec[r] == SEC_PDATA and (g.r_off[r] % es) == 0:
+            if not live[g.r_sym[r]]:
+                keep[g.r_off[r] / es] = false
+            end
+        end
+    end
+    mut newpos := Vector {} as Vector<int>
+    mut out := Vector {} as Vector<u8>
+    repeat n in e:
+        if keep[e]:
+            newpos.push(out.len())
+            repeat es in q:
+                out.push(g.s_pdata[e * es + q])
+            end
+        else:
+            newpos.push(0 - 1)
+        end
+    end
+    repeat g.r_sec.len() in r2:
+        if g.r_sec[r2] == SEC_PDATA:
+            ent := g.r_off[r2] / es
+            if keep[ent]:
+                g.r_off[r2] = newpos[ent] + (g.r_off[r2] % es)
+            else:
+                g.r_sec[r2] = 0 - 1
+            end
+        end
+    end
+    g.s_pdata.free()
+    g.s_pdata = out
+    keep.free()
+    newpos.free()
+end

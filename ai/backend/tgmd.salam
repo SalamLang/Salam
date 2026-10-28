@@ -1,0 +1,384 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aitgmd
+
+import str
+
+const FENCE := "```"
+const RULE := "────────────"
+
+func esc(s: str): str:
+    if s.find("&") < 0 and s.find("<") < 0 and s.find(">") < 0:
+        ret s
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    n := s.len()
+    mut i := 0
+    mut run := 0
+    until i < n:
+        c := s[i] as int
+        if c == 38 or c == 60 or c == 62:
+            if i > run:
+                str.BufAppend(b, s.substr(run, i - run))
+            end
+            if c == 38:
+                str.BufAppend(b, "&amp;")
+            else c == 60:
+                str.BufAppend(b, "&lt;")
+            else:
+                str.BufAppend(b, "&gt;")
+            end
+            run = i + 1
+        end
+        i += 1
+    end
+    if n > run:
+        str.BufAppend(b, s.substr(run, n - run))
+    end
+    ret str.BufStr(b)
+end
+
+func attr(s: str): str:
+    ret str.Replace(esc(s), "\"", "&quot;")
+end
+
+func find_from(s: str, needle: str, from: int): int:
+    if from >= s.len():
+        ret -1
+    end
+    at := s.substr(from, s.len() - from).find(needle)
+    if at < 0:
+        ret -1
+    end
+    ret from + at
+end
+
+func word_byte(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c >= 128
+end
+
+func blank_byte(c: int): bool:
+    ret c == 32 or c == 10 or c == 9 or c == 13
+end
+
+func safe_url(u: str): bool:
+    ret str.StartsWith(u, "http://") or str.StartsWith(u, "https://") or str.StartsWith(u, "tg://") or str.StartsWith(u, "mailto:")
+end
+
+func close_single(s: str, c: int, from: int): int:
+    n := s.len()
+    mut j := from
+    until j < n:
+        b := s[j] as int
+        if b == 92:
+            j += 2
+            continue
+        end
+        if b == c:
+            if j + 1 < n and (s[j + 1] as int) == c:
+                j += 2
+                continue
+            end
+            if j > from and not blank_byte(s[j - 1] as int):
+                if c != 95 or j + 1 >= n or not word_byte(s[j + 1] as int):
+                    ret j
+                end
+            end
+            ret -1
+        end
+        j += 1
+    end
+    ret -1
+end
+
+func spans(s: str): str:
+    n := s.len()
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    mut run := 0
+    until i < n:
+        c := s[i] as int
+        mut piece := ""
+        mut next := i + 1
+        mut handled := false
+        if c == 96:
+            close := find_from(s, "`", i + 1)
+            if close > i + 1:
+                piece = "<code>" + esc(s.substr(i + 1, close - i - 1)) + "</code>"
+                next = close + 1
+                handled = true
+            end
+        else (c == 42 or c == 95 or c == 126) and i + 1 < n and (s[i + 1] as int) == c:
+            marker := s.substr(i, 2)
+            mut close := find_from(s, marker, i + 2)
+            if close > 0 and close + 2 < n and (s[close + 2] as int) == c:
+                close += 1
+            end
+            prev_word := i > 0 and word_byte(s[i - 1] as int)
+            if close > i + 2 and not blank_byte(s[i + 2] as int) and (c != 95 or not prev_word):
+                tag := c == 126 ? "s" : "b"
+                piece = "<" + tag + ">" + spans(s.substr(i + 2, close - i - 2)) + "</" + tag + ">"
+                next = close + 2
+                handled = true
+            end
+        else (c == 42 or c == 95) and i + 1 < n and not blank_byte(s[i + 1] as int):
+            prev_word := i > 0 and (word_byte(s[i - 1] as int) or (s[i - 1] as int) == c)
+            if not (c == 95 and prev_word) and not (c == 42 and i > 0 and (s[i - 1] as int) == 42):
+                close := close_single(s, c, i + 1)
+                if close > i + 1:
+                    piece = "<i>" + spans(s.substr(i + 1, close - i - 1)) + "</i>"
+                    next = close + 1
+                    handled = true
+                end
+            end
+        else c == 91:
+            mid := find_from(s, "](", i + 1)
+            if mid > i + 1:
+                stop := find_from(s, ")", mid + 2)
+                if stop > mid + 2:
+                    url := s.substr(mid + 2, stop - mid - 2)
+                    if safe_url(url) and url.find(" ") < 0:
+                        piece = "<a href=\"" + attr(url) + "\">" + spans(s.substr(i + 1, mid - i - 1)) + "</a>"
+                        next = stop + 1
+                        handled = true
+                    end
+                end
+            end
+        end
+        if not handled and (c == 38 or c == 60 or c == 62):
+            if c == 38:
+                piece = "&amp;"
+            else c == 60:
+                piece = "&lt;"
+            else:
+                piece = "&gt;"
+            end
+            handled = true
+        end
+        if handled:
+            if i > run:
+                str.BufAppend(b, s.substr(run, i - run))
+            end
+            str.BufAppend(b, piece)
+            run = next
+            i = next
+        else:
+            i += 1
+        end
+    end
+    if n > run:
+        str.BufAppend(b, s.substr(run, n - run))
+    end
+    ret str.BufStr(b)
+end
+
+func lang_of(info: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < info.len():
+        c := info[i] as int
+        if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c == 43 or c == 35 or c == 46 or c == 45:
+            str.BufAppend(b, info.substr(i, 1))
+            i += 1
+        else:
+            break
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func code_block(info: str, lines: Vector<str>): str:
+    body := esc(str.Join(lines, "\n"))
+    lang := lang_of(info)
+    if lang.len() == 0:
+        ret "<pre>" + body + "</pre>"
+    end
+    ret "<pre><code class=\"language-" + lang + "\">" + body + "</code></pre>"
+end
+
+func rule_line(t: str): bool:
+    if t.len() < 3:
+        ret false
+    end
+    first := t[0] as int
+    if first != 45 and first != 42 and first != 95:
+        ret false
+    end
+    mut i := 0
+    until i < t.len():
+        if (t[i] as int) != first:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func heading_text(t: str): str:
+    mut hashes := 0
+    until hashes < t.len() and hashes < 7 and (t[hashes] as int) == 35:
+        hashes += 1
+    end
+    if hashes == 0 or hashes > 6 or hashes >= t.len() or (t[hashes] as int) != 32:
+        ret ""
+    end
+    ret str.Trim(t.substr(hashes + 1, t.len() - hashes - 1))
+end
+
+func list_item(line: str): str:
+    mut i := 0
+    until i < line.len() and ((line[i] as int) == 32 or (line[i] as int) == 9):
+        i += 1
+    end
+    if i + 1 >= line.len():
+        ret ""
+    end
+    c := line[i] as int
+    if (c == 45 or c == 42 or c == 43) and (line[i + 1] as int) == 32:
+        ret line.substr(0, i) + "• " + spans(line.substr(i + 2, line.len() - i - 2))
+    end
+    ret ""
+end
+
+func utf8_cut(s: str, max: int): int:
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret cut
+end
+
+pub func Html(md: str): str:
+    lines := md.split("\n")
+    n := lines.len()
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < n:
+        line := lines.get(i)
+        t := str.Trim(line)
+        if str.StartsWith(t, FENCE):
+            info := str.Trim(t.substr(3, t.len() - 3))
+            mut code := Vector {} as Vector<str>
+            i += 1
+            until i < n and not str.StartsWith(str.Trim(lines.get(i)), FENCE):
+                code.push(lines.get(i))
+                i += 1
+            end
+            i += 1
+            out.push(code_block(info, code))
+            continue
+        end
+        if str.StartsWith(t, "|"):
+            mut rows := Vector {} as Vector<str>
+            until i < n and str.StartsWith(str.Trim(lines.get(i)), "|"):
+                rows.push(lines.get(i))
+                i += 1
+            end
+            out.push("<pre>" + esc(str.Join(rows, "\n")) + "</pre>")
+            continue
+        end
+        if str.StartsWith(t, ">"):
+            mut quoted := Vector {} as Vector<str>
+            until i < n and str.StartsWith(str.Trim(lines.get(i)), ">"):
+                q := str.Trim(lines.get(i))
+                quoted.push(spans(str.TrimPrefix(str.TrimPrefix(q, ">"), " ")))
+                i += 1
+            end
+            out.push("<blockquote>" + str.Join(quoted, "\n") + "</blockquote>")
+            continue
+        end
+        head := heading_text(t)
+        if head.len() > 0:
+            out.push("<b>" + spans(head) + "</b>")
+        else rule_line(t):
+            out.push(RULE)
+        else:
+            item := list_item(line)
+            out.push(item.len() > 0 ? item : spans(line))
+        end
+        i += 1
+    end
+    ret str.Join(out, "\n")
+end
+
+pub func Split(md: str, max: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if md.len() <= max:
+        out.push(md)
+        ret out
+    end
+    room := max - 16
+    mut cur := Vector {} as Vector<str>
+    mut size := 0
+    mut fence := ""
+    each line in md.split("\n"):
+        mut rest := line
+        until rest.len() > room:
+            mut cut := utf8_cut(rest, room)
+            if cut <= 0:
+                cut = room
+            end
+            piece := rest.substr(0, cut)
+            rest = rest.substr(cut, rest.len() - cut)
+            if size + piece.len() + 1 > room and cur.len() > 0:
+                if fence.len() > 0:
+                    cur.push(FENCE)
+                end
+                out.push(str.Join(cur, "\n"))
+                cur = Vector {} as Vector<str>
+                size = 0
+                if fence.len() > 0:
+                    cur.push(fence)
+                    size = fence.len() + 1
+                end
+            end
+            cur.push(piece)
+            size += piece.len() + 1
+        end
+        if size + rest.len() + 1 > room and cur.len() > 0:
+            if fence.len() > 0:
+                cur.push(FENCE)
+            end
+            out.push(str.Join(cur, "\n"))
+            cur = Vector {} as Vector<str>
+            size = 0
+            if fence.len() > 0:
+                cur.push(fence)
+                size = fence.len() + 1
+            end
+        end
+        cur.push(rest)
+        size += rest.len() + 1
+        t := str.Trim(rest)
+        if str.StartsWith(t, FENCE):
+            if fence.len() > 0:
+                fence = ""
+            else:
+                fence = t
+            end
+        end
+    end
+    if cur.len() > 0:
+        out.push(str.Join(cur, "\n"))
+    end
+    ret out
+end

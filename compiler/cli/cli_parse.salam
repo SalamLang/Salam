@@ -49,6 +49,28 @@ func parse_indent_width(val: str, out &: int): bool:
     ret true
 end
 
+func parse_switch_min(val: str, out &: int): bool:
+    n := str.Len(val)
+    if n == 0 or n > 2:
+        ret false
+    end
+    mut num := 0
+    mut i := 0
+    until i < n:
+        code := byte_at(val, i)
+        if not str.IsAsciiDigit(code):
+            ret false
+        end
+        num = num * 10 + (code - 48)
+        i += 1
+    end
+    if num < 2:
+        ret false
+    end
+    out = num
+    ret true
+end
+
 func parse_timeout_ms(val: str, out &: int): bool:
     n := str.Len(val)
     if n == 0 or n > 9:
@@ -229,7 +251,7 @@ func positional(arg: str, out &: dr.Dr): bool:
                 out.input = arg
             end
         end
-    else out.command == dr.CMD_BUILD or out.command == dr.CMD_OBJ or out.command == dr.CMD_LLVM or out.command == dr.CMD_JS or out.command == dr.CMD_LAYOUT_BUILD or out.command == dr.CMD_WEB or out.command == dr.CMD_DEBUG or out.command == dr.CMD_MEMCHECK or out.command == dr.CMD_FMT or out.command == dr.CMD_DOC or out.command == dr.CMD_SQL or out.command == dr.CMD_ADD or out.command == dr.CMD_REMOVE or out.command == dr.CMD_DEPS_UPDATE or out.command == dr.CMD_INSTALL or out.command == dr.CMD_SEARCH or out.command == dr.CMD_UNINSTALL:
+    else out.command == dr.CMD_BUILD or out.command == dr.CMD_TEST or out.command == dr.CMD_OBJ or out.command == dr.CMD_LLVM or out.command == dr.CMD_JS or out.command == dr.CMD_LAYOUT_BUILD or out.command == dr.CMD_WEB or out.command == dr.CMD_DEBUG or out.command == dr.CMD_MEMCHECK or out.command == dr.CMD_FMT or out.command == dr.CMD_DOC or out.command == dr.CMD_SQL or out.command == dr.CMD_ADD or out.command == dr.CMD_REMOVE or out.command == dr.CMD_DEPS_UPDATE or out.command == dr.CMD_INSTALL or out.command == dr.CMD_SEARCH or out.command == dr.CMD_UNINSTALL:
         out.inputs.push(arg)
         if str.Len(out.input) == 0:
             out.input = arg
@@ -325,6 +347,9 @@ func dispatch_command(args: Vector<str>, out &: dr.Dr): int:
         start = 2
     else str.Equals(cmd, "inspect"):
         out.command = dr.CMD_INSPECT
+        start = 2
+    else str.Equals(cmd, "test"):
+        out.command = dr.CMD_TEST
         start = 2
     else str.Equals(cmd, "check"):
         out.command = dr.CMD_INSPECT
@@ -443,6 +468,7 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.llvm_emit = 0
         else str.Equals(arg, "--emit-asm"):
             out.llvm_emit = 1
+            out.native_asm = true
         else str.Equals(arg, "--emit-obj") or str.Equals(arg, "-c"):
             out.llvm_emit = 2
         else str.Equals(arg, "--emit-bitcode") or str.Equals(arg, "-flto"):
@@ -478,6 +504,34 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
                 )
                 ret false
             end
+        else opt_value(arg, "--switch-lint", val):
+            if str.Equals(val, "off"):
+                out.switch_lint = 0
+            else str.Equals(val, "warn"):
+                out.switch_lint = 1
+            else str.Equals(val, "error"):
+                out.switch_lint = 2
+            else str.Equals(val, "fix"):
+                out.switch_lint = 3
+            else:
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: unknown --switch-lint mode '%s' (expected 'off', 'warn', 'error' or 'fix')\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+        else opt_value(arg, "--switch-lint-min", val):
+            mut smin := 0
+            if not parse_switch_min(val, smin):
+                io.EPrint(
+                    co.Format1(
+                        i18.Tr("salam: invalid --switch-lint-min value '%s' (a number of at least 2)\n"), co.ArgStr(val)
+                    )
+                )
+                ret false
+            end
+            out.switch_lint_min = smin
         else str.Equals(arg, "--check") and out.command == dr.CMD_UPDATE:
             out.update_check = true
         else opt_value(arg, "--version", val) and out.command == dr.CMD_UPDATE:
@@ -486,6 +540,14 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.fmt_check = true
         else str.Equals(arg, "--fix"):
             out.check_fix = true
+        else str.Equals(arg, "--one") and out.command == dr.CMD_TEST:
+            out.test_one = true
+        else opt_value(arg, "--format", val) and out.command == dr.CMD_TEST:
+            out.test_format = val
+        else opt_value(arg, "--run", val) and out.command == dr.CMD_TEST:
+            out.test_run = val
+        else opt_value(arg, "--report", val) and out.command == dr.CMD_TEST:
+            out.test_report = val
         else str.Equals(arg, "--fix-order"):
             out.fmt_fix_order = true
         else str.Equals(arg, "--no-fix-order"):
@@ -549,6 +611,8 @@ func parse_options(args: Vector<str>, start: int, out &: dr.Dr): bool:
             out.output = args.get(i)
         else opt_value(arg, "--backend", val):
             out.backend = val
+        else opt_value(arg, "--linker", val):
+            out.linker = val
         else str.Equals(arg, "--lib"):
             out.lib_kind = "shared"
         else opt_value(arg, "--lib", val):

@@ -24,7 +24,7 @@ import crypto
 import encoding
 import encoding.json
 import encoding.encerr
-import net.httpx
+import net.http
 
 @en "VERSION"
 @fa "نسخه کلاینت"
@@ -49,30 +49,60 @@ pub const KIND_DECODE := "decode"
 @en "Client"
 @fa "کلاینت"
 pub struct Client:
+    @en "nodes"
+    @fa "گره‌ها"
     pub nodes: Vector<str> = Vector {} as Vector<str>
+    @en "nearest"
+    @fa "نزدیک‌ترین"
     pub nearest: str = ""
+    @en "api_key"
+    @fa "کلید دسترسی"
     pub api_key: str = ""
+    @en "timeout_ms"
+    @fa "مهلت میلی‌ثانیه"
     pub timeout_ms: int = 10000
+    @en "retries"
+    @fa "تعداد تلاش"
     pub retries: int = 3
+    @en "retry_interval_ms"
+    @fa "فاصله تلاش میلی‌ثانیه"
     pub retry_interval_ms: int = 100
+    @en "healthcheck_ms"
+    @fa "بازه سلامت‌سنجی میلی‌ثانیه"
     pub healthcheck_ms: int = 60000
+    @en "headers"
+    @fa "سرآیندها"
     pub headers: Vector<str> = Vector {} as Vector<str>
+    @en "state"
+    @fa "وضعیت"
     pub state: Vector<i64> = Vector {} as Vector<i64>
 end
 
 @en "Error"
 @fa "خطا"
 pub struct Error:
+    @en "status"
+    @fa "وضعیت"
     pub status: int = 0
+    @en "kind"
+    @fa "نوع"
     pub kind: str = ""
+    @en "message"
+    @fa "پیام"
     pub message: str = ""
 end
 
 @en "ClusterStatus"
 @fa "وضعیت خوشه"
 pub struct ClusterStatus:
+    @en "state"
+    @fa "وضعیت"
     pub state: str = ""
+    @en "committed_index"
+    @fa "اندیس ثبت‌شده"
     pub committed_index: i64 = 0
+    @en "queued_writes"
+    @fa "نوشتن‌های صف‌شده"
     pub queued_writes: i64 = 0
 end
 
@@ -272,7 +302,7 @@ func _ts_ok(err: Error): bool:
     ret err.kind.len() == 0
 end
 
-func _raw_str(r: httpx.Raw): str:
+func _raw_str(r: http.RawResponse): str:
     if r.data == null or r.len <= 0: ret "" end
     d := mem.Allocate((r.len + 1) as u64)
     if d == null: ret "" end
@@ -291,7 +321,7 @@ func _node_path(node: str): str:
     ret rest.substr(slash, rest.len() - slash)
 end
 
-func _host_header(ep: httpx.Endpoint): str:
+func _host_header(ep: http.Endpoint): str:
     if ep.secure and ep.port == 443: ret ep.host end
     if not ep.secure and ep.port == 80: ret ep.host end
     ret ep.host + ":" + ep.port
@@ -351,7 +381,7 @@ func _mark(c: Client, idx: int, healthy: bool):
     end
 end
 
-func _head(c: Client, ep: httpx.Endpoint, method: str, target: str, ctype: str, n: int): str:
+func _head(c: Client, ep: http.Endpoint, method: str, target: str, ctype: str, n: int): str:
     mut h := method + " " + target + " HTTP/1.1\r\n"
     h = h + "Host: " + _host_header(ep) + "\r\n"
     h = h + "User-Agent: typesense-salam/" + VERSION + "\r\n"
@@ -393,13 +423,13 @@ func _send(c: Client, method: str, path: str, ctype: str, body: str, err &: Erro
         end
         mut node := c.nearest
         if idx >= 0: node = c.nodes.get(idx) end
-        ep := httpx.ParseEndpoint(node)
+        ep := http.ParseEndpoint(node)
         if not ep.ok:
             _fail(err, 0, KIND_INVALID, "not a node url: " + node)
             ret ""
         end
         head := _head(c, ep, method, _node_path(node) + path, ctype, body.len())
-        mut r := httpx.SendRawTimeout(ep, head, body as void*, body.len(), c.timeout_ms)
+        mut r := http.SendRawTimeout(ep, head, body as void*, body.len(), c.timeout_ms)
         if r.status == 0 or r.status >= 500:
             if r.status == 0:
                 mut msg := r.error
@@ -408,7 +438,7 @@ func _send(c: Client, method: str, path: str, ctype: str, body: str, err &: Erro
             else:
                 _http_error(r.status, _raw_str(r), err)
             end
-            httpx.FreeRaw(r)
+            http.FreeRaw(r)
             _mark(c, idx, false)
             if attempt + 1 < attempts and c.retry_interval_ms > 0:
                 time.Sleep(c.retry_interval_ms)
@@ -418,7 +448,7 @@ func _send(c: Client, method: str, path: str, ctype: str, body: str, err &: Erro
         _mark(c, idx, true)
         _clear(err)
         text := _raw_str(r)
-        httpx.FreeRaw(r)
+        http.FreeRaw(r)
         if r.status >= 200 and r.status < 300:
             ret text
         end

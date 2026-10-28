@@ -1,0 +1,160 @@
+package nativelink
+
+const SYN_INIT_START := 0 - 10
+const SYN_INIT_END := 0 - 11
+const SYN_FINI_START := 0 - 12
+const SYN_FINI_END := 0 - 13
+const SYN_GOT := 0 - 14
+const SYN_BSS := 0 - 15
+const SYN_END := 0 - 16
+const SYN_EHDR := 0 - 17
+const SYN_ZERO := 0 - 18
+const SYN_DYNAMIC := 0 - 19
+const SYN_COMMON := 0 - 20
+const SYN_GP := 0 - 21
+const SYN_EXIDX_START := 0 - 22
+const SYN_EXIDX_END := 0 - 23
+const SYN_PREINIT_START := 0 - 24
+const SYN_PREINIT_END := 0 - 25
+
+func synth(l &: Nl, s: str, kind: int):
+    g := glob_find(l, s)
+    if g >= 0 and l.g_state[g] == SY_UNDEF:
+        l.g_state[g] = SY_ABS
+        l.g_sec[g] = kind
+        l.g_val[g] = 0 as i64
+    end
+end
+
+func resolve(l &: Nl):
+    mut changed := true
+    until changed and l.ok:
+        changed = false
+        mut g := 0
+        until g < l.g_name.len() and l.ok:
+            if l.g_state[g] == SY_UNDEF:
+                nm := l.g_name[g]
+                e := l.g_strongref[g] ? ar_first_of(l, nm) : 0 - 1
+                sl := l.dynamic ? sd_of(l, nm) : 0 - 1
+                if e >= 0 and not l.ar_loaded[e] and (sl < 0 or l.ar_file[e] < l.sl_file[sl]):
+                    ar_load(l, e)
+                    changed = true
+                else sl >= 0:
+                    l.g_state[g] = SY_SHARED
+                    l.g_lib[g] = sl
+                    l.g_ver[g] = l.sd_ver[nm]
+                    l.g_stype[g] = l.sd_type[nm]
+                    l.sl_used[sl] = true
+                end
+            end
+            g += 1
+        end
+    end
+    if not l.ok or l.pe or l.macho:
+        ret
+    end
+    synth(l, "__preinit_array_start", SYN_PREINIT_START)
+    synth(l, "__preinit_array_end", SYN_PREINIT_END)
+    synth(l, "__init_array_start", SYN_INIT_START)
+    synth(l, "__init_array_end", SYN_INIT_END)
+    synth(l, "__fini_array_start", SYN_FINI_START)
+    synth(l, "__fini_array_end", SYN_FINI_END)
+    synth(l, "_GLOBAL_OFFSET_TABLE_", SYN_GOT)
+    synth(l, "__bss_start", SYN_BSS)
+    synth(l, "_end", SYN_END)
+    synth(l, "__ehdr_start", SYN_EHDR)
+    if l.mach == EM_RISCV:
+        synth(l, "__global_pointer$", SYN_GP)
+    end
+    if l.mach == EM_ARM:
+        synth(l, "__exidx_start", SYN_EXIDX_START)
+        synth(l, "__exidx_end", SYN_EXIDX_END)
+    end
+    if l.dynamic:
+        synth(l, "_DYNAMIC", SYN_DYNAMIC)
+        synth(l, "__dso_handle", SYN_EHDR)
+    else:
+        synth(l, "_DYNAMIC", SYN_ZERO)
+    end
+    check_undefined(l)
+end
+
+func check_undefined(l &: Nl):
+    mut missing := ""
+    mut nmiss := 0
+    mut refd := Vector {} as Vector<bool>
+    if l.pe:
+        repeat l.g_name.len():
+            refd.push(false)
+        end
+        repeat l.s_obj.len() in s:
+            if l.s_live[s]:
+                r0 := l.s_rel0[s]
+                repeat l.s_nrel[s] in q:
+                    gq := l.os_glob[l.r_sym[r0 + q]]
+                    if gq >= 0:
+                        refd[gq] = true
+                    end
+                end
+            end
+        end
+    end
+    repeat l.g_name.len() in k:
+        if l.pe and not refd[k]:
+            continue
+        end
+        if l.g_state[k] == SY_UNDEF and l.g_common[k] > (0 as i64) and not l.pe:
+            continue
+        end
+        if l.g_state[k] == SY_UNDEF:
+            if l.g_strongref[k]:
+                if nmiss < 12:
+                    missing += "\n  undefined symbol '" + name_of(l, l.g_name[k]) + "'" + refs_of(l, k)
+                end
+                nmiss += 1
+            else:
+                l.g_state[k] = SY_ABS
+                l.g_sec[k] = SYN_ZERO
+            end
+        end
+    end
+    if nmiss > 0:
+        mut more := ""
+        if nmiss > 12:
+            more = "\n  and " + str.FromInt((nmiss - 12) as i64) + " more"
+        end
+        nl_fail(l, "cannot link: " + str.FromInt(nmiss as i64) + " undefined symbol" + (nmiss == 1 ? "" : "s") + missing + more)
+    end
+    refd.free()
+    if l.pe:
+        ret
+    end
+    sym := glob_find(l, "_start")
+    if l.ok and (sym < 0 or l.g_state[sym] != SY_DEF):
+        nl_fail(l, "cannot link: no entry point '_start' (is crt1.o missing?)")
+    end
+end
+
+func refs_of(l &: Nl, g: int): str:
+    mut out := ""
+    mut n := 0
+    repeat l.o_file.len() in o:
+        s0 := l.o_sym0[o]
+        mut hit := false
+        repeat l.o_nsym[o] in k:
+            if l.os_glob[s0 + k] == g and l.os_sec[s0 + k] == 0 - 1:
+                hit = true
+            end
+        end
+        if hit:
+            if n < 3:
+                out += (n == 0 ? ", wanted by " : ", ") + l.o_label[o]
+            end
+            n += 1
+        end
+    end
+    if n > 3:
+        out += " and " + str.FromInt((n - 3) as i64) + " more"
+    end
+    ret out
+end

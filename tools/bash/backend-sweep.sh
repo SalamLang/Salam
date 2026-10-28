@@ -6,7 +6,7 @@ SALAM_BIN="${1:-}"
 BACKEND="${2:-}"
 [ -n "$SALAM_BIN" ] && [ -n "$BACKEND" ] || {
     cat >&2 <<'USAGE'
-usage: backend-sweep.sh <salam-binary> <exec|js|llvm> [sections...]
+usage: backend-sweep.sh <salam-binary> <exec|js|llvm|native> [sections...]
 
 Runs test programs on a backend other than the C one and compares their
 output with the .out file the C backend is held to. run-tests.sh gives almost
@@ -56,6 +56,10 @@ clean: 681 agree over the default sections and 259 more over interop,
 editor-selected and stdlib, with no divergence except interop/redis_demo.
 Nothing there needs re-checking unless codegen changes.
 
+'native' builds with the x86-64 machine-code backend (compiler/nativegen),
+which takes the same IR as 'llvm' and writes the object itself, so a
+DIVERGE there that 'llvm' does not show is a nativegen bug.
+
 Under 'js' the same sections give about 100 DIVERGEs, and all of them were
 triaged on 2026-10-05 without finding a bug. 74 print nothing where output
 was expected and 15 throw, which is the program bailing out of a feature js
@@ -76,9 +80,9 @@ case "$SALAM_BIN" in /* | [A-Za-z]:*) ;; *) SALAM_BIN="$(pwd)/$SALAM_BIN" ;; esa
     exit 2
 }
 case "$BACKEND" in
-exec | js | llvm) ;;
+exec | js | llvm | native) ;;
 *)
-    echo "backend-sweep: backend must be exec, js or llvm" >&2
+    echo "backend-sweep: backend must be exec, js, llvm or native" >&2
     exit 2
     ;;
 esac
@@ -171,10 +175,10 @@ for section in $SECTIONS; do
                     ok=0
                 fi
                 ;;
-            llvm)
+            llvm | native)
                 # shellcheck disable=SC2086
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
-                    --backend=llvm --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
+                    --backend="$BACKEND" --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
                     [ -x "$WORK/sweep.exe" ]; then
                     (cd "$ROOT" && timeout 90 "$WORK/sweep.exe" </dev/null) >"$WORK/run.out" 2>&1
                     rc=$?

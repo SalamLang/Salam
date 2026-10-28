@@ -27,6 +27,62 @@ engine -> ai-api /bridge/mcp -> long poll -> this app -> runs the tool after app
   against that folder (`src/workspace.rs`), and symlinks and `..` cannot
   escape it unnoticed.
 
+## Project instructions and memory
+
+Before each message in an agent chat the web app asks the app for the
+workspace's context (`agent_project_context`): the project's `AGENTS.md`, or
+`AGENT.md` when there is no `AGENTS.md` (up to 32 KB), and the memory index
+(up to 16 KB). The backend passes them to the model when they change, so an
+unchanged file is not resent on every turn.
+
+The model keeps notes about the project with two tools, `save_memory` and
+`forget_memory` (`src/memory.rs`). They write plain Markdown that is meant to
+be read, edited and committed like any other file:
+
+```text
+.salam-agent/
+  index.md                one line per memory, newest first, linking to its file
+  memory/build-steps.md   one memory
+```
+
+```markdown
+---
+title: Build steps
+description: How to build and test this project
+created: 2026-10-26T02:30:00Z
+updated: 2026-10-26T02:41:12Z
+---
+
+Run `salam build main.salam`, then `salam test`.
+```
+
+Saving with an existing slug updates that file and keeps its `created` time.
+Memory calls run without asking in the two writing levels and ask in the
+read-only one, and they never leave the workspace.
+
+## Notifications
+
+When the window is not in front, the app shows a system notification and
+asks the OS to flash the taskbar or bounce the dock icon (`src/notify.rs`):
+
+- a reply is ready, or failed (raised by the web app)
+- the server cannot be reached mid-reply (web app)
+- a command or edit waits for approval (app)
+- the assistant link is down for 20 seconds, and back again (app)
+- this computer was unlinked, HTTP 401 (app)
+
+The bell next to the access level sets notifications, sound and the reply
+preview, and sends a test. Settings are kept in `notifications.json` in the
+app's config folder. The same notice is not repeated within 4 seconds.
+
+- Windows: toasts use the app's own identity when installed under
+  `%LOCALAPPDATA%` or Program Files, and PowerShell's otherwise (portable ZIP).
+- macOS: needs notification permission for Salam Agent in System Settings.
+- Linux: talks to the session's `org.freedesktop.Notifications` service over
+  D-Bus (any desktop, or dunst/mako on a bare window manager). Clicking a
+  notification raises the window. Without a service the taskbar hint still
+  works and the test button explains what is missing.
+
 ## Access levels
 
 You pick one per chat in the composer.

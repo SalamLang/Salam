@@ -47,7 +47,7 @@ const ERROR_TEXT: Record<string, string> = {
   temporarily_unavailable: t("سرویس سلام موقتا در دسترس نیست. کمی بعد دوباره تلاش کنید.", "The Salam service is temporarily unavailable. Try again in a little while."),
 };
 
-function Shell({ theme, toggleTheme, children }: { theme: Theme; toggleTheme: () => void; children: ReactNode }) {
+export function Shell({ theme, toggleTheme, children }: { theme: Theme; toggleTheme: () => void; children: ReactNode }) {
   return (
     <div className="connect">
       <button type="button" className="icon-button theme-corner" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
@@ -67,7 +67,7 @@ function Shell({ theme, toggleTheme, children }: { theme: Theme; toggleTheme: ()
   );
 }
 
-function Notice({ tone = "info", title, children }: { tone?: "info" | "danger"; title: string; children?: ReactNode }) {
+export function Notice({ tone = "info", title, children }: { tone?: "info" | "danger"; title: string; children?: ReactNode }) {
   return (
     <section className="auth-card connect-card notice-card" aria-live="polite">
       <div className={`notice-icon ${tone}`}>{tone === "danger" ? <IconAlert /> : <IconLink />}</div>
@@ -292,8 +292,8 @@ export function Connect({ user, onAuth, onSwitchAccount, theme, toggleTheme }: P
       </ul>
       <p className="connect-note">
         {t(
-          "استفاده‌ی این برنامه از ابزارهای سلام در حساب شما ثبت می‌شود و هر زمان بخواهید می‌توانید از بخش «برنامه‌های متصل» اتصال آن را قطع کنید.",
-          "This app's use of Salam tools is logged in your account, and you can disconnect it at any time from Connected apps.",
+          "استفاده‌ی این برنامه از ابزارهای سلام در حساب شما ثبت می‌شود و هر زمان بخواهید می‌توانید از صفحه‌ی «اتصال‌ها و برنامه‌ها» اتصال آن را قطع کنید.",
+          "This app's use of Salam tools is logged in your account, and you can disconnect it at any time from Connections and apps.",
         )}
       </p>
       {request.redirect_host && (

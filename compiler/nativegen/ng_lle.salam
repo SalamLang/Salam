@@ -1,0 +1,363 @@
+package nativegen
+
+pub struct LleLoop:
+    pub head: int = 0 - 1
+    pub latch: int = 0 - 1
+    pub pre: int = 0 - 1
+    pub mark: int = 0
+    pub iv: int = 0 - 1
+    pub step: i64 = 0 as i64
+    pub iv_nsw: bool = false
+end
+
+func idx_off(g &: Ng, ix: int, pv: int, nsw_iv: bool, off &: i64): bool:
+    off = 0 as i64
+    if ix == pv:
+        ret true
+    end
+    if ix < 0 or g.v_kind[ix] != VK_INS:
+        ret false
+    end
+    d := g.v_def[ix]
+    op := g.i_op[d]
+    if op == OP_SEXT:
+        a := g.i_a[d]
+        if a == pv:
+            ret nsw_iv
+        end
+        if a < 0 or g.v_kind[a] != VK_INS:
+            ret false
+        end
+        ad := g.v_def[a]
+        aop := g.i_op[ad]
+        if (aop == OP_ADD or aop == OP_SUB) and g.i_a[ad] == pv and is_cint(g, g.i_b[ad]) and (g.i_f[ad] & IF_NSW) != 0 and nsw_iv:
+            c := norm_int(g, g.v_ty[g.i_b[ad]], g.v_i[g.i_b[ad]])
+            off = aop == OP_ADD ? c : 0 - c
+            ret true
+        end
+        ret false
+    end
+    if (op == OP_ADD or op == OP_SUB) and g.i_a[d] == pv and is_cint(g, g.i_b[d]) and g.v_ty[pv] == T_I64:
+        c2 := g.v_i[g.i_b[d]]
+        off = op == OP_ADD ? c2 : 0 - c2
+        ret true
+    end
+    ret false
+end
+
+func lle_cond_ok(g &: Ng, l &: Lp, s &: LleLoop, c: int): bool:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret true
+    end
+    d := g.v_def[c]
+    if l.inl[g.i_blk[d]] != s.mark:
+        ret true
+    end
+    if g.i_blk[d] != s.head or g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    each v in [g.i_a[d], g.i_b[d]]:
+        if v >= 0 and g.v_kind[v] == VK_INS:
+            vd := g.v_def[v]
+            inl := l.inl[g.i_blk[vd]] == s.mark
+            if inl and not (g.i_op[vd] == OP_PHI and g.i_blk[vd] == s.head):
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func lle_loop(g &: Ng, l &: Lp, s &: LleLoop): bool:
+    h := s.head
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or not lle_cond_ok(g, l, s, g.i_a[t]):
+        ret false
+    end
+    mut st := 0 - 1
+    mut nst := 0
+    each b in g.b_rpo:
+        if l.inl[b] != s.mark:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+                ret false
+            end
+            if op == OP_STORE:
+                st = i
+                nst += 1
+            end
+            i = g.i_next[i]
+        end
+    end
+    if nst != 1 or (g.i_f[st] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    sb := g.i_blk[st]
+    if not dominates(g, sb, s.latch):
+        ret false
+    end
+    sa := g.i_b[st]
+    sv := g.i_a[st]
+    if sa < 0 or g.v_kind[sa] != VK_INS or sv < 0:
+        ret false
+    end
+    sad := g.v_def[sa]
+    if g.i_op[sad] != OP_ADDR or g.i_b[sad] < 0:
+        ret false
+    end
+    base := g.i_a[sad]
+    if not lsr_inv_m(g, l, s.mark, base):
+        ret false
+    end
+    pv := g.i_res[s.iv]
+    nsw_iv := s.iv_nsw
+    mut so := 0 as i64
+    if not idx_off(g, g.i_b[sad], pv, nsw_iv, so):
+        ret false
+    end
+    sc := g.i_x[sad] as i64
+    sdisp := g.i_d[sad] + so * sc
+    want := sdisp - sc * s.step
+    svt := g.v_ty[sv]
+    if is_agg(g, svt) or is_vec(g, svt):
+        ret false
+    end
+    mut changed := false
+    each b2 in g.b_rpo:
+        if l.inl[b2] != s.mark:
+            continue
+        end
+        mut j := g.b_first[b2]
+        until j >= 0:
+            nx := g.i_next[j]
+            if g.i_op[j] == OP_LOAD and g.i_ty[j] == svt and g.i_res[j] >= 0 and (g.i_f[j] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+                la := g.i_a[j]
+                if la >= 0 and g.v_kind[la] == VK_INS:
+                    ld := g.v_def[la]
+                    mut lo := 0 as i64
+                    if g.i_op[ld] == OP_ADDR and g.i_a[ld] == base and (g.i_x[ld] as i64) == sc and g.i_b[ld] >= 0 and idx_off(g, g.i_b[ld], pv, nsw_iv, lo):
+                        if g.i_d[ld] + lo * sc == want and not changed:
+                            lle_rewrite(g, l, s, j, ld, sv)
+                            changed = true
+                        end
+                    end
+                end
+            end
+            j = nx
+        end
+    end
+    ret changed
+end
+
+func lsr_inv_m(g &: Ng, l &: Lp, mark: int, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    if g.v_kind[v] != VK_INS:
+        ret true
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b >= 0 and l.inl[b] != mark
+end
+
+func lle_rewrite(g &: Ng, l &: Lp, s &: LleLoop, ldi: int, addri: int, sv: int):
+    h := s.head
+    pre := s.pre
+    t := g.b_last[h]
+    cmpv := g.i_a[t]
+    gb := new_blk(g)
+    lb := new_blk(g)
+    jb := new_blk(g)
+    replace_succ(g, g.b_last[pre], h, gb)
+    mut vmap := Vector {} as Vector<int>
+    mut vval := Vector {} as Vector<int>
+    mut pi := g.b_first[h]
+    until pi >= 0 and g.i_op[pi] == OP_PHI:
+        vmap.push(g.i_res[pi])
+        vval.push(phi_val_for(g, pi, pre))
+        pi = g.i_next[pi]
+    end
+    mut cond := cmpv
+    if cmpv >= 0 and g.v_kind[cmpv] == VK_INS and g.i_blk[g.v_def[cmpv]] == h:
+        cd := g.v_def[cmpv]
+        nc := ins_new(g, g.i_op[cd], g.i_ty[cd])
+        dv_taint(g, cd)
+        g.i_a[nc] = lle_map(vmap, vval, g.i_a[cd])
+        g.i_b[nc] = lle_map(vmap, vval, g.i_b[cd])
+        g.i_x[nc] = g.i_x[cd]
+        cond = new_res(g, nc)
+        ins_append(g, gb, nc)
+    end
+    gtm := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[gtm] = cond
+    if g.i_b[t] == h or l.inl[g.i_b[t]] == s.mark:
+        g.i_b[gtm] = lb
+        g.i_c[gtm] = jb
+    else:
+        g.i_b[gtm] = jb
+        g.i_c[gtm] = lb
+    end
+    ins_append(g, gb, gtm)
+    ia := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[ia] = g.i_a[addri]
+    g.i_b[ia] = lle_clone_idx(g, g.i_b[addri], vmap, vval, lb)
+    g.i_x[ia] = g.i_x[addri]
+    g.i_d[ia] = g.i_d[addri]
+    iav := new_res(g, ia)
+    ins_append(g, lb, ia)
+    il := ins_new(g, OP_LOAD, g.i_ty[ldi])
+    g.i_a[il] = iav
+    g.i_c[il] = g.i_c[ldi]
+    ilv := new_res(g, il)
+    ins_append(g, lb, il)
+    bl := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bl] = jb
+    ins_append(g, lb, bl)
+    jp := ins_new(g, OP_PHI, g.i_ty[ldi])
+    g.i_ps[jp] = g.pool.len()
+    g.i_pcount[jp] = 2
+    g.pool.push(ilv)
+    g.pool.push(lb)
+    g.pool.push(new_val(g, VK_UNDEF, g.i_ty[ldi], 0 as i64))
+    g.pool.push(gb)
+    jpv := new_res(g, jp)
+    ins_append(g, jb, jp)
+    bj := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bj] = h
+    ins_append(g, jb, bj)
+    pi = g.b_first[h]
+    until pi >= 0 and g.i_op[pi] == OP_PHI:
+        ps := g.i_ps[pi]
+        repeat g.i_pcount[pi] in q:
+            if g.pool[ps + 2 * q + 1] == pre:
+                g.pool[ps + 2 * q + 1] = jb
+            end
+        end
+        pi = g.i_next[pi]
+    end
+    hp := ins_new(g, OP_PHI, g.i_ty[ldi])
+    g.i_ps[hp] = g.pool.len()
+    g.i_pcount[hp] = 2
+    g.pool.push(jpv)
+    g.pool.push(jb)
+    g.pool.push(sv)
+    g.pool.push(s.latch)
+    hpv := new_res(g, hp)
+    ins_before(g, g.b_first[h], hp)
+    repl_grow(g)
+    g.v_repl[g.i_res[ldi]] = hpv
+    ins_unlink(g, ldi)
+    vmap.free()
+    vval.free()
+end
+
+func lle_map(vmap: Vector<int>, vval: Vector<int>, v: int): int:
+    repeat vmap.len() in k:
+        if vmap[k] == v:
+            ret vval[k]
+        end
+    end
+    ret v
+end
+
+func lle_clone_idx(g &: Ng, ix: int, vmap: Vector<int>, vval: Vector<int>, b: int): int:
+    m := lle_map(vmap, vval, ix)
+    if m != ix:
+        ret m
+    end
+    if ix < 0 or g.v_kind[ix] != VK_INS:
+        ret ix
+    end
+    d := g.v_def[ix]
+    op := g.i_op[d]
+    if op != OP_SEXT and op != OP_ADD and op != OP_SUB:
+        ret ix
+    end
+    ni := ins_new(g, op, g.i_ty[d])
+    g.i_a[ni] = lle_clone_idx(g, g.i_a[d], vmap, vval, b)
+    g.i_b[ni] = op == OP_SEXT ? g.i_b[d] : lle_clone_idx(g, g.i_b[d], vmap, vval, b)
+    g.i_x[ni] = g.i_x[d]
+    g.i_f[ni] = g.i_f[d]
+    nv := new_res(g, ni)
+    ins_append(g, b, ni)
+    ret nv
+end
+
+func loop_load_elim(g &: Ng): bool:
+    ensure_preheaders(g)
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut heads := Vector {} as Vector<int>
+    each hh in l.head:
+        heads.push(hh)
+    end
+    mut changed := false
+    mut mark := 4000000
+    each h in heads:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        p := lp_outside_pred(g, l, h, mark)
+        if p < 0:
+            continue
+        end
+        pt := g.b_last[p]
+        if pt < 0 or g.i_op[pt] != OP_BR:
+            continue
+        end
+        mut latch := 0 - 1
+        mut nl := 0
+        repeat g.b_npred[h] in q:
+            pb := g.b_pred[g.b_ps[h] + q]
+            if l.inl[pb] == mark:
+                latch = pb
+                nl += 1
+            end
+        end
+        if nl != 1:
+            continue
+        end
+        mut s := LleLoop {}
+        s.head = h
+        s.latch = latch
+        s.pre = p
+        s.mark = mark
+        mut pi := g.b_first[h]
+        until pi >= 0 and g.i_op[pi] == OP_PHI and not changed:
+            mut ls := Lsr {}
+            ls.pre = p
+            ls.latch = latch
+            if lsr_iv(g, ls, pi):
+                s.iv = pi
+                s.step = ls.step
+                s.iv_nsw = ls.iv_nsw
+                if lle_loop(g, l, s):
+                    changed = true
+                end
+            end
+            pi = g.i_next[pi]
+        end
+    end
+    heads.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+        remap_all(g)
+    end
+    ret changed
+end

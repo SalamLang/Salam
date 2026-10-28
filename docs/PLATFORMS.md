@@ -78,6 +78,15 @@ Width classification lives in `ll_target_ptr_bits()`
 > `std/*` does not hard-code `u64` for sizes. Until then, prefer the C backend
 > for production 32-bit builds. The C backend already handles this correctly.
 
+### 🟢 Native backend (`--backend=native`) - x86-64 only
+
+The native backend writes x86-64 machine code and ELF or COFF objects itself,
+so it covers 64-bit Linux and 64-bit Windows and nothing else. It takes the
+same IR as the LLVM backend, so `usize` and every other width come out the
+same way, but there is no 32-bit or arm code generator behind it. Any other
+`--target` is rejected with a pointer to `--backend=llvm`. See
+[NATIVE_BACKEND.md](NATIVE_BACKEND.md).
+
 ## 📦 Release Matrix
 
 > GitHub Actions workflow: `.github/workflows/compiler-release.yml`
@@ -118,4 +127,5 @@ can never block the release of the core 64-bit platforms.
 
 - [Getting Started](GETTING_STARTED.md) - build instructions for all platforms
 - [LLVM Default Backend](LLVM_DEFAULT_BACKEND.md) - LLVM backend deep-dive
+- [Native Backend](NATIVE_BACKEND.md) - the x86-64 machine-code generator
 - [Releases](https://github.com/SalamLang/Salam/releases) - pre-built binaries for all supported platforms

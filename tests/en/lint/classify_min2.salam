@@ -1,0 +1,110 @@
+// ARGS: --switch-lint=warn --switch-lint-min=2
+// EXPECT-WARNINGS: 1
+// EXPECT-FIXES: 1
+// EXPECT-MSG: 2 consecutive comparisons of 'ty' against constants could be a switch
+// EXPECT-MSG: The run stops at line 60 because that test is not a plain comparison of 'ty'.
+
+import str
+
+const OC_NONE := 0 - 1
+const OC_RODATA := 0
+const OC_BSS := 1
+const OC_INIT := 2
+const OC_FINI := 3
+const OC_INITARR := 4
+const OC_FINIARR := 5
+const OC_EHFRAME := 6
+const OC_EXIDX := 7
+const OC_TEXT := 8
+const OC_DATA := 9
+const OC_DATAREL := 10
+
+struct Nl:
+    pub s_flags: Vector<i64> = Vector {}
+    pub s_type: Vector<int> = Vector {}
+    pub s_name: Vector<int> = Vector {}
+    pub s_obj: Vector<int> = Vector {}
+    pub s_rel0: Vector<int> = Vector {}
+    pub s_nrel: Vector<int> = Vector {}
+    pub r_type: Vector<int> = Vector {}
+    pub o_label: Vector<str> = Vector {}
+    pub names: Vector<str> = Vector {}
+    pub dynamic: bool = false
+end
+
+func name_is(l &: Nl, id: int, s: str): bool:
+    ret str.Equals(l.names.get(id), s)
+end
+
+func name_starts(l &: Nl, id: int, s: str): bool:
+    ret str.StartsWith(l.names.get(id), s)
+end
+
+func nl_fail(l &: Nl, m: str):
+    l.o_label.push(m)
+end
+
+func classify(l &: Nl, s: int): int:
+    fl := l.s_flags[s]
+    if (fl & (2 as i64)) == (0 as i64):
+        ret OC_NONE
+    end
+    ty := l.s_type[s]
+    nm := l.s_name[s]
+    if ty == 7:
+        ret OC_NONE
+    end
+    if ty == 8:
+        ret OC_BSS
+    end
+    if name_is(l, nm, ".init"):
+        ret OC_INIT
+    end
+    if name_is(l, nm, ".fini"):
+        ret OC_FINI
+    end
+    if ty == 14 or name_starts(l, nm, ".init_array"):
+        ret OC_INITARR
+    end
+    if ty == 15 or name_starts(l, nm, ".fini_array"):
+        ret OC_FINIARR
+    end
+    if ty == 16 or name_starts(l, nm, ".preinit_array"):
+        nl_fail(l, l.o_label[l.s_obj[s]] + ": .preinit_array is not supported yet")
+        ret OC_NONE
+    end
+    if name_is(l, nm, ".eh_frame"):
+        ret OC_EHFRAME
+    end
+    if ty == 0x70000001:
+        ret OC_EXIDX
+    end
+    if (fl & (4 as i64)) != (0 as i64):
+        ret OC_TEXT
+    end
+    if (fl & (1 as i64)) != (0 as i64):
+        ret OC_DATA
+    end
+    if l.dynamic:
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k:
+            if l.r_type[r0 + k] == 1:
+                ret OC_DATAREL
+            end
+        end
+    end
+    ret OC_RODATA
+end
+
+func main:
+    mut l := Nl {}
+    l.s_flags.push(7 as i64)
+    l.s_type.push(8)
+    l.s_name.push(0)
+    l.s_obj.push(0)
+    l.s_rel0.push(0)
+    l.s_nrel.push(0)
+    l.names.push(".bss")
+    l.o_label.push("a.o")
+    println classify(l, 0)
+end

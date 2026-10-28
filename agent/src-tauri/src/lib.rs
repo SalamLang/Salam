@@ -3,6 +3,8 @@ mod bridge;
 mod commands;
 mod config;
 mod device;
+mod memory;
+mod notify;
 mod tools;
 mod workspace;
 
@@ -22,6 +24,10 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-decide",
     "allow-agent-stop",
     "allow-agent-pending",
+    "allow-agent-project-context",
+    "allow-agent-notify",
+    "allow-agent-notify-prefs",
+    "allow-agent-set-notify-prefs",
 ];
 
 #[cfg(target_os = "macos")]
@@ -122,10 +128,7 @@ pub fn run() {
     config::import_login_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            notify::raise(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -140,12 +143,17 @@ pub fn run() {
             commands::agent_decide,
             commands::agent_stop,
             commands::agent_pending,
+            commands::agent_project_context,
+            commands::agent_notify,
+            commands::agent_notify_prefs,
+            commands::agent_set_notify_prefs,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             set_dock_icon();
             let handle = app.handle().clone();
             app.manage(device::DeviceStore::load(&handle));
+            app.manage(notify::Notifier::load(&handle));
             allow_dev_origin(app)?;
             open_main(&handle)?;
             tauri::async_runtime::spawn(connect_main(handle.clone()));

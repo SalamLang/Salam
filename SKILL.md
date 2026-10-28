@@ -20,7 +20,7 @@ description: >-
 
 Salam is a statically typed, compiled, general-purpose systems language. The
 **general language transpiles to C** and builds to a native executable; embedded
-**`layout:`** blocks compile to HTML/CSS/JS. It can also be run with an
+**`page:`** blocks compile to HTML/CSS/JS. It can also be run with an
 interpreter (`salam exec`, pure compute only) that compiles each function to
 register bytecode on first call (`SALAM_VM=0` falls back to the plain
 tree-walker), and cross-compiled via LLVM. Source can be written in English or Persian, with the same grammar and
@@ -278,6 +278,16 @@ end
   subjects, a `switch` with no matching label and no `else` does nothing.
 - **Not usable on a `Variant`** subject - that is a semantic error that tells
   you to use `match`'s type patterns instead (see §3).
+- **W145 (opt-in lint)** - `salam check --switch-lint=warn` flags a run of
+  `if x == K:` tests (4 or more by default, `--switch-lint-min=N`) that compare
+  the same side-effect-free `x` with constants and could be one `switch`. Only
+  a _contiguous_ run of plain `==` tests counts (`or` joins labels): a call, a
+  bit test, `!=` or a different subject ends the run, because moving a test
+  across such a test could change which branch wins. `--switch-lint=error`
+  makes it an error, `--switch-lint=fix` makes `salam check --fix` rewrite it,
+  and the editor offers the rewrite as a quick fix. No rewrite is offered when
+  an arm has a `break` meant for an enclosing loop, when two labels are equal,
+  or when a comment sits between the tests. Details: `docs/design/SWITCH_LINT.md`.
 - Prefer `switch` for C-style fallthrough or open-ended relational/range
   labels; prefer `match` when the subject is an enum or `Variant` and you want
   the compiler to check every case is handled (see §12.2 for the C
@@ -481,8 +491,10 @@ receiver.
 type, a field type, in a cast and as a struct literal. On a generic struct it
 means the struct with its own type parameters, so `Self` stands for
 `Pair<A, B>` without respelling it. It works in a `static func` too, which is
-where constructors live. Persian spells it `خود`. There is no `Self` in an
-`interface` (that would be an associated type, which Salam does not have).
+where constructors live. Persian spells it `خود`, and each file accepts only its
+own spelling: `Self` and `this` are errors in a Persian file (the message names
+`خود` and `این`), and `خود` and `این` are errors in an English file. There is no
+`Self` in an `interface` (that would be an associated type, which Salam does not have).
 
 ```salam
 struct Node:
@@ -1212,7 +1224,9 @@ end
   compiler derives per type:
   `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
-  `@json "" "omitempty"/"optional"/"string"` for the rest. An enum with data
+  `@json "" "omitempty"/"optional"/"string"` for the rest. A Persian file
+  spells the marker `@جیسون` and an English file `@json`; the other spelling is
+  an error that names the right one. An enum with data
   is written with its member as the key, `{"Circle":{"r":1.5}}`, and a member
   without data as a bare string, `"Empty"`.
   `Schema(v)` derives the type's **JSON Schema** (2020-12, `$defs`/`$ref`)
@@ -1371,11 +1385,11 @@ end
 - **`net.http`** (`import net.http`, called `http.`), client: `Get Post Put Patch Delete Head Options` (+ `*With(..., headers)` taking a
   `HashMap<str,str>` from `NewHeaders`), `Request(method, url, headers, body)`, then `Status Body Error Ok GetHeader Headers SetCookieLines` (or the
   fields `.status .body .err`); `NewClient()` keeps cookies (`c.Get`,
-  `c.Post`, `c.SetHeader`). No redirects are followed and there is **no
-  timeout** (use `net.httpx` for one); `Post`/`Put`/`Patch` label the body as
+  `c.Post`, `c.SetHeader`). Redirects are off unless `RequestOptions.max_redirects` (or `c.SetMaxRedirects`) is set; every call has a 30 s idle timeout and a 256 MB body cap, and
+  `Do(method, url, headers, body, opts)` or `c.SetTimeout(ms)` bounds the whole request (errors read `the request timed out`); `Post`/`Put`/`Patch` label the body as
   a form unless you pass `Content-Type`; `Status` 0 means unreachable;
-  `Ok` is 2xx; the one-shot calls share package state, so not from several
-  threads at once.
+  `Ok` is 2xx; the one-line calls keep no state, so threads may call them freely, and a `NewClient()` client is safe to share between threads
+  (`Free` it at the end; a `Client {}` literal has no lock). Cookies go back only to the host that set them.
 - **Server** (`net.http` + `net.router`): `mut r := router.NewRouter()`,
   `router.Get/Post/Put/Patch/Delete(r, "/books/:id", handler)`, `Group Static`; `mut s := http.NewServer(port)`, `http.Use(s, r)`, then `Run(s)`,
   `RunTLS(s, cert, key)` or `RunBackground(s)` (returns once bound, serves on
@@ -1398,9 +1412,11 @@ end
   and you must `ret` after a failed `Assert`), **`net.http.session`**
   `Configure Start Save Regenerate Destroy Value SetValue CSRFToken CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
   live in process memory).
-- **`net.httpx`**: raw requests with your own header text: `SendRaw SendRawTimeout SendRawTLS FreeRaw RawText Send SendText HeaderValue`. Send
-  `Connection: close` (it reads until the server closes); `SendText` does not
-  decode chunked bodies (the raw calls do).
+- **`net.http` raw calls**: requests with your own header text and any bytes: `ParseEndpoint SendRaw SendRawTimeout SendRawTLS FreeRaw RawText HeaderValue`
+  (result type `RawResponse`, body in `.data`/`.len`, chunked bodies decoded). A call
+  ends when a `Content-Length` or chunked answer is complete; an answer with neither is read
+  until the server closes, so send `Connection: close` for those; `Endpoint` and the raw
+  calls are in the same package as `Get`/`Post`.
 - **`net.http.swagger`** (OpenAPI + a documentation page): `New(title, version) Describe Server BearerAuth ApiKeyAuth`; `Scan(doc, router)` adds
   every registered route, `Route` creates one and `At(doc, method, pattern)`
   selects one (after an `At` that finds nothing the following calls do
@@ -1596,8 +1612,8 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
   the password (an ACL user needs `Command`); it can publish but not
   subscribe.
-- **`db.meilisearch`** (Meilisearch over HTTP, the whole v1 API): `New WithAgent WithTimeout WithMetadata Ok ErrorString Request RequestAs Health IsHealthy GetVersion GetStats CreateIndex GetIndex ListIndexes UpdateIndex RenameIndex DeleteIndex SwapIndexes GetIndexStats CompactIndex ListFields AddDocuments UpdateDocuments AddDocumentsWith AddDocumentsNdjson AddDocumentsCsv AddDocumentsInBatches AddDocumentsOf GetDocument GetDocumentWith GetDocumentAs GetDocuments DocumentsAs DeleteDocument DeleteDocuments DeleteDocumentsByFilter DeleteAllDocuments Search Query HitsAs MultiSearch FederatedSearch FacetSearch SimilarDocuments GetSettings UpdateSettings ResetSettings Get/Update/Reset<Setting> GetTask GetTasks WaitForTask Wait CancelTasks DeleteTasks GetTaskDocuments CompactTasks GetBatch GetBatches CreateKey GetKey GetKeys UpdateKey DeleteKey TenantToken ListWebhooks CreateWebhook GetWebhook UpdateWebhook DeleteWebhook ListSearchRules GetSearchRule UpdateSearchRule DeleteSearchRule DeleteAllSearchRules ListChatWorkspaces GetChatWorkspace DeleteChatWorkspace GetChatSettings UpdateChatSettings ResetChatSettings ChatCompletion SetStderrLogs NetworkControl RenderTemplate`. Requests go over `net.httpx`: no timeout unless `WithTimeout(c, ms)` (then `err.code == "timeout"`), and a `Client` is a plain value that threads can share. `CompactTasks` leaves the server refusing writes until it is restarted. Struct fields have Persian names too (`ک.میزبان`, `خ.کد`), and a Persian file must use them. Runnable examples for every part of the API live in `tests/en/stdlib/meilisearch/examples` and, with Persian names throughout, `tests/fa/stdlib/meilisearch/examples`. Every call ends with `err &: meilisearch.Error` (empty `code` = success, check with `Ok(err)`). Writes return a `TaskInfo` and apply later; chain `meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", json, "id", err), err)` when the next step needs the change. Hits and documents are raw JSON strings; decode into structs with `HitsAs`/`GetDocumentAs` (lenient, extra fields like `_formatted` are ignored). `SearchRequest` sends only what you set (-1 numbers, empty strings/lists and false flags are omitted); `filter` takes an expression or a raw JSON array.
-- **`db.elasticsearch`** (Elasticsearch 7/8, Elastic Cloud and OpenSearch over `net.httpx`; no outside library; `Distribution(c)` tells them apart and SQL/point in time switch endpoints on their own). `NewClient(Config)` takes several nodes (rotated, a node that refuses connections is skipped for `DEAD_NODE_MS`, 502/503/504 retried), basic auth, `api_key` (encoded or `id:key`), `bearer`, `cloud_id`, `ca_file`/`insecure`, `timeout_ms` and `keep_alive` (one pooled connection per node, on by default); `Connect ConnectAuth ConnectApiKey ConnectCloud` are shortcuts. Documents and query clauses are raw JSON `str`. Documents: `Index Create Get Exists Update Upsert UpdateScript Delete MGet Count` (+`...With(Options)` for `refresh`, `routing`, `if_seq_no`/`if_primary_term`). Search: build a `SearchRequest { query, size, sort, aggs, ... }` from `Match Term Terms Range Bool And Or Not Filtered MultiMatch Knn SortDesc` and `AddAgg(aggs, name, TermsAgg(...))`, then `Search`; read `res.hits`, `AggValue`, `AggBuckets`. Paging: `SearchScroll/Scroll/ClearScroll`, `OpenPit` + `search_after`. Bulk: `NewBulk`, `BulkIndex/BulkUpdate/BulkDelete(b, ...)`, `RunBulk` (check `res.items` when `res.errors`). Admin: `CreateIndex PutMapping Refresh PutAlias SwapAlias Reindex DeleteByQuery UpdateByQuery CatIndices ClusterHealth`, pipelines (`PutPipeline SimulatePipeline`), data streams (`CreateDataStream Rollover`), `PutLifecyclePolicy` (ILM, or ISM on OpenSearch), snapshots, cluster settings, background tasks (`StartReindex StartUpdateByQuery GetTask`), stored scripts and `SearchTemplate`, `SubmitAsyncSearch`, `Explain ValidateQuery FieldCaps TermVectors IndexStats`. SQL: `Sql`/`SqlWith` return `SqlRows` (a `db.Rows` that pages with the cursor), and `Conn(c)` is a read-only `dyn db.Connection` (`Exec` is -1, no transactions). Anything else: `Perform(c, method, path, body)`. Check `Error(c)`/`ErrorType(c)`/`Status(c)` after a call; a `Get` of a missing doc is `found = false` with no error.
+- **`db.meilisearch`** (Meilisearch over HTTP, the whole v1 API): `New WithAgent WithTimeout WithMetadata Ok ErrorString Request RequestAs Health IsHealthy GetVersion GetStats CreateIndex GetIndex ListIndexes UpdateIndex RenameIndex DeleteIndex SwapIndexes GetIndexStats CompactIndex ListFields AddDocuments UpdateDocuments AddDocumentsWith AddDocumentsNdjson AddDocumentsCsv AddDocumentsInBatches AddDocumentsOf GetDocument GetDocumentWith GetDocumentAs GetDocuments DocumentsAs DeleteDocument DeleteDocuments DeleteDocumentsByFilter DeleteAllDocuments Search Query HitsAs MultiSearch FederatedSearch FacetSearch SimilarDocuments GetSettings UpdateSettings ResetSettings Get/Update/Reset<Setting> GetTask GetTasks WaitForTask Wait CancelTasks DeleteTasks GetTaskDocuments CompactTasks GetBatch GetBatches CreateKey GetKey GetKeys UpdateKey DeleteKey TenantToken ListWebhooks CreateWebhook GetWebhook UpdateWebhook DeleteWebhook ListSearchRules GetSearchRule UpdateSearchRule DeleteSearchRule DeleteAllSearchRules ListChatWorkspaces GetChatWorkspace DeleteChatWorkspace GetChatSettings UpdateChatSettings ResetChatSettings ChatCompletion SetStderrLogs NetworkControl RenderTemplate`. Requests go over `net.http` raw calls: no timeout unless `WithTimeout(c, ms)` (then `err.code == "timeout"`), and a `Client` is a plain value that threads can share. `CompactTasks` leaves the server refusing writes until it is restarted. Struct fields have Persian names too (`ک.میزبان`, `خ.کد`), and a Persian file must use them. Runnable examples for every part of the API live in `tests/en/stdlib/meilisearch/examples` and, with Persian names throughout, `tests/fa/stdlib/meilisearch/examples`. Every call ends with `err &: meilisearch.Error` (empty `code` = success, check with `Ok(err)`). Writes return a `TaskInfo` and apply later; chain `meilisearch.Wait(c, meilisearch.AddDocuments(c, "movies", json, "id", err), err)` when the next step needs the change. Hits and documents are raw JSON strings; decode into structs with `HitsAs`/`GetDocumentAs` (lenient, extra fields like `_formatted` are ignored). `SearchRequest` sends only what you set (-1 numbers, empty strings/lists and false flags are omitted); `filter` takes an expression or a raw JSON array.
+- **`db.elasticsearch`** (Elasticsearch 7/8, Elastic Cloud and OpenSearch over `net.http` raw calls; no outside library; `Distribution(c)` tells them apart and SQL/point in time switch endpoints on their own). `NewClient(Config)` takes several nodes (rotated, a node that refuses connections is skipped for `DEAD_NODE_MS`, 502/503/504 retried), basic auth, `api_key` (encoded or `id:key`), `bearer`, `cloud_id`, `ca_file`/`insecure`, `timeout_ms` and `keep_alive` (one pooled connection per node, on by default); `Connect ConnectAuth ConnectApiKey ConnectCloud` are shortcuts. Documents and query clauses are raw JSON `str`. Documents: `Index Create Get Exists Update Upsert UpdateScript Delete MGet Count` (+`...With(Options)` for `refresh`, `routing`, `if_seq_no`/`if_primary_term`). Search: build a `SearchRequest { query, size, sort, aggs, ... }` from `Match Term Terms Range Bool And Or Not Filtered MultiMatch Knn SortDesc` and `AddAgg(aggs, name, TermsAgg(...))`, then `Search`; read `res.hits`, `AggValue`, `AggBuckets`. Paging: `SearchScroll/Scroll/ClearScroll`, `OpenPit` + `search_after`. Bulk: `NewBulk`, `BulkIndex/BulkUpdate/BulkDelete(b, ...)`, `RunBulk` (check `res.items` when `res.errors`). Admin: `CreateIndex PutMapping Refresh PutAlias SwapAlias Reindex DeleteByQuery UpdateByQuery CatIndices ClusterHealth`, pipelines (`PutPipeline SimulatePipeline`), data streams (`CreateDataStream Rollover`), `PutLifecyclePolicy` (ILM, or ISM on OpenSearch), snapshots, cluster settings, background tasks (`StartReindex StartUpdateByQuery GetTask`), stored scripts and `SearchTemplate`, `SubmitAsyncSearch`, `Explain ValidateQuery FieldCaps TermVectors IndexStats`. SQL: `Sql`/`SqlWith` return `SqlRows` (a `db.Rows` that pages with the cursor), and `Conn(c)` is a read-only `dyn db.Connection` (`Exec` is -1, no transactions). Anything else: `Perform(c, method, path, body)`. Check `Error(c)`/`ErrorType(c)`/`Status(c)` after a call; a `Get` of a missing doc is `found = false` with no error.
 - **`db.typesense`** (Typesense over HTTP, 29.x and 30.x): `New NewCluster SetNearestNode AddNode AddHeader Free Ok IsNotFound IsConflict ErrorString Request RequestAs Health ServerVersion Status Stats Metrics CreateSnapshot ClearCache CompactDB SchemaChanges UpdateConfig CreateCollection GetCollection CollectionExists ListCollections UpdateCollection AddFields DropFields CloneCollection TruncateCollection DeleteCollection UpsertAlias GetAlias ListAliases DeleteAlias CreateDocument UpsertDocument EmplaceDocument UpdateDocument GetDocument GetDocumentAs DeleteDocument DeleteByFilter UpdateByFilter ImportDocuments ImportJSONL ImportOf ExportDocuments Search SearchRaw MultiSearch UnionSearch HitsAs Highlight CreateKey SearchOnlyKey GetKey ListKeys DeleteKey ScopedSearchKey GenerateScopedSearchKey UpsertSynonymSet UpsertSynonymItem UpsertSynonym UpsertCurationSet UpsertCurationItem UpsertOverride UpsertPreset UpsertSearchPreset UpsertStopwords ImportStemmingDictionary CreateAnalyticsRule SendEvent FlushAnalytics CreateConversationModel CreateNLSearchModel`. Every call ends with `err &: typesense.Error` (empty `kind` = success, `Ok(err)`; `IsNotFound`/`IsConflict` for 404/409). A client holds several nodes and skips one that fails for `healthcheck_ms`, retrying `retries` times, so a 5xx or a dead node is not an error until every try failed. Build a schema with `Schema { name }` plus `NewField`/`FacetField`/`VectorField`/`EmbeddingField` (`Field.kind` is the type, `sort` is 1/-1/0 for on/off/default). `SearchParams` sends only what you set; anything without a field goes through `Set(p, key, value)`, and a query string over `MAX_GET_QUERY` bytes goes through `/multi_search` by itself. Imports answer 200 even when lines fail: check `ImportResult.failed`. Synonym sets and curation sets are Typesense 30; `UpsertSynonym`/`UpsertOverride` are the 29 per collection forms. `ScopedSearchKey` signs a browser key locally.
 - **`db.opensearch`** (OpenSearch over its REST API, native TCP/TLS, no outside library; `db.elasticsearch` covers the shared core API too, pick this one for PPL, k-NN/neural/hybrid, ISM, the security plugin, alerting, ML Commons or AWS SigV4): connect with `Connect ConnectAuth ConnectInsecure ConnectAWS NewClient(Config)` (several nodes with retries and dead node skipping, basic/bearer auth, AWS SigV4 for `SERVICE_ES`/`SERVICE_AOSS`, `ca_file`, `insecure` for a self signed test server). Documents `Index IndexWith Create Get GetSource Exists Update UpdateWith Upsert UpdateScript Delete MGet Count DeleteByQuery UpdateByQuery Reindex`; bulk `NewBulk BulkIndex BulkCreate BulkUpdate BulkUpsert BulkDelete BulkSend BulkFree`; search `Search SearchWith(SearchRequest) SearchRaw SearchParamsWith MSearch SearchScroll Scroll ClearScroll CreatePit DeletePit SearchTemplate Explain Validate`; results `Buckets AggValue AggField Suggestions JsonPath`; query DSL builders return JSON text (`Match Term Terms Range BoolOf(BoolQuery{}) Nested Knn KnnFiltered Neural Hybrid ScriptScore FunctionScore SortDesc Highlight TermsAgg AvgAgg DateHistogramAgg AddAgg SubAggs`); admin `CreateIndex CreateIndexWith PutMapping PutSettings Refresh PutAlias SwapAlias PutIndexTemplate CreateDataStream Rollover CatIndices ClusterHealth WaitForStatus GetTask PutPipeline SimulatePipeline CreateSnapshot`; plugins `Sql SqlWith Ppl SqlExplain` (JDBC rows that page with the cursor), k-NN `KnnIndexBody KnnVectorField KnnWarmup`, ISM `PutPolicy AddPolicy ExplainPolicy DeleteAfterPolicy`, security `WhoAmI PutUser PutRole RoleBody PutRoleMapping ChangePassword`, `PutSearchPipeline NormalizationPipeline`, alerting monitors and `Ml*`; anything else through `Perform`. Every call records `Status Error ErrorType ErrorReason` on the client; `Conn(c)` is a `dyn db.Connection` whose `Query` runs SQL (`Exec` only does SQL `DELETE`, there are no transactions). `Get` of a missing id is `found = false` with an empty `error`. A bulk delete of a missing id counts as ok.
 
@@ -1970,7 +1986,7 @@ Cross-compile by passing an LLVM triple: `salam build app.salam
 
 ## 9. Layout DSL (HTML/CSS/JS)
 
-A `layout:` block (either its own `.salam` file built with `salam page build`,
+A `page:` block (either its own `.salam` file built with `salam page build`,
 or embedded after a general program) declares a UI tree that compiles to HTML +
 CSS + JS. Elements open with `:` … `end`; **attributes and style properties are
 `name = value` pairs** (no commas needed) written inside the element.
@@ -2048,7 +2064,7 @@ variable or call a Salam function (E129); a bad fold (division by zero,
 overflow, `true + 1`) is E130. A constant named like a value word
 (`const red := ...` then `color = red`) wins, with W131.
 
-**Runtime layouts.** `layout:` is a static page built at compile time. A
+**Runtime layouts.** `page:` is a static page built at compile time. A
 _named_ layout with typed parameters is a runtime page: the compiler builds
 the whole document and its CSS at compile time and turns the layout into a
 `pure func Name(params): str` that only fills in escaped values. There is no
@@ -2171,6 +2187,7 @@ merged `style.css`/`script.js`.
 
 ```sh
 salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
+salam check app.salam --switch-lint=warn   # also flag if-chains that could be a switch (W145; off by default)
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing
 salam build app.salam --output=app      # native executable (add --keep-temp to inspect the C)
@@ -2529,7 +2546,8 @@ Type digits may be Persian or ASCII (`صحیح۶۴` = `صحیح64`). Note that
 | `char_find` | `بیاب نویسه`  | `starts_with` | `شروع با`       |
 | `ends_with` | `ختم با`      | `includes`    | `دربردارد`      |
 | `copy`      | `رونوشت`      | `deep_copy`   | `رونوشت عمیق`   |
-| `bytes`     | `بایت ها`     |               |                 |
+| `bytes`     | `بایت ها`     | `lower`       | `کوچک`          |
+| `upper`     | `بزرگ`        | `repeat`      | `تکرار`         |
 
 The free built-in `len(x)` (arrays, slices and `str` only) is spelled
 `طول(x)` in a Persian file: `len(x)` there is error E001 ("identifier must
@@ -2910,3 +2928,10 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | `spawn`/`join`                                   | <https://www.salamlang.ir/learn/threads/>      |
 | Layout DSL `صفحه`                                | <https://www.salamlang.ir/learn/layout/>       |
 | Full Persian/English glossary                    | <https://www.salamlang.ir/learn/keywords/>     |
+
+The web page lessons that follow the layout lesson (all under `https://www.salamlang.ir/learn/`, and in English under
+`https://salamlang.github.io/Salam/learn/`) teach every element, attribute, CSS property and event of the page language with a
+checked example for each: `page-text`, `page-structure`, `page-media`, `page-tables`, `page-forms`, `page-head` for HTML;
+`css-basics`, `css-text`, `css-backgrounds`, `css-borders`, `css-layout`, `css-responsive`, `css-motion`, `css-more` for CSS;
+`events-mouse`, `events-keys-forms`, `events-drag-touch`, `events-media-more`, `events-dom` for JavaScript behaviour, and
+`web-projects` for whole pages.

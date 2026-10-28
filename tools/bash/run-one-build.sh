@@ -27,6 +27,9 @@ build_once() {
     if [ -n "${SALAM_CC:-}" ]; then
         set -- --cc="$SALAM_CC" "$@"
     fi
+    if [ -n "${SALAM_BACKEND:-}" ]; then
+        set -- --backend="$SALAM_BACKEND" "$@"
+    fi
     (cd "$jobdir" && "$SALAM_BIN" build "$f" --output="$exe" \
         --no-color --log-level=error --lang="$lang" "$@") >"$buildlog" 2>&1
 }

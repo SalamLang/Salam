@@ -46,6 +46,7 @@ triple_of() {
     aarch64) echo aarch64-linux-musl ;;
     i686) echo i686-linux-musl ;;
     arm) echo arm-linux-musleabihf ;;
+    riscv64) echo riscv64-linux-musl ;;
     *) echo "" ;;
     esac
 }
@@ -56,6 +57,7 @@ ctriple_of() {
     aarch64) echo aarch64-unknown-linux-musl ;;
     i686) echo i686-unknown-linux-musl ;;
     arm) echo arm-unknown-linux-musleabihf ;;
+    riscv64) echo riscv64-unknown-linux-musl ;;
     *) echo "" ;;
     esac
 }
@@ -133,7 +135,7 @@ for arch in $ARCHES; do
     mkdir -p "$SR"
     missing=
     for f in crt1.o crti.o crtn.o libc.a libgcc.a; do
-        found=$(find "$arch-x" -name "$f" -type f 2>/dev/null | head -1)
+        found=$(find "$arch-x" -name "$f" -type f ! -path "*/lib32/*" ! -path "*ilp32*" 2>/dev/null | head -1)
         if [ -n "$found" ]; then
             cp "$found" "$SR/$f"
         else
@@ -141,8 +143,8 @@ for arch in $ARCHES; do
         fi
     done
 
-    for f in crtbeginT.o crtend.o libgcc_eh.a; do
-        found=$(find "$arch-x" -name "$f" -type f 2>/dev/null | head -1)
+    for f in crtbeginT.o crtend.o libgcc_eh.a Scrt1.o libc.so; do
+        found=$(find "$arch-x" -name "$f" -type f ! -path "*/lib32/*" ! -path "*ilp32*" 2>/dev/null | head -1)
         [ -n "$found" ] && cp "$found" "$SR/$f"
     done
 

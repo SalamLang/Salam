@@ -18,6 +18,7 @@ package rawsock
 
 import mem
 import str
+import sync
 
 if SALAM_OS_WINDOWS:
     link dynamic "ws2_32"
@@ -68,6 +69,7 @@ else:
         func shutdown(s: int, how: int): int
         func setsockopt(s: int, level: int, optname: int, optval: void*, optlen: int): int
         func getsockname(s: int, addr: void*, addrlen: void*): int
+        func getpeername(s: int, addr: void*, addrlen: void*): int
         func fcntl(s: int, cmd: int, ...): int
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
@@ -164,12 +166,17 @@ func _fd_of(s: usize): i64:
 end
 
 func _hostent_addr4(he: void*): int:
-    listp := (he as i64 + 24) as i64*
+    pw := sizeof(void*) as i64
+    mut lo := 2 * pw + 8
+    if SALAM_OS_WINDOWS:
+        lo = (2 * pw + 4 + pw - 1) / pw * pw
+    end
+    listp := (he as i64 + lo) as usize*
     list := listp[0]
-    if list == 0: ret 0 end
-    addrp := list as i64*
+    if list == (0 as usize): ret 0 end
+    addrp := list as usize*
     addr := addrp[0]
-    if addr == 0: ret 0 end
+    if addr == (0 as usize): ret 0 end
     bytes := addr as int*
     ret bytes[0]
 end
@@ -193,20 +200,24 @@ end
 
 func _ai_family(ai: void*): int: ret ((ai as i64 + 4) as int*)[0] end
 func _ai_addrlen(ai: void*): i64:
-    if SALAM_OS_WINDOWS:
+    if SALAM_OS_WINDOWS and sizeof(void*) == 8:
         ret ((ai as i64 + 16) as i64*)[0]
     else:
         ret ((ai as i64 + 16) as int*)[0]
     end
 end
+func _ai_ptr(ai: void*, slot: int): void*:
+    pw := sizeof(void*) as i64
+    ret ((ai as i64 + 16 + pw * (slot as i64)) as usize*)[0] as void*
+end
 func _ai_addr(ai: void*): void*:
     if SALAM_OS_LINUX:
-        ret ((ai as i64 + 24) as i64*)[0] as void*
+        ret _ai_ptr(ai, 1)
     else:
-        ret ((ai as i64 + 32) as i64*)[0] as void*
+        ret _ai_ptr(ai, 2)
     end
 end
-func _ai_next(ai: void*): void*: ret ((ai as i64 + 40) as i64*)[0] as void* end
+func _ai_next(ai: void*): void*: ret _ai_ptr(ai, 3) end
 
 func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
     if SALAM_OS_WINDOWS:
@@ -230,6 +241,50 @@ func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
         end
         _no_sigpipe(s as i64)
         ret Socket { fd = s as i64, family = fam }
+    end
+end
+
+func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis: int): Socket:
+    if SALAM_OS_LINUX:
+        s := socket(fam, socktype, 0)
+        if s == 0 - 1:
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+        sock := Socket { fd = s as i64, family = fam }
+        SetNonBlocking(sock, true)
+        if connect(s, sa, alen) != 0:
+            if not _wait_writable(s, millis):
+                close(s)
+                ret Socket { fd = 0 - 1, family = fam }
+            end
+            slot := mem.AllocateZeroed(136 as u64)
+            lenp := mem.AllocateZeroed(8 as u64)
+            (lenp as int*)[0] = 128
+            peer := getpeername(s, slot, lenp)
+            mem.Free(slot)
+            mem.Free(lenp)
+            if peer != 0:
+                close(s)
+                ret Socket { fd = 0 - 1, family = fam }
+            end
+        end
+        SetNonBlocking(sock, false)
+        _no_sigpipe(s as i64)
+        ret sock
+    else:
+        ret _try_connect(sa, alen, fam, socktype)
+    end
+end
+
+if SALAM_OS_LINUX:
+    func _wait_writable(fd: int, millis: int): bool:
+        p := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(p)
+        fdp := p as i32*
+        fdp[0] = fd
+        evp := ((p as i64) + 4) as i16*
+        evp[0] = 4 as i16
+        ret poll(p, 1 as usize, millis) > 0
     end
 end
 
@@ -311,6 +366,33 @@ end
 @fa "اتصال"
 pub func Connect(host: str, port: int): Socket:
     ret ConnectProto(host, port, SOCK_STREAM)
+end
+
+@en "ConnectTimeout"
+@fa "اتصال با مهلت"
+pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
+    if millis <= 0 or not SALAM_OS_LINUX:
+        ret Connect(host, port)
+    end
+    mut addrs := Vector {} as Vector<i64>
+    mut lens := Vector {} as Vector<int>
+    mut fams := Vector {} as Vector<int>
+    _resolve_all(host, port, addrs, lens, fams)
+    deadline := sync.NowMs() + (millis as i64)
+    mut out := Socket { fd = 0 - 1, family = AF_INET }
+    repeat addrs.len() in i:
+        if out.fd < 0:
+            left := deadline - sync.NowMs()
+            if left > 0:
+                out = _try_connect_timeout(addrs.get(i) as void*, lens.get(i), fams.get(i), SOCK_STREAM, left as int)
+            end
+        end
+        mem.Free(addrs.get(i) as void*)
+    end
+    addrs.free()
+    lens.free()
+    fams.free()
+    ret out
 end
 
 @en "ConnectProto"
@@ -630,11 +712,12 @@ pub func WaitReadable(sock: Socket, timeout_ms: int): bool:
         ret false
     end
     if SALAM_OS_WINDOWS:
+        pw := sizeof(void*) as i64
         p := mem.AllocateZeroed(16 as u64)
         defer mem.Free(p)
-        fdp := p as i64*
-        fdp[0] = sock.fd
-        evp := ((p as i64) + 8) as i16*
+        fdp := p as usize*
+        fdp[0] = sock.fd as usize
+        evp := ((p as i64) + pw) as i16*
         evp[0] = 256 as i16
         ret WSAPoll(p, 1 as u32, timeout_ms) > 0
     else:

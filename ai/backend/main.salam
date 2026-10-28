@@ -41,12 +41,18 @@ include aibridge "bridge.salam"
 include aibilling "billing.salam"
 include aifiles "files.salam"
 include aiguest "guest.salam"
+include aipolicy "policy.salam"
+include aimemory "memory.salam"
+include aitelegram "telegram.salam"
+include aicloud "cloud.salam"
+include ailogin "login.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const PENDING_SECONDS := 600
+const TIMED_OUT := "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const STREAM_WORKERS := 128
 const BRIDGE_SLOTS := 48
 const STREAM_SECONDS := 900
@@ -64,6 +70,9 @@ mut STREAM_LOCK := sync.Mutex {}
 mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 mut MEM_SOFT_MB := 1200
 mut MEM_HARD_MB := 2600
+mut AGENT_TURN_SECONDS := 3600 as i64
+mut CONTEXT_LOCK := sync.Mutex {}
+mut CONTEXT_SENT := HashMap {} as HashMap<str, str>
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -96,12 +105,14 @@ func main:
     engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
     aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
     aiengine.SetFallbacks(os.Env("AI_ENGINE_FALLBACK_MODELS"))
+    aiengine.SetPolicy(aipolicy.System(), env_or("AI_ENGINE_AGENT_RAW", "raw"))
     aifiles.Configure(env_or("AI_UPLOAD_DIR", "/data/uploads"))
     aiguest.Configure(env_or("AI_GUEST_ORIGINS", "https://www.salamlang.ir,https://salamlang.ir,https://salamlang.github.io"), env_or("AI_GUEST_LIMIT", "15").to_int(), env_or("AI_GUEST_PER_IP", "6").to_int(), env_or("AI_GUEST_MESSAGES_PER_IP", "60").to_int())
     if aiengine.Fallbacks() > 0:
         println "salam-ai has", aiengine.Fallbacks(), "fallback models for failed turns"
     end
     aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS, env_or("AI_BRIDGE_HOLD_SECONDS", "40").to_int())
+    AGENT_TURN_SECONDS = env_or("AI_AGENT_TURN_SECONDS", "3600").to_int() as i64
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
@@ -112,6 +123,20 @@ func main:
         println "salam-ai checks code blocks with", env_or("AI_SALAM_BIN", "/srv/salam/salam")
     end
     STREAM_LOCK = sync.NewMutex()
+    CONTEXT_LOCK = sync.NewMutex()
+    aimemory.Configure(env_or("AI_CHAT_MEMORY", "on") != "off", env_or("AI_CHAT_MEMORY_IDLE_SECONDS", "60").to_int(), env_or("AI_CHAT_MEMORY_DAYS", "30").to_int(), env_or("AI_CHAT_MEMORY_PAUSE_SECONDS", "10").to_int())
+    aimemory.Start()
+    mut secret_key := os.Env("AI_SECRET_KEY")
+    if secret_key.len() < 16:
+        secret_key = os.Env("AI_BRIDGE_SECRET")
+    end
+    aicloud.Configure(os.Env("AI_SANDBOX_URL"), os.Env("AI_SANDBOX_SECRET"), secret_key, env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir"), os.Env("AI_GITHUB_CLIENT_ID"), os.Env("AI_GITHUB_CLIENT_SECRET"), os.Env("AI_FIGMA_CLIENT_ID"), os.Env("AI_FIGMA_CLIENT_SECRET"), os.Env("AI_FIGMA_SCOPES"))
+    aicloud.SetApis(os.Env("AI_GITHUB_API"), os.Env("AI_GITHUB_WEB"), os.Env("AI_FIGMA_API"), os.Env("AI_FIGMA_WEB"))
+    aicloud.SetGithubScopes(os.Env("AI_GITHUB_SCOPES"))
+    aicloud.Start()
+    ailogin.Configure(env_or("AI_APP_URL", "https://ai.salamlang.ir"))
+    aitelegram.Configure(os.Env("AI_TELEGRAM_TOKEN"), os.Env("AI_TELEGRAM_API"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_TELEGRAM_GUEST_LIMIT", "15").to_int())
+    aitelegram.Start()
     aiopenai.Configure(env_or("AI_API_ANSWER_SECONDS", "3600").to_int(), env_or("AI_API_START_SECONDS", "180").to_int())
     aibilling.Configure(os.Env("AI_ZARINPAL_MERCHANT"), os.Env("AI_ZIBAL_MERCHANT"), os.Env("AI_ZARINPAL_BASE"), os.Env("AI_ZIBAL_BASE"), env_or("AI_BILLING_CALLBACK", env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir")), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_CHAT_HOURLY", "60").to_int(), env_or("AI_BILLING_SWEEP_SECONDS", "600").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
@@ -164,6 +189,10 @@ func main:
     aibridge.Routes(r)
     aibilling.Routes(r)
     aiguest.Routes(r)
+    aimemory.Routes(r)
+    aitelegram.Routes(r)
+    aicloud.Routes(r)
+    ailogin.Routes(r)
     each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/capabilities", "/chats/:id/files/:fid"]:
         router.Options(r, path, preflight)
     end
@@ -375,11 +404,14 @@ func me(ctx: i64):
     reply(ctx, 200, `{"user": ` + out + "}")
 end
 
-func chat_json(id: str, title: str, updated: str, device: str, workspace: str): str:
+func chat_json(id: str, title: str, updated: str, device: str, workspace: str, cloud: str): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("id", id))
     m.push(json.Member("title", title))
     m.push(json.MemberRaw("updated", updated))
+    if cloud == "1":
+        m.push(json.MemberBool("cloud", true))
+    end
     if device != "0" and device.len() > 0:
         m.push(json.MemberBool("agent", true))
         m.push(json.MemberRaw("device_id", device))
@@ -446,9 +478,9 @@ func list_chats(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
     until aistore.Next(rows):
-        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -477,20 +509,30 @@ func create_chat(ctx: i64):
     else:
         device = "0"
     end
+    mut cloud := "0"
+    if device == "0" and json.Get(body, "cloud") == "true":
+        if not aicloud.Enabled():
+            fail(ctx, 503, "cloud", "محیط اجرای ابری روی این سرور فعال نیست.")
+            ret
+        end
+        cloud = "1"
+        token = crypto.RandomHex(16)
+    end
     id := crypto.RandomHex(12)
     t := i64s(aistore.Now())
     mut a := four(id, i64s(uid), DEFAULT_TITLE, t)
     a.push(device)
     a.push(device == "0" ? "" : workspace)
     a.push(token)
+    a.push(cloud)
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7)", a)
+    ok := aistore.Run("INSERT INTO chats (id, user_id, title, created, updated, device_id, workspace, bridge_token, cloud) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8)", a)
     aistore.Unlock()
     if not ok:
         fail(ctx, 500, "server", "ساخت گفت‌وگو ناموفق بود.")
         ret
     end
-    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace) + "}")
+    reply(ctx, 201, `{"chat": ` + chat_json(id, DEFAULT_TITLE, t, device, device == "0" ? "" : workspace, cloud) + "}")
 end
 
 func sync_pending(id: str, sid: str):
@@ -507,17 +549,30 @@ func sync_pending(id: str, sid: str):
     if mid.len() == 0:
         ret
     end
-    _r := settle(mid, sid, created)
+    aistore.Lock()
+    _o := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE chat_id = ?2 AND status = 'pending' AND id < ?3", three("دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", id, mid))
+    aistore.Unlock()
+    _r := settle(mid, sid, created, turn_seconds(id))
 end
 
-func settle(mid: str, sid: str, created: i64): aiengine.Reply:
-    mut r := aiturn.Progress(sid, created, PENDING_SECONDS)
+func turn_seconds(id: str): i64:
+    aistore.Lock()
+    device := aistore.OneText("SELECT device_id FROM chats WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if device.len() > 0 and device != "0":
+        ret AGENT_TURN_SECONDS
+    end
+    ret PENDING_SECONDS
+end
+
+func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
+    mut r := aiturn.Progress(sid, created, limit)
     if r.done:
         mut status := "done"
         mut body := r.text
         if r.failed and body.len() == 0:
             status = "error"
-            body = "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+            body = r.timed_out ? TIMED_OUT : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
         end
         aistore.Lock()
         _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))
@@ -558,9 +613,9 @@ func get_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
-    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace FROM chats WHERE id = ?1", one(id))
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE id = ?1", one(id))
     if aistore.Next(crow):
-        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4))
+        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
     end
     aistore.Finish(crow)
     mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
@@ -619,6 +674,7 @@ func delete_chat(ctx: i64):
         ret
     end
     aistore.Lock()
+    cloud_token := aistore.OneText("SELECT bridge_token FROM chats WHERE id = ?1 AND cloud = 1", one(id))
     _m := aistore.Run("DELETE FROM messages WHERE chat_id = ?1", one(id))
     _c := aistore.Run("DELETE FROM chats WHERE id = ?1", one(id))
     aistore.Unlock()
@@ -626,6 +682,9 @@ func delete_chat(ctx: i64):
     if sid.len() > 0:
         aiengine.Abort(sid)
         aiengine.Delete(sid)
+    end
+    if cloud_token.len() > 0:
+        aicloud.Destroy(cloud_token)
     end
     reply(ctx, 200, `{"ok": true}`)
 end
@@ -669,14 +728,16 @@ func send_message(ctx: i64):
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
-    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token FROM chats WHERE id = ?1", one(id))
+    mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token, cloud FROM chats WHERE id = ?1", one(id))
     mut device := "0"
     mut workspace := ""
     mut token := ""
+    mut cloud := false
     if aistore.Next(rows):
         device = aistore.Text(rows, 0)
         workspace = aistore.Text(rows, 1)
         token = aistore.Text(rows, 2)
+        cloud = aistore.Text(rows, 3) == "1"
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -689,7 +750,9 @@ func send_message(ctx: i64):
         fail(ctx, 429, "rate", "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید.")
         ret
     end
+    mut fresh := false
     if sid.len() == 0:
+        fresh = true
         sid = aiengine.NewSession("chat " + id)
         if sid.len() == 0:
             fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.")
@@ -722,15 +785,23 @@ func send_message(ctx: i64):
         fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
         ret
     end
-    prompt := aiweb.UiLangNote(ctx) + aifiles.PromptText(text, files)
+    recall := fresh ? aimemory.Recall(i64s(uid), id) : ""
+    mut free_system := ""
+    free := aiweb.PolicyOf(i64s(uid), free_system)
+    prompt := aiweb.UiLangNote(ctx) + aifiles.PromptText(aipolicy.Defang(text), files) + recall
     parts := aifiles.Parts(files)
     ailive.Begin(sid)
     forget_check(sid)
+    aiturn.Relax(sid, free)
     mut sent := false
     if device != "0" and token.len() > 0:
-        sent = aiengine.SendDesktop(sid, desktop_preamble(uid, device, workspace, token) + prompt, parts)
+        preamble := desktop_preamble(uid, device, workspace, token) + project_block(id, body, fresh) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, parts, free_system) : aiengine.SendDesktop(sid, preamble, parts)
+    else cloud and token.len() > 0:
+        preamble := aicloud.Prelude(token, i64s(uid)) + prompt
+        sent = free ? aiengine.SendDesktopFree(sid, preamble, parts, free_system) : aiengine.SendDesktop(sid, preamble, parts)
     else:
-        sent = aiengine.Send(sid, prompt, parts)
+        sent = free ? aiengine.SendFree(sid, prompt, parts, free_system) : aiengine.Send(sid, prompt, parts)
     end
     if not sent:
         ailive.End(sid)
@@ -778,7 +849,53 @@ func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:
     if not aibridge.Online(device):
         state = "not connected right now"
     end
-    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</desktop_session>\n\n"
+    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
+end
+
+func project_block(chat: str, body: str, fresh: bool): str:
+    project := json.Get(body, "project")
+    if not str.StartsWith(project, "{"):
+        ret ""
+    end
+    file := json.Get(project, "instructions_file")
+    rules := str.Trim(json.Get(project, "instructions"))
+    index := str.Trim(json.Get(project, "memory_index"))
+    digest := aiweb.Hash(file + "\n" + rules + "\n" + index)
+    key := "chat " + chat
+    _l := sync.Lock(CONTEXT_LOCK)
+    if CONTEXT_SENT.size() > 5000:
+        CONTEXT_SENT = HashMap {} as HashMap<str, str>
+    end
+    same := not fresh and CONTEXT_SENT.has(key) and CONTEXT_SENT.get(key) == digest
+    CONTEXT_SENT.put(key, digest)
+    _u := sync.Unlock(CONTEXT_LOCK)
+    if same:
+        ret ""
+    end
+    mut out := ""
+    if rules.len() > 0:
+        name := file == "AGENT.md" ? "AGENT.md" : "AGENTS.md"
+        out = out + "<project_instructions file=\"" + name + "\">\n" + aipolicy.Defang(clip_bytes(rules, 32768)) + "\n</project_instructions>\n\n"
+    end
+    if index.len() > 0:
+        out = out + "<project_memory>\n" + aipolicy.Defang(clip_bytes(index, 16384)) + "\n</project_memory>\n\n"
+    end
+    ret out
+end
+
+func clip_bytes(s: str, max: int): str:
+    if s.len() <= max:
+        ret s
+    end
+    mut cut := max
+    until cut > 0:
+        b := s[cut] as int
+        if b < 128 or b >= 192:
+            break
+        end
+        cut -= 1
+    end
+    ret s.substr(0, cut) + "\n[... cut, read the file for the rest ...]"
 end
 
 func poll_message(ctx: i64):
@@ -815,7 +932,7 @@ func poll_message(ctx: i64):
     mut activity := "[]"
     body = aiturn.Plain(body)
     if status == "pending":
-        r := settle(mid, str.TrimSuffix(owned, "|"), created)
+        r := settle(mid, str.TrimSuffix(owned, "|"), created, turn_seconds(id))
         body = r.text
         activity = activity_raw(r.activity)
         if r.done:
@@ -1126,6 +1243,7 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
         _d := send_event(c, "done", "{" + json.Member("body", aiturn.Plain(body)) + ", " + json.Member("status", status) + ", " + json.MemberRaw("activity", activity_raw(stored_activity)) + ", " + json.MemberRaw("ms", stored_ms.len() > 0 ? stored_ms : "0") + "}")
         ret
     end
+    limit := turn_seconds(id)
     mut sent := ""
     mut phase_sent := ""
     mut activity_sent := "[]"
@@ -1136,7 +1254,7 @@ func stream_answer(c: tcp.Conn, origin: str, id: str, mid: str, owned: str):
     start := aistore.Now()
     tcp.SetWriteDeadline(c, 30000)
     until true:
-        r := settle(mid, sid, created)
+        r := settle(mid, sid, created, limit)
         if r.done:
             final := r.failed ? "error" : "done"
             took := time.NowMillis() - created * 1000

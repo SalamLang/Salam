@@ -26,11 +26,14 @@ import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.VirtualFile;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.Icon;
 
 /**
- * Puts a Run button in the gutter beside {@code func main} and {@code تابع ریشه}.
+ * Puts a Run button in the gutter beside {@code func main} and {@code تابع ریشه}, and in a {@code
+ * _test.salam} file beside every test function.
  *
  * <p>TextMate files have no PSI below the file, so a run line marker contributor never sees the
  * line; the button is an editor highlighter instead, refreshed as the document changes.
@@ -39,6 +42,11 @@ public final class SalamRunGutter implements EditorFactoryListener {
   private static final Pattern ENTRY =
       Pattern.compile(
           "^\\s*(pub\\s+)?(func|تابع)\\s+(main|ریشه)(?![\\w\\u200c])",
+          Pattern.UNICODE_CHARACTER_CLASS);
+  private static final Pattern TEST =
+      Pattern.compile(
+          "^\\s*(?:pub\\s+)?(?:func|تابع)\\s+(test_\\w*|آزمون[^(:]*?)"
+              + "\\s*(?:\\(\\s*\\))?\\s*:\\s*(?://.*)?$",
           Pattern.UNICODE_CHARACTER_CLASS);
   private static final Key<Disposable> LIFETIME = Key.create("salam.run.gutter");
   private static final Key<List<RangeHighlighter>> MARKS = Key.create("salam.run.gutter.marks");
@@ -88,39 +96,54 @@ public final class SalamRunGutter implements EditorFactoryListener {
     }
     List<RangeHighlighter> marks = new ArrayList<>();
     Document document = editor.getDocument();
+    boolean tests = SalamRunConfigurationProducer.isTestFile(file);
     for (int line = 0; line < document.getLineCount(); line++) {
       int start = document.getLineStartOffset(line);
       int end = document.getLineEndOffset(line);
       String text = document.getText(new TextRange(start, end));
-      if (!ENTRY.matcher(text).lookingAt()) {
+      String test = null;
+      if (tests) {
+        Matcher m = TEST.matcher(text);
+        if (!m.lookingAt()) {
+          continue;
+        }
+        test = m.group(1).trim();
+      } else if (!ENTRY.matcher(text).lookingAt()) {
         continue;
       }
       RangeHighlighter h =
           markup.addLineHighlighter(line, HighlighterLayer.ADDITIONAL_SYNTAX, null);
-      h.setGutterIconRenderer(new RunIcon(project, file));
+      h.setGutterIconRenderer(new RunIcon(project, file, test));
       marks.add(h);
     }
     editor.putUserData(MARKS, marks);
   }
 
-  static void run(Project project, VirtualFile file) {
+  static void run(Project project, VirtualFile file, String test) {
     FileDocumentManager.getInstance().saveAllDocuments();
+    String testName = test == null ? "" : "^" + test + "$";
     RunManager runs = RunManager.getInstance(project);
     RunnerAndConfigurationSettings settings = null;
     for (RunnerAndConfigurationSettings s :
         runs.getConfigurationSettingsList(SalamRunConfigurationType.getInstance())) {
       if (s.getConfiguration() instanceof SalamRunConfiguration c
-          && file.getPath().equals(c.getFile())) {
+          && file.getPath().equals(c.getFile())
+          && testName.equals(c.getTestName() == null ? "" : c.getTestName())) {
         settings = s;
         break;
       }
     }
     if (settings == null) {
+      String name = file.getNameWithoutExtension() + (test == null ? "" : ": " + test);
       settings =
           runs.createConfiguration(
-              file.getNameWithoutExtension(),
-              SalamRunConfigurationType.getInstance().getConfigurationFactories()[0]);
-      ((SalamRunConfiguration) settings.getConfiguration()).setFile(file.getPath());
+              name, SalamRunConfigurationType.getInstance().getConfigurationFactories()[0]);
+      SalamRunConfiguration c = (SalamRunConfiguration) settings.getConfiguration();
+      c.setFile(file.getPath());
+      if (SalamRunConfigurationProducer.isTestFile(file)) {
+        c.setCommand("test");
+        c.setTestName(testName);
+      }
       settings.setTemporary(true);
       runs.addConfiguration(settings);
     }
@@ -128,14 +151,20 @@ public final class SalamRunGutter implements EditorFactoryListener {
     ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance());
   }
 
-  /** The gutter button; equal for the same file so the IDE does not repaint it needlessly. */
+  /** The gutter button; equal for the same target so the IDE does not repaint it needlessly. */
   private static final class RunIcon extends GutterIconRenderer {
     private final Project project;
     private final VirtualFile file;
+    private final String test;
 
-    RunIcon(Project project, VirtualFile file) {
+    RunIcon(Project project, VirtualFile file, String test) {
       this.project = project;
       this.file = file;
+      this.test = test;
+    }
+
+    private String label() {
+      return "Run " + (test == null ? file.getName() : test);
     }
 
     @Override
@@ -145,15 +174,15 @@ public final class SalamRunGutter implements EditorFactoryListener {
 
     @Override
     public String getTooltipText() {
-      return "Run " + file.getName();
+      return label();
     }
 
     @Override
     public AnAction getClickAction() {
-      return new AnAction("Run " + file.getName()) {
+      return new AnAction(label()) {
         @Override
         public void actionPerformed(AnActionEvent e) {
-          run(project, file);
+          run(project, file, test);
         }
       };
     }
@@ -165,7 +194,10 @@ public final class SalamRunGutter implements EditorFactoryListener {
 
     @Override
     public boolean equals(Object other) {
-      return other instanceof RunIcon r && r.file.equals(file) && r.project.equals(project);
+      return other instanceof RunIcon r
+          && r.file.equals(file)
+          && r.project.equals(project)
+          && Objects.equals(r.test, test);
     }
 
     @Override

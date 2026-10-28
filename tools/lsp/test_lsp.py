@@ -7,7 +7,7 @@ answers against the fixtures in tests/lsp. Uses only the standard library.
     python3 tools/lsp/test_lsp.py [path/to/salam]
 """
 
-# pylint: disable=too-many-locals,too-many-statements,too-few-public-methods,consider-using-with
+# pylint: disable=too-many-lines,too-many-locals,too-many-statements,too-few-public-methods,consider-using-with
 
 import json
 import os
@@ -495,7 +495,10 @@ QF_PARSE = [
     ),
     (
         "elif",
-        "func main:\n    n := 3\n    if n > 5:\n        println 1\n    elif n > 2:\n        println 2\n    end\nend\n",
+        (
+            "func main:\n    n := 3\n    if n > 5:\n        println 1\n"
+            "    elif n > 2:\n        println 2\n    end\nend\n"
+        ),
         "Write 'else'",
         "    else n > 2:\n",
     ),
@@ -532,6 +535,61 @@ def quick_fixes(t, s):
             title in got and sub in got[title],
             str(sorted(got)) + json.dumps(diags)[:300],
         )
+
+
+SWITCH_LINT_SRC = """func pick(ty: int): int:
+    if ty == 7:
+        ret 1
+    end
+    if ty == 8:
+        ret 2
+    end
+    if ty == 9:
+        ret 3
+    end
+    if ty == 11:
+        ret 4
+    end
+    ret 0
+end
+
+func main:
+    println pick(8)
+end
+"""
+
+
+def switch_lint(t, exe):
+    """The W145 hint is off until switchLint is set, then carries a quick fix."""
+    path = os.path.join(ROOT, "tests", "lsp", "qf", "switch_lint.salam")
+    for mode, options in (("off", {}), ("warn", {"salam": {"switchLint": "warn"}})):
+        s = Server(exe, ["--stdlib-path=" + STD])
+        params = {"processId": None, "rootUri": uri_of(ROOT), "capabilities": {}}
+        if options:
+            params["initializationOptions"] = options
+        s.request("initialize", params)
+        s.notify("initialized", {})
+        got, diags = fixes_for(s, uri_of(path), SWITCH_LINT_SRC)
+        hits = [d for d in diags if "145" in str(d.get("code"))]
+        if mode == "off":
+            t.check("switch lint is off by default", not hits, json.dumps(diags)[:300])
+        else:
+            title = "Rewrite as a 'switch' statement"
+            t.check(
+                "switch lint reports W145 when on",
+                len(hits) == 1,
+                json.dumps(diags)[:300],
+            )
+            t.check(
+                "switch lint offers the rewrite",
+                title in got
+                and "switch ty:" in got[title]
+                and "        7:\n" in got[title],
+                str(sorted(got)),
+            )
+        s.request("shutdown", None)
+        s.notify("exit", None)
+        s.proc.wait(10)
 
 
 def persian(t, s):
@@ -614,11 +672,29 @@ def persian(t, s):
         json.dumps(msgs, ensure_ascii=False)[:300],
     )
     fa_text = "تابع ریشه:\n    ناپایا شمارنده := 1\n    سرچاپ شمارنده\nپایان\n"
-    got, diags = fixes_for(s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "fa.salam")), fa_text)
+    got, diags = fixes_for(
+        s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "fa.salam")), fa_text
+    )
     title = "حذف 'ناپایا'"
     t.check(
         "fa: the fix is titled and spelled in Persian",
         title in got and "    شمارنده := 1\n" in got[title],
+        str(sorted(got)) + json.dumps(diags, ensure_ascii=False)[:300],
+    )
+    name_text = (
+        "واردسازی شبکه.اچ تی تی پی\n\n"
+        "تابع ریشه:\n"
+        '    ن := اچ تی تی پی.تجزیه نقطه پایانی("https://a.b")\n'
+        "    سرچاپ ن.host\n"
+        "پایان\n"
+    )
+    got, diags = fixes_for(
+        s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "name.salam")), name_text
+    )
+    title = "نوشتن 'میزبان'"
+    t.check(
+        "fa: an English member name is offered the Persian one",
+        title in got and "    سرچاپ ن.میزبان\n" in got[title],
         str(sorted(got)) + json.dumps(diags, ensure_ascii=False)[:300],
     )
 
@@ -1080,6 +1156,7 @@ def main():
     f.notify("exit", None)
     f.proc.wait(10)
 
+    switch_lint(t, exe)
     project(t, exe)
     pull_and_colors(t, exe)
     check_cli(t, exe)

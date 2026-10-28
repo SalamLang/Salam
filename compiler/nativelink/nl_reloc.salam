@@ -1,0 +1,201 @@
+package nativelink
+
+func fits32s(v: i64): bool:
+    ret v >= (0 - 2147483648 as i64) and v <= (2147483647 as i64)
+end
+
+func fits32u(v: i64): bool:
+    ret v >= (0 as i64) and v <= (4294967295 as i64)
+end
+
+func reloc_where(l &: Nl, s: int, r: int): str:
+    os := l.r_sym[r]
+    g := l.os_glob[os]
+    nm := g >= 0 ? name_of(l, l.g_name[g]) : "a local symbol"
+    ret l.o_label[l.s_obj[s]] + " section " + name_of(l, l.s_name[s]) + " offset " + str.FromInt(l.r_off[r]) + " against " + nm
+end
+
+func apply_relocs(l &: Nl):
+    buf := malloc(l.file_size as u64) as u8*
+    l.out_ptr = buf as i64
+    repeat l.file_size in z:
+        buf[z] = 0 as u8
+    end
+    rx0 := l.seg_fpos[1]
+    repeat l.seg_fsz[1] in zz:
+        buf[rx0 + zz] = 0x90 as u8
+    end
+    repeat l.s_obj.len() in s:
+        if not l.s_live[s] or l.s_fpos[s] < (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        src := l.s_off[s]
+        dst := l.s_fpos[s]
+        repeat l.s_size[s] in k:
+            buf[dst + k] = p[src + k]
+        end
+    end
+    repeat l.got_sym.len() in q:
+        gat := l.oc_fpos[OC_GOT] + ((got_esz(l) * q) as i64)
+        gs := l.got_sym[q]
+        mut gv := gs >= 0 ? sym_addr_g(l, gs) : sym_addr(l, 0 - 1 - gs)
+        if l.got_tlsk.has(q):
+            gv = tls_got_value(l, q, gv)
+        end
+        if l.elf32:
+            wr32(buf, gat, gv)
+        else:
+            wr64(buf, gat, gv)
+        end
+    end
+    th_write(l, buf)
+    has_th := l.th_sec.len() > 0
+    repeat l.s_obj.len() in s2:
+        if not l.s_live[s2] or l.s_fpos[s2] < (0 as i64):
+            continue
+        end
+        r0 := l.s_rel0[s2]
+        repeat l.s_nrel[s2] in k2:
+            r := r0 + k2
+            ty := l.r_type[r]
+            os := l.r_sym[r]
+            place := l.s_fpos[s2] + l.r_off[r]
+            pc := l.s_addr[s2] + l.r_off[r]
+            mut a := l.r_add[r]
+            mut sv := sym_addr(l, os)
+            if has_th and l.th_of_rel.has(r):
+                tid := l.th_of_rel.get(r)
+                sv = th_addr(l, tid)
+                a = th_bias(l.th_kind[tid])
+            end
+            if ty == 0:
+                continue
+            end
+            tk := reloc_tls(l, buf, s2, r, ty, place, pc, a, sv, os)
+            if tk < 0:
+                ret
+            end
+            if tk > 0:
+                continue
+            end
+            mut ok := true
+            if l.mach == EM_386:
+                ok = reloc_i386(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else l.mach == EM_AARCH64:
+                ok = reloc_a64(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else l.mach == EM_ARM:
+                ok = reloc_arm(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else l.mach == EM_RISCV:
+                ok = reloc_riscv(l, buf, s2, r, ty, place, pc, a, sv, os)
+            else:
+                ok = reloc_x64(l, buf, s2, r, ty, place, pc, a, sv, os)
+            end
+            if not ok:
+                ret
+            end
+        end
+    end
+    if l.oc_size[OC_EXIDX] > (0 as i64):
+        th_exidx_write(l, buf)
+        sort_exidx(l, buf)
+    end
+end
+
+func got_entry(l &: Nl, os: int): i64:
+    g := l.os_glob[os]
+    if g >= 0 and l.g_got[g] >= 0:
+        ret l.oc_addr[OC_GOT] + ((got_esz(l) * l.g_got[g]) as i64)
+    end
+    if g < 0 and l.got_loc.has(os):
+        ret l.oc_addr[OC_GOT] + ((got_esz(l) * l.got_loc.get(os)) as i64)
+    end
+    ret 0 - 1 as i64
+end
+
+func got_esz(l &: Nl): int:
+    ret l.elf32 ? 4 : 8
+end
+
+func reloc_x64(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    if ty == 1:
+        wr64(buf, place, sv + a)
+    else ty == 2 or ty == 4:
+        v := sv + a - pc
+        if not fits32s(v):
+            nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v)
+    else ty == 10:
+        v2 := sv + a
+        if not fits32u(v2):
+            nl_fail(l, "32-bit relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v2)
+    else ty == 11:
+        v3 := sv + a
+        if not fits32s(v3):
+            nl_fail(l, "32-bit signed relocation out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, v3)
+    else ty == 24:
+        wr64(buf, place, sv + a - pc)
+    else ty == 9 or ty == 41 or ty == 42:
+        ga := got_entry(l, os)
+        if ga >= (0 as i64):
+            wr32(buf, place, ga + a - pc)
+        else:
+            buf[place - (2 as i64)] = 0x8d as u8
+            v4 := sv + a - pc
+            if not fits32s(v4):
+                nl_fail(l, "relocation out of range at " + reloc_where(l, s2, r))
+                ret false
+            end
+            wr32(buf, place, v4)
+            l.stat_relax += 1
+        end
+    else:
+        nl_fail(l, "unsupported relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
+end
+
+func reloc_i386(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    got := l.oc_addr[OC_GOT]
+    if ty == 1:
+        wr32(buf, place, sv + a)
+    else ty == 2 or ty == 4:
+        wr32(buf, place, sv + a - pc)
+    else ty == 9:
+        wr32(buf, place, sv + a - got)
+    else ty == 10:
+        wr32(buf, place, got + a - pc)
+    else ty == 3 or ty == 43:
+        ga := got_entry(l, os)
+        if ga < (0 as i64):
+            nl_fail(l, "GOT entry missing at " + reloc_where(l, s2, r))
+            ret false
+        end
+        wr32(buf, place, ga + a - got)
+    else ty == 20:
+        v := sv + a
+        buf[place] = (v & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((v >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 21:
+        v2 := sv + a - pc
+        buf[place] = (v2 & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((v2 >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 22:
+        buf[place] = ((sv + a) & (255 as i64)) as u8
+    else ty == 23:
+        buf[place] = ((sv + a - pc) & (255 as i64)) as u8
+    else:
+        nl_fail(l, "unsupported i386 relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
+end

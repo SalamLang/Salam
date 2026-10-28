@@ -1,0 +1,45 @@
+import net.http
+import net.tcp
+
+mut server := tcp.Server {}
+
+func api():
+    repeat 2:
+        conn := tcp.Accept(server)
+        request := tcp.Read(conn, 4096)
+        if request.find("GET /missing ") == 0:
+            tcp.WriteHTTP(conn, "404 Not Found", "application/json", `{"error": "no such page"}`)
+        else:
+            tcp.WriteHTTP(conn, "503 Service Unavailable", "text/plain", "try again later")
+        end
+        tcp.Close(conn)
+    end
+end
+
+func get(ep: http.Endpoint, path: str):
+    head := "GET " + path + " HTTP/1.1\r\nHost: " + ep.host + "\r\nConnection: close\r\n\r\n"
+    mut r := http.SendRawTimeout(ep, head, null, 0, 5000)
+    body := http.RawText(r)
+    if r.ok:
+        println path, "worked:", body
+    else r.status > 0:
+        println path, "answered", r.status, "with", body
+    else:
+        println path, "failed:", r.error
+    end
+    http.FreeRaw(r)
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(api)
+    ep := http.ParseEndpoint("http://127.0.0.1:" + tcp.Port(server))
+    get(ep, "/missing")
+    get(ep, "/busy")
+    join(t)
+    tcp.CloseServer(server)
+    get(http.ParseEndpoint("http://127.0.0.1:1"), "/nobody-listens")
+    bad := http.ParseEndpoint("ftp://files.example.com")
+    println "ftp endpoint ok:", bad.ok
+    get(bad, "/")
+end

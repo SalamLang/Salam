@@ -15,11 +15,6 @@ on:
       - .github/workflows/agent-release.yml
   workflow_dispatch:
   workflow_call:
-    inputs:
-      attach:
-        description: Build the release set for another release to attach, without checking for a matching Salam release itself
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -40,7 +35,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
-      salam_release: ${{ steps.v.outputs.salam_release }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,11 +42,6 @@ jobs:
           persist-credentials: false
       - name: Read and cross-check the version
         id: v
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT: ${{ github.event_name }}
-          ATTACH: ${{ inputs.attach && 'true' || 'false' }}
         run: |
           set -euo pipefail
           conf=$(jq -r .version agent/src-tauri/tauri.conf.json)
@@ -61,19 +50,8 @@ jobs:
             echo "::error::tauri.conf.json says $conf but Cargo.toml says $cargo"
             exit 1
           fi
-          salam_release=
-          if [ "$EVENT" != pull_request ] && [ "$ATTACH" != true ] && [ "$REPO" = SalamLang/Salam ]; then
-            if gh release view "v$conf" --repo "$REPO" >/dev/null 2>&1; then
-              salam_release="v$conf"
-            else
-              echo "::notice::no v$conf release yet; building without publishing anywhere"
-            fi
-          fi
-          {
-            echo "version=$conf"
-            echo "salam_release=$salam_release"
-          } >> "$GITHUB_OUTPUT"
-          echo "version=$conf salam_release=${salam_release:-none}"
+          echo "version=$conf" >> "$GITHUB_OUTPUT"
+          echo "version=$conf"
 
   check:
     name: Check (${{ matrix.os }})
@@ -309,11 +287,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
     steps:
       - name: Download every build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -369,21 +345,3 @@ jobs:
           path: release/*
           if-no-files-found: error
           retention-days: 14
-      - name: Attach to the Salam release of the same version
-        if: needs.version.outputs.salam_release != ''
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-          SALAM_RELEASE: ${{ needs.version.outputs.salam_release }}
-        run: |
-          set -euo pipefail
-          mkdir attach
-          cp release/salam-agent-"$VERSION"-* attach/
-          cp release/SHA256SUMS "attach/salam-agent-$VERSION-SHA256SUMS"
-          cp release/SHA512SUMS "attach/salam-agent-$VERSION-SHA512SUMS"
-          (cd attach && sha256sum -c "salam-agent-$VERSION-SHA256SUMS")
-          gh release upload "$SALAM_RELEASE" --clobber attach/*
-          {
-            echo "### Salam Agent attached to $SALAM_RELEASE"
-            echo ""
-            printf -- '- %s\n' attach/*
-          } >> "$GITHUB_STEP_SUMMARY"

@@ -681,6 +681,22 @@ def persian(t, s):
         title in got and "    شمارنده := 1\n" in got[title],
         str(sorted(got)) + json.dumps(diags, ensure_ascii=False)[:300],
     )
+    name_text = (
+        "واردسازی شبکه.اچ تی تی پی\n\n"
+        "تابع ریشه:\n"
+        '    ن := اچ تی تی پی.تجزیه نقطه پایانی("https://a.b")\n'
+        "    سرچاپ ن.host\n"
+        "پایان\n"
+    )
+    got, diags = fixes_for(
+        s, uri_of(os.path.join(ROOT, "tests", "lsp", "qf", "name.salam")), name_text
+    )
+    title = "نوشتن 'میزبان'"
+    t.check(
+        "fa: an English member name is offered the Persian one",
+        title in got and "    سرچاپ ن.میزبان\n" in got[title],
+        str(sorted(got)) + json.dumps(diags, ensure_ascii=False)[:300],
+    )
 
 
 def interfaces(t, s):

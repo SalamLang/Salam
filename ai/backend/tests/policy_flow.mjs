@@ -93,6 +93,17 @@ const pieces = [await askMore("spread python please"), await askMore("spread pyt
 check("small pieces of python stay alone at first", pieces[0].startsWith("One more part") && pieces[1].startsWith("One more part"), pieces);
 check("but not once they add up across the conversation", pieces[2].startsWith("Rewritten in Salam"), pieces[2]);
 
+const guestPost = (body) => fetch(`${API}/guest/messages`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://www.salamlang.ir" }, body: JSON.stringify(body) });
+const stuck = await guestPost({ text: "never start the answer" });
+const stuckBody = await stuck.json();
+check("a guest message the assistant never answers stays pending", stuck.status === 201 && typeof stuckBody.guest === "string", stuckBody);
+const early = await guestPost({ guest: stuckBody.guest, text: "asking again" });
+check("while it is running a second guest message is refused", early.status === 409 && (await early.json()).error === "busy");
+await sleep(60000);
+const later = await guestPost({ guest: stuckBody.guest, text: "guest hello again" });
+const laterBody = await later.json();
+check("an abandoned guest message no longer blocks the chat", later.status === 201 && laterBody.used === 2, laterBody);
+
 const tg = await api("GET", "/admin/telegram", admin);
 check("the admin sees Telegram sessions", tg.res.status === 200 && Array.isArray(tg.json.links) && Array.isArray(tg.json.guests) && typeof tg.json.online_links === "number", tg.json);
 const tgDenied = await api("GET", "/admin/telegram", user);

@@ -16,6 +16,8 @@ Salam is a general-purpose and systems programming language designed for efficie
 [![Website](https://img.shields.io/badge/Website-Persian-1A1A1A?style=for-the-badge&labelColor=333333&color=FF5C00)](https://www.salamlang.ir/)
 [![Salam Programming Language Playground](https://img.shields.io/badge/Salam-Playground-1A1A1A?style=for-the-badge&labelColor=333333&color=00FFCC)](https://editor.salamlang.ir/)
 
+<a href="https://trendshift.io/repositories/281016?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-281016" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/281016/daily?language=TeX" alt="SalamLang/Salam | Trendshift" width="250" height="55"/></a>
+
 ---
 
 </div>

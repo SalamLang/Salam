@@ -11,13 +11,13 @@ pkg.intro <<
 <p>The packages around it:</p>
 <ul>
 <li><a href="/std/net-http-middleware/">net/http/middleware</a> for access logs, CORS and cache headers, <a href="/std/net-http-session/">net/http/session</a> for logins with a cookie, <a href="/std/net-http-validate/">net/http/validate</a> for checking input, and <a href="/std/net-http-swagger/">net/http/swagger</a> for API documentation;</li>
-<li><a href="/std/net-httpx/">net/httpx</a> when a client needs hand-written headers, binary bodies or a time limit, <a href="/std/net-http2/">net/http2</a> for HTTP/2, and <a href="/std/net-websocket/">net/websocket</a> for connections that stay open.</li>
+<li><a href="/std/net-http2/">net/http2</a> for HTTP/2, and <a href="/std/net-websocket/">net/websocket</a> for connections that stay open.</li>
 </ul>
 <p>Things people get wrong:</p>
 <ul>
 <li><strong>Register every route before <code>Use</code>.</strong> The server keeps a copy of the router.</li>
 <li><strong><code>Post</code>, <code>Put</code> and <code>Patch</code> label a body as a form</strong> (<code>application/x-www-form-urlencoded</code>) unless you pass a <code>Content-Type</code>; send JSON with <code>PostWith</code> and that header.</li>
-<li><strong>The client does not follow redirects and has no time limit.</strong> A 302 comes back as a 302 with its <code>Location</code> header; for a request that must not hang, use <code>net/httpx</code> with a timeout.</li>
+<li><strong>The client does not follow redirects unless you ask.</strong> A 302 comes back as a 302 with its <code>Location</code> header; set <code>max_redirects</code> in <code>RequestOptions</code> (or call <code>SetMaxRedirects</code> on a client) to follow them. It never hangs or reads without limit: a read or write that is idle for 30 seconds fails, a response over 256 MB fails, and <code>timeout_ms</code> caps the whole request.</li>
 <li><strong><code>Ok</code> means a 2xx status.</strong> When the server could not be reached at all, <code>Status</code> is 0 and <code>Error</code> says why.</li>
 <li>A value read from a request is freed when the handler returns; see the end of the page.</li>
 </ul>
@@ -52,7 +52,57 @@ curl http://127.0.0.1:8080/health</code></pre>
 <h2 id="guide-client">Calling an API as a client</h2>
 <p><code>Get</code>, <code>Post</code> and the other one-line calls send a request and return a <code>Response</code>; the <code>...With</code> forms take a map of extra headers. The program below shows the four answers a client has to handle. A <code>Post</code> without a content type reaches the server as a form, so a JSON API refuses it with 415; the same body through <code>PostWith</code> with <code>Content-Type: application/json</code> creates the ticket. A redirect is not followed, so <code>Get</code> returns the 302 and you read <code>Location</code> yourself. A server that is not running gives status 0 and the reason in <code>Error</code>.</p>
 {{example.net-http-guide-client}}
-<p>Gzip and chunked answers are decoded for you, and every request is sent with <code>Connection: close</code>. For a series of calls that share a login, <code>NewClient</code> keeps the cookies from each answer and sends them with the next request, plus any headers set with <code>SetHeader</code>. Its cookie jar is one map for every host, so use one <code>Client</code> per service you talk to. The one-line calls share some state inside the package, so do not run them from several threads at the same time.</p>
+<p>Gzip and chunked answers are decoded for you, and every request is sent with <code>Connection: close</code>. For a series of calls that share a login, <code>NewClient</code> keeps the cookies from each answer and sends them with the next request, plus any headers set with <code>SetHeader</code>. A cookie is sent back only to the host that set it; a cookie you add with <code>SetCookie</code> goes to the host of the first request, never to a host a redirect leads to.</p>
+<p>Any number of threads can use the one-line calls at once, because a call keeps no state outside itself. A <code>Client</code> from <code>NewClient</code> can be shared by threads too: it carries its own lock, so <code>SetHeader</code>, the cookie jar and the settings stay consistent. Call <code>Free</code> when you are done with a shared client. A <code>Client {}</code> written as a literal has no lock and belongs to one thread.</p>
+
+<h2 id="guide-raw">Raw requests: your own headers, bytes and time limits</h2>
+<p>The one-line calls above build the request for you. When you need full control of the request line and headers, for example to sign a request, to send a binary body or to talk to an API with unusual headers, write the request head yourself and send it with <code>SendRaw</code>. The <a href="/packages/aws/">aws</a>, <a href="/packages/webpush/">webpush</a>, <a href="/std/db-meilisearch/">db/meilisearch</a>, <a href="/std/db-elasticsearch/">db/elasticsearch</a> and <a href="/std/db-typesense/">db/typesense</a> packages are built on these calls. The examples run against a small server in a thread of the same program, so they need no network.</p>
+<p>Every raw call takes an <code>Endpoint</code> from <code>ParseEndpoint</code> (host, port and TLS on or off; any path in the URL is dropped, because the path goes in your request line) and a request head: the request line, the headers and an empty line, each line ending in <code>\r\n</code>. The body is a pointer and a length, so it can hold any bytes. The answer is a <code>RawResponse</code> with the body as bytes, chunked bodies already decoded, freed with <code>FreeRaw</code>. <code>SendRaw</code> waits as long as the server does; <code>SendRawTimeout</code> adds a time limit in milliseconds; <code>SendRawTLS</code> adds your own <code>tls.Config</code>. A response larger than <code>RawLimit</code> (256 MB by default) is reported as an error.</p>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Send <code>Connection: close</code> unless the answer is framed.</strong> The raw calls stop as soon as an answer with a <code>Content-Length</code> or a chunked body is complete. An answer with neither is read until the server closes the connection, so on a kept-alive connection the call waits until then (or until the time limit).</li>
+<li><strong><code>ok</code> means a 2xx status</strong>, not "an answer arrived". Check <code>status</code> to tell a 404 from a dead server.</li>
+<li>A <code>str</code> stops at the first zero byte, so binary bodies stay in <code>data</code>; <code>RawText</code> cuts at the first zero.</li>
+</ul>
+<h2 id="guide-raw-post">POST JSON with your own headers</h2>
+<p><code>ParseEndpoint</code> turns a URL into the host, port and whether to use TLS. The request head is plain text that you write: the request line, a <code>Host</code> header, and here an <code>Authorization</code> token, the content type and the body length, closed by an empty line. <code>SendRawTimeout</code> sends the head and the body and returns the answer; <code>RawText</code> turns the reply body into a <code>str</code>. <code>HeaderValue</code> finds a header in the response head, ignoring case.</p>
+{{example.net-http-raw-post-json}}
+<p><code>Content-Length</code> must be the length in bytes, which is what <code>str.len()</code> returns, so it stays right for text in any language. A wrong length makes servers wait for more data or cut the body.</p>
+
+<h2 id="guide-raw-errors">Status codes and failures</h2>
+<p>A <code>RawResponse</code> tells three cases apart. <code>ok</code> is true only for a 2xx status. A 4xx or 5xx answer still has its <code>status</code> and a body, which usually explain the problem. When no answer came at all, because the connection was refused, the host was unknown or the URL could not be parsed, <code>status</code> is 0 and <code>error</code> says why.</p>
+{{example.net-http-raw-status-errors}}
+<p>A 503 or 429 often means "try again later"; read <code>Retry-After</code> with <code>HeaderValue</code> before you retry, and do not retry a 4xx such as 404, which will not change.</p>
+
+<h2 id="guide-raw-client">A small API client</h2>
+<p>A struct that holds the endpoint and the token, with one method per kind of request, keeps the header writing in one place. The JSON in the replies is read with <a href="/std/encoding-json/">encoding/json</a>: <code>json.Get</code> for a field and <code>json.Items</code> to walk an array.</p>
+{{example.net-http-raw-api-client}}
+
+<h2 id="guide-raw-chunked">Chunked answers and time limits</h2>
+<p>A server that does not know the length of its answer in advance sends it in chunks, each one prefixed by its size in hex. <code>SendRawTimeout</code> removes that framing for you. The last parameter of <code>SendRawTimeout</code> is a time limit in milliseconds for each read and write, and on Linux also for the connect, so a server that accepts the connection and then says nothing cannot hang the program. The second request below hits such a server with a 300 ms limit.</p>
+{{example.net-http-raw-chunked}}
+<p>A timeout is reported as <code>the request timed out</code> and an answer cut short by a closing connection as <code>the response body was cut short</code>; both are worth a retry later. <code>SendRaw</code> has no time limit at all; give <code>SendRawTimeout</code> a limit for any server you do not control. <code>SendRawTLS</code> takes the same limit plus a <code>tls.Config</code> for a private CA.</p>
+
+<h2 id="guide-raw-binary">Binary downloads</h2>
+<p>A <code>str</code> ends at the first zero byte, so an image or a zip file turned into one is cut short. Read it from the <code>RawResponse</code> instead: <code>data</code> points at the body bytes and <code>len</code> is their count. The program downloads twelve bytes of a PNG header and shows that <code>RawText</code>, which turns the body into a <code>str</code>, keeps only the eight bytes before the first zero.</p>
+{{example.net-http-raw-binary}}
+<p>A <code>RawResponse</code> body is limited to <code>RawLimit</code> bytes, 256 MB unless you change it with <code>SetRawLimit</code>; a larger answer is reported as an error instead of filling memory. The <code>data</code> buffer belongs to you until <code>FreeRaw</code>.</p>
+
+<h2 id="guide-raw-https">HTTPS</h2>
+<p>An <code>https://</code> URL gives an endpoint with <code>secure</code> set, and the same calls then speak TLS through <a href="/std/tls/">tls</a>, checking the server certificate. Nothing else changes. This example asks the GitHub API about the Salam repository, so it needs the internet; GitHub requires a <code>User-Agent</code> header.</p>
+{{example.net-http-raw-https}}
+<p>When this page was written it printed:</p>
+<pre class="code" dir="ltr"><code>api.github.com 443 true
+status: 200
+rate limit left: 58
+SalamLang/Salam is written in TeX</code></pre>
+<p>The rate limit number counts down with each call from your address, and the language is what GitHub detects for the repository at the time.</p>
+
+<h2 id="guide-limits">Timeouts, limits and redirects</h2>
+<p>Client requests run under the limits below. <code>RequestOptions</code> holds the limits and <code>Do</code> sends a request with them; a <code>Client</code> keeps its own copy, changed with <code>SetTimeout</code>, <code>SetIdleTimeout</code>, <code>SetMaxRedirects</code> and <code>SetMaxBody</code>. <code>idle_ms</code> (30 seconds by default) is how long one read or write may stall, <code>timeout_ms</code> (off by default) is the time for the whole request including redirects, and <code>max_body</code> (256 MB by default) bounds the body, also after gzip is unpacked, so a small compressed answer cannot fill memory. Looking up a host name is done by the system resolver, and on systems other than Linux the connect itself waits the system default; neither is covered by these limits. A request that runs out of time reports <code>the request timed out</code>, and an answer cut short by a closing connection is an error rather than a smaller body.</p>
+<p>Redirects are followed only when <code>max_redirects</code> is above zero. A 301 or 302 after a POST and every 303 turn into a GET without the body; 307 and 308 repeat the request as it was. When a redirect leads to another host, the <code>Authorization</code> and <code>Cookie</code> headers are dropped, and a redirect from https to http is refused. The final address is in the <code>url</code> field of the response.</p>
+<p>The request is checked before anything is sent: a method, header name or address with a space or a control character, and a header value with a line break, are refused with a message in <code>err</code>, so a value taken from outside cannot add headers to the request. A <code>Content-Length</code>, <code>Transfer-Encoding</code>, <code>Connection</code> or <code>Accept-Encoding</code> header of yours is replaced by the one the client computes. The example sends a request to a server that answers late and one that never answers, follows a redirect and refuses an answer that is too large.</p>
+{{example.net-http-guide-limits}}
 
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
@@ -64,8 +114,11 @@ curl http://127.0.0.1:8080/health</code></pre>
 <tr><td>Choose the status or add a header</td><td><code>SetStatus</code>, <code>SetHeader</code></td></tr>
 <tr><td>Send the browser somewhere else</td><td><code>Redirect</code></td></tr>
 <tr><td>Hold the request in a struct instead of the bare id</td><td><code>Ctx</code>, then the same <code>Param</code>, <code>Json</code> and the rest</td></tr>
+<tr><td>A request with a time limit, a size limit or redirects</td><td><code>Do</code> with <code>RequestOptions</code>, or <code>SetTimeout</code>, <code>SetMaxRedirects</code> on a client</td></tr>
 <tr><td>One request from a program</td><td><code>Get</code>, <code>Post</code>, <code>GetWith</code>, <code>PostWith</code>, <code>Request</code></td></tr>
 <tr><td>Several requests that share cookies</td><td><code>NewClient</code></td></tr>
+<tr><td>A request with headers you write yourself, or a binary body</td><td><code>ParseEndpoint</code>, <code>SendRaw</code>, <code>SendRawTimeout</code>, <code>SendRawTLS</code></td></tr>
+<tr><td>Read the bytes of a raw answer</td><td><code>RawResponse</code> <code>data</code> and <code>len</code>, <code>RawText</code>, then <code>FreeRaw</code></td></tr>
 <tr><td>Check the answer</td><td><code>Ok</code> for a 2xx status, <code>Status</code> for the code (0 when nothing answered), <code>Error</code> for the reason</td></tr>
 </tbody>
 </table></div>
@@ -96,6 +149,9 @@ doc.UrlDecode = Undoes percent encoding and turns <code>+</code> into a space.
 doc.Method = The request method, such as GET.
 doc.Path = The request path without the query.
 doc.Body = The request body.
+doc.BodyLen = The length of the request body in bytes, zero bytes included; use it with <code>BodyBytes</code>.
+doc.BodyBytes = A pointer to the request body bytes, for uploads and other binary bodies that <code>Body</code> would cut at the first zero byte. It belongs to the request and is freed when the handler returns; copy what you keep, and do not free it.
+doc.Multipart = Reads a <code>multipart/form-data</code> body into its parts, each with its name, file name, content type and bytes; no parts when the request is not multipart. The caller owns the result and frees it with <code>mime.FreeMultipart</code>.
 doc.Query = One query parameter, decoded.
 doc.Header = One request header; the name is case insensitive.
 doc.Param = One path parameter, such as <code>id</code> in <code>/books/:id</code>.
@@ -105,6 +161,7 @@ doc.SetHeader = Sets one response header. A second call with the same name, spel
 doc.Html = Sends an HTML response.
 doc.Json = Sends a JSON response; you build the JSON text yourself.
 doc.Text = Sends a text response.
+doc.Bytes = Sends <code>n</code> bytes from a pointer as the body, with the given content type; binary safe, for files, images and archives. The bytes are copied, so the call takes nothing over: free the pointer afterwards only if you allocated it, and never free one the request owns, such as the one <code>BodyBytes</code> returns.
 doc.Redirect = Redirects to another address with a 302 and an empty body.
 doc.Own = Hands a string the handler built to the context, so it is freed when the request ends; do not hand it a string that came from the context itself, such as the body.
 doc.Cookies = Every cookie of the request.
@@ -135,13 +192,15 @@ doc.Response = The response to a client request.
 doc.Response.status = The status code.
 doc.Response.body = The body.
 doc.Response.head = The raw headers.
-doc.Response.err = The error message, when the request did not get through; the status is then 0.
+doc.Response.err = The error message, when the request did not get through or was refused for a limit; the status is 0 when nothing came back.
+doc.Response.url = The address of the last request, after redirects.
 doc.BytesResponse = A response whose body is raw bytes, for downloads such as archives and images that a <code>str</code> would cut at the first zero byte.
 doc.BytesResponse.status = The status code.
 doc.BytesResponse.head = The raw headers.
 doc.BytesResponse.body = The body as a <code>compress.ByteBuf</code>; free it with <code>compress.BufFree</code>.
+doc.BytesResponse.url = The address of the last request, after redirects.
 doc.BytesResponse.err = The error message, when the request did not get through; the status is then 0.
-doc.Get = Sends a GET request. Redirects are not followed and there is no time limit.
+doc.Get = Sends a GET request. Redirects are not followed; a read that stalls for 30 seconds fails.
 doc.Post = A POST request with a body, sent as <code>application/x-www-form-urlencoded</code>; use <code>PostWith</code> to give another content type.
 doc.Put = A PUT request.
 doc.Delete = A DELETE request.
@@ -173,11 +232,28 @@ doc.SetCookieLines = Every <code>Set-Cookie</code> header of the response.
 doc.CookieMap = The names and values of the cookies the response set.
 doc.CookieHeader = Turns a cookie map into the value of a <code>Cookie</code> header.
 doc.Client = An HTTP client that keeps fixed headers and cookies between requests; a simple browser.
-doc.Client.cookies = The cookies it took from the responses: one map for every host it talks to.
+doc.Client.cookies = The cookies it took from the responses; each is sent back only to the host that set it.
+doc.Client.cookie_hosts = Which host set each cookie in <code>cookies</code>.
+doc.Client.cookie_secure = The cookies that came with the <code>Secure</code> attribute; they are sent back over HTTPS only, never over plain HTTP.
+doc.Client.options = The limits of this client: a <code>RequestOptions</code>.
+doc.Client.mu = The lock that lets threads share a client made by <code>NewClient</code>.
 doc.Client.headers = The headers sent with every request.
-doc.NewClient = A new client.
+doc.NewClient = A new client with its own lock, so threads can share it.
+doc.RequestOptions = The limits of a request: <code>idle_ms</code> for one stalled read or write (30000), <code>timeout_ms</code> for the whole request (0, none), <code>max_body</code> in bytes (256 MB) and <code>max_redirects</code> (0).
+doc.RequestOptions.idle_ms = How long one read or write may stall, in milliseconds.
+doc.RequestOptions.timeout_ms = The time for the whole request, redirects included; 0 means none.
+doc.RequestOptions.max_body = The largest body in bytes, measured after gzip is unpacked.
+doc.RequestOptions.max_redirects = How many redirects to follow; 0 follows none.
+doc.Do = Sends a request with the limits in a <code>RequestOptions</code>.
 doc.Client.SetHeader = Sets a header for every request from now on.
-doc.Client.SetCookie = Adds a cookie by hand.
+doc.Client.SetCookie = Adds a cookie by hand; it is sent to the host of the first request only.
+doc.Client.SetTimeout = Sets the time for a whole request, in milliseconds; 0 means no limit.
+doc.Client.SetIdleTimeout = Sets how long one read or write may stall, in milliseconds.
+doc.Client.SetMaxRedirects = Sets how many redirects a request follows; 0 follows none.
+doc.Client.SetMaxBody = Sets the largest body a response may have, in bytes.
+doc.Client.Free = Releases the lock and the maps of the client.
+doc.Client.RequestRaw = A request with the header text written out by you; the cookies and headers of the client are added.
+doc.Client.RequestBytes = Like <code>RequestRaw</code>, but keeps the body as bytes (a <code>BytesResponse</code>).
 doc.Client.ClearCookies = Clears every cookie.
 doc.Client.Request = A request with any method and body; the cookies of the response are kept.
 doc.Client.RequestWith = The same, with extra headers for this request alone.
@@ -188,6 +264,32 @@ doc.Client.Delete = A DELETE request with the cookies and headers of the client.
 doc.Client.Patch = A PATCH request with the cookies and headers of the client.
 doc.Client.Options = An OPTIONS request with the cookies and headers of the client.
 doc.Client.Head = A HEAD request with the cookies and headers of the client.
+
+doc.Endpoint = The address of one server: the host, the port and whether it is secure.
+doc.Endpoint.host = The host.
+doc.Endpoint.port = The port: the one in the URL, else 80 for http and 443 for https.
+doc.Endpoint.secure = Connect with TLS.
+doc.Endpoint.ok = The address was read correctly; false for anything that does not start with <code>http://</code> or <code>https://</code>.
+doc.ParseEndpoint = Reads an address such as <code>https://api.example.com:8443</code>; the default port is 80 for http and 443 for https. A path after the host is ignored.
+doc.Host = The host of an <code>Endpoint</code>: <code>api.example.com</code> for <code>https://api.example.com:8443/v1</code>.
+doc.Port = The port of an <code>Endpoint</code>: the one in the address, else 80 for http and 443 for https.
+doc.Secure = Whether an <code>Endpoint</code> uses TLS: true for <code>https://</code>, false for <code>http://</code>.
+doc.EndpointOk = Whether <code>ParseEndpoint</code> read the address; false for anything that does not start with <code>http://</code> or <code>https://</code>.
+doc.HeaderValue = The value of one header in the header text; the name is case insensitive.
+doc.RawResponse = A response with a binary body.
+doc.RawResponse.status = The status code.
+doc.RawResponse.head = The headers.
+doc.RawResponse.data = The address of the body.
+doc.RawResponse.len = The length of the body in bytes, after chunked decoding.
+doc.RawResponse.ok = The status is 2xx.
+doc.RawResponse.error = The error message, such as <code>the request timed out</code> or <code>the response body was cut short</code>.
+doc.SendRaw = Sends the request head you wrote and <code>n</code> bytes of body from a pointer, reads until the server closes, keeps the body binary and decodes a chunked body. No time limit.
+doc.SendRawTimeout = The same, with a time limit in milliseconds for each read and write; 0 means none.
+doc.SendRawTLS = Like <code>SendRawTimeout</code>, with your own <code>tls.Config</code>: a private CA in <code>ca_file</code>, or <code>insecure_skip_verify</code> for local testing. A plain <code>http</code> endpoint ignores it.
+doc.FreeRaw = Frees the memory of a raw response.
+doc.RawText = The body of a raw response as a string, cut at the first zero byte.
+doc.RawLimit = The greatest response size the raw calls read, in bytes; 256 MB by default.
+doc.SetRawLimit = Changes that limit for the whole program; zero or less is ignored.
 
 ex.NewServer = net-http-Handle
 ex.Use = net-http-Handle
@@ -207,6 +309,10 @@ ex.Json = net-http-Handle
 ex.Text = net-http-Handle
 ex.Redirect = net-http-Handle
 ex.Own = net-http-Handle
+ex.BodyLen = net-http-Upload
+ex.BodyBytes = net-http-Upload
+ex.Multipart = net-http-Upload
+ex.Bytes = net-http-Upload
 ex.Get = net-http-Handle
 ex.PostWith = net-http-Handle
 ex.Put = net-http-Handle
@@ -227,6 +333,15 @@ ex.Client.Get = net-http-Context
 ex.Client.Post = net-http-Context
 ex.Client.SetHeader = net-http-Context
 ex.SetCookieLines = net-http-Context
+ex.RequestOptions = net-http-Do
+ex.Do = net-http-Do
+ex.Client.SetTimeout = net-http-Do
+ex.Client.SetIdleTimeout = net-http-Do
+ex.Client.SetMaxRedirects = net-http-Do
+ex.Client.SetMaxBody = net-http-Do
+ex.Client.Free = net-http-Do
+ex.Client.RequestRaw = net-http-Do
+ex.Client.RequestBytes = net-http-Do
 ex.Response = net-http-Client
 ex.BytesResponse = net-http-Client
 ex.Post = net-http-Client
@@ -280,3 +395,18 @@ ex.Run = net-http-Server
 ex.RunTLS = net-http-Server
 ex.IsEdge = net-http-Server
 ex.ConnOf = net-http-Server
+ex.Endpoint = net-http-SendRaw
+ex.ParseEndpoint = net-http-SendRaw
+ex.Host = net-http-EndpointInfo
+ex.Port = net-http-EndpointInfo
+ex.Secure = net-http-EndpointInfo
+ex.EndpointOk = net-http-EndpointInfo
+ex.HeaderValue = net-http-SendRaw
+ex.RawResponse = net-http-SendRaw
+ex.SendRaw = net-http-SendRaw
+ex.SendRawTimeout = net-http-SendRaw
+ex.SendRawTLS = net-http-SendRaw
+ex.FreeRaw = net-http-SendRaw
+ex.RawText = net-http-SendRaw
+ex.RawLimit = net-http-SendRaw
+ex.SetRawLimit = net-http-SendRaw

@@ -35,6 +35,11 @@ if SALAM_OS_WINDOWS:
         func GetProcAddress(mod: void*, name: str): void*
         func GetTickCount(): u32
         func Sleep(ms: int)
+        func InitializeConditionVariable(cv: void*)
+        func SleepConditionVariableCS(cv: void*, cs: void*, ms: int): int
+        func WakeConditionVariable(cv: void*)
+        func WakeAllConditionVariable(cv: void*)
+        func GetTickCount64(): u64
     end
 else:
     extern:
@@ -68,43 +73,69 @@ end
 @en "Mutex"
 @fa "قفل"
 pub struct Mutex:
+    @en "handle"
+    @fa "دستگیره"
     pub handle: void* = null
 end
 
 @en "CondVar"
 @fa "متغیر شرط"
 pub struct CondVar:
+    @en "handle"
+    @fa "دستگیره"
     pub handle: void* = null
 end
 
 @en "WaitGroup"
 @fa "گروه انتظار"
 pub struct WaitGroup:
+    @en "counter"
+    @fa "شمارنده"
     pub counter: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
     pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
     pub cv: void* = null
 end
 
 @en "RWMutex"
 @fa "قفل خواندن نوشتن"
 pub struct RWMutex:
+    @en "state"
+    @fa "وضعیت"
     pub state: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
     pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
     pub cv: void* = null
 end
 
 @en "Semaphore"
 @fa "نشانگر"
 pub struct Semaphore:
+    @en "permits"
+    @fa "مجوزها"
     pub permits: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
     pub mu: void* = null
+    @en "cv"
+    @fa "شرط درونی"
     pub cv: void* = null
 end
 
 @en "Once"
 @fa "یک بار"
 pub struct Once:
+    @en "done"
+    @fa "انجام شد"
     pub done: i64* = null
+    @en "mu"
+    @fa "قفل درونی"
     pub mu: void* = null
 end
 
@@ -130,56 +161,84 @@ if SALAM_OS_WINDOWS:
         mem.Free(h)
     end
 
-    func cond_new(): void*:
-        c := mem.Allocate(COND_BYTES as u64)
-        if _cv_init_fn != null:
-            f := _cv_init_fn as extern func (void*) void
+    if SALAM_ARCH_X86:
+        func cond_new(): void*:
+            c := mem.Allocate(COND_BYTES as u64)
+            InitializeConditionVariable(c)
+            ret c
+        end
+
+        func cond_wait(c: void*, m: void*):
+            SleepConditionVariableCS(c, m, 0 - 1)
+        end
+
+        func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+            ret SleepConditionVariableCS(c, m, ms as int) != 0
+        end
+
+        func now_ms_os(): i64:
+            ret GetTickCount64() as i64
+        end
+
+        func cond_signal(c: void*):
+            WakeConditionVariable(c)
+        end
+
+        func cond_broadcast(c: void*):
+            WakeAllConditionVariable(c)
+        end
+    else:
+        func cond_new(): void*:
+            c := mem.Allocate(COND_BYTES as u64)
+            if _cv_init_fn != null:
+                f := _cv_init_fn as extern func (void*) void
+                f(c)
+            end
+            ret c
+        end
+
+        func cond_wait(c: void*, m: void*):
+            if _cv_sleep_fn == null:
+                LeaveCriticalSection(m)
+                Sleep(1)
+                EnterCriticalSection(m)
+                ret
+            end
+            f := _cv_sleep_fn as extern func (void*, void*, int) int
+            f(c, m, 0 - 1)
+        end
+
+        func cond_timedwait(c: void*, m: void*, ms: i64): bool:
+            if _cv_sleep_fn == null:
+                LeaveCriticalSection(m)
+                mut nap := ms
+                if nap > 1: nap = 1 end
+                if nap < 0: nap = 0 end
+                Sleep(nap as int)
+                EnterCriticalSection(m)
+                ret false
+            end
+            f := _cv_sleep_fn as extern func (void*, void*, int) int
+            ret f(c, m, ms as int) != 0
+        end
+
+        func now_ms_os(): i64:
+            if _tick64_fn == null: ret GetTickCount() as i64 end
+            f := _tick64_fn as extern func () u64
+            ret f() as i64
+        end
+
+        func cond_signal(c: void*):
+            if _cv_wake_fn == null: ret end
+            f := _cv_wake_fn as extern func (void*) void
             f(c)
         end
-        ret c
-    end
 
-    func cond_wait(c: void*, m: void*):
-        if _cv_sleep_fn == null:
-            LeaveCriticalSection(m)
-            Sleep(1)
-            EnterCriticalSection(m)
-            ret
+        func cond_broadcast(c: void*):
+            if _cv_wake_all_fn == null: ret end
+            f := _cv_wake_all_fn as extern func (void*) void
+            f(c)
         end
-        f := _cv_sleep_fn as extern func (void*, void*, int) int
-        f(c, m, 0 - 1)
-    end
-
-    func cond_timedwait(c: void*, m: void*, ms: i64): bool:
-        if _cv_sleep_fn == null:
-            LeaveCriticalSection(m)
-            mut nap := ms
-            if nap > 1: nap = 1 end
-            if nap < 0: nap = 0 end
-            Sleep(nap as int)
-            EnterCriticalSection(m)
-            ret false
-        end
-        f := _cv_sleep_fn as extern func (void*, void*, int) int
-        ret f(c, m, ms as int) != 0
-    end
-
-    func now_ms_os(): i64:
-        if _tick64_fn == null: ret GetTickCount() as i64 end
-        f := _tick64_fn as extern func () u64
-        ret f() as i64
-    end
-
-    func cond_signal(c: void*):
-        if _cv_wake_fn == null: ret end
-        f := _cv_wake_fn as extern func (void*) void
-        f(c)
-    end
-
-    func cond_broadcast(c: void*):
-        if _cv_wake_all_fn == null: ret end
-        f := _cv_wake_all_fn as extern func (void*) void
-        f(c)
     end
 
     func cond_free(c: void*): mem.Free(c) end

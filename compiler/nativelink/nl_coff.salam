@@ -1,0 +1,198 @@
+package nativelink
+
+const CR_BASE := 1000
+
+func coff_name(l &: Nl, p: u8*, at: i64, strtab: i64, lim: i64): int:
+    if rd32(p, at) == (0 as i64) and strtab >= (0 as i64):
+        so := strtab + rd32(p, at + (4 as i64))
+        ret nt_find(l.names, p, so, cstr_len(p, so, lim), true)
+    end
+    mut n := 0
+    until n < 8 and p[at + (n as i64)] != (0 as u8):
+        n += 1
+    end
+    ret nt_find(l.names, p, at, n, true)
+end
+
+func coff_secname(l &: Nl, p: u8*, at: i64, strtab: i64, lim: i64): int:
+    if p[at] == (47 as u8):
+        mut v := 0 as i64
+        mut k := 1
+        until k < 8 and p[at + (k as i64)] >= (48 as u8) and p[at + (k as i64)] <= (57 as u8):
+            v = v * (10 as i64) + ((p[at + (k as i64)] as i64) - (48 as i64))
+            k += 1
+        end
+        so := strtab + v
+        ret nt_find(l.names, p, so, cstr_len(p, so, lim), true)
+    end
+    mut n := 0
+    until n < 8 and p[at + (n as i64)] != (0 as u8):
+        n += 1
+    end
+    ret nt_find(l.names, p, at, n, true)
+end
+
+func is_coff(p: u8*, base: i64): bool:
+    m := rd16(p, base)
+    ret m == 0x8664 or m == 0x14c or m == 0xAA64
+end
+
+func add_coff(l &: Nl, f: int, base: i64, size: i64, label: str):
+    p := fptr(l, f)
+    lim := base + size
+    nsec := rd16(p, base + (2 as i64))
+    symptr := rd32(p, base + (8 as i64))
+    nsym := rd32(p, base + (12 as i64)) as int
+    opt := rd16(p, base + (16 as i64))
+    strtab := base + symptr + ((18 * nsym) as i64)
+    cmr := rd16(p, base)
+    cm := cmr == 0x14c ? EM_386 : (cmr == 0xAA64 ? EM_AARCH64 : EM_X86_64)
+    if l.mach == 0:
+        l.mach = cm
+    else l.mach != cm:
+        nl_fail(l, label + ": is for " + mach_name(cm) + ", but the link is for " + mach_name(l.mach))
+        ret
+    end
+    o := l.o_file.len()
+    l.o_file.push(f)
+    l.o_base.push(base)
+    l.o_label.push(label)
+    sec0 := l.s_obj.len()
+    l.o_sec0.push(sec0)
+    l.o_nsec.push(nsec + 1)
+    l.o_coff.push(true)
+    repeat nsec + 1 in i:
+        mut nm := 0 - 1
+        mut fl := 0 as i64
+        mut off := 0 as i64
+        mut sz := 0 as i64
+        mut al := 1 as i64
+        r0 := l.r_off.len()
+        mut nr := 0
+        if i > 0:
+            sh := base + (20 as i64) + (opt as i64) + (((i - 1) * 40) as i64)
+            nm = coff_secname(l, p, sh, strtab, lim)
+            sz = rd32(p, sh + (16 as i64))
+            raw := rd32(p, sh + (20 as i64))
+            rel := rd32(p, sh + (24 as i64))
+            nr = rd16(p, sh + (32 as i64))
+            fl = rd32(p, sh + (36 as i64))
+            ab := ((fl >> (20 as i64)) & (15 as i64)) as int
+            if ab > 0:
+                al = (1 as i64) << ((ab - 1) as i64)
+            end
+            off = raw == (0 as i64) ? (0 as i64) : base + raw
+            if (fl & (0x01000000 as i64)) != (0 as i64) and nr == 0xFFFF:
+                nr = rd32(p, base + rel) as int
+            end
+            repeat nr in k:
+                re := base + rel + ((10 * k) as i64)
+                l.r_off.push(rd32(p, re))
+                l.r_sym.push(0 - 1 - (rd32(p, re + (4 as i64)) as int))
+                l.r_type.push(CR_BASE + rd16(p, re + (8 as i64)))
+                l.r_add.push(0 as i64)
+            end
+        end
+        l.s_obj.push(o)
+        l.s_name.push(nm < 0 ? name_id(l, "") : nm)
+        l.s_type.push((fl & (0x80 as i64)) != (0 as i64) ? 8 : 1)
+        l.s_flags.push(fl)
+        l.s_off.push(off)
+        l.s_size.push(sz)
+        l.s_align.push(al)
+        l.s_rel0.push(r0)
+        l.s_nrel.push(nr)
+        l.s_oc.push(OC_NONE)
+        l.s_live.push(false)
+        l.s_addr.push(0 as i64)
+        l.s_fpos.push(0 as i64)
+        l.s_comdat.push(false)
+        l.s_sel.push(0)
+        l.s_assoc.push(0 - 1)
+        l.s_drop.push(false)
+        l.s_link.push(0 - 1)
+    end
+    sym0 := l.os_sec.len()
+    l.o_sym0.push(sym0)
+    l.o_nsym.push(nsym)
+    mut i2 := 0
+    until i2 < nsym:
+        e := base + symptr + ((18 * i2) as i64)
+        val := rd32(p, e + (8 as i64))
+        secn := rd16(p, e + (12 as i64))
+        cls := rd8(p, e + (16 as i64))
+        naux := rd8(p, e + (17 as i64))
+        nm2 := coff_name(l, p, e, strtab, lim)
+        mut sec := 0 - 1
+        if secn == 0xFFFF:
+            sec = 0 - 2
+        else secn > 0 and secn <= nsec:
+            sec = sec0 + secn
+        end
+        if cls == 3 and naux == 1 and sec >= 0 and val == (0 as i64):
+            ax := e + (18 as i64)
+            if (l.s_flags[sec] & (0x1000 as i64)) != (0 as i64):
+                l.s_comdat[sec] = true
+                l.s_sel[sec] = rd8(p, ax + (14 as i64))
+                l.s_assoc[sec] = sec0 + rd16(p, ax + (12 as i64))
+            end
+        end
+        l.os_sec.push(sec)
+        l.os_val.push(val)
+        l.os_name.push(0 - 1)
+        l.os_type.push(0)
+        l.os_size.push(0 as i64)
+        mut gi := 0 - 1
+        if cls == 2 or cls == 105:
+            gi = glob_of(l, nm2)
+            if cls == 105:
+                tag := rd32(p, e + (18 as i64)) as int
+                l.g_alias[gi] = sym0 + tag
+                l.g_firstref[gi] = l.g_firstref[gi] < 0 ? o : l.g_firstref[gi]
+            else secn == 0 and val > (0 as i64):
+                if l.g_common[gi] < val:
+                    l.g_common[gi] = val
+                end
+                if l.g_firstref[gi] < 0:
+                    l.g_firstref[gi] = o
+                end
+            else sec >= 0 and l.s_comdat[sec]:
+                if l.g_state[gi] == SY_DEF and not l.g_weak[gi]:
+                    l.s_drop[sec] = true
+                else:
+                    sym_merge(l, gi, o, sec, val, false)
+                end
+            else:
+                sym_merge(l, gi, o, sec, val, false)
+            end
+        end
+        if (cls == 2 or cls == 3) and sec >= 0:
+            l.os_name[l.os_name.len() - 1] = nm2
+            l.os_type[l.os_type.len() - 1] = cls == 2 ? 0x12 : 0x02
+        end
+        l.os_glob.push(gi)
+        repeat naux:
+            l.os_sec.push(0 - 1)
+            l.os_val.push(0 as i64)
+            l.os_name.push(0 - 1)
+            l.os_type.push(0)
+            l.os_size.push(0 as i64)
+            l.os_glob.push(0 - 1)
+        end
+        i2 = i2 + 1 + naux
+    end
+    repeat nsec + 1 in i3:
+        s := sec0 + i3
+        r0 := l.s_rel0[s]
+        repeat l.s_nrel[s] in k2:
+            raw2 := 0 - 1 - l.r_sym[r0 + k2]
+            l.r_sym[r0 + k2] = sym0 + raw2
+        end
+        if l.s_comdat[s] and l.s_sel[s] == 5:
+            a := l.s_assoc[s]
+            if a >= 0 and a < l.s_drop.len() and l.s_drop[a]:
+                l.s_drop[s] = true
+            end
+        end
+    end
+end

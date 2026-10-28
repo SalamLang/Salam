@@ -3,19 +3,23 @@ import { api, ApiError, getToken, handleUnauthorized, setClientVersion, setToken
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
-import { Apps } from "./Apps";
+import { Memory } from "./Memory";
 import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
 import { Connect } from "./Connect";
+import { Connections, TelegramLink } from "./Telegram";
+import { OAuthCallback, providerFromPath } from "./OAuthCallback";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
+import { announce } from "./Notify";
 import { Plans } from "./Plans";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
+import { Checkbox } from "./Checkbox";
 
 const SUGGESTIONS = [
   { icon: IconCode, title: t("اولین برنامه", "First program"), text: t("یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید.", "Write a Salam program that asks for the user's name and greets them.") },
@@ -36,7 +40,7 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "apps" | "keys" | "plans" | "admin" | "admin-chat";
+type Route = "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -45,9 +49,12 @@ function adminChatIdFromPath(): string {
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
   if (p === "/connect") return "connect";
-  if (p === "/apps") return "apps";
+  if (p === "/telegram") return "telegram";
+  if (p === "/connections") return "connections";
+  if (p === "/apps") return "connections";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
+  if (p === "/memory") return "memory";
   if (p === "/admin") return "admin";
   if (adminChatIdFromPath()) return "admin-chat";
   return "chat";
@@ -56,9 +63,11 @@ function routeFromPath(): Route {
 const PAGE_TITLES: Record<Route, string> = {
   chat: t("دستیار سلام", "Salam AI"),
   connect: t("اتصال برنامه", "Connect an app"),
-  apps: t("برنامه‌های متصل", "Connected apps"),
+  telegram: t("اتصال تلگرام", "Connect Telegram"),
+  connections: t("اتصال‌ها و برنامه‌ها", "Connections and apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
+  memory: t("حافظه", "Memory"),
   admin: t("مدیریت", "Admin"),
   "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
 };
@@ -111,6 +120,14 @@ export function App() {
   const [toast, setToast] = useState("");
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
+  const [cloudOk, setCloudOk] = useState(false);
+  const [cloud, setCloud] = useState(() => {
+    try {
+      return localStorage.getItem("salam-ai-cloud") === "1";
+    } catch {
+      return false;
+    }
+  });
   const scroller = useRef<HTMLDivElement>(null);
   const pageScroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -120,8 +137,26 @@ export function App() {
   activeRef.current = activeId;
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
+  const chatsRef = useRef<Chat[]>(chats);
+  chatsRef.current = chats;
+  const announced = useRef(new Set<number>());
+  const watching = useRef(new Set<number>());
+  const netFails = useRef(0);
   const signedIn = user !== null;
-  const onConnect = route === "connect";
+  useEffect(() => {
+    if (!signedIn || isDesktop) return;
+    api
+      .integrations()
+      .then((r) => setCloudOk(r.sandbox))
+      .catch(() => {});
+  }, [signedIn]);
+  const toggleCloud = (on: boolean) => {
+    setCloud(on);
+    try {
+      localStorage.setItem("salam-ai-cloud", on ? "1" : "0");
+    } catch {}
+  };
+  const onConnect = route === "connect" || route === "telegram";
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -169,6 +204,44 @@ export function App() {
   }, []);
   const tools = useAgent(isDesktop && signedIn, midFor, notify);
 
+  const finish = useCallback((chatId: string, mid: number, status: Message["status"], body: string) => {
+    if (!isDesktop || status === "pending" || announced.current.has(mid)) return;
+    announced.current.add(mid);
+    const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "";
+    if (status === "error") announce("failed", title, uiText(body));
+    else announce("done", title, body);
+  }, []);
+
+  const watchAway = useCallback(() => {
+    const chatId = activeRef.current;
+    const pending = messagesRef.current.find((m) => m.role === "assistant" && m.status === "pending");
+    if (!isDesktop || !chatId || !pending || pending.id <= 0 || watching.current.has(pending.id)) return;
+    const mid = pending.id;
+    const until = Date.now() + 30 * 60 * 1000;
+    watching.current.add(mid);
+    const tick = async () => {
+      if (announced.current.has(mid) || activeRef.current === chatId || Date.now() > until) {
+        watching.current.delete(mid);
+        return;
+      }
+      try {
+        const r = await api.poll(chatId, mid);
+        if (r.status !== "pending") {
+          watching.current.delete(mid);
+          finish(chatId, mid, r.status, r.body);
+          return;
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          watching.current.delete(mid);
+          return;
+        }
+      }
+      window.setTimeout(tick, 3000);
+    };
+    window.setTimeout(tick, 3000);
+  }, [finish]);
+
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
     pollTimer.current = null;
@@ -184,6 +257,7 @@ export function App() {
         try {
           const r = await api.poll(chatId, mid);
           if (activeRef.current !== chatId) return;
+          netFails.current = 0;
           setMessages((ms) =>
             ms.map((m) =>
               m.id === mid
@@ -192,14 +266,17 @@ export function App() {
             ),
           );
           if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
+          else finish(chatId, mid, r.status, r.body);
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
+          netFails.current += 1;
+          if (netFails.current === 3) announce("network", chatsRef.current.find((c) => c.id === chatId)?.title ?? "", "");
           pollTimer.current = window.setTimeout(tick, 2000);
         }
       };
       pollTimer.current = window.setTimeout(tick, 300);
     },
-    [],
+    [finish],
   );
 
   const follow = useCallback(
@@ -222,6 +299,7 @@ export function App() {
           activity: (steps) => update((m) => ({ ...m, activity: steps })),
           done: (body, status, activity, ms) => {
             finished = true;
+            finish(chatId, mid, status, body);
             update((m) => ({
               ...m,
               body,
@@ -241,12 +319,14 @@ export function App() {
           if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
         });
     },
-    [poll],
+    [poll, finish],
   );
 
   const openChat = useCallback(
     async (id: string | null, replace = false) => {
+      if (id !== activeRef.current) watchAway();
       stopPolling();
+      netFails.current = 0;
       setSidebar(false);
       setRoute("chat");
       setActiveId(id);
@@ -289,10 +369,11 @@ export function App() {
         setLoadingChat(false);
       }
     },
-    [notify, follow],
+    [notify, follow, watchAway],
   );
 
   const leaveChat = () => {
+    watchAway();
     stopPolling();
     setSidebar(false);
     setActiveId(null);
@@ -311,6 +392,7 @@ export function App() {
     const onPop = () => {
       if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
       else {
+        watchAway();
         stopPolling();
         setSidebar(false);
         setActiveId(null);
@@ -408,7 +490,7 @@ export function App() {
           notify(t("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.", "This computer is not connected to the assistant yet. Please try again in a moment."));
           return false;
         }
-        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : undefined);
+        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : !isDesktop && cloudOk && cloud ? { cloud: true } : undefined);
         id = r.chat.id;
         if (r.chat.agent) {
           saveMode(id, mode);
@@ -424,7 +506,10 @@ export function App() {
       const tempUser: Message = { id: -now, role: "user", body: text, status: "done", created: now, files: local.length > 0 ? local : undefined };
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
-      const r = await api.send(id, text, files);
+      const chat = chats.find((c) => c.id === id);
+      const folder = chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+      const project = isDesktop && folder ? await agent.projectContext(folder).catch(() => undefined) : undefined;
+      const r = await api.send(id, text, files, project);
       const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
       setMessages((ms) => [...ms.filter((m) => m.id !== tempUser.id), user, { ...r.assistant, phase: "thinking" }]);
       setChats((cs) => {
@@ -486,6 +571,10 @@ export function App() {
     );
   }
 
+  if (providerFromPath()) return <OAuthCallback theme={theme} toggleTheme={toggleTheme} />;
+
+  if (route === "telegram") return <TelegramLink user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
+
   if (route === "connect") return <Connect user={user} onAuth={onAuth} onSwitchAccount={signOut} theme={theme} toggleTheme={toggleTheme} />;
 
   if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
@@ -526,9 +615,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "apps" || route === "keys" || route === "plans" || route === "admin" ? (
+        ) : route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "apps" ? <Apps notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>
@@ -548,6 +637,14 @@ export function App() {
                           "Ask anything about the Salam programming language: writing code, the standard library, fixing errors, or converting code from other languages.",
                         )}
                   </p>
+                  {cloudOk && !agentChat && !activeId && (
+                    <Checkbox
+                      className="cloud-toggle"
+                      checked={cloud}
+                      onChange={toggleCloud}
+                      label={t("اجرای دستورها در محیط ابری خصوصی (git، node، python، کامپایلر سلام، GitHub و Figma)", "Run commands in a private cloud sandbox (git, node, python, the Salam compiler, GitHub and Figma)")}
+                    />
+                  )}
                   <div className="suggestions">
                     {(agentChat ? AGENT_SUGGESTIONS : SUGGESTIONS).map((s) => (
                       <button key={s.title} type="button" className="suggestion" onClick={() => send(s.text)}>

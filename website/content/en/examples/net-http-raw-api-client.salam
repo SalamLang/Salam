@@ -1,0 +1,48 @@
+import net.http
+import net.tcp
+import encoding.json
+
+mut server := tcp.Server {}
+
+struct Api:
+    pub ep: http.Endpoint = http.Endpoint {}
+    pub token: str = ""
+
+    pub func get(path: str): str:
+        mut head := "GET " + path + " HTTP/1.1\r\n"
+        head += "Host: " + this.ep.host + "\r\n"
+        head += "Authorization: Bearer " + this.token + "\r\n"
+        head += "Accept: application/json\r\n"
+        head += "Connection: close\r\n\r\n"
+        mut r := http.SendRawTimeout(this.ep, head, null, 0, 5000)
+        defer http.FreeRaw(r)
+        ret http.RawText(r)
+    end
+end
+
+func backend():
+    repeat 2:
+        conn := tcp.Accept(server)
+        request := tcp.Read(conn, 4096)
+        if request.find("GET /users/7 ") == 0:
+            tcp.WriteHTTP(conn, "200 OK", "application/json", `{"id": 7, "name": "Sara", "city": "Shiraz"}`)
+        else:
+            tcp.WriteHTTP(conn, "200 OK", "application/json", `[{"item": "pen", "qty": 3}, {"item": "notebook", "qty": 1}]`)
+        end
+        tcp.Close(conn)
+    end
+end
+
+func main:
+    server = tcp.Bind(0)
+    t := spawn(backend)
+    api := Api { ep = http.ParseEndpoint("http://127.0.0.1:" + tcp.Port(server)), token = "abc123" }
+    user := api.get("/users/7")
+    println json.Get(user, "name"), "from", json.Get(user, "city")
+    orders := api.get("/users/7/orders")
+    each order in json.Items(orders):
+        println " ", json.GetInt(order, "qty"), "x", json.Get(order, "item")
+    end
+    join(t)
+    tcp.CloseServer(server)
+end

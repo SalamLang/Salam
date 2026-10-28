@@ -1,0 +1,268 @@
+package nativelink
+
+func rd32s_at(p: u8*, at: i64): i64:
+    v := rd32(p, at)
+    if v >= (0x80000000 as i64):
+        ret v - (0x100000000 as i64)
+    end
+    ret v
+end
+
+func sext(v: i64, bits: int): i64:
+    m := (1 as i64) << ((bits - 1) as i64)
+    x := v & ((m << (1 as i64)) - (1 as i64))
+    ret (x ^ m) - m
+end
+
+func rel_implicit(l &: Nl, p: u8*, at: i64, ty: int): i64:
+    if l.mach == EM_386:
+        if ty == 20 or ty == 21:
+            ret sext(rd16(p, at) as i64, 16)
+        end
+        if ty == 22 or ty == 23:
+            ret sext(rd8(p, at) as i64, 8)
+        end
+        if ty == 0:
+            ret 0
+        end
+        ret rd32s_at(p, at)
+    end
+    if l.mach == EM_ARM:
+        ret arm_implicit(p, at, ty)
+    end
+    ret rd32s_at(p, at)
+end
+
+func arm_implicit(p: u8*, at: i64, ty: int): i64:
+    w := rd32(p, at)
+    if ty == 28 or ty == 29 or ty == 1 or ty == 27:
+        ret sext((w & (0xFFFFFF as i64)) << (2 as i64), 26)
+    end
+    if ty == 43 or ty == 44:
+        imm := ((w >> (4 as i64)) & (0xF000 as i64)) | (w & (0xFFF as i64))
+        ret sext(imm, 16)
+    end
+    if ty == 47 or ty == 48:
+        hi := rd16(p, at) as i64
+        lo := rd16(p, at + (2 as i64)) as i64
+        imm4 := hi & (15 as i64)
+        i1 := (hi >> (10 as i64)) & (1 as i64)
+        imm3 := (lo >> (12 as i64)) & (7 as i64)
+        imm8 := lo & (255 as i64)
+        ret sext((imm4 << (12 as i64)) | (i1 << (11 as i64)) | (imm3 << (8 as i64)) | imm8, 16)
+    end
+    if ty == 10 or ty == 30:
+        hi2 := rd16(p, at) as i64
+        lo2 := rd16(p, at + (2 as i64)) as i64
+        s := (hi2 >> (10 as i64)) & (1 as i64)
+        j1 := (lo2 >> (13 as i64)) & (1 as i64)
+        j2 := (lo2 >> (11 as i64)) & (1 as i64)
+        i1b := 1 - (j1 ^ s)
+        i2b := 1 - (j2 ^ s)
+        imm10 := hi2 & (0x3FF as i64)
+        imm11 := lo2 & (0x7FF as i64)
+        v := (s << (24 as i64)) | (i1b << (23 as i64)) | (i2b << (22 as i64)) | (imm10 << (12 as i64)) | (imm11 << (1 as i64))
+        ret sext(v, 25)
+    end
+    if ty == 42:
+        ret sext(w & (0x7FFFFFFF as i64), 31)
+    end
+    ret rd32s_at(p, at)
+end
+
+func nl_page(l &: Nl): int:
+    if l.mach == EM_AARCH64:
+        ret 0x10000
+    end
+    ret NL_PAGE
+end
+
+func page4k(x: i64): i64:
+    ret x & (0 - 4096 as i64)
+end
+
+func ins_set(buf: u8*, at: i64, mask: i64, v: i64):
+    w := rd32(buf, at)
+    wr32(buf, at, (w & ~mask) | (v & mask))
+end
+
+func got_or_fail(l &: Nl, os: int, s2: int, r: int): i64:
+    ga := got_entry(l, os)
+    if ga < (0 as i64):
+        nl_fail(l, "GOT entry missing at " + reloc_where(l, s2, r))
+    end
+    ret ga
+end
+
+func reloc_a64(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    x := sv + a
+    if ty == 257:
+        wr64(buf, place, x)
+    else ty == 258:
+        wr32(buf, place, x)
+    else ty == 259:
+        buf[place] = (x & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((x >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 260:
+        wr64(buf, place, x - pc)
+    else ty == 261:
+        wr32(buf, place, x - pc)
+    else ty == 262:
+        d := x - pc
+        buf[place] = (d & (255 as i64)) as u8
+        buf[place + (1 as i64)] = ((d >> (8 as i64)) & (255 as i64)) as u8
+    else ty == 275 or ty == 276 or ty == 311:
+        mut tgt := x
+        if ty == 311:
+            tgt = got_or_fail(l, os, s2, r)
+            if tgt < (0 as i64): ret false end
+        end
+        pg := (page4k(tgt) - page4k(pc)) >> (12 as i64)
+        imm := ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+        ins_set(buf, place, (0x60FFFFE0 as i64), imm)
+    else ty == 274:
+        d2 := x - pc
+        imm2 := ((d2 & (3 as i64)) << (29 as i64)) | (((d2 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64))
+        ins_set(buf, place, (0x60FFFFE0 as i64), imm2)
+    else ty == 277 or ty == 278:
+        ins_set(buf, place, (0x3FFC00 as i64), (x & (0xFFF as i64)) << (10 as i64))
+    else ty == 284:
+        ins_set(buf, place, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (1 as i64)) << (10 as i64))
+    else ty == 285:
+        ins_set(buf, place, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (2 as i64)) << (10 as i64))
+    else ty == 286:
+        ins_set(buf, place, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+    else ty == 299:
+        ins_set(buf, place, (0x3FFC00 as i64), ((x & (0xFFF as i64)) >> (4 as i64)) << (10 as i64))
+    else ty == 312:
+        ga := got_or_fail(l, os, s2, r)
+        if ga < (0 as i64): ret false end
+        ins_set(buf, place, (0x3FFC00 as i64), ((ga & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+    else ty == 282 or ty == 283:
+        d3 := x - pc
+        if d3 < (0 - 0x8000000 as i64) or d3 >= (0x8000000 as i64):
+            nl_fail(l, "branch out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        ins_set(buf, place, (0x3FFFFFF as i64), d3 >> (2 as i64))
+    else ty == 280:
+        if not th_in_range(x - pc, 21):
+            nl_fail(l, "conditional branch out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        ins_set(buf, place, (0xFFFFE0 as i64), ((x - pc) >> (2 as i64)) << (5 as i64))
+    else ty == 279:
+        if not th_in_range(x - pc, 16):
+            nl_fail(l, "test branch out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        ins_set(buf, place, (0x7FFE0 as i64), ((x - pc) >> (2 as i64)) << (5 as i64))
+    else ty >= 263 and ty <= 270:
+        grp := (ty - 263) / 2
+        ins_set(buf, place, (0x1FFFE0 as i64), ((x >> ((16 * grp) as i64)) & (0xFFFF as i64)) << (5 as i64))
+    else:
+        nl_fail(l, "unsupported AArch64 relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
+end
+
+func arm_movw(buf: u8*, place: i64, v: i64):
+    w := rd32(buf, place)
+    wr32(buf, place, (w & (0xFFF0F000 as i64)) | ((v & (0xF000 as i64)) << (4 as i64)) | (v & (0xFFF as i64)))
+end
+
+func thumb_movw(buf: u8*, place: i64, v: i64):
+    hi := rd16(buf, place) as i64
+    lo := rd16(buf, place + (2 as i64)) as i64
+    nh := (hi & (0xFBF0 as i64)) | ((v >> (12 as i64)) & (15 as i64)) | (((v >> (11 as i64)) & (1 as i64)) << (10 as i64))
+    nlo := (lo & (0x8F00 as i64)) | (((v >> (8 as i64)) & (7 as i64)) << (12 as i64)) | (v & (255 as i64))
+    buf[place] = (nh & (255 as i64)) as u8
+    buf[place + (1 as i64)] = (nh >> (8 as i64)) as u8
+    buf[place + (2 as i64)] = (nlo & (255 as i64)) as u8
+    buf[place + (3 as i64)] = (nlo >> (8 as i64)) as u8
+end
+
+func thumb_branch(buf: u8*, place: i64, d: i64, blx: bool):
+    s := (d >> (24 as i64)) & (1 as i64)
+    i1 := (d >> (23 as i64)) & (1 as i64)
+    i2 := (d >> (22 as i64)) & (1 as i64)
+    j1 := (1 - i1) ^ s
+    j2 := (1 - i2) ^ s
+    imm10 := (d >> (12 as i64)) & (0x3FF as i64)
+    imm11 := (d >> (1 as i64)) & (0x7FF as i64)
+    hi := (0xF000 as i64) | (s << (10 as i64)) | imm10
+    lo0 := rd16(buf, place + (2 as i64)) as i64
+    mut lo := (lo0 & (0xD000 as i64)) | (j1 << (13 as i64)) | (j2 << (11 as i64)) | imm11
+    if blx:
+        lo = lo & (0xEFFE as i64)
+    end
+    buf[place] = (hi & (255 as i64)) as u8
+    buf[place + (1 as i64)] = (hi >> (8 as i64)) as u8
+    buf[place + (2 as i64)] = (lo & (255 as i64)) as u8
+    buf[place + (3 as i64)] = (lo >> (8 as i64)) as u8
+end
+
+func reloc_arm(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int): bool:
+    x := sv + a
+    got := l.oc_addr[OC_GOT]
+    if ty == 2 or ty == 38:
+        wr32(buf, place, x)
+    else ty == 3:
+        wr32(buf, place, x - pc)
+    else ty == 28 or ty == 29 or ty == 1 or ty == 27:
+        thumb := (sv & (1 as i64)) != (0 as i64)
+        d := (x & (0 - 2 as i64)) - pc
+        if (thumb and ty != 28) or not th_in_range(d, 26):
+            nl_fail(l, "ARM branch out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        w := rd32(buf, place)
+        if thumb:
+            h := (d >> (1 as i64)) & (1 as i64)
+            wr32(buf, place, (0xFA000000 as i64) | (h << (24 as i64)) | ((d >> (2 as i64)) & (0xFFFFFF as i64)))
+        else:
+            wr32(buf, place, (w & (0xFF000000 as i64)) | ((d >> (2 as i64)) & (0xFFFFFF as i64)))
+        end
+    else ty == 43:
+        arm_movw(buf, place, x & (0xFFFF as i64))
+    else ty == 44:
+        arm_movw(buf, place, (x >> (16 as i64)) & (0xFFFF as i64))
+    else ty == 47:
+        thumb_movw(buf, place, x & (0xFFFF as i64))
+    else ty == 48:
+        thumb_movw(buf, place, (x >> (16 as i64)) & (0xFFFF as i64))
+    else ty == 10 or ty == 30:
+        thumb2 := (sv & (1 as i64)) != (0 as i64)
+        if th_needed(TH_THUMB, ty, pc, a, sv):
+            nl_fail(l, "Thumb branch out of range at " + reloc_where(l, s2, r))
+            ret false
+        end
+        if thumb2:
+            thumb_branch(buf, place, (x & (0 - 2 as i64)) - pc, false)
+        else:
+            thumb_branch(buf, place, ((x - (pc & (0 - 4 as i64))) & (0 - 4 as i64)), true)
+        end
+    else ty == 42:
+        old := rd32(buf, place)
+        wr32(buf, place, (old & (0x80000000 as i64)) | ((x - pc) & (0x7FFFFFFF as i64)))
+    else ty == 40:
+        ret true
+    else ty == 24:
+        wr32(buf, place, x - got)
+    else ty == 25:
+        wr32(buf, place, got + a - pc)
+    else ty == 26:
+        ga := got_or_fail(l, os, s2, r)
+        if ga < (0 as i64): ret false end
+        wr32(buf, place, ga + a - got)
+    else ty == 96 or ty == 41:
+        ga2 := got_or_fail(l, os, s2, r)
+        if ga2 < (0 as i64): ret false end
+        wr32(buf, place, ga2 + a - pc)
+    else:
+        nl_fail(l, "unsupported ARM relocation type " + str.FromInt(ty as i64) + " at " + reloc_where(l, s2, r))
+        ret false
+    end
+    ret true
+end

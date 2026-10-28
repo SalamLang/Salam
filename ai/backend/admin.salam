@@ -29,6 +29,7 @@ include aiengine "engine.salam"
 include aifiles "files.salam"
 
 const TEHRAN := 12600
+const MAX_SYSTEM_PROMPT := 262144
 const EPOCH_JDN := 2440588
 
 func n(v: i64): str:
@@ -70,7 +71,7 @@ end
 
 func usage_of(table: str, filter: str, from: i64, upto: i64): str:
     a := two(n(from), n(upto))
-    mut rows := aistore.Stmt("SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0), COALESCE(SUM(tokens_reasoning), 0), COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0), COALESCE(SUM(cost), 0) FROM " + table + " WHERE created >= ?1 AND created < ?2" + filter, a)
+    mut rows := aistore.Stmt("SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0), COALESCE(SUM(tokens_reasoning), 0), COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0), COALESCE(SUM(cost), 0), COALESCE(SUM(cost_in), 0), COALESCE(SUM(cost_out), 0) FROM " + table + " WHERE created >= ?1 AND created < ?2" + filter, a)
     mut m := Vector {} as Vector<str>
     if aistore.Next(rows):
         m.push(json.MemberRaw("count", aistore.Text(rows, 0)))
@@ -80,6 +81,8 @@ func usage_of(table: str, filter: str, from: i64, upto: i64): str:
         m.push(json.MemberRaw("cache_read", aistore.Text(rows, 4)))
         m.push(json.MemberRaw("cache_write", aistore.Text(rows, 5)))
         m.push(json.MemberRaw("cost", aistore.Text(rows, 6)))
+        m.push(json.MemberRaw("cost_in", aistore.Text(rows, 7)))
+        m.push(json.MemberRaw("cost_out", aistore.Text(rows, 8)))
     end
     aistore.Finish(rows)
     ret json.Object(m)
@@ -237,7 +240,7 @@ func list_users(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM users WHERE name LIKE ?1 OR email LIKE ?1", one(like))
-    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins, (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id AND f.kind = 'image'), (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id), (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > UNIX_TIMESTAMP()), COALESCE((SELECT s.client_version FROM sessions s WHERE s.user_id = u.id AND s.client = 'agent' AND s.client_version != '' ORDER BY s.last_used DESC LIMIT 1), '') FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
+    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins, (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id AND f.kind = 'image'), (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id), (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > UNIX_TIMESTAMP()), COALESCE((SELECT s.client_version FROM sessions s WHERE s.user_id = u.id AND s.client = 'agent' AND s.client_version != '' ORDER BY s.last_used DESC LIMIT 1), ''), (SELECT COALESCE(SUM(m.cost_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.cost_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.policy_free, COALESCE(u.policy_system, ''), (SELECT COUNT(*) FROM telegram_links t WHERE t.user_id = u.id) FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -260,6 +263,11 @@ func list_users(ctx: i64):
         m.push(json.MemberRaw("files", aistore.Text(rows, 17)))
         m.push(json.MemberRaw("sessions", aistore.Text(rows, 18)))
         m.push(json.Member("agent_version", aistore.Text(rows, 19)))
+        m.push(json.MemberRaw("cost_in", aistore.Text(rows, 20)))
+        m.push(json.MemberRaw("cost_out", aistore.Text(rows, 21)))
+        m.push(json.MemberBool("policy_free", aistore.Text(rows, 22) != "0"))
+        m.push(json.Member("policy_system", aistore.Text(rows, 23)))
+        m.push(json.MemberRaw("telegram", aistore.Text(rows, 24)))
         items.push(json.Object(m))
     end
     aistore.Finish(rows)
@@ -697,6 +705,237 @@ func get_guest(ctx: i64):
     aiweb.Reply(ctx, 200, `{"messages": ` + json.Array(items) + "}")
 end
 
+func admin_keys_json(where: str, args: Vector<str>): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT k.id, k.name, k.prefix, k.created, k.last_used, k.revoked, (SELECT COUNT(*) FROM api_requests r WHERE r.key_id = k.id), k.salam_prompt, k.salam_tools, COALESCE(k.system_prompt, ''), k.policy_at, k.policy_by, u.id, u.name, u.email FROM api_keys k JOIN users u ON u.id = k.user_id WHERE " + where + " ORDER BY k.id DESC LIMIT 50", args)
+    until aistore.Next(rows):
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", aistore.Text(rows, 12)))
+        u.push(json.Member("name", aistore.Text(rows, 13)))
+        u.push(json.Member("email", aistore.Text(rows, 14)))
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+        m.push(json.Member("name", aistore.Text(rows, 1)))
+        m.push(json.Member("prefix", aistore.Text(rows, 2)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("last_used", aistore.Text(rows, 4)))
+        m.push(json.MemberBool("revoked", aistore.Text(rows, 5) != "0"))
+        m.push(json.MemberRaw("requests", aistore.Text(rows, 6)))
+        m.push(json.MemberBool("salam_prompt", aistore.Text(rows, 7) != "0"))
+        m.push(json.MemberBool("salam_tools", aistore.Text(rows, 8) != "0"))
+        m.push(json.Member("system_prompt", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("policy_at", aistore.Text(rows, 10)))
+        m.push(json.MemberRaw("policy_by", aistore.Text(rows, 11)))
+        m.push(json.MemberRaw("user", json.Object(u)))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+func admin_list_keys(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut before := http.Query(ctx, "before").to_int() as i64
+    if before <= 0:
+        before = 9223372036854775807
+    end
+    mut where := "k.id < ?1"
+    mut args := one(n(before))
+    user := http.Query(ctx, "user")
+    if user.len() > 0:
+        args.push(user)
+        where = where + " AND k.user_id = ?" + args.len()
+    end
+    if http.Query(ctx, "custom") == "1":
+        where = where + " AND (k.salam_prompt = 0 OR k.salam_tools = 0 OR COALESCE(k.system_prompt, '') <> '')"
+    end
+    if http.Query(ctx, "active") == "1":
+        where = where + " AND k.revoked = 0"
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("keys", admin_keys_json(where, args)))
+    m.push(json.MemberBool("plain_ready", aiengine.PlainReady()))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func admin_update_key(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    body := http.Body(ctx)
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM api_keys WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این کلید پیدا نشد.")
+        ret
+    end
+    mut sets := Vector {} as Vector<str>
+    mut args := one(id)
+    each name in ["salam_prompt", "salam_tools"]:
+        v := json.Get(body, name)
+        if v == "true" or v == "false":
+            args.push(v == "true" ? "1" : "0")
+            sets.push(name + " = ?" + args.len())
+        else v.len() > 0:
+            aiweb.Fail(ctx, 400, "invalid", name + " باید true یا false باشد.")
+            ret
+        end
+    end
+    if body.find(`"system_prompt"`) >= 0:
+        mut text := json.Get(body, "system_prompt")
+        if text == "null":
+            text = ""
+        end
+        text = str.Trim(text)
+        if text.len() > MAX_SYSTEM_PROMPT:
+            aiweb.Fail(ctx, 400, "too_long", "پرامپت سیستمی حداکثر ۲۵۶ کیلوبایت است.")
+            ret
+        end
+        args.push(text)
+        sets.push("system_prompt = ?" + args.len())
+    end
+    if sets.len() == 0:
+        aiweb.Fail(ctx, 400, "empty", "چیزی برای تغییر فرستاده نشد.")
+        ret
+    end
+    args.push(n(admin))
+    sets.push("policy_by = ?" + args.len())
+    args.push(n(aistore.Now()))
+    sets.push("policy_at = ?" + args.len())
+    aistore.Lock()
+    ok := aistore.Run("UPDATE api_keys SET " + str.Join(sets, ", ") + " WHERE id = ?1", args)
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ذخیره ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"key": ` + str.TrimSuffix(str.TrimPrefix(admin_keys_json("k.id = ?1", one(id)), "["), "]") + "}")
+end
+
+func admin_user_policy(ctx: i64):
+    admin := aiweb.NeedAdmin(ctx)
+    if admin == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    body := http.Body(ctx)
+    aistore.Lock()
+    found := aistore.OneText("SELECT id FROM users WHERE id = ?1", one(id))
+    aistore.Unlock()
+    if found.len() == 0:
+        aiweb.Fail(ctx, 404, "not_found", "این کاربر پیدا نشد.")
+        ret
+    end
+    mut sets := Vector {} as Vector<str>
+    mut args := one(id)
+    v := json.Get(body, "policy_free")
+    if v == "true" or v == "false":
+        args.push(v == "true" ? "1" : "0")
+        sets.push("policy_free = ?" + args.len())
+    else v.len() > 0:
+        aiweb.Fail(ctx, 400, "invalid", "policy_free باید true یا false باشد.")
+        ret
+    end
+    if body.find(`"policy_system"`) >= 0:
+        mut text := json.Get(body, "policy_system")
+        if text == "null":
+            text = ""
+        end
+        text = str.Trim(text)
+        if text.len() > MAX_SYSTEM_PROMPT:
+            aiweb.Fail(ctx, 400, "too_long", "پرامپت سیستمی حداکثر ۲۵۶ کیلوبایت است.")
+            ret
+        end
+        args.push(text)
+        sets.push("policy_system = ?" + args.len())
+    end
+    if sets.len() == 0:
+        aiweb.Fail(ctx, 400, "empty", "چیزی برای تغییر فرستاده نشد.")
+        ret
+    end
+    args.push(n(admin))
+    sets.push("policy_by = ?" + args.len())
+    args.push(n(aistore.Now()))
+    sets.push("policy_at = ?" + args.len())
+    aistore.Lock()
+    ok := aistore.Run("UPDATE users SET " + str.Join(sets, ", ") + " WHERE id = ?1", args)
+    aistore.Unlock()
+    if not ok:
+        aiweb.Fail(ctx, 500, "server", "ذخیره ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    mut system := ""
+    free := aiweb.PolicyOf(id, system)
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("id", id))
+    m.push(json.MemberBool("policy_free", free))
+    m.push(json.Member("policy_system", system))
+    aiweb.Reply(ctx, 200, `{"user": ` + json.Object(m) + "}")
+end
+
+func admin_telegram(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    now := aistore.Now()
+    mut links := Vector {} as Vector<str>
+    mut guests := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT t.tg_id, t.name, t.username, t.lang, t.created, t.last_seen, u.id, u.name, u.email, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id AND c.source = 'telegram'), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND c.source = 'telegram' AND m.role = 'user'), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND c.source = 'telegram' AND m.status = 'pending'), t.chat_id FROM telegram_links t JOIN users u ON u.id = t.user_id ORDER BY t.last_seen DESC, t.created DESC LIMIT 200", Vector {} as Vector<str>)
+    until aistore.Next(rows):
+        mut u := Vector {} as Vector<str>
+        u.push(json.MemberRaw("id", aistore.Text(rows, 6)))
+        u.push(json.Member("name", aistore.Text(rows, 7)))
+        u.push(json.Member("email", aistore.Text(rows, 8)))
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("tg_id", aistore.Text(rows, 0)))
+        m.push(json.Member("name", aistore.Text(rows, 1)))
+        m.push(json.Member("username", aistore.Text(rows, 2)))
+        m.push(json.Member("lang", aistore.Text(rows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(rows, 4)))
+        m.push(json.MemberRaw("last_seen", aistore.Text(rows, 5)))
+        m.push(json.MemberRaw("user", json.Object(u)))
+        m.push(json.MemberRaw("chats", aistore.Text(rows, 9)))
+        m.push(json.MemberRaw("messages", aistore.Text(rows, 10)))
+        m.push(json.MemberBool("answering", aistore.Text(rows, 11) != "0"))
+        m.push(json.Member("chat_id", aistore.Text(rows, 12)))
+        links.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    mut grows := aistore.Stmt("SELECT g.tg_id, g.name, g.username, g.lang, g.created, g.last_seen, s.id, s.messages, (SELECT COUNT(*) FROM guest_messages gm WHERE gm.guest_id = s.id AND gm.status = 'pending') FROM telegram_guests g JOIN guest_sessions s ON s.id = g.guest_id ORDER BY g.last_seen DESC, g.created DESC LIMIT 200", Vector {} as Vector<str>)
+    until aistore.Next(grows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("tg_id", aistore.Text(grows, 0)))
+        m.push(json.Member("name", aistore.Text(grows, 1)))
+        m.push(json.Member("username", aistore.Text(grows, 2)))
+        m.push(json.Member("lang", aistore.Text(grows, 3)))
+        m.push(json.MemberRaw("created", aistore.Text(grows, 4)))
+        m.push(json.MemberRaw("last_seen", aistore.Text(grows, 5)))
+        m.push(json.MemberRaw("guest_id", aistore.Text(grows, 6)))
+        m.push(json.MemberRaw("messages", aistore.Text(grows, 7)))
+        m.push(json.MemberBool("answering", aistore.Text(grows, 8) != "0"))
+        guests.push(json.Object(m))
+    end
+    aistore.Finish(grows)
+    online_links := aistore.OneText("SELECT COUNT(*) FROM telegram_links WHERE last_seen > ?1", one(n(now - 300)))
+    online_guests := aistore.OneText("SELECT COUNT(*) FROM telegram_guests WHERE last_seen > ?1", one(n(now - 300)))
+    aistore.Unlock()
+    mut out := Vector {} as Vector<str>
+    out.push(json.MemberRaw("links", json.Array(links)))
+    out.push(json.MemberRaw("guests", json.Array(guests)))
+    out.push(json.MemberRaw("online_links", online_links))
+    out.push(json.MemberRaw("online_guests", online_guests))
+    out.push(json.MemberInt("now", now))
+    aiweb.Reply(ctx, 200, json.Object(out))
+end
+
 func revoke_app(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -723,7 +962,11 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/apps", admin_list_apps)
     router.Delete(r, "/admin/apps/:id", revoke_app)
     router.Get(r, "/admin/requests", list_requests)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests"]:
+    router.Get(r, "/admin/keys", admin_list_keys)
+    router.Patch(r, "/admin/keys/:id", admin_update_key)
+    router.Patch(r, "/admin/users/:id/policy", admin_user_policy)
+    router.Get(r, "/admin/telegram", admin_telegram)
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id", "/admin/users/:id/policy", "/admin/telegram"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

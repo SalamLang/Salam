@@ -1,0 +1,439 @@
+package nativegen
+
+func cr_bound(g &: Ng, c: int, on_true: bool, x &: int, lo &: i64, hi &: i64): bool:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    mut a := g.i_a[d]
+    mut b := g.i_b[d]
+    mut p := g.i_x[d]
+    if is_cint(g, a) and not is_cint(g, b):
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    if not is_cint(g, b) or is_cint(g, a) or a < 0:
+        ret false
+    end
+    if not on_true:
+        p = neg_cc(p)
+    end
+    t := g.v_ty[a]
+    bits := int_bits(g, t)
+    if g.t_kind[t] != TK_INT or (bits != 32 and bits != 64):
+        ret false
+    end
+    tmax := bits == 64 ? (9223372036854775807 as i64) : (2147483647 as i64)
+    tmin := 0 - tmax - (1 as i64)
+    k := norm_int(g, t, g.v_i[b])
+    switch p:
+        CC_SGE:
+            lo = k
+            hi = tmax
+            break
+        end
+        CC_SGT:
+            if k == tmax: ret false end
+            lo = k + (1 as i64)
+            hi = tmax
+            break
+        end
+        CC_SLE:
+            lo = tmin
+            hi = k
+            break
+        end
+        CC_SLT:
+            if k == tmin: ret false end
+            lo = tmin
+            hi = k - (1 as i64)
+            break
+        end
+        CC_EQ:
+            lo = k
+            hi = k
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    x = a
+    ret true
+end
+
+func cr_emit(g &: Ng, at: int, x: int, lo: i64, hi: i64): int:
+    t := g.v_ty[x]
+    bits := int_bits(g, t)
+    tmax := bits == 64 ? (9223372036854775807 as i64) : (2147483647 as i64)
+    tmin := 0 - tmax - (1 as i64)
+    c := ins_new(g, OP_ICMP, T_I1)
+    if lo == hi:
+        g.i_a[c] = x
+        g.i_b[c] = const_int(g, t, lo)
+        g.i_x[c] = CC_EQ
+    else lo == tmin:
+        g.i_a[c] = x
+        g.i_b[c] = const_int(g, t, hi)
+        g.i_x[c] = CC_SLE
+    else hi == tmax:
+        g.i_a[c] = x
+        g.i_b[c] = const_int(g, t, lo)
+        g.i_x[c] = CC_SGE
+    else:
+        s := ins_new(g, OP_ADD, t)
+        g.i_a[s] = x
+        g.i_b[s] = const_int(g, t, norm_int(g, t, 0 - lo))
+        sv := new_res(g, s)
+        ins_before(g, at, s)
+        g.i_a[c] = sv
+        g.i_b[c] = const_int(g, t, norm_int(g, t, hi - lo))
+        g.i_x[c] = CC_ULE
+    end
+    cv := new_res(g, c)
+    ins_before(g, at, c)
+    ret cv
+end
+
+func cr_meet(g &: Ng, c1: int, t1: bool, c2: int, t2: bool, x &: int, lo &: i64, hi &: i64): bool:
+    mut x1 := 0 - 1
+    mut x2 := 0 - 1
+    mut l1 := 0 as i64
+    mut h1 := 0 as i64
+    mut l2 := 0 as i64
+    mut h2 := 0 as i64
+    if not cr_bound(g, c1, t1, x1, l1, h1) or not cr_bound(g, c2, t2, x2, l2, h2) or x1 != x2:
+        ret false
+    end
+    lo = l1 > l2 ? l1 : l2
+    hi = h1 < h2 ? h1 : h2
+    if lo > hi:
+        ret false
+    end
+    x = x1
+    ret true
+end
+
+func crange_select(g &: Ng, i: int): bool:
+    if g.off_crange or g.i_ty[i] != T_I1 or g.i_res[i] < 0:
+        ret false
+    end
+    mut a := 0 - 1
+    mut b := 0 - 1
+    if g.i_op[i] == OP_SELECT:
+        z := g.i_c[i]
+        if z < 0 or not is_cint(g, z) or g.v_i[z] != (0 as i64):
+            ret false
+        end
+        a = g.i_a[i]
+        b = g.i_b[i]
+    else g.i_op[i] == OP_AND:
+        a = g.i_a[i]
+        b = g.i_b[i]
+    else:
+        ret false
+    end
+    mut x := 0 - 1
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if not cr_meet(g, a, true, b, true, x, lo, hi):
+        ret false
+    end
+    replace_res(g, i, cr_emit(g, i, x, lo, hi))
+    ret true
+end
+
+func crange_block(g &: Ng, a: int): bool:
+    ta := g.b_last[a]
+    if g.off_crange or ta < 0 or g.i_op[ta] != OP_CBR or g.i_b[ta] == g.i_c[ta]:
+        ret false
+    end
+    repeat 2 in side:
+        bb := side == 0 ? g.i_b[ta] : g.i_c[ta]
+        fa := side == 0 ? g.i_c[ta] : g.i_b[ta]
+        if bb == a or g.b_npred[bb] != 1 or blk_has_phi(g, bb):
+            continue
+        end
+        tb := g.b_last[bb]
+        f0 := g.b_first[bb]
+        if tb < 0 or g.i_op[tb] != OP_CBR or f0 < 0:
+            continue
+        end
+        if not (f0 == tb or (g.i_next[f0] == tb and g.i_op[f0] == OP_ICMP and g.i_res[f0] == g.i_a[tb] and one_use(g, g.i_res[f0]))):
+            continue
+        end
+        mut bt := 0 - 1
+        mut bon := true
+        if g.i_b[tb] == fa:
+            bt = g.i_c[tb]
+            bon = false
+        else g.i_c[tb] == fa:
+            bt = g.i_b[tb]
+            bon = true
+        else:
+            continue
+        end
+        if bt == fa or bt == bb or bt == a:
+            continue
+        end
+        mut x := 0 - 1
+        mut lo := 0 as i64
+        mut hi := 0 as i64
+        if not cr_meet(g, g.i_a[ta], side == 0, g.i_a[tb], bon, x, lo, hi):
+            continue
+        end
+        if not phis_same_for(g, fa, a, bb):
+            continue
+        end
+        nc := cr_emit(g, ta, x, lo, hi)
+        g.i_a[ta] = nc
+        g.i_b[ta] = bt
+        g.i_c[ta] = fa
+        retarget_phis(g, bt, bb, a)
+        ret true
+    end
+    ret false
+end
+
+func byte_norm(g &: Ng, i: int): bool:
+    if g.off_crange or g.i_op[i] != OP_SELECT or g.i_res[i] < 0:
+        ret false
+    end
+    c := g.i_a[i]
+    if c < 0 or g.v_kind[c] != VK_INS or g.i_op[g.v_def[c]] != OP_ICMP:
+        ret false
+    end
+    d := g.v_def[c]
+    x := g.i_a[d]
+    k := g.i_b[d]
+    if x < 0 or k < 0 or not is_cint(g, k) or g.v_kind[x] != VK_INS or g.i_op[g.v_def[x]] != OP_SEXT:
+        ret false
+    end
+    src := g.i_a[g.v_def[x]]
+    if src < 0:
+        ret false
+    end
+    sb := int_bits(g, g.v_ty[src])
+    if sb != 8 and sb != 16:
+        ret false
+    end
+    t := g.i_ty[i]
+    if g.v_ty[x] != t:
+        ret false
+    end
+    kv := norm_int(g, t, g.v_i[k])
+    p := g.i_x[d]
+    mut neg_arm := 0 - 1
+    mut pos_arm := 0 - 1
+    if (p == CC_SLT and kv == (0 as i64)) or (p == CC_SLE and kv == (0 - 1 as i64)):
+        neg_arm = g.i_b[i]
+        pos_arm = g.i_c[i]
+    else (p == CC_SGE and kv == (0 as i64)) or (p == CC_SGT and kv == (0 - 1 as i64)):
+        neg_arm = g.i_c[i]
+        pos_arm = g.i_b[i]
+    else:
+        ret false
+    end
+    if pos_arm != x or neg_arm < 0 or g.v_kind[neg_arm] != VK_INS:
+        ret false
+    end
+    ad := g.v_def[neg_arm]
+    if g.i_op[ad] != OP_ADD:
+        ret false
+    end
+    mut kc := g.i_b[ad]
+    if g.i_a[ad] != x:
+        if g.i_b[ad] != x:
+            ret false
+        end
+        kc = g.i_a[ad]
+    end
+    if kc < 0 or not is_cint(g, kc) or g.v_i[kc] != ((1 as i64) << (sb as i64)):
+        ret false
+    end
+    z := ins_new(g, OP_ZEXT, t)
+    g.i_a[z] = src
+    g.i_x[z] = g.i_x[g.v_def[x]]
+    zv := new_res(g, z)
+    ins_before(g, i, z)
+    replace_res(g, i, zv)
+    ret true
+end
+
+func arm_load(g &: Ng, p: int, m: int, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_LOAD or g.i_blk[d] != p or (g.i_f[d] & (IF_VOLATILE | IF_ATOMIC)) != 0 or is_agg(g, g.i_ty[d]):
+        ret 0 - 1
+    end
+    if g.b_npred[p] != 1 or g.b_last[p] != g.i_next[d]:
+        ret 0 - 1
+    end
+    t := g.b_last[p]
+    if t < 0 or g.i_op[t] != OP_BR or g.i_b[t] != m:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func sink_join_loads(g &: Ng, m: int): bool:
+    if g.b_npred[m] != 2:
+        ret false
+    end
+    p1 := g.b_pred[g.b_ps[m]]
+    p2 := g.b_pred[g.b_ps[m] + 1]
+    if p1 == p2 or p1 == m or p2 == m:
+        ret false
+    end
+    mut changed := false
+    mut ph := g.b_first[m]
+    until ph >= 0 and g.i_op[ph] == OP_PHI:
+        nx := g.i_next[ph]
+        if g.i_pcount[ph] == 2 and g.i_res[ph] >= 0:
+            ps := g.i_ps[ph]
+            mut v1 := g.pool[ps]
+            mut v2 := g.pool[ps + 2]
+            if g.pool[ps + 1] == p2:
+                v1 = g.pool[ps + 2]
+                v2 = g.pool[ps]
+            end
+            l1 := arm_load(g, p1, m, v1)
+            l2 := arm_load(g, p2, m, v2)
+            if l1 >= 0 and l2 >= 0 and g.i_ty[l1] == g.i_ty[l2] and g.i_ty[l1] == g.i_ty[ph]:
+                np := ins_new(g, OP_PHI, T_PTR)
+                g.i_ps[np] = g.pool.len()
+                g.i_pcount[np] = 2
+                g.pool.push(g.i_a[l1])
+                g.pool.push(p1)
+                g.pool.push(g.i_a[l2])
+                g.pool.push(p2)
+                npv := new_res(g, np)
+                ins_before(g, g.b_first[m], np)
+                mut at := g.b_first[m]
+                until at >= 0 and g.i_op[at] == OP_PHI:
+                    at = g.i_next[at]
+                end
+                nl := ins_new(g, OP_LOAD, g.i_ty[l1])
+                g.i_a[nl] = npv
+                g.i_c[nl] = g.i_c[l1] == g.i_c[l2] ? g.i_c[l1] : 0
+                g.i_f[nl] = g.i_f[l1] & g.i_f[l2]
+                nlv := new_res(g, nl)
+                ins_before(g, at, nl)
+                replace_res(g, ph, nlv)
+                ins_unlink(g, l1)
+                ins_unlink(g, l2)
+                changed = true
+            end
+        end
+        ph = nx
+    end
+    ret changed
+end
+
+func sink_loads(g &: Ng): bool:
+    if g.off_lsink:
+        ret false
+    end
+    count_uses(g)
+    mut changed := false
+    each b in g.b_rpo:
+        if g.b_first[b] >= 0 and sink_join_loads(g, b):
+            changed = true
+            count_uses(g)
+        end
+        if g.b_first[b] >= 0 and phi_addr_select(g, b):
+            changed = true
+            count_uses(g)
+        end
+    end
+    ret changed
+end
+
+func arm_addr(g &: Ng, p: int, m: int, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ADDR or g.i_blk[d] != p or g.b_first[p] != d or g.b_npred[p] != 1:
+        ret 0 - 1
+    end
+    t := g.i_next[d]
+    if t < 0 or g.i_op[t] != OP_BR or g.i_b[t] != m:
+        ret 0 - 1
+    end
+    ret d
+end
+
+func phi_addr_select(g &: Ng, m: int): bool:
+    if g.off_paddr or g.b_npred[m] != 2:
+        ret false
+    end
+    p1 := g.b_pred[g.b_ps[m]]
+    p2 := g.b_pred[g.b_ps[m] + 1]
+    if p1 == p2 or g.b_npred[p1] != 1 or g.b_npred[p2] != 1:
+        ret false
+    end
+    top := g.b_pred[g.b_ps[p1]]
+    if top != g.b_pred[g.b_ps[p2]]:
+        ret false
+    end
+    tt := g.b_last[top]
+    if tt < 0 or g.i_op[tt] != OP_CBR:
+        ret false
+    end
+    mut changed := false
+    mut ph := g.b_first[m]
+    until ph >= 0 and g.i_op[ph] == OP_PHI:
+        nx := g.i_next[ph]
+        if g.i_pcount[ph] == 2 and g.i_res[ph] >= 0 and g.i_ty[ph] == T_PTR:
+            ps := g.i_ps[ph]
+            mut v1 := g.pool[ps]
+            mut v2 := g.pool[ps + 2]
+            if g.pool[ps + 1] == p2:
+                v1 = g.pool[ps + 2]
+                v2 = g.pool[ps]
+            end
+            a1 := arm_addr(g, p1, m, v1)
+            a2 := arm_addr(g, p2, m, v2)
+            if a1 >= 0 and a2 >= 0 and g.i_b[a1] == g.i_b[a2] and g.i_x[a1] == g.i_x[a2] and g.i_d[a1] == g.i_d[a2] and g.i_a[a1] >= 0 and g.i_a[a2] >= 0:
+                mut bt := g.i_a[a1]
+                mut bf := g.i_a[a2]
+                if g.i_b[tt] == p2:
+                    bt = g.i_a[a2]
+                    bf = g.i_a[a1]
+                end
+                mut at := g.b_first[m]
+                until at >= 0 and g.i_op[at] == OP_PHI:
+                    at = g.i_next[at]
+                end
+                sl := ins_new(g, OP_SELECT, T_PTR)
+                g.i_a[sl] = g.i_a[tt]
+                g.i_b[sl] = bt
+                g.i_c[sl] = bf
+                slv := new_res(g, sl)
+                ins_before(g, at, sl)
+                na := ins_new(g, OP_ADDR, T_PTR)
+                g.i_a[na] = slv
+                g.i_b[na] = g.i_b[a1]
+                g.i_x[na] = g.i_x[a1]
+                g.i_d[na] = g.i_d[a1]
+                nav := new_res(g, na)
+                ins_before(g, at, na)
+                replace_res(g, ph, nav)
+                ins_unlink(g, a1)
+                ins_unlink(g, a2)
+                g.want_licm = true
+                changed = true
+            end
+        end
+        ph = nx
+    end
+    ret changed
+end

@@ -1,0 +1,40 @@
+import tls
+import net.http
+import net.tcp
+
+mut server := tcp.Server {}
+
+func responder():
+    repeat 3:
+        conn := tcp.Accept(server)
+        _ := tcp.Read(conn, 4096)
+        tcp.WriteHTTP(conn, "200 OK", "text/plain", "hello from the server")
+        tcp.Close(conn)
+    end
+end
+
+func main:
+    remote := http.ParseEndpoint("https://api.example.com:8443")
+    println remote.ok, remote.host, remote.port, remote.secure
+    server = tcp.Bind(0)
+    t := spawn(responder)
+    local := http.ParseEndpoint("http://127.0.0.1:" + tcp.Port(server))
+    head := "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    mut r := http.SendRaw(local, head, null, 0)
+    println r.ok, r.status, http.RawText(r), "[" + r.error + "]"
+    println http.HeaderValue(r.head, "content-type")
+    http.FreeRaw(r)
+    mut raw := http.SendRawTimeout(local, head, null, 0, 2000)
+    println raw.ok, raw.status, raw.len, http.RawText(raw)
+    http.FreeRaw(raw)
+    mut cfg := tls.NewConfig("127.0.0.1")
+    cfg.ca_file = "/etc/ssl/certs/ca-certificates.crt"
+    mut secured := http.SendRawTLS(local, head, null, 0, 2000, cfg)
+    println secured.status, secured.len
+    http.FreeRaw(secured)
+    join(t)
+    tcp.CloseServer(server)
+    println http.RawLimit() > 0
+    http.SetRawLimit(1024 * 1024)
+    println http.RawLimit()
+end

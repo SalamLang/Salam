@@ -16,6 +16,7 @@
 @fa "قالب"
 package template
 
+import mem
 import str
 
 func _lookup(ctx: HashMap<str, str>, key: str): str:
@@ -36,54 +37,77 @@ func _all_true(stack: Vector<bool>): bool:
     ret true
 end
 
+func _find2(p: i8 *, n: int, from: int, x: int, y: int): int:
+    mut i := from
+    until i + 1 < n:
+        if p[i] == (x as i8) and p[i + 1] == (y as i8): ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _append_range(b &: str.StringBuilder, p: i8 *, lo: int, hi: int):
+    mut k := lo
+    until k < hi:
+        str.BufAppendChar(b, p[k] as int)
+        k += 1
+    end
+end
+
 func _render(tmpl: str, ctx: HashMap<str, str>, escape: bool): str:
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     stack := Vector {} as Vector<bool> defer stack.free()
     n := tmpl.len()
+    p := tmpl as i8 *
     mut i := 0
     until i < n:
-        lb := str.IndexFrom(tmpl, "{{", i)
+        lb := _find2(p, n, i, 123, 123)
         if lb < 0:
             if _all_true(stack):
-                str.BufAppend(b, tmpl.substr(i, n - i))
+                _append_range(b, p, i, n)
             end
             i = n
         else:
             if lb > i and _all_true(stack):
-                str.BufAppend(b, tmpl.substr(i, lb - i))
+                _append_range(b, p, i, lb)
             end
-            rb := str.IndexFrom(tmpl, "}}", lb + 2)
+            rb := _find2(p, n, lb + 2, 125, 125)
             if rb < 0:
                 if _all_true(stack):
-                    str.BufAppend(b, tmpl.substr(lb, n - lb))
+                    _append_range(b, p, lb, n)
                 end
                 i = n
             else:
-                tag := str.Trim(tmpl.substr(lb + 2, rb - lb - 2))
+                raw := tmpl.substr(lb + 2, rb - lb - 2)
+                tag := str.Trim(raw)
+                mem.Free(raw as void *)
                 if str.StartsWith(tag, "#if "):
-                    key := str.Trim(str.TrimPrefix(tag, "#if "))
+                    rest := str.TrimPrefix(tag, "#if ")
+                    key := str.Trim(rest)
+                    mem.Free(rest as void *)
                     stack.push(_truthy(ctx, key))
-                else:
-                    if tag == "else":
-                        if stack.len() > 0:
-                            top := stack.pop()
-                            stack.push(top == false)
-                        end
+                    mem.Free(key as void *)
+                else tag == "else":
+                    if stack.len() > 0:
+                        top := stack.pop()
+                        stack.push(top == false)
+                    end
+                else tag == "/if":
+                    if stack.len() > 0:
+                        _dropped := stack.pop()
+                    end
+                else str.StartsWith(tag, "!") == false and _all_true(stack):
+                    v := _lookup(ctx, tag)
+                    if escape:
+                        e := EscapeHTML(v)
+                        str.BufAppend(b, e)
+                        mem.Free(e as void *)
                     else:
-                        if tag == "/if":
-                            if stack.len() > 0:
-                                _dropped := stack.pop()
-                            end
-                        else:
-                            if str.StartsWith(tag, "!") == false and _all_true(stack):
-                                mut v := _lookup(ctx, tag)
-                                if escape: v = EscapeHTML(v) end
-                                str.BufAppend(b, v)
-                            end
-                        end
+                        str.BufAppend(b, v)
                     end
                 end
+                mem.Free(tag as void *)
                 i = rb + 2
             end
         end
@@ -102,30 +126,23 @@ end
 @fa "گریز اچ تی ام ال"
 pub func EscapeHTML(s: str): str:
     n := s.len()
+    p := s as i8 *
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     repeat n in i:
-        c := s.substr(i, 1)
-        if c == "&":
+        c := p[i] as int
+        if c == 38:
             str.BufAppend(b, "&amp;")
+        else c == 60:
+            str.BufAppend(b, "&lt;")
+        else c == 62:
+            str.BufAppend(b, "&gt;")
+        else c == 34:
+            str.BufAppend(b, "&quot;")
+        else c == 39:
+            str.BufAppend(b, "&#39;")
         else:
-            if c == "<":
-                str.BufAppend(b, "&lt;")
-            else:
-                if c == ">":
-                    str.BufAppend(b, "&gt;")
-                else:
-                    if c == `"`:
-                        str.BufAppend(b, "&quot;")
-                    else:
-                        if c == "'":
-                            str.BufAppend(b, "&#39;")
-                        else:
-                            str.BufAppend(b, c)
-                        end
-                    end
-                end
-            end
+            str.BufAppendChar(b, c)
         end
     end
     out := str.BufStr(b)

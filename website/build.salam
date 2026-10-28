@@ -24,6 +24,7 @@ import encoding.json
 import encoding.encerr
 
 const ROOT := "website"
+const PREVIEW_SCRIPT := `<script>(function(){function s(){parent.postMessage({salamPreview:1,n:window.name,h:document.documentElement.scrollHeight},"*")}addEventListener("load",s);addEventListener("resize",s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&a.getAttribute("href").charAt(0)!=="#"){e.preventDefault()}});document.addEventListener("submit",function(e){e.preventDefault()},true)})();</script>`
 
 struct Lesson:
     pub path: str = ""
@@ -365,7 +366,50 @@ func label(ctx: HashMap<str, str>, key: str, errs &: Vector<str>): str:
     ret ctx.get(key)
 end
 
-func example_block(name: str, src: str, code_html: str, out_html: str, ctx: HashMap<str, str>, errs &: Vector<str>): str:
+func is_page_source(src: str): bool:
+    each line in str.Split(src, "\n"):
+        if str.Equals(str.TrimRight(line), "page:") or str.Equals(str.TrimRight(line), "صفحه:"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func shell_quote(s: str): str:
+    ret "'" + str.Replace(s, "'", "'\\''") + "'"
+end
+
+func attr_escape(s: str): str:
+    ret str.Replace(str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "\"", "&quot;"), "<", "&lt;"), ">", "&gt;")
+end
+
+func preview_html(stem: str, src: str, errs &: Vector<str>): str:
+    mut compiler := os.Env("SALAM")
+    if compiler.len() == 0:
+        compiler = "salam"
+    end
+    work := os.TempDir() + "/salam-site-preview-" + str.FromInt(os.Pid() as i64) + "-" + stem
+    _rm := os.RemoveAll(work)
+    _mk := os.MkdirAll(work)
+    _wr := os.WriteFile(work + "/" + stem + ".salam", src + "\n")
+    cmd := "cd " + shell_quote(work) + " && SALAM_STD=" + shell_quote(os.Cwd() + "/std") + " " + shell_quote(compiler) + " page build " + shell_quote(stem + ".salam") + " --inline --no-color --log-level=error 2>&1"
+    res := os.RunCapture(cmd)
+    html_path := work + "/" + stem + ".html"
+    if res.code != 0 or not file.Exists(html_path):
+        report(errs, "preview of example '" + stem + "' failed: " + res.out)
+        _rm2 := os.RemoveAll(work)
+        ret ""
+    end
+    mut html := io.ReadFile(html_path)
+    _rm3 := os.RemoveAll(work)
+    at := str.LastIndex(html, "</body>")
+    if at >= 0:
+        html = html.substr(0, at) + PREVIEW_SCRIPT + html.substr(at, html.len() - at)
+    end
+    ret html
+end
+
+func example_block(name: str, src: str, code_html: str, out_html: str, page_html: str, ctx: HashMap<str, str>, errs &: Vector<str>): str:
     dir_attr := has_rtl_script(src) ? "rtl" : "ltr"
     id := "ex-" + name
     mut b := str.NewBuilder()
@@ -375,6 +419,9 @@ func example_block(name: str, src: str, code_html: str, out_html: str, ctx: Hash
     str.BufAppend(b, `<span class="file" dir="ltr">` + name + ".salam</span>")
     str.BufAppend(b, `<button type="button" class="copy-button" data-copy-target="` + id + `" data-copied="` + escape_text(label(ctx, "code.copied", errs)) + `">` + label(ctx, "code.copy", errs) + "</button></div>")
     str.BufAppend(b, `<pre class="code" dir="` + dir_attr + `"><code id="` + id + `">` + code_html + "</code></pre>")
+    if page_html.len() > 0:
+        str.BufAppend(b, `<div class="code-preview" data-label="` + escape_text(label(ctx, "code.preview", errs)) + `"><iframe id="pv-` + name + `" name="` + name + `" class="preview-frame" sandbox="allow-scripts allow-modals allow-forms" loading="lazy" title="` + escape_text(label(ctx, "code.preview", errs)) + `" srcdoc="` + attr_escape(page_html) + `"></iframe></div>`)
+    end
     if out_html.len() > 0:
         str.BufAppend(b, `<div class="code-output" dir="` + dir_attr + `"><span class="label">` + label(ctx, "code.output", errs) + "</span>" + out_html + "</div>")
     end
@@ -410,7 +457,11 @@ func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>)
         else file.Exists(sample_path):
             out_html = escape_text(str.TrimRight(io.ReadFile(sample_path)))
         end
-        ctx.put("example." + stem, example_block(ctx_or(ctx, "exname." + stem, stem), src, highlight(src, classes), out_html, ctx, errs))
+        mut page_html := ""
+        if out_html.len() == 0 and not file.Exists(ex_dir + "/" + stem + ".server") and is_page_source(src):
+            page_html = preview_html(stem, src, errs)
+        end
+        ctx.put("example." + stem, example_block(ctx_or(ctx, "exname." + stem, stem), src, highlight(src, classes), out_html, page_html, ctx, errs))
     end
 end
 
@@ -997,6 +1048,62 @@ func llms_link(b &: str.StringBuilder, name: str, url: str, desc: str):
     str.BufAppend(b, "\n")
 end
 
+func sitemap_item(href: str, text: str): str:
+    ret `<li><a href="` + href + `">` + text + "</a></li>"
+end
+
+func sitemap_block(title: str, items: str): str:
+    ret `<section class="card sitemap-block"><h2>` + title + `</h2><ul class="sitemap-list">` + items + "</ul></section>\n"
+end
+
+func sitemap_html(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut items := sitemap_item("/", ctx_or(ctx, "sitemap.home", "Home"))
+    each p in pages:
+        if p.slug != "index" and p.slug != "404" and p.slug != "sitemap":
+            items = items + sitemap_item(p.url, ctx_or(ctx, "nav." + p.slug, title_head(ctx_or(ctx, p.slug + ".title", p.slug))))
+        end
+    end
+    str.BufAppend(b, sitemap_block(ctx_or(ctx, "sitemap.pages", "Pages"), items))
+    mut part := ""
+    mut course := ""
+    each l in lessons:
+        if l.part != part:
+            if part != "":
+                course = course + "</ol>"
+            end
+            part = l.part
+            course = course + "<h3>" + part + "</h3><ol>"
+        end
+        course = course + sitemap_item(l.url, l.title)
+    end
+    if part != "":
+        course = course + "</ol>"
+    end
+    str.BufAppend(b, `<section class="card sitemap-block"><h2>` + ctx_or(ctx, "sitemap.course", "Course") + `</h2><div class="sitemap-course">` + course + "</div></section>\n")
+    mut std := ""
+    each p in pkgs:
+        std = std + sitemap_item(p.url, pkg_label(p))
+    end
+    str.BufAppend(b, `<section class="card sitemap-block"><h2>` + ctx_or(ctx, "sitemap.std", "Standard library") + `</h2><ul class="sitemap-list sitemap-cols">` + std + "</ul></section>\n")
+    mut ext := sitemap_item(ctx_or(ctx, "link.editor", ""), ctx_or(ctx, "nav.editor", "Editor"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.ai", ""), ctx_or(ctx, "sitemap.ai", "Salam AI"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.telegram_bot", ""), ctx_or(ctx, "sitemap.bot", "Telegram bot"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.github", ""), ctx_or(ctx, "footer.source", "Source code"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.releases", ""), ctx_or(ctx, "footer.releases", "Releases"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.mcp", ""), ctx_or(ctx, "sitemap.mcp", "MCP server"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.telegram", ""), ctx_or(ctx, "footer.telegram", "Telegram group"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.discord", ""), ctx_or(ctx, "footer.discord", "Discord"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.eitaa", ""), ctx_or(ctx, "footer.eitaa", "Eitaa"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.bale", ""), ctx_or(ctx, "footer.bale", "Bale"))
+    ext = ext + sitemap_item(ctx_or(ctx, "link.issues", ""), ctx_or(ctx, "footer.issues", "Report a problem"))
+    ext = ext + sitemap_item("/sitemap.xml", ctx_or(ctx, "sitemap.xml", "sitemap.xml"))
+    ext = ext + sitemap_item("/llms.txt", "llms.txt")
+    str.BufAppend(b, sitemap_block(ctx_or(ctx, "sitemap.external", "Elsewhere"), ext))
+    ret str.BufStr(b)
+end
+
 func llms_index(ctx: HashMap<str, str>, pages: Vector<Page>, lessons: Vector<Lesson>, pkgs: Vector<StdPkg>): str:
     site_url := ctx_or(ctx, "site.url", "")
     mut b := str.NewBuilder()
@@ -1170,7 +1277,7 @@ func load_std_examples(lang_dir: str, pkg: StdPkg, ctx: HashMap<str, str>, errs 
         if file.Exists(out_path):
             out_html = escape_text(str.TrimRight(io.ReadFile(out_path)))
         end
-        out.put(stem, example_block(stem, src, highlight(src, classes), out_html, ctx, errs))
+        out.put(stem, example_block(stem, src, highlight(src, classes), out_html, "", ctx, errs))
     end
     ret out
 end
@@ -1301,6 +1408,9 @@ func std_item(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, idx: int, words:
                 continue
             end
             mfa := show ? alias_of(md, alias) : ""
+            if show and mfa.len() == 0:
+                report(errs, pkg.path + ": field '" + key + "." + md.n + "' has no @" + alias + " name in std")
+            end
             mut kind := ""
             colon := md.s.find(":")
             if colon > 0:
@@ -1600,8 +1710,14 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     end
     ctx.put("site.version", version)
     ctx.put("site.version_raw", raw_version)
-    ctx.put("agent.release", ctx_or(ctx, "link.github", "") + "/releases/tag/v" + raw_version)
-    ctx.put("agent.download", ctx_or(ctx, "link.github", "") + "/releases/download/v" + raw_version + "/salam-agent-" + raw_version + "-")
+    mut agent_version := str.Trim(os.Env("SITE_AGENT_VERSION"))
+    mut agent_tag := str.Trim(os.Env("SITE_AGENT_TAG"))
+    if agent_version.len() == 0 or agent_tag.len() == 0:
+        agent_version = raw_version
+        agent_tag = "v" + raw_version
+    end
+    ctx.put("agent.release", ctx_or(ctx, "link.github", "") + "/releases/tag/" + agent_tag)
+    ctx.put("agent.download", ctx_or(ctx, "link.github", "") + "/releases/download/" + agent_tag + "/salam-agent-" + agent_version + "-")
     ctx.put("asset.css", "/assets/css/site.css?v=" + short_hash(ROOT + "/assets/css/site.css"))
     ctx.put("asset.js", "/assets/js/site.js?v=" + short_hash(ROOT + "/assets/js/site.js"))
     ctx.put("asset.logo", "/assets/img/logo.svg?v=" + short_hash(ROOT + "/assets/img/logo.svg"))
@@ -1624,6 +1740,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     each p in pages:
         ctx.put("active." + p.slug, "")
     end
+    ctx.put("sitemap.html", sitemap_html(ctx, pages, lessons, pkgs))
 
     if dir.Exists(out_dir):
         _rm := dir.RemoveAll(out_dir)

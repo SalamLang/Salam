@@ -40,7 +40,7 @@ pub const SERVER_VERSION := SALAM_VERSION
 
 const _RD_CHUNK := 65536
 
-const _SRV_MAX := 8
+const _SRV_MAX := 64
 
 const _SRV_SHIFT := 32 as i64
 
@@ -66,7 +66,15 @@ mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
 
 mut _srv_shdr := Vector {} as Vector<str>
 
+mut _srv_hka := Vector {} as Vector<str>
+
+mut _srv_hcl := Vector {} as Vector<str>
+
+mut _srv_hxp := Vector {} as Vector<str>
+
 mut _srv_count := 0
+
+mut _srv_mu := sync.NewMutex()
 
 struct _KV:
     pub k: str = ""
@@ -81,8 +89,10 @@ struct _ReqCtx:
     pub path: str = ""
     pub query: str = ""
     pub body: str = ""
+    pub body_len: int = 0
     pub resp_ct: str = ""
     pub resp_body: str = ""
+    pub resp_len: int = -1
     pub req_hdrs: Vector<_KV> = Vector {}
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
@@ -96,16 +106,28 @@ end
 @en "Context"
 @fa "زمینه"
 pub struct Context:
+    @en "h"
+    @fa "دسته"
     pub h: i64
 end
 
 @en "Server"
 @fa "سرور"
 pub struct Server:
+    @en "port"
+    @fa "درگاه"
     pub port: int = 0
+    @en "host"
+    @fa "میزبان"
     pub host: str = "0.0.0.0"
+    @en "router"
+    @fa "مسیریاب"
     pub router: router.Router = router.Router {}
+    @en "hide_tokens"
+    @fa "پنهان‌سازی‌توکن"
     pub hide_tokens: bool = false
+    @en "access_log"
+    @fa "گزارش‌دسترسی"
     pub access_log: bool = false
 end
 
@@ -119,33 +141,51 @@ func _srv_init():
         _srv_log.push(false)
         _srv_tls.push(tls.NewServerConfig("", ""))
         _srv_shdr.push("Salam")
+        _srv_hka.push("")
+        _srv_hcl.push("")
+        _srv_hxp.push("")
     end
 end
 
 func _srv_claim(r: router.Router, hide: bool, log: bool): int:
+    sync.Lock(_srv_mu)
     _srv_init()
-    mut slot := _srv_count
-    if slot >= _SRV_MAX:
-        slot = _SRV_MAX - 1
-    else:
-        _srv_count += 1
+    if _srv_count >= _SRV_MAX:
+        sync.Unlock(_srv_mu)
+        ret 0 - 1
     end
+    slot := _srv_count
+    _srv_count += 1
     _srv_routers.set(slot, r)
     _srv_hide.set(slot, hide)
     _srv_log.set(slot, log)
-    _srv_shdr.set(slot, _server_header(hide))
+    shdr := _server_header(hide)
+    _srv_shdr.set(slot, shdr)
+    _srv_hka.set(slot, "\r\nConnection: keep-alive\r\nServer: ".concat(shdr))
+    _srv_hcl.set(slot, "\r\nConnection: close\r\nServer: ".concat(shdr))
+    _srv_hxp.set(slot, "\r\nX-Powered-By: ".concat(shdr).concat("\r\n"))
+    sync.Unlock(_srv_mu)
     ret slot
 end
 
 func _srv_pack(slot: int, fd: i64): i64:
+    if sizeof(void*) == 4:
+        ret (slot as i64 << (28 as i64)) | (fd & (0x0FFFFFFF as i64))
+    end
     ret (slot as i64 << _SRV_SHIFT) | fd
 end
 
 func _srv_slot_of(packed: i64): int:
+    if sizeof(void*) == 4:
+        ret ((packed >> (28 as i64)) & (15 as i64)) as int
+    end
     ret (packed >> _SRV_SHIFT) as int
 end
 
 func _srv_fd_of(packed: i64): i64:
+    if sizeof(void*) == 4:
+        ret packed & (0x0FFFFFFF as i64)
+    end
     ret packed & _SRV_MASK
 end
 
@@ -169,6 +209,27 @@ end
 
 func _rc(h: i64): _ReqCtx *:
     ret h as _ReqCtx *
+end
+
+func _scan_crlf(s: str, from: int, lim: int): int:
+    p := s as i8 *
+    mut i := from
+    until i + 1 < lim:
+        if p[i] == (13 as i8) and p[i + 1] == (10 as i8): ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _scan_byte(s: str, from: int, lim: int, c: int): int:
+    p := s as i8 *
+    b := c as i8
+    mut i := from
+    until i < lim:
+        if p[i] == b: ret i end
+        i += 1
+    end
+    ret 0 - 1
 end
 
 func _eq_at(s: str, pos: int, lit: str): bool:
@@ -258,8 +319,10 @@ func salam_ctx_reset(h: i64):
     c.path = ""
     c.query = ""
     c.body = ""
+    c.body_len = 0
     c.resp_ct = ""
     c.resp_body = ""
+    c.resp_len = -1
 end
 
 func salam_ctx_free(h: i64):
@@ -377,9 +440,9 @@ func _hdr_lookup(h: i64, name: str): str:
     nlen := name.len()
     mut pos := c.hdr_pos
     until pos < e:
-        line_end := str.IndexFrom(raw, "\r\n", pos)
+        line_end := _scan_crlf(raw, pos, e + 2)
         if line_end < 0 or line_end > e: break end
-        colon := str.IndexFrom(raw, ":", pos)
+        colon := _scan_byte(raw, pos, line_end, 58)
         if colon >= 0 and colon < line_end and colon - pos == nlen and _eq_at_ifold(raw, pos, name):
             mut vs := colon + 1
             until vs < line_end and _ows_at(raw, vs):
@@ -460,10 +523,10 @@ func _query_parse(req: str, key: str): str:
     n := req.len()
     mut pos := 0
     until pos < n:
-        amp := str.IndexFrom(req, "&", pos)
+        amp := _scan_byte(req, pos, n, 38)
         mut fend := amp
         if fend < 0: fend = n end
-        eq_at := str.IndexFrom(req, "=", pos)
+        eq_at := _scan_byte(req, pos, fend, 61)
         if eq_at >= 0 and eq_at < fend:
             kraw := req.substr(pos, eq_at - pos)
             kdec := UrlDecode(kraw)
@@ -483,9 +546,9 @@ func _query_parse(req: str, key: str): str:
     ret str.Clone("")
 end
 
-func _parse_http(ctx: i64, req: str):
+func _parse_http(ctx: i64, req: str, req_len: int):
     c := _rc(ctx)
-    n := req.len()
+    n := req_len
     sp1 := req.find(" ")
     if sp1 < 0: ret end
     c.method = _ctx_own(ctx, req.substr(0, sp1))
@@ -511,15 +574,15 @@ func _parse_http(ctx: i64, req: str):
     mut pos := first_crlf + 2
     mut body_start := 0 - 1
     until pos < n:
-        if pos + 1 < n and _eq_at(req, pos, "\r\n"):
+        if pos + 1 < n and _scan_crlf(req, pos, pos + 2) == pos:
             body_start = pos + 2
             break
         end
-        line_end := str.IndexFrom(req, "\r\n", pos)
+        line_end := _scan_crlf(req, pos, n)
         if line_end < 0:
             break
         end
-        colon := str.IndexFrom(req, ":", pos)
+        colon := _scan_byte(req, pos, line_end, 58)
         if colon >= 0 and colon < line_end and colon - pos == 10 and _eq_at_fold(req, pos, "connection"):
             mut vs := colon + 1
             until vs < line_end and _ows_at(req, vs):
@@ -532,7 +595,8 @@ func _parse_http(ctx: i64, req: str):
     end
     c.hdr_end = pos
     if body_start >= 0 and body_start < n:
-        c.body = _ctx_own(ctx, req.substr(body_start, n - body_start))
+        c.body = _ctx_own(ctx, _str_of(((req as void *) as i64 + body_start) as void *, n - body_start))
+        c.body_len = n - body_start
     end
 end
 
@@ -570,26 +634,48 @@ func _hdr_clean(s: str): str:
     ret out
 end
 
-func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
+if SALAM_JS:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        ret
+    end
+else:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        if b.cap != (0 as i64): ret end
+        b.data = mem.Allocate(want as u64)
+        b.cap = want as i64
+    end
+end
+
+func _fill_response(b &: str.StringBuilder, ctx: i64, slot: int, keep: bool):
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
     body := salam_ctx_get(ctx, 5)
-    str.BufAppend(b, "HTTP/1.1 ")
-    _append_status(b, status)
-    str.BufAppend(b, "\r\nContent-Length: ")
-    str.BufAppendInt(b, body.len() as i64)
-    if keep:
-        str.BufAppend(b, "\r\nConnection: keep-alive")
+    binary := _rc(ctx).resp_len
+    mut blen := body.len()
+    if binary >= 0: blen = binary end
+    if binary < 0:
+        _buf_presize(b, 256 + blen)
     else:
-        str.BufAppend(b, "\r\nConnection: close")
+        _buf_presize(b, 256)
     end
-    str.BufAppend(b, "\r\nServer: ")
-    str.BufAppend(b, shdr)
+    if status == 200:
+        str.BufAppend(b, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    else:
+        str.BufAppend(b, "HTTP/1.1 ")
+        _append_status(b, status)
+        str.BufAppend(b, "\r\nContent-Length: ")
+    end
+    str.BufAppendInt(b, blen as i64)
+    if keep:
+        str.BufAppend(b, _srv_hka.get(slot))
+    else:
+        str.BufAppend(b, _srv_hcl.get(slot))
+    end
     if _has_header(ctx, "X-Powered-By") == false:
-        str.BufAppend(b, "\r\nX-Powered-By: ")
-        str.BufAppend(b, shdr)
+        str.BufAppend(b, _srv_hxp.get(slot))
+    else:
+        str.BufAppend(b, "\r\n")
     end
-    str.BufAppend(b, "\r\n")
     if ct.len() > 0 and _has_header(ctx, "Content-Type") == false:
         str.BufAppend(b, "Content-Type: ")
         str.BufAppend(b, ct)
@@ -615,14 +701,25 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
         str.BufAppend(b, "\r\n")
     end
     str.BufAppend(b, "\r\n")
-    if salam_ctx_get(ctx, 0) != "HEAD":
+    if salam_ctx_get(ctx, 0) != "HEAD" and binary < 0:
         str.BufAppend(b, body)
     end
 end
 
-func _build_response(ctx: i64, shdr: str): str:
+// A binary body (http.Bytes) is not part of the header buffer: it is written after it.
+func _binary_body(ctx: i64, n &: int): void *:
+    c := _rc(ctx)
+    n = c.resp_len
+    if c.resp_len < 0 or salam_ctx_get(ctx, 0) == "HEAD":
+        n = 0
+        ret null
+    end
+    ret c.resp_body as void *
+end
+
+func _build_response(ctx: i64, slot: int): str:
     mut b := str.NewBuilder()
-    _fill_response(b, ctx, shdr, false)
+    _fill_response(b, ctx, slot, false)
     out := str.BufStr(b)
     str.BufFree(b)
     ret out
@@ -669,9 +766,9 @@ end
 func _has_transfer_encoding(head: str, head_len: int): bool:
     mut pos := 0
     until pos < head_len:
-        line_end := str.IndexFrom(head, "\r\n", pos)
+        line_end := _scan_crlf(head, pos, head_len)
         if line_end < 0 or line_end >= head_len: break end
-        colon := str.IndexFrom(head, ":", pos)
+        colon := _scan_byte(head, pos, line_end, 58)
         if colon >= 0 and colon < line_end:
             if colon - pos == 17 and _eq_at_fold(head, pos, "transfer-encoding"):
                 ret true
@@ -687,9 +784,9 @@ func _bad_content_length(head: str, head_len: int): bool:
     mut seen := false
     mut first := 0
     until pos < head_len:
-        line_end := str.IndexFrom(head, "\r\n", pos)
+        line_end := _scan_crlf(head, pos, head_len)
         if line_end < 0 or line_end >= head_len: break end
-        colon := str.IndexFrom(head, ":", pos)
+        colon := _scan_byte(head, pos, line_end, 58)
         if colon >= 0 and colon < line_end:
             if colon - pos == 14 and _eq_at_fold(head, pos, "content-length"):
                 raw := head.substr(colon + 1, line_end - colon - 1)
@@ -729,9 +826,9 @@ end
 func _content_length(head: str, head_len: int): int:
     mut pos := 0
     until pos < head_len:
-        line_end := str.IndexFrom(head, "\r\n", pos)
+        line_end := _scan_crlf(head, pos, head_len)
         if line_end < 0 or line_end >= head_len: break end
-        colon := str.IndexFrom(head, ":", pos)
+        colon := _scan_byte(head, pos, line_end, 58)
         if colon >= 0 and colon < line_end:
             if colon - pos == 14 and _eq_at_fold(head, pos, "content-length"):
                 raw := head.substr(colon + 1, line_end - colon - 1)
@@ -764,10 +861,27 @@ func _has_body_at(s: str, vend: int): bool:
     ret true
 end
 
-func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, oversize &: int): str:
+// Joins alen bytes of a with blen bytes at b into a new NUL-terminated buffer.
+func _bytes_join(a: str, alen: int, b: void *, blen: int): str:
+    r := mem.Allocate((alen + blen + 1) as u64)
+    if alen > 0: mem.Copy(r, a as void *, alen as u64) end
+    if blen > 0: mem.Copy((r as i64 + alen) as void *, b, blen as u64) end
+    p := r as i8 *
+    p[alen + blen] = 0 as i8
+    ret r as str
+end
+
+func _bytes_slice(s: str, off: int, n: int): str:
+    ret _str_of(((s as void *) as i64 + off) as void *, n)
+end
+
+// Reads one request. Lengths are tracked explicitly (req_len, pending_len)
+// so bodies may carry NUL bytes; header scanning stops before the body.
+func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
     sock := rawsock.FromFd(fd)
     owned = false
-    if pending.len() == 0:
+    req_len = 0
+    if pending_len == 0:
         got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
         if got <= 0: ret "" end
         sp0 := scratch as i8 *
@@ -781,21 +895,29 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, over
             if vend > 0 and _has_body_at(one, vend):
                 need = head_len + _content_length(one, head_len)
             end
-            if need == got: ret one end
+            if need == got:
+                req_len = got
+                ret one
+            end
             if need < got:
-                pending = one.substr(need, got - need)
+                pending = _bytes_slice(one, need, got - need)
+                pending_len = got - need
                 owned = true
-                ret one.substr(0, need)
+                req_len = need
+                ret _bytes_slice(one, 0, need)
             end
         end
         pending = _str_of(scratch, got)
+        pending_len = got
     end
     mut buf := pending
+    mut blen := pending_len
     pending = ""
+    pending_len = 0
     mut scan := 0
     mut head_end := str.IndexFrom(buf, "\r\n\r\n", scan)
     until head_end < 0:
-        if buf.len() >= _max_header_bytes:
+        if blen >= _max_header_bytes:
             mem.Free(buf as void *)
             oversize = 431
             ret ""
@@ -805,13 +927,12 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, over
             mem.Free(buf as void *)
             ret ""
         end
-        chunk := _str_of(scratch, got)
-        grown := buf.concat(chunk)
-        mem.Free(chunk as void *)
-        scan = buf.len() - 3
+        grown := _bytes_join(buf, blen, scratch, got)
+        scan = blen - 3
         if scan < 0: scan = 0 end
         mem.Free(buf as void *)
         buf = grown
+        blen += got
         head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
     end
     head_len := head_end + 4
@@ -824,26 +945,29 @@ func _read_request(fd: i64, scratch: void *, pending &: str, owned &: bool, over
             oversize = 413
             ret ""
         end
-        if buf.len() < need:
-            mut acc := str.NewBuilder()
-            str.BufAppend(acc, buf)
+        if blen < need:
+            full := mem.Allocate((need + 1) as u64)
+            mem.Copy(full, buf as void *, blen as u64)
             mem.Free(buf as void *)
-            until (str.BufLen(acc) as int) < need:
-                got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+            until blen < need:
+                mut want := need - blen
+                if want > _RD_CHUNK: want = _RD_CHUNK end
+                got := rawsock.RecvBytes(sock, (full as i64 + blen) as void *, want)
                 if got <= 0: break end
-                chunk := _str_of(scratch, got)
-                str.BufAppend(acc, chunk)
-                mem.Free(chunk as void *)
+                blen += got
             end
-            buf = str.BufStr(acc)
-            str.BufFree(acc)
+            fp := full as i8 *
+            fp[blen] = 0 as i8
+            buf = full as str
         end
-        if buf.len() < need: need = buf.len() end
+        if blen < need: need = blen end
     end
     owned = true
-    if need == buf.len(): ret buf end
-    pending = buf.substr(need, buf.len() - need)
-    out := buf.substr(0, need)
+    req_len = need
+    if need == blen: ret buf end
+    pending = _bytes_slice(buf, need, blen - need)
+    pending_len = blen - need
+    out := _bytes_slice(buf, 0, need)
     mem.Free(buf as void *)
     ret out
 end
@@ -1027,13 +1151,21 @@ func _log_access(slot: int, method: str, path: str, status: int):
     println method, path, "->", status
 end
 
-func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
-    if req.len() == 0:
+func _send_static(slot: int, fd: i64, url: str, file: str, shdr: str, keep: bool): int:
+    ct := mime.MimeType(file)
+    if keep and _sc_send_new(slot, fd, url, file, ct, shdr):
+        ret 1
+    end
+    ret _send_file(fd, file, ct, shdr, keep)
+end
+
+func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+    if req_len == 0:
         keep = false
         ret false
     end
     salam_ctx_reset(ctx)
-    _parse_http(ctx, req)
+    _parse_http(ctx, req, req_len)
     keep = _rc(ctx).keep_alive
     r := _srv_routers.get(slot)
     shdr := _srv_shdr.get(slot)
@@ -1041,7 +1173,10 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     if r.has_static:
         prefix := r.static_prefix
         path := salam_ctx_get(ctx, 1)
-        if _eq_at(path, 0, prefix):
+        if keep and _eq_at(path, 0, prefix) and _sc_serve(slot, fd, path):
+            _ctx_mark_sent(ctx)
+            static_handled = true
+        else _eq_at(path, 0, prefix):
             relraw := path.substr(prefix.len(), path.len() - prefix.len())
             rel := UrlDecode(relraw)
             mem.Free(relraw as void *)
@@ -1054,7 +1189,7 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
                 else os.IsDir(target):
                     idx := filepath.Join(target, "index.html")
                     if os.Exists(idx) and os.IsDir(idx) == false:
-                        if _send_file(fd, idx, mime.MimeType(idx), shdr, keep) == 1:
+                        if _send_static(slot, fd, path, idx, shdr, keep) == 1:
                             _ctx_mark_sent(ctx)
                             static_handled = true
                         end
@@ -1066,7 +1201,7 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
                     end
                     mem.Free(idx as void *)
                 else os.Exists(target):
-                    if _send_file(fd, target, mime.MimeType(target), shdr, keep) == 1:
+                    if _send_static(slot, fd, path, target, shdr, keep) == 1:
                         _ctx_mark_sent(ctx)
                         static_handled = true
                     end
@@ -1087,15 +1222,19 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
     ret true
 end
 
-func _serve_request(slot: int, fd: i64, ctx: i64, req: str, keep &: bool): bool:
-    if not _route_request(slot, fd, ctx, req, keep):
+func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &: bool): bool:
+    if not _route_request(slot, fd, ctx, req, req_len, keep):
         ret false
     end
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
-        _fill_response(b, ctx, _srv_shdr.get(slot), keep)
-        tcp.WriteBytes(tcp.ConnFromFd(fd), b.data, b.len as int)
+        _fill_response(b, ctx, slot, keep)
+        conn := tcp.ConnFromFd(fd)
+        tcp.WriteBytes(conn, b.data, b.len as int)
         str.BufFree(b)
+        mut n := 0
+        p := _binary_body(ctx, n)
+        if n > 0: tcp.WriteBytes(conn, p, n) end
     end
     ret true
 end
@@ -1109,11 +1248,13 @@ func _web_conn_handler(packed: i64):
     scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
     ctx := salam_ctx_new(fd)
     mut pending := ""
+    mut pending_len := 0
     mut served := 0
     until 1 == 1:
         mut owned := false
         mut oversize := 0
-        req := _read_request(fd, scratch, pending, owned, oversize)
+        mut req_len := 0
+        req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
         if oversize == 431:
             _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             break
@@ -1122,7 +1263,7 @@ func _web_conn_handler(packed: i64):
             _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             break
         end
-        if req.len() == 0: break end
+        if req_len == 0: break end
         te_end := str.IndexFrom(req, "\r\n\r\n", 0)
         if te_end >= 0 and (_has_transfer_encoding(req, te_end + 4) or _bad_content_length(req, te_end + 4)):
             _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
@@ -1130,13 +1271,13 @@ func _web_conn_handler(packed: i64):
             break
         end
         mut keep := true
-        ok := _serve_request(slot, fd, ctx, req, keep)
+        ok := _serve_request(slot, fd, ctx, req, req_len, keep)
         if owned: mem.Free(req as void *) end
         if ok == false: break end
         served += 1
         if keep == false or served >= _keepalive_max_reqs: break end
     end
-    if pending.len() > 0: mem.Free(pending as void *) end
+    if pending_len > 0: mem.Free(pending as void *) end
     salam_ctx_free(ctx)
     mem.Free(scratch)
     _net_close(fd)
@@ -1159,7 +1300,7 @@ func _web_tls_conn_handler(packed: i64):
     ctx := salam_ctx_new(fd)
     defer salam_ctx_free(ctx)
     defer mem.Free(req as void *)
-    _parse_http(ctx, req)
+    _parse_http(ctx, req, req.len())
     r := _srv_routers.get(slot)
     shdr := _srv_shdr.get(slot)
     mut static_handled := false
@@ -1208,9 +1349,12 @@ func _web_tls_conn_handler(packed: i64):
     end
     _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
-        resp := _build_response(ctx, shdr)
+        resp := _build_response(ctx, slot)
         tls.Write(c, resp)
         mem.Free(resp as void *)
+        mut n := 0
+        p := _binary_body(ctx, n)
+        if n > 0: tls.WriteBytes(c, p, n) end
     end
     tls.Close(c)
 end

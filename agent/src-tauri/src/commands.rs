@@ -2,7 +2,10 @@ use crate::approve::{Answer, Approvals, Mode};
 use crate::bridge::{self, Status};
 use crate::config;
 use crate::device::{Device, DeviceStore};
+use crate::memory;
+use crate::notify::{self, Delivery, Kind, Notice, Notifier, Prefs};
 use crate::tools::Preview;
+use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager};
@@ -103,4 +106,37 @@ pub fn agent_stop(app: AppHandle, call_id: String) -> bool {
 #[tauri::command]
 pub fn agent_pending(app: AppHandle) -> Vec<Preview> {
     app.state::<Approvals>().pending()
+}
+
+#[tauri::command]
+pub async fn agent_project_context(workspace: String) -> Result<memory::ProjectContext, String> {
+    if workspace.trim().is_empty() {
+        return Err("No workspace folder is selected.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let ws = Workspace::open(workspace.trim())?;
+        Ok(memory::project_context(ws.root()))
+    })
+    .await
+    .map_err(|e| format!("Reading the project context failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn agent_notify(app: AppHandle, kind: Kind, chat: Option<String>, text: Option<String>) -> Result<Delivery, String> {
+    let notice = Notice {
+        kind,
+        chat: chat.unwrap_or_default(),
+        text: text.unwrap_or_default(),
+    };
+    notify::deliver(&app, notice).await
+}
+
+#[tauri::command]
+pub fn agent_notify_prefs(app: AppHandle) -> Prefs {
+    app.state::<Notifier>().prefs()
+}
+
+#[tauri::command]
+pub fn agent_set_notify_prefs(app: AppHandle, prefs: Prefs) -> Prefs {
+    app.state::<Notifier>().set_prefs(prefs)
 }

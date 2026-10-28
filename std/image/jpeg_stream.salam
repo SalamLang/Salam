@@ -1,0 +1,698 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package image
+
+// A baseline JPEG encoder that follows libjpeg (jpeg_set_defaults) step by
+// step: the fixed-point RGB -> YCbCr of jccolor.c, 4:2:0 subsampling with the
+// alternating 1/2 bias of jcsample.c, edge replication and dummy blocks like
+// jcprepct.c / jccoefct.c, the integer "islow" DCT of jfdctint.c, rounded
+// quantisation and the standard Huffman tables. The same pixels give the same
+// entropy-coded data libjpeg writes. It works on strips of rows, so a huge
+// picture never has to be held in memory as a whole (offsets are 64-bit), and
+// it writes the JFIF density (dots per inch / cm) and an optional comment.
+
+import mem
+import compress
+import archive
+
+@en "JPEGOptions"
+@fa "گزینه‌های جی‌پگ"
+pub struct JPEGOptions:
+    @en "quality"
+    @fa "کیفیت"
+    pub quality: int = 90
+    @en "subsample"
+    @fa "کاهش نمونه‌های رنگ"
+    pub subsample: bool = true
+    @en "density_unit"
+    @fa "واحد تراکم"
+    pub density_unit: int = 0
+    @en "x_density"
+    @fa "تراکم افقی"
+    pub x_density: int = 1
+    @en "y_density"
+    @fa "تراکم عمودی"
+    pub y_density: int = 1
+    @en "comment"
+    @fa "توضیح"
+    pub comment: str = ""
+end
+
+@en "JPEGStream"
+@fa "جریان جی‌پگ"
+pub struct JPEGStream:
+    @en "width"
+    @fa "عرض"
+    pub width: int = 0
+    @en "height"
+    @fa "ارتفاع"
+    pub height: int = 0
+    @en "rows_written"
+    @fa "سطرهای نوشته‌شده"
+    pub rows_written: int = 0
+    @en "ok"
+    @fa "آماده"
+    pub ok: bool = false
+    @en "out"
+    @fa "خروجی"
+    pub out: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    @en "hs"
+    @fa "ضریب افقی"
+    pub hs: int = 2
+    @en "vs"
+    @fa "ضریب عمودی"
+    pub vs: int = 2
+    @en "mcu_w"
+    @fa "عرض واحد کدشده"
+    pub mcu_w: int = 16
+    @en "mcu_h"
+    @fa "ارتفاع واحد کدشده"
+    pub mcu_h: int = 16
+    @en "mcus_x"
+    @fa "واحدهای کدشده‌ی سطر"
+    pub mcus_x: int = 0
+    @en "full_w"
+    @fa "عرض کامل"
+    pub full_w: int = 0
+    @en "y_wib"
+    @fa "عرض بلوک روشنایی"
+    pub y_wib: int = 0
+    @en "y_hib"
+    @fa "ارتفاع بلوک روشنایی"
+    pub y_hib: int = 0
+    @en "c_w"
+    @fa "عرض صفحه رنگ"
+    pub c_w: int = 0
+    @en "mcu_row"
+    @fa "شماره نوار"
+    pub mcu_row: int = 0
+    @en "mcu_rows"
+    @fa "شمار نوارها"
+    pub mcu_rows: int = 0
+    @en "buffered"
+    @fa "سطرهای منتظر"
+    pub buffered: int = 0
+    @en "yb"
+    @fa "نمونه‌های روشنایی"
+    pub yb: void* = null
+    @en "cbb"
+    @fa "نمونه‌های آبی کامل"
+    pub cbb: void* = null
+    @en "crb"
+    @fa "نمونه‌های قرمز کامل"
+    pub crb: void* = null
+    @en "cbd"
+    @fa "نمونه‌های آبی کاهش‌یافته"
+    pub cbd: void* = null
+    @en "crd"
+    @fa "نمونه‌های قرمز کاهش‌یافته"
+    pub crd: void* = null
+    @en "lq"
+    @fa "جدول کوانتش روشنایی"
+    pub lq: void* = null
+    @en "cq"
+    @fa "جدول کوانتش رنگ"
+    pub cq: void* = null
+    @en "hc"
+    @fa "کدهای هافمن"
+    pub hc: void* = null
+    @en "hl"
+    @fa "طول کدهای هافمن"
+    pub hl: void* = null
+    @en "work"
+    @fa "بلوک کار"
+    pub work: void* = null
+    @en "acc"
+    @fa "انباره بیت"
+    pub acc: i64 = 0
+    @en "nbits"
+    @fa "شمار بیت‌ها"
+    pub nbits: int = 0
+    @en "dc_y"
+    @fa "دی‌سی روشنایی"
+    pub dc_y: int = 0
+    @en "dc_cb"
+    @fa "دی‌سی آبی"
+    pub dc_cb: int = 0
+    @en "dc_cr"
+    @fa "دی‌سی قرمز"
+    pub dc_cr: int = 0
+end
+
+func _js_push_marker_len(out &: compress.ByteBuf, marker: int, len: int):
+    compress.BufPush(out, 0xFF)
+    compress.BufPush(out, marker)
+    compress.BufPush(out, (len >> 8) & 255)
+    compress.BufPush(out, len & 255)
+end
+
+func _js_bits(s &: JPEGStream, code: int, size: int):
+    if size <= 0:
+        ret
+    end
+    s.acc = (s.acc << (size as i64)) | ((code as i64) & (((1 as i64) << (size as i64)) - 1))
+    s.nbits += size
+    until s.nbits >= 8:
+        b := ((s.acc >> ((s.nbits - 8) as i64)) & 255) as int
+        compress.BufPush(s.out, b)
+        if b == 255:
+            compress.BufPush(s.out, 0)
+        end
+        s.nbits -= 8
+    end
+    s.acc = s.acc & (((1 as i64) << (s.nbits as i64)) - 1)
+end
+
+// table: 0 = DC luma, 1 = AC luma, 2 = DC chroma, 3 = AC chroma
+func _js_huff(s &: JPEGStream, table: int, symbol: int):
+    cp := s.hc as i32*
+    lp := s.hl as i32*
+    _js_bits(s, cp[table * 256 + symbol], lp[table * 256 + symbol])
+end
+
+func _js_nbits(v: int): int:
+    mut a := v
+    mut n := 0
+    until a != 0:
+        a = a >> 1
+        n += 1
+    end
+    ret n
+end
+
+func _js_encode_block(s &: JPEGStream, zz: i32*, dc_prev &: int, dc_table: int, ac_table: int):
+    dc := zz[0]
+    mut t := dc - dc_prev
+    dc_prev = dc
+    mut t2 := t
+    if t < 0:
+        t = 0 - t
+        t2 -= 1
+    end
+    nb := _js_nbits(t)
+    _js_huff(s, dc_table, nb)
+    if nb > 0:
+        _js_bits(s, t2, nb)
+    end
+    mut run := 0
+    mut k := 1
+    until k < 64:
+        v := zz[_zigzag(k)]
+        if v == 0:
+            run += 1
+        else:
+            until run > 15:
+                _js_huff(s, ac_table, 0xF0)
+                run -= 16
+            end
+            mut a := v
+            mut a2 := v
+            if a < 0:
+                a = 0 - a
+                a2 -= 1
+            end
+            n := _js_nbits(a)
+            _js_huff(s, ac_table, (run << 4) + n)
+            _js_bits(s, a2, n)
+            run = 0
+        end
+        k += 1
+    end
+    if run > 0:
+        _js_huff(s, ac_table, 0)
+    end
+end
+
+// jfdctint.c jpeg_fdct_islow on 64 level-shifted samples (in place), then the
+// rounded division by quant * 8 (jcdctmgr.c). Results in natural order.
+func _js_fdct_quant(d: i32*, quant: i32*):
+    mut row := 0
+    until row < 8:
+        o := row * 8
+        d0 := d[o] as i64
+        d1 := d[o + 1] as i64
+        d2 := d[o + 2] as i64
+        d3 := d[o + 3] as i64
+        d4 := d[o + 4] as i64
+        d5 := d[o + 5] as i64
+        d6 := d[o + 6] as i64
+        d7 := d[o + 7] as i64
+        tmp0 := d0 + d7
+        mut tmp7 := d0 - d7
+        tmp1 := d1 + d6
+        mut tmp6 := d1 - d6
+        tmp2 := d2 + d5
+        mut tmp5 := d2 - d5
+        tmp3 := d3 + d4
+        mut tmp4 := d3 - d4
+        tmp10 := tmp0 + tmp3
+        tmp13 := tmp0 - tmp3
+        tmp11 := tmp1 + tmp2
+        tmp12 := tmp1 - tmp2
+        d[o] = ((tmp10 + tmp11) << 2) as int
+        d[o + 4] = ((tmp10 - tmp11) << 2) as int
+        mut z1 := (tmp12 + tmp13) * 4433
+        d[o + 2] = ((z1 + tmp13 * 6270 + 1024) >> 11) as int
+        d[o + 6] = ((z1 - tmp12 * 15137 + 1024) >> 11) as int
+        z1 = tmp4 + tmp7
+        mut z2 := tmp5 + tmp6
+        mut z3 := tmp4 + tmp6
+        mut z4 := tmp5 + tmp7
+        z5 := (z3 + z4) * 9633
+        tmp4 = tmp4 * 2446
+        tmp5 = tmp5 * 16819
+        tmp6 = tmp6 * 25172
+        tmp7 = tmp7 * 12299
+        z1 = z1 * (0 - 7373)
+        z2 = z2 * (0 - 20995)
+        z3 = z3 * (0 - 16069)
+        z4 = z4 * (0 - 3196)
+        z3 += z5
+        z4 += z5
+        d[o + 7] = ((tmp4 + z1 + z3 + 1024) >> 11) as int
+        d[o + 5] = ((tmp5 + z2 + z4 + 1024) >> 11) as int
+        d[o + 3] = ((tmp6 + z2 + z3 + 1024) >> 11) as int
+        d[o + 1] = ((tmp7 + z1 + z4 + 1024) >> 11) as int
+        row += 1
+    end
+    mut col := 0
+    until col < 8:
+        d0 := d[col] as i64
+        d1 := d[8 + col] as i64
+        d2 := d[16 + col] as i64
+        d3 := d[24 + col] as i64
+        d4 := d[32 + col] as i64
+        d5 := d[40 + col] as i64
+        d6 := d[48 + col] as i64
+        d7 := d[56 + col] as i64
+        tmp0 := d0 + d7
+        mut tmp7 := d0 - d7
+        tmp1 := d1 + d6
+        mut tmp6 := d1 - d6
+        tmp2 := d2 + d5
+        mut tmp5 := d2 - d5
+        tmp3 := d3 + d4
+        mut tmp4 := d3 - d4
+        tmp10 := tmp0 + tmp3
+        tmp13 := tmp0 - tmp3
+        tmp11 := tmp1 + tmp2
+        tmp12 := tmp1 - tmp2
+        d[col] = ((tmp10 + tmp11 + 2) >> 2) as int
+        d[32 + col] = ((tmp10 - tmp11 + 2) >> 2) as int
+        mut z1 := (tmp12 + tmp13) * 4433
+        d[16 + col] = ((z1 + tmp13 * 6270 + 16384) >> 15) as int
+        d[48 + col] = ((z1 - tmp12 * 15137 + 16384) >> 15) as int
+        z1 = tmp4 + tmp7
+        mut z2 := tmp5 + tmp6
+        mut z3 := tmp4 + tmp6
+        mut z4 := tmp5 + tmp7
+        z5 := (z3 + z4) * 9633
+        tmp4 = tmp4 * 2446
+        tmp5 = tmp5 * 16819
+        tmp6 = tmp6 * 25172
+        tmp7 = tmp7 * 12299
+        z1 = z1 * (0 - 7373)
+        z2 = z2 * (0 - 20995)
+        z3 = z3 * (0 - 16069)
+        z4 = z4 * (0 - 3196)
+        z3 += z5
+        z4 += z5
+        d[56 + col] = ((tmp4 + z1 + z3 + 16384) >> 15) as int
+        d[40 + col] = ((tmp5 + z2 + z4 + 16384) >> 15) as int
+        d[24 + col] = ((tmp6 + z2 + z3 + 16384) >> 15) as int
+        d[8 + col] = ((tmp7 + z1 + z4 + 16384) >> 15) as int
+        col += 1
+    end
+    mut i := 0
+    until i < 64:
+        q := quant[i] * 8
+        mut t := d[i]
+        if t < 0:
+            t = 0 - ((0 - t + (q >> 1)) / q)
+        else:
+            t = (t + (q >> 1)) / q
+        end
+        d[i] = t
+        i += 1
+    end
+end
+
+// Loads the 8x8 block at (bx, by) of a plane (stride pixels a row) into the
+// work buffer, level shifted.
+func _js_load(work: i32*, plane: u8*, stride: int, bx: int, blk_y: int):
+    mut r := 0
+    until r < 8:
+        base := ((blk_y + r) as i64) * (stride as i64) + (bx as i64)
+        mut c := 0
+        until c < 8:
+            work[r * 8 + c] = ((plane[base + (c as i64)] as int) - 128)
+            c += 1
+        end
+        r += 1
+    end
+end
+
+// Encodes the buffered iMCU row (the rows past the picture are already filled).
+func _js_flush_mcu_row(s &: JPEGStream, real_rows: int):
+    yp := s.yb as u8*
+    w := s.work as i32*
+    fw := s.full_w
+    // chroma planes: downsampled (or copied) into cbd / crd, c_w x 8
+    cbf := s.cbb as u8*
+    crf := s.crb as u8*
+    cbo := s.cbd as u8*
+    cro := s.crd as u8*
+    cw := s.c_w
+    if s.hs == 2:
+        real_c := (real_rows + 1) / 2
+        mut r := 0
+        until r < 8:
+            src := r < real_c ? r : real_c - 1
+            r0 := ((src * 2) as i64) * (fw as i64)
+            r1 := ((src * 2 + 1) as i64) * (fw as i64)
+            ob := (r as i64) * (cw as i64)
+            mut bias := 1
+            mut j := 0
+            until j < cw:
+                x0 := (j * 2) as i64
+                cbo[ob + (j as i64)] = (((cbf[r0 + x0] as int) + (cbf[r0 + x0 + 1] as int) + (cbf[r1 + x0] as int) + (cbf[r1 + x0 + 1] as int) + bias) >> 2) as u8
+                cro[ob + (j as i64)] = (((crf[r0 + x0] as int) + (crf[r0 + x0 + 1] as int) + (crf[r1 + x0] as int) + (crf[r1 + x0 + 1] as int) + bias) >> 2) as u8
+                bias = bias ^ 3
+                j += 1
+            end
+            r += 1
+        end
+    else:
+        mut r := 0
+        until r < 8:
+            src := r < real_rows ? r : real_rows - 1
+            mut j := 0
+            until j < cw:
+                cbo[(r as i64) * (cw as i64) + (j as i64)] = cbf[(src as i64) * (fw as i64) + (j as i64)]
+                cro[(r as i64) * (cw as i64) + (j as i64)] = crf[(src as i64) * (fw as i64) + (j as i64)]
+                j += 1
+            end
+            r += 1
+        end
+    end
+    last_row := s.mcu_row == s.mcu_rows - 1
+    mut m := 0
+    until m < s.mcus_x:
+        mut yi := 0
+        until yi < s.vs:
+            blk_y := s.mcu_row * s.vs + yi
+            mut xi := 0
+            until xi < s.hs:
+                bx := m * s.hs + xi
+                if last_row and blk_y >= s.y_hib:
+                    // a row of dummy blocks at the bottom: DC of the block before
+                    _js_dummy(s, w)
+                else bx >= s.y_wib:
+                    _js_dummy(s, w)
+                else:
+                    _js_load(w, yp, fw, bx * 8, yi * 8)
+                    _js_fdct_quant(w, s.lq as i32*)
+                    _js_encode_block(s, w, s.dc_y, 0, 1)
+                end
+                xi += 1
+            end
+            yi += 1
+        end
+        _js_load(w, cbo, cw, m * 8, 0)
+        _js_fdct_quant(w, s.cq as i32*)
+        _js_encode_block(s, w, s.dc_cb, 2, 3)
+        _js_load(w, cro, cw, m * 8, 0)
+        _js_fdct_quant(w, s.cq as i32*)
+        _js_encode_block(s, w, s.dc_cr, 2, 3)
+        m += 1
+    end
+    s.mcu_row += 1
+    s.buffered = 0
+end
+
+// A dummy block repeats the DC of the block encoded before it, all AC zero.
+func _js_dummy(s &: JPEGStream, w: i32*):
+    mut i := 0
+    until i < 64:
+        w[i] = 0
+        i += 1
+    end
+    w[0] = s.dc_y
+    _js_encode_block(s, w, s.dc_y, 0, 1)
+end
+
+func _js_tables(s &: JPEGStream):
+    _build_huff_encode((i: int): ret _dc_luma_bits(i) end, (i: int): ret _dc_luma_values(i) end, s.hc, s.hl)
+    _build_huff_encode((i: int): ret _ac_luma_bits(i) end, (i: int): ret _ac_luma_values(i) end, ((s.hc as i64) + 1024) as void*, ((s.hl as i64) + 1024) as void*)
+    _build_huff_encode((i: int): ret _dc_chroma_bits(i) end, (i: int): ret _dc_chroma_values(i) end, ((s.hc as i64) + 2048) as void*, ((s.hl as i64) + 2048) as void*)
+    _build_huff_encode((i: int): ret _ac_chroma_bits(i) end, (i: int): ret _ac_chroma_values(i) end, ((s.hc as i64) + 3072) as void*, ((s.hl as i64) + 3072) as void*)
+end
+
+func _js_headers(s &: JPEGStream, opts: JPEGOptions):
+    compress.BufPush(s.out, 0xFF)
+    compress.BufPush(s.out, 0xD8)
+    _js_push_marker_len(s.out, 0xE0, 16)
+    compress.BufPush(s.out, 74)
+    compress.BufPush(s.out, 70)
+    compress.BufPush(s.out, 73)
+    compress.BufPush(s.out, 70)
+    compress.BufPush(s.out, 0)
+    compress.BufPush(s.out, 1)
+    compress.BufPush(s.out, 1)
+    compress.BufPush(s.out, opts.density_unit & 255)
+    compress.BufPush(s.out, (opts.x_density >> 8) & 255)
+    compress.BufPush(s.out, opts.x_density & 255)
+    compress.BufPush(s.out, (opts.y_density >> 8) & 255)
+    compress.BufPush(s.out, opts.y_density & 255)
+    compress.BufPush(s.out, 0)
+    compress.BufPush(s.out, 0)
+    comment_len := opts.comment.len()
+    if comment_len > 0 and comment_len < 65000:
+        _js_push_marker_len(s.out, 0xFE, comment_len + 2)
+        repeat comment_len in i:
+            compress.BufPush(s.out, (opts.comment[i] as int) & 255)
+        end
+    end
+    lqp := s.lq as i32*
+    cqp := s.cq as i32*
+    _js_push_marker_len(s.out, 0xDB, 67)
+    compress.BufPush(s.out, 0)
+    repeat 64 in i:
+        compress.BufPush(s.out, lqp[_zigzag(i)])
+    end
+    _js_push_marker_len(s.out, 0xDB, 67)
+    compress.BufPush(s.out, 1)
+    repeat 64 in i:
+        compress.BufPush(s.out, cqp[_zigzag(i)])
+    end
+    _js_push_marker_len(s.out, 0xC0, 17)
+    compress.BufPush(s.out, 8)
+    compress.BufPush(s.out, (s.height >> 8) & 255)
+    compress.BufPush(s.out, s.height & 255)
+    compress.BufPush(s.out, (s.width >> 8) & 255)
+    compress.BufPush(s.out, s.width & 255)
+    compress.BufPush(s.out, 3)
+    compress.BufPush(s.out, 1)
+    compress.BufPush(s.out, (s.hs << 4) | s.vs)
+    compress.BufPush(s.out, 0)
+    compress.BufPush(s.out, 2)
+    compress.BufPush(s.out, 0x11)
+    compress.BufPush(s.out, 1)
+    compress.BufPush(s.out, 3)
+    compress.BufPush(s.out, 0x11)
+    compress.BufPush(s.out, 1)
+    _write_dht(s.out, 0x00, (i: int): ret _dc_luma_bits(i) end, (i: int): ret _dc_luma_values(i) end)
+    _write_dht(s.out, 0x10, (i: int): ret _ac_luma_bits(i) end, (i: int): ret _ac_luma_values(i) end)
+    _write_dht(s.out, 0x01, (i: int): ret _dc_chroma_bits(i) end, (i: int): ret _dc_chroma_values(i) end)
+    _write_dht(s.out, 0x11, (i: int): ret _ac_chroma_bits(i) end, (i: int): ret _ac_chroma_values(i) end)
+    _js_push_marker_len(s.out, 0xDA, 12)
+    compress.BufPush(s.out, 3)
+    compress.BufPush(s.out, 1)
+    compress.BufPush(s.out, 0x00)
+    compress.BufPush(s.out, 2)
+    compress.BufPush(s.out, 0x11)
+    compress.BufPush(s.out, 3)
+    compress.BufPush(s.out, 0x11)
+    compress.BufPush(s.out, 0)
+    compress.BufPush(s.out, 63)
+    compress.BufPush(s.out, 0)
+end
+
+@en "NewJPEGStream"
+@fa "جریان جی‌پگ جدید"
+pub func NewJPEGStream(width: int, height: int, opts: JPEGOptions): JPEGStream:
+    mut s := JPEGStream { width = width, height = height }
+    if width <= 0 or height <= 0 or width > 65535 or height > 65535:
+        ret s
+    end
+    if not opts.subsample:
+        s.hs = 1
+        s.vs = 1
+    end
+    s.mcu_w = 8 * s.hs
+    s.mcu_h = 8 * s.vs
+    s.mcus_x = (width + s.mcu_w - 1) / s.mcu_w
+    s.mcu_rows = (height + s.mcu_h - 1) / s.mcu_h
+    s.full_w = s.mcus_x * s.mcu_w
+    s.y_wib = (width + 7) / 8
+    s.y_hib = (height + 7) / 8
+    s.c_w = s.mcus_x * 8
+    plane := ((s.full_w * s.mcu_h) as i64) as u64
+    s.yb = mem.AllocateZeroed(plane)
+    s.cbb = mem.AllocateZeroed(plane)
+    s.crb = mem.AllocateZeroed(plane)
+    s.cbd = mem.AllocateZeroed(((s.c_w * 8) as i64) as u64)
+    s.crd = mem.AllocateZeroed(((s.c_w * 8) as i64) as u64)
+    s.lq = mem.Allocate((64 * 4) as u64)
+    s.cq = mem.Allocate((64 * 4) as u64)
+    s.hc = mem.AllocateZeroed((4 * 256 * 4) as u64)
+    s.hl = mem.AllocateZeroed((4 * 256 * 4) as u64)
+    s.work = mem.Allocate((64 * 4) as u64)
+    if s.yb == null or s.cbb == null or s.crb == null or s.cbd == null or s.crd == null:
+        ret s
+    end
+    _scale_quant(opts.quality, s.lq, s.cq)
+    _js_tables(s)
+    s.out = compress.NewByteBufCap(65536)
+    _js_headers(s, opts)
+    s.ok = true
+    ret s
+end
+
+// One RGB row (r, g, b at p[0], p[step], ... - step 3 or 4 bytes a pixel).
+@en "JPEGStreamWriteRow"
+@fa "نوشتن سطر جی‌پگ"
+pub func JPEGStreamWriteRow(s &: JPEGStream, p: u8*, step: int):
+    if not s.ok or s.rows_written >= s.height:
+        ret
+    end
+    fw := s.full_w
+    base := (s.buffered as i64) * (fw as i64)
+    yp := s.yb as u8*
+    cbp := s.cbb as u8*
+    crp := s.crb as u8*
+    mut x := 0
+    until x < s.width:
+        o := (x * step) as i64
+        r := p[o] as int
+        g := p[o + 1] as int
+        b := p[o + 2] as int
+        at := base + (x as i64)
+        yp[at] = ((19595 * r + 38470 * g + 7471 * b + 32768) >> 16) as u8
+        cbp[at] = ((0 - 11059 * r - 21709 * g + 32768 * b + 8421375) >> 16) as u8
+        crp[at] = ((32768 * r - 27439 * g - 5329 * b + 8421375) >> 16) as u8
+        x += 1
+    end
+    // replicate the last column to the padded width
+    last := base + ((s.width - 1) as i64)
+    until x < fw:
+        at := base + (x as i64)
+        yp[at] = yp[last]
+        cbp[at] = cbp[last]
+        crp[at] = crp[last]
+        x += 1
+    end
+    s.buffered += 1
+    s.rows_written += 1
+    if s.buffered == s.mcu_h:
+        _js_flush_mcu_row(s, s.mcu_h)
+    end
+end
+
+// Every row of a strip image (RGBA).
+@en "JPEGStreamWrite"
+@fa "نوشتن نوار جی‌پگ"
+pub func JPEGStreamWrite(s &: JPEGStream, strip: Image):
+    if strip.pixels == null or strip.width != s.width:
+        ret
+    end
+    bp := strip.pixels as u8*
+    mut y := 0
+    until y < strip.height:
+        JPEGStreamWriteRow(s, ((bp as i64) + (y as i64) * (strip.width as i64) * 4) as u8*, 4)
+        y += 1
+    end
+end
+
+// Pads and encodes what is left, writes EOI and frees the work buffers. The
+// encoded file is in s.out (free it with compress.BufFree). False when not
+// every row was written.
+@en "JPEGStreamFinish"
+@fa "پایان جریان جی‌پگ"
+pub func JPEGStreamFinish(s &: JPEGStream): bool:
+    if not s.ok:
+        ret false
+    end
+    complete := s.rows_written == s.height
+    if complete and s.buffered > 0:
+        fw := s.full_w
+        real := s.buffered
+        mut r := real
+        until r < s.mcu_h:
+            dst := (r as i64) * (fw as i64)
+            src := ((real - 1) as i64) * (fw as i64)
+            mem.Copy(((s.yb as i64) + dst) as void*, ((s.yb as i64) + src) as void*, fw as u64)
+            mem.Copy(((s.cbb as i64) + dst) as void*, ((s.cbb as i64) + src) as void*, fw as u64)
+            mem.Copy(((s.crb as i64) + dst) as void*, ((s.crb as i64) + src) as void*, fw as u64)
+            r += 1
+        end
+        _js_flush_mcu_row(s, real)
+    end
+    if s.nbits > 0:
+        _js_bits(s, 0x7F, 7)
+    end
+    compress.BufPush(s.out, 0xFF)
+    compress.BufPush(s.out, 0xD9)
+    mem.Free(s.yb)
+    mem.Free(s.cbb)
+    mem.Free(s.crb)
+    mem.Free(s.cbd)
+    mem.Free(s.crd)
+    mem.Free(s.lq)
+    mem.Free(s.cq)
+    mem.Free(s.hc)
+    mem.Free(s.hl)
+    mem.Free(s.work)
+    s.yb = null
+    s.ok = false
+    ret complete
+end
+
+@en "EncodeJPEGOptions"
+@fa "کدگذاری جی‌پگ با گزینه"
+pub func EncodeJPEGOptions(img: Image, opts: JPEGOptions): compress.ByteBuf:
+    mut s := NewJPEGStream(img.width, img.height, opts)
+    if not s.ok:
+        ret compress.NewByteBuf()
+    end
+    JPEGStreamWrite(s, img)
+    if not JPEGStreamFinish(s):
+        compress.BufFree(s.out)
+        ret compress.NewByteBuf()
+    end
+    ret s.out
+end
+
+@en "SaveJPEGOptions"
+@fa "ذخیره جی‌پگ با گزینه"
+pub func SaveJPEGOptions(img: Image, path: str, opts: JPEGOptions): bool:
+    mut buf := EncodeJPEGOptions(img, opts)
+    if buf.len == 0:
+        ret false
+    end
+    ok := archive.WriteBinaryFileBuf(path, buf)
+    compress.BufFree(buf)
+    ret ok
+end

@@ -1,0 +1,405 @@
+package nativegen
+
+import str
+
+func new_type(g &: Ng, kind: int, bits: int, size: int, al: int): int:
+    id := g.t_kind.len()
+    g.t_kind.push(kind)
+    g.t_bits.push(bits)
+    g.t_size.push(size)
+    g.t_align.push(al)
+    g.t_elem.push(0 - 1)
+    g.t_count.push(0 as i64)
+    g.t_fs.push(0)
+    g.t_nf.push(0)
+    g.t_done.push(kind != TK_STRUCT and kind != TK_ARRAY and kind != TK_OPAQUE)
+    ret id
+end
+
+func types_init(g &: Ng):
+    _v := new_type(g, TK_VOID, 0, 0, 1)
+    _b := new_type(g, TK_INT, 1, 1, 1)
+    _i8 := new_type(g, TK_INT, 8, 1, 1)
+    _i16 := new_type(g, TK_INT, 16, 2, 2)
+    _i32 := new_type(g, TK_INT, 32, 4, 4)
+    _i64 := new_type(g, TK_INT, 64, 8, 8)
+    _f32 := new_type(g, TK_F32, 32, 4, 4)
+    _f64 := new_type(g, TK_F64, 64, 8, 8)
+    _p := new_type(g, TK_PTR, 64, 8, 8)
+    _i128 := new_type(g, TK_INT, 128, 16, 16)
+    _l := new_type(g, TK_LABEL, 0, 0, 1)
+    v4 := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[v4] = T_F32
+    g.t_count[v4] = 4 as i64
+    v2 := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[v2] = T_F64
+    g.t_count[v2] = 2 as i64
+    vq := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[vq] = T_I64
+    g.t_count[vq] = 2 as i64
+    vd := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[vd] = T_I32
+    g.t_count[vd] = 4 as i64
+    vb := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[vb] = T_I8
+    g.t_count[vb] = 16 as i64
+    vw := new_type(g, TK_VEC, 128, 16, 16)
+    g.t_elem[vw] = T_I16
+    g.t_count[vw] = 8 as i64
+    tab_init(g.tnames, 1024)
+end
+
+func named_type(g &: Ng, s: int, l: int): int:
+    id := tab_add(g.tnames, g.src, s, l)
+    until g.tnamed.len() <= id:
+        g.tnamed.push(0 - 1)
+    end
+    if g.tnamed[id] < 0:
+        g.tnamed[id] = new_type(g, TK_OPAQUE, 0, 0, 1)
+    end
+    ret g.tnamed[id]
+end
+
+func int_type(g &: Ng, bits: int): int:
+    if bits == 1: ret T_I1 end
+    if bits == 8: ret T_I8 end
+    if bits == 16: ret T_I16 end
+    if bits == 32: ret T_I32 end
+    if bits == 64: ret T_I64 end
+    if bits == 128: ret T_I128 end
+    fail(g, "native backend: unsupported integer width i" + str.FromInt(bits as i64))
+    ret T_I64
+end
+
+func array_type(g &: Ng, n: i64, elem: int): int:
+    key := "a" + str.FromInt(n) + "x" + str.FromInt(elem as i64)
+    if g.t_lit.has(key):
+        ret g.t_lit.get(key)
+    end
+    id := new_type(g, TK_ARRAY, 0, 0, 1)
+    g.t_elem[id] = elem
+    g.t_count[id] = n
+    g.t_lit.put(key, id)
+    ret id
+end
+
+func struct_from_fields(g &: Ng, fields: Vector<int>): int:
+    mut key := "s"
+    each f in fields:
+        key = key + "," + str.FromInt(f as i64)
+    end
+    if g.t_lit.has(key):
+        ret g.t_lit.get(key)
+    end
+    id := new_type(g, TK_STRUCT, 0, 0, 1)
+    set_fields(g, id, fields)
+    g.t_lit.put(key, id)
+    ret id
+end
+
+func set_fields(g &: Ng, id: int, fields: Vector<int>):
+    g.t_kind[id] = TK_STRUCT
+    g.t_fs[id] = g.t_pool.len()
+    g.t_nf[id] = fields.len()
+    each f in fields:
+        g.t_pool.push(f)
+        g.t_offs.push(0)
+    end
+    g.t_done[id] = false
+end
+
+func parse_field_list(g &: Ng, close: int): Vector<int>:
+    mut fields := Vector {} as Vector<int>
+    if eat(g, close):
+        ret fields
+    end
+    until g.ok:
+        fields.push(parse_type(g))
+        if eat(g, close):
+            break
+        end
+        expect(g, 44)
+    end
+    ret fields
+end
+
+func parse_type(g &: Ng): int:
+    skip_ws(g)
+    c := cur(g)
+    mut t := 0 - 1
+    if c == 37:
+        if read_sigil_name(g, 37):
+            t = named_type(g, g.ws, g.wl)
+        end
+    else c == 123:
+        g.p += 1
+        fl := parse_field_list(g, 125)
+        t = struct_from_fields(g, fl)
+    else c == 60:
+        g.p += 1
+        expect(g, 123)
+        fl2 := parse_field_list(g, 125)
+        expect(g, 62)
+        t = struct_from_fields(g, fl2)
+    else c == 91:
+        g.p += 1
+        n := read_i64(g)
+        if word_kw(g) != KW_X:
+            fail(g, "native backend: bad array type near '" + near(g) + "'")
+        end
+        el := parse_type(g)
+        expect(g, 93)
+        t = array_type(g, n, el)
+    else c == 105:
+        g.p += 1
+        bits := read_i64(g) as int
+        t = int_type(g, bits)
+    else:
+        k := word_kw(g)
+        if k == KW_PTR:
+            t = T_PTR
+        else k == KW_VOID:
+            t = T_VOID
+        else k == KW_FLOAT:
+            t = T_F32
+        else k == KW_DOUBLE:
+            t = T_F64
+        else k == KW_LABEL:
+            t = T_LABEL
+        else:
+            fail(g, "native backend: unknown type near '" + near(g) + "'")
+            t = T_I64
+        end
+    end
+    until true:
+        skip_sp(g)
+        if cur(g) == 42:
+            g.p += 1
+            t = T_PTR
+        else:
+            break
+        end
+    end
+    ret t
+end
+
+func tlayout(g &: Ng, t: int):
+    if g.t_done[t]:
+        ret
+    end
+    k := g.t_kind[t]
+    if k == TK_ARRAY:
+        el := g.t_elem[t]
+        tlayout(g, el)
+        g.t_size[t] = ((g.t_size[el] as i64) * g.t_count[t]) as int
+        g.t_align[t] = g.t_align[el]
+    else k == TK_STRUCT:
+        mut off := 0
+        mut al := 1
+        fs := g.t_fs[t]
+        repeat g.t_nf[t] in i:
+            ft := g.t_pool[fs + i]
+            tlayout(g, ft)
+            fa := g.t_align[ft]
+            off = align_up(off, fa)
+            g.t_offs[fs + i] = off
+            off += g.t_size[ft]
+            if fa > al:
+                al = fa
+            end
+        end
+        g.t_size[t] = align_up(off, al)
+        g.t_align[t] = al
+    else k == TK_OPAQUE:
+        g.t_size[t] = 0
+        g.t_align[t] = 1
+    end
+    g.t_done[t] = true
+end
+
+func tsize(g &: Ng, t: int): int:
+    tlayout(g, t)
+    ret g.t_size[t]
+end
+
+func talign(g &: Ng, t: int): int:
+    tlayout(g, t)
+    ret g.t_align[t]
+end
+
+func field_off(g &: Ng, t: int, i: int): int:
+    tlayout(g, t)
+    ret g.t_offs[g.t_fs[t] + i]
+end
+
+func field_ty(g &: Ng, t: int, i: int): int:
+    ret g.t_pool[g.t_fs[t] + i]
+end
+
+func is_agg(g &: Ng, t: int): bool:
+    k := g.t_kind[t]
+    ret k == TK_STRUCT or k == TK_ARRAY or k == TK_OPAQUE
+end
+
+func is_vec(g &: Ng, t: int): bool:
+    ret g.t_kind[t] == TK_VEC
+end
+
+func is_flt(g &: Ng, t: int): bool:
+    k := g.t_kind[t]
+    ret k == TK_F32 or k == TK_F64
+end
+
+func int_bits(g &: Ng, t: int): int:
+    if g.t_kind[t] == TK_PTR:
+        ret 64
+    end
+    ret g.t_bits[t]
+end
+
+func dl_num(g &: Ng, q &: int, end_at: int): int:
+    mut v := 0
+    until q < end_at and g.src[q] >= (48 as u8) and g.src[q] <= (57 as u8):
+        v = v * 10 + ((g.src[q] as int) - 48)
+        q += 1
+    end
+    ret v
+end
+
+func apply_datalayout(g &: Ng):
+    key := "target datalayout = \""
+    kn := str.Len(key)
+    mut p := 0
+    mut found := 0 - 1
+    until p + kn < g.sn and found < 0:
+        if (p == 0 or g.src[p - 1] == (10 as u8)) and src_at(g, p, key):
+            found = p + kn
+        end
+        p += 1
+    end
+    if found < 0:
+        if g.arch == NG_ARCH_X86:
+            g.t_bits[T_PTR] = 32
+            g.t_size[T_PTR] = 4
+            g.t_align[T_PTR] = 4
+            g.wsz = 4
+        end
+        ret
+    end
+    mut e := found
+    until e < g.sn and g.src[e] != (34 as u8) and g.src[e] != (10 as u8):
+        e += 1
+    end
+    mut q := found
+    until q < e:
+        c := g.src[q] as int
+        if c == 112 and q + 1 < e and g.src[q + 1] == (58 as u8):
+            q += 2
+            sz := dl_num(g, q, e)
+            mut al := sz
+            if q < e and g.src[q] == (58 as u8):
+                q += 1
+                al = dl_num(g, q, e)
+            end
+            if sz > 0:
+                g.t_bits[T_PTR] = sz
+                g.t_size[T_PTR] = sz / 8
+                g.t_align[T_PTR] = al / 8
+                g.wsz = sz / 8
+            end
+        else (c == 105 or c == 102) and (q == found or g.src[q - 1] == (45 as u8)):
+            q += 1
+            bits := dl_num(g, q, e)
+            if q < e and g.src[q] == (58 as u8):
+                q += 1
+                al2 := dl_num(g, q, e)
+                if c == 105 and bits == 64 and al2 > 0:
+                    g.t_align[T_I64] = al2 / 8
+                else c == 105 and bits == 128 and al2 > 0:
+                    g.t_align[T_I128] = al2 / 8
+                else c == 102 and bits == 64 and al2 > 0:
+                    g.t_align[T_F64] = al2 / 8
+                end
+            end
+        end
+        until q < e and g.src[q] != (45 as u8):
+            q += 1
+        end
+        q += 1
+    end
+    if g.wsz == 4 and not dl_has(g, found, e, "-i64:"):
+        g.t_align[T_I64] = 4
+    end
+end
+
+func dl_has(g &: Ng, from: int, upto: int, pat: str): bool:
+    mut q := from
+    n := str.Len(pat)
+    until q + n <= upto:
+        if src_at(g, q, pat):
+            ret true
+        end
+        q += 1
+    end
+    ret false
+end
+
+func prescan_types(g &: Ng):
+    apply_datalayout(g)
+    mut line_start := true
+    g.p = 0
+    until g.p < g.sn:
+        c := g.src[g.p] as int
+        if line_start and c == 37:
+            save := g.p
+            if read_sigil_name(g, 37):
+                ns := g.ws
+                nl := g.wl
+                if eat(g, 61) and eat_kw(g, KW_TYPE):
+                    id := named_type(g, ns, nl)
+                    skip_ws(g)
+                    if cur(g) == 123:
+                        g.p += 1
+                        fl := parse_field_list(g, 125)
+                        set_fields(g, id, fl)
+                    else cur(g) == 60:
+                        g.p += 1
+                        expect(g, 123)
+                        fl2 := parse_field_list(g, 125)
+                        expect(g, 62)
+                        set_fields(g, id, fl2)
+                    end
+                    skip_line(g)
+                    line_start = true
+                    continue
+                end
+            end
+            g.p = save
+        end
+        if line_start and c == 64:
+            save2 := g.p
+            if read_sigil_name(g, 64):
+                s := sym_of(g, g.src, g.ws, g.wl)
+                if eat(g, 61) and peek_kw(g) != KW_EXTERNAL:
+                    g.sy_def[s] = true
+                    g.sy_kind[s] = SY_DATA
+                end
+            end
+            g.p = save2
+        else line_start and c == 100 and at_off(g, 1) == 101 and at_off(g, 2) == 102:
+            save3 := g.p
+            until g.p < g.sn and g.src[g.p] != (64 as u8) and g.src[g.p] != (10 as u8):
+                g.p += 1
+            end
+            if cur(g) == 64 and read_sigil_name(g, 64):
+                s2 := sym_of(g, g.src, g.ws, g.wl)
+                g.sy_def[s2] = true
+                g.sy_kind[s2] = SY_FUNC
+            end
+            g.p = save3
+        end
+        line_start = c == 10
+        g.p += 1
+    end
+    g.p = 0
+end

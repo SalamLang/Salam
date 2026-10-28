@@ -7,13 +7,28 @@ const BRIDGE = process.env.BRIDGE_MCP ?? "http://127.0.0.1:18091/bridge/mcp";
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? "";
 const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
+const foreign = (lang, n) => `${FENCE}${lang}\n${Array.from({ length: n }, (_, i) => `line ${i}`).join("\n")}\n${FENCE}`;
+const AGENTS = () => (process.env.MOCK_AGENTS ?? "salam,salam-agent,raw").split(",");
+const memoryAnswer = (s) => {
+  const first = /\n\nUser: ([^\n]*)/.exec(s.prompt)?.[1] ?? "";
+  const memories = s.prompt.includes("remember that my favorite color is teal") ? [{ slug: "Favorite Color", title: "Favorite color", description: "What color the user likes", content: "The user likes **teal**." }] : [];
+  return `Sure:\n${JSON.stringify({ summary: `Talked about: ${first.slice(0, 60)}`, memories, forget: [] })}`;
+};
 const answerFor = (s) => {
+  if (s.prompt.includes("<memory_task>")) return memoryAnswer(s);
+  if (s.prompt.includes("what do you remember")) return `Memory: ${s.memory.includes("### Favorite color") && s.memory.includes("teal")} chats=${(s.memory.match(/^- /gm) ?? []).length}`;
   if (s.prompt.includes("which interface")) return `Interface: ${s.ui || "none"}`;
+  if (s.prompt.includes("show policy")) return `Policy: agent=${s.agent} system=${s.system.includes("<salam_policy>") ? "salam" : JSON.stringify(s.system)} operator=${s.system.includes("<operator_instructions>")} tools=${JSON.stringify(s.tools ?? null)} reminder=${s.reminder} defanged=${s.prompt.includes("&lt;/caller_instructions>")}`;
+  if (s.prompt.includes("<language_check>")) return `Rewritten in Salam (${s.prompt.includes("php") ? "saw php" : "no language"}):\n${code('func main:\n    println "hi"\nend')}`;
+  if (s.prompt.includes("write php please")) return `Here is the plugin:\n${foreign("php", 50)}`;
+  if (s.prompt.includes("review then fix please")) return `Here are the fixes:\n${FENCE}\n${Array.from({ length: 50 }, (_, i) => `def run_${i}(self):`).join("\n")}\n${FENCE}`;
+  if (s.prompt.includes("spread python please")) return `One more part:\n${FENCE}python\n${Array.from({ length: 35 }, (_, i) => `value_${i} = compute(${i})`).join("\n")}\n${FENCE}`;
+  if (s.prompt.includes("short php please")) return `A tiny helper:\n${foreign("php", 5)}`;
   if (s.files?.length || s.prompt.includes("<attached_file")) {
     const blocks = [...s.prompt.matchAll(/<attached_file name="([^"]+)">/g)].map((m) => m[1]);
     return `Saw images [${(s.files ?? []).join(", ")}] and text [${blocks.join(", ")}]`;
   }
-  if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}`;
+  if (s.tool !== undefined) return `Tool said (${s.agent}): ${s.tool}${s.project ? " [project]" : ""}`;
   if (s.prompt.includes("<caller_tools>") && s.prompt.includes("write it to a file")) {
     return JSON.stringify({ tool: "write_to_file", arguments: { path: "factorial.salam", content: "func main:\n    println 1\n    ret 0\nend\n" } });
   }
@@ -37,7 +52,7 @@ const answerFor = (s) => {
 };
 async function callDesktop(s) {
   const session = /session: ([0-9a-f]{32})/.exec(s.prompt)?.[1] ?? "";
-  const command = /run: (.*)$/m.exec(s.prompt)?.[1] ?? "echo hi";
+  const command = /run: ([\s\S]*)$/.exec(s.prompt)?.[1] ?? "echo hi";
   const call = async (name, args) => {
     const res = await fetch(BRIDGE, {
       method: "POST",
@@ -47,7 +62,8 @@ async function callDesktop(s) {
     return (await res.json()).result;
   };
   try {
-    let r = await call("shell", { session, command });
+    const tool = /tool: (\w+) (\{[^\n]*\})/.exec(s.prompt);
+    let r = tool ? await call(tool[1], { session, ...JSON.parse(tool[2]) }) : await call("shell", { session, command });
     s.waits = 0;
     for (let id = /call_id "([0-9a-f]+)"/.exec(r.content[0].text)?.[1]; id && !r.isError; id = /call_id "([0-9a-f]+)"/.exec(r.content[0].text)?.[1]) {
       s.waits += 1;
@@ -106,14 +122,14 @@ http.createServer((req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/config") return send(200, { model: "mock/vision", agent: { salam: {} } });
     if (req.method === "GET" && url.pathname === "/config/providers") return send(200, { providers: [{ id: "mock", models: { vision: { capabilities: { input: { text: true, image: true, pdf: false } } } } }] });
-    if (req.method === "GET" && url.pathname === "/agent") return send(200, (process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").map((name) => ({ name })));
-    if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", start: 0 }); return send(200, { id }); }
+    if (req.method === "GET" && url.pathname === "/agent") return send(200, AGENTS().map((name) => ({ name })));
+    if (req.method === "POST" && url.pathname === "/session") { const id = `ses_${++n}`; sessions.set(id, { prompt: "", system: "", start: 0 }); return send(200, { id }); }
     if (req.method === "GET" && url.pathname === "/session/status") {
       const busy = {};
-      for (const [id, s] of sessions) if (!s.dead && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
+      for (const [id, s] of sessions) if (!s.dead && !s.prompt?.includes("restarted mid answer") && (s.waiting || (s.start && Date.now() - s.start < (s.limited ? 300 : s.span)))) busy[id] = { type: "busy" };
       return send(200, busy);
     }
-    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, ""); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !(process.env.MOCK_AGENTS ?? "salam,salam-agent").split(",").includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
+    if ((m = /^\/session\/([^/]+)\/prompt_async$/.exec(url.pathname))) { const s = sessions.get(m[1]); const b = JSON.parse(body); s.dead = false; const uiNote = /<user_interface>\n([\s\S]*?)<\/user_interface>\n\n/.exec(b.parts[0].text); s.ui = uiNote ? (uiNote[1].includes("English interface") ? "en" : "fa") : ""; s.reminder = b.parts[0].text.includes("<salam_policy_reminder>"); s.memory = /<user_memory>([\s\S]*?)<\/user_memory>/.exec(b.parts[0].text)?.[1] ?? ""; s.prompt = b.parts[0].text.replace(/<user_interface>\n[\s\S]*?<\/user_interface>\n\n/, "").replace(/\n\n<salam_policy_reminder>[\s\S]*?<\/salam_policy_reminder>/, "").replace(/\n\n<user_memory>[\s\S]*?<\/user_memory>/, ""); s.project = /<project_instructions file="AGENTS.md">\nUse tabs/.test(s.prompt) && s.prompt.includes("<project_memory>\n# Salam Agent memory"); s.agent = b.agent; s.files = b.parts.filter((p) => p.type === "file" && p.url.startsWith(`data:${p.mime};base64,`)).map((p) => `${p.filename} ${p.mime}`); s.model = b.model?.modelID ?? ""; s.system = b.system ?? ""; s.tools = b.tools; s.limited = (s.prompt.includes("rate limited") && !s.model) || s.prompt.includes("always limited"); s.start = Date.now(); s.tool = undefined; s.span = 1000 * Number(/slow: (\d+)/.exec(s.prompt)?.[1] ?? 0) + 1200; if (s.prompt.includes("never start") || !AGENTS().includes(s.agent)) { s.dead = true; res.writeHead(204); return res.end(); } if (s.prompt.includes("<desktop_session>") || s.prompt.includes("<cloud_session>")) { s.waiting = true; callDesktop(s).then(() => (s.waiting = false)); } else { streamParts(m[1], s); } res.writeHead(204); return res.end(); }
     if ((m = /^\/session\/([^/]+)\/message$/.exec(url.pathname))) {
       const s = sessions.get(m[1]);
       if (!s) return send(404, {});
@@ -126,6 +142,12 @@ http.createServer((req, res) => {
         ]);
       }
       const full = answerFor(s);
+      if (s.prompt.includes("restarted mid answer")) {
+        return send(200, [
+          { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },
+          { info: { role: "assistant", time: { created: s.start }, cost: 0, tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [{ type: "text", text: "partial words before the restart" }] },
+        ]);
+      }
       if (s.prompt.includes("goes quiet")) {
         return send(200, [
           { info: { role: "user", agent: s.agent }, parts: [{ type: "text", text: s.prompt }] },

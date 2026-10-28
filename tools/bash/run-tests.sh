@@ -360,6 +360,86 @@ EOF_NOTS
             echo "  $out"
         fi
     }
+    wk_lint() {
+        largs=$(grep -oE '^// ARGS: .*' "$f" | head -1 | sed -E 's|^// ARGS: ||' | tr -d '\r')
+        [ -n "$largs" ] || largs="--switch-lint=warn"
+        # shellcheck disable=SC2086
+        json=$("$SALAM_ABS" check "$f" $largs --error-format=json --lang="$lang" 2>&1 | tr -d '\r')
+        # shellcheck disable=SC2086
+        out=$("$SALAM_ABS" check "$f" $largs --no-color --log-level=warn --lang="$lang" 2>&1 | tr -d '\r')
+        want_n=$(grep -oE '^// EXPECT-WARNINGS: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-WARNINGS: ||')
+        want_fx=$(grep -oE '^// EXPECT-FIXES: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-FIXES: ||')
+        got_n=$(printf '%s\n' "$json" | grep -cE '"code":"([WE]145|[^"]*۱۴۵)"')
+        got_fx=$(printf '%s\n' "$json" | grep -E '"code":"([WE]145|[^"]*۱۴۵)"' | grep -c '"fixes":\[{')
+        lfail=""
+        stray=$(printf '%s\n' "$json" | grep '"level":"error"' | grep -vE '"code":"([WE]145|[^"]*۱۴۵)"' | head -1)
+        if [ -n "$stray" ]; then
+            lfail="the program has its own error: $stray"
+        elif [ -z "$want_n" ]; then
+            lfail="missing // EXPECT-WARNINGS: N"
+        elif [ "$got_n" != "$want_n" ]; then
+            lfail="want $want_n W145, got $got_n"
+        elif [ -n "$want_fx" ] && [ "$got_fx" != "$want_fx" ]; then
+            lfail="want $want_fx with a fix, got $got_fx"
+        else
+            msgs=$(grep -oE '^// EXPECT-MSG: .*' "$f" | sed -E 's|^// EXPECT-MSG: ||' | tr -d '\r')
+            while IFS= read -r want_msg; do
+                [ -n "$want_msg" ] || continue
+                printf '%s\n' "$out" | grep -qF -- "$want_msg" || lfail="want message '$want_msg'"
+            done <<EOF_LMSGS
+$msgs
+EOF_LMSGS
+            nots=$(grep -oE '^// EXPECT-NOT: .*' "$f" | sed -E 's|^// EXPECT-NOT: ||' | tr -d '\r')
+            while IFS= read -r bad_msg; do
+                [ -n "$bad_msg" ] || continue
+                if printf '%s\n' "$out" | grep -qF -- "$bad_msg"; then lfail="unexpected '$bad_msg'"; fi
+            done <<EOF_LNOTS
+$nots
+EOF_LNOTS
+        fi
+        if [ -z "$lfail" ]; then
+            echo "PASS $label ($got_n)"
+        else
+            echo "FAIL $label ($lfail)"
+            echo "  $out"
+        fi
+    }
+    lint_run() { # <source> <dir> -> program output on stdout, empty when it did not build
+        lr_exe="$2/run.exe"
+        rm -f "$lr_exe"
+        (cd "$2" && "$SALAM_ABS" build "$1" --output="$lr_exe" --no-color --log-level=error --lang="$lang") >"$2/build.log" 2>&1
+        [ -x "$lr_exe" ] || return 1
+        tmo "${SALAM_TEST_TIMEOUT:-20}" "$lr_exe" </dev/null 2>&1 | tr -d '\r'
+    }
+    wk_lintfix() {
+        jobdir="$WORK/lfjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        cp "$fabs" "$jobdir/orig.salam"
+        cp "$fabs" "$jobdir/fixed.salam"
+        lfail=""
+        (cd "$jobdir" && "$SALAM_ABS" check fixed.salam --fix --switch-lint=fix --no-color --log-level=error --lang="$lang") >"$jobdir/fix.log" 2>&1
+        golden="${fabs%.salam}.fixed"
+        if [ ! -f "$golden" ]; then
+            lfail="missing ${golden##*/}"
+        elif [ "$(tr -d '\r' <"$jobdir/fixed.salam")" != "$(tr -d '\r' <"$golden")" ]; then
+            lfail="rewritten file differs from ${golden##*/}"
+            diff "$golden" "$jobdir/fixed.salam" | head -20 | sed 's/^/  /'
+        else
+            again=$(cd "$jobdir" && "$SALAM_ABS" check fixed.salam --switch-lint=warn --error-format=json --lang="$lang" 2>&1 | grep -cE '"code":"([WE]145|[^"]*۱۴۵)"')
+            [ "$again" = 0 ] || lfail="$again W145 left after the rewrite"
+        fi
+        if [ -z "$lfail" ]; then
+            got_orig=$(lint_run "$jobdir/orig.salam" "$jobdir") || got_orig="<build failed>"
+            got_fixed=$(lint_run "$jobdir/fixed.salam" "$jobdir") || got_fixed="<build failed>"
+            if [ "$got_orig" != "$got_fixed" ]; then
+                lfail="output changed: before '$(printf '%s' "$got_orig" | tr '\n' '|')' after '$(printf '%s' "$got_fixed" | tr '\n' '|')'"
+            elif [ -f "$expabs" ] && [ "$got_fixed" != "$(tr -d '\r' <"$expabs")" ]; then
+                lfail="output is '$(printf '%s' "$got_fixed" | tr '\n' '|')', not the expected one"
+            fi
+        fi
+        if [ -z "$lfail" ]; then echo "PASS $label"; else echo "FAIL $label ($lfail)"; fi
+        rm -rf "$jobdir"
+    }
     wk_page_errors() {
         lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
         lfail=""
@@ -472,6 +552,8 @@ EOF_LAYOUT_NOT
         lib) wk_lib ;;
         script) wk_script ;;
         expect) wk_expect ;;
+        lint) wk_lint ;;
+        lintfix) wk_lintfix ;;
         buildonly) wk_buildonly ;;
         jsbuildonly) wk_jsbuildonly ;;
         cross) wk_cross ;;
@@ -721,6 +803,10 @@ if want lib && command -v cc >/dev/null 2>&1 && { [ "$(uname -s 2>/dev/null)" = 
             add_job lib "lib/$lang/$name" "tests/$lang/lib/$name" "$lang" "$f"
         done
     done
+fi
+
+if want testcmd; then
+    add_job script "testcmd/en/flow" "tools/bash/test-salam-test.sh" "en" "tests/en/testcmd/flow.out"
 fi
 
 if want packages && command -v git >/dev/null 2>&1; then
@@ -1135,6 +1221,23 @@ if want errors; then
             name=$(basename "$f" .salam)
             case "$name" in _*) continue ;; esac
             add_job errors "errors/$lang/$name" "$f" "$lang" -
+        done
+    done
+fi
+
+if want lint; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/lint/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            add_job lint "lint/$lang/$name" "$f" "$lang" -
+        done
+        for f in tests/"$lang"/lint/fix/*.salam; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .salam)
+            case "$name" in _*) continue ;; esac
+            add_job lintfix "lint/$lang/fix/$name" "$f" "$lang" "$(pick_expect "tests/$lang/lint/fix/$name")"
         done
     done
 fi

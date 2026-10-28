@@ -19,6 +19,7 @@ import encoding.json
 import encoding.value
 import encoding.encerr
 import str
+import conv
 import sync
 import time
 
@@ -32,6 +33,8 @@ mut ENGINE_BASE := ""
 mut ENGINE_AUTH := ""
 mut ENGINE_AGENT := ""
 mut DESKTOP_AGENT := ""
+mut PLAIN_AGENT := ""
+mut SYSTEM := ""
 mut LOCK := sync.Mutex {}
 mut AGENTS := ""
 mut AGENTS_AT := 0 as i64
@@ -39,9 +42,13 @@ mut SESSION_AGENT := HashMap {} as HashMap<str, str>
 mut SESSION_PROMPT := HashMap {} as HashMap<str, str>
 mut SESSION_PARTS := HashMap {} as HashMap<str, str>
 mut CAPS_AT := 0 as i64
+mut PRICES := HashMap {} as HashMap<str, str>
+mut PRICES_AT := 0 as i64
 mut CAPS_IMAGE := false
 mut CAPS_PDF := false
 mut SESSION_MODEL := HashMap {} as HashMap<str, str>
+mut SESSION_SYSTEM := HashMap {} as HashMap<str, str>
+mut SESSION_TOOLS := HashMap {} as HashMap<str, str>
 mut SESSION_TRY := HashMap {} as HashMap<str, int>
 mut SESSION_RETRY_AT := HashMap {} as HashMap<str, i64>
 mut FALLBACKS := Vector {} as Vector<str>
@@ -61,6 +68,8 @@ pub struct Reply:
     pub started: bool = false
     pub idle: bool = false
     pub acted: bool = false
+    pub timed_out: bool = false
+    pub interrupted: bool = false
 end
 
 pub struct Usage:
@@ -71,6 +80,8 @@ pub struct Usage:
     pub cache_read: i64 = 0
     pub cache_write: i64 = 0
     pub cost: f64 = 0.0
+    pub cost_in: f64 = 0.0
+    pub cost_out: f64 = 0.0
     pub tools: int = 0
     pub steps: int = 0
     pub ms: i64 = 0
@@ -268,18 +279,22 @@ func model_json(model: str): str:
     ret `, "model": {"providerID": ` + json.Str(model.substr(0, slash)) + `, "modelID": ` + json.Str(model.substr(slash + 1, model.len() - slash - 1)) + "}"
 end
 
-func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: str):
+func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: str, system: str, tools: str):
     _l := sync.Lock(LOCK)
     if SESSION_AGENT.size() > 5000:
         SESSION_AGENT = HashMap {} as HashMap<str, str>
         SESSION_PROMPT = HashMap {} as HashMap<str, str>
         SESSION_PARTS = HashMap {} as HashMap<str, str>
         SESSION_MODEL = HashMap {} as HashMap<str, str>
+        SESSION_SYSTEM = HashMap {} as HashMap<str, str>
+        SESSION_TOOLS = HashMap {} as HashMap<str, str>
         SESSION_TRY = HashMap {} as HashMap<str, int>
         SESSION_RETRY_AT = HashMap {} as HashMap<str, i64>
     end
     SESSION_AGENT.put(sid, agent)
     SESSION_MODEL.put(sid, model)
+    SESSION_SYSTEM.put(sid, system)
+    SESSION_TOOLS.put(sid, tools)
     if fresh:
         SESSION_PROMPT.put(sid, text)
         SESSION_PARTS.put(sid, parts)
@@ -289,12 +304,20 @@ func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: s
     _u := sync.Unlock(LOCK)
 end
 
-func post_prompt(sid: str, agent: str, text: str, model: str, parts: str): bool:
+func post_prompt(sid: str, agent: str, text: str, model: str, parts: str, system: str, tools: str): bool:
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     str.BufAppend(b, `{"agent": `)
     str.BufAppend(b, json.Str(agent))
     str.BufAppend(b, model_json(model))
+    if system.len() > 0:
+        str.BufAppend(b, `, "system": `)
+        str.BufAppend(b, json.Str(system))
+    end
+    if tools.len() > 0:
+        str.BufAppend(b, `, "tools": `)
+        str.BufAppend(b, tools)
+    end
     str.BufAppend(b, `, "parts": [{"type": "text", "text": `)
     str.BufAppend(b, json.Str(text))
     str.BufAppend(b, "}")
@@ -303,9 +326,9 @@ func post_prompt(sid: str, agent: str, text: str, model: str, parts: str): bool:
     ret ok_status(call("POST", "/session/" + sid + "/prompt_async", str.BufStr(b), SEND_MS))
 end
 
-func send_as(sid: str, agent: str, text: str, parts: str): bool:
-    remember(sid, agent, text, "", true, parts)
-    ret post_prompt(sid, agent, text, "", parts)
+func send_as(sid: str, agent: str, text: str, parts: str, system: str, tools: str): bool:
+    remember(sid, agent, text, "", true, parts, system, tools)
+    ret post_prompt(sid, agent, text, "", parts, system, tools)
 end
 
 func caps_model(config: value.Value, agent: str): str:
@@ -429,6 +452,98 @@ func trace_part(p: value.Value, mask: str): str:
     ret json.Object(m)
 end
 
+func load_prices():
+    pr := call("GET", "/config/providers", "", CALL_MS)
+    if not ok_status(pr):
+        _l := sync.Lock(LOCK)
+        PRICES_AT = time.NowMillis() - 540000
+        _u := sync.Unlock(LOCK)
+        ret
+    end
+    mut perr := encerr.EncodingError {}
+    all := json.Decode(pr.body, perr)
+    list := field(all, "providers")
+    mut table := HashMap {} as HashMap<str, str>
+    if value.IsArray(list):
+        repeat value.ArrayLen(list) in i:
+            prov := value.ArrayGet(list, i)
+            pid := text_of(prov, "id")
+            models := field(prov, "models")
+            if value.IsObject(models):
+                each mid in value.ObjectKeys(models):
+                    c := field(field(models, mid), "cost")
+                    if value.IsObject(c):
+                        table.put(pid + "/" + mid, price_of(c, "input") + "|" + price_of(c, "output") + "|" + price_of(c, "cache_read") + "|" + price_of(c, "cache_write"))
+                    end
+                end
+            end
+        end
+    end
+    value.ValueFree(all)
+    _a := sync.Lock(LOCK)
+    PRICES = table
+    PRICES_AT = time.NowMillis()
+    _b := sync.Unlock(LOCK)
+end
+
+func price_of(c: value.Value, key: str): str:
+    f := field(c, key)
+    if value.IsNumber(f):
+        ret conv.FormatFloatPrec(value.AsFloat(f), 8)
+    end
+    ret "0"
+end
+
+func prices_for(model_key: str, pin &: f64, pout &: f64, pcr &: f64, pcw &: f64): bool:
+    _l := sync.Lock(LOCK)
+    stale := time.NowMillis() - PRICES_AT > 600000
+    _u := sync.Unlock(LOCK)
+    if stale:
+        load_prices()
+    end
+    _a := sync.Lock(LOCK)
+    have := PRICES.has(model_key)
+    row := have ? PRICES.get(model_key) : ""
+    _b := sync.Unlock(LOCK)
+    if not have:
+        ret false
+    end
+    p := row.split("|")
+    if p.len() != 4:
+        ret false
+    end
+    pin = p.get(0).to_float()
+    pout = p.get(1).to_float()
+    pcr = p.get(2).to_float()
+    pcw = p.get(3).to_float()
+    ret pin > 0.0 or pout > 0.0
+end
+
+func split_cost(model_key: str, total: f64, in_tokens: i64, out_tokens: i64, cache_read: i64, cache_write: i64, cost_in &: f64, cost_out &: f64):
+    if total <= 0.0:
+        ret
+    end
+    mut pin := 0.0
+    mut pout := 0.0
+    mut pcr := 0.0
+    mut pcw := 0.0
+    if not prices_for(model_key, pin, pout, pcr, pcw):
+        pin = 1.0
+        pout = 5.0
+        pcr = 0.1
+        pcw = 1.25
+    end
+    ci := (in_tokens as f64) * pin + (cache_read as f64) * pcr + (cache_write as f64) * pcw
+    co := (out_tokens as f64) * pout
+    sum := ci + co
+    if sum <= 0.0:
+        cost_in += total
+        ret
+    end
+    cost_in += total * ci / sum
+    cost_out += total * co / sum
+end
+
 pub func Configure(url: str, auth: str, agent: str, desktop: str):
     LOCK = sync.NewMutex()
     mut rest := str.TrimPrefix(url, "http://")
@@ -458,16 +573,49 @@ pub func NewSession(title: str): str:
     ret json.Get(r.body, "id")
 end
 
+pub func SetPolicy(system: str, plain_agent: str):
+    SYSTEM = system
+    PLAIN_AGENT = plain_agent
+end
+
+pub func PlainReady(): bool:
+    ret PLAIN_AGENT.len() > 0 and agent_exists(PLAIN_AGENT)
+end
+
 pub func Send(sid: str, text: str, parts: str): bool:
-    ret send_as(sid, ENGINE_AGENT, text, parts)
+    ret send_as(sid, ENGINE_AGENT, text, parts, SYSTEM, "")
+end
+
+pub func SendWith(sid: str, text: str, parts: str, plain: bool, system: str, tools: bool): bool:
+    mut agent := ENGINE_AGENT
+    if plain:
+        if PlainReady():
+            agent = PLAIN_AGENT
+        else:
+            println "engine has no agent", PLAIN_AGENT, "so a custom API key is answered by", ENGINE_AGENT
+        end
+    end
+    ret send_as(sid, agent, text, parts, system, tools ? "" : `{"*": false}`)
+end
+
+pub func SendFree(sid: str, text: str, parts: str, system: str): bool:
+    ret SendWith(sid, text, parts, true, system, true)
+end
+
+pub func SendDesktopFree(sid: str, text: str, parts: str, system: str): bool:
+    mut agent := DESKTOP_AGENT
+    if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
+        agent = ENGINE_AGENT
+    end
+    ret send_as(sid, agent, text, parts, system, "")
 end
 
 pub func SendDesktop(sid: str, text: str, parts: str): bool:
     if DESKTOP_AGENT != ENGINE_AGENT and not agent_exists(DESKTOP_AGENT):
         println "engine has no agent", DESKTOP_AGENT, "so desktop chats use", ENGINE_AGENT
-        ret send_as(sid, ENGINE_AGENT, text, parts)
+        ret send_as(sid, ENGINE_AGENT, text, parts, SYSTEM, "")
     end
-    ret send_as(sid, DESKTOP_AGENT, text, parts)
+    ret send_as(sid, DESKTOP_AGENT, text, parts, SYSTEM, "")
 end
 
 pub func Accepts(image &: bool, pdf &: bool):
@@ -487,9 +635,11 @@ pub func Followup(sid: str, text: str): bool:
     _l := sync.Lock(LOCK)
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
     model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
+    system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
+    tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
     _u := sync.Unlock(LOCK)
-    remember(sid, agent, text, model, false, "")
-    ret post_prompt(sid, agent, text, model, "")
+    remember(sid, agent, text, model, false, "", system, tools)
+    ret post_prompt(sid, agent, text, model, "", system, tools)
 end
 
 pub func SetFallbacks(list: str):
@@ -525,6 +675,8 @@ pub func Retry(sid: str): bool:
     text := SESSION_PROMPT.get(sid)
     parts := SESSION_PARTS.has(sid) ? SESSION_PARTS.get(sid) : ""
     model := FALLBACKS.get(tried)
+    system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
+    tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
     _u := sync.Unlock(LOCK)
     seen := Poll(sid)
     if seen.acted or seen.text.len() > 0:
@@ -532,8 +684,8 @@ pub func Retry(sid: str): bool:
     end
     _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
     println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
-    remember(sid, agent, text, model, false, "")
-    ret post_prompt(sid, agent, text, model, parts)
+    remember(sid, agent, text, model, false, "", system, tools)
+    ret post_prompt(sid, agent, text, model, parts, system, tools)
 end
 
 pub func SetRedactions(words: str):
@@ -664,6 +816,7 @@ pub func UsageOf(sid: str): Usage:
             c := field(info, "cost")
             if value.IsNumber(c):
                 u.cost += value.AsFloat(c)
+                split_cost(text_of(info, "providerID") + "/" + text_of(info, "modelID"), value.AsFloat(c), num(t, "input"), num(t, "output") + num(t, "reasoning"), num(field(t, "cache"), "read"), num(field(t, "cache"), "write"), u.cost_in, u.cost_out)
             end
             tm := field(info, "time")
             created := num(tm, "created")
@@ -690,6 +843,27 @@ pub func UsageOf(sid: str): Usage:
         u.ms = last - first
     end
     ret u
+end
+
+pub func Retrying(sid: str, note &: str, wait_ms &: i64): bool:
+    r := call("GET", "/session/status", "", CALL_MS)
+    if not ok_status(r):
+        ret false
+    end
+    entry := json.Get(r.body, sid)
+    if entry.len() == 0 or json.Get(entry, "type") != "retry":
+        ret false
+    end
+    note = json.Get(entry, "message")
+    next := json.Get(entry, "next")
+    wait_ms = 0
+    if next.len() > 0:
+        wait_ms = conv.ParseInt(next) - time.NowMillis()
+        if wait_ms < 0:
+            wait_ms = 0
+        end
+    end
+    ret true
 end
 
 pub func Poll(sid: str): Reply:
@@ -766,6 +940,7 @@ pub func Poll(sid: str): Reply:
     end
     out.idle = not busy
     out.done = not busy and last_done and last_finish != "tool-calls"
+    out.interrupted = not busy and out.started and not last_done
     if searching:
         out.phase = "searching"
     else out.text.len() > 0:

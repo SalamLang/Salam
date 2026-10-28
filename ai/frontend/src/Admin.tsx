@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminTelegram, type AdminKey, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { Checkbox } from "./Checkbox";
 
 type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
@@ -75,6 +76,8 @@ function pickUsage(p: UsagePeriod, mode: UsageMode): UsageTotals {
     cache_read: p.chat.cache_read + p.api.cache_read,
     cache_write: p.chat.cache_write + p.api.cache_write,
     cost: p.chat.cost + p.api.cost,
+    cost_in: p.chat.cost_in + p.api.cost_in,
+    cost_out: p.chat.cost_out + p.api.cost_out,
   };
 }
 
@@ -97,13 +100,14 @@ function UsageTiles({ usage }: { usage: UsagePeriod[] }) {
     const tk = tokenSplit(pickUsage(p, "all"));
     return <Tile key={p.key} label={label} value={tk.total} compact sub={t(`${fmtCompact(tk.input)} ورودی، ${fmtCompact(tk.output)} خروجی`, `${fmtCompact(tk.input)} in, ${fmtCompact(tk.output)} out`)} />;
   };
-  const monthCost = month ? pickUsage(month, "all").cost : 0;
+  const monthTotals = month ? pickUsage(month, "all") : null;
+  const monthCost = monthTotals ? monthTotals.cost : 0;
   return (
     <div className="tiles">
       {tile(t("توکن‌های امروز", "Tokens today"), today)}
       {tile(month ? t(`توکن‌های ${fmtMonth(month.from)}`, `Tokens in ${fmtMonth(month.from)}`) : t("توکن‌های این ماه", "Tokens this month"), month)}
       {tile(t("توکن‌های کل", "Tokens all time"), all)}
-      {month && monthCost > 0 && <Tile label={t("هزینه‌ی این ماه", "Cost this month")} value={monthCost} display={fmtCost(monthCost)} sub={fmtMonth(month.from)} />}
+      {month && monthCost > 0 && <Tile label={t("هزینه‌ی این ماه", "Cost this month")} value={monthCost} display={fmtCost(monthCost)} sub={monthTotals ? t(`${fmtCost(monthTotals.cost_in)} ورودی، ${fmtCost(monthTotals.cost_out)} خروجی`, `${fmtCost(monthTotals.cost_in)} in, ${fmtCost(monthTotals.cost_out)} out`) : fmtMonth(month.from)} />}
     </div>
   );
 }
@@ -129,7 +133,9 @@ function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
               <th scope="col">{t("خروجی", "Output")}</th>
               <th scope="col">{t("کش", "Cache")}</th>
               <th scope="col">{t("جمع", "Total")}</th>
-              {showCost && <th scope="col">{t("هزینه", "Cost")}</th>}
+              {showCost && <th scope="col">{t("هزینه‌ی ورودی", "Input cost")}</th>}
+              {showCost && <th scope="col">{t("هزینه‌ی خروجی", "Output cost")}</th>}
+              {showCost && <th scope="col">{t("هزینه‌ی کل", "Total cost")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -149,7 +155,9 @@ function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
                   <td className="strong" title={exactTitle(sp.total)}>
                     {fmtCompact(sp.total)}
                   </td>
-                  {showCost && <td>{tot.cost > 0 ? fmtCost(tot.cost) : <span className="muted">-</span>}</td>}
+                  {showCost && <td dir="ltr">{tot.cost_in > 0 ? fmtCost(tot.cost_in) : <span className="muted">-</span>}</td>}
+                  {showCost && <td dir="ltr">{tot.cost_out > 0 ? fmtCost(tot.cost_out) : <span className="muted">-</span>}</td>}
+                  {showCost && <td dir="ltr" className="strong">{tot.cost > 0 ? fmtCost(tot.cost) : <span className="muted">-</span>}</td>}
                 </tr>
               );
             })}
@@ -157,7 +165,7 @@ function UsagePanel({ usage }: { usage: UsagePeriod[] }) {
         </table>
       </div>
       <p className="muted small usage-note">
-        {t("ورودی شامل توکن‌های کش هم هست و ستون کش همان بخش را جدا نشان می‌دهد. خروجی شامل توکن‌های استدلال است. «همه» جمع گفت‌وگوهای سایت و درخواست‌های API است.", "Input includes cached tokens, and the cache column shows that part on its own. Output includes reasoning tokens. 'All' is site chats plus API requests.")}
+        {t("ورودی شامل توکن‌های کش هم هست و ستون کش همان بخش را جدا نشان می‌دهد. خروجی شامل توکن‌های استدلال است. هزینه‌ها به دلار است؛ سهم ورودی (با کش) و خروجی از قیمت مدل محاسبه می‌شود و برای ردیف‌های قدیمی تخمینی است. «همه» جمع گفت‌وگوهای سایت و درخواست‌های API است.", "Input includes cached tokens, and the cache column shows that part on its own. Output includes reasoning tokens. Costs are in US dollars; the input (cache included) and output shares come from the model's prices and are estimates for older rows. 'All' is site chats plus API requests.")}
       </p>
     </section>
   );
@@ -405,7 +413,8 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
   );
 }
 
-function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string) => void }) {
+  const [saving, setSaving] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -434,6 +443,30 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
       live = false;
     };
   }, [query, offset]);
+
+  const togglePolicy = async (u: AdminUser) => {
+    const lift = !u.policy_free;
+    const ok = await confirmDialog({
+      title: lift ? t("برداشتن محدودیت فقط-سلام", "Lift the Salam-only limit") : t("برگرداندن محدودیت فقط-سلام", "Restore the Salam-only limit"),
+      subject: u.name,
+      message: lift
+        ? t("دستیار برای این کاربر (سایت، تلگرام، ایجنت و کلیدهای API او) به زبان‌ها و فناوری‌های دیگر هم کد می‌نویسد و بررسی‌های سلام‌محور اعمال نمی‌شود. بقیه‌ی کاربران همچنان محدود می‌مانند.", "The assistant will write code in other languages and technologies for this user (site, Telegram, agent and their API keys) and the Salam-only checks are skipped. Everyone else stays limited.")
+        : t("محدودیت فقط-سلام دوباره برای این کاربر فعال می‌شود.", "The Salam-only limit applies to this user again."),
+      confirmLabel: lift ? t("برداشتن", "Lift") : t("فعال کردن", "Restore"),
+      icon: "alert",
+    });
+    if (!ok) return;
+    setSaving(u.id);
+    try {
+      const r = await api.adminUserPolicy(u.id, { policy_free: lift });
+      setData((cur) => (cur ? { ...cur, users: cur.users.map((x) => (x.id === u.id ? { ...x, policy_free: r.user.policy_free } : x)) } : cur));
+      notify(lift ? t("محدودیت برای این کاربر برداشته شد.", "The limit was lifted for this user.") : t("محدودیت دوباره فعال شد.", "The limit is on again."));
+    } catch (e) {
+      notify(errText(e, t("ذخیره ناموفق بود.", "Could not save.")));
+    } finally {
+      setSaving(null);
+    }
+  };
 
   const total = data?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
@@ -471,6 +504,11 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
               <th scope="col">API</th>
               <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
               <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
+              <th scope="col">{t("هزینه‌ی ورودی ($)", "Input cost ($)")}</th>
+              <th scope="col">{t("هزینه‌ی خروجی ($)", "Output cost ($)")}</th>
+              <th scope="col">{t("هزینه‌ی کل ($)", "Total cost ($)")}</th>
+              <th scope="col">{t("تلگرام", "Telegram")}</th>
+              <th scope="col">{t("محدودیت فقط سلام", "Salam-only limit")}</th>
               <th scope="col">{t("آخرین ورود", "Last login")}</th>
               <th scope="col">{t("آخرین چت", "Last chat")}</th>
               <th scope="col">{t("آخرین ایجنت", "Last agent")}</th>
@@ -499,6 +537,15 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
                 <td>{fmtNum(u.api_requests)}</td>
                 <td title={exactTitle(u.tokens_in || 0)}>{fmtCompact(u.tokens_in || 0)}</td>
                 <td title={exactTitle(u.tokens_out || 0)}>{fmtCompact(u.tokens_out || 0)}</td>
+                <td dir="ltr">{(u.cost_in ?? 0) > 0 ? fmtCost(u.cost_in ?? 0) : <span className="muted">-</span>}</td>
+                <td dir="ltr">{(u.cost_out ?? 0) > 0 ? fmtCost(u.cost_out ?? 0) : <span className="muted">-</span>}</td>
+                <td dir="ltr" className="strong">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
+                <td>{u.telegram ? fmtNum(u.telegram) : <span className="muted">-</span>}</td>
+                <td>
+                  <button type="button" className={`badge ${u.policy_free ? "danger" : "ok"}`} disabled={saving === u.id} onClick={() => togglePolicy(u)} title={t("با زدن، محدودیت فقط-سلام برای این کاربر برداشته یا برگردانده می‌شود", "Click to lift or restore the Salam-only limit for this user")}>
+                    {saving === u.id ? "…" : u.policy_free ? t("برداشته شده", "Lifted") : t("فعال", "On")}
+                  </button>
+                </td>
                 <td title={u.last_login ? t(`${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود`, `${fmtDateTime(u.last_login)}, ${fmtNum(u.logins || 0)} logins in total`) : undefined}>{fmtRelative(u.last_login || 0)}</td>
                 <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
                 <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
@@ -507,7 +554,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             ))}
             {!data && !error && (
               <tr>
-                <td colSpan={17} className="empty-cell">
+                <td colSpan={22} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
                     <span>{t("در حال بارگذاری کاربران…", "Loading users…")}</span>
@@ -517,7 +564,7 @@ function Users({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void
             )}
             {data && data.users.length === 0 && !loading && (
               <tr>
-                <td colSpan={14} className="empty-cell">
+                <td colSpan={22} className="empty-cell">
                   {t("کاربری پیدا نشد.", "No users found.")}
                 </td>
               </tr>
@@ -1148,6 +1195,226 @@ function Conversations({ picked }: { picked: Picked }) {
   );
 }
 
+function policyBadges(k: AdminKey) {
+  return (
+    <span className="badge-row">
+      {k.salam_prompt ? <span className="badge ok">{t("فقط سلام", "Salam only")}</span> : <span className="badge danger">{t("پرامپت سفارشی", "Custom prompt")}</span>}
+      {!k.salam_tools && <span className="badge">{t("بدون MCP", "No MCP")}</span>}
+      {k.salam_prompt && k.system_prompt && <span className="badge">{t("دستور اپراتور", "Operator note")}</span>}
+    </span>
+  );
+}
+
+function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved: (k: AdminKey) => void; onClose: () => void; notify: (msg: string) => void }) {
+  const [salam, setSalam] = useState(k.salam_prompt);
+  const [tools, setTools] = useState(k.salam_tools);
+  const [prompt, setPrompt] = useState(k.system_prompt);
+  const [saving, setSaving] = useState(false);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const r = await api.adminUpdateKey(k.id, { salam_prompt: salam, salam_tools: tools, system_prompt: prompt });
+      onSaved(r.key);
+      notify(t("تنظیم کلید ذخیره شد.", "Key settings saved."));
+    } catch (err) {
+      notify(errText(err, t("ذخیره‌ی تنظیم کلید ناموفق بود.", "Could not save the key settings.")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="grant key-policy" onSubmit={save}>
+      <div className="grant-head">
+        <h4>
+          {t("تنظیم کلید", "Settings for key")} <bdi className="strong">{k.name}</bdi>
+        </h4>
+        <p className="muted">{t("پیش‌فرض هر کلید: دستیار فقط با سلام کار می‌کند و ابزارهای MCP سلام روشن است. این تنظیم فقط با این کلید عوض می‌شود.", "By default a key answers in Salam only, with the Salam MCP tools on. These switches only change this key.")}</p>
+      </div>
+      <Checkbox
+        checked={salam}
+        onChange={setSalam}
+        label={t("پرامپت سیستمی سلام", "Salam system prompt")}
+        hint={t("خاموش: پرامپت و سیاست سلام برداشته می‌شود و فقط پرامپت زیر به کار می‌رود، با پروفایل ساده‌ی موتور.", "Off: the Salam prompt and policy are removed and only the prompt below is used, on the engine's plain profile.")}
+      />
+      <Checkbox
+        checked={tools}
+        onChange={setTools}
+        label={t("ابزارهای MCP", "MCP tools")}
+        hint={t("خاموش: دستیار هیچ ابزاری صدا نمی‌زند (نه salam_check و نه جست‌وجو).", "Off: the assistant calls no tools at all (no salam_check, no search).")}
+      />
+      <label className="grant-field">
+        <span>
+          {salam ? t("دستور اپراتور", "Operator instructions") : t("پرامپت سیستمی کامل", "Full system prompt")} <span className="opt">{t("اختیاری", "optional")}</span>
+        </span>
+        <textarea dir="auto" rows={6} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={salam ? t("بعد از سیاست سلام اضافه می‌شود و نمی‌تواند آن را بردارد.", "Added after the Salam policy; it cannot lift it.") : t("همه‌ی پرامپت سیستمی این کلید.", "The whole system prompt for this key.")} />
+      </label>
+      <div className="grant-actions key-policy-actions">
+        <button type="submit" className="button primary" disabled={saving}>
+          {saving ? <span className="spinner" /> : null}
+          {t("ذخیره", "Save")}
+        </button>
+        <button type="button" className="button ghost" onClick={onClose}>
+          {t("بستن", "Close")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+  const [keys, setKeys] = useState<AdminKey[] | null>(null);
+  const [ready, setReady] = useState(true);
+  const [error, setError] = useState("");
+  const [custom, setCustom] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  const [more, setMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setKeys(null);
+    setError("");
+    setMore(false);
+    api
+      .adminKeys({ user: picked?.id, custom })
+      .then((r) => {
+        if (!live) return;
+        setKeys(r.keys);
+        setReady(r.plain_ready);
+        setMore(r.keys.length >= 50);
+      })
+      .catch((e) => live && setError(errText(e, t("بارگذاری کلیدها ناموفق بود.", "Could not load keys."))));
+    return () => {
+      live = false;
+    };
+  }, [picked, custom]);
+
+  const loadMore = async () => {
+    if (!keys || keys.length === 0) return;
+    setLoadingMore(true);
+    try {
+      const r = await api.adminKeys({ user: picked?.id, custom, before: keys[keys.length - 1].id });
+      setKeys((cur) => [...(cur ?? []), ...r.keys]);
+      setMore(r.keys.length >= 50);
+    } catch (e) {
+      notify(errText(e, t("بارگذاری کلیدها ناموفق بود.", "Could not load keys.")));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("کلیدهای API", "API keys")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
+        <Segmented
+          label={t("نما", "View")}
+          options={[
+            { id: "all", label: t("همه", "All") },
+            { id: "custom", label: t("تنظیم‌شده", "Customized") },
+          ]}
+          value={custom ? "custom" : "all"}
+          onChange={(v) => setCustom(v === "custom")}
+        />
+      </div>
+      {!ready && (
+        <p className="policy-warn" role="status">
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس کلیدهایی که پرامپت سلامشان خاموش است هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so keys with the Salam prompt off are still answered by the Salam profile.")}
+        </p>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {keys === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : (
+        <div className="table-wrap scroll-y">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">{t("کاربر", "User")}</th>
+                <th scope="col">{t("کلید", "Key")}</th>
+                <th scope="col">{t("آخرین استفاده", "Last used")}</th>
+                <th scope="col">{t("درخواست", "Requests")}</th>
+                <th scope="col">{t("رفتار", "Behavior")}</th>
+                <th scope="col">
+                  <span className="sr-only">{t("کارها", "Actions")}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {keys?.map((k) => (
+                <Fragment key={k.id}>
+                  <tr className={k.revoked ? "revoked" : ""}>
+                    <td>
+                      <bdi>{k.user.name}</bdi>
+                      <span className="cell-sub" dir="ltr">
+                        {k.user.email}
+                      </span>
+                    </td>
+                    <td>
+                      <bdi>{k.name}</bdi>
+                      <span className="cell-sub cell-mono" dir="ltr">
+                        {k.prefix}…{k.revoked ? ` ${t("(باطل)", "(revoked)")}` : ""}
+                      </span>
+                    </td>
+                    <td title={k.last_used ? fmtDateTime(k.last_used) : undefined}>{fmtRelative(k.last_used)}</td>
+                    <td>{fmtNum(k.requests)}</td>
+                    <td title={k.policy_at ? fmtDateTime(k.policy_at) : undefined}>{policyBadges(k)}</td>
+                    <td>
+                      <button type="button" className="button ghost small" aria-expanded={open === k.id} onClick={() => setOpen(open === k.id ? null : k.id)} aria-label={t(`تنظیم کلید ${k.name}`, `Settings for key ${k.name}`)}>
+                        {t("تنظیم", "Settings")}
+                      </button>
+                    </td>
+                  </tr>
+                  {open === k.id && (
+                    <tr className="key-policy-row">
+                      <td colSpan={6}>
+                        <KeyPolicyEditor
+                          k={k}
+                          notify={notify}
+                          onClose={() => setOpen(null)}
+                          onSaved={(saved) => setKeys((cur) => (cur ? cur.map((x) => (x.id === saved.id ? saved : x)) : cur))}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+              {keys && keys.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-cell">
+                    {custom ? t("کلید تنظیم‌شده‌ای نیست.", "No customized keys.") : t("کلیدی ساخته نشده است.", "No keys yet.")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {loadingMore && (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      )}
+      {more && !loadingMore && (
+        <button type="button" className="button ghost more" onClick={loadMore}>
+          {t("نمایش موارد بیشتر", "Show more")}
+        </button>
+      )}
+    </section>
+  );
+}
+
 function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
@@ -1299,6 +1566,121 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
           {t("نمایش موارد بیشتر", "Show more")}
         </button>
       )}
+    </section>
+  );
+}
+
+function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+  const [data, setData] = useState<AdminTelegram | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api
+        .adminTelegram()
+        .then((r) => live && (setData(r), setError("")))
+        .catch((e) => live && setError(errText(e, t("بارگذاری نشست‌های تلگرام ناموفق بود.", "Could not load Telegram sessions."))));
+    load();
+    const timer = window.setInterval(load, 15000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const online = (seen: number) => !!data && seen > data.now - 300;
+  const links = (data?.links ?? []).filter((l) => !picked || l.user.id === picked.id);
+  const guests = picked ? [] : data?.guests ?? [];
+  const who = (name: string, username: string) => (
+    <>
+      <bdi>{name || "-"}</bdi>
+      {username && (
+        <span className="cell-sub" dir="ltr">
+          @{username}
+        </span>
+      )}
+    </>
+  );
+  const state = (seen: number, answering: boolean) => (
+    <>
+      {answering ? <span className="badge ok">{t("در حال پاسخ", "Answering")}</span> : online(seen) ? <span className="badge ok">{t("آنلاین", "Online")}</span> : <span className="muted">{seen ? fmtRelative(seen) : "-"}</span>}
+    </>
+  );
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("نشست‌های تلگرام", "Telegram sessions")}</h3>
+        {data && <span className="muted">{t(`${fmtNum(data.online_links)} کاربر و ${fmtNum(data.online_guests)} مهمان آنلاین (۵ دقیقه‌ی اخیر)`, `${fmtNum(data.online_links)} users and ${fmtNum(data.online_guests)} guests online (last 5 minutes)`)}</span>}
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="table-wrap scroll-y">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">{t("تلگرام", "Telegram")}</th>
+              <th scope="col">{t("حساب سلام", "Salam account")}</th>
+              <th scope="col">{t("وضعیت", "Status")}</th>
+              <th scope="col">{t("گفت‌وگو", "Chats")}</th>
+              <th scope="col">{t("پیام", "Messages")}</th>
+              <th scope="col">{t("زبان", "Language")}</th>
+              <th scope="col">{t("اتصال", "Connected")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {links.map((l) => (
+              <tr key={`l${l.tg_id}`}>
+                <td>{who(l.name, l.username)}</td>
+                <td>
+                  <button type="button" className="link" onClick={() => onPick(picked?.id === l.user.id ? null : { id: l.user.id, name: l.user.name })} title={t("نمایش فعالیت این کاربر", "Show this user's activity")}>
+                    <bdi>{l.user.name}</bdi>
+                  </button>
+                  <span className="cell-sub" dir="ltr">
+                    {l.user.email}
+                  </span>
+                </td>
+                <td>{state(l.last_seen, l.answering)}</td>
+                <td>{fmtNum(l.chats)}</td>
+                <td>{fmtNum(l.messages)}</td>
+                <td>{l.lang === "en" ? "English" : "فارسی"}</td>
+                <td title={fmtDateTime(l.created)}>{fmtDate(l.created)}</td>
+              </tr>
+            ))}
+            {guests.map((g) => (
+              <tr key={`g${g.tg_id}`}>
+                <td>{who(g.name, g.username)}</td>
+                <td className="muted">{t("مهمان", "Guest")}</td>
+                <td>{state(g.last_seen, g.answering)}</td>
+                <td>-</td>
+                <td>{fmtNum(g.messages)}</td>
+                <td>{g.lang === "en" ? "English" : "فارسی"}</td>
+                <td title={fmtDateTime(g.created)}>{fmtDate(g.created)}</td>
+              </tr>
+            ))}
+            {data && links.length === 0 && guests.length === 0 && (
+              <tr>
+                <td colSpan={7} className="empty-cell">
+                  {t("هنوز کسی از تلگرام استفاده نکرده است.", "Nobody has used Telegram yet.")}
+                </td>
+              </tr>
+            )}
+            {!data && !error && (
+              <tr>
+                <td colSpan={7} className="empty-cell">
+                  <span className="list-loading inline" role="status">
+                    <span className="spinner" />
+                  </span>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -1907,7 +2289,8 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
       )}
       {!forbidden && (
         <>
-          <Users picked={picked} onPick={setPicked} />
+          <Users picked={picked} onPick={setPicked} notify={notify} />
+          <TelegramSessions picked={picked} onPick={setPicked} />
           {picked && (
             <div className="picked-bar" role="status">
               {t("نمایش رویدادها، درخواست‌های API و برنامه‌های", "Showing events, API requests and apps for")} <bdi className="strong">{picked.name}</bdi>
@@ -1924,6 +2307,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <Uploads picked={picked} notify={notify} />
           <Events picked={picked} onPick={setPicked} />
           <RequestsFeed picked={picked} onPick={setPicked} />
+          <KeyPolicies picked={picked} notify={notify} />
           <AppsTable picked={picked} notify={notify} />
         </>
       )}

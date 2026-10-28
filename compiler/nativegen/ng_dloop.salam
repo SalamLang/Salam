@@ -1,0 +1,226 @@
+package nativegen
+
+func dl_effect(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if op == OP_STORE or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE or op == OP_ALLOCA:
+        ret true
+    end
+    if op == OP_CALL:
+        ret true
+    end
+    if op == OP_SDIV or op == OP_UDIV or op == OP_SREM or op == OP_UREM:
+        ret true
+    end
+    ret op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0
+end
+
+func dl_in(g &: Ng, l &: Lp, mark: int, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    b := g.i_blk[g.v_def[v]]
+    ret b >= 0 and l.inl[b] == mark
+end
+
+func dl_used_outside(g &: Ng, l &: Lp, mark: int): bool:
+    each b in g.b_rpo:
+        if l.inl[b] == mark:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            if (m & 1) != 0 and dl_in(g, l, mark, g.i_a[i]): ret true end
+            if (m & 2) != 0 and dl_in(g, l, mark, g.i_b[i]): ret true end
+            if (m & 4) != 0 and dl_in(g, l, mark, g.i_c[i]): ret true end
+            if g.i_op[i] == OP_CALL:
+                repeat g.i_pcount[i] in q:
+                    if dl_in(g, l, mark, g.pool[g.i_ps[i] + 3 * q]):
+                        ret true
+                    end
+                end
+            else g.i_op[i] == OP_PHI:
+                repeat g.i_pcount[i] in q2:
+                    if dl_in(g, l, mark, g.pool[g.i_ps[i] + 2 * q2]):
+                        ret true
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func dl_step(g &: Ng, h: int, v: int, ivp &: int, k &: i64): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    if g.i_op[d] == OP_PHI and g.i_blk[d] == h:
+        ivp = d
+        k = 0 as i64
+        ret true
+    end
+    if g.i_op[d] != OP_ADD or (g.i_f[d] & IF_NSW) == 0 or not is_cint(g, g.i_b[d]):
+        ret false
+    end
+    a := g.i_a[d]
+    if a < 0 or g.v_kind[a] != VK_INS:
+        ret false
+    end
+    pd := g.v_def[a]
+    if g.i_op[pd] != OP_PHI or g.i_blk[pd] != h:
+        ret false
+    end
+    ivp = pd
+    k = g.v_i[g.i_b[d]]
+    ret true
+end
+
+func dl_finite(g &: Ng, l &: Lp, mark: int, h: int, x: int): bool:
+    t := g.b_last[x]
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret false
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP:
+        ret false
+    end
+    mut a := g.i_a[d]
+    mut lim := g.i_b[d]
+    mut p := g.i_x[d]
+    if dl_in(g, l, mark, lim) and not dl_in(g, l, mark, a):
+        tmp := a
+        a = lim
+        lim = tmp
+        p = swap_pred(p)
+    end
+    if dl_in(g, l, mark, lim):
+        ret false
+    end
+    mut ivp := 0 - 1
+    mut k0 := 0 as i64
+    if not dl_step(g, h, a, ivp, k0):
+        ret false
+    end
+    mut stepv := 0 - 1
+    mut inside_n := 0
+    repeat g.i_pcount[ivp] in q:
+        pb := g.pool[g.i_ps[ivp] + 2 * q + 1]
+        if l.inl[pb] == mark:
+            stepv = g.pool[g.i_ps[ivp] + 2 * q]
+            inside_n += 1
+        end
+    end
+    mut ivp2 := 0 - 1
+    mut s := 0 as i64
+    if inside_n != 1 or not dl_step(g, h, stepv, ivp2, s) or ivp2 != ivp or s == (0 as i64):
+        ret false
+    end
+    stay := l.inl[g.i_b[t]] == mark
+    if not stay:
+        p = neg_cc(p)
+    end
+    if s > (0 as i64):
+        ret p == CC_SLT or p == CC_SLE or (p == CC_NE and s == (1 as i64))
+    end
+    ret p == CC_SGT or p == CC_SGE or (p == CC_NE and s == (0 - 1 as i64))
+end
+
+func dl_loop(g &: Ng, l &: Lp, h: int, mark: int, succ &: Vector<int>): bool:
+    p := lp_outside_pred(g, l, h, mark)
+    if p < 0:
+        ret false
+    end
+    pt := g.b_last[p]
+    if pt < 0 or (g.i_op[pt] != OP_BR and g.i_op[pt] != OP_CBR):
+        ret false
+    end
+    mut x := 0 - 1
+    mut e := 0 - 1
+    each b in g.b_rpo:
+        if l.inl[b] != mark:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if dl_effect(g, i):
+                ret false
+            end
+            i = g.i_next[i]
+        end
+        t := g.b_last[b]
+        if t < 0 or (g.i_op[t] != OP_BR and g.i_op[t] != OP_CBR):
+            ret false
+        end
+        blk_succs(g, b, succ)
+        each s in succ:
+            if l.inl[s] != mark:
+                if x >= 0:
+                    ret false
+                end
+                x = b
+                e = s
+            end
+        end
+    end
+    if x < 0 or g.i_op[g.b_last[x]] != OP_CBR or not dl_finite(g, l, mark, h, x):
+        ret false
+    end
+    if dl_used_outside(g, l, mark):
+        ret false
+    end
+    blk_succs(g, p, succ)
+    each ps0 in succ:
+        if ps0 == e:
+            ret false
+        end
+    end
+    mut j := g.b_first[e]
+    until j >= 0 and g.i_op[j] == OP_PHI:
+        ps := g.i_ps[j]
+        repeat g.i_pcount[j] in q:
+            if g.pool[ps + 2 * q + 1] == x:
+                g.pool[ps + 2 * q + 1] = p
+            end
+        end
+        j = g.i_next[j]
+    end
+    replace_succ(g, pt, h, e)
+    ret true
+end
+
+func dead_loops(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut succ := Vector {} as Vector<int>
+    mut changed := false
+    mut mark := 7000000
+    each h in l.head:
+        if changed:
+            break
+        end
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        if dl_loop(g, l, h, mark, succ):
+            changed = true
+        end
+    end
+    succ.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

@@ -1,0 +1,70 @@
+import mem
+import str
+import compress
+import net.http
+import net.mime
+import net.router
+
+func echo(ctx: i64):
+    n := http.BodyLen(ctx)
+    p := http.BodyBytes(ctx) as u8*
+    mut zeros := 0
+    repeat n in i:
+        if p[i] == 0 as u8: zeros += 1 end
+    end
+    http.SetHeader(ctx, "X-Zeros", http.Own(ctx, str.FromInt(zeros as i64)))
+    http.Bytes(ctx, "application/octet-stream", http.BodyBytes(ctx), n)
+end
+
+func upload(ctx: i64):
+    mut parts := http.Multipart(ctx)
+    defer mime.FreeMultipart(parts)
+    if parts.items.len() == 0:
+        http.SetStatus(ctx, 400)
+        http.Text(ctx, "not multipart")
+        ret
+    end
+    mut answer := ""
+    each part in parts.items:
+        answer = answer + part.name + ":" + part.filename + ":" + str.FromInt(part.body.len as i64) + " "
+    end
+    answer = answer + "note=" + mime.PartValue(parts, "note")
+    http.Text(ctx, http.Own(ctx, answer))
+end
+
+func main:
+    mut r := router.NewRouter()
+    router.Post(r, "/echo", echo)
+    router.Post(r, "/upload", upload)
+    mut s := http.NewServer(19645)
+    http.Use(s, r)
+    println http.RunBackground(s)
+    ep := http.ParseEndpoint("http://127.0.0.1:19645")
+
+    data := mem.Allocate(4 as u64)
+    bytes := data as u8*
+    bytes[0] = 83 as u8
+    bytes[1] = 0 as u8
+    bytes[2] = 255 as u8
+    bytes[3] = 0 as u8
+    head := "POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\nConnection: close\r\n\r\n"
+    mut a := http.SendRawTimeout(ep, head, data, 4, 2000)
+    back := a.data as u8*
+    println a.status, a.len, http.HeaderValue(a.head, "x-zeros"), http.HeaderValue(a.head, "content-type")
+    println back[0] as int, back[1] as int, back[2] as int, back[3] as int
+    http.FreeRaw(a)
+
+    mut w := mime.NewMultipartWriter()
+    mime.WriteField(w, "note", "holiday")
+    mime.WriteFileBytes(w, "photo", "pic.bin", "image/png", data, 4)
+    mut body := mime.CloseWriter(w)
+    up := "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: " + mime.ContentTypeHeader(w) + "\r\nContent-Length: " + str.FromInt(body.len as i64) + "\r\nConnection: close\r\n\r\n"
+    mut b := http.SendRawTimeout(ep, up, body.data, body.len, 2000)
+    println b.status, http.RawText(b)
+    http.FreeRaw(b)
+    compress.BufFree(body)
+    mem.Free(data)
+
+    plain := http.Post("http://127.0.0.1:19645/upload", "note=x")
+    println http.Status(plain), http.Body(plain)
+end

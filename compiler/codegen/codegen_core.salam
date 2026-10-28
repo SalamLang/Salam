@@ -633,6 +633,10 @@ func cg_tidy(sn: str): str:
     ret r
 end
 
+func is_thread_spawn_extern(nm: str): bool:
+    ret str.Equals(nm, "pthread_create") or str.Equals(nm, "thrd_create") or str.Equals(nm, "_beginthread") or str.Equals(nm, "_beginthreadex") or str.Equals(nm, "CreateThread") or str.Equals(nm, "clone")
+end
+
 func node_uses_spawn(a &: at.Ast, id: int): bool:
     if id == 0:
         ret false
@@ -678,6 +682,49 @@ func cg_target_is_kernel(triple: str): bool:
         ret false
     end
     ret str.Contains(triple, "kernel") and str.Contains(triple, "salamos")
+end
+
+func node_may_thread(a &: at.Ast, id: int, imports: bool): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_FUNC_DEF and n.is_extern and is_thread_spawn_extern(n.name):
+        ret true
+    end
+    if imports and n.kind == at.AST_IMPORT and str.Equals(n.name, "thread"):
+        ret true
+    end
+    if n.kind == at.AST_CALL and n.a != 0:
+        an := at.Get(a, n.a)
+        if an.kind == at.AST_IDENTIFIER and str.Equals(an.name, "spawn"):
+            ret true
+        end
+    end
+    if node_may_thread(a, n.a, imports) or node_may_thread(a, n.b, imports) or node_may_thread(a, n.c, imports) or node_may_thread(a, n.d, imports):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if node_may_thread(a, n.list.get(i), imports):
+            ret true
+        end
+    end
+    ret false
+end
+
+func program_may_thread_impl(s &: sm.Sema, a &: at.Ast, program: int): bool:
+    if node_may_thread(a, program, true):
+        ret true
+    end
+    repeat sm.PackageCount(s) in i:
+        p := sm.PackagePathAt(s, i)
+        if not str.EndsWith(p, "std/thread/thread.salam"):
+            if node_may_thread(a, sm.PackageDeclAt(s, i), not str.EndsWith(p, "std/core/core.salam")):
+                ret true
+            end
+        end
+    end
+    ret false
 end
 
 func module_single_threaded_impl(a &: at.Ast, program: int): bool:

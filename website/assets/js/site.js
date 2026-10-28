@@ -17,6 +17,17 @@
       : "light";
   }
 
+  window.addEventListener("message", (e) => {
+    var d = e.data;
+    if (!d || d.salamPreview !== 1 || typeof d.n !== "string") {
+      return;
+    }
+    var frame = document.getElementById("pv-" + d.n);
+    if (frame && e.source === frame.contentWindow) {
+      frame.style.height = Math.min(Math.max(d.h, 56), 576) + "px";
+    }
+  });
+
   var themeButton = document.querySelector(".theme-toggle");
   if (themeButton) {
     themeButton.addEventListener("click", () => {
@@ -474,6 +485,21 @@
     };
 
     const wait1 = (ms) => new Promise((done) => setTimeout(done, ms));
+    const ours = (message) => {
+      const e = new Error(message || "");
+      e.ours = true;
+      return e;
+    };
+    const failure = (e) => {
+      if (e && e.ours && e.message) {
+        return e.message;
+      }
+      const offline =
+        e instanceof TypeError ||
+        (e && e.offline) ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      return salamat.getAttribute(offline ? "data-offline" : "data-error");
+    };
     const call = async (method, path, payload) => {
       const res = await fetch(apiUrl + path, {
         method,
@@ -607,7 +633,7 @@
           return;
         }
         if (sent.status !== 201) {
-          throw new Error(sent.data.message || "");
+          throw ours(sent.data.message);
         }
         if (sent.data.guest) {
           state.guest = sent.data.guest;
@@ -633,15 +659,34 @@
         const streamed = await follow(sent.data.id, show);
         if (!streamed) {
           const started = Date.now();
+          let lost = 0;
+          let bad = 0;
           while (Date.now() - started < 10 * 60 * 1000) {
             await wait1(1200);
-            const got = await call(
-              "GET",
-              `/guest/messages/${sent.data.id}?guest=${encodeURIComponent(state.guest)}`,
-            );
-            if (got.status !== 200) {
+            let got;
+            try {
+              got = await call(
+                "GET",
+                `/guest/messages/${sent.data.id}?guest=${encodeURIComponent(state.guest)}`,
+              );
+            } catch (_e) {
+              lost += 1;
+              if (lost >= 5) {
+                const gone = new Error("");
+                gone.offline = true;
+                throw gone;
+              }
               continue;
             }
+            lost = 0;
+            if (got.status !== 200) {
+              bad += 1;
+              if (bad >= 8) {
+                throw ours("");
+              }
+              continue;
+            }
+            bad = 0;
             setPhase(got.data.phase);
             show(got.data.body || "");
             if (got.data.status !== "pending") {
@@ -666,7 +711,11 @@
         persist();
       } catch (e) {
         typing.hidden = true;
-        bubble("assistant", e?.message || salamat.getAttribute("data-error"));
+        setPhase("");
+        if (answer) {
+          answer.classList.remove("is-live");
+        }
+        bubble("assistant", failure(e));
       }
       lock(false);
       if (!state.blocked) {

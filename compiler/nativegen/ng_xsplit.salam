@@ -1,0 +1,150 @@
+package nativegen
+
+func xs_loop(g &: Ng, l &: Lp, mk: int, succ &: Vector<int>, used &: Vector<int>, cands &: Vector<int>, depth: Vector<int>): bool:
+    mut exb := 0 - 1
+    mut ne := 0
+    mut calls := false
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut ci := g.b_first[b]
+        until ci >= 0:
+            if g.i_op[ci] == OP_CALL:
+                calls = true
+            end
+            ci = g.i_next[ci]
+        end
+        blk_succs(g, b, succ)
+        each s in succ:
+            if l.inl[s] != mk:
+                ne += 1
+                exb = s
+            end
+        end
+    end
+    if not calls or ne != 1 or exb < 0 or g.b_npred[exb] != 1 or depth[exb] > 0:
+        ret false
+    end
+    cands.clear()
+    each b2 in g.b_rpo:
+        if l.inl[b2] == mk:
+            continue
+        end
+        mut i := g.b_first[b2]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            repeat 3 in k:
+                mut v := 0 - 1
+                if k == 0 and (m & 1) != 0: v = g.i_a[i] end
+                if k == 1 and (m & 2) != 0: v = g.i_b[i] end
+                if k == 2 and (m & 4) != 0: v = g.i_c[i] end
+                if v >= 0 and v < used.len() and g.v_kind[v] == VK_INS and used[v] != mk and l.inl[g.i_blk[g.v_def[v]]] == mk:
+                    t := g.v_ty[v]
+                    if not is_agg(g, t) and not is_vec(g, t) and cands.len() < 8:
+                        used[v] = mk
+                        cands.push(v)
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    if cands.len() == 0:
+        ret false
+    end
+    mut at := g.b_first[exb]
+    until at >= 0 and g.i_op[at] == OP_PHI:
+        at = g.i_next[at]
+    end
+    if at < 0:
+        ret false
+    end
+    each v2 in cands:
+        t2 := g.v_ty[v2]
+        c := ins_new(g, OP_BITCAST, t2)
+        g.i_a[c] = v2
+        g.i_x[c] = t2
+        g.i_f[c] = IF_SPLITC
+        cv := new_res(g, c)
+        ins_before(g, at, c)
+        each b3 in g.b_rpo:
+            if l.inl[b3] == mk:
+                continue
+            end
+            mut j := g.b_first[b3]
+            until j >= 0:
+                if j != c:
+                    m2 := val_mask(g.i_op[j])
+                    if (m2 & 1) != 0 and g.i_a[j] == v2: g.i_a[j] = cv end
+                    if (m2 & 2) != 0 and g.i_b[j] == v2: g.i_b[j] = cv end
+                    if (m2 & 4) != 0 and g.i_c[j] == v2: g.i_c[j] = cv end
+                    if g.i_op[j] == OP_CALL:
+                        repeat g.i_pcount[j] in q:
+                            if g.pool[g.i_ps[j] + 3 * q] == v2:
+                                g.pool[g.i_ps[j] + 3 * q] = cv
+                            end
+                        end
+                    else g.i_op[j] == OP_PHI:
+                        repeat g.i_pcount[j] in q2:
+                            if g.pool[g.i_ps[j] + 2 * q2] == v2:
+                                g.pool[g.i_ps[j] + 2 * q2] = cv
+                            end
+                        end
+                    end
+                end
+                j = g.i_next[j]
+            end
+        end
+    end
+    ret true
+end
+
+func exit_split(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut succ := Vector {} as Vector<int>
+    mut used := Vector {} as Vector<int>
+    mut cands := Vector {} as Vector<int>
+    mut depth := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        depth.push(0)
+    end
+    mut mk0 := 7000000
+    each h0 in l.head:
+        mk0 += 1
+        _s0 := lp_body(g, l, h0, mk0)
+        repeat g.b_first.len() in bb:
+            if l.inl[bb] == mk0:
+                depth[bb] = depth[bb] + 1
+            end
+        end
+    end
+    mut changed := false
+    mut mk := 6000000
+    each h in l.head:
+        mk += 1
+        _s := lp_body(g, l, h, mk)
+        used.clear()
+        repeat g.v_kind.len():
+            used.push(0)
+        end
+        if xs_loop(g, l, mk, succ, used, cands, depth):
+            changed = true
+        end
+    end
+    depth.free()
+    succ.free()
+    used.free()
+    cands.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    ret changed
+end

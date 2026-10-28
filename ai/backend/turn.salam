@@ -22,10 +22,12 @@ include aistore "store.salam"
 include aiengine "engine.salam"
 include ailive "live.salam"
 include aicheck "check.salam"
+include aipolicy "policy.salam"
 
 const CHECK_SECONDS := 10
 const FIX_ROUNDS := 2
 const START_SECONDS := 45
+const INTERRUPTED_SECONDS := 30
 const EM := 8212
 const EN := 8211
 
@@ -36,6 +38,9 @@ mut CHECKED := HashMap {} as HashMap<str, str>
 mut ROUNDS := HashMap {} as HashMap<str, int>
 mut VERIFYING := HashMap {} as HashMap<str, str>
 mut ASKED := HashMap {} as HashMap<str, i64>
+mut RELAXED := HashMap {} as HashMap<str, str>
+mut TALLY := HashMap {} as HashMap<str, int>
+mut TALLIED := HashMap {} as HashMap<str, str>
 
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
@@ -88,6 +93,30 @@ func retried(sid: str):
     _u := sync.Unlock(CHECK_LOCK)
 end
 
+func relaxed(sid: str): bool:
+    _l := sync.Lock(CHECK_LOCK)
+    v := RELAXED.has(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+    ret v
+end
+
+func tally(sid: str, text: str, lines: int): int:
+    mark := text.len() + ":" + text.substr(0, text.len() < 80 ? text.len() : 80)
+    _l := sync.Lock(CHECK_LOCK)
+    if TALLY.size() > 5000:
+        TALLY = HashMap {} as HashMap<str, int>
+        TALLIED = HashMap {} as HashMap<str, str>
+    end
+    mut total := TALLY.has(sid) ? TALLY.get(sid) : 0
+    if not TALLIED.has(sid) or TALLIED.get(sid) != mark:
+        total += lines
+        TALLY.put(sid, total)
+        TALLIED.put(sid, mark)
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+    ret total
+end
+
 func verify(sid: str, text: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
@@ -98,11 +127,28 @@ func verify(sid: str, text: str): bool:
     end
     VERIFYING.put(sid, "1")
     _u := sync.Unlock(CHECK_LOCK)
-    report := aicheck.Problems(text)
+    mut ask := ""
+    mut foreign := ""
+    if not relaxed(sid):
+        foreign = aipolicy.Foreign(text)
+        lines := aipolicy.ForeignLines(text)
+        total := tally(sid, text, lines)
+        if foreign.len() == 0 and aipolicy.Spread(total, lines):
+            foreign = "pieces of other-language code spread over this conversation (" + total + " lines in all)"
+        end
+    end
+    if foreign.len() > 0:
+        ask = aipolicy.LanguagePrompt(foreign)
+    else:
+        report := aicheck.Problems(text)
+        if report.len() > 0:
+            ask = fix_prompt(report)
+        end
+    end
     mut sent := false
-    if report.len() > 0:
+    if ask.len() > 0:
         ailive.Begin(sid)
-        sent = aiengine.Followup(sid, fix_prompt(report))
+        sent = aiengine.Followup(sid, ask)
     end
     _a := sync.Lock(CHECK_LOCK)
     _v := VERIFYING.remove(sid)
@@ -127,6 +173,8 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
     a.push(conv.FormatInt(u.cache_read))
     a.push(conv.FormatInt(u.cache_write))
     a.push(conv.FormatFloatPrec(u.cost, 8))
+    a.push(conv.FormatFloatPrec(u.cost_in, 8))
+    a.push(conv.FormatFloatPrec(u.cost_out, 8))
     a.push(conv.FormatInt(u.tools as i64))
     a.push(conv.FormatInt(u.steps as i64))
     a.push(id)
@@ -134,10 +182,10 @@ pub func SaveUsage(table: str, id: str, u: aiengine.Usage):
     if table == "messages":
         a.push(conv.FormatInt(u.ms))
         a.push(conv.FormatInt(aistore.Now()))
-        extra = ", ms = ?10, finished = ?11"
+        extra = ", ms = ?12, finished = ?13"
     end
     aistore.Lock()
-    _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, tools = ?7, steps = ?8" + extra + " WHERE id = ?9", a)
+    _u := aistore.Run("UPDATE " + table + " SET tokens_in = ?1, tokens_out = ?2, tokens_reasoning = ?3, cache_read = ?4, cache_write = ?5, cost = ?6, cost_in = ?7, cost_out = ?8, tools = ?9, steps = ?10" + extra + " WHERE id = ?11", a)
     aistore.Unlock()
 end
 
@@ -157,6 +205,18 @@ pub func Forget(sid: str):
     _r := CHECKED.remove(sid)
     _o := ROUNDS.remove(sid)
     _a := ASKED.remove(sid)
+    _x := RELAXED.remove(sid)
+    _t := TALLIED.remove(sid)
+    _u := sync.Unlock(CHECK_LOCK)
+end
+
+pub func Relax(sid: str, on_flag: bool):
+    _l := sync.Lock(CHECK_LOCK)
+    if on_flag:
+        RELAXED.put(sid, "1")
+    else:
+        _r := RELAXED.remove(sid)
+    end
     _u := sync.Unlock(CHECK_LOCK)
 end
 
@@ -255,6 +315,10 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
         aiengine.Abort(sid)
         r.done = true
         r.failed = true
+    else r.interrupted and aistore.Now() - asked_at(sid, created) > INTERRUPTED_SECONDS:
+        aiengine.Abort(sid)
+        r.done = true
+        r.failed = r.text.len() == 0
     else r.done and r.failed and r.text.len() == 0 and aistore.Now() - created <= limit and aiengine.Retry(sid):
         ailive.Begin(sid)
         retried(sid)
@@ -273,6 +337,7 @@ pub func Advance(sid: str, created: i64, limit: i64, start_limit: i64, check: bo
         aiengine.Abort(sid)
         r.done = true
         r.failed = r.text.len() == 0
+        r.timed_out = true
     end
     if tracked and want_steps:
         r.activity = ailive.Activity(sid)

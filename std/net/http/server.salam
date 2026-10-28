@@ -15,13 +15,13 @@
 package http
 
 import net.router
+import net.internal.rawsock
 import mem
 import tls
 
 if SALAM_OS_WINDOWS:
     extern:
-        func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
-        func CloseHandle(h: void *): int
+        func _beginthread(start: void *, stack: u32, arg: void *): usize
     end
 else:
     extern:
@@ -45,8 +45,7 @@ end
 if SALAM_OS_WINDOWS:
     export:
         func salam_spawn_fn_i64(fn: i64, arg: i64):
-            h := _beginthreadex(null, 0 as u32, fn as void *, arg as void *, 0 as u32, null)
-            if h != (0 as u64): CloseHandle(h as void *) end
+            _h := _beginthread(fn as void *, 0 as u32, arg as void *)
         end
     end
 else:
@@ -133,7 +132,12 @@ pub func Run(s: Server):
         if lfd < 0:
             ret
         end
-        _accept_loop(_srv_pack(_srv_claim(s.router, s.hide_tokens, s.access_log), lfd))
+        slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret
+        end
+        _accept_loop(_srv_pack(slot, lfd))
     end
 end
 
@@ -149,6 +153,10 @@ pub func RunBackground(s: Server): bool:
             ret false
         end
         slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret false
+        end
         salam_spawn_fn_i64(_accept_loop, _srv_pack(slot, lfd))
         ret true
     end
@@ -165,6 +173,10 @@ pub func RunTLS(s: Server, cert_file: str, key_file: str):
             ret
         end
         slot := _srv_claim(s.router, s.hide_tokens, s.access_log)
+        if slot < 0:
+            rawsock.Close(rawsock.FromFd(lfd))
+            ret
+        end
         _srv_tls.set(slot, tls.NewServerConfig(cert_file, key_file))
         _accept_loop_tls(_srv_pack(slot, lfd))
     end

@@ -102,6 +102,17 @@ func su_skip(s: str, i &: int):
 end
 
 func su_has_ctx_word(s: str): bool:
+    p := (s as void*) as u8*
+    mut i := 0
+    mut wide := false
+    until p[i] != (0 as u8):
+        if p[i] >= (128 as u8):
+            wide = true
+            break
+        end
+        i += 1
+    end
+    if not wide: ret false end
     ret str.Contains(s, "پیوند") or str.Contains(s, "ایستا") or str.Contains(s, "پویا") or str.Contains(s, "چارچوب")
 end
 
@@ -274,10 +285,20 @@ func check_lang_form(s &: Sema, want: str, used: str, sp: co.SrcSpan):
         ret
     end
     mut msg := "identifier '%s' must be English in an English file"
+    mut hint := "the English name is '%s'"
     if lang0(s.lang) == 102:
         msg = "identifier '%s' must be Persian in a Persian file"
+        hint = "the Persian name is '%s'"
     end
-    serr(s, 1, sp, co.Format1(i18.Tr(msg), co.ArgStr(used)))
+    mut fx := fix_at(sp)
+    fx.title = co.Format1(i18.Tr("Write '%s'"), co.ArgStr(want))
+    fx.length = 0
+    fx.find = used
+    fx.text = want
+    fx.preferred = true
+    fx.safe = true
+    queue_fix(fx)
+    serr_help(s, 1, sp, co.Format1(i18.Tr(msg), co.ArgStr(used)), co.Format1(i18.Tr(hint), co.ArgStr(want)))
 end
 
 func sema_check_intrinsic_type_lang(s &: Sema, used: str, sp: co.SrcSpan):
@@ -305,7 +326,13 @@ end
 func sema_check_intrinsic_method_lang(
     s &: Sema, used: str, canon: str, sp: co.SrcSpan
 ):
-    if lang0(s.lang) == 0 or lang0(s.lang) == 101 or str.Len(used) == 0 or str.Len(canon) == 0:
+    if lang0(s.lang) == 0 or str.Len(used) == 0 or str.Len(canon) == 0:
+        ret
+    end
+    if lang0(s.lang) == 101:
+        if not str.Equals(intrinsic_method_canon(used), used):
+            check_lang_form(s, canon, used, sp)
+        end
         ret
     end
     want := intrinsic_method_lang_form(canon, s.lang)
@@ -367,6 +394,19 @@ func scope_member_canon(
     end
     if str.Len(name) == 0 or members == 0:
         ret name
+    end
+    if str.Equals(lang, "en") and lang0(s.lang) != 102 and scope_lookup_local(s, members, name) == 0:
+        esc := scope_at(s, members)
+        repeat esc.symbols.len() in ei:
+            em := sym_at(s, esc.symbols.get(ei))
+            if em.decl == 0 or em.kind == SYM_PACKAGE:
+                continue
+            end
+            if aliases_have(at.Get(a, em.decl).aliases, "fa", name):
+                check_lang_form(s, em.name, name, sp)
+                ret em.name
+            end
+        end
     end
     if not str.Equals(lang, "en"):
         msc := scope_at(s, members)

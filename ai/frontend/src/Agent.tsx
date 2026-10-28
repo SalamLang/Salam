@@ -3,6 +3,7 @@ import { api, getToken } from "./api";
 import { agent, folderName, onAgent, type AgentAnswer, type AgentCall, type AgentInfo, type AgentMode } from "./desktop";
 import { IconAlert, IconChevronDown, IconClose, IconFile, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { useHighlighted } from "./Markdown";
+import { NotifyMenu, syncNotifyLanguage } from "./Notify";
 import { t } from "./i18n";
 
 export type CallView = AgentCall & { mid?: number };
@@ -72,6 +73,7 @@ export function useAgent(enabled: boolean, midFor: (chat: string) => number | un
       }
     };
     ensure();
+    syncNotifyLanguage();
     agent
       .pending()
       .then((ps) => {
@@ -256,6 +258,7 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
           ))}
         </select>
       )}
+      <NotifyMenu os={info?.os} />
       {elsewhere && <span className="agent-note">{t("این گفت‌وگو به رایانه‌ی دیگری وصل است.", "This chat is linked to another computer.")}</span>}
     </div>
   );

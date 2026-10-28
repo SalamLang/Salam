@@ -1,0 +1,316 @@
+package nativelink
+
+func glob_of(l &: Nl, name: int): int:
+    until l.g_of_name.len() <= name:
+        l.g_of_name.push(0 - 1)
+    end
+    mut g := l.g_of_name[name]
+    if g < 0:
+        g = l.g_name.len()
+        l.g_name.push(name)
+        l.g_state.push(SY_UNDEF)
+        l.g_weak.push(false)
+        l.g_sec.push(0 - 1)
+        l.g_val.push(0 as i64)
+        l.g_obj.push(0 - 1)
+        l.g_strongref.push(false)
+        l.g_firstref.push(0 - 1)
+        l.g_got.push(0 - 1)
+        l.g_lib.push(0 - 1)
+        l.g_ver.push(0 - 1)
+        l.g_stype.push(0)
+        l.g_plt.push(0 - 1)
+        l.g_dyn.push(0 - 1)
+        l.g_alias.push(0 - 1)
+        l.g_common.push(0 as i64)
+        l.g_of_name[name] = g
+    end
+    ret g
+end
+
+func glob_find(l &: Nl, s: str): int:
+    n := nt_find(l.names, (s as void*) as u8*, 0 as i64, str.Len(s), false)
+    if n < 0 or n >= l.g_of_name.len():
+        ret 0 - 1
+    end
+    ret l.g_of_name[n]
+end
+
+func ew(p: u8*, at: i64, is32: bool): i64:
+    if is32:
+        ret rd32(p, at)
+    end
+    ret rd64(p, at)
+end
+
+func elf_mach_ok(m: int): bool:
+    ret m == EM_X86_64 or m == EM_386 or m == EM_AARCH64 or m == EM_ARM or m == EM_RISCV
+end
+
+func mach_name(m: int): str:
+    if m == EM_X86_64: ret "x86-64" end
+    if m == EM_386: ret "i386" end
+    if m == EM_AARCH64: ret "AArch64" end
+    if m == EM_ARM: ret "ARM" end
+    if m == EM_RISCV: ret "RISC-V" end
+    ret "machine " + str.FromInt(m as i64)
+end
+
+func add_object(l &: Nl, f: int, base: i64, size: i64, label: str):
+    p := fptr(l, f)
+    if is_short_import(p, base, size):
+        add_short_import(l, f, base, size, label)
+        ret
+    end
+    if size >= (20 as i64) and is_coff(p, base):
+        add_coff(l, f, base, size, label)
+        ret
+    end
+    if size >= (4 as i64) and is_macho(p, base):
+        add_macho(l, f, base, size, label)
+        ret
+    end
+    if size < (52 as i64) or p[base] != (127 as u8) or p[base + (1 as i64)] != (69 as u8) or p[base + (2 as i64)] != (76 as u8) or p[base + (3 as i64)] != (70 as u8):
+        nl_fail(l, label + ": not an ELF object")
+        ret
+    end
+    cls := p[base + (4 as i64)] as int
+    mach := rd16(p, base + (18 as i64))
+    if (cls != 1 and cls != 2) or p[base + (5 as i64)] != (1 as u8) or rd16(p, base + (16 as i64)) != 1 or not elf_mach_ok(mach):
+        nl_fail(l, label + ": not a little-endian relocatable object for a supported machine")
+        ret
+    end
+    is32 := cls == 1
+    if l.mach == 0:
+        l.mach = mach
+        l.elf32 = is32
+        l.eflags = rd32(p, base + (is32 ? 0x24 : 0x30) as i64)
+    else l.mach != mach or l.elf32 != is32:
+        nl_fail(l, label + ": is for " + mach_name(mach) + ", but the link is for " + mach_name(l.mach))
+        ret
+    end
+    shsz := is32 ? 40 : 64
+    o := l.o_file.len()
+    l.o_coff.push(false)
+    shoff := base + (is32 ? rd32(p, base + (0x20 as i64)) : rd64(p, base + (0x28 as i64)))
+    shnum := rd16(p, base + (is32 ? 0x30 : 0x3C) as i64)
+    shstr := rd16(p, base + (is32 ? 0x32 : 0x3E) as i64)
+    l.o_file.push(f)
+    l.o_base.push(base)
+    l.o_label.push(label)
+    sec0 := l.s_obj.len()
+    l.o_sec0.push(sec0)
+    l.o_nsec.push(shnum)
+    sstr_off := base + ew(p, shoff + ((shstr * shsz) as i64) + (is32 ? 16 : 24) as i64, is32)
+    mut symtab := 0 - 1
+    repeat shnum in i:
+        sh := shoff + ((i * shsz) as i64)
+        nm_off := sstr_off + rd32(p, sh)
+        nm := nt_find(l.names, p, nm_off, cstr_len(p, nm_off, l.f_size[f]), true)
+        ty := rd32(p, sh + (4 as i64)) as int
+        l.s_obj.push(o)
+        l.s_name.push(nm)
+        l.s_type.push(ty)
+        l.s_flags.push(ew(p, sh + (8 as i64), is32))
+        l.s_off.push(base + ew(p, sh + (is32 ? 16 : 24) as i64, is32))
+        l.s_size.push(ew(p, sh + (is32 ? 20 : 32) as i64, is32))
+        mut al := ew(p, sh + (is32 ? 32 : 48) as i64, is32)
+        if al < (1 as i64):
+            al = 1 as i64
+        end
+        l.s_align.push(al)
+        l.s_rel0.push(0)
+        l.s_nrel.push(0)
+        l.s_oc.push(OC_NONE)
+        l.s_live.push(false)
+        l.s_addr.push(0 as i64)
+        l.s_fpos.push(0 as i64)
+        l.s_comdat.push(false)
+        l.s_sel.push(0)
+        l.s_assoc.push(0 - 1)
+        l.s_drop.push(false)
+        lk := rd32(p, sh + (is32 ? 24 : 40) as i64) as int
+        l.s_link.push(lk > 0 and lk < shnum ? sec0 + lk : 0 - 1)
+        if ty == 2:
+            symtab = i
+        end
+    end
+    elf_groups(l, p, f, base, shoff, shnum, sec0, is32)
+    sym0 := l.os_sec.len()
+    l.o_sym0.push(sym0)
+    if symtab < 0:
+        l.o_nsym.push(0)
+    else:
+        symsz := is32 ? 16 : 24
+        sh2 := shoff + ((symtab * shsz) as i64)
+        st_off := base + ew(p, sh2 + (is32 ? 16 : 24) as i64, is32)
+        st_size := ew(p, sh2 + (is32 ? 20 : 32) as i64, is32)
+        strl := rd32(p, sh2 + (is32 ? 24 : 40) as i64) as int
+        str_off := base + ew(p, shoff + ((strl * shsz) as i64) + (is32 ? 16 : 24) as i64, is32)
+        ns := (st_size / (symsz as i64)) as int
+        l.o_nsym.push(ns)
+        repeat ns in k:
+            e := st_off + ((k * symsz) as i64)
+            info := rd8(p, e + (is32 ? 12 : 4) as i64)
+            bind := info >> 4
+            shndx := rd16(p, e + (is32 ? 14 : 6) as i64)
+            val := ew(p, e + (is32 ? 4 : 8) as i64, is32)
+            ssz := ew(p, e + (is32 ? 8 : 16) as i64, is32)
+            mut sec := 0 - 1
+            if shndx == 0xFFF1:
+                sec = 0 - 2
+            else shndx == 0xFFF2:
+                sec = 0 - 1
+            else shndx > 0 and shndx < 0xFF00:
+                sec = sec0 + shndx
+            end
+            l.os_sec.push(sec)
+            l.os_val.push(val)
+            stype := info & 15
+            mut snm := 0 - 1
+            if (stype == 1 or stype == 2 or stype == 6) and k > 0:
+                no0 := str_off + rd32(p, e)
+                ln0 := cstr_len(p, no0, l.f_size[f])
+                if ln0 > 0:
+                    snm = nt_find(l.names, p, no0, ln0, true)
+                end
+            end
+            l.os_name.push(snm)
+            l.os_type.push(stype | (bind << 4))
+            l.os_size.push(ssz)
+            mut gi := 0 - 1
+            if bind != 0 and k > 0:
+                no := str_off + rd32(p, e)
+                ln := cstr_len(p, no, l.f_size[f])
+                if ln > 0:
+                    gi = glob_of(l, nt_find(l.names, p, no, ln, true))
+                    if shndx == 0xFFF2:
+                        if l.g_common[gi] < ssz:
+                            l.g_common[gi] = ssz
+                        end
+                        if l.g_firstref[gi] < 0:
+                            l.g_firstref[gi] = o
+                        end
+                    else sec >= 0 and l.s_drop[sec]:
+                        sym_merge(l, gi, o, 0 - 1, val, bind == 2)
+                    else:
+                        sym_merge(l, gi, o, sec, val, bind == 2)
+                    end
+                end
+            end
+            l.os_glob.push(gi)
+        end
+    end
+    repeat shnum in i2:
+        sh3 := shoff + ((i2 * shsz) as i64)
+        rty := rd32(p, sh3 + (4 as i64))
+        if rty != (4 as i64) and rty != (9 as i64):
+            continue
+        end
+        rela := rty == (4 as i64)
+        tgt := sec0 + (rd32(p, sh3 + (is32 ? 28 : 44) as i64) as int)
+        ro := base + ew(p, sh3 + (is32 ? 16 : 24) as i64, is32)
+        esz := is32 ? (rela ? 12 : 8) : (rela ? 24 : 16)
+        nr := (ew(p, sh3 + (is32 ? 20 : 32) as i64, is32) / (esz as i64)) as int
+        l.s_rel0[tgt] = l.r_off.len()
+        l.s_nrel[tgt] = nr
+        repeat nr in r:
+            re := ro + ((r * esz) as i64)
+            roff := ew(p, re, is32)
+            mut rtype := 0
+            mut rsym := 0
+            if is32:
+                info3 := rd32(p, re + (4 as i64))
+                rtype = (info3 & (255 as i64)) as int
+                rsym = (info3 >> (8 as i64)) as int
+            else:
+                info2 := rd64(p, re + (8 as i64))
+                rtype = (info2 & (0xFFFFFFFF as i64)) as int
+                rsym = (info2 >> (32 as i64)) as int
+            end
+            l.r_off.push(roff)
+            l.r_type.push(rtype)
+            l.r_sym.push(sym0 + rsym)
+            if rela:
+                l.r_add.push(ew(p, re + (is32 ? 8 : 16) as i64, is32))
+            else:
+                l.r_add.push(rel_implicit(l, p, l.s_off[tgt] + roff, rtype))
+            end
+        end
+    end
+end
+
+func elf_groups(l &: Nl, p: u8*, f: int, base: i64, shoff: i64, shnum: int, sec0: int, is32: bool):
+    shsz := is32 ? 40 : 64
+    repeat shnum in i:
+        s := sec0 + i
+        if l.s_type[s] != 17 or l.s_size[s] < (8 as i64) or (rd32(p, l.s_off[s]) & (1 as i64)) == (0 as i64):
+            continue
+        end
+        sh := shoff + ((i * shsz) as i64)
+        stab := rd32(p, sh + (is32 ? 24 : 40) as i64) as int
+        sidx := rd32(p, sh + (is32 ? 28 : 44) as i64)
+        if stab <= 0 or stab >= shnum:
+            continue
+        end
+        sh2 := shoff + ((stab * shsz) as i64)
+        st_off := base + ew(p, sh2 + (is32 ? 16 : 24) as i64, is32)
+        strl := rd32(p, sh2 + (is32 ? 24 : 40) as i64) as int
+        str_off := base + ew(p, shoff + ((strl * shsz) as i64) + (is32 ? 16 : 24) as i64, is32)
+        no := str_off + rd32(p, st_off + sidx * ((is32 ? 16 : 24) as i64))
+        ln := cstr_len(p, no, l.f_size[f])
+        if ln <= 0:
+            continue
+        end
+        nm := nt_find(l.names, p, no, ln, true)
+        until l.grp_seen.len() <= nm:
+            l.grp_seen.push(false)
+        end
+        if not l.grp_seen[nm]:
+            l.grp_seen[nm] = true
+            continue
+        end
+        n := (l.s_size[s] / (4 as i64)) as int
+        mut k := 1
+        until k < n:
+            m := rd32(p, l.s_off[s] + ((k * 4) as i64)) as int
+            if m > 0 and m < shnum:
+                l.s_drop[sec0 + m] = true
+            end
+            k += 1
+        end
+    end
+end
+
+func sym_merge(l &: Nl, g: int, o: int, sec: int, val: i64, weak: bool):
+    if sec == 0 - 1:
+        if not weak:
+            l.g_strongref[g] = true
+        end
+        if l.g_firstref[g] < 0:
+            l.g_firstref[g] = o
+        end
+        ret
+    end
+    st := l.g_state[g]
+    if st == SY_UNDEF or st == SY_SHARED:
+        l.g_state[g] = sec == 0 - 2 ? SY_ABS : SY_DEF
+        l.g_weak[g] = weak
+        l.g_sec[g] = sec
+        l.g_val[g] = val
+        l.g_obj[g] = o
+        ret
+    end
+    if weak:
+        ret
+    end
+    if l.g_weak[g]:
+        l.g_state[g] = sec == 0 - 2 ? SY_ABS : SY_DEF
+        l.g_weak[g] = false
+        l.g_sec[g] = sec
+        l.g_val[g] = val
+        l.g_obj[g] = o
+        ret
+    end
+    nl_fail(l, "duplicate symbol '" + name_of(l, l.g_name[g]) + "' in " + l.o_label[l.g_obj[g]] + " and " + l.o_label[o])
+end

@@ -537,6 +537,55 @@ def quick_fixes(t, s):
         )
 
 
+SWITCH_LINT_SRC = """func pick(ty: int): int:
+    if ty == 7:
+        ret 1
+    end
+    if ty == 8:
+        ret 2
+    end
+    if ty == 9:
+        ret 3
+    end
+    if ty == 11:
+        ret 4
+    end
+    ret 0
+end
+
+func main:
+    println pick(8)
+end
+"""
+
+
+def switch_lint(t, exe):
+    """The W145 hint is off until switchLint is set, then carries a quick fix."""
+    path = os.path.join(ROOT, "tests", "lsp", "qf", "switch_lint.salam")
+    for mode, options in (("off", {}), ("warn", {"salam": {"switchLint": "warn"}})):
+        s = Server(exe, ["--stdlib-path=" + STD])
+        params = {"processId": None, "rootUri": uri_of(ROOT), "capabilities": {}}
+        if options:
+            params["initializationOptions"] = options
+        s.request("initialize", params)
+        s.notify("initialized", {})
+        got, diags = fixes_for(s, uri_of(path), SWITCH_LINT_SRC)
+        hits = [d for d in diags if "145" in str(d.get("code"))]
+        if mode == "off":
+            t.check("switch lint is off by default", not hits, json.dumps(diags)[:300])
+        else:
+            title = "Rewrite as a 'switch' statement"
+            t.check("switch lint reports W145 when on", len(hits) == 1, json.dumps(diags)[:300])
+            t.check(
+                "switch lint offers the rewrite",
+                title in got and "switch ty:" in got[title] and "        7:\n" in got[title],
+                str(sorted(got)),
+            )
+        s.request("shutdown", None)
+        s.notify("exit", None)
+        s.proc.wait(10)
+
+
 def persian(t, s):
     text = read_text(FA)
     uri = uri_of(FA)
@@ -1085,6 +1134,7 @@ def main():
     f.notify("exit", None)
     f.proc.wait(10)
 
+    switch_lint(t, exe)
     project(t, exe)
     pull_and_colors(t, exe)
     check_cli(t, exe)

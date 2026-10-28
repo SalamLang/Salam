@@ -87,7 +87,11 @@ fn detect_os_version() -> String {
 fn detect_os_version() -> String {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    match std::process::Command::new("cmd").args(["/C", "ver"]).creation_flags(CREATE_NO_WINDOW).output() {
+    match std::process::Command::new("cmd")
+        .args(["/C", "ver"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
         Ok(out) if out.status.success() => parse_windows_ver(&String::from_utf8_lossy(&out.stdout)),
         _ => String::new(),
     }
@@ -157,15 +161,24 @@ mod tests {
 
     #[test]
     fn os_release_gives_name_and_version() {
-        assert_eq!(parse_os_release("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n"), "Ubuntu 24.04");
+        assert_eq!(
+            parse_os_release("NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n"),
+            "Ubuntu 24.04"
+        );
         assert_eq!(parse_os_release("PRETTY_NAME=x\nNAME=Arch Linux\n"), "Arch Linux");
         assert_eq!(parse_os_release(""), "");
     }
 
     #[test]
     fn windows_ver_names_the_release() {
-        assert_eq!(parse_windows_ver("\r\nMicrosoft Windows [Version 10.0.22631.4602]\r\n"), "Windows 11 (build 22631)");
-        assert_eq!(parse_windows_ver("Microsoft Windows [Version 10.0.19045.5011]"), "Windows 10 (build 19045)");
+        assert_eq!(
+            parse_windows_ver("\r\nMicrosoft Windows [Version 10.0.22631.4602]\r\n"),
+            "Windows 11 (build 22631)"
+        );
+        assert_eq!(
+            parse_windows_ver("Microsoft Windows [Version 10.0.19045.5011]"),
+            "Windows 10 (build 19045)"
+        );
         assert_eq!(parse_windows_ver("nothing here"), "");
     }
 

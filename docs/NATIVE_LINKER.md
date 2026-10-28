@@ -697,13 +697,19 @@ string forms in DWARF 5 line table headers, and `.debug_aranges`. An object
 whose units cannot be walked (64-bit DWARF, an unknown form) is left out
 rather than linked with wrong offsets, and `__debug_names` is dropped when
 more than one object contributes, since its tables cannot be concatenated
-(lldb builds its own index of the units). The executable has no `__unwind_info`;
-unwinders fall back to `__eh_frame`, which is what lldb does.
+(lldb builds its own index of the units). The executable gets an
+`__unwind_info` section (`nl_unwind.salam`) in which every function with an
+FDE uses the DWARF encoding (`UNWIND_X86_64_MODE_DWARF` or
+`UNWIND_ARM64_MODE_DWARF` plus the FDE's offset in `__eh_frame`), and the
+code between FDEs gets encoding 0, so the system unwinder finds each frame
+through `__eh_frame` without guessing. Entries sit in regular second-level
+pages of up to 511, behind an index whose last entry marks the end of the
+code.
 
 The output is a PIE `MH_EXECUTE`:
 
 - `__PAGEZERO`, `__TEXT` (`__text`, `__stubs`, `__cstring`, `__const`,
-  `__eh_frame`), `__DATA_CONST` (`__got`, `__mod_init_func`, `__const`),
+  `__eh_frame`, `__unwind_info`), `__DATA_CONST` (`__got`, `__mod_init_func`, `__const`),
   `__DATA` (`__data`, `__bss`) and `__LINKEDIT`.
 - Calls to imported functions go through a stub that jumps through a
   non-lazy `__got` slot; there is no lazy binding. GOT loads of local

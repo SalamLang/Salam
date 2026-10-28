@@ -20,8 +20,7 @@ pub struct JSONOptions:
     pub ignore_null: bool = false
 end
 
-func _skip_ws(s: str, i: int): int:
-    n := str.ByteLen(s)
+func _skip_ws_n(s: str, n: int, i: int): int:
     mut p := i
     until p < n:
         c := _ub(_bp(s), p)
@@ -31,8 +30,9 @@ func _skip_ws(s: str, i: int): int:
     ret p
 end
 
-func _pstr(s: str, i: int, endpos &: int, err &: encerr.EncodingError): str:
-    n := str.ByteLen(s)
+func _skip_ws(s: str, i: int): int: ret _skip_ws_n(s, str.ByteLen(s), i) end
+
+func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError): str:
     bp := _bp(s)
     if i >= n or _ub(bp, i) != 34:
         err = encerr.ErrUnexpectedToken(`expected '"'`, i)
@@ -87,10 +87,10 @@ func _pstr(s: str, i: int, endpos &: int, err &: encerr.EncodingError): str:
 end
 
 func _pval(s: str, i: int, endpos &: int, err &: encerr.EncodingError): value.Value:
-    ret _pval_d(s, i, endpos, err, 0)
+    ret _pval_d_n(s, str.ByteLen(s), i, endpos, err, 0)
 end
 
-func _pval_d(s: str, i: int, endpos &: int, err &: encerr.EncodingError, depth: int): value.Value:
+func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError, depth: int): value.Value:
     if encerr.IsError(err):
         endpos = i
         ret value.ValueNull()
@@ -100,8 +100,7 @@ func _pval_d(s: str, i: int, endpos &: int, err &: encerr.EncodingError, depth: 
         endpos = i
         ret value.ValueNull()
     end
-    n := str.ByteLen(s)
-    p0 := _skip_ws(s, i)
+    p0 := _skip_ws_n(s, n, i)
     if p0 >= n:
         err = encerr.ErrUnexpectedEOF(p0)
         endpos = p0
@@ -111,38 +110,38 @@ func _pval_d(s: str, i: int, endpos &: int, err &: encerr.EncodingError, depth: 
     c := _ub(bp, p0)
     if c == 34:
         mut ep := p0
-        text := _pstr(s, p0, ep, err)
+        text := _pstr_n(s, n, p0, ep, err)
         endpos = ep
         ret value.ValueString(text)
     end
     if c == 123:
         mut out := value.NewValueObject()
-        mut q := _skip_ws(s, p0 + 1)
+        mut q := _skip_ws_n(s, n, p0 + 1)
         if q < n and _ub(bp, q) == 125:
             endpos = q + 1
             ret out
         end
         until true:
-            q = _skip_ws(s, q)
+            q = _skip_ws_n(s, n, q)
             if q >= n or _ub(bp, q) != 34:
                 err = encerr.ErrUnexpectedToken("expected object key", q)
                 endpos = q
                 ret out
             end
             mut kend := q
-            key := _pstr(s, q, kend, err)
+            key := _pstr_n(s, n, q, kend, err)
             if encerr.IsError(err): endpos = kend ret out end
-            q = _skip_ws(s, kend)
+            q = _skip_ws_n(s, n, kend)
             if q >= n or _ub(bp, q) != 58:
                 err = encerr.ErrUnexpectedToken("expected ':'", q)
                 endpos = q
                 ret out
             end
             mut vend := q + 1
-            v := _pval_d(s, q + 1, vend, err, depth + 1)
+            v := _pval_d_n(s, n, q + 1, vend, err, depth + 1)
             if encerr.IsError(err): endpos = vend ret out end
             value.ObjectSet(out, key, v)
-            q = _skip_ws(s, vend)
+            q = _skip_ws_n(s, n, vend)
             if q < n and _ub(bp, q) == 44:
                 q += 1
                 continue
@@ -158,17 +157,17 @@ func _pval_d(s: str, i: int, endpos &: int, err &: encerr.EncodingError, depth: 
     end
     if c == 91:
         mut out := value.NewValueArray()
-        mut q := _skip_ws(s, p0 + 1)
+        mut q := _skip_ws_n(s, n, p0 + 1)
         if q < n and _ub(bp, q) == 93:
             endpos = q + 1
             ret out
         end
         until true:
             mut vend := q
-            v := _pval_d(s, q, vend, err, depth + 1)
+            v := _pval_d_n(s, n, q, vend, err, depth + 1)
             if encerr.IsError(err): endpos = vend ret out end
             value.ArrayPush(out, v)
-            q = _skip_ws(s, vend)
+            q = _skip_ws_n(s, n, vend)
             if q < n and _ub(bp, q) == 44:
                 q += 1
                 continue
@@ -182,25 +181,25 @@ func _pval_d(s: str, i: int, endpos &: int, err &: encerr.EncodingError, depth: 
             ret out
         end
     end
-    if p0 + 4 <= n and str.ByteSub(s, p0, 4) == "true":
+    if p0 + 4 <= n and _match_at(bp, p0, _bp("true"), 4):
         endpos = p0 + 4
         ret value.ValueBool(true)
     end
-    if p0 + 5 <= n and str.ByteSub(s, p0, 5) == "false":
+    if p0 + 5 <= n and _match_at(bp, p0, _bp("false"), 5):
         endpos = p0 + 5
         ret value.ValueBool(false)
     end
-    if p0 + 4 <= n and str.ByteSub(s, p0, 4) == "null":
+    if p0 + 4 <= n and _match_at(bp, p0, _bp("null"), 4):
         endpos = p0 + 4
         ret value.ValueNull()
     end
-    ep := _jnum(s, p0)
+    ep := _jnum_n(s, n, p0)
     if ep < 0 or ep == p0:
         err = encerr.ErrUnexpectedToken("invalid value", p0)
         endpos = p0
         ret value.ValueNull()
     end
-    numtext := str.ByteSub(s, p0, ep - p0)
+    numtext := __jdslice(s, p0, ep)
     endpos = ep
     if str.Contains(numtext, ".") or str.Contains(numtext, "e") or str.Contains(numtext, "E"):
         ret value.ValueFloat(numtext.to_float())

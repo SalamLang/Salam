@@ -525,31 +525,256 @@ func cv_locals(g &: Ng, v &: Vector<u8>, tys &: DvTypes, k: int):
     seen.free()
 end
 
+func cv_func_id(g &: Ng, spm: int): int:
+    if g.cv_fid.has(spm):
+        ret g.cv_fid.get(spm)
+    end
+    if g.cv_proc0 == 0:
+        al := cv_trec_begin(g, 0x1201)
+        vb_le(g.s_cvtyp, 0 as i64, 4)
+        ali := cv_trec_end(g, al)
+        pr := cv_trec_begin(g, 0x1008)
+        vb_le(g.s_cvtyp, 0x03 as i64, 4)
+        vb_le(g.s_cvtyp, 0 as i64, 4)
+        vb_le(g.s_cvtyp, ali as i64, 4)
+        g.cv_proc0 = cv_trec_end(g, pr)
+    end
+    at := cv_trec_begin(g, 0x1601)
+    vb_le(g.s_cvtyp, 0 as i64, 4)
+    vb_le(g.s_cvtyp, g.cv_proc0 as i64, 4)
+    mut nm := g.md_s1[spm]
+    if str.Len(nm) == 0:
+        nm = "<inlined>"
+    end
+    vb_str(g.s_cvtyp, nm)
+    ix := cv_trec_end(g, at)
+    g.cv_fid.put(spm, ix)
+    g.cv_il_id.push(ix)
+    g.cv_il_sp.push(spm)
+    ret ix
+end
+
+func cv_ba_uint(v &: Vector<u8>, x: int):
+    if x < 0x80:
+        v.push(x as u8)
+    else x < 0x4000:
+        v.push((0x80 | (x >> 8)) as u8)
+        v.push((x & 255) as u8)
+    else:
+        v.push((0xC0 | ((x >> 24) & 0x1F)) as u8)
+        v.push(((x >> 16) & 255) as u8)
+        v.push(((x >> 8) & 255) as u8)
+        v.push((x & 255) as u8)
+    end
+end
+
+func cv_ba_sint(v &: Vector<u8>, x: int):
+    cv_ba_uint(v, x >= 0 ? x << 1 : ((0 - x) << 1) | 1)
+end
+
+func cv_child_sites(t &: DbgTree, nd: int, out &: Vector<int>):
+    mut c := t.kid[nd]
+    until c >= 0:
+        if t.kind[c] == 0:
+            out.push(c)
+        else:
+            cv_child_sites(t, c, out)
+        end
+        c = t.sib[c]
+    end
+end
+
+func cv_site_lines(g &: Ng, t &: DbgTree, nd: int, base: int, ann &: Vector<u8>):
+    spm := t.sp[nd]
+    fmd := g.md_file[spm]
+    fi := fmd >= 0 ? dbg_file_index(g, fmd) : 0 - 1
+    mut cur_line := g.md_line[spm]
+    mut cur_off := 0
+    mut r := t.iv0[nd]
+    until r >= 0:
+        s := t.ivs[r] - base
+        e := t.ive[r] - base
+        mut eo := Vector {} as Vector<int>
+        mut el := Vector {} as Vector<int>
+        mut kids := Vector {} as Vector<int>
+        cv_child_sites(t, nd, kids)
+        repeat g.dl_off.len() in q:
+            o := g.dl_off[q] - base
+            if o < s or o >= e or cv_file_of(g, q) != fi:
+                continue
+            end
+            mut inkid := false
+            each ch in kids:
+                mut cr := t.iv0[ch]
+                until cr >= 0:
+                    if o + base >= t.ivs[cr] and o + base < t.ive[cr]:
+                        inkid = true
+                    end
+                    cr = t.ivn[cr]
+                end
+            end
+            if inkid:
+                continue
+            end
+            if eo.len() > 0 and eo[eo.len() - 1] == o:
+                el[el.len() - 1] = g.dl_line[q]
+                continue
+            end
+            eo.push(o)
+            el.push(g.dl_line[q])
+        end
+        each ch2 in kids:
+            cl := g.md_line[g.lt_md[t.loc[ch2]]]
+            mut cr2 := t.iv0[ch2]
+            until cr2 >= 0:
+                co := t.ivs[cr2] - base
+                if co >= s and co < e:
+                    mut pos := 0
+                    until pos < eo.len() and eo[pos] < co:
+                        pos += 1
+                    end
+                    if pos < eo.len() and eo[pos] == co:
+                        el[pos] = cl
+                    else:
+                        eo.insert(pos, co)
+                        el.insert(pos, cl)
+                    end
+                end
+                cr2 = t.ivn[cr2]
+            end
+        end
+        kids.free()
+        if eo.len() == 0 or eo[0] > s:
+            eo.insert(0, s)
+            el.insert(0, cur_line)
+        end
+        repeat eo.len() in k:
+            if el[k] != cur_line:
+                ann.push(6 as u8)
+                cv_ba_sint(ann, el[k] - cur_line)
+                cur_line = el[k]
+            end
+            ann.push(3 as u8)
+            cv_ba_uint(ann, eo[k] - cur_off)
+            cur_off = eo[k]
+        end
+        ann.push(4 as u8)
+        cv_ba_uint(ann, e - cur_off)
+        eo.free()
+        el.free()
+        r = t.ivn[r]
+    end
+end
+
+func cv_sites(g &: Ng, v &: Vector<u8>, t &: DbgTree, nd: int, base: int):
+    if t.kind[nd] == 0 and t.iv0[nd] >= 0 and t.sp[nd] >= 0:
+        fid := cv_func_id(g, t.sp[nd])
+        r := cv_rec_begin(v, 0x114D)
+        vb_le(v, 0 as i64, 4)
+        vb_le(v, 0 as i64, 4)
+        vb_le(v, fid as i64, 4)
+        mut ann := Vector {} as Vector<u8>
+        cv_site_lines(g, t, nd, base, ann)
+        each b in ann:
+            v.push(b)
+        end
+        ann.free()
+        cv_rec_end(v, r)
+        mut c := t.kid[nd]
+        until c >= 0:
+            cv_sites(g, v, t, c, base)
+            c = t.sib[c]
+        end
+        re := cv_rec_begin(v, 0x114E)
+        cv_rec_end(v, re)
+        ret
+    end
+    mut c2 := t.kid[nd]
+    until c2 >= 0:
+        cv_sites(g, v, t, c2, base)
+        c2 = t.sib[c2]
+    end
+end
+
+func cv_inlines(g &: Ng, v &: Vector<u8>, k: int):
+    mut t := DbgTree {}
+    base := g.df_base[k]
+    dt_build(g, t, base, base + g.df_size[k])
+    repeat t.loc.len() in nd:
+        if t.par[nd] < 0:
+            cv_sites(g, v, t, nd, base)
+        end
+    end
+end
+
+func cv_top_sites(t &: DbgTree, nd: int, out &: Vector<int>):
+    if t.kind[nd] == 0:
+        out.push(nd)
+        ret
+    end
+    mut c := t.kid[nd]
+    until c >= 0:
+        cv_top_sites(t, c, out)
+        c = t.sib[c]
+    end
+end
+
 func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
     base := g.df_base[k]
     stop := base + g.df_size[k]
-    mut first := 0 - 1
-    mut last := 0 - 1
+    mut ro := Vector {} as Vector<int>
+    mut rl := Vector {} as Vector<int>
+    mut rf := Vector {} as Vector<int>
     repeat g.dl_off.len() in r:
         if g.dl_off[r] >= base and g.dl_off[r] < stop:
-            if first < 0:
-                first = r
-            end
-            last = r
+            ro.push(g.dl_off[r])
+            rl.push(g.dl_line[r])
+            rf.push(cv_file_of(g, r))
         end
     end
-    if first < 0:
+    if ro.len() == 0:
+        ro.free()
+        rl.free()
+        rf.free()
         ret
     end
+    mut t := DbgTree {}
+    dt_build(g, t, base, stop)
+    mut tops := Vector {} as Vector<int>
+    repeat t.loc.len() in nd:
+        if t.par[nd] < 0:
+            cv_top_sites(t, nd, tops)
+        end
+    end
+    each st in tops:
+        cmd := g.lt_md[t.loc[st]]
+        cf := dbg_file_of(g, cmd)
+        if cf < 0:
+            continue
+        end
+        cfi := dbg_file_index(g, cf)
+        cln := g.md_line[cmd]
+        mut cr := t.iv0[st]
+        until cr >= 0:
+            repeat ro.len() in q0:
+                if ro[q0] >= t.ivs[cr] and ro[q0] < t.ive[cr]:
+                    rl[q0] = cln
+                    rf[q0] = cfi
+                end
+            end
+            cr = t.ivn[cr]
+        end
+    end
+    tops.free()
     at := cv_sub_begin(v, CV_LINES)
     cv_fn_secrel(g, v, k)
     vb_le(v, 0 as i64, 2)
     vb_le(v, g.df_size[k] as i64, 4)
-    mut r0 := first
-    until r0 <= last:
-        f := cv_file_of(g, r0)
+    mut r0 := 0
+    until r0 < ro.len():
+        f := rf[r0]
         mut r1 := r0
-        until r1 + 1 <= last and cv_file_of(g, r1 + 1) == f:
+        until r1 + 1 < ro.len() and rf[r1 + 1] == f:
             r1 += 1
         end
         n := r1 - r0 + 1
@@ -558,12 +783,15 @@ func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
         vb_le(v, (12 + 8 * n) as i64, 4)
         repeat n in q:
             r := r0 + q
-            vb_le(v, (g.dl_off[r] - base) as i64, 4)
-            vb_le(v, ((g.dl_line[r] & 0xFFFFFF) as i64) | (0x80000000 as i64), 4)
+            vb_le(v, (ro[r] - base) as i64, 4)
+            vb_le(v, ((rl[r] & 0xFFFFFF) as i64) | (0x80000000 as i64), 4)
         end
         r0 = r1 + 1
     end
     cv_sub_end(v, at)
+    ro.free()
+    rl.free()
+    rf.free()
 end
 
 func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
@@ -609,12 +837,26 @@ func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
         vb_str(v, nm)
         cv_rec_end(v, rp)
         cv_locals(g, v, tys, k)
+        cv_inlines(g, v, k)
         re := cv_rec_begin(v, 0x0006)
         cv_rec_end(v, re)
     end
     cv_sub_end(v, sa)
     repeat g.df_sym.len() in k2:
         cv_lines(g, v, k2)
+    end
+    if g.cv_il_id.len() > 0:
+        il := cv_sub_begin(v, 0xF6)
+        vb_le(v, 0 as i64, 4)
+        repeat g.cv_il_id.len() in q:
+            sp2 := g.cv_il_sp[q]
+            fm := g.md_file[sp2]
+            fx := fm >= 0 ? dbg_file_index(g, fm) : 1
+            vb_le(v, g.cv_il_id[q] as i64, 4)
+            vb_le(v, (8 * (fx - 1)) as i64, 4)
+            vb_le(v, g.md_line[sp2] as i64, 4)
+        end
+        cv_sub_end(v, il)
     end
     mut strs := Vector {} as Vector<u8>
     strs.push(0 as u8)

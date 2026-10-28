@@ -1,0 +1,116 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.http
+import net.router
+import net.internal.rawsock
+import str
+import time
+
+const PORT := 19474
+
+mut _slow_body := ""
+
+func slow(ctx: i64):
+    time.Sleep(1500)
+    http.Text(ctx, "slow")
+end
+
+func fast(ctx: i64):
+    http.Text(ctx, "fast")
+end
+
+func dial(): rawsock.Socket:
+    mut sock := rawsock.Connect("127.0.0.1", PORT)
+    mut tries := 0
+    until not rawsock.Ok(sock) and tries < 300:
+        time.Sleep(10)
+        sock = rawsock.Connect("127.0.0.1", PORT)
+        tries = tries + 1
+    end
+    ret sock
+end
+
+func read_until(sock: rawsock.Socket, want: int): str:
+    mut got := ""
+    until str.Count(got, "\r\n\r\n") < want:
+        chunk := rawsock.Recv(sock, 8192)
+        if chunk.len() == 0: break end
+        got += chunk
+    end
+    ret got
+end
+
+func get_once(path: str): str:
+    sock := dial()
+    rawsock.Send(sock, "GET " + path + " HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    resp := read_until(sock, 1)
+    rawsock.Close(sock)
+    at := resp.find("\r\n\r\n")
+    if at < 0: ret "" end
+    ret resp.substr(at + 4, resp.len() - at - 4)
+end
+
+func slow_client():
+    _slow_body = get_once("/slow")
+end
+
+func main:
+    r := router.NewRouter()
+    router.Get(r, "/slow", slow)
+    router.Get(r, "/fast", fast)
+    http.SetKeepAliveIdle(800)
+    http.SetKeepAliveMaxRequests(3)
+    s := http.NewServer(PORT)
+    http.Use(s, r)
+    if not http.RunBackground(s):
+        println "server failed to start"
+        ret
+    end
+    _warm := get_once("/fast")
+
+    t := spawn(slow_client)
+    time.Sleep(100)
+    mut fast_ok := 0
+    repeat 10:
+        if get_once("/fast") == "fast": fast_ok += 1 end
+    end
+    println "fast while slow runs:", fast_ok
+    join(t)
+    println "slow:", _slow_body
+
+    p := dial()
+    rawsock.Send(p, "GET /fast HTTP/1.1\r\nHost: x\r\n\r\nGET /fast HTTP/1.1\r\nHost: x\r\n\r\n")
+    two := read_until(p, 2)
+    println "pipelined responses:", str.Count(two, "fast")
+    rawsock.Close(p)
+
+    k := dial()
+    mut closes := 0
+    repeat 3:
+        rawsock.Send(k, "GET /fast HTTP/1.1\r\nHost: x\r\n\r\n")
+        one := read_until(k, 1)
+        if one.find("Connection: close") >= 0: closes += 1 end
+    end
+    println "responses with a close header:", closes
+    println "then the server hangs up:", rawsock.Recv(k, 64).len() == 0
+    rawsock.Close(k)
+
+    idle := dial()
+    rawsock.Send(idle, "GET /fast HTTP/1.1\r\nHost: x\r\n\r\n")
+    _first := read_until(idle, 1)
+    time.Sleep(2500)
+    println "idle connection closed:", rawsock.Recv(idle, 64).len() == 0
+    rawsock.Close(idle)
+end

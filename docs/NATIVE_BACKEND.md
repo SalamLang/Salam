@@ -468,7 +468,8 @@ then goes through:
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree (only from 16
    elements up; shorter copies stay a loop).
-   Innermost loops whose body is one branch-free block are vectorized with
+   Innermost loops whose body is one branch-free block, counting up to a
+   limit with `<` or `<=` (before or after the body), are vectorized with
    SSE2: bytes sixteen lanes at a time, 16-bit integers eight, 32-bit integer
    and `f32` code four, 64-bit and `f64` two. Loads and stores must be
    contiguous in the counter; a loop that also does 32-bit work widens its

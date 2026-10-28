@@ -117,7 +117,17 @@ record is reloaded. libgcc's `_Unwind_Backtrace` walks the same number of
 frames there as on x86, and gdb uses the tables instead of guessing from the
 prologues.
 
-What is not there yet: the loop and SLP vectorizers are off on AArch64.
+The loop, SLP and sum-reduction vectorizers run on AArch64 too. They emit the
+same machine ops as on x86, and `ng_a64` lowers each SSE2-shaped one to its
+NEON counterpart: `paddd` to `add .4s`, `pandn` to `bic`, `pcmpgtd` to
+`cmgt`, `punpcklbw` to `zip1 .16b`, `packuswb` to `sqxtun` and `sqxtun2`,
+`shufps`/`pshufd` to `dup` or four `ins`, and packed float ops to
+`fadd`/`fmul` on `.4s`/`.2d`. qemu keeps NEON registers in memory, so
+vectorized loops can run slower under emulation than on hardware; the
+`linux-arm64-run` gate job times every benchmark with and without the
+vectorizers on an AArch64 runner. armhf and RISC-V keep them off: the armhf
+baseline (VFPv3-D16) does not promise NEON, and rv64gc has no vector unit.
+
 ARM hardware returns 0 for an integer division by zero instead of trapping,
 so on AArch64 (and on RISC-V, which returns -1) release builds keep the
 explicit check that debug builds have on every target: one compare and a
@@ -797,7 +807,8 @@ faster than the LLVM path.
 Not there yet:
 
 - `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
-- The loop and SLP vectorizers run on x86 only (SLP also on i686).
+- The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
+  i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer
   multiply, no 8- or 16-bit lanes, and float reductions are not reordered.

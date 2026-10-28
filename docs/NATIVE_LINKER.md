@@ -399,7 +399,7 @@ file alignment `0x200`:
 | `.pdata`, `.xdata` | unwind data, data directory 3 |
 | `.bss` | `.bss` and commons |
 | `.idata` | `$2`, five zero words, `$4`, `$5` (the IAT, data directory 12), `$6`, `$7` |
-| `.tls` | `.tls$AAA` ... `.tls$ZZZ`; `_tls_used` becomes data directory 9 |
+| `.tls` | `.tls$AAA`, `.tls` (mingw's `_tls_start`), `.tls$` (clang's thread-locals), other `.tls$*`, `.tls$ZZZ`; `_tls_used` becomes data directory 9 |
 | `.reloc` | base relocations for every `ADDR64` (dynamic base) |
 
 Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
@@ -440,6 +440,8 @@ reads whatever the LLVM backend produces, so `--linker=builtin` works with
 | `x86_64-linux-musl` | static ELF64 | bundled musl |
 | `x86_64-linux-gnu` | dynamic ELF64 PIE | system glibc |
 | `aarch64-linux-gnu` | dynamic ELF64 PIE | glibc (host, `/usr/aarch64-linux-gnu`, or `SALAM_GLIBC_SYSROOT`) |
+| `i686-linux-gnu`, `arm-linux-gnueabihf` | dynamic ELF32 at a fixed address | glibc, as above, plus `libgcc.a` |
+| `riscv64-linux-gnu` | dynamic ELF64 at a fixed address | glibc, as above |
 | `i686-linux-musl` | static ELF32 | bundled musl |
 | `aarch64-linux-musl` | static ELF64 | bundled musl |
 | `arm-linux-musleabihf` | static ELF32 | bundled musl |
@@ -448,23 +450,53 @@ reads whatever the LLVM backend produces, so `--linker=builtin` works with
 | `aarch64-w64-windows-gnu` | PE32+ (ARM64) | llvm-mingw (UCRT) |
 | `x86_64-apple-macos`, `arm64-apple-macos` | Mach-O PIE, ad-hoc signed | `libSystem` |
 
-AArch64 dynamic links use the same layout as x86-64: a 16-byte PLT stub per
-imported function (`adrp x16`, `ldr x17`, `add x16`, `br x17` through its GOT
-slot), `R_AARCH64_GLOB_DAT` and `R_AARCH64_RELATIVE` for GOT slots,
-`R_AARCH64_ABS64` or `RELATIVE` for 64-bit data words, and
-`/lib/ld-linux-aarch64.so.1` as the interpreter. Like x86-64 it binds
-eagerly through the GOT and makes no copy relocations, so a direct
-reference to data in a shared library is an error. An address built with
-`MOVZ`/`MOVK` (`R_AARCH64_MOVW_UABS_G*`, which `-mcmodel=large` without
-`-fPIC` produces) cannot be fixed up at load time, so the linker refuses it in
-a PIE instead of writing the link-time address into the instruction. The driver looks for
-`Scrt1.o` and `libc.so` in a bundled sysroot or `SALAM_GLIBC_SYSROOT` first, then
-in the target's own directories (`/usr/lib/aarch64-linux-gnu` on an AArch64
-host, `/usr/aarch64-linux-gnu/lib` where Debian's cross packages put it).
-`tools/bash/native-glibc-check.sh` runs test programs and a call into a C
-shared library under qemu; it passes its sysroot argument to the linker as
-`SALAM_GLIBC_SYSROOT` as well as to the emulator, and fails when the program
-exits with an error.
+Dynamic links work for every Linux target. x86-64 and AArch64 code is
+position-independent, so those are PIEs; the native backend's i686, ARM and
+RISC-V code uses absolute addresses, so those executables load at a fixed
+address (`0x08048000` on i686, `0x10000` elsewhere, `ET_EXEC`) and need no
+`RELATIVE` relocations. Each relocation is sorted into a call, a GOT load, a
+pointer-sized data word or an address formed in code:
+
+- A call to a shared function goes through a 16-byte PLT stub that jumps
+  through the function's GOT slot: `jmp *slot` on x86, `adrp`/`ldr`/`add`/`br`
+  on AArch64, `auipc`/`ld`/`jalr` on RISC-V, and on ARM `ldr ip`/`ldr pc`
+  behind a `bx pc` so Thumb code (glibc's start files are Thumb) can branch
+  to it too.
+- A data word pointing at a shared symbol gets a symbolic dynamic
+  relocation when it sits in writable data; in a PIE, sections holding
+  pointers are moved to the RELRO area so they can be relocated at load time.
+- An address formed in code, or a pointer in read-only data, cannot be
+  relocated at runtime, so a shared variable gets a copy relocation (space
+  in `.bss`, sized from the library's symbol table, defined in `.dynsym` so
+  the library binds to the copy) and a shared function gets a canonical PLT
+  address (the undefined `.dynsym` entry carries the stub's address, and its
+  GOT slot uses `JUMP_SLOT` so it still resolves to the real function).
+  Symbols defined this way are the only ones in `.gnu.hash`.
+- GOT slots are bound eagerly (`DF_BIND_NOW`) with `GLOB_DAT` (`R_RISCV_64` on
+  RISC-V, which has no `GLOB_DAT`).
+- Thread-locals of the executable keep their static offsets (it is module
+  1, laid out exactly as in a static link); thread-locals from a shared
+  library get `TPOFF`/`DTPMOD`/`DTPOFF` relocations on their GOT slots, and
+  AArch64 TLS descriptors for them are relaxed to initial-exec.
+- i686 and ARM write `.rel.dyn` (`DT_REL`, addends in place) with 32-bit
+  symbol and dynamic entries; the others write `.rela.dyn`. `.preinit_array`
+  (which RISC-V glibc's start file has) gets `DT_PREINIT_ARRAY`.
+
+The driver looks for `Scrt1.o` and `libc.so` in a bundled sysroot or
+`SALAM_GLIBC_SYSROOT` first, then in the target's own directories (the host's
+multiarch directory, or `/usr/<tuple>/lib` where Debian's cross packages put
+them), and on i686 and ARM adds the newest `libgcc.a` it finds for 64-bit
+helpers like `__ashldi3`. Shared libraries are read in both ELF classes.
+`tools/bash/native-glibc-check.sh` runs test programs, a Salam call into a C
+library, and a C program that exercises copy relocations, canonical PLT
+addresses and TLS from a library, on every target.
+
+musl targets link statically unless a library named with `link dynamic` has
+no static archive but a `.so` exists and the musl sysroot has `libc.so` and
+`Scrt1.o` (the fetch script keeps both). The link is then dynamic in the same
+way, against musl's `libc.so` with `/lib/ld-musl-<arch>.so.1` as the
+interpreter (`i386` and `armhf` for i686 and ARM).
+`tools/bash/native-musl-dyn-check.sh` checks it.
 
 With the LLVM backend the driver asks LLVM for an object instead of an
 executable and hands it to the same dispatcher the native backend uses.
@@ -621,6 +653,14 @@ symbols become section-relative, and section-relative relocations get a
 synthetic symbol per section. It pairs `SUBTRACTOR` with the following
 `UNSIGNED`, applies arm64 `ADDEND` to the next relocation, and reads
 x86_64's embedded addends including the `SIGNED_1/2/4` bias.
+Thread-locals keep their three sections (`__thread_vars`,
+`__thread_data`, `__thread_bss`, in that order ahead of `__bss`, with their
+section types, and `MH_HAS_TLV_DESCRIPTORS` in the header). A descriptor's
+pointer to its `$tlv$init` symbol becomes that symbol's offset in the
+template, its `__tlv_bootstrap` word is bound like any import, and the code
+that loads a descriptor is relaxed to address it directly (`movq` to `leaq`
+on x86-64, `ldr` to `add` on arm64), as ld64 does for local variables. A
+thread-local from a dylib is an error.
 `__compact_unwind` is dropped; `__eh_frame` is kept and relocated. The
 `__DWARF` sections of every object that has `__debug_info`, archive members
 included, are concatenated into a `__DWARF` segment between `__DATA` and

@@ -78,6 +78,21 @@ const restored = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { pol
 check("the limit can be restored", restored.res.status === 200 && restored.json.user.policy_free === false);
 check("and applies again", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
+check("python in an unlabeled fence is sent back to be written in Salam", (await ask(user, "review then fix please")).startsWith("Rewritten in Salam"));
+const spread = (await api("POST", "/chats", user, {})).json.chat.id;
+const askMore = async (text) => {
+  const sent = await api("POST", `/chats/${spread}/messages`, user, { text });
+  for (let i = 0; i < 150; i += 1) {
+    const r = await api("GET", `/chats/${spread}/messages/${sent.json.assistant.id}`, user);
+    if (r.json?.status && r.json.status !== "pending") return r.json.body;
+    await sleep(300);
+  }
+  return "";
+};
+const pieces = [await askMore("spread python please"), await askMore("spread python please"), await askMore("spread python please")];
+check("small pieces of python stay alone at first", pieces[0].startsWith("One more part") && pieces[1].startsWith("One more part"), pieces);
+check("but not once they add up across the conversation", pieces[2].startsWith("Rewritten in Salam"), pieces[2]);
+
 const tg = await api("GET", "/admin/telegram", admin);
 check("the admin sees Telegram sessions", tg.res.status === 200 && Array.isArray(tg.json.links) && Array.isArray(tg.json.guests) && typeof tg.json.online_links === "number", tg.json);
 const tgDenied = await api("GET", "/admin/telegram", user);

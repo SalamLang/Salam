@@ -1420,15 +1420,31 @@ func encode_function_rv64(g &: Ng):
         tp := a.lbl_pos[a.fx_lbl[f]]
         a.w[at] = (rv_jenc(((tp - at) * 4) as i64, RV_ZERO) & (0xFFFFFFFF as i64)) as int
     end
+    mut bpos := Vector {} as Vector<int>
+    mut half := Vector {} as Vector<int>
+    rv_compress(g, a, bpos, half)
+    if g.cf_open and g.cf_sym.len() > 0 and g.cf_sym[g.cf_sym.len() - 1] == g.f_sym:
+        fc := g.cf_sym.len() - 1
+        repeat g.cf_en[fc] in q:
+            e := g.cf_e0[fc] + q
+            g.cfe_at[e] = bpos[g.cfe_at[e]]
+        end
+    end
     sec_align_to(g, SEC_TEXT, 16)
     base := g.s_text.len()
     g.sy_sec[g.f_sym] = SEC_TEXT
     g.sy_off[g.f_sym] = base
     repeat a.rl_at.len() in r:
-        add_reloc(g, SEC_TEXT, base + 4 * a.rl_at[r], a.rl_sym[r], a.rl_type[r], a.rl_add[r])
+        add_reloc(g, SEC_TEXT, base + bpos[a.rl_at[r]], a.rl_sym[r], a.rl_type[r], a.rl_add[r])
     end
-    each wv in a.w:
-        v := wv as i64
+    repeat a.w.len() in wi:
+        v := a.w[wi] as i64
+        if half[wi] >= 0:
+            g.s_text.push((half[wi] & 255) as u8)
+            g.s_text.push(((half[wi] >> 8) & 255) as u8)
+            g.uses_rvc = true
+            continue
+        end
         g.s_text.push((v & (255 as i64)) as u8)
         g.s_text.push(((v >> (8 as i64)) & (255 as i64)) as u8)
         g.s_text.push(((v >> (16 as i64)) & (255 as i64)) as u8)
@@ -1437,8 +1453,15 @@ func encode_function_rv64(g &: Ng):
     g.sy_size[g.f_sym] = g.s_text.len() - base
     g.sy_align[g.f_sym] = 16
     g.mc.dv_spb = a.total as i64
-    dbg_words(g, base, a.mi_pos)
-    dv_words(g, base, a.mi_pos, g.s_text.len())
+    mut posb := Vector {} as Vector<int>
+    each mp in a.mi_pos:
+        posb.push(bpos[mp])
+    end
+    dbg_words(g, base, posb, 1)
+    dv_words(g, base, posb, g.s_text.len(), 1)
+    posb.free()
+    bpos.free()
+    half.free()
     a.w.free()
     a.mi_pos.free()
     a.lbl_mi.free()
@@ -1449,4 +1472,254 @@ func encode_function_rv64(g &: Ng):
     a.rl_sym.free()
     a.rl_type.free()
     a.rl_add.free()
+end
+
+func rvc_creg(r: int): bool:
+    ret r >= 8 and r <= 15
+end
+
+func rvc_sx(v: i64, bits: int): i64:
+    m := (1 as i64) << ((bits - 1) as i64)
+    x := v & ((m << (1 as i64)) - (1 as i64))
+    ret (x ^ m) - m
+end
+
+func rvc_ci(f3: int, rd: int, imm: i64, op: int): int:
+    ret (f3 << 13) | ((((imm >> (5 as i64)) & (1 as i64)) as int) << 12) | (rd << 7) | (((imm & (31 as i64)) as int) << 2) | op
+end
+
+func rvc_ca(f6: int, rd: int, f2: int, rs2: int): int:
+    ret (f6 << 10) | ((rd - 8) << 7) | (f2 << 5) | ((rs2 - 8) << 2) | 1
+end
+
+func rvc_cr(f4: int, rd: int, rs2: int): int:
+    ret (f4 << 12) | (rd << 7) | (rs2 << 2) | 2
+end
+
+func rvc_mem(op: int, f3: int, rd: int, rs1: int, off: i64): int:
+    sz := f3 == 2 ? 4 : 8
+    if off < (0 as i64) or (off % (sz as i64)) != (0 as i64):
+        ret 0 - 1
+    end
+    ld := op == 0x03 or op == 0x07
+    fl := op == 0x07 or op == 0x27
+    if not fl and f3 != 2 and f3 != 3:
+        ret 0 - 1
+    end
+    if fl and f3 != 3:
+        ret 0 - 1
+    end
+    o := off as int
+    cf3 := fl ? (ld ? 1 : 5) : (ld ? (f3 == 2 ? 2 : 3) : (f3 == 2 ? 6 : 7))
+    if rs1 == 2:
+        if sz == 8 and o < 512:
+            if ld:
+                if not fl and rd == 0:
+                    ret 0 - 1
+                end
+                ret (cf3 << 13) | (((o >> 5) & 1) << 12) | (rd << 7) | (((o >> 3) & 3) << 5) | (((o >> 6) & 7) << 2) | 2
+            end
+            ret (cf3 << 13) | (((o >> 3) & 7) << 10) | (((o >> 6) & 7) << 7) | (rd << 2) | 2
+        end
+        if sz == 4 and o < 256:
+            if ld:
+                if rd == 0:
+                    ret 0 - 1
+                end
+                ret (cf3 << 13) | (((o >> 5) & 1) << 12) | (rd << 7) | (((o >> 2) & 7) << 4) | (((o >> 6) & 3) << 2) | 2
+            end
+            ret (cf3 << 13) | (((o >> 2) & 15) << 9) | (((o >> 6) & 3) << 7) | (rd << 2) | 2
+        end
+        ret 0 - 1
+    end
+    if not rvc_creg(rs1) or not rvc_creg(rd):
+        ret 0 - 1
+    end
+    if sz == 8 and o < 256:
+        ret (cf3 << 13) | (((o >> 3) & 7) << 10) | ((rs1 - 8) << 7) | (((o >> 6) & 3) << 5) | ((rd - 8) << 2)
+    end
+    if sz == 4 and o < 128:
+        ret (cf3 << 13) | (((o >> 3) & 7) << 10) | ((rs1 - 8) << 7) | (((o >> 2) & 1) << 6) | (((o >> 6) & 1) << 5) | ((rd - 8) << 2)
+    end
+    ret 0 - 1
+end
+
+func rvc_of(w: i64): int:
+    op := (w & (0x7F as i64)) as int
+    rd := ((w >> (7 as i64)) & (31 as i64)) as int
+    f3 := ((w >> (12 as i64)) & (7 as i64)) as int
+    rs1 := ((w >> (15 as i64)) & (31 as i64)) as int
+    rs2 := ((w >> (20 as i64)) & (31 as i64)) as int
+    f7 := ((w >> (25 as i64)) & (0x7F as i64)) as int
+    imm := rvc_sx(w >> (20 as i64), 12)
+    switch op:
+        0x13:
+            if f3 == 0:
+                if rd == 0:
+                    ret rs1 == 0 and imm == (0 as i64) ? 1 : 0 - 1
+                end
+                if imm == (0 as i64) and rs1 != 0:
+                    ret rvc_cr(8, rd, rs1)
+                end
+                if rs1 == 0 and imm >= (0 - 32 as i64) and imm < (32 as i64):
+                    ret rvc_ci(2, rd, imm, 1)
+                end
+                if rd == rs1 and imm != (0 as i64) and imm >= (0 - 32 as i64) and imm < (32 as i64):
+                    ret rvc_ci(0, rd, imm, 1)
+                end
+                if rd == 2 and rs1 == 2 and imm != (0 as i64) and (imm % (16 as i64)) == (0 as i64) and imm >= (0 - 512 as i64) and imm < (512 as i64):
+                    v := imm as int
+                    ret (3 << 13) | (((v >> 9) & 1) << 12) | (2 << 7) | (((v >> 4) & 1) << 6) | (((v >> 6) & 1) << 5) | (((v >> 7) & 3) << 3) | (((v >> 5) & 1) << 2) | 1
+                end
+                if rs1 == 2 and rvc_creg(rd) and imm > (0 as i64) and imm < (1024 as i64) and (imm % (4 as i64)) == (0 as i64):
+                    u := imm as int
+                    ret (((u >> 4) & 3) << 11) | (((u >> 6) & 15) << 7) | (((u >> 2) & 1) << 6) | (((u >> 3) & 1) << 5) | ((rd - 8) << 2)
+                end
+                ret 0 - 1
+            end
+            sh := (imm & (63 as i64)) as int
+            hi := ((w >> (26 as i64)) & (63 as i64)) as int
+            if f3 == 1 and hi == 0 and rd == rs1 and rd != 0 and sh != 0:
+                ret rvc_ci(0, rd, sh as i64, 2)
+            end
+            if f3 == 5 and rd == rs1 and rvc_creg(rd) and sh != 0 and (hi == 0 or hi == 0x10):
+                ret (4 << 13) | (((sh >> 5) & 1) << 12) | ((hi == 0 ? 0 : 1) << 10) | ((rd - 8) << 7) | ((sh & 31) << 2) | 1
+            end
+            if f3 == 7 and rd == rs1 and rvc_creg(rd) and imm >= (0 - 32 as i64) and imm < (32 as i64):
+                ret (4 << 13) | ((((imm >> (5 as i64)) & (1 as i64)) as int) << 12) | (2 << 10) | ((rd - 8) << 7) | (((imm & (31 as i64)) as int) << 2) | 1
+            end
+            ret 0 - 1
+        end
+        0x1B:
+            if f3 == 0 and rd == rs1 and rd != 0 and imm >= (0 - 32 as i64) and imm < (32 as i64):
+                ret rvc_ci(1, rd, imm, 1)
+            end
+            ret 0 - 1
+        end
+        0x33:
+            if f3 == 0 and f7 == 0 and rd != 0:
+                if rs1 == 0 and rs2 != 0:
+                    ret rvc_cr(8, rd, rs2)
+                end
+                if rd == rs1 and rs2 != 0:
+                    ret rvc_cr(9, rd, rs2)
+                end
+                if rd == rs2 and rs1 != 0:
+                    ret rvc_cr(9, rd, rs1)
+                end
+                ret 0 - 1
+            end
+            mut f2 := 0 - 1
+            if f3 == 0 and f7 == 0x20: f2 = 0 end
+            if f3 == 4 and f7 == 0: f2 = 1 end
+            if f3 == 6 and f7 == 0: f2 = 2 end
+            if f3 == 7 and f7 == 0: f2 = 3 end
+            if f2 < 0 or not rvc_creg(rd):
+                ret 0 - 1
+            end
+            if rd == rs1 and rvc_creg(rs2):
+                ret rvc_ca(0x23, rd, f2, rs2)
+            end
+            if f2 != 0 and rd == rs2 and rvc_creg(rs1):
+                ret rvc_ca(0x23, rd, f2, rs1)
+            end
+            ret 0 - 1
+        end
+        0x3B:
+            if f3 != 0 or (f7 != 0 and f7 != 0x20) or not rvc_creg(rd):
+                ret 0 - 1
+            end
+            f2w := f7 == 0 ? 1 : 0
+            if rd == rs1 and rvc_creg(rs2):
+                ret rvc_ca(0x27, rd, f2w, rs2)
+            end
+            if f7 == 0 and rd == rs2 and rvc_creg(rs1):
+                ret rvc_ca(0x27, rd, f2w, rs1)
+            end
+            ret 0 - 1
+        end
+        0x03, 0x07:
+            ret rvc_mem(op, f3, rd, rs1, imm)
+        end
+        0x23, 0x27:
+            soff := rvc_sx(((w >> (25 as i64)) << (5 as i64)) | ((w >> (7 as i64)) & (31 as i64)), 12)
+            ret rvc_mem(op, f3, rs2, rs1, soff)
+        end
+        0x37:
+            lh := rvc_sx(w >> (12 as i64), 20)
+            if rd != 0 and rd != 2 and lh != (0 as i64) and lh >= (0 - 32 as i64) and lh < (32 as i64):
+                ret rvc_ci(3, rd, lh, 1)
+            end
+            ret 0 - 1
+        end
+        0x67:
+            if f3 == 0 and imm == (0 as i64) and rs1 != 0 and (rd == 0 or rd == 1):
+                ret rvc_cr(rd == 0 ? 8 : 9, rs1, 0)
+            end
+            ret 0 - 1
+        end
+    end
+    ret 0 - 1
+end
+
+func rv_compress(g &: Ng, a &: Rv, bpos &: Vector<int>, half &: Vector<int>):
+    n := a.w.len()
+    mut fixed := Vector {} as Vector<bool>
+    repeat n:
+        fixed.push(false)
+    end
+    repeat a.rl_at.len() in r:
+        fixed[a.rl_at[r]] = true
+        if a.rl_type[r] == R_RV_CALL and a.rl_at[r] + 1 < n:
+            fixed[a.rl_at[r] + 1] = true
+        end
+    end
+    mut in_lr := false
+    repeat n in i:
+        w := (a.w[i] as i64) & (0xFFFFFFFF as i64)
+        if (w & (0x7F as i64)) == (0x2F as i64):
+            f5 := ((w >> (27 as i64)) & (31 as i64)) as int
+            if f5 == 2:
+                in_lr = true
+            else f5 == 3:
+                fixed[i] = true
+                in_lr = false
+            end
+        end
+        if in_lr:
+            fixed[i] = true
+        end
+    end
+    bpos.clear()
+    half.clear()
+    bpos.push(0)
+    repeat n in j:
+        w2 := (a.w[j] as i64) & (0xFFFFFFFF as i64)
+        op := (w2 & (0x7F as i64)) as int
+        mut c := 0 - 1
+        if not fixed[j] and not g.off_rvc and op != 0x63 and op != 0x6F:
+            c = rvc_of(w2)
+        end
+        half.push(c)
+        bpos.push(bpos[j] + (c >= 0 ? 2 : 4))
+    end
+    repeat n in k:
+        if half[k] >= 0:
+            continue
+        end
+        w3 := (a.w[k] as i64) & (0xFFFFFFFF as i64)
+        op3 := (w3 & (0x7F as i64)) as int
+        if op3 == 0x63:
+            bi := (((w3 >> (31 as i64)) & (1 as i64)) << (12 as i64)) | (((w3 >> (7 as i64)) & (1 as i64)) << (11 as i64)) | (((w3 >> (25 as i64)) & (0x3F as i64)) << (5 as i64)) | (((w3 >> (8 as i64)) & (15 as i64)) << (1 as i64))
+            t := k + ((rvc_sx(bi, 13) / (4 as i64)) as int)
+            d := (bpos[t] - bpos[k]) as i64
+            a.w[k] = (rv_benc(d, ((w3 >> (20 as i64)) & (31 as i64)) as int, ((w3 >> (15 as i64)) & (31 as i64)) as int, ((w3 >> (12 as i64)) & (7 as i64)) as int) & (0xFFFFFFFF as i64)) as int
+        else op3 == 0x6F:
+            ji := (((w3 >> (31 as i64)) & (1 as i64)) << (20 as i64)) | (((w3 >> (12 as i64)) & (0xFF as i64)) << (12 as i64)) | (((w3 >> (20 as i64)) & (1 as i64)) << (11 as i64)) | (((w3 >> (21 as i64)) & (0x3FF as i64)) << (1 as i64))
+            t2 := k + ((rvc_sx(ji, 21) / (4 as i64)) as int)
+            d2 := (bpos[t2] - bpos[k]) as i64
+            a.w[k] = (rv_jenc(d2, ((w3 >> (7 as i64)) & (31 as i64)) as int) & (0xFFFFFFFF as i64)) as int
+        end
+    end
+    fixed.free()
 end

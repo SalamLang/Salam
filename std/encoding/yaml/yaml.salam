@@ -471,8 +471,20 @@ func _json_str_literal(raw: str): str:
     ret `"`.concat(Escape(raw)).concat(`"`)
 end
 
-func _cws(s: str, i: int): int:
-    n := s.len()
+func _ysub(s: str, start: int, cnt: int): str:
+    bp := _bp(s)
+    mut sb := str.NewBuilder()
+    mut k := 0
+    until k < cnt:
+        str.BufAppendChar(sb, bp[start + k] as int)
+        k += 1
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _cws(s: str, n: int, i: int): int:
     bp := _bp(s)
     mut p := i
     until p < n and (_ub(bp, p) == 32 or _ub(bp, p) == 10 or _ub(bp, p) == 9 or _ub(bp, p) == 13):
@@ -481,8 +493,7 @@ func _cws(s: str, i: int): int:
     ret p
 end
 
-func _cstr_end(s: str, i: int): int:
-    n := s.len()
+func _cstr_end(s: str, n: int, i: int): int:
     bp := _bp(s)
     mut p := i + 1
     until p < n:
@@ -497,23 +508,22 @@ func _cstr_end(s: str, i: int): int:
     ret p
 end
 
-func _cval_end(s: str, i0: int): int:
-    i := _cws(s, i0)
-    n := s.len()
+func _cval_end(s: str, n: int, i0: int): int:
+    i := _cws(s, n, i0)
     bp := _bp(s)
     if i >= n: ret i end
     c := _ub(bp, i)
-    if c == 34: ret _cstr_end(s, i) end
+    if c == 34: ret _cstr_end(s, n, i) end
     if c == 123:
-        mut p := _cws(s, i + 1)
+        mut p := _cws(s, n, i + 1)
         if p < n and _ub(bp, p) == 125: ret p + 1 end
         until p < n:
-            p = _cws(s, p)
-            ke := _cstr_end(s, p)
-            p = _cws(s, ke)
+            p = _cws(s, n, p)
+            ke := _cstr_end(s, n, p)
+            p = _cws(s, n, ke)
             if p < n and _ub(bp, p) == 58: p = p + 1 end
-            p = _cval_end(s, p)
-            p = _cws(s, p)
+            p = _cval_end(s, n, p)
+            p = _cws(s, n, p)
             if p < n and _ub(bp, p) == 44:
                 p = p + 1
                 continue
@@ -524,11 +534,11 @@ func _cval_end(s: str, i0: int): int:
         ret p
     end
     if c == 91:
-        mut p := _cws(s, i + 1)
+        mut p := _cws(s, n, i + 1)
         if p < n and _ub(bp, p) == 93: ret p + 1 end
         until p < n:
-            p = _cval_end(s, p)
-            p = _cws(s, p)
+            p = _cval_end(s, n, p)
+            p = _cws(s, n, p)
             if p < n and _ub(bp, p) == 44:
                 p = p + 1
                 continue
@@ -550,21 +560,21 @@ end
 func _obj_get(s: str, key: str): _YR:
     n := s.len()
     bp := _bp(s)
-    mut p := _cws(s, 0)
+    mut p := _cws(s, n, 0)
     if p >= n or _ub(bp, p) != 123: ret _YR { value = "", ok = false } end
-    p = _cws(s, p + 1)
+    p = _cws(s, n, p + 1)
     if p < n and _ub(bp, p) == 125: ret _YR { value = "", ok = false } end
     until p < n:
-        p = _cws(s, p)
+        p = _cws(s, n, p)
         ks := p
-        ke := _cstr_end(s, p)
-        rawkey := _json_unescape(s.substr(ks + 1, ke - ks - 2))
-        p = _cws(s, ke)
+        ke := _cstr_end(s, n, p)
+        rawkey := _json_unescape(_ysub(s, ks + 1, ke - ks - 2))
+        p = _cws(s, n, ke)
         if p < n and _ub(bp, p) == 58: p = p + 1 end
-        vs := _cws(s, p)
-        ve := _cval_end(s, vs)
+        vs := _cws(s, n, p)
+        ve := _cval_end(s, n, vs)
         if rawkey == key: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
-        p = _cws(s, ve)
+        p = _cws(s, n, ve)
         if p < n and _ub(bp, p) == 44:
             p = p + 1
             continue
@@ -578,17 +588,17 @@ func _arr_get(s: str, idx: int): _YR:
     if idx < 0: ret _YR { value = "", ok = false } end
     n := s.len()
     bp := _bp(s)
-    mut p := _cws(s, 0)
+    mut p := _cws(s, n, 0)
     if p >= n or _ub(bp, p) != 91: ret _YR { value = "", ok = false } end
-    p = _cws(s, p + 1)
+    p = _cws(s, n, p + 1)
     if p < n and _ub(bp, p) == 93: ret _YR { value = "", ok = false } end
     mut i := 0
     until p < n:
-        vs := _cws(s, p)
-        ve := _cval_end(s, vs)
+        vs := _cws(s, n, p)
+        ve := _cval_end(s, n, vs)
         if i == idx: ret _YR { value = s.substr(vs, ve - vs), ok = true } end
         i = i + 1
-        p = _cws(s, ve)
+        p = _cws(s, n, ve)
         if p < n and _ub(bp, p) == 44:
             p = p + 1
             continue
@@ -650,21 +660,21 @@ end
 func _count_elems(s: str, is_obj: bool): int:
     n := s.len()
     bp := _bp(s)
-    mut p := _cws(s, 1)
+    mut p := _cws(s, n, 1)
     mut closec := 93
     if is_obj: closec = 125 end
     if p < n and _ub(bp, p) == closec: ret 0 end
     mut count := 0
     until p < n:
         if is_obj:
-            ke := _cstr_end(s, p)
-            p = _cws(s, ke)
+            ke := _cstr_end(s, n, p)
+            p = _cws(s, n, ke)
             if p < n and _ub(bp, p) == 58: p = p + 1 end
         end
-        vs := _cws(s, p)
-        ve := _cval_end(s, vs)
+        vs := _cws(s, n, p)
+        ve := _cval_end(s, n, vs)
         count = count + 1
-        p = _cws(s, ve)
+        p = _cws(s, n, ve)
         if p < n and _ub(bp, p) == 44:
             p = p + 1
             continue
@@ -1018,11 +1028,10 @@ func _dump_indent(sb &: str.StringBuilder, unit: str, depth: int):
     end
 end
 
-func _dump_scalar(s: str, i: int, sb &: str.StringBuilder): int:
-    n := s.len()
+func _dump_scalar(s: str, n: int, i: int, sb &: str.StringBuilder): int:
     bp := _bp(s)
     if i < n and _ub(bp, i) == 34:
-        e := _cstr_end(s, i)
+        e := _cstr_end(s, n, i)
         raw := _json_unescape(s.substr(i + 1, e - i - 2))
         if _needs_quote(raw):
             str.BufAppend(sb, _json_str_literal(raw))
@@ -1031,19 +1040,18 @@ func _dump_scalar(s: str, i: int, sb &: str.StringBuilder): int:
         end
         ret e
     end
-    e := _cval_end(s, i)
+    e := _cval_end(s, n, i)
     str.BufAppend(sb, s.substr(i, e - i))
     ret e
 end
 
-func _dump_collection_or_scalar(s: str, vs: int, sb &: str.StringBuilder, unit: str, depth: int): int:
-    n := s.len()
+func _dump_collection_or_scalar(s: str, n: int, vs: int, sb &: str.StringBuilder, unit: str, depth: int): int:
     bp := _bp(s)
     vc := _ub(bp, vs)
     if vc == 123 or vc == 91:
         mut closec := 125
         if vc == 91: closec = 93 end
-        inner := _cws(s, vs + 1)
+        inner := _cws(s, n, vs + 1)
         if inner < n and _ub(bp, inner) == closec:
             str.BufAppendChar(sb, 32)
             if vc == 123: str.BufAppend(sb, "{}") else:
@@ -1052,15 +1060,14 @@ func _dump_collection_or_scalar(s: str, vs: int, sb &: str.StringBuilder, unit: 
             ret inner + 1
         end
         str.BufAppendChar(sb, 10)
-        ret _dump_block(s, vs, sb, unit, depth + 1)
+        ret _dump_block(s, n, vs, sb, unit, depth + 1)
     end
     str.BufAppendChar(sb, 32)
-    ret _dump_scalar(s, vs, sb)
+    ret _dump_scalar(s, n, vs, sb)
 end
 
-func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
-    i := _cws(s, i0)
-    n := s.len()
+func _dump_block(s: str, n: int, i0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
+    i := _cws(s, n, i0)
     bp := _bp(s)
     if i >= n:
         str.BufAppend(sb, "null")
@@ -1068,15 +1075,15 @@ func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int
     end
     c := _ub(bp, i)
     if c == 123:
-        mut p := _cws(s, i + 1)
+        mut p := _cws(s, n, i + 1)
         if p < n and _ub(bp, p) == 125:
             str.BufAppend(sb, "{}")
             ret p + 1
         end
         mut first := true
         until p < n:
-            p = _cws(s, p)
-            ke := _cstr_end(s, p)
+            p = _cws(s, n, p)
+            ke := _cstr_end(s, n, p)
             keyraw := _json_unescape(s.substr(p + 1, ke - p - 2))
             if first == false: str.BufAppendChar(sb, 10) end
             first = false
@@ -1087,11 +1094,11 @@ func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int
                 str.BufAppend(sb, keyraw)
             end
             str.BufAppendChar(sb, 58)
-            p = _cws(s, ke)
+            p = _cws(s, n, ke)
             if p < n and _ub(bp, p) == 58: p = p + 1 end
-            vs := _cws(s, p)
-            p = _dump_collection_or_scalar(s, vs, sb, unit, depth)
-            p = _cws(s, p)
+            vs := _cws(s, n, p)
+            p = _dump_collection_or_scalar(s, n, vs, sb, unit, depth)
+            p = _cws(s, n, p)
             if p < n and _ub(bp, p) == 44:
                 p = p + 1
                 continue
@@ -1102,7 +1109,7 @@ func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int
         ret p
     end
     if c == 91:
-        mut p := _cws(s, i + 1)
+        mut p := _cws(s, n, i + 1)
         if p < n and _ub(bp, p) == 93:
             str.BufAppend(sb, "[]")
             ret p + 1
@@ -1113,9 +1120,9 @@ func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int
             first = false
             _dump_indent(sb, unit, depth)
             str.BufAppendChar(sb, 45)
-            vs := _cws(s, p)
-            p = _dump_collection_or_scalar(s, vs, sb, unit, depth)
-            p = _cws(s, p)
+            vs := _cws(s, n, p)
+            p = _dump_collection_or_scalar(s, n, vs, sb, unit, depth)
+            p = _cws(s, n, p)
             if p < n and _ub(bp, p) == 44:
                 p = p + 1
                 continue
@@ -1125,7 +1132,7 @@ func _dump_block(s: str, i0: int, sb &: str.StringBuilder, unit: str, depth: int
         end
         ret p
     end
-    ret _dump_scalar(s, i, sb)
+    ret _dump_scalar(s, n, i, sb)
 end
 
 @en "Parse"

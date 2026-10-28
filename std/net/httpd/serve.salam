@@ -19,7 +19,6 @@ import os
 import io
 import time
 import mem
-import fs
 import conv
 import sync
 import filepath
@@ -323,7 +322,14 @@ end
 func _etag_of(mt: i64, size: i64): str:
     a := conv.FormatHex(mt as u64)
     b := conv.FormatHex(size as u64)
-    out := _cat3("\"", _cat3(a, "-", b), "\"")
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "\"")
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, "-")
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, "\"")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
     mem.Free(a as void *)
     mem.Free(b as void *)
     ret out
@@ -348,7 +354,7 @@ func _not_modified(ctx: i64, etag: str, mt: i64): bool:
         ret _etag_listed(inm, etag)
     end
     ims := http.Header(ctx, "If-Modified-Since")
-    if ims.len() > 0:
+    if ims.len() > 0 and mt > 0:
         r := time.ParseHTTPDate(ims)
         ret r.ok and mt <= r.epoch
     end
@@ -411,11 +417,14 @@ end
 
 func _send_target(ctx: i64, site: int, loc: int, target: str): int:
     ct := mime.MimeType(target)
-    size := os.FileSize(target)
-    mt := fs.ModTime(target)
+    mut size := 0 as i64
+    mut mt := 0 as i64
+    if not http.FileStat(target, size, mt): ret 404 end
     etag := http.Own(ctx, _etag_of(mt, size))
     http.SetHeader(ctx, "ETag", etag)
-    http.SetHeader(ctx, "Last-Modified", http.Own(ctx, time.FormatHTTPDate(mt)))
+    if mt > 0:
+        http.SetHeader(ctx, "Last-Modified", http.Own(ctx, time.FormatHTTPDate(mt)))
+    end
     http.SetHeader(ctx, "Accept-Ranges", "bytes")
     cache := _effective_cache(site, loc)
     if cache >= 0:

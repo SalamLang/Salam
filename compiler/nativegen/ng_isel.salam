@@ -114,9 +114,31 @@ func isel_init(g &: Ng):
                 if p >= 0 and p != g.i_a[i]:
                     g.v_mem[p] = g.v_mem[p] + 1
                 end
+            else op == OP_CALL and not g.off_memaddr:
+                count_inline_mem(g, i)
             end
             i = g.i_next[i]
         end
+    end
+end
+
+func count_inline_mem(g &: Ng, i: int):
+    callee := g.i_a[i]
+    if callee < 0 or g.v_kind[callee] != VK_GLB or g.v_i[callee] != (0 as i64) or g.i_pcount[i] < 3:
+        ret
+    end
+    sy := g.v_def[callee]
+    ln := call_arg(g, i, 2)
+    if g.v_kind[ln] != VK_INT or g.v_i[ln] > (256 as i64):
+        ret
+    end
+    d0 := call_arg(g, i, 0)
+    s0 := call_arg(g, i, 1)
+    if sy == g.sym_i_memset and g.v_kind[s0] == VK_INT and d0 >= 0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+    else sy == g.sym_i_memcpy and d0 >= 0 and s0 >= 0 and d0 != s0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+        g.v_mem[s0] = g.v_mem[s0] + 1
     end
 end
 
@@ -179,6 +201,19 @@ func raw_const(g &: Ng, bits: i64, sz: int): Mem:
         sec_pad(g, SEC_CONST, 16 - sz)
         g.fpcr.put(bits, off)
     end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const(g &: Ng, lo: i64, hi: i64): Mem:
+    key := "v" + str.FromInt(lo) + ":" + str.FromInt(hi)
+    if g.vconst.has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 16)
+    off := g.s_cst.len()
+    sec_le(g, SEC_CONST, lo, 8)
+    sec_le(g, SEC_CONST, hi, 8)
+    g.vconst.put(key, off)
     ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
 end
 
@@ -4782,6 +4817,23 @@ func isel_ins(g &: Ng, i: int, b: int):
             if res_used(g, i):
                 isel_vredmm(g, i)
             end
+            ret
+        end
+        OP_VLANES:
+            vt := g.i_ty[i]
+            q := g.t_elem[vt] == T_I64
+            m := q ? vec_const(g, 0 as i64, 1 as i64) : vec_const(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64))
+            rl := wide_reg(g)
+            _vl := e_rm(g, M_VLD, 16, rl, m)
+            set_res(g, i, rl)
+            ret
+        end
+        OP_VSADB:
+            rs := vcopy(g, g.i_a[i])
+            zs := wide_reg(g)
+            _zz := e_rr(g, M_XORPS, 16, zs, zs)
+            vop(g, 0xF6, rs, zs)
+            set_res(g, i, rs)
             ret
         end
         OP_VBCAST:

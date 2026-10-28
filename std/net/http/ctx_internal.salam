@@ -95,6 +95,7 @@ struct _ReqCtx:
     pub resp_len: int = -1
     pub resp_file: str = ""
     pub resp_file_len: int = -1
+    pub resp_file_off: int = 0
     pub req_hdrs: Vector<_KV> = Vector {}
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
@@ -327,6 +328,7 @@ func salam_ctx_reset(h: i64):
     c.resp_len = -1
     c.resp_file = ""
     c.resp_file_len = -1
+    c.resp_file_off = 0
 end
 
 func salam_ctx_free(h: i64):
@@ -1248,7 +1250,7 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
         if n > 0: tcp.WriteBytes(conn, p, n) end
         fl := _rc(ctx).resp_file_len
         if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
-            _stream_file_body(fd, _rc(ctx).resp_file, fl)
+            _stream_file_body(fd, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
         end
     end
     ret true
@@ -1377,16 +1379,17 @@ func _web_tls_conn_handler(packed: i64):
         if n > 0: tls.WriteBytes(c, p, n) end
         fl := _rc(ctx).resp_file_len
         if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
-            _tls_file_body(c, _rc(ctx).resp_file, fl)
+            _tls_file_body(c, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
         end
     end
     tls.Close(c)
 end
 
-func _stream_file_body(fd: i64, path: str, size: int):
+func _stream_file_body(fd: i64, path: str, off: int, size: int):
     f := fopen(path, "rb")
     if f == null: ret end
     defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
     defer mem.Free(buf)
@@ -1405,10 +1408,11 @@ func _stream_file_body(fd: i64, path: str, size: int):
     end
 end
 
-func _tls_file_body(c &: tls.Conn, path: str, size: int):
+func _tls_file_body(c &: tls.Conn, path: str, off: int, size: int):
     f := fopen(path, "rb")
     if f == null: ret end
     defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
     defer mem.Free(buf)
@@ -1507,4 +1511,24 @@ end
 @fa "وضعیت"
 pub func Status(h: i64): int:
     ret salam_ctx_get_status(h)
+end
+
+@en "FileRange"
+@fa "ارسال بخشی از پرونده"
+pub func FileRange(h: i64, path: str, content_type: str, offset: int, length: int): bool:
+    if offset < 0 or length < 0:
+        ret false
+    end
+    if not File(h, path, content_type):
+        ret false
+    end
+    c := _rc(h)
+    if offset + length > c.resp_file_len:
+        c.resp_file = ""
+        c.resp_file_len = -1
+        ret false
+    end
+    c.resp_file_off = offset
+    c.resp_file_len = length
+    ret true
 end

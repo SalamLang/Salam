@@ -19,6 +19,8 @@ import os
 import io
 import time
 import mem
+import fs
+import conv
 import sync
 import filepath
 import net.http
@@ -315,13 +317,139 @@ func _serve_file(ctx: i64, site: int, loc: int, root: str, rel: str, path: str, 
     else not os.Exists(target):
         ret 404
     end
-    if not http.File(ctx, target, mime.MimeType(target)): ret 404 end
+    ret _send_target(ctx, site, loc, target)
+end
+
+func _etag_of(mt: i64, size: i64): str:
+    a := conv.FormatHex(mt as u64)
+    b := conv.FormatHex(size as u64)
+    out := _cat3("\"", _cat3(a, "-", b), "\"")
+    mem.Free(a as void *)
+    mem.Free(b as void *)
+    ret out
+end
+
+func _etag_listed(header: str, etag: str): bool:
+    if str.Equals(str.Trim(header), "*"): ret true end
+    parts := str.Split(header, ",")
+    mut hit := false
+    repeat parts.len() in i:
+        mut p := str.Trim(parts.get(i))
+        if str.StartsWith(p, "W/"): p = p.substr(2, p.len() - 2) end
+        if str.Equals(p, etag): hit = true end
+    end
+    _free_strs(parts)
+    ret hit
+end
+
+func _not_modified(ctx: i64, etag: str, mt: i64): bool:
+    inm := http.Header(ctx, "If-None-Match")
+    if inm.len() > 0:
+        ret _etag_listed(inm, etag)
+    end
+    ims := http.Header(ctx, "If-Modified-Since")
+    if ims.len() > 0:
+        r := time.ParseHTTPDate(ims)
+        ret r.ok and mt <= r.epoch
+    end
+    ret false
+end
+
+func _range_bounds(spec: str, size: i64, start &: i64, last &: i64): int:
+    dash := spec.indexOf("-")
+    if dash < 0 or spec.indexOf(",") >= 0: ret 0 end
+    a := str.Trim(spec.substr(0, dash))
+    b := str.Trim(spec.substr(dash + 1, spec.len() - dash - 1))
+    mut result := 1
+    if a.len() == 0:
+        n := _parse_uint(b)
+        if n < 1:
+            result = 2
+        else:
+            start = n < size ? size - n : 0
+            last = size - 1
+        end
+    else:
+        s0 := _parse_uint(a)
+        if s0 < 0:
+            result = 0
+        else:
+            start = s0
+            last = size - 1
+            if b.len() > 0:
+                e0 := _parse_uint(b)
+                if e0 < 0:
+                    result = 0
+                else:
+                    if e0 < last: last = e0 end
+                end
+            end
+            if result == 1 and (start >= size or last < start): result = 2 end
+        end
+    end
+    mem.Free(a as void *)
+    mem.Free(b as void *)
+    ret result
+end
+
+func _content_range(start: i64, last: i64, size: i64): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "bytes ")
+    if start < 0:
+        str.BufAppend(sb, "*")
+    else:
+        str.BufAppendInt(sb, start)
+        str.BufAppend(sb, "-")
+        str.BufAppendInt(sb, last)
+    end
+    str.BufAppend(sb, "/")
+    str.BufAppendInt(sb, size)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _send_target(ctx: i64, site: int, loc: int, target: str): int:
+    ct := mime.MimeType(target)
+    size := os.FileSize(target)
+    mt := fs.ModTime(target)
+    etag := http.Own(ctx, _etag_of(mt, size))
+    http.SetHeader(ctx, "ETag", etag)
+    http.SetHeader(ctx, "Last-Modified", http.Own(ctx, time.FormatHTTPDate(mt)))
+    http.SetHeader(ctx, "Accept-Ranges", "bytes")
     cache := _effective_cache(site, loc)
     if cache >= 0:
         secs := str.FromInt(cache)
         http.SetHeader(ctx, "Cache-Control", http.Own(ctx, _cat3("public, max-age=", secs, "")))
         mem.Free(secs as void *)
     end
+    if _not_modified(ctx, etag, mt):
+        http.SetStatus(ctx, 304)
+        http.Text(ctx, "")
+        ret 304
+    end
+    rh := http.Header(ctx, "Range")
+    ir := http.Header(ctx, "If-Range")
+    if rh.len() > 6 and str.StartsWith(rh, "bytes=") and (ir.len() == 0 or str.Equals(ir, etag)):
+        spec := rh.substr(6, rh.len() - 6)
+        mut start := 0 as i64
+        mut last := 0 as i64
+        kind := _range_bounds(spec, size, start, last)
+        mem.Free(spec as void *)
+        if kind == 2:
+            http.SetStatus(ctx, 416)
+            http.SetHeader(ctx, "Content-Range", http.Own(ctx, _content_range(-1, -1, size)))
+            http.Text(ctx, "")
+            ret 416
+        end
+        if kind == 1:
+            if not http.FileRange(ctx, target, ct, start as int, (last - start + 1) as int): ret 404 end
+            http.SetStatus(ctx, 206)
+            http.SetHeader(ctx, "Content-Range", http.Own(ctx, _content_range(start, last, size)))
+            ret 206
+        end
+    end
+    if not http.File(ctx, target, ct): ret 404 end
     ret 200
 end
 

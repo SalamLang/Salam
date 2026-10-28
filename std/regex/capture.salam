@@ -14,6 +14,9 @@
 
 package regex
 
+import mem
+import str
+
 @en "MatchResult"
 @fa "نتیجه تطبیق"
 pub struct MatchResult:
@@ -57,6 +60,23 @@ func _re_result(pat: str, text: str, ok: bool): MatchResult:
         i += 1
     end
     ret m
+end
+
+func _re_put(sb &: str.StringBuilder, text: str, a: int, b: int):
+    tp := _bp(text)
+    mut k := a
+    until k < b:
+        str.BufAppendChar(sb, tp[k] as int)
+        k += 1
+    end
+end
+
+func _re_slice(text: str, a: int, b: int): str:
+    mut sb := str.NewBuilder()
+    _re_put(sb, text, a, b)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
 end
 
 func _re_name_index(pat: str, name: str): int:
@@ -210,13 +230,14 @@ end
 @fa "یافتن همه تطبیق ها"
 pub func FindAllMatches(re: Regex, text: str, limit: int): Vector<MatchResult>:
     out := Vector {} as Vector<MatchResult>
+    tl := text.len()
     mut from := 0
     mut going := true
     until going:
         if limit >= 0 and out.len() >= limit: going = false
-        else from > text.len(): going = false
+        else from > tl: going = false
         else:
-            m := FindMatchFrom(re, text, from)
+            m := _re_result(re.pattern, text, _re_exec_n(re.pattern, text, tl, from))
             if not m.ok:
                 going = false
             else:
@@ -232,17 +253,18 @@ end
 @fa "یافتن چند"
 pub func FindAllN(re: Regex, text: str, limit: int): Vector<str>:
     out := Vector {} as Vector<str>
+    tl := text.len()
     mut from := 0
     mut going := true
     until going:
         if limit >= 0 and out.len() >= limit: going = false
-        else from > text.len(): going = false
+        else from > tl: going = false
         else:
-            m := FindMatchFrom(re, text, from)
+            m := _re_result(re.pattern, text, _re_exec_n(re.pattern, text, tl, from))
             if not m.ok:
                 going = false
             else:
-                out.push(Group(m, 0))
+                out.push(_re_slice(text, m.start, m.stop))
                 from = _re_advance(m)
             end
         end
@@ -267,28 +289,29 @@ end
 pub func SplitN(re: Regex, text: str, limit: int): Vector<str>:
     out := Vector {} as Vector<str>
     if limit == 0: ret out end
+    tl := text.len()
     mut from := 0
     mut cut := 0
     mut going := true
     until going:
         if limit >= 0 and out.len() + 1 >= limit: going = false
-        else from > text.len(): going = false
+        else from > tl: going = false
         else:
-            m := FindMatchFrom(re, text, from)
+            m := _re_result(re.pattern, text, _re_exec_n(re.pattern, text, tl, from))
             if not m.ok:
                 going = false
-            else m.stop == m.start and m.start >= text.len():
+            else m.stop == m.start and m.start >= tl:
                 going = false
             else m.stop == m.start and m.start <= cut:
                 from = _re_advance(m)
             else:
-                out.push(text.substr(cut, m.start - cut))
+                out.push(_re_slice(text, cut, m.start))
                 cut = m.stop
                 from = _re_advance(m)
             end
         end
     end
-    out.push(text.substr(cut, text.len() - cut))
+    out.push(_re_slice(text, cut, tl))
     ret out
 end
 
@@ -363,30 +386,36 @@ end
 @en "ReplaceAllExpand"
 @fa "جایگزینی همه با بسط"
 pub func ReplaceAllExpand(re: Regex, text: str, template: str): str:
-    mut out := ""
+    tl := text.len()
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
     mut cut := 0
     mut from := 0
     mut going := true
     until going:
-        if from > text.len(): going = false
+        if from > tl: going = false
         else:
-            m := FindMatchFrom(re, text, from)
+            m := _re_result(re.pattern, text, _re_exec_n(re.pattern, text, tl, from))
             if not m.ok:
                 going = false
             else:
-                out = out.concat(text.substr(cut, m.start - cut)).concat(Expand(m, template))
+                _re_put(sb, text, cut, m.start)
+                ex := Expand(m, template)
+                str.BufAppend(sb, ex)
+                mem.Free(ex as void *)
                 cut = m.stop
                 from = _re_advance(m)
-                if m.stop == m.start and from <= text.len():
+                if m.stop == m.start and from <= tl:
                     if from > cut:
-                        out = out.concat(text.substr(cut, from - cut))
+                        _re_put(sb, text, cut, from)
                         cut = from
                     end
                 end
             end
         end
     end
-    ret out.concat(text.substr(cut, text.len() - cut))
+    _re_put(sb, text, cut, tl)
+    ret str.BufStr(sb)
 end
 
 @en "ReplaceExpandStr"

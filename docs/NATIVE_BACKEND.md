@@ -673,6 +673,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+  that are well defined by construction (values are kept small with a prime
+  modulus, divisors and shift counts are offset or masked, indices are
+  wrapped into range), builds each with the reference backend and the native
+  backend, and compares their output. `--count`, `--seed`, `--target` with
+  `--runner`, `--ref` and `--keep` (which saves the programs that differ)
+  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
+  with the run number, so each run tries new programs.
 - `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
@@ -816,7 +824,11 @@ with built-in type indices (integers, floats, `bool`, and `str` as a char
 pointer) and the same ranges as their DWARF location lists:
 `S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
 slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
-There are no type records, so struct and array locals are in DWARF only.
+Structs, enums, arrays and pointers get type records in `.debug$T`
+(a pointer to a struct goes through a forward reference, so self-referential
+structs work), and a struct local split into registers gets one
+`S_DEFRANGE_SUBFIELD_REGISTER` per field, or `S_DEFRANGE_REGISTER_REL` with
+its field offset when that field is on the stack.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 
@@ -845,8 +857,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- CodeView has no type records, so WinDbg and Visual Studio show scalar
-  locals but not struct or array ones.
+- CodeView does not describe inlined functions (`S_INLINESITE`) or FPO
+  frame data, so on i686 a debugger walks the stack by frame pointer only.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into

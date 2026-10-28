@@ -362,13 +362,47 @@ func native_link_macho(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
     ret 0
 end
 
-func glibc_dirs(o: lv.Options): Vector<str>:
+func glibc_host_arch(): str:
+    mut a := "x86_64"
+    if SALAM_ARCH_ARM64:
+        a = "aarch64"
+    else SALAM_ARCH_X86:
+        a = "i686"
+    else:
+        a = "x86_64"
+    end
+    ret a
+end
+
+func glibc_arch(triple: str): str:
+    if str.Len(triple) == 0:
+        ret glibc_host_arch()
+    end
+    ret tri_arch(triple)
+end
+
+func glibc_sysroot(o: lv.Options): str:
+    if str.Len(o.sysroot) > 0:
+        ret o.sysroot
+    end
+    ret os.Env("SALAM_GLIBC_SYSROOT")
+end
+
+func glibc_dirs(o: lv.Options, arch: str): Vector<str>:
     mut d := Vector {} as Vector<str>
     each lp in o.lib_paths:
         d.push(lp)
     end
-    each s in ["/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64", "/lib64", "/usr/local/lib", "/usr/lib", "/lib"]:
-        d.push(s)
+    sr := glibc_sysroot(o)
+    each s in ["/usr/lib/" + arch + "-linux-gnu", "/lib/" + arch + "-linux-gnu", "/usr/" + arch + "-linux-gnu/lib"]:
+        d.push(sr + s)
+    end
+    if str.Len(sr) > 0 or str.Equals(arch, glibc_host_arch()):
+        each s2 in ["/usr/lib64", "/lib64", "/usr/local/lib", "/usr/lib", "/lib"]:
+            if str.Len(sr) == 0 or not str.Equals(s2, "/usr/local/lib"):
+                d.push(sr + s2)
+            end
+        end
     end
     ret d
 end
@@ -400,7 +434,8 @@ func glibc_lib(dirs: Vector<str>, spec0: str, kind: str): str:
 end
 
 func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
-    if str.Len(triple) > 0 and not (str.Contains(triple, "x86_64") and str.Contains(triple, "linux-gnu")):
+    arch := glibc_arch(triple)
+    if (str.Len(triple) > 0 and not str.Contains(triple, "linux-gnu")) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
         ret false
     end
@@ -412,7 +447,7 @@ func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
         ret false
     end
-    dirs := glibc_dirs(o)
+    dirs := glibc_dirs(o, arch)
     each need in ["Scrt1.o", "crti.o", "crtn.o", "libc.so"]:
         if str.Len(find_in(dirs, need)) == 0:
             why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
@@ -436,10 +471,11 @@ func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
     ret true
 end
 
-func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
-    dirs := glibc_dirs(o)
+func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
+    dirs := glibc_dirs(o, glibc_arch(triple))
     mut l := nl.New()
     nl.SetDynamic(l, "")
+    nl.SetSysroot(l, glibc_sysroot(o))
     nl.AddInput(l, find_in(dirs, "Scrt1.o"))
     nl.AddInput(l, find_in(dirs, "crti.o"))
     nl.AddInput(l, obj)
@@ -680,7 +716,7 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
     if kind == 4:
         ret native_link_macho(lgr, obj, exe, o)
     end
-    ret native_link_glibc(lgr, obj, exe, o)
+    ret native_link_glibc(lgr, obj, exe, o, triple)
 end
 
 func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:

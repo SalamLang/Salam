@@ -289,7 +289,9 @@ security tooling and ASLR see nothing unusual:
 
 - **Linker scripts**: a small parser for `GROUP(...)`, `INPUT(...)` and
   `AS_NEEDED(...)`, enough for glibc's `libc.so`/`libm.so`. Anything else is
-  an error naming the script.
+  an error naming the script. An absolute path in a script that does not
+  exist on its own is looked up under the sysroot, the way GNU ld's `--sysroot`
+  does, so a cross glibc unpacked anywhere links.
 - **Shared library reader**: from each `.so`, the `DT_SONAME`, the dynamic
   symbol table (`.dynsym`, `.dynstr`) and the version tables
   (`.gnu.version`, `.gnu.version_d`). A symbol defined there resolves an
@@ -437,6 +439,7 @@ reads whatever the LLVM backend produces, so `--linker=builtin` works with
 |---|---|---|
 | `x86_64-linux-musl` | static ELF64 | bundled musl |
 | `x86_64-linux-gnu` | dynamic ELF64 PIE | system glibc |
+| `aarch64-linux-gnu` | dynamic ELF64 PIE | glibc (host, `/usr/aarch64-linux-gnu`, or `SALAM_GLIBC_SYSROOT`) |
 | `i686-linux-musl` | static ELF32 | bundled musl |
 | `aarch64-linux-musl` | static ELF64 | bundled musl |
 | `arm-linux-musleabihf` | static ELF32 | bundled musl |
@@ -444,6 +447,19 @@ reads whatever the LLVM backend produces, so `--linker=builtin` works with
 | `i686-w64-windows-gnu` | PE32 | mingw-w64 |
 | `aarch64-w64-windows-gnu` | PE32+ (ARM64) | llvm-mingw (UCRT) |
 | `x86_64-apple-macos`, `arm64-apple-macos` | Mach-O PIE, ad-hoc signed | `libSystem` |
+
+AArch64 dynamic links use the same layout as x86-64: a 16-byte PLT stub per
+imported function (`adrp x16`, `ldr x17`, `add x16`, `br x17` through its GOT
+slot), `R_AARCH64_GLOB_DAT` and `R_AARCH64_RELATIVE` for GOT slots,
+`R_AARCH64_ABS64` or `RELATIVE` for 64-bit data words, and
+`/lib/ld-linux-aarch64.so.1` as the interpreter. Like x86-64 it binds
+eagerly through the GOT and makes no copy relocations, so a direct
+reference to data in a shared library is an error. The driver looks for
+`Scrt1.o` and `libc.so` in a bundled sysroot or `SALAM_GLIBC_SYSROOT` first, then
+in the target's own directories (`/usr/lib/aarch64-linux-gnu` on an AArch64
+host, `/usr/aarch64-linux-gnu/lib` where Debian's cross packages put it).
+`tools/bash/native-glibc-check.sh` runs test programs and a call into a C
+shared library under qemu.
 
 With the LLVM backend the driver asks LLVM for an object instead of an
 executable and hands it to the same dispatcher the native backend uses.

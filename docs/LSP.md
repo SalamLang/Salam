@@ -29,7 +29,7 @@ salam lsp --version
 | Semantic highlighting, including multi-word Persian names | `semanticTokens/full` |
 | Folding for blocks, comments and imports | `foldingRange` |
 | Formatting through the compiler's formatter, and indent after `:` | `formatting`, `rangeFormatting`, `onTypeFormatting` |
-| Quick fixes from the compiler itself: did-you-mean for names, fields and methods, add the missing `import`, remove an unused import, remove a `mut` that is never reassigned, prefix an unused name with `_`, add `pub` to a private field or method (in its own file), and rewrite `while`, `return`, `elif`, `for ... in`, `def`, `class`, `let` and `var` into Salam, spelled in the file's language | `codeAction` |
+| Quick fixes from the compiler itself: did-you-mean for names, fields and methods, add the missing `import`, remove an unused import, remove a `mut` that is never reassigned, prefix an unused name with `_`, turn a run of `if x == K` tests into a `switch` (when `switchLint` is on), add `pub` to a private field or method (in its own file), and rewrite `while`, `return`, `elif`, `for ... in`, `def`, `class`, `let` and `var` into Salam, spelled in the file's language | `codeAction` |
 | Smart selection | `selectionRange` |
 
 Messages follow the editor's language: a Persian (`fa`) locale gets Persian
@@ -53,6 +53,8 @@ Send them as `initializationOptions`, or later in
 | `formatFixOrder` | `false` | let formatting reorder top-level declarations, like `salam format` |
 | `index` | `true` | analyze every Salam file in the workspace in the background, for references, rename, call hierarchy and code lens |
 | `indexMaxFiles` | `400` | skip the background index when a workspace has more Salam files than this |
+| `switchLint` | `off` | `warn` reports a run of `if x == K` tests that could be one `switch` (W145) and offers the rewrite as a quick fix |
+| `switchLintMin` | `4` | the shortest run `switchLint` reports (at least 2) |
 
 The same can be set on the command line: `salam lsp --stdlib-path=DIR --messages=fa`.
 

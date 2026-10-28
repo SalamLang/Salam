@@ -66,6 +66,12 @@ mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
 
 mut _srv_shdr := Vector {} as Vector<str>
 
+mut _srv_hka := Vector {} as Vector<str>
+
+mut _srv_hcl := Vector {} as Vector<str>
+
+mut _srv_hxp := Vector {} as Vector<str>
+
 mut _srv_count := 0
 
 mut _srv_mu := sync.NewMutex()
@@ -135,6 +141,9 @@ func _srv_init():
         _srv_log.push(false)
         _srv_tls.push(tls.NewServerConfig("", ""))
         _srv_shdr.push("Salam")
+        _srv_hka.push("")
+        _srv_hcl.push("")
+        _srv_hxp.push("")
     end
 end
 
@@ -150,7 +159,11 @@ func _srv_claim(r: router.Router, hide: bool, log: bool): int:
     _srv_routers.set(slot, r)
     _srv_hide.set(slot, hide)
     _srv_log.set(slot, log)
-    _srv_shdr.set(slot, _server_header(hide))
+    shdr := _server_header(hide)
+    _srv_shdr.set(slot, shdr)
+    _srv_hka.set(slot, "\r\nConnection: keep-alive\r\nServer: ".concat(shdr))
+    _srv_hcl.set(slot, "\r\nConnection: close\r\nServer: ".concat(shdr))
+    _srv_hxp.set(slot, "\r\nX-Powered-By: ".concat(shdr).concat("\r\n"))
     sync.Unlock(_srv_mu)
     ret slot
 end
@@ -600,29 +613,48 @@ func _hdr_clean(s: str): str:
     ret out
 end
 
-func _fill_response(b &: str.StringBuilder, ctx: i64, shdr: str, keep: bool):
+if SALAM_JS:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        ret
+    end
+else:
+    func _buf_presize(b &: str.StringBuilder, want: int):
+        if b.cap != (0 as i64): ret end
+        b.data = mem.Allocate(want as u64)
+        b.cap = want as i64
+    end
+end
+
+func _fill_response(b &: str.StringBuilder, ctx: i64, slot: int, keep: bool):
     status := salam_ctx_get_status(ctx)
     ct := salam_ctx_get(ctx, 4)
     body := salam_ctx_get(ctx, 5)
     binary := _rc(ctx).resp_len
     mut blen := body.len()
     if binary >= 0: blen = binary end
-    str.BufAppend(b, "HTTP/1.1 ")
-    _append_status(b, status)
-    str.BufAppend(b, "\r\nContent-Length: ")
+    if binary < 0:
+        _buf_presize(b, 256 + blen)
+    else:
+        _buf_presize(b, 256)
+    end
+    if status == 200:
+        str.BufAppend(b, "HTTP/1.1 200 OK\r\nContent-Length: ")
+    else:
+        str.BufAppend(b, "HTTP/1.1 ")
+        _append_status(b, status)
+        str.BufAppend(b, "\r\nContent-Length: ")
+    end
     str.BufAppendInt(b, blen as i64)
     if keep:
-        str.BufAppend(b, "\r\nConnection: keep-alive")
+        str.BufAppend(b, _srv_hka.get(slot))
     else:
-        str.BufAppend(b, "\r\nConnection: close")
+        str.BufAppend(b, _srv_hcl.get(slot))
     end
-    str.BufAppend(b, "\r\nServer: ")
-    str.BufAppend(b, shdr)
     if _has_header(ctx, "X-Powered-By") == false:
-        str.BufAppend(b, "\r\nX-Powered-By: ")
-        str.BufAppend(b, shdr)
+        str.BufAppend(b, _srv_hxp.get(slot))
+    else:
+        str.BufAppend(b, "\r\n")
     end
-    str.BufAppend(b, "\r\n")
     if ct.len() > 0 and _has_header(ctx, "Content-Type") == false:
         str.BufAppend(b, "Content-Type: ")
         str.BufAppend(b, ct)
@@ -664,9 +696,9 @@ func _binary_body(ctx: i64, n &: int): void *:
     ret c.resp_body as void *
 end
 
-func _build_response(ctx: i64, shdr: str): str:
+func _build_response(ctx: i64, slot: int): str:
     mut b := str.NewBuilder()
-    _fill_response(b, ctx, shdr, false)
+    _fill_response(b, ctx, slot, false)
     out := str.BufStr(b)
     str.BufFree(b)
     ret out
@@ -1175,7 +1207,7 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
     end
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
-        _fill_response(b, ctx, _srv_shdr.get(slot), keep)
+        _fill_response(b, ctx, slot, keep)
         conn := tcp.ConnFromFd(fd)
         tcp.WriteBytes(conn, b.data, b.len as int)
         str.BufFree(b)
@@ -1296,7 +1328,7 @@ func _web_tls_conn_handler(packed: i64):
     end
     _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
     if salam_ctx_is_sent(ctx) == 0:
-        resp := _build_response(ctx, shdr)
+        resp := _build_response(ctx, slot)
         tls.Write(c, resp)
         mem.Free(resp as void *)
         mut n := 0

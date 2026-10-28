@@ -673,6 +673,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+  that are well defined by construction (values are kept small with a prime
+  modulus, divisors and shift counts are offset or masked, indices are
+  wrapped into range), builds each with the reference backend and the native
+  backend, and compares their output. `--count`, `--seed`, `--target` with
+  `--runner`, `--ref` and `--keep` (which saves the programs that differ)
+  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
+  with the run number, so each run tries new programs.
 - `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`

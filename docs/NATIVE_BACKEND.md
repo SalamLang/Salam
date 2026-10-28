@@ -635,6 +635,14 @@ between and no jump target on the way, becomes a register copy (or a move of
 the immediate). This runs after allocation and again after the encoder's jump
 cleanup, and on x86-64 a copy into a scratch register is folded into the
 next instruction that reads it.
+When the hints of a value are taken, the allocator tries the register of
+any value it is copied to or from that already has one, so phi webs and the
+copies around them tend to land in one register. A `select` whose result
+replaces a loop value (the value dies at the `select` and the result flows
+back into its phi) is emitted with that loop value as the tied operand of the
+`cmov`, so the loop carries it in one register with no copy at the latch. A
+32-bit division fast path leaves its quotient and remainder in `rax` and
+`rdx` on both paths and copies them once after the join.
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in

@@ -73,13 +73,222 @@ func cv_file_of(g &: Ng, r: int): int:
     ret f < 0 ? 0 - f : f
 end
 
-func cv_fn_secrel(g &: Ng, v &: Vector<u8>, k: int):
+func cv_pc_secrel(g &: Ng, v &: Vector<u8>, k: int, pc: int):
     s := g.df_sym[k]
     if g.sy_def[s] and g.sy_sec[s] == SEC_TEXT:
-        cv_secrel(g, v, s, (g.df_base[k] - g.sy_off[s]) as i64)
+        cv_secrel(g, v, s, (pc - g.sy_off[s]) as i64)
         ret
     end
-    cv_secrel(g, v, g.cv_text, g.df_base[k] as i64)
+    cv_secrel(g, v, g.cv_text, pc as i64)
+end
+
+func cv_fn_secrel(g &: Ng, v &: Vector<u8>, k: int):
+    cv_pc_secrel(g, v, k, g.df_base[k])
+end
+
+func cv_basic(g &: Ng, md: int): int:
+    bs := g.md_sz[md] / 8
+    e := g.md_a[md]
+    if e == 2:
+        ret 0x30
+    end
+    if e == 4:
+        ret bs == 4 ? 0x40 : (bs == 8 ? 0x41 : 0)
+    end
+    if e == 6 and bs == 1:
+        ret 0x10
+    end
+    if e == 8 and bs == 1:
+        ret 0x20
+    end
+    uns := e == 7 or e == 8
+    switch bs:
+        1: ret uns ? 0x69 : 0x68 end
+        2: ret uns ? 0x73 : 0x72 end
+        4: ret uns ? 0x75 : 0x74 end
+        8: ret uns ? 0x77 : 0x76 end
+    end
+    ret 0
+end
+
+func cv_type(g &: Ng, md0: int): int:
+    mut md := md0
+    repeat 8:
+        if md < 0 or md >= g.md_kind.len():
+            ret 0
+        end
+        k := g.md_kind[md]
+        if k == 5:
+            ret cv_basic(g, md)
+        end
+        if k == 6 and g.md_tag[md] == 0x0f:
+            pt := g.md_t[md]
+            ptr := g.wsz == 4 ? 0x400 : 0x600
+            if pt >= 0 and pt < g.md_kind.len() and g.md_kind[pt] == 5 and g.md_sz[pt] == 8 and (g.md_a[pt] == 6 or g.md_a[pt] == 8):
+                ret ptr | 0x70
+            end
+            ret ptr | 0x03
+        end
+        if k == 7 and g.md_tag[md] == 0x04:
+            switch g.md_sz[md] / 8:
+                1: ret 0x68 end
+                2: ret 0x72 end
+                8: ret 0x76 end
+            end
+            ret 0x74
+        end
+        if k != 6:
+            ret 0
+        end
+        md = g.md_t[md]
+    end
+    ret 0
+end
+
+func cv_reg(g &: Ng, dw: int, bs: int): int:
+    if g.arch == NG_ARCH_X86:
+        if dw >= 0 and dw < 8:
+            ret 17 + dw
+        end
+        ret dw >= 21 and dw < 29 ? 154 + dw - 21 : 0
+    end
+    if g.arch == NG_ARCH_A64:
+        if dw >= 0 and dw < 29:
+            ret bs == 4 ? 10 + dw : 50 + dw
+        end
+        if dw == 29: ret 79 end
+        if dw == 30: ret 80 end
+        if dw == 31: ret 81 end
+        if dw >= 64 and dw < 96:
+            v := dw - 64
+            ret bs == 4 ? 100 + v : (bs == 8 ? 140 + v : 180 + v)
+        end
+        ret 0
+    end
+    if dw >= 17 and dw < 33:
+        x := dw - 17
+        ret x < 8 ? 154 + x : 252 + x - 8
+    end
+    if dw < 0 or dw >= 16:
+        ret 0
+    end
+    if dw >= 8:
+        ret bs == 4 ? 360 + dw - 8 : 336 + dw - 8
+    end
+    k64 := [328, 331, 330, 329, 332, 333, 334, 335]
+    k32 := [17, 19, 18, 20, 23, 24, 22, 21]
+    ret bs == 4 ? k32[dw] : k64[dw]
+end
+
+func cv_frame_reg(g &: Ng, k: int): int:
+    use_sp := k == 3
+    if g.arch == NG_ARCH_X86:
+        ret use_sp ? 21 : 22
+    end
+    if g.arch == NG_ARCH_A64:
+        ret use_sp ? 81 : 79
+    end
+    ret use_sp ? 335 : 334
+end
+
+func cv_defrange(g &: Ng, v &: Vector<u8>, k: int, s0: int, e0: int, lk: int, lp: i64, lx: int, bs: int):
+    mut reg := 0
+    mut off := 0 as i64
+    mut rel := true
+    if lk == 1:
+        reg = cv_reg(g, lp as int, bs)
+        rel = false
+    else lk == 3 or lk == 8:
+        reg = cv_frame_reg(g, lk)
+        off = lp
+    else lk == 6:
+        reg = cv_reg(g, lp as int, 8)
+        off = lx as i64
+    end
+    if reg == 0:
+        ret
+    end
+    mut s := s0
+    until s < e0:
+        n := e0 - s < 0xFFFF ? e0 - s : 0xFFFF
+        r := cv_rec_begin(v, rel ? 0x1145 : 0x1141)
+        vb_le(v, reg as i64, 2)
+        vb_le(v, 0 as i64, 2)
+        if rel:
+            vb_le(v, off, 4)
+        end
+        cv_pc_secrel(g, v, k, s)
+        vb_le(v, n as i64, 2)
+        cv_rec_end(v, r)
+        s = s + n
+    end
+end
+
+func cv_numeric(v &: Vector<u8>, x: i64):
+    if x >= (0 as i64) and x < (0x8000 as i64):
+        vb_le(v, x, 2)
+    else x >= (0 - 0x80000000 as i64) and x <= (0x7FFFFFFF as i64):
+        vb_le(v, 0x8003 as i64, 2)
+        vb_le(v, x, 4)
+    else:
+        vb_le(v, 0x8009 as i64, 2)
+        vb_le(v, x, 8)
+    end
+end
+
+func cv_locals(g &: Ng, v &: Vector<u8>, tys &: DvTypes, k: int):
+    mut seen := HashMap {} as HashMap<int, int>
+    repeat g.gv_md.len() in gv:
+        if gv >= g.gv_df.len() or g.gv_df[gv] != k or g.gv_foff[gv] >= 0:
+            continue
+        end
+        md := g.gv_md[gv]
+        if seen.has(md):
+            continue
+        end
+        h := gv < tys.le_head.len() ? tys.le_head[gv] : 0 - 1
+        if not g.gv_mem[gv] and h < 0:
+            continue
+        end
+        ty := cv_type(g, g.md_t[md])
+        if ty == 0:
+            continue
+        end
+        seen.put(md, 1)
+        bs := dv_type_bytes(g, g.md_t[md])
+        mut cst := not g.gv_mem[gv]
+        mut e0 := h
+        until cst and e0 >= 0:
+            if g.le_k[e0] != 2 or g.le_p[e0] != g.le_p[h]:
+                cst = false
+            end
+            e0 = tys.le_next[e0]
+        end
+        if cst:
+            rc := cv_rec_begin(v, 0x1107)
+            vb_le(v, ty as i64, 4)
+            cv_numeric(v, g.le_p[h])
+            vb_str(v, g.md_s1[md])
+            cv_rec_end(v, rc)
+            continue
+        end
+        r := cv_rec_begin(v, 0x113E)
+        vb_le(v, ty as i64, 4)
+        vb_le(v, (g.md_a[md] > 0 ? 1 : 0) as i64, 2)
+        vb_str(v, g.md_s1[md])
+        cv_rec_end(v, r)
+        base := g.df_base[k]
+        if g.gv_mem[gv]:
+            cv_defrange(g, v, k, base, base + g.df_size[k], g.gv_mk[gv], g.gv_moff[gv], 0, bs)
+            continue
+        end
+        mut e := h
+        until e >= 0:
+            cv_defrange(g, v, k, g.le_s[e], g.le_e[e], g.le_k[e], g.le_p[e], g.le_x[e], bs)
+            e = tys.le_next[e]
+        end
+    end
+    seen.free()
 end
 
 func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
@@ -123,7 +332,7 @@ func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
     cv_sub_end(v, at)
 end
 
-func cv_emit(g &: Ng, ts: int):
+func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
     g.cv_text = ts
     mut v := Vector {} as Vector<u8>
     vb_le(v, 4 as i64, 4)
@@ -165,6 +374,7 @@ func cv_emit(g &: Ng, ts: int):
         v.push(0 as u8)
         vb_str(v, nm)
         cv_rec_end(v, rp)
+        cv_locals(g, v, tys, k)
         re := cv_rec_begin(v, 0x0006)
         cv_rec_end(v, re)
     end

@@ -799,10 +799,15 @@ How the pieces fit:
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
 On Windows targets, `-g` also writes CodeView into each object: a
 `.debug$S` section with `S_OBJNAME`, `S_COMPILE3`, one
-`S_GPROC32`/`S_LPROC32` per function (no type records), C13 line blocks,
-file checksums and a string table (`ng_cv.salam`). The built-in linker
-turns that into a PDB (see `NATIVE_LINKER.md`); with the system linker,
-GNU ld discards it. Local variables are in DWARF only.
+`S_GPROC32`/`S_LPROC32` per function, C13 line blocks, file checksums and a
+string table (`ng_cv.salam`). Scalar locals and parameters get `S_LOCAL`
+with built-in type indices (integers, floats, `bool`, and `str` as a char
+pointer) and the same ranges as their DWARF location lists:
+`S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
+slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
+There are no type records, so struct and array locals are in DWARF only.
+The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
+with the system linker, GNU ld discards it.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
@@ -829,8 +834,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- CodeView has functions and lines but no types or local variables, so
-  WinDbg and Visual Studio show the call stack and source but not values.
+- CodeView has no type records, so WinDbg and Visual Studio show scalar
+  locals but not struct or array ones.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a single-block loop body with unit-stride

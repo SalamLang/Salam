@@ -579,12 +579,22 @@ synthetic symbol per section. It pairs `SUBTRACTOR` with the following
 `UNSIGNED`, applies arm64 `ADDEND` to the next relocation, and reads
 x86_64's embedded addends including the `SIGNED_1/2/4` bias.
 `__compact_unwind` is dropped; `__eh_frame` is kept and relocated. The
-`__DWARF` sections of the first object that has `__debug_info` go into a
-`__DWARF` segment between `__DATA` and `__LINKEDIT`, with their address
-relocations applied. Only one object's DWARF is kept, because Mach-O objects
-carry no relocations for the offsets between their debug sections, so two
-objects' sections cannot be concatenated. The executable has no
-`__unwind_info`; unwinders fall back to `__eh_frame`.
+`__DWARF` sections of every object that has `__debug_info`, archive members
+included, are concatenated into a `__DWARF` segment between `__DATA` and
+`__LINKEDIT`, with their address relocations applied. Mach-O objects carry
+no relocations for the offsets between their debug sections, so
+`nl_dwmo.salam` walks each object's units (DWARF 2 to 5, decoding every
+DIE through its abbreviations) and adds that object's place in each output
+section to every offset into another debug section: the abbreviation offset,
+`DW_FORM_strp`, `line_strp`, `ref_addr` and `sec_offset` (by attribute:
+line table, ranges or range lists, location or location lists,
+`str_offsets_base`, `addr_base`), the `.debug_str_offsets` entries, the
+string forms in DWARF 5 line table headers, and `.debug_aranges`. An object
+whose units cannot be walked (64-bit DWARF, an unknown form) is left out
+rather than linked with wrong offsets, and `__debug_names` is dropped when
+more than one object contributes, since its tables cannot be concatenated
+(lldb builds its own index of the units). The executable has no `__unwind_info`;
+unwinders fall back to `__eh_frame`, which is what lldb does.
 
 The output is a PIE `MH_EXECUTE`:
 

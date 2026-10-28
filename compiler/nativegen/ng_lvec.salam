@@ -8,6 +8,8 @@ const LV_RED := 4
 const LV_SKIP := 5
 const LV_NARROW := 6
 const LV_HOIST := 7
+const LV_RIDX := 8
+const LV_RADDR := 9
 
 pub struct Lv:
     pub h: int = 0 - 1
@@ -18,6 +20,10 @@ pub struct Lv:
     pub shape: int = 0
     pub ivp: int = 0 - 1
     pub ivn: int = 0 - 1
+    pub divp: int = 0 - 1
+    pub divn: int = 0 - 1
+    pub rsum: int = 0 - 1
+    pub rsum64: int = 0 - 1
     pub cmp: int = 0 - 1
     pub lim: int = 0 - 1
     pub sle: bool = false
@@ -186,12 +192,53 @@ func lv_idx_val(g &: Ng, r &: Lv, v: int): bool:
     ret lv_cls(r, v) == LV_IDX
 end
 
+func lv_ridx_val(g &: Ng, r &: Lv, v: int): bool:
+    if r.divp >= 0 and v == g.i_res[r.divp]:
+        ret true
+    end
+    ret lv_cls(r, v) == LV_RIDX
+end
+
 func lv_classify(g &: Ng, r &: Lv, i: int): bool:
     op := g.i_op[i]
     res := g.i_res[i]
     t := g.i_ty[i]
     if i == r.ivn:
         r.cls[res] = LV_IDX
+        ret true
+    end
+    if i == r.divn:
+        r.cls[res] = LV_RIDX
+        ret true
+    end
+    if (op == OP_SEXT or op == OP_TRUNC) and lv_ridx_val(g, r, g.i_a[i]):
+        r.cls[res] = LV_RIDX
+        ret true
+    end
+    if op == OP_ADDR and g.i_b[i] >= 0 and lv_ridx_val(g, r, g.i_b[i]):
+        if not lv_inv(g, r, g.i_a[i]):
+            ret false
+        end
+        r.cls[res] = LV_RADDR
+        ret true
+    end
+    if op == OP_LOAD and lv_cls(r, g.i_a[i]) == LV_RADDR:
+        ad0 := g.v_def[g.i_a[i]]
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (tsize(g, t) != 4 and tsize(g, t) != 8) or (g.i_x[ad0] as i64) != (tsize(g, t) as i64) or not lv_set_lane(r, lv_lane_of(t)):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        r.loads.push(i)
+        ret true
+    end
+    if op == OP_STORE and lv_cls(r, g.i_b[i]) == LV_RADDR:
+        sv0 := g.i_a[i]
+        st0 := g.v_ty[sv0]
+        ad1 := g.v_def[g.i_b[i]]
+        if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, sv0) != LV_VEC or (tsize(g, st0) != 4 and tsize(g, st0) != 8) or (g.i_x[ad1] as i64) != (tsize(g, st0) as i64) or not lv_set_lane(r, lv_lane_of(st0)):
+            ret false
+        end
+        r.stores.push(i)
         ret true
     end
     if op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC:
@@ -385,7 +432,8 @@ end
 func lv_add_red(g &: Ng, r &: Lv, p: int, w: int): bool:
     pv := g.i_res[p]
     t := g.i_ty[p]
-    if t != T_I32 and t != T_I64:
+    flt := t == T_F32 or t == T_F64
+    if t != T_I32 and t != T_I64 and not (flt and g.fast_math):
         ret false
     end
     nx := phi_val_for(g, p, w)
@@ -393,13 +441,13 @@ func lv_add_red(g &: Ng, r &: Lv, p: int, w: int): bool:
         ret false
     end
     d := g.v_def[nx]
-    if g.i_op[d] == OP_SELECT:
+    if g.i_op[d] == OP_SELECT and not flt:
         if lv_add_cnt(g, r, p, d):
             ret true
         end
         ret lv_add_mm(g, r, p, d)
     end
-    if g.i_op[d] != OP_ADD or (g.i_blk[d] != r.w and g.i_blk[d] != r.h):
+    if g.i_op[d] != (flt ? OP_FADD : OP_ADD) or (g.i_blk[d] != r.w and g.i_blk[d] != r.h):
         ret false
     end
     if g.i_a[d] != pv and g.i_b[d] != pv:
@@ -631,6 +679,113 @@ func lv_iv(g &: Ng, r &: Lv): bool:
     ret true
 end
 
+func lv_i32_start(g &: Ng, v: int): bool:
+    if is_cint(g, v):
+        x := g.v_i[v]
+        ret x >= (0 - 2147483647 as i64) and x <= (2147483647 as i64)
+    end
+    if g.v_kind[v] == VK_ARG or g.v_kind[v] == VK_INS:
+        if g.v_ty[v] == T_I32:
+            ret true
+        end
+        if g.v_kind[v] == VK_INS:
+            d := g.v_def[v]
+            ret g.i_op[d] == OP_SEXT and g.v_ty[g.i_a[d]] == T_I32
+        end
+    end
+    ret false
+end
+
+func lv_strip_trunc(g &: Ng, v: int, tr &: bool): int:
+    tr = false
+    if v >= 0 and g.v_kind[v] == VK_INS:
+        d := g.v_def[v]
+        if g.i_op[d] == OP_TRUNC and g.i_ty[d] == T_I32 and g.v_ty[g.i_a[d]] == T_I64:
+            tr = true
+            ret g.i_a[d]
+        end
+    end
+    ret v
+end
+
+func lv_iv_rev(g &: Ng, r &: Lv): bool:
+    if g.off_vrev or r.ivp < 0:
+        ret false
+    end
+    latchb := r.shape == 1 ? r.w : (r.latch >= 0 ? r.latch : r.h)
+    ivt := g.i_ty[r.ivp]
+    mut dp := 0 - 1
+    mut dn := 0 - 1
+    mut i := g.b_first[r.h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        if i != r.ivp and g.i_ty[i] == ivt and g.i_pcount[i] == 2:
+            nx := phi_val_for(g, i, latchb)
+            if nx >= 0 and g.v_kind[nx] == VK_INS:
+                d := g.v_def[nx]
+                if g.i_a[d] == g.i_res[i] and is_cint(g, g.i_b[d]) and ((g.i_op[d] == OP_SUB and g.v_i[g.i_b[d]] == (1 as i64)) or (g.i_op[d] == OP_ADD and g.v_i[g.i_b[d]] == (0 - 1 as i64))):
+                    if dp >= 0:
+                        ret false
+                    end
+                    dp = i
+                    dn = d
+                end
+            end
+        end
+        i = g.i_next[i]
+    end
+    if dp < 0:
+        ret false
+    end
+    r.reds.clear()
+    r.rnext.clear()
+    r.rkind.clear()
+    r.rcmp.clear()
+    mut j := g.b_first[r.h]
+    until j >= 0 and g.i_op[j] == OP_PHI:
+        if j != r.ivp and j != dp and g.v_uses[g.i_res[j]] > 0 and not lv_add_red(g, r, j, latchb):
+            ret false
+        end
+        j = g.i_next[j]
+    end
+    cm := r.cmp
+    mut ta := false
+    mut tb := false
+    mut a := lv_strip_trunc(g, g.i_a[cm], ta)
+    mut b := lv_strip_trunc(g, g.i_b[cm], tb)
+    if ta != tb:
+        ret false
+    end
+    mut p := g.i_x[cm]
+    t := g.b_last[r.h]
+    if g.i_b[t] == r.exitb:
+        p = neg_cc(p)
+    end
+    want := r.shape == 1 ? g.i_res[r.ivp] : g.i_res[r.ivn]
+    hwant := r.shape == 1 ? g.i_res[dp] : g.i_res[dn]
+    if a != want:
+        tmp := a
+        a = b
+        b = tmp
+        p = swap_pred(p)
+    end
+    if a != want or b != hwant or p != CC_SLT:
+        ret false
+    end
+    lo0 := phi_val_for(g, r.ivp, r.pre)
+    hi0 := phi_val_for(g, dp, r.pre)
+    if (ta or ivt == T_I64) and (not lv_i32_start(g, lo0) or not lv_i32_start(g, hi0)):
+        ret false
+    end
+    if ivt != T_I32 and ivt != T_I64:
+        ret false
+    end
+    r.divp = dp
+    r.divn = dn
+    r.lim = 0 - 1
+    r.sle = false
+    ret true
+end
+
 func lv_outside_ok(g &: Ng, r &: Lv): bool:
     each b in g.b_rpo:
         if b == r.h or b == r.w or b == r.latch:
@@ -690,6 +845,36 @@ func lv_out_val_ok(g &: Ng, r &: Lv, v: int): bool:
     ret false
 end
 
+func lv_iv_root(g &: Ng, r &: Lv, v0: int): int:
+    mut v := v0
+    repeat 4:
+        if v == g.i_res[r.ivp]:
+            ret 1
+        end
+        if r.divp >= 0 and v == g.i_res[r.divp]:
+            ret 2
+        end
+        if v < 0 or g.v_kind[v] != VK_INS:
+            ret 0
+        end
+        d := g.v_def[v]
+        if g.i_op[d] != OP_SEXT and g.i_op[d] != OP_TRUNC:
+            ret 0
+        end
+        v = g.i_a[d]
+    end
+    ret 0
+end
+
+func lv_twoptr(g &: Ng, r &: Lv, a: int, b: int): bool:
+    if r.divp < 0 or g.i_d[a] != g.i_d[b] or g.i_x[a] != g.i_x[b]:
+        ret false
+    end
+    ka := lv_iv_root(g, r, g.i_b[a])
+    kb := lv_iv_root(g, r, g.i_b[b])
+    ret ka != 0 and kb != 0 and ka != kb
+end
+
 func lv_mem_ok(g &: Ng, r &: Lv): bool:
     r.checks.clear()
     r.hchecks.clear()
@@ -704,7 +889,7 @@ func lv_mem_ok(g &: Ng, r &: Lv): bool:
         each ld in r.loads:
             la := g.v_def[g.i_a[ld]]
             if g.i_a[sa] == g.i_a[la]:
-                if g.i_b[sa] != g.i_b[la] or g.i_d[sa] != g.i_d[la] or g.i_x[sa] != g.i_x[la]:
+                if (g.i_b[sa] != g.i_b[la] or g.i_d[sa] != g.i_d[la] or g.i_x[sa] != g.i_x[la]) and not lv_twoptr(g, r, sa, la):
                     ret false
                 end
             else:
@@ -718,7 +903,7 @@ func lv_mem_ok(g &: Ng, r &: Lv): bool:
                 if g.i_a[sa] != g.i_a[sb]:
                     r.checks.push(sa)
                     r.checks.push(sb)
-                else g.i_b[sa] != g.i_b[sb] or g.i_x[sa] != g.i_x[sb]:
+                else (g.i_b[sa] != g.i_b[sb] or g.i_x[sa] != g.i_x[sb]) and not lv_twoptr(g, r, sa, sb):
                     ret false
                 end
             end
@@ -772,7 +957,9 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
         ret false
     end
     lv_hoist_pure(g, r)
-    if not lv_iv(g, r):
+    r.divp = 0 - 1
+    r.divn = 0 - 1
+    if not lv_iv(g, r) and not lv_iv_rev(g, r):
         ret false
     end
     r.cls.clear()
@@ -782,6 +969,9 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
     each rp in r.reds:
         r.cls[g.i_res[rp]] = LV_RED
     end
+    if r.divp >= 0:
+        r.cls[g.i_res[r.divp]] = LV_RIDX
+    end
     r.body.clear()
     r.hoist.clear()
     if r.shape == 1:
@@ -789,7 +979,7 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
         until hi >= 0:
             ho := g.i_op[hi]
             if ho != OP_PHI and hi != r.cmp and ho != OP_CBR:
-                if not lv_classify(g, r, hi) or lv_cls(r, g.i_res[hi]) != LV_IDX:
+                if not lv_classify(g, r, hi) or (lv_cls(r, g.i_res[hi]) != LV_IDX and lv_cls(r, g.i_res[hi]) != LV_RIDX):
                     ret false
                 end
                 r.body.push(hi)
@@ -916,7 +1106,16 @@ func lv_uses_ok(g &: Ng, r &: Lv): bool:
             if k == 2 and (m & 4) != 0: v = g.i_c[i] end
             if v >= 0 and lv_in(g, r, v):
                 c := lv_cls(r, v)
-                if c == LV_SKIP:
+                if c == LV_RIDX:
+                    rc := g.i_res[i] >= 0 ? lv_cls(r, g.i_res[i]) : LV_NONE
+                    if not ((op == OP_ADDR and k == 1 and rc == LV_RADDR) or rc == LV_RIDX):
+                        ret false
+                    end
+                else c == LV_RADDR:
+                    if not ((op == OP_LOAD and k == 0) or (op == OP_STORE and k == 1)):
+                        ret false
+                    end
+                else c == LV_SKIP:
                     if op != OP_ZEXT and op != OP_SEXT:
                         ret false
                     end
@@ -1144,7 +1343,13 @@ func lv_sext_app(g &: Ng, b: int, v: int): int:
     ret nv
 end
 
-func lv_addr_range(g &: Ng, r &: Lv, ck: int, ad: int, s64: int, end64: int, lo &: int, hi &: int):
+func lv_addr_range(g &: Ng, r &: Lv, ck: int, ad: int, s64_0: int, end64_0: int, lo &: int, hi &: int):
+    mut s64 := s64_0
+    mut end64 := end64_0
+    if lv_cls(r, g.i_res[ad]) == LV_RADDR:
+        s64 = lv_emit_before(g, g.b_last[ck], OP_SUB, T_I64, r.rsum64, end64_0)
+        end64 = lv_emit_before(g, g.b_last[ck], OP_SUB, T_I64, r.rsum64, s64_0)
+    end
     base := lv_emit_before(g, g.b_last[ck], OP_PTRTOINT, T_I64, lv_hm(r, g.i_a[ad]), 0 - 1)
     sc := const_int(g, T_I64, g.i_x[ad] as i64)
     d := const_int(g, T_I64, g.i_d[ad])
@@ -1155,6 +1360,16 @@ func lv_addr_range(g &: Ng, r &: Lv, ck: int, ad: int, s64: int, end64: int, lo 
     b2 := lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, base, b1)
     b3 := lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, b2, d)
     hi = lv_emit_before(g, g.b_last[ck], OP_ADD, T_I64, b3, const_int(g, T_I64, 16 as i64))
+end
+
+func lv_rshift(g &: Ng, r &: Lv, b: int, adr: int, es: int): int:
+    na := ins_new(g, OP_ADDR, g.v_ty[adr])
+    g.i_a[na] = adr
+    g.i_b[na] = 0 - 1
+    g.i_x[na] = 1
+    g.i_d[na] = (0 - (r.vf - 1) * es) as i64
+    ins_append(g, b, na)
+    ret new_res(g, na)
 end
 
 func lv_phi(g &: Ng, b: int, ty: int, v0: int, b0: int, v1: int, b1: int): int:
@@ -1239,6 +1454,15 @@ func lv_transform(g &: Ng, r &: Lv):
     ckt := ins_new(g, OP_CBR, T_VOID)
     ins_append(g, ck, ckt)
     replace_succ(g, g.b_last[pre], h, ck)
+    if r.divp >= 0:
+        hi0 := phi_val_for(g, r.divp, pre)
+        r.rsum = lv_emit_before(g, ckt, OP_ADD, ivt, start, hi0)
+        sl := lv_sext(g, ck, start)
+        sh := lv_sext(g, ck, hi0)
+        r.rsum64 = lv_emit_before(g, ckt, OP_ADD, T_I64, sl, sh)
+        s1 := lv_emit_before(g, ckt, OP_ADD, T_I64, r.rsum64, const_int(g, T_I64, 1 as i64))
+        r.lim = lv_emit_before(g, ckt, OP_ASHR, T_I64, s1, const_int(g, T_I64, 1 as i64))
+    end
     lim64 := lv_sext(g, ck, r.lim)
     s64 := lv_sext(g, ck, start)
     vfm := r.sle ? r.vf - 2 : r.vf - 1
@@ -1351,6 +1575,9 @@ func lv_transform(g &: Ng, r &: Lv):
     g.i_f[vct] = IF_NOVEC
     ins_append(g, vh, vct)
     r.vmap[ivv] = viv
+    if r.divp >= 0:
+        r.vmap[g.i_res[r.divp]] = lv_emit(g, vb, OP_SUB, ivt, r.rsum, viv)
+    end
     if r.shape == 0:
         ne := new_blk(g)
         nej := ins_new(g, OP_BR, T_VOID)
@@ -1378,6 +1605,10 @@ func lv_transform(g &: Ng, r &: Lv):
                 g.i_a[nst] = lv_vget(g, r, ck, sv, lv_vty(g.v_ty[sv], r.lane))
             end
             g.i_b[nst] = r.vmap[g.i_b[i]]
+            if lv_cls(r, g.i_b[i]) == LV_RADDR:
+                g.i_a[nst] = lv_emit(g, vb, OP_VREV, lv_vty(g.v_ty[sv], r.lane), g.i_a[nst], 0 - 1)
+                g.i_b[nst] = lv_rshift(g, r, vb, g.i_b[nst], tsize(g, g.v_ty[sv]))
+            end
             g.i_c[nst] = g.i_c[i]
             ins_append(g, vb, nst)
             continue
@@ -1385,7 +1616,7 @@ func lv_transform(g &: Ng, r &: Lv):
         if c == LV_SKIP or c == LV_NARROW or c == LV_HOIST:
             continue
         end
-        if c == LV_IDX or c == LV_ADDR:
+        if c == LV_IDX or c == LV_ADDR or c == LV_RIDX or c == LV_RADDR:
             ni := ins_new(g, op, g.i_ty[i])
             g.i_a[ni] = g.i_a[i]
             g.i_b[ni] = g.i_b[i]
@@ -1447,7 +1678,7 @@ func lv_transform(g &: Ng, r &: Lv):
                 continue
             end
             x := g.i_a[i] == pv ? g.i_b[i] : g.i_a[i]
-            r.vmap[res] = lv_emit(g, vb, OP_ADD, vt2, vaccs[red_i], lv_vget(g, r, ck, x, vt2))
+            r.vmap[res] = lv_emit(g, vb, is_flt(g, g.i_ty[i]) ? OP_FADD : OP_ADD, vt2, vaccs[red_i], lv_vget(g, r, ck, x, vt2))
             continue
         end
         if op == OP_LOAD:
@@ -1456,10 +1687,14 @@ func lv_transform(g &: Ng, r &: Lv):
             end
             vt3 := lv_vty(g.i_ty[i], r.lane)
             nl := ins_new(g, OP_LOAD, vt3)
-            g.i_a[nl] = r.vmap[g.i_a[i]]
+            rev := lv_cls(r, g.i_a[i]) == LV_RADDR
+            g.i_a[nl] = rev ? lv_rshift(g, r, vb, r.vmap[g.i_a[i]], tsize(g, g.i_ty[i])) : r.vmap[g.i_a[i]]
             g.i_c[nl] = g.i_c[i]
             r.vmap[res] = new_res(g, nl)
             ins_append(g, vb, nl)
+            if rev:
+                r.vmap[res] = lv_emit(g, vb, OP_VREV, vt3, r.vmap[res], 0 - 1)
+            end
             continue
         end
         if op == OP_ZEXT or op == OP_SEXT:
@@ -1570,7 +1805,7 @@ func lv_transform(g &: Ng, r &: Lv):
             acc0.push(hv)
         else:
             init := phi_val_for(g, rp3, pre)
-            acc0.push(lv_emit(g, rb, OP_ADD, g.i_ty[rp3], init, hv))
+            acc0.push(lv_emit(g, rb, is_flt(g, g.i_ty[rp3]) ? OP_FADD : OP_ADD, g.i_ty[rp3], init, hv))
         end
     end
     mut skip := 0 - 1
@@ -1602,6 +1837,9 @@ func lv_transform(g &: Ng, r &: Lv):
     until j >= 0 and g.i_op[j] == OP_PHI:
         lv_phi_repred(g, j, pre, ck)
         mut nv := j == r.ivp ? viv : phi_val_for(g, j, ck)
+        if j == r.divp:
+            nv = lv_emit_before(g, g.b_last[rb], OP_SUB, ivt, r.rsum, viv)
+        end
         repeat r.reds.len() in k4:
             if r.reds[k4] == j:
                 nv = acc0[k4]

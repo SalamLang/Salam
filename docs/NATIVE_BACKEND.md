@@ -366,6 +366,10 @@ then goes through:
    case. A struct result that the caller only reads field by field earns a
    bonus too (`p_peekn` returns a whole `Token`), and a callee of at most ten
    instructions is inlined even after the caller used up its growth budget.
+   A call inside a loop to a callee that makes no calls itself earns a larger
+   bonus when the caller has at most 40 blocks (`image.BlendPixel` in a fill
+   loop); bigger callers, such as an image codec's frame decoder, only grew
+   and got slower with it.
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -483,7 +487,13 @@ then goes through:
    `psrad` when the extension is signed) and narrows bytes with
    `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
    data pointer of a vector passed by reference) is done once before the
-   vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
+   vector loop, behind a runtime check that no store in the loop reaches it.
+   A second counter that steps down by one while the first steps up (the
+   `lo < hi` swap of a reversal) is rewritten as `lo0 + hi0 - i`, the loop
+   runs while `i < (lo0 + hi0 + 1) / 2`, and its loads and stores read and
+   write the lanes just below the address and reverse them with `pshufd`
+   (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
+   runtime check, since the loop condition keeps the two ranges apart. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
@@ -646,7 +656,20 @@ immediate) of the same size, with no write to the slot or the register in
 between and no jump target on the way, becomes a register copy (or a move of
 the immediate). This runs after allocation and again after the encoder's jump
 cleanup, and on x86-64 a copy into a scratch register is folded into the
-next instruction that reads it.
+next instruction that reads it. The same walk on x86-64 tracks which 64-bit
+registers hold equal values after a copy and drops a copy whose registers
+are already equal, such as the second half of `mov r8, rax` followed by
+`mov rax, r8` (one instruction per divisor in `prime_factorization`).
+Before instruction selection on x86, when a two-address operation (`sub`,
+`divsd` and the like overwrite their first operand) reads a value that has
+one or two later pure uses in the same block, and those uses only need
+values that are ready already, they move ahead of it so the value dies at
+the operation and needs no copy. `sum + sign / den` followed by
+`0.0 - sign` negates first and divides `sign` in place (`pi_leibniz` runs
+11% fewer instructions). A later use that is itself tied to the same value
+stays put unless it is commutative with an operand that dies there, or
+takes a constant (`lea` and `imul` with an immediate need no tie), so DCT
+butterflies keep their order.
 When the hints of a value are taken, the allocator tries the register of
 any value it is copied to or from that already has one, so phi webs and the
 copies around them tend to land in one register. A `select` whose result
@@ -738,7 +761,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -899,11 +922,14 @@ Not there yet:
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into
   one block (a load inside one arm of a branch keeps it scalar) and
-  unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
+  unit-stride accesses (counting up, or down by one through a second
+  counter). On x86-64 it has no 64-bit multiplies or ordered
   64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
   values are widened first). Float
   reductions are not reordered, since that would change the rounding of the
-  result. There is no AVX code path.
+  result, unless the program is built with `--fast-math`, which lets float
+  add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
+  There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

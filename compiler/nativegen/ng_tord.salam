@@ -1,0 +1,125 @@
+package nativegen
+
+func to_tied(op: int): bool:
+    switch op:
+        OP_ADD, OP_SUB, OP_MUL, OP_AND, OP_OR, OP_XOR, OP_SHL, OP_LSHR, OP_ASHR: ret true end
+        OP_FADD, OP_FSUB, OP_FMUL, OP_FDIV: ret true end
+    end
+    ret false
+end
+
+func to_frees(g &: Ng, u: int, a: int): bool:
+    op := g.i_op[u]
+    if not to_tied(op) or g.i_a[u] != a:
+        ret true
+    end
+    o := g.i_b[u]
+    if o >= 0 and g.v_kind[o] == VK_INT and (op == OP_ADD or op == OP_SUB or op == OP_MUL):
+        ret true
+    end
+    if op == OP_SUB or op == OP_SHL or op == OP_LSHR or op == OP_ASHR or op == OP_FSUB or op == OP_FDIV:
+        ret false
+    end
+    ret o >= 0 and (g.v_kind[o] == VK_INS or g.v_kind[o] == VK_ARG) and g.v_uses[o] == 1
+end
+
+func to_movable(op: int): bool:
+    if spec_ok(op) and op != OP_SELECT and op != OP_ICMP:
+        ret true
+    end
+    ret op == OP_FADD or op == OP_FSUB or op == OP_FMUL or op == OP_FNEG
+end
+
+func to_reads(g &: Ng, i: int, v: int): bool:
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and g.i_a[i] == v: ret true end
+    if (m & 2) != 0 and g.i_b[i] == v: ret true end
+    if (m & 4) != 0 and g.i_c[i] == v: ret true end
+    ret false
+end
+
+func to_ready(g &: Ng, pos &: Vector<int>, b: int, v: int, at: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret true
+    end
+    d := g.v_def[v]
+    ret d < 0 or g.i_blk[d] != b or pos[d] < pos[at]
+end
+
+func to_operands_ready(g &: Ng, pos &: Vector<int>, b: int, u: int, at: int): bool:
+    m := val_mask(g.i_op[u])
+    if (m & 1) != 0 and not to_ready(g, pos, b, g.i_a[u], at): ret false end
+    if (m & 2) != 0 and not to_ready(g, pos, b, g.i_b[u], at): ret false end
+    if (m & 4) != 0 and not to_ready(g, pos, b, g.i_c[u], at): ret false end
+    ret true
+end
+
+func to_number(g &: Ng, pos &: Vector<int>, b: int):
+    mut n := 0
+    mut i := g.b_first[b]
+    until i >= 0:
+        pos[i] = n
+        n += 1
+        i = g.i_next[i]
+    end
+end
+
+func to_block(g &: Ng, b: int, pos &: Vector<int>, later &: Vector<int>): bool:
+    mut changed := false
+    to_number(g, pos, b)
+    mut i := g.b_first[b]
+    until i >= 0:
+        a := g.i_a[i]
+        if to_tied(g.i_op[i]) and a >= 0 and (g.v_kind[a] == VK_INS or g.v_kind[a] == VK_ARG) and a != g.i_b[i]:
+            later.clear()
+            mut seen := 0
+            mut ok := true
+            mut j := g.b_first[b]
+            until j >= 0 and ok:
+                if to_reads(g, j, a):
+                    seen += 1
+                    if pos[j] > pos[i]:
+                        if not to_movable(g.i_op[j]) or not to_frees(g, j, a) or later.len() >= 2 or not to_operands_ready(g, pos, b, j, i):
+                            ok = false
+                        end
+                        later.push(j)
+                    end
+                end
+                j = g.i_next[j]
+            end
+            if ok and later.len() > 0 and seen == g.v_uses[a]:
+                each u in later:
+                    keep := g.i_op[u]
+                    ins_unlink(g, u)
+                    g.i_op[u] = keep
+                    ins_before(g, i, u)
+                end
+                to_number(g, pos, b)
+                changed = true
+            end
+        end
+        i = g.i_next[i]
+    end
+    ret changed
+end
+
+func tied_order(g &: Ng): bool:
+    if g.arch != NG_ARCH_X64 and g.arch != NG_ARCH_X86:
+        ret false
+    end
+    count_uses(g)
+    mut pos := Vector {} as Vector<int>
+    repeat g.i_op.len():
+        pos.push(0)
+    end
+    mut later := Vector {} as Vector<int>
+    mut changed := false
+    each b in g.b_rpo:
+        if to_block(g, b, pos, later):
+            changed = true
+        end
+    end
+    pos.free()
+    later.free()
+    ret changed
+end

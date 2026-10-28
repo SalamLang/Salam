@@ -77,13 +77,13 @@ When asked to convert program `X` (in some other language) into Salam:
 1. **Understand `X`**: its entry point, data types, control flow, external I/O,
    and dependencies.
 2. **Map constructs** to Salam using §7 (class→`struct`, interface→`interface`,
-   generics→`<T>`, exceptions→`bool`/`Option`/sentinel, dict→`HashMap`,
+   generics→`<T>`, exceptions→`throws`/`try`/`catch`, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
    `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
-   (unused = error, `until` = while, manual `.free()`, integer `/` truncates, no
-   exceptions, `mut` to reassign, `pub` to export, top-level ordering).
+   (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
+   errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
 file.salam --output=app` (§10). Fix every warning; most are hard errors.
 
@@ -718,6 +718,53 @@ end
 println area(Shape.Rect(3.0, 4.0))
 println Shape.Circle(2.0)          // Circle(r = 2)
 ```
+
+**Errors: `throws`, `throw`, `try`, `catch`.** Add `throws` after the return
+type (or after the parameters when there is none). `throw` takes an `Error`, or
+a `str` that becomes one of kind `ErrorKind.Other`. `Error` and `ErrorKind`
+need no import (`import error` only for `KindName`, `RetryPolicy`, ...).
+
+```salam
+func parse port(text: str): int throws:
+    if text == "":
+        throw Error.New(ErrorKind.InvalidArgument, "empty port")
+    end
+    ret text.to_int()
+end
+
+func load(text: str): int throws:
+    p := try parse port(text)          // passes any error to the caller
+    ret p * 2
+end
+
+func load config(text: str): int throws:
+    try:
+        ret load(text)
+    catch e:
+        throw e.wrap("loading config")  // rethrow with context
+    end
+end
+
+func main:
+    port := try parse port("") catch 8080   // fallback value on error
+    try:                                 // calls inside need no 'try'
+        println load config("80"), port
+    catch e:                             // e: Error (kind, message, code, path, line, column)
+        println e.to_str()
+    end
+end
+```
+
+`try` covers everything to its right (`try v.field("a").int()` marks both
+calls) and may appear anywhere in an expression of a statement, except where
+it would run conditionally or repeatedly: the right side of `and`/`or`, a
+`?:` branch, an `until` or `else` condition, a `defer`, or a match expression
+arm (E140; store the value first). `func main throws:` prints
+`error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
+block yet; `break` can. Methods and interface methods may be `throws`;
+lambdas and `extern` functions cannot. `E139` unmarked throwing call, `E140`
+misplaced `try`, `E141` misplaced or mistyped `throw`, `E142` `try` with
+nothing that can throw.
 
 **Generic enums, `result.Result` and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
@@ -1664,10 +1711,12 @@ naive port into compile errors (each corresponds to a case in
    are supported on integers** with C precedence and compound forms
    (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
-6. **No exceptions / no try-catch.** Signal failure with a `bool` return and
-   an `err &:` out-parameter (the std style), an `option.Option<T>`
-   (`import option`), a `result.Result<T, E>` (`import result`), or a sentinel
-   value, and check it at the call site.
+6. **Errors are thrown and caught explicitly.** A function that can fail is
+   declared `throws` and fails with `throw`; every call to it is marked `try`
+   (pass the error on, only inside a `throws` function) or sits in a
+   `try: ... catch e: ... end` block. An unmarked call is E139. The error is
+   always the prelude type `Error`; nothing is unwound, `defer` runs, and
+   panics (out-of-bounds index, `Unwrap` on None) are not caught.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
@@ -1713,30 +1762,30 @@ When the compiler complains, fix the code; do not try to suppress the check.
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                             |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                            |
-| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                       |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`  |
-| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining         |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                            |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                            |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                    |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                               |
-| set                          | `Set<T>`                                                                          |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                             |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
-| exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                              |
-| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                       |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)        |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)       |
-| `for i in range(n)`          | `repeat n in i:`                                                                  |
-| `for x in xs`                | `each x in xs:`                                                                   |
-| destructor / cleanup         | `defer x.free()`                                                                  |
+| Source concept               | Salam                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                                      |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                                 |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`            |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining                   |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                                      |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                                      |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                              |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                         |
+| set                          | `Set<T>`                                                                                    |
+| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                                       |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
+| exception / error            | `func f(): T throws`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
+| null / nil / None            | `null` (pointers) or `Option.None()`                                                        |
+| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`                     |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                                         |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                    |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                  |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                 |
+| `for i in range(n)`          | `repeat n in i:`                                                                            |
+| `for x in xs`                | `each x in xs:`                                                                             |
+| destructor / cleanup         | `defer x.free()`                                                                            |
 
 ### From PHP
 
@@ -2453,6 +2502,8 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
 | `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
 | `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
+| `try`               | `تلاش`              | `catch`                   | `گرفتن خطا`                   |
+| `throw`             | `پرتاب خطا`         | `throws`                  | `خطادار`                      |
 
 Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`

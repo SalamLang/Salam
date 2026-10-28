@@ -4855,7 +4855,7 @@ Type parameters themselves are covered in generics and interfaces.
 
 ## Result and the ? operator
 
-Salam has no exceptions. The `result` package provides `Result<T, E>`, which is either `Ok` with a value or `Err` with an error. Inside a function that returns a Result, writing `?` after a call unwraps the successful value, and on an error returns that error straight away.
+Errors are usually thrown and caught (see the rules lesson), but sometimes you want to keep a result as a value, store it, or pass it around before you look at it. The `result` package provides `Result<T, E>`, which is either `Ok` with a value or `Err` with an error. Inside a function that returns a Result, writing `?` after a call unwraps the successful value, and on an error returns that error straight away.
 
 result-try.salam
 
@@ -4941,7 +4941,7 @@ Keep `Expect` for errors that mean a bug in the program, not for bad input from 
 
 - Give each case the data that belongs to it, instead of one struct with fields that are only sometimes used.
 
-- Return a `Result` from functions that can fail, and pass errors up with `?`.
+- Make functions that can fail `throws`; keep `Result` for results you want to store or pass around as values.
 
 
 ---
@@ -6137,47 +6137,64 @@ negative zero positive
 
 When a new member is added to `Light` later, every `match` that does not handle it stops compiling, which is exactly where you need to look.
 
-## No exceptions, and main returns the exit code
+## Errors with throw, try and catch, and main's exit code
 
-Salam has no exceptions and no try and catch. A function that can fail says so in what it returns: a `bool` with the result in a `&:` parameter, as below, or a `Result` enum with the `?` operator from the enums lesson. The caller checks it right away.
+A function that can fail says so in its signature: `throws` after the return type. It fails with `throw`, which takes an `Error` (or just a message). Every call to such a function is marked: `try` in front of the call passes the error on to the caller, which then has to be `throws` as well; a `try: ... catch e: ... end` block handles it, and the calls inside need no mark. `try f() catch value` gives a fallback instead. Nothing is hidden: you can see on every line where an error can come from, and `defer` still runs when one passes through.
 
 rules-exit.salam
 
 ```salam
-func parse_age(text: str, age &: int): bool:
+func parse age(text: str): int throws:
     n := text.to_int()
     if n <= 0 or n > 150:
-        ret false
+        throw Error.New(ErrorKind.OutOfRange, "'" + text + "' is not an age")
     end
-    age = n
-    ret true
+    ret n
+end
+
+func oldest(texts: Vector<str>): int throws:
+    mut best := 0
+    each text in texts:
+        age := try parse age(text)
+        if age > best:
+            best = age
+        end
+    end
+    ret best
 end
 
 func main:
-    mut age := 0
-    each text in ["42", "abc", "900"]:
-        if parse_age(text, age):
-            println text, "is a valid age"
-        else:
-            println text, "is not an age"
+    each text in ["42", "abc"]:
+        try:
+            println text, "is a valid age:", parse age(text)
+        catch e:
+            println e.message
         end
     end
-    if age == 0:
-        printerrln "no valid age found"
+    fallback := try parse age("900") catch 18
+    println "with a fallback:", fallback
+    mut texts := Vector {} as Vector<str>
+    texts.push("30")
+    texts.push("45")
+    try:
+        println "oldest:", oldest(texts)
+    catch e:
+        printerrln "no oldest age:", e.message
         ret 1
     end
-    println "last valid age:", age
 end
 ```
 
 Output:
 
 ```text
-42 is a valid age
-abc is not an age
-900 is not an age
-last valid age: 42
+42 is a valid age: 42
+'abc' is not an age
+with a fallback: 18
+oldest: 45
 ```
+
+Forgetting the mark is a compile error, `E139`, and `try` in a function that is not `throws` is `E140`. A bug such as an index out of bounds is not an error value: it stops the program, and `catch` does not see it. The error package lists the kinds of errors and what an `Error` carries.
 
 The value `main` returns is the program's exit code: `ret 1` reports failure to the shell, and no `ret` means 0. Calling `os.Exit` inside `main` is `E109`, because it would skip the cleanup that `main` deferred.
 
@@ -18768,11 +18785,11 @@ position-area | A newer feature: Chromium browsers have it and others are catchi
 position-try-fallbacks | A newer feature: Chromium browsers have it and others are catching up. A comma separated list of other places to try when the element would run out of the screen. Use the tactics `flip-block`, `flip-inline` and `flip-start`, a `position-area` value, or the name of a `@position-try` rule. The first one that fits is used. [comma list of tactics and/or position-area values] | `box: position = absolute position anchor = "--tip" position area = top position try fallbacks = "flip-block, bottom" content = "Moves below if there is no room" end` |
 
 | `position try order`
-ترتیب تلاش جایگاه
+ترتیب کوشش جایگاه
 position-try-order | A newer feature: Chromium browsers have it and others are catching up. Decides how the fallbacks of `position-try-fallbacks` are ranked. `normal` tries them in the order written. `most-width`, `most-height`, `most-block-size` and `most-inline-size` pick the one that leaves the most room in that direction. [normal / most-width / most-height / most-block-size / most-inline-size] | `box: position = absolute position anchor = "--tip" position area = left position try order = "most-width" position try fallbacks = "right, top" content = "Picks the widest side" end` |
 
 | `position try`
-تلاش جایگاه
+کوشش جایگاه
 position-try | A newer feature: Chromium browsers have it and others are catching up. Shorthand for `position-try-order` and `position-try-fallbacks`. The order word, if any, comes first, then the list of fallbacks. [position-try-order then position-try-fallbacks, shorthand] | `box: position = absolute position anchor = "--tip" position area = top position try = "most-height flip-block" content = "Tries the taller side first" end` |
 
 | `position visibility`
@@ -23421,7 +23438,9 @@ The smallest package in Salam, for when the program must not carry on.
 
 The `core` package has exactly one function, but an important one. Sometimes a program reaches a point where carrying on makes no sense: data is corrupt, or a condition that "can never happen" has happened. In that case it is better to stop right there with a clear message than to quietly hand back a wrong answer.
 
-For ordinary errors, such as bad input from a user, use result instead, so that the caller decides what to do. A panic is for when there is no correct way to continue.
+For ordinary errors, such as bad input from a user, declare the function `throws` and `throw` an `Error` instead, so that the caller decides what to do with `try` and `catch`. A panic is for when there is no correct way to continue, and `catch` does not stop it.
+
+`core` also defines the built-in error types, `Error` and `ErrorKind`, which every program can use without an import. The error package explains how to throw, pass on and catch them.
 
 ## Guarding an invariant
 
@@ -23575,6 +23594,179 @@ rejected: a percentage must be between 0 and 100, got 250
 - In a server, one bad request that panics takes down every other request too.
 
 That is the main reason to keep `Panic` for real bugs only.
+
+## Types
+
+### `ErrorKind`
+
+```salam
+enum ErrorKind
+```
+
+The general category of an error. Code decides on the kind; the message is for people.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `Other` | `` | Any error that fits none of the other kinds. A `throw "message"` gets this kind. |
+| `Syntax` | `` | The input does not follow its format, such as a missing comma in JSON. |
+| `UnexpectedEnd` | `` | The input ended in the middle of a value. |
+| `TypeMismatch` | `` | A value has another type than the one asked for. |
+| `MissingKey` | `` | A required key or field is not there. |
+| `OutOfRange` | `` | A number, index or size is outside the allowed range. |
+| `InvalidUtf8` | `` | Text is not valid UTF-8. |
+| `InvalidArgument` | `` | The caller passed a value the function cannot accept. |
+| `NotFound` | `` | What was asked for does not exist. |
+| `AlreadyExists` | `` | Something that should be new is already there. |
+| `PermissionDenied` | `` | The operation is not allowed. |
+| `Io` | `` | A read or write failed; trying again may work. |
+| `Timeout` | `` | Time ran out; trying again may work. |
+| `Canceled` | `` | The work was stopped on purpose. |
+| `Unavailable` | `` | A service is unavailable for now; trying again may work. |
+| `Unsupported` | `` | The input or the request uses something that is not supported. |
+| `Internal` | `` | A fault inside the program itself. |
+
+core-Error.salam
+
+```salam
+func parse age(text: str): int throws:
+    if text == "":
+        throw Error.New(ErrorKind.MissingKey, "the age is missing")
+    end
+    n := text.to_int()
+    if n < 0 or n > 150:
+        throw Error.New(ErrorKind.OutOfRange, "the age " + n + " is out of range").with_code("age.range")
+    end
+    ret n
+end
+
+func main:
+    each text in ["42", "", "200"]:
+        try:
+            println "age", parse age(text)
+        catch e:
+            println e.kind_name() + ":", e.message
+            println "  code:", e.code, "| out of range:", e.is(ErrorKind.OutOfRange)
+        end
+    end
+    e := Error.At(ErrorKind.Syntax, "expected a digit", 4).with_path("$.age")
+    println e.to_str()
+    placed := e.with_position(4, 2, 3).wrap("reading the form")
+    println placed.to_str()
+    println placed.offset, placed.line, placed.column, placed.context
+end
+```
+
+Output:
+
+```text
+age 42
+missing key: the age is missing
+  code:  | out of range: false
+out of range: the age 200 is out of range
+  code: age.range | out of range: true
+expected a digit at $.age (offset 4)
+reading the form: expected a digit at $.age (line 2, column 3)
+4 2 3 reading the form
+```
+
+### `Error`
+
+```salam
+struct Error
+```
+
+The error that `throw` sends and `catch` receives. It holds only text and numbers, so copying it is cheap and safe.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `kind` | `ErrorKind` | The general category, one of `ErrorKind`. |
+| `code` | `str = ""` | A precise code chosen by the package that threw the error, such as `json.trailing_data`; empty when there is none. |
+| `message` | `str = ""` | What went wrong, for a person to read. |
+| `context` | `str = ""` | The explanations added by `wrap`, outermost first, joined with ": ". |
+| `path` | `str = ""` | Where in the data the problem is, such as `$.users[3].age`, or a file path; empty when unknown. |
+| `offset` | `int = -1` | The byte offset of the problem in the input, or -1 when unknown. |
+| `line` | `int = 0` | The line of the problem, counting from 1, or 0 when unknown. |
+| `column` | `int = 0` | The column of the problem, counting from 1, or 0 when unknown. |
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `is`
+
+```salam
+func is(kind: ErrorKind): bool
+```
+
+True when the error is of this kind.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `wrap`
+
+```salam
+func wrap(message: str): Error
+```
+
+A copy with an explanation added in front of the context. The kind, code and position stay.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `with_code`
+
+```salam
+func with_code(code: str): Error
+```
+
+A copy with the code set.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `with_path`
+
+```salam
+func with_path(path: str): Error
+```
+
+A copy with the path set.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `with_position`
+
+```salam
+func with_position(offset: int, line: int, column: int): Error
+```
+
+A copy with the offset, line and column set.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `kind_name`
+
+```salam
+func kind_name(): str
+```
+
+A short English name for the kind, such as "out of range".
+
+The example for this item is shown with the ones above: core-Error.salam
+
+#### `to_str`
+
+```salam
+func to_str(): str
+```
+
+The error as one line: context, message, path and position. `println` uses it too.
+
+The example for this item is shown with the ones above: core-Error.salam
+
+### `Throws`
+
+```salam
+type Throws = Variant<auto<T>, auto<T>>
+```
+
+What a `throws` function returns under the hood. You never write it: `try` and `catch` take it apart for you.
 
 ## Functions
 
@@ -41119,7 +41311,7 @@ os-shell-guide-check.salam
 ```salam
 import os.shell
 
-func try(command: str):
+func attempt(command: str):
     r := shell.Exec(command)
     if r.code == 0:
         println "ok:", command
@@ -41130,8 +41322,8 @@ func try(command: str):
 end
 
 func main:
-    try("ls .")
-    try("ls no-such-folder")
+    attempt("ls .")
+    attempt("ls no-such-folder")
     println "exit code of false:", shell.System("false")
 end
 ```
@@ -48078,76 +48270,70 @@ The example for this item is shown with the ones above: testing-Runner.salam
 
 https://salamlang.github.io/Salam/std/error/
 
-Structured errors with a kind, a message, a chain of causes, metadata and a retry policy.
+The one Error type behind throw, try and catch: a kind, a message, where it happened, and a retry policy.
 
-Salam has no exceptions, so a function that may fail says so in its result. The `error` package gives your own code one error type for that: an `error.Error` is either nil, meaning everything went well, or an error with a kind, such as `not_found`, and a message. The kind is for the code to decide on; the message is for a person to read. The usual shape is an `err &: error.Error` out parameter, as in the standard library.
+A function that can fail says so in its signature with `throws`, and reports the failure with `throw`. The caller either passes the error on with `try`, or handles it in a `try: ... catch e: ... end` block. What travels is always an `Error` from this package, so an error from a JSON decoder, a file read and your own code all look the same to the caller. `Error` and `ErrorKind` need no import; import `error` only for the helper functions below.
 
-When an error comes up from a lower layer, `Wrap` it so the current layer's explanation is added. The final message shows the whole chain, as in could not save the report: the disk is full, and `RootMessage` gives the original cause. For transient errors, such as a dropped network connection, `RetryPolicy` says how often to try again and how long to wait between attempts.
+An `Error` has a kind, such as `ErrorKind.NotFound`, for the code to decide on, and a message for a person to read. Parsers also fill in where the problem is: an `offset`, a `line` and `column`, and a `path` such as `$.users[3].age`. A package can put a precise `code` of its own, such as `json.trailing_data`, next to the general kind. When an error passes through a layer that knows more, `wrap` adds that layer's explanation in front, and the kind stays the same.
 
-Neighbouring packages: result and option return a value or its absence in one result, which suits short chains with `?`; os/error holds the last error of a file or process call. Many std packages, such as the database clients, have an `Error` type of their own; turn it into an `error.Error` at the edge of your code when you want one type throughout.
+Under the hood a `throws` function returns a `Throws` value, and `try` checks it right after the call. Nothing is unwound and nothing is hidden: `defer` runs as with any other early return, and a call that can throw always carries `try` or sits inside a `try:` block. A bug, such as an index out of bounds, is not an error value: it still stops the program, and `catch` does not see it.
+
+Neighbouring packages: result and option keep a value or its absence in one place, when you want to store a result instead of handling it right away.
 
 The things people get wrong:
 
-- `Wrap` and `WithMeta` on a nil error make a real error. Check `Ok` before you wrap.
+- A call to a `throws` function needs `try` in front of it, or a `try:` block around it. The compiler refuses it otherwise (E139).
 
-- Every `Wrap`, `WithMeta` and `WrapKind` returns a new error with its own copies, and leaves the old one as it was. Free the ones you no longer need with `Free`.
+- `try` on its own passes the error to the caller, so it only works in a function that is itself `throws` (E140). In `main`, either declare `func main throws:` or use a `try:` block.
 
-- `Is` and the `Is...` helpers look at every layer, not only the outer kind. After `WrapKind` to `internal`, an error that started as a timeout still answers true to `IsTimeout` and `IsRetryable` (see below). Compare `Kind` when only the outer kind should count.
+- `try x catch fallback` evaluates the fallback first, every time. Keep it a plain value.
 
-- `DelayForAttempt` only computes the wait; your loop has to sleep. It adds no random jitter, so many clients that fail together retry together.
+- `wrap`, `with_code`, `with_path` and `with_position` return a new error and leave the old one as it was.
+
+- Decide by `kind` or `is`, not by reading the message: messages are for people and may change.
 
 ## Errors through the layers of a program
 
-A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail takes an `err &: error.Error` out parameter, sets it to `error.Nil()` on success, and on failure either makes a new error or wraps the one it got from below. Only the top layer decides what to do, and it decides by kind, not by reading the message.
+A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail is `throws`. A middle layer that has something to add catches the error, wraps it, and throws it again; the top layer decides what to do by kind.
 
 error-guide-layers.salam
 
 ```salam
-import error
-import str
-
-func load user(id: int, err &: error.Error): str:
+func load user(id: int): str throws:
     if id <= 0:
-        err = error.New(error.KindInvalidArgument, "the id must be positive")
-        ret ""
+        throw Error.New(ErrorKind.InvalidArgument, "the id must be positive")
     end
     if id != 7:
-        err = error.WithMeta(error.New(error.KindNotFound, "no such user"), "id", str.FromInt(id))
-        ret ""
+        throw Error.New(ErrorKind.NotFound, "no such user").with_code("user." + id)
     end
-    err = error.Nil()
     ret "Leila"
 end
 
-func greeting(id: int, err &: error.Error): str:
-    mut inner := error.Nil()
-    name := load user(id, inner)
-    if not error.Ok(inner):
-        err = error.Wrap(inner, "could not build the greeting")
-        ret ""
+func greeting(id: int): str throws:
+    try:
+        ret "Welcome back, " + load user(id)
+    catch e:
+        throw e.wrap("could not build the greeting")
     end
-    err = error.Nil()
-    ret "Welcome back, " + name
 end
 
-func status for(e: error.Error): int:
-    if error.Ok(e): ret 200 end
-    if error.IsNotFound(e): ret 404 end
-    if error.IsInvalidArgument(e): ret 400 end
+func status for(e: Error): int:
+    if e.is(ErrorKind.NotFound):
+        ret 404
+    else e.is(ErrorKind.InvalidArgument):
+        ret 400
+    end
     ret 500
 end
 
 func main:
     each id in [7, 3, -1]:
-        mut err := error.Nil()
-        text := greeting(id, err)
-        status := status for(err)
-        if error.Ok(err):
-            println status, text
-        else:
-            println status, error.Message(err)
-            if error.Meta(err, "id") != "":
-                println "    missing id:", error.Meta(err, "id")
+        try:
+            println 200, greeting(id)
+        catch e:
+            println status for(e), e.to_str()
+            if e.code != "":
+                println "    code:", e.code
             end
         end
     end
@@ -48159,15 +48345,15 @@ Output:
 ```text
 200 Welcome back, Leila
 404 could not build the greeting: no such user
-    missing id: 3
+    code: user.3
 400 could not build the greeting: the id must be positive
 ```
 
-Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. `WithMeta` attaches a detail, here the missing id, that the code can read back with `Meta` without parsing text.
+Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. The `code` carries a detail, here the missing id, that the code can read without parsing text.
 
 ## A retry loop
 
-`ShouldRetry` answers the whole question in one call: is there an error at all, is it the kind that may go away by itself (`unavailable`, `timeout` or `io`), and are there attempts left? `DelayForAttempt` gives the wait before the next try, doubling each time up to the maximum.
+`ShouldRetry` answers the whole question in one call: is the error the kind that may go away by itself (`Unavailable`, `Timeout` or `Io`), and are there attempts left? `DelayForAttempt` gives the wait before the next try, doubling each time up to the maximum. When the attempts run out, the last error is wrapped and thrown to the caller.
 
 error-guide-retry.salam
 
@@ -48177,34 +48363,40 @@ import sync
 
 mut calls := 0
 
-func fetch price(err &: error.Error): int:
+func fetch price(): int throws:
     calls += 1
     if calls < 3:
-        err = error.New(error.KindUnavailable, "the price service is busy")
-        ret 0
+        throw Error.New(ErrorKind.Unavailable, "the price service is busy")
     end
-    err = error.Nil()
     ret 4200
 end
 
-func main:
+func steady price(): int throws:
     mut policy := error.NewRetryPolicy(5, 10, 80)
     mut attempt := 1
-    mut err := error.Nil()
-    mut price := fetch price(err)
-    until error.ShouldRetry(policy, err, attempt):
-        wait := error.DelayForAttempt(policy, attempt)
-        println "attempt", attempt, "failed:", error.Message(err), "| waiting", wait, "ms"
-        sync.SleepMs(wait)
+    until true:
+        try:
+            ret fetch price()
+        catch e:
+            if not error.ShouldRetry(policy, e, attempt):
+                throw e.wrap("gave up after " + attempt + " attempts")
+            end
+            wait := error.DelayForAttempt(policy, attempt)
+            println "attempt", attempt, "failed:", e.message, "| waiting", wait, "ms"
+            sync.SleepMs(wait)
+        end
         attempt += 1
-        price = fetch price(err)
     end
-    if error.Ok(err):
-        println "price:", price, "after", attempt, "attempts"
-    else:
-        println "gave up:", error.Format(err)
+end
+
+func main:
+    try:
+        println "price:", steady price()
+    catch e:
+        println e.to_str()
     end
-    bad := error.New(error.KindInvalidArgument, "unknown product")
+    bad := Error.New(ErrorKind.InvalidArgument, "unknown product")
+    mut policy := error.NewRetryPolicy(5, 10, 80)
     println "retry a bad request?", error.ShouldRetry(policy, bad, 1)
 end
 ```
@@ -48214,7 +48406,7 @@ Output:
 ```text
 attempt 1 failed: the price service is busy | waiting 10 ms
 attempt 2 failed: the price service is busy | waiting 20 ms
-price: 4200 after 3 attempts
+price: 4200
 retry a bad request? false
 ```
 
@@ -48222,34 +48414,37 @@ An invalid argument is never retried: sending the same bad request again gives t
 
 ## Collect every problem at once
 
-For a form or a config file, stopping at the first mistake makes the user fix them one by one. Collect the errors in a vector instead and show them all. `Newf` fills the `{}` placeholders of a message from a vector of strings, and a `field` meta entry says which input each error is about.
+For a form or a config file, stopping at the first mistake makes the user fix them one by one. An `Error` is an ordinary value, so collect them in a vector instead and show them all, with `path` naming the field each one is about. Throw once at the end if any were found.
 
 error-guide-validate.salam
 
 ```salam
-import error
-
 struct Signup:
     pub email: str = ""
     pub age: int = 0
     pub password: str = ""
 end
 
-func check(s: Signup): Vector<error.Error>:
-    mut problems := Vector {} as Vector<error.Error>
+func check(s: Signup): Vector<Error>:
+    mut problems := Vector {} as Vector<Error>
     if not s.email.includes("@"):
-        problems.push(error.WithMeta(error.New(error.KindInvalidArgument, "the email has no @"), "field", "email"))
+        problems.push(Error.New(ErrorKind.InvalidArgument, "the email has no @").with_path("email"))
     end
     if s.age < 13:
-        mut args := Vector {} as Vector<str>
-        defer args.free()
-        args.push("13")
-        problems.push(error.WithMeta(error.Newf(error.KindInvalidArgument, "you must be at least {}", args), "field", "age"))
+        problems.push(Error.New(ErrorKind.OutOfRange, "you must be at least 13").with_path("age"))
     end
     if s.password.len() < 8:
-        problems.push(error.WithMeta(error.New(error.KindInvalidArgument, "the password is too short"), "field", "password"))
+        problems.push(Error.New(ErrorKind.InvalidArgument, "the password is too short").with_path("password"))
     end
     ret problems
+end
+
+func register(s: Signup): str throws:
+    problems := check(s)
+    if problems.len() > 0:
+        throw Error.New(ErrorKind.InvalidArgument, problems.len() + " fields need fixing")
+    end
+    ret "welcome, " + s.email
 end
 
 func main:
@@ -48257,10 +48452,18 @@ func main:
     problems := check(form)
     println problems.len(), "problems:"
     each p in problems:
-        println "  " + error.Meta(p, "field") + ":", error.Message(p)
+        println "  " + p.path + ":", p.message
     end
-    ok := check(Signup { email = "sara@example.com", age = 30, password = "long enough" })
-    println "a good form has", ok.len(), "problems"
+    try:
+        println register(form)
+    catch e:
+        println "not registered:", e.message
+    end
+    try:
+        println register(Signup { email = "sara@example.com", age = 30, password = "long enough" })
+    catch e:
+        println "not registered:", e.message
+    end
 end
 ```
 
@@ -48271,151 +48474,30 @@ Output:
   email: the email has no @
   age: you must be at least 13
   password: the password is too short
-a good form has 0 problems
+not registered: 3 fields need fixing
+welcome, sara@example.com
 ```
-
-## Logging an error with its trace
-
-`NewAt` and `WrapAt` also record where the error passed, which `Trace` joins with `->`. `WrapKind` gives the error a new outer kind, here `internal` once the program has decided it cannot start. `Format` puts everything on a few lines for a log: the outer kind in brackets, the full message, the trace and each meta entry.
-
-error-guide-format.salam
-
-```salam
-import error
-
-func read_file(path: str, err &: error.Error):
-    mut e := error.NewAt(error.KindIO, "permission denied reading " + path, "fs.read_file")
-    defer error.Free(e)
-    err = error.WithMeta(e, "path", path)
-end
-
-func load_config(err &: error.Error):
-    mut inner := error.Nil()
-    read_file("/etc/shop/config.yaml", inner)
-    defer error.Free(inner)
-    if not error.Ok(inner):
-        err = error.WrapAt(inner, "could not load the settings", "config.load")
-        ret
-    end
-    err = error.Nil()
-end
-
-func start(err &: error.Error):
-    mut inner := error.Nil()
-    load_config(inner)
-    defer error.Free(inner)
-    if not error.Ok(inner):
-        err = error.WrapKind(inner, error.KindInternal, "the shop did not start")
-        ret
-    end
-    err = error.Nil()
-end
-
-func main:
-    mut err := error.Nil()
-    start(err)
-    defer error.Free(err)
-    println error.Format(err)
-    println "kind:", error.Kind(err)
-    println "root cause:", error.RootMessage(err)
-    println "was an io error:", error.Is(err, error.KindIO)
-    println "retryable:", error.IsRetryable(err)
-end
-```
-
-Output:
-
-```text
-[internal] the shop did not start: could not load the settings: permission denied reading /etc/shop/config.yaml
-  trace: fs.read_file -> config.load
-  path=/etc/shop/config.yaml
-kind: internal
-root cause: permission denied reading /etc/shop/config.yaml
-was an io error: true
-retryable: true
-```
-
-The last two lines are the trap from the list above: the error now reads as `internal`, but `Is` still finds the `io` kind of its root cause, so `IsRetryable` says yes. Each layer frees the error it got from below with `defer error.Free(inner)`; that is safe because the wrapped error has its own copies.
 
 ## Choosing a kind
 
 | Kind | Use it when | Retry? |
 | --- | --- | --- |
-| `KindInvalidArgument` | The caller passed bad input | No |
-| `KindNotFound` | The thing asked for does not exist | No |
-| `KindAlreadyExists` | Creating something that is already there | No |
-| `KindPermissionDenied` | The caller may not do this | No |
-| `KindUnavailable` | A service is down or busy | Yes |
-| `KindTimeout` | Something took too long | Yes |
-| `KindIO` | A file or device operation failed | Yes |
-| `KindCanceled` | The work was stopped on purpose | No |
-| `KindInternal` | A bug or a broken invariant | No |
+| `Syntax` | The input does not follow its format | No |
+| `UnexpectedEnd` | The input stopped in the middle of something | No |
+| `TypeMismatch` | A value has the wrong type, such as text where a number belongs | No |
+| `MissingKey` | A required key or field is absent | No |
+| `OutOfRange` | A number or index is outside what is allowed | No |
+| `InvalidArgument` | The caller passed bad input | No |
+| `NotFound` | The thing asked for does not exist | No |
+| `PermissionDenied` | The caller may not do this | No |
+| `Unavailable` | A service is down or busy | Yes |
+| `Timeout` | Something took too long | Yes |
+| `Io` | A file or device operation failed | Yes |
+| `Internal` | A broken invariant inside the program | No |
 
-Keep messages short and in lower case without a final full stop, because `Message` joins them with ": " into one sentence. Put values the code needs, such as ids and file names, in `WithMeta`, and show `Format` in logs, where the trace and meta entries help most.
+Keep messages short and in lower case without a final full stop, because `to_str` joins the context and the message with ": " into one sentence.
 
 ## Types
-
-### `Error`
-
-```salam
-struct Error
-```
-
-An error, or nil when `kind` is empty. It holds vectors, so free it with `Free`.
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `kind` | `str = ""` | The outer kind of the error: one of the constants above, or one you define yourself; empty for nil. |
-| `messages` | `Vector` | The message from each layer, from the innermost cause to the outermost. |
-| `kinds` | `Vector` | The kind given at creation and each kind added by `WrapKind`. |
-| `trace` | `Vector` | The places recorded by `NewAt` and `WrapAt`, innermost first. |
-| `meta_keys` | `Vector` | The metadata keys. |
-| `meta_vals` | `Vector` | The metadata values. |
-
-error-New.salam
-
-```salam
-import error
-
-func find_user(id: int): error.Error:
-    if id <= 0:
-        ret error.New(error.KindInvalidArgument, "the id has to be positive")
-    end
-    if id > 100:
-        ret error.NewAt(error.KindNotFound, "no such user", "find_user")
-    end
-    ret error.Nil()
-end
-
-func main:
-    each id in [7, -1, 500]:
-        mut e := find_user(id)
-        if error.Ok(e):
-            println id, "found", error.IsNil(e)
-        else:
-            println id, error.Kind(e), error.Message(e)
-            println error.Is(e, error.KindNotFound), error.IsNotFound(e), error.IsInvalidArgument(e)
-        end
-        error.Free(e)
-    end
-    mut args := Vector {} as Vector<str>
-    defer args.free()
-    args.push("config.ini")
-    e2 := error.Newf(error.KindIO, "cannot read {}", args)
-    println error.Message(e2)
-end
-```
-
-Output:
-
-```text
-7 found true
--1 invalid_argument the id has to be positive
-false false true
-500 not_found no such user
-true true false
-cannot read config.ini
-```
 
 ### `RetryPolicy`
 
@@ -48439,13 +48521,14 @@ import error
 func main:
     mut policy := error.NewRetryPolicy(4, 100, 1000)
     println policy.max_attempts, policy.base_delay_ms, policy.max_delay_ms
-    e := error.New(error.KindTimeout, "the server did not answer")
+    e := Error.New(ErrorKind.Timeout, "the server did not answer")
+    println error.KindName(e.kind), error.IsRetryable(e)
     mut attempt := 1
     until error.ShouldRetry(policy, e, attempt):
         println "attempt", attempt, "after", error.DelayForAttempt(policy, attempt), "milliseconds"
         attempt += 1
     end
-    println error.ShouldRetry(policy, error.New(error.KindInvalidArgument, "bad input"), 1)
+    println error.ShouldRetry(policy, Error.New(ErrorKind.InvalidArgument, "bad input"), 1)
 end
 ```
 
@@ -48453,427 +48536,24 @@ Output:
 
 ```text
 4 100 1000
+timed out true
 attempt 1 after 100 milliseconds
 attempt 2 after 200 milliseconds
 attempt 3 after 400 milliseconds
 false
 ```
 
-## Constants and variables
-
-### `KindUnknown`
-
-```salam
-const KindUnknown: str = "unknown"
-```
-
-An unspecified kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindNotFound`
-
-```salam
-const KindNotFound: str = "not_found"
-```
-
-What was asked for was not found.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindInvalidArgument`
-
-```salam
-const KindInvalidArgument: str = "invalid_argument"
-```
-
-The input is wrong; trying again will not help.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindPermissionDenied`
-
-```salam
-const KindPermissionDenied: str = "permission_denied"
-```
-
-Access is not allowed.
-
-error-Kinds.salam
-
-```salam
-import error
-
-func main:
-    each kind in [error.KindPermissionDenied, error.KindAlreadyExists, error.KindTimeout, error.KindCanceled, error.KindUnavailable, error.KindUnknown, error.KindUnimplemented]:
-        e := error.New(kind, "an example")
-        println kind, error.IsPermissionDenied(e), error.IsAlreadyExists(e), error.IsTimeout(e), error.IsCanceled(e), error.IsUnavailable(e), error.IsRetryable(e)
-    end
-end
-```
-
-Output:
-
-```text
-permission_denied true false false false false false
-already_exists false true false false false false
-timeout false false true false false true
-canceled false false false true false false
-unavailable false false false false true true
-unknown false false false false false false
-unimplemented false false false false false false
-```
-
-### `KindAlreadyExists`
-
-```salam
-const KindAlreadyExists: str = "already_exists"
-```
-
-It is already there.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindUnavailable`
-
-```salam
-const KindUnavailable: str = "unavailable"
-```
-
-The service is unavailable for now; trying again may work.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindTimeout`
-
-```salam
-const KindTimeout: str = "timeout"
-```
-
-Time ran out; trying again may work.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindCanceled`
-
-```salam
-const KindCanceled: str = "canceled"
-```
-
-The work was cancelled.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindInternal`
-
-```salam
-const KindInternal: str = "internal"
-```
-
-An internal fault in the program.
-
-error-Wrap.salam
-
-```salam
-import error
-
-func main:
-    root := error.New(error.KindIO, "the disk is full")
-    a := error.Wrap(root, "could not save the report")
-    b := error.WrapAt(a, "the nightly run stopped", "nightly job")
-    c := error.WrapKind(b, error.KindInternal, "internal error")
-    d := error.WithMeta(c, "disk", "/dev/sda1")
-    println error.Message(d)
-    println error.RootMessage(d)
-    println error.Kind(d), error.IsInternal(d), error.Meta(d, "disk")
-    println error.Trace(d)
-    println error.Format(d)
-end
-```
-
-Output:
-
-```text
-internal error: the nightly run stopped: could not save the report: the disk is full
-the disk is full
-internal true /dev/sda1
-nightly job
-[internal] internal error: the nightly run stopped: could not save the report: the disk is full
-  trace: nightly job
-  disk=/dev/sda1
-```
-
-### `KindIO`
-
-```salam
-const KindIO: str = "io"
-```
-
-A read or write error.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindUnimplemented`
-
-```salam
-const KindUnimplemented: str = "unimplemented"
-```
-
-Not implemented yet.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
 ## Functions
 
-### `Nil`
+### `KindName`
 
 ```salam
-func Nil(): Error
+func KindName(kind: ErrorKind): str
 ```
 
-The nil error, meaning "no error".
+A short English name for a kind, such as "not found"; `to_str` uses it when the message is empty.
 
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsNil`
-
-```salam
-func IsNil(e: Error): bool
-```
-
-True when the error is nil.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Ok`
-
-```salam
-func Ok(e: Error): bool
-```
-
-The same as `IsNil`, and easier to read in a condition.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `New`
-
-```salam
-func New(kind: str, message: str): Error
-```
-
-A new error with a kind and a message; an empty kind becomes `unknown`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `NewAt`
-
-```salam
-func NewAt(kind: str, message: str, at: str): Error
-```
-
-A new error that also records the place it happened, such as a function name, in its trace.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Newf`
-
-```salam
-func Newf(kind: str, tmpl: str, args: Vector<str>): Error
-```
-
-A new error with a formatted message; every `{}` is filled with the next string from `args`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Wrap`
-
-```salam
-func Wrap(e: Error, message: str): Error
-```
-
-Puts a new message on an error and keeps the earlier ones; the kind does not change. When the error is nil it builds a new one of unknown kind.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WrapAt`
-
-```salam
-func WrapAt(e: Error, message: str, at: str): Error
-```
-
-Like `Wrap`, and adds the place to the trace.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WrapKind`
-
-```salam
-func WrapKind(e: Error, kind: str, message: str): Error
-```
-
-Like `Wrap`, and sets a new outer kind. The earlier kinds stay in the error, so `Is` still finds them.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WithMeta`
-
-```salam
-func WithMeta(e: Error, key: str, val: str): Error
-```
-
-A copy of the error with a key and value pair added, such as a user id or a file path. On a nil error it makes an error of kind `unknown`.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Meta`
-
-```salam
-func Meta(e: Error, key: str): str
-```
-
-The value of a metadata key, or an empty string when it is absent. With a repeated key, the first value wins.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Kind`
-
-```salam
-func Kind(e: Error): str
-```
-
-The outer kind of the error; empty for nil.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Is`
-
-```salam
-func Is(e: Error, kind: str): bool
-```
-
-True when this kind is the error's kind at any layer, including kinds replaced by `WrapKind`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Message`
-
-```salam
-func Message(e: Error): str
-```
-
-The full message, outermost layer first, joined with `: `.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `RootMessage`
-
-```salam
-func RootMessage(e: Error): str
-```
-
-The message of the innermost cause.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Trace`
-
-```salam
-func Trace(e: Error): str
-```
-
-The recorded places, joined with ` -> `.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Format`
-
-```salam
-func Format(e: Error): str
-```
-
-The full text for a log: the kind in brackets and the message, then the trace and each meta entry on lines of their own. `<nil>` for nil.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `IsNotFound`
-
-```salam
-func IsNotFound(e: Error): bool
-```
-
-True when the error is of the "not found" kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsInvalidArgument`
-
-```salam
-func IsInvalidArgument(e: Error): bool
-```
-
-For the "invalid argument" kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsPermissionDenied`
-
-```salam
-func IsPermissionDenied(e: Error): bool
-```
-
-For the "permission denied" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsAlreadyExists`
-
-```salam
-func IsAlreadyExists(e: Error): bool
-```
-
-For the "already exists" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsTimeout`
-
-```salam
-func IsTimeout(e: Error): bool
-```
-
-For the "timeout" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsCanceled`
-
-```salam
-func IsCanceled(e: Error): bool
-```
-
-For the "cancelled" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsUnavailable`
-
-```salam
-func IsUnavailable(e: Error): bool
-```
-
-For the "unavailable" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsInternal`
-
-```salam
-func IsInternal(e: Error): bool
-```
-
-For the "internal" kind.
-
-The example for this item is shown with the ones above: error-Wrap.salam
+The example for this item is shown with the ones above: error-RetryPolicy.salam
 
 ### `IsRetryable`
 
@@ -48881,9 +48561,9 @@ The example for this item is shown with the ones above: error-Wrap.salam
 func IsRetryable(e: Error): bool
 ```
 
-True when the error is transient and worth retrying: a timeout, unavailability or a read or write error.
+True when the error is transient and worth retrying: a timeout, an unavailable service or a read or write error.
 
-The example for this item is shown with the ones above: error-Kinds.salam
+The example for this item is shown with the ones above: error-RetryPolicy.salam
 
 ### `NewRetryPolicy`
 
@@ -48911,19 +48591,9 @@ The example for this item is shown with the ones above: error-RetryPolicy.salam
 func ShouldRetry(p &: RetryPolicy, e: Error, attempt: int): bool
 ```
 
-True when an error happened, is retryable at any layer, and `attempt` is still below `max_attempts`.
+True when the error is retryable and `attempt` is still below `max_attempts`.
 
 The example for this item is shown with the ones above: error-RetryPolicy.salam
-
-### `Free`
-
-```salam
-func Free(e &: Error)
-```
-
-Releases the error's vectors. Wrapped copies are not affected.
-
-The example for this item is shown with the ones above: error-New.salam
 
 
 ---
@@ -56747,7 +56417,7 @@ mut claimed := atomic.Flag {}
 mut winners := atomic.I64 {}
 mut losers := atomic.I64 {}
 
-func try claim():
+func attempt claim():
     if atomic.TestAndSet(claimed):
         atomic.Add(winners, 1)
     else:
@@ -56762,7 +56432,7 @@ func main:
     mut threads := Vector {} as Vector<i64>
     defer threads.free()
     repeat 8:
-        threads.push(spawn(try claim))
+        threads.push(spawn(attempt claim))
     end
     each t in threads:
         join(t)
@@ -63387,7 +63057,7 @@ encoding-serde-guide-errors.salam
 ```salam
 import encoding.serde
 
-func try(label: str, data: str, from: str, dest: str):
+func attempt(label: str, data: str, from: str, dest: str):
     mut ok := false
     out := serde.TranscodeStrict(data, from, dest, ok)
     if ok:
@@ -63398,11 +63068,11 @@ func try(label: str, data: str, from: str, dest: str):
 end
 
 func main:
-    try("good yaml   ", "- 1\n- 2\n", "yaml", "json")
-    try("broken json ", `{"a": 1`, "json", "yaml")
-    try("unknown from", `a = 1`, "ini", "json")
-    try("unknown dest", `{"a": 1}`, "json", "ini")
-    try("toml needs a table", `[1, 2]`, "json", "toml")
+    attempt("good yaml   ", "- 1\n- 2\n", "yaml", "json")
+    attempt("broken json ", `{"a": 1`, "json", "yaml")
+    attempt("unknown from", `a = 1`, "ini", "json")
+    attempt("unknown dest", `{"a": 1}`, "json", "ini")
+    attempt("toml needs a table", `[1, 2]`, "json", "toml")
     println "lenient gives [" + serde.Transcode(`{"a": 1`, "json", "yaml") + "]"
 end
 ```
@@ -77971,7 +77641,7 @@ func gate():
     end
 end
 
-func try(port: int, extra: str):
+func attempt(port: int, extra: str):
     mut c := websocket.DialWith("127.0.0.1", port, "/live", extra)
     println "open:", websocket.IsOpen(c), "server says:", websocket.ReceiveText(c)
     if extra != "":
@@ -77985,8 +77655,8 @@ end
 func main:
     server = websocket.Listen(0)
     t := spawn(gate)
-    try(websocket.Port(server), "Authorization: Bearer sara-token\r\n")
-    try(websocket.Port(server), "")
+    attempt(websocket.Port(server), "Authorization: Bearer sara-token\r\n")
+    attempt(websocket.Port(server), "")
     join(t)
     websocket.CloseServer(server)
 end
@@ -94805,7 +94475,7 @@ ssh-host-keys.salam
 ```salam
 import ssh
 
-func try(mode: int, label: str):
+func attempt(mode: int, label: str):
     mut cfg := ssh.NewConfig("new-server.example.com", 22, "admin")
     ssh.WithPassword(cfg, "first-login-password")
     ssh.WithKnownHostsPath(cfg, "known_hosts")
@@ -94820,9 +94490,9 @@ func try(mode: int, label: str):
 end
 
 func main:
-    try(ssh.HOSTKEY_MODE_STRICT, "strict, empty known_hosts:")
-    try(ssh.HOSTKEY_MODE_ACCEPT_NEW, "accept-new, first time:")
-    try(ssh.HOSTKEY_MODE_STRICT, "strict, key now recorded:")
+    attempt(ssh.HOSTKEY_MODE_STRICT, "strict, empty known_hosts:")
+    attempt(ssh.HOSTKEY_MODE_ACCEPT_NEW, "accept-new, first time:")
+    attempt(ssh.HOSTKEY_MODE_STRICT, "strict, key now recorded:")
 end
 ```
 
@@ -106982,7 +106652,7 @@ db-postgres-errors.salam
 import db.postgres
 import str
 
-func try(d: postgres.Database, sql: str):
+func attempt(d: postgres.Database, sql: str):
     if postgres.Exec(d, sql) != 0:
         print postgres.Error(d)
     end
@@ -106992,10 +106662,10 @@ func main:
     d := postgres.Open("host=127.0.0.1 user=postgres password=secret dbname=bookshop")
     defer postgres.Close(d)
 
-    try(d, "INSERT INTO books (title, author, price) VALUES ('Dune', 'Someone', 5)")
-    try(d, "UPDATE books SET stock = stock - 50 WHERE id = 1")
-    try(d, "INSERT INTO orders (customer, book_id, qty, total) VALUES ('Omid', 99, 1, 1)")
-    try(d, "SELEC title FROM books")
+    attempt(d, "INSERT INTO books (title, author, price) VALUES ('Dune', 'Someone', 5)")
+    attempt(d, "UPDATE books SET stock = stock - 50 WHERE id = 1")
+    attempt(d, "INSERT INTO orders (customer, book_id, qty, total) VALUES ('Omid', 99, 1, 1)")
+    attempt(d, "SELEC title FROM books")
 
     r := postgres.Query(d, "SELECT nope FROM books")
     println "query ok:", r.Ok(), "rows:", r.RowCount(), "next:", r.Next()

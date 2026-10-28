@@ -468,11 +468,13 @@ then goes through:
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree (only from 16
    elements up; shorter copies stay a loop).
-   Innermost loops whose body is one branch-free block are vectorized with
+   Innermost loops whose body is one branch-free block, counting up to a
+   limit with `<` or `<=` (before or after the body), are vectorized with
    SSE2: bytes sixteen lanes at a time, 16-bit integers eight, 32-bit integer
    and `f32` code four, 64-bit and `f64` two. Loads and stores must be
-   contiguous in the counter; a byte loop that also does 32-bit work widens
-   its bytes on load (`movd` and two unpacks) and narrows them with
+   contiguous in the counter; a loop that also does 32-bit work widens its
+   bytes or 16-bit values on load (`movd` or `movsd` and unpacks, then
+   `psrad` when the extension is signed) and narrows bytes with
    `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
    data pointer of a vector passed by reference) is done once before the
    vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
@@ -486,7 +488,9 @@ then goes through:
    (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
    equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
-   and any number of integer add reductions. A loop that stores gets a
+   and any number of integer add reductions and min or max reductions
+   (`m = x > m ? x : m`, or the same as an `if`, either sign; 64-bit ones
+   on AArch64 only), which end in a shuffle-and-select tree. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
    loads from another base. The vector loop runs while a full vector fits
    and the scalar loop finishes the rest, so the PNG filter scoring and
@@ -601,7 +605,9 @@ to the operand that dies there by inverting the condition, turns
 `(x >> n) | (x << (bits - n))` (also with `^` or `+`) and `rol %cl` for the
 variable form `(x << r) | (x >> (32 - r))` even when the counts are masked
 with `& 31`, builds an `insertvalue` chain that is returned directly in
-the caller's result buffer, copies and clears structs of up to 256 bytes
+the caller's result buffer (or, when the chain is only stored to a local
+or through a pointer argument with no load, store or call in between,
+directly in that memory), copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
@@ -667,6 +673,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+  that are well defined by construction (values are kept small with a prime
+  modulus, divisors and shift counts are offset or masked, indices are
+  wrapped into range), builds each with the reference backend and the native
+  backend, and compares their output. `--count`, `--seed`, `--target` with
+  `--runner`, `--ref` and `--keep` (which saves the programs that differ)
+  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
+  with the run number, so each run tries new programs.
 - `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
@@ -693,7 +707,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -810,7 +824,16 @@ with built-in type indices (integers, floats, `bool`, and `str` as a char
 pointer) and the same ranges as their DWARF location lists:
 `S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
 slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
-There are no type records, so struct and array locals are in DWARF only.
+Structs, enums, arrays and pointers get type records in `.debug$T`
+(a pointer to a struct goes through a forward reference, so self-referential
+structs work), and a struct local split into registers gets one
+`S_DEFRANGE_SUBFIELD_REGISTER` per field, or `S_DEFRANGE_REGISTER_REL` with
+its field offset when that field is on the stack. Each inlined call gets an
+`S_INLINESITE` (with an `LF_FUNC_ID` for the callee and binary annotations
+for its code ranges and lines, the call-site line of any call inlined
+further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
+and the function's own line table gives the outermost call site for inlined
+code, so a debugger shows the inlined frames and steps over them as calls.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 
@@ -839,14 +862,15 @@ faster than the LLVM path.
 
 Not there yet:
 
-- CodeView has no type records, so WinDbg and Visual Studio show scalar
-  locals but not struct or array ones.
+- CodeView carries no FPO frame data, so on i686 a debugger walks the
+  stack by frame pointer only.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into
   one block (a load inside one arm of a branch keeps it scalar) and
   unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
-  64-bit compares, and 8- and 16-bit lanes take no reductions. Float
+  64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
+  values are widened first). Float
   reductions are not reordered, since that would change the rounding of the
   result. There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

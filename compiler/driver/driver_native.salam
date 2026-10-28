@@ -220,6 +220,54 @@ func static_lib_path(spec0: str, kind: str, o: lv.Options): str:
     ret ""
 end
 
+func musl_ld_name(arch: str): str:
+    switch arch:
+        "i686": ret "/lib/ld-musl-i386.so.1" end
+        "arm": ret "/lib/ld-musl-armhf.so.1" end
+    end
+    ret "/lib/ld-musl-" + arch + ".so.1"
+end
+
+func musl_shared_lib(spec0: str, kind: str, o: lv.Options, dir: str): str:
+    spec := lib_spec(spec0)
+    if str.Equals(kind, "static") or str.Equals(kind, "framework") or str.StartsWith(spec, "-"):
+        ret ""
+    end
+    if str.Contains(spec, ".so"):
+        ret spec
+    end
+    each lp in o.lib_paths:
+        if os.Exists(lp + "/lib" + spec + ".so"):
+            ret lp + "/lib" + spec + ".so"
+        end
+    end
+    if os.Exists(dir + "/lib" + spec + ".so"):
+        ret dir + "/lib" + spec + ".so"
+    end
+    ret ""
+end
+
+func musl_can_dyn(dir: str): bool:
+    ret os.Exists(dir + "/libc.so") and os.Exists(dir + "/Scrt1.o")
+end
+
+func musl_needs_dyn(o: lv.Options, dir: str): bool:
+    repeat o.link_libs.len() in i:
+        spec := lib_spec(o.link_libs.get(i))
+        if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+            continue
+        end
+        mut kind := ""
+        if i < o.link_kinds.len():
+            kind = o.link_kinds.get(i)
+        end
+        if str.Len(static_lib_path(spec, kind, o)) == 0 and str.Len(musl_shared_lib(spec, kind, o, dir)) > 0:
+            ret true
+        end
+    end
+    ret false
+end
+
 func builtin_link_ok(triple: str, o: lv.Options, why &: str): bool:
     arch := tri_arch(triple)
     if not str.Contains(triple, "linux-musl") or str.Len(arch) == 0:
@@ -240,8 +288,11 @@ func builtin_link_ok(triple: str, o: lv.Options, why &: str): bool:
             kind = o.link_kinds.get(i)
         end
         if str.Len(static_lib_path(spec, kind, o)) == 0:
-            why = co.Format1(i18.Tr("the built-in linker links statically, and no static archive was found for library '%s'"), co.ArgStr(spec))
-            ret false
+            mdir := musl_libdir(musl_root(o, arch))
+            if not musl_can_dyn(mdir) or str.Len(musl_shared_lib(spec, kind, o, mdir)) == 0:
+                why = co.Format1(i18.Tr("the built-in linker links statically, and no static archive was found for library '%s'"), co.ArgStr(spec))
+                ret false
+            end
         end
     end
     ret true
@@ -250,8 +301,14 @@ end
 func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
     arch := tri_arch(triple)
     dir := musl_libdir(musl_root(o, arch))
+    dyn := musl_can_dyn(dir) and musl_needs_dyn(o, dir)
     mut l := nl.New()
-    nl.AddInput(l, dir + "/crt1.o")
+    if dyn:
+        nl.SetDynamic(l, musl_ld_name(arch))
+        nl.AddInput(l, dir + "/Scrt1.o")
+    else:
+        nl.AddInput(l, dir + "/crt1.o")
+    end
     nl.AddInput(l, dir + "/crti.o")
     nl.AddInput(l, obj)
     repeat o.link_libs.len() in i:
@@ -263,9 +320,13 @@ func native_link_builtin(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, trip
         if i < o.link_kinds.len():
             kind = o.link_kinds.get(i)
         end
-        nl.AddInput(l, static_lib_path(spec, kind, o))
+        mut lib := static_lib_path(spec, kind, o)
+        if dyn and str.Len(lib) == 0:
+            lib = musl_shared_lib(spec, kind, o, dir)
+        end
+        nl.AddInput(l, lib)
     end
-    nl.AddInput(l, dir + "/libc.a")
+    nl.AddInput(l, dir + (dyn ? "/libc.so" : "/libc.a"))
     rt := dir + "/libclang_rt.builtins-" + arch + ".a"
     if os.Exists(rt):
         nl.AddInput(l, rt)
@@ -385,6 +446,8 @@ func glibc_host_arch(): str:
         a = "aarch64"
     else SALAM_ARCH_X86:
         a = "i686"
+    else SALAM_ARCH_ARM:
+        a = "arm"
     else:
         a = "x86_64"
     end
@@ -405,15 +468,69 @@ func glibc_sysroot(o: lv.Options): str:
     ret os.Env("SALAM_GLIBC_SYSROOT")
 end
 
+func glibc_tuples(arch: str): Vector<str>:
+    mut tuples := Vector {} as Vector<str>
+    switch arch:
+        "i686":
+            tuples.push("i386-linux-gnu")
+            tuples.push("i686-linux-gnu")
+            break
+        end
+        "arm":
+            tuples.push("arm-linux-gnueabihf")
+            break
+        end
+    end
+    if tuples.len() == 0:
+        tuples.push(arch + "-linux-gnu")
+    end
+    ret tuples
+end
+
+func glibc_libgcc(o: lv.Options, arch: str): str:
+    sr := glibc_sysroot(o)
+    mut tuples := glibc_tuples(arch)
+    mut sub := ""
+    if str.Equals(arch, "i686") and str.Equals(glibc_host_arch(), "x86_64"):
+        tuples.push("x86_64-linux-gnu")
+        sub = "/32"
+    end
+    mut best := ""
+    mut bestv := ""
+    each t in tuples:
+        each g in ["/usr/lib/gcc/", "/usr/lib/gcc-cross/"]:
+            base := sr + g + t
+            vers := os.ListDir(base)
+            each v in vers:
+                mut cand := base + "/" + v + "/libgcc.a"
+                if str.Equals(t, "x86_64-linux-gnu"):
+                    cand = base + "/" + v + sub + "/libgcc.a"
+                end
+                if os.Exists(cand) and str.Compare(v, bestv) > 0:
+                    best = cand
+                    bestv = v
+                end
+            end
+            vers.free()
+        end
+    end
+    tuples.free()
+    ret best
+end
+
 func glibc_dirs(o: lv.Options, arch: str): Vector<str>:
     mut d := Vector {} as Vector<str>
     each lp in o.lib_paths:
         d.push(lp)
     end
     sr := glibc_sysroot(o)
-    each s in ["/usr/lib/" + arch + "-linux-gnu", "/lib/" + arch + "-linux-gnu", "/usr/" + arch + "-linux-gnu/lib"]:
-        d.push(sr + s)
+    tuples := glibc_tuples(arch)
+    each t in tuples:
+        each s in ["/usr/lib/" + t, "/lib/" + t, "/usr/" + t + "/lib"]:
+            d.push(sr + s)
+        end
     end
+    tuples.free()
     if str.Len(sr) > 0 or str.Equals(arch, glibc_host_arch()):
         each s2 in ["/usr/lib64", "/lib64", "/usr/local/lib", "/usr/lib", "/lib"]:
             if str.Len(sr) == 0 or not str.Equals(s2, "/usr/local/lib"):
@@ -456,7 +573,7 @@ func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(arch + "-linux-musl"))
         ret false
     end
-    if (str.Len(triple) > 0 and not str.Contains(triple, "linux-gnu")) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
+    if (str.Len(triple) > 0 and not str.Contains(triple, "linux-gnu")) or str.Len(arch) == 0:
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
         ret false
     end
@@ -469,6 +586,10 @@ func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
         ret false
     end
     dirs := glibc_dirs(o, arch)
+    if (str.Equals(arch, "i686") or str.Equals(arch, "arm")) and str.Len(glibc_libgcc(o, arch)) == 0:
+        why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr("libgcc.a"))
+        ret false
+    end
     each need in ["Scrt1.o", "crti.o", "crtn.o", "libc.so"]:
         if str.Len(find_in(dirs, need)) == 0:
             why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr(need))
@@ -513,6 +634,10 @@ func native_link_glibc(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple
     end
     nl.AddInput(l, find_in(dirs, "libm.so"))
     nl.AddInput(l, find_in(dirs, "libc.so"))
+    gcc := glibc_libgcc(o, glibc_arch(triple))
+    if str.Len(gcc) > 0:
+        nl.AddInput(l, gcc)
+    end
     nl.AddInput(l, find_in(dirs, "crtn.o"))
     if not nl.Link(l, exe):
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))

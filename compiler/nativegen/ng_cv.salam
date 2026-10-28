@@ -111,6 +111,201 @@ func cv_basic(g &: Ng, md: int): int:
     ret 0
 end
 
+func cv_trec_begin(g &: Ng, kind: int): int:
+    if g.s_cvtyp.len() == 0:
+        vb_le(g.s_cvtyp, 4 as i64, 4)
+    end
+    at := g.s_cvtyp.len()
+    vb_le(g.s_cvtyp, 0 as i64, 2)
+    vb_le(g.s_cvtyp, kind as i64, 2)
+    ret at
+end
+
+func cv_tpad(v &: Vector<u8>):
+    until v.len() % 4 != 0:
+        v.push((0xF0 + (4 - v.len() % 4)) as u8)
+    end
+end
+
+func cv_trec_end(g &: Ng, at: int): int:
+    cv_tpad(g.s_cvtyp)
+    cv_put16(g.s_cvtyp, at, g.s_cvtyp.len() - at - 2)
+    ix := 0x1000 + g.cv_nt
+    g.cv_nt += 1
+    ret ix
+end
+
+func cv_udt_name(g &: Ng, md: int): str:
+    nm := g.md_s1[md]
+    ret str.Len(nm) > 0 ? nm : "<anon>"
+end
+
+func cv_udt_tail(g &: Ng, md: int):
+    vb_str(g.s_cvtyp, cv_udt_name(g, md))
+    vb_str(g.s_cvtyp, "salam." + str.FromInt(md as i64))
+end
+
+func cv_fwd_struct(g &: Ng, md: int): int:
+    if g.cv_tmap.has(md):
+        ret g.cv_tmap.get(md)
+    end
+    if g.cv_fwd.has(md):
+        ret g.cv_fwd.get(md)
+    end
+    at := cv_trec_begin(g, 0x1505)
+    vb_le(g.s_cvtyp, 0 as i64, 2)
+    vb_le(g.s_cvtyp, 0x280 as i64, 2)
+    vb_le(g.s_cvtyp, 0 as i64, 12)
+    cv_numeric(g.s_cvtyp, 0 as i64)
+    cv_udt_tail(g, md)
+    ix := cv_trec_end(g, at)
+    g.cv_fwd.put(md, ix)
+    ret ix
+end
+
+func cv_members(g &: Ng, md: int, want: int, out &: Vector<int>):
+    el := g.md_el[md]
+    if el < 0 or el >= g.md_kind.len() or g.md_kind[el] != 9:
+        ret
+    end
+    repeat g.md_ln[el] in q:
+        m := g.md_pool[g.md_l0[el] + q]
+        if m >= 0 and m < g.md_kind.len() and g.md_kind[m] == want and (want != 6 or g.md_tag[m] == 0x0d):
+            out.push(m)
+        end
+    end
+end
+
+func cv_struct(g &: Ng, md: int): int:
+    if g.cv_tmap.has(md):
+        ret g.cv_tmap.get(md)
+    end
+    mut ms := Vector {} as Vector<int>
+    cv_members(g, md, 6, ms)
+    mut tys := Vector {} as Vector<int>
+    each m in ms:
+        tys.push(cv_type(g, g.md_t[m]))
+    end
+    fl := cv_trec_begin(g, 0x1203)
+    mut cnt := 0
+    repeat ms.len() in k:
+        if tys[k] == 0:
+            continue
+        end
+        m2 := ms[k]
+        vb_le(g.s_cvtyp, 0x150D as i64, 2)
+        vb_le(g.s_cvtyp, 3 as i64, 2)
+        vb_le(g.s_cvtyp, tys[k] as i64, 4)
+        cv_numeric(g.s_cvtyp, (g.md_off[m2] / 8) as i64)
+        vb_str(g.s_cvtyp, g.md_s1[m2])
+        cv_tpad(g.s_cvtyp)
+        cnt += 1
+    end
+    fi := cv_trec_end(g, fl)
+    at := cv_trec_begin(g, 0x1505)
+    vb_le(g.s_cvtyp, cnt as i64, 2)
+    vb_le(g.s_cvtyp, 0x200 as i64, 2)
+    vb_le(g.s_cvtyp, fi as i64, 4)
+    vb_le(g.s_cvtyp, 0 as i64, 8)
+    cv_numeric(g.s_cvtyp, (g.md_sz[md] / 8) as i64)
+    cv_udt_tail(g, md)
+    ix := cv_trec_end(g, at)
+    g.cv_tmap.put(md, ix)
+    ms.free()
+    tys.free()
+    ret ix
+end
+
+func cv_enum(g &: Ng, md: int): int:
+    if g.cv_tmap.has(md):
+        ret g.cv_tmap.get(md)
+    end
+    mut ms := Vector {} as Vector<int>
+    cv_members(g, md, 12, ms)
+    fl := cv_trec_begin(g, 0x1203)
+    each m in ms:
+        vb_le(g.s_cvtyp, 0x1502 as i64, 2)
+        vb_le(g.s_cvtyp, 3 as i64, 2)
+        cv_numeric(g.s_cvtyp, g.md_a[m] as i64)
+        vb_str(g.s_cvtyp, g.md_s1[m])
+        cv_tpad(g.s_cvtyp)
+    end
+    fi := cv_trec_end(g, fl)
+    mut ut := 0x74
+    switch g.md_sz[md] / 8:
+        1: ut = 0x68 break end
+        2: ut = 0x72 break end
+        8: ut = 0x76 break end
+    end
+    at := cv_trec_begin(g, 0x1507)
+    vb_le(g.s_cvtyp, ms.len() as i64, 2)
+    vb_le(g.s_cvtyp, 0x200 as i64, 2)
+    vb_le(g.s_cvtyp, ut as i64, 4)
+    vb_le(g.s_cvtyp, fi as i64, 4)
+    cv_udt_tail(g, md)
+    ix := cv_trec_end(g, at)
+    g.cv_tmap.put(md, ix)
+    ms.free()
+    ret ix
+end
+
+func cv_array(g &: Ng, md: int): int:
+    if g.cv_tmap.has(md):
+        ret g.cv_tmap.get(md)
+    end
+    et := cv_type(g, g.md_t[md])
+    if et == 0:
+        ret 0
+    end
+    at := cv_trec_begin(g, 0x1503)
+    vb_le(g.s_cvtyp, et as i64, 4)
+    vb_le(g.s_cvtyp, (g.wsz == 4 ? 0x75 : 0x77) as i64, 4)
+    cv_numeric(g.s_cvtyp, (g.md_sz[md] / 8) as i64)
+    g.s_cvtyp.push(0 as u8)
+    ix := cv_trec_end(g, at)
+    g.cv_tmap.put(md, ix)
+    ret ix
+end
+
+func cv_pointer(g &: Ng, md: int): int:
+    if g.cv_tmap.has(md):
+        ret g.cv_tmap.get(md)
+    end
+    pt := g.md_t[md]
+    simple := g.wsz == 4 ? 0x400 : 0x600
+    if pt < 0 or pt >= g.md_kind.len():
+        ret simple | 0x03
+    end
+    if g.md_kind[pt] == 5 and g.md_sz[pt] == 8 and (g.md_a[pt] == 6 or g.md_a[pt] == 8):
+        ret simple | 0x70
+    end
+    mut tgt := 0
+    mut p2 := pt
+    repeat 8:
+        if p2 < 0 or p2 >= g.md_kind.len() or g.md_kind[p2] != 6 or g.md_tag[p2] == 0x0f:
+            break
+        end
+        p2 = g.md_t[p2]
+    end
+    if p2 >= 0 and p2 < g.md_kind.len() and g.md_kind[p2] == 7 and g.md_tag[p2] == 0x13:
+        tgt = cv_fwd_struct(g, p2)
+    else:
+        tgt = cv_type(g, pt)
+    end
+    if tgt == 0:
+        ret simple | 0x03
+    end
+    if tgt < 0x1000 and (tgt & 0xF00) == 0:
+        ret simple | tgt
+    end
+    at := cv_trec_begin(g, 0x1002)
+    vb_le(g.s_cvtyp, tgt as i64, 4)
+    vb_le(g.s_cvtyp, ((g.wsz == 4 ? 0x0A : 0x0C) | ((g.wsz == 4 ? 4 : 8) << 13)) as i64, 4)
+    ix := cv_trec_end(g, at)
+    g.cv_tmap.put(md, ix)
+    ret ix
+end
+
 func cv_type(g &: Ng, md0: int): int:
     mut md := md0
     repeat 8:
@@ -122,20 +317,16 @@ func cv_type(g &: Ng, md0: int): int:
             ret cv_basic(g, md)
         end
         if k == 6 and g.md_tag[md] == 0x0f:
-            pt := g.md_t[md]
-            ptr := g.wsz == 4 ? 0x400 : 0x600
-            if pt >= 0 and pt < g.md_kind.len() and g.md_kind[pt] == 5 and g.md_sz[pt] == 8 and (g.md_a[pt] == 6 or g.md_a[pt] == 8):
-                ret ptr | 0x70
-            end
-            ret ptr | 0x03
+            ret cv_pointer(g, md)
         end
         if k == 7 and g.md_tag[md] == 0x04:
-            switch g.md_sz[md] / 8:
-                1: ret 0x68 end
-                2: ret 0x72 end
-                8: ret 0x76 end
-            end
-            ret 0x74
+            ret cv_enum(g, md)
+        end
+        if k == 7 and g.md_tag[md] == 0x13:
+            ret cv_struct(g, md)
+        end
+        if k == 7 and g.md_tag[md] == 0x01:
+            ret cv_array(g, md)
         end
         if k != 6:
             ret 0
@@ -192,10 +383,17 @@ func cv_frame_reg(g &: Ng, k: int): int:
 end
 
 func cv_defrange(g &: Ng, v &: Vector<u8>, k: int, s0: int, e0: int, lk: int, lp: i64, lx: int, bs: int):
+    cv_defrange_sub(g, v, k, s0, e0, lk, lp, lx, bs, 0 - 1)
+end
+
+func cv_defrange_sub(g &: Ng, v &: Vector<u8>, k: int, s0: int, e0: int, lk: int, lp: i64, lx: int, bs: int, sub: int):
     mut reg := 0
     mut off := 0 as i64
     mut rel := true
     if lk == 1:
+        if bs > 8:
+            ret
+        end
         reg = cv_reg(g, lp as int, bs)
         rel = false
     else lk == 3 or lk == 8:
@@ -211,11 +409,16 @@ func cv_defrange(g &: Ng, v &: Vector<u8>, k: int, s0: int, e0: int, lk: int, lp
     mut s := s0
     until s < e0:
         n := e0 - s < 0xFFFF ? e0 - s : 0xFFFF
-        r := cv_rec_begin(v, rel ? 0x1145 : 0x1141)
+        r := cv_rec_begin(v, rel ? 0x1145 : (sub >= 0 ? 0x1143 : 0x1141))
         vb_le(v, reg as i64, 2)
-        vb_le(v, 0 as i64, 2)
         if rel:
+            vb_le(v, (sub >= 0 ? 1 | (sub << 4) : 0) as i64, 2)
             vb_le(v, off, 4)
+        else sub >= 0:
+            vb_le(v, 0 as i64, 2)
+            vb_le(v, sub as i64, 4)
+        else:
+            vb_le(v, 0 as i64, 2)
         end
         cv_pc_secrel(g, v, k, s)
         vb_le(v, n as i64, 2)
@@ -286,6 +489,37 @@ func cv_locals(g &: Ng, v &: Vector<u8>, tys &: DvTypes, k: int):
         until e >= 0:
             cv_defrange(g, v, k, g.le_s[e], g.le_e[e], g.le_k[e], g.le_p[e], g.le_x[e], bs)
             e = tys.le_next[e]
+        end
+    end
+    repeat g.gv_md.len() in fv:
+        if fv >= g.gv_df.len() or g.gv_df[fv] != k or g.gv_foff[fv] < 0:
+            continue
+        end
+        fmd := g.gv_md[fv]
+        if seen.has(fmd):
+            continue
+        end
+        fty := cv_type(g, g.md_t[fmd])
+        if fty == 0:
+            continue
+        end
+        seen.put(fmd, 1)
+        fr := cv_rec_begin(v, 0x113E)
+        vb_le(v, fty as i64, 4)
+        vb_le(v, (g.md_a[fmd] > 0 ? 1 : 0) as i64, 2)
+        vb_str(v, g.md_s1[fmd])
+        cv_rec_end(v, fr)
+        repeat g.gv_md.len() - fv in d0:
+            q := fv + d0
+            if q >= g.gv_df.len() or g.gv_df[q] != k or g.gv_md[q] != fmd or g.gv_foff[q] < 0 or g.gv_foff[q] >= 4096:
+                continue
+            end
+            hq := q < tys.le_head.len() ? tys.le_head[q] : 0 - 1
+            mut e3 := hq
+            until e3 >= 0:
+                cv_defrange_sub(g, v, k, g.le_s[e3], g.le_e[e3], g.le_k[e3], g.le_p[e3], g.le_x[e3], g.gv_fsz[q], g.gv_foff[q])
+                e3 = tys.le_next[e3]
+            end
         end
     end
     seen.free()

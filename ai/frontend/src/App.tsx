@@ -12,6 +12,7 @@ import { Connections, TelegramLink } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
+import { announce } from "./Notify";
 import { Plans } from "./Plans";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
@@ -136,6 +137,11 @@ export function App() {
   activeRef.current = activeId;
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
+  const chatsRef = useRef<Chat[]>(chats);
+  chatsRef.current = chats;
+  const announced = useRef(new Set<number>());
+  const watching = useRef(new Set<number>());
+  const netFails = useRef(0);
   const signedIn = user !== null;
   useEffect(() => {
     if (!signedIn || isDesktop) return;
@@ -198,6 +204,44 @@ export function App() {
   }, []);
   const tools = useAgent(isDesktop && signedIn, midFor, notify);
 
+  const finish = useCallback((chatId: string, mid: number, status: Message["status"], body: string) => {
+    if (!isDesktop || status === "pending" || announced.current.has(mid)) return;
+    announced.current.add(mid);
+    const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "";
+    if (status === "error") announce("failed", title, uiText(body));
+    else announce("done", title, body);
+  }, []);
+
+  const watchAway = useCallback(() => {
+    const chatId = activeRef.current;
+    const pending = messagesRef.current.find((m) => m.role === "assistant" && m.status === "pending");
+    if (!isDesktop || !chatId || !pending || pending.id <= 0 || watching.current.has(pending.id)) return;
+    const mid = pending.id;
+    const until = Date.now() + 30 * 60 * 1000;
+    watching.current.add(mid);
+    const tick = async () => {
+      if (announced.current.has(mid) || activeRef.current === chatId || Date.now() > until) {
+        watching.current.delete(mid);
+        return;
+      }
+      try {
+        const r = await api.poll(chatId, mid);
+        if (r.status !== "pending") {
+          watching.current.delete(mid);
+          finish(chatId, mid, r.status, r.body);
+          return;
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          watching.current.delete(mid);
+          return;
+        }
+      }
+      window.setTimeout(tick, 3000);
+    };
+    window.setTimeout(tick, 3000);
+  }, [finish]);
+
   const stopPolling = () => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
     pollTimer.current = null;
@@ -213,6 +257,7 @@ export function App() {
         try {
           const r = await api.poll(chatId, mid);
           if (activeRef.current !== chatId) return;
+          netFails.current = 0;
           setMessages((ms) =>
             ms.map((m) =>
               m.id === mid
@@ -221,14 +266,17 @@ export function App() {
             ),
           );
           if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
+          else finish(chatId, mid, r.status, r.body);
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
+          netFails.current += 1;
+          if (netFails.current === 3) announce("network", chatsRef.current.find((c) => c.id === chatId)?.title ?? "", "");
           pollTimer.current = window.setTimeout(tick, 2000);
         }
       };
       pollTimer.current = window.setTimeout(tick, 300);
     },
-    [],
+    [finish],
   );
 
   const follow = useCallback(
@@ -251,6 +299,7 @@ export function App() {
           activity: (steps) => update((m) => ({ ...m, activity: steps })),
           done: (body, status, activity, ms) => {
             finished = true;
+            finish(chatId, mid, status, body);
             update((m) => ({
               ...m,
               body,
@@ -270,12 +319,14 @@ export function App() {
           if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
         });
     },
-    [poll],
+    [poll, finish],
   );
 
   const openChat = useCallback(
     async (id: string | null, replace = false) => {
+      if (id !== activeRef.current) watchAway();
       stopPolling();
+      netFails.current = 0;
       setSidebar(false);
       setRoute("chat");
       setActiveId(id);
@@ -318,10 +369,11 @@ export function App() {
         setLoadingChat(false);
       }
     },
-    [notify, follow],
+    [notify, follow, watchAway],
   );
 
   const leaveChat = () => {
+    watchAway();
     stopPolling();
     setSidebar(false);
     setActiveId(null);
@@ -340,6 +392,7 @@ export function App() {
     const onPop = () => {
       if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
       else {
+        watchAway();
         stopPolling();
         setSidebar(false);
         setActiveId(null);

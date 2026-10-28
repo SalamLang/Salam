@@ -1,9 +1,10 @@
+use crate::notify::{self, Notice};
 use crate::tools::{Kind, Preview};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, UserAttentionType};
+use tauri::AppHandle;
 use tokio::sync::{Notify, oneshot};
 
 const ANSWER_WAIT: Duration = Duration::from_secs(9 * 60);
@@ -88,9 +89,7 @@ impl Approvals {
     pub async fn ask(&self, app: &AppHandle, p: &Preview) -> Decision {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(p.call_id.clone(), (p.clone(), tx));
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.request_user_attention(Some(UserAttentionType::Informational));
-        }
+        notify::post(app, Notice::new(notify::Kind::Approval).text(p.summary.clone()));
         let answer = tokio::time::timeout(ANSWER_WAIT, rx).await;
         self.pending.lock().unwrap().remove(&p.call_id);
         match answer {

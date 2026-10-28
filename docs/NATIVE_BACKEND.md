@@ -117,10 +117,11 @@ record is reloaded. libgcc's `_Unwind_Backtrace` walks the same number of
 frames there as on x86, and gdb uses the tables instead of guessing from the
 prologues.
 
-What is not there yet: the loop and SLP vectorizers are off on AArch64, and
-in release builds an integer
-division by zero returns 0 instead of trapping, as ARM hardware does (debug
-builds check explicitly, as on every target).
+What is not there yet: the loop and SLP vectorizers are off on AArch64.
+ARM hardware returns 0 for an integer division by zero instead of trapping,
+so on AArch64 (and on RISC-V, which returns -1) release builds keep the
+explicit check that debug builds have on every target: one compare and a
+branch to the panic per division by a non-constant.
 
 ## 32-bit x86
 
@@ -791,8 +792,6 @@ faster than the LLVM path.
 Not there yet:
 
 - `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
-- On AArch64, an integer division by zero in a release build returns 0
-  instead of trapping. Debug builds check.
 - The loop and SLP vectorizers run on x86 only (SLP also on i686).
 - The loop vectorizer needs a single-block loop body with unit-stride
   accesses, and SSE2 limits it: no 64-bit integer compares, no integer

@@ -281,7 +281,7 @@ end
 - **W145 (opt-in lint)** - `salam check --switch-lint=warn` flags a run of
   `if x == K:` tests (4 or more by default, `--switch-lint-min=N`) that compare
   the same side-effect-free `x` with constants and could be one `switch`. Only
-  a *contiguous* run of plain `==` tests counts (`or` joins labels): a call, a
+  a _contiguous_ run of plain `==` tests counts (`or` joins labels): a call, a
   bit test, `!=` or a different subject ends the run, because moving a test
   across such a test could change which branch wins. `--switch-lint=error`
   makes it an error, `--switch-lint=fix` makes `salam check --fix` rewrite it,

@@ -17,13 +17,13 @@ warning[W145]: 4 consecutive comparisons of 'ty' against constants could be a sw
 
 ## Using it
 
-| Flag | Meaning |
-| --- | --- |
-| `--switch-lint=off` | the default: nothing is reported |
-| `--switch-lint=warn` | report W145 as a warning |
-| `--switch-lint=error` | report it as an error (E145); the exit code is 1 |
-| `--switch-lint=fix` | like `warn`, and `salam check --fix` rewrites the runs it can |
-| `--switch-lint-min=N` | the shortest run to report, 2 or more (default 4) |
+| Flag                  | Meaning                                                       |
+| --------------------- | ------------------------------------------------------------- |
+| `--switch-lint=off`   | the default: nothing is reported                              |
+| `--switch-lint=warn`  | report W145 as a warning                                      |
+| `--switch-lint=error` | report it as an error (E145); the exit code is 1              |
+| `--switch-lint=fix`   | like `warn`, and `salam check --fix` rewrites the runs it can |
+| `--switch-lint-min=N` | the shortest run to report, 2 or more (default 4)             |
 
 The language server takes `switchLint` (`off` or `warn`) and `switchLintMin` as
 settings, and offers the rewrite as a quick fix. See `docs/LSP.md`.
@@ -33,12 +33,12 @@ Your own `include`d files are.
 
 ## What counts as a run
 
-A *link* is one test of an `if` chain: either an `else cond:` branch, or a
+A _link_ is one test of an `if` chain: either an `else cond:` branch, or a
 sibling `if` statement whose body always leaves the block (`ret`, `continue`,
 `break`, or a call that never returns). Siblings that fall through are not
 exclusive, so they never form a run.
 
-An *atom* is `subject == constant`, in either operand order, and `or` joins
+An _atom_ is `subject == constant`, in either operand order, and `or` joins
 atoms into one link with several labels. A run is a maximal sequence of
 **contiguous** links in which every atom compares the same subject, so
 `ty == 7`, `(ty) == (8)` and `9 == ty or ty == K` all belong together

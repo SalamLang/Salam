@@ -487,7 +487,13 @@ then goes through:
    `psrad` when the extension is signed) and narrows bytes with
    `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
    data pointer of a vector passed by reference) is done once before the
-   vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
+   vector loop, behind a runtime check that no store in the loop reaches it.
+   A second counter that steps down by one while the first steps up (the
+   `lo < hi` swap of a reversal) is rewritten as `lo0 + hi0 - i`, the loop
+   runs while `i < (lo0 + hi0 + 1) / 2`, and its loads and stores read and
+   write the lanes just below the address and reverse them with `pshufd`
+   (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
+   runtime check, since the loop condition keeps the two ranges apart. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
@@ -755,7 +761,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -916,7 +922,8 @@ Not there yet:
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into
   one block (a load inside one arm of a branch keeps it scalar) and
-  unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
+  unit-stride accesses (counting up, or down by one through a second
+  counter). On x86-64 it has no 64-bit multiplies or ordered
   64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
   values are widened first). Float
   reductions are not reordered, since that would change the rounding of the

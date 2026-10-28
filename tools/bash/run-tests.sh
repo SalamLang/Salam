@@ -369,10 +369,10 @@ EOF_NOTS
         out=$("$SALAM_ABS" check "$f" $largs --no-color --log-level=warn --lang="$lang" 2>&1 | tr -d '\r')
         want_n=$(grep -oE '^// EXPECT-WARNINGS: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-WARNINGS: ||')
         want_fx=$(grep -oE '^// EXPECT-FIXES: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-FIXES: ||')
-        got_n=$(printf '%s\n' "$json" | grep -c '"code":"[WE]145"')
-        got_fx=$(printf '%s\n' "$json" | grep '"code":"[WE]145"' | grep -c '"fixes":\[{')
+        got_n=$(printf '%s\n' "$json" | grep -cE '"code":"([WE]145|[^"]*۱۴۵)"')
+        got_fx=$(printf '%s\n' "$json" | grep -E '"code":"([WE]145|[^"]*۱۴۵)"' | grep -c '"fixes":\[{')
         lfail=""
-        stray=$(printf '%s\n' "$out" | grep -E '^error' | grep -v 'E145' | head -1)
+        stray=$(printf '%s\n' "$json" | grep '"level":"error"' | grep -vE '"code":"([WE]145|[^"]*۱۴۵)"' | head -1)
         if [ -n "$stray" ]; then
             lfail="the program has its own error: $stray"
         elif [ -z "$want_n" ]; then
@@ -425,7 +425,7 @@ EOF_LNOTS
             lfail="rewritten file differs from ${golden##*/}"
             diff "$golden" "$jobdir/fixed.salam" | head -20 | sed 's/^/  /'
         else
-            again=$(cd "$jobdir" && "$SALAM_ABS" check fixed.salam --switch-lint=warn --error-format=json --lang="$lang" 2>&1 | grep -c '"code":"W145"')
+            again=$(cd "$jobdir" && "$SALAM_ABS" check fixed.salam --switch-lint=warn --error-format=json --lang="$lang" 2>&1 | grep -cE '"code":"([WE]145|[^"]*۱۴۵)"')
             [ "$again" = 0 ] || lfail="$again W145 left after the rewrite"
         fi
         if [ -z "$lfail" ]; then

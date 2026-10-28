@@ -903,7 +903,9 @@ Not there yet:
   64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
   values are widened first). Float
   reductions are not reordered, since that would change the rounding of the
-  result. There is no AVX code path.
+  result, unless the program is built with `--fast-math`, which lets float
+  add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
+  There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

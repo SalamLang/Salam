@@ -457,7 +457,10 @@ then goes through:
    SSE2: 32-bit integer and `f32` code four lanes at a time, 64-bit and `f64`
    two at a time. Loads and stores must be contiguous in the counter; bytes
    are widened to 32-bit lanes on load (`movd` and two unpacks) and narrowed
-   with `packssdw`/`packuswb` on store. A compare that only feeds selects is
+   with `packssdw`/`packuswb` on store. A 32-bit multiply, which SSE2 has no
+   instruction for, is two `pmuludq` (the even lanes, then the odd ones
+   shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
+   `mul .4s`. A compare that only feeds selects is
    emitted in its cheaper sense with the select arms swapped, and a
    commutative vector operation writes into an operand that dies there
    (but not into a reduction's accumulator). Adds, subtracts, bitwise operations,
@@ -810,9 +813,10 @@ Not there yet:
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a single-block loop body with unit-stride
-  accesses, and SSE2 limits it: no 64-bit integer compares, no integer
-  multiply, no 8- or 16-bit lanes, and float reductions are not reordered.
-  There is no AVX code path.
+  accesses, and SSE2 limits it: no 64-bit integer compares or multiplies,
+  and no 8- or 16-bit lanes (bytes are widened to 32-bit lanes). Float
+  reductions are not reordered, since that would change the rounding of the
+  result. There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

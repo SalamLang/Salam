@@ -87,6 +87,30 @@ func guest_preflight(ctx: i64):
     http.Text(ctx, "")
 end
 
+func guest_settle(ctx: i64, gid: str, sid: str): int:
+    failed := aiweb.Pick(ctx, "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید.", "The assistant could not answer just now. Please ask again in a moment.")
+    mut mid := ""
+    mut created := 0 as i64
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, created FROM guest_messages WHERE guest_id = ?1 AND role = 'assistant' AND status = 'pending' ORDER BY id DESC LIMIT 1", gone(gid))
+    if aistore.Next(rows):
+        mid = aistore.Text(rows, 0)
+        created = aistore.Int64(rows, 1)
+    end
+    aistore.Finish(rows)
+    if mid.len() > 0:
+        _o := aistore.Run("UPDATE guest_messages SET status = 'error', body = ?1 WHERE guest_id = ?2 AND role = 'assistant' AND status = 'pending' AND id < ?3", gthree(failed, gid, mid))
+    end
+    aistore.Unlock()
+    if mid.len() == 0:
+        ret 0
+    end
+    mut status := "pending"
+    mut text := ""
+    _p := guest_step(mid, sid, created, aiweb.English(ctx), status, text)
+    ret status == "pending" ? 1 : 0
+end
+
 func guest_send(ctx: i64):
     body := http.Body(ctx)
     text := str.Trim(json.Get(body, "text"))
@@ -117,7 +141,7 @@ func guest_send(ctx: i64):
     end
     per_ip := aistore.OneText("SELECT COUNT(*) FROM guest_messages m JOIN guest_sessions g ON g.id = m.guest_id WHERE g.ip = ?1 AND m.role = 'user' AND m.created > ?2", gtwo(ip, day)).to_int()
     new_guests := aistore.OneText("SELECT COUNT(*) FROM guest_sessions WHERE ip = ?1 AND created > ?2", gtwo(ip, day)).to_int()
-    pending := gid.len() > 0 ? aistore.OneText("SELECT COUNT(*) FROM guest_messages WHERE guest_id = ?1 AND status = 'pending'", gone(gid)).to_int() : 0
+    mut pending := gid.len() > 0 ? aistore.OneText("SELECT COUNT(*) FROM guest_messages WHERE guest_id = ?1 AND status = 'pending'", gone(gid)).to_int() : 0
     aistore.Unlock()
     if used >= LIMIT:
         guest_fail(ctx, 403, "guest_limit", "گفت‌وگوی مهمان به سقف " + str.ToPersianDigits("" + LIMIT) + " پیام رسید. برای ادامه، رایگان ثبت‌نام کنید یا وارد شوید.", "This guest chat reached its " + LIMIT + " message limit. Sign up for free or sign in to keep going.")
@@ -126,6 +150,9 @@ func guest_send(ctx: i64):
     if per_ip >= MESSAGES_PER_IP or (gid.len() == 0 and new_guests >= GUESTS_PER_IP):
         guest_fail(ctx, 429, "guest_limit", "از این شبکه امروز پیام زیادی فرستاده شده است. برای ادامه، رایگان ثبت‌نام کنید یا وارد شوید.", "Too many guest messages came from this network today. Sign up for free or sign in to keep going.")
         ret
+    end
+    if pending > 0:
+        pending = guest_settle(ctx, gid, sid)
     end
     if pending > 0:
         guest_fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.", "The answer to the previous message is not finished yet.")

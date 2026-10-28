@@ -1224,7 +1224,9 @@ end
   compiler derives per type:
   `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
-  `@json "" "omitempty"/"optional"/"string"` for the rest. An enum with data
+  `@json "" "omitempty"/"optional"/"string"` for the rest. A Persian file
+  spells the marker `@جیسون` and an English file `@json`; the other spelling is
+  an error that names the right one. An enum with data
   is written with its member as the key, `{"Circle":{"r":1.5}}`, and a member
   without data as a bare string, `"Empty"`.
   `Schema(v)` derives the type's **JSON Schema** (2020-12, `$defs`/`$ref`)

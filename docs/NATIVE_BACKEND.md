@@ -469,17 +469,22 @@ then goes through:
    runtime check that a forward copy and `memmove` agree (only from 16
    elements up; shorter copies stay a loop).
    Innermost loops whose body is one branch-free block are vectorized with
-   SSE2: 32-bit integer and `f32` code four lanes at a time, 64-bit and `f64`
-   two at a time. Loads and stores must be contiguous in the counter; bytes
-   are widened to 32-bit lanes on load (`movd` and two unpacks) and narrowed
-   with `packssdw`/`packuswb` on store. A 32-bit multiply, which SSE2 has no
+   SSE2: bytes sixteen lanes at a time, 16-bit integers eight, 32-bit integer
+   and `f32` code four, 64-bit and `f64` two. Loads and stores must be
+   contiguous in the counter; a byte loop that also does 32-bit work widens
+   its bytes on load (`movd` and two unpacks) and narrows them with
+   `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
+   data pointer of a vector passed by reference) is done once before the
+   vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
    emitted in its cheaper sense with the select arms swapped, and a
    commutative vector operation writes into an operand that dies there
    (but not into a reduction's accumulator). Adds, subtracts, bitwise operations,
-   constant shifts, the four float operations, signed or equality compares
+   constant shifts, the four float operations, compares of any sign
+   (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
+   equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
    and any number of integer add reductions. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
@@ -797,7 +802,17 @@ How the pieces fit:
   stack, that would stop before any of them has a location.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
-CodeView/PDB for MSVC debuggers is not written.
+On Windows targets, `-g` also writes CodeView into each object: a
+`.debug$S` section with `S_OBJNAME`, `S_COMPILE3`, one
+`S_GPROC32`/`S_LPROC32` per function, C13 line blocks, file checksums and a
+string table (`ng_cv.salam`). Scalar locals and parameters get `S_LOCAL`
+with built-in type indices (integers, floats, `bool`, and `str` as a char
+pointer) and the same ranges as their DWARF location lists:
+`S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
+slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
+There are no type records, so struct and array locals are in DWARF only.
+The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
+with the system linker, GNU ld discards it.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
@@ -824,12 +839,14 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
+- CodeView has no type records, so WinDbg and Visual Studio show scalar
+  locals but not struct or array ones.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
-- The loop vectorizer needs a single-block loop body with unit-stride
-  accesses, and SSE2 limits it: no 64-bit integer compares or multiplies,
-  and no 8- or 16-bit lanes (bytes are widened to 32-bit lanes). Float
+- The loop vectorizer needs a loop body that if-conversion can turn into
+  one block (a load inside one arm of a branch keeps it scalar) and
+  unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
+  64-bit compares, and 8- and 16-bit lanes take no reductions. Float
   reductions are not reordered, since that would change the rounding of the
   result. There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

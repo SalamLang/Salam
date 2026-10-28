@@ -39,6 +39,7 @@ pub struct Pe:
     pub btype: int = 10
     pub imp_va: i64 = 0
     pub imp_size: i64 = 0
+    pub dbg_rva: i64 = 0
 end
 
 func ps_name(k: int): str:
@@ -637,6 +638,15 @@ func pe_link(l &: Nl, out: str):
     if l.mach == EM_386:
         l.pe_base = 0x400000 as i64
     end
+    mut cvs := Vector {} as Vector<int>
+    mut pdb := ""
+    if not l.strip:
+        cvs = pdb_cv_secs(l)
+    end
+    if cvs.len() > 0:
+        pdb = pdb_path_of(out)
+        pe_bytes(t, PS_RDATA, "zpdb", PDB_RSDS + 25 + str.Len(pdb), 0)
+    end
     synth(l, "__ImageBase", SYN_EHDR)
     synth(l, "__image_base__", SYN_EHDR)
     synth(l, "___ImageBase", SYN_EHDR)
@@ -728,9 +738,106 @@ func pe_link(l &: Nl, out: str):
     if l.dg_name.len() > 0:
         t.image_size = dbg_layout_pe(l, t.image_size, fp + t.ps_rawsize[PS_RELOC])
     end
+    mut g0 := 0 as i64
+    mut g1 := 0 as i64
+    if cvs.len() > 0:
+        g0 = pdb_guid(buf, total, 0)
+        g1 = pdb_guid(buf, total, 1)
+        pe_rsds(t, buf, fpos_of, g0, g1, pdb)
+    end
     pe_write(l, t, buf, total, rel, out)
+    if cvs.len() > 0 and l.ok:
+        mut sh := pe_sechdrs(l, t)
+        if not pdb_write(l, t, cvs, sh, g0, g1, pdb):
+            nl_fail(l, "cannot write " + pdb)
+        end
+        sh.free()
+    end
+    cvs.free()
     rel.free()
     fpos_of.free()
+end
+
+func pdb_path_of(out: str): str:
+    n := str.Len(out)
+    if n > 4 and (str.EndsWith(out, ".exe") or str.EndsWith(out, ".EXE") or str.EndsWith(out, ".dll") or str.EndsWith(out, ".DLL")):
+        ret str.Substr(out, 0, n - 4) + ".pdb"
+    end
+    ret out + ".pdb"
+end
+
+func pe_rsds(t &: Pe, buf: u8*, fpos_of &: Vector<i64>, g0: i64, g1: i64, pdb: str):
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] != IT_BYTES or not str.Equals(t.it_key[i], "zpdb"):
+            continue
+        end
+        rva := t.it_addr[i]
+        at := fpos_of[PS_RDATA] + (rva - t.ps_va[PS_RDATA])
+        mut v := Vector {} as Vector<u8>
+        tb_le(v, 0 as i64, 12)
+        tb_le(v, 2 as i64, 4)
+        tb_le(v, (25 + str.Len(pdb)) as i64, 4)
+        tb_le(v, rva + (PDB_RSDS as i64), 4)
+        tb_le(v, at + (PDB_RSDS as i64), 4)
+        tb_le(v, 0x53445352 as i64, 4)
+        tb_le(v, g0, 8)
+        tb_le(v, g1, 8)
+        tb_le(v, 1 as i64, 4)
+        pp := (pdb as void*) as u8*
+        repeat str.Len(pdb) in c:
+            v.push(pp[c])
+        end
+        v.push(0 as u8)
+        repeat v.len() in b:
+            buf[at + (b as i64)] = v[b]
+        end
+        v.free()
+        t.dbg_rva = rva
+        ret
+    end
+end
+
+func pe_sechdrs(l &: Nl, t &: Pe): Vector<u8>:
+    mut h := Vector {} as Vector<u8>
+    repeat PS_COUNT in k2:
+        if t.ps_vsize[k2] <= (0 as i64):
+            continue
+        end
+        nm := ps_name(k2)
+        np := (nm as void*) as u8*
+        repeat 8 in c:
+            h.push(c < str.Len(nm) ? np[c] : (0 as u8))
+        end
+        w32(h, t.ps_vsize[k2])
+        w32(h, t.ps_va[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_rawsize[k2])
+        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_raw[k2])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, ps_flags(k2))
+    end
+    repeat l.dg_name.len() in dk:
+        mut dn := name_of(l, l.dg_name[dk])
+        if l.pe_stroff[dk] >= 0:
+            dn = "/" + str.FromInt(l.pe_stroff[dk] as i64)
+        end
+        dp := (dn as void*) as u8*
+        repeat 8 in c2:
+            h.push(c2 < str.Len(dn) ? dp[c2] : (0 as u8))
+        end
+        w32(h, l.dg_size[dk])
+        w32(h, l.dg_va[dk])
+        w32(h, align_to(l.dg_size[dk], 0x200 as i64))
+        w32(h, l.dg_raw[dk])
+        w32(h, 0 as i64)
+        w32(h, 0 as i64)
+        w16(h, 0 as i64)
+        w16(h, 0 as i64)
+        w32(h, 0x42100040 as i64)
+    end
+    ret h
 end
 
 func w16(o &: Vector<u8>, v: i64):
@@ -849,6 +956,9 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
         else d == 5 and rel.len() > 0:
             w32(h, t.ps_va[PS_RELOC])
             w32(h, rel.len() as i64)
+        else d == 6 and t.dbg_rva > (0 as i64):
+            w32(h, t.dbg_rva)
+            w32(h, PDB_RSDS as i64)
         else d == 9 and tls > (0 as i64):
             w32(h, tls)
             w32(h, (p32 ? 24 : 40) as i64)
@@ -860,44 +970,11 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
             w32(h, 0 as i64)
         end
     end
-    repeat PS_COUNT in k2:
-        if t.ps_vsize[k2] <= (0 as i64):
-            continue
-        end
-        nm := ps_name(k2)
-        np := (nm as void*) as u8*
-        repeat 8 in c:
-            h.push(c < str.Len(nm) ? np[c] : (0 as u8))
-        end
-        w32(h, t.ps_vsize[k2])
-        w32(h, t.ps_va[k2])
-        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_rawsize[k2])
-        w32(h, k2 == PS_BSS ? (0 as i64) : t.ps_raw[k2])
-        w32(h, 0 as i64)
-        w32(h, 0 as i64)
-        w16(h, 0 as i64)
-        w16(h, 0 as i64)
-        w32(h, ps_flags(k2))
+    mut shd := pe_sechdrs(l, t)
+    each sb0 in shd:
+        h.push(sb0)
     end
-    repeat l.dg_name.len() in dk:
-        mut dn := name_of(l, l.dg_name[dk])
-        if l.pe_stroff[dk] >= 0:
-            dn = "/" + str.FromInt(l.pe_stroff[dk] as i64)
-        end
-        dp := (dn as void*) as u8*
-        repeat 8 in c2:
-            h.push(c2 < str.Len(dn) ? dp[c2] : (0 as u8))
-        end
-        w32(h, l.dg_size[dk])
-        w32(h, l.dg_va[dk])
-        w32(h, align_to(l.dg_size[dk], 0x200 as i64))
-        w32(h, l.dg_raw[dk])
-        w32(h, 0 as i64)
-        w32(h, 0 as i64)
-        w16(h, 0 as i64)
-        w16(h, 0 as i64)
-        w32(h, 0x42100040 as i64)
-    end
+    shd.free()
     repeat h.len() in b:
         buf[b] = h[b]
     end

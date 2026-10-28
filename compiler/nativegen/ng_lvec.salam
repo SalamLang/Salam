@@ -7,6 +7,7 @@ const LV_VEC := 3
 const LV_RED := 4
 const LV_SKIP := 5
 const LV_NARROW := 6
+const LV_HOIST := 7
 
 pub struct Lv:
     pub h: int = 0 - 1
@@ -33,6 +34,9 @@ pub struct Lv:
     pub bc_s: Vector<int> = Vector {}
     pub bc_v: Vector<int> = Vector {}
     pub inv: Vector<bool> = Vector {}
+    pub hoist: Vector<int> = Vector {}
+    pub hchecks: Vector<int> = Vector {}
+    pub hmap: Vector<int> = Vector {}
 end
 
 func lv_in(g &: Ng, r &: Lv, v: int): bool:
@@ -43,9 +47,34 @@ func lv_in(g &: Ng, r &: Lv, v: int): bool:
     ret b == r.h or b == r.w or b == r.latch
 end
 
+func lv_safe_ptr(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    k := g.v_kind[v]
+    if k == VK_ARG or k == VK_GLB:
+        ret true
+    end
+    ret k == VK_INS and g.i_op[g.v_def[v]] == OP_ALLOCA
+end
+
+func lv_hoisted(r &: Lv, v: int): bool:
+    ret v >= 0 and v < r.cls.len() and r.cls[v] == LV_HOIST
+end
+
+func lv_hm(r &: Lv, v: int): int:
+    if v >= 0 and v < r.hmap.len() and r.hmap[v] >= 0:
+        ret r.hmap[v]
+    end
+    ret v
+end
+
 func lv_inv(g &: Ng, r &: Lv, v: int): bool:
     if v < 0:
         ret false
+    end
+    if lv_hoisted(r, v):
+        ret true
     end
     k := g.v_kind[v]
     if k == VK_INT or k == VK_FLT or k == VK_ZERO or k == VK_ARG or k == VK_GLB:
@@ -160,6 +189,11 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
         end
         r.cls[res] = LV_ADDR
         ret true
+    end
+    if op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and lv_safe_ptr(g, g.i_a[i]) and lv_inv(g, r, g.i_a[i]) and not is_agg(g, t) and not is_vec(g, t) and res >= 0:
+        r.cls[res] = LV_HOIST
+        r.hoist.push(i)
+        ret r.hoist.len() <= 4
     end
     if op == OP_LOAD:
         if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_a[i]) != LV_ADDR:
@@ -508,6 +542,13 @@ end
 
 func lv_mem_ok(g &: Ng, r &: Lv): bool:
     r.checks.clear()
+    r.hchecks.clear()
+    each s0 in r.stores:
+        each hl in r.hoist:
+            r.hchecks.push(g.v_def[g.i_b[s0]])
+            r.hchecks.push(hl)
+        end
+    end
     each s in r.stores:
         sa := g.v_def[g.i_b[s]]
         each ld in r.loads:
@@ -548,6 +589,7 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
         r.cls[g.i_res[rp]] = LV_RED
     end
     r.body.clear()
+    r.hoist.clear()
     if r.shape == 1:
         mut hi := g.b_first[r.h]
         until hi >= 0:
@@ -667,7 +709,7 @@ func lv_uses_ok(g &: Ng, r &: Lv): bool:
                     if not own:
                         ret false
                     end
-                else c != LV_VEC:
+                else c != LV_VEC and c != LV_HOIST:
                     ret false
                 end
             end
@@ -711,7 +753,8 @@ func lv_emit_before(g &: Ng, at: int, op: int, ty: int, a: int, bb: int): int:
     ret v
 end
 
-func lv_bcast(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
+func lv_bcast(g &: Ng, r &: Lv, ck: int, v0: int, vt: int): int:
+    v := lv_hm(r, v0)
     repeat r.bc_s.len() in k:
         if r.bc_s[k] == v and g.v_ty[r.bc_v[k]] == vt:
             ret r.bc_v[k]
@@ -788,8 +831,8 @@ func lv_sext_app(g &: Ng, b: int, v: int): int:
     ret nv
 end
 
-func lv_addr_range(g &: Ng, ck: int, ad: int, s64: int, end64: int, lo &: int, hi &: int):
-    base := lv_emit_before(g, g.b_last[ck], OP_PTRTOINT, T_I64, g.i_a[ad], 0 - 1)
+func lv_addr_range(g &: Ng, r &: Lv, ck: int, ad: int, s64: int, end64: int, lo &: int, hi &: int):
+    base := lv_emit_before(g, g.b_last[ck], OP_PTRTOINT, T_I64, lv_hm(r, g.i_a[ad]), 0 - 1)
     sc := const_int(g, T_I64, g.i_x[ad] as i64)
     d := const_int(g, T_I64, g.i_d[ad])
     a1 := lv_emit_before(g, g.b_last[ck], OP_MUL, T_I64, s64, sc)
@@ -892,14 +935,46 @@ func lv_transform(g &: Ng, r &: Lv):
     if r.sle:
         ce = lv_emit_before(g, ckt, OP_ADD, T_I64, lim64, const_int(g, T_I64, 1 as i64))
     end
+    r.hmap.clear()
+    repeat g.v_kind.len():
+        r.hmap.push(0 - 1)
+    end
+    each hl in r.hoist:
+        nh := ins_new(g, OP_LOAD, g.i_ty[hl])
+        g.i_a[nh] = lv_hm(r, g.i_a[hl])
+        g.i_c[nh] = g.i_c[hl]
+        ins_before(g, ckt, nh)
+        hres := new_res(g, nh)
+        repl_grow(g)
+        until r.hmap.len() >= g.v_kind.len():
+            r.hmap.push(0 - 1)
+        end
+        r.hmap[g.i_res[hl]] = hres
+    end
+    mut hq := 0
+    until hq < r.hchecks.len():
+        mut s_lo := 0 - 1
+        mut s_hi := 0 - 1
+        lv_addr_range(g, r, ck, r.hchecks[hq], s64, ce, s_lo, s_hi)
+        hl2 := r.hchecks[hq + 1]
+        p0 := lv_emit_before(g, ckt, OP_PTRTOINT, T_I64, lv_hm(r, g.i_a[hl2]), 0 - 1)
+        p1 := lv_emit_before(g, ckt, OP_ADD, T_I64, p0, const_int(g, T_I64, tsize(g, g.i_ty[hl2]) as i64))
+        h1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, s_hi, p0)
+        g.i_x[g.v_def[h1]] = CC_ULE
+        h2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, p1, s_lo)
+        g.i_x[g.v_def[h2]] = CC_ULE
+        h3 := lv_emit_before(g, ckt, OP_OR, T_I1, h1, h2)
+        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, h3)
+        hq += 2
+    end
     mut q := 0
     until q < r.checks.len():
         mut a_lo := 0 - 1
         mut a_hi := 0 - 1
         mut b_lo := 0 - 1
         mut b_hi := 0 - 1
-        lv_addr_range(g, ck, r.checks[q], s64, ce, a_lo, a_hi)
-        lv_addr_range(g, ck, r.checks[q + 1], s64, ce, b_lo, b_hi)
+        lv_addr_range(g, r, ck, r.checks[q], s64, ce, a_lo, a_hi)
+        lv_addr_range(g, r, ck, r.checks[q + 1], s64, ce, b_lo, b_hi)
         c1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, a_hi, b_lo)
         g.i_x[g.v_def[c1]] = CC_ULE
         c2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, b_hi, a_lo)
@@ -986,7 +1061,7 @@ func lv_transform(g &: Ng, r &: Lv):
             ins_append(g, vb, nst)
             continue
         end
-        if c == LV_SKIP or c == LV_NARROW:
+        if c == LV_SKIP or c == LV_NARROW or c == LV_HOIST:
             continue
         end
         if c == LV_IDX or c == LV_ADDR:
@@ -999,6 +1074,8 @@ func lv_transform(g &: Ng, r &: Lv):
             g.i_f[ni] = 0
             if g.i_a[ni] >= 0 and lv_in(g, r, g.i_a[ni]) and r.vmap[g.i_a[ni]] >= 0: g.i_a[ni] = r.vmap[g.i_a[ni]] end
             if g.i_b[ni] >= 0 and lv_in(g, r, g.i_b[ni]) and r.vmap[g.i_b[ni]] >= 0: g.i_b[ni] = r.vmap[g.i_b[ni]] end
+            g.i_a[ni] = lv_hm(r, g.i_a[ni])
+            g.i_b[ni] = lv_hm(r, g.i_b[ni])
             r.vmap[res] = new_res(g, ni)
             ins_append(g, vb, ni)
             continue

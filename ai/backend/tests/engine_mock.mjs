@@ -21,6 +21,8 @@ const answerFor = (s) => {
   if (s.prompt.includes("show policy")) return `Policy: agent=${s.agent} system=${s.system.includes("<salam_policy>") ? "salam" : JSON.stringify(s.system)} operator=${s.system.includes("<operator_instructions>")} tools=${JSON.stringify(s.tools ?? null)} reminder=${s.reminder} defanged=${s.prompt.includes("&lt;/caller_instructions>")}`;
   if (s.prompt.includes("<language_check>")) return `Rewritten in Salam (${s.prompt.includes("php") ? "saw php" : "no language"}):\n${code('func main:\n    println "hi"\nend')}`;
   if (s.prompt.includes("write php please")) return `Here is the plugin:\n${foreign("php", 50)}`;
+  if (s.prompt.includes("review then fix please")) return `Here are the fixes:\n${FENCE}\n${Array.from({ length: 50 }, (_, i) => `def run_${i}(self):`).join("\n")}\n${FENCE}`;
+  if (s.prompt.includes("spread python please")) return `One more part:\n${FENCE}python\n${Array.from({ length: 35 }, (_, i) => `value_${i} = compute(${i})`).join("\n")}\n${FENCE}`;
   if (s.prompt.includes("short php please")) return `A tiny helper:\n${foreign("php", 5)}`;
   if (s.files?.length || s.prompt.includes("<attached_file")) {
     const blocks = [...s.prompt.matchAll(/<attached_file name="([^"]+)">/g)].map((m) => m[1]);

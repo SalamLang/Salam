@@ -132,7 +132,8 @@ in Persian and English and starts answering.
 
 `node ai/backend/tests/telegram_flow.mjs` tests it against a running API with
 `ai/backend/tests/telegram_mock.mjs` standing in for Telegram (`AI_TELEGRAM_API`);
-`salam exec ai/backend/tests/tgmd_test.salam` tests the Markdown converter.
+`salam exec ai/backend/tests/tgmd_test.salam` tests the Markdown converter, and
+`salam exec ai/backend/tests/policy_test.salam` tests the language detection of the Salam-only rule.
 
 ### Cloud sandbox, GitHub and Figma
 
@@ -286,14 +287,26 @@ assistant out of it:
   they cannot change the language.
 - Answers that are checked (chats, and API answers that are not streamed) go back
   to the model once more when they hold more than 40 lines of code in another
-  language and less Salam than that, or more than 150 lines of shell. Reading,
-  explaining and porting other code into Salam, shell commands, config files and
-  short snippets all pass.
-- Salam Agent cannot write more than 60 lines of another language's source into
-  one file, or 200 in one conversation, and it cannot run another ecosystem's
+  language and less Salam than that, more than 150 lines of shell, or smaller
+  pieces that add up past 90 lines in one conversation. Code is found in
+  `` ` `` and `~` fences of any length, in unlabeled, `text`, `diff` and `md`
+  fences (by what the lines look like), in shell blocks that feed a program to an
+  interpreter or write a source file, and outside fences. Reading, explaining and
+  porting other code into Salam, shell commands, config files and short snippets
+  pass. The prompt also says that reviewing is a written report: fixes, patches,
+  prototypes and "first step" versions in the original language are not written,
+  even when the user says the port comes later.
+- Salam Agent cannot write more than 40 lines of another language's source into
+  one file, or 120 in one conversation, and it cannot run another ecosystem's
   project generator (`composer create-project`, `dotnet new`, `npx create-*`,
-  `cargo new`, `go mod init` and so on). The refusal goes back to the model as the
-  tool's error, before anything reaches the user's computer.
+  `cargo new`, `go mod init` and so on). Source is recognised by the filename
+  (including notebooks and `Rakefile`), by a `#!` line naming python, node, php
+  and the like, and by the content of files with no known extension. Commands
+  that run a program straight from the command line (`python3 -`, `-c`, `-e`,
+  `-r`, a heredoc into an interpreter, also through `docker`) are refused above
+  10 lines and count against the same 120; so do `sed -i`, `patch` and
+  `git apply` on source files. The refusal goes back to the model as the tool's
+  error, before anything reaches the user's computer.
 
 An admin can change this for a single API key on the admin page: turn the Salam
 prompt off (the key then runs on the `AI_ENGINE_AGENT_RAW` profile with only the

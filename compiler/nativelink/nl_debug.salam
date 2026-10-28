@@ -170,27 +170,75 @@ func dbg_layout_pe(l &: Nl, va0: i64, raw0: i64): i64:
     ret va
 end
 
+func dw_mo_pos(l &: Nl, obj: int, at: bool): Vector<i64>:
+    mut v := Vector {} as Vector<i64>
+    repeat DWB_COUNT in k:
+        s := mo_dsec(l, obj, dw_base_name(k))
+        if s < 0 or l.s_dbg[s] < 0:
+            v.push(0 as i64)
+        else at:
+            v.push(l.dg_base[l.s_dbg[s]] + l.s_addr[s])
+        else:
+            v.push(l.s_addr[s])
+        end
+    end
+    ret v
+end
+
+func has_int(v: Vector<int>, x: int): bool:
+    each y in v:
+        if y == x:
+            ret true
+        end
+    end
+    ret false
+end
+
 func dbg_collect_mo(l &: Nl):
-    mut obj := 0 - 1
+    mut objs := Vector {} as Vector<int>
     repeat l.s_obj.len() in s:
         l.s_dbg.push(0 - 1)
-        if obj < 0 and l.s_off[s] > (0 as i64) and name_is(l, l.s_name[s], "__DWARF,__debug_info"):
-            obj = l.s_obj[s]
+        o := l.s_obj[s]
+        if l.s_off[s] > (0 as i64) and name_is(l, l.s_name[s], "__DWARF,__debug_info") and not has_int(objs, o):
+            objs.push(o)
         end
     end
-    if obj < 0:
+    if objs.len() == 0:
         ret
     end
-    repeat l.s_obj.len() in s2:
-        if l.s_obj[s2] != obj or l.s_off[s2] <= (0 as i64) or not name_starts(l, l.s_name[s2], "__DWARF,__debug_"):
-            continue
-        end
-        k := dbg_out_index(l, l.s_name[s2])
-        off := align_to(l.dg_size[k], l.s_align[s2])
-        l.s_addr[s2] = off
-        l.s_dbg[s2] = k
-        l.dg_size[k] = off + l.s_size[s2]
+    mut zero := Vector {} as Vector<i64>
+    repeat DWB_COUNT:
+        zero.push(0 as i64)
     end
+    l.dg_mobj.clear()
+    each o2 in objs:
+        si := mo_dsec(l, o2, "__DWARF,__debug_info")
+        ab := mo_dsec(l, o2, "__DWARF,__debug_abbrev")
+        if ab >= 0 and dw_info(fptr(l, l.o_file[o2]), l.s_off[si], l.s_size[si], l.s_off[ab], zero, false):
+            l.dg_mobj.push(o2)
+        end
+    end
+    if l.dg_mobj.len() == 0:
+        l.dg_mobj.push(objs[0])
+    end
+    multi := l.dg_mobj.len() > 1
+    each o3 in l.dg_mobj:
+        repeat l.s_obj.len() in s2:
+            if l.s_obj[s2] != o3 or l.s_off[s2] <= (0 as i64) or not name_starts(l, l.s_name[s2], "__DWARF,__debug_"):
+                continue
+            end
+            if multi and name_is(l, l.s_name[s2], "__DWARF,__debug_names"):
+                continue
+            end
+            k := dbg_out_index(l, l.s_name[s2])
+            off := align_to(l.dg_size[k], l.s_align[s2])
+            l.s_addr[s2] = off
+            l.s_dbg[s2] = k
+            l.dg_size[k] = off + l.s_size[s2]
+        end
+    end
+    objs.free()
+    zero.free()
 end
 
 func dbg_build_mo(l &: Nl):
@@ -235,5 +283,30 @@ func dbg_build_mo(l &: Nl):
                 wr32(buf, place, v)
             end
         end
+    end
+    if l.dg_mobj.len() < 2:
+        ret
+    end
+    each o in l.dg_mobj:
+        base := dw_mo_pos(l, o, false)
+        pos := dw_mo_pos(l, o, true)
+        si := mo_dsec(l, o, "__DWARF,__debug_info")
+        _ok := dw_info(buf, pos[DWB_INFO], l.s_size[si], pos[DWB_ABBREV], base, true)
+        so := mo_dsec(l, o, "__DWARF,__debug_str_offs")
+        if so >= 0:
+            dw_stroff(buf, pos[DWB_STROFF], l.s_size[so], base)
+        end
+        sl := mo_dsec(l, o, "__DWARF,__debug_line")
+        if sl >= 0:
+            dw_line(buf, pos[DWB_LINE], l.s_size[sl], base)
+        end
+        sa := mo_dsec(l, o, "__DWARF,__debug_aranges")
+        if sa >= 0:
+            if l.s_dbg[sa] >= 0:
+                dw_aranges(buf, l.dg_base[l.s_dbg[sa]] + l.s_addr[sa], l.s_size[sa], base)
+            end
+        end
+        base.free()
+        pos.free()
     end
 end

@@ -39,6 +39,8 @@ mut ROUNDS := HashMap {} as HashMap<str, int>
 mut VERIFYING := HashMap {} as HashMap<str, str>
 mut ASKED := HashMap {} as HashMap<str, i64>
 mut RELAXED := HashMap {} as HashMap<str, str>
+mut TALLY := HashMap {} as HashMap<str, int>
+mut TALLIED := HashMap {} as HashMap<str, str>
 
 func check_due(sid: str): bool:
     _l := sync.Lock(CHECK_LOCK)
@@ -98,6 +100,23 @@ func relaxed(sid: str): bool:
     ret v
 end
 
+func tally(sid: str, text: str, lines: int): int:
+    mark := text.len() + ":" + text.substr(0, text.len() < 80 ? text.len() : 80)
+    _l := sync.Lock(CHECK_LOCK)
+    if TALLY.size() > 5000:
+        TALLY = HashMap {} as HashMap<str, int>
+        TALLIED = HashMap {} as HashMap<str, str>
+    end
+    mut total := TALLY.has(sid) ? TALLY.get(sid) : 0
+    if not TALLIED.has(sid) or TALLIED.get(sid) != mark:
+        total += lines
+        TALLY.put(sid, total)
+        TALLIED.put(sid, mark)
+    end
+    _u := sync.Unlock(CHECK_LOCK)
+    ret total
+end
+
 func verify(sid: str, text: str): bool:
     _l := sync.Lock(CHECK_LOCK)
     round := ROUNDS.has(sid) ? ROUNDS.get(sid) : 0
@@ -109,7 +128,15 @@ func verify(sid: str, text: str): bool:
     VERIFYING.put(sid, "1")
     _u := sync.Unlock(CHECK_LOCK)
     mut ask := ""
-    foreign := relaxed(sid) ? "" : aipolicy.Foreign(text)
+    mut foreign := ""
+    if not relaxed(sid):
+        foreign = aipolicy.Foreign(text)
+        lines := aipolicy.ForeignLines(text)
+        total := tally(sid, text, lines)
+        if foreign.len() == 0 and aipolicy.Spread(total, lines):
+            foreign = "pieces of other-language code spread over this conversation (" + total + " lines in all)"
+        end
+    end
     if foreign.len() > 0:
         ask = aipolicy.LanguagePrompt(foreign)
     else:
@@ -179,6 +206,7 @@ pub func Forget(sid: str):
     _o := ROUNDS.remove(sid)
     _a := ASKED.remove(sid)
     _x := RELAXED.remove(sid)
+    _t := TALLIED.remove(sid)
     _u := sync.Unlock(CHECK_LOCK)
 end
 

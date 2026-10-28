@@ -575,10 +575,16 @@ def switch_lint(t, exe):
             t.check("switch lint is off by default", not hits, json.dumps(diags)[:300])
         else:
             title = "Rewrite as a 'switch' statement"
-            t.check("switch lint reports W145 when on", len(hits) == 1, json.dumps(diags)[:300])
+            t.check(
+                "switch lint reports W145 when on",
+                len(hits) == 1,
+                json.dumps(diags)[:300],
+            )
             t.check(
                 "switch lint offers the rewrite",
-                title in got and "switch ty:" in got[title] and "        7:\n" in got[title],
+                title in got
+                and "switch ty:" in got[title]
+                and "        7:\n" in got[title],
                 str(sorted(got)),
             )
         s.request("shutdown", None)

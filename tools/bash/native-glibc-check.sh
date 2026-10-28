@@ -17,6 +17,7 @@ RUNNER=$4
 shift 4
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 fail=0
+export SALAM_GLIBC_SYSROOT="$LIBC"
 SALAM_LINKER=builtin sh "$ROOT/tools/bash/native-cross-check.sh" "$SALAM" "$ARCH-linux-gnu" "$RUNNER -L $LIBC" "$@" || fail=1
 if ! command -v ld.lld >/dev/null 2>&1; then
     echo "native glibc check: no ld.lld, the shared library case was skipped"
@@ -51,7 +52,10 @@ if ! SALAM_LINKER=builtin "$SALAM" build usefoo.salam --backend=native --release
     exit 1
 fi
 # shellcheck disable=SC2086
-got=$($RUNNER -L "$LIBC" -E LD_LIBRARY_PATH="$work" ./usefoo 2>&1)
+if ! got=$($RUNNER -L "$LIBC" -E LD_LIBRARY_PATH="$work" ./usefoo 2>&1); then
+    echo "FAIL shared library: the program exited with an error: $got"
+    exit 1
+fi
 if [ "$got" != "43
 70" ]; then
     echo "FAIL shared library: got $got"

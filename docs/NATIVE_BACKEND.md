@@ -271,6 +271,18 @@ remainder next to its quotient is a `mul` and `sub` instead of a second
 divide. Byte and halfword atomics run `lr.w`/`sc.w` on the containing word
 with a mask.
 
+After a function is encoded, every instruction that has an RV64C form
+becomes 2 bytes (`c.addi`, `c.li`, `c.mv`, `c.add`, the register-pair ALU
+ops, `sp`- and register-based loads and stores, `c.lui`, `c.jr`/`c.jalr`,
+`c.addi16sp`, `c.addi4spn`). Branches and jumps stay 4 bytes and are
+re-encoded for the shorter distances, which only shrink, so none goes out of
+range. An instruction with a relocation keeps 4 bytes, as does the `jalr`
+of an `auipc`/`jalr` call pair and everything from an `lr` to its `sc`
+(the spec keeps compressed code out of constrained LR/SC loops). Debug rows,
+variable ranges and CFI move with the code; the CIE's code alignment is 1
+and the object's `e_flags` gain `EF_RISCV_RVC`. The compiler built for
+riscv64 is 15% smaller this way. `SALAM_NG_OFF=rvc` turns it off.
+
 Built with the built-in linker against a musl sysroot and run under
 qemu-riscv64, the test groups listed for i686 match their expected output
 with the same exceptions.
@@ -673,7 +685,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

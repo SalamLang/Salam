@@ -31,8 +31,11 @@ shift 3
 TEST_GROUPS=${*:-basics features types data games match switch llvm general stdlib}
 DEFAULT_SKIP="general/condcomp_toplevel general/condcomp_pruned_lints general/const_define general/preproc
 general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_*
-general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64
 llvm/ll_div_zero_runtime llvm/ll_mod_zero_compound stdlib/os_platform_demo"
+case "$TRIPLE" in
+aarch64* | arm64* | riscv*) ;;
+*) DEFAULT_SKIP="$DEFAULT_SKIP general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64" ;;
+esac
 case "$TRIPLE" in
 i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos" ;;
 esac

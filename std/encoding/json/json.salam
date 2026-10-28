@@ -34,8 +34,7 @@ pure func _match_at(hp: i8*, hi: int, np: i8*, n: int): bool:
     ret true
 end
 
-pure func _jws(s: str, i: int): int:
-    l := str.ByteLen(s)
+pure func _jws_n(s: str, l: int, i: int): int:
     bp := _bp(s)
     mut p := i
     until p < l:
@@ -48,8 +47,9 @@ pure func _jws(s: str, i: int): int:
     ret p
 end
 
-pure func _jstr(s: str, i: int): int:
-    l := str.ByteLen(s)
+pure func _jws(s: str, i: int): int: ret _jws_n(s, str.ByteLen(s), i) end
+
+pure func _jstr_n(s: str, l: int, i: int): int:
     bp := _bp(s)
     if i >= l or _ub(bp, i) != 34: ret -1 end
     mut p := i + 1
@@ -65,8 +65,7 @@ pure func _jstr(s: str, i: int): int:
     ret -1
 end
 
-pure func _jnum(s: str, i: int): int:
-    l := str.ByteLen(s)
+pure func _jnum_n(s: str, l: int, i: int): int:
     bp := _bp(s)
     mut p := i
     if p < l and _ub(bp, p) == 45: p = p + 1 end
@@ -97,25 +96,24 @@ pure func _jnum(s: str, i: int): int:
     ret p
 end
 
-pure func _jval(s: str, i: int): int:
-    p0 := _jws(s, i)
-    l := str.ByteLen(s)
+pure func _jval_n(s: str, l: int, i: int): int:
+    p0 := _jws_n(s, l, i)
     if p0 >= l: ret -1 end
     bp := _bp(s)
     c := _ub(bp, p0)
-    if c == 34: ret _jstr(s, p0)
+    if c == 34: ret _jstr_n(s, l, p0)
     else c == 123:
-        mut q := _jws(s, p0 + 1)
+        mut q := _jws_n(s, l, p0 + 1)
         if q < l and _ub(bp, q) == 125: ret q + 1 end
         until q < l:
-            q = _jws(s, q)
-            qk := _jstr(s, q)
+            q = _jws_n(s, l, q)
+            qk := _jstr_n(s, l, q)
             if qk < 0: ret -1 end
-            q = _jws(s, qk)
+            q = _jws_n(s, l, qk)
             if q >= l or _ub(bp, q) != 58: ret -1 end
-            q = _jval(s, q + 1)
+            q = _jval_n(s, l, q + 1)
             if q < 0: ret -1 end
-            q = _jws(s, q)
+            q = _jws_n(s, l, q)
             if q < l and _ub(bp, q) == 44:
                 q += 1
                 continue
@@ -124,12 +122,12 @@ pure func _jval(s: str, i: int): int:
             ret -1
         end
     else c == 91:
-        mut q := _jws(s, p0 + 1)
+        mut q := _jws_n(s, l, p0 + 1)
         if q < l and _ub(bp, q) == 93: ret q + 1 end
         until q < l:
-            q = _jval(s, q)
+            q = _jval_n(s, l, q)
             if q < 0: ret -1 end
-            q = _jws(s, q)
+            q = _jws_n(s, l, q)
             if q < l and _ub(bp, q) == 44:
                 q += 1
                 continue
@@ -141,9 +139,17 @@ pure func _jval(s: str, i: int): int:
     else p0 + 5 <= l and _match_at(bp, p0, _bp("false"), 5): ret p0 + 5
     else p0 + 4 <= l and _match_at(bp, p0, _bp("null"), 4): ret p0 + 4
     else:
-        ret _jnum(s, p0)
+        ret _jnum_n(s, l, p0)
     end
     ret -1
+end
+
+func _pp_put(sb &: str.StringBuilder, bp: i8*, lo: int, hi: int):
+    mut k := lo
+    until k < hi:
+        str.BufAppendChar(sb, bp[k] as int)
+        k += 1
+    end
 end
 
 func _pp_indent(sb &: str.StringBuilder, unit: str, depth: int):
@@ -152,26 +158,24 @@ func _pp_indent(sb &: str.StringBuilder, unit: str, depth: int):
     end
 end
 
-func _pp_val(s: str, i: int, sb &: str.StringBuilder, unit: str, depth: int): int:
-    p0 := _jws(s, i)
-    l := str.ByteLen(s)
+func _pp_val_n(s: str, l: int, i: int, sb &: str.StringBuilder, unit: str, depth: int): int:
+    p0 := _jws_n(s, l, i)
     if p0 >= l: ret -1 end
     bp := _bp(s)
     c := _ub(bp, p0)
-    if c == 123: ret _pp_obj(s, p0, sb, unit, depth)
-    else c == 91: ret _pp_arr(s, p0, sb, unit, depth)
+    if c == 123: ret _pp_obj(s, l, p0, sb, unit, depth)
+    else c == 91: ret _pp_arr(s, l, p0, sb, unit, depth)
     else:
-        e := _jval(s, p0)
+        e := _jval_n(s, l, p0)
         if e < 0: ret -1 end
-        str.BufAppend(sb, str.ByteSub(s, p0, e - p0))
+        _pp_put(sb, bp, p0, e)
         ret e
     end
 end
 
-func _pp_obj(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
-    l := str.ByteLen(s)
+func _pp_obj(s: str, l: int, p0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
     bp := _bp(s)
-    mut q := _jws(s, p0 + 1)
+    mut q := _jws_n(s, l, p0 + 1)
     if q < l and _ub(bp, q) == 125:
         str.BufAppend(sb, "{}")
         ret q + 1
@@ -180,16 +184,16 @@ func _pp_obj(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): i
     str.BufAppendChar(sb, 10)
     until q < l:
         _pp_indent(sb, unit, depth + 1)
-        q = _jws(s, q)
-        qk := _jstr(s, q)
+        q = _jws_n(s, l, q)
+        qk := _jstr_n(s, l, q)
         if qk < 0: ret -1 end
-        str.BufAppend(sb, str.ByteSub(s, q, qk - q))
-        q = _jws(s, qk)
+        _pp_put(sb, bp, q, qk)
+        q = _jws_n(s, l, qk)
         if q >= l or _ub(bp, q) != 58: ret -1 end
         str.BufAppend(sb, ": ")
-        q = _pp_val(s, q + 1, sb, unit, depth + 1)
+        q = _pp_val_n(s, l, q + 1, sb, unit, depth + 1)
         if q < 0: ret -1 end
-        q = _jws(s, q)
+        q = _jws_n(s, l, q)
         if q < l and _ub(bp, q) == 44:
             str.BufAppendChar(sb, 44)
             str.BufAppendChar(sb, 10)
@@ -207,10 +211,9 @@ func _pp_obj(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): i
     ret -1
 end
 
-func _pp_arr(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
-    l := str.ByteLen(s)
+func _pp_arr(s: str, l: int, p0: int, sb &: str.StringBuilder, unit: str, depth: int): int:
     bp := _bp(s)
-    mut q := _jws(s, p0 + 1)
+    mut q := _jws_n(s, l, p0 + 1)
     if q < l and _ub(bp, q) == 93:
         str.BufAppend(sb, "[]")
         ret q + 1
@@ -219,9 +222,9 @@ func _pp_arr(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): i
     str.BufAppendChar(sb, 10)
     until q < l:
         _pp_indent(sb, unit, depth + 1)
-        q = _pp_val(s, q, sb, unit, depth + 1)
+        q = _pp_val_n(s, l, q, sb, unit, depth + 1)
         if q < 0: ret -1 end
-        q = _jws(s, q)
+        q = _jws_n(s, l, q)
         if q < l and _ub(bp, q) == 44:
             str.BufAppendChar(sb, 44)
             str.BufAppendChar(sb, 10)
@@ -240,26 +243,26 @@ func _pp_arr(s: str, p0: int, sb &: str.StringBuilder, unit: str, depth: int): i
 end
 
 func _get_raw(text: str, key: str): str:
-    start := _jws(text, 0)
     l := str.ByteLen(text)
+    start := _jws_n(text, l, 0)
     bp := _bp(text)
     if start >= l or _ub(bp, start) != 123: ret "" end
     kl := str.ByteLen(key)
     kp := _bp(key)
     mut p := start + 1
     until p < l:
-        p = _jws(text, p)
+        p = _jws_n(text, l, p)
         if p >= l or _ub(bp, p) != 34: ret "" end
-        ke := _jstr(text, p)
+        ke := _jstr_n(text, l, p)
         if ke < 0: ret "" end
         is_key := ke - p - 2 == kl and _match_at(bp, p + 1, kp, kl)
-        p = _jws(text, ke)
+        p = _jws_n(text, l, ke)
         if p >= l or _ub(bp, p) != 58: ret "" end
-        vs := _jws(text, p + 1)
-        ve := _jval(text, vs)
+        vs := _jws_n(text, l, p + 1)
+        ve := _jval_n(text, l, vs)
         if ve < 0: ret "" end
-        if is_key: ret str.ByteSub(text, vs, ve - vs) end
-        p = _jws(text, ve)
+        if is_key: ret __jdslice(text, vs, vs + ve - vs) end
+        p = _jws_n(text, l, ve)
         if p < l and _ub(bp, p) == 44:
             p += 1
             continue
@@ -273,33 +276,34 @@ end
 @fa "معتبر"
 pub pure func Valid(text: str): bool:
     if text.len() == 0: ret false end
-    e := _jval(text, 0)
+    l := str.ByteLen(text)
+    e := _jval_n(text, l, 0)
     if e < 0: ret false end
-    ret _jws(text, e) == str.ByteLen(text)
+    ret _jws_n(text, l, e) == l
 end
 
 @en "Get"
 @fa "دریافت"
 pub func Get(text: str, key: str): str:
     if text.len() == 0 or key.len() == 0: ret "" end
-    start := _jws(text, 0)
     l := str.ByteLen(text)
+    start := _jws_n(text, l, 0)
     bp := _bp(text)
     if start >= l or _ub(bp, start) != 123: ret "" end
     kl := str.ByteLen(key)
     kp := _bp(key)
     mut p := start + 1
     until p < l:
-        p = _jws(text, p)
+        p = _jws_n(text, l, p)
         if p >= l or _ub(bp, p) != 34: ret "" end
-        ke := _jstr(text, p)
+        ke := _jstr_n(text, l, p)
         if ke < 0: ret "" end
         this_kl := ke - p - 2
         is_key := this_kl == kl and _match_at(bp, p + 1, kp, kl)
-        p = _jws(text, ke)
+        p = _jws_n(text, l, ke)
         if p >= l or _ub(bp, p) != 58: ret "" end
-        vs := _jws(text, p + 1)
-        ve := _jval(text, vs)
+        vs := _jws_n(text, l, p + 1)
+        ve := _jval_n(text, l, vs)
         if ve < 0: ret "" end
         if is_key:
             if vs < l and _ub(bp, vs) == 34:
@@ -308,11 +312,11 @@ pub func Get(text: str, key: str): str:
                 if sep >= 0:
                     ret dec
                 end
-                ret str.ByteSub(text, vs + 1, ve - vs - 2)
+                ret __jdslice(text, vs + 1, vs + 1 + ve - vs - 2)
             end
-            ret str.ByteSub(text, vs, ve - vs)
+            ret __jdslice(text, vs, vs + ve - vs)
         end
-        p = _jws(text, ve)
+        p = _jws_n(text, l, ve)
         if p < l and _ub(bp, p) == 44:
             p += 1
             continue
@@ -488,7 +492,7 @@ end
 pub func IndentWith(text: str, unit: str): str:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    e := _pp_val(text, 0, sb, unit, 0)
+    e := _pp_val_n(text, str.ByteLen(text), 0, sb, unit, 0)
     if e < 0: ret text end
     out := str.BufStr(sb)
     ret out
@@ -517,26 +521,26 @@ end
 pub func Keys(text: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     if text.len() == 0: ret out end
-    start := _jws(text, 0)
     l := str.ByteLen(text)
+    start := _jws_n(text, l, 0)
     bp := _bp(text)
     if start >= l or _ub(bp, start) != 123: ret out end
-    mut p := _jws(text, start + 1)
+    mut p := _jws_n(text, l, start + 1)
     if p < l and _ub(bp, p) == 125: ret out end
     until p < l:
-        p = _jws(text, p)
+        p = _jws_n(text, l, p)
         if p >= l or _ub(bp, p) != 34: ret out end
-        ke := _jstr(text, p)
+        ke := _jstr_n(text, l, p)
         if ke < 0: ret out end
         mut sep := 0
         dec := __jdgstr(text, p, sep)
-        out.push(sep >= 0 ? dec : str.ByteSub(text, p + 1, ke - p - 2))
-        p = _jws(text, ke)
+        out.push(sep >= 0 ? dec : __jdslice(text, p + 1, p + 1 + ke - p - 2))
+        p = _jws_n(text, l, ke)
         if p >= l or _ub(bp, p) != 58: ret out end
-        vs := _jws(text, p + 1)
-        ve := _jval(text, vs)
+        vs := _jws_n(text, l, p + 1)
+        ve := _jval_n(text, l, vs)
         if ve < 0: ret out end
-        p = _jws(text, ve)
+        p = _jws_n(text, l, ve)
         if p < l and _ub(bp, p) == 44:
             p += 1
             continue
@@ -551,18 +555,18 @@ end
 pub func Items(text: str): Vector<str>:
     mut out := Vector {} as Vector<str>
     if text.len() == 0: ret out end
-    start := _jws(text, 0)
     l := str.ByteLen(text)
+    start := _jws_n(text, l, 0)
     bp := _bp(text)
     if start >= l or _ub(bp, start) != 91: ret out end
-    mut p := _jws(text, start + 1)
+    mut p := _jws_n(text, l, start + 1)
     if p < l and _ub(bp, p) == 93: ret out end
     until p < l:
-        vs := _jws(text, p)
-        ve := _jval(text, vs)
+        vs := _jws_n(text, l, p)
+        ve := _jval_n(text, l, vs)
         if ve < 0: ret out end
-        out.push(str.ByteSub(text, vs, ve - vs))
-        p = _jws(text, ve)
+        out.push(__jdslice(text, vs, vs + ve - vs))
+        p = _jws_n(text, l, ve)
         if p < l and _ub(bp, p) == 44:
             p += 1
             continue

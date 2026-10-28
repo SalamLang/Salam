@@ -830,7 +830,12 @@ Structs, enums, arrays and pointers get type records in `.debug$T`
 (a pointer to a struct goes through a forward reference, so self-referential
 structs work), and a struct local split into registers gets one
 `S_DEFRANGE_SUBFIELD_REGISTER` per field, or `S_DEFRANGE_REGISTER_REL` with
-its field offset when that field is on the stack.
+its field offset when that field is on the stack. Each inlined call gets an
+`S_INLINESITE` (with an `LF_FUNC_ID` for the callee and binary annotations
+for its code ranges and lines, the call-site line of any call inlined
+further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
+and the function's own line table gives the outermost call site for inlined
+code, so a debugger shows the inlined frames and steps over them as calls.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 
@@ -859,8 +864,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- CodeView does not describe inlined functions (`S_INLINESITE`) or FPO
-  frame data, so on i686 a debugger walks the stack by frame pointer only.
+- CodeView carries no FPO frame data, so on i686 a debugger walks the
+  stack by frame pointer only.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into

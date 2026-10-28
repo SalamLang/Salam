@@ -1239,6 +1239,35 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
     ret true
 end
 
+func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, pending_len &: int, served &: int): bool:
+    mut owned := false
+    mut oversize := 0
+    mut req_len := 0
+    req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
+    if oversize == 431:
+        _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret false
+    end
+    if oversize != 0:
+        _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        ret false
+    end
+    if req_len == 0: ret false end
+    te_end := str.IndexFrom(req, "\r\n\r\n", 0)
+    if te_end >= 0 and (_has_transfer_encoding(req, te_end + 4) or _bad_content_length(req, te_end + 4)):
+        _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        if owned: mem.Free(req as void *) end
+        ret false
+    end
+    mut keep := true
+    ok := _serve_request(slot, fd, ctx, req, req_len, keep)
+    if owned: mem.Free(req as void *) end
+    if ok == false: ret false end
+    served += 1
+    if keep == false or served >= _keepalive_max_reqs: ret false end
+    ret true
+end
+
 func _web_conn_handler(packed: i64):
     slot := _srv_slot_of(packed)
     fd := _srv_fd_of(packed)
@@ -1250,32 +1279,8 @@ func _web_conn_handler(packed: i64):
     mut pending := ""
     mut pending_len := 0
     mut served := 0
-    until 1 == 1:
-        mut owned := false
-        mut oversize := 0
-        mut req_len := 0
-        req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
-        if oversize == 431:
-            _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            break
-        end
-        if oversize != 0:
-            _net_send_all(fd, "HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            break
-        end
-        if req_len == 0: break end
-        te_end := str.IndexFrom(req, "\r\n\r\n", 0)
-        if te_end >= 0 and (_has_transfer_encoding(req, te_end + 4) or _bad_content_length(req, te_end + 4)):
-            _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            if owned: mem.Free(req as void *) end
-            break
-        end
-        mut keep := true
-        ok := _serve_request(slot, fd, ctx, req, req_len, keep)
-        if owned: mem.Free(req as void *) end
-        if ok == false: break end
-        served += 1
-        if keep == false or served >= _keepalive_max_reqs: break end
+    until _conn_step(slot, fd, ctx, scratch, pending, pending_len, served):
+        continue
     end
     if pending_len > 0: mem.Free(pending as void *) end
     salam_ctx_free(ctx)

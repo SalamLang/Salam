@@ -10,8 +10,9 @@
 # objdump is needed, since llvm-dwarfdump --verify does not finish on i686
 # PE files linked against the mingw-w64 CRT. With the built-in linker the -g
 # build also gets a PDB: when llvm-pdbutil is there, every part of it must
-# parse, and llvm-symbolizer must find walk's file and line through the PDB
-# alone once the DWARF sections are stripped.
+# parse, the Pt struct must be in its type stream with area's p typed as it,
+# and llvm-symbolizer must find walk's file and line through the PDB alone
+# once the DWARF sections are stripped.
 #
 # Usage: tools/bash/native-windows-debug-check.sh <salam>
 
@@ -136,6 +137,11 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
             done
             if [ -n "$perr" ]; then
                 bad "$tag (llvm-pdbutil cannot read the PDB, $perr)"
+                continue
+            fi
+            if ! "$pdbutil" dump -types "$d/dbg.pdb" | grep -q 'LF_STRUCTURE .*`Pt`' ||
+                ! "$pdbutil" dump -symbols "$d/dbg.pdb" | grep -A1 'S_LOCAL .*`p`' | grep -q '(Pt)'; then
+                bad "$tag (the PDB has no Pt type, or area's p is not typed Pt)"
                 continue
             fi
             if [ -n "$symbolizer" ]; then

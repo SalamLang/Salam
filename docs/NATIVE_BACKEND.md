@@ -701,8 +701,11 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   backend.
 - `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
   (integer code with loops and vectors, vector kernels over `int`, `u8`,
-  `i16` and `i64`, clamped `f64` code, and calls with eight arguments and a
-  struct passed by reference) that are well defined by construction (values are kept small with a prime
+  `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
+  struct passed by reference, string building, slicing and UTF-8 walks,
+  generic functions and a generic struct over several element types, and
+  lambdas with captures called directly, from a Vector and through `dyn`)
+  that are well defined by construction (values are kept small with a prime
   modulus, divisors and shift counts are offset or masked, indices are
   wrapped into range), builds each with the reference backend and the native
   backend, and compares their output. `--count`, `--seed`, `--target` with

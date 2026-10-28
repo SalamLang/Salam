@@ -1,6 +1,7 @@
 package nativegen
 
 const IF_W8 := 16384
+const VOP_MUL32 := 0x1F4
 
 func vop(g &: Ng, opc: int, dst: int, src: int):
     m := e_rr(g, M_VOP_RR, 8, dst, src)
@@ -48,6 +49,37 @@ func isel_vint_bin(g &: Ng, i: int):
     r2 := vcopy(g, a)
     vop(g, vint_opc(op, q), r2, use_reg(g, b))
     set_res(g, i, r2)
+end
+
+func vshr64(g &: Ng, r: int, k: int):
+    s := mi_new(g, M_VSHI, 16)
+    g.mc.r0[s] = r
+    g.mc.cc[s] = 0x73
+    g.mc.sz2[s] = 2
+    g.mc.imm[s] = k as i64
+end
+
+func isel_vmul32(g &: Ng, i: int):
+    b := use_reg(g, g.i_b[i])
+    lo := vcopy(g, g.i_a[i])
+    if g.arch == NG_ARCH_A64:
+        vop(g, VOP_MUL32, lo, b)
+        set_res(g, i, lo)
+        ret
+    end
+    vop(g, 0xF4, lo, b)
+    hi := vcopy(g, g.i_a[i])
+    vshr64(g, hi, 32)
+    bh := wide_reg(g)
+    _c := e_copy(g, bh, b)
+    vshr64(g, bh, 32)
+    vop(g, 0xF4, hi, bh)
+    s1 := e_rr(g, M_PSHUFD, 16, lo, lo)
+    g.mc.imm[s1] = 8 as i64
+    s2 := e_rr(g, M_PSHUFD, 16, hi, hi)
+    g.mc.imm[s2] = 8 as i64
+    vop(g, 0x62, lo, hi)
+    set_res(g, i, lo)
 end
 
 func vnot(g &: Ng, r: int):

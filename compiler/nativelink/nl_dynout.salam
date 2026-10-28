@@ -147,6 +147,48 @@ func elf_hash(l &: Nl, id: int): i64:
     ret h & (0xffffffff as i64)
 end
 
+func dr_relative(l &: Nl): int:
+    ret l.mach == EM_AARCH64 ? 1027 : 8
+end
+
+func dr_globdat(l &: Nl): int:
+    ret l.mach == EM_AARCH64 ? 1025 : 6
+end
+
+func dr_abs64(l &: Nl): int:
+    ret l.mach == EM_AARCH64 ? 257 : 1
+end
+
+func dyn_kind(l &: Nl, ty: int): int:
+    if l.mach == EM_AARCH64:
+        if ty == 282 or ty == 283: ret 1 end
+        if ty == 311 or ty == 312: ret 2 end
+        if ty == 257: ret 3 end
+        if ty == 258 or ty == 259: ret 4 end
+        ret 0
+    end
+    if ty == 2 or ty == 4: ret 1 end
+    if ty == 9 or ty == 41 or ty == 42: ret 2 end
+    if ty == 1: ret 3 end
+    if ty == 10 or ty == 11: ret 4 end
+    ret 0
+end
+
+func dyn_got_relaxable(l &: Nl, s: int, r: int): bool:
+    if l.mach == EM_AARCH64:
+        ret false
+    end
+    ret got_relaxable(l, s, r)
+end
+
+func a64_plt(buf: u8*, at: i64, pa: i64, slot: i64):
+    pg := (page4k(slot) - page4k(pa)) >> (12 as i64)
+    wr32(buf, at, (0x90000010 as i64) | ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+    wr32(buf, at + (4 as i64), (0xF9400211 as i64) | (((slot & (0xFFF as i64)) >> (3 as i64)) << (10 as i64)))
+    wr32(buf, at + (8 as i64), (0x91000210 as i64) | ((slot & (0xFFF as i64)) << (10 as i64)))
+    wr32(buf, at + (12 as i64), 0xD61F0220 as i64)
+end
+
 func dyn_prepare(l &: Nl):
     repeat l.s_obj.len() in s:
         if not l.s_live[s] or l.s_oc[s] == OC_NONE:
@@ -158,16 +200,17 @@ func dyn_prepare(l &: Nl):
             ty := l.r_type[r]
             os := l.r_sym[r]
             g := shared_g(l, os)
+            dk := dyn_kind(l, ty)
             if g >= 0:
-                if ty == 2 or ty == 4:
+                if dk == 1:
                     if l.g_stype[g] == 1:
                         nl_fail(l, "the built-in linker does not make copy relocations; data symbol '" + name_of(l, l.g_name[g]) + "' from a shared library is used directly at " + reloc_where(l, s, r))
                         ret
                     end
                     need_plt(l, g)
-                else ty == 9 or ty == 41 or ty == 42:
+                else dk == 2:
                     need_got(l, g)
-                else ty == 1:
+                else dk == 3:
                     need_dyn(l, g)
                     l.stat_dynrel += 1
                 else:
@@ -175,17 +218,17 @@ func dyn_prepare(l &: Nl):
                     ret
                 end
             else:
-                if ty == 1:
+                if dk == 3:
                     if is_addr_sym(l, os):
                         l.stat_dynrel += 1
                     end
-                else ty == 10 or ty == 11:
+                else dk == 4:
                     if is_addr_sym(l, os):
                         nl_fail(l, "a 32-bit absolute address cannot be used in a position-independent executable at " + reloc_where(l, s, r))
                         ret
                     end
-                else ty == 9 or ty == 41 or ty == 42:
-                    if not got_relaxable(l, s, r):
+                else dk == 2:
+                    if not dyn_got_relaxable(l, s, r):
                         g2 := l.os_glob[os]
                         if g2 < 0:
                             nl_fail(l, l.o_label[l.s_obj[s]] + ": GOT reference to a local symbol is not supported")
@@ -349,8 +392,10 @@ func apply_dyn(l &: Nl):
     repeat l.file_size in z:
         buf[z] = 0 as u8
     end
-    repeat l.seg_fsz[1] in zz:
-        buf[l.seg_fpos[1] + zz] = 0x90 as u8
+    if l.mach == EM_X86_64:
+        repeat l.seg_fsz[1] in zz:
+            buf[l.seg_fpos[1] + zz] = 0x90 as u8
+        end
     end
     repeat l.s_obj.len() in s:
         if not l.s_live[s] or l.s_fpos[s] < (0 as i64):
@@ -378,6 +423,12 @@ func apply_dyn(l &: Nl):
             g := shared_g(l, os)
             sv := target_addr(l, os)
             if ty == 0:
+                continue
+            end
+            if l.mach == EM_AARCH64:
+                if not apply_dyn_a64(l, buf, s2, r, ty, place, pc, a, sv, os, g):
+                    ret
+                end
                 continue
             end
             if ty == 1:
@@ -422,10 +473,10 @@ func apply_dyn(l &: Nl):
         slot := l.ds_addr[DS_GOT] + ((8 * q) as i64)
         sf := l.ds_off[DS_GOT] + ((8 * q) as i64)
         if l.g_state[g3] == SY_SHARED:
-            rela_add(l, slot, 6, l.g_dyn[g3], 0 as i64)
+            rela_add(l, slot, dr_globdat(l), l.g_dyn[g3], 0 as i64)
         else is_addr_g(l, g3):
             v3 := sym_addr_g(l, g3)
-            rela_add(l, slot, 8, 0, v3)
+            rela_add(l, slot, dr_relative(l), 0, v3)
             wr64(buf, sf, v3)
         else:
             wr64(buf, sf, sym_addr_g(l, g3))
@@ -436,6 +487,10 @@ func apply_dyn(l &: Nl):
         at := l.ds_off[DS_PLT] + ((16 * q2) as i64)
         pa := l.ds_addr[DS_PLT] + ((16 * q2) as i64)
         slot2 := l.ds_addr[DS_GOT] + ((8 * l.g_got[g4]) as i64)
+        if l.mach == EM_AARCH64:
+            a64_plt(buf, at, pa, slot2)
+            continue
+        end
         buf[at] = 0xff as u8
         buf[at + (1 as i64)] = 0x25 as u8
         wr32(buf, at + (2 as i64), slot2 - (pa + (6 as i64)))
@@ -540,7 +595,7 @@ func write_dyn_tables(l &: Nl, buf: u8*):
     mut ri := 0
     repeat 2 in pass:
         repeat l.rd_off.len() in k4:
-            rel := l.rd_type[k4] == 8
+            rel := l.rd_type[k4] == dr_relative(l)
             if (pass == 0) != rel:
                 continue
             end
@@ -553,7 +608,7 @@ func write_dyn_tables(l &: Nl, buf: u8*):
     end
     mut nrel := 0
     repeat l.rd_type.len() in k5:
-        if l.rd_type[k5] == 8:
+        if l.rd_type[k5] == dr_relative(l):
             nrel += 1
         end
     end
@@ -589,4 +644,35 @@ func dyn_ent(buf: u8*, dp &: i64, tag: int, val: i64):
     wr64(buf, dp, tag as i64)
     wr64(buf, dp + (8 as i64), val)
     dp = dp + (16 as i64)
+end
+
+func apply_dyn_a64(l &: Nl, buf: u8*, s2: int, r: int, ty: int, place: i64, pc: i64, a: i64, sv: i64, os: int, g: int): bool:
+    if ty == 257:
+        if g >= 0:
+            rela_add(l, pc, 257, l.g_dyn[g], a)
+            wr64(buf, place, 0 as i64)
+        else is_addr_sym(l, os):
+            rela_add(l, pc, 1027, 0, sv + a)
+            wr64(buf, place, sv + a)
+        else:
+            wr64(buf, place, sv + a)
+        end
+        ret true
+    end
+    if ty == 311 or ty == 312:
+        g2 := l.os_glob[os]
+        if g2 < 0 or l.g_got[g2] < 0:
+            nl_fail(l, "GOT entry missing at " + reloc_where(l, s2, r))
+            ret false
+        end
+        ga := l.ds_addr[DS_GOT] + ((8 * l.g_got[g2]) as i64)
+        if ty == 311:
+            pg := (page4k(ga) - page4k(pc)) >> (12 as i64)
+            ins_set(buf, place, (0x60FFFFE0 as i64), ((pg & (3 as i64)) << (29 as i64)) | (((pg >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+        else:
+            ins_set(buf, place, (0x3FFC00 as i64), ((ga & (0xFFF as i64)) >> (3 as i64)) << (10 as i64))
+        end
+        ret true
+    end
+    ret reloc_a64(l, buf, s2, r, ty, place, pc, a, sv, os)
 end
